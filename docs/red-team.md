@@ -68,7 +68,7 @@ The attested value is also a different object. The light client stores a header 
 - has no `#![no_main]` and no `sp1_zkvm::entrypoint!`, so the SP1 toolchain cannot build it as a guest program;
 - uses `tokio` and HTTP calls, but a zkVM guest has no network;
 - fetches data and builds a JSON object, then discards it — it verifies nothing and commits no public values;
-- passes `eyre::eyre!(…)` to `ok_or_else`, which needs a closure, so it does not compile.
+- does not compile. Against alloy 2.1.1 it fails with four errors: `on_http` no longer exists on `ProviderBuilder`, and three calls need type annotations. With those fixed, `get_block_by_number` and `get_block_receipts` reject their arguments, because the code targets an older alloy API. It also passes `eyre::eyre!(…)` to `ok_or_else`, which needs a closure. With every error fixed, the compiler warns `unused variable: serialized_proof_payload` — the program builds its output and throws it away. See `checks/h05-circuit.sh`.
 
 Because no circuit constrains anything, `programVKey` is only a fingerprint of nothing. The test suite models the circuit the specification describes, as generously as possible: it checks receipt inclusion against the real receipts root. H-02 and H-03 still succeed under that generous model.
 
@@ -129,7 +129,7 @@ The contract verifies 342+ signatures and 342+ Merkle proofs in each update. The
 
 ### H-18 — The frontend contradicts "no backend"
 
-The component sends the transaction hash to `/api/prove-deposit`, so a server generates the proof. The web worker is never loaded. Its `SP1Prover` import comes from a package that the specification does not version, and Groth16 wrapping in SP1 runs through native tooling. A browser tab is not a realistic prover. `VAULT_ABI` is a list of human-readable strings without `parseAbi`, so viem's types reject it.
+The component sends the transaction hash to `/api/prove-deposit`, so a server generates the proof. The web worker is never loaded. Its `SP1Prover` import comes from a package that the specification does not version, and Groth16 wrapping in SP1 runs through native tooling. A browser tab is not a realistic prover. `VAULT_ABI` is a list of human-readable strings without `parseAbi`. TypeScript accepts it, because viem types `abi` loosely, but viem throws a `TypeError` at run time when it encodes the call. Both buttons fail on click. See `checks/h18-frontend.sh`.
 
 ### H-19 — Immutability against hard forks
 
