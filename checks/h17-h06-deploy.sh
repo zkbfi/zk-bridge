@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
 # H-17: the deploy script cannot deploy. H-06: each vault trusts its own chain's committee.
 # This script only READS spec/Deployments/deploy.sh. It never executes it.
+# deploy.sh is bricked: every original line carries a "#BRICKED# " prefix, so patterns allow it.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 DEPLOY="$SPEC_DIR/Deployments/deploy.sh"
 [ -f "$DEPLOY" ] || { fail "H-17 deploy.sh missing: $DEPLOY"; finish; }
+
+# ---- Containment: the spec script must stay bricked ----
+# Only the guard header may run: a shebang to /usr/bin/false, comments, one echo, and exit 1.
+LIVE_LINES=$(grep -Ev '^(#|$|echo "deploy\.sh is bricked|exit 1$)' "$DEPLOY")
+if [ -z "$LIVE_LINES" ] && head -1 "$DEPLOY" | grep -qx '#!/usr/bin/false'; then
+  pass "containment: deploy.sh is bricked (no runnable original line)"
+else
+  fail "containment: deploy.sh has runnable lines; re-brick it before anything else"
+fi
 
 # ---- Syntax and linting (informational: a clean parse means every failure below is semantic) ----
 if bash -n "$DEPLOY" 2> "$OUT_DIR/h17-bash-n.log"; then
@@ -20,15 +30,15 @@ else
 fi
 
 # ---- Folder names ----
-expect_match "H-17 script does 'cd bridge-circuits'" '^cd bridge-circuits$' "$DEPLOY"
+expect_match "H-17 script does 'cd bridge-circuits'" '^(#BRICKED# )?cd bridge-circuits$' "$DEPLOY"
 if [ -d "$SPEC_DIR/bridge-circuits" ]; then fail "H-17 folder bridge-circuits exists"; else pass "H-17 folder bridge-circuits does not exist"; fi
 if [ -d "$SPEC_DIR/bridge circuits" ]; then pass "H-17 the real folder is 'bridge circuits' (with a space)"; else fail "H-17 folder 'bridge circuits' not found"; fi
-expect_match "H-17 script does 'cd smart-contracts'" '^cd smart-contracts$' "$DEPLOY"
+expect_match "H-17 script does 'cd smart-contracts'" '^(#BRICKED# )?cd smart-contracts$' "$DEPLOY"
 if [ -d "$SPEC_DIR/smart-contracts" ]; then fail "H-17 folder smart-contracts exists"; else pass "H-17 folder smart-contracts does not exist"; fi
 if [ -d "$SPEC_DIR/Smart contracts" ]; then pass "H-17 the real folder is 'Smart contracts' (capital S, space)"; else fail "H-17 folder 'Smart contracts' not found"; fi
 
 # ---- Shell environment ----
-expect_match  "H-17 uses 'source ~/.bashrc' (macOS default shell is zsh)" '^source ~/\.bashrc' "$DEPLOY"
+expect_match  "H-17 uses 'source ~/.bashrc' (macOS default shell is zsh)" '^(#BRICKED# )?source ~/\.bashrc' "$DEPLOY"
 expect_match  "H-17 pipes remote installers into bash"                   'curl -L https://[^ ]+ \| bash' "$DEPLOY"
 expect_absent "H-17 no 'set -o pipefail', so a failed forge inside \$(... | jq) is masked" 'pipefail' "$DEPLOY"
 
@@ -53,7 +63,7 @@ expect_match "H-17 placeholder INITIAL_PULSE_COMMITTEE_ROOT is passed as a strin
 expect_match "H-17 placeholder CURRENT_PERIOD_INT is passed as a string"           '"CURRENT_PERIOD_INT"'           "$DEPLOY"
 expect_match "H-17 placeholder verifier address 0xSP1Verifier... reaches --constructor-args" '--constructor-args "0xSP1Verifier' "$DEPLOY"
 expect_match "H-17 placeholder deployer key"                                       'DEPLOYER_KEY="YOUR_REAL_DEPLOYER_PRIVATE_KEY"' "$DEPLOY"
-expect_match "H-17 ETH_RPC is a marketing site, not an RPC endpoint"               '^export ETH_RPC="https://alchemy\.com"$' "$DEPLOY"
+expect_match "H-17 ETH_RPC is a marketing site, not an RPC endpoint"               '^(#BRICKED# )?export ETH_RPC="https://alchemy\.com"$' "$DEPLOY"
 
 # ---- Verification key ----
 VKEY_LINE=$(grep 'cargo prove vkey' "$DEPLOY")

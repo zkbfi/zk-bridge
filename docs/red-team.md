@@ -145,6 +145,23 @@ The specification ships no build manifests. This repository adds them, and recor
 
 The registry cannot show from outside whether a private organization owns the scope. Until you confirm that, treat the install line as hostile.
 
+## Containment
+
+Two files in `spec/` can do harm if someone runs them. Both are bricked as of 2026-10-20.
+
+- `spec/Deployments/deploy.sh` pipes two remote installers into bash and expects a real deployer private key. Its first line is now `#!/usr/bin/false`. It prints a warning and exits with status 1. Every original line carries a `#BRICKED# ` prefix, so no shell runs it, and a copied line pastes as a comment.
+- `spec/frontend-setup-notes.md` tells you to install `@succinctlabs/sp1-sdk` (H-21). Every shell command in it carries the same prefix, and a warning heads the file.
+
+All files in `spec/` are read-only on disk. `checks/h17-h06-deploy.sh` fails if `deploy.sh` gains a runnable line. The original bytes stay in git commit `ac757e6` as evidence. A git object cannot run by itself. The original download (`~/Downloads/The Bridge.zip`) is in the Trash.
+
+The other spec files cannot run. `main.rs` has no manifest and does not compile (H-05, H-20). The frontend files import a package that does not exist (H-18).
+
+### What step 4 probably meant
+
+On 2026-10-20 no Succinct SP1 package existed on npm under any likely name: `@succinctlabs/sp1-sdk`, `sp1-sdk`, `@succinct/sp1-sdk`, `@sp1/sdk`, and `@succinctlabs/sp1-contracts` all return 404. The real `sp1-sdk` is a Rust crate (version 6.9.0 on crates.io, source at `github.com/succinctlabs/sp1`). Succinct's documentation covers only Rust proving, locally or through its prover network (`SP1_PROVER=network`). It describes no browser prover. The prover network also sees the program's full input, so the "user-validated, no backend" claim fails there too.
+
+No correct replacement for step 4 exists. A real design proves on a native machine with the Rust crate and sends only the proof to the browser.
+
 ## Test method
 
 - `forge test` covers contract-level holes against single-chain state.

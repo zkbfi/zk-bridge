@@ -1,3 +1,5 @@
+> **BRICKED 2026-10-20.** Every shell command in this file is commented out with a `#BRICKED# ` prefix. Step 4 installs `@succinctlabs/sp1-sdk`, a package that does not exist on npm, so anyone who registers the name runs code on your machine (H-21 in `docs/red-team.md`). Do not run these commands. The original text lives in git commit ac757e6.
+
 # Frontend setup notes (from the originating developer, received 2026-10-19)
 
 Recorded verbatim in substance. These notes are part of the specification under review.
@@ -8,19 +10,19 @@ To prevent dependency version mismatches—which can easily break WebAssembly (W
 
 ```bash
 # 1. Create a modern Next.js project with TypeScript and Tailwind CSS configured
-npx create-next-app@latest frontend --typescript --tailwind --eslint --app
+#BRICKED# npx create-next-app@latest frontend --typescript --tailwind --eslint --app
 
 # 2. Change directory into your newly generated frontend directory
-cd frontend
+#BRICKED# cd frontend
 
 # 3. Install core blockchain infrastructure packages (Viem + Wagmi)
-npm install viem@2.x wagmi@2.x @tanstack/react-query
+#BRICKED# npm install viem@2.x wagmi@2.x @tanstack/react-query
 
 # 4. Install the official Succinct SDK for client-side browser proving
-npm install @succinctlabs/sp1-sdk
+#BRICKED# npm install @succinctlabs/sp1-sdk
 
 # 5. Install the browser worker loader plugin to cleanly package zkProver.worker.ts
-npm install --save-dev worker-loader
+#BRICKED# npm install --save-dev worker-loader
 ```
 
 ## Phase 2: The Next.js Configuration Patch (next.config.mjs)
@@ -62,5 +64,5 @@ export default nextConfig;
 ## Phase 3: Launching the App
 
 ```bash
-npm run dev
+#BRICKED# npm run dev
 ```

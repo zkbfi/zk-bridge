@@ -12,7 +12,7 @@ Each hole test must also prove that it can fail. Add a control assertion that sh
 
 | Path | Owner | Contents |
 |---|---|---|
-| `spec/` | nobody — read only | The original specification. Never edit it. |
+| `spec/` | nobody — read only | The original specification. Never edit it. The one exception is containment: the runnable parts are bricked (see `docs/red-team.md`). |
 | `foundry.toml`, `remappings.txt`, `lib/`, `src/`, `test/` | contracts agent | Foundry project at the repository root |
 | `docs/spec-deviations.md` | contracts agent | Every change needed to compile the specification's Solidity |
 | `harness/` | harness agent | Two-Anvil end-to-end attacks in TypeScript |

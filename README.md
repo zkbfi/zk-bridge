@@ -31,5 +31,5 @@ Requirements: Foundry (`forge`, `anvil`), Node.js with pnpm, and Rust with Cargo
 
 ## Safety
 
-- Never run `spec/Deployments/deploy.sh`. It pipes remote installers into bash and expects a real private key.
+- `spec/Deployments/deploy.sh` and the shell commands in `spec/frontend-setup-notes.md` are bricked. Every original line carries a `#BRICKED# ` prefix, and the script exits before any of them. Do not un-brick them. See "Containment" in `docs/red-team.md`.
 - Never run `npm install @succinctlabs/sp1-sdk` from `spec/frontend-setup-notes.md`. That package does not exist, and anyone can register the name (H-21).
