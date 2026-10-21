@@ -23,11 +23,26 @@ Only light-client updates are proven.
 
 A chain whose deposit gate runs in registry mode (PulseChain) has a second light client: one of its OWN beacon chain,
 deployed on that chain. The fork registry reads it for freshness and for the start of an observation. Set its address
-as `own_light_client` in the section of that chain. Each pass of `once` and `run` then sends it one update toward the
+as `own_light_client` in the section of that chain. Each pass of `once` and `run` then sends it one proof toward the
 newest final header of that chain, built from the same beacon source that the route already reads for the other
 direction. A failed update is logged (`own_light_client_update_failed`) and never stops a deposit. At startup the
 service checks that the contract runs the configured program and follows the same beacon chain (same genesis
 validators root) as the light client on the other chain.
+
+## Catching up a light client that lags
+
+One update moves a light client across at most one sync committee period. The HTTP beacon source therefore builds a
+fold. It reads the committee handoff update of each period from the head period of the light client to the present
+(`/eth/v1/beacon/light_client/updates?start_period=&count=`, paged, because a node returns at most a count of its own
+choice), adds the latest finality update, and sends all of them as one proof. This holds for the light clients of both
+directions and for the own-chain light client. The program takes 64 updates in one fold, so a light client more than 64
+periods behind needs successive proofs on successive passes. When the light client already holds a next committee, the
+store of the proof carries it, read from the beacon state of the head (the contract compares its hash). The Anvil
+source (`beacon.kind = "dev"`) asserts its output and always needs one proof.
+
+A beacon node that pruned the update of a needed period cannot serve the catch-up. The error names the period and asks
+for a node with a longer history of light-client updates. `route-health` probes for this gap on the destination light
+client and on the own-chain light client, and gives `WARN` that names the period.
 
 ## Tests
 

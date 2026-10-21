@@ -10,7 +10,17 @@
 //! 3. the finalized block that the state names, as SSZ.
 //!
 //! The store (the committee of the head period) comes from the `light_client/bootstrap` endpoint when served, and
-//! from the state of the head otherwise.
+//! from the state of the head otherwise. When the light client already holds a next committee, the store must carry
+//! it (the contract compares the hash), so the store then comes from the state of the head.
+//!
+//! # Catching up
+//!
+//! One update moves the head across at most one sync committee period. A light client that lags by more periods needs
+//! the committee handoff update of each period it passed. The source fetches them from
+//! `/eth/v1/beacon/light_client/updates?start_period=&count=` (paged, because a node returns at most a count of its
+//! own choice), puts the latest finality update last, and sends the whole list as one fold. The program takes at most
+//! 64 updates in a fold. A longer catch-up goes in successive folds on successive passes. A node that has no update
+//! for a needed period (pruned history) gives an error that names the period.
 //!
 //! # Old deposits
 //!
@@ -36,7 +46,7 @@ use crate::chain::ExecutionReader;
 use crate::gate::{beacon_root_at, ForkEvidenceSource, ForkRequest};
 use crate::error::{Error, Result};
 use crate::light_client::{
-    ancestry_path, assemble_update, beacon_header_from_json, block_hash_gindex, block_roots_gindex, describe_header,
+    ancestry_path, assemble_update, beacon_header_from_json, block_hash_gindex, block_roots_gindex, committee_hash, describe_header,
     era_block_roots, era_of, header_root, historical_summaries_gindex, store_at, store_from_bootstrap_json,
     sync_aggregate_from_json, update_from_json, AncestryPath, BeaconHeader, BeaconPath, BlockView, ChainKind,
     LightClientStore, LightClientUpdate, StateView, SyncAggregate, UpdateInput, SLOTS_PER_HISTORICAL_ROOT,
@@ -44,8 +54,10 @@ use crate::light_client::{
 use crate::prover::ProofStatement;
 use crate::rpc::HttpGet;
 use alloy_primitives::B256;
+use lc_core::update::MAX_FOLD_UPDATES;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 const JSON: &str = "application/json";
@@ -62,6 +74,9 @@ const STATE_CACHE_SIZE: usize = 2;
 const ERA_CACHE_SIZE: usize = 64;
 /// How many empty slots the search for an attested block skips.
 const MAX_EMPTY_SLOTS: u64 = 16;
+/// The most periods that one request of `light_client/updates` asks for (`MAX_REQUEST_LIGHT_CLIENT_UPDATES`). A node
+/// may answer with fewer.
+const UPDATES_PER_REQUEST: u64 = 128;
 
 /// Puts `value` first in a cache of at most `capacity` entries. The entry of the same key is replaced, and the entries
 /// beyond the capacity, the oldest, are dropped.
@@ -69,6 +84,125 @@ fn insert_bounded<V>(cache: &mut Vec<(u64, V)>, key: u64, value: V, capacity: us
     cache.retain(|(cached_key, _)| *cached_key != key);
     cache.insert(0, (key, value));
     cache.truncate(capacity);
+}
+
+/// GET and parse JSON. `None` when the node says 404 or 501 (the endpoint is not served or the object is unknown).
+fn get_json_from(client: &dyn HttpGet, path: &str) -> Result<Option<Value>> {
+    let response = client.get(path, JSON)?;
+    match response.status {
+        200 => serde_json::from_slice(&response.body)
+            .map(Some)
+            .map_err(|error| Error::Malformed(format!("GET {path}: {error}"))),
+        404 | 501 => Ok(None),
+        status => Err(Error::Beacon(format!("GET {path}: status {status}"))),
+    }
+}
+
+/// Collects the items for the periods `first..end` from a source that answers a request for `count` periods from
+/// `start` with the items it chooses to give. The source may give fewer than `count`, and it may skip a period.
+///
+/// Each request starts after the highest period received. A request that brings nothing new ends the search, so a
+/// node that has pruned old periods does not cause a loop. The result holds the periods that arrived. The caller
+/// finds the periods that did not.
+fn page_through_periods<T>(
+    first: u64,
+    end: u64,
+    mut request: impl FnMut(u64, u64) -> Result<Vec<(u64, T)>>,
+) -> Result<BTreeMap<u64, T>> {
+    let mut received = BTreeMap::new();
+    let mut start = first;
+    while start < end {
+        let items = request(start, (end - start).min(UPDATES_PER_REQUEST))?;
+        let highest = items.iter().map(|(period, _)| *period).filter(|period| (start..end).contains(period)).max();
+        for (period, item) in items.into_iter().filter(|(period, _)| (start..end).contains(period)) {
+            received.entry(period).or_insert(item);
+        }
+        let Some(highest) = highest else { break };
+        start = highest + 1;
+    }
+    Ok(received)
+}
+
+/// The committee handoff updates of the periods `first_period..end_period`, by period, from
+/// `/eth/v1/beacon/light_client/updates`. A period is the period of the attested header of the update.
+///
+/// The map lacks every period that the node did not give, and it is empty when the node does not serve the endpoint.
+///
+/// # Errors
+/// `Error::Beacon` for a status other than 200, 404 and 501. `Error::Malformed` for a body that is not a list of updates.
+pub fn fetch_period_updates(
+    client: &dyn HttpGet,
+    chain: ChainKind,
+    first_period: u64,
+    end_period: u64,
+) -> Result<BTreeMap<u64, LightClientUpdate>> {
+    page_through_periods(first_period, end_period, |start, count| {
+        let path = format!("/eth/v1/beacon/light_client/updates?start_period={start}&count={count}");
+        let Some(answer) = get_json_from(client, &path)? else {
+            return Ok(Vec::new());
+        };
+        let entries = answer.as_array().ok_or_else(|| Error::Malformed(format!("GET {path}: not a list")))?;
+        entries
+            .iter()
+            .map(|entry| {
+                let update = update_from_json(&entry["data"])?;
+                Ok((chain.spec().period_at_slot(update.attested_header.beacon.slot), update))
+            })
+            .collect()
+    })
+}
+
+/// The first period of `first_period..end_period` that `received` lacks, or `None` when it holds them all.
+pub fn first_missing_period<T>(received: &BTreeMap<u64, T>, first_period: u64, end_period: u64) -> Option<u64> {
+    (first_period..end_period).find(|period| !received.contains_key(period))
+}
+
+/// The error for a period that the node has no update for. It names the period and what to do.
+fn missing_period_error(period: u64, head_period: u64, latest_period: u64) -> Error {
+    Error::Beacon(format!(
+        "the beacon node has no light-client update for sync committee period {period}; the light client head is in period {head_period} and the catch-up to period {latest_period} needs every period in between; use a beacon node with a longer history of light-client updates"
+    ))
+}
+
+/// The periods whose handoff updates a fold from `head_slot` needs: from the period of the head up to, and not
+/// including, the period of the latest update. The range stops after 64 periods, the size of one fold.
+pub fn handoff_periods(chain: ChainKind, head_slot: u64, latest: &LightClientUpdate) -> Range<u64> {
+    let spec = chain.spec();
+    let first = spec.period_at_slot(head_slot);
+    let last = spec.period_at_slot(latest.finalized_header.beacon.slot);
+    first..last.min(first + MAX_FOLD_UPDATES as u64).max(first)
+}
+
+/// The updates of one fold from the head at `head_slot`: the handoff update of each period, then the latest update when
+/// the fold has room for it. An update that does not move the head forward is left out (the handoff of the head
+/// period often finalizes the head itself).
+///
+/// # Errors
+/// `Error::Beacon` naming the first period that `handoffs` lacks.
+pub fn assemble_fold(
+    chain: ChainKind,
+    head_slot: u64,
+    handoffs: &BTreeMap<u64, LightClientUpdate>,
+    latest: LightClientUpdate,
+) -> Result<Vec<LightClientUpdate>> {
+    let periods = handoff_periods(chain, head_slot, &latest);
+    let latest_period = chain.spec().period_at_slot(latest.finalized_header.beacon.slot);
+    if let Some(period) = first_missing_period(handoffs, periods.start, periods.end) {
+        return Err(missing_period_error(period, periods.start, latest_period));
+    }
+    let room_for_latest = (periods.end - periods.start) < MAX_FOLD_UPDATES as u64;
+    let candidates = periods.filter_map(|period| handoffs.get(&period).cloned()).chain(room_for_latest.then_some(latest));
+    let mut head = head_slot;
+    let mut fold = Vec::new();
+    for update in candidates {
+        let finalized = update.finalized_header.beacon.slot;
+        if finalized <= head {
+            continue;
+        }
+        head = finalized;
+        fold.push(update);
+    }
+    Ok(fold)
 }
 
 /// A beacon node.
@@ -94,14 +228,7 @@ impl HttpBeaconSource {
 
     /// GET and parse JSON. `None` when the node says 404 or 501 (the endpoint is not served or the object is unknown).
     fn get_json(&self, path: &str) -> Result<Option<Value>> {
-        let response = self.client.get(path, JSON)?;
-        match response.status {
-            200 => serde_json::from_slice(&response.body)
-                .map(Some)
-                .map_err(|error| Error::Malformed(format!("GET {path}: {error}"))),
-            404 | 501 => Ok(None),
-            status => Err(Error::Beacon(format!("GET {path}: status {status}"))),
-        }
+        get_json_from(self.client.as_ref(), path)
     }
 
     /// GET raw SSZ bytes. `None` for 404 and 501.
@@ -276,8 +403,29 @@ impl HttpBeaconSource {
         Ok(header)
     }
 
-    /// The store at the light client head: the bootstrap endpoint first, the state of the head second.
-    fn store_at_head(&self, head: &BeaconHeader) -> Result<LightClientStore> {
+    /// The store at the light client head. The contract compares the next committee of the store with its own, so the
+    /// store carries the next committee exactly when the light client holds one (`next_committee_hash` is not zero).
+    ///
+    /// Without a next committee the bootstrap endpoint comes first and the state of the head second. With one, the state
+    /// of the head gives it (the bootstrap holds the current committee only), and its hash must equal the stored hash.
+    fn store_at_head(&self, head: &BeaconHeader, next_committee_hash: B256) -> Result<LightClientStore> {
+        if next_committee_hash == B256::ZERO {
+            return self.store_without_next_committee(head);
+        }
+        let state = self.state_for(head.state_root)?;
+        let store = store_at(head, &state, true);
+        let held = store.next_sync_committee.as_ref().map(committee_hash).transpose()?;
+        if held != Some(next_committee_hash) {
+            return Err(Error::Beacon(format!(
+                "the next committee in the state of the light client head ({}) does not match the stored hash {next_committee_hash:#x}",
+                describe_header(head)
+            )));
+        }
+        Ok(store)
+    }
+
+    /// The store at the head with no next committee: the bootstrap endpoint first, the state of the head second.
+    fn store_without_next_committee(&self, head: &BeaconHeader) -> Result<LightClientStore> {
         let root = header_root(head);
         if let Some(answer) = self.get_json(&format!("/eth/v1/beacon/light_client/bootstrap/{root:#x}"))? {
             return store_from_bootstrap_json(&answer["data"]);
@@ -300,6 +448,16 @@ impl HttpBeaconSource {
             Some(update) => Ok(update),
             None => self.assembled_update(),
         }
+    }
+
+    /// The fold that moves the light client from `head` as far toward `latest` as one proof can: the handoff updates of
+    /// the periods in between, then `latest` (see the module documentation, "Catching up").
+    fn catch_up(&self, head: &BeaconHeader, light_client: &LightClientState, latest: LightClientUpdate) -> Result<UpdateInput> {
+        let periods = handoff_periods(self.chain, head.slot, &latest);
+        let handoffs = fetch_period_updates(self.client.as_ref(), self.chain, periods.start, periods.end)?;
+        let updates = assemble_fold(self.chain, head.slot, &handoffs, latest)?;
+        let store = self.store_at_head(head, light_client.next_committee_hash)?;
+        Ok(UpdateInput { chain: self.chain, store, updates })
     }
 
     /// The update assembled from block and state data (the path for nodes without light-client endpoints).
@@ -419,32 +577,29 @@ impl BeaconSource for HttpBeaconSource {
             return Ok(UpdatePlan::Covered);
         }
         let head = self.head_header(light_client)?;
-        let update = self.latest_update()?;
-        let finalized_slot = update.finalized_header.beacon.slot;
+        let latest = self.latest_update()?;
+        let finalized_slot = latest.finalized_header.beacon.slot;
         if finalized_slot <= deposit_slot || finalized_slot <= head.slot {
             return Ok(UpdatePlan::NotYetFinal);
         }
-        let store = self.store_at_head(&head)?;
-        if finalized_slot - deposit_slot > WINDOW_SLOTS {
+        let input = self.catch_up(&head, light_client, latest)?;
+        let beyond_window = |update: &&LightClientUpdate| update.finalized_header.beacon.slot.saturating_sub(deposit_slot) > WINDOW_SLOTS;
+        if let Some(last) = input.updates.last().filter(beyond_window) {
             // The deposit needs the historical path under the new head. Fetch the state of the new head now, while
             // the node serves it whole. A failure here is not an error: the withdrawal step fetches again.
-            let _ = self.state_for(update.finalized_header.beacon.state_root);
+            let _ = self.state_for(last.finalized_header.beacon.state_root);
         }
-        Ok(UpdatePlan::Update(Box::new(ProofStatement::Verified(UpdateInput {
-            chain: self.chain,
-            store,
-            updates: vec![update],
-        }))))
+        Ok(UpdatePlan::Update(Box::new(ProofStatement::Verified(input))))
     }
 
     fn next_head_update(&self, light_client: &LightClientState, _source: &dyn ExecutionReader) -> Result<UpdatePlan> {
         let head = self.head_header(light_client)?;
-        let update = self.latest_update()?;
-        if update.finalized_header.beacon.slot <= head.slot {
+        let latest = self.latest_update()?;
+        if latest.finalized_header.beacon.slot <= head.slot {
             return Ok(UpdatePlan::Covered);
         }
-        let store = self.store_at_head(&head)?;
-        Ok(UpdatePlan::Update(Box::new(ProofStatement::Verified(UpdateInput { chain: self.chain, store, updates: vec![update] }))))
+        let input = self.catch_up(&head, light_client, latest)?;
+        Ok(UpdatePlan::Update(Box::new(ProofStatement::Verified(input))))
     }
 
     fn withdrawal_path(
@@ -877,7 +1032,7 @@ mod tests {
         let recent_root = state.block_root_at(recent_slot);
         let recent = source.ancestry_branch_for(&anchor, recent_slot, recent_root).unwrap();
         assert_eq!(recent.len(), 18);
-        assert!(is_valid_exact_branch(&recent_root, &recent, lc_core::ancestry::block_roots_leaf_gindex(37, recent_slot), &state_root));
+        assert!(is_valid_exact_branch(&recent_root, &recent, lc_core::ancestry::block_roots_leaf_gindex(37, recent_slot).unwrap(), &state_root));
 
         // A header that the canonical roots do not name.
         let error = source.ancestry_branch_for(&anchor, deposit_slot, keccak256(b"other")).unwrap_err();
@@ -922,5 +1077,192 @@ mod tests {
         assert!(source.historical_layout_evidence(&anchor, &[anchor_slot - 100, anchor_slot], no_source).unwrap().is_none());
         // A slot within 8192 slots of the anchor is not a candidate, whatever its era.
         assert!(source.historical_layout_evidence(&anchor, &[5 * 8192 + 2], no_source).unwrap().is_none());
+    }
+
+    // ---------------------------------------------------------------- catching up with a fold
+
+    use lc_testkit::synthetic::{build_update, committee_for, UpdateRecipe};
+
+    const PERIOD_SLOTS: u64 = 8192;
+
+    /// The handoff update of `period`: attested and finalized inside the period, signed by its committee, and proving
+    /// the committee of the next period. The store is the one that the same recipe gives (head early in the period).
+    fn period_scenario(period: u64) -> lc_testkit::synthetic::UpdateScenario {
+        let base = period * PERIOD_SLOTS;
+        build_update(
+            ChainKind::Pulsechain.spec(),
+            UpdateRecipe {
+                store_slot: base + 10,
+                finalized_slot: base + 4_000,
+                attested_slot: base + 4_100,
+                signature_slot: base + 4_101,
+                participants: 400,
+                include_next_committee: true,
+                store_knows_next_committee: false,
+            },
+        )
+    }
+
+    fn handoffs_of(periods: std::ops::Range<u64>) -> BTreeMap<u64, LightClientUpdate> {
+        periods.map(|period| (period, period_scenario(period).update)).collect()
+    }
+
+    fn committee_hash_of(period: u64) -> B256 {
+        committee_hash(&committee_for(ChainKind::Pulsechain.spec(), period).committee).unwrap()
+    }
+
+    /// Claim: a light client four periods behind catches up in one fold: the handoff update of each period it passed,
+    /// then the latest update. The program accepts the fold, the output spans all of it, and the oracle backend signs it.
+    /// Why it matters: one update crosses at most one period. Before the fold the source sent the latest update alone,
+    /// and the program refused it ("more than one period past the stored head"), so the light client never caught up.
+    #[test]
+    fn a_light_client_four_periods_behind_catches_up_in_one_fold() {
+        let first = period_scenario(100);
+        let handoffs = handoffs_of(100..104);
+        let latest = period_scenario(104).update;
+        let latest_slot = latest.finalized_header.beacon.slot;
+
+        let fold = assemble_fold(ChainKind::Pulsechain, first.store.header_slot, &handoffs, latest.clone()).unwrap();
+        assert_eq!(fold.len(), 5, "four handoffs and the latest update");
+
+        // The control: the latest update alone, as the source sent it before, is refused.
+        let alone = UpdateInput { chain: ChainKind::Pulsechain, store: first.store.clone(), updates: vec![latest] };
+        let refused = verify_update_natively(&alone).unwrap_err();
+        assert!(refused.to_string().contains("more than one period"), "{refused}");
+
+        let input = UpdateInput { chain: ChainKind::Pulsechain, store: first.store.clone(), updates: fold };
+        let output = verify_update_natively(&input).expect("the fold verifies natively");
+        assert_eq!(output.previousHeadSlot, first.store.header_slot);
+        assert_eq!(output.newHeadSlot, latest_slot);
+        assert_eq!(output.previousSyncCommitteeHash, committee_hash_of(100));
+        assert_eq!(output.syncCommitteeHash, committee_hash_of(104));
+        assert_eq!(output.nextSyncCommitteeHash, committee_hash_of(105));
+
+        let oracle = crate::signer::Signer::from_secret_bytes(&alloy_primitives::hex::decode(
+            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        )
+        .unwrap())
+        .unwrap();
+        let proof = crate::prover::OracleProver::new(oracle)
+            .prove(B256::repeat_byte(0x42), &ProofStatement::Verified(input))
+            .expect("the oracle signs the fold");
+        assert_eq!(proof.public_values, crate::light_client::public_values(&output));
+    }
+
+    use crate::prover::Prover;
+
+    /// Claim: a light client 66 periods behind needs two folds. The first holds the 64 handoffs that the program takes
+    /// and ends in period 163. The second starts there, leaves out the handoff of the head period (it finalizes the head
+    /// itself), and ends at the latest update.
+    /// Why it matters: the program refuses a fold of 65 updates. The source must cut the catch-up at 64 and continue
+    /// on the next pass, from the store that the first fold left, which carries the next committee that it proved.
+    #[test]
+    fn a_light_client_more_than_sixty_four_periods_behind_needs_two_folds() {
+        let first = period_scenario(100);
+        let handoffs = handoffs_of(100..166);
+        let latest = period_scenario(166).update;
+        let latest_slot = latest.finalized_header.beacon.slot;
+        let spec = ChainKind::Pulsechain.spec();
+
+        let fold_one = assemble_fold(ChainKind::Pulsechain, first.store.header_slot, &handoffs, latest.clone()).unwrap();
+        assert_eq!(fold_one.len(), MAX_FOLD_UPDATES);
+        let (output_one, store_one) = lc_core::update::verify_light_client_fold(&first.store, &fold_one, spec).expect("the first fold verifies");
+        assert_eq!(spec.period_at_slot(output_one.newHeadSlot), 163);
+        assert!(output_one.newHeadSlot < latest_slot);
+
+        let fold_two = assemble_fold(ChainKind::Pulsechain, store_one.header_slot, &handoffs, latest).unwrap();
+        assert_eq!(fold_two.len(), 3, "handoffs of periods 164 and 165, then the latest update");
+        let (output_two, _) = lc_core::update::verify_light_client_fold(&store_one, &fold_two, spec).expect("the second fold verifies");
+        assert_eq!(output_two.previousHeadSlot, output_one.newHeadSlot, "the second fold starts where the first ended");
+        assert_eq!(output_two.newHeadSlot, latest_slot);
+    }
+
+    /// Claim: a period that the node does not give is an error that names the period, says what is needed, and asks
+    /// for a node with a longer history. No fold is built from the periods that exist.
+    /// Why it matters: pruned history cannot be fetched again. The operator must change the node, and the log line must
+    /// say so. A fold with a hole would fail inside the program with an error that names no period.
+    #[test]
+    fn a_missing_period_is_an_error_that_names_it() {
+        let mut handoffs = handoffs_of(100..104);
+        handoffs.remove(&102);
+        let latest = period_scenario(104).update;
+        let error = assemble_fold(ChainKind::Pulsechain, 100 * PERIOD_SLOTS + 10, &handoffs, latest).unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("sync committee period 102"), "{text}");
+        assert!(text.contains("period 100") && text.contains("period 104"), "{text}");
+        assert!(text.contains("longer history"), "{text}");
+        assert_eq!(first_missing_period(&handoffs, 100, 104), Some(102));
+        assert_eq!(first_missing_period(&handoffs, 100, 102), None);
+    }
+
+    /// Claim: a head in the period of the latest update needs no handoff, and the fold is the latest update alone.
+    /// Why it matters: this is the common case. It must not ask the node for periods, and it must keep the old behavior.
+    #[test]
+    fn a_head_in_the_latest_period_needs_the_latest_update_alone() {
+        let first = period_scenario(100);
+        let latest = period_scenario(100).update;
+        let fold = assemble_fold(ChainKind::Pulsechain, first.store.header_slot, &BTreeMap::new(), latest).unwrap();
+        assert_eq!(fold.len(), 1);
+    }
+
+    /// Claim: the paging asks for the count that is left (never more than 128), starts each request after the highest
+    /// period received, takes what a node that gives only three periods per request returns, and stops when a request
+    /// brings nothing new.
+    /// Why it matters: a node chooses how many updates it returns. A pager that assumed the full count would leave
+    /// holes, and one that did not stop would loop on a node that pruned the start of the range.
+    #[test]
+    fn paging_follows_what_the_node_returns() {
+        let node_has = |from: u64| {
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let log = calls.clone();
+            let request = move |start: u64, count: u64| -> Result<Vec<(u64, u64)>> {
+                log.lock().unwrap().push((start, count));
+                Ok((start.max(from)..start.max(from) + count.min(3)).map(|period| (period, period)).collect())
+            };
+            (calls, request)
+        };
+
+        let (calls, request) = node_has(0);
+        let received = page_through_periods(10, 20, request).unwrap();
+        assert_eq!(received.keys().copied().collect::<Vec<_>>(), (10..20).collect::<Vec<_>>());
+        assert_eq!(*calls.lock().unwrap(), vec![(10, 10), (13, 7), (16, 4), (19, 1)]);
+
+        let (calls, request) = node_has(0);
+        page_through_periods(0, 300, request).unwrap();
+        assert_eq!(calls.lock().unwrap()[0], (0, UPDATES_PER_REQUEST), "the first request is capped");
+
+        // A node that pruned periods below 15 gives 15, 16, 17 for a request from 10. The pager takes them and goes on.
+        let (calls, request) = node_has(15);
+        let received = page_through_periods(10, 20, request).unwrap();
+        assert_eq!(received.keys().copied().collect::<Vec<_>>(), (15..20).collect::<Vec<_>>());
+        assert_eq!(first_missing_period(&received, 10, 20), Some(10));
+        assert_eq!(calls.lock().unwrap().len(), 2);
+
+        // A node that gives nothing ends the search at once.
+        let empty = page_through_periods::<u64>(10, 20, |_, _| Ok(Vec::new())).unwrap();
+        assert!(empty.is_empty());
+    }
+
+    /// Claim: the request names `start_period` and `count`, the answer is a list of `{version, data}` objects, and the
+    /// period of an update is the period of its attested header. A node that does not serve the endpoint gives no
+    /// updates and no error.
+    /// Why it matters: this is the wire shape of the standard beacon API. A wrong query name or period rule would
+    /// pass the paging tests and fail on every real node.
+    #[test]
+    fn the_updates_endpoint_is_read_in_the_standard_shape() {
+        let path = light_client_fixtures().join("light_client_update.json");
+        let wrapper: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let data = wrapper["response"]["update"].clone();
+        let update = update_from_json(&data).unwrap();
+        let period = ChainKind::Pulsechain.spec().period_at_slot(update.attested_header.beacon.slot);
+
+        let body = serde_json::json!([{ "version": "capella", "data": data }]).to_string().into_bytes();
+        let query = format!("/eth/v1/beacon/light_client/updates?start_period={period}&count=1");
+        let node = Node([(query, body)].into_iter().collect());
+        let received = fetch_period_updates(&node, ChainKind::Pulsechain, period, period + 1).unwrap();
+        assert_eq!(received.keys().copied().collect::<Vec<_>>(), vec![period]);
+
+        let silent = Node(HashMap::new());
+        assert!(fetch_period_updates(&silent, ChainKind::Pulsechain, period, period + 1).unwrap().is_empty());
     }
 }

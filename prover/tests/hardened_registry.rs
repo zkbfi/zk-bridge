@@ -95,6 +95,7 @@ fn inputs_for(bridge: &Bridge, gate: zk_bridge_prover::route_health::GateObserva
         light_client_head_slot: 100,
         source_head_slot: 100,
         own_light_client: None,
+        update_gaps: vec![],
         settings: HealthSettings::default(),
     }
 }

@@ -525,4 +525,20 @@ mod tests {
         let two = header_root(&source.build(slot, &chain).unwrap().header.header);
         assert_eq!(one, two);
     }
+
+    /// Claim: a light client 75 sync committee periods behind (8192 slots each) reaches the newest final block with
+    /// one update, then reports `Covered`. The dev source asserts the output, so no fold is needed on Anvil.
+    /// Why it matters: the real source folds up to 64 updates, and a dev source that needed one update per period
+    /// would make the Anvil runs of a long catch-up differ from the one-proof catch-up of the real source.
+    #[test]
+    fn a_head_many_periods_behind_catches_up_in_one_update() {
+        let source = DevBeaconSource::new(ChainKind::Pulsechain, 0, DEFAULT_SLOT_OFFSET);
+        let chain = FakeChain { latest: 160_000 };
+        let behind = light_client_at(1);
+        let UpdatePlan::Update(statement) = source.next_head_update(&behind, &chain).unwrap() else { panic!("an update") };
+        let ProofStatement::DevAsserted(output) = *statement else { panic!("dev statement") };
+        assert!(output.newHeadSlot / 8192 - output.previousHeadSlot / 8192 >= 75, "the jump is {} periods", output.newHeadSlot / 8192);
+        let caught_up = light_client_at(output.newHeadSlot);
+        assert!(matches!(source.next_head_update(&caught_up, &chain).unwrap(), UpdatePlan::Covered));
+    }
 }

@@ -57,7 +57,8 @@ pub enum UpdatePlan {
     Covered,
     /// The source has no final header that covers the deposit block yet. Wait.
     NotYetFinal,
-    /// Submit this update. Afterwards ask again.
+    /// Submit this statement: a fold of one or more updates, which moves the head across as many sync committee
+    /// periods as one proof can. Afterwards ask again.
     Update(Box<ProofStatement>),
 }
 

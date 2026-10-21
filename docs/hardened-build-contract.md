@@ -354,6 +354,8 @@ The other fields:
 
 The public values grow from 320 to 352 bytes.
 
+The prover uses the fold to catch up a light client that lags by several sync committee periods: the committee handoff update of each period, then the latest finality update, in one proof of at most 64 updates. A longer catch-up goes in successive proofs. When the contract holds a next committee, the initial store of the proof must carry it. See `prover/README.md`, "Catching up a light client that lags".
+
 ### Contract rules (replace the earlier committee rules)
 
 1. `previousSyncCommitteeHash == syncCommittees[headPeriod]` and `startNextSyncCommitteeHash == syncCommittees[headPeriod + 1]`. Zero equals zero.

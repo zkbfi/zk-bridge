@@ -33,10 +33,15 @@
 //! delivers them would cost users more than the lag does. The fix is an operator action, and `WARN` asks for it with
 //! time to spare: one proof folds at most 64 updates, and the beacon node keeps only a limited history of updates.
 //!
+//! A light client that lags by one period or more also needs the beacon node to hold the committee handoff update of
+//! every period it passed: one proof folds those updates and catches up. When the node has none for a period (it
+//! pruned old history), `WARN` names the period and the light client, and asks for a node with longer history.
+//!
 //! A schedule entry whose epoch is [`NEVER_EPOCH`] is not scheduled. The beacon API uses that value for "never".
 //! PulseChain lists Deneb with version `0xffffffff` and this epoch. Only the epoch decides: an entry with a real
 //! epoch counts as scheduled, whatever its version.
 
+use crate::beacon::http::{fetch_period_updates, first_missing_period};
 use crate::chain::ChainClient;
 use crate::config::{BeaconKind, ChainConfig, Config, RouteName};
 use crate::contracts::{ForkRegistryContract, GateVersionsContract, LightClientContract, VaultContract};
@@ -180,6 +185,17 @@ pub struct OwnLightClientObservation {
     pub slots_per_period: u64,
 }
 
+/// A light client that cannot catch up because the beacon node holds no update for a period it needs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateGap {
+    /// Which light client lags: `destination` or `own-chain`.
+    pub light_client: &'static str,
+    /// The sync committee period of the head of that light client.
+    pub head_period: u64,
+    /// The first period that the node has no update for.
+    pub missing_period: u64,
+}
+
 /// Everything [`route_status`] needs. The caller fetches it. The function does no input or output.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RouteInputs {
@@ -203,6 +219,8 @@ pub struct RouteInputs {
     pub source_head_slot: u64,
     /// The own-chain light client of the source chain, when one is configured.
     pub own_light_client: Option<OwnLightClientObservation>,
+    /// The light clients that the beacon node cannot catch up (see [`find_update_gap`]). Empty when none lags.
+    pub update_gaps: Vec<UpdateGap>,
     /// The limits.
     pub settings: HealthSettings,
 }
@@ -364,11 +382,22 @@ pub fn route_status(inputs: &RouteInputs) -> RouteStatus {
             ),
         ));
     }
+    findings.extend(inputs.update_gaps.iter().map(update_gap_finding));
     findings.sort_by(|left, right| right.0.cmp(&left.0));
     let mut ordered = findings.into_iter();
     let (level, reason) = ordered.next().unwrap_or((Level::Open, "no unsupported fork is scheduled, the gate is not sealed and the light client head is fresh".to_string()));
     let other_findings = ordered.map(|(_, text)| text).collect();
     RouteStatus { level, reason, other_findings, fork, current_epoch, margin_seconds, head_lag_epochs, own_light_client_lag_periods: own_lag_periods }
+}
+
+fn update_gap_finding(gap: &UpdateGap) -> (Level, String) {
+    (
+        Level::Warn,
+        format!(
+            "the beacon node has no light-client update for sync committee period {}, and the head of the {} light client is in period {}: one proof cannot catch it up; use a beacon node with a longer history of light-client updates",
+            gap.missing_period, gap.light_client, gap.head_period
+        ),
+    )
 }
 
 /// The whole periods between the head of the own-chain light client and the current slot. The current slot comes from
@@ -457,6 +486,30 @@ pub fn fetch_beacon_facts(client: &dyn HttpGet) -> Result<BeaconFacts> {
         schedule: parse_fork_schedule(&get_json(client, "/eth/v1/config/fork_schedule")?)?,
         head_slot: parse_head_slot(&get_json(client, "/eth/v1/beacon/headers/head")?)?,
     })
+}
+
+/// Whether the beacon node can catch up a light client with its head at `head_slot`.
+///
+/// A catch-up needs the handoff update of each period from the head period up to the period of the newest finalized
+/// header, which trails the beacon head by about two epochs. The check asks for at most 64 periods, the size of one
+/// fold. It gives the first period that the node does not return, or `None` when the node returns them all or the head
+/// is not a period behind.
+///
+/// # Errors
+/// Any error of the request (a node that does not serve the endpoint is not an error: it gives no update).
+pub fn find_update_gap(
+    client: &dyn HttpGet,
+    kind: ChainKind,
+    light_client: &'static str,
+    head_slot: u64,
+    beacon_head_slot: u64,
+) -> Result<Option<UpdateGap>> {
+    let spec = kind.spec();
+    let finalized_slot = beacon_head_slot.saturating_sub(2 * spec.slots_per_epoch);
+    let head_period = spec.period_at_slot(head_slot);
+    let end_period = spec.period_at_slot(finalized_slot).min(head_period + MAX_FOLD_UPDATES as u64);
+    let received = fetch_period_updates(client, kind, head_period, end_period)?;
+    Ok(first_missing_period(&received, head_period, end_period).map(|missing_period| UpdateGap { light_client, head_period, missing_period }))
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -715,7 +768,8 @@ pub fn exit_code(reports: &[RouteReport]) -> i32 {
     0
 }
 
-/// Builds the inputs of one route from data that is already read.
+/// Builds the inputs of one route from data that is already read. The update gaps start empty: the caller probes the
+/// beacon node for them with [`find_update_gap`].
 pub fn assemble_inputs(
     kind: ChainKind,
     beacon: &BeaconFacts,
@@ -737,6 +791,7 @@ pub fn assemble_inputs(
         light_client_head_slot,
         source_head_slot: beacon.head_slot,
         own_light_client,
+        update_gaps: Vec::new(),
         settings,
     }
 }
@@ -775,7 +830,17 @@ fn check_route(config: &Config, route: RouteName, now: u64, settings: HealthSett
     let gate = Some(read_gate_observation(&source_client, source.vault_address()?)?);
     let own_light_client = read_own_light_client(&source_client, source)?;
     let head = connect(destination)?.view(destination.light_client_address()?, LightClientContract::headCall {})?;
-    let inputs = assemble_inputs(kind, &beacon, gate, head, own_light_client, now, settings);
+    let client = HttpClient::new(url);
+    let own_head = own_light_client.map(|own| ("own-chain", own.head_slot));
+    let update_gaps = [Some(("destination", head)), own_head]
+        .into_iter()
+        .flatten()
+        .map(|(name, head_slot)| find_update_gap(&client, kind, name, head_slot, beacon.head_slot))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
+    let inputs = RouteInputs { update_gaps, ..assemble_inputs(kind, &beacon, gate, head, own_light_client, now, settings) };
     Ok(RouteReport {
         route: route.as_str().to_string(),
         source_chain: source.name.clone(),
@@ -838,6 +903,7 @@ mod tests {
             light_client_head_slot: NOW_EPOCH * 32,
             source_head_slot: NOW_EPOCH * 32,
             own_light_client: None,
+            update_gaps: vec![],
             settings: HealthSettings { margin_seconds: HOUR, stale_epochs: 64, own_light_client_warn_periods: 32 },
         }
     }
@@ -1511,5 +1577,49 @@ mod tests {
 
         let client = connect(Box::new(handler_for(Address::ZERO)));
         assert!(read_registry_observation(&client, gate_address, REGISTRY_MODE).is_err(), "a zero registry is a read error");
+    }
+
+    /// A beacon node that does not serve the updates endpoint (404), so it holds no update for any period.
+    struct HistoryNode;
+
+    impl HttpGet for HistoryNode {
+        fn get(&self, _path_and_query: &str, _accept: &str) -> Result<HttpResponse> {
+            Ok(HttpResponse { status: 404, body: b"{}".to_vec() })
+        }
+    }
+
+    /// Claim: a light client with its head several periods behind the finalized header, and a node with no update for
+    /// the period of the head, gives a gap that names the head period, the first missing period and the light client.
+    /// A head in the current period gives no gap, and asks the node nothing.
+    /// Why it matters: only a node with a longer history can catch such a light client up. Operators learn this from
+    /// route-health before they need the catch-up.
+    #[test]
+    fn a_node_without_the_handoff_updates_gives_a_gap() {
+        let period_slots = 8_192;
+        let beacon_head = 100 * period_slots + 500;
+        let behind = find_update_gap(&HistoryNode, ChainKind::Pulsechain, "own-chain", 97 * period_slots + 20, beacon_head).unwrap();
+        assert_eq!(behind, Some(UpdateGap { light_client: "own-chain", head_period: 97, missing_period: 97 }));
+        let current = find_update_gap(&HistoryNode, ChainKind::Pulsechain, "destination", 100 * period_slots + 20, beacon_head).unwrap();
+        assert_eq!(current, None, "a head in the current period needs no handoff");
+    }
+
+    /// Claim: an update gap gives WARN, not STOP, names the missing period and the light client, asks for a node with a
+    /// longer history, and does not refuse deposits. It does not hide a more severe finding.
+    /// Why it matters: a deposit made now does not depend on the catch-up, so a script must still deposit. The operator
+    /// must still see the problem while there is time to change the node.
+    #[test]
+    fn an_update_gap_warns_and_never_refuses_deposits() {
+        let mut value = inputs();
+        value.update_gaps = vec![UpdateGap { light_client: "destination", head_period: 90, missing_period: 92 }];
+        let status = route_status(&value);
+        assert_eq!(status.level, Level::Warn);
+        assert!(!status.level.refuses_deposits());
+        assert!(status.reason.contains("period 92") && status.reason.contains("destination light client is in period 90"), "{}", status.reason);
+        assert!(status.reason.contains("longer history"), "{}", status.reason);
+
+        value.gate = Some(gate(true));
+        let sealed = route_status(&value);
+        assert_eq!(sealed.level, Level::Sealed);
+        assert_eq!(sealed.other_findings.len(), 1, "the gap stays among the other findings");
     }
 }

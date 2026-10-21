@@ -25,8 +25,8 @@ use alloy_sol_types::SolCall;
 use std::sync::Mutex;
 use std::time::Duration;
 
-/// The most light-client updates that one call of `advance_light_client` sends.
-const MAX_UPDATES_PER_CALL: usize = 8;
+/// The most light-client proofs (each a fold of one or more updates) that one call of `advance_light_client` sends.
+const MAX_PROOFS_PER_CALL: usize = 8;
 
 /// One direction over two real chains.
 ///
@@ -376,7 +376,7 @@ impl RoutePorts for LiveRoute {
         if block.hash != deposit.block_hash {
             return Err(Error::Malformed(format!("block {} changed its hash; the source chain reorganized a final block", block.number)));
         }
-        for _ in 0..MAX_UPDATES_PER_CALL {
+        for _ in 0..MAX_PROOFS_PER_CALL {
             let state = self.read_light_client_state()?;
             let stored = self.stored_slots()?;
             match self.beacon.next_update(&block, &state, &stored, &self.source)? {
@@ -385,16 +385,17 @@ impl RoutePorts for LiveRoute {
                 UpdatePlan::Update(statement) => self.submit_update(&self.destination, self.light_client, &statement)?,
             }
         }
-        Err(Error::Beacon(format!("the light client is still behind block {} after {MAX_UPDATES_PER_CALL} updates", block.number)))
+        Err(Error::Beacon(format!("the light client is still behind block {} after {MAX_PROOFS_PER_CALL} proofs", block.number)))
     }
 
     fn advance_own_light_client(&self) -> Result<usize> {
         let Some(own) = self.own_light_client else {
             return Ok(0);
         };
-        // One update per pass. The chain keeps finalizing, so a loop that chases the newest final header would not
-        // end on a fast chain (on Anvil each update mines a block that moves the finalized block). The next pass
-        // continues, and a head far behind catches up one update per pass.
+        // One fold per pass. The chain keeps finalizing, so a loop that chases the newest final header would not end on
+        // a fast chain (on Anvil each update mines a block that moves the finalized block). A fold holds up to 64
+        // updates, so a head many periods behind catches up in one proof, or in a few passes when it lags by more than
+        // 64 periods.
         let state = read_light_client_state_of(&self.source, own)?;
         match self.beacon.next_head_update(&state, &self.source)? {
             UpdatePlan::Covered | UpdatePlan::NotYetFinal => Ok(0),
