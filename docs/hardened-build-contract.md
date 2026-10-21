@@ -187,7 +187,7 @@ Implements the Altair light-client sync protocol for both fork schedules:
 
 ### Withdrawal program: `verify_withdrawal(witness, expected_source_vault) -> WithdrawalOutput`
 
-- Ancestry: the light client stores only one execution block per update, so the deposit block is proven against a finalized anchor. Path: the anchor's state root, then `state.block_roots` (the deposit slot must be within 8192 slots before the anchor), then the deposit beacon header, then its execution payload branch, then `keccak256(header_rlp) == deposit_block_hash`. Older deposits would need `historical_summaries` (not built yet).
+- Ancestry: the light client stores only one execution block per update, so the deposit block is proven against a finalized anchor. Path: the anchor's state root, then `state.block_roots` (the deposit slot must be within 8192 slots before the anchor), then the deposit beacon header, then its execution payload branch, then `keccak256(header_rlp) == deposit_block_hash`. Older deposits use the historical path through `historical_summaries`; see "Change: historical ancestry and folded updates".
 - The verifier argument of both contracts is a specific versioned SP1 verifier, never Succinct's ownable gateway. Decode the header for both Ethereum (Prague fields) and PulseChain (Shanghai fields).
 - Prove the receipt with `alloy_trie::verify_proof(receipts_root, Nibbles::unpack(rlp(tx_index)), Some(receipt_bytes), proof)` (fixes R2-04).
 - Decode the receipt as an EIP-2718 envelope (fixes R2-05) and require success status.
@@ -324,7 +324,7 @@ Source: `docs/zkbridge-paper-review.md`. These two changes remove the need for a
     5. `g = g * 2**13 + depositSlot % 8192` (into that era's `block_roots`)
   - Branch lengths are exact. Padding is refused, as on the recent path.
 - **`capellaEra`** is an immutable vault constructor argument: `floor(capellaForkSlot / 8192)`. Expected values: Ethereum 758 (Capella slot 6209536), PulseChain 0 (Capella epoch 3, slot 96). The deploy script reads the Capella epoch from each chain's spec and refuses a mismatch.
-  - A real fixture must confirm that `historical_summaries[index].block_summary_root` equals the hash tree root of that era's block roots. Do this on PulseChain at least. The formula is unverified until it does.
+  - Confirmed on real PulseChain data (2026-10-20): `historical_summaries[era - capellaEra].block_summary_root` equals the hash tree root of the era's 8192 block roots for eras 0 (Capella starts mid-era at slot 96), 1325 and 1326. The anchor is a real state at slot 10875900. Fixture: `light-client/tests/fixtures/pulsechain/historical_paths.json`. Ethereum is not yet checked on real data.
 - **Layout row:** add `addHistoricalSummariesLayout`, validated like the block-roots row:
   - The evidence is a stored header in a completed era, proven at the claimed position under a later stored anchor's state root.
   - The row is usable over the slot range its evidence covers.
@@ -362,7 +362,9 @@ The public values grow from 320 to 352 bytes.
 - `lc-core` builds both ancestry paths.
 - The prover service needs two extra inputs for an old deposit:
   - the anchor state's `historical_summaries` branch;
-  - the era's 8192 block roots. Take them from a state at the era's end, or rebuild them from the era's headers.
+  - the era's 8192 block roots. Rebuild them from the node's canonical block roots. Do not take them from an old state: on 2026-10-20 the PulseChain node served states older than a few hundred slots without their newest `historical_summaries` entry, so their roots did not match their headers. Fetch the anchor state while it is near the head.
+- After a crossing, a next committee proven in an earlier period no longer counts as the next committee, because the crossing makes it current. A proof followed only by steps that do not cross still counts.
+- If the contract stores a next committee, the prover's initial store must carry it. Otherwise `startNextSyncCommitteeHash` is zero and rule 1 refuses the update.
 
 ## Fork gate on the Ethereum vault (HB-02, 2026-10-20)
 
@@ -373,7 +375,7 @@ The Ethereum vault refuses a deposit unless the chain's current fork version is 
 - New interface `IDepositGate { function admit(bytes calldata evidence) external; }`. The vault takes an immutable `depositGate` and calls `admit(evidence)` first in `deposit`. A gate that reverts refuses the deposit.
 - `deposit(address token, address recipient, uint256 amount, bytes calldata gateEvidence)`. The new last argument changes the selector.
 - One contract, `BeaconForkGate`, deployed on both chains. The vault constructor refuses a zero gate address.
-- **Detection mode (PulseChain, which has no EIP-4788 today).** Each `admit` first probes `beaconRoots.staticcall(abi.encode(block.timestamp))`. If the call fails, or returns anything other than 32 non-zero bytes, the beacon-root contract is absent and the gate admits the deposit. The probe costs about 2,600 gas. When the probe returns a root, the gate switches itself to enforcing mode for good (`enforcing = true`, event `BeaconRootsDetected`), and the same call continues as an enforcing `admit`.
+- **Detection mode (PulseChain, which has no EIP-4788 today).** Each `admit` first probes `beaconRoots.staticcall(abi.encode(block.timestamp))`. If the call fails, or returns anything other than 32 non-zero bytes, the beacon-root contract is absent and the gate admits the deposit. Measured cost: about 745 gas per deposit. A deposit that reverts also undoes a switch to enforcing made in that same call; the next deposit detects again. When the probe returns a root, the gate switches itself to enforcing mode for good (`enforcing = true`, event `BeaconRootsDetected`), and the same call continues as an enforcing `admit`.
 - **Enforcing mode (Ethereum from deployment, PulseChain after detection).** The rules below apply.
 - **Why no admin key (user proposal, 2026-10-20).** The user proposed a self-destructing admin key that turns the gate on once PulseChain adopts EIP-4788. The probe gives the same switch with no key:
   - A key could turn the gate on too early and halt deposits forever, because the switch is one-way. It could also be lost, and then the gate would never turn on.
@@ -421,7 +423,7 @@ Anyone may also call `confirm(evidence)` directly. It runs the same checks witho
 
 ### Costs and limits
 
-- The first deposit in an epoch pays for the proof: about 30,000 to 40,000 gas, mostly calldata and one storage write. Later deposits in that epoch pay about 2,100 gas.
+- The first deposit in an epoch pays for the proof: about 30,000 to 40,000 gas, mostly calldata and one storage write. Later deposits in that epoch pay about 3,500 gas for the gate call and its storage read (measured).
 - Deposits fail when no beacon block exists yet in the current epoch. That happens in the first slot of each epoch, and after missed slots. The interface should wait one slot.
 - The proof needs a beacon state branch. Some beacon clients serve state proofs. Otherwise the prover service computes the branch from the state and serves it. A dedicated keeper can call `confirm` each epoch. That costs about 225 transactions a day, so on-demand confirmation by the first depositor is the default.
 
