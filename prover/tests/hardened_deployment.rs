@@ -30,6 +30,26 @@ fn live_fee() -> serde_json::Value {
     json!({ "authority": format!("{DEPLOYER:#x}"), "recipient": format!("{DEPLOYER:#x}"), "basisPoints": "25", "ceilingBasisPoints": "50" })
 }
 
+alloy_sol_types::sol! {
+    /// The read surface of `SupplyShareFlowLimiter` that the deployment test checks.
+    interface SupplyShareLimiter {
+        function vault() external view returns (address);
+        function shareBasisPoints() external view returns (uint16);
+        function windowSeconds() external view returns (uint64);
+        function sunsetTimestamp() external view returns (uint64);
+        function capOf(address token) external view returns (uint256);
+    }
+}
+
+/// The `flowLimit` object of one chain: a share of 10 basis points, a window of one day, no sunset, and a fixed supply
+/// of 100 million whole tokens (18 decimals) for `token`, so the cap is 100,000 tokens per window.
+fn flow_limit(token: Address) -> serde_json::Value {
+    json!({
+        "shareBasisPoints": "10", "windowSeconds": "86400", "sunsetTimestamp": "0",
+        "fixedSupplies": [{ "token": format!("{token:#x}"), "supply": "100000000000000000000000000" }],
+    })
+}
+
 /// The deploy script configuration for two chains. The deployer is the first Anvil account, and the script signs
 /// with it through `--unlocked`.
 fn script_config(
@@ -95,7 +115,7 @@ fn script_config_with_observation(
         json!({
             "rpcAlias": live.anvil.url, "chainId": id.to_string(), "verifier": format!("{verifier:#x}"),
             "verifierCodeHash": format!("{:#x}", keccak256(live.code_of(verifier))),
-            "depositCutoffTimestamp": "0", "deployerNonce": nonce.to_string(), "fee": fee, "flowLimiter": format!("{:#x}", Address::ZERO),
+            "depositCutoffTimestamp": "0", "deployerNonce": nonce.to_string(), "fee": fee,
             "lightClient": light_client(era, label), "gate": gate(mode),
         })
     };
@@ -154,12 +174,17 @@ struct ScriptChains {
 }
 
 /// Starts the two chains as the deploy script expects them: chain A has the beacon roots contract, and chain B sends
-/// one dummy transaction first, so the two chains give different contract addresses.
+/// dummy transactions first, so the two chains give different contract addresses. The gap must be wider than the
+/// longest run of contracts that the script deploys on one chain (six): forge names a deployed contract by its address
+/// alone, so an address that is a gate on one chain and a flow limiter on the other makes forge decode the constructor
+/// arguments of the gate with the ABI of the limiter, and the script fails after it has run.
 fn script_chains() -> ScriptChains {
     let chain_a = TestChain::start(1, Hardfork::Cancun);
     let chain_b = TestChain::start(369, Hardfork::Shanghai);
     install_beacon_roots(&chain_a);
-    chain_b.send(Some(DEPLOYER), &[]);
+    for _ in 0..8 {
+        chain_b.send(Some(DEPLOYER), &[]);
+    }
     let deploy_verifier = |chain: &TestChain| {
         chain.deploy(
             "OracleSP1Verifier",
@@ -525,6 +550,120 @@ fn r2_08_hardened_deploy_script_predicted_addresses_are_the_deployed_addresses()
         "the gate of chain 369 detects"
     );
     // The forge cache of this test is large. Remove the scratch directory (a failed run keeps it for inspection).
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Claim: with a `flowLimit` object on a chain, the deploy script deploys the limiter right before the vault, at the
+/// nonce that the plan predicts, and the limiter and the vault name each other. Without the object, the vault has no
+/// limiter.
+/// Shows: a control first. A fixed supply for a token that is not paired on its chain stops the script before it sends
+/// anything. The honest run puts a fourth contract on chain A (limiter at `n + 2`, vault at `n + 3`) and leaves chain B
+/// at three contracts, because only chain A has the object. Read from the chains: the vault on chain A names the limiter
+/// and the limiter names the vault, with the configured share, window, sunset and a cap of 100,000 tokens; the vault on
+/// chain B names no limiter.
+/// Why it matters: the limiter needs the predicted address of the vault, and the vault needs the limiter's. A nonce that
+/// shifted by one would leave a limiter that serves a stranger, and an outsider could use up the allowance of the vault.
+#[test]
+fn hardened_deploy_script_with_a_flow_limit_wires_the_limiter_and_the_vault_to_each_other() {
+    let _turn = FORGE_TURN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !tools_available() {
+        return;
+    }
+    let ScriptChains {
+        chain_a,
+        chain_b,
+        verifiers,
+        tokens,
+        nonces,
+    } = script_chains();
+    let directory = scratch("hardened-deploy-script-flow-limit");
+    let honest = script_config(&chain_a, &chain_b, verifiers, tokens, nonces, "0");
+    let with_limit = |token: Address| {
+        let mut config: serde_json::Value = serde_json::from_str(&honest).unwrap();
+        config["chainA"]["flowLimit"] = flow_limit(token);
+        config.to_string()
+    };
+
+    // Control: the token of chain B is not a local token of chain A.
+    let (ok, output) = run_script(&directory, &with_limit(tokens.1));
+    assert!(
+        !ok && output.contains("FixedSupplyTokenNotPaired"),
+        "a fixed supply for an unpaired token must stop the script:\n{output}"
+    );
+    assert_eq!(
+        (chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER)),
+        nonces,
+        "a refused run sends nothing"
+    );
+
+    // The honest run.
+    let (ok, output) = run_script(&directory, &with_limit(tokens.0));
+    assert!(ok, "the script must succeed:\n{output}");
+    assert_eq!(
+        (chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER)),
+        (nonces.0 + 4, nonces.1 + 3),
+        "four contracts on chain A (with the limiter), three on chain B"
+    );
+
+    // This test's own prediction: light client n, gate n + 1, limiter n + 2, vault n + 3.
+    let (limiter, vault_a) = (DEPLOYER.create(nonces.0 + 2), DEPLOYER.create(nonces.0 + 3));
+    let vault_b = DEPLOYER.create(nonces.1 + 2);
+    assert!(
+        chain_a.code_of(limiter).len() > 500,
+        "the limiter holds a contract on chain 1"
+    );
+    let address_of = |chain: &TestChain, to: Address, data: Vec<u8>| {
+        Address::from_slice(&chain.call(to, &data).unwrap()[12..])
+    };
+    assert_eq!(
+        address_of(
+            &chain_a,
+            vault_a,
+            VaultContract::flowLimiterCall {}.abi_encode()
+        ),
+        limiter,
+        "the vault names the limiter"
+    );
+    assert_eq!(
+        address_of(
+            &chain_a,
+            limiter,
+            SupplyShareLimiter::vaultCall {}.abi_encode()
+        ),
+        vault_a,
+        "the limiter names the vault"
+    );
+    assert_eq!(
+        address_of(
+            &chain_b,
+            vault_b,
+            VaultContract::flowLimiterCall {}.abi_encode()
+        ),
+        Address::ZERO,
+        "chain B has no flowLimit object and no limiter"
+    );
+    let number_of = |data: Vec<u8>| {
+        alloy_primitives::U256::from_be_slice(&chain_a.call(limiter, &data).unwrap())
+    };
+    assert_eq!(
+        number_of(SupplyShareLimiter::shareBasisPointsCall {}.abi_encode()),
+        alloy_primitives::U256::from(10)
+    );
+    assert_eq!(
+        number_of(SupplyShareLimiter::windowSecondsCall {}.abi_encode()),
+        alloy_primitives::U256::from(86_400)
+    );
+    assert_eq!(
+        number_of(SupplyShareLimiter::sunsetTimestampCall {}.abi_encode()),
+        alloy_primitives::U256::ZERO
+    );
+    assert_eq!(
+        number_of(SupplyShareLimiter::capOfCall { token: tokens.0 }.abi_encode()),
+        alloy_primitives::U256::from(100_000u64) * alloy_primitives::U256::from(ONE_TOKEN),
+        "a cap of 100,000 tokens per window"
+    );
     let _ = std::fs::remove_dir_all(&directory);
 }
 

@@ -19,7 +19,7 @@ The bridge moves tokens between two chains. A deposit on the source chain unlock
 - **Withdrawal with no proof.** The vault checks a withdrawal itself. It starts from a stored finalized header. It follows a Merkle path through `block_roots` (recent headers) or `historical_summaries` (old headers) to the block. It then checks the receipt and the deposit log. Only light client updates need a proof.
 - **Fork safety.** A fork that the proof program does not know would strand deposits. Each vault has a fork gate. On Ethereum, the gate reads the beacon roots contract (Ethereum Improvement Proposal 4788) and refuses a deposit that the route cannot deliver. PulseChain has no such contract today. There the gate runs in a detection mode, and it uses execution canaries (probes for new opcodes and precompiles). A fork registry on PulseChain records fork versions that a committee signature proves. No key switches any of this.
 - **Optional fee switch.** A vault can take a deposit fee. One fee authority sets it. An immutable ceiling of 1% limits it. A one-way call turns the fee off for good. Each deposit names a maximum fee, so no timelock is needed.
-- **Optional flow limiter hook.** A vault can attach one limiter contract that holds immutable rules. A refusal reverts and leaves the withdrawal claimable later. The rules are not written yet.
+- **Optional flow limiter hook.** A vault can attach one limiter contract that holds immutable rules. A refusal reverts and leaves the withdrawal claimable later. The first limiter, `SupplyShareFlowLimiter`, caps withdrawals of each token at 0.1% of its supply per 24 hours (100,000 ETH and 100 billion PLS). It is optional for each chain.
 - **Funded operator.** One funded operator runs the prover and pays the gas. The contracts take no proving fee. The operator holds no trusted role. The contracts check everything the operator sends.
 
 Details are in [`docs/hardened-build-contract.md`](docs/hardened-build-contract.md).
@@ -64,9 +64,8 @@ The code review and the comparison also produced fixes: the destination token bi
 | Item | State |
 |---|---|
 | Refunds (H-09) | Out of scope by user decision. A deposit made just before an unsupported fork, or to a blacklisted recipient, stays locked. |
-| Flow limit rules | Pending. The user will send them. |
 | Real SP1 prover backend | A stub. The program for fork observation is also stubbed in it. |
-| Outflow cap (G-01) | The flow limiter hook is built and waits for the limit rules. |
+| Outflow cap (G-01) | Built: `SupplyShareFlowLimiter`, 0.1% of supply per 24 hours. A withdrawal larger than the cap passes, then later withdrawals of that token wait while the debt refills. |
 | Second proof system (G-02) | Not adopted. Reconsider if the value at risk grows. See [`docs/sp1-version-policy.md`](docs/sp1-version-policy.md). |
 | Block parser | Reads Capella blocks only. The state parser reads Capella through Fulu. |
 | Real chain checks | No real Ethereum historical path check, and no reproducible SP1 build with a program key test. |
@@ -78,9 +77,9 @@ The red team tests pass when an attack **succeeds**. A green red team run means 
 
 | Suite | What it proves | Command | Count |
 |---|---|---|---|
-| Forge, root | The specification's contract holes (red team), and the hardened contracts: light client, vault, fork gate, registry, layouts, fee, limiter, deploy script | `forge test` | 422 passed |
+| Forge, root | The specification's contract holes (red team), and the hardened contracts: light client, vault, fork gate, registry, layouts, fee, limiter, deploy script | `forge test` | 447 passed |
 | Light client | The Rust reference programs: update verification, folds, fork observation, layouts, state parsing | `cargo test --offline` in `light-client/` | 143 passed |
-| Prover | The prover service, with two Anvil chains and the oracle backend | `cargo test --offline` in `prover/` | 156 passed |
+| Prover | The prover service, with two Anvil chains and the oracle backend | `cargo test --offline` in `prover/` | 157 passed |
 | Harness | End-to-end red team exploits on two Anvil chains (chain 1 on port 18545, chain 369 on port 18546) | `pnpm --dir harness install && pnpm --dir harness test` | Not rerun for this note |
 | Checks | The specification's circuit does not compile, the frontend fails, the deploy script cannot deploy, and the npm package does not exist | `bash checks/run.sh` | Not rerun for this note |
 

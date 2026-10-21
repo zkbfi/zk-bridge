@@ -7,6 +7,7 @@ import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
 import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
 import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
 import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
+import {SupplyShareFlowLimiter} from "../../src/hardened/SupplyShareFlowLimiter.sol";
 
 /// @title DeployBridge
 /// @notice Deploys the hardened bridge on two chains with predicted cross-chain addresses.
@@ -17,7 +18,9 @@ import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
 /// light-client data. Each chain gets a light client at the deployer nonce `n`, a deposit gate at `n + 1` and a vault
 /// at `n + 2`. A chain whose gate runs in `DetectBeaconRootsAndRegistry` mode (PulseChain) also gets a light client of
 /// its OWN beacon chain and a fork registry, so its layout is: light client `n`, own light client `n + 1`, registry
-/// `n + 2`, gate `n + 3`, vault `n + 4`. The light client on a chain tracks the OTHER chain's beacon chain. The deposit gate on a chain reads the
+/// `n + 2`, gate `n + 3`, vault `n + 4`. A chain with a `flowLimit` setting also deploys the flow limiter right before
+/// the vault, so the vault moves up by one nonce (the limiter takes the vault's predicted address, and the vault takes
+/// the limiter's). The light client on a chain tracks the OTHER chain's beacon chain. The deposit gate on a chain reads the
 /// beacon chain of THAT chain, because it guards the deposits made there.
 contract DeployBridge is Script {
     /// @notice The settings of one chain. The `lightClient` fields describe the OTHER chain's beacon chain.
@@ -29,7 +32,7 @@ contract DeployBridge is Script {
         uint256 deployerNonce;
         uint64 depositCutoffTimestamp;
         FeeConfig fee;
-        address flowLimiter;
+        FlowLimitConfig flowLimit;
         LightClientConfig lightClient;
         GateConfig gate;
         ObservationConfig observation;
@@ -42,6 +45,16 @@ contract DeployBridge is Script {
         address recipient;
         uint16 basisPoints;
         uint16 ceilingBasisPoints;
+    }
+
+    /// @notice The supply-share flow limiter of the vault on a chain. `enabled` is false when the chain's configuration has
+    /// no `flowLimit` object: the vault then has no limiter. The other fields are zero or empty in that case.
+    struct FlowLimitConfig {
+        bool enabled;
+        uint16 shareBasisPoints;
+        uint64 windowSeconds;
+        uint64 sunsetTimestamp;
+        SupplyShareFlowLimiter.FixedSupply[] fixedSupplies;
     }
 
     /// @notice The own-chain light client and the fork registry of a chain whose gate mode is
@@ -103,11 +116,13 @@ contract DeployBridge is Script {
         address observedLightClientA;
         address registryA;
         address gateA;
+        address flowLimiterA;
         address vaultA;
         address lightClientB;
         address observedLightClientB;
         address registryB;
         address gateB;
+        address flowLimiterB;
         address vaultB;
     }
 
@@ -119,6 +134,7 @@ contract DeployBridge is Script {
         address predictedObservedLightClient;
         address predictedRegistry;
         address predictedGate;
+        address predictedFlowLimiter;
         address predictedVault;
         uint64 remoteChainId;
         address remoteVault;
@@ -129,6 +145,8 @@ contract DeployBridge is Script {
     error PlaceholderValue(string key);
     /// @notice A configuration value is zero.
     error ZeroConfigValue(string key);
+    /// @notice A configuration value is above its largest allowed value.
+    error ConfigValueTooLarge(string key, uint256 value);
     /// @notice The two chains share one chain identifier.
     error SameChainIdentifier(uint64 chainId);
     /// @notice The configuration has no token pairs.
@@ -143,8 +161,8 @@ contract DeployBridge is Script {
     error VerifierHasNoCode(uint64 chainId, address verifier);
     /// @notice The code hash of the verifier differs from the pinned code hash.
     error VerifierCodeHashMismatch(uint64 chainId, address verifier, bytes32 expected, bytes32 actual);
-    /// @notice The configured flow limiter holds no code on its chain.
-    error FlowLimiterHasNoCode(uint64 chainId, address flowLimiter);
+    /// @notice A fixed supply of the flow limit names a token that is not a local token of the chain.
+    error FixedSupplyTokenNotPaired(uint64 chainId, address token);
     /// @notice A token address holds no code on its chain.
     error TokenHasNoCode(uint64 chainId, address token);
     /// @notice The signer of the script is not the configured deployer.
@@ -198,6 +216,7 @@ contract DeployBridge is Script {
             decimalsB
         );
         deploymentA = withRegistry(deploymentA, plan.observedLightClientA, plan.registryA);
+        deploymentA = withFlowLimiter(deploymentA, plan.flowLimiterA);
         ChainDeployment memory deploymentB = withPairs(
             baseDeployment(
                 config.chainB, config.chainA.chainId, config.deployer, plan.lightClientB, plan.gateB, plan.vaultB, plan.vaultA
@@ -207,6 +226,7 @@ contract DeployBridge is Script {
             decimalsA
         );
         deploymentB = withRegistry(deploymentB, plan.observedLightClientB, plan.registryB);
+        deploymentB = withFlowLimiter(deploymentB, plan.flowLimiterB);
 
         vm.selectFork(forkA);
         deployChain(deploymentA);
@@ -237,14 +257,16 @@ contract DeployBridge is Script {
             config.tokensA[i] = _toAddress(_readText(json, string.concat(pair, ".chainA")), ".tokenPairs.chainA");
             config.tokensB[i] = _toAddress(_readText(json, string.concat(pair, ".chainB")), ".tokenPairs.chainB");
         }
+        _requireFixedSuppliesArePaired(config.chainA, config.tokensA);
+        _requireFixedSuppliesArePaired(config.chainB, config.tokensB);
     }
 
     /// @notice Predicts every address from the deployer nonces. Nothing deploys here.
     /// @param config The validated configuration.
     function predictAddresses(BridgeConfig memory config) public pure returns (Plan memory plan) {
-        (plan.lightClientA, plan.observedLightClientA, plan.registryA, plan.gateA, plan.vaultA) =
+        (plan.lightClientA, plan.observedLightClientA, plan.registryA, plan.gateA, plan.flowLimiterA, plan.vaultA) =
             _predictChain(config.deployer, config.chainA);
-        (plan.lightClientB, plan.observedLightClientB, plan.registryB, plan.gateB, plan.vaultB) =
+        (plan.lightClientB, plan.observedLightClientB, plan.registryB, plan.gateB, plan.flowLimiterB, plan.vaultB) =
             _predictChain(config.deployer, config.chainB);
     }
 
@@ -259,6 +281,7 @@ contract DeployBridge is Script {
         console2.log("  own-chain light client", plan.observedLightClientA);
         console2.log("  fork registry", plan.registryA);
         console2.log("  deposit gate", plan.gateA);
+        console2.log("  flow limiter", plan.flowLimiterA);
         console2.log("  vault", plan.vaultA);
         console2.log("chain B", config.chainB.chainId, config.chainB.rpcAlias);
         console2.log("  nonce", config.chainB.deployerNonce);
@@ -266,6 +289,7 @@ contract DeployBridge is Script {
         console2.log("  own-chain light client", plan.observedLightClientB);
         console2.log("  fork registry", plan.registryB);
         console2.log("  deposit gate", plan.gateB);
+        console2.log("  flow limiter", plan.flowLimiterB);
         console2.log("  vault", plan.vaultB);
         console2.log("token pairs", config.tokensA.length);
     }
@@ -312,6 +336,18 @@ contract DeployBridge is Script {
         return deployment;
     }
 
+    /// @notice Adds the predicted flow limiter to a deployment.
+    /// @param deployment The deployment.
+    /// @param flowLimiter The predicted flow limiter, or zero when the chain has none.
+    function withFlowLimiter(ChainDeployment memory deployment, address flowLimiter)
+        public
+        pure
+        returns (ChainDeployment memory)
+    {
+        deployment.predictedFlowLimiter = flowLimiter;
+        return deployment;
+    }
+
     /// @notice Adds the token pairs to a deployment.
     /// @param deployment The deployment without pairs.
     /// @param localTokens The tokens on this chain.
@@ -337,7 +373,7 @@ contract DeployBridge is Script {
     // ------------------------------------------------------------------ chain checks
 
     /// @notice Refuses to continue when the connected chain, the deployer nonce, the verifier or its pinned code hash,
-    /// the beacon roots contract of an enforcing gate, or a non-zero flow limiter is wrong. It runs before any broadcast.
+    /// or the beacon roots contract of an enforcing gate is wrong. It runs before any broadcast.
     /// @param chain The settings of the connected chain.
     /// @param deployer The deployer.
     function assertChainEnvironment(ChainConfig memory chain, address deployer) public view {
@@ -351,15 +387,14 @@ contract DeployBridge is Script {
         if (chain.gate.mode == BeaconForkGate.GateMode.Enforcing && BEACON_ROOTS.code.length == 0) {
             revert BeaconRootsHaveNoCode(chain.chainId, BEACON_ROOTS);
         }
-        if (chain.flowLimiter != address(0) && chain.flowLimiter.code.length == 0) {
-            revert FlowLimiterHasNoCode(chain.chainId, chain.flowLimiter);
-        }
     }
 
     // ------------------------------------------------------------------ deployment
 
-    /// @notice Deploys the light client, the deposit gate and the vault from the deployer, then reads everything back.
+    /// @notice Deploys the light client, the deposit gate, the flow limiter (when configured) and the vault from the
+    /// deployer, then reads everything back.
     /// @dev The caller selects the right fork first. The light client takes nonce `n`, the gate `n + 1`, the vault `n + 2`.
+    /// With a flow limiter, the limiter takes `n + 2` and the vault `n + 3`.
     /// @param deployment The deployment of one chain.
     /// @return lightClient The deployed light client.
     /// @return gate The deployed deposit gate.
@@ -379,7 +414,8 @@ contract DeployBridge is Script {
             registry = _deployRegistry(deployment.chain, observedLightClient);
         }
         gate = _deployGate(deployment.chain.gate, registry);
-        vault = _deployVault(deployment, lightClient, gate);
+        address flowLimiter = _deployFlowLimiter(deployment);
+        vault = _deployVault(deployment, lightClient, gate, flowLimiter);
         vm.stopBroadcast();
 
         verifyDeployment(deployment, lightClient, gate, vault);
@@ -403,6 +439,7 @@ contract DeployBridge is Script {
         _verifyLightClient(deployment.chain, lightClient);
         _verifyGate(deployment.chain.gate, gate);
         _verifyVault(deployment, lightClient, gate, vault);
+        _verifyFlowLimiter(deployment, vault);
     }
 
     /// @notice Reads back the fork registry and the own-chain light client behind the gate. In other modes it checks
@@ -453,11 +490,19 @@ contract DeployBridge is Script {
 
     // ------------------------------------------------------------------ internals
 
-    /// @dev Light client at `n`; with a registry: own light client `n + 1`, registry `n + 2`; then gate and vault.
+    /// @dev Light client at `n`; with a registry: own light client `n + 1`, registry `n + 2`; then gate, the flow limiter
+    /// when configured (zero otherwise), and vault.
     function _predictChain(address deployer, ChainConfig memory chain)
         private
         pure
-        returns (address lightClient, address observedLightClient, address registry, address gate, address vault)
+        returns (
+            address lightClient,
+            address observedLightClient,
+            address registry,
+            address gate,
+            address flowLimiter,
+            address vault
+        )
     {
         uint256 nonce = chain.deployerNonce;
         lightClient = vm.computeCreateAddress(deployer, nonce++);
@@ -466,6 +511,7 @@ contract DeployBridge is Script {
             registry = vm.computeCreateAddress(deployer, nonce++);
         }
         gate = vm.computeCreateAddress(deployer, nonce++);
+        if (chain.flowLimit.enabled) flowLimiter = vm.computeCreateAddress(deployer, nonce++);
         vault = vm.computeCreateAddress(deployer, nonce);
     }
 
@@ -523,7 +569,22 @@ contract DeployBridge is Script {
         );
     }
 
-    function _deployVault(ChainDeployment memory deployment, address lightClient, address gate)
+    /// @dev The limiter takes the PREDICTED vault, because the vault does not exist yet. Zero when no limit is configured.
+    function _deployFlowLimiter(ChainDeployment memory deployment) private returns (address) {
+        FlowLimitConfig memory limit = deployment.chain.flowLimit;
+        if (!limit.enabled) return address(0);
+        return address(
+            new SupplyShareFlowLimiter(
+                deployment.predictedVault,
+                limit.shareBasisPoints,
+                limit.windowSeconds,
+                limit.sunsetTimestamp,
+                limit.fixedSupplies
+            )
+        );
+    }
+
+    function _deployVault(ChainDeployment memory deployment, address lightClient, address gate, address flowLimiter)
         private
         returns (address)
     {
@@ -541,7 +602,7 @@ contract DeployBridge is Script {
                     feeRecipient: chain.fee.recipient,
                     feeBasisPoints: chain.fee.basisPoints,
                     feeCeilingBasisPoints: chain.fee.ceilingBasisPoints,
-                    flowLimiter: chain.flowLimiter
+                    flowLimiter: flowLimiter
                 }),
                 chain.lightClient.capellaEra,
                 gate
@@ -626,7 +687,9 @@ contract DeployBridge is Script {
         if (bridgeVault.feeCeilingBasisPoints() != chain.fee.ceilingBasisPoints) {
             revert DeploymentMismatch("vault.feeCeilingBasisPoints");
         }
-        if (address(bridgeVault.flowLimiter()) != chain.flowLimiter) revert DeploymentMismatch("vault.flowLimiter");
+        if (address(bridgeVault.flowLimiter()) != deployment.predictedFlowLimiter) {
+            revert DeploymentMismatch("vault.flowLimiter");
+        }
         if (
             bridgeVault.stateLayouts().length != 0 || bridgeVault.bodyLayouts().length != 0
                 || bridgeVault.historicalLayouts().length != 0
@@ -637,6 +700,24 @@ contract DeployBridge is Script {
             BridgeVault.TokenPair memory pair = deployment.pairs[i];
             if (bridgeVault.remoteTokenOf(pair.localToken) != pair.remoteToken) revert DeploymentMismatch("vault.remoteTokenOf");
             if (bridgeVault.localTokenOf(pair.remoteToken) != pair.localToken) revert DeploymentMismatch("vault.localTokenOf");
+        }
+    }
+
+    /// @dev Reads the flow limiter back. The vault must name it (checked in `_verifyVault`, which also requires no limiter
+    /// when none is configured) and it must name the vault: a limiter that serves another vault would let an outsider
+    /// use up the allowance of this one, and nothing could repair it. Then every parameter of the limiter is compared
+    /// with the configuration.
+    function _verifyFlowLimiter(ChainDeployment memory deployment, address vault) private view {
+        FlowLimitConfig memory limit = deployment.chain.flowLimit;
+        if (!limit.enabled) return;
+        SupplyShareFlowLimiter limiter = SupplyShareFlowLimiter(address(BridgeVault(vault).flowLimiter()));
+        if (limiter.vault() != vault) revert DeploymentMismatch("flowLimiter.vault");
+        if (limiter.shareBasisPoints() != limit.shareBasisPoints) revert DeploymentMismatch("flowLimiter.shareBasisPoints");
+        if (limiter.windowSeconds() != limit.windowSeconds) revert DeploymentMismatch("flowLimiter.windowSeconds");
+        if (limiter.sunsetTimestamp() != limit.sunsetTimestamp) revert DeploymentMismatch("flowLimiter.sunsetTimestamp");
+        for (uint256 i = 0; i < limit.fixedSupplies.length; i++) {
+            SupplyShareFlowLimiter.FixedSupply memory entry = limit.fixedSupplies[i];
+            if (limiter.fixedSupplyOf(entry.token) != entry.supply) revert DeploymentMismatch("flowLimiter.fixedSupplyOf");
         }
     }
 
@@ -662,7 +743,7 @@ contract DeployBridge is Script {
         chain.deployerNonce = _readUint(json, string.concat(prefix, ".deployerNonce"));
         chain.depositCutoffTimestamp = uint64(_readUint(json, string.concat(prefix, ".depositCutoffTimestamp")));
         chain.fee = _readFee(json, string.concat(prefix, ".fee"));
-        chain.flowLimiter = vm.parseAddress(_readText(json, string.concat(prefix, ".flowLimiter")));
+        chain.flowLimit = _readFlowLimit(json, string.concat(prefix, ".flowLimit"));
         string memory client = string.concat(prefix, ".lightClient");
         chain.lightClient.programVKey = _readBytes32(json, string.concat(client, ".programVKey"));
         chain.lightClient.genesisValidatorsRoot = _readBytes32(json, string.concat(client, ".genesisValidatorsRoot"));
@@ -690,6 +771,44 @@ contract DeployBridge is Script {
         fee.recipient = vm.parseAddress(_readText(json, string.concat(prefix, ".recipient")));
         fee.basisPoints = uint16(_readUint(json, string.concat(prefix, ".basisPoints")));
         fee.ceilingBasisPoints = uint16(_readUint(json, string.concat(prefix, ".ceilingBasisPoints")));
+    }
+
+    /// @dev The flow limit of one vault. A missing object means no limiter. A present object needs every key. The share
+    /// and the window must not be zero, and the limiter constructor checks the rest.
+    function _readFlowLimit(string memory json, string memory prefix) private view returns (FlowLimitConfig memory limit) {
+        if (!vm.keyExistsJson(json, prefix)) return limit;
+        limit.enabled = true;
+        uint256 share = _readNonZeroUint(json, string.concat(prefix, ".shareBasisPoints"));
+        if (share > 10_000) revert ConfigValueTooLarge(string.concat(prefix, ".shareBasisPoints"), share);
+        limit.shareBasisPoints = uint16(share);
+        limit.windowSeconds = uint64(_readNonZeroUint(json, string.concat(prefix, ".windowSeconds")));
+        limit.sunsetTimestamp = uint64(_readUint(json, string.concat(prefix, ".sunsetTimestamp")));
+        string memory suppliesKey = string.concat(prefix, ".fixedSupplies");
+        uint256 count = _arrayLength(json, suppliesKey);
+        limit.fixedSupplies = new SupplyShareFlowLimiter.FixedSupply[](count);
+        for (uint256 i = 0; i < count; i++) {
+            string memory entry = string.concat(suppliesKey, "[", vm.toString(i), "]");
+            limit.fixedSupplies[i] = SupplyShareFlowLimiter.FixedSupply({
+                token: _readAddress(json, string.concat(entry, ".token")),
+                supply: _readNonZeroUint(json, string.concat(entry, ".supply"))
+            });
+        }
+    }
+
+    /// @dev Every token of a fixed supply must be a local token of a configured pair. A fixed supply for another token
+    /// would be dead, and it hides a mistaken address. The relationship is asserted, not assumed.
+    function _requireFixedSuppliesArePaired(ChainConfig memory chain, address[] memory localTokens) private pure {
+        SupplyShareFlowLimiter.FixedSupply[] memory supplies = chain.flowLimit.fixedSupplies;
+        for (uint256 i = 0; i < supplies.length; i++) {
+            if (!_contains(localTokens, supplies[i].token)) revert FixedSupplyTokenNotPaired(chain.chainId, supplies[i].token);
+        }
+    }
+
+    function _contains(address[] memory list, address item) private pure returns (bool) {
+        for (uint256 i = 0; i < list.length; i++) {
+            if (list[i] == item) return true;
+        }
+        return false;
     }
 
     function _readObservation(string memory json, string memory prefix)

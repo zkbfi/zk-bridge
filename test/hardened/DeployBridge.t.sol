@@ -9,7 +9,7 @@ import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
 import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
 import {OracleSP1Verifier} from "../../src/mocks/OracleSP1Verifier.sol";
 import {MockERC20} from "../../src/mocks/MockERC20.sol";
-import {ScriptedFlowLimiter} from "./utils/FlowLimiterMocks.sol";
+import {SupplyShareFlowLimiter} from "../../src/hardened/SupplyShareFlowLimiter.sol";
 
 /// @notice Tests of the deploy script logic. One Foundry chain plays both chains: the test switches `block.chainid`
 /// and the deployer nonce with cheatcodes, and it uses different nonces on the two sides so the addresses differ.
@@ -23,8 +23,10 @@ contract DeployBridgeTest is Test {
     MockERC20 internal tokenOnB;
 
     address internal deployer = makeAddr("deployer");
-    /// @dev The flow limiter that `_chainJson` writes for chain 1. Zero, as in the example configuration, unless a test sets it.
-    address internal configuredFlowLimiter;
+    /// @dev The `flowLimit` text that `_chainJson` writes for chain 1 and for chain 369. Empty means no limiter, so a test
+    /// sets one to deploy with a limiter.
+    string internal flowLimitOnChainA;
+    string internal flowLimitOnChainB;
     uint256 internal constant NONCE_A = 3;
     uint256 internal constant NONCE_B = 8;
     address internal constant BEACON_ROOTS = 0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02;
@@ -65,7 +67,7 @@ contract DeployBridgeTest is Test {
             '","verifier":"', verifierText, '","verifierCodeHash":"', _hexString(address(verifier).codehash),
             '","depositCutoffTimestamp":"0","deployerNonce":"', vm.toString(nonce), '",',
             chainId == 1 ? _liveFeeJson() : _nullifiedFeeJson(),
-            '"flowLimiter":"', vm.toString(chainId == 1 ? configuredFlowLimiter : address(0)), '",'
+            chainId == 1 ? flowLimitOnChainA : flowLimitOnChainB
         );
         string memory client = string.concat(
             '"lightClient":{"programVKey":"', _hexString(keccak256("light client program")),
@@ -80,6 +82,14 @@ contract DeployBridgeTest is Test {
         );
         return string.concat(
             head, client, checkpoint, chainId == 1 ? _ethereumGate() : string.concat(_pulsechainGate(), _observationJson(slot)), "}"
+        );
+    }
+
+    /// @dev A `flowLimit` object with a share of 10 basis points, a window of one day, one fixed supply and a sunset.
+    function _flowLimitJson(address token, uint256 supply, uint256 sunsetTimestamp) internal pure returns (string memory) {
+        return string.concat(
+            '"flowLimit":{"shareBasisPoints":"10","windowSeconds":"86400","sunsetTimestamp":"', vm.toString(sunsetTimestamp),
+            '","fixedSupplies":[{"token":"', vm.toString(token), '","supply":"', vm.toString(supply), '"}]},'
         );
     }
 
@@ -181,6 +191,8 @@ contract DeployBridgeTest is Test {
         );
         deploymentA = script.withRegistry(deploymentA, plan.observedLightClientA, plan.registryA);
         deploymentB = script.withRegistry(deploymentB, plan.observedLightClientB, plan.registryB);
+        deploymentA = script.withFlowLimiter(deploymentA, plan.flowLimiterA);
+        deploymentB = script.withFlowLimiter(deploymentB, plan.flowLimiterB);
     }
 
     /// @dev Puts code at the beacon roots address, as an Ethereum node has it.
@@ -266,13 +278,17 @@ contract DeployBridgeTest is Test {
     function test_HB02_exampleConfigurationHoldsEveryKeyTheScriptReads() public view {
         string memory json = vm.readFile("script/hardened/bridge.config.example.json");
         string[2] memory chains = [".chainA", ".chainB"];
-        string[23] memory keys = [
+        string[22] memory keys = [
             ".rpcAlias", ".chainId", ".verifier", ".verifierCodeHash", ".depositCutoffTimestamp", ".deployerNonce",
             ".fee.authority", ".fee.recipient", ".fee.basisPoints", ".fee.ceilingBasisPoints",
-            ".flowLimiter", ".lightClient.programVKey", ".lightClient.genesisValidatorsRoot", ".lightClient.slotsPerPeriod",
+            ".lightClient.programVKey", ".lightClient.genesisValidatorsRoot", ".lightClient.slotsPerPeriod",
             ".lightClient.genesisTime", ".lightClient.secondsPerSlot", ".lightClient.slotsPerEpoch", ".lightClient.capellaForkEpoch", ".lightClient.capellaEra",
             ".lightClient.initialSlot", ".lightClient.initialHeaderRoot", ".lightClient.initialSyncCommitteeHash",
             ".lightClient.initialNextSyncCommitteeHash"
+        ];
+        string[5] memory flowLimitKeys = [
+            ".flowLimit.shareBasisPoints", ".flowLimit.windowSeconds", ".flowLimit.sunsetTimestamp",
+            ".flowLimit.fixedSupplies[0].token", ".flowLimit.fixedSupplies[0].supply"
         ];
         string[9] memory gateKeys = [
             ".gate.mode", ".gate.genesisTime", ".gate.secondsPerSlot", ".gate.slotsPerEpoch",
@@ -283,10 +299,15 @@ contract DeployBridgeTest is Test {
             for (uint256 k = 0; k < keys.length; k++) {
                 assertTrue(vm.keyExistsJson(json, string.concat(chains[c], keys[k])), string.concat(chains[c], keys[k]));
             }
+            for (uint256 k = 0; k < flowLimitKeys.length; k++) {
+                string memory path = string.concat(chains[c], flowLimitKeys[k]);
+                assertTrue(vm.keyExistsJson(json, path), path);
+            }
             for (uint256 k = 0; k < gateKeys.length; k++) {
                 string memory path = string.concat(chains[c], gateKeys[k]);
                 assertTrue(vm.keyExistsJson(json, path), path);
             }
+            assertFalse(vm.keyExistsJson(json, string.concat(chains[c], ".flowLimiter")), "the old address setting is gone");
             string memory removed = string.concat(chains[c], ".lightClient.slotsPerHistoricalRoot");
             assertFalse(vm.keyExistsJson(json, removed), "the removed key is still in the example");
         }
@@ -593,6 +614,8 @@ contract DeployBridgeTest is Test {
         assertEq(address(registryB.verifier()), address(verifier));
         assertEq(address(BeaconForkGate(gateA).forkRegistry()), address(0), "Ethereum stays enforcing with no registry");
 
+        assertEq(address(BridgeVault(vaultA).flowLimiter()), address(0), "no flowLimit object: no limiter on chain A");
+        assertEq(address(BridgeVault(vaultB).flowLimiter()), address(0), "no flowLimit object: no limiter on chain B");
         assertEq(BridgeVault(vaultA).remoteVault(), vaultB, "vault A points at the real vault B");
         assertEq(BridgeVault(vaultB).remoteVault(), vaultA, "vault B points at the real vault A");
         assertEq(address(BridgeVault(vaultA).lightClient()), lightClientA);
@@ -617,45 +640,146 @@ contract DeployBridgeTest is Test {
 
     // ================================================================ flow limiter
 
-    /// Claim: the flow limiter setting defaults to zero and a non-zero address is read as written. Shows: the
-    /// complete configuration gives chain A and chain B a zero limiter; with an address in the setting, chain A gets that
-    /// address and chain B stays zero. Matters: the limiter is optional, and a misread address would pin the wrong rules.
-    function test_flowLimiter_parseConfig_defaultsToZeroAndReadsAnAddress() public {
-        DeployBridge.BridgeConfig memory config = script.parseConfig(_validJson());
-        assertEq(config.chainA.flowLimiter, address(0));
-        assertEq(config.chainB.flowLimiter, address(0));
-
-        configuredFlowLimiter = address(new ScriptedFlowLimiter());
-        config = script.parseConfig(_validJson());
-        assertEq(config.chainA.flowLimiter, configuredFlowLimiter);
-        assertEq(config.chainB.flowLimiter, address(0), "the setting is per chain");
+    /// Claim: the example file asks for the first limit the user chose. Shows: both chains hold a share of 10 basis
+    /// points, a window of 86,400 seconds and a sunset of zero; Ethereum fixes wrapped ETH at 100,000,000 ETH and
+    /// PulseChain fixes wrapped PLS at 100,000,000,000,000 PLS, in base units of 18 decimals. Matters: a supply with a
+    /// wrong power of ten would move the cap by that power, and the example is the template an operator copies.
+    function test_flowLimit_exampleConfigurationHoldsTheChosenLimit() public view {
+        string memory json = vm.readFile("script/hardened/bridge.config.example.json");
+        string[2] memory chains = [".chainA", ".chainB"];
+        string[2] memory supplies = ["100000000000000000000000000", "100000000000000000000000000000000"];
+        for (uint256 c = 0; c < chains.length; c++) {
+            string memory prefix = string.concat(chains[c], ".flowLimit");
+            assertEq(vm.parseJsonString(json, string.concat(prefix, ".shareBasisPoints")), "10");
+            assertEq(vm.parseJsonString(json, string.concat(prefix, ".windowSeconds")), "86400");
+            assertEq(vm.parseJsonString(json, string.concat(prefix, ".sunsetTimestamp")), "0");
+            assertEq(vm.parseJsonString(json, string.concat(prefix, ".fixedSupplies[0].supply")), supplies[c]);
+            assertFalse(vm.keyExistsJson(json, string.concat(prefix, ".fixedSupplies[1]")), "one fixed supply per chain");
+        }
+        assertEq(vm.parseUint(supplies[0]), 100_000_000 * 1e18, "100 million ETH");
+        assertEq(vm.parseUint(supplies[1]), 100_000_000_000_000 * 1e18, "100 trillion PLS");
     }
 
-    /// Claim: a non-zero limiter must have code on its chain. Shows: an address with no code reverts with the chain and
-    /// the address; a limiter with code passes; a zero limiter passes. Matters: a limiter address with no code would make
-    /// every deposit revert on the call, and the immutable choice could not be repaired.
-    function test_flowLimiter_environmentRequiresCodeForANonZeroLimiter() public {
+    /// Claim: a chain with no `flowLimit` object has no limiter, and a chain with one reads every value as written.
+    /// Shows: the complete configuration gives both chains `enabled` false; with an object on chain A it holds the
+    /// share, the window, the sunset and the fixed supply, and chain B stays disabled. Matters: absent means no limiter,
+    /// and a misread value would pin the wrong rules into an immutable contract.
+    function test_flowLimit_parseConfig_absentMeansNoLimiterAndPresentIsReadAsWritten() public {
         DeployBridge.BridgeConfig memory config = script.parseConfig(_validJson());
+        assertFalse(config.chainA.flowLimit.enabled);
+        assertFalse(config.chainB.flowLimit.enabled);
+
+        flowLimitOnChainA = _flowLimitJson(address(tokenOnA), 100_000_000e18, 1_900_000_000);
+        config = script.parseConfig(_validJson());
+        DeployBridge.FlowLimitConfig memory limit = config.chainA.flowLimit;
+        assertTrue(limit.enabled);
+        assertEq(limit.shareBasisPoints, 10);
+        assertEq(limit.windowSeconds, 86_400);
+        assertEq(limit.sunsetTimestamp, 1_900_000_000);
+        assertEq(limit.fixedSupplies.length, 1);
+        assertEq(limit.fixedSupplies[0].token, address(tokenOnA));
+        assertEq(limit.fixedSupplies[0].supply, 100_000_000e18);
+        assertFalse(config.chainB.flowLimit.enabled, "the setting is per chain");
+    }
+
+    /// Claim: a flow limit with a zero share, a zero window, a share above 100 percent, or a fixed supply for a token that
+    /// is not a local token of the chain is refused. Shows: each case reverts with the key or the token. Matters: a limit
+    /// that can never refill, or that names a stranger's token, would be pinned for good.
+    function test_flowLimit_parseConfig_refusesValuesThatCannotWork() public {
+        flowLimitOnChainA = _flowLimitJson(address(tokenOnA), 100_000_000e18, 0);
+        string memory good = _validJson();
+
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.flowLimit.shareBasisPoints"));
+        script.parseConfig(vm.replace(good, '"shareBasisPoints":"10"', '"shareBasisPoints":"0"'));
+
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.flowLimit.windowSeconds"));
+        script.parseConfig(vm.replace(good, '"windowSeconds":"86400"', '"windowSeconds":"0"'));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.ConfigValueTooLarge.selector, ".chainA.flowLimit.shareBasisPoints", 65_546)
+        );
+        script.parseConfig(vm.replace(good, '"shareBasisPoints":"10"', '"shareBasisPoints":"65546"'));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.flowLimit.fixedSupplies[0].supply")
+        );
+        script.parseConfig(vm.replace(good, '"supply":"100000000000000000000000000"', '"supply":"0"'));
+
+        // The token of chain B is a token of the other chain: not paired on chain A.
+        flowLimitOnChainA = _flowLimitJson(address(tokenOnB), 100_000_000e18, 0);
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.FixedSupplyTokenNotPaired.selector, uint64(1), address(tokenOnB)));
+        script.parseConfig(_validJson());
+    }
+
+    /// Claim: with a limiter on a chain, the limiter takes the nonce before the vault and the vault moves up by one;
+    /// with none, nothing moves. Shows: chain A with a limiter predicts light client n, gate n + 1, limiter n + 2, vault
+    /// n + 3; chain B with a limiter after its registry predicts limiter n + 5 and vault n + 6; with no limiter the
+    /// prediction is the old one and the limiter address is zero. Matters: the limiter needs the vault's address and
+    /// the vault needs the limiter's, and both come from the nonce, so a shifted nonce points one at nothing.
+    function test_flowLimit_predictionPutsTheLimiterBeforeTheVault() public {
+        DeployBridge.Plan memory plain = script.predictAddresses(script.parseConfig(_validJson()));
+        assertEq(plain.flowLimiterA, address(0));
+        assertEq(plain.flowLimiterB, address(0));
+        assertEq(plain.vaultA, vm.computeCreateAddress(deployer, NONCE_A + 2));
+
+        flowLimitOnChainA = _flowLimitJson(address(tokenOnA), 100_000_000e18, 0);
+        flowLimitOnChainB = _flowLimitJson(address(tokenOnB), 100_000_000_000_000e18, 0);
+        DeployBridge.Plan memory plan = script.predictAddresses(script.parseConfig(_validJson()));
+        assertEq(plan.gateA, vm.computeCreateAddress(deployer, NONCE_A + 1));
+        assertEq(plan.flowLimiterA, vm.computeCreateAddress(deployer, NONCE_A + 2));
+        assertEq(plan.vaultA, vm.computeCreateAddress(deployer, NONCE_A + 3));
+        assertEq(plan.gateB, vm.computeCreateAddress(deployer, NONCE_B + 3));
+        assertEq(plan.flowLimiterB, vm.computeCreateAddress(deployer, NONCE_B + 4));
+        assertEq(plan.vaultB, vm.computeCreateAddress(deployer, NONCE_B + 5));
+    }
+
+    /// Claim: a deployment with a limiter on both chains wires the limiter and the vault to each other and builds the
+    /// limiter from the configuration; a chain with no limiter deploys a vault with none. Shows: chain A with a limiter
+    /// (a sunset and a fixed supply for wrapped ETH) and chain B with another one (wrapped PLS) deploy at the predicted
+    /// addresses; `limiter.vault()` is the vault and `vault.flowLimiter()` is the limiter, on both chains; the caps are
+    /// 100,000 ETH and 100,000,000,000 PLS in base units; the nonce shows one more contract per limiter. Matters: the vault and the limiter are immutable, and the
+    /// two read-back checks are the only proof that they point at each other.
+    function test_flowLimit_deployChainWiresTheLimiterAndTheVaultToEachOther() public {
+        flowLimitOnChainA = _flowLimitJson(address(tokenOnA), 100_000_000e18, 1_900_000_000);
+        flowLimitOnChainB = _flowLimitJson(address(tokenOnB), 100_000_000_000_000e18, 0);
+        DeployBridge.BridgeConfig memory config = script.parseConfig(_validJson());
+        DeployBridge.Plan memory plan = script.predictAddresses(config);
+        (DeployBridge.ChainDeployment memory deploymentA, DeployBridge.ChainDeployment memory deploymentB) =
+            _deployments(config, plan);
+
         _etchBeaconRoots();
         vm.chainId(1);
         vm.setNonce(deployer, uint64(NONCE_A));
-        script.assertChainEnvironment(config.chainA, deployer); // honest: no limiter
+        (,, address vaultA) = script.deployChain(deploymentA);
+        assertEq(vm.getNonce(deployer), NONCE_A + 4, "the limiter is a fourth contract on chain A");
+        vm.chainId(369);
+        vm.setNonce(deployer, uint64(NONCE_B));
+        (,, address vaultB) = script.deployChain(deploymentB);
+        assertEq(vm.getNonce(deployer), NONCE_B + 6, "the limiter is a sixth contract on chain B");
 
-        address withoutCode = makeAddr("a limiter address with no code");
-        config.chainA.flowLimiter = withoutCode;
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.FlowLimiterHasNoCode.selector, uint64(1), withoutCode));
-        script.assertChainEnvironment(config.chainA, deployer);
-
-        config.chainA.flowLimiter = address(new ScriptedFlowLimiter());
-        script.assertChainEnvironment(config.chainA, deployer); // honest: a limiter with code
+        SupplyShareFlowLimiter limiterA = SupplyShareFlowLimiter(plan.flowLimiterA);
+        SupplyShareFlowLimiter limiterB = SupplyShareFlowLimiter(plan.flowLimiterB);
+        assertEq(address(BridgeVault(vaultA).flowLimiter()), address(limiterA));
+        assertEq(address(BridgeVault(vaultB).flowLimiter()), address(limiterB));
+        assertEq(limiterA.vault(), vaultA, "the limiter on chain A serves the vault on chain A");
+        assertEq(limiterB.vault(), vaultB, "the limiter on chain B serves the vault on chain B");
+        assertTrue(limiterA.vault() != limiterB.vault());
+        assertEq(limiterA.shareBasisPoints(), 10);
+        assertEq(limiterA.windowSeconds(), 86_400);
+        assertEq(limiterA.sunsetTimestamp(), 1_900_000_000);
+        assertEq(limiterB.sunsetTimestamp(), 0);
+        assertEq(limiterA.capOf(address(tokenOnA)), 100_000e18, "100,000 ETH per window");
+        assertEq(limiterB.capOf(address(tokenOnB)), 100_000_000_000e18, "100,000,000,000 PLS per window");
     }
 
-    /// Claim: a deployment with a non-zero limiter puts that limiter in the vault, and the read-back refuses a vault with
-    /// another limiter or none. Shows: `deployChain` for chain A with a limiter; the vault reports it and
-    /// `verifyDeployment` passes; a vault built with no limiter and one built with another limiter each fail with the
-    /// field name. Matters: the limiter is immutable at deployment, so the read-back is the only check.
-    function test_flowLimiter_deployChainSetsItAndReadBackCatchesAWrongOne() public {
-        configuredFlowLimiter = address(new ScriptedFlowLimiter());
+    /// Claim: the read-back refuses a vault with another limiter or none, a limiter that serves another vault, and a
+    /// limiter with other parameters. Shows: `verifyDeployment` on an honest chain A passes; then a vault with no limiter,
+    /// a vault with a limiter of another vault, and a vault with a limiter of a different share each fail with the field
+    /// name; a vault with a limiter when none is configured fails too. Matters: the choice is immutable at deployment, so
+    /// the read-back is the only check, and the first two failures are the ones that leave the vault unprotected or open
+    /// to an outsider who spends its allowance.
+    function test_flowLimit_readBackCatchesAWrongLimiter() public {
+        flowLimitOnChainA = _flowLimitJson(address(tokenOnA), 100_000_000e18, 0);
         DeployBridge.BridgeConfig memory config = script.parseConfig(_validJson());
         DeployBridge.Plan memory plan = script.predictAddresses(config);
         (DeployBridge.ChainDeployment memory deploymentA,) = _deployments(config, plan);
@@ -664,20 +788,67 @@ contract DeployBridgeTest is Test {
         vm.chainId(1);
         vm.setNonce(deployer, uint64(NONCE_A));
         (address lightClient, address gate, address vault) = script.deployChain(deploymentA);
-        assertEq(address(BridgeVault(vault).flowLimiter()), configuredFlowLimiter);
+        script.verifyDeployment(deploymentA, lightClient, gate, vault); // control: the honest deployment passes
 
-        address[2] memory wrongLimiters = [address(0), address(new ScriptedFlowLimiter())];
-        for (uint256 i = 0; i < wrongLimiters.length; i++) {
-            DeployBridge.FeeConfig memory fee = deploymentA.chain.fee;
-            BridgeVault wrong = new BridgeVault(
-                lightClient, 1, 369, deploymentA.remoteVault, deploymentA.pairs,
-                BridgeVault.VaultTerms(0, fee.authority, fee.recipient, fee.basisPoints, fee.ceilingBasisPoints, wrongLimiters[i]),
-                deploymentA.chain.lightClient.capellaEra, gate
-            );
+        SupplyShareFlowLimiter.FixedSupply[] memory supplies = deploymentA.chain.flowLimit.fixedSupplies;
+        address otherVault = makeAddr("another vault");
+        address[3] memory limiters = [
+            address(0),
+            address(new SupplyShareFlowLimiter(otherVault, 10, 86_400, 0, supplies)),
+            address(new SupplyShareFlowLimiter(address(0xBEEF), 11, 86_400, 0, supplies))
+        ];
+        string[3] memory fields = ["vault.flowLimiter", "flowLimiter.vault", "flowLimiter.vault"];
+        for (uint256 i = 0; i < limiters.length; i++) {
+            BridgeVault wrong = _vaultWithLimiter(deploymentA, lightClient, gate, limiters[i]);
             deploymentA.predictedVault = address(wrong);
-            vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "vault.flowLimiter"));
+            deploymentA.predictedFlowLimiter = limiters[i];
+            if (i == 0) deploymentA.predictedFlowLimiter = plan.flowLimiterA; // the config still expects a limiter
+            vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, fields[i]));
             script.verifyDeployment(deploymentA, lightClient, gate, address(wrong));
         }
+
+        // The limiter serves the vault, but its share is not the configured one.
+        BridgeVault wrongShare = _vaultWithLimiterOf(deploymentA, lightClient, gate, 11, 86_400, supplies);
+        deploymentA.predictedVault = address(wrongShare);
+        deploymentA.predictedFlowLimiter = address(wrongShare.flowLimiter());
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "flowLimiter.shareBasisPoints"));
+        script.verifyDeployment(deploymentA, lightClient, gate, address(wrongShare));
+
+        // The configuration has no limit, and the vault has one.
+        deploymentA.chain.flowLimit.enabled = false;
+        deploymentA.predictedFlowLimiter = address(0);
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "vault.flowLimiter"));
+        script.verifyDeployment(deploymentA, lightClient, gate, address(wrongShare));
+    }
+
+    /// @dev A vault of chain A with the given limiter, for the read-back tests.
+    function _vaultWithLimiter(DeployBridge.ChainDeployment memory d, address lightClient, address gate, address limiter)
+        internal
+        returns (BridgeVault)
+    {
+        DeployBridge.FeeConfig memory fee = d.chain.fee;
+        return new BridgeVault(
+            lightClient, 1, 369, d.remoteVault, d.pairs,
+            BridgeVault.VaultTerms(0, fee.authority, fee.recipient, fee.basisPoints, fee.ceilingBasisPoints, limiter),
+            d.chain.lightClient.capellaEra, gate
+        );
+    }
+
+    /// @dev A vault of chain A with a limiter that serves that vault, built at the predicted address of the vault, with the
+    /// given share, window and supplies. The limiter gets the address that the vault will take.
+    function _vaultWithLimiterOf(
+        DeployBridge.ChainDeployment memory d,
+        address lightClient,
+        address gate,
+        uint16 share,
+        uint64 window,
+        SupplyShareFlowLimiter.FixedSupply[] memory supplies
+    ) internal returns (BridgeVault) {
+        address nextVault = vm.computeCreateAddress(address(this), vm.getNonce(address(this)) + 1);
+        SupplyShareFlowLimiter limiter = new SupplyShareFlowLimiter(nextVault, share, window, 0, supplies);
+        BridgeVault vault = _vaultWithLimiter(d, lightClient, gate, address(limiter));
+        assertEq(address(vault), nextVault, "the vault took the address that the limiter expects");
+        return vault;
     }
 
     // ================================================================ guards
@@ -827,7 +998,7 @@ contract DeployBridgeTest is Test {
     ) internal returns (BridgeVault) {
         DeployBridge.FeeConfig memory fee = d.chain.fee;
         BridgeVault.VaultTerms memory terms = BridgeVault.VaultTerms(
-            cutoff, fee.authority, fee.recipient, fee.basisPoints, fee.ceilingBasisPoints, d.chain.flowLimiter
+            cutoff, fee.authority, fee.recipient, fee.basisPoints, fee.ceilingBasisPoints, d.predictedFlowLimiter
         );
         return new BridgeVault(lightClient, 1, 369, remoteVault, d.pairs, terms, capellaEra, gate);
     }
