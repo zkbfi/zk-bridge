@@ -49,6 +49,40 @@ head. It also adds the `historical_summaries` layout row of the vault when the r
 detecting), and a fork proof when it is stale. `lc_core::gate` builds the proof. The service sends no deposit; a
 wallet, a keeper or a test calls `gate::gate_evidence_for_deposit`.
 
+## Route health
+
+```
+zk-bridge-prover --config prover.toml route-health [--json] [--margin-seconds 3600] [--stale-epochs 64]
+```
+
+The command answers one question for each route: can it still deliver a deposit made now? A route cannot deliver
+deposits made in the last three epochs or so before a source-chain fork that its light-client program does not know
+(finding HB-02, window 2). The fork schedule is not on chain, so only an off-chain tool can see the fork coming. The
+command reads `/eth/v1/config/fork_schedule`, `/eth/v1/beacon/genesis` and `/eth/v1/beacon/headers/head` from the
+source beacon API. It compares the schedule with the fork table of the light-client program (`lc-core`) and, when the
+source vault has a deposit gate, with the gate's `supportedVersions`. It also reads the gate (`mode`, `enforcing`,
+`isSealed`, `confirmedEpoch`) and the head slot of the destination light client. The decision is the pure function
+`route_health::route_status`. It does no input or output, and an interface should copy its rules.
+
+| Status | Meaning |
+|---|---|
+| `OPEN` | No unsupported fork is scheduled, the gate is not sealed, the light client head is fresh. |
+| `WARN` | An unsupported fork is scheduled beyond the margin. The reason says whether it is more than 24 hours ahead. |
+| `STOP` | An unsupported fork is active, or activates within the margin. |
+| `SEALED` | The gate is sealed. Every deposit reverts. |
+| `STALE` | The light client head lags the source head by more than `--stale-epochs` epochs. |
+
+The margin is the larger of `--margin-seconds` and three epochs. A smaller value is raised to three epochs. When
+several findings apply, the most severe one wins (`SEALED`, `STOP`, `STALE`, `WARN`, `OPEN`) and the others appear
+as other findings. A schedule entry with epoch 18446744073709551615 (the beacon API value for "never") is not
+scheduled. PulseChain lists Deneb that way, with version `0xffffffff`.
+
+Output is one line of `key=value` pairs per route, or one JSON array with `--json`. Each route shows the reason, the
+fork version, the activation epoch and time, and the seconds remaining. Exit codes: 0 when every route is `OPEN` or
+`WARN`; 2 when any route is `STOP`, `SEALED` or `STALE`; 1 when the command cannot read a route (it never reports an
+unread route as open). The check is advisory. A direct contract call skips it, and in the window before a fork such a
+call can strand funds.
+
 ## The seams
 
 - `src/light_client.rs` is the only file that calls `lc-core` (and `lc-testkit`, for the development source only).

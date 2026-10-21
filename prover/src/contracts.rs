@@ -102,6 +102,18 @@ sol! {
         error AlreadyClaimed(bytes32 depositNonce);
     }
 
+    /// A supported fork version of the deposit gate.
+    struct GateSupportedVersion {
+        bytes4 version;
+        uint8 stateDepth;
+    }
+
+    /// Read-only views of `BeaconForkGate` that `route-health` needs besides the ones in `gate.rs`.
+    interface GateVersionsContract {
+        function supportedVersions() external view returns (GateSupportedVersion[] memory);
+        function mode() external view returns (uint8);
+    }
+
     /// A minimal token surface for the tests.
     interface TokenContract {
         function approve(address spender, uint256 amount) external returns (bool);

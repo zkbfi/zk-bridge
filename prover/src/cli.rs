@@ -1,4 +1,4 @@
-//! The command line: `run`, `once`, `status` and `withdraw`.
+//! The command line: `run`, `once`, `status`, `withdraw` and `route-health`.
 //!
 //! The command line never carries a key. [`reject_secret_arguments`] runs before any parsing and refuses a flag
 //! that names a secret, and any argument that looks like a 32-byte key. The only way to give a key is
@@ -8,6 +8,7 @@ use crate::config::{Config, KeystoreConfig};
 use crate::error::{Error, Result};
 use crate::logging::Logger;
 use crate::route::build_routes;
+use crate::route_health::{self, HealthSettings, OutputFormat};
 use crate::service::{Service, ServiceSettings};
 use crate::signer::Signer;
 use crate::store::Store;
@@ -49,6 +50,19 @@ pub enum Command {
         /// The index of the `DepositInitiated` log inside the receipt of that transaction.
         #[arg(long)]
         log_index: u64,
+    },
+    /// Say whether each route can still deliver a deposit made now (finding HB-02, window 2).
+    /// Exit code 0 for OPEN and WARN, 2 for STOP, SEALED and STALE, 1 for an error.
+    RouteHealth {
+        /// Print one JSON array instead of one line per route.
+        #[arg(long)]
+        json: bool,
+        /// Stop this many seconds before an unsupported fork. Never below three epochs.
+        #[arg(long, default_value_t = route_health::DEFAULT_MARGIN_SECONDS)]
+        margin_seconds: u64,
+        /// The most epochs the light client head may lag the source chain head.
+        #[arg(long, default_value_t = route_health::DEFAULT_STALE_EPOCHS)]
+        stale_epochs: u64,
     },
 }
 
@@ -185,21 +199,23 @@ fn parse_hash(text: &str) -> Result<B256> {
     text.parse().map_err(|error| Error::Usage(format!("--tx: {error}")))
 }
 
-/// Runs the program. `arguments` includes the program name. Output goes to `out`.
+/// Runs the program and returns the process exit code. `arguments` includes the program name. Output goes to `out`.
+///
+/// The code is 0 on success. Only `route-health` returns another code: 2 when a route is STOP, SEALED or STALE.
 ///
 /// # Errors
 /// Any error of the subcommand.
-pub fn execute(
+pub fn run(
     arguments: Vec<String>,
     lookup: &dyn Fn(&str) -> Option<String>,
     out: &mut dyn std::io::Write,
-) -> Result<()> {
+) -> Result<i32> {
     reject_secret_arguments(&arguments)?;
     let cli = Cli::try_parse_from(&arguments).map_err(|error| Error::Usage(error.to_string()))?;
     let config = Config::load_file(&cli.config, lookup)?;
     match &cli.command {
-        Command::Status => print_status(&config, out),
-        Command::Once => build_service(&config, &cli, lookup)?.run_once(),
+        Command::Status => print_status(&config, out).map(|()| 0),
+        Command::Once => build_service(&config, &cli, lookup)?.run_once().map(|()| 0),
         Command::Run => {
             let mut service = build_service(&config, &cli, lookup)?;
             loop {
@@ -210,8 +226,29 @@ pub fn execute(
         Command::Withdraw { tx, log_index } => {
             let hash = parse_hash(tx)?;
             let nonce = build_service(&config, &cli, lookup)?.withdraw_one(hash, *log_index)?;
-            writeln!(out, "deposit {nonce:#x} processed; run `status` to see its state").map_err(|e| Error::Usage(e.to_string()))
+            writeln!(out, "deposit {nonce:#x} processed; run `status` to see its state").map_err(|e| Error::Usage(e.to_string()))?;
+            Ok(0)
         }
+        Command::RouteHealth { json, margin_seconds, stale_epochs } => {
+            let settings = HealthSettings { margin_seconds: *margin_seconds, stale_epochs: *stale_epochs };
+            let format = if *json { OutputFormat::Json } else { OutputFormat::Human };
+            route_health::run(&config, settings, format, out)
+        }
+    }
+}
+
+/// Runs the program. Like [`run`], but a non-zero exit code of `route-health` becomes an error.
+///
+/// # Errors
+/// Any error of the subcommand, and `Error::Usage` when `route-health` finds a route that refuses deposits.
+pub fn execute(
+    arguments: Vec<String>,
+    lookup: &dyn Fn(&str) -> Option<String>,
+    out: &mut dyn std::io::Write,
+) -> Result<()> {
+    match run(arguments, lookup, out)? {
+        0 => Ok(()),
+        code => Err(Error::Usage(format!("a route does not accept deposits (exit code {code}); see the output"))),
     }
 }
 
@@ -293,7 +330,7 @@ mod tests {
     /// Claim: the old name `prove-withdrawal` is gone; the subcommand is `withdraw`.
     #[test]
     fn subcommands_are_run_once_status_withdraw() {
-        for name in ["run", "once", "status"] {
+        for name in ["run", "once", "status", "route-health"] {
             assert!(Cli::try_parse_from(["p", "--config", "c", name]).is_ok(), "{name}");
         }
         assert!(Cli::try_parse_from(["p", "--config", "c", "prove-withdrawal", "--tx", "0x1", "--log-index", "0"]).is_err());

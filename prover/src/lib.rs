@@ -13,6 +13,7 @@
 //! - [`prover`]: the proving backends. Only light-client updates are proven.
 //! - [`beacon`]: where beacon data comes from (a beacon node, or a depth rule on Anvil).
 //! - [`store`] and [`state`]: the SQLite file and the deposit state machine.
+//! - [`route_health`]: decides whether a route still delivers a deposit made now (finding HB-02, window 2).
 //! - [`service`]: the loop that moves a deposit from its first sight to its withdrawal.
 
 pub mod beacon;
@@ -26,6 +27,7 @@ pub mod light_client;
 pub mod logging;
 pub mod prover;
 pub mod route;
+pub mod route_health;
 pub mod rpc;
 pub mod service;
 pub mod signer;
