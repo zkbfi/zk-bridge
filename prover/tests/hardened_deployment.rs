@@ -15,7 +15,7 @@ use std::sync::Mutex;
 /// Both tests in this file run forge against the same project. Run in parallel, the forge script stalled until its
 /// deadline (it passes in seconds alone), so the tests take turns. A poisoned lock still serialises.
 static FORGE_TURN: Mutex<()> = Mutex::new(());
-use zk_bridge_prover::contracts::{LightClientContract, VaultContract};
+use zk_bridge_prover::contracts::{ForkRegistryContract, GateVersionsContract, LightClientContract, VaultContract};
 
 /// The deploy script configuration for two chains. The deployer is the first Anvil account, and the script signs
 /// with it through `--unlocked`.
@@ -26,6 +26,22 @@ fn script_config(
     tokens: (Address, Address),
     nonces: (u64, u64),
     capella_era_on_a: &str,
+) -> String {
+    script_config_with_observation(chain_a, chain_b, verifiers, tokens, nonces, capella_era_on_a, None)
+}
+
+/// As [`script_config`]. With `observation_key`, chain B runs its gate in registry mode and the configuration gains the
+/// `chainB.observation` block, whose observation program key is `observation_key`. The own-chain light client starts
+/// at a made-up checkpoint, and its genesis validators root equals the one of the light client on chain A (they
+/// describe the same beacon chain, as the script requires).
+fn script_config_with_observation(
+    chain_a: &TestChain,
+    chain_b: &TestChain,
+    verifiers: (Address, Address),
+    tokens: (Address, Address),
+    nonces: (u64, u64),
+    capella_era_on_a: &str,
+    observation_key: Option<B256>,
 ) -> String {
     let versions = |version: &str| json!([{ "version": version, "stateDepth": "5" }]);
     let gate = |mode: &str| {
@@ -52,13 +68,55 @@ fn script_config(
             "lightClient": light_client(era, label), "gate": gate(mode),
         })
     };
+    let mut chain_b_config = match observation_key {
+        Some(_) => chain(&chain_b.anvil.url, 369, verifiers.1, nonces.1, "0", "genesis-of-chain-a", "DetectBeaconRootsAndRegistry"),
+        None => chain(&chain_b.anvil.url, 369, verifiers.1, nonces.1, "0", "genesis-of-chain-a", "DetectBeaconRoots"),
+    };
+    if let Some(key) = observation_key {
+        chain_b_config["observation"] = json!({
+            "lightClientProgramVKey": format!("{:#x}", keccak256(b"light-client-program")),
+            "observationProgramVKey": format!("{key:#x}"),
+            "genesisValidatorsRoot": format!("{:#x}", keccak256("genesis-of-chain-b")),
+            "slotsPerPeriod": "8192",
+            "initialSlot": "100",
+            "initialHeaderRoot": format!("{:#x}", keccak256(b"own header")),
+            "initialSyncCommitteeHash": format!("{:#x}", keccak256(b"own committee")),
+            "initialNextSyncCommitteeHash": format!("{:#x}", keccak256(b"own next committee")),
+        });
+    }
     json!({
         "deployer": format!("{DEPLOYER:#x}"),
         "chainA": chain(&chain_a.anvil.url, 1, verifiers.0, nonces.0, capella_era_on_a, "genesis-of-chain-b", "Enforcing"),
-        "chainB": chain(&chain_b.anvil.url, 369, verifiers.1, nonces.1, "0", "genesis-of-chain-a", "DetectBeaconRoots"),
+        "chainB": chain_b_config,
         "tokenPairs": [{ "chainA": format!("{:#x}", tokens.0), "chainB": format!("{:#x}", tokens.1) }],
     })
     .to_string()
+}
+
+/// Two live chains with a verifier and a token each, and the deployer nonces where the script must start.
+struct ScriptChains {
+    chain_a: TestChain,
+    chain_b: TestChain,
+    verifiers: (Address, Address),
+    tokens: (Address, Address),
+    nonces: (u64, u64),
+}
+
+/// Starts the two chains as the deploy script expects them: chain A has the beacon roots contract, and chain B sends
+/// one dummy transaction first, so the two chains give different contract addresses.
+fn script_chains() -> ScriptChains {
+    let chain_a = TestChain::start(1, Hardfork::Cancun);
+    let chain_b = TestChain::start(369, Hardfork::Shanghai);
+    install_beacon_roots(&chain_a);
+    chain_b.send(Some(DEPLOYER), &[]);
+    let deploy_verifier = |chain: &TestChain| chain.deploy("OracleSP1Verifier", HashMap::from([("oracle", word_address(DEPLOYER))]));
+    let deploy_token = |chain: &TestChain, name: &str| {
+        chain.deploy("MockERC20", HashMap::from([("name", Argument::Text(name.into())), ("symbol", Argument::Text("TKN".into()))]))
+    };
+    let verifiers = (deploy_verifier(&chain_a), deploy_verifier(&chain_b));
+    let tokens = (deploy_token(&chain_a, "Token A"), deploy_token(&chain_b, "Token B"));
+    let nonces = (chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER));
+    ScriptChains { chain_a, chain_b, verifiers, tokens, nonces }
 }
 
 /// Runs the deploy script against the two chains. Returns the success flag and the combined output.
@@ -79,13 +137,17 @@ fn run_script(directory: &std::path::Path, config: &str) -> (bool, String) {
     let broadcast = format!("[profile.default]\nbroadcast = \"./{}/broadcast\"", relative.display());
     let adjusted = repository_config.replace("fs_permissions = [", &extra_permission).replace("[profile.default]", &broadcast);
     std::fs::write(&config_copy, adjusted).unwrap();
+    // `--slow` sends each transaction after the one before it is mined. Without it, forge sends the next transaction
+    // at once, and the transaction pool of Anvil sometimes parks it as "queued" behind a nonce that is already mined.
+    // Nothing then moves it, and the script waits until the deadline. Under load that happened in 17 of 72 runs;
+    // with the flag, in none of 72.
     // The output goes to files, so the test can poll the process and stop it after a deadline instead of waiting forever.
     let (stdout_path, stderr_path) = (directory.join("forge-script.out"), directory.join("forge-script.err"));
     let mut child = Command::new("forge")
         .current_dir(repository_root())
         .env("BRIDGE_CONFIG", &config_path)
         .env("FOUNDRY_CONFIG", &config_copy)
-        .args(["script", "script/hardened/DeployBridge.s.sol", "--tc", "DeployBridge", "--broadcast", "--unlocked", "--sender", &format!("{DEPLOYER:#x}")])
+        .args(["script", "script/hardened/DeployBridge.s.sol", "--tc", "DeployBridge", "--broadcast", "--slow", "--unlocked", "--sender", &format!("{DEPLOYER:#x}")])
         .arg("--out")
         .arg(base.join("out"))
         .arg("--cache-path")
@@ -129,17 +191,7 @@ fn r2_08_hardened_deploy_script_predicted_addresses_are_the_deployed_addresses()
     if !tools_available() {
         return;
     }
-    let chain_a = TestChain::start(1, Hardfork::Cancun);
-    let chain_b = TestChain::start(369, Hardfork::Shanghai);
-    install_beacon_roots(&chain_a);
-    chain_b.send(Some(DEPLOYER), &[]);
-    let deploy_verifier = |chain: &TestChain| chain.deploy("OracleSP1Verifier", HashMap::from([("oracle", word_address(DEPLOYER))]));
-    let deploy_token = |chain: &TestChain, name: &str| {
-        chain.deploy("MockERC20", HashMap::from([("name", Argument::Text(name.into())), ("symbol", Argument::Text("TKN".into()))]))
-    };
-    let verifiers = (deploy_verifier(&chain_a), deploy_verifier(&chain_b));
-    let tokens = (deploy_token(&chain_a, "Token A"), deploy_token(&chain_b, "Token B"));
-    let nonces = (chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER));
+    let ScriptChains { chain_a, chain_b, verifiers, tokens, nonces } = script_chains();
     let directory = scratch("r2-08-deploy-script");
 
     // Controls: a wrong nonce and a wrong Capella era both stop the script before it sends anything.
@@ -187,6 +239,69 @@ fn r2_08_hardened_deploy_script_predicted_addresses_are_the_deployed_addresses()
     assert!(gate_enforcing(&chain_a, gate_a), "the gate of chain 1 enforces from the start");
     assert!(!gate_enforcing(&chain_b, gate_b), "the gate of chain 369 detects");
     // The forge cache of this test is large. Remove the scratch directory (a failed run keeps it for inspection).
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Claim: with the `chainB.observation` block, the deploy script puts five contracts on chain B at the nonces `n` to
+/// `n + 4`: light client, own-chain light client, fork registry, gate, vault. Each is at the address that this test
+/// computes from the deployer and the nonce, and they point at each other as the design says.
+/// Shows: a control first. An observation key equal to the light client key stops the script before it sends anything.
+/// The honest run then moves the nonce of chain B by five and the nonce of chain A by three. The vault of chain B reads
+/// the gate at `n + 3`. The gate is in mode 2 and names the registry at `n + 2`. The registry reads the own-chain light
+/// client at `n + 1`, which holds the checkpoint of the configuration and the genesis validators root of the beacon
+/// chain of chain B, and which differs from the light client at `n` that follows chain A. The registry uses the
+/// verifier of the chain and the observation key of the configuration.
+/// Why it matters: R2-08 again, for the registry. If the registry or the own-chain light client sat at another address
+/// than the plan says, the gate would read an empty account or the wrong beacon chain. A registry that reads the
+/// light client of the other chain would accept observations of the wrong beacon chain, or none at all.
+#[test]
+fn r2_08_hardened_deploy_script_registry_mode_predicted_addresses_are_the_deployed_addresses() {
+    let _turn = FORGE_TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !tools_available() {
+        return;
+    }
+    let ScriptChains { chain_a, chain_b, verifiers, tokens, nonces } = script_chains();
+    let directory = scratch("r2-08-deploy-script-registry");
+    let configuration = |key: B256| script_config_with_observation(&chain_a, &chain_b, verifiers, tokens, nonces, "0", Some(key));
+
+    // Control: the observation key may not equal the light client key.
+    let (ok, output) = run_script(&directory, &configuration(keccak256(b"light-client-program")));
+    assert!(!ok && output.contains("ObservationMismatch"), "equal keys must stop the script:\n{output}");
+    assert_eq!((chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER)), nonces, "a refused run sends nothing");
+
+    // The honest run.
+    let (ok, output) = run_script(&directory, &configuration(observation_program_vkey()));
+    assert!(ok, "the script must succeed:\n{output}");
+    assert_eq!((chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER)), (nonces.0 + 3, nonces.1 + 5), "three contracts on chain A, five on chain B");
+
+    // This test's own prediction, from the deployer and the nonces.
+    let n = nonces.1;
+    let (light_client, own_light_client, registry, gate, vault) =
+        (DEPLOYER.create(n), DEPLOYER.create(n + 1), DEPLOYER.create(n + 2), DEPLOYER.create(n + 3), DEPLOYER.create(n + 4));
+    let lowercase_output = output.to_lowercase();
+    for address in [light_client, own_light_client, registry, gate, vault] {
+        assert!(lowercase_output.contains(&format!("{address:#x}")), "the script's plan names {address:#x}:\n{output}");
+        assert!(chain_b.code_of(address).len() > 1000, "{address} holds a contract on chain 369");
+    }
+
+    // Read the relationships from the chain (a name is a hypothesis).
+    let address_of = |to: Address, data: Vec<u8>| Address::from_slice(&chain_b.call(to, &data).unwrap()[12..]);
+    let genesis = |light_client: Address| B256::from_slice(&chain_b.call(light_client, &LightClientContract::genesisValidatorsRootCall {}.abi_encode()).unwrap());
+    assert_eq!(address_of(vault, VaultContract::depositGateCall {}.abi_encode()), gate);
+    assert_eq!(address_of(vault, VaultContract::lightClientCall {}.abi_encode()), light_client);
+    assert_eq!(address_of(gate, GateVersionsContract::forkRegistryCall {}.abi_encode()), registry, "the gate names the registry");
+    assert_eq!(chain_b.call(gate, &GateVersionsContract::modeCall {}.abi_encode()).unwrap().last(), Some(&2), "mode 2");
+    assert_eq!(address_of(registry, ForkRegistryContract::lightClientCall {}.abi_encode()), own_light_client, "the registry reads the own-chain light client");
+    assert_ne!(own_light_client, light_client);
+    assert_eq!(genesis(light_client), keccak256("genesis-of-chain-a"), "the light client at n follows chain A");
+    assert_eq!(genesis(own_light_client), keccak256("genesis-of-chain-b"), "the own-chain light client follows chain B");
+    let head = |light_client: Address| chain_b.call(light_client, &LightClientContract::headCall {}.abi_encode()).unwrap();
+    assert_eq!(head(own_light_client).last(), Some(&100), "the own-chain light client starts at the configured checkpoint slot");
+    let verifier_of_registry = Address::from_slice(&chain_b.call(registry, &alloy_primitives::keccak256("verifier()")[..4]).unwrap()[12..]);
+    assert_eq!(verifier_of_registry, verifiers.1, "the registry uses the verifier of the chain");
+    let key_of_registry = B256::from_slice(&chain_b.call(registry, &alloy_primitives::keccak256("observationProgramVKey()")[..4]).unwrap());
+    assert_eq!(key_of_registry, observation_program_vkey(), "the registry holds the observation key of the configuration");
+    assert!(!gate_enforcing(&chain_b, gate), "the gate of chain 369 detects");
     let _ = std::fs::remove_dir_all(&directory);
 }
 

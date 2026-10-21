@@ -26,7 +26,7 @@
 #[cfg(feature = "sp1")]
 use crate::error::Error;
 use crate::error::Result;
-use crate::light_client::{public_values, sha256, verify_update_natively, LightClientOutput, UpdateInput};
+use crate::light_client::{public_values, sha256, verify_observation_natively, verify_update_natively, LightClientOutput, UpdateInput};
 use crate::signer::Signer;
 use alloy_primitives::{keccak256, B256};
 
@@ -38,12 +38,17 @@ pub enum ProofStatement {
     /// An output that `DevBeaconSource` asserts on Anvil. No sync committee exists there, so there is nothing to
     /// run the program on. The source's depth rule stands in for finality.
     DevAsserted(LightClientOutput),
+    /// A fork observation: the bytes that the fork observation guest reads. The program runs natively on it first.
+    Observation(Vec<u8>),
+    /// Public values of a fork observation that a test asserts. The fixtures of the light client hold public values
+    /// and no committee data, so there is nothing to run the program on. Like `DevAsserted`, this is for Anvil only.
+    ObservationAsserted(Vec<u8>),
 }
 
 /// A proof and the public values it commits to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Proof {
-    /// The ABI-encoded `LightClientOutput`.
+    /// The ABI-encoded public values: a `LightClientOutput`, or a `ForkObservation` for an observation statement.
     pub public_values: Vec<u8>,
     /// The bytes the verifier contract reads.
     pub proof_bytes: Vec<u8>,
@@ -89,11 +94,12 @@ impl Prover for OracleProver {
     }
 
     fn prove(&self, program_vkey: B256, statement: &ProofStatement) -> Result<Proof> {
-        let output = match statement {
-            ProofStatement::Verified(input) => verify_update_natively(input)?,
-            ProofStatement::DevAsserted(output) => output.clone(),
+        let public_values = match statement {
+            ProofStatement::Verified(input) => public_values(&verify_update_natively(input)?),
+            ProofStatement::DevAsserted(output) => public_values(output),
+            ProofStatement::Observation(guest_input) => verify_observation_natively(guest_input)?,
+            ProofStatement::ObservationAsserted(values) => values.clone(),
         };
-        let public_values = public_values(&output);
         let signature = self.oracle.sign_digest(&oracle_digest(program_vkey, &public_values))?;
         Ok(Proof { public_values, proof_bytes: signature.to_65_bytes().to_vec() })
     }
@@ -114,8 +120,16 @@ impl Prover for Sp1Prover {
 
     fn prove(&self, _program_vkey: B256, statement: &ProofStatement) -> Result<Proof> {
         match statement {
-            ProofStatement::DevAsserted(_) => {
+            ProofStatement::DevAsserted(_) | ProofStatement::ObservationAsserted(_) => {
                 Err(Error::Prover("a development statement has no real proof; use the oracle backend on Anvil".into()))
+            }
+            ProofStatement::Observation(guest_input) => {
+                verify_observation_natively(guest_input)?;
+                // TODO(sp1): write `guest_input` to the SP1 stdin of the fork observation guest and prove.
+                Err(Error::Prover(format!(
+                    "the sp1 backend is a stub: the sp1-sdk crate is not linked (elf {})",
+                    self.elf_path.display()
+                )))
             }
             ProofStatement::Verified(input) => {
                 verify_update_natively(input)?;

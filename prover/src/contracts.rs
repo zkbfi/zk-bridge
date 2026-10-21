@@ -112,6 +112,17 @@ sol! {
     interface GateVersionsContract {
         function supportedVersions() external view returns (GateSupportedVersion[] memory);
         function mode() external view returns (uint8);
+        function forkRegistry() external view returns (address);
+    }
+
+    /// The `ForkRegistry` surface: the latest observed fork version for `route-health`, and `observe` for the
+    /// keeper that submits fork observations.
+    interface ForkRegistryContract {
+        function latestObserved() external view returns (bytes4 version, uint64 slot);
+        function observe(bytes calldata proof, bytes calldata publicValues) external;
+        function lightClient() external view returns (address);
+
+        event ForkObserved(bytes4 indexed version, uint64 slot);
     }
 
     /// A minimal token surface for the tests.
@@ -146,6 +157,11 @@ pub fn update_calldata(proof: &[u8], public_values: &[u8]) -> Bytes {
         LightClientContract::updateCall { proof: proof.to_vec().into(), publicValues: public_values.to_vec().into() }
             .abi_encode(),
     )
+}
+
+/// The calldata of `ForkRegistry.observe`.
+pub fn observe_calldata(proof: &[u8], public_values: &[u8]) -> Bytes {
+    Bytes::from(ForkRegistryContract::observeCall { proof: proof.to_vec().into(), publicValues: public_values.to_vec().into() }.abi_encode())
 }
 
 /// The topic 0 of the `HeadUpdated` event.

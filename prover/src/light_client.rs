@@ -28,7 +28,7 @@ use serde_json::Value;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 pub use lc_core::ancestry::AncestryPath;
-pub use lc_core::abi::LightClientOutput;
+pub use lc_core::abi::{ForkObservation, LightClientOutput};
 pub use lc_core::layout::SLOTS_PER_HISTORICAL_ROOT;
 pub use lc_core::ssz_state::ForkData;
 pub use lc_core::types::BeaconBlockHeader as BeaconHeader;
@@ -104,6 +104,25 @@ pub fn verify_update_natively(input: &UpdateInput) -> Result<LightClientOutput> 
     lc_core::update::verify_light_client_fold(&input.store, &input.updates, input.chain.spec())
         .map(|(output, _)| output)
         .map_err(|error| Error::VerificationRefused(error.to_string()))
+}
+
+/// Runs the fork observation program natively on its guest input bytes and returns its public values.
+///
+/// Calls `lc_core::wire::run_fork_observation_guest`, the same function the SP1 guest wraps. It checks the fold
+/// steps, the participation threshold and the committee signature under the fork version that the input names.
+///
+/// # Errors
+/// `Error::VerificationRefused` with the rule that failed. No proof exists for such an input.
+pub fn verify_observation_natively(guest_input: &[u8]) -> Result<Vec<u8>> {
+    lc_core::wire::run_fork_observation_guest(guest_input).map_err(|error| Error::VerificationRefused(error.to_string()))
+}
+
+/// Decodes the public values of the fork observation program.
+///
+/// # Errors
+/// `Error::Malformed` when the bytes are not the 224 bytes of an encoded `ForkObservation`.
+pub fn decode_fork_observation(public_values: &[u8]) -> Result<ForkObservation> {
+    <ForkObservation as SolValue>::abi_decode(public_values).map_err(|error| Error::Malformed(format!("fork observation public values: {error}")))
 }
 
 /// The public values of the program: the ABI encoding of the output. The contract decodes these bytes.

@@ -19,6 +19,8 @@
 //! 1. `SEALED`: the deposit gate of the source vault is sealed. Every deposit reverts, for good.
 //! 2. `STOP`: a fork the route does not support is already active, or activates within the margin.
 //!    The margin is the larger of the configured seconds and three epochs. It is never below three epochs.
+//!    `STOP` also covers a gate in registry mode whose fork registry shows an unsupported version as the latest
+//!    observation: the gate refuses every deposit until it is sealed, and nothing in the registry clears it.
 //! 3. `STALE`: the light client head lags the source chain head by more than the configured number of epochs.
 //! 4. `WARN`: a fork the route does not support is scheduled, and it lies beyond the margin.
 //! 5. `OPEN`: none of the above.
@@ -29,7 +31,7 @@
 
 use crate::chain::ChainClient;
 use crate::config::{BeaconKind, ChainConfig, Config, RouteName};
-use crate::contracts::{GateVersionsContract, LightClientContract, VaultContract};
+use crate::contracts::{ForkRegistryContract, GateVersionsContract, LightClientContract, VaultContract};
 use crate::error::{Error, Result};
 use crate::gate::read_gate_status;
 use crate::light_client::ChainKind;
@@ -90,12 +92,34 @@ pub struct ScheduleEntry {
     pub epoch: u64,
 }
 
+/// The gate mode number of `DetectBeaconRootsAndRegistry`. Only this mode has a fork registry.
+pub const REGISTRY_MODE: u8 = 2;
+
+/// What the fork registry behind a gate says. The registry keeps the version seen under the highest attested slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RegistryObservation {
+    /// The address of the registry.
+    pub registry: Address,
+    /// The latest observed fork version. It means something only when `latest_slot` is not zero.
+    pub latest_version: [u8; 4],
+    /// The attested slot of the latest observation, or zero when nothing was observed.
+    pub latest_slot: u64,
+}
+
+impl RegistryObservation {
+    /// Whether the registry holds an observation at all. Before the first one the version field is zero bytes, and
+    /// that is no fork version.
+    pub fn has_observation(&self) -> bool {
+        self.latest_slot != 0
+    }
+}
+
 /// What the deposit gate of the source vault says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GateObservation {
     /// The address of the gate.
     pub gate: Address,
-    /// `Enforcing`, `DetectBeaconRoots`, or `Unknown(n)`.
+    /// `Enforcing`, `DetectBeaconRoots`, `DetectBeaconRootsAndRegistry`, or `Unknown(n)`.
     pub mode: String,
     /// Whether the gate applies its rules now.
     pub enforcing: bool,
@@ -105,6 +129,8 @@ pub struct GateObservation {
     pub confirmed_epoch: Option<u64>,
     /// The versions the gate supports.
     pub supported_versions: Vec<[u8; 4]>,
+    /// The fork registry of the gate, in registry mode only.
+    pub registry: Option<RegistryObservation>,
 }
 
 /// The limits of the decision.
@@ -216,6 +242,24 @@ fn first_unsupported_fork(inputs: &RouteInputs, current_epoch: u64, epoch_second
     })
 }
 
+/// The reason text when the fork registry of the gate shows a latest observed version that the gate does not support.
+///
+/// The gate reads the same registry in `admit`, so from that moment every deposit reverts with
+/// `UnsupportedObservedVersion`. A registry with no observation, and a gate without a registry, give nothing.
+fn unsupported_observation_reason(gate: Option<&GateObservation>) -> Option<String> {
+    let gate = gate?;
+    let registry = gate.registry.filter(RegistryObservation::has_observation)?;
+    if gate.supported_versions.contains(&registry.latest_version) {
+        return None;
+    }
+    Some(format!(
+        "the fork registry {:#x} shows the version {} at attested slot {}, and the gate does not support it: every deposit reverts",
+        registry.registry,
+        format_version(registry.latest_version),
+        registry.latest_slot
+    ))
+}
+
 fn describe_duration(seconds: u64) -> String {
     let (hours, minutes) = (seconds / 3_600, seconds % 3_600 / 60);
     match (seconds / 86_400, hours) {
@@ -260,6 +304,9 @@ pub fn route_status(inputs: &RouteInputs) -> RouteStatus {
     }
     if let Some(fork) = &fork {
         findings.push(fork_finding_message(fork, margin_seconds));
+    }
+    if let Some(reason) = unsupported_observation_reason(inputs.gate.as_ref()) {
+        findings.push((Level::Stop, reason));
     }
     if lag_slots > inputs.settings.stale_epochs.saturating_mul(slots_per_epoch) {
         findings.push((
@@ -371,6 +418,7 @@ fn mode_name(mode: u8) -> String {
     match mode {
         0 => "Enforcing".to_string(),
         1 => "DetectBeaconRoots".to_string(),
+        REGISTRY_MODE => "DetectBeaconRootsAndRegistry".to_string(),
         other => format!("Unknown({other})"),
     }
 }
@@ -380,7 +428,8 @@ fn mode_name(mode: u8) -> String {
 /// The hardened vault's constructor refuses a zero gate, so a revert of `depositGate()` or a zero address means the
 /// node or the configured address is wrong. Both are errors: a route that cannot be read is never reported as open.
 /// The gate reads are `enforcing`, `isSealed`, `confirmedEpoch` and `currentEpoch` (through `gate.rs`), and
-/// `supportedVersions` and `mode` (added to `contracts.rs` for this command).
+/// `supportedVersions` and `mode` (added to `contracts.rs` for this command). A gate in registry mode also gives its
+/// `forkRegistry`, and the registry gives `latestObserved`. A gate in another mode has no registry and is not asked.
 ///
 /// # Errors
 /// Any read error, including a revert of `depositGate()` and a zero gate address.
@@ -391,14 +440,33 @@ pub fn read_gate_observation(client: &ChainClient, vault: Address) -> Result<Gat
     }
     let status = read_gate_status(client, gate)?;
     let versions = client.view(gate, GateVersionsContract::supportedVersionsCall {})?;
+    let mode = client.view(gate, GateVersionsContract::modeCall {})?;
     Ok(GateObservation {
         gate,
-        mode: mode_name(client.view(gate, GateVersionsContract::modeCall {})?),
+        mode: mode_name(mode),
         enforcing: status.enforcing,
         sealed: status.sealed,
         confirmed_epoch: status.confirmed_epoch,
         supported_versions: versions.iter().map(|entry| entry.version.0).collect(),
+        registry: read_registry_observation(client, gate, mode)?,
     })
+}
+
+/// Reads the fork registry of a gate. A gate that is not in registry mode has none, so nothing is read.
+///
+/// # Errors
+/// Any read error, and `Error::Config` when a gate in registry mode reports a zero registry address. The gate
+/// constructor refuses that, so a zero address means the node or the configured address is wrong.
+pub fn read_registry_observation(client: &ChainClient, gate: Address, mode: u8) -> Result<Option<RegistryObservation>> {
+    if mode != REGISTRY_MODE {
+        return Ok(None);
+    }
+    let registry = client.view(gate, GateVersionsContract::forkRegistryCall {})?;
+    if registry == Address::ZERO {
+        return Err(Error::Config(format!("gate {gate:#x} is in registry mode and reports a zero fork registry")));
+    }
+    let latest = client.view(registry, ForkRegistryContract::latestObservedCall {})?;
+    Ok(Some(RegistryObservation { registry, latest_version: latest.version.0, latest_slot: latest.slot }))
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -444,6 +512,15 @@ pub fn format_utc(unix_seconds: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", in_day / 3_600, in_day % 3_600 / 60, in_day % 60)
 }
 
+/// The latest version of a registry as text: `none` before the first observation.
+fn registry_version_text(registry: &RegistryObservation) -> String {
+    if registry.has_observation() {
+        format_version(registry.latest_version)
+    } else {
+        "none".to_string()
+    }
+}
+
 impl RouteReport {
     /// One line of `key=value` pairs for a person or a log.
     pub fn human_line(&self) -> String {
@@ -479,6 +556,14 @@ impl RouteReport {
             )),
             None => line.push_str(" gate=none"),
         }
+        if let Some(registry) = self.gate.as_ref().and_then(|gate| gate.registry) {
+            line.push_str(&format!(
+                " registry={:#x} registry_latest_version={} registry_latest_slot={}",
+                registry.registry,
+                registry_version_text(&registry),
+                registry.latest_slot
+            ));
+        }
         line
     }
 
@@ -502,6 +587,11 @@ impl RouteReport {
                 "sealed": gate.sealed,
                 "confirmed_epoch": gate.confirmed_epoch,
                 "supported_versions": gate.supported_versions.iter().copied().map(format_version).collect::<Vec<_>>(),
+                "registry": gate.registry.map(|registry| json!({
+                    "address": format!("{:#x}", registry.registry),
+                    "latest_version": registry.has_observation().then(|| format_version(registry.latest_version)),
+                    "latest_slot": registry.latest_slot,
+                })),
             })
         });
         json!({
@@ -671,7 +761,16 @@ mod tests {
             sealed,
             confirmed_epoch: Some(NOW_EPOCH),
             supported_versions: vec![KNOWN],
+            registry: None,
         }
+    }
+
+    /// A gate in registry mode whose registry shows `version` at `slot`. Slot zero means no observation.
+    fn registry_gate(version: [u8; 4], slot: u64) -> GateObservation {
+        let mut value = gate(false);
+        value.mode = "DetectBeaconRootsAndRegistry".into();
+        value.registry = Some(RegistryObservation { registry: Address::repeat_byte(0x77), latest_version: version, latest_slot: slot });
+        value
     }
 
     /// Claim: with no unsupported fork, a fresh head and an unsealed gate, the route is OPEN.
@@ -754,6 +853,105 @@ mod tests {
         let status = route_status(&value);
         assert_eq!(status.level, Level::Sealed);
         assert!(status.level.refuses_deposits());
+    }
+
+    /// Claim: mode numbers 0, 1 and 2 have the names of the contract enum, and any other number is shown as unknown.
+    /// Why it matters: a person reads this name to learn whether the gate looks at a registry at all.
+    #[test]
+    fn mode_names_follow_the_contract_enum() {
+        assert_eq!(mode_name(0), "Enforcing");
+        assert_eq!(mode_name(1), "DetectBeaconRoots");
+        assert_eq!(mode_name(2), "DetectBeaconRootsAndRegistry");
+        assert_eq!(mode_name(3), "Unknown(3)");
+    }
+
+    /// Claim: a registry whose latest observed version is not supported by the gate gives STOP, and the reason names
+    /// the version and the slot.
+    /// Why it matters: the gate reverts every deposit in that state. An interface that offers deposits would send
+    /// users into a revert, and tokens only stay safe because the revert happens before the transfer.
+    #[test]
+    fn an_unsupported_observed_version_stops_the_route() {
+        let mut value = inputs();
+        value.gate = Some(registry_gate(UNKNOWN, 123));
+        let status = route_status(&value);
+        assert_eq!(status.level, Level::Stop);
+        assert!(status.level.refuses_deposits());
+        assert!(status.reason.contains("0x09000000") && status.reason.contains("123"), "{}", status.reason);
+        assert!(status.fork.is_none(), "the schedule shows no fork, so the registry alone caused the stop");
+    }
+
+    /// Claim: a registry whose latest observed version is supported leaves the route OPEN, and so does a registry
+    /// with no observation at all, even though its version field is zero bytes.
+    /// Why it matters: a false STOP blocks deposits for no reason, and an empty registry is the normal start state.
+    #[test]
+    fn a_supported_or_missing_observation_keeps_the_route_open() {
+        let mut value = inputs();
+        value.gate = Some(registry_gate(KNOWN, 123));
+        assert_eq!(route_status(&value).level, Level::Open, "supported version");
+        value.gate = Some(registry_gate([0, 0, 0, 0], 0));
+        assert_eq!(route_status(&value).level, Level::Open, "nothing observed yet");
+        value.gate = Some(registry_gate(UNKNOWN, 0));
+        assert_eq!(route_status(&value).level, Level::Open, "slot zero means no observation, whatever the version bytes say");
+    }
+
+    /// Claim: the support check uses the version list of the GATE, not the table of the light client program.
+    /// Why it matters: the gate decides whether a deposit reverts. A version that the program knows and the gate does
+    /// not list still stops every deposit.
+    #[test]
+    fn the_observed_version_is_checked_against_the_gate_list() {
+        let mut value = inputs();
+        value.program_versions.push(UNKNOWN);
+        value.gate = Some(registry_gate(UNKNOWN, 5));
+        assert_eq!(route_status(&value).level, Level::Stop);
+    }
+
+    /// Claim: a sealed gate stays SEALED when the registry also shows an unsupported version, and the registry finding
+    /// stays in the list of other findings.
+    /// Why it matters: SEALED is final, and STOP is not. A script must see the final state.
+    #[test]
+    fn a_sealed_gate_outranks_an_unsupported_observation() {
+        let mut value = inputs();
+        let mut sealed = registry_gate(UNKNOWN, 5);
+        sealed.sealed = true;
+        value.gate = Some(sealed);
+        let status = route_status(&value);
+        assert_eq!(status.level, Level::Sealed);
+        assert_eq!(status.other_findings.len(), 1, "{:?}", status.other_findings);
+    }
+
+    /// Claim: the report prints the registry in the line and in the JSON, with no version before the first
+    /// observation.
+    /// Why it matters: scripts and people read the registry state from here. A zero version printed as a real version
+    /// would suggest a fork that never happened.
+    #[test]
+    fn the_report_shows_the_registry() {
+        let report = |gate: GateObservation| {
+            let mut value = inputs();
+            value.gate = Some(gate);
+            RouteReport {
+                route: "b_to_a".into(),
+                source_chain: "pulsechain".into(),
+                status: route_status(&value),
+                light_client_head_slot: 1,
+                source_head_slot: 1,
+                gate: value.gate,
+            }
+        };
+        let observed = report(registry_gate(UNKNOWN, 123));
+        let line = observed.human_line();
+        assert!(line.contains("registry_latest_version=0x09000000") && line.contains("registry_latest_slot=123"), "{line}");
+        let value = observed.to_json();
+        assert_eq!(value["gate"]["registry"]["latest_version"], "0x09000000");
+        assert_eq!(value["gate"]["registry"]["latest_slot"], 123);
+        assert_eq!(value["status"], "STOP");
+
+        let empty = report(registry_gate([0, 0, 0, 0], 0));
+        assert!(empty.human_line().contains("registry_latest_version=none"));
+        assert!(empty.to_json()["gate"]["registry"]["latest_version"].is_null());
+
+        let plain = report(gate(false));
+        assert!(!plain.human_line().contains("registry="));
+        assert!(plain.to_json()["gate"]["registry"].is_null());
     }
 
     /// Claim: a head that lags more than the limit gives STALE, and a lag of exactly the limit does not.
@@ -1065,5 +1263,56 @@ mod tests {
         };
         let client = ChainClient::connect("test", 1, Box::new(bare), None).unwrap();
         assert!(read_gate_observation(&client, vault).is_err(), "a reverting depositGate is a read error, never an open route");
+        assert_eq!(observed.registry, None, "a gate in detection mode has no registry, and the node is not asked for one");
+    }
+
+    /// Claim: in registry mode the reader follows `forkRegistry()` to the registry and reads `latestObserved()`
+    /// there. A zero registry address is a read error.
+    /// Why it matters: the registry address comes from the gate, never from the configuration, so the registry that
+    /// is reported is the one that the gate really asks. The version bytes must come back unshifted.
+    #[test]
+    fn the_registry_is_read_through_the_gate() {
+        use crate::chain::fake::ScriptedRpc;
+        use alloy_primitives::address;
+        use alloy_sol_types::SolCall;
+        use std::sync::Mutex;
+
+        let gate_address = address!("00000000000000000000000000000000000000aa");
+        let registry = address!("00000000000000000000000000000000000000cc");
+        let handler_for = |registry_answer: Address| {
+            move |method: &str, params: &Value| -> Result<Value> {
+                match method {
+                    "eth_chainId" => return Ok(json!("0x1")),
+                    "eth_call" => {}
+                    other => panic!("unexpected {other}"),
+                }
+                let to = params[0]["to"].as_str().unwrap().to_string();
+                let data = hex::decode(params[0]["data"].as_str().unwrap()).unwrap();
+                let selector: [u8; 4] = data[..4].try_into().unwrap();
+                let answer = |data: Vec<u8>| Ok(json!(format!("0x{}", hex::encode(data))));
+                if selector == GateVersionsContract::forkRegistryCall::SELECTOR {
+                    assert_eq!(to, format!("{gate_address:#x}"), "the registry address is asked from the gate");
+                    return answer(GateVersionsContract::forkRegistryCall::abi_encode_returns(&registry_answer));
+                }
+                assert_eq!(selector, ForkRegistryContract::latestObservedCall::SELECTOR);
+                assert_eq!(to, format!("{registry:#x}"), "latestObserved is asked from the registry the gate named");
+                answer(ForkRegistryContract::latestObservedCall::abi_encode_returns(&ForkRegistryContract::latestObservedReturn {
+                    version: [0, 0, 3, 0x6d].into(),
+                    slot: 10_864_592,
+                }))
+            }
+        };
+        let connect = |handler: crate::chain::fake::Handler| {
+            let rpc = ScriptedRpc { calls: Mutex::new(vec![]), handler };
+            ChainClient::connect("test", 1, Box::new(rpc), None).unwrap()
+        };
+
+        let client = connect(Box::new(handler_for(registry)));
+        let observed = read_registry_observation(&client, gate_address, REGISTRY_MODE).unwrap().expect("a registry");
+        assert_eq!(observed, RegistryObservation { registry, latest_version: [0, 0, 3, 0x6d], latest_slot: 10_864_592 });
+        assert_eq!(read_registry_observation(&client, gate_address, 1).unwrap(), None, "other modes ask for nothing");
+
+        let client = connect(Box::new(handler_for(Address::ZERO)));
+        assert!(read_registry_observation(&client, gate_address, REGISTRY_MODE).is_err(), "a zero registry is a read error");
     }
 }

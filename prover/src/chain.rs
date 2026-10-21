@@ -258,6 +258,21 @@ impl ChainClient {
         }))
     }
 
+    /// Sends a transaction and waits for its receipt. `what` names the action in the error text.
+    ///
+    /// # Errors
+    /// The errors of [`ChainClient::send_transaction`] (a call that would revert fails with its revert data and
+    /// sends nothing), `Error::Transaction` when the transaction is mined and reverts, and `Error::Http` when it is
+    /// not mined within `timeout`.
+    pub fn send_and_wait(&self, to: Address, data: &[u8], what: &str, timeout: Duration) -> Result<B256> {
+        let hash = self.send_transaction(to, data)?;
+        match self.wait_for_transaction(hash, timeout)? {
+            Some(mined) if mined.success => Ok(hash),
+            Some(_) => Err(Error::Transaction(format!("{what} reverted (transaction {hash:#x})"))),
+            None => Err(Error::Http(format!("{what} was not mined within the timeout (transaction {hash:#x})"))),
+        }
+    }
+
     /// Polls for the receipt until `timeout`. Returns `None` when the transaction is still pending.
     pub fn wait_for_transaction(&self, hash: B256, timeout: Duration) -> Result<Option<MinedTransaction>> {
         let start = Instant::now();

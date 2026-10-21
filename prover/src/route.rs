@@ -193,12 +193,7 @@ impl LiveRoute {
 
     /// Sends a transaction to the destination chain and waits for it. A revert is an error with the revert data.
     fn send_and_wait(&self, to: Address, data: &[u8], what: &str) -> Result<B256> {
-        let hash = self.destination.send_transaction(to, data)?;
-        match self.destination.wait_for_transaction(hash, self.receipt_timeout)? {
-            Some(mined) if mined.success => Ok(hash),
-            Some(_) => Err(Error::Transaction(format!("{what} reverted (transaction {hash:#x})"))),
-            None => Err(Error::Http(format!("{what} was not mined within the timeout (transaction {hash:#x})"))),
-        }
+        self.destination.send_and_wait(to, data, what, self.receipt_timeout)
     }
 
     fn submit_update(&self, statement: &crate::prover::ProofStatement) -> Result<()> {

@@ -134,6 +134,10 @@ pub struct Side {
     pub token: Address,
     pub verifier: Address,
     pub light_client: Address,
+    /// The light client of the chain's own beacon chain. Only a registry-mode side has one.
+    pub own_light_client: Option<Address>,
+    /// The fork registry. Only a registry-mode side has one.
+    pub registry: Option<Address>,
     pub gate: Address,
     pub vault: Address,
 }
@@ -141,6 +145,60 @@ pub struct Side {
 /// The gate mode numbers of the `BeaconForkGate` constructor.
 pub const GATE_MODE_ENFORCING: u64 = 0;
 pub const GATE_MODE_DETECT: u64 = 1;
+pub const GATE_MODE_REGISTRY: u64 = 2;
+
+/// The key of the fork observation program in the tests. It must differ from the light client key.
+pub fn observation_program_vkey() -> B256 {
+    keccak256(b"fork-observation-program")
+}
+
+/// The extra deployments of a registry-mode side before its gate: the own-chain light client and the registry.
+pub const REGISTRY_EXTRA_DEPLOYMENTS: u64 = 2;
+
+/// One case of `light-client/tests/fixtures/fork-observation/`: the starting store that the own-chain light client
+/// must hold, and the public values that a proof of the observation program would commit to.
+#[derive(Clone, Debug)]
+pub struct ObservationFixture {
+    pub name: String,
+    pub public_values: Vec<u8>,
+    pub observed_version: [u8; 4],
+    pub observed_attested_slot: u64,
+    pub head_slot: u64,
+    pub header_root: B256,
+    pub committee_hash: B256,
+    pub next_committee_hash: B256,
+}
+
+impl ObservationFixture {
+    /// Reads a fixture by its file stem, for example `pulsechain_accept_version_outside_the_table`.
+    pub fn load(stem: &str) -> Self {
+        let path = repository_root().join("light-client/tests/fixtures/fork-observation").join(format!("{stem}.json"));
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let json: serde_json::Value = serde_json::from_str(&text).expect("fixture json");
+        let text_of = |value: &serde_json::Value| value.as_str().unwrap_or_else(|| panic!("fixture field is not text: {value}")).to_string();
+        let hash_of = |value: &serde_json::Value| -> B256 { text_of(value).parse().expect("hash") };
+        let number_of = |value: &serde_json::Value| -> u64 { text_of(value).parse().expect("number") };
+        let start = &json["startStore"];
+        Self {
+            name: text_of(&json["name"]),
+            public_values: hex::decode(text_of(&json["publicValues"]).trim_start_matches("0x")).expect("public values"),
+            observed_version: hex::decode(text_of(&json["observedVersion"]).trim_start_matches("0x")).expect("version").try_into().expect("four bytes"),
+            observed_attested_slot: number_of(&json["observedAttestedSlot"]),
+            head_slot: number_of(&start["headSlot"]),
+            header_root: hash_of(&start["headerRoot"]),
+            committee_hash: hash_of(&start["currentSyncCommitteeHash"]),
+            next_committee_hash: hash_of(&start["nextSyncCommitteeHash"]),
+        }
+    }
+
+    /// The genesis validators root of the chain that the observation belongs to: the first word of the public values.
+    pub fn genesis_validators_root(&self) -> B256 {
+        B256::from_slice(&self.public_values[..32])
+    }
+}
+
+/// The slots of one sync committee period of the chain that the fixtures describe.
+pub const OBSERVATION_SLOTS_PER_PERIOD: u64 = 8192;
 
 /// Deploys oracle verifier, light client, deposit gate and vault on one chain, in this order, after the token. The
 /// vault follows the token by 4 nonces.
@@ -154,6 +212,7 @@ fn deploy_side(
     remote_vault: Address,
     genesis_label: &str,
     gate_mode: u64,
+    observation: Option<&ObservationFixture>,
 ) -> Side {
     let token = chain.deploy("MockERC20", HashMap::from([("name", Argument::Text(local_token_name.into())), ("symbol", Argument::Text("TKN".into()))]));
     let verifier = chain.deploy("OracleSP1Verifier", HashMap::from([("oracle", word_address(DEPLOYER))]));
@@ -170,6 +229,32 @@ fn deploy_side(
             ("initialNextSyncCommitteeHash", word_hash(B256::ZERO)),
         ]),
     );
+    // Registry mode: the light client of the chain's own beacon chain, then the registry that reads it.
+    let own_light_client = observation.map(|fixture| {
+        chain.deploy(
+            "BeaconLightClient",
+            HashMap::from([
+                ("verifier", word_address(verifier)),
+                ("programVKey", word_hash(keccak256(b"light-client-program"))),
+                ("genesisValidatorsRoot", word_hash(fixture.genesis_validators_root())),
+                ("slotsPerPeriod", word_u64(OBSERVATION_SLOTS_PER_PERIOD)),
+                ("initialSlot", word_u64(fixture.head_slot)),
+                ("initialHeaderRoot", word_hash(fixture.header_root)),
+                ("initialSyncCommitteeHash", word_hash(fixture.committee_hash)),
+                ("initialNextSyncCommitteeHash", word_hash(fixture.next_committee_hash)),
+            ]),
+        )
+    });
+    let registry = own_light_client.map(|own| {
+        chain.deploy(
+            "ForkRegistry",
+            HashMap::from([
+                ("lightClient", word_address(own)),
+                ("verifier", word_address(verifier)),
+                ("observationProgramVKey", word_hash(observation_program_vkey())),
+            ]),
+        )
+    });
     let gate = chain.deploy(
         "BeaconForkGate",
         HashMap::from([
@@ -180,6 +265,7 @@ fn deploy_side(
             ("slotsPerEpoch", word_u64(SLOTS_PER_EPOCH)),
             ("supportedVersions", Argument::Tuples(vec![vec![raw_bytes4(CAPELLA_VERSION), word_u64_raw(5)]])),
             ("sealDepths", Argument::Words(vec![word_u64_raw(5), word_u64_raw(6), word_u64_raw(7)])),
+            ("forkRegistry", word_address(registry.unwrap_or(Address::ZERO))),
         ]),
     );
     let vault = chain.deploy(
@@ -195,7 +281,7 @@ fn deploy_side(
             ("depositGate", word_address(gate)),
         ]),
     );
-    Side { token, verifier, light_client, gate, vault }
+    Side { token, verifier, light_client, own_light_client, registry, gate, vault }
 }
 
 /// The two directions of the bridge.
@@ -214,11 +300,14 @@ pub struct BridgeOptions {
     pub rogue_token: bool,
     /// The finality depth of the development beacon source, in blocks.
     pub finality_depth: u64,
+    /// The file stem of a fork observation fixture. With it, chain B gets a gate in registry mode, with its own-chain
+    /// light client and fork registry. Without it, the gate of chain B is in plain detection mode.
+    pub registry_fixture: Option<&'static str>,
 }
 
 impl Default for BridgeOptions {
     fn default() -> Self {
-        Self { rogue_token: false, finality_depth: 1 }
+        Self { rogue_token: false, finality_depth: 1, registry_fixture: None }
     }
 }
 
@@ -236,6 +325,12 @@ pub struct Bridge {
     pub light_client_b: Address,
     pub verifier_a: Address,
     pub verifier_b: Address,
+    /// The fork registry on chain B, in registry mode only.
+    pub registry_b: Option<Address>,
+    /// The light client of chain B's own beacon chain, in registry mode only.
+    pub own_light_client_b: Option<Address>,
+    /// The fixture that the registry of chain B was built from, in registry mode only.
+    pub observation_fixture: Option<ObservationFixture>,
     /// The token that has one address on both chains and is registered on chain A only. `None` without the option.
     pub rogue_token: Option<Address>,
     pub config_path: PathBuf,
@@ -334,18 +429,22 @@ pub fn deploy_bridge_with(name: &str, options: BridgeOptions) -> Bridge {
 
     // Chain B sends one dummy transaction first, so the two chains give different contract addresses.
     chain_b.send(Some(DEPLOYER), &[]);
-    // Addresses follow from the deployer nonce: token, verifier, light client, gate, vault.
+    // Addresses follow from the deployer nonce: token, verifier, light client, gate, vault. A registry-mode side adds
+    // the own-chain light client and the registry before its gate.
+    let observation_fixture = options.registry_fixture.map(ObservationFixture::load);
+    let extra_on_b = if observation_fixture.is_some() { REGISTRY_EXTRA_DEPLOYMENTS } else { 0 };
     let (nonce_a, nonce_b) = (chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER));
     let (token_a, vault_a) = (DEPLOYER.create(nonce_a), DEPLOYER.create(nonce_a + 4));
-    let (token_b, vault_b) = (DEPLOYER.create(nonce_b), DEPLOYER.create(nonce_b + 4));
+    let (token_b, vault_b) = (DEPLOYER.create(nonce_b), DEPLOYER.create(nonce_b + 4 + extra_on_b));
     assert_ne!(token_a, token_b, "the real pair has different addresses on the two chains");
 
     let mut pairs_a = vec![(token_a, token_b)];
     if let Some(rogue) = rogue_token {
         pairs_a.push((rogue, rogue));
     }
-    let side_a = deploy_side(&chain_a, 1, 369, "Token A", &pairs_a, vault_b, "genesis-of-chain-b", GATE_MODE_ENFORCING);
-    let side_b = deploy_side(&chain_b, 369, 1, "Token B", &[(token_b, token_a)], vault_a, "genesis-of-chain-a", GATE_MODE_DETECT);
+    let side_a = deploy_side(&chain_a, 1, 369, "Token A", &pairs_a, vault_b, "genesis-of-chain-b", GATE_MODE_ENFORCING, None);
+    let gate_mode_b = if observation_fixture.is_some() { GATE_MODE_REGISTRY } else { GATE_MODE_DETECT };
+    let side_b = deploy_side(&chain_b, 369, 1, "Token B", &[(token_b, token_a)], vault_a, "genesis-of-chain-a", gate_mode_b, observation_fixture.as_ref());
     assert_eq!((side_a.token, side_a.vault), (token_a, vault_a));
     assert_eq!((side_b.token, side_b.vault), (token_b, vault_b));
 
@@ -406,6 +505,9 @@ finality_depth = {depth}
         light_client_b: side_b.light_client,
         verifier_a: side_a.verifier,
         verifier_b: side_b.verifier,
+        registry_b: side_b.registry,
+        own_light_client_b: side_b.own_light_client,
+        observation_fixture,
         rogue_token,
         config_path,
     }

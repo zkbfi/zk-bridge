@@ -10,6 +10,7 @@
 //! - [`rpc`] and [`chain`]: a small JSON-RPC client and a client for one chain.
 //! - [`light_client`]: the only module that calls `lc-core` (and, for the development source only, `lc-testkit`).
 //! - [`gate`]: evidence for the deposit gate of a vault.
+//! - [`fork_observation`]: proves a fork observation and sends it to the `ForkRegistry`.
 //! - [`prover`]: the proving backends. Only light-client updates are proven.
 //! - [`beacon`]: where beacon data comes from (a beacon node, or a depth rule on Anvil).
 //! - [`store`] and [`state`]: the SQLite file and the deposit state machine.
@@ -22,6 +23,7 @@ pub mod cli;
 pub mod config;
 pub mod contracts;
 pub mod error;
+pub mod fork_observation;
 pub mod gate;
 pub mod light_client;
 pub mod logging;
