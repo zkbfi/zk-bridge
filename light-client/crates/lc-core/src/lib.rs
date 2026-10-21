@@ -11,10 +11,16 @@ pub mod ancestry;
 pub mod bls;
 pub mod chain;
 pub mod error;
+pub mod era;
 pub mod execution;
+pub mod gate;
+#[cfg(feature = "json")]
+pub mod json;
 pub mod layout;
 pub mod mpt;
+pub mod receipts;
 pub mod ssz;
+pub mod ssz_state;
 pub mod types;
 pub mod update;
 pub mod wire;

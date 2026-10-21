@@ -6,6 +6,10 @@
 //! trailing bytes and wrong fixed sizes.
 //!
 //! Field order follows the struct order in [`crate::types`].
+//!
+//! Layout of the guest input: chain selector (1 byte), the store, then a list of 1 to 64 steps. Each step is a fork
+//! version (4 bytes) followed by one update. A fold applies the steps in order (`update::verify_fold_with_layout`).
+//! The decoder refuses a count above 64. A count of 0 decodes, and the fold then refuses it.
 
 use crate::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN};
 use crate::error::{Error, Result};
@@ -13,6 +17,7 @@ use crate::types::{
     BeaconBlockHeader, BlobGasFields, BlsPublicKey, ExecutionPayloadHeader, LightClientHeader, LightClientStore,
     LightClientUpdate, NextSyncCommittee, SyncAggregate, SyncCommittee,
 };
+use crate::update::{verify_light_client_fold_with_fork_versions, FoldStep, MAX_FOLD_UPDATES};
 use alloy_primitives::{Address, B256, U256};
 
 /// Which chain configuration the guest applies.
@@ -39,12 +44,11 @@ impl ChainSelector {
 pub struct GuestInput {
     /// The chain.
     pub chain: ChainSelector,
-    /// The fork version of the signing domain (an input, see `verify_light_client_update_with_fork_version`).
-    pub fork_version: [u8; 4],
-    /// The store before the update.
+    /// The store before the first update.
     pub store: LightClientStore,
-    /// The update.
-    pub update: LightClientUpdate,
+    /// The updates to apply in order, 1 to 64. Each carries the fork version of its signing domain, which is a private
+    /// input (see `verify_light_client_update_with_fork_version`).
+    pub steps: Vec<FoldStep>,
 }
 
 fn wire_error(reason: &str) -> Error {
@@ -117,6 +121,22 @@ impl Writer {
         }
         self.fixed(committee.aggregate_pubkey.as_slice());
     }
+    fn update(&mut self, update: &LightClientUpdate) {
+        self.header(&update.attested_header);
+        match &update.next_sync_committee {
+            None => self.fixed(&[0]),
+            Some(next) => {
+                self.fixed(&[1]);
+                self.committee(&next.committee);
+                self.branch(&next.branch);
+            }
+        }
+        self.header(&update.finalized_header);
+        self.branch(&update.finality_branch);
+        self.fixed(&update.sync_aggregate.sync_committee_bits);
+        self.fixed(&update.sync_aggregate.sync_committee_signature);
+        self.u64(update.signature_slot);
+    }
 }
 
 /// Encodes the guest input.
@@ -126,7 +146,6 @@ pub fn encode_guest_input(input: &GuestInput) -> Vec<u8> {
         ChainSelector::EthereumMainnet => 1,
         ChainSelector::Pulsechain => 2,
     }]);
-    writer.fixed(&input.fork_version);
     writer.fixed(input.store.header_root.as_slice());
     writer.u64(input.store.header_slot);
     writer.committee(&input.store.current_sync_committee);
@@ -137,21 +156,11 @@ pub fn encode_guest_input(input: &GuestInput) -> Vec<u8> {
             writer.committee(committee);
         }
     }
-    let update = &input.update;
-    writer.header(&update.attested_header);
-    match &update.next_sync_committee {
-        None => writer.fixed(&[0]),
-        Some(next) => {
-            writer.fixed(&[1]);
-            writer.committee(&next.committee);
-            writer.branch(&next.branch);
-        }
+    writer.u32(input.steps.len());
+    for step in &input.steps {
+        writer.fixed(&step.fork_version);
+        writer.update(&step.update);
     }
-    writer.header(&update.finalized_header);
-    writer.branch(&update.finality_branch);
-    writer.fixed(&update.sync_aggregate.sync_committee_bits);
-    writer.fixed(&update.sync_aggregate.sync_committee_signature);
-    writer.u64(update.signature_slot);
     writer.0
 }
 
@@ -246,6 +255,27 @@ impl<'a> Reader<'a> {
     fn header(&mut self) -> Result<LightClientHeader> {
         Ok(LightClientHeader { beacon: self.beacon()?, execution: self.payload()?, execution_branch: self.branch()? })
     }
+    fn update(&mut self) -> Result<LightClientUpdate> {
+        let attested_header = self.header()?;
+        let next_sync_committee = if self.flag()? {
+            Some(NextSyncCommittee { committee: self.committee()?, branch: self.branch()? })
+        } else {
+            None
+        };
+        let finalized_header = self.header()?;
+        let finality_branch = self.branch()?;
+        let sync_committee_bits: [u8; 64] = self.take(64)?.try_into().expect("64 bytes");
+        let sync_committee_signature: [u8; 96] = self.take(96)?.try_into().expect("96 bytes");
+        let signature_slot = self.u64()?;
+        Ok(LightClientUpdate {
+            attested_header,
+            next_sync_committee,
+            finalized_header,
+            finality_branch,
+            sync_aggregate: SyncAggregate { sync_committee_bits, sync_committee_signature },
+            signature_slot,
+        })
+    }
     fn committee(&mut self) -> Result<SyncCommittee> {
         let count = self.count(512)?;
         let pubkeys = (0..count).map(|_| self.take(48).map(BlsPublicKey::from_slice)).collect::<Result<Vec<_>>>()?;
@@ -264,39 +294,27 @@ pub fn decode_guest_input(bytes: &[u8]) -> Result<GuestInput> {
         2 => ChainSelector::Pulsechain,
         _ => return Err(wire_error("unknown chain selector")),
     };
-    let fork_version: [u8; 4] = reader.take(4)?.try_into().expect("4 bytes");
     let header_root = reader.b256()?;
     let header_slot = reader.u64()?;
     let current_sync_committee = reader.committee()?;
     let next_sync_committee = if reader.flag()? { Some(reader.committee()?) } else { None };
     let store = LightClientStore { header_root, header_slot, current_sync_committee, next_sync_committee };
 
-    let attested_header = reader.header()?;
-    let next_sync_committee = if reader.flag()? {
-        Some(NextSyncCommittee { committee: reader.committee()?, branch: reader.branch()? })
-    } else {
-        None
-    };
-    let finalized_header = reader.header()?;
-    let finality_branch = reader.branch()?;
-    let sync_committee_bits: [u8; 64] = reader.take(64)?.try_into().expect("64 bytes");
-    let sync_committee_signature: [u8; 96] = reader.take(96)?.try_into().expect("96 bytes");
-    let signature_slot = reader.u64()?;
+    let count = reader.count(MAX_FOLD_UPDATES)?;
+    let steps = (0..count)
+        .map(|_| {
+            let fork_version: [u8; 4] = reader.take(4)?.try_into().expect("4 bytes");
+            Ok(FoldStep { update: reader.update()?, fork_version })
+        })
+        .collect::<Result<Vec<_>>>()?;
     if !reader.0.is_empty() {
         return Err(wire_error("trailing bytes"));
     }
-    let update = LightClientUpdate {
-        attested_header,
-        next_sync_committee,
-        finalized_header,
-        finality_branch,
-        sync_aggregate: SyncAggregate { sync_committee_bits, sync_committee_signature },
-        signature_slot,
-    };
-    Ok(GuestInput { chain, fork_version, store, update })
+    Ok(GuestInput { chain, store, steps })
 }
 
-/// The whole guest program in one function: decode the input, verify, return the ABI-encoded public values.
+/// The whole guest program in one function: decode the input, apply the fold of 1 to 64 updates, return the
+/// ABI-encoded public values (11 words, 352 bytes).
 /// The SP1 wrapper in `light-client/guests/light-client` calls exactly this.
 ///
 /// # Errors
@@ -304,11 +322,6 @@ pub fn decode_guest_input(bytes: &[u8]) -> Result<GuestInput> {
 pub fn run_light_client_guest(input_bytes: &[u8]) -> Result<Vec<u8>> {
     use alloy_sol_types::SolValue;
     let input = decode_guest_input(input_bytes)?;
-    let output = crate::update::verify_light_client_update_with_fork_version(
-        &input.store,
-        &input.update,
-        input.chain.spec(),
-        input.fork_version,
-    )?;
+    let output = verify_light_client_fold_with_fork_versions(&input.store, &input.steps, input.chain.spec())?;
     Ok(output.abi_encode())
 }

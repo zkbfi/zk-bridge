@@ -12,9 +12,14 @@
 //! - `nextSyncCommitteeHash` is the root of a next committee that this update proved, else zero. The private store
 //!   may know a next committee, but the output never reports it.
 //!
-//! The contract rule behind this: when the new period is `headPeriod + 1`, the contract requires
-//! `syncCommittees[headPeriod + 1]` to be non-zero and equal to `syncCommitteeHash`. It fills an empty next slot only
-//! from a non-zero `nextSyncCommitteeHash`.
+//! - `startNextSyncCommitteeHash` is the hash of the store's next committee, or zero when the store has none. It binds the
+//!   private starting next committee, so a contract can refuse an invented one.
+//!
+//! The contract rules behind this are in `docs/hardened-build-contract.md`, section "Change: historical ancestry and
+//! folded updates". A fold ([`verify_fold_with_layout`]) applies 1 to 64 updates in order and carries the store from
+//! step to step. Its output describes the whole fold: `previous*` and `startNextSyncCommitteeHash` the initial store,
+//! `new*`, `executionBlock*` and `syncCommitteeHash` the final store, and `nextSyncCommitteeHash` the final next committee
+//! only if a step of the fold proved it.
 //!
 //! The wall clock check `current_slot >= signature_slot` of the specification cannot run inside a proof (no clock).
 //! It adds nothing: a real signature cannot come from the future.
@@ -31,6 +36,19 @@ use crate::types::{
     SyncCommittee,
 };
 use alloy_primitives::B256;
+
+/// The most updates one fold holds. Each update costs one BLS check, so the cost grows linearly with the count.
+pub const MAX_FOLD_UPDATES: usize = 64;
+
+/// One step of a fold: an update and the fork version of its signing domain (a private input, see
+/// [`verify_light_client_update_with_fork_version`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FoldStep {
+    /// The update.
+    pub update: LightClientUpdate,
+    /// The fork version of the signing domain of this update.
+    pub fork_version: [u8; 4],
+}
 
 /// Chooses the beacon state layout for the fork of the attested header. Tests replace it to model the "wrong fork" attack.
 pub type StateLayoutSelector = fn(crate::chain::ForkName) -> Result<StateLayout>;
@@ -240,6 +258,10 @@ pub fn verify_with_layout(
 
     // Output.
     let previous_committee_hash = store.current_sync_committee.hash_tree_root()?;
+    let start_next_hash = match &store.next_sync_committee {
+        Some(committee) => committee.hash_tree_root()?,
+        None => B256::ZERO,
+    };
     let new_committee = if new_period == store_period {
         &store.current_sync_committee
     } else {
@@ -258,6 +280,7 @@ pub fn verify_with_layout(
         previousHeaderRoot: store.header_root,
         previousHeadSlot: store.header_slot,
         previousSyncCommitteeHash: previous_committee_hash,
+        startNextSyncCommitteeHash: start_next_hash,
         newHeaderRoot: finalized_root,
         newHeadSlot: finalized.beacon.slot,
         executionBlockHash: finalized.execution.block_hash,
@@ -288,6 +311,95 @@ pub fn verify_with_layout(
         }
     };
     Ok((output, advanced))
+}
+
+/// Applies 1 to 64 updates in order, carrying the store from step to step, and returns one output for the whole fold
+/// with the store after the last step. Every step keeps every rule of [`verify_with_layout`], including "a next-period
+/// signature needs a crossing" and "a crossing needs a known next committee". When the initial store has no next
+/// committee, the first crossing must come after a step that proves it.
+///
+/// Output: `previous*`, `startNextSyncCommitteeHash` and `genesisValidatorsRoot` from the initial store; `new*`,
+/// `executionBlock*` and `syncCommitteeHash` from the final store; `nextSyncCommitteeHash` is the final store's next
+/// committee if a step in this fold proved it, else zero. A proof of the next committee in an earlier period does not
+/// count after a crossing: the crossing makes that committee the current one.
+///
+/// # Errors
+/// `FoldLengthOutOfRange` for an empty list or more than [`MAX_FOLD_UPDATES`]. Otherwise the first failed rule of a step.
+pub fn verify_fold_with_layout(
+    store: &LightClientStore,
+    steps: &[FoldStep],
+    spec: &ChainSpec,
+    select_layout: StateLayoutSelector,
+) -> Result<(LightClientOutput, LightClientStore)> {
+    if steps.is_empty() || steps.len() > MAX_FOLD_UPDATES {
+        return Err(Error::FoldLengthOutOfRange { count: steps.len() });
+    }
+    let mut current = store.clone();
+    let mut first: Option<LightClientOutput> = None;
+    let mut proven_next = B256::ZERO;
+    let mut last_output = None;
+    for step in steps {
+        let store_period = spec.period_at_slot(current.header_slot);
+        let (output, advanced) = verify_with_layout(&current, &step.update, spec, select_layout, step.fork_version)?;
+        let crossed = spec.period_at_slot(output.newHeadSlot) != store_period;
+        // A step that proves the next committee sets it. A crossing without a proof empties it. Otherwise it stays.
+        if output.nextSyncCommitteeHash != B256::ZERO {
+            proven_next = output.nextSyncCommitteeHash;
+        } else if crossed {
+            proven_next = B256::ZERO;
+        }
+        first.get_or_insert_with(|| output.clone());
+        last_output = Some(output);
+        current = advanced;
+    }
+    let (Some(first), Some(last)) = (first, last_output) else {
+        return Err(Error::FoldLengthOutOfRange { count: 0 });
+    };
+    let output = LightClientOutput {
+        genesisValidatorsRoot: first.genesisValidatorsRoot,
+        previousHeaderRoot: first.previousHeaderRoot,
+        previousHeadSlot: first.previousHeadSlot,
+        previousSyncCommitteeHash: first.previousSyncCommitteeHash,
+        startNextSyncCommitteeHash: first.startNextSyncCommitteeHash,
+        newHeaderRoot: last.newHeaderRoot,
+        newHeadSlot: last.newHeadSlot,
+        executionBlockHash: last.executionBlockHash,
+        executionBlockNumber: last.executionBlockNumber,
+        syncCommitteeHash: last.syncCommitteeHash,
+        nextSyncCommitteeHash: proven_next,
+    };
+    Ok((output, current))
+}
+
+/// A fold with the fork version of each step from the table in `spec`, and the per-fork layouts.
+///
+/// # Errors
+/// See [`verify_fold_with_layout`].
+pub fn verify_light_client_fold(
+    store: &LightClientStore,
+    updates: &[LightClientUpdate],
+    spec: &ChainSpec,
+) -> Result<(LightClientOutput, LightClientStore)> {
+    let steps: Vec<FoldStep> = updates
+        .iter()
+        .map(|update| FoldStep {
+            update: update.clone(),
+            fork_version: table_fork_version(spec, update.signature_slot),
+        })
+        .collect();
+    verify_fold_with_layout(store, &steps, spec, state_layout_for_fork)
+}
+
+/// A fold with the fork version of each step supplied by the caller (private inputs of the guest program).
+///
+/// # Errors
+/// See [`verify_fold_with_layout`].
+pub fn verify_light_client_fold_with_fork_versions(
+    store: &LightClientStore,
+    steps: &[FoldStep],
+    spec: &ChainSpec,
+) -> Result<LightClientOutput> {
+    verify_fold_with_layout(store, steps, spec, state_layout_for_fork).map(|(output, _)| output)
 }
 
 /// Verifies the bootstrap of a store: the committee branch of the header state root.

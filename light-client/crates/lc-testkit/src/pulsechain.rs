@@ -78,7 +78,7 @@ pub fn real_withdrawal_proof(
     let proof = WithdrawalProof {
         anchorHeader: (&anchor).into(),
         depositHeader: (&beacon_header(&entry["deposit_header"])).into(),
-        blockRootsBranch: branch(&entry["block_roots_branch"]),
+        ancestryBranch: branch(&entry["ancestry_branch"]),
         blockHashBranch: branch(&entry["block_hash_branch"]),
         executionHeaderRlp: block.header_rlp.clone(),
         receiptProof: block.proofs[transaction_index as usize].clone(),
@@ -86,4 +86,69 @@ pub fn real_withdrawal_proof(
         logIndex: U256::from(log_index),
     };
     (proof, anchor.hash_tree_root(), block)
+}
+
+/// The anchor and the entries of `pulsechain/historical_paths.json`: real historical-path ancestry from a real anchor state.
+pub struct RealHistoricalPaths {
+    /// The anchor header (a real finalized-or-recent PulseChain header).
+    pub anchor: lc_core::types::BeaconBlockHeader,
+    /// The response object of the fixture (checks and entries).
+    pub response: serde_json::Value,
+}
+
+/// Loads `pulsechain/historical_paths.json` and checks that the anchor header hashes to the root the node reported.
+pub fn real_historical_paths() -> RealHistoricalPaths {
+    let response = load_response("pulsechain/historical_paths.json");
+    let anchor = beacon_header(&response["anchor_header"]);
+    assert_eq!(anchor.hash_tree_root(), hex_b256(&response["anchor_header_root"]), "anchor header root");
+    RealHistoricalPaths { anchor, response }
+}
+
+impl RealHistoricalPaths {
+    /// The entry with this name.
+    ///
+    /// # Panics
+    /// Panics when the fixture has no such entry.
+    pub fn entry(&self, name: &str) -> &serde_json::Value {
+        self.response["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .find(|candidate| candidate["name"] == name)
+            .unwrap_or_else(|| panic!("no historical entry {name}"))
+    }
+
+    /// The deposit header of an entry.
+    pub fn deposit_header(&self, name: &str) -> lc_core::types::BeaconBlockHeader {
+        beacon_header(&self.entry(name)["deposit_header"])
+    }
+
+    /// The ancestry branch of an entry (44 entries, bottom to top).
+    pub fn ancestry_branch(&self, name: &str) -> Vec<B256> {
+        branch(&self.entry(name)["ancestry_branch"])
+    }
+}
+
+/// The withdrawal proof for the middle block of the historical fixture, with its real execution block and receipts.
+/// The log is not a deposit event (no vault exists on PulseChain), so the vault checks reject it at the log stage.
+pub fn real_historical_withdrawal_proof(transaction_index: u64, log_index: u64) -> (WithdrawalProof, B256, RealBlock) {
+    let paths = real_historical_paths();
+    let entry = paths.entry("era_middle_block");
+    let block = rebuild_block("pulsechain/path_historical_block.json", "pulsechain/path_historical_receipts.json");
+    assert_eq!(
+        hex_b256(&entry["execution_block_hash"]),
+        block.block_hash,
+        "the beacon payload and the execution RPC agree"
+    );
+    let proof = WithdrawalProof {
+        anchorHeader: (&paths.anchor).into(),
+        depositHeader: (&beacon_header(&entry["deposit_header"])).into(),
+        ancestryBranch: branch(&entry["ancestry_branch"]),
+        blockHashBranch: branch(&entry["block_hash_branch"]),
+        executionHeaderRlp: block.header_rlp.clone(),
+        receiptProof: block.proofs[transaction_index as usize].clone(),
+        transactionIndex: U256::from(transaction_index),
+        logIndex: U256::from(log_index),
+    };
+    (proof, paths.anchor.hash_tree_root(), block)
 }

@@ -161,22 +161,145 @@ fn synthetic_log_rules() {
     }
 }
 
-/// Claim: the 8192-slot window is exact. A deposit 8192 slots before the anchor passes, 8193 fails with the documented
-/// error, and the anchor slot itself or a later slot fails.
+/// Claim: the path follows the distance, and the edge is exact. A deposit 8192 slots before the anchor takes the recent
+/// path, 8193 takes the historical path, and both verify. The anchor slot itself and a later slot fail.
+/// Why it matters: the vault picks the path, never the prover, so the edge must sit on one side only.
 #[test]
-fn synthetic_historical_window_is_exact() {
+fn synthetic_path_follows_the_distance_at_the_edge() {
+    use lc_core::ancestry::{ancestry_path_for_slots, AncestryPath};
     for (spec, _, _, local) in layouts() {
         let anchor_slot = if spec.name == "pulsechain" { 10_900_000 } else { 15_500_000 };
-        let ok = scenario_for(spec, anchor_slot - 8192, anchor_slot, local, 1, 0);
-        assert!(verify_withdrawal(&ok.proof, &context(&ok, local), spec).is_ok(), "exactly 8192 slots back");
-        for deposit_slot in [anchor_slot - 8193, anchor_slot, anchor_slot + 1] {
+        let recent = scenario_for(spec, anchor_slot - 8192, anchor_slot, local, 1, 0);
+        assert_eq!(ancestry_path_for_slots(anchor_slot, anchor_slot - 8192), Ok(AncestryPath::Recent));
+        assert!(verify_withdrawal(&recent.proof, &context(&recent, local), spec).is_ok(), "exactly 8192 slots back");
+        let historical = scenario_for(spec, anchor_slot - 8193, anchor_slot, local, 1, 0);
+        assert_eq!(ancestry_path_for_slots(anchor_slot, anchor_slot - 8193), Ok(AncestryPath::Historical));
+        assert!(verify_withdrawal(&historical.proof, &context(&historical, local), spec).is_ok(), "8193 slots back");
+        // The two honest branches differ in length: 18 or 19 on the recent path, 44 or 45 on the historical path.
+        let (recent_length, historical_length) = if spec.name == "pulsechain" { (18, 44) } else { (19, 45) };
+        assert_eq!(recent.proof.ancestryBranch.len(), recent_length);
+        assert_eq!(historical.proof.ancestryBranch.len(), historical_length);
+        for deposit_slot in [anchor_slot, anchor_slot + 1] {
             let scenario = scenario_for(spec, deposit_slot, anchor_slot, local, 1, 0);
             assert_eq!(
                 verify_withdrawal(&scenario.proof, &context(&scenario, local), spec),
-                Err(Error::DepositOutsideHistoricalWindow { anchor_slot, deposit_slot }),
+                Err(Error::DepositNotBeforeAnchor { anchor_slot, deposit_slot }),
                 "deposit slot {deposit_slot}"
             );
         }
+    }
+}
+
+/// Claim: at an era edge each side uses its own list position. The last slot of era E uses index E - capellaEra, the first
+/// slot of era E + 1 uses the next index, both verify, and swapping the two branches fails.
+/// Why it matters: the synthetic anchor state holds each deposit root in the neighbouring eras too, so the swap is a
+/// valid Merkle path and only an off-by-one in the index would let it through.
+#[test]
+fn synthetic_historical_era_edges_use_their_own_index() {
+    for (spec, _, _, local) in layouts() {
+        let anchor_slot = if spec.name == "pulsechain" { 10_900_000 } else { 15_500_000 };
+        let era = anchor_slot / 8192 - 4;
+        let last = scenario_for(spec, (era + 1) * 8192 - 1, anchor_slot, local, 1, 0);
+        let first = scenario_for(spec, (era + 1) * 8192, anchor_slot, local, 1, 0);
+        for scenario in [&last, &first] {
+            assert!(verify_withdrawal(&scenario.proof, &context(scenario, local), spec).is_ok(), "control");
+        }
+        let capella_era = spec.capella_era().unwrap();
+        let last_index = (era - capella_era) as usize;
+        assert!(
+            last.anchor_state.has_historical_era(last_index) && last.anchor_state.has_historical_era(last_index + 1)
+        );
+        let wrong_for_last = last.historical_ancestry_branch_for_era(era + 1).expect("neighbour exists");
+        let mut swapped = last.proof.clone();
+        swapped.ancestryBranch = wrong_for_last;
+        assert_eq!(verify_withdrawal(&swapped, &context(&last, local), spec), Err(Error::InvalidAncestryBranch));
+        let wrong_for_first = first.historical_ancestry_branch_for_era(era).expect("neighbour exists");
+        let mut swapped = first.proof.clone();
+        swapped.ancestryBranch = wrong_for_first;
+        assert_eq!(verify_withdrawal(&swapped, &context(&first, local), spec), Err(Error::InvalidAncestryBranch));
+    }
+}
+
+/// Claim: the historical branch has an exact length. Padding, a missing entry and an extra entry are refused, and so is
+/// every single flipped entry (44 or 45 positions), with the honest proof as control.
+#[test]
+fn synthetic_historical_branch_length_and_entries_are_exact() {
+    for (spec, _, _, local) in layouts() {
+        let anchor_slot = if spec.name == "pulsechain" { 10_900_000 } else { 15_500_000 };
+        let scenario = scenario_for(spec, anchor_slot - 20_000, anchor_slot, local, 1, 0);
+        let ctx = context(&scenario, local);
+        assert!(verify_withdrawal(&scenario.proof, &ctx, spec).is_ok(), "control");
+        let mut proof = scenario.proof.clone();
+        proof.ancestryBranch.insert(0, B256::ZERO);
+        assert_eq!(verify_withdrawal(&proof, &ctx, spec), Err(Error::InvalidAncestryBranch), "padded at the front");
+        let mut proof = scenario.proof.clone();
+        proof.ancestryBranch.push(B256::ZERO);
+        assert_eq!(verify_withdrawal(&proof, &ctx, spec), Err(Error::InvalidAncestryBranch), "padded at the back");
+        let mut proof = scenario.proof.clone();
+        proof.ancestryBranch.pop();
+        assert_eq!(verify_withdrawal(&proof, &ctx, spec), Err(Error::InvalidAncestryBranch), "short");
+        for position in 0..scenario.proof.ancestryBranch.len() {
+            let mut proof = scenario.proof.clone();
+            proof.ancestryBranch[position].0[5] ^= 1;
+            assert_eq!(verify_withdrawal(&proof, &ctx, spec), Err(Error::InvalidAncestryBranch), "entry {position}");
+        }
+    }
+}
+
+/// Claim: a branch built for the other path is refused in both directions. The anchor state holds the deposit root at
+/// both places, so each branch is a valid path of the state. Historical distance with the block_roots branch fails, and
+/// recent distance with the historical branch fails.
+#[test]
+fn synthetic_path_mixups_are_refused_in_both_directions() {
+    for (spec, _, _, local) in layouts() {
+        let anchor_slot = if spec.name == "pulsechain" { 10_900_000 } else { 15_500_000 };
+        let far = scenario_for(spec, anchor_slot - 20_000, anchor_slot, local, 1, 0);
+        let mut proof = far.proof.clone();
+        proof.ancestryBranch = far.recent_ancestry_branch();
+        assert_eq!(verify_withdrawal(&proof, &context(&far, local), spec), Err(Error::InvalidAncestryBranch));
+        // Control: the recent branch is a real path of that state, it proves the same header root at the block_roots index.
+        let state_root = far.proof.anchorHeader.stateRoot;
+        let deposit: lc_core::types::BeaconBlockHeader = (&far.proof.depositHeader).into();
+        let layout = lc_core::layout::state_layout_for_fork(spec.fork_at_slot(anchor_slot)).unwrap();
+        let recent_gindex = lc_core::ancestry::block_roots_leaf_gindex(layout.block_roots_gindex, deposit.slot);
+        assert!(lc_core::ssz::is_valid_exact_branch(
+            &deposit.hash_tree_root(),
+            &proof.ancestryBranch,
+            recent_gindex,
+            &state_root
+        ));
+
+        let near_slot = (anchor_slot / 8192) * 8192 - 300;
+        let near = scenario_for(spec, near_slot, anchor_slot, local, 1, 0);
+        assert!(verify_withdrawal(&near.proof, &context(&near, local), spec).is_ok(), "control");
+        let mut proof = near.proof.clone();
+        proof.ancestryBranch = near.historical_ancestry_branch().expect("deposit era is complete");
+        assert_eq!(verify_withdrawal(&proof, &context(&near, local), spec), Err(Error::InvalidAncestryBranch));
+    }
+}
+
+/// Claim: the era formula uses the chain's `capellaEra`. The first era of the chain (list position 0) verifies, and on
+/// Ethereum the era before it is refused with `DepositBeforeCapella`, never with a branch error.
+/// Why it matters: an off-by-one here makes a whole era unreachable or wrongly reachable.
+#[test]
+fn synthetic_historical_first_capella_era_and_the_era_before() {
+    for (spec, _, _, local) in layouts() {
+        let anchor_slot = if spec.name == "pulsechain" { 10_900_000 } else { 15_500_000 };
+        let capella_era = spec.capella_era().unwrap();
+        let first_slot = spec.capella_fork_slot().unwrap().max(capella_era * 8192);
+        let first = scenario_for(spec, first_slot, anchor_slot, local, 1, 0);
+        assert!(first.anchor_state.has_historical_era(0));
+        assert!(verify_withdrawal(&first.proof, &context(&first, local), spec).is_ok(), "list position 0");
+        assert_eq!(first.proof.ancestryBranch.len(), if spec.name == "pulsechain" { 44 } else { 45 });
+        if capella_era == 0 {
+            continue;
+        }
+        let mut before = first.proof.clone();
+        before.depositHeader.slot = capella_era * 8192 - 1;
+        assert_eq!(
+            verify_withdrawal(&before, &context(&first, local), spec),
+            Err(Error::DepositBeforeCapella { deposit_era: capella_era - 1, capella_era })
+        );
     }
 }
 
@@ -189,10 +312,10 @@ fn synthetic_beacon_path_tampering() {
         let ctx = context(&scenario, local);
         assert!(verify_withdrawal(&scenario.proof, &ctx, spec).is_ok(), "control");
 
-        for position in 0..scenario.proof.blockRootsBranch.len() {
+        for position in 0..scenario.proof.ancestryBranch.len() {
             let mut proof = scenario.proof.clone();
-            proof.blockRootsBranch[position].0[5] ^= 1;
-            assert_eq!(verify_withdrawal(&proof, &ctx, spec), Err(Error::InvalidBlockRootsBranch), "roots {position}");
+            proof.ancestryBranch[position].0[5] ^= 1;
+            assert_eq!(verify_withdrawal(&proof, &ctx, spec), Err(Error::InvalidAncestryBranch), "ancestry {position}");
         }
         for position in 0..scenario.proof.blockHashBranch.len() {
             let mut proof = scenario.proof.clone();
@@ -201,11 +324,11 @@ fn synthetic_beacon_path_tampering() {
         }
         let mut proof = scenario.proof.clone();
         proof.depositHeader.slot += 1;
-        assert_eq!(verify_withdrawal(&proof, &ctx, spec), Err(Error::InvalidBlockRootsBranch), "wrong slot");
+        assert_eq!(verify_withdrawal(&proof, &ctx, spec), Err(Error::InvalidAncestryBranch), "wrong slot");
 
         let mut proof = scenario.proof.clone();
-        proof.blockRootsBranch.insert(0, B256::ZERO);
-        assert_eq!(verify_withdrawal(&proof, &ctx, spec), Err(Error::InvalidBlockRootsBranch), "padded branch");
+        proof.ancestryBranch.insert(0, B256::ZERO);
+        assert_eq!(verify_withdrawal(&proof, &ctx, spec), Err(Error::InvalidAncestryBranch), "padded branch");
         let mut proof = scenario.proof.clone();
         proof.blockHashBranch.pop();
         assert_eq!(verify_withdrawal(&proof, &ctx, spec), Err(Error::InvalidBlockHashBranch), "short branch");

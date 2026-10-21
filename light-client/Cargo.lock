@@ -1361,6 +1361,7 @@ dependencies = [
  "alloy-sol-types",
  "alloy-trie",
  "bls12_381",
+ "serde_json",
  "sha2 0.9.9",
 ]
 

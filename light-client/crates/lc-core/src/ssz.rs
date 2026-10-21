@@ -174,6 +174,29 @@ pub fn branch_for_leaf(leaves: &[B256], index: usize) -> (B256, Vec<B256>) {
     (layer[0], branch)
 }
 
+/// Builds the branch and the root for leaf `index` of a list-shaped tree with `depth` levels over `leaves`.
+/// Missing leaves count as zero chunks, so the tree can be far larger than `leaves` (a list limit of `2^depth`).
+/// The root is the data root of the list, before the length mix-in. It equals `merkleize_with_limit(leaves, 1 << depth)`.
+///
+/// # Panics
+/// Panics when `index` is outside `leaves` or when `leaves` does not fit in `2^depth` leaves.
+pub fn branch_for_leaf_with_limit(leaves: &[B256], index: usize, depth: u32) -> (B256, Vec<B256>) {
+    assert!(index < leaves.len(), "leaf index out of range");
+    assert!((leaves.len() as u64) <= (1u64 << depth), "more leaves than the limit");
+    let mut layer = leaves.to_vec();
+    let mut position = index;
+    let mut branch = Vec::with_capacity(depth as usize);
+    for level in 0..depth {
+        if layer.len() % 2 == 1 {
+            layer.push(zero_hash(level));
+        }
+        branch.push(layer[position ^ 1]);
+        layer = layer.chunks_exact(2).map(|pair| hash_pair(&pair[0], &pair[1])).collect();
+        position /= 2;
+    }
+    (layer[0], branch)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +229,20 @@ mod tests {
             assert_eq!(root, merkleize(&leaves));
             assert!(is_valid_merkle_branch(&leaves[index], &branch, 3, index as u64, &root));
             assert!(!is_valid_merkle_branch(&leaves[index], &branch, 3, (index as u64 + 1) % 8, &root));
+        }
+    }
+
+    /// Claim: a branch through a tree much larger than its leaves (a list with a limit) ends at the same root as
+    /// `merkleize_with_limit`, and every leaf verifies against that root at depth 24. Zero padding is part of the tree.
+    #[test]
+    fn limit_branch_matches_limit_merkleization() {
+        let leaves: Vec<B256> = (1..=5u64).map(u64_chunk).collect();
+        for index in 0..leaves.len() {
+            let (root, branch) = branch_for_leaf_with_limit(&leaves, index, 24);
+            assert_eq!(branch.len(), 24);
+            assert_eq!(root, merkleize_with_limit(&leaves, 1 << 24));
+            assert!(is_valid_merkle_branch(&leaves[index], &branch, 24, index as u64, &root));
+            assert!(!is_valid_merkle_branch(&leaves[index], &branch, 24, index as u64 + 1, &root));
         }
     }
 

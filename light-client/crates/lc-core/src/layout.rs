@@ -24,6 +24,8 @@ pub struct StateLayout {
     pub next_sync_committee_gindex: u64,
     /// `get_generalized_index(BeaconState, "block_roots")`. The vector holds 8192 roots below this node.
     pub block_roots_gindex: u64,
+    /// `get_generalized_index(BeaconState, "historical_summaries")`. Field 27 in Capella through Fulu.
+    pub historical_summaries_gindex: u64,
 }
 
 /// `SLOTS_PER_HISTORICAL_ROOT`: the length of `BeaconState.block_roots`.
@@ -35,6 +37,18 @@ pub const SLOTS_PER_HISTORICAL_ROOT: u64 = 8192;
 /// Depth of the `block_roots` vector below its field node: `log2(8192)`.
 pub const BLOCK_ROOTS_VECTOR_DEPTH: u32 = 13;
 
+/// Depth of the `historical_summaries` list below its data node: `log2(HISTORICAL_ROOTS_LIMIT)` with
+/// `HISTORICAL_ROOTS_LIMIT = 2**24` (`HistoricalSummaries.LIMIT` in `specs/capella/beacon-chain.md`).
+pub const HISTORICAL_SUMMARIES_LIST_DEPTH: u32 = 24;
+
+/// Position of `historical_summaries` among the `BeaconState` fields, in Capella, Deneb, Electra and Fulu.
+///
+/// Source: container `BeaconState` in `specs/capella/beacon-chain.md` (28 fields; `historical_summaries` is the last,
+/// field 27, marked "New in Capella"). `specs/deneb`, `specs/electra` and `specs/fulu` `beacon-chain.md` only append
+/// fields after it (Electra 37 fields, Fulu 38), so the position stays 27. Checked on 2026-10-20 by counting the fields of
+/// each fork's `BeaconState` in those four files.
+pub const HISTORICAL_SUMMARIES_FIELD_INDEX: u64 = 27;
+
 /// Layout of the Capella and Deneb `BeaconState` (28 fields, tree depth 5).
 ///
 /// Source: `specs/altair/light-client/sync-protocol.md` "Constants": 105, 54, 55.
@@ -45,6 +59,7 @@ pub const CAPELLA_DENEB_STATE_LAYOUT: StateLayout = StateLayout {
     current_sync_committee_gindex: 54,
     next_sync_committee_gindex: 55,
     block_roots_gindex: 37,
+    historical_summaries_gindex: 32 + HISTORICAL_SUMMARIES_FIELD_INDEX,
 };
 
 /// Layout of the Electra and Fulu `BeaconState` (more than 32 fields, tree depth 6).
@@ -56,6 +71,7 @@ pub const ELECTRA_STATE_LAYOUT: StateLayout = StateLayout {
     current_sync_committee_gindex: 86,
     next_sync_committee_gindex: 87,
     block_roots_gindex: 69,
+    historical_summaries_gindex: 64 + HISTORICAL_SUMMARIES_FIELD_INDEX,
 };
 
 /// `EXECUTION_PAYLOAD_GINDEX`: `get_generalized_index(BeaconBlockBody, "execution_payload")` = 25.
@@ -153,6 +169,18 @@ mod tests {
         assert_eq!(gindex_depth(412), 8);
         assert_eq!(gindex_depth(812), 9);
         assert_eq!(block_hash_gindex_for_fork(ForkName::Electra), Ok(812));
+    }
+
+    /// Claim: `historical_summaries` is field 27, so its index is 59 in the 28 field layouts (depth 5) and 91 in the
+    /// 37 and 38 field layouts (depth 6). The numbers are counted by hand from the container field lists in
+    /// consensus-specs (see the constant). A wrong index would send every historical proof to the wrong node.
+    #[test]
+    fn historical_summaries_indices() {
+        assert_eq!(CAPELLA_DENEB_STATE_LAYOUT.historical_summaries_gindex, 59);
+        assert_eq!(ELECTRA_STATE_LAYOUT.historical_summaries_gindex, 91);
+        assert_eq!(gindex_depth(59), 5);
+        assert_eq!(gindex_depth(91), 6);
+        assert_eq!(HISTORICAL_SUMMARIES_LIST_DEPTH, 24);
     }
 
     /// Claim: Deneb and Capella share state indices, Electra differs. Mixing them up is the "wrong fork" attack.

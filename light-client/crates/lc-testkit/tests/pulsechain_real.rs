@@ -13,7 +13,9 @@ use lc_core::update::{
 use lc_core::withdrawal::{verify_withdrawal, WithdrawalContext};
 use lc_core::Error;
 use lc_testkit::json::{hex_b256, load_response};
-use lc_testkit::pulsechain::{real_update_and_store, real_withdrawal_proof};
+use lc_testkit::pulsechain::{
+    real_historical_paths, real_historical_withdrawal_proof, real_update_and_store, real_withdrawal_proof,
+};
 
 /// Claim: the PulseChain constants equal the live configuration (including the Bellatrix version `0x0000036b` that the
 /// build contract table leaves out), the Deneb fork is never scheduled and the genesis validators root matches.
@@ -197,8 +199,8 @@ fn real_beacon_path_rejects_tampering() {
     );
 
     let mut broken = proof.clone();
-    broken.blockRootsBranch[3] = B256::repeat_byte(0x55);
-    assert_eq!(verify_withdrawal(&broken, &ctx, &PULSECHAIN), Err(Error::InvalidBlockRootsBranch));
+    broken.ancestryBranch[3] = B256::repeat_byte(0x55);
+    assert_eq!(verify_withdrawal(&broken, &ctx, &PULSECHAIN), Err(Error::InvalidAncestryBranch));
 
     let mut broken = proof.clone();
     broken.blockHashBranch[2] = B256::repeat_byte(0x55);
@@ -206,7 +208,7 @@ fn real_beacon_path_rejects_tampering() {
 
     let mut broken = proof.clone();
     broken.depositHeader.slot -= 1;
-    assert_eq!(verify_withdrawal(&broken, &ctx, &PULSECHAIN), Err(Error::InvalidBlockRootsBranch));
+    assert_eq!(verify_withdrawal(&broken, &ctx, &PULSECHAIN), Err(Error::InvalidAncestryBranch));
 
     let mut rlp = proof.executionHeaderRlp.to_vec();
     let last = rlp.len() - 1;
@@ -214,4 +216,165 @@ fn real_beacon_path_rejects_tampering() {
     let mut broken = proof.clone();
     broken.executionHeaderRlp = rlp.into();
     assert_eq!(verify_withdrawal(&broken, &ctx, &PULSECHAIN), Err(Error::InvalidBlockHashBranch));
+}
+
+// ---- historical ancestry on real PulseChain data ----
+
+const HISTORICAL_ENTRIES: [&str; 6] = [
+    "capella_fork_block",
+    "era_zero_last_block",
+    "era_previous_last_block",
+    "era_first_block",
+    "era_middle_block",
+    "era_last_block",
+];
+
+/// Claim: the era formula holds on real PulseChain data, for three eras: era 0 (the Capella era: Capella starts at slot 96,
+/// in the middle of the era), the era before an era edge and the era after it. In each, the entry at list position
+/// `era - capellaEra` of the anchor's `historical_summaries` has a `block_summary_root` equal to the hash tree root of the
+/// 8192 block roots of that era. The tool rebuilt each era from the canonical block roots of the node, checked the method
+/// against the anchor state where they overlap, and stopped on any mismatch.
+/// Here the test checks the stored evidence again with `capellaEra` from the chain configuration: the position, the length of the
+/// list, and the climb from a real header leaf through 13 levels to the same `block_summary_root`.
+/// Why it matters: an off-by-one here would make a whole era unreachable or wrongly reachable.
+#[test]
+fn real_era_formula_matches_the_node() {
+    let paths = real_historical_paths();
+    let capella_era = PULSECHAIN.capella_era().unwrap();
+    assert_eq!(capella_era, 0, "PulseChain: Capella epoch 3 is slot 96, inside era 0");
+    let anchor_era = paths.anchor.slot / 8192;
+    let checks = paths.response["era_formula_checks"].as_array().expect("checks");
+    assert!(checks.len() >= 3, "era 0 and two later eras");
+    for check in checks {
+        let era = check["era"].as_u64().unwrap();
+        assert_eq!(check["index"].as_u64().unwrap(), era - capella_era, "index = era - capellaEra");
+        assert_eq!(check["anchor_state_summaries_length"].as_u64().unwrap(), anchor_era - capella_era);
+        assert_eq!(check["equal"], true);
+        assert_eq!(check["block_summary_root_in_anchor_state"], check["hash_tree_root_of_era_block_roots"]);
+        assert_ne!(check["block_summary_root_in_anchor_state"], format!("{:#x}", B256::ZERO));
+    }
+    assert!(checks.iter().any(|check| check["era"] == 0), "the Capella era itself");
+    // The overlap with the anchor's own block_roots validated the rebuild method for the newest complete era.
+    assert!(checks.iter().any(|check| check["slots_compared_with_anchor_block_roots"].as_u64().unwrap() > 1000));
+
+    // Climb again from the stored data: leaf -> 13 levels -> block_summary_root of the matching check.
+    for name in HISTORICAL_ENTRIES {
+        let deposit = paths.deposit_header(name);
+        let branch = paths.ancestry_branch(name);
+        let era = deposit.slot / 8192;
+        let check = checks.iter().find(|check| check["era"] == era).expect("a check for the era");
+        let mut node = deposit.hash_tree_root();
+        for (height, sibling) in branch[..13].iter().enumerate() {
+            node = if (deposit.slot % 8192) >> height & 1 == 1 {
+                lc_core::ssz::hash_pair(sibling, &node)
+            } else {
+                lc_core::ssz::hash_pair(&node, sibling)
+            };
+        }
+        assert_eq!(format!("{node:#x}"), check["block_summary_root_in_anchor_state"].as_str().unwrap(), "{name}");
+    }
+}
+
+/// Claim: a real header in an older era is proven under a real anchor state through `historical_summaries`, at the
+/// generalized index built in the stated order, with an exact 44 entry branch: the first Capella block, both sides of an
+/// era edge (last slot of one era, first slot of the next) and a middle block. All of them are more than 8192 slots before
+/// the anchor, so the vault takes the historical path.
+/// The last block of the newest complete era is only 5117 slots before this anchor. The vault takes the RECENT path for it,
+/// so its historical branch is the reverse mix-up: a valid path of the real anchor state at the historical index that the
+/// vault refuses at the `block_roots` index.
+#[test]
+fn real_historical_ancestry_verifies() {
+    use lc_core::ancestry::{ancestry_leaf_gindex, ancestry_path_for_slots, historical_leaf_gindex, AncestryPath};
+    use lc_core::layout::CAPELLA_DENEB_STATE_LAYOUT;
+    use lc_core::ssz::is_valid_exact_branch;
+    let paths = real_historical_paths();
+    let field = CAPELLA_DENEB_STATE_LAYOUT.historical_summaries_gindex;
+    for name in HISTORICAL_ENTRIES {
+        let deposit = paths.deposit_header(name);
+        let leaf = deposit.hash_tree_root();
+        let branch = paths.ancestry_branch(name);
+        assert_eq!(branch.len(), 44, "{name}");
+        let historical_gindex = historical_leaf_gindex(field, deposit.slot / 8192, deposit.slot).unwrap();
+        assert!(
+            is_valid_exact_branch(&leaf, &branch, historical_gindex, &paths.anchor.state_root),
+            "{name}: slot {} at generalized index {historical_gindex}",
+            deposit.slot
+        );
+        let vault_gindex = ancestry_leaf_gindex(&PULSECHAIN, paths.anchor.slot, deposit.slot).unwrap();
+        let path = ancestry_path_for_slots(paths.anchor.slot, deposit.slot).unwrap();
+        if name == "era_last_block" {
+            assert_eq!(path, AncestryPath::Recent, "5117 slots before the anchor");
+            assert_ne!(vault_gindex, historical_gindex);
+            assert!(!is_valid_exact_branch(&leaf, &branch, vault_gindex, &paths.anchor.state_root), "reverse mix-up");
+            continue;
+        }
+        assert_eq!(path, AncestryPath::Historical, "{name}");
+        assert_eq!(vault_gindex, historical_gindex, "{name}: the vault picks the same index");
+    }
+    // The edge slots are the real edge: one era ends at slot 8191 and one at era_first_block - 1.
+    let first = paths.deposit_header("era_first_block").slot;
+    assert_eq!(paths.deposit_header("era_previous_last_block").slot, first - 1);
+    assert_eq!(first % 8192, 0);
+    assert_eq!(paths.deposit_header("era_last_block").slot % 8192, 8191);
+    assert_eq!(paths.deposit_header("era_zero_last_block").slot, 8191);
+    assert!(paths.deposit_header("capella_fork_block").slot >= PULSECHAIN.capella_fork_slot().unwrap());
+}
+
+/// Claim: on real data every wrong version of the proof fails. The neighbouring era index on either side, the block_roots
+/// index, a padded branch, a short branch and each flipped entry are refused. The honest branch passes (control).
+#[test]
+fn real_historical_ancestry_rejects_wrong_index_length_and_entries() {
+    use lc_core::ancestry::{block_roots_leaf_gindex, historical_leaf_gindex};
+    use lc_core::layout::CAPELLA_DENEB_STATE_LAYOUT;
+    use lc_core::ssz::is_valid_exact_branch;
+    let paths = real_historical_paths();
+    let field = CAPELLA_DENEB_STATE_LAYOUT.historical_summaries_gindex;
+    for name in HISTORICAL_ENTRIES {
+        let deposit = paths.deposit_header(name);
+        let (leaf, root) = (deposit.hash_tree_root(), paths.anchor.state_root);
+        let branch = paths.ancestry_branch(name);
+        let index = deposit.slot / 8192;
+        let check = |branch: &[B256], gindex: u64| is_valid_exact_branch(&leaf, branch, gindex, &root);
+        assert!(check(&branch, historical_leaf_gindex(field, index, deposit.slot).unwrap()), "{name}: control");
+        for wrong in [index + 1, index.wrapping_sub(1)] {
+            let gindex = historical_leaf_gindex(field, wrong, deposit.slot).unwrap_or(0).max(1);
+            assert!(!check(&branch, gindex), "{name}: wrong era index {wrong}");
+        }
+        let recent = block_roots_leaf_gindex(CAPELLA_DENEB_STATE_LAYOUT.block_roots_gindex, deposit.slot);
+        assert!(!check(&branch, recent), "{name}: block_roots index");
+        let gindex = historical_leaf_gindex(field, index, deposit.slot).unwrap();
+        let mut padded = branch.clone();
+        padded.insert(0, B256::ZERO);
+        assert!(!check(&padded, gindex), "{name}: padded");
+        assert!(!check(&branch[..43], gindex), "{name}: short");
+        for position in 0..branch.len() {
+            let mut flipped = branch.clone();
+            flipped[position].0[7] ^= 1;
+            assert!(!check(&flipped, gindex), "{name}: entry {position}");
+        }
+    }
+}
+
+/// Claim: a full withdrawal over the real historical path reaches the log checks: anchor, historical ancestry branch, block
+/// hash branch, keccak256 of the header, receipt proof, receipt. A real block has no deposit event, so it stops at the log
+/// stage. With the wrong index (the vault's era is wrong by one, modelled by a branch of the neighbouring entry) it stops
+/// earlier, at the ancestry branch.
+#[test]
+fn real_historical_withdrawal_reaches_the_log_checks() {
+    let (proof, anchor_root, block) = real_historical_withdrawal_proof(0, 0);
+    assert_eq!(proof.ancestryBranch.len(), 44);
+    assert!(proof.anchorHeader.slot - proof.depositHeader.slot > 8192, "the historical path");
+    let has_log = !block.receipts_json[0]["logs"].as_array().unwrap().is_empty();
+    let ctx = context(anchor_root, Address::repeat_byte(0xee));
+    let expected = if has_log { Error::LogEmitterMismatch } else { Error::LogIndexOutOfRange { index: 0, logs: 0 } };
+    assert_eq!(verify_withdrawal(&proof, &ctx, &PULSECHAIN), Err(expected), "control reaches the log stage");
+
+    let mut padded = proof.clone();
+    padded.ancestryBranch.insert(0, B256::ZERO);
+    assert_eq!(verify_withdrawal(&padded, &ctx, &PULSECHAIN), Err(Error::InvalidAncestryBranch));
+    let mut other_entry = proof.clone();
+    other_entry.ancestryBranch = real_historical_paths().ancestry_branch("era_first_block");
+    assert_eq!(verify_withdrawal(&other_entry, &ctx, &PULSECHAIN), Err(Error::InvalidAncestryBranch));
+    let unknown = WithdrawalContext { stored_anchor_root: B256::repeat_byte(9), ..ctx };
+    assert_eq!(verify_withdrawal(&proof, &unknown, &PULSECHAIN), Err(Error::AnchorNotStored));
 }

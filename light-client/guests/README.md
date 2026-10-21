@@ -12,12 +12,12 @@ has **not** been compiled on this machine, because the machine has no SP1 toolch
 ## What the guest does
 
 1. `sp1_zkvm::io::read_vec()` reads the input bytes. The format is `lc_core::wire` (documented in that module).
-   The input holds the chain selector, the fork version, the store and the update.
-2. `run_light_client_guest` decodes, runs `verify_light_client_update_with_fork_version`, and returns
-   `abi.encode(LightClientOutput)`.
+   The input holds the chain selector, the store and a list of 1 to 64 steps. Each step is a fork version and an update.
+2. `run_light_client_guest` decodes, runs `verify_light_client_fold_with_fork_versions` (every step applies
+   `verify_with_layout` and carries the store), and returns `abi.encode(LightClientOutput)`: 11 words, 352 bytes.
 3. `commit_slice` writes those bytes as the public values. The contract decodes them with `abi.decode`.
 
-The fork version is an input. That is safe: the sync committee signed the domain that contains it, so a wrong version gives
+The fork version is an input for every step. That is safe: the sync committee signed the domain that contains it, so a wrong version gives
 no valid signature (`real_update_verifies_only_with_the_correct_fork_version` shows this on real data).
 The chain selector picks the genesis validators root. The root is part of the public values, so the contract binds the proof to
 its chain.

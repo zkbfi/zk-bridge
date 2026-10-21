@@ -48,16 +48,52 @@ pub enum Error {
     InvalidNextSyncCommitteeBranch,
     /// The current sync committee branch does not lead to the state root of the bootstrap header.
     InvalidCurrentSyncCommitteeBranch,
-    /// The deposit block is not within 8192 slots before the anchor. Older deposits would need `historical_summaries`,
-    /// which this program does not support.
-    DepositOutsideHistoricalWindow {
+    /// The deposit block is not before the anchor block. Both ancestry paths need `deposit slot < anchor slot`.
+    DepositNotBeforeAnchor {
         /// Slot of the anchor header.
         anchor_slot: u64,
         /// Slot of the deposit header.
         deposit_slot: u64,
     },
-    /// The `block_roots` branch does not lead from the deposit header root to the anchor state root.
-    InvalidBlockRootsBranch,
+    /// The deposit era is before `capellaEra`, so no `historical_summaries` entry covers it.
+    DepositBeforeCapella {
+        /// `deposit slot / 8192`.
+        deposit_era: u64,
+        /// `capellaEra` of the chain.
+        capella_era: u64,
+    },
+    /// The index into `historical_summaries` does not fit under `HISTORICAL_ROOTS_LIMIT` (2^24).
+    HistoricalIndexOutOfRange {
+        /// `deposit era - capellaEra`.
+        index: u64,
+    },
+    /// The ancestry branch does not lead from the deposit header root to the anchor state root. The branch is the
+    /// `block_roots` branch on the recent path and the `historical_summaries` branch on the historical path.
+    InvalidAncestryBranch,
+    /// The anchor state has no `historical_summaries` entry for the era of the deposit: the era is not complete at the
+    /// anchor state.
+    HistoricalSummaryMissing {
+        /// The era of the deposit.
+        era: u64,
+        /// The number of entries in `historical_summaries` of the anchor state.
+        summaries: u64,
+    },
+    /// The 8192 block roots built for an era do not hash to the `block_summary_root` of the anchor state.
+    EraRootsMismatch {
+        /// The era.
+        era: u64,
+    },
+    /// No canonical block at or before the first slot of the era is known, so the roots of the empty first slots
+    /// cannot be filled.
+    NoBlockBeforeEra {
+        /// The era.
+        era: u64,
+    },
+    /// A fold must hold 1 to 64 updates.
+    FoldLengthOutOfRange {
+        /// Number of updates given.
+        count: usize,
+    },
     /// The execution payload branch does not lead to the body root of the named header.
     InvalidExecutionBranch(&'static str),
     /// A public key is not a valid, non-identity point in the right subgroup.
@@ -115,7 +151,9 @@ impl fmt::Display for Error {
             Self::ExecutionHeaderForkMismatch { fork } => {
                 write!(formatter, "execution payload header fields do not match fork {fork:?}")
             }
-            Self::NotFinalizedProgress(reason) => write!(formatter, "update does not advance the finalized head: {reason}"),
+            Self::NotFinalizedProgress(reason) => {
+                write!(formatter, "update does not advance the finalized head: {reason}")
+            }
             Self::PeriodOutOfRange(reason) => write!(formatter, "sync committee period out of range: {reason}"),
             Self::SignatureInNextPeriodWithoutCrossing => write!(
                 formatter,
@@ -130,16 +168,42 @@ impl fmt::Display for Error {
             Self::InvalidCurrentSyncCommitteeBranch => {
                 write!(formatter, "current sync committee branch does not match the header state root")
             }
-            Self::DepositOutsideHistoricalWindow { anchor_slot, deposit_slot } => write!(
+            Self::DepositNotBeforeAnchor { anchor_slot, deposit_slot } => {
+                write!(formatter, "deposit slot {deposit_slot} is not before anchor slot {anchor_slot}")
+            }
+            Self::DepositBeforeCapella { deposit_era, capella_era } => {
+                write!(
+                    formatter,
+                    "deposit era {deposit_era} is before capellaEra {capella_era}; no historical summary covers it"
+                )
+            }
+            Self::HistoricalIndexOutOfRange { index } => {
+                write!(formatter, "historical summary index {index} is not below 2^24")
+            }
+            Self::InvalidAncestryBranch => write!(formatter, "ancestry branch does not match the anchor state root"),
+            Self::HistoricalSummaryMissing { era, summaries } => write!(
                 formatter,
-                "deposit slot {deposit_slot} is not within 8192 slots before anchor slot {anchor_slot}; older deposits need historical_summaries, which is not built"
+                "the anchor state has {summaries} historical summaries, none for era {era}: the era is not complete"
             ),
-            Self::InvalidBlockRootsBranch => write!(formatter, "block_roots branch does not match the anchor state root"),
-            Self::InvalidExecutionBranch(which) => write!(formatter, "execution branch of the {which} header is invalid"),
+            Self::EraRootsMismatch { era } => write!(
+                formatter,
+                "the block roots built for era {era} do not hash to the block summary root of the anchor state"
+            ),
+            Self::NoBlockBeforeEra { era } => {
+                write!(formatter, "no canonical block at or before the first slot of era {era} is known")
+            }
+            Self::FoldLengthOutOfRange { count } => {
+                write!(formatter, "a fold holds 1 to 64 updates, got {count}")
+            }
+            Self::InvalidExecutionBranch(which) => {
+                write!(formatter, "execution branch of the {which} header is invalid")
+            }
             Self::InvalidPublicKey { index } => write!(formatter, "public key {index} is not a valid point"),
             Self::InvalidSignatureEncoding => write!(formatter, "signature is not a valid point"),
             Self::SignatureVerificationFailed => write!(formatter, "aggregate signature verification failed"),
-            Self::AnchorNotStored => write!(formatter, "the anchor header is not the stored finalized header of its slot"),
+            Self::AnchorNotStored => {
+                write!(formatter, "the anchor header is not the stored finalized header of its slot")
+            }
             Self::InvalidBlockHashBranch => write!(formatter, "block hash branch does not match the deposit body root"),
             Self::TargetChainMismatch { target_chain_id } => {
                 write!(formatter, "the deposit targets chain {target_chain_id}, not this chain")
@@ -163,8 +227,10 @@ impl Error {
     pub fn reason_code(&self) -> &'static str {
         match self {
             Self::AnchorNotStored => "AnchorNotStored",
-            Self::DepositOutsideHistoricalWindow { .. } => "DepositOutsideHistoricalWindow",
-            Self::InvalidBlockRootsBranch => "InvalidBlockRootsBranch",
+            Self::DepositNotBeforeAnchor { .. } => "DepositNotBeforeAnchor",
+            Self::DepositBeforeCapella { .. } => "DepositBeforeCapella",
+            Self::HistoricalIndexOutOfRange { .. } => "HistoricalIndexOutOfRange",
+            Self::InvalidAncestryBranch => "InvalidAncestryBranch",
             Self::InvalidBlockHashBranch => "InvalidBlockHashBranch",
             Self::UnsupportedFork { .. } => "UnsupportedFork",
             Self::HeaderDecode(_) => "HeaderDecode",

@@ -5,6 +5,8 @@
 //! `https://rpc-pulsechain.g4mm4.io/beacon-api` (see `tests/fixtures/pulsechain/chain_spec.json`).
 //! A test compares each constant with its fixture, so a typing error cannot hide.
 
+use crate::error::{Error, Result};
+use crate::layout::SLOTS_PER_HISTORICAL_ROOT;
 use alloy_primitives::{b256, B256};
 
 /// The epoch value that the beacon configuration uses for a fork that is never scheduled.
@@ -109,6 +111,27 @@ impl ChainSpec {
     pub fn fork_version_at(&self, epoch: u64) -> [u8; 4] {
         self.fork_entry_at_epoch(epoch).fork_version
     }
+
+    /// The first slot of the Capella fork, from the fork schedule. `None` when the schedule has no Capella entry.
+    pub fn capella_fork_slot(&self) -> Option<u64> {
+        let entry = self.fork_schedule.iter().find(|entry| entry.fork_name == ForkName::Capella)?;
+        Some(entry.epoch.saturating_mul(self.slots_per_epoch))
+    }
+
+    /// `capellaEra`: `floor(capellaForkSlot / 8192)`. The era of the first entry of `state.historical_summaries`.
+    ///
+    /// `BeaconState.historical_summaries` starts empty at the Capella upgrade, and the first summary is appended at the
+    /// first epoch transition with `next_epoch % 256 == 0` (`process_historical_summaries_update`,
+    /// `specs/capella/beacon-chain.md`). That summary covers the era that holds the Capella fork slot. So the entry at
+    /// index `i` covers era `capellaEra + i`. Ethereum gives 758 (Capella slot 6209536); PulseChain gives 0 (slot 96).
+    /// The value comes from the fork schedule, so it is never typed in by hand outside the chain configuration.
+    ///
+    /// # Errors
+    /// `UnsupportedFork` when the schedule has no Capella entry.
+    pub fn capella_era(&self) -> Result<u64> {
+        let slot = self.capella_fork_slot().ok_or(Error::UnsupportedFork { fork: ForkName::Capella })?;
+        Ok(slot / SLOTS_PER_HISTORICAL_ROOT)
+    }
 }
 
 /// The fork schedule of Ethereum mainnet.
@@ -197,6 +220,26 @@ mod tests {
         assert_eq!(ETHEREUM_MAINNET.fork_version_at(364_032), [5, 0, 0, 0]);
         assert_eq!(PULSECHAIN.fork_version_at(2), [0, 0, 0x03, 0x6b]);
         assert_eq!(PULSECHAIN.fork_version_at(3), [0, 0, 0x03, 0x6c]);
+    }
+
+    /// Claim: `capellaEra` comes out of the fork schedule as 758 on Ethereum (Capella slot 6209536 = 758 * 8192
+    /// exactly) and 0 on PulseChain (Capella epoch 3, slot 96). The expected numbers are written by hand from the
+    /// build contract, not from the code. A wrong value would make a whole era unreachable or wrongly reachable.
+    #[test]
+    fn capella_era_comes_from_the_fork_schedule() {
+        assert_eq!(ETHEREUM_MAINNET.capella_fork_slot(), Some(6_209_536));
+        assert_eq!(ETHEREUM_MAINNET.capella_era(), Ok(758));
+        assert_eq!(758 * 8192, 6_209_536);
+        assert_eq!(PULSECHAIN.capella_fork_slot(), Some(96));
+        assert_eq!(PULSECHAIN.capella_era(), Ok(0));
+    }
+
+    /// Claim: a schedule without Capella has no `capellaEra`. The control shows the function can fail.
+    #[test]
+    fn capella_era_needs_a_capella_entry() {
+        const FORKS: [ForkEntry; 1] = [ForkEntry { epoch: 0, fork_version: [0; 4], fork_name: ForkName::Phase0 }];
+        let spec = ChainSpec { fork_schedule: &FORKS, ..PULSECHAIN };
+        assert_eq!(spec.capella_era(), Err(Error::UnsupportedFork { fork: ForkName::Capella }));
     }
 
     /// Claim: a sync committee period is 8192 slots on both chains, so period boundaries sit at multiples of 8192.

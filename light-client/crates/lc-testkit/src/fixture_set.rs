@@ -5,18 +5,20 @@
 //! case it runs `verify_withdrawal` and asserts that the outcome equals the outcome the file declares.
 
 use crate::json::{hex_bytes, load_response};
-use crate::pulsechain::{real_withdrawal_proof, rebuild_block};
+use crate::pulsechain::{real_historical_withdrawal_proof, real_withdrawal_proof, rebuild_block};
 use crate::synthetic::{
     assemble_withdrawal, build_withdrawal, deposit_log, DepositFields, ExecutionBlockEvidence, ReceiptSpec,
+    WithdrawalScenario,
 };
 use alloy_primitives::{address, hex, Address, Bytes, B256, U256};
 use alloy_sol_types::SolCall;
 use lc_core::abi::{withdrawCall, WithdrawalProof};
+use lc_core::ancestry::{ancestry_path_for_slots, historical_leaf_gindex, AncestryPath};
 use lc_core::chain::{ChainSpec, ForkName, ETHEREUM_MAINNET, FAR_FUTURE_EPOCH, PULSECHAIN};
 use lc_core::execution::Log;
 use lc_core::layout::{
     block_hash_gindex_for_fork, state_layout_for_fork, BLOCK_ROOTS_VECTOR_DEPTH, EXECUTION_PAYLOAD_GINDEX,
-    SLOTS_PER_HISTORICAL_ROOT,
+    HISTORICAL_SUMMARIES_LIST_DEPTH, SLOTS_PER_HISTORICAL_ROOT,
 };
 use lc_core::ssz::gindex_depth;
 use lc_core::withdrawal::{verify_withdrawal, VerifiedDeposit, WithdrawalContext};
@@ -30,7 +32,9 @@ fn text(value: impl core::fmt::LowerHex) -> String {
 }
 
 /// The fork schedule rows the vault takes as a constructor argument, for one source chain.
-/// Row: `(activationEpoch, blockRootsGindexBase, blockHashGindex)`. Forks without a supported layout are left out.
+/// Row: `(activationEpoch, blockRootsGindexBase, blockHashGindex, historicalSummariesGindex)`.
+/// `historicalSummariesGindex` is the generalized index of the `historical_summaries` field in the `BeaconState` of the
+/// fork (the anchor's layout). Forks without a supported layout are left out.
 fn schedule_rows(spec: &ChainSpec) -> Vec<Value> {
     spec.fork_schedule
         .iter()
@@ -43,6 +47,7 @@ fn schedule_rows(spec: &ChainSpec) -> Vec<Value> {
                 "fork": format!("{:?}", entry.fork_name).to_lowercase(),
                 "blockRootsGindexBase": (layout.block_roots_gindex << BLOCK_ROOTS_VECTOR_DEPTH).to_string(),
                 "blockHashGindex": block_hash_gindex.to_string(),
+                "historicalSummariesGindex": layout.historical_summaries_gindex.to_string(),
             }))
         })
         .collect()
@@ -63,6 +68,10 @@ pub fn gindices_json() -> Value {
             "blockRootsFieldGindex": layout.block_roots_gindex.to_string(),
             "blockRootsGindexBase": base.to_string(),
             "blockRootsBranchLength": gindex_depth(base),
+            "historicalSummariesFieldGindex": layout.historical_summaries_gindex.to_string(),
+            "historicalAncestryBranchLength": gindex_depth(
+                historical_leaf_gindex(layout.historical_summaries_gindex, 0, 0).expect("index 0 is in range")
+            ),
             "executionPayloadGindex": EXECUTION_PAYLOAD_GINDEX.to_string(),
             "executionBranchLength": gindex_depth(EXECUTION_PAYLOAD_GINDEX),
             "blockHashGindex": block_hash.to_string(),
@@ -70,14 +79,20 @@ pub fn gindices_json() -> Value {
         })
     };
     json!({
-        "source": "ethereum/consensus-specs master, fetched 2026-10-20. BeaconState.block_roots: specs/phase0/beacon-chain.md (field 5). BeaconState sync committee and finality indices: specs/altair/light-client/sync-protocol.md and specs/electra/light-client/sync-protocol.md. execution_payload: specs/capella/light-client/sync-protocol.md (25). ExecutionPayload field lists: specs/capella/beacon-chain.md (15 fields) and specs/deneb/beacon-chain.md (17 fields, unchanged in Electra and Fulu).",
+        "source": "ethereum/consensus-specs master, fetched 2026-10-20. BeaconState.block_roots: specs/phase0/beacon-chain.md (field 5). BeaconState sync committee and finality indices: specs/altair/light-client/sync-protocol.md and specs/electra/light-client/sync-protocol.md. execution_payload: specs/capella/light-client/sync-protocol.md (25). ExecutionPayload field lists: specs/capella/beacon-chain.md (15 fields) and specs/deneb/beacon-chain.md (17 fields, unchanged in Electra and Fulu). BeaconState.historical_summaries: container BeaconState in specs/capella/beacon-chain.md (28 fields, historical_summaries is field 27, new in Capella; HistoricalSummary and HistoricalSummaries.LIMIT = HISTORICAL_ROOTS_LIMIT = 2^24 in the same file); specs/deneb, specs/electra and specs/fulu beacon-chain.md only append fields after it (Electra 37, Fulu 38), so it stays field 27. process_historical_summaries_update (specs/capella/beacon-chain.md) appends one summary per era.",
         "generatedBy": "cargo run -p lc-testkit --bin write-withdrawal-fixtures",
         "notes": [
             "blockRootsGindexBase = blockRootsFieldGindex * 8192. The generalized index of block_roots[slot % 8192] is blockRootsGindexBase + (slot % 8192).",
             "blockHashGindex is the combined index of BeaconBlockBody.execution_payload.block_hash: executionPayloadGindex * 2^payloadDepth + 12. block_hash is field 12 of ExecutionPayload.",
             "The vault picks the block roots row by the epoch of the ANCHOR header slot and the block hash row by the epoch of the DEPOSIT header slot.",
-            "A branch has exactly floorlog2(gindex) entries. A branch with padding is refused."
+            "A branch has exactly floorlog2(gindex) entries. A branch with padding is refused.",
+            "The vault picks the ancestry path from the slots: recent when 0 < anchorSlot - depositSlot <= 8192 (leaf block_roots[depositSlot % 8192]), historical when the distance is above 8192.",
+            "Historical generalized index, in this order: g = historicalSummariesFieldGindex; g = g * 2 (list data root); g = g * 2^24 + index (HISTORICAL_ROOTS_LIMIT = 2^24); g = g * 2 + 0 (block_summary_root); g = g * 2^13 + depositSlot % 8192. index = depositSlot / 8192 - capellaEra, and the deposit era must be at least capellaEra.",
+            "historicalAncestryBranchLength is the exact length of the historical ancestry branch: 44 in the Capella and Deneb layouts, 45 in the Electra and Fulu layouts.",
+            "capellaEra = floor(capellaForkSlot / 8192): Ethereum 758 (Capella slot 6209536), PulseChain 0 (Capella epoch 3, slot 96). It is an immutable vault argument."
         ],
+        "historicalRootsLimit": (1u64 << HISTORICAL_SUMMARIES_LIST_DEPTH).to_string(),
+        "historicalSummariesListDepth": HISTORICAL_SUMMARIES_LIST_DEPTH,
         "slotsPerHistoricalRoot": SLOTS_PER_HISTORICAL_ROOT.to_string(),
         "forks": {
             "capella": fork_entry(ForkName::Capella),
@@ -86,8 +101,16 @@ pub fn gindices_json() -> Value {
             "fulu": fork_entry(ForkName::Fulu),
         },
         "chains": {
-            "ethereum": { "chainId": "1", "forkSchedule": schedule_rows(&ETHEREUM_MAINNET) },
-            "pulsechain": { "chainId": "369", "forkSchedule": schedule_rows(&PULSECHAIN) },
+            "ethereum": {
+                "chainId": "1",
+                "capellaEra": ETHEREUM_MAINNET.capella_era().expect("Capella").to_string(),
+                "forkSchedule": schedule_rows(&ETHEREUM_MAINNET),
+            },
+            "pulsechain": {
+                "chainId": "369",
+                "capellaEra": PULSECHAIN.capella_era().expect("Capella").to_string(),
+                "forkSchedule": schedule_rows(&PULSECHAIN),
+            },
         },
     })
 }
@@ -139,6 +162,11 @@ fn render(case: Case) -> (String, Value) {
     };
     let calldata = withdrawCall { proof: case.proof.clone() }.abi_encode();
     let layout = if case.spec.name == "pulsechain" { "capella" } else { "electra" };
+    let ancestry_path = match ancestry_path_for_slots(case.proof.anchorHeader.slot, case.proof.depositHeader.slot) {
+        Ok(AncestryPath::Recent) => "recent",
+        Ok(AncestryPath::Historical) => "historical",
+        Err(_) => "none",
+    };
     let value = json!({
         "name": case.name,
         "description": case.description,
@@ -148,6 +176,8 @@ fn render(case: Case) -> (String, Value) {
         "layout": layout,
         "calldata": format!("0x{}", hex::encode(calldata)),
         "anchorSlot": case.proof.anchorHeader.slot.to_string(),
+        "ancestryPath": ancestry_path,
+        "capellaEra": case.spec.capella_era().expect("Capella").to_string(),
         "storedAnchorHeaderRoot": text(case.stored_anchor_root),
         "remoteVault": text(case.remote_vault),
         "localChainId": case.local_chain_id.to_string(),
@@ -315,22 +345,22 @@ fn synthetic_cases(spec: &'static ChainSpec, prefix: &str, local_chain_id: u64, 
     cases.push(other_root);
 
     let mut roots = base(
-        "reject_corrupted_block_roots_branch",
-        "One entry of blockRootsBranch is flipped.",
+        "reject_corrupted_recent_ancestry_branch",
+        "One entry of ancestryBranch is flipped (recent path).",
         1,
         0,
-        Expected::Reject("InvalidBlockRootsBranch"),
+        Expected::Reject("InvalidAncestryBranch"),
     );
-    flip_node(&mut roots.proof.blockRootsBranch[4]);
+    flip_node(&mut roots.proof.ancestryBranch[4]);
     cases.push(roots);
     let mut padded = base(
-        "reject_padded_block_roots_branch",
-        "blockRootsBranch has one extra zero entry; the vault wants the exact length.",
+        "reject_padded_recent_ancestry_branch",
+        "ancestryBranch has one extra zero entry (recent path); the vault wants the exact length.",
         1,
         0,
-        Expected::Reject("InvalidBlockRootsBranch"),
+        Expected::Reject("InvalidAncestryBranch"),
     );
-    padded.proof.blockRootsBranch.insert(0, B256::ZERO);
+    padded.proof.ancestryBranch.insert(0, B256::ZERO);
     cases.push(padded);
     let mut hash_branch = base(
         "reject_corrupted_block_hash_branch",
@@ -355,7 +385,7 @@ fn synthetic_cases(spec: &'static ChainSpec, prefix: &str, local_chain_id: u64, 
         "depositHeader.slot is one more than the slot the branch proves.",
         1,
         0,
-        Expected::Reject("InvalidBlockRootsBranch"),
+        Expected::Reject("InvalidAncestryBranch"),
     );
     wrong_slot.proof.depositHeader.slot += 1;
     cases.push(wrong_slot);
@@ -415,17 +445,135 @@ fn synthetic_cases(spec: &'static ChainSpec, prefix: &str, local_chain_id: u64, 
         Expected::Accept,
     ));
     cases.push(window(
-        "reject_deposit_8193_slots_before_anchor",
-        "One slot too old; needs historical_summaries, which are not built.",
+        "accept_deposit_8193_slots_before_anchor_historical_path",
+        "One slot past the recent window: the vault takes the historical path, and the branch goes through historical_summaries.",
         window_anchor - 8193,
-        Expected::Reject("DepositOutsideHistoricalWindow"),
+        Expected::Accept,
     ));
     cases.push(window(
         "reject_deposit_in_anchor_slot",
         "The deposit slot equals the anchor slot.",
         window_anchor,
-        Expected::Reject("DepositOutsideHistoricalWindow"),
+        Expected::Reject("DepositNotBeforeAnchor"),
     ));
+    cases.extend(historical_cases(spec, prefix, local_chain_id, window_anchor));
+    cases
+}
+
+/// Cases for the historical ancestry path. The anchor state always holds the deposit header root in every place a mixed-up
+/// proof could point at (see `assemble_withdrawal`), so each rejection below comes from the vault's choice of path, index
+/// and length, not from a broken Merkle path.
+fn historical_cases(spec: &'static ChainSpec, prefix: &str, local_chain_id: u64, anchor: u64) -> Vec<Case> {
+    let receipts = synthetic_receipts(local_chain_id);
+    let scenario_at = |deposit_slot: u64| build_withdrawal(spec, &receipts, 1, 0, deposit_slot, anchor);
+    let case = |name: &str, description: &str, scenario: WithdrawalScenario, expected: Expected| Case {
+        name: format!("{prefix}_{name}"),
+        description: description.to_string(),
+        beacon_data: "synthetic",
+        receipt_data: "synthetic",
+        spec,
+        proof: scenario.proof,
+        stored_anchor_root: scenario.stored_anchor_root,
+        remote_vault: VAULT,
+        local_chain_id,
+        expected,
+    };
+    // The era edge: the last slot of one era and the first slot of the next, both far from the anchor.
+    let edge_era = anchor / SLOTS_PER_HISTORICAL_ROOT - 4;
+    let last_slot_of_era = (edge_era + 1) * SLOTS_PER_HISTORICAL_ROOT - 1;
+    let first_slot_of_next_era = last_slot_of_era + 1;
+    let mut cases = vec![
+        case(
+            "accept_historical_era_last_slot",
+            "Historical path. The deposit sits in the last slot of an era; the index is that era minus capellaEra.",
+            scenario_at(last_slot_of_era),
+            Expected::Accept,
+        ),
+        case(
+            "accept_historical_era_first_slot",
+            "Historical path. The deposit sits in the first slot of the next era; the index is one higher.",
+            scenario_at(first_slot_of_next_era),
+            Expected::Accept,
+        ),
+    ];
+
+    let mut wrong_era = scenario_at(last_slot_of_era);
+    wrong_era.proof.ancestryBranch =
+        wrong_era.historical_ancestry_branch_for_era(edge_era + 1).expect("the next era is complete at the anchor");
+    cases.push(case(
+        "reject_historical_wrong_era_index",
+        "The deposit is in the last slot of era E. The branch is a valid path of the anchor state, but for the list position of era E+1 (the state holds the deposit root there too).",
+        wrong_era,
+        Expected::Reject("InvalidAncestryBranch"),
+    ));
+    let mut padded = scenario_at(last_slot_of_era);
+    padded.proof.ancestryBranch.insert(0, B256::ZERO);
+    cases.push(case(
+        "reject_historical_padded_branch",
+        "The historical ancestryBranch has one extra zero entry; the vault wants the exact length.",
+        padded,
+        Expected::Reject("InvalidAncestryBranch"),
+    ));
+    let mut short = scenario_at(last_slot_of_era);
+    short.proof.ancestryBranch.pop();
+    cases.push(case(
+        "reject_historical_short_branch",
+        "The historical ancestryBranch lacks its last entry.",
+        short,
+        Expected::Reject("InvalidAncestryBranch"),
+    ));
+    let mut corrupted = scenario_at(last_slot_of_era);
+    flip_node(&mut corrupted.proof.ancestryBranch[20]);
+    cases.push(case(
+        "reject_historical_corrupted_branch",
+        "One entry inside the 24 list levels of the historical ancestryBranch is flipped.",
+        corrupted,
+        Expected::Reject("InvalidAncestryBranch"),
+    ));
+    let mut recent_gindex = scenario_at(last_slot_of_era);
+    recent_gindex.proof.ancestryBranch = recent_gindex.recent_ancestry_branch();
+    cases.push(case(
+        "reject_historical_distance_with_block_roots_branch",
+        "The distance is above 8192, but the branch was built with the block_roots index (a valid path of the anchor state).",
+        recent_gindex,
+        Expected::Reject("InvalidAncestryBranch"),
+    ));
+    let recent_deposit_slot = (anchor / SLOTS_PER_HISTORICAL_ROOT) * SLOTS_PER_HISTORICAL_ROOT - 300;
+    let mut historical_gindex = scenario_at(recent_deposit_slot);
+    historical_gindex.proof.ancestryBranch =
+        historical_gindex.historical_ancestry_branch().expect("the deposit era is complete at the anchor");
+    cases.push(case(
+        "reject_recent_distance_with_historical_branch",
+        "The distance is at most 8192 and the deposit era is complete, but the branch was built with the historical_summaries index (a valid path of the anchor state).",
+        historical_gindex,
+        Expected::Reject("InvalidAncestryBranch"),
+    ));
+    cases.push(case(
+        "accept_recent_distance_in_a_complete_era",
+        "Control for the reverse attack: the same deposit with the recent branch verifies.",
+        scenario_at(recent_deposit_slot),
+        Expected::Accept,
+    ));
+
+    // capellaEra: the first era of the chain is reachable, and an older era is not.
+    let capella_era = spec.capella_era().expect("Capella");
+    let first_capella_era_slot = capella_era * SLOTS_PER_HISTORICAL_ROOT;
+    cases.push(case(
+        "accept_historical_first_capella_era",
+        "The first slot of era capellaEra (list position 0). Ethereum: slot 6209536, the Capella slot. PulseChain: slot 0 is before Capella, but the era is capellaEra 0.",
+        scenario_at(first_capella_era_slot.max(spec.capella_fork_slot().expect("Capella"))),
+        Expected::Accept,
+    ));
+    if capella_era > 0 {
+        let mut before = scenario_at(first_capella_era_slot);
+        before.proof.depositHeader.slot = first_capella_era_slot - 1;
+        cases.push(case(
+            "reject_historical_deposit_before_capella_era",
+            "The deposit slot is the last slot of era capellaEra - 1. No summary covers it. (The branch is a copy of the honest one; the era check comes first.)",
+            before,
+            Expected::Reject("DepositBeforeCapella"),
+        ));
+    }
     cases
 }
 
@@ -472,6 +620,46 @@ fn real_receipt_cases() -> Vec<Case> {
                 expected: Expected::Reject(reason),
             });
         }
+    }
+
+    // REAL PulseChain historical path: a block in an older era under a real anchor, through historical_summaries.
+    let (_, _, block) = real_historical_withdrawal_proof(0, 0);
+    let (transaction_index, receipt) = block
+        .receipts_json
+        .as_array()
+        .expect("receipts")
+        .iter()
+        .enumerate()
+        .find(|(_, receipt)| !receipt["logs"].as_array().expect("logs").is_empty())
+        .expect("a receipt with logs");
+    let emitter = Address::from_slice(&hex_bytes(&receipt["logs"][0]["address"]));
+    let (proof, anchor_root, _) = real_historical_withdrawal_proof(transaction_index as u64, 0);
+    for (suffix, vault, reason, description) in [
+        (
+            "wrong_emitter",
+            Address::repeat_byte(0xee),
+            "LogEmitterMismatch",
+            "Every beacon, header and receipt check passes on real data; the log is not from the vault.",
+        ),
+        (
+            "not_a_deposit",
+            emitter,
+            "LogTopicMismatch",
+            "The vault address is the real emitter of the log, whose topic is not the deposit topic.",
+        ),
+    ] {
+        cases.push(Case {
+            name: format!("real_pulsechain_historical_block_{suffix}"),
+            description: format!("{description} Receipt {transaction_index}, log 0, of a real PulseChain block in an older era (historical path, 44 entry ancestry branch, the era before the era of the anchor) under a real anchor state."),
+            beacon_data: "real",
+            receipt_data: "real",
+            spec: &PULSECHAIN,
+            proof: proof.clone(),
+            stored_anchor_root: anchor_root,
+            remote_vault: vault,
+            local_chain_id: 1,
+            expected: Expected::Reject(reason),
+        });
     }
 
     // REAL Ethereum block and receipts under a SYNTHETIC Electra-layout beacon path.

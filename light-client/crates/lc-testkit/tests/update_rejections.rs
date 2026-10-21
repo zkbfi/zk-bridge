@@ -408,12 +408,14 @@ fn real_updates_reject_every_attack() {
 
 // ---- guest wire format ----
 
-/// Claim: the guest entry point (`run_light_client_guest`) decodes the wire format, verifies, and returns the exact ABI
-/// bytes of the output, for a REAL Ethereum update and a REAL PulseChain update. Truncated input, trailing bytes and a
-/// flipped fork version are refused. Why it matters: this is the function the SP1 guest calls.
+/// Claim: the guest entry point (`run_light_client_guest`) decodes the wire format, verifies a fold of one update, and
+/// returns the exact ABI bytes of the output (352 bytes), for a REAL Ethereum update and a REAL PulseChain update.
+/// Truncated input, trailing bytes and a flipped fork version are refused. Why it matters: this is the function the SP1
+/// guest calls.
 #[test]
 fn real_updates_run_through_the_guest_entry_point() {
     use alloy_sol_types::SolValue;
+    use lc_core::update::FoldStep;
     use lc_core::wire::{decode_guest_input, encode_guest_input, run_light_client_guest, ChainSelector, GuestInput};
     let (eth_store, eth_update) = real_ethereum();
     let (pls_store, pls_update) = real_update_and_store();
@@ -422,19 +424,24 @@ fn real_updates_run_through_the_guest_entry_point() {
         (ChainSelector::Pulsechain, &PULSECHAIN, pls_store, pls_update),
     ] {
         let fork_version = table_fork_version(spec, update.signature_slot);
-        let input = GuestInput { chain, fork_version, store: store.clone(), update: update.clone() };
+        let input =
+            GuestInput { chain, store: store.clone(), steps: vec![FoldStep { update: update.clone(), fork_version }] };
         let bytes = encode_guest_input(&input);
         assert_eq!(decode_guest_input(&bytes), Ok(input.clone()), "roundtrip");
         let expected = verify_light_client_update(&store, &update, spec).unwrap().abi_encode();
+        assert_eq!(expected.len(), 352);
         assert_eq!(run_light_client_guest(&bytes), Ok(expected));
 
         assert!(run_light_client_guest(&bytes[..bytes.len() - 1]).is_err(), "truncated");
         let mut trailing = bytes.clone();
         trailing.push(0);
         assert!(run_light_client_guest(&trailing).is_err(), "trailing byte");
-        let mut wrong_version = bytes.clone();
-        wrong_version[1] ^= 0x01;
-        assert_eq!(run_light_client_guest(&wrong_version), Err(Error::SignatureVerificationFailed));
+        let mut wrong_version = input.clone();
+        wrong_version.steps[0].fork_version[0] ^= 0x01;
+        assert_eq!(
+            run_light_client_guest(&encode_guest_input(&wrong_version)),
+            Err(Error::SignatureVerificationFailed)
+        );
         let mut wrong_chain = bytes.clone();
         wrong_chain[0] = if chain == ChainSelector::Pulsechain { 1 } else { 2 };
         assert!(run_light_client_guest(&wrong_chain).is_err(), "the other chain's configuration");

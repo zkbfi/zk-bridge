@@ -17,6 +17,8 @@ sol! {
         bytes32 previousHeaderRoot;
         uint64 previousHeadSlot;
         bytes32 previousSyncCommitteeHash;
+        // Hash of the initial store's next committee, or zero when the store has none. Binds the private start.
+        bytes32 startNextSyncCommitteeHash;
         bytes32 newHeaderRoot;
         uint64 newHeadSlot;
         bytes32 executionBlockHash;
@@ -40,7 +42,7 @@ sol! {
     struct WithdrawalProof {
         BeaconBlockHeader anchorHeader;
         BeaconBlockHeader depositHeader;
-        bytes32[] blockRootsBranch;
+        bytes32[] ancestryBranch;
         bytes32[] blockHashBranch;
         bytes executionHeaderRlp;
         bytes[] receiptProof;
@@ -92,6 +94,7 @@ mod tests {
             previousHeaderRoot: B256::repeat_byte(0x22),
             previousHeadSlot: 100,
             previousSyncCommitteeHash: B256::repeat_byte(0x33),
+            startNextSyncCommitteeHash: B256::repeat_byte(0x88),
             newHeaderRoot: B256::repeat_byte(0x44),
             newHeadSlot: 200,
             executionBlockHash: B256::repeat_byte(0x55),
@@ -102,8 +105,9 @@ mod tests {
     }
 
     /// Claim: the encoding of `LightClientOutput` equals the bytes of
-    /// `cast abi-encode "f((bytes32,bytes32,uint64,bytes32,bytes32,uint64,bytes32,uint64,bytes32,bytes32))" ...`,
-    /// produced by Foundry `cast` on 2026-10-20 (the cast tool is a separate, Solidity-ABI implementation).
+    /// `cast abi-encode "f((bytes32,bytes32,uint64,bytes32,bytes32,bytes32,uint64,bytes32,uint64,bytes32,bytes32))" ...`,
+    /// produced by Foundry `cast` 1.6.0 on 2026-10-20 (the cast tool is a separate, Solidity-ABI implementation).
+    /// The output has 11 words of 32 bytes: 352 bytes (it had 10 words, 320 bytes, before `startNextSyncCommitteeHash`).
     /// Why it matters: the contract decodes these exact bytes with `abi.decode`.
     #[test]
     fn light_client_output_encoding_matches_cast() {
@@ -112,6 +116,7 @@ mod tests {
             "2222222222222222222222222222222222222222222222222222222222222222"
             "0000000000000000000000000000000000000000000000000000000000000064"
             "3333333333333333333333333333333333333333333333333333333333333333"
+            "8888888888888888888888888888888888888888888888888888888888888888"
             "4444444444444444444444444444444444444444444444444444444444444444"
             "00000000000000000000000000000000000000000000000000000000000000c8"
             "5555555555555555555555555555555555555555555555555555555555555555"
@@ -120,7 +125,8 @@ mod tests {
             "7777777777777777777777777777777777777777777777777777777777777777"
         );
         assert_eq!(sample_light_client_output().abi_encode(), expected.to_vec());
-        assert_eq!(expected.len(), 10 * 32);
+        assert_eq!(expected.len(), 11 * 32);
+        assert_eq!(expected.len(), 352);
     }
 
     /// Claim: decoding the encoded bytes gives back the same struct, so the layout is symmetric.
@@ -148,7 +154,7 @@ mod tests {
         let proof = WithdrawalProof {
             anchorHeader: header(1, 2, 0x11),
             depositHeader: header(4, 5, 0x44),
-            blockRootsBranch: vec![B256::repeat_byte(0x77)],
+            ancestryBranch: vec![B256::repeat_byte(0x77)],
             blockHashBranch: vec![B256::repeat_byte(0x88), B256::repeat_byte(0x99)],
             executionHeaderRlp: hex!("deadbeef").into(),
             receiptProof: vec![hex!("aabb").into(), hex!("ccddeeff00").into()],

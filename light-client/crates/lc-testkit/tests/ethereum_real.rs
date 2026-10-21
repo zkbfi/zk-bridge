@@ -182,6 +182,53 @@ fn real_updates_cross_a_period_boundary_and_chain() {
     assert!(final_output.newHeadSlot > output.newHeadSlot);
 }
 
+/// Claim: a REAL fold of two updates (the period crossing and the newest finality update) gives the same final store as
+/// applying them one by one, and one output that spans both: `previous*` and `startNextSyncCommitteeHash` describe the
+/// initial store, `new*` the last update, and `nextSyncCommitteeHash` is the committee that the crossing update proved
+/// (a later step that proves nothing keeps it). Real signatures, real branches, Electra layout.
+/// Control: without the next committee in the store the same fold fails at the crossing.
+#[test]
+fn real_fold_of_a_crossing_and_a_finality_update() {
+    let bootstrap = bootstrap(&load_response("ethereum/bootstrap_previous_period.json")["data"]);
+    let updates = two_period_updates();
+    let spec = &ETHEREUM_MAINNET;
+    let next = updates[0].next_sync_committee.as_ref().expect("the best update carries the next committee");
+    let store = store_from_bootstrap(&bootstrap, Some(next.committee.clone()));
+    let crossing = &updates[1];
+    let latest = finality_update();
+
+    let (first_output, store_after_first) = advance_light_client_store(&store, crossing, spec).expect("crossing");
+    let (second_output, store_after_second) =
+        advance_light_client_store(&store_after_first, &latest, spec).expect("finality update");
+    let (fold, fold_store) =
+        lc_core::update::verify_light_client_fold(&store, &[crossing.clone(), latest.clone()], spec)
+            .expect("the real fold verifies");
+    assert_eq!(fold_store, store_after_second);
+    assert_eq!(fold.previousHeaderRoot, first_output.previousHeaderRoot);
+    assert_eq!(fold.previousHeadSlot, first_output.previousHeadSlot);
+    assert_eq!(fold.previousSyncCommitteeHash, first_output.previousSyncCommitteeHash);
+    assert_eq!(fold.startNextSyncCommitteeHash, next.committee.hash_tree_root().unwrap());
+    assert_ne!(fold.startNextSyncCommitteeHash, B256::ZERO);
+    assert_eq!(fold.newHeaderRoot, second_output.newHeaderRoot);
+    assert_eq!(fold.newHeadSlot, second_output.newHeadSlot);
+    assert_eq!(fold.executionBlockHash, second_output.executionBlockHash);
+    assert_eq!(fold.syncCommitteeHash, second_output.syncCommitteeHash);
+    let proven_by_crossing = crossing.next_sync_committee.as_ref().unwrap().committee.hash_tree_root().unwrap();
+    assert_eq!(first_output.nextSyncCommitteeHash, proven_by_crossing);
+    assert_eq!(second_output.nextSyncCommitteeHash, B256::ZERO, "the finality update proves nothing");
+    assert_eq!(
+        fold.nextSyncCommitteeHash, proven_by_crossing,
+        "proved earlier in this fold, still the final next committee"
+    );
+
+    let without_next = store_from_bootstrap(&bootstrap, None);
+    assert_eq!(
+        lc_core::update::verify_light_client_fold(&without_next, &[crossing.clone(), latest], spec),
+        Err(lc_core::Error::NextSyncCommitteeUnknown),
+        "control: no next committee, no crossing"
+    );
+}
+
 /// Claim: the real update does not verify against a store whose head is not before the finalized header.
 /// A store that already holds the update's finalized header must refuse it (the head must strictly advance).
 #[test]

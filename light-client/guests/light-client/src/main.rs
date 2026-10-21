@@ -1,7 +1,8 @@
-//! SP1 guest: verifies one Ethereum or PulseChain light-client update and commits the ABI-encoded `LightClientOutput`.
+//! SP1 guest: verifies a fold of 1 to 64 Ethereum or PulseChain light-client updates and commits the ABI-encoded
+//! `LightClientOutput` (352 bytes).
 //!
 //! The body is `lc_core::wire::run_light_client_guest`, which native tests in `lc-testkit` run on real updates
-//! (`real_updates_run_through_the_guest_entry_point`). This wrapper only moves bytes in and out of the zkVM.
+//! (`real_updates_run_through_the_guest_entry_point`) and on synthetic folds (`synthetic_guest_entry_point_runs_a_fold`). This wrapper only moves bytes in and out of the zkVM.
 //! A failed check panics, so no proof exists for an invalid update.
 
 #![no_main]

@@ -17,7 +17,10 @@ use lc_core::abi::WithdrawalProof;
 use lc_core::bls::BLS_DST;
 use lc_core::chain::{ChainSpec, ForkName, SYNC_COMMITTEE_SIZE};
 use lc_core::execution::Log;
-use lc_core::ssz::{branch_for_leaf, hash_pair, merkleize, sha256, u64_chunk};
+use lc_core::ssz::{
+    branch_for_leaf, branch_for_leaf_with_limit, hash_pair, merkleize, merkleize_with_limit, mix_in_length, sha256,
+    u64_chunk,
+};
 use lc_core::types::{
     compute_signing_root, sync_committee_domain, BeaconBlockHeader, BlobGasFields, BlsPublicKey,
     ExecutionPayloadHeader, LightClientHeader, LightClientStore, LightClientUpdate, NextSyncCommittee, SyncAggregate,
@@ -29,6 +32,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 /// Field index of `block_roots` in `BeaconState` (phase0 order, unchanged in every later fork).
 const STATE_FIELD_BLOCK_ROOTS: usize = 5;
+/// Field index of `historical_summaries` (the last Capella field; Electra and Fulu append after it).
+const STATE_FIELD_HISTORICAL_SUMMARIES: usize = 27;
+/// `HISTORICAL_ROOTS_LIMIT = 2^24`: depth of the `historical_summaries` list.
+const HISTORICAL_LIST_DEPTH: u32 = 24;
+/// Slots per era, written here on purpose instead of imported (the builder does not share constants with the code under test).
+const SLOTS_PER_ERA: u64 = 8192;
 /// Field index of `finalized_checkpoint`.
 const STATE_FIELD_FINALIZED_CHECKPOINT: usize = 20;
 /// Field index of `current_sync_committee`.
@@ -127,6 +136,16 @@ pub fn sign_with_first_members(committee: &TestCommittee, count: usize, signing_
 pub struct StateBuilder {
     leaves: Vec<B256>,
     block_roots: Vec<B256>,
+    /// Hash tree root of each `HistoricalSummary`, in list order.
+    summaries: Vec<B256>,
+    /// For list positions that the test fills: the era's `block_roots` and its `state_summary_root`.
+    eras: HashMap<usize, EraRecord>,
+}
+
+/// One `HistoricalSummary` that the test controls.
+struct EraRecord {
+    block_roots: Vec<B256>,
+    state_summary_root: B256,
 }
 
 impl StateBuilder {
@@ -134,7 +153,7 @@ impl StateBuilder {
     pub fn new(fork: ForkName) -> Self {
         let leaves = (0..state_field_count(fork) as u64).map(|index| filler("state-field", index)).collect();
         let block_roots = (0..8192u64).map(|index| filler("block-root", index)).collect();
-        Self { leaves, block_roots }
+        Self { leaves, block_roots, summaries: Vec::new(), eras: HashMap::new() }
     }
 
     /// Sets `finalized_checkpoint` to `Checkpoint { epoch, root }`.
@@ -157,9 +176,41 @@ impl StateBuilder {
         self.block_roots[(slot % 8192) as usize] = root;
     }
 
+    /// Makes `historical_summaries` hold `count` entries and sets `block_roots[slot % 8192]` of the era at list
+    /// position `index` to `root`. Other positions hold filler summaries. The era vector of `index` is created on the
+    /// first call with filler roots, so several calls for the same position build one vector.
+    ///
+    /// # Panics
+    /// Panics when `index >= count`.
+    pub fn set_historical_block_root(&mut self, count: usize, index: usize, slot: u64, root: B256) {
+        assert!(index < count, "the summary position must be inside the list");
+        if self.summaries.len() < count {
+            let start = self.summaries.len();
+            self.summaries.extend((start..count).map(|position| filler("historical-summary", position as u64)));
+        }
+        let record = self.eras.entry(index).or_insert_with(|| EraRecord {
+            block_roots: (0..SLOTS_PER_ERA).map(|offset| filler(&format!("era-block-root/{index}"), offset)).collect(),
+            state_summary_root: filler("era-state-summary", index as u64),
+        });
+        record.block_roots[(slot % SLOTS_PER_ERA) as usize] = root;
+        self.summaries[index] = hash_pair(&merkleize(&record.block_roots), &record.state_summary_root);
+    }
+
+    /// Whether the test filled the era at list position `index`.
+    pub fn has_historical_era(&self, index: usize) -> bool {
+        self.eras.contains_key(&index)
+    }
+
+    /// The `historical_summaries` field root: the list data root mixed with the length.
+    fn historical_summaries_root(&self) -> B256 {
+        let data_root = merkleize_with_limit(&self.summaries, 1 << HISTORICAL_LIST_DEPTH);
+        mix_in_length(&data_root, self.summaries.len() as u64)
+    }
+
     fn field_leaves(&self) -> Vec<B256> {
         let mut leaves = self.leaves.clone();
         leaves[STATE_FIELD_BLOCK_ROOTS] = merkleize(&self.block_roots);
+        leaves[STATE_FIELD_HISTORICAL_SUMMARIES] = self.historical_summaries_root();
         leaves
     }
 
@@ -189,6 +240,24 @@ impl StateBuilder {
     pub fn block_roots_branch(&self, slot: u64) -> Vec<B256> {
         let mut branch = branch_for_leaf(&self.block_roots, (slot % 8192) as usize).1;
         branch.extend(branch_for_leaf(&self.field_leaves(), STATE_FIELD_BLOCK_ROOTS).1);
+        branch
+    }
+}
+
+impl StateBuilder {
+    /// Branch for `historical_summaries[index].block_summary_root.block_roots[slot % 8192]`, bottom to top:
+    /// 13 entries inside the era vector, the `state_summary_root` sibling, 24 list levels, the list length, then the
+    /// field branch of the state.
+    ///
+    /// # Panics
+    /// Panics when the test did not fill the era at `index` (see [`StateBuilder::set_historical_block_root`]).
+    pub fn historical_ancestry_branch(&self, index: usize, slot: u64) -> Vec<B256> {
+        let record = self.eras.get(&index).expect("the era at this list position was not filled");
+        let mut branch = branch_for_leaf(&record.block_roots, (slot % SLOTS_PER_ERA) as usize).1;
+        branch.push(record.state_summary_root);
+        branch.extend(branch_for_leaf_with_limit(&self.summaries, index, HISTORICAL_LIST_DEPTH).1);
+        branch.push(u64_chunk(self.summaries.len() as u64));
+        branch.extend(branch_for_leaf(&self.field_leaves(), STATE_FIELD_HISTORICAL_SUMMARIES).1);
         branch
     }
 }
@@ -421,6 +490,33 @@ pub struct WithdrawalScenario {
     pub deposit_block_hash: B256,
 }
 
+impl WithdrawalScenario {
+    /// The branch through `state.block_roots`. It is a valid Merkle path of the anchor state at any distance, because the
+    /// builder always stores the deposit header root there. The vault accepts it only when the distance is at most 8192.
+    pub fn recent_ancestry_branch(&self) -> Vec<B256> {
+        self.anchor_state.block_roots_branch(self.proof.depositHeader.slot)
+    }
+
+    /// The branch through `state.historical_summaries` for the era of the deposit, or `None` when the anchor state has
+    /// no entry for it (the era is not complete at the anchor, or it is before Capella). The builder fills the entry of
+    /// the deposit era whenever it exists, whatever the distance. The vault accepts it only when the distance is above 8192.
+    pub fn historical_ancestry_branch(&self) -> Option<Vec<B256>> {
+        let slot = self.proof.depositHeader.slot;
+        self.historical_ancestry_branch_for_era(slot / SLOTS_PER_ERA)
+    }
+
+    /// The same branch built for the list position of `era`. For a neighbouring era it is the "wrong era index" attack: the
+    /// builder stores the deposit header root at the same offset in the eras next to the deposit era, so this branch is a
+    /// valid Merkle path of the anchor state and only the index of the vault rejects it.
+    pub fn historical_ancestry_branch_for_era(&self, era: u64) -> Option<Vec<B256>> {
+        let capella_era = self.spec.capella_era().expect("a Capella schedule");
+        let index = usize::try_from(era.checked_sub(capella_era)?).ok()?;
+        self.anchor_state
+            .has_historical_era(index)
+            .then(|| self.anchor_state.historical_ancestry_branch(index, self.proof.depositHeader.slot))
+    }
+}
+
 /// Builds a withdrawal scenario whose deposit receipt is receipt `transaction_index` and log `log_index`.
 pub fn build_withdrawal(
     spec: &'static ChainSpec,
@@ -503,7 +599,20 @@ pub fn assemble_withdrawal(
     };
 
     let mut anchor_state = StateBuilder::new(spec.fork_at_slot(anchor_slot));
-    anchor_state.set_block_root(deposit_slot, deposit_header.hash_tree_root());
+    let deposit_root = deposit_header.hash_tree_root();
+    anchor_state.set_block_root(deposit_slot, deposit_root);
+    // The anchor state holds the deposit header root in EVERY place a mixed-up proof could point at: block_roots, the era of
+    // the deposit, and the two neighbouring eras (same offset). So each wrong branch is a valid Merkle path and only the
+    // vault's choice of index can refuse it. An era has an entry only when it is complete at the anchor and not before Capella.
+    let capella_era = spec.capella_era().expect("a Capella schedule");
+    let summary_count = (anchor_slot / SLOTS_PER_ERA).saturating_sub(capella_era) as usize;
+    let deposit_era = deposit_slot / SLOTS_PER_ERA;
+    for era in [deposit_era.wrapping_sub(1), deposit_era, deposit_era + 1] {
+        let Some(index) = era.checked_sub(capella_era).map(|index| index as usize) else { continue };
+        if index < summary_count {
+            anchor_state.set_historical_block_root(summary_count, index, deposit_slot, deposit_root);
+        }
+    }
     let anchor_header = BeaconBlockHeader {
         slot: anchor_slot,
         proposer_index: 9,
@@ -512,10 +621,18 @@ pub fn assemble_withdrawal(
         body_root: filler("anchor-body", anchor_slot),
     };
 
+    // The honest prover builds the branch of the path that the distance selects (the vault makes the same choice).
+    let ancestry_branch = if anchor_slot.saturating_sub(deposit_slot) > SLOTS_PER_ERA {
+        let index = (deposit_era - capella_era) as usize;
+        anchor_state.historical_ancestry_branch(index, deposit_slot)
+    } else {
+        anchor_state.block_roots_branch(deposit_slot)
+    };
+
     let proof = WithdrawalProof {
         anchorHeader: (&anchor_header).into(),
         depositHeader: (&deposit_header).into(),
-        blockRootsBranch: anchor_state.block_roots_branch(deposit_slot),
+        ancestryBranch: ancestry_branch,
         blockHashBranch: body.block_hash_branch,
         executionHeaderRlp: evidence.header_rlp.clone(),
         receiptProof: evidence.receipt_proof.clone(),

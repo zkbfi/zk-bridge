@@ -10,17 +10,7 @@
     },
     "entries": [
       {
-        "block_hash_branch": [
-          "0x490b1f2a7b0e5b08aefacaebe7017b5a8d0efe7c8d7d55fa4a78b531df031dbd",
-          "0x3ea5337a040963bb0dc229ced6dd7b2d5f966ca4f0ec7f83c0ba76f04cfbe5c0",
-          "0x406fc2888df829f0e9ba1d5a6a3a6a6802409f05beb5519057e48c6e3575aa13",
-          "0x035747b2284654891e68128c1f69e33a6c81506d4121e421df979c444181aaec",
-          "0xb0b6f008cd6c19f2ef0fbb11832d7321a867d8bc9da6116cd9cf6f3f5bc18cc0",
-          "0x336488033fe5f3ef4ccc12af07b9370b92e553e35ecb4a337a1b1c0e4afe1e0e",
-          "0xdb56114e00fdd4c1f85c892bf35ac9a89289aaecb1ebd0a96cde606a748b5d71",
-          "0xdfa0ae650e9fca3f1fb388ec90f5b80b4fc84b11b84b701ca4879d92458671a3"
-        ],
-        "block_roots_branch": [
+        "ancestry_branch": [
           "0x19a903a8bcb94a1f2d4af7cb4d01a4e6cdda090e173622e12891fd0bf08112be",
           "0xd36acdd062e05e38941e845563377c913e2723a1ef2fd388e7d3585d1d330483",
           "0x0adc7d1f7050e3b8de0bd7ef9c62c066ccaaaaf39d9b8e4edad9385f7f8b197e",
@@ -40,6 +30,16 @@
           "0x44ec3ca54afcdc9e6fc2eae9ec870f2d238c83ed8a207f3cbb3cb11ad4c7d303",
           "0x2378a4dcb53a1b05b83964e0e09cfd6863a2537114a59c38043bf9949fbf48f5"
         ],
+        "block_hash_branch": [
+          "0x490b1f2a7b0e5b08aefacaebe7017b5a8d0efe7c8d7d55fa4a78b531df031dbd",
+          "0x3ea5337a040963bb0dc229ced6dd7b2d5f966ca4f0ec7f83c0ba76f04cfbe5c0",
+          "0x406fc2888df829f0e9ba1d5a6a3a6a6802409f05beb5519057e48c6e3575aa13",
+          "0x035747b2284654891e68128c1f69e33a6c81506d4121e421df979c444181aaec",
+          "0xb0b6f008cd6c19f2ef0fbb11832d7321a867d8bc9da6116cd9cf6f3f5bc18cc0",
+          "0x336488033fe5f3ef4ccc12af07b9370b92e553e35ecb4a337a1b1c0e4afe1e0e",
+          "0xdb56114e00fdd4c1f85c892bf35ac9a89289aaecb1ebd0a96cde606a748b5d71",
+          "0xdfa0ae650e9fca3f1fb388ec90f5b80b4fc84b11b84b701ca4879d92458671a3"
+        ],
         "deposit_header": {
           "body_root": "0xc2dd877b685fab4c3a90fc0677f0d6b9e99e835127eea1803520b2e83da66623",
           "parent_root": "0x7df940453a058cde6961ddf1ce703a8f4d09ab92d2e41ea01ccd5ee17f46fab3",
@@ -52,17 +52,7 @@
         "name": "finalized"
       },
       {
-        "block_hash_branch": [
-          "0xc25f1b5ca6af9065d1e0058d566c7292c7da02ec679c6cbda24f649802e000b6",
-          "0xed50b4a97c6f677c360038680a0e0f231ccb175582f751d0f89e3a61a80fda54",
-          "0xc4326bbf3db46e6ea93a21c797cbd5a9b8c453fa651d1b2e9606f3702950bacd",
-          "0xe81109accadc8108851a5d1686a0cc1a382fcf698cad0358d32122bc1ba202bb",
-          "0xa76d5c9e8d81b179a6deecd25d65b355d816e52fa96ddd036bdcdc9856935072",
-          "0x336488033fe5f3ef4ccc12af07b9370b92e553e35ecb4a337a1b1c0e4afe1e0e",
-          "0xdb56114e00fdd4c1f85c892bf35ac9a89289aaecb1ebd0a96cde606a748b5d71",
-          "0x05e8914b4b65c3280c7a9985eaac2967c3c115b23f10bcb0fcffc14fd7ff7526"
-        ],
-        "block_roots_branch": [
+        "ancestry_branch": [
           "0xd5401047869afff17bb8131fda13fa5a82c49c378d503a6b765c09ecca0d646b",
           "0x1d0818eea8ba2115e70ed3594962c1c6ce95e7b66ccf4f0083c0611f57145eac",
           "0x160568689177a044dd9c53386a6369fae177c96272b8c3e855b57cf58751ca58",
@@ -81,6 +71,16 @@
           "0x3577f165bee8cde8385ee453397dc666564b982cd98ff0345520ff1f2eafaac1",
           "0x44ec3ca54afcdc9e6fc2eae9ec870f2d238c83ed8a207f3cbb3cb11ad4c7d303",
           "0x2378a4dcb53a1b05b83964e0e09cfd6863a2537114a59c38043bf9949fbf48f5"
+        ],
+        "block_hash_branch": [
+          "0xc25f1b5ca6af9065d1e0058d566c7292c7da02ec679c6cbda24f649802e000b6",
+          "0xed50b4a97c6f677c360038680a0e0f231ccb175582f751d0f89e3a61a80fda54",
+          "0xc4326bbf3db46e6ea93a21c797cbd5a9b8c453fa651d1b2e9606f3702950bacd",
+          "0xe81109accadc8108851a5d1686a0cc1a382fcf698cad0358d32122bc1ba202bb",
+          "0xa76d5c9e8d81b179a6deecd25d65b355d816e52fa96ddd036bdcdc9856935072",
+          "0x336488033fe5f3ef4ccc12af07b9370b92e553e35ecb4a337a1b1c0e4afe1e0e",
+          "0xdb56114e00fdd4c1f85c892bf35ac9a89289aaecb1ebd0a96cde606a748b5d71",
+          "0x05e8914b4b65c3280c7a9985eaac2967c3c115b23f10bcb0fcffc14fd7ff7526"
         ],
         "deposit_header": {
           "body_root": "0xc5269546a976b06e0d9a39cfab4fa697958d2b1d5d9e0ba64403b06dbb3c680c",

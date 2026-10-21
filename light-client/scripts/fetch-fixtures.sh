@@ -4,6 +4,7 @@
 # Usage:
 #   scripts/fetch-fixtures.sh ethereum      Ethereum mainnet: chain specification, light-client data, receipts
 #   scripts/fetch-fixtures.sh pulsechain    PulseChain: chain specification, beacon blocks, state, receipts
+#   scripts/fetch-fixtures.sh historical    PulseChain: real historical-path ancestry (needs `pulsechain` run first; same anchor)
 #   scripts/fetch-fixtures.sh all
 #
 # Needs: bash, curl, jq, cargo. It calls the derive tool for PulseChain (the beacon state is 18 MB and is not committed).
@@ -199,10 +200,66 @@ fetch_path_blocks() {
   done
 }
 
+# slot_root <slot>: prints "<slot> <root>" when the canonical chain has a block at the slot, nothing when the slot is empty.
+slot_root() {
+  local slot="$1" body
+  body="$(curl -sf --retry 3 -m 30 -A zk-bridge-fixture-fetch "${HISTORICAL_BEACON}/eth/v1/beacon/blocks/${slot}/root")" || return 0
+  echo "${slot} $(echo "${body}" | jq -r .data.root)"
+}
+export -f slot_root
+
+# fetch_era_roots <era> <output>: the root of every canonical block in the slots of an era, and of the last block before it.
+# It takes about five minutes per era and reuses the output file when it exists (delete the file to refetch).
+# An empty slot repeats the root of the block before it in block_roots; the derive tool does that carry.
+fetch_era_roots() {
+  local era="$1" output="$2" start end previous
+  if [ -s "${output}" ]; then echo "reusing ${output}"; return 0; fi
+  start=$(( era * 8192 )); end=$(( start + 8191 ))
+  export HISTORICAL_BEACON="${pulsechain_beacon}"
+  seq -f %.0f "${start}" "${end}" | xargs -P 8 -I{} bash -c 'slot_root {}' | sort -n > "${output}"
+  previous=$(( start - 1 ))
+  if [ "${start}" -gt 0 ]; then
+    until [ -n "$(slot_root "${previous}")" ]; do previous=$(( previous - 1 )); done
+    slot_root "${previous}" >> "${output}"
+  fi
+  echo "wrote ${output}: $(wc -l < "${output}") blocks"
+}
+
+# fetch_historical: real historical-path ancestry for PulseChain. It reuses the anchor state that `pulsechain` downloaded.
+# The era's block roots are rebuilt from canonical block roots, because on 2026-10-20 the node served every state older
+# than a few hundred slots with ONE historical summary missing at the end of the list (the state root then fails to match
+# the header). Only states near the head hash correctly.
+fetch_historical() {
+  local beacon="${pulsechain_beacon}" work="${cache}/pulsechain/era" anchor="${cache}/pulsechain"
+  mkdir -p "${work}"
+  local anchor_slot era
+  anchor_slot="$(jq -r .data.header.message.slot "${anchor}/attested_header.json")"
+  era=$(( anchor_slot / 8192 - 1 ))
+  local edge_before=$(( era * 8192 - 1 )) edge_after=$(( era * 8192 )) era_last=$(( (era + 1) * 8192 - 1 ))
+  local middle="${HISTORICAL_MIDDLE_SLOT:-$(( era * 8192 + 3471 ))}"
+  local slot
+  for slot in 96 8191 "${edge_before}" "${edge_after}" "${middle}" "${era_last}"; do
+    curl -sf --retry 3 -m 60 -A zk-bridge-fixture-fetch "${beacon}/eth/v1/beacon/headers/${slot}" > "${work}/header_${slot}.json"
+    curl -sf --retry 3 -m 60 -A zk-bridge-fixture-fetch -H 'Accept: application/octet-stream' -o "${work}/block_${slot}.ssz" "${beacon}/eth/v2/beacon/blocks/${slot}"
+  done
+  fetch_era_roots 0 "${work}/era_roots_0.txt"
+  fetch_era_roots $(( era - 1 )) "${work}/era_roots_$(( era - 1 )).txt"
+  fetch_era_roots "${era}" "${work}/era_roots_${era}.txt"
+  (cd "${here}" && cargo run --quiet --release -p lc-testkit --bin derive-historical-fixtures -- "${work}" "${anchor}" "${fixtures}/pulsechain" "${beacon}" "${today}" \
+    "capella_fork_block=96" "era_zero_last_block=8191" "era_previous_last_block=${edge_before}" "era_first_block=${edge_after}" \
+    "era_middle_block=${middle}" "era_last_block=${era_last}")
+  # Execution block and receipts of the middle block (few transactions), for the full withdrawal fixture.
+  local number_hex
+  number_hex="$(printf '0x%x' "$(jq -r '.response.entries[] | select(.name == "era_middle_block") | .execution_block_number' "${fixtures}/pulsechain/historical_paths.json")")"
+  rpc_json "${pulsechain_execution}" eth_getBlockByNumber "[\"${number_hex}\", false]" "${fixtures}/pulsechain/path_historical_block.json"
+  rpc_json "${pulsechain_execution}" eth_getBlockReceipts "[\"${number_hex}\"]" "${fixtures}/pulsechain/path_historical_receipts.json"
+}
+
 case "${1:-all}" in
   ethereum) fetch_ethereum ;;
   pulsechain) fetch_pulsechain ;;
   path-blocks) fetch_path_blocks ;;
+  historical) fetch_historical ;;
   all) fetch_ethereum; fetch_pulsechain ;;
-  *) echo "usage: $0 ethereum|pulsechain|all"; exit 2 ;;
+  *) echo "usage: $0 ethereum|pulsechain|historical|all"; exit 2 ;;
 esac

@@ -10,12 +10,12 @@
 //! reports: the computed state root must equal the attested header `state_root`, and each computed body root must
 //! equal the header `body_root`. The tool stops with a message when a root differs.
 
-use alloy_primitives::{hex, B256};
-use lc_core::layout::ExecutionHeaderForm;
+use alloy_primitives::hex;
 use lc_core::ssz::{branch_for_leaf, u64_chunk};
-use lc_core::types::{BeaconBlockHeader, ExecutionPayloadHeader};
+use lc_core::types::ExecutionPayloadHeader;
+use lc_testkit::derive_support::{header_json, hex_list, read_block, read_json, write_fixture, CheckedBlock};
 use lc_testkit::json::{beacon_header, hex_b256};
-use lc_testkit::ssz_state::{parse_signed_block, parse_state, ParsedBlock};
+use lc_testkit::ssz_state::parse_state;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -23,26 +23,6 @@ const FIELD_BLOCK_ROOTS: usize = 5;
 const FIELD_FINALIZED_CHECKPOINT: usize = 20;
 const FIELD_CURRENT_SYNC_COMMITTEE: usize = 22;
 const FIELD_NEXT_SYNC_COMMITTEE: usize = 23;
-const BODY_FIELD_EXECUTION_PAYLOAD: usize = 9;
-const PAYLOAD_FIELD_BLOCK_HASH: usize = 12;
-
-fn read_json(path: &Path) -> Value {
-    serde_json::from_slice(&std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))).expect("json")
-}
-
-fn hex_list(branch: &[B256]) -> Value {
-    Value::Array(branch.iter().map(|node| json!(format!("0x{}", hex::encode(node)))).collect())
-}
-
-fn header_json(header: &BeaconBlockHeader) -> Value {
-    json!({
-        "slot": header.slot.to_string(),
-        "proposer_index": header.proposer_index.to_string(),
-        "parent_root": format!("{:#x}", header.parent_root),
-        "state_root": format!("{:#x}", header.state_root),
-        "body_root": format!("{:#x}", header.body_root),
-    })
-}
 
 fn payload_json(payload: &ExecutionPayloadHeader) -> Value {
     json!({
@@ -64,31 +44,6 @@ fn payload_json(payload: &ExecutionPayloadHeader) -> Value {
     })
 }
 
-/// A block read from SSZ, checked against its header, with the two execution branches.
-struct CheckedBlock {
-    block: ParsedBlock,
-    execution_branch: Vec<B256>,
-    block_hash_branch: Vec<B256>,
-}
-
-fn read_block(path: &Path, header_file: &Path) -> CheckedBlock {
-    let block = parse_signed_block(&std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())));
-    let expected = beacon_header(&read_json(header_file)["data"]["header"]["message"]);
-    assert_eq!(block.header.slot, expected.slot, "slot of {}", path.display());
-    assert_eq!(
-        block.header.body_root,
-        expected.body_root,
-        "body root of {} (the SSZ hasher disagrees with the node)",
-        path.display()
-    );
-    assert_eq!(block.header.state_root, expected.state_root);
-    let (_, execution_branch) = branch_for_leaf(&block.body_field_roots, BODY_FIELD_EXECUTION_PAYLOAD);
-    let leaves = block.payload.field_roots(ExecutionHeaderForm::Capella).expect("payload leaves");
-    let (_, mut block_hash_branch) = branch_for_leaf(&leaves, PAYLOAD_FIELD_BLOCK_HASH);
-    block_hash_branch.extend(&execution_branch);
-    CheckedBlock { block, execution_branch, block_hash_branch }
-}
-
 fn light_client_header_json(block: &CheckedBlock) -> Value {
     json!({
         "beacon": header_json(&block.block.header),
@@ -102,13 +57,6 @@ fn committee_json(committee: &lc_core::types::SyncCommittee) -> Value {
         "pubkeys": committee.pubkeys.iter().map(|key| format!("0x{}", hex::encode(key))).collect::<Vec<_>>(),
         "aggregate_pubkey": format!("0x{}", hex::encode(committee.aggregate_pubkey)),
     })
-}
-
-fn write_fixture(directory: &Path, name: &str, source_url: &str, fetched_on: &str, response: Value) {
-    let wrapper = json!({ "source_url": source_url, "fetched_on": fetched_on, "response": response });
-    let path = directory.join(name);
-    std::fs::write(&path, serde_json::to_string_pretty(&wrapper).expect("json")).expect("write");
-    println!("wrote {}", path.display());
 }
 
 fn main() {
@@ -186,7 +134,7 @@ fn main() {
         json!({
             "name": name,
             "deposit_header": header_json(&block.block.header),
-            "block_roots_branch": hex_list(&roots_branch),
+            "ancestry_branch": hex_list(&roots_branch),
             "block_hash_branch": hex_list(&block.block_hash_branch),
             "execution_block_number": block.block.payload.block_number,
             "execution_block_hash": format!("{:#x}", block.block.payload.block_hash),
