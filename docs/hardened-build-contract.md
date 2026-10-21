@@ -288,3 +288,13 @@ For Merkle-Patricia proofs and RLP decoding, prefer vendoring an audited impleme
 ### The light-client crate's role
 
 `verify_withdrawal` stays in Rust as the reference implementation and the proof builder. It produces the exact `WithdrawalProof` calldata. A Rust test and a Solidity test run the same fixtures and must agree on accept or reject. No withdrawal guest program is built.
+
+## Decision: source-chain forks (user decision, 2026-10-20)
+
+**A permissionless, self-validating fork-layout table, plus versioned redeployment (option A).** No admin, no upgrade path, no time lock.
+
+- **The vault's layout table is open to anyone.** `addForkLayout` accepts a row only when the chain's own stored data proves it. The `block_roots` position must map two stored header slots to the stored header roots, under a later stored state root. The `block_hash` position must map a stored header's body root to its stored execution block hash. A wrong position cannot match.
+- **The light-client program takes the fork version as an input.** The committee signs the domain that contains it, so a wrong version yields no valid signature.
+- **Merkle positions in the program move only when a container crosses a power-of-two field count.** The beacon state crossed 32 fields at Electra (37); Fulu has 38; the next crossing is at 65. When that happens, a new route (light client, program and vault pair) is deployed beside the old one. The old route keeps paying out what it can still prove.
+- **Deposit cutoff.** Each vault takes an immutable `depositCutoffTimestamp` (zero disables it). After it, `deposit` reverts, so nobody deposits into a route whose counterpart may no longer prove. Set it at deployment only when a breaking fork is already scheduled.
+- **Future work, not built:** a liveness gate that proves the counterpart light client's recent head through a storage proof of the other chain, so deposits stop automatically when the other direction stalls.
