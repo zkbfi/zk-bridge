@@ -1096,9 +1096,9 @@ contract BeaconForkGateTest is GateSupport {
         vm.expectEmit(true, false, false, true, address(gate));
         emit ForkConfirmed(EPOCH_E, ELECTRA);
         vm.expectEmit(true, true, true, false, address(vault));
-        emit BridgeVault.DepositInitiated(address(tokenOnA), alice, bob, 2e18, bytes32(0), CHAIN_B, address(vaultB));
-        vault.deposit(address(tokenOnA), bob, 2e18, evidence);
-        vault.deposit(address(tokenOnA), bob, 1e18, "");
+        emit BridgeVault.DepositInitiated(address(tokenOnA), alice, bob, 2e18, bytes32(0), CHAIN_B, address(vaultB), address(tokenOnB));
+        vault.deposit(address(tokenOnA), bob, 2e18, 0, evidence);
+        vault.deposit(address(tokenOnA), bob, 1e18, 0, "");
         vm.stopPrank();
         assertEq(tokenOnA.balanceOf(address(vault)), 3e18);
         assertEq(vault.depositCount(), 2);
@@ -1116,7 +1116,7 @@ contract BeaconForkGateTest is GateSupport {
         vm.startPrank(alice);
         tokenOnA.approve(address(vault), 4e18);
         vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.ForkNotConfirmed.selector, EPOCH_E + 1));
-        vault.deposit(address(tokenOnA), bob, 4e18, "");
+        vault.deposit(address(tokenOnA), bob, 4e18, 0, "");
         vm.stopPrank();
         assertEq(tokenOnA.balanceOf(alice), 4e18, "the tokens stay with the user");
         assertEq(tokenOnA.balanceOf(address(vault)), 1e18);
@@ -1135,9 +1135,9 @@ contract BeaconForkGateTest is GateSupport {
         vm.startPrank(alice);
         tokenOnA.approve(address(vault), 2e18);
         vm.expectRevert(_err(BeaconForkGate.GateSealed.selector));
-        vault.deposit(address(tokenOnA), bob, 1e18, "");
+        vault.deposit(address(tokenOnA), bob, 1e18, 0, "");
         vm.expectRevert(_err(BeaconForkGate.GateSealed.selector));
-        vault.deposit(address(tokenOnA), bob, 1e18, valid);
+        vault.deposit(address(tokenOnA), bob, 1e18, 0, valid);
         vm.stopPrank();
         assertEq(tokenOnA.balanceOf(alice), 2e18);
     }
@@ -1152,7 +1152,8 @@ contract BeaconForkGateTest is GateSupport {
         // The fixture receipts name `DESTINATION_VAULT` as the only vault that may pay them, so the vault under test
         // is built at that address, with this test's gate.
         bytes memory arguments = abi.encode(
-            address(lightClientForB), CHAIN_B, CHAIN_A, ReceiptFixtures.REMOTE_VAULT, pairs, uint64(0), DEFAULT_CAPELLA_ERA, address(gate)
+            address(lightClientForB), CHAIN_B, CHAIN_A, ReceiptFixtures.REMOTE_VAULT, pairs,
+            BridgeVault.DepositTerms(0, address(0), address(0), 0, 0), DEFAULT_CAPELLA_ERA, address(gate)
         );
         deployCodeTo("BridgeVault.sol:BridgeVault", arguments, ReceiptFixtures.DESTINATION_VAULT);
         BridgeVault vault = BridgeVault(ReceiptFixtures.DESTINATION_VAULT);
@@ -1166,7 +1167,7 @@ contract BeaconForkGateTest is GateSupport {
         tokenOnB.mint(alice, 1e18);
         vm.startPrank(alice);
         tokenOnB.approve(address(vault), 1e18);
-        vault.deposit(address(tokenOnB), bob, 1e18, _good());
+        vault.deposit(address(tokenOnB), bob, 1e18, 0, _good());
         vm.stopPrank();
 
         gate.seal(_honestEvidence(block.timestamp + 12, _slotNow(), 6, UNKNOWN_FORK));
@@ -1174,7 +1175,7 @@ contract BeaconForkGateTest is GateSupport {
 
         vm.expectRevert(_err(BeaconForkGate.GateSealed.selector));
         vm.prank(alice);
-        vault.deposit(address(tokenOnB), bob, 1e18, "");
+        vault.deposit(address(tokenOnB), bob, 1e18, 0, "");
 
         vault.withdraw(scene.proof);
         assertEq(tokenOnB.balanceOf(ReceiptFixtures.RECIPIENT), named.amount, "the recipient got the logged amount");

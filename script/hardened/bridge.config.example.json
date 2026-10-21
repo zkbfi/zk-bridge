@@ -4,8 +4,15 @@
     "rpcAlias": "REPLACE_WITH_RPC_ALIAS_FROM_FOUNDRY_TOML",
     "chainId": "REPLACE_WITH_CHAIN_ID",
     "verifier": "REPLACE_WITH_SP1_VERIFIER_ADDRESS_ON_CHAIN_A",
+    "verifierCodeHash": "REPLACE_WITH_EXPECTED_CODE_HASH_OF_THE_VERIFIER_ON_CHAIN_A_FROM_cast_codehash",
     "depositCutoffTimestamp": "REPLACE_WITH_CUTOFF_UNIX_TIME_OR_0_FOR_NONE",
     "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_CHAIN_A",
+    "fee": {
+      "authority": "0x0000000000000000000000000000000000000000",
+      "recipient": "0x0000000000000000000000000000000000000000",
+      "basisPoints": "0",
+      "ceilingBasisPoints": "0"
+    },
     "lightClient": {
       "programVKey": "REPLACE_WITH_LIGHT_CLIENT_PROGRAM_VKEY",
       "genesisValidatorsRoot": "REPLACE_WITH_GENESIS_VALIDATORS_ROOT_OF_CHAIN_B",
@@ -36,8 +43,15 @@
     "rpcAlias": "REPLACE_WITH_RPC_ALIAS_FROM_FOUNDRY_TOML",
     "chainId": "REPLACE_WITH_CHAIN_ID",
     "verifier": "REPLACE_WITH_SP1_VERIFIER_ADDRESS_ON_CHAIN_B",
+    "verifierCodeHash": "REPLACE_WITH_EXPECTED_CODE_HASH_OF_THE_VERIFIER_ON_CHAIN_B_FROM_cast_codehash",
     "depositCutoffTimestamp": "REPLACE_WITH_CUTOFF_UNIX_TIME_OR_0_FOR_NONE",
     "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_CHAIN_B",
+    "fee": {
+      "authority": "0x0000000000000000000000000000000000000000",
+      "recipient": "0x0000000000000000000000000000000000000000",
+      "basisPoints": "0",
+      "ceilingBasisPoints": "0"
+    },
     "lightClient": {
       "programVKey": "REPLACE_WITH_LIGHT_CLIENT_PROGRAM_VKEY",
       "genesisValidatorsRoot": "REPLACE_WITH_GENESIS_VALIDATORS_ROOT_OF_CHAIN_A",

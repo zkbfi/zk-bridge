@@ -16,6 +16,8 @@ use lc_testkit::synthetic::{build_withdrawal, deposit_log, DepositFields, Receip
 const VAULT: Address = address!("00000000000000000000000000000000000000a1");
 /// The verifying vault on the destination chain.
 const LOCAL_VAULT: Address = address!("00000000000000000000000000000000000000b1");
+/// The token that the destination vault pays for the deposits.
+const DESTINATION_TOKEN: Address = address!("00000000000000000000000000000000000000e5");
 const ATTACKER: Address = address!("00000000000000000000000000000000000000ee");
 
 fn fields(nonce_byte: u8, amount: u64) -> DepositFields {
@@ -27,6 +29,7 @@ fn fields(nonce_byte: u8, amount: u64) -> DepositFields {
         nonce: B256::repeat_byte(nonce_byte),
         target_chain_id: 369,
         destination_vault: LOCAL_VAULT,
+        destination_token: DESTINATION_TOKEN,
     }
 }
 
@@ -112,6 +115,7 @@ fn synthetic_honest_withdrawal_verifies_on_both_layouts() {
                 nonce: expected.nonce,
                 target_chain_id: local,
                 destination_vault: LOCAL_VAULT,
+                destination_token: DESTINATION_TOKEN,
                 deposit_block_hash: scenario.deposit_block_hash,
             }
         );

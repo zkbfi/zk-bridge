@@ -437,6 +437,8 @@ pub struct DepositFields {
     pub target_chain_id: u64,
     /// The vault on the target chain that the deposit is addressed to.
     pub destination_vault: Address,
+    /// The token that the destination vault must pay for this deposit.
+    pub destination_token: Address,
 }
 
 /// A log of the `DepositInitiated` event, emitted by `emitter`.
@@ -449,6 +451,7 @@ pub fn deposit_log(emitter: Address, fields: &DepositFields) -> Log {
         nonce: fields.nonce,
         targetChainId: fields.target_chain_id,
         destinationVault: fields.destination_vault,
+        destinationToken: fields.destination_token,
     };
     let data = event.encode_log_data();
     Log { address: emitter, topics: data.topics().to_vec(), data: data.data.clone() }

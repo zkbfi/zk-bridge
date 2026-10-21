@@ -63,7 +63,7 @@ fn hb02_window1_enforcing_gate_refuses_an_unsupported_fork_and_anyone_can_seal_w
     chain.send(Some(bridge.token_a), &TokenContract::approveCall { spender: bridge.vault_a, amount: U256::from(10 * ONE_TOKEN) }.abi_encode());
     let unsupported = SyntheticForkSource::new(chain, UNKNOWN_VERSION);
     let unsupported_evidence = gate_evidence_for_deposit(&client, bridge.gate_a, &unsupported).unwrap();
-    let deposit_with = |evidence: &[u8]| deposit_calldata(bridge.token_a, RECIPIENT, U256::from(ONE_TOKEN), evidence).to_vec();
+    let deposit_with = |evidence: &[u8]| deposit_calldata(bridge.token_a, RECIPIENT, U256::from(ONE_TOKEN), 0, evidence).to_vec();
     assert_eq!(
         revert_selector(chain, bridge.vault_a, &deposit_with(&unsupported_evidence)),
         Some(error_selector("UnsupportedVersion(bytes4)")),
@@ -121,7 +121,7 @@ fn hb02_window1_detecting_gate_admits_then_enforces_once_beacon_roots_exist() {
     settle_in_epoch(chain, bridge.gate_b);
     chain.send(Some(bridge.token_b), &TokenContract::mintCall { to: DEPLOYER, amount: U256::from(10 * ONE_TOKEN) }.abi_encode());
     chain.send(Some(bridge.token_b), &TokenContract::approveCall { spender: bridge.vault_b, amount: U256::from(10 * ONE_TOKEN) }.abi_encode());
-    let deposit_with = |evidence: &[u8]| deposit_calldata(bridge.token_b, RECIPIENT, U256::from(ONE_TOKEN), evidence).to_vec();
+    let deposit_with = |evidence: &[u8]| deposit_calldata(bridge.token_b, RECIPIENT, U256::from(ONE_TOKEN), 0, evidence).to_vec();
     let vault_balance = || balance(chain, bridge.token_b, bridge.vault_b);
 
     // (1) Detection: no beacon roots contract, so the deposit passes with empty evidence.

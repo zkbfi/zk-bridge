@@ -13,8 +13,8 @@ contract FakeDepositEmitter {
         uint64 targetChainId
     );
 
-    /// @dev The hardened vault event. It has a final `destinationVault` parameter, so its topic differs from the
-    /// revision 2 event above. Both events share one name; the signatures tell them apart.
+    /// @dev The hardened vault event. It has final `destinationVault` and `destinationToken` parameters, so its topic
+    /// differs from the revision 2 event above. Both events share one name; the signatures tell them apart.
     event DepositInitiated(
         address indexed token,
         address indexed sender,
@@ -22,7 +22,8 @@ contract FakeDepositEmitter {
         uint256 amount,
         bytes32 nonce,
         uint64 targetChainId,
-        address destinationVault
+        address destinationVault,
+        address destinationToken
     );
 
     /// @notice Emits the hardened event. The revision 2 tests still call `fakeDeposit`, which emits the old event.
@@ -32,9 +33,10 @@ contract FakeDepositEmitter {
         uint256 amount,
         bytes32 nonce,
         uint64 targetChainId,
-        address destinationVault
+        address destinationVault,
+        address destinationToken
     ) external {
-        emit DepositInitiated(token, msg.sender, recipient, amount, nonce, targetChainId, destinationVault);
+        emit DepositInitiated(token, msg.sender, recipient, amount, nonce, targetChainId, destinationVault, destinationToken);
     }
 
     function fakeDeposit(address token, address recipient, uint256 amount, bytes32 nonce, uint64 targetChainId)

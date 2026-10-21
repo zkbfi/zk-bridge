@@ -94,10 +94,16 @@ sol! {
         function historicalLayouts() external view returns (HistoricalLayoutRow[] memory);
         function capellaEra() external view returns (uint64);
         function depositGate() external view returns (address);
+        function feeAuthority() external view returns (address);
+        function feeRecipient() external view returns (address);
+        function feeBasisPoints() external view returns (uint16);
+        function feeCeilingBasisPoints() external view returns (uint16);
+        function accruedFees(address localToken) external view returns (uint256);
+        function collectFees(address token) external;
         function addHistoricalSummariesLayout(uint256 historicalSummariesGindex, HistoricalSummariesEvidence calldata evidence) external;
         function addBlockRootsLayout(uint256 blockRootsGindex, BlockRootsEvidence calldata evidence) external;
         function addBlockHashLayout(uint256 blockHashGindex, BlockHashEvidence calldata evidence) external;
-        function deposit(address token, address recipient, uint256 amount, bytes calldata gateEvidence) external returns (bytes32 nonce);
+        function deposit(address token, address recipient, uint256 amount, uint16 maxFeeBasisPoints, bytes calldata gateEvidence) external returns (bytes32 nonce);
 
         error AlreadyClaimed(bytes32 depositNonce);
     }
@@ -143,11 +149,24 @@ pub fn is_already_claimed(revert_data: &[u8]) -> bool {
 
 /// The calldata of `BridgeVault.deposit`. The only place that builds it.
 ///
+/// `max_fee_basis_points` is the highest deposit fee the caller accepts; the vault reverts with `FeeAboveLimit` above it.
 /// `gate_evidence` is empty when the gate needs none (see `gate::gate_evidence_for_deposit`).
-pub fn deposit_calldata(token: Address, recipient: Address, amount: U256, gate_evidence: &[u8]) -> Bytes {
+pub fn deposit_calldata(
+    token: Address,
+    recipient: Address,
+    amount: U256,
+    max_fee_basis_points: u16,
+    gate_evidence: &[u8],
+) -> Bytes {
     Bytes::from(
-        VaultContract::depositCall { token, recipient, amount, gateEvidence: gate_evidence.to_vec().into() }
-            .abi_encode(),
+        VaultContract::depositCall {
+            token,
+            recipient,
+            amount,
+            maxFeeBasisPoints: max_fee_basis_points,
+            gateEvidence: gate_evidence.to_vec().into(),
+        }
+        .abi_encode(),
     )
 }
 
@@ -173,14 +192,15 @@ pub fn head_updated_topic() -> B256 {
 mod tests {
     use super::*;
 
-    /// Claim: `deposit` takes four arguments and its selector is the one of the contract signature.
-    /// Why it matters: the old three-argument selector reverts on the current vault.
+    /// Claim: `deposit` takes the fee limit and the gate evidence, and its selector is the one of the contract signature.
+    /// Why it matters: the older selectors revert on the current vault.
     #[test]
-    fn deposit_call_has_the_gate_evidence_argument() {
-        let expected = &alloy_primitives::keccak256("deposit(address,address,uint256,bytes)")[..4];
-        let calldata = deposit_calldata(Address::ZERO, Address::ZERO, U256::from(1), &[1, 2, 3]);
+    fn deposit_call_has_the_fee_limit_and_the_gate_evidence_arguments() {
+        let expected = &alloy_primitives::keccak256("deposit(address,address,uint256,uint16,bytes)")[..4];
+        let calldata = deposit_calldata(Address::ZERO, Address::ZERO, U256::from(1), 25, &[1, 2, 3]);
         assert_eq!(&calldata[..4], expected);
         let decoded = VaultContract::depositCall::abi_decode(&calldata).unwrap();
+        assert_eq!(decoded.maxFeeBasisPoints, 25);
         assert_eq!(decoded.gateEvidence.as_ref(), &[1, 2, 3]);
     }
 

@@ -30,6 +30,10 @@ contract LightClientFixturesTest is Test {
     address internal constant UNUSED_GATE = address(0x6a7e);
     uint64 internal constant SLOTS_PER_EPOCH = 32;
     address internal constant FIXTURE_REMOTE_TOKEN = address(0xb2);
+    /// @dev The token that the Rust fixtures name as the one the destination vault pays. The local token sits here.
+    address internal constant FIXTURE_DESTINATION_TOKEN = address(0xe5);
+    /// @dev The storage slot of the balance map of the mock token.
+    uint256 internal constant BALANCES_SLOT = 0;
 
     /// @dev Nonces claimed by accepted fixtures, and local tokens registered, at the shared fixture vault address.
     bytes32[] internal claimedNonces;
@@ -96,6 +100,8 @@ contract LightClientFixturesTest is Test {
         accepted++;
         claimedNonces.push(vm.parseJsonBytes32(json, ".expected.deposit.nonce"));
         _assertPaid(json, vault, localToken, path);
+        // The token address is shared by every fixture, so the payout is cleared for the next fixture.
+        vm.store(address(localToken), keccak256(abi.encode(vm.parseJsonAddress(json, ".expected.deposit.recipient"), BALANCES_SLOT)), bytes32(0));
         _countAccepted(json, gasUsed);
     }
 
@@ -182,6 +188,7 @@ contract LightClientFixturesTest is Test {
 
     function _assertPaid(string memory json, BridgeVault vault, MockERC20 localToken, string memory path) internal view {
         uint256 amount = vm.parseUint(vm.parseJsonString(json, ".expected.deposit.amount"));
+        assertEq(vm.parseJsonAddress(json, ".expected.deposit.destinationToken"), address(localToken), string.concat("destination token in ", path));
         assertEq(localToken.balanceOf(vm.parseJsonAddress(json, ".expected.deposit.recipient")), amount, string.concat("amount paid in ", path));
         assertTrue(vault.claimed(vm.parseJsonBytes32(json, ".expected.deposit.nonce")), string.concat("nonce marked in ", path));
     }
@@ -192,7 +199,9 @@ contract LightClientFixturesTest is Test {
         uint64 localChain = uint64(vm.parseUint(vm.parseJsonString(json, ".localChainId")));
         vm.chainId(localChain);
         BeaconLightClient client = _clientFor(json);
-        localToken = new MockERC20("Local", "LOC");
+        // The deposit names the token that the destination vault pays, so the local token is built at that address.
+        deployCodeTo("MockERC20.sol:MockERC20", abi.encode("Local", "LOC"), FIXTURE_DESTINATION_TOKEN);
+        localToken = MockERC20(FIXTURE_DESTINATION_TOKEN);
         BridgeVault.TokenPair[] memory pairs = new BridgeVault.TokenPair[](1);
         pairs[0] = BridgeVault.TokenPair(address(localToken), FIXTURE_REMOTE_TOKEN, 18);
         uint64 capellaEra = uint64(vm.parseUint(vm.parseJsonString(json, ".capellaEra")));
@@ -209,7 +218,7 @@ contract LightClientFixturesTest is Test {
                 localChain == 369 ? uint64(1) : uint64(369),
                 vm.parseJsonAddress(json, ".remoteVault"),
                 pairs,
-                uint64(0),
+                BridgeVault.DepositTerms(0, address(0), address(0), 0, 0),
                 capellaEra,
                 UNUSED_GATE
             ),

@@ -25,11 +25,22 @@ contract DeployBridge is Script {
         string rpcAlias;
         uint64 chainId;
         address verifier;
+        bytes32 verifierCodeHash;
         uint256 deployerNonce;
         uint64 depositCutoffTimestamp;
+        FeeConfig fee;
         LightClientConfig lightClient;
         GateConfig gate;
         ObservationConfig observation;
+    }
+
+    /// @notice The deposit fee switch of the vault on a chain. A zero `authority` removes the fee from the start: the
+    /// fee and the ceiling must then be zero.
+    struct FeeConfig {
+        address authority;
+        address recipient;
+        uint16 basisPoints;
+        uint16 ceilingBasisPoints;
     }
 
     /// @notice The own-chain light client and the fork registry of a chain whose gate mode is
@@ -125,6 +136,8 @@ contract DeployBridge is Script {
     error DeployerNonceMismatch(uint64 chainId, uint256 configured, uint256 actual);
     /// @notice The verifier address holds no code on its chain.
     error VerifierHasNoCode(uint64 chainId, address verifier);
+    /// @notice The code hash of the verifier differs from the pinned code hash.
+    error VerifierCodeHashMismatch(uint64 chainId, address verifier, bytes32 expected, bytes32 actual);
     /// @notice A token address holds no code on its chain.
     error TokenHasNoCode(uint64 chainId, address token);
     /// @notice The signer of the script is not the configured deployer.
@@ -312,8 +325,8 @@ contract DeployBridge is Script {
 
     // ------------------------------------------------------------------ chain checks
 
-    /// @notice Refuses to continue when the connected chain, the deployer nonce, the verifier, or the beacon roots
-    /// contract of an enforcing gate is wrong.
+    /// @notice Refuses to continue when the connected chain, the deployer nonce, the verifier or its pinned code hash,
+    /// or the beacon roots contract of an enforcing gate is wrong. It runs before any broadcast.
     /// @param chain The settings of the connected chain.
     /// @param deployer The deployer.
     function assertChainEnvironment(ChainConfig memory chain, address deployer) public view {
@@ -321,6 +334,9 @@ contract DeployBridge is Script {
         uint256 nonce = vm.getNonce(deployer);
         if (nonce != chain.deployerNonce) revert DeployerNonceMismatch(chain.chainId, chain.deployerNonce, nonce);
         if (chain.verifier.code.length == 0) revert VerifierHasNoCode(chain.chainId, chain.verifier);
+        if (chain.verifier.codehash != chain.verifierCodeHash) {
+            revert VerifierCodeHashMismatch(chain.chainId, chain.verifier, chain.verifierCodeHash, chain.verifier.codehash);
+        }
         if (chain.gate.mode == BeaconForkGate.GateMode.Enforcing && BEACON_ROOTS.code.length == 0) {
             revert BeaconRootsHaveNoCode(chain.chainId, BEACON_ROOTS);
         }
@@ -491,15 +507,22 @@ contract DeployBridge is Script {
         private
         returns (address)
     {
+        ChainConfig memory chain = deployment.chain;
         return address(
             new BridgeVault(
                 lightClient,
-                deployment.chain.chainId,
+                chain.chainId,
                 deployment.remoteChainId,
                 deployment.remoteVault,
                 deployment.pairs,
-                deployment.chain.depositCutoffTimestamp,
-                deployment.chain.lightClient.capellaEra,
+                BridgeVault.DepositTerms({
+                    cutoffTimestamp: chain.depositCutoffTimestamp,
+                    feeAuthority: chain.fee.authority,
+                    feeRecipient: chain.fee.recipient,
+                    feeBasisPoints: chain.fee.basisPoints,
+                    feeCeilingBasisPoints: chain.fee.ceilingBasisPoints
+                }),
+                chain.lightClient.capellaEra,
                 gate
             )
         );
@@ -572,6 +595,12 @@ contract DeployBridge is Script {
         }
         if (bridgeVault.capellaEra() != chain.lightClient.capellaEra) revert DeploymentMismatch("vault.capellaEra");
         if (address(bridgeVault.depositGate()) != gate) revert DeploymentMismatch("vault.depositGate");
+        if (bridgeVault.feeAuthority() != chain.fee.authority) revert DeploymentMismatch("vault.feeAuthority");
+        if (bridgeVault.feeRecipient() != chain.fee.recipient) revert DeploymentMismatch("vault.feeRecipient");
+        if (bridgeVault.feeBasisPoints() != chain.fee.basisPoints) revert DeploymentMismatch("vault.feeBasisPoints");
+        if (bridgeVault.feeCeilingBasisPoints() != chain.fee.ceilingBasisPoints) {
+            revert DeploymentMismatch("vault.feeCeilingBasisPoints");
+        }
         if (
             bridgeVault.stateLayouts().length != 0 || bridgeVault.bodyLayouts().length != 0
                 || bridgeVault.historicalLayouts().length != 0
@@ -603,8 +632,10 @@ contract DeployBridge is Script {
         chain.rpcAlias = _readText(json, string.concat(prefix, ".rpcAlias"));
         chain.chainId = uint64(_readNonZeroUint(json, string.concat(prefix, ".chainId")));
         chain.verifier = _readAddress(json, string.concat(prefix, ".verifier"));
+        chain.verifierCodeHash = _readBytes32(json, string.concat(prefix, ".verifierCodeHash"));
         chain.deployerNonce = _readUint(json, string.concat(prefix, ".deployerNonce"));
         chain.depositCutoffTimestamp = uint64(_readUint(json, string.concat(prefix, ".depositCutoffTimestamp")));
+        chain.fee = _readFee(json, string.concat(prefix, ".fee"));
         string memory client = string.concat(prefix, ".lightClient");
         chain.lightClient.programVKey = _readBytes32(json, string.concat(client, ".programVKey"));
         chain.lightClient.genesisValidatorsRoot = _readBytes32(json, string.concat(client, ".genesisValidatorsRoot"));
@@ -621,6 +652,15 @@ contract DeployBridge is Script {
         if (chain.gate.mode == BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry) {
             chain.observation = _readObservation(json, string.concat(prefix, ".observation"));
         }
+    }
+
+    /// @dev The fee switch of one vault. The authority and the recipient may be the zero address: a zero authority
+    /// is a fee removed from the start. The vault constructor checks the rest.
+    function _readFee(string memory json, string memory prefix) private pure returns (FeeConfig memory fee) {
+        fee.authority = vm.parseAddress(_readText(json, string.concat(prefix, ".authority")));
+        fee.recipient = vm.parseAddress(_readText(json, string.concat(prefix, ".recipient")));
+        fee.basisPoints = uint16(_readUint(json, string.concat(prefix, ".basisPoints")));
+        fee.ceilingBasisPoints = uint16(_readUint(json, string.concat(prefix, ".ceilingBasisPoints")));
     }
 
     function _readObservation(string memory json, string memory prefix)

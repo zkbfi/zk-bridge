@@ -213,6 +213,7 @@ fn deploy_side(
     genesis_label: &str,
     gate_mode: u64,
     observation: Option<&ObservationFixture>,
+    deposit_fee_basis_points: u16,
 ) -> Side {
     let token = chain.deploy("MockERC20", HashMap::from([("name", Argument::Text(local_token_name.into())), ("symbol", Argument::Text("TKN".into()))]));
     let verifier = chain.deploy("OracleSP1Verifier", HashMap::from([("oracle", word_address(DEPLOYER))]));
@@ -276,12 +277,23 @@ fn deploy_side(
             ("remoteChainId", word_u64(remote_id)),
             ("remoteVault", word_address(remote_vault)),
             ("pairs", pairs_argument(pairs)),
-            ("depositCutoffTimestamp", word_u64(0)),
+            ("depositTerms", Argument::StaticTuple(deposit_terms(deposit_fee_basis_points))),
             ("capellaEra", word_u64(0)),
             ("depositGate", word_address(gate)),
         ]),
     );
     Side { token, verifier, light_client, own_light_client, registry, gate, vault }
+}
+
+/// The deposit terms of a vault: no cutoff, and the fee switch. A fee of zero means no fee authority, so the fee is
+/// removed from the start. A fee above zero makes the deployer the fee authority and the recipient, with the highest
+/// ceiling the vault accepts (100 basis points).
+fn deposit_terms(fee_basis_points: u16) -> Vec<[u8; 32]> {
+    if fee_basis_points == 0 {
+        return vec![word_u64_raw(0); 5];
+    }
+    let deployer = word_address_raw(DEPLOYER);
+    vec![word_u64_raw(0), deployer, deployer, word_u64_raw(u64::from(fee_basis_points)), word_u64_raw(100)]
 }
 
 /// The two directions of the bridge.
@@ -303,11 +315,13 @@ pub struct BridgeOptions {
     /// The file stem of a fork observation fixture. With it, chain B gets a gate in registry mode, with its own-chain
     /// light client and fork registry. Without it, the gate of chain B is in plain detection mode.
     pub registry_fixture: Option<&'static str>,
+    /// The deposit fee of both vaults in basis points. Zero deploys vaults with no fee authority.
+    pub deposit_fee_basis_points: u16,
 }
 
 impl Default for BridgeOptions {
     fn default() -> Self {
-        Self { rogue_token: false, finality_depth: 1, registry_fixture: None }
+        Self { rogue_token: false, finality_depth: 1, registry_fixture: None, deposit_fee_basis_points: 0 }
     }
 }
 
@@ -442,9 +456,9 @@ pub fn deploy_bridge_with(name: &str, options: BridgeOptions) -> Bridge {
     if let Some(rogue) = rogue_token {
         pairs_a.push((rogue, rogue));
     }
-    let side_a = deploy_side(&chain_a, 1, 369, "Token A", &pairs_a, vault_b, "genesis-of-chain-b", GATE_MODE_ENFORCING, None);
+    let side_a = deploy_side(&chain_a, 1, 369, "Token A", &pairs_a, vault_b, "genesis-of-chain-b", GATE_MODE_ENFORCING, None, options.deposit_fee_basis_points);
     let gate_mode_b = if observation_fixture.is_some() { GATE_MODE_REGISTRY } else { GATE_MODE_DETECT };
-    let side_b = deploy_side(&chain_b, 369, 1, "Token B", &[(token_b, token_a)], vault_a, "genesis-of-chain-a", gate_mode_b, observation_fixture.as_ref());
+    let side_b = deploy_side(&chain_b, 369, 1, "Token B", &[(token_b, token_a)], vault_a, "genesis-of-chain-a", gate_mode_b, observation_fixture.as_ref(), options.deposit_fee_basis_points);
     assert_eq!((side_a.token, side_a.vault), (token_a, vault_a));
     assert_eq!((side_b.token, side_b.vault), (token_b, vault_b));
 
@@ -620,15 +634,39 @@ pub fn made_deposit(receipt: serde_json::Value) -> MadeDeposit {
 
 /// Mints, approves and deposits a token on `chain` through `vault`, with gate evidence built for `gate`.
 pub fn deposit_token(chain: &TestChain, vault: Address, gate: Address, token: Address, amount: u128) -> MadeDeposit {
+    deposit_token_with_fee_limit(chain, vault, gate, token, amount, 0)
+}
+
+/// Mints, approves and deposits as [`deposit_token`], with the highest fee in basis points that the depositor accepts.
+pub fn deposit_token_with_fee_limit(
+    chain: &TestChain,
+    vault: Address,
+    gate: Address,
+    token: Address,
+    amount: u128,
+    max_fee_basis_points: u16,
+) -> MadeDeposit {
     chain.send(Some(token), &TokenContract::mintCall { to: DEPLOYER, amount: U256::from(amount) }.abi_encode());
     chain.send(Some(token), &TokenContract::approveCall { spender: vault, amount: U256::from(amount) }.abi_encode());
     let evidence = gate_evidence(chain, gate);
-    made_deposit(chain.send(Some(vault), &deposit_calldata(token, RECIPIENT, U256::from(amount), &evidence)))
+    made_deposit(chain.send(Some(vault), &deposit_calldata(token, RECIPIENT, U256::from(amount), max_fee_basis_points, &evidence)))
 }
 
 /// Mints, approves and deposits on the source chain of a direction.
 pub fn deposit_on(bridge: &Bridge, direction: Direction, amount: u128) -> MadeDeposit {
     deposit_token(bridge.source(direction), bridge.source_vault(direction), bridge.source_gate(direction), bridge.source_token(direction), amount)
+}
+
+/// Mints, approves and deposits on the source chain of a direction, with the highest fee that the depositor accepts.
+pub fn deposit_on_with_fee_limit(bridge: &Bridge, direction: Direction, amount: u128, max_fee_basis_points: u16) -> MadeDeposit {
+    deposit_token_with_fee_limit(
+        bridge.source(direction),
+        bridge.source_vault(direction),
+        bridge.source_gate(direction),
+        bridge.source_token(direction),
+        amount,
+        max_fee_basis_points,
+    )
 }
 
 /// Mints, approves and deposits on chain A. Returns the receipt and the index of the deposit log inside it.

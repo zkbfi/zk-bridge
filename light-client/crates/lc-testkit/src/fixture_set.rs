@@ -27,6 +27,8 @@ use serde_json::{json, Value};
 const VAULT: Address = address!("00000000000000000000000000000000000000a1");
 /// The verifying vault on the destination chain (`address(this)` in the vault).
 const LOCAL_VAULT: Address = address!("00000000000000000000000000000000000000b1");
+/// The token that the destination vault pays for the deposits of the fixtures.
+const DESTINATION_TOKEN: Address = address!("00000000000000000000000000000000000000e5");
 const ATTACKER: Address = address!("00000000000000000000000000000000000000ee");
 
 fn text(value: impl core::fmt::LowerHex) -> String {
@@ -146,6 +148,7 @@ fn deposit_json(deposit: &VerifiedDeposit) -> Value {
         "nonce": text(deposit.nonce),
         "targetChainId": deposit.target_chain_id.to_string(),
         "destinationVault": text(deposit.destination_vault),
+        "destinationToken": text(deposit.destination_token),
         "depositBlockHash": text(deposit.deposit_block_hash),
     })
 }
@@ -202,6 +205,7 @@ fn fields(nonce_byte: u8, amount: u64, target_chain_id: u64) -> DepositFields {
         nonce: B256::repeat_byte(nonce_byte),
         target_chain_id,
         destination_vault: LOCAL_VAULT,
+        destination_token: DESTINATION_TOKEN,
     }
 }
 

@@ -50,15 +50,18 @@ contract DeployBridgeTest is Test {
     /// @dev The settings of one chain. The light client part describes the OTHER chain. Chain 1 is Ethereum, so its
     /// light client tracks PulseChain (Capella epoch 3, era 0) and its gate follows Ethereum (enforcing from the start).
     /// Chain 369 is the reverse: its light client tracks Ethereum (Capella epoch 194048, era 758) and its gate follows
-    /// PulseChain (detects the beacon roots contract).
+    /// PulseChain (detects the beacon roots contract). The verifier is pinned to its real code hash. The vault on
+    /// chain 1 has a live fee switch (the deployer is the authority); the vault on chain 369 has none.
     function _chainJson(uint64 chainId, uint256 nonce, string memory verifierText, string memory slot)
         internal
-        pure
+        view
         returns (string memory)
     {
         string memory head = string.concat(
             '{"rpcAlias":"chain-', vm.toString(chainId), '","chainId":"', vm.toString(chainId),
-            '","verifier":"', verifierText, '","depositCutoffTimestamp":"0","deployerNonce":"', vm.toString(nonce), '",'
+            '","verifier":"', verifierText, '","verifierCodeHash":"', _hexString(address(verifier).codehash),
+            '","depositCutoffTimestamp":"0","deployerNonce":"', vm.toString(nonce), '",',
+            chainId == 1 ? _liveFeeJson() : _nullifiedFeeJson()
         );
         string memory client = string.concat(
             '"lightClient":{"programVKey":"', _hexString(keccak256("light client program")),
@@ -73,6 +76,18 @@ contract DeployBridgeTest is Test {
         return string.concat(
             head, client, checkpoint, chainId == 1 ? _ethereumGate() : string.concat(_pulsechainGate(), _observationJson(slot)), "}"
         );
+    }
+
+    function _liveFeeJson() internal view returns (string memory) {
+        return string.concat(
+            '"fee":{"authority":"', vm.toString(deployer), '","recipient":"', vm.toString(deployer),
+            '","basisPoints":"25","ceilingBasisPoints":"50"},'
+        );
+    }
+
+    /// @dev A zero authority removes the fee from the start. The fee and the ceiling must then be zero.
+    function _nullifiedFeeJson() internal pure returns (string memory) {
+        return '"fee":{"authority":"0x0000000000000000000000000000000000000000","recipient":"0x0000000000000000000000000000000000000000","basisPoints":"0","ceilingBasisPoints":"0"},';
     }
 
     /// @dev The own-chain light client and the registry settings of PulseChain. Its genesis validators root and period
@@ -172,6 +187,15 @@ contract DeployBridgeTest is Test {
         assertEq(config.chainA.deployerNonce, NONCE_A);
         assertEq(config.chainB.deployerNonce, NONCE_B);
         assertEq(config.chainA.depositCutoffTimestamp, 0);
+        assertEq(config.chainA.verifierCodeHash, address(verifier).codehash, "the pin is the code hash of the verifier");
+        assertEq(config.chainB.verifierCodeHash, address(verifier).codehash);
+        assertEq(config.chainA.fee.authority, deployer);
+        assertEq(config.chainA.fee.recipient, deployer);
+        assertEq(config.chainA.fee.basisPoints, 25);
+        assertEq(config.chainA.fee.ceilingBasisPoints, 50);
+        assertEq(config.chainB.fee.authority, address(0), "chain B starts with the fee removed");
+        assertEq(config.chainB.fee.basisPoints, 0);
+        assertEq(config.chainB.fee.ceilingBasisPoints, 0);
         assertEq(config.tokensA[0], address(tokenOnA));
         assertEq(config.tokensB[0], address(tokenOnB));
 
@@ -227,8 +251,9 @@ contract DeployBridgeTest is Test {
     function test_HB02_exampleConfigurationHoldsEveryKeyTheScriptReads() public view {
         string memory json = vm.readFile("script/hardened/bridge.config.example.json");
         string[2] memory chains = [".chainA", ".chainB"];
-        string[15] memory keys = [
-            ".rpcAlias", ".chainId", ".verifier", ".depositCutoffTimestamp", ".deployerNonce",
+        string[20] memory keys = [
+            ".rpcAlias", ".chainId", ".verifier", ".verifierCodeHash", ".depositCutoffTimestamp", ".deployerNonce",
+            ".fee.authority", ".fee.recipient", ".fee.basisPoints", ".fee.ceilingBasisPoints",
             ".lightClient.programVKey", ".lightClient.genesisValidatorsRoot", ".lightClient.slotsPerPeriod",
             ".lightClient.slotsPerEpoch", ".lightClient.capellaForkEpoch", ".lightClient.capellaEra",
             ".lightClient.initialSlot", ".lightClient.initialHeaderRoot", ".lightClient.initialSyncCommitteeHash",
@@ -278,6 +303,9 @@ contract DeployBridgeTest is Test {
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.verifier"));
         script.parseConfig(vm.replace(json, vm.toString(address(verifier)), placeholder));
 
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.verifierCodeHash"));
+        script.parseConfig(vm.replace(json, vm.toString(address(verifier).codehash), placeholder));
+
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.rpcAlias"));
         script.parseConfig(vm.replace(json, "chain-1", placeholder));
 
@@ -318,6 +346,9 @@ contract DeployBridgeTest is Test {
 
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.verifier"));
         script.parseConfig(vm.replace(json, vm.toString(address(verifier)), zeroAddress));
+
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.verifierCodeHash"));
+        script.parseConfig(vm.replace(json, vm.toString(address(verifier).codehash), zeroWord));
 
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.chainId"));
         script.parseConfig(vm.replace(json, '"chainId":"1"', '"chainId":"0"'));
@@ -619,9 +650,11 @@ contract DeployBridgeTest is Test {
         assertEq(vault, plan.vaultA);
     }
 
-    /// Claim: the connected chain must be the configured chain, and the verifier must have code there.
-    /// Shows: two exact errors, each followed by the honest call. Matters: the specification's SP1 gateways have code
-    /// on Ethereum but none on PulseChain.
+    /// Claim: the connected chain must be the configured chain, and the verifier must have code there, and the code must
+    /// be the pinned code. Shows: three exact errors, each followed by the honest call. The code hash error names the
+    /// expected and the actual hash, and it also fires for a verifier with other code at the right address. Matters:
+    /// the specification's SP1 gateways have code on Ethereum but none on PulseChain, and an address with other code
+    /// (a verifier that accepts any proof) would pass a check for code alone.
     function test_R2_08_environmentGuardsChainAndVerifier() public {
         DeployBridge.BridgeConfig memory config = script.parseConfig(_validJson());
         _etchBeaconRoots();
@@ -635,6 +668,26 @@ contract DeployBridgeTest is Test {
         address verifierWithoutCode = makeAddr("an address with no code");
         config.chainA.verifier = verifierWithoutCode;
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.VerifierHasNoCode.selector, uint64(1), verifierWithoutCode));
+        script.assertChainEnvironment(config.chainA, deployer);
+
+        // The same address with another pinned hash is refused, and so is other code at the pinned address.
+        config.chainA.verifier = address(verifier);
+        script.assertChainEnvironment(config.chainA, deployer); // honest: the pin is the real hash
+        bytes32 realHash = address(verifier).codehash;
+        bytes32 otherHash = keccak256("the code of another verifier");
+        config.chainA.verifierCodeHash = otherHash;
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.VerifierCodeHashMismatch.selector, uint64(1), address(verifier), otherHash, realHash)
+        );
+        script.assertChainEnvironment(config.chainA, deployer);
+
+        config.chainA.verifierCodeHash = realHash;
+        address impostor = makeAddr("a verifier that accepts any proof");
+        vm.etch(impostor, hex"600160005260206000f3");
+        config.chainA.verifier = impostor;
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.VerifierCodeHashMismatch.selector, uint64(1), impostor, realHash, impostor.codehash)
+        );
         script.assertChainEnvironment(config.chainA, deployer);
     }
 
@@ -690,7 +743,11 @@ contract DeployBridgeTest is Test {
         uint64 cutoff,
         uint64 capellaEra
     ) internal returns (BridgeVault) {
-        return new BridgeVault(lightClient, 1, 369, remoteVault, d.pairs, cutoff, capellaEra, gate);
+        DeployBridge.FeeConfig memory fee = d.chain.fee;
+        BridgeVault.DepositTerms memory terms = BridgeVault.DepositTerms(
+            cutoff, fee.authority, fee.recipient, fee.basisPoints, fee.ceilingBasisPoints
+        );
+        return new BridgeVault(lightClient, 1, 369, remoteVault, d.pairs, terms, capellaEra, gate);
     }
 
     /// @dev Deploys the honest contracts of chain A at addresses of this test, records them as the predicted addresses,
@@ -749,6 +806,34 @@ contract DeployBridgeTest is Test {
         deploymentA.predictedVault = address(wrongCutoff);
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "vault.depositCutoffTimestamp"));
         script.verifyDeployment(deploymentA, lightClient, gate, address(wrongCutoff));
+    }
+
+    /// Claim: the post-deploy check catches a vault whose fee switch differs from the configuration. Shows: a vault
+    /// with no fee authority, a vault with another fee, and a vault with another ceiling each fail with the field name,
+    /// while the honest vault (made by `_honestChainA`) passes. Matters: the fee ceiling is immutable, so a wrong
+    /// ceiling cannot be repaired after launch.
+    function test_R2_08_postDeployAssertionsCatchWrongFeeSwitch() public {
+        DeployBridge.ChainDeployment memory deploymentA = _honestChainA();
+        address lightClient = deploymentA.predictedLightClient;
+        address gate = deploymentA.predictedGate;
+        DeployBridge.FeeConfig memory fee = deploymentA.chain.fee;
+        assertEq(fee.basisPoints, 25, "control: the configured fee is live");
+
+        BridgeVault.DepositTerms[3] memory wrong = [
+            BridgeVault.DepositTerms(0, address(0), address(0), 0, 0),
+            BridgeVault.DepositTerms(0, fee.authority, fee.recipient, 30, fee.ceilingBasisPoints),
+            BridgeVault.DepositTerms(0, fee.authority, fee.recipient, fee.basisPoints, 100)
+        ];
+        string[3] memory fields = ["vault.feeAuthority", "vault.feeBasisPoints", "vault.feeCeilingBasisPoints"];
+        for (uint256 i = 0; i < wrong.length; i++) {
+            BridgeVault vault = new BridgeVault(
+                lightClient, 1, 369, deploymentA.remoteVault, deploymentA.pairs, wrong[i],
+                deploymentA.chain.lightClient.capellaEra, gate
+            );
+            deploymentA.predictedVault = address(vault);
+            vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, fields[i]));
+            script.verifyDeployment(deploymentA, lightClient, gate, address(vault));
+        }
     }
 
     /// Claim: the light client read-back catches a wrong checkpoint. Shows: a light client with another genesis

@@ -6,9 +6,11 @@
 
 mod common;
 
-use alloy_primitives::U256;
+use alloy_primitives::{Address, U256};
+use alloy_sol_types::SolCall;
 use common::bridge::*;
 use common::*;
+use zk_bridge_prover::contracts::{deposit_calldata, TokenContract, VaultContract};
 
 /// Claim: a deposit on chain 1 reaches chain 369, and a deposit on chain 369 reaches chain 1, with every balance on
 /// both sides moving by exactly the amount.
@@ -58,6 +60,58 @@ fn happy_path_both_directions_move_balances_on_both_sides() {
         // The source vault keeps the locked tokens: the bridge moves liquidity, not supply.
         assert_eq!(balance(source, source_token, source_vault), source_vault_before + U256::from(amount));
     }
+}
+
+/// Claim: with a deposit fee, the source vault keeps the fee, the destination pays the net amount, and the fee reaches
+/// the recipient by collection.
+/// Shows: a vault pair with a fee of 50 basis points. A deposit whose fee limit is 49 reverts and moves nothing. The
+/// same deposit with a limit of 50 locks the whole amount on the source. The service then proves it, and the
+/// destination pays the amount less the fee, through the real receipt proof. Anyone can collect, and the recipient of
+/// fees gets exactly the fee. After collection the source vault holds the net amount that the destination paid.
+/// Why it matters: the fee changes the amount in the event, and the destination pays what the event says. A vault that
+/// paid the gross amount would be insolvent by the fee, and a vault that lost the fee would pay for nothing.
+#[test]
+fn happy_path_deposit_fee_is_kept_on_the_source_and_the_destination_pays_the_net_amount() {
+    if !tools_available() {
+        return;
+    }
+    let bridge = deploy_bridge_with("happy-fee", BridgeOptions { deposit_fee_basis_points: 50, ..Default::default() });
+    fund_destination_vault(&bridge, Direction::AToB, 1_000 * ONE_TOKEN);
+    let (source, destination) = (bridge.source(Direction::AToB), bridge.destination(Direction::AToB));
+    let (source_token, destination_token) = (bridge.source_token(Direction::AToB), bridge.destination_token(Direction::AToB));
+    let (source_vault, destination_vault) = (bridge.source_vault(Direction::AToB), bridge.destination_vault(Direction::AToB));
+    let amount = 100 * ONE_TOKEN;
+    let fee = amount * 50 / 10_000;
+    let net = amount - fee;
+
+    // A limit below the fee refuses the deposit, and the tokens stay with the depositor.
+    source.send(Some(source_token), &TokenContract::mintCall { to: DEPLOYER, amount: U256::from(amount) }.abi_encode());
+    source.send(Some(source_token), &TokenContract::approveCall { spender: source_vault, amount: U256::from(amount) }.abi_encode());
+    let evidence = gate_evidence(source, bridge.source_gate(Direction::AToB));
+    let refused = source.send_allowing_failure(Some(source_vault), &deposit_calldata(source_token, RECIPIENT, U256::from(amount), 49, &evidence));
+    assert_eq!(refused["status"], "0x0", "a limit of 49 refuses a fee of 50");
+    assert_eq!(balance(source, source_token, DEPLOYER), U256::from(amount), "the depositor keeps the tokens");
+    assert_eq!(balance(source, source_token, source_vault), U256::ZERO);
+
+    let made = deposit_on_with_fee_limit(&bridge, Direction::AToB, amount, 50);
+    assert_eq!(balance(source, source_token, source_vault), U256::from(amount), "the source vault locks the gross amount");
+    let accrued = |vault: Address| {
+        U256::from_be_slice(&source.call(vault, &VaultContract::accruedFeesCall { localToken: source_token }.abi_encode()).unwrap())
+    };
+    assert_eq!(accrued(source_vault), U256::from(fee), "the fee is booked");
+
+    source.mine(2);
+    run(&bridge, &["once"]).expect("once");
+    assert_eq!(balance(destination, destination_token, RECIPIENT), U256::from(net), "the recipient gets the amount less the fee");
+    assert_eq!(balance(destination, destination_token, destination_vault), U256::from(1_000 * ONE_TOKEN - net));
+    assert!(claimed(destination, destination_vault, made.nonce));
+
+    // The deployer is the fee authority and the fee recipient. Anyone may collect. Here the deployer sends the call.
+    let before = balance(source, source_token, DEPLOYER);
+    source.send(Some(source_vault), &VaultContract::collectFeesCall { token: source_token }.abi_encode());
+    assert_eq!(balance(source, source_token, DEPLOYER) - before, U256::from(fee), "the recipient gets exactly the fee");
+    assert_eq!(accrued(source_vault), U256::ZERO);
+    assert_eq!(balance(source, source_token, source_vault), U256::from(net), "the source vault holds what the destination paid");
 }
 
 /// Claim: the cost of each piece, measured on the hardened contracts, is printed (and bounded).

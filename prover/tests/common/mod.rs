@@ -137,6 +137,8 @@ pub enum Argument {
     /// A dynamic array of static words (for example `uint8[]`).
     Words(Vec<[u8; 32]>),
     Tuples(Vec<Vec<[u8; 32]>>),
+    /// A tuple of static words (for example a struct of addresses and integers). It sits inline in the head.
+    StaticTuple(Vec<[u8; 32]>),
     Text(String),
 }
 
@@ -170,14 +172,28 @@ fn encode_constructor(abi: &Value, values: &HashMap<&str, Argument>) -> Vec<u8> 
     let inputs = constructor["inputs"].as_array().expect("inputs");
     let mut head: Vec<u8> = Vec::new();
     let mut tail: Vec<u8> = Vec::new();
-    let head_size = inputs.len() * 32;
-    for input in inputs {
+    let argument_of = |input: &Value| {
         let name = input["name"].as_str().expect("name").trim_end_matches('_');
-        let argument = values
+        values
             .get(name)
-            .unwrap_or_else(|| panic!("the constructor takes `{name}` ({}), and the test has no value for it", input["type"]));
+            .unwrap_or_else(|| panic!("the constructor takes `{name}` ({}), and the test has no value for it", input["type"]))
+    };
+    let head_size: usize = inputs
+        .iter()
+        .map(|input| match argument_of(input) {
+            Argument::StaticTuple(words) => words.len() * 32,
+            _ => 32,
+        })
+        .sum();
+    for input in inputs {
+        let argument = argument_of(input);
         match argument {
             Argument::Word(word) => head.extend_from_slice(word),
+            Argument::StaticTuple(words) => {
+                for word in words {
+                    head.extend_from_slice(word);
+                }
+            }
             Argument::Words(words) => {
                 head.extend_from_slice(&U256::from(head_size + tail.len()).to_be_bytes::<32>());
                 tail.extend_from_slice(&U256::from(words.len()).to_be_bytes::<32>());

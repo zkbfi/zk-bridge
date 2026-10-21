@@ -53,7 +53,8 @@ contract BridgeVaultTest is WithdrawalScenes {
         uint256 amount,
         bytes32 nonce,
         uint64 targetChainId,
-        address destinationVault
+        address destinationVault,
+        address destinationToken
     );
 
     function _pair(address localToken, address remoteToken, uint8 decimals)
@@ -69,12 +70,19 @@ contract BridgeVaultTest is WithdrawalScenes {
         internal
         returns (BridgeVault)
     {
-        return new BridgeVault(client, local, remote, remoteVault_, pairs, 0, DEFAULT_CAPELLA_ERA, address(gateB));
+        return new BridgeVault(client, local, remote, remoteVault_, pairs, BridgeVault.DepositTerms(0, address(0), address(0), 0, 0), DEFAULT_CAPELLA_ERA, address(gateB));
     }
 
     /// @dev A vault on chain B for one custom local token, paired with the fixture remote token and remote vault.
     function _vaultFor(address localToken, uint8 decimals) internal returns (BridgeVault) {
         return _newDestinationVault(_pair(localToken, ReceiptFixtures.REMOTE_TOKEN, decimals), 0, DEFAULT_CAPELLA_ERA);
+    }
+
+    /// @dev Puts a token at the address that the fixture receipts name as the token the destination vault pays. A
+    /// withdrawal test that pays a hostile token needs this, because `withdraw` refuses any other destination token.
+    function _deployAtDestinationToken(string memory artifact, bytes memory arguments) internal returns (address) {
+        deployCodeTo(artifact, arguments, ReceiptFixtures.DESTINATION_TOKEN);
+        return ReceiptFixtures.DESTINATION_TOKEN;
     }
 
     // ================================================================ constructor
@@ -100,7 +108,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         RecordingGate gate = new RecordingGate();
         vm.chainId(CHAIN_B);
         BridgeVault custom = new BridgeVault(
-            address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), _pair(address(tokenOnB), address(tokenOnA), 18), 0, 758, address(gate)
+            address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), _pair(address(tokenOnB), address(tokenOnA), 18), BridgeVault.DepositTerms(0, address(0), address(0), 0, 0), 758, address(gate)
         );
         assertEq(custom.capellaEra(), 758);
         assertEq(address(custom.depositGate()), address(gate));
@@ -121,8 +129,8 @@ contract BridgeVaultTest is WithdrawalScenes {
         BridgeVault.TokenPair[] memory pairs = _pair(address(tokenOnB), address(tokenOnA), 18);
         vm.chainId(CHAIN_B);
         vm.expectRevert(abi.encodeWithSelector(BridgeVault.ZeroValue.selector, "depositGate"));
-        new BridgeVault(address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs, 0, DEFAULT_CAPELLA_ERA, address(0));
-        new BridgeVault(address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs, 0, DEFAULT_CAPELLA_ERA, address(gateB)); // honest path
+        new BridgeVault(address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs, BridgeVault.DepositTerms(0, address(0), address(0), 0, 0), DEFAULT_CAPELLA_ERA, address(0));
+        new BridgeVault(address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs, BridgeVault.DepositTerms(0, address(0), address(0), 0, 0), DEFAULT_CAPELLA_ERA, address(gateB)); // honest path
     }
 
     /// Claim: each zero constructor argument is refused with its name. Shows: three reverts with exact errors (the vault has no verifier argument).
@@ -221,7 +229,7 @@ contract BridgeVaultTest is WithdrawalScenes {
     /// Claim: `DEPOSIT_EVENT_TOPIC` is the keccak256 of the event signature string, and equals the compiler's
     /// selector. Shows: both, plus the topic on a real log. Matters: R2-02 (the circuit hardcoded a wrong topic).
     function test_R2_02_depositEventTopicIsKeccakOfSignature() public {
-        bytes32 expected = keccak256("DepositInitiated(address,address,address,uint256,bytes32,uint64,address)");
+        bytes32 expected = keccak256("DepositInitiated(address,address,address,uint256,bytes32,uint64,address,address)");
         assertEq(vaultA.DEPOSIT_EVENT_TOPIC(), expected);
         assertEq(vaultA.DEPOSIT_EVENT_TOPIC(), BridgeVault.DepositInitiated.selector);
         assertTrue(vaultA.DEPOSIT_EVENT_TOPIC() != bytes32(0x2df9000000000000000000000000000000000000000000000000000000000000) , "not the wrong revision-2 prefix");
@@ -231,7 +239,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         vm.startPrank(alice);
         tokenOnA.approve(address(vaultA), 1e18);
         vm.recordLogs();
-        vaultA.deposit(address(tokenOnA), bob, 1e18, "");
+        vaultA.deposit(address(tokenOnA), bob, 1e18, 0, "");
         vm.stopPrank();
         Vm.Log[] memory logs = vm.getRecordedLogs();
         Vm.Log memory depositLog = logs[logs.length - 1];
@@ -247,7 +255,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         vm.startPrank(alice);
         tokenOnA.approve(address(vaultA), 1e18);
         vm.recordLogs();
-        vaultA.deposit(address(tokenOnA), bob, 1e18, "");
+        vaultA.deposit(address(tokenOnA), bob, 1e18, 0, "");
         vm.stopPrank();
         Vm.Log[] memory logs = vm.getRecordedLogs();
         Vm.Log memory depositLog = logs[logs.length - 1];
@@ -255,9 +263,11 @@ contract BridgeVaultTest is WithdrawalScenes {
         assertEq(depositLog.topics[1], bytes32(uint256(uint160(address(tokenOnA)))));
         assertEq(depositLog.topics[2], bytes32(uint256(uint160(alice))));
         assertEq(depositLog.topics[3], bytes32(uint256(uint160(bob))));
-        assertEq(depositLog.data.length, 128, "amount, nonce, target chain id, destination vault");
-        (,,, address destinationVault) = abi.decode(depositLog.data, (uint256, bytes32, uint64, address));
+        assertEq(depositLog.data.length, 160, "amount, nonce, target chain id, destination vault, destination token");
+        (,,, address destinationVault, address destinationToken) =
+            abi.decode(depositLog.data, (uint256, bytes32, uint64, address, address));
         assertEq(destinationVault, address(vaultB), "the event names the vault on the other chain");
+        assertEq(destinationToken, address(tokenOnB), "the event names the token that the other vault pays");
     }
 
     // ================================================================ deposit
@@ -271,8 +281,8 @@ contract BridgeVaultTest is WithdrawalScenes {
         tokenOnA.approve(address(vaultA), 100e18);
         bytes32 expectedNonce = keccak256(abi.encode(uint256(CHAIN_A), address(vaultA), uint256(0)));
         vm.expectEmit(true, true, true, true, address(vaultA));
-        emit DepositInitiated(address(tokenOnA), alice, bob, 100e18, expectedNonce, CHAIN_B, address(vaultB));
-        bytes32 nonce = vaultA.deposit(address(tokenOnA), bob, 100e18, "");
+        emit DepositInitiated(address(tokenOnA), alice, bob, 100e18, expectedNonce, CHAIN_B, address(vaultB), address(tokenOnB));
+        bytes32 nonce = vaultA.deposit(address(tokenOnA), bob, 100e18, 0, "");
         vm.stopPrank();
 
         assertEq(nonce, expectedNonce);
@@ -297,7 +307,7 @@ contract BridgeVaultTest is WithdrawalScenes {
             abi.encodeWithSignature("deposit(address,address,uint256)", address(tokenOnA), bob, 1e18)
         );
         assertFalse(threeArguments, "the three-argument deposit of revision two no longer exists");
-        (bool newShape,) = address(vaultA).call(abi.encodeCall(BridgeVault.deposit, (address(tokenOnA), bob, 1e18, bytes(""))));
+        (bool newShape,) = address(vaultA).call(abi.encodeCall(BridgeVault.deposit, (address(tokenOnA), bob, 1e18, uint16(0), bytes(""))));
         assertTrue(newShape);
         vm.stopPrank();
     }
@@ -308,7 +318,7 @@ contract BridgeVaultTest is WithdrawalScenes {
     function _vaultWithRecordingGate(RecordingGate gate) internal returns (BridgeVault) {
         vm.chainId(CHAIN_A);
         return new BridgeVault(
-            address(lightClientForA), CHAIN_A, CHAIN_B, address(vaultB), _pair(address(tokenOnA), address(tokenOnB), 18), 0, DEFAULT_CAPELLA_ERA, address(gate)
+            address(lightClientForA), CHAIN_A, CHAIN_B, address(vaultB), _pair(address(tokenOnA), address(tokenOnB), 18), BridgeVault.DepositTerms(0, address(0), address(0), 0, 0), DEFAULT_CAPELLA_ERA, address(gate)
         );
     }
 
@@ -322,7 +332,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         tokenOnA.mint(alice, 1e18);
         vm.startPrank(alice);
         tokenOnA.approve(address(vault), 1e18);
-        vault.deposit(address(tokenOnA), bob, 1e18, evidence);
+        vault.deposit(address(tokenOnA), bob, 1e18, 0, evidence);
         vm.stopPrank();
         assertEq(gate.calls(), 1);
         assertEq(gate.lastEvidence(), evidence);
@@ -340,12 +350,12 @@ contract BridgeVaultTest is WithdrawalScenes {
         tokenOnA.approve(address(vault), 1e18);
         gate.setRefusing(true);
         vm.expectRevert(abi.encodeWithSelector(RecordingGate.GateRefused.selector, bytes("proof")));
-        vault.deposit(address(tokenOnA), bob, 1e18, "proof");
+        vault.deposit(address(tokenOnA), bob, 1e18, 0, "proof");
         assertEq(vault.depositCount(), 0);
         assertEq(tokenOnA.balanceOf(alice), 1e18);
         assertEq(tokenOnA.balanceOf(address(vault)), 0);
         gate.setRefusing(false);
-        vault.deposit(address(tokenOnA), bob, 1e18, "proof"); // control: the same call passes once the gate admits
+        vault.deposit(address(tokenOnA), bob, 1e18, 0, "proof"); // control: the same call passes once the gate admits
         vm.stopPrank();
         assertEq(vault.depositCount(), 1);
     }
@@ -359,32 +369,32 @@ contract BridgeVaultTest is WithdrawalScenes {
         vm.chainId(CHAIN_A);
         uint64 cutoff = uint64(block.timestamp + 100);
         BridgeVault vault = new BridgeVault(
-            address(lightClientForA), CHAIN_A, CHAIN_B, address(vaultB), _pair(address(tokenOnA), address(tokenOnB), 18), cutoff, DEFAULT_CAPELLA_ERA, address(gate)
+            address(lightClientForA), CHAIN_A, CHAIN_B, address(vaultB), _pair(address(tokenOnA), address(tokenOnB), 18), BridgeVault.DepositTerms(cutoff, address(0), address(0), 0, 0), DEFAULT_CAPELLA_ERA, address(gate)
         );
         MockERC20 unregistered = new MockERC20("Unregistered", "UNR");
         bytes memory refusal = abi.encodeWithSelector(RecordingGate.GateRefused.selector, bytes(""));
 
         gate.setRefusing(true);
         vm.expectRevert(refusal);
-        vault.deposit(address(unregistered), bob, 1e18, "");
+        vault.deposit(address(unregistered), bob, 1e18, 0, "");
         vm.expectRevert(refusal);
-        vault.deposit(address(tokenOnA), address(0), 1e18, "");
+        vault.deposit(address(tokenOnA), address(0), 1e18, 0, "");
         vm.expectRevert(refusal);
-        vault.deposit(address(tokenOnA), bob, 0, "");
+        vault.deposit(address(tokenOnA), bob, 0, 0, "");
         vm.warp(cutoff);
         vm.expectRevert(refusal);
-        vault.deposit(address(tokenOnA), bob, 1e18, "");
+        vault.deposit(address(tokenOnA), bob, 1e18, 0, "");
 
         gate.setRefusing(false); // control: with an admitting gate every check reports itself
         vm.expectRevert(abi.encodeWithSelector(BridgeVault.DepositCutoffReached.selector, cutoff));
-        vault.deposit(address(tokenOnA), bob, 1e18, "");
+        vault.deposit(address(tokenOnA), bob, 1e18, 0, "");
         vm.warp(cutoff - 1);
         vm.expectRevert(abi.encodeWithSelector(BridgeVault.UnsupportedToken.selector, address(unregistered)));
-        vault.deposit(address(unregistered), bob, 1e18, "");
+        vault.deposit(address(unregistered), bob, 1e18, 0, "");
         vm.expectRevert(BridgeVault.ZeroRecipient.selector);
-        vault.deposit(address(tokenOnA), address(0), 1e18, "");
+        vault.deposit(address(tokenOnA), address(0), 1e18, 0, "");
         vm.expectRevert(BridgeVault.ZeroAmount.selector);
-        vault.deposit(address(tokenOnA), bob, 0, "");
+        vault.deposit(address(tokenOnA), bob, 0, 0, "");
     }
 
     /// Claim: only registered tokens deposit. Shows: the cheap copy of a token (H-03) is refused with its address, and
@@ -396,7 +406,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         vm.startPrank(attacker);
         cheapCopy.approve(address(vaultA), 1e18);
         vm.expectRevert(abi.encodeWithSelector(BridgeVault.UnsupportedToken.selector, address(cheapCopy)));
-        vaultA.deposit(address(cheapCopy), attacker, 1e18, "");
+        vaultA.deposit(address(cheapCopy), attacker, 1e18, 0, "");
         vm.stopPrank();
 
         _depositOnA(alice, bob, 1e18); // honest path
@@ -410,7 +420,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         vm.startPrank(alice);
         tokenOnB.approve(address(vaultA), 1e18);
         vm.expectRevert(abi.encodeWithSelector(BridgeVault.UnsupportedToken.selector, address(tokenOnB)));
-        vaultA.deposit(address(tokenOnB), bob, 1e18, "");
+        vaultA.deposit(address(tokenOnB), bob, 1e18, 0, "");
         vm.stopPrank();
     }
 
@@ -422,10 +432,10 @@ contract BridgeVaultTest is WithdrawalScenes {
         vm.startPrank(alice);
         tokenOnA.approve(address(vaultA), 1e18);
         vm.expectRevert(BridgeVault.ZeroRecipient.selector);
-        vaultA.deposit(address(tokenOnA), address(0), 1e18, "");
+        vaultA.deposit(address(tokenOnA), address(0), 1e18, 0, "");
         vm.expectRevert(BridgeVault.ZeroAmount.selector);
-        vaultA.deposit(address(tokenOnA), bob, 0, "");
-        vaultA.deposit(address(tokenOnA), bob, 1e18, "");
+        vaultA.deposit(address(tokenOnA), bob, 0, 0, "");
+        vaultA.deposit(address(tokenOnA), bob, 1e18, 0, "");
         vm.stopPrank();
     }
 
@@ -436,12 +446,12 @@ contract BridgeVaultTest is WithdrawalScenes {
         tokenOnA.mint(alice, 1e18);
         vm.startPrank(alice);
         vm.expectRevert(abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, address(vaultA), 0, 1e18));
-        vaultA.deposit(address(tokenOnA), bob, 1e18, "");
+        vaultA.deposit(address(tokenOnA), bob, 1e18, 0, "");
         tokenOnA.approve(address(vaultA), 2e18);
         vm.expectRevert(abi.encodeWithSelector(IERC20Errors.ERC20InsufficientBalance.selector, alice, 1e18, 2e18));
-        vaultA.deposit(address(tokenOnA), bob, 2e18, "");
+        vaultA.deposit(address(tokenOnA), bob, 2e18, 0, "");
         assertEq(vaultA.depositCount(), 0);
-        vaultA.deposit(address(tokenOnA), bob, 1e18, ""); // honest path
+        vaultA.deposit(address(tokenOnA), bob, 1e18, 0, ""); // honest path
         assertEq(vaultA.depositCount(), 1);
         vm.stopPrank();
     }
@@ -454,7 +464,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         burn.mint(alice, 1e18);
         vm.prank(alice);
         vm.expectRevert(BridgeVault.NothingReceived.selector);
-        vault.deposit(address(burn), bob, 1e18, "");
+        vault.deposit(address(burn), bob, 1e18, 0, "");
     }
 
     /// Claim: a fee-on-transfer token deposits the received amount, not the requested amount. Shows: the event and
@@ -466,7 +476,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         vm.startPrank(alice);
         fee.approve(address(vault), 1000e18);
         vm.recordLogs();
-        vault.deposit(address(fee), bob, 1000e18, "");
+        vault.deposit(address(fee), bob, 1000e18, 0, "");
         vm.stopPrank();
         Vm.Log[] memory logs = vm.getRecordedLogs();
         (uint256 eventAmount,,) = abi.decode(logs[logs.length - 1].data, (uint256, bytes32, uint64));
@@ -484,7 +494,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         tokenOnA.approve(address(vaultA), 60e18);
         bytes32[] memory nonces = new bytes32[](60);
         for (uint256 i = 0; i < 60; i++) {
-            nonces[i] = vaultA.deposit(address(tokenOnA), bob, 1e18, "");
+            nonces[i] = vaultA.deposit(address(tokenOnA), bob, 1e18, 0, "");
             assertEq(nonces[i], keccak256(abi.encode(uint256(CHAIN_A), address(vaultA), i)));
         }
         vm.stopPrank();
@@ -515,11 +525,11 @@ contract BridgeVaultTest is WithdrawalScenes {
         token.mint(alice, 2e18);
         vm.startPrank(alice);
         token.approve(address(vault), 2e18);
-        token.arm(address(vault), abi.encodeCall(BridgeVault.deposit, (address(token), bob, 1, bytes(""))));
+        token.arm(address(vault), abi.encodeCall(BridgeVault.deposit, (address(token), bob, 1, uint16(0), bytes(""))));
         vm.expectRevert(ReentrancyGuard.ReentrancyGuardReentrantCall.selector);
-        vault.deposit(address(token), bob, 1e18, "");
+        vault.deposit(address(token), bob, 1e18, 0, "");
         token.arm(address(0), ""); // the revert undid the first disarm
-        vault.deposit(address(token), bob, 1e18, ""); // honest path
+        vault.deposit(address(token), bob, 1e18, 0, ""); // honest path
         vm.stopPrank();
         assertEq(vault.depositCount(), 1);
     }
@@ -530,7 +540,7 @@ contract BridgeVaultTest is WithdrawalScenes {
     /// is fine), and the payout reverts with `SafeERC20FailedOperation`, leaves the nonce unclaimed, and keeps the
     /// funds. Matters: H-13 (revision 1 ignored the return value and marked the claim paid).
     function test_H13_withdraw_returnsFalseTokenRevertsAndKeepsClaim() public {
-        ReturnsFalseToken bad = new ReturnsFalseToken("Bad", "BAD");
+        ReturnsFalseToken bad = ReturnsFalseToken(_deployAtDestinationToken("ReturnsFalseToken.sol:ReturnsFalseToken", abi.encode("Bad", "BAD")));
         BridgeVault vault = _vaultFor(address(bad), 18);
         bad.mint(address(vault), 100e18);
         ReceiptFixtures.Named memory named = ReceiptFixtures.type2();
@@ -545,12 +555,12 @@ contract BridgeVaultTest is WithdrawalScenes {
     /// The fixture amount is 3e18, and the 6-decimal token pays 3e18 base units of its own. Matters: H-13 (revision 1
     /// reverted on such tokens).
     function test_H13_noReturnTokenWorksBothWays() public {
-        NoReturnToken usdt = new NoReturnToken();
+        NoReturnToken usdt = NoReturnToken(_deployAtDestinationToken("NoReturnToken.sol:NoReturnToken", ""));
         BridgeVault vault = _vaultFor(address(usdt), 6);
         usdt.mint(alice, 50e6);
         vm.startPrank(alice);
         usdt.approve(address(vault), 50e6);
-        vault.deposit(address(usdt), bob, 50e6, "");
+        vault.deposit(address(usdt), bob, 50e6, 0, "");
         vm.stopPrank();
         assertEq(usdt.balanceOf(address(vault)), 50e6);
 
@@ -563,7 +573,7 @@ contract BridgeVaultTest is WithdrawalScenes {
     /// Claim: the storage guard stops a token that calls back into `withdraw` during the payout. Shows: the guard
     /// error bubbles up, and the claim stays open. Matters: H-13 (hostile token) and R2-10 (no TSTORE).
     function test_H13_withdraw_blocksReentrancyThroughToken() public {
-        ReentrantToken token = new ReentrantToken();
+        ReentrantToken token = ReentrantToken(_deployAtDestinationToken("HardenedMocks.sol:ReentrantToken", ""));
         BridgeVault vault = _vaultFor(address(token), 18);
         token.mint(address(vault), 100e18);
         ReceiptFixtures.Named memory named = ReceiptFixtures.type2();

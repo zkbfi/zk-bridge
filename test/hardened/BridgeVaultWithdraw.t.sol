@@ -5,6 +5,7 @@ import {console2} from "forge-std/console2.sol";
 import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
 import {BeaconBlockHeader, SSZ} from "../../src/hardened/SSZ.sol";
+import {MockERC20} from "../../src/mocks/MockERC20.sol";
 import {WithdrawalScenes} from "./utils/WithdrawalScenes.sol";
 import {ReceiptFixtures} from "./utils/ReceiptFixtures.sol";
 
@@ -572,15 +573,15 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
         tokenOnB.approve(address(closing), 10e18);
 
         vm.warp(cutoff - 1);
-        closing.deposit(address(tokenOnB), bob, 1e18, ""); // honest path
+        closing.deposit(address(tokenOnB), bob, 1e18, 0, ""); // honest path
 
         vm.warp(cutoff);
         vm.expectRevert(abi.encodeWithSelector(BridgeVault.DepositCutoffReached.selector, cutoff));
-        closing.deposit(address(tokenOnB), bob, 1e18, "");
+        closing.deposit(address(tokenOnB), bob, 1e18, 0, "");
 
         vm.warp(cutoff + 1 days);
         vm.expectRevert(abi.encodeWithSelector(BridgeVault.DepositCutoffReached.selector, cutoff));
-        closing.deposit(address(tokenOnB), bob, 1e18, "");
+        closing.deposit(address(tokenOnB), bob, 1e18, 0, "");
         vm.stopPrank();
         assertEq(closing.depositCount(), 1);
     }
@@ -619,6 +620,39 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
         assertEq(tokenOnB.balanceOf(address(second)), 100e18, "the second vault paid nothing");
 
         vault.withdraw(scene.proof); // control: the vault named in the deposit pays
+        _assertPaid(named);
+    }
+
+    // ================================================================ destination token (code review finding)
+
+    /// Claim: a deposit is payable only in the token that the depositing vault expects. Shows: the fixture deposit
+    /// names `tokenOnB`, the token that the depositing vault pairs with its own token. A destination vault with an
+    /// asymmetric table maps the same remote token to another local token. It refuses with `WrongDestinationToken`
+    /// naming the token it would pay and the token the log names, marks nothing, and pays nothing in either token. The
+    /// vault with the symmetric table pays the same deposit (control, after a state revert). Matters: before the event named the token, the
+    /// destination vault paid whatever its own table said, so two vaults with different tables paid the wrong token.
+    function test_destinationToken_asymmetricTablesRefuseTheDeposit() public {
+        ReceiptFixtures.Named memory named = ReceiptFixtures.type2();
+        uint256 symmetricState = vm.snapshotState();
+
+        MockERC20 other = new MockERC20("Other", "OTH");
+        BridgeVault.TokenPair[] memory pairs = new BridgeVault.TokenPair[](1);
+        pairs[0] = BridgeVault.TokenPair(address(other), ReceiptFixtures.REMOTE_TOKEN, 18);
+        BridgeVault asymmetric = _newDestinationVault(pairs, 0, DEFAULT_CAPELLA_ERA);
+        Scene memory scene = _scene(named, _defaultParams());
+        other.mint(address(asymmetric), 100e18);
+        tokenOnB.mint(address(asymmetric), 100e18);
+        assertEq(asymmetric.localTokenOf(ReceiptFixtures.REMOTE_TOKEN), address(other), "the table maps to the other token");
+
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.WrongDestinationToken.selector, address(other), address(tokenOnB)));
+        asymmetric.withdraw(scene.proof);
+        assertFalse(asymmetric.claimed(named.nonce), "nothing is marked");
+        assertEq(other.balanceOf(ReceiptFixtures.RECIPIENT), 0, "the wrong token is not paid");
+        assertEq(tokenOnB.balanceOf(ReceiptFixtures.RECIPIENT), 0, "the named token is not paid either");
+
+        // Control: back at the state of `setUp`, the vault with the symmetric table pays the same deposit.
+        vm.revertToState(symmetricState);
+        vault.withdraw(_scene(named, _defaultParams()).proof);
         _assertPaid(named);
     }
 

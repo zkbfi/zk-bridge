@@ -207,12 +207,14 @@ REMOTE_TOKEN = address(0x22)
 # The vault on the destination chain that may pay these deposits. The tests deploy their vault at this address.
 DESTINATION_VAULT = address(0x77)
 OTHER_DESTINATION_VAULT = address(0x88)
+# The token that the destination vault pays for REMOTE_TOKEN. The tests deploy their token on the destination chain here.
+DESTINATION_TOKEN = address(0x99)
 OTHER_EMITTER = address(0x33)
 UNREGISTERED_TOKEN = address(0x44)
 SENDER = address(0x55)
 RECIPIENT = address(0x66)
 TARGET_CHAIN = 369
-DEPOSIT_TOPIC = keccak256(b"DepositInitiated(address,address,address,uint256,bytes32,uint64,address)")
+DEPOSIT_TOPIC = keccak256(b"DepositInitiated(address,address,address,uint256,bytes32,uint64,address,address)")
 OTHER_TOPIC = keccak256(b"Unrelated(uint256)")
 
 
@@ -224,9 +226,9 @@ def pad_address(a):
     return b"\x00" * 12 + a
 
 
-def deposit_log(emitter, token, amount, nonce, target, destination=DESTINATION_VAULT):
+def deposit_log(emitter, token, amount, nonce, target, destination=DESTINATION_VAULT, destination_token=DESTINATION_TOKEN):
     return [emitter, [DEPOSIT_TOPIC, pad_address(token), pad_address(SENDER), pad_address(RECIPIENT)],
-            word(amount) + nonce + word(target) + pad_address(destination)]
+            word(amount) + nonce + word(target) + pad_address(destination) + pad_address(destination_token)]
 
 
 def other_log(emitter):
@@ -302,7 +304,7 @@ here = os.path.dirname(os.path.abspath(__file__))
 out_json = {
     "receiptsRoot": "0x" + root.hex(),
     "constants": {"remoteVault": "0x" + REMOTE_VAULT.hex(), "remoteToken": "0x" + REMOTE_TOKEN.hex(),
-                  "destinationVault": "0x" + DESTINATION_VAULT.hex(), "otherDestinationVault": "0x" + OTHER_DESTINATION_VAULT.hex(),
+                  "destinationVault": "0x" + DESTINATION_VAULT.hex(), "destinationToken": "0x" + DESTINATION_TOKEN.hex(), "otherDestinationVault": "0x" + OTHER_DESTINATION_VAULT.hex(),
                   "otherEmitter": "0x" + OTHER_EMITTER.hex(), "unregisteredToken": "0x" + UNREGISTERED_TOKEN.hex(),
                   "sender": "0x" + SENDER.hex(), "recipient": "0x" + RECIPIENT.hex(), "targetChainId": TARGET_CHAIN,
                   "depositTopic": "0x" + DEPOSIT_TOPIC.hex()},
@@ -331,6 +333,7 @@ lines.append("    bytes32 internal constant RECEIPTS_ROOT = 0x%s;" % root.hex())
 lines.append("    address internal constant REMOTE_VAULT = 0x%s;" % REMOTE_VAULT.hex())
 lines.append("    address internal constant REMOTE_TOKEN = 0x%s;" % REMOTE_TOKEN.hex())
 lines.append("    address internal constant DESTINATION_VAULT = 0x%s;" % DESTINATION_VAULT.hex())
+lines.append("    address internal constant DESTINATION_TOKEN = 0x%s;" % DESTINATION_TOKEN.hex())
 lines.append("    address internal constant OTHER_DESTINATION_VAULT = 0x%s;" % OTHER_DESTINATION_VAULT.hex())
 lines.append("    address internal constant OTHER_EMITTER = 0x%s;" % OTHER_EMITTER.hex())
 lines.append("    address internal constant UNREGISTERED_TOKEN = 0x%s;" % UNREGISTERED_TOKEN.hex())

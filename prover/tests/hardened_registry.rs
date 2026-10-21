@@ -43,7 +43,7 @@ fn latest_observed(bridge: &Bridge) -> ([u8; 4], u64) {
 
 /// The deposit call data on chain B with empty gate evidence (the gate in registry mode needs none on Shanghai).
 fn deposit_call(bridge: &Bridge) -> Vec<u8> {
-    deposit_calldata(bridge.token_b, RECIPIENT, alloy_primitives::U256::from(ONE_TOKEN), &[]).to_vec()
+    deposit_calldata(bridge.token_b, RECIPIENT, alloy_primitives::U256::from(ONE_TOKEN), 0, &[]).to_vec()
 }
 
 /// The selector of the revert of a deposit call made by the deployer, or `None` when the call would succeed. The

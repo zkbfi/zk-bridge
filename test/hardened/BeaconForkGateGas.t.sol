@@ -35,7 +35,7 @@ contract BeaconForkGateGasTest is GateSupport {
         vm.cool(BEACON_ROOTS);
         vm.prank(alice);
         uint256 before_ = gasleft();
-        vault.deposit(address(tokenOnA), bob, 1e18, evidence);
+        vault.deposit(address(tokenOnA), bob, 1e18, 0, evidence);
         used = before_ - gasleft();
     }
 

@@ -17,6 +17,8 @@ import {ReceiptLogs} from "./ReceiptLogs.sol";
 /// @notice One end of a two-chain bridge. It locks tokens on deposit and pays tokens against a direct proof of
 /// a deposit on the other chain. The vault checks the proof itself: no withdrawal zero-knowledge program exists.
 /// Only the light client uses a zero-knowledge proof. The vault has no owner, no refund, and no upgrade path.
+/// One role exists: the fee authority. It can set a deposit fee within an immutable ceiling, and it can give up that
+/// power for good. It cannot touch locked tokens, withdrawals, the light client, the gate or the layout table.
 /// @dev Fork layouts. The generalized indices of `state.block_roots`, of `state.historical_summaries` and of the
 /// execution block hash depend on the fork of the source chain. The vault holds no fixed table. Anyone may add a
 /// layout with `addBlockRootsLayout`, `addHistoricalSummariesLayout` and `addBlockHashLayout`. Two checks guard each
@@ -46,6 +48,21 @@ contract BridgeVault is ReentrancyGuard {
         address localToken;
         address remoteToken;
         uint8 remoteDecimals;
+    }
+
+    /// @notice The deposit terms at deployment: the cutoff and the fee switch.
+    /// @dev One struct, because a ninth constructor argument does not compile without the intermediate representation.
+    /// @param cutoffTimestamp Deposits revert from this timestamp on. Zero means no cutoff.
+    /// @param feeAuthority The fee authority. Zero removes the fee from the start: the fee and the ceiling must be zero.
+    /// @param feeRecipient The recipient of collected fees. It must not be zero when the fee is not zero.
+    /// @param feeBasisPoints The fee on deposits at the start. It must not exceed the ceiling.
+    /// @param feeCeilingBasisPoints The highest fee ever. It must not exceed `MAX_FEE_CEILING_BASIS_POINTS`.
+    struct DepositTerms {
+        uint64 cutoffTimestamp;
+        address feeAuthority;
+        address feeRecipient;
+        uint16 feeBasisPoints;
+        uint16 feeCeilingBasisPoints;
     }
 
     /// @notice A validated `block_roots` position and the state slots at which it was validated.
@@ -131,6 +148,7 @@ contract BridgeVault is ReentrancyGuard {
         bytes32 nonce;
         uint64 targetChainId;
         address destinationVault;
+        address destinationToken;
     }
 
     /// @notice The length of `state.block_roots`. A deposit block at most this far below its anchor uses the recent path.
@@ -146,7 +164,13 @@ contract BridgeVault is ReentrancyGuard {
     /// @notice The topic 0 of `DepositInitiated`. Withdrawals match logs against this value.
     /// @dev Solidity 0.8.28 rejects `DepositInitiated.selector` in a constant. A test pins this value to the selector.
     bytes32 public constant DEPOSIT_EVENT_TOPIC =
-        keccak256("DepositInitiated(address,address,address,uint256,bytes32,uint64,address)");
+        keccak256("DepositInitiated(address,address,address,uint256,bytes32,uint64,address,address)");
+
+    /// @notice The highest fee ceiling a vault accepts, in basis points (1%).
+    uint16 public constant MAX_FEE_CEILING_BASIS_POINTS = 100;
+
+    /// @notice The number of basis points in the whole amount.
+    uint256 public constant BASIS_POINTS_DENOMINATOR = 10_000;
 
     /// @dev The deepest accepted `block_roots` or `historical_summaries` position (the state container only).
     uint256 private constant MAX_BLOCK_ROOTS_DEPTH = 8;
@@ -176,6 +200,20 @@ contract BridgeVault is ReentrancyGuard {
 
     /// @notice A constructor argument is zero.
     error ZeroValue(string name);
+    /// @notice The fee ceiling is above `MAX_FEE_CEILING_BASIS_POINTS`.
+    error FeeCeilingTooHigh(uint16 ceiling, uint16 maximum);
+    /// @notice A vault with no fee authority must have a zero fee and a zero ceiling.
+    error NullifiedFeeMustBeZero(uint16 feeBasisPoints, uint16 feeCeilingBasisPoints);
+    /// @notice The fee is above the ceiling.
+    error FeeAboveCeiling(uint16 feeBasisPoints, uint16 feeCeilingBasisPoints);
+    /// @notice The caller is not the fee authority. After `nullifyFee` nobody is.
+    error NotFeeAuthority(address caller);
+    /// @notice A fee that is not zero needs a recipient.
+    error ZeroFeeRecipient();
+    /// @notice The fee is above the limit that the depositor accepts.
+    error FeeAboveLimit(uint16 feeBasisPoints, uint16 maxFeeBasisPoints);
+    /// @notice No fees are waiting for collection in this token.
+    error NoFeesAccrued(address token);
     /// @notice The local chain identifier differs from `block.chainid`.
     error LocalChainIdMismatch(uint64 configured, uint256 actual);
     /// @notice The remote chain is the local chain.
@@ -249,6 +287,8 @@ contract BridgeVault is ReentrancyGuard {
     error WrongTargetChain(uint64 expected, uint64 actual);
     /// @notice The deposit is addressed to another vault than this one.
     error WrongDestinationVault(address expected, address actual);
+    /// @notice The deposit names another token than the one this vault pays for the deposited token.
+    error WrongDestinationToken(address expected, address actual);
     /// @notice The deposit was already claimed.
     error AlreadyClaimed(bytes32 depositNonce);
 
@@ -261,8 +301,22 @@ contract BridgeVault is ReentrancyGuard {
     /// @notice Emitted when a validated `historical_summaries` position is added or its validated range grows.
     event HistoricalSummariesLayoutValidated(uint256 indexed historicalSummariesGindex, uint64 firstSlot, uint64 lastSlot);
 
-    /// @notice Emitted on deposit with the amount the vault received. `destinationVault` is the vault on the other
-    /// chain that may pay this deposit: the `remoteVault` of the emitting vault. Another vault refuses the deposit.
+    /// @notice Emitted when the fee authority sets the fee.
+    event FeeChanged(uint16 feeBasisPoints, address feeRecipient);
+
+    /// @notice Emitted when the fee authority gives up its power. The fee is zero from then on, for good.
+    event FeeNullified();
+
+    /// @notice Emitted when a deposit is charged a fee. The fee stays in the vault until `collectFees`.
+    event FeeCharged(address indexed token, uint256 fee);
+
+    /// @notice Emitted when accrued fees are sent to the fee recipient.
+    event FeesCollected(address indexed token, address indexed feeRecipient, uint256 amount);
+
+    /// @notice Emitted on deposit with the amount the vault received, less the fee. `destinationVault` is the vault
+    /// on the other chain that may pay this deposit: the `remoteVault` of the emitting vault. Another vault refuses
+    /// the deposit. `destinationToken` is the token that vault must pay: the `remoteTokenOf` entry of `token`. A vault
+    /// whose table maps `token` to another local token refuses the deposit.
     event DepositInitiated(
         address indexed token,
         address indexed sender,
@@ -270,7 +324,8 @@ contract BridgeVault is ReentrancyGuard {
         uint256 amount,
         bytes32 nonce,
         uint64 targetChainId,
-        address destinationVault
+        address destinationVault,
+        address destinationToken
     );
 
     /// @notice Emitted when a withdrawal pays out. `depositBlockHash` is the execution block that holds the deposit.
@@ -298,6 +353,8 @@ contract BridgeVault is ReentrancyGuard {
     uint64 public immutable capellaEra;
     /// @notice The gate that `deposit` calls first. It refuses a deposit the route cannot deliver.
     IDepositGate public immutable depositGate;
+    /// @notice The highest fee in basis points that the fee authority can ever set. At most 100 (1%).
+    uint16 public immutable feeCeilingBasisPoints;
 
     /// @notice The number of deposits so far. It feeds the nonce.
     uint256 public depositCount;
@@ -312,12 +369,23 @@ contract BridgeVault is ReentrancyGuard {
     BodyLayout[] private _bodyLayouts;
     HistoricalLayout[] private _historicalLayouts;
 
+
+    // The fee state follows the layout tables, so the earlier storage slots keep their place.
+    /// @notice The only role: it sets the fee within the ceiling. Zero means the fee was removed for good.
+    address public feeAuthority;
+    /// @notice The fee on each new deposit, in basis points.
+    uint16 public feeBasisPoints;
+    /// @notice The recipient of collected fees.
+    address public feeRecipient;
+    /// @notice The fees charged and not yet collected, for each local token.
+    mapping(address localToken => uint256) public accruedFees;
+
     /// @param lightClient_ The light client of the remote chain.
     /// @param localChainId_ The identifier of this chain. It must equal `block.chainid`.
     /// @param remoteChainId_ The identifier of the other chain.
     /// @param remoteVault_ The vault on the other chain.
     /// @param pairs The registered token pairs. The remote decimals are the deployer's claim.
-    /// @param depositCutoffTimestamp_ Deposits revert from this timestamp on. Zero means no cutoff.
+    /// @param depositTerms The deposit cutoff and the fee switch. See `DepositTerms`.
     /// @param capellaEra_ `floor(capellaForkSlot / 8192)` of the remote chain. The deploy script checks it.
     /// @param depositGate_ The deposit gate. It must not be the zero address.
     constructor(
@@ -326,7 +394,7 @@ contract BridgeVault is ReentrancyGuard {
         uint64 remoteChainId_,
         address remoteVault_,
         TokenPair[] memory pairs,
-        uint64 depositCutoffTimestamp_,
+        DepositTerms memory depositTerms,
         uint64 capellaEra_,
         address depositGate_
     ) {
@@ -337,14 +405,25 @@ contract BridgeVault is ReentrancyGuard {
         if (localChainId_ != block.chainid) revert LocalChainIdMismatch(localChainId_, block.chainid);
         if (remoteChainId_ == localChainId_) revert RemoteChainIsLocalChain();
         if (pairs.length == 0) revert NoTokenPairs();
+        if (depositTerms.feeCeilingBasisPoints > MAX_FEE_CEILING_BASIS_POINTS) {
+            revert FeeCeilingTooHigh(depositTerms.feeCeilingBasisPoints, MAX_FEE_CEILING_BASIS_POINTS);
+        }
+        if (depositTerms.feeAuthority == address(0) && (depositTerms.feeBasisPoints != 0 || depositTerms.feeCeilingBasisPoints != 0)) {
+            revert NullifiedFeeMustBeZero(depositTerms.feeBasisPoints, depositTerms.feeCeilingBasisPoints);
+        }
+        _requireFeeTerms(depositTerms.feeBasisPoints, depositTerms.feeRecipient, depositTerms.feeCeilingBasisPoints);
 
         lightClient = IBeaconLightClient(lightClient_);
         localChainId = localChainId_;
         remoteChainId = remoteChainId_;
         remoteVault = remoteVault_;
-        depositCutoffTimestamp = depositCutoffTimestamp_;
+        depositCutoffTimestamp = depositTerms.cutoffTimestamp;
         capellaEra = capellaEra_;
         depositGate = IDepositGate(depositGate_);
+        feeCeilingBasisPoints = depositTerms.feeCeilingBasisPoints;
+        feeAuthority = depositTerms.feeAuthority;
+        feeBasisPoints = depositTerms.feeBasisPoints;
+        feeRecipient = depositTerms.feeRecipient;
 
         for (uint256 i = 0; i < pairs.length; i++) {
             _registerPair(pairs[i]);
@@ -353,13 +432,15 @@ contract BridgeVault is ReentrancyGuard {
 
     /// @notice Locks tokens and emits the deposit event. The target is always the remote chain.
     /// @dev The gate runs first. A gate that reverts refuses the deposit, with the tokens still in the wallet of the user.
-    /// The event carries the amount the vault received, which differs from `amount` for a fee-on-transfer token.
+    /// The vault charges the fee on the amount it received, rounded down, and keeps it in `accruedFees`. The event
+    /// carries the amount the vault received less the fee. That amount differs from `amount` for a fee-on-transfer token.
     /// @param token The local token.
     /// @param recipient The recipient on the remote chain.
     /// @param amount The amount to pull from the caller.
+    /// @param maxFeeBasisPoints The highest fee the caller accepts. A fee raised just before this call cannot exceed it.
     /// @param gateEvidence The evidence for the deposit gate. Empty when the gate needs none.
     /// @return nonce The unique deposit nonce.
-    function deposit(address token, address recipient, uint256 amount, bytes calldata gateEvidence)
+    function deposit(address token, address recipient, uint256 amount, uint16 maxFeeBasisPoints, bytes calldata gateEvidence)
         external
         nonReentrant
         returns (bytes32 nonce)
@@ -368,17 +449,47 @@ contract BridgeVault is ReentrancyGuard {
         if (depositCutoffTimestamp != 0 && block.timestamp >= depositCutoffTimestamp) {
             revert DepositCutoffReached(depositCutoffTimestamp);
         }
-        if (remoteTokenOf[token] == address(0)) revert UnsupportedToken(token);
+        address destinationToken = remoteTokenOf[token];
+        if (destinationToken == address(0)) revert UnsupportedToken(token);
+        if (feeBasisPoints > maxFeeBasisPoints) revert FeeAboveLimit(feeBasisPoints, maxFeeBasisPoints);
         if (recipient == address(0)) revert ZeroRecipient();
         if (amount == 0) revert ZeroAmount();
 
-        uint256 balanceBefore = IERC20(token).balanceOf(address(this));
-        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
-        uint256 received = IERC20(token).balanceOf(address(this)) - balanceBefore;
-        if (received == 0) revert NothingReceived();
+        return _recordDeposit(token, recipient, _pull(token, amount), destinationToken);
+    }
 
-        nonce = keccak256(abi.encode(block.chainid, address(this), depositCount++));
-        emit DepositInitiated(token, msg.sender, recipient, received, nonce, remoteChainId, remoteVault);
+    /// @notice Sets the fee on new deposits and the recipient of collected fees. Only the fee authority may call it.
+    /// @param basisPoints The new fee. It must not exceed `feeCeilingBasisPoints`.
+    /// @param recipient The new recipient. It must not be zero when the fee is not zero.
+    function setFee(uint16 basisPoints, address recipient) external {
+        _requireFeeAuthority();
+        _requireFeeTerms(basisPoints, recipient, feeCeilingBasisPoints);
+        feeBasisPoints = basisPoints;
+        feeRecipient = recipient;
+        emit FeeChanged(basisPoints, recipient);
+    }
+
+    /// @notice Sets the fee to zero and gives up the fee authority. This cannot be undone. Only the fee authority may
+    /// call it. `feeRecipient` stays, so it can still collect the fees already charged.
+    function nullifyFee() external {
+        _requireFeeAuthority();
+        feeBasisPoints = 0;
+        feeAuthority = address(0);
+        emit FeeNullified();
+    }
+
+    /// @notice Sends the accrued fees of a token to the fee recipient. Anyone may call it.
+    /// @dev The balance is zeroed before the transfer. A deposit never transfers to the recipient, so a recipient that
+    /// a token refuses blocks this call only.
+    /// @param token The local token.
+    function collectFees(address token) external nonReentrant {
+        uint256 amount = accruedFees[token];
+        if (amount == 0) revert NoFeesAccrued(token);
+        address recipient = feeRecipient;
+        if (recipient == address(0)) revert ZeroFeeRecipient();
+        accruedFees[token] = 0;
+        IERC20(token).safeTransfer(recipient, amount);
+        emit FeesCollected(token, recipient, amount);
     }
 
     /// @notice Pays a deposit that was made on the remote vault, given direct evidence.
@@ -387,7 +498,7 @@ contract BridgeVault is ReentrancyGuard {
     /// `state.block_roots` of the anchor (distance up to 8192) or in a `historical_summaries` era (more).
     /// 4: the execution block hash is in the deposit header body. 5: the execution header hashes to that block hash.
     /// 6: the receipt is in the receipts trie and succeeded. 7: the log is a deposit log of the remote vault for this
-    /// chain and this vault, for a registered token, and is unclaimed. 8: state changes, then the transfer.
+    /// chain and this vault, for a registered token that this vault pays under the token the log names, and is unclaimed. 8: state changes, then the transfer.
     /// @param proof The evidence.
     function withdraw(WithdrawalProof calldata proof) external nonReentrant {
         _requireStoredAnchor(proof.anchorHeader);
@@ -403,6 +514,7 @@ contract BridgeVault is ReentrancyGuard {
         if (found.destinationVault != address(this)) revert WrongDestinationVault(address(this), found.destinationVault);
         address localToken = localTokenOf[found.token];
         if (localToken == address(0)) revert UnsupportedRemoteToken(found.token);
+        if (found.destinationToken != localToken) revert WrongDestinationToken(localToken, found.destinationToken);
         if (claimed[found.nonce]) revert AlreadyClaimed(found.nonce);
 
         claimed[found.nonce] = true;
@@ -706,10 +818,10 @@ contract BridgeVault is ReentrancyGuard {
         if (topics.length != 4) revert MalformedLog();
 
         bytes memory data = RLPReader.readBytes(logFields[2]);
-        if (data.length != 128) revert MalformedLog();
+        if (data.length != 160) revert MalformedLog();
         found.token = _toAddress(RLPReader.readBytes(topics[1]));
         found.recipient = _toAddress(RLPReader.readBytes(topics[3]));
-        (found.amount, found.nonce, found.targetChainId, found.destinationVault) = _decodeData(data);
+        _decodeData(data, found);
     }
 
     /// @dev Strips the EIP-2718 type byte. Legacy receipts start with a list prefix (at least 0xc0).
@@ -725,18 +837,19 @@ contract BridgeVault is ReentrancyGuard {
         return payload;
     }
 
-    function _decodeData(bytes memory data)
-        private
-        pure
-        returns (uint256 amount, bytes32 nonce, uint64 target, address destinationVault)
-    {
-        uint256 targetWide;
-        uint256 destinationWide;
-        (amount, nonce, targetWide, destinationWide) = abi.decode(data, (uint256, bytes32, uint256, uint256));
+    /// @dev Decodes the five data words into `found`: amount, nonce, target chain, destination vault, destination token.
+    /// The address and chain words must fit their types.
+    function _decodeData(bytes memory data, Deposit memory found) private pure {
+        (uint256 amount, bytes32 nonce, uint256 targetWide, uint256 destinationWide, uint256 tokenWide) =
+            abi.decode(data, (uint256, bytes32, uint256, uint256, uint256));
         if (targetWide > type(uint64).max) revert MalformedLog();
         if (destinationWide > type(uint160).max) revert MalformedLog();
-        target = uint64(targetWide);
-        destinationVault = address(uint160(destinationWide));
+        if (tokenWide > type(uint160).max) revert MalformedLog();
+        found.amount = amount;
+        found.nonce = nonce;
+        found.targetChainId = uint64(targetWide);
+        found.destinationVault = address(uint160(destinationWide));
+        found.destinationToken = address(uint160(tokenWide));
     }
 
     function _toBytes32(bytes memory value) private pure returns (bytes32) {
@@ -768,6 +881,43 @@ contract BridgeVault is ReentrancyGuard {
     }
 
     // ------------------------------------------------------------------ constructor helpers
+
+    /// @dev Pulls `amount` from the caller and returns the amount the vault received.
+    function _pull(address token, uint256 amount) private returns (uint256 received) {
+        uint256 balanceBefore = IERC20(token).balanceOf(address(this));
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+        received = IERC20(token).balanceOf(address(this)) - balanceBefore;
+        if (received == 0) revert NothingReceived();
+    }
+
+    /// @dev Books the fee on `received`, rounded down, then emits the deposit with the net amount. The fee is at most
+    /// 1% of a non-zero amount, so the net amount is never zero.
+    function _recordDeposit(address token, address recipient, uint256 received, address destinationToken)
+        private
+        returns (bytes32 nonce)
+    {
+        uint256 fee = received * feeBasisPoints / BASIS_POINTS_DENOMINATOR;
+        if (fee != 0) {
+            accruedFees[token] += fee;
+            emit FeeCharged(token, fee);
+        }
+        nonce = keccak256(abi.encode(block.chainid, address(this), depositCount++));
+        emit DepositInitiated(
+            token, msg.sender, recipient, received - fee, nonce, remoteChainId, remoteVault, destinationToken
+        );
+    }
+
+    /// @dev Only the fee authority passes. A zero authority is a nullified fee, and then nobody passes.
+    function _requireFeeAuthority() private view {
+        address authority = feeAuthority;
+        if (authority == address(0) || msg.sender != authority) revert NotFeeAuthority(msg.sender);
+    }
+
+    /// @dev A fee must stay within the ceiling and, when it is not zero, have a recipient.
+    function _requireFeeTerms(uint16 basisPoints, address recipient, uint16 ceiling) private pure {
+        if (basisPoints > ceiling) revert FeeAboveCeiling(basisPoints, ceiling);
+        if (basisPoints != 0 && recipient == address(0)) revert ZeroFeeRecipient();
+    }
 
     /// @dev Registers one pair after it checks the code, the decimals, and the uniqueness.
     function _registerPair(TokenPair memory pair) private {

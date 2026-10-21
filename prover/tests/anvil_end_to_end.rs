@@ -157,7 +157,7 @@ fn an_enforcing_gate_takes_the_built_evidence_once_per_epoch() {
     let amount = ONE_TOKEN;
     chain.send(Some(bridge.token_a), &TokenContract::mintCall { to: DEPLOYER, amount: U256::from(10 * amount) }.abi_encode());
     chain.send(Some(bridge.token_a), &TokenContract::approveCall { spender: bridge.vault_a, amount: U256::from(10 * amount) }.abi_encode());
-    let call = |evidence: &[u8]| deposit_calldata(bridge.token_a, RECIPIENT, U256::from(amount), evidence);
+    let call = |evidence: &[u8]| deposit_calldata(bridge.token_a, RECIPIENT, U256::from(amount), 0, evidence);
 
     let enforcing = chain.call(bridge.gate_a, &GateContract::enforcingCall {}.abi_encode()).unwrap();
     assert_eq!(enforcing.last(), Some(&1), "chain A starts enforcing");
@@ -217,7 +217,7 @@ fn a_detecting_gate_admits_deposits_without_evidence() {
     let evidence = gate_evidence_for_deposit(&client_of(chain), bridge.gate_b, &source).unwrap();
     assert!(evidence.is_empty());
     assert_eq!(source.requests.load(std::sync::atomic::Ordering::SeqCst), 0);
-    chain.send(Some(bridge.vault_b), &deposit_calldata(bridge.token_b, RECIPIENT, U256::from(amount), &evidence));
+    chain.send(Some(bridge.vault_b), &deposit_calldata(bridge.token_b, RECIPIENT, U256::from(amount), 0, &evidence));
     let enforcing = chain.call(bridge.gate_b, &GateContract::enforcingCall {}.abi_encode()).unwrap();
     assert_eq!(enforcing.last(), Some(&0), "the gate is still detecting");
     assert_eq!(confirmed_epoch(chain, bridge.gate_b), (0, false));

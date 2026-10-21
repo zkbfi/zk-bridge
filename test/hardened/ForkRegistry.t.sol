@@ -421,7 +421,7 @@ contract ForkRegistryTest is GateSupport {
         vm.startPrank(alice);
         tokenOnA.approve(address(vault), 1e18);
         vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.UnsupportedObservedVersion.selector, UNKNOWN_FORK, _head() + 100));
-        vault.deposit(address(tokenOnA), bob, 1e18, "");
+        vault.deposit(address(tokenOnA), bob, 1e18, 0, "");
         vm.stopPrank();
         assertEq(tokenOnA.balanceOf(alice), 1e18, "the tokens stay in the wallet");
 

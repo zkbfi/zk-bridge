@@ -8,6 +8,7 @@ import {BeaconForkGate} from "../../../src/hardened/BeaconForkGate.sol";
 import {OracleSP1Verifier} from "../../../src/mocks/OracleSP1Verifier.sol";
 import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {HardenedProofs} from "./HardenedProofs.sol";
+import {ReceiptFixtures} from "./ReceiptFixtures.sol";
 
 /// @title HardenedFixture
 /// @notice One Foundry chain plays both roles. `vaultA` has chain id 1 and `vaultB` has chain id 369.
@@ -48,7 +49,9 @@ abstract contract HardenedFixture is HardenedProofs {
         lightClientForA = _newLightClient(GENESIS_ROOT_B, COMMITTEE_101);
         lightClientForB = _newLightClient(GENESIS_ROOT_A, COMMITTEE_101);
         tokenOnA = new MockERC20("Token on A", "TKA");
-        tokenOnB = new MockERC20("Token on B", "TKB");
+        // The fixture receipts name this address as the token that the destination vault pays.
+        deployCodeTo("MockERC20.sol:MockERC20", abi.encode("Token on B", "TKB"), ReceiptFixtures.DESTINATION_TOKEN);
+        tokenOnB = MockERC20(ReceiptFixtures.DESTINATION_TOKEN);
 
         BridgeVault.TokenPair[] memory pairsA = new BridgeVault.TokenPair[](1);
         pairsA[0] = BridgeVault.TokenPair(address(tokenOnA), address(tokenOnB), 18);
@@ -62,11 +65,11 @@ abstract contract HardenedFixture is HardenedProofs {
         address predictedVaultB = vm.computeCreateAddress(address(this), vm.getNonce(address(this)) + 1);
         vm.chainId(CHAIN_A);
         vaultA = new BridgeVault(
-            address(lightClientForA), CHAIN_A, CHAIN_B, predictedVaultB, pairsA, 0, DEFAULT_CAPELLA_ERA, address(gateA)
+            address(lightClientForA), CHAIN_A, CHAIN_B, predictedVaultB, pairsA, BridgeVault.DepositTerms(0, address(0), address(0), 0, 0), DEFAULT_CAPELLA_ERA, address(gateA)
         );
         vm.chainId(CHAIN_B);
         vaultB = new BridgeVault(
-            address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairsB, 0, DEFAULT_CAPELLA_ERA, address(gateB)
+            address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairsB, BridgeVault.DepositTerms(0, address(0), address(0), 0, 0), DEFAULT_CAPELLA_ERA, address(gateB)
         );
         require(address(vaultB) == predictedVaultB, "fixture: vaultB address prediction failed");
     }
@@ -110,7 +113,7 @@ abstract contract HardenedFixture is HardenedProofs {
         vm.recordLogs();
         vm.startPrank(user);
         IMintableToken(token).approve(address(vault), amount);
-        vault.deposit(token, recipient, amount, "");
+        vault.deposit(token, recipient, amount, 0, "");
         vm.stopPrank();
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i = 0; i < logs.length; i++) {

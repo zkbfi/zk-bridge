@@ -31,7 +31,7 @@ fn r2_05_hardened_typed_transaction_receipts_withdraw() {
     let mut made = Vec::new();
     for (transaction_type, amount) in [(2u8, ONE_TOKEN), (1, 2 * ONE_TOKEN), (0, 4 * ONE_TOKEN)] {
         let evidence = gate_evidence(chain, bridge.gate_a);
-        let calldata = deposit_calldata(bridge.token_a, RECIPIENT, U256::from(amount), &evidence);
+        let calldata = deposit_calldata(bridge.token_a, RECIPIENT, U256::from(amount), 0, &evidence);
         let receipt = chain.send_typed(bridge.vault_a, &calldata, transaction_type);
         assert_eq!(receipt["type"].as_str().unwrap(), format!("{transaction_type:#x}"), "the chain mined a type {transaction_type} transaction");
         made.push((transaction_type, amount, made_deposit(receipt)));
@@ -77,8 +77,8 @@ fn r2_06_hardened_two_deposits_in_one_transaction_both_withdraw_by_log_index() {
     let calls = vec![
         (bridge.token_a, TokenContract::mintCall { to: batch, amount: total }.abi_encode()),
         (bridge.token_a, TokenContract::approveCall { spender: bridge.vault_a, amount: total }.abi_encode()),
-        (bridge.vault_a, deposit_calldata(bridge.token_a, RECIPIENT, U256::from(first_amount), &evidence).to_vec()),
-        (bridge.vault_a, deposit_calldata(bridge.token_a, RECIPIENT, U256::from(second_amount), &[]).to_vec()),
+        (bridge.vault_a, deposit_calldata(bridge.token_a, RECIPIENT, U256::from(first_amount), 0, &evidence).to_vec()),
+        (bridge.vault_a, deposit_calldata(bridge.token_a, RECIPIENT, U256::from(second_amount), 0, &[]).to_vec()),
     ];
     let receipt = chain.send(Some(batch), &batch_calldata(&calls));
     let indices = deposit_log_indices(&receipt);

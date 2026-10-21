@@ -50,6 +50,9 @@ pub struct VerifiedDeposit {
     pub target_chain_id: u64,
     /// The vault on the verifying chain that the deposit is addressed to.
     pub destination_vault: Address,
+    /// The token on the verifying chain that the depositing vault expects the destination vault to pay. The vault
+    /// compares it with its own token table; that table is vault state and outside this function.
+    pub destination_token: Address,
     /// Execution block hash of the deposit block.
     pub deposit_block_hash: B256,
 }
@@ -125,6 +128,7 @@ pub fn verify_withdrawal(
         nonce: event.nonce,
         target_chain_id: event.targetChainId,
         destination_vault: event.destinationVault,
+        destination_token: event.destinationToken,
         deposit_block_hash,
     })
 }

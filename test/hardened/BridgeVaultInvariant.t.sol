@@ -68,7 +68,7 @@ contract SolvencyHandler is Test {
         localToken.mint(user, amount);
         vm.startPrank(user);
         localToken.approve(address(vault), amount);
-        vault.deposit(address(localToken), user, amount, "");
+        vault.deposit(address(localToken), user, amount, 0, "");
         vm.stopPrank();
         fundedLiquidity += amount;
     }

@@ -125,13 +125,13 @@ struct LightClientOutput {
 
 ### `src/hardened/BridgeVault.sol`
 
-Event (3 indexed parameters, fixes R2-01). It has a final `destinationVault` parameter that revision 1 did not have, so its signature and topic 0 differ from revision 1. The log data is 128 bytes: `amount`, `nonce`, `targetChainId`, `destinationVault`, each padded to 32 bytes. The source vault emits its immutable `remoteVault` as `destinationVault`. The destination vault's `withdraw` requires `destinationVault == address(this)`:
+Event (3 indexed parameters, fixes R2-01). It has final `destinationVault` and `destinationToken` parameters that revision 1 did not have, so its signature and topic 0 differ from revision 1. The log data is 160 bytes: `amount`, `nonce`, `targetChainId`, `destinationVault`, `destinationToken`, each padded to 32 bytes. The source vault emits its immutable `remoteVault` as `destinationVault`. The destination vault's `withdraw` requires `destinationVault == address(this)`. The source vault emits `remoteTokenOf[token]` as `destinationToken`. The destination vault requires it to equal the local token that it would pay (see "Destination token binding" at the end of this file):
 
 ```solidity
-event DepositInitiated(address indexed token, address indexed sender, address indexed recipient, uint256 amount, bytes32 nonce, uint64 targetChainId, address destinationVault);
+event DepositInitiated(address indexed token, address indexed sender, address indexed recipient, uint256 amount, bytes32 nonce, uint64 targetChainId, address destinationVault, address destinationToken);
 ```
 
-The signature string is `DepositInitiated(address,address,address,uint256,bytes32,uint64,address)`. Topic 0 is `0x490f9589cc06e81cb4598bee88e655c90baac92e928ba51146f4ba2c16fa69da`.
+The signature string is `DepositInitiated(address,address,address,uint256,bytes32,uint64,address,address)`. Topic 0 is `0x2d8b36b0632a230eea6da357dbb14a954a4a3101fb64d1567778dc4bf2a25cd0`.
 
 Expose `bytes32 public constant DEPOSIT_EVENT_TOPIC = DepositInitiated.selector;` so tests can compare it with the circuit's constant (fixes R2-02).
 
@@ -542,7 +542,7 @@ A PulseChain consensus fork almost always arrives with an execution fork, and th
   - Each opcode path runs alone, an unknown selector fails, and the first canary in enum order wins.
   - A probe that consumes all forwarded gas still costs at most the bound.
 
-## Deposit fee switch (user decision, 2026-10-21)
+## Deposit fee switch (user decision, 2026-10-21) (built)
 
 The user expects a fee in the future. Each vault gets a fee switch that is off by default and can be removed for good, either at deployment or at any time after launch.
 
@@ -571,3 +571,32 @@ The user expects a fee in the future. Each vault gets a fee switch that is off b
 - **Collection:** a recipient that the token refuses blocks only `collectFees`, never `deposit`.
 - **Accounting:** a fee-on-transfer token is charged on the measured amount. A withdrawal of the net amount works end to end, and the vault balance covers withdrawals plus accrued fees.
 - **Gas:** measured with a fee of zero and with a fee set.
+
+**As built.**
+- **Constructor shape:** the vault takes one `DepositTerms` struct in place of `depositCutoffTimestamp`. It holds `cutoffTimestamp`, `feeAuthority`, `feeRecipient`, `feeBasisPoints` and `feeCeilingBasisPoints`. A ninth constructor argument does not compile without the intermediate representation (stack too deep).
+- **Extra guards:** a zero authority never passes the authority check, so no caller can use the zero address. `collectFees` reverts with `NoFeesAccrued` when nothing is waiting, and with `ZeroFeeRecipient` when the recipient is zero.
+- **Storage:** the fee state sits after the layout tables, so the earlier storage slots keep their place.
+- **Tests:** `test/hardened/BridgeVaultFee.t.sol` holds every test above. `prover/tests/hardened_happy_path.rs` shows a deposit with a fee, the proof, and the payout of the net amount on the other chain.
+- **Gas, deposit:** 85,303 before the fee switch. 88,312 with the fee at zero (3,009 more). 112,051 with a fee of 25 basis points (26,748 more: one new storage slot and one event). All are first deposits with cold storage.
+- **Gas, withdraw:** 393,325 before for a recent withdrawal, 402,770 after. For a historical withdrawal, 424,950 before and 434,428 after. About 8,500 of the increase comes from the receipt parser, which copies the log data byte by byte. The log is 32 bytes longer (see below).
+
+## Destination token binding (code review finding)
+
+Before this change, `withdraw` mapped the token of the remote log through the local table only. Two vaults with different tables paid the wrong token.
+
+- **Event:** `DepositInitiated` has a new last field, `destinationToken`. The source vault sets it to `remoteTokenOf[token]`, the token that it expects the destination vault to pay.
+- **Withdraw:** the vault reads the token of the log, maps it to its local token, and requires `destinationToken` to equal that local token. Otherwise it reverts with `WrongDestinationToken(expected, actual)`. `expected` is the local token, and `actual` is the token in the log.
+- **Order of checks:** target chain, destination vault, registered remote token, destination token, claimed nonce.
+- **Decoders:** the log data is 160 bytes. A log of the older 96-byte or 128-byte shape is malformed. The Rust decoders in `prover/src/light_client.rs` and `light-client/crates/lc-core` read the new field. The reference function `verify_withdrawal` reports it as `destination_token`. It does not compare it, because the token table is vault state.
+- **Fixtures:** `generate_receipts.py` and `write-withdrawal-fixtures` write the new field. The receipt fixtures name `DESTINATION_TOKEN` (`0x99…99`). The tests deploy their destination token at that address.
+- **Test:** `test_destinationToken_asymmetricTablesRefuseTheDeposit` rebuilds the destination vault with a table that maps the remote token to another local token. The withdrawal reverts with `WrongDestinationToken`, and nothing is paid. The symmetric vault pays the same deposit. With the check removed, the test fails.
+
+## Verifier pinning in the deploy script (comparison finding)
+
+The script used to check only that the verifier address has code. An address with other code would pass.
+
+- **Config:** each chain has a `verifierCodeHash` field. It is the `extcodehash` that the operator expects, for example from `cast codehash <verifier> --rpc-url <chain>`. The field must not be a placeholder or zero.
+- **Check:** `assertChainEnvironment` compares `verifier.codehash` with the field. A difference reverts with `VerifierCodeHashMismatch(chainId, verifier, expected, actual)`.
+- **Timing:** the check runs before the script broadcasts anything, in `_inspectChain` and again at the start of `deployChain`.
+- **Fee fields:** each chain also has a `fee` object with `authority`, `recipient`, `basisPoints` and `ceilingBasisPoints`. The example config uses a zero authority, which removes the fee from the start. The script reads the fee fields back from each vault after deployment.
+- **Tests:** `test/hardened/DeployBridge.t.sol` has a passing case, a case with a wrong hash, and a case with other code at the pinned address. `prover/tests/hardened_deployment.rs` runs the script against two live chains. The honest run uses the real hashes and passes. A run with a wrong hash on either chain stops before any transaction.

@@ -205,6 +205,8 @@ pub struct DepositEvent {
     pub target_chain_id: u64,
     /// The vault on the destination chain that the deposit is addressed to.
     pub destination_vault: Address,
+    /// The token on the destination chain that the depositing vault expects the destination vault to pay.
+    pub destination_token: Address,
 }
 
 /// Decodes a `DepositInitiated` log from its topics and data.
@@ -225,6 +227,7 @@ pub fn decode_deposit(topics: &[B256], data: &[u8]) -> Result<DepositEvent> {
         nonce: event.nonce,
         target_chain_id: event.targetChainId,
         destination_vault: event.destinationVault,
+        destination_token: event.destinationToken,
     })
 }
 
@@ -841,20 +844,22 @@ pub(crate) mod test_support {
 mod tests {
     use super::*;
 
-    /// Claim: the deposit topic equals the real signature hash `0x9bab...eaf5`, not a hardcoded wrong constant.
+    /// Claim: the deposit topic equals the real signature hash `0x2d8b...5cd0`, not a hardcoded wrong constant.
     /// Why it matters: the scanner filters logs on this topic; a wrong one finds no deposit.
     #[test]
     fn deposit_topic_is_the_signature_hash() {
-        assert_eq!(DEPOSIT_EVENT_TOPIC, keccak256("DepositInitiated(address,address,address,uint256,bytes32,uint64,address)"));
+        assert_eq!(DEPOSIT_EVENT_TOPIC, keccak256("DepositInitiated(address,address,address,uint256,bytes32,uint64,address,address)"));
     }
 
-    /// Claim: a deposit log has 128 bytes of data (amount, nonce, target chain, destination vault), and the decoder
-    /// returns the destination vault. A log of the earlier 96-byte shape is refused.
+    /// Claim: a deposit log has 160 bytes of data (amount, nonce, target chain, destination vault, destination token),
+    /// and the decoder returns the destination vault and the destination token. A log of an earlier shape (96 or 128
+    /// bytes) is refused.
     /// Why it matters: the route ignores deposits for other vaults by this field, so it must come from the log data and
-    /// not from a default. The old shape must fail loudly, not decode with a zero vault.
+    /// not from a default. An old shape must fail loudly, not decode with a zero vault or a zero token.
     #[test]
-    fn decode_deposit_reads_the_destination_vault_and_refuses_the_old_shape() {
+    fn decode_deposit_reads_the_destination_vault_and_token_and_refuses_old_shapes() {
         let vault = Address::repeat_byte(0xb1);
+        let token = Address::repeat_byte(0xb2);
         let event = DepositInitiated {
             token: Address::repeat_byte(1),
             sender: Address::repeat_byte(2),
@@ -863,13 +868,16 @@ mod tests {
             nonce: B256::repeat_byte(4),
             targetChainId: 369,
             destinationVault: vault,
+            destinationToken: token,
         };
         let log = event.encode_log_data();
-        assert_eq!(log.data.len(), 128);
+        assert_eq!(log.data.len(), 160);
         let decoded = decode_deposit(log.topics(), &log.data).expect("control: the current shape decodes");
         assert_eq!(decoded.destination_vault, vault);
+        assert_eq!(decoded.destination_token, token);
         assert_eq!(decoded.target_chain_id, 369);
-        assert!(decode_deposit(log.topics(), &log.data[..96]).is_err(), "96 bytes is the old shape");
+        assert!(decode_deposit(log.topics(), &log.data[..96]).is_err(), "96 bytes is the first shape");
+        assert!(decode_deposit(log.topics(), &log.data[..128]).is_err(), "128 bytes is the shape before the token");
     }
 
     /// Claim: a synthetic header is a pure function of its arguments.

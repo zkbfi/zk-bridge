@@ -17,6 +17,17 @@ use std::sync::Mutex;
 static FORGE_TURN: Mutex<()> = Mutex::new(());
 use zk_bridge_prover::contracts::{ForkRegistryContract, GateVersionsContract, LightClientContract, VaultContract};
 
+/// The fee switch of a vault with no fee authority: the fee is removed from the start.
+static NULLIFIED_FEE: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(|| {
+    json!({ "authority": format!("{:#x}", Address::ZERO), "recipient": format!("{:#x}", Address::ZERO), "basisPoints": "0", "ceilingBasisPoints": "0" })
+});
+
+/// The fee switch of a live vault: the deployer is the fee authority and the recipient, the fee is 25 basis points
+/// and the ceiling is 50.
+fn live_fee() -> serde_json::Value {
+    json!({ "authority": format!("{DEPLOYER:#x}"), "recipient": format!("{DEPLOYER:#x}"), "basisPoints": "25", "ceilingBasisPoints": "50" })
+}
+
 /// The deploy script configuration for two chains. The deployer is the first Anvil account, and the script signs
 /// with it through `--unlocked`.
 fn script_config(
@@ -61,16 +72,18 @@ fn script_config_with_observation(
             "initialNextSyncCommitteeHash": format!("{:#x}", keccak256(b"next committee")),
         })
     };
-    let chain = |url: &str, id: u64, verifier: Address, nonce: u64, era: &str, label: &str, mode: &str| {
+    // The expected code hash of the verifier is read from the chain, the way an operator reads it with `cast codehash`.
+    let chain = |live: &TestChain, id: u64, verifier: Address, fee: serde_json::Value, nonce: u64, era: &str, label: &str, mode: &str| {
         json!({
-            "rpcAlias": url, "chainId": id.to_string(), "verifier": format!("{verifier:#x}"),
-            "depositCutoffTimestamp": "0", "deployerNonce": nonce.to_string(),
+            "rpcAlias": live.anvil.url, "chainId": id.to_string(), "verifier": format!("{verifier:#x}"),
+            "verifierCodeHash": format!("{:#x}", keccak256(live.code_of(verifier))),
+            "depositCutoffTimestamp": "0", "deployerNonce": nonce.to_string(), "fee": fee,
             "lightClient": light_client(era, label), "gate": gate(mode),
         })
     };
     let mut chain_b_config = match observation_key {
-        Some(_) => chain(&chain_b.anvil.url, 369, verifiers.1, nonces.1, "0", "genesis-of-chain-a", "DetectBeaconRootsAndRegistry"),
-        None => chain(&chain_b.anvil.url, 369, verifiers.1, nonces.1, "0", "genesis-of-chain-a", "DetectBeaconRoots"),
+        Some(_) => chain(chain_b, 369, verifiers.1, NULLIFIED_FEE.clone(), nonces.1, "0", "genesis-of-chain-a", "DetectBeaconRootsAndRegistry"),
+        None => chain(chain_b, 369, verifiers.1, NULLIFIED_FEE.clone(), nonces.1, "0", "genesis-of-chain-a", "DetectBeaconRoots"),
     };
     if let Some(key) = observation_key {
         chain_b_config["observation"] = json!({
@@ -86,7 +99,7 @@ fn script_config_with_observation(
     }
     json!({
         "deployer": format!("{DEPLOYER:#x}"),
-        "chainA": chain(&chain_a.anvil.url, 1, verifiers.0, nonces.0, capella_era_on_a, "genesis-of-chain-b", "Enforcing"),
+        "chainA": chain(chain_a, 1, verifiers.0, live_fee(), nonces.0, capella_era_on_a, "genesis-of-chain-b", "Enforcing"),
         "chainB": chain_b_config,
         "tokenPairs": [{ "chainA": format!("{:#x}", tokens.0), "chainB": format!("{:#x}", tokens.1) }],
     })
@@ -228,6 +241,16 @@ fn r2_08_hardened_deploy_script_predicted_addresses_are_the_deployed_addresses()
     assert_eq!(address_of(&chain_b, vault_b, VaultContract::lightClientCall {}.abi_encode()), light_client_b);
     assert_eq!(address_of(&chain_a, vault_a, VaultContract::depositGateCall {}.abi_encode()), gate_a);
     assert_eq!(address_of(&chain_b, vault_b, VaultContract::depositGateCall {}.abi_encode()), gate_b);
+    // The fee switch of each vault is the configured one: live on chain 1, removed from the start on chain 369.
+    let fee_of = |chain: &TestChain, vault: Address| {
+        let basis_points = VaultContract::feeBasisPointsCall::abi_decode_returns(&chain.call(vault, &VaultContract::feeBasisPointsCall {}.abi_encode()).unwrap()).unwrap();
+        let ceiling = VaultContract::feeCeilingBasisPointsCall::abi_decode_returns(&chain.call(vault, &VaultContract::feeCeilingBasisPointsCall {}.abi_encode()).unwrap()).unwrap();
+        let authority = address_of(chain, vault, VaultContract::feeAuthorityCall {}.abi_encode());
+        let recipient = address_of(chain, vault, VaultContract::feeRecipientCall {}.abi_encode());
+        (authority, recipient, basis_points, ceiling)
+    };
+    assert_eq!(fee_of(&chain_a, vault_a), (DEPLOYER, DEPLOYER, 25, 50), "vault A carries the configured fee switch");
+    assert_eq!(fee_of(&chain_b, vault_b), (Address::ZERO, Address::ZERO, 0, 0), "vault B has no fee authority");
     assert_eq!(address_of(&chain_a, vault_a, VaultContract::remoteTokenOfCall { localToken: tokens.0 }.abi_encode()), tokens.1);
     assert_eq!(address_of(&chain_b, vault_b, VaultContract::remoteTokenOfCall { localToken: tokens.1 }.abi_encode()), tokens.0);
     // Each light client tracks the other chain: the genesis validators roots match the configuration.
@@ -239,6 +262,42 @@ fn r2_08_hardened_deploy_script_predicted_addresses_are_the_deployed_addresses()
     assert!(gate_enforcing(&chain_a, gate_a), "the gate of chain 1 enforces from the start");
     assert!(!gate_enforcing(&chain_b, gate_b), "the gate of chain 369 detects");
     // The forge cache of this test is large. Remove the scratch directory (a failed run keeps it for inspection).
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Claim: the deploy script refuses a verifier whose code hash differs from the pinned one, and it refuses before it
+/// sends anything.
+/// Shows: the configuration holds the real code hash of the verifier of chain 1 (read from the chain) in one run and a
+/// made-up hash in the other. The made-up hash stops the script with `VerifierCodeHashMismatch`, and the deployer
+/// nonces do not move. The pin is per chain: a made-up hash on chain 369 stops the
+/// script as well. The passing case is the honest run of the first test in this file, which uses the real hashes.
+/// Why it matters: the script only checked that the verifier address had code. An address with other code (a verifier
+/// that accepts any proof) would pass that check, and every light client built on it would trust false headers.
+#[test]
+fn hardened_deploy_script_refuses_a_verifier_with_another_code_hash() {
+    let _turn = FORGE_TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !tools_available() {
+        return;
+    }
+    let ScriptChains { chain_a, chain_b, verifiers, tokens, nonces } = script_chains();
+    let directory = scratch("hardened-deploy-script-verifier-pin");
+    let honest = script_config(&chain_a, &chain_b, verifiers, tokens, nonces, "0");
+    let pinned_to = |chain_key: &str, hash: B256| {
+        let mut config: serde_json::Value = serde_json::from_str(&honest).unwrap();
+        config[chain_key]["verifierCodeHash"] = json!(format!("{hash:#x}"));
+        config.to_string()
+    };
+    // Control: the honest configuration holds the real hash, so the pin differs from the made-up one.
+    let real_hash = keccak256(chain_a.code_of(verifiers.0));
+    let made_up = keccak256(b"code of some other verifier");
+    assert_ne!(real_hash, made_up);
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&honest).unwrap()["chainA"]["verifierCodeHash"], json!(format!("{real_hash:#x}")));
+
+    for chain_key in ["chainA", "chainB"] {
+        let (ok, output) = run_script(&directory, &pinned_to(chain_key, made_up));
+        assert!(!ok && output.contains("VerifierCodeHashMismatch"), "a wrong code hash on {chain_key} must stop the script:\n{output}");
+        assert_eq!((chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER)), nonces, "a refused run sends nothing");
+    }
     let _ = std::fs::remove_dir_all(&directory);
 }
 
