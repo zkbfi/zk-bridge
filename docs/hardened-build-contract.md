@@ -683,7 +683,7 @@ The user asked for a reasonable first limit: 0.1% of a token's total supply, tak
 - **Cap per token.** The cap is `supply * shareBasisPoints / 10_000`, with `shareBasisPoints = 10` (0.1%). The supply is a fixed number from the constructor when the token has one, else `IERC20(token).totalSupply()` read at the time of the call.
   - Fixed supplies are for tokens whose on-chain supply is not the asset's supply. Wrapped ETH holds only the ETH that is wrapped, so Ethereum's config sets wrapped ETH to 100,000,000 ETH. PulseChain's config sets wrapped PLS to 100,000,000,000,000 PLS. Caps: 100,000 ETH and 100,000,000,000 PLS per window.
   - A token with no fixed supply and a total supply of zero has a cap of zero; its first withdrawal still passes when the allowance is full (see below).
-- **Window.** `windowSeconds = 86_400` (24 hours). The allowance refills in a straight line: the full cap over one window. It never exceeds the cap. This has no burst at a window edge, unlike fixed calendar windows.
+- **Window.** `windowSeconds = 86_400` (24 hours). The allowance refills in a straight line: the full cap over one window. It never exceeds the cap. A thief who finds the allowance full can take at most about two caps in the first 24 hours, then one cap per day.
 - **No withdrawal is stranded.** A withdrawal larger than the cap passes when the allowance is full, and the allowance goes into debt (below zero) by the excess. Later withdrawals wait until the debt refills. So the average outflow stays at the cap, and every valid withdrawal can complete.
 - **A refusal reverts** with `FlowRefused(token, amount, available)`, so the vault leaves the nonce claimable and the prover waits (built in `5551b23`).
 - **Sunset, optional.** An immutable `sunsetTimestamp`. Zero means never. After it, anyone may call `sunset()`, which calls `vault.detachFlowLimiter()`. This is the only way the limiter ends. It has no owner and no other setter.
@@ -703,4 +703,4 @@ The vault takes the limiter at construction, and the limiter takes the vault. Th
 - Caps are per token: draining one token does not affect another.
 - Sunset: refused before the timestamp, works after it, works once, and with zero it never works.
 - End to end through the vault: the withdrawal over the allowance reverts with `FlowRefused` and stays claimable, then pays after the refill (use `vm.warp`).
-- Fuzz: over any sequence of withdrawals and time steps, the total paid in any window of 24 hours is at most the cap plus one withdrawal's excess over it.
+- Fuzz: over any sequence of withdrawals and time steps, the total paid in any span of 24 hours is at most two caps (a full allowance plus one window of refill) plus the excess of one oversize withdrawal. Over a long run the average is one cap per window.
