@@ -4,6 +4,9 @@
 
 #![allow(dead_code)]
 
+pub mod bridge;
+pub mod multicall;
+
 use alloy_primitives::{hex, Address, Bytes, B256, U256};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -233,6 +236,120 @@ impl TestChain {
             assert!(start.elapsed() < Duration::from_secs(20), "no receipt for {hash}");
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    /// Sends a transaction of an explicit EIP-2718 type (0 legacy, 1 access list, 2 dynamic fee) from the unlocked
+    /// deployer account and waits for the receipt. The receipt's `type` field shows what the chain mined.
+    pub fn send_typed(&self, to: Address, data: &[u8], transaction_type: u8) -> Value {
+        let mut request = json!({
+            "from": format!("{DEPLOYER:#x}"),
+            "to": format!("{to:#x}"),
+            "data": format!("0x{}", hex::encode(data)),
+            "gas": "0x7a1200",
+            "type": format!("{transaction_type:#x}"),
+        });
+        match transaction_type {
+            0 | 1 => request["gasPrice"] = json!("0x77359400"),
+            _ => {
+                request["maxFeePerGas"] = json!("0x77359400");
+                request["maxPriorityFeePerGas"] = json!("0x3b9aca00");
+            }
+        }
+        if transaction_type == 1 {
+            request["accessList"] = json!([]);
+        }
+        let hash = self.rpc.call("eth_sendTransaction", json!([request])).expect("send transaction");
+        self.wait_for_receipt(&hash)
+    }
+
+    /// Waits for the receipt of a transaction hash that the node returned, and requires success.
+    pub fn wait_for_receipt(&self, hash: &Value) -> Value {
+        let start = Instant::now();
+        loop {
+            let receipt = self.rpc.call("eth_getTransactionReceipt", json!([hash])).expect("receipt");
+            if !receipt.is_null() {
+                assert_eq!(receipt["status"], "0x1", "transaction failed: {receipt}");
+                return receipt;
+            }
+            assert!(start.elapsed() < Duration::from_secs(20), "no receipt for {hash}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Sends several transactions from the deployer and mines them into ONE block, in the order given. Returns the
+    /// receipts in the same order. Automine is switched off for the duration and on again afterwards.
+    pub fn send_in_one_block(&self, calls: &[(Address, Vec<u8>)]) -> Vec<Value> {
+        self.rpc.call("evm_setAutomine", json!([false])).expect("stop automine");
+        let hashes: Vec<Value> = calls
+            .iter()
+            .map(|(to, data)| {
+                let request = json!({ "from": format!("{DEPLOYER:#x}"), "to": format!("{to:#x}"), "data": format!("0x{}", hex::encode(data)), "gas": "0x7a1200" });
+                self.rpc.call("eth_sendTransaction", json!([request])).expect("send transaction")
+            })
+            .collect();
+        self.rpc.call("evm_mine", json!([])).expect("mine");
+        self.rpc.call("evm_setAutomine", json!([true])).expect("start automine");
+        hashes.iter().map(|hash| self.wait_for_receipt(hash)).collect()
+    }
+
+    /// Takes an Anvil snapshot and returns its identifier.
+    pub fn snapshot(&self) -> Value {
+        self.rpc.call("evm_snapshot", json!([])).expect("snapshot")
+    }
+
+    /// Reverts the chain to a snapshot. Every block after the snapshot disappears, as in a reorganization that
+    /// replaces them. Returns whether Anvil knew the snapshot.
+    pub fn revert_to(&self, snapshot: &Value) -> bool {
+        self.rpc.call("evm_revert", json!([snapshot])).expect("revert").as_bool().unwrap_or(false)
+    }
+
+    /// The number of the latest block.
+    pub fn block_number(&self) -> u64 {
+        zk_bridge_prover::rpc::parse_quantity(&self.rpc.call("eth_blockNumber", json!([])).expect("block number")).expect("quantity")
+    }
+
+    /// Sends a transaction from the deployer and returns its receipt WITHOUT requiring success. With an explicit gas
+    /// limit Anvil mines a failing transaction with status 0, which is what a test of a failure wants to read.
+    pub fn send_allowing_failure(&self, to: Option<Address>, data: &[u8]) -> Value {
+        let mut request = json!({ "from": format!("{DEPLOYER:#x}"), "data": format!("0x{}", hex::encode(data)), "gas": "0x7a1200" });
+        if let Some(to) = to {
+            request["to"] = json!(format!("{to:#x}"));
+        }
+        let hash = self.rpc.call("eth_sendTransaction", json!([request])).expect("send transaction");
+        let start = Instant::now();
+        loop {
+            let receipt = self.rpc.call("eth_getTransactionReceipt", json!([hash])).expect("receipt");
+            if !receipt.is_null() {
+                return receipt;
+            }
+            assert!(start.elapsed() < Duration::from_secs(20), "no receipt for {hash}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Sends a transaction from any unlocked Anvil account and waits for a successful receipt.
+    pub fn send_from(&self, from: Address, to: Address, data: &[u8]) -> Value {
+        let request = json!({ "from": format!("{from:#x}"), "to": format!("{to:#x}"), "data": format!("0x{}", hex::encode(data)), "gas": "0x7a1200" });
+        let hash = self.rpc.call("eth_sendTransaction", json!([request])).expect("send transaction");
+        self.wait_for_receipt(&hash)
+    }
+
+    /// Fixes the timestamp of the next block. It must lie after the latest block.
+    pub fn set_next_block_timestamp(&self, timestamp: u64) {
+        self.rpc.call("evm_setNextBlockTimestamp", json!([timestamp])).expect("set next block timestamp");
+    }
+
+    /// The revert data of a mined transaction that failed, read from a call trace. Empty when the trace has none.
+    pub fn revert_data_of(&self, transaction_hash: &Value) -> Vec<u8> {
+        let trace = self.rpc.call("debug_traceTransaction", json!([transaction_hash, { "tracer": "callTracer" }])).expect("trace");
+        let output = trace["output"].as_str().unwrap_or("0x");
+        hex::decode(output.trim_start_matches("0x")).expect("hex")
+    }
+
+    /// The code of an account.
+    pub fn code_of(&self, account: Address) -> Vec<u8> {
+        let answer = self.rpc.call("eth_getCode", json!([format!("{account:#x}"), "latest"])).expect("code");
+        hex::decode(answer.as_str().expect("hex").trim_start_matches("0x")).expect("hex")
     }
 
     /// Deploys a contract from `forge build` output and returns its address.

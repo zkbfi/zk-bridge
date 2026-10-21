@@ -27,6 +27,15 @@
 //! withdrawal of the source on the recent ancestry path; a unit test checks that with `ancestry_path`, the function
 //! that mirrors the choice of the vault.
 //!
+//! # The historical path
+//!
+//! An anchor whose slot lies more than 8192 slots above a deposit proves the deposit through `historical_summaries`.
+//! Every anchor state at or after slot 8192 therefore holds one summary per completed era. To keep a state cheap to
+//! build, a summary holds the header roots (phases 0, 1 and 2) of only the first [`HISTORICAL_FILL_BLOCKS`] blocks of
+//! its era, and filler elsewhere. So the source proves a deposit from the first blocks of an era, and a layout row from a
+//! stored phase 0 or phase 1 header in those blocks. A deposit later in its era is refused with an error that says so.
+//! This is a limit of the synthetic chain, not of the vault.
+//!
 //! Limits, by design: the source cannot cover a deposit whose phase 0 slot the head already passed (the service
 //! processes deposits in block order, so this does not happen in a normal run), and `slot_offset` must lie above the
 //! checkpoint slot of the light client and after the Capella fork.
@@ -35,16 +44,20 @@ use super::{BeaconSource, DepositBlock, HashEvidence, HistoricalEvidence, LightC
 use crate::chain::ExecutionReader;
 use crate::error::{Error, Result};
 use crate::light_client::{
-    block_hash_gindex, block_roots_gindex, dev_header, dev_output, dev_plain_state_root, header_root, BeaconHeader,
-    BeaconPath, ChainKind, DevHeader, DevState,
+    ancestry_path, block_hash_gindex, block_roots_gindex, dev_header, dev_output, dev_plain_state_root, header_root,
+    historical_summaries_gindex, AncestryPath, BeaconHeader, BeaconPath, ChainKind, DevHeader, DevState,
 };
 use crate::prover::ProofStatement;
 use alloy_primitives::B256;
 
 /// The default slot of block 0.
 pub const DEFAULT_SLOT_OFFSET: u64 = 1_024;
-/// The number of blocks below an anchor that a withdrawal can still reach.
+/// The number of blocks below an anchor that a withdrawal can still reach on the recent path.
 pub const WINDOW_BLOCKS: u64 = 256;
+/// The blocks at the start of each era whose headers a historical summary holds.
+pub const HISTORICAL_FILL_BLOCKS: u64 = 32;
+/// The slots of one era of `historical_summaries`.
+const SLOTS_PER_ERA: u64 = 8192;
 const SLOTS_PER_BLOCK: u64 = 4;
 const PHASE_FIRST: u64 = 0;
 const PHASE_SECOND: u64 = 1;
@@ -96,9 +109,53 @@ impl DevBeaconSource {
             let earlier_hash = if earlier == number { hash } else { source.block_hash(earlier)? };
             roots.push((self.slot_of(earlier, PHASE_DEPOSIT), self.sibling_root(earlier, PHASE_DEPOSIT, earlier_hash)?));
         }
-        let state = DevState::new(self.chain, slot, &roots)?;
+        let mut state = DevState::new(self.chain, slot, &roots)?;
+        self.fill_historical_summaries(&mut state, slot, source)?;
         let header = dev_header(self.chain, slot, number, hash, state.root());
         Ok(Built { header, state: Some(state) })
+    }
+
+    /// The first era with a historical summary, from the Capella fork of the chain.
+    fn capella_era(&self) -> Result<u64> {
+        self.chain.spec().capella_era().map_err(|error| Error::Beacon(error.to_string()))
+    }
+
+    /// The number of summaries that a state at `anchor_slot` holds: one per completed era since Capella.
+    fn summary_count(&self, anchor_slot: u64) -> Result<u64> {
+        Ok((anchor_slot / SLOTS_PER_ERA).saturating_sub(self.capella_era()?))
+    }
+
+    /// The block numbers of the first [`HISTORICAL_FILL_BLOCKS`] blocks that start in `era`.
+    fn filled_blocks(&self, era: u64) -> std::ops::Range<u64> {
+        let era_start = era * SLOTS_PER_ERA;
+        let first = era_start.saturating_sub(self.slot_offset).div_ceil(SLOTS_PER_BLOCK);
+        first..first + HISTORICAL_FILL_BLOCKS
+    }
+
+    /// Whether a historical summary holds the header root of `slot`: a phase 0, 1 or 2 slot in a filled block.
+    fn is_filled(&self, slot: u64) -> bool {
+        let Some((number, phase)) = self.block_and_phase(slot) else { return false };
+        phase != PHASE_ANCHOR && self.filled_blocks(slot / SLOTS_PER_ERA).contains(&number)
+    }
+
+    /// Adds one summary per completed era to an anchor state. Each summary holds the header roots of the filled blocks.
+    fn fill_historical_summaries(&self, state: &mut DevState, anchor_slot: u64, source: &dyn ExecutionReader) -> Result<()> {
+        let capella_era = self.capella_era()?;
+        let count = self.summary_count(anchor_slot)? as usize;
+        for index in 0..count {
+            let era = capella_era + index as u64;
+            for number in self.filled_blocks(era) {
+                let hash = source.block_hash(number)?;
+                for phase in [PHASE_FIRST, PHASE_SECOND, PHASE_DEPOSIT] {
+                    let slot = self.slot_of(number, phase);
+                    if slot / SLOTS_PER_ERA != era {
+                        continue;
+                    }
+                    state.set_historical_root(count, index, slot, self.sibling_root(number, phase, hash)?);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn sibling_root(&self, number: u64, phase: u64, hash: B256) -> Result<B256> {
@@ -176,19 +233,34 @@ impl BeaconSource for DevBeaconSource {
         let anchor_block = self
             .anchor_block(deposit.number, stored_slots)
             .ok_or_else(|| Error::Beacon(format!("no stored anchor at or after block {}", deposit.number)))?;
-        if anchor_block - deposit.number > WINDOW_BLOCKS {
-            return Err(Error::Beacon(format!(
-                "block {} lies more than {WINDOW_BLOCKS} blocks below the anchor block {anchor_block}",
-                deposit.number
-            )));
-        }
         let anchor = self.build(self.slot_of(anchor_block, PHASE_ANCHOR), source)?;
         let deposit_slot = self.slot_of(deposit.number, PHASE_DEPOSIT);
         let deposit_header = self.build(deposit_slot, source)?.header;
         let state = anchor.state.ok_or_else(|| Error::Beacon("anchor without state".into()))?;
+        let ancestry_branch = match ancestry_path(anchor.header.header.slot, deposit_slot)? {
+            AncestryPath::Recent => {
+                if anchor_block - deposit.number > WINDOW_BLOCKS {
+                    return Err(Error::Beacon(format!(
+                        "block {} lies more than {WINDOW_BLOCKS} blocks below the anchor block {anchor_block}",
+                        deposit.number
+                    )));
+                }
+                state.ancestry_branch(deposit_slot)
+            }
+            AncestryPath::Historical => {
+                if !self.is_filled(deposit_slot) {
+                    return Err(Error::Beacon(format!(
+                        "block {} is not among the first {HISTORICAL_FILL_BLOCKS} blocks of its era, so the dev source holds no historical summary entry for it",
+                        deposit.number
+                    )));
+                }
+                let index = deposit_slot / SLOTS_PER_ERA - self.capella_era()?;
+                state.historical_branch(index as usize, deposit_slot)
+            }
+        };
         Ok(BeaconPath {
             anchor_header: anchor.header.header,
-            ancestry_branch: state.ancestry_branch(deposit_slot),
+            ancestry_branch,
             deposit_header: deposit_header.header,
             block_hash_branch: deposit_header.block_hash_branch,
         })
@@ -221,11 +293,26 @@ impl BeaconSource for DevBeaconSource {
 
     fn historical_layout_evidence(
         &self,
-        _anchor: &BeaconHeader,
-        _stored_slots: &[u64],
-        _source: &dyn ExecutionReader,
+        anchor: &BeaconHeader,
+        stored_slots: &[u64],
+        source: &dyn ExecutionReader,
     ) -> Result<Option<HistoricalEvidence>> {
-        Ok(None)
+        let capella_era = self.capella_era()?;
+        let usable = |slot: &u64| {
+            anchor.slot.saturating_sub(*slot) > SLOTS_PER_ERA && slot / SLOTS_PER_ERA >= capella_era && self.is_filled(*slot)
+        };
+        let Some(earlier_slot) = stored_slots.iter().copied().filter(usable).max() else {
+            return Ok(None);
+        };
+        let built = self.build(anchor.slot, source)?;
+        let state = built.state.ok_or_else(|| Error::Beacon("anchor without state".into()))?;
+        let index = (earlier_slot / SLOTS_PER_ERA - capella_era) as usize;
+        Ok(Some(HistoricalEvidence {
+            gindex: historical_summaries_gindex(self.chain, anchor.slot)?,
+            anchor_header: built.header.header,
+            earlier_slot,
+            branch: state.historical_branch(index, earlier_slot),
+        }))
     }
 
     fn hash_layout_evidence(
