@@ -198,3 +198,35 @@ Implements the Altair light-client sync protocol for both fork schedules:
 - Chain B (the PulseChain role, id 369) runs Anvil with `--hardfork shanghai`. Chain A (id 1) keeps `prague`.
 - Add hardened tests under `harness/test/hardened/` on two Anvil chains: the happy path both ways, the fake emitter (H-02), the same-address token (H-03), an unfinalized block after a reorganization (H-08), cross-chain replay of a light-client output (H-01), a deposit and withdrawal with a second deposit in the same transaction (R2-06), a typed receipt (R2-05), the deploy procedure with predicted addresses (R2-08), and `MCOPY` bytecode failing on chain B while the Shanghai build works (R2-10).
 - The reference light-client prover models finality: it emits a `LightClientOutput` only for a block that is at least a fixed number of blocks deep, and it signs with the oracle key.
+
+## Prover service (`prover/`)
+
+A Rust binary that keeps the bridge moving. It holds no trusted role: every proof it submits is checked on chain, so a faulty or hostile prover can only fail to deliver, never steal. Anyone can run one.
+
+### Responsibilities
+
+1. **Watch deposits.** Read `DepositInitiated` logs from the source vault, only from blocks at or below the source chain's `finalized` tag.
+2. **Advance the light client.** Read the destination light client's head. Fetch beacon data until a finalized header covers the deposit's block. Build a light-client update, run `verify_light_client_update` natively, prove it, and submit `BeaconLightClient.update`.
+3. **Withdraw.** Build the withdrawal witness (header, receipt proof, transaction index, log index), run `verify_withdrawal` natively, prove it, and submit `BridgeVault.withdraw`.
+4. **Persist.** Record each deposit's state (`seen`, `awaiting_finality`, `light_client_updated`, `proven`, `submitted`, `confirmed`, `failed`) in a local SQLite file, so a restart resumes without double work. Treat an on-chain "already claimed" revert as success.
+
+### Proving backends (one trait, `Prover`)
+
+- `OracleProver` (development and tests): runs the program natively first and refuses to sign when it fails. Then it signs `keccak256(programVKey ‖ sha256(publicValues))` with the oracle key, which `OracleSP1Verifier` accepts. This models a sound proof system.
+- `Sp1Prover` (production): behind the cargo feature `sp1`, off by default and not built on this machine. It calls the official `sp1-sdk` crate, locally or through the Succinct prover network. Document how to enable it.
+
+### Beacon sources (one trait, `BeaconSource`)
+
+- `HttpBeaconSource`: a standard beacon API. Uses the light-client endpoints when the node serves them. Otherwise it assembles the update from block, state and committee endpoints. PulseChain's public node returns 404 for the light-client endpoints, so this path matters.
+- `DevBeaconSource` (tests on Anvil, which has no beacon chain): treats an execution block as finalized once it is a configured number of blocks deep, and produces `LightClientOutput` values for it. The harness uses this backend, so the service is the harness's reference prover. Do not write a second prover in TypeScript.
+
+### Interface
+
+- Configuration file (TOML) plus environment overrides: both chains' RPC URLs, contract addresses, chain identifiers, the beacon API URL per chain, the finality depth for `DevBeaconSource`, the database path, the polling interval.
+- Signing: a Foundry keystore file plus a password file, or `--private-key-env <NAME>` only for local Anvil. Never a key on the command line.
+- Subcommands: `run` (the loop), `once` (one pass, then exit; used by tests), `status` (print each deposit's state), `prove-withdrawal --tx <hash> --log-index <n>` (one manual proof).
+- Logs: structured, one line per state change, with the deposit nonce in every line.
+
+### Tests
+
+Unit tests for state transitions, idempotent restarts, the "already claimed" path, the refusal to sign when native verification fails, and configuration validation. Integration tests run two Anvil chains with the hardened contracts deployed, run `once` repeatedly, and assert deposits arrive in both directions, including after a restart in the middle and after a reorganization of an unfinalized block.
