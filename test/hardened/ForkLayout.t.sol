@@ -3,14 +3,21 @@ pragma solidity ^0.8.24;
 
 import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
 import {BeaconBlockHeader, SSZ} from "../../src/hardened/SSZ.sol";
-import {WithdrawalScenes} from "./utils/WithdrawalScenes.sol";
+import {HistoricalScenes} from "./utils/HistoricalScenes.sol";
 import {ReceiptFixtures} from "./utils/ReceiptFixtures.sol";
 
 /// @notice Tests of the permissionless, self-validating fork layout table. The light client's stored data must prove a
 /// candidate position, or the call reverts. Positions of other fields of the same trees must never be accepted.
-contract ForkLayoutTest is WithdrawalScenes {
+contract ForkLayoutTest is HistoricalScenes {
     event BlockRootsLayoutValidated(uint256 indexed blockRootsGindex, uint64 firstSlot, uint64 lastSlot);
     event BlockHashLayoutValidated(uint256 indexed blockHashGindex, uint64 firstSlot, uint64 lastSlot);
+    event HistoricalSummariesLayoutValidated(uint256 indexed historicalSummariesGindex, uint64 firstSlot, uint64 lastSlot);
+
+    /// @dev The historical fixture: an Electra-like state (position 91) of an anchor at slot 1,000,000, a stored evidence
+    /// slot 100,000 below it, and three extra stored slots. The default vault has capellaEra 0.
+    uint64 internal constant HISTORICAL_ANCHOR = 1_000_000;
+    uint64 internal constant HISTORICAL_EVIDENCE = 900_000;
+    uint256 internal constant SUMMARIES = 91;
 
     BridgeVault internal fresh;
     SceneParams internal params;
@@ -227,5 +234,339 @@ contract ForkLayoutTest is WithdrawalScenes {
         evidence.branch = scene.evidenceAfterBranch;
         vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
         fresh.addBlockHashLayout(812, evidence);
+    }
+
+    // ================================================================ historical summaries: accepted
+
+    /// @dev A deep copy, because memory structs are references and a test edits the evidence.
+    function _copy(BridgeVault.HistoricalSummariesEvidence memory evidence)
+        internal
+        pure
+        returns (BridgeVault.HistoricalSummariesEvidence memory)
+    {
+        return abi.decode(abi.encode(evidence), (BridgeVault.HistoricalSummariesEvidence));
+    }
+
+    function _historicalFixture() internal returns (HistoricalParams memory fixtureParams, HistoricalScene memory historical) {
+        fixtureParams = _historicalParams(HISTORICAL_ANCHOR, 0, SUMMARIES, HISTORICAL_EVIDENCE, _noSlots());
+        // One slot at distance 8193 (historical), one at 8192 (recent), one after the anchor.
+        fixtureParams.extraStoredSlots = _slots(HISTORICAL_ANCHOR - 8193, HISTORICAL_ANCHOR - 8192, HISTORICAL_ANCHOR + 64);
+        historical = _historicalScene(fixtureParams);
+    }
+
+    /// Claim: the correct `historical_summaries` position is accepted from any caller. Shows: a random caller adds
+    /// position 91 with a stored earlier header under the stored anchor state; the event and the table show the anchor slot.
+    /// Matters: no administrator is needed, and the stored data alone authorizes the row.
+    /// forge-config: default.fuzz.runs = 16
+    function testFuzz_HB01_historicalLayoutAcceptedFromAnyCaller(address caller) public {
+        (, HistoricalScene memory historical) = _historicalFixture();
+        vm.expectEmit(true, false, false, true, address(fresh));
+        emit HistoricalSummariesLayoutValidated(SUMMARIES, HISTORICAL_ANCHOR, HISTORICAL_ANCHOR);
+        vm.prank(caller);
+        fresh.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
+        BridgeVault.HistoricalLayout[] memory rows = fresh.historicalLayouts();
+        assertEq(rows.length, 1);
+        assertEq(rows[0].historicalSummariesGindex, SUMMARIES);
+        assertEq(rows[0].firstSlot, HISTORICAL_ANCHOR);
+        assertEq(rows[0].lastSlot, HISTORICAL_ANCHOR);
+    }
+
+    /// Claim: more evidence widens the validated anchor range of the same position and adds no new row. Shows: evidence at
+    /// a later anchor, then at the earlier one, gives the range from the lowest to the highest anchor slot in one row.
+    /// Matters: a deposit under any anchor between two validated anchors is covered.
+    function test_HB01_historicalLayoutWidensValidatedRange() public {
+        (, HistoricalScene memory first) = _historicalFixture();
+        HistoricalParams memory laterParams = _historicalParams(1_200_000, 0, SUMMARIES, 1_100_000, _noSlots());
+        HistoricalScene memory later = _historicalScene(laterParams);
+        fresh.addHistoricalSummariesLayout(SUMMARIES, later.historicalEvidence);
+        fresh.addHistoricalSummariesLayout(SUMMARIES, first.historicalEvidence);
+        BridgeVault.HistoricalLayout[] memory rows = fresh.historicalLayouts();
+        assertEq(rows.length, 1);
+        assertEq(rows[0].firstSlot, HISTORICAL_ANCHOR);
+        assertEq(rows[0].lastSlot, 1_200_000);
+    }
+
+    /// Claim: the boundary of the evidence distance is exact. Shows: an earlier slot 8193 below the anchor is accepted
+    /// (the era of the slot is complete). Matters: this is the control of the distance tests below.
+    function test_HB01_historicalLayoutAcceptedAtDistance8193() public {
+        (, HistoricalScene memory historical) = _historicalFixture();
+        BridgeVault.HistoricalSummariesEvidence memory evidence = _copy(historical.historicalEvidence);
+        evidence.earlierSlot = HISTORICAL_ANCHOR - 8193;
+        evidence.branch = historical.extraBranches[0];
+        fresh.addHistoricalSummariesLayout(SUMMARIES, evidence);
+        assertEq(fresh.historicalLayouts().length, 1);
+    }
+
+    // ================================================================ historical summaries: rejected
+
+    /// Claim: zero and absurdly deep candidates are rejected before any check. Shows: 0, 512 (depth 9) and 2^20 revert
+    /// with `LayoutOutOfBounds`; the honest candidate is accepted. Matters: a sane depth bound.
+    function test_HB01_historicalLayoutOutOfBoundsRejected() public {
+        (, HistoricalScene memory historical) = _historicalFixture();
+        uint256[3] memory bad = [uint256(0), 512, uint256(1) << 20];
+        for (uint256 i = 0; i < bad.length; i++) {
+            vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutOutOfBounds.selector, bad[i]));
+            fresh.addHistoricalSummariesLayout(bad[i], historical.historicalEvidence);
+        }
+        fresh.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
+    }
+
+    /// Claim: an earlier slot with no stored header is rejected. Shows: the slot after the evidence slot reverts with
+    /// `EvidenceSlotNotStored`. Matters: the check compares against stored data only.
+    function test_HB01_historicalLayoutWithUnstoredEarlierSlotRejected() public {
+        (, HistoricalScene memory historical) = _historicalFixture();
+        BridgeVault.HistoricalSummariesEvidence memory evidence = _copy(historical.historicalEvidence);
+        evidence.earlierSlot = HISTORICAL_EVIDENCE + 1;
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.EvidenceSlotNotStored.selector, HISTORICAL_EVIDENCE + 1));
+        fresh.addHistoricalSummariesLayout(SUMMARIES, evidence);
+        fresh.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
+    }
+
+    /// Claim: an earlier slot within 8192 of the anchor, equal to it, or after it is rejected. Shows: stored slots at
+    /// distance 8192, at distance 0 and 64 after the anchor revert with `EvidenceSlotNotHistorical`, even though the first
+    /// has a valid branch. The control at distance 8193 is accepted. Matters: those slots belong to `block_roots`, which
+    /// holds the ring, so they cannot prove the historical position.
+    function test_HB01_historicalLayoutWithRecentEarlierSlotRejected() public {
+        (, HistoricalScene memory historical) = _historicalFixture();
+        BridgeVault.HistoricalSummariesEvidence memory near = _copy(historical.historicalEvidence);
+        near.earlierSlot = HISTORICAL_ANCHOR - 8192;
+        near.branch = historical.extraBranches[1];
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BridgeVault.EvidenceSlotNotHistorical.selector, HISTORICAL_ANCHOR - 8192, HISTORICAL_ANCHOR
+            )
+        );
+        fresh.addHistoricalSummariesLayout(SUMMARIES, near);
+
+        BridgeVault.HistoricalSummariesEvidence memory equal = _copy(historical.historicalEvidence);
+        equal.earlierSlot = HISTORICAL_ANCHOR;
+        vm.expectRevert(
+            abi.encodeWithSelector(BridgeVault.EvidenceSlotNotHistorical.selector, HISTORICAL_ANCHOR, HISTORICAL_ANCHOR)
+        );
+        fresh.addHistoricalSummariesLayout(SUMMARIES, equal);
+
+        BridgeVault.HistoricalSummariesEvidence memory after_ = _copy(historical.historicalEvidence);
+        after_.earlierSlot = HISTORICAL_ANCHOR + 64;
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BridgeVault.EvidenceSlotNotHistorical.selector, HISTORICAL_ANCHOR + 64, HISTORICAL_ANCHOR
+            )
+        );
+        fresh.addHistoricalSummariesLayout(SUMMARIES, after_);
+
+        BridgeVault.HistoricalSummariesEvidence memory boundary = _copy(historical.historicalEvidence);
+        boundary.earlierSlot = HISTORICAL_ANCHOR - 8193;
+        boundary.branch = historical.extraBranches[0];
+        fresh.addHistoricalSummariesLayout(SUMMARIES, boundary);
+    }
+
+    /// Claim: the anchor must be a stored header. Shows: a forged anchor (a state root of the attacker's choice) reverts
+    /// with `AnchorNotStored`. The honest anchor is accepted. Matters: an attacker cannot choose the tree.
+    function test_HB01_historicalLayoutWithForgedAnchorRejected() public {
+        (, HistoricalScene memory historical) = _historicalFixture();
+        BridgeVault.HistoricalSummariesEvidence memory evidence = _copy(historical.historicalEvidence);
+        evidence.anchorHeader.stateRoot = keccak256("a state root the attacker chose");
+        bytes32 root = SSZ.hashTreeRootMemory(evidence.anchorHeader);
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.AnchorNotStored.selector, HISTORICAL_ANCHOR, root));
+        fresh.addHistoricalSummariesLayout(SUMMARIES, evidence);
+        fresh.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
+    }
+
+    /// Claim: the branch must belong to the earlier slot. Shows: the branch of another stored slot, and a branch with a
+    /// changed sibling, revert with `LayoutEvidenceInvalid`. The honest branch is accepted. Matters: the leaf is tied to
+    /// its own era index and its own slot offset.
+    function test_HB01_historicalLayoutWithForeignBranchRejected() public {
+        (, HistoricalScene memory historical) = _historicalFixture();
+        BridgeVault.HistoricalSummariesEvidence memory foreign = _copy(historical.historicalEvidence);
+        foreign.branch = historical.extraBranches[0];
+        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        fresh.addHistoricalSummariesLayout(SUMMARIES, foreign);
+
+        BridgeVault.HistoricalSummariesEvidence memory tampered = _copy(historical.historicalEvidence);
+        tampered.branch = _concat(_slice(tampered.branch, 0, 20), _concat(_repeat(keccak256("x"), 1), _slice(tampered.branch, 21, 45)));
+        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        fresh.addHistoricalSummariesLayout(SUMMARIES, tampered);
+        fresh.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
+    }
+
+    /// Claim: an earlier slot in an era before `capellaEra` is rejected. Shows: the evidence slot is in era 109; a vault
+    /// with capellaEra 110 reverts with `DepositBeforeCapellaEra(109, 110)`. The vault with capellaEra 0 accepts the same
+    /// evidence. Matters: no summary exists before Capella, and the index would underflow.
+    function test_HB01_historicalLayoutWithEraBeforeCapellaRejected() public {
+        (, HistoricalScene memory historical) = _historicalFixture();
+        BridgeVault late = _newWithdrawalVault(0, 110);
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.DepositBeforeCapellaEra.selector, uint64(109), uint64(110)));
+        late.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
+        fresh.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
+    }
+
+    // ================================================================ historical summaries: other fields that hold block roots
+
+    /// @dev A bad anchor: a stored header whose state really holds the stored header root of the evidence slot at
+    /// `leafGindex` (and a stand-in in every other field). Returns the evidence with the real branch of that leaf.
+    function _anchorHoldingRootAt(uint64 anchorSlot, uint256 leafGindex)
+        internal
+        returns (BridgeVault.HistoricalSummariesEvidence memory evidence)
+    {
+        bytes32 storedRoot = lightClientForB.headers(HISTORICAL_EVIDENCE);
+        assertTrue(storedRoot != bytes32(0), "the evidence slot is stored");
+        (bytes32 stateRoot, bytes32[] memory branch) = _stateWithLeaf(leafGindex, storedRoot);
+        BeaconBlockHeader memory anchor = BeaconBlockHeader({
+            slot: anchorSlot,
+            proposerIndex: 9,
+            parentRoot: keccak256(abi.encode("bad anchor parent", anchorSlot)),
+            stateRoot: stateRoot,
+            bodyRoot: keccak256(abi.encode("bad anchor body", anchorSlot))
+        });
+        _storeAnchor(anchorSlot, SSZ.hashTreeRootMemory(anchor));
+        evidence = BridgeVault.HistoricalSummariesEvidence({anchorHeader: anchor, earlierSlot: HISTORICAL_EVIDENCE, branch: branch});
+    }
+
+    /// @dev Offers `candidate` with every branch the attacker can build from the real branch of the leaf, and requires a
+    /// refusal for each. `expectedLength` is the branch length the vault demands for the candidate.
+    function _assertEveryBranchRefused(
+        uint256 candidate,
+        BridgeVault.HistoricalSummariesEvidence memory evidence,
+        uint256 expectedLength
+    ) internal {
+        bytes32[] memory real = evidence.branch;
+        assertLt(real.length, expectedLength, "the real branch is shorter than the vault demands");
+        uint256 missing = expectedLength - real.length;
+        bytes32 arbitrary = keccak256("arbitrary sibling");
+
+        // The real branch as it is: the length differs, so the vault says so.
+        vm.expectRevert(abi.encodeWithSelector(SSZ.BranchLengthMismatch.selector, expectedLength, real.length));
+        fresh.addHistoricalSummariesLayout(candidate, evidence);
+
+        bytes32[][4] memory padded;
+        padded[0] = _concat(real, _repeat(bytes32(0), missing)); // zeros above the real siblings
+        padded[1] = _concat(_repeat(bytes32(0), missing), real); // zeros below the real siblings
+        padded[2] = _concat(real, _repeat(arbitrary, missing)); // arbitrary hashes above
+        padded[3] = _concat(_repeat(arbitrary, missing), real); // arbitrary hashes below
+        for (uint256 i = 0; i < padded.length; i++) {
+            evidence.branch = padded[i];
+            vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+            fresh.addHistoricalSummariesLayout(candidate, evidence);
+        }
+        evidence.branch = real;
+    }
+
+    /// Claim: a candidate that is `state.block_roots` (field 5, position 69) is refused although the state really holds
+    /// the stored header root there, at index `earlierSlot % 8192`. Shows: the real branch (19 entries) reverts with
+    /// `BranchLengthMismatch(45, 19)`; that real branch padded with zeros or arbitrary hashes, above or below, reverts
+    /// with `LayoutEvidenceInvalid`; so does the best aligned attempt, the 13 real vector siblings followed by 26 arbitrary
+    /// entries and then the 6 real state siblings. The honest historical anchor is accepted. Matters: a field that holds
+    /// the same root cannot pass as `historical_summaries`; the path lengths differ, and any padding needs a hash preimage.
+    function test_HB01_historicalLayoutAtBlockRootsFieldRejected() public {
+        _historicalFixture();
+        uint256 leaf = 69 * 8192 + (HISTORICAL_EVIDENCE % 8192);
+        BridgeVault.HistoricalSummariesEvidence memory bad = _anchorHoldingRootAt(1_100_000, leaf);
+        assertEq(bad.branch.length, 19);
+        _assertEveryBranchRefused(69, bad, 45);
+
+        bytes32[] memory real = bad.branch;
+        bad.branch = _concat(_slice(real, 0, 13), _concat(_repeat(keccak256("arbitrary sibling"), 26), _slice(real, 13, 19)));
+        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        fresh.addHistoricalSummariesLayout(69, bad);
+
+        (, HistoricalScene memory honest) = _honestAfterBad();
+        fresh.addHistoricalSummariesLayout(SUMMARIES, honest.historicalEvidence);
+        assertEq(fresh.historicalLayouts().length, 1);
+        assertEq(fresh.historicalLayouts()[0].historicalSummariesGindex, SUMMARIES);
+    }
+
+    /// @dev The honest control: the fixture's own anchor (stored before the bad anchors).
+    function _honestAfterBad() internal pure returns (HistoricalParams memory fixtureParams, HistoricalScene memory historical) {
+        fixtureParams = _historicalParams(HISTORICAL_ANCHOR, 0, SUMMARIES, HISTORICAL_EVIDENCE, _noSlots());
+        fixtureParams.extraStoredSlots = _slots(HISTORICAL_ANCHOR - 8193, HISTORICAL_ANCHOR - 8192, HISTORICAL_ANCHOR + 64);
+        historical = _buildHistorical(fixtureParams, _defaultHeaderRlp());
+    }
+
+    /// Claim: a candidate that is `state.finalized_checkpoint.root` (field 20, then field 1 of the checkpoint: position
+    /// (64 + 20) * 2 + 1 = 169, depth 7) is refused although the state really holds the stored header root there. Shows:
+    /// the real branch (7 entries) reverts with `BranchLengthMismatch(46, 7)`; every padded variant reverts with
+    /// `LayoutEvidenceInvalid`. The honest anchor is accepted. Matters: a finalized checkpoint root is a block root, so
+    /// it is the most natural impostor.
+    function test_HB01_historicalLayoutAtFinalizedCheckpointRootRejected() public {
+        _historicalFixture();
+        BridgeVault.HistoricalSummariesEvidence memory bad = _anchorHoldingRootAt(1_100_000, 169);
+        assertEq(bad.branch.length, 7);
+        _assertEveryBranchRefused(169, bad, 46);
+        (, HistoricalScene memory honest) = _honestAfterBad();
+        fresh.addHistoricalSummariesLayout(SUMMARIES, honest.historicalEvidence);
+        assertEq(fresh.historicalLayouts().length, 1);
+    }
+
+    /// Claim: a candidate that is `state.latest_block_header` (field 4, position 68) is refused although the state really
+    /// holds the stored header root as its `parent_root`. The header container has 5 fields padded to 8 leaves and
+    /// `parent_root` is its leaf 2, so the leaf sits at 68 * 8 + 2 = 546 (depth 9). Shows: the real branch (9 entries)
+    /// offered for candidate 68 reverts with `BranchLengthMismatch(45, 9)` and every padded variant with
+    /// `LayoutEvidenceInvalid`. Candidate 546 itself is deeper than 8 and reverts with `LayoutOutOfBounds(546)`. The honest
+    /// anchor is accepted. Matters: the parent root of the latest header is a stored root too.
+    function test_HB01_historicalLayoutAtLatestBlockHeaderRejected() public {
+        _historicalFixture();
+        BridgeVault.HistoricalSummariesEvidence memory bad = _anchorHoldingRootAt(1_100_000, 68 * 8 + 2);
+        assertEq(bad.branch.length, 9);
+        _assertEveryBranchRefused(68, bad, 45);
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutOutOfBounds.selector, uint256(546)));
+        fresh.addHistoricalSummariesLayout(546, bad);
+        (, HistoricalScene memory honest) = _honestAfterBad();
+        fresh.addHistoricalSummariesLayout(SUMMARIES, honest.historicalEvidence);
+        assertEq(fresh.historicalLayouts().length, 1);
+    }
+
+    // ================================================================ historical summaries: wrong list depth
+
+    /// @dev A bad anchor whose `historical_summaries` list was built with another depth: the root commits the stored
+    /// header root at the position that the other limit gives. Returns the evidence with the real branch of that tree.
+    function _anchorWithListDepth(uint64 anchorSlot, uint256 listDepth)
+        internal
+        returns (BridgeVault.HistoricalSummariesEvidence memory evidence)
+    {
+        uint256 leaf = _historicalLeafWithListDepth(SUMMARIES, 0, HISTORICAL_EVIDENCE, listDepth);
+        evidence = _anchorHoldingRootAt(anchorSlot, leaf);
+        assertEq(evidence.branch.length, 6 + 1 + listDepth + 1 + 13, "the bad tree has its own depth");
+    }
+
+    /// Claim: a state whose summaries list has depth 23 (limit 2^23) is refused for position 91. Shows: its real branch has
+    /// 44 entries and reverts with `BranchLengthMismatch(45, 44)`. Adding one sibling at any of the 45 places (the best
+    /// the attacker can do to reach the length) reverts with `LayoutEvidenceInvalid` every time. The depth 24 anchor is
+    /// accepted. Matters: the list depth is part of the root, so a state with another limit cannot validate the row.
+    function test_HB01_historicalLayoutWithListDepth23Rejected() public {
+        _historicalFixture();
+        BridgeVault.HistoricalSummariesEvidence memory bad = _anchorWithListDepth(1_100_000, 23);
+        vm.expectRevert(abi.encodeWithSelector(SSZ.BranchLengthMismatch.selector, uint256(45), uint256(44)));
+        fresh.addHistoricalSummariesLayout(SUMMARIES, bad);
+        bytes32[] memory real = bad.branch;
+        for (uint256 place = 0; place < 45; place++) {
+            bad.branch = _inserting(real, place, keccak256("arbitrary sibling"));
+            vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+            fresh.addHistoricalSummariesLayout(SUMMARIES, bad);
+            bad.branch = _inserting(real, place, bytes32(0));
+            vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+            fresh.addHistoricalSummariesLayout(SUMMARIES, bad);
+        }
+        (, HistoricalScene memory honest) = _honestAfterBad();
+        fresh.addHistoricalSummariesLayout(SUMMARIES, honest.historicalEvidence);
+        assertEq(fresh.historicalLayouts().length, 1);
+    }
+
+    /// Claim: a state whose summaries list has depth 25 (limit 2^25) is refused for position 91. Shows: its real branch has
+    /// 46 entries and reverts with `BranchLengthMismatch(45, 46)`. Removing one sibling at any of the 46 places reverts
+    /// with `LayoutEvidenceInvalid` every time. The depth 24 anchor is accepted. Matters: the same as above, in the other direction.
+    function test_HB01_historicalLayoutWithListDepth25Rejected() public {
+        _historicalFixture();
+        BridgeVault.HistoricalSummariesEvidence memory bad = _anchorWithListDepth(1_100_000, 25);
+        vm.expectRevert(abi.encodeWithSelector(SSZ.BranchLengthMismatch.selector, uint256(45), uint256(46)));
+        fresh.addHistoricalSummariesLayout(SUMMARIES, bad);
+        bytes32[] memory real = bad.branch;
+        for (uint256 place = 0; place < 46; place++) {
+            bad.branch = _without(real, place);
+            vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+            fresh.addHistoricalSummariesLayout(SUMMARIES, bad);
+        }
+        (, HistoricalScene memory honest) = _honestAfterBad();
+        fresh.addHistoricalSummariesLayout(SUMMARIES, honest.historicalEvidence);
+        assertEq(fresh.historicalLayouts().length, 1);
     }
 }

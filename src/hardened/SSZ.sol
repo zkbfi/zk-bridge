@@ -65,6 +65,26 @@ library SSZ {
         return value == root;
     }
 
+    /// @notice The same check for a branch held in memory, for evidence that the caller decoded from `bytes`.
+    /// @param leaf The leaf value.
+    /// @param branch The siblings, deepest first.
+    /// @param generalizedIndex The generalized index of the leaf.
+    /// @param root The expected root.
+    function isValidBranchMemory(bytes32 leaf, bytes32[] memory branch, uint256 generalizedIndex, bytes32 root)
+        internal
+        pure
+        returns (bool)
+    {
+        uint256 depth = depthOf(generalizedIndex);
+        if (branch.length != depth) revert BranchLengthMismatch(depth, branch.length);
+        bytes32 value = leaf;
+        for (uint256 level = 0; level < depth; level++) {
+            bool nodeIsRight = (generalizedIndex >> level) & 1 == 1;
+            value = nodeIsRight ? _hashPair(branch[level], value) : _hashPair(value, branch[level]);
+        }
+        return value == root;
+    }
+
     /// @notice The depth of a generalized index: the number of bits below the leading one.
     /// @param generalizedIndex The index. It must not be zero.
     function depthOf(uint256 generalizedIndex) internal pure returns (uint256 depth) {

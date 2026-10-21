@@ -2,6 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {HardenedFixture} from "./utils/HardenedFixture.sol";
+import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
+import {GateGenuineBeaconRoots} from "./utils/GateMocks.sol";
 
 /// @notice PulseChain stopped at Shanghai. It rejects MCOPY (0x5e) and TSTORE (0x5d). These tests scan the deployed
 /// runtime bytecode of the hardened contracts, skipping the data bytes that follow PUSH1 to PUSH32.
@@ -41,23 +43,62 @@ contract BytecodeTest is HardenedFixture {
 
     // ---------------------------------------------------------------- the contracts
 
-    /// Claim: neither hardened contract contains MCOPY or TSTORE (or TLOAD). Shows: the count is zero for each opcode in
-    /// the runtime code of the light client and of both vaults, with the vendored libraries linked in. Matters: R2-10
-    /// (the repository compiled for cancun, and PulseChain rejects those opcodes). The storage reentrancy guard, not the
-    /// transient one, is what makes this pass for the vault.
-    function test_R2_10_noMcopyOrTstoreInHardenedBytecode() public view {
-        bytes[3] memory codes = [address(lightClientForA).code, address(vaultA).code, address(vaultB).code];
+    /// Claim: no hardened contract contains MCOPY or TSTORE (or TLOAD). Shows: the count is zero for each opcode in
+    /// the runtime code of the light client, both vaults and both fork gates (detection mode and enforcing mode), with
+    /// the vendored libraries linked in. Matters: R2-10 (the repository compiled for cancun, and PulseChain rejects
+    /// those opcodes). The gate is deployed on PulseChain too. The storage reentrancy guard, not the transient one, is
+    /// what makes this pass for the vault.
+    function test_R2_10_noMcopyOrTstoreInHardenedBytecode() public {
+        bytes[5] memory codes = [
+            address(lightClientForA).code,
+            address(vaultA).code,
+            address(vaultB).code,
+            address(gateA).code,
+            address(_newGate(BeaconForkGate.GateMode.Enforcing)).code
+        ];
         for (uint256 i = 0; i < codes.length; i++) {
             assertGt(codes[i].length, 1000, "the contract has code");
-            assertEq(_countOpcode(codes[i], MCOPY), 0, "no MCOPY");
-            assertEq(_countOpcode(codes[i], TSTORE), 0, "no TSTORE");
-            assertEq(_countOpcode(codes[i], TLOAD), 0, "no TLOAD");
+            _assertNoNewOpcodes(codes[i]);
         }
     }
 
-    /// Claim: the contracts fit the 24576-byte limit. Shows: the sizes. Matters: a deployable contract on both chains.
+    function _assertNoNewOpcodes(bytes memory code) internal pure {
+        assertEq(_countOpcode(code, MCOPY), 0, "no MCOPY");
+        assertEq(_countOpcode(code, TSTORE), 0, "no TSTORE");
+        assertEq(_countOpcode(code, TLOAD), 0, "no TLOAD");
+    }
+
+    /// Claim: the fork gate contains none of the three opcodes, checked on its own. Shows: zero counts on the runtime
+    /// code of the gate in both modes. Matters: HB-02, the same gate bytecode runs on PulseChain (stopped at
+    /// Shanghai).
+    function test_HB02_noMcopyOrTstoreInForkGateBytecode() public {
+        bytes memory detecting = address(gateB).code;
+        bytes memory enforcing = address(_newGate(BeaconForkGate.GateMode.Enforcing)).code;
+        assertGt(detecting.length, 1000);
+        assertGt(enforcing.length, 1000);
+        _assertNoNewOpcodes(detecting);
+        _assertNoNewOpcodes(enforcing);
+    }
+
+    /// Claim: the genuine EIP-4788 runtime code has none of the opcodes, and a deliberately bad snippet is caught.
+    /// Shows: zero counts for the genuine code (a control that the scanner reads real code without false alarms),
+    /// and one count each for a snippet of `TLOAD TSTORE MCOPY`. Matters: a scanner that never fails proves nothing.
+    function test_HB02_scannerControl_genuineCodeIsCleanAndABadSnippetIsCaught() public pure {
+        _assertNoNewOpcodes(GateGenuineBeaconRoots.code());
+        bytes memory bad = hex"5c5d5e";
+        assertEq(_countOpcode(bad, TLOAD), 1);
+        assertEq(_countOpcode(bad, TSTORE), 1);
+        assertEq(_countOpcode(bad, MCOPY), 1);
+        // a bad opcode after push data is still found, and one inside push data is not
+        assertEq(_countOpcode(hex"605d5e", MCOPY), 1);
+        assertEq(_countOpcode(hex"605e5d", MCOPY), 0);
+    }
+
+    /// Claim: the contracts, the fork gate included, fit the 24576-byte limit. Shows: the sizes. Matters: a
+    /// deployable contract on both chains.
     function test_R2_10_hardenedContractsFitTheSizeLimit() public view {
         assertLt(address(lightClientForA).code.length, 24_576);
         assertLt(address(vaultA).code.length, 24_576);
+        assertLt(address(gateA).code.length, 24_576);
     }
 }

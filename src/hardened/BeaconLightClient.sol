@@ -7,8 +7,9 @@ import {IBeaconLightClient} from "./IBeaconLightClient.sol";
 /// @title BeaconLightClient
 /// @notice Tracks the finalized beacon chain of one source chain with zero-knowledge proofs of the
 /// Altair light-client protocol. It follows the shape of the Succinct SP1 Helios contract.
-/// @dev Every past head stays stored forever, because withdrawals use it as an anchor. A head moves at most
-/// `slotsPerHistoricalRoot` slots, so a deposit block is always within `state.block_roots` range of a stored anchor.
+/// @dev Every past head stays stored forever, because withdrawals use it as an anchor. A head may jump any distance:
+/// the program folds 1 to 64 updates into one proof, and the vault proves an old deposit through
+/// `state.historical_summaries` when the anchor is more than 8192 slots away.
 /// One proof check per update, whatever the committee size, because the contract stores only
 /// committee hashes. The contract has no owner, no upgrade path, and no pause.
 contract BeaconLightClient is IBeaconLightClient {
@@ -18,6 +19,7 @@ contract BeaconLightClient is IBeaconLightClient {
         bytes32 previousHeaderRoot;
         uint64 previousHeadSlot;
         bytes32 previousSyncCommitteeHash;
+        bytes32 startNextSyncCommitteeHash;
         bytes32 newHeaderRoot;
         uint64 newHeadSlot;
         bytes32 executionBlockHash;
@@ -32,8 +34,8 @@ contract BeaconLightClient is IBeaconLightClient {
         uint64 number;
     }
 
-    /// @notice The size of the encoded output: ten static words.
-    uint256 public constant PUBLIC_VALUES_LENGTH = 320;
+    /// @notice The size of the encoded output: eleven static words.
+    uint256 public constant PUBLIC_VALUES_LENGTH = 352;
 
     /// @notice A constructor argument is zero.
     error ZeroValue(string name);
@@ -47,19 +49,17 @@ contract BeaconLightClient is IBeaconLightClient {
     error PreviousHeaderRootMismatch(bytes32 expected, bytes32 actual);
     /// @notice The output builds on another committee than the stored one.
     error PreviousSyncCommitteeMismatch(bytes32 expected, bytes32 actual);
+    /// @notice The output starts from another next committee than the stored one (zero equals zero). This binds the
+    /// private starting store of the program, so a caller cannot invent a starting next committee.
+    error StartNextSyncCommitteeMismatch(bytes32 expected, bytes32 actual);
     /// @notice The new head slot is not past the stored head.
     error HeadNotAdvancing(uint64 head, uint64 newHeadSlot);
-    /// @notice The new head slot is more than `slotsPerHistoricalRoot` past the stored head.
-    error HeadJumpTooLarge(uint64 head, uint64 newHeadSlot);
-    /// @notice `slotsPerHistoricalRoot` is larger than `slotsPerPeriod`, which would allow an update to skip a committee.
-    error HistoricalRootWindowTooLarge(uint64 slotsPerHistoricalRoot, uint64 slotsPerPeriod);
     /// @notice The new header root is zero.
     error EmptyHeaderRoot();
     /// @notice The execution block hash is zero.
     error EmptyExecutionBlockHash();
-    /// @notice The new head is in the next period, but no next committee is stored yet. An empty slot is never filled
-    /// from the committee in the output, because that would let a caller install a committee of their own keys.
-    error NextSyncCommitteeUnknown(uint64 period);
+    /// @notice The committee hash of the new head is zero. The program never outputs a zero committee.
+    error EmptySyncCommitteeHash();
     /// @notice The committee in the output differs from the stored committee for its period.
     error SyncCommitteeMismatch(bytes32 expected, bytes32 actual);
     /// @notice The next committee differs from the stored next committee.
@@ -78,10 +78,6 @@ contract BeaconLightClient is IBeaconLightClient {
     bytes32 public immutable genesisValidatorsRoot;
     /// @notice The number of slots in a sync committee period.
     uint64 public immutable slotsPerPeriod;
-    /// @notice The number of past slots that `state.block_roots` covers (8192 on Ethereum and PulseChain).
-    /// @dev A head may move at most this far, so every slot lies within this distance below some stored anchor.
-    /// The constructor requires it to be at most `slotsPerPeriod`, so one update crosses at most one period boundary.
-    uint64 public immutable slotsPerHistoricalRoot;
 
     /// @notice The slot of the latest finalized header.
     uint64 public head;
@@ -103,7 +99,6 @@ contract BeaconLightClient is IBeaconLightClient {
     /// @param initialHeaderRoot The header root of the trusted checkpoint.
     /// @param initialSyncCommitteeHash The committee hash for the period of the checkpoint.
     /// @param initialNextSyncCommitteeHash The committee hash for the next period, or zero.
-    /// @param slotsPerHistoricalRoot_ The largest head jump in slots. It is `SLOTS_PER_HISTORICAL_ROOT` of the chain.
     constructor(
         address verifier_,
         bytes32 programVKey_,
@@ -112,17 +107,12 @@ contract BeaconLightClient is IBeaconLightClient {
         uint64 initialSlot,
         bytes32 initialHeaderRoot,
         bytes32 initialSyncCommitteeHash,
-        bytes32 initialNextSyncCommitteeHash,
-        uint64 slotsPerHistoricalRoot_
+        bytes32 initialNextSyncCommitteeHash
     ) {
         if (verifier_ == address(0)) revert ZeroValue("verifier");
         if (programVKey_ == bytes32(0)) revert ZeroValue("programVKey");
         if (genesisValidatorsRoot_ == bytes32(0)) revert ZeroValue("genesisValidatorsRoot");
         if (slotsPerPeriod_ == 0) revert ZeroValue("slotsPerPeriod");
-        if (slotsPerHistoricalRoot_ == 0) revert ZeroValue("slotsPerHistoricalRoot");
-        if (slotsPerHistoricalRoot_ > slotsPerPeriod_) {
-            revert HistoricalRootWindowTooLarge(slotsPerHistoricalRoot_, slotsPerPeriod_);
-        }
         if (initialSlot == 0) revert ZeroValue("initialSlot");
         if (initialHeaderRoot == bytes32(0)) revert ZeroValue("initialHeaderRoot");
         if (initialSyncCommitteeHash == bytes32(0)) revert ZeroValue("initialSyncCommitteeHash");
@@ -131,7 +121,6 @@ contract BeaconLightClient is IBeaconLightClient {
         programVKey = programVKey_;
         genesisValidatorsRoot = genesisValidatorsRoot_;
         slotsPerPeriod = slotsPerPeriod_;
-        slotsPerHistoricalRoot = slotsPerHistoricalRoot_;
 
         uint64 period = initialSlot / slotsPerPeriod_;
         head = initialSlot;
@@ -148,29 +137,8 @@ contract BeaconLightClient is IBeaconLightClient {
         if (publicValues.length != PUBLIC_VALUES_LENGTH) revert InvalidPublicValuesLength(publicValues.length);
         LightClientOutput memory output = abi.decode(publicValues, (LightClientOutput));
 
-        if (output.genesisValidatorsRoot != genesisValidatorsRoot) {
-            revert GenesisValidatorsRootMismatch(genesisValidatorsRoot, output.genesisValidatorsRoot);
-        }
-        uint64 currentHead = head;
-        if (output.previousHeadSlot != currentHead) revert PreviousHeadSlotMismatch(currentHead, output.previousHeadSlot);
-        bytes32 currentHeaderRoot = headers[currentHead];
-        if (output.previousHeaderRoot != currentHeaderRoot) {
-            revert PreviousHeaderRootMismatch(currentHeaderRoot, output.previousHeaderRoot);
-        }
-        uint64 headPeriod = currentHead / slotsPerPeriod;
-        bytes32 currentCommittee = syncCommittees[headPeriod];
-        if (output.previousSyncCommitteeHash != currentCommittee) {
-            revert PreviousSyncCommitteeMismatch(currentCommittee, output.previousSyncCommitteeHash);
-        }
-        if (output.newHeadSlot <= currentHead) revert HeadNotAdvancing(currentHead, output.newHeadSlot);
-        if (output.newHeadSlot - currentHead > slotsPerHistoricalRoot) {
-            revert HeadJumpTooLarge(currentHead, output.newHeadSlot);
-        }
-        uint64 newPeriod = output.newHeadSlot / slotsPerPeriod;
-        if (output.newHeaderRoot == bytes32(0)) revert EmptyHeaderRoot();
-        if (output.executionBlockHash == bytes32(0)) revert EmptyExecutionBlockHash();
-        _requireCommitteeKnown(headPeriod, newPeriod, output.syncCommitteeHash);
-        _requireNextCommitteeConsistent(newPeriod, output.nextSyncCommitteeHash);
+        _requireStoredStart(output);
+        bool writesNewCommittee = _requireProgress(output);
 
         verifier.verifyProof(programVKey, publicValues, proof);
 
@@ -179,8 +147,11 @@ contract BeaconLightClient is IBeaconLightClient {
         executionBlockHashes[output.newHeadSlot] = output.executionBlockHash;
         _finalizedBlocks[output.executionBlockHash] =
             FinalizedBlock({finalized: true, number: output.executionBlockNumber});
-        // The committee of `newPeriod` is never written from the output: it was stored already and just matched.
-        // The next slot is written only when the program proved a next committee and the slot is still empty.
+        uint64 newPeriod = output.newHeadSlot / slotsPerPeriod;
+        // Rule 4: a crossing into a period with no stored committee writes it. The program proved the chain of
+        // handoffs from the bound start (`previousSyncCommitteeHash` and `startNextSyncCommitteeHash`).
+        if (writesNewCommittee) syncCommittees[newPeriod] = output.syncCommitteeHash;
+        // Rule 5: the next slot is written only when the program proved a next committee and the slot is still empty.
         if (output.nextSyncCommitteeHash != bytes32(0) && syncCommittees[newPeriod + 1] == bytes32(0)) {
             syncCommittees[newPeriod + 1] = output.nextSyncCommitteeHash;
         }
@@ -206,13 +177,57 @@ contract BeaconLightClient is IBeaconLightClient {
         return slot / slotsPerPeriod;
     }
 
-    /// @dev The committee that signed the new head must be one the contract already stored. In the head period it is
-    /// the stored committee. In the next period the next committee must be stored, and it must equal the output.
-    /// An empty slot is never filled here. `periodOf` is the only source of a period; the caller names none.
-    function _requireCommitteeKnown(uint64 headPeriod, uint64 newPeriod, bytes32 committeeHash) private view {
+    /// @dev The genesis validators root and the starting store. Rule 1: the output names the stored head, header root,
+    /// committee and next committee (zero equals zero), so the private starting store of the program is bound.
+    function _requireStoredStart(LightClientOutput memory output) private view {
+        if (output.genesisValidatorsRoot != genesisValidatorsRoot) {
+            revert GenesisValidatorsRootMismatch(genesisValidatorsRoot, output.genesisValidatorsRoot);
+        }
+        uint64 currentHead = head;
+        if (output.previousHeadSlot != currentHead) revert PreviousHeadSlotMismatch(currentHead, output.previousHeadSlot);
+        bytes32 currentHeaderRoot = headers[currentHead];
+        if (output.previousHeaderRoot != currentHeaderRoot) {
+            revert PreviousHeaderRootMismatch(currentHeaderRoot, output.previousHeaderRoot);
+        }
+        uint64 headPeriod = currentHead / slotsPerPeriod;
+        bytes32 currentCommittee = syncCommittees[headPeriod];
+        if (output.previousSyncCommitteeHash != currentCommittee) {
+            revert PreviousSyncCommitteeMismatch(currentCommittee, output.previousSyncCommitteeHash);
+        }
+        bytes32 currentNextCommittee = syncCommittees[headPeriod + 1];
+        if (output.startNextSyncCommitteeHash != currentNextCommittee) {
+            revert StartNextSyncCommitteeMismatch(currentNextCommittee, output.startNextSyncCommitteeHash);
+        }
+    }
+
+    /// @dev Rules 2 to 5, the checks on the new head. Returns whether the caller must write the committee of the new
+    /// period (rule 4, empty slot).
+    function _requireProgress(LightClientOutput memory output) private view returns (bool writesNewCommittee) {
+        uint64 currentHead = head;
+        // Rule 2: the head only moves forward. There is no jump cap.
+        if (output.newHeadSlot <= currentHead) revert HeadNotAdvancing(currentHead, output.newHeadSlot);
+        if (output.newHeaderRoot == bytes32(0)) revert EmptyHeaderRoot();
+        if (output.executionBlockHash == bytes32(0)) revert EmptyExecutionBlockHash();
+        uint64 newPeriod = output.newHeadSlot / slotsPerPeriod;
+        writesNewCommittee = _requireNewCommittee(currentHead / slotsPerPeriod, newPeriod, output.syncCommitteeHash);
+        _requireNextCommitteeConsistent(newPeriod, output.nextSyncCommitteeHash);
+    }
+
+    /// @dev Rules 3 and 4. In the head period the output must equal the stored committee. In a later period it must
+    /// equal the stored committee when one is stored. When the slot is empty the function reports that the caller must
+    /// write it: the folded program proved the handoffs from a start that rules 1 bound to stored values.
+    /// A zero committee hash is refused, because writing zero would leave the new head with no committee.
+    /// `periodOf` is the only source of a period; the caller names none.
+    function _requireNewCommittee(uint64 headPeriod, uint64 newPeriod, bytes32 committeeHash)
+        private
+        view
+        returns (bool writesNewCommittee)
+    {
+        if (committeeHash == bytes32(0)) revert EmptySyncCommitteeHash();
         bytes32 stored = syncCommittees[newPeriod];
-        if (newPeriod != headPeriod && stored == bytes32(0)) revert NextSyncCommitteeUnknown(newPeriod);
+        if (newPeriod > headPeriod && stored == bytes32(0)) return true;
         if (stored != committeeHash) revert SyncCommitteeMismatch(stored, committeeHash);
+        return false;
     }
 
     /// @dev A non-zero next committee must equal the stored next committee when one is stored. A zero value changes

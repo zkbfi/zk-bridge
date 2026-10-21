@@ -10,11 +10,26 @@
       "programVKey": "REPLACE_WITH_LIGHT_CLIENT_PROGRAM_VKEY",
       "genesisValidatorsRoot": "REPLACE_WITH_GENESIS_VALIDATORS_ROOT_OF_CHAIN_B",
       "slotsPerPeriod": "REPLACE_WITH_SLOTS_PER_PERIOD_OF_CHAIN_B",
-      "slotsPerHistoricalRoot": "REPLACE_WITH_SLOTS_PER_HISTORICAL_ROOT_OF_CHAIN_B",
+      "slotsPerEpoch": "REPLACE_WITH_SLOTS_PER_EPOCH_OF_CHAIN_B",
+      "capellaForkEpoch": "REPLACE_WITH_CAPELLA_FORK_EPOCH_OF_CHAIN_B",
+      "capellaEra": "REPLACE_WITH_CAPELLA_FORK_EPOCH_TIMES_SLOTS_PER_EPOCH_DIVIDED_BY_8192_ROUNDED_DOWN",
       "initialSlot": "REPLACE_WITH_CHECKPOINT_SLOT_OF_CHAIN_B",
       "initialHeaderRoot": "REPLACE_WITH_CHECKPOINT_HEADER_ROOT_OF_CHAIN_B",
       "initialSyncCommitteeHash": "REPLACE_WITH_COMMITTEE_HASH_AT_CHECKPOINT",
       "initialNextSyncCommitteeHash": "REPLACE_WITH_NEXT_COMMITTEE_HASH_AT_CHECKPOINT"
+    },
+    "gate": {
+      "mode": "REPLACE_WITH_Enforcing_OR_DetectBeaconRoots",
+      "genesisTime": "REPLACE_WITH_GENESIS_TIME_OF_CHAIN_A_BEACON_CHAIN",
+      "secondsPerSlot": "REPLACE_WITH_SECONDS_PER_SLOT_OF_CHAIN_A",
+      "slotsPerEpoch": "REPLACE_WITH_SLOTS_PER_EPOCH_OF_CHAIN_A",
+      "supportedVersions": [
+        {
+          "version": "REPLACE_WITH_FORK_VERSION_OF_CHAIN_A_AS_4_BYTE_HEX",
+          "stateDepth": "REPLACE_WITH_BEACON_STATE_DEPTH_OF_THAT_FORK"
+        }
+      ],
+      "sealDepths": ["REPLACE_WITH_SEAL_DEPTH_5", "REPLACE_WITH_SEAL_DEPTH_6", "REPLACE_WITH_SEAL_DEPTH_7"]
     }
   },
   "chainB": {
@@ -27,11 +42,26 @@
       "programVKey": "REPLACE_WITH_LIGHT_CLIENT_PROGRAM_VKEY",
       "genesisValidatorsRoot": "REPLACE_WITH_GENESIS_VALIDATORS_ROOT_OF_CHAIN_A",
       "slotsPerPeriod": "REPLACE_WITH_SLOTS_PER_PERIOD_OF_CHAIN_A",
-      "slotsPerHistoricalRoot": "REPLACE_WITH_SLOTS_PER_HISTORICAL_ROOT_OF_CHAIN_A",
+      "slotsPerEpoch": "REPLACE_WITH_SLOTS_PER_EPOCH_OF_CHAIN_A",
+      "capellaForkEpoch": "REPLACE_WITH_CAPELLA_FORK_EPOCH_OF_CHAIN_A",
+      "capellaEra": "REPLACE_WITH_CAPELLA_FORK_EPOCH_TIMES_SLOTS_PER_EPOCH_DIVIDED_BY_8192_ROUNDED_DOWN",
       "initialSlot": "REPLACE_WITH_CHECKPOINT_SLOT_OF_CHAIN_A",
       "initialHeaderRoot": "REPLACE_WITH_CHECKPOINT_HEADER_ROOT_OF_CHAIN_A",
       "initialSyncCommitteeHash": "REPLACE_WITH_COMMITTEE_HASH_AT_CHECKPOINT",
       "initialNextSyncCommitteeHash": "REPLACE_WITH_NEXT_COMMITTEE_HASH_AT_CHECKPOINT"
+    },
+    "gate": {
+      "mode": "REPLACE_WITH_Enforcing_OR_DetectBeaconRoots",
+      "genesisTime": "REPLACE_WITH_GENESIS_TIME_OF_CHAIN_B_BEACON_CHAIN",
+      "secondsPerSlot": "REPLACE_WITH_SECONDS_PER_SLOT_OF_CHAIN_B",
+      "slotsPerEpoch": "REPLACE_WITH_SLOTS_PER_EPOCH_OF_CHAIN_B",
+      "supportedVersions": [
+        {
+          "version": "REPLACE_WITH_FORK_VERSION_OF_CHAIN_B_AS_4_BYTE_HEX",
+          "stateDepth": "REPLACE_WITH_BEACON_STATE_DEPTH_OF_THAT_FORK"
+        }
+      ],
+      "sealDepths": ["REPLACE_WITH_SEAL_DEPTH_5", "REPLACE_WITH_SEAL_DEPTH_6", "REPLACE_WITH_SEAL_DEPTH_7"]
     }
   },
   "tokenPairs": [

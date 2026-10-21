@@ -43,21 +43,45 @@ contract ImmutabilityTest is Test {
         _assertOnly(_mutatingFunctions("out/BeaconLightClient.sol/BeaconLightClient.json"), allowed);
     }
 
-    /// Claim: the vault has no owner, upgrade path, pause, or setter for the light client or anything else. Shows: the
-    /// ABI lists exactly four state-changing functions: `deposit`, `withdraw`, and the two open layout functions, which
-    /// only add positions that stored light-client data proves. Matters: H-04 (no key can redirect the vault).
+    /// Claim: the vault has no owner, upgrade path, pause, or setter for the light client, the gate, or anything else.
+    /// Shows: the ABI lists exactly five state-changing functions: `deposit`, `withdraw`, and the three open layout
+    /// functions (`addBlockRootsLayout`, `addHistoricalSummariesLayout`, `addBlockHashLayout`), which only add
+    /// positions that stored light-client data proves. Matters: H-04 (no key can redirect the vault).
     function test_H04_bridgeVault_onlyDepositWithdrawAndLayoutFunctionsChangeState() public view {
         string[] memory names = _mutatingFunctions("out/BridgeVault.sol/BridgeVault.json");
-        assertEq(names.length, 4);
-        uint256 matched;
-        for (uint256 i = 0; i < names.length; i++) {
-            bytes32 hashed = keccak256(bytes(names[i]));
-            if (
-                hashed == keccak256("deposit") || hashed == keccak256("withdraw")
-                    || hashed == keccak256("addBlockRootsLayout") || hashed == keccak256("addBlockHashLayout")
-            ) matched++;
+        string[] memory allowed = new string[](5);
+        allowed[0] = "deposit";
+        allowed[1] = "withdraw";
+        allowed[2] = "addBlockRootsLayout";
+        allowed[3] = "addHistoricalSummariesLayout";
+        allowed[4] = "addBlockHashLayout";
+        assertEq(names.length, allowed.length, "unexpected number of state-changing functions");
+        for (uint256 i = 0; i < allowed.length; i++) {
+            assertTrue(_contains(names, allowed[i]), allowed[i]);
         }
-        assertEq(matched, 4, "no other state-changing function exists");
+    }
+
+    /// Claim: the fork gate has no owner, upgrade path, pause, or setter. Shows: the ABI lists exactly three
+    /// state-changing functions, `admit`, `confirm` and `seal`, which only record what beacon chain evidence proves.
+    /// Matters: HB-02. A key that could switch the gate on or off was rejected on purpose, because a one-way switch
+    /// in the wrong hand would halt deposits for good.
+    function test_HB02_beaconForkGate_onlyAdmitConfirmAndSealChangeState() public view {
+        string[] memory names = _mutatingFunctions("out/BeaconForkGate.sol/BeaconForkGate.json");
+        string[] memory allowed = new string[](3);
+        allowed[0] = "admit";
+        allowed[1] = "confirm";
+        allowed[2] = "seal";
+        assertEq(names.length, allowed.length, "unexpected number of state-changing functions");
+        for (uint256 i = 0; i < allowed.length; i++) {
+            assertTrue(_contains(names, allowed[i]), allowed[i]);
+        }
+    }
+
+    function _contains(string[] memory names, string memory wanted) internal pure returns (bool) {
+        for (uint256 i = 0; i < names.length; i++) {
+            if (keccak256(bytes(names[i])) == keccak256(bytes(wanted))) return true;
+        }
+        return false;
     }
 
     /// Claim: `update` never takes a period (or a slot of a period) from the caller. Shows: its only inputs are
@@ -74,16 +98,19 @@ contract ImmutabilityTest is Test {
         assertEq(inputTypes[1], "bytes");
     }
 
-    /// Claim: no ownership or upgrade function names exist in either ABI. Shows: none of the usual names appear.
+    /// Claim: no ownership or upgrade function names exist in every ABI. Shows: none of the usual names appear.
     /// Matters: a second line of defense in case the first test is weakened by a future mutability change.
     function test_H04_noOwnershipOrUpgradeNamesInAbi() public view {
-        string[2] memory artifacts =
-            ["out/BeaconLightClient.sol/BeaconLightClient.json", "out/BridgeVault.sol/BridgeVault.json"];
+        string[3] memory artifacts = [
+            "out/BeaconLightClient.sol/BeaconLightClient.json",
+            "out/BridgeVault.sol/BridgeVault.json",
+            "out/BeaconForkGate.sol/BeaconForkGate.json"
+        ];
         string[9] memory banned = [
             "owner", "transferOwnership", "renounceOwnership", "upgradeTo", "upgradeToAndCall", "setVerifier",
             "setProgramVKey", "setLightClient", "pause"
         ];
-        for (uint256 i = 0; i < 2; i++) {
+        for (uint256 i = 0; i < artifacts.length; i++) {
             string[] memory names = _names(artifacts[i], '$.abi[?(@.type=="function")].name');
             for (uint256 j = 0; j < names.length; j++) {
                 for (uint256 k = 0; k < banned.length; k++) {

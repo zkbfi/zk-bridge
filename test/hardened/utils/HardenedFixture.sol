@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Vm} from "forge-std/Vm.sol";
 import {BeaconLightClient} from "../../../src/hardened/BeaconLightClient.sol";
 import {BridgeVault} from "../../../src/hardened/BridgeVault.sol";
+import {BeaconForkGate} from "../../../src/hardened/BeaconForkGate.sol";
 import {OracleSP1Verifier} from "../../../src/mocks/OracleSP1Verifier.sol";
 import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {HardenedProofs} from "./HardenedProofs.sol";
@@ -32,6 +33,14 @@ abstract contract HardenedFixture is HardenedProofs {
     MockERC20 internal tokenOnB;
     BridgeVault internal vaultA;
     BridgeVault internal vaultB;
+    /// @dev Gates in detection mode. No beacon roots contract exists in the unit tests, so they admit every deposit.
+    BeaconForkGate internal gateA;
+    BeaconForkGate internal gateB;
+
+    /// @notice The EIP-4788 address.
+    address internal constant BEACON_ROOTS = 0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02;
+    /// @notice The `capellaEra` of the vaults in the unit tests: the synthetic source chain activated Capella at slot 0.
+    uint64 internal constant DEFAULT_CAPELLA_ERA = 0;
 
     function setUp() public virtual {
         oracle = vm.addr(ORACLE_KEY);
@@ -46,15 +55,18 @@ abstract contract HardenedFixture is HardenedProofs {
         BridgeVault.TokenPair[] memory pairsB = new BridgeVault.TokenPair[](1);
         pairsB[0] = BridgeVault.TokenPair(address(tokenOnB), address(tokenOnA), 18);
 
+        gateA = _newGate(BeaconForkGate.GateMode.DetectBeaconRoots);
+        gateB = _newGate(BeaconForkGate.GateMode.DetectBeaconRoots);
+
         // vaultA is created first, so vaultB lands on the next nonce of this contract.
         address predictedVaultB = vm.computeCreateAddress(address(this), vm.getNonce(address(this)) + 1);
         vm.chainId(CHAIN_A);
         vaultA = new BridgeVault(
-            address(lightClientForA), CHAIN_A, CHAIN_B, predictedVaultB, pairsA, 0
+            address(lightClientForA), CHAIN_A, CHAIN_B, predictedVaultB, pairsA, 0, DEFAULT_CAPELLA_ERA, address(gateA)
         );
         vm.chainId(CHAIN_B);
         vaultB = new BridgeVault(
-            address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairsB, 0
+            address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairsB, 0, DEFAULT_CAPELLA_ERA, address(gateB)
         );
         require(address(vaultB) == predictedVaultB, "fixture: vaultB address prediction failed");
     }
@@ -69,9 +81,22 @@ abstract contract HardenedFixture is HardenedProofs {
             INITIAL_SLOT,
             INITIAL_HEADER_ROOT,
             COMMITTEE_100,
-            nextCommittee,
-            SLOTS_PER_HISTORICAL_ROOT
+            nextCommittee
         );
+    }
+
+    /// @notice A gate with the Ethereum mainnet fork table and timing, in the given mode.
+    function _newGate(BeaconForkGate.GateMode mode) internal returns (BeaconForkGate) {
+        BeaconForkGate.SupportedVersion[] memory versions = new BeaconForkGate.SupportedVersion[](4);
+        versions[0] = BeaconForkGate.SupportedVersion(0x03000000, 5);
+        versions[1] = BeaconForkGate.SupportedVersion(0x04000000, 5);
+        versions[2] = BeaconForkGate.SupportedVersion(0x05000000, 6);
+        versions[3] = BeaconForkGate.SupportedVersion(0x06000000, 6);
+        uint8[] memory sealDepths = new uint8[](3);
+        sealDepths[0] = 5;
+        sealDepths[1] = 6;
+        sealDepths[2] = 7;
+        return new BeaconForkGate(BEACON_ROOTS, mode, 1_606_824_023, 12, 32, versions, sealDepths);
     }
 
     // ---------------------------------------------------------------- deposits
@@ -85,7 +110,7 @@ abstract contract HardenedFixture is HardenedProofs {
         vm.recordLogs();
         vm.startPrank(user);
         IMintableToken(token).approve(address(vault), amount);
-        vault.deposit(token, recipient, amount);
+        vault.deposit(token, recipient, amount, "");
         vm.stopPrank();
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i = 0; i < logs.length; i++) {

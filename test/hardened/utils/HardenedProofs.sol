@@ -12,7 +12,6 @@ abstract contract HardenedProofs is Test {
     uint64 internal constant CHAIN_A = 1;
     uint64 internal constant CHAIN_B = 369;
     uint64 internal constant SLOTS_PER_PERIOD = 8192;
-    uint64 internal constant SLOTS_PER_HISTORICAL_ROOT = 8192;
     uint64 internal constant CHECKPOINT_PERIOD = 100;
     uint64 internal constant INITIAL_SLOT = CHECKPOINT_PERIOD * SLOTS_PER_PERIOD + 64;
 
@@ -60,13 +59,23 @@ abstract contract HardenedProofs is Test {
             previousHeaderRoot: client.headers(head),
             previousHeadSlot: head,
             previousSyncCommitteeHash: client.syncCommittees(client.periodOf(head)),
+            startNextSyncCommitteeHash: client.syncCommittees(client.periodOf(head) + 1),
             newHeaderRoot: keccak256(abi.encode("header", newSlot)),
             newHeadSlot: newSlot,
             executionBlockHash: executionBlockHash,
             executionBlockNumber: uint64(1_000_000 + newSlot),
-            syncCommitteeHash: client.syncCommittees(period),
+            syncCommitteeHash: _committeeFor(client, period),
             nextSyncCommitteeHash: client.syncCommittees(period + 1)
         });
+    }
+
+    /// @notice The stored committee of a period, or a fixed stand-in for a period the client has not stored yet.
+    /// A crossing into an empty period writes the output's committee (contract rule 4), so the stand-in models the
+    /// committee that the folded program proved.
+    function _committeeFor(BeaconLightClient client, uint64 period) internal view returns (bytes32) {
+        bytes32 stored = client.syncCommittees(period);
+        if (stored != bytes32(0)) return stored;
+        return keccak256(abi.encode("folded committee of period", period));
     }
 
     /// @notice Proves and submits an output.

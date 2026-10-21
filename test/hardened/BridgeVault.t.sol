@@ -6,6 +6,7 @@ import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.so
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {IDepositGate} from "../../src/hardened/IDepositGate.sol";
 import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
 import {OracleSP1Verifier} from "../../src/mocks/OracleSP1Verifier.sol";
 import {MockERC20} from "../../src/mocks/MockERC20.sol";
@@ -16,6 +17,25 @@ import {FakeDepositEmitter} from "../../src/mocks/FakeDepositEmitter.sol";
 import {WithdrawalScenes} from "./utils/WithdrawalScenes.sol";
 import {ReceiptFixtures} from "./utils/ReceiptFixtures.sol";
 import {BurnAllToken, ReentrantToken} from "./utils/HardenedMocks.sol";
+
+/// @notice A deposit gate for the tests. It records the evidence of every call and refuses when told to.
+contract RecordingGate is IDepositGate {
+    error GateRefused(bytes evidence);
+
+    bytes public lastEvidence;
+    uint256 public calls;
+    bool public refusing;
+
+    function setRefusing(bool value) external {
+        refusing = value;
+    }
+
+    function admit(bytes calldata evidence) external override {
+        if (refusing) revert GateRefused(evidence);
+        lastEvidence = evidence;
+        calls++;
+    }
+}
 
 /// @notice Unit tests of the hardened vault: constructor, deposit, withdraw, token handling.
 contract BridgeVaultTest is WithdrawalScenes {
@@ -48,7 +68,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         internal
         returns (BridgeVault)
     {
-        return new BridgeVault(client, local, remote, remoteVault_, pairs, 0);
+        return new BridgeVault(client, local, remote, remoteVault_, pairs, 0, DEFAULT_CAPELLA_ERA, address(gateB));
     }
 
     /// @dev A vault on chain B for one custom local token, paired with the fixture remote token and remote vault.
@@ -73,6 +93,40 @@ contract BridgeVaultTest is WithdrawalScenes {
         assertEq(vaultB.remoteTokenOf(address(tokenOnB)), address(tokenOnA));
         assertEq(vaultB.localTokenOf(address(tokenOnA)), address(tokenOnB));
         assertEq(vaultB.depositCount(), 0);
+        assertEq(vaultB.capellaEra(), DEFAULT_CAPELLA_ERA);
+        assertEq(address(vaultB.depositGate()), address(gateB));
+    }
+
+    /// Claim: the constructor stores the capella era and the deposit gate that it was given. Shows: a vault built with
+    /// era 758 and a recording gate returns exactly those two values (not the fixture defaults). Matters: HB-01 and
+    /// HB-02 (the era sets every historical leaf position, and the gate decides who may deposit).
+    function test_HB01_constructor_storesCapellaEraAndGate() public {
+        RecordingGate gate = new RecordingGate();
+        vm.chainId(CHAIN_B);
+        BridgeVault custom = new BridgeVault(
+            address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), _pair(address(tokenOnB), address(tokenOnA), 18), 0, 758, address(gate)
+        );
+        assertEq(custom.capellaEra(), 758);
+        assertEq(address(custom.depositGate()), address(gate));
+        assertTrue(custom.capellaEra() != vaultB.capellaEra(), "the value is not the default");
+    }
+
+    /// Claim: a vault with no capella era (zero) is allowed. Shows: the constructor accepts era zero. Matters: HB-01
+    /// (PulseChain started Capella at slot 0 in the unit-test chain, so era zero is a real value).
+    function test_HB01_constructor_acceptsCapellaEraZero() public {
+        vm.chainId(CHAIN_B);
+        BridgeVault custom = _newVault(address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), _pair(address(tokenOnB), address(tokenOnA), 18));
+        assertEq(custom.capellaEra(), 0);
+    }
+
+    /// Claim: a zero deposit gate is refused with its name. Shows: the exact error for a zero gate, and success for a
+    /// real gate. Matters: HB-02 (a vault with no gate would skip the fork check without a trace).
+    function test_HB02_constructor_revertsOnZeroDepositGate() public {
+        BridgeVault.TokenPair[] memory pairs = _pair(address(tokenOnB), address(tokenOnA), 18);
+        vm.chainId(CHAIN_B);
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.ZeroValue.selector, "depositGate"));
+        new BridgeVault(address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs, 0, DEFAULT_CAPELLA_ERA, address(0));
+        new BridgeVault(address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs, 0, DEFAULT_CAPELLA_ERA, address(gateB)); // honest path
     }
 
     /// Claim: each zero constructor argument is refused with its name. Shows: three reverts with exact errors (the vault has no verifier argument).
@@ -181,7 +235,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         vm.startPrank(alice);
         tokenOnA.approve(address(vaultA), 1e18);
         vm.recordLogs();
-        vaultA.deposit(address(tokenOnA), bob, 1e18);
+        vaultA.deposit(address(tokenOnA), bob, 1e18, "");
         vm.stopPrank();
         Vm.Log[] memory logs = vm.getRecordedLogs();
         Vm.Log memory depositLog = logs[logs.length - 1];
@@ -197,7 +251,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         vm.startPrank(alice);
         tokenOnA.approve(address(vaultA), 1e18);
         vm.recordLogs();
-        vaultA.deposit(address(tokenOnA), bob, 1e18);
+        vaultA.deposit(address(tokenOnA), bob, 1e18, "");
         vm.stopPrank();
         Vm.Log[] memory logs = vm.getRecordedLogs();
         Vm.Log memory depositLog = logs[logs.length - 1];
@@ -220,7 +274,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         bytes32 expectedNonce = keccak256(abi.encode(uint256(CHAIN_A), address(vaultA), uint256(0)));
         vm.expectEmit(true, true, true, true, address(vaultA));
         emit DepositInitiated(address(tokenOnA), alice, bob, 100e18, expectedNonce, CHAIN_B);
-        bytes32 nonce = vaultA.deposit(address(tokenOnA), bob, 100e18);
+        bytes32 nonce = vaultA.deposit(address(tokenOnA), bob, 100e18, "");
         vm.stopPrank();
 
         assertEq(nonce, expectedNonce);
@@ -229,8 +283,9 @@ contract BridgeVaultTest is WithdrawalScenes {
         assertEq(vaultA.depositCount(), 1);
     }
 
-    /// Claim: there is no way to name a target chain. Shows: the old four-argument selector does not exist, and the
-    /// three-argument selector is the only `deposit`. Matters: H-10 (a typo in the target locked funds forever).
+    /// Claim: there is no way to name a target chain. Shows: the old four-argument selector (with a target chain) does
+    /// not exist, and the new selector takes gate evidence, not a chain. Matters: H-10 (a typo in the target locked
+    /// funds forever).
     function test_H10_deposit_hasNoTargetChainParameter() public {
         vm.chainId(CHAIN_A);
         tokenOnA.mint(alice, 1e18);
@@ -240,9 +295,98 @@ contract BridgeVaultTest is WithdrawalScenes {
             abi.encodeWithSignature("deposit(address,address,uint256,uint64)", address(tokenOnA), bob, 1e18, uint64(999))
         );
         assertFalse(oldShape, "no overload takes a target chain");
-        (bool newShape,) = address(vaultA).call(abi.encodeCall(BridgeVault.deposit, (address(tokenOnA), bob, 1e18)));
+        (bool threeArguments,) = address(vaultA).call(
+            abi.encodeWithSignature("deposit(address,address,uint256)", address(tokenOnA), bob, 1e18)
+        );
+        assertFalse(threeArguments, "the three-argument deposit of revision two no longer exists");
+        (bool newShape,) = address(vaultA).call(abi.encodeCall(BridgeVault.deposit, (address(tokenOnA), bob, 1e18, bytes(""))));
         assertTrue(newShape);
         vm.stopPrank();
+    }
+
+    // ================================================================ deposit gate
+
+    /// @dev A vault on chain A that uses a recording gate.
+    function _vaultWithRecordingGate(RecordingGate gate) internal returns (BridgeVault) {
+        vm.chainId(CHAIN_A);
+        return new BridgeVault(
+            address(lightClientForA), CHAIN_A, CHAIN_B, address(vaultB), _pair(address(tokenOnA), address(tokenOnB), 18), 0, DEFAULT_CAPELLA_ERA, address(gate)
+        );
+    }
+
+    /// Claim: the vault passes the caller's gate evidence to the gate unchanged, once per deposit. Shows: the gate
+    /// saw the exact bytes, and the honest deposit with admitting gate went through. Matters: HB-02 (the gate needs the
+    /// fork proof that the depositor supplies).
+    function test_HB02_deposit_forwardsGateEvidenceToGate() public {
+        RecordingGate gate = new RecordingGate();
+        BridgeVault vault = _vaultWithRecordingGate(gate);
+        bytes memory evidence = hex"c0ffee0102";
+        tokenOnA.mint(alice, 1e18);
+        vm.startPrank(alice);
+        tokenOnA.approve(address(vault), 1e18);
+        vault.deposit(address(tokenOnA), bob, 1e18, evidence);
+        vm.stopPrank();
+        assertEq(gate.calls(), 1);
+        assertEq(gate.lastEvidence(), evidence);
+        assertEq(vault.depositCount(), 1);
+    }
+
+    /// Claim: a refusing gate stops the deposit and the tokens stay with the user. Shows: the gate's exact error comes
+    /// through, no nonce is used, and no token moved; after the gate admits again, the same deposit works. Matters:
+    /// HB-02 (a deposit that the source chain's fork would strand must not take the tokens).
+    function test_HB02_deposit_revertsWhenGateRefuses() public {
+        RecordingGate gate = new RecordingGate();
+        BridgeVault vault = _vaultWithRecordingGate(gate);
+        tokenOnA.mint(alice, 1e18);
+        vm.startPrank(alice);
+        tokenOnA.approve(address(vault), 1e18);
+        gate.setRefusing(true);
+        vm.expectRevert(abi.encodeWithSelector(RecordingGate.GateRefused.selector, bytes("proof")));
+        vault.deposit(address(tokenOnA), bob, 1e18, "proof");
+        assertEq(vault.depositCount(), 0);
+        assertEq(tokenOnA.balanceOf(alice), 1e18);
+        assertEq(tokenOnA.balanceOf(address(vault)), 0);
+        gate.setRefusing(false);
+        vault.deposit(address(tokenOnA), bob, 1e18, "proof"); // control: the same call passes once the gate admits
+        vm.stopPrank();
+        assertEq(vault.depositCount(), 1);
+    }
+
+    /// Claim: the gate runs before every other deposit check. Shows: with a refusing gate, an unregistered token, a
+    /// zero recipient, a zero amount and a passed cutoff all fail with the gate's error, not their own. With an
+    /// admitting gate each fails with its own error. Matters: HB-02 (the gate error must not hide behind, or be hidden by,
+    /// other errors, and the order is a documented contract).
+    function test_HB02_deposit_gateRunsBeforeOtherChecks() public {
+        RecordingGate gate = new RecordingGate();
+        vm.chainId(CHAIN_A);
+        uint64 cutoff = uint64(block.timestamp + 100);
+        BridgeVault vault = new BridgeVault(
+            address(lightClientForA), CHAIN_A, CHAIN_B, address(vaultB), _pair(address(tokenOnA), address(tokenOnB), 18), cutoff, DEFAULT_CAPELLA_ERA, address(gate)
+        );
+        MockERC20 unregistered = new MockERC20("Unregistered", "UNR");
+        bytes memory refusal = abi.encodeWithSelector(RecordingGate.GateRefused.selector, bytes(""));
+
+        gate.setRefusing(true);
+        vm.expectRevert(refusal);
+        vault.deposit(address(unregistered), bob, 1e18, "");
+        vm.expectRevert(refusal);
+        vault.deposit(address(tokenOnA), address(0), 1e18, "");
+        vm.expectRevert(refusal);
+        vault.deposit(address(tokenOnA), bob, 0, "");
+        vm.warp(cutoff);
+        vm.expectRevert(refusal);
+        vault.deposit(address(tokenOnA), bob, 1e18, "");
+
+        gate.setRefusing(false); // control: with an admitting gate every check reports itself
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.DepositCutoffReached.selector, cutoff));
+        vault.deposit(address(tokenOnA), bob, 1e18, "");
+        vm.warp(cutoff - 1);
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.UnsupportedToken.selector, address(unregistered)));
+        vault.deposit(address(unregistered), bob, 1e18, "");
+        vm.expectRevert(BridgeVault.ZeroRecipient.selector);
+        vault.deposit(address(tokenOnA), address(0), 1e18, "");
+        vm.expectRevert(BridgeVault.ZeroAmount.selector);
+        vault.deposit(address(tokenOnA), bob, 0, "");
     }
 
     /// Claim: only registered tokens deposit. Shows: the cheap copy of a token (H-03) is refused with its address, and
@@ -254,7 +398,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         vm.startPrank(attacker);
         cheapCopy.approve(address(vaultA), 1e18);
         vm.expectRevert(abi.encodeWithSelector(BridgeVault.UnsupportedToken.selector, address(cheapCopy)));
-        vaultA.deposit(address(cheapCopy), attacker, 1e18);
+        vaultA.deposit(address(cheapCopy), attacker, 1e18, "");
         vm.stopPrank();
 
         _depositOnA(alice, bob, 1e18); // honest path
@@ -268,7 +412,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         vm.startPrank(alice);
         tokenOnB.approve(address(vaultA), 1e18);
         vm.expectRevert(abi.encodeWithSelector(BridgeVault.UnsupportedToken.selector, address(tokenOnB)));
-        vaultA.deposit(address(tokenOnB), bob, 1e18);
+        vaultA.deposit(address(tokenOnB), bob, 1e18, "");
         vm.stopPrank();
     }
 
@@ -280,10 +424,10 @@ contract BridgeVaultTest is WithdrawalScenes {
         vm.startPrank(alice);
         tokenOnA.approve(address(vaultA), 1e18);
         vm.expectRevert(BridgeVault.ZeroRecipient.selector);
-        vaultA.deposit(address(tokenOnA), address(0), 1e18);
+        vaultA.deposit(address(tokenOnA), address(0), 1e18, "");
         vm.expectRevert(BridgeVault.ZeroAmount.selector);
-        vaultA.deposit(address(tokenOnA), bob, 0);
-        vaultA.deposit(address(tokenOnA), bob, 1e18);
+        vaultA.deposit(address(tokenOnA), bob, 0, "");
+        vaultA.deposit(address(tokenOnA), bob, 1e18, "");
         vm.stopPrank();
     }
 
@@ -294,12 +438,12 @@ contract BridgeVaultTest is WithdrawalScenes {
         tokenOnA.mint(alice, 1e18);
         vm.startPrank(alice);
         vm.expectRevert(abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, address(vaultA), 0, 1e18));
-        vaultA.deposit(address(tokenOnA), bob, 1e18);
+        vaultA.deposit(address(tokenOnA), bob, 1e18, "");
         tokenOnA.approve(address(vaultA), 2e18);
         vm.expectRevert(abi.encodeWithSelector(IERC20Errors.ERC20InsufficientBalance.selector, alice, 1e18, 2e18));
-        vaultA.deposit(address(tokenOnA), bob, 2e18);
+        vaultA.deposit(address(tokenOnA), bob, 2e18, "");
         assertEq(vaultA.depositCount(), 0);
-        vaultA.deposit(address(tokenOnA), bob, 1e18); // honest path
+        vaultA.deposit(address(tokenOnA), bob, 1e18, ""); // honest path
         assertEq(vaultA.depositCount(), 1);
         vm.stopPrank();
     }
@@ -312,7 +456,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         burn.mint(alice, 1e18);
         vm.prank(alice);
         vm.expectRevert(BridgeVault.NothingReceived.selector);
-        vault.deposit(address(burn), bob, 1e18);
+        vault.deposit(address(burn), bob, 1e18, "");
     }
 
     /// Claim: a fee-on-transfer token deposits the received amount, not the requested amount. Shows: the event and
@@ -324,7 +468,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         vm.startPrank(alice);
         fee.approve(address(vault), 1000e18);
         vm.recordLogs();
-        vault.deposit(address(fee), bob, 1000e18);
+        vault.deposit(address(fee), bob, 1000e18, "");
         vm.stopPrank();
         Vm.Log[] memory logs = vm.getRecordedLogs();
         (uint256 eventAmount,,) = abi.decode(logs[logs.length - 1].data, (uint256, bytes32, uint64));
@@ -342,7 +486,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         tokenOnA.approve(address(vaultA), 60e18);
         bytes32[] memory nonces = new bytes32[](60);
         for (uint256 i = 0; i < 60; i++) {
-            nonces[i] = vaultA.deposit(address(tokenOnA), bob, 1e18);
+            nonces[i] = vaultA.deposit(address(tokenOnA), bob, 1e18, "");
             assertEq(nonces[i], keccak256(abi.encode(uint256(CHAIN_A), address(vaultA), i)));
         }
         vm.stopPrank();
@@ -373,11 +517,11 @@ contract BridgeVaultTest is WithdrawalScenes {
         token.mint(alice, 2e18);
         vm.startPrank(alice);
         token.approve(address(vault), 2e18);
-        token.arm(address(vault), abi.encodeCall(BridgeVault.deposit, (address(token), bob, 1)));
+        token.arm(address(vault), abi.encodeCall(BridgeVault.deposit, (address(token), bob, 1, bytes(""))));
         vm.expectRevert(ReentrancyGuard.ReentrancyGuardReentrantCall.selector);
-        vault.deposit(address(token), bob, 1e18);
+        vault.deposit(address(token), bob, 1e18, "");
         token.arm(address(0), ""); // the revert undid the first disarm
-        vault.deposit(address(token), bob, 1e18); // honest path
+        vault.deposit(address(token), bob, 1e18, ""); // honest path
         vm.stopPrank();
         assertEq(vault.depositCount(), 1);
     }
@@ -408,7 +552,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         usdt.mint(alice, 50e6);
         vm.startPrank(alice);
         usdt.approve(address(vault), 50e6);
-        vault.deposit(address(usdt), bob, 50e6);
+        vault.deposit(address(usdt), bob, 50e6, "");
         vm.stopPrank();
         assertEq(usdt.balanceOf(address(vault)), 50e6);
 

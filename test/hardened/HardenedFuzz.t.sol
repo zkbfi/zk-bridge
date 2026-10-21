@@ -27,51 +27,45 @@ contract HardenedFuzzTest is WithdrawalScenes {
         }
     }
 
-    /// Claim: after any sequence of maximal-or-smaller jumps, every slot between the first and the last head lies
-    /// within 8192 slots below some stored anchor, and that anchor's header root and block hash are stored. Shows:
-    /// 12 random jumps in 1..8192 followed by probes at random slots. Matters: withdrawals prove a deposit block
-    /// through `state.block_roots` of a stored anchor, which reaches only 8192 slots back (H-08 liveness).
-    function testFuzz_H08_everySlotIsCoveredByAnAnchor(uint16[12] memory rawJumps, uint64[8] memory probes) public {
+    /// Claim: after any sequence of forward jumps of any size, every jump is accepted and the stored state matches
+    /// the output. Shows: 12 random jumps (1 to 5 million slots) with matching committees each move the head and
+    /// store the header root and the block hash. Matters: HB-01 and rule 2. There is no jump cap, and a head that moves
+    /// far leaves earlier heads stored, because withdrawals use them as anchors.
+    function testFuzz_HB01_everyForwardJumpIsAcceptedAndStored(uint32[12] memory rawJumps) public {
         BeaconLightClient client = lightClientForB;
-        uint64[] memory anchors = new uint64[](13);
-        anchors[0] = client.head();
+        uint64[] memory slots = new uint64[](12);
+        bytes32[] memory roots = new bytes32[](12);
         for (uint256 i = 0; i < 12; i++) {
-            uint64 jump = uint64(bound(rawJumps[i], 1, client.slotsPerHistoricalRoot()));
+            uint64 jump = uint64(bound(rawJumps[i], 1, 5_000_000));
             uint64 slot = client.head() + jump;
-            _submit(client, _stepOutput(client, slot, keccak256(abi.encode("block", i))));
-            anchors[i + 1] = slot;
+            BeaconLightClient.LightClientOutput memory output = _stepOutput(client, slot, keccak256(abi.encode("block", i)));
+            _submit(client, output);
+            slots[i] = slot;
+            roots[i] = output.newHeaderRoot;
+            assertEq(client.head(), slot);
         }
-        uint64 first = anchors[0];
-        uint64 last = anchors[12];
-        for (uint256 p = 0; p < probes.length; p++) {
-            uint64 slot = uint64(bound(probes[p], first, last));
-            uint64 covering = type(uint64).max;
-            for (uint256 i = 0; i < anchors.length; i++) {
-                if (anchors[i] >= slot) {
-                    covering = anchors[i];
-                    break;
-                }
-            }
-            assertTrue(covering != type(uint64).max, "an anchor at or after the slot exists");
-            assertLe(covering - slot, client.slotsPerHistoricalRoot(), "the anchor reaches back to the slot");
-            assertTrue(client.headers(covering) != bytes32(0), "the anchor is stored");
+        for (uint256 i = 0; i < 12; i++) {
+            assertEq(client.headers(slots[i]), roots[i], "every past head stays stored");
+            assertTrue(client.isFinalizedExecutionBlock(keccak256(abi.encode("block", i))));
         }
     }
 
-    /// Claim: the maximum jump is not an accident of one example. Shows: a sequence of exact 8192 jumps (many period
-    /// crossings) is accepted, and the next jump of 8193 is refused. Matters: the bound is tight and it holds
-    /// at every point of the sequence.
-    function testFuzz_H08_maximalJumpSequenceThenOneTooFar(uint8 jumpCount) public {
+    /// Claim: the acceptance rule for a new slot is exactly "advances". Shows: for a random slot (from zero up to
+    /// 100 million) with matching committees, a slot at or before the head reverts with `HeadNotAdvancing` and any
+    /// later slot is accepted. Matters: rule 2, the only slot rule left. The control is the other branch of the model.
+    function testFuzz_HB01_updateAcceptsExactlyTheAdvancingSlots(uint64 rawSlot) public {
         BeaconLightClient client = lightClientForB;
-        uint256 count = bound(jumpCount, 1, 12);
-        for (uint256 i = 0; i < count; i++) {
-            _submit(client, _stepOutput(client, client.head() + 8192, keccak256(abi.encode("max", i))));
+        uint64 head = client.head();
+        uint64 slot = uint64(bound(rawSlot, 0, 100_000_000));
+        BeaconLightClient.LightClientOutput memory output = _outputAt(client, GENESIS_ROOT_A, slot, keccak256("model"));
+        if (slot <= head) {
+            _submitExpectingRevert(client, output, abi.encodeWithSelector(BeaconLightClient.HeadNotAdvancing.selector, head, slot));
+            assertEq(client.head(), head);
+            return;
         }
-        assertEq(client.head(), INITIAL_SLOT + count * 8192);
-        BeaconLightClient.LightClientOutput memory tooFar = _stepOutput(client, client.head() + 8193, keccak256("too far"));
-        _submitExpectingRevert(
-            client, tooFar, abi.encodeWithSelector(BeaconLightClient.HeadJumpTooLarge.selector, client.head(), tooFar.newHeadSlot)
-        );
+        _submit(client, output);
+        assertEq(client.head(), slot);
+        assertEq(client.headers(slot), output.newHeaderRoot);
     }
 
     /// Claim: `update` is permissionless. Shows: any caller can move the head with a valid proof; the proof, not
@@ -86,39 +80,22 @@ contract HardenedFuzzTest is WithdrawalScenes {
         assertEq(client.head(), output.newHeadSlot);
     }
 
-    /// Claim: the acceptance rule for a new slot is exactly "advances, and by at most 8192". Shows: a model of the
-    /// rule against the contract for random slots. Matters: H-08.
-    function testFuzz_H08_updateAcceptsExactlyTheAdvancingSlotsWithinTheWindow(uint64 rawSlot) public {
-        BeaconLightClient client = lightClientForB;
-        uint64 head = client.head();
-        uint64 slot = uint64(bound(rawSlot, 0, uint256(head) + 20_000));
-        BeaconLightClient.LightClientOutput memory output = _outputAt(client, GENESIS_ROOT_A, slot, keccak256("model"));
-        if (slot <= head) {
-            _submitExpectingRevert(client, output, abi.encodeWithSelector(BeaconLightClient.HeadNotAdvancing.selector, head, slot));
-            return;
-        }
-        if (slot - head > 8192) {
-            _submitExpectingRevert(client, output, abi.encodeWithSelector(BeaconLightClient.HeadJumpTooLarge.selector, head, slot));
-            return;
-        }
-        _submit(client, output);
-        assertEq(client.head(), slot);
-    }
-
-    /// Claim: the decoder of the light-client output takes exactly the ten-word layout. Shows: fuzzed words in
+    /// Claim: the decoder of the light-client output takes exactly the eleven-word layout. Shows: fuzzed words in
     /// every field reach the first failing check in order. Matters: R2-09 and H-01 (a field in the wrong place
     /// would be a different statement).
     function testFuzz_R2_09_decodingChecksFieldsInOrder(
         bytes32 genesisRoot,
         bytes32 previousHeaderRoot,
         uint64 previousSlot,
-        bytes32 previousCommittee
+        bytes32 previousCommittee,
+        bytes32 startNextCommittee
     ) public {
         BeaconLightClient client = lightClientForB;
         BeaconLightClient.LightClientOutput memory output = _nextOutput(client, genesisRoot, keccak256("b"));
         output.previousHeaderRoot = previousHeaderRoot;
         output.previousHeadSlot = previousSlot;
         output.previousSyncCommitteeHash = previousCommittee;
+        output.startNextSyncCommitteeHash = startNextCommittee;
         bytes memory expected;
         if (genesisRoot != GENESIS_ROOT_A) {
             expected = abi.encodeWithSelector(BeaconLightClient.GenesisValidatorsRootMismatch.selector, GENESIS_ROOT_A, genesisRoot);
@@ -128,6 +105,8 @@ contract HardenedFuzzTest is WithdrawalScenes {
             expected = abi.encodeWithSelector(BeaconLightClient.PreviousHeaderRootMismatch.selector, INITIAL_HEADER_ROOT, previousHeaderRoot);
         } else if (previousCommittee != COMMITTEE_100) {
             expected = abi.encodeWithSelector(BeaconLightClient.PreviousSyncCommitteeMismatch.selector, COMMITTEE_100, previousCommittee);
+        } else if (startNextCommittee != COMMITTEE_101) {
+            expected = abi.encodeWithSelector(BeaconLightClient.StartNextSyncCommitteeMismatch.selector, COMMITTEE_101, startNextCommittee);
         }
         if (expected.length > 0) {
             _submitExpectingRevert(client, output, expected);
@@ -159,7 +138,7 @@ contract HardenedFuzzTest is WithdrawalScenes {
         pairs[0] = BridgeVault.TokenPair(address(fee), address(tokenOnA), 18);
         vm.chainId(CHAIN_B);
         BridgeVault vault = new BridgeVault(
-            address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs, 0
+            address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs, 0, DEFAULT_CAPELLA_ERA, address(gateB)
         );
         (, uint256 eventAmount) = _deposit(vault, address(fee), alice, bob, amount);
         assertEq(eventAmount, fee.balanceOf(address(vault)));
@@ -205,7 +184,7 @@ contract HardenedFuzzTest is WithdrawalScenes {
         if (choice == 1) tampered.anchorHeader.parentRoot ^= bytes32(uint256(1) << (position % 256));
         if (choice == 2) tampered.depositHeader.bodyRoot ^= bytes32(uint256(1) << (position % 256));
         if (choice == 3) {
-            tampered.blockRootsBranch[position % tampered.blockRootsBranch.length] ^= bytes32(uint256(1) << (position % 256));
+            tampered.ancestryBranch[position % tampered.ancestryBranch.length] ^= bytes32(uint256(1) << (position % 256));
         }
         if (choice == 4) {
             tampered.blockHashBranch[position % tampered.blockHashBranch.length] ^= bytes32(uint256(1) << (position % 256));

@@ -7,6 +7,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 // The storage guard, never the transient one: PulseChain has no TSTORE.
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IBeaconLightClient} from "./IBeaconLightClient.sol";
+import {IDepositGate} from "./IDepositGate.sol";
 import {BeaconBlockHeader, SSZ} from "./SSZ.sol";
 import {MerkleTrie} from "./vendor/optimism/trie/MerkleTrie.sol";
 import {RLPReader} from "./vendor/optimism/rlp/RLPReader.sol";
@@ -15,10 +16,16 @@ import {RLPReader} from "./vendor/optimism/rlp/RLPReader.sol";
 /// @notice One end of a two-chain bridge. It locks tokens on deposit and pays tokens against a direct proof of
 /// a deposit on the other chain. The vault checks the proof itself: no withdrawal zero-knowledge program exists.
 /// Only the light client uses a zero-knowledge proof. The vault has no owner, no refund, and no upgrade path.
-/// @dev Fork layouts. The generalized indices of `state.block_roots` and of the execution block hash depend on the
-/// fork of the source chain. The vault holds no fixed table. Anyone may add a layout with `addBlockRootsLayout` and
-/// `addBlockHashLayout`, and the chain's own stored data must prove it: the candidate position must map stored
-/// header roots (or the stored execution block hash) to the stored state (or body) root. A wrong position cannot match.
+/// @dev Fork layouts. The generalized indices of `state.block_roots`, of `state.historical_summaries` and of the
+/// execution block hash depend on the fork of the source chain. The vault holds no fixed table. Anyone may add a
+/// layout with `addBlockRootsLayout`, `addHistoricalSummariesLayout` and `addBlockHashLayout`, and the chain's own stored
+/// data must prove it: the candidate position must map stored header roots (or the stored execution block hash) to the
+/// stored state (or body) root. A wrong position cannot match.
+///
+/// Ancestry has two paths, chosen by the vault from the two slots. A deposit at most 8192 slots below the anchor is
+/// proven through `state.block_roots`. An older deposit is proven through `state.historical_summaries`, which holds the
+/// root of every completed era of 8192 block roots since Capella. So a stored head may be any distance past the one
+/// before it.
 /// A layout is usable only for the slots between the first and the last slot at which it was validated. Layouts move
 /// only when a container crosses a power-of-two field count; then a new route (light client and vault) is deployed
 /// beside the old one, and the old route keeps paying what it can still prove. This is the immutability trade-off of
@@ -67,6 +74,16 @@ contract BridgeVault is ReentrancyGuard {
         bytes32[] branchB;
     }
 
+    /// @notice A validated `historical_summaries` position and the state slots at which it was validated.
+    /// @param historicalSummariesGindex The generalized index of `BeaconState.historical_summaries`.
+    /// @param firstSlot The lowest state slot at which the position was validated.
+    /// @param lastSlot The highest state slot at which the position was validated.
+    struct HistoricalLayout {
+        uint256 historicalSummariesGindex;
+        uint64 firstSlot;
+        uint64 lastSlot;
+    }
+
     /// @notice Evidence for a block hash position: a stored header whose body holds its stored execution block hash.
     /// @param header A stored header.
     /// @param branch The branch from the stored execution block hash to the body root of the header.
@@ -75,11 +92,22 @@ contract BridgeVault is ReentrancyGuard {
         bytes32[] branch;
     }
 
+    /// @notice Evidence for a `historical_summaries` position: a stored header in a completed era, proven at the claimed
+    /// position under a later stored anchor's state root.
+    /// @param anchorHeader A stored header. Its `stateRoot` holds `historical_summaries`.
+    /// @param earlierSlot A stored slot more than 8192 slots below the anchor, in an era at or after `capellaEra`.
+    /// @param branch The branch from the stored root at `earlierSlot` to the anchor state root. Its length is exact.
+    struct HistoricalSummariesEvidence {
+        BeaconBlockHeader anchorHeader;
+        uint64 earlierSlot;
+        bytes32[] branch;
+    }
+
     /// @notice The evidence for one withdrawal. Nothing in it is secret.
     struct WithdrawalProof {
         BeaconBlockHeader anchorHeader;
         BeaconBlockHeader depositHeader;
-        bytes32[] blockRootsBranch;
+        bytes32[] ancestryBranch;
         bytes32[] blockHashBranch;
         bytes executionHeaderRlp;
         bytes[] receiptProof;
@@ -96,15 +124,22 @@ contract BridgeVault is ReentrancyGuard {
         uint64 targetChainId;
     }
 
-    /// @notice The length of `state.block_roots`. A deposit block must lie this close below its anchor.
+    /// @notice The length of `state.block_roots`. A deposit block at most this far below its anchor uses the recent path.
     uint64 public constant SLOTS_PER_HISTORICAL_ROOT = 8192;
+
+    /// @notice `log2(SLOTS_PER_HISTORICAL_ROOT)`: the depth of the `block_roots` vector.
+    uint256 public constant BLOCK_ROOTS_VECTOR_DEPTH = 13;
+
+    /// @notice `log2(HISTORICAL_ROOTS_LIMIT)` with `HISTORICAL_ROOTS_LIMIT = 2**24`: the depth of the
+    /// `historical_summaries` list below its data node.
+    uint256 public constant HISTORICAL_SUMMARIES_LIST_DEPTH = 24;
 
     /// @notice The topic 0 of `DepositInitiated`. Withdrawals match logs against this value.
     /// @dev Solidity 0.8.28 rejects `DepositInitiated.selector` in a constant. A test pins this value to the selector.
     bytes32 public constant DEPOSIT_EVENT_TOPIC =
         keccak256("DepositInitiated(address,address,address,uint256,bytes32,uint64)");
 
-    /// @dev The deepest accepted `block_roots` position (the container, before the 13 levels of the vector).
+    /// @dev The deepest accepted `block_roots` or `historical_summaries` position (the state container only).
     uint256 private constant MAX_BLOCK_ROOTS_DEPTH = 8;
     /// @dev The deepest accepted block hash position.
     uint256 private constant MAX_BLOCK_HASH_DEPTH = 16;
@@ -143,8 +178,12 @@ contract BridgeVault is ReentrancyGuard {
     error AnchorNotStored(uint64 slot, bytes32 anchorRoot);
     /// @notice The deposit block is not strictly before the anchor.
     error DepositNotBeforeAnchor(uint64 depositSlot, uint64 anchorSlot);
-    /// @notice The deposit block is more than 8192 slots below the anchor.
-    error DepositOutsideWindow(uint64 depositSlot, uint64 anchorSlot);
+    /// @notice The deposit era is before `capellaEra`, so no historical summary covers it.
+    error DepositBeforeCapellaEra(uint64 depositEra, uint64 capellaEra);
+    /// @notice The era index does not fit in the summaries list (2**24 entries). It would spill into a neighbour.
+    error HistoricalIndexOutOfRange(uint64 index);
+    /// @notice A `historical_summaries` evidence slot is not more than 8192 slots below its anchor.
+    error EvidenceSlotNotHistorical(uint64 earlierSlot, uint64 anchorSlot);
     /// @notice No validated layout covers the slot. Anyone can add one with evidence.
     error LayoutNotValidated(uint64 slot);
     /// @notice A candidate position is zero or deeper than the bound.
@@ -159,8 +198,8 @@ contract BridgeVault is ReentrancyGuard {
     error LayoutEvidenceInvalid();
     /// @notice Deposits are closed because the cutoff time passed.
     error DepositCutoffReached(uint64 cutoff);
-    /// @notice The block roots branch does not lead from the deposit header to the anchor state.
-    error BlockRootsBranchInvalid();
+    /// @notice The ancestry branch does not lead from the deposit header to the anchor state.
+    error AncestryBranchInvalid();
     /// @notice The block hash branch does not lead from the execution block hash to the deposit header body.
     error BlockHashBranchInvalid();
     /// @notice The execution header does not decode to a header with a receipts root.
@@ -187,6 +226,9 @@ contract BridgeVault is ReentrancyGuard {
 
     /// @notice Emitted when a validated block hash position is added or its validated range grows.
     event BlockHashLayoutValidated(uint256 indexed blockHashGindex, uint64 firstSlot, uint64 lastSlot);
+
+    /// @notice Emitted when a validated `historical_summaries` position is added or its validated range grows.
+    event HistoricalSummariesLayoutValidated(uint256 indexed historicalSummariesGindex, uint64 firstSlot, uint64 lastSlot);
 
     /// @notice Emitted on deposit with the amount the vault received.
     event DepositInitiated(
@@ -218,6 +260,11 @@ contract BridgeVault is ReentrancyGuard {
     /// @notice Deposits revert at and after this timestamp. Zero disables the cutoff. Set it at deployment only
     /// when a breaking fork of the other chain is already scheduled.
     uint64 public immutable depositCutoffTimestamp;
+    /// @notice `floor(capellaForkSlot / 8192)` of the remote chain: the era of the first `historical_summaries` entry.
+    /// Ethereum 758 (Capella slot 6209536), PulseChain 0 (Capella epoch 3, slot 96). Zero is valid.
+    uint64 public immutable capellaEra;
+    /// @notice The gate that `deposit` calls first. It refuses a deposit the route cannot deliver.
+    IDepositGate public immutable depositGate;
 
     /// @notice The number of deposits so far. It feeds the nonce.
     uint256 public depositCount;
@@ -230,6 +277,7 @@ contract BridgeVault is ReentrancyGuard {
 
     StateLayout[] private _stateLayouts;
     BodyLayout[] private _bodyLayouts;
+    HistoricalLayout[] private _historicalLayouts;
 
     /// @param lightClient_ The light client of the remote chain.
     /// @param localChainId_ The identifier of this chain. It must equal `block.chainid`.
@@ -237,17 +285,22 @@ contract BridgeVault is ReentrancyGuard {
     /// @param remoteVault_ The vault on the other chain.
     /// @param pairs The registered token pairs. The remote decimals are the deployer's claim.
     /// @param depositCutoffTimestamp_ Deposits revert from this timestamp on. Zero means no cutoff.
+    /// @param capellaEra_ `floor(capellaForkSlot / 8192)` of the remote chain. The deploy script checks it.
+    /// @param depositGate_ The deposit gate. It must not be the zero address.
     constructor(
         address lightClient_,
         uint64 localChainId_,
         uint64 remoteChainId_,
         address remoteVault_,
         TokenPair[] memory pairs,
-        uint64 depositCutoffTimestamp_
+        uint64 depositCutoffTimestamp_,
+        uint64 capellaEra_,
+        address depositGate_
     ) {
         if (lightClient_ == address(0)) revert ZeroValue("lightClient");
         if (remoteChainId_ == 0) revert ZeroValue("remoteChainId");
         if (remoteVault_ == address(0)) revert ZeroValue("remoteVault");
+        if (depositGate_ == address(0)) revert ZeroValue("depositGate");
         if (localChainId_ != block.chainid) revert LocalChainIdMismatch(localChainId_, block.chainid);
         if (remoteChainId_ == localChainId_) revert RemoteChainIsLocalChain();
         if (pairs.length == 0) revert NoTokenPairs();
@@ -257,6 +310,8 @@ contract BridgeVault is ReentrancyGuard {
         remoteChainId = remoteChainId_;
         remoteVault = remoteVault_;
         depositCutoffTimestamp = depositCutoffTimestamp_;
+        capellaEra = capellaEra_;
+        depositGate = IDepositGate(depositGate_);
 
         for (uint256 i = 0; i < pairs.length; i++) {
             _registerPair(pairs[i]);
@@ -264,12 +319,19 @@ contract BridgeVault is ReentrancyGuard {
     }
 
     /// @notice Locks tokens and emits the deposit event. The target is always the remote chain.
-    /// @dev The event carries the amount the vault received, which differs from `amount` for a fee-on-transfer token.
+    /// @dev The gate runs first. A gate that reverts refuses the deposit, with the tokens still in the wallet of the user.
+    /// The event carries the amount the vault received, which differs from `amount` for a fee-on-transfer token.
     /// @param token The local token.
     /// @param recipient The recipient on the remote chain.
     /// @param amount The amount to pull from the caller.
+    /// @param gateEvidence The evidence for the deposit gate. Empty when the gate needs none.
     /// @return nonce The unique deposit nonce.
-    function deposit(address token, address recipient, uint256 amount) external nonReentrant returns (bytes32 nonce) {
+    function deposit(address token, address recipient, uint256 amount, bytes calldata gateEvidence)
+        external
+        nonReentrant
+        returns (bytes32 nonce)
+    {
+        depositGate.admit(gateEvidence);
         if (depositCutoffTimestamp != 0 && block.timestamp >= depositCutoffTimestamp) {
             revert DepositCutoffReached(depositCutoffTimestamp);
         }
@@ -288,15 +350,15 @@ contract BridgeVault is ReentrancyGuard {
 
     /// @notice Pays a deposit that was made on the remote vault, given direct evidence.
     /// @dev The checks run in this order. 1: the anchor is a stored finalized header. 2: the deposit block lies
-    /// at most 8192 slots below the anchor. 3: the deposit header is in `state.block_roots` of the anchor.
+    /// before the anchor, and the vault picks the ancestry path from the distance. 3: the deposit header is in
+    /// `state.block_roots` of the anchor (distance up to 8192) or in a `historical_summaries` era (more).
     /// 4: the execution block hash is in the deposit header body. 5: the execution header hashes to that block hash.
     /// 6: the receipt is in the receipts trie and succeeded. 7: the log is a deposit log of the remote vault for this
     /// chain and a registered token, and is unclaimed. 8: state changes, then the transfer.
     /// @param proof The evidence.
     function withdraw(WithdrawalProof calldata proof) external nonReentrant {
         _requireStoredAnchor(proof.anchorHeader);
-        _requireDepositWindow(proof.anchorHeader.slot, proof.depositHeader.slot);
-        _requireBlockRootsBranch(proof);
+        _requireAncestryBranch(proof);
         bytes32 blockHash = keccak256(proof.executionHeaderRlp);
         _requireBlockHashBranch(proof, blockHash);
 
@@ -371,9 +433,55 @@ contract BridgeVault is ReentrancyGuard {
         emit BlockHashLayoutValidated(blockHashGindex, slot, slot);
     }
 
+    /// @notice Adds a `historical_summaries` position, or widens its validated range, given evidence from stored data.
+    /// @dev Open to anyone. The position is accepted only when, under the stored anchor state root, the leaf at the
+    /// historical index of the candidate equals the light client's stored header root at `earlierSlot`. The index is
+    /// built as `withdraw` builds it, so the candidate must also fit the era formula. A candidate that is another
+    /// state field (`block_roots`, `finalized_checkpoint.root`, `latest_block_header`) or a list of another depth
+    /// cannot match. The position is then usable for the anchor's slot.
+    /// @param historicalSummariesGindex The candidate generalized index of `BeaconState.historical_summaries`.
+    /// @param evidence A stored anchor, a stored earlier slot in a completed era, and the branch between them.
+    function addHistoricalSummariesLayout(uint256 historicalSummariesGindex, HistoricalSummariesEvidence calldata evidence)
+        external
+    {
+        if (historicalSummariesGindex == 0 || SSZ.depthOf(historicalSummariesGindex) > MAX_BLOCK_ROOTS_DEPTH) {
+            revert LayoutOutOfBounds(historicalSummariesGindex);
+        }
+        _requireStoredHeader(evidence.anchorHeader);
+        uint64 anchorSlot = evidence.anchorHeader.slot;
+        uint64 earlierSlot = evidence.earlierSlot;
+        bytes32 storedRoot = lightClient.headers(earlierSlot);
+        if (storedRoot == bytes32(0)) revert EvidenceSlotNotStored(earlierSlot);
+        if (earlierSlot >= anchorSlot || anchorSlot - earlierSlot <= SLOTS_PER_HISTORICAL_ROOT) {
+            revert EvidenceSlotNotHistorical(earlierSlot, anchorSlot);
+        }
+        uint256 leafIndex = _historicalLeafGindex(historicalSummariesGindex, _eraIndex(earlierSlot), earlierSlot);
+        if (!SSZ.isValidBranch(storedRoot, evidence.branch, leafIndex, evidence.anchorHeader.stateRoot)) {
+            revert LayoutEvidenceInvalid();
+        }
+
+        for (uint256 i = 0; i < _historicalLayouts.length; i++) {
+            HistoricalLayout storage layout = _historicalLayouts[i];
+            if (layout.historicalSummariesGindex != historicalSummariesGindex) continue;
+            if (anchorSlot < layout.firstSlot) layout.firstSlot = anchorSlot;
+            if (anchorSlot > layout.lastSlot) layout.lastSlot = anchorSlot;
+            emit HistoricalSummariesLayoutValidated(historicalSummariesGindex, layout.firstSlot, layout.lastSlot);
+            return;
+        }
+        _historicalLayouts.push(
+            HistoricalLayout({historicalSummariesGindex: historicalSummariesGindex, firstSlot: anchorSlot, lastSlot: anchorSlot})
+        );
+        emit HistoricalSummariesLayoutValidated(historicalSummariesGindex, anchorSlot, anchorSlot);
+    }
+
     /// @notice The validated `block_roots` positions and their slot ranges.
     function stateLayouts() external view returns (StateLayout[] memory) {
         return _stateLayouts;
+    }
+
+    /// @notice The validated `historical_summaries` positions and their slot ranges.
+    function historicalLayouts() external view returns (HistoricalLayout[] memory) {
+        return _historicalLayouts;
     }
 
     /// @notice The validated block hash positions and their slot ranges.
@@ -411,20 +519,51 @@ contract BridgeVault is ReentrancyGuard {
         if (!SSZ.isValidBranch(storedRoot, branch, elementIndex, later.stateRoot)) revert LayoutEvidenceInvalid();
     }
 
-    /// @dev Check 2.
-    function _requireDepositWindow(uint64 anchorSlot, uint64 depositSlot) private pure {
+    /// @dev Checks 2 and 3. The vault picks the path from the distance: up to 8192 slots is the recent path, more is the
+    /// historical path. The prover never picks. Both leaf indices are built by pure functions, and the branch length
+    /// must be exact (`SSZ.isValidBranch` refuses padding and short branches).
+    function _requireAncestryBranch(WithdrawalProof calldata proof) private view {
+        uint64 anchorSlot = proof.anchorHeader.slot;
+        uint64 depositSlot = proof.depositHeader.slot;
         if (depositSlot >= anchorSlot) revert DepositNotBeforeAnchor(depositSlot, anchorSlot);
-        if (anchorSlot - depositSlot > SLOTS_PER_HISTORICAL_ROOT) revert DepositOutsideWindow(depositSlot, anchorSlot);
+        uint256 leafIndex = anchorSlot - depositSlot <= SLOTS_PER_HISTORICAL_ROOT
+            ? _recentLeafGindex(_blockRootsGindexAt(anchorSlot), depositSlot)
+            : _historicalLeafGindex(_historicalGindexAt(anchorSlot), _eraIndex(depositSlot), depositSlot);
+        bytes32 depositRoot = SSZ.hashTreeRoot(proof.depositHeader);
+        if (!SSZ.isValidBranch(depositRoot, proof.ancestryBranch, leafIndex, proof.anchorHeader.stateRoot)) {
+            revert AncestryBranchInvalid();
+        }
     }
 
-    /// @dev Check 3. The element generalized index is `blockRootsGindex * 8192 + slot % 8192`.
-    function _requireBlockRootsBranch(WithdrawalProof calldata proof) private view {
-        uint256 elementIndex = _blockRootsGindexAt(proof.anchorHeader.slot) * SLOTS_PER_HISTORICAL_ROOT
-            + (proof.depositHeader.slot % SLOTS_PER_HISTORICAL_ROOT);
-        bytes32 depositRoot = SSZ.hashTreeRoot(proof.depositHeader);
-        if (!SSZ.isValidBranch(depositRoot, proof.blockRootsBranch, elementIndex, proof.anchorHeader.stateRoot)) {
-            revert BlockRootsBranchInvalid();
-        }
+    /// @dev The recent path: `block_roots[depositSlot % 8192]` is at `blockRootsGindex * 8192 + depositSlot % 8192`.
+    function _recentLeafGindex(uint256 blockRootsGindex, uint64 depositSlot) private pure returns (uint256) {
+        return blockRootsGindex * SLOTS_PER_HISTORICAL_ROOT + (depositSlot % SLOTS_PER_HISTORICAL_ROOT);
+    }
+
+    /// @dev The index of the summary of a slot's era: `era - capellaEra`. The era must be at or after `capellaEra`
+    /// and the index must fit the list of 2**24 entries.
+    function _eraIndex(uint64 slot) private view returns (uint64) {
+        uint64 era = slot / SLOTS_PER_HISTORICAL_ROOT;
+        if (era < capellaEra) revert DepositBeforeCapellaEra(era, capellaEra);
+        uint64 index = era - capellaEra;
+        if (uint256(index) >= (uint256(1) << HISTORICAL_SUMMARIES_LIST_DEPTH)) revert HistoricalIndexOutOfRange(index);
+        return index;
+    }
+
+    /// @dev The historical path. Built in this order, from the index `g` of `historical_summaries` in `BeaconState`:
+    /// 1. `g` is the field. 2. `g = g * 2`: the list data root, past the length mix-in.
+    /// 3. `g = g * 2**24 + index`: the list position. 4. `g = g * 2 + 0`: `HistoricalSummary.block_summary_root`.
+    /// 5. `g = g * 2**13 + depositSlot % 8192`: the position inside that era's `block_roots`.
+    function _historicalLeafGindex(uint256 historicalSummariesGindex, uint64 index, uint64 depositSlot)
+        private
+        pure
+        returns (uint256 gindex)
+    {
+        gindex = historicalSummariesGindex;
+        gindex = gindex * 2;
+        gindex = gindex * (uint256(1) << HISTORICAL_SUMMARIES_LIST_DEPTH) + index;
+        gindex = gindex * 2 + 0;
+        gindex = gindex * (uint256(1) << BLOCK_ROOTS_VECTOR_DEPTH) + (depositSlot % SLOTS_PER_HISTORICAL_ROOT);
     }
 
     /// @dev Check 4.
@@ -441,6 +580,15 @@ contract BridgeVault is ReentrancyGuard {
         for (uint256 i = 0; i < _stateLayouts.length; i++) {
             StateLayout storage layout = _stateLayouts[i];
             if (layout.firstSlot <= slot && slot <= layout.lastSlot) return layout.blockRootsGindex;
+        }
+        revert LayoutNotValidated(slot);
+    }
+
+    /// @dev The validated `historical_summaries` position whose slot range contains `slot`.
+    function _historicalGindexAt(uint64 slot) private view returns (uint256) {
+        for (uint256 i = 0; i < _historicalLayouts.length; i++) {
+            HistoricalLayout storage layout = _historicalLayouts[i];
+            if (layout.firstSlot <= slot && slot <= layout.lastSlot) return layout.historicalSummariesGindex;
         }
         revert LayoutNotValidated(slot);
     }

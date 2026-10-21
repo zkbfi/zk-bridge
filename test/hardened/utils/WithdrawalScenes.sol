@@ -59,10 +59,14 @@ abstract contract WithdrawalScenes is HardenedFixture {
     }
 
     function _newWithdrawalVault(uint64 depositCutoff) internal returns (BridgeVault vault_) {
+        return _newWithdrawalVault(depositCutoff, DEFAULT_CAPELLA_ERA);
+    }
+
+    function _newWithdrawalVault(uint64 depositCutoff, uint64 capellaEra) internal returns (BridgeVault vault_) {
         BridgeVault.TokenPair[] memory pairs = new BridgeVault.TokenPair[](1);
         pairs[0] = BridgeVault.TokenPair(address(tokenOnB), ReceiptFixtures.REMOTE_TOKEN, 18);
         vm.chainId(CHAIN_B);
-        vault_ = new BridgeVault(address(lightClientForB), CHAIN_B, CHAIN_A, ReceiptFixtures.REMOTE_VAULT, pairs, depositCutoff);
+        vault_ = new BridgeVault(address(lightClientForB), CHAIN_B, CHAIN_A, ReceiptFixtures.REMOTE_VAULT, pairs, depositCutoff, capellaEra, address(gateB));
         createdVaults.push(vault_);
     }
 
@@ -202,7 +206,7 @@ abstract contract WithdrawalScenes is HardenedFixture {
         scene.proof = BridgeVault.WithdrawalProof({
             anchorHeader: anchorHeader,
             depositHeader: depositHeader,
-            blockRootsBranch: branches[0],
+            ancestryBranch: branches[0],
             blockHashBranch: hashBranch,
             executionHeaderRlp: headerRlp,
             receiptProof: ReceiptFixtures.proofFor(named.transactionIndex),

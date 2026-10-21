@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {console2} from "forge-std/console2.sol";
+import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
 import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
 import {OracleSP1Verifier} from "../../src/mocks/OracleSP1Verifier.sol";
 import {LightClientSync} from "../../src/LightClientSync.sol";
@@ -11,6 +12,8 @@ import {HardenedFixture} from "./utils/HardenedFixture.sol";
 /// @notice Tests of the hardened light client: constructor, every revert path of `update`,
 /// forward-only head, continuity, committee rotation, cross-chain replay, proof soundness, gas.
 contract BeaconLightClientTest is HardenedFixture {
+    using stdStorage for StdStorage;
+
     BeaconLightClient internal client;
 
     event HeadUpdated(uint64 indexed slot, bytes32 indexed headerRoot, bytes32 indexed executionBlockHash);
@@ -32,7 +35,7 @@ contract BeaconLightClientTest is HardenedFixture {
         bytes32 committee
     ) internal returns (BeaconLightClient) {
         return new BeaconLightClient(
-            verifier_, programVKey, genesisRoot, slotsPerPeriod, slot, headerRoot, committee, COMMITTEE_101, SLOTS_PER_HISTORICAL_ROOT
+            verifier_, programVKey, genesisRoot, slotsPerPeriod, slot, headerRoot, committee, COMMITTEE_101
         );
     }
 
@@ -98,7 +101,7 @@ contract BeaconLightClientTest is HardenedFixture {
     /// Matters: the honest path stays open when the checkpoint has no next committee yet.
     function test_H04_constructor_allowsZeroNextCommittee() public {
         BeaconLightClient other = new BeaconLightClient(
-            address(verifier), LIGHT_CLIENT_VKEY, GENESIS_ROOT_A, SLOTS_PER_PERIOD, INITIAL_SLOT, INITIAL_HEADER_ROOT, COMMITTEE_100, bytes32(0), SLOTS_PER_HISTORICAL_ROOT
+            address(verifier), LIGHT_CLIENT_VKEY, GENESIS_ROOT_A, SLOTS_PER_PERIOD, INITIAL_SLOT, INITIAL_HEADER_ROOT, COMMITTEE_100, bytes32(0)
         );
         assertEq(other.syncCommittees(CHECKPOINT_PERIOD + 1), bytes32(0));
     }
@@ -143,21 +146,45 @@ contract BeaconLightClientTest is HardenedFixture {
 
     // ================================================================ revert paths
 
-    /// Claim: public values of the wrong length are not decoded. Shows: short and long values revert with the length.
-    /// Matters: no trailing bytes can ride along with a signed statement. H-04.
+    /// Claim: public values of the wrong length are not decoded. Shows: an empty value and a value with one extra
+    /// word revert with the actual length. Matters: no trailing bytes can ride along with a signed statement. H-04.
     function test_H04_update_revertsOnWrongLength() public {
         BeaconLightClient.LightClientOutput memory output = _nextOutput(client, GENESIS_ROOT_A, keccak256("b"));
         bytes memory values = abi.encode(output);
         bytes memory proof = _lightClientProof(output);
+        assertEq(values.length, 352, "the exact length of eleven words");
 
         vm.expectRevert(abi.encodeWithSelector(BeaconLightClient.InvalidPublicValuesLength.selector, 0));
         client.update(proof, "");
 
         bytes memory longer = bytes.concat(values, bytes32(0));
-        vm.expectRevert(abi.encodeWithSelector(BeaconLightClient.InvalidPublicValuesLength.selector, 352));
+        vm.expectRevert(abi.encodeWithSelector(BeaconLightClient.InvalidPublicValuesLength.selector, 384));
         client.update(proof, longer);
 
         client.update(proof, values); // honest path
+        assertEq(client.head(), output.newHeadSlot);
+    }
+
+    /// Claim: the length 352 is exact. Shows: the old length of ten words (320 bytes) and the length of twelve words
+    /// (384 bytes) both revert with `InvalidPublicValuesLength`, even when the oracle signed them, and exactly 352
+    /// passes. Matters: the length check runs before the decoder, so a statement with a missing or extra word never
+    /// reaches the field checks.
+    function test_H04_update_publicValuesLengthIsExactly352() public {
+        BeaconLightClient.LightClientOutput memory output = _nextOutput(client, GENESIS_ROOT_A, keccak256("b"));
+        bytes memory values = abi.encode(output);
+        bytes memory shorter = new bytes(320);
+        for (uint256 i = 0; i < 320; i++) shorter[i] = values[i];
+        bytes memory longer = bytes.concat(values, bytes32(uint256(1)));
+
+        bytes memory shorterProof = _prove(LIGHT_CLIENT_VKEY, shorter);
+        bytes memory longerProof = _prove(LIGHT_CLIENT_VKEY, longer);
+        vm.expectRevert(abi.encodeWithSelector(BeaconLightClient.InvalidPublicValuesLength.selector, 320));
+        client.update(shorterProof, shorter);
+        vm.expectRevert(abi.encodeWithSelector(BeaconLightClient.InvalidPublicValuesLength.selector, 384));
+        client.update(longerProof, longer);
+        assertEq(client.head(), INITIAL_SLOT, "neither malformed statement moved the head");
+
+        client.update(_lightClientProof(output), values); // honest path
         assertEq(client.head(), output.newHeadSlot);
     }
 
@@ -274,54 +301,274 @@ contract BeaconLightClientTest is HardenedFixture {
         assertEq(client.head(), output.newHeadSlot);
     }
 
-    /// Claim: a head moves at most `slotsPerHistoricalRoot` (8192) slots, so every deposit block stays inside the
-    /// `state.block_roots` window of some stored anchor. Shows: a jump of exactly 8192 succeeds, 8193 reverts with
-    /// `HeadJumpTooLarge`, and a jump of two periods reverts too. Matters: without the bound anyone could post
-    /// maximal-skip updates and strand deposits that no stored anchor reaches.
-    function test_H08_update_jumpOfExactlyWindowSucceedsAndOneMoreReverts() public {
-        uint64 window = client.slotsPerHistoricalRoot();
-        assertEq(window, 8192);
-        BeaconLightClient.LightClientOutput memory tooFar =
-            _outputAt(client, GENESIS_ROOT_A, INITIAL_SLOT + window + 1, keccak256("too far"));
-        _submitExpectingRevert(
-            client, tooFar, abi.encodeWithSelector(BeaconLightClient.HeadJumpTooLarge.selector, INITIAL_SLOT, INITIAL_SLOT + window + 1)
-        );
+    // ---------------------------------------------------------------- jumps and folded updates
 
-        BeaconLightClient.LightClientOutput memory twoPeriods =
-            _outputAt(client, GENESIS_ROOT_A, INITIAL_SLOT + 2 * SLOTS_PER_PERIOD, keccak256("two periods"));
-        twoPeriods.syncCommitteeHash = COMMITTEE_102;
-        _submitExpectingRevert(
-            client, twoPeriods, abi.encodeWithSelector(BeaconLightClient.HeadJumpTooLarge.selector, INITIAL_SLOT, INITIAL_SLOT + 2 * SLOTS_PER_PERIOD)
-        );
-
-        _submit(client, _outputAt(client, GENESIS_ROOT_A, INITIAL_SLOT + window, keccak256("exact"))); // honest path
-        assertEq(client.head(), INITIAL_SLOT + window);
-        assertEq(client.periodOf(client.head()), CHECKPOINT_PERIOD + 1, "an exact jump crosses one boundary");
-    }
-
-    /// Claim: the committee check still guards a maximal jump that crosses a boundary. Shows: the stored next
-    /// committee is required at the crossing. Matters: H-01 (the jump bound replaced the period rule, not the
-    /// committee continuity).
-    function test_H01_update_maximalJumpAcrossBoundaryKeepsCommitteeContinuity() public {
+    /// Claim: the committee check still guards a jump of exactly one period that crosses a boundary. Shows: with the
+    /// committee of the new period stored, another committee reverts with `SyncCommitteeMismatch`. Matters: H-01.
+    /// The removal of the jump cap did not remove the committee continuity of rule 4 for a stored committee.
+    function test_H01_update_crossingOnePeriodKeepsTheStoredCommittee() public {
         BeaconLightClient.LightClientOutput memory output =
-            _outputAt(client, GENESIS_ROOT_A, INITIAL_SLOT + SLOTS_PER_HISTORICAL_ROOT, keccak256("exact"));
+            _outputAt(client, GENESIS_ROOT_A, INITIAL_SLOT + SLOTS_PER_PERIOD, keccak256("exact"));
         output.syncCommitteeHash = keccak256("attacker committee");
         _submitExpectingRevert(
-            client, output, abi.encodeWithSelector(BeaconLightClient.SyncCommitteeMismatch.selector, COMMITTEE_101, output.syncCommitteeHash)
+            client,
+            output,
+            abi.encodeWithSelector(BeaconLightClient.SyncCommitteeMismatch.selector, COMMITTEE_101, output.syncCommitteeHash)
         );
         output.syncCommitteeHash = COMMITTEE_101;
         _submit(client, output); // honest path
+        assertEq(client.periodOf(client.head()), CHECKPOINT_PERIOD + 1);
     }
 
-    /// Claim: the window must not exceed a period, because a longer jump could skip a committee. Shows: the
-    /// constructor errors for zero and for a window larger than the period. Matters: H-04 / H-08.
-    function test_H08_constructor_validatesHistoricalRootWindow() public {
-        vm.expectRevert(abi.encodeWithSelector(BeaconLightClient.ZeroValue.selector, "slotsPerHistoricalRoot"));
-        new BeaconLightClient(address(verifier), LIGHT_CLIENT_VKEY, GENESIS_ROOT_A, SLOTS_PER_PERIOD, INITIAL_SLOT, INITIAL_HEADER_ROOT, COMMITTEE_100, COMMITTEE_101, 0);
-        vm.expectRevert(abi.encodeWithSelector(BeaconLightClient.HistoricalRootWindowTooLarge.selector, uint64(8193), SLOTS_PER_PERIOD));
-        new BeaconLightClient(address(verifier), LIGHT_CLIENT_VKEY, GENESIS_ROOT_A, SLOTS_PER_PERIOD, INITIAL_SLOT, INITIAL_HEADER_ROOT, COMMITTEE_100, COMMITTEE_101, 8193);
-        BeaconLightClient small = new BeaconLightClient(address(verifier), LIGHT_CLIENT_VKEY, GENESIS_ROOT_A, SLOTS_PER_PERIOD, INITIAL_SLOT, INITIAL_HEADER_ROOT, COMMITTEE_100, COMMITTEE_101, 64);
-        assertEq(small.slotsPerHistoricalRoot(), 64);
+    /// Claim: a jump of 20000 slots is accepted (rule 2 has no cap). Shows: the head moves, the header root, the
+    /// execution block hash and the finalized block are stored, and the empty committee slot of the new period is
+    /// written. Matters: HB-01 and the folded update. The program folds up to 64 updates into one proof, so a jump of
+    /// several periods must be accepted. The old cap of 8192 slots would have refused it.
+    function test_HB01_update_jumpOf20000SlotsIsAccepted() public {
+        _assertLargeJumpAccepted(INITIAL_SLOT + 20_000, "jump of 20000");
+    }
+
+    /// Claim: a very large jump (10 million slots) is accepted. Shows: the same effects as above. Matters: no cap
+    /// means no cap; a relayer that was offline for years can still catch up with one folded proof. The program,
+    /// not the contract, limits a fold to 64 updates.
+    function test_HB01_update_jumpOfTenMillionSlotsIsAccepted() public {
+        _assertLargeJumpAccepted(INITIAL_SLOT + 10_000_000, "jump of ten million");
+    }
+
+    function _assertLargeJumpAccepted(uint64 slot, string memory label) internal {
+        bytes32 blockHash = keccak256(bytes(label));
+        BeaconLightClient.LightClientOutput memory output = _outputAt(client, GENESIS_ROOT_A, slot, blockHash);
+        uint64 newPeriod = client.periodOf(slot);
+        assertGt(newPeriod, CHECKPOINT_PERIOD + 1, "the jump passes the stored committees");
+        assertEq(client.syncCommittees(newPeriod), bytes32(0), "control: nothing is stored for the new period yet");
+        assertFalse(client.isFinalizedExecutionBlock(blockHash), "control: not finalized before");
+        _submit(client, output);
+        assertEq(client.head(), slot);
+        assertEq(client.headers(slot), output.newHeaderRoot);
+        assertEq(client.executionBlockHashes(slot), blockHash);
+        assertTrue(client.isFinalizedExecutionBlock(blockHash));
+        assertEq(client.executionBlockNumber(blockHash), output.executionBlockNumber);
+        assertEq(client.syncCommittees(newPeriod), output.syncCommitteeHash, "the crossing wrote the new committee");
+    }
+
+    /// Claim: a fold across three periods (head in period 100, new head in period 103) with an empty slot for period
+    /// 103 writes the committee of the output. Shows: the committee of 103 is stored, the slots of 102 and 104 stay
+    /// empty, and the old committees stay. Matters: rule 4. The program proved the chain of handoffs from the bound
+    /// start (the program's duty: `light-client/crates/lc-testkit/tests/fold.rs`,
+    /// `synthetic_fold_across_three_periods_is_accepted`). The contract only writes the result.
+    function test_HB01_update_foldAcrossThreePeriodsWritesAnEmptyCommitteeSlot() public {
+        uint64 slot = (CHECKPOINT_PERIOD + 3) * SLOTS_PER_PERIOD + 5;
+        assertEq(client.syncCommittees(CHECKPOINT_PERIOD + 3), bytes32(0), "control: the slot is empty before");
+        BeaconLightClient.LightClientOutput memory output = _outputAt(client, GENESIS_ROOT_A, slot, keccak256("fold"));
+        bytes32 foldedCommittee = output.syncCommitteeHash;
+        assertTrue(foldedCommittee != bytes32(0));
+        _submit(client, output);
+
+        assertEq(client.head(), slot);
+        assertEq(client.syncCommittees(CHECKPOINT_PERIOD + 3), foldedCommittee);
+        assertEq(client.syncCommittees(CHECKPOINT_PERIOD + 2), bytes32(0), "a skipped period stays empty");
+        assertEq(client.syncCommittees(CHECKPOINT_PERIOD + 4), bytes32(0), "no next committee was claimed");
+        assertEq(client.syncCommittees(CHECKPOINT_PERIOD), COMMITTEE_100);
+        assertEq(client.syncCommittees(CHECKPOINT_PERIOD + 1), COMMITTEE_101);
+    }
+
+    /// Claim: the same fold, when the slot of period 103 already holds a committee, must produce exactly that
+    /// committee. Shows: another committee reverts with `SyncCommitteeMismatch(stored, claimed)` and the head does
+    /// not move; the stored committee is accepted and stays. Matters: rule 4. A stored committee is never
+    /// overwritten, so a folded proof cannot replace a committee that an earlier proof already established.
+    /// The slot is filled with `stdstore`, because a head can reach such a state only through a longer history.
+    function test_HB01_update_foldAcrossThreePeriodsMustMatchAStoredCommittee() public {
+        uint64 period = CHECKPOINT_PERIOD + 3;
+        bytes32 stored = keccak256("committee of period 103 stored by an earlier proof");
+        stdstore.target(address(client)).sig("syncCommittees(uint64)").with_key(uint256(period)).checked_write(stored);
+        assertEq(client.syncCommittees(period), stored, "setup: the slot holds a committee");
+
+        uint64 slot = period * SLOTS_PER_PERIOD + 5;
+        BeaconLightClient.LightClientOutput memory forged = _outputAt(client, GENESIS_ROOT_A, slot, keccak256("forged fold"));
+        forged.syncCommitteeHash = keccak256("committee of keys the attacker holds");
+        _submitExpectingRevert(
+            client,
+            forged,
+            abi.encodeWithSelector(BeaconLightClient.SyncCommitteeMismatch.selector, stored, forged.syncCommitteeHash)
+        );
+        assertEq(client.head(), INITIAL_SLOT, "the forged fold did not move the head");
+
+        BeaconLightClient.LightClientOutput memory honest = _outputAt(client, GENESIS_ROOT_A, slot, keccak256("honest fold"));
+        assertEq(honest.syncCommitteeHash, stored, "the honest fold names the stored committee");
+        _submit(client, honest); // honest path
+        assertEq(client.head(), slot);
+        assertEq(client.syncCommittees(period), stored, "the stored committee is unchanged");
+    }
+
+    /// Claim: crossing exactly one period into an empty slot writes the committee of the output, and the written
+    /// committee is then fixed. Shows: the slot is written, and the next output in that period must equal it.
+    /// Matters: rule 4 for a start with an empty next slot. The program proved the handoff. The matching Rust test
+    /// for what the program refuses is `synthetic_first_step_cannot_cross_without_a_known_next_committee` in
+    /// `light-client/crates/lc-testkit/tests/fold.rs`.
+    function test_HB01_update_crossingOnePeriodIntoEmptySlotWritesIt() public {
+        BeaconLightClient bare = _clientWithoutNextCommittee();
+        uint64 slot = (CHECKPOINT_PERIOD + 1) * SLOTS_PER_PERIOD + 3;
+        BeaconLightClient.LightClientOutput memory crossing = _outputAt(bare, GENESIS_ROOT_A, slot, keccak256("crossing"));
+        assertEq(bare.syncCommittees(CHECKPOINT_PERIOD + 1), bytes32(0), "control: the slot is empty before");
+        _submit(bare, crossing);
+        assertEq(bare.head(), slot);
+        assertEq(bare.syncCommittees(CHECKPOINT_PERIOD + 1), crossing.syncCommitteeHash);
+
+        // Written once: another committee for the same period is now refused (rule 3).
+        BeaconLightClient.LightClientOutput memory other = _nextOutput(bare, GENESIS_ROOT_A, keccak256("later"));
+        other.syncCommitteeHash = keccak256("a different committee for the same period");
+        _submitExpectingRevert(
+            bare,
+            other,
+            abi.encodeWithSelector(
+                BeaconLightClient.SyncCommitteeMismatch.selector, crossing.syncCommitteeHash, other.syncCommitteeHash
+            )
+        );
+        other.syncCommitteeHash = crossing.syncCommitteeHash;
+        _submit(bare, other); // honest path
+    }
+
+    /// Claim: a crossing that also proves a next committee fills the slot after the new period. Shows: the slot of
+    /// period 102 holds the proven value after the crossing into 101 from a client with an empty 101 slot.
+    /// Matters: rule 5 together with rule 4 (both writes in one update).
+    function test_HB01_update_crossingWritesTheCommitteeAndTheProvenNextCommittee() public {
+        BeaconLightClient bare = _clientWithoutNextCommittee();
+        uint64 slot = (CHECKPOINT_PERIOD + 1) * SLOTS_PER_PERIOD + 3;
+        BeaconLightClient.LightClientOutput memory crossing = _outputAt(bare, GENESIS_ROOT_A, slot, keccak256("crossing"));
+        crossing.nextSyncCommitteeHash = COMMITTEE_102;
+        _submit(bare, crossing);
+        assertEq(bare.syncCommittees(CHECKPOINT_PERIOD + 1), crossing.syncCommitteeHash);
+        assertEq(bare.syncCommittees(CHECKPOINT_PERIOD + 2), COMMITTEE_102);
+    }
+
+    /// Claim: a head may only move forward, however large the allowed jump is. Shows: a slot equal to the head
+    /// reverts with `HeadNotAdvancing`, while a large forward jump is accepted. Matters: rule 2 is the only
+    /// slot rule left, so it must hold for every slot value.
+    function test_HB01_update_onlyForwardJumpsAreAccepted() public {
+        BeaconLightClient.LightClientOutput memory same = _outputAt(client, GENESIS_ROOT_A, INITIAL_SLOT, keccak256("same"));
+        _submitExpectingRevert(
+            client, same, abi.encodeWithSelector(BeaconLightClient.HeadNotAdvancing.selector, INITIAL_SLOT, INITIAL_SLOT)
+        );
+        _submit(client, _outputAt(client, GENESIS_ROOT_A, INITIAL_SLOT + 1_000_000, keccak256("far"))); // honest path
+        assertEq(client.head(), INITIAL_SLOT + 1_000_000);
+    }
+
+    /// Claim: the starting store is checked before progress. Shows: an output with a wrong starting next committee and
+    /// a head that does not advance reverts with `StartNextSyncCommitteeMismatch`, not `HeadNotAdvancing`.
+    /// Matters: the order of checks is part of the documented contract rules (rule 1 before rule 2).
+    function test_HB01_update_startCheckRunsBeforeTheProgressCheck() public {
+        BeaconLightClient.LightClientOutput memory output = _outputAt(client, GENESIS_ROOT_A, INITIAL_SLOT, keccak256("both"));
+        output.startNextSyncCommitteeHash = keccak256("invented");
+        _submitExpectingRevert(
+            client,
+            output,
+            abi.encodeWithSelector(
+                BeaconLightClient.StartNextSyncCommitteeMismatch.selector, COMMITTEE_101, output.startNextSyncCommitteeHash
+            )
+        );
+        output.startNextSyncCommitteeHash = COMMITTEE_101;
+        _submitExpectingRevert(
+            client, output, abi.encodeWithSelector(BeaconLightClient.HeadNotAdvancing.selector, INITIAL_SLOT, INITIAL_SLOT)
+        );
+    }
+
+    // ---------------------------------------------------------------- starting store (HB-01)
+
+    /// Claim: the starting next committee must equal the stored next committee. Shows: a wrong value reverts with
+    /// `StartNextSyncCommitteeMismatch(expected, actual)` with exactly those two values, and the honest value is
+    /// accepted. Matters: HB-01. The program takes its starting store as private input; this check ties that store to
+    /// what the contract holds, so a caller cannot start the program from an invented store.
+    function test_HB01_update_startNextCommitteeMustMatchTheStoredSlot() public {
+        BeaconLightClient.LightClientOutput memory output = _nextOutput(client, GENESIS_ROOT_A, keccak256("b"));
+        output.startNextSyncCommitteeHash = keccak256("some other next committee");
+        _submitExpectingRevert(
+            client,
+            output,
+            abi.encodeWithSelector(
+                BeaconLightClient.StartNextSyncCommitteeMismatch.selector, COMMITTEE_101, output.startNextSyncCommitteeHash
+            )
+        );
+        assertEq(client.head(), INITIAL_SLOT);
+
+        output.startNextSyncCommitteeHash = COMMITTEE_101;
+        _submit(client, output); // honest path
+        assertEq(client.head(), output.newHeadSlot);
+    }
+
+    /// Claim: zero equals zero. A client built with an empty next committee accepts an output whose starting next
+    /// committee is zero. Shows: the update is accepted and the empty slot stays empty. Matters: the honest path stays
+    /// open when the checkpoint has no next committee yet (the prover then starts with no next committee too).
+    function test_HB01_update_zeroStartNextCommitteeMatchesAnEmptyStoredSlot() public {
+        BeaconLightClient bare = _clientWithoutNextCommittee();
+        BeaconLightClient.LightClientOutput memory output = _nextOutput(bare, GENESIS_ROOT_A, keccak256("b"));
+        assertEq(output.startNextSyncCommitteeHash, bytes32(0), "the honest start is zero");
+        _submit(bare, output);
+        assertEq(bare.head(), output.newHeadSlot);
+        assertEq(bare.syncCommittees(CHECKPOINT_PERIOD + 1), bytes32(0));
+    }
+
+    /// Claim: a stored next committee cannot be hidden behind a zero. Shows: a stored non-zero slot against a zero
+    /// starting next committee reverts with `StartNextSyncCommitteeMismatch(stored, 0)`. Matters: the contract refuses
+    /// an output whose store differs from its own, rather than accept it (docs: "If the contract stores a next
+    /// committee, the prover's initial store must carry it").
+    function test_HB01_update_storedNextCommitteeAgainstZeroOutputIsRefused() public {
+        BeaconLightClient.LightClientOutput memory output = _nextOutput(client, GENESIS_ROOT_A, keccak256("b"));
+        output.startNextSyncCommitteeHash = bytes32(0);
+        _submitExpectingRevert(
+            client,
+            output,
+            abi.encodeWithSelector(BeaconLightClient.StartNextSyncCommitteeMismatch.selector, COMMITTEE_101, bytes32(0))
+        );
+        output.startNextSyncCommitteeHash = COMMITTEE_101;
+        _submit(client, output); // honest path
+    }
+
+    /// Claim: an invented starting next committee is refused when the stored slot is empty. Shows: an output that
+    /// claims a made-up committee as the start reverts with `StartNextSyncCommitteeMismatch(0, invented)`, the slot
+    /// stays empty, and the head does not move. Matters: HB-01 path (a). Before the fix the attacker invented the
+    /// committee, signed a forged head with keys they hold, and crossed into the empty slot. Now the invention
+    /// must appear in the public output as the start, and the contract holds zero. The program's own duty is to refuse
+    /// a next-period signature that the finalized header does not cross: see
+    /// `synthetic_invented_next_committee_in_the_initial_store_is_exposed` in
+    /// `light-client/crates/lc-testkit/tests/fold.rs` and `verify_fold_with_layout` in
+    /// `light-client/crates/lc-core/src/update.rs`.
+    function test_HB01_update_inventedStartingNextCommitteeIsRefusedWhenTheSlotIsEmpty() public {
+        BeaconLightClient bare = _clientWithoutNextCommittee();
+        uint64 slot = (CHECKPOINT_PERIOD + 1) * SLOTS_PER_PERIOD + 3;
+        bytes32 invented = keccak256("committee of keys the attacker holds");
+        BeaconLightClient.LightClientOutput memory forged = _outputAt(bare, GENESIS_ROOT_A, slot, keccak256("forged head"));
+        forged.startNextSyncCommitteeHash = invented;
+        forged.syncCommitteeHash = invented;
+        _submitExpectingRevert(
+            bare, forged, abi.encodeWithSelector(BeaconLightClient.StartNextSyncCommitteeMismatch.selector, bytes32(0), invented)
+        );
+        assertEq(bare.syncCommittees(CHECKPOINT_PERIOD + 1), bytes32(0), "the empty slot stays empty");
+        assertEq(bare.head(), INITIAL_SLOT);
+
+        // Control: the same crossing with the true (empty) start is accepted by the contract.
+        BeaconLightClient.LightClientOutput memory honest = _outputAt(bare, GENESIS_ROOT_A, slot, keccak256("honest head"));
+        assertEq(honest.startNextSyncCommitteeHash, bytes32(0));
+        _submit(bare, honest);
+        assertEq(bare.head(), slot);
+    }
+
+    /// Claim: an invented starting next committee is refused when a next committee is stored. Shows: another value
+    /// reverts with `StartNextSyncCommitteeMismatch(stored, invented)`, and the stored value is accepted. Matters:
+    /// HB-01 path (b): the attacker cannot swap the stored next committee for another one in the program's start.
+    function test_HB01_update_inventedStartingNextCommitteeIsRefusedWhenOneIsStored() public {
+        uint64 slot = (CHECKPOINT_PERIOD + 1) * SLOTS_PER_PERIOD + 3;
+        bytes32 invented = keccak256("committee of keys the attacker holds");
+        BeaconLightClient.LightClientOutput memory forged = _outputAt(client, GENESIS_ROOT_A, slot, keccak256("forged head"));
+        forged.startNextSyncCommitteeHash = invented;
+        forged.syncCommitteeHash = invented;
+        _submitExpectingRevert(
+            client, forged, abi.encodeWithSelector(BeaconLightClient.StartNextSyncCommitteeMismatch.selector, COMMITTEE_101, invented)
+        );
+        assertEq(client.syncCommittees(CHECKPOINT_PERIOD + 1), COMMITTEE_101, "the stored committee is unchanged");
+
+        BeaconLightClient.LightClientOutput memory honest = _outputAt(client, GENESIS_ROOT_A, slot, keccak256("honest head"));
+        _submit(client, honest); // honest path
+        assertEq(client.head(), slot);
     }
 
     /// Claim: every past head stays stored, because withdrawals use it as an anchor. Shows: after several updates all
@@ -343,14 +590,26 @@ contract BeaconLightClientTest is HardenedFixture {
         assertEq(client.headers(INITIAL_SLOT), INITIAL_HEADER_ROOT);
     }
 
-    /// Claim: a zero committee hash is refused. Shows: zero reverts as a mismatch with the stored committee. Matters:
-    /// a zero hash must never read as "no committee, accept anything".
+    /// Claim: a zero committee hash is refused with its own error, in the head period and at a crossing. Shows: zero
+    /// reverts with `EmptySyncCommitteeHash` (not a mismatch), also when the slot of the new period is empty and a
+    /// zero would be written. Matters: writing zero would leave the new head without a committee, and a zero hash
+    /// must never read as "no committee, accept anything".
     function test_H04_update_revertsOnEmptyCommittee() public {
         BeaconLightClient.LightClientOutput memory output = _nextOutput(client, GENESIS_ROOT_A, keccak256("b"));
         output.syncCommitteeHash = bytes32(0);
-        _submitExpectingRevert(
-            client, output, abi.encodeWithSelector(BeaconLightClient.SyncCommitteeMismatch.selector, COMMITTEE_100, bytes32(0))
-        );
+        _submitExpectingRevert(client, output, _selector(BeaconLightClient.EmptySyncCommitteeHash.selector));
+
+        // The crossing into an empty slot: the case where the contract would write the zero.
+        uint64 farSlot = (CHECKPOINT_PERIOD + 5) * SLOTS_PER_PERIOD + 1;
+        BeaconLightClient.LightClientOutput memory crossing = _outputAt(client, GENESIS_ROOT_A, farSlot, keccak256("far"));
+        assertEq(client.syncCommittees(CHECKPOINT_PERIOD + 5), bytes32(0));
+        crossing.syncCommitteeHash = bytes32(0);
+        _submitExpectingRevert(client, crossing, _selector(BeaconLightClient.EmptySyncCommitteeHash.selector));
+        assertEq(client.syncCommittees(CHECKPOINT_PERIOD + 5), bytes32(0), "no zero was written");
+
+        crossing.syncCommitteeHash = keccak256("honest far committee");
+        _submit(client, crossing); // honest path
+        assertEq(client.syncCommittees(CHECKPOINT_PERIOD + 5), crossing.syncCommitteeHash);
     }
 
     /// Claim: an empty header root is refused. Shows: zero reverts. Matters: the next update must build on a real root.
@@ -448,69 +707,11 @@ contract BeaconLightClientTest is HardenedFixture {
         assertEq(client.periodOf(client.head()), CHECKPOINT_PERIOD + 2);
     }
 
-    /// A light client whose checkpoint has no next committee. The attack tests below start from it.
+    /// A light client whose checkpoint has no next committee. The tests below start from it.
     function _clientWithoutNextCommittee() internal returns (BeaconLightClient) {
         return new BeaconLightClient(
-            address(verifier), LIGHT_CLIENT_VKEY, GENESIS_ROOT_A, SLOTS_PER_PERIOD, INITIAL_SLOT, INITIAL_HEADER_ROOT, COMMITTEE_100, bytes32(0), SLOTS_PER_HISTORICAL_ROOT
+            address(verifier), LIGHT_CLIENT_VKEY, GENESIS_ROOT_A, SLOTS_PER_PERIOD, INITIAL_SLOT, INITIAL_HEADER_ROOT, COMMITTEE_100, bytes32(0)
         );
-    }
-
-    /// Claim (path a of the forged next committee): with an empty next slot, an update that crosses into the next
-    /// period with a committee hash of the attacker's choice is refused. Shows: the crossing reverts with
-    /// `NextSyncCommitteeUnknown`, and the slot stays empty. Matters: the program takes the next committee as private
-    /// input, so a caller could sign a forged head with keys they hold. The contract never fills an empty slot from the
-    /// output. Before this fix the contract stored the attacker's hash and accepted the forged head.
-    function test_H01_update_crossingIntoEmptyNextSlotRevertsWithAttackerCommittee() public {
-        BeaconLightClient bare = _clientWithoutNextCommittee();
-        uint64 slot = (CHECKPOINT_PERIOD + 1) * SLOTS_PER_PERIOD + 3;
-        BeaconLightClient.LightClientOutput memory forged = _outputAt(bare, GENESIS_ROOT_A, slot, keccak256("forged head"));
-        forged.syncCommitteeHash = keccak256("committee of keys the attacker holds");
-        _submitExpectingRevert(
-            bare, forged, abi.encodeWithSelector(BeaconLightClient.NextSyncCommitteeUnknown.selector, CHECKPOINT_PERIOD + 1)
-        );
-        assertEq(bare.syncCommittees(CHECKPOINT_PERIOD + 1), bytes32(0), "the empty slot stays empty");
-        assertEq(bare.head(), INITIAL_SLOT);
-    }
-
-    /// Control for path (a): the same crossing is accepted when the next slot holds the right hash, and refused with
-    /// the attacker's hash. Shows: acceptance and a mismatch on the filled slot. Matters: the revert above comes from the
-    /// empty slot, not from some other rule.
-    function test_H01_update_crossingIntoFilledNextSlotRequiresTheStoredCommittee() public {
-        uint64 slot = (CHECKPOINT_PERIOD + 1) * SLOTS_PER_PERIOD + 3;
-        BeaconLightClient.LightClientOutput memory forged = _outputAt(client, GENESIS_ROOT_A, slot, keccak256("forged head"));
-        forged.syncCommitteeHash = keccak256("committee of keys the attacker holds");
-        _submitExpectingRevert(
-            client, forged, abi.encodeWithSelector(BeaconLightClient.SyncCommitteeMismatch.selector, COMMITTEE_101, forged.syncCommitteeHash)
-        );
-        BeaconLightClient.LightClientOutput memory honest = _outputAt(client, GENESIS_ROOT_A, slot, keccak256("honest head"));
-        assertEq(honest.syncCommitteeHash, COMMITTEE_101);
-        _submit(client, honest);
-        assertEq(client.head(), slot);
-        assertEq(client.syncCommittees(CHECKPOINT_PERIOD + 1), COMMITTEE_101, "the stored committee is unchanged");
-    }
-
-    /// Claim: with a zero initial next committee, the first crossing update reverts until a same-period update fills the
-    /// slot. Shows: a crossing with the right hash still reverts; after a same-period update proves the next committee,
-    /// the crossing is accepted. Matters: liveness is kept (any relayer fills the slot with a proven update), and nobody
-    /// can skip that step.
-    function test_H08_update_crossingWaitsForASamePeriodUpdateThatFillsTheSlot() public {
-        BeaconLightClient bare = _clientWithoutNextCommittee();
-        uint64 crossingSlot = (CHECKPOINT_PERIOD + 1) * SLOTS_PER_PERIOD + 3;
-        BeaconLightClient.LightClientOutput memory early = _outputAt(bare, GENESIS_ROOT_A, crossingSlot, keccak256("early"));
-        early.syncCommitteeHash = COMMITTEE_101; // the right hash, but the contract does not know it yet
-        _submitExpectingRevert(
-            bare, early, abi.encodeWithSelector(BeaconLightClient.NextSyncCommitteeUnknown.selector, CHECKPOINT_PERIOD + 1)
-        );
-
-        // A same-period update whose program output proves the next committee fills the slot.
-        BeaconLightClient.LightClientOutput memory fill = _nextOutput(bare, GENESIS_ROOT_A, keccak256("fill"));
-        fill.nextSyncCommitteeHash = COMMITTEE_101;
-        _submit(bare, fill);
-        assertEq(bare.syncCommittees(CHECKPOINT_PERIOD + 1), COMMITTEE_101);
-
-        BeaconLightClient.LightClientOutput memory crossing = _outputAt(bare, GENESIS_ROOT_A, crossingSlot, keccak256("crossing"));
-        _submit(bare, crossing);
-        assertEq(bare.head(), crossingSlot);
     }
 
     /// Claim (path b): a same-period update that carries a non-zero next committee fills an empty next slot, and a
@@ -518,6 +719,8 @@ contract BeaconLightClientTest is HardenedFixture {
     /// zero next value changes nothing. Matters: this is the only way a next slot gets filled after construction.
     /// The contract relies on the program's rule that it outputs a non-zero next committee only when that update proves it
     /// from the attested state, and never a carried value. The contract cannot check that rule itself.
+    /// The matching Rust test is `synthetic_next_committee_hash_counts_only_what_this_fold_proved` in
+    /// `light-client/crates/lc-testkit/tests/fold.rs`.
     function test_H01_update_nextSlotFilledOnlyByProvenNonZeroValueAndNeverChanged() public {
         BeaconLightClient bare = _clientWithoutNextCommittee();
         BeaconLightClient.LightClientOutput memory zeroNext = _nextOutput(bare, GENESIS_ROOT_A, keccak256("zero next"));
@@ -601,7 +804,7 @@ contract BeaconLightClientTest is HardenedFixture {
     // ================================================================ gas
 
     /// Claim: an update costs one proof check, whatever the committee size (H-15). Revision 1 verified 342 signatures
-    /// and 342 Merkle proofs. Shows: the public values are a fixed 320 bytes of hashes (so committee size cannot enter
+    /// and 342 Merkle proofs. Shows: the public values are a fixed 352 bytes of hashes (so committee size cannot enter
     /// the calldata or the loop), and 5 updates in a row cost the same gas within a narrow band.
     /// Bound: three new storage slots (header root, execution block hash of the head, finalized block, 3 x 22.1k), one
     /// head write (about 5k), cold reads of the stored state (about 8k), the oracle check (3k for ecrecover plus sha256),

@@ -245,14 +245,15 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
         _expectRejected(empty, abi.encodeWithSelector(BridgeVault.AnchorNotStored.selector, uint64(5), root));
     }
 
-    // ================================================================ check 2: the window
+    // ================================================================ check 2: the path by distance
 
-    /// Claim: the deposit block must lie at most 8192 slots below the anchor. Shows: exactly 8192 pays; 8193 reverts
-    /// with `DepositOutsideWindow`. Matters: `state.block_roots` holds only 8192 entries, so an older root is not
-    /// in the anchor state at all.
-    function test_H08_withdraw_depositWindowBoundary() public {
+    /// Claim: the vault picks the ancestry path from the distance. Shows: a deposit exactly 8192 slots below the anchor
+    /// pays through `state.block_roots`. One slot further (8193) the vault no longer reads `block_roots`: it needs a
+    /// `historical_summaries` row, and this vault has none, so it reverts with `LayoutNotValidated` for the anchor slot.
+    /// Matters: the old refusal `DepositOutsideWindow` is gone. An old deposit is proven by the historical path, which
+    /// `HistoricalAncestry.t.sol` tests with real evidence. The vault never falls back to `block_roots` for it.
+    function test_HB01_withdraw_distanceBoundarySwitchesPath() public {
         ReceiptFixtures.Named memory named = ReceiptFixtures.type2();
-        _storeAnchor(825_000, keccak256("walk")); // the light client moves at most 8192 slots per update
 
         // Exactly 8192 below the anchor.
         SceneParams memory edgeParams = SceneParams({
@@ -266,19 +267,17 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
         vault.withdraw(edge.proof);
         _assertPaid(named);
 
-        // One slot further: the same deposit slot with an anchor one slot higher.
-        SceneParams memory tooOldParams = SceneParams({
+        // One slot further: the same recent evidence, but the vault now takes the historical path.
+        SceneParams memory farParams = SceneParams({
             anchorSlot: 835_300,
             depositSlot: 835_300 - 8193,
             blockRootsGindex: 69,
             anchorBodyGindex: 812,
             blockHashGindex: 812
         });
-        Scene memory tooOld = _scene(ReceiptFixtures.legacy(), tooOldParams);
-        _expectRejected(
-            tooOld.proof,
-            abi.encodeWithSelector(BridgeVault.DepositOutsideWindow.selector, tooOldParams.depositSlot, tooOldParams.anchorSlot)
-        );
+        Scene memory far = _scene(ReceiptFixtures.legacy(), farParams);
+        _expectRejected(far.proof, abi.encodeWithSelector(BridgeVault.LayoutNotValidated.selector, farParams.anchorSlot));
+        assertEq(vault.historicalLayouts().length, 0, "no historical row was added by the scene");
     }
 
     /// Claim: the deposit block must be strictly before the anchor. Shows: the same slot and a later slot revert with
@@ -303,23 +302,23 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
     // ================================================================ check 3: block roots branch
 
     /// Claim: the deposit header must be in the anchor's `block_roots`. Shows: a changed sibling, a changed deposit
-    /// header, and a changed deposit slot each revert with `BlockRootsBranchInvalid`. Matters: this ties the deposit
+    /// header, and a changed deposit slot each revert with `AncestryBranchInvalid`. Matters: this ties the deposit
     /// block to the finalized chain.
-    function test_H08_withdraw_blockRootsBranchTamperRejected() public {
+    function test_H08_withdraw_ancestryBranchTamperRejected() public {
         ReceiptFixtures.Named memory named = ReceiptFixtures.type2();
         Scene memory scene = _scene(named, _defaultParams());
 
         BridgeVault.WithdrawalProof memory sibling = _clone(scene.proof);
-        sibling.blockRootsBranch[3] = keccak256("attacker sibling");
-        _expectRejected(sibling, abi.encodeWithSelector(BridgeVault.BlockRootsBranchInvalid.selector));
+        sibling.ancestryBranch[3] = keccak256("attacker sibling");
+        _expectRejected(sibling, abi.encodeWithSelector(BridgeVault.AncestryBranchInvalid.selector));
 
         BridgeVault.WithdrawalProof memory header = _clone(scene.proof);
         header.depositHeader.proposerIndex += 1;
-        _expectRejected(header, abi.encodeWithSelector(BridgeVault.BlockRootsBranchInvalid.selector));
+        _expectRejected(header, abi.encodeWithSelector(BridgeVault.AncestryBranchInvalid.selector));
 
         BridgeVault.WithdrawalProof memory slot = _clone(scene.proof);
         slot.depositHeader.slot -= 1; // another vector index, so another path
-        _expectRejected(slot, abi.encodeWithSelector(BridgeVault.BlockRootsBranchInvalid.selector));
+        _expectRejected(slot, abi.encodeWithSelector(BridgeVault.AncestryBranchInvalid.selector));
 
         vault.withdraw(scene.proof);
         _assertPaid(named);
@@ -328,23 +327,23 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
     /// Claim: a branch of the wrong length is an error of its own, not a silent pass. Shows: one sibling too many
     /// and one too few revert with the expected depth 19 (Electra-like state, 6 + 13). Matters: a wrong fork row
     /// shows up as a clear failure.
-    function test_H08_withdraw_blockRootsBranchLengthRejected() public {
+    function test_H08_withdraw_ancestryBranchLengthRejected() public {
         ReceiptFixtures.Named memory named = ReceiptFixtures.type2();
         Scene memory scene = _scene(named, _defaultParams());
         BridgeVault.WithdrawalProof memory longer = _clone(scene.proof);
         bytes32[] memory extended = new bytes32[](20);
         for (uint256 i = 0; i < 19; i++) {
-            extended[i] = longer.blockRootsBranch[i];
+            extended[i] = longer.ancestryBranch[i];
         }
-        longer.blockRootsBranch = extended;
+        longer.ancestryBranch = extended;
         _expectRejected(longer, abi.encodeWithSelector(SSZ.BranchLengthMismatch.selector, uint256(19), uint256(20)));
 
         BridgeVault.WithdrawalProof memory shorter = _clone(scene.proof);
         bytes32[] memory cut = new bytes32[](18);
         for (uint256 i = 0; i < 18; i++) {
-            cut[i] = shorter.blockRootsBranch[i];
+            cut[i] = shorter.ancestryBranch[i];
         }
-        shorter.blockRootsBranch = cut;
+        shorter.ancestryBranch = cut;
         _expectRejected(shorter, abi.encodeWithSelector(SSZ.BranchLengthMismatch.selector, uint256(19), uint256(18)));
 
         vault.withdraw(scene.proof);
@@ -572,15 +571,15 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
         tokenOnB.approve(address(closing), 10e18);
 
         vm.warp(cutoff - 1);
-        closing.deposit(address(tokenOnB), bob, 1e18); // honest path
+        closing.deposit(address(tokenOnB), bob, 1e18, ""); // honest path
 
         vm.warp(cutoff);
         vm.expectRevert(abi.encodeWithSelector(BridgeVault.DepositCutoffReached.selector, cutoff));
-        closing.deposit(address(tokenOnB), bob, 1e18);
+        closing.deposit(address(tokenOnB), bob, 1e18, "");
 
         vm.warp(cutoff + 1 days);
         vm.expectRevert(abi.encodeWithSelector(BridgeVault.DepositCutoffReached.selector, cutoff));
-        closing.deposit(address(tokenOnB), bob, 1e18);
+        closing.deposit(address(tokenOnB), bob, 1e18, "");
         vm.stopPrank();
         assertEq(closing.depositCount(), 1);
     }
