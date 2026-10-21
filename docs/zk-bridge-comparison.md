@@ -8,7 +8,7 @@ Read `docs/hardened-build-contract.md` and `docs/red-team-revision-2.md` first. 
 - `update()` is open to anyone. One proof folds 1 to 64 updates.
 - The vault checks each deposit directly. The Merkle path runs from a stored finalized header through `block_roots` or `historical_summaries` down to the receipt log.
 - A fork registry and execution canaries protect against source-chain forks.
-- No admin, no upgrade path, no pause, no timelock. An optional deposit fee with an immutable 1% ceiling is specified, but `src/hardened/BridgeVault.sol` does not implement it yet.
+- No admin, no upgrade path, no pause, no timelock. An optional deposit fee with an immutable ceiling of at most 1% and an optional flow limiter hook are built (`3823f57`, `36583c9`).
 
 Each claim below cites a URL or a file and line in this repository. "Not confirmed" means I could not find a primary source.
 

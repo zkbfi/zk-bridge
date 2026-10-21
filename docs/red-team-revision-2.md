@@ -255,7 +255,7 @@ The hardened build is held to the same standard as revision 2. These are holes f
 | Id | Severity | Status | Fix |
 |---|---|---|---|
 | HB-01 | Critical | Fixed (light client `628e30a`, contracts `0aa1d0a`) | Every signing committee is bound to a public value; an empty committee slot is never filled from an unproven value |
-| HB-02 | High | Open: specified in `docs/hardened-build-contract.md` | Fork gate on both vaults (enforcing on Ethereum; on PulseChain it detects EIP-4788 itself, with no admin key); interface cutover before activation; a liveness gate for PulseChain forks without EIP-4788 later |
+| HB-02 | High | Built (gate, canaries, fork registry); not audited. A route that meets an unsupported fork still needs a cutover, and deposits just before the fork stay locked (refunds, H-09, are out of scope) | Fork gate on both vaults (enforcing on Ethereum; on PulseChain it detects EIP-4788 itself, with no admin key); interface cutover before activation; a liveness gate for PulseChain forks without EIP-4788 later |
 | HB-03 | Critical | Fixed (`2119d5d`) | A block-roots layout row may name only the field's own position; `eth1_data_votes` has the same shape and proposers fill it |
 | HB-04 | Critical | Fixed (`2119d5d`) | A block-hash layout row may name only the execution payload's `block_hash` position; graffiti and `eth1_data` hold proposer-chosen values |
 | HB-05 | High | Fixed (`2119d5d`) | The receipt logs walker has no 32-item limit, so a deposit in a busy transaction can still be withdrawn |
