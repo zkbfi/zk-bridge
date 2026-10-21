@@ -1,0 +1,6 @@
+[package]
+name = "sp1_zkvm"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Local stand-in for the SP1 guest library. NOT the real crate. Reads inputs from stdin, prints commits."

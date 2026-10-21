@@ -5,7 +5,7 @@
 CHECKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 OVERALL=0
-for SCRIPT in h19-h20-files h17-h06-deploy h21-h22-registry h18-frontend h05-circuit; do
+for SCRIPT in h19-h20-files h17-h06-deploy h21-h22-registry h18-frontend h05-circuit revision-2/r2-01-vault-compile revision-2/r2-circuit; do
   printf '\n== %s ==\n' "$SCRIPT"
   bash "$CHECKS_DIR/$SCRIPT.sh" || OVERALL=1
 done

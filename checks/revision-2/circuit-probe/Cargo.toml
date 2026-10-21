@@ -1,0 +1,26 @@
+# Compile and run probe for the revision 2 circuit (spec/revision-2/bridge circuits/src/main.rs).
+# It never installs SP1. `sp1_zkvm` is a local stub (see stub/) that reads its inputs from stdin.
+# `generated/main.rs` is written by checks/revision-2/r2-circuit.sh from the specification file.
+# Every dependency is pinned to an exact version, as in checks/rust-circuit (alloy 2.1.1 era).
+[package]
+name = "revision-2-circuit-probe"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+
+[[bin]]
+name = "circuit"
+path = "generated/main.rs"
+
+[[bin]]
+name = "witness"
+path = "src/bin/witness.rs"
+
+[dependencies]
+sp1_zkvm = { path = "stub" }
+alloy-consensus = "=2.1.1"
+alloy-primitives = "=1.7.3"
+alloy-rlp = "=0.3.16"
+alloy-sol-types = "=1.7.3"
+alloy-trie = "=0.9.5"

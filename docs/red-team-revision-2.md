@@ -26,6 +26,11 @@ The hardened build follows `docs/hardened-build-contract.md`. Status markers: **
 | R2-07 | Medium | The token registry ignores decimals | Decimals checked at construction |
 | R2-08 | Low | Each vault needs the other's address, and no deploy procedure exists | Address prediction in the deploy script |
 | R2-10 | High | The build targeted Cancun; PulseChain runs Shanghai | `evm_version = "shanghai"` and a bytecode opcode test |
+| R2-11 | Blocker | After the R2-01 repair, `withdraw` fails with "Stack too deep" | Smaller functions; the hardened vault takes one calldata struct |
+| R2-12 | High | `period` is not tied to the header, and a committee that never rotates keeps attesting later periods | Period derived from the header's slot inside the proof |
+| R2-13 | Critical | The circuit pins an execution block hash, but the committee signs a beacon root; nothing links them | An execution-payload branch from the beacon body root |
+| R2-14 | Medium | The constructor lost its zero-address checks | Non-zero checks on every address |
+| R2-15 | Medium | `deposit` accepts the zero address as recipient; the claim can never pay | Non-zero recipient required |
 | H-09 | — | Out of scope (user decision) | No refund in the hardened vault |
 | H-02, H-03, H-07, H-10, H-11, H-12, H-13, H-14, H-16 | — | Fixed in revision 2, provided R2-01 to R2-05 are fixed | Kept |
 
@@ -180,6 +185,46 @@ The real signature (alloy-trie 0.9.8) is `verify_proof(root: B256, key: Nibbles,
 **The right question.** "**Does the test chain behave like the production chain?**" A test only proves what its environment can show.
 
 **After.** `foundry.toml` targets `shanghai` (commit `38e020e`). The harness runs the PulseChain-role chain with `--hardfork shanghai`. A test scans the hardened bytecode for `MCOPY` and `TSTORE`. Another test deploys Cancun-built code on the Shanghai chain and shows it fails, with the Shanghai build as the control.
+
+## R2-11 — "Stack too deep" after the R2-01 repair
+
+**Before.** With `indexed` removed from `nonce`, the vault still does not compile. `withdraw` decodes eight values into local variables and then uses them, and the compiler runs out of stack slots. The test copy splits the first half into an internal function and keeps every check, its order and every revert string (see `docs/spec-deviations.md`).
+
+**The right question.** "**Was this ever compiled at all?**" R2-01 already answered no. R2-11 shows that fixing the first error only revealed the next.
+
+**After.** The hardened vault takes one calldata struct and checks it in small, single-purpose internal functions. It compiles without `viaIR`.
+
+## R2-12 — `period` is not tied to the header
+
+**Before.** `updateSyncState` takes `period` as a free argument (line 31). Nothing ties it to the attested header's slot. With `nextCommitteeRoot` set to zero, the committee never rotates (line 65), yet it keeps signing headers labeled with any later period.
+
+**The right question.** "**Who decides which period a header belongs to?**" The header does: `period = slot / (SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD)`. A caller-supplied label proves nothing.
+
+**After.** The light-client program derives the period from the attested header's slot and the signature slot. The contract derives periods from slots with `periodOf(slot)`. No caller supplies a period.
+
+## R2-13 — An execution block hash is not what the committee signs
+
+**Before.** The circuit asserts `keccak256(raw_block_header) == confirmed_block_root` (line 40) and calls this the consensus check. The sync committee signs the SSZ hash tree root of a **beacon** block header, a SHA-256 tree. An execution block hash is a Keccak hash of an RLP header. Nothing in revision 2 connects the two, so a "verified" root could never be a real committee's attestation of an execution block.
+
+**The right question.** "**What chain of hashes leads from what the committee signed to the receipt we pay on?**" Every link must be a hash the verifier checks. A link that is only asserted is a gap.
+
+**After.** The chain is explicit: committee signature over the beacon header root, then (for finality) the finality branch, then `state.block_roots` to the deposit's beacon header, then the body branch to `execution_payload.block_hash`, then Keccak of the execution header, then the receipts trie. The light-client program checks the first part; the vault checks the rest.
+
+## R2-14 — No zero-address checks in the constructor
+
+**Before.** The revision 2 constructor stores the verifier, the light client and the source vault without checking them. A vault with a zero verifier or a zero light client deploys successfully, takes deposits, and can never pay a withdrawal.
+
+**The right question.** "**What deployment mistakes can this constructor catch for free?**" An immutable contract cannot be fixed afterwards, so it must refuse a bad configuration at birth.
+
+**After.** Every address argument of the hardened contracts must be non-zero, and the local chain identifier must equal `block.chainid`. The deploy script also reads every immutable back and compares it with the configuration.
+
+## R2-15 — Deposits to the zero address
+
+**Before.** `deposit` checks the amount, the chain and the token, but not the recipient. A deposit to `address(0)` locks the tokens. On the other side, `safeTransfer` to the zero address reverts, so the claim fails forever, and with H-09 out of scope there is no way back.
+
+**The right question.** "**Can this deposit ever be paid out?**" If the destination will always revert, the source must refuse the deposit.
+
+**After.** The hardened vault requires a non-zero recipient in `deposit`.
 
 ## H-09 — Out of scope
 
