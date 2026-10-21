@@ -1,4 +1,4 @@
-> **BRICKED 2026-10-20.** Every shell command in this file is commented out with a `#BRICKED# ` prefix. Step 4 installs `@succinctlabs/sp1-sdk`, a package that does not exist on npm, so anyone who registers the name runs code on your machine (H-21 in `docs/red-team.md`). Do not run these commands. The original text lives in git commit ac757e6.
+> **BRICKED 2026-10-20.** Every shell command in this file is commented out with a `#BRICKED# ` prefix. Step 4 installs `@succinctlabs/sp1-sdk`, a package that does not exist on npm, so anyone who registers the name runs code on your machine (H-21 in `docs/red-team.md`). Do not run these commands. The original text lives in git commit 3df2f14.
 
 # Frontend setup notes (from the originating developer, received 2026-10-19)
 

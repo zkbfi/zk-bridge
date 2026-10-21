@@ -152,7 +152,7 @@ Two files in `spec/` can do harm if someone runs them. Both are bricked as of 20
 - `spec/Deployments/deploy.sh` pipes two remote installers into bash and expects a real deployer private key. Its first line is now `#!/usr/bin/false`. It prints a warning and exits with status 1. Every original line carries a `#BRICKED# ` prefix, so no shell runs it, and a copied line pastes as a comment.
 - `spec/frontend-setup-notes.md` tells you to install `@succinctlabs/sp1-sdk` (H-21). Every shell command in it carries the same prefix, and a warning heads the file.
 
-All files in `spec/` are read-only on disk. `checks/h17-h06-deploy.sh` fails if `deploy.sh` gains a runnable line. The original bytes stay in git commit `ac757e6` as evidence. A git object cannot run by itself. The original download (`~/Downloads/The Bridge.zip`) is in the Trash.
+All files in `spec/` are read-only on disk. `checks/h17-h06-deploy.sh` fails if `deploy.sh` gains a runnable line. The original bytes stay in git commit `3df2f14` as evidence. A git object cannot run by itself. The original download (`~/Downloads/The Bridge.zip`) is in the Trash.
 
 The other spec files cannot run. `main.rs` has no manifest and does not compile (H-05, H-20). The frontend files import a package that does not exist (H-18).
 

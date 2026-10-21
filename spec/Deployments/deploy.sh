@@ -1,7 +1,7 @@
 #!/usr/bin/false
 # BRICKED 2026-10-20. This file is evidence for docs/red-team.md (H-06, H-17), not a deploy script.
 # Every original line below carries a "#BRICKED# " prefix, so no shell can run any of it,
-# and a copied line pastes as a comment. The original bytes live in git commit ac757e6.
+# and a copied line pastes as a comment. The original bytes live in git commit 3df2f14.
 echo "deploy.sh is bricked. It is red-team evidence, not a deploy script. See docs/red-team.md." >&2
 exit 1
 #BRICKED# #!/bin/bash
