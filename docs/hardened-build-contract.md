@@ -363,3 +363,74 @@ The public values grow from 320 to 352 bytes.
 - The prover service needs two extra inputs for an old deposit:
   - the anchor state's `historical_summaries` branch;
   - the era's 8192 block roots. Take them from a state at the era's end, or rebuild them from the era's headers.
+
+## Fork gate on the Ethereum vault (HB-02, 2026-10-20)
+
+The Ethereum vault refuses a deposit unless the chain's current fork version is one its route supports. This closes HB-02 window 1 on Ethereum. Window 2 (the epochs before activation) is the interface's job; see `docs/red-team-revision-2.md`, HB-02.
+
+### Shape
+
+- New interface `IDepositGate { function admit(bytes calldata evidence) external; }`. The vault takes an immutable `depositGate` and calls `admit(evidence)` first in `deposit`. A gate that reverts refuses the deposit.
+- `deposit(address token, address recipient, uint256 amount, bytes calldata gateEvidence)`. The new last argument changes the selector.
+- `BeaconForkGate` (Ethereum) and `OpenGate` (PulseChain, which has no EIP-4788; it always admits). The vault constructor refuses a zero gate address, so the choice is explicit.
+
+### `BeaconForkGate`
+
+Immutable configuration, checked against the chain spec by the deploy script:
+- `beaconRoots`: `0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02` (EIP-4788);
+- `genesisTime`, `secondsPerSlot` (12), `slotsPerEpoch` (32);
+- `supportedVersions`: a list of `(bytes4 version, uint8 stateDepth)` pairs. It must equal the light-client program's fork table, and a test compares the two. Expected values: Capella `0x03000000` depth 5; Deneb `0x04000000` depth 5; Electra `0x05000000` depth 6; Fulu `0x06000000` depth 6. Take each depth from `ethereum/consensus-specs` and cite it.
+- `sealDepths`: the depths allowed for a seal proof, namely 5, 6 and 7. Depth 7 covers a future fork that crosses 64 state fields.
+
+State:
+- `confirmedEpoch` (one storage slot);
+- `sealed` (one storage slot; once set, never cleared).
+
+`currentEpoch = (block.timestamp - genesisTime) / secondsPerSlot / slotsPerEpoch`.
+
+`admit(evidence)`:
+1. If `sealed`, revert `GateSealed()`.
+2. If `confirmedEpoch == currentEpoch`, return. Most deposits stop here, at the cost of one storage read.
+3. Otherwise decode `evidence` as a `ForkEvidence { uint256 timestamp; BeaconBlockHeader header; bytes4 version; bytes32[] branch; }` and call `_confirm`:
+   - `root = beaconRoots.staticcall(abi.encode(timestamp))`. It must succeed and be non-zero. The beacon roots contract reverts for a timestamp outside its 8191-entry ring buffer.
+   - Require `hashTreeRoot(header) == root` and `header.slot / slotsPerEpoch == currentEpoch`.
+   - `version` must be in `supportedVersions`, and the branch length must match its depth.
+   - Verify that `version`, right-padded with zeros to 32 bytes, is the leaf at generalized index `((2**depth + 3) * 4) + 1` under `header.stateRoot`. That is `BeaconState.fork` (field 3), then `Fork.current_version` (field 1 of 3, depth 2).
+   - Store `confirmedEpoch = currentEpoch`.
+4. Empty evidence with an unconfirmed epoch reverts `ForkNotConfirmed(currentEpoch)`.
+
+Anyone may also call `confirm(evidence)` directly. It runs the same checks without a deposit, for keepers.
+
+`seal(evidence)`: the same proof, except that `version` must NOT be in `supportedVersions` and the depth must be in `sealDepths`. There is no epoch rule: any recent proven state with an unknown current version is enough. It sets `sealed = true` and emits `GateSealedByFork(version, header.slot)`.
+
+### Why this is sound
+
+- The gate computes the generalized index itself. The caller cannot point it at `Fork.previous_version`; if it could, a proof of the previous version would wrongly seal the gate before any fork.
+- Fork versions change only at an epoch boundary. A proof from a header in the current epoch therefore shows the version of the block the deposit lands in.
+- A wrong depth lands inside a leaf field or a fixed-shape container, so the proof needs a SHA-256 preimage. Test this for every depth pair.
+
+### Costs and limits
+
+- The first deposit in an epoch pays for the proof: about 30,000 to 40,000 gas, mostly calldata and one storage write. Later deposits in that epoch pay about 2,100 gas.
+- Deposits fail when no beacon block exists yet in the current epoch. That happens in the first slot of each epoch, and after missed slots. The interface should wait one slot.
+- The proof needs a beacon state branch. Some beacon clients serve state proofs. Otherwise the prover service computes the branch from the state and serves it. A dedicated keeper can call `confirm` each epoch. That costs about 225 transactions a day, so on-demand confirmation by the first depositor is the default.
+
+### Tests
+
+- Every revert, with its exact error.
+- A confirmation in epoch E admits later deposits in E, but not in E+1.
+- A header from the previous epoch is refused.
+- A proof of `previous_version` neither confirms nor seals.
+- A wrong depth is refused for every pair of depths.
+- A seal with a supported version is refused, and a seal with an unknown version blocks all later deposits.
+- Withdrawals still work after a seal.
+- A timestamp outside the ring buffer is refused. Use a mock at the EIP-4788 address in unit tests, and the real system contract in the harness.
+- `OpenGate` admits everything.
+- A test that `supportedVersions` equals the light-client program's fork table.
+- The harness runs chain A (Ethereum) on a fork with EIP-4788 (Cancun or later). Chain B (PulseChain) stays on Shanghai.
+
+### Interface cutover (HB-02 window 2)
+
+- The interface reads `/eth/v1/config/fork_schedule` from each source chain. It stops offering a route one hour before the activation epoch of any fork whose version the route does not support, never less than three epochs before.
+- It shows the gate's state, and it builds the gate evidence when `confirmedEpoch` is stale.
+- This is advisory. The documentation must state that a direct contract call in that window can strand funds.
