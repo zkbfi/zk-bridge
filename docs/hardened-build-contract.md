@@ -303,3 +303,63 @@ For Merkle-Patricia proofs and RLP decoding, prefer vendoring an audited impleme
 - **Merkle positions in the program move only when a container crosses a power-of-two field count.** The beacon state crossed 32 fields at Electra (37); Fulu has 38; the next crossing is at 65. When that happens, a new route (light client, program and vault pair) is deployed beside the old one. The old route keeps paying out what it can still prove.
 - **Deposit cutoff.** Each vault takes an immutable `depositCutoffTimestamp` (zero disables it). After it, `deposit` reverts, so nobody deposits into a route whose counterpart may no longer prove. Set it at deployment only when a breaking fork is already scheduled.
 - **Future work, not built:** a liveness gate that proves the counterpart light client's recent head through a storage proof of the other chain, so deposits stop automatically when the other direction stalls.
+
+## Change: historical ancestry and folded updates (2026-10-20)
+
+Source: `docs/zkbridge-paper-review.md`. These two changes remove the need for an update in every 8192-slot window, and with it the 8192-slot head-jump cap. They replace the parts of the sections above that conflict.
+
+### Ancestry: two paths, chosen by distance
+
+`WithdrawalProof.blockRootsBranch` is renamed `ancestryBranch`. The vault picks the path from the two slots. The prover never picks it.
+
+- **Recent path** (unchanged), when `0 < anchorSlot - depositSlot <= 8192`: leaf `hashTreeRoot(depositHeader)` at `blockRootsGindex(anchorSlot)` for `block_roots[depositSlot % 8192]`.
+- **Historical path**, when `anchorSlot - depositSlot > 8192`:
+  - `era = depositSlot / 8192`. Require `era >= capellaEra`. `index = era - capellaEra`.
+  - The era is always complete at the anchor, because `(era + 1) * 8192 <= anchorSlot`.
+  - Generalized index, built in this order:
+    1. `g = historicalSummariesGindex(anchorSlot)` (the field's position in `BeaconState`)
+    2. `g = g * 2` (list data root, past the length mix-in)
+    3. `g = g * 2**24 + index` (`HISTORICAL_ROOTS_LIMIT = 2**24`)
+    4. `g = g * 2 + 0` (`HistoricalSummary.block_summary_root`)
+    5. `g = g * 2**13 + depositSlot % 8192` (into that era's `block_roots`)
+  - Branch lengths are exact. Padding is refused, as on the recent path.
+- **`capellaEra`** is an immutable vault constructor argument: `floor(capellaForkSlot / 8192)`. Expected values: Ethereum 758 (Capella slot 6209536), PulseChain 0 (Capella epoch 3, slot 96). The deploy script reads the Capella epoch from each chain's spec and refuses a mismatch.
+  - A real fixture must confirm that `historical_summaries[index].block_summary_root` equals the hash tree root of that era's block roots. Do this on PulseChain at least. The formula is unverified until it does.
+- **Layout row:** add `addHistoricalSummariesLayout`, validated like the block-roots row:
+  - The evidence is a stored header in a completed era, proven at the claimed position under a later stored anchor's state root.
+  - The row is usable over the slot range its evidence covers.
+  - Add a rejection test for every state field that also holds a block root (`block_roots`, `finalized_checkpoint.root`, `latest_block_header`), and for a wrong list depth.
+  - Expected field positions: take them from `ethereum/consensus-specs`, cite them, and add them to `gindices.json`. `historical_summaries` is field 27 in Capella through Fulu.
+
+### Folded updates
+
+The light-client program accepts a list of 1 to 64 updates. It applies `verify_with_layout` step by step, carrying the store. Each step keeps every existing rule, including "a next-period signature needs a crossing".
+
+`LightClientOutput` gains one field, after `previousSyncCommitteeHash`:
+
+- `startNextSyncCommitteeHash`: the hash of the initial store's next committee, or zero if the store has none. This binds the private starting next committee. If the store has none, the first crossing must come after a step that proves it.
+
+The other fields:
+
+- `previous*` describe the initial store.
+- `new*`, `executionBlock*` and `syncCommitteeHash` describe the final store.
+- `nextSyncCommitteeHash` is the final store's next committee, but only if a step in this fold proved it. Otherwise it is zero.
+
+The public values grow from 320 to 352 bytes.
+
+### Contract rules (replace the earlier committee rules)
+
+1. `previousSyncCommitteeHash == syncCommittees[headPeriod]` and `startNextSyncCommitteeHash == syncCommittees[headPeriod + 1]`. Zero equals zero.
+2. `newHeadSlot > headSlot`. There is no jump cap, and `slotsPerHistoricalRoot` is removed from the constructor.
+3. `newPeriod == headPeriod`: `syncCommitteeHash == syncCommittees[headPeriod]`.
+4. `newPeriod > headPeriod`:
+   - If `syncCommittees[newPeriod]` is stored, the two must be equal.
+   - If it is empty, write `syncCommitteeHash`. The program proved the chain of handoffs from the bound start.
+5. `nextSyncCommitteeHash` keeps its rule: zero changes nothing. A non-zero value must equal a stored `syncCommittees[newPeriod + 1]`, or it fills an empty one.
+
+### Builders
+
+- `lc-core` builds both ancestry paths.
+- The prover service needs two extra inputs for an old deposit:
+  - the anchor state's `historical_summaries` branch;
+  - the era's 8192 block roots. Take them from a state at the era's end, or rebuild them from the era's headers.
