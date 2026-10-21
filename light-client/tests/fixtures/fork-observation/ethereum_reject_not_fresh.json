@@ -1,0 +1,25 @@
+{
+  "chain": "ethereum",
+  "description": "The light client head is at or after the observed attested slot, so the signature may be old (a replay).",
+  "expected": {
+    "reason": "NotFresh",
+    "result": "reject"
+  },
+  "lightClient": {
+    "currentSyncCommitteeHash": "0xab3b4f013f5217ec06e8e76763b4e0edddee1c8975d67d8480e906342f32e96b",
+    "headSlot": "15476688",
+    "headerRoot": "0xc64e2f5cdcef9576570d20904628acd2e1f525efecb7479f08ee584fd8ee803b",
+    "nextSyncCommitteeHash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "name": "ethereum_reject_not_fresh",
+  "observedAttestedSlot": "15476688",
+  "observedVersion": "0x08000000",
+  "publicValues": "0x4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95c64e2f5cdcef9576570d20904628acd2e1f525efecb7479f08ee584fd8ee803b0000000000000000000000000000000000000000000000000000000000ec2190ab3b4f013f5217ec06e8e76763b4e0edddee1c8975d67d8480e906342f32e96b000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ec27d0",
+  "startStore": {
+    "currentSyncCommitteeHash": "0xab3b4f013f5217ec06e8e76763b4e0edddee1c8975d67d8480e906342f32e96b",
+    "headSlot": "15475088",
+    "headerRoot": "0xc64e2f5cdcef9576570d20904628acd2e1f525efecb7479f08ee584fd8ee803b",
+    "nextSyncCommitteeHash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "versionInProgramTable": false
+}

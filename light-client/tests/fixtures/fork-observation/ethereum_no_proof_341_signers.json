@@ -1,0 +1,10 @@
+{
+  "chain": "ethereum",
+  "description": "Only 341 of 512 members sign.",
+  "expected": {
+    "reason": "InsufficientParticipation",
+    "result": "no-proof-exists"
+  },
+  "name": "ethereum_no_proof_341_signers",
+  "publicValues": null
+}

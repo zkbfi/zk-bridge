@@ -1,0 +1,10 @@
+{
+  "chain": "ethereum",
+  "description": "The attested slot is at or before the final head.",
+  "expected": {
+    "reason": "InvalidSlotOrder",
+    "result": "no-proof-exists"
+  },
+  "name": "ethereum_no_proof_signature_not_after_the_head",
+  "publicValues": null
+}

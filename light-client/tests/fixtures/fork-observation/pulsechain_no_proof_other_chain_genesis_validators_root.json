@@ -1,0 +1,10 @@
+{
+  "chain": "pulsechain",
+  "description": "The signature was made for the other chain.",
+  "expected": {
+    "reason": "SignatureVerificationFailed",
+    "result": "no-proof-exists"
+  },
+  "name": "pulsechain_no_proof_other_chain_genesis_validators_root",
+  "publicValues": null
+}

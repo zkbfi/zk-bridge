@@ -102,3 +102,24 @@ the check of the era formula. `source_url` lists the endpoints, `fetched_on` the
 state into `fetch-cache/` (ignored by git). On 2026-10-20 the beacon node served every state older than a few hundred slots with the
 newest `historical_summaries` entry missing, so such a state does not hash to the root in its header. The tool therefore rebuilds
 each era from the canonical block roots (`GET /eth/v1/beacon/blocks/<slot>/root`).
+
+## `fork-observation/<name>.json`
+
+Cases for the fork observation registry (`docs/hardened-build-contract.md`, section "Fork observation registry").
+Synthetic committees on both layouts. `cargo run -p lc-testkit --bin write-fork-observation-fixtures` writes them,
+and the Rust test `fork_observation_fixtures_are_current` fails when they are stale. File names start with `pulsechain_` or `ethereum_`.
+
+| Key | Meaning |
+|---|---|
+| `name`, `description`, `chain` | Same as the file stem, what the case shows, and the source chain. |
+| `publicValues` | Hex of `abi.encode(ForkObservation)`: 7 words, 224 bytes (`genesisValidatorsRoot`, `previousHeaderRoot`, `previousHeadSlot`, `previousSyncCommitteeHash`, `startNextSyncCommitteeHash`, `observedVersion`, `observedAttestedSlot`). The `bytes4` version is left-aligned in its word. `null` for `no-proof-exists` cases. |
+| `observedVersion`, `observedAttestedSlot` | The two last fields, decoded (accept cases only). |
+| `versionInProgramTable` | Whether the fork table of the Rust program holds the version (accept cases only). |
+| `startStore` | The start store of the proof: `headerRoot`, `headSlot` (decimal string), `currentSyncCommitteeHash`, `nextSyncCommitteeHash` (zero when the store has none). Equals the first five fields of the public values. |
+| `lightClient` | What the observed chain's light client holds in this case: `headSlot`, `headerRoot` (for that slot), `currentSyncCommitteeHash`, `nextSyncCommitteeHash` (zero for none). An accept case has them equal to `startStore`; a reject case changes one. |
+| `expected.result` | `accept`, `reject` (the registry reverts), or `no-proof-exists` (the Rust program refuses, so no proof and no public values exist). |
+| `expected.reason` | For `reject`: `StartMismatch` (a start field differs from `lightClient`), `NotFresh` (`observedAttestedSlot <= lightClient.headSlot`), `WrongLength` (public values are not 224 bytes). For `no-proof-exists`: the Rust error name. |
+
+The accept cases use a proof-less oracle verifier on the Solidity side, so the proof bytes are not part of the fixture.
+`observedAttestedSlot` is the slot of the attested header. The signature authenticates it, because the signed root is the hash of that header. The unsigned signature slot is not in the output.
+The freshness rule compares `observedAttestedSlot` with `lightClient.headSlot`, not with `startStore.headSlot`.

@@ -27,6 +27,19 @@ sol! {
         bytes32 nextSyncCommitteeHash;
     }
 
+    /// Public values of the fork-observation program: 7 words, 224 bytes. The first five fields bind the starting store
+    /// exactly like `LightClientOutput`. `observedVersion` is a `bytes4`, so it is left-aligned in its word.
+    #[derive(Debug, PartialEq, Eq)]
+    struct ForkObservation {
+        bytes32 genesisValidatorsRoot;
+        bytes32 previousHeaderRoot;
+        uint64 previousHeadSlot;
+        bytes32 previousSyncCommitteeHash;
+        bytes32 startNextSyncCommitteeHash;
+        bytes4 observedVersion;
+        uint64 observedAttestedSlot;
+    }
+
     /// A beacon block header, as the vault receives it in calldata.
     #[derive(Debug, PartialEq, Eq)]
     struct BeaconBlockHeader {
@@ -127,6 +140,37 @@ mod tests {
         assert_eq!(sample_light_client_output().abi_encode(), expected.to_vec());
         assert_eq!(expected.len(), 11 * 32);
         assert_eq!(expected.len(), 352);
+    }
+
+    /// Claim: the encoding of `ForkObservation` equals the bytes of
+    /// `cast abi-encode "f((bytes32,bytes32,uint64,bytes32,bytes32,bytes4,uint64))" ...` (Foundry `cast`, 2026-10-21).
+    /// It has 7 words of 32 bytes: 224 bytes. The `bytes4` version `0x0000036d` is LEFT-aligned in its word, as Solidity
+    /// `abi.encode` of a `bytes4` does, and not right-aligned like an integer.
+    /// Why it matters: the contract decodes these exact bytes, and 224 differs from the 352 of `LightClientOutput`.
+    #[test]
+    fn fork_observation_encoding_matches_cast() {
+        let output = ForkObservation {
+            genesisValidatorsRoot: B256::repeat_byte(0x11),
+            previousHeaderRoot: B256::repeat_byte(0x22),
+            previousHeadSlot: 100,
+            previousSyncCommitteeHash: B256::repeat_byte(0x33),
+            startNextSyncCommitteeHash: B256::repeat_byte(0x88),
+            observedVersion: alloy_primitives::FixedBytes::from([0, 0, 0x03, 0x6d]),
+            observedAttestedSlot: 200,
+        };
+        let expected = hex!(
+            "1111111111111111111111111111111111111111111111111111111111111111"
+            "2222222222222222222222222222222222222222222222222222222222222222"
+            "0000000000000000000000000000000000000000000000000000000000000064"
+            "3333333333333333333333333333333333333333333333333333333333333333"
+            "8888888888888888888888888888888888888888888888888888888888888888"
+            "0000036d00000000000000000000000000000000000000000000000000000000"
+            "00000000000000000000000000000000000000000000000000000000000000c8"
+        );
+        assert_eq!(output.abi_encode(), expected.to_vec());
+        assert_eq!(expected.len(), 7 * 32);
+        assert_eq!(expected.len(), 224);
+        assert_eq!(ForkObservation::abi_decode(&expected).expect("decode"), output);
     }
 
     /// Claim: decoding the encoded bytes gives back the same struct, so the layout is symmetric.

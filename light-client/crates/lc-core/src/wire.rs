@@ -17,6 +17,7 @@ use crate::types::{
     BeaconBlockHeader, BlobGasFields, BlsPublicKey, ExecutionPayloadHeader, LightClientHeader, LightClientStore,
     LightClientUpdate, NextSyncCommittee, SyncAggregate, SyncCommittee,
 };
+use crate::observation::{verify_fork_observation, Observation};
 use crate::update::{verify_light_client_fold_with_fork_versions, FoldStep, MAX_FOLD_UPDATES};
 use alloy_primitives::{Address, B256, U256};
 
@@ -133,34 +134,46 @@ impl Writer {
         }
         self.header(&update.finalized_header);
         self.branch(&update.finality_branch);
-        self.fixed(&update.sync_aggregate.sync_committee_bits);
-        self.fixed(&update.sync_aggregate.sync_committee_signature);
+        self.aggregate(&update.sync_aggregate);
         self.u64(update.signature_slot);
+    }
+    fn aggregate(&mut self, aggregate: &SyncAggregate) {
+        self.fixed(&aggregate.sync_committee_bits);
+        self.fixed(&aggregate.sync_committee_signature);
+    }
+    fn store(&mut self, store: &LightClientStore) {
+        self.fixed(store.header_root.as_slice());
+        self.u64(store.header_slot);
+        self.committee(&store.current_sync_committee);
+        match &store.next_sync_committee {
+            None => self.fixed(&[0]),
+            Some(committee) => {
+                self.fixed(&[1]);
+                self.committee(committee);
+            }
+        }
+    }
+    fn chain(&mut self, chain: ChainSelector) {
+        self.fixed(&[match chain {
+            ChainSelector::EthereumMainnet => 1,
+            ChainSelector::Pulsechain => 2,
+        }]);
+    }
+    fn steps(&mut self, steps: &[FoldStep]) {
+        self.u32(steps.len());
+        for step in steps {
+            self.fixed(&step.fork_version);
+            self.update(&step.update);
+        }
     }
 }
 
 /// Encodes the guest input.
 pub fn encode_guest_input(input: &GuestInput) -> Vec<u8> {
     let mut writer = Writer(Vec::new());
-    writer.fixed(&[match input.chain {
-        ChainSelector::EthereumMainnet => 1,
-        ChainSelector::Pulsechain => 2,
-    }]);
-    writer.fixed(input.store.header_root.as_slice());
-    writer.u64(input.store.header_slot);
-    writer.committee(&input.store.current_sync_committee);
-    match &input.store.next_sync_committee {
-        None => writer.fixed(&[0]),
-        Some(committee) => {
-            writer.fixed(&[1]);
-            writer.committee(committee);
-        }
-    }
-    writer.u32(input.steps.len());
-    for step in &input.steps {
-        writer.fixed(&step.fork_version);
-        writer.update(&step.update);
-    }
+    writer.chain(input.chain);
+    writer.store(&input.store);
+    writer.steps(&input.steps);
     writer.0
 }
 
@@ -174,6 +187,12 @@ impl<'a> Reader<'a> {
         let (head, rest) = self.0.split_at(length);
         self.0 = rest;
         Ok(head)
+    }
+    fn finish(&self) -> Result<()> {
+        if self.0.is_empty() {
+            return Ok(());
+        }
+        Err(wire_error("trailing bytes"))
     }
     fn u64(&mut self) -> Result<u64> {
         Ok(u64::from_le_bytes(self.take(8)?.try_into().expect("8 bytes")))
@@ -264,17 +283,44 @@ impl<'a> Reader<'a> {
         };
         let finalized_header = self.header()?;
         let finality_branch = self.branch()?;
-        let sync_committee_bits: [u8; 64] = self.take(64)?.try_into().expect("64 bytes");
-        let sync_committee_signature: [u8; 96] = self.take(96)?.try_into().expect("96 bytes");
+        let sync_aggregate = self.aggregate()?;
         let signature_slot = self.u64()?;
         Ok(LightClientUpdate {
             attested_header,
             next_sync_committee,
             finalized_header,
             finality_branch,
-            sync_aggregate: SyncAggregate { sync_committee_bits, sync_committee_signature },
+            sync_aggregate,
             signature_slot,
         })
+    }
+    fn aggregate(&mut self) -> Result<SyncAggregate> {
+        let sync_committee_bits: [u8; 64] = self.take(64)?.try_into().expect("64 bytes");
+        let sync_committee_signature: [u8; 96] = self.take(96)?.try_into().expect("96 bytes");
+        Ok(SyncAggregate { sync_committee_bits, sync_committee_signature })
+    }
+    fn chain(&mut self) -> Result<ChainSelector> {
+        match self.take(1)?[0] {
+            1 => Ok(ChainSelector::EthereumMainnet),
+            2 => Ok(ChainSelector::Pulsechain),
+            _ => Err(wire_error("unknown chain selector")),
+        }
+    }
+    fn store(&mut self) -> Result<LightClientStore> {
+        let header_root = self.b256()?;
+        let header_slot = self.u64()?;
+        let current_sync_committee = self.committee()?;
+        let next_sync_committee = if self.flag()? { Some(self.committee()?) } else { None };
+        Ok(LightClientStore { header_root, header_slot, current_sync_committee, next_sync_committee })
+    }
+    fn steps(&mut self) -> Result<Vec<FoldStep>> {
+        let count = self.count(MAX_FOLD_UPDATES)?;
+        (0..count)
+            .map(|_| {
+                let fork_version: [u8; 4] = self.take(4)?.try_into().expect("4 bytes");
+                Ok(FoldStep { update: self.update()?, fork_version })
+            })
+            .collect()
     }
     fn committee(&mut self) -> Result<SyncCommittee> {
         let count = self.count(512)?;
@@ -289,27 +335,10 @@ impl<'a> Reader<'a> {
 /// `HeaderDecode` with a wire-format reason for truncated, oversized or trailing input.
 pub fn decode_guest_input(bytes: &[u8]) -> Result<GuestInput> {
     let mut reader = Reader(bytes);
-    let chain = match reader.take(1)?[0] {
-        1 => ChainSelector::EthereumMainnet,
-        2 => ChainSelector::Pulsechain,
-        _ => return Err(wire_error("unknown chain selector")),
-    };
-    let header_root = reader.b256()?;
-    let header_slot = reader.u64()?;
-    let current_sync_committee = reader.committee()?;
-    let next_sync_committee = if reader.flag()? { Some(reader.committee()?) } else { None };
-    let store = LightClientStore { header_root, header_slot, current_sync_committee, next_sync_committee };
-
-    let count = reader.count(MAX_FOLD_UPDATES)?;
-    let steps = (0..count)
-        .map(|_| {
-            let fork_version: [u8; 4] = reader.take(4)?.try_into().expect("4 bytes");
-            Ok(FoldStep { update: reader.update()?, fork_version })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    if !reader.0.is_empty() {
-        return Err(wire_error("trailing bytes"));
-    }
+    let chain = reader.chain()?;
+    let store = reader.store()?;
+    let steps = reader.steps()?;
+    reader.finish()?;
     Ok(GuestInput { chain, store, steps })
 }
 
@@ -323,5 +352,64 @@ pub fn run_light_client_guest(input_bytes: &[u8]) -> Result<Vec<u8>> {
     use alloy_sol_types::SolValue;
     let input = decode_guest_input(input_bytes)?;
     let output = verify_light_client_fold_with_fork_versions(&input.store, &input.steps, input.chain.spec())?;
+    Ok(output.abi_encode())
+}
+
+/// Everything the fork-observation guest reads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObservationGuestInput {
+    /// The chain.
+    pub chain: ChainSelector,
+    /// The store before the first step.
+    pub store: LightClientStore,
+    /// Zero to 64 fold steps, each with the fork version of its signing domain.
+    pub steps: Vec<FoldStep>,
+    /// The observation.
+    pub observation: Observation,
+}
+
+/// Encodes the fork-observation guest input: chain selector, store, a list of 0 to 64 steps (the same encoding as
+/// the light-client guest), then the observation: attested beacon header (112 bytes: slot, proposer index, parent, state and body roots), signature slot (`u64`),
+/// participation bits (64 bytes), signature (96 bytes), fork version (4 bytes).
+pub fn encode_observation_input(input: &ObservationGuestInput) -> Vec<u8> {
+    let mut writer = Writer(Vec::new());
+    writer.chain(input.chain);
+    writer.store(&input.store);
+    writer.steps(&input.steps);
+    writer.beacon(&input.observation.attested_header);
+    writer.u64(input.observation.signature_slot);
+    writer.aggregate(&input.observation.sync_aggregate);
+    writer.fixed(&input.observation.fork_version);
+    writer.0
+}
+
+/// Decodes the fork-observation guest input.
+///
+/// # Errors
+/// `HeaderDecode` with a wire-format reason for truncated, oversized (more than 64 steps) or trailing input.
+pub fn decode_observation_input(bytes: &[u8]) -> Result<ObservationGuestInput> {
+    let mut reader = Reader(bytes);
+    let chain = reader.chain()?;
+    let store = reader.store()?;
+    let steps = reader.steps()?;
+    let attested_header = reader.beacon()?;
+    let signature_slot = reader.u64()?;
+    let sync_aggregate = reader.aggregate()?;
+    let fork_version: [u8; 4] = reader.take(4)?.try_into().expect("4 bytes");
+    reader.finish()?;
+    let observation = Observation { attested_header, signature_slot, sync_aggregate, fork_version };
+    Ok(ObservationGuestInput { chain, store, steps, observation })
+}
+
+/// The whole fork-observation guest program in one function: decode the input, verify the fold and the observation,
+/// return the ABI-encoded public values (`ForkObservation`: 7 words, 224 bytes).
+/// The SP1 wrapper in `light-client/guests/fork-observation` calls exactly this.
+///
+/// # Errors
+/// Any decode or verification error. The guest panics on error, so no proof exists.
+pub fn run_fork_observation_guest(input_bytes: &[u8]) -> Result<Vec<u8>> {
+    use alloy_sol_types::SolValue;
+    let input = decode_observation_input(input_bytes)?;
+    let output = verify_fork_observation(&input.store, &input.steps, &input.observation, input.chain.spec())?;
     Ok(output.abi_encode())
 }

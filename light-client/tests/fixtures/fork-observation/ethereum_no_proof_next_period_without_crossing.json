@@ -1,0 +1,10 @@
+{
+  "chain": "ethereum",
+  "description": "A next-period signature with no crossing in the fold.",
+  "expected": {
+    "reason": "SignatureInNextPeriodWithoutCrossing",
+    "result": "no-proof-exists"
+  },
+  "name": "ethereum_no_proof_next_period_without_crossing",
+  "publicValues": null
+}

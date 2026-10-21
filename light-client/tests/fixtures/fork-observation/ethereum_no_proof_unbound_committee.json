@@ -1,0 +1,10 @@
+{
+  "chain": "ethereum",
+  "description": "An invented committee signs. No public value binds it.",
+  "expected": {
+    "reason": "SignatureVerificationFailed",
+    "result": "no-proof-exists"
+  },
+  "name": "ethereum_no_proof_unbound_committee",
+  "publicValues": null
+}
