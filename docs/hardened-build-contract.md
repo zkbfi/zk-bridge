@@ -202,6 +202,8 @@ Implements the Altair light-client sync protocol for both fork schedules:
 
 ## Harness (`harness/`)
 
+**Decision (2026-10-20):** the hardened two-chain tests live in Rust, in `prover/tests/`, on the prover's existing two-Anvil setup. The prover is the reference prover, so this avoids a second stack and a fresh Node install on a nearly full disk. `harness/` keeps the red-team tests against revision 1. The list below still defines what the hardened tests must cover. Chain A (id 1) runs `cancun`, so EIP-4788 exists; chain B (id 369) runs `shanghai`.
+
 - Chain B (the PulseChain role, id 369) runs Anvil with `--hardfork shanghai`. Chain A (id 1) keeps `prague`.
 - Add hardened tests under `harness/test/hardened/` on two Anvil chains: the happy path both ways, the fake emitter (H-02), the same-address token (H-03), an unfinalized block after a reorganization (H-08), cross-chain replay of a light-client output (H-01), a deposit and withdrawal with a second deposit in the same transaction (R2-06), a typed receipt (R2-05), the deploy procedure with predicted addresses (R2-08), and `MCOPY` bytecode failing on chain B while the Shanghai build works (R2-10).
 - The reference light-client prover models finality: it emits a `LightClientOutput` only for a block that is at least a fixed number of blocks deep, and it signs with the oracle key.
