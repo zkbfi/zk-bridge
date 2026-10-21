@@ -453,3 +453,60 @@ Anyone may also call `confirm(evidence)` directly. It runs the same checks witho
 - The interface reads `/eth/v1/config/fork_schedule` from each source chain. It stops offering a route one hour before the activation epoch of any fork whose version the route does not support, never less than three epochs before.
 - It shows the gate's state, and it builds the gate evidence when `confirmedEpoch` is stale.
 - This is advisory. The documentation must state that a direct contract call in that window can strand funds.
+
+## Fork observation registry (HB-02 on PulseChain, 2026-10-20)
+
+PulseChain has no EIP-4788, so its vault cannot read its own beacon state. This registry gives the PulseChain gate a proven view of PulseChain's current fork version without an admin. Build it after the two-chain tests are committed.
+
+### Why a signature proves the fork version
+
+The sync committee signs `compute_signing_root(attested_header, domain)`, where the domain is built from the fork version of the signature epoch and the genesis validators root. An honest committee signs only under the chain's real current version. So two thirds of a bound committee signing under version V proves the chain runs V at that slot. The proof needs no state layout, only the signature over a header root. That means a program that does not know V's layout can still prove that V is active.
+
+### Program: `guests/fork-observation`
+
+- It is separate from the light-client program and has its own verification key, so one kind of output can never pass for the other.
+- **Input:** a store; zero or more fold steps under known versions; then one observation of the form `{ attestedHeaderRoot, signatureSlot, syncAggregate, forkVersion }`.
+- **Check:** the fold steps follow every existing rule, including HB-01. The observation's signing committee is the current committee of the final store, or its proven next committee after a crossing, under the same "a next-period signature needs a crossing" rule. It needs at least 342 of 512 signers. It needs `signatureSlot > finalStore.headerSlot`. It needs a valid BLS `FastAggregateVerify` under `compute_domain(DOMAIN_SYNC_COMMITTEE, forkVersion, genesisValidatorsRoot)`.
+- **Output (`ForkObservation`):** `genesisValidatorsRoot`, `previousHeaderRoot`, `previousHeadSlot`, `previousSyncCommitteeHash`, `startNextSyncCommitteeHash`, `observedVersion`, `observedSignatureSlot`.
+  - The first five bind the starting store exactly as `LightClientOutput` does.
+  - No head moves: the observation never feeds the light client.
+
+### Contract: `ForkRegistry`
+
+- **Immutable:** `lightClient` (the light client of the observed chain, on this chain), `verifier`, `observationProgramVKey`.
+- `observe(bytes proof, bytes publicValues)`, open to anyone:
+  - It verifies the proof.
+  - It applies light-client rule 1 to the five start fields against `lightClient`: header root, head slot, current committee, and the stored next committee, where zero equals zero.
+  - It requires `observedSignatureSlot > lightClient.headSlot()`. This freshness rule blocks a replay of an old signature, for example one from the Bellatrix era, which could otherwise seal a gate falsely.
+  - It records `firstSeenSlot[observedVersion] = min(existing, observedSignatureSlot)` and `latestObservedVersion`, the version with the highest slot seen, then emits `ForkObserved(version, slot)`.
+- `latestObservedVersion()` and `firstSeenSlot(version)` are views. Entries are only added or moved earlier, never removed.
+
+### The PulseChain deployment
+
+- A light client of PulseChain is deployed on PulseChain itself. It is the same `BeaconLightClient`, verified by the same SP1 verifier the route already needs on PulseChain for deposits from Ethereum. Anyone updates it with the same proofs as the copy on Ethereum.
+- If it goes stale, an observation proof folds forward from its stored committee. It does not have to be kept current.
+- **Gate mode:** add `DetectBeaconRootsAndRegistry` to the gate's mode enum, and give the gate an immutable `forkRegistry`. Every `admit` refuses when `latestObservedVersion` is set and is not in `supportedVersions`. `seal()` with no evidence succeeds in that state, so anyone can seal by pointing at the registry. Beacon-root detection stays as before.
+
+### What it closes and what it leaves
+
+- **Window 1 on PulseChain:** the gap shrinks to the time between activation and the first observation proof. That is minutes when the prover service watches for it: `route-health` sees the activation and triggers the proof. On Ethereum, EIP-4788 stays the zero-gap mechanism.
+- **Optional liveness rule, off by default (user decision):** the gate also refuses deposits when the PulseChain-side light client's head lags the wall clock by more than N epochs. This closes the remaining gap, at the cost of an update about once an epoch, roughly 270 transactions a day at about 300,000 gas each. It fails safe: if nobody updates, deposits pause and no funds are stranded.
+- **Window 2:** still the interface's job. The fork schedule is not on chain anywhere.
+
+### Tests
+
+- **Program:** each item below is an attack with a control.
+  - An observation under a version outside the program's table is accepted, and its output names that version.
+  - 341 signers fail.
+  - A wrong committee fails.
+  - A signature at or before the final head fails.
+  - A next-period signature without a crossing fails.
+  - The other chain's genesis validators root fails.
+  - Folding forward from a stale store works.
+- **Contract:**
+  - The start fields must match.
+  - Freshness is enforced.
+  - The minimum first-seen slot is kept.
+  - An observation proof cannot be passed to `BeaconLightClient.update`, and a light-client proof cannot be passed to `observe`, because the verification keys differ.
+- **Gate:** an unsupported observed version refuses deposits and allows `seal()`. A supported observed version changes nothing.
+- **Two chains:** on chain 369, observe an unsupported version, then a deposit reverts, then anyone seals, then withdrawals still work.
