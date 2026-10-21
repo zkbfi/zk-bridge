@@ -17,7 +17,9 @@ use lc_core::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN};
 use lc_core::json::{execution_header_from_json, receipts_from_json};
 use lc_core::receipts::{build_receipts_trie, encode_execution_header, header_hash};
 use lc_core::ssz::{branch_for_leaf, u64_chunk};
-use lc_core::ssz_state::{try_parse_signed_block, try_parse_state, ParsedState};
+use lc_core::ssz_state::{
+    state_slot, try_parse_signed_block, try_parse_state_for_fork, ParsedState, StateForm,
+};
 use lc_core::types::{
     BeaconBlockHeader, ExecutionPayloadHeader, LightClientHeader, NextSyncCommittee, SyncCommittee,
 };
@@ -420,16 +422,28 @@ pub fn block_hash_gindex(chain: ChainKind, slot: u64) -> Result<u64> {
         .map_err(|error| Error::Beacon(error.to_string()))
 }
 
-// ------------------------------------------------------------------ real beacon data (Capella layout)
+// ------------------------------------------------------------------ real beacon data (Capella, Deneb, Electra layouts)
 
-/// Field positions in the Capella `BeaconState` (PulseChain). Taken from `ethereum/consensus-specs`.
+/// Field positions in the `BeaconState`. Taken from `ethereum/consensus-specs`. Every fork keeps these positions; Electra
+/// and Fulu only append fields, so their tree is deeper (depth 6) and the branches get one entry more.
 const STATE_FIELD_FINALIZED_CHECKPOINT: usize = 20;
 const STATE_FIELD_CURRENT_SYNC_COMMITTEE: usize = 22;
 const STATE_FIELD_NEXT_SYNC_COMMITTEE: usize = 23;
 const BODY_FIELD_EXECUTION_PAYLOAD: usize = 9;
 const PAYLOAD_FIELD_BLOCK_HASH: usize = 12;
-/// The number of fields of the Capella state. The parser supports this layout only.
-const CAPELLA_STATE_FIELDS: usize = 28;
+/// The field counts of the layouts that the parser supports: Capella and Deneb (28), Electra (37), Fulu (38).
+const SUPPORTED_STATE_FIELD_COUNTS: [usize; 3] = [
+    StateForm::Capella.field_count(),
+    StateForm::Electra.field_count(),
+    StateForm::Fulu.field_count(),
+];
+
+/// The error for a state whose field count no supported layout has.
+fn unsupported_field_count(count: usize) -> Error {
+    Error::Beacon(format!(
+        "the state has {count} fields; only the Capella and Deneb (28 fields), Electra (37 fields) and Fulu (38 fields) layouts are supported"
+    ))
+}
 
 /// A beacon state read from SSZ bytes, with the branches the service needs.
 pub struct StateView {
@@ -437,22 +451,20 @@ pub struct StateView {
 }
 
 impl StateView {
-    /// Parses and hashes a Capella-layout state (SSZ bytes of `GET /eth/v2/debug/beacon/states/<id>`).
+    /// Parses and hashes a state (SSZ bytes of `GET /eth/v2/debug/beacon/states/<id>`). The layout comes from the fork
+    /// that the chain schedule has at the slot of the state: Capella, Deneb, Electra or Fulu.
     ///
     /// # Errors
-    /// `Error::Malformed` when the bytes are not a state. `Error::Beacon` when the layout is not Capella.
-    pub fn parse(bytes: &[u8]) -> Result<Self> {
+    /// `Error::Malformed` when the bytes are not a state of that fork, or when the fork has no parser.
+    pub fn parse(bytes: &[u8], chain: ChainKind) -> Result<Self> {
+        let malformed = |error: lc_core::Error| Error::Malformed(format!("beacon state: {error}"));
+        let slot = state_slot(bytes).map_err(malformed)?;
+        let fork = chain.spec().fork_at_slot(slot);
         let state =
             // The parser returns errors for malformed input; `guarded` stays as a second line of defence.
-            guarded("beacon state", || try_parse_state(bytes))?
-                .map_err(|error| Error::Malformed(format!("beacon state: {error}")))?;
-        if state.field_roots.len() != CAPELLA_STATE_FIELDS {
-            return Err(Error::Beacon(format!(
-                "the state has {} fields; only the Capella layout (28 fields) is supported",
-                state.field_roots.len()
-            )));
-        }
-        Ok(Self { state })
+            guarded("beacon state", || try_parse_state_for_fork(bytes, fork))?
+                .map_err(malformed)?;
+        Self::from_parsed(state)
     }
 
     /// The state root. It must equal the `state_root` of the header that names this state.
@@ -483,13 +495,10 @@ impl StateView {
     /// Wraps an already parsed state (tests build synthetic ones). The layout check is the one of [`StateView::parse`].
     ///
     /// # Errors
-    /// `Error::Beacon` when the layout is not Capella.
+    /// `Error::Beacon` when the field count is that of no supported layout.
     pub fn from_parsed(state: ParsedState) -> Result<Self> {
-        if state.field_roots.len() != CAPELLA_STATE_FIELDS {
-            return Err(Error::Beacon(format!(
-                "the state has {} fields; only the Capella layout (28 fields) is supported",
-                state.field_roots.len()
-            )));
+        if !SUPPORTED_STATE_FIELD_COUNTS.contains(&state.field_roots.len()) {
+            return Err(unsupported_field_count(state.field_roots.len()));
         }
         Ok(Self { state })
     }

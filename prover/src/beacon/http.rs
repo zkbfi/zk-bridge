@@ -35,9 +35,9 @@
 //!    head state at once, while the node still serves it whole.
 //! 3. `lc-core` checks the rebuilt roots against the `block_summary_root` of the anchor state.
 //!
-//! Limits: the SSZ parser in `lc-core` reads the Capella layout only, which is the layout of PulseChain. Ethereum
-//! can use the light-client endpoints for the update, but its states need a parser for Deneb and Electra
-//! layouts (not built).
+//! Limits: the SSZ parser in `lc-core` reads states of the Capella, Deneb, Electra and Fulu layouts. It picks the layout
+//! from the fork that the chain schedule has at the slot of the state. The block parser reads the Capella block layout
+//! only, so the assembled update path needs a Capella chain. Ethereum uses the light-client endpoints for the update.
 
 use super::{
     BeaconSource, DepositBlock, HashEvidence, HistoricalEvidence, LightClientState, RootsEvidence,
@@ -332,7 +332,7 @@ impl HttpBeaconSource {
             self.get_ssz(&format!("/eth/v2/debug/beacon/states/{state_root:#x}"))?,
             &format!("state {state_root:#x}"),
         )?;
-        let state = Arc::new(StateView::parse(&bytes)?);
+        let state = Arc::new(StateView::parse(&bytes, self.chain)?);
         if state.root() != state_root {
             return Err(Error::Beacon(format!(
                 "the state hashes to {:#x}, not {state_root:#x} (the node preset may differ from the mainnet preset)",
@@ -622,7 +622,7 @@ impl ForkEvidenceSource for HttpBeaconSource {
     /// holds, under `t`, the root of the parent beacon block. The first such header in the epoch of the request gives
     /// the proof: the node serves its header by root and its state by state root.
     ///
-    /// The state parser reads the Capella layout only. A state of another layout fails with `Error::Beacon`.
+    /// The state parser picks the layout from the fork at the slot of the state (Capella, Deneb, Electra or Fulu).
     fn fork_evidence(&self, request: &ForkRequest<'_>) -> Result<Vec<u8>> {
         let latest = request.chain.latest_block_number()?;
         for number in (latest.saturating_sub(GATE_SEARCH_BLOCKS)..=latest).rev() {
@@ -1646,6 +1646,176 @@ mod tests {
             fetch_period_updates(&silent, ChainKind::Pulsechain, period, period + 1)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    // ---------------------------------------------------------------- the store at the head
+
+    use lc_core::chain::{ForkName, ETHEREUM_MAINNET};
+    use lc_testkit::state_bytes::StateBytes;
+    /// A slot in the middle of the first epoch of `fork` on Ethereum mainnet.
+    fn ethereum_slot_in(fork: ForkName) -> u64 {
+        let entry = ETHEREUM_MAINNET
+            .fork_schedule
+            .iter()
+            .find(|entry| entry.fork_name == fork)
+            .expect("the fork is scheduled");
+        entry.epoch * ETHEREUM_MAINNET.slots_per_epoch + 7
+    }
+
+    /// An Ethereum source whose node serves one synthetic state of `fork`, the header that names it, and the state.
+    /// The current and the next committee are two different real committees.
+    fn head_with_state(fork: ForkName) -> (HttpBeaconSource, BeaconHeader, StateView) {
+        let slot = ethereum_slot_in(fork);
+        let period = ETHEREUM_MAINNET.period_at_slot(slot);
+        let current = committee_for(&ETHEREUM_MAINNET, period).committee.clone();
+        let next = committee_for(&ETHEREUM_MAINNET, period + 1)
+            .committee
+            .clone();
+        let bytes = StateBytes::new(fork, slot, current, next).to_ssz();
+        let state =
+            StateView::parse(&bytes, ChainKind::Ethereum).expect("a synthetic state parses");
+        let head = BeaconHeader {
+            slot,
+            proposer_index: 5,
+            parent_root: keccak256(b"head parent"),
+            state_root: state.root(),
+            body_root: keccak256(b"head body"),
+        };
+        let path = format!("/eth/v2/debug/beacon/states/{:#x}", head.state_root);
+        let node = Node([(path, bytes)].into_iter().collect());
+        (
+            HttpBeaconSource::new(ChainKind::Ethereum, Box::new(node)),
+            head,
+            state,
+        )
+    }
+
+    const FORKS_WITH_STATES: [ForkName; 4] = [
+        ForkName::Capella,
+        ForkName::Deneb,
+        ForkName::Electra,
+        ForkName::Fulu,
+    ];
+
+    /// Claim: when the light client holds a next committee, `store_at_head` reads both committees from the state of the
+    /// head, in every layout (Capella, Deneb, Electra, Fulu), and the store names the head.
+    /// Why it matters: the contract compares the next committee hash of the store with its own. A parser that gave a
+    /// shifted field would hand the program the wrong committee, and the fold would revert on chain.
+    #[test]
+    fn store_at_head_reads_both_committees_from_the_state() {
+        for fork in FORKS_WITH_STATES {
+            let (source, head, state) = head_with_state(fork);
+            let next_hash = committee_hash(state.next_committee()).unwrap();
+            let store = source
+                .store_at_head(&head, next_hash)
+                .unwrap_or_else(|error| panic!("{fork:?}: {error}"));
+            assert_eq!(store.header_root, header_root(&head), "{fork:?}");
+            assert_eq!(store.header_slot, head.slot, "{fork:?}");
+            assert_eq!(
+                &store.current_sync_committee,
+                state.current_committee(),
+                "{fork:?}"
+            );
+            assert_eq!(
+                store.next_sync_committee.as_ref(),
+                Some(state.next_committee()),
+                "{fork:?}"
+            );
+            assert_ne!(
+                state.current_committee(),
+                state.next_committee(),
+                "{fork:?}: the two committees must differ"
+            );
+        }
+    }
+
+    /// Claim: when the contract holds no next committee (the stored hash is zero) and the node serves no bootstrap,
+    /// the store comes from the state of the head and carries the current committee only.
+    /// Why it matters: a store with a next committee that the contract does not hold would not match its record.
+    #[test]
+    fn store_at_head_without_a_next_committee_carries_the_current_committee_only() {
+        for fork in FORKS_WITH_STATES {
+            let (source, head, state) = head_with_state(fork);
+            let store = source
+                .store_at_head(&head, B256::ZERO)
+                .unwrap_or_else(|error| panic!("{fork:?}: {error}"));
+            assert_eq!(
+                &store.current_sync_committee,
+                state.current_committee(),
+                "{fork:?}"
+            );
+            assert!(store.next_sync_committee.is_none(), "{fork:?}");
+        }
+    }
+
+    /// Claim: when the stored hash is not the hash of the next committee in the state, `store_at_head` fails with an
+    /// error that names the stored hash. A hash of the current committee, of another committee and of one flipped bit
+    /// all fail, in every layout.
+    /// Why it matters: the state may belong to another fork of the beacon chain than the one the light client followed.
+    /// The prover must stop and not send a proof that the contract rejects.
+    #[test]
+    fn store_at_head_refuses_a_stored_hash_that_differs() {
+        for fork in FORKS_WITH_STATES {
+            let (source, head, state) = head_with_state(fork);
+            let next_hash = committee_hash(state.next_committee()).unwrap();
+            let mut flipped = next_hash;
+            flipped.0[0] ^= 1;
+            let stranger = committee_hash(&committee_for(&ETHEREUM_MAINNET, 7).committee).unwrap();
+            let wrong_hashes = [
+                committee_hash(state.current_committee()).unwrap(),
+                stranger,
+                flipped,
+            ];
+            for wrong in wrong_hashes {
+                match source.store_at_head(&head, wrong) {
+                    Err(Error::Beacon(message)) => {
+                        assert!(
+                            message.contains(&format!("{wrong:#x}")),
+                            "{fork:?}: {message}"
+                        )
+                    }
+                    other => panic!(
+                        "{fork:?}: expected a mismatch error, got {:?}",
+                        other.map(|_| ())
+                    ),
+                }
+            }
+            assert!(
+                source.store_at_head(&head, next_hash).is_ok(),
+                "{fork:?}: the control must pass"
+            );
+        }
+    }
+
+    /// Claim: a node that serves a state which does not hash to the `state_root` of the head gets an error, and no
+    /// store comes out.
+    /// Why it matters: the head state is the only authority for the next committee. Its hash must tie to the header.
+    #[test]
+    fn store_at_head_refuses_a_state_that_does_not_belong_to_the_head() {
+        let (source, head, state) = head_with_state(ForkName::Electra);
+        let next_hash = committee_hash(state.next_committee()).unwrap();
+        let other = BeaconHeader {
+            state_root: keccak256(b"another state"),
+            ..head
+        };
+        let bytes = StateBytes::new(
+            ForkName::Electra,
+            head.slot,
+            state.current_committee().clone(),
+            state.next_committee().clone(),
+        )
+        .to_ssz();
+        let path = format!("/eth/v2/debug/beacon/states/{:#x}", other.state_root);
+        let node = Node([(path, bytes)].into_iter().collect());
+        let liar = HttpBeaconSource::new(ChainKind::Ethereum, Box::new(node));
+        assert!(matches!(
+            liar.store_at_head(&other, next_hash),
+            Err(Error::Beacon(message)) if message.contains("hashes to")
+        ));
+        assert!(
+            source.store_at_head(&head, next_hash).is_ok(),
+            "the control must pass"
         );
     }
 }
