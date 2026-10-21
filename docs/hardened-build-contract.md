@@ -372,7 +372,13 @@ The Ethereum vault refuses a deposit unless the chain's current fork version is 
 
 - New interface `IDepositGate { function admit(bytes calldata evidence) external; }`. The vault takes an immutable `depositGate` and calls `admit(evidence)` first in `deposit`. A gate that reverts refuses the deposit.
 - `deposit(address token, address recipient, uint256 amount, bytes calldata gateEvidence)`. The new last argument changes the selector.
-- `BeaconForkGate` (Ethereum) and `OpenGate` (PulseChain, which has no EIP-4788; it always admits). The vault constructor refuses a zero gate address, so the choice is explicit.
+- One contract, `BeaconForkGate`, deployed on both chains. The vault constructor refuses a zero gate address.
+- **Detection mode (PulseChain, which has no EIP-4788 today).** Each `admit` first probes `beaconRoots.staticcall(abi.encode(block.timestamp))`. If the call fails, or returns anything other than 32 non-zero bytes, the beacon-root contract is absent and the gate admits the deposit. The probe costs about 2,600 gas. When the probe returns a root, the gate switches itself to enforcing mode for good (`enforcing = true`, event `BeaconRootsDetected`), and the same call continues as an enforcing `admit`.
+- **Enforcing mode (Ethereum from deployment, PulseChain after detection).** The rules below apply.
+- **Why no admin key (user proposal, 2026-10-20).** The user proposed a self-destructing admin key that turns the gate on once PulseChain adopts EIP-4788. The probe gives the same switch with no key:
+  - A key could turn the gate on too early and halt deposits forever, because the switch is one-way. It could also be lost, and then the gate would never turn on.
+  - The probe cannot be spoofed. Only the protocol writes roots, through the system address `0xfffffffffffffffffffffffffffffffffffffffe`. A replay of the keyless deployment of the genuine code on PulseChain leaves its storage empty, so every read reverts and the gate stays in detection mode.
+- **Expected effect on PulseChain.** EIP-4788 can only arrive through a PulseChain fork, which the route's program does not know. So the first deposit after that fork detects the beacon-root contract, finds an unsupported version, and reverts. Anyone can then call `seal`. The old route closes itself at the fork. A PulseChain fork that does not bring EIP-4788 is not covered; only the interface cutover protects it.
 
 ### `BeaconForkGate`
 
@@ -382,13 +388,17 @@ Immutable configuration, checked against the chain spec by the deploy script:
 - `supportedVersions`: a list of `(bytes4 version, uint8 stateDepth)` pairs. It must equal the light-client program's fork table, and a test compares the two. Expected values: Capella `0x03000000` depth 5; Deneb `0x04000000` depth 5; Electra `0x05000000` depth 6; Fulu `0x06000000` depth 6. Take each depth from `ethereum/consensus-specs` and cite it.
 - `sealDepths`: the depths allowed for a seal proof, namely 5, 6 and 7. Depth 7 covers a future fork that crosses 64 state fields.
 
+Immutable mode: `Enforcing` (Ethereum) or `DetectBeaconRoots` (PulseChain), from a configuration enum, not a boolean.
+
 State:
+- `enforcing` (set at deployment in `Enforcing` mode; set once by detection otherwise; never cleared);
 - `confirmedEpoch` (one storage slot);
 - `sealed` (one storage slot; once set, never cleared).
 
 `currentEpoch = (block.timestamp - genesisTime) / secondsPerSlot / slotsPerEpoch`.
 
 `admit(evidence)`:
+0. If not `enforcing`, run the probe. An absent beacon-root contract admits the deposit. A present one sets `enforcing` and continues.
 1. If `sealed`, revert `GateSealed()`.
 2. If `confirmedEpoch == currentEpoch`, return. Most deposits stop here, at the cost of one storage read.
 3. Otherwise decode `evidence` as a `ForkEvidence { uint256 timestamp; BeaconBlockHeader header; bytes4 version; bytes32[] branch; }` and call `_confirm`:
@@ -425,9 +435,14 @@ Anyone may also call `confirm(evidence)` directly. It runs the same checks witho
 - A seal with a supported version is refused, and a seal with an unknown version blocks all later deposits.
 - Withdrawals still work after a seal.
 - A timestamp outside the ring buffer is refused. Use a mock at the EIP-4788 address in unit tests, and the real system contract in the harness.
-- `OpenGate` admits everything.
+- Detection mode:
+  - It admits deposits when there is no code at the address.
+  - It admits deposits when the genuine runtime code has empty storage (use `vm.etch`). The probe must read this as absent.
+  - It admits deposits when the code returns zero, short or garbage data.
+  - It switches to enforcing for good once the mock returns a root, and then the same deposit needs evidence.
+  - A seal in detection mode first requires a working probe.
 - A test that `supportedVersions` equals the light-client program's fork table.
-- The harness runs chain A (Ethereum) on a fork with EIP-4788 (Cancun or later). Chain B (PulseChain) stays on Shanghai.
+- The harness runs chain A (Ethereum) on a fork with EIP-4788 (Cancun or later). Chain B (PulseChain) stays on Shanghai, so its gate stays in detection mode. A second harness case runs chain B on Cancun to show detection, enforcement and the seal on a real beacon-root contract.
 
 ### Interface cutover (HB-02 window 2)
 
