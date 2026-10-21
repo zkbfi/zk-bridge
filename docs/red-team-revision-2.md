@@ -254,6 +254,10 @@ The hardened build is held to the same standard as revision 2. These are holes f
 |---|---|---|---|
 | HB-01 | Critical | Fixed (light client `31b943e`, contracts `53b8c54`) | Every signing committee is bound to a public value; an empty committee slot is never filled from an unproven value |
 | HB-02 | High | Open: specified in `docs/hardened-build-contract.md` | Fork gate on both vaults (enforcing on Ethereum; on PulseChain it detects EIP-4788 itself, with no admin key); interface cutover before activation; a liveness gate for PulseChain forks without EIP-4788 later |
+| HB-03 | Critical | Fix in progress | A block-roots layout row may name only the field's own position; `eth1_data_votes` has the same shape and proposers fill it |
+| HB-04 | Critical | Fix in progress | A block-hash layout row may name only the execution payload's `block_hash` position; graffiti and `eth1_data` hold proposer-chosen values |
+| HB-05 | High | Fix in progress | The receipt logs walker has no 32-item limit, so a deposit in a busy transaction can still be withdrawn |
+| HB-06 | Medium | Fix in progress | Each deposit names its destination vault, so a second vault for the same source cannot pay it again |
 
 ## HB-01 — An unbound next committee could sign a forged head
 
@@ -293,3 +297,37 @@ Two windows lose funds:
   - This is advisory: a direct contract call skips it. Window 2 is the only place where the bridge relies on the interface for safety, and the documentation must say so plainly.
 - **PulseChain vault** (window 1). PulseChain has no EIP-4788 today, so its gate starts in detection mode and admits deposits. The user proposed a self-destructing admin key to turn the gate on later. The gate does this with no key: it probes the beacon-root contract on each deposit and enforces from the first block where the protocol serves roots. EIP-4788 can only reach PulseChain through a fork the route does not know, so the gate refuses deposits from that fork onward, and anyone can seal it. A PulseChain fork without EIP-4788 is covered by a fork observation registry, specified in `docs/hardened-build-contract.md`. One proof that the bound sync committee signed under a new version shows the chain now runs that version. This needs no state layout and no admin. With that proof recorded on PulseChain, the gate refuses deposits and anyone can seal it. The remaining gap is the time to produce that proof, minutes when a watcher runs. An optional liveness rule closes the rest, at a keeper cost. A liveness gate would read the remote light client's head through the local light client and a storage proof, and refuse deposits when the head stalls. Its gap is the stall window plus finality on both chains, so it bounds losses but does not remove them.
 - **Rejected: a permissionless "fork announced" pause.** The schedule is not on chain, so nothing can validate an announcement. Anyone could pause deposits at will. The pause would only delay deposits, never take funds, but it is still a griefing lever, and we do not need it.
+
+## HB-03 — A layout row can point at votes that proposers write
+
+**Before.** `addBlockRootsLayout` accepted any generalized index G, at depth 8 or less, when two stored header roots appeared at `G * 8192 + slot % 8192`. We called the table self-validating because "a wrong position cannot match". That is false. `state.eth1_data_votes` is a list of 2048 entries with 4 leaves each, so it has the same shape at G = 82 (Capella, Deneb) and G = 146 (Electra, Fulu). A proposer writes any value into a vote, and the state transition does not check it.
+
+An attacker proposes two blocks in one voting period. The votes hold two past finalized header roots, at the right offsets, and the root of an invented deposit header. The attacker adds the row and withdraws in one transaction. That is a full drain.
+
+**The right question.** "**Who can write the leaves this evidence points at?**" Evidence that a value matches proves only that someone wrote it. It does not prove the chain computed it.
+
+**After.** The vault accepts only the field's own position: `2**d + 5` for `block_roots` and `2**d + 27` for `historical_summaries`, with d in {5, 6, 7}. The evidence then only picks the depth. Reject tests cover positions 82 and 146 with evidence that would have passed before.
+
+## HB-04 — A block-hash row can point at graffiti
+
+**Before.** `addBlockHashLayout` accepted any body position where a stored header's leaf equalled that block's own execution block hash. A proposer can copy the hash into `graffiti` (position 18) or `eth1_data.block_hash` (position 70) of the same block. With two such checkpoint blocks and a third block between them, the third block's graffiti names an invented execution header, and the vault pays an invented deposit. This works wherever no honest row already covers that slot.
+
+**The right question.** The same as HB-03.
+
+**After.** The vault accepts only `(2**db + 9) * 2**dp + 12`, with db and dp in {4, 5}: the `block_hash` field of the execution payload. Today that is 412 or 812. The Rust reference already used these fixed positions, so the two now agree again.
+
+## HB-05 — A deposit in a transaction with more than 32 logs is stuck
+
+**Before.** The vault read the receipt's logs with the vendored `RLPReader.readList`, which reverts on more than 32 items. The Rust reference accepts any count, so a prover builds a valid proof and the vault reverts. With no refund, the tokens stay locked. Batching contracts and busy decentralized-finance transactions produce such receipts.
+
+**The right question.** "**Does every deposit the source vault accepts have a withdrawal the destination vault accepts?**"
+
+**After.** A small walker steps to item `logIndex` without building the whole list. The vendored files stay unchanged. Tests cover 0, 31, 32, 33 and 200 items and a deposit at log 40 of 64.
+
+## HB-06 — Nothing names the destination vault
+
+**Before.** The deposit nonce binds the source chain, the source vault and a counter. `claimed` is stored per vault. If a second vault on the same chain names the same source vault, for example after only one side of a route is redeployed, its `claimed` map is empty and it pays every deposit again.
+
+**The right question.** "**Which vault may pay this deposit?**" Only the deposit itself can answer that, because anyone can deploy a vault.
+
+**After.** `DepositInitiated` carries the destination vault, and `withdraw` requires it to equal `address(this)`.

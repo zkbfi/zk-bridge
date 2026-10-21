@@ -300,7 +300,10 @@ For Merkle-Patricia proofs and RLP decoding, prefer vendoring an audited impleme
 
 **A permissionless, self-validating fork-layout table, plus versioned redeployment (option A).** No admin, no upgrade path, no time lock.
 
-- **The vault's layout table is open to anyone.** `addForkLayout` accepts a row only when the chain's own stored data proves it. The `block_roots` position must map two stored header slots to the stored header roots, under a later stored state root. The `block_hash` position must map a stored header's body root to its stored execution block hash. A wrong position cannot match.
+- **The vault's layout table is open to anyone.** `addForkLayout` accepts a row only when the chain's own stored data proves it. The `block_roots` position must map two stored header slots to the stored header roots, under a later stored state root. The `block_hash` position must map a stored header's body root to its stored execution block hash. Matching evidence is not enough on its own, because proposers write some state and body leaves freely (HB-03, HB-04). So each function also accepts only its field's own position, at the depths a future fork could plausibly produce:
+  - `block_roots`: `2**d + 5`, and `historical_summaries`: `2**d + 27`, with d in {5, 6, 7}.
+  - `block_hash`: `(2**db + 9) * 2**dp + 12`, with db and dp in {4, 5}.
+  The evidence then only picks the depth.
 - **The light-client program takes the fork version as an input.** The committee signs the domain that contains it, so a wrong version yields no valid signature.
 - **Merkle positions in the program move only when a container crosses a power-of-two field count.** The beacon state crossed 32 fields at Electra (37); Fulu has 38; the next crossing is at 65. When that happens, a new route (light client, program and vault pair) is deployed beside the old one. The old route keeps paying out what it can still prove.
 - **Deposit cutoff.** Each vault takes an immutable `depositCutoffTimestamp` (zero disables it). After it, `deposit` reverts, so nobody deposits into a route whose counterpart may no longer prove. Set it at deployment only when a breaking fork is already scheduled.
