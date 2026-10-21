@@ -52,6 +52,8 @@ contract DeployBridge is Script {
         bytes32 observationProgramVKey;
         bytes32 genesisValidatorsRoot;
         uint64 slotsPerPeriod;
+        uint64 genesisTime;
+        uint64 secondsPerSlot;
         uint64 initialSlot;
         bytes32 initialHeaderRoot;
         bytes32 initialSyncCommitteeHash;
@@ -74,6 +76,8 @@ contract DeployBridge is Script {
         bytes32 programVKey;
         bytes32 genesisValidatorsRoot;
         uint64 slotsPerPeriod;
+        uint64 genesisTime;
+        uint64 secondsPerSlot;
         uint64 slotsPerEpoch;
         uint64 capellaForkEpoch;
         uint64 capellaEra;
@@ -144,6 +148,8 @@ contract DeployBridge is Script {
     error DeployerMismatch(address configured, address actual);
     /// @notice An observation setting does not match the other chain's settings or the light-client key.
     error ObservationMismatch(string field);
+    /// @notice The clock of a light client differs from the clock of the gate of the chain that it tracks.
+    error ClockMismatch(string field);
     /// @notice The gate mode is not one of the three names.
     error UnknownGateMode(string mode);
     /// @notice A list in the configuration is empty.
@@ -214,6 +220,8 @@ contract DeployBridge is Script {
         config.chainA = _readChain(json, ".chainA");
         config.chainB = _readChain(json, ".chainB");
         if (config.chainA.chainId == config.chainB.chainId) revert SameChainIdentifier(config.chainA.chainId);
+        _requireLightClientClockMatchesOtherGate(config.chainA, config.chainB);
+        _requireLightClientClockMatchesOtherGate(config.chainB, config.chainA);
         _requireObservationMatchesOtherChain(config.chainA, config.chainB);
         _requireObservationMatchesOtherChain(config.chainB, config.chainA);
 
@@ -424,6 +432,8 @@ contract DeployBridge is Script {
             revert DeploymentMismatch("observed.genesisValidatorsRoot");
         }
         if (observed.slotsPerPeriod() != own.slotsPerPeriod) revert DeploymentMismatch("observed.slotsPerPeriod");
+        if (observed.genesisTime() != own.genesisTime) revert DeploymentMismatch("observed.genesisTime");
+        if (observed.secondsPerSlot() != own.secondsPerSlot) revert DeploymentMismatch("observed.secondsPerSlot");
         if (observed.head() != own.initialSlot) revert DeploymentMismatch("observed.head");
         if (observed.headers(own.initialSlot) != own.initialHeaderRoot) revert DeploymentMismatch("observed.headerRoot");
         uint64 period = observed.periodOf(own.initialSlot);
@@ -460,6 +470,8 @@ contract DeployBridge is Script {
                 chain.lightClient.programVKey,
                 chain.lightClient.genesisValidatorsRoot,
                 chain.lightClient.slotsPerPeriod,
+                chain.lightClient.genesisTime,
+                chain.lightClient.secondsPerSlot,
                 chain.lightClient.initialSlot,
                 chain.lightClient.initialHeaderRoot,
                 chain.lightClient.initialSyncCommitteeHash,
@@ -476,6 +488,8 @@ contract DeployBridge is Script {
                 own.lightClientProgramVKey,
                 own.genesisValidatorsRoot,
                 own.slotsPerPeriod,
+                own.genesisTime,
+                own.secondsPerSlot,
                 own.initialSlot,
                 own.initialHeaderRoot,
                 own.initialSyncCommitteeHash,
@@ -537,6 +551,10 @@ contract DeployBridge is Script {
             revert DeploymentMismatch("lightClient.genesisValidatorsRoot");
         }
         if (client.slotsPerPeriod() != chain.lightClient.slotsPerPeriod) revert DeploymentMismatch("lightClient.slotsPerPeriod");
+        if (client.genesisTime() != chain.lightClient.genesisTime) revert DeploymentMismatch("lightClient.genesisTime");
+        if (client.secondsPerSlot() != chain.lightClient.secondsPerSlot) {
+            revert DeploymentMismatch("lightClient.secondsPerSlot");
+        }
         if (client.head() != chain.lightClient.initialSlot) revert DeploymentMismatch("lightClient.head");
         if (client.headers(chain.lightClient.initialSlot) != chain.lightClient.initialHeaderRoot) {
             revert DeploymentMismatch("lightClient.initialHeaderRoot");
@@ -640,6 +658,8 @@ contract DeployBridge is Script {
         chain.lightClient.programVKey = _readBytes32(json, string.concat(client, ".programVKey"));
         chain.lightClient.genesisValidatorsRoot = _readBytes32(json, string.concat(client, ".genesisValidatorsRoot"));
         chain.lightClient.slotsPerPeriod = uint64(_readNonZeroUint(json, string.concat(client, ".slotsPerPeriod")));
+        chain.lightClient.genesisTime = uint64(_readNonZeroUint(json, string.concat(client, ".genesisTime")));
+        chain.lightClient.secondsPerSlot = uint64(_readNonZeroUint(json, string.concat(client, ".secondsPerSlot")));
         chain.lightClient.slotsPerEpoch = uint64(_readNonZeroUint(json, string.concat(client, ".slotsPerEpoch")));
         chain.lightClient.capellaForkEpoch = uint64(_readNonZeroUint(json, string.concat(client, ".capellaForkEpoch")));
         chain.lightClient.capellaEra = uint64(_readUint(json, string.concat(client, ".capellaEra")));
@@ -672,6 +692,8 @@ contract DeployBridge is Script {
         own.observationProgramVKey = _readBytes32(json, string.concat(prefix, ".observationProgramVKey"));
         own.genesisValidatorsRoot = _readBytes32(json, string.concat(prefix, ".genesisValidatorsRoot"));
         own.slotsPerPeriod = uint64(_readNonZeroUint(json, string.concat(prefix, ".slotsPerPeriod")));
+        own.genesisTime = uint64(_readNonZeroUint(json, string.concat(prefix, ".genesisTime")));
+        own.secondsPerSlot = uint64(_readNonZeroUint(json, string.concat(prefix, ".secondsPerSlot")));
         own.initialSlot = uint64(_readNonZeroUint(json, string.concat(prefix, ".initialSlot")));
         own.initialHeaderRoot = _readBytes32(json, string.concat(prefix, ".initialHeaderRoot"));
         own.initialSyncCommitteeHash = _readBytes32(json, string.concat(prefix, ".initialSyncCommitteeHash"));
@@ -691,8 +713,25 @@ contract DeployBridge is Script {
         if (chain.observation.slotsPerPeriod != other.lightClient.slotsPerPeriod) {
             revert ObservationMismatch("slotsPerPeriod differs from the other chain's light client");
         }
+        if (chain.observation.genesisTime != other.lightClient.genesisTime) {
+            revert ObservationMismatch("genesisTime differs from the other chain's light client");
+        }
+        if (chain.observation.secondsPerSlot != other.lightClient.secondsPerSlot) {
+            revert ObservationMismatch("secondsPerSlot differs from the other chain's light client");
+        }
         if (chain.observation.observationProgramVKey == chain.lightClient.programVKey) {
             revert ObservationMismatch("observationProgramVKey equals the light client key");
+        }
+    }
+
+    /// @dev The light client of a chain tracks the OTHER chain's beacon chain, so its clock must be the clock of the
+    /// gate of the other chain. A clock that differs would refuse honest heads or accept heads from the future.
+    function _requireLightClientClockMatchesOtherGate(ChainConfig memory chain, ChainConfig memory other) private pure {
+        if (chain.lightClient.genesisTime != other.gate.genesisTime) {
+            revert ClockMismatch("lightClient.genesisTime differs from the gate of the other chain");
+        }
+        if (chain.lightClient.secondsPerSlot != other.gate.secondsPerSlot) {
+            revert ClockMismatch("lightClient.secondsPerSlot differs from the gate of the other chain");
         }
     }
 

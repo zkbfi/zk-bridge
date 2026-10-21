@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {IDepositGate} from "./IDepositGate.sol";
 import {IForkRegistry} from "./IForkRegistry.sol";
+import {BeaconClock} from "./BeaconClock.sol";
 import {BeaconBlockHeader, SSZ} from "./SSZ.sol";
 
 /// @title BeaconForkGate
@@ -252,7 +253,7 @@ contract BeaconForkGate is IDepositGate {
         genesisTime = genesisTime_;
         secondsPerSlot = secondsPerSlot_;
         slotsPerEpoch = slotsPerEpoch_;
-        deploymentSlot = block.timestamp < genesisTime_ ? 0 : uint64((block.timestamp - genesisTime_) / secondsPerSlot_);
+        deploymentSlot = BeaconClock.slotAt(block.timestamp, genesisTime_, secondsPerSlot_);
         _packedVersions = _pack(supportedVersions_);
         _versionCount = supportedVersions_.length;
         _sealDepthMask = _maskOf(sealDepths_);

@@ -14,6 +14,11 @@ abstract contract HardenedProofs is Test {
     uint64 internal constant SLOTS_PER_PERIOD = 8192;
     uint64 internal constant CHECKPOINT_PERIOD = 100;
     uint64 internal constant INITIAL_SLOT = CHECKPOINT_PERIOD * SLOTS_PER_PERIOD + 64;
+    /// @dev The light clients of the unit tests count one slot per second from time 1, so the slot at a timestamp is the
+    /// timestamp minus 1. `FIXTURE_START_TIME` is far above every slot that the tests use, so no honest head lies in the future.
+    uint64 internal constant LIGHT_CLIENT_GENESIS_TIME = 1;
+    uint64 internal constant LIGHT_CLIENT_SECONDS_PER_SLOT = 1;
+    uint64 internal constant FIXTURE_START_TIME = 2_000_000_000;
 
     bytes32 internal constant GENESIS_ROOT_A = keccak256("genesis validators root of chain A");
     bytes32 internal constant GENESIS_ROOT_B = keccak256("genesis validators root of chain B");

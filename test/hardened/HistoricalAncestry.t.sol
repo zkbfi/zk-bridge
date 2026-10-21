@@ -356,13 +356,15 @@ contract HistoricalAncestryTest is HistoricalScenes {
     /// Claim: an era index at or above 2**24 is refused, and the last index below it pays. Shows: eras 758 + 2**24 and
     /// 758 + 2**24 + 2 revert with `HistoricalIndexOutOfRange(2**24)` and `(2**24 + 2)`; era 758 + 2**24 - 1 (the last
     /// list position) pays. The light client of the scene jumps to slots near 1.4e11, which the client accepts because it
-    /// has no jump cap. Matters: index 2**24 would spill into the length mix-in side of the tree and point at another node.
+    /// has no jump cap and the test sets the clock to that slot. Matters: index 2**24 would spill into the length mix-in side of the tree and point at another node.
     function test_HB01_era_indexAtTheListLimitRejected() public {
         uint64 lastEra = ETHEREUM_CAPELLA_ERA + uint64(2 ** 24) - 1;
         uint64 lastSlot = lastEra * 8192 + 100;
         HistoricalParams memory params = _historicalParams(
             (lastEra + 6) * 8192 + 300, ETHEREUM_CAPELLA_ERA, ELECTRA_SUMMARIES, ETHEREUM_EVIDENCE, _slots(lastSlot)
         );
+        // The clock must reach the anchor slot, or the light client refuses the head as a head from the future.
+        vm.warp(LIGHT_CLIENT_GENESIS_TIME + uint256(params.anchorSlot) * LIGHT_CLIENT_SECONDS_PER_SLOT);
         BridgeVault vault_ = _historicalWorld(ETHEREUM_INITIAL_SLOT, ETHEREUM_CAPELLA_ERA);
         HistoricalScene memory scene = _historicalScene(params);
         _addBodyRows(vault_, scene);

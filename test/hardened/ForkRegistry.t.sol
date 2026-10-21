@@ -355,6 +355,8 @@ contract ForkRegistryTest is GateSupport {
             LIGHT_CLIENT_VKEY,
             genesisRoot,
             SLOTS_PER_PERIOD,
+            LIGHT_CLIENT_GENESIS_TIME,
+            LIGHT_CLIENT_SECONDS_PER_SLOT,
             uint64(vm.parseJsonUint(json, ".lightClient.headSlot")),
             vm.parseJsonBytes32(json, ".lightClient.headerRoot"),
             vm.parseJsonBytes32(json, ".lightClient.currentSyncCommitteeHash"),

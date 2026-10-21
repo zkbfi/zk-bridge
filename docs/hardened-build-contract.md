@@ -112,8 +112,8 @@ struct LightClientOutput {
 }
 ```
 
-- `constructor(address verifier, bytes32 programVKey, bytes32 genesisValidatorsRoot, uint64 slotsPerPeriod, uint64 initialSlot, bytes32 initialHeaderRoot, bytes32 initialSyncCommitteeHash, bytes32 initialNextSyncCommitteeHash, uint64 slotsPerHistoricalRoot)`. The initial checkpoint is the one trust assumption. Anyone can check it against public beacon data.
-- `function update(bytes calldata proof, bytes calldata publicValues) external`. The caller names no period: periods come only from `periodOf(slot)`. Checks, in this order, with custom errors: the public values have the exact length; the genesis validators root matches; the previous head, header root, and committee match stored state (`previousSyncCommitteeHash == syncCommittees[headPeriod]`); `newHeadSlot > head`; `newHeadSlot - head <= slotsPerHistoricalRoot` (an immutable constructor argument, at most `slotsPerPeriod`, so one update crosses at most one period boundary); the new header root and execution block hash are non-zero; then the committee rules below; then `verifier.verifyProof(programVKey, publicValues, proof)`. Then it stores the header root (every past head stays stored, as an anchor), the execution block hash of that head (`executionBlockHashes(slot)`), marks the execution block hash finalized with its block number, moves the head, and emits `HeadUpdated(uint64 indexed slot, bytes32 indexed headerRoot, bytes32 indexed executionBlockHash)`.
+- `constructor(address verifier, bytes32 programVKey, bytes32 genesisValidatorsRoot, uint64 slotsPerPeriod, uint64 genesisTime, uint64 secondsPerSlot, uint64 initialSlot, bytes32 initialHeaderRoot, bytes32 initialSyncCommitteeHash, bytes32 initialNextSyncCommitteeHash, uint64 slotsPerHistoricalRoot)`. The initial checkpoint is the one trust assumption. Anyone can check it against public beacon data. `genesisTime` and `secondsPerSlot` are immutable, and a zero value reverts `ZeroValue`.
+- `function update(bytes calldata proof, bytes calldata publicValues) external`. The caller names no period: periods come only from `periodOf(slot)`. Checks, in this order, with custom errors: the public values have the exact length; the genesis validators root matches; the previous head, header root, and committee match stored state (`previousSyncCommitteeHash == syncCommittees[headPeriod]`); `newHeadSlot > head`; `newHeadSlot <= currentSlot` (error `HeadInFuture(newHeadSlot, currentSlot)`, see "Clock bound on the head"); `newHeadSlot - head <= slotsPerHistoricalRoot` (an immutable constructor argument, at most `slotsPerPeriod`, so one update crosses at most one period boundary); the new header root and execution block hash are non-zero; then the committee rules below; then `verifier.verifyProof(programVKey, publicValues, proof)`. Then it stores the header root (every past head stays stored, as an anchor), the execution block hash of that head (`executionBlockHashes(slot)`), marks the execution block hash finalized with its block number, moves the head, and emits `HeadUpdated(uint64 indexed slot, bytes32 indexed headerRoot, bytes32 indexed executionBlockHash)`.
 - **Committee rules** (a forged next committee must never enter through an empty slot):
   1. If `newPeriod == headPeriod`, `syncCommitteeHash` must equal `syncCommittees[headPeriod]`, else `SyncCommitteeMismatch`.
   2. If `newPeriod == headPeriod + 1`, `syncCommittees[headPeriod + 1]` must be non-zero, else `NextSyncCommitteeUnknown(period)`, and `syncCommitteeHash` must equal it. An empty slot is never filled from `syncCommitteeHash`.
@@ -160,7 +160,7 @@ struct WithdrawalOutput {
 
 The deploy script the specification should have shipped. Foundry script, run with `forge script … --broadcast`.
 
-- Reads a JSON configuration (path from `BRIDGE_CONFIG`) holding both chains' RPC aliases, chain identifiers, the verifier address per chain, the program verification keys, the light-client checkpoints, and the token pairs.
+- Reads a JSON configuration (path from `BRIDGE_CONFIG`) holding both chains' RPC aliases, chain identifiers, the verifier address per chain, the program verification keys, the light-client checkpoints and clocks, and the token pairs.
 - Never takes a private key on the command line or in a file. Use `--account <keystore name>` or `--ledger`.
 - Predicts both vault addresses from the deployer's nonce on each chain with `vm.computeCreateAddress` **before** it deploys anything (fixes R2-08). It refuses to run when the deployer's nonce on either chain differs from the value in the configuration.
 - After deployment, it reads every immutable back and asserts it matches the configuration and the predicted cross-chain addresses.
@@ -489,7 +489,7 @@ The sync committee signs `compute_signing_root(attested_header, domain)`, where 
 ### The PulseChain deployment
 
 - A light client of PulseChain is deployed on PulseChain itself. It is the same `BeaconLightClient`, verified by the same SP1 verifier the route already needs on PulseChain for deposits from Ethereum. Anyone updates it with the same proofs as the copy on Ethereum.
-- If it goes stale, an observation proof folds forward from its stored committee. It does not have to be kept current.
+- If it goes stale, an observation proof folds forward from its stored committee. The prover service still keeps it current, because a stale head makes old observations look fresh. See "Own-chain light client freshness".
 - **Gate mode:** add `DetectBeaconRootsAndRegistry` to the gate's mode enum, and give the gate an immutable `forkRegistry`. Every `admit` refuses when `latestObservedVersion` is set and is not in `supportedVersions`. `seal()` with no evidence succeeds in that state, so anyone can seal by pointing at the registry. Beacon-root detection stays as before.
 
 ### What it closes and what it leaves
@@ -600,3 +600,29 @@ The script used to check only that the verifier address has code. An address wit
 - **Timing:** the check runs before the script broadcasts anything, in `_inspectChain` and again at the start of `deployChain`.
 - **Fee fields:** each chain also has a `fee` object with `authority`, `recipient`, `basisPoints` and `ceilingBasisPoints`. The example config uses a zero authority, which removes the fee from the start. The script reads the fee fields back from each vault after deployment.
 - **Tests:** `test/hardened/DeployBridge.t.sol` has a passing case, a case with a wrong hash, and a case with other code at the pinned address. `prover/tests/hardened_deployment.rs` runs the script against two live chains. The honest run uses the real hashes and passes. A run with a wrong hash on either chain stops before any transaction.
+
+## Clock bound on the head (comparison finding G-04)
+
+Before this change, a dishonest committee could store a head far in the future. The head only moves forward, so no honest update could follow. The route would stop for good.
+
+- **Constructor:** `BeaconLightClient` takes two new immutable arguments, `genesisTime` and `secondsPerSlot`, after `slotsPerPeriod`. A zero value reverts `ZeroValue("genesisTime")` or `ZeroValue("secondsPerSlot")`. Both are public views.
+- **Rule 2a:** `update` requires `newHeadSlot <= currentSlot`. The check runs right after rule 2 (the head moves forward), and before the proof check. Otherwise it reverts `HeadInFuture(uint64 newHeadSlot, uint64 currentSlot)`.
+- **Formula:** the library `src/hardened/BeaconClock.sol` holds it: `(block.timestamp - genesisTime) / secondsPerSlot`, and zero before genesis. The deposit gate uses the same function for its deployment slot.
+- **Limit:** the check bounds the head by the clock of the chain that runs the contract. It does not stop a forged head at a slot that is not in the future.
+- **Deploy script:** each `lightClient` block and the `observation` block hold `genesisTime` and `secondsPerSlot`. The script reads them back after deployment. A light client tracks the other chain, so its clock must equal the clock in the `gate` block of the other chain. A difference reverts `ClockMismatch`. The `observation` block must equal the light client that tracks the same chain, else `ObservationMismatch`.
+- **Gas:** `update` costs 329 gas more (87,111 against 86,782 for the first update, 81,819 against 81,490 for later updates).
+- **Tests:** `test/hardened/BeaconLightClient.t.sol` has a head one slot ahead (refused with the exact error, at the last second of the slot), a head at the current slot (accepted), a head far ahead followed by an honest update, a clock before genesis, and the zero constructor values. With the check removed, the three refusal tests fail. `test/hardened/DeployBridge.t.sol` covers the clock checks of the script.
+- **Program:** the light-client program cannot read a clock. The comment in `light-client/crates/lc-core/src/update.rs` now says that the contract enforces the check.
+
+## Own-chain light client freshness (comparison finding)
+
+On PulseChain, the fork registry checks freshness and the start of an observation against a light client of PulseChain on PulseChain. Nothing updated it. Its head stayed at the deployment checkpoint. Old observations looked fresh. After 64 updates of lag, one proof can no longer catch up, and the beacon node keeps only a limited history of updates.
+
+- **Config:** each chain section of the prover configuration takes an optional `own_light_client`. It is the light client of that chain's own beacon chain, on that chain. The environment variables `ZK_BRIDGE_PROVER_CHAIN_A_OWN_LIGHT_CLIENT` and `ZK_BRIDGE_PROVER_CHAIN_B_OWN_LIGHT_CLIENT` set it.
+- **Loop:** a route that reads deposits from a chain with this setting sends one update per pass to that light client. The update comes from the same beacon source and the same program as the update for the other direction. Only the chain differs. The source chain client signs for this.
+- **One update per pass:** the chain keeps finalizing, so a loop that chases the newest header would not end. A head far behind catches up one update per pass.
+- **Failure:** a failed update logs `own_light_client_update_failed` and never stops a deposit. A pass that sent one logs `own_light_client_updated`.
+- **Startup check:** the service reads the contract and requires the same program key as the route. It also requires the same genesis validators root as the light client on the other chain, because both track the source chain.
+- **Route health:** `route-health` prints `own_light_client`, `own_light_client_head_slot` and `own_light_client_lag_periods`. The lag is the current slot from the wall clock, minus the head slot, divided by the slots per period from the contract. The JSON has an `own_light_client` object, or `null`.
+- **Rule: WARN, not STOP.** The status is `WARN` when the lag reaches `--own-light-client-warn-periods`. The default is 32, half of the fold limit of 64 updates. A deposit made now does not depend on this light client. `STOP` would make scripts refuse deposits on a route that still delivers them. The cost of a stale head is a weaker registry and a harder catch-up. The operator can fix both, and the warning comes with time to spare.
+- **Tests:** unit tests cover the threshold, the clock source, the precedence and the output. `prover/tests/hardened_own_light_client.rs` runs two Anvil chains. The head moves with each pass. The registry refuses the fixture observation as a replay after the move (`ObservationNotFresh`), and accepts an observation built from the new head, which the stale head refused (`PreviousHeadSlotMismatch`). A light client of another beacon chain is refused at startup.

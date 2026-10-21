@@ -87,6 +87,8 @@ abstract contract HistoricalScenes is WithdrawalScenes {
             LIGHT_CLIENT_VKEY,
             GENESIS_ROOT_A,
             SLOTS_PER_PERIOD,
+            LIGHT_CLIENT_GENESIS_TIME,
+            LIGHT_CLIENT_SECONDS_PER_SLOT,
             initialSlot,
             INITIAL_HEADER_ROOT,
             COMMITTEE_100,

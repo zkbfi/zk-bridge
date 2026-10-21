@@ -44,6 +44,7 @@ abstract contract HardenedFixture is HardenedProofs {
     uint64 internal constant DEFAULT_CAPELLA_ERA = 0;
 
     function setUp() public virtual {
+        vm.warp(FIXTURE_START_TIME);
         oracle = vm.addr(ORACLE_KEY);
         verifier = new OracleSP1Verifier(oracle);
         lightClientForA = _newLightClient(GENESIS_ROOT_B, COMMITTEE_101);
@@ -81,6 +82,8 @@ abstract contract HardenedFixture is HardenedProofs {
             LIGHT_CLIENT_VKEY,
             genesisRoot,
             SLOTS_PER_PERIOD,
+            LIGHT_CLIENT_GENESIS_TIME,
+            LIGHT_CLIENT_SECONDS_PER_SLOT,
             INITIAL_SLOT,
             INITIAL_HEADER_ROOT,
             COMMITTEE_100,

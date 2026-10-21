@@ -22,7 +22,9 @@
 //! only if a step of the fold proved it.
 //!
 //! The wall clock check `current_slot >= signature_slot` of the specification cannot run inside a proof (no clock).
-//! It adds nothing: a real signature cannot come from the future.
+//! The contract enforces it instead: `BeaconLightClient.update` refuses a new head slot later than the current slot
+//! (`HeadInFuture`), computed from the immutable genesis time and seconds per slot. A dishonest committee can sign a
+//! header from the future, so the program alone cannot exclude it.
 
 use crate::abi::LightClientOutput;
 use crate::bls::fast_aggregate_verify;

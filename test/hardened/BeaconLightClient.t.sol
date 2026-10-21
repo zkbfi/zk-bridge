@@ -35,7 +35,34 @@ contract BeaconLightClientTest is HardenedFixture {
         bytes32 committee
     ) internal returns (BeaconLightClient) {
         return new BeaconLightClient(
-            verifier_, programVKey, genesisRoot, slotsPerPeriod, slot, headerRoot, committee, COMMITTEE_101
+            verifier_,
+            programVKey,
+            genesisRoot,
+            slotsPerPeriod,
+            LIGHT_CLIENT_GENESIS_TIME,
+            LIGHT_CLIENT_SECONDS_PER_SLOT,
+            slot,
+            headerRoot,
+            committee,
+            COMMITTEE_101
+        );
+    }
+
+    /// @dev A genesis time with a realistic size. The clock tests use it with 12 seconds per slot.
+    uint64 internal constant CLOCK_GENESIS_TIME = 1_600_000_000;
+
+    function _constructWithClock(uint64 genesisTime, uint64 secondsPerSlot) internal returns (BeaconLightClient) {
+        return new BeaconLightClient(
+            address(verifier),
+            LIGHT_CLIENT_VKEY,
+            GENESIS_ROOT_A,
+            SLOTS_PER_PERIOD,
+            genesisTime,
+            secondsPerSlot,
+            INITIAL_SLOT,
+            INITIAL_HEADER_ROOT,
+            COMMITTEE_100,
+            COMMITTEE_101
         );
     }
 
@@ -97,11 +124,33 @@ contract BeaconLightClientTest is HardenedFixture {
         _construct(address(verifier), LIGHT_CLIENT_VKEY, GENESIS_ROOT_A, SLOTS_PER_PERIOD, INITIAL_SLOT, INITIAL_HEADER_ROOT, bytes32(0));
     }
 
+    /// Claim: a zero genesis time or zero seconds per slot would make the clock bound meaningless (a zero divisor, or
+    /// no bound at all). Shows: both are refused at construction, and the honest values are stored. Matters: G-04.
+    function test_G04_constructor_revertsOnZeroClockValues() public {
+        vm.expectRevert(abi.encodeWithSelector(BeaconLightClient.ZeroValue.selector, "genesisTime"));
+        _constructWithClock(0, 12);
+        vm.expectRevert(abi.encodeWithSelector(BeaconLightClient.ZeroValue.selector, "secondsPerSlot"));
+        _constructWithClock(CLOCK_GENESIS_TIME, 0);
+
+        BeaconLightClient honest = _constructWithClock(CLOCK_GENESIS_TIME, 12);
+        assertEq(honest.genesisTime(), CLOCK_GENESIS_TIME);
+        assertEq(honest.secondsPerSlot(), 12);
+    }
+
     /// Claim: the next committee may be unknown at the checkpoint. Shows: a zero next committee is accepted.
     /// Matters: the honest path stays open when the checkpoint has no next committee yet.
     function test_H04_constructor_allowsZeroNextCommittee() public {
         BeaconLightClient other = new BeaconLightClient(
-            address(verifier), LIGHT_CLIENT_VKEY, GENESIS_ROOT_A, SLOTS_PER_PERIOD, INITIAL_SLOT, INITIAL_HEADER_ROOT, COMMITTEE_100, bytes32(0)
+            address(verifier),
+            LIGHT_CLIENT_VKEY,
+            GENESIS_ROOT_A,
+            SLOTS_PER_PERIOD,
+            LIGHT_CLIENT_GENESIS_TIME,
+            LIGHT_CLIENT_SECONDS_PER_SLOT,
+            INITIAL_SLOT,
+            INITIAL_HEADER_ROOT,
+            COMMITTEE_100,
+            bytes32(0)
         );
         assertEq(other.syncCommittees(CHECKPOINT_PERIOD + 1), bytes32(0));
     }
@@ -284,6 +333,53 @@ contract BeaconLightClientTest is HardenedFixture {
         output.newHeadSlot = INITIAL_SLOT + 1;
         _submit(client, output); // honest path
         assertEq(client.head(), INITIAL_SLOT + 1);
+    }
+
+    /// Claim: a head later than the current slot is refused, with the head and the current slot in the error. A head
+    /// at the current slot is accepted, even in the last second of that slot. Shows: at the last second of slot `target`
+    /// a head one slot ahead reverts with `HeadInFuture(target + 1, target)` and changes nothing, and a head at `target`
+    /// is accepted. Matters: G-04. Without the bound, a dishonest committee could store a head far in the future, and
+    /// the head only moves forward, so no honest update could ever follow.
+    function test_G04_update_refusesAHeadOneSlotAfterTheCurrentSlotAndAcceptsTheCurrentSlot() public {
+        BeaconLightClient timed = _constructWithClock(CLOCK_GENESIS_TIME, 12);
+        uint64 target = INITIAL_SLOT + 1_000;
+        vm.warp(CLOCK_GENESIS_TIME + uint256(target) * 12 + 11);
+
+        BeaconLightClient.LightClientOutput memory ahead =
+            _outputAt(timed, GENESIS_ROOT_A, target + 1, keccak256("one slot ahead"));
+        _submitExpectingRevert(timed, ahead, abi.encodeWithSelector(BeaconLightClient.HeadInFuture.selector, target + 1, target));
+        assertEq(timed.head(), INITIAL_SLOT, "a refused head changes nothing");
+
+        _submit(timed, _outputAt(timed, GENESIS_ROOT_A, target, keccak256("at the current slot")));
+        assertEq(timed.head(), target, "a head at the current slot is accepted");
+    }
+
+    /// Claim: a head far in the future is refused, and an honest update still follows. Shows: the forged head reverts
+    /// with `HeadInFuture`, then the honest head is accepted. Matters: G-04, the route stays live.
+    function test_G04_update_aHeadFarInTheFutureDoesNotBlockTheHonestUpdate() public {
+        BeaconLightClient timed = _constructWithClock(CLOCK_GENESIS_TIME, 12);
+        uint64 target = INITIAL_SLOT + 1_000;
+        vm.warp(CLOCK_GENESIS_TIME + uint256(target) * 12);
+        uint64 farSlot = 4_000_000_000_000;
+        _submitExpectingRevert(
+            timed,
+            _outputAt(timed, GENESIS_ROOT_A, farSlot, keccak256("far future")),
+            abi.encodeWithSelector(BeaconLightClient.HeadInFuture.selector, farSlot, target)
+        );
+        _submit(timed, _outputAt(timed, GENESIS_ROOT_A, target, keccak256("honest")));
+        assertEq(timed.head(), target);
+    }
+
+    /// Claim: before the genesis time the current slot is zero, so every head is in the future. Shows: a head after the
+    /// checkpoint reverts with `HeadInFuture(slot, 0)`. Matters: G-04, an early clock must not wrap to a huge slot.
+    function test_G04_update_beforeGenesisEveryHeadIsInTheFuture() public {
+        BeaconLightClient timed = _constructWithClock(CLOCK_GENESIS_TIME, 12);
+        vm.warp(CLOCK_GENESIS_TIME - 1);
+        BeaconLightClient.LightClientOutput memory output =
+            _outputAt(timed, GENESIS_ROOT_A, INITIAL_SLOT + 1, keccak256("before genesis"));
+        _submitExpectingRevert(
+            timed, output, abi.encodeWithSelector(BeaconLightClient.HeadInFuture.selector, INITIAL_SLOT + 1, uint64(0))
+        );
     }
 
     /// Claim: after a successful update the old output is dead. Shows: replaying it reverts with the previous-slot
@@ -710,7 +806,16 @@ contract BeaconLightClientTest is HardenedFixture {
     /// A light client whose checkpoint has no next committee. The tests below start from it.
     function _clientWithoutNextCommittee() internal returns (BeaconLightClient) {
         return new BeaconLightClient(
-            address(verifier), LIGHT_CLIENT_VKEY, GENESIS_ROOT_A, SLOTS_PER_PERIOD, INITIAL_SLOT, INITIAL_HEADER_ROOT, COMMITTEE_100, bytes32(0)
+            address(verifier),
+            LIGHT_CLIENT_VKEY,
+            GENESIS_ROOT_A,
+            SLOTS_PER_PERIOD,
+            LIGHT_CLIENT_GENESIS_TIME,
+            LIGHT_CLIENT_SECONDS_PER_SLOT,
+            INITIAL_SLOT,
+            INITIAL_HEADER_ROOT,
+            COMMITTEE_100,
+            bytes32(0)
         );
     }
 

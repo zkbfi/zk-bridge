@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {ISP1Verifier} from "./ISP1Verifier.sol";
 import {IBeaconLightClient} from "./IBeaconLightClient.sol";
+import {BeaconClock} from "./BeaconClock.sol";
 
 /// @title BeaconLightClient
 /// @notice Tracks the finalized beacon chain of one source chain with zero-knowledge proofs of the
@@ -54,6 +55,8 @@ contract BeaconLightClient is IBeaconLightClient {
     error StartNextSyncCommitteeMismatch(bytes32 expected, bytes32 actual);
     /// @notice The new head slot is not past the stored head.
     error HeadNotAdvancing(uint64 head, uint64 newHeadSlot);
+    /// @notice The new head slot is later than the current slot, which `block.timestamp` implies.
+    error HeadInFuture(uint64 newHeadSlot, uint64 currentSlot);
     /// @notice The new header root is zero.
     error EmptyHeaderRoot();
     /// @notice The execution block hash is zero.
@@ -78,6 +81,10 @@ contract BeaconLightClient is IBeaconLightClient {
     bytes32 public immutable genesisValidatorsRoot;
     /// @notice The number of slots in a sync committee period.
     uint64 public immutable slotsPerPeriod;
+    /// @notice The genesis time of the tracked beacon chain, in seconds.
+    uint64 public immutable genesisTime;
+    /// @notice The seconds per slot of the tracked beacon chain.
+    uint64 public immutable secondsPerSlot;
 
     /// @notice The slot of the latest finalized header.
     uint64 public head;
@@ -95,6 +102,8 @@ contract BeaconLightClient is IBeaconLightClient {
     /// @param programVKey_ The verification key of the light-client program.
     /// @param genesisValidatorsRoot_ The genesis validators root of the tracked chain.
     /// @param slotsPerPeriod_ Slots per sync committee period (8192 on Ethereum and PulseChain).
+    /// @param genesisTime_ Genesis time of the tracked beacon chain, in seconds. It bounds the head by the clock.
+    /// @param secondsPerSlot_ Seconds per slot of the tracked beacon chain.
     /// @param initialSlot The slot of the trusted checkpoint.
     /// @param initialHeaderRoot The header root of the trusted checkpoint.
     /// @param initialSyncCommitteeHash The committee hash for the period of the checkpoint.
@@ -104,6 +113,8 @@ contract BeaconLightClient is IBeaconLightClient {
         bytes32 programVKey_,
         bytes32 genesisValidatorsRoot_,
         uint64 slotsPerPeriod_,
+        uint64 genesisTime_,
+        uint64 secondsPerSlot_,
         uint64 initialSlot,
         bytes32 initialHeaderRoot,
         bytes32 initialSyncCommitteeHash,
@@ -113,6 +124,8 @@ contract BeaconLightClient is IBeaconLightClient {
         if (programVKey_ == bytes32(0)) revert ZeroValue("programVKey");
         if (genesisValidatorsRoot_ == bytes32(0)) revert ZeroValue("genesisValidatorsRoot");
         if (slotsPerPeriod_ == 0) revert ZeroValue("slotsPerPeriod");
+        if (genesisTime_ == 0) revert ZeroValue("genesisTime");
+        if (secondsPerSlot_ == 0) revert ZeroValue("secondsPerSlot");
         if (initialSlot == 0) revert ZeroValue("initialSlot");
         if (initialHeaderRoot == bytes32(0)) revert ZeroValue("initialHeaderRoot");
         if (initialSyncCommitteeHash == bytes32(0)) revert ZeroValue("initialSyncCommitteeHash");
@@ -121,6 +134,8 @@ contract BeaconLightClient is IBeaconLightClient {
         programVKey = programVKey_;
         genesisValidatorsRoot = genesisValidatorsRoot_;
         slotsPerPeriod = slotsPerPeriod_;
+        genesisTime = genesisTime_;
+        secondsPerSlot = secondsPerSlot_;
 
         uint64 period = initialSlot / slotsPerPeriod_;
         head = initialSlot;
@@ -200,12 +215,16 @@ contract BeaconLightClient is IBeaconLightClient {
         }
     }
 
-    /// @dev Rules 2 to 5, the checks on the new head. Returns whether the caller must write the committee of the new
-    /// period (rule 4, empty slot).
+    /// @dev Rules 2 to 5, the checks on the new head. Rule 2a is the clock bound. Returns whether the caller must write
+    /// the committee of the new period (rule 4, empty slot).
     function _requireProgress(LightClientOutput memory output) private view returns (bool writesNewCommittee) {
         uint64 currentHead = head;
         // Rule 2: the head only moves forward. There is no jump cap.
         if (output.newHeadSlot <= currentHead) revert HeadNotAdvancing(currentHead, output.newHeadSlot);
+        // Rule 2a: the head is not later than the current slot. The program has no clock, so only the contract can
+        // refuse a head from the future. Without the rule, a head far ahead would block every honest update for good.
+        uint64 currentSlot = BeaconClock.slotAt(block.timestamp, genesisTime, secondsPerSlot);
+        if (output.newHeadSlot > currentSlot) revert HeadInFuture(output.newHeadSlot, currentSlot);
         if (output.newHeaderRoot == bytes32(0)) revert EmptyHeaderRoot();
         if (output.executionBlockHash == bytes32(0)) revert EmptyExecutionBlockHash();
         uint64 newPeriod = output.newHeadSlot / slotsPerPeriod;

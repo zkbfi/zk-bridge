@@ -252,7 +252,16 @@ contract LightClientFixturesTest is Test {
 
     function _client(uint64 slot, bytes32 headerRoot) internal returns (BeaconLightClient) {
         return new BeaconLightClient(
-            address(0xdead), keccak256("light client program"), keccak256("genesis"), 8192, slot, headerRoot, keccak256("committee"), keccak256("next")
+            address(0xdead),
+            keccak256("light client program"),
+            keccak256("genesis"),
+            8192,
+            1,
+            1,
+            slot,
+            headerRoot,
+            keccak256("committee"),
+            keccak256("next")
         );
     }
 

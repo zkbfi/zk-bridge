@@ -65,6 +65,7 @@ contract DeployBridgeTest is Test {
         );
         string memory client = string.concat(
             '"lightClient":{"programVKey":"', _hexString(keccak256("light client program")),
+            chainId == 1 ? _pulsechainClock() : _ethereumClock(),
             '","genesisValidatorsRoot":"', _hexString(keccak256(abi.encode("genesis", chainId))),
             '","slotsPerPeriod":"8192",', chainId == 1 ? _pulsechainCapella() : _ethereumCapella()
         );
@@ -94,7 +95,7 @@ contract DeployBridgeTest is Test {
     /// length are those that the light client of chain 1 tracks (the PulseChain beacon chain).
     function _observationJson(string memory slot) internal pure returns (string memory) {
         return string.concat(
-            ',"observation":{"lightClientProgramVKey":"', _hexString(keccak256("light client program")),
+            ',"observation":{"genesisTime":"1683785555","secondsPerSlot":"10","lightClientProgramVKey":"', _hexString(keccak256("light client program")),
             '","observationProgramVKey":"', _hexString(keccak256("fork observation program")),
             '","genesisValidatorsRoot":"', _hexString(keccak256(abi.encode("genesis", uint64(1)))),
             '","slotsPerPeriod":"8192","initialSlot":"', slot,
@@ -102,6 +103,16 @@ contract DeployBridgeTest is Test {
             '","initialSyncCommitteeHash":"', _hexString(keccak256("own committee")),
             '","initialNextSyncCommitteeHash":"', _hexString(keccak256("own next committee")), '"}'
         );
+    }
+
+    /// @dev The clock of the light client of chain 369: it tracks Ethereum, so it holds the clock of the Ethereum gate.
+    function _ethereumClock() internal pure returns (string memory) {
+        return '","genesisTime":"1606824023","secondsPerSlot":"12';
+    }
+
+    /// @dev The clock of the light client of chain 1: it tracks PulseChain, so it holds the clock of the PulseChain gate.
+    function _pulsechainClock() internal pure returns (string memory) {
+        return '","genesisTime":"1683785555","secondsPerSlot":"10';
     }
 
     function _ethereumCapella() internal pure returns (string memory) {
@@ -251,11 +262,11 @@ contract DeployBridgeTest is Test {
     function test_HB02_exampleConfigurationHoldsEveryKeyTheScriptReads() public view {
         string memory json = vm.readFile("script/hardened/bridge.config.example.json");
         string[2] memory chains = [".chainA", ".chainB"];
-        string[20] memory keys = [
+        string[22] memory keys = [
             ".rpcAlias", ".chainId", ".verifier", ".verifierCodeHash", ".depositCutoffTimestamp", ".deployerNonce",
             ".fee.authority", ".fee.recipient", ".fee.basisPoints", ".fee.ceilingBasisPoints",
             ".lightClient.programVKey", ".lightClient.genesisValidatorsRoot", ".lightClient.slotsPerPeriod",
-            ".lightClient.slotsPerEpoch", ".lightClient.capellaForkEpoch", ".lightClient.capellaEra",
+            ".lightClient.genesisTime", ".lightClient.secondsPerSlot", ".lightClient.slotsPerEpoch", ".lightClient.capellaForkEpoch", ".lightClient.capellaEra",
             ".lightClient.initialSlot", ".lightClient.initialHeaderRoot", ".lightClient.initialSyncCommitteeHash",
             ".lightClient.initialNextSyncCommitteeHash"
         ];
@@ -275,9 +286,9 @@ contract DeployBridgeTest is Test {
             string memory removed = string.concat(chains[c], ".lightClient.slotsPerHistoricalRoot");
             assertFalse(vm.keyExistsJson(json, removed), "the removed key is still in the example");
         }
-        string[8] memory observationKeys = [
+        string[10] memory observationKeys = [
             ".lightClientProgramVKey", ".observationProgramVKey", ".genesisValidatorsRoot", ".slotsPerPeriod",
-            ".initialSlot", ".initialHeaderRoot", ".initialSyncCommitteeHash", ".initialNextSyncCommitteeHash"
+            ".genesisTime", ".secondsPerSlot", ".initialSlot", ".initialHeaderRoot", ".initialSyncCommitteeHash", ".initialNextSyncCommitteeHash"
         ];
         for (uint256 k = 0; k < observationKeys.length; k++) {
             string memory path = string.concat(".chainB.observation", observationKeys[k]);
@@ -721,6 +732,8 @@ contract DeployBridgeTest is Test {
             c.lightClient.programVKey,
             genesisRoot,
             c.lightClient.slotsPerPeriod,
+            c.lightClient.genesisTime,
+            c.lightClient.secondsPerSlot,
             c.lightClient.initialSlot,
             c.lightClient.initialHeaderRoot,
             c.lightClient.initialSyncCommitteeHash,
@@ -983,6 +996,48 @@ contract DeployBridgeTest is Test {
         returns (DeployBridge.ChainDeployment memory deploymentB)
     {
         (, deploymentB) = _deployments(config, plan);
+    }
+
+    /// Claim: the clock of each light client is checked against the gate of the chain that it tracks. Shows: a genesis
+    /// time or a seconds-per-slot value that differs reverts `ClockMismatch` (light client) or `ObservationMismatch`
+    /// (own-chain light client) with the field, and a zero value reverts `ZeroConfigValue`. Matters: G-04. The light
+    /// client refuses heads later than its clock. A clock that runs ahead would let a forged head in, and a clock that
+    /// runs behind would refuse honest heads.
+    function test_G04_parseConfig_checksTheLightClientClockAgainstTheOtherChain() public {
+        string memory json = _validJson();
+        string memory key = _hexString(keccak256("light client program"));
+        string memory chainAClient = string.concat('"lightClient":{"programVKey":"', key, '","genesisTime":"1683785555",');
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployBridge.ClockMismatch.selector, "lightClient.genesisTime differs from the gate of the other chain"
+            )
+        );
+        script.parseConfig(vm.replace(json, chainAClient, string.concat('"lightClient":{"programVKey":"', key, '","genesisTime":"1683785556",')));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployBridge.ClockMismatch.selector, "lightClient.secondsPerSlot differs from the gate of the other chain"
+            )
+        );
+        script.parseConfig(vm.replace(json, '"secondsPerSlot":"10","genesisValidatorsRoot"', '"secondsPerSlot":"11","genesisValidatorsRoot"'));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployBridge.ObservationMismatch.selector, "genesisTime differs from the other chain's light client"
+            )
+        );
+        script.parseConfig(vm.replace(json, '"observation":{"genesisTime":"1683785555"', '"observation":{"genesisTime":"1683785556"'));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployBridge.ObservationMismatch.selector, "secondsPerSlot differs from the other chain's light client"
+            )
+        );
+        script.parseConfig(vm.replace(json, '"secondsPerSlot":"10","lightClientProgramVKey"', '"secondsPerSlot":"11","lightClientProgramVKey"'));
+
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.lightClient.genesisTime"));
+        script.parseConfig(vm.replace(json, chainAClient, string.concat('"lightClient":{"programVKey":"', key, '","genesisTime":"0",')));
     }
 
     /// Claim: the registry settings are checked against the other chain, not only read. Shows: a genesis validators
