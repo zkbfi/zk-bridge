@@ -52,7 +52,8 @@ contract BridgeVaultTest is WithdrawalScenes {
         address indexed recipient,
         uint256 amount,
         bytes32 nonce,
-        uint64 targetChainId
+        uint64 targetChainId,
+        address destinationVault
     );
 
     function _pair(address localToken, address remoteToken, uint8 decimals)
@@ -73,12 +74,7 @@ contract BridgeVaultTest is WithdrawalScenes {
 
     /// @dev A vault on chain B for one custom local token, paired with the fixture remote token and remote vault.
     function _vaultFor(address localToken, uint8 decimals) internal returns (BridgeVault) {
-        vm.chainId(CHAIN_B);
-        BridgeVault custom = _newVault(
-            address(lightClientForB), CHAIN_B, CHAIN_A, ReceiptFixtures.REMOTE_VAULT, _pair(localToken, ReceiptFixtures.REMOTE_TOKEN, decimals)
-        );
-        createdVaults.push(custom); // `_scene` adds the fork layouts to it
-        return custom;
+        return _newDestinationVault(_pair(localToken, ReceiptFixtures.REMOTE_TOKEN, decimals), 0, DEFAULT_CAPELLA_ERA);
     }
 
     // ================================================================ constructor
@@ -225,7 +221,7 @@ contract BridgeVaultTest is WithdrawalScenes {
     /// Claim: `DEPOSIT_EVENT_TOPIC` is the keccak256 of the event signature string, and equals the compiler's
     /// selector. Shows: both, plus the topic on a real log. Matters: R2-02 (the circuit hardcoded a wrong topic).
     function test_R2_02_depositEventTopicIsKeccakOfSignature() public {
-        bytes32 expected = keccak256("DepositInitiated(address,address,address,uint256,bytes32,uint64)");
+        bytes32 expected = keccak256("DepositInitiated(address,address,address,uint256,bytes32,uint64,address)");
         assertEq(vaultA.DEPOSIT_EVENT_TOPIC(), expected);
         assertEq(vaultA.DEPOSIT_EVENT_TOPIC(), BridgeVault.DepositInitiated.selector);
         assertTrue(vaultA.DEPOSIT_EVENT_TOPIC() != bytes32(0x2df9000000000000000000000000000000000000000000000000000000000000) , "not the wrong revision-2 prefix");
@@ -259,7 +255,9 @@ contract BridgeVaultTest is WithdrawalScenes {
         assertEq(depositLog.topics[1], bytes32(uint256(uint160(address(tokenOnA)))));
         assertEq(depositLog.topics[2], bytes32(uint256(uint160(alice))));
         assertEq(depositLog.topics[3], bytes32(uint256(uint160(bob))));
-        assertEq(depositLog.data.length, 96, "amount, nonce, target chain id");
+        assertEq(depositLog.data.length, 128, "amount, nonce, target chain id, destination vault");
+        (,,, address destinationVault) = abi.decode(depositLog.data, (uint256, bytes32, uint64, address));
+        assertEq(destinationVault, address(vaultB), "the event names the vault on the other chain");
     }
 
     // ================================================================ deposit
@@ -273,7 +271,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         tokenOnA.approve(address(vaultA), 100e18);
         bytes32 expectedNonce = keccak256(abi.encode(uint256(CHAIN_A), address(vaultA), uint256(0)));
         vm.expectEmit(true, true, true, true, address(vaultA));
-        emit DepositInitiated(address(tokenOnA), alice, bob, 100e18, expectedNonce, CHAIN_B);
+        emit DepositInitiated(address(tokenOnA), alice, bob, 100e18, expectedNonce, CHAIN_B, address(vaultB));
         bytes32 nonce = vaultA.deposit(address(tokenOnA), bob, 100e18, "");
         vm.stopPrank();
 

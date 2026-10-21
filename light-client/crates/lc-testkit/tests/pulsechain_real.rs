@@ -144,7 +144,12 @@ fn real_pulsechain_update_does_not_verify_under_ethereums_genesis_validators_roo
 }
 
 fn context(anchor_root: B256, vault: Address) -> WithdrawalContext {
-    WithdrawalContext { remote_vault: vault, local_chain_id: 1, stored_anchor_root: anchor_root }
+    WithdrawalContext {
+        remote_vault: vault,
+        local_vault: Address::repeat_byte(0xb1),
+        local_chain_id: 1,
+        stored_anchor_root: anchor_root,
+    }
 }
 
 /// Claim: the real beacon path works for a real PulseChain block (anchor state -> block_roots -> beacon header -> block hash

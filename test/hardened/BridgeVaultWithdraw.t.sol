@@ -195,6 +195,7 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
     /// payout never burns the claim.
     function test_H13_withdraw_withoutLiquidityRevertsAndStaysClaimable() public {
         BridgeVault empty = _newWithdrawalVault();
+        deal(address(tokenOnB), address(empty), 0); // the setUp vault held liquidity at the same address
         ReceiptFixtures.Named memory named = ReceiptFixtures.type2();
         Scene memory scene = _scene(named, _defaultParams());
         vm.expectRevert(abi.encodeWithSelector(IERC20Errors.ERC20InsufficientBalance.selector, address(empty), 0, named.amount));
@@ -598,4 +599,80 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
         assertEq(tokenOnB.balanceOf(ReceiptFixtures.RECIPIENT), named.amount);
     }
 
+    // ================================================================ destination vault (defect 4)
+
+    /// Claim: a deposit is payable only by the vault that the deposit names. Shows: a second vault with the same remote
+    /// vault, the same chains and the same token pair refuses a deposit that names the first vault, with
+    /// `WrongDestinationVault`, and it marks nothing. The first vault, the control, pays the same proof. Matters: the
+    /// second vault has an empty `claimed` map. Before the event named its destination, it paid every deposit a second
+    /// time, and it drained its own liquidity.
+    function test_defect4_secondVaultWithTheSameRemoteRefusesTheDeposit() public {
+        ReceiptFixtures.Named memory named = ReceiptFixtures.type2();
+        BridgeVault second = _newSecondWithdrawalVault(); // before the scene, so that it gets the fork layouts too
+        Scene memory scene = _scene(named, _defaultParams());
+        tokenOnB.mint(address(second), 100e18);
+        assertEq(second.remoteVault(), vault.remoteVault(), "both vaults have the same remote vault");
+
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.WrongDestinationVault.selector, address(second), address(vault)));
+        second.withdraw(scene.proof);
+        assertFalse(second.claimed(named.nonce), "the second vault marked nothing");
+        assertEq(tokenOnB.balanceOf(address(second)), 100e18, "the second vault paid nothing");
+
+        vault.withdraw(scene.proof); // control: the vault named in the deposit pays
+        _assertPaid(named);
+    }
+
+    /// Claim: a deposit that names another vault than the paying vault is refused. Shows: the fixture receipt
+    /// `wrong_destination` names 0x88..88, so the vault at the fixture address refuses it with the exact addresses. The
+    /// same vault pays a receipt that names it (control). Matters: the check compares the vault address, not only the
+    /// chain, so a deposit for vault X never pays at vault Y.
+    function test_defect4_depositNamingAnotherVaultIsRefused() public {
+        ReceiptFixtures.Named memory wrong = ReceiptFixtures.wrong_destination();
+        Scene memory scene = _scene(wrong, _defaultParams());
+        _expectRejected(
+            scene.proof,
+            abi.encodeWithSelector(
+                BridgeVault.WrongDestinationVault.selector, address(vault), ReceiptFixtures.OTHER_DESTINATION_VAULT
+            )
+        );
+        assertFalse(vault.claimed(wrong.nonce));
+
+        ReceiptFixtures.Named memory honest = ReceiptFixtures.type2();
+        vault.withdraw(_scene(honest, _defaultParams()).proof);
+        _assertPaid(honest);
+    }
+
+    // ================================================================ many logs (defect 3)
+
+    /// Claim: a deposit at log index 40 of a receipt with 64 logs pays. Shows: the vault finds log 40 and pays the
+    /// logged amount. Matters: the vendored list reader panics on 33 or more items, so before the log walker such a
+    /// deposit could never be withdrawn and its tokens stayed locked. Any depositor can put more than 32 logs in one
+    /// transaction (a call to a contract that logs a lot).
+    function test_defect3_depositAtLogForty_of64Logs_pays() public {
+        ReceiptFixtures.Named memory named = ReceiptFixtures.many_logs();
+        assertEq(named.logIndex, 40);
+        Scene memory scene = _scene(named, _defaultParams());
+        assertEq(scene.proof.logIndex, 40);
+        vault.withdraw(scene.proof);
+        _assertPaid(named);
+    }
+
+    /// Claim: a log index past the end of a long list still reverts with the count. Shows: index 64 in the 64-log
+    /// receipt reverts with `LogIndexOutOfRange(64, 64)`; index 63 (a log of another emitter) reverts with
+    /// `WrongEmitter`, which proves the walk reached the last log. Matters: the walker counts every item, not 32.
+    function test_defect3_logIndexPastTheEndOfLongListReverts() public {
+        ReceiptFixtures.Named memory named = ReceiptFixtures.many_logs();
+        Scene memory scene = _scene(named, _defaultParams());
+
+        BridgeVault.WithdrawalProof memory past = _clone(scene.proof);
+        past.logIndex = 64;
+        _expectRejected(past, abi.encodeWithSelector(BridgeVault.LogIndexOutOfRange.selector, uint256(64), uint256(64)));
+
+        BridgeVault.WithdrawalProof memory last = _clone(scene.proof);
+        last.logIndex = 63;
+        _expectRejected(last, abi.encodeWithSelector(BridgeVault.WrongEmitter.selector, ReceiptFixtures.REMOTE_VAULT, ReceiptFixtures.OTHER_EMITTER));
+
+        vault.withdraw(scene.proof); // control: log 40 pays
+        _assertPaid(named);
+    }
 }

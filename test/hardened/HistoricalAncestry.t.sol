@@ -392,7 +392,7 @@ contract HistoricalAncestryTest is HistoricalScenes {
         BridgeVault right = _historicalWorld(ETHEREUM_INITIAL_SLOT, ETHEREUM_CAPELLA_ERA);
         HistoricalParams memory params = _ethereumParams(_slots(770 * 8192));
         HistoricalScene memory scene = _historicalScene(params);
-        BridgeVault wrong = _newWithdrawalVault(0, ETHEREUM_CAPELLA_ERA - 1);
+        BridgeVault wrong = _newSecondWithdrawalVault(0, ETHEREUM_CAPELLA_ERA - 1);
         vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
         wrong.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, scene.historicalEvidence);
         right.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, scene.historicalEvidence);
@@ -467,7 +467,7 @@ contract HistoricalAncestryTest is HistoricalScenes {
             ETHEREUM_ANCHOR + 20_000, ETHEREUM_CAPELLA_ERA, ELECTRA_SUMMARIES, 6_410_000, _noSlots()
         );
         HistoricalScene memory electraScene = _historicalScene(electra);
-        BridgeVault wrongForDeneb = _newWithdrawalVault(0, ETHEREUM_CAPELLA_ERA);
+        BridgeVault wrongForDeneb = _newSecondWithdrawalVault(0, ETHEREUM_CAPELLA_ERA);
         vm.expectRevert(_lengthMismatch(45, 44));
         wrongForDeneb.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, denebScene.historicalEvidence);
         vm.expectRevert(_lengthMismatch(44, 45));
@@ -479,7 +479,7 @@ contract HistoricalAncestryTest is HistoricalScenes {
     }
 
     /// Claim: a neighbour field of the same depth is not accepted as the position. Shows: for an Electra-like state,
-    /// candidates 90 and 92 revert with `LayoutEvidenceInvalid`. For a Deneb-like state, 58 and 60 revert the same way.
+    /// candidates 90 and 92 revert with `LayoutPositionInvalid`. For a Deneb-like state, 58 and 60 revert the same way.
     /// The honest candidates are accepted. Matters: no near miss passes for `historical_summaries`.
     function test_HB01_layout_neighbourFieldsRejected() public {
         _historicalWorld(ETHEREUM_INITIAL_SLOT, ETHEREUM_CAPELLA_ERA);
@@ -491,14 +491,14 @@ contract HistoricalAncestryTest is HistoricalScenes {
             ETHEREUM_ANCHOR + 20_000, ETHEREUM_CAPELLA_ERA, DENEB_SUMMARIES, 6_410_000, _noSlots()
         );
         HistoricalScene memory denebScene = _historicalScene(deneb);
-        BridgeVault vault_ = _newWithdrawalVault(0, ETHEREUM_CAPELLA_ERA);
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        BridgeVault vault_ = _newSecondWithdrawalVault(0, ETHEREUM_CAPELLA_ERA);
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(90)));
         vault_.addHistoricalSummariesLayout(90, electraScene.historicalEvidence);
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(92)));
         vault_.addHistoricalSummariesLayout(92, electraScene.historicalEvidence);
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(58)));
         vault_.addHistoricalSummariesLayout(58, denebScene.historicalEvidence);
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(60)));
         vault_.addHistoricalSummariesLayout(60, denebScene.historicalEvidence);
         vault_.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, electraScene.historicalEvidence);
         vault_.addHistoricalSummariesLayout(DENEB_SUMMARIES, denebScene.historicalEvidence);

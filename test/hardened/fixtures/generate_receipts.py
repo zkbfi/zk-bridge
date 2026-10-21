@@ -204,12 +204,15 @@ def address(byte):
 
 REMOTE_VAULT = address(0x11)
 REMOTE_TOKEN = address(0x22)
+# The vault on the destination chain that may pay these deposits. The tests deploy their vault at this address.
+DESTINATION_VAULT = address(0x77)
+OTHER_DESTINATION_VAULT = address(0x88)
 OTHER_EMITTER = address(0x33)
 UNREGISTERED_TOKEN = address(0x44)
 SENDER = address(0x55)
 RECIPIENT = address(0x66)
 TARGET_CHAIN = 369
-DEPOSIT_TOPIC = keccak256(b"DepositInitiated(address,address,address,uint256,bytes32,uint64)")
+DEPOSIT_TOPIC = keccak256(b"DepositInitiated(address,address,address,uint256,bytes32,uint64,address)")
 OTHER_TOPIC = keccak256(b"Unrelated(uint256)")
 
 
@@ -221,9 +224,9 @@ def pad_address(a):
     return b"\x00" * 12 + a
 
 
-def deposit_log(emitter, token, amount, nonce, target):
+def deposit_log(emitter, token, amount, nonce, target, destination=DESTINATION_VAULT):
     return [emitter, [DEPOSIT_TOPIC, pad_address(token), pad_address(SENDER), pad_address(RECIPIENT)],
-            word(amount) + nonce + word(target)]
+            word(amount) + nonce + word(target) + pad_address(destination)]
 
 
 def other_log(emitter):
@@ -270,6 +273,9 @@ add("TYPE4", 9, 4, True, lambda n: [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 12 *
 add("TYPE5", 10, 5, True, lambda n: [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 13 * E18, n, TARGET_CHAIN)], 0, 13 * E18, "receipt with an unsupported type byte 5")
 add("TYPE0_PREFIXED", 11, 0, True, lambda n: [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 14 * E18, n, TARGET_CHAIN)], 0, 14 * E18, "receipt with an explicit 0x00 prefix, which no client writes")
 receipts[11] = b"\x00" + receipts[11]
+add("WRONG_DESTINATION", 12, 2, True, lambda n: [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 15 * E18, n, TARGET_CHAIN, OTHER_DESTINATION_VAULT)], 0, 15 * E18, "deposit addressed to another vault of the destination chain")
+# 64 logs: the deposit is log 40. The vendored list reader panics from 33 items on.
+add("MANY_LOGS", 13, 2, True, lambda n: [other_log(OTHER_EMITTER) for _ in range(40)] + [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 16 * E18, n, TARGET_CHAIN)] + [other_log(OTHER_EMITTER) for _ in range(23)], 40, 16 * E18, "64 logs; the deposit is log 40")
 TOTAL = 140
 for index in range(TOTAL):
     if index not in receipts:
@@ -296,6 +302,7 @@ here = os.path.dirname(os.path.abspath(__file__))
 out_json = {
     "receiptsRoot": "0x" + root.hex(),
     "constants": {"remoteVault": "0x" + REMOTE_VAULT.hex(), "remoteToken": "0x" + REMOTE_TOKEN.hex(),
+                  "destinationVault": "0x" + DESTINATION_VAULT.hex(), "otherDestinationVault": "0x" + OTHER_DESTINATION_VAULT.hex(),
                   "otherEmitter": "0x" + OTHER_EMITTER.hex(), "unregisteredToken": "0x" + UNREGISTERED_TOKEN.hex(),
                   "sender": "0x" + SENDER.hex(), "recipient": "0x" + RECIPIENT.hex(), "targetChainId": TARGET_CHAIN,
                   "depositTopic": "0x" + DEPOSIT_TOPIC.hex()},
@@ -323,6 +330,8 @@ lines.append("library ReceiptFixtures {")
 lines.append("    bytes32 internal constant RECEIPTS_ROOT = 0x%s;" % root.hex())
 lines.append("    address internal constant REMOTE_VAULT = 0x%s;" % REMOTE_VAULT.hex())
 lines.append("    address internal constant REMOTE_TOKEN = 0x%s;" % REMOTE_TOKEN.hex())
+lines.append("    address internal constant DESTINATION_VAULT = 0x%s;" % DESTINATION_VAULT.hex())
+lines.append("    address internal constant OTHER_DESTINATION_VAULT = 0x%s;" % OTHER_DESTINATION_VAULT.hex())
 lines.append("    address internal constant OTHER_EMITTER = 0x%s;" % OTHER_EMITTER.hex())
 lines.append("    address internal constant UNREGISTERED_TOKEN = 0x%s;" % UNREGISTERED_TOKEN.hex())
 lines.append("    address internal constant SENDER = 0x%s;" % SENDER.hex())

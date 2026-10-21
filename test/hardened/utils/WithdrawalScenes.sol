@@ -41,9 +41,19 @@ abstract contract WithdrawalScenes is HardenedFixture {
         bytes32[] evidenceAfterBranch;
     }
 
+    /// @dev The storage slots of a vault that a test can change: `depositCount` and the three layout lengths. The token
+    /// maps are cleared by key. A test that wipes a vault has claimed nothing yet.
+    uint256 internal constant DEPOSIT_COUNT_SLOT = 0;
+    uint256 internal constant STATE_LAYOUTS_LENGTH_SLOT = 4;
+    uint256 internal constant BODY_LAYOUTS_LENGTH_SLOT = 5;
+    uint256 internal constant HISTORICAL_LAYOUTS_LENGTH_SLOT = 6;
+    uint256 internal constant REMOTE_TOKEN_OF_SLOT = 1;
+    uint256 internal constant LOCAL_TOKEN_OF_SLOT = 2;
     uint64 internal constant FIRST_ANCHOR_SLOT = 826_000;
     uint64 internal nextAnchorSlot;
     BridgeVault[] internal createdVaults;
+    /// @dev Every pair of every vault built at `DESTINATION_VAULT` in this test. A wipe clears their map entries.
+    BridgeVault.TokenPair[] internal destinationPairs;
 
     function setUp() public virtual override {
         super.setUp();
@@ -65,9 +75,59 @@ abstract contract WithdrawalScenes is HardenedFixture {
     function _newWithdrawalVault(uint64 depositCutoff, uint64 capellaEra) internal returns (BridgeVault vault_) {
         BridgeVault.TokenPair[] memory pairs = new BridgeVault.TokenPair[](1);
         pairs[0] = BridgeVault.TokenPair(address(tokenOnB), ReceiptFixtures.REMOTE_TOKEN, 18);
+        return _newDestinationVault(pairs, depositCutoff, capellaEra);
+    }
+
+    /// @notice A vault on chain B for the given pairs, built at `DESTINATION_VAULT`, the only address that the fixture
+    /// receipts name. An earlier vault of the same test at that address is wiped first (code, counters, layouts and
+    /// token maps), so the new one starts clean. A test that needs two live vaults builds the second with
+    /// `_newSecondWithdrawalVault`. `_scene` adds the fork layouts to every vault that this function returned.
+    function _newDestinationVault(BridgeVault.TokenPair[] memory pairs, uint64 depositCutoff, uint64 capellaEra)
+        internal
+        returns (BridgeVault vault_)
+    {
         vm.chainId(CHAIN_B);
-        vault_ = new BridgeVault(address(lightClientForB), CHAIN_B, CHAIN_A, ReceiptFixtures.REMOTE_VAULT, pairs, depositCutoff, capellaEra, address(gateB));
+        address destination = ReceiptFixtures.DESTINATION_VAULT;
+        vm.etch(destination, "");
+        _wipeVaultState(destination);
+        bytes memory arguments = abi.encode(
+            address(lightClientForB), CHAIN_B, CHAIN_A, ReceiptFixtures.REMOTE_VAULT, pairs, depositCutoff, capellaEra, address(gateB)
+        );
+        deployCodeTo("BridgeVault.sol:BridgeVault", arguments, destination);
+        for (uint256 i = 0; i < pairs.length; i++) {
+            destinationPairs.push(pairs[i]);
+        }
+        vault_ = BridgeVault(destination);
         createdVaults.push(vault_);
+    }
+
+    /// @notice A vault like the one above, at an ordinary address. It has the same remote vault as the first, and it is
+    /// not the destination named in the fixture receipts, so it must refuse them with `WrongDestinationVault`.
+    function _newSecondWithdrawalVault() internal returns (BridgeVault vault_) {
+        return _newSecondWithdrawalVault(0, DEFAULT_CAPELLA_ERA);
+    }
+
+    /// @notice The same, with a deposit cutoff and a `capellaEra`.
+    function _newSecondWithdrawalVault(uint64 depositCutoff, uint64 capellaEra) internal returns (BridgeVault vault_) {
+        BridgeVault.TokenPair[] memory pairs = new BridgeVault.TokenPair[](1);
+        pairs[0] = BridgeVault.TokenPair(address(tokenOnB), ReceiptFixtures.REMOTE_TOKEN, 18);
+        vm.chainId(CHAIN_B);
+        vault_ = new BridgeVault(
+            address(lightClientForB), CHAIN_B, CHAIN_A, ReceiptFixtures.REMOTE_VAULT, pairs, depositCutoff, capellaEra, address(gateB)
+        );
+        createdVaults.push(vault_);
+    }
+
+    /// @dev Clears the counters, the layout tables and the token maps of every earlier vault at `vaultAddress`.
+    function _wipeVaultState(address vaultAddress) internal {
+        vm.store(vaultAddress, bytes32(DEPOSIT_COUNT_SLOT), bytes32(0));
+        vm.store(vaultAddress, bytes32(STATE_LAYOUTS_LENGTH_SLOT), bytes32(0));
+        vm.store(vaultAddress, bytes32(BODY_LAYOUTS_LENGTH_SLOT), bytes32(0));
+        vm.store(vaultAddress, bytes32(HISTORICAL_LAYOUTS_LENGTH_SLOT), bytes32(0));
+        for (uint256 i = 0; i < destinationPairs.length; i++) {
+            vm.store(vaultAddress, keccak256(abi.encode(destinationPairs[i].localToken, REMOTE_TOKEN_OF_SLOT)), bytes32(0));
+            vm.store(vaultAddress, keccak256(abi.encode(destinationPairs[i].remoteToken, LOCAL_TOKEN_OF_SLOT)), bytes32(0));
+        }
     }
 
     /// @notice The default scene: anchor in an Electra-like fork (state position 69, block hash position 812), deposit

@@ -85,19 +85,19 @@ contract ForkLayoutTest is HistoricalScenes {
     // ================================================================ rejected: block roots
 
     /// Claim: a candidate that points at `finalized_checkpoint.root` (position 105 in the Electra state) is rejected.
-    /// Shows: the leaf under position 105 is not the stored header root, so the call reverts; the right position works.
-    /// Matters: a wrong position cannot match, so no field of the state can pass for `block_roots`.
+    /// Shows: position 105 is not the `block_roots` field, so the call reverts with `LayoutPositionInvalid`; the right
+    /// position works. Matters: no other field of the state can pass for `block_roots`.
     function test_H19_blockRootsLayoutAtFinalizedCheckpointRejected() public {
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(105)));
         fresh.addBlockRootsLayout(105, _rootsEvidence());
         fresh.addBlockRootsLayout(69, _rootsEvidence());
     }
 
     /// Claim: a candidate that points at `state_roots` (position 70, the field after `block_roots`) is rejected.
-    /// Shows: same depth, other path, so the root differs. Matters: state_roots holds roots of the same shape and is
-    /// the most likely confusion.
+    /// Shows: same depth, other field, so the position check refuses it. Matters: state_roots holds roots of the same
+    /// shape and is the most likely confusion.
     function test_H19_blockRootsLayoutAtStateRootsRejected() public {
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(70)));
         fresh.addBlockRootsLayout(70, _rootsEvidence());
         fresh.addBlockRootsLayout(69, _rootsEvidence());
     }
@@ -180,7 +180,7 @@ contract ForkLayoutTest is HistoricalScenes {
     /// later) is rejected. Shows: the leaf there is not the stored execution block hash. Matters: only the block hash
     /// field can pass for the block hash field.
     function test_H19_blockHashLayoutAtParentHashRejected() public {
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(800)));
         fresh.addBlockHashLayout(800, _hashEvidence());
         fresh.addBlockHashLayout(812, _hashEvidence());
     }
@@ -190,7 +190,7 @@ contract ForkLayoutTest is HistoricalScenes {
     function test_H19_blockHashLayoutAtNeighbouringFieldsRejected() public {
         uint256[5] memory wrong = [uint256(802), 803, 805, 806, 813];
         for (uint256 i = 0; i < wrong.length; i++) {
-            vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+            vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, wrong[i]));
             fresh.addBlockHashLayout(wrong[i], _hashEvidence());
         }
         fresh.addBlockHashLayout(812, _hashEvidence());
@@ -394,7 +394,7 @@ contract ForkLayoutTest is HistoricalScenes {
     /// evidence. Matters: no summary exists before Capella, and the index would underflow.
     function test_HB01_historicalLayoutWithEraBeforeCapellaRejected() public {
         (, HistoricalScene memory historical) = _historicalFixture();
-        BridgeVault late = _newWithdrawalVault(0, 110);
+        BridgeVault late = _newSecondWithdrawalVault(0, 110);
         vm.expectRevert(abi.encodeWithSelector(BridgeVault.DepositBeforeCapellaEra.selector, uint64(109), uint64(110)));
         late.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
         fresh.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
@@ -422,51 +422,16 @@ contract ForkLayoutTest is HistoricalScenes {
         evidence = BridgeVault.HistoricalSummariesEvidence({anchorHeader: anchor, earlierSlot: HISTORICAL_EVIDENCE, branch: branch});
     }
 
-    /// @dev Offers `candidate` with every branch the attacker can build from the real branch of the leaf, and requires a
-    /// refusal for each. `expectedLength` is the branch length the vault demands for the candidate.
-    function _assertEveryBranchRefused(
-        uint256 candidate,
-        BridgeVault.HistoricalSummariesEvidence memory evidence,
-        uint256 expectedLength
-    ) internal {
-        bytes32[] memory real = evidence.branch;
-        assertLt(real.length, expectedLength, "the real branch is shorter than the vault demands");
-        uint256 missing = expectedLength - real.length;
-        bytes32 arbitrary = keccak256("arbitrary sibling");
-
-        // The real branch as it is: the length differs, so the vault says so.
-        vm.expectRevert(abi.encodeWithSelector(SSZ.BranchLengthMismatch.selector, expectedLength, real.length));
-        fresh.addHistoricalSummariesLayout(candidate, evidence);
-
-        bytes32[][4] memory padded;
-        padded[0] = _concat(real, _repeat(bytes32(0), missing)); // zeros above the real siblings
-        padded[1] = _concat(_repeat(bytes32(0), missing), real); // zeros below the real siblings
-        padded[2] = _concat(real, _repeat(arbitrary, missing)); // arbitrary hashes above
-        padded[3] = _concat(_repeat(arbitrary, missing), real); // arbitrary hashes below
-        for (uint256 i = 0; i < padded.length; i++) {
-            evidence.branch = padded[i];
-            vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
-            fresh.addHistoricalSummariesLayout(candidate, evidence);
-        }
-        evidence.branch = real;
-    }
-
     /// Claim: a candidate that is `state.block_roots` (field 5, position 69) is refused although the state really holds
-    /// the stored header root there, at index `earlierSlot % 8192`. Shows: the real branch (19 entries) reverts with
-    /// `BranchLengthMismatch(45, 19)`; that real branch padded with zeros or arbitrary hashes, above or below, reverts
-    /// with `LayoutEvidenceInvalid`; so does the best aligned attempt, the 13 real vector siblings followed by 26 arbitrary
-    /// entries and then the 6 real state siblings. The honest historical anchor is accepted. Matters: a field that holds
-    /// the same root cannot pass as `historical_summaries`; the path lengths differ, and any padding needs a hash preimage.
+    /// the stored header root there, at index `earlierSlot % 8192`. Shows: position 69 is not the `historical_summaries`
+    /// field, so the call reverts with `LayoutPositionInvalid(69)`; the honest anchor is accepted. Matters: a field
+    /// that holds the same root cannot pass as `historical_summaries`.
     function test_HB01_historicalLayoutAtBlockRootsFieldRejected() public {
         _historicalFixture();
         uint256 leaf = 69 * 8192 + (HISTORICAL_EVIDENCE % 8192);
         BridgeVault.HistoricalSummariesEvidence memory bad = _anchorHoldingRootAt(1_100_000, leaf);
         assertEq(bad.branch.length, 19);
-        _assertEveryBranchRefused(69, bad, 45);
-
-        bytes32[] memory real = bad.branch;
-        bad.branch = _concat(_slice(real, 0, 13), _concat(_repeat(keccak256("arbitrary sibling"), 26), _slice(real, 13, 19)));
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(69)));
         fresh.addHistoricalSummariesLayout(69, bad);
 
         (, HistoricalScene memory honest) = _honestAfterBad();
@@ -483,15 +448,15 @@ contract ForkLayoutTest is HistoricalScenes {
     }
 
     /// Claim: a candidate that is `state.finalized_checkpoint.root` (field 20, then field 1 of the checkpoint: position
-    /// (64 + 20) * 2 + 1 = 169, depth 7) is refused although the state really holds the stored header root there. Shows:
-    /// the real branch (7 entries) reverts with `BranchLengthMismatch(46, 7)`; every padded variant reverts with
-    /// `LayoutEvidenceInvalid`. The honest anchor is accepted. Matters: a finalized checkpoint root is a block root, so
-    /// it is the most natural impostor.
+    /// (64 + 20) * 2 + 1 = 169, depth 7) is refused although the state really holds the stored header root there.
+    /// Shows: the call reverts with `LayoutPositionInvalid(169)`; the honest anchor is accepted. Matters: a finalized
+    /// checkpoint root is a block root, so it is the most natural impostor.
     function test_HB01_historicalLayoutAtFinalizedCheckpointRootRejected() public {
         _historicalFixture();
         BridgeVault.HistoricalSummariesEvidence memory bad = _anchorHoldingRootAt(1_100_000, 169);
         assertEq(bad.branch.length, 7);
-        _assertEveryBranchRefused(169, bad, 46);
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(169)));
+        fresh.addHistoricalSummariesLayout(169, bad);
         (, HistoricalScene memory honest) = _honestAfterBad();
         fresh.addHistoricalSummariesLayout(SUMMARIES, honest.historicalEvidence);
         assertEq(fresh.historicalLayouts().length, 1);
@@ -499,15 +464,15 @@ contract ForkLayoutTest is HistoricalScenes {
 
     /// Claim: a candidate that is `state.latest_block_header` (field 4, position 68) is refused although the state really
     /// holds the stored header root as its `parent_root`. The header container has 5 fields padded to 8 leaves and
-    /// `parent_root` is its leaf 2, so the leaf sits at 68 * 8 + 2 = 546 (depth 9). Shows: the real branch (9 entries)
-    /// offered for candidate 68 reverts with `BranchLengthMismatch(45, 9)` and every padded variant with
-    /// `LayoutEvidenceInvalid`. Candidate 546 itself is deeper than 8 and reverts with `LayoutOutOfBounds(546)`. The honest
-    /// anchor is accepted. Matters: the parent root of the latest header is a stored root too.
+    /// `parent_root` is its leaf 2, so the leaf sits at 68 * 8 + 2 = 546 (depth 9). Shows: candidate 68 reverts with
+    /// `LayoutPositionInvalid(68)`, and candidate 546 is deeper than 8 and reverts with `LayoutOutOfBounds(546)`. The
+    /// honest anchor is accepted. Matters: the parent root of the latest header is a stored root too.
     function test_HB01_historicalLayoutAtLatestBlockHeaderRejected() public {
         _historicalFixture();
         BridgeVault.HistoricalSummariesEvidence memory bad = _anchorHoldingRootAt(1_100_000, 68 * 8 + 2);
         assertEq(bad.branch.length, 9);
-        _assertEveryBranchRefused(68, bad, 45);
+        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(68)));
+        fresh.addHistoricalSummariesLayout(68, bad);
         vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutOutOfBounds.selector, uint256(546)));
         fresh.addHistoricalSummariesLayout(546, bad);
         (, HistoricalScene memory honest) = _honestAfterBad();
@@ -568,5 +533,111 @@ contract ForkLayoutTest is HistoricalScenes {
         (, HistoricalScene memory honest) = _honestAfterBad();
         fresh.addHistoricalSummariesLayout(SUMMARIES, honest.historicalEvidence);
         assertEq(fresh.historicalLayouts().length, 1);
+    }
+
+    // ================================================================ position rules: fields a proposer writes
+
+    /// @dev Builds and stores a scene whose evidence uses the given positions, without adding any layout to a vault.
+    /// The evidence is real: the stored light client data and the sparse trees agree with the chosen positions.
+    function _storedScene(uint256 blockRootsGindex, uint256 anchorBodyGindex) internal returns (SceneParams memory forgedParams, Scene memory forged) {
+        forgedParams = _defaultParams();
+        forgedParams.blockRootsGindex = blockRootsGindex;
+        forgedParams.anchorBodyGindex = anchorBodyGindex;
+        forged = _buildScene(ReceiptFixtures.type2(), forgedParams, _executionHeaderRlp(ReceiptFixtures.RECEIPTS_ROOT, 17));
+        _storeScene(forgedParams, forged);
+    }
+
+    /// Claim: the position of `eth1_data_votes` (field 9 of the state: 82 in Capella and Deneb, 146 in Electra and Fulu)
+    /// is refused as a `block_roots` position, even when the evidence is valid for it. Shows: the evidence is built so
+    /// that two stored header roots sit at `G * 8192 + slot % 8192` under a stored state root (the test proves that with
+    /// the branch check itself), and the call still reverts with `LayoutPositionInvalid`. The honest position 69 is
+    /// accepted afterwards. Matters: `eth1_data_votes` has the same tree shape as `block_roots`, and a block proposer
+    /// writes its entries. If the vault accepted that position, a proposer could pick the "block roots" and forge deposits.
+    function test_defect1_eth1DataVotesPositionRefusedAsBlockRoots() public {
+        uint256[2] memory votesPositions = [uint256(82), 146];
+        for (uint256 i = 0; i < votesPositions.length; i++) {
+            (, Scene memory forged) = _storedScene(votesPositions[i], 812);
+            BridgeVault.BlockRootsEvidence memory evidence = forged.rootsEvidence;
+            assertTrue(
+                SSZ.isValidBranchMemory(
+                    lightClientForB.headers(evidence.earlierSlotA),
+                    evidence.branchA,
+                    votesPositions[i] * 8192 + (evidence.earlierSlotA % 8192),
+                    evidence.laterHeader.stateRoot
+                ),
+                "the forged evidence is valid for the position"
+            );
+            vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, votesPositions[i]));
+            fresh.addBlockRootsLayout(votesPositions[i], evidence);
+            assertEq(fresh.stateLayouts().length, 0, "nothing was stored");
+        }
+        fresh.addBlockRootsLayout(69, _rootsEvidence());
+        assertEq(fresh.stateLayouts().length, 1);
+    }
+
+    /// Claim: only `2**d + 5` with `d` of 5, 6 or 7 is accepted as a `block_roots` position. Shows: 37, 69 and 133 pass
+    /// the position check (they fail later, on evidence built for another depth, with a length error that proves the
+    /// position check let them through), and the neighbours 36, 38, 68, 70, 132, 134 and the depth 4 and 8 positions
+    /// are refused. Matters: the rule is exactly the position of the field in the three accepted tree depths.
+    function test_defect1_blockRootsPositionRuleIsExact() public {
+        uint256[3] memory allowed = [uint256(37), 69, 133];
+        for (uint256 i = 0; i < allowed.length; i++) {
+            if (allowed[i] == 69) continue;
+            vm.expectRevert(abi.encodeWithSelector(SSZ.BranchLengthMismatch.selector, SSZ.depthOf(allowed[i] * 8192 + 1), uint256(19)));
+            fresh.addBlockRootsLayout(allowed[i], _rootsEvidence());
+        }
+        uint256[8] memory refused = [uint256(36), 38, 68, 70, 132, 134, 21, 261];
+        for (uint256 i = 0; i < refused.length; i++) {
+            vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, refused[i]));
+            fresh.addBlockRootsLayout(refused[i], _rootsEvidence());
+        }
+        fresh.addBlockRootsLayout(69, _rootsEvidence()); // control
+    }
+
+    /// Claim: `graffiti` (body field 4: position 16 + 2 = 18) and `eth1_data.block_hash` (body field 1, then leaf 2 of
+    /// `Eth1Data`: position 70) are refused as block hash positions, even when the body holds the stored execution block
+    /// hash there. Shows: the evidence is valid for the position (proved with the branch check), and the call reverts
+    /// with `LayoutPositionInvalid`. The honest position 812 is accepted afterwards. Matters: a block proposer can copy
+    /// the execution block hash into graffiti or into `eth1_data.block_hash`, and then forge the proof of any block hash.
+    function test_defect2_graffitiAndEth1DataPositionsRefusedAsBlockHash() public {
+        uint256[2] memory writablePositions = [uint256(18), 70];
+        for (uint256 i = 0; i < writablePositions.length; i++) {
+            (, Scene memory forged) = _storedScene(69, writablePositions[i]);
+            BridgeVault.BlockHashEvidence memory evidence = forged.anchorBodyEvidence;
+            assertTrue(
+                SSZ.isValidBranchMemory(
+                    lightClientForB.executionBlockHashes(evidence.header.slot),
+                    evidence.branch,
+                    writablePositions[i],
+                    evidence.header.bodyRoot
+                ),
+                "the forged evidence is valid for the position"
+            );
+            vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, writablePositions[i]));
+            fresh.addBlockHashLayout(writablePositions[i], evidence);
+            assertEq(fresh.bodyLayouts().length, 0, "nothing was stored");
+        }
+        fresh.addBlockHashLayout(812, _hashEvidence());
+        assertEq(fresh.bodyLayouts().length, 1);
+    }
+
+    /// Claim: the block hash rule is `(2**db + 9) * 2**dp + 12` with `db` and `dp` in 4 to 5: 412, 668, 812, 1324. Shows:
+    /// each of 412, 668 and 1324 passes the position check (it fails later, on the evidence that was built for 812), and near misses are
+    /// refused. Matters: the Rust reference accepts only 412 and 812. The vault also admits 668 and 1324, the positions
+    /// of the same field if the body or the payload grows to 17 or more fields. They need evidence that the stored data
+    /// proves, so they cannot be used to forge.
+    function test_defect2_blockHashPositionRuleIsExact() public {
+        vm.expectRevert(abi.encodeWithSelector(SSZ.BranchLengthMismatch.selector, uint256(8), uint256(9)));
+        fresh.addBlockHashLayout(412, _hashEvidence());
+        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector); // depth 9 like 812, but the leaf is elsewhere
+        fresh.addBlockHashLayout(668, _hashEvidence());
+        vm.expectRevert(abi.encodeWithSelector(SSZ.BranchLengthMismatch.selector, uint256(10), uint256(9)));
+        fresh.addBlockHashLayout(1324, _hashEvidence());
+        uint256[6] memory refused = [uint256(411), 413, 667, 811, 813, 1325];
+        for (uint256 i = 0; i < refused.length; i++) {
+            vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, refused[i]));
+            fresh.addBlockHashLayout(refused[i], _hashEvidence());
+        }
+        fresh.addBlockHashLayout(812, _hashEvidence()); // control
     }
 }

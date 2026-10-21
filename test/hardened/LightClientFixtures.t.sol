@@ -19,16 +19,21 @@ import {MockERC20} from "../../src/mocks/MockERC20.sol";
 /// Reading the directory needs `fs_permissions` for `light-client/tests/fixtures/withdrawal`. The test fails without it.
 contract LightClientFixturesTest is Test {
     string internal constant DIRECTORY = "light-client/tests/fixtures/withdrawal";
+    /// @dev The storage slot of the `claimed` and token maps of the vault, as `forge inspect` reports them.
+    uint256 internal constant CLAIMED_SLOT = 3;
     uint256 internal constant STATE_LAYOUTS_SLOT = 4;
     uint256 internal constant BODY_LAYOUTS_SLOT = 5;
     uint256 internal constant HISTORICAL_LAYOUTS_SLOT = 6;
     /// @dev The number of fixture files the Rust reference writes. A change in the set must be a deliberate change here.
-    uint256 internal constant EXPECTED_FIXTURE_COUNT = 73;
+    uint256 internal constant EXPECTED_FIXTURE_COUNT = 75;
     /// @dev The vault never calls its deposit gate during `withdraw`, so any non-zero address stands in for it.
     address internal constant UNUSED_GATE = address(0x6a7e);
     uint64 internal constant SLOTS_PER_EPOCH = 32;
     address internal constant FIXTURE_REMOTE_TOKEN = address(0xb2);
 
+    /// @dev Nonces claimed by accepted fixtures, and local tokens registered, at the shared fixture vault address.
+    bytes32[] internal claimedNonces;
+    address[] internal usedTokens;
     uint256 internal accepted;
     uint256 internal rejected;
     uint256 internal acceptedHistorical;
@@ -46,7 +51,7 @@ contract LightClientFixturesTest is Test {
     /// Claim: the Solidity vault and the Rust reference agree on every fixture. Shows: for each file, `withdraw` with the
     /// fixture calldata succeeds exactly when Rust says accept, and an accepted deposit pays the logged amount to the
     /// logged recipient and marks the logged nonce. A rejected fixture fails with the Solidity error that names the same
-    /// failed check as the Rust reason. The set has exactly 73 files, and both the capella and the electra layout have
+    /// failed check as the Rust reason. The set has exactly 75 files, and both the capella and the electra layout have
     /// at least four accepted historical-path fixtures. Matters: two independent implementations of the check (the build
     /// contract requires them to agree on accept and reject). The accept fixtures are the control of the reject fixtures:
     /// the same vault set-up pays an honest proof.
@@ -76,6 +81,7 @@ contract LightClientFixturesTest is Test {
 
     function _runFixture(string memory json, string memory path) internal {
         (BridgeVault vault, MockERC20 localToken) = _deployFor(json);
+        usedTokens.push(address(localToken));
         bytes memory callData = vm.parseJsonBytes(json, ".calldata");
         uint256 gasBefore = gasleft();
         (bool ok, bytes memory returned) = address(vault).call(callData);
@@ -88,6 +94,7 @@ contract LightClientFixturesTest is Test {
             return;
         }
         accepted++;
+        claimedNonces.push(vm.parseJsonBytes32(json, ".expected.deposit.nonce"));
         _assertPaid(json, vault, localToken, path);
         _countAccepted(json, gasUsed);
     }
@@ -132,6 +139,7 @@ contract LightClientFixturesTest is Test {
         if (reason == keccak256("LogIndexOutOfRange")) matches = selector == BridgeVault.LogIndexOutOfRange.selector;
         if (reason == keccak256("LogTopicMismatch")) matches = selector == BridgeVault.WrongEventTopic.selector;
         if (reason == keccak256("TargetChainMismatch")) matches = selector == BridgeVault.WrongTargetChain.selector;
+        if (reason == keccak256("DestinationVaultMismatch")) matches = selector == BridgeVault.WrongDestinationVault.selector;
         assertTrue(matches, string.concat("Solidity error differs from the Rust reason ", rustReason, " in ", path));
     }
 
@@ -188,18 +196,42 @@ contract LightClientFixturesTest is Test {
         BridgeVault.TokenPair[] memory pairs = new BridgeVault.TokenPair[](1);
         pairs[0] = BridgeVault.TokenPair(address(localToken), FIXTURE_REMOTE_TOKEN, 18);
         uint64 capellaEra = uint64(vm.parseUint(vm.parseJsonString(json, ".capellaEra")));
-        vault = new BridgeVault(
-            address(client),
-            localChain,
-            localChain == 369 ? 1 : 369,
-            vm.parseJsonAddress(json, ".remoteVault"),
-            pairs,
-            0,
-            capellaEra,
-            UNUSED_GATE
+        // The deposit names the vault that may pay it, so the vault is built at the address that the fixture names. Every
+        // fixture reuses that address, so the nonces that earlier fixtures claimed are cleared first.
+        address localVault = vm.parseJsonAddress(json, ".localVault");
+        vm.etch(localVault, "");
+        _clearClaims(localVault);
+        deployCodeTo(
+            "BridgeVault.sol:BridgeVault",
+            abi.encode(
+                address(client),
+                localChain,
+                localChain == 369 ? uint64(1) : uint64(369),
+                vm.parseJsonAddress(json, ".remoteVault"),
+                pairs,
+                uint64(0),
+                capellaEra,
+                UNUSED_GATE
+            ),
+            localVault
         );
+        vault = BridgeVault(localVault);
         localToken.mint(address(vault), 1_000_000e18);
         _seedLayouts(vault, json);
+    }
+
+    /// @dev Clears the claimed flag of every nonce that an earlier accepted fixture claimed at `localVault`, and the
+    /// token map entries of earlier fixtures. The layout tables are rewritten by `_seedLayouts`.
+    function _clearClaims(address localVault) internal {
+        for (uint256 i = 0; i < claimedNonces.length; i++) {
+            vm.store(localVault, keccak256(abi.encode(claimedNonces[i], CLAIMED_SLOT)), bytes32(0));
+        }
+        delete claimedNonces;
+        for (uint256 i = 0; i < usedTokens.length; i++) {
+            vm.store(localVault, keccak256(abi.encode(usedTokens[i], uint256(1))), bytes32(0));
+        }
+        vm.store(localVault, keccak256(abi.encode(FIXTURE_REMOTE_TOKEN, uint256(2))), bytes32(0));
+        delete usedTokens;
     }
 
     function _clientFor(string memory json) internal returns (BeaconLightClient) {

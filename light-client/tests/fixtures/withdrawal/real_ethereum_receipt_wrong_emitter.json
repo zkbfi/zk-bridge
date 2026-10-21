@@ -12,6 +12,7 @@
   },
   "layout": "electra",
   "localChainId": "369",
+  "localVault": "0x00000000000000000000000000000000000000b1",
   "name": "real_ethereum_receipt_wrong_emitter",
   "receiptData": "real",
   "remoteVault": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",

@@ -74,11 +74,13 @@ sol! {
         address indexed recipient,
         uint256 amount,
         bytes32 nonce,
-        uint64 targetChainId
+        uint64 targetChainId,
+        address destinationVault
     );
 }
 
-/// Topic 0 of `DepositInitiated(address,address,address,uint256,bytes32,uint64)`.
+/// Topic 0 of `DepositInitiated(address,address,address,uint256,bytes32,uint64,address)`.
+/// The log data has 4 words: amount, nonce, target chain, destination vault (128 bytes).
 ///
 /// Derived from the declaration above: `keccak256` of the canonical signature.
 pub const DEPOSIT_EVENT_TOPIC: B256 = <DepositInitiated as SolEvent>::SIGNATURE_HASH;
@@ -89,16 +91,20 @@ mod tests {
     use alloy_primitives::{b256, hex};
     use alloy_sol_types::SolValue;
 
-    /// Claim: the topic is the real keccak256 of the event signature (revision 1 constant `0x9bab...eaf5`) and is
+    /// Claim: the topic is the real keccak256 of the event signature (verified with `cast keccak`; the signature gained
+    /// the final `address destinationVault` parameter, so the earlier constant `0x9bab...eaf5` is retired) and is
     /// NOT the revision 2 constant `0x2df9...c1ee` that the revision 2 circuit hardcodes (defect R2-02).
     /// Why it matters: with the wrong topic no deposit can ever be proven.
     #[test]
     fn deposit_topic_is_the_real_signature_hash_and_not_the_revision_two_constant() {
-        let expected = b256!("9babffc98c2690dda697fdc26b5b3ea9b3806a6525a7b6da2cdeb372a48beaf5");
+        let expected = b256!("490f9589cc06e81cb4598bee88e655c90baac92e928ba51146f4ba2c16fa69da");
         let revision_two = b256!("2df93605658e38812f86230cb85b0d0c35583b27b9c9769f36b6fbfda3d8c1ee");
         assert_eq!(DEPOSIT_EVENT_TOPIC, expected);
         assert_ne!(DEPOSIT_EVENT_TOPIC, revision_two);
-        assert_eq!(DepositInitiated::SIGNATURE, "DepositInitiated(address,address,address,uint256,bytes32,uint64)");
+        assert_eq!(
+            DepositInitiated::SIGNATURE,
+            "DepositInitiated(address,address,address,uint256,bytes32,uint64,address)"
+        );
     }
 
     fn sample_light_client_output() -> LightClientOutput {

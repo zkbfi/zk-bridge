@@ -5,7 +5,8 @@
 //! and a Solidity test can run the same fixtures and must agree.
 //!
 //! Order: beacon path (anchor stored, window, block roots branch, block hash branch); header decode; receipt proof;
-//! EIP-2718 receipt decode with a success check; log lookup; emitter and topic; field decode; target chain.
+//! EIP-2718 receipt decode with a success check; log lookup; emitter and topic; field decode; target chain;
+//! destination vault.
 //! The vault state checks (registered token, unclaimed nonce) are outside this function.
 
 use crate::abi::{DepositInitiated, WithdrawalProof, DEPOSIT_EVENT_TOPIC};
@@ -26,6 +27,8 @@ pub struct WithdrawalContext {
     pub remote_vault: Address,
     /// The chain identifier of the verifying chain (`localChainId`).
     pub local_chain_id: u64,
+    /// The address of the verifying vault itself (`address(this)`). A deposit must name it as its destination vault.
+    pub local_vault: Address,
     /// What `lightClient.headers(anchorHeader.slot)` returns. Zero means not stored.
     pub stored_anchor_root: B256,
 }
@@ -45,6 +48,8 @@ pub struct VerifiedDeposit {
     pub nonce: B256,
     /// Target chain of the deposit.
     pub target_chain_id: u64,
+    /// The vault on the verifying chain that the deposit is addressed to.
+    pub destination_vault: Address,
     /// Execution block hash of the deposit block.
     pub deposit_block_hash: B256,
 }
@@ -108,6 +113,9 @@ pub fn verify_withdrawal(
     if event.targetChainId != context.local_chain_id {
         return Err(Error::TargetChainMismatch { target_chain_id: event.targetChainId });
     }
+    if event.destinationVault != context.local_vault {
+        return Err(Error::DestinationVaultMismatch { destination_vault: event.destinationVault });
+    }
 
     Ok(VerifiedDeposit {
         token: event.token,
@@ -116,6 +124,7 @@ pub fn verify_withdrawal(
         amount: event.amount,
         nonce: event.nonce,
         target_chain_id: event.targetChainId,
+        destination_vault: event.destinationVault,
         deposit_block_hash,
     })
 }

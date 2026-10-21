@@ -12,6 +12,7 @@
   },
   "layout": "capella",
   "localChainId": "1",
+  "localVault": "0x00000000000000000000000000000000000000b1",
   "name": "real_pulsechain_historical_block_not_a_deposit",
   "receiptData": "real",
   "remoteVault": "0x1c27fd7ab4faa8141119484e00d2455851639c2b",

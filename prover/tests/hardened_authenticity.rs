@@ -15,7 +15,7 @@ use zk_bridge_prover::error::Error;
 
 sol! {
     interface FakeEmitter {
-        function fakeDeposit(address token, address recipient, uint256 amount, bytes32 nonce, uint64 targetChainId) external;
+        function fakeHardenedDeposit(address token, address recipient, uint256 amount, bytes32 nonce, uint64 targetChainId, address destinationVault) external;
     }
 }
 
@@ -42,12 +42,14 @@ fn h02_hardened_fake_emitter_is_refused() {
     chain.send(Some(bridge.token_a), &TokenContract::approveCall { spender: bridge.vault_a, amount: U256::from(ONE_TOKEN) }.abi_encode());
     let evidence = gate_evidence(chain, bridge.gate_a);
     let stolen = 500 * ONE_TOKEN;
-    let fake_call = FakeEmitter::fakeDepositCall {
+    let fake_call = FakeEmitter::fakeHardenedDepositCall {
         token: bridge.token_a,
         recipient: RECIPIENT,
         amount: U256::from(stolen),
         nonce: keccak256(b"fake nonce"),
         targetChainId: 369,
+        // The fake log is perfect in every field, even the destination vault, so only the emitter can refuse it.
+        destinationVault: bridge.vault_b,
     }
     .abi_encode();
     let honest_call = deposit_calldata(bridge.token_a, RECIPIENT, U256::from(ONE_TOKEN), &evidence).to_vec();

@@ -173,6 +173,9 @@ impl LiveRoute {
         if event.target_chain_id != self.destination.chain_id() {
             return Ok(None);
         }
+        if event.destination_vault != self.destination_vault {
+            return Ok(None);
+        }
         Ok(Some(NewDeposit {
             route: self.route_name.clone(),
             nonce: event.nonce,
@@ -361,6 +364,7 @@ impl RoutePorts for LiveRoute {
             .view(self.light_client, LightClientContract::headersCall { slot: path.anchor_header.slot })?;
         let context = VaultContext {
             remote_vault: self.source_vault,
+            local_vault: self.destination_vault,
             local_chain_id: self.destination.chain_id(),
             stored_anchor_root,
         };

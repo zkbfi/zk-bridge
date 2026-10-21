@@ -114,6 +114,11 @@ pub enum Error {
         /// The target chain in the log.
         target_chain_id: u64,
     },
+    /// The deposit is addressed to another vault than the one that verifies the withdrawal.
+    DestinationVaultMismatch {
+        /// The destination vault in the log.
+        destination_vault: alloy_primitives::Address,
+    },
     /// Bytes served as SSZ break a rule of the encoding: an offset or a length is out of bounds, an offset order is wrong,
     /// or a list is longer than its limit. The text names the rule.
     MalformedSsz(String),
@@ -211,6 +216,9 @@ impl fmt::Display for Error {
             Self::TargetChainMismatch { target_chain_id } => {
                 write!(formatter, "the deposit targets chain {target_chain_id}, not this chain")
             }
+            Self::DestinationVaultMismatch { destination_vault } => {
+                write!(formatter, "the deposit is addressed to vault {destination_vault}, not this vault")
+            }
             Self::MalformedSsz(reason) => write!(formatter, "malformed SSZ: {reason}"),
             Self::HeaderDecode(reason) => write!(formatter, "cannot decode execution header: {reason}"),
             Self::ReceiptProofInvalid(reason) => write!(formatter, "receipt proof invalid: {reason}"),
@@ -247,6 +255,7 @@ impl Error {
             Self::LogTopicMismatch => "LogTopicMismatch",
             Self::LogDecode(_) => "LogDecode",
             Self::TargetChainMismatch { .. } => "TargetChainMismatch",
+            Self::DestinationVaultMismatch { .. } => "DestinationVaultMismatch",
             Self::SignatureInNextPeriodWithoutCrossing => "SignatureInNextPeriodWithoutCrossing",
             _ => "LightClientUpdateRejected",
         }

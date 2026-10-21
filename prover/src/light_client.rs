@@ -184,6 +184,8 @@ pub struct DepositEvent {
     pub nonce: B256,
     /// The destination chain.
     pub target_chain_id: u64,
+    /// The vault on the destination chain that the deposit is addressed to.
+    pub destination_vault: Address,
 }
 
 /// Decodes a `DepositInitiated` log from its topics and data.
@@ -203,6 +205,7 @@ pub fn decode_deposit(topics: &[B256], data: &[u8]) -> Result<DepositEvent> {
         amount: event.amount,
         nonce: event.nonce,
         target_chain_id: event.targetChainId,
+        destination_vault: event.destinationVault,
     })
 }
 
@@ -296,6 +299,8 @@ pub struct VaultContext {
     pub remote_vault: Address,
     /// The destination chain identifier.
     pub local_chain_id: u64,
+    /// The destination vault itself. The deposit must name it as its destination vault.
+    pub local_vault: Address,
     /// What the destination light client stores for the anchor slot.
     pub stored_anchor_root: B256,
 }
@@ -328,6 +333,7 @@ pub fn verify_withdrawal_natively(
 ) -> Result<VerifiedDeposit> {
     let context = lc_core::withdrawal::WithdrawalContext {
         remote_vault: context.remote_vault,
+        local_vault: context.local_vault,
         local_chain_id: context.local_chain_id,
         stored_anchor_root: context.stored_anchor_root,
     };
@@ -820,7 +826,31 @@ mod tests {
     /// Why it matters: the scanner filters logs on this topic; a wrong one finds no deposit.
     #[test]
     fn deposit_topic_is_the_signature_hash() {
-        assert_eq!(DEPOSIT_EVENT_TOPIC, keccak256("DepositInitiated(address,address,address,uint256,bytes32,uint64)"));
+        assert_eq!(DEPOSIT_EVENT_TOPIC, keccak256("DepositInitiated(address,address,address,uint256,bytes32,uint64,address)"));
+    }
+
+    /// Claim: a deposit log has 128 bytes of data (amount, nonce, target chain, destination vault), and the decoder
+    /// returns the destination vault. A log of the earlier 96-byte shape is refused.
+    /// Why it matters: the route ignores deposits for other vaults by this field, so it must come from the log data and
+    /// not from a default. The old shape must fail loudly, not decode with a zero vault.
+    #[test]
+    fn decode_deposit_reads_the_destination_vault_and_refuses_the_old_shape() {
+        let vault = Address::repeat_byte(0xb1);
+        let event = DepositInitiated {
+            token: Address::repeat_byte(1),
+            sender: Address::repeat_byte(2),
+            recipient: Address::repeat_byte(3),
+            amount: U256::from(5u64),
+            nonce: B256::repeat_byte(4),
+            targetChainId: 369,
+            destinationVault: vault,
+        };
+        let log = event.encode_log_data();
+        assert_eq!(log.data.len(), 128);
+        let decoded = decode_deposit(log.topics(), &log.data).expect("control: the current shape decodes");
+        assert_eq!(decoded.destination_vault, vault);
+        assert_eq!(decoded.target_chain_id, 369);
+        assert!(decode_deposit(log.topics(), &log.data[..96]).is_err(), "96 bytes is the old shape");
     }
 
     /// Claim: a synthetic header is a pure function of its arguments.
@@ -957,6 +987,7 @@ mod tests {
         let proof = assemble_withdrawal_proof(&path, &execution, 0, 0);
         let context = VaultContext {
             remote_vault: Address::repeat_byte(0xee),
+            local_vault: Address::repeat_byte(0xb1),
             local_chain_id: 1,
             stored_anchor_root: header_root(&real.anchor),
         };

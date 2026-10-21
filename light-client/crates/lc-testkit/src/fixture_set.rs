@@ -25,6 +25,8 @@ use lc_core::withdrawal::{verify_withdrawal, VerifiedDeposit, WithdrawalContext}
 use serde_json::{json, Value};
 
 const VAULT: Address = address!("00000000000000000000000000000000000000a1");
+/// The verifying vault on the destination chain (`address(this)` in the vault).
+const LOCAL_VAULT: Address = address!("00000000000000000000000000000000000000b1");
 const ATTACKER: Address = address!("00000000000000000000000000000000000000ee");
 
 fn text(value: impl core::fmt::LowerHex) -> String {
@@ -130,6 +132,7 @@ struct Case {
     proof: WithdrawalProof,
     stored_anchor_root: B256,
     remote_vault: Address,
+    local_vault: Address,
     local_chain_id: u64,
     expected: Expected,
 }
@@ -142,6 +145,7 @@ fn deposit_json(deposit: &VerifiedDeposit) -> Value {
         "amount": deposit.amount.to_string(),
         "nonce": text(deposit.nonce),
         "targetChainId": deposit.target_chain_id.to_string(),
+        "destinationVault": text(deposit.destination_vault),
         "depositBlockHash": text(deposit.deposit_block_hash),
     })
 }
@@ -149,6 +153,7 @@ fn deposit_json(deposit: &VerifiedDeposit) -> Value {
 fn render(case: Case) -> (String, Value) {
     let context = WithdrawalContext {
         remote_vault: case.remote_vault,
+        local_vault: case.local_vault,
         local_chain_id: case.local_chain_id,
         stored_anchor_root: case.stored_anchor_root,
     };
@@ -180,6 +185,7 @@ fn render(case: Case) -> (String, Value) {
         "capellaEra": case.spec.capella_era().expect("Capella").to_string(),
         "storedAnchorHeaderRoot": text(case.stored_anchor_root),
         "remoteVault": text(case.remote_vault),
+        "localVault": text(case.local_vault),
         "localChainId": case.local_chain_id.to_string(),
         "sourceForkSchedule": schedule_rows(case.spec),
         "expected": expected,
@@ -195,6 +201,7 @@ fn fields(nonce_byte: u8, amount: u64, target_chain_id: u64) -> DepositFields {
         amount,
         nonce: B256::repeat_byte(nonce_byte),
         target_chain_id,
+        destination_vault: LOCAL_VAULT,
     }
 }
 
@@ -264,6 +271,7 @@ fn synthetic_cases(spec: &'static ChainSpec, prefix: &str, local_chain_id: u64, 
             proof: scenario.proof,
             stored_anchor_root: scenario.stored_anchor_root,
             remote_vault: VAULT,
+            local_vault: LOCAL_VAULT,
             local_chain_id,
             expected,
         }
@@ -324,6 +332,16 @@ fn synthetic_cases(spec: &'static ChainSpec, prefix: &str, local_chain_id: u64, 
     );
     target_mismatch.local_chain_id = 31337;
     cases.push(target_mismatch);
+
+    let mut vault_mismatch = base(
+        "reject_destination_vault_mismatch",
+        "The deposit is addressed to another vault than the verifying vault (localVault); the chain matches.",
+        1,
+        0,
+        Expected::Reject("DestinationVaultMismatch"),
+    );
+    vault_mismatch.local_vault = ATTACKER;
+    cases.push(vault_mismatch);
 
     let mut not_stored = base(
         "reject_anchor_not_stored",
@@ -434,6 +452,7 @@ fn synthetic_cases(spec: &'static ChainSpec, prefix: &str, local_chain_id: u64, 
             proof: scenario.proof,
             stored_anchor_root: scenario.stored_anchor_root,
             remote_vault: VAULT,
+            local_vault: LOCAL_VAULT,
             local_chain_id,
             expected,
         }
@@ -475,6 +494,7 @@ fn historical_cases(spec: &'static ChainSpec, prefix: &str, local_chain_id: u64,
         proof: scenario.proof,
         stored_anchor_root: scenario.stored_anchor_root,
         remote_vault: VAULT,
+        local_vault: LOCAL_VAULT,
         local_chain_id,
         expected,
     };
@@ -616,6 +636,7 @@ fn real_receipt_cases() -> Vec<Case> {
                 proof: proof.clone(),
                 stored_anchor_root: anchor_root,
                 remote_vault: vault,
+                local_vault: LOCAL_VAULT,
                 local_chain_id: 1,
                 expected: Expected::Reject(reason),
             });
@@ -657,6 +678,7 @@ fn real_receipt_cases() -> Vec<Case> {
             proof: proof.clone(),
             stored_anchor_root: anchor_root,
             remote_vault: vault,
+            local_vault: LOCAL_VAULT,
             local_chain_id: 1,
             expected: Expected::Reject(reason),
         });
@@ -708,6 +730,7 @@ fn real_receipt_cases() -> Vec<Case> {
             proof: scenario.proof.clone(),
             stored_anchor_root: scenario.stored_anchor_root,
             remote_vault: vault,
+            local_vault: LOCAL_VAULT,
             local_chain_id: 369,
             expected: Expected::Reject(reason),
         });
@@ -734,6 +757,7 @@ pub fn check_fixture_with_verifier(fixture: &Value) {
     let proof = withdrawCall::abi_decode(&calldata).unwrap_or_else(|error| panic!("{name}: {error}")).proof;
     let context = WithdrawalContext {
         remote_vault: Address::from_slice(&hex_bytes(&fixture["remoteVault"])),
+        local_vault: Address::from_slice(&hex_bytes(&fixture["localVault"])),
         local_chain_id: fixture["localChainId"].as_str().expect("chain").parse().expect("chain"),
         stored_anchor_root: crate::json::hex_b256(&fixture["storedAnchorHeaderRoot"]),
     };

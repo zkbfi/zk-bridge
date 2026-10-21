@@ -125,11 +125,13 @@ struct LightClientOutput {
 
 ### `src/hardened/BridgeVault.sol`
 
-Event (3 indexed parameters, fixes R2-01; same signature as revision 1):
+Event (3 indexed parameters, fixes R2-01). It has a final `destinationVault` parameter that revision 1 did not have, so its signature and topic 0 differ from revision 1. The log data is 128 bytes: `amount`, `nonce`, `targetChainId`, `destinationVault`, each padded to 32 bytes. The source vault emits its immutable `remoteVault` as `destinationVault`. The destination vault's `withdraw` requires `destinationVault == address(this)`:
 
 ```solidity
-event DepositInitiated(address indexed token, address indexed sender, address indexed recipient, uint256 amount, bytes32 nonce, uint64 targetChainId);
+event DepositInitiated(address indexed token, address indexed sender, address indexed recipient, uint256 amount, bytes32 nonce, uint64 targetChainId, address destinationVault);
 ```
+
+The signature string is `DepositInitiated(address,address,address,uint256,bytes32,uint64,address)`. Topic 0 is `0x490f9589cc06e81cb4598bee88e655c90baac92e928ba51146f4ba2c16fa69da`.
 
 Expose `bytes32 public constant DEPOSIT_EVENT_TOPIC = DepositInitiated.selector;` so tests can compare it with the circuit's constant (fixes R2-02).
 
@@ -192,7 +194,7 @@ Implements the Altair light-client sync protocol for both fork schedules:
 - Prove the receipt with `alloy_trie::verify_proof(receipts_root, Nibbles::unpack(rlp(tx_index)), Some(receipt_bytes), proof)` (fixes R2-04).
 - Decode the receipt as an EIP-2718 envelope (fixes R2-05) and require success status.
 - Take the log at the witness's `log_index` (fixes R2-06). Require `log.address == expected_source_vault` and `topic0 == DEPOSIT_EVENT_TOPIC`, computed from an alloy `sol!` event declaration, never hardcoded (fixes R2-02).
-- Decode token, sender, recipient from topics, and amount, nonce, target chain from data.
+- Decode token, sender, recipient from topics, and amount, nonce, target chain, destination vault from data.
 
 ### Tests
 
@@ -277,7 +279,7 @@ function withdraw(WithdrawalProof calldata proof) external;
 4. The execution block hash is the leaf of `blockHashBranch` at `generalizedIndex(BeaconBlockBody.execution_payload.block_hash)` under `depositHeader.bodyRoot`.
 5. `keccak256(executionHeaderRlp) == blockHash`. Decode `receiptsRoot` from the header.
 6. Verify `receiptProof` against `receiptsRoot` with key `rlp(transactionIndex)`. Decode the EIP-2718 receipt envelope. Require success status.
-7. Take the log at `logIndex`. Require `log.address == remoteVault` and `topic0 == DEPOSIT_EVENT_TOPIC`. Decode token, sender, recipient, amount, nonce, target chain. Require `targetChainId == localChainId`, a registered token, an unclaimed nonce.
+7. Take the log at `logIndex`. Require `log.address == remoteVault` and `topic0 == DEPOSIT_EVENT_TOPIC`. Decode token, sender, recipient, amount, nonce, target chain, destination vault. Require `targetChainId == localChainId`, `destinationVault == address(this)`, a registered token, an unclaimed nonce.
 8. Mark the nonce, pay with `SafeERC20`, emit `WithdrawalCompleted(token, recipient, amount, nonce, depositBlockHash)`.
 
 SSZ hashing uses the SHA-256 precompile (address `0x02`), which exists on both chains.

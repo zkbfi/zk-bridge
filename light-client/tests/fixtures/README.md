@@ -65,20 +65,21 @@ One case per file. Keys:
 | `capellaEra` | The `capellaEra` argument of the verifying vault, as a decimal string. |
 | `storedAnchorHeaderRoot` | What `lightClient.headers(anchorSlot)` must return for this case. Zero means the slot is not stored. |
 | `remoteVault` | The vault address on the source chain (`remoteVault` in the verifying vault). |
+| `localVault` | The address of the verifying vault itself (`address(this)`). The deposit must name it as `destinationVault`. |
 | `localChainId` | `localChainId` of the verifying vault. |
 | `sourceForkSchedule` | Rows `(activationEpoch, blockRootsGindexBase, blockHashGindex)` for the verifying vault. |
 | `expected.result` | `"accept"` or `"reject"`. |
-| `expected.deposit` | On accept: `token`, `sender`, `recipient`, `amount` (decimal string), `nonce`, `targetChainId`, `depositBlockHash`. |
+| `expected.deposit` | On accept: `token`, `sender`, `recipient`, `amount` (decimal string), `nonce`, `targetChainId`, `destinationVault`, `depositBlockHash`. |
 | `expected.reason` | On reject: the Rust reason code. Mapping to Solidity custom errors is the Solidity test's job. |
 
 Reason codes: `AnchorNotStored`, `DepositNotBeforeAnchor`, `DepositBeforeCapella`, `HistoricalIndexOutOfRange`, `InvalidAncestryBranch`, `InvalidBlockHashBranch`,
 `ReceiptProofInvalid`, `ReceiptDecode`, `ReceiptFailed`, `LogIndexOutOfRange`, `LogEmitterMismatch`, `LogTopicMismatch`,
-`LogDecode`, `TargetChainMismatch`, `HeaderDecode`, `UnsupportedFork`.
+`LogDecode`, `TargetChainMismatch`, `DestinationVaultMismatch`, `HeaderDecode`, `UnsupportedFork`.
 
 The vault checks in the same order as the Rust function: anchor stored, path choice (deposit before anchor, then for the historical path
 `era >= capellaEra` and the index limit), ancestry branch (exact length), block hash branch (the leaf is
 `keccak256(executionHeaderRlp)`), header decode, receipt proof, receipt decode and status, log index, emitter, topic, field decode,
-target chain. The vault state checks (registered token, unclaimed nonce) are not part of these cases.
+target chain, destination vault. The vault state checks (registered token, unclaimed nonce) are not part of these cases.
 
 ## Historical ancestry
 

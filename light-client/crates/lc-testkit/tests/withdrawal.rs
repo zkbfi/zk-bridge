@@ -14,6 +14,8 @@ use lc_core::Error;
 use lc_testkit::synthetic::{build_withdrawal, deposit_log, DepositFields, ReceiptSpec, WithdrawalScenario};
 
 const VAULT: Address = address!("00000000000000000000000000000000000000a1");
+/// The verifying vault on the destination chain.
+const LOCAL_VAULT: Address = address!("00000000000000000000000000000000000000b1");
 const ATTACKER: Address = address!("00000000000000000000000000000000000000ee");
 
 fn fields(nonce_byte: u8, amount: u64) -> DepositFields {
@@ -24,6 +26,7 @@ fn fields(nonce_byte: u8, amount: u64) -> DepositFields {
         amount,
         nonce: B256::repeat_byte(nonce_byte),
         target_chain_id: 369,
+        destination_vault: LOCAL_VAULT,
     }
 }
 
@@ -71,7 +74,12 @@ fn layouts() -> Vec<(&'static ChainSpec, u64, u64, u64)> {
 }
 
 fn context(scenario: &WithdrawalScenario, local_chain_id: u64) -> WithdrawalContext {
-    WithdrawalContext { remote_vault: VAULT, local_chain_id, stored_anchor_root: scenario.stored_anchor_root }
+    WithdrawalContext {
+        remote_vault: VAULT,
+        local_vault: LOCAL_VAULT,
+        local_chain_id,
+        stored_anchor_root: scenario.stored_anchor_root,
+    }
 }
 
 fn scenario_for(
@@ -103,6 +111,7 @@ fn synthetic_honest_withdrawal_verifies_on_both_layouts() {
                 amount: U256::from(1_000u64),
                 nonce: expected.nonce,
                 target_chain_id: local,
+                destination_vault: LOCAL_VAULT,
                 deposit_block_hash: scenario.deposit_block_hash,
             }
         );
@@ -135,7 +144,7 @@ fn synthetic_failed_receipt_is_refused() {
 }
 
 /// Claim: log checks. A log from another emitter (H-02), a wrong log index, a log that is not a deposit, a log with the
-/// revision 2 topic, and a deposit aimed at another chain are each refused for the right reason.
+/// revision 2 topic, a deposit aimed at another chain, and a deposit addressed to another vault are each refused for the right reason.
 #[test]
 fn synthetic_log_rules() {
     for (spec, deposit_slot, anchor_slot, local) in layouts() {
@@ -155,6 +164,12 @@ fn synthetic_log_rules() {
         assert_eq!(
             verify_withdrawal(&scenario.proof, &other_chain, spec),
             Err(Error::TargetChainMismatch { target_chain_id: local })
+        );
+        // The same deposit, checked by a vault it is not addressed to: the chain matches, the vault does not.
+        let other_local_vault = WithdrawalContext { local_vault: ATTACKER, ..context(&scenario, local) };
+        assert_eq!(
+            verify_withdrawal(&scenario.proof, &other_local_vault, spec),
+            Err(Error::DestinationVaultMismatch { destination_vault: LOCAL_VAULT })
         );
         let other_vault = WithdrawalContext { remote_vault: ATTACKER, ..context(&scenario, local) };
         assert_eq!(verify_withdrawal(&scenario.proof, &other_vault, spec), Err(Error::LogEmitterMismatch));
@@ -398,5 +413,51 @@ fn synthetic_calldata_roundtrip_and_selector() {
         let decoded: WithdrawalProof = withdrawCall::abi_decode(&calldata).expect("decode").proof;
         assert_eq!(decoded, scenario.proof);
         assert!(verify_withdrawal(&decoded, &context(&scenario, local), spec).is_ok());
+    }
+}
+
+/// Claim: a deposit addressed to another vault is refused, and the same deposit passes at the vault it names.
+/// Why it matters: the source vault stamps the intended destination vault into the event. Without this check, a deposit
+/// meant for one destination vault could be replayed against any other vault that trusts the same source vault.
+#[test]
+fn synthetic_deposit_addressed_to_another_vault_is_refused() {
+    let other_destination_vault = address!("00000000000000000000000000000000000000b9");
+    for (spec, deposit_slot, anchor_slot, local) in layouts() {
+        let addressed_elsewhere = vec![ReceiptSpec {
+            transaction_type: 2,
+            success: true,
+            logs: vec![deposit_log(
+                VAULT,
+                &DepositFields {
+                    target_chain_id: local,
+                    destination_vault: other_destination_vault,
+                    ..fields(0xa1, 1_000)
+                },
+            )],
+        }];
+        let scenario = build_withdrawal(spec, &addressed_elsewhere, 0, 0, deposit_slot, anchor_slot);
+        let at_named_vault = WithdrawalContext { local_vault: other_destination_vault, ..context(&scenario, local) };
+        let deposit =
+            verify_withdrawal(&scenario.proof, &at_named_vault, spec).expect("control: the named vault accepts");
+        assert_eq!(deposit.destination_vault, other_destination_vault);
+        assert_eq!(
+            verify_withdrawal(&scenario.proof, &context(&scenario, local), spec),
+            Err(Error::DestinationVaultMismatch { destination_vault: other_destination_vault })
+        );
+    }
+}
+
+/// Claim: the chain check runs before the vault check, so a deposit that fails both reports the chain.
+/// Why it matters: the order is part of the contract that the Solidity vault and its fixtures share.
+#[test]
+fn synthetic_target_chain_is_checked_before_destination_vault() {
+    for (spec, deposit_slot, anchor_slot, local) in layouts() {
+        let scenario = scenario_for(spec, deposit_slot, anchor_slot, local, 1, 0);
+        let both_wrong =
+            WithdrawalContext { local_chain_id: 31337, local_vault: ATTACKER, ..context(&scenario, local) };
+        assert_eq!(
+            verify_withdrawal(&scenario.proof, &both_wrong, spec),
+            Err(Error::TargetChainMismatch { target_chain_id: local })
+        );
     }
 }

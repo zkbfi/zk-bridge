@@ -11,6 +11,7 @@ import {IDepositGate} from "./IDepositGate.sol";
 import {BeaconBlockHeader, SSZ} from "./SSZ.sol";
 import {MerkleTrie} from "./vendor/optimism/trie/MerkleTrie.sol";
 import {RLPReader} from "./vendor/optimism/rlp/RLPReader.sol";
+import {ReceiptLogs} from "./ReceiptLogs.sol";
 
 /// @title BridgeVault
 /// @notice One end of a two-chain bridge. It locks tokens on deposit and pays tokens against a direct proof of
@@ -18,9 +19,16 @@ import {RLPReader} from "./vendor/optimism/rlp/RLPReader.sol";
 /// Only the light client uses a zero-knowledge proof. The vault has no owner, no refund, and no upgrade path.
 /// @dev Fork layouts. The generalized indices of `state.block_roots`, of `state.historical_summaries` and of the
 /// execution block hash depend on the fork of the source chain. The vault holds no fixed table. Anyone may add a
-/// layout with `addBlockRootsLayout`, `addHistoricalSummariesLayout` and `addBlockHashLayout`, and the chain's own stored
-/// data must prove it: the candidate position must map stored header roots (or the stored execution block hash) to the
-/// stored state (or body) root. A wrong position cannot match.
+/// layout with `addBlockRootsLayout`, `addHistoricalSummariesLayout` and `addBlockHashLayout`. Two checks guard each
+/// call. First, the candidate must be the position of the named field itself in a state or body tree of a known shape
+/// (see the position rules below). Second, the chain's own stored data must prove it: the candidate position must map
+/// stored header roots (or the stored execution block hash) to the stored state (or body) root.
+///
+/// The first check is needed because the second is not enough alone. Other fields hold values that a block proposer
+/// chooses: the list `eth1_data_votes` has the same tree shape as `block_roots`, and `graffiti` or
+/// `eth1_data.block_hash` can hold a copy of the execution block hash. A proposer could place stored header roots or
+/// a stored block hash there, get that position accepted, and then forge deposits. So the vault accepts only the
+/// position of the real field.
 ///
 /// Ancestry has two paths, chosen by the vault from the two slots. A deposit at most 8192 slots below the anchor is
 /// proven through `state.block_roots`. An older deposit is proven through `state.historical_summaries`, which holds the
@@ -122,6 +130,7 @@ contract BridgeVault is ReentrancyGuard {
         uint256 amount;
         bytes32 nonce;
         uint64 targetChainId;
+        address destinationVault;
     }
 
     /// @notice The length of `state.block_roots`. A deposit block at most this far below its anchor uses the recent path.
@@ -137,12 +146,30 @@ contract BridgeVault is ReentrancyGuard {
     /// @notice The topic 0 of `DepositInitiated`. Withdrawals match logs against this value.
     /// @dev Solidity 0.8.28 rejects `DepositInitiated.selector` in a constant. A test pins this value to the selector.
     bytes32 public constant DEPOSIT_EVENT_TOPIC =
-        keccak256("DepositInitiated(address,address,address,uint256,bytes32,uint64)");
+        keccak256("DepositInitiated(address,address,address,uint256,bytes32,uint64,address)");
 
     /// @dev The deepest accepted `block_roots` or `historical_summaries` position (the state container only).
     uint256 private constant MAX_BLOCK_ROOTS_DEPTH = 8;
     /// @dev The deepest accepted block hash position.
     uint256 private constant MAX_BLOCK_HASH_DEPTH = 16;
+
+    /// @dev The index of `BeaconState.block_roots` among the state fields.
+    uint256 private constant BLOCK_ROOTS_FIELD = 5;
+    /// @dev The index of `BeaconState.historical_summaries` among the state fields (Capella through Fulu).
+    uint256 private constant HISTORICAL_SUMMARIES_FIELD = 27;
+    /// @dev The index of `execution_payload` among the `BeaconBlockBody` fields (Capella through Fulu).
+    uint256 private constant EXECUTION_PAYLOAD_FIELD = 9;
+    /// @dev The index of `block_hash` among the `ExecutionPayload` fields (Capella through Fulu).
+    uint256 private constant BLOCK_HASH_FIELD = 12;
+    /// @dev The accepted depths of the `BeaconState` tree: 32, 64 or 128 leaves (28 to 128 fields).
+    uint256 private constant MIN_STATE_DEPTH = 5;
+    uint256 private constant MAX_STATE_DEPTH = 7;
+    /// @dev The accepted depths of the `BeaconBlockBody` tree (16 or 32 leaves) and of the `ExecutionPayload` tree
+    /// (16 or 32 leaves).
+    uint256 private constant MIN_BODY_DEPTH = 4;
+    uint256 private constant MAX_BODY_DEPTH = 5;
+    uint256 private constant MIN_PAYLOAD_DEPTH = 4;
+    uint256 private constant MAX_PAYLOAD_DEPTH = 5;
 
     /// @dev The index of `receiptsRoot` in the execution block header list.
     uint256 private constant RECEIPTS_ROOT_FIELD = 5;
@@ -210,6 +237,8 @@ contract BridgeVault is ReentrancyGuard {
     error ReceiptFailed();
     /// @notice The log index is past the end of the receipt's logs.
     error LogIndexOutOfRange(uint256 logIndex, uint256 logCount);
+    /// @notice A candidate position is not the position of the named field in any accepted tree shape.
+    error LayoutPositionInvalid(uint256 gindex);
     /// @notice The log was not emitted by the remote vault.
     error WrongEmitter(address expected, address actual);
     /// @notice The log is not a `DepositInitiated` log.
@@ -218,6 +247,8 @@ contract BridgeVault is ReentrancyGuard {
     error MalformedLog();
     /// @notice The deposit targets another chain than this chain.
     error WrongTargetChain(uint64 expected, uint64 actual);
+    /// @notice The deposit is addressed to another vault than this one.
+    error WrongDestinationVault(address expected, address actual);
     /// @notice The deposit was already claimed.
     error AlreadyClaimed(bytes32 depositNonce);
 
@@ -230,14 +261,16 @@ contract BridgeVault is ReentrancyGuard {
     /// @notice Emitted when a validated `historical_summaries` position is added or its validated range grows.
     event HistoricalSummariesLayoutValidated(uint256 indexed historicalSummariesGindex, uint64 firstSlot, uint64 lastSlot);
 
-    /// @notice Emitted on deposit with the amount the vault received.
+    /// @notice Emitted on deposit with the amount the vault received. `destinationVault` is the vault on the other
+    /// chain that may pay this deposit: the `remoteVault` of the emitting vault. Another vault refuses the deposit.
     event DepositInitiated(
         address indexed token,
         address indexed sender,
         address indexed recipient,
         uint256 amount,
         bytes32 nonce,
-        uint64 targetChainId
+        uint64 targetChainId,
+        address destinationVault
     );
 
     /// @notice Emitted when a withdrawal pays out. `depositBlockHash` is the execution block that holds the deposit.
@@ -345,7 +378,7 @@ contract BridgeVault is ReentrancyGuard {
         if (received == 0) revert NothingReceived();
 
         nonce = keccak256(abi.encode(block.chainid, address(this), depositCount++));
-        emit DepositInitiated(token, msg.sender, recipient, received, nonce, remoteChainId);
+        emit DepositInitiated(token, msg.sender, recipient, received, nonce, remoteChainId, remoteVault);
     }
 
     /// @notice Pays a deposit that was made on the remote vault, given direct evidence.
@@ -354,7 +387,7 @@ contract BridgeVault is ReentrancyGuard {
     /// `state.block_roots` of the anchor (distance up to 8192) or in a `historical_summaries` era (more).
     /// 4: the execution block hash is in the deposit header body. 5: the execution header hashes to that block hash.
     /// 6: the receipt is in the receipts trie and succeeded. 7: the log is a deposit log of the remote vault for this
-    /// chain and a registered token, and is unclaimed. 8: state changes, then the transfer.
+    /// chain and this vault, for a registered token, and is unclaimed. 8: state changes, then the transfer.
     /// @param proof The evidence.
     function withdraw(WithdrawalProof calldata proof) external nonReentrant {
         _requireStoredAnchor(proof.anchorHeader);
@@ -367,6 +400,7 @@ contract BridgeVault is ReentrancyGuard {
         Deposit memory found = _depositLog(receipt, proof.logIndex);
 
         if (found.targetChainId != localChainId) revert WrongTargetChain(localChainId, found.targetChainId);
+        if (found.destinationVault != address(this)) revert WrongDestinationVault(address(this), found.destinationVault);
         address localToken = localTokenOf[found.token];
         if (localToken == address(0)) revert UnsupportedRemoteToken(found.token);
         if (claimed[found.nonce]) revert AlreadyClaimed(found.nonce);
@@ -377,7 +411,9 @@ contract BridgeVault is ReentrancyGuard {
     }
 
     /// @notice Adds a `block_roots` position, or widens its validated range, given evidence from stored data.
-    /// @dev Open to anyone. The position is accepted only when, under the stored later state root, the leaf at
+    /// @dev Open to anyone. The position must be the `block_roots` field itself: `2**d + 5` with `d` in 5 to 7. Any
+    /// other position reverts with `LayoutPositionInvalid`, even when the evidence would match (for example the position
+    /// of `eth1_data_votes`, whose entries a proposer writes). The position is accepted only when, under the stored later state root, the leaf at
     /// `blockRootsGindex * 8192 + slot % 8192` equals the light client's stored header root, for two different
     /// stored earlier slots. A wrong position cannot match. The position is then usable for the later header's slot.
     /// @param blockRootsGindex The candidate generalized index of `BeaconState.block_roots`.
@@ -386,6 +422,7 @@ contract BridgeVault is ReentrancyGuard {
         if (blockRootsGindex == 0 || SSZ.depthOf(blockRootsGindex) > MAX_BLOCK_ROOTS_DEPTH) {
             revert LayoutOutOfBounds(blockRootsGindex);
         }
+        if (!_isStateFieldPosition(blockRootsGindex, BLOCK_ROOTS_FIELD)) revert LayoutPositionInvalid(blockRootsGindex);
         _requireStoredHeader(evidence.laterHeader);
         if (evidence.earlierSlotA == evidence.earlierSlotB) revert EvidenceSlotsEqual(evidence.earlierSlotA);
         _requireEarlierRoot(evidence.laterHeader, evidence.earlierSlotA, blockRootsGindex, evidence.branchA);
@@ -405,7 +442,10 @@ contract BridgeVault is ReentrancyGuard {
     }
 
     /// @notice Adds a block hash position, or widens its validated range, given evidence from stored data.
-    /// @dev Open to anyone. The position is accepted only when, under the body root of a stored header, the leaf at
+    /// @dev Open to anyone. The position must be the block hash field itself: `(2**db + 9) * 2**dp + 12` with `db` and
+    /// `dp` in 4 to 5, which is 412, 668, 812 or 1324. Any other position reverts with `LayoutPositionInvalid`, even when
+    /// the evidence would match (for example `graffiti` at 18, or `eth1_data.block_hash` at 70, which a proposer can
+    /// fill with a copy of the block hash). The position is accepted only when, under the body root of a stored header, the leaf at
     /// `blockHashGindex` equals the light client's stored execution block hash of that header.
     /// @param blockHashGindex The candidate generalized index of `BeaconBlockBody.execution_payload.block_hash`.
     /// @param evidence A stored header and the branch to its body root.
@@ -413,6 +453,7 @@ contract BridgeVault is ReentrancyGuard {
         if (blockHashGindex == 0 || SSZ.depthOf(blockHashGindex) > MAX_BLOCK_HASH_DEPTH) {
             revert LayoutOutOfBounds(blockHashGindex);
         }
+        if (!_isBlockHashPosition(blockHashGindex)) revert LayoutPositionInvalid(blockHashGindex);
         _requireStoredHeader(evidence.header);
         bytes32 storedBlockHash = lightClient.executionBlockHashes(evidence.header.slot);
         if (storedBlockHash == bytes32(0)) revert EvidenceSlotNotStored(evidence.header.slot);
@@ -446,6 +487,9 @@ contract BridgeVault is ReentrancyGuard {
     {
         if (historicalSummariesGindex == 0 || SSZ.depthOf(historicalSummariesGindex) > MAX_BLOCK_ROOTS_DEPTH) {
             revert LayoutOutOfBounds(historicalSummariesGindex);
+        }
+        if (!_isStateFieldPosition(historicalSummariesGindex, HISTORICAL_SUMMARIES_FIELD)) {
+            revert LayoutPositionInvalid(historicalSummariesGindex);
         }
         _requireStoredHeader(evidence.anchorHeader);
         uint64 anchorSlot = evidence.anchorHeader.slot;
@@ -487,6 +531,27 @@ contract BridgeVault is ReentrancyGuard {
     /// @notice The validated block hash positions and their slot ranges.
     function bodyLayouts() external view returns (BodyLayout[] memory) {
         return _bodyLayouts;
+    }
+
+    // ------------------------------------------------------------------ position rules
+
+    /// @dev Whether `gindex` is field `fieldIndex` of a `BeaconState` tree of depth 5, 6 or 7: `2**depth + fieldIndex`.
+    function _isStateFieldPosition(uint256 gindex, uint256 fieldIndex) private pure returns (bool) {
+        uint256 depth = SSZ.depthOf(gindex);
+        if (depth < MIN_STATE_DEPTH || depth > MAX_STATE_DEPTH) return false;
+        return gindex == (uint256(1) << depth) + fieldIndex;
+    }
+
+    /// @dev Whether `gindex` is `ExecutionPayload.block_hash` inside `BeaconBlockBody.execution_payload`:
+    /// `(2**bodyDepth + 9) * 2**payloadDepth + 12`, with both depths in 4 to 5.
+    function _isBlockHashPosition(uint256 gindex) private pure returns (bool) {
+        for (uint256 bodyDepth = MIN_BODY_DEPTH; bodyDepth <= MAX_BODY_DEPTH; bodyDepth++) {
+            uint256 payloadField = (uint256(1) << bodyDepth) + EXECUTION_PAYLOAD_FIELD;
+            for (uint256 payloadDepth = MIN_PAYLOAD_DEPTH; payloadDepth <= MAX_PAYLOAD_DEPTH; payloadDepth++) {
+                if (gindex == (payloadField << payloadDepth) + BLOCK_HASH_FIELD) return true;
+            }
+        }
+        return false;
     }
 
     // ------------------------------------------------------------------ withdrawal checks
@@ -619,9 +684,14 @@ contract BridgeVault is ReentrancyGuard {
         bytes memory status = RLPReader.readBytes(fields[0]);
         if (status.length != 1 || status[0] != 0x01) revert ReceiptFailed();
 
-        RLPReader.RLPItem[] memory logs = RLPReader.readList(fields[3]);
-        if (logIndex >= logs.length) revert LogIndexOutOfRange(logIndex, logs.length);
-        RLPReader.RLPItem[] memory logFields = RLPReader.readList(logs[logIndex]);
+        (bool logFound, RLPReader.RLPItem memory log, uint256 logCount) = ReceiptLogs.itemAt(fields[3], logIndex);
+        if (!logFound) revert LogIndexOutOfRange(logIndex, logCount);
+        return _decodeLog(log);
+    }
+
+    /// @dev Checks the emitter and the topics of one log, then decodes its fields.
+    function _decodeLog(RLPReader.RLPItem memory log) private view returns (Deposit memory found) {
+        RLPReader.RLPItem[] memory logFields = RLPReader.readList(log);
         if (logFields.length != 3) revert MalformedLog();
 
         bytes memory emitter = RLPReader.readBytes(logFields[0]);
@@ -636,10 +706,10 @@ contract BridgeVault is ReentrancyGuard {
         if (topics.length != 4) revert MalformedLog();
 
         bytes memory data = RLPReader.readBytes(logFields[2]);
-        if (data.length != 96) revert MalformedLog();
+        if (data.length != 128) revert MalformedLog();
         found.token = _toAddress(RLPReader.readBytes(topics[1]));
         found.recipient = _toAddress(RLPReader.readBytes(topics[3]));
-        (found.amount, found.nonce, found.targetChainId) = _decodeData(data);
+        (found.amount, found.nonce, found.targetChainId, found.destinationVault) = _decodeData(data);
     }
 
     /// @dev Strips the EIP-2718 type byte. Legacy receipts start with a list prefix (at least 0xc0).
@@ -655,11 +725,18 @@ contract BridgeVault is ReentrancyGuard {
         return payload;
     }
 
-    function _decodeData(bytes memory data) private pure returns (uint256 amount, bytes32 nonce, uint64 target) {
+    function _decodeData(bytes memory data)
+        private
+        pure
+        returns (uint256 amount, bytes32 nonce, uint64 target, address destinationVault)
+    {
         uint256 targetWide;
-        (amount, nonce, targetWide) = abi.decode(data, (uint256, bytes32, uint256));
+        uint256 destinationWide;
+        (amount, nonce, targetWide, destinationWide) = abi.decode(data, (uint256, bytes32, uint256, uint256));
         if (targetWide > type(uint64).max) revert MalformedLog();
+        if (destinationWide > type(uint160).max) revert MalformedLog();
         target = uint64(targetWide);
+        destinationVault = address(uint160(destinationWide));
     }
 
     function _toBytes32(bytes memory value) private pure returns (bytes32) {
