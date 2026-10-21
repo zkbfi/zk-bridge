@@ -408,9 +408,9 @@ pub fn try_parse_state(bytes: &[u8]) -> Result<ParsedState> {
         checkpoint_root(f[19]),
         checkpoint_root(f[20]),
         packed_list_root(f[21], (1u64 << 40) * 8, (f[21].len() / 8) as u64),
-        committee_roots.0.hash_tree_root().expect("committee root"),
-        committee_roots.1.hash_tree_root().expect("committee root"),
-        payload.hash_tree_root(ExecutionHeaderForm::Capella).expect("payload header root"),
+        committee_roots.0.hash_tree_root()?,
+        committee_roots.1.hash_tree_root()?,
+        payload.hash_tree_root(ExecutionHeaderForm::Capella)?,
         u64_chunk(le_u64(f[25])),
         u64_chunk(le_u64(f[26])),
         list_root(&summaries, 1 << 24),
@@ -608,7 +608,7 @@ pub fn try_parse_signed_block(bytes: &[u8]) -> Result<ParsedBlock> {
         list_root(&deposits, 16),
         list_root(&exits, 16),
         sync_aggregate,
-        payload.hash_tree_root(ExecutionHeaderForm::Capella).expect("payload root"),
+        payload.hash_tree_root(ExecutionHeaderForm::Capella)?,
         list_root(&changes, 16),
     ];
     // The Capella body has 11 fields (randao_reveal ... bls_to_execution_changes). Field 9 is execution_payload.
@@ -733,5 +733,20 @@ mod tests {
         is_malformed(try_parse_state(&[]), "fixed part");
         is_malformed(try_parse_signed_block(&[0xff; 100]), "");
         is_malformed(try_parse_sync_committee(&[0; 3]), "sync committee");
+    }
+
+    /// Claim: a payload header with `extra_data` longer than 32 bytes fails to hash with an error, not a panic.
+    /// Why it matters: `try_parse_state` and `try_parse_signed_block` hash the payload header with `?`, so a hostile
+    /// beacon node that serves 33 bytes of `extra_data` gets an error back and cannot crash the prover.
+    #[test]
+    fn oversized_extra_data_is_an_error() {
+        // Fixed part of a Capella payload header: 404 + 4 × 8 + 4 (offset) + 4 × 32 = 568 bytes.
+        let fixed_size = 568u32;
+        let mut bytes = vec![0u8; fixed_size as usize];
+        bytes[436..440].copy_from_slice(&fixed_size.to_le_bytes());
+        let control = try_parse_payload_header(&[bytes.clone(), vec![7; 32]].concat()).expect("32 bytes parse");
+        assert!(control.hash_tree_root(ExecutionHeaderForm::Capella).is_ok());
+        let header = try_parse_payload_header(&[bytes, vec![7; 33]].concat()).expect("the layout parses");
+        assert!(header.hash_tree_root(ExecutionHeaderForm::Capella).is_err());
     }
 }

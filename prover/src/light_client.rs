@@ -384,7 +384,9 @@ impl StateView {
     /// `Error::Malformed` when the bytes are not a state. `Error::Beacon` when the layout is not Capella.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         let state =
-            try_parse_state(bytes).map_err(|error| Error::Malformed(format!("beacon state: {error}")))?;
+            // The parser returns errors for malformed input; `guarded` stays as a second line of defence.
+            guarded("beacon state", || try_parse_state(bytes))?
+                .map_err(|error| Error::Malformed(format!("beacon state: {error}")))?;
         if state.field_roots.len() != CAPELLA_STATE_FIELDS {
             return Err(Error::Beacon(format!(
                 "the state has {} fields; only the Capella layout (28 fields) is supported",
@@ -512,7 +514,8 @@ impl BlockView {
     /// `Error::Malformed` when the bytes are not a supported block.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         let block =
-            try_parse_signed_block(bytes).map_err(|error| Error::Malformed(format!("beacon block: {error}")))?;
+            guarded("beacon block", || try_parse_signed_block(bytes))?
+                .map_err(|error| Error::Malformed(format!("beacon block: {error}")))?;
         guarded("beacon block", || {
             let (_, execution_branch) = branch_for_leaf(&block.body_field_roots, BODY_FIELD_EXECUTION_PAYLOAD);
             let leaves = block
@@ -700,6 +703,23 @@ impl DevState {
     /// Branch for `block_roots[slot % 8192]`.
     pub fn ancestry_branch(&self, slot: u64) -> Vec<B256> {
         self.builder.block_roots_branch(slot)
+    }
+
+    /// Makes `historical_summaries` hold `count` entries and sets `block_roots[slot % 8192]` of the era at list position
+    /// `index` to `root`. The tests use it to build the historical ancestry path. Other slots of that era hold filler.
+    ///
+    /// # Panics
+    /// Panics when `index >= count`.
+    pub fn set_historical_root(&mut self, count: usize, index: usize, slot: u64, root: B256) {
+        self.builder.set_historical_block_root(count, index, slot, root);
+    }
+
+    /// Branch for the historical path of `slot`, in the era at list position `index`.
+    ///
+    /// # Panics
+    /// Panics when no root was set in that era (see [`DevState::set_historical_root`]).
+    pub fn historical_branch(&self, index: usize, slot: u64) -> Vec<B256> {
+        self.builder.historical_ancestry_branch(index, slot)
     }
 }
 
