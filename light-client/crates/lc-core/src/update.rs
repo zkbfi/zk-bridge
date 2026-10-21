@@ -5,7 +5,16 @@
 //! - at least 342 of 512 members sign (the specification only asks for one in `validate`, and asks for two thirds in
 //!   `process_light_client_update`; the bridge always needs two thirds);
 //! - the update must carry a finalized header and the head must strictly advance;
-//! - the signature binds to the chain through the genesis validators root and the fork version.
+//! - the signature binds to the chain through the genesis validators root and the fork version;
+//! - the signing committee is always public: the stored current committee (`previousSyncCommitteeHash`), or the
+//!   committee named by `syncCommitteeHash` when the finalized header crosses into the next period. An update signed in
+//!   the next period but finalized in the stored period is refused (`SignatureInNextPeriodWithoutCrossing`);
+//! - `nextSyncCommitteeHash` is the root of a next committee that this update proved, else zero. The private store
+//!   may know a next committee, but the output never reports it.
+//!
+//! The contract rule behind this: when the new period is `headPeriod + 1`, the contract requires
+//! `syncCommittees[headPeriod + 1]` to be non-zero and equal to `syncCommitteeHash`. It fills an empty next slot only
+//! from a non-zero `nextSyncCommitteeHash`.
 //!
 //! The wall clock check `current_slot >= signature_slot` of the specification cannot run inside a proof (no clock).
 //! It adds nothing: a real signature cannot come from the future.
@@ -168,6 +177,13 @@ pub fn verify_with_layout(
     if signature_period != store_period && signature_period != store_period + 1 {
         return Err(Error::PeriodOutOfRange("the signature is more than one period past the stored head"));
     }
+    // The store is private input. The output binds only its current committee (previousSyncCommitteeHash). A signature
+    // by the stored NEXT committee is safe only when the output exposes that committee as syncCommitteeHash, and that
+    // happens only when the finalized header crosses into the next period. Otherwise an attacker could sign with an
+    // invented next committee that nothing public names.
+    if signature_period == store_period + 1 && new_period == store_period {
+        return Err(Error::SignatureInNextPeriodWithoutCrossing);
+    }
     if (new_period == store_period + 1 || signature_period == store_period + 1) && store.next_sync_committee.is_none() {
         return Err(Error::NextSyncCommitteeUnknown);
     }
@@ -207,7 +223,8 @@ pub fn verify_with_layout(
         }
     }
 
-    // The signing committee: the stored current one, or the stored next one after a period change.
+    // The signing committee: the stored current one (bound by previousSyncCommitteeHash), or, after a period crossing,
+    // the stored next one (exposed as syncCommitteeHash). The check above rules out any other case.
     let signing_committee = if signature_period == store_period {
         &store.current_sync_committee
     } else {
@@ -230,11 +247,11 @@ pub fn verify_with_layout(
     };
     let new_committee_hash =
         if new_period == store_period { previous_committee_hash } else { new_committee.hash_tree_root()? };
-    let carried_next_hash = match (new_period == store_period, &store.next_sync_committee) {
-        (true, Some(known)) => Some(known.hash_tree_root()?),
-        _ => None,
-    };
-    let next_hash = proven_next_hash.or(carried_next_hash).unwrap_or(B256::ZERO);
+    // nextSyncCommitteeHash is non-zero only when THIS update proves the next committee against the attested state.
+    // The stored next committee is private and unbound, so it must never reach this field. The contract relies on:
+    // when the new period is headPeriod + 1 it requires syncCommittees[headPeriod + 1] to be non-zero and equal to
+    // syncCommitteeHash, and it fills an empty next slot only from a non-zero nextSyncCommitteeHash.
+    let next_hash = proven_next_hash.unwrap_or(B256::ZERO);
 
     let output = LightClientOutput {
         genesisValidatorsRoot: spec.genesis_validators_root,

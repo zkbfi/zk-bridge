@@ -35,6 +35,9 @@ pub enum Error {
     NotFinalizedProgress(&'static str),
     /// The signature period or the new head period lies outside the allowed window.
     PeriodOutOfRange(&'static str),
+    /// The signature period is the period after the stored head, but the finalized header stays in the stored period.
+    /// The signing committee would be the private next committee of the store, which no output field binds.
+    SignatureInNextPeriodWithoutCrossing,
     /// The store has no next sync committee but the update needs it.
     NextSyncCommitteeUnknown,
     /// The next sync committee in the update differs from the one in the store.
@@ -114,6 +117,10 @@ impl fmt::Display for Error {
             }
             Self::NotFinalizedProgress(reason) => write!(formatter, "update does not advance the finalized head: {reason}"),
             Self::PeriodOutOfRange(reason) => write!(formatter, "sync committee period out of range: {reason}"),
+            Self::SignatureInNextPeriodWithoutCrossing => write!(
+                formatter,
+                "the signature period is after the stored head period but the finalized header does not cross into it"
+            ),
             Self::NextSyncCommitteeUnknown => write!(formatter, "the store does not know the next sync committee"),
             Self::NextSyncCommitteeMismatch => write!(formatter, "update next sync committee differs from the store"),
             Self::InvalidFinalityBranch => write!(formatter, "finality branch does not match the attested state root"),
@@ -169,6 +176,7 @@ impl Error {
             Self::LogTopicMismatch => "LogTopicMismatch",
             Self::LogDecode(_) => "LogDecode",
             Self::TargetChainMismatch { .. } => "TargetChainMismatch",
+            Self::SignatureInNextPeriodWithoutCrossing => "SignatureInNextPeriodWithoutCrossing",
             _ => "LightClientUpdateRejected",
         }
     }

@@ -7,6 +7,7 @@
 use alloy_primitives::B256;
 use lc_core::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN};
 use lc_core::layout::{state_layout_for_fork, StateLayout, CAPELLA_DENEB_STATE_LAYOUT, ELECTRA_STATE_LAYOUT};
+use lc_core::types::{compute_signing_root, sync_committee_domain};
 use lc_core::types::{LightClientStore, LightClientUpdate};
 use lc_core::update::{
     advance_light_client_store, table_fork_version, verify_light_client_update,
@@ -15,7 +16,9 @@ use lc_core::update::{
 use lc_core::Error;
 use lc_testkit::json::{bootstrap, light_client_update, load_response, store_from_bootstrap};
 use lc_testkit::pulsechain::real_update_and_store;
-use lc_testkit::synthetic::{build_update, UpdateRecipe, UpdateScenario};
+use lc_testkit::synthetic::{
+    build_update, make_committee, sign_with_first_members, TestCommittee, UpdateRecipe, UpdateScenario,
+};
 
 fn flip(node: &mut B256) {
     node.0[0] ^= 0x01;
@@ -435,5 +438,82 @@ fn real_updates_run_through_the_guest_entry_point() {
         let mut wrong_chain = bytes.clone();
         wrong_chain[0] = if chain == ChainSelector::Pulsechain { 1 } else { 2 };
         assert!(run_light_client_guest(&wrong_chain).is_err(), "the other chain's configuration");
+    }
+}
+
+/// Signs the update of a scenario with `signer` instead of the committee the builder chose.
+fn resign(scenario: &mut UpdateScenario, signer: &TestCommittee) {
+    let domain = sync_committee_domain(scenario.spec, scenario.update.signature_slot);
+    let signing_root = compute_signing_root(&scenario.update.attested_header.beacon.hash_tree_root(), &domain);
+    scenario.update.sync_aggregate = sign_with_first_members(signer, 400, &signing_root);
+}
+
+/// A scenario whose store holds an invented next committee and whose update is signed by that committee in the next period.
+/// `finalized_in_next_period` chooses whether the finalized header crosses into the next period.
+fn attacker_next_committee_scenario(
+    spec: &'static ChainSpec,
+    base: UpdateRecipe,
+    attacker: &TestCommittee,
+    finalized_in_next_period: bool,
+) -> UpdateScenario {
+    let period_start = (spec.period_at_slot(base.store_slot) + 1) * 8192;
+    let (finalized_slot, attested_slot) = if finalized_in_next_period {
+        (period_start + 64, period_start + 130)
+    } else {
+        (base.store_slot + 1000, period_start - 6)
+    };
+    let recipe = UpdateRecipe {
+        finalized_slot,
+        attested_slot,
+        signature_slot: attested_slot.max(period_start) + 1,
+        include_next_committee: false,
+        store_knows_next_committee: true,
+        ..base
+    };
+    let mut scenario = build_update(spec, recipe);
+    scenario.store.next_sync_committee = Some(attacker.committee.clone());
+    resign(&mut scenario, attacker);
+    scenario
+}
+
+/// Claim: a signature by the store's private next committee is refused unless the finalized header crosses into the
+/// next period. Why it matters: the output binds only the current committee, so an invented next committee would
+/// otherwise sign an update and nothing public would name it. With the crossing, `syncCommitteeHash` is the attacker
+/// committee hash, which the contract checks against `syncCommittees[headPeriod + 1]`.
+#[test]
+fn synthetic_signature_by_unbound_next_committee_needs_a_crossing() {
+    let attacker = make_committee("attacker-next-committee");
+    for (spec, base) in [(&PULSECHAIN, pulsechain_recipe()), (&ETHEREUM_MAINNET, ethereum_recipe())] {
+        let attack = attacker_next_committee_scenario(spec, base, &attacker, false);
+        assert_eq!(verify(&attack, &attack.update), Err(Error::SignatureInNextPeriodWithoutCrossing));
+        assert_eq!(Error::SignatureInNextPeriodWithoutCrossing.reason_code(), "SignatureInNextPeriodWithoutCrossing");
+
+        let control = attacker_next_committee_scenario(spec, base, &attacker, true);
+        let output = verify(&control, &control.update).expect("crossing update verifies");
+        assert_eq!(output.syncCommitteeHash, attacker.committee.hash_tree_root().unwrap());
+        assert_ne!(output.syncCommitteeHash, output.previousSyncCommitteeHash);
+    }
+}
+
+/// Claim: `nextSyncCommitteeHash` is zero when the update does not prove a next committee, even if the private store
+/// knows one. Why it matters: the contract fills an empty next slot from a non-zero value, so an unproven value would
+/// let the prover choose the next committee of the contract.
+#[test]
+fn synthetic_next_committee_hash_is_zero_unless_this_update_proves_it() {
+    for (spec, base) in [(&PULSECHAIN, pulsechain_recipe()), (&ETHEREUM_MAINNET, ethereum_recipe())] {
+        let proven =
+            build_update(spec, UpdateRecipe { store_knows_next_committee: true, include_next_committee: true, ..base });
+        let output = verify(&proven, &proven.update).expect("control verifies");
+        let committee_root = proven.update.next_sync_committee.as_ref().unwrap().committee.hash_tree_root().unwrap();
+        assert_ne!(committee_root, B256::ZERO);
+        assert_eq!(output.nextSyncCommitteeHash, committee_root);
+
+        let unproven = build_update(
+            spec,
+            UpdateRecipe { store_knows_next_committee: true, include_next_committee: false, ..base },
+        );
+        assert!(unproven.store.next_sync_committee.is_some());
+        let output = verify(&unproven, &unproven.update).expect("update without next committee verifies");
+        assert_eq!(output.nextSyncCommitteeHash, B256::ZERO);
     }
 }
