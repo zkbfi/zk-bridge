@@ -824,17 +824,17 @@ contract BridgeVault is ReentrancyGuard {
         _decodeData(data, found);
     }
 
-    /// @dev Strips the EIP-2718 type byte. Legacy receipts start with a list prefix (at least 0xc0).
-    function _receiptPayload(bytes memory receipt) private pure returns (bytes memory) {
+    /// @dev Strips the EIP-2718 type byte. Legacy receipts start with a list prefix (at least 0xc0). The result is an
+    /// RLP item that points one byte into the receipt, so no byte is copied. A receipt of only a type byte gives an
+    /// item of length zero, which the reader refuses.
+    function _receiptPayload(bytes memory receipt) internal pure returns (RLPReader.RLPItem memory payload) {
         if (receipt.length == 0) revert MalformedReceipt();
         uint8 first = uint8(receipt[0]);
-        if (first >= 0xc0) return receipt;
+        payload = RLPReader.toRLPItem(receipt);
+        if (first >= 0xc0) return payload;
         if (first < 0x01 || first > 0x04) revert MalformedReceipt();
-        bytes memory payload = new bytes(receipt.length - 1);
-        for (uint256 i = 0; i < payload.length; i++) {
-            payload[i] = receipt[i + 1];
-        }
-        return payload;
+        payload.length -= 1;
+        payload.ptr = RLPReader.MemoryPointer.wrap(RLPReader.MemoryPointer.unwrap(payload.ptr) + 1);
     }
 
     /// @dev Decodes the five data words into `found`: amount, nonce, target chain, destination vault, destination token.
