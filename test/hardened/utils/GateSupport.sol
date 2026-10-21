@@ -80,7 +80,7 @@ abstract contract GateSupport is WithdrawalScenes {
         BeaconForkGate.SupportedVersion[] memory versions,
         uint8[] memory depths
     ) internal returns (BeaconForkGate) {
-        return new BeaconForkGate(BEACON_ROOTS, mode, ETHEREUM_GENESIS, 12, 32, versions, depths);
+        return new BeaconForkGate(BEACON_ROOTS, mode, ETHEREUM_GENESIS, 12, 32, versions, depths, address(0));
     }
 
     function _oneVersion(bytes4 version, uint8 depth) internal pure returns (BeaconForkGate.SupportedVersion[] memory out) {

@@ -6,6 +6,7 @@ import {DeployBridge} from "../../script/hardened/DeployBridge.s.sol";
 import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
 import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
 import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
+import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
 import {OracleSP1Verifier} from "../../src/mocks/OracleSP1Verifier.sol";
 import {MockERC20} from "../../src/mocks/MockERC20.sol";
 
@@ -69,7 +70,23 @@ contract DeployBridgeTest is Test {
             '","initialSyncCommitteeHash":"', _hexString(keccak256("committee")),
             '","initialNextSyncCommitteeHash":"', _hexString(keccak256("next committee")), '"},'
         );
-        return string.concat(head, client, checkpoint, chainId == 1 ? _ethereumGate() : _pulsechainGate(), "}");
+        return string.concat(
+            head, client, checkpoint, chainId == 1 ? _ethereumGate() : string.concat(_pulsechainGate(), _observationJson(slot)), "}"
+        );
+    }
+
+    /// @dev The own-chain light client and the registry settings of PulseChain. Its genesis validators root and period
+    /// length are those that the light client of chain 1 tracks (the PulseChain beacon chain).
+    function _observationJson(string memory slot) internal pure returns (string memory) {
+        return string.concat(
+            ',"observation":{"lightClientProgramVKey":"', _hexString(keccak256("light client program")),
+            '","observationProgramVKey":"', _hexString(keccak256("fork observation program")),
+            '","genesisValidatorsRoot":"', _hexString(keccak256(abi.encode("genesis", uint64(1)))),
+            '","slotsPerPeriod":"8192","initialSlot":"', slot,
+            '","initialHeaderRoot":"', _hexString(keccak256("own header")),
+            '","initialSyncCommitteeHash":"', _hexString(keccak256("own committee")),
+            '","initialNextSyncCommitteeHash":"', _hexString(keccak256("own next committee")), '"}'
+        );
     }
 
     function _ethereumCapella() internal pure returns (string memory) {
@@ -89,7 +106,7 @@ contract DeployBridgeTest is Test {
 
     function _pulsechainGate() internal pure returns (string memory) {
         return string.concat(
-            '"gate":{"mode":"DetectBeaconRoots","genesisTime":"1683785555","secondsPerSlot":"10","slotsPerEpoch":"32",',
+            '"gate":{"mode":"DetectBeaconRootsAndRegistry","genesisTime":"1683785555","secondsPerSlot":"10","slotsPerEpoch":"32",',
             '"supportedVersions":', PULSECHAIN_VERSIONS, ',"sealDepths":', SEAL_DEPTHS, "}"
         );
     }
@@ -132,6 +149,8 @@ contract DeployBridgeTest is Test {
             config.tokensA,
             decimalsA
         );
+        deploymentA = script.withRegistry(deploymentA, plan.observedLightClientA, plan.registryA);
+        deploymentB = script.withRegistry(deploymentB, plan.observedLightClientB, plan.registryB);
     }
 
     /// @dev Puts code at the beacon roots address, as an Ethereum node has it.
@@ -177,7 +196,13 @@ contract DeployBridgeTest is Test {
         assertEq(config.chainA.gate.sealDepths[0], 5);
         assertEq(config.chainA.gate.sealDepths[2], 7);
 
-        assertEq(uint8(config.chainB.gate.mode), uint8(BeaconForkGate.GateMode.DetectBeaconRoots));
+        assertEq(uint8(config.chainB.gate.mode), uint8(BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry));
+        assertEq(config.chainB.observation.genesisValidatorsRoot, config.chainA.lightClient.genesisValidatorsRoot);
+        assertEq(config.chainB.observation.slotsPerPeriod, 8192);
+        assertEq(config.chainB.observation.initialSlot, 819264);
+        assertEq(config.chainB.observation.observationProgramVKey, keccak256("fork observation program"));
+        assertEq(config.chainB.observation.lightClientProgramVKey, keccak256("light client program"));
+        assertEq(config.chainA.observation.observationProgramVKey, bytes32(0), "Ethereum has no registry");
         assertEq(config.chainB.gate.genesisTime, 1_683_785_555);
         assertEq(config.chainB.gate.secondsPerSlot, 10);
         assertEq(config.chainB.gate.supportedVersions.length, 1);
@@ -225,6 +250,15 @@ contract DeployBridgeTest is Test {
             string memory removed = string.concat(chains[c], ".lightClient.slotsPerHistoricalRoot");
             assertFalse(vm.keyExistsJson(json, removed), "the removed key is still in the example");
         }
+        string[8] memory observationKeys = [
+            ".lightClientProgramVKey", ".observationProgramVKey", ".genesisValidatorsRoot", ".slotsPerPeriod",
+            ".initialSlot", ".initialHeaderRoot", ".initialSyncCommitteeHash", ".initialNextSyncCommitteeHash"
+        ];
+        for (uint256 k = 0; k < observationKeys.length; k++) {
+            string memory path = string.concat(".chainB.observation", observationKeys[k]);
+            assertTrue(vm.keyExistsJson(json, path), path);
+        }
+        assertFalse(vm.keyExistsJson(json, ".chainA.observation"), "Ethereum has no registry");
         assertTrue(vm.keyExistsJson(json, ".tokenPairs[0].chainA"));
         assertTrue(vm.keyExistsJson(json, ".tokenPairs[0].chainB"));
     }
@@ -365,7 +399,9 @@ contract DeployBridgeTest is Test {
         script.parseConfig(vm.replace(json, '"mode":"Enforcing"', '"mode":"enforcing"'));
 
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.UnknownGateMode.selector, "Detect"));
-        script.parseConfig(vm.replace(json, '"mode":"DetectBeaconRoots"', '"mode":"Detect"'));
+        script.parseConfig(vm.replace(json, '"mode":"DetectBeaconRootsAndRegistry"', '"mode":"Detect"'));
+        // control: a PulseChain gate in plain detection mode needs no observation block
+        script.parseConfig(vm.replace(json, '"mode":"DetectBeaconRootsAndRegistry"', '"mode":"DetectBeaconRoots"'));
 
         script.parseConfig(json); // honest
     }
@@ -471,8 +507,12 @@ contract DeployBridgeTest is Test {
         assertEq(plan.gateA, vm.computeCreateAddress(deployer, NONCE_A + 1));
         assertEq(plan.vaultA, vm.computeCreateAddress(deployer, NONCE_A + 2));
         assertEq(plan.lightClientB, vm.computeCreateAddress(deployer, NONCE_B));
-        assertEq(plan.gateB, vm.computeCreateAddress(deployer, NONCE_B + 1));
-        assertEq(plan.vaultB, vm.computeCreateAddress(deployer, NONCE_B + 2));
+        assertEq(plan.observedLightClientA, address(0), "Ethereum has no own-chain light client");
+        assertEq(plan.registryA, address(0), "Ethereum has no registry");
+        assertEq(plan.observedLightClientB, vm.computeCreateAddress(deployer, NONCE_B + 1));
+        assertEq(plan.registryB, vm.computeCreateAddress(deployer, NONCE_B + 2));
+        assertEq(plan.gateB, vm.computeCreateAddress(deployer, NONCE_B + 3));
+        assertEq(plan.vaultB, vm.computeCreateAddress(deployer, NONCE_B + 4));
         (DeployBridge.ChainDeployment memory deploymentA, DeployBridge.ChainDeployment memory deploymentB) =
             _deployments(config, plan);
 
@@ -494,7 +534,18 @@ contract DeployBridgeTest is Test {
         assertEq(lightClientB, plan.lightClientB);
         assertEq(gateB, plan.gateB);
         assertEq(vaultB, plan.vaultB);
-        assertEq(vm.getNonce(deployer), NONCE_B + 3, "three contracts left the deployer on chain B");
+        assertEq(vm.getNonce(deployer), NONCE_B + 5, "five contracts left the deployer on chain B");
+
+        // PulseChain: the gate reads a registry, the registry reads a light client of PulseChain on PulseChain
+        ForkRegistry registryB = ForkRegistry(address(BeaconForkGate(gateB).forkRegistry()));
+        assertEq(address(registryB), plan.registryB);
+        assertEq(address(registryB.lightClient()), plan.observedLightClientB);
+        assertTrue(plan.observedLightClientB != lightClientB, "the own-chain light client is not the light client of Ethereum");
+        assertEq(BeaconLightClient(plan.observedLightClientB).genesisValidatorsRoot(), BeaconLightClient(lightClientA).genesisValidatorsRoot(), "both follow the PulseChain beacon chain");
+        assertEq(registryB.observationProgramVKey(), keccak256("fork observation program"));
+        assertTrue(registryB.observationProgramVKey() != BeaconLightClient(plan.observedLightClientB).programVKey());
+        assertEq(address(registryB.verifier()), address(verifier));
+        assertEq(address(BeaconForkGate(gateA).forkRegistry()), address(0), "Ethereum stays enforcing with no registry");
 
         assertEq(BridgeVault(vaultA).remoteVault(), vaultB, "vault A points at the real vault B");
         assertEq(BridgeVault(vaultB).remoteVault(), vaultA, "vault B points at the real vault A");
@@ -508,9 +559,9 @@ contract DeployBridgeTest is Test {
         assertEq(BeaconLightClient(lightClientB).head(), 819264);
 
         assertTrue(BeaconForkGate(gateA).enforcing(), "the Ethereum gate enforces from deployment");
-        assertFalse(BeaconForkGate(gateB).enforcing(), "the PulseChain gate waits for a beacon root");
+        assertFalse(BeaconForkGate(gateB).enforcing(), "the PulseChain gate waits for a beacon root or a canary");
         assertEq(uint8(BeaconForkGate(gateA).mode()), uint8(BeaconForkGate.GateMode.Enforcing));
-        assertEq(uint8(BeaconForkGate(gateB).mode()), uint8(BeaconForkGate.GateMode.DetectBeaconRoots));
+        assertEq(uint8(BeaconForkGate(gateB).mode()), uint8(BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry));
         assertEq(BeaconForkGate(gateA).secondsPerSlot(), 12);
         assertEq(BeaconForkGate(gateB).secondsPerSlot(), 10);
         assertEq(BeaconForkGate(gateA).supportedVersions().length, 4);
@@ -626,7 +677,7 @@ contract DeployBridgeTest is Test {
 
     function _newGateFrom(DeployBridge.GateConfig memory g) internal returns (BeaconForkGate) {
         return new BeaconForkGate(
-            BEACON_ROOTS, g.mode, g.genesisTime, g.secondsPerSlot, g.slotsPerEpoch, g.supportedVersions, g.sealDepths
+            BEACON_ROOTS, g.mode, g.genesisTime, g.secondsPerSlot, g.slotsPerEpoch, g.supportedVersions, g.sealDepths, address(0)
         );
     }
 
@@ -837,5 +888,93 @@ contract DeployBridgeTest is Test {
         }
         deploymentA.predictedVault = vault;
         script.verifyDeployment(deploymentA, lightClient, gate, vault); // honest
+    }
+
+    // ================================================================ the fork registry on PulseChain
+
+    function _deploymentB(DeployBridge.BridgeConfig memory config, DeployBridge.Plan memory plan)
+        internal
+        view
+        returns (DeployBridge.ChainDeployment memory deploymentB)
+    {
+        (, deploymentB) = _deployments(config, plan);
+    }
+
+    /// Claim: the registry settings are checked against the other chain, not only read. Shows: a genesis validators
+    /// root, a period length or a key that does not fit each revert `ObservationMismatch` with the field; a placeholder
+    /// reverts `PlaceholderValue`; the honest file parses. Matters: HB-02 on PulseChain. The own-chain light client
+    /// must follow the same beacon chain as the Ethereum-side light client, or the registry would record versions of
+    /// another chain. An observation key equal to the light-client key would let the two kinds of proof be swapped.
+    function test_HB02_parseConfig_checksTheObservationAgainstTheOtherChain() public {
+        string memory json = _validJson();
+        string memory honestRoot = _hexString(keccak256(abi.encode("genesis", uint64(1))));
+        string memory otherRoot = _hexString(keccak256("another chain"));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployBridge.ObservationMismatch.selector, "genesisValidatorsRoot differs from the other chain's light client"
+            )
+        );
+        script.parseConfig(vm.replace(json, string.concat('"genesisValidatorsRoot":"', honestRoot, '","slotsPerPeriod":"8192","initialSlot"'), string.concat('"genesisValidatorsRoot":"', otherRoot, '","slotsPerPeriod":"8192","initialSlot"')));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployBridge.ObservationMismatch.selector, "slotsPerPeriod differs from the other chain's light client"
+            )
+        );
+        script.parseConfig(vm.replace(json, '"slotsPerPeriod":"8192","initialSlot"', '"slotsPerPeriod":"4096","initialSlot"'));
+
+        string memory sameKey = _hexString(keccak256("light client program"));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployBridge.ObservationMismatch.selector, "observationProgramVKey equals lightClientProgramVKey"
+            )
+        );
+        script.parseConfig(vm.replace(json, _hexString(keccak256("fork observation program")), sameKey));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainB.observation.observationProgramVKey")
+        );
+        script.parseConfig(vm.replace(json, _hexString(keccak256("fork observation program")), "REPLACE_WITH_KEY"));
+
+        script.parseConfig(json); // honest
+    }
+
+    /// Claim: after deployment the script reads the registry and the own-chain light client back and compares each
+    /// with the configuration and the prediction. Shows: with an honest chain B deployment the read-back passes; a
+    /// wrong observation key, a wrong predicted registry, a wrong own-chain genesis root and a registry on an
+    /// Ethereum-mode chain each revert. Matters: the registry is the only thing that closes a consensus-only fork on
+    /// PulseChain. A registry wired to the wrong light client or the wrong key would give a false sense of cover.
+    function test_HB02_postDeployAssertionsCatchAWrongRegistry() public {
+        DeployBridge.BridgeConfig memory config = script.parseConfig(_validJson());
+        DeployBridge.Plan memory plan = script.predictAddresses(config);
+        (, DeployBridge.ChainDeployment memory deploymentB) = _deployments(config, plan);
+        _etchBeaconRoots();
+        vm.chainId(369);
+        vm.setNonce(deployer, uint64(NONCE_B));
+        (, address gateB,) = script.deployChain(deploymentB);
+        script.verifyRegistry(deploymentB, gateB); // honest
+
+        DeployBridge.ChainDeployment memory wrong = _deploymentB(config, plan);
+        wrong.chain.observation.observationProgramVKey = keccak256("another key");
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "registry.observationProgramVKey"));
+        script.verifyRegistry(wrong, gateB);
+
+        wrong = _deploymentB(config, plan);
+        wrong.predictedRegistry = makeAddr("elsewhere");
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.AddressNotAsPredicted.selector, "forkRegistry", wrong.predictedRegistry, plan.registryB)
+        );
+        script.verifyRegistry(wrong, gateB);
+
+        wrong = _deploymentB(config, plan);
+        wrong.chain.observation.genesisValidatorsRoot = keccak256("another chain");
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "observed.genesisValidatorsRoot"));
+        script.verifyRegistry(wrong, gateB);
+
+        wrong = _deploymentB(config, plan);
+        wrong.chain.gate.mode = BeaconForkGate.GateMode.Enforcing;
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "gate.forkRegistry must be empty"));
+        script.verifyRegistry(wrong, gateB);
     }
 }

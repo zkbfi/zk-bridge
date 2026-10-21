@@ -63,19 +63,19 @@ contract BeaconForkGateTest is GateSupport {
         BeaconForkGate.GateMode mode = BeaconForkGate.GateMode.Enforcing;
 
         vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.ZeroValue.selector, "beaconRoots"));
-        new BeaconForkGate(address(0), mode, ETHEREUM_GENESIS, 12, 32, versions, depths);
+        new BeaconForkGate(address(0), mode, ETHEREUM_GENESIS, 12, 32, versions, depths, address(0));
         vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.ZeroValue.selector, "genesisTime"));
-        new BeaconForkGate(BEACON_ROOTS, mode, 0, 12, 32, versions, depths);
+        new BeaconForkGate(BEACON_ROOTS, mode, 0, 12, 32, versions, depths, address(0));
         vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.ZeroValue.selector, "secondsPerSlot"));
-        new BeaconForkGate(BEACON_ROOTS, mode, ETHEREUM_GENESIS, 0, 32, versions, depths);
+        new BeaconForkGate(BEACON_ROOTS, mode, ETHEREUM_GENESIS, 0, 32, versions, depths, address(0));
         vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.ZeroValue.selector, "slotsPerEpoch"));
-        new BeaconForkGate(BEACON_ROOTS, mode, ETHEREUM_GENESIS, 12, 0, versions, depths);
+        new BeaconForkGate(BEACON_ROOTS, mode, ETHEREUM_GENESIS, 12, 0, versions, depths, address(0));
         vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.ZeroValue.selector, "supportedVersions"));
-        new BeaconForkGate(BEACON_ROOTS, mode, ETHEREUM_GENESIS, 12, 32, none, depths);
+        new BeaconForkGate(BEACON_ROOTS, mode, ETHEREUM_GENESIS, 12, 32, none, depths, address(0));
         vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.ZeroValue.selector, "sealDepths"));
-        new BeaconForkGate(BEACON_ROOTS, mode, ETHEREUM_GENESIS, 12, 32, versions, noDepths);
+        new BeaconForkGate(BEACON_ROOTS, mode, ETHEREUM_GENESIS, 12, 32, versions, noDepths, address(0));
 
-        BeaconForkGate control = new BeaconForkGate(BEACON_ROOTS, mode, ETHEREUM_GENESIS, 12, 32, versions, depths);
+        BeaconForkGate control = new BeaconForkGate(BEACON_ROOTS, mode, ETHEREUM_GENESIS, 12, 32, versions, depths, address(0));
         assertEq(control.beaconRoots(), BEACON_ROOTS, "the control deploys with the honest values");
     }
 
@@ -277,7 +277,8 @@ contract BeaconForkGateTest is GateSupport {
             10,
             32,
             _oneVersion(0x0000036c, 5),
-            _depths(5, 6, 7)
+            _depths(5, 6, 7),
+            address(0)
         );
         vm.warp(genesis + 319);
         assertEq(pulse.currentEpoch(), 0);
@@ -918,7 +919,8 @@ contract BeaconForkGateTest is GateSupport {
             10,
             32,
             _oneVersion(0x0000036c, 5),
-            _depths(5, 6, 7)
+            _depths(5, 6, 7),
+            address(0)
         );
         _assertGateEqualsFixtures(pulse, gindices, "pulsechain", "light-client/tests/fixtures/pulsechain/chain_spec.json");
     }
@@ -1030,7 +1032,7 @@ contract BeaconForkGateTest is GateSupport {
         vm.expectEmit(true, false, false, true, address(gate));
         emit ForkConfirmed(EPOCH_E, ELECTRA);
         vm.expectEmit(true, true, true, false, address(vault));
-        emit BridgeVault.DepositInitiated(address(tokenOnA), alice, bob, 2e18, bytes32(0), CHAIN_B);
+        emit BridgeVault.DepositInitiated(address(tokenOnA), alice, bob, 2e18, bytes32(0), CHAIN_B, address(vaultB));
         vault.deposit(address(tokenOnA), bob, 2e18, evidence);
         vault.deposit(address(tokenOnA), bob, 1e18, "");
         vm.stopPrank();
@@ -1083,16 +1085,14 @@ contract BeaconForkGateTest is GateSupport {
         BridgeVault.TokenPair[] memory pairs = new BridgeVault.TokenPair[](1);
         pairs[0] = BridgeVault.TokenPair(address(tokenOnB), ReceiptFixtures.REMOTE_TOKEN, 18);
         vm.chainId(CHAIN_B);
-        BridgeVault vault = new BridgeVault(
-            address(lightClientForB),
-            CHAIN_B,
-            CHAIN_A,
-            ReceiptFixtures.REMOTE_VAULT,
-            pairs,
-            0,
-            DEFAULT_CAPELLA_ERA,
-            address(gate)
+        // The fixture receipts name `DESTINATION_VAULT` as the only vault that may pay them, so the vault under test
+        // is built at that address, with this test's gate.
+        bytes memory arguments = abi.encode(
+            address(lightClientForB), CHAIN_B, CHAIN_A, ReceiptFixtures.REMOTE_VAULT, pairs, uint64(0), DEFAULT_CAPELLA_ERA, address(gate)
         );
+        deployCodeTo("BridgeVault.sol:BridgeVault", arguments, ReceiptFixtures.DESTINATION_VAULT);
+        BridgeVault vault = BridgeVault(ReceiptFixtures.DESTINATION_VAULT);
+        destinationPairs.push(pairs[0]);
         createdVaults.push(vault);
         ReceiptFixtures.Named memory named = ReceiptFixtures.legacy();
         Scene memory scene = _scene(named, _defaultParams());

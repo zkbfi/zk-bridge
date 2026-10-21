@@ -19,7 +19,7 @@
       "initialNextSyncCommitteeHash": "REPLACE_WITH_NEXT_COMMITTEE_HASH_AT_CHECKPOINT"
     },
     "gate": {
-      "mode": "REPLACE_WITH_Enforcing_OR_DetectBeaconRoots",
+      "mode": "REPLACE_WITH_Enforcing_FOR_ETHEREUM",
       "genesisTime": "REPLACE_WITH_GENESIS_TIME_OF_CHAIN_A_BEACON_CHAIN",
       "secondsPerSlot": "REPLACE_WITH_SECONDS_PER_SLOT_OF_CHAIN_A",
       "slotsPerEpoch": "REPLACE_WITH_SLOTS_PER_EPOCH_OF_CHAIN_A",
@@ -51,7 +51,7 @@
       "initialNextSyncCommitteeHash": "REPLACE_WITH_NEXT_COMMITTEE_HASH_AT_CHECKPOINT"
     },
     "gate": {
-      "mode": "REPLACE_WITH_Enforcing_OR_DetectBeaconRoots",
+      "mode": "REPLACE_WITH_DetectBeaconRootsAndRegistry_FOR_PULSECHAIN",
       "genesisTime": "REPLACE_WITH_GENESIS_TIME_OF_CHAIN_B_BEACON_CHAIN",
       "secondsPerSlot": "REPLACE_WITH_SECONDS_PER_SLOT_OF_CHAIN_B",
       "slotsPerEpoch": "REPLACE_WITH_SLOTS_PER_EPOCH_OF_CHAIN_B",
@@ -62,6 +62,16 @@
         }
       ],
       "sealDepths": ["REPLACE_WITH_SEAL_DEPTH_5", "REPLACE_WITH_SEAL_DEPTH_6", "REPLACE_WITH_SEAL_DEPTH_7"]
+    },
+    "observation": {
+      "lightClientProgramVKey": "REPLACE_WITH_LIGHT_CLIENT_PROGRAM_VKEY",
+      "observationProgramVKey": "REPLACE_WITH_FORK_OBSERVATION_PROGRAM_VKEY_DIFFERENT_FROM_THE_LIGHT_CLIENT_KEY",
+      "genesisValidatorsRoot": "REPLACE_WITH_GENESIS_VALIDATORS_ROOT_OF_CHAIN_B_SAME_AS_IN_CHAIN_A_LIGHT_CLIENT",
+      "slotsPerPeriod": "REPLACE_WITH_SLOTS_PER_PERIOD_OF_CHAIN_B",
+      "initialSlot": "REPLACE_WITH_CHECKPOINT_SLOT_OF_CHAIN_B_ON_CHAIN_B",
+      "initialHeaderRoot": "REPLACE_WITH_CHECKPOINT_HEADER_ROOT_OF_CHAIN_B",
+      "initialSyncCommitteeHash": "REPLACE_WITH_COMMITTEE_HASH_AT_CHECKPOINT",
+      "initialNextSyncCommitteeHash": "REPLACE_WITH_NEXT_COMMITTEE_HASH_AT_CHECKPOINT"
     }
   },
   "tokenPairs": [

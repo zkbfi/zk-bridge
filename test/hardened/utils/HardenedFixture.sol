@@ -96,7 +96,7 @@ abstract contract HardenedFixture is HardenedProofs {
         sealDepths[0] = 5;
         sealDepths[1] = 6;
         sealDepths[2] = 7;
-        return new BeaconForkGate(BEACON_ROOTS, mode, 1_606_824_023, 12, 32, versions, sealDepths);
+        return new BeaconForkGate(BEACON_ROOTS, mode, 1_606_824_023, 12, 32, versions, sealDepths, address(0));
     }
 
     // ---------------------------------------------------------------- deposits

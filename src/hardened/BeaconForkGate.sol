@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {IDepositGate} from "./IDepositGate.sol";
+import {IForkRegistry} from "./IForkRegistry.sol";
 import {BeaconBlockHeader, SSZ} from "./SSZ.sol";
 
 /// @title BeaconForkGate
@@ -20,14 +21,33 @@ import {BeaconBlockHeader, SSZ} from "./SSZ.sol";
 /// The generalized index of the version leaf is computed here from the configured depth, never taken from the caller.
 /// If the caller could choose it, a proof of `Fork.previous_version` would pass for the current version.
 ///
-/// The gate is deployed on both chains and avoids `MCOPY`, `TSTORE` and `TLOAD`, because PulseChain rejects them.
+/// A third mode, `DetectBeaconRootsAndRegistry` (PulseChain), adds two things to detection. First, execution canaries:
+/// tiny probe contracts that run one new opcode each (`TSTORE`, `MCOPY`, `BLOBBASEFEE`, `CLZ`), and a call to the first
+/// BLS12-381 precompile. A PulseChain consensus fork almost always arrives with an execution fork, and the first canary
+/// that works switches the gate to enforcing for good. Second, a fork observation registry: while its latest observed
+/// version is not supported, every deposit is refused, and `seal()` with empty evidence closes the gate for good.
+///
+/// The runtime code of the gate avoids `MCOPY`, `TSTORE` and `TLOAD`, because PulseChain rejects them. The probes hold
+/// those opcodes on purpose, as separate contracts that the constructor deploys from raw bytes.
 contract BeaconForkGate is IDepositGate {
     /// @notice The behavior of the gate before it has seen a beacon root.
     enum GateMode {
         /// @dev The rules apply from the first call (Ethereum).
         Enforcing,
         /// @dev The gate admits every deposit until the beacon roots contract answers with a root (PulseChain).
-        DetectBeaconRoots
+        /// Execution canaries also switch it to enforcing.
+        DetectBeaconRoots,
+        /// @dev As `DetectBeaconRoots`, and the gate also refuses while the fork registry shows an unsupported version.
+        DetectBeaconRootsAndRegistry
+    }
+
+    /// @notice The execution canaries, in the order the gate tries them.
+    enum Canary {
+        TransientStorage,
+        MemoryCopy,
+        BlobBaseFee,
+        CountLeadingZeros,
+        Bls12381Precompile
     }
 
     /// @notice A supported fork version and the depth of the `BeaconState` tree in that fork.
@@ -67,6 +87,30 @@ contract BeaconForkGate is IDepositGate {
     /// @dev The position of `fork` among the `BeaconState` fields.
     uint256 private constant FORK_FIELD_INDEX = 3;
 
+    /// @notice The gas forwarded to each opcode probe. A probe needs about 120. A probe that burns all its gas costs
+    /// this much and no more.
+    uint256 public constant PROBE_GAS = 300;
+    /// @notice The gas forwarded to the BLS12-381 precompile canary. `BLS12_G1ADD` costs 375 gas (EIP-2537). The cap
+    /// leaves room for a later repricing and still bounds a mock that burns gas.
+    uint256 public constant PRECOMPILE_GAS = 2_000;
+    /// @notice The address of `BLS12_G1ADD` (EIP-2537, "Specification": G1ADD is 0x0b, G1MSM 0x0c, G2ADD 0x0d,
+    /// G2MSM 0x0e, PAIRING_CHECK 0x0f, MAP_FP_TO_G1 0x10, MAP_FP2_TO_G2 0x11).
+    address public constant BLS_G1_ADD = address(0x0b);
+    /// @notice The word every probe returns.
+    uint256 public constant PROBE_WORD = 1;
+
+    /// @dev Common tail of every probe: `PUSH1 1; PUSH0; MSTORE; PUSH1 0x20; PUSH0; RETURN`. `PUSH0` (0x5f) is
+    /// EIP-3855, live in Shanghai.
+    bytes private constant PROBE_TAIL = hex"60015f5260205ff3";
+    /// @dev The generator of G1 on BLS12-381 (EIP-2537 encoding: each field element is 64 bytes, big endian, with 16
+    /// leading zero bytes). Source: the BLS12-381 parameters; the point satisfies y^2 = x^3 + 4 modulo the field prime.
+    /// Adding the point at infinity (128 zero bytes) to it must return it unchanged. Held as 32 byte words so that the
+    /// bytes are push data in the runtime code, never a data section.
+    bytes32 private constant BLS_G1_X_HIGH = 0x0000000000000000000000000000000017f1d3a73197d7942695638c4fa9ac0f;
+    bytes32 private constant BLS_G1_X_LOW = 0xc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb;
+    bytes32 private constant BLS_G1_Y_HIGH = 0x0000000000000000000000000000000008b3f481e3aaa0f1a09e30ed741d8ae4;
+    bytes32 private constant BLS_G1_Y_LOW = 0xfcf5e095d5d00af600db18cb2c04b3edd03cc744a2888ae40caa232946c5e7e1;
+
     /// @notice A constructor argument is zero or empty.
     error ZeroValue(string name);
     /// @notice The configuration lists more than `MAX_SUPPORTED_VERSIONS` versions.
@@ -95,6 +139,16 @@ contract BeaconForkGate is IDepositGate {
     error SealDepthNotAllowed(uint256 depth);
     /// @notice The branch does not lead from the version to the state root.
     error ForkProofInvalid();
+    /// @notice A registry address is set in a mode that has no registry, or missing in the mode that needs one.
+    error ForkRegistryMismatch(GateMode mode, address forkRegistry);
+    /// @notice The fork registry address holds no code.
+    error ForkRegistryHasNoCode(address forkRegistry);
+    /// @notice A probe contract did not deploy.
+    error ProbeDeploymentFailed(Canary canary);
+    /// @notice The fork registry shows an observed fork version that the route does not support.
+    error UnsupportedObservedVersion(bytes4 version, uint64 slot);
+    /// @notice `seal` with empty evidence needs an unsupported observed version in the registry, and there is none.
+    error NoUnsupportedObservation();
     /// @notice The block time is before the genesis time of the chain.
     error BeforeGenesis(uint256 timestamp, uint64 genesisTime);
 
@@ -102,6 +156,8 @@ contract BeaconForkGate is IDepositGate {
     event BeaconRootsDetected();
     /// @notice Emitted when a proof confirms a supported fork version for an epoch.
     event ForkConfirmed(uint256 indexed epoch, bytes4 version);
+    /// @notice Emitted once, when an execution canary first works and the gate becomes enforcing.
+    event ExecutionCanaryFired(Canary canary);
     /// @notice Emitted when a proof of an unsupported version seals the gate for good.
     event GateSealedByFork(bytes4 version, uint64 slot);
 
@@ -109,6 +165,16 @@ contract BeaconForkGate is IDepositGate {
     address public immutable beaconRoots;
     /// @notice Whether the gate starts enforcing or starts in detection mode.
     GateMode public immutable mode;
+    /// @notice The fork observation registry. Zero except in `DetectBeaconRootsAndRegistry` mode.
+    IForkRegistry public immutable forkRegistry;
+    /// @notice The probe contract for `TSTORE` (EIP-1153, opcode 0x5d).
+    address public immutable tstoreProbe;
+    /// @notice The probe contract for `MCOPY` (EIP-5656, opcode 0x5e).
+    address public immutable mcopyProbe;
+    /// @notice The probe contract for `BLOBBASEFEE` (EIP-7516, opcode 0x4a).
+    address public immutable blobBaseFeeProbe;
+    /// @notice The probe contract for `CLZ` (EIP-7939, opcode 0x1e).
+    address public immutable clzProbe;
     /// @notice The genesis time of the beacon chain of this chain, in seconds.
     uint64 public immutable genesisTime;
     /// @notice Seconds per slot (12 on Ethereum, 10 on PulseChain).
@@ -133,6 +199,8 @@ contract BeaconForkGate is IDepositGate {
     /// light-client program.
     /// @param sealDepths_ The state depths allowed in a seal proof: 5, 6 and 7. Depth 7 covers a future fork that
     /// crosses 64 state fields.
+    /// @param forkRegistry_ The fork observation registry. It must hold code in `DetectBeaconRootsAndRegistry` mode
+    /// and must be zero in every other mode.
     constructor(
         address beaconRoots_,
         GateMode mode_,
@@ -140,7 +208,8 @@ contract BeaconForkGate is IDepositGate {
         uint64 secondsPerSlot_,
         uint64 slotsPerEpoch_,
         SupportedVersion[] memory supportedVersions_,
-        uint8[] memory sealDepths_
+        uint8[] memory sealDepths_,
+        address forkRegistry_
     ) {
         if (beaconRoots_ == address(0)) revert ZeroValue("beaconRoots");
         if (genesisTime_ == 0) revert ZeroValue("genesisTime");
@@ -151,6 +220,10 @@ contract BeaconForkGate is IDepositGate {
             revert TooManySupportedVersions(supportedVersions_.length);
         }
         if (sealDepths_.length == 0) revert ZeroValue("sealDepths");
+        if ((mode_ == GateMode.DetectBeaconRootsAndRegistry) != (forkRegistry_ != address(0))) {
+            revert ForkRegistryMismatch(mode_, forkRegistry_);
+        }
+        if (forkRegistry_ != address(0) && forkRegistry_.code.length == 0) revert ForkRegistryHasNoCode(forkRegistry_);
 
         beaconRoots = beaconRoots_;
         mode = mode_;
@@ -160,6 +233,16 @@ contract BeaconForkGate is IDepositGate {
         _packedVersions = _pack(supportedVersions_);
         _versionCount = supportedVersions_.length;
         _sealDepthMask = _maskOf(sealDepths_);
+        forkRegistry = IForkRegistry(forkRegistry_);
+        // Opcode values: TSTORE 0x5d (EIP-1153), MCOPY 0x5e (EIP-5656), BLOBBASEFEE 0x4a (EIP-7516), CLZ 0x1e (EIP-7939).
+        // Each probe runs the opcode on constants, then returns the word 1. PUSH1 0x01 PUSH0 TSTORE: key 0, value 1.
+        tstoreProbe = _deployProbe(Canary.TransientStorage, abi.encodePacked(hex"60015f5d", PROBE_TAIL));
+        // PUSH1 0x20 PUSH0 PUSH0 MCOPY: copy 32 bytes from offset 0 to offset 0 (MCOPY pops dest, source, length).
+        mcopyProbe = _deployProbe(Canary.MemoryCopy, abi.encodePacked(hex"60205f5f5e", PROBE_TAIL));
+        // BLOBBASEFEE POP.
+        blobBaseFeeProbe = _deployProbe(Canary.BlobBaseFee, abi.encodePacked(hex"4a50", PROBE_TAIL));
+        // PUSH0 CLZ POP.
+        clzProbe = _deployProbe(Canary.CountLeadingZeros, abi.encodePacked(hex"5f1e50", PROBE_TAIL));
 
         if (mode_ == GateMode.Enforcing) _state.enforcing = true;
     }
@@ -167,16 +250,17 @@ contract BeaconForkGate is IDepositGate {
     // ------------------------------------------------------------------ entry points
 
     /// @inheritdoc IDepositGate
-    /// @dev Step 0 probes in detection mode. Step 1 refuses a sealed gate. Step 2 returns when the epoch is confirmed.
-    /// Step 3 decodes the evidence and confirms. Empty evidence in an unconfirmed epoch reverts.
+    /// @dev Step 0 refuses a sealed gate. Step 1 asks the registry (registry mode only). Step 2 detects in detection
+    /// mode: the beacon roots probe, then the execution canaries. Step 3 returns when the epoch is confirmed.
+    /// Step 4 decodes the evidence and confirms. Empty evidence in an unconfirmed epoch reverts.
     function admit(bytes calldata evidence) external override {
         GateState memory state = _state;
+        if (state.isSealed) revert GateSealed();
+        _requireObservedVersionSupported();
         if (!state.enforcing) {
-            if (!_beaconRootsPresent()) return;
-            _enterEnforcing();
+            if (!_detectAndEnter()) return;
             state.enforcing = true;
         }
-        if (state.isSealed) revert GateSealed();
         uint256 epoch = _currentEpoch();
         if (state.hasConfirmedEpoch && state.confirmedEpoch == epoch) return;
         if (evidence.length == 0) revert ForkNotConfirmed(epoch);
@@ -188,8 +272,9 @@ contract BeaconForkGate is IDepositGate {
     /// In detection mode it first needs a working probe.
     /// @param evidence An `abi.encode` of a `ForkEvidence`.
     function confirm(bytes calldata evidence) external {
+        if (_state.isSealed) revert GateSealed();
+        _requireObservedVersionSupported();
         GateState memory state = _wake();
-        if (state.isSealed) revert GateSealed();
         uint256 epoch = _currentEpoch();
         if (state.hasConfirmedEpoch && state.confirmedEpoch == epoch) return;
         _confirm(abi.decode(evidence, (ForkEvidence)), epoch);
@@ -199,9 +284,14 @@ contract BeaconForkGate is IDepositGate {
     /// rule: any recent proven state with an unknown current version is enough. In detection mode it first needs a
     /// working probe. Withdrawals are not affected.
     /// @param evidence An `abi.encode` of a `ForkEvidence`. The branch length must imply a depth in `sealDepths`.
+    /// In registry mode, empty evidence seals from the registry instead: it succeeds when the registry shows an unsupported version.
     function seal(bytes calldata evidence) external {
-        GateState memory state = _wake();
-        if (state.isSealed) revert GateSealed();
+        if (_state.isSealed) revert GateSealed();
+        if (evidence.length == 0 && address(forkRegistry) != address(0)) {
+            _sealFromRegistry();
+            return;
+        }
+        _wake();
         ForkEvidence memory proof = abi.decode(evidence, (ForkEvidence));
         (bool supported,) = _lookup(proof.version);
         if (supported) revert VersionIsSupported(proof.version);
@@ -265,18 +355,117 @@ contract BeaconForkGate is IDepositGate {
 
     // ------------------------------------------------------------------ internals
 
-    /// @dev Detection mode: a working probe is needed, then the gate enforces. Returns the state after the switch.
+    /// @dev Detection mode: a working probe or canary is needed, then the gate enforces. Returns the state after the
+    /// switch.
     function _wake() private returns (GateState memory state) {
         state = _state;
         if (state.enforcing) return state;
-        if (!_beaconRootsPresent()) revert BeaconRootsAbsent();
-        _enterEnforcing();
+        if (!_detectAndEnter()) revert BeaconRootsAbsent();
         state.enforcing = true;
     }
 
-    function _enterEnforcing() private {
+    /// @dev Runs the detectors in order: the beacon roots probe, then the canaries. The first that works sets
+    /// `enforcing` for good. Returns whether one worked. A revert later in the same call undoes the switch.
+    function _detectAndEnter() private returns (bool) {
+        if (_beaconRootsPresent()) {
+            _state.enforcing = true;
+            emit BeaconRootsDetected();
+            return true;
+        }
+        (bool fired, Canary canary) = _firedCanary();
+        if (!fired) return false;
         _state.enforcing = true;
-        emit BeaconRootsDetected();
+        emit ExecutionCanaryFired(canary);
+        return true;
+    }
+
+    /// @dev The first canary that works, in the order of the `Canary` enum.
+    function _firedCanary() private returns (bool fired, Canary canary) {
+        if (_probeFires(tstoreProbe)) return (true, Canary.TransientStorage);
+        if (_probeFires(mcopyProbe)) return (true, Canary.MemoryCopy);
+        if (_probeFires(blobBaseFeeProbe)) return (true, Canary.BlobBaseFee);
+        if (_probeFires(clzProbe)) return (true, Canary.CountLeadingZeros);
+        if (_blsPrecompileWorks()) return (true, Canary.Bls12381Precompile);
+        return (false, Canary.TransientStorage);
+    }
+
+    /// @dev Calls a probe with `PROBE_GAS`. It works when the call succeeds and returns exactly the word 1. A probe
+    /// whose opcode is not valid fails, and the call costs only the forwarded gas. A plain `CALL` is used, not
+    /// `STATICCALL`, because `TSTORE` is a state change and fails in a static context (EIP-1153).
+    function _probeFires(address probe) private returns (bool) {
+        bool ok;
+        uint256 size;
+        uint256 word;
+        assembly {
+            let scratch := mload(0x40)
+            mstore(scratch, 0)
+            ok := call(PROBE_GAS, probe, 0, scratch, 0, scratch, 0x20)
+            size := returndatasize()
+            word := mload(scratch)
+        }
+        return ok && size == 32 && word == PROBE_WORD;
+    }
+
+    /// @dev Calls `BLS12_G1ADD` with the generator and the point at infinity. A chain that has the precompile
+    /// returns the generator (128 bytes). A chain without it treats the address as an empty account: the call
+    /// succeeds and returns nothing, so the size check rejects it.
+    function _blsPrecompileWorks() private view returns (bool) {
+        bool ok;
+        uint256 size;
+        bool same;
+        bytes32 xHigh = BLS_G1_X_HIGH;
+        bytes32 xLow = BLS_G1_X_LOW;
+        bytes32 yHigh = BLS_G1_Y_HIGH;
+        bytes32 yLow = BLS_G1_Y_LOW;
+        assembly {
+            let input := mload(0x40)
+            mstore(input, xHigh)
+            mstore(add(input, 0x20), xLow)
+            mstore(add(input, 0x40), yHigh)
+            mstore(add(input, 0x60), yLow)
+            mstore(add(input, 0x80), 0)
+            mstore(add(input, 0xa0), 0)
+            mstore(add(input, 0xc0), 0)
+            mstore(add(input, 0xe0), 0)
+            let output := add(input, 0x100)
+            ok := staticcall(PRECOMPILE_GAS, 0x0b, input, 0x100, output, 0x80)
+            size := returndatasize()
+            same := and(
+                and(eq(mload(output), xHigh), eq(mload(add(output, 0x20)), xLow)),
+                and(eq(mload(add(output, 0x40)), yHigh), eq(mload(add(output, 0x60)), yLow))
+            )
+        }
+        return ok && size == 0x80 && same;
+    }
+
+    /// @dev Registry mode: refuses while the latest observed version is set and not supported.
+    function _requireObservedVersionSupported() private view {
+        IForkRegistry registry = forkRegistry;
+        if (address(registry) == address(0)) return;
+        (bytes4 version, uint64 slot) = registry.latestObserved();
+        if (slot == 0) return;
+        (bool supported,) = _lookup(version);
+        if (!supported) revert UnsupportedObservedVersion(version, slot);
+    }
+
+    /// @dev Seals from the registry, with no proof: the registry already holds a proven unsupported version.
+    function _sealFromRegistry() private {
+        (bytes4 version, uint64 slot) = forkRegistry.latestObserved();
+        if (slot == 0) revert NoUnsupportedObservation();
+        (bool supported,) = _lookup(version);
+        if (supported) revert NoUnsupportedObservation();
+        _state.isSealed = true;
+        emit GateSealedByFork(version, slot);
+    }
+
+    /// @dev Deploys raw runtime code with `create`. The init code copies the runtime code and returns it:
+    /// `PUSH1 len DUP1 PUSH1 9 PUSH0 CODECOPY PUSH0 RETURN`.
+    function _deployProbe(Canary canary, bytes memory runtime) private returns (address probe) {
+        bytes memory initCode = abi.encodePacked(hex"60", uint8(runtime.length), hex"8060095f395ff3", runtime);
+        assembly {
+            probe := create(0, add(initCode, 0x20), mload(initCode))
+        }
+        if (probe == address(0)) revert ProbeDeploymentFailed(canary);
     }
 
     /// @dev The probe. The beacon roots contract is present when it returns exactly 32 non-zero bytes for the

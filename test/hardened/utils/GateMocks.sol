@@ -103,3 +103,69 @@ contract GateAlwaysReverts {
 contract GateAlwaysAdmits is IDepositGate {
     function admit(bytes calldata) external pure override {}
 }
+
+/// @notice The generator of G1 on BLS12-381 in the EIP-2537 encoding (two 64 byte field elements, 16 leading zero
+/// bytes each). The gate sends it with the point at infinity to `BLS12_G1ADD` and expects it back.
+library GateBlsPoints {
+    bytes32 internal constant X_HIGH = 0x0000000000000000000000000000000017f1d3a73197d7942695638c4fa9ac0f;
+    bytes32 internal constant X_LOW = 0xc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb;
+    bytes32 internal constant Y_HIGH = 0x0000000000000000000000000000000008b3f481e3aaa0f1a09e30ed741d8ae4;
+    bytes32 internal constant Y_LOW = 0xfcf5e095d5d00af600db18cb2c04b3edd03cc744a2888ae40caa232946c5e7e1;
+
+    /// @notice The 128 byte encoding of the generator.
+    function generator() internal pure returns (bytes memory) {
+        return abi.encodePacked(X_HIGH, X_LOW, Y_HIGH, Y_LOW);
+    }
+}
+
+/// @notice A stand-in for the `BLS12_G1ADD` precompile (EIP-2537, address 0x0b) that only understands the one input the
+/// gate sends (generator plus infinity) and returns the generator. Any other input reverts.
+contract GateBlsG1AddMock {
+    fallback(bytes calldata data) external returns (bytes memory) {
+        require(data.length == 256, "bad length");
+        require(keccak256(data) == keccak256(abi.encodePacked(GateBlsPoints.generator(), new bytes(128))), "bad input");
+        return GateBlsPoints.generator();
+    }
+}
+
+/// @notice A `BLS12_G1ADD` stand-in that answers with the right length and the wrong bytes (all zero).
+contract GateBlsWrongOutputMock {
+    fallback() external {
+        assembly {
+            return(0, 128)
+        }
+    }
+}
+
+/// @notice A `BLS12_G1ADD` stand-in that answers with the right first 64 bytes only.
+contract GateBlsShortOutputMock {
+    fallback() external {
+        bytes memory point = GateBlsPoints.generator();
+        assembly {
+            return(add(point, 0x20), 64)
+        }
+    }
+}
+
+/// @notice Runtime bytes for etching over a probe.
+library GateProbeCodes {
+    /// @notice A probe that works: returns the word 1 (`PUSH1 1 PUSH0 MSTORE PUSH1 0x20 PUSH0 RETURN`).
+    function succeeds() internal pure returns (bytes memory) {
+        return hex"60015f5260205ff3";
+    }
+
+    /// @notice A probe that burns all the gas it gets: `JUMPDEST PUSH0 JUMP` loops forever.
+    function burnsAllGas() internal pure returns (bytes memory) {
+        return hex"5b5f56";
+    }
+
+    /// @notice A probe that succeeds and returns the wrong word (2).
+    function returnsWrongWord() internal pure returns (bytes memory) {
+        return hex"60025f5260205ff3";
+    }
+
+    /// @notice A probe that succeeds and returns nothing.
+    function returnsNothing() internal pure returns (bytes memory) {
+        return hex"00";
+    }
+}

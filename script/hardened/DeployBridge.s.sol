@@ -6,6 +6,7 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
 import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
 import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
+import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
 
 /// @title DeployBridge
 /// @notice Deploys the hardened bridge on two chains with predicted cross-chain addresses.
@@ -14,7 +15,9 @@ import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
 /// The script never reads a private key. The vaults start with no fork layouts. After deployment, anyone adds them
 /// with `addBlockRootsLayout`, `addBlockHashLayout` and `addHistoricalSummariesLayout`, with evidence from the stored
 /// light-client data. Each chain gets a light client at the deployer nonce `n`, a deposit gate at `n + 1` and a vault
-/// at `n + 2`. The light client on a chain tracks the OTHER chain's beacon chain. The deposit gate on a chain reads the
+/// at `n + 2`. A chain whose gate runs in `DetectBeaconRootsAndRegistry` mode (PulseChain) also gets a light client of
+/// its OWN beacon chain and a fork registry, so its layout is: light client `n`, own light client `n + 1`, registry
+/// `n + 2`, gate `n + 3`, vault `n + 4`. The light client on a chain tracks the OTHER chain's beacon chain. The deposit gate on a chain reads the
 /// beacon chain of THAT chain, because it guards the deposits made there.
 contract DeployBridge is Script {
     /// @notice The settings of one chain. The `lightClient` fields describe the OTHER chain's beacon chain.
@@ -26,6 +29,22 @@ contract DeployBridge is Script {
         uint64 depositCutoffTimestamp;
         LightClientConfig lightClient;
         GateConfig gate;
+        ObservationConfig observation;
+    }
+
+    /// @notice The own-chain light client and the fork registry of a chain whose gate mode is
+    /// `DetectBeaconRootsAndRegistry`. It describes the beacon chain of THIS chain. All fields are zero in other modes.
+    /// Both contracts use the verifier of the chain. The light client of this chain follows the same light-client
+    /// program as the other light client, so `lightClientProgramVKey` is that key.
+    struct ObservationConfig {
+        bytes32 lightClientProgramVKey;
+        bytes32 observationProgramVKey;
+        bytes32 genesisValidatorsRoot;
+        uint64 slotsPerPeriod;
+        uint64 initialSlot;
+        bytes32 initialHeaderRoot;
+        bytes32 initialSyncCommitteeHash;
+        bytes32 initialNextSyncCommitteeHash;
     }
 
     /// @notice The settings of the deposit gate on a chain. They describe the beacon chain of THIS chain.
@@ -65,9 +84,13 @@ contract DeployBridge is Script {
     /// @notice The predicted addresses on both chains.
     struct Plan {
         address lightClientA;
+        address observedLightClientA;
+        address registryA;
         address gateA;
         address vaultA;
         address lightClientB;
+        address observedLightClientB;
+        address registryB;
         address gateB;
         address vaultB;
     }
@@ -77,6 +100,8 @@ contract DeployBridge is Script {
         ChainConfig chain;
         address deployer;
         address predictedLightClient;
+        address predictedObservedLightClient;
+        address predictedRegistry;
         address predictedGate;
         address predictedVault;
         uint64 remoteChainId;
@@ -104,7 +129,9 @@ contract DeployBridge is Script {
     error TokenHasNoCode(uint64 chainId, address token);
     /// @notice The signer of the script is not the configured deployer.
     error DeployerMismatch(address configured, address actual);
-    /// @notice The gate mode is neither `Enforcing` nor `DetectBeaconRoots`.
+    /// @notice An observation setting does not match the other chain's settings or the light-client key.
+    error ObservationMismatch(string field);
+    /// @notice The gate mode is not one of the three names.
     error UnknownGateMode(string mode);
     /// @notice A list in the configuration is empty.
     error EmptyConfigList(string key);
@@ -148,6 +175,7 @@ contract DeployBridge is Script {
             config.tokensB,
             decimalsB
         );
+        deploymentA = withRegistry(deploymentA, plan.observedLightClientA, plan.registryA);
         ChainDeployment memory deploymentB = withPairs(
             baseDeployment(
                 config.chainB, config.chainA.chainId, config.deployer, plan.lightClientB, plan.gateB, plan.vaultB, plan.vaultA
@@ -156,6 +184,7 @@ contract DeployBridge is Script {
             config.tokensA,
             decimalsA
         );
+        deploymentB = withRegistry(deploymentB, plan.observedLightClientB, plan.registryB);
 
         vm.selectFork(forkA);
         deployChain(deploymentA);
@@ -172,6 +201,8 @@ contract DeployBridge is Script {
         config.chainA = _readChain(json, ".chainA");
         config.chainB = _readChain(json, ".chainB");
         if (config.chainA.chainId == config.chainB.chainId) revert SameChainIdentifier(config.chainA.chainId);
+        _requireObservationMatchesOtherChain(config.chainA, config.chainB);
+        _requireObservationMatchesOtherChain(config.chainB, config.chainA);
 
         uint256 pairCount = _arrayLength(json, ".tokenPairs");
         if (pairCount == 0) revert NoTokenPairsConfigured();
@@ -187,12 +218,10 @@ contract DeployBridge is Script {
     /// @notice Predicts every address from the deployer nonces. Nothing deploys here.
     /// @param config The validated configuration.
     function predictAddresses(BridgeConfig memory config) public pure returns (Plan memory plan) {
-        plan.lightClientA = vm.computeCreateAddress(config.deployer, config.chainA.deployerNonce);
-        plan.gateA = vm.computeCreateAddress(config.deployer, config.chainA.deployerNonce + 1);
-        plan.vaultA = vm.computeCreateAddress(config.deployer, config.chainA.deployerNonce + 2);
-        plan.lightClientB = vm.computeCreateAddress(config.deployer, config.chainB.deployerNonce);
-        plan.gateB = vm.computeCreateAddress(config.deployer, config.chainB.deployerNonce + 1);
-        plan.vaultB = vm.computeCreateAddress(config.deployer, config.chainB.deployerNonce + 2);
+        (plan.lightClientA, plan.observedLightClientA, plan.registryA, plan.gateA, plan.vaultA) =
+            _predictChain(config.deployer, config.chainA);
+        (plan.lightClientB, plan.observedLightClientB, plan.registryB, plan.gateB, plan.vaultB) =
+            _predictChain(config.deployer, config.chainB);
     }
 
     /// @notice Prints the plan.
@@ -203,11 +232,15 @@ contract DeployBridge is Script {
         console2.log("chain A", config.chainA.chainId, config.chainA.rpcAlias);
         console2.log("  nonce", config.chainA.deployerNonce);
         console2.log("  light client", plan.lightClientA);
+        console2.log("  own-chain light client", plan.observedLightClientA);
+        console2.log("  fork registry", plan.registryA);
         console2.log("  deposit gate", plan.gateA);
         console2.log("  vault", plan.vaultA);
         console2.log("chain B", config.chainB.chainId, config.chainB.rpcAlias);
         console2.log("  nonce", config.chainB.deployerNonce);
         console2.log("  light client", plan.lightClientB);
+        console2.log("  own-chain light client", plan.observedLightClientB);
+        console2.log("  fork registry", plan.registryB);
         console2.log("  deposit gate", plan.gateB);
         console2.log("  vault", plan.vaultB);
         console2.log("token pairs", config.tokensA.length);
@@ -221,6 +254,7 @@ contract DeployBridge is Script {
     /// @param gate The predicted deposit gate address on this chain.
     /// @param vault The predicted vault address on this chain.
     /// @param remoteVault The predicted vault address on the other chain.
+    /// @dev The predicted own-chain light client and registry are zero here. Set them with `withRegistry`.
     function baseDeployment(
         ChainConfig memory chain,
         uint64 remoteChainId,
@@ -238,6 +272,20 @@ contract DeployBridge is Script {
         deployment.remoteChainId = remoteChainId;
         deployment.remoteVault = remoteVault;
         deployment.pairs = new BridgeVault.TokenPair[](0);
+    }
+
+    /// @notice Adds the predicted own-chain light client and registry to a deployment.
+    /// @param deployment The deployment.
+    /// @param observedLightClient The predicted own-chain light client, or zero.
+    /// @param registry The predicted fork registry, or zero.
+    function withRegistry(ChainDeployment memory deployment, address observedLightClient, address registry)
+        public
+        pure
+        returns (ChainDeployment memory)
+    {
+        deployment.predictedObservedLightClient = observedLightClient;
+        deployment.predictedRegistry = registry;
+        return deployment;
     }
 
     /// @notice Adds the token pairs to a deployment.
@@ -294,11 +342,18 @@ contract DeployBridge is Script {
 
         vm.startBroadcast(deployment.deployer);
         lightClient = _deployLightClient(deployment.chain);
-        gate = _deployGate(deployment.chain.gate);
+        address registry;
+        address observedLightClient;
+        if (deployment.chain.gate.mode == BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry) {
+            observedLightClient = _deployObservedLightClient(deployment.chain);
+            registry = _deployRegistry(deployment.chain, observedLightClient);
+        }
+        gate = _deployGate(deployment.chain.gate, registry);
         vault = _deployVault(deployment, lightClient, gate);
         vm.stopBroadcast();
 
         verifyDeployment(deployment, lightClient, gate, vault);
+        verifyRegistry(deployment, gate);
     }
 
     /// @notice Reads every immutable back and compares it with the configuration and the prediction.
@@ -320,7 +375,67 @@ contract DeployBridge is Script {
         _verifyVault(deployment, lightClient, gate, vault);
     }
 
+    /// @notice Reads back the fork registry and the own-chain light client behind the gate. In other modes it checks
+    /// that the gate has no registry. Every address is compared with the prediction.
+    /// @param deployment The deployment of one chain.
+    /// @param gate The deployed deposit gate.
+    function verifyRegistry(ChainDeployment memory deployment, address gate) public view {
+        address registry = address(BeaconForkGate(gate).forkRegistry());
+        if (deployment.chain.gate.mode != BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry) {
+            if (registry != address(0)) revert DeploymentMismatch("gate.forkRegistry must be empty");
+            return;
+        }
+        ObservationConfig memory own = deployment.chain.observation;
+        if (registry != deployment.predictedRegistry) {
+            revert AddressNotAsPredicted("forkRegistry", deployment.predictedRegistry, registry);
+        }
+        ForkRegistry deployedRegistry = ForkRegistry(registry);
+        address client = address(deployedRegistry.lightClient());
+        if (client != deployment.predictedObservedLightClient) {
+            revert AddressNotAsPredicted("observedLightClient", deployment.predictedObservedLightClient, client);
+        }
+        if (address(deployedRegistry.verifier()) != deployment.chain.verifier) {
+            revert DeploymentMismatch("registry.verifier");
+        }
+        if (deployedRegistry.observationProgramVKey() != own.observationProgramVKey) {
+            revert DeploymentMismatch("registry.observationProgramVKey");
+        }
+        BeaconLightClient observed = BeaconLightClient(client);
+        if (address(observed.verifier()) != deployment.chain.verifier) revert DeploymentMismatch("observed.verifier");
+        if (observed.programVKey() != own.lightClientProgramVKey) revert DeploymentMismatch("observed.programVKey");
+        if (observed.programVKey() == own.observationProgramVKey) revert DeploymentMismatch("observed.keysMustDiffer");
+        if (observed.genesisValidatorsRoot() != own.genesisValidatorsRoot) {
+            revert DeploymentMismatch("observed.genesisValidatorsRoot");
+        }
+        if (observed.slotsPerPeriod() != own.slotsPerPeriod) revert DeploymentMismatch("observed.slotsPerPeriod");
+        if (observed.head() != own.initialSlot) revert DeploymentMismatch("observed.head");
+        if (observed.headers(own.initialSlot) != own.initialHeaderRoot) revert DeploymentMismatch("observed.headerRoot");
+        uint64 period = observed.periodOf(own.initialSlot);
+        if (observed.syncCommittees(period) != own.initialSyncCommitteeHash) {
+            revert DeploymentMismatch("observed.syncCommittee");
+        }
+        if (observed.syncCommittees(period + 1) != own.initialNextSyncCommitteeHash) {
+            revert DeploymentMismatch("observed.nextSyncCommittee");
+        }
+    }
+
     // ------------------------------------------------------------------ internals
+
+    /// @dev Light client at `n`; with a registry: own light client `n + 1`, registry `n + 2`; then gate and vault.
+    function _predictChain(address deployer, ChainConfig memory chain)
+        private
+        pure
+        returns (address lightClient, address observedLightClient, address registry, address gate, address vault)
+    {
+        uint256 nonce = chain.deployerNonce;
+        lightClient = vm.computeCreateAddress(deployer, nonce++);
+        if (chain.gate.mode == BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry) {
+            observedLightClient = vm.computeCreateAddress(deployer, nonce++);
+            registry = vm.computeCreateAddress(deployer, nonce++);
+        }
+        gate = vm.computeCreateAddress(deployer, nonce++);
+        vault = vm.computeCreateAddress(deployer, nonce);
+    }
 
     function _deployLightClient(ChainConfig memory chain) private returns (address) {
         return address(
@@ -337,7 +452,27 @@ contract DeployBridge is Script {
         );
     }
 
-    function _deployGate(GateConfig memory gate) private returns (address) {
+    function _deployObservedLightClient(ChainConfig memory chain) private returns (address) {
+        ObservationConfig memory own = chain.observation;
+        return address(
+            new BeaconLightClient(
+                chain.verifier,
+                own.lightClientProgramVKey,
+                own.genesisValidatorsRoot,
+                own.slotsPerPeriod,
+                own.initialSlot,
+                own.initialHeaderRoot,
+                own.initialSyncCommitteeHash,
+                own.initialNextSyncCommitteeHash
+            )
+        );
+    }
+
+    function _deployRegistry(ChainConfig memory chain, address observedLightClient) private returns (address) {
+        return address(new ForkRegistry(observedLightClient, chain.verifier, chain.observation.observationProgramVKey));
+    }
+
+    function _deployGate(GateConfig memory gate, address registry) private returns (address) {
         return address(
             new BeaconForkGate(
                 BEACON_ROOTS,
@@ -346,7 +481,8 @@ contract DeployBridge is Script {
                 gate.secondsPerSlot,
                 gate.slotsPerEpoch,
                 gate.supportedVersions,
-                gate.sealDepths
+                gate.sealDepths,
+                registry
             )
         );
     }
@@ -482,6 +618,42 @@ contract DeployBridge is Script {
         chain.lightClient.initialNextSyncCommitteeHash = _readBytes32(json, string.concat(client, ".initialNextSyncCommitteeHash"));
         _requireCapellaEra(chain);
         chain.gate = _readGate(json, string.concat(prefix, ".gate"));
+        if (chain.gate.mode == BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry) {
+            chain.observation = _readObservation(json, string.concat(prefix, ".observation"));
+        }
+    }
+
+    function _readObservation(string memory json, string memory prefix)
+        private
+        pure
+        returns (ObservationConfig memory own)
+    {
+        own.lightClientProgramVKey = _readBytes32(json, string.concat(prefix, ".lightClientProgramVKey"));
+        own.observationProgramVKey = _readBytes32(json, string.concat(prefix, ".observationProgramVKey"));
+        own.genesisValidatorsRoot = _readBytes32(json, string.concat(prefix, ".genesisValidatorsRoot"));
+        own.slotsPerPeriod = uint64(_readNonZeroUint(json, string.concat(prefix, ".slotsPerPeriod")));
+        own.initialSlot = uint64(_readNonZeroUint(json, string.concat(prefix, ".initialSlot")));
+        own.initialHeaderRoot = _readBytes32(json, string.concat(prefix, ".initialHeaderRoot"));
+        own.initialSyncCommitteeHash = _readBytes32(json, string.concat(prefix, ".initialSyncCommitteeHash"));
+        own.initialNextSyncCommitteeHash = _readBytes32(json, string.concat(prefix, ".initialNextSyncCommitteeHash"));
+        if (own.observationProgramVKey == own.lightClientProgramVKey) {
+            revert ObservationMismatch("observationProgramVKey equals lightClientProgramVKey");
+        }
+    }
+
+    /// @dev The own-chain settings of a registry chain must describe the beacon chain that the OTHER chain's light
+    /// client tracks: the same genesis validators root and period length. The relationship is asserted, not assumed.
+    function _requireObservationMatchesOtherChain(ChainConfig memory chain, ChainConfig memory other) private pure {
+        if (chain.gate.mode != BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry) return;
+        if (chain.observation.genesisValidatorsRoot != other.lightClient.genesisValidatorsRoot) {
+            revert ObservationMismatch("genesisValidatorsRoot differs from the other chain's light client");
+        }
+        if (chain.observation.slotsPerPeriod != other.lightClient.slotsPerPeriod) {
+            revert ObservationMismatch("slotsPerPeriod differs from the other chain's light client");
+        }
+        if (chain.observation.observationProgramVKey == chain.lightClient.programVKey) {
+            revert ObservationMismatch("observationProgramVKey equals the light client key");
+        }
     }
 
     /// @dev The era of the Capella fork slot is `capellaForkEpoch * slotsPerEpoch / SLOTS_PER_ERA`, rounded down.
@@ -523,6 +695,9 @@ contract DeployBridge is Script {
     function _readGateMode(string memory text) private pure returns (BeaconForkGate.GateMode) {
         if (keccak256(bytes(text)) == keccak256("Enforcing")) return BeaconForkGate.GateMode.Enforcing;
         if (keccak256(bytes(text)) == keccak256("DetectBeaconRoots")) return BeaconForkGate.GateMode.DetectBeaconRoots;
+        if (keccak256(bytes(text)) == keccak256("DetectBeaconRootsAndRegistry")) {
+            return BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry;
+        }
         revert UnknownGateMode(text);
     }
 

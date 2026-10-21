@@ -11,7 +11,8 @@ import {GateAlwaysAdmits} from "./utils/GateMocks.sol";
 /// the touched accounts cooled first (`vm.cool`) so storage and account reads are cold, as in a fresh transaction.
 /// The bounds are about 20 percent above the measurement, rounded up. The plain baseline is a deposit through a gate
 /// that does nothing, so it already pays the cold external call into a gate (about 2,600 gas); the extra numbers are what
-/// the real gate adds on top of that call.
+/// the real gate adds on top of that call. Since the execution canaries, a deposit before the switch also makes four
+/// calls to probe contracts and one call to the BLS12-381 address; the numbers below cool those accounts too.
 contract BeaconForkGateGasTest is GateSupport {
     function setUp() public override {
         super.setUp();
@@ -37,6 +38,15 @@ contract BeaconForkGateGasTest is GateSupport {
         used = before_ - gasleft();
     }
 
+    /// @dev Cools the probe contracts and the BLS address, which the detection modes call on every deposit.
+    function _coolCanaries(BeaconForkGate target) internal {
+        vm.cool(target.tstoreProbe());
+        vm.cool(target.mcopyProbe());
+        vm.cool(target.blobBaseFeeProbe());
+        vm.cool(target.clzProbe());
+        vm.cool(address(0x0b));
+    }
+
     function _plainDepositGas() internal returns (uint256) {
         BridgeVault plain = _vaultWithGate(address(new GateAlwaysAdmits()));
         return _measuredDeposit(plain, address(plain.depositGate()), "");
@@ -50,17 +60,37 @@ contract BeaconForkGateGasTest is GateSupport {
         uint256 plain = _plainDepositGas();
         vm.etch(BEACON_ROOTS, "");
         BeaconForkGate detecting = _newGate(BeaconForkGate.GateMode.DetectBeaconRoots);
+        _coolCanaries(detecting);
         uint256 withGate = _measuredDeposit(_vaultWithGate(address(detecting)), address(detecting), "");
         _etchGenuine();
         BeaconForkGate detectingGenuine = _newGate(BeaconForkGate.GateMode.DetectBeaconRoots);
+        _coolCanaries(detectingGenuine);
         uint256 withGenuine = _measuredDeposit(_vaultWithGate(address(detectingGenuine)), address(detectingGenuine), "");
         console2.log("plain deposit (always admit gate)", plain);
         console2.log("deposit before detection, no code at the address", withGate);
         console2.log("  extra over plain (probe plus the gate call)", withGate - plain);
         console2.log("deposit before detection, genuine code with empty storage", withGenuine);
         console2.log("  extra over plain", withGenuine - plain);
-        assertLt(withGate - plain, 1_000, "the probe stays small");
-        assertLt(withGenuine - plain, 3_600, "the probe with a reverting contract stays small");
+        // Before the canaries the probe cost under 1,000 gas. Each canary now adds a cold account access (2,600 gas) and
+        // the 300 gas that an invalid opcode burns: about 15,000 gas more, bounded by the caps of the gate.
+        assertLt(withGate - plain, 24_000, "the probes and canaries stay bounded");
+        assertLt(withGenuine - plain, 24_000, "the same with a reverting beacon roots contract");
+    }
+
+    /// Claim: a deposit before the switch, with every canary account cold as in a fresh transaction, costs a bounded
+    /// amount over the plain deposit. Shows: the gas through the gate of the fixture (`gateB`, built in `setUp`, so
+    /// that `vm.cool` takes effect on its probes; a contract created inside the test stays warm). Matters: this is the
+    /// real price a PulseChain depositor pays on every deposit until a canary fires: the beacon roots probe, four
+    /// probe contracts and the BLS12-381 address, each a cold account access (2,600 gas).
+    function test_HB02_gas_depositBeforeTheSwitchWithColdCanaries() public {
+        vm.etch(BEACON_ROOTS, "");
+        uint256 plain = _plainDepositGas();
+        _coolCanaries(gateB);
+        uint256 withGate = _measuredDeposit(_vaultWithGate(address(gateB)), address(gateB), "");
+        console2.log("deposit before the switch, cold canaries", withGate);
+        console2.log("  extra over plain", withGate - plain);
+        assertGt(withGate - plain, 12_000, "control: the cold accesses are real");
+        assertLt(withGate - plain, 24_000, "bound");
     }
 
     /// Claim: the admit call alone, before detection, costs a small fixed amount. Shows: the gas of
@@ -70,11 +100,12 @@ contract BeaconForkGateGasTest is GateSupport {
         BeaconForkGate detecting = _newGate(BeaconForkGate.GateMode.DetectBeaconRoots);
         vm.cool(address(detecting));
         vm.cool(BEACON_ROOTS);
+        _coolCanaries(detecting);
         uint256 before_ = gasleft();
         detecting.admit("");
         uint256 used = before_ - gasleft();
         console2.log("admit only, before detection", used);
-        assertLt(used, 4_200);
+        assertLt(used, 24_000);
     }
 
     /// Claim: the second deposit in a confirmed epoch costs the plain deposit plus about 2,100 gas (one cold read of
