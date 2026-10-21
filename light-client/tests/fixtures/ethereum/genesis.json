@@ -1,0 +1,11 @@
+{
+  "source_url": "https://ethereum-beacon-api.publicnode.com/eth/v1/beacon/genesis",
+  "fetched_on": "2026-10-20",
+  "response": {
+    "data": {
+      "genesis_time": "1606824023",
+      "genesis_validators_root": "0x4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95",
+      "genesis_fork_version": "0x00000000"
+    }
+  }
+}

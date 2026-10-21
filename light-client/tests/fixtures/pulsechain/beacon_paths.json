@@ -1,0 +1,99 @@
+{
+  "fetched_on": "2026-10-20",
+  "response": {
+    "anchor_header": {
+      "body_root": "0x72a48992935e9eb96275d922cce00342c85b4a2858314855d7b91153206b434e",
+      "parent_root": "0x3a729779544eedfc255cb576b5b7370e8823a8fa9e531034aa9d42f9412b0e96",
+      "proposer_index": "111388",
+      "slot": "10875900",
+      "state_root": "0x70ef03b41f7fb935605876bdedce86cfc793f1c60c8eae0e00a8a6b77c7c059f"
+    },
+    "entries": [
+      {
+        "block_hash_branch": [
+          "0x490b1f2a7b0e5b08aefacaebe7017b5a8d0efe7c8d7d55fa4a78b531df031dbd",
+          "0x3ea5337a040963bb0dc229ced6dd7b2d5f966ca4f0ec7f83c0ba76f04cfbe5c0",
+          "0x406fc2888df829f0e9ba1d5a6a3a6a6802409f05beb5519057e48c6e3575aa13",
+          "0x035747b2284654891e68128c1f69e33a6c81506d4121e421df979c444181aaec",
+          "0xb0b6f008cd6c19f2ef0fbb11832d7321a867d8bc9da6116cd9cf6f3f5bc18cc0",
+          "0x336488033fe5f3ef4ccc12af07b9370b92e553e35ecb4a337a1b1c0e4afe1e0e",
+          "0xdb56114e00fdd4c1f85c892bf35ac9a89289aaecb1ebd0a96cde606a748b5d71",
+          "0xdfa0ae650e9fca3f1fb388ec90f5b80b4fc84b11b84b701ca4879d92458671a3"
+        ],
+        "block_roots_branch": [
+          "0x19a903a8bcb94a1f2d4af7cb4d01a4e6cdda090e173622e12891fd0bf08112be",
+          "0xd36acdd062e05e38941e845563377c913e2723a1ef2fd388e7d3585d1d330483",
+          "0x0adc7d1f7050e3b8de0bd7ef9c62c066ccaaaaf39d9b8e4edad9385f7f8b197e",
+          "0x1cb45dad7f14ccc2c15cdb86066ac1884b369ff032493a0dbdfec4861d926f62",
+          "0x9a23095d9483cef8ba2847f3ce409237a2559c8a65be0848238ee6766b25dbba",
+          "0x9d5e0ddedf0c86179e28ed4bb15114d7900f10ccab3b0a6fa2ba94de07076ed0",
+          "0xe383fd20a2e5fd12d10b44951ab23e02485c9f8f04e88c28f545e0e23241d44e",
+          "0xd11063d8c927ad45f968457d10fdfb577731f23615c9825d1c68b660c7a3a59f",
+          "0x3bcba169ea6656a9f4744ed811498dd27b3cd162a63be76f8fb0cade3f7c565d",
+          "0xe916eeac4cca90e81e688439cc19c5b5d7b5c2ddef244c5517952be9f2e19fca",
+          "0x283b8d829737f83810ca714cadc6a755bed0622b3c3cfedeb27504a9f094eaee",
+          "0x4aad855858be26bbe7f8314ce9b23c75b226325c6ea9d06aee2c6501518ceca5",
+          "0xfa2c1f42d9ad6b51631777c2ce9602cfe5243bc774519618de76bf01dbebadee",
+          "0xf2be9ae9f3388b4f29ca81c7e5d3c83a0934857b10aed7332a673d4fd85b4bc7",
+          "0x83e5a0d3c5a84d13bbde8f267dee7b7440d783c1404985d274965d663c08ea37",
+          "0x3577f165bee8cde8385ee453397dc666564b982cd98ff0345520ff1f2eafaac1",
+          "0x44ec3ca54afcdc9e6fc2eae9ec870f2d238c83ed8a207f3cbb3cb11ad4c7d303",
+          "0x2378a4dcb53a1b05b83964e0e09cfd6863a2537114a59c38043bf9949fbf48f5"
+        ],
+        "deposit_header": {
+          "body_root": "0xc2dd877b685fab4c3a90fc0677f0d6b9e99e835127eea1803520b2e83da66623",
+          "parent_root": "0x7df940453a058cde6961ddf1ce703a8f4d09ab92d2e41ea01ccd5ee17f46fab3",
+          "proposer_index": "12713",
+          "slot": "10875808",
+          "state_root": "0xa790f38bc440b979ebe51e4b098491997a0bbf85858a0c6736c77a587f9f24bd"
+        },
+        "execution_block_hash": "0x5ab16934cb40be0367bf604c3323a53ba54af9545db606d831653f29015ce73d",
+        "execution_block_number": 27849934,
+        "name": "finalized"
+      },
+      {
+        "block_hash_branch": [
+          "0xc25f1b5ca6af9065d1e0058d566c7292c7da02ec679c6cbda24f649802e000b6",
+          "0xed50b4a97c6f677c360038680a0e0f231ccb175582f751d0f89e3a61a80fda54",
+          "0xc4326bbf3db46e6ea93a21c797cbd5a9b8c453fa651d1b2e9606f3702950bacd",
+          "0xe81109accadc8108851a5d1686a0cc1a382fcf698cad0358d32122bc1ba202bb",
+          "0xa76d5c9e8d81b179a6deecd25d65b355d816e52fa96ddd036bdcdc9856935072",
+          "0x336488033fe5f3ef4ccc12af07b9370b92e553e35ecb4a337a1b1c0e4afe1e0e",
+          "0xdb56114e00fdd4c1f85c892bf35ac9a89289aaecb1ebd0a96cde606a748b5d71",
+          "0x05e8914b4b65c3280c7a9985eaac2967c3c115b23f10bcb0fcffc14fd7ff7526"
+        ],
+        "block_roots_branch": [
+          "0xd5401047869afff17bb8131fda13fa5a82c49c378d503a6b765c09ecca0d646b",
+          "0x1d0818eea8ba2115e70ed3594962c1c6ce95e7b66ccf4f0083c0611f57145eac",
+          "0x160568689177a044dd9c53386a6369fae177c96272b8c3e855b57cf58751ca58",
+          "0x9d62c73b19a5c57f30de99613e895d754645593c82e288836aa6d17e00123eaa",
+          "0xa5ae35b74c8febb0124766b144ad39d0b44467f10f33efed221e6a8a8d16f4dc",
+          "0xc27aa976441ab1961f65497b8c64e445068cdfeff72bce0dbf9b066343d7706f",
+          "0xe383fd20a2e5fd12d10b44951ab23e02485c9f8f04e88c28f545e0e23241d44e",
+          "0xd11063d8c927ad45f968457d10fdfb577731f23615c9825d1c68b660c7a3a59f",
+          "0x3bcba169ea6656a9f4744ed811498dd27b3cd162a63be76f8fb0cade3f7c565d",
+          "0xe916eeac4cca90e81e688439cc19c5b5d7b5c2ddef244c5517952be9f2e19fca",
+          "0x283b8d829737f83810ca714cadc6a755bed0622b3c3cfedeb27504a9f094eaee",
+          "0x4aad855858be26bbe7f8314ce9b23c75b226325c6ea9d06aee2c6501518ceca5",
+          "0xfa2c1f42d9ad6b51631777c2ce9602cfe5243bc774519618de76bf01dbebadee",
+          "0xf2be9ae9f3388b4f29ca81c7e5d3c83a0934857b10aed7332a673d4fd85b4bc7",
+          "0x83e5a0d3c5a84d13bbde8f267dee7b7440d783c1404985d274965d663c08ea37",
+          "0x3577f165bee8cde8385ee453397dc666564b982cd98ff0345520ff1f2eafaac1",
+          "0x44ec3ca54afcdc9e6fc2eae9ec870f2d238c83ed8a207f3cbb3cb11ad4c7d303",
+          "0x2378a4dcb53a1b05b83964e0e09cfd6863a2537114a59c38043bf9949fbf48f5"
+        ],
+        "deposit_header": {
+          "body_root": "0xc5269546a976b06e0d9a39cfab4fa697958d2b1d5d9e0ba64403b06dbb3c680c",
+          "parent_root": "0x2e87aff31fba7864ca92af3a160e43aaf79f53d8ea93554f8043d2c5cf9188fa",
+          "proposer_index": "27724",
+          "slot": "10875800",
+          "state_root": "0x0c4591150f17cf7cdf22b739f496ddcaa59da40423de2391b86e0ecd154cc7ab"
+        },
+        "execution_block_hash": "0xc5b904a1013af68ac26a7a786a13267ac2b2c9d82861e9a5ab55bdde30d1b874",
+        "execution_block_number": 27849926,
+        "name": "ancestor"
+      }
+    ]
+  },
+  "source_url": "derived from https://rpc-pulsechain.g4mm4.io/beacon-api: SSZ state 0x70ef03b41f7fb935605876bdedce86cfc793f1c60c8eae0e00a8a6b77c7c059f (GET /eth/v2/debug/beacon/states/<root>), SSZ blocks (GET /eth/v2/beacon/blocks/<root>), block 10875901 (GET /eth/v2/beacon/blocks/<slot>)"
+}

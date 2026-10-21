@@ -1,0 +1,31 @@
+# Workspace for the light-client and withdrawal programs of the hardened bridge.
+# The guests/ directory holds Succinct SP1 wrapper sources. It is NOT a member of this workspace
+# (see guests/README.md): this machine has no SP1 toolchain.
+[workspace]
+resolver = "2"
+members = ["crates/lc-core", "crates/lc-testkit"]
+exclude = ["guests"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+publish = false
+
+# Every dependency below is pinned with "=" to one exact version.
+# The date next to each line is the crates.io publish date of that version (checked on 2026-10-20).
+# The rule is: at least 28 days old on 2026-10-20, so published on or before 2026-09-22.
+# scripts/check-crate-ages.sh checks the same rule for every crate in Cargo.lock, including indirect ones.
+[workspace.dependencies]
+alloy-primitives = { version = "=1.7.3", default-features = false, features = ["std"] } # 2026-09-10
+alloy-sol-types = { version = "=1.7.3", default-features = false, features = ["std"] } # 2026-09-10
+alloy-rlp = { version = "=0.3.16", default-features = false, features = ["std"] } # 2026-07-03
+alloy-trie = { version = "=0.9.5", default-features = false, features = ["std"] } # 2026-03-09
+bls12_381 = { version = "=0.8.0", default-features = false, features = ["groups", "pairings", "alloc", "experimental"] } # 2023-02-27
+sha2 = { version = "=0.9.9", default-features = false } # 2022-01-06
+serde = { version = "=1.0.229", features = ["derive"] } # 2026-07-18
+serde_json = { version = "=1.0.151" } # 2026-07-20
+
+# BLS12-381 arithmetic is slow without optimization. The tests build 512-key committees, so optimize the dev profile.
+[profile.dev]
+opt-level = 2

@@ -1,0 +1,111 @@
+{
+  "chains": {
+    "ethereum": {
+      "chainId": "1",
+      "forkSchedule": [
+        {
+          "activationEpoch": "194048",
+          "blockHashGindex": "412",
+          "blockRootsGindexBase": "303104",
+          "fork": "capella"
+        },
+        {
+          "activationEpoch": "269568",
+          "blockHashGindex": "812",
+          "blockRootsGindexBase": "303104",
+          "fork": "deneb"
+        },
+        {
+          "activationEpoch": "364032",
+          "blockHashGindex": "812",
+          "blockRootsGindexBase": "565248",
+          "fork": "electra"
+        },
+        {
+          "activationEpoch": "411392",
+          "blockHashGindex": "812",
+          "blockRootsGindexBase": "565248",
+          "fork": "fulu"
+        }
+      ]
+    },
+    "pulsechain": {
+      "chainId": "369",
+      "forkSchedule": [
+        {
+          "activationEpoch": "3",
+          "blockHashGindex": "412",
+          "blockRootsGindexBase": "303104",
+          "fork": "capella"
+        }
+      ]
+    }
+  },
+  "forks": {
+    "capella": {
+      "blockHashBranchLength": 8,
+      "blockHashGindex": "412",
+      "blockRootsBranchLength": 18,
+      "blockRootsFieldGindex": "37",
+      "blockRootsGindexBase": "303104",
+      "currentSyncCommitteeGindex": "54",
+      "executionBranchLength": 4,
+      "executionPayloadGindex": "25",
+      "finalityBranchLength": 6,
+      "finalizedRootGindex": "105",
+      "nextSyncCommitteeGindex": "55",
+      "syncCommitteeBranchLength": 5
+    },
+    "deneb": {
+      "blockHashBranchLength": 9,
+      "blockHashGindex": "812",
+      "blockRootsBranchLength": 18,
+      "blockRootsFieldGindex": "37",
+      "blockRootsGindexBase": "303104",
+      "currentSyncCommitteeGindex": "54",
+      "executionBranchLength": 4,
+      "executionPayloadGindex": "25",
+      "finalityBranchLength": 6,
+      "finalizedRootGindex": "105",
+      "nextSyncCommitteeGindex": "55",
+      "syncCommitteeBranchLength": 5
+    },
+    "electra": {
+      "blockHashBranchLength": 9,
+      "blockHashGindex": "812",
+      "blockRootsBranchLength": 19,
+      "blockRootsFieldGindex": "69",
+      "blockRootsGindexBase": "565248",
+      "currentSyncCommitteeGindex": "86",
+      "executionBranchLength": 4,
+      "executionPayloadGindex": "25",
+      "finalityBranchLength": 7,
+      "finalizedRootGindex": "169",
+      "nextSyncCommitteeGindex": "87",
+      "syncCommitteeBranchLength": 6
+    },
+    "fulu": {
+      "blockHashBranchLength": 9,
+      "blockHashGindex": "812",
+      "blockRootsBranchLength": 19,
+      "blockRootsFieldGindex": "69",
+      "blockRootsGindexBase": "565248",
+      "currentSyncCommitteeGindex": "86",
+      "executionBranchLength": 4,
+      "executionPayloadGindex": "25",
+      "finalityBranchLength": 7,
+      "finalizedRootGindex": "169",
+      "nextSyncCommitteeGindex": "87",
+      "syncCommitteeBranchLength": 6
+    }
+  },
+  "generatedBy": "cargo run -p lc-testkit --bin write-withdrawal-fixtures",
+  "notes": [
+    "blockRootsGindexBase = blockRootsFieldGindex * 8192. The generalized index of block_roots[slot % 8192] is blockRootsGindexBase + (slot % 8192).",
+    "blockHashGindex is the combined index of BeaconBlockBody.execution_payload.block_hash: executionPayloadGindex * 2^payloadDepth + 12. block_hash is field 12 of ExecutionPayload.",
+    "The vault picks the block roots row by the epoch of the ANCHOR header slot and the block hash row by the epoch of the DEPOSIT header slot.",
+    "A branch has exactly floorlog2(gindex) entries. A branch with padding is refused."
+  ],
+  "slotsPerHistoricalRoot": "8192",
+  "source": "ethereum/consensus-specs master, fetched 2026-10-20. BeaconState.block_roots: specs/phase0/beacon-chain.md (field 5). BeaconState sync committee and finality indices: specs/altair/light-client/sync-protocol.md and specs/electra/light-client/sync-protocol.md. execution_payload: specs/capella/light-client/sync-protocol.md (25). ExecutionPayload field lists: specs/capella/beacon-chain.md (15 fields) and specs/deneb/beacon-chain.md (17 fields, unchanged in Electra and Fulu)."
+}

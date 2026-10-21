@@ -1,0 +1,11 @@
+{
+  "source_url": "https://rpc-pulsechain.g4mm4.io/beacon-api/eth/v1/beacon/genesis",
+  "fetched_on": "2026-10-20",
+  "response": {
+    "data": {
+      "genesis_time": "1683785555",
+      "genesis_validators_root": "0x3357ba0018a2582aeabe4ae847aa17d50a3a99aaeb66293c01f80a83aecd0c90",
+      "genesis_fork_version": "0x00000369"
+    }
+  }
+}

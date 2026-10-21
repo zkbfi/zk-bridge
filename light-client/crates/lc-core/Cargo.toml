@@ -1,0 +1,15 @@
+[package]
+name = "lc-core"
+description = "Light-client and withdrawal verification for the hardened bridge. The function bodies of the SP1 guest programs."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+alloy-primitives.workspace = true
+alloy-sol-types.workspace = true
+alloy-rlp.workspace = true
+alloy-trie.workspace = true
+bls12_381.workspace = true
+sha2.workspace = true
