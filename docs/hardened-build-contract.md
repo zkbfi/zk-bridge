@@ -510,3 +510,28 @@ The sync committee signs `compute_signing_root(attested_header, domain)`, where 
   - An observation proof cannot be passed to `BeaconLightClient.update`, and a light-client proof cannot be passed to `observe`, because the verification keys differ.
 - **Gate:** an unsupported observed version refuses deposits and allows `seal()`. A supported observed version changes nothing.
 - **Two chains:** on chain 369, observe an unsupported version, then a deposit reverts, then anyone seals, then withdrawals still work.
+
+## Execution canaries in the gate (HB-02, 2026-10-20)
+
+A PulseChain consensus fork almost always arrives with an execution fork, and the EVM can detect its own upgrades. The gate's detection mode widens from "the EIP-4788 contract answers" to a list of canaries. The first canary that works switches the gate to enforcing for good. No gap, no proof, no keeper, no admin.
+
+- **Canaries:**
+  - opcodes: `TSTORE` (0x5d), `MCOPY` (0x5e), `BLOBBASEFEE` (0x4a), `CLZ` (0x1e);
+  - precompiles: the BLS12-381 precompiles from `0x0b` (call one with a known valid input and require the known output);
+  - the EIP-4788 probe that already exists.
+  Cite each opcode and address from its EIP.
+- **Opcode probes:** each probe is a tiny immutable contract whose code runs one canary opcode and returns a fixed word. The gate calls it with at most about 300 gas. Before the fork, the opcode is invalid, the probe fails, and only the forwarded gas is lost.
+- **Switch:** if any canary succeeds, the gate sets `enforcing`. On PulseChain, enforcing needs EIP-4788 evidence or a supported version in the observation registry, so deposits refuse until a new route is in place.
+- **False positive:** an execution-only change that leaves the consensus version alone would also trip a canary. It fails closed: deposits into that route stop, and users move to a new route. No funds are stranded.
+- **Not covered:** a fork that changes only consensus and nothing the EVM can see. The fork observation registry covers that case.
+- **Order of defence:**
+  1. canaries, for the first block of most forks;
+  2. the observation registry, for consensus-only forks, within minutes;
+  3. the interface and `route-health`, for the window before activation.
+- **Liveness rule:** dropped as unnecessary, unless the user asks for it.
+- **Tests:**
+  - On a Shanghai chain, every canary fails and deposits are admitted.
+  - On a Cancun chain, `TSTORE` and `MCOPY` fire and the gate enforces.
+  - With a BLS precompile mock, the precompile canary fires.
+  - Gas per deposit before the switch, with a bound.
+  - A probe that consumes all forwarded gas still costs at most the bound.
