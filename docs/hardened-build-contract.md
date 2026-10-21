@@ -232,3 +232,59 @@ A Rust binary that keeps the bridge moving. It holds no trusted role: every proo
 ### Tests
 
 Unit tests for state transitions, idempotent restarts, the "already claimed" path, the refusal to sign when native verification fails, and configuration validation. Integration tests run two Anvil chains with the hardened contracts deployed, run `once` repeatedly, and assert deposits arrive in both directions, including after a restart in the middle and after a reorganization of an unfinalized block.
+
+## Change: the vault verifies withdrawals directly (user decision, 2026-10-20)
+
+Nothing in a withdrawal is secret, and the evidence is a few kilobytes. So the vault checks it directly, and **the withdrawal program and its verification key are removed.** Only the light-client update (proof 1) uses SP1. A user's browser can build a withdrawal from public RPC and beacon data and submit it with no prover. This replaces the `WithdrawalOutput` section above.
+
+### Calldata
+
+```solidity
+struct BeaconBlockHeader {
+    uint64  slot;
+    uint64  proposerIndex;
+    bytes32 parentRoot;
+    bytes32 stateRoot;
+    bytes32 bodyRoot;
+}
+
+struct WithdrawalProof {
+    BeaconBlockHeader anchorHeader;   // its hash tree root must equal lightClient.headers(anchorHeader.slot)
+    BeaconBlockHeader depositHeader;  // the beacon block that carries the deposit's execution payload
+    bytes32[] blockRootsBranch;       // anchorHeader.stateRoot -> state.block_roots[depositHeader.slot % 8192]
+    bytes32[] blockHashBranch;        // depositHeader.bodyRoot -> body.execution_payload.block_hash
+    bytes   executionHeaderRlp;       // keccak256 must equal the proven block hash
+    bytes[] receiptProof;             // Merkle-Patricia nodes from receiptsRoot to the receipt
+    uint256 transactionIndex;         // trie key = rlp(transactionIndex)
+    uint256 logIndex;                 // index of the deposit log inside that receipt
+}
+
+function withdraw(WithdrawalProof calldata proof) external;
+```
+
+### Checks, in order
+
+1. `hashTreeRoot(anchorHeader) == lightClient.headers(anchorHeader.slot)` and that value is non-zero. The light client stores only finalized headers, so the anchor is final.
+2. `depositHeader.slot < anchorHeader.slot` and `anchorHeader.slot - depositHeader.slot <= 8192`.
+3. `hashTreeRoot(depositHeader)` is the leaf of `blockRootsBranch` at `generalizedIndex(BeaconState.block_roots, slot % 8192)` under `anchorHeader.stateRoot`.
+4. The execution block hash is the leaf of `blockHashBranch` at `generalizedIndex(BeaconBlockBody.execution_payload.block_hash)` under `depositHeader.bodyRoot`.
+5. `keccak256(executionHeaderRlp) == blockHash`. Decode `receiptsRoot` from the header.
+6. Verify `receiptProof` against `receiptsRoot` with key `rlp(transactionIndex)`. Decode the EIP-2718 receipt envelope. Require success status.
+7. Take the log at `logIndex`. Require `log.address == remoteVault` and `topic0 == DEPOSIT_EVENT_TOPIC`. Decode token, sender, recipient, amount, nonce, target chain. Require `targetChainId == localChainId`, a registered token, an unclaimed nonce.
+8. Mark the nonce, pay with `SafeERC20`, emit `WithdrawalCompleted(token, recipient, amount, nonce, depositBlockHash)`.
+
+SSZ hashing uses the SHA-256 precompile (address `0x02`), which exists on both chains.
+
+### Generalized indices depend on the source chain's fork
+
+`BeaconState.block_roots` and `BeaconBlockBody.execution_payload` sit at different tree depths in different forks (Capella, Deneb, Electra and later). The vault takes the source chain's fork schedule as an immutable constructor argument: a list of `(activationEpoch, blockRootsGindexBase, blockHashGindex)` rows. It picks the row by each header's epoch. Take every value from `ethereum/consensus-specs` and cite it.
+
+A future source-chain fork that moves these indices breaks new withdrawals. That failure is safe: proofs fail and nothing pays out, but deposits made after that fork wait for a redeployment. This is the immutability trade-off from H-19, and the documentation must say so plainly.
+
+### Libraries
+
+For Merkle-Patricia proofs and RLP decoding, prefer vendoring an audited implementation (for example Optimism's `MerkleTrie.sol` and `RLPReader.sol`, MIT licensed) at a release tag at least 28 days old, with the tag and commit recorded. Writing new parsers is a last resort and needs tests against real receipts from both chains.
+
+### The light-client crate's role
+
+`verify_withdrawal` stays in Rust as the reference implementation and the proof builder. It produces the exact `WithdrawalProof` calldata. A Rust test and a Solidity test run the same fixtures and must agree on accept or reject. No withdrawal guest program is built.
