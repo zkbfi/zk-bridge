@@ -306,6 +306,7 @@ For Merkle-Patricia proofs and RLP decoding, prefer vendoring an audited impleme
   - `block_roots`: `2**d + 5`, and `historical_summaries`: `2**d + 27`, with d in {5, 6, 7}.
   - `block_hash`: `(2**db + 9) * 2**dp + 12`, with db and dp in {4, 5}.
   The evidence then only picks the depth.
+- **A range never covers a slot of another position.** Each row holds the lowest and highest slot at which its position was validated. A new validation grows a range of the same position only when the grown range overlaps no range of another position. Otherwise it starts a new range. A validation at a slot that another position's range already covers reverts with `LayoutRangeConflict`. So ranges of different positions never overlap, and a lookup has at most one answer. An anchor in a gap has no layout, and its withdrawal reverts with `LayoutNotValidated` until anyone validates a position there. The rule keeps a position that was validated, replaced, and validated again from covering the slots of its replacement.
 - **The light-client program takes the fork version as an input.** The committee signs the domain that contains it, so a wrong version yields no valid signature.
 - **Merkle positions in the program move only when a container crosses a power-of-two field count.** The beacon state crossed 32 fields at Electra (37); Fulu has 38; the next crossing is at 65. When that happens, a new route (light client, program and vault pair) is deployed beside the old one. The old route keeps paying out what it can still prove.
 - **Deposit cutoff.** Each vault takes an immutable `depositCutoffTimestamp` (zero disables it). After it, `deposit` reverts, so nobody deposits into a route whose counterpart may no longer prove. Set it at deployment only when a breaking fork is already scheduled.
@@ -543,6 +544,7 @@ A PulseChain consensus fork almost always arrives with an execution fork, and th
   - Gas per deposit before the switch, with a bound. With one probe, a cold deposit before the switch costs 85,463 gas, which is 9,827 over the plain deposit (75,636 in this run). The four-probe design cost 91,628, which was 16,272 over its plain deposit (75,356). The cold deposit is 6,165 gas cheaper. `admit("")` alone, all accounts cold, costs 15,062 (was 21,507). The saving comes from three fewer cold account accesses (2,600 each), less the dispatch and the three warm calls.
   - Each opcode path runs alone, an unknown selector fails, and the first canary in enum order wins.
   - A probe that consumes all forwarded gas still costs at most the bound.
+- **Decision (2026-10-22): probe on every deposit.** The code review asked whether the canaries could run less often, for example once per block or only in `confirm` and `seal`. They stay on every deposit. The probes exist to catch the first deposit after a fork; probing less often would admit the deposits made in that gap, which are the ones that lock. The cost is about 9,800 gas on a cold deposit before the switch, and nothing after it.
 
 ## Deposit fee switch (user decision, 2026-10-21) (built)
 

@@ -37,8 +37,10 @@ import {ReceiptLogs} from "./ReceiptLogs.sol";
 /// proven through `state.block_roots`. An older deposit is proven through `state.historical_summaries`, which holds the
 /// root of every completed era of 8192 block roots since Capella. So a stored head may be any distance past the one
 /// before it.
-/// A layout is usable only for the slots between the first and the last slot at which it was validated. Layouts move
-/// only when a container crosses a power-of-two field count; then a new route (light client and vault) is deployed
+/// A layout is usable only for the slots between the first and the last slot at which it was validated. A range
+/// never covers a slot where another position was validated, and ranges of different positions never overlap. So a
+/// position validated, then replaced, then validated again leaves the slots between without a layout, and each
+/// lookup has one answer. Layouts move only when a container crosses a power-of-two field count; then a new route (light client and vault) is deployed
 /// beside the old one, and the old route keeps paying what it can still prove. This is the immutability trade-off of
 /// hole H-19.
 contract BridgeVault is ReentrancyGuard {
@@ -66,6 +68,16 @@ contract BridgeVault is ReentrancyGuard {
         uint16 feeBasisPoints;
         uint16 feeCeilingBasisPoints;
         address flowLimiter;
+    }
+
+    /// @notice One validated range of a layout table, as the range rule reads it.
+    /// @param gindex The validated generalized index.
+    /// @param firstSlot The lowest slot of the range.
+    /// @param lastSlot The highest slot of the range.
+    struct SlotRange {
+        uint256 gindex;
+        uint64 firstSlot;
+        uint64 lastSlot;
     }
 
     /// @notice A validated `block_roots` position and the state slots at which it was validated.
@@ -252,6 +264,8 @@ contract BridgeVault is ReentrancyGuard {
     error HistoricalIndexOutOfRange(uint64 index);
     /// @notice A `historical_summaries` evidence slot is not more than 8192 slots below its anchor.
     error EvidenceSlotNotHistorical(uint64 earlierSlot, uint64 anchorSlot);
+    /// @notice The slot lies inside the validated range of another position, so a layout cannot be validated there.
+    error LayoutRangeConflict(uint64 slot);
     /// @notice No validated layout covers the slot. Anyone can add one with evidence.
     error LayoutNotValidated(uint64 slot);
     /// @notice A candidate position is zero or deeper than the bound.
@@ -575,16 +589,21 @@ contract BridgeVault is ReentrancyGuard {
         _requireEarlierRoot(evidence.laterHeader, evidence.earlierSlotB, blockRootsGindex, evidence.branchB);
 
         uint64 slot = evidence.laterHeader.slot;
-        for (uint256 i = 0; i < _stateLayouts.length; i++) {
-            StateLayout storage layout = _stateLayouts[i];
-            if (layout.blockRootsGindex != blockRootsGindex) continue;
-            if (slot < layout.firstSlot) layout.firstSlot = slot;
-            if (slot > layout.lastSlot) layout.lastSlot = slot;
-            emit BlockRootsLayoutValidated(blockRootsGindex, layout.firstSlot, layout.lastSlot);
+        SlotRange[] memory ranges = new SlotRange[](_stateLayouts.length);
+        for (uint256 i = 0; i < ranges.length; i++) {
+            StateLayout storage stored = _stateLayouts[i];
+            ranges[i] = SlotRange(stored.blockRootsGindex, stored.firstSlot, stored.lastSlot);
+        }
+        uint256 index = _planRange(blockRootsGindex, slot, ranges);
+        if (index == ranges.length) {
+            _stateLayouts.push(StateLayout({blockRootsGindex: blockRootsGindex, firstSlot: slot, lastSlot: slot}));
+            emit BlockRootsLayoutValidated(blockRootsGindex, slot, slot);
             return;
         }
-        _stateLayouts.push(StateLayout({blockRootsGindex: blockRootsGindex, firstSlot: slot, lastSlot: slot}));
-        emit BlockRootsLayoutValidated(blockRootsGindex, slot, slot);
+        StateLayout storage layout = _stateLayouts[index];
+        if (slot < layout.firstSlot) layout.firstSlot = slot;
+        if (slot > layout.lastSlot) layout.lastSlot = slot;
+        emit BlockRootsLayoutValidated(blockRootsGindex, layout.firstSlot, layout.lastSlot);
     }
 
     /// @notice Adds a block hash position, or widens its validated range, given evidence from stored data.
@@ -608,16 +627,21 @@ contract BridgeVault is ReentrancyGuard {
         }
 
         uint64 slot = evidence.header.slot;
-        for (uint256 i = 0; i < _bodyLayouts.length; i++) {
-            BodyLayout storage layout = _bodyLayouts[i];
-            if (layout.blockHashGindex != blockHashGindex) continue;
-            if (slot < layout.firstSlot) layout.firstSlot = slot;
-            if (slot > layout.lastSlot) layout.lastSlot = slot;
-            emit BlockHashLayoutValidated(blockHashGindex, layout.firstSlot, layout.lastSlot);
+        SlotRange[] memory ranges = new SlotRange[](_bodyLayouts.length);
+        for (uint256 i = 0; i < ranges.length; i++) {
+            BodyLayout storage stored = _bodyLayouts[i];
+            ranges[i] = SlotRange(stored.blockHashGindex, stored.firstSlot, stored.lastSlot);
+        }
+        uint256 index = _planRange(blockHashGindex, slot, ranges);
+        if (index == ranges.length) {
+            _bodyLayouts.push(BodyLayout({blockHashGindex: blockHashGindex, firstSlot: slot, lastSlot: slot}));
+            emit BlockHashLayoutValidated(blockHashGindex, slot, slot);
             return;
         }
-        _bodyLayouts.push(BodyLayout({blockHashGindex: blockHashGindex, firstSlot: slot, lastSlot: slot}));
-        emit BlockHashLayoutValidated(blockHashGindex, slot, slot);
+        BodyLayout storage layout = _bodyLayouts[index];
+        if (slot < layout.firstSlot) layout.firstSlot = slot;
+        if (slot > layout.lastSlot) layout.lastSlot = slot;
+        emit BlockHashLayoutValidated(blockHashGindex, layout.firstSlot, layout.lastSlot);
     }
 
     /// @notice Adds a `historical_summaries` position, or widens its validated range, given evidence from stored data.
@@ -651,20 +675,56 @@ contract BridgeVault is ReentrancyGuard {
             revert LayoutEvidenceInvalid();
         }
 
-        for (uint256 i = 0; i < _historicalLayouts.length; i++) {
-            HistoricalLayout storage layout = _historicalLayouts[i];
-            if (layout.historicalSummariesGindex != historicalSummariesGindex) continue;
-            if (anchorSlot < layout.firstSlot) layout.firstSlot = anchorSlot;
-            if (anchorSlot > layout.lastSlot) layout.lastSlot = anchorSlot;
-            emit HistoricalSummariesLayoutValidated(historicalSummariesGindex, layout.firstSlot, layout.lastSlot);
+        SlotRange[] memory ranges = new SlotRange[](_historicalLayouts.length);
+        for (uint256 i = 0; i < ranges.length; i++) {
+            HistoricalLayout storage stored = _historicalLayouts[i];
+            ranges[i] = SlotRange(stored.historicalSummariesGindex, stored.firstSlot, stored.lastSlot);
+        }
+        uint256 index = _planRange(historicalSummariesGindex, anchorSlot, ranges);
+        if (index == ranges.length) {
+            _historicalLayouts.push(
+                HistoricalLayout({
+                    historicalSummariesGindex: historicalSummariesGindex, firstSlot: anchorSlot, lastSlot: anchorSlot
+                })
+            );
+            emit HistoricalSummariesLayoutValidated(historicalSummariesGindex, anchorSlot, anchorSlot);
             return;
         }
-        _historicalLayouts.push(
-            HistoricalLayout({
-                historicalSummariesGindex: historicalSummariesGindex, firstSlot: anchorSlot, lastSlot: anchorSlot
-            })
-        );
-        emit HistoricalSummariesLayoutValidated(historicalSummariesGindex, anchorSlot, anchorSlot);
+        HistoricalLayout storage layout = _historicalLayouts[index];
+        if (anchorSlot < layout.firstSlot) layout.firstSlot = anchorSlot;
+        if (anchorSlot > layout.lastSlot) layout.lastSlot = anchorSlot;
+        emit HistoricalSummariesLayoutValidated(historicalSummariesGindex, layout.firstSlot, layout.lastSlot);
+    }
+
+    /// @dev The range rule. Returns the index of the range of `gindex` that grows to hold `slot`, or `ranges.length`
+    /// when a new range must start. A range grows only when the grown range overlaps no range of another position, so
+    /// ranges of different positions never overlap. Reverts when `slot` is already inside the range of another position.
+    function _planRange(uint256 gindex, uint64 slot, SlotRange[] memory ranges) private pure returns (uint256) {
+        for (uint256 i = 0; i < ranges.length; i++) {
+            if (ranges[i].gindex == gindex) continue;
+            if (ranges[i].firstSlot <= slot && slot <= ranges[i].lastSlot) revert LayoutRangeConflict(slot);
+        }
+        for (uint256 i = 0; i < ranges.length; i++) {
+            if (ranges[i].gindex != gindex) continue;
+            uint64 low = slot < ranges[i].firstSlot ? slot : ranges[i].firstSlot;
+            uint64 high = slot > ranges[i].lastSlot ? slot : ranges[i].lastSlot;
+            if (_overlapsOtherPosition(gindex, low, high, ranges)) continue;
+            return i;
+        }
+        return ranges.length;
+    }
+
+    /// @dev Whether a range of a position other than `gindex` shares a slot with `low` to `high`.
+    function _overlapsOtherPosition(uint256 gindex, uint64 low, uint64 high, SlotRange[] memory ranges)
+        private
+        pure
+        returns (bool)
+    {
+        for (uint256 i = 0; i < ranges.length; i++) {
+            if (ranges[i].gindex == gindex) continue;
+            if (ranges[i].firstSlot <= high && low <= ranges[i].lastSlot) return true;
+        }
+        return false;
     }
 
     /// @notice The validated `block_roots` positions and their slot ranges.
