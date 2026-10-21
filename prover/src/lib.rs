@@ -15,6 +15,7 @@
 //! - [`beacon`]: where beacon data comes from (a beacon node, or a depth rule on Anvil).
 //! - [`store`] and [`state`]: the SQLite file and the deposit state machine.
 //! - [`route_health`]: decides whether a route still delivers a deposit made now (finding HB-02, window 2).
+//! - `local_network` (feature `dev-source`): bots and a beacon stub for the local network in `docker/`.
 //! - [`service`]: the loop that moves a deposit from its first sight to its withdrawal.
 
 pub mod beacon;
@@ -26,6 +27,8 @@ pub mod error;
 pub mod fork_observation;
 pub mod gate;
 pub mod light_client;
+#[cfg(feature = "dev-source")]
+pub mod local_network;
 pub mod logging;
 pub mod prover;
 pub mod route;

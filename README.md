@@ -83,6 +83,8 @@ The red team tests pass when an attack **succeeds**. A green red team run means 
 | Harness | End-to-end red team exploits on two Anvil chains (chain 1 on port 18545, chain 369 on port 18546) | `pnpm --dir harness install && pnpm --dir harness test` | Not rerun for this note |
 | Checks | The specification's circuit does not compile, the frontend fails, the deploy script cannot deploy, and the npm package does not exist | `bash checks/run.sh` | Not rerun for this note |
 
+To run the whole bridge on two local chains in Docker, with a prover and bots that move test tokens both ways, see `docs/local-network.md`.
+
 Requirements: Foundry (`forge`, `anvil`), Node.js with pnpm, and Rust with Cargo. Clone with `--recurse-submodules`, or run `git submodule update --init`. The Anvil tests skip with a message when `anvil` or `forge` is missing.
 
 ## Layout

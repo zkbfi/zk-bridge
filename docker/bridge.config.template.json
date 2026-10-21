@@ -1,0 +1,78 @@
+{
+  "deployer": "@@DEPLOYER@@",
+  "chainA": {
+    "rpcAlias": "@@RPC_A@@",
+    "chainId": "1",
+    "verifier": "@@VERIFIER_A@@",
+    "verifierCodeHash": "@@VERIFIER_CODE_HASH_A@@",
+    "depositCutoffTimestamp": "0",
+    "deployerNonce": "@@NONCE_A@@",
+    "fee": {
+      "authority": "0x0000000000000000000000000000000000000000",
+      "recipient": "0x0000000000000000000000000000000000000000",
+      "basisPoints": "0",
+      "ceilingBasisPoints": "0"
+    },
+    "flowLimiter": "0x0000000000000000000000000000000000000000",
+    "lightClient": {
+      "programVKey": "@@PROGRAM_VKEY@@",
+      "genesisValidatorsRoot": "@@GENESIS_ROOT_B@@",
+      "slotsPerPeriod": "1048576",
+      "genesisTime": "@@GATE_GENESIS_TIME@@",
+      "secondsPerSlot": "12",
+      "slotsPerEpoch": "32",
+      "capellaForkEpoch": "3",
+      "capellaEra": "0",
+      "initialSlot": "1",
+      "initialHeaderRoot": "@@CHECKPOINT_HEADER_ROOT@@",
+      "initialSyncCommitteeHash": "@@COMMITTEE_HASH@@",
+      "initialNextSyncCommitteeHash": "@@NEXT_COMMITTEE_HASH@@"
+    },
+    "gate": {
+      "mode": "Enforcing",
+      "genesisTime": "@@GATE_GENESIS_TIME@@",
+      "secondsPerSlot": "12",
+      "slotsPerEpoch": "32",
+      "supportedVersions": [{ "version": "0x0000036c", "stateDepth": "5" }],
+      "sealDepths": ["5", "6", "7"]
+    }
+  },
+  "chainB": {
+    "rpcAlias": "@@RPC_B@@",
+    "chainId": "369",
+    "verifier": "@@VERIFIER_B@@",
+    "verifierCodeHash": "@@VERIFIER_CODE_HASH_B@@",
+    "depositCutoffTimestamp": "0",
+    "deployerNonce": "@@NONCE_B@@",
+    "fee": {
+      "authority": "0x0000000000000000000000000000000000000000",
+      "recipient": "0x0000000000000000000000000000000000000000",
+      "basisPoints": "0",
+      "ceilingBasisPoints": "0"
+    },
+    "flowLimiter": "0x0000000000000000000000000000000000000000",
+    "lightClient": {
+      "programVKey": "@@PROGRAM_VKEY@@",
+      "genesisValidatorsRoot": "@@GENESIS_ROOT_A@@",
+      "slotsPerPeriod": "1048576",
+      "genesisTime": "@@GATE_GENESIS_TIME@@",
+      "secondsPerSlot": "12",
+      "slotsPerEpoch": "32",
+      "capellaForkEpoch": "3",
+      "capellaEra": "0",
+      "initialSlot": "1",
+      "initialHeaderRoot": "@@CHECKPOINT_HEADER_ROOT@@",
+      "initialSyncCommitteeHash": "@@COMMITTEE_HASH@@",
+      "initialNextSyncCommitteeHash": "@@NEXT_COMMITTEE_HASH@@"
+    },
+    "gate": {
+      "mode": "DetectBeaconRoots",
+      "genesisTime": "@@GATE_GENESIS_TIME@@",
+      "secondsPerSlot": "12",
+      "slotsPerEpoch": "32",
+      "supportedVersions": [{ "version": "0x0000036c", "stateDepth": "5" }],
+      "sealDepths": ["5", "6", "7"]
+    }
+  },
+  "tokenPairs": [{ "chainA": "@@TOKEN_A@@", "chainB": "@@TOKEN_B@@" }]
+}

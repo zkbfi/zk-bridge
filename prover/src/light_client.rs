@@ -724,6 +724,26 @@ pub fn fork_evidence_bytes(
     lc_core::gate::encode_fork_evidence(timestamp, header, fork.current_version, branch)
 }
 
+/// A synthetic beacon header at `slot` over a state whose `fork` field is `fork`, with the roots of all 28 state fields.
+///
+/// The other 27 fields hold filler. The header is the input of [`fork_evidence_bytes`] for a local chain that has no
+/// beacon node. Only the local-network tools use it.
+#[cfg(feature = "dev-source")]
+pub fn synthetic_fork_header(slot: u64, fork: ForkData) -> (BeaconBlockHeader, Vec<B256>) {
+    let mut field_roots: Vec<B256> = (0..28u64)
+        .map(|field| keccak256(format!("synthetic-state-field/{field}")))
+        .collect();
+    field_roots[3] = fork.hash_tree_root();
+    let header = BeaconBlockHeader {
+        slot,
+        proposer_index: 1,
+        parent_root: keccak256(b"synthetic-parent"),
+        state_root: lc_core::ssz::merkleize(&field_roots),
+        body_root: keccak256(b"synthetic-body"),
+    };
+    (header, field_roots)
+}
+
 // ------------------------------------------------------------------ synthetic beacon data for Anvil
 
 /// A synthetic beacon header over a real execution block, with the branch to its block hash.

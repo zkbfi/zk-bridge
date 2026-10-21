@@ -1,0 +1,19 @@
+# Keep the build context small: the images need only the contracts and the two Rust workspaces.
+**/target
+**/.git
+.git
+.serena
+.claude
+**/node_modules
+out
+cache
+broadcast
+harness
+checks
+spec
+test
+docs
+progress.txt
+light-client/fetch-cache
+prover/fetch-cache
+light-client/guests

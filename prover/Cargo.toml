@@ -19,6 +19,12 @@ publish = false
 name = "zk-bridge-prover"
 path = "src/main.rs"
 
+# Bots and a beacon stub for the local network in docker/. Development only: it needs the feature `dev-source`.
+[[bin]]
+name = "local-network"
+path = "src/bin/local_network.rs"
+required-features = ["dev-source"]
+
 [features]
 # `dev-source` builds the development beacon source (DevBeaconSource) that serves Anvil. It needs the test crate
 # `lc-testkit` for its synthetic beacon data. A production build leaves it out: `cargo build --release --no-default-features`.

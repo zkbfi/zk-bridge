@@ -1,0 +1,117 @@
+# A local two-chain bridge for development. Start with the commands in docs/local-network.md.
+#
+# Every key here is public: the chains use the well-known Anvil development mnemonic. Do not use these keys on a real
+# chain. The ports bind to localhost only.
+name: zk-bridge-local
+
+x-foundry-image: &foundry-image ghcr.io/foundry-rs/foundry:v1.7.0@sha256:ff06299a789deee1d9e07d93961f08330820e2444a8dbbb425c1256bc3d1c206
+
+x-chains-healthy: &chains-healthy
+  chain-a:
+    condition: service_healthy
+  chain-b:
+    condition: service_healthy
+
+x-anvil-mnemonic: &anvil-mnemonic "test test test test test test test test test test test junk"
+
+# The prover refuses a development beacon source or a key from the environment unless every RPC URL is a loopback
+# address. So the services that talk to the chains share the network of the container host (`network_mode: host`)
+# and reach the chains on the published localhost ports. On Colima the host is the Colima virtual machine.
+x-prover-image: &prover-image
+  image: zk-bridge-local-prover:latest
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+    target: prover
+  network_mode: host
+
+services:
+  # Chain A: identifier 1, hardfork cancun (it has EIP-4788 after the deploy step installs the contract code).
+  chain-a:
+    image: *foundry-image
+    entrypoint: ["anvil"]
+    command:
+      - --host=0.0.0.0
+      - --port=8545
+      - --chain-id=1
+      - --hardfork=cancun
+      - --block-time=2
+      - --mnemonic=test test test test test test test test test test test junk
+    ports:
+      - "127.0.0.1:28545:8545"
+    healthcheck:
+      test: ["CMD", "cast", "chain-id", "--rpc-url", "http://127.0.0.1:8545"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  # Chain B: identifier 369, hardfork shanghai (no EIP-4788, no MCOPY, like PulseChain).
+  chain-b:
+    image: *foundry-image
+    entrypoint: ["anvil"]
+    command:
+      - --host=0.0.0.0
+      - --port=8545
+      - --chain-id=369
+      - --hardfork=shanghai
+      - --block-time=2
+      - --mnemonic=test test test test test test test test test test test junk
+    ports:
+      - "127.0.0.1:28546:8545"
+    healthcheck:
+      test: ["CMD", "cast", "chain-id", "--rpc-url", "http://127.0.0.1:8545"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  # One-shot. Deploys tokens, verifiers and the hardened bridge on both chains, and writes /state.
+  deploy:
+    profiles: ["setup"]
+    image: zk-bridge-local-deploy:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: deploy
+    depends_on: *chains-healthy
+    network_mode: host
+    environment:
+      RPC_A: http://127.0.0.1:28545
+      RPC_B: http://127.0.0.1:28546
+      ANVIL_MNEMONIC: *anvil-mnemonic
+    volumes:
+      - bridge-state:/state
+
+  # Answers the three beacon requests of `route-health` from the local chains. The prover does not use it.
+  beacon-stub:
+    <<: *prover-image
+    command: ["local-network", "beacon-stub", "--listen", "127.0.0.1:29000"]
+    depends_on: *chains-healthy
+    volumes:
+      - bridge-state:/state:ro
+    restart: unless-stopped
+
+  # The prover service in `run` mode, for both directions, with the oracle backend and the development beacon source.
+  prover:
+    <<: *prover-image
+    command: ["prover-entry", "run"]
+    depends_on:
+      <<: *chains-healthy
+      beacon-stub:
+        condition: service_started
+    volumes:
+      - bridge-state:/state
+    restart: unless-stopped
+
+  # Bots that deposit random small amounts in both directions for ever.
+  bots:
+    <<: *prover-image
+    command: ["local-network", "traffic"]
+    depends_on: *chains-healthy
+    volumes:
+      - bridge-state:/state:ro
+    restart: unless-stopped
+
+volumes:
+  bridge-state:
