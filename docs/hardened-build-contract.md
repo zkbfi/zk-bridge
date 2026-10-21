@@ -626,3 +626,33 @@ On PulseChain, the fork registry checks freshness and the start of an observatio
 - **Route health:** `route-health` prints `own_light_client`, `own_light_client_head_slot` and `own_light_client_lag_periods`. The lag is the current slot from the wall clock, minus the head slot, divided by the slots per period from the contract. The JSON has an `own_light_client` object, or `null`.
 - **Rule: WARN, not STOP.** The status is `WARN` when the lag reaches `--own-light-client-warn-periods`. The default is 32, half of the fold limit of 64 updates. A deposit made now does not depend on this light client. `STOP` would make scripts refuse deposits on a route that still delivers them. The cost of a stale head is a weaker registry and a harder catch-up. The operator can fix both, and the warning comes with time to spare.
 - **Tests:** unit tests cover the threshold, the clock source, the precedence and the output. `prover/tests/hardened_own_light_client.rs` runs two Anvil chains. The head moves with each pass. The registry refuses the fixture observation as a replay after the move (`ObservationNotFresh`), and accepts an observation built from the new head, which the stale head refused (`PreviousHeadSlotMismatch`). A light client of another beacon chain is refused at startup.
+
+## Flow limiter hook (user decision, 2026-10-21)
+
+The user asked for a hook for flow limits that can be nullified, with the rules held by an immutable contract. The user will supply the limit rules later. This section defines only the hook.
+
+### Rules
+
+- **One optional limiter.** The vault takes a constructor argument `flowLimiter`. A zero address means no limiter from the start. Nothing can set or replace a limiter after deployment.
+- **The limiter governs itself.** Any rules, parameters or governance live in the limiter contract, which has no upgrade path. The vault trusts the limiter only to say yes or no.
+- **One-way detach.** `detachFlowLimiter()` sets the limiter to zero and emits `FlowLimiterDetached(limiter)`. Only the limiter itself may call it, so its own rules decide when. Nothing can attach a limiter again.
+- **Interface `IFlowLimiter`:**
+  - `checkDeposit(address token, address depositor, uint256 amount)` after the vault measures the received amount and takes the fee. `amount` is the net amount. `token` is the local token.
+  - `checkWithdrawal(address token, address recipient, uint256 amount, bytes32 nonce)` after every proof check and before the vault marks the nonce claimed. `token` is the local token it would pay.
+  - Both may change the limiter's state (to record usage). A revert refuses the call.
+- **A refused withdrawal stays claimable.** The revert undoes the whole transaction, so the nonce stays unclaimed and the recipient can retry later. A rate limit therefore works as "wait and retry" with no queue in the vault.
+- **What a limiter cannot do.** It holds no tokens and no approval, so it cannot move funds. The vault calls it under its reentrancy guard, so it cannot reenter the vault. It can delay or block deposits and withdrawals; a limiter that always refuses blocks them for good. So the limiter's code must be audited before deployment like the vault itself, and the vault exposes its address as a public view.
+- **Cost.** With no limiter, the vault reads one storage slot per call and calls nothing.
+
+### Deploy script
+
+Each chain's config gains `flowLimiter` (default zero). A non-zero value must have code. The script reads it back from the deployed vault.
+
+### Tests
+
+- No limiter: deposit and withdraw behave as before; record the gas change.
+- A test limiter (in `test/` only) that refuses: deposit reverts; withdraw reverts and the nonce stays unclaimed; after the limiter allows, the same withdrawal succeeds.
+- The limiter receives the net amount, the local token, and the nonce.
+- Only the limiter can detach; detach is one-way; after detach the vault never calls it.
+- A limiter that tries to reenter `withdraw` or `deposit` fails.
+- A limiter that tries to move vault funds has no way to do so (no approval exists).
