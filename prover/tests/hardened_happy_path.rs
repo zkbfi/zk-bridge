@@ -162,14 +162,15 @@ fn happy_path_gas_of_updates_withdrawals_and_gated_deposits() {
     }
 }
 
-/// Claim: a flow limiter that refuses a withdrawal makes the prover's attempt fail with a clear note, the deposit stays
-/// unclaimed, and after the limiter allows it the next pass pays it.
-/// Shows: both vaults have a test limiter. A deposit on chain 1 is proven. The limiter of chain 369 refuses withdrawals,
-/// so the first pass pays nothing, leaves the nonce unclaimed, counts one attempt, and records a note that names the
-/// flow limiter and carries its `FlowRefused` error. After the limiter allows, the second pass pays the amount to the
-/// recipient and the state is `confirmed`.
-/// Why it matters: a refusal reverts the whole transaction, so the claim stays open. A rate limit works as wait and
-/// retry only if the prover reports the refusal as such and pays when the limiter allows it.
+/// Claim: a flow limiter that refuses a withdrawal makes the prover wait, however long, without sending, without
+/// counting an attempt, and without failing the deposit. After the limiter allows, the next pass pays it.
+/// Shows: both vaults have a test limiter. A deposit on chain 1 is proven. The limiter of chain 369 refuses
+/// withdrawals for more passes than `max_attempts`. Every pass leaves the state `proven` with zero attempts and a note
+/// that names the flow limiter and carries its `FlowRefused` error, pays nothing, leaves the nonce unclaimed, and sends
+/// no withdrawal transaction (the nonce of the prover account does not move). After the limiter allows, the next
+/// pass pays the amount to the recipient and the state is `confirmed`.
+/// Why it matters: a refusal reverts the whole transaction, so the claim stays open on chain. A rate limit works as
+/// wait and retry only if the prover never gives the deposit up while the limit lasts.
 #[test]
 fn happy_path_withdrawal_refused_by_the_flow_limiter_is_reported_and_paid_after_it_allows() {
     use zk_bridge_prover::contracts::VaultContract;
@@ -190,17 +191,26 @@ fn happy_path_withdrawal_refused_by_the_flow_limiter_is_reported_and_paid_after_
     destination.send(Some(limiter), &ScriptedFlowLimiter::setRefusalsCall { deposits: false, withdrawals: true }.abi_encode());
     let made = deposit_on(&bridge, Direction::AToB, amount);
     source.mine(2);
+    // The prover signs with the deployer key, so the nonce of that account on the destination counts every transaction
+    // it sent. The first pass may send light-client updates, so the nonce is read after it.
     run(&bridge, &["once"]).expect("a refused withdrawal does not stop the pass");
+    let sent_before = destination.nonce(DEPLOYER);
+
+    // Many more passes than the default `max_attempts` (3).
+    for _ in 0..6 {
+        run(&bridge, &["once"]).expect("a refused withdrawal does not stop the pass");
+    }
 
     assert_eq!(balance(destination, destination_token, RECIPIENT), U256::ZERO, "nothing was paid");
     assert!(!claimed(destination, destination_vault, made.nonce), "the nonce stays unclaimed");
+    assert_eq!(destination.nonce(DEPLOYER), sent_before, "no withdrawal was sent while the limiter refused");
     let status = run(&bridge, &["status"]).unwrap();
     let line = status.lines().find(|line| line.starts_with(&format!("nonce={:#x} ", made.nonce))).expect("status line");
     assert!(line.contains("state=proven"), "the deposit waits with its proof: {line}");
-    assert!(line.contains("attempts=1"), "the refusal counts as one attempt: {line}");
+    assert!(line.contains("attempts=0"), "a wait is not an attempt: {line}");
     assert!(line.contains(&format!("flow_limiter_{limiter:#x}")), "the note names the limiter: {line}");
     let refusal = alloy_primitives::hex::encode(error_selector("FlowRefused()"));
-    assert!(line.contains(&format!("revert_data_0x{refusal}")), "the note carries the error of the limiter: {line}");
+    assert!(line.contains(&format!("0x{refusal}")), "the note carries the error of the limiter: {line}");
 
     destination.send(Some(limiter), &ScriptedFlowLimiter::setRefusalsCall { deposits: false, withdrawals: false }.abi_encode());
     run(&bridge, &["once"]).expect("once");

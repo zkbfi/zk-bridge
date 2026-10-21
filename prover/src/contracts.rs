@@ -109,6 +109,10 @@ sol! {
         error AlreadyClaimed(bytes32 depositNonce);
     }
 
+    interface FlowLimiterContract {
+        function checkWithdrawal(address token, address recipient, uint256 amount, bytes32 nonce) external;
+    }
+
     /// A supported fork version of the deposit gate.
     struct GateSupportedVersion {
         bytes4 version;

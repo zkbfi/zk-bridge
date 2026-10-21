@@ -302,6 +302,15 @@ impl Store {
         Ok(())
     }
 
+    /// Stores a note and counts no attempt. The service uses it for a deposit that waits.
+    pub fn set_note(&self, nonce: B256, note: &str) -> Result<()> {
+        self.connection.execute(
+            "UPDATE deposits SET note = ?1, updated_at = ?2 WHERE nonce = ?3",
+            params![note, now(), format!("{nonce:#x}")],
+        )?;
+        Ok(())
+    }
+
     /// Counts one failed attempt, stores the note, and returns the new count.
     pub fn record_attempt(&self, nonce: B256, note: &str) -> Result<u32> {
         self.connection.execute(

@@ -8,7 +8,7 @@ use crate::chain::{ChainClient, ExecutionReader, RawLog};
 use crate::config::{BeaconKind, ChainConfig, Config, ProverBackend, RouteName};
 use crate::contracts::{
     head_updated_topic, is_already_claimed, update_calldata, BlockHashEvidence, BlockRootsEvidence, HistoricalSummariesEvidence, LightClientContract,
-    VaultContract,
+    FlowLimiterContract, VaultContract,
 };
 use crate::error::{Error, Result};
 use crate::light_client::{
@@ -20,7 +20,7 @@ use crate::rpc::{parse_quantity, HttpClient, HttpRpc};
 use crate::service::{Coverage, Route, RoutePorts, SendOutcome};
 use crate::signer::Signer;
 use crate::store::NewDeposit;
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::SolCall;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -294,6 +294,22 @@ impl LiveRoute {
     }
 }
 
+/// The wait note for the answer of a simulated `checkWithdrawal`, or `None` when the limiter allowed it.
+///
+/// # Errors
+/// The error itself when it carries no revert data: the node failed, and the limiter gave no answer.
+fn limiter_wait_note(limiter: Address, simulation: Result<Bytes>) -> Result<Option<String>> {
+    let error = match simulation {
+        Ok(_) => return Ok(None),
+        Err(error) => error,
+    };
+    let Some(data) = error.revert_data() else { return Err(error) };
+    Ok(Some(format!(
+        "waiting on the flow limiter {limiter:#x}: it refuses the withdrawal now (revert data 0x{}); the deposit stays unclaimed and the service tries again on every pass",
+        alloy_primitives::hex::encode(data)
+    )))
+}
+
 impl LiveRoute {
     /// Names the flow limiter in the error of a refused withdrawal, when the vault has one and the revert carries data.
     /// The vault passes the revert data of the limiter through unchanged, so the prover cannot tell a refusal of the
@@ -427,6 +443,23 @@ impl RoutePorts for LiveRoute {
         Ok(withdrawal_calldata(&proof))
     }
 
+    fn flow_limiter_refusal(&self, deposit: &NewDeposit) -> Result<Option<String>> {
+        let limiter = self.destination.view(self.destination_vault, VaultContract::flowLimiterCall {})?;
+        if limiter == Address::ZERO {
+            return Ok(None);
+        }
+        let local_token = self.destination.view(self.destination_vault, VaultContract::localTokenOfCall { remoteToken: deposit.token })?;
+        let check = FlowLimiterContract::checkWithdrawalCall {
+            token: local_token,
+            recipient: deposit.recipient,
+            amount: deposit.amount,
+            nonce: deposit.nonce,
+        };
+        // The limiter may accept calls from its vault only, so the simulation comes from the vault address.
+        let simulation = self.destination.eth_call_from(limiter, self.destination_vault, &check.abi_encode());
+        limiter_wait_note(limiter, simulation)
+    }
+
     fn send_withdrawal(&self, calldata: &[u8]) -> Result<SendOutcome> {
         match self.destination.send_transaction(self.destination_vault, calldata) {
             Ok(hash) => Ok(SendOutcome::Sent(hash)),
@@ -533,4 +566,28 @@ fn build_route(config: &Config, name: RouteName, signer: &Signer, oracle: &Signe
         log_block_range: config.log_block_range,
         ports: Box::new(live),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Claim: a revert with data is a wait that names the limiter and keeps the data, a pass is no wait, and a failure
+    /// without revert data stays an error.
+    /// Why it matters: a wait costs no attempt, so mistaking a node failure for a refusal would hide an outage, and
+    /// mistaking a refusal for an error would strand the deposit after `max_attempts`.
+    #[test]
+    fn only_a_revert_with_data_is_a_wait() {
+        let limiter = Address::repeat_byte(0x77);
+        assert_eq!(limiter_wait_note(limiter, Ok(Bytes::new())).unwrap(), None);
+
+        let refused = Error::Rpc { code: 3, message: "execution reverted".into(), data: Some(Bytes::from(vec![0xde, 0xad])) };
+        let note = limiter_wait_note(limiter, Err(refused)).unwrap().expect("a wait");
+        assert!(note.contains("waiting on the flow limiter"), "{note}");
+        assert!(note.contains(&format!("{limiter:#x}")), "{note}");
+        assert!(note.contains("0xdead"), "{note}");
+
+        let outage = Error::Rpc { code: -32000, message: "busy".into(), data: None };
+        assert!(limiter_wait_note(limiter, Err(outage)).is_err());
+    }
 }

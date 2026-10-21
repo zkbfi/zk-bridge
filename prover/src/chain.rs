@@ -213,10 +213,21 @@ impl ChainClient {
     /// # Errors
     /// `Error::Rpc` with the revert data when the call reverts.
     pub fn eth_call(&self, to: Address, data: &[u8], as_sender: bool) -> Result<Bytes> {
-        let mut request = json!({ "to": format!("{to:#x}"), "data": format!("0x{}", hex::encode(data)) });
         if as_sender {
-            request["from"] = json!(format!("{:#x}", self.sender()?));
+            return self.eth_call_from(to, self.sender()?, data);
         }
+        self.run_eth_call(json!({ "to": format!("{to:#x}"), "data": format!("0x{}", hex::encode(data)) }))
+    }
+
+    /// Runs `eth_call` as the address `from`, which needs no key.
+    ///
+    /// # Errors
+    /// `Error::Rpc` with the revert data when the call reverts.
+    pub fn eth_call_from(&self, to: Address, from: Address, data: &[u8]) -> Result<Bytes> {
+        self.run_eth_call(json!({ "from": format!("{from:#x}"), "to": format!("{to:#x}"), "data": format!("0x{}", hex::encode(data)) }))
+    }
+
+    fn run_eth_call(&self, request: Value) -> Result<Bytes> {
         let answer = self.rpc.call("eth_call", json!([request, "latest"]))?;
         parse_bytes(&answer, "eth_call")
     }

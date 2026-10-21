@@ -57,6 +57,11 @@ pub trait RoutePorts {
     /// Builds the withdrawal calldata and runs native verification. It never returns calldata that native
     /// verification refused. It also makes sure the vault layout rows cover the withdrawal.
     fn build_withdrawal(&self, deposit: &NewDeposit) -> Result<Vec<u8>>;
+    /// The note for a deposit that the flow limiter of the destination vault would refuse now, or `None` when there is
+    /// no limiter or it allows the withdrawal. A refusal is a wait, not a failed attempt: the deposit stays claimable.
+    fn flow_limiter_refusal(&self, _deposit: &NewDeposit) -> Result<Option<String>> {
+        Ok(None)
+    }
     /// Sends the withdrawal.
     fn send_withdrawal(&self, calldata: &[u8]) -> Result<SendOutcome>;
     /// The status of a sent transaction: `None` while pending, else whether it succeeded.
@@ -280,6 +285,11 @@ impl Service {
             .calldata
             .as_ref()
             .ok_or_else(|| Error::Transaction("the deposit is proven but has no stored calldata".into()))?;
+        if let Some(note) = ports.flow_limiter_refusal(&record.deposit)? {
+            self.store.set_note(record.deposit.nonce, &note)?;
+            self.logger.info("waiting_on_flow_limiter", Some(record.deposit.nonce), &[("reason", note)]);
+            return Ok(Progress::Blocked);
+        }
         match ports.send_withdrawal(calldata)? {
             SendOutcome::AlreadyClaimed => {
                 self.apply(record, Event::AlreadyClaimed, Some("the vault reverted with AlreadyClaimed"))?;
@@ -355,6 +365,8 @@ pub(crate) mod tests {
         pub status: Cell<Option<bool>>,
         pub builds: Cell<u32>,
         pub sends: Cell<u32>,
+        /// What `flow_limiter_refusal` answers: a note while the limiter refuses, else `None`.
+        pub refusal: RefCell<Option<String>>,
         pub scans: Cell<u32>,
         /// What `advance_own_light_client` answers: the number of updates sent, or a failure.
         pub own_answer: RefCell<Box<dyn Fn() -> Result<usize>>>,
@@ -373,6 +385,7 @@ pub(crate) mod tests {
                 status: Cell::new(Some(true)),
                 builds: Cell::new(0),
                 sends: Cell::new(0),
+                refusal: RefCell::new(None),
                 scans: Cell::new(0),
                 own_answer: RefCell::new(Box::new(|| Ok(0))),
                 own_calls: Cell::new(0),
@@ -407,6 +420,9 @@ pub(crate) mod tests {
         fn build_withdrawal(&self, _deposit: &NewDeposit) -> Result<Vec<u8>> {
             self.0.builds.set(self.0.builds.get() + 1);
             (self.0.build.borrow())()
+        }
+        fn flow_limiter_refusal(&self, _deposit: &NewDeposit) -> Result<Option<String>> {
+            Ok(self.0.refusal.borrow().clone())
         }
         fn send_withdrawal(&self, _calldata: &[u8]) -> Result<SendOutcome> {
             self.0.sends.set(self.0.sends.get() + 1);
@@ -541,6 +557,28 @@ pub(crate) mod tests {
         }
         let record = service.store().get(B256::repeat_byte(0x11)).unwrap().unwrap();
         assert_eq!((record.state, record.attempts), (DepositState::Proven, 0));
+    }
+
+    /// Claim: while the flow limiter refuses, the deposit waits in `proven` with the note, nothing is sent, and no
+    /// attempt counts, however many passes go by. When the limiter allows, the deposit is paid.
+    /// Why it matters: a rate limit may last longer than `max_attempts` passes, and the deposit stays claimable on chain.
+    /// Marking it `failed` would strand it in the service.
+    #[test]
+    fn a_flow_limiter_refusal_waits_without_counting_attempts() {
+        let script = Script::new();
+        *script.refusal.borrow_mut() = Some("waiting on the flow limiter".into());
+        let (mut service, _) = service_with(&script, Store::open_in_memory().unwrap());
+        for _ in 0..10 {
+            service.run_once().unwrap();
+        }
+        let record = service.store().get(B256::repeat_byte(0x11)).unwrap().unwrap();
+        assert_eq!((record.state, record.attempts), (DepositState::Proven, 0));
+        assert_eq!(record.note.as_deref(), Some("waiting on the flow limiter"));
+        assert_eq!(script.sends.get(), 0, "nothing was sent while the limiter refused");
+
+        *script.refusal.borrow_mut() = None;
+        service.run_once().unwrap();
+        assert_eq!(state_of(&service, 0x11), DepositState::Confirmed);
     }
 
     /// Claim: each pass asks every route once to move its own-chain light client, even when no deposit is waiting, and
