@@ -37,8 +37,9 @@ contract BeaconForkGateTest is GateSupport {
 
     // ---------------------------------------------------------------- shortcuts
 
+    /// @dev The slot of the block time of `setUp`, which is also the deployment slot of `gate`.
     function _slotNow() internal pure returns (uint64) {
-        return _slotIn(EPOCH_E, 2);
+        return _slotIn(EPOCH_E, NOW_SLOTS);
     }
 
     /// @dev Honest evidence for Electra (depth 6) at the current block time, header in epoch E.
@@ -619,18 +620,81 @@ contract BeaconForkGateTest is GateSupport {
         }
     }
 
-    /// Claim: a seal needs no epoch rule. Shows: a header from a previous epoch seals while the beacon roots
-    /// contract still returns it; the same header is refused by `confirm`. Matters: a recent proof of an unknown
-    /// version is enough to close the route, and the seal must not wait for an epoch.
+    /// Claim: a seal needs no epoch rule, only the slot bounds. Shows: a gate deployed in an earlier epoch is sealed
+    /// by a header of that earlier epoch, after the deployment slot, while the beacon roots contract still returns
+    /// it; the same header is refused by `confirm`. Matters: a recent proof of an unknown version is enough to
+    /// close the route, and the seal must not wait for an epoch.
     function test_HB02_seal_acceptsAHeaderFromAPreviousEpoch() public {
-        bytes memory old = _honestEvidence(block.timestamp, _slotIn(EPOCH_E - 3, 5), 6, UNKNOWN_FORK);
-        BeaconForkGate other = _newGate(BeaconForkGate.GateMode.Enforcing);
+        _warpIntoEpoch(EPOCH_E - 3, 6);
+        BeaconForkGate early = _newGate(BeaconForkGate.GateMode.Enforcing);
+        _warpIntoEpoch(EPOCH_E, NOW_SLOTS);
+        bytes memory old = _honestEvidence(block.timestamp, _slotIn(EPOCH_E - 3, 7), 6, UNKNOWN_FORK);
         // control for the epoch rule: the same kind of header with a supported version is refused by confirm
-        bytes memory oldSupported = _honestEvidence(block.timestamp + 12, _slotIn(EPOCH_E - 3, 5), 6, ELECTRA);
+        bytes memory oldSupported = _honestEvidence(block.timestamp + 12, _slotIn(EPOCH_E - 3, 7), 6, ELECTRA);
         vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.HeaderNotInCurrentEpoch.selector, EPOCH_E - 3, EPOCH_E));
-        other.confirm(oldSupported);
+        early.confirm(oldSupported);
 
-        gate.seal(old);
+        early.seal(old);
+        assertTrue(early.isSealed());
+    }
+
+    /// Claim: a header from before the deployment cannot seal, even with an unlisted version. Shows:
+    /// `SealEvidenceTooOld(slot, deploymentSlot)` one slot before the deployment slot, and the gate stays open.
+    /// Control: a header at the deployment slot seals. Matters: when a gate is deployed after a fork that the route
+    /// does not list, the ring buffer can still hold older headers with a version that the gate does not list, so such a
+    /// header must not close the gate.
+    function test_HB02_seal_headerBeforeDeploymentRefused() public {
+        assertEq(gate.deploymentSlot(), _slotNow(), "the deployment slot is the slot of the deployment block");
+        uint64 tooOld = _slotNow() - 1;
+        bytes memory evidence = _honestEvidence(block.timestamp, tooOld, 6, UNKNOWN_FORK);
+        vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.SealEvidenceTooOld.selector, tooOld, _slotNow()));
+        gate.seal(evidence);
+        assertFalse(gate.isSealed());
+
+        gate.seal(_honestEvidence(block.timestamp + 12, _slotNow(), 6, UNKNOWN_FORK));
+        assertTrue(gate.isSealed(), "a header at the deployment slot seals");
+    }
+
+    /// Claim: a header older than the last confirmed header cannot seal, even with an unlisted version. Shows: after
+    /// a confirmation at slot s, `SealEvidenceTooOld(s - 1, s)` for a header one slot older (both after the
+    /// deployment slot); after a confirmation in a later epoch the bound moves up to the new header.
+    /// Control: a header at s seals. Matters: a supported version proven live at s means any older unlisted version
+    /// is stale, because fork versions only move forward.
+    function test_HB02_seal_headerOlderThanLastConfirmationRefused() public {
+        uint64 confirmedSlot = _slotIn(EPOCH_E, 10);
+        gate.confirm(_honestEvidence(block.timestamp, confirmedSlot, 6, ELECTRA));
+
+        uint64 older = confirmedSlot - 1;
+        assertGt(older, gate.deploymentSlot(), "the header is newer than the deployment");
+        bytes memory evidence = _honestEvidence(block.timestamp + 12, older, 6, UNKNOWN_FORK);
+        vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.SealEvidenceTooOld.selector, older, confirmedSlot));
+        gate.seal(evidence);
+        assertFalse(gate.isSealed());
+
+        // a later epoch confirms with a higher header; the bound follows it
+        _warpIntoEpoch(EPOCH_E + 1, 3);
+        uint64 laterSlot = _slotIn(EPOCH_E + 1, 1);
+        gate.confirm(_honestEvidence(block.timestamp, laterSlot, 6, ELECTRA));
+        bytes memory stale = _honestEvidence(block.timestamp + 12, confirmedSlot, 6, UNKNOWN_FORK);
+        vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.SealEvidenceTooOld.selector, confirmedSlot, laterSlot));
+        gate.seal(stale);
+
+        gate.seal(_honestEvidence(block.timestamp + 24, laterSlot, 6, UNKNOWN_FORK));
+        assertTrue(gate.isSealed(), "a header at the confirmed slot seals");
+    }
+
+    /// Claim: a header at or after both bounds with an unlisted version still seals (the real fork case). Shows: a
+    /// confirmation at slot s in epoch E, then a fork in the next epoch: a header newer than s with an unlisted
+    /// version seals and emits the event with its slot. Matters: the new rule must not stop a real fork from closing
+    /// the route.
+    function test_HB02_seal_headerAfterBothBoundsSeals() public {
+        gate.confirm(_honestEvidence(block.timestamp, _slotIn(EPOCH_E, 10), 6, ELECTRA));
+        _warpIntoEpoch(EPOCH_E + 2, 4);
+        uint64 forkSlot = _slotIn(EPOCH_E + 2, 2);
+        bytes memory evidence = _honestEvidence(block.timestamp, forkSlot, 6, UNKNOWN_FORK);
+        vm.expectEmit(false, false, false, true, address(gate));
+        emit GateSealedByFork(UNKNOWN_FORK, forkSlot);
+        gate.seal(evidence);
         assertTrue(gate.isSealed());
     }
 

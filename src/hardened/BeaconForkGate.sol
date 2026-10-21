@@ -76,6 +76,7 @@ contract BeaconForkGate is IDepositGate {
         bool hasConfirmedEpoch;
         bool isSealed;
         bool enforcing;
+        uint64 highestConfirmedSlot;
     }
 
     /// @notice The most supported versions a gate holds. They are packed into one immutable word, 5 bytes each.
@@ -172,6 +173,8 @@ contract BeaconForkGate is IDepositGate {
     error NoUnsupportedObservation();
     /// @notice The block time is before the genesis time of the chain.
     error BeforeGenesis(uint256 timestamp, uint64 genesisTime);
+    /// @notice A seal proof is older than the newest evidence that the gate trusts.
+    error SealEvidenceTooOld(uint64 slot, uint64 minimumSlot);
 
     /// @notice Emitted once, when detection mode first reads a beacon root and the gate becomes enforcing.
     event BeaconRootsDetected();
@@ -197,6 +200,9 @@ contract BeaconForkGate is IDepositGate {
     uint64 public immutable secondsPerSlot;
     /// @notice Slots per epoch (32 on both).
     uint64 public immutable slotsPerEpoch;
+    /// @notice The slot of the block that deployed the gate (zero when that block is before genesis). A seal proof
+    /// from an earlier slot is refused.
+    uint64 public immutable deploymentSlot;
 
     /// @dev The supported versions, 5 bytes each: the version, then the depth. Entry `i` sits at byte `5 * i`.
     bytes32 private immutable _packedVersions;
@@ -246,6 +252,7 @@ contract BeaconForkGate is IDepositGate {
         genesisTime = genesisTime_;
         secondsPerSlot = secondsPerSlot_;
         slotsPerEpoch = slotsPerEpoch_;
+        deploymentSlot = block.timestamp < genesisTime_ ? 0 : uint64((block.timestamp - genesisTime_) / secondsPerSlot_);
         _packedVersions = _pack(supportedVersions_);
         _versionCount = supportedVersions_.length;
         _sealDepthMask = _maskOf(sealDepths_);
@@ -289,8 +296,11 @@ contract BeaconForkGate is IDepositGate {
     }
 
     /// @notice Seals the gate for good, given a proof of a fork version the route does not support. There is no epoch
-    /// rule: any recent proven state with an unknown current version is enough. In detection mode it first needs a
-    /// working probe. Withdrawals are not affected.
+    /// rule, but the header must not be older than the deployment slot or the newest header that a confirmation
+    /// accepted (`SealEvidenceTooOld`). Fork versions only move forward, so an unknown version at or after a slot
+    /// where a supported version was live cannot be a stale one. Without this rule, an old header that the beacon
+    /// roots ring buffer still holds could seal the gate. In detection mode it first needs a working probe.
+    /// Withdrawals are not affected.
     /// @param evidence An `abi.encode` of a `ForkEvidence`. The branch length must imply a depth in `sealDepths`.
     /// In registry mode, empty evidence seals from the registry instead: it succeeds when the registry shows an unsupported version.
     function seal(bytes calldata evidence) external {
@@ -305,6 +315,8 @@ contract BeaconForkGate is IDepositGate {
         if (supported) revert VersionIsSupported(proof.version);
 
         _requireBeaconHeader(proof);
+        uint64 minimumSlot = _state.highestConfirmedSlot > deploymentSlot ? _state.highestConfirmedSlot : deploymentSlot;
+        if (proof.header.slot < minimumSlot) revert SealEvidenceTooOld(proof.header.slot, minimumSlot);
         if (proof.branch.length < FORK_DEPTH + 1) revert SealDepthNotAllowed(0);
         uint256 depth = proof.branch.length - FORK_DEPTH;
         if (depth > MAX_STATE_DEPTH || (_sealDepthMask >> depth) & 1 == 0) revert SealDepthNotAllowed(depth);
@@ -530,8 +542,11 @@ contract BeaconForkGate is IDepositGate {
         if (!supported) revert UnsupportedVersion(proof.version);
         _requireVersionLeaf(proof, depth);
 
-        _state.confirmedEpoch = uint64(epoch);
-        _state.hasConfirmedEpoch = true;
+        GateState memory state = _state;
+        state.confirmedEpoch = uint64(epoch);
+        state.hasConfirmedEpoch = true;
+        if (proof.header.slot > state.highestConfirmedSlot) state.highestConfirmedSlot = proof.header.slot;
+        _state = state;
         emit ForkConfirmed(epoch, proof.version);
     }
 

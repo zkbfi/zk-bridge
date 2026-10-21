@@ -420,7 +420,7 @@ State:
 
 Anyone may also call `confirm(evidence)` directly. It runs the same checks without a deposit, for keepers.
 
-`seal(evidence)`: the same proof, except that `version` must NOT be in `supportedVersions` and the depth must be in `sealDepths`. There is no epoch rule: any recent proven state with an unknown current version is enough. It sets `sealed = true` and emits `GateSealedByFork(version, header.slot)`.
+`seal(evidence)`: the same proof, except that `version` must NOT be in `supportedVersions` and the depth must be in `sealDepths`. There is no epoch rule, but `header.slot` must be at least the larger of the deployment slot and the highest header slot that a confirmation accepted, else it reverts `SealEvidenceTooOld(slot, minimumSlot)`. Fork versions only move forward, so this stops an old header that the ring buffer still holds from sealing the gate. It sets `sealed = true` and emits `GateSealedByFork(version, header.slot)`.
 
 ### Why this is sound
 
