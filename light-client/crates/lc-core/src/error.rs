@@ -62,6 +62,12 @@ pub enum Error {
         /// `capellaEra` of the chain.
         capella_era: u64,
     },
+    /// A candidate position is not the position of the named field in any accepted tree shape. The vault refuses it with
+    /// `LayoutPositionInvalid`.
+    LayoutPositionInvalid {
+        /// The candidate generalized index.
+        gindex: u64,
+    },
     /// The index into `historical_summaries` does not fit under `HISTORICAL_ROOTS_LIMIT` (2^24).
     HistoricalIndexOutOfRange {
         /// `deposit era - capellaEra`.
@@ -188,6 +194,9 @@ impl fmt::Display for Error {
             Self::HistoricalIndexOutOfRange { index } => {
                 write!(formatter, "historical summary index {index} is not below 2^24")
             }
+            Self::LayoutPositionInvalid { gindex } => {
+                write!(formatter, "generalized index {gindex} is not the position of the named field")
+            }
             Self::InvalidAncestryBranch => write!(formatter, "ancestry branch does not match the anchor state root"),
             Self::HistoricalSummaryMissing { era, summaries } => write!(
                 formatter,
@@ -242,6 +251,7 @@ impl Error {
             Self::DepositNotBeforeAnchor { .. } => "DepositNotBeforeAnchor",
             Self::DepositBeforeCapella { .. } => "DepositBeforeCapella",
             Self::HistoricalIndexOutOfRange { .. } => "HistoricalIndexOutOfRange",
+            Self::LayoutPositionInvalid { .. } => "LayoutPositionInvalid",
             Self::InvalidAncestryBranch => "InvalidAncestryBranch",
             Self::InvalidBlockHashBranch => "InvalidBlockHashBranch",
             Self::UnsupportedFork { .. } => "UnsupportedFork",

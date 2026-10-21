@@ -280,7 +280,8 @@ fn synthetic_path_mixups_are_refused_in_both_directions() {
         let state_root = far.proof.anchorHeader.stateRoot;
         let deposit: lc_core::types::BeaconBlockHeader = (&far.proof.depositHeader).into();
         let layout = lc_core::layout::state_layout_for_fork(spec.fork_at_slot(anchor_slot)).unwrap();
-        let recent_gindex = lc_core::ancestry::block_roots_leaf_gindex(layout.block_roots_gindex, deposit.slot);
+        let recent_gindex =
+            lc_core::ancestry::block_roots_leaf_gindex(layout.block_roots_gindex, deposit.slot).unwrap();
         assert!(lc_core::ssz::is_valid_exact_branch(
             &deposit.hash_tree_root(),
             &proof.ancestryBranch,

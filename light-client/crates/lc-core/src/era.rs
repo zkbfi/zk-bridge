@@ -189,7 +189,7 @@ mod tests {
         let state = state_with_eras(100_000, &[]);
         let slot = 99_000;
         let branch = recent_ancestry_branch(&state, slot);
-        let gindex = crate::ancestry::block_roots_leaf_gindex(37, slot);
+        let gindex = crate::ancestry::block_roots_leaf_gindex(37, slot).unwrap();
         assert_eq!(branch.len(), 18);
         assert!(is_valid_exact_branch(&state.block_roots[(slot % 8192) as usize], &branch, gindex, &state.root()));
     }

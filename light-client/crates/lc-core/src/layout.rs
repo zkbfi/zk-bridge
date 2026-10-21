@@ -12,6 +12,7 @@
 
 use crate::chain::ForkName;
 use crate::error::{Error, Result};
+use crate::ssz::gindex_depth;
 
 /// Generalized indices of fields inside `BeaconState` that the light client uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,6 +49,27 @@ pub const HISTORICAL_SUMMARIES_LIST_DEPTH: u32 = 24;
 /// fields after it (Electra 37 fields, Fulu 38), so the position stays 27. Checked on 2026-10-20 by counting the fields of
 /// each fork's `BeaconState` in those four files.
 pub const HISTORICAL_SUMMARIES_FIELD_INDEX: u64 = 27;
+
+/// Position of `block_roots` among the `BeaconState` fields (phase0 field order).
+pub const BLOCK_ROOTS_FIELD_INDEX: u64 = 5;
+
+/// Position of `execution_payload` among the `BeaconBlockBody` fields, in Capella through Fulu (index 25 at depth 4).
+pub const EXECUTION_PAYLOAD_FIELD_INDEX: u64 = 9;
+
+/// Position of `block_hash` among the `ExecutionPayload` fields, in Capella through Fulu.
+pub const BLOCK_HASH_FIELD_INDEX: u64 = 12;
+
+/// The tree depths of `BeaconState` that a layout position may have: 32, 64 or 128 leaves (up to 128 fields).
+///
+/// The same rule as `_isStateFieldPosition` in `BridgeVault.sol`. Today's layouts use depth 5 (Capella, Deneb) and depth 6
+/// (Electra, Fulu). Depth 7 is allowed so that a later fork with more than 64 fields needs no new vault.
+pub const STATE_DEPTHS: core::ops::RangeInclusive<u32> = 5..=7;
+
+/// The tree depths of `BeaconBlockBody` that a block hash position may have: 16 or 32 leaves.
+pub const BODY_DEPTHS: core::ops::RangeInclusive<u32> = 4..=5;
+
+/// The tree depths of `ExecutionPayload` that a block hash position may have: 16 or 32 leaves.
+pub const PAYLOAD_DEPTHS: core::ops::RangeInclusive<u32> = 4..=5;
 
 /// Layout of the Capella and Deneb `BeaconState` (28 fields, tree depth 5).
 ///
@@ -93,6 +115,42 @@ pub const BLOCK_HASH_GINDEX_CAPELLA: u64 = EXECUTION_PAYLOAD_GINDEX * 16 + 12;
 /// `ExecutionPayload` has 17 fields from Deneb on (`specs/deneb/beacon-chain.md`, container `ExecutionPayload`; Electra
 /// does not change it), a tree of depth 5. The body keeps depth 4 (13 fields in Electra). The branch has 9 entries.
 pub const BLOCK_HASH_GINDEX_DENEB: u64 = EXECUTION_PAYLOAD_GINDEX * 32 + 12;
+
+/// Whether `gindex` is field `field_index` of a `BeaconState` tree of an accepted depth: `2^depth + field_index`.
+///
+/// This is the one rule for `block_roots` and `historical_summaries` positions. It mirrors `_isStateFieldPosition` in
+/// `BridgeVault.sol`. The accepted positions of `block_roots` are 37, 69 and 133, and of `historical_summaries` 59, 91 and
+/// 155. Only 37, 69, 59 and 91 exist in a layout of today.
+pub fn is_state_field_position(gindex: u64, field_index: u64) -> bool {
+    if gindex == 0 {
+        return false;
+    }
+    let depth = gindex_depth(gindex);
+    if !STATE_DEPTHS.contains(&depth) {
+        return false;
+    }
+    gindex == (1u64 << depth) + field_index
+}
+
+/// Whether `gindex` is the position of `block_roots` in a state of an accepted depth (37, 69 or 133).
+pub fn is_block_roots_position(gindex: u64) -> bool {
+    is_state_field_position(gindex, BLOCK_ROOTS_FIELD_INDEX)
+}
+
+/// Whether `gindex` is the position of `historical_summaries` in a state of an accepted depth (59, 91 or 155).
+pub fn is_historical_summaries_position(gindex: u64) -> bool {
+    is_state_field_position(gindex, HISTORICAL_SUMMARIES_FIELD_INDEX)
+}
+
+/// Whether `gindex` is the position of `execution_payload.block_hash` in a body and a payload of accepted depths:
+/// `(2^body_depth + 9) * 2^payload_depth + 12`. These are 412, 668, 812 and 1324. It mirrors `_isBlockHashPosition` in
+/// `BridgeVault.sol`. Only 412 (Capella) and 812 (Deneb and later) exist in a layout of today.
+pub fn is_block_hash_position(gindex: u64) -> bool {
+    BODY_DEPTHS.clone().any(|body_depth| {
+        let payload_field = (1u64 << body_depth) + EXECUTION_PAYLOAD_FIELD_INDEX;
+        PAYLOAD_DEPTHS.clone().any(|payload_depth| gindex == (payload_field << payload_depth) + BLOCK_HASH_FIELD_INDEX)
+    })
+}
 
 /// Selects the `execution_payload.block_hash` generalized index for a fork.
 ///
@@ -148,7 +206,6 @@ pub fn execution_header_form_for_fork(fork: ForkName) -> Result<ExecutionHeaderF
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ssz::gindex_depth;
 
     /// Claim: the branch depths are 6/5/5 for Capella and 7/6/6 for Electra, as the real update lengths show
     /// (the live Ethereum update has a 7 entry finality branch and a 6 entry committee branch).
@@ -197,5 +254,58 @@ mod tests {
         for fork in [ForkName::Phase0, ForkName::Altair, ForkName::Bellatrix, ForkName::Gloas] {
             assert_eq!(state_layout_for_fork(fork), Err(Error::UnsupportedFork { fork }));
         }
+    }
+
+    /// Claim: the position rule accepts exactly the vault's set. `block_roots` is 37, 69 or 133, `historical_summaries` is
+    /// 59, 91 or 155, and the block hash is 412, 668, 812 or 1324, each written out by hand from the field index and the
+    /// depth. The neighbour on each side of every accepted position is refused.
+    /// Why it matters: the vault accepts these positions and no others. A light client that knew fewer would refuse a
+    /// layout the vault accepts, and one that knew more would accept a layout the vault refuses.
+    #[test]
+    fn position_rule_matches_the_vault() {
+        for position in [37, 69, 133] {
+            assert!(is_block_roots_position(position));
+            assert!(!is_block_roots_position(position - 1), "{position}: the field before");
+            assert!(!is_block_roots_position(position + 1), "{position}: the field after");
+        }
+        for position in [59, 91, 155] {
+            assert!(is_historical_summaries_position(position));
+            assert!(!is_historical_summaries_position(position - 1), "{position}: the field before");
+            assert!(!is_historical_summaries_position(position + 1), "{position}: the field after");
+        }
+        for position in [412, 668, 812, 1324] {
+            assert!(is_block_hash_position(position));
+            assert!(!is_block_hash_position(position - 1), "{position}: the field before");
+            assert!(!is_block_hash_position(position + 1), "{position}: the field after");
+        }
+    }
+
+    /// Claim: the accepted positions of one field never double as another field's, and the depths outside the allowed
+    /// range are refused. Depth 4 (21), depth 8 (261 and 283) and the root are refused, as are a body of depth 3 (284)
+    /// and a body of depth 6 (2348).
+    /// Why it matters: the depth bounds are half of the rule, and an off-by-one in a bound shows only at the edge.
+    #[test]
+    fn position_rule_refuses_depths_outside_the_range() {
+        assert!(!is_block_roots_position(21));
+        assert!(!is_block_roots_position(261));
+        assert!(!is_historical_summaries_position(283));
+        assert!(!is_block_roots_position(0) && !is_block_roots_position(1));
+        assert!(!is_block_hash_position(0));
+        // Body depth 3 with payload depth 4: (8 + 9) * 16 + 12. Body depth 6 with payload depth 5: (64 + 9) * 32 + 12.
+        assert!(!is_block_hash_position(284));
+        assert!(!is_block_hash_position(2348));
+        assert!(!is_block_roots_position(59) && !is_historical_summaries_position(37));
+    }
+
+    /// Claim: every position in today's layout tables obeys the rule. Why it matters: the table and the rule must not
+    /// drift apart, because the vault accepts only positions that obey the rule.
+    #[test]
+    fn todays_layouts_obey_the_rule() {
+        for layout in [CAPELLA_DENEB_STATE_LAYOUT, ELECTRA_STATE_LAYOUT] {
+            assert!(is_block_roots_position(layout.block_roots_gindex));
+            assert!(is_historical_summaries_position(layout.historical_summaries_gindex));
+        }
+        assert!(is_block_hash_position(BLOCK_HASH_GINDEX_CAPELLA));
+        assert!(is_block_hash_position(BLOCK_HASH_GINDEX_DENEB));
     }
 }

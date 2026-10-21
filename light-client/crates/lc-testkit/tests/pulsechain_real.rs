@@ -345,7 +345,7 @@ fn real_historical_ancestry_rejects_wrong_index_length_and_entries() {
             let gindex = historical_leaf_gindex(field, wrong, deposit.slot).unwrap_or(0).max(1);
             assert!(!check(&branch, gindex), "{name}: wrong era index {wrong}");
         }
-        let recent = block_roots_leaf_gindex(CAPELLA_DENEB_STATE_LAYOUT.block_roots_gindex, deposit.slot);
+        let recent = block_roots_leaf_gindex(CAPELLA_DENEB_STATE_LAYOUT.block_roots_gindex, deposit.slot).unwrap();
         assert!(!check(&branch, recent), "{name}: block_roots index");
         let gindex = historical_leaf_gindex(field, index, deposit.slot).unwrap();
         let mut padded = branch.clone();

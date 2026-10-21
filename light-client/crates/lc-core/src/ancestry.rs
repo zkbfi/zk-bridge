@@ -25,8 +25,8 @@ use crate::abi::{BeaconBlockHeader as AbiBeaconBlockHeader, WithdrawalProof};
 use crate::chain::ChainSpec;
 use crate::error::{Error, Result};
 use crate::layout::{
-    block_hash_gindex_for_fork, state_layout_for_fork, BLOCK_ROOTS_VECTOR_DEPTH, HISTORICAL_SUMMARIES_LIST_DEPTH,
-    SLOTS_PER_HISTORICAL_ROOT,
+    block_hash_gindex_for_fork, is_block_roots_position, is_historical_summaries_position, state_layout_for_fork,
+    BLOCK_ROOTS_VECTOR_DEPTH, HISTORICAL_SUMMARIES_LIST_DEPTH, SLOTS_PER_HISTORICAL_ROOT,
 };
 use crate::ssz::is_valid_exact_branch;
 use crate::types::BeaconBlockHeader;
@@ -80,8 +80,15 @@ pub fn ancestry_path_for_slots(anchor_slot: u64, deposit_slot: u64) -> Result<An
 }
 
 /// The generalized index of `block_roots[slot % 8192]`, given the generalized index of the `block_roots` field.
-pub fn block_roots_leaf_gindex(block_roots_field_gindex: u64, deposit_slot: u64) -> u64 {
-    (block_roots_field_gindex << BLOCK_ROOTS_VECTOR_DEPTH) | (deposit_slot % SLOTS_PER_HISTORICAL_ROOT)
+///
+/// # Errors
+/// `LayoutPositionInvalid` when the field index is not an accepted `block_roots` position (37, 69 or 133): the vault
+/// accepts no other.
+pub fn block_roots_leaf_gindex(block_roots_field_gindex: u64, deposit_slot: u64) -> Result<u64> {
+    if !is_block_roots_position(block_roots_field_gindex) {
+        return Err(Error::LayoutPositionInvalid { gindex: block_roots_field_gindex });
+    }
+    Ok((block_roots_field_gindex << BLOCK_ROOTS_VECTOR_DEPTH) | (deposit_slot % SLOTS_PER_HISTORICAL_ROOT))
 }
 
 /// The generalized index of `historical_summaries[index].block_summary_root.block_roots[deposit_slot % 8192]`.
@@ -97,8 +104,12 @@ pub fn block_roots_leaf_gindex(block_roots_field_gindex: u64, deposit_slot: u64)
 /// the Electra and Fulu layouts.
 ///
 /// # Errors
+/// `LayoutPositionInvalid` when the field index is not an accepted `historical_summaries` position (59, 91 or 155).
 /// `HistoricalIndexOutOfRange` when `index >= 2^24`: it would spill into the neighbouring subtree.
 pub fn historical_leaf_gindex(historical_summaries_field_gindex: u64, index: u64, deposit_slot: u64) -> Result<u64> {
+    if !is_historical_summaries_position(historical_summaries_field_gindex) {
+        return Err(Error::LayoutPositionInvalid { gindex: historical_summaries_field_gindex });
+    }
     if index >= 1u64 << HISTORICAL_SUMMARIES_LIST_DEPTH {
         return Err(Error::HistoricalIndexOutOfRange { index });
     }
@@ -115,12 +126,13 @@ pub fn historical_leaf_gindex(historical_summaries_field_gindex: u64, index: u64
 /// `capella_era` is the immutable `capellaEra` of the vault (`ChainSpec::capella_era`).
 ///
 /// # Errors
-/// `DepositNotBeforeAnchor`, `UnsupportedFork` (anchor fork), `DepositBeforeCapella`, `HistoricalIndexOutOfRange`.
+/// `DepositNotBeforeAnchor`, `UnsupportedFork` (anchor fork), `DepositBeforeCapella`, `HistoricalIndexOutOfRange`,
+/// `LayoutPositionInvalid`.
 pub fn ancestry_leaf_gindex(spec: &ChainSpec, anchor_slot: u64, deposit_slot: u64) -> Result<u64> {
     let path = ancestry_path_for_slots(anchor_slot, deposit_slot)?;
     let layout = state_layout_for_fork(spec.fork_at_slot(anchor_slot))?;
     if path == AncestryPath::Recent {
-        return Ok(block_roots_leaf_gindex(layout.block_roots_gindex, deposit_slot));
+        return block_roots_leaf_gindex(layout.block_roots_gindex, deposit_slot);
     }
     let capella_era = spec.capella_era()?;
     let deposit_era = deposit_slot / SLOTS_PER_HISTORICAL_ROOT;
@@ -206,8 +218,10 @@ mod tests {
     fn branch_lengths_are_exact() {
         assert_eq!(gindex_depth(historical_leaf_gindex(59, 5, 77).unwrap()), 44);
         assert_eq!(gindex_depth(historical_leaf_gindex(91, 5, 77).unwrap()), 45);
-        assert_eq!(gindex_depth(block_roots_leaf_gindex(37, 77)), 18);
-        assert_eq!(gindex_depth(block_roots_leaf_gindex(69, 77)), 19);
+        assert_eq!(gindex_depth(historical_leaf_gindex(155, 5, 77).unwrap()), 46);
+        assert_eq!(gindex_depth(block_roots_leaf_gindex(133, 77).unwrap()), 20);
+        assert_eq!(gindex_depth(block_roots_leaf_gindex(37, 77).unwrap()), 18);
+        assert_eq!(gindex_depth(block_roots_leaf_gindex(69, 77).unwrap()), 19);
     }
 
     /// Claim: an index of 2^24 or more is refused instead of spilling into the next subtree. The control: 2^24 - 1 works.
@@ -234,5 +248,33 @@ mod tests {
         );
         let pulsechain = ancestry_leaf_gindex(&PULSECHAIN, 10_900_000, 100).unwrap();
         assert_eq!(pulsechain, historical_leaf_gindex(59, 0, 100).unwrap());
+    }
+
+    /// Claim: the leaf builders take only the positions that the vault accepts, and refuse a neighbour of each. The
+    /// deeper positions 133 and 155 build leaves, the neighbours 36, 38, 132, 134, 58, 60, 154 and 156 do not.
+    /// Why it matters: a position that the vault refuses must not yield a leaf that a prover could use to build evidence.
+    #[test]
+    fn leaf_builders_take_only_accepted_positions() {
+        for position in [37, 69, 133] {
+            assert!(block_roots_leaf_gindex(position, 5).is_ok(), "{position}");
+            for neighbour in [position - 1, position + 1] {
+                assert_eq!(
+                    block_roots_leaf_gindex(neighbour, 5),
+                    Err(Error::LayoutPositionInvalid { gindex: neighbour })
+                );
+            }
+        }
+        for position in [59, 91, 155] {
+            assert!(historical_leaf_gindex(position, 0, 5).is_ok(), "{position}");
+            for neighbour in [position - 1, position + 1] {
+                assert_eq!(
+                    historical_leaf_gindex(neighbour, 0, 5),
+                    Err(Error::LayoutPositionInvalid { gindex: neighbour })
+                );
+            }
+        }
+        // A position of the other field is refused too, although it has an accepted shape.
+        assert_eq!(block_roots_leaf_gindex(59, 5), Err(Error::LayoutPositionInvalid { gindex: 59 }));
+        assert_eq!(historical_leaf_gindex(37, 0, 5), Err(Error::LayoutPositionInvalid { gindex: 37 }));
     }
 }
