@@ -63,6 +63,9 @@ pub enum Command {
         /// The most epochs the light client head may lag the source chain head.
         #[arg(long, default_value_t = route_health::DEFAULT_STALE_EPOCHS)]
         stale_epochs: u64,
+        /// Warn when the own-chain light client head lags the current slot by this many periods or more.
+        #[arg(long, default_value_t = route_health::DEFAULT_OWN_LIGHT_CLIENT_WARN_PERIODS)]
+        own_light_client_warn_periods: u64,
     },
 }
 
@@ -229,8 +232,12 @@ pub fn run(
             writeln!(out, "deposit {nonce:#x} processed; run `status` to see its state").map_err(|e| Error::Usage(e.to_string()))?;
             Ok(0)
         }
-        Command::RouteHealth { json, margin_seconds, stale_epochs } => {
-            let settings = HealthSettings { margin_seconds: *margin_seconds, stale_epochs: *stale_epochs };
+        Command::RouteHealth { json, margin_seconds, stale_epochs, own_light_client_warn_periods } => {
+            let settings = HealthSettings {
+                margin_seconds: *margin_seconds,
+                stale_epochs: *stale_epochs,
+                own_light_client_warn_periods: *own_light_client_warn_periods,
+            };
             let format = if *json { OutputFormat::Json } else { OutputFormat::Human };
             route_health::run(&config, settings, format, out)
         }

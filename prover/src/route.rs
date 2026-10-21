@@ -29,12 +29,15 @@ use std::time::Duration;
 const MAX_UPDATES_PER_CALL: usize = 8;
 
 /// One direction over two real chains.
+///
+/// The source chain client sends transactions only when `own_light_client` is set: it then updates that light client.
 pub struct LiveRoute {
     source: ChainClient,
     destination: ChainClient,
     source_vault: Address,
     destination_vault: Address,
     light_client: Address,
+    own_light_client: Option<Address>,
     beacon: Box<dyn BeaconSource>,
     prover: Box<dyn Prover>,
     program_vkey: B256,
@@ -49,7 +52,7 @@ pub struct LiveRoute {
 pub struct LiveRouteParts {
     /// The route name.
     pub route_name: String,
-    /// The client of the source chain.
+    /// The client of the source chain. It needs the signer when `own_light_client` is set.
     pub source: ChainClient,
     /// The client of the destination chain (it holds the signer).
     pub destination: ChainClient,
@@ -59,6 +62,8 @@ pub struct LiveRouteParts {
     pub destination_vault: Address,
     /// The light client on the destination chain.
     pub light_client: Address,
+    /// The light client of the source chain's own beacon chain, on the source chain, when one is configured.
+    pub own_light_client: Option<Address>,
     /// The beacon source of the source chain.
     pub beacon: Box<dyn BeaconSource>,
     /// The proving backend.
@@ -86,6 +91,7 @@ impl LiveRoute {
             source_vault: parts.source_vault,
             destination_vault: parts.destination_vault,
             light_client: parts.light_client,
+            own_light_client: parts.own_light_client,
             beacon: parts.beacon,
             prover: parts.prover,
             program_vkey: parts.program_vkey,
@@ -125,24 +131,34 @@ impl LiveRoute {
         if program_key != self.program_vkey {
             return Err(mismatch("light client programVKey", format!("{:#x}", self.program_vkey), format!("{program_key:#x}")));
         }
+        self.check_own_light_client_wiring(&mismatch)
+    }
+
+    /// The own-chain light client must follow the same beacon chain as the destination light client (both track the
+    /// source chain) and run the same program. The service reads both facts from the contracts and compares them.
+    fn check_own_light_client_wiring(&self, mismatch: &dyn Fn(&str, String, String) -> Error) -> Result<()> {
+        let Some(own) = self.own_light_client else {
+            return Ok(());
+        };
+        self.source.sender().map_err(|_| Error::Config(format!("route {}: own_light_client is set, but the source chain has no signer", self.route_name)))?;
+        let own_key = self.source.view(own, LightClientContract::programVKeyCall {})?;
+        if own_key != self.program_vkey {
+            return Err(mismatch("own light client programVKey", format!("{:#x}", self.program_vkey), format!("{own_key:#x}")));
+        }
+        let own_root = self.source.view(own, LightClientContract::genesisValidatorsRootCall {})?;
+        let tracked_root = self.destination.view(self.light_client, LightClientContract::genesisValidatorsRootCall {})?;
+        if own_root != tracked_root {
+            return Err(mismatch(
+                "own light client genesisValidatorsRoot (the destination light client tracks the same beacon chain)",
+                format!("{tracked_root:#x}"),
+                format!("{own_root:#x}"),
+            ));
+        }
         Ok(())
     }
 
     fn read_light_client_state(&self) -> Result<LightClientState> {
-        let client = &self.destination;
-        let address = self.light_client;
-        let head_slot = client.view(address, LightClientContract::headCall {})?;
-        let slots_per_period = client.view(address, LightClientContract::slotsPerPeriodCall {})?;
-        let period = head_slot / slots_per_period;
-        Ok(LightClientState {
-            head_slot,
-            head_root: client.view(address, LightClientContract::headersCall { slot: head_slot })?,
-            head_execution_hash: client.view(address, LightClientContract::executionBlockHashesCall { slot: head_slot })?,
-            genesis_validators_root: client.view(address, LightClientContract::genesisValidatorsRootCall {})?,
-            slots_per_period,
-            head_committee_hash: client.view(address, LightClientContract::syncCommitteesCall { period })?,
-            next_committee_hash: client.view(address, LightClientContract::syncCommitteesCall { period: period + 1 })?,
-        })
+        read_light_client_state_of(&self.destination, self.light_client)
     }
 
     /// The slots of every head that the light client stored by an update, from its `HeadUpdated` events.
@@ -196,10 +212,11 @@ impl LiveRoute {
         self.destination.send_and_wait(to, data, what, self.receipt_timeout)
     }
 
-    fn submit_update(&self, statement: &crate::prover::ProofStatement) -> Result<()> {
+    /// Proves an update and sends it to `light_client` on `chain`.
+    fn submit_update(&self, chain: &ChainClient, light_client: Address, statement: &crate::prover::ProofStatement) -> Result<()> {
         let proof = self.prover.prove(self.program_vkey, statement)?;
         let data = update_calldata(&proof.proof_bytes, &proof.public_values);
-        self.send_and_wait(self.light_client, &data, "the light client update")?;
+        chain.send_and_wait(light_client, &data, "the light client update", self.receipt_timeout)?;
         Ok(())
     }
 
@@ -331,10 +348,27 @@ impl RoutePorts for LiveRoute {
             match self.beacon.next_update(&block, &state, &stored, &self.source)? {
                 UpdatePlan::Covered => return Ok(Coverage::Covered),
                 UpdatePlan::NotYetFinal => return Ok(Coverage::NotYetFinal),
-                UpdatePlan::Update(statement) => self.submit_update(&statement)?,
+                UpdatePlan::Update(statement) => self.submit_update(&self.destination, self.light_client, &statement)?,
             }
         }
         Err(Error::Beacon(format!("the light client is still behind block {} after {MAX_UPDATES_PER_CALL} updates", block.number)))
+    }
+
+    fn advance_own_light_client(&self) -> Result<usize> {
+        let Some(own) = self.own_light_client else {
+            return Ok(0);
+        };
+        // One update per pass. The chain keeps finalizing, so a loop that chases the newest final header would not
+        // end on a fast chain (on Anvil each update mines a block that moves the finalized block). The next pass
+        // continues, and a head far behind catches up one update per pass.
+        let state = read_light_client_state_of(&self.source, own)?;
+        match self.beacon.next_head_update(&state, &self.source)? {
+            UpdatePlan::Covered | UpdatePlan::NotYetFinal => Ok(0),
+            UpdatePlan::Update(statement) => {
+                self.submit_update(&self.source, own, &statement)?;
+                Ok(1)
+            }
+        }
     }
 
     fn build_withdrawal(&self, deposit: &NewDeposit) -> Result<Vec<u8>> {
@@ -386,6 +420,22 @@ impl RoutePorts for LiveRoute {
     fn transaction_succeeded(&self, transaction: B256) -> Result<Option<bool>> {
         Ok(self.destination.wait_for_transaction(transaction, self.receipt_timeout)?.map(|mined| mined.success))
     }
+}
+
+/// What a light client contract stores, as the service reads it from the chain that holds the contract.
+pub fn read_light_client_state_of(client: &ChainClient, address: Address) -> Result<LightClientState> {
+    let head_slot = client.view(address, LightClientContract::headCall {})?;
+    let slots_per_period = client.view(address, LightClientContract::slotsPerPeriodCall {})?;
+    let period = head_slot / slots_per_period;
+    Ok(LightClientState {
+        head_slot,
+        head_root: client.view(address, LightClientContract::headersCall { slot: head_slot })?,
+        head_execution_hash: client.view(address, LightClientContract::executionBlockHashesCall { slot: head_slot })?,
+        genesis_validators_root: client.view(address, LightClientContract::genesisValidatorsRootCall {})?,
+        slots_per_period,
+        head_committee_hash: client.view(address, LightClientContract::syncCommitteesCall { period })?,
+        next_committee_hash: client.view(address, LightClientContract::syncCommitteesCall { period: period + 1 })?,
+    })
 }
 
 fn connect_chain(config: &ChainConfig, signer: Option<Signer>) -> Result<ChainClient> {
@@ -441,13 +491,17 @@ pub fn build_routes(config: &Config, signer: &Signer, oracle: &Signer) -> Result
 fn build_route(config: &Config, name: RouteName, signer: &Signer, oracle: &Signer) -> Result<Route> {
     let source_config = config.source_of(name);
     let destination_config = config.destination_of(name);
+    let own_light_client = source_config.own_light_client_address()?;
+    // The source client signs only when it must update the own-chain light client.
+    let source_signer = own_light_client.map(|_| signer.clone());
     let live = LiveRoute::connect(LiveRouteParts {
         route_name: name.as_str().to_string(),
-        source: connect_chain(source_config, None)?,
+        source: connect_chain(source_config, source_signer)?,
         destination: connect_chain(destination_config, Some(signer.clone()))?,
         source_vault: source_config.vault_address()?,
         destination_vault: destination_config.vault_address()?,
         light_client: destination_config.light_client_address()?,
+        own_light_client,
         beacon: build_beacon(source_config)?,
         prover: build_prover(config, oracle)?,
         program_vkey: config.prover.program_vkey_value()?,

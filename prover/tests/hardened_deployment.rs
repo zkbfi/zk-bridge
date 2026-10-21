@@ -65,7 +65,8 @@ fn script_config_with_observation(
         json!({
             "programVKey": format!("{:#x}", keccak256(b"light-client-program")),
             "genesisValidatorsRoot": format!("{:#x}", keccak256(label)),
-            "slotsPerPeriod": "8192", "slotsPerEpoch": "32", "capellaForkEpoch": "3", "capellaEra": era,
+            "slotsPerPeriod": "8192", "genesisTime": "1600000000", "secondsPerSlot": "12",
+            "slotsPerEpoch": "32", "capellaForkEpoch": "3", "capellaEra": era,
             "initialSlot": "100",
             "initialHeaderRoot": format!("{:#x}", keccak256(b"header")),
             "initialSyncCommitteeHash": format!("{:#x}", keccak256(b"committee")),
@@ -91,6 +92,8 @@ fn script_config_with_observation(
             "observationProgramVKey": format!("{key:#x}"),
             "genesisValidatorsRoot": format!("{:#x}", keccak256("genesis-of-chain-b")),
             "slotsPerPeriod": "8192",
+            "genesisTime": "1600000000",
+            "secondsPerSlot": "12",
             "initialSlot": "100",
             "initialHeaderRoot": format!("{:#x}", keccak256(b"own header")),
             "initialSyncCommitteeHash": format!("{:#x}", keccak256(b"own committee")),

@@ -19,6 +19,16 @@ Deposit states: `seen`, `awaiting_finality`, `light_client_updated`, `proven`, `
 `proven` means the service built the withdrawal and `lc-core` verified it natively. A withdrawal needs no proof.
 Only light-client updates are proven.
 
+## Own-chain light client
+
+A chain whose deposit gate runs in registry mode (PulseChain) has a second light client: one of its OWN beacon chain,
+deployed on that chain. The fork registry reads it for freshness and for the start of an observation. Set its address
+as `own_light_client` in the section of that chain. Each pass of `once` and `run` then sends it one update toward the
+newest final header of that chain, built from the same beacon source that the route already reads for the other
+direction. A failed update is logged (`own_light_client_update_failed`) and never stops a deposit. At startup the
+service checks that the contract runs the configured program and follows the same beacon chain (same genesis
+validators root) as the light client on the other chain.
+
 ## Tests
 
 ```
@@ -52,7 +62,7 @@ wallet, a keeper or a test calls `gate::gate_evidence_for_deposit`.
 ## Route health
 
 ```
-zk-bridge-prover --config prover.toml route-health [--json] [--margin-seconds 3600] [--stale-epochs 64]
+zk-bridge-prover --config prover.toml route-health [--json] [--margin-seconds 3600] [--stale-epochs 64] [--own-light-client-warn-periods 32]
 ```
 
 The command answers one question for each route: can it still deliver a deposit made now? A route cannot deliver
@@ -71,6 +81,11 @@ source vault has a deposit gate, with the gate's `supportedVersions`. It also re
 | `STOP` | An unsupported fork is active, or activates within the margin. |
 | `SEALED` | The gate is sealed. Every deposit reverts. |
 | `STALE` | The light client head lags the source head by more than `--stale-epochs` epochs. |
+
+`WARN` also covers the own-chain light client (see above) when its head lags the current slot by
+`--own-light-client-warn-periods` periods or more. The default is 32, half of the fold limit of one proof (64 updates).
+The lag comes from the wall clock, so a stuck beacon node cannot hide it. It is a `WARN` and not a `STOP`: a deposit
+made now does not depend on that light client, so the exit code stays 0.
 
 The margin is the larger of `--margin-seconds` and three epochs. A smaller value is raised to three epochs. When
 several findings apply, the most severe one wins (`SEALED`, `STOP`, `STALE`, `WARN`, `OPEN`) and the others appear

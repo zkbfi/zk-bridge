@@ -28,7 +28,7 @@ enum Kind {
 }
 
 /// Every key that an environment variable may override.
-const OVERRIDES: [(&str, Kind); 17] = [
+const OVERRIDES: [(&str, Kind); 19] = [
     ("database_path", Kind::Text),
     ("poll_interval_seconds", Kind::Integer),
     ("receipt_timeout_seconds", Kind::Integer),
@@ -37,12 +37,14 @@ const OVERRIDES: [(&str, Kind); 17] = [
     ("chain_a.chain_id", Kind::Integer),
     ("chain_a.vault", Kind::Text),
     ("chain_a.light_client", Kind::Text),
+    ("chain_a.own_light_client", Kind::Text),
     ("chain_a.beacon.url", Kind::Text),
     ("chain_a.beacon.finality_depth", Kind::Integer),
     ("chain_b.rpc_url", Kind::Text),
     ("chain_b.chain_id", Kind::Integer),
     ("chain_b.vault", Kind::Text),
     ("chain_b.light_client", Kind::Text),
+    ("chain_b.own_light_client", Kind::Text),
     ("chain_b.beacon.url", Kind::Text),
     ("chain_b.beacon.finality_depth", Kind::Integer),
     ("max_attempts", Kind::Integer),
@@ -152,6 +154,12 @@ pub struct ChainConfig {
     pub vault: String,
     /// The `BeaconLightClient` on this chain. It tracks the OTHER chain's beacon chain.
     pub light_client: String,
+    /// The `BeaconLightClient` of THIS chain's own beacon chain, deployed on this chain. Optional. The fork registry
+    /// of a gate in registry mode reads it for freshness and for the start of an observation. When it is set, every
+    /// route that reads deposits from this chain also keeps it current, with the beacon updates that the route fetches
+    /// for the other direction.
+    #[serde(default)]
+    pub own_light_client: Option<String>,
     /// The beacon chain of this chain (the source of deposits made here).
     pub beacon: BeaconConfig,
 }
@@ -216,6 +224,14 @@ impl ChainConfig {
     /// The light client address.
     pub fn light_client_address(&self) -> Result<Address> {
         parse_address(&self.light_client, &format!("{}.light_client", self.name))
+    }
+
+    /// The own-chain light client address, or `None` when the chain has none configured.
+    pub fn own_light_client_address(&self) -> Result<Option<Address>> {
+        let Some(text) = &self.own_light_client else {
+            return Ok(None);
+        };
+        parse_address(text, &format!("{}.own_light_client", self.name)).map(Some)
     }
 
     /// The `lc-core` chain kind of this chain's beacon chain.
@@ -372,6 +388,9 @@ impl Config {
         if vault == light_client {
             return Err(Error::Config(format!("{name}: vault and light_client are the same address")));
         }
+        if chain.own_light_client_address()?.is_some_and(|own| own == vault || own == light_client) {
+            return Err(Error::Config(format!("{name}: own_light_client is the same address as the vault or the light_client")));
+        }
         chain.chain_kind()?;
         match chain.beacon.kind {
             BeaconKind::Http => {
@@ -518,6 +537,32 @@ mod tests {
         }
         let dev = SAMPLE.replace("kind = \"http\"\nurl = \"https://beacon.example.net\"", "kind = \"dev\"\nfinality_depth = 2");
         assert!(Config::load(&dev, &no_environment).unwrap_err().to_string().contains("only on a local chain"));
+    }
+
+    /// Claim: the own-chain light client is optional, parses when set, and may not repeat the vault or the light
+    /// client. An environment variable can set it.
+    /// Why it matters: a repeated address would send light-client updates to the wrong contract.
+    #[test]
+    fn own_light_client_is_optional_and_checked() {
+        let config = Config::load(SAMPLE, &no_environment).unwrap();
+        assert_eq!(config.chain_a.own_light_client_address().unwrap(), None);
+        let with_own = SAMPLE.replace(
+            "light_client = \"0x4444444444444444444444444444444444444444\"",
+            "light_client = \"0x4444444444444444444444444444444444444444\"\nown_light_client = \"0x5555555555555555555555555555555555555555\"",
+        );
+        let config = Config::load(&with_own, &no_environment).unwrap();
+        assert_eq!(config.chain_b.own_light_client_address().unwrap(), Some(Address::repeat_byte(0x55)));
+        assert_eq!(config.chain_a.own_light_client_address().unwrap(), None);
+        let lookup = |name: &str| (name == "ZK_BRIDGE_PROVER_CHAIN_A_OWN_LIGHT_CLIENT").then(|| "0x6666666666666666666666666666666666666666".to_string());
+        let config = Config::load(SAMPLE, &lookup).unwrap();
+        assert_eq!(config.chain_a.own_light_client_address().unwrap(), Some(Address::repeat_byte(0x66)));
+        for repeated in ["0x3333333333333333333333333333333333333333", "0x4444444444444444444444444444444444444444"] {
+            let text = with_own.replace("0x5555555555555555555555555555555555555555", repeated);
+            let error = Config::load(&text, &no_environment).unwrap_err().to_string();
+            assert!(error.contains("own_light_client is the same address"), "{error}");
+        }
+        let zero = with_own.replace("0x5555555555555555555555555555555555555555", "0x0000000000000000000000000000000000000000");
+        assert!(Config::load(&zero, &no_environment).unwrap_err().to_string().contains("zero address"));
     }
 
     /// Claim: only loopback hosts count as local.

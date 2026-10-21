@@ -43,6 +43,9 @@ start_block = 0
 chain_id = 369
 vault = "0x0000000000000000000000000000000000000003"          # REPLACE
 light_client = "0x0000000000000000000000000000000000000004"   # REPLACE
+# Optional. The light client of THIS chain's own beacon chain, deployed on this chain (PulseChain: the one that its
+# fork registry reads). When set, every pass sends it one update toward the newest final header. It needs a signer.
+# own_light_client = "0x0000000000000000000000000000000000000005"
 [chain_b.beacon]
 kind = "http"
 url = "https://REPLACE"

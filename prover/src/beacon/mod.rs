@@ -4,8 +4,10 @@
 //! which has no beacon chain: it treats an execution block as final once it lies a set number of blocks below the
 //! latest block, and it builds a synthetic beacon chain over the real execution blocks.
 //!
-//! The service asks the source four things. Which source blocks are final. What the next light-client update must be
-//! for a deposit. What the beacon part of a withdrawal looks like. What evidence the vault needs for its layout rows.
+//! The service asks the source five things. Which source blocks are final. What the next light-client update must be
+//! for a deposit. What the next update must be to follow the newest final header, with no deposit in view (the
+//! own-chain light client). What the beacon part of a withdrawal looks like. What evidence the vault needs for its
+//! layout rows.
 
 #[cfg(feature = "dev-source")]
 pub mod dev;
@@ -47,10 +49,11 @@ pub struct LightClientState {
     pub next_committee_hash: B256,
 }
 
-/// The answer to "what must the light client do for this deposit".
+/// The answer to "what must the light client do for this deposit", or "what must it do to follow the chain".
 #[derive(Clone, Debug)]
 pub enum UpdatePlan {
-    /// The light client already holds a header that covers the deposit block.
+    /// The light client already holds a header that covers the deposit block. Without a deposit in view, its head
+    /// already is the newest final header.
     Covered,
     /// The source has no final header that covers the deposit block yet. Wait.
     NotYetFinal,
@@ -120,6 +123,10 @@ pub trait BeaconSource: Send + Sync {
         stored_slots: &[u64],
         source: &dyn ExecutionReader,
     ) -> Result<UpdatePlan>;
+
+    /// What the light client must do next to follow the newest final header of the source chain, with no deposit in
+    /// view. `Covered` means the head already is the newest final header. `NotYetFinal` means the source has none.
+    fn next_head_update(&self, light_client: &LightClientState, source: &dyn ExecutionReader) -> Result<UpdatePlan>;
 
     /// The beacon part of the withdrawal for a deposit block.
     fn withdrawal_path(

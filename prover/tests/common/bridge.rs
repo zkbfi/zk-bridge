@@ -54,6 +54,17 @@ pub const SLOTS_PER_EPOCH: u64 = 32;
 /// The seconds of a gate epoch.
 pub const EPOCH_SECONDS: u64 = SECONDS_PER_SLOT * SLOTS_PER_EPOCH;
 
+/// The genesis time of every light client in the tests. The Anvil clock follows the wall clock, so the current slot of
+/// a light client is far above every slot that a test stores: no honest head lies in the future.
+pub const LIGHT_CLIENT_GENESIS_TIME: u64 = 1_000_000_000;
+/// The seconds per slot of every light client in the tests.
+pub const LIGHT_CLIENT_SECONDS_PER_SLOT: u64 = 12;
+
+/// The dev beacon slot of block 0 on chain B when chain B has an own-chain light client. It lies above the checkpoint
+/// slots of the observation fixtures (about 10.86 million), so the dev source can move that light client forward. The
+/// clock of the light client (`LIGHT_CLIENT_GENESIS_TIME`) puts the current slot far above this value.
+pub const OWN_CHAIN_SLOT_OFFSET: u64 = 11_000_000;
+
 /// The signer of the first Anvil account, which is also the oracle of the verifier contracts.
 pub fn deployer_signer() -> Signer {
     Signer::from_secret_bytes(&hex::decode(DEPLOYER_SECRET.trim_start_matches("0x")).unwrap()).unwrap()
@@ -210,7 +221,7 @@ fn deploy_side(
     local_token_name: &str,
     pairs: &[(Address, Address)],
     remote_vault: Address,
-    genesis_label: &str,
+    genesis_root: B256,
     gate_mode: u64,
     observation: Option<&ObservationFixture>,
     deposit_fee_basis_points: u16,
@@ -222,8 +233,10 @@ fn deploy_side(
         HashMap::from([
             ("verifier", word_address(verifier)),
             ("programVKey", word_hash(keccak256(b"light-client-program"))),
-            ("genesisValidatorsRoot", word_hash(keccak256(genesis_label))),
+            ("genesisValidatorsRoot", word_hash(genesis_root)),
             ("slotsPerPeriod", word_u64(1 << 20)),
+            ("genesisTime", word_u64(LIGHT_CLIENT_GENESIS_TIME)),
+            ("secondsPerSlot", word_u64(LIGHT_CLIENT_SECONDS_PER_SLOT)),
             ("initialSlot", word_u64(1)),
             ("initialHeaderRoot", word_hash(keccak256(b"checkpoint"))),
             ("initialSyncCommitteeHash", word_hash(keccak256(b"committee"))),
@@ -239,6 +252,8 @@ fn deploy_side(
                 ("programVKey", word_hash(keccak256(b"light-client-program"))),
                 ("genesisValidatorsRoot", word_hash(fixture.genesis_validators_root())),
                 ("slotsPerPeriod", word_u64(OBSERVATION_SLOTS_PER_PERIOD)),
+                ("genesisTime", word_u64(LIGHT_CLIENT_GENESIS_TIME)),
+                ("secondsPerSlot", word_u64(LIGHT_CLIENT_SECONDS_PER_SLOT)),
                 ("initialSlot", word_u64(fixture.head_slot)),
                 ("initialHeaderRoot", word_hash(fixture.header_root)),
                 ("initialSyncCommitteeHash", word_hash(fixture.committee_hash)),
@@ -456,13 +471,19 @@ pub fn deploy_bridge_with(name: &str, options: BridgeOptions) -> Bridge {
     if let Some(rogue) = rogue_token {
         pairs_a.push((rogue, rogue));
     }
-    let side_a = deploy_side(&chain_a, 1, 369, "Token A", &pairs_a, vault_b, "genesis-of-chain-b", GATE_MODE_ENFORCING, None, options.deposit_fee_basis_points);
+    // The light client on chain A tracks chain B. With an own-chain light client on chain B, both follow the beacon chain
+    // of the fixture, so they hold one genesis validators root (the prover checks that relationship at startup).
+    let chain_b_genesis_root = observation_fixture.as_ref().map_or_else(|| keccak256("genesis-of-chain-b"), ObservationFixture::genesis_validators_root);
+    let side_a = deploy_side(&chain_a, 1, 369, "Token A", &pairs_a, vault_b, chain_b_genesis_root, GATE_MODE_ENFORCING, None, options.deposit_fee_basis_points);
     let gate_mode_b = if observation_fixture.is_some() { GATE_MODE_REGISTRY } else { GATE_MODE_DETECT };
-    let side_b = deploy_side(&chain_b, 369, 1, "Token B", &[(token_b, token_a)], vault_a, "genesis-of-chain-a", gate_mode_b, observation_fixture.as_ref(), options.deposit_fee_basis_points);
+    let side_b = deploy_side(&chain_b, 369, 1, "Token B", &[(token_b, token_a)], vault_a, keccak256("genesis-of-chain-a"), gate_mode_b, observation_fixture.as_ref(), options.deposit_fee_basis_points);
     assert_eq!((side_a.token, side_a.vault), (token_a, vault_a));
     assert_eq!((side_b.token, side_b.vault), (token_b, vault_b));
 
     let directory = scratch(name);
+    // A registry-mode chain B also keeps its own-chain light client current, from a slot above the fixture checkpoint.
+    let chain_b_own = side_b.own_light_client.map_or_else(String::new, |own| format!("own_light_client = \"{own:#x}\"\n"));
+    let chain_b_offset = side_b.own_light_client.map_or_else(String::new, |_| format!("slot_offset = {OWN_CHAIN_SLOT_OFFSET}\n"));
     let config = format!(
         r#"
 database_path = "{database}"
@@ -491,11 +512,11 @@ rpc_url = "{url_b}"
 chain_id = 369
 vault = "{vault_b:#x}"
 light_client = "{lc_b:#x}"
-[chain_b.beacon]
+{chain_b_own}[chain_b.beacon]
 kind = "dev"
 chain = "pulsechain"
 finality_depth = {depth}
-"#,
+{chain_b_offset}"#,
         database = directory.join("prover.sqlite").display(),
         vkey = keccak256(b"light-client-program"),
         url_a = chain_a.anvil.url,

@@ -294,6 +294,14 @@ impl HttpBeaconSource {
         update_from_json(&answer["data"]).map(Some)
     }
 
+    /// The newest finality update: the served one, or else the one assembled from block and state data.
+    fn latest_update(&self) -> Result<LightClientUpdate> {
+        match self.served_update()? {
+            Some(update) => Ok(update),
+            None => self.assembled_update(),
+        }
+    }
+
     /// The update assembled from block and state data (the path for nodes without light-client endpoints).
     fn assembled_update(&self) -> Result<LightClientUpdate> {
         let head = Self::require(self.header_by_id("head")?, "a head header")?;
@@ -411,10 +419,7 @@ impl BeaconSource for HttpBeaconSource {
             return Ok(UpdatePlan::Covered);
         }
         let head = self.head_header(light_client)?;
-        let update = match self.served_update()? {
-            Some(update) => update,
-            None => self.assembled_update()?,
-        };
+        let update = self.latest_update()?;
         let finalized_slot = update.finalized_header.beacon.slot;
         if finalized_slot <= deposit_slot || finalized_slot <= head.slot {
             return Ok(UpdatePlan::NotYetFinal);
@@ -430,6 +435,16 @@ impl BeaconSource for HttpBeaconSource {
             store,
             updates: vec![update],
         }))))
+    }
+
+    fn next_head_update(&self, light_client: &LightClientState, _source: &dyn ExecutionReader) -> Result<UpdatePlan> {
+        let head = self.head_header(light_client)?;
+        let update = self.latest_update()?;
+        if update.finalized_header.beacon.slot <= head.slot {
+            return Ok(UpdatePlan::Covered);
+        }
+        let store = self.store_at_head(&head)?;
+        Ok(UpdatePlan::Update(Box::new(ProofStatement::Verified(UpdateInput { chain: self.chain, store, updates: vec![update] }))))
     }
 
     fn withdrawal_path(

@@ -4,8 +4,9 @@
 //! source chain, the beacon source, the prover and the destination chain. `route.rs` implements it for real
 //! chains. The unit tests implement it with a script.
 //!
-//! One pass (`once`) does, for each route: scan finalized source blocks for new deposits, then advance every
-//! deposit that is not confirmed or failed as far as it goes. A restart repeats nothing that the file records.
+//! One pass (`once`) does, for each route: scan finalized source blocks for new deposits, advance every
+//! deposit that is not confirmed or failed as far as it goes, then move the own-chain light client of the source
+//! chain to the newest final header (when the chain has one). A restart repeats nothing that the file records.
 
 use crate::error::{Error, Result};
 use crate::logging::Logger;
@@ -47,6 +48,12 @@ pub trait RoutePorts {
     fn claimed(&self, nonce: B256) -> Result<bool>;
     /// Advances the destination light client until it covers the deposit block, or says it cannot yet.
     fn advance_light_client(&self, deposit: &NewDeposit) -> Result<Coverage>;
+    /// Sends the next update that moves the own-chain light client of the source chain toward the newest final header
+    /// of that chain, and returns how many updates it sent (zero or one per call). It uses the beacon updates that the
+    /// route fetches for the other direction. A route whose source chain has no own-chain light client sends none.
+    fn advance_own_light_client(&self) -> Result<usize> {
+        Ok(0)
+    }
     /// Builds the withdrawal calldata and runs native verification. It never returns calldata that native
     /// verification refused. It also makes sure the vault layout rows cover the withdrawal.
     fn build_withdrawal(&self, deposit: &NewDeposit) -> Result<Vec<u8>>;
@@ -117,9 +124,21 @@ impl Service {
             for record in self.store.active(&name)? {
                 self.advance(index, &record.deposit.nonce)?;
             }
+            self.keep_own_light_client_current(index);
         }
         self.logger.info("pass_finished", None, &[]);
         Ok(())
+    }
+
+    /// Updates the own-chain light client of the source chain. A failure is logged and never stops the pass: it
+    /// has no bearing on the deposits, and the next pass tries again.
+    fn keep_own_light_client_current(&self, index: usize) {
+        let route = &self.routes[index];
+        match route.ports.advance_own_light_client() {
+            Ok(0) => {}
+            Ok(sent) => self.logger.info("own_light_client_updated", None, &[("route", route.name.clone()), ("updates", sent.to_string())]),
+            Err(error) => self.logger.warn("own_light_client_update_failed", None, &[("route", route.name.clone()), ("error", error.to_string())]),
+        }
     }
 
     fn scan_route(&mut self, index: usize) -> Result<()> {
@@ -337,6 +356,9 @@ pub(crate) mod tests {
         pub builds: Cell<u32>,
         pub sends: Cell<u32>,
         pub scans: Cell<u32>,
+        /// What `advance_own_light_client` answers: the number of updates sent, or a failure.
+        pub own_answer: RefCell<Box<dyn Fn() -> Result<usize>>>,
+        pub own_calls: Cell<u32>,
     }
 
     impl Script {
@@ -352,6 +374,8 @@ pub(crate) mod tests {
                 builds: Cell::new(0),
                 sends: Cell::new(0),
                 scans: Cell::new(0),
+                own_answer: RefCell::new(Box::new(|| Ok(0))),
+                own_calls: Cell::new(0),
             })
         }
     }
@@ -375,6 +399,10 @@ pub(crate) mod tests {
         }
         fn advance_light_client(&self, _deposit: &NewDeposit) -> Result<Coverage> {
             Ok(self.0.coverage.get())
+        }
+        fn advance_own_light_client(&self) -> Result<usize> {
+            self.0.own_calls.set(self.0.own_calls.get() + 1);
+            (self.0.own_answer.borrow())()
         }
         fn build_withdrawal(&self, _deposit: &NewDeposit) -> Result<Vec<u8>> {
             self.0.builds.set(self.0.builds.get() + 1);
@@ -513,6 +541,49 @@ pub(crate) mod tests {
         }
         let record = service.store().get(B256::repeat_byte(0x11)).unwrap().unwrap();
         assert_eq!((record.state, record.attempts), (DepositState::Proven, 0));
+    }
+
+    /// Claim: each pass asks every route once to move its own-chain light client, even when no deposit is waiting, and
+    /// a pass that sent updates says how many.
+    /// Why it matters: the own-chain light client goes stale unless the loop updates it. A pass with no deposit is the
+    /// common case, so the update must not hang on one.
+    #[test]
+    fn every_pass_keeps_the_own_chain_light_client_current() {
+        let script = Script::new();
+        script.deposits.borrow_mut().clear();
+        *script.own_answer.borrow_mut() = Box::new(|| Ok(2));
+        let (mut service, lines) = service_with(&script, Store::open_in_memory().unwrap());
+        service.run_once().unwrap();
+        service.run_once().unwrap();
+        assert_eq!(script.own_calls.get(), 2, "once per pass");
+        let updated: Vec<String> = lines.lock().unwrap().iter().filter(|line| line.contains("event=own_light_client_updated")).cloned().collect();
+        assert_eq!(updated.len(), 2);
+        assert!(updated[0].contains("updates=2") && updated[0].contains("route=a_to_b"), "{}", updated[0]);
+    }
+
+    /// Claim: a failed own-chain update is logged as a warning, and the pass still finishes the deposits.
+    /// Why it matters: the own-chain light client has no bearing on a deposit in flight. A beacon outage that blocks it
+    /// must not block a withdrawal.
+    #[test]
+    fn a_failed_own_chain_update_does_not_stop_the_deposits() {
+        let script = Script::new();
+        *script.own_answer.borrow_mut() = Box::new(|| Err(Error::Beacon("no finality update".into())));
+        let (mut service, lines) = service_with(&script, Store::open_in_memory().unwrap());
+        service.run_once().unwrap();
+        assert_eq!(state_of(&service, 0x11), DepositState::Confirmed);
+        let failed: Vec<String> = lines.lock().unwrap().iter().filter(|line| line.contains("event=own_light_client_update_failed")).cloned().collect();
+        assert_eq!(failed.len(), 1);
+        assert!(failed[0].contains("no finality update"), "{}", failed[0]);
+    }
+
+    /// Claim: a route with no own-chain light client sends no update and logs nothing about it.
+    /// Why it matters: the setting is optional. An operator without it must see no noise.
+    #[test]
+    fn a_route_without_an_own_chain_light_client_logs_nothing_about_it() {
+        let script = Script::new();
+        let (mut service, lines) = service_with(&script, Store::open_in_memory().unwrap());
+        service.run_once().unwrap();
+        assert!(lines.lock().unwrap().iter().all(|line| !line.contains("own_light_client")));
     }
 
     /// Claim: while no final header covers the block, the deposit waits in `awaiting_finality` and nothing is built.

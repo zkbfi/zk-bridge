@@ -163,6 +163,30 @@ impl DevBeaconSource {
         Ok(header_root(&dev_header(self.chain, slot, number, hash, dev_plain_state_root(slot)).header))
     }
 
+    /// The update that moves the head of `light_client` to the header at `slot`, which carries block `number`.
+    fn asserted_update(
+        &self,
+        light_client: &LightClientState,
+        slot: u64,
+        number: u64,
+        hash: B256,
+        source: &dyn ExecutionReader,
+    ) -> Result<UpdatePlan> {
+        let built = self.build(slot, source)?;
+        let output = dev_output(
+            light_client.genesis_validators_root,
+            light_client.head_slot,
+            light_client.head_root,
+            light_client.head_committee_hash,
+            light_client.next_committee_hash,
+            header_root(&built.header.header),
+            slot,
+            hash,
+            number,
+        );
+        Ok(UpdatePlan::Update(Box::new(ProofStatement::DevAsserted(output))))
+    }
+
     /// The smallest block `T >= deposit_block` whose anchor slot the light client stores.
     fn anchor_block(&self, deposit_block: u64, stored_slots: &[u64]) -> Option<u64> {
         stored_slots
@@ -208,19 +232,20 @@ impl BeaconSource for DevBeaconSource {
                 light_client.head_slot, deposit.number
             )));
         };
-        let built = self.build(slot, source)?;
-        let output = dev_output(
-            light_client.genesis_validators_root,
-            light_client.head_slot,
-            light_client.head_root,
-            light_client.head_committee_hash,
-            light_client.next_committee_hash,
-            header_root(&built.header.header),
-            slot,
-            deposit.hash,
-            deposit.number,
-        );
-        Ok(UpdatePlan::Update(Box::new(ProofStatement::DevAsserted(output))))
+        self.asserted_update(light_client, slot, deposit.number, deposit.hash, source)
+    }
+
+    /// The newest final block, at its first phase. The update stores no anchor, because no withdrawal reads this
+    /// light client: the own-chain light client only has to follow the chain.
+    fn next_head_update(&self, light_client: &LightClientState, source: &dyn ExecutionReader) -> Result<UpdatePlan> {
+        let Some(finalized) = self.finalized_execution_block(source)? else {
+            return Ok(UpdatePlan::NotYetFinal);
+        };
+        let slot = self.slot_of(finalized, PHASE_FIRST);
+        if slot <= light_client.head_slot {
+            return Ok(UpdatePlan::Covered);
+        }
+        self.asserted_update(light_client, slot, finalized, source.block_hash(finalized)?, source)
     }
 
     fn withdrawal_path(
@@ -413,6 +438,31 @@ mod tests {
         }
         let expected = [0, 1, 3].map(|phase| source.slot_of(5, phase));
         assert_eq!(slots, expected);
+    }
+
+    /// Claim: with no deposit in view, the source sends one update to the newest final block, then reports `Covered`,
+    /// and it never plans a head that does not advance. It waits while no block is final.
+    /// Why it matters: this is the plan that keeps the own-chain light client current. A plan that moved the head
+    /// backward would revert on chain, and a plan that never ended would send updates for ever.
+    #[test]
+    fn following_the_chain_sends_one_update_to_the_newest_final_block() {
+        let source = DevBeaconSource::new(ChainKind::Pulsechain, 3, DEFAULT_SLOT_OFFSET);
+        let early = source.next_head_update(&light_client_at(10), &FakeChain { latest: 2 }).unwrap();
+        assert!(matches!(early, UpdatePlan::NotYetFinal));
+
+        let chain = FakeChain { latest: 10 };
+        let UpdatePlan::Update(statement) = source.next_head_update(&light_client_at(10), &chain).unwrap() else {
+            panic!("a final block above the head needs an update");
+        };
+        let ProofStatement::DevAsserted(output) = *statement else { panic!("dev statement") };
+        assert_eq!((output.newHeadSlot, output.executionBlockNumber), (source.slot_of(7, PHASE_FIRST), 7));
+        assert_eq!(output.executionBlockHash, keccak256(7u64.to_be_bytes()));
+        assert_eq!(output.previousHeadSlot, 10);
+
+        for head in [source.slot_of(7, PHASE_FIRST), source.slot_of(7, PHASE_FIRST) + 100] {
+            let plan = source.next_head_update(&light_client_at(head), &chain).unwrap();
+            assert!(matches!(plan, UpdatePlan::Covered), "head {head}");
+        }
     }
 
     /// Claim: the anchor, the deposit header and the branches fit together: the ancestry branch leads from the

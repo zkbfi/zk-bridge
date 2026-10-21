@@ -22,8 +22,16 @@
 //!    `STOP` also covers a gate in registry mode whose fork registry shows an unsupported version as the latest
 //!    observation: the gate refuses every deposit until it is sealed, and nothing in the registry clears it.
 //! 3. `STALE`: the light client head lags the source chain head by more than the configured number of epochs.
-//! 4. `WARN`: a fork the route does not support is scheduled, and it lies beyond the margin.
+//! 4. `WARN`: a fork the route does not support is scheduled, and it lies beyond the margin. `WARN` also covers an
+//!    own-chain light client (the one the fork registry reads) whose head lags the current slot by the configured
+//!    number of periods or more. The default is half of the fold limit of one proof (64 updates).
 //! 5. `OPEN`: none of the above.
+//!
+//! The own-chain lag is a `WARN` and never a `STOP`. A deposit made now does not depend on that light client: the
+//! vault and the gate read other contracts, and a stale head only makes old observations look fresh and makes the
+//! catch-up harder. `STOP` makes a script refuse deposits (exit code 2). Refusing deposits on a route that still
+//! delivers them would cost users more than the lag does. The fix is an operator action, and `WARN` asks for it with
+//! time to spare: one proof folds at most 64 updates, and the beacon node keeps only a limited history of updates.
 //!
 //! A schedule entry whose epoch is [`NEVER_EPOCH`] is not scheduled. The beacon API uses that value for "never".
 //! PulseChain lists Deneb with version `0xffffffff` and this epoch. Only the epoch decides: an entry with a real
@@ -36,6 +44,7 @@ use crate::error::{Error, Result};
 use crate::gate::read_gate_status;
 use crate::light_client::ChainKind;
 use crate::rpc::{HttpClient, HttpGet, HttpRpc};
+use lc_core::update::MAX_FOLD_UPDATES;
 use alloy_primitives::{hex, Address};
 use serde_json::{json, Value};
 
@@ -47,6 +56,12 @@ pub const MINIMUM_MARGIN_EPOCHS: u64 = 3;
 pub const DEFAULT_MARGIN_SECONDS: u64 = 3_600;
 /// The default number of epochs the light client head may lag the source chain head.
 pub const DEFAULT_STALE_EPOCHS: u64 = 64;
+/// The most periods one proof can catch up. One update moves the head across at most one sync committee period, and
+/// one proof folds at most [`MAX_FOLD_UPDATES`] updates.
+pub const FOLD_LIMIT_PERIODS: u64 = MAX_FOLD_UPDATES as u64;
+/// The default number of periods the own-chain light client head may lag before `WARN`: half of the fold limit. The
+/// other half is room for the delay of the operator and for a beacon node that keeps only a limited update history.
+pub const DEFAULT_OWN_LIGHT_CLIENT_WARN_PERIODS: u64 = FOLD_LIMIT_PERIODS / 2;
 /// A scheduled unsupported fork farther away than this is only a warning. The reason text says so.
 pub const FAR_AHEAD_SECONDS: u64 = 86_400;
 
@@ -55,7 +70,7 @@ pub const FAR_AHEAD_SECONDS: u64 = 86_400;
 pub enum Level {
     /// Deposits are safe to offer.
     Open,
-    /// An unsupported fork is scheduled, but it lies beyond the margin.
+    /// An unsupported fork is scheduled beyond the margin, or the own-chain light client lags.
     Warn,
     /// The light client head lags too far.
     Stale,
@@ -140,12 +155,29 @@ pub struct HealthSettings {
     pub margin_seconds: u64,
     /// The most epochs the light client head may lag.
     pub stale_epochs: u64,
+    /// The lag in periods, from which the own-chain light client head earns a `WARN`.
+    pub own_light_client_warn_periods: u64,
 }
 
 impl Default for HealthSettings {
     fn default() -> Self {
-        Self { margin_seconds: DEFAULT_MARGIN_SECONDS, stale_epochs: DEFAULT_STALE_EPOCHS }
+        Self {
+            margin_seconds: DEFAULT_MARGIN_SECONDS,
+            stale_epochs: DEFAULT_STALE_EPOCHS,
+            own_light_client_warn_periods: DEFAULT_OWN_LIGHT_CLIENT_WARN_PERIODS,
+        }
     }
+}
+
+/// What the own-chain light client of the source chain says. The fork registry reads it for freshness.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OwnLightClientObservation {
+    /// The address of the light client.
+    pub address: Address,
+    /// The slot of its head.
+    pub head_slot: u64,
+    /// Slots per sync committee period, as the contract reports them.
+    pub slots_per_period: u64,
 }
 
 /// Everything [`route_status`] needs. The caller fetches it. The function does no input or output.
@@ -169,6 +201,8 @@ pub struct RouteInputs {
     pub light_client_head_slot: u64,
     /// The head slot of the source beacon chain.
     pub source_head_slot: u64,
+    /// The own-chain light client of the source chain, when one is configured.
+    pub own_light_client: Option<OwnLightClientObservation>,
     /// The limits.
     pub settings: HealthSettings,
 }
@@ -203,6 +237,9 @@ pub struct RouteStatus {
     pub margin_seconds: u64,
     /// How many whole epochs the light client head lags the source chain head.
     pub head_lag_epochs: u64,
+    /// How many whole periods the head of the own-chain light client lags the current slot, from the wall clock.
+    /// `None` when the source chain has no own-chain light client configured.
+    pub own_light_client_lag_periods: Option<u64>,
 }
 
 /// Formats a fork version as `0x` and eight hex digits.
@@ -297,6 +334,7 @@ pub fn route_status(inputs: &RouteInputs) -> RouteStatus {
     let lag_slots = inputs.source_head_slot.saturating_sub(inputs.light_client_head_slot);
     let head_lag_epochs = lag_slots / slots_per_epoch;
     let fork = first_unsupported_fork(inputs, current_epoch, epoch_seconds);
+    let own_lag_periods = own_light_client_lag_periods(inputs);
 
     let mut findings: Vec<(Level, String)> = Vec::new();
     if inputs.gate.as_ref().is_some_and(|gate| gate.sealed) {
@@ -317,11 +355,28 @@ pub fn route_status(inputs: &RouteInputs) -> RouteStatus {
             ),
         ));
     }
+    if let Some(lag) = own_lag_periods.filter(|lag| *lag >= inputs.settings.own_light_client_warn_periods) {
+        findings.push((
+            Level::Warn,
+            format!(
+                "the own-chain light client lags the current slot by {lag} periods, the warning starts at {}, and one proof folds at most {FOLD_LIMIT_PERIODS} updates: update it before the catch-up gets hard",
+                inputs.settings.own_light_client_warn_periods
+            ),
+        ));
+    }
     findings.sort_by(|left, right| right.0.cmp(&left.0));
     let mut ordered = findings.into_iter();
     let (level, reason) = ordered.next().unwrap_or((Level::Open, "no unsupported fork is scheduled, the gate is not sealed and the light client head is fresh".to_string()));
     let other_findings = ordered.map(|(_, text)| text).collect();
-    RouteStatus { level, reason, other_findings, fork, current_epoch, margin_seconds, head_lag_epochs }
+    RouteStatus { level, reason, other_findings, fork, current_epoch, margin_seconds, head_lag_epochs, own_light_client_lag_periods: own_lag_periods }
+}
+
+/// The whole periods between the head of the own-chain light client and the current slot. The current slot comes from
+/// the wall clock and the genesis time, never from the beacon head: a stalled beacon node must not hide a stale head.
+fn own_light_client_lag_periods(inputs: &RouteInputs) -> Option<u64> {
+    let own = inputs.own_light_client?;
+    let current_slot = inputs.now.saturating_sub(inputs.genesis_time) / inputs.seconds_per_slot.max(1);
+    Some(current_slot.saturating_sub(own.head_slot) / own.slots_per_period.max(1))
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -486,6 +541,8 @@ pub struct RouteReport {
     pub light_client_head_slot: u64,
     /// The head slot of the source beacon chain.
     pub source_head_slot: u64,
+    /// The own-chain light client of the source chain, when one is configured.
+    pub own_light_client: Option<OwnLightClientObservation>,
     /// The gate, when the source vault has one.
     pub gate: Option<GateObservation>,
 }
@@ -545,6 +602,14 @@ impl RouteReport {
             " current_epoch={} margin_seconds={} light_client_head_slot={} source_head_slot={} head_lag_epochs={}",
             status.current_epoch, status.margin_seconds, self.light_client_head_slot, self.source_head_slot, status.head_lag_epochs
         ));
+        if let Some(own) = &self.own_light_client {
+            line.push_str(&format!(
+                " own_light_client={:#x} own_light_client_head_slot={} own_light_client_lag_periods={}",
+                own.address,
+                own.head_slot,
+                status.own_light_client_lag_periods.unwrap_or(0)
+            ));
+        }
         match &self.gate {
             Some(gate) => line.push_str(&format!(
                 " gate={:#x} gate_mode={} gate_enforcing={} gate_sealed={} gate_confirmed_epoch={}",
@@ -594,6 +659,14 @@ impl RouteReport {
                 })),
             })
         });
+        let own_light_client = self.own_light_client.map(|own| {
+            json!({
+                "address": format!("{:#x}", own.address),
+                "head_slot": own.head_slot,
+                "slots_per_period": own.slots_per_period,
+                "lag_periods": status.own_light_client_lag_periods,
+            })
+        });
         json!({
             "route": self.route,
             "source_chain": self.source_chain,
@@ -607,6 +680,7 @@ impl RouteReport {
             "light_client_head_slot": self.light_client_head_slot,
             "source_head_slot": self.source_head_slot,
             "head_lag_epochs": status.head_lag_epochs,
+            "own_light_client": own_light_client,
             "gate": gate,
         })
     }
@@ -647,6 +721,7 @@ pub fn assemble_inputs(
     beacon: &BeaconFacts,
     gate: Option<GateObservation>,
     light_client_head_slot: u64,
+    own_light_client: Option<OwnLightClientObservation>,
     now: u64,
     settings: HealthSettings,
 ) -> RouteInputs {
@@ -661,12 +736,28 @@ pub fn assemble_inputs(
         gate,
         light_client_head_slot,
         source_head_slot: beacon.head_slot,
+        own_light_client,
         settings,
     }
 }
 
 fn connect(chain: &ChainConfig) -> Result<ChainClient> {
     ChainClient::connect(&chain.name, chain.chain_id, Box::new(HttpRpc::new(&chain.rpc_url)), None)
+}
+
+/// Reads the own-chain light client of a chain, or `None` when the configuration names none.
+///
+/// # Errors
+/// Any read error, and `Error::Config` for a bad address.
+pub fn read_own_light_client(client: &ChainClient, chain: &ChainConfig) -> Result<Option<OwnLightClientObservation>> {
+    let Some(address) = chain.own_light_client_address()? else {
+        return Ok(None);
+    };
+    Ok(Some(OwnLightClientObservation {
+        address,
+        head_slot: client.view(address, LightClientContract::headCall {})?,
+        slots_per_period: client.view(address, LightClientContract::slotsPerPeriodCall {})?,
+    }))
 }
 
 /// Reads and decides one route. Deposits are made on the source chain. The light client sits on the destination.
@@ -680,15 +771,18 @@ fn check_route(config: &Config, route: RouteName, now: u64, settings: HealthSett
     let url = url.ok_or_else(|| Error::Config(format!("{}.beacon.url: missing", source.name)))?;
     let kind = source.chain_kind()?;
     let beacon = fetch_beacon_facts(&HttpClient::new(url))?;
-    let gate = Some(read_gate_observation(&connect(source)?, source.vault_address()?)?);
+    let source_client = connect(source)?;
+    let gate = Some(read_gate_observation(&source_client, source.vault_address()?)?);
+    let own_light_client = read_own_light_client(&source_client, source)?;
     let head = connect(destination)?.view(destination.light_client_address()?, LightClientContract::headCall {})?;
-    let inputs = assemble_inputs(kind, &beacon, gate, head, now, settings);
+    let inputs = assemble_inputs(kind, &beacon, gate, head, own_light_client, now, settings);
     Ok(RouteReport {
         route: route.as_str().to_string(),
         source_chain: source.name.clone(),
         status: route_status(&inputs),
         light_client_head_slot: head,
         source_head_slot: beacon.head_slot,
+        own_light_client,
         gate: inputs.gate,
     })
 }
@@ -743,7 +837,8 @@ mod tests {
             gate: None,
             light_client_head_slot: NOW_EPOCH * 32,
             source_head_slot: NOW_EPOCH * 32,
-            settings: HealthSettings { margin_seconds: HOUR, stale_epochs: 64 },
+            own_light_client: None,
+            settings: HealthSettings { margin_seconds: HOUR, stale_epochs: 64, own_light_client_warn_periods: 32 },
         }
     }
 
@@ -934,6 +1029,7 @@ mod tests {
                 status: route_status(&value),
                 light_client_head_slot: 1,
                 source_head_slot: 1,
+                own_light_client: None,
                 gate: value.gate,
             }
         };
@@ -977,6 +1073,105 @@ mod tests {
         let status = route_status(&value);
         assert_eq!(status.level, Level::Open);
         assert_eq!(status.head_lag_epochs, 0);
+    }
+
+    /// Slots per period in the own-chain tests: two epochs, so a lag of many periods fits in the clock of the tests.
+    const OWN_SLOTS_PER_PERIOD: u64 = 64;
+
+    /// Inputs whose own-chain light client head lags the current slot (from the clock) by `lag_periods` whole periods.
+    fn with_own_lag(lag_periods: u64) -> RouteInputs {
+        let mut value = inputs();
+        let current_slot = NOW_EPOCH * SLOTS_PER_EPOCH;
+        value.own_light_client = Some(OwnLightClientObservation {
+            address: Address::repeat_byte(0x55),
+            head_slot: current_slot - lag_periods * OWN_SLOTS_PER_PERIOD,
+            slots_per_period: OWN_SLOTS_PER_PERIOD,
+        });
+        value
+    }
+
+    /// Claim: the own-chain light client gives a WARN from the configured lag, and not one period earlier. The status
+    /// reports the lag in whole periods, and the reason names the fold limit.
+    /// Why it matters: the fold limit is 64 updates. The operator needs the warning while a catch-up still fits in one
+    /// proof. A warning that comes late is useless. A warning that comes early on every pass is ignored.
+    #[test]
+    fn the_own_chain_light_client_warns_from_the_configured_lag() {
+        let below = route_status(&with_own_lag(31));
+        assert_eq!((below.level, below.own_light_client_lag_periods), (Level::Open, Some(31)));
+        let at = route_status(&with_own_lag(32));
+        assert_eq!((at.level, at.own_light_client_lag_periods), (Level::Warn, Some(32)));
+        assert!(at.reason.contains("32 periods") && at.reason.contains("at most 64 updates"), "{}", at.reason);
+        let mut stricter = with_own_lag(5);
+        stricter.settings.own_light_client_warn_periods = 5;
+        assert_eq!(route_status(&stricter).level, Level::Warn, "the limit is a setting");
+    }
+
+    /// Claim: the lag comes from the wall clock. A beacon head that stalls at the light client head does not hide it.
+    /// Why it matters: a source beacon node that is stuck would show no lag against its own head, and the own-chain
+    /// light client would look current while it is months behind.
+    #[test]
+    fn the_own_chain_lag_follows_the_clock_not_the_beacon_head() {
+        let mut value = with_own_lag(40);
+        value.source_head_slot = value.own_light_client.unwrap().head_slot;
+        value.light_client_head_slot = value.source_head_slot;
+        let status = route_status(&value);
+        assert_eq!(status.level, Level::Warn);
+        assert_eq!(status.head_lag_epochs, 0, "the destination light client rule sees no lag");
+    }
+
+    /// Claim: the own-chain lag is a WARN. It does not refuse deposits, and the exit code stays 0. A head ahead of the
+    /// clock counts as no lag.
+    /// Why it matters: a deposit made now does not depend on this light client. STOP would make scripts refuse deposits
+    /// on a route that still delivers them. An unsigned subtraction here would wrap and report a huge lag.
+    #[test]
+    fn the_own_chain_lag_never_refuses_deposits() {
+        let status = route_status(&with_own_lag(63));
+        assert_eq!(status.level, Level::Warn);
+        assert!(!status.level.refuses_deposits());
+        let mut ahead = with_own_lag(0);
+        ahead.own_light_client.as_mut().unwrap().head_slot += 10_000;
+        let status = route_status(&ahead);
+        assert_eq!((status.level, status.own_light_client_lag_periods), (Level::Open, Some(0)));
+    }
+
+    /// Claim: a more severe finding wins over the own-chain warning, and the warning stays in the other findings.
+    /// Why it matters: the level must name the worst problem. The warning must not vanish when something worse shows.
+    #[test]
+    fn a_more_severe_finding_outranks_the_own_chain_warning() {
+        let mut value = with_own_lag(40);
+        value.schedule.push(ScheduleEntry { version: UNKNOWN, epoch: NOW_EPOCH - 1 });
+        let status = route_status(&value);
+        assert_eq!(status.level, Level::Stop);
+        assert!(status.other_findings.iter().any(|text| text.contains("own-chain light client")), "{:?}", status.other_findings);
+    }
+
+    /// Claim: a source chain with no own-chain light client has no lag, and the report prints no field for it. With
+    /// one, the line and the JSON name the address, the head slot and the lag.
+    /// Why it matters: the setting is optional. Scripts read the names, and a null tells them nothing was configured.
+    #[test]
+    fn the_report_shows_the_own_chain_light_client_only_when_configured() {
+        let report = |value: RouteInputs| RouteReport {
+            route: "b_to_a".into(),
+            source_chain: "pulsechain".into(),
+            status: route_status(&value),
+            light_client_head_slot: 1,
+            source_head_slot: 1,
+            own_light_client: value.own_light_client,
+            gate: None,
+        };
+        let none = report(inputs());
+        assert_eq!(none.status.own_light_client_lag_periods, None);
+        assert!(!none.human_line().contains("own_light_client"));
+        assert!(none.to_json()["own_light_client"].is_null());
+
+        let some = report(with_own_lag(40));
+        let line = some.human_line();
+        assert!(line.contains("status=WARN") && line.contains("own_light_client_lag_periods=40"), "{line}");
+        assert!(line.contains(&format!("own_light_client={:#x}", Address::repeat_byte(0x55))), "{line}");
+        let value = some.to_json();
+        assert_eq!(value["own_light_client"]["lag_periods"], 40);
+        assert_eq!(value["own_light_client"]["slots_per_period"], OWN_SLOTS_PER_PERIOD);
+        assert_eq!(value["status"], "WARN");
     }
 
     /// Claim: a margin configured below three epochs is raised to three epochs, and the result is STOP just inside them.
@@ -1073,6 +1268,7 @@ mod tests {
                 status,
                 light_client_head_slot: 1,
                 source_head_slot: 1,
+                own_light_client: None,
                 gate: None,
             }
         };
@@ -1154,12 +1350,12 @@ mod tests {
     fn fetched_data_and_the_program_table_decide_the_route() {
         let facts = fetch_beacon_facts(&fake_node()).expect("fetch");
         let now = facts.genesis_time + 200_000 * 384;
-        let open = assemble_inputs(ChainKind::Ethereum, &facts, None, facts.head_slot, now, HealthSettings::default());
+        let open = assemble_inputs(ChainKind::Ethereum, &facts, None, facts.head_slot, None, now, HealthSettings::default());
         assert_eq!(route_status(&open).level, Level::Open);
 
         let mut announced = facts.clone();
         announced.schedule.push(ScheduleEntry { version: [0x42, 0, 0, 0], epoch: 200_000 + 5 });
-        let soon = assemble_inputs(ChainKind::Ethereum, &announced, None, facts.head_slot, now, HealthSettings::default());
+        let soon = assemble_inputs(ChainKind::Ethereum, &announced, None, facts.head_slot, None, now, HealthSettings::default());
         assert_eq!(route_status(&soon).level, Level::Stop);
     }
 
@@ -1190,6 +1386,7 @@ mod tests {
             status,
             light_client_head_slot: 5,
             source_head_slot: 9,
+            own_light_client: None,
             gate: None,
         };
         let value = report.to_json();
