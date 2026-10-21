@@ -1,0 +1,56 @@
+# Example configuration for zk-bridge-prover. Copy it, edit it, and pass it with --config.
+# The file never holds a secret. Environment overrides: ZK_BRIDGE_PROVER_<KEY PATH IN CAPITALS>,
+# for example ZK_BRIDGE_PROVER_CHAIN_A_RPC_URL.
+
+database_path = "prover.sqlite"
+poll_interval_seconds = 12
+receipt_timeout_seconds = 60
+max_attempts = 5
+log_block_range = 2000
+# routes = ["a_to_b", "b_to_a"]   # default: both directions
+
+# A Foundry keystore (made with `cast wallet import`) and a file that holds its password.
+[signer]
+keystore = "keys/prover-keystore.json"
+password_file = "keys/prover.password"
+
+# Optional. The oracle backend signs light-client proofs with this key. Default: the signer above.
+# [oracle]
+# keystore = "keys/oracle-keystore.json"
+# password_file = "keys/oracle.password"
+
+[prover]
+backend = "oracle"          # "sp1" needs a build with the cargo feature `sp1`
+program_vkey = "0x0000000000000000000000000000000000000000000000000000000000000000"  # REPLACE: must equal programVKey() of both light clients
+
+# Chain A. Its light client tracks chain B's beacon chain. Its [beacon] section describes chain A's own beacon chain.
+[chain_a]
+name = "ethereum"
+rpc_url = "https://REPLACE"
+start_block = 0             # the block where the contracts were deployed
+chain_id = 1
+vault = "0x0000000000000000000000000000000000000001"          # REPLACE
+light_client = "0x0000000000000000000000000000000000000002"   # REPLACE
+[chain_a.beacon]
+kind = "http"
+url = "https://REPLACE"
+chain = "ethereum"
+
+[chain_b]
+name = "pulsechain"
+rpc_url = "https://REPLACE"
+start_block = 0
+chain_id = 369
+vault = "0x0000000000000000000000000000000000000003"          # REPLACE
+light_client = "0x0000000000000000000000000000000000000004"   # REPLACE
+[chain_b.beacon]
+kind = "http"
+url = "https://REPLACE"
+chain = "pulsechain"
+
+# For a local Anvil chain, use a dev beacon and run with --private-key-env NAME:
+# [chain_a.beacon]
+# kind = "dev"
+# chain = "pulsechain"
+# finality_depth = 2
+# slot_offset = 1024        # above the light-client checkpoint slot, after the Capella fork
