@@ -540,3 +540,33 @@ A PulseChain consensus fork almost always arrives with an execution fork, and th
   - With a BLS precompile mock, the precompile canary fires.
   - Gas per deposit before the switch, with a bound.
   - A probe that consumes all forwarded gas still costs at most the bound.
+
+## Deposit fee switch (user decision, 2026-10-21)
+
+The user expects a fee in the future. Each vault gets a fee switch that is off by default and can be removed for good, either at deployment or at any time after launch.
+
+**The one role.** The fee authority is the only privileged role in the hardened build. It can set the fee on new deposits within an immutable ceiling, and nothing else. It cannot touch locked tokens, withdrawals, the light client, the gate or the layout table. It can give up its power at any time, and then nobody can ever set a fee again.
+
+**Interface.**
+- **Constructor:** it takes `feeAuthority`, `feeRecipient`, `feeBasisPoints` and `feeCeilingBasisPoints`.
+  - `feeCeilingBasisPoints` is immutable, and the code refuses any value above `MAX_FEE_CEILING_BASIS_POINTS = 100` (1%).
+  - A zero `feeAuthority` means the fee is removed from the start. The constructor then requires a zero fee and a zero ceiling.
+- **`setFee(uint16 basisPoints, address recipient)`:** only the authority may call it. It requires `basisPoints <= feeCeilingBasisPoints`, and a non-zero recipient when the fee is not zero. It emits `FeeChanged`.
+- **`nullifyFee()`:** only the authority may call it. It sets the fee to zero and the authority to zero, and emits `FeeNullified`. This cannot be undone. `feeRecipient` stays, so it can still collect fees already charged.
+- **`deposit(token, recipient, amount, maxFeeBasisPoints, gateEvidence)`:** it reverts with `FeeAboveLimit` when the current fee is above `maxFeeBasisPoints`. So a fee raise that lands just before a pending deposit cannot charge that deposit more than its sender agreed to. This takes the place of a timelock, which the user rejected.
+- **Charging:** the vault computes the fee on the measured `received` amount, rounding down. It adds the fee to `accruedFees[token]` and bridges `received - fee` under the existing decimals rules. `DepositInitiated` carries the net amount, so the withdrawal side and the Rust reference do not change. The vault emits `FeeCharged(token, fee)`.
+- **`collectFees(token)`:** anyone may call it. It sends `accruedFees[token]` to `feeRecipient` and zeroes it first. A deposit never transfers to the recipient, so a recipient that a token refuses cannot block deposits.
+
+**Why these choices.**
+- **The fee is on the deposit side.** The source vault knows the amount before anything is bridged, and the withdrawal stays a pure proof check. A fee paid to whoever submits a proof would need the proof to commit to that address, as noted in H-15. That is not part of this change.
+- **The ceiling is immutable.** Users can read the worst case before they deposit, for the vault's whole life.
+- **Collection is pull-based.** Deposits never depend on a transfer to the recipient.
+
+**Tests.**
+- **Nullified at the start:** a vault with no authority charges no fee, and `setFee` reverts for everyone.
+- **Ceiling:** a fee above the ceiling and a ceiling above 1% both revert.
+- **Nullify:** it is one-way. Every later `setFee` and `nullifyFee` reverts, and fees already charged can still be collected.
+- **Fee raise ahead of a deposit:** with `maxFeeBasisPoints` below the new fee, the deposit reverts and the tokens stay with the sender. Without the raise, the same deposit succeeds.
+- **Collection:** a recipient that the token refuses blocks only `collectFees`, never `deposit`.
+- **Accounting:** a fee-on-transfer token is charged on the measured amount. A withdrawal of the net amount works end to end, and the vault balance covers withdrawals plus accrued fees.
+- **Gas:** measured with a fee of zero and with a fee set.
