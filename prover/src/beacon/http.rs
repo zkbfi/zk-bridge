@@ -45,7 +45,7 @@ use crate::prover::ProofStatement;
 use crate::rpc::HttpGet;
 use alloy_primitives::B256;
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 const JSON: &str = "application/json";
@@ -58,8 +58,18 @@ const ROOT_FETCH_THREADS: usize = 8;
 const MAX_EMPTY_SLOTS_BEFORE_ERA: u64 = 1_024;
 /// How many parsed states stay in memory (each one is about 18 MB of bytes on PulseChain).
 const STATE_CACHE_SIZE: usize = 2;
+/// How many eras of block roots stay in memory (each one is 8192 roots, 256 KiB). The oldest era leaves first.
+const ERA_CACHE_SIZE: usize = 64;
 /// How many empty slots the search for an attested block skips.
 const MAX_EMPTY_SLOTS: u64 = 16;
+
+/// Puts `value` first in a cache of at most `capacity` entries. The entry of the same key is replaced, and the entries
+/// beyond the capacity, the oldest, are dropped.
+fn insert_bounded<V>(cache: &mut Vec<(u64, V)>, key: u64, value: V, capacity: usize) {
+    cache.retain(|(cached_key, _)| *cached_key != key);
+    cache.insert(0, (key, value));
+    cache.truncate(capacity);
+}
 
 /// A beacon node.
 pub struct HttpBeaconSource {
@@ -67,7 +77,7 @@ pub struct HttpBeaconSource {
     client: Box<dyn HttpGet>,
     genesis_time: Mutex<Option<u64>>,
     state_cache: Mutex<Vec<(B256, Arc<StateView>)>>,
-    era_cache: Mutex<HashMap<u64, Arc<Vec<B256>>>>,
+    era_cache: Mutex<Vec<(u64, Arc<Vec<B256>>)>>,
 }
 
 impl HttpBeaconSource {
@@ -78,7 +88,7 @@ impl HttpBeaconSource {
             client,
             genesis_time: Mutex::new(None),
             state_cache: Mutex::new(Vec::new()),
-            era_cache: Mutex::new(HashMap::new()),
+            era_cache: Mutex::new(Vec::new()),
         }
     }
 
@@ -198,12 +208,15 @@ impl HttpBeaconSource {
         })
     }
 
-    /// The 8192 block roots of an era, rebuilt from the canonical block roots of the node and cached.
+    /// The 8192 block roots of an era, rebuilt from the canonical block roots of the node, verified, and cached.
     ///
     /// An empty slot repeats the root of the block before it (`process_slot` stores the root of the latest block
     /// header). When the first slot of the era is empty, the search for the last block before the era goes back.
-    fn era_roots(&self, era: u64) -> Result<Arc<Vec<B256>>> {
-        if let Some(cached) = self.era_cache.lock().expect("lock").get(&era) {
+    ///
+    /// The roots enter the cache only after they hash to `historical_summaries[era - capella_era].block_summary_root`
+    /// of `anchor` (checked by `lc-core`). A wrong answer from the node returns an error and leaves the cache as it was.
+    fn era_roots(&self, era: u64, anchor: &StateView) -> Result<Arc<Vec<B256>>> {
+        if let Some((_, cached)) = self.era_cache.lock().expect("lock").iter().find(|(cached_era, _)| *cached_era == era) {
             return Ok(cached.clone());
         }
         let start = era * SLOTS_PER_HISTORICAL_ROOT;
@@ -219,7 +232,10 @@ impl HttpBeaconSource {
             }
         }
         let roots = Arc::new(era_block_roots(era, &canonical)?);
-        self.era_cache.lock().expect("lock").insert(era, roots.clone());
+        // Verification builds a throwaway branch for the first slot of the era. It fails with the `lc-core` mismatch
+        // when the roots do not hash to the summary of the anchor, and nothing has been cached yet.
+        anchor.historical_ancestry_branch(self.chain, era * SLOTS_PER_HISTORICAL_ROOT, &roots)?;
+        insert_bounded(&mut self.era_cache.lock().expect("lock"), era, roots.clone(), ERA_CACHE_SIZE);
         Ok(roots)
     }
 
@@ -234,7 +250,7 @@ impl HttpBeaconSource {
                 Ok(state.recent_ancestry_branch(deposit_slot))
             }
             AncestryPath::Historical => {
-                let roots = self.era_roots(era_of(deposit_slot))?;
+                let roots = self.era_roots(era_of(deposit_slot), &state)?;
                 if roots[(deposit_slot % SLOTS_PER_HISTORICAL_ROOT) as usize] != deposit_root {
                     return Err(Error::Beacon(format!(
                         "the canonical block roots of era {} do not name the deposit header at slot {deposit_slot}",
@@ -489,7 +505,7 @@ impl BeaconSource for HttpBeaconSource {
             return Ok(None);
         };
         let state = self.state_for(anchor.state_root)?;
-        let roots = self.era_roots(era_of(earlier_slot))?;
+        let roots = self.era_roots(era_of(earlier_slot), &state)?;
         Ok(Some(HistoricalEvidence {
             gindex: historical_summaries_gindex(self.chain, anchor.slot)?,
             anchor_header: *anchor,
@@ -630,9 +646,12 @@ mod tests {
     use lc_core::ssz::is_valid_exact_branch;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    /// The block roots a fake node serves, shared so a test can change them.
+    type SharedAnswers = Arc<Mutex<HashMap<u64, B256>>>;
+
     /// A node that serves `/eth/v1/beacon/blocks/<slot>/root` for the slots of a map and counts the requests.
     struct RootNode {
-        roots: HashMap<u64, B256>,
+        roots: SharedAnswers,
         requests: Arc<AtomicUsize>,
     }
 
@@ -644,7 +663,7 @@ mod tests {
                 .and_then(|rest| rest.strip_suffix("/root"))
                 .and_then(|text| text.parse().ok())
                 .expect("only block root requests");
-            Ok(match self.roots.get(&slot) {
+            Ok(match self.roots.lock().unwrap().get(&slot) {
                 Some(root) => crate::rpc::HttpResponse {
                     status: 200,
                     body: serde_json::json!({ "data": { "root": format!("{root:#x}") } }).to_string().into_bytes(),
@@ -676,9 +695,18 @@ mod tests {
     }
 
     fn source_over(roots: HashMap<u64, B256>) -> (HttpBeaconSource, Arc<AtomicUsize>) {
+        let (source, requests, _) = changeable_source_over(roots);
+        (source, requests)
+    }
+
+    /// Like [`source_over`], and also returns the answers of the node, so a test can change them between calls.
+    fn changeable_source_over(
+        roots: HashMap<u64, B256>,
+    ) -> (HttpBeaconSource, Arc<AtomicUsize>, SharedAnswers) {
         let requests = Arc::new(AtomicUsize::new(0));
-        let node = RootNode { roots, requests: requests.clone() };
-        (HttpBeaconSource::new(ChainKind::Pulsechain, Box::new(node)), requests)
+        let answers = Arc::new(Mutex::new(roots));
+        let node = RootNode { roots: answers.clone(), requests: requests.clone() };
+        (HttpBeaconSource::new(ChainKind::Pulsechain, Box::new(node)), requests, answers)
     }
 
     fn fork() -> ForkData {
@@ -714,6 +742,71 @@ mod tests {
         anchor
     }
 
+    /// An anchor state whose summaries hold the eras 3 and 4 of `chain_with_gaps` (after three filler eras).
+    fn anchored(source: &HttpBeaconSource, eras: &[Vec<B256>]) -> Arc<StateView> {
+        let all_eras: Vec<Vec<B256>> = (0..3)
+            .map(|era| (0..8192u64).map(|slot| keccak256(format!("old/{era}/{slot}"))).collect())
+            .chain(eras.iter().cloned())
+            .collect();
+        let anchor = primed(source, 5 * 8192 + 40, &all_eras);
+        source.state_for(anchor.state_root).unwrap()
+    }
+
+    /// Claim: roots that do not hash to the anchor's `block_summary_root` are refused and not cached, so one bad answer
+    /// does not poison the era, and a later good answer succeeds.
+    /// Why it matters: before the fix the unverified roots stayed in memory for the life of the process, and every
+    /// historical withdrawal of the era failed until a restart.
+    #[test]
+    fn bad_era_roots_are_not_cached_and_a_good_answer_follows() {
+        let (canonical, eras) = chain_with_gaps();
+        let mut wrong = canonical.clone();
+        wrong.insert(3 * 8192 + 5, keccak256(b"a root from another fork"));
+        let (source, _, answers) = changeable_source_over(wrong);
+        let anchor = anchored(&source, &eras);
+        let error = source.era_roots(3, &anchor).unwrap_err();
+        assert!(error.to_string().contains("do not hash to the block summary root"), "{error}");
+        assert!(source.era_cache.lock().unwrap().is_empty(), "nothing stays cached after a mismatch");
+
+        // The same source, now over a node that answers correctly: the earlier failure left nothing behind.
+        *answers.lock().unwrap() = canonical;
+        assert_eq!(*source.era_roots(3, &anchor).unwrap(), eras[0]);
+        assert_eq!(source.era_cache.lock().unwrap().len(), 1);
+    }
+
+    /// Claim: a failed era leaves earlier verified eras in place, and a retry on the same source verifies afresh.
+    #[test]
+    fn a_failed_era_does_not_disturb_the_cache() {
+        let (canonical, eras) = chain_with_gaps();
+        let (source, requests) = source_over(canonical);
+        let anchor = anchored(&source, &eras);
+        source.era_roots(3, &anchor).unwrap();
+        // Era 4 is served truthfully, but the anchor below holds a different summary for it.
+        let mut changed = eras.clone();
+        changed[1][17] = keccak256(b"different");
+        let other_anchor = anchored(&source, &changed);
+        let before = requests.load(Ordering::SeqCst);
+        assert!(source.era_roots(4, &other_anchor).is_err());
+        assert!(requests.load(Ordering::SeqCst) > before, "the node was asked");
+        let cached: Vec<u64> = source.era_cache.lock().unwrap().iter().map(|(era, _)| *era).collect();
+        assert_eq!(cached, vec![3]);
+    }
+
+    /// Claim: the era cache holds at most the capacity, the newest first, and drops the oldest.
+    /// Why it matters: untrusted answers must not grow memory without bound.
+    #[test]
+    fn era_cache_is_bounded_and_evicts_the_oldest() {
+        let mut cache: Vec<(u64, u32)> = Vec::new();
+        for era in 0..ERA_CACHE_SIZE as u64 + 5 {
+            insert_bounded(&mut cache, era, era as u32, ERA_CACHE_SIZE);
+        }
+        assert_eq!(cache.len(), ERA_CACHE_SIZE);
+        assert_eq!(cache[0].0, ERA_CACHE_SIZE as u64 + 4, "newest first");
+        assert!(cache.iter().all(|(era, _)| *era >= 5), "eras 0 to 4 are evicted");
+        insert_bounded(&mut cache, 10, 99, ERA_CACHE_SIZE);
+        assert_eq!(cache.len(), ERA_CACHE_SIZE, "re-inserting a key does not duplicate it");
+        assert_eq!(cache.iter().filter(|(era, _)| *era == 10).count(), 1);
+    }
+
     /// Claim: the era roots come from the canonical block roots of the node, one request per slot of the era, plus the
     /// search for the block before the era when its first slot is empty. An empty slot repeats the root before it. A
     /// second call for the same era makes no request.
@@ -723,7 +816,8 @@ mod tests {
     fn era_roots_are_rebuilt_from_canonical_block_roots() {
         let (canonical, eras) = chain_with_gaps();
         let (source, requests) = source_over(canonical);
-        let roots = source.era_roots(3).unwrap();
+        let anchor = anchored(&source, &eras);
+        let roots = source.era_roots(3, &anchor).unwrap();
         assert_eq!(*roots, eras[0]);
         // 8192 slots, then the backward search: slot 3 * 8192 - 1 and - 2 are empty, - 3 holds the block.
         assert_eq!(requests.load(Ordering::SeqCst), 8192 + 3);
@@ -732,7 +826,7 @@ mod tests {
         let offset = (empty - 3 * 8192) as usize;
         assert_eq!(roots[offset], roots[offset - 1], "slot {empty} is empty (a multiple of seven) and repeats the root before it");
         assert_ne!(roots[offset + 1], roots[offset], "the next slot holds a block");
-        source.era_roots(3).unwrap();
+        source.era_roots(3, &anchor).unwrap();
         assert_eq!(requests.load(Ordering::SeqCst), 8192 + 3, "the second call reads the cache");
     }
 

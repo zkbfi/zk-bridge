@@ -114,6 +114,9 @@ pub enum Error {
         /// The target chain in the log.
         target_chain_id: u64,
     },
+    /// Bytes served as SSZ break a rule of the encoding: an offset or a length is out of bounds, an offset order is wrong,
+    /// or a list is longer than its limit. The text names the rule.
+    MalformedSsz(String),
     /// The execution block header could not be decoded.
     HeaderDecode(String),
     /// The receipt proof does not lead to the receipts root.
@@ -208,6 +211,7 @@ impl fmt::Display for Error {
             Self::TargetChainMismatch { target_chain_id } => {
                 write!(formatter, "the deposit targets chain {target_chain_id}, not this chain")
             }
+            Self::MalformedSsz(reason) => write!(formatter, "malformed SSZ: {reason}"),
             Self::HeaderDecode(reason) => write!(formatter, "cannot decode execution header: {reason}"),
             Self::ReceiptProofInvalid(reason) => write!(formatter, "receipt proof invalid: {reason}"),
             Self::ReceiptDecode(reason) => write!(formatter, "cannot decode receipt: {reason}"),
@@ -233,6 +237,7 @@ impl Error {
             Self::InvalidAncestryBranch => "InvalidAncestryBranch",
             Self::InvalidBlockHashBranch => "InvalidBlockHashBranch",
             Self::UnsupportedFork { .. } => "UnsupportedFork",
+            Self::MalformedSsz(_) => "MalformedSsz",
             Self::HeaderDecode(_) => "HeaderDecode",
             Self::ReceiptProofInvalid(_) => "ReceiptProofInvalid",
             Self::ReceiptDecode(_) => "ReceiptDecode",

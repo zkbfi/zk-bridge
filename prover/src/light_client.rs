@@ -21,7 +21,7 @@ use lc_core::update::FoldStep;
 use lc_core::wire::{encode_guest_input, ChainSelector, GuestInput};
 use lc_core::json::{execution_header_from_json, receipts_from_json};
 use lc_core::receipts::{build_receipts_trie, encode_execution_header, header_hash};
-use lc_core::ssz_state::{parse_signed_block, parse_state, ParsedState};
+use lc_core::ssz_state::{try_parse_signed_block, try_parse_state, ParsedState};
 #[cfg(feature = "dev-source")]
 use lc_testkit::synthetic::{build_body_proofs, synthetic_payload_header, StateBuilder};
 use serde_json::Value;
@@ -383,7 +383,8 @@ impl StateView {
     /// # Errors
     /// `Error::Malformed` when the bytes are not a state. `Error::Beacon` when the layout is not Capella.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
-        let state = guarded("beacon state", || parse_state(bytes))?;
+        let state =
+            try_parse_state(bytes).map_err(|error| Error::Malformed(format!("beacon state: {error}")))?;
         if state.field_roots.len() != CAPELLA_STATE_FIELDS {
             return Err(Error::Beacon(format!(
                 "the state has {} fields; only the Capella layout (28 fields) is supported",
@@ -510,8 +511,9 @@ impl BlockView {
     /// # Errors
     /// `Error::Malformed` when the bytes are not a supported block.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
+        let block =
+            try_parse_signed_block(bytes).map_err(|error| Error::Malformed(format!("beacon block: {error}")))?;
         guarded("beacon block", || {
-            let block = parse_signed_block(bytes);
             let (_, execution_branch) = branch_for_leaf(&block.body_field_roots, BODY_FIELD_EXECUTION_PAYLOAD);
             let leaves = block
                 .payload

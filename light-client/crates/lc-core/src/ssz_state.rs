@@ -10,6 +10,7 @@
 //! If a root does not match, the preset differs and the caller must stop.
 
 use alloy_primitives::{Address, B256, U256};
+use crate::error::{Error, Result};
 use crate::layout::ExecutionHeaderForm;
 use crate::ssz::{
     byte_list_root, byte_vector_root, hash_pair, merkleize, merkleize_with_limit, mix_in_length, pack_bytes, u64_chunk,
@@ -18,10 +19,6 @@ use crate::types::{BeaconBlockHeader, ExecutionPayloadHeader, SyncCommittee};
 
 fn le_u64(bytes: &[u8]) -> u64 {
     u64::from_le_bytes(bytes[..8].try_into().expect("8 bytes"))
-}
-
-fn le_u32(bytes: &[u8]) -> usize {
-    u32::from_le_bytes(bytes[..4].try_into().expect("4 bytes")) as usize
 }
 
 fn chunk32(bytes: &[u8]) -> B256 {
@@ -35,12 +32,42 @@ enum Kind {
     Variable,
 }
 
+/// The error for bytes that break an SSZ rule.
+fn malformed<T>(reason: impl Into<String>) -> Result<T> {
+    Err(Error::MalformedSsz(reason.into()))
+}
+
+/// Reads a 4-byte offset at `position` and checks the rules every offset must keep: it does not fall below
+/// `minimum` (the offset before it, or the end of the fixed part) and does not pass `bytes.len()`.
+fn checked_offset(bytes: &[u8], position: usize, minimum: usize) -> Result<usize> {
+    let Some(raw) = bytes.get(position..position + 4) else {
+        return malformed(format!("offset at byte {position} runs past the {} bytes of input", bytes.len()));
+    };
+    let offset = u32::from_le_bytes(raw.try_into().expect("4 bytes")) as usize;
+    if offset < minimum {
+        return malformed(format!("offset {offset} at byte {position} is below the previous offset {minimum}"));
+    }
+    if offset > bytes.len() {
+        return malformed(format!("offset {offset} at byte {position} is past the {} bytes of input", bytes.len()));
+    }
+    Ok(offset)
+}
+
 /// Splits an SSZ container into one slice per field.
-fn split_container<'a>(bytes: &'a [u8], kinds: &[Kind]) -> Vec<&'a [u8]> {
+///
+/// The first variable offset must equal the size of the fixed part, offsets must not decrease, and none may pass the end
+/// of the input (`simple-serialize.md` of consensus-specs, "Deserialization"). A container with no variable field must
+/// have exactly the fixed size.
+fn split_container<'a>(bytes: &'a [u8], kinds: &[Kind]) -> Result<Vec<&'a [u8]>> {
     let fixed_length: usize = kinds.iter().map(|kind| if let Kind::Fixed(size) = kind { *size } else { 4 }).sum();
+    let has_variable = kinds.iter().any(|kind| matches!(kind, Kind::Variable));
+    if bytes.len() < fixed_length || (!has_variable && bytes.len() != fixed_length) {
+        return malformed(format!("container of {} bytes does not fit its fixed part of {fixed_length} bytes", bytes.len()));
+    }
     let mut cursor = 0;
-    let mut starts: Vec<Option<usize>> = Vec::new();
-    let mut fixed_parts: Vec<&[u8]> = Vec::new();
+    let mut starts: Vec<Option<usize>> = Vec::with_capacity(kinds.len());
+    let mut fixed_parts: Vec<&[u8]> = Vec::with_capacity(kinds.len());
+    let mut previous = 0;
     for kind in kinds {
         match kind {
             Kind::Fixed(size) => {
@@ -49,16 +76,20 @@ fn split_container<'a>(bytes: &'a [u8], kinds: &[Kind]) -> Vec<&'a [u8]> {
                 cursor += size;
             }
             Kind::Variable => {
+                let offset = checked_offset(bytes, cursor, previous)?;
+                if starts.iter().all(Option::is_none) && offset != fixed_length {
+                    return malformed(format!("first offset {offset} is not the fixed part size {fixed_length}"));
+                }
+                previous = offset;
                 fixed_parts.push(&[]);
-                starts.push(Some(le_u32(&bytes[cursor..])));
+                starts.push(Some(offset));
                 cursor += 4;
             }
         }
     }
-    assert_eq!(cursor, fixed_length);
     let offsets: Vec<usize> = starts.iter().flatten().copied().collect();
     let mut variable_index = 0;
-    kinds
+    Ok(kinds
         .iter()
         .enumerate()
         .map(|(position, _)| match starts[position] {
@@ -69,30 +100,50 @@ fn split_container<'a>(bytes: &'a [u8], kinds: &[Kind]) -> Vec<&'a [u8]> {
                 &bytes[start..end]
             }
         })
-        .collect()
+        .collect())
 }
 
 /// Splits a list of variable-size elements into its elements.
-fn split_variable_list(bytes: &[u8]) -> Vec<&[u8]> {
+///
+/// `limit` is the SSZ limit of the list type. All checks run before anything is allocated: the first offset is a
+/// multiple of 4, at least 4 and at most `bytes.len()`; the count it implies is at most `limit`; offsets never decrease
+/// and none passes the end of the input.
+fn split_variable_list(bytes: &[u8], limit: u64) -> Result<Vec<&[u8]>> {
     if bytes.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let count = le_u32(bytes) / 4;
-    let offsets: Vec<usize> = (0..count).map(|index| le_u32(&bytes[index * 4..])).collect();
-    (0..count)
-        .map(|index| {
-            let end = offsets.get(index + 1).copied().unwrap_or(bytes.len());
-            &bytes[offsets[index]..end]
-        })
-        .collect()
+    let first = checked_offset(bytes, 0, 4)?;
+    if !first.is_multiple_of(4) {
+        return malformed(format!("first offset {first} of a list is not a multiple of 4"));
+    }
+    let count = first / 4;
+    if count as u64 > limit {
+        return malformed(format!("list holds {count} elements, above its limit of {limit}"));
+    }
+    let mut offsets = Vec::with_capacity(count + 1);
+    let mut previous = first;
+    for index in 0..count {
+        previous = checked_offset(bytes, index * 4, previous)?;
+        offsets.push(previous);
+    }
+    offsets.push(bytes.len());
+    Ok(offsets.windows(2).map(|pair| &bytes[pair[0]..pair[1]]).collect())
 }
 
 fn list_root(element_roots: &[B256], limit: u64) -> B256 {
     mix_in_length(&merkleize_with_limit(element_roots, limit), element_roots.len() as u64)
 }
 
-fn fixed_list_roots(bytes: &[u8], element_size: usize, hash: impl Fn(&[u8]) -> B256) -> Vec<B256> {
-    bytes.chunks_exact(element_size).map(hash).collect()
+/// The roots of a list of fixed-size elements. The input must be a whole number of elements, at most `limit`.
+fn fixed_list_roots(bytes: &[u8], element_size: usize, limit: u64, hash: impl Fn(&[u8]) -> B256) -> Result<Vec<B256>> {
+    if !bytes.len().is_multiple_of(element_size) {
+        return malformed(format!("{} bytes are not a whole number of {element_size}-byte elements", bytes.len()));
+    }
+    let count = bytes.len() / element_size;
+    if count as u64 > limit {
+        return malformed(format!("list holds {count} elements, above its limit of {limit}"));
+    }
+    Ok(bytes.chunks_exact(element_size).map(hash).collect())
 }
 
 fn checkpoint_root(bytes: &[u8]) -> B256 {
@@ -124,17 +175,41 @@ fn packed_list_root(bytes: &[u8], limit_bytes: u64, length: u64) -> B256 {
 }
 
 /// Parses a Capella `SyncCommittee` (512 public keys and the aggregate).
-pub fn parse_sync_committee(bytes: &[u8]) -> SyncCommittee {
-    assert_eq!(bytes.len(), 512 * 48 + 48);
+///
+/// # Errors
+/// `MalformedSsz` when `bytes` is not exactly 512 keys and the aggregate.
+pub fn try_parse_sync_committee(bytes: &[u8]) -> Result<SyncCommittee> {
+    if bytes.len() != 512 * 48 + 48 {
+        return malformed(format!("sync committee has {} bytes, not {}", bytes.len(), 512 * 48 + 48));
+    }
     let key = |slice: &[u8]| crate::types::BlsPublicKey::from_slice(slice);
-    SyncCommittee {
+    Ok(SyncCommittee {
         pubkeys: bytes[..512 * 48].chunks_exact(48).map(key).collect(),
         aggregate_pubkey: key(&bytes[512 * 48..]),
-    }
+    })
+}
+
+/// Parses a Capella `SyncCommittee`.
+///
+/// # Panics
+/// Panics when [`try_parse_sync_committee`] fails.
+pub fn parse_sync_committee(bytes: &[u8]) -> SyncCommittee {
+    try_parse_sync_committee(bytes).unwrap_or_else(|error| panic!("{error}"))
 }
 
 /// Parses a Capella execution payload header (the form stored in the state).
+///
+/// # Panics
+/// Panics when [`try_parse_payload_header`] fails.
 pub fn parse_payload_header(bytes: &[u8]) -> ExecutionPayloadHeader {
+    try_parse_payload_header(bytes).unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Parses a Capella execution payload header (the form stored in the state).
+///
+/// # Errors
+/// `MalformedSsz` when the bytes break an SSZ rule.
+pub fn try_parse_payload_header(bytes: &[u8]) -> Result<ExecutionPayloadHeader> {
     let kinds = [
         Kind::Fixed(32),
         Kind::Fixed(20),
@@ -152,8 +227,8 @@ pub fn parse_payload_header(bytes: &[u8]) -> ExecutionPayloadHeader {
         Kind::Fixed(32),
         Kind::Fixed(32),
     ];
-    let f = split_container(bytes, &kinds);
-    payload_header_from_fields(&f, chunk32(f[13]), chunk32(f[14]))
+    let f = split_container(bytes, &kinds)?;
+    Ok(payload_header_from_fields(&f, chunk32(f[13]), chunk32(f[14])))
 }
 
 fn payload_header_from_fields(f: &[&[u8]], transactions_root: B256, withdrawals_root: B256) -> ExecutionPayloadHeader {
@@ -240,7 +315,18 @@ impl ParsedState {
 }
 
 /// Parses and hashes a Capella `BeaconState`.
+///
+/// # Panics
+/// Panics when [`try_parse_state`] fails.
 pub fn parse_state(bytes: &[u8]) -> ParsedState {
+    try_parse_state(bytes).unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Parses and hashes a Capella `BeaconState`, for bytes that a remote node served.
+///
+/// # Errors
+/// `MalformedSsz` when the bytes break an SSZ rule. Nothing is allocated before the offsets are checked.
+pub fn try_parse_state(bytes: &[u8]) -> Result<ParsedState> {
     use Kind::{Fixed, Variable};
     let kinds = [
         Fixed(8),
@@ -272,7 +358,7 @@ pub fn parse_state(bytes: &[u8]) -> ParsedState {
         Fixed(8),
         Variable,
     ];
-    let f = split_container(bytes, &kinds);
+    let f = split_container(bytes, &kinds)?;
     let header = |slice: &[u8]| {
         BeaconBlockHeader {
             slot: le_u64(&slice[0..8]),
@@ -285,13 +371,20 @@ pub fn parse_state(bytes: &[u8]) -> ParsedState {
     };
     let fork = ForkData::from_ssz(f[3]);
     let root_chunks = |slice: &[u8]| -> Vec<B256> { slice.chunks_exact(32).map(chunk32).collect() };
-    let eth1_votes = fixed_list_roots(f[9], 72, eth1_data_root);
-    let validators = fixed_list_roots(f[11], 121, validator_root);
+    // Limits are the mainnet preset: EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH = 2048 (phase0 beacon-chain.md),
+    // VALIDATOR_REGISTRY_LIMIT = 2^40 and HISTORICAL_ROOTS_LIMIT = 2^24 (phase0 and capella beacon-chain.md).
+    let eth1_votes = fixed_list_roots(f[9], 72, 2048, eth1_data_root)?;
+    let validators = fixed_list_roots(f[11], 121, 1 << 40, validator_root)?;
+    if !f[7].len().is_multiple_of(32) || (f[7].len() / 32) as u64 > 1 << 24 {
+        return malformed("historical_roots is not a whole list of at most 2^24 roots");
+    }
     let historical_roots = root_chunks(f[7]);
-    let summaries = fixed_list_roots(f[27], 64, |item| hash_pair(&chunk32(&item[0..32]), &chunk32(&item[32..64])));
+    let summaries =
+        fixed_list_roots(f[27], 64, 1 << 24, |item| hash_pair(&chunk32(&item[0..32]), &chunk32(&item[32..64])))?;
     let mut justification = [0u8; 32];
     justification[0] = f[17][0];
-    let payload = parse_payload_header(f[24]);
+    let payload = try_parse_payload_header(f[24])?;
+    let committee_roots = (try_parse_sync_committee(f[22])?, try_parse_sync_committee(f[23])?);
     let field_roots = vec![
         u64_chunk(le_u64(f[0])),
         chunk32(f[1]),
@@ -315,18 +408,18 @@ pub fn parse_state(bytes: &[u8]) -> ParsedState {
         checkpoint_root(f[19]),
         checkpoint_root(f[20]),
         packed_list_root(f[21], (1u64 << 40) * 8, (f[21].len() / 8) as u64),
-        parse_sync_committee(f[22]).hash_tree_root().expect("committee root"),
-        parse_sync_committee(f[23]).hash_tree_root().expect("committee root"),
+        committee_roots.0.hash_tree_root().expect("committee root"),
+        committee_roots.1.hash_tree_root().expect("committee root"),
         payload.hash_tree_root(ExecutionHeaderForm::Capella).expect("payload header root"),
         u64_chunk(le_u64(f[25])),
         u64_chunk(le_u64(f[26])),
         list_root(&summaries, 1 << 24),
     ];
-    ParsedState {
+    Ok(ParsedState {
         field_roots,
         block_roots: root_chunks(f[5]),
-        current_sync_committee: parse_sync_committee(f[22]),
-        next_sync_committee: parse_sync_committee(f[23]),
+        current_sync_committee: committee_roots.0,
+        next_sync_committee: committee_roots.1,
         slot: le_u64(f[2]),
         fork,
         finalized_checkpoint: (le_u64(f[20]), chunk32(&f[20][8..40])),
@@ -334,7 +427,7 @@ pub fn parse_state(bytes: &[u8]) -> ParsedState {
             .chunks_exact(64)
             .map(|item| (chunk32(&item[0..32]), chunk32(&item[32..64])))
             .collect(),
-    }
+    })
 }
 
 /// A parsed Capella `BeaconBlock`: its header and the execution payload header derived from the body.
@@ -368,21 +461,27 @@ fn attestation_data_root(bytes: &[u8]) -> B256 {
     ])
 }
 
-fn bitlist_root(bytes: &[u8], max_bits: u64) -> B256 {
-    let last = *bytes.last().expect("bitlist has a delimiter");
+fn bitlist_root(bytes: &[u8], max_bits: u64) -> Result<B256> {
+    let Some(&last) = bytes.last().filter(|last| **last != 0) else {
+        return malformed("a bitlist needs a last byte that holds the delimiter bit");
+    };
     let delimiter = 7 - last.leading_zeros() as usize;
     let bit_length = (bytes.len() - 1) * 8 + delimiter;
+    if bit_length as u64 > max_bits {
+        return malformed(format!("bitlist holds {bit_length} bits, above its limit of {max_bits}"));
+    }
     let mut data = bytes.to_vec();
     *data.last_mut().expect("last") &= !(1u8 << delimiter);
     if delimiter == 0 {
         data.pop();
     }
-    mix_in_length(&merkleize_with_limit(&pack_bytes(&data), max_bits.div_ceil(256)), bit_length as u64)
+    Ok(mix_in_length(&merkleize_with_limit(&pack_bytes(&data), max_bits.div_ceil(256)), bit_length as u64))
 }
 
-fn attestation_root(bytes: &[u8]) -> B256 {
-    let parts = split_container(bytes, &[Kind::Variable, Kind::Fixed(128), Kind::Fixed(96)]);
-    merkleize(&[bitlist_root(parts[0], 2048), attestation_data_root(parts[1]), byte_vector_root(parts[2])])
+fn attestation_root(bytes: &[u8]) -> Result<B256> {
+    let parts = split_container(bytes, &[Kind::Variable, Kind::Fixed(128), Kind::Fixed(96)])?;
+    // MAX_VALIDATORS_PER_COMMITTEE = 2048 (phase0 preset).
+    Ok(merkleize(&[bitlist_root(parts[0], 2048)?, attestation_data_root(parts[1]), byte_vector_root(parts[2])]))
 }
 
 fn deposit_root(bytes: &[u8]) -> B256 {
@@ -400,11 +499,21 @@ fn deposit_root(bytes: &[u8]) -> B256 {
 /// Parses and hashes a Capella `SignedBeaconBlock`.
 ///
 /// # Panics
-/// Panics when the block carries attester slashings (not supported here) or when sizes are off.
+/// Panics when [`try_parse_signed_block`] fails.
 pub fn parse_signed_block(bytes: &[u8]) -> ParsedBlock {
+    try_parse_signed_block(bytes).unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Parses and hashes a Capella `SignedBeaconBlock`, for bytes that a remote node served.
+///
+/// # Errors
+/// `MalformedSsz` when the bytes break an SSZ rule, or when the block carries attester slashings (not supported here).
+pub fn try_parse_signed_block(bytes: &[u8]) -> Result<ParsedBlock> {
     use Kind::{Fixed, Variable};
-    let message = &bytes[le_u32(bytes)..];
-    let block = split_container(message, &[Fixed(8), Fixed(8), Fixed(32), Fixed(32), Variable]);
+    // `SignedBeaconBlock` is the message (variable) followed by the 96-byte signature.
+    let outer = split_container(bytes, &[Variable, Fixed(96)])?;
+    let message = outer[0];
+    let block = split_container(message, &[Fixed(8), Fixed(8), Fixed(32), Fixed(32), Variable])?;
     let body = split_container(
         block[4],
         &[
@@ -420,8 +529,10 @@ pub fn parse_signed_block(bytes: &[u8]) -> ParsedBlock {
             Variable,
             Variable,
         ],
-    );
-    assert!(body[4].is_empty(), "blocks with attester slashings are not supported by this tool");
+    )?;
+    if !body[4].is_empty() {
+        return malformed("blocks with attester slashings are not supported by this tool");
+    }
 
     let payload_fields = split_container(
         body[9],
@@ -442,45 +553,50 @@ pub fn parse_signed_block(bytes: &[u8]) -> ParsedBlock {
             Variable,
             Variable,
         ],
-    );
-    let transaction_roots: Vec<B256> = split_variable_list(payload_fields[13])
+    )?;
+    // Limits are the mainnet preset: MAX_TRANSACTIONS_PER_PAYLOAD = 2^20 and MAX_BYTES_PER_TRANSACTION = 2^30
+    // (bellatrix beacon-chain.md), MAX_WITHDRAWALS_PER_PAYLOAD = 16 (capella beacon-chain.md), MAX_PROPOSER_SLASHINGS,
+    // MAX_DEPOSITS, MAX_VOLUNTARY_EXITS = 16, MAX_ATTESTATIONS = 128 (phase0 beacon-chain.md),
+    // MAX_BLS_TO_EXECUTION_CHANGES = 16 (capella beacon-chain.md).
+    let transaction_roots: Vec<B256> = split_variable_list(payload_fields[13], 1 << 20)?
         .iter()
         .map(|transaction| byte_list_root(transaction, 1 << 30))
         .collect();
-    let withdrawal_roots = fixed_list_roots(payload_fields[14], 44, |item| {
+    let withdrawal_roots = fixed_list_roots(payload_fields[14], 44, 16, |item| {
         merkleize(&[
             u64_chunk(le_u64(&item[0..8])),
             u64_chunk(le_u64(&item[8..16])),
             B256::right_padding_from(&item[16..36]),
             u64_chunk(le_u64(&item[36..44])),
         ])
-    });
+    })?;
     let payload = payload_header_from_fields(
         &payload_fields,
         list_root(&transaction_roots, 1 << 20),
         list_root(&withdrawal_roots, 16),
     );
 
-    let proposer_slashings = fixed_list_roots(body[3], 416, |item| {
+    let proposer_slashings = fixed_list_roots(body[3], 416, 16, |item| {
         hash_pair(&signed_header_root(&item[0..208]), &signed_header_root(&item[208..416]))
-    });
-    let attestations: Vec<B256> = split_variable_list(body[5]).iter().map(|item| attestation_root(item)).collect();
-    let deposits = fixed_list_roots(body[6], 1240, deposit_root);
-    let exits = fixed_list_roots(body[7], 112, |item| {
+    })?;
+    let attestations: Vec<B256> =
+        split_variable_list(body[5], 128)?.iter().map(|item| attestation_root(item)).collect::<Result<_>>()?;
+    let deposits = fixed_list_roots(body[6], 1240, 16, deposit_root)?;
+    let exits = fixed_list_roots(body[7], 112, 16, |item| {
         hash_pair(
             &hash_pair(&u64_chunk(le_u64(&item[0..8])), &u64_chunk(le_u64(&item[8..16]))),
             &byte_vector_root(&item[16..112]),
         )
-    });
+    })?;
     let sync_aggregate = hash_pair(&byte_vector_root(&body[8][0..64]), &byte_vector_root(&body[8][64..160]));
-    let changes = fixed_list_roots(body[10], 172, |item| {
+    let changes = fixed_list_roots(body[10], 172, 16, |item| {
         let message = merkleize(&[
             u64_chunk(le_u64(&item[0..8])),
             byte_vector_root(&item[8..56]),
             B256::right_padding_from(&item[56..76]),
         ]);
         hash_pair(&message, &byte_vector_root(&item[76..172]))
-    });
+    })?;
 
     let body_field_roots: Vec<B256> = vec![
         byte_vector_root(body[0]),
@@ -504,5 +620,118 @@ pub fn parse_signed_block(bytes: &[u8]) -> ParsedBlock {
         state_root: chunk32(block[3]),
         body_root: merkleize(&body_leaves),
     };
-    ParsedBlock { header, payload, body_field_roots: body_leaves }
+    Ok(ParsedBlock { header, payload, body_field_roots: body_leaves })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn offsets_list(offsets: &[u32], body: &[u8]) -> Vec<u8> {
+        let mut bytes: Vec<u8> = offsets.iter().flat_map(|offset| offset.to_le_bytes()).collect();
+        bytes.extend_from_slice(body);
+        bytes
+    }
+
+    fn is_malformed<T>(result: Result<T>, needle: &str) {
+        match result.map(|_| ()) {
+            Err(Error::MalformedSsz(reason)) => assert!(reason.contains(needle), "reason {reason:?} lacks {needle:?}"),
+            other => panic!("expected MalformedSsz containing {needle:?}, got {other:?}"),
+        }
+    }
+
+    /// Claim: a valid list splits into its elements.
+    /// Why it matters: the checks must not reject what an honest node serves.
+    #[test]
+    fn variable_list_valid_control() {
+        let bytes = offsets_list(&[12, 14, 14], b"abcde");
+        let parts = split_variable_list(&bytes, 3).unwrap();
+        assert_eq!(parts, vec![&b"ab"[..], &b""[..], &b"cde"[..]]);
+        assert!(split_variable_list(&[], 3).unwrap().is_empty());
+    }
+
+    /// Claim: a first offset of 4 GiB minus one is refused before any allocation.
+    /// Why it matters: the count came from this offset, so a hostile node could abort the process on allocation.
+    #[test]
+    fn variable_list_huge_first_offset() {
+        is_malformed(split_variable_list(&offsets_list(&[u32::MAX], b""), u64::MAX), "past");
+    }
+
+    /// Claim: a first offset that is not a multiple of 4, or is below 4, is refused.
+    #[test]
+    fn variable_list_first_offset_misaligned() {
+        is_malformed(split_variable_list(&offsets_list(&[6, 6], b"xxxx"), 10), "multiple of 4");
+        is_malformed(split_variable_list(&offsets_list(&[0], b"xxxx"), 10), "below");
+    }
+
+    /// Claim: offsets that decrease are refused.
+    #[test]
+    fn variable_list_decreasing_offsets() {
+        is_malformed(split_variable_list(&offsets_list(&[12, 16, 14], b"abcdef"), 3), "below");
+    }
+
+    /// Claim: an offset past the end of the input is refused.
+    #[test]
+    fn variable_list_offset_past_end() {
+        is_malformed(split_variable_list(&offsets_list(&[8, 99], b"abc"), 2), "past");
+    }
+
+    /// Claim: a count above the list limit is refused, one element at the limit is accepted.
+    #[test]
+    fn variable_list_count_above_limit() {
+        let bytes = offsets_list(&[12, 12, 12], b"");
+        is_malformed(split_variable_list(&bytes, 2), "above its limit");
+        assert_eq!(split_variable_list(&bytes, 3).unwrap().len(), 3);
+    }
+
+    const KINDS: [Kind; 3] = [Kind::Fixed(2), Kind::Variable, Kind::Variable];
+
+    /// Claim: a valid container splits into its fields.
+    #[test]
+    fn container_valid_control() {
+        let mut bytes = vec![7, 8];
+        bytes.extend(offsets_list(&[10, 12], b"abcd"));
+        let fields = split_container(&bytes, &KINDS).unwrap();
+        assert_eq!(fields, vec![&[7u8, 8][..], &b"ab"[..], &b"cd"[..]]);
+    }
+
+    /// Claim: the container refuses input shorter than the fixed part, a first offset that is not the fixed size,
+    /// decreasing offsets and offsets past the end.
+    #[test]
+    fn container_bad_offsets() {
+        is_malformed(split_container(&[1, 2, 3], &KINDS), "fixed part");
+        let with = |offsets: &[u32], body: &[u8]| [vec![7u8, 8], offsets_list(offsets, body)].concat();
+        is_malformed(split_container(&with(&[u32::MAX, 12], b"ab"), &KINDS), "past");
+        is_malformed(split_container(&with(&[9, 10], b"ab"), &KINDS), "first offset");
+        let three = [Kind::Variable, Kind::Variable, Kind::Variable];
+        let decreasing = offsets_list(&[12, 15, 13], b"abcdef");
+        is_malformed(split_container(&decreasing, &three), "below");
+        is_malformed(split_container(&with(&[10, 99], b"abcd"), &KINDS), "past");
+    }
+
+    /// Claim: a container with no variable field must have exactly its fixed size.
+    #[test]
+    fn container_fixed_only_needs_exact_size() {
+        assert!(split_container(&[0; 4], &[Kind::Fixed(4)]).is_ok());
+        is_malformed(split_container(&[0; 5], &[Kind::Fixed(4)]), "fixed part");
+    }
+
+    /// Claim: lists of fixed-size elements and bitlists refuse bad lengths instead of truncating or panicking.
+    #[test]
+    fn fixed_list_and_bitlist_bounds() {
+        is_malformed(fixed_list_roots(&[0; 5], 2, 10, |_| B256::ZERO), "whole number");
+        is_malformed(fixed_list_roots(&[0; 6], 2, 2, |_| B256::ZERO), "above its limit");
+        is_malformed(bitlist_root(&[], 8), "delimiter");
+        is_malformed(bitlist_root(&[0], 8), "delimiter");
+        is_malformed(bitlist_root(&[0xff, 0x03], 8), "above its limit");
+        assert!(bitlist_root(&[0b101], 8).is_ok());
+    }
+
+    /// Claim: parsing hostile whole objects returns an error and does not panic.
+    #[test]
+    fn hostile_objects_do_not_panic() {
+        is_malformed(try_parse_state(&[]), "fixed part");
+        is_malformed(try_parse_signed_block(&[0xff; 100]), "");
+        is_malformed(try_parse_sync_committee(&[0; 3]), "sync committee");
+    }
 }
