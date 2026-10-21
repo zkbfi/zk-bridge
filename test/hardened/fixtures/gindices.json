@@ -1,0 +1,46 @@
+{
+  "description": "Generalized indices of the source chain's beacon structures, by fork. Derived from ethereum/consensus-specs field lists and checked against two published constants (see checks).",
+  "source": {
+    "repository": "https://github.com/ethereum/consensus-specs",
+    "branch": "master",
+    "fetchedOn": "2026-10-20",
+    "files": [
+      "specs/capella/beacon-chain.md",
+      "specs/deneb/beacon-chain.md",
+      "specs/electra/beacon-chain.md",
+      "specs/fulu/beacon-chain.md",
+      "configs/mainnet.yaml"
+    ]
+  },
+  "method": "A container with n fields has a tree with the next power of two leaves at or above n. The field with index i has generalized index leaves + i. A Vector[Root, 8192] adds depth 13, so element j has generalized index (vector index) * 8192 + j.",
+  "fieldCounts": {
+    "capella": { "BeaconState": 28, "BeaconBlockBody": 11, "ExecutionPayload": 15 },
+    "deneb": { "BeaconState": 28, "BeaconBlockBody": 12, "ExecutionPayload": 17 },
+    "electra": { "BeaconState": 37, "BeaconBlockBody": 13, "ExecutionPayload": 17 },
+    "fulu": { "BeaconState": 38, "BeaconBlockBody": 13, "ExecutionPayload": 17 }
+  },
+  "fieldIndices": { "BeaconState.block_roots": 5, "BeaconBlockBody.execution_payload": 9, "ExecutionPayload.block_hash": 12 },
+  "checks": {
+    "altair finalized_checkpoint.root": "52 * 2 + 1 = 105, matches FINALIZED_ROOT_GINDEX in the altair sync protocol",
+    "electra finalized_checkpoint.root": "(64 + 20) * 2 + 1 = 169, matches FINALIZED_ROOT_GINDEX_ELECTRA"
+  },
+  "slotsPerHistoricalRoot": 8192,
+  "slotsPerEpoch": 32,
+  "forks": {
+    "capella": { "blockRootsGindex": 37, "blockHashGindex": 412 },
+    "deneb": { "blockRootsGindex": 37, "blockHashGindex": 812 },
+    "electra": { "blockRootsGindex": 69, "blockHashGindex": 812 },
+    "fulu": { "blockRootsGindex": 69, "blockHashGindex": 812 }
+  },
+  "forkSchedules": {
+    "ethereumMainnet": [
+      { "fork": "capella", "activationEpoch": 194048 },
+      { "fork": "deneb", "activationEpoch": 269568 },
+      { "fork": "electra", "activationEpoch": 364032 },
+      { "fork": "fulu", "activationEpoch": 411392 }
+    ],
+    "pulsechain": [
+      { "fork": "capella", "activationEpoch": 3, "note": "Capella epoch 3 from the PulseChain beacon API on 2026-10-20. Deneb is never scheduled." }
+    ]
+  }
+}

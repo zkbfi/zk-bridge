@@ -1,0 +1,43 @@
+{
+  "deployer": "REPLACE_WITH_DEPLOYER_ADDRESS",
+  "chainA": {
+    "rpcAlias": "REPLACE_WITH_RPC_ALIAS_FROM_FOUNDRY_TOML",
+    "chainId": "REPLACE_WITH_CHAIN_ID",
+    "verifier": "REPLACE_WITH_SP1_VERIFIER_ADDRESS_ON_CHAIN_A",
+    "depositCutoffTimestamp": "REPLACE_WITH_CUTOFF_UNIX_TIME_OR_0_FOR_NONE",
+    "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_CHAIN_A",
+    "lightClient": {
+      "programVKey": "REPLACE_WITH_LIGHT_CLIENT_PROGRAM_VKEY",
+      "genesisValidatorsRoot": "REPLACE_WITH_GENESIS_VALIDATORS_ROOT_OF_CHAIN_B",
+      "slotsPerPeriod": "REPLACE_WITH_SLOTS_PER_PERIOD_OF_CHAIN_B",
+      "slotsPerHistoricalRoot": "REPLACE_WITH_SLOTS_PER_HISTORICAL_ROOT_OF_CHAIN_B",
+      "initialSlot": "REPLACE_WITH_CHECKPOINT_SLOT_OF_CHAIN_B",
+      "initialHeaderRoot": "REPLACE_WITH_CHECKPOINT_HEADER_ROOT_OF_CHAIN_B",
+      "initialSyncCommitteeHash": "REPLACE_WITH_COMMITTEE_HASH_AT_CHECKPOINT",
+      "initialNextSyncCommitteeHash": "REPLACE_WITH_NEXT_COMMITTEE_HASH_AT_CHECKPOINT"
+    }
+  },
+  "chainB": {
+    "rpcAlias": "REPLACE_WITH_RPC_ALIAS_FROM_FOUNDRY_TOML",
+    "chainId": "REPLACE_WITH_CHAIN_ID",
+    "verifier": "REPLACE_WITH_SP1_VERIFIER_ADDRESS_ON_CHAIN_B",
+    "depositCutoffTimestamp": "REPLACE_WITH_CUTOFF_UNIX_TIME_OR_0_FOR_NONE",
+    "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_CHAIN_B",
+    "lightClient": {
+      "programVKey": "REPLACE_WITH_LIGHT_CLIENT_PROGRAM_VKEY",
+      "genesisValidatorsRoot": "REPLACE_WITH_GENESIS_VALIDATORS_ROOT_OF_CHAIN_A",
+      "slotsPerPeriod": "REPLACE_WITH_SLOTS_PER_PERIOD_OF_CHAIN_A",
+      "slotsPerHistoricalRoot": "REPLACE_WITH_SLOTS_PER_HISTORICAL_ROOT_OF_CHAIN_A",
+      "initialSlot": "REPLACE_WITH_CHECKPOINT_SLOT_OF_CHAIN_A",
+      "initialHeaderRoot": "REPLACE_WITH_CHECKPOINT_HEADER_ROOT_OF_CHAIN_A",
+      "initialSyncCommitteeHash": "REPLACE_WITH_COMMITTEE_HASH_AT_CHECKPOINT",
+      "initialNextSyncCommitteeHash": "REPLACE_WITH_NEXT_COMMITTEE_HASH_AT_CHECKPOINT"
+    }
+  },
+  "tokenPairs": [
+    {
+      "chainA": "REPLACE_WITH_TOKEN_ADDRESS_ON_CHAIN_A",
+      "chainB": "REPLACE_WITH_TOKEN_ADDRESS_ON_CHAIN_B"
+    }
+  ]
+}
