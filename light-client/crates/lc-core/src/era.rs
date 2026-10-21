@@ -13,17 +13,23 @@
 
 use crate::ancestry::historical_leaf_gindex;
 use crate::error::{Error, Result};
-use crate::layout::{
-    CAPELLA_DENEB_STATE_LAYOUT, HISTORICAL_SUMMARIES_FIELD_INDEX, HISTORICAL_SUMMARIES_LIST_DEPTH,
-    SLOTS_PER_HISTORICAL_ROOT,
+use crate::layout::{HISTORICAL_SUMMARIES_FIELD_INDEX, HISTORICAL_SUMMARIES_LIST_DEPTH, SLOTS_PER_HISTORICAL_ROOT};
+use crate::ssz::{
+    branch_for_leaf, branch_for_leaf_with_limit, ceil_log2, hash_pair, is_valid_exact_branch, merkleize, u64_chunk,
 };
-use crate::ssz::{branch_for_leaf, branch_for_leaf_with_limit, hash_pair, is_valid_exact_branch, merkleize, u64_chunk};
 use crate::ssz_state::ParsedState;
 use alloy_primitives::B256;
 use std::collections::BTreeMap;
 
 /// The position of `block_roots` among the Capella `BeaconState` fields.
 const STATE_FIELD_BLOCK_ROOTS: usize = 5;
+
+/// The generalized index of `historical_summaries` in the state: field 27 of a tree whose depth the number of fields
+/// gives (5 for the 28 fields of Capella and Deneb, 6 for the 37 of Electra). It equals `historical_summaries_gindex` of
+/// the matching `StateLayout` in `layout.rs`, and a test compares the two.
+fn historical_summaries_gindex(state: &ParsedState) -> u64 {
+    (1u64 << ceil_log2(state.field_roots.len() as u64)) + HISTORICAL_SUMMARIES_FIELD_INDEX
+}
 
 /// The first slot of an era.
 pub const fn era_first_slot(era: u64) -> u64 {
@@ -57,7 +63,7 @@ pub fn recent_ancestry_branch(state: &ParsedState, slot: u64) -> Vec<B256> {
     branch
 }
 
-/// The branch of the historical path, 44 entries in the Capella layout, from the block roots of the deposit era.
+/// The branch of the historical path, 44 entries in the Capella and Deneb layouts (45 in Electra), from the block roots of the deposit era.
 ///
 /// `capella_era` is the immutable `capellaEra` of the vault (`ChainSpec::capella_era`). `era_roots` are the 8192 block
 /// roots of the era of `slot` (see [`era_block_roots`]). The function checks that they hash to the `block_summary_root`
@@ -90,7 +96,7 @@ pub fn historical_ancestry_branch(
     branch.extend(branch_for_leaf_with_limit(&summary_roots, position, HISTORICAL_SUMMARIES_LIST_DEPTH).1);
     branch.push(u64_chunk(summaries));
     branch.extend(branch_for_leaf(&state.field_roots, HISTORICAL_SUMMARIES_FIELD_INDEX as usize).1);
-    let gindex = historical_leaf_gindex(CAPELLA_DENEB_STATE_LAYOUT.historical_summaries_gindex, index, slot)?;
+    let gindex = historical_leaf_gindex(historical_summaries_gindex(state), index, slot)?;
     let leaf = era_roots[(slot % SLOTS_PER_HISTORICAL_ROOT) as usize];
     if !is_valid_exact_branch(&leaf, &branch, gindex, &state.root()) {
         return Err(Error::InvalidAncestryBranch);

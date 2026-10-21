@@ -409,6 +409,33 @@ pub fn build_update(spec: &'static ChainSpec, recipe: UpdateRecipe) -> UpdateSce
     UpdateScenario { spec, store, update, attested_state: state }
 }
 
+/// A chain of updates that walks across sync committee periods, as the updates of a lagging light client are.
+///
+/// Update 0 finalizes inside `first_period` and proves the next committee. Update `k` finalizes 64 slots into period
+/// `first_period + k`, is signed by the committee of that period, and proves the next committee, except the last, which
+/// has none (a finality update proves no next committee). Every update finalizes after the one before it, so the list
+/// is a valid fold from a store in `first_period` that knows no next committee.
+pub fn period_chain(spec: &'static ChainSpec, first_period: u64, crossings: u64) -> Vec<LightClientUpdate> {
+    let slots_per_period = spec.epochs_per_sync_committee_period * spec.slots_per_epoch;
+    let start = first_period * slots_per_period;
+    let recipe = |store_slot: u64, finalized_slot: u64, include_next_committee: bool| UpdateRecipe {
+        store_slot,
+        finalized_slot,
+        attested_slot: finalized_slot + 66,
+        signature_slot: finalized_slot + 67,
+        participants: 342,
+        include_next_committee,
+        store_knows_next_committee: false,
+    };
+    let mut updates = vec![build_update(spec, recipe(start + 400, start + 1000, crossings > 0)).update];
+    for crossing in 1..=crossings {
+        let previous = updates.last().expect("one update").finalized_header.beacon.slot;
+        let finalized = start + crossing * slots_per_period + 64;
+        updates.push(build_update(spec, recipe(previous, finalized, crossing < crossings)).update);
+    }
+    updates
+}
+
 /// Parameters of one receipt in a synthetic block.
 #[derive(Clone, Debug)]
 pub struct ReceiptSpec {

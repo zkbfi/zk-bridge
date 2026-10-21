@@ -8,4 +8,5 @@ pub mod json;
 pub mod pulsechain;
 pub mod receipts;
 pub mod ssz_state;
+pub mod state_bytes;
 pub mod synthetic;

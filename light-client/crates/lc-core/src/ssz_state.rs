@@ -1,20 +1,24 @@
-//! Parser and hasher for real Capella-layout SSZ data: `BeaconState` and `SignedBeaconBlock`.
+//! Parser and hasher for real SSZ data: `BeaconState` (Capella, Deneb, Electra and Fulu layouts) and the Capella
+//! `SignedBeaconBlock`.
 //!
 //! The prover service uses it to compute REAL Merkle branches from a beacon state and a block
-//! body that a PulseChain node served as SSZ. The hasher is written from the consensus-specs container definitions
-//! (`specs/phase0`, `altair`, `bellatrix`, `capella` `beacon-chain.md`). Its correctness is checked by the node itself:
-//! the computed state root must equal the `state_root` of the block header, and the body root must equal `body_root`.
-//! The Capella layout is the layout of PulseChain.
+//! body that a node served as SSZ. The hasher is written from the consensus-specs container definitions
+//! (`specs/phase0`, `altair`, `bellatrix`, `capella`, `deneb`, `electra`, `fulu` `beacon-chain.md`). Its correctness is checked
+//! by the node itself: the computed state root must equal the `state_root` of the block header, and the body root must
+//! equal `body_root`. The Capella layout is the layout of PulseChain. Deneb changes the payload header in the state
+//! (two blob gas fields). Electra adds nine fields after `historical_summaries` (37 fields, tree depth 6). Fulu adds
+//! `proposer_lookahead` (38 fields, tree depth 6).
 //!
 //! Limits are mainnet preset values (`SLOTS_PER_HISTORICAL_ROOT` 8192, validator registry limit 2^40, and so on).
 //! If a root does not match, the preset differs and the caller must stop.
 
+use crate::chain::ForkName;
 use crate::error::{Error, Result};
 use crate::layout::ExecutionHeaderForm;
 use crate::ssz::{
     byte_list_root, byte_vector_root, hash_pair, merkleize, merkleize_with_limit, mix_in_length, pack_bytes, u64_chunk,
 };
-use crate::types::{BeaconBlockHeader, ExecutionPayloadHeader, SyncCommittee};
+use crate::types::{BeaconBlockHeader, BlobGasFields, ExecutionPayloadHeader, SyncCommittee};
 use alloy_primitives::{Address, B256, U256};
 
 fn le_u64(bytes: &[u8]) -> u64 {
@@ -213,7 +217,16 @@ pub fn parse_payload_header(bytes: &[u8]) -> ExecutionPayloadHeader {
 /// # Errors
 /// `MalformedSsz` when the bytes break an SSZ rule.
 pub fn try_parse_payload_header(bytes: &[u8]) -> Result<ExecutionPayloadHeader> {
-    let kinds = [
+    try_parse_payload_header_form(bytes, ExecutionHeaderForm::Capella)
+}
+
+/// Parses an execution payload header of the given form: Capella has 15 fields, Deneb and later add `blob_gas_used`
+/// and `excess_blob_gas` after `withdrawals_root`.
+///
+/// # Errors
+/// `MalformedSsz` when the bytes break an SSZ rule.
+pub fn try_parse_payload_header_form(bytes: &[u8], form: ExecutionHeaderForm) -> Result<ExecutionPayloadHeader> {
+    let mut kinds = vec![
         Kind::Fixed(32),
         Kind::Fixed(20),
         Kind::Fixed(32),
@@ -230,8 +243,15 @@ pub fn try_parse_payload_header(bytes: &[u8]) -> Result<ExecutionPayloadHeader> 
         Kind::Fixed(32),
         Kind::Fixed(32),
     ];
+    if form == ExecutionHeaderForm::Deneb {
+        kinds.extend([Kind::Fixed(8), Kind::Fixed(8)]);
+    }
     let f = split_container(bytes, &kinds)?;
-    Ok(payload_header_from_fields(&f, chunk32(f[13]), chunk32(f[14])))
+    let mut header = payload_header_from_fields(&f, chunk32(f[13]), chunk32(f[14]));
+    if form == ExecutionHeaderForm::Deneb {
+        header.blob_gas = Some(BlobGasFields { blob_gas_used: le_u64(f[15]), excess_blob_gas: le_u64(f[16]) });
+    }
+    Ok(header)
 }
 
 fn payload_header_from_fields(f: &[&[u8]], transactions_root: B256, withdrawals_root: B256) -> ExecutionPayloadHeader {
@@ -290,9 +310,9 @@ impl ForkData {
     }
 }
 
-/// A parsed Capella `BeaconState`: the root of every field, plus the parts the tool reads.
+/// A parsed `BeaconState`: the root of every field, plus the parts the tool reads.
 pub struct ParsedState {
-    /// The hash tree root of each of the 28 fields, in field order.
+    /// The hash tree root of each field, in field order: 28 in Capella and Deneb, 37 in Electra.
     pub field_roots: Vec<B256>,
     /// `state_roots` are not needed; `block_roots` as 8192 chunks.
     pub block_roots: Vec<B256>,
@@ -317,6 +337,112 @@ impl ParsedState {
     }
 }
 
+/// The field layout of a `BeaconState`. Each form has its own field list and payload header. The order is the order of
+/// the forks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StateForm {
+    /// 28 fields, payload header of 15 fields (PulseChain).
+    Capella,
+    /// 28 fields, payload header of 17 fields.
+    Deneb,
+    /// 37 fields, payload header of 17 fields. Nine fields follow `historical_summaries`.
+    Electra,
+    /// 38 fields: Electra plus `proposer_lookahead` (a vector of 64 validator indices).
+    Fulu,
+}
+
+impl StateForm {
+    /// The state form of a fork.
+    ///
+    /// # Errors
+    /// `UnsupportedFork` for forks without a parser here: before Capella, and Gloas.
+    pub fn for_fork(fork: ForkName) -> Result<Self> {
+        match fork {
+            ForkName::Capella => Ok(Self::Capella),
+            ForkName::Deneb => Ok(Self::Deneb),
+            ForkName::Electra => Ok(Self::Electra),
+            ForkName::Fulu => Ok(Self::Fulu),
+            ForkName::Phase0 | ForkName::Altair | ForkName::Bellatrix | ForkName::Gloas => {
+                Err(Error::UnsupportedFork { fork })
+            }
+        }
+    }
+
+    /// The number of `BeaconState` fields.
+    pub const fn field_count(self) -> usize {
+        match self {
+            Self::Capella | Self::Deneb => 28,
+            Self::Electra => 37,
+            Self::Fulu => 38,
+        }
+    }
+
+    const fn header_form(self) -> ExecutionHeaderForm {
+        match self {
+            Self::Capella => ExecutionHeaderForm::Capella,
+            Self::Deneb | Self::Electra | Self::Fulu => ExecutionHeaderForm::Deneb,
+        }
+    }
+
+    /// The SSZ field kinds, in field order.
+    fn kinds(self) -> Vec<Kind> {
+        use Kind::{Fixed, Variable};
+        let mut kinds = vec![
+            Fixed(8),
+            Fixed(32),
+            Fixed(8),
+            Fixed(16),
+            Fixed(112),
+            Fixed(8192 * 32),
+            Fixed(8192 * 32),
+            Variable,
+            Fixed(72),
+            Variable,
+            Fixed(8),
+            Variable,
+            Variable,
+            Fixed(65536 * 32),
+            Fixed(8192 * 8),
+            Variable,
+            Variable,
+            Fixed(1),
+            Fixed(40),
+            Fixed(40),
+            Fixed(40),
+            Variable,
+            Fixed(24624),
+            Fixed(24624),
+            Variable,
+            Fixed(8),
+            Fixed(8),
+            Variable,
+        ];
+        if self >= Self::Electra {
+            // deposit_requests_start_index, deposit_balance_to_consume, exit_balance_to_consume, earliest_exit_epoch,
+            // consolidation_balance_to_consume, earliest_consolidation_epoch, then the three pending lists.
+            kinds.extend([Fixed(8), Fixed(8), Fixed(8), Fixed(8), Fixed(8), Fixed(8), Variable, Variable, Variable]);
+        }
+        if self == Self::Fulu {
+            // proposer_lookahead: Vector[ValidatorIndex, (MIN_SEED_LOOKAHEAD + 1) * SLOTS_PER_EPOCH] = 64 indices.
+            kinds.push(Fixed(64 * 8));
+        }
+        kinds
+    }
+}
+
+/// The slot of a `BeaconState`, read from its fixed part (`genesis_time`, `genesis_validators_root`, then `slot`).
+///
+/// The caller picks the fork from the slot, then parses with [`try_parse_state_for_fork`].
+///
+/// # Errors
+/// `MalformedSsz` when `bytes` is shorter than the three leading fields.
+pub fn state_slot(bytes: &[u8]) -> Result<u64> {
+    let Some(raw) = bytes.get(40..48) else {
+        return malformed(format!("state of {} bytes has no slot", bytes.len()));
+    };
+    Ok(le_u64(raw))
+}
+
 /// Parses and hashes a Capella `BeaconState`.
 ///
 /// # Panics
@@ -330,38 +456,23 @@ pub fn parse_state(bytes: &[u8]) -> ParsedState {
 /// # Errors
 /// `MalformedSsz` when the bytes break an SSZ rule. Nothing is allocated before the offsets are checked.
 pub fn try_parse_state(bytes: &[u8]) -> Result<ParsedState> {
-    use Kind::{Fixed, Variable};
-    let kinds = [
-        Fixed(8),
-        Fixed(32),
-        Fixed(8),
-        Fixed(16),
-        Fixed(112),
-        Fixed(8192 * 32),
-        Fixed(8192 * 32),
-        Variable,
-        Fixed(72),
-        Variable,
-        Fixed(8),
-        Variable,
-        Variable,
-        Fixed(65536 * 32),
-        Fixed(8192 * 8),
-        Variable,
-        Variable,
-        Fixed(1),
-        Fixed(40),
-        Fixed(40),
-        Fixed(40),
-        Variable,
-        Fixed(24624),
-        Fixed(24624),
-        Variable,
-        Fixed(8),
-        Fixed(8),
-        Variable,
-    ];
-    let f = split_container(bytes, &kinds)?;
+    try_parse_state_form(bytes, StateForm::Capella)
+}
+
+/// Parses and hashes the `BeaconState` of a fork.
+///
+/// # Errors
+/// `UnsupportedFork` when [`StateForm::for_fork`] refuses the fork. `MalformedSsz` when the bytes break an SSZ rule.
+pub fn try_parse_state_for_fork(bytes: &[u8], fork: ForkName) -> Result<ParsedState> {
+    try_parse_state_form(bytes, StateForm::for_fork(fork)?)
+}
+
+/// Parses and hashes a `BeaconState` of the given form.
+///
+/// # Errors
+/// `MalformedSsz` when the bytes break an SSZ rule. Nothing is allocated before the offsets are checked.
+pub fn try_parse_state_form(bytes: &[u8], form: StateForm) -> Result<ParsedState> {
+    let f = split_container(bytes, &form.kinds())?;
     let header = |slice: &[u8]| {
         BeaconBlockHeader {
             slot: le_u64(&slice[0..8]),
@@ -386,9 +497,9 @@ pub fn try_parse_state(bytes: &[u8]) -> Result<ParsedState> {
         fixed_list_roots(f[27], 64, 1 << 24, |item| hash_pair(&chunk32(&item[0..32]), &chunk32(&item[32..64])))?;
     let mut justification = [0u8; 32];
     justification[0] = f[17][0];
-    let payload = try_parse_payload_header(f[24])?;
+    let payload = try_parse_payload_header_form(f[24], form.header_form())?;
     let committee_roots = (try_parse_sync_committee(f[22])?, try_parse_sync_committee(f[23])?);
-    let field_roots = vec![
+    let mut field_roots = vec![
         u64_chunk(le_u64(f[0])),
         chunk32(f[1]),
         u64_chunk(le_u64(f[2])),
@@ -413,11 +524,17 @@ pub fn try_parse_state(bytes: &[u8]) -> Result<ParsedState> {
         packed_list_root(f[21], (1u64 << 40) * 8, (f[21].len() / 8) as u64),
         committee_roots.0.hash_tree_root()?,
         committee_roots.1.hash_tree_root()?,
-        payload.hash_tree_root(ExecutionHeaderForm::Capella)?,
+        payload.hash_tree_root(form.header_form())?,
         u64_chunk(le_u64(f[25])),
         u64_chunk(le_u64(f[26])),
         list_root(&summaries, 1 << 24),
     ];
+    if form >= StateForm::Electra {
+        field_roots.extend(electra_field_roots(&f[28..37])?);
+    }
+    if form == StateForm::Fulu {
+        field_roots.push(merkleize(&pack_bytes(f[37])));
+    }
     Ok(ParsedState {
         field_roots,
         block_roots: root_chunks(f[5]),
@@ -431,6 +548,43 @@ pub fn try_parse_state(bytes: &[u8]) -> Result<ParsedState> {
             .map(|item| (chunk32(&item[0..32]), chunk32(&item[32..64])))
             .collect(),
     })
+}
+
+/// The roots of the nine fields that Electra adds after `historical_summaries` (`specs/electra/beacon-chain.md`,
+/// container `BeaconState`). `f` holds the slices of fields 28 to 36.
+///
+/// The three lists use the limits `PENDING_DEPOSITS_LIMIT` 2^27, `PENDING_PARTIAL_WITHDRAWALS_LIMIT` 2^27 and
+/// `PENDING_CONSOLIDATIONS_LIMIT` 2^18 of the same file.
+fn electra_field_roots(f: &[&[u8]]) -> Result<Vec<B256>> {
+    let pending_deposits = fixed_list_roots(f[6], 192, 1 << 27, pending_deposit_root)?;
+    let pending_partial_withdrawals = fixed_list_roots(f[7], 24, 1 << 27, pending_partial_withdrawal_root)?;
+    let pending_consolidations = fixed_list_roots(f[8], 16, 1 << 18, pending_consolidation_root)?;
+    let mut roots: Vec<B256> = f[..6].iter().map(|field| u64_chunk(le_u64(field))).collect();
+    roots.push(list_root(&pending_deposits, 1 << 27));
+    roots.push(list_root(&pending_partial_withdrawals, 1 << 27));
+    roots.push(list_root(&pending_consolidations, 1 << 18));
+    Ok(roots)
+}
+
+/// `PendingDeposit`: public key, withdrawal credentials, amount, signature, slot.
+fn pending_deposit_root(bytes: &[u8]) -> B256 {
+    merkleize(&[
+        byte_vector_root(&bytes[0..48]),
+        chunk32(&bytes[48..80]),
+        u64_chunk(le_u64(&bytes[80..88])),
+        byte_vector_root(&bytes[88..184]),
+        u64_chunk(le_u64(&bytes[184..192])),
+    ])
+}
+
+/// `PendingPartialWithdrawal`: validator index, amount, withdrawable epoch.
+fn pending_partial_withdrawal_root(bytes: &[u8]) -> B256 {
+    merkleize(&[u64_chunk(le_u64(&bytes[0..8])), u64_chunk(le_u64(&bytes[8..16])), u64_chunk(le_u64(&bytes[16..24]))])
+}
+
+/// `PendingConsolidation`: source index, target index.
+fn pending_consolidation_root(bytes: &[u8]) -> B256 {
+    hash_pair(&u64_chunk(le_u64(&bytes[0..8])), &u64_chunk(le_u64(&bytes[8..16])))
 }
 
 /// A parsed Capella `BeaconBlock`: its header and the execution payload header derived from the body.
