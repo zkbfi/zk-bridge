@@ -84,21 +84,6 @@ contract ImmutabilityTest is Test {
         }
     }
 
-    /// Claim: the supply-share flow limiter has no owner and no setter. Shows: the ABI lists exactly two state-changing
-    /// functions, `checkWithdrawal` (which only records what the vault pays) and `sunset` (which only detaches the
-    /// limiter, after the immutable sunset time); `checkDeposit` is a view. Matters: every rule of the limiter is fixed at
-    /// construction, so no key can loosen the limit after the vault trusts it.
-    function test_flowLimit_supplyShareFlowLimiter_onlyCheckWithdrawalAndSunsetChangeState() public view {
-        string[] memory names = _mutatingFunctions("out/SupplyShareFlowLimiter.sol/SupplyShareFlowLimiter.json");
-        string[] memory allowed = new string[](2);
-        allowed[0] = "checkWithdrawal";
-        allowed[1] = "sunset";
-        assertEq(names.length, allowed.length, "unexpected number of state-changing functions");
-        for (uint256 i = 0; i < allowed.length; i++) {
-            assertTrue(_contains(names, allowed[i]), allowed[i]);
-        }
-    }
-
     function _contains(string[] memory names, string memory wanted) internal pure returns (bool) {
         for (uint256 i = 0; i < names.length; i++) {
             if (keccak256(bytes(names[i])) == keccak256(bytes(wanted))) return true;

@@ -13,17 +13,7 @@
       "basisPoints": "0",
       "ceilingBasisPoints": "0"
     },
-    "flowLimit": {
-      "shareBasisPoints": "10",
-      "windowSeconds": "86400",
-      "sunsetTimestamp": "0",
-      "fixedSupplies": [
-        {
-          "token": "REPLACE_WITH_WRAPPED_ETH_ADDRESS_ON_CHAIN_A",
-          "supply": "100000000000000000000000000"
-        }
-      ]
-    },
+    "flowLimiter": "0x0000000000000000000000000000000000000000",
     "lightClient": {
       "programVKey": "REPLACE_WITH_LIGHT_CLIENT_PROGRAM_VKEY",
       "genesisValidatorsRoot": "REPLACE_WITH_GENESIS_VALIDATORS_ROOT_OF_CHAIN_B",
@@ -65,17 +55,7 @@
       "basisPoints": "0",
       "ceilingBasisPoints": "0"
     },
-    "flowLimit": {
-      "shareBasisPoints": "10",
-      "windowSeconds": "86400",
-      "sunsetTimestamp": "0",
-      "fixedSupplies": [
-        {
-          "token": "REPLACE_WITH_WRAPPED_PLS_ADDRESS_ON_CHAIN_B",
-          "supply": "100000000000000000000000000000000"
-        }
-      ]
-    },
+    "flowLimiter": "0x0000000000000000000000000000000000000000",
     "lightClient": {
       "programVKey": "REPLACE_WITH_LIGHT_CLIENT_PROGRAM_VKEY",
       "genesisValidatorsRoot": "REPLACE_WITH_GENESIS_VALIDATORS_ROOT_OF_CHAIN_A",
