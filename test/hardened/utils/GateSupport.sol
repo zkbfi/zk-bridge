@@ -227,7 +227,7 @@ abstract contract GateSupport is WithdrawalScenes {
         pairs[0] = BridgeVault.TokenPair(address(tokenOnA), address(tokenOnB), 18);
         vm.chainId(CHAIN_A);
         return new BridgeVault(
-            address(lightClientForA), CHAIN_A, CHAIN_B, address(vaultB), pairs, BridgeVault.DepositTerms(0, address(0), address(0), 0, 0), DEFAULT_CAPELLA_ERA, gate
+            address(lightClientForA), CHAIN_A, CHAIN_B, address(vaultB), pairs, BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0)), DEFAULT_CAPELLA_ERA, gate
         );
     }
 

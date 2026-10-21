@@ -29,6 +29,7 @@ contract DeployBridge is Script {
         uint256 deployerNonce;
         uint64 depositCutoffTimestamp;
         FeeConfig fee;
+        address flowLimiter;
         LightClientConfig lightClient;
         GateConfig gate;
         ObservationConfig observation;
@@ -142,6 +143,8 @@ contract DeployBridge is Script {
     error VerifierHasNoCode(uint64 chainId, address verifier);
     /// @notice The code hash of the verifier differs from the pinned code hash.
     error VerifierCodeHashMismatch(uint64 chainId, address verifier, bytes32 expected, bytes32 actual);
+    /// @notice The configured flow limiter holds no code on its chain.
+    error FlowLimiterHasNoCode(uint64 chainId, address flowLimiter);
     /// @notice A token address holds no code on its chain.
     error TokenHasNoCode(uint64 chainId, address token);
     /// @notice The signer of the script is not the configured deployer.
@@ -334,7 +337,7 @@ contract DeployBridge is Script {
     // ------------------------------------------------------------------ chain checks
 
     /// @notice Refuses to continue when the connected chain, the deployer nonce, the verifier or its pinned code hash,
-    /// or the beacon roots contract of an enforcing gate is wrong. It runs before any broadcast.
+    /// the beacon roots contract of an enforcing gate, or a non-zero flow limiter is wrong. It runs before any broadcast.
     /// @param chain The settings of the connected chain.
     /// @param deployer The deployer.
     function assertChainEnvironment(ChainConfig memory chain, address deployer) public view {
@@ -347,6 +350,9 @@ contract DeployBridge is Script {
         }
         if (chain.gate.mode == BeaconForkGate.GateMode.Enforcing && BEACON_ROOTS.code.length == 0) {
             revert BeaconRootsHaveNoCode(chain.chainId, BEACON_ROOTS);
+        }
+        if (chain.flowLimiter != address(0) && chain.flowLimiter.code.length == 0) {
+            revert FlowLimiterHasNoCode(chain.chainId, chain.flowLimiter);
         }
     }
 
@@ -529,12 +535,13 @@ contract DeployBridge is Script {
                 deployment.remoteChainId,
                 deployment.remoteVault,
                 deployment.pairs,
-                BridgeVault.DepositTerms({
+                BridgeVault.VaultTerms({
                     cutoffTimestamp: chain.depositCutoffTimestamp,
                     feeAuthority: chain.fee.authority,
                     feeRecipient: chain.fee.recipient,
                     feeBasisPoints: chain.fee.basisPoints,
-                    feeCeilingBasisPoints: chain.fee.ceilingBasisPoints
+                    feeCeilingBasisPoints: chain.fee.ceilingBasisPoints,
+                    flowLimiter: chain.flowLimiter
                 }),
                 chain.lightClient.capellaEra,
                 gate
@@ -619,6 +626,7 @@ contract DeployBridge is Script {
         if (bridgeVault.feeCeilingBasisPoints() != chain.fee.ceilingBasisPoints) {
             revert DeploymentMismatch("vault.feeCeilingBasisPoints");
         }
+        if (address(bridgeVault.flowLimiter()) != chain.flowLimiter) revert DeploymentMismatch("vault.flowLimiter");
         if (
             bridgeVault.stateLayouts().length != 0 || bridgeVault.bodyLayouts().length != 0
                 || bridgeVault.historicalLayouts().length != 0
@@ -654,6 +662,7 @@ contract DeployBridge is Script {
         chain.deployerNonce = _readUint(json, string.concat(prefix, ".deployerNonce"));
         chain.depositCutoffTimestamp = uint64(_readUint(json, string.concat(prefix, ".depositCutoffTimestamp")));
         chain.fee = _readFee(json, string.concat(prefix, ".fee"));
+        chain.flowLimiter = vm.parseAddress(_readText(json, string.concat(prefix, ".flowLimiter")));
         string memory client = string.concat(prefix, ".lightClient");
         chain.lightClient.programVKey = _readBytes32(json, string.concat(client, ".programVKey"));
         chain.lightClient.genesisValidatorsRoot = _readBytes32(json, string.concat(client, ".genesisValidatorsRoot"));

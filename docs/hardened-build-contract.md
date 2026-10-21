@@ -573,7 +573,7 @@ The user expects a fee in the future. Each vault gets a fee switch that is off b
 - **Gas:** measured with a fee of zero and with a fee set.
 
 **As built.**
-- **Constructor shape:** the vault takes one `DepositTerms` struct in place of `depositCutoffTimestamp`. It holds `cutoffTimestamp`, `feeAuthority`, `feeRecipient`, `feeBasisPoints` and `feeCeilingBasisPoints`. A ninth constructor argument does not compile without the intermediate representation (stack too deep).
+- **Constructor shape:** the vault takes one struct (then named `DepositTerms`, now `VaultTerms`) in place of `depositCutoffTimestamp`. It holds `cutoffTimestamp`, `feeAuthority`, `feeRecipient`, `feeBasisPoints` and `feeCeilingBasisPoints`. A ninth constructor argument does not compile without the intermediate representation (stack too deep).
 - **Extra guards:** a zero authority never passes the authority check, so no caller can use the zero address. `collectFees` reverts with `NoFeesAccrued` when nothing is waiting, and with `ZeroFeeRecipient` when the recipient is zero.
 - **Storage:** the fee state sits after the layout tables, so the earlier storage slots keep their place.
 - **Tests:** `test/hardened/BridgeVaultFee.t.sol` holds every test above. `prover/tests/hardened_happy_path.rs` shows a deposit with a fee, the proof, and the payout of the net amount on the other chain.
@@ -627,7 +627,7 @@ On PulseChain, the fork registry checks freshness and the start of an observatio
 - **Rule: WARN, not STOP.** The status is `WARN` when the lag reaches `--own-light-client-warn-periods`. The default is 32, half of the fold limit of 64 updates. A deposit made now does not depend on this light client. `STOP` would make scripts refuse deposits on a route that still delivers them. The cost of a stale head is a weaker registry and a harder catch-up. The operator can fix both, and the warning comes with time to spare.
 - **Tests:** unit tests cover the threshold, the clock source, the precedence and the output. `prover/tests/hardened_own_light_client.rs` runs two Anvil chains. The head moves with each pass. The registry refuses the fixture observation as a replay after the move (`ObservationNotFresh`), and accepts an observation built from the new head, which the stale head refused (`PreviousHeadSlotMismatch`). A light client of another beacon chain is refused at startup.
 
-## Flow limiter hook (user decision, 2026-10-21)
+## Flow limiter hook (user decision, 2026-10-21) (built)
 
 The user asked for a hook for flow limits that can be nullified, with the rules held by an immutable contract. The user will supply the limit rules later. This section defines only the hook.
 
@@ -656,3 +656,14 @@ Each chain's config gains `flowLimiter` (default zero). A non-zero value must ha
 - Only the limiter can detach; detach is one-way; after detach the vault never calls it.
 - A limiter that tries to reenter `withdraw` or `deposit` fails.
 - A limiter that tries to move vault funds has no way to do so (no approval exists).
+
+### As built
+
+- **Constructor shape:** the argument `flowLimiter` is the last field of the constructor struct. The struct is now `VaultTerms` (it was `DepositTerms`), because it no longer holds deposit terms only. The vault stores the limiter in a plain storage slot after the fee state, so the earlier slots keep their place. The public view is `flowLimiter()`.
+- **Hook points:** `checkDeposit` runs in the deposit after the fee is booked, with the net amount, before the vault emits the deposit event. `checkWithdrawal` runs after the `AlreadyClaimed` check and before the nonce is marked. A claimed deposit never reaches the limiter.
+- **Detach:** `detachFlowLimiter()` reverts with `NotFlowLimiter(caller)` for every caller but the limiter. After a detach nobody passes, so the same error covers a second detach. The vault has no other function that touches the limiter, and a test reads the compiled interface to prove it.
+- **Deploy script:** the setting is `flowLimiter` on each chain, as a string address. The example configuration holds the zero address. `assertChainEnvironment` reverts with `FlowLimiterHasNoCode(chainId, address)` for a non-zero address with no code. The read-back reverts with `DeploymentMismatch("vault.flowLimiter")`.
+- **Prover:** a refused withdrawal fails at gas estimation with the revert data of the limiter. The vault passes that data through, so the prover cannot tell a refusal of the limiter from another revert. When the vault has a limiter, the failure note names it and carries the revert data. The attempt counts like any other failed attempt, so after `max_attempts` refusals the service marks the deposit `failed`. A long rate limit therefore needs a higher `max_attempts`. This is an open point.
+- **Tests:** `test/hardened/BridgeVaultFlowLimiter.t.sol` holds every test above, with the test limiter in `test/hardened/utils/FlowLimiterMocks.sol`. The deploy tests are in `test/hardened/DeployBridge.t.sol`. The Anvil test is in `prover/tests/hardened_happy_path.rs`.
+- **Gas, deposit:** 88,312 before, 90,464 with no limiter (2,152 more: one cold storage read). 208,633 with a test limiter attached that allows and records every call. That figure includes the limiter's own storage writes.
+- **Gas, withdraw:** in the type 2 receipt test, 263,327 before and 265,549 with no limiter (2,222 more).

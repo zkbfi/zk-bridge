@@ -13,6 +13,7 @@
       "basisPoints": "0",
       "ceilingBasisPoints": "0"
     },
+    "flowLimiter": "0x0000000000000000000000000000000000000000",
     "lightClient": {
       "programVKey": "REPLACE_WITH_LIGHT_CLIENT_PROGRAM_VKEY",
       "genesisValidatorsRoot": "REPLACE_WITH_GENESIS_VALIDATORS_ROOT_OF_CHAIN_B",
@@ -54,6 +55,7 @@
       "basisPoints": "0",
       "ceilingBasisPoints": "0"
     },
+    "flowLimiter": "0x0000000000000000000000000000000000000000",
     "lightClient": {
       "programVKey": "REPLACE_WITH_LIGHT_CLIENT_PROGRAM_VKEY",
       "genesisValidatorsRoot": "REPLACE_WITH_GENESIS_VALIDATORS_ROOT_OF_CHAIN_A",

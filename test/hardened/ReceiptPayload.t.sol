@@ -14,7 +14,7 @@ contract ReceiptPayloadVault is BridgeVault {
         uint64 remoteChainId,
         address remoteVaultAddress,
         TokenPair[] memory pairs,
-        DepositTerms memory terms,
+        VaultTerms memory terms,
         uint64 capellaEraValue,
         address gate
     ) BridgeVault(lightClient, localChainId, remoteChainId, remoteVaultAddress, pairs, terms, capellaEraValue, gate) {}
@@ -47,7 +47,7 @@ contract ReceiptPayloadTest is WithdrawalScenes {
             CHAIN_A,
             ReceiptFixtures.REMOTE_VAULT,
             pairs,
-            BridgeVault.DepositTerms(0, address(0), address(0), 0, 0),
+            BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0)),
             DEFAULT_CAPELLA_ERA,
             address(gateB)
         );

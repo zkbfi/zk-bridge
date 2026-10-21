@@ -44,14 +44,15 @@ contract ImmutabilityTest is Test {
     }
 
     /// Claim: the vault has no owner, upgrade path, pause, or setter for the light client, the gate, or anything else.
-    /// Shows: the ABI lists exactly eight state-changing functions: `deposit`, `withdraw`, the three open layout
+    /// Shows: the ABI lists exactly nine state-changing functions: `deposit`, `withdraw`, the three open layout
     /// functions (`addBlockRootsLayout`, `addHistoricalSummariesLayout`, `addBlockHashLayout`), which only add
     /// positions that stored light-client data proves, and the three fee functions (`setFee`, `nullifyFee`,
-    /// `collectFees`). Only `setFee` and `nullifyFee` need the fee authority, and neither reaches locked tokens.
+    /// `collectFees`), and `detachFlowLimiter`. Only `setFee` and `nullifyFee` need the fee authority, and neither
+    /// reaches locked tokens. Only the flow limiter can call `detachFlowLimiter`, and no function sets or replaces a limiter.
     /// Matters: H-04 (no key can redirect the vault).
     function test_H04_bridgeVault_onlyDepositWithdrawAndLayoutFunctionsChangeState() public view {
         string[] memory names = _mutatingFunctions("out/BridgeVault.sol/BridgeVault.json");
-        string[] memory allowed = new string[](8);
+        string[] memory allowed = new string[](9);
         allowed[0] = "deposit";
         allowed[1] = "withdraw";
         allowed[2] = "addBlockRootsLayout";
@@ -60,6 +61,7 @@ contract ImmutabilityTest is Test {
         allowed[5] = "setFee";
         allowed[6] = "nullifyFee";
         allowed[7] = "collectFees";
+        allowed[8] = "detachFlowLimiter";
         assertEq(names.length, allowed.length, "unexpected number of state-changing functions");
         for (uint256 i = 0; i < allowed.length; i++) {
             assertTrue(_contains(names, allowed[i]), allowed[i]);

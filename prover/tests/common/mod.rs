@@ -370,7 +370,12 @@ impl TestChain {
 
     /// Deploys a contract from `forge build` output and returns its address.
     pub fn deploy(&self, contract: &str, values: HashMap<&str, Argument>) -> Address {
-        let path = forge_output().join(format!("{contract}.sol/{contract}.json"));
+        self.deploy_from(contract, contract, values)
+    }
+
+    /// Deploys a contract whose source file has another name than the contract, for example a test double.
+    pub fn deploy_from(&self, source_file: &str, contract: &str, values: HashMap<&str, Argument>) -> Address {
+        let path = forge_output().join(format!("{source_file}.sol/{contract}.json"));
         let artifact: Value = serde_json::from_slice(&std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))).expect("artifact");
         let mut data = hex::decode(artifact["bytecode"]["object"].as_str().expect("bytecode")).expect("hex");
         data.extend(encode_constructor(&artifact["abi"], &values));

@@ -8,6 +8,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IBeaconLightClient} from "./IBeaconLightClient.sol";
 import {IDepositGate} from "./IDepositGate.sol";
+import {IFlowLimiter} from "./IFlowLimiter.sol";
 import {BeaconBlockHeader, SSZ} from "./SSZ.sol";
 import {MerkleTrie} from "./vendor/optimism/trie/MerkleTrie.sol";
 import {RLPReader} from "./vendor/optimism/rlp/RLPReader.sol";
@@ -50,19 +51,21 @@ contract BridgeVault is ReentrancyGuard {
         uint8 remoteDecimals;
     }
 
-    /// @notice The deposit terms at deployment: the cutoff and the fee switch.
+    /// @notice The terms at deployment: the cutoff, the fee switch and the flow limiter.
     /// @dev One struct, because a ninth constructor argument does not compile without the intermediate representation.
     /// @param cutoffTimestamp Deposits revert from this timestamp on. Zero means no cutoff.
     /// @param feeAuthority The fee authority. Zero removes the fee from the start: the fee and the ceiling must be zero.
     /// @param feeRecipient The recipient of collected fees. It must not be zero when the fee is not zero.
     /// @param feeBasisPoints The fee on deposits at the start. It must not exceed the ceiling.
     /// @param feeCeilingBasisPoints The highest fee ever. It must not exceed `MAX_FEE_CEILING_BASIS_POINTS`.
-    struct DepositTerms {
+    /// @param flowLimiter The flow limiter. Zero means no limiter from the start. Nothing can set one later.
+    struct VaultTerms {
         uint64 cutoffTimestamp;
         address feeAuthority;
         address feeRecipient;
         uint16 feeBasisPoints;
         uint16 feeCeilingBasisPoints;
+        address flowLimiter;
     }
 
     /// @notice A validated `block_roots` position and the state slots at which it was validated.
@@ -291,6 +294,8 @@ contract BridgeVault is ReentrancyGuard {
     error WrongDestinationToken(address expected, address actual);
     /// @notice The deposit was already claimed.
     error AlreadyClaimed(bytes32 depositNonce);
+    /// @notice Only the flow limiter may detach itself. After a detach nobody can.
+    error NotFlowLimiter(address caller);
 
     /// @notice Emitted when a validated `block_roots` position is added or its validated range grows.
     event BlockRootsLayoutValidated(uint256 indexed blockRootsGindex, uint64 firstSlot, uint64 lastSlot);
@@ -312,6 +317,9 @@ contract BridgeVault is ReentrancyGuard {
 
     /// @notice Emitted when accrued fees are sent to the fee recipient.
     event FeesCollected(address indexed token, address indexed feeRecipient, uint256 amount);
+
+    /// @notice Emitted when the flow limiter detaches itself. The vault never calls it again.
+    event FlowLimiterDetached(address indexed limiter);
 
     /// @notice Emitted on deposit with the amount the vault received, less the fee. `destinationVault` is the vault
     /// on the other chain that may pay this deposit: the `remoteVault` of the emitting vault. Another vault refuses
@@ -379,13 +387,16 @@ contract BridgeVault is ReentrancyGuard {
     address public feeRecipient;
     /// @notice The fees charged and not yet collected, for each local token.
     mapping(address localToken => uint256) public accruedFees;
+    /// @notice The flow limiter that every deposit and withdrawal must pass. Zero means none, from the start or after a
+    /// detach. Only the limiter can detach itself, and nothing can set it. Read its code before you use this vault.
+    IFlowLimiter public flowLimiter;
 
     /// @param lightClient_ The light client of the remote chain.
     /// @param localChainId_ The identifier of this chain. It must equal `block.chainid`.
     /// @param remoteChainId_ The identifier of the other chain.
     /// @param remoteVault_ The vault on the other chain.
     /// @param pairs The registered token pairs. The remote decimals are the deployer's claim.
-    /// @param depositTerms The deposit cutoff and the fee switch. See `DepositTerms`.
+    /// @param vaultTerms The deposit cutoff and the fee switch. See `VaultTerms`.
     /// @param capellaEra_ `floor(capellaForkSlot / 8192)` of the remote chain. The deploy script checks it.
     /// @param depositGate_ The deposit gate. It must not be the zero address.
     constructor(
@@ -394,7 +405,7 @@ contract BridgeVault is ReentrancyGuard {
         uint64 remoteChainId_,
         address remoteVault_,
         TokenPair[] memory pairs,
-        DepositTerms memory depositTerms,
+        VaultTerms memory vaultTerms,
         uint64 capellaEra_,
         address depositGate_
     ) {
@@ -405,25 +416,26 @@ contract BridgeVault is ReentrancyGuard {
         if (localChainId_ != block.chainid) revert LocalChainIdMismatch(localChainId_, block.chainid);
         if (remoteChainId_ == localChainId_) revert RemoteChainIsLocalChain();
         if (pairs.length == 0) revert NoTokenPairs();
-        if (depositTerms.feeCeilingBasisPoints > MAX_FEE_CEILING_BASIS_POINTS) {
-            revert FeeCeilingTooHigh(depositTerms.feeCeilingBasisPoints, MAX_FEE_CEILING_BASIS_POINTS);
+        if (vaultTerms.feeCeilingBasisPoints > MAX_FEE_CEILING_BASIS_POINTS) {
+            revert FeeCeilingTooHigh(vaultTerms.feeCeilingBasisPoints, MAX_FEE_CEILING_BASIS_POINTS);
         }
-        if (depositTerms.feeAuthority == address(0) && (depositTerms.feeBasisPoints != 0 || depositTerms.feeCeilingBasisPoints != 0)) {
-            revert NullifiedFeeMustBeZero(depositTerms.feeBasisPoints, depositTerms.feeCeilingBasisPoints);
+        if (vaultTerms.feeAuthority == address(0) && (vaultTerms.feeBasisPoints != 0 || vaultTerms.feeCeilingBasisPoints != 0)) {
+            revert NullifiedFeeMustBeZero(vaultTerms.feeBasisPoints, vaultTerms.feeCeilingBasisPoints);
         }
-        _requireFeeTerms(depositTerms.feeBasisPoints, depositTerms.feeRecipient, depositTerms.feeCeilingBasisPoints);
+        _requireFeeTerms(vaultTerms.feeBasisPoints, vaultTerms.feeRecipient, vaultTerms.feeCeilingBasisPoints);
 
         lightClient = IBeaconLightClient(lightClient_);
         localChainId = localChainId_;
         remoteChainId = remoteChainId_;
         remoteVault = remoteVault_;
-        depositCutoffTimestamp = depositTerms.cutoffTimestamp;
+        depositCutoffTimestamp = vaultTerms.cutoffTimestamp;
         capellaEra = capellaEra_;
         depositGate = IDepositGate(depositGate_);
-        feeCeilingBasisPoints = depositTerms.feeCeilingBasisPoints;
-        feeAuthority = depositTerms.feeAuthority;
-        feeBasisPoints = depositTerms.feeBasisPoints;
-        feeRecipient = depositTerms.feeRecipient;
+        feeCeilingBasisPoints = vaultTerms.feeCeilingBasisPoints;
+        feeAuthority = vaultTerms.feeAuthority;
+        feeBasisPoints = vaultTerms.feeBasisPoints;
+        feeRecipient = vaultTerms.feeRecipient;
+        flowLimiter = IFlowLimiter(vaultTerms.flowLimiter);
 
         for (uint256 i = 0; i < pairs.length; i++) {
             _registerPair(pairs[i]);
@@ -492,13 +504,24 @@ contract BridgeVault is ReentrancyGuard {
         emit FeesCollected(token, recipient, amount);
     }
 
+    /// @notice Detaches the flow limiter for good. Only the limiter itself may call it, so its own rules decide when.
+    /// Nothing can attach a limiter again.
+    function detachFlowLimiter() external {
+        IFlowLimiter limiter = flowLimiter;
+        if (msg.sender != address(limiter)) revert NotFlowLimiter(msg.sender);
+        flowLimiter = IFlowLimiter(address(0));
+        emit FlowLimiterDetached(address(limiter));
+    }
+
     /// @notice Pays a deposit that was made on the remote vault, given direct evidence.
     /// @dev The checks run in this order. 1: the anchor is a stored finalized header. 2: the deposit block lies
     /// before the anchor, and the vault picks the ancestry path from the distance. 3: the deposit header is in
     /// `state.block_roots` of the anchor (distance up to 8192) or in a `historical_summaries` era (more).
     /// 4: the execution block hash is in the deposit header body. 5: the execution header hashes to that block hash.
     /// 6: the receipt is in the receipts trie and succeeded. 7: the log is a deposit log of the remote vault for this
-    /// chain and this vault, for a registered token that this vault pays under the token the log names, and is unclaimed. 8: state changes, then the transfer.
+    /// chain and this vault, for a registered token that this vault pays under the token the log names, and is unclaimed.
+    /// 8: the flow limiter, when one is attached, may refuse; a refusal undoes the call and the nonce stays unclaimed.
+    /// 9: state changes, then the transfer.
     /// @param proof The evidence.
     function withdraw(WithdrawalProof calldata proof) external nonReentrant {
         _requireStoredAnchor(proof.anchorHeader);
@@ -517,6 +540,7 @@ contract BridgeVault is ReentrancyGuard {
         if (found.destinationToken != localToken) revert WrongDestinationToken(localToken, found.destinationToken);
         if (claimed[found.nonce]) revert AlreadyClaimed(found.nonce);
 
+        _checkWithdrawalFlow(localToken, found.recipient, found.amount, found.nonce);
         claimed[found.nonce] = true;
         IERC20(localToken).safeTransfer(found.recipient, found.amount);
         emit WithdrawalCompleted(localToken, found.recipient, found.nonce, found.amount, blockHash);
@@ -901,10 +925,26 @@ contract BridgeVault is ReentrancyGuard {
             accruedFees[token] += fee;
             emit FeeCharged(token, fee);
         }
+        uint256 net = received - fee;
+        _checkDepositFlow(token, net);
         nonce = keccak256(abi.encode(block.chainid, address(this), depositCount++));
         emit DepositInitiated(
-            token, msg.sender, recipient, received - fee, nonce, remoteChainId, remoteVault, destinationToken
+            token, msg.sender, recipient, net, nonce, remoteChainId, remoteVault, destinationToken
         );
+    }
+
+    /// @dev Asks the flow limiter about a deposit of the net amount. With no limiter it costs one storage read.
+    function _checkDepositFlow(address token, uint256 net) private {
+        IFlowLimiter limiter = flowLimiter;
+        if (address(limiter) == address(0)) return;
+        limiter.checkDeposit(token, msg.sender, net);
+    }
+
+    /// @dev Asks the flow limiter about a withdrawal. With no limiter it costs one storage read.
+    function _checkWithdrawalFlow(address localToken, address recipient, uint256 amount, bytes32 nonce) private {
+        IFlowLimiter limiter = flowLimiter;
+        if (address(limiter) == address(0)) return;
+        limiter.checkWithdrawal(localToken, recipient, amount, nonce);
     }
 
     /// @dev Only the fee authority passes. A zero authority is a nullified fee, and then nobody passes.

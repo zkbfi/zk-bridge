@@ -88,7 +88,7 @@ contract BridgeVaultFeeTest is HardenedFixture {
             CHAIN_B,
             address(vaultB),
             pairs,
-            BridgeVault.DepositTerms(0, authority_, recipient_, basisPoints, ceiling),
+            BridgeVault.VaultTerms(0, authority_, recipient_, basisPoints, ceiling, address(0)),
             DEFAULT_CAPELLA_ERA,
             address(gateA)
         );

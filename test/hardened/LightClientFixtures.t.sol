@@ -218,7 +218,7 @@ contract LightClientFixturesTest is Test {
                 localChain == 369 ? uint64(1) : uint64(369),
                 vm.parseJsonAddress(json, ".remoteVault"),
                 pairs,
-                BridgeVault.DepositTerms(0, address(0), address(0), 0, 0),
+                BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0)),
                 capellaEra,
                 UNUSED_GATE
             ),

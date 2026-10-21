@@ -73,9 +73,17 @@ abstract contract WithdrawalScenes is HardenedFixture {
     }
 
     function _newWithdrawalVault(uint64 depositCutoff, uint64 capellaEra) internal returns (BridgeVault vault_) {
+        return _newWithdrawalVault(depositCutoff, capellaEra, address(0));
+    }
+
+    /// @notice The same, with a flow limiter. A zero address means none.
+    function _newWithdrawalVault(uint64 depositCutoff, uint64 capellaEra, address flowLimiter)
+        internal
+        returns (BridgeVault vault_)
+    {
         BridgeVault.TokenPair[] memory pairs = new BridgeVault.TokenPair[](1);
         pairs[0] = BridgeVault.TokenPair(address(tokenOnB), ReceiptFixtures.REMOTE_TOKEN, 18);
-        return _newDestinationVault(pairs, depositCutoff, capellaEra);
+        return _newDestinationVault(pairs, depositCutoff, capellaEra, flowLimiter);
     }
 
     /// @notice A vault on chain B for the given pairs, built at `DESTINATION_VAULT`, the only address that the fixture
@@ -86,13 +94,23 @@ abstract contract WithdrawalScenes is HardenedFixture {
         internal
         returns (BridgeVault vault_)
     {
+        return _newDestinationVault(pairs, depositCutoff, capellaEra, address(0));
+    }
+
+    /// @notice The same, with a flow limiter. A zero address means none.
+    function _newDestinationVault(
+        BridgeVault.TokenPair[] memory pairs,
+        uint64 depositCutoff,
+        uint64 capellaEra,
+        address flowLimiter
+    ) internal returns (BridgeVault vault_) {
         vm.chainId(CHAIN_B);
         address destination = ReceiptFixtures.DESTINATION_VAULT;
         vm.etch(destination, "");
         _wipeVaultState(destination);
         bytes memory arguments = abi.encode(
             address(lightClientForB), CHAIN_B, CHAIN_A, ReceiptFixtures.REMOTE_VAULT, pairs,
-            BridgeVault.DepositTerms(depositCutoff, address(0), address(0), 0, 0), capellaEra, address(gateB)
+            BridgeVault.VaultTerms(depositCutoff, address(0), address(0), 0, 0, flowLimiter), capellaEra, address(gateB)
         );
         deployCodeTo("BridgeVault.sol:BridgeVault", arguments, destination);
         for (uint256 i = 0; i < pairs.length; i++) {
@@ -114,7 +132,7 @@ abstract contract WithdrawalScenes is HardenedFixture {
         pairs[0] = BridgeVault.TokenPair(address(tokenOnB), ReceiptFixtures.REMOTE_TOKEN, 18);
         vm.chainId(CHAIN_B);
         vault_ = new BridgeVault(
-            address(lightClientForB), CHAIN_B, CHAIN_A, ReceiptFixtures.REMOTE_VAULT, pairs, BridgeVault.DepositTerms(depositCutoff, address(0), address(0), 0, 0), capellaEra, address(gateB)
+            address(lightClientForB), CHAIN_B, CHAIN_A, ReceiptFixtures.REMOTE_VAULT, pairs, BridgeVault.VaultTerms(depositCutoff, address(0), address(0), 0, 0, address(0)), capellaEra, address(gateB)
         );
         createdVaults.push(vault_);
     }

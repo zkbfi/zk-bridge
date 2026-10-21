@@ -94,6 +94,7 @@ sol! {
         function historicalLayouts() external view returns (HistoricalLayoutRow[] memory);
         function capellaEra() external view returns (uint64);
         function depositGate() external view returns (address);
+        function flowLimiter() external view returns (address);
         function feeAuthority() external view returns (address);
         function feeRecipient() external view returns (address);
         function feeBasisPoints() external view returns (uint16);

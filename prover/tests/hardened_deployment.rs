@@ -78,7 +78,7 @@ fn script_config_with_observation(
         json!({
             "rpcAlias": live.anvil.url, "chainId": id.to_string(), "verifier": format!("{verifier:#x}"),
             "verifierCodeHash": format!("{:#x}", keccak256(live.code_of(verifier))),
-            "depositCutoffTimestamp": "0", "deployerNonce": nonce.to_string(), "fee": fee,
+            "depositCutoffTimestamp": "0", "deployerNonce": nonce.to_string(), "fee": fee, "flowLimiter": format!("{:#x}", Address::ZERO),
             "lightClient": light_client(era, label), "gate": gate(mode),
         })
     };

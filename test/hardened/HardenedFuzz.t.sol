@@ -138,7 +138,7 @@ contract HardenedFuzzTest is WithdrawalScenes {
         pairs[0] = BridgeVault.TokenPair(address(fee), address(tokenOnA), 18);
         vm.chainId(CHAIN_B);
         BridgeVault vault = new BridgeVault(
-            address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs, BridgeVault.DepositTerms(0, address(0), address(0), 0, 0), DEFAULT_CAPELLA_ERA, address(gateB)
+            address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs, BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0)), DEFAULT_CAPELLA_ERA, address(gateB)
         );
         (, uint256 eventAmount) = _deposit(vault, address(fee), alice, bob, amount);
         assertEq(eventAmount, fee.balanceOf(address(vault)));

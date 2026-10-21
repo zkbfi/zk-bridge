@@ -9,6 +9,7 @@ import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
 import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
 import {OracleSP1Verifier} from "../../src/mocks/OracleSP1Verifier.sol";
 import {MockERC20} from "../../src/mocks/MockERC20.sol";
+import {ScriptedFlowLimiter} from "./utils/FlowLimiterMocks.sol";
 
 /// @notice Tests of the deploy script logic. One Foundry chain plays both chains: the test switches `block.chainid`
 /// and the deployer nonce with cheatcodes, and it uses different nonces on the two sides so the addresses differ.
@@ -22,6 +23,8 @@ contract DeployBridgeTest is Test {
     MockERC20 internal tokenOnB;
 
     address internal deployer = makeAddr("deployer");
+    /// @dev The flow limiter that `_chainJson` writes for chain 1. Zero, as in the example configuration, unless a test sets it.
+    address internal configuredFlowLimiter;
     uint256 internal constant NONCE_A = 3;
     uint256 internal constant NONCE_B = 8;
     address internal constant BEACON_ROOTS = 0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02;
@@ -61,7 +64,8 @@ contract DeployBridgeTest is Test {
             '{"rpcAlias":"chain-', vm.toString(chainId), '","chainId":"', vm.toString(chainId),
             '","verifier":"', verifierText, '","verifierCodeHash":"', _hexString(address(verifier).codehash),
             '","depositCutoffTimestamp":"0","deployerNonce":"', vm.toString(nonce), '",',
-            chainId == 1 ? _liveFeeJson() : _nullifiedFeeJson()
+            chainId == 1 ? _liveFeeJson() : _nullifiedFeeJson(),
+            '"flowLimiter":"', vm.toString(chainId == 1 ? configuredFlowLimiter : address(0)), '",'
         );
         string memory client = string.concat(
             '"lightClient":{"programVKey":"', _hexString(keccak256("light client program")),
@@ -262,10 +266,10 @@ contract DeployBridgeTest is Test {
     function test_HB02_exampleConfigurationHoldsEveryKeyTheScriptReads() public view {
         string memory json = vm.readFile("script/hardened/bridge.config.example.json");
         string[2] memory chains = [".chainA", ".chainB"];
-        string[22] memory keys = [
+        string[23] memory keys = [
             ".rpcAlias", ".chainId", ".verifier", ".verifierCodeHash", ".depositCutoffTimestamp", ".deployerNonce",
             ".fee.authority", ".fee.recipient", ".fee.basisPoints", ".fee.ceilingBasisPoints",
-            ".lightClient.programVKey", ".lightClient.genesisValidatorsRoot", ".lightClient.slotsPerPeriod",
+            ".flowLimiter", ".lightClient.programVKey", ".lightClient.genesisValidatorsRoot", ".lightClient.slotsPerPeriod",
             ".lightClient.genesisTime", ".lightClient.secondsPerSlot", ".lightClient.slotsPerEpoch", ".lightClient.capellaForkEpoch", ".lightClient.capellaEra",
             ".lightClient.initialSlot", ".lightClient.initialHeaderRoot", ".lightClient.initialSyncCommitteeHash",
             ".lightClient.initialNextSyncCommitteeHash"
@@ -611,6 +615,71 @@ contract DeployBridgeTest is Test {
         assertEq(BeaconForkGate(gateB).supportedVersions()[0].version, bytes4(0x0000036c));
     }
 
+    // ================================================================ flow limiter
+
+    /// Claim: the flow limiter setting defaults to zero and a non-zero address is read as written. Shows: the
+    /// complete configuration gives chain A and chain B a zero limiter; with an address in the setting, chain A gets that
+    /// address and chain B stays zero. Matters: the limiter is optional, and a misread address would pin the wrong rules.
+    function test_flowLimiter_parseConfig_defaultsToZeroAndReadsAnAddress() public {
+        DeployBridge.BridgeConfig memory config = script.parseConfig(_validJson());
+        assertEq(config.chainA.flowLimiter, address(0));
+        assertEq(config.chainB.flowLimiter, address(0));
+
+        configuredFlowLimiter = address(new ScriptedFlowLimiter());
+        config = script.parseConfig(_validJson());
+        assertEq(config.chainA.flowLimiter, configuredFlowLimiter);
+        assertEq(config.chainB.flowLimiter, address(0), "the setting is per chain");
+    }
+
+    /// Claim: a non-zero limiter must have code on its chain. Shows: an address with no code reverts with the chain and
+    /// the address; a limiter with code passes; a zero limiter passes. Matters: a limiter address with no code would make
+    /// every deposit revert on the call, and the immutable choice could not be repaired.
+    function test_flowLimiter_environmentRequiresCodeForANonZeroLimiter() public {
+        DeployBridge.BridgeConfig memory config = script.parseConfig(_validJson());
+        _etchBeaconRoots();
+        vm.chainId(1);
+        vm.setNonce(deployer, uint64(NONCE_A));
+        script.assertChainEnvironment(config.chainA, deployer); // honest: no limiter
+
+        address withoutCode = makeAddr("a limiter address with no code");
+        config.chainA.flowLimiter = withoutCode;
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.FlowLimiterHasNoCode.selector, uint64(1), withoutCode));
+        script.assertChainEnvironment(config.chainA, deployer);
+
+        config.chainA.flowLimiter = address(new ScriptedFlowLimiter());
+        script.assertChainEnvironment(config.chainA, deployer); // honest: a limiter with code
+    }
+
+    /// Claim: a deployment with a non-zero limiter puts that limiter in the vault, and the read-back refuses a vault with
+    /// another limiter or none. Shows: `deployChain` for chain A with a limiter; the vault reports it and
+    /// `verifyDeployment` passes; a vault built with no limiter and one built with another limiter each fail with the
+    /// field name. Matters: the limiter is immutable at deployment, so the read-back is the only check.
+    function test_flowLimiter_deployChainSetsItAndReadBackCatchesAWrongOne() public {
+        configuredFlowLimiter = address(new ScriptedFlowLimiter());
+        DeployBridge.BridgeConfig memory config = script.parseConfig(_validJson());
+        DeployBridge.Plan memory plan = script.predictAddresses(config);
+        (DeployBridge.ChainDeployment memory deploymentA,) = _deployments(config, plan);
+
+        _etchBeaconRoots();
+        vm.chainId(1);
+        vm.setNonce(deployer, uint64(NONCE_A));
+        (address lightClient, address gate, address vault) = script.deployChain(deploymentA);
+        assertEq(address(BridgeVault(vault).flowLimiter()), configuredFlowLimiter);
+
+        address[2] memory wrongLimiters = [address(0), address(new ScriptedFlowLimiter())];
+        for (uint256 i = 0; i < wrongLimiters.length; i++) {
+            DeployBridge.FeeConfig memory fee = deploymentA.chain.fee;
+            BridgeVault wrong = new BridgeVault(
+                lightClient, 1, 369, deploymentA.remoteVault, deploymentA.pairs,
+                BridgeVault.VaultTerms(0, fee.authority, fee.recipient, fee.basisPoints, fee.ceilingBasisPoints, wrongLimiters[i]),
+                deploymentA.chain.lightClient.capellaEra, gate
+            );
+            deploymentA.predictedVault = address(wrong);
+            vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "vault.flowLimiter"));
+            script.verifyDeployment(deploymentA, lightClient, gate, address(wrong));
+        }
+    }
+
     // ================================================================ guards
 
     /// Claim: the script refuses to run when the deployer nonce differs from the configuration, on either chain.
@@ -757,8 +826,8 @@ contract DeployBridgeTest is Test {
         uint64 capellaEra
     ) internal returns (BridgeVault) {
         DeployBridge.FeeConfig memory fee = d.chain.fee;
-        BridgeVault.DepositTerms memory terms = BridgeVault.DepositTerms(
-            cutoff, fee.authority, fee.recipient, fee.basisPoints, fee.ceilingBasisPoints
+        BridgeVault.VaultTerms memory terms = BridgeVault.VaultTerms(
+            cutoff, fee.authority, fee.recipient, fee.basisPoints, fee.ceilingBasisPoints, d.chain.flowLimiter
         );
         return new BridgeVault(lightClient, 1, 369, remoteVault, d.pairs, terms, capellaEra, gate);
     }
@@ -832,10 +901,10 @@ contract DeployBridgeTest is Test {
         DeployBridge.FeeConfig memory fee = deploymentA.chain.fee;
         assertEq(fee.basisPoints, 25, "control: the configured fee is live");
 
-        BridgeVault.DepositTerms[3] memory wrong = [
-            BridgeVault.DepositTerms(0, address(0), address(0), 0, 0),
-            BridgeVault.DepositTerms(0, fee.authority, fee.recipient, 30, fee.ceilingBasisPoints),
-            BridgeVault.DepositTerms(0, fee.authority, fee.recipient, fee.basisPoints, 100)
+        BridgeVault.VaultTerms[3] memory wrong = [
+            BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0)),
+            BridgeVault.VaultTerms(0, fee.authority, fee.recipient, 30, fee.ceilingBasisPoints, address(0)),
+            BridgeVault.VaultTerms(0, fee.authority, fee.recipient, fee.basisPoints, 100, address(0))
         ];
         string[3] memory fields = ["vault.feeAuthority", "vault.feeBasisPoints", "vault.feeCeilingBasisPoints"];
         for (uint256 i = 0; i < wrong.length; i++) {

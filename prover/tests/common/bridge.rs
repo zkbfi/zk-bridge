@@ -29,6 +29,12 @@ sol! {
     interface GateWrites {
         function seal(bytes calldata evidence) external;
     }
+
+    /// The test flow limiter (`test/hardened/utils/FlowLimiterMocks.sol`): it refuses on command.
+    interface ScriptedFlowLimiter {
+        function setRefusals(bool deposits, bool withdrawals) external;
+        error FlowRefused();
+    }
 }
 
 /// One token in the smallest unit (18 decimals).
@@ -225,6 +231,7 @@ fn deploy_side(
     gate_mode: u64,
     observation: Option<&ObservationFixture>,
     deposit_fee_basis_points: u16,
+    flow_limiter: Address,
 ) -> Side {
     let token = chain.deploy("MockERC20", HashMap::from([("name", Argument::Text(local_token_name.into())), ("symbol", Argument::Text("TKN".into()))]));
     let verifier = chain.deploy("OracleSP1Verifier", HashMap::from([("oracle", word_address(DEPLOYER))]));
@@ -292,7 +299,7 @@ fn deploy_side(
             ("remoteChainId", word_u64(remote_id)),
             ("remoteVault", word_address(remote_vault)),
             ("pairs", pairs_argument(pairs)),
-            ("depositTerms", Argument::StaticTuple(deposit_terms(deposit_fee_basis_points))),
+            ("vaultTerms", Argument::StaticTuple(vault_terms(deposit_fee_basis_points, flow_limiter))),
             ("capellaEra", word_u64(0)),
             ("depositGate", word_address(gate)),
         ]),
@@ -300,15 +307,16 @@ fn deploy_side(
     Side { token, verifier, light_client, own_light_client, registry, gate, vault }
 }
 
-/// The deposit terms of a vault: no cutoff, and the fee switch. A fee of zero means no fee authority, so the fee is
-/// removed from the start. A fee above zero makes the deployer the fee authority and the recipient, with the highest
-/// ceiling the vault accepts (100 basis points).
-fn deposit_terms(fee_basis_points: u16) -> Vec<[u8; 32]> {
+/// The terms of a vault: no cutoff, the fee switch and the flow limiter. A fee of zero means no fee authority, so the
+/// fee is removed from the start. A fee above zero makes the deployer the fee authority and the recipient, with the
+/// highest ceiling the vault accepts (100 basis points). A zero `flow_limiter` means no limiter.
+fn vault_terms(fee_basis_points: u16, flow_limiter: Address) -> Vec<[u8; 32]> {
+    let limiter = word_address_raw(flow_limiter);
     if fee_basis_points == 0 {
-        return vec![word_u64_raw(0); 5];
+        return vec![word_u64_raw(0), word_u64_raw(0), word_u64_raw(0), word_u64_raw(0), word_u64_raw(0), limiter];
     }
     let deployer = word_address_raw(DEPLOYER);
-    vec![word_u64_raw(0), deployer, deployer, word_u64_raw(u64::from(fee_basis_points)), word_u64_raw(100)]
+    vec![word_u64_raw(0), deployer, deployer, word_u64_raw(u64::from(fee_basis_points)), word_u64_raw(100), limiter]
 }
 
 /// The two directions of the bridge.
@@ -332,11 +340,14 @@ pub struct BridgeOptions {
     pub registry_fixture: Option<&'static str>,
     /// The deposit fee of both vaults in basis points. Zero deploys vaults with no fee authority.
     pub deposit_fee_basis_points: u16,
+    /// Deploy a test flow limiter on each chain and attach it to the vault there. The limiters allow everything until a
+    /// test tells one to refuse. Without it, both vaults have no limiter (a zero address).
+    pub scripted_flow_limiter: bool,
 }
 
 impl Default for BridgeOptions {
     fn default() -> Self {
-        Self { rogue_token: false, finality_depth: 1, registry_fixture: None, deposit_fee_basis_points: 0 }
+        Self { rogue_token: false, finality_depth: 1, registry_fixture: None, deposit_fee_basis_points: 0, scripted_flow_limiter: false }
     }
 }
 
@@ -362,6 +373,9 @@ pub struct Bridge {
     pub observation_fixture: Option<ObservationFixture>,
     /// The token that has one address on both chains and is registered on chain A only. `None` without the option.
     pub rogue_token: Option<Address>,
+    /// The test flow limiters of chain A and chain B, with the option `scripted_flow_limiter` only.
+    pub flow_limiter_a: Option<Address>,
+    pub flow_limiter_b: Option<Address>,
     pub config_path: PathBuf,
 }
 
@@ -426,6 +440,14 @@ impl Bridge {
         }
     }
 
+    /// The test flow limiter of the destination vault. It exists with the option `scripted_flow_limiter` only.
+    pub fn destination_flow_limiter(&self, direction: Direction) -> Option<Address> {
+        match direction {
+            Direction::AToB => self.flow_limiter_b,
+            Direction::BToA => self.flow_limiter_a,
+        }
+    }
+
     /// The light client on the destination chain, which tracks the source chain.
     pub fn destination_light_client(&self, direction: Direction) -> Address {
         match direction {
@@ -458,6 +480,9 @@ pub fn deploy_bridge_with(name: &str, options: BridgeOptions) -> Bridge {
 
     // Chain B sends one dummy transaction first, so the two chains give different contract addresses.
     chain_b.send(Some(DEPLOYER), &[]);
+    // A test flow limiter comes before the other contracts, so the nonces below already count it.
+    let deploy_limiter = |chain: &TestChain| options.scripted_flow_limiter.then(|| chain.deploy_from("FlowLimiterMocks", "ScriptedFlowLimiter", HashMap::new()));
+    let (flow_limiter_a, flow_limiter_b) = (deploy_limiter(&chain_a), deploy_limiter(&chain_b));
     // Addresses follow from the deployer nonce: token, verifier, light client, gate, vault. A registry-mode side adds
     // the own-chain light client and the registry before its gate.
     let observation_fixture = options.registry_fixture.map(ObservationFixture::load);
@@ -474,9 +499,9 @@ pub fn deploy_bridge_with(name: &str, options: BridgeOptions) -> Bridge {
     // The light client on chain A tracks chain B. With an own-chain light client on chain B, both follow the beacon chain
     // of the fixture, so they hold one genesis validators root (the prover checks that relationship at startup).
     let chain_b_genesis_root = observation_fixture.as_ref().map_or_else(|| keccak256("genesis-of-chain-b"), ObservationFixture::genesis_validators_root);
-    let side_a = deploy_side(&chain_a, 1, 369, "Token A", &pairs_a, vault_b, chain_b_genesis_root, GATE_MODE_ENFORCING, None, options.deposit_fee_basis_points);
+    let side_a = deploy_side(&chain_a, 1, 369, "Token A", &pairs_a, vault_b, chain_b_genesis_root, GATE_MODE_ENFORCING, None, options.deposit_fee_basis_points, flow_limiter_a.unwrap_or(Address::ZERO));
     let gate_mode_b = if observation_fixture.is_some() { GATE_MODE_REGISTRY } else { GATE_MODE_DETECT };
-    let side_b = deploy_side(&chain_b, 369, 1, "Token B", &[(token_b, token_a)], vault_a, keccak256("genesis-of-chain-a"), gate_mode_b, observation_fixture.as_ref(), options.deposit_fee_basis_points);
+    let side_b = deploy_side(&chain_b, 369, 1, "Token B", &[(token_b, token_a)], vault_a, keccak256("genesis-of-chain-a"), gate_mode_b, observation_fixture.as_ref(), options.deposit_fee_basis_points, flow_limiter_b.unwrap_or(Address::ZERO));
     assert_eq!((side_a.token, side_a.vault), (token_a, vault_a));
     assert_eq!((side_b.token, side_b.vault), (token_b, vault_b));
 
@@ -544,6 +569,8 @@ finality_depth = {depth}
         own_light_client_b: side_b.own_light_client,
         observation_fixture,
         rogue_token,
+        flow_limiter_a,
+        flow_limiter_b,
         config_path,
     }
 }

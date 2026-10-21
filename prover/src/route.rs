@@ -294,6 +294,24 @@ impl LiveRoute {
     }
 }
 
+impl LiveRoute {
+    /// Names the flow limiter in the error of a refused withdrawal, when the vault has one and the revert carries data.
+    /// The vault passes the revert data of the limiter through unchanged, so the prover cannot tell a refusal of the
+    /// limiter from another revert. It says that the limiter may have refused, and it keeps the revert data. The nonce
+    /// stays unclaimed, so a later attempt can pay it.
+    fn explain_refusal(&self, error: Error) -> Error {
+        let Some(data) = error.revert_data() else { return error };
+        let limiter = match self.destination.view(self.destination_vault, VaultContract::flowLimiterCall {}) {
+            Ok(limiter) if limiter != Address::ZERO => limiter,
+            _ => return error,
+        };
+        Error::Transaction(format!(
+            "the destination vault refused the withdrawal, and flow limiter {limiter:#x} is attached, so it may have refused (revert data 0x{}); the deposit stays unclaimed and a later attempt can pay it",
+            alloy_primitives::hex::encode(data)
+        ))
+    }
+}
+
 impl RoutePorts for LiveRoute {
     fn finalized_source_block(&self) -> Result<Option<u64>> {
         self.beacon.finalized_execution_block(&self.source)
@@ -413,7 +431,7 @@ impl RoutePorts for LiveRoute {
         match self.destination.send_transaction(self.destination_vault, calldata) {
             Ok(hash) => Ok(SendOutcome::Sent(hash)),
             Err(error) if error.revert_data().is_some_and(|data| is_already_claimed(data)) => Ok(SendOutcome::AlreadyClaimed),
-            Err(error) => Err(error),
+            Err(error) => Err(self.explain_refusal(error)),
         }
     }
 

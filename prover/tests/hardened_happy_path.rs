@@ -161,3 +161,50 @@ fn happy_path_gas_of_updates_withdrawals_and_gated_deposits() {
         assert_eq!(state_of(&bridge, nonce), "confirmed");
     }
 }
+
+/// Claim: a flow limiter that refuses a withdrawal makes the prover's attempt fail with a clear note, the deposit stays
+/// unclaimed, and after the limiter allows it the next pass pays it.
+/// Shows: both vaults have a test limiter. A deposit on chain 1 is proven. The limiter of chain 369 refuses withdrawals,
+/// so the first pass pays nothing, leaves the nonce unclaimed, counts one attempt, and records a note that names the
+/// flow limiter and carries its `FlowRefused` error. After the limiter allows, the second pass pays the amount to the
+/// recipient and the state is `confirmed`.
+/// Why it matters: a refusal reverts the whole transaction, so the claim stays open. A rate limit works as wait and
+/// retry only if the prover reports the refusal as such and pays when the limiter allows it.
+#[test]
+fn happy_path_withdrawal_refused_by_the_flow_limiter_is_reported_and_paid_after_it_allows() {
+    use zk_bridge_prover::contracts::VaultContract;
+
+    if !tools_available() {
+        return;
+    }
+    let bridge = deploy_bridge_with("happy-flow-limiter", BridgeOptions { scripted_flow_limiter: true, ..Default::default() });
+    fund_destination_vault(&bridge, Direction::AToB, 1_000 * ONE_TOKEN);
+    let (source, destination) = (bridge.source(Direction::AToB), bridge.destination(Direction::AToB));
+    let destination_token = bridge.destination_token(Direction::AToB);
+    let destination_vault = bridge.destination_vault(Direction::AToB);
+    let limiter = bridge.destination_flow_limiter(Direction::AToB).expect("the option deploys a limiter");
+    let attached = U256::from_be_slice(&destination.call(destination_vault, &VaultContract::flowLimiterCall {}.abi_encode()).unwrap());
+    assert_eq!(attached, U256::from_be_slice(limiter.as_slice()), "control: the vault has the limiter attached");
+    let amount = 5 * ONE_TOKEN;
+
+    destination.send(Some(limiter), &ScriptedFlowLimiter::setRefusalsCall { deposits: false, withdrawals: true }.abi_encode());
+    let made = deposit_on(&bridge, Direction::AToB, amount);
+    source.mine(2);
+    run(&bridge, &["once"]).expect("a refused withdrawal does not stop the pass");
+
+    assert_eq!(balance(destination, destination_token, RECIPIENT), U256::ZERO, "nothing was paid");
+    assert!(!claimed(destination, destination_vault, made.nonce), "the nonce stays unclaimed");
+    let status = run(&bridge, &["status"]).unwrap();
+    let line = status.lines().find(|line| line.starts_with(&format!("nonce={:#x} ", made.nonce))).expect("status line");
+    assert!(line.contains("state=proven"), "the deposit waits with its proof: {line}");
+    assert!(line.contains("attempts=1"), "the refusal counts as one attempt: {line}");
+    assert!(line.contains(&format!("flow_limiter_{limiter:#x}")), "the note names the limiter: {line}");
+    let refusal = alloy_primitives::hex::encode(error_selector("FlowRefused()"));
+    assert!(line.contains(&format!("revert_data_0x{refusal}")), "the note carries the error of the limiter: {line}");
+
+    destination.send(Some(limiter), &ScriptedFlowLimiter::setRefusalsCall { deposits: false, withdrawals: false }.abi_encode());
+    run(&bridge, &["once"]).expect("once");
+    assert_eq!(balance(destination, destination_token, RECIPIENT), U256::from(amount), "the recipient is paid after the allow");
+    assert!(claimed(destination, destination_vault, made.nonce));
+    assert_eq!(state_of(&bridge, made.nonce), "confirmed");
+}
