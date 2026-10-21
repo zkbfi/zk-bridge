@@ -40,12 +40,16 @@
 //! processes deposits in block order, so this does not happen in a normal run), and `slot_offset` must lie above the
 //! checkpoint slot of the light client and after the Capella fork.
 
-use super::{BeaconSource, DepositBlock, HashEvidence, HistoricalEvidence, LightClientState, RootsEvidence, UpdatePlan};
+use super::{
+    BeaconSource, DepositBlock, HashEvidence, HistoricalEvidence, LightClientState, RootsEvidence,
+    UpdatePlan,
+};
 use crate::chain::ExecutionReader;
 use crate::error::{Error, Result};
 use crate::light_client::{
-    ancestry_path, block_hash_gindex, block_roots_gindex, dev_header, dev_output, dev_plain_state_root, header_root,
-    historical_summaries_gindex, AncestryPath, BeaconHeader, BeaconPath, ChainKind, DevHeader, DevState,
+    ancestry_path, block_hash_gindex, block_roots_gindex, dev_header, dev_output,
+    dev_plain_state_root, header_root, historical_summaries_gindex, AncestryPath, BeaconHeader,
+    BeaconPath, ChainKind, DevHeader, DevState,
 };
 use crate::prover::ProofStatement;
 use alloy_primitives::B256;
@@ -79,7 +83,11 @@ struct Built {
 impl DevBeaconSource {
     /// A source with a finality depth and the slot of block 0.
     pub fn new(chain: ChainKind, finality_depth: u64, slot_offset: u64) -> Self {
-        Self { chain, finality_depth, slot_offset }
+        Self {
+            chain,
+            finality_depth,
+            slot_offset,
+        }
     }
 
     /// The slot of `phase` of block `number`.
@@ -94,30 +102,52 @@ impl DevBeaconSource {
     }
 
     fn build(&self, slot: u64, source: &dyn ExecutionReader) -> Result<Built> {
-        let (number, phase) = self
-            .block_and_phase(slot)
-            .ok_or_else(|| Error::Beacon(format!("slot {slot} is below the dev slot offset {}", self.slot_offset)))?;
+        let (number, phase) = self.block_and_phase(slot).ok_or_else(|| {
+            Error::Beacon(format!(
+                "slot {slot} is below the dev slot offset {}",
+                self.slot_offset
+            ))
+        })?;
         let hash = source.block_hash(number)?;
         if phase != PHASE_ANCHOR {
             let header = dev_header(self.chain, slot, number, hash, dev_plain_state_root(slot));
-            return Ok(Built { header, state: None });
+            return Ok(Built {
+                header,
+                state: None,
+            });
         }
         let first = self.sibling_root(number, PHASE_FIRST, hash)?;
         let second = self.sibling_root(number, PHASE_SECOND, hash)?;
-        let mut roots = vec![(self.slot_of(number, PHASE_FIRST), first), (self.slot_of(number, PHASE_SECOND), second)];
+        let mut roots = vec![
+            (self.slot_of(number, PHASE_FIRST), first),
+            (self.slot_of(number, PHASE_SECOND), second),
+        ];
         for earlier in number.saturating_sub(WINDOW_BLOCKS)..=number {
-            let earlier_hash = if earlier == number { hash } else { source.block_hash(earlier)? };
-            roots.push((self.slot_of(earlier, PHASE_DEPOSIT), self.sibling_root(earlier, PHASE_DEPOSIT, earlier_hash)?));
+            let earlier_hash = if earlier == number {
+                hash
+            } else {
+                source.block_hash(earlier)?
+            };
+            roots.push((
+                self.slot_of(earlier, PHASE_DEPOSIT),
+                self.sibling_root(earlier, PHASE_DEPOSIT, earlier_hash)?,
+            ));
         }
         let mut state = DevState::new(self.chain, slot, &roots)?;
         self.fill_historical_summaries(&mut state, slot, source)?;
         let header = dev_header(self.chain, slot, number, hash, state.root());
-        Ok(Built { header, state: Some(state) })
+        Ok(Built {
+            header,
+            state: Some(state),
+        })
     }
 
     /// The first era with a historical summary, from the Capella fork of the chain.
     fn capella_era(&self) -> Result<u64> {
-        self.chain.spec().capella_era().map_err(|error| Error::Beacon(error.to_string()))
+        self.chain
+            .spec()
+            .capella_era()
+            .map_err(|error| Error::Beacon(error.to_string()))
     }
 
     /// The number of summaries that a state at `anchor_slot` holds: one per completed era since Capella.
@@ -128,18 +158,27 @@ impl DevBeaconSource {
     /// The block numbers of the first [`HISTORICAL_FILL_BLOCKS`] blocks that start in `era`.
     fn filled_blocks(&self, era: u64) -> std::ops::Range<u64> {
         let era_start = era * SLOTS_PER_ERA;
-        let first = era_start.saturating_sub(self.slot_offset).div_ceil(SLOTS_PER_BLOCK);
+        let first = era_start
+            .saturating_sub(self.slot_offset)
+            .div_ceil(SLOTS_PER_BLOCK);
         first..first + HISTORICAL_FILL_BLOCKS
     }
 
     /// Whether a historical summary holds the header root of `slot`: a phase 0, 1 or 2 slot in a filled block.
     fn is_filled(&self, slot: u64) -> bool {
-        let Some((number, phase)) = self.block_and_phase(slot) else { return false };
+        let Some((number, phase)) = self.block_and_phase(slot) else {
+            return false;
+        };
         phase != PHASE_ANCHOR && self.filled_blocks(slot / SLOTS_PER_ERA).contains(&number)
     }
 
     /// Adds one summary per completed era to an anchor state. Each summary holds the header roots of the filled blocks.
-    fn fill_historical_summaries(&self, state: &mut DevState, anchor_slot: u64, source: &dyn ExecutionReader) -> Result<()> {
+    fn fill_historical_summaries(
+        &self,
+        state: &mut DevState,
+        anchor_slot: u64,
+        source: &dyn ExecutionReader,
+    ) -> Result<()> {
         let capella_era = self.capella_era()?;
         let count = self.summary_count(anchor_slot)? as usize;
         for index in 0..count {
@@ -151,7 +190,12 @@ impl DevBeaconSource {
                     if slot / SLOTS_PER_ERA != era {
                         continue;
                     }
-                    state.set_historical_root(count, index, slot, self.sibling_root(number, phase, hash)?);
+                    state.set_historical_root(
+                        count,
+                        index,
+                        slot,
+                        self.sibling_root(number, phase, hash)?,
+                    );
                 }
             }
         }
@@ -160,7 +204,9 @@ impl DevBeaconSource {
 
     fn sibling_root(&self, number: u64, phase: u64, hash: B256) -> Result<B256> {
         let slot = self.slot_of(number, phase);
-        Ok(header_root(&dev_header(self.chain, slot, number, hash, dev_plain_state_root(slot)).header))
+        Ok(header_root(
+            &dev_header(self.chain, slot, number, hash, dev_plain_state_root(slot)).header,
+        ))
     }
 
     /// The update that moves the head of `light_client` to the header at `slot`, which carries block `number`.
@@ -184,7 +230,9 @@ impl DevBeaconSource {
             hash,
             number,
         );
-        Ok(UpdatePlan::Update(Box::new(ProofStatement::DevAsserted(output))))
+        Ok(UpdatePlan::Update(Box::new(ProofStatement::DevAsserted(
+            output,
+        ))))
     }
 
     /// The smallest block `T >= deposit_block` whose anchor slot the light client stores.
@@ -208,7 +256,9 @@ impl BeaconSource for DevBeaconSource {
     }
 
     fn finalized_execution_block(&self, source: &dyn ExecutionReader) -> Result<Option<u64>> {
-        Ok(source.latest_block_number()?.checked_sub(self.finality_depth))
+        Ok(source
+            .latest_block_number()?
+            .checked_sub(self.finality_depth))
     }
 
     fn next_update(
@@ -225,8 +275,12 @@ impl BeaconSource for DevBeaconSource {
             Some(finalized) if finalized >= deposit.number => {}
             _ => return Ok(UpdatePlan::NotYetFinal),
         }
-        let wanted = [PHASE_FIRST, PHASE_SECOND, PHASE_ANCHOR].map(|phase| self.slot_of(deposit.number, phase));
-        let Some(slot) = wanted.into_iter().find(|slot| *slot > light_client.head_slot) else {
+        let wanted = [PHASE_FIRST, PHASE_SECOND, PHASE_ANCHOR]
+            .map(|phase| self.slot_of(deposit.number, phase));
+        let Some(slot) = wanted
+            .into_iter()
+            .find(|slot| *slot > light_client.head_slot)
+        else {
             return Err(Error::Beacon(format!(
                 "the light client head {} is past block {} but holds no anchor for it; the dev chain skipped this block",
                 light_client.head_slot, deposit.number
@@ -237,7 +291,11 @@ impl BeaconSource for DevBeaconSource {
 
     /// The newest final block, at its first phase. The update stores no anchor, because no withdrawal reads this
     /// light client: the own-chain light client only has to follow the chain.
-    fn next_head_update(&self, light_client: &LightClientState, source: &dyn ExecutionReader) -> Result<UpdatePlan> {
+    fn next_head_update(
+        &self,
+        light_client: &LightClientState,
+        source: &dyn ExecutionReader,
+    ) -> Result<UpdatePlan> {
         let Some(finalized) = self.finalized_execution_block(source)? else {
             return Ok(UpdatePlan::NotYetFinal);
         };
@@ -245,7 +303,13 @@ impl BeaconSource for DevBeaconSource {
         if slot <= light_client.head_slot {
             return Ok(UpdatePlan::Covered);
         }
-        self.asserted_update(light_client, slot, finalized, source.block_hash(finalized)?, source)
+        self.asserted_update(
+            light_client,
+            slot,
+            finalized,
+            source.block_hash(finalized)?,
+            source,
+        )
     }
 
     fn withdrawal_path(
@@ -257,11 +321,18 @@ impl BeaconSource for DevBeaconSource {
     ) -> Result<BeaconPath> {
         let anchor_block = self
             .anchor_block(deposit.number, stored_slots)
-            .ok_or_else(|| Error::Beacon(format!("no stored anchor at or after block {}", deposit.number)))?;
+            .ok_or_else(|| {
+                Error::Beacon(format!(
+                    "no stored anchor at or after block {}",
+                    deposit.number
+                ))
+            })?;
         let anchor = self.build(self.slot_of(anchor_block, PHASE_ANCHOR), source)?;
         let deposit_slot = self.slot_of(deposit.number, PHASE_DEPOSIT);
         let deposit_header = self.build(deposit_slot, source)?.header;
-        let state = anchor.state.ok_or_else(|| Error::Beacon("anchor without state".into()))?;
+        let state = anchor
+            .state
+            .ok_or_else(|| Error::Beacon("anchor without state".into()))?;
         let ancestry_branch = match ancestry_path(anchor.header.header.slot, deposit_slot)? {
             AncestryPath::Recent => {
                 if anchor_block - deposit.number > WINDOW_BLOCKS {
@@ -298,14 +369,22 @@ impl BeaconSource for DevBeaconSource {
         source: &dyn ExecutionReader,
     ) -> Result<Option<RootsEvidence>> {
         let Some((number, PHASE_ANCHOR)) = self.block_and_phase(anchor.slot) else {
-            return Err(Error::Beacon(format!("slot {} is not a dev anchor slot", anchor.slot)));
+            return Err(Error::Beacon(format!(
+                "slot {} is not a dev anchor slot",
+                anchor.slot
+            )));
         };
-        let (slot_a, slot_b) = (self.slot_of(number, PHASE_FIRST), self.slot_of(number, PHASE_SECOND));
+        let (slot_a, slot_b) = (
+            self.slot_of(number, PHASE_FIRST),
+            self.slot_of(number, PHASE_SECOND),
+        );
         if !stored_slots.contains(&slot_a) || !stored_slots.contains(&slot_b) {
             return Ok(None);
         }
         let built = self.build(anchor.slot, source)?;
-        let state = built.state.ok_or_else(|| Error::Beacon("anchor without state".into()))?;
+        let state = built
+            .state
+            .ok_or_else(|| Error::Beacon("anchor without state".into()))?;
         Ok(Some(RootsEvidence {
             gindex: block_roots_gindex(self.chain, anchor.slot)?,
             later_header: built.header.header,
@@ -324,13 +403,17 @@ impl BeaconSource for DevBeaconSource {
     ) -> Result<Option<HistoricalEvidence>> {
         let capella_era = self.capella_era()?;
         let usable = |slot: &u64| {
-            anchor.slot.saturating_sub(*slot) > SLOTS_PER_ERA && slot / SLOTS_PER_ERA >= capella_era && self.is_filled(*slot)
+            anchor.slot.saturating_sub(*slot) > SLOTS_PER_ERA
+                && slot / SLOTS_PER_ERA >= capella_era
+                && self.is_filled(*slot)
         };
         let Some(earlier_slot) = stored_slots.iter().copied().filter(usable).max() else {
             return Ok(None);
         };
         let built = self.build(anchor.slot, source)?;
-        let state = built.state.ok_or_else(|| Error::Beacon("anchor without state".into()))?;
+        let state = built
+            .state
+            .ok_or_else(|| Error::Beacon("anchor without state".into()))?;
         let index = (earlier_slot / SLOTS_PER_ERA - capella_era) as usize;
         Ok(Some(HistoricalEvidence {
             gindex: historical_summaries_gindex(self.chain, anchor.slot)?,
@@ -346,7 +429,12 @@ impl BeaconSource for DevBeaconSource {
         stored_slots: &[u64],
         source: &dyn ExecutionReader,
     ) -> Result<Option<HashEvidence>> {
-        let Some(slot) = stored_slots.iter().copied().filter(|slot| *slot <= at_or_below).max() else {
+        let Some(slot) = stored_slots
+            .iter()
+            .copied()
+            .filter(|slot| *slot <= at_or_below)
+            .max()
+        else {
             return Ok(None);
         };
         let built = self.build(slot, source)?;
@@ -392,7 +480,11 @@ mod tests {
     }
 
     fn deposit(number: u64) -> DepositBlock {
-        DepositBlock { number, hash: keccak256(number.to_be_bytes()), timestamp: 0 }
+        DepositBlock {
+            number,
+            hash: keccak256(number.to_be_bytes()),
+            timestamp: 0,
+        }
     }
 
     /// Claim: a block counts as final only when it lies `finality_depth` blocks below the latest block.
@@ -400,16 +492,38 @@ mod tests {
     #[test]
     fn finality_is_a_depth_rule() {
         let source = DevBeaconSource::new(ChainKind::Pulsechain, 3, DEFAULT_SLOT_OFFSET);
-        assert_eq!(source.finalized_execution_block(&FakeChain { latest: 2 }).unwrap(), None);
-        assert_eq!(source.finalized_execution_block(&FakeChain { latest: 3 }).unwrap(), Some(0));
-        assert_eq!(source.finalized_execution_block(&FakeChain { latest: 10 }).unwrap(), Some(7));
+        assert_eq!(
+            source
+                .finalized_execution_block(&FakeChain { latest: 2 })
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            source
+                .finalized_execution_block(&FakeChain { latest: 3 })
+                .unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            source
+                .finalized_execution_block(&FakeChain { latest: 10 })
+                .unwrap(),
+            Some(7)
+        );
     }
 
     /// Claim: a deposit in a block that is not yet final gets no update.
     #[test]
     fn unfinalized_deposit_waits() {
         let source = DevBeaconSource::new(ChainKind::Pulsechain, 3, DEFAULT_SLOT_OFFSET);
-        let plan = source.next_update(&deposit(9), &light_client_at(10), &[], &FakeChain { latest: 10 }).unwrap();
+        let plan = source
+            .next_update(
+                &deposit(9),
+                &light_client_at(10),
+                &[],
+                &FakeChain { latest: 10 },
+            )
+            .unwrap();
         assert!(matches!(plan, UpdatePlan::NotYetFinal));
     }
 
@@ -424,10 +538,15 @@ mod tests {
         let mut stored = vec![];
         let mut slots = vec![];
         loop {
-            match source.next_update(&deposit(5), &light_client_at(head), &stored, &chain).unwrap() {
+            match source
+                .next_update(&deposit(5), &light_client_at(head), &stored, &chain)
+                .unwrap()
+            {
                 UpdatePlan::Covered => break,
                 UpdatePlan::Update(statement) => {
-                    let ProofStatement::DevAsserted(output) = *statement else { panic!("dev statement") };
+                    let ProofStatement::DevAsserted(output) = *statement else {
+                        panic!("dev statement")
+                    };
                     assert!(output.newHeadSlot > head);
                     head = output.newHeadSlot;
                     stored.push(head);
@@ -447,20 +566,35 @@ mod tests {
     #[test]
     fn following_the_chain_sends_one_update_to_the_newest_final_block() {
         let source = DevBeaconSource::new(ChainKind::Pulsechain, 3, DEFAULT_SLOT_OFFSET);
-        let early = source.next_head_update(&light_client_at(10), &FakeChain { latest: 2 }).unwrap();
+        let early = source
+            .next_head_update(&light_client_at(10), &FakeChain { latest: 2 })
+            .unwrap();
         assert!(matches!(early, UpdatePlan::NotYetFinal));
 
         let chain = FakeChain { latest: 10 };
-        let UpdatePlan::Update(statement) = source.next_head_update(&light_client_at(10), &chain).unwrap() else {
+        let UpdatePlan::Update(statement) = source
+            .next_head_update(&light_client_at(10), &chain)
+            .unwrap()
+        else {
             panic!("a final block above the head needs an update");
         };
-        let ProofStatement::DevAsserted(output) = *statement else { panic!("dev statement") };
-        assert_eq!((output.newHeadSlot, output.executionBlockNumber), (source.slot_of(7, PHASE_FIRST), 7));
+        let ProofStatement::DevAsserted(output) = *statement else {
+            panic!("dev statement")
+        };
+        assert_eq!(
+            (output.newHeadSlot, output.executionBlockNumber),
+            (source.slot_of(7, PHASE_FIRST), 7)
+        );
         assert_eq!(output.executionBlockHash, keccak256(7u64.to_be_bytes()));
         assert_eq!(output.previousHeadSlot, 10);
 
-        for head in [source.slot_of(7, PHASE_FIRST), source.slot_of(7, PHASE_FIRST) + 100] {
-            let plan = source.next_head_update(&light_client_at(head), &chain).unwrap();
+        for head in [
+            source.slot_of(7, PHASE_FIRST),
+            source.slot_of(7, PHASE_FIRST) + 100,
+        ] {
+            let plan = source
+                .next_head_update(&light_client_at(head), &chain)
+                .unwrap();
             assert!(matches!(plan, UpdatePlan::Covered), "head {head}");
         }
     }
@@ -473,17 +607,28 @@ mod tests {
         let source = DevBeaconSource::new(ChainKind::Pulsechain, 0, DEFAULT_SLOT_OFFSET);
         let chain = FakeChain { latest: 20 };
         let stored: Vec<u64> = [0, 1, 3].map(|phase| source.slot_of(5, phase)).to_vec();
-        let path = source.withdrawal_path(&deposit(5), &light_client_at(stored[2]), &stored, &chain).unwrap();
+        let path = source
+            .withdrawal_path(&deposit(5), &light_client_at(stored[2]), &stored, &chain)
+            .unwrap();
         assert_eq!(path.anchor_header.slot, source.slot_of(5, PHASE_ANCHOR));
         assert_eq!(path.deposit_header.slot, source.slot_of(5, PHASE_DEPOSIT));
 
-        let evidence = source.roots_layout_evidence(&path.anchor_header, &stored, &chain).unwrap().expect("evidence");
+        let evidence = source
+            .roots_layout_evidence(&path.anchor_header, &stored, &chain)
+            .unwrap()
+            .expect("evidence");
         assert_eq!(evidence.later_header.slot, path.anchor_header.slot);
         assert_eq!(evidence.branch_a.len(), path.ancestry_branch.len());
-        let hash_evidence = source.hash_layout_evidence(stored[0], &stored, &chain).unwrap().expect("evidence");
+        let hash_evidence = source
+            .hash_layout_evidence(stored[0], &stored, &chain)
+            .unwrap()
+            .expect("evidence");
         assert_eq!(hash_evidence.header.slot, stored[0]);
         // Evidence needs both earlier slots stored.
-        assert!(source.roots_layout_evidence(&path.anchor_header, &stored[1..], &chain).unwrap().is_none());
+        assert!(source
+            .roots_layout_evidence(&path.anchor_header, &stored[1..], &chain)
+            .unwrap()
+            .is_none());
     }
 
     /// Claim: the first update for a deposit may jump the head by far more than 8192 slots: from slot 1 to phase 0 of
@@ -494,11 +639,21 @@ mod tests {
     fn the_head_may_jump_more_than_8192_slots() {
         let source = DevBeaconSource::new(ChainKind::Pulsechain, 0, DEFAULT_SLOT_OFFSET);
         let chain = FakeChain { latest: 6000 };
-        let plan = source.next_update(&deposit(5000), &light_client_at(1), &[], &chain).unwrap();
-        let UpdatePlan::Update(statement) = plan else { panic!("an update") };
-        let ProofStatement::DevAsserted(output) = *statement else { panic!("dev statement") };
+        let plan = source
+            .next_update(&deposit(5000), &light_client_at(1), &[], &chain)
+            .unwrap();
+        let UpdatePlan::Update(statement) = plan else {
+            panic!("an update")
+        };
+        let ProofStatement::DevAsserted(output) = *statement else {
+            panic!("dev statement")
+        };
         assert_eq!(output.newHeadSlot, source.slot_of(5000, PHASE_FIRST));
-        assert!(output.newHeadSlot - output.previousHeadSlot > 8192, "the jump is {}", output.newHeadSlot - output.previousHeadSlot);
+        assert!(
+            output.newHeadSlot - output.previousHeadSlot > 8192,
+            "the jump is {}",
+            output.newHeadSlot - output.previousHeadSlot
+        );
     }
 
     /// Claim: the widest withdrawal that the source builds (a deposit `WINDOW_BLOCKS` below its anchor) is on the
@@ -510,8 +665,15 @@ mod tests {
         let source = DevBeaconSource::new(ChainKind::Pulsechain, 0, DEFAULT_SLOT_OFFSET);
         let anchor = source.slot_of(WINDOW_BLOCKS + 10, PHASE_ANCHOR);
         let deposit_slot = source.slot_of(10, PHASE_DEPOSIT);
-        assert_eq!(crate::light_client::ancestry_path(anchor, deposit_slot).unwrap(), crate::light_client::AncestryPath::Recent);
-        const { assert!(WINDOW_BLOCKS * SLOTS_PER_BLOCK <= crate::light_client::SLOTS_PER_HISTORICAL_ROOT) };
+        assert_eq!(
+            crate::light_client::ancestry_path(anchor, deposit_slot).unwrap(),
+            crate::light_client::AncestryPath::Recent
+        );
+        const {
+            assert!(
+                WINDOW_BLOCKS * SLOTS_PER_BLOCK <= crate::light_client::SLOTS_PER_HISTORICAL_ROOT
+            )
+        };
     }
 
     /// Claim: building the same slot twice gives the same header root.
@@ -535,10 +697,22 @@ mod tests {
         let source = DevBeaconSource::new(ChainKind::Pulsechain, 0, DEFAULT_SLOT_OFFSET);
         let chain = FakeChain { latest: 160_000 };
         let behind = light_client_at(1);
-        let UpdatePlan::Update(statement) = source.next_head_update(&behind, &chain).unwrap() else { panic!("an update") };
-        let ProofStatement::DevAsserted(output) = *statement else { panic!("dev statement") };
-        assert!(output.newHeadSlot / 8192 - output.previousHeadSlot / 8192 >= 75, "the jump is {} periods", output.newHeadSlot / 8192);
+        let UpdatePlan::Update(statement) = source.next_head_update(&behind, &chain).unwrap()
+        else {
+            panic!("an update")
+        };
+        let ProofStatement::DevAsserted(output) = *statement else {
+            panic!("dev statement")
+        };
+        assert!(
+            output.newHeadSlot / 8192 - output.previousHeadSlot / 8192 >= 75,
+            "the jump is {} periods",
+            output.newHeadSlot / 8192
+        );
         let caught_up = light_client_at(output.newHeadSlot);
-        assert!(matches!(source.next_head_update(&caught_up, &chain).unwrap(), UpdatePlan::Covered));
+        assert!(matches!(
+            source.next_head_update(&caught_up, &chain).unwrap(),
+            UpdatePlan::Covered
+        ));
     }
 }

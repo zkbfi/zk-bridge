@@ -127,7 +127,11 @@ pub trait BeaconSource: Send + Sync {
 
     /// What the light client must do next to follow the newest final header of the source chain, with no deposit in
     /// view. `Covered` means the head already is the newest final header. `NotYetFinal` means the source has none.
-    fn next_head_update(&self, light_client: &LightClientState, source: &dyn ExecutionReader) -> Result<UpdatePlan>;
+    fn next_head_update(
+        &self,
+        light_client: &LightClientState,
+        source: &dyn ExecutionReader,
+    ) -> Result<UpdatePlan>;
 
     /// The beacon part of the withdrawal for a deposit block.
     fn withdrawal_path(

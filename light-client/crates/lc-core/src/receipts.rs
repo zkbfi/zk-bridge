@@ -2,12 +2,12 @@
 //!
 //! The prover service builds the execution part of a withdrawal with these functions.
 
+use crate::execution::{ExecutionHeader, Log};
+use crate::withdrawal::receipt_trie_key;
 use alloy_primitives::{keccak256, Bloom, Bytes, B256};
 use alloy_rlp::{BufMut, Encodable, Header as RlpHeader};
 use alloy_trie::proof::ProofRetainer;
 use alloy_trie::{HashBuilder, Nibbles};
-use crate::execution::{ExecutionHeader, Log};
-use crate::withdrawal::receipt_trie_key;
 
 /// A receipts trie with the proof of every receipt.
 pub struct ReceiptsTrie {
@@ -118,4 +118,3 @@ pub fn encode_execution_header(header: &ExecutionHeader) -> Bytes {
 pub fn header_hash(header_rlp: &[u8]) -> B256 {
     keccak256(header_rlp)
 }
-

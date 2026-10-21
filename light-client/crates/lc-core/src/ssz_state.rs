@@ -9,13 +9,13 @@
 //! Limits are mainnet preset values (`SLOTS_PER_HISTORICAL_ROOT` 8192, validator registry limit 2^40, and so on).
 //! If a root does not match, the preset differs and the caller must stop.
 
-use alloy_primitives::{Address, B256, U256};
 use crate::error::{Error, Result};
 use crate::layout::ExecutionHeaderForm;
 use crate::ssz::{
     byte_list_root, byte_vector_root, hash_pair, merkleize, merkleize_with_limit, mix_in_length, pack_bytes, u64_chunk,
 };
 use crate::types::{BeaconBlockHeader, ExecutionPayloadHeader, SyncCommittee};
+use alloy_primitives::{Address, B256, U256};
 
 fn le_u64(bytes: &[u8]) -> u64 {
     u64::from_le_bytes(bytes[..8].try_into().expect("8 bytes"))
@@ -62,7 +62,10 @@ fn split_container<'a>(bytes: &'a [u8], kinds: &[Kind]) -> Result<Vec<&'a [u8]>>
     let fixed_length: usize = kinds.iter().map(|kind| if let Kind::Fixed(size) = kind { *size } else { 4 }).sum();
     let has_variable = kinds.iter().any(|kind| matches!(kind, Kind::Variable));
     if bytes.len() < fixed_length || (!has_variable && bytes.len() != fixed_length) {
-        return malformed(format!("container of {} bytes does not fit its fixed part of {fixed_length} bytes", bytes.len()));
+        return malformed(format!(
+            "container of {} bytes does not fit its fixed part of {fixed_length} bytes",
+            bytes.len()
+        ));
     }
     let mut cursor = 0;
     let mut starts: Vec<Option<usize>> = Vec::with_capacity(kinds.len());

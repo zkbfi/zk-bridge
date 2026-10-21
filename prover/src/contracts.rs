@@ -145,7 +145,8 @@ sol! {
 }
 
 /// The selector of `AlreadyClaimed(bytes32)`.
-pub const ALREADY_CLAIMED_SELECTOR: [u8; 4] = <VaultContract::AlreadyClaimed as alloy_sol_types::SolError>::SELECTOR;
+pub const ALREADY_CLAIMED_SELECTOR: [u8; 4] =
+    <VaultContract::AlreadyClaimed as alloy_sol_types::SolError>::SELECTOR;
 
 /// Whether revert data is the `AlreadyClaimed` error of the vault, for any nonce.
 pub fn is_already_claimed(revert_data: &[u8]) -> bool {
@@ -178,14 +179,23 @@ pub fn deposit_calldata(
 /// The calldata of `BeaconLightClient.update`.
 pub fn update_calldata(proof: &[u8], public_values: &[u8]) -> Bytes {
     Bytes::from(
-        LightClientContract::updateCall { proof: proof.to_vec().into(), publicValues: public_values.to_vec().into() }
-            .abi_encode(),
+        LightClientContract::updateCall {
+            proof: proof.to_vec().into(),
+            publicValues: public_values.to_vec().into(),
+        }
+        .abi_encode(),
     )
 }
 
 /// The calldata of `ForkRegistry.observe`.
 pub fn observe_calldata(proof: &[u8], public_values: &[u8]) -> Bytes {
-    Bytes::from(ForkRegistryContract::observeCall { proof: proof.to_vec().into(), publicValues: public_values.to_vec().into() }.abi_encode())
+    Bytes::from(
+        ForkRegistryContract::observeCall {
+            proof: proof.to_vec().into(),
+            publicValues: public_values.to_vec().into(),
+        }
+        .abi_encode(),
+    )
 }
 
 /// The topic 0 of the `HeadUpdated` event.
@@ -201,8 +211,10 @@ mod tests {
     /// Why it matters: the older selectors revert on the current vault.
     #[test]
     fn deposit_call_has_the_fee_limit_and_the_gate_evidence_arguments() {
-        let expected = &alloy_primitives::keccak256("deposit(address,address,uint256,uint16,bytes)")[..4];
-        let calldata = deposit_calldata(Address::ZERO, Address::ZERO, U256::from(1), 25, &[1, 2, 3]);
+        let expected =
+            &alloy_primitives::keccak256("deposit(address,address,uint256,uint16,bytes)")[..4];
+        let calldata =
+            deposit_calldata(Address::ZERO, Address::ZERO, U256::from(1), 25, &[1, 2, 3]);
         assert_eq!(&calldata[..4], expected);
         let decoded = VaultContract::depositCall::abi_decode(&calldata).unwrap();
         assert_eq!(decoded.maxFeeBasisPoints, 25);

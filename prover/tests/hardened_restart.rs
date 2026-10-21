@@ -16,7 +16,9 @@ use zk_bridge_prover::config::Config;
 use zk_bridge_prover::error::{Error, Result};
 use zk_bridge_prover::logging::Logger;
 use zk_bridge_prover::route::build_routes;
-use zk_bridge_prover::service::{Coverage, Route, RoutePorts, SendOutcome, Service, ServiceSettings};
+use zk_bridge_prover::service::{
+    Coverage, Route, RoutePorts, SendOutcome, Service, ServiceSettings,
+};
 use zk_bridge_prover::store::{NewDeposit, Store};
 
 /// The step at which the decorated route "crashes".
@@ -51,7 +53,11 @@ impl RoutePorts for Crashing {
     fn scan(&self, from: u64, to: u64) -> Result<Vec<NewDeposit>> {
         self.inner.scan(from, to)
     }
-    fn deposit_from_receipt(&self, transaction: B256, log_index: u64) -> Result<Option<NewDeposit>> {
+    fn deposit_from_receipt(
+        &self,
+        transaction: B256,
+        log_index: u64,
+    ) -> Result<Option<NewDeposit>> {
         self.inner.deposit_from_receipt(transaction, log_index)
     }
     fn claimed(&self, nonce: B256) -> Result<bool> {
@@ -98,17 +104,30 @@ fn one_pass(bridge: &Bridge, crash_at: CrashAt) {
             name: route.name,
             start_block: route.start_block,
             log_block_range: route.log_block_range,
-            ports: Box::new(Crashing { inner: route.ports, crash_at }),
+            ports: Box::new(Crashing {
+                inner: route.ports,
+                crash_at,
+            }),
         })
         .collect();
     let store = Store::open(&config.database_path).expect("file");
     let (logger, _lines) = Logger::in_memory();
-    Service::new(store, logger, ServiceSettings { max_attempts: config.max_attempts }, routes).run_once().expect("pass");
+    Service::new(
+        store,
+        logger,
+        ServiceSettings {
+            max_attempts: config.max_attempts,
+        },
+        routes,
+    )
+    .run_once()
+    .expect("pass");
 }
 
 /// How many withdrawals the vault of chain 369 paid, from its `WithdrawalCompleted` events.
 fn payouts(bridge: &Bridge) -> usize {
-    let topic = alloy_primitives::keccak256("WithdrawalCompleted(address,address,bytes32,uint256,bytes32)");
+    let topic =
+        alloy_primitives::keccak256("WithdrawalCompleted(address,address,bytes32,uint256,bytes32)");
     let client = client_of(&bridge.chain_b);
     let latest = bridge.chain_b.block_number();
     client.logs(bridge.vault_b, topic, 0, latest).unwrap().len()
@@ -158,33 +177,67 @@ fn restart_after_crashes_between_steps_delivers_the_deposit_exactly_once() {
     one_pass(&bridge, CrashAt::BeforeBuild);
     assert_eq!(state(), "light_client_updated");
     let updates_after_first_crash = stored_head_slots(&bridge.chain_b, bridge.light_client_b).len();
-    assert!(updates_after_first_crash > 0, "the light client was updated before the crash");
-    assert_eq!((recipient(), payouts(&bridge)), (U256::ZERO, 0), "nothing paid yet");
+    assert!(
+        updates_after_first_crash > 0,
+        "the light client was updated before the crash"
+    );
+    assert_eq!(
+        (recipient(), payouts(&bridge)),
+        (U256::ZERO, 0),
+        "nothing paid yet"
+    );
 
     // Crash 2: the withdrawal is built and stored, and the crash comes before the send.
     one_pass(&bridge, CrashAt::BeforeSend);
     assert_eq!(state(), "proven");
-    assert_eq!((recipient(), payouts(&bridge)), (U256::ZERO, 0), "nothing paid yet");
+    assert_eq!(
+        (recipient(), payouts(&bridge)),
+        (U256::ZERO, 0),
+        "nothing paid yet"
+    );
     let nonce_before_send = sent_by_deployer();
 
     // Crash 3: the withdrawal is mined, and the crash comes before the file records it.
     one_pass(&bridge, CrashAt::AfterSendBeforeRecord);
-    assert_eq!(state(), "proven", "the file does not know about the payment");
+    assert_eq!(
+        state(),
+        "proven",
+        "the file does not know about the payment"
+    );
     assert_eq!(payouts_after_waiting(&bridge, 1), 1, "the chain paid once");
     assert_eq!(recipient(), U256::from(amount));
-    assert_eq!(sent_by_deployer(), nonce_before_send + 1, "one withdrawal transaction so far");
+    assert_eq!(
+        sent_by_deployer(),
+        nonce_before_send + 1,
+        "one withdrawal transaction so far"
+    );
 
     // The restart: a healthy pass finishes the deposit and sends nothing.
     one_pass(&bridge, CrashAt::Nowhere);
     assert_eq!(state(), "confirmed");
-    assert_eq!((recipient(), payouts(&bridge)), (U256::from(amount), 1), "exactly one payout");
-    assert_eq!(sent_by_deployer(), nonce_before_send + 1, "the restart sent no second withdrawal");
-    assert_eq!(stored_head_slots(&bridge.chain_b, bridge.light_client_b).len(), updates_after_first_crash, "the light client got no second update");
+    assert_eq!(
+        (recipient(), payouts(&bridge)),
+        (U256::from(amount), 1),
+        "exactly one payout"
+    );
+    assert_eq!(
+        sent_by_deployer(),
+        nonce_before_send + 1,
+        "the restart sent no second withdrawal"
+    );
+    assert_eq!(
+        stored_head_slots(&bridge.chain_b, bridge.light_client_b).len(),
+        updates_after_first_crash,
+        "the light client got no second update"
+    );
     assert!(claimed(&bridge.chain_b, bridge.vault_b, made.nonce));
 
     // A further pass changes nothing.
     one_pass(&bridge, CrashAt::Nowhere);
-    assert_eq!((recipient(), payouts(&bridge), sent_by_deployer()), (U256::from(amount), 1, nonce_before_send + 1));
+    assert_eq!(
+        (recipient(), payouts(&bridge), sent_by_deployer()),
+        (U256::from(amount), 1, nonce_before_send + 1)
+    );
 }
 
 /// Claim: a service that stops after it recorded its withdrawal transaction, before it learned the result, ends the deposit
@@ -207,6 +260,13 @@ fn restart_after_the_withdrawal_was_recorded_confirms_without_resending() {
     one_pass(&bridge, CrashAt::Nowhere);
     assert_eq!(state_of(&bridge, made.nonce), "confirmed");
     assert_eq!(payouts(&bridge), 1);
-    assert_eq!(bridge.chain_b.nonce(DEPLOYER), nonce_after_send, "no second transaction");
-    assert_eq!(balance(&bridge.chain_b, bridge.token_b, RECIPIENT), U256::from(amount));
+    assert_eq!(
+        bridge.chain_b.nonce(DEPLOYER),
+        nonce_after_send,
+        "no second transaction"
+    );
+    assert_eq!(
+        balance(&bridge.chain_b, bridge.token_b, RECIPIENT),
+        U256::from(amount)
+    );
 }

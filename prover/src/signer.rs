@@ -60,7 +60,8 @@ impl Signer {
     /// # Errors
     /// `Error::Signer` when the bytes are not a valid secp256k1 secret.
     pub fn from_secret_bytes(bytes: &[u8]) -> Result<Self> {
-        let key = SigningKey::from_slice(bytes).map_err(|_| Error::Signer("not a valid secp256k1 secret".into()))?;
+        let key = SigningKey::from_slice(bytes)
+            .map_err(|_| Error::Signer("not a valid secp256k1 secret".into()))?;
         let address = address_of(key.verifying_key());
         Ok(Self { key, address })
     }
@@ -72,10 +73,12 @@ impl Signer {
     /// # Errors
     /// `Error::Signer` when the variable is missing or is not 32 bytes of hex. The message never holds the value.
     pub fn from_environment(name: &str, lookup: &dyn Fn(&str) -> Option<String>) -> Result<Self> {
-        let value = lookup(name).ok_or_else(|| Error::Signer(format!("environment variable {name} is not set")))?;
+        let value = lookup(name)
+            .ok_or_else(|| Error::Signer(format!("environment variable {name} is not set")))?;
         let bytes = alloy_primitives::hex::decode(value.trim())
             .map_err(|_| Error::Signer(format!("environment variable {name} is not hex")))?;
-        Self::from_secret_bytes(&bytes).map_err(|_| Error::Signer(format!("environment variable {name} is not a key")))
+        Self::from_secret_bytes(&bytes)
+            .map_err(|_| Error::Signer(format!("environment variable {name} is not a key")))
     }
 
     /// Decrypts a Web3 Secret Storage version 3 keystore (the Foundry format: scrypt and AES-128-CTR).
@@ -83,10 +86,17 @@ impl Signer {
     /// # Errors
     /// `Error::Signer` for a wrong password, an unsupported key derivation, or a malformed file.
     pub fn from_keystore(keystore_path: &Path, password_path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(keystore_path)
-            .map_err(|error| Error::Signer(format!("cannot read the keystore {}: {error}", keystore_path.display())))?;
+        let text = std::fs::read_to_string(keystore_path).map_err(|error| {
+            Error::Signer(format!(
+                "cannot read the keystore {}: {error}",
+                keystore_path.display()
+            ))
+        })?;
         let password = std::fs::read_to_string(password_path).map_err(|error| {
-            Error::Signer(format!("cannot read the password file {}: {error}", password_path.display()))
+            Error::Signer(format!(
+                "cannot read the password file {}: {error}",
+                password_path.display()
+            ))
         })?;
         Self::from_keystore_text(&text, password.trim_end_matches(['\n', '\r']))
     }
@@ -96,18 +106,24 @@ impl Signer {
     /// # Errors
     /// `Error::Signer` for a wrong password, an unsupported key derivation, or a malformed document.
     pub fn from_keystore_text(text: &str, password: &str) -> Result<Self> {
-        let document: Value =
-            serde_json::from_str(text).map_err(|error| Error::Signer(format!("keystore is not JSON: {error}")))?;
-        let crypto = document.get("crypto").or_else(|| document.get("Crypto")).ok_or_else(|| missing("crypto"))?;
+        let document: Value = serde_json::from_str(text)
+            .map_err(|error| Error::Signer(format!("keystore is not JSON: {error}")))?;
+        let crypto = document
+            .get("crypto")
+            .or_else(|| document.get("Crypto"))
+            .ok_or_else(|| missing("crypto"))?;
         if crypto["kdf"].as_str() != Some("scrypt") {
             return Err(Error::Signer("only scrypt keystores are supported".into()));
         }
         if crypto["cipher"].as_str() != Some("aes-128-ctr") {
-            return Err(Error::Signer("only aes-128-ctr keystores are supported".into()));
+            return Err(Error::Signer(
+                "only aes-128-ctr keystores are supported".into(),
+            ));
         }
         let params = &crypto["kdfparams"];
         let number = |name: &str| params[name].as_u64().ok_or_else(|| missing(name));
-        let (n, r, p, derived_length) = (number("n")?, number("r")?, number("p")?, number("dklen")?);
+        let (n, r, p, derived_length) =
+            (number("n")?, number("r")?, number("p")?, number("dklen")?);
         if !n.is_power_of_two() || derived_length != 32 {
             return Err(Error::Signer("unsupported scrypt parameters".into()));
         }
@@ -116,8 +132,9 @@ impl Signer {
         let ciphertext = hex_field(&crypto["ciphertext"], "ciphertext")?;
         let mac = hex_field(&crypto["mac"], "mac")?;
 
-        let scrypt_params = scrypt::Params::new(n.trailing_zeros() as u8, r as u32, p as u32, 32)
-            .map_err(|error| Error::Signer(format!("scrypt parameters: {error}")))?;
+        let scrypt_params =
+            scrypt::Params::new(n.trailing_zeros() as u8, r as u32, p as u32, 32)
+                .map_err(|error| Error::Signer(format!("scrypt parameters: {error}")))?;
         let mut derived = [0u8; 32];
         scrypt::scrypt(password.as_bytes(), &salt, &scrypt_params, &mut derived)
             .map_err(|error| Error::Signer(format!("scrypt: {error}")))?;
@@ -162,12 +179,15 @@ impl Signer {
 }
 
 fn missing(name: &str) -> Error {
-    Error::Signer(format!("keystore field {name} is missing or has the wrong type"))
+    Error::Signer(format!(
+        "keystore field {name} is missing or has the wrong type"
+    ))
 }
 
 fn hex_field(value: &Value, name: &str) -> Result<Vec<u8>> {
     let text = value.as_str().ok_or_else(|| missing(name))?;
-    alloy_primitives::hex::decode(text).map_err(|_| Error::Signer(format!("keystore field {name} is not hex")))
+    alloy_primitives::hex::decode(text)
+        .map_err(|_| Error::Signer(format!("keystore field {name} is not hex")))
 }
 
 /// Recovers the address that signed `digest`. Used by tests and by the transaction checks.
@@ -178,7 +198,8 @@ pub fn recover_address(digest: &B256, signature: &RecoverableSignature) -> Resul
     let mut bytes = [0u8; 64];
     bytes[..32].copy_from_slice(signature.r.as_slice());
     bytes[32..].copy_from_slice(signature.s.as_slice());
-    let parsed = k256::ecdsa::Signature::from_slice(&bytes).map_err(|error| Error::Signer(error.to_string()))?;
+    let parsed = k256::ecdsa::Signature::from_slice(&bytes)
+        .map_err(|error| Error::Signer(error.to_string()))?;
     let recovery = k256::ecdsa::RecoveryId::from_byte(signature.recovery_id)
         .ok_or_else(|| Error::Signer("bad recovery id".into()))?;
     let key = k256::ecdsa::VerifyingKey::recover_from_prehash(digest.as_slice(), &parsed, recovery)
@@ -203,7 +224,10 @@ mod tests {
     #[test]
     fn anvil_secret_gives_anvil_address() {
         let signer = anvil_signer();
-        assert_eq!(signer.address(), address!("f39Fd6e51aad88F6F4ce6aB8827279cffFb92266"));
+        assert_eq!(
+            signer.address(),
+            address!("f39Fd6e51aad88F6F4ce6aB8827279cffFb92266")
+        );
         assert!(!format!("{signer:?}").contains(ANVIL_SECRET));
     }
 
@@ -215,9 +239,14 @@ mod tests {
         for seed in 0u8..20 {
             let digest = keccak256([seed]);
             let signature = signer.sign_digest(&digest).unwrap();
-            assert_eq!(recover_address(&digest, &signature).unwrap(), signer.address());
-            let parsed =
-                k256::ecdsa::Signature::from_slice(&[signature.r.as_slice(), signature.s.as_slice()].concat()).unwrap();
+            assert_eq!(
+                recover_address(&digest, &signature).unwrap(),
+                signer.address()
+            );
+            let parsed = k256::ecdsa::Signature::from_slice(
+                &[signature.r.as_slice(), signature.s.as_slice()].concat(),
+            )
+            .unwrap();
             assert!(parsed.normalize_s().is_none(), "s must already be low");
             assert!(matches!(signature.to_65_bytes()[64], 27 | 28));
         }
@@ -259,7 +288,10 @@ mod tests {
             &directory.join("foundry-keystore.password"),
         )
         .unwrap();
-        assert_eq!(signer.address(), address!("1e01c40fA71113192e0AA8FEEc936c0Dda4b9c21"));
+        assert_eq!(
+            signer.address(),
+            address!("1e01c40fA71113192e0AA8FEEc936c0Dda4b9c21")
+        );
     }
 
     /// Builds a version 3 keystore for tests.
@@ -270,7 +302,9 @@ mod tests {
         let mut derived = [0u8; 32];
         scrypt::scrypt(password.as_bytes(), &salt, &params, &mut derived).unwrap();
         let mut ciphertext = secret.to_vec();
-        Aes128Ctr::new_from_slices(&derived[..16], &iv).unwrap().apply_keystream(&mut ciphertext);
+        Aes128Ctr::new_from_slices(&derived[..16], &iv)
+            .unwrap()
+            .apply_keystream(&mut ciphertext);
         let mut mac_input = derived[16..].to_vec();
         mac_input.extend_from_slice(&ciphertext);
         let mac = keccak256(&mac_input);

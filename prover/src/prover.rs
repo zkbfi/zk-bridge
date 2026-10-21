@@ -26,7 +26,10 @@
 #[cfg(feature = "sp1")]
 use crate::error::Error;
 use crate::error::Result;
-use crate::light_client::{public_values, sha256, verify_observation_natively, verify_update_natively, LightClientOutput, UpdateInput};
+use crate::light_client::{
+    public_values, sha256, verify_observation_natively, verify_update_natively, LightClientOutput,
+    UpdateInput,
+};
 use crate::signer::Signer;
 use alloy_primitives::{keccak256, B256};
 
@@ -100,8 +103,13 @@ impl Prover for OracleProver {
             ProofStatement::Observation(guest_input) => verify_observation_natively(guest_input)?,
             ProofStatement::ObservationAsserted(values) => values.clone(),
         };
-        let signature = self.oracle.sign_digest(&oracle_digest(program_vkey, &public_values))?;
-        Ok(Proof { public_values, proof_bytes: signature.to_65_bytes().to_vec() })
+        let signature = self
+            .oracle
+            .sign_digest(&oracle_digest(program_vkey, &public_values))?;
+        Ok(Proof {
+            public_values,
+            proof_bytes: signature.to_65_bytes().to_vec(),
+        })
     }
 }
 
@@ -121,7 +129,10 @@ impl Prover for Sp1Prover {
     fn prove(&self, _program_vkey: B256, statement: &ProofStatement) -> Result<Proof> {
         match statement {
             ProofStatement::DevAsserted(_) | ProofStatement::ObservationAsserted(_) => {
-                Err(Error::Prover("a development statement has no real proof; use the oracle backend on Anvil".into()))
+                Err(Error::Prover(
+                    "a development statement has no real proof; use the oracle backend on Anvil"
+                        .into(),
+                ))
             }
             ProofStatement::Observation(guest_input) => {
                 verify_observation_natively(guest_input)?;
@@ -171,7 +182,11 @@ mod tests {
                 store_knows_next_committee: true,
             },
         );
-        UpdateInput { chain, store: built.store, updates: vec![built.update] }
+        UpdateInput {
+            chain,
+            store: built.store,
+            updates: vec![built.update],
+        }
     }
 
     /// Claim: the digest is `keccak256(vkey ‖ sha256(publicValues))`, built from independent pieces.
@@ -183,7 +198,10 @@ mod tests {
         let sha = <sha2_digest::Sha>::of(&values);
         let mut packed = vec![0x11u8; 32];
         packed.extend_from_slice(&sha);
-        assert_eq!(oracle_digest(B256::repeat_byte(0x11), &values), keccak256(&packed));
+        assert_eq!(
+            oracle_digest(B256::repeat_byte(0x11), &values),
+            keccak256(&packed)
+        );
     }
 
     /// Claim: a valid update gives public values of 352 bytes and a 65-byte signature that recovers to the oracle.
@@ -192,7 +210,9 @@ mod tests {
     fn valid_update_is_signed_by_the_oracle() {
         let prover = OracleProver::new(oracle());
         let vkey = B256::repeat_byte(0x42);
-        let proof = prover.prove(vkey, &ProofStatement::Verified(scenario(400))).expect("proof");
+        let proof = prover
+            .prove(vkey, &ProofStatement::Verified(scenario(400)))
+            .expect("proof");
         assert_eq!(proof.public_values.len(), 352);
         assert_eq!(proof.proof_bytes.len(), 65);
         let signature = crate::signer::RecoverableSignature {
@@ -201,7 +221,8 @@ mod tests {
             recovery_id: proof.proof_bytes[64] - 27,
         };
         let recovered =
-            crate::signer::recover_address(&oracle_digest(vkey, &proof.public_values), &signature).unwrap();
+            crate::signer::recover_address(&oracle_digest(vkey, &proof.public_values), &signature)
+                .unwrap();
         assert_eq!(recovered, oracle().address());
     }
 
@@ -210,8 +231,16 @@ mod tests {
     #[test]
     fn prover_refuses_to_sign_when_native_verification_fails() {
         let prover = OracleProver::new(oracle());
-        let error = prover.prove(B256::repeat_byte(0x42), &ProofStatement::Verified(scenario(341))).unwrap_err();
-        assert!(matches!(error, Error::VerificationRefused(_)), "got {error}");
+        let error = prover
+            .prove(
+                B256::repeat_byte(0x42),
+                &ProofStatement::Verified(scenario(341)),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, Error::VerificationRefused(_)),
+            "got {error}"
+        );
     }
 
     /// A tiny wrapper so the digest test does not call the module under test for the SHA-256 value.
@@ -221,10 +250,12 @@ mod tests {
             pub fn of(data: &[u8]) -> [u8; 32] {
                 // SHA-256 of [1, 2, 3], computed with `shasum -a 256` for the fixed input below.
                 assert_eq!(data, [1u8, 2, 3]);
-                alloy_primitives::hex::decode("039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81")
-                    .unwrap()
-                    .try_into()
-                    .unwrap()
+                alloy_primitives::hex::decode(
+                    "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+                )
+                .unwrap()
+                .try_into()
+                .unwrap()
             }
         }
     }

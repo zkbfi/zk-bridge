@@ -43,7 +43,8 @@ pub trait RoutePorts {
     fn scan(&self, from: u64, to: u64) -> Result<Vec<NewDeposit>>;
     /// The deposit at log `log_index` of the receipt of `transaction`, or `None` when this route's source chain has
     /// no such deposit. Fails when the block is not final.
-    fn deposit_from_receipt(&self, transaction: B256, log_index: u64) -> Result<Option<NewDeposit>>;
+    fn deposit_from_receipt(&self, transaction: B256, log_index: u64)
+        -> Result<Option<NewDeposit>>;
     /// Whether the destination vault already paid the nonce.
     fn claimed(&self, nonce: B256) -> Result<bool>;
     /// Advances the destination light client until it covers the deposit block, or says it cannot yet.
@@ -106,8 +107,18 @@ pub fn is_transient(error: &Error) -> bool {
 
 impl Service {
     /// A service over a store and routes.
-    pub fn new(store: Store, logger: Logger, settings: ServiceSettings, routes: Vec<Route>) -> Self {
-        Self { store, logger, settings, routes }
+    pub fn new(
+        store: Store,
+        logger: Logger,
+        settings: ServiceSettings,
+        routes: Vec<Route>,
+    ) -> Self {
+        Self {
+            store,
+            logger,
+            settings,
+            routes,
+        }
     }
 
     /// The store, for `status`.
@@ -124,7 +135,11 @@ impl Service {
         for index in 0..self.routes.len() {
             let name = self.routes[index].name.clone();
             if let Err(error) = self.scan_route(index) {
-                self.logger.warn("scan_failed", None, &[("route", name.clone()), ("error", error.to_string())]);
+                self.logger.warn(
+                    "scan_failed",
+                    None,
+                    &[("route", name.clone()), ("error", error.to_string())],
+                );
             }
             for record in self.store.active(&name)? {
                 self.advance(index, &record.deposit.nonce)?;
@@ -141,15 +156,24 @@ impl Service {
         let route = &self.routes[index];
         match route.ports.advance_own_light_client() {
             Ok(0) => {}
-            Ok(sent) => self.logger.info("own_light_client_updated", None, &[("route", route.name.clone()), ("updates", sent.to_string())]),
-            Err(error) => self.logger.warn("own_light_client_update_failed", None, &[("route", route.name.clone()), ("error", error.to_string())]),
+            Ok(sent) => self.logger.info(
+                "own_light_client_updated",
+                None,
+                &[("route", route.name.clone()), ("updates", sent.to_string())],
+            ),
+            Err(error) => self.logger.warn(
+                "own_light_client_update_failed",
+                None,
+                &[("route", route.name.clone()), ("error", error.to_string())],
+            ),
         }
     }
 
     fn scan_route(&mut self, index: usize) -> Result<()> {
         let route = &self.routes[index];
         let Some(finalized) = route.ports.finalized_source_block()? else {
-            self.logger.info("no_finalized_block", None, &[("route", route.name.clone())]);
+            self.logger
+                .info("no_finalized_block", None, &[("route", route.name.clone())]);
             return Ok(());
         };
         let mut from = match self.store.cursor(&route.name)? {
@@ -188,7 +212,12 @@ impl Service {
         );
     }
 
-    fn apply(&self, record: &DepositRecord, event: Event, note: Option<&str>) -> Result<DepositState> {
+    fn apply(
+        &self,
+        record: &DepositRecord,
+        event: Event,
+        note: Option<&str>,
+    ) -> Result<DepositState> {
         let nonce = record.deposit.nonce;
         let (from, to) = self.store.apply(nonce, event, note)?;
         let mut fields = vec![
@@ -209,23 +238,36 @@ impl Service {
         self.logger.warn(
             "attempt_failed",
             Some(nonce),
-            &[("attempts", attempts.to_string()), ("reason", note.to_string())],
+            &[
+                ("attempts", attempts.to_string()),
+                ("reason", note.to_string()),
+            ],
         );
         if attempts >= self.settings.max_attempts {
-            self.apply(record, Event::Rejected, Some(&format!("gave up after {attempts} attempts: {note}")))?;
+            self.apply(
+                record,
+                Event::Rejected,
+                Some(&format!("gave up after {attempts} attempts: {note}")),
+            )?;
         }
         Ok(())
     }
 
     fn log_transient(&self, nonce: B256, error: &Error) {
-        self.logger.warn("step_failed_will_retry", Some(nonce), &[("error", error.to_string())]);
+        self.logger.warn(
+            "step_failed_will_retry",
+            Some(nonce),
+            &[("error", error.to_string())],
+        );
     }
 
     /// Moves one deposit as far as it goes in this pass.
     fn advance(&self, index: usize, nonce: &B256) -> Result<()> {
         let ports = &self.routes[index].ports;
         for _ in 0..MAX_STEPS_PER_PASS {
-            let Some(record) = self.store.get(*nonce)? else { return Ok(()) };
+            let Some(record) = self.store.get(*nonce)? else {
+                return Ok(());
+            };
             if record.state.is_terminal() {
                 return Ok(());
             }
@@ -248,7 +290,11 @@ impl Service {
     fn step(&self, ports: &dyn RoutePorts, record: &DepositRecord) -> Result<Progress> {
         let deposit = &record.deposit;
         if record.state != DepositState::Submitted && ports.claimed(deposit.nonce)? {
-            self.apply(record, Event::AlreadyClaimed, Some("the vault reports the nonce as claimed"))?;
+            self.apply(
+                record,
+                Event::AlreadyClaimed,
+                Some("the vault reports the nonce as claimed"),
+            )?;
             return Ok(Progress::Moved);
         }
         match record.state {
@@ -273,7 +319,11 @@ impl Service {
             }
             Coverage::NotYetFinal => {
                 if record.state == DepositState::Seen {
-                    self.apply(record, Event::BeaconNotReady, Some("no final header covers the deposit block yet"))?;
+                    self.apply(
+                        record,
+                        Event::BeaconNotReady,
+                        Some("no final header covers the deposit block yet"),
+                    )?;
                 }
                 Ok(Progress::Blocked)
             }
@@ -281,43 +331,67 @@ impl Service {
     }
 
     fn step_send(&self, ports: &dyn RoutePorts, record: &DepositRecord) -> Result<Progress> {
-        let calldata = record
-            .calldata
-            .as_ref()
-            .ok_or_else(|| Error::Transaction("the deposit is proven but has no stored calldata".into()))?;
+        let calldata = record.calldata.as_ref().ok_or_else(|| {
+            Error::Transaction("the deposit is proven but has no stored calldata".into())
+        })?;
         if let Some(note) = ports.flow_limiter_refusal(&record.deposit)? {
             self.store.set_note(record.deposit.nonce, &note)?;
-            self.logger.info("waiting_on_flow_limiter", Some(record.deposit.nonce), &[("reason", note)]);
+            self.logger.info(
+                "waiting_on_flow_limiter",
+                Some(record.deposit.nonce),
+                &[("reason", note)],
+            );
             return Ok(Progress::Blocked);
         }
         match ports.send_withdrawal(calldata)? {
             SendOutcome::AlreadyClaimed => {
-                self.apply(record, Event::AlreadyClaimed, Some("the vault reverted with AlreadyClaimed"))?;
+                self.apply(
+                    record,
+                    Event::AlreadyClaimed,
+                    Some("the vault reverted with AlreadyClaimed"),
+                )?;
             }
             SendOutcome::Sent(hash) => {
-                self.store.set_withdrawal_transaction(record.deposit.nonce, hash)?;
-                self.apply(record, Event::WithdrawalSent, Some(&format!("transaction {hash:#x}")))?;
+                self.store
+                    .set_withdrawal_transaction(record.deposit.nonce, hash)?;
+                self.apply(
+                    record,
+                    Event::WithdrawalSent,
+                    Some(&format!("transaction {hash:#x}")),
+                )?;
             }
         }
         Ok(Progress::Moved)
     }
 
     fn step_confirm(&self, ports: &dyn RoutePorts, record: &DepositRecord) -> Result<Progress> {
-        let hash = record
-            .withdrawal_transaction
-            .ok_or_else(|| Error::Transaction("the deposit is submitted but has no stored transaction".into()))?;
+        let hash = record.withdrawal_transaction.ok_or_else(|| {
+            Error::Transaction("the deposit is submitted but has no stored transaction".into())
+        })?;
         match ports.transaction_succeeded(hash)? {
             None => Ok(Progress::Blocked),
             Some(true) => {
-                self.apply(record, Event::WithdrawalMined, Some(&format!("transaction {hash:#x}")))?;
+                self.apply(
+                    record,
+                    Event::WithdrawalMined,
+                    Some(&format!("transaction {hash:#x}")),
+                )?;
                 Ok(Progress::Moved)
             }
             Some(false) if ports.claimed(record.deposit.nonce)? => {
-                self.apply(record, Event::AlreadyClaimed, Some("another transaction paid the deposit first"))?;
+                self.apply(
+                    record,
+                    Event::AlreadyClaimed,
+                    Some("another transaction paid the deposit first"),
+                )?;
                 Ok(Progress::Moved)
             }
             Some(false) => {
-                self.apply(record, Event::WithdrawalReverted, Some(&format!("transaction {hash:#x} reverted")))?;
+                self.apply(
+                    record,
+                    Event::WithdrawalReverted,
+                    Some(&format!("transaction {hash:#x} reverted")),
+                )?;
                 self.count_attempt(record, "the withdrawal transaction reverted")?;
                 Ok(Progress::Blocked)
             }
@@ -330,7 +404,10 @@ impl Service {
     /// `Error::Usage` when no route has such a deposit.
     pub fn withdraw_one(&mut self, transaction: B256, log_index: u64) -> Result<B256> {
         for index in 0..self.routes.len() {
-            let Some(deposit) = self.routes[index].ports.deposit_from_receipt(transaction, log_index)? else {
+            let Some(deposit) = self.routes[index]
+                .ports
+                .deposit_from_receipt(transaction, log_index)?
+            else {
                 continue;
             };
             if self.store.insert_deposit(&deposit)? {
@@ -339,7 +416,9 @@ impl Service {
             self.advance(index, &deposit.nonce)?;
             return Ok(deposit.nonce);
         }
-        Err(Error::Usage(format!("no route has a deposit at log {log_index} of transaction {transaction:#x}")))
+        Err(Error::Usage(format!(
+            "no route has a deposit at log {log_index} of transaction {transaction:#x}"
+        )))
     }
 }
 
@@ -402,9 +481,20 @@ pub(crate) mod tests {
         }
         fn scan(&self, from: u64, to: u64) -> Result<Vec<NewDeposit>> {
             self.0.scans.set(self.0.scans.get() + 1);
-            Ok(self.0.deposits.borrow().iter().filter(|d| d.block_number >= from && d.block_number <= to).cloned().collect())
+            Ok(self
+                .0
+                .deposits
+                .borrow()
+                .iter()
+                .filter(|d| d.block_number >= from && d.block_number <= to)
+                .cloned()
+                .collect())
         }
-        fn deposit_from_receipt(&self, _transaction: B256, _log_index: u64) -> Result<Option<NewDeposit>> {
+        fn deposit_from_receipt(
+            &self,
+            _transaction: B256,
+            _log_index: u64,
+        ) -> Result<Option<NewDeposit>> {
             Ok(self.0.deposits.borrow().first().cloned())
         }
         fn claimed(&self, _nonce: B256) -> Result<bool> {
@@ -433,7 +523,10 @@ pub(crate) mod tests {
         }
     }
 
-    pub fn service_with(script: &std::rc::Rc<Script>, store: Store) -> (Service, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    pub fn service_with(
+        script: &std::rc::Rc<Script>,
+        store: Store,
+    ) -> (Service, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
         let (logger, lines) = Logger::in_memory();
         let route = Route {
             name: "a_to_b".into(),
@@ -441,11 +534,24 @@ pub(crate) mod tests {
             log_block_range: 50,
             ports: Box::new(ScriptPorts(script.clone())),
         };
-        (Service::new(store, logger, ServiceSettings { max_attempts: 3 }, vec![route]), lines)
+        (
+            Service::new(
+                store,
+                logger,
+                ServiceSettings { max_attempts: 3 },
+                vec![route],
+            ),
+            lines,
+        )
     }
 
     fn state_of(service: &Service, seed: u8) -> DepositState {
-        service.store().get(B256::repeat_byte(seed)).unwrap().unwrap().state
+        service
+            .store()
+            .get(B256::repeat_byte(seed))
+            .unwrap()
+            .unwrap()
+            .state
     }
 
     /// Claim: with everything working, one pass takes a deposit from its first sight to `confirmed`, and every log
@@ -458,11 +564,27 @@ pub(crate) mod tests {
         service.run_once().unwrap();
         assert_eq!(state_of(&service, 0x11), DepositState::Confirmed);
         let nonce = format!("nonce={:#x}", B256::repeat_byte(0x11));
-        let deposit_lines: Vec<String> =
-            lines.lock().unwrap().iter().filter(|line| line.contains("event=deposit_state")).cloned().collect();
-        assert_eq!(deposit_lines.len(), 5, "seen, covered, proven, submitted, confirmed: {deposit_lines:?}");
+        let deposit_lines: Vec<String> = lines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|line| line.contains("event=deposit_state"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            deposit_lines.len(),
+            5,
+            "seen, covered, proven, submitted, confirmed: {deposit_lines:?}"
+        );
         assert!(deposit_lines.iter().all(|line| line.contains(&nonce)));
-        assert!(lines.lock().unwrap().iter().all(|line| line.contains("nonce=")), "every line has the key");
+        assert!(
+            lines
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|line| line.contains("nonce=")),
+            "every line has the key"
+        );
     }
 
     /// Claim: the scan reads only up to the finalized block. A deposit above it is not read, not stored.
@@ -485,7 +607,10 @@ pub(crate) mod tests {
     /// Why it matters: a second withdrawal transaction wastes gas, and a second build repeats the work.
     #[test]
     fn restart_resumes_without_repeating_work() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("target/test-scratch/service-restart-{}.sqlite", std::process::id()));
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "target/test-scratch/service-restart-{}.sqlite",
+            std::process::id()
+        ));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         let script = Script::new();
@@ -495,13 +620,25 @@ pub(crate) mod tests {
             service.run_once().unwrap();
             assert_eq!(state_of(&service, 0x11), DepositState::Submitted);
         }
-        assert_eq!((script.builds.get(), script.sends.get(), script.scans.get()), (1, 1, 3), "blocks 0..=100 in chunks of 50");
+        assert_eq!(
+            (script.builds.get(), script.sends.get(), script.scans.get()),
+            (1, 1, 3),
+            "blocks 0..=100 in chunks of 50"
+        );
         script.status.set(Some(true));
         let (mut service, _) = service_with(&script, Store::open(&path).unwrap());
         service.run_once().unwrap();
         assert_eq!(state_of(&service, 0x11), DepositState::Confirmed);
-        assert_eq!((script.builds.get(), script.sends.get()), (1, 1), "nothing repeated");
-        assert_eq!(script.scans.get(), 3, "the cursor kept the scanner above block 100");
+        assert_eq!(
+            (script.builds.get(), script.sends.get()),
+            (1, 1),
+            "nothing repeated"
+        );
+        assert_eq!(
+            script.scans.get(),
+            3,
+            "the cursor kept the scanner above block 100"
+        );
     }
 
     /// Claim: when the vault reverts with AlreadyClaimed, the deposit ends `confirmed`, not `failed`, with no retry.
@@ -533,7 +670,8 @@ pub(crate) mod tests {
     #[test]
     fn refused_verification_sends_nothing_and_fails_after_the_limit() {
         let script = Script::new();
-        *script.build.borrow_mut() = Box::new(|| Err(Error::VerificationRefused("InvalidAncestryBranch".into())));
+        *script.build.borrow_mut() =
+            Box::new(|| Err(Error::VerificationRefused("InvalidAncestryBranch".into())));
         let (mut service, _) = service_with(&script, Store::open_in_memory().unwrap());
         service.run_once().unwrap();
         assert_eq!(state_of(&service, 0x11), DepositState::LightClientUpdated);
@@ -542,7 +680,11 @@ pub(crate) mod tests {
         service.run_once().unwrap();
         assert_eq!(state_of(&service, 0x11), DepositState::Failed);
         assert_eq!(script.sends.get(), 0, "nothing was ever sent");
-        let record = service.store().get(B256::repeat_byte(0x11)).unwrap().unwrap();
+        let record = service
+            .store()
+            .get(B256::repeat_byte(0x11))
+            .unwrap()
+            .unwrap();
         assert!(record.note.unwrap().contains("InvalidAncestryBranch"));
     }
 
@@ -555,7 +697,11 @@ pub(crate) mod tests {
         for _ in 0..5 {
             service.run_once().unwrap();
         }
-        let record = service.store().get(B256::repeat_byte(0x11)).unwrap().unwrap();
+        let record = service
+            .store()
+            .get(B256::repeat_byte(0x11))
+            .unwrap()
+            .unwrap();
         assert_eq!((record.state, record.attempts), (DepositState::Proven, 0));
     }
 
@@ -571,10 +717,18 @@ pub(crate) mod tests {
         for _ in 0..10 {
             service.run_once().unwrap();
         }
-        let record = service.store().get(B256::repeat_byte(0x11)).unwrap().unwrap();
+        let record = service
+            .store()
+            .get(B256::repeat_byte(0x11))
+            .unwrap()
+            .unwrap();
         assert_eq!((record.state, record.attempts), (DepositState::Proven, 0));
         assert_eq!(record.note.as_deref(), Some("waiting on the flow limiter"));
-        assert_eq!(script.sends.get(), 0, "nothing was sent while the limiter refused");
+        assert_eq!(
+            script.sends.get(),
+            0,
+            "nothing was sent while the limiter refused"
+        );
 
         *script.refusal.borrow_mut() = None;
         service.run_once().unwrap();
@@ -594,9 +748,19 @@ pub(crate) mod tests {
         service.run_once().unwrap();
         service.run_once().unwrap();
         assert_eq!(script.own_calls.get(), 2, "once per pass");
-        let updated: Vec<String> = lines.lock().unwrap().iter().filter(|line| line.contains("event=own_light_client_updated")).cloned().collect();
+        let updated: Vec<String> = lines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|line| line.contains("event=own_light_client_updated"))
+            .cloned()
+            .collect();
         assert_eq!(updated.len(), 2);
-        assert!(updated[0].contains("updates=2") && updated[0].contains("route=a_to_b"), "{}", updated[0]);
+        assert!(
+            updated[0].contains("updates=2") && updated[0].contains("route=a_to_b"),
+            "{}",
+            updated[0]
+        );
     }
 
     /// Claim: a failed own-chain update is logged as a warning, and the pass still finishes the deposits.
@@ -605,11 +769,18 @@ pub(crate) mod tests {
     #[test]
     fn a_failed_own_chain_update_does_not_stop_the_deposits() {
         let script = Script::new();
-        *script.own_answer.borrow_mut() = Box::new(|| Err(Error::Beacon("no finality update".into())));
+        *script.own_answer.borrow_mut() =
+            Box::new(|| Err(Error::Beacon("no finality update".into())));
         let (mut service, lines) = service_with(&script, Store::open_in_memory().unwrap());
         service.run_once().unwrap();
         assert_eq!(state_of(&service, 0x11), DepositState::Confirmed);
-        let failed: Vec<String> = lines.lock().unwrap().iter().filter(|line| line.contains("event=own_light_client_update_failed")).cloned().collect();
+        let failed: Vec<String> = lines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|line| line.contains("event=own_light_client_update_failed"))
+            .cloned()
+            .collect();
         assert_eq!(failed.len(), 1);
         assert!(failed[0].contains("no finality update"), "{}", failed[0]);
     }
@@ -621,7 +792,11 @@ pub(crate) mod tests {
         let script = Script::new();
         let (mut service, lines) = service_with(&script, Store::open_in_memory().unwrap());
         service.run_once().unwrap();
-        assert!(lines.lock().unwrap().iter().all(|line| !line.contains("own_light_client")));
+        assert!(lines
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|line| !line.contains("own_light_client")));
     }
 
     /// Claim: while no final header covers the block, the deposit waits in `awaiting_finality` and nothing is built.

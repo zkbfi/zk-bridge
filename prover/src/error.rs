@@ -49,14 +49,24 @@ impl fmt::Display for Error {
             Self::SecretHandling(reason) => write!(formatter, "secret handling: {reason}"),
             Self::Signer(reason) => write!(formatter, "signer: {reason}"),
             Self::Http(reason) => write!(formatter, "http: {reason}"),
-            Self::Rpc { code, message, data } => match data {
-                Some(data) => write!(formatter, "rpc error {code}: {message} (data 0x{})", hex::encode(data)),
+            Self::Rpc {
+                code,
+                message,
+                data,
+            } => match data {
+                Some(data) => write!(
+                    formatter,
+                    "rpc error {code}: {message} (data 0x{})",
+                    hex::encode(data)
+                ),
                 None => write!(formatter, "rpc error {code}: {message}"),
             },
             Self::Malformed(reason) => write!(formatter, "malformed answer: {reason}"),
             Self::Database(reason) => write!(formatter, "database: {reason}"),
             Self::Beacon(reason) => write!(formatter, "beacon: {reason}"),
-            Self::VerificationRefused(reason) => write!(formatter, "verification refused: {reason}"),
+            Self::VerificationRefused(reason) => {
+                write!(formatter, "verification refused: {reason}")
+            }
             Self::Prover(reason) => write!(formatter, "prover: {reason}"),
             Self::Transaction(reason) => write!(formatter, "transaction: {reason}"),
             Self::Usage(reason) => write!(formatter, "usage: {reason}"),
@@ -76,7 +86,9 @@ impl Error {
     /// The first four bytes of the revert data of a failed call, when the error carries any.
     pub fn revert_selector(&self) -> Option<[u8; 4]> {
         match self {
-            Self::Rpc { data: Some(data), .. } if data.len() >= 4 => data[..4].try_into().ok(),
+            Self::Rpc {
+                data: Some(data), ..
+            } if data.len() >= 4 => data[..4].try_into().ok(),
             _ => None,
         }
     }
@@ -84,7 +96,9 @@ impl Error {
     /// The revert data of a failed call, when the error carries any.
     pub fn revert_data(&self) -> Option<&Bytes> {
         match self {
-            Self::Rpc { data: Some(data), .. } => Some(data),
+            Self::Rpc {
+                data: Some(data), ..
+            } => Some(data),
             _ => None,
         }
     }

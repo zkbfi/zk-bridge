@@ -13,11 +13,11 @@
 
 use crate::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN};
 use crate::error::{Error, Result};
+use crate::observation::{verify_fork_observation, Observation};
 use crate::types::{
     BeaconBlockHeader, BlobGasFields, BlsPublicKey, ExecutionPayloadHeader, LightClientHeader, LightClientStore,
     LightClientUpdate, NextSyncCommittee, SyncAggregate, SyncCommittee,
 };
-use crate::observation::{verify_fork_observation, Observation};
 use crate::update::{verify_light_client_fold_with_fork_versions, FoldStep, MAX_FOLD_UPDATES};
 use alloy_primitives::{Address, B256, U256};
 

@@ -13,12 +13,26 @@ use zk_bridge_prover::contracts::{LightClientContract, VaultContract};
 use zk_bridge_prover::rpc::parse_quantity;
 
 fn historical_row_count(bridge: &Bridge) -> usize {
-    let raw = bridge.chain_b.call(bridge.vault_b, &VaultContract::historicalLayoutsCall {}.abi_encode()).unwrap();
-    VaultContract::historicalLayoutsCall::abi_decode_returns(&raw).unwrap().len()
+    let raw = bridge
+        .chain_b
+        .call(
+            bridge.vault_b,
+            &VaultContract::historicalLayoutsCall {}.abi_encode(),
+        )
+        .unwrap();
+    VaultContract::historicalLayoutsCall::abi_decode_returns(&raw)
+        .unwrap()
+        .len()
 }
 
 fn head_slot(bridge: &Bridge) -> u64 {
-    let raw = bridge.chain_b.call(bridge.light_client_b, &LightClientContract::headCall {}.abi_encode()).unwrap();
+    let raw = bridge
+        .chain_b
+        .call(
+            bridge.light_client_b,
+            &LightClientContract::headCall {}.abi_encode(),
+        )
+        .unwrap();
     LightClientContract::headCall::abi_decode_returns(&raw).unwrap()
 }
 
@@ -31,7 +45,14 @@ fn historical_row_gas(bridge: &Bridge) -> Vec<u64> {
         .logs(bridge.vault_b, topic, 0, latest)
         .unwrap()
         .iter()
-        .map(|log| gas_used(&client.transaction_receipt(log.transaction_hash).unwrap().unwrap()))
+        .map(|log| {
+            gas_used(
+                &client
+                    .transaction_receipt(log.transaction_hash)
+                    .unwrap()
+                    .unwrap(),
+            )
+        })
         .collect()
 }
 
@@ -61,7 +82,11 @@ fn historical_path_pays_a_deposit_more_than_8192_slots_before_its_anchor() {
     chain.mine(2);
     run(&bridge, &["once"]).expect("once for the first deposit");
     assert_eq!(state_of(&bridge, early.nonce), "confirmed");
-    assert_eq!(historical_row_count(&bridge), 0, "the recent path adds no historical row");
+    assert_eq!(
+        historical_row_count(&bridge),
+        0,
+        "the recent path adds no historical row"
+    );
 
     // D1: made now and not yet read by the service (no `once` runs until D2 exists).
     let old = deposit_on(&bridge, Direction::AToB, amounts[1]);
@@ -72,30 +97,71 @@ fn historical_path_pays_a_deposit_more_than_8192_slots_before_its_anchor() {
     settle_in_epoch(chain, bridge.gate_a);
     let late = deposit_on(&bridge, Direction::AToB, amounts[2]);
     let late_block = parse_quantity(&late.receipt["blockNumber"]).unwrap();
-    assert!(late_block - old_block >= 2_048, "the two deposits lie {} blocks apart", late_block - old_block);
+    assert!(
+        late_block - old_block >= 2_048,
+        "the two deposits lie {} blocks apart",
+        late_block - old_block
+    );
     chain.mine(2);
 
     // D2 first, by hand: the head jumps past D1.
-    run(&bridge, &["withdraw", "--tx", &format!("{:#x}", late.transaction_hash), "--log-index", &late.log_index.to_string()]).expect("late deposit");
+    run(
+        &bridge,
+        &[
+            "withdraw",
+            "--tx",
+            &format!("{:#x}", late.transaction_hash),
+            "--log-index",
+            &late.log_index.to_string(),
+        ],
+    )
+    .expect("late deposit");
     assert!(claimed(&bridge.chain_b, bridge.vault_b, late.nonce));
-    assert!(!claimed(&bridge.chain_b, bridge.vault_b, old.nonce), "D1 is still unpaid");
+    assert!(
+        !claimed(&bridge.chain_b, bridge.vault_b, old.nonce),
+        "D1 is still unpaid"
+    );
     let old_slot = 1_024 + 4 * old_block + 2; // the development chain's deposit slot of the block
-    assert!(head_slot(&bridge) - old_slot > 8_192, "the head is {} slots past D1", head_slot(&bridge) - old_slot);
+    assert!(
+        head_slot(&bridge) - old_slot > 8_192,
+        "the head is {} slots past D1",
+        head_slot(&bridge) - old_slot
+    );
     assert_eq!(historical_row_count(&bridge), 0, "no historical row yet");
 
     // The service pays D1 on the historical path.
     run(&bridge, &["once"]).expect("once for the old deposit");
     assert_eq!(state_of(&bridge, old.nonce), "confirmed", "D1 is paid");
     assert!(claimed(&bridge.chain_b, bridge.vault_b, old.nonce));
-    assert_eq!(historical_row_count(&bridge), 1, "the historical path needed, and got, one validated layout row");
+    assert_eq!(
+        historical_row_count(&bridge),
+        1,
+        "the historical path needed, and got, one validated layout row"
+    );
     let total: u128 = amounts.iter().sum();
-    assert_eq!(balance(&bridge.chain_b, bridge.token_b, RECIPIENT), U256::from(total), "all three deposits paid, each once");
+    assert_eq!(
+        balance(&bridge.chain_b, bridge.token_b, RECIPIENT),
+        U256::from(total),
+        "all three deposits paid, each once"
+    );
 
     // Gas of the three withdrawals and of the historical row.
-    report_gas("withdrawal, recent path (first deposit)", withdrawal_gas(&bridge, Direction::AToB, early.nonce));
-    report_gas("withdrawal, recent path (after a head jump of more than 8192 slots)", withdrawal_gas(&bridge, Direction::AToB, late.nonce));
-    report_gas("withdrawal, historical path", withdrawal_gas(&bridge, Direction::AToB, old.nonce));
+    report_gas(
+        "withdrawal, recent path (first deposit)",
+        withdrawal_gas(&bridge, Direction::AToB, early.nonce),
+    );
+    report_gas(
+        "withdrawal, recent path (after a head jump of more than 8192 slots)",
+        withdrawal_gas(&bridge, Direction::AToB, late.nonce),
+    );
+    report_gas(
+        "withdrawal, historical path",
+        withdrawal_gas(&bridge, Direction::AToB, old.nonce),
+    );
     for gas in historical_row_gas(&bridge) {
-        report_gas("addHistoricalSummariesLayout (once per route, by anyone)", gas);
+        report_gas(
+            "addHistoricalSummariesLayout (once per route, by anyone)",
+            gas,
+        );
     }
 }

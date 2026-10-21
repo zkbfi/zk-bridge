@@ -17,9 +17,7 @@ use crate::layout::{
     CAPELLA_DENEB_STATE_LAYOUT, HISTORICAL_SUMMARIES_FIELD_INDEX, HISTORICAL_SUMMARIES_LIST_DEPTH,
     SLOTS_PER_HISTORICAL_ROOT,
 };
-use crate::ssz::{
-    branch_for_leaf, branch_for_leaf_with_limit, hash_pair, is_valid_exact_branch, merkleize, u64_chunk,
-};
+use crate::ssz::{branch_for_leaf, branch_for_leaf_with_limit, hash_pair, is_valid_exact_branch, merkleize, u64_chunk};
 use crate::ssz_state::ParsedState;
 use alloy_primitives::B256;
 use std::collections::BTreeMap;
@@ -75,11 +73,10 @@ pub fn historical_ancestry_branch(
     era_roots: &[B256],
 ) -> Result<Vec<B256>> {
     let era = slot / SLOTS_PER_HISTORICAL_ROOT;
-    let index = era
-        .checked_sub(capella_era)
-        .ok_or(Error::DepositBeforeCapella { deposit_era: era, capella_era })?;
+    let index = era.checked_sub(capella_era).ok_or(Error::DepositBeforeCapella { deposit_era: era, capella_era })?;
     let summaries = state.historical_summaries.len() as u64;
-    let Some(&(blocks, states)) = usize::try_from(index).ok().and_then(|position| state.historical_summaries.get(position))
+    let Some(&(blocks, states)) =
+        usize::try_from(index).ok().and_then(|position| state.historical_summaries.get(position))
     else {
         return Err(Error::HistoricalSummaryMissing { era, summaries });
     };
@@ -104,8 +101,8 @@ pub fn historical_ancestry_branch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ssz::mix_in_length;
     use crate::ssz::merkleize_with_limit;
+    use crate::ssz::mix_in_length;
     use crate::ssz_state::ForkData;
     use crate::types::SyncCommittee;
     use alloy_primitives::keccak256;
@@ -122,10 +119,8 @@ mod tests {
         let summary_roots: Vec<B256> = historical_summaries.iter().map(|(b, s)| hash_pair(b, s)).collect();
         let mut field_roots: Vec<B256> = (0..28u64).map(|field| keccak256(format!("field/{field}"))).collect();
         field_roots[5] = merkleize(&block_roots);
-        field_roots[27] = mix_in_length(
-            &merkleize_with_limit(&summary_roots, 1 << 24),
-            historical_summaries.len() as u64,
-        );
+        field_roots[27] =
+            mix_in_length(&merkleize_with_limit(&summary_roots, 1 << 24), historical_summaries.len() as u64);
         let committee = SyncCommittee { pubkeys: Vec::new(), aggregate_pubkey: Default::default() };
         ParsedState {
             field_roots,

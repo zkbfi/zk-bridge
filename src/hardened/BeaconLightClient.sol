@@ -199,7 +199,9 @@ contract BeaconLightClient is IBeaconLightClient {
             revert GenesisValidatorsRootMismatch(genesisValidatorsRoot, output.genesisValidatorsRoot);
         }
         uint64 currentHead = head;
-        if (output.previousHeadSlot != currentHead) revert PreviousHeadSlotMismatch(currentHead, output.previousHeadSlot);
+        if (output.previousHeadSlot != currentHead) {
+            revert PreviousHeadSlotMismatch(currentHead, output.previousHeadSlot);
+        }
         bytes32 currentHeaderRoot = headers[currentHead];
         if (output.previousHeaderRoot != currentHeaderRoot) {
             revert PreviousHeaderRootMismatch(currentHeaderRoot, output.previousHeaderRoot);

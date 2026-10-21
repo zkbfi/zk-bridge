@@ -42,21 +42,35 @@ pub struct HttpRpc {
 impl HttpRpc {
     /// A client with a 60 second timeout per request.
     pub fn new(url: &str) -> Self {
-        Self { url: url.to_string(), agent: build_agent(Duration::from_secs(60)) }
+        Self {
+            url: url.to_string(),
+            agent: build_agent(Duration::from_secs(60)),
+        }
     }
 }
 
 /// Reads the `error` object of a JSON-RPC answer.
 pub fn rpc_error_from(error: &Value) -> Error {
     let code = error["code"].as_i64().unwrap_or(0);
-    let message = error["message"].as_str().unwrap_or("no message").to_string();
-    let data = error["data"].as_str().and_then(|text| hex::decode(text).ok()).map(Bytes::from);
-    Error::Rpc { code, message, data }
+    let message = error["message"]
+        .as_str()
+        .unwrap_or("no message")
+        .to_string();
+    let data = error["data"]
+        .as_str()
+        .and_then(|text| hex::decode(text).ok())
+        .map(Bytes::from);
+    Error::Rpc {
+        code,
+        message,
+        data,
+    }
 }
 
 impl JsonRpc for HttpRpc {
     fn call(&self, method: &str, params: Value) -> Result<Value> {
-        let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string();
+        let body =
+            json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string();
         let mut response = self
             .agent
             .post(&self.url)
@@ -70,13 +84,18 @@ impl JsonRpc for HttpRpc {
             .map_err(|error| Error::Http(format!("{method}: reading the answer: {error}")))?;
         let answer: Value = match serde_json::from_str(&text) {
             Ok(answer) => answer,
-            Err(_) if status != 200 => return Err(Error::Http(format!("{method}: status {status}"))),
+            Err(_) if status != 200 => {
+                return Err(Error::Http(format!("{method}: status {status}")))
+            }
             Err(error) => return Err(Error::Malformed(format!("{method}: {error}"))),
         };
         if let Some(error) = answer.get("error").filter(|error| !error.is_null()) {
             return Err(rpc_error_from(error));
         }
-        answer.get("result").cloned().ok_or_else(|| Error::Malformed(format!("{method}: no result field")))
+        answer
+            .get("result")
+            .cloned()
+            .ok_or_else(|| Error::Malformed(format!("{method}: no result field")))
     }
 }
 
@@ -107,7 +126,10 @@ pub struct HttpClient {
 impl HttpClient {
     /// A client with a 120 second timeout per request. `base_url` has no trailing slash after the call.
     pub fn new(base_url: &str) -> Self {
-        Self { base_url: base_url.trim_end_matches('/').to_string(), agent: build_agent(Duration::from_secs(120)) }
+        Self {
+            base_url: base_url.trim_end_matches('/').to_string(),
+            agent: build_agent(Duration::from_secs(120)),
+        }
     }
 }
 
@@ -126,7 +148,9 @@ impl HttpGet for HttpClient {
             .with_config()
             .limit(MAX_BODY_BYTES)
             .read_to_vec()
-            .map_err(|error| Error::Http(format!("GET {path_and_query}: reading the body: {error}")))?;
+            .map_err(|error| {
+                Error::Http(format!("GET {path_and_query}: reading the body: {error}"))
+            })?;
         Ok(HttpResponse { status, body })
     }
 }
@@ -136,7 +160,9 @@ impl HttpGet for HttpClient {
 /// # Errors
 /// `Error::Malformed` when the text is not a hex quantity.
 pub fn parse_quantity(value: &Value) -> Result<u64> {
-    let text = value.as_str().ok_or_else(|| Error::Malformed(format!("expected a quantity, got {value}")))?;
+    let text = value
+        .as_str()
+        .ok_or_else(|| Error::Malformed(format!("expected a quantity, got {value}")))?;
     u64::from_str_radix(text.trim_start_matches("0x"), 16)
         .map_err(|error| Error::Malformed(format!("bad quantity {text}: {error}")))
 }
@@ -154,7 +180,9 @@ mod tests {
     /// Why it matters: "already claimed" is recognised by the first four bytes of that data.
     #[test]
     fn error_object_keeps_revert_data() {
-        let error = rpc_error_from(&json!({"code": 3, "message": "execution reverted", "data": "0x1234567800"}));
+        let error = rpc_error_from(
+            &json!({"code": 3, "message": "execution reverted", "data": "0x1234567800"}),
+        );
         assert_eq!(error.revert_selector(), Some([0x12, 0x34, 0x56, 0x78]));
     }
 

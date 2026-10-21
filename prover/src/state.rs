@@ -109,7 +109,12 @@ pub fn transition(state: DepositState, event: Event) -> Result<DepositState> {
         (S::Submitted, E::WithdrawalReverted) => Some(S::Proven),
         _ => None,
     };
-    next.ok_or_else(|| Error::Usage(format!("event {event:?} is not allowed in state {}", state.as_str())))
+    next.ok_or_else(|| {
+        Error::Usage(format!(
+            "event {event:?} is not allowed in state {}",
+            state.as_str()
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -124,13 +129,26 @@ mod tests {
     fn happy_path_visits_each_state_in_order() {
         let mut state = S::Seen;
         let mut seen = vec![state.as_str()];
-        for event in [E::BeaconNotReady, E::LightClientCovers, E::WithdrawalBuilt, E::WithdrawalSent, E::WithdrawalMined] {
+        for event in [
+            E::BeaconNotReady,
+            E::LightClientCovers,
+            E::WithdrawalBuilt,
+            E::WithdrawalSent,
+            E::WithdrawalMined,
+        ] {
             state = transition(state, event).unwrap();
             seen.push(state.as_str());
         }
         assert_eq!(
             seen,
-            ["seen", "awaiting_finality", "light_client_updated", "proven", "submitted", "confirmed"]
+            [
+                "seen",
+                "awaiting_finality",
+                "light_client_updated",
+                "proven",
+                "submitted",
+                "confirmed"
+            ]
         );
     }
 
@@ -138,8 +156,18 @@ mod tests {
     /// Why it matters: another relayer, or an earlier run of this service, may have paid the deposit.
     #[test]
     fn already_claimed_confirms_from_every_live_state() {
-        for state in [S::Seen, S::AwaitingFinality, S::LightClientUpdated, S::Proven, S::Submitted] {
-            assert_eq!(transition(state, E::AlreadyClaimed).unwrap(), S::Confirmed, "from {state:?}");
+        for state in [
+            S::Seen,
+            S::AwaitingFinality,
+            S::LightClientUpdated,
+            S::Proven,
+            S::Submitted,
+        ] {
+            assert_eq!(
+                transition(state, E::AlreadyClaimed).unwrap(),
+                S::Confirmed,
+                "from {state:?}"
+            );
         }
     }
 
@@ -147,19 +175,36 @@ mod tests {
     /// Why it matters: a confirmed deposit must never be sent twice, and an unbuilt one has nothing to send.
     #[test]
     fn terminal_states_and_skipped_steps_are_refused() {
-        for event in [E::BeaconNotReady, E::LightClientCovers, E::WithdrawalSent, E::AlreadyClaimed, E::Rejected] {
+        for event in [
+            E::BeaconNotReady,
+            E::LightClientCovers,
+            E::WithdrawalSent,
+            E::AlreadyClaimed,
+            E::Rejected,
+        ] {
             assert!(transition(S::Confirmed, event).is_err());
             assert!(transition(S::Failed, event).is_err());
         }
         assert!(transition(S::Seen, E::WithdrawalSent).is_err());
         assert!(transition(S::LightClientUpdated, E::WithdrawalSent).is_err());
-        assert_eq!(transition(S::Submitted, E::WithdrawalReverted).unwrap(), S::Proven);
+        assert_eq!(
+            transition(S::Submitted, E::WithdrawalReverted).unwrap(),
+            S::Proven
+        );
     }
 
     /// Claim: every state name parses back to itself.
     #[test]
     fn names_round_trip() {
-        for state in [S::Seen, S::AwaitingFinality, S::LightClientUpdated, S::Proven, S::Submitted, S::Confirmed, S::Failed] {
+        for state in [
+            S::Seen,
+            S::AwaitingFinality,
+            S::LightClientUpdated,
+            S::Proven,
+            S::Submitted,
+            S::Confirmed,
+            S::Failed,
+        ] {
             assert_eq!(DepositState::parse(state.as_str()).unwrap(), state);
         }
         assert!(DepositState::parse("nonsense").is_err());

@@ -70,17 +70,31 @@ pub enum Command {
 }
 
 /// Flag names (without dashes, lower case) that name a secret.
-const SECRET_FLAGS: [&str; 9] =
-    ["private-key", "privatekey", "private_key", "key", "secret", "mnemonic", "password", "seed", "keystore-password"];
+const SECRET_FLAGS: [&str; 9] = [
+    "private-key",
+    "privatekey",
+    "private_key",
+    "key",
+    "secret",
+    "mnemonic",
+    "password",
+    "seed",
+    "keystore-password",
+];
 
 fn looks_like_key(value: &str) -> bool {
     let digits = value.strip_prefix("0x").unwrap_or(value);
-    digits.len() == 64 && digits.chars().all(|character| character.is_ascii_hexdigit())
+    digits.len() == 64
+        && digits
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
 }
 
 fn is_environment_name(value: &str) -> bool {
     let mut characters = value.chars();
-    characters.next().is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+    characters
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
         && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
@@ -127,7 +141,9 @@ fn check_value(argument: &str, previous: Option<&str>) -> Result<()> {
 
 fn check_environment_name(value: &str) -> Result<()> {
     if looks_like_key(value) || !is_environment_name(value) {
-        return Err(refusal("--private-key-env takes the NAME of an environment variable, not a value"));
+        return Err(refusal(
+            "--private-key-env takes the NAME of an environment variable, not a value",
+        ));
     }
     Ok(())
 }
@@ -168,10 +184,9 @@ pub fn resolve_signer(
         }
         return Signer::from_environment(name, lookup);
     }
-    let keystore = config
-        .signer
-        .as_ref()
-        .ok_or_else(|| Error::Config("no [signer] section and no --private-key-env: the service has no key".into()))?;
+    let keystore = config.signer.as_ref().ok_or_else(|| {
+        Error::Config("no [signer] section and no --private-key-env: the service has no key".into())
+    })?;
     load_keystore(keystore)
 }
 
@@ -190,16 +205,28 @@ fn load_keystore(keystore: &KeystoreConfig) -> Result<Signer> {
     Signer::from_keystore(&keystore.keystore, &keystore.password_file)
 }
 
-fn build_service(config: &Config, cli: &Cli, lookup: &dyn Fn(&str) -> Option<String>) -> Result<Service> {
+fn build_service(
+    config: &Config,
+    cli: &Cli,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<Service> {
     let signer = resolve_signer(config, cli.private_key_env.as_deref(), lookup)?;
     let oracle = resolve_oracle(config, &signer)?;
     let routes = build_routes(config, &signer, &oracle)?;
     let store = Store::open(&config.database_path)?;
-    Ok(Service::new(store, Logger::standard(), ServiceSettings { max_attempts: config.max_attempts }, routes))
+    Ok(Service::new(
+        store,
+        Logger::standard(),
+        ServiceSettings {
+            max_attempts: config.max_attempts,
+        },
+        routes,
+    ))
 }
 
 fn parse_hash(text: &str) -> Result<B256> {
-    text.parse().map_err(|error| Error::Usage(format!("--tx: {error}")))
+    text.parse()
+        .map_err(|error| Error::Usage(format!("--tx: {error}")))
 }
 
 /// Runs the program and returns the process exit code. `arguments` includes the program name. Output goes to `out`.
@@ -229,16 +256,29 @@ pub fn run(
         Command::Withdraw { tx, log_index } => {
             let hash = parse_hash(tx)?;
             let nonce = build_service(&config, &cli, lookup)?.withdraw_one(hash, *log_index)?;
-            writeln!(out, "deposit {nonce:#x} processed; run `status` to see its state").map_err(|e| Error::Usage(e.to_string()))?;
+            writeln!(
+                out,
+                "deposit {nonce:#x} processed; run `status` to see its state"
+            )
+            .map_err(|e| Error::Usage(e.to_string()))?;
             Ok(0)
         }
-        Command::RouteHealth { json, margin_seconds, stale_epochs, own_light_client_warn_periods } => {
+        Command::RouteHealth {
+            json,
+            margin_seconds,
+            stale_epochs,
+            own_light_client_warn_periods,
+        } => {
             let settings = HealthSettings {
                 margin_seconds: *margin_seconds,
                 stale_epochs: *stale_epochs,
                 own_light_client_warn_periods: *own_light_client_warn_periods,
             };
-            let format = if *json { OutputFormat::Json } else { OutputFormat::Human };
+            let format = if *json {
+                OutputFormat::Json
+            } else {
+                OutputFormat::Human
+            };
             route_health::run(&config, settings, format, out)
         }
     }
@@ -255,7 +295,9 @@ pub fn execute(
 ) -> Result<()> {
     match run(arguments, lookup, out)? {
         0 => Ok(()),
-        code => Err(Error::Usage(format!("a route does not accept deposits (exit code {code}); see the output"))),
+        code => Err(Error::Usage(format!(
+            "a route does not accept deposits (exit code {code}); see the output"
+        ))),
     }
 }
 
@@ -305,15 +347,28 @@ mod tests {
             args(&["p", "once", "--key", "x"]),
             args(&["p", "once", &format!("0x{KEY}")]),
             args(&["p", "once", KEY]),
-            args(&["p", "--config", "c.toml", "once", "--config-secret", &format!("0x{KEY}")]),
+            args(&[
+                "p",
+                "--config",
+                "c.toml",
+                "once",
+                "--config-secret",
+                &format!("0x{KEY}"),
+            ]),
             args(&["p", "once", "--private-key-env", KEY]),
             args(&["p", "once", &format!("--private-key-env=0x{KEY}")]),
             args(&["p", "once", "--private-key-env", "not a name"]),
         ];
         for arguments in refused {
             let error = reject_secret_arguments(&arguments).unwrap_err();
-            assert!(matches!(error, Error::SecretHandling(_)), "{arguments:?} gave {error}");
-            assert!(!error.to_string().contains(KEY), "the error must not echo the key");
+            assert!(
+                matches!(error, Error::SecretHandling(_)),
+                "{arguments:?} gave {error}"
+            );
+            assert!(
+                !error.to_string().contains(KEY),
+                "the error must not echo the key"
+            );
         }
     }
 
@@ -324,13 +379,45 @@ mod tests {
         let tx = format!("0x{KEY}");
         for arguments in [
             args(&["p", "--config", "c.toml", "once"]),
-            args(&["p", "--config", "c.toml", "--private-key-env", "ANVIL_KEY", "once"]),
-            args(&["p", "--config", "c.toml", "--private-key-env=ANVIL_KEY", "once"]),
-            args(&["p", "--config", "c.toml", "withdraw", "--tx", &tx, "--log-index", "0"]),
-            args(&["p", "--config", "c.toml", "withdraw", &format!("--tx={tx}"), "--log-index", "0"]),
+            args(&[
+                "p",
+                "--config",
+                "c.toml",
+                "--private-key-env",
+                "ANVIL_KEY",
+                "once",
+            ]),
+            args(&[
+                "p",
+                "--config",
+                "c.toml",
+                "--private-key-env=ANVIL_KEY",
+                "once",
+            ]),
+            args(&[
+                "p",
+                "--config",
+                "c.toml",
+                "withdraw",
+                "--tx",
+                &tx,
+                "--log-index",
+                "0",
+            ]),
+            args(&[
+                "p",
+                "--config",
+                "c.toml",
+                "withdraw",
+                &format!("--tx={tx}"),
+                "--log-index",
+                "0",
+            ]),
         ] {
-            reject_secret_arguments(&arguments).unwrap_or_else(|error| panic!("{arguments:?}: {error}"));
-            Cli::try_parse_from(&arguments).unwrap_or_else(|error| panic!("{arguments:?}: {error}"));
+            reject_secret_arguments(&arguments)
+                .unwrap_or_else(|error| panic!("{arguments:?}: {error}"));
+            Cli::try_parse_from(&arguments)
+                .unwrap_or_else(|error| panic!("{arguments:?}: {error}"));
         }
     }
 
@@ -338,9 +425,22 @@ mod tests {
     #[test]
     fn subcommands_are_run_once_status_withdraw() {
         for name in ["run", "once", "status", "route-health"] {
-            assert!(Cli::try_parse_from(["p", "--config", "c", name]).is_ok(), "{name}");
+            assert!(
+                Cli::try_parse_from(["p", "--config", "c", name]).is_ok(),
+                "{name}"
+            );
         }
-        assert!(Cli::try_parse_from(["p", "--config", "c", "prove-withdrawal", "--tx", "0x1", "--log-index", "0"]).is_err());
+        assert!(Cli::try_parse_from([
+            "p",
+            "--config",
+            "c",
+            "prove-withdrawal",
+            "--tx",
+            "0x1",
+            "--log-index",
+            "0"
+        ])
+        .is_err());
     }
 
     /// Claim: `--private-key-env` is refused when any RPC URL is remote.
@@ -357,6 +457,9 @@ mod tests {
             .replace("https://rpc.example.net", "http://localhost:8546");
         let local = Config::load(&local_text, &|_: &str| None).unwrap();
         let signer = resolve_signer(&local, Some("ANVIL_KEY"), &lookup).unwrap();
-        assert_eq!(format!("{:#x}", signer.address()), "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266");
+        assert_eq!(
+            format!("{:#x}", signer.address()),
+            "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+        );
     }
 }

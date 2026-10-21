@@ -304,7 +304,9 @@ contract BridgeVault is ReentrancyGuard {
     event BlockHashLayoutValidated(uint256 indexed blockHashGindex, uint64 firstSlot, uint64 lastSlot);
 
     /// @notice Emitted when a validated `historical_summaries` position is added or its validated range grows.
-    event HistoricalSummariesLayoutValidated(uint256 indexed historicalSummariesGindex, uint64 firstSlot, uint64 lastSlot);
+    event HistoricalSummariesLayoutValidated(
+        uint256 indexed historicalSummariesGindex, uint64 firstSlot, uint64 lastSlot
+    );
 
     /// @notice Emitted when the fee authority sets the fee.
     event FeeChanged(uint16 feeBasisPoints, address feeRecipient);
@@ -377,7 +379,6 @@ contract BridgeVault is ReentrancyGuard {
     BodyLayout[] private _bodyLayouts;
     HistoricalLayout[] private _historicalLayouts;
 
-
     // The fee state follows the layout tables, so the earlier storage slots keep their place.
     /// @notice The only role: it sets the fee within the ceiling. Zero means the fee was removed for good.
     address public feeAuthority;
@@ -419,7 +420,10 @@ contract BridgeVault is ReentrancyGuard {
         if (vaultTerms.feeCeilingBasisPoints > MAX_FEE_CEILING_BASIS_POINTS) {
             revert FeeCeilingTooHigh(vaultTerms.feeCeilingBasisPoints, MAX_FEE_CEILING_BASIS_POINTS);
         }
-        if (vaultTerms.feeAuthority == address(0) && (vaultTerms.feeBasisPoints != 0 || vaultTerms.feeCeilingBasisPoints != 0)) {
+        if (
+            vaultTerms.feeAuthority == address(0)
+                && (vaultTerms.feeBasisPoints != 0 || vaultTerms.feeCeilingBasisPoints != 0)
+        ) {
             revert NullifiedFeeMustBeZero(vaultTerms.feeBasisPoints, vaultTerms.feeCeilingBasisPoints);
         }
         _requireFeeTerms(vaultTerms.feeBasisPoints, vaultTerms.feeRecipient, vaultTerms.feeCeilingBasisPoints);
@@ -452,11 +456,13 @@ contract BridgeVault is ReentrancyGuard {
     /// @param maxFeeBasisPoints The highest fee the caller accepts. A fee raised just before this call cannot exceed it.
     /// @param gateEvidence The evidence for the deposit gate. Empty when the gate needs none.
     /// @return nonce The unique deposit nonce.
-    function deposit(address token, address recipient, uint256 amount, uint16 maxFeeBasisPoints, bytes calldata gateEvidence)
-        external
-        nonReentrant
-        returns (bytes32 nonce)
-    {
+    function deposit(
+        address token,
+        address recipient,
+        uint256 amount,
+        uint16 maxFeeBasisPoints,
+        bytes calldata gateEvidence
+    ) external nonReentrant returns (bytes32 nonce) {
         depositGate.admit(gateEvidence);
         if (depositCutoffTimestamp != 0 && block.timestamp >= depositCutoffTimestamp) {
             revert DepositCutoffReached(depositCutoffTimestamp);
@@ -534,7 +540,9 @@ contract BridgeVault is ReentrancyGuard {
         Deposit memory found = _depositLog(receipt, proof.logIndex);
 
         if (found.targetChainId != localChainId) revert WrongTargetChain(localChainId, found.targetChainId);
-        if (found.destinationVault != address(this)) revert WrongDestinationVault(address(this), found.destinationVault);
+        if (found.destinationVault != address(this)) {
+            revert WrongDestinationVault(address(this), found.destinationVault);
+        }
         address localToken = localTokenOf[found.token];
         if (localToken == address(0)) revert UnsupportedRemoteToken(found.token);
         if (found.destinationToken != localToken) revert WrongDestinationToken(localToken, found.destinationToken);
@@ -558,7 +566,9 @@ contract BridgeVault is ReentrancyGuard {
         if (blockRootsGindex == 0 || SSZ.depthOf(blockRootsGindex) > MAX_BLOCK_ROOTS_DEPTH) {
             revert LayoutOutOfBounds(blockRootsGindex);
         }
-        if (!_isStateFieldPosition(blockRootsGindex, BLOCK_ROOTS_FIELD)) revert LayoutPositionInvalid(blockRootsGindex);
+        if (!_isStateFieldPosition(blockRootsGindex, BLOCK_ROOTS_FIELD)) {
+            revert LayoutPositionInvalid(blockRootsGindex);
+        }
         _requireStoredHeader(evidence.laterHeader);
         if (evidence.earlierSlotA == evidence.earlierSlotB) revert EvidenceSlotsEqual(evidence.earlierSlotA);
         _requireEarlierRoot(evidence.laterHeader, evidence.earlierSlotA, blockRootsGindex, evidence.branchA);
@@ -618,9 +628,10 @@ contract BridgeVault is ReentrancyGuard {
     /// cannot match. The position is then usable for the anchor's slot.
     /// @param historicalSummariesGindex The candidate generalized index of `BeaconState.historical_summaries`.
     /// @param evidence A stored anchor, a stored earlier slot in a completed era, and the branch between them.
-    function addHistoricalSummariesLayout(uint256 historicalSummariesGindex, HistoricalSummariesEvidence calldata evidence)
-        external
-    {
+    function addHistoricalSummariesLayout(
+        uint256 historicalSummariesGindex,
+        HistoricalSummariesEvidence calldata evidence
+    ) external {
         if (historicalSummariesGindex == 0 || SSZ.depthOf(historicalSummariesGindex) > MAX_BLOCK_ROOTS_DEPTH) {
             revert LayoutOutOfBounds(historicalSummariesGindex);
         }
@@ -649,7 +660,9 @@ contract BridgeVault is ReentrancyGuard {
             return;
         }
         _historicalLayouts.push(
-            HistoricalLayout({historicalSummariesGindex: historicalSummariesGindex, firstSlot: anchorSlot, lastSlot: anchorSlot})
+            HistoricalLayout({
+                historicalSummariesGindex: historicalSummariesGindex, firstSlot: anchorSlot, lastSlot: anchorSlot
+            })
         );
         emit HistoricalSummariesLayoutValidated(historicalSummariesGindex, anchorSlot, anchorSlot);
     }
@@ -770,7 +783,10 @@ contract BridgeVault is ReentrancyGuard {
     /// @dev Check 4.
     function _requireBlockHashBranch(WithdrawalProof calldata proof, bytes32 blockHash) private view {
         if (!SSZ.isValidBranch(
-                blockHash, proof.blockHashBranch, _blockHashGindexAt(proof.depositHeader.slot), proof.depositHeader.bodyRoot
+                blockHash,
+                proof.blockHashBranch,
+                _blockHashGindexAt(proof.depositHeader.slot),
+                proof.depositHeader.bodyRoot
             )) {
             revert BlockHashBranchInvalid();
         }
@@ -928,9 +944,7 @@ contract BridgeVault is ReentrancyGuard {
         uint256 net = received - fee;
         _checkDepositFlow(token, net);
         nonce = keccak256(abi.encode(block.chainid, address(this), depositCount++));
-        emit DepositInitiated(
-            token, msg.sender, recipient, net, nonce, remoteChainId, remoteVault, destinationToken
-        );
+        emit DepositInitiated(token, msg.sender, recipient, net, nonce, remoteChainId, remoteVault, destinationToken);
     }
 
     /// @dev Asks the flow limiter about a deposit of the net amount. With no limiter it costs one storage read.

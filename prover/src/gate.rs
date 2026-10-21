@@ -50,7 +50,10 @@ impl GateStatus {
     /// `Error::Usage` when the gate is sealed: every deposit reverts and no evidence helps.
     pub fn evidence_needed(&self) -> Result<bool> {
         if self.sealed {
-            return Err(Error::Usage("the deposit gate is sealed: a fork that the route does not support was proven".into()));
+            return Err(Error::Usage(
+                "the deposit gate is sealed: a fork that the route does not support was proven"
+                    .into(),
+            ));
         }
         Ok(self.enforcing && self.confirmed_epoch != Some(self.current_epoch))
     }
@@ -102,14 +105,17 @@ pub fn read_gate_status(client: &ChainClient, gate: Address) -> Result<GateStatu
         enforcing,
         sealed: client.view(gate, GateContract::isSealedCall {})?,
         confirmed_epoch: confirmed.exists.then_some(confirmed.epoch),
-        current_epoch: u64::try_from(current_epoch).map_err(|_| Error::Malformed("currentEpoch".into()))?,
+        current_epoch: u64::try_from(current_epoch)
+            .map_err(|_| Error::Malformed("currentEpoch".into()))?,
     })
 }
 
 /// The timestamp of the latest block.
 fn latest_timestamp(client: &ChainClient) -> Result<u64> {
     let number = client.latest_block_number()?;
-    let block = client.block(number)?.ok_or_else(|| Error::Malformed(format!("block {number} is unknown")))?;
+    let block = client
+        .block(number)?
+        .ok_or_else(|| Error::Malformed(format!("block {number} is unknown")))?;
     crate::rpc::parse_quantity(&block["timestamp"])
 }
 
@@ -118,10 +124,16 @@ fn latest_timestamp(client: &ChainClient) -> Result<u64> {
 ///
 /// # Errors
 /// `Error::Rpc` for a transport failure.
-pub fn beacon_root_at(client: &ChainClient, roots: Address, timestamp: u64) -> Result<Option<B256>> {
+pub fn beacon_root_at(
+    client: &ChainClient,
+    roots: Address,
+    timestamp: u64,
+) -> Result<Option<B256>> {
     let key = alloy_primitives::U256::from(timestamp).to_be_bytes::<32>();
     match client.eth_call(roots, &key, false) {
-        Ok(answer) if answer.len() == 32 && answer.iter().any(|byte| *byte != 0) => Ok(Some(B256::from_slice(&answer))),
+        Ok(answer) if answer.len() == 32 && answer.iter().any(|byte| *byte != 0) => {
+            Ok(Some(B256::from_slice(&answer)))
+        }
         Ok(_) => Ok(None),
         Err(Error::Rpc { .. }) => Ok(None),
         Err(other) => Err(other),
@@ -133,7 +145,11 @@ pub fn beacon_root_at(client: &ChainClient, roots: Address, timestamp: u64) -> R
 ///
 /// # Errors
 /// `Error::Usage` for a sealed gate. Any read error, and any error of the source.
-pub fn gate_evidence_for_deposit(client: &ChainClient, gate: Address, source: &dyn ForkEvidenceSource) -> Result<Vec<u8>> {
+pub fn gate_evidence_for_deposit(
+    client: &ChainClient,
+    gate: Address,
+    source: &dyn ForkEvidenceSource,
+) -> Result<Vec<u8>> {
     let status = read_gate_status(client, gate)?;
     if !status.evidence_needed()? {
         return Ok(Vec::new());
@@ -154,7 +170,12 @@ mod tests {
     use super::*;
 
     fn status(enforcing: bool, sealed: bool, confirmed: Option<u64>, current: u64) -> GateStatus {
-        GateStatus { enforcing, sealed, confirmed_epoch: confirmed, current_epoch: current }
+        GateStatus {
+            enforcing,
+            sealed,
+            confirmed_epoch: confirmed,
+            current_epoch: current,
+        }
     }
 
     /// Claim: evidence is needed only for an enforcing gate whose confirmed epoch is not the current epoch.
@@ -162,11 +183,33 @@ mod tests {
     /// Why it matters: empty evidence in a stale epoch reverts, and a needless proof wastes gas on every deposit.
     #[test]
     fn evidence_is_needed_only_when_the_confirmed_epoch_is_stale() {
-        assert_eq!(status(true, false, None, 5).evidence_needed(), Ok(true), "never confirmed");
-        assert_eq!(status(true, false, Some(4), 5).evidence_needed(), Ok(true), "confirmed in an older epoch");
-        assert_eq!(status(true, false, Some(5), 5).evidence_needed(), Ok(false), "confirmed this epoch");
-        assert_eq!(status(false, false, None, 5).evidence_needed(), Ok(false), "detection mode, no beacon roots yet");
-        assert!(status(true, true, Some(5), 5).evidence_needed().is_err(), "sealed");
-        assert!(status(false, true, None, 5).evidence_needed().is_err(), "sealed");
+        assert_eq!(
+            status(true, false, None, 5).evidence_needed(),
+            Ok(true),
+            "never confirmed"
+        );
+        assert_eq!(
+            status(true, false, Some(4), 5).evidence_needed(),
+            Ok(true),
+            "confirmed in an older epoch"
+        );
+        assert_eq!(
+            status(true, false, Some(5), 5).evidence_needed(),
+            Ok(false),
+            "confirmed this epoch"
+        );
+        assert_eq!(
+            status(false, false, None, 5).evidence_needed(),
+            Ok(false),
+            "detection mode, no beacon roots yet"
+        );
+        assert!(
+            status(true, true, Some(5), 5).evidence_needed().is_err(),
+            "sealed"
+        );
+        assert!(
+            status(false, true, None, 5).evidence_needed().is_err(),
+            "sealed"
+        );
     }
 }

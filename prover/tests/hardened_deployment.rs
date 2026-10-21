@@ -15,12 +15,14 @@ use std::sync::Mutex;
 /// Both tests in this file run forge against the same project. Run in parallel, the forge script stalled until its
 /// deadline (it passes in seconds alone), so the tests take turns. A poisoned lock still serialises.
 static FORGE_TURN: Mutex<()> = Mutex::new(());
-use zk_bridge_prover::contracts::{ForkRegistryContract, GateVersionsContract, LightClientContract, VaultContract};
+use zk_bridge_prover::contracts::{
+    ForkRegistryContract, GateVersionsContract, LightClientContract, VaultContract,
+};
 
 /// The fee switch of a vault with no fee authority: the fee is removed from the start.
-static NULLIFIED_FEE: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(|| {
-    json!({ "authority": format!("{:#x}", Address::ZERO), "recipient": format!("{:#x}", Address::ZERO), "basisPoints": "0", "ceilingBasisPoints": "0" })
-});
+static NULLIFIED_FEE: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(
+    || json!({ "authority": format!("{:#x}", Address::ZERO), "recipient": format!("{:#x}", Address::ZERO), "basisPoints": "0", "ceilingBasisPoints": "0" }),
+);
 
 /// The fee switch of a live vault: the deployer is the fee authority and the recipient, the fee is 25 basis points
 /// and the ceiling is 50.
@@ -38,7 +40,15 @@ fn script_config(
     nonces: (u64, u64),
     capella_era_on_a: &str,
 ) -> String {
-    script_config_with_observation(chain_a, chain_b, verifiers, tokens, nonces, capella_era_on_a, None)
+    script_config_with_observation(
+        chain_a,
+        chain_b,
+        verifiers,
+        tokens,
+        nonces,
+        capella_era_on_a,
+        None,
+    )
 }
 
 /// As [`script_config`]. With `observation_key`, chain B runs its gate in registry mode and the configuration gains the
@@ -74,7 +84,14 @@ fn script_config_with_observation(
         })
     };
     // The expected code hash of the verifier is read from the chain, the way an operator reads it with `cast codehash`.
-    let chain = |live: &TestChain, id: u64, verifier: Address, fee: serde_json::Value, nonce: u64, era: &str, label: &str, mode: &str| {
+    let chain = |live: &TestChain,
+                 id: u64,
+                 verifier: Address,
+                 fee: serde_json::Value,
+                 nonce: u64,
+                 era: &str,
+                 label: &str,
+                 mode: &str| {
         json!({
             "rpcAlias": live.anvil.url, "chainId": id.to_string(), "verifier": format!("{verifier:#x}"),
             "verifierCodeHash": format!("{:#x}", keccak256(live.code_of(verifier))),
@@ -83,8 +100,26 @@ fn script_config_with_observation(
         })
     };
     let mut chain_b_config = match observation_key {
-        Some(_) => chain(chain_b, 369, verifiers.1, NULLIFIED_FEE.clone(), nonces.1, "0", "genesis-of-chain-a", "DetectBeaconRootsAndRegistry"),
-        None => chain(chain_b, 369, verifiers.1, NULLIFIED_FEE.clone(), nonces.1, "0", "genesis-of-chain-a", "DetectBeaconRoots"),
+        Some(_) => chain(
+            chain_b,
+            369,
+            verifiers.1,
+            NULLIFIED_FEE.clone(),
+            nonces.1,
+            "0",
+            "genesis-of-chain-a",
+            "DetectBeaconRootsAndRegistry",
+        ),
+        None => chain(
+            chain_b,
+            369,
+            verifiers.1,
+            NULLIFIED_FEE.clone(),
+            nonces.1,
+            "0",
+            "genesis-of-chain-a",
+            "DetectBeaconRoots",
+        ),
     };
     if let Some(key) = observation_key {
         chain_b_config["observation"] = json!({
@@ -125,14 +160,34 @@ fn script_chains() -> ScriptChains {
     let chain_b = TestChain::start(369, Hardfork::Shanghai);
     install_beacon_roots(&chain_a);
     chain_b.send(Some(DEPLOYER), &[]);
-    let deploy_verifier = |chain: &TestChain| chain.deploy("OracleSP1Verifier", HashMap::from([("oracle", word_address(DEPLOYER))]));
+    let deploy_verifier = |chain: &TestChain| {
+        chain.deploy(
+            "OracleSP1Verifier",
+            HashMap::from([("oracle", word_address(DEPLOYER))]),
+        )
+    };
     let deploy_token = |chain: &TestChain, name: &str| {
-        chain.deploy("MockERC20", HashMap::from([("name", Argument::Text(name.into())), ("symbol", Argument::Text("TKN".into()))]))
+        chain.deploy(
+            "MockERC20",
+            HashMap::from([
+                ("name", Argument::Text(name.into())),
+                ("symbol", Argument::Text("TKN".into())),
+            ]),
+        )
     };
     let verifiers = (deploy_verifier(&chain_a), deploy_verifier(&chain_b));
-    let tokens = (deploy_token(&chain_a, "Token A"), deploy_token(&chain_b, "Token B"));
+    let tokens = (
+        deploy_token(&chain_a, "Token A"),
+        deploy_token(&chain_b, "Token B"),
+    );
     let nonces = (chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER));
-    ScriptChains { chain_a, chain_b, verifiers, tokens, nonces }
+    ScriptChains {
+        chain_a,
+        chain_b,
+        verifiers,
+        tokens,
+        nonces,
+    }
 }
 
 /// Runs the deploy script against the two chains. Returns the success flag and the combined output.
@@ -145,25 +200,52 @@ fn run_script(directory: &std::path::Path, config: &str) -> (bool, String) {
     // foundry.toml into the scratch directory with one more read permission (for the scratch directory) and the
     // broadcast directory moved there too (a broadcast run writes records, and they must not land in the repository),
     // and points `FOUNDRY_CONFIG` at the copy. The repository's file stays unchanged.
-    let relative = directory.strip_prefix(repository_root()).expect("the scratch directory lies below the repository");
-    let repository_config = std::fs::read_to_string(repository_root().join("foundry.toml")).unwrap();
-    assert!(repository_config.contains("fs_permissions = ["), "the repository config lists fs_permissions");
-    let extra_permission = format!("fs_permissions = [\n  {{ access = \"read\", path = \"./{}\" }},", relative.display());
+    let relative = directory
+        .strip_prefix(repository_root())
+        .expect("the scratch directory lies below the repository");
+    let repository_config =
+        std::fs::read_to_string(repository_root().join("foundry.toml")).unwrap();
+    assert!(
+        repository_config.contains("fs_permissions = ["),
+        "the repository config lists fs_permissions"
+    );
+    let extra_permission = format!(
+        "fs_permissions = [\n  {{ access = \"read\", path = \"./{}\" }},",
+        relative.display()
+    );
     let config_copy = directory.join("foundry.toml");
-    let broadcast = format!("[profile.default]\nbroadcast = \"./{}/broadcast\"", relative.display());
-    let adjusted = repository_config.replace("fs_permissions = [", &extra_permission).replace("[profile.default]", &broadcast);
+    let broadcast = format!(
+        "[profile.default]\nbroadcast = \"./{}/broadcast\"",
+        relative.display()
+    );
+    let adjusted = repository_config
+        .replace("fs_permissions = [", &extra_permission)
+        .replace("[profile.default]", &broadcast);
     std::fs::write(&config_copy, adjusted).unwrap();
     // `--slow` sends each transaction after the one before it is mined. Without it, forge sends the next transaction
     // at once, and the transaction pool of Anvil sometimes parks it as "queued" behind a nonce that is already mined.
     // Nothing then moves it, and the script waits until the deadline. Under load that happened in 17 of 72 runs;
     // with the flag, in none of 72.
     // The output goes to files, so the test can poll the process and stop it after a deadline instead of waiting forever.
-    let (stdout_path, stderr_path) = (directory.join("forge-script.out"), directory.join("forge-script.err"));
+    let (stdout_path, stderr_path) = (
+        directory.join("forge-script.out"),
+        directory.join("forge-script.err"),
+    );
     let mut child = Command::new("forge")
         .current_dir(repository_root())
         .env("BRIDGE_CONFIG", &config_path)
         .env("FOUNDRY_CONFIG", &config_copy)
-        .args(["script", "script/hardened/DeployBridge.s.sol", "--tc", "DeployBridge", "--broadcast", "--slow", "--unlocked", "--sender", &format!("{DEPLOYER:#x}")])
+        .args([
+            "script",
+            "script/hardened/DeployBridge.s.sol",
+            "--tc",
+            "DeployBridge",
+            "--broadcast",
+            "--slow",
+            "--unlocked",
+            "--sender",
+            &format!("{DEPLOYER:#x}"),
+        ])
         .arg("--out")
         .arg(base.join("out"))
         .arg("--cache-path")
@@ -186,7 +268,10 @@ fn run_script(directory: &std::path::Path, config: &str) -> (bool, String) {
     };
     let read = |path: &std::path::Path| std::fs::read_to_string(path).unwrap_or_default();
     let text = format!("{}{}", read(&stdout_path), read(&stderr_path));
-    assert!(status.is_some(), "forge script did not finish within 240 seconds:\n{text}");
+    assert!(
+        status.is_some(),
+        "forge script did not finish within 240 seconds:\n{text}"
+    );
     (status.is_some_and(|status| status.success()), text)
 }
 
@@ -203,67 +288,242 @@ fn run_script(directory: &std::path::Path, config: &str) -> (bool, String) {
 /// accepts no deposit, or worse, accepts one from a stranger's contract.
 #[test]
 fn r2_08_hardened_deploy_script_predicted_addresses_are_the_deployed_addresses() {
-    let _turn = FORGE_TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _turn = FORGE_TURN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if !tools_available() {
         return;
     }
-    let ScriptChains { chain_a, chain_b, verifiers, tokens, nonces } = script_chains();
+    let ScriptChains {
+        chain_a,
+        chain_b,
+        verifiers,
+        tokens,
+        nonces,
+    } = script_chains();
     let directory = scratch("r2-08-deploy-script");
 
     // Controls: a wrong nonce and a wrong Capella era both stop the script before it sends anything.
-    let (ok, output) = run_script(&directory, &script_config(&chain_a, &chain_b, verifiers, tokens, (nonces.0 + 1, nonces.1), "0"));
-    assert!(!ok && output.contains("DeployerNonceMismatch"), "a wrong nonce must stop the script:\n{output}");
-    let (ok, output) = run_script(&directory, &script_config(&chain_a, &chain_b, verifiers, tokens, nonces, "1"));
-    assert!(!ok && output.contains("CapellaEraMismatch"), "a wrong Capella era must stop the script:\n{output}");
-    assert_eq!((chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER)), nonces, "a refused run sends nothing");
+    let (ok, output) = run_script(
+        &directory,
+        &script_config(
+            &chain_a,
+            &chain_b,
+            verifiers,
+            tokens,
+            (nonces.0 + 1, nonces.1),
+            "0",
+        ),
+    );
+    assert!(
+        !ok && output.contains("DeployerNonceMismatch"),
+        "a wrong nonce must stop the script:\n{output}"
+    );
+    let (ok, output) = run_script(
+        &directory,
+        &script_config(&chain_a, &chain_b, verifiers, tokens, nonces, "1"),
+    );
+    assert!(
+        !ok && output.contains("CapellaEraMismatch"),
+        "a wrong Capella era must stop the script:\n{output}"
+    );
+    assert_eq!(
+        (chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER)),
+        nonces,
+        "a refused run sends nothing"
+    );
 
     // The honest run.
-    let (ok, output) = run_script(&directory, &script_config(&chain_a, &chain_b, verifiers, tokens, nonces, "0"));
+    let (ok, output) = run_script(
+        &directory,
+        &script_config(&chain_a, &chain_b, verifiers, tokens, nonces, "0"),
+    );
     assert!(ok, "the script must succeed:\n{output}");
-    assert_eq!((chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER)), (nonces.0 + 3, nonces.1 + 3), "three contracts on each chain");
+    assert_eq!(
+        (chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER)),
+        (nonces.0 + 3, nonces.1 + 3),
+        "three contracts on each chain"
+    );
 
     // This test's own prediction: light client at n, gate at n + 1, vault at n + 2.
-    let predicted = |nonce: u64| (DEPLOYER.create(nonce), DEPLOYER.create(nonce + 1), DEPLOYER.create(nonce + 2));
+    let predicted = |nonce: u64| {
+        (
+            DEPLOYER.create(nonce),
+            DEPLOYER.create(nonce + 1),
+            DEPLOYER.create(nonce + 2),
+        )
+    };
     let (light_client_a, gate_a, vault_a) = predicted(nonces.0);
     let (light_client_b, gate_b, vault_b) = predicted(nonces.1);
     let lowercase_output = output.to_lowercase();
-    for address in [light_client_a, gate_a, vault_a, light_client_b, gate_b, vault_b] {
-        assert!(lowercase_output.contains(&format!("{address:#x}")), "the script's plan names {address:#x}:\n{output}");
+    for address in [
+        light_client_a,
+        gate_a,
+        vault_a,
+        light_client_b,
+        gate_b,
+        vault_b,
+    ] {
+        assert!(
+            lowercase_output.contains(&format!("{address:#x}")),
+            "the script's plan names {address:#x}:\n{output}"
+        );
     }
-    for (chain, addresses) in [(&chain_a, [light_client_a, gate_a, vault_a]), (&chain_b, [light_client_b, gate_b, vault_b])] {
+    for (chain, addresses) in [
+        (&chain_a, [light_client_a, gate_a, vault_a]),
+        (&chain_b, [light_client_b, gate_b, vault_b]),
+    ] {
         for address in addresses {
-            assert!(chain.code_of(address).len() > 1000, "{address} holds a contract on chain {}", chain.anvil.chain_id);
+            assert!(
+                chain.code_of(address).len() > 1000,
+                "{address} holds a contract on chain {}",
+                chain.anvil.chain_id
+            );
         }
     }
 
     // Read the relationships from the chains (a name is a hypothesis).
-    let address_of = |chain: &TestChain, to: Address, data: Vec<u8>| Address::from_slice(&chain.call(to, &data).unwrap()[12..]);
-    assert_eq!(address_of(&chain_a, vault_a, VaultContract::remoteVaultCall {}.abi_encode()), vault_b, "vault A points at the predicted vault B");
-    assert_eq!(address_of(&chain_b, vault_b, VaultContract::remoteVaultCall {}.abi_encode()), vault_a, "vault B points at the predicted vault A");
-    assert_eq!(address_of(&chain_a, vault_a, VaultContract::lightClientCall {}.abi_encode()), light_client_a);
-    assert_eq!(address_of(&chain_b, vault_b, VaultContract::lightClientCall {}.abi_encode()), light_client_b);
-    assert_eq!(address_of(&chain_a, vault_a, VaultContract::depositGateCall {}.abi_encode()), gate_a);
-    assert_eq!(address_of(&chain_b, vault_b, VaultContract::depositGateCall {}.abi_encode()), gate_b);
+    let address_of = |chain: &TestChain, to: Address, data: Vec<u8>| {
+        Address::from_slice(&chain.call(to, &data).unwrap()[12..])
+    };
+    assert_eq!(
+        address_of(
+            &chain_a,
+            vault_a,
+            VaultContract::remoteVaultCall {}.abi_encode()
+        ),
+        vault_b,
+        "vault A points at the predicted vault B"
+    );
+    assert_eq!(
+        address_of(
+            &chain_b,
+            vault_b,
+            VaultContract::remoteVaultCall {}.abi_encode()
+        ),
+        vault_a,
+        "vault B points at the predicted vault A"
+    );
+    assert_eq!(
+        address_of(
+            &chain_a,
+            vault_a,
+            VaultContract::lightClientCall {}.abi_encode()
+        ),
+        light_client_a
+    );
+    assert_eq!(
+        address_of(
+            &chain_b,
+            vault_b,
+            VaultContract::lightClientCall {}.abi_encode()
+        ),
+        light_client_b
+    );
+    assert_eq!(
+        address_of(
+            &chain_a,
+            vault_a,
+            VaultContract::depositGateCall {}.abi_encode()
+        ),
+        gate_a
+    );
+    assert_eq!(
+        address_of(
+            &chain_b,
+            vault_b,
+            VaultContract::depositGateCall {}.abi_encode()
+        ),
+        gate_b
+    );
     // The fee switch of each vault is the configured one: live on chain 1, removed from the start on chain 369.
     let fee_of = |chain: &TestChain, vault: Address| {
-        let basis_points = VaultContract::feeBasisPointsCall::abi_decode_returns(&chain.call(vault, &VaultContract::feeBasisPointsCall {}.abi_encode()).unwrap()).unwrap();
-        let ceiling = VaultContract::feeCeilingBasisPointsCall::abi_decode_returns(&chain.call(vault, &VaultContract::feeCeilingBasisPointsCall {}.abi_encode()).unwrap()).unwrap();
-        let authority = address_of(chain, vault, VaultContract::feeAuthorityCall {}.abi_encode());
-        let recipient = address_of(chain, vault, VaultContract::feeRecipientCall {}.abi_encode());
+        let basis_points = VaultContract::feeBasisPointsCall::abi_decode_returns(
+            &chain
+                .call(vault, &VaultContract::feeBasisPointsCall {}.abi_encode())
+                .unwrap(),
+        )
+        .unwrap();
+        let ceiling = VaultContract::feeCeilingBasisPointsCall::abi_decode_returns(
+            &chain
+                .call(
+                    vault,
+                    &VaultContract::feeCeilingBasisPointsCall {}.abi_encode(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        let authority = address_of(
+            chain,
+            vault,
+            VaultContract::feeAuthorityCall {}.abi_encode(),
+        );
+        let recipient = address_of(
+            chain,
+            vault,
+            VaultContract::feeRecipientCall {}.abi_encode(),
+        );
         (authority, recipient, basis_points, ceiling)
     };
-    assert_eq!(fee_of(&chain_a, vault_a), (DEPLOYER, DEPLOYER, 25, 50), "vault A carries the configured fee switch");
-    assert_eq!(fee_of(&chain_b, vault_b), (Address::ZERO, Address::ZERO, 0, 0), "vault B has no fee authority");
-    assert_eq!(address_of(&chain_a, vault_a, VaultContract::remoteTokenOfCall { localToken: tokens.0 }.abi_encode()), tokens.1);
-    assert_eq!(address_of(&chain_b, vault_b, VaultContract::remoteTokenOfCall { localToken: tokens.1 }.abi_encode()), tokens.0);
+    assert_eq!(
+        fee_of(&chain_a, vault_a),
+        (DEPLOYER, DEPLOYER, 25, 50),
+        "vault A carries the configured fee switch"
+    );
+    assert_eq!(
+        fee_of(&chain_b, vault_b),
+        (Address::ZERO, Address::ZERO, 0, 0),
+        "vault B has no fee authority"
+    );
+    assert_eq!(
+        address_of(
+            &chain_a,
+            vault_a,
+            VaultContract::remoteTokenOfCall {
+                localToken: tokens.0
+            }
+            .abi_encode()
+        ),
+        tokens.1
+    );
+    assert_eq!(
+        address_of(
+            &chain_b,
+            vault_b,
+            VaultContract::remoteTokenOfCall {
+                localToken: tokens.1
+            }
+            .abi_encode()
+        ),
+        tokens.0
+    );
     // Each light client tracks the other chain: the genesis validators roots match the configuration.
     let genesis = |chain: &TestChain, light_client: Address| {
-        B256::from_slice(&chain.call(light_client, &LightClientContract::genesisValidatorsRootCall {}.abi_encode()).unwrap())
+        B256::from_slice(
+            &chain
+                .call(
+                    light_client,
+                    &LightClientContract::genesisValidatorsRootCall {}.abi_encode(),
+                )
+                .unwrap(),
+        )
     };
-    assert_eq!(genesis(&chain_a, light_client_a), keccak256("genesis-of-chain-b"));
-    assert_eq!(genesis(&chain_b, light_client_b), keccak256("genesis-of-chain-a"));
-    assert!(gate_enforcing(&chain_a, gate_a), "the gate of chain 1 enforces from the start");
-    assert!(!gate_enforcing(&chain_b, gate_b), "the gate of chain 369 detects");
+    assert_eq!(
+        genesis(&chain_a, light_client_a),
+        keccak256("genesis-of-chain-b")
+    );
+    assert_eq!(
+        genesis(&chain_b, light_client_b),
+        keccak256("genesis-of-chain-a")
+    );
+    assert!(
+        gate_enforcing(&chain_a, gate_a),
+        "the gate of chain 1 enforces from the start"
+    );
+    assert!(
+        !gate_enforcing(&chain_b, gate_b),
+        "the gate of chain 369 detects"
+    );
     // The forge cache of this test is large. Remove the scratch directory (a failed run keeps it for inspection).
     let _ = std::fs::remove_dir_all(&directory);
 }
@@ -278,11 +538,19 @@ fn r2_08_hardened_deploy_script_predicted_addresses_are_the_deployed_addresses()
 /// that accepts any proof) would pass that check, and every light client built on it would trust false headers.
 #[test]
 fn hardened_deploy_script_refuses_a_verifier_with_another_code_hash() {
-    let _turn = FORGE_TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _turn = FORGE_TURN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if !tools_available() {
         return;
     }
-    let ScriptChains { chain_a, chain_b, verifiers, tokens, nonces } = script_chains();
+    let ScriptChains {
+        chain_a,
+        chain_b,
+        verifiers,
+        tokens,
+        nonces,
+    } = script_chains();
     let directory = scratch("hardened-deploy-script-verifier-pin");
     let honest = script_config(&chain_a, &chain_b, verifiers, tokens, nonces, "0");
     let pinned_to = |chain_key: &str, hash: B256| {
@@ -294,12 +562,22 @@ fn hardened_deploy_script_refuses_a_verifier_with_another_code_hash() {
     let real_hash = keccak256(chain_a.code_of(verifiers.0));
     let made_up = keccak256(b"code of some other verifier");
     assert_ne!(real_hash, made_up);
-    assert_eq!(serde_json::from_str::<serde_json::Value>(&honest).unwrap()["chainA"]["verifierCodeHash"], json!(format!("{real_hash:#x}")));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&honest).unwrap()["chainA"]["verifierCodeHash"],
+        json!(format!("{real_hash:#x}"))
+    );
 
     for chain_key in ["chainA", "chainB"] {
         let (ok, output) = run_script(&directory, &pinned_to(chain_key, made_up));
-        assert!(!ok && output.contains("VerifierCodeHashMismatch"), "a wrong code hash on {chain_key} must stop the script:\n{output}");
-        assert_eq!((chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER)), nonces, "a refused run sends nothing");
+        assert!(
+            !ok && output.contains("VerifierCodeHashMismatch"),
+            "a wrong code hash on {chain_key} must stop the script:\n{output}"
+        );
+        assert_eq!(
+            (chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER)),
+            nonces,
+            "a refused run sends nothing"
+        );
     }
     let _ = std::fs::remove_dir_all(&directory);
 }
@@ -318,52 +596,166 @@ fn hardened_deploy_script_refuses_a_verifier_with_another_code_hash() {
 /// light client of the other chain would accept observations of the wrong beacon chain, or none at all.
 #[test]
 fn r2_08_hardened_deploy_script_registry_mode_predicted_addresses_are_the_deployed_addresses() {
-    let _turn = FORGE_TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _turn = FORGE_TURN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if !tools_available() {
         return;
     }
-    let ScriptChains { chain_a, chain_b, verifiers, tokens, nonces } = script_chains();
+    let ScriptChains {
+        chain_a,
+        chain_b,
+        verifiers,
+        tokens,
+        nonces,
+    } = script_chains();
     let directory = scratch("r2-08-deploy-script-registry");
-    let configuration = |key: B256| script_config_with_observation(&chain_a, &chain_b, verifiers, tokens, nonces, "0", Some(key));
+    let configuration = |key: B256| {
+        script_config_with_observation(
+            &chain_a,
+            &chain_b,
+            verifiers,
+            tokens,
+            nonces,
+            "0",
+            Some(key),
+        )
+    };
 
     // Control: the observation key may not equal the light client key.
-    let (ok, output) = run_script(&directory, &configuration(keccak256(b"light-client-program")));
-    assert!(!ok && output.contains("ObservationMismatch"), "equal keys must stop the script:\n{output}");
-    assert_eq!((chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER)), nonces, "a refused run sends nothing");
+    let (ok, output) = run_script(
+        &directory,
+        &configuration(keccak256(b"light-client-program")),
+    );
+    assert!(
+        !ok && output.contains("ObservationMismatch"),
+        "equal keys must stop the script:\n{output}"
+    );
+    assert_eq!(
+        (chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER)),
+        nonces,
+        "a refused run sends nothing"
+    );
 
     // The honest run.
     let (ok, output) = run_script(&directory, &configuration(observation_program_vkey()));
     assert!(ok, "the script must succeed:\n{output}");
-    assert_eq!((chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER)), (nonces.0 + 3, nonces.1 + 5), "three contracts on chain A, five on chain B");
+    assert_eq!(
+        (chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER)),
+        (nonces.0 + 3, nonces.1 + 5),
+        "three contracts on chain A, five on chain B"
+    );
 
     // This test's own prediction, from the deployer and the nonces.
     let n = nonces.1;
-    let (light_client, own_light_client, registry, gate, vault) =
-        (DEPLOYER.create(n), DEPLOYER.create(n + 1), DEPLOYER.create(n + 2), DEPLOYER.create(n + 3), DEPLOYER.create(n + 4));
+    let (light_client, own_light_client, registry, gate, vault) = (
+        DEPLOYER.create(n),
+        DEPLOYER.create(n + 1),
+        DEPLOYER.create(n + 2),
+        DEPLOYER.create(n + 3),
+        DEPLOYER.create(n + 4),
+    );
     let lowercase_output = output.to_lowercase();
     for address in [light_client, own_light_client, registry, gate, vault] {
-        assert!(lowercase_output.contains(&format!("{address:#x}")), "the script's plan names {address:#x}:\n{output}");
-        assert!(chain_b.code_of(address).len() > 1000, "{address} holds a contract on chain 369");
+        assert!(
+            lowercase_output.contains(&format!("{address:#x}")),
+            "the script's plan names {address:#x}:\n{output}"
+        );
+        assert!(
+            chain_b.code_of(address).len() > 1000,
+            "{address} holds a contract on chain 369"
+        );
     }
 
     // Read the relationships from the chain (a name is a hypothesis).
-    let address_of = |to: Address, data: Vec<u8>| Address::from_slice(&chain_b.call(to, &data).unwrap()[12..]);
-    let genesis = |light_client: Address| B256::from_slice(&chain_b.call(light_client, &LightClientContract::genesisValidatorsRootCall {}.abi_encode()).unwrap());
-    assert_eq!(address_of(vault, VaultContract::depositGateCall {}.abi_encode()), gate);
-    assert_eq!(address_of(vault, VaultContract::lightClientCall {}.abi_encode()), light_client);
-    assert_eq!(address_of(gate, GateVersionsContract::forkRegistryCall {}.abi_encode()), registry, "the gate names the registry");
-    assert_eq!(chain_b.call(gate, &GateVersionsContract::modeCall {}.abi_encode()).unwrap().last(), Some(&2), "mode 2");
-    assert_eq!(address_of(registry, ForkRegistryContract::lightClientCall {}.abi_encode()), own_light_client, "the registry reads the own-chain light client");
+    let address_of =
+        |to: Address, data: Vec<u8>| Address::from_slice(&chain_b.call(to, &data).unwrap()[12..]);
+    let genesis = |light_client: Address| {
+        B256::from_slice(
+            &chain_b
+                .call(
+                    light_client,
+                    &LightClientContract::genesisValidatorsRootCall {}.abi_encode(),
+                )
+                .unwrap(),
+        )
+    };
+    assert_eq!(
+        address_of(vault, VaultContract::depositGateCall {}.abi_encode()),
+        gate
+    );
+    assert_eq!(
+        address_of(vault, VaultContract::lightClientCall {}.abi_encode()),
+        light_client
+    );
+    assert_eq!(
+        address_of(gate, GateVersionsContract::forkRegistryCall {}.abi_encode()),
+        registry,
+        "the gate names the registry"
+    );
+    assert_eq!(
+        chain_b
+            .call(gate, &GateVersionsContract::modeCall {}.abi_encode())
+            .unwrap()
+            .last(),
+        Some(&2),
+        "mode 2"
+    );
+    assert_eq!(
+        address_of(
+            registry,
+            ForkRegistryContract::lightClientCall {}.abi_encode()
+        ),
+        own_light_client,
+        "the registry reads the own-chain light client"
+    );
     assert_ne!(own_light_client, light_client);
-    assert_eq!(genesis(light_client), keccak256("genesis-of-chain-a"), "the light client at n follows chain A");
-    assert_eq!(genesis(own_light_client), keccak256("genesis-of-chain-b"), "the own-chain light client follows chain B");
-    let head = |light_client: Address| chain_b.call(light_client, &LightClientContract::headCall {}.abi_encode()).unwrap();
-    assert_eq!(head(own_light_client).last(), Some(&100), "the own-chain light client starts at the configured checkpoint slot");
-    let verifier_of_registry = Address::from_slice(&chain_b.call(registry, &alloy_primitives::keccak256("verifier()")[..4]).unwrap()[12..]);
-    assert_eq!(verifier_of_registry, verifiers.1, "the registry uses the verifier of the chain");
-    let key_of_registry = B256::from_slice(&chain_b.call(registry, &alloy_primitives::keccak256("observationProgramVKey()")[..4]).unwrap());
-    assert_eq!(key_of_registry, observation_program_vkey(), "the registry holds the observation key of the configuration");
-    assert!(!gate_enforcing(&chain_b, gate), "the gate of chain 369 detects");
+    assert_eq!(
+        genesis(light_client),
+        keccak256("genesis-of-chain-a"),
+        "the light client at n follows chain A"
+    );
+    assert_eq!(
+        genesis(own_light_client),
+        keccak256("genesis-of-chain-b"),
+        "the own-chain light client follows chain B"
+    );
+    let head = |light_client: Address| {
+        chain_b
+            .call(light_client, &LightClientContract::headCall {}.abi_encode())
+            .unwrap()
+    };
+    assert_eq!(
+        head(own_light_client).last(),
+        Some(&100),
+        "the own-chain light client starts at the configured checkpoint slot"
+    );
+    let verifier_of_registry = Address::from_slice(
+        &chain_b
+            .call(registry, &alloy_primitives::keccak256("verifier()")[..4])
+            .unwrap()[12..],
+    );
+    assert_eq!(
+        verifier_of_registry, verifiers.1,
+        "the registry uses the verifier of the chain"
+    );
+    let key_of_registry = B256::from_slice(
+        &chain_b
+            .call(
+                registry,
+                &alloy_primitives::keccak256("observationProgramVKey()")[..4],
+            )
+            .unwrap(),
+    );
+    assert_eq!(
+        key_of_registry,
+        observation_program_vkey(),
+        "the registry holds the observation key of the configuration"
+    );
+    assert!(
+        !gate_enforcing(&chain_b, gate),
+        "the gate of chain 369 detects"
+    );
     let _ = std::fs::remove_dir_all(&directory);
 }
 
@@ -399,7 +791,9 @@ fn count_opcode(code: &[u8], opcode: u8) -> usize {
 /// uses `MCOPY` deploys and then reverts on every call, or fails to deploy, and nothing in the source shows it.
 #[test]
 fn r2_10_hardened_mcopy_bytecode_fails_on_shanghai_and_the_hardened_build_runs() {
-    let _turn = FORGE_TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _turn = FORGE_TURN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if !tools_available() {
         return;
     }
@@ -418,17 +812,30 @@ fn r2_10_hardened_mcopy_bytecode_fails_on_shanghai_and_the_hardened_build_runs()
         chain.set_code(probe, &runtime);
     }
     assert!(cancun.call(probe, &[]).is_ok(), "MCOPY runs on Cancun");
-    assert!(shanghai.call(probe, &[]).is_err(), "MCOPY does not run on Shanghai");
+    assert!(
+        shanghai.call(probe, &[]).is_err(),
+        "MCOPY does not run on Shanghai"
+    );
 
     // Creation code that runs MCOPY in its constructor, then returns one STOP byte as the runtime code.
     let creation = hex::decode("6000600060005e600060005360016000f3").unwrap();
     let deployed = cancun.send(None, &creation);
-    assert!(deployed["contractAddress"].is_string(), "the constructor with MCOPY deploys on Cancun");
+    assert!(
+        deployed["contractAddress"].is_string(),
+        "the constructor with MCOPY deploys on Cancun"
+    );
     let failed = shanghai.send_allowing_failure(None, &creation);
-    assert_eq!(failed["status"], "0x0", "the constructor with MCOPY fails on Shanghai");
+    assert_eq!(
+        failed["status"], "0x0",
+        "the constructor with MCOPY fails on Shanghai"
+    );
 
     // The hardened build on chain 369.
-    for (name, address) in [("light client", bridge.light_client_b), ("vault", bridge.vault_b), ("gate", bridge.gate_b)] {
+    for (name, address) in [
+        ("light client", bridge.light_client_b),
+        ("vault", bridge.vault_b),
+        ("gate", bridge.gate_b),
+    ] {
         let code = shanghai.code_of(address);
         assert!(code.len() > 1000, "{name} has code");
         for (opcode, label) in [(MCOPY, "MCOPY"), (TSTORE, "TSTORE"), (TLOAD, "TLOAD")] {
@@ -436,5 +843,8 @@ fn r2_10_hardened_mcopy_bytecode_fails_on_shanghai_and_the_hardened_build_runs()
         }
     }
     let made = deposit_on(&bridge, Direction::BToA, ONE_TOKEN);
-    assert_eq!(made.receipt["status"], "0x1", "the hardened vault runs on Shanghai");
+    assert_eq!(
+        made.receipt["status"], "0x1",
+        "the hardened vault runs on Shanghai"
+    );
 }

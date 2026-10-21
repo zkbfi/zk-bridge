@@ -18,7 +18,14 @@ use std::str::FromStr;
 pub const ENVIRONMENT_PREFIX: &str = "ZK_BRIDGE_PROVER_";
 
 /// Key names that may never appear in the file.
-const FORBIDDEN_KEYS: [&str; 6] = ["private_key", "privatekey", "mnemonic", "password", "secret", "seed"];
+const FORBIDDEN_KEYS: [&str; 6] = [
+    "private_key",
+    "privatekey",
+    "mnemonic",
+    "password",
+    "secret",
+    "seed",
+];
 
 /// What an override sets.
 #[derive(Clone, Copy)]
@@ -239,7 +246,10 @@ impl ChainConfig {
         match self.beacon.chain.as_str() {
             "pulsechain" => Ok(ChainKind::Pulsechain),
             "ethereum" => Ok(ChainKind::Ethereum),
-            other => Err(Error::Config(format!("{}.beacon.chain: unknown chain {other}", self.name))),
+            other => Err(Error::Config(format!(
+                "{}.beacon.chain: unknown chain {other}",
+                self.name
+            ))),
         }
     }
 }
@@ -247,12 +257,14 @@ impl ChainConfig {
 impl ProverConfig {
     /// The program verification key.
     pub fn program_vkey_value(&self) -> Result<B256> {
-        B256::from_str(&self.program_vkey).map_err(|error| Error::Config(format!("prover.program_vkey: {error}")))
+        B256::from_str(&self.program_vkey)
+            .map_err(|error| Error::Config(format!("prover.program_vkey: {error}")))
     }
 }
 
 fn parse_address(text: &str, key: &str) -> Result<Address> {
-    let address = Address::from_str(text).map_err(|error| Error::Config(format!("{key}: {error}")))?;
+    let address =
+        Address::from_str(text).map_err(|error| Error::Config(format!("{key}: {error}")))?;
     if address == Address::ZERO {
         return Err(Error::Config(format!("{key}: the zero address")));
     }
@@ -263,14 +275,20 @@ fn parse_address(text: &str, key: &str) -> Result<Address> {
 pub fn is_loopback_url(url: &str) -> bool {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     let authority = rest.split(['/', '?']).next().unwrap_or("");
-    let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
     let host = match host.strip_prefix('[') {
         Some(inner) => inner.split(']').next().unwrap_or(""),
         None => host.split(':').next().unwrap_or(""),
     };
     host == "localhost"
-        || host.parse::<std::net::Ipv4Addr>().is_ok_and(|address| address.is_loopback())
-        || host.parse::<std::net::Ipv6Addr>().is_ok_and(|address| address.is_loopback())
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|address| address.is_loopback())
+        || host
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 fn refuse_secret_keys(value: &toml::Value, path: &str) -> Result<()> {
@@ -312,15 +330,22 @@ impl Config {
     /// # Errors
     /// `Error::Config` for a syntax or value problem. `Error::SecretHandling` for a secret in the file.
     pub fn load(text: &str, lookup: &dyn Fn(&str) -> Option<String>) -> Result<Self> {
-        let mut table: toml::Table = text.parse().map_err(|error| Error::Config(format!("not valid TOML: {error}")))?;
+        let mut table: toml::Table = text
+            .parse()
+            .map_err(|error| Error::Config(format!("not valid TOML: {error}")))?;
         refuse_secret_keys(&toml::Value::Table(table.clone()), "")?;
         for (path, kind) in OVERRIDES {
-            let name = format!("{ENVIRONMENT_PREFIX}{}", path.to_ascii_uppercase().replace('.', "_"));
+            let name = format!(
+                "{ENVIRONMENT_PREFIX}{}",
+                path.to_ascii_uppercase().replace('.', "_")
+            );
             let Some(raw) = lookup(&name) else { continue };
             let value = match kind {
                 Kind::Text => toml::Value::String(raw),
                 Kind::Integer => toml::Value::Integer(
-                    raw.trim().parse().map_err(|_| Error::Config(format!("{name}: expected an integer")))?,
+                    raw.trim()
+                        .parse()
+                        .map_err(|_| Error::Config(format!("{name}: expected an integer")))?,
                 ),
             };
             set_path(&mut table, path, value)?;
@@ -333,7 +358,10 @@ impl Config {
     }
 
     /// Reads a file and loads it. See [`Config::load`].
-    pub fn load_file(path: &std::path::Path, lookup: &dyn Fn(&str) -> Option<String>) -> Result<Self> {
+    pub fn load_file(
+        path: &std::path::Path,
+        lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .map_err(|error| Error::Config(format!("cannot read {}: {error}", path.display())))?;
         Self::load(&text, lookup)
@@ -345,7 +373,9 @@ impl Config {
     /// `Error::Config` naming the key.
     pub fn validate(&self) -> Result<()> {
         if self.poll_interval_seconds == 0 {
-            return Err(Error::Config("poll_interval_seconds must be at least 1".into()));
+            return Err(Error::Config(
+                "poll_interval_seconds must be at least 1".into(),
+            ));
         }
         if self.max_attempts == 0 {
             return Err(Error::Config("max_attempts must be at least 1".into()));
@@ -360,7 +390,10 @@ impl Config {
             return Err(Error::Config("chain_id must not be zero".into()));
         }
         if self.chain_a.chain_id == self.chain_b.chain_id {
-            return Err(Error::Config(format!("both chains have chain_id {}", self.chain_a.chain_id)));
+            return Err(Error::Config(format!(
+                "both chains have chain_id {}",
+                self.chain_a.chain_id
+            )));
         }
         if self.chain_a.name == self.chain_b.name {
             return Err(Error::Config("the two chains need different names".into()));
@@ -370,7 +403,9 @@ impl Config {
             return Err(Error::Config("prover.program_vkey is zero".into()));
         }
         if self.prover.backend == ProverBackend::Sp1 && self.prover.sp1_elf_path.is_none() {
-            return Err(Error::Config("prover.sp1_elf_path is required for the sp1 backend".into()));
+            return Err(Error::Config(
+                "prover.sp1_elf_path is required for the sp1 backend".into(),
+            ));
         }
         for chain in [&self.chain_a, &self.chain_b] {
             Self::validate_chain(chain)?;
@@ -381,30 +416,45 @@ impl Config {
     fn validate_chain(chain: &ChainConfig) -> Result<()> {
         let name = &chain.name;
         if !(chain.rpc_url.starts_with("http://") || chain.rpc_url.starts_with("https://")) {
-            return Err(Error::Config(format!("{name}.rpc_url must start with http:// or https://")));
+            return Err(Error::Config(format!(
+                "{name}.rpc_url must start with http:// or https://"
+            )));
         }
         let vault = chain.vault_address()?;
         let light_client = chain.light_client_address()?;
         if vault == light_client {
-            return Err(Error::Config(format!("{name}: vault and light_client are the same address")));
+            return Err(Error::Config(format!(
+                "{name}: vault and light_client are the same address"
+            )));
         }
-        if chain.own_light_client_address()?.is_some_and(|own| own == vault || own == light_client) {
-            return Err(Error::Config(format!("{name}: own_light_client is the same address as the vault or the light_client")));
+        if chain
+            .own_light_client_address()?
+            .is_some_and(|own| own == vault || own == light_client)
+        {
+            return Err(Error::Config(format!(
+                "{name}: own_light_client is the same address as the vault or the light_client"
+            )));
         }
         chain.chain_kind()?;
         match chain.beacon.kind {
             BeaconKind::Http => {
                 let url = chain.beacon.url.as_deref().unwrap_or("");
                 if !(url.starts_with("http://") || url.starts_with("https://")) {
-                    return Err(Error::Config(format!("{name}.beacon.url is required for kind http")));
+                    return Err(Error::Config(format!(
+                        "{name}.beacon.url is required for kind http"
+                    )));
                 }
             }
             BeaconKind::Dev => {
                 if chain.beacon.finality_depth.is_none() {
-                    return Err(Error::Config(format!("{name}.beacon.finality_depth is required for kind dev")));
+                    return Err(Error::Config(format!(
+                        "{name}.beacon.finality_depth is required for kind dev"
+                    )));
                 }
                 if !is_loopback_url(&chain.rpc_url) {
-                    return Err(Error::Config(format!("{name}: the dev beacon source works only on a local chain")));
+                    return Err(Error::Config(format!(
+                        "{name}: the dev beacon source works only on a local chain"
+                    )));
                 }
             }
         }
@@ -503,17 +553,30 @@ mod tests {
         assert_eq!(config.chain_b.rpc_url, "http://127.0.0.1:8546");
         assert_eq!(config.poll_interval_seconds, 3);
         assert_eq!(config.chain_a.beacon.finality_depth, Some(4));
-        let bad = |name: &str| (name == "ZK_BRIDGE_PROVER_POLL_INTERVAL_SECONDS").then(|| "soon".to_string());
-        assert!(Config::load(SAMPLE, &bad).unwrap_err().to_string().contains("expected an integer"));
+        let bad = |name: &str| {
+            (name == "ZK_BRIDGE_PROVER_POLL_INTERVAL_SECONDS").then(|| "soon".to_string())
+        };
+        assert!(Config::load(SAMPLE, &bad)
+            .unwrap_err()
+            .to_string()
+            .contains("expected an integer"));
     }
 
     /// Claim: a secret in the file is refused, at any depth, whatever the letter case.
     /// Why it matters: a configuration file is often committed or copied. It must never hold a key.
     #[test]
     fn secrets_in_the_file_are_refused() {
-        for line in ["private_key = \"0xabc\"", "Mnemonic = \"a b c\"", "[signer.extra]\npassword = \"x\""] {
+        for line in [
+            "private_key = \"0xabc\"",
+            "Mnemonic = \"a b c\"",
+            "[signer.extra]\npassword = \"x\"",
+        ] {
             let text = SAMPLE.replace("[prover]", &format!("{line}\n[prover]"));
-            let text = if line.starts_with('[') { format!("{SAMPLE}\n{line}") } else { text };
+            let text = if line.starts_with('[') {
+                format!("{SAMPLE}\n{line}")
+            } else {
+                text
+            };
             let error = Config::load(&text, &no_environment).unwrap_err();
             assert!(matches!(error, Error::SecretHandling(_)), "{line}: {error}");
         }
@@ -524,19 +587,50 @@ mod tests {
     #[test]
     fn invalid_values_are_refused() {
         let cases = [
-            ("chain_id = 369", "chain_id = 1", "both chains have chain_id"),
-            ("vault = \"0x3333333333333333333333333333333333333333\"", "vault = \"0x0000000000000000000000000000000000000000\"", "zero address"),
-            ("url = \"https://beacon.example.net\"", "", "beacon.url is required"),
-            ("light_client = \"0x4444444444444444444444444444444444444444\"", "light_client = \"0x3333333333333333333333333333333333333333\"", "same address"),
-            ("backend = \"oracle\"", "backend = \"oracle\"\nunknown_key = 1", "unknown field"),
+            (
+                "chain_id = 369",
+                "chain_id = 1",
+                "both chains have chain_id",
+            ),
+            (
+                "vault = \"0x3333333333333333333333333333333333333333\"",
+                "vault = \"0x0000000000000000000000000000000000000000\"",
+                "zero address",
+            ),
+            (
+                "url = \"https://beacon.example.net\"",
+                "",
+                "beacon.url is required",
+            ),
+            (
+                "light_client = \"0x4444444444444444444444444444444444444444\"",
+                "light_client = \"0x3333333333333333333333333333333333333333\"",
+                "same address",
+            ),
+            (
+                "backend = \"oracle\"",
+                "backend = \"oracle\"\nunknown_key = 1",
+                "unknown field",
+            ),
         ];
         for (from, to, expected) in cases {
             let text = SAMPLE.replace(from, to);
-            let error = Config::load(&text, &no_environment).unwrap_err().to_string();
-            assert!(error.contains(expected), "expected `{expected}` in `{error}`");
+            let error = Config::load(&text, &no_environment)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(expected),
+                "expected `{expected}` in `{error}`"
+            );
         }
-        let dev = SAMPLE.replace("kind = \"http\"\nurl = \"https://beacon.example.net\"", "kind = \"dev\"\nfinality_depth = 2");
-        assert!(Config::load(&dev, &no_environment).unwrap_err().to_string().contains("only on a local chain"));
+        let dev = SAMPLE.replace(
+            "kind = \"http\"\nurl = \"https://beacon.example.net\"",
+            "kind = \"dev\"\nfinality_depth = 2",
+        );
+        assert!(Config::load(&dev, &no_environment)
+            .unwrap_err()
+            .to_string()
+            .contains("only on a local chain"));
     }
 
     /// Claim: the own-chain light client is optional, parses when set, and may not repeat the vault or the light
@@ -551,28 +645,61 @@ mod tests {
             "light_client = \"0x4444444444444444444444444444444444444444\"\nown_light_client = \"0x5555555555555555555555555555555555555555\"",
         );
         let config = Config::load(&with_own, &no_environment).unwrap();
-        assert_eq!(config.chain_b.own_light_client_address().unwrap(), Some(Address::repeat_byte(0x55)));
+        assert_eq!(
+            config.chain_b.own_light_client_address().unwrap(),
+            Some(Address::repeat_byte(0x55))
+        );
         assert_eq!(config.chain_a.own_light_client_address().unwrap(), None);
-        let lookup = |name: &str| (name == "ZK_BRIDGE_PROVER_CHAIN_A_OWN_LIGHT_CLIENT").then(|| "0x6666666666666666666666666666666666666666".to_string());
+        let lookup = |name: &str| {
+            (name == "ZK_BRIDGE_PROVER_CHAIN_A_OWN_LIGHT_CLIENT")
+                .then(|| "0x6666666666666666666666666666666666666666".to_string())
+        };
         let config = Config::load(SAMPLE, &lookup).unwrap();
-        assert_eq!(config.chain_a.own_light_client_address().unwrap(), Some(Address::repeat_byte(0x66)));
-        for repeated in ["0x3333333333333333333333333333333333333333", "0x4444444444444444444444444444444444444444"] {
+        assert_eq!(
+            config.chain_a.own_light_client_address().unwrap(),
+            Some(Address::repeat_byte(0x66))
+        );
+        for repeated in [
+            "0x3333333333333333333333333333333333333333",
+            "0x4444444444444444444444444444444444444444",
+        ] {
             let text = with_own.replace("0x5555555555555555555555555555555555555555", repeated);
-            let error = Config::load(&text, &no_environment).unwrap_err().to_string();
-            assert!(error.contains("own_light_client is the same address"), "{error}");
+            let error = Config::load(&text, &no_environment)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("own_light_client is the same address"),
+                "{error}"
+            );
         }
-        let zero = with_own.replace("0x5555555555555555555555555555555555555555", "0x0000000000000000000000000000000000000000");
-        assert!(Config::load(&zero, &no_environment).unwrap_err().to_string().contains("zero address"));
+        let zero = with_own.replace(
+            "0x5555555555555555555555555555555555555555",
+            "0x0000000000000000000000000000000000000000",
+        );
+        assert!(Config::load(&zero, &no_environment)
+            .unwrap_err()
+            .to_string()
+            .contains("zero address"));
     }
 
     /// Claim: only loopback hosts count as local.
     /// Why it matters: `--private-key-env` is allowed only when every endpoint is local.
     #[test]
     fn loopback_detection() {
-        for url in ["http://127.0.0.1:8545", "http://localhost:8545/path", "http://[::1]:8545", "http://user@localhost"] {
+        for url in [
+            "http://127.0.0.1:8545",
+            "http://localhost:8545/path",
+            "http://[::1]:8545",
+            "http://user@localhost",
+        ] {
             assert!(is_loopback_url(url), "{url}");
         }
-        for url in ["https://rpc.example.org", "http://127.0.0.1.example.org", "http://10.0.0.5:8545", "https://localhost.example.org"] {
+        for url in [
+            "https://rpc.example.org",
+            "http://127.0.0.1.example.org",
+            "http://10.0.0.5:8545",
+            "https://localhost.example.org",
+        ] {
             assert!(!is_loopback_url(url), "{url}");
         }
     }

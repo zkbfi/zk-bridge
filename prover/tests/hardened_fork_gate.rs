@@ -26,7 +26,8 @@ use zk_bridge_prover::gate::gate_evidence_for_deposit;
 /// deposit made then can never be proven, and the vault has no refund. The gate closes the route to new deposits at
 /// that fork, and it must not trap the deposits that were already proven.
 #[test]
-fn hb02_window1_enforcing_gate_refuses_an_unsupported_fork_and_anyone_can_seal_while_withdrawals_work() {
+fn hb02_window1_enforcing_gate_refuses_an_unsupported_fork_and_anyone_can_seal_while_withdrawals_work(
+) {
     if !tools_available() {
         return;
     }
@@ -42,7 +43,10 @@ fn hb02_window1_enforcing_gate_refuses_an_unsupported_fork_and_anyone_can_seal_w
     // (1) The healthy epoch: a deposit passes and the epoch is confirmed.
     let healthy = deposit_on(&bridge, Direction::AToB, ONE_TOKEN);
     assert_eq!(healthy.receipt["status"], "0x1");
-    assert!(confirmed_epoch(chain, bridge.gate_a).1, "the healthy epoch is confirmed");
+    assert!(
+        confirmed_epoch(chain, bridge.gate_a).1,
+        "the healthy epoch is confirmed"
+    );
     assert!(!gate_sealed(chain, bridge.gate_a));
 
     // Move into the next epoch. The chain now reports an unsupported version.
@@ -59,11 +63,35 @@ fn hb02_window1_enforcing_gate_refuses_an_unsupported_fork_and_anyone_can_seal_w
     );
 
     // (2) The unsupported version: deposits revert.
-    chain.send(Some(bridge.token_a), &TokenContract::mintCall { to: DEPLOYER, amount: U256::from(10 * ONE_TOKEN) }.abi_encode());
-    chain.send(Some(bridge.token_a), &TokenContract::approveCall { spender: bridge.vault_a, amount: U256::from(10 * ONE_TOKEN) }.abi_encode());
+    chain.send(
+        Some(bridge.token_a),
+        &TokenContract::mintCall {
+            to: DEPLOYER,
+            amount: U256::from(10 * ONE_TOKEN),
+        }
+        .abi_encode(),
+    );
+    chain.send(
+        Some(bridge.token_a),
+        &TokenContract::approveCall {
+            spender: bridge.vault_a,
+            amount: U256::from(10 * ONE_TOKEN),
+        }
+        .abi_encode(),
+    );
     let unsupported = SyntheticForkSource::new(chain, UNKNOWN_VERSION);
-    let unsupported_evidence = gate_evidence_for_deposit(&client, bridge.gate_a, &unsupported).unwrap();
-    let deposit_with = |evidence: &[u8]| deposit_calldata(bridge.token_a, RECIPIENT, U256::from(ONE_TOKEN), 0, evidence).to_vec();
+    let unsupported_evidence =
+        gate_evidence_for_deposit(&client, bridge.gate_a, &unsupported).unwrap();
+    let deposit_with = |evidence: &[u8]| {
+        deposit_calldata(
+            bridge.token_a,
+            RECIPIENT,
+            U256::from(ONE_TOKEN),
+            0,
+            evidence,
+        )
+        .to_vec()
+    };
     assert_eq!(
         revert_selector(chain, bridge.vault_a, &deposit_with(&unsupported_evidence)),
         Some(error_selector("UnsupportedVersion(bytes4)")),
@@ -76,8 +104,13 @@ fn hb02_window1_enforcing_gate_refuses_an_unsupported_fork_and_anyone_can_seal_w
     );
 
     // (3) Anyone seals it. The sender is the second Anvil account, not the deployer.
-    let unsupported_evidence = gate_evidence_for_deposit(&client, bridge.gate_a, &unsupported).unwrap();
-    let sealed = chain.send_from(RECIPIENT, bridge.gate_a, &seal_calldata(&unsupported_evidence));
+    let unsupported_evidence =
+        gate_evidence_for_deposit(&client, bridge.gate_a, &unsupported).unwrap();
+    let sealed = chain.send_from(
+        RECIPIENT,
+        bridge.gate_a,
+        &seal_calldata(&unsupported_evidence),
+    );
     assert_eq!(sealed["status"], "0x1");
     assert!(gate_sealed(chain, bridge.gate_a), "the gate is sealed");
 
@@ -88,16 +121,31 @@ fn hb02_window1_enforcing_gate_refuses_an_unsupported_fork_and_anyone_can_seal_w
         supported_evidence
     };
     for evidence in [Vec::new(), supported_after] {
-        assert_eq!(revert_selector(chain, bridge.vault_a, &deposit_with(&evidence)), Some(error_selector("GateSealed()")));
+        assert_eq!(
+            revert_selector(chain, bridge.vault_a, &deposit_with(&evidence)),
+            Some(error_selector("GateSealed()"))
+        );
     }
-    assert!(gate_evidence_for_deposit(&client, bridge.gate_a, &supported).is_err(), "the builder refuses a sealed gate");
+    assert!(
+        gate_evidence_for_deposit(&client, bridge.gate_a, &supported).is_err(),
+        "the builder refuses a sealed gate"
+    );
 
     // (5) Withdrawals still work: the deposit of chain 369 is paid on chain 1, and the healthy deposit on chain 369.
     let recipient_before = balance(chain, bridge.token_a, RECIPIENT);
     run(&bridge, &["once"]).expect("once");
-    assert!(claimed(chain, bridge.vault_a, before_seal.nonce), "the withdrawal on the sealed chain works");
-    assert_eq!(balance(chain, bridge.token_a, RECIPIENT), recipient_before + U256::from(3 * ONE_TOKEN));
-    assert!(claimed(&bridge.chain_b, bridge.vault_b, healthy.nonce), "the deposit made before the seal is paid on chain 369");
+    assert!(
+        claimed(chain, bridge.vault_a, before_seal.nonce),
+        "the withdrawal on the sealed chain works"
+    );
+    assert_eq!(
+        balance(chain, bridge.token_a, RECIPIENT),
+        recipient_before + U256::from(3 * ONE_TOKEN)
+    );
+    assert!(
+        claimed(&bridge.chain_b, bridge.vault_b, healthy.nonce),
+        "the deposit made before the seal is paid on chain 369"
+    );
     assert_eq!(state_of(&bridge, before_seal.nonce), "confirmed");
 }
 
@@ -119,14 +167,43 @@ fn hb02_window1_detecting_gate_admits_then_enforces_once_beacon_roots_exist() {
     let bridge = deploy_bridge("hb02-detect");
     let chain = &bridge.chain_b;
     settle_in_epoch(chain, bridge.gate_b);
-    chain.send(Some(bridge.token_b), &TokenContract::mintCall { to: DEPLOYER, amount: U256::from(10 * ONE_TOKEN) }.abi_encode());
-    chain.send(Some(bridge.token_b), &TokenContract::approveCall { spender: bridge.vault_b, amount: U256::from(10 * ONE_TOKEN) }.abi_encode());
-    let deposit_with = |evidence: &[u8]| deposit_calldata(bridge.token_b, RECIPIENT, U256::from(ONE_TOKEN), 0, evidence).to_vec();
+    chain.send(
+        Some(bridge.token_b),
+        &TokenContract::mintCall {
+            to: DEPLOYER,
+            amount: U256::from(10 * ONE_TOKEN),
+        }
+        .abi_encode(),
+    );
+    chain.send(
+        Some(bridge.token_b),
+        &TokenContract::approveCall {
+            spender: bridge.vault_b,
+            amount: U256::from(10 * ONE_TOKEN),
+        }
+        .abi_encode(),
+    );
+    let deposit_with = |evidence: &[u8]| {
+        deposit_calldata(
+            bridge.token_b,
+            RECIPIENT,
+            U256::from(ONE_TOKEN),
+            0,
+            evidence,
+        )
+        .to_vec()
+    };
     let vault_balance = || balance(chain, bridge.token_b, bridge.vault_b);
 
     // (1) Detection: no beacon roots contract, so the deposit passes with empty evidence.
-    assert!(chain.code_of(BEACON_ROOTS).is_empty(), "chain 369 has no beacon roots contract");
-    assert_eq!(chain.send(Some(bridge.vault_b), &deposit_with(&[]))["status"], "0x1");
+    assert!(
+        chain.code_of(BEACON_ROOTS).is_empty(),
+        "chain 369 has no beacon roots contract"
+    );
+    assert_eq!(
+        chain.send(Some(bridge.vault_b), &deposit_with(&[]))["status"],
+        "0x1"
+    );
     assert!(!gate_enforcing(chain, bridge.gate_b));
     assert_eq!(vault_balance(), U256::from(ONE_TOKEN));
 
@@ -136,30 +213,60 @@ fn hb02_window1_detecting_gate_admits_then_enforces_once_beacon_roots_exist() {
     write_beacon_root(chain, next_timestamp, keccak256(b"a beacon root"));
     chain.set_next_block_timestamp(next_timestamp);
     let failed = chain.send_allowing_failure(Some(bridge.vault_b), &deposit_with(&[]));
-    assert_eq!(failed["status"], "0x0", "the gate now enforces and empty evidence is refused");
+    assert_eq!(
+        failed["status"], "0x0",
+        "the gate now enforces and empty evidence is refused"
+    );
     assert_eq!(
         chain.revert_data_of(&failed["transactionHash"])[..4],
         error_selector("ForkNotConfirmed(uint256)"),
         "refused by the gate: the probe found the root, the gate enforced, and no epoch is confirmed"
     );
-    assert!(!gate_enforcing(chain, bridge.gate_b), "a failed deposit undoes the switch: the next deposit detects again");
-    assert_eq!(vault_balance(), U256::from(ONE_TOKEN), "the failed deposit moved no tokens");
+    assert!(
+        !gate_enforcing(chain, bridge.gate_b),
+        "a failed deposit undoes the switch: the next deposit detects again"
+    );
+    assert_eq!(
+        vault_balance(),
+        U256::from(ONE_TOKEN),
+        "the failed deposit moved no tokens"
+    );
 
     // (3) A deposit with a fork proof succeeds, and the gate enforces for good.
     let latest = chain.latest_timestamp();
-    write_beacon_root(chain, latest, keccak256(b"a beacon root for the latest block"));
+    write_beacon_root(
+        chain,
+        latest,
+        keccak256(b"a beacon root for the latest block"),
+    );
     let evidence = gate_evidence(chain, bridge.gate_b);
-    assert!(!evidence.is_empty(), "the builder sees a working beacon roots contract and builds a proof");
+    assert!(
+        !evidence.is_empty(),
+        "the builder sees a working beacon roots contract and builds a proof"
+    );
     let next_timestamp = chain.latest_timestamp() + 2;
-    write_beacon_root(chain, next_timestamp, keccak256(b"the root of the deposit block"));
+    write_beacon_root(
+        chain,
+        next_timestamp,
+        keccak256(b"the root of the deposit block"),
+    );
     chain.set_next_block_timestamp(next_timestamp);
-    assert_eq!(chain.send(Some(bridge.vault_b), &deposit_with(&evidence))["status"], "0x1");
+    assert_eq!(
+        chain.send(Some(bridge.vault_b), &deposit_with(&evidence))["status"],
+        "0x1"
+    );
     assert!(gate_enforcing(chain, bridge.gate_b), "the gate enforces");
-    assert!(confirmed_epoch(chain, bridge.gate_b).1, "and has confirmed the epoch");
+    assert!(
+        confirmed_epoch(chain, bridge.gate_b).1,
+        "and has confirmed the epoch"
+    );
     assert_eq!(vault_balance(), U256::from(2 * ONE_TOKEN));
 
     // (4) Enforcement is permanent: remove the contract, move to the next epoch, and empty evidence still reverts.
     chain.set_code(BEACON_ROOTS, &[]);
     chain.advance_time(EPOCH_SECONDS + 10);
-    assert_eq!(revert_selector(chain, bridge.vault_b, &deposit_with(&[])), Some(error_selector("ForkNotConfirmed(uint256)")));
+    assert_eq!(
+        revert_selector(chain, bridge.vault_b, &deposit_with(&[])),
+        Some(error_selector("ForkNotConfirmed(uint256)"))
+    );
 }

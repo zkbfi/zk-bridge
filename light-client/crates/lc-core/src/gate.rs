@@ -119,7 +119,12 @@ mod tests {
             let gindex = version_gindex(depth);
             assert!(is_valid_exact_branch(&version_leaf(fork.current_version), &branch, gindex, &root));
             assert!(!is_valid_exact_branch(&version_leaf(fork.previous_version), &branch, gindex, &root));
-            assert!(!is_valid_exact_branch(&version_leaf(fork.current_version), &branch, version_gindex(depth + 1), &root));
+            assert!(!is_valid_exact_branch(
+                &version_leaf(fork.current_version),
+                &branch,
+                version_gindex(depth + 1),
+                &root
+            ));
             // The gate's formula, spelled out: field 3 of a tree of 2^depth leaves, then field 1 of 4.
             assert_eq!(gindex, ((1u64 << depth) + 3) * 4 + 1);
         }
@@ -144,7 +149,11 @@ mod tests {
         assert_eq!(word(4), B256::repeat_byte(1).as_slice());
         assert_eq!(word(5), B256::repeat_byte(2).as_slice());
         assert_eq!(&word(7)[..4], &[3, 0, 0, 0], "bytes4 is left-aligned");
-        assert_eq!(U256::from_be_slice(word(8)), U256::from(8 * 32), "the branch offset, counted from the start of the struct");
+        assert_eq!(
+            U256::from_be_slice(word(8)),
+            U256::from(8 * 32),
+            "the branch offset, counted from the start of the struct"
+        );
         assert_eq!(U256::from_be_slice(word(9)), U256::from(7), "the branch length");
         assert_eq!(bytes.len(), 32 * (10 + 7));
     }

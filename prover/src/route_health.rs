@@ -44,13 +44,15 @@
 use crate::beacon::http::{fetch_period_updates, first_missing_period};
 use crate::chain::ChainClient;
 use crate::config::{BeaconKind, ChainConfig, Config, RouteName};
-use crate::contracts::{ForkRegistryContract, GateVersionsContract, LightClientContract, VaultContract};
+use crate::contracts::{
+    ForkRegistryContract, GateVersionsContract, LightClientContract, VaultContract,
+};
 use crate::error::{Error, Result};
 use crate::gate::read_gate_status;
 use crate::light_client::ChainKind;
 use crate::rpc::{HttpClient, HttpGet, HttpRpc};
-use lc_core::update::MAX_FOLD_UPDATES;
 use alloy_primitives::{hex, Address};
+use lc_core::update::MAX_FOLD_UPDATES;
 use serde_json::{json, Value};
 
 /// The epoch that the beacon API reports for a fork that is not scheduled.
@@ -267,7 +269,10 @@ pub fn format_version(version: [u8; 4]) -> String {
 
 fn is_supported(version: [u8; 4], inputs: &RouteInputs) -> bool {
     let known_to_program = inputs.program_versions.contains(&version);
-    let known_to_gate = inputs.gate.as_ref().is_none_or(|gate| gate.supported_versions.contains(&version));
+    let known_to_gate = inputs
+        .gate
+        .as_ref()
+        .is_none_or(|gate| gate.supported_versions.contains(&version));
     known_to_program && known_to_gate
 }
 
@@ -279,16 +284,31 @@ fn clamp_to_i64(value: i128) -> i64 {
 ///
 /// Only the newest active entry counts among the entries that are already active. The older ones are history.
 /// Where two entries share an epoch, the later one in the schedule wins.
-fn first_unsupported_fork(inputs: &RouteInputs, current_epoch: u64, epoch_seconds: u64) -> Option<ForkFinding> {
-    let mut scheduled: Vec<ScheduleEntry> = inputs.schedule.iter().copied().filter(|entry| entry.epoch != NEVER_EPOCH).collect();
+fn first_unsupported_fork(
+    inputs: &RouteInputs,
+    current_epoch: u64,
+    epoch_seconds: u64,
+) -> Option<ForkFinding> {
+    let mut scheduled: Vec<ScheduleEntry> = inputs
+        .schedule
+        .iter()
+        .copied()
+        .filter(|entry| entry.epoch != NEVER_EPOCH)
+        .collect();
     scheduled.sort_by_key(|entry| entry.epoch);
-    let newest_active = scheduled.iter().rposition(|entry| entry.epoch <= current_epoch);
+    let newest_active = scheduled
+        .iter()
+        .rposition(|entry| entry.epoch <= current_epoch);
     let relevant = scheduled.iter().enumerate().filter(|(index, entry)| {
         let is_future = entry.epoch > current_epoch;
         is_future || Some(*index) == newest_active
     });
-    let (_, entry) = relevant.map(|(index, entry)| (index, *entry)).find(|(_, entry)| !is_supported(entry.version, inputs))?;
-    let activation_time = inputs.genesis_time.saturating_add(entry.epoch.saturating_mul(epoch_seconds));
+    let (_, entry) = relevant
+        .map(|(index, entry)| (index, *entry))
+        .find(|(_, entry)| !is_supported(entry.version, inputs))?;
+    let activation_time = inputs
+        .genesis_time
+        .saturating_add(entry.epoch.saturating_mul(epoch_seconds));
     Some(ForkFinding {
         version: entry.version,
         activation_epoch: entry.epoch,
@@ -331,12 +351,20 @@ fn fork_finding_message(fork: &ForkFinding, margin_seconds: u64) -> (Level, Stri
         return (Level::Stop, reason);
     }
     let remaining = fork.seconds_remaining.unsigned_abs();
-    let timing = format!("activates at epoch {} in {}", fork.activation_epoch, describe_duration(remaining));
+    let timing = format!(
+        "activates at epoch {} in {}",
+        fork.activation_epoch,
+        describe_duration(remaining)
+    );
     if remaining <= margin_seconds {
         let reason = format!("the source chain fork {version} {timing}, inside the margin of {}, and the route does not support it", describe_duration(margin_seconds));
         return (Level::Stop, reason);
     }
-    let horizon = if remaining > FAR_AHEAD_SECONDS { "more than 24 hours ahead" } else { "within 24 hours, beyond the margin" };
+    let horizon = if remaining > FAR_AHEAD_SECONDS {
+        "more than 24 hours ahead"
+    } else {
+        "within 24 hours, beyond the margin"
+    };
     (Level::Warn, format!("the source chain fork {version} {timing} ({horizon}), and the route does not support it"))
 }
 
@@ -346,17 +374,28 @@ fn fork_finding_message(fork: &ForkFinding, margin_seconds: u64) -> (Level, Stri
 /// [`RouteStatus::other_findings`]. See the module documentation for each rule.
 pub fn route_status(inputs: &RouteInputs) -> RouteStatus {
     let slots_per_epoch = inputs.slots_per_epoch.max(1);
-    let epoch_seconds = inputs.seconds_per_slot.max(1).saturating_mul(slots_per_epoch);
+    let epoch_seconds = inputs
+        .seconds_per_slot
+        .max(1)
+        .saturating_mul(slots_per_epoch);
     let current_epoch = inputs.now.saturating_sub(inputs.genesis_time) / epoch_seconds;
-    let margin_seconds = inputs.settings.margin_seconds.max(MINIMUM_MARGIN_EPOCHS.saturating_mul(epoch_seconds));
-    let lag_slots = inputs.source_head_slot.saturating_sub(inputs.light_client_head_slot);
+    let margin_seconds = inputs
+        .settings
+        .margin_seconds
+        .max(MINIMUM_MARGIN_EPOCHS.saturating_mul(epoch_seconds));
+    let lag_slots = inputs
+        .source_head_slot
+        .saturating_sub(inputs.light_client_head_slot);
     let head_lag_epochs = lag_slots / slots_per_epoch;
     let fork = first_unsupported_fork(inputs, current_epoch, epoch_seconds);
     let own_lag_periods = own_light_client_lag_periods(inputs);
 
     let mut findings: Vec<(Level, String)> = Vec::new();
     if inputs.gate.as_ref().is_some_and(|gate| gate.sealed) {
-        findings.push((Level::Sealed, "the deposit gate of the source vault is sealed: every deposit reverts".to_string()));
+        findings.push((
+            Level::Sealed,
+            "the deposit gate of the source vault is sealed: every deposit reverts".to_string(),
+        ));
     }
     if let Some(fork) = &fork {
         findings.push(fork_finding_message(fork, margin_seconds));
@@ -373,7 +412,9 @@ pub fn route_status(inputs: &RouteInputs) -> RouteStatus {
             ),
         ));
     }
-    if let Some(lag) = own_lag_periods.filter(|lag| *lag >= inputs.settings.own_light_client_warn_periods) {
+    if let Some(lag) =
+        own_lag_periods.filter(|lag| *lag >= inputs.settings.own_light_client_warn_periods)
+    {
         findings.push((
             Level::Warn,
             format!(
@@ -387,7 +428,16 @@ pub fn route_status(inputs: &RouteInputs) -> RouteStatus {
     let mut ordered = findings.into_iter();
     let (level, reason) = ordered.next().unwrap_or((Level::Open, "no unsupported fork is scheduled, the gate is not sealed and the light client head is fresh".to_string()));
     let other_findings = ordered.map(|(_, text)| text).collect();
-    RouteStatus { level, reason, other_findings, fork, current_epoch, margin_seconds, head_lag_epochs, own_light_client_lag_periods: own_lag_periods }
+    RouteStatus {
+        level,
+        reason,
+        other_findings,
+        fork,
+        current_epoch,
+        margin_seconds,
+        head_lag_epochs,
+        own_light_client_lag_periods: own_lag_periods,
+    }
 }
 
 fn update_gap_finding(gap: &UpdateGap) -> (Level, String) {
@@ -404,7 +454,8 @@ fn update_gap_finding(gap: &UpdateGap) -> (Level, String) {
 /// the wall clock and the genesis time, never from the beacon head: a stalled beacon node must not hide a stale head.
 fn own_light_client_lag_periods(inputs: &RouteInputs) -> Option<u64> {
     let own = inputs.own_light_client?;
-    let current_slot = inputs.now.saturating_sub(inputs.genesis_time) / inputs.seconds_per_slot.max(1);
+    let current_slot =
+        inputs.now.saturating_sub(inputs.genesis_time) / inputs.seconds_per_slot.max(1);
     Some(current_slot.saturating_sub(own.head_slot) / own.slots_per_period.max(1))
 }
 
@@ -426,9 +477,13 @@ pub struct BeaconFacts {
 fn get_json(client: &dyn HttpGet, path: &str) -> Result<Value> {
     let response = client.get(path, "application/json")?;
     if response.status != 200 {
-        return Err(Error::Beacon(format!("GET {path}: status {}", response.status)));
+        return Err(Error::Beacon(format!(
+            "GET {path}: status {}",
+            response.status
+        )));
     }
-    serde_json::from_slice(&response.body).map_err(|error| Error::Malformed(format!("GET {path}: {error}")))
+    serde_json::from_slice(&response.body)
+        .map_err(|error| Error::Malformed(format!("GET {path}: {error}")))
 }
 
 fn parse_number(value: &Value, what: &str) -> Result<u64> {
@@ -437,13 +492,20 @@ fn parse_number(value: &Value, what: &str) -> Result<u64> {
         Value::Number(number) => number.as_u64(),
         _ => None,
     };
-    parsed.ok_or_else(|| Error::Malformed(format!("{what}: expected an unsigned number, got {value}")))
+    parsed.ok_or_else(|| {
+        Error::Malformed(format!("{what}: expected an unsigned number, got {value}"))
+    })
 }
 
 fn parse_version(value: &Value) -> Result<[u8; 4]> {
-    let text = value.as_str().ok_or_else(|| Error::Malformed(format!("fork version: expected text, got {value}")))?;
-    let bytes = hex::decode(text).map_err(|error| Error::Malformed(format!("fork version {text}: {error}")))?;
-    bytes.try_into().map_err(|_| Error::Malformed(format!("fork version {text}: expected 4 bytes")))
+    let text = value
+        .as_str()
+        .ok_or_else(|| Error::Malformed(format!("fork version: expected text, got {value}")))?;
+    let bytes = hex::decode(text)
+        .map_err(|error| Error::Malformed(format!("fork version {text}: {error}")))?;
+    bytes
+        .try_into()
+        .map_err(|_| Error::Malformed(format!("fork version {text}: expected 4 bytes")))
 }
 
 /// Parses the answer of `GET /eth/v1/config/fork_schedule`.
@@ -451,11 +513,16 @@ fn parse_version(value: &Value) -> Result<[u8; 4]> {
 /// # Errors
 /// `Error::Malformed` when the answer lacks `data`, or an entry has no valid `current_version` or `epoch`.
 pub fn parse_fork_schedule(answer: &Value) -> Result<Vec<ScheduleEntry>> {
-    let entries = answer["data"].as_array().ok_or_else(|| Error::Malformed("fork_schedule: no data array".into()))?;
+    let entries = answer["data"]
+        .as_array()
+        .ok_or_else(|| Error::Malformed("fork_schedule: no data array".into()))?;
     entries
         .iter()
         .map(|entry| {
-            Ok(ScheduleEntry { version: parse_version(&entry["current_version"])?, epoch: parse_number(&entry["epoch"], "fork epoch")? })
+            Ok(ScheduleEntry {
+                version: parse_version(&entry["current_version"])?,
+                epoch: parse_number(&entry["epoch"], "fork epoch")?,
+            })
         })
         .collect()
 }
@@ -507,9 +574,17 @@ pub fn find_update_gap(
     let spec = kind.spec();
     let finalized_slot = beacon_head_slot.saturating_sub(2 * spec.slots_per_epoch);
     let head_period = spec.period_at_slot(head_slot);
-    let end_period = spec.period_at_slot(finalized_slot).min(head_period + MAX_FOLD_UPDATES as u64);
+    let end_period = spec
+        .period_at_slot(finalized_slot)
+        .min(head_period + MAX_FOLD_UPDATES as u64);
     let received = fetch_period_updates(client, kind, head_period, end_period)?;
-    Ok(first_missing_period(&received, head_period, end_period).map(|missing_period| UpdateGap { light_client, head_period, missing_period }))
+    Ok(
+        first_missing_period(&received, head_period, end_period).map(|missing_period| UpdateGap {
+            light_client,
+            head_period,
+            missing_period,
+        }),
+    )
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -519,7 +594,12 @@ pub fn find_update_gap(
 /// The versions the light-client program verifies: the entries of its fork table that are scheduled.
 /// An entry at the never epoch (Gloas on Ethereum) is a placeholder, not a supported fork.
 pub fn program_versions(kind: ChainKind) -> Vec<[u8; 4]> {
-    kind.spec().fork_schedule.iter().filter(|entry| entry.epoch != NEVER_EPOCH).map(|entry| entry.fork_version).collect()
+    kind.spec()
+        .fork_schedule
+        .iter()
+        .filter(|entry| entry.epoch != NEVER_EPOCH)
+        .map(|entry| entry.fork_version)
+        .collect()
 }
 
 fn mode_name(mode: u8) -> String {
@@ -544,7 +624,9 @@ fn mode_name(mode: u8) -> String {
 pub fn read_gate_observation(client: &ChainClient, vault: Address) -> Result<GateObservation> {
     let gate = client.view(vault, VaultContract::depositGateCall {})?;
     if gate == Address::ZERO {
-        return Err(Error::Config(format!("vault {vault:#x} reports a zero deposit gate; a hardened vault always has one")));
+        return Err(Error::Config(format!(
+            "vault {vault:#x} reports a zero deposit gate; a hardened vault always has one"
+        )));
     }
     let status = read_gate_status(client, gate)?;
     let versions = client.view(gate, GateVersionsContract::supportedVersionsCall {})?;
@@ -565,16 +647,26 @@ pub fn read_gate_observation(client: &ChainClient, vault: Address) -> Result<Gat
 /// # Errors
 /// Any read error, and `Error::Config` when a gate in registry mode reports a zero registry address. The gate
 /// constructor refuses that, so a zero address means the node or the configured address is wrong.
-pub fn read_registry_observation(client: &ChainClient, gate: Address, mode: u8) -> Result<Option<RegistryObservation>> {
+pub fn read_registry_observation(
+    client: &ChainClient,
+    gate: Address,
+    mode: u8,
+) -> Result<Option<RegistryObservation>> {
     if mode != REGISTRY_MODE {
         return Ok(None);
     }
     let registry = client.view(gate, GateVersionsContract::forkRegistryCall {})?;
     if registry == Address::ZERO {
-        return Err(Error::Config(format!("gate {gate:#x} is in registry mode and reports a zero fork registry")));
+        return Err(Error::Config(format!(
+            "gate {gate:#x} is in registry mode and reports a zero fork registry"
+        )));
     }
     let latest = client.view(registry, ForkRegistryContract::latestObservedCall {})?;
-    Ok(Some(RegistryObservation { registry, latest_version: latest.version.0, latest_slot: latest.slot }))
+    Ok(Some(RegistryObservation {
+        registry,
+        latest_version: latest.version.0,
+        latest_slot: latest.slot,
+    }))
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -605,21 +697,33 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let shifted = days + 719_468;
     let era = shifted.div_euclid(146_097);
     let day_of_era = shifted.rem_euclid(146_097);
-    let year_of_era = (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let month_index = (5 * day_of_year + 2) / 153;
     let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 { month_index + 3 } else { month_index - 9 };
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
     let year = year_of_era + era * 400 + i64::from(month <= 2);
     (year, month, day)
 }
 
 /// Formats Unix seconds as `YYYY-MM-DDTHH:MM:SSZ` (UTC).
 pub fn format_utc(unix_seconds: u64) -> String {
-    let seconds = i64::try_from(unix_seconds).unwrap_or(i64::MAX / 2).min(253_402_300_799);
+    let seconds = i64::try_from(unix_seconds)
+        .unwrap_or(i64::MAX / 2)
+        .min(253_402_300_799);
     let (year, month, day) = civil_from_days(seconds.div_euclid(86_400));
     let in_day = seconds.rem_euclid(86_400);
-    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", in_day / 3_600, in_day % 3_600 / 60, in_day % 60)
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        in_day / 3_600,
+        in_day % 3_600 / 60,
+        in_day % 60
+    )
 }
 
 /// The latest version of a registry as text: `none` before the first observation.
@@ -670,7 +774,8 @@ impl RouteReport {
                 gate.mode,
                 gate.enforcing,
                 gate.sealed,
-                gate.confirmed_epoch.map_or("none".to_string(), |epoch| epoch.to_string())
+                gate.confirmed_epoch
+                    .map_or("none".to_string(), |epoch| epoch.to_string())
             )),
             None => line.push_str(" gate=none"),
         }
@@ -751,10 +856,16 @@ pub enum OutputFormat {
 /// Renders the reports. In JSON the output is one array, so a script parses it once.
 pub fn render(reports: &[RouteReport], format: OutputFormat) -> String {
     match format {
-        OutputFormat::Human => reports.iter().map(|report| format!("{}\n", report.human_line())).collect(),
+        OutputFormat::Human => reports
+            .iter()
+            .map(|report| format!("{}\n", report.human_line()))
+            .collect(),
         OutputFormat::Json => {
             let objects: Vec<Value> = reports.iter().map(RouteReport::to_json).collect();
-            format!("{}\n", serde_json::to_string_pretty(&objects).unwrap_or_else(|_| "[]".to_string()))
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&objects).unwrap_or_else(|_| "[]".to_string())
+            )
         }
     }
 }
@@ -762,7 +873,10 @@ pub fn render(reports: &[RouteReport], format: OutputFormat) -> String {
 /// The process exit code for a set of reports: 0 when no route refuses deposits, else 2.
 /// (An error of the command itself exits with 1.)
 pub fn exit_code(reports: &[RouteReport]) -> i32 {
-    if reports.iter().any(|report| report.status.level.refuses_deposits()) {
+    if reports
+        .iter()
+        .any(|report| report.status.level.refuses_deposits())
+    {
         return 2;
     }
     0
@@ -797,14 +911,22 @@ pub fn assemble_inputs(
 }
 
 fn connect(chain: &ChainConfig) -> Result<ChainClient> {
-    ChainClient::connect(&chain.name, chain.chain_id, Box::new(HttpRpc::new(&chain.rpc_url)), None)
+    ChainClient::connect(
+        &chain.name,
+        chain.chain_id,
+        Box::new(HttpRpc::new(&chain.rpc_url)),
+        None,
+    )
 }
 
 /// Reads the own-chain light client of a chain, or `None` when the configuration names none.
 ///
 /// # Errors
 /// Any read error, and `Error::Config` for a bad address.
-pub fn read_own_light_client(client: &ChainClient, chain: &ChainConfig) -> Result<Option<OwnLightClientObservation>> {
+pub fn read_own_light_client(
+    client: &ChainClient,
+    chain: &ChainConfig,
+) -> Result<Option<OwnLightClientObservation>> {
     let Some(address) = chain.own_light_client_address()? else {
         return Ok(None);
     };
@@ -816,20 +938,34 @@ pub fn read_own_light_client(client: &ChainClient, chain: &ChainConfig) -> Resul
 }
 
 /// Reads and decides one route. Deposits are made on the source chain. The light client sits on the destination.
-fn check_route(config: &Config, route: RouteName, now: u64, settings: HealthSettings) -> Result<RouteReport> {
+fn check_route(
+    config: &Config,
+    route: RouteName,
+    now: u64,
+    settings: HealthSettings,
+) -> Result<RouteReport> {
     let source = config.source_of(route);
     let destination = config.destination_of(route);
     if source.beacon.kind != BeaconKind::Http {
-        return Err(Error::Config(format!("{}.beacon.kind: route-health needs a beacon API (kind = \"http\")", source.name)));
+        return Err(Error::Config(format!(
+            "{}.beacon.kind: route-health needs a beacon API (kind = \"http\")",
+            source.name
+        )));
     }
     let url = source.beacon.url.as_deref().filter(|url| !url.is_empty());
     let url = url.ok_or_else(|| Error::Config(format!("{}.beacon.url: missing", source.name)))?;
     let kind = source.chain_kind()?;
     let beacon = fetch_beacon_facts(&HttpClient::new(url))?;
     let source_client = connect(source)?;
-    let gate = Some(read_gate_observation(&source_client, source.vault_address()?)?);
+    let gate = Some(read_gate_observation(
+        &source_client,
+        source.vault_address()?,
+    )?);
     let own_light_client = read_own_light_client(&source_client, source)?;
-    let head = connect(destination)?.view(destination.light_client_address()?, LightClientContract::headCall {})?;
+    let head = connect(destination)?.view(
+        destination.light_client_address()?,
+        LightClientContract::headCall {},
+    )?;
     let client = HttpClient::new(url);
     let own_head = own_light_client.map(|own| ("own-chain", own.head_slot));
     let update_gaps = [Some(("destination", head)), own_head]
@@ -840,7 +976,10 @@ fn check_route(config: &Config, route: RouteName, now: u64, settings: HealthSett
         .into_iter()
         .flatten()
         .collect();
-    let inputs = RouteInputs { update_gaps, ..assemble_inputs(kind, &beacon, gate, head, own_light_client, now, settings) };
+    let inputs = RouteInputs {
+        update_gaps,
+        ..assemble_inputs(kind, &beacon, gate, head, own_light_client, now, settings)
+    };
     Ok(RouteReport {
         route: route.as_str().to_string(),
         source_chain: source.name.clone(),
@@ -864,10 +1003,20 @@ fn unix_now() -> Result<u64> {
 ///
 /// # Errors
 /// Any read error. A route that cannot be read is never reported as open.
-pub fn run(config: &Config, settings: HealthSettings, format: OutputFormat, out: &mut dyn std::io::Write) -> Result<i32> {
+pub fn run(
+    config: &Config,
+    settings: HealthSettings,
+    format: OutputFormat,
+    out: &mut dyn std::io::Write,
+) -> Result<i32> {
     let now = unix_now()?;
-    let reports = config.routes.iter().map(|route| check_route(config, *route, now, settings)).collect::<Result<Vec<_>>>()?;
-    out.write_all(render(&reports, format).as_bytes()).map_err(|error| Error::Usage(error.to_string()))?;
+    let reports = config
+        .routes
+        .iter()
+        .map(|route| check_route(config, *route, now, settings))
+        .collect::<Result<Vec<_>>>()?;
+    out.write_all(render(&reports, format).as_bytes())
+        .map_err(|error| Error::Usage(error.to_string()))?;
     Ok(exit_code(&reports))
 }
 
@@ -897,20 +1046,30 @@ mod tests {
             genesis_time: GENESIS,
             seconds_per_slot: SECONDS_PER_SLOT,
             slots_per_epoch: SLOTS_PER_EPOCH,
-            schedule: vec![ScheduleEntry { version: KNOWN, epoch: 10 }],
+            schedule: vec![ScheduleEntry {
+                version: KNOWN,
+                epoch: 10,
+            }],
             program_versions: vec![KNOWN],
             gate: None,
             light_client_head_slot: NOW_EPOCH * 32,
             source_head_slot: NOW_EPOCH * 32,
             own_light_client: None,
             update_gaps: vec![],
-            settings: HealthSettings { margin_seconds: HOUR, stale_epochs: 64, own_light_client_warn_periods: 32 },
+            settings: HealthSettings {
+                margin_seconds: HOUR,
+                stale_epochs: 64,
+                own_light_client_warn_periods: 32,
+            },
         }
     }
 
     fn with_fork_in(seconds: u64) -> RouteInputs {
         let mut value = inputs();
-        value.schedule.push(ScheduleEntry { version: UNKNOWN, epoch: NOW_EPOCH + seconds / EPOCH_SECONDS });
+        value.schedule.push(ScheduleEntry {
+            version: UNKNOWN,
+            epoch: NOW_EPOCH + seconds / EPOCH_SECONDS,
+        });
         value
     }
 
@@ -930,7 +1089,11 @@ mod tests {
     fn registry_gate(version: [u8; 4], slot: u64) -> GateObservation {
         let mut value = gate(false);
         value.mode = "DetectBeaconRootsAndRegistry".into();
-        value.registry = Some(RegistryObservation { registry: Address::repeat_byte(0x77), latest_version: version, latest_slot: slot });
+        value.registry = Some(RegistryObservation {
+            registry: Address::repeat_byte(0x77),
+            latest_version: version,
+            latest_slot: slot,
+        });
         value
     }
 
@@ -953,12 +1116,22 @@ mod tests {
     fn a_fork_beyond_24_hours_warns() {
         let status = route_status(&with_fork_in(48 * HOUR));
         assert_eq!(status.level, Level::Warn);
-        assert!(status.reason.contains("more than 24 hours ahead"), "{}", status.reason);
+        assert!(
+            status.reason.contains("more than 24 hours ahead"),
+            "{}",
+            status.reason
+        );
         let fork = status.fork.expect("fork");
         assert_eq!(fork.version, UNKNOWN);
         assert_eq!(fork.activation_epoch, NOW_EPOCH + 48 * HOUR / EPOCH_SECONDS);
-        assert_eq!(fork.activation_time, GENESIS + fork.activation_epoch * EPOCH_SECONDS);
-        assert_eq!(fork.seconds_remaining, (fork.activation_time - inputs().now) as i64);
+        assert_eq!(
+            fork.activation_time,
+            GENESIS + fork.activation_epoch * EPOCH_SECONDS
+        );
+        assert_eq!(
+            fork.seconds_remaining,
+            (fork.activation_time - inputs().now) as i64
+        );
         assert!(!status.level.refuses_deposits(), "a warning does not block");
     }
 
@@ -968,7 +1141,11 @@ mod tests {
     fn a_fork_between_the_margin_and_24_hours_warns() {
         let status = route_status(&with_fork_in(6 * HOUR));
         assert_eq!(status.level, Level::Warn);
-        assert!(status.reason.contains("within 24 hours, beyond the margin"), "{}", status.reason);
+        assert!(
+            status.reason.contains("within 24 hours, beyond the margin"),
+            "{}",
+            status.reason
+        );
     }
 
     /// Claim: a fork inside the margin is STOP.
@@ -987,10 +1164,21 @@ mod tests {
         let margin_epochs = 10;
         let mut value = inputs();
         value.settings.margin_seconds = margin_epochs * EPOCH_SECONDS;
-        value.schedule.push(ScheduleEntry { version: UNKNOWN, epoch: NOW_EPOCH + margin_epochs });
-        assert_eq!(route_status(&value).level, Level::Stop, "exactly at the margin");
+        value.schedule.push(ScheduleEntry {
+            version: UNKNOWN,
+            epoch: NOW_EPOCH + margin_epochs,
+        });
+        assert_eq!(
+            route_status(&value).level,
+            Level::Stop,
+            "exactly at the margin"
+        );
         value.schedule[1].epoch += 1;
-        assert_eq!(route_status(&value).level, Level::Warn, "one epoch beyond the margin");
+        assert_eq!(
+            route_status(&value).level,
+            Level::Warn,
+            "one epoch beyond the margin"
+        );
     }
 
     /// Claim: a fork that is already active and unsupported is STOP, and its time remaining is not positive.
@@ -998,7 +1186,10 @@ mod tests {
     #[test]
     fn an_active_unsupported_fork_stops() {
         let mut value = inputs();
-        value.schedule.push(ScheduleEntry { version: UNKNOWN, epoch: NOW_EPOCH - 5 });
+        value.schedule.push(ScheduleEntry {
+            version: UNKNOWN,
+            epoch: NOW_EPOCH - 5,
+        });
         let status = route_status(&value);
         assert_eq!(status.level, Level::Stop);
         assert!(status.reason.contains("is active"), "{}", status.reason);
@@ -1037,8 +1228,15 @@ mod tests {
         let status = route_status(&value);
         assert_eq!(status.level, Level::Stop);
         assert!(status.level.refuses_deposits());
-        assert!(status.reason.contains("0x09000000") && status.reason.contains("123"), "{}", status.reason);
-        assert!(status.fork.is_none(), "the schedule shows no fork, so the registry alone caused the stop");
+        assert!(
+            status.reason.contains("0x09000000") && status.reason.contains("123"),
+            "{}",
+            status.reason
+        );
+        assert!(
+            status.fork.is_none(),
+            "the schedule shows no fork, so the registry alone caused the stop"
+        );
     }
 
     /// Claim: a registry whose latest observed version is supported leaves the route OPEN, and so does a registry
@@ -1050,9 +1248,17 @@ mod tests {
         value.gate = Some(registry_gate(KNOWN, 123));
         assert_eq!(route_status(&value).level, Level::Open, "supported version");
         value.gate = Some(registry_gate([0, 0, 0, 0], 0));
-        assert_eq!(route_status(&value).level, Level::Open, "nothing observed yet");
+        assert_eq!(
+            route_status(&value).level,
+            Level::Open,
+            "nothing observed yet"
+        );
         value.gate = Some(registry_gate(UNKNOWN, 0));
-        assert_eq!(route_status(&value).level, Level::Open, "slot zero means no observation, whatever the version bytes say");
+        assert_eq!(
+            route_status(&value).level,
+            Level::Open,
+            "slot zero means no observation, whatever the version bytes say"
+        );
     }
 
     /// Claim: the support check uses the version list of the GATE, not the table of the light client program.
@@ -1077,7 +1283,12 @@ mod tests {
         value.gate = Some(sealed);
         let status = route_status(&value);
         assert_eq!(status.level, Level::Sealed);
-        assert_eq!(status.other_findings.len(), 1, "{:?}", status.other_findings);
+        assert_eq!(
+            status.other_findings.len(),
+            1,
+            "{:?}",
+            status.other_findings
+        );
     }
 
     /// Claim: the report prints the registry in the line and in the JSON, with no version before the first
@@ -1101,7 +1312,11 @@ mod tests {
         };
         let observed = report(registry_gate(UNKNOWN, 123));
         let line = observed.human_line();
-        assert!(line.contains("registry_latest_version=0x09000000") && line.contains("registry_latest_slot=123"), "{line}");
+        assert!(
+            line.contains("registry_latest_version=0x09000000")
+                && line.contains("registry_latest_slot=123"),
+            "{line}"
+        );
         let value = observed.to_json();
         assert_eq!(value["gate"]["registry"]["latest_version"], "0x09000000");
         assert_eq!(value["gate"]["registry"]["latest_slot"], 123);
@@ -1163,13 +1378,27 @@ mod tests {
     #[test]
     fn the_own_chain_light_client_warns_from_the_configured_lag() {
         let below = route_status(&with_own_lag(31));
-        assert_eq!((below.level, below.own_light_client_lag_periods), (Level::Open, Some(31)));
+        assert_eq!(
+            (below.level, below.own_light_client_lag_periods),
+            (Level::Open, Some(31))
+        );
         let at = route_status(&with_own_lag(32));
-        assert_eq!((at.level, at.own_light_client_lag_periods), (Level::Warn, Some(32)));
-        assert!(at.reason.contains("32 periods") && at.reason.contains("at most 64 updates"), "{}", at.reason);
+        assert_eq!(
+            (at.level, at.own_light_client_lag_periods),
+            (Level::Warn, Some(32))
+        );
+        assert!(
+            at.reason.contains("32 periods") && at.reason.contains("at most 64 updates"),
+            "{}",
+            at.reason
+        );
         let mut stricter = with_own_lag(5);
         stricter.settings.own_light_client_warn_periods = 5;
-        assert_eq!(route_status(&stricter).level, Level::Warn, "the limit is a setting");
+        assert_eq!(
+            route_status(&stricter).level,
+            Level::Warn,
+            "the limit is a setting"
+        );
     }
 
     /// Claim: the lag comes from the wall clock. A beacon head that stalls at the light client head does not hide it.
@@ -1182,7 +1411,10 @@ mod tests {
         value.light_client_head_slot = value.source_head_slot;
         let status = route_status(&value);
         assert_eq!(status.level, Level::Warn);
-        assert_eq!(status.head_lag_epochs, 0, "the destination light client rule sees no lag");
+        assert_eq!(
+            status.head_lag_epochs, 0,
+            "the destination light client rule sees no lag"
+        );
     }
 
     /// Claim: the own-chain lag is a WARN. It does not refuse deposits, and the exit code stays 0. A head ahead of the
@@ -1197,7 +1429,10 @@ mod tests {
         let mut ahead = with_own_lag(0);
         ahead.own_light_client.as_mut().unwrap().head_slot += 10_000;
         let status = route_status(&ahead);
-        assert_eq!((status.level, status.own_light_client_lag_periods), (Level::Open, Some(0)));
+        assert_eq!(
+            (status.level, status.own_light_client_lag_periods),
+            (Level::Open, Some(0))
+        );
     }
 
     /// Claim: a more severe finding wins over the own-chain warning, and the warning stays in the other findings.
@@ -1205,10 +1440,20 @@ mod tests {
     #[test]
     fn a_more_severe_finding_outranks_the_own_chain_warning() {
         let mut value = with_own_lag(40);
-        value.schedule.push(ScheduleEntry { version: UNKNOWN, epoch: NOW_EPOCH - 1 });
+        value.schedule.push(ScheduleEntry {
+            version: UNKNOWN,
+            epoch: NOW_EPOCH - 1,
+        });
         let status = route_status(&value);
         assert_eq!(status.level, Level::Stop);
-        assert!(status.other_findings.iter().any(|text| text.contains("own-chain light client")), "{:?}", status.other_findings);
+        assert!(
+            status
+                .other_findings
+                .iter()
+                .any(|text| text.contains("own-chain light client")),
+            "{:?}",
+            status.other_findings
+        );
     }
 
     /// Claim: a source chain with no own-chain light client has no lag, and the report prints no field for it. With
@@ -1232,11 +1477,23 @@ mod tests {
 
         let some = report(with_own_lag(40));
         let line = some.human_line();
-        assert!(line.contains("status=WARN") && line.contains("own_light_client_lag_periods=40"), "{line}");
-        assert!(line.contains(&format!("own_light_client={:#x}", Address::repeat_byte(0x55))), "{line}");
+        assert!(
+            line.contains("status=WARN") && line.contains("own_light_client_lag_periods=40"),
+            "{line}"
+        );
+        assert!(
+            line.contains(&format!(
+                "own_light_client={:#x}",
+                Address::repeat_byte(0x55)
+            )),
+            "{line}"
+        );
         let value = some.to_json();
         assert_eq!(value["own_light_client"]["lag_periods"], 40);
-        assert_eq!(value["own_light_client"]["slots_per_period"], OWN_SLOTS_PER_PERIOD);
+        assert_eq!(
+            value["own_light_client"]["slots_per_period"],
+            OWN_SLOTS_PER_PERIOD
+        );
         assert_eq!(value["status"], "WARN");
     }
 
@@ -1247,12 +1504,23 @@ mod tests {
     fn a_small_margin_is_raised_to_three_epochs() {
         let mut value = inputs();
         value.settings.margin_seconds = 0;
-        value.schedule.push(ScheduleEntry { version: UNKNOWN, epoch: NOW_EPOCH + 3 });
+        value.schedule.push(ScheduleEntry {
+            version: UNKNOWN,
+            epoch: NOW_EPOCH + 3,
+        });
         let status = route_status(&value);
         assert_eq!(status.margin_seconds, 3 * EPOCH_SECONDS);
-        assert_eq!(status.level, Level::Stop, "three epochs ahead is inside the minimum margin");
+        assert_eq!(
+            status.level,
+            Level::Stop,
+            "three epochs ahead is inside the minimum margin"
+        );
         value.schedule[1].epoch = NOW_EPOCH + 4;
-        assert_eq!(route_status(&value).level, Level::Warn, "four epochs ahead is outside it");
+        assert_eq!(
+            route_status(&value).level,
+            Level::Warn,
+            "four epochs ahead is outside it"
+        );
     }
 
     /// Claim: the default margin of one hour is used when it is larger than three epochs.
@@ -1268,8 +1536,14 @@ mod tests {
     #[test]
     fn the_never_epoch_is_ignored() {
         let mut value = inputs();
-        value.schedule.push(ScheduleEntry { version: [0xff; 4], epoch: NEVER_EPOCH });
-        value.schedule.push(ScheduleEntry { version: UNKNOWN, epoch: 18_446_744_073_709_551_615 });
+        value.schedule.push(ScheduleEntry {
+            version: [0xff; 4],
+            epoch: NEVER_EPOCH,
+        });
+        value.schedule.push(ScheduleEntry {
+            version: UNKNOWN,
+            epoch: 18_446_744_073_709_551_615,
+        });
         let status = route_status(&value);
         assert_eq!(status.level, Level::Open);
         assert!(status.fork.is_none());
@@ -1280,7 +1554,10 @@ mod tests {
     #[test]
     fn a_real_epoch_counts_whatever_the_version() {
         let mut value = inputs();
-        value.schedule.push(ScheduleEntry { version: [0xff; 4], epoch: NOW_EPOCH + 1 });
+        value.schedule.push(ScheduleEntry {
+            version: [0xff; 4],
+            epoch: NOW_EPOCH + 1,
+        });
         assert_eq!(route_status(&value).level, Level::Stop);
     }
 
@@ -1289,7 +1566,13 @@ mod tests {
     #[test]
     fn replaced_forks_are_history() {
         let mut value = inputs();
-        value.schedule.insert(0, ScheduleEntry { version: UNKNOWN, epoch: 0 });
+        value.schedule.insert(
+            0,
+            ScheduleEntry {
+                version: UNKNOWN,
+                epoch: 0,
+            },
+        );
         assert_eq!(route_status(&value).level, Level::Open);
     }
 
@@ -1302,7 +1585,10 @@ mod tests {
         narrow.supported_versions = vec![KNOWN];
         value.gate = Some(narrow);
         value.program_versions.push([5, 0, 0, 0]);
-        value.schedule.push(ScheduleEntry { version: [5, 0, 0, 0], epoch: NOW_EPOCH + 100 });
+        value.schedule.push(ScheduleEntry {
+            version: [5, 0, 0, 0],
+            epoch: NOW_EPOCH + 100,
+        });
         assert_eq!(route_status(&value).level, Level::Warn);
     }
 
@@ -1313,12 +1599,20 @@ mod tests {
         let mut value = with_fork_in(48 * HOUR);
         value.light_client_head_slot = 0;
         assert_eq!(route_status(&value).level, Level::Stale, "stale beats warn");
-        value.schedule.push(ScheduleEntry { version: UNKNOWN, epoch: NOW_EPOCH + 1 });
+        value.schedule.push(ScheduleEntry {
+            version: UNKNOWN,
+            epoch: NOW_EPOCH + 1,
+        });
         assert_eq!(route_status(&value).level, Level::Stop, "stop beats stale");
         value.gate = Some(gate(true));
         let status = route_status(&value);
         assert_eq!(status.level, Level::Sealed, "sealed beats stop");
-        assert_eq!(status.other_findings.len(), 2, "{:?}", status.other_findings);
+        assert_eq!(
+            status.other_findings.len(),
+            2,
+            "{:?}",
+            status.other_findings
+        );
     }
 
     /// Claim: the exit code is 0 for OPEN and WARN and 2 for STOP, SEALED and STALE.
@@ -1340,7 +1634,11 @@ mod tests {
         };
         assert_eq!(exit_code(&[report(Level::Open), report(Level::Warn)]), 0);
         for level in [Level::Stop, Level::Sealed, Level::Stale] {
-            assert_eq!(exit_code(&[report(Level::Open), report(level)]), 2, "{level:?}");
+            assert_eq!(
+                exit_code(&[report(Level::Open), report(level)]),
+                2,
+                "{level:?}"
+            );
         }
     }
 
@@ -1359,8 +1657,14 @@ mod tests {
     impl HttpGet for Node {
         fn get(&self, path: &str, _accept: &str) -> Result<HttpResponse> {
             Ok(match self.0.get(path) {
-                Some(body) => HttpResponse { status: 200, body: body.clone().into_bytes() },
-                None => HttpResponse { status: 404, body: b"{}".to_vec() },
+                Some(body) => HttpResponse {
+                    status: 200,
+                    body: body.clone().into_bytes(),
+                },
+                None => HttpResponse {
+                    status: 404,
+                    body: b"{}".to_vec(),
+                },
             })
         }
     }
@@ -1390,8 +1694,20 @@ mod tests {
         assert_eq!(facts.genesis_time, 1_606_824_023);
         assert_eq!(facts.head_slot, 12_345);
         assert_eq!(facts.schedule.len(), 4);
-        assert_eq!(facts.schedule[1], ScheduleEntry { version: [1, 0, 0, 0], epoch: 74_240 });
-        assert_eq!(facts.schedule[3], ScheduleEntry { version: [0xff; 4], epoch: NEVER_EPOCH });
+        assert_eq!(
+            facts.schedule[1],
+            ScheduleEntry {
+                version: [1, 0, 0, 0],
+                epoch: 74_240
+            }
+        );
+        assert_eq!(
+            facts.schedule[3],
+            ScheduleEntry {
+                version: [0xff; 4],
+                epoch: NEVER_EPOCH
+            }
+        );
     }
 
     /// Claim: a missing endpoint, a bad version and a bad epoch each give an error, never a default.
@@ -1399,14 +1715,32 @@ mod tests {
     #[test]
     fn bad_beacon_answers_are_errors() {
         let missing = Node(HashMap::new());
-        assert!(matches!(fetch_beacon_facts(&missing), Err(Error::Beacon(_))));
+        assert!(matches!(
+            fetch_beacon_facts(&missing),
+            Err(Error::Beacon(_))
+        ));
         let bad_version = json!({"data":[{"current_version":"0x0100","epoch":"1"}]});
-        assert!(matches!(parse_fork_schedule(&bad_version), Err(Error::Malformed(_))));
+        assert!(matches!(
+            parse_fork_schedule(&bad_version),
+            Err(Error::Malformed(_))
+        ));
         let bad_epoch = json!({"data":[{"current_version":"0x01000000","epoch":"soon"}]});
-        assert!(matches!(parse_fork_schedule(&bad_epoch), Err(Error::Malformed(_))));
-        assert!(matches!(parse_fork_schedule(&json!({})), Err(Error::Malformed(_))));
-        assert!(matches!(parse_genesis_time(&json!({"data":{}})), Err(Error::Malformed(_))));
-        assert!(matches!(parse_head_slot(&json!({"data":{"header":{}}})), Err(Error::Malformed(_))));
+        assert!(matches!(
+            parse_fork_schedule(&bad_epoch),
+            Err(Error::Malformed(_))
+        ));
+        assert!(matches!(
+            parse_fork_schedule(&json!({})),
+            Err(Error::Malformed(_))
+        ));
+        assert!(matches!(
+            parse_genesis_time(&json!({"data":{}})),
+            Err(Error::Malformed(_))
+        ));
+        assert!(matches!(
+            parse_head_slot(&json!({"data":{"header":{}}})),
+            Err(Error::Malformed(_))
+        ));
     }
 
     /// Claim: from a fake node, with the real program table, the pieces together give OPEN on a quiet Ethereum
@@ -1416,12 +1750,31 @@ mod tests {
     fn fetched_data_and_the_program_table_decide_the_route() {
         let facts = fetch_beacon_facts(&fake_node()).expect("fetch");
         let now = facts.genesis_time + 200_000 * 384;
-        let open = assemble_inputs(ChainKind::Ethereum, &facts, None, facts.head_slot, None, now, HealthSettings::default());
+        let open = assemble_inputs(
+            ChainKind::Ethereum,
+            &facts,
+            None,
+            facts.head_slot,
+            None,
+            now,
+            HealthSettings::default(),
+        );
         assert_eq!(route_status(&open).level, Level::Open);
 
         let mut announced = facts.clone();
-        announced.schedule.push(ScheduleEntry { version: [0x42, 0, 0, 0], epoch: 200_000 + 5 });
-        let soon = assemble_inputs(ChainKind::Ethereum, &announced, None, facts.head_slot, None, now, HealthSettings::default());
+        announced.schedule.push(ScheduleEntry {
+            version: [0x42, 0, 0, 0],
+            epoch: 200_000 + 5,
+        });
+        let soon = assemble_inputs(
+            ChainKind::Ethereum,
+            &announced,
+            None,
+            facts.head_slot,
+            None,
+            now,
+            HealthSettings::default(),
+        );
         assert_eq!(route_status(&soon).level, Level::Stop);
     }
 
@@ -1462,8 +1815,15 @@ mod tests {
         assert!(value["fork"]["activation_epoch"].is_u64());
         assert!(value["gate"].is_null());
         let line = report.human_line();
-        assert!(line.contains("status=STOP") && line.contains("fork_version=0x09000000") && line.contains("gate=none"), "{line}");
-        assert!(render(&[report], OutputFormat::Json).trim_start().starts_with('['));
+        assert!(
+            line.contains("status=STOP")
+                && line.contains("fork_version=0x09000000")
+                && line.contains("gate=none"),
+            "{line}"
+        );
+        assert!(render(&[report], OutputFormat::Json)
+            .trim_start()
+            .starts_with('['));
     }
 
     /// Claim: the gate reader reads the mode, the supported versions and the sealed flag through the contract
@@ -1491,24 +1851,47 @@ mod tests {
             let selector: [u8; 4] = data[..4].try_into().unwrap();
             if to == format!("{vault:#x}") {
                 assert_eq!(selector, VaultContract::depositGateCall::SELECTOR);
-                return answer(VaultContract::depositGateCall::abi_encode_returns(&gate_address));
+                return answer(VaultContract::depositGateCall::abi_encode_returns(
+                    &gate_address,
+                ));
             }
             match selector {
-                s if s == GateContract::enforcingCall::SELECTOR => answer(GateContract::enforcingCall::abi_encode_returns(&true)),
-                s if s == GateContract::isSealedCall::SELECTOR => answer(GateContract::isSealedCall::abi_encode_returns(&true)),
-                s if s == GateContract::confirmedEpochCall::SELECTOR => {
-                    answer(GateContract::confirmedEpochCall::abi_encode_returns(&GateContract::confirmedEpochReturn { epoch: 77, exists: true }))
+                s if s == GateContract::enforcingCall::SELECTOR => {
+                    answer(GateContract::enforcingCall::abi_encode_returns(&true))
                 }
-                s if s == GateContract::currentEpochCall::SELECTOR => answer(GateContract::currentEpochCall::abi_encode_returns(&U256::from(78))),
-                s if s == GateVersionsContract::modeCall::SELECTOR => answer(GateVersionsContract::modeCall::abi_encode_returns(&1u8)),
+                s if s == GateContract::isSealedCall::SELECTOR => {
+                    answer(GateContract::isSealedCall::abi_encode_returns(&true))
+                }
+                s if s == GateContract::confirmedEpochCall::SELECTOR => {
+                    answer(GateContract::confirmedEpochCall::abi_encode_returns(
+                        &GateContract::confirmedEpochReturn {
+                            epoch: 77,
+                            exists: true,
+                        },
+                    ))
+                }
+                s if s == GateContract::currentEpochCall::SELECTOR => answer(
+                    GateContract::currentEpochCall::abi_encode_returns(&U256::from(78)),
+                ),
+                s if s == GateVersionsContract::modeCall::SELECTOR => {
+                    answer(GateVersionsContract::modeCall::abi_encode_returns(&1u8))
+                }
                 s if s == GateVersionsContract::supportedVersionsCall::SELECTOR => {
-                    let versions = vec![crate::contracts::GateSupportedVersion { version: [3, 0, 0, 0].into(), stateDepth: 5 }];
-                    answer(GateVersionsContract::supportedVersionsCall::abi_encode_returns(&versions))
+                    let versions = vec![crate::contracts::GateSupportedVersion {
+                        version: [3, 0, 0, 0].into(),
+                        stateDepth: 5,
+                    }];
+                    answer(
+                        GateVersionsContract::supportedVersionsCall::abi_encode_returns(&versions),
+                    )
                 }
                 other => panic!("unexpected selector {other:?}"),
             }
         };
-        let rpc = ScriptedRpc { calls: Mutex::new(vec![]), handler: Box::new(handler) };
+        let rpc = ScriptedRpc {
+            calls: Mutex::new(vec![]),
+            handler: Box::new(handler),
+        };
         let client = ChainClient::connect("test", 1, Box::new(rpc), None).unwrap();
         let observed = read_gate_observation(&client, vault).unwrap();
         assert_eq!(observed.gate, gate_address);
@@ -1521,12 +1904,22 @@ mod tests {
             calls: Mutex::new(vec![]),
             handler: Box::new(|method, _| match method {
                 "eth_chainId" => Ok(json!("0x1")),
-                _ => Err(Error::Rpc { code: 3, message: "execution reverted".into(), data: None }),
+                _ => Err(Error::Rpc {
+                    code: 3,
+                    message: "execution reverted".into(),
+                    data: None,
+                }),
             }),
         };
         let client = ChainClient::connect("test", 1, Box::new(bare), None).unwrap();
-        assert!(read_gate_observation(&client, vault).is_err(), "a reverting depositGate is a read error, never an open route");
-        assert_eq!(observed.registry, None, "a gate in detection mode has no registry, and the node is not asked for one");
+        assert!(
+            read_gate_observation(&client, vault).is_err(),
+            "a reverting depositGate is a read error, never an open route"
+        );
+        assert_eq!(
+            observed.registry, None,
+            "a gate in detection mode has no registry, and the node is not asked for one"
+        );
     }
 
     /// Claim: in registry mode the reader follows `forkRegistry()` to the registry and reads `latestObserved()`
@@ -1554,29 +1947,62 @@ mod tests {
                 let selector: [u8; 4] = data[..4].try_into().unwrap();
                 let answer = |data: Vec<u8>| Ok(json!(format!("0x{}", hex::encode(data))));
                 if selector == GateVersionsContract::forkRegistryCall::SELECTOR {
-                    assert_eq!(to, format!("{gate_address:#x}"), "the registry address is asked from the gate");
-                    return answer(GateVersionsContract::forkRegistryCall::abi_encode_returns(&registry_answer));
+                    assert_eq!(
+                        to,
+                        format!("{gate_address:#x}"),
+                        "the registry address is asked from the gate"
+                    );
+                    return answer(GateVersionsContract::forkRegistryCall::abi_encode_returns(
+                        &registry_answer,
+                    ));
                 }
                 assert_eq!(selector, ForkRegistryContract::latestObservedCall::SELECTOR);
-                assert_eq!(to, format!("{registry:#x}"), "latestObserved is asked from the registry the gate named");
-                answer(ForkRegistryContract::latestObservedCall::abi_encode_returns(&ForkRegistryContract::latestObservedReturn {
-                    version: [0, 0, 3, 0x6d].into(),
-                    slot: 10_864_592,
-                }))
+                assert_eq!(
+                    to,
+                    format!("{registry:#x}"),
+                    "latestObserved is asked from the registry the gate named"
+                );
+                answer(
+                    ForkRegistryContract::latestObservedCall::abi_encode_returns(
+                        &ForkRegistryContract::latestObservedReturn {
+                            version: [0, 0, 3, 0x6d].into(),
+                            slot: 10_864_592,
+                        },
+                    ),
+                )
             }
         };
         let connect = |handler: crate::chain::fake::Handler| {
-            let rpc = ScriptedRpc { calls: Mutex::new(vec![]), handler };
+            let rpc = ScriptedRpc {
+                calls: Mutex::new(vec![]),
+                handler,
+            };
             ChainClient::connect("test", 1, Box::new(rpc), None).unwrap()
         };
 
         let client = connect(Box::new(handler_for(registry)));
-        let observed = read_registry_observation(&client, gate_address, REGISTRY_MODE).unwrap().expect("a registry");
-        assert_eq!(observed, RegistryObservation { registry, latest_version: [0, 0, 3, 0x6d], latest_slot: 10_864_592 });
-        assert_eq!(read_registry_observation(&client, gate_address, 1).unwrap(), None, "other modes ask for nothing");
+        let observed = read_registry_observation(&client, gate_address, REGISTRY_MODE)
+            .unwrap()
+            .expect("a registry");
+        assert_eq!(
+            observed,
+            RegistryObservation {
+                registry,
+                latest_version: [0, 0, 3, 0x6d],
+                latest_slot: 10_864_592
+            }
+        );
+        assert_eq!(
+            read_registry_observation(&client, gate_address, 1).unwrap(),
+            None,
+            "other modes ask for nothing"
+        );
 
         let client = connect(Box::new(handler_for(Address::ZERO)));
-        assert!(read_registry_observation(&client, gate_address, REGISTRY_MODE).is_err(), "a zero registry is a read error");
+        assert!(
+            read_registry_observation(&client, gate_address, REGISTRY_MODE).is_err(),
+            "a zero registry is a read error"
+        );
     }
 
     /// A beacon node that does not serve the updates endpoint (404), so it holds no update for any period.
@@ -1584,7 +2010,10 @@ mod tests {
 
     impl HttpGet for HistoryNode {
         fn get(&self, _path_and_query: &str, _accept: &str) -> Result<HttpResponse> {
-            Ok(HttpResponse { status: 404, body: b"{}".to_vec() })
+            Ok(HttpResponse {
+                status: 404,
+                body: b"{}".to_vec(),
+            })
         }
     }
 
@@ -1597,10 +2026,34 @@ mod tests {
     fn a_node_without_the_handoff_updates_gives_a_gap() {
         let period_slots = 8_192;
         let beacon_head = 100 * period_slots + 500;
-        let behind = find_update_gap(&HistoryNode, ChainKind::Pulsechain, "own-chain", 97 * period_slots + 20, beacon_head).unwrap();
-        assert_eq!(behind, Some(UpdateGap { light_client: "own-chain", head_period: 97, missing_period: 97 }));
-        let current = find_update_gap(&HistoryNode, ChainKind::Pulsechain, "destination", 100 * period_slots + 20, beacon_head).unwrap();
-        assert_eq!(current, None, "a head in the current period needs no handoff");
+        let behind = find_update_gap(
+            &HistoryNode,
+            ChainKind::Pulsechain,
+            "own-chain",
+            97 * period_slots + 20,
+            beacon_head,
+        )
+        .unwrap();
+        assert_eq!(
+            behind,
+            Some(UpdateGap {
+                light_client: "own-chain",
+                head_period: 97,
+                missing_period: 97
+            })
+        );
+        let current = find_update_gap(
+            &HistoryNode,
+            ChainKind::Pulsechain,
+            "destination",
+            100 * period_slots + 20,
+            beacon_head,
+        )
+        .unwrap();
+        assert_eq!(
+            current, None,
+            "a head in the current period needs no handoff"
+        );
     }
 
     /// Claim: an update gap gives WARN, not STOP, names the missing period and the light client, asks for a node with a
@@ -1610,16 +2063,35 @@ mod tests {
     #[test]
     fn an_update_gap_warns_and_never_refuses_deposits() {
         let mut value = inputs();
-        value.update_gaps = vec![UpdateGap { light_client: "destination", head_period: 90, missing_period: 92 }];
+        value.update_gaps = vec![UpdateGap {
+            light_client: "destination",
+            head_period: 90,
+            missing_period: 92,
+        }];
         let status = route_status(&value);
         assert_eq!(status.level, Level::Warn);
         assert!(!status.level.refuses_deposits());
-        assert!(status.reason.contains("period 92") && status.reason.contains("destination light client is in period 90"), "{}", status.reason);
-        assert!(status.reason.contains("longer history"), "{}", status.reason);
+        assert!(
+            status.reason.contains("period 92")
+                && status
+                    .reason
+                    .contains("destination light client is in period 90"),
+            "{}",
+            status.reason
+        );
+        assert!(
+            status.reason.contains("longer history"),
+            "{}",
+            status.reason
+        );
 
         value.gate = Some(gate(true));
         let sealed = route_status(&value);
         assert_eq!(sealed.level, Level::Sealed);
-        assert_eq!(sealed.other_findings.len(), 1, "the gap stays among the other findings");
+        assert_eq!(
+            sealed.other_findings.len(),
+            1,
+            "the gap stays among the other findings"
+        );
     }
 }

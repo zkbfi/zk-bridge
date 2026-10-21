@@ -29,7 +29,11 @@ fn encode_list(items: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
     let mut payload = Vec::new();
     items(&mut payload);
     let mut out = Vec::new();
-    Header { list: true, payload_length: payload.len() }.encode(&mut out);
+    Header {
+        list: true,
+        payload_length: payload.len(),
+    }
+    .encode(&mut out);
     out.extend_from_slice(&payload);
     out
 }
@@ -84,7 +88,11 @@ mod tests {
     /// Why it matters: a wrong digest makes every transaction come from a different, unfunded address.
     #[test]
     fn signed_transaction_recovers_to_the_sender() {
-        let signer = Signer::from_secret_bytes(&hex::decode("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80").unwrap()).unwrap();
+        let signer = Signer::from_secret_bytes(
+            &hex::decode("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+                .unwrap(),
+        )
+        .unwrap();
         let transaction = LegacyTransaction {
             chain_id: 369,
             nonce: 3,
@@ -113,7 +121,8 @@ mod tests {
             s: B256::from(s.to_be_bytes::<32>()),
             recovery_id: (v - 35 - 369 * 2) as u8,
         };
-        let recovered = crate::signer::recover_address(&transaction.signing_digest(), &signature).unwrap();
+        let recovered =
+            crate::signer::recover_address(&transaction.signing_digest(), &signature).unwrap();
         assert_eq!(recovered, signer.address());
     }
 }

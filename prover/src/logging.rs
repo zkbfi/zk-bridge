@@ -45,13 +45,20 @@ pub struct Logger {
 impl Logger {
     /// A logger that writes every line to standard error.
     pub fn standard() -> Self {
-        Self { sink: Sink::Standard }
+        Self {
+            sink: Sink::Standard,
+        }
     }
 
     /// A logger that keeps lines in memory. The second value gives the lines written so far.
     pub fn in_memory() -> (Self, Arc<Mutex<Vec<String>>>) {
         let lines = Arc::new(Mutex::new(Vec::new()));
-        (Self { sink: Sink::Memory(lines.clone()) }, lines)
+        (
+            Self {
+                sink: Sink::Memory(lines.clone()),
+            },
+            lines,
+        )
     }
 
     /// Writes one line.
@@ -82,15 +89,27 @@ impl Logger {
 }
 
 fn unix_seconds() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
 }
 
 fn quote_if_needed(value: &str) -> String {
-    let needs_quotes = value.is_empty() || value.chars().any(|character| character.is_whitespace() || character == '"');
+    let needs_quotes = value.is_empty()
+        || value
+            .chars()
+            .any(|character| character.is_whitespace() || character == '"');
     if !needs_quotes {
         return value.to_string();
     }
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', " "))
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', " ")
+    )
 }
 
 /// Builds one line. Separate from [`Logger::log`] so a test can fix the time.
@@ -120,8 +139,20 @@ mod tests {
     /// Why it matters: a log reader filters on `nonce=` and must not meet a line without the key.
     #[test]
     fn every_line_has_a_nonce_key_and_quotes_spaces() {
-        let with = format_line(7, Level::Info, "deposit_state", Some(B256::repeat_byte(0xab)), &[("reason", "no cover".into())]);
-        assert_eq!(with, format!("ts=7 level=info event=deposit_state nonce={:#x} reason=\"no cover\"", B256::repeat_byte(0xab)));
+        let with = format_line(
+            7,
+            Level::Info,
+            "deposit_state",
+            Some(B256::repeat_byte(0xab)),
+            &[("reason", "no cover".into())],
+        );
+        assert_eq!(
+            with,
+            format!(
+                "ts=7 level=info event=deposit_state nonce={:#x} reason=\"no cover\"",
+                B256::repeat_byte(0xab)
+            )
+        );
         let without = format_line(7, Level::Warn, "pass_started", None, &[]);
         assert_eq!(without, "ts=7 level=warn event=pass_started nonce=none");
     }

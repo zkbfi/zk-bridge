@@ -49,8 +49,13 @@ pub fn submit_fork_observation(
     let proof = prover.prove(observation_program_vkey, statement)?;
     let observation = decode_fork_observation(&proof.public_values)?;
     let data = observe_calldata(&proof.proof_bytes, &proof.public_values);
-    let transaction = destination.send_and_wait(registry, &data, "the fork observation", receipt_timeout)?;
-    Ok(SubmittedObservation { transaction, version: observation.observedVersion.0, attested_slot: observation.observedAttestedSlot })
+    let transaction =
+        destination.send_and_wait(registry, &data, "the fork observation", receipt_timeout)?;
+    Ok(SubmittedObservation {
+        transaction,
+        version: observation.observedVersion.0,
+        attested_slot: observation.observedAttestedSlot,
+    })
 }
 
 #[cfg(test)]
@@ -83,7 +88,9 @@ mod tests {
             match method {
                 "eth_chainId" => Ok(json!("0x171")),
                 "eth_estimateGas" => {
-                    sent.lock().unwrap().push(params[0]["data"].as_str().unwrap().to_string());
+                    sent.lock()
+                        .unwrap()
+                        .push(params[0]["data"].as_str().unwrap().to_string());
                     Ok(json!("0x5208"))
                 }
                 "eth_getTransactionCount" => Ok(json!("0x0")),
@@ -93,7 +100,10 @@ mod tests {
                 other => panic!("unexpected {other}"),
             }
         };
-        let rpc = ScriptedRpc { calls: Mutex::new(vec![]), handler: Box::new(handler) };
+        let rpc = ScriptedRpc {
+            calls: Mutex::new(vec![]),
+            handler: Box::new(handler),
+        };
         ChainClient::connect("test", 369, Box::new(rpc), Some(oracle())).unwrap()
     }
 
@@ -108,7 +118,15 @@ mod tests {
         let values = public_values([0, 0, 3, 0x6d], 10_864_592);
         let statement = ProofStatement::ObservationAsserted(values.clone());
         let prover = crate::prover::OracleProver::new(oracle());
-        let submitted = submit_fork_observation(&client, Address::repeat_byte(0x44), &prover, B256::repeat_byte(0x22), &statement, Duration::from_secs(1)).unwrap();
+        let submitted = submit_fork_observation(
+            &client,
+            Address::repeat_byte(0x44),
+            &prover,
+            B256::repeat_byte(0x22),
+            &statement,
+            Duration::from_secs(1),
+        )
+        .unwrap();
         assert_eq!(submitted.version, [0, 0, 3, 0x6d]);
         assert_eq!(submitted.attested_slot, 10_864_592);
         assert_eq!(submitted.transaction, B256::repeat_byte(0x11));
@@ -126,7 +144,15 @@ mod tests {
         let client = recording_node(sent.clone());
         let statement = ProofStatement::ObservationAsserted(vec![1, 2, 3]);
         let prover = crate::prover::OracleProver::new(oracle());
-        let error = submit_fork_observation(&client, Address::repeat_byte(0x44), &prover, B256::repeat_byte(0x22), &statement, Duration::from_secs(1)).unwrap_err();
+        let error = submit_fork_observation(
+            &client,
+            Address::repeat_byte(0x44),
+            &prover,
+            B256::repeat_byte(0x22),
+            &statement,
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
         assert!(matches!(error, Error::Malformed(_)), "{error}");
         assert!(sent.lock().unwrap().is_empty());
     }
@@ -139,7 +165,15 @@ mod tests {
         let client = recording_node(sent.clone());
         let statement = ProofStatement::Observation(vec![0xff; 16]);
         let prover = crate::prover::OracleProver::new(oracle());
-        let error = submit_fork_observation(&client, Address::repeat_byte(0x44), &prover, B256::repeat_byte(0x22), &statement, Duration::from_secs(1)).unwrap_err();
+        let error = submit_fork_observation(
+            &client,
+            Address::repeat_byte(0x44),
+            &prover,
+            B256::repeat_byte(0x22),
+            &statement,
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
         assert!(matches!(error, Error::VerificationRefused(_)), "{error}");
         assert!(sent.lock().unwrap().is_empty());
     }

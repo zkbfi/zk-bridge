@@ -7,13 +7,14 @@ use crate::beacon::{BeaconSource, DepositBlock, LightClientState, UpdatePlan};
 use crate::chain::{ChainClient, ExecutionReader, RawLog};
 use crate::config::{BeaconKind, ChainConfig, Config, ProverBackend, RouteName};
 use crate::contracts::{
-    head_updated_topic, is_already_claimed, update_calldata, BlockHashEvidence, BlockRootsEvidence, HistoricalSummariesEvidence, LightClientContract,
-    FlowLimiterContract, VaultContract,
+    head_updated_topic, is_already_claimed, update_calldata, BlockHashEvidence, BlockRootsEvidence,
+    FlowLimiterContract, HistoricalSummariesEvidence, LightClientContract, VaultContract,
 };
 use crate::error::{Error, Result};
 use crate::light_client::{
-    ancestry_path, assemble_withdrawal_proof, build_execution_evidence, decode_deposit, AncestryPath, to_layout_header, verify_withdrawal_natively,
-    withdrawal_calldata, VaultContext, DEPOSIT_EVENT_TOPIC,
+    ancestry_path, assemble_withdrawal_proof, build_execution_evidence, decode_deposit,
+    to_layout_header, verify_withdrawal_natively, withdrawal_calldata, AncestryPath, VaultContext,
+    DEPOSIT_EVENT_TOPIC,
 };
 use crate::prover::{OracleProver, Prover};
 use crate::rpc::{parse_quantity, HttpClient, HttpRpc};
@@ -109,44 +110,95 @@ impl LiveRoute {
         let vault = self.destination_vault;
         let name = &self.route_name;
         let mismatch = |what: &str, expected: String, actual: String| {
-            Error::Config(format!("route {name}: {what} is {actual}, the configuration says {expected}"))
+            Error::Config(format!(
+                "route {name}: {what} is {actual}, the configuration says {expected}"
+            ))
         };
-        let remote_vault = self.destination.view(vault, VaultContract::remoteVaultCall {})?;
+        let remote_vault = self
+            .destination
+            .view(vault, VaultContract::remoteVaultCall {})?;
         if remote_vault != self.source_vault {
-            return Err(mismatch("destination vault remoteVault", self.source_vault.to_string(), remote_vault.to_string()));
+            return Err(mismatch(
+                "destination vault remoteVault",
+                self.source_vault.to_string(),
+                remote_vault.to_string(),
+            ));
         }
-        let remote_chain = self.destination.view(vault, VaultContract::remoteChainIdCall {})?;
+        let remote_chain = self
+            .destination
+            .view(vault, VaultContract::remoteChainIdCall {})?;
         if remote_chain != self.source.chain_id() {
-            return Err(mismatch("destination vault remoteChainId", self.source.chain_id().to_string(), remote_chain.to_string()));
+            return Err(mismatch(
+                "destination vault remoteChainId",
+                self.source.chain_id().to_string(),
+                remote_chain.to_string(),
+            ));
         }
-        let local_chain = self.destination.view(vault, VaultContract::localChainIdCall {})?;
+        let local_chain = self
+            .destination
+            .view(vault, VaultContract::localChainIdCall {})?;
         if local_chain != self.destination.chain_id() {
-            return Err(mismatch("destination vault localChainId", self.destination.chain_id().to_string(), local_chain.to_string()));
+            return Err(mismatch(
+                "destination vault localChainId",
+                self.destination.chain_id().to_string(),
+                local_chain.to_string(),
+            ));
         }
-        let light_client = self.destination.view(vault, VaultContract::lightClientCall {})?;
+        let light_client = self
+            .destination
+            .view(vault, VaultContract::lightClientCall {})?;
         if light_client != self.light_client {
-            return Err(mismatch("destination vault lightClient", self.light_client.to_string(), light_client.to_string()));
+            return Err(mismatch(
+                "destination vault lightClient",
+                self.light_client.to_string(),
+                light_client.to_string(),
+            ));
         }
-        let program_key = self.destination.view(self.light_client, LightClientContract::programVKeyCall {})?;
+        let program_key = self
+            .destination
+            .view(self.light_client, LightClientContract::programVKeyCall {})?;
         if program_key != self.program_vkey {
-            return Err(mismatch("light client programVKey", format!("{:#x}", self.program_vkey), format!("{program_key:#x}")));
+            return Err(mismatch(
+                "light client programVKey",
+                format!("{:#x}", self.program_vkey),
+                format!("{program_key:#x}"),
+            ));
         }
         self.check_own_light_client_wiring(&mismatch)
     }
 
     /// The own-chain light client must follow the same beacon chain as the destination light client (both track the
     /// source chain) and run the same program. The service reads both facts from the contracts and compares them.
-    fn check_own_light_client_wiring(&self, mismatch: &dyn Fn(&str, String, String) -> Error) -> Result<()> {
+    fn check_own_light_client_wiring(
+        &self,
+        mismatch: &dyn Fn(&str, String, String) -> Error,
+    ) -> Result<()> {
         let Some(own) = self.own_light_client else {
             return Ok(());
         };
-        self.source.sender().map_err(|_| Error::Config(format!("route {}: own_light_client is set, but the source chain has no signer", self.route_name)))?;
-        let own_key = self.source.view(own, LightClientContract::programVKeyCall {})?;
+        self.source.sender().map_err(|_| {
+            Error::Config(format!(
+                "route {}: own_light_client is set, but the source chain has no signer",
+                self.route_name
+            ))
+        })?;
+        let own_key = self
+            .source
+            .view(own, LightClientContract::programVKeyCall {})?;
         if own_key != self.program_vkey {
-            return Err(mismatch("own light client programVKey", format!("{:#x}", self.program_vkey), format!("{own_key:#x}")));
+            return Err(mismatch(
+                "own light client programVKey",
+                format!("{:#x}", self.program_vkey),
+                format!("{own_key:#x}"),
+            ));
         }
-        let own_root = self.source.view(own, LightClientContract::genesisValidatorsRootCall {})?;
-        let tracked_root = self.destination.view(self.light_client, LightClientContract::genesisValidatorsRootCall {})?;
+        let own_root = self
+            .source
+            .view(own, LightClientContract::genesisValidatorsRootCall {})?;
+        let tracked_root = self.destination.view(
+            self.light_client,
+            LightClientContract::genesisValidatorsRootCall {},
+        )?;
         if own_root != tracked_root {
             return Err(mismatch(
                 "own light client genesisValidatorsRoot (the destination light client tracks the same beacon chain)",
@@ -165,12 +217,22 @@ impl LiveRoute {
     fn stored_slots(&self) -> Result<Vec<u64>> {
         let latest = self.destination.latest_block_number()?;
         let mut cache = self.head_slots.lock().expect("lock");
-        let mut from = cache.0.map_or(self.destination_start_block, |last| last + 1);
+        let mut from = cache
+            .0
+            .map_or(self.destination_start_block, |last| last + 1);
         while from <= latest {
             let to = latest.min(from.saturating_add(self.log_block_range - 1));
-            for log in self.destination.logs(self.light_client, head_updated_topic(), from, to)? {
-                let slot_topic = log.topics.get(1).ok_or_else(|| Error::Malformed("HeadUpdated without a slot topic".into()))?;
-                cache.1.push(u64::from_be_bytes(slot_topic[24..].try_into().expect("8 bytes")));
+            for log in self
+                .destination
+                .logs(self.light_client, head_updated_topic(), from, to)?
+            {
+                let slot_topic = log
+                    .topics
+                    .get(1)
+                    .ok_or_else(|| Error::Malformed("HeadUpdated without a slot topic".into()))?;
+                cache.1.push(u64::from_be_bytes(
+                    slot_topic[24..].try_into().expect("8 bytes"),
+                ));
             }
             cache.0 = Some(to);
             from = to + 1;
@@ -179,9 +241,19 @@ impl LiveRoute {
     }
 
     fn deposit_block(&self, number: u64) -> Result<DepositBlock> {
-        let block = self.source.block(number)?.ok_or_else(|| Error::Malformed(format!("source block {number} is unknown")))?;
-        let hash: B256 = block["hash"].as_str().and_then(|text| text.parse().ok()).ok_or_else(|| Error::Malformed("block hash".into()))?;
-        Ok(DepositBlock { number, hash, timestamp: parse_quantity(&block["timestamp"])? })
+        let block = self
+            .source
+            .block(number)?
+            .ok_or_else(|| Error::Malformed(format!("source block {number} is unknown")))?;
+        let hash: B256 = block["hash"]
+            .as_str()
+            .and_then(|text| text.parse().ok())
+            .ok_or_else(|| Error::Malformed("block hash".into()))?;
+        Ok(DepositBlock {
+            number,
+            hash,
+            timestamp: parse_quantity(&block["timestamp"])?,
+        })
     }
 
     fn deposit_from_log(&self, log: &RawLog, log_index: u64) -> Result<Option<NewDeposit>> {
@@ -209,34 +281,63 @@ impl LiveRoute {
 
     /// Sends a transaction to the destination chain and waits for it. A revert is an error with the revert data.
     fn send_and_wait(&self, to: Address, data: &[u8], what: &str) -> Result<B256> {
-        self.destination.send_and_wait(to, data, what, self.receipt_timeout)
+        self.destination
+            .send_and_wait(to, data, what, self.receipt_timeout)
     }
 
     /// Proves an update and sends it to `light_client` on `chain`.
-    fn submit_update(&self, chain: &ChainClient, light_client: Address, statement: &crate::prover::ProofStatement) -> Result<()> {
+    fn submit_update(
+        &self,
+        chain: &ChainClient,
+        light_client: Address,
+        statement: &crate::prover::ProofStatement,
+    ) -> Result<()> {
         let proof = self.prover.prove(self.program_vkey, statement)?;
         let data = update_calldata(&proof.proof_bytes, &proof.public_values);
-        chain.send_and_wait(light_client, &data, "the light client update", self.receipt_timeout)?;
+        chain.send_and_wait(
+            light_client,
+            &data,
+            "the light client update",
+            self.receipt_timeout,
+        )?;
         Ok(())
     }
 
     /// Makes the vault layout rows cover the withdrawal: the `block_roots` row (recent path) or the
     /// `historical_summaries` row (historical path) must cover the anchor slot, and the block hash row must cover the
     /// deposit slot. Anyone may add a row. The chain's stored data validates it.
-    fn ensure_layouts(&self, anchor: &crate::light_client::BeaconHeader, deposit_slot: u64, stored: &[u64]) -> Result<()> {
+    fn ensure_layouts(
+        &self,
+        anchor: &crate::light_client::BeaconHeader,
+        deposit_slot: u64,
+        stored: &[u64],
+    ) -> Result<()> {
         let vault = self.destination_vault;
-        let roots_cover = |rows: &[crate::contracts::StateLayoutRow]| rows.iter().any(|row| row.firstSlot <= anchor.slot && anchor.slot <= row.lastSlot);
-        let hash_cover = |rows: &[crate::contracts::BodyLayoutRow], slot: u64| rows.iter().any(|row| row.firstSlot <= slot && slot <= row.lastSlot);
+        let roots_cover = |rows: &[crate::contracts::StateLayoutRow]| {
+            rows.iter()
+                .any(|row| row.firstSlot <= anchor.slot && anchor.slot <= row.lastSlot)
+        };
+        let hash_cover = |rows: &[crate::contracts::BodyLayoutRow], slot: u64| {
+            rows.iter()
+                .any(|row| row.firstSlot <= slot && slot <= row.lastSlot)
+        };
 
         // The vault takes the path from the distance, so the row that it needs depends on the distance too.
         match ancestry_path(anchor.slot, deposit_slot)? {
             AncestryPath::Recent => {
-                let rows = self.destination.view(vault, VaultContract::stateLayoutsCall {})?;
+                let rows = self
+                    .destination
+                    .view(vault, VaultContract::stateLayoutsCall {})?;
                 if !roots_cover(&rows) {
                     let evidence = self
                         .beacon
                         .roots_layout_evidence(anchor, stored, &self.source)?
-                        .ok_or_else(|| Error::Beacon("not enough stored headers yet to validate the block roots layout".into()))?;
+                        .ok_or_else(|| {
+                            Error::Beacon(
+                                "not enough stored headers yet to validate the block roots layout"
+                                    .into(),
+                            )
+                        })?;
                     let call = VaultContract::addBlockRootsLayoutCall {
                         blockRootsGindex: U256::from(evidence.gindex),
                         evidence: BlockRootsEvidence {
@@ -251,8 +352,13 @@ impl LiveRoute {
                 }
             }
             AncestryPath::Historical => {
-                let rows = self.destination.view(vault, VaultContract::historicalLayoutsCall {})?;
-                if !rows.iter().any(|row| row.firstSlot <= anchor.slot && anchor.slot <= row.lastSlot) {
+                let rows = self
+                    .destination
+                    .view(vault, VaultContract::historicalLayoutsCall {})?;
+                if !rows
+                    .iter()
+                    .any(|row| row.firstSlot <= anchor.slot && anchor.slot <= row.lastSlot)
+                {
                     let evidence = self.beacon.historical_layout_evidence(anchor, stored, &self.source)?.ok_or_else(|| {
                         Error::Beacon(
                             "no stored header lies in a completed era more than 8192 slots below the anchor, so the historical summaries layout cannot be validated yet"
@@ -273,22 +379,34 @@ impl LiveRoute {
         }
 
         for wanted in [deposit_slot, anchor.slot] {
-            let rows = self.destination.view(vault, VaultContract::bodyLayoutsCall {})?;
+            let rows = self
+                .destination
+                .view(vault, VaultContract::bodyLayoutsCall {})?;
             if hash_cover(&rows, deposit_slot) {
                 break;
             }
-            let Some(evidence) = self.beacon.hash_layout_evidence(wanted, stored, &self.source)? else {
+            let Some(evidence) = self
+                .beacon
+                .hash_layout_evidence(wanted, stored, &self.source)?
+            else {
                 continue;
             };
             let call = VaultContract::addBlockHashLayoutCall {
                 blockHashGindex: U256::from(evidence.gindex),
-                evidence: BlockHashEvidence { header: to_layout_header(&evidence.header), branch: evidence.branch },
+                evidence: BlockHashEvidence {
+                    header: to_layout_header(&evidence.header),
+                    branch: evidence.branch,
+                },
             };
             self.send_and_wait(vault, &call.abi_encode(), "addBlockHashLayout")?;
         }
-        let rows = self.destination.view(vault, VaultContract::bodyLayoutsCall {})?;
+        let rows = self
+            .destination
+            .view(vault, VaultContract::bodyLayoutsCall {})?;
         if !hash_cover(&rows, deposit_slot) {
-            return Err(Error::Beacon(format!("no validated block hash layout covers slot {deposit_slot} yet")));
+            return Err(Error::Beacon(format!(
+                "no validated block hash layout covers slot {deposit_slot} yet"
+            )));
         }
         Ok(())
     }
@@ -303,7 +421,9 @@ fn limiter_wait_note(limiter: Address, simulation: Result<Bytes>) -> Result<Opti
         Ok(_) => return Ok(None),
         Err(error) => error,
     };
-    let Some(data) = error.revert_data() else { return Err(error) };
+    let Some(data) = error.revert_data() else {
+        return Err(error);
+    };
     Ok(Some(format!(
         "waiting on the flow limiter {limiter:#x}: it refuses the withdrawal now (revert data 0x{}); the deposit stays unclaimed and the service tries again on every pass",
         alloy_primitives::hex::encode(data)
@@ -316,8 +436,13 @@ impl LiveRoute {
     /// limiter from another revert. It says that the limiter may have refused, and it keeps the revert data. The nonce
     /// stays unclaimed, so a later attempt can pay it.
     fn explain_refusal(&self, error: Error) -> Error {
-        let Some(data) = error.revert_data() else { return error };
-        let limiter = match self.destination.view(self.destination_vault, VaultContract::flowLimiterCall {}) {
+        let Some(data) = error.revert_data() else {
+            return error;
+        };
+        let limiter = match self
+            .destination
+            .view(self.destination_vault, VaultContract::flowLimiterCall {})
+        {
             Ok(limiter) if limiter != Address::ZERO => limiter,
             _ => return error,
         };
@@ -335,25 +460,41 @@ impl RoutePorts for LiveRoute {
 
     fn scan(&self, from: u64, to: u64) -> Result<Vec<NewDeposit>> {
         let mut deposits = Vec::new();
-        for log in self.source.logs(self.source_vault, DEPOSIT_EVENT_TOPIC, from, to)? {
+        for log in self
+            .source
+            .logs(self.source_vault, DEPOSIT_EVENT_TOPIC, from, to)?
+        {
             let receipt = self
                 .source
                 .transaction_receipt(log.transaction_hash)?
-                .ok_or_else(|| Error::Malformed(format!("no receipt for {:#x}", log.transaction_hash)))?;
+                .ok_or_else(|| {
+                    Error::Malformed(format!("no receipt for {:#x}", log.transaction_hash))
+                })?;
             let position = receipt["logs"]
                 .as_array()
-                .and_then(|logs| logs.iter().position(|entry| parse_quantity(&entry["logIndex"]).ok() == Some(log.block_log_index)))
+                .and_then(|logs| {
+                    logs.iter().position(|entry| {
+                        parse_quantity(&entry["logIndex"]).ok() == Some(log.block_log_index)
+                    })
+                })
                 .ok_or_else(|| Error::Malformed("the log is not in its receipt".into()))?;
             deposits.extend(self.deposit_from_log(&log, position as u64)?);
         }
         Ok(deposits)
     }
 
-    fn deposit_from_receipt(&self, transaction: B256, log_index: u64) -> Result<Option<NewDeposit>> {
+    fn deposit_from_receipt(
+        &self,
+        transaction: B256,
+        log_index: u64,
+    ) -> Result<Option<NewDeposit>> {
         let Some(receipt) = self.source.transaction_receipt(transaction)? else {
             return Ok(None);
         };
-        let Some(entry) = receipt["logs"].as_array().and_then(|logs| logs.get(log_index as usize)) else {
+        let Some(entry) = receipt["logs"]
+            .as_array()
+            .and_then(|logs| logs.get(log_index as usize))
+        else {
             return Ok(None);
         };
         let log = RawLog::from_json(entry)?;
@@ -362,30 +503,49 @@ impl RoutePorts for LiveRoute {
         }
         let finalized = self.finalized_source_block()?;
         if finalized.is_none_or(|block| log.block_number > block) {
-            return Err(Error::Usage(format!("block {} is not final yet; the service reads only final blocks", log.block_number)));
+            return Err(Error::Usage(format!(
+                "block {} is not final yet; the service reads only final blocks",
+                log.block_number
+            )));
         }
         self.deposit_from_log(&log, log_index)
     }
 
     fn claimed(&self, nonce: B256) -> Result<bool> {
-        self.destination.view(self.destination_vault, VaultContract::claimedCall { depositNonce: nonce })
+        self.destination.view(
+            self.destination_vault,
+            VaultContract::claimedCall {
+                depositNonce: nonce,
+            },
+        )
     }
 
     fn advance_light_client(&self, deposit: &NewDeposit) -> Result<Coverage> {
         let block = self.deposit_block(deposit.block_number)?;
         if block.hash != deposit.block_hash {
-            return Err(Error::Malformed(format!("block {} changed its hash; the source chain reorganized a final block", block.number)));
+            return Err(Error::Malformed(format!(
+                "block {} changed its hash; the source chain reorganized a final block",
+                block.number
+            )));
         }
         for _ in 0..MAX_PROOFS_PER_CALL {
             let state = self.read_light_client_state()?;
             let stored = self.stored_slots()?;
-            match self.beacon.next_update(&block, &state, &stored, &self.source)? {
+            match self
+                .beacon
+                .next_update(&block, &state, &stored, &self.source)?
+            {
                 UpdatePlan::Covered => return Ok(Coverage::Covered),
                 UpdatePlan::NotYetFinal => return Ok(Coverage::NotYetFinal),
-                UpdatePlan::Update(statement) => self.submit_update(&self.destination, self.light_client, &statement)?,
+                UpdatePlan::Update(statement) => {
+                    self.submit_update(&self.destination, self.light_client, &statement)?
+                }
             }
         }
-        Err(Error::Beacon(format!("the light client is still behind block {} after {MAX_PROOFS_PER_CALL} proofs", block.number)))
+        Err(Error::Beacon(format!(
+            "the light client is still behind block {} after {MAX_PROOFS_PER_CALL} proofs",
+            block.number
+        )))
     }
 
     fn advance_own_light_client(&self) -> Result<usize> {
@@ -407,25 +567,39 @@ impl RoutePorts for LiveRoute {
     }
 
     fn build_withdrawal(&self, deposit: &NewDeposit) -> Result<Vec<u8>> {
-        let block_json = self
+        let block_json = self.source.block(deposit.block_number)?.ok_or_else(|| {
+            Error::Malformed(format!("source block {} is unknown", deposit.block_number))
+        })?;
+        let receipts = self
             .source
-            .block(deposit.block_number)?
-            .ok_or_else(|| Error::Malformed(format!("source block {} is unknown", deposit.block_number)))?;
-        let receipts = self.source.block_receipts(deposit.block_number, &block_json)?;
-        let execution = build_execution_evidence(&block_json, &receipts, deposit.transaction_index)?;
+            .block_receipts(deposit.block_number, &block_json)?;
+        let execution =
+            build_execution_evidence(&block_json, &receipts, deposit.transaction_index)?;
         if execution.block_hash != deposit.block_hash {
-            return Err(Error::Malformed("the source block hash differs from the stored deposit block hash".into()));
+            return Err(Error::Malformed(
+                "the source block hash differs from the stored deposit block hash".into(),
+            ));
         }
 
         let state = self.read_light_client_state()?;
         let stored = self.stored_slots()?;
         let block = self.deposit_block(deposit.block_number)?;
-        let path = self.beacon.withdrawal_path(&block, &state, &stored, &self.source)?;
-        let proof = assemble_withdrawal_proof(&path, &execution, deposit.transaction_index, deposit.log_index);
+        let path = self
+            .beacon
+            .withdrawal_path(&block, &state, &stored, &self.source)?;
+        let proof = assemble_withdrawal_proof(
+            &path,
+            &execution,
+            deposit.transaction_index,
+            deposit.log_index,
+        );
 
-        let stored_anchor_root = self
-            .destination
-            .view(self.light_client, LightClientContract::headersCall { slot: path.anchor_header.slot })?;
+        let stored_anchor_root = self.destination.view(
+            self.light_client,
+            LightClientContract::headersCall {
+                slot: path.anchor_header.slot,
+            },
+        )?;
         let context = VaultContext {
             remote_vault: self.source_vault,
             local_vault: self.destination_vault,
@@ -438,18 +612,27 @@ impl RoutePorts for LiveRoute {
             || verified.amount != deposit.amount
             || verified.token != deposit.token
         {
-            return Err(Error::VerificationRefused("the proven deposit differs from the scanned deposit".into()));
+            return Err(Error::VerificationRefused(
+                "the proven deposit differs from the scanned deposit".into(),
+            ));
         }
         self.ensure_layouts(&path.anchor_header, path.deposit_header.slot, &stored)?;
         Ok(withdrawal_calldata(&proof))
     }
 
     fn flow_limiter_refusal(&self, deposit: &NewDeposit) -> Result<Option<String>> {
-        let limiter = self.destination.view(self.destination_vault, VaultContract::flowLimiterCall {})?;
+        let limiter = self
+            .destination
+            .view(self.destination_vault, VaultContract::flowLimiterCall {})?;
         if limiter == Address::ZERO {
             return Ok(None);
         }
-        let local_token = self.destination.view(self.destination_vault, VaultContract::localTokenOfCall { remoteToken: deposit.token })?;
+        let local_token = self.destination.view(
+            self.destination_vault,
+            VaultContract::localTokenOfCall {
+                remoteToken: deposit.token,
+            },
+        )?;
         let check = FlowLimiterContract::checkWithdrawalCall {
             token: local_token,
             recipient: deposit.recipient,
@@ -457,41 +640,74 @@ impl RoutePorts for LiveRoute {
             nonce: deposit.nonce,
         };
         // The limiter may accept calls from its vault only, so the simulation comes from the vault address.
-        let simulation = self.destination.eth_call_from(limiter, self.destination_vault, &check.abi_encode());
+        let simulation =
+            self.destination
+                .eth_call_from(limiter, self.destination_vault, &check.abi_encode());
         limiter_wait_note(limiter, simulation)
     }
 
     fn send_withdrawal(&self, calldata: &[u8]) -> Result<SendOutcome> {
-        match self.destination.send_transaction(self.destination_vault, calldata) {
+        match self
+            .destination
+            .send_transaction(self.destination_vault, calldata)
+        {
             Ok(hash) => Ok(SendOutcome::Sent(hash)),
-            Err(error) if error.revert_data().is_some_and(|data| is_already_claimed(data)) => Ok(SendOutcome::AlreadyClaimed),
+            Err(error)
+                if error
+                    .revert_data()
+                    .is_some_and(|data| is_already_claimed(data)) =>
+            {
+                Ok(SendOutcome::AlreadyClaimed)
+            }
             Err(error) => Err(self.explain_refusal(error)),
         }
     }
 
     fn transaction_succeeded(&self, transaction: B256) -> Result<Option<bool>> {
-        Ok(self.destination.wait_for_transaction(transaction, self.receipt_timeout)?.map(|mined| mined.success))
+        Ok(self
+            .destination
+            .wait_for_transaction(transaction, self.receipt_timeout)?
+            .map(|mined| mined.success))
     }
 }
 
 /// What a light client contract stores, as the service reads it from the chain that holds the contract.
-pub fn read_light_client_state_of(client: &ChainClient, address: Address) -> Result<LightClientState> {
+pub fn read_light_client_state_of(
+    client: &ChainClient,
+    address: Address,
+) -> Result<LightClientState> {
     let head_slot = client.view(address, LightClientContract::headCall {})?;
     let slots_per_period = client.view(address, LightClientContract::slotsPerPeriodCall {})?;
     let period = head_slot / slots_per_period;
     Ok(LightClientState {
         head_slot,
-        head_root: client.view(address, LightClientContract::headersCall { slot: head_slot })?,
-        head_execution_hash: client.view(address, LightClientContract::executionBlockHashesCall { slot: head_slot })?,
-        genesis_validators_root: client.view(address, LightClientContract::genesisValidatorsRootCall {})?,
+        head_root: client.view(
+            address,
+            LightClientContract::headersCall { slot: head_slot },
+        )?,
+        head_execution_hash: client.view(
+            address,
+            LightClientContract::executionBlockHashesCall { slot: head_slot },
+        )?,
+        genesis_validators_root: client
+            .view(address, LightClientContract::genesisValidatorsRootCall {})?,
         slots_per_period,
-        head_committee_hash: client.view(address, LightClientContract::syncCommitteesCall { period })?,
-        next_committee_hash: client.view(address, LightClientContract::syncCommitteesCall { period: period + 1 })?,
+        head_committee_hash: client
+            .view(address, LightClientContract::syncCommitteesCall { period })?,
+        next_committee_hash: client.view(
+            address,
+            LightClientContract::syncCommitteesCall { period: period + 1 },
+        )?,
     })
 }
 
 fn connect_chain(config: &ChainConfig, signer: Option<Signer>) -> Result<ChainClient> {
-    ChainClient::connect(&config.name, config.chain_id, Box::new(HttpRpc::new(&config.rpc_url)), signer)
+    ChainClient::connect(
+        &config.name,
+        config.chain_id,
+        Box::new(HttpRpc::new(&config.rpc_url)),
+        signer,
+    )
 }
 
 fn build_beacon(config: &ChainConfig) -> Result<Box<dyn BeaconSource>> {
@@ -540,7 +756,12 @@ pub fn build_routes(config: &Config, signer: &Signer, oracle: &Signer) -> Result
     Ok(routes)
 }
 
-fn build_route(config: &Config, name: RouteName, signer: &Signer, oracle: &Signer) -> Result<Route> {
+fn build_route(
+    config: &Config,
+    name: RouteName,
+    signer: &Signer,
+    oracle: &Signer,
+) -> Result<Route> {
     let source_config = config.source_of(name);
     let destination_config = config.destination_of(name);
     let own_light_client = source_config.own_light_client_address()?;
@@ -582,13 +803,23 @@ mod tests {
         let limiter = Address::repeat_byte(0x77);
         assert_eq!(limiter_wait_note(limiter, Ok(Bytes::new())).unwrap(), None);
 
-        let refused = Error::Rpc { code: 3, message: "execution reverted".into(), data: Some(Bytes::from(vec![0xde, 0xad])) };
-        let note = limiter_wait_note(limiter, Err(refused)).unwrap().expect("a wait");
+        let refused = Error::Rpc {
+            code: 3,
+            message: "execution reverted".into(),
+            data: Some(Bytes::from(vec![0xde, 0xad])),
+        };
+        let note = limiter_wait_note(limiter, Err(refused))
+            .unwrap()
+            .expect("a wait");
         assert!(note.contains("waiting on the flow limiter"), "{note}");
         assert!(note.contains(&format!("{limiter:#x}")), "{note}");
         assert!(note.contains("0xdead"), "{note}");
 
-        let outage = Error::Rpc { code: -32000, message: "busy".into(), data: None };
+        let outage = Error::Rpc {
+            code: -32000,
+            message: "busy".into(),
+            data: None,
+        };
         assert!(limiter_wait_note(limiter, Err(outage)).is_err());
     }
 }

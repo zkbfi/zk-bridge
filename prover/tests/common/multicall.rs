@@ -20,14 +20,16 @@ pub fn runtime_code() -> Vec<u8> {
     code.extend([0x80, 0x36, 0x11, 0x15]); // DUP1 CALLDATASIZE GT ISZERO
     let end_patch = code.len() + 1;
     code.extend([PUSH2, 0, 0, 0x57]); // PUSH2 end JUMPI
-    // target = calldataload(offset) >> 96
+                                      // target = calldataload(offset) >> 96
     code.extend([0x80, 0x35, PUSH1, 0x60, 0x1c]);
     // length = calldataload(offset + 20) >> 240
     code.extend([0x81, PUSH1, 0x14, 0x01, 0x35, PUSH1, 0xf0, 0x1c]);
     // calldatacopy(0, offset + 22, length)
     code.extend([0x80, 0x83, PUSH1, 0x16, 0x01, PUSH1, 0x00, 0x37]);
     // call(gas, target, 0, 0, length, 0, 0)
-    code.extend([PUSH1, 0x00, PUSH1, 0x00, 0x82, PUSH1, 0x00, PUSH1, 0x00, 0x86, 0x5a, 0xf1]);
+    code.extend([
+        PUSH1, 0x00, PUSH1, 0x00, 0x82, PUSH1, 0x00, PUSH1, 0x00, 0x86, 0x5a, 0xf1,
+    ]);
     // if the call failed goto fail
     code.push(0x15); // ISZERO
     let fail_patch = code.len() + 1;
@@ -51,7 +53,19 @@ pub fn creation_code() -> Vec<u8> {
     let runtime = runtime_code();
     let length = runtime.len();
     // PUSH1 length DUP1 PUSH1 12 PUSH1 0 CODECOPY PUSH1 0 RETURN, then the runtime. The prefix is 12 bytes long.
-    let mut code = vec![PUSH1, length as u8, 0x80, PUSH1, 0x0c, PUSH1, 0x00, 0x39, PUSH1, 0x00, 0xf3];
+    let mut code = vec![
+        PUSH1,
+        length as u8,
+        0x80,
+        PUSH1,
+        0x0c,
+        PUSH1,
+        0x00,
+        0x39,
+        PUSH1,
+        0x00,
+        0xf3,
+    ];
     // The prefix above is 11 bytes: pad one byte so that the runtime starts at offset 12.
     code.push(0x00);
     assert_eq!(code.len(), 12);

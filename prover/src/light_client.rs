@@ -10,25 +10,27 @@ use crate::error::{Error, Result};
 use alloy_primitives::keccak256;
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::{SolCall, SolEvent, SolValue};
-use lc_core::abi::{withdrawCall, BeaconBlockHeader as AbiHeader, DepositInitiated, WithdrawalProof};
+use lc_core::abi::{
+    withdrawCall, BeaconBlockHeader as AbiHeader, DepositInitiated, WithdrawalProof,
+};
 use lc_core::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN};
-use std::collections::BTreeMap;
+use lc_core::json::{execution_header_from_json, receipts_from_json};
+use lc_core::receipts::{build_receipts_trie, encode_execution_header, header_hash};
 use lc_core::ssz::{branch_for_leaf, u64_chunk};
+use lc_core::ssz_state::{try_parse_signed_block, try_parse_state, ParsedState};
 use lc_core::types::{
     BeaconBlockHeader, ExecutionPayloadHeader, LightClientHeader, NextSyncCommittee, SyncCommittee,
 };
 use lc_core::update::FoldStep;
 use lc_core::wire::{encode_guest_input, ChainSelector, GuestInput};
-use lc_core::json::{execution_header_from_json, receipts_from_json};
-use lc_core::receipts::{build_receipts_trie, encode_execution_header, header_hash};
-use lc_core::ssz_state::{try_parse_signed_block, try_parse_state, ParsedState};
 #[cfg(feature = "dev-source")]
 use lc_testkit::synthetic::{build_body_proofs, synthetic_payload_header, StateBuilder};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-pub use lc_core::ancestry::AncestryPath;
 pub use lc_core::abi::{ForkObservation, LightClientOutput};
+pub use lc_core::ancestry::AncestryPath;
 pub use lc_core::layout::SLOTS_PER_HISTORICAL_ROOT;
 pub use lc_core::ssz_state::ForkData;
 pub use lc_core::types::BeaconBlockHeader as BeaconHeader;
@@ -114,7 +116,8 @@ pub fn verify_update_natively(input: &UpdateInput) -> Result<LightClientOutput> 
 /// # Errors
 /// `Error::VerificationRefused` with the rule that failed. No proof exists for such an input.
 pub fn verify_observation_natively(guest_input: &[u8]) -> Result<Vec<u8>> {
-    lc_core::wire::run_fork_observation_guest(guest_input).map_err(|error| Error::VerificationRefused(error.to_string()))
+    lc_core::wire::run_fork_observation_guest(guest_input)
+        .map_err(|error| Error::VerificationRefused(error.to_string()))
 }
 
 /// Decodes the public values of the fork observation program.
@@ -122,7 +125,8 @@ pub fn verify_observation_natively(guest_input: &[u8]) -> Result<Vec<u8>> {
 /// # Errors
 /// `Error::Malformed` when the bytes are not the 224 bytes of an encoded `ForkObservation`.
 pub fn decode_fork_observation(public_values: &[u8]) -> Result<ForkObservation> {
-    <ForkObservation as SolValue>::abi_decode(public_values).map_err(|error| Error::Malformed(format!("fork observation public values: {error}")))
+    <ForkObservation as SolValue>::abi_decode(public_values)
+        .map_err(|error| Error::Malformed(format!("fork observation public values: {error}")))
 }
 
 /// The public values of the program: the ABI encoding of the output. The contract decodes these bytes.
@@ -143,7 +147,11 @@ pub fn guest_input_bytes(input: &UpdateInput) -> Vec<u8> {
             fork_version: lc_core::update::table_fork_version(spec, update.signature_slot),
         })
         .collect();
-    encode_guest_input(&GuestInput { chain: input.chain.selector(), store: input.store.clone(), steps })
+    encode_guest_input(&GuestInput {
+        chain: input.chain.selector(),
+        store: input.store.clone(),
+        steps,
+    })
 }
 
 /// Parses the `data` object of a beacon API light-client update or finality update.
@@ -151,7 +159,9 @@ pub fn guest_input_bytes(input: &UpdateInput) -> Vec<u8> {
 /// # Errors
 /// `Error::Malformed` when the object lacks a field.
 pub fn update_from_json(data: &Value) -> Result<LightClientUpdate> {
-    guarded("light-client update", || lc_core::json::light_client_update(data))
+    guarded("light-client update", || {
+        lc_core::json::light_client_update(data)
+    })
 }
 
 /// The hash tree root of a sync committee, as the contract stores it.
@@ -159,7 +169,9 @@ pub fn update_from_json(data: &Value) -> Result<LightClientUpdate> {
 /// # Errors
 /// `Error::Malformed` when the committee does not hold 512 keys.
 pub fn committee_hash(committee: &SyncCommittee) -> Result<B256> {
-    committee.hash_tree_root().map_err(|error| Error::Malformed(error.to_string()))
+    committee
+        .hash_tree_root()
+        .map_err(|error| Error::Malformed(error.to_string()))
 }
 
 /// The hash tree root of a beacon header.
@@ -215,7 +227,9 @@ pub struct DepositEvent {
 /// `Error::Malformed` when the log is not a deposit event.
 pub fn decode_deposit(topics: &[B256], data: &[u8]) -> Result<DepositEvent> {
     if topics.first() != Some(&DEPOSIT_EVENT_TOPIC) {
-        return Err(Error::Malformed("log topic 0 is not the deposit event".into()));
+        return Err(Error::Malformed(
+            "log topic 0 is not the deposit event".into(),
+        ));
     }
     let event = DepositInitiated::decode_raw_log(topics.iter().copied(), data)
         .map_err(|error| Error::Malformed(format!("deposit log: {error}")))?;
@@ -263,7 +277,11 @@ pub struct ExecutionEvidence {
 ///
 /// # Errors
 /// `Error::Malformed` for a mismatch or a missing field.
-pub fn build_execution_evidence(block: &Value, receipts: &Value, transaction_index: u64) -> Result<ExecutionEvidence> {
+pub fn build_execution_evidence(
+    block: &Value,
+    receipts: &Value,
+    transaction_index: u64,
+) -> Result<ExecutionEvidence> {
     guarded("execution evidence", || {
         let header = execution_header_from_json(block);
         let header_rlp = encode_execution_header(&header);
@@ -284,9 +302,17 @@ pub fn build_execution_evidence(block: &Value, receipts: &Value, transaction_ind
         let proof = trie
             .proofs
             .get(transaction_index as usize)
-            .ok_or_else(|| Error::Malformed(format!("no receipt at transaction index {transaction_index}")))?
+            .ok_or_else(|| {
+                Error::Malformed(format!(
+                    "no receipt at transaction index {transaction_index}"
+                ))
+            })?
             .clone();
-        Ok(ExecutionEvidence { header_rlp, block_hash, receipt_proof: proof })
+        Ok(ExecutionEvidence {
+            header_rlp,
+            block_hash,
+            receipt_proof: proof,
+        })
     })?
 }
 
@@ -311,7 +337,10 @@ pub fn assemble_withdrawal_proof(
 
 /// The calldata of `BridgeVault.withdraw(WithdrawalProof)`.
 pub fn withdrawal_calldata(proof: &WithdrawalProof) -> Vec<u8> {
-    withdrawCall { proof: proof.clone() }.abi_encode()
+    withdrawCall {
+        proof: proof.clone(),
+    }
+    .abi_encode()
 }
 
 /// What the vault knows when it checks a withdrawal.
@@ -359,8 +388,10 @@ pub fn verify_withdrawal_natively(
         local_chain_id: context.local_chain_id,
         stored_anchor_root: context.stored_anchor_root,
     };
-    let verified = lc_core::withdrawal::verify_withdrawal(proof, &context, chain.spec())
-        .map_err(|error| Error::VerificationRefused(format!("{} ({})", error, error.reason_code())))?;
+    let verified =
+        lc_core::withdrawal::verify_withdrawal(proof, &context, chain.spec()).map_err(|error| {
+            Error::VerificationRefused(format!("{} ({})", error, error.reason_code()))
+        })?;
     Ok(VerifiedDeposit {
         token: verified.token,
         recipient: verified.recipient,
@@ -485,8 +516,16 @@ impl StateView {
     /// # Errors
     /// `Error::Beacon` for a rule of `lc-core` that fails: an era not complete in this state, roots that do not
     /// match, or an era before `capellaEra`.
-    pub fn historical_ancestry_branch(&self, chain: ChainKind, slot: u64, era_roots: &[B256]) -> Result<Vec<B256>> {
-        let capella_era = chain.spec().capella_era().map_err(|error| Error::Beacon(error.to_string()))?;
+    pub fn historical_ancestry_branch(
+        &self,
+        chain: ChainKind,
+        slot: u64,
+        era_roots: &[B256],
+    ) -> Result<Vec<B256>> {
+        let capella_era = chain
+            .spec()
+            .capella_era()
+            .map_err(|error| Error::Beacon(error.to_string()))?;
         lc_core::era::historical_ancestry_branch(&self.state, capella_era, slot, era_roots)
             .map_err(|error| Error::Beacon(error.to_string()))
     }
@@ -500,9 +539,16 @@ impl StateView {
     /// `Error::Beacon` when the state root differs from the header.
     pub fn fork_evidence(&self, timestamp: u64, header: &BeaconBlockHeader) -> Result<Vec<u8>> {
         if self.root() != header.state_root {
-            return Err(Error::Beacon("the state does not belong to the header".into()));
+            return Err(Error::Beacon(
+                "the state does not belong to the header".into(),
+            ));
         }
-        Ok(fork_evidence_bytes(timestamp, header, self.state.fork, &self.state.field_roots))
+        Ok(fork_evidence_bytes(
+            timestamp,
+            header,
+            self.state.fork,
+            &self.state.field_roots,
+        ))
     }
 
     /// Branch for `finalized_checkpoint.root`: the epoch chunk, then the field branch.
@@ -541,18 +587,23 @@ impl BlockView {
     /// # Errors
     /// `Error::Malformed` when the bytes are not a supported block.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
-        let block =
-            guarded("beacon block", || try_parse_signed_block(bytes))?
-                .map_err(|error| Error::Malformed(format!("beacon block: {error}")))?;
+        let block = guarded("beacon block", || try_parse_signed_block(bytes))?
+            .map_err(|error| Error::Malformed(format!("beacon block: {error}")))?;
         guarded("beacon block", || {
-            let (_, execution_branch) = branch_for_leaf(&block.body_field_roots, BODY_FIELD_EXECUTION_PAYLOAD);
+            let (_, execution_branch) =
+                branch_for_leaf(&block.body_field_roots, BODY_FIELD_EXECUTION_PAYLOAD);
             let leaves = block
                 .payload
                 .field_roots(lc_core::layout::ExecutionHeaderForm::Capella)
                 .expect("payload leaves");
             let (_, mut block_hash_branch) = branch_for_leaf(&leaves, PAYLOAD_FIELD_BLOCK_HASH);
             block_hash_branch.extend(&execution_branch);
-            Self { header: block.header, payload: block.payload, execution_branch, block_hash_branch }
+            Self {
+                header: block.header,
+                payload: block.payload,
+                execution_branch,
+                block_hash_branch,
+            }
         })
     }
 
@@ -600,7 +651,11 @@ pub fn assemble_update(
 }
 
 /// A store at a header: the header root and slot, the current committee, and optionally the next one.
-pub fn store_at(header: &BeaconBlockHeader, state: &StateView, include_next: bool) -> LightClientStore {
+pub fn store_at(
+    header: &BeaconBlockHeader,
+    state: &StateView,
+    include_next: bool,
+) -> LightClientStore {
     LightClientStore {
         header_root: header.hash_tree_root(),
         header_slot: header.slot,
@@ -616,7 +671,8 @@ pub fn store_at(header: &BeaconBlockHeader, state: &StateView, include_next: boo
 /// # Errors
 /// `Error::Beacon` when the deposit slot is not before the anchor slot.
 pub fn ancestry_path(anchor_slot: u64, deposit_slot: u64) -> Result<AncestryPath> {
-    lc_core::ancestry::ancestry_path_for_slots(anchor_slot, deposit_slot).map_err(|error| Error::Beacon(error.to_string()))
+    lc_core::ancestry::ancestry_path_for_slots(anchor_slot, deposit_slot)
+        .map_err(|error| Error::Beacon(error.to_string()))
 }
 
 /// Rebuilds the 8192 block roots of an era from canonical block roots (slot to root, empty slots absent).
@@ -649,7 +705,12 @@ pub fn historical_summaries_gindex(chain: ChainKind, slot: u64) -> Result<u64> {
 ///
 /// # Panics
 /// Panics when entry 3 of `field_roots` is not the root of `fork`.
-pub fn fork_evidence_bytes(timestamp: u64, header: &BeaconBlockHeader, fork: ForkData, field_roots: &[B256]) -> Vec<u8> {
+pub fn fork_evidence_bytes(
+    timestamp: u64,
+    header: &BeaconBlockHeader,
+    fork: ForkData,
+    field_roots: &[B256],
+) -> Vec<u8> {
     let branch = lc_core::gate::fork_version_branch(field_roots, &fork);
     lc_core::gate::encode_fork_evidence(timestamp, header, fork.current_version, branch)
 }
@@ -679,7 +740,13 @@ pub fn dev_header(
     state_root: B256,
 ) -> DevHeader {
     let spec = chain.spec();
-    let payload = synthetic_payload_header(spec, slot, block_number, block_hash, keccak256(b"dev-receipts"));
+    let payload = synthetic_payload_header(
+        spec,
+        slot,
+        block_number,
+        block_hash,
+        keccak256(b"dev-receipts"),
+    );
     let body = build_body_proofs(spec, slot, &payload);
     DevHeader {
         header: BeaconBlockHeader {
@@ -713,8 +780,12 @@ impl DevState {
     /// `Error::Beacon` when the fork at `slot` is not supported by the synthetic builder.
     pub fn new(chain: ChainKind, slot: u64, roots: &[(u64, B256)]) -> Result<Self> {
         let fork = chain.spec().fork_at_slot(slot);
-        if lc_core::layout::state_layout_for_fork(fork).is_err() || fork < lc_core::chain::ForkName::Capella {
-            return Err(Error::Beacon(format!("slot {slot} is in fork {fork:?}; use a slot after the Capella fork")));
+        if lc_core::layout::state_layout_for_fork(fork).is_err()
+            || fork < lc_core::chain::ForkName::Capella
+        {
+            return Err(Error::Beacon(format!(
+                "slot {slot} is in fork {fork:?}; use a slot after the Capella fork"
+            )));
         }
         let mut builder = guarded("synthetic state", || StateBuilder::new(fork))?;
         for (root_slot, root) in roots {
@@ -739,7 +810,8 @@ impl DevState {
     /// # Panics
     /// Panics when `index >= count`.
     pub fn set_historical_root(&mut self, count: usize, index: usize, slot: u64, root: B256) {
-        self.builder.set_historical_block_root(count, index, slot, root);
+        self.builder
+            .set_historical_block_root(count, index, slot, root);
     }
 
     /// Branch for the historical path of `slot`, in the era at list position `index`.
@@ -813,19 +885,36 @@ pub(crate) mod test_support {
     /// A Capella-layout state whose `block_roots`, `fork` and `historical_summaries` the test controls. `eras` holds
     /// the 8192 block roots of each complete era, in list order. All other fields hold filler.
     pub fn synthetic_state(anchor_slot: u64, fork: ForkData, eras: &[Vec<B256>]) -> StateView {
-        let block_roots: Vec<B256> = (0..8192u64).map(|slot| keccak256(format!("recent/{slot}"))).collect();
+        let block_roots: Vec<B256> = (0..8192u64)
+            .map(|slot| keccak256(format!("recent/{slot}")))
+            .collect();
         let historical_summaries: Vec<(B256, B256)> = eras
             .iter()
             .enumerate()
-            .map(|(index, roots)| (merkleize(roots), keccak256(format!("state-summary/{index}"))))
+            .map(|(index, roots)| {
+                (
+                    merkleize(roots),
+                    keccak256(format!("state-summary/{index}")),
+                )
+            })
             .collect();
-        let summary_roots: Vec<B256> = historical_summaries.iter().map(|(b, s)| hash_pair(b, s)).collect();
-        let mut field_roots: Vec<B256> = (0..28u64).map(|field| keccak256(format!("field/{field}"))).collect();
+        let summary_roots: Vec<B256> = historical_summaries
+            .iter()
+            .map(|(b, s)| hash_pair(b, s))
+            .collect();
+        let mut field_roots: Vec<B256> = (0..28u64)
+            .map(|field| keccak256(format!("field/{field}")))
+            .collect();
         field_roots[3] = fork.hash_tree_root();
         field_roots[5] = merkleize(&block_roots);
-        field_roots[27] =
-            mix_in_length(&merkleize_with_limit(&summary_roots, 1 << 24), historical_summaries.len() as u64);
-        let committee = SyncCommittee { pubkeys: Vec::new(), aggregate_pubkey: Default::default() };
+        field_roots[27] = mix_in_length(
+            &merkleize_with_limit(&summary_roots, 1 << 24),
+            historical_summaries.len() as u64,
+        );
+        let committee = SyncCommittee {
+            pubkeys: Vec::new(),
+            aggregate_pubkey: Default::default(),
+        };
         StateView::from_parsed(ParsedState {
             field_roots,
             block_roots,
@@ -848,7 +937,12 @@ mod tests {
     /// Why it matters: the scanner filters logs on this topic; a wrong one finds no deposit.
     #[test]
     fn deposit_topic_is_the_signature_hash() {
-        assert_eq!(DEPOSIT_EVENT_TOPIC, keccak256("DepositInitiated(address,address,address,uint256,bytes32,uint64,address,address)"));
+        assert_eq!(
+            DEPOSIT_EVENT_TOPIC,
+            keccak256(
+                "DepositInitiated(address,address,address,uint256,bytes32,uint64,address,address)"
+            )
+        );
     }
 
     /// Claim: a deposit log has 160 bytes of data (amount, nonce, target chain, destination vault, destination token),
@@ -872,12 +966,19 @@ mod tests {
         };
         let log = event.encode_log_data();
         assert_eq!(log.data.len(), 160);
-        let decoded = decode_deposit(log.topics(), &log.data).expect("control: the current shape decodes");
+        let decoded =
+            decode_deposit(log.topics(), &log.data).expect("control: the current shape decodes");
         assert_eq!(decoded.destination_vault, vault);
         assert_eq!(decoded.destination_token, token);
         assert_eq!(decoded.target_chain_id, 369);
-        assert!(decode_deposit(log.topics(), &log.data[..96]).is_err(), "96 bytes is the first shape");
-        assert!(decode_deposit(log.topics(), &log.data[..128]).is_err(), "128 bytes is the shape before the token");
+        assert!(
+            decode_deposit(log.topics(), &log.data[..96]).is_err(),
+            "96 bytes is the first shape"
+        );
+        assert!(
+            decode_deposit(log.topics(), &log.data[..128]).is_err(),
+            "128 bytes is the shape before the token"
+        );
     }
 
     /// Claim: a synthetic header is a pure function of its arguments.
@@ -886,10 +987,28 @@ mod tests {
     #[test]
     fn dev_header_is_deterministic() {
         let chain = ChainKind::Pulsechain;
-        let one = dev_header(chain, 2000, 5, B256::repeat_byte(1), dev_plain_state_root(2000));
-        let two = dev_header(chain, 2000, 5, B256::repeat_byte(1), dev_plain_state_root(2000));
+        let one = dev_header(
+            chain,
+            2000,
+            5,
+            B256::repeat_byte(1),
+            dev_plain_state_root(2000),
+        );
+        let two = dev_header(
+            chain,
+            2000,
+            5,
+            B256::repeat_byte(1),
+            dev_plain_state_root(2000),
+        );
         assert_eq!(one.header.hash_tree_root(), two.header.hash_tree_root());
-        let other = dev_header(chain, 2000, 5, B256::repeat_byte(2), dev_plain_state_root(2000));
+        let other = dev_header(
+            chain,
+            2000,
+            5,
+            B256::repeat_byte(2),
+            dev_plain_state_root(2000),
+        );
         assert_ne!(one.header.hash_tree_root(), other.header.hash_tree_root());
     }
 
@@ -901,7 +1020,11 @@ mod tests {
     #[test]
     fn gate_evidence_decodes_and_verifies_like_the_gate() {
         use alloy_sol_types::SolValue;
-        let fork = ForkData { previous_version: [2, 0, 0, 0], current_version: [3, 0, 0, 0], epoch: 3 };
+        let fork = ForkData {
+            previous_version: [2, 0, 0, 0],
+            current_version: [3, 0, 0, 0],
+            epoch: 3,
+        };
         let state = test_support::synthetic_state(100_000, fork, &[]);
         let header = BeaconBlockHeader {
             slot: 4242,
@@ -919,11 +1042,24 @@ mod tests {
         assert_eq!(decoded.branch.len(), 2 + 5);
         let gindex = (32 + 3) * 4 + 1;
         let leaf = lc_core::gate::version_leaf(decoded.version.0);
-        assert!(lc_core::ssz::is_valid_exact_branch(&leaf, &decoded.branch, gindex, &state.root()));
+        assert!(lc_core::ssz::is_valid_exact_branch(
+            &leaf,
+            &decoded.branch,
+            gindex,
+            &state.root()
+        ));
         let previous = lc_core::gate::version_leaf(fork.previous_version);
-        assert!(!lc_core::ssz::is_valid_exact_branch(&previous, &decoded.branch, gindex, &state.root()));
+        assert!(!lc_core::ssz::is_valid_exact_branch(
+            &previous,
+            &decoded.branch,
+            gindex,
+            &state.root()
+        ));
 
-        let other = BeaconBlockHeader { state_root: B256::repeat_byte(1), ..header };
+        let other = BeaconBlockHeader {
+            state_root: B256::repeat_byte(1),
+            ..header
+        };
         assert!(state.fork_evidence(1, &other).is_err());
     }
 
@@ -932,14 +1068,22 @@ mod tests {
     const ANCHOR_AND_ERA_FIXTURE: &str = "../light-client/tests/fixtures/pulsechain";
 
     fn fixture(name: &str) -> Value {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(ANCHOR_AND_ERA_FIXTURE).join(name);
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(ANCHOR_AND_ERA_FIXTURE)
+            .join(name);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         let wrapper: Value = serde_json::from_str(&text).expect("fixture json");
         wrapper["response"].clone()
     }
 
     fn hex_branch(value: &Value) -> Vec<B256> {
-        value.as_array().expect("branch").iter().map(|item| item.as_str().expect("hex").parse().expect("b256")).collect()
+        value
+            .as_array()
+            .expect("branch")
+            .iter()
+            .map(|item| item.as_str().expect("hex").parse().expect("b256"))
+            .collect()
     }
 
     struct RealHistorical {
@@ -951,19 +1095,32 @@ mod tests {
         fn load() -> Self {
             let paths = fixture("historical_paths.json");
             let anchor = beacon_header_from_json(&paths["anchor_header"]).expect("anchor");
-            assert_eq!(header_root(&anchor), paths["anchor_header_root"].as_str().unwrap().parse::<B256>().unwrap());
+            assert_eq!(
+                header_root(&anchor),
+                paths["anchor_header_root"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<B256>()
+                    .unwrap()
+            );
             Self { anchor, paths }
         }
 
         fn entry(&self, name: &str) -> &Value {
-            self.paths["entries"].as_array().unwrap().iter().find(|entry| entry["name"] == name).expect("entry")
+            self.paths["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["name"] == name)
+                .expect("entry")
         }
 
         fn path(&self, name: &str) -> BeaconPath {
             let entry = self.entry(name);
             BeaconPath {
                 anchor_header: self.anchor,
-                deposit_header: beacon_header_from_json(&entry["deposit_header"]).expect("deposit header"),
+                deposit_header: beacon_header_from_json(&entry["deposit_header"])
+                    .expect("deposit header"),
                 ancestry_branch: hex_branch(&entry["ancestry_branch"]),
                 block_hash_branch: hex_branch(&entry["block_hash_branch"]),
             }
@@ -973,7 +1130,8 @@ mod tests {
     fn middle_block_evidence() -> ExecutionEvidence {
         let block = fixture("path_historical_block.json");
         let receipts = fixture("path_historical_receipts.json");
-        build_execution_evidence(&block, &receipts, 0).expect("the real block rebuilds and its receipts root matches")
+        build_execution_evidence(&block, &receipts, 0)
+            .expect("the real block rebuilds and its receipts root matches")
     }
 
     /// Claim: for the real PulseChain anchor, the service classifies each fixture deposit by distance: five of them
@@ -994,9 +1152,17 @@ mod tests {
         ] {
             let path = real.path(name);
             let found = ancestry_path(path.anchor_header.slot, path.deposit_header.slot).unwrap();
-            assert_eq!(found, expected, "{name}: distance {}", path.anchor_header.slot - path.deposit_header.slot);
+            assert_eq!(
+                found,
+                expected,
+                "{name}: distance {}",
+                path.anchor_header.slot - path.deposit_header.slot
+            );
         }
-        assert!(ancestry_path(100, 100).is_err(), "a deposit at the anchor slot has no path");
+        assert!(
+            ancestry_path(100, 100).is_err(),
+            "a deposit at the anchor slot has no path"
+        );
     }
 
     /// Claim: the real historical branches pass the vault check of `lc-core` through the service functions: the
@@ -1018,11 +1184,16 @@ mod tests {
             local_chain_id: 1,
             stored_anchor_root: header_root(&real.anchor),
         };
-        let reason = |proof: &WithdrawalProof, context: &VaultContext| match verify_withdrawal_natively(proof, context, ChainKind::Pulsechain) {
-            Ok(_) => "accepted".to_string(),
-            Err(Error::VerificationRefused(text)) => text,
-            Err(other) => panic!("unexpected error {other}"),
-        };
+        let reason =
+            |proof: &WithdrawalProof, context: &VaultContext| match verify_withdrawal_natively(
+                proof,
+                context,
+                ChainKind::Pulsechain,
+            ) {
+                Ok(_) => "accepted".to_string(),
+                Err(Error::VerificationRefused(text)) => text,
+                Err(other) => panic!("unexpected error {other}"),
+            };
         let at_log = reason(&proof, &context);
         assert!(
             at_log.contains("LogEmitterMismatch") || at_log.contains("LogIndexOutOfRange"),
@@ -1031,14 +1202,24 @@ mod tests {
 
         let mut other_era = proof.clone();
         other_era.ancestryBranch = hex_branch(&real.entry("era_first_block")["ancestry_branch"]);
-        assert!(reason(&other_era, &context).contains("InvalidAncestryBranch"), "a branch of another entry");
+        assert!(
+            reason(&other_era, &context).contains("InvalidAncestryBranch"),
+            "a branch of another entry"
+        );
         let mut padded = proof.clone();
         padded.ancestryBranch.insert(0, B256::ZERO);
-        assert!(reason(&padded, &context).contains("InvalidAncestryBranch"), "a padded branch");
-        let unknown = VaultContext { stored_anchor_root: B256::repeat_byte(9), ..context };
+        assert!(
+            reason(&padded, &context).contains("InvalidAncestryBranch"),
+            "a padded branch"
+        );
+        let unknown = VaultContext {
+            stored_anchor_root: B256::repeat_byte(9),
+            ..context
+        };
         assert!(reason(&proof, &unknown).contains("AnchorNotStored"));
         let mut wrong_block = proof.clone();
-        wrong_block.blockHashBranch = hex_branch(&real.entry("era_first_block")["block_hash_branch"]);
+        wrong_block.blockHashBranch =
+            hex_branch(&real.entry("era_first_block")["block_hash_branch"]);
         assert!(reason(&wrong_block, &context).contains("InvalidBlockHashBranch"));
     }
 
@@ -1047,12 +1228,20 @@ mod tests {
     #[test]
     fn real_fixture_matches_the_layout_constants() {
         let real = RealHistorical::load();
-        assert_eq!(historical_summaries_gindex(ChainKind::Pulsechain, real.anchor.slot).unwrap(), 59);
+        assert_eq!(
+            historical_summaries_gindex(ChainKind::Pulsechain, real.anchor.slot).unwrap(),
+            59
+        );
         let middle = real.path("era_middle_block");
         assert_eq!(era_of(middle.deposit_header.slot), 1326);
         assert_eq!(real.entry("era_middle_block")["index"], 1326);
         assert_eq!(ChainKind::Pulsechain.spec().capella_era().unwrap(), 0);
-        let leaf = lc_core::ancestry::ancestry_leaf_gindex(ChainKind::Pulsechain.spec(), real.anchor.slot, middle.deposit_header.slot).unwrap();
+        let leaf = lc_core::ancestry::ancestry_leaf_gindex(
+            ChainKind::Pulsechain.spec(),
+            real.anchor.slot,
+            middle.deposit_header.slot,
+        )
+        .unwrap();
         assert!(lc_core::ssz::is_valid_exact_branch(
             &header_root(&middle.deposit_header),
             &middle.ancestry_branch,

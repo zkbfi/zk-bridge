@@ -121,10 +121,9 @@ contract BeaconForkGate is IDepositGate {
     ///   3b  5b 5f 1e 50                  JUMPDEST PUSH0 CLZ POP, falls into the return
     ///   3f  5b 6001 5f52 60205f f3       JUMPDEST, store 1 in memory, RETURN 32 bytes
     /// Opcode values: TSTORE 0x5d (EIP-1153), MCOPY 0x5e (EIP-5656), BLOBBASEFEE 0x4a (EIP-7516), CLZ 0x1e (EIP-7939).
-    bytes private constant PROBE_RUNTIME =
-        hex"5f3560f81c" hex"80600114" hex"602457" hex"80600214" hex"602c57" hex"80600314" hex"603557" hex"80600414"
-        hex"603b57" hex"5f5ffd" hex"5b60015f5d603f56" hex"5b60205f5f5e603f56" hex"5b4a50603f56" hex"5b5f1e50"
-        hex"5b60015f5260205ff3";
+    bytes private constant PROBE_RUNTIME = hex"5f3560f81c" hex"80600114" hex"602457" hex"80600214" hex"602c57"
+        hex"80600314" hex"603557" hex"80600414" hex"603b57" hex"5f5ffd" hex"5b60015f5d603f56" hex"5b60205f5f5e603f56"
+        hex"5b4a50603f56" hex"5b5f1e50" hex"5b60015f5260205ff3";
     /// @dev The generator of G1 on BLS12-381 (EIP-2537 encoding: each field element is 64 bytes, big endian, with 16
     /// leading zero bytes). Source: the BLS12-381 parameters; the point satisfies y^2 = x^3 + 4 modulo the field prime.
     /// Adding the point at infinity (128 zero bytes) to it must return it unchanged. Held as 32 byte words so that the
@@ -583,7 +582,9 @@ contract BeaconForkGate is IDepositGate {
         uint256 word;
         for (uint256 i = 0; i < versions.length; i++) {
             SupportedVersion memory entry = versions[i];
-            if (entry.stateDepth == 0 || entry.stateDepth > MAX_STATE_DEPTH) revert StateDepthOutOfRange(entry.stateDepth);
+            if (entry.stateDepth == 0 || entry.stateDepth > MAX_STATE_DEPTH) {
+                revert StateDepthOutOfRange(entry.stateDepth);
+            }
             for (uint256 j = 0; j < i; j++) {
                 if (versions[j].version == entry.version) revert DuplicateSupportedVersion(entry.version);
             }

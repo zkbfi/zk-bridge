@@ -40,16 +40,19 @@
 //! layouts (not built).
 
 use super::{
-    BeaconSource, DepositBlock, HashEvidence, HistoricalEvidence, LightClientState, RootsEvidence, UpdatePlan,
+    BeaconSource, DepositBlock, HashEvidence, HistoricalEvidence, LightClientState, RootsEvidence,
+    UpdatePlan,
 };
 use crate::chain::ExecutionReader;
-use crate::gate::{beacon_root_at, ForkEvidenceSource, ForkRequest};
 use crate::error::{Error, Result};
+use crate::gate::{beacon_root_at, ForkEvidenceSource, ForkRequest};
 use crate::light_client::{
-    ancestry_path, assemble_update, beacon_header_from_json, block_hash_gindex, block_roots_gindex, committee_hash, describe_header,
-    era_block_roots, era_of, header_root, historical_summaries_gindex, store_at, store_from_bootstrap_json,
-    sync_aggregate_from_json, update_from_json, AncestryPath, BeaconHeader, BeaconPath, BlockView, ChainKind,
-    LightClientStore, LightClientUpdate, StateView, SyncAggregate, UpdateInput, SLOTS_PER_HISTORICAL_ROOT,
+    ancestry_path, assemble_update, beacon_header_from_json, block_hash_gindex, block_roots_gindex,
+    committee_hash, describe_header, era_block_roots, era_of, header_root,
+    historical_summaries_gindex, store_at, store_from_bootstrap_json, sync_aggregate_from_json,
+    update_from_json, AncestryPath, BeaconHeader, BeaconPath, BlockView, ChainKind,
+    LightClientStore, LightClientUpdate, StateView, SyncAggregate, UpdateInput,
+    SLOTS_PER_HISTORICAL_ROOT,
 };
 use crate::prover::ProofStatement;
 use crate::rpc::HttpGet;
@@ -113,8 +116,15 @@ fn page_through_periods<T>(
     let mut start = first;
     while start < end {
         let items = request(start, (end - start).min(UPDATES_PER_REQUEST))?;
-        let highest = items.iter().map(|(period, _)| *period).filter(|period| (start..end).contains(period)).max();
-        for (period, item) in items.into_iter().filter(|(period, _)| (start..end).contains(period)) {
+        let highest = items
+            .iter()
+            .map(|(period, _)| *period)
+            .filter(|period| (start..end).contains(period))
+            .max();
+        for (period, item) in items
+            .into_iter()
+            .filter(|(period, _)| (start..end).contains(period))
+        {
             received.entry(period).or_insert(item);
         }
         let Some(highest) = highest else { break };
@@ -137,23 +147,35 @@ pub fn fetch_period_updates(
     end_period: u64,
 ) -> Result<BTreeMap<u64, LightClientUpdate>> {
     page_through_periods(first_period, end_period, |start, count| {
-        let path = format!("/eth/v1/beacon/light_client/updates?start_period={start}&count={count}");
+        let path =
+            format!("/eth/v1/beacon/light_client/updates?start_period={start}&count={count}");
         let Some(answer) = get_json_from(client, &path)? else {
             return Ok(Vec::new());
         };
-        let entries = answer.as_array().ok_or_else(|| Error::Malformed(format!("GET {path}: not a list")))?;
+        let entries = answer
+            .as_array()
+            .ok_or_else(|| Error::Malformed(format!("GET {path}: not a list")))?;
         entries
             .iter()
             .map(|entry| {
                 let update = update_from_json(&entry["data"])?;
-                Ok((chain.spec().period_at_slot(update.attested_header.beacon.slot), update))
+                Ok((
+                    chain
+                        .spec()
+                        .period_at_slot(update.attested_header.beacon.slot),
+                    update,
+                ))
             })
             .collect()
     })
 }
 
 /// The first period of `first_period..end_period` that `received` lacks, or `None` when it holds them all.
-pub fn first_missing_period<T>(received: &BTreeMap<u64, T>, first_period: u64, end_period: u64) -> Option<u64> {
+pub fn first_missing_period<T>(
+    received: &BTreeMap<u64, T>,
+    first_period: u64,
+    end_period: u64,
+) -> Option<u64> {
     (first_period..end_period).find(|period| !received.contains_key(period))
 }
 
@@ -186,12 +208,16 @@ pub fn assemble_fold(
     latest: LightClientUpdate,
 ) -> Result<Vec<LightClientUpdate>> {
     let periods = handoff_periods(chain, head_slot, &latest);
-    let latest_period = chain.spec().period_at_slot(latest.finalized_header.beacon.slot);
+    let latest_period = chain
+        .spec()
+        .period_at_slot(latest.finalized_header.beacon.slot);
     if let Some(period) = first_missing_period(handoffs, periods.start, periods.end) {
         return Err(missing_period_error(period, periods.start, latest_period));
     }
     let room_for_latest = (periods.end - periods.start) < MAX_FOLD_UPDATES as u64;
-    let candidates = periods.filter_map(|period| handoffs.get(&period).cloned()).chain(room_for_latest.then_some(latest));
+    let candidates = periods
+        .filter_map(|period| handoffs.get(&period).cloned())
+        .chain(room_for_latest.then_some(latest));
     let mut head = head_slot;
     let mut fold = Vec::new();
     for update in candidates {
@@ -265,11 +291,15 @@ impl HttpBeaconSource {
     pub fn slot_for_timestamp(&self, timestamp: u64) -> Result<u64> {
         let genesis = self.genesis_time()?;
         let seconds = self.chain.seconds_per_slot();
-        let elapsed = timestamp
-            .checked_sub(genesis)
-            .ok_or_else(|| Error::Beacon(format!("timestamp {timestamp} is before the genesis time {genesis}")))?;
+        let elapsed = timestamp.checked_sub(genesis).ok_or_else(|| {
+            Error::Beacon(format!(
+                "timestamp {timestamp} is before the genesis time {genesis}"
+            ))
+        })?;
         if elapsed % seconds != 0 {
-            return Err(Error::Beacon(format!("timestamp {timestamp} is not on a slot boundary")));
+            return Err(Error::Beacon(format!(
+                "timestamp {timestamp} is not on a slot boundary"
+            )));
         }
         Ok(elapsed / seconds)
     }
@@ -282,12 +312,20 @@ impl HttpBeaconSource {
     }
 
     fn block_by_id(&self, id: &str) -> Result<Option<BlockView>> {
-        self.get_ssz(&format!("/eth/v2/beacon/blocks/{id}"))?.map(|bytes| BlockView::parse(&bytes)).transpose()
+        self.get_ssz(&format!("/eth/v2/beacon/blocks/{id}"))?
+            .map(|bytes| BlockView::parse(&bytes))
+            .transpose()
     }
 
     /// The state with `state_root`, hashed in full and compared with the root. The two newest states stay cached.
     fn state_for(&self, state_root: B256) -> Result<Arc<StateView>> {
-        if let Some((_, state)) = self.state_cache.lock().expect("lock").iter().find(|(root, _)| *root == state_root) {
+        if let Some((_, state)) = self
+            .state_cache
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|(root, _)| *root == state_root)
+        {
             return Ok(state.clone());
         }
         let bytes = Self::require(
@@ -325,11 +363,21 @@ impl HttpBeaconSource {
         std::thread::scope(|scope| {
             let workers: Vec<_> = slots
                 .chunks(chunk)
-                .map(|part| scope.spawn(move || part.iter().map(|slot| self.canonical_root(*slot)).collect::<Result<Vec<_>>>()))
+                .map(|part| {
+                    scope.spawn(move || {
+                        part.iter()
+                            .map(|slot| self.canonical_root(*slot))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                })
                 .collect();
             let mut roots = Vec::with_capacity(slots.len());
             for worker in workers {
-                roots.extend(worker.join().map_err(|_| Error::Beacon("a root fetch thread panicked".into()))??);
+                roots.extend(
+                    worker
+                        .join()
+                        .map_err(|_| Error::Beacon("a root fetch thread panicked".into()))??,
+                );
             }
             Ok(roots)
         })
@@ -343,13 +391,23 @@ impl HttpBeaconSource {
     /// The roots enter the cache only after they hash to `historical_summaries[era - capella_era].block_summary_root`
     /// of `anchor` (checked by `lc-core`). A wrong answer from the node returns an error and leaves the cache as it was.
     fn era_roots(&self, era: u64, anchor: &StateView) -> Result<Arc<Vec<B256>>> {
-        if let Some((_, cached)) = self.era_cache.lock().expect("lock").iter().find(|(cached_era, _)| *cached_era == era) {
+        if let Some((_, cached)) = self
+            .era_cache
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|(cached_era, _)| *cached_era == era)
+        {
             return Ok(cached.clone());
         }
         let start = era * SLOTS_PER_HISTORICAL_ROOT;
         let slots: Vec<u64> = (start..start + SLOTS_PER_HISTORICAL_ROOT).collect();
-        let mut canonical: BTreeMap<u64, B256> =
-            slots.iter().copied().zip(self.canonical_roots(&slots)?).filter_map(|(slot, root)| Some((slot, root?))).collect();
+        let mut canonical: BTreeMap<u64, B256> = slots
+            .iter()
+            .copied()
+            .zip(self.canonical_roots(&slots)?)
+            .filter_map(|(slot, root)| Some((slot, root?)))
+            .collect();
         if !canonical.contains_key(&start) {
             for slot in (start.saturating_sub(MAX_EMPTY_SLOTS_BEFORE_ERA)..start).rev() {
                 if let Some(root) = self.canonical_root(slot)? {
@@ -362,17 +420,29 @@ impl HttpBeaconSource {
         // Verification builds a throwaway branch for the first slot of the era. It fails with the `lc-core` mismatch
         // when the roots do not hash to the summary of the anchor, and nothing has been cached yet.
         anchor.historical_ancestry_branch(self.chain, era * SLOTS_PER_HISTORICAL_ROOT, &roots)?;
-        insert_bounded(&mut self.era_cache.lock().expect("lock"), era, roots.clone(), ERA_CACHE_SIZE);
+        insert_bounded(
+            &mut self.era_cache.lock().expect("lock"),
+            era,
+            roots.clone(),
+            ERA_CACHE_SIZE,
+        );
         Ok(roots)
     }
 
     /// The ancestry branch for a deposit header under the anchor, on the path that the vault takes for the two slots.
-    fn ancestry_branch_for(&self, anchor: &BeaconHeader, deposit_slot: u64, deposit_root: B256) -> Result<Vec<B256>> {
+    fn ancestry_branch_for(
+        &self,
+        anchor: &BeaconHeader,
+        deposit_slot: u64,
+        deposit_root: B256,
+    ) -> Result<Vec<B256>> {
         let state = self.state_for(anchor.state_root)?;
         match ancestry_path(anchor.slot, deposit_slot)? {
             AncestryPath::Recent => {
                 if state.block_root_at(deposit_slot) != deposit_root {
-                    return Err(Error::Beacon("the anchor state does not hold the deposit header in block_roots".into()));
+                    return Err(Error::Beacon(
+                        "the anchor state does not hold the deposit header in block_roots".into(),
+                    ));
                 }
                 Ok(state.recent_ancestry_branch(deposit_slot))
             }
@@ -392,7 +462,10 @@ impl HttpBeaconSource {
     fn head_header(&self, light_client: &LightClientState) -> Result<BeaconHeader> {
         let header = Self::require(
             self.header_by_id(&light_client.head_slot.to_string())?,
-            &format!("a header at the light client head slot {}", light_client.head_slot),
+            &format!(
+                "a header at the light client head slot {}",
+                light_client.head_slot
+            ),
         )?;
         if header_root(&header) != light_client.head_root {
             return Err(Error::Beacon(format!(
@@ -408,13 +481,21 @@ impl HttpBeaconSource {
     ///
     /// Without a next committee the bootstrap endpoint comes first and the state of the head second. With one, the state
     /// of the head gives it (the bootstrap holds the current committee only), and its hash must equal the stored hash.
-    fn store_at_head(&self, head: &BeaconHeader, next_committee_hash: B256) -> Result<LightClientStore> {
+    fn store_at_head(
+        &self,
+        head: &BeaconHeader,
+        next_committee_hash: B256,
+    ) -> Result<LightClientStore> {
         if next_committee_hash == B256::ZERO {
             return self.store_without_next_committee(head);
         }
         let state = self.state_for(head.state_root)?;
         let store = store_at(head, &state, true);
-        let held = store.next_sync_committee.as_ref().map(committee_hash).transpose()?;
+        let held = store
+            .next_sync_committee
+            .as_ref()
+            .map(committee_hash)
+            .transpose()?;
         if held != Some(next_committee_hash) {
             return Err(Error::Beacon(format!(
                 "the next committee in the state of the light client head ({}) does not match the stored hash {next_committee_hash:#x}",
@@ -427,7 +508,9 @@ impl HttpBeaconSource {
     /// The store at the head with no next committee: the bootstrap endpoint first, the state of the head second.
     fn store_without_next_committee(&self, head: &BeaconHeader) -> Result<LightClientStore> {
         let root = header_root(head);
-        if let Some(answer) = self.get_json(&format!("/eth/v1/beacon/light_client/bootstrap/{root:#x}"))? {
+        if let Some(answer) =
+            self.get_json(&format!("/eth/v1/beacon/light_client/bootstrap/{root:#x}"))?
+        {
             return store_from_bootstrap_json(&answer["data"]);
         }
         let state = self.state_for(head.state_root)?;
@@ -452,12 +535,22 @@ impl HttpBeaconSource {
 
     /// The fold that moves the light client from `head` as far toward `latest` as one proof can: the handoff updates of
     /// the periods in between, then `latest` (see the module documentation, "Catching up").
-    fn catch_up(&self, head: &BeaconHeader, light_client: &LightClientState, latest: LightClientUpdate) -> Result<UpdateInput> {
+    fn catch_up(
+        &self,
+        head: &BeaconHeader,
+        light_client: &LightClientState,
+        latest: LightClientUpdate,
+    ) -> Result<UpdateInput> {
         let periods = handoff_periods(self.chain, head.slot, &latest);
-        let handoffs = fetch_period_updates(self.client.as_ref(), self.chain, periods.start, periods.end)?;
+        let handoffs =
+            fetch_period_updates(self.client.as_ref(), self.chain, periods.start, periods.end)?;
         let updates = assemble_fold(self.chain, head.slot, &handoffs, latest)?;
         let store = self.store_at_head(head, light_client.next_committee_hash)?;
-        Ok(UpdateInput { chain: self.chain, store, updates })
+        Ok(UpdateInput {
+            chain: self.chain,
+            store,
+            updates,
+        })
     }
 
     /// The update assembled from block and state data (the path for nodes without light-client endpoints).
@@ -469,7 +562,8 @@ impl HttpBeaconSource {
                 slot = slot.saturating_sub(1);
                 continue;
             };
-            let Some((child_slot, aggregate)) = self.child_aggregate(&attested, slot, head.slot)? else {
+            let Some((child_slot, aggregate)) = self.child_aggregate(&attested, slot, head.slot)?
+            else {
                 slot = slot.saturating_sub(1);
                 continue;
             };
@@ -480,11 +574,17 @@ impl HttpBeaconSource {
                 &format!("the finalized block {finalized_root:#x}"),
             )?;
             if header_root(&finalized.header) != finalized_root {
-                return Err(Error::Beacon("the finalized block does not hash to the checkpoint root".into()));
+                return Err(Error::Beacon(
+                    "the finalized block does not hash to the checkpoint root".into(),
+                ));
             }
-            return Ok(assemble_update(&attested, &state, &finalized, aggregate, child_slot));
+            return Ok(assemble_update(
+                &attested, &state, &finalized, aggregate, child_slot,
+            ));
         }
-        Err(Error::Beacon(format!("no block with a child found within {MAX_EMPTY_SLOTS} slots of the head")))
+        Err(Error::Beacon(format!(
+            "no block with a child found within {MAX_EMPTY_SLOTS} slots of the head"
+        )))
     }
 
     /// The first block after `attested` and its sync aggregate. The child's parent root must be the attested root.
@@ -538,12 +638,16 @@ impl ForkEvidenceSource for HttpBeaconSource {
                 continue;
             };
             if header_root(&header) != root {
-                return Err(Error::Beacon(format!("the node answered for root {root:#x} with another header")));
+                return Err(Error::Beacon(format!(
+                    "the node answered for root {root:#x} with another header"
+                )));
             }
             if header.slot / request.slots_per_epoch != request.epoch {
                 continue;
             }
-            return self.state_for(header.state_root)?.fork_evidence(timestamp, &header);
+            return self
+                .state_for(header.state_root)?
+                .fork_evidence(timestamp, &header);
         }
         Err(Error::Beacon(format!(
             "no beacon header of epoch {} found among the roots of the last {GATE_SEARCH_BLOCKS} blocks; wait one slot",
@@ -583,23 +687,38 @@ impl BeaconSource for HttpBeaconSource {
             return Ok(UpdatePlan::NotYetFinal);
         }
         let input = self.catch_up(&head, light_client, latest)?;
-        let beyond_window = |update: &&LightClientUpdate| update.finalized_header.beacon.slot.saturating_sub(deposit_slot) > WINDOW_SLOTS;
+        let beyond_window = |update: &&LightClientUpdate| {
+            update
+                .finalized_header
+                .beacon
+                .slot
+                .saturating_sub(deposit_slot)
+                > WINDOW_SLOTS
+        };
         if let Some(last) = input.updates.last().filter(beyond_window) {
             // The deposit needs the historical path under the new head. Fetch the state of the new head now, while
             // the node serves it whole. A failure here is not an error: the withdrawal step fetches again.
             let _ = self.state_for(last.finalized_header.beacon.state_root);
         }
-        Ok(UpdatePlan::Update(Box::new(ProofStatement::Verified(input))))
+        Ok(UpdatePlan::Update(Box::new(ProofStatement::Verified(
+            input,
+        ))))
     }
 
-    fn next_head_update(&self, light_client: &LightClientState, _source: &dyn ExecutionReader) -> Result<UpdatePlan> {
+    fn next_head_update(
+        &self,
+        light_client: &LightClientState,
+        _source: &dyn ExecutionReader,
+    ) -> Result<UpdatePlan> {
         let head = self.head_header(light_client)?;
         let latest = self.latest_update()?;
         if latest.finalized_header.beacon.slot <= head.slot {
             return Ok(UpdatePlan::Covered);
         }
         let input = self.catch_up(&head, light_client, latest)?;
-        Ok(UpdatePlan::Update(Box::new(ProofStatement::Verified(input))))
+        Ok(UpdatePlan::Update(Box::new(ProofStatement::Verified(
+            input,
+        ))))
     }
 
     fn withdrawal_path(
@@ -612,16 +731,23 @@ impl BeaconSource for HttpBeaconSource {
         let deposit_slot = self.slot_for_timestamp(deposit.timestamp)?;
         let anchor = self.head_header(light_client)?;
         if deposit_slot >= anchor.slot {
-            return Err(Error::Beacon(format!("deposit slot {deposit_slot} is not before the anchor slot {}", anchor.slot)));
+            return Err(Error::Beacon(format!(
+                "deposit slot {deposit_slot} is not before the anchor slot {}",
+                anchor.slot
+            )));
         }
-        let block = Self::require(self.block_by_id(&deposit_slot.to_string())?, &format!("the block at slot {deposit_slot}"))?;
+        let block = Self::require(
+            self.block_by_id(&deposit_slot.to_string())?,
+            &format!("the block at slot {deposit_slot}"),
+        )?;
         if block.payload.block_hash != deposit.hash {
             return Err(Error::Beacon(format!(
                 "the beacon block at slot {deposit_slot} carries execution block {:#x}, not {:#x}",
                 block.payload.block_hash, deposit.hash
             )));
         }
-        let ancestry_branch = self.ancestry_branch_for(&anchor, deposit_slot, header_root(&block.header))?;
+        let ancestry_branch =
+            self.ancestry_branch_for(&anchor, deposit_slot, header_root(&block.header))?;
         Ok(BeaconPath {
             anchor_header: anchor,
             deposit_header: block.header,
@@ -663,13 +789,20 @@ impl BeaconSource for HttpBeaconSource {
         stored_slots: &[u64],
         _source: &dyn ExecutionReader,
     ) -> Result<Option<HistoricalEvidence>> {
-        let capella_era = self.chain.spec().capella_era().map_err(|error| Error::Beacon(error.to_string()))?;
+        let capella_era = self
+            .chain
+            .spec()
+            .capella_era()
+            .map_err(|error| Error::Beacon(error.to_string()))?;
         // The nearest stored slot in a completed era that lies more than 8192 slots below the anchor.
         let candidate = stored_slots
             .iter()
             .copied()
             .filter(|slot| *slot < anchor.slot && anchor.slot - *slot > WINDOW_SLOTS)
-            .filter(|slot| era_of(*slot) >= capella_era && (era_of(*slot) + 1) * SLOTS_PER_HISTORICAL_ROOT <= anchor.slot)
+            .filter(|slot| {
+                era_of(*slot) >= capella_era
+                    && (era_of(*slot) + 1) * SLOTS_PER_HISTORICAL_ROOT <= anchor.slot
+            })
             .max();
         let Some(earlier_slot) = candidate else {
             return Ok(None);
@@ -690,10 +823,18 @@ impl BeaconSource for HttpBeaconSource {
         stored_slots: &[u64],
         _source: &dyn ExecutionReader,
     ) -> Result<Option<HashEvidence>> {
-        let Some(slot) = stored_slots.iter().copied().filter(|slot| *slot <= at_or_below).max() else {
+        let Some(slot) = stored_slots
+            .iter()
+            .copied()
+            .filter(|slot| *slot <= at_or_below)
+            .max()
+        else {
             return Ok(None);
         };
-        let block = Self::require(self.block_by_id(&slot.to_string())?, &format!("the block at slot {slot}"))?;
+        let block = Self::require(
+            self.block_by_id(&slot.to_string())?,
+            &format!("the block at slot {slot}"),
+        )?;
         Ok(Some(HashEvidence {
             gindex: block_hash_gindex(self.chain, slot)?,
             header: block.header,
@@ -716,8 +857,14 @@ mod tests {
     impl HttpGet for Node {
         fn get(&self, path_and_query: &str, _accept: &str) -> Result<HttpResponse> {
             Ok(match self.0.get(path_and_query) {
-                Some(body) => HttpResponse { status: 200, body: body.clone() },
-                None => HttpResponse { status: 404, body: b"{}".to_vec() },
+                Some(body) => HttpResponse {
+                    status: 200,
+                    body: body.clone(),
+                },
+                None => HttpResponse {
+                    status: 404,
+                    body: b"{}".to_vec(),
+                },
             })
         }
     }
@@ -727,7 +874,10 @@ mod tests {
     }
 
     fn pulsechain_source(pages: Vec<(String, Vec<u8>)>) -> HttpBeaconSource {
-        HttpBeaconSource::new(ChainKind::Pulsechain, Box::new(Node(pages.into_iter().collect())))
+        HttpBeaconSource::new(
+            ChainKind::Pulsechain,
+            Box::new(Node(pages.into_iter().collect())),
+        )
     }
 
     /// Claim: the slot of an execution timestamp is `(timestamp - genesis) / 10` on PulseChain, and a timestamp
@@ -749,9 +899,15 @@ mod tests {
     #[test]
     fn served_endpoint_is_used_and_404_means_not_served() {
         let path = light_client_fixtures().join("light_client_update.json");
-        let wrapper: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        let body = serde_json::json!({ "data": wrapper["response"]["update"] }).to_string().into_bytes();
-        let served = pulsechain_source(vec![("/eth/v1/beacon/light_client/finality_update".into(), body)]);
+        let wrapper: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let body = serde_json::json!({ "data": wrapper["response"]["update"] })
+            .to_string()
+            .into_bytes();
+        let served = pulsechain_source(vec![(
+            "/eth/v1/beacon/light_client/finality_update".into(),
+            body,
+        )]);
         let update = served.served_update().unwrap().expect("served");
         assert!(update.finalized_header.beacon.slot > 0);
         let missing = pulsechain_source(vec![]);
@@ -765,7 +921,8 @@ mod tests {
     /// `light-client/fetch-cache/pulsechain` (not tracked by git). The test skips when it is absent.
     #[test]
     fn assembled_update_from_real_pulsechain_data_verifies() {
-        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../light-client/fetch-cache/pulsechain");
+        let directory =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../light-client/fetch-cache/pulsechain");
         let read = |name: &str| std::fs::read(directory.join(name));
         let (Ok(state), Ok(attested), Ok(finalized), Ok(child), Ok(attested_header), Ok(previous)) = (
             read("attested_state.ssz"),
@@ -783,26 +940,43 @@ mod tests {
         let attested_slot: u64 = message["slot"].as_str().unwrap().parse().unwrap();
         let state_root = message["state_root"].as_str().unwrap().to_string();
         let mut head = header_json.clone();
-        head["data"]["header"]["message"]["slot"] = serde_json::json!((attested_slot + 1).to_string());
-        let checkpoints: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(directory.join("finality_checkpoints.json")).unwrap()).unwrap();
-        let finalized_root = checkpoints["data"]["finalized"]["root"].as_str().unwrap().to_string();
+        head["data"]["header"]["message"]["slot"] =
+            serde_json::json!((attested_slot + 1).to_string());
+        let checkpoints: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(directory.join("finality_checkpoints.json")).unwrap(),
+        )
+        .unwrap();
+        let finalized_root = checkpoints["data"]["finalized"]["root"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         let source = pulsechain_source(vec![
-            ("/eth/v1/beacon/headers/head".into(), head.to_string().into_bytes()),
+            (
+                "/eth/v1/beacon/headers/head".into(),
+                head.to_string().into_bytes(),
+            ),
             (format!("/eth/v2/beacon/blocks/{attested_slot}"), attested),
-            (format!("/eth/v2/beacon/blocks/{}", attested_slot + 1), child),
+            (
+                format!("/eth/v2/beacon/blocks/{}", attested_slot + 1),
+                child,
+            ),
             (format!("/eth/v2/beacon/blocks/{finalized_root}"), finalized),
             (format!("/eth/v2/debug/beacon/states/{state_root}"), state),
         ]);
         let update = source.assembled_update().expect("assembled update");
 
         let previous_json: serde_json::Value = serde_json::from_slice(&previous).unwrap();
-        let previous_header = beacon_header_from_json(&previous_json["data"]["header"]["message"]).unwrap();
+        let previous_header =
+            beacon_header_from_json(&previous_json["data"]["header"]["message"]).unwrap();
         let state = source.state_for(state_root.parse().unwrap()).unwrap();
         let store = store_at(&previous_header, &state, false);
-        let output = verify_update_natively(&UpdateInput { chain: ChainKind::Pulsechain, store, updates: vec![update] })
-            .expect("the assembled update must verify natively");
+        let output = verify_update_natively(&UpdateInput {
+            chain: ChainKind::Pulsechain,
+            store,
+            updates: vec![update],
+        })
+        .expect("the assembled update must verify natively");
         assert_eq!(output.previousHeadSlot, previous_header.slot);
         assert!(output.newHeadSlot > previous_header.slot);
     }
@@ -836,9 +1010,14 @@ mod tests {
             Ok(match self.roots.lock().unwrap().get(&slot) {
                 Some(root) => crate::rpc::HttpResponse {
                     status: 200,
-                    body: serde_json::json!({ "data": { "root": format!("{root:#x}") } }).to_string().into_bytes(),
+                    body: serde_json::json!({ "data": { "root": format!("{root:#x}") } })
+                        .to_string()
+                        .into_bytes(),
                 },
-                None => crate::rpc::HttpResponse { status: 404, body: b"{}".to_vec() },
+                None => crate::rpc::HttpResponse {
+                    status: 404,
+                    body: b"{}".to_vec(),
+                },
             })
         }
     }
@@ -875,12 +1054,23 @@ mod tests {
     ) -> (HttpBeaconSource, Arc<AtomicUsize>, SharedAnswers) {
         let requests = Arc::new(AtomicUsize::new(0));
         let answers = Arc::new(Mutex::new(roots));
-        let node = RootNode { roots: answers.clone(), requests: requests.clone() };
-        (HttpBeaconSource::new(ChainKind::Pulsechain, Box::new(node)), requests, answers)
+        let node = RootNode {
+            roots: answers.clone(),
+            requests: requests.clone(),
+        };
+        (
+            HttpBeaconSource::new(ChainKind::Pulsechain, Box::new(node)),
+            requests,
+            answers,
+        )
     }
 
     fn fork() -> ForkData {
-        ForkData { previous_version: [2, 0, 0, 0], current_version: [3, 0, 0, 0], epoch: 3 }
+        ForkData {
+            previous_version: [2, 0, 0, 0],
+            current_version: [3, 0, 0, 0],
+            epoch: 3,
+        }
     }
 
     /// An execution chain for calls that never read it.
@@ -908,14 +1098,22 @@ mod tests {
             state_root: state.root(),
             body_root: keccak256(b"anchor body"),
         };
-        source.state_cache.lock().unwrap().insert(0, (state.root(), Arc::new(state)));
+        source
+            .state_cache
+            .lock()
+            .unwrap()
+            .insert(0, (state.root(), Arc::new(state)));
         anchor
     }
 
     /// An anchor state whose summaries hold the eras 3 and 4 of `chain_with_gaps` (after three filler eras).
     fn anchored(source: &HttpBeaconSource, eras: &[Vec<B256>]) -> Arc<StateView> {
         let all_eras: Vec<Vec<B256>> = (0..3)
-            .map(|era| (0..8192u64).map(|slot| keccak256(format!("old/{era}/{slot}"))).collect())
+            .map(|era| {
+                (0..8192u64)
+                    .map(|slot| keccak256(format!("old/{era}/{slot}")))
+                    .collect()
+            })
             .chain(eras.iter().cloned())
             .collect();
         let anchor = primed(source, 5 * 8192 + 40, &all_eras);
@@ -934,8 +1132,16 @@ mod tests {
         let (source, _, answers) = changeable_source_over(wrong);
         let anchor = anchored(&source, &eras);
         let error = source.era_roots(3, &anchor).unwrap_err();
-        assert!(error.to_string().contains("do not hash to the block summary root"), "{error}");
-        assert!(source.era_cache.lock().unwrap().is_empty(), "nothing stays cached after a mismatch");
+        assert!(
+            error
+                .to_string()
+                .contains("do not hash to the block summary root"),
+            "{error}"
+        );
+        assert!(
+            source.era_cache.lock().unwrap().is_empty(),
+            "nothing stays cached after a mismatch"
+        );
 
         // The same source, now over a node that answers correctly: the earlier failure left nothing behind.
         *answers.lock().unwrap() = canonical;
@@ -956,8 +1162,17 @@ mod tests {
         let other_anchor = anchored(&source, &changed);
         let before = requests.load(Ordering::SeqCst);
         assert!(source.era_roots(4, &other_anchor).is_err());
-        assert!(requests.load(Ordering::SeqCst) > before, "the node was asked");
-        let cached: Vec<u64> = source.era_cache.lock().unwrap().iter().map(|(era, _)| *era).collect();
+        assert!(
+            requests.load(Ordering::SeqCst) > before,
+            "the node was asked"
+        );
+        let cached: Vec<u64> = source
+            .era_cache
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(era, _)| *era)
+            .collect();
         assert_eq!(cached, vec![3]);
     }
 
@@ -971,9 +1186,16 @@ mod tests {
         }
         assert_eq!(cache.len(), ERA_CACHE_SIZE);
         assert_eq!(cache[0].0, ERA_CACHE_SIZE as u64 + 4, "newest first");
-        assert!(cache.iter().all(|(era, _)| *era >= 5), "eras 0 to 4 are evicted");
+        assert!(
+            cache.iter().all(|(era, _)| *era >= 5),
+            "eras 0 to 4 are evicted"
+        );
         insert_bounded(&mut cache, 10, 99, ERA_CACHE_SIZE);
-        assert_eq!(cache.len(), ERA_CACHE_SIZE, "re-inserting a key does not duplicate it");
+        assert_eq!(
+            cache.len(),
+            ERA_CACHE_SIZE,
+            "re-inserting a key does not duplicate it"
+        );
         assert_eq!(cache.iter().filter(|(era, _)| *era == 10).count(), 1);
     }
 
@@ -991,13 +1213,29 @@ mod tests {
         assert_eq!(*roots, eras[0]);
         // 8192 slots, then the backward search: slot 3 * 8192 - 1 and - 2 are empty, - 3 holds the block.
         assert_eq!(requests.load(Ordering::SeqCst), 8192 + 3);
-        assert_eq!(roots[0], keccak256(b"block before era 3"), "the empty first slot repeats the block before the era");
+        assert_eq!(
+            roots[0],
+            keccak256(b"block before era 3"),
+            "the empty first slot repeats the block before the era"
+        );
         let empty = (3 * 8192 + 1..).find(|slot| slot % 7 == 0).unwrap();
         let offset = (empty - 3 * 8192) as usize;
-        assert_eq!(roots[offset], roots[offset - 1], "slot {empty} is empty (a multiple of seven) and repeats the root before it");
-        assert_ne!(roots[offset + 1], roots[offset], "the next slot holds a block");
+        assert_eq!(
+            roots[offset],
+            roots[offset - 1],
+            "slot {empty} is empty (a multiple of seven) and repeats the root before it"
+        );
+        assert_ne!(
+            roots[offset + 1],
+            roots[offset],
+            "the next slot holds a block"
+        );
         source.era_roots(3, &anchor).unwrap();
-        assert_eq!(requests.load(Ordering::SeqCst), 8192 + 3, "the second call reads the cache");
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            8192 + 3,
+            "the second call reads the cache"
+        );
     }
 
     /// Claim: for a deposit more than 8192 slots below the anchor, the service builds the historical branch, and it
@@ -1011,7 +1249,11 @@ mod tests {
         let (source, _) = source_over(canonical.clone());
         let anchor_slot = 5 * 8192 + 40;
         let all_eras: Vec<Vec<B256>> = (0..3)
-            .map(|era| (0..8192u64).map(|slot| keccak256(format!("old/{era}/{slot}"))).collect())
+            .map(|era| {
+                (0..8192u64)
+                    .map(|slot| keccak256(format!("old/{era}/{slot}")))
+                    .collect()
+            })
             .chain(eras.iter().cloned())
             .collect();
         let anchor = primed(&source, anchor_slot, &all_eras);
@@ -1019,24 +1261,49 @@ mod tests {
 
         let deposit_slot = 3 * 8192 + 1234;
         let deposit_root = eras[0][1234];
-        let branch = source.ancestry_branch_for(&anchor, deposit_slot, deposit_root).unwrap();
+        let branch = source
+            .ancestry_branch_for(&anchor, deposit_slot, deposit_root)
+            .unwrap();
         assert_eq!(branch.len(), 44);
-        let gindex = ancestry_leaf_gindex(ChainKind::Pulsechain.spec(), anchor_slot, deposit_slot).unwrap();
+        let gindex =
+            ancestry_leaf_gindex(ChainKind::Pulsechain.spec(), anchor_slot, deposit_slot).unwrap();
         assert_eq!(gindex, historical_leaf_gindex(59, 3, deposit_slot).unwrap());
-        assert!(is_valid_exact_branch(&deposit_root, &branch, gindex, &state_root));
-        assert!(!is_valid_exact_branch(&deposit_root, &branch, historical_leaf_gindex(59, 4, deposit_slot).unwrap(), &state_root));
+        assert!(is_valid_exact_branch(
+            &deposit_root,
+            &branch,
+            gindex,
+            &state_root
+        ));
+        assert!(!is_valid_exact_branch(
+            &deposit_root,
+            &branch,
+            historical_leaf_gindex(59, 4, deposit_slot).unwrap(),
+            &state_root
+        ));
 
         // The recent path: the anchor's own `block_roots` hold the header.
         let recent_slot = anchor_slot - 100;
         let state = source.state_for(state_root).unwrap();
         let recent_root = state.block_root_at(recent_slot);
-        let recent = source.ancestry_branch_for(&anchor, recent_slot, recent_root).unwrap();
+        let recent = source
+            .ancestry_branch_for(&anchor, recent_slot, recent_root)
+            .unwrap();
         assert_eq!(recent.len(), 18);
-        assert!(is_valid_exact_branch(&recent_root, &recent, lc_core::ancestry::block_roots_leaf_gindex(37, recent_slot).unwrap(), &state_root));
+        assert!(is_valid_exact_branch(
+            &recent_root,
+            &recent,
+            lc_core::ancestry::block_roots_leaf_gindex(37, recent_slot).unwrap(),
+            &state_root
+        ));
 
         // A header that the canonical roots do not name.
-        let error = source.ancestry_branch_for(&anchor, deposit_slot, keccak256(b"other")).unwrap_err();
-        assert!(error.to_string().contains("do not name the deposit header"), "{error}");
+        let error = source
+            .ancestry_branch_for(&anchor, deposit_slot, keccak256(b"other"))
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("do not name the deposit header"),
+            "{error}"
+        );
 
         // One wrong root in era 4: the era formula fails and no branch is built.
         let mut wrong = canonical;
@@ -1044,8 +1311,19 @@ mod tests {
         let (bad_source, _) = source_over(wrong);
         let bad_anchor = primed(&bad_source, anchor_slot, &all_eras);
         let bad_slot = 4 * 8192 + 5;
-        let error = bad_source.ancestry_branch_for(&bad_anchor, bad_slot, keccak256(b"a root from another fork")).unwrap_err();
-        assert!(error.to_string().contains("do not hash to the block summary root"), "{error}");
+        let error = bad_source
+            .ancestry_branch_for(
+                &bad_anchor,
+                bad_slot,
+                keccak256(b"a root from another fork"),
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("do not hash to the block summary root"),
+            "{error}"
+        );
     }
 
     /// Claim: the historical layout evidence picks a stored slot in a completed era more than 8192 slots below the
@@ -1058,7 +1336,11 @@ mod tests {
         let (source, _) = source_over(canonical);
         let anchor_slot = 5 * 8192 + 40;
         let all_eras: Vec<Vec<B256>> = (0..3)
-            .map(|era| (0..8192u64).map(|slot| keccak256(format!("old/{era}/{slot}"))).collect())
+            .map(|era| {
+                (0..8192u64)
+                    .map(|slot| keccak256(format!("old/{era}/{slot}")))
+                    .collect()
+            })
             .chain(eras.iter().cloned())
             .collect();
         let anchor = primed(&source, anchor_slot, &all_eras);
@@ -1067,16 +1349,30 @@ mod tests {
         // The stored slot 3 * 8192 + 1234 holds a header whose root the era vector names.
         let earlier = 3 * 8192 + 1234;
         let stored = [earlier, anchor_slot - 100, anchor_slot];
-        let evidence = source.historical_layout_evidence(&anchor, &stored, no_source).unwrap().expect("evidence");
+        let evidence = source
+            .historical_layout_evidence(&anchor, &stored, no_source)
+            .unwrap()
+            .expect("evidence");
         assert_eq!(evidence.earlier_slot, earlier);
         assert_eq!(evidence.gindex, 59);
         let leaf = eras[0][1234];
         let index = historical_leaf_gindex(evidence.gindex, 3, earlier).unwrap();
-        assert!(is_valid_exact_branch(&leaf, &evidence.branch, index, &anchor.state_root));
+        assert!(is_valid_exact_branch(
+            &leaf,
+            &evidence.branch,
+            index,
+            &anchor.state_root
+        ));
 
-        assert!(source.historical_layout_evidence(&anchor, &[anchor_slot - 100, anchor_slot], no_source).unwrap().is_none());
+        assert!(source
+            .historical_layout_evidence(&anchor, &[anchor_slot - 100, anchor_slot], no_source)
+            .unwrap()
+            .is_none());
         // A slot within 8192 slots of the anchor is not a candidate, whatever its era.
-        assert!(source.historical_layout_evidence(&anchor, &[5 * 8192 + 2], no_source).unwrap().is_none());
+        assert!(source
+            .historical_layout_evidence(&anchor, &[5 * 8192 + 2], no_source)
+            .unwrap()
+            .is_none());
     }
 
     // ---------------------------------------------------------------- catching up with a fold
@@ -1104,7 +1400,9 @@ mod tests {
     }
 
     fn handoffs_of(periods: std::ops::Range<u64>) -> BTreeMap<u64, LightClientUpdate> {
-        periods.map(|period| (period, period_scenario(period).update)).collect()
+        periods
+            .map(|period| (period, period_scenario(period).update))
+            .collect()
     }
 
     fn committee_hash_of(period: u64) -> B256 {
@@ -1122,15 +1420,32 @@ mod tests {
         let latest = period_scenario(104).update;
         let latest_slot = latest.finalized_header.beacon.slot;
 
-        let fold = assemble_fold(ChainKind::Pulsechain, first.store.header_slot, &handoffs, latest.clone()).unwrap();
+        let fold = assemble_fold(
+            ChainKind::Pulsechain,
+            first.store.header_slot,
+            &handoffs,
+            latest.clone(),
+        )
+        .unwrap();
         assert_eq!(fold.len(), 5, "four handoffs and the latest update");
 
         // The control: the latest update alone, as the source sent it before, is refused.
-        let alone = UpdateInput { chain: ChainKind::Pulsechain, store: first.store.clone(), updates: vec![latest] };
+        let alone = UpdateInput {
+            chain: ChainKind::Pulsechain,
+            store: first.store.clone(),
+            updates: vec![latest],
+        };
         let refused = verify_update_natively(&alone).unwrap_err();
-        assert!(refused.to_string().contains("more than one period"), "{refused}");
+        assert!(
+            refused.to_string().contains("more than one period"),
+            "{refused}"
+        );
 
-        let input = UpdateInput { chain: ChainKind::Pulsechain, store: first.store.clone(), updates: fold };
+        let input = UpdateInput {
+            chain: ChainKind::Pulsechain,
+            store: first.store.clone(),
+            updates: fold,
+        };
         let output = verify_update_natively(&input).expect("the fold verifies natively");
         assert_eq!(output.previousHeadSlot, first.store.header_slot);
         assert_eq!(output.newHeadSlot, latest_slot);
@@ -1138,15 +1453,20 @@ mod tests {
         assert_eq!(output.syncCommitteeHash, committee_hash_of(104));
         assert_eq!(output.nextSyncCommitteeHash, committee_hash_of(105));
 
-        let oracle = crate::signer::Signer::from_secret_bytes(&alloy_primitives::hex::decode(
-            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        let oracle = crate::signer::Signer::from_secret_bytes(
+            &alloy_primitives::hex::decode(
+                "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+            )
+            .unwrap(),
         )
-        .unwrap())
         .unwrap();
         let proof = crate::prover::OracleProver::new(oracle)
             .prove(B256::repeat_byte(0x42), &ProofStatement::Verified(input))
             .expect("the oracle signs the fold");
-        assert_eq!(proof.public_values, crate::light_client::public_values(&output));
+        assert_eq!(
+            proof.public_values,
+            crate::light_client::public_values(&output)
+        );
     }
 
     use crate::prover::Prover;
@@ -1164,16 +1484,39 @@ mod tests {
         let latest_slot = latest.finalized_header.beacon.slot;
         let spec = ChainKind::Pulsechain.spec();
 
-        let fold_one = assemble_fold(ChainKind::Pulsechain, first.store.header_slot, &handoffs, latest.clone()).unwrap();
+        let fold_one = assemble_fold(
+            ChainKind::Pulsechain,
+            first.store.header_slot,
+            &handoffs,
+            latest.clone(),
+        )
+        .unwrap();
         assert_eq!(fold_one.len(), MAX_FOLD_UPDATES);
-        let (output_one, store_one) = lc_core::update::verify_light_client_fold(&first.store, &fold_one, spec).expect("the first fold verifies");
+        let (output_one, store_one) =
+            lc_core::update::verify_light_client_fold(&first.store, &fold_one, spec)
+                .expect("the first fold verifies");
         assert_eq!(spec.period_at_slot(output_one.newHeadSlot), 163);
         assert!(output_one.newHeadSlot < latest_slot);
 
-        let fold_two = assemble_fold(ChainKind::Pulsechain, store_one.header_slot, &handoffs, latest).unwrap();
-        assert_eq!(fold_two.len(), 3, "handoffs of periods 164 and 165, then the latest update");
-        let (output_two, _) = lc_core::update::verify_light_client_fold(&store_one, &fold_two, spec).expect("the second fold verifies");
-        assert_eq!(output_two.previousHeadSlot, output_one.newHeadSlot, "the second fold starts where the first ended");
+        let fold_two = assemble_fold(
+            ChainKind::Pulsechain,
+            store_one.header_slot,
+            &handoffs,
+            latest,
+        )
+        .unwrap();
+        assert_eq!(
+            fold_two.len(),
+            3,
+            "handoffs of periods 164 and 165, then the latest update"
+        );
+        let (output_two, _) =
+            lc_core::update::verify_light_client_fold(&store_one, &fold_two, spec)
+                .expect("the second fold verifies");
+        assert_eq!(
+            output_two.previousHeadSlot, output_one.newHeadSlot,
+            "the second fold starts where the first ended"
+        );
         assert_eq!(output_two.newHeadSlot, latest_slot);
     }
 
@@ -1186,10 +1529,19 @@ mod tests {
         let mut handoffs = handoffs_of(100..104);
         handoffs.remove(&102);
         let latest = period_scenario(104).update;
-        let error = assemble_fold(ChainKind::Pulsechain, 100 * PERIOD_SLOTS + 10, &handoffs, latest).unwrap_err();
+        let error = assemble_fold(
+            ChainKind::Pulsechain,
+            100 * PERIOD_SLOTS + 10,
+            &handoffs,
+            latest,
+        )
+        .unwrap_err();
         let text = error.to_string();
         assert!(text.contains("sync committee period 102"), "{text}");
-        assert!(text.contains("period 100") && text.contains("period 104"), "{text}");
+        assert!(
+            text.contains("period 100") && text.contains("period 104"),
+            "{text}"
+        );
         assert!(text.contains("longer history"), "{text}");
         assert_eq!(first_missing_period(&handoffs, 100, 104), Some(102));
         assert_eq!(first_missing_period(&handoffs, 100, 102), None);
@@ -1201,7 +1553,13 @@ mod tests {
     fn a_head_in_the_latest_period_needs_the_latest_update_alone() {
         let first = period_scenario(100);
         let latest = period_scenario(100).update;
-        let fold = assemble_fold(ChainKind::Pulsechain, first.store.header_slot, &BTreeMap::new(), latest).unwrap();
+        let fold = assemble_fold(
+            ChainKind::Pulsechain,
+            first.store.header_slot,
+            &BTreeMap::new(),
+            latest,
+        )
+        .unwrap();
         assert_eq!(fold.len(), 1);
     }
 
@@ -1217,24 +1575,39 @@ mod tests {
             let log = calls.clone();
             let request = move |start: u64, count: u64| -> Result<Vec<(u64, u64)>> {
                 log.lock().unwrap().push((start, count));
-                Ok((start.max(from)..start.max(from) + count.min(3)).map(|period| (period, period)).collect())
+                Ok((start.max(from)..start.max(from) + count.min(3))
+                    .map(|period| (period, period))
+                    .collect())
             };
             (calls, request)
         };
 
         let (calls, request) = node_has(0);
         let received = page_through_periods(10, 20, request).unwrap();
-        assert_eq!(received.keys().copied().collect::<Vec<_>>(), (10..20).collect::<Vec<_>>());
-        assert_eq!(*calls.lock().unwrap(), vec![(10, 10), (13, 7), (16, 4), (19, 1)]);
+        assert_eq!(
+            received.keys().copied().collect::<Vec<_>>(),
+            (10..20).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![(10, 10), (13, 7), (16, 4), (19, 1)]
+        );
 
         let (calls, request) = node_has(0);
         page_through_periods(0, 300, request).unwrap();
-        assert_eq!(calls.lock().unwrap()[0], (0, UPDATES_PER_REQUEST), "the first request is capped");
+        assert_eq!(
+            calls.lock().unwrap()[0],
+            (0, UPDATES_PER_REQUEST),
+            "the first request is capped"
+        );
 
         // A node that pruned periods below 15 gives 15, 16, 17 for a request from 10. The pager takes them and goes on.
         let (calls, request) = node_has(15);
         let received = page_through_periods(10, 20, request).unwrap();
-        assert_eq!(received.keys().copied().collect::<Vec<_>>(), (15..20).collect::<Vec<_>>());
+        assert_eq!(
+            received.keys().copied().collect::<Vec<_>>(),
+            (15..20).collect::<Vec<_>>()
+        );
         assert_eq!(first_missing_period(&received, 10, 20), Some(10));
         assert_eq!(calls.lock().unwrap().len(), 2);
 
@@ -1251,18 +1624,28 @@ mod tests {
     #[test]
     fn the_updates_endpoint_is_read_in_the_standard_shape() {
         let path = light_client_fixtures().join("light_client_update.json");
-        let wrapper: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let wrapper: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let data = wrapper["response"]["update"].clone();
         let update = update_from_json(&data).unwrap();
-        let period = ChainKind::Pulsechain.spec().period_at_slot(update.attested_header.beacon.slot);
+        let period = ChainKind::Pulsechain
+            .spec()
+            .period_at_slot(update.attested_header.beacon.slot);
 
-        let body = serde_json::json!([{ "version": "capella", "data": data }]).to_string().into_bytes();
+        let body = serde_json::json!([{ "version": "capella", "data": data }])
+            .to_string()
+            .into_bytes();
         let query = format!("/eth/v1/beacon/light_client/updates?start_period={period}&count=1");
         let node = Node([(query, body)].into_iter().collect());
-        let received = fetch_period_updates(&node, ChainKind::Pulsechain, period, period + 1).unwrap();
+        let received =
+            fetch_period_updates(&node, ChainKind::Pulsechain, period, period + 1).unwrap();
         assert_eq!(received.keys().copied().collect::<Vec<_>>(), vec![period]);
 
         let silent = Node(HashMap::new());
-        assert!(fetch_period_updates(&silent, ChainKind::Pulsechain, period, period + 1).unwrap().is_empty());
+        assert!(
+            fetch_period_updates(&silent, ChainKind::Pulsechain, period, period + 1)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

@@ -17,25 +17,38 @@ use std::time::{Duration, Instant};
 use zk_bridge_prover::rpc::{HttpRpc, JsonRpc};
 
 /// The first and second Anvil development accounts. Their keys are public and worthless outside local test chains.
-pub const DEPLOYER: Address = alloy_primitives::address!("f39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
-pub const RECIPIENT: Address = alloy_primitives::address!("70997970C51812dc3A010C7d01b50e0d17dc79C8");
-pub const DEPLOYER_SECRET: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+pub const DEPLOYER: Address =
+    alloy_primitives::address!("f39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
+pub const RECIPIENT: Address =
+    alloy_primitives::address!("70997970C51812dc3A010C7d01b50e0d17dc79C8");
+pub const DEPLOYER_SECRET: &str =
+    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
 /// The root of the repository (the parent of `prover/`).
 pub fn repository_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("repository root").to_path_buf()
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("repository root")
+        .to_path_buf()
 }
 
 /// A scratch directory under `target/`, unique for a name and this process.
 pub fn scratch(name: &str) -> PathBuf {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-scratch").join(format!("{name}-{}", std::process::id()));
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/test-scratch")
+        .join(format!("{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("scratch directory");
     path
 }
 
 fn tool_exists(name: &str) -> bool {
-    Command::new(name).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|status| status.success())
+    Command::new(name)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 /// Returns false and prints why when anvil or forge is missing.
@@ -64,7 +77,11 @@ impl Drop for Anvil {
 }
 
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").expect("bind").local_addr().expect("address").port()
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("bind")
+        .local_addr()
+        .expect("address")
+        .port()
 }
 
 /// The Anvil hardforks the tests use. `Shanghai` is the PulseChain role: no EIP-4788 (beacon roots) and no
@@ -89,16 +106,31 @@ impl Hardfork {
 pub fn start_anvil(chain_id: u64, hardfork: Hardfork) -> Anvil {
     let port = free_port();
     let child = Command::new("anvil")
-        .args(["--port", &port.to_string(), "--chain-id", &chain_id.to_string(), "--hardfork", hardfork.name(), "--silent"])
+        .args([
+            "--port",
+            &port.to_string(),
+            "--chain-id",
+            &chain_id.to_string(),
+            "--hardfork",
+            hardfork.name(),
+            "--silent",
+        ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("start anvil");
-    let anvil = Anvil { child, url: format!("http://127.0.0.1:{port}"), chain_id };
+    let anvil = Anvil {
+        child,
+        url: format!("http://127.0.0.1:{port}"),
+        chain_id,
+    };
     let rpc = HttpRpc::new(&anvil.url);
     let start = Instant::now();
     while rpc.call("eth_chainId", json!([])).is_err() {
-        assert!(start.elapsed() < Duration::from_secs(20), "anvil did not start");
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "anvil did not start"
+        );
         std::thread::sleep(Duration::from_millis(100));
     }
     anvil
@@ -107,7 +139,9 @@ pub fn start_anvil(chain_id: u64, hardfork: Hardfork) -> Anvil {
 /// The root that forge builds. By default the repository. The variable `PROVER_TEST_CONTRACTS_ROOT` names another
 /// root (a copy of the contracts), for a check against contracts that differ from the repository.
 fn contracts_root() -> PathBuf {
-    std::env::var("PROVER_TEST_CONTRACTS_ROOT").map(PathBuf::from).unwrap_or_else(|_| repository_root())
+    std::env::var("PROVER_TEST_CONTRACTS_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| repository_root())
 }
 
 /// Builds the contracts with forge into a directory of this crate and returns it. It builds once per process.
@@ -126,7 +160,11 @@ pub fn forge_output() -> &'static PathBuf {
             .args(["--skip", "test", "--skip", "script"])
             .output()
             .expect("run forge build");
-        assert!(status.status.success(), "forge build failed: {}", String::from_utf8_lossy(&status.stderr));
+        assert!(
+            status.status.success(),
+            "forge build failed: {}",
+            String::from_utf8_lossy(&status.stderr)
+        );
         out
     })
 }
@@ -166,7 +204,10 @@ pub fn word_hash(value: B256) -> Argument {
 /// Encodes constructor arguments in the order of the artifact ABI, matching by parameter name
 /// (a trailing underscore is ignored). A parameter without a value stops the test with its name.
 fn encode_constructor(abi: &Value, values: &HashMap<&str, Argument>) -> Vec<u8> {
-    let Some(constructor) = abi.as_array().and_then(|items| items.iter().find(|item| item["type"] == "constructor")) else {
+    let Some(constructor) = abi
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["type"] == "constructor"))
+    else {
         return Vec::new();
     };
     let inputs = constructor["inputs"].as_array().expect("inputs");
@@ -174,9 +215,12 @@ fn encode_constructor(abi: &Value, values: &HashMap<&str, Argument>) -> Vec<u8> 
     let mut tail: Vec<u8> = Vec::new();
     let argument_of = |input: &Value| {
         let name = input["name"].as_str().expect("name").trim_end_matches('_');
-        values
-            .get(name)
-            .unwrap_or_else(|| panic!("the constructor takes `{name}` ({}), and the test has no value for it", input["type"]))
+        values.get(name).unwrap_or_else(|| {
+            panic!(
+                "the constructor takes `{name}` ({}), and the test has no value for it",
+                input["type"]
+            )
+        })
     };
     let head_size: usize = inputs
         .iter()
@@ -241,15 +285,24 @@ impl TestChain {
         if let Some(to) = to {
             request["to"] = json!(format!("{to:#x}"));
         }
-        let hash = self.rpc.call("eth_sendTransaction", json!([request])).expect("send transaction");
+        let hash = self
+            .rpc
+            .call("eth_sendTransaction", json!([request]))
+            .expect("send transaction");
         let start = Instant::now();
         loop {
-            let receipt = self.rpc.call("eth_getTransactionReceipt", json!([hash])).expect("receipt");
+            let receipt = self
+                .rpc
+                .call("eth_getTransactionReceipt", json!([hash]))
+                .expect("receipt");
             if !receipt.is_null() {
                 assert_eq!(receipt["status"], "0x1", "transaction failed: {receipt}");
                 return receipt;
             }
-            assert!(start.elapsed() < Duration::from_secs(20), "no receipt for {hash}");
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "no receipt for {hash}"
+            );
             std::thread::sleep(Duration::from_millis(50));
         }
     }
@@ -274,7 +327,10 @@ impl TestChain {
         if transaction_type == 1 {
             request["accessList"] = json!([]);
         }
-        let hash = self.rpc.call("eth_sendTransaction", json!([request])).expect("send transaction");
+        let hash = self
+            .rpc
+            .call("eth_sendTransaction", json!([request]))
+            .expect("send transaction");
         self.wait_for_receipt(&hash)
     }
 
@@ -282,12 +338,18 @@ impl TestChain {
     pub fn wait_for_receipt(&self, hash: &Value) -> Value {
         let start = Instant::now();
         loop {
-            let receipt = self.rpc.call("eth_getTransactionReceipt", json!([hash])).expect("receipt");
+            let receipt = self
+                .rpc
+                .call("eth_getTransactionReceipt", json!([hash]))
+                .expect("receipt");
             if !receipt.is_null() {
                 assert_eq!(receipt["status"], "0x1", "transaction failed: {receipt}");
                 return receipt;
             }
-            assert!(start.elapsed() < Duration::from_secs(20), "no receipt for {hash}");
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "no receipt for {hash}"
+            );
             std::thread::sleep(Duration::from_millis(50));
         }
     }
@@ -295,7 +357,9 @@ impl TestChain {
     /// Sends several transactions from the deployer and mines them into ONE block, in the order given. Returns the
     /// receipts in the same order. Automine is switched off for the duration and on again afterwards.
     pub fn send_in_one_block(&self, calls: &[(Address, Vec<u8>)]) -> Vec<Value> {
-        self.rpc.call("evm_setAutomine", json!([false])).expect("stop automine");
+        self.rpc
+            .call("evm_setAutomine", json!([false]))
+            .expect("stop automine");
         let hashes: Vec<Value> = calls
             .iter()
             .map(|(to, data)| {
@@ -304,8 +368,13 @@ impl TestChain {
             })
             .collect();
         self.rpc.call("evm_mine", json!([])).expect("mine");
-        self.rpc.call("evm_setAutomine", json!([true])).expect("start automine");
-        hashes.iter().map(|hash| self.wait_for_receipt(hash)).collect()
+        self.rpc
+            .call("evm_setAutomine", json!([true]))
+            .expect("start automine");
+        hashes
+            .iter()
+            .map(|hash| self.wait_for_receipt(hash))
+            .collect()
     }
 
     /// Takes an Anvil snapshot and returns its identifier.
@@ -316,12 +385,22 @@ impl TestChain {
     /// Reverts the chain to a snapshot. Every block after the snapshot disappears, as in a reorganization that
     /// replaces them. Returns whether Anvil knew the snapshot.
     pub fn revert_to(&self, snapshot: &Value) -> bool {
-        self.rpc.call("evm_revert", json!([snapshot])).expect("revert").as_bool().unwrap_or(false)
+        self.rpc
+            .call("evm_revert", json!([snapshot]))
+            .expect("revert")
+            .as_bool()
+            .unwrap_or(false)
     }
 
     /// The number of the latest block.
     pub fn block_number(&self) -> u64 {
-        zk_bridge_prover::rpc::parse_quantity(&self.rpc.call("eth_blockNumber", json!([])).expect("block number")).expect("quantity")
+        zk_bridge_prover::rpc::parse_quantity(
+            &self
+                .rpc
+                .call("eth_blockNumber", json!([]))
+                .expect("block number"),
+        )
+        .expect("quantity")
     }
 
     /// Sends a transaction from the deployer and returns its receipt WITHOUT requiring success. With an explicit gas
@@ -331,14 +410,23 @@ impl TestChain {
         if let Some(to) = to {
             request["to"] = json!(format!("{to:#x}"));
         }
-        let hash = self.rpc.call("eth_sendTransaction", json!([request])).expect("send transaction");
+        let hash = self
+            .rpc
+            .call("eth_sendTransaction", json!([request]))
+            .expect("send transaction");
         let start = Instant::now();
         loop {
-            let receipt = self.rpc.call("eth_getTransactionReceipt", json!([hash])).expect("receipt");
+            let receipt = self
+                .rpc
+                .call("eth_getTransactionReceipt", json!([hash]))
+                .expect("receipt");
             if !receipt.is_null() {
                 return receipt;
             }
-            assert!(start.elapsed() < Duration::from_secs(20), "no receipt for {hash}");
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "no receipt for {hash}"
+            );
             std::thread::sleep(Duration::from_millis(50));
         }
     }
@@ -346,25 +434,39 @@ impl TestChain {
     /// Sends a transaction from any unlocked Anvil account and waits for a successful receipt.
     pub fn send_from(&self, from: Address, to: Address, data: &[u8]) -> Value {
         let request = json!({ "from": format!("{from:#x}"), "to": format!("{to:#x}"), "data": format!("0x{}", hex::encode(data)), "gas": "0x7a1200" });
-        let hash = self.rpc.call("eth_sendTransaction", json!([request])).expect("send transaction");
+        let hash = self
+            .rpc
+            .call("eth_sendTransaction", json!([request]))
+            .expect("send transaction");
         self.wait_for_receipt(&hash)
     }
 
     /// Fixes the timestamp of the next block. It must lie after the latest block.
     pub fn set_next_block_timestamp(&self, timestamp: u64) {
-        self.rpc.call("evm_setNextBlockTimestamp", json!([timestamp])).expect("set next block timestamp");
+        self.rpc
+            .call("evm_setNextBlockTimestamp", json!([timestamp]))
+            .expect("set next block timestamp");
     }
 
     /// The revert data of a mined transaction that failed, read from a call trace. Empty when the trace has none.
     pub fn revert_data_of(&self, transaction_hash: &Value) -> Vec<u8> {
-        let trace = self.rpc.call("debug_traceTransaction", json!([transaction_hash, { "tracer": "callTracer" }])).expect("trace");
+        let trace = self
+            .rpc
+            .call(
+                "debug_traceTransaction",
+                json!([transaction_hash, { "tracer": "callTracer" }]),
+            )
+            .expect("trace");
         let output = trace["output"].as_str().unwrap_or("0x");
         hex::decode(output.trim_start_matches("0x")).expect("hex")
     }
 
     /// The code of an account.
     pub fn code_of(&self, account: Address) -> Vec<u8> {
-        let answer = self.rpc.call("eth_getCode", json!([format!("{account:#x}"), "latest"])).expect("code");
+        let answer = self
+            .rpc
+            .call("eth_getCode", json!([format!("{account:#x}"), "latest"]))
+            .expect("code");
         hex::decode(answer.as_str().expect("hex").trim_start_matches("0x")).expect("hex")
     }
 
@@ -374,49 +476,92 @@ impl TestChain {
     }
 
     /// Deploys a contract whose source file has another name than the contract, for example a test double.
-    pub fn deploy_from(&self, source_file: &str, contract: &str, values: HashMap<&str, Argument>) -> Address {
+    pub fn deploy_from(
+        &self,
+        source_file: &str,
+        contract: &str,
+        values: HashMap<&str, Argument>,
+    ) -> Address {
         let path = forge_output().join(format!("{source_file}.sol/{contract}.json"));
-        let artifact: Value = serde_json::from_slice(&std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))).expect("artifact");
-        let mut data = hex::decode(artifact["bytecode"]["object"].as_str().expect("bytecode")).expect("hex");
+        let artifact: Value = serde_json::from_slice(
+            &std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display())),
+        )
+        .expect("artifact");
+        let mut data =
+            hex::decode(artifact["bytecode"]["object"].as_str().expect("bytecode")).expect("hex");
         data.extend(encode_constructor(&artifact["abi"], &values));
         let receipt = self.send(None, &data);
-        receipt["contractAddress"].as_str().expect("contract address").parse().expect("address")
+        receipt["contractAddress"]
+            .as_str()
+            .expect("contract address")
+            .parse()
+            .expect("address")
     }
 
     /// Calls a view function and returns the raw return data.
     pub fn call(&self, to: Address, data: &[u8]) -> Result<Bytes, zk_bridge_prover::error::Error> {
         let answer = self.rpc.call("eth_call", json!([{ "to": format!("{to:#x}"), "data": format!("0x{}", hex::encode(data)) }, "latest"]))?;
-        Ok(Bytes::from(hex::decode(answer.as_str().expect("hex")).expect("hex")))
+        Ok(Bytes::from(
+            hex::decode(answer.as_str().expect("hex")).expect("hex"),
+        ))
     }
 
     /// Moves the clock of the chain forward and mines one block, so the next block lies `seconds` later.
     pub fn advance_time(&self, seconds: u64) {
-        self.rpc.call("evm_increaseTime", json!([seconds])).expect("increase time");
+        self.rpc
+            .call("evm_increaseTime", json!([seconds]))
+            .expect("increase time");
         self.rpc.call("evm_mine", json!([])).expect("mine");
     }
 
     /// Writes one storage word of a contract.
     pub fn set_storage(&self, contract: Address, slot: B256, value: B256) {
         self.rpc
-            .call("anvil_setStorageAt", json!([format!("{contract:#x}"), format!("{slot:#x}"), format!("{value:#x}")]))
+            .call(
+                "anvil_setStorageAt",
+                json!([
+                    format!("{contract:#x}"),
+                    format!("{slot:#x}"),
+                    format!("{value:#x}")
+                ]),
+            )
             .expect("set storage");
     }
 
     /// Replaces the code of an account.
     pub fn set_code(&self, account: Address, code: &[u8]) {
-        self.rpc.call("anvil_setCode", json!([format!("{account:#x}"), format!("0x{}", hex::encode(code))])).expect("set code");
+        self.rpc
+            .call(
+                "anvil_setCode",
+                json!([format!("{account:#x}"), format!("0x{}", hex::encode(code))]),
+            )
+            .expect("set code");
     }
 
     pub fn latest_timestamp(&self) -> u64 {
-        let block = self.rpc.call("eth_getBlockByNumber", json!(["latest", false])).expect("block");
+        let block = self
+            .rpc
+            .call("eth_getBlockByNumber", json!(["latest", false]))
+            .expect("block");
         zk_bridge_prover::rpc::parse_quantity(&block["timestamp"]).expect("timestamp")
     }
 
     pub fn mine(&self, blocks: u64) {
-        self.rpc.call("anvil_mine", json!([format!("{blocks:#x}")])).expect("mine");
+        self.rpc
+            .call("anvil_mine", json!([format!("{blocks:#x}")]))
+            .expect("mine");
     }
 
     pub fn nonce(&self, account: Address) -> u64 {
-        zk_bridge_prover::rpc::parse_quantity(&self.rpc.call("eth_getTransactionCount", json!([format!("{account:#x}"), "latest"])).expect("nonce")).expect("quantity")
+        zk_bridge_prover::rpc::parse_quantity(
+            &self
+                .rpc
+                .call(
+                    "eth_getTransactionCount",
+                    json!([format!("{account:#x}"), "latest"]),
+                )
+                .expect("nonce"),
+        )
+        .expect("quantity")
     }
 }

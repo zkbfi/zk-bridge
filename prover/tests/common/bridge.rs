@@ -13,12 +13,16 @@ use zk_bridge_prover::beacon::dev::{DevBeaconSource, DEFAULT_SLOT_OFFSET};
 use zk_bridge_prover::beacon::{BeaconSource, DepositBlock, LightClientState};
 use zk_bridge_prover::chain::ChainClient;
 use zk_bridge_prover::cli;
-use zk_bridge_prover::contracts::{deposit_calldata, head_updated_topic, LightClientContract, TokenContract, VaultContract};
+use zk_bridge_prover::contracts::{
+    deposit_calldata, head_updated_topic, LightClientContract, TokenContract, VaultContract,
+};
 use zk_bridge_prover::error::Error;
-use zk_bridge_prover::gate::{gate_evidence_for_deposit, ForkEvidenceSource, ForkRequest, GateContract};
+use zk_bridge_prover::gate::{
+    gate_evidence_for_deposit, ForkEvidenceSource, ForkRequest, GateContract,
+};
 use zk_bridge_prover::light_client::{
-    assemble_withdrawal_proof, build_execution_evidence, decode_deposit, fork_evidence_bytes, withdrawal_calldata, BeaconHeader, ChainKind,
-    ForkData, DEPOSIT_EVENT_TOPIC,
+    assemble_withdrawal_proof, build_execution_evidence, decode_deposit, fork_evidence_bytes,
+    withdrawal_calldata, BeaconHeader, ChainKind, ForkData, DEPOSIT_EVENT_TOPIC,
 };
 use zk_bridge_prover::prover::OracleProver;
 use zk_bridge_prover::rpc::{parse_quantity, HttpRpc};
@@ -41,7 +45,8 @@ sol! {
 pub const ONE_TOKEN: u128 = 1_000_000_000_000_000_000;
 
 /// The beacon roots contract of EIP-4788.
-pub const BEACON_ROOTS: Address = alloy_primitives::address!("000F3df6D732807Ef1319fB7B8bB8522d0Beac02");
+pub const BEACON_ROOTS: Address =
+    alloy_primitives::address!("000F3df6D732807Ef1319fB7B8bB8522d0Beac02");
 
 /// The genuine runtime code of the EIP-4788 contract (the code in the specification, with `PUSH0`). The Solidity gate
 /// tests install the same bytes (`test/hardened/utils/GateMocks.sol`). The contract keeps a ring buffer of 8191
@@ -73,12 +78,16 @@ pub const OWN_CHAIN_SLOT_OFFSET: u64 = 11_000_000;
 
 /// The signer of the first Anvil account, which is also the oracle of the verifier contracts.
 pub fn deployer_signer() -> Signer {
-    Signer::from_secret_bytes(&hex::decode(DEPLOYER_SECRET.trim_start_matches("0x")).unwrap()).unwrap()
+    Signer::from_secret_bytes(&hex::decode(DEPLOYER_SECRET.trim_start_matches("0x")).unwrap())
+        .unwrap()
 }
 
 /// A genesis time that puts the present about 100 seconds into an epoch, so no epoch border falls inside a test.
 fn gate_genesis_time() -> u64 {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_secs();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs();
     now - 100 - EPOCH_SECONDS * 1_000
 }
 
@@ -90,8 +99,16 @@ pub fn install_beacon_roots(chain: &TestChain) {
 /// Writes one entry of the ring buffer of the beacon roots contract.
 pub fn write_beacon_root(chain: &TestChain, timestamp: u64, root: B256) {
     let position = timestamp % RING_LENGTH;
-    chain.set_storage(BEACON_ROOTS, B256::from(U256::from(position).to_be_bytes::<32>()), B256::from(U256::from(timestamp).to_be_bytes::<32>()));
-    chain.set_storage(BEACON_ROOTS, B256::from(U256::from(position + RING_LENGTH).to_be_bytes::<32>()), root);
+    chain.set_storage(
+        BEACON_ROOTS,
+        B256::from(U256::from(position).to_be_bytes::<32>()),
+        B256::from(U256::from(timestamp).to_be_bytes::<32>()),
+    );
+    chain.set_storage(
+        BEACON_ROOTS,
+        B256::from(U256::from(position + RING_LENGTH).to_be_bytes::<32>()),
+        root,
+    );
 }
 
 /// A fork evidence source with no beacon node: a synthetic state whose `fork.current_version` is `version`, a header
@@ -105,16 +122,27 @@ pub struct SyntheticForkSource<'a> {
 
 impl<'a> SyntheticForkSource<'a> {
     pub fn new(chain: &'a TestChain, version: [u8; 4]) -> Self {
-        Self { chain, version, requests: Default::default() }
+        Self {
+            chain,
+            version,
+            requests: Default::default(),
+        }
     }
 }
 
 impl ForkEvidenceSource for SyntheticForkSource<'_> {
     fn fork_evidence(&self, request: &ForkRequest<'_>) -> Result<Vec<u8>, Error> {
-        self.requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.requests
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let timestamp = self.chain.latest_timestamp();
-        let fork = ForkData { previous_version: [2, 0, 0, 0], current_version: self.version, epoch: 3 };
-        let mut field_roots: Vec<B256> = (0..28u64).map(|field| keccak256(format!("synthetic-state-field/{field}"))).collect();
+        let fork = ForkData {
+            previous_version: [2, 0, 0, 0],
+            current_version: self.version,
+            epoch: 3,
+        };
+        let mut field_roots: Vec<B256> = (0..28u64)
+            .map(|field| keccak256(format!("synthetic-state-field/{field}")))
+            .collect();
         field_roots[3] = fork.hash_tree_root();
         let header = BeaconHeader {
             slot: (timestamp - request.genesis_time) / request.seconds_per_slot,
@@ -123,7 +151,11 @@ impl ForkEvidenceSource for SyntheticForkSource<'_> {
             state_root: lc_core::ssz::merkleize(&field_roots),
             body_root: keccak256(b"synthetic-body"),
         };
-        assert_eq!(header.slot / request.slots_per_epoch, request.epoch, "the synthetic header lies in the epoch the gate wants");
+        assert_eq!(
+            header.slot / request.slots_per_epoch,
+            request.epoch,
+            "the synthetic header lies in the epoch the gate wants"
+        );
         write_beacon_root(self.chain, timestamp, header.hash_tree_root());
         Ok(fork_evidence_bytes(timestamp, &header, fork, &field_roots))
     }
@@ -143,7 +175,18 @@ fn word_u64_raw(value: u64) -> [u8; 32] {
 
 /// The constructor argument for token pairs: `(local token, remote token)` with 18 decimals each.
 fn pairs_argument(pairs: &[(Address, Address)]) -> Argument {
-    Argument::Tuples(pairs.iter().map(|(local, remote)| vec![word_address_raw(*local), word_address_raw(*remote), word_u64_raw(18)]).collect())
+    Argument::Tuples(
+        pairs
+            .iter()
+            .map(|(local, remote)| {
+                vec![
+                    word_address_raw(*local),
+                    word_address_raw(*remote),
+                    word_u64_raw(18),
+                ]
+            })
+            .collect(),
+    )
 }
 
 /// What `deploy_side` returns.
@@ -189,17 +232,32 @@ pub struct ObservationFixture {
 impl ObservationFixture {
     /// Reads a fixture by its file stem, for example `pulsechain_accept_version_outside_the_table`.
     pub fn load(stem: &str) -> Self {
-        let path = repository_root().join("light-client/tests/fixtures/fork-observation").join(format!("{stem}.json"));
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let path = repository_root()
+            .join("light-client/tests/fixtures/fork-observation")
+            .join(format!("{stem}.json"));
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         let json: serde_json::Value = serde_json::from_str(&text).expect("fixture json");
-        let text_of = |value: &serde_json::Value| value.as_str().unwrap_or_else(|| panic!("fixture field is not text: {value}")).to_string();
+        let text_of = |value: &serde_json::Value| {
+            value
+                .as_str()
+                .unwrap_or_else(|| panic!("fixture field is not text: {value}"))
+                .to_string()
+        };
         let hash_of = |value: &serde_json::Value| -> B256 { text_of(value).parse().expect("hash") };
-        let number_of = |value: &serde_json::Value| -> u64 { text_of(value).parse().expect("number") };
+        let number_of =
+            |value: &serde_json::Value| -> u64 { text_of(value).parse().expect("number") };
         let start = &json["startStore"];
         Self {
             name: text_of(&json["name"]),
-            public_values: hex::decode(text_of(&json["publicValues"]).trim_start_matches("0x")).expect("public values"),
-            observed_version: hex::decode(text_of(&json["observedVersion"]).trim_start_matches("0x")).expect("version").try_into().expect("four bytes"),
+            public_values: hex::decode(text_of(&json["publicValues"]).trim_start_matches("0x"))
+                .expect("public values"),
+            observed_version: hex::decode(
+                text_of(&json["observedVersion"]).trim_start_matches("0x"),
+            )
+            .expect("version")
+            .try_into()
+            .expect("four bytes"),
             observed_attested_slot: number_of(&json["observedAttestedSlot"]),
             head_slot: number_of(&start["headSlot"]),
             header_root: hash_of(&start["headerRoot"]),
@@ -233,8 +291,17 @@ fn deploy_side(
     deposit_fee_basis_points: u16,
     flow_limiter: Address,
 ) -> Side {
-    let token = chain.deploy("MockERC20", HashMap::from([("name", Argument::Text(local_token_name.into())), ("symbol", Argument::Text("TKN".into()))]));
-    let verifier = chain.deploy("OracleSP1Verifier", HashMap::from([("oracle", word_address(DEPLOYER))]));
+    let token = chain.deploy(
+        "MockERC20",
+        HashMap::from([
+            ("name", Argument::Text(local_token_name.into())),
+            ("symbol", Argument::Text("TKN".into())),
+        ]),
+    );
+    let verifier = chain.deploy(
+        "OracleSP1Verifier",
+        HashMap::from([("oracle", word_address(DEPLOYER))]),
+    );
     let light_client = chain.deploy(
         "BeaconLightClient",
         HashMap::from([
@@ -246,7 +313,10 @@ fn deploy_side(
             ("secondsPerSlot", word_u64(LIGHT_CLIENT_SECONDS_PER_SLOT)),
             ("initialSlot", word_u64(1)),
             ("initialHeaderRoot", word_hash(keccak256(b"checkpoint"))),
-            ("initialSyncCommitteeHash", word_hash(keccak256(b"committee"))),
+            (
+                "initialSyncCommitteeHash",
+                word_hash(keccak256(b"committee")),
+            ),
             ("initialNextSyncCommitteeHash", word_hash(B256::ZERO)),
         ]),
     );
@@ -257,14 +327,23 @@ fn deploy_side(
             HashMap::from([
                 ("verifier", word_address(verifier)),
                 ("programVKey", word_hash(keccak256(b"light-client-program"))),
-                ("genesisValidatorsRoot", word_hash(fixture.genesis_validators_root())),
+                (
+                    "genesisValidatorsRoot",
+                    word_hash(fixture.genesis_validators_root()),
+                ),
                 ("slotsPerPeriod", word_u64(OBSERVATION_SLOTS_PER_PERIOD)),
                 ("genesisTime", word_u64(LIGHT_CLIENT_GENESIS_TIME)),
                 ("secondsPerSlot", word_u64(LIGHT_CLIENT_SECONDS_PER_SLOT)),
                 ("initialSlot", word_u64(fixture.head_slot)),
                 ("initialHeaderRoot", word_hash(fixture.header_root)),
-                ("initialSyncCommitteeHash", word_hash(fixture.committee_hash)),
-                ("initialNextSyncCommitteeHash", word_hash(fixture.next_committee_hash)),
+                (
+                    "initialSyncCommitteeHash",
+                    word_hash(fixture.committee_hash),
+                ),
+                (
+                    "initialNextSyncCommitteeHash",
+                    word_hash(fixture.next_committee_hash),
+                ),
             ]),
         )
     });
@@ -274,7 +353,10 @@ fn deploy_side(
             HashMap::from([
                 ("lightClient", word_address(own)),
                 ("verifier", word_address(verifier)),
-                ("observationProgramVKey", word_hash(observation_program_vkey())),
+                (
+                    "observationProgramVKey",
+                    word_hash(observation_program_vkey()),
+                ),
             ]),
         )
     });
@@ -286,9 +368,18 @@ fn deploy_side(
             ("genesisTime", word_u64(gate_genesis_time())),
             ("secondsPerSlot", word_u64(SECONDS_PER_SLOT)),
             ("slotsPerEpoch", word_u64(SLOTS_PER_EPOCH)),
-            ("supportedVersions", Argument::Tuples(vec![vec![raw_bytes4(CAPELLA_VERSION), word_u64_raw(5)]])),
-            ("sealDepths", Argument::Words(vec![word_u64_raw(5), word_u64_raw(6), word_u64_raw(7)])),
-            ("forkRegistry", word_address(registry.unwrap_or(Address::ZERO))),
+            (
+                "supportedVersions",
+                Argument::Tuples(vec![vec![raw_bytes4(CAPELLA_VERSION), word_u64_raw(5)]]),
+            ),
+            (
+                "sealDepths",
+                Argument::Words(vec![word_u64_raw(5), word_u64_raw(6), word_u64_raw(7)]),
+            ),
+            (
+                "forkRegistry",
+                word_address(registry.unwrap_or(Address::ZERO)),
+            ),
         ]),
     );
     let vault = chain.deploy(
@@ -299,12 +390,23 @@ fn deploy_side(
             ("remoteChainId", word_u64(remote_id)),
             ("remoteVault", word_address(remote_vault)),
             ("pairs", pairs_argument(pairs)),
-            ("vaultTerms", Argument::StaticTuple(vault_terms(deposit_fee_basis_points, flow_limiter))),
+            (
+                "vaultTerms",
+                Argument::StaticTuple(vault_terms(deposit_fee_basis_points, flow_limiter)),
+            ),
             ("capellaEra", word_u64(0)),
             ("depositGate", word_address(gate)),
         ]),
     );
-    Side { token, verifier, light_client, own_light_client, registry, gate, vault }
+    Side {
+        token,
+        verifier,
+        light_client,
+        own_light_client,
+        registry,
+        gate,
+        vault,
+    }
 }
 
 /// The terms of a vault: no cutoff, the fee switch and the flow limiter. A fee of zero means no fee authority, so the
@@ -313,10 +415,24 @@ fn deploy_side(
 fn vault_terms(fee_basis_points: u16, flow_limiter: Address) -> Vec<[u8; 32]> {
     let limiter = word_address_raw(flow_limiter);
     if fee_basis_points == 0 {
-        return vec![word_u64_raw(0), word_u64_raw(0), word_u64_raw(0), word_u64_raw(0), word_u64_raw(0), limiter];
+        return vec![
+            word_u64_raw(0),
+            word_u64_raw(0),
+            word_u64_raw(0),
+            word_u64_raw(0),
+            word_u64_raw(0),
+            limiter,
+        ];
     }
     let deployer = word_address_raw(DEPLOYER);
-    vec![word_u64_raw(0), deployer, deployer, word_u64_raw(u64::from(fee_basis_points)), word_u64_raw(100), limiter]
+    vec![
+        word_u64_raw(0),
+        deployer,
+        deployer,
+        word_u64_raw(u64::from(fee_basis_points)),
+        word_u64_raw(100),
+        limiter,
+    ]
 }
 
 /// The two directions of the bridge.
@@ -347,7 +463,13 @@ pub struct BridgeOptions {
 
 impl Default for BridgeOptions {
     fn default() -> Self {
-        Self { rogue_token: false, finality_depth: 1, registry_fixture: None, deposit_fee_basis_points: 0, scripted_flow_limiter: false }
+        Self {
+            rogue_token: false,
+            finality_depth: 1,
+            registry_fixture: None,
+            deposit_fee_basis_points: 0,
+            scripted_flow_limiter: false,
+        }
     }
 }
 
@@ -471,26 +593,49 @@ pub fn deploy_bridge_with(name: &str, options: BridgeOptions) -> Bridge {
     // The rogue token goes first, at nonce 0 on both chains, so it has one address on both.
     let rogue_token = options.rogue_token.then(|| {
         let deploy_rogue = |chain: &TestChain| {
-            chain.deploy("MockERC20", HashMap::from([("name", Argument::Text("Rogue".into())), ("symbol", Argument::Text("RGE".into()))]))
+            chain.deploy(
+                "MockERC20",
+                HashMap::from([
+                    ("name", Argument::Text("Rogue".into())),
+                    ("symbol", Argument::Text("RGE".into())),
+                ]),
+            )
         };
         let (on_a, on_b) = (deploy_rogue(&chain_a), deploy_rogue(&chain_b));
-        assert_eq!(on_a, on_b, "the rogue token has the same address on both chains");
+        assert_eq!(
+            on_a, on_b,
+            "the rogue token has the same address on both chains"
+        );
         on_a
     });
 
     // Chain B sends one dummy transaction first, so the two chains give different contract addresses.
     chain_b.send(Some(DEPLOYER), &[]);
     // A test flow limiter comes before the other contracts, so the nonces below already count it.
-    let deploy_limiter = |chain: &TestChain| options.scripted_flow_limiter.then(|| chain.deploy_from("FlowLimiterMocks", "ScriptedFlowLimiter", HashMap::new()));
+    let deploy_limiter = |chain: &TestChain| {
+        options
+            .scripted_flow_limiter
+            .then(|| chain.deploy_from("FlowLimiterMocks", "ScriptedFlowLimiter", HashMap::new()))
+    };
     let (flow_limiter_a, flow_limiter_b) = (deploy_limiter(&chain_a), deploy_limiter(&chain_b));
     // Addresses follow from the deployer nonce: token, verifier, light client, gate, vault. A registry-mode side adds
     // the own-chain light client and the registry before its gate.
     let observation_fixture = options.registry_fixture.map(ObservationFixture::load);
-    let extra_on_b = if observation_fixture.is_some() { REGISTRY_EXTRA_DEPLOYMENTS } else { 0 };
+    let extra_on_b = if observation_fixture.is_some() {
+        REGISTRY_EXTRA_DEPLOYMENTS
+    } else {
+        0
+    };
     let (nonce_a, nonce_b) = (chain_a.nonce(DEPLOYER), chain_b.nonce(DEPLOYER));
     let (token_a, vault_a) = (DEPLOYER.create(nonce_a), DEPLOYER.create(nonce_a + 4));
-    let (token_b, vault_b) = (DEPLOYER.create(nonce_b), DEPLOYER.create(nonce_b + 4 + extra_on_b));
-    assert_ne!(token_a, token_b, "the real pair has different addresses on the two chains");
+    let (token_b, vault_b) = (
+        DEPLOYER.create(nonce_b),
+        DEPLOYER.create(nonce_b + 4 + extra_on_b),
+    );
+    assert_ne!(
+        token_a, token_b,
+        "the real pair has different addresses on the two chains"
+    );
 
     let mut pairs_a = vec![(token_a, token_b)];
     if let Some(rogue) = rogue_token {
@@ -498,17 +643,52 @@ pub fn deploy_bridge_with(name: &str, options: BridgeOptions) -> Bridge {
     }
     // The light client on chain A tracks chain B. With an own-chain light client on chain B, both follow the beacon chain
     // of the fixture, so they hold one genesis validators root (the prover checks that relationship at startup).
-    let chain_b_genesis_root = observation_fixture.as_ref().map_or_else(|| keccak256("genesis-of-chain-b"), ObservationFixture::genesis_validators_root);
-    let side_a = deploy_side(&chain_a, 1, 369, "Token A", &pairs_a, vault_b, chain_b_genesis_root, GATE_MODE_ENFORCING, None, options.deposit_fee_basis_points, flow_limiter_a.unwrap_or(Address::ZERO));
-    let gate_mode_b = if observation_fixture.is_some() { GATE_MODE_REGISTRY } else { GATE_MODE_DETECT };
-    let side_b = deploy_side(&chain_b, 369, 1, "Token B", &[(token_b, token_a)], vault_a, keccak256("genesis-of-chain-a"), gate_mode_b, observation_fixture.as_ref(), options.deposit_fee_basis_points, flow_limiter_b.unwrap_or(Address::ZERO));
+    let chain_b_genesis_root = observation_fixture.as_ref().map_or_else(
+        || keccak256("genesis-of-chain-b"),
+        ObservationFixture::genesis_validators_root,
+    );
+    let side_a = deploy_side(
+        &chain_a,
+        1,
+        369,
+        "Token A",
+        &pairs_a,
+        vault_b,
+        chain_b_genesis_root,
+        GATE_MODE_ENFORCING,
+        None,
+        options.deposit_fee_basis_points,
+        flow_limiter_a.unwrap_or(Address::ZERO),
+    );
+    let gate_mode_b = if observation_fixture.is_some() {
+        GATE_MODE_REGISTRY
+    } else {
+        GATE_MODE_DETECT
+    };
+    let side_b = deploy_side(
+        &chain_b,
+        369,
+        1,
+        "Token B",
+        &[(token_b, token_a)],
+        vault_a,
+        keccak256("genesis-of-chain-a"),
+        gate_mode_b,
+        observation_fixture.as_ref(),
+        options.deposit_fee_basis_points,
+        flow_limiter_b.unwrap_or(Address::ZERO),
+    );
     assert_eq!((side_a.token, side_a.vault), (token_a, vault_a));
     assert_eq!((side_b.token, side_b.vault), (token_b, vault_b));
 
     let directory = scratch(name);
     // A registry-mode chain B also keeps its own-chain light client current, from a slot above the fixture checkpoint.
-    let chain_b_own = side_b.own_light_client.map_or_else(String::new, |own| format!("own_light_client = \"{own:#x}\"\n"));
-    let chain_b_offset = side_b.own_light_client.map_or_else(String::new, |_| format!("slot_offset = {OWN_CHAIN_SLOT_OFFSET}\n"));
+    let chain_b_own = side_b.own_light_client.map_or_else(String::new, |own| {
+        format!("own_light_client = \"{own:#x}\"\n")
+    });
+    let chain_b_offset = side_b.own_light_client.map_or_else(String::new, |_| {
+        format!("slot_offset = {OWN_CHAIN_SLOT_OFFSET}\n")
+    });
     let config = format!(
         r#"
 database_path = "{database}"
@@ -577,7 +757,11 @@ finality_depth = {depth}
 
 /// Runs the prover command line against the configuration of the bridge, as `once`, `status` or `withdraw` would.
 pub fn run(bridge: &Bridge, command: &[&str]) -> Result<String, Error> {
-    let mut arguments = vec!["zk-bridge-prover".to_string(), "--config".into(), bridge.config_path.display().to_string()];
+    let mut arguments = vec![
+        "zk-bridge-prover".to_string(),
+        "--config".into(),
+        bridge.config_path.display().to_string(),
+    ];
     arguments.extend(["--private-key-env".to_string(), "ANVIL_DEPLOYER".into()]);
     arguments.extend(command.iter().map(|part| part.to_string()));
     let lookup = |name: &str| (name == "ANVIL_DEPLOYER").then(|| DEPLOYER_SECRET.to_string());
@@ -588,13 +772,26 @@ pub fn run(bridge: &Bridge, command: &[&str]) -> Result<String, Error> {
 
 /// The token balance of an account.
 pub fn balance(chain: &TestChain, token: Address, account: Address) -> U256 {
-    let raw = chain.call(token, &TokenContract::balanceOfCall { account }.abi_encode()).unwrap();
+    let raw = chain
+        .call(
+            token,
+            &TokenContract::balanceOfCall { account }.abi_encode(),
+        )
+        .unwrap();
     U256::from_be_slice(&raw)
 }
 
 /// Whether the vault paid the deposit nonce.
 pub fn claimed(chain: &TestChain, vault: Address, nonce: B256) -> bool {
-    let raw = chain.call(vault, &VaultContract::claimedCall { depositNonce: nonce }.abi_encode()).unwrap();
+    let raw = chain
+        .call(
+            vault,
+            &VaultContract::claimedCall {
+                depositNonce: nonce,
+            }
+            .abi_encode(),
+        )
+        .unwrap();
     raw.last() == Some(&1)
 }
 
@@ -602,13 +799,23 @@ pub fn claimed(chain: &TestChain, vault: Address, nonce: B256) -> bool {
 pub fn fund_destination_vault(bridge: &Bridge, direction: Direction, amount: u128) {
     bridge.destination(direction).send(
         Some(bridge.destination_token(direction)),
-        &TokenContract::mintCall { to: bridge.destination_vault(direction), amount: U256::from(amount) }.abi_encode(),
+        &TokenContract::mintCall {
+            to: bridge.destination_vault(direction),
+            amount: U256::from(amount),
+        }
+        .abi_encode(),
     );
 }
 
 /// A client for a test chain, without a signer.
 pub fn client_of(chain: &TestChain) -> ChainClient {
-    ChainClient::connect("test", chain.anvil.chain_id, Box::new(HttpRpc::new(&chain.anvil.url)), None).expect("client")
+    ChainClient::connect(
+        "test",
+        chain.anvil.chain_id,
+        Box::new(HttpRpc::new(&chain.anvil.url)),
+        None,
+    )
+    .expect("client")
 }
 
 /// The gate evidence that `gate_evidence_for_deposit` builds for a deposit now, from a synthetic Capella chain.
@@ -662,7 +869,12 @@ pub fn deposit_log_indices(receipt: &serde_json::Value) -> Vec<usize> {
 /// The nonce of the deposit log at `index` of a receipt.
 pub fn deposit_nonce_at(receipt: &serde_json::Value, index: usize) -> B256 {
     let log = &receipt["logs"][index];
-    let topics: Vec<B256> = log["topics"].as_array().unwrap().iter().map(|topic| topic.as_str().unwrap().parse().unwrap()).collect();
+    let topics: Vec<B256> = log["topics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|topic| topic.as_str().unwrap().parse().unwrap())
+        .collect();
     let data = hex::decode(log["data"].as_str().unwrap()).unwrap();
     decode_deposit(&topics, &data).unwrap().nonce
 }
@@ -672,7 +884,11 @@ pub fn made_deposit(receipt: serde_json::Value) -> MadeDeposit {
     let log_index = deposit_log_indices(&receipt)[0];
     MadeDeposit {
         nonce: deposit_nonce_at(&receipt, log_index),
-        transaction_hash: receipt["transactionHash"].as_str().unwrap().parse().unwrap(),
+        transaction_hash: receipt["transactionHash"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap(),
         block_hash: receipt["blockHash"].as_str().unwrap().parse().unwrap(),
         gas_used: gas_used(&receipt),
         log_index,
@@ -681,7 +897,13 @@ pub fn made_deposit(receipt: serde_json::Value) -> MadeDeposit {
 }
 
 /// Mints, approves and deposits a token on `chain` through `vault`, with gate evidence built for `gate`.
-pub fn deposit_token(chain: &TestChain, vault: Address, gate: Address, token: Address, amount: u128) -> MadeDeposit {
+pub fn deposit_token(
+    chain: &TestChain,
+    vault: Address,
+    gate: Address,
+    token: Address,
+    amount: u128,
+) -> MadeDeposit {
     deposit_token_with_fee_limit(chain, vault, gate, token, amount, 0)
 }
 
@@ -694,19 +916,53 @@ pub fn deposit_token_with_fee_limit(
     amount: u128,
     max_fee_basis_points: u16,
 ) -> MadeDeposit {
-    chain.send(Some(token), &TokenContract::mintCall { to: DEPLOYER, amount: U256::from(amount) }.abi_encode());
-    chain.send(Some(token), &TokenContract::approveCall { spender: vault, amount: U256::from(amount) }.abi_encode());
+    chain.send(
+        Some(token),
+        &TokenContract::mintCall {
+            to: DEPLOYER,
+            amount: U256::from(amount),
+        }
+        .abi_encode(),
+    );
+    chain.send(
+        Some(token),
+        &TokenContract::approveCall {
+            spender: vault,
+            amount: U256::from(amount),
+        }
+        .abi_encode(),
+    );
     let evidence = gate_evidence(chain, gate);
-    made_deposit(chain.send(Some(vault), &deposit_calldata(token, RECIPIENT, U256::from(amount), max_fee_basis_points, &evidence)))
+    made_deposit(chain.send(
+        Some(vault),
+        &deposit_calldata(
+            token,
+            RECIPIENT,
+            U256::from(amount),
+            max_fee_basis_points,
+            &evidence,
+        ),
+    ))
 }
 
 /// Mints, approves and deposits on the source chain of a direction.
 pub fn deposit_on(bridge: &Bridge, direction: Direction, amount: u128) -> MadeDeposit {
-    deposit_token(bridge.source(direction), bridge.source_vault(direction), bridge.source_gate(direction), bridge.source_token(direction), amount)
+    deposit_token(
+        bridge.source(direction),
+        bridge.source_vault(direction),
+        bridge.source_gate(direction),
+        bridge.source_token(direction),
+        amount,
+    )
 }
 
 /// Mints, approves and deposits on the source chain of a direction, with the highest fee that the depositor accepts.
-pub fn deposit_on_with_fee_limit(bridge: &Bridge, direction: Direction, amount: u128, max_fee_basis_points: u16) -> MadeDeposit {
+pub fn deposit_on_with_fee_limit(
+    bridge: &Bridge,
+    direction: Direction,
+    amount: u128,
+    max_fee_basis_points: u16,
+) -> MadeDeposit {
     deposit_token_with_fee_limit(
         bridge.source(direction),
         bridge.source_vault(direction),
@@ -743,7 +999,14 @@ pub fn update_gas(chain: &TestChain, light_client: Address) -> Vec<u64> {
         .logs(light_client, head_updated_topic(), 0, latest)
         .unwrap()
         .iter()
-        .map(|log| gas_used(&client.transaction_receipt(log.transaction_hash).unwrap().unwrap()))
+        .map(|log| {
+            gas_used(
+                &client
+                    .transaction_receipt(log.transaction_hash)
+                    .unwrap()
+                    .unwrap(),
+            )
+        })
         .collect()
 }
 
@@ -753,28 +1016,54 @@ pub fn update_gas(chain: &TestChain, light_client: Address) -> Vec<u64> {
 ///
 /// The light client of the destination must already cover the block (run `once` after a real deposit in the same
 /// block), and the vault must hold the layout rows (the same `once` adds them).
-pub fn unchecked_withdrawal_calldata(bridge: &Bridge, direction: Direction, transaction: B256, log_index: u64) -> Vec<u8> {
+pub fn unchecked_withdrawal_calldata(
+    bridge: &Bridge,
+    direction: Direction,
+    transaction: B256,
+    log_index: u64,
+) -> Vec<u8> {
     let source = client_of(bridge.source(direction));
     let light_client = bridge.destination_light_client(direction);
-    let receipt = source.transaction_receipt(transaction).unwrap().expect("receipt");
+    let receipt = source
+        .transaction_receipt(transaction)
+        .unwrap()
+        .expect("receipt");
     let number = parse_quantity(&receipt["blockNumber"]).unwrap();
     let transaction_index = parse_quantity(&receipt["transactionIndex"]).unwrap();
     let block = source.block(number).unwrap().expect("block");
-    let receipts = zk_bridge_prover::chain::ChainClient::block_receipts(&source, number, &block).unwrap();
-    let execution = build_execution_evidence(&block, &receipts, transaction_index).expect("execution evidence");
+    let receipts =
+        zk_bridge_prover::chain::ChainClient::block_receipts(&source, number, &block).unwrap();
+    let execution =
+        build_execution_evidence(&block, &receipts, transaction_index).expect("execution evidence");
 
     let state = read_light_client_state(bridge, direction);
     let stored = stored_head_slots(bridge.destination(direction), light_client);
     let beacon = DevBeaconSource::new(ChainKind::Pulsechain, 1, DEFAULT_SLOT_OFFSET);
-    let deposit_block = DepositBlock { number, hash: execution.block_hash, timestamp: parse_quantity(&block["timestamp"]).unwrap() };
-    let path = beacon.withdrawal_path(&deposit_block, &state, &stored, &source).expect("beacon path");
-    withdrawal_calldata(&assemble_withdrawal_proof(&path, &execution, transaction_index, log_index))
+    let deposit_block = DepositBlock {
+        number,
+        hash: execution.block_hash,
+        timestamp: parse_quantity(&block["timestamp"]).unwrap(),
+    };
+    let path = beacon
+        .withdrawal_path(&deposit_block, &state, &stored, &source)
+        .expect("beacon path");
+    withdrawal_calldata(&assemble_withdrawal_proof(
+        &path,
+        &execution,
+        transaction_index,
+        log_index,
+    ))
 }
 
 /// Moves the clock of the chain so that the next block lies about 100 seconds into a gate epoch. A test that mines many
 /// blocks calls it, so no epoch border falls between the evidence and the deposit.
 pub fn settle_in_epoch(chain: &TestChain, gate: Address) {
-    let genesis = GateContract::genesisTimeCall::abi_decode_returns(&chain.call(gate, &GateContract::genesisTimeCall {}.abi_encode()).unwrap()).unwrap();
+    let genesis = GateContract::genesisTimeCall::abi_decode_returns(
+        &chain
+            .call(gate, &GateContract::genesisTimeCall {}.abi_encode())
+            .unwrap(),
+    )
+    .unwrap();
     let offset = (chain.latest_timestamp() - genesis) % EPOCH_SECONDS;
     if !(20..=300).contains(&offset) {
         chain.advance_time((100 + EPOCH_SECONDS - offset) % EPOCH_SECONDS);
@@ -783,7 +1072,9 @@ pub fn settle_in_epoch(chain: &TestChain, gate: Address) {
 
 /// `(epoch, exists)` of `confirmedEpoch()` of a gate.
 pub fn confirmed_epoch(chain: &TestChain, gate: Address) -> (u64, bool) {
-    let raw = chain.call(gate, &GateContract::confirmedEpochCall {}.abi_encode()).unwrap();
+    let raw = chain
+        .call(gate, &GateContract::confirmedEpochCall {}.abi_encode())
+        .unwrap();
     let decoded = GateContract::confirmedEpochCall::abi_decode_returns(&raw).unwrap();
     (decoded.epoch, decoded.exists)
 }
@@ -805,7 +1096,10 @@ pub fn gate_sealed(chain: &TestChain, gate: Address) -> bool {
 
 /// The calldata of `BeaconForkGate.seal(evidence)`.
 pub fn seal_calldata(evidence: &[u8]) -> Vec<u8> {
-    GateWrites::sealCall { evidence: evidence.to_vec().into() }.abi_encode()
+    GateWrites::sealCall {
+        evidence: evidence.to_vec().into(),
+    }
+    .abi_encode()
 }
 
 /// Prints one measured number in a form that `cargo test -- --nocapture` shows and a reader can grep.
@@ -822,9 +1116,17 @@ pub fn oracle_prover() -> OracleProver {
 pub fn withdrawal_transaction_of(bridge: &Bridge, nonce: B256) -> B256 {
     let status = run(bridge, &["status"]).unwrap();
     let prefix = format!("nonce={nonce:#x} ");
-    let line = status.lines().find(|line| line.starts_with(&prefix)).unwrap_or_else(|| panic!("no status line for {nonce:#x}: {status}"));
-    let hash = line.split("withdrawal_transaction=").nth(1).and_then(|rest| rest.split(' ').next()).expect("withdrawal_transaction field");
-    hash.parse().unwrap_or_else(|_| panic!("the deposit has no withdrawal transaction yet: {line}"))
+    let line = status
+        .lines()
+        .find(|line| line.starts_with(&prefix))
+        .unwrap_or_else(|| panic!("no status line for {nonce:#x}: {status}"));
+    let hash = line
+        .split("withdrawal_transaction=")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .expect("withdrawal_transaction field");
+    hash.parse()
+        .unwrap_or_else(|_| panic!("the deposit has no withdrawal transaction yet: {line}"))
 }
 
 /// The state word of the `status` line of a deposit nonce, for example `confirmed`.
@@ -832,13 +1134,19 @@ pub fn state_of(bridge: &Bridge, nonce: B256) -> String {
     let status = run(bridge, &["status"]).unwrap();
     let prefix = format!("nonce={nonce:#x} ");
     let line = status.lines().find(|line| line.starts_with(&prefix));
-    line.and_then(|line| line.split("state=").nth(1)).and_then(|rest| rest.split(' ').next()).unwrap_or("absent").to_string()
+    line.and_then(|line| line.split("state=").nth(1))
+        .and_then(|rest| rest.split(' ').next())
+        .unwrap_or("absent")
+        .to_string()
 }
 
 /// The gas used by the withdrawal transaction of a deposit, read from the destination chain.
 pub fn withdrawal_gas(bridge: &Bridge, direction: Direction, nonce: B256) -> u64 {
     let hash = withdrawal_transaction_of(bridge, nonce);
-    let receipt = client_of(bridge.destination(direction)).transaction_receipt(hash).unwrap().expect("withdrawal receipt");
+    let receipt = client_of(bridge.destination(direction))
+        .transaction_receipt(hash)
+        .unwrap()
+        .expect("withdrawal receipt");
     assert_eq!(receipt["status"], "0x1");
     gas_used(&receipt)
 }
@@ -847,17 +1155,46 @@ pub fn withdrawal_gas(bridge: &Bridge, direction: Direction, nonce: B256) -> u64
 pub fn read_light_client_state(bridge: &Bridge, direction: Direction) -> LightClientState {
     let destination = client_of(bridge.destination(direction));
     let light_client = bridge.destination_light_client(direction);
-    let head_slot = destination.view(light_client, LightClientContract::headCall {}).unwrap();
-    let slots_per_period = destination.view(light_client, LightClientContract::slotsPerPeriodCall {}).unwrap();
+    let head_slot = destination
+        .view(light_client, LightClientContract::headCall {})
+        .unwrap();
+    let slots_per_period = destination
+        .view(light_client, LightClientContract::slotsPerPeriodCall {})
+        .unwrap();
     let period = head_slot / slots_per_period;
     LightClientState {
         head_slot,
-        head_root: destination.view(light_client, LightClientContract::headersCall { slot: head_slot }).unwrap(),
-        head_execution_hash: destination.view(light_client, LightClientContract::executionBlockHashesCall { slot: head_slot }).unwrap(),
-        genesis_validators_root: destination.view(light_client, LightClientContract::genesisValidatorsRootCall {}).unwrap(),
+        head_root: destination
+            .view(
+                light_client,
+                LightClientContract::headersCall { slot: head_slot },
+            )
+            .unwrap(),
+        head_execution_hash: destination
+            .view(
+                light_client,
+                LightClientContract::executionBlockHashesCall { slot: head_slot },
+            )
+            .unwrap(),
+        genesis_validators_root: destination
+            .view(
+                light_client,
+                LightClientContract::genesisValidatorsRootCall {},
+            )
+            .unwrap(),
         slots_per_period,
-        head_committee_hash: destination.view(light_client, LightClientContract::syncCommitteesCall { period }).unwrap(),
-        next_committee_hash: destination.view(light_client, LightClientContract::syncCommitteesCall { period: period + 1 }).unwrap(),
+        head_committee_hash: destination
+            .view(
+                light_client,
+                LightClientContract::syncCommitteesCall { period },
+            )
+            .unwrap(),
+        next_committee_hash: destination
+            .view(
+                light_client,
+                LightClientContract::syncCommitteesCall { period: period + 1 },
+            )
+            .unwrap(),
     }
 }
 
@@ -871,12 +1208,15 @@ pub fn update_calldata_for_block(
     block_number: u64,
     tamper: impl FnOnce(&mut zk_bridge_prover::light_client::LightClientOutput),
 ) -> Vec<u8> {
-    use zk_bridge_prover::contracts::update_calldata;
     use zk_bridge_prover::beacon::UpdatePlan;
+    use zk_bridge_prover::contracts::update_calldata;
     use zk_bridge_prover::prover::{ProofStatement, Prover};
     let source = client_of(bridge.source(direction));
     let state = read_light_client_state(bridge, direction);
-    let stored = stored_head_slots(bridge.destination(direction), bridge.destination_light_client(direction));
+    let stored = stored_head_slots(
+        bridge.destination(direction),
+        bridge.destination_light_client(direction),
+    );
     let block = source.block(block_number).unwrap().expect("block");
     let deposit_block = DepositBlock {
         number: block_number,
@@ -884,12 +1224,19 @@ pub fn update_calldata_for_block(
         timestamp: parse_quantity(&block["timestamp"]).unwrap(),
     };
     let beacon = DevBeaconSource::new(ChainKind::Pulsechain, 1, DEFAULT_SLOT_OFFSET);
-    let UpdatePlan::Update(statement) = beacon.next_update(&deposit_block, &state, &stored, &source).expect("plan") else {
+    let UpdatePlan::Update(statement) = beacon
+        .next_update(&deposit_block, &state, &stored, &source)
+        .expect("plan")
+    else {
         panic!("the light client needs an update for block {block_number}");
     };
-    let ProofStatement::DevAsserted(mut output) = *statement else { panic!("the development source asserts outputs") };
+    let ProofStatement::DevAsserted(mut output) = *statement else {
+        panic!("the development source asserts outputs")
+    };
     tamper(&mut output);
     let vkey = keccak256(b"light-client-program");
-    let proof = oracle_prover().prove(vkey, &ProofStatement::DevAsserted(output)).expect("oracle proof");
+    let proof = oracle_prover()
+        .prove(vkey, &ProofStatement::DevAsserted(output))
+        .expect("oracle proof");
     update_calldata(&proof.proof_bytes, &proof.public_values).to_vec()
 }

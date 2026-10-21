@@ -73,7 +73,8 @@ struct RawRecord {
 
 impl RawRecord {
     fn into_record(self) -> Result<DepositRecord> {
-        let [nonce, route, token, sender, recipient, amount, block_hash, transaction_hash, state] = self.texts;
+        let [nonce, route, token, sender, recipient, amount, block_hash, transaction_hash, state] =
+            self.texts;
         Ok(DepositRecord {
             deposit: NewDeposit {
                 route,
@@ -107,14 +108,18 @@ pub struct Store {
 }
 
 fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed| elapsed.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn parse<T: FromStr>(text: &str, what: &str) -> Result<T>
 where
     T::Err: std::fmt::Display,
 {
-    text.parse().map_err(|error| Error::Database(format!("stored {what} {text}: {error}")))
+    text.parse()
+        .map_err(|error| Error::Database(format!("stored {what} {text}: {error}")))
 }
 
 impl Store {
@@ -132,13 +137,17 @@ impl Store {
     }
 
     fn from_connection(connection: Connection) -> Result<Self> {
-        connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;").or_else(|_| {
-            // An in-memory database has no WAL. That is fine.
-            connection.execute_batch("PRAGMA synchronous = FULL;")
-        })?;
+        connection
+            .execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")
+            .or_else(|_| {
+                // An in-memory database has no WAL. That is fine.
+                connection.execute_batch("PRAGMA synchronous = FULL;")
+            })?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if version > SCHEMA_VERSION {
-            return Err(Error::Database(format!("the file has schema {version}, this program knows {SCHEMA_VERSION}")));
+            return Err(Error::Database(format!(
+                "the file has schema {version}, this program knows {SCHEMA_VERSION}"
+            )));
         }
         connection.execute_batch(
             "CREATE TABLE IF NOT EXISTS deposits (
@@ -174,7 +183,11 @@ impl Store {
     pub fn cursor(&self, route: &str) -> Result<Option<u64>> {
         let value: Option<i64> = self
             .connection
-            .query_row("SELECT last_scanned_block FROM cursors WHERE route = ?1", [route], |row| row.get(0))
+            .query_row(
+                "SELECT last_scanned_block FROM cursors WHERE route = ?1",
+                [route],
+                |row| row.get(0),
+            )
             .optional()?;
         Ok(value.map(|block| block as u64))
     }
@@ -182,7 +195,12 @@ impl Store {
     /// Stores the new deposits and moves the cursor in one transaction. Returns how many deposits were new.
     ///
     /// A deposit that already exists keeps its state: a rescan never resets progress.
-    pub fn record_scan(&mut self, route: &str, deposits: &[NewDeposit], new_cursor: u64) -> Result<usize> {
+    pub fn record_scan(
+        &mut self,
+        route: &str,
+        deposits: &[NewDeposit],
+        new_cursor: u64,
+    ) -> Result<usize> {
         let transaction = self.connection.transaction()?;
         let mut inserted = 0;
         for deposit in deposits {
@@ -221,8 +239,15 @@ impl Store {
     fn read_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawRecord> {
         Ok(RawRecord {
             texts: [
-                row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?,
-                row.get(7)?, row.get(8)?, row.get(11)?,
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(7)?,
+                row.get(8)?,
+                row.get(11)?,
             ],
             block_number: row.get::<_, i64>(6)? as u64,
             transaction_index: row.get::<_, i64>(9)? as u64,
@@ -237,7 +262,10 @@ impl Store {
     /// One deposit by nonce.
     pub fn get(&self, nonce: B256) -> Result<Option<DepositRecord>> {
         let sql = format!("SELECT {} FROM deposits WHERE nonce = ?1", Self::COLUMNS);
-        let raw = self.connection.query_row(&sql, [format!("{nonce:#x}")], Self::read_record).optional()?;
+        let raw = self
+            .connection
+            .query_row(&sql, [format!("{nonce:#x}")], Self::read_record)
+            .optional()?;
         raw.map(RawRecord::into_record).transpose()
     }
 
@@ -248,7 +276,9 @@ impl Store {
             Self::COLUMNS
         );
         let mut statement = self.connection.prepare(&sql)?;
-        let rows = statement.query_map([route], Self::read_record)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let rows = statement
+            .query_map([route], Self::read_record)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter().map(RawRecord::into_record).collect()
     }
 
@@ -262,7 +292,11 @@ impl Store {
 
     /// The deposits of a route that no terminal state ends, oldest block first.
     pub fn active(&self, route: &str) -> Result<Vec<DepositRecord>> {
-        Ok(self.list(Some(route))?.into_iter().filter(|record| !record.state.is_terminal()).collect())
+        Ok(self
+            .list(Some(route))?
+            .into_iter()
+            .filter(|record| !record.state.is_terminal())
+            .collect())
     }
 
     /// Applies an event to a deposit: checks the table, then writes the new state with a note.
@@ -271,15 +305,24 @@ impl Store {
     ///
     /// # Errors
     /// `Error::Usage` when the event is not allowed. `Error::Database` when the row changed meanwhile.
-    pub fn apply(&self, nonce: B256, event: Event, note: Option<&str>) -> Result<(DepositState, DepositState)> {
-        let record = self.get(nonce)?.ok_or_else(|| Error::Database(format!("no deposit {nonce:#x}")))?;
+    pub fn apply(
+        &self,
+        nonce: B256,
+        event: Event,
+        note: Option<&str>,
+    ) -> Result<(DepositState, DepositState)> {
+        let record = self
+            .get(nonce)?
+            .ok_or_else(|| Error::Database(format!("no deposit {nonce:#x}")))?;
         let next = transition(record.state, event)?;
         let changed = self.connection.execute(
             "UPDATE deposits SET state = ?1, note = COALESCE(?2, note), updated_at = ?3 WHERE nonce = ?4 AND state = ?5",
             params![next.as_str(), note, now(), format!("{nonce:#x}"), record.state.as_str()],
         )?;
         if changed != 1 {
-            return Err(Error::Database(format!("deposit {nonce:#x} changed state while it was being updated")));
+            return Err(Error::Database(format!(
+                "deposit {nonce:#x} changed state while it was being updated"
+            )));
         }
         Ok((record.state, next))
     }
@@ -343,7 +386,8 @@ mod tests {
     use super::*;
 
     fn scratch_file(name: &str) -> std::path::PathBuf {
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-scratch");
+        let directory =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-scratch");
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join(format!("{name}-{}.sqlite", std::process::id()));
         let _ = std::fs::remove_file(&path);
@@ -359,14 +403,25 @@ mod tests {
         let nonce = B256::repeat_byte(0x11);
         {
             let mut store = Store::open(&path).unwrap();
-            assert_eq!(store.record_scan("a_to_b", &[sample_deposit(0x11, 10)], 12).unwrap(), 1);
+            assert_eq!(
+                store
+                    .record_scan("a_to_b", &[sample_deposit(0x11, 10)], 12)
+                    .unwrap(),
+                1
+            );
             store.apply(nonce, Event::LightClientCovers, None).unwrap();
             store.apply(nonce, Event::WithdrawalBuilt, None).unwrap();
             store.set_calldata(nonce, &[1, 2, 3]).unwrap();
         }
         let mut store = Store::open(&path).unwrap();
         assert_eq!(store.cursor("a_to_b").unwrap(), Some(12));
-        assert_eq!(store.record_scan("a_to_b", &[sample_deposit(0x11, 10)], 12).unwrap(), 0, "no new row");
+        assert_eq!(
+            store
+                .record_scan("a_to_b", &[sample_deposit(0x11, 10)], 12)
+                .unwrap(),
+            0,
+            "no new row"
+        );
         let record = store.get(nonce).unwrap().unwrap();
         assert_eq!(record.state, DepositState::Proven);
         assert_eq!(record.calldata, Some(vec![1, 2, 3]));
@@ -388,12 +443,23 @@ mod tests {
     #[test]
     fn forbidden_event_changes_nothing() {
         let mut store = Store::open_in_memory().unwrap();
-        store.record_scan("a_to_b", &[sample_deposit(0x22, 3)], 3).unwrap();
+        store
+            .record_scan("a_to_b", &[sample_deposit(0x22, 3)], 3)
+            .unwrap();
         let nonce = B256::repeat_byte(0x22);
         assert!(store.apply(nonce, Event::WithdrawalSent, None).is_err());
         assert_eq!(store.get(nonce).unwrap().unwrap().state, DepositState::Seen);
-        store.apply(nonce, Event::AlreadyClaimed, Some("claimed by someone else")).unwrap();
+        store
+            .apply(
+                nonce,
+                Event::AlreadyClaimed,
+                Some("claimed by someone else"),
+            )
+            .unwrap();
         assert!(store.active("a_to_b").unwrap().is_empty());
-        assert_eq!(store.get(nonce).unwrap().unwrap().note.as_deref(), Some("claimed by someone else"));
+        assert_eq!(
+            store.get(nonce).unwrap().unwrap().note.as_deref(),
+            Some("claimed by someone else")
+        );
     }
 }

@@ -10,8 +10,8 @@ pub mod abi;
 pub mod ancestry;
 pub mod bls;
 pub mod chain;
-pub mod error;
 pub mod era;
+pub mod error;
 pub mod execution;
 pub mod gate;
 #[cfg(feature = "json")]

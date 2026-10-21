@@ -14,7 +14,11 @@ use common::*;
 fn head_of(chain: &TestChain, light_client: alloy_primitives::Address) -> u64 {
     use alloy_sol_types::SolCall;
     let call = zk_bridge_prover::contracts::LightClientContract::headCall {};
-    u64::from_be_bytes(chain.call(light_client, &call.abi_encode()).unwrap()[24..].try_into().unwrap())
+    u64::from_be_bytes(
+        chain.call(light_client, &call.abi_encode()).unwrap()[24..]
+            .try_into()
+            .unwrap(),
+    )
 }
 
 /// Claim: a light-client update that is valid for one chain's light client is refused by the other chain's light
@@ -35,7 +39,8 @@ fn h01_r2_09_hardened_light_client_output_of_the_other_chain_is_refused() {
     for direction in [Direction::AToB, Direction::BToA] {
         let made = deposit_on(&bridge, direction, ONE_TOKEN);
         bridge.source(direction).mine(2);
-        let block_number = zk_bridge_prover::rpc::parse_quantity(&made.receipt["blockNumber"]).unwrap();
+        let block_number =
+            zk_bridge_prover::rpc::parse_quantity(&made.receipt["blockNumber"]).unwrap();
         let update = update_calldata_for_block(&bridge, direction, block_number, |_| {});
 
         let own_destination = bridge.destination(direction);
@@ -51,16 +56,29 @@ fn h01_r2_09_hardened_light_client_output_of_the_other_chain_is_refused() {
         let head_before = head_of(other_destination, other_light_client);
         assert_eq!(
             revert_selector(other_destination, other_light_client, &update),
-            Some(error_selector("GenesisValidatorsRootMismatch(bytes32,bytes32)")),
+            Some(error_selector(
+                "GenesisValidatorsRootMismatch(bytes32,bytes32)"
+            )),
             "{direction:?}: refused for the chain it belongs to, not for another reason"
         );
-        assert_eq!(head_of(other_destination, other_light_client), head_before, "{direction:?}: the other head did not move");
+        assert_eq!(
+            head_of(other_destination, other_light_client),
+            head_before,
+            "{direction:?}: the other head did not move"
+        );
 
         // The control: the same bytes move the head of their own light client.
-        assert_eq!(revert_selector(own_destination, own_light_client, &update), None, "{direction:?}: the honest light client accepts it");
+        assert_eq!(
+            revert_selector(own_destination, own_light_client, &update),
+            None,
+            "{direction:?}: the honest light client accepts it"
+        );
         let own_before = head_of(own_destination, own_light_client);
         own_destination.send(Some(own_light_client), &update);
-        assert!(head_of(own_destination, own_light_client) > own_before, "{direction:?}: the honest head moved");
+        assert!(
+            head_of(own_destination, own_light_client) > own_before,
+            "{direction:?}: the honest head moved"
+        );
     }
 }
 
@@ -82,17 +100,38 @@ fn hb01_hardened_update_from_a_store_with_an_invented_next_committee_is_refused(
     let made = deposit_on(&bridge, direction, ONE_TOKEN);
     bridge.source(direction).mine(2);
     let block_number = zk_bridge_prover::rpc::parse_quantity(&made.receipt["blockNumber"]).unwrap();
-    let (chain, light_client) = (bridge.destination(direction), bridge.destination_light_client(direction));
+    let (chain, light_client) = (
+        bridge.destination(direction),
+        bridge.destination_light_client(direction),
+    );
 
     let invented: B256 = keccak256(b"a next committee that the attacker chose");
     let state = read_light_client_state(&bridge, direction);
-    assert_eq!(state.next_committee_hash, B256::ZERO, "the checkpoint stores no next committee");
+    assert_eq!(
+        state.next_committee_hash,
+        B256::ZERO,
+        "the checkpoint stores no next committee"
+    );
 
-    let forged_next = update_calldata_for_block(&bridge, direction, block_number, |output| output.startNextSyncCommitteeHash = invented);
-    assert_eq!(revert_selector(chain, light_client, &forged_next), Some(error_selector("StartNextSyncCommitteeMismatch(bytes32,bytes32)")));
+    let forged_next = update_calldata_for_block(&bridge, direction, block_number, |output| {
+        output.startNextSyncCommitteeHash = invented
+    });
+    assert_eq!(
+        revert_selector(chain, light_client, &forged_next),
+        Some(error_selector(
+            "StartNextSyncCommitteeMismatch(bytes32,bytes32)"
+        ))
+    );
 
-    let forged_current = update_calldata_for_block(&bridge, direction, block_number, |output| output.previousSyncCommitteeHash = invented);
-    assert_eq!(revert_selector(chain, light_client, &forged_current), Some(error_selector("PreviousSyncCommitteeMismatch(bytes32,bytes32)")));
+    let forged_current = update_calldata_for_block(&bridge, direction, block_number, |output| {
+        output.previousSyncCommitteeHash = invented
+    });
+    assert_eq!(
+        revert_selector(chain, light_client, &forged_current),
+        Some(error_selector(
+            "PreviousSyncCommitteeMismatch(bytes32,bytes32)"
+        ))
+    );
 
     // The head did not move for any forged output.
     assert_eq!(head_of(chain, light_client), state.head_slot);

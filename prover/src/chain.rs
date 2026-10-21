@@ -91,13 +91,19 @@ pub struct ChainClient {
 }
 
 fn parse_hash(value: &Value, what: &str) -> Result<B256> {
-    let text = value.as_str().ok_or_else(|| Error::Malformed(format!("{what}: expected a hash, got {value}")))?;
+    let text = value
+        .as_str()
+        .ok_or_else(|| Error::Malformed(format!("{what}: expected a hash, got {value}")))?;
     B256::from_str(text).map_err(|error| Error::Malformed(format!("{what}: {error}")))
 }
 
 fn parse_bytes(value: &Value, what: &str) -> Result<Bytes> {
-    let text = value.as_str().ok_or_else(|| Error::Malformed(format!("{what}: expected bytes, got {value}")))?;
-    hex::decode(text).map(Bytes::from).map_err(|error| Error::Malformed(format!("{what}: {error}")))
+    let text = value
+        .as_str()
+        .ok_or_else(|| Error::Malformed(format!("{what}: expected bytes, got {value}")))?;
+    hex::decode(text)
+        .map(Bytes::from)
+        .map_err(|error| Error::Malformed(format!("{what}: {error}")))
 }
 
 impl ChainClient {
@@ -105,8 +111,18 @@ impl ChainClient {
     ///
     /// # Errors
     /// `Error::Config` when the node serves another chain.
-    pub fn connect(name: &str, expected_chain_id: u64, rpc: Box<dyn JsonRpc>, signer: Option<Signer>) -> Result<Self> {
-        let client = Self { name: name.to_string(), chain_id: expected_chain_id, rpc, signer };
+    pub fn connect(
+        name: &str,
+        expected_chain_id: u64,
+        rpc: Box<dyn JsonRpc>,
+        signer: Option<Signer>,
+    ) -> Result<Self> {
+        let client = Self {
+            name: name.to_string(),
+            chain_id: expected_chain_id,
+            rpc,
+            signer,
+        };
         let actual = parse_quantity(&client.rpc.call("eth_chainId", json!([]))?)?;
         if actual != expected_chain_id {
             return Err(Error::Config(format!(
@@ -131,12 +147,17 @@ impl ChainClient {
     /// # Errors
     /// `Error::Signer` when the client has no signer.
     pub fn sender(&self) -> Result<Address> {
-        self.signer.as_ref().map(Signer::address).ok_or_else(|| Error::Signer(format!("chain {} has no signer", self.name)))
+        self.signer
+            .as_ref()
+            .map(Signer::address)
+            .ok_or_else(|| Error::Signer(format!("chain {} has no signer", self.name)))
     }
 
     /// The JSON of block `number` without transaction bodies, or `None` when the node does not know it.
     pub fn block(&self, number: u64) -> Result<Option<Value>> {
-        let block = self.rpc.call("eth_getBlockByNumber", json!([quantity(number), false]))?;
+        let block = self
+            .rpc
+            .call("eth_getBlockByNumber", json!([quantity(number), false]))?;
         Ok((!block.is_null()).then_some(block))
     }
 
@@ -145,7 +166,10 @@ impl ChainClient {
     /// # Errors
     /// An RPC error other than "no such tag".
     pub fn finalized_block_number(&self) -> Result<Option<u64>> {
-        let block = match self.rpc.call("eth_getBlockByNumber", json!(["finalized", false])) {
+        let block = match self
+            .rpc
+            .call("eth_getBlockByNumber", json!(["finalized", false]))
+        {
             Ok(block) => block,
             Err(Error::Rpc { .. }) => return Ok(None),
             Err(other) => return Err(other),
@@ -163,17 +187,24 @@ impl ChainClient {
     /// # Errors
     /// `Error::Malformed` when the block is unknown.
     pub fn block_receipts(&self, number: u64, block: &Value) -> Result<Value> {
-        match self.rpc.call("eth_getBlockReceipts", json!([quantity(number)])) {
+        match self
+            .rpc
+            .call("eth_getBlockReceipts", json!([quantity(number)]))
+        {
             Ok(receipts) if receipts.is_array() => return Ok(receipts),
             Ok(_) | Err(Error::Rpc { .. }) => {}
             Err(other) => return Err(other),
         }
-        let hashes = block["transactions"].as_array().ok_or_else(|| Error::Malformed("block has no transactions".into()))?;
+        let hashes = block["transactions"]
+            .as_array()
+            .ok_or_else(|| Error::Malformed("block has no transactions".into()))?;
         let mut receipts = Vec::with_capacity(hashes.len());
         for hash in hashes {
             let receipt = self.rpc.call("eth_getTransactionReceipt", json!([hash]))?;
             if receipt.is_null() {
-                return Err(Error::Malformed(format!("no receipt for transaction {hash}")));
+                return Err(Error::Malformed(format!(
+                    "no receipt for transaction {hash}"
+                )));
             }
             receipts.push(receipt);
         }
@@ -182,7 +213,9 @@ impl ChainClient {
 
     /// The receipt of one transaction, or `None` when it is not mined.
     pub fn transaction_receipt(&self, hash: B256) -> Result<Option<Value>> {
-        let receipt = self.rpc.call("eth_getTransactionReceipt", json!([format!("{hash:#x}")]))?;
+        let receipt = self
+            .rpc
+            .call("eth_getTransactionReceipt", json!([format!("{hash:#x}")]))?;
         Ok((!receipt.is_null()).then_some(receipt))
     }
 
@@ -195,7 +228,9 @@ impl ChainClient {
             "toBlock": quantity(to),
         }]);
         let answer = self.rpc.call("eth_getLogs", filter)?;
-        let entries = answer.as_array().ok_or_else(|| Error::Malformed("eth_getLogs: not an array".into()))?;
+        let entries = answer
+            .as_array()
+            .ok_or_else(|| Error::Malformed("eth_getLogs: not an array".into()))?;
         entries.iter().map(RawLog::from_json).collect()
     }
 
@@ -205,7 +240,8 @@ impl ChainClient {
     /// `Error::Rpc` when the call reverts, `Error::Malformed` when the return data does not decode.
     pub fn view<C: SolCall>(&self, to: Address, call: C) -> Result<C::Return> {
         let raw = self.eth_call(to, &call.abi_encode(), false)?;
-        C::abi_decode_returns(&raw).map_err(|error| Error::Malformed(format!("{}: {error}", C::SIGNATURE)))
+        C::abi_decode_returns(&raw)
+            .map_err(|error| Error::Malformed(format!("{}: {error}", C::SIGNATURE)))
     }
 
     /// Runs `eth_call`. With `as_sender` the call comes from the signer address.
@@ -216,7 +252,9 @@ impl ChainClient {
         if as_sender {
             return self.eth_call_from(to, self.sender()?, data);
         }
-        self.run_eth_call(json!({ "to": format!("{to:#x}"), "data": format!("0x{}", hex::encode(data)) }))
+        self.run_eth_call(
+            json!({ "to": format!("{to:#x}"), "data": format!("0x{}", hex::encode(data)) }),
+        )
     }
 
     /// Runs `eth_call` as the address `from`, which needs no key.
@@ -238,12 +276,23 @@ impl ChainClient {
     /// # Errors
     /// `Error::Rpc` with revert data when the estimate reverts; other node errors as they come.
     pub fn send_transaction(&self, to: Address, data: &[u8]) -> Result<B256> {
-        let signer = self.signer.as_ref().ok_or_else(|| Error::Signer(format!("chain {} has no signer", self.name)))?;
+        let signer = self
+            .signer
+            .as_ref()
+            .ok_or_else(|| Error::Signer(format!("chain {} has no signer", self.name)))?;
         let from = format!("{:#x}", signer.address());
         let data_hex = format!("0x{}", hex::encode(data));
-        let estimate = self.rpc.call("eth_estimateGas", json!([{ "from": from, "to": format!("{to:#x}"), "data": data_hex }]))?;
-        let gas_limit = parse_quantity(&estimate)? * (100 + GAS_MARGIN_PERCENT) / 100 + GAS_FLOOR_MARGIN;
-        let nonce = parse_quantity(&self.rpc.call("eth_getTransactionCount", json!([from, "pending"]))?)?;
+        let estimate = self.rpc.call(
+            "eth_estimateGas",
+            json!([{ "from": from, "to": format!("{to:#x}"), "data": data_hex }]),
+        )?;
+        let gas_limit =
+            parse_quantity(&estimate)? * (100 + GAS_MARGIN_PERCENT) / 100 + GAS_FLOOR_MARGIN;
+        let nonce = parse_quantity(
+            &self
+                .rpc
+                .call("eth_getTransactionCount", json!([from, "pending"]))?,
+        )?;
         let gas_price = u128::from(parse_quantity(&self.rpc.call("eth_gasPrice", json!([]))?)?);
         let transaction = LegacyTransaction {
             chain_id: self.chain_id,
@@ -254,7 +303,10 @@ impl ChainClient {
             data: Bytes::copy_from_slice(data),
         };
         let raw = transaction.sign(signer)?;
-        let answer = self.rpc.call("eth_sendRawTransaction", json!([format!("0x{}", hex::encode(&raw))]))?;
+        let answer = self.rpc.call(
+            "eth_sendRawTransaction",
+            json!([format!("0x{}", hex::encode(&raw))]),
+        )?;
         parse_hash(&answer, "transaction hash")
     }
 
@@ -275,17 +327,31 @@ impl ChainClient {
     /// The errors of [`ChainClient::send_transaction`] (a call that would revert fails with its revert data and
     /// sends nothing), `Error::Transaction` when the transaction is mined and reverts, and `Error::Http` when it is
     /// not mined within `timeout`.
-    pub fn send_and_wait(&self, to: Address, data: &[u8], what: &str, timeout: Duration) -> Result<B256> {
+    pub fn send_and_wait(
+        &self,
+        to: Address,
+        data: &[u8],
+        what: &str,
+        timeout: Duration,
+    ) -> Result<B256> {
         let hash = self.send_transaction(to, data)?;
         match self.wait_for_transaction(hash, timeout)? {
             Some(mined) if mined.success => Ok(hash),
-            Some(_) => Err(Error::Transaction(format!("{what} reverted (transaction {hash:#x})"))),
-            None => Err(Error::Http(format!("{what} was not mined within the timeout (transaction {hash:#x})"))),
+            Some(_) => Err(Error::Transaction(format!(
+                "{what} reverted (transaction {hash:#x})"
+            ))),
+            None => Err(Error::Http(format!(
+                "{what} was not mined within the timeout (transaction {hash:#x})"
+            ))),
         }
     }
 
     /// Polls for the receipt until `timeout`. Returns `None` when the transaction is still pending.
-    pub fn wait_for_transaction(&self, hash: B256, timeout: Duration) -> Result<Option<MinedTransaction>> {
+    pub fn wait_for_transaction(
+        &self,
+        hash: B256,
+        timeout: Duration,
+    ) -> Result<Option<MinedTransaction>> {
         let start = Instant::now();
         loop {
             if let Some(mined) = self.mined_transaction(hash)? {
@@ -309,7 +375,9 @@ impl ExecutionReader for ChainClient {
     }
 
     fn block_hash(&self, number: u64) -> Result<B256> {
-        let block = self.block(number)?.ok_or_else(|| Error::Malformed(format!("block {number} is unknown")))?;
+        let block = self
+            .block(number)?
+            .ok_or_else(|| Error::Malformed(format!("block {number} is unknown")))?;
         parse_hash(&block["hash"], "block hash")
     }
 }
@@ -344,8 +412,13 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    fn client(handler: impl Fn(&str, &Value) -> Result<Value> + Send + Sync + 'static) -> Result<ChainClient> {
-        let rpc = ScriptedRpc { calls: Mutex::new(vec![]), handler: Box::new(handler) };
+    fn client(
+        handler: impl Fn(&str, &Value) -> Result<Value> + Send + Sync + 'static,
+    ) -> Result<ChainClient> {
+        let rpc = ScriptedRpc {
+            calls: Mutex::new(vec![]),
+            handler: Box::new(handler),
+        };
         ChainClient::connect("test", 369, Box::new(rpc), None)
     }
 
@@ -363,7 +436,11 @@ mod tests {
     fn missing_finalized_tag_gives_none() {
         let chain = client(|method, _| match method {
             "eth_chainId" => Ok(json!("0x171")),
-            _ => Err(Error::Rpc { code: -32602, message: "unknown block".into(), data: None }),
+            _ => Err(Error::Rpc {
+                code: -32602,
+                message: "unknown block".into(),
+                data: None,
+            }),
         })
         .unwrap();
         assert_eq!(chain.finalized_block_number().unwrap(), None);
@@ -374,12 +451,18 @@ mod tests {
     fn receipts_fall_back_to_per_transaction() {
         let chain = client(|method, _| match method {
             "eth_chainId" => Ok(json!("0x171")),
-            "eth_getBlockReceipts" => Err(Error::Rpc { code: -32601, message: "no such method".into(), data: None }),
+            "eth_getBlockReceipts" => Err(Error::Rpc {
+                code: -32601,
+                message: "no such method".into(),
+                data: None,
+            }),
             "eth_getTransactionReceipt" => Ok(json!({"status": "0x1"})),
             _ => Ok(Value::Null),
         })
         .unwrap();
-        let receipts = chain.block_receipts(5, &json!({"transactions": ["0x01", "0x02"]})).unwrap();
+        let receipts = chain
+            .block_receipts(5, &json!({"transactions": ["0x01", "0x02"]}))
+            .unwrap();
         assert_eq!(receipts.as_array().unwrap().len(), 2);
     }
 }
