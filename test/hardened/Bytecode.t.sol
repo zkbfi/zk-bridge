@@ -106,13 +106,14 @@ contract BytecodeTest is HardenedFixture {
     }
 
     /// Claim: the fork gate (in all three modes) and the fork registry contain none of the five canary opcodes, and
-    /// each probe contract contains exactly its own opcode and no other. Shows: the scan counts zero of TSTORE, TLOAD,
-    /// MCOPY, BLOBBASEFEE and CLZ in the runtime code of the gate and of the registry; then it scans the four probes
-    /// the gate deployed and finds exactly one canary opcode in each, the one named in its comment. Matters: the gate
-    /// and the registry run on PulseChain, which rejects the new opcodes. The probes are the only code that may
-    /// contain them, and the scan excludes exactly those four runtime codes (the addresses that the gate exposes), not
-    /// anything else. A probe with a second or a wrong opcode would watch for the wrong fork.
-    function test_HB02_canaryOpcodesLiveOnlyInTheProbes() public {
+    /// the one probe contract holds exactly the four
+    /// intended opcodes once each. Shows: the scan counts zero of TSTORE, TLOAD, MCOPY, BLOBBASEFEE and CLZ in the
+    /// runtime code of the gate and of the registry; then it scans the probe the gate deployed and finds one TSTORE,
+    /// one MCOPY, one BLOBBASEFEE, one CLZ and no TLOAD. Matters: the gate and the registry run on PulseChain, which
+    /// rejects the new opcodes. The probe is the only code that may contain them, and the scan excludes exactly that
+    /// runtime code (the address that the gate exposes), not anything else. A second or a wrong opcode in the probe
+    /// would watch for the wrong fork.
+    function test_HB02_canaryOpcodesLiveOnlyInTheProbe() public {
         ForkRegistry registry = new ForkRegistry(address(lightClientForA), address(verifier), keccak256("observation"));
         BeaconForkGate registryGate = new BeaconForkGate(
             BEACON_ROOTS,
@@ -138,17 +139,15 @@ contract BytecodeTest is HardenedFixture {
             assertEq(_countOpcode(scanned[i], CLZ), 0, "no CLZ");
         }
 
-        // The probes: the excluded code, scanned for exactly its own opcode.
-        uint8[5] memory canaryOpcodes = [TSTORE, MCOPY, BLOBBASEFEE, CLZ, TLOAD];
-        address[4] memory probes =
-            [registryGate.tstoreProbe(), registryGate.mcopyProbe(), registryGate.blobBaseFeeProbe(), registryGate.clzProbe()];
-        for (uint256 p = 0; p < probes.length; p++) {
-            bytes memory code = probes[p].code;
-            for (uint256 o = 0; o < canaryOpcodes.length; o++) {
-                uint256 expected = o == p ? 1 : 0;
-                assertEq(_countOpcode(code, canaryOpcodes[o]), expected, "a probe holds only its own opcode");
-            }
-        }
+        // The probe: the one excluded code, scanned for exactly the four intended opcodes and nothing else new.
+        bytes memory probeCode = registryGate.opcodeProbe().code;
+        assertEq(_countOpcode(probeCode, TSTORE), 1, "the probe holds one TSTORE");
+        assertEq(_countOpcode(probeCode, MCOPY), 1, "the probe holds one MCOPY");
+        assertEq(_countOpcode(probeCode, BLOBBASEFEE), 1, "the probe holds one BLOBBASEFEE");
+        assertEq(_countOpcode(probeCode, CLZ), 1, "the probe holds one CLZ");
+        assertEq(_countOpcode(probeCode, TLOAD), 0, "the probe holds no TLOAD");
+        // Control: the probe differs from the gate only by what it holds. The scan helper sees a second opcode.
+        assertEq(_countOpcode(abi.encodePacked(probeCode, hex"5d"), TSTORE), 2, "control: an extra opcode is counted");
     }
 
     function _versions() internal pure returns (BeaconForkGate.SupportedVersion[] memory versions) {

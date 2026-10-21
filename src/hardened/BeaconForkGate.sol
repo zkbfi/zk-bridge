@@ -22,13 +22,13 @@ import {BeaconBlockHeader, SSZ} from "./SSZ.sol";
 /// If the caller could choose it, a proof of `Fork.previous_version` would pass for the current version.
 ///
 /// A third mode, `DetectBeaconRootsAndRegistry` (PulseChain), adds two things to detection. First, execution canaries:
-/// tiny probe contracts that run one new opcode each (`TSTORE`, `MCOPY`, `BLOBBASEFEE`, `CLZ`), and a call to the first
-/// BLS12-381 precompile. A PulseChain consensus fork almost always arrives with an execution fork, and the first canary
+/// one tiny probe contract that runs one new opcode per call (`TSTORE`, `MCOPY`, `BLOBBASEFEE`, `CLZ`, chosen by the
+/// first byte of the calldata), and a call to the first BLS12-381 precompile. A PulseChain consensus fork almost always arrives with an execution fork, and the first canary
 /// that works switches the gate to enforcing for good. Second, a fork observation registry: while its latest observed
 /// version is not supported, every deposit is refused, and `seal()` with empty evidence closes the gate for good.
 ///
-/// The runtime code of the gate avoids `MCOPY`, `TSTORE` and `TLOAD`, because PulseChain rejects them. The probes hold
-/// those opcodes on purpose, as separate contracts that the constructor deploys from raw bytes.
+/// The runtime code of the gate avoids `MCOPY`, `TSTORE` and `TLOAD`, because PulseChain rejects them. The probe holds
+/// those opcodes on purpose, as a separate contract that the constructor deploys from raw bytes.
 contract BeaconForkGate is IDepositGate {
     /// @notice The behavior of the gate before it has seen a beacon root.
     enum GateMode {
@@ -87,21 +87,42 @@ contract BeaconForkGate is IDepositGate {
     /// @dev The position of `fork` among the `BeaconState` fields.
     uint256 private constant FORK_FIELD_INDEX = 3;
 
-    /// @notice The gas forwarded to each opcode probe. A probe needs about 120. A probe that burns all its gas costs
-    /// this much and no more.
-    uint256 public constant PROBE_GAS = 300;
+    /// @notice The gas forwarded to each call of the opcode probe. The costliest path (`TSTORE`, which costs 100 gas by
+    /// itself) needs 167, measured, and the others need 97 to 126. The cap leaves room for a later repricing of a
+    /// cheap opcode. A call
+    /// whose opcode is not valid burns all its gas, so this is also the most that one canary can cost.
+    uint256 public constant PROBE_GAS = 400;
     /// @notice The gas forwarded to the BLS12-381 precompile canary. `BLS12_G1ADD` costs 375 gas (EIP-2537). The cap
     /// leaves room for a later repricing and still bounds a mock that burns gas.
     uint256 public constant PRECOMPILE_GAS = 2_000;
     /// @notice The address of `BLS12_G1ADD` (EIP-2537, "Specification": G1ADD is 0x0b, G1MSM 0x0c, G2ADD 0x0d,
     /// G2MSM 0x0e, PAIRING_CHECK 0x0f, MAP_FP_TO_G1 0x10, MAP_FP2_TO_G2 0x11).
     address public constant BLS_G1_ADD = address(0x0b);
-    /// @notice The word every probe returns.
+    /// @notice The word the probe returns when its opcode ran.
     uint256 public constant PROBE_WORD = 1;
 
-    /// @dev Common tail of every probe: `PUSH1 1; PUSH0; MSTORE; PUSH1 0x20; PUSH0; RETURN`. `PUSH0` (0x5f) is
-    /// EIP-3855, live in Shanghai.
-    bytes private constant PROBE_TAIL = hex"60015f5260205ff3";
+    /// @dev The runtime code of the opcode probe. It reads the first byte of the calldata as a selector, from 1 to 4
+    /// in the order of the `Canary` enum (selector = index + 1). Each selector jumps to its own path. A path runs
+    /// exactly one new opcode and then returns the word 1. Any other selector, and empty calldata, reverts. `PUSH0`
+    /// (0x5f) is EIP-3855, live in Shanghai. The jump targets are byte offsets in this code, and a test fails if one
+    /// is wrong.
+    ///
+    ///   00  5f 35 60f8 1c        PUSH0 CALLDATALOAD PUSH1 0xf8 SHR       selector on the stack
+    ///   05  80 6001 14 6024 57   DUP1 PUSH1 1 EQ PUSH1 0x24 JUMPI        selector 1: TSTORE path
+    ///   0c  80 6002 14 602c 57   selector 2: MCOPY path
+    ///   13  80 6003 14 6035 57   selector 3: BLOBBASEFEE path
+    ///   1a  80 6004 14 603b 57   selector 4: CLZ path
+    ///   21  5f 5f fd             PUSH0 PUSH0 REVERT                      unknown selector
+    ///   24  5b 6001 5f 5d 603f 56        JUMPDEST, key 0 value 1 TSTORE, jump to the return
+    ///   2c  5b 6020 5f 5f 5e 603f 56     JUMPDEST, copy 32 bytes from 0 to 0 (MCOPY), jump to the return
+    ///   35  5b 4a 50 603f 56             JUMPDEST BLOBBASEFEE POP, jump to the return
+    ///   3b  5b 5f 1e 50                  JUMPDEST PUSH0 CLZ POP, falls into the return
+    ///   3f  5b 6001 5f52 60205f f3       JUMPDEST, store 1 in memory, RETURN 32 bytes
+    /// Opcode values: TSTORE 0x5d (EIP-1153), MCOPY 0x5e (EIP-5656), BLOBBASEFEE 0x4a (EIP-7516), CLZ 0x1e (EIP-7939).
+    bytes private constant PROBE_RUNTIME =
+        hex"5f3560f81c" hex"80600114" hex"602457" hex"80600214" hex"602c57" hex"80600314" hex"603557" hex"80600414"
+        hex"603b57" hex"5f5ffd" hex"5b60015f5d603f56" hex"5b60205f5f5e603f56" hex"5b4a50603f56" hex"5b5f1e50"
+        hex"5b60015f5260205ff3";
     /// @dev The generator of G1 on BLS12-381 (EIP-2537 encoding: each field element is 64 bytes, big endian, with 16
     /// leading zero bytes). Source: the BLS12-381 parameters; the point satisfies y^2 = x^3 + 4 modulo the field prime.
     /// Adding the point at infinity (128 zero bytes) to it must return it unchanged. Held as 32 byte words so that the
@@ -143,8 +164,8 @@ contract BeaconForkGate is IDepositGate {
     error ForkRegistryMismatch(GateMode mode, address forkRegistry);
     /// @notice The fork registry address holds no code.
     error ForkRegistryHasNoCode(address forkRegistry);
-    /// @notice A probe contract did not deploy.
-    error ProbeDeploymentFailed(Canary canary);
+    /// @notice The opcode probe contract did not deploy.
+    error ProbeDeploymentFailed();
     /// @notice The fork registry shows an observed fork version that the route does not support.
     error UnsupportedObservedVersion(bytes4 version, uint64 slot);
     /// @notice `seal` with empty evidence needs an unsupported observed version in the registry, and there is none.
@@ -167,14 +188,9 @@ contract BeaconForkGate is IDepositGate {
     GateMode public immutable mode;
     /// @notice The fork observation registry. Zero except in `DetectBeaconRootsAndRegistry` mode.
     IForkRegistry public immutable forkRegistry;
-    /// @notice The probe contract for `TSTORE` (EIP-1153, opcode 0x5d).
-    address public immutable tstoreProbe;
-    /// @notice The probe contract for `MCOPY` (EIP-5656, opcode 0x5e).
-    address public immutable mcopyProbe;
-    /// @notice The probe contract for `BLOBBASEFEE` (EIP-7516, opcode 0x4a).
-    address public immutable blobBaseFeeProbe;
-    /// @notice The probe contract for `CLZ` (EIP-7939, opcode 0x1e).
-    address public immutable clzProbe;
+    /// @notice The one probe contract for the four opcode canaries (`TSTORE`, `MCOPY`, `BLOBBASEFEE`, `CLZ`). The
+    /// first byte of the calldata picks the opcode.
+    address public immutable opcodeProbe;
     /// @notice The genesis time of the beacon chain of this chain, in seconds.
     uint64 public immutable genesisTime;
     /// @notice Seconds per slot (12 on Ethereum, 10 on PulseChain).
@@ -234,15 +250,7 @@ contract BeaconForkGate is IDepositGate {
         _versionCount = supportedVersions_.length;
         _sealDepthMask = _maskOf(sealDepths_);
         forkRegistry = IForkRegistry(forkRegistry_);
-        // Opcode values: TSTORE 0x5d (EIP-1153), MCOPY 0x5e (EIP-5656), BLOBBASEFEE 0x4a (EIP-7516), CLZ 0x1e (EIP-7939).
-        // Each probe runs the opcode on constants, then returns the word 1. PUSH1 0x01 PUSH0 TSTORE: key 0, value 1.
-        tstoreProbe = _deployProbe(Canary.TransientStorage, abi.encodePacked(hex"60015f5d", PROBE_TAIL));
-        // PUSH1 0x20 PUSH0 PUSH0 MCOPY: copy 32 bytes from offset 0 to offset 0 (MCOPY pops dest, source, length).
-        mcopyProbe = _deployProbe(Canary.MemoryCopy, abi.encodePacked(hex"60205f5f5e", PROBE_TAIL));
-        // BLOBBASEFEE POP.
-        blobBaseFeeProbe = _deployProbe(Canary.BlobBaseFee, abi.encodePacked(hex"4a50", PROBE_TAIL));
-        // PUSH0 CLZ POP.
-        clzProbe = _deployProbe(Canary.CountLeadingZeros, abi.encodePacked(hex"5f1e50", PROBE_TAIL));
+        opcodeProbe = _deployProbe(PROBE_RUNTIME);
 
         if (mode_ == GateMode.Enforcing) _state.enforcing = true;
     }
@@ -381,27 +389,32 @@ contract BeaconForkGate is IDepositGate {
 
     /// @dev The first canary that works, in the order of the `Canary` enum.
     function _firedCanary() private returns (bool fired, Canary canary) {
-        if (_probeFires(tstoreProbe)) return (true, Canary.TransientStorage);
-        if (_probeFires(mcopyProbe)) return (true, Canary.MemoryCopy);
-        if (_probeFires(blobBaseFeeProbe)) return (true, Canary.BlobBaseFee);
-        if (_probeFires(clzProbe)) return (true, Canary.CountLeadingZeros);
+        if (_probeFires(Canary.TransientStorage)) return (true, Canary.TransientStorage);
+        if (_probeFires(Canary.MemoryCopy)) return (true, Canary.MemoryCopy);
+        if (_probeFires(Canary.BlobBaseFee)) return (true, Canary.BlobBaseFee);
+        if (_probeFires(Canary.CountLeadingZeros)) return (true, Canary.CountLeadingZeros);
         if (_blsPrecompileWorks()) return (true, Canary.Bls12381Precompile);
         return (false, Canary.TransientStorage);
     }
 
-    /// @dev Calls a probe with `PROBE_GAS`. It works when the call succeeds and returns exactly the word 1. A probe
-    /// whose opcode is not valid fails, and the call costs only the forwarded gas. A plain `CALL` is used, not
-    /// `STATICCALL`, because `TSTORE` is a state change and fails in a static context (EIP-1153).
-    function _probeFires(address probe) private returns (bool) {
+    /// @dev Calls the opcode probe once for one canary, with `PROBE_GAS`. The calldata is one byte: the index of the
+    /// canary plus one. The canary works when the call succeeds and returns exactly the word 1. A call whose opcode is
+    /// not valid fails and costs only the forwarded gas. Each call runs one path alone, so a missing opcode fails only
+    /// its own canary. A plain `CALL` is used, not `STATICCALL`, because `TSTORE` is a state change and fails in a
+    /// static context (EIP-1153).
+    function _probeFires(Canary canary) private returns (bool) {
+        address probe = opcodeProbe;
+        uint256 selector = uint256(uint8(canary)) + 1;
         bool ok;
         uint256 size;
         uint256 word;
         assembly {
             let scratch := mload(0x40)
-            mstore(scratch, 0)
-            ok := call(PROBE_GAS, probe, 0, scratch, 0, scratch, 0x20)
+            mstore8(scratch, selector)
+            mstore(add(scratch, 0x20), 0)
+            ok := call(PROBE_GAS, probe, 0, scratch, 1, add(scratch, 0x20), 0x20)
             size := returndatasize()
-            word := mload(scratch)
+            word := mload(add(scratch, 0x20))
         }
         return ok && size == 32 && word == PROBE_WORD;
     }
@@ -460,12 +473,12 @@ contract BeaconForkGate is IDepositGate {
 
     /// @dev Deploys raw runtime code with `create`. The init code copies the runtime code and returns it:
     /// `PUSH1 len DUP1 PUSH1 9 PUSH0 CODECOPY PUSH0 RETURN`.
-    function _deployProbe(Canary canary, bytes memory runtime) private returns (address probe) {
+    function _deployProbe(bytes memory runtime) private returns (address probe) {
         bytes memory initCode = abi.encodePacked(hex"60", uint8(runtime.length), hex"8060095f395ff3", runtime);
         assembly {
             probe := create(0, add(initCode, 0x20), mload(initCode))
         }
-        if (probe == address(0)) revert ProbeDeploymentFailed(canary);
+        if (probe == address(0)) revert ProbeDeploymentFailed();
     }
 
     /// @dev The probe. The beacon roots contract is present when it returns exactly 32 non-zero bytes for the

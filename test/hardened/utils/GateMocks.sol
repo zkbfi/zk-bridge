@@ -147,11 +147,28 @@ contract GateBlsShortOutputMock {
     }
 }
 
-/// @notice Runtime bytes for etching over a probe.
+/// @notice Runtime bytes for etching over the opcode probe.
 library GateProbeCodes {
-    /// @notice A probe that works: returns the word 1 (`PUSH1 1 PUSH0 MSTORE PUSH1 0x20 PUSH0 RETURN`).
+    /// @notice A probe that works for every selector: returns the word 1 (`PUSH1 1 PUSH0 MSTORE PUSH1 0x20 PUSH0 RETURN`).
     function succeeds() internal pure returns (bytes memory) {
         return hex"60015f5260205ff3";
+    }
+
+    /// @notice A probe that works for one selector only: it returns the word 1 when the first calldata byte equals
+    /// `selector`, and reverts for every other byte and for empty calldata. It stands in for a chain that has the
+    /// opcode of that one path and lacks the others.
+    /// @dev `PUSH0 CALLDATALOAD PUSH1 0xf8 SHR PUSH1 selector EQ PUSH1 0x0e JUMPI PUSH0 PUSH0 REVERT JUMPDEST`, then
+    /// the return of the word 1.
+    function succeedsOnlyForSelector(uint8 selector) internal pure returns (bytes memory) {
+        return abi.encodePacked(hex"5f3560f81c60", selector, hex"1460", hex"0e575f5ffd5b60015f5260205ff3");
+    }
+
+    /// @notice A probe that works for every selector from `first` upward and reverts below it. It stands in for a
+    /// chain that has the later opcodes but not the earlier ones.
+    /// @dev `PUSH0 CALLDATALOAD PUSH1 0xf8 SHR PUSH1 first GT ISZERO PUSH1 0x0f JUMPI PUSH0 PUSH0 REVERT JUMPDEST`, then
+    /// the return of the word 1.
+    function succeedsFromSelector(uint8 first) internal pure returns (bytes memory) {
+        return abi.encodePacked(hex"5f3560f81c60", first, hex"1115600f575f5ffd5b60015f5260205ff3");
     }
 
     /// @notice A probe that burns all the gas it gets: `JUMPDEST PUSH0 JUMP` loops forever.

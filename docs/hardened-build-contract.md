@@ -525,7 +525,7 @@ A PulseChain consensus fork almost always arrives with an execution fork, and th
   - precompiles: the BLS12-381 precompiles from `0x0b` (call one with a known valid input and require the known output);
   - the EIP-4788 probe that already exists.
   Cite each opcode and address from its EIP.
-- **Opcode probes:** each probe is a tiny immutable contract whose code runs one canary opcode and returns a fixed word. The gate calls it with at most about 300 gas. Before the fork, the opcode is invalid, the probe fails, and only the forwarded gas is lost.
+- **Opcode probe:** one tiny immutable contract (`opcodeProbe`, deployed by the gate constructor) serves all four opcodes. The first byte of the calldata picks the path: 1 is `TSTORE`, 2 is `MCOPY`, 3 is `BLOBBASEFEE`, 4 is `CLZ` (the enum index plus one). A path runs its one opcode and returns the word 1. Any other selector, and empty calldata, reverts. The gate calls the probe once per opcode, in enum order, with at most 400 gas (`PROBE_GAS`). The costliest path needs 167 gas, measured. Before the fork, the opcode is invalid, that call fails, and only its forwarded gas is lost. Each call runs one path alone, so a missing opcode fails only its own call and no result depends on another path. A bytecode scan test requires exactly one of each of the four opcodes in the probe and none in the gate.
 - **Switch:** if any canary succeeds, the gate sets `enforcing`. On PulseChain, enforcing needs EIP-4788 evidence or a supported version in the observation registry, so deposits refuse until a new route is in place.
 - **False positive:** an execution-only change that leaves the consensus version alone would also trip a canary. It fails closed: deposits into that route stop, and users move to a new route. No funds are stranded.
 - **Not covered:** a fork that changes only consensus and nothing the EVM can see. The fork observation registry covers that case.
@@ -538,7 +538,8 @@ A PulseChain consensus fork almost always arrives with an execution fork, and th
   - On a Shanghai chain, every canary fails and deposits are admitted.
   - On a Cancun chain, `TSTORE` and `MCOPY` fire and the gate enforces.
   - With a BLS precompile mock, the precompile canary fires.
-  - Gas per deposit before the switch, with a bound.
+  - Gas per deposit before the switch, with a bound. With one probe, a cold deposit before the switch costs 85,463 gas, which is 9,827 over the plain deposit (75,636 in this run). The four-probe design cost 91,628, which was 16,272 over its plain deposit (75,356). The cold deposit is 6,165 gas cheaper. `admit("")` alone, all accounts cold, costs 15,062 (was 21,507). The saving comes from three fewer cold account accesses (2,600 each), less the dispatch and the three warm calls.
+  - Each opcode path runs alone, an unknown selector fails, and the first canary in enum order wins.
   - A probe that consumes all forwarded gas still costs at most the bound.
 
 ## Deposit fee switch (user decision, 2026-10-21)
