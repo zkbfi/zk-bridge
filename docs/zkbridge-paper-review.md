@@ -85,4 +85,4 @@ SP1 already splits execution into shards and can prove them on many machines. de
 
 - Add the `historical_summaries` path to the vault and to `lc-core::withdrawal`. Pin `eraIndex` with a real fixture from each chain. Then remove the 8192-slot head-jump cap and its tests, replacing them with era-boundary tests.
 - Let the light-client program accept a list of updates, with tests that a broken link anywhere in the list rejects the whole proof.
-- Decide H-15: no fee, or a fee paid to an address that the proof commits to.
+- H-15 is decided (2026-10-21): a funded operator runs the prover, and the contracts take no fee. Lazy submission is not needed.

@@ -19,7 +19,7 @@ The hardened build follows `docs/hardened-build-contract.md`. Status markers: **
 | R2-03 / H-04 | Critical | Open: the BLS check checks nothing, and the light client is still an ECDSA multisignature | Real sync-committee verification inside the light-client program |
 | H-08 | High | Open: no finality | Only finalized headers enter the light client |
 | R2-09 / H-01 | Medium | H-01 fixed; no domain separation | The source chain's genesis validators root and fork version bind every update |
-| H-15 | Medium | Open: 342+ signature recoveries per update | One proof check per update |
+| H-15 | Medium | Decided: a funded operator runs the prover | One proof check per update; no fee |
 | R2-04 | Blocker | The circuit does not compile | `verify_proof` used as its signature requires |
 | R2-05 | High | Typed receipts cannot be decoded | EIP-2718 envelope decoding |
 | R2-06 | Medium | A second deposit in one transaction can never be proven | The witness names the log index |
@@ -128,7 +128,9 @@ The on-chain `BeaconLightClient` stores committee hashes and finalized headers. 
 
 **After.** All signature and branch work moves into the light-client program. On chain, one `verifyProof` call checks one proof (`BeaconLightClient.update`), whatever the committee size. The hardened tests measure the gas per update and assert it does not grow with the committee.
 
-**What remains open.** Proving is not free. Someone must pay for proof generation, either on their own hardware or through Succinct's prover network. The prover network also sees the program's full input. A "0% fee" bridge has no answer for who pays. The honest options are a relayer fee taken from the withdrawal, or a funded operator. Neither is in revision 2, and the user has not chosen one. A naive relayer fee paid to `msg.sender` is not safe: anyone can copy a pending proof and submit it first. A fee must go to an address that the proof itself commits to.
+**What remains open.** Proving is not free. Someone must pay for proof generation, either on their own hardware or through Succinct's prover network. The prover network also sees the program's full input. A "0% fee" bridge has no answer for who pays. The honest options are a relayer fee taken from the withdrawal, or a funded operator. Neither is in revision 2. A naive relayer fee paid to `msg.sender` is not safe: anyone can copy a pending proof and submit it first. A fee must go to an address that the proof itself commits to.
+
+**Decision (2026-10-21).** A funded operator. A server or bot with enough proving power runs the prover service for this purpose, on its own hardware, and pays for proof generation and gas. The contracts take no fee, and none is planned. `update()` and `ForkRegistry.observe()` stay permissionless, so anyone else can run the same prover if the operator stops. With folded updates and the historical path, a pause in the operator costs latency, not funds. Running the prover locally also keeps the program's input off a third-party prover network.
 
 ## R2-04 — The circuit does not compile
 
@@ -184,7 +186,7 @@ The real signature (alloy-trie 0.9.8) is `verify_proof(root: B256, key: Nibbles,
 
 **The right question.** "**Does the test chain behave like the production chain?**" A test only proves what its environment can show.
 
-**After.** `foundry.toml` targets `shanghai` (commit `38e020e`). The harness runs the PulseChain-role chain with `--hardfork shanghai`. A test scans the hardened bytecode for `MCOPY` and `TSTORE`. Another test deploys Cancun-built code on the Shanghai chain and shows it fails, with the Shanghai build as the control.
+**After.** `foundry.toml` targets `shanghai` (commit `1f1aa41`). The harness runs the PulseChain-role chain with `--hardfork shanghai`. A test scans the hardened bytecode for `MCOPY` and `TSTORE`. Another test deploys Cancun-built code on the Shanghai chain and shows it fails, with the Shanghai build as the control.
 
 ## R2-11 — "Stack too deep" after the R2-01 repair
 
@@ -252,12 +254,12 @@ The hardened build is held to the same standard as revision 2. These are holes f
 
 | Id | Severity | Status | Fix |
 |---|---|---|---|
-| HB-01 | Critical | Fixed (light client `31b943e`, contracts `53b8c54`) | Every signing committee is bound to a public value; an empty committee slot is never filled from an unproven value |
+| HB-01 | Critical | Fixed (light client `628e30a`, contracts `0aa1d0a`) | Every signing committee is bound to a public value; an empty committee slot is never filled from an unproven value |
 | HB-02 | High | Open: specified in `docs/hardened-build-contract.md` | Fork gate on both vaults (enforcing on Ethereum; on PulseChain it detects EIP-4788 itself, with no admin key); interface cutover before activation; a liveness gate for PulseChain forks without EIP-4788 later |
-| HB-03 | Critical | Fixed (`7277518`) | A block-roots layout row may name only the field's own position; `eth1_data_votes` has the same shape and proposers fill it |
-| HB-04 | Critical | Fixed (`7277518`) | A block-hash layout row may name only the execution payload's `block_hash` position; graffiti and `eth1_data` hold proposer-chosen values |
-| HB-05 | High | Fixed (`7277518`) | The receipt logs walker has no 32-item limit, so a deposit in a busy transaction can still be withdrawn |
-| HB-06 | Medium | Fixed (`7277518`) | Each deposit names its destination vault, so a second vault for the same source cannot pay it again |
+| HB-03 | Critical | Fixed (`2119d5d`) | A block-roots layout row may name only the field's own position; `eth1_data_votes` has the same shape and proposers fill it |
+| HB-04 | Critical | Fixed (`2119d5d`) | A block-hash layout row may name only the execution payload's `block_hash` position; graffiti and `eth1_data` hold proposer-chosen values |
+| HB-05 | High | Fixed (`2119d5d`) | The receipt logs walker has no 32-item limit, so a deposit in a busy transaction can still be withdrawn |
+| HB-06 | Medium | Fixed (`2119d5d`) | Each deposit names its destination vault, so a second vault for the same source cannot pay it again |
 
 ## HB-01 — An unbound next committee could sign a forged head
 
