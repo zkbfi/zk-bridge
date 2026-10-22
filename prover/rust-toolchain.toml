@@ -1,0 +1,4 @@
+# The toolchain this workspace is tested with. A newer stable adds lints, and lc-core changes would move the guest program keys.
+[toolchain]
+channel = "1.93.0"
+components = ["clippy", "rustfmt"]
