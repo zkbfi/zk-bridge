@@ -1,0 +1,4 @@
+# One compile job at a time. The reproducible build runs under x86 emulation in a 2 GiB virtual machine,
+# and parallel jobs run out of memory there. The job count does not change the ELF.
+[build]
+jobs = 1

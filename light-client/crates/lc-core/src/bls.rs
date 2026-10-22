@@ -5,7 +5,8 @@
 //!
 //! Crate choice: `bls12_381` 0.8.0 (zkcrypto). Succinct patches this exact version for SP1
 //! (tag `patch-bls12_381-0.8.0-sp1-6.0.0`, the crates.io line), so the same source runs with precompiles in a guest.
-//! The `experimental` feature supplies hash-to-curve and needs `digest` 0.9, hence `sha2` 0.9.9 (also patched).
+//! The `experimental` feature supplies hash-to-curve. The crates.io release needs `digest` 0.9, hence `sha2` 0.9.9.
+//! The SP1 patch needs `digest` 0.10, so inside the zkVM the hash-to-curve hash is `sha2` 0.10.9 (also patched).
 
 use crate::chain::SYNC_COMMITTEE_SIZE;
 use crate::error::{Error, Result};
@@ -13,7 +14,10 @@ use crate::types::BlsPublicKey;
 use alloy_primitives::B256;
 use bls12_381::hash_to_curve::{ExpandMsgXmd, HashToCurve};
 use bls12_381::{pairing, G1Affine, G1Projective, G2Affine, G2Projective};
+#[cfg(not(target_os = "zkvm"))]
 use sha2::Sha256;
+#[cfg(target_os = "zkvm")]
+use sha2_digest10::Sha256;
 
 /// The domain separation tag of the proof-of-possession ciphersuite.
 pub const BLS_DST: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
@@ -26,6 +30,18 @@ fn decode_public_key(bytes: &BlsPublicKey, index: usize) -> Result<G1Projective>
         return Err(Error::InvalidPublicKey { index });
     }
     Ok(G1Projective::from(point))
+}
+
+/// Hashes the signing root to a point of G2. The crates.io release takes one byte string.
+#[cfg(not(target_os = "zkvm"))]
+fn hash_message_to_curve(message: &B256) -> G2Projective {
+    <G2Projective as HashToCurve<ExpandMsgXmd<Sha256>>>::hash_to_curve(message.as_slice(), BLS_DST)
+}
+
+/// Hashes the signing root to a point of G2. The SP1 patch takes a list of byte chunks, so the message is one chunk.
+#[cfg(target_os = "zkvm")]
+fn hash_message_to_curve(message: &B256) -> G2Projective {
+    <G2Projective as HashToCurve<ExpandMsgXmd<Sha256>>>::hash_to_curve([message.as_slice()], BLS_DST)
 }
 
 /// Verifies an aggregate signature over `message` by all `public_keys`.
@@ -43,8 +59,7 @@ pub fn fast_aggregate_verify(public_keys: &[BlsPublicKey], message: &B256, signa
     }
     let signature_point =
         Option::<G2Affine>::from(G2Affine::from_compressed(signature)).ok_or(Error::InvalidSignatureEncoding)?;
-    let message_point =
-        G2Affine::from(<G2Projective as HashToCurve<ExpandMsgXmd<Sha256>>>::hash_to_curve(message.as_slice(), BLS_DST));
+    let message_point = G2Affine::from(hash_message_to_curve(message));
     let left = pairing(&G1Affine::from(aggregate), &message_point);
     let right = pairing(&G1Affine::generator(), &signature_point);
     if left == right {

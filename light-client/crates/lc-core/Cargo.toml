@@ -19,3 +19,8 @@ alloy-trie.workspace = true
 bls12_381.workspace = true
 sha2.workspace = true
 serde_json = { workspace = true, optional = true }
+
+# The SP1 patch of bls12_381 0.8.0 builds on `digest` 0.10, while the crates.io release builds on `digest` 0.9.
+# Hash-to-curve therefore needs sha2 0.10.9 inside the zkVM only. Native builds keep sha2 0.9.9.
+[target.'cfg(target_os = "zkvm")'.dependencies]
+sha2-digest10 = { package = "sha2", version = "=0.10.9", default-features = false }

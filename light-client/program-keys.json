@@ -1,0 +1,10 @@
+{
+  "fork-observation": {
+    "elf_sha256": "f22877570740a8da2819a21dbc909f388f61ea38c71c7f12abf69776b05e2a2a",
+    "program_key": "0x0067530c734ee67a44e7954dcb9e54610f9893eb77d16d4b8c07ae0f2bce2cdd"
+  },
+  "light-client": {
+    "elf_sha256": "5babfe2b6501779e0524cc33e01d5c15576f44c1c5aa66a3335a03d6fa87ea93",
+    "program_key": "0x00a2b556cd72b5d838b34c60b0367e1ffc9ab662d4e6aabca23e3682b0f5584b"
+  }
+}

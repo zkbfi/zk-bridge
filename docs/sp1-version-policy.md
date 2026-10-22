@@ -11,7 +11,26 @@ This policy answers gap G-02 in `docs/zk-bridge-comparison.md`. The light client
 | On-chain verifier | the code hash in `verifierCodeHash` for each chain | `script/hardened/bridge.config.example.json`, checked by `script/hardened/DeployBridge.s.sol` |
 | Program keys | `programVKey` and the observation key | the deploy config |
 
-The repository never installs the SP1 toolchain or `sp1-sdk`. The real prover backend is still a stub.
+The repository never installs the SP1 toolchain with `sp1up` or a `curl | bash` installer, and never installs `sp1-sdk`. The real prover backend is still a stub.
+
+## Pinned toolchain and program keys (2026-10-21)
+
+| Item | Value |
+|---|---|
+| Command line tool | `cargo prove` from sp1-cli 6.8.1, built from source at commit c84ada1 |
+| Rust toolchain | rustup toolchain `succinct`, `succinct-1.96.0-64bit-v2` |
+| Guest library | `sp1-zkvm` `=6.8.0`. The build works with 6.8.0, so the older release stays. The advisory GHSA-p7v2-jjv3-8p8f concerns the prover side, not the guest library. |
+| Build image | `ghcr.io/succinctlabs/sp1:v6.8.1`, linux/amd64 manifest `sha256:2ddd7c1d74be98be628e5e58f9b177a739eb3e7c0a6b8f7b97b358682cb4677b` |
+| Dependency lock files | `light-client/guests/light-client/Cargo.lock`, `light-client/guests/fork-observation/Cargo.lock`. Each crate is at least 28 days old (cutoff 2026-09-24). |
+
+| Program | ELF SHA-256 | Program key |
+|---|---|---|
+| Light client | `5babfe2b6501779e0524cc33e01d5c15576f44c1c5aa66a3335a03d6fa87ea93` | `0x00a2b556cd72b5d838b34c60b0367e1ffc9ab662d4e6aabca23e3682b0f5584b` |
+| Fork observation | `f22877570740a8da2819a21dbc909f388f61ea38c71c7f12abf69776b05e2a2a` | `0x0067530c734ee67a44e7954dcb9e54610f9893eb77d16d4b8c07ae0f2bce2cdd` |
+
+The values come from the Docker build and live in `light-client/program-keys.json`. To check them, run `light-client/scripts/program-keys.sh`. It exits with a non-zero code when a value differs.
+A native build (`cargo prove build` without `--docker`) gives different ELF hashes and keys, because the output depends on the build machine. Deploy only the Docker keys.
+These keys are the values for `programVKey` (light client) and `observationProgramVKey` (fork observation) in the deploy configuration.
 
 ## Advisories checked (2026-10-22)
 
@@ -32,7 +51,7 @@ Source: the security advisories of the `succinctlabs/sp1` repository on GitHub, 
 2. **Respect the age rule.** Pin exact versions at least 28 days old, as for every other dependency.
 3. **Move the guest and the prover together.** A new `sp1-zkvm` changes the program key. The deploy config must then carry the new key, and the old route stays on its old key.
 4. **Pin the verifier by code hash.** Deploy the Groth16 verifier from the matching SP1 contracts release and record its code hash in `verifierCodeHash`. The deploy script refuses any other code. Check that the verifier's `VERIFIER_HASH()` matches the release too.
-5. **Publish a reproducible build** of each program, so anyone can rebuild the program key and compare it with the deployed one.
+5. **Publish a reproducible build** of each program. Anyone can run `light-client/scripts/program-keys.sh` and compare the result with the deployed key.
 
 ## When an advisory hits a deployed route
 
