@@ -25,6 +25,12 @@ name = "local-network"
 path = "src/bin/local_network.rs"
 required-features = ["dev-source"]
 
+# Evidence builder for the red-team attacks in attacks/local/. Development only: it needs the feature `dev-source`.
+[[bin]]
+name = "attack-evidence"
+path = "../attacks/local/src/main.rs"
+required-features = ["dev-source"]
+
 [features]
 # `dev-source` builds the development beacon source (DevBeaconSource) that serves Anvil. It needs the test crate
 # `lc-testkit` for its synthetic beacon data. A production build leaves it out: `cargo build --release --no-default-features`.
