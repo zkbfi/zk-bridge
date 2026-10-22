@@ -2,6 +2,9 @@
 #
 #   target deploy   Foundry plus the compiled contracts and the deploy script.
 #   target prover   The prover service, the bots and the beacon stub, on a small Debian base.
+#   target prover-sp1   The production prover for a server: linux/amd64, feature sp1-native-gnark, the two SP1 guest ELFs.
+#                       Build: docker build --platform linux/amd64 --target prover-sp1 -f docker/Dockerfile .
+#                       Needs about 8 GB of memory to build. See docs/server-prover.md. Do not build it on the 2 GB VM.
 #
 # The chains run from the Foundry image itself, so they need no target here.
 #
@@ -61,3 +64,65 @@ COPY --chown=foundry:foundry script ./script
 RUN forge build --skip test
 COPY --chown=foundry:foundry docker/deploy.sh docker/bridge.config.template.json ./docker/
 ENTRYPOINT ["/usr/bin/bash", "/repo/docker/deploy.sh"]
+
+# ---------------------------------------------------------------------------------------------------------------
+# The production prover for a server (target prover-sp1). Platform linux/amd64.
+#
+# - Cargo features: sp1-native-gnark (SP1 prover on the local CPU; the Groth16 wrapper runs inside the process, so the
+#   container needs no Docker socket). Without the development source and without the local-network binaries.
+# - Go is needed at build time only, for the Groth16 wrapper that sp1-sdk compiles. The tarball is pinned by SHA-256.
+#   The commit of go1.25.14 is dated 2026-08-19, more than 28 days before the cutoff of 2026-09-24. The Go modules of
+#   the wrapper are pinned by the go.sum file inside the crate sp1-recursion-gnark-ffi and checked by the Go checksum database.
+# - The apt packages (compiler, libclang) are not pinned. They build the wrapper and are not part of the final image.
+# - The ELFs come from the reproducible build: `ELF_OUTPUT_DIR=light-client/elf light-client/scripts/program-keys.sh`.
+#   The build fails when the SHA-256 of an ELF differs from light-client/program-keys.json.
+# ---------------------------------------------------------------------------------------------------------------
+FROM --platform=linux/amd64 ${RUST_IMAGE} AS build-sp1
+ARG GO_VERSION=1.25.14
+ARG GO_SHA256=a21ae5633a269bcd7e90cf767e48225633795e99d831742cbf3397064fee7712
+ADD --checksum=sha256:${GO_SHA256} https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz /tmp/go.tar.gz
+RUN tar -C /usr/local -xzf /tmp/go.tar.gz && rm /tmp/go.tar.gz
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential clang libclang-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+ENV PATH="/usr/local/go/bin:${PATH}" GOPROXY=https://proxy.golang.org
+WORKDIR /build
+COPY light-client ./light-client
+COPY prover ./prover
+WORKDIR /build/prover
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/root/go/pkg/mod \
+    --mount=type=cache,target=/build/prover/target \
+    cargo build --release --locked --no-default-features --features sp1-native-gnark --bin zk-bridge-prover \
+    && mkdir /out \
+    && cp target/release/zk-bridge-prover /out/
+
+# Checks the two ELFs against light-client/program-keys.json before they enter the image.
+FROM --platform=linux/amd64 ${RUNTIME_IMAGE} AS check-elfs
+COPY light-client/program-keys.json /check/program-keys.json
+COPY light-client/elf/light-client.elf light-client/elf/fork-observation.elf /check/
+RUN set -eu; \
+    for guest in light-client fork-observation; do \
+      expected="$(awk -v g="\"${guest}\"" '$1 == g":" {found=1} found && /elf_sha256/ {gsub(/[",]/, "", $2); print $2; exit}' /check/program-keys.json)"; \
+      actual="$(sha256sum "/check/${guest}.elf" | cut -d' ' -f1)"; \
+      test -n "${expected}" || { echo "no entry for ${guest} in program-keys.json"; exit 1; }; \
+      test "${expected}" = "${actual}" || { echo "ELF ${guest}: SHA-256 ${actual} differs from program-keys.json (${expected})"; exit 1; }; \
+    done
+
+FROM --platform=linux/amd64 ${RUNTIME_IMAGE} AS prover-sp1
+LABEL org.opencontainers.image.title="zk-bridge production prover (SP1, local CPU)"
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 1000 --create-home --home-dir /home/bridge --shell /usr/sbin/nologin bridge \
+    && mkdir /state /elf \
+    && chown bridge:bridge /state
+COPY --from=build-sp1 /out/zk-bridge-prover /usr/local/bin/
+COPY --from=check-elfs /check/light-client.elf /check/fork-observation.elf /elf/
+# The Groth16 circuit files are downloaded on the first proof. Mount a volume on /state to keep them.
+ENV SP1_GROTH16_CIRCUIT_PATH=/state/sp1-circuits
+USER bridge
+WORKDIR /state
+ENTRYPOINT ["zk-bridge-prover"]
+CMD ["--config", "/state/prover.toml", "run"]

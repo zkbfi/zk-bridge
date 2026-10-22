@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Rebuilds both SP1 guest programs in the pinned Docker image and checks them against program-keys.json.
 # Usage: scripts/program-keys.sh [--write]
+# Environment: ELF_OUTPUT_DIR=<dir> also copies the two ELFs to <dir>/light-client.elf and <dir>/fork-observation.elf.
+#   The server image (docker/Dockerfile, target prover-sp1) reads them from light-client/elf/.
 #   no option : print the ELF SHA-256 and the program key of each guest. Exit 1 when any value differs from program-keys.json.
 #   --write   : print the values and write them to program-keys.json.
 # Needs: cargo prove (sp1-cli 6.8.1), a running Docker engine (Colima), jq, shasum.
@@ -33,6 +35,10 @@ for guest in "${guests[@]}"; do
   [ -n "${elf}" ] || { echo "no ELF produced for ${guest}" >&2; exit 1; }
   elf_sha256="$(shasum -a 256 "${elf}" | awk '{print $1}')"
   program_key="$(cargo prove vkey --elf "${elf}" | grep -Eo '0x[0-9a-f]{64}')"
+  if [ -n "${ELF_OUTPUT_DIR:-}" ]; then
+    mkdir -p "${ELF_OUTPUT_DIR}"
+    cp "${elf}" "${ELF_OUTPUT_DIR}/${guest}.elf"
+  fi
   echo "${guest}: elf_sha256=${elf_sha256} program_key=${program_key}"
   result="$(jq --arg g "${guest}" --arg s "${elf_sha256}" --arg k "${program_key}" '.[$g] = {elf_sha256: $s, program_key: $k}' <<<"${result}")"
 done

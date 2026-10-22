@@ -35,11 +35,13 @@ enum Kind {
 }
 
 /// Every key that an environment variable may override.
-const OVERRIDES: [(&str, Kind); 20] = [
+const OVERRIDES: [(&str, Kind); 22] = [
     ("database_path", Kind::Text),
     ("poll_interval_seconds", Kind::Integer),
     ("receipt_timeout_seconds", Kind::Integer),
     ("prover.program_vkey", Kind::Text),
+    ("prover.sp1_elf_path", Kind::Text),
+    ("prover.sp1_observation_elf_path", Kind::Text),
     ("chain_a.rpc_url", Kind::Text),
     ("chain_a.chain_id", Kind::Integer),
     ("chain_a.vault", Kind::Text),
@@ -109,9 +111,12 @@ pub struct ProverConfig {
     /// The verification key of the light-client program. The service checks it against `programVKey()` of the light
     /// client contract before it proves anything.
     pub program_vkey: String,
-    /// The compiled guest program, for the `sp1` backend.
+    /// The compiled light-client guest, for the `sp1` backend.
     #[serde(default)]
     pub sp1_elf_path: Option<PathBuf>,
+    /// The compiled fork observation guest, for the `sp1` backend. Without it the prover refuses observations.
+    #[serde(default)]
+    pub sp1_observation_elf_path: Option<PathBuf>,
 }
 
 /// Where beacon data comes from.

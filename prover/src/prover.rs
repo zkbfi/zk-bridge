@@ -6,26 +6,20 @@
 //!   It models a sound proof system: a proof exists only when the reference program accepts the statement.
 //! - `Sp1Prover` is for production. It is behind the cargo feature `sp1`, which is off by default.
 //!
-//! # Enabling the `sp1` feature
+//! # The `sp1` feature
 //!
-//! The feature compiles a stub that names what is missing. To make it real, on a machine that has the SP1
-//! toolchain (installed by the operator from Succinct's signed releases, never with a pipe to a shell):
+//! `Sp1Prover` proves on the local CPU with the `sp1-sdk` crate (exact version 6.8.1, no network prover, no API
+//! keys). Build with `cargo build --release --features sp1` (see `docs/server-prover.md`). The steps:
 //!
-//! 1. Add `sp1-sdk = { version = "=<exact version>", optional = true }` to `Cargo.toml`, with a version published
-//!    at least 28 days ago, and change the feature to `sp1 = ["dep:sp1-sdk"]`. Run
-//!    `scripts/check-crate-ages.sh` until it reports no crate that is too new.
-//! 2. Build the guest in `light-client/guests/light-client` and point `[prover] sp1_elf_path` at the ELF.
-//! 3. Implement `Sp1Prover::prove`: write [`crate::light_client::guest_input_bytes`] to the SP1 stdin, call
-//!    `prove(...).groth16()` (locally, or with `SP1_PROVER=network` and a network key from the environment of the
-//!    process), and return the proof bytes and the public values of the proof.
-//! 4. Deploy the light client with the real SP1 verifier of that program version, not the oracle verifier, and
-//!    set `[prover] program_vkey` to the key of the ELF.
-//!
-//! `cargo check --features sp1` compiles the stub on any machine.
+//! 1. Build both guests reproducibly with `light-client/scripts/program-keys.sh`. Its keys are in
+//!    `light-client/program-keys.json`.
+//! 2. Set `[prover] sp1_elf_path` (light client) and `sp1_observation_elf_path` (fork observation).
+//! 3. At startup the service compares the key of each ELF with the key that the contract stores, and it refuses to
+//!    run when they differ (`Prover::require_program_key`, called from `route.rs`).
+//! 4. Each proof runs the program natively first, proves in Groth16 mode, and checks that the proven public values
+//!    equal the native ones. The proof bytes are `selector ‖ proof`, which `SP1VerifierGroth16.verifyProof` reads.
 
-#[cfg(feature = "sp1")]
-use crate::error::Error;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::light_client::{
     public_values, sha256, verify_observation_natively, verify_update_natively, LightClientOutput,
     UpdateInput,
@@ -68,6 +62,50 @@ pub trait Prover: Send + Sync {
     /// `Error::VerificationRefused` when the program rejects the statement. `Error::Prover` when the backend cannot
     /// prove this kind of statement.
     fn prove(&self, program_vkey: B256, statement: &ProofStatement) -> Result<Proof>;
+
+    /// Checks the program a backend would run against the key that the destination contract stores.
+    /// The service calls it at startup with the key it read from the contract. A backend without a program of its own
+    /// (the oracle) accepts every key.
+    ///
+    /// # Errors
+    /// `Error::Config` when the backend runs a program whose key differs from `onchain_key`.
+    fn require_program_key(&self, _program: ProgramKind, _onchain_key: B256) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Which guest program a key belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgramKind {
+    /// The light-client program. The light client stores its key as `programVKey`.
+    LightClient,
+    /// The fork observation program. The fork registry stores its key as `observationProgramVKey`.
+    ForkObservation,
+}
+
+impl ProgramKind {
+    /// The name of the program in messages.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::LightClient => "light client",
+            Self::ForkObservation => "fork observation",
+        }
+    }
+}
+
+/// A prover that several routes share. The routes then load a backend only once.
+impl Prover for std::sync::Arc<dyn Prover> {
+    fn name(&self) -> &'static str {
+        (**self).name()
+    }
+
+    fn prove(&self, program_vkey: B256, statement: &ProofStatement) -> Result<Proof> {
+        (**self).prove(program_vkey, statement)
+    }
+
+    fn require_program_key(&self, program: ProgramKind, onchain_key: B256) -> Result<()> {
+        (**self).require_program_key(program, onchain_key)
+    }
 }
 
 /// The digest that `OracleSP1Verifier.verifyProof` recovers a signer from:
@@ -113,11 +151,168 @@ impl Prover for OracleProver {
     }
 }
 
-/// The production backend. See the module documentation for how to enable it.
+/// Fails unless the program key computed from an ELF equals the key that the destination contract stores.
+///
+/// `program` names the program in the message (`light client` or `fork observation`). The check compares the two
+/// values only. The caller reads `onchain_key` from the contract (`programVKey()` on the light client,
+/// `observationProgramVKey()` on the fork registry), never from its own configuration.
+///
+/// # Errors
+/// `Error::Config` that shows both keys when they differ.
+pub fn require_matching_key(program: &str, local_key: B256, onchain_key: B256) -> Result<()> {
+    if local_key == onchain_key {
+        return Ok(());
+    }
+    Err(Error::Config(format!(
+        "the {program} ELF has program key {local_key:#x}, but the contract stores {onchain_key:#x}; \
+         the prover refuses to run with an ELF the contract does not know"
+    )))
+}
+
+/// The production backend: the SP1 prover on the local CPU, with Groth16 proofs. See the module documentation.
+///
+/// It loads two ELFs and computes their program keys once. A statement runs on the program that matches its kind.
 #[cfg(feature = "sp1")]
 pub struct Sp1Prover {
-    /// The path of the compiled guest program.
-    pub elf_path: std::path::PathBuf,
+    client: sp1_sdk::blocking::CpuProver,
+    light_client: Sp1Program,
+    fork_observation: Option<Sp1Program>,
+}
+
+/// The paths of the compiled guest programs.
+#[cfg(feature = "sp1")]
+#[derive(Clone, Debug)]
+pub struct Sp1ProgramPaths {
+    /// The light-client guest ELF (`light-client/guests/light-client`).
+    pub light_client: std::path::PathBuf,
+    /// The fork observation guest ELF. Without it, the prover refuses observation statements.
+    pub fork_observation: Option<std::path::PathBuf>,
+}
+
+/// One loaded guest: its proving key and the program key that the contracts store.
+#[cfg(feature = "sp1")]
+struct Sp1Program {
+    proving_key: <sp1_sdk::blocking::CpuProver as sp1_sdk::blocking::Prover>::ProvingKey,
+    program_key: B256,
+}
+
+/// What the SP1 executor reports for one run of a guest. No proof exists for it.
+#[cfg(feature = "sp1")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sp1Execution {
+    /// The exit code of the guest. A guest that panics (a rejected input) exits with a code other than 0.
+    pub exit_code: u64,
+    /// The bytes the guest committed. Empty when the guest panicked before it committed.
+    pub public_values: Vec<u8>,
+    /// The number of instructions that the guest ran.
+    pub instruction_count: u64,
+}
+
+/// The one CPU client of the process. Building a client starts its worker pools, so the process builds it once.
+#[cfg(feature = "sp1")]
+fn shared_client() -> &'static sp1_sdk::blocking::CpuProver {
+    static CLIENT: std::sync::OnceLock<sp1_sdk::blocking::CpuProver> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| sp1_sdk::blocking::ProverClient::builder().cpu().build())
+}
+
+#[cfg(feature = "sp1")]
+fn read_elf(path: &std::path::Path) -> Result<Vec<u8>> {
+    std::fs::read(path)
+        .map_err(|error| Error::Config(format!("cannot read the ELF {}: {error}", path.display())))
+}
+
+/// Runs a guest ELF in the SP1 executor on guest input bytes. It does not prove and does not compute a program key.
+///
+/// The input goes to the guest the way `sp1_zkvm::io::read_vec` reads it: one raw byte vector.
+///
+/// # Errors
+/// `Error::Prover` when the executor itself fails (a corrupt ELF, for example). A guest that rejects its input is not
+/// an error here: it returns an [`Sp1Execution`] with a non-zero `exit_code`.
+#[cfg(feature = "sp1")]
+pub fn execute_program(elf: &[u8], guest_input: &[u8]) -> Result<Sp1Execution> {
+    use sp1_sdk::blocking::Prover as _;
+    let mut stdin = sp1_sdk::SP1Stdin::new();
+    stdin.write_vec(guest_input.to_vec());
+    let (values, report) = shared_client()
+        .execute(sp1_sdk::Elf::from(elf), stdin)
+        .run()
+        .map_err(|error| Error::Prover(format!("the SP1 executor failed: {error}")))?;
+    Ok(Sp1Execution {
+        exit_code: report.exit_code,
+        public_values: values.to_vec(),
+        instruction_count: report.total_instruction_count(),
+    })
+}
+
+#[cfg(feature = "sp1")]
+impl Sp1Prover {
+    /// Reads the ELFs, runs the SP1 setup for each and computes the program keys.
+    ///
+    /// The setup takes time and memory, so a service builds one prover and shares it (`Arc<dyn Prover>`).
+    ///
+    /// # Errors
+    /// `Error::Config` when a file cannot be read. `Error::Prover` when the setup fails.
+    pub fn load(paths: &Sp1ProgramPaths) -> Result<Self> {
+        use sp1_sdk::blocking::Prover as _;
+        let client = shared_client().clone();
+        let load_one = |path: &std::path::Path| -> Result<Sp1Program> {
+            let proving_key =
+                client
+                    .setup(sp1_sdk::Elf::from(read_elf(path)?))
+                    .map_err(|error| {
+                        Error::Prover(format!("SP1 setup of {}: {error}", path.display()))
+                    })?;
+            let program_key = B256::from(sp1_sdk::HashableKey::bytes32_raw(
+                sp1_sdk::ProvingKey::verifying_key(&proving_key),
+            ));
+            Ok(Sp1Program {
+                proving_key,
+                program_key,
+            })
+        };
+        let light_client = load_one(&paths.light_client)?;
+        let fork_observation = paths
+            .fork_observation
+            .as_deref()
+            .map(load_one)
+            .transpose()?;
+        if fork_observation.as_ref().map(|program| program.program_key)
+            == Some(light_client.program_key)
+        {
+            return Err(Error::Config(
+                "the light client ELF and the fork observation ELF have the same program key"
+                    .into(),
+            ));
+        }
+        Ok(Self {
+            client,
+            light_client,
+            fork_observation,
+        })
+    }
+
+    /// The program key of the light-client ELF.
+    pub fn light_client_key(&self) -> B256 {
+        self.light_client.program_key
+    }
+
+    /// The program key of the fork observation ELF, when one is loaded.
+    pub fn fork_observation_key(&self) -> Option<B256> {
+        self.fork_observation
+            .as_ref()
+            .map(|program| program.program_key)
+    }
+
+    fn program(&self, kind: ProgramKind) -> Result<&Sp1Program> {
+        match kind {
+            ProgramKind::LightClient => Ok(&self.light_client),
+            ProgramKind::ForkObservation => self.fork_observation.as_ref().ok_or_else(|| {
+                Error::Config(
+                    "no fork observation ELF is loaded; set prover.sp1_observation_elf_path".into(),
+                )
+            }),
+        }
+    }
 }
 
 #[cfg(feature = "sp1")]
@@ -126,31 +321,62 @@ impl Prover for Sp1Prover {
         "sp1"
     }
 
-    fn prove(&self, _program_vkey: B256, statement: &ProofStatement) -> Result<Proof> {
-        match statement {
+    fn require_program_key(&self, program: ProgramKind, onchain_key: B256) -> Result<()> {
+        require_matching_key(
+            program.label(),
+            self.program(program)?.program_key,
+            onchain_key,
+        )
+    }
+
+    fn prove(&self, program_vkey: B256, statement: &ProofStatement) -> Result<Proof> {
+        use sp1_sdk::blocking::{ProveRequest as _, Prover as _};
+        // The native run comes first: it refuses a bad statement cheaply, and its output is the check on the proof.
+        let (kind, guest_input, expected_values) = match statement {
             ProofStatement::DevAsserted(_) | ProofStatement::ObservationAsserted(_) => {
-                Err(Error::Prover(
+                return Err(Error::Prover(
                     "a development statement has no real proof; use the oracle backend on Anvil"
                         .into(),
                 ))
             }
-            ProofStatement::Observation(guest_input) => {
-                verify_observation_natively(guest_input)?;
-                // TODO(sp1): write `guest_input` to the SP1 stdin of the fork observation guest and prove.
-                Err(Error::Prover(format!(
-                    "the sp1 backend is a stub: the sp1-sdk crate is not linked (elf {})",
-                    self.elf_path.display()
-                )))
-            }
-            ProofStatement::Verified(input) => {
-                verify_update_natively(input)?;
-                // TODO(sp1): write `guest_input_bytes(input)` to the SP1 stdin and prove. See the module docs.
-                Err(Error::Prover(format!(
-                    "the sp1 backend is a stub: the sp1-sdk crate is not linked (elf {})",
-                    self.elf_path.display()
-                )))
-            }
+            ProofStatement::Observation(guest_input) => (
+                ProgramKind::ForkObservation,
+                guest_input.clone(),
+                verify_observation_natively(guest_input)?,
+            ),
+            ProofStatement::Verified(input) => (
+                ProgramKind::LightClient,
+                crate::light_client::guest_input_bytes(input),
+                public_values(&verify_update_natively(input)?),
+            ),
+        };
+        let program = self.program(kind)?;
+        require_matching_key(kind.label(), program.program_key, program_vkey)?;
+        let mut stdin = sp1_sdk::SP1Stdin::new();
+        stdin.write_vec(guest_input);
+        let proof = self
+            .client
+            .prove(&program.proving_key, stdin)
+            .groth16()
+            .run()
+            .map_err(|error| Error::Prover(format!("the SP1 Groth16 proof failed: {error}")))?;
+        let proven_values = proof.public_values.to_vec();
+        if proven_values != expected_values {
+            return Err(Error::Prover(
+                "the public values of the proof differ from the native run of lc-core; the ELF and lc-core disagree".into(),
+            ));
         }
+        self.client
+            .verify(
+                &proof,
+                sp1_sdk::ProvingKey::verifying_key(&program.proving_key),
+                None,
+            )
+            .map_err(|error| Error::Prover(format!("the new proof does not verify: {error}")))?;
+        Ok(Proof {
+            public_values: proven_values,
+            proof_bytes: proof.bytes(),
+        })
     }
 }
 
@@ -241,6 +467,20 @@ mod tests {
             matches!(error, Error::VerificationRefused(_)),
             "got {error}"
         );
+    }
+
+    /// Claim: a program key that differs in one bit from the stored key is refused, and the error shows both keys.
+    /// Why it matters: this is the check that keeps the prover from running an ELF the contract does not know.
+    #[test]
+    fn a_program_key_that_differs_from_the_stored_key_is_refused() {
+        let stored = B256::repeat_byte(0x42);
+        assert!(require_matching_key("light client", stored, stored).is_ok());
+        let mut other = stored;
+        other.0[31] ^= 0x01;
+        let error = require_matching_key("light client", other, stored).unwrap_err();
+        assert!(matches!(error, Error::Config(_)), "got {error}");
+        let text = error.to_string();
+        assert!(text.contains(&format!("{other:#x}")) && text.contains(&format!("{stored:#x}")));
     }
 
     /// A tiny wrapper so the digest test does not call the module under test for the SHA-256 value.

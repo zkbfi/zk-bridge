@@ -8,10 +8,11 @@ This policy answers gap G-02 in `docs/zk-bridge-comparison.md`. The light client
 |---|---|---|
 | Guest library `sp1-zkvm` | `=6.8.0` | `light-client/guests/light-client/Cargo.toml`, `light-client/guests/fork-observation/Cargo.toml` |
 | Precompile patches | tags `patch-*-sp1-6.0.0` | the same files |
-| On-chain verifier | the code hash in `verifierCodeHash` for each chain | `script/hardened/bridge.config.example.json`, checked by `script/hardened/DeployBridge.s.sol` |
+| Prover library `sp1-sdk` | `=6.8.1` (crates.io, published 2026-09-24), local processor only, feature `network` off | `prover/Cargo.toml`, feature `sp1` |
+| On-chain verifier | SP1 contracts release `v6.1.1`, verifier of circuit `v6.1.0`, vendored in `src/hardened/vendor/sp1-contracts/`. The code hash goes in `verifierCodeHash` for each chain. | `script/hardened/bridge.config.example.json`, checked by `script/hardened/DeployBridge.s.sol` |
 | Program keys | `programVKey` and the observation key | the deploy config |
 
-The repository never installs the SP1 toolchain with `sp1up` or a `curl | bash` installer, and never installs `sp1-sdk`. The real prover backend is still a stub.
+The repository never installs the SP1 toolchain with `sp1up` or a `curl | bash` installer. The Rust crate `sp1-sdk` is a dependency of the prover, pinned to one exact version (the npm package of the same name does not exist and must never be installed). The production prover backend is `Sp1Prover`; `docs/server-prover.md` explains how to run it.
 
 ## Pinned toolchain and program keys (2026-10-21)
 
@@ -32,6 +33,41 @@ The values come from the Docker build and live in `light-client/program-keys.jso
 A native build (`cargo prove build` without `--docker`) gives different ELF hashes and keys, because the output depends on the build machine. Deploy only the Docker keys.
 These keys are the values for `programVKey` (light client) and `observationProgramVKey` (fork observation) in the deploy configuration.
 
+## Verifier contract (2026-10-22)
+
+| Item | Value |
+|---|---|
+| Source | https://github.com/succinctlabs/sp1-contracts, release `v6.1.1` (2026-04-28), commit `d3629729c3216eb51bd4859d027a8eb729399fa4` |
+| Contract | `SP1Verifier` in `src/hardened/vendor/sp1-contracts/v6.1.0/SP1VerifierGroth16.sol` (circuit version `v6.1.0`), vendored without change |
+| `VERIFIER_HASH()` | `0x4388a21c687fdd5f218d7e3d13190cac4c5355818d3605fd5fb811df468ee696` (selector `0x4388a21c`) |
+| `VK_ROOT()` | `0x002f850ee998974d6cc00e50cd0814b098c05bfade466d28573240d057f25352` |
+
+How I confirmed that this release matches `sp1-sdk` 6.8.1:
+
+1. The file `SP1_CIRCUIT_VERSION` in the crate `sp1-prover` 6.8.1 holds `v6.1.0`. The verifier reports `VERSION() = "v6.1.0"`.
+2. The SHA-256 hash of `vk-artifacts/groth16_vk.bin` in the crate `sp1-verifier` 6.8.1 equals `VERIFIER_HASH()`. The SDK puts the first four bytes of that hash in front of every proof, and the verifier checks them.
+3. The constant `VK_ROOT_BYTES` in the same crate equals `VK_ROOT()`.
+4. Release v6.1.1 changed only the compiler pragma of the circuit v6.1.0 verifier, as its notes say. Release v6.0.0 has another circuit (selector `0x0e78f4db`) and refuses every proof of this SDK.
+
+The release ships no proof for circuit v6.1.0. Its one real proof is for circuit v6.0.0. `test/hardened/SP1VerifierGroth16.t.sol` uses that proof with the v6.0.0 verifier (test use only) to show that a good proof is accepted and that a tampered proof, tampered public values and a wrong program key are refused. For the v6.1.0 verifier the same file checks the constants and the refusals that need no valid proof: wrong selector, proof of another circuit, non-zero exit code, proof of zeros and a short proof. The first accepting test for v6.1.0 needs a proof from the server (see `docs/server-prover.md`).
+
+### Code hash for `verifierCodeHash`
+
+If you deploy the vendored source with the compiler settings of this repository (solc 0.8.28, optimizer with 200 runs, EVM version shanghai, no metadata hash), the runtime code hash is:
+
+```
+verifierCodeHash = 0xe5878a94678c40ab6b1bebc391f4d4c12f44bedb8291921b5c0f5a251ec6e84b
+```
+
+The test `test_codeHashIsTheDocumentedVerifierCodeHash` fails when this value drifts. Always check the value against the chain with `cast codehash <verifier> --rpc-url <rpc>` after the deployment.
+
+Two other builds exist, and their hashes differ from the one above. Do not mix them up:
+
+- The verifier that Succinct deployed for circuit v6.1.0 on Ethereum (address in `contracts/deployments/1.json` of the release, key `V6_1_0_SP1_VERIFIER_GROTH16`) has code hash `0xcceb864cd8a5a36b2073a8f2b32a773835cd2dd2c78a56f8e6fdb942feff04dd` (read on 2026-10-22).
+- The release source built with its own deploy profile (solc 0.8.20, optimizer with 200 runs, IPFS metadata hash) gives `0x048bdb430e2d55075aae4a2b7633fc4b4baeb61dcb007642bcc03c87f869281d`. It does not equal the deployed hash. I did not find out why. A likely cause is that the deployment predates the pragma change of v6.1.1, but I did not check this.
+
+If you use a verifier that Succinct deployed, put its code hash in the config, and compare its `VERIFIER_HASH()` and `VK_ROOT()` with the table above. The decision between a deployment of the vendored source and an existing deployment is yours. A deployment of the vendored source needs no trust in a deployer account, because anyone can rebuild and compare the hash.
+
 ## Advisories checked (2026-10-22)
 
 Source: the security advisories of the `succinctlabs/sp1` repository on GitHub, and the open source vulnerability database at osv.dev.
@@ -50,7 +86,7 @@ Source: the security advisories of the `succinctlabs/sp1` repository on GitHub, 
 1. **Check the advisories.** List the `succinctlabs/sp1` security advisories (for example `gh api /repos/succinctlabs/sp1/security-advisories`). Refuse a release that any advisory lists as affected for the Groth16 path. Record the date of the check in the deploy notes.
 2. **Respect the age rule.** Pin exact versions at least 28 days old, as for every other dependency.
 3. **Move the guest and the prover together.** A new `sp1-zkvm` changes the program key. The deploy config must then carry the new key, and the old route stays on its old key.
-4. **Pin the verifier by code hash.** Deploy the Groth16 verifier from the matching SP1 contracts release and record its code hash in `verifierCodeHash`. The deploy script refuses any other code. Check that the verifier's `VERIFIER_HASH()` matches the release too.
+4. **Pin the verifier by code hash.** Deploy the Groth16 verifier from the matching SP1 contracts release and record its code hash in `verifierCodeHash`. The deploy script refuses any other code. Check that the verifier's `VERIFIER_HASH()` matches the release too. The current values are in the section "Verifier contract".
 5. **Publish a reproducible build** of each program. Anyone can run `light-client/scripts/program-keys.sh` and compare the result with the deployed key.
 
 ## When an advisory hits a deployed route

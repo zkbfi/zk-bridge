@@ -46,7 +46,7 @@ It exits with a non-zero code when a value differs from `light-client/program-ke
 The image is amd64 only. On an arm64 machine it runs under emulation, so the build takes about 6 minutes for the light client and about 16 minutes for fork observation. The guests set `jobs = 1` in `.cargo/config.toml` so that the build fits in 2 GiB of memory.
 The `--locked` flag makes cargo fail when `Cargo.lock` would change.
 
-A host program (not included) builds the input with `lc_core::wire::encode_guest_input` and calls the SP1 prover. The
+The host program is `Sp1Prover` in `prover/src/prover.rs` (feature `sp1`). It builds the input with `lc_core::wire::encode_guest_input` and proves on the local processor. `prover/tests/sp1_execute.rs` runs both guests in the SP1 executor and compares their output with `lc-core`. The
 Solidity side checks the proof with the gateway `ISP1Verifier.verifyProof(programVKey, publicValues, proof)`.
 The program keys go into the deploy configuration as `programVKey` and `observationProgramVKey`. See `docs/sp1-version-policy.md` for the current values.
 

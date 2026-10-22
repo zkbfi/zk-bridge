@@ -157,4 +157,11 @@ call can strand funds.
 - `src/contracts.rs` holds every contract binding and the vault `deposit` call, with its `gateEvidence` argument.
 - The cargo feature `dev-source` (on by default) adds `DevBeaconSource` and the test crate behind it.
   `--no-default-features` leaves both out.
-- The `sp1` cargo feature is off by default. See the module documentation of `src/prover.rs`.
+- The `sp1` cargo feature is off by default. It adds `Sp1Prover`, which proves on the local processor with `sp1-sdk` 6.8.1.
+  The feature `sp1-native-gnark` adds the in-process Groth16 wrapper and is the one the server image uses.
+  See the module documentation of `src/prover.rs` and `docs/server-prover.md`.
+- `tests/sp1_execute.rs` (feature `sp1`) runs the two guest programs in the SP1 executor on real and synthetic inputs and
+  compares their public values with `lc-core`. Run it with `cargo test --features sp1 --test sp1_execute -- --test-threads=1`
+  (about 4.5 minutes). It needs the guest program files from `cargo prove build` in `light-client/guests/*`.
+  The full Groth16 proof test is ignored on a laptop because it needs the server.
+- `.cargo/config.toml` sets `GOPROXY` for the Go build of the Groth16 wrapper (feature `sp1-native-gnark`).

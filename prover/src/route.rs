@@ -16,14 +16,14 @@ use crate::light_client::{
     to_layout_header, verify_withdrawal_natively, withdrawal_calldata, AncestryPath, VaultContext,
     DEPOSIT_EVENT_TOPIC,
 };
-use crate::prover::{OracleProver, Prover};
+use crate::prover::{OracleProver, ProgramKind, Prover};
 use crate::rpc::{parse_quantity, HttpClient, HttpRpc};
 use crate::service::{Coverage, Route, RoutePorts, SendOutcome};
 use crate::signer::Signer;
 use crate::store::NewDeposit;
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::SolCall;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// The most light-client proofs (each a fold of one or more updates) that one call of `advance_light_client` sends.
@@ -164,6 +164,9 @@ impl LiveRoute {
                 format!("{program_key:#x}"),
             ));
         }
+        // The backend must run the program that the contract stores (the oracle backend accepts any key).
+        self.prover
+            .require_program_key(ProgramKind::LightClient, program_key)?;
         self.check_own_light_client_wiring(&mismatch)
     }
 
@@ -730,13 +733,22 @@ fn build_beacon(config: &ChainConfig) -> Result<Box<dyn BeaconSource>> {
     }
 }
 
-fn build_prover(config: &Config, oracle: &Signer) -> Result<Box<dyn Prover>> {
+/// Builds the one prover that all routes share. The `sp1` backend loads its ELFs here, once.
+fn build_prover(config: &Config, oracle: &Signer) -> Result<Arc<dyn Prover>> {
     match config.prover.backend {
-        ProverBackend::Oracle => Ok(Box::new(OracleProver::new(oracle.clone()))),
+        ProverBackend::Oracle => Ok(Arc::new(OracleProver::new(oracle.clone()))),
         #[cfg(feature = "sp1")]
-        ProverBackend::Sp1 => Ok(Box::new(crate::prover::Sp1Prover {
-            elf_path: config.prover.sp1_elf_path.clone().unwrap_or_default(),
-        })),
+        ProverBackend::Sp1 => {
+            let light_client = config.prover.sp1_elf_path.clone().ok_or_else(|| {
+                Error::Config("prover.sp1_elf_path is required for the sp1 backend".into())
+            })?;
+            Ok(Arc::new(crate::prover::Sp1Prover::load(
+                &crate::prover::Sp1ProgramPaths {
+                    light_client,
+                    fork_observation: config.prover.sp1_observation_elf_path.clone(),
+                },
+            )?))
+        }
         #[cfg(not(feature = "sp1"))]
         ProverBackend::Sp1 => Err(Error::Config(
             "prover.backend = \"sp1\" needs a build with the cargo feature `sp1` (see the documentation in src/prover.rs)".into(),
@@ -750,8 +762,9 @@ fn build_prover(config: &Config, oracle: &Signer) -> Result<Box<dyn Prover>> {
 /// Any connection or wiring error.
 pub fn build_routes(config: &Config, signer: &Signer, oracle: &Signer) -> Result<Vec<Route>> {
     let mut routes = Vec::new();
+    let prover = build_prover(config, oracle)?;
     for name in &config.routes {
-        routes.push(build_route(config, *name, signer, oracle)?);
+        routes.push(build_route(config, *name, signer, &prover)?);
     }
     Ok(routes)
 }
@@ -760,7 +773,7 @@ fn build_route(
     config: &Config,
     name: RouteName,
     signer: &Signer,
-    oracle: &Signer,
+    prover: &Arc<dyn Prover>,
 ) -> Result<Route> {
     let source_config = config.source_of(name);
     let destination_config = config.destination_of(name);
@@ -776,7 +789,7 @@ fn build_route(
         light_client: destination_config.light_client_address()?,
         own_light_client,
         beacon: build_beacon(source_config)?,
-        prover: build_prover(config, oracle)?,
+        prover: Box::new(Arc::clone(prover)),
         program_vkey: config.prover.program_vkey_value()?,
         receipt_timeout: Duration::from_secs(config.receipt_timeout_seconds),
         log_block_range: config.log_block_range,

@@ -224,7 +224,7 @@ A Rust binary that keeps the bridge moving. It holds no trusted role: every proo
 ### Proving backends (one trait, `Prover`)
 
 - `OracleProver` (development and tests): runs the program natively first and refuses to sign when it fails. Then it signs `keccak256(programVKey ‖ sha256(publicValues))` with the oracle key, which `OracleSP1Verifier` accepts. This models a sound proof system.
-- `Sp1Prover` (production): behind the cargo feature `sp1`, off by default and not built on this machine. It calls the official `sp1-sdk` crate, locally or through the Succinct prover network. Document how to enable it.
+- `Sp1Prover` (production): behind the cargo feature `sp1`, off by default. It calls the official `sp1-sdk` crate 6.8.1 on the local processor, with Groth16 proofs. It never uses the Succinct prover network. See `docs/server-prover.md`.
 
 ### Beacon sources (one trait, `BeaconSource`)
 

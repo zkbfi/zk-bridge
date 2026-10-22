@@ -1,0 +1,5 @@
+# Go modules for the native Groth16 wrapper (feature `sp1-native-gnark`, built by the crate sp1-recursion-gnark-ffi) come
+# from the Go module proxy. go.sum of that crate pins every module hash, and the checksum database verifies them.
+# A machine with GOPROXY=direct would fetch from the code hosts instead, which fails behind some git settings.
+[env]
+GOPROXY = { value = "https://proxy.golang.org", force = false }
