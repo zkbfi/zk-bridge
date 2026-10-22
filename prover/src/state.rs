@@ -5,6 +5,8 @@
 //!   \________________________/                          ^           |
 //!                                                         \_________/  (the withdrawal reverted, retry)
 //! every state except confirmed and failed can move to confirmed (already claimed) or failed (rejected)
+//! failed -> seen             (an operator retries the deposit by hand)
+//! failed -> confirmed        (an operator retries it, and the vault already paid the nonce)
 //! ```
 //!
 //! A word on names. `proven` does not mean a zero-knowledge proof exists: a withdrawal needs none. It means the
@@ -51,6 +53,10 @@ pub enum Event {
     AlreadyClaimed,
     /// The service gives up on the deposit.
     Rejected,
+    /// An operator sends a failed deposit back to the start, because the cause of the failure is gone.
+    Retried,
+    /// An operator retries a failed deposit and finds that the vault already paid the nonce.
+    ClaimedAfterFailure,
 }
 
 impl DepositState {
@@ -98,6 +104,8 @@ pub fn transition(state: DepositState, event: Event) -> Result<DepositState> {
     use DepositState as S;
     use Event as E;
     let next = match (state, event) {
+        (S::Failed, E::Retried) => Some(S::Seen),
+        (S::Failed, E::ClaimedAfterFailure) => Some(S::Confirmed),
         (S::Confirmed | S::Failed, _) => None,
         (_, E::AlreadyClaimed) => Some(S::Confirmed),
         (_, E::Rejected) => Some(S::Failed),
@@ -191,6 +199,32 @@ mod tests {
             transition(S::Submitted, E::WithdrawalReverted).unwrap(),
             S::Proven
         );
+    }
+
+    /// Claim: only a failed deposit can be retried or confirmed after a failure, and a retry restarts at `seen`.
+    /// Why it matters: a retry of a live deposit would run two copies of its work, and a retry of a confirmed one
+    /// could pay it twice.
+    #[test]
+    fn only_a_failed_deposit_can_be_retried() {
+        assert_eq!(transition(S::Failed, E::Retried).unwrap(), S::Seen);
+        assert_eq!(
+            transition(S::Failed, E::ClaimedAfterFailure).unwrap(),
+            S::Confirmed
+        );
+        for state in [
+            S::Seen,
+            S::AwaitingFinality,
+            S::LightClientUpdated,
+            S::Proven,
+            S::Submitted,
+            S::Confirmed,
+        ] {
+            assert!(transition(state, E::Retried).is_err(), "from {state:?}");
+            assert!(
+                transition(state, E::ClaimedAfterFailure).is_err(),
+                "from {state:?}"
+            );
+        }
     }
 
     /// Claim: every state name parses back to itself.

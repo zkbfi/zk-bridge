@@ -4,18 +4,57 @@
 //! source chain, the beacon source, the prover and the destination chain. `route.rs` implements it for real
 //! chains. The unit tests implement it with a script.
 //!
-//! One pass (`once`) does, for each route: scan finalized source blocks for new deposits, advance every
-//! deposit that is not confirmed or failed as far as it goes, then move the own-chain light client of the source
-//! chain to the newest final header (when the chain has one). A restart repeats nothing that the file records.
+//! One pass (`once`) does, for each route: scan finalized source blocks for new deposits, then work on all deposits
+//! that are not confirmed or failed in four stages, then move the own-chain light client of the source chain to the
+//! newest final header (when the chain has one). A restart repeats nothing that the file records.
+//!
+//! The four stages make a burst of deposits cheap. One light-client update covers every deposit at or below its head,
+//! so stage one asks for the update for the oldest deposit, then for the newest, and the update of one covers the rest. Stage two builds the withdrawals. Stage three sends
+//! them back to back, without a wait for any receipt. Stage four waits for the receipts. A failure of one deposit
+//! costs that deposit an attempt and stops no other deposit.
 
 use crate::error::{Error, Result};
 use crate::logging::Logger;
 use crate::state::{DepositState, Event};
 use crate::store::{DepositRecord, NewDeposit, Store};
 use alloy_primitives::B256;
+use std::cell::Cell;
 
 /// The most steps one deposit takes in one pass. It stops a loop that cannot make progress.
 const MAX_STEPS_PER_PASS: usize = 16;
+
+/// How far one call of [`Service::advance`] takes a deposit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reach {
+    /// The destination light client covers the deposit block.
+    LightClientUpdated,
+    /// The withdrawal is built and verified natively.
+    Proven,
+    /// The withdrawal transaction is sent.
+    Submitted,
+    /// The deposit ends in a terminal state.
+    Confirmed,
+}
+
+impl Reach {
+    /// Whether a deposit in `state` is at least this far.
+    fn is_met_by(self, state: DepositState) -> bool {
+        let rank = |state: DepositState| match state {
+            DepositState::Seen | DepositState::AwaitingFinality => 0,
+            DepositState::LightClientUpdated => 1,
+            DepositState::Proven => 2,
+            DepositState::Submitted => 3,
+            DepositState::Confirmed | DepositState::Failed => 4,
+        };
+        let goal = match self {
+            Self::LightClientUpdated => 1,
+            Self::Proven => 2,
+            Self::Submitted => 3,
+            Self::Confirmed => 4,
+        };
+        rank(state) >= goal
+    }
+}
 
 /// What the light client says about a deposit block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +125,17 @@ pub struct Route {
 pub struct ServiceSettings {
     /// Failed attempts before a deposit is marked failed.
     pub max_attempts: u32,
+    /// The most withdrawals that one route builds, and the most that it sends, in one pass.
+    pub max_withdrawals_per_pass: usize,
+}
+
+/// What [`Service::retry`] did with a failed deposit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetryOutcome {
+    /// The deposit is back in `seen` with no attempts. The next pass works on it.
+    Restarted,
+    /// The vault already paid the nonce, so the deposit is now `confirmed`.
+    AlreadyPaid,
 }
 
 /// The loop.
@@ -94,6 +144,8 @@ pub struct Service {
     logger: Logger,
     settings: ServiceSettings,
     routes: Vec<Route>,
+    /// The highest deposit block that a light-client update covered in this pass of the current route.
+    covered_through: Cell<Option<u64>>,
 }
 
 /// A failure that a later pass may fix: the node is down or slow. It does not count as an attempt.
@@ -118,6 +170,7 @@ impl Service {
             logger,
             settings,
             routes,
+            covered_through: Cell::new(None),
         }
     }
 
@@ -141,12 +194,48 @@ impl Service {
                     &[("route", name.clone()), ("error", error.to_string())],
                 );
             }
-            for record in self.store.active(&name)? {
-                self.advance(index, &record.deposit.nonce)?;
-            }
+            self.work_on_deposits(index, &name)?;
             self.keep_own_light_client_current(index);
         }
         self.logger.info("pass_finished", None, &[]);
+        Ok(())
+    }
+
+    /// Works on every live deposit of a route in four stages (see the module documentation).
+    fn work_on_deposits(&self, index: usize, route: &str) -> Result<()> {
+        self.covered_through.set(None);
+        // The oldest deposit first, so the light client stores a header close to the oldest deposit (the vault layout
+        // rows need a stored header at or below the slot of a deposit). Then the newest: when its block is covered,
+        // the update covers every deposit between them, and the others need no call.
+        let records = self.store.active(route)?;
+        let (oldest, newer) = records.split_at(records.len().min(1));
+        for record in oldest.iter().chain(newer.iter().rev()) {
+            self.advance(index, &record.deposit.nonce, Reach::LightClientUpdated)?;
+        }
+        let limit = self.settings.max_withdrawals_per_pass;
+        self.advance_batch(index, route, Batch::build(limit))?;
+        self.advance_batch(index, route, Batch::send(limit))?;
+        self.advance_batch(index, route, Batch::confirm())
+    }
+
+    /// Advances each deposit of a route that waits in `batch.from`, oldest first, until `batch.limit` of them reach
+    /// `batch.reach`. A deposit that stays behind (a failure, a wait) does not count toward the limit.
+    fn advance_batch(&self, index: usize, route: &str, batch: Batch) -> Result<()> {
+        let mut reached = 0;
+        for record in self.store.active(route)? {
+            if reached >= batch.limit {
+                return Ok(());
+            }
+            if record.state != batch.from {
+                continue;
+            }
+            let nonce = record.deposit.nonce;
+            self.advance(index, &nonce, batch.reach)?;
+            let after = self.store.get(nonce)?.map(|record| record.state);
+            if after.is_some_and(|state| state != batch.from) {
+                reached += 1;
+            }
+        }
         Ok(())
     }
 
@@ -218,18 +307,27 @@ impl Service {
         event: Event,
         note: Option<&str>,
     ) -> Result<DepositState> {
-        let nonce = record.deposit.nonce;
-        let (from, to) = self.store.apply(nonce, event, note)?;
+        let (from, to) = self.store.apply(record.deposit.nonce, event, note)?;
+        self.log_change(record, (from, to), note);
+        Ok(to)
+    }
+
+    fn log_change(
+        &self,
+        record: &DepositRecord,
+        change: (DepositState, DepositState),
+        note: Option<&str>,
+    ) {
         let mut fields = vec![
             ("route", record.deposit.route.clone()),
-            ("from", from.as_str().to_string()),
-            ("to", to.as_str().to_string()),
+            ("from", change.0.as_str().to_string()),
+            ("to", change.1.as_str().to_string()),
         ];
         if let Some(note) = note {
             fields.push(("reason", note.to_string()));
         }
-        self.logger.info("deposit_state", Some(nonce), &fields);
-        Ok(to)
+        self.logger
+            .info("deposit_state", Some(record.deposit.nonce), &fields);
     }
 
     fn count_attempt(&self, record: &DepositRecord, note: &str) -> Result<()> {
@@ -261,14 +359,14 @@ impl Service {
         );
     }
 
-    /// Moves one deposit as far as it goes in this pass.
-    fn advance(&self, index: usize, nonce: &B256) -> Result<()> {
+    /// Moves one deposit toward `reach`, as far as it goes in this pass.
+    fn advance(&self, index: usize, nonce: &B256, reach: Reach) -> Result<()> {
         let ports = &self.routes[index].ports;
         for _ in 0..MAX_STEPS_PER_PASS {
             let Some(record) = self.store.get(*nonce)? else {
                 return Ok(());
             };
-            if record.state.is_terminal() {
+            if record.state.is_terminal() || reach.is_met_by(record.state) {
                 return Ok(());
             }
             match self.step(ports.as_ref(), &record) {
@@ -312,8 +410,19 @@ impl Service {
     }
 
     fn step_cover(&self, ports: &dyn RoutePorts, record: &DepositRecord) -> Result<Progress> {
+        let block = record.deposit.block_number;
+        if self
+            .covered_through
+            .get()
+            .is_some_and(|through| block <= through)
+        {
+            self.apply(record, Event::LightClientCovers, None)?;
+            return Ok(Progress::Moved);
+        }
         match ports.advance_light_client(&record.deposit)? {
             Coverage::Covered => {
+                self.covered_through
+                    .set(self.covered_through.get().max(Some(block)));
                 self.apply(record, Event::LightClientCovers, None)?;
                 Ok(Progress::Moved)
             }
@@ -398,6 +507,55 @@ impl Service {
         }
     }
 
+    /// The manual path for a failed deposit: finds it by its source transaction and log index, and sends it back to
+    /// `seen` with no attempts, no calldata and a note. When the vault already paid the nonce, the deposit becomes
+    /// `confirmed` instead.
+    ///
+    /// # Errors
+    /// `Error::Usage` when the store has no such deposit, or the deposit is not `failed`.
+    pub fn retry(&self, transaction: B256, log_index: u64) -> Result<(B256, RetryOutcome)> {
+        let record = self
+            .store
+            .find_by_source(transaction, log_index)?
+            .ok_or_else(|| {
+                Error::Usage(format!(
+                    "the store has no deposit at log {log_index} of transaction {transaction:#x}"
+                ))
+            })?;
+        let nonce = record.deposit.nonce;
+        if record.state != DepositState::Failed {
+            return Err(Error::Usage(format!(
+                "deposit {nonce:#x} is {}, not failed: only a failed deposit can be retried",
+                record.state.as_str()
+            )));
+        }
+        let route = self
+            .routes
+            .iter()
+            .find(|route| route.name == record.deposit.route)
+            .ok_or_else(|| {
+                Error::Usage(format!(
+                    "deposit {nonce:#x} belongs to route {}, which this configuration does not run",
+                    record.deposit.route
+                ))
+            })?;
+        if route.ports.claimed(nonce)? {
+            let note = "retry found the nonce claimed on the destination chain";
+            let change = self
+                .store
+                .apply(nonce, Event::ClaimedAfterFailure, Some(note))?;
+            self.log_change(&record, change, Some(note));
+            return Ok((nonce, RetryOutcome::AlreadyPaid));
+        }
+        let note = format!(
+            "retried by an operator; the failure was: {}",
+            record.note.as_deref().unwrap_or("no note")
+        );
+        let change = self.store.retry_failed(nonce, &note)?;
+        self.log_change(&record, change, Some(&note));
+        Ok((nonce, RetryOutcome::Restarted))
+    }
+
     /// The manual path: reads one deposit from a receipt, stores it, and advances it. Used by `withdraw`.
     ///
     /// # Errors
@@ -413,7 +571,8 @@ impl Service {
             if self.store.insert_deposit(&deposit)? {
                 self.log_new(&deposit);
             }
-            self.advance(index, &deposit.nonce)?;
+            self.covered_through.set(None);
+            self.advance(index, &deposit.nonce, Reach::Confirmed)?;
             return Ok(deposit.nonce);
         }
         Err(Error::Usage(format!(
@@ -425,6 +584,43 @@ impl Service {
 enum Progress {
     Moved,
     Blocked,
+}
+
+/// One stage of the work on a route: the deposits that wait in `from` are taken to `reach`.
+struct Batch {
+    from: DepositState,
+    reach: Reach,
+    /// The most deposits that leave `from` in one pass.
+    limit: usize,
+}
+
+impl Batch {
+    /// Builds the withdrawal of each covered deposit.
+    fn build(limit: usize) -> Self {
+        Self {
+            from: DepositState::LightClientUpdated,
+            reach: Reach::Proven,
+            limit,
+        }
+    }
+
+    /// Sends the withdrawal of each built deposit, without a wait for its receipt.
+    fn send(limit: usize) -> Self {
+        Self {
+            from: DepositState::Proven,
+            reach: Reach::Submitted,
+            limit,
+        }
+    }
+
+    /// Waits for the receipt of each sent withdrawal. Every sent withdrawal is checked, whatever the limit.
+    fn confirm() -> Self {
+        Self {
+            from: DepositState::Submitted,
+            reach: Reach::Confirmed,
+            limit: usize::MAX,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -450,6 +646,15 @@ pub(crate) mod tests {
         /// What `advance_own_light_client` answers: the number of updates sent, or a failure.
         pub own_answer: RefCell<Box<dyn Fn() -> Result<usize>>>,
         pub own_calls: Cell<u32>,
+        /// The head of a modelled destination light client, or `None` to answer from `coverage`. With a head, a
+        /// deposit above it costs one update that moves the head to the finalized block.
+        pub head: Cell<Option<u64>>,
+        /// How many updates the modelled light client received.
+        pub updates: Cell<u32>,
+        /// How many times the service asked the light client to advance.
+        pub advance_calls: Cell<u32>,
+        /// The order of `send` and `confirm` calls, to show that every send comes before the first receipt wait.
+        pub order: RefCell<Vec<&'static str>>,
     }
 
     impl Script {
@@ -468,6 +673,10 @@ pub(crate) mod tests {
                 scans: Cell::new(0),
                 own_answer: RefCell::new(Box::new(|| Ok(0))),
                 own_calls: Cell::new(0),
+                head: Cell::new(None),
+                updates: Cell::new(0),
+                advance_calls: Cell::new(0),
+                order: RefCell::new(Vec::new()),
             })
         }
     }
@@ -500,8 +709,17 @@ pub(crate) mod tests {
         fn claimed(&self, _nonce: B256) -> Result<bool> {
             Ok(self.0.claimed.get())
         }
-        fn advance_light_client(&self, _deposit: &NewDeposit) -> Result<Coverage> {
-            Ok(self.0.coverage.get())
+        fn advance_light_client(&self, deposit: &NewDeposit) -> Result<Coverage> {
+            self.0.advance_calls.set(self.0.advance_calls.get() + 1);
+            let Some(head) = self.0.head.get() else {
+                return Ok(self.0.coverage.get());
+            };
+            if deposit.block_number <= head {
+                return Ok(Coverage::Covered);
+            }
+            self.0.updates.set(self.0.updates.get() + 1);
+            self.0.head.set(self.0.finalized.get());
+            Ok(Coverage::Covered)
         }
         fn advance_own_light_client(&self) -> Result<usize> {
             self.0.own_calls.set(self.0.own_calls.get() + 1);
@@ -516,9 +734,11 @@ pub(crate) mod tests {
         }
         fn send_withdrawal(&self, _calldata: &[u8]) -> Result<SendOutcome> {
             self.0.sends.set(self.0.sends.get() + 1);
+            self.0.order.borrow_mut().push("send");
             (self.0.send.borrow())()
         }
         fn transaction_succeeded(&self, _transaction: B256) -> Result<Option<bool>> {
+            self.0.order.borrow_mut().push("confirm");
             Ok(self.0.status.get())
         }
     }
@@ -526,6 +746,14 @@ pub(crate) mod tests {
     pub fn service_with(
         script: &std::rc::Rc<Script>,
         store: Store,
+    ) -> (Service, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        service_with_limit(script, store, 32)
+    }
+
+    pub fn service_with_limit(
+        script: &std::rc::Rc<Script>,
+        store: Store,
+        max_withdrawals_per_pass: usize,
     ) -> (Service, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
         let (logger, lines) = Logger::in_memory();
         let route = Route {
@@ -538,7 +766,10 @@ pub(crate) mod tests {
             Service::new(
                 store,
                 logger,
-                ServiceSettings { max_attempts: 3 },
+                ServiceSettings {
+                    max_attempts: 3,
+                    max_withdrawals_per_pass,
+                },
                 vec![route],
             ),
             lines,
@@ -811,5 +1042,193 @@ pub(crate) mod tests {
         script.coverage.set(Coverage::Covered);
         service.run_once().unwrap();
         assert_eq!(state_of(&service, 0x11), DepositState::Confirmed);
+    }
+
+    /// A script with `count` deposits, one per block from block 10, all final, with a modelled light client that
+    /// starts below every deposit.
+    fn burst_script(count: u8) -> std::rc::Rc<Script> {
+        let script = Script::new();
+        *script.deposits.borrow_mut() = (0..count)
+            .map(|offset| sample_deposit(0x40 + offset, 10 + u64::from(offset)))
+            .collect();
+        script.head.set(Some(0));
+        script
+    }
+
+    fn confirmed_count(service: &Service) -> usize {
+        service
+            .store()
+            .list(None)
+            .unwrap()
+            .iter()
+            .filter(|record| record.state == DepositState::Confirmed)
+            .count()
+    }
+
+    /// Claim: a burst of 25 deposits costs one light-client update and two requests to advance it (for the oldest
+    /// deposit and for the newest), and one pass pays them all. The service sends every withdrawal before it waits
+    /// for the first receipt.
+    /// Why it matters: before the change each deposit cost its own update check and its own receipt wait, about 14
+    /// seconds each on the local network, so a burst of 25 delayed honest deposits from 18 to 104 seconds.
+    #[test]
+    fn a_burst_costs_one_update_and_one_pass() {
+        let script = burst_script(25);
+        let (mut service, _) = service_with(&script, Store::open_in_memory().unwrap());
+        service.run_once().unwrap();
+        assert_eq!(confirmed_count(&service), 25);
+        assert_eq!(script.updates.get(), 1, "one update for the whole burst");
+        assert_eq!(
+            script.advance_calls.get(),
+            2,
+            "asked for the oldest and for the newest deposit, not once per deposit"
+        );
+        assert_eq!(script.sends.get(), 25);
+        let order = script.order.borrow();
+        let first_confirm = order.iter().position(|step| *step == "confirm").unwrap();
+        assert_eq!(
+            first_confirm, 25,
+            "all sends come before the first receipt wait: {order:?}"
+        );
+    }
+
+    /// Claim: the limit per pass holds, and the update is still sent once. A burst of 25 with a limit of 10 is paid in
+    /// three passes.
+    /// Why it matters: the limit bounds the work and the gas of one pass, and it must not make the update repeat.
+    #[test]
+    fn the_limit_per_pass_spreads_a_burst_over_passes() {
+        let script = burst_script(25);
+        let (mut service, _) = service_with_limit(&script, Store::open_in_memory().unwrap(), 10);
+        let mut paid_after_each_pass = Vec::new();
+        for _ in 0..3 {
+            service.run_once().unwrap();
+            paid_after_each_pass.push(confirmed_count(&service));
+        }
+        assert_eq!(paid_after_each_pass, [10, 20, 25]);
+        assert_eq!(script.updates.get(), 1);
+    }
+
+    /// Claim: when one withdrawal of the batch fails, the others are still sent and paid in the same pass. The failed
+    /// deposit counts one attempt, stays `proven`, and is paid in the next pass.
+    /// Why it matters: one bad deposit must not hold back the 24 around it.
+    #[test]
+    fn a_failed_withdrawal_in_the_middle_does_not_block_the_batch() {
+        let script = burst_script(25);
+        let calls = std::rc::Rc::new(Cell::new(0u32));
+        let counter = calls.clone();
+        *script.send.borrow_mut() = Box::new(move || {
+            counter.set(counter.get() + 1);
+            if counter.get() == 13 {
+                return Err(Error::Transaction("the vault refused this one".into()));
+            }
+            Ok(SendOutcome::Sent(B256::repeat_byte(0xee)))
+        });
+        let (mut service, _) = service_with(&script, Store::open_in_memory().unwrap());
+        service.run_once().unwrap();
+        assert_eq!(confirmed_count(&service), 24);
+        let stuck: Vec<DepositRecord> = service
+            .store()
+            .list(None)
+            .unwrap()
+            .into_iter()
+            .filter(|record| record.state != DepositState::Confirmed)
+            .collect();
+        assert_eq!(stuck.len(), 1);
+        assert_eq!(
+            (stuck[0].state, stuck[0].attempts),
+            (DepositState::Proven, 1)
+        );
+        service.run_once().unwrap();
+        assert_eq!(confirmed_count(&service), 25);
+        assert_eq!(script.updates.get(), 1);
+    }
+
+    /// Claim: a deposit that the flow limiter refuses waits with a note, and the others of the batch are paid.
+    #[test]
+    fn a_flow_limiter_wait_does_not_block_the_batch() {
+        let script = burst_script(5);
+        let (mut service, _) = service_with(&script, Store::open_in_memory().unwrap());
+        *script.refusal.borrow_mut() = Some("waiting on the flow limiter".into());
+        service.run_once().unwrap();
+        assert_eq!(
+            confirmed_count(&service),
+            0,
+            "the limiter refuses every deposit"
+        );
+        *script.refusal.borrow_mut() = None;
+        service.run_once().unwrap();
+        assert_eq!(confirmed_count(&service), 5);
+    }
+
+    fn fail_deposit(script: &std::rc::Rc<Script>, service: &mut Service) {
+        *script.build.borrow_mut() = Box::new(|| {
+            Err(Error::VerificationRefused(
+                "the light client lost an update".into(),
+            ))
+        });
+        for _ in 0..3 {
+            service.run_once().unwrap();
+        }
+        assert_eq!(state_of(service, 0x11), DepositState::Failed);
+    }
+
+    fn sample_transaction() -> B256 {
+        sample_deposit(0x11, 10).transaction_hash
+    }
+
+    /// Claim: `retry` sends a failed deposit back to the start with no attempts and a note, and the next pass pays it.
+    /// Why it matters: the cause of a failure (a reverted chain removed a light-client update) can go away, and a
+    /// terminal state had no way back.
+    #[test]
+    fn retry_of_a_failed_deposit_ends_paid() {
+        let script = Script::new();
+        let (mut service, _) = service_with(&script, Store::open_in_memory().unwrap());
+        fail_deposit(&script, &mut service);
+        *script.build.borrow_mut() = Box::new(|| Ok(vec![1, 2, 3]));
+
+        let (nonce, outcome) = service.retry(sample_transaction(), 0).unwrap();
+        assert_eq!(
+            (nonce, outcome),
+            (B256::repeat_byte(0x11), RetryOutcome::Restarted)
+        );
+        let record = service.store().get(nonce).unwrap().unwrap();
+        assert_eq!((record.state, record.attempts), (DepositState::Seen, 0));
+        assert!(record
+            .note
+            .unwrap()
+            .contains("the light client lost an update"));
+
+        service.run_once().unwrap();
+        assert_eq!(state_of(&service, 0x11), DepositState::Confirmed);
+    }
+
+    /// Claim: `retry` refuses a deposit that is not failed and leaves it alone.
+    /// Why it matters: a retry of a live deposit would run two copies of its work.
+    #[test]
+    fn retry_refuses_a_deposit_that_is_not_failed() {
+        let script = Script::new();
+        script.status.set(None);
+        let (mut service, _) = service_with(&script, Store::open_in_memory().unwrap());
+        service.run_once().unwrap();
+        assert_eq!(state_of(&service, 0x11), DepositState::Submitted);
+        let error = service.retry(sample_transaction(), 0).unwrap_err();
+        assert!(matches!(error, Error::Usage(_)));
+        assert!(error.to_string().contains("not failed"), "{error}");
+        assert_eq!(state_of(&service, 0x11), DepositState::Submitted);
+        let error = service.retry(sample_transaction(), 7).unwrap_err();
+        assert!(error.to_string().contains("no deposit"), "{error}");
+    }
+
+    /// Claim: `retry` of a failed deposit whose nonce the vault already paid marks it `confirmed`, not `seen`.
+    /// Why it matters: a second withdrawal of a paid nonce can only revert, and the deposit is delivered.
+    #[test]
+    fn retry_confirms_a_deposit_whose_nonce_is_claimed() {
+        let script = Script::new();
+        let (mut service, _) = service_with(&script, Store::open_in_memory().unwrap());
+        fail_deposit(&script, &mut service);
+        script.claimed.set(true);
+        let (_, outcome) = service.retry(sample_transaction(), 0).unwrap();
+        assert_eq!(outcome, RetryOutcome::AlreadyPaid);
+        assert_eq!(state_of(&service, 0x11), DepositState::Confirmed);
+        assert_eq!(script.sends.get(), 0);
     }
 }

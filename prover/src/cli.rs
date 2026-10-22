@@ -1,4 +1,4 @@
-//! The command line: `run`, `once`, `status`, `withdraw` and `route-health`.
+//! The command line: `run`, `once`, `status`, `withdraw`, `retry` and `route-health`.
 //!
 //! The command line never carries a key. [`reject_secret_arguments`] runs before any parsing and refuses a flag
 //! that names a secret, and any argument that looks like a 32-byte key. The only way to give a key is
@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 use crate::logging::Logger;
 use crate::route::build_routes;
 use crate::route_health::{self, HealthSettings, OutputFormat};
-use crate::service::{Service, ServiceSettings};
+use crate::service::{RetryOutcome, Service, ServiceSettings};
 use crate::signer::Signer;
 use crate::store::Store;
 use alloy_primitives::B256;
@@ -44,6 +44,16 @@ pub enum Command {
     Status,
     /// Withdraw one deposit by hand. No proof is involved: the vault checks the evidence.
     Withdraw {
+        /// The hash of the deposit transaction on the source chain.
+        #[arg(long)]
+        tx: String,
+        /// The index of the `DepositInitiated` log inside the receipt of that transaction.
+        #[arg(long)]
+        log_index: u64,
+    },
+    /// Send a failed deposit back to the start, with its attempts reset. Use it when the cause of the failure is gone.
+    /// A deposit that is not failed is refused. A deposit that the vault already paid becomes confirmed.
+    Retry {
         /// The hash of the deposit transaction on the source chain.
         #[arg(long)]
         tx: String,
@@ -219,6 +229,7 @@ fn build_service(
         Logger::standard(),
         ServiceSettings {
             max_attempts: config.max_attempts,
+            max_withdrawals_per_pass: config.max_withdrawals_per_pass,
         },
         routes,
     ))
@@ -261,6 +272,19 @@ pub fn run(
                 "deposit {nonce:#x} processed; run `status` to see its state"
             )
             .map_err(|e| Error::Usage(e.to_string()))?;
+            Ok(0)
+        }
+        Command::Retry { tx, log_index } => {
+            let hash = parse_hash(tx)?;
+            let (nonce, outcome) = build_service(&config, &cli, lookup)?.retry(hash, *log_index)?;
+            let message = match outcome {
+                RetryOutcome::Restarted => "is back in seen; the next pass works on it",
+                RetryOutcome::AlreadyPaid => {
+                    "was already paid on the destination chain; it is now confirmed"
+                }
+            };
+            writeln!(out, "deposit {nonce:#x} {message}")
+                .map_err(|error| Error::Usage(error.to_string()))?;
             Ok(0)
         }
         Command::RouteHealth {
@@ -410,6 +434,16 @@ mod tests {
                 "c.toml",
                 "withdraw",
                 &format!("--tx={tx}"),
+                "--log-index",
+                "0",
+            ]),
+            args(&[
+                "p",
+                "--config",
+                "c.toml",
+                "retry",
+                "--tx",
+                &tx,
                 "--log-index",
                 "0",
             ]),

@@ -117,6 +117,7 @@ fn one_pass(bridge: &Bridge, crash_at: CrashAt) {
         logger,
         ServiceSettings {
             max_attempts: config.max_attempts,
+            max_withdrawals_per_pass: config.max_withdrawals_per_pass,
         },
         routes,
     )

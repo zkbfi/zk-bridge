@@ -6,6 +6,7 @@ database_path = "prover.sqlite"
 poll_interval_seconds = 12
 receipt_timeout_seconds = 60
 max_attempts = 5
+max_withdrawals_per_pass = 32   # withdrawals built and sent per route in one pass
 log_block_range = 2000
 # routes = ["a_to_b", "b_to_a"]   # default: both directions
 

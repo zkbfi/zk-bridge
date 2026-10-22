@@ -290,6 +290,18 @@ impl Store {
         Ok(!before)
     }
 
+    /// The deposit that a source log made, found by its transaction hash and its log index inside the receipt.
+    pub fn find_by_source(
+        &self,
+        transaction_hash: B256,
+        log_index: u64,
+    ) -> Result<Option<DepositRecord>> {
+        Ok(self.list(None)?.into_iter().find(|record| {
+            record.deposit.transaction_hash == transaction_hash
+                && record.deposit.log_index == log_index
+        }))
+    }
+
     /// The deposits of a route that no terminal state ends, oldest block first.
     pub fn active(&self, route: &str) -> Result<Vec<DepositRecord>> {
         Ok(self
@@ -325,6 +337,20 @@ impl Store {
             )));
         }
         Ok((record.state, next))
+    }
+
+    /// Moves a failed deposit back to `seen`: resets the attempt count, drops the stored calldata and transaction
+    /// hash, and stores the note. The next pass builds the withdrawal again.
+    ///
+    /// # Errors
+    /// `Error::Usage` when the deposit is not failed.
+    pub fn retry_failed(&self, nonce: B256, note: &str) -> Result<(DepositState, DepositState)> {
+        let change = self.apply(nonce, Event::Retried, Some(note))?;
+        self.connection.execute(
+            "UPDATE deposits SET attempts = 0, calldata = NULL, withdrawal_transaction = NULL, updated_at = ?1 WHERE nonce = ?2",
+            params![now(), format!("{nonce:#x}")],
+        )?;
+        Ok(change)
     }
 
     /// Stores the withdrawal calldata.
@@ -426,6 +452,46 @@ mod tests {
         assert_eq!(record.state, DepositState::Proven);
         assert_eq!(record.calldata, Some(vec![1, 2, 3]));
         assert_eq!(store.list(None).unwrap().len(), 1);
+    }
+
+    /// Claim: a retry moves a failed deposit to `seen` with no attempts, no calldata and no transaction hash, and
+    /// keeps the note. A deposit that is not failed is refused and left alone.
+    /// Why it matters: stale calldata or a stale attempt count would carry the old failure into the new try.
+    #[test]
+    fn retry_resets_a_failed_deposit_and_refuses_the_rest() {
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .record_scan("a_to_b", &[sample_deposit(0x33, 3)], 3)
+            .unwrap();
+        let nonce = B256::repeat_byte(0x33);
+        assert!(store.retry_failed(nonce, "too early").is_err());
+        store.apply(nonce, Event::LightClientCovers, None).unwrap();
+        store.apply(nonce, Event::WithdrawalBuilt, None).unwrap();
+        store.set_calldata(nonce, &[9]).unwrap();
+        store
+            .set_withdrawal_transaction(nonce, B256::repeat_byte(0x44))
+            .unwrap();
+        store.record_attempt(nonce, "boom").unwrap();
+        store
+            .apply(nonce, Event::Rejected, Some("gave up"))
+            .unwrap();
+
+        store.retry_failed(nonce, "retried by hand").unwrap();
+        let record = store.get(nonce).unwrap().unwrap();
+        assert_eq!(record.state, DepositState::Seen);
+        assert_eq!(record.attempts, 0);
+        assert_eq!(record.calldata, None);
+        assert_eq!(record.withdrawal_transaction, None);
+        assert_eq!(record.note.as_deref(), Some("retried by hand"));
+        let found = store
+            .find_by_source(B256::repeat_byte(0xcc), 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.deposit.nonce, nonce);
+        assert!(store
+            .find_by_source(B256::repeat_byte(0xcc), 1)
+            .unwrap()
+            .is_none());
     }
 
     /// Claim: the cursor never moves backwards.

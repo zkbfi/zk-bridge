@@ -35,7 +35,7 @@ enum Kind {
 }
 
 /// Every key that an environment variable may override.
-const OVERRIDES: [(&str, Kind); 19] = [
+const OVERRIDES: [(&str, Kind); 20] = [
     ("database_path", Kind::Text),
     ("poll_interval_seconds", Kind::Integer),
     ("receipt_timeout_seconds", Kind::Integer),
@@ -55,6 +55,7 @@ const OVERRIDES: [(&str, Kind); 19] = [
     ("chain_b.beacon.url", Kind::Text),
     ("chain_b.beacon.finality_depth", Kind::Integer),
     ("max_attempts", Kind::Integer),
+    ("max_withdrawals_per_pass", Kind::Integer),
 ];
 
 /// A route is one direction: deposits on the source chain, withdrawals on the destination chain.
@@ -180,6 +181,9 @@ fn default_receipt_timeout() -> u64 {
 fn default_attempts() -> u32 {
     5
 }
+fn default_withdrawals_per_pass() -> usize {
+    32
+}
 fn default_log_range() -> u64 {
     2_000
 }
@@ -202,6 +206,9 @@ pub struct Config {
     /// How many failed attempts a deposit gets before it is marked failed.
     #[serde(default = "default_attempts")]
     pub max_attempts: u32,
+    /// The most withdrawals that one route builds and sends in one pass.
+    #[serde(default = "default_withdrawals_per_pass")]
+    pub max_withdrawals_per_pass: usize,
     /// The largest block range of one `eth_getLogs` call.
     #[serde(default = "default_log_range")]
     pub log_block_range: u64,
@@ -379,6 +386,11 @@ impl Config {
         }
         if self.max_attempts == 0 {
             return Err(Error::Config("max_attempts must be at least 1".into()));
+        }
+        if self.max_withdrawals_per_pass == 0 {
+            return Err(Error::Config(
+                "max_withdrawals_per_pass must be at least 1".into(),
+            ));
         }
         if self.log_block_range == 0 {
             return Err(Error::Config("log_block_range must be at least 1".into()));

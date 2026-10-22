@@ -10,6 +10,7 @@ zk-bridge-prover --config prover.toml once                      # one pass, then
 zk-bridge-prover --config prover.toml run                       # loop
 zk-bridge-prover --config prover.toml status                    # print every deposit and its state
 zk-bridge-prover --config prover.toml withdraw --tx <hash> --log-index <n>   # n = index inside the receipt
+zk-bridge-prover --config prover.toml retry --tx <hash> --log-index <n>      # send a failed deposit back to the start
 zk-bridge-prover --config prover.toml --private-key-env NAME once            # local Anvil only
 ```
 
@@ -18,6 +19,43 @@ The command line never takes a key. Use a Foundry keystore and a password file (
 Deposit states: `seen`, `awaiting_finality`, `light_client_updated`, `proven`, `submitted`, `confirmed`, `failed`.
 `proven` means the service built the withdrawal and `lc-core` verified it natively. A withdrawal needs no proof.
 Only light-client updates are proven.
+
+## Bursts of deposits
+
+Each pass works on all live deposits of a route in four stages. The stages keep a burst of deposits cheap.
+
+1. Light-client update. The service asks for the update for the oldest deposit, then for the newest. One update covers
+   every deposit at or below its head, so it sends one update per route per pass when a deposit needs it. The oldest
+   deposit goes first because the vault layout rows need a stored header near the oldest deposit.
+2. Build. The service builds and checks the withdrawal of each covered deposit.
+3. Send. The service sends the withdrawals back to back. It does not wait for a receipt, so the transactions use
+   consecutive nonces and share blocks. The flow-limiter simulation, the check for an already claimed nonce and the
+   count of attempts still run for each deposit.
+4. Confirm. The service waits for the receipts.
+
+A failure of one deposit costs that deposit one attempt. The other deposits go on. Before a transaction is sent, the
+service records nothing. After it is sent, the service records the hash and the state `submitted` at once. A crash
+between the two steps leaves the deposit `proven`. The next pass finds the nonce claimed, or sends it again.
+
+`max_withdrawals_per_pass` (default 32) limits how many withdrawals a route builds and how many it sends in one pass.
+A larger burst takes more passes. The update is still sent once.
+
+## Retry of a failed deposit
+
+A deposit in the state `failed` does not move by itself. Use `retry` when the cause is gone, for example when a
+reverted chain removed a light-client update and the update was sent again.
+
+```
+zk-bridge-prover --config prover.toml retry --tx <hash> --log-index <n>   # the same pair as `withdraw`
+```
+
+`retry` finds the deposit by the hash of its source transaction and its log index. These are stored with the deposit,
+so `retry` needs no chain read for that. It then does one of three things.
+
+- The deposit is not `failed`: `retry` refuses and changes nothing.
+- The vault already paid the nonce: the deposit becomes `confirmed`.
+- Otherwise the deposit goes back to `seen`. The attempt count is zero. The stored calldata and transaction hash are
+  cleared, so the next pass builds the withdrawal again. The note keeps the reason of the failure.
 
 ## Own-chain light client
 
