@@ -11,6 +11,7 @@
 use crate::chain::{ChainSpec, DOMAIN_SYNC_COMMITTEE, SYNC_COMMITTEE_SIZE};
 use crate::error::{Error, Result};
 use crate::layout::{execution_header_form_for_fork, ExecutionHeaderForm};
+use crate::profile::tracked;
 use crate::ssz::{byte_list_root, byte_vector_root, hash_pair, merkleize, u64_chunk};
 use alloy_primitives::{Address, FixedBytes, B256, U256};
 
@@ -66,8 +67,10 @@ impl SyncCommittee {
         if self.pubkeys.len() != SYNC_COMMITTEE_SIZE {
             return Err(Error::InvalidSyncCommitteeSize { actual: self.pubkeys.len() });
         }
-        let key_roots: Vec<B256> = self.pubkeys.iter().map(|key| byte_vector_root(key.as_slice())).collect();
-        Ok(hash_pair(&merkleize(&key_roots), &byte_vector_root(self.aggregate_pubkey.as_slice())))
+        Ok(tracked("committee_hash", || {
+            let key_roots: Vec<B256> = self.pubkeys.iter().map(|key| byte_vector_root(key.as_slice())).collect();
+            hash_pair(&merkleize(&key_roots), &byte_vector_root(self.aggregate_pubkey.as_slice()))
+        }))
     }
 }
 

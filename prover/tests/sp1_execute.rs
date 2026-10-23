@@ -164,6 +164,93 @@ fn light_client_guest_agrees_with_lc_core_on_a_fold() {
     }
 }
 
+/// The sections that `lc_core::profile::tracked` names in the signature check and its callers.
+const PROFILED_SECTIONS: [&str; 7] = [
+    "committee_hash",
+    "merkle_branch",
+    "decompress_pubkeys",
+    "aggregate_pubkeys",
+    "decompress_signature",
+    "hash_to_curve",
+    "pairing",
+];
+
+/// The instruction count of one run of a profiling ELF, which repeats the section `label` (none for an empty label).
+fn instructions_with_repeated_section(elf: &[u8], input: &[u8], label: &str) -> u64 {
+    use sp1_sdk::blocking::Prover as _;
+    static CLIENT: std::sync::OnceLock<sp1_sdk::blocking::CpuProver> = std::sync::OnceLock::new();
+    let client = CLIENT.get_or_init(|| sp1_sdk::blocking::ProverClient::builder().cpu().build());
+    let mut stdin = sp1_sdk::SP1Stdin::new();
+    stdin.write_vec(input.to_vec());
+    stdin.write_vec(label.as_bytes().to_vec());
+    let (_, report) = client
+        .execute(sp1_sdk::Elf::from(elf), stdin)
+        .run()
+        .expect("executor runs");
+    assert_eq!(
+        report.exit_code, 0,
+        "the guest accepts (repeating {label:?})"
+    );
+    report.total_instruction_count()
+}
+
+/// Prints the instruction count of every section on `input`: the cost of the section is the count of a run that
+/// repeats it, minus the count of a run that repeats nothing (see `lc_core::profile`). `rest` is the remainder.
+fn print_sections(label: &str, elf: &[u8], input: &[u8]) {
+    let total = instructions_with_repeated_section(elf, input, "");
+    let mut rest = total;
+    for section in PROFILED_SECTIONS {
+        let cost = instructions_with_repeated_section(elf, input, section) - total;
+        rest -= cost;
+        eprintln!("profile {label} | {section}: {cost}");
+    }
+    eprintln!("profile {label} | rest: {rest}");
+    eprintln!("profile {label} | total: {total}");
+}
+
+/// The profiling tests below print the instruction count per section of the signature check, on the real updates of both
+/// chains, on a fold and on a fork observation. Run them by hand, one at a time, with ELFs built with
+/// `--features section-profile` in the guest directories: set `SP1_LIGHT_CLIENT_ELF` and `SP1_FORK_OBSERVATION_ELF`
+/// to them and pass `--ignored --nocapture`.
+fn profile_light_client(label: &str, input: &UpdateInput) {
+    let elf = std::fs::read(light_client_elf_path()).expect("light-client ELF");
+    print_sections(label, &elf, &guest_input_bytes(input));
+}
+
+#[test]
+#[ignore = "profiling: needs ELFs built with --features section-profile"]
+fn profile_the_signature_check_on_a_real_ethereum_update() {
+    profile_light_client("real ethereum update", &real_ethereum_input());
+}
+
+#[test]
+#[ignore = "profiling: needs ELFs built with --features section-profile"]
+fn profile_the_signature_check_on_a_real_pulsechain_update() {
+    profile_light_client("real pulsechain update", &real_pulsechain_input());
+}
+
+#[test]
+#[ignore = "profiling: needs ELFs built with --features section-profile"]
+fn profile_the_signature_check_on_a_fold_of_three() {
+    let (spec, period) = chains()[0];
+    profile_light_client(
+        "fold of three on pulsechain",
+        &synthetic_fold_input(spec, period),
+    );
+}
+
+#[test]
+#[ignore = "profiling: needs ELFs built with --features section-profile"]
+fn profile_the_signature_check_on_a_fork_observation() {
+    let elf = std::fs::read(fork_observation_elf_path()).expect("fork observation ELF");
+    let (spec, period) = chains()[0];
+    print_sections(
+        "fold of three and an observation on pulsechain",
+        &elf,
+        &observation_input(spec, period, 400),
+    );
+}
+
 /// Claim: the executor refuses a real update that the guest must reject (a wrong fork version in the signing domain),
 /// and `lc-core` refuses the same input. The control, with the right version, is accepted.
 /// Why it matters: a rejecting guest is what makes a false update unprovable.
@@ -366,6 +453,7 @@ fn full_groth16_proof_of_a_real_update() {
             "publicValues": alloy_primitives::hex::encode_prefixed(&proof.public_values),
             "proof": alloy_primitives::hex::encode_prefixed(&proof.proof_bytes),
         });
-        std::fs::write(&path, serde_json::to_string_pretty(&fixture).expect("json")).expect("write the proof fixture");
+        std::fs::write(&path, serde_json::to_string_pretty(&fixture).expect("json"))
+            .expect("write the proof fixture");
     }
 }

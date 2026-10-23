@@ -19,6 +19,7 @@ pub mod json;
 pub mod layout;
 pub mod mpt;
 pub mod observation;
+pub mod profile;
 pub mod receipts;
 pub mod ssz;
 pub mod ssz_state;

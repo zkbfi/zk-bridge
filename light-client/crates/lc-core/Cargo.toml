@@ -10,6 +10,8 @@ publish.workspace = true
 default = []
 # JSON parsers for node answers (`lc_core::json`). The light-client guests do not enable it.
 json = ["dep:serde_json"]
+# Section profiling for the guests (`lc_core::profile`): `tracked` runs one named section twice. The shipped guests leave it off.
+section-profile = []
 
 [dependencies]
 alloy-primitives.workspace = true

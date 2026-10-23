@@ -27,11 +27,12 @@
 //! header from the future, so the program alone cannot exclude it.
 
 use crate::abi::LightClientOutput;
-use crate::bls::fast_aggregate_verify;
+use crate::bls::verify_aggregate_by_subtraction;
 use crate::chain::DOMAIN_SYNC_COMMITTEE;
 use crate::chain::{ChainSpec, GENESIS_SLOT, MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZE};
 use crate::error::{Error, Result};
 use crate::layout::{execution_header_form_for_fork, state_layout_for_fork, StateLayout, EXECUTION_PAYLOAD_GINDEX};
+use crate::profile::tracked;
 use crate::ssz::is_valid_normalized_merkle_branch;
 use crate::types::{
     compute_domain, compute_signing_root, LightClientHeader, LightClientStore, LightClientUpdate, SyncAggregate,
@@ -55,6 +56,11 @@ pub struct FoldStep {
 /// Chooses the beacon state layout for the fork of the attested header. Tests replace it to model the "wrong fork" attack.
 pub type StateLayoutSelector = fn(crate::chain::ForkName) -> Result<StateLayout>;
 
+/// [`is_valid_normalized_merkle_branch`] under the profile label `merkle_branch`.
+fn branch_is_valid(leaf: &B256, branch: &[B256], gindex: u64, root: &B256) -> bool {
+    tracked("merkle_branch", || is_valid_normalized_merkle_branch(leaf, branch, gindex, root))
+}
+
 /// Checks the execution payload branch of one light-client header (`is_valid_light_client_header`, Capella and later).
 ///
 /// # Errors
@@ -62,12 +68,7 @@ pub type StateLayoutSelector = fn(crate::chain::ForkName) -> Result<StateLayout>
 pub fn verify_execution_branch(spec: &ChainSpec, header: &LightClientHeader, which: &'static str) -> Result<()> {
     execution_header_form_for_fork(spec.fork_at_slot(header.beacon.slot))?;
     let leaf = header.execution.hash_tree_root_for_slot(spec, header.beacon.slot)?;
-    let valid = is_valid_normalized_merkle_branch(
-        &leaf,
-        &header.execution_branch,
-        EXECUTION_PAYLOAD_GINDEX,
-        &header.beacon.body_root,
-    );
+    let valid = branch_is_valid(&leaf, &header.execution_branch, EXECUTION_PAYLOAD_GINDEX, &header.beacon.body_root);
     if valid {
         return Ok(());
     }
@@ -79,7 +80,8 @@ pub fn verify_execution_branch(spec: &ChainSpec, header: &LightClientHeader, whi
 /// The committee signs the root of the block that precedes the signing block. The domain is built from
 /// `fork_version` and the genesis validators root of `spec`. The fork version is an input, not a table lookup.
 /// This is safe: the domain is part of what the committee signed, so a wrong version gives no valid signature.
-/// It does not check the participation threshold.
+/// It does not check the participation threshold. The signer key comes from `committee.aggregate_pubkey`, which the
+/// committee hash binds (see [`verify_aggregate_by_subtraction`]), so the caller must use a committee that the output binds.
 ///
 /// # Errors
 /// Any [`Error`] from the BLS check.
@@ -93,16 +95,16 @@ pub fn verify_sync_aggregate(
     if committee.pubkeys.len() != SYNC_COMMITTEE_SIZE {
         return Err(Error::InvalidSyncCommitteeSize { actual: committee.pubkeys.len() });
     }
-    let participants: Vec<_> = committee
-        .pubkeys
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| aggregate.is_set(*index))
-        .map(|(_, key)| *key)
-        .collect();
+    let absent: Vec<usize> = (0..SYNC_COMMITTEE_SIZE).filter(|index| !aggregate.is_set(*index)).collect();
     let domain = compute_domain(DOMAIN_SYNC_COMMITTEE, fork_version, &spec.genesis_validators_root);
     let signing_root = compute_signing_root(signed_root, &domain);
-    fast_aggregate_verify(&participants, &signing_root, &aggregate.sync_committee_signature)
+    verify_aggregate_by_subtraction(
+        &committee.aggregate_pubkey,
+        &committee.pubkeys,
+        &absent,
+        &signing_root,
+        &aggregate.sync_committee_signature,
+    )
 }
 
 /// The fork version from the fork table of `spec`, for the slot before `signature_slot`.
@@ -211,7 +213,7 @@ pub fn verify_with_layout(
     // State proofs from the attested state root. The layout follows the fork of the attested slot.
     let layout = select_layout(spec.fork_at_slot(attested.beacon.slot))?;
     let finalized_root = finalized.beacon.hash_tree_root();
-    if !is_valid_normalized_merkle_branch(
+    if !branch_is_valid(
         &finalized_root,
         &update.finality_branch,
         layout.finalized_root_gindex,
@@ -223,7 +225,7 @@ pub fn verify_with_layout(
     let mut proven_next_hash = None;
     if let Some(next) = &update.next_sync_committee {
         let committee_root = next.committee.hash_tree_root()?;
-        if !is_valid_normalized_merkle_branch(
+        if !branch_is_valid(
             &committee_root,
             &next.branch,
             layout.next_sync_committee_gindex,

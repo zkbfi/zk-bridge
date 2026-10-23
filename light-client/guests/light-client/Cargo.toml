@@ -12,6 +12,10 @@ publish = false
 # Standalone workspace root, so cargo does not look for the light-client workspace above this directory.
 [workspace]
 
+# Section profiling (see lc_core::profile and prover/tests/sp1_execute.rs). The program keys come from builds without it.
+[features]
+section-profile = ["lc-core/section-profile"]
+
 [dependencies]
 lc-core = { path = "../../crates/lc-core" }
 sp1-zkvm = "=6.8.0" # published 2026-09-11. The build works with 6.8.0, so the older release stays.

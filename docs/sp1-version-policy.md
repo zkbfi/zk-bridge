@@ -27,9 +27,10 @@ The repository never installs the SP1 toolchain with `sp1up` or a `curl | bash` 
 
 | Program | ELF SHA-256 | Program key |
 |---|---|---|
-| Light client | `5babfe2b6501779e0524cc33e01d5c15576f44c1c5aa66a3335a03d6fa87ea93` | `0x00a2b556cd72b5d838b34c60b0367e1ffc9ab662d4e6aabca23e3682b0f5584b` |
-| Fork observation | `f22877570740a8da2819a21dbc909f388f61ea38c71c7f12abf69776b05e2a2a` | `0x0067530c734ee67a44e7954dcb9e54610f9893eb77d16d4b8c07ae0f2bce2cdd` |
+| Light client | `203cfe771e23b4f32028b019e2357432fdda15825877f21e635b0a3ddefeecc2` | `0x00ae8429b1bb3ed61eee12f070e5e3b5dcb388fc67c5550a13b331ac57608bbe` |
+| Fork observation | `52cfb556cb00d884b550949e1f7b6ba92f24283fe2a542147957d1eed54e258e` | `0x00db44aeb84b7d18ea73fd9c4594a06400fc10de8e8104fc1c6542899778cef0` |
 
+The two programs changed on 2026-10-23: the signature check takes the signer key from the committee aggregate key minus the keys of the absent members, and it ends in one final exponentiation. The keys above are the new ones. Any key deployed before that date belongs to the earlier programs.
 The values come from the Docker build and live in `light-client/program-keys.json`. To check them, run `light-client/scripts/program-keys.sh`. It exits with a non-zero code when a value differs.
 A native build (`cargo prove build` without `--docker`) gives different ELF hashes and keys, because the output depends on the build machine. Deploy only the Docker keys.
 These keys are the values for `programVKey` (light client) and `observationProgramVKey` (fork observation) in the deploy configuration.
@@ -50,7 +51,7 @@ How I confirmed that this release matches `sp1-sdk` 6.8.1:
 3. The constant `VK_ROOT_BYTES` in the same crate equals `VK_ROOT()`.
 4. Release v6.1.1 changed only the compiler pragma of the circuit v6.1.0 verifier, as its notes say. Release v6.0.0 has another circuit (selector `0x0e78f4db`) and refuses every proof of this SDK.
 
-The release ships no proof for circuit v6.1.0. Its one real proof is for circuit v6.0.0. `test/hardened/SP1VerifierGroth16.t.sol` uses that proof with the v6.0.0 verifier (test use only) to show that a good proof is accepted and that a tampered proof, tampered public values and a wrong program key are refused. For the v6.1.0 verifier the same file checks the constants and the refusals that need no valid proof: wrong selector, proof of another circuit, non-zero exit code, proof of zeros and a short proof. The first accepting test for v6.1.0 needs a proof from the server (see `docs/server-prover.md`).
+The release ships no proof for circuit v6.1.0. Its one real proof is for circuit v6.0.0. Our own prover made a real proof for circuit v6.1.0: `test/hardened/fixtures/sp1-proof-ethereum-update.json` holds the light-client program on a real Ethereum update. `test/hardened/SP1VerifierGroth16.t.sol` runs it against the vendored v6.1.0 verifier. The verifier accepts it (about 226,000 gas for the call), and it refuses a proof with one changed bit in any public value word, in the nonce or in any proof word, a proof under another program key, and a proof with a changed selector, exit code or key root. The same file checks the constants and the refusals that need no valid proof: wrong selector, proof of another circuit, non-zero exit code, proof of zeros and a short proof. The release proof for circuit v6.0.0 still runs against the v6.0.0 verifier (test use only). `docs/end-to-end-real-proofs.md` shows the same verifier on two Anvil chains, with proofs that the prover made during the run.
 
 ### Code hash for `verifierCodeHash`
 

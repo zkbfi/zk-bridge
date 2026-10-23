@@ -12,6 +12,9 @@ sp1_zkvm::entrypoint!(main);
 
 pub fn main() {
     let input = sp1_zkvm::io::read_vec();
+    // Profiling builds read a second buffer: the label of the section that runs twice (see `lc_core::profile`).
+    #[cfg(feature = "section-profile")]
+    lc_core::profile::repeat_section(String::from_utf8(sp1_zkvm::io::read_vec()).expect("the label is text"));
     let public_values = lc_core::wire::run_fork_observation_guest(&input).expect("fork observation must verify");
     sp1_zkvm::io::commit_slice(&public_values);
 }

@@ -50,6 +50,13 @@ The host program is `Sp1Prover` in `prover/src/prover.rs` (feature `sp1`). It bu
 Solidity side checks the proof with the gateway `ISP1Verifier.verifyProof(programVKey, publicValues, proof)`.
 The program keys go into the deploy configuration as `programVKey` and `observationProgramVKey`. See `docs/sp1-version-policy.md` for the current values.
 
+## Profile the signature check
+
+The executor reports one instruction count for a whole run. Its cycle tracker needs the executor feature `profiling`, which pulls extra crates. The repository measures a section by difference instead (`lc_core::profile`).
+Build a guest with the feature `section-profile` (`cargo prove build --locked --features section-profile`). That build reads a second input buffer: the label of one section. It runs that section twice.
+The ignored tests `profile_the_signature_check_on_*` in `prover/tests/sp1_execute.rs` run each section this way and print the instruction count of the section, the rest and the total.
+Point `SP1_LIGHT_CLIENT_ELF` and `SP1_FORK_OBSERVATION_ELF` at the profiling ELFs. The program keys come from builds without the feature, and those builds contain no profiling code.
+
 ## Dependency age rule
 
 Every crate version in each `Cargo.lock` must be at least 28 days old. To check a guest lock file, copy it to a scratch directory as `Cargo.lock`
