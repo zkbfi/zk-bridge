@@ -110,6 +110,18 @@ pub fn verify_update_natively(input: &UpdateInput) -> Result<LightClientOutput> 
         .map_err(|error| Error::VerificationRefused(error.to_string()))
 }
 
+/// Runs the light-client program natively on its guest input bytes and returns its public values.
+///
+/// Calls `lc_core::wire::run_light_client_guest`, the same function the SP1 guest wraps. A worker uses it, because it
+/// receives the input bytes and not an [`UpdateInput`].
+///
+/// # Errors
+/// `Error::VerificationRefused` with the rule that failed. No proof exists for such an input.
+pub fn verify_light_client_natively(guest_input: &[u8]) -> Result<Vec<u8>> {
+    lc_core::wire::run_light_client_guest(guest_input)
+        .map_err(|error| Error::VerificationRefused(error.to_string()))
+}
+
 /// Runs the fork observation program natively on its guest input bytes and returns its public values.
 ///
 /// Calls `lc_core::wire::run_fork_observation_guest`, the same function the SP1 guest wraps. It checks the fold

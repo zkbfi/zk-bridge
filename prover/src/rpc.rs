@@ -24,7 +24,7 @@ pub trait JsonRpc: Send + Sync {
     fn call(&self, method: &str, params: Value) -> Result<Value>;
 }
 
-fn build_agent(timeout: Duration) -> ureq::Agent {
+pub(crate) fn build_agent(timeout: Duration) -> ureq::Agent {
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
         .http_status_as_error(false)

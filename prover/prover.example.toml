@@ -21,9 +21,16 @@ password_file = "keys/prover.password"
 # password_file = "keys/oracle.password"
 
 [prover]
-backend = "oracle"          # "sp1" needs a build with the cargo feature `sp1` (docs/server-prover.md)
+backend = "oracle"          # "sp1" needs a build with the cargo feature `sp1` (docs/server-prover.md); "remote" needs none (docs/gpu-prover.md)
 # sp1_elf_path = "/elf/light-client.elf"                  # backend "sp1": the light-client guest program
 # sp1_observation_elf_path = "/elf/fork-observation.elf"  # backend "sp1": the fork observation guest program
+# backend "remote" sends proof jobs to a GPU worker (docs/gpu-prover.md). The API key is read from the environment variable that
+# remote_api_key_env names. It never goes in this file.
+# remote_url = "https://REPLACE"
+# remote_api_key_env = "RUNPOD_API_KEY"
+# remote_timeout_seconds = 900
+# remote_attempts = 4
+# remote_retry_delay_seconds = 10
 program_vkey = "0x0000000000000000000000000000000000000000000000000000000000000000"  # REPLACE: must equal programVKey() of both light clients
 
 # Chain A. Its light client tracks chain B's beacon chain. Its [beacon] section describes chain A's own beacon chain.

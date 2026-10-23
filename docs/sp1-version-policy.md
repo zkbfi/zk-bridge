@@ -9,6 +9,7 @@ This policy answers gap G-02 in `docs/zk-bridge-comparison.md`. The light client
 | Guest library `sp1-zkvm` | `=6.8.0` | `light-client/guests/light-client/Cargo.toml`, `light-client/guests/fork-observation/Cargo.toml` |
 | Precompile patches | tags `patch-*-sp1-6.0.0` | the same files |
 | Prover library `sp1-sdk` | `=6.8.1` (crates.io, published 2026-09-24), local processor only, feature `network` off | `prover/Cargo.toml`, feature `sp1` |
+| GPU worker | `sp1-sdk` feature `cuda` (crate `sp1-cuda` `=6.8.1`, published 2026-09-24), GPU server release v6.8.1 pinned by SHA-256 hash in `docker/Dockerfile`, `sp1-verifier` `=6.8.1` for local checks of remote proofs | `prover/Cargo.toml`, `docs/gpu-prover.md` |
 | On-chain verifier | SP1 contracts release `v6.1.1`, verifier of circuit `v6.1.0`, vendored in `src/hardened/vendor/sp1-contracts/`. The code hash goes in `verifierCodeHash` for each chain. | `script/hardened/bridge.config.example.json`, checked by `script/hardened/DeployBridge.s.sol` |
 | Program keys | `programVKey` and the observation key | the deploy config |
 

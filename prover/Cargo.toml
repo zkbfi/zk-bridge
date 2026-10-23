@@ -20,6 +20,12 @@ name = "zk-bridge-prover"
 path = "src/main.rs"
 
 # Bots and a beacon stub for the local network in docker/. Development only: it needs the feature `dev-source`.
+# The GPU worker for RunPod Serverless. It needs the feature `sp1-cuda` and, to run, an NVIDIA GPU. See docs/gpu-prover.md.
+[[bin]]
+name = "prove-worker"
+path = "src/bin/prove_worker.rs"
+required-features = ["sp1-cuda"]
+
 [[bin]]
 name = "local-network"
 path = "src/bin/local_network.rs"
@@ -42,6 +48,10 @@ sp1 = ["dep:sp1-sdk"]
 # `sp1` plus the native Groth16 wrapper (Go code that sp1-sdk compiles). Without it, sp1-sdk runs the Groth16 step in a
 # Docker container. The server image uses this feature. It needs a Go toolchain at build time.
 sp1-native-gnark = ["sp1", "sp1-sdk/native-gnark"]
+# `sp1` plus the CUDA client of sp1-sdk. The client starts or finds the SP1 GPU server of the same release (the
+# worker image installs it). Building needs no CUDA toolkit; running needs an NVIDIA GPU. It builds the `prove-worker`
+# binary. The `remote` backend needs none of this: it is in the default build.
+sp1-cuda = ["sp1", "sp1-sdk/cuda"]
 
 [dependencies]
 # The light-client crates. Every call goes through src/light_client.rs.
@@ -55,6 +65,7 @@ alloy-sol-types = { version = "=1.7.3", default-features = false, features = ["s
 alloy-rlp = { version = "=0.3.16", default-features = false, features = ["std"] } # 2026-07-03
 serde = { version = "=1.0.229", features = ["derive"] } # 2026-07-18
 serde_json = { version = "=1.0.151" } # 2026-07-20
+tiny_http = { version = "=0.12.0", default-features = false } # 2022-10-06
 ureq = { version = "=3.4.2", default-features = false, features = ["rustls", "gzip"] } # 2026-09-13
 rusqlite = { version = "=0.40.2", features = ["bundled"] } # 2026-08-08
 toml = { version = "=0.9.8", default-features = false, features = ["parse", "serde"] } # 2025-10-09
@@ -63,6 +74,9 @@ k256 = { version = "=0.13.4", default-features = false, features = ["ecdsa", "st
 scrypt = { version = "=0.11.0", default-features = false, features = ["std"] } # 2023-03-05
 aes = { version = "=0.8.4" } # 2024-02-13
 ctr = { version = "=0.9.2" } # 2022-09-30
+
+# Verifies an SP1 Groth16 proof (no_std crate, the `full` feature stays off). Published 2026-09-24.
+sp1-verifier = { version = "=6.8.1", default-features = false, features = ["std"] } # 2026-09-24
 
 # The SP1 prover, local CPU only (the feature `network` of sp1-sdk stays off). Published 2026-09-24.
 sp1-sdk = { version = "=6.8.1", default-features = false, features = ["blocking"], optional = true } # 2026-09-24

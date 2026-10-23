@@ -4,6 +4,8 @@ This document explains how to run the production prover on your own server. The 
 
 The proving code is `Sp1Prover` in `prover/src/prover.rs`. It is behind the cargo feature `sp1`, which is off by default. The server image uses the feature `sp1-native-gnark`, which adds the in-process Groth16 wrapper.
 
+To prove on a rented GPU instead of a server of your own, see `docs/gpu-prover.md`.
+
 ## What the prover does
 
 1. It builds the guest input for a statement. A statement is a light-client update (or a fold of up to 64 updates), or a fork observation.

@@ -5,6 +5,10 @@
 #   target prover-sp1   The production prover for a server: linux/amd64, feature sp1-native-gnark, the two SP1 guest ELFs.
 #                       Build: docker build --platform linux/amd64 --target prover-sp1 -f docker/Dockerfile .
 #                       Needs about 8 GB of memory to build. See docs/server-prover.md. Do not build it on the 2 GB VM.
+#   target prover-gpu-worker   The proving worker for a GPU host (RunPod Serverless): linux/amd64, feature sp1-cuda, the two
+#                       SP1 guest ELFs and the SP1 GPU server of the same release. It runs only on an NVIDIA GPU with
+#                       about 24 GB of video memory. Build: docker build --platform linux/amd64 --target prover-gpu-worker
+#                       -f docker/Dockerfile .  See docs/gpu-prover.md.
 #
 # The chains run from the Foundry image itself, so they need no target here.
 #
@@ -13,6 +17,10 @@
 ARG FOUNDRY_IMAGE=ghcr.io/foundry-rs/foundry:v1.7.0@sha256:ff06299a789deee1d9e07d93961f08330820e2444a8dbbb425c1256bc3d1c206
 ARG RUST_IMAGE=rust:1.93.0-slim-bookworm@sha256:776861219cd851131c1cec3bbd7cbeb16b99a794048097eb69ad9682a8ed0d57
 ARG RUNTIME_IMAGE=debian:bookworm-20260316-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a
+# The base of the GPU worker: CUDA 12.8.2 runtime on Ubuntu 24.04 (glibc 2.39, newer than the glibc 2.36 of the Rust
+# build image, so the worker binary runs on it). The tag was pushed on 2026-04-30. The digest is the multi-platform index.
+# The SP1 GPU server of release v6.8.1 links libcudart.so.12 and needs a host driver for CUDA 12.8 (version 570 or newer).
+ARG CUDA_RUNTIME_IMAGE=nvidia/cuda:12.8.2-runtime-ubuntu24.04@sha256:7e62235c5d6f22a57ec8ba51f1583634fdbbf4b08a15b42dc1a60f086145c210
 
 # ---------------------------------------------------------------------------------------------------------------
 # Rust build. Two jobs only: the build VM has about 2 GB of memory. The cache mounts keep the downloaded crates
@@ -126,3 +134,60 @@ USER bridge
 WORKDIR /state
 ENTRYPOINT ["zk-bridge-prover"]
 CMD ["--config", "/state/prover.toml", "run"]
+
+# ---------------------------------------------------------------------------------------------------------------
+# The proving worker for a GPU host (target prover-gpu-worker). Platform linux/amd64.
+#
+# - Cargo features: sp1-cuda. The worker is a client of the SP1 GPU server. Building it needs no CUDA toolkit and no Go:
+#   the Groth16 wrapper runs inside the GPU server binary, and the worker verifies the proof with Rust code only.
+# - The SP1 GPU server is the binary of the release v6.8.1, pinned by SHA-256 (the digest that GitHub shows for the
+#   release asset). The SDK looks for it at $HOME/.sp1/bin/sp1-gpu-server and checks that `--version` prints the SDK
+#   version. When the file is there, the SDK downloads nothing at run time.
+# - The ELFs come from the reproducible build, as for prover-sp1, and the same check compares them with
+#   light-client/program-keys.json.
+# - The worker listens on PORT (8000 here) and answers GET /ping for the health check. RunPod needs both variables on
+#   the endpoint too (docs/gpu-prover.md).
+# ---------------------------------------------------------------------------------------------------------------
+FROM --platform=linux/amd64 ${RUST_IMAGE} AS build-gpu-worker
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential clang libclang-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY light-client ./light-client
+COPY prover ./prover
+WORKDIR /build/prover
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/prover/target \
+    cargo build --release --locked --no-default-features --features sp1-cuda --bin prove-worker \
+    && mkdir /out \
+    && cp target/release/prove-worker /out/
+
+FROM --platform=linux/amd64 ${CUDA_RUNTIME_IMAGE} AS prover-gpu-worker
+ARG SP1_GPU_SERVER_VERSION=6.8.1
+ARG SP1_GPU_SERVER_SHA256=1116d91fb36cbc0158112c78491ff665ae43ad1dbfb95c66bea0c9d530e81ec3
+LABEL org.opencontainers.image.title="zk-bridge proving worker (SP1, NVIDIA GPU)"
+ADD --checksum=sha256:${SP1_GPU_SERVER_SHA256} \
+    https://github.com/succinctlabs/sp1/releases/download/v${SP1_GPU_SERVER_VERSION}/sp1_gpu_server_v${SP1_GPU_SERVER_VERSION}_x86_64.tar.gz \
+    /tmp/sp1-gpu-server.tar.gz
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libstdc++6 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 10001 --create-home --home-dir /home/bridge --shell /usr/sbin/nologin bridge \
+    && mkdir -p /home/bridge/.sp1/bin /state /elf \
+    && tar -xzf /tmp/sp1-gpu-server.tar.gz -C /home/bridge/.sp1/bin \
+    && rm /tmp/sp1-gpu-server.tar.gz \
+    && chown -R bridge:bridge /home/bridge /state
+COPY --from=build-gpu-worker /out/prove-worker /usr/local/bin/
+COPY --from=check-elfs /check/light-client.elf /check/fork-observation.elf /elf/
+# The Groth16 circuit files are downloaded on the first proof of a worker. Mount a network volume on /state to keep them.
+ENV HOME=/home/bridge \
+    SP1_GROTH16_CIRCUIT_PATH=/state/sp1-circuits \
+    PORT=8000 \
+    PORT_HEALTH=8000 \
+    ZK_BRIDGE_WORKER_LIGHT_CLIENT_ELF=/elf/light-client.elf \
+    ZK_BRIDGE_WORKER_OBSERVATION_ELF=/elf/fork-observation.elf
+EXPOSE 8000
+USER bridge
+WORKDIR /state
+ENTRYPOINT ["prove-worker"]

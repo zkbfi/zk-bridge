@@ -749,6 +749,11 @@ fn build_prover(config: &Config, oracle: &Signer) -> Result<Arc<dyn Prover>> {
                 },
             )?))
         }
+        ProverBackend::Remote => Ok(Arc::new(crate::remote::RemoteProver::from_config(
+            &config.prover,
+            &|name| std::env::var(name).ok(),
+            crate::logging::Logger::standard(),
+        )?)),
         #[cfg(not(feature = "sp1"))]
         ProverBackend::Sp1 => Err(Error::Config(
             "prover.backend = \"sp1\" needs a build with the cargo feature `sp1` (see the documentation in src/prover.rs)".into(),

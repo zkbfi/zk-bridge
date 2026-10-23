@@ -12,6 +12,8 @@
 //! - [`gate`]: evidence for the deposit gate of a vault.
 //! - [`fork_observation`]: proves a fork observation and sends it to the `ForkRegistry`.
 //! - [`prover`]: the proving backends. Only light-client updates are proven.
+//! - [`remote`]: the backend that sends a proof job to a GPU worker and checks the answer.
+//! - [`worker`]: the HTTP server that such a worker runs (`docs/gpu-prover.md`).
 //! - [`beacon`]: where beacon data comes from (a beacon node, or a depth rule on Anvil).
 //! - [`store`] and [`state`]: the SQLite file and the deposit state machine.
 //! - [`route_health`]: decides whether a route still delivers a deposit made now (finding HB-02, window 2).
@@ -31,6 +33,7 @@ pub mod light_client;
 pub mod local_network;
 pub mod logging;
 pub mod prover;
+pub mod remote;
 pub mod route;
 pub mod route_health;
 pub mod rpc;
@@ -39,3 +42,4 @@ pub mod signer;
 pub mod state;
 pub mod store;
 pub mod transaction;
+pub mod worker;

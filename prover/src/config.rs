@@ -1,7 +1,7 @@
 //! TOML configuration with environment overrides and validation.
 //!
-//! The file holds no secret. A key named `private_key`, `mnemonic`, `password`, `secret` or `seed` anywhere in the
-//! file is refused. The signing key comes from a Foundry keystore plus a password file (both named by path), or from
+//! The file holds no secret. A key named `private_key`, `mnemonic`, `password`, `secret`, `seed`, `api_key` or `token`
+//! anywhere in the file is refused. The signing key comes from a Foundry keystore plus a password file (both named by path), or from
 //! the environment variable that `--private-key-env` names, for local Anvil only.
 //!
 //! Environment overrides: `ZK_BRIDGE_PROVER_<PATH>` where `<PATH>` is the key path in capitals, with `_` for `.`.
@@ -18,13 +18,16 @@ use std::str::FromStr;
 pub const ENVIRONMENT_PREFIX: &str = "ZK_BRIDGE_PROVER_";
 
 /// Key names that may never appear in the file.
-const FORBIDDEN_KEYS: [&str; 6] = [
+const FORBIDDEN_KEYS: [&str; 9] = [
     "private_key",
     "privatekey",
     "mnemonic",
     "password",
     "secret",
     "seed",
+    "api_key",
+    "apikey",
+    "token",
 ];
 
 /// What an override sets.
@@ -35,13 +38,15 @@ enum Kind {
 }
 
 /// Every key that an environment variable may override.
-const OVERRIDES: [(&str, Kind); 22] = [
+const OVERRIDES: [(&str, Kind); 24] = [
     ("database_path", Kind::Text),
     ("poll_interval_seconds", Kind::Integer),
     ("receipt_timeout_seconds", Kind::Integer),
     ("prover.program_vkey", Kind::Text),
     ("prover.sp1_elf_path", Kind::Text),
     ("prover.sp1_observation_elf_path", Kind::Text),
+    ("prover.remote_url", Kind::Text),
+    ("prover.remote_api_key_env", Kind::Text),
     ("chain_a.rpc_url", Kind::Text),
     ("chain_a.chain_id", Kind::Integer),
     ("chain_a.vault", Kind::Text),
@@ -100,6 +105,9 @@ pub enum ProverBackend {
     /// The production backend (cargo feature `sp1`).
     #[serde(rename = "sp1")]
     Sp1,
+    /// A worker on a GPU host, reached over HTTP (`src/remote.rs`). It is in the default build.
+    #[serde(rename = "remote")]
+    Remote,
 }
 
 /// The `[prover]` section.
@@ -117,6 +125,34 @@ pub struct ProverConfig {
     /// The compiled fork observation guest, for the `sp1` backend. Without it the prover refuses observations.
     #[serde(default)]
     pub sp1_observation_elf_path: Option<PathBuf>,
+    /// The base URL of the worker endpoint, for the `remote` backend.
+    #[serde(default)]
+    pub remote_url: Option<String>,
+    /// The NAME of the environment variable that holds the API key of the endpoint, for the `remote` backend. The key
+    /// itself never goes in the file.
+    #[serde(default)]
+    pub remote_api_key_env: Option<String>,
+    /// The time one request to the worker may take. It must cover a cold start and a proof.
+    #[serde(default = "default_remote_timeout_seconds")]
+    pub remote_timeout_seconds: u64,
+    /// How often the backend sends a job before it gives up.
+    #[serde(default = "default_remote_attempts")]
+    pub remote_attempts: u32,
+    /// The wait before the second attempt. The wait grows by this much for each further attempt.
+    #[serde(default = "default_remote_retry_delay_seconds")]
+    pub remote_retry_delay_seconds: u64,
+}
+
+fn default_remote_timeout_seconds() -> u64 {
+    900
+}
+
+fn default_remote_attempts() -> u32 {
+    4
+}
+
+fn default_remote_retry_delay_seconds() -> u64 {
+    10
 }
 
 /// Where beacon data comes from.
@@ -423,6 +459,9 @@ impl Config {
             return Err(Error::Config(
                 "prover.sp1_elf_path is required for the sp1 backend".into(),
             ));
+        }
+        if self.prover.backend == ProverBackend::Remote {
+            crate::remote::validate_remote_config(&self.prover)?;
         }
         for chain in [&self.chain_a, &self.chain_b] {
             Self::validate_chain(chain)?;

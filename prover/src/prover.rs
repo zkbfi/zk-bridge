@@ -5,6 +5,9 @@
 //!   that fails. Then it signs `keccak256(programVKey ‖ sha256(publicValues))`, which `OracleSP1Verifier` accepts.
 //!   It models a sound proof system: a proof exists only when the reference program accepts the statement.
 //! - `Sp1Prover` is for production. It is behind the cargo feature `sp1`, which is off by default.
+//! - `Sp1CudaProver` is the same prover on an NVIDIA GPU (cargo feature `sp1-cuda`). The worker of `docs/gpu-prover.md`
+//!   runs it.
+//! - [`crate::remote::RemoteProver`] sends the job to such a worker over HTTP. It is in the default build.
 //!
 //! # The `sp1` feature
 //!
@@ -21,8 +24,8 @@
 
 use crate::error::{Error, Result};
 use crate::light_client::{
-    public_values, sha256, verify_observation_natively, verify_update_natively, LightClientOutput,
-    UpdateInput,
+    public_values, sha256, verify_light_client_natively, verify_observation_natively,
+    verify_update_natively, LightClientOutput, UpdateInput,
 };
 use crate::signer::Signer;
 use alloy_primitives::{keccak256, B256};
@@ -74,8 +77,9 @@ pub trait Prover: Send + Sync {
     }
 }
 
-/// Which guest program a key belongs to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Which guest program a key belongs to. In JSON it reads `lightClient` or `forkObservation`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ProgramKind {
     /// The light-client program. The light client stores its key as `programVKey`.
     LightClient,
@@ -169,15 +173,121 @@ pub fn require_matching_key(program: &str, local_key: B256, onchain_key: B256) -
     )))
 }
 
-/// The production backend: the SP1 prover on the local CPU, with Groth16 proofs. See the module documentation.
+/// The four bytes that open every Groth16 proof of the pinned SP1 circuit (v6.1.0). They are the first four bytes of
+/// `VERIFIER_HASH()` of the vendored verifier (`docs/sp1-version-policy.md`). The verifier refuses any other prefix.
+pub const GROTH16_VERIFIER_SELECTOR: [u8; 4] = [0x43, 0x88, 0xa2, 0x1c];
+
+/// The length of the proof bytes of the pinned circuit: the selector, three 32-byte words (exit code, recursion key
+/// root, nonce) and 256 bytes of Groth16 proof.
+pub const GROTH16_PROOF_LENGTH: usize = 4 + 3 * 32 + 256;
+
+/// Fails unless the proof bytes have the length and the selector of the pinned verifier.
+///
+/// This is a shape check, not a verification. It stops a proof of another circuit before it costs a transaction.
+///
+/// # Errors
+/// `Error::Prover` that names the length or the selector.
+pub fn require_groth16_shape(proof_bytes: &[u8]) -> Result<()> {
+    if proof_bytes.len() != GROTH16_PROOF_LENGTH {
+        return Err(Error::Prover(format!(
+            "the proof has {} bytes, but the pinned verifier reads {GROTH16_PROOF_LENGTH}",
+            proof_bytes.len()
+        )));
+    }
+    if proof_bytes[..4] != GROTH16_VERIFIER_SELECTOR {
+        return Err(Error::Prover(format!(
+            "the proof starts with selector 0x{}, but the pinned verifier expects 0x{}",
+            alloy_primitives::hex::encode(&proof_bytes[..4]),
+            alloy_primitives::hex::encode(GROTH16_VERIFIER_SELECTOR)
+        )));
+    }
+    Ok(())
+}
+
+/// Fails unless the public values of a proof equal the public values of the native run.
+///
+/// # Errors
+/// `Error::Prover` when they differ.
+pub fn require_native_values(proven_values: &[u8], expected_values: &[u8]) -> Result<()> {
+    if proven_values == expected_values {
+        return Ok(());
+    }
+    Err(Error::Prover(
+        "the public values of the proof differ from the native run of lc-core; the ELF and lc-core disagree".into(),
+    ))
+}
+
+/// A statement that the native run accepted: the program to prove, its input bytes and the public values that every
+/// proof of it must carry. Every proof backend that uses real proofs starts here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuestJob {
+    /// The program that proves the statement.
+    pub kind: ProgramKind,
+    /// The bytes that the guest reads, as `sp1_zkvm::io::read_vec` returns them.
+    pub guest_input: Vec<u8>,
+    /// The public values of the native run.
+    pub expected_values: Vec<u8>,
+}
+
+/// Runs a statement natively and returns the job for a proof backend.
+///
+/// # Errors
+/// `Error::VerificationRefused` when the program rejects the statement. `Error::Prover` for a development statement,
+/// which has no real proof.
+pub fn native_job(statement: &ProofStatement) -> Result<GuestJob> {
+    match statement {
+        ProofStatement::DevAsserted(_) | ProofStatement::ObservationAsserted(_) => {
+            Err(Error::Prover(
+                "a development statement has no real proof; use the oracle backend on Anvil".into(),
+            ))
+        }
+        ProofStatement::Observation(guest_input) => {
+            native_job_from_guest_input(ProgramKind::ForkObservation, guest_input.clone())
+        }
+        ProofStatement::Verified(input) => Ok(GuestJob {
+            kind: ProgramKind::LightClient,
+            guest_input: crate::light_client::guest_input_bytes(input),
+            expected_values: public_values(&verify_update_natively(input)?),
+        }),
+    }
+}
+
+/// Runs the program of `kind` natively on guest input bytes, as a worker receives them.
+///
+/// # Errors
+/// `Error::VerificationRefused` when the program rejects the input.
+pub fn native_job_from_guest_input(kind: ProgramKind, guest_input: Vec<u8>) -> Result<GuestJob> {
+    let expected_values = match kind {
+        ProgramKind::LightClient => verify_light_client_natively(&guest_input)?,
+        ProgramKind::ForkObservation => verify_observation_natively(&guest_input)?,
+    };
+    Ok(GuestJob {
+        kind,
+        guest_input,
+        expected_values,
+    })
+}
+
+/// The SP1 prover of the production backend, generic over the proving client. The CPU client is `Sp1Prover`.
+/// The CUDA client is `Sp1CudaProver`. Only the client differs: the native run, the key check, the check of the
+/// proven values and the local verification are the same code.
 ///
 /// It loads two ELFs and computes their program keys once. A statement runs on the program that matches its kind.
 #[cfg(feature = "sp1")]
-pub struct Sp1Prover {
-    client: sp1_sdk::blocking::CpuProver,
-    light_client: Sp1Program,
-    fork_observation: Option<Sp1Program>,
+pub struct Sp1ClientProver<Client: sp1_sdk::blocking::Prover> {
+    name: &'static str,
+    client: Client,
+    light_client: Sp1Program<Client>,
+    fork_observation: Option<Sp1Program<Client>>,
 }
+
+/// The production backend on the local CPU. See the module documentation.
+#[cfg(feature = "sp1")]
+pub type Sp1Prover = Sp1ClientProver<sp1_sdk::blocking::CpuProver>;
+
+/// The production backend on a local NVIDIA GPU (cargo feature `sp1-cuda`). See `docs/gpu-prover.md`.
+#[cfg(feature = "sp1-cuda")]
+pub type Sp1CudaProver = Sp1ClientProver<sp1_sdk::blocking::CudaProver>;
 
 /// The paths of the compiled guest programs.
 #[cfg(feature = "sp1")]
@@ -191,8 +301,8 @@ pub struct Sp1ProgramPaths {
 
 /// One loaded guest: its proving key and the program key that the contracts store.
 #[cfg(feature = "sp1")]
-struct Sp1Program {
-    proving_key: <sp1_sdk::blocking::CpuProver as sp1_sdk::blocking::Prover>::ProvingKey,
+struct Sp1Program<Client: sp1_sdk::blocking::Prover> {
+    proving_key: Client::ProvingKey,
     program_key: B256,
 }
 
@@ -246,16 +356,42 @@ pub fn execute_program(elf: &[u8], guest_input: &[u8]) -> Result<Sp1Execution> {
 
 #[cfg(feature = "sp1")]
 impl Sp1Prover {
-    /// Reads the ELFs, runs the SP1 setup for each and computes the program keys.
+    /// Reads the ELFs, runs the SP1 setup for each on the CPU client and computes the program keys.
     ///
     /// The setup takes time and memory, so a service builds one prover and shares it (`Arc<dyn Prover>`).
     ///
     /// # Errors
     /// `Error::Config` when a file cannot be read. `Error::Prover` when the setup fails.
     pub fn load(paths: &Sp1ProgramPaths) -> Result<Self> {
-        use sp1_sdk::blocking::Prover as _;
-        let client = shared_client().clone();
-        let load_one = |path: &std::path::Path| -> Result<Sp1Program> {
+        Self::load_with_client(shared_client().clone(), "sp1", paths)
+    }
+}
+
+#[cfg(feature = "sp1-cuda")]
+impl Sp1CudaProver {
+    /// Connects to the SP1 GPU server (the client starts it), then loads the ELFs as [`Sp1Prover::load`] does.
+    ///
+    /// # Errors
+    /// `Error::Config` when a file cannot be read. `Error::Prover` when the setup fails. The client panics when the GPU
+    /// server cannot start, which is what happens on a machine without an NVIDIA GPU.
+    pub fn load(paths: &Sp1ProgramPaths) -> Result<Self> {
+        let client = sp1_sdk::blocking::ProverClient::builder().cuda().build();
+        Self::load_with_client(client, "sp1-cuda", paths)
+    }
+}
+
+#[cfg(feature = "sp1")]
+impl<Client: sp1_sdk::blocking::Prover> Sp1ClientProver<Client> {
+    /// Reads the ELFs, runs the SP1 setup for each on `client` and computes the program keys. `name` is what logs show.
+    ///
+    /// # Errors
+    /// `Error::Config` when a file cannot be read or both ELFs have the same key. `Error::Prover` when the setup fails.
+    pub fn load_with_client(
+        client: Client,
+        name: &'static str,
+        paths: &Sp1ProgramPaths,
+    ) -> Result<Self> {
+        let load_one = |path: &std::path::Path| -> Result<Sp1Program<Client>> {
             let proving_key =
                 client
                     .setup(sp1_sdk::Elf::from(read_elf(path)?))
@@ -285,6 +421,7 @@ impl Sp1Prover {
             ));
         }
         Ok(Self {
+            name,
             client,
             light_client,
             fork_observation,
@@ -303,7 +440,7 @@ impl Sp1Prover {
             .map(|program| program.program_key)
     }
 
-    fn program(&self, kind: ProgramKind) -> Result<&Sp1Program> {
+    fn program(&self, kind: ProgramKind) -> Result<&Sp1Program<Client>> {
         match kind {
             ProgramKind::LightClient => Ok(&self.light_client),
             ProgramKind::ForkObservation => self.fork_observation.as_ref().ok_or_else(|| {
@@ -313,12 +450,51 @@ impl Sp1Prover {
             }),
         }
     }
+
+    /// Proves a job that the native run accepted: checks the key, proves in Groth16 mode, compares the proven public
+    /// values with the native ones, verifies the proof locally and checks its shape.
+    ///
+    /// # Errors
+    /// `Error::Config` when `program_vkey` is not the key of the program for `job.kind`. `Error::Prover` when the
+    /// proof fails, carries other public values or does not verify.
+    pub fn prove_guest(&self, program_vkey: B256, job: &GuestJob) -> Result<Proof> {
+        use sp1_sdk::blocking::ProveRequest as _;
+        let program = self.program(job.kind)?;
+        require_matching_key(job.kind.label(), program.program_key, program_vkey)?;
+        let mut stdin = sp1_sdk::SP1Stdin::new();
+        stdin.write_vec(job.guest_input.clone());
+        let proof = self
+            .client
+            .prove(&program.proving_key, stdin)
+            .groth16()
+            .run()
+            .map_err(|error| Error::Prover(format!("the SP1 Groth16 proof failed: {error}")))?;
+        let proven_values = proof.public_values.to_vec();
+        require_native_values(&proven_values, &job.expected_values)?;
+        self.client
+            .verify(
+                &proof,
+                sp1_sdk::ProvingKey::verifying_key(&program.proving_key),
+                None,
+            )
+            .map_err(|error| Error::Prover(format!("the new proof does not verify: {error}")))?;
+        let proof_bytes = proof.bytes();
+        require_groth16_shape(&proof_bytes)?;
+        Ok(Proof {
+            public_values: proven_values,
+            proof_bytes,
+        })
+    }
 }
 
 #[cfg(feature = "sp1")]
-impl Prover for Sp1Prover {
+impl<Client> Prover for Sp1ClientProver<Client>
+where
+    Client: sp1_sdk::blocking::Prover,
+    Client::ProvingKey: Send + Sync,
+{
     fn name(&self) -> &'static str {
-        "sp1"
+        self.name
     }
 
     fn require_program_key(&self, program: ProgramKind, onchain_key: B256) -> Result<()> {
@@ -330,53 +506,9 @@ impl Prover for Sp1Prover {
     }
 
     fn prove(&self, program_vkey: B256, statement: &ProofStatement) -> Result<Proof> {
-        use sp1_sdk::blocking::{ProveRequest as _, Prover as _};
         // The native run comes first: it refuses a bad statement cheaply, and its output is the check on the proof.
-        let (kind, guest_input, expected_values) = match statement {
-            ProofStatement::DevAsserted(_) | ProofStatement::ObservationAsserted(_) => {
-                return Err(Error::Prover(
-                    "a development statement has no real proof; use the oracle backend on Anvil"
-                        .into(),
-                ))
-            }
-            ProofStatement::Observation(guest_input) => (
-                ProgramKind::ForkObservation,
-                guest_input.clone(),
-                verify_observation_natively(guest_input)?,
-            ),
-            ProofStatement::Verified(input) => (
-                ProgramKind::LightClient,
-                crate::light_client::guest_input_bytes(input),
-                public_values(&verify_update_natively(input)?),
-            ),
-        };
-        let program = self.program(kind)?;
-        require_matching_key(kind.label(), program.program_key, program_vkey)?;
-        let mut stdin = sp1_sdk::SP1Stdin::new();
-        stdin.write_vec(guest_input);
-        let proof = self
-            .client
-            .prove(&program.proving_key, stdin)
-            .groth16()
-            .run()
-            .map_err(|error| Error::Prover(format!("the SP1 Groth16 proof failed: {error}")))?;
-        let proven_values = proof.public_values.to_vec();
-        if proven_values != expected_values {
-            return Err(Error::Prover(
-                "the public values of the proof differ from the native run of lc-core; the ELF and lc-core disagree".into(),
-            ));
-        }
-        self.client
-            .verify(
-                &proof,
-                sp1_sdk::ProvingKey::verifying_key(&program.proving_key),
-                None,
-            )
-            .map_err(|error| Error::Prover(format!("the new proof does not verify: {error}")))?;
-        Ok(Proof {
-            public_values: proven_values,
-            proof_bytes: proof.bytes(),
-        })
+        let job = native_job(statement)?;
+        self.prove_guest(program_vkey, &job)
     }
 }
 
