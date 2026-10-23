@@ -356,6 +356,16 @@ fn full_groth16_proof_of_a_real_update() {
         .prove(prover.light_client_key(), &ProofStatement::Verified(input))
         .expect("Groth16 proof");
     assert_eq!(proof.public_values, expected);
-    // The proof bytes are a 4-byte verifier selector and 256 bytes of Groth16 proof.
-    assert_eq!(proof.proof_bytes.len(), 4 + 256);
+    // SP1 v6 proof bytes: a 4-byte verifier selector, three 32-byte words (exit code, recursion key root, nonce)
+    // that the verifier checks, then 256 bytes of Groth16 proof.
+    assert_eq!(proof.proof_bytes.len(), 4 + 3 * 32 + 256);
+    // A proof costs many minutes, so keep it: the Foundry verifier test reads this file.
+    if let Ok(path) = std::env::var("SP1_PROOF_OUTPUT") {
+        let fixture = serde_json::json!({
+            "programVKey": format!("{}", prover.light_client_key()),
+            "publicValues": alloy_primitives::hex::encode_prefixed(&proof.public_values),
+            "proof": alloy_primitives::hex::encode_prefixed(&proof.proof_bytes),
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&fixture).expect("json")).expect("write the proof fixture");
+    }
 }
