@@ -70,6 +70,15 @@ impl ChainKind {
     pub fn seconds_per_slot(self) -> u64 {
         self.spec().seconds_per_slot
     }
+
+    /// The chain with this name in the configuration (`ethereum` or `pulsechain`), or `None`.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "ethereum" => Some(Self::Ethereum),
+            "pulsechain" => Some(Self::Pulsechain),
+            _ => None,
+        }
+    }
 }
 
 /// Runs a builder that panics on malformed input and turns a panic into an error.
@@ -283,6 +292,40 @@ pub struct ExecutionEvidence {
     pub receipt_proof: Vec<Bytes>,
 }
 
+/// An execution header that the service rebuilt from a node answer and checked against the hash that the node reports.
+#[derive(Clone, Debug)]
+pub struct RebuiltHeader {
+    /// RLP of the execution block header.
+    pub header_rlp: Bytes,
+    /// Its keccak256: the execution block hash.
+    pub block_hash: B256,
+    /// The root of the receipts trie of the block.
+    pub receipts_root: B256,
+}
+
+/// Rebuilds the execution header from the JSON of a block and checks that it hashes to the `hash` field.
+///
+/// # Errors
+/// `Error::Malformed` for a mismatch or a missing field.
+pub fn rebuild_execution_header(block: &Value) -> Result<RebuiltHeader> {
+    guarded("execution header", || {
+        let header = execution_header_from_json(block);
+        let header_rlp = encode_execution_header(&header);
+        let block_hash = header_hash(&header_rlp);
+        let reported = lc_core::json::hex_b256(&block["hash"]);
+        if block_hash != reported {
+            return Err(Error::Malformed(format!(
+                "the rebuilt header hashes to {block_hash:#x}, the node reports {reported:#x}"
+            )));
+        }
+        Ok(RebuiltHeader {
+            header_rlp,
+            block_hash,
+            receipts_root: header.receipts_root,
+        })
+    })?
+}
+
 /// Rebuilds the execution header and the receipt proof from node answers.
 ///
 /// `block` is the JSON of `eth_getBlockByNumber` and `receipts` the JSON array of the block receipts, in order.
@@ -296,16 +339,8 @@ pub fn build_execution_evidence(
     receipts: &Value,
     transaction_index: u64,
 ) -> Result<ExecutionEvidence> {
+    let header = rebuild_execution_header(block)?;
     guarded("execution evidence", || {
-        let header = execution_header_from_json(block);
-        let header_rlp = encode_execution_header(&header);
-        let block_hash = header_hash(&header_rlp);
-        let reported = lc_core::json::hex_b256(&block["hash"]);
-        if block_hash != reported {
-            return Err(Error::Malformed(format!(
-                "the rebuilt header hashes to {block_hash:#x}, the node reports {reported:#x}"
-            )));
-        }
         let trie = build_receipts_trie(&receipts_from_json(receipts));
         if trie.root != header.receipts_root {
             return Err(Error::Malformed(format!(
@@ -323,8 +358,8 @@ pub fn build_execution_evidence(
             })?
             .clone();
         Ok(ExecutionEvidence {
-            header_rlp,
-            block_hash,
+            header_rlp: header.header_rlp,
+            block_hash: header.block_hash,
             receipt_proof: proof,
         })
     })?

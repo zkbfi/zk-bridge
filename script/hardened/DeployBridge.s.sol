@@ -18,7 +18,9 @@ import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
 /// at `n + 2`. A chain whose gate runs in `DetectBeaconRootsAndRegistry` mode (PulseChain) also gets a light client of
 /// its OWN beacon chain and a fork registry, so its layout is: light client `n`, own light client `n + 1`, registry
 /// `n + 2`, gate `n + 3`, vault `n + 4`. The light client on a chain tracks the OTHER chain's beacon chain. The deposit gate on a chain reads the
-/// beacon chain of THAT chain, because it guards the deposits made there.
+/// beacon chain of THAT chain, because it guards the deposits made there. Each vault also names the light client of the
+/// OTHER chain (`remoteLightClient`), which it reads to open deposits. Both vaults start locked: see "Launch sequence" in
+/// `docs/hardened-build-contract.md`.
 contract DeployBridge is Script {
     /// @notice The settings of one chain. The `lightClient` fields describe the OTHER chain's beacon chain.
     struct ChainConfig {
@@ -122,6 +124,7 @@ contract DeployBridge is Script {
         address predictedVault;
         uint64 remoteChainId;
         address remoteVault;
+        address remoteLightClient;
         BridgeVault.TokenPair[] pairs;
     }
 
@@ -189,29 +192,54 @@ contract DeployBridge is Script {
         (uint256 forkB, uint8[] memory decimalsB) = _inspectChain(config.chainB, config.deployer, config.tokensB);
         logPlan(config, plan);
 
-        ChainDeployment memory deploymentA = withPairs(
+        (ChainDeployment memory deploymentA, ChainDeployment memory deploymentB) =
+            _deployments(config, plan, decimalsA, decimalsB);
+
+        vm.selectFork(forkA);
+        deployChain(deploymentA);
+        vm.selectFork(forkB);
+        deployChain(deploymentB);
+    }
+
+    /// @dev Joins the configuration, the plan and the remote decimals into the deployment of each chain. A separate
+    /// function keeps `run` within the stack limit.
+    function _deployments(BridgeConfig memory config, Plan memory plan, uint8[] memory decimalsA, uint8[] memory decimalsB)
+        private
+        pure
+        returns (ChainDeployment memory deploymentA, ChainDeployment memory deploymentB)
+    {
+        deploymentA = withPairs(
             baseDeployment(
-                config.chainA, config.chainB.chainId, config.deployer, plan.lightClientA, plan.gateA, plan.vaultA, plan.vaultB
+                config.chainA,
+                config.chainB.chainId,
+                config.deployer,
+                plan.lightClientA,
+                plan.gateA,
+                plan.vaultA,
+                plan.vaultB,
+                plan.lightClientB
             ),
             config.tokensA,
             config.tokensB,
             decimalsB
         );
         deploymentA = withRegistry(deploymentA, plan.observedLightClientA, plan.registryA);
-        ChainDeployment memory deploymentB = withPairs(
+        deploymentB = withPairs(
             baseDeployment(
-                config.chainB, config.chainA.chainId, config.deployer, plan.lightClientB, plan.gateB, plan.vaultB, plan.vaultA
+                config.chainB,
+                config.chainA.chainId,
+                config.deployer,
+                plan.lightClientB,
+                plan.gateB,
+                plan.vaultB,
+                plan.vaultA,
+                plan.lightClientA
             ),
             config.tokensB,
             config.tokensA,
             decimalsA
         );
         deploymentB = withRegistry(deploymentB, plan.observedLightClientB, plan.registryB);
-
-        vm.selectFork(forkA);
-        deployChain(deploymentA);
-        vm.selectFork(forkB);
-        deployChain(deploymentB);
     }
 
     // ------------------------------------------------------------------ configuration
@@ -278,6 +306,7 @@ contract DeployBridge is Script {
     /// @param gate The predicted deposit gate address on this chain.
     /// @param vault The predicted vault address on this chain.
     /// @param remoteVault The predicted vault address on the other chain.
+    /// @param remoteLightClient The predicted light client address on the other chain. The vault reads it to open deposits.
     /// @dev The predicted own-chain light client and registry are zero here. Set them with `withRegistry`.
     function baseDeployment(
         ChainConfig memory chain,
@@ -286,7 +315,8 @@ contract DeployBridge is Script {
         address lightClient,
         address gate,
         address vault,
-        address remoteVault
+        address remoteVault,
+        address remoteLightClient
     ) public pure returns (ChainDeployment memory deployment) {
         deployment.chain = chain;
         deployment.deployer = deployer;
@@ -295,6 +325,7 @@ contract DeployBridge is Script {
         deployment.predictedVault = vault;
         deployment.remoteChainId = remoteChainId;
         deployment.remoteVault = remoteVault;
+        deployment.remoteLightClient = remoteLightClient;
         deployment.pairs = new BridgeVault.TokenPair[](0);
     }
 
@@ -541,7 +572,8 @@ contract DeployBridge is Script {
                     feeRecipient: chain.fee.recipient,
                     feeBasisPoints: chain.fee.basisPoints,
                     feeCeilingBasisPoints: chain.fee.ceilingBasisPoints,
-                    flowLimiter: chain.flowLimiter
+                    flowLimiter: chain.flowLimiter,
+                    remoteLightClient: deployment.remoteLightClient
                 }),
                 chain.lightClient.capellaEra,
                 gate
@@ -615,6 +647,10 @@ contract DeployBridge is Script {
         if (bridgeVault.localChainId() != chain.chainId) revert DeploymentMismatch("vault.localChainId");
         if (bridgeVault.remoteChainId() != deployment.remoteChainId) revert DeploymentMismatch("vault.remoteChainId");
         if (bridgeVault.remoteVault() != deployment.remoteVault) revert DeploymentMismatch("vault.remoteVault");
+        if (bridgeVault.remoteLightClient() != deployment.remoteLightClient) {
+            revert DeploymentMismatch("vault.remoteLightClient");
+        }
+        if (bridgeVault.depositsOpen()) revert DeploymentMismatch("vault.depositsOpen must start false");
         if (bridgeVault.depositCutoffTimestamp() != chain.depositCutoffTimestamp) {
             revert DeploymentMismatch("vault.depositCutoffTimestamp");
         }

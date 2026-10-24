@@ -37,6 +37,8 @@ pub enum Error {
     Transaction(String),
     /// An input of a command line subcommand is wrong.
     Usage(String),
+    /// The process has used its proof budget (`prover.max_proofs_per_process`). The next process goes on.
+    ProofBudget(String),
 }
 
 /// The result type of the service.
@@ -70,6 +72,7 @@ impl fmt::Display for Error {
             Self::Prover(reason) => write!(formatter, "prover: {reason}"),
             Self::Transaction(reason) => write!(formatter, "transaction: {reason}"),
             Self::Usage(reason) => write!(formatter, "usage: {reason}"),
+            Self::ProofBudget(reason) => write!(formatter, "proof budget: {reason}"),
         }
     }
 }

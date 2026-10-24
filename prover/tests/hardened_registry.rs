@@ -141,6 +141,7 @@ fn inputs_for(
         schedule: vec![],
         program_versions: vec![CAPELLA_VERSION],
         gate: Some(gate),
+        deposits_open: true,
         light_client_head_slot: 100,
         source_head_slot: 100,
         own_light_client: None,

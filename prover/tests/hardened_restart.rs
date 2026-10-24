@@ -66,6 +66,9 @@ impl RoutePorts for Crashing {
     fn advance_light_client(&self, deposit: &NewDeposit) -> Result<Coverage> {
         self.inner.advance_light_client(deposit)
     }
+    fn open_source_vault(&self) -> Result<zk_bridge_prover::opening::OpeningOutcome> {
+        self.inner.open_source_vault()
+    }
     fn build_withdrawal(&self, deposit: &NewDeposit) -> Result<Vec<u8>> {
         if self.crash_at == CrashAt::BeforeBuild {
             return Err(crash());

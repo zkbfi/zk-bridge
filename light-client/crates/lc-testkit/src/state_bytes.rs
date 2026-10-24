@@ -44,13 +44,15 @@ pub struct StateBytes {
 }
 
 /// One field of an SSZ container: fixed bytes in place, or variable bytes behind a 4-byte offset.
-enum Part {
+pub enum Part {
+    /// A field of fixed size. Its bytes sit in the fixed part of the container.
     Fixed(Vec<u8>),
+    /// A field of variable size. Its bytes follow the fixed part, and a 4-byte offset points at them.
     Variable(Vec<u8>),
 }
 
 /// The SSZ serialization of a container.
-fn container(parts: Vec<Part>) -> Vec<u8> {
+pub fn container(parts: Vec<Part>) -> Vec<u8> {
     let fixed_length: usize = parts
         .iter()
         .map(|part| match part {
@@ -73,11 +75,13 @@ fn container(parts: Vec<Part>) -> Vec<u8> {
     head
 }
 
-fn fixed(bytes: impl Into<Vec<u8>>) -> Part {
+/// A fixed-size field.
+pub fn fixed(bytes: impl Into<Vec<u8>>) -> Part {
     Part::Fixed(bytes.into())
 }
 
-fn number(value: u64) -> Part {
+/// A `uint64` field.
+pub fn number(value: u64) -> Part {
     fixed(value.to_le_bytes())
 }
 

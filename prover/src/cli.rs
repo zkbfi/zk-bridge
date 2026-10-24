@@ -1,4 +1,4 @@
-//! The command line: `run`, `once`, `status`, `withdraw`, `retry` and `route-health`.
+//! The command line: `run`, `once`, `follow`, `status`, `withdraw`, `retry` and `route-health`.
 //!
 //! The command line never carries a key. [`reject_secret_arguments`] runs before any parsing and refuses a flag
 //! that names a secret, and any argument that looks like a 32-byte key. The only way to give a key is
@@ -40,6 +40,25 @@ pub enum Command {
     Run,
     /// One pass, then exit.
     Once,
+    /// Move the light client of each route to the newest final header of its source chain, with no deposit in view. Then
+    /// try to open the source vault of each route, print one line for each route, and exit.
+    ///
+    /// A new vault is LOCKED: it refuses every deposit. A vault pays a deposit only after the light client on the other
+    /// chain stored a header at or below the deposit slot, and the vault cannot read that light client. So the vault
+    /// opens only when a proof shows that the other light client stored a head. The proof needs a block of the other chain
+    /// that finalized after the first update of that light client.
+    ///
+    /// The order: run `follow` after the deployment, then run it again, until every route says `deposits open`. The
+    /// reverse route needs a block that finalized after the first update, so the second run follows the first. Only then
+    /// start deposits. A line is `deposits open`, `deposits opened (transaction ...)` or `deposits locked: <reason>`.
+    ///
+    /// Exit code 0 when every route is open or was opened by this run. Exit code 2 when a route is still locked after the
+    /// rounds: the output says why, and the next run tries again. Exit code 1 for an error.
+    Follow {
+        /// The most updates to send for each route. A route stops early when its head is current.
+        #[arg(long, default_value_t = 1)]
+        rounds: usize,
+    },
     /// Print the state of every deposit.
     Status,
     /// Withdraw one deposit by hand. No proof is involved: the vault checks the evidence.
@@ -62,7 +81,8 @@ pub enum Command {
         log_index: u64,
     },
     /// Say whether each route can still deliver a deposit made now (finding HB-02, window 2).
-    /// Exit code 0 for OPEN and WARN, 2 for STOP, SEALED and STALE, 1 for an error.
+    /// Exit code 0 for OPEN and WARN, 2 for STOP, SEALED, LOCKED and STALE, 1 for an error. LOCKED means the source vault
+    /// still refuses deposits: run `follow` until it says `deposits open`.
     RouteHealth {
         /// Print one JSON array instead of one line per route.
         #[arg(long)]
@@ -242,7 +262,8 @@ fn parse_hash(text: &str) -> Result<B256> {
 
 /// Runs the program and returns the process exit code. `arguments` includes the program name. Output goes to `out`.
 ///
-/// The code is 0 on success. Only `route-health` returns another code: 2 when a route is STOP, SEALED or STALE.
+/// The code is 0 on success. Only two commands return another code: `route-health` returns 2 when a route is STOP,
+/// SEALED, LOCKED or STALE, and `follow` returns 2 when a source vault is still locked after the rounds.
 ///
 /// # Errors
 /// Any error of the subcommand.
@@ -257,6 +278,20 @@ pub fn run(
     match &cli.command {
         Command::Status => print_status(&config, out).map(|()| 0),
         Command::Once => build_service(&config, &cli, lookup)?.run_once().map(|()| 0),
+        Command::Follow { rounds } => {
+            let report = build_service(&config, &cli, lookup)?.follow(*rounds)?;
+            writeln!(out, "light client updates sent={}", report.updates_sent)
+                .map_err(|error| Error::Usage(error.to_string()))?;
+            for opening in &report.openings {
+                writeln!(out, "{}", opening.summary())
+                    .map_err(|error| Error::Usage(error.to_string()))?;
+            }
+            Ok(if report.locked_routes().is_empty() {
+                0
+            } else {
+                2
+            })
+        }
         Command::Run => {
             let mut service = build_service(&config, &cli, lookup)?;
             loop {
@@ -311,7 +346,8 @@ pub fn run(
 /// Runs the program. Like [`run`], but a non-zero exit code of `route-health` becomes an error.
 ///
 /// # Errors
-/// Any error of the subcommand, and `Error::Usage` when `route-health` finds a route that refuses deposits.
+/// Any error of the subcommand, and `Error::Usage` when `route-health` finds a route that refuses deposits or `follow`
+/// leaves a source vault locked.
 pub fn execute(
     arguments: Vec<String>,
     lookup: &dyn Fn(&str) -> Option<String>,

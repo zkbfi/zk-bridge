@@ -1,0 +1,78 @@
+{
+  "deployer": "@@DEPLOYER@@",
+  "chainA": {
+    "rpcAlias": "@@RPC_A@@",
+    "chainId": "1",
+    "verifier": "@@VERIFIER_A@@",
+    "verifierCodeHash": "@@VERIFIER_CODE_HASH_A@@",
+    "depositCutoffTimestamp": "0",
+    "deployerNonce": "@@NONCE_A@@",
+    "fee": {
+      "authority": "0x0000000000000000000000000000000000000000",
+      "recipient": "0x0000000000000000000000000000000000000000",
+      "basisPoints": "0",
+      "ceilingBasisPoints": "0"
+    },
+    "flowLimiter": "0x0000000000000000000000000000000000000000",
+    "lightClient": {
+      "programVKey": "@@PROGRAM_VKEY@@",
+      "genesisValidatorsRoot": "@@GENESIS_VALIDATORS_ROOT_B@@",
+      "slotsPerPeriod": "8192",
+      "genesisTime": "@@GENESIS_TIME_B@@",
+      "secondsPerSlot": "10",
+      "slotsPerEpoch": "32",
+      "capellaForkEpoch": "3",
+      "capellaEra": "0",
+      "initialSlot": "@@CHECKPOINT_SLOT_B@@",
+      "initialHeaderRoot": "@@CHECKPOINT_HEADER_ROOT_B@@",
+      "initialSyncCommitteeHash": "@@CHECKPOINT_COMMITTEE_HASH_B@@",
+      "initialNextSyncCommitteeHash": "@@CHECKPOINT_NEXT_COMMITTEE_HASH_B@@"
+    },
+    "gate": {
+      "mode": "Enforcing",
+      "genesisTime": "@@GENESIS_TIME_A@@",
+      "secondsPerSlot": "12",
+      "slotsPerEpoch": "32",
+      "supportedVersions": [{ "version": "0x0000036c", "stateDepth": "5" }],
+      "sealDepths": ["5", "6", "7"]
+    }
+  },
+  "chainB": {
+    "rpcAlias": "@@RPC_B@@",
+    "chainId": "369",
+    "verifier": "@@VERIFIER_B@@",
+    "verifierCodeHash": "@@VERIFIER_CODE_HASH_B@@",
+    "depositCutoffTimestamp": "0",
+    "deployerNonce": "@@NONCE_B@@",
+    "fee": {
+      "authority": "0x0000000000000000000000000000000000000000",
+      "recipient": "0x0000000000000000000000000000000000000000",
+      "basisPoints": "0",
+      "ceilingBasisPoints": "0"
+    },
+    "flowLimiter": "0x0000000000000000000000000000000000000000",
+    "lightClient": {
+      "programVKey": "@@PROGRAM_VKEY@@",
+      "genesisValidatorsRoot": "@@GENESIS_VALIDATORS_ROOT_A@@",
+      "slotsPerPeriod": "8192",
+      "genesisTime": "@@GENESIS_TIME_A@@",
+      "secondsPerSlot": "12",
+      "slotsPerEpoch": "32",
+      "capellaForkEpoch": "194048",
+      "capellaEra": "758",
+      "initialSlot": "@@CHECKPOINT_SLOT_A@@",
+      "initialHeaderRoot": "@@CHECKPOINT_HEADER_ROOT_A@@",
+      "initialSyncCommitteeHash": "@@CHECKPOINT_COMMITTEE_HASH_A@@",
+      "initialNextSyncCommitteeHash": "@@CHECKPOINT_NEXT_COMMITTEE_HASH_A@@"
+    },
+    "gate": {
+      "mode": "DetectBeaconRoots",
+      "genesisTime": "@@GENESIS_TIME_B@@",
+      "secondsPerSlot": "10",
+      "slotsPerEpoch": "32",
+      "supportedVersions": [{ "version": "0x0000036c", "stateDepth": "5" }],
+      "sealDepths": ["5", "6", "7"]
+    }
+  },
+  "tokenPairs": [{ "chainA": "@@TOKEN_A@@", "chainB": "@@TOKEN_B@@" }]
+}

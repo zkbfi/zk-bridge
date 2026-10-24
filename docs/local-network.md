@@ -11,6 +11,7 @@ The files are in `docker/`. The network is for development only. It uses the ora
 | `chain-a` | An Anvil chain with identifier 1 and the `cancun` hardfork. RPC on `http://127.0.0.1:28545`. |
 | `chain-b` | An Anvil chain with identifier 369 and the `shanghai` hardfork. RPC on `http://127.0.0.1:28546`. |
 | `deploy` | A one-shot job. It deploys the test tokens, the oracle verifiers and the bridge. |
+| `open` | A one-shot job. It runs the prover command `follow` until both vaults accept deposits. |
 | `prover` | The prover service in `run` mode, for both directions. |
 | `bots` | Three accounts that deposit random small amounts, one direction after the other, for ever. |
 | `beacon-stub` | A small HTTP server. It answers the three beacon requests that `route-health` makes. |
@@ -24,10 +25,13 @@ Run these commands from the repository root. The first build compiles the Rust c
 ```
 docker compose -f docker/compose.yaml up -d chain-a chain-b
 docker compose -f docker/compose.yaml run --rm deploy
+docker compose -f docker/compose.yaml run --rm open
 docker compose -f docker/compose.yaml up -d prover bots
 ```
 
 The deploy job takes about 30 seconds. It writes its result to the volume `bridge-state`: `deployment.json` (all addresses), `prover.toml`, `route-health.toml` and a keystore for the prover.
+
+A new vault is locked: it refuses every deposit with `DepositsNotOpen` until a proof shows that the light client on the other chain stored a head. The `open` job runs the prover command `follow` again and again until both vaults report open. It needs about one minute. Start the bots only after it ends. Bots that start earlier see every deposit revert. The job exits with an error when a vault is still locked after 10 runs. `docker compose -f docker/compose.yaml run --rm prover prover-entry follow` runs `follow` once. It exits with code 2 while a vault is locked.
 
 You can run the deploy job again. If the vaults already exist, it prints "already deployed" and stops. If the chains hold other contracts, it refuses and says so. Chains that restart lose their state. Then run `down -v` (see "Stop") and start again.
 
@@ -53,7 +57,7 @@ docker compose -f docker/compose.yaml exec prover prover-entry route-health
 
 `status` prints one line for every deposit that the prover knows, with its state (`seen`, `awaiting_finality`, `light_client_updated`, `proven`, `submitted`, `confirmed` or `failed`). The last line is `deposits=N`.
 
-`route-health` says for each route whether it can still deliver a deposit made now. See `prover/README.md`. On the local network it reads the beacon stub. The stub reports one fork (Capella) and the head slot of the local chain. Both routes show `OPEN` while the bots run. A route shows `STALE` when the bots stop and the light client head falls behind. A route shows `WARN` when the light client head and the chain head lie in different sync committee periods.
+`route-health` says for each route whether it can still deliver a deposit made now. See `prover/README.md`. A route shows `LOCKED` until its source vault is open: run the `open` job. On the local network it reads the beacon stub. The stub reports one fork (Capella) and the head slot of the local chain. Both routes show `OPEN` while the bots run. A route shows `STALE` when the bots stop and the light client head falls behind. A route shows `WARN` when the light client head and the chain head lie in different sync committee periods.
 
 You can read the chains with `cast`. Replace the addresses with the ones in `deployment.json`:
 
@@ -80,6 +84,7 @@ This command stops every container, removes the network and removes the volume `
 
 ## Notes
 
+- For a run with real proofs, a real verifier and a beacon chain whose committee signs, see `docs/end-to-end-real-proofs.md`. It uses the same binary (`local-network signed-beacon`) and the scripts in `e2e/`.
 - The bots and the beacon stub are the binary `local-network` in `prover/`. It is built only with the cargo feature `dev-source`. A production build (`--no-default-features`) leaves it out.
 - The prover signs with the second Anvil account. The same account is the oracle of the verifier contracts.
 - The deploy job runs `script/hardened/DeployBridge.s.sol` with `docker/bridge.config.template.json`. It checks the addresses that the script predicts against the chains.

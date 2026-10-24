@@ -28,7 +28,7 @@ The page also says that a Groth16 proof through Docker may need a higher Docker 
 
 Our advice, which is our own margin and not a number from that page: use 16 cores and 32 GB of memory. The 14 GB of the wrapping step comes on top of the memory that the earlier proof steps use.
 
-I did not measure proof time. The execution sizes that I measured on a laptop are: about 31 million instructions for one real Ethereum update, about 29 million for one real PulseChain update, about 91 million for a fold of three updates, and about 117 million for a fork observation with a fold of three updates. Prove a real update on the server first and record the time before you rely on the cadence of the service.
+I measured proof time on a server with 32 threads (see `docs/end-to-end-real-proofs.md`): a Groth16 proof of one update takes 284 to 322 seconds with the current program and peaks near 56 GiB. The prover keeps memory after a proof, so run one proof for each process. The execution sizes that I measured on a laptop are: about 31 million instructions for one real Ethereum update, about 29 million for one real PulseChain update, about 91 million for a fold of three updates, and about 117 million for a fork observation with a fold of three updates. Prove a real update on the server first and record the time before you rely on the cadence of the service.
 
 ## Build
 
@@ -127,6 +127,16 @@ zk-bridge-prover --config prover.toml route-health
 
 It reads the fork schedule and the head of each light client and tells you whether each route can still deliver a deposit.
 
+## Open the vaults before the first deposit
+
+A new vault is locked. It refuses every deposit with `DepositsNotOpen()` until a proof shows that the light client on the other chain stored a head. Without this lock, a deposit made before the first update of the light client could never be paid. After the deployment, run the prover command `follow` on both routes, and repeat it until every route reports open:
+
+```
+zk-bridge-prover --config prover.toml follow --rounds 1
+```
+
+Each run stores a head in the light client of each route, then tries to open the source vault of each route. It prints `deposits open`, `deposits opened (transaction ...)` or `deposits locked: <reason>` for each route. It exits with code 2 while a route is still locked. The second run usually opens both vaults: the reverse route needs a block that finalized after the first update. With real proofs the runs are far apart in time, and each run proves one update on the server. The key of the prover pays for the opening transaction on each source chain, so it needs gas on both chains. The RPC node of each chain must serve `eth_getProof` and `eth_call` for a past block. Start the bots and the deposits only after `follow` exits with code 0. `route-health` shows the state as `LOCKED`. `prover/README.md` has the details.
+
 ## Verifying a proof before you rely on the service
 
 The test `full_groth16_proof_of_a_real_update` in `prover/tests/sp1_execute.rs` proves a real Ethereum update. It is ignored on a laptop. On the server run:
@@ -136,7 +146,7 @@ cd prover
 cargo test --release --features sp1-native-gnark --test sp1_execute -- --ignored --test-threads=1 full_groth16
 ```
 
-Then send the proof to a light client on a test network. No proof for circuit version v6.1.0 exists in the repository yet, so this run also produces the first accepting fixture for `test/hardened/SP1VerifierGroth16.t.sol`.
+The proof of this test is the fixture `test/hardened/fixtures/sp1-proof-ethereum-update.json`, and `test/hardened/SP1VerifierGroth16.t.sol` checks it against the vendored verifier. `docs/end-to-end-real-proofs.md` sends proofs to light clients on two Anvil chains and pays deposits with them.
 
 ## What this setup does not give you
 

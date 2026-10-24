@@ -72,7 +72,7 @@ fn execution_payload_header_json(header: &ExecutionPayloadHeader) -> Value {
     value
 }
 
-fn light_client_header_json(header: &LightClientHeader) -> Value {
+pub fn light_client_header_json(header: &LightClientHeader) -> Value {
     json!({
         "beacon": beacon_header_json(&header.beacon),
         "execution": execution_payload_header_json(&header.execution),
@@ -80,7 +80,7 @@ fn light_client_header_json(header: &LightClientHeader) -> Value {
     })
 }
 
-fn branch_json(branch: &[alloy_primitives::B256]) -> Vec<String> {
+pub fn branch_json(branch: &[alloy_primitives::B256]) -> Vec<String> {
     branch.iter().map(|node| hex_text(node.as_slice())).collect()
 }
 

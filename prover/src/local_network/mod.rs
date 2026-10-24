@@ -7,8 +7,10 @@
 //! - [`synthetic_fork`]: gate evidence for a local chain that has no beacon node.
 //! - [`traffic`]: bots that deposit tokens in both directions and watch the withdrawals.
 //! - [`beacon_stub`]: a small HTTP server that answers the three beacon requests that `route-health` makes.
+//! - [`signed_beacon`]: a beacon chain over the Anvil blocks with real sync committee signatures, for runs with real proofs.
 
 pub mod beacon_stub;
 pub mod deployment;
+pub mod signed_beacon;
 pub mod synthetic_fork;
 pub mod traffic;

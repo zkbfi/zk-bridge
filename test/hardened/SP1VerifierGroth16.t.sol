@@ -3,13 +3,15 @@ pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {ISP1Verifier as BridgeISP1Verifier} from "../../src/hardened/ISP1Verifier.sol";
+import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
 import {SP1Verifier} from "../../src/hardened/vendor/sp1-contracts/v6.1.0/SP1VerifierGroth16.sol";
 import {SP1Verifier as SP1VerifierV600} from "./vendor-sp1-contracts-v6.0.0/v6.0.0/SP1VerifierGroth16.sol";
 
 /// @notice Tests of the vendored SP1 Groth16 verifier (circuit v6.1.0, the circuit of sp1-sdk 6.8.x).
-/// @dev The release ships no proof for circuit v6.1.0. Its only real proof is for circuit v6.0.0, so the acceptance and
-/// tamper tests on a real proof run against the v6.0.0 verifier (test use only), and the v6.1.0 verifier gets the
-/// constant checks and the refusal tests that need no valid proof.
+/// @dev The release ships no proof for circuit v6.1.0. The tests of the v6.1.0 verifier use the proof that our own
+/// prover made on a server (`test/hardened/fixtures/sp1-proof-ethereum-update.json`, the light-client program on a real
+/// Ethereum update). The release's own proof is for circuit v6.0.0, so its acceptance and tamper tests run against the
+/// v6.0.0 verifier (test use only).
 contract SP1VerifierGroth16Test is Test {
     // The proof of release v6.1.1 (contracts/test/SP1VerifierGroth16V6.sol), valid for circuit v6.0.0.
     bytes32 internal constant PROGRAM_VKEY = 0x004a55ed3c7a07d0233a027278a8b7ff8681ffbd5d1ec4795c18966f6e693090;
@@ -22,6 +24,15 @@ contract SP1VerifierGroth16Test is Test {
     bytes32 internal constant EXPECTED_VERIFIER_HASH =
         0x4388a21c687fdd5f218d7e3d13190cac4c5355818d3605fd5fb811df468ee696;
     bytes32 internal constant EXPECTED_VK_ROOT = 0x002f850ee998974d6cc00e50cd0814b098c05bfade466d28573240d057f25352;
+
+    // Where our own proof for circuit v6.1.0 lives. The proof comes from `Sp1Prover` (sp1-sdk 6.8.1, Groth16) for the
+    // light-client program with the key below, on a real Ethereum update.
+    string internal constant OWN_PROOF_FILE = "test/hardened/fixtures/sp1-proof-ethereum-update.json";
+    bytes32 internal constant LIGHT_CLIENT_PROGRAM_VKEY =
+        0x00ae8429b1bb3ed61eee12f070e5e3b5dcb388fc67c5550a13b331ac57608bbe;
+    // The genesis validators root of Ethereum mainnet. The proof binds its output to this chain.
+    bytes32 internal constant ETHEREUM_GENESIS_VALIDATORS_ROOT =
+        0x4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95;
 
     SP1Verifier internal verifier;
     SP1VerifierV600 internal verifierV600;
@@ -108,7 +119,107 @@ contract SP1VerifierGroth16Test is Test {
         verifier.verifyProof(PROGRAM_VKEY, PUBLIC_VALUES, hex"4388a2");
     }
 
-    // ------------------------------------------------------------------ the real proof (circuit v6.0.0, test use only)
+    // ------------------------------------------------------------------ our own real proof (circuit v6.1.0)
+
+    /// @dev The program key, the public values and the proof of the fixture of our own prover.
+    function _ownProof() internal view returns (bytes32 programVKey, bytes memory publicValues, bytes memory proof) {
+        string memory json = vm.readFile(OWN_PROOF_FILE);
+        programVKey = vm.parseJsonBytes32(json, ".programVKey");
+        publicValues = vm.parseJsonBytes(json, ".publicValues");
+        proof = vm.parseJsonBytes(json, ".proof");
+    }
+
+    /// Claim: the fixture holds a proof of the light-client program of this repository, for a real Ethereum update.
+    /// The key is the key of `light-client/program-keys.json`, the proof starts with the selector of circuit v6.1.0, and
+    /// the public values decode to a head that moves forward on the chain with the Ethereum genesis validators root.
+    /// Why it matters: the acceptance test below proves something about the bridge only if the fixture is this program on
+    /// this chain. A proof of some other program would pass the verifier just as well.
+    function test_ownProofIsTheLightClientProgramOnAnEthereumUpdate() public view {
+        (bytes32 programVKey, bytes memory publicValues, bytes memory proof) = _ownProof();
+        assertEq(programVKey, LIGHT_CLIENT_PROGRAM_VKEY);
+        assertEq(bytes4(proof), bytes4(EXPECTED_VERIFIER_HASH), "the selector of circuit v6.1.0");
+        BeaconLightClient.LightClientOutput memory output =
+            abi.decode(publicValues, (BeaconLightClient.LightClientOutput));
+        assertEq(output.genesisValidatorsRoot, ETHEREUM_GENESIS_VALIDATORS_ROOT);
+        assertGt(output.newHeadSlot, output.previousHeadSlot, "the head moves forward");
+        assertEq(publicValues.length, 11 * 32, "the length that BeaconLightClient.update demands");
+    }
+
+    /// Claim: the v6.1.0 verifier accepts the real proof of our own prover, and the check costs less than 400,000 gas.
+    /// Why it matters: this is the first accepting test for circuit v6.1.0. It shows that the verifier that we vendored
+    /// is the verifier of the circuit that `sp1-sdk` 6.8.1 proves with. The gas bound guards the cost of every `update`.
+    function test_ownProofIsAcceptedByTheVendoredVerifier() public {
+        (bytes32 programVKey, bytes memory publicValues, bytes memory proof) = _ownProof();
+        uint256 gasBefore = gasleft();
+        verifier.verifyProof(programVKey, publicValues, proof);
+        uint256 gasUsed = gasBefore - gasleft();
+        emit log_named_uint("gas of verifyProof for the real proof", gasUsed);
+        assertLt(gasUsed, 400_000);
+    }
+
+    /// Claim: the call that `BeaconLightClient.update` makes, through the interface of the bridge, accepts the proof.
+    function test_ownProofIsAcceptedThroughTheBridgeInterface() public view {
+        (bytes32 programVKey, bytes memory publicValues, bytes memory proof) = _ownProof();
+        BridgeISP1Verifier(address(verifier)).verifyProof(programVKey, publicValues, proof);
+    }
+
+    /// Claim: one changed bit in any word of the public values makes the verifier refuse the proof.
+    /// Why it matters: the light client acts on the public values. If the proof did not bind every word, a caller could
+    /// keep the proof and change the new head, the committee hash or the execution block hash.
+    function test_ownProofWithTamperedPublicValuesIsRefused() public {
+        (bytes32 programVKey, bytes memory publicValues, bytes memory proof) = _ownProof();
+        for (uint256 word = 0; word < 11; word++) {
+            bytes memory tampered = bytes.concat(publicValues);
+            uint256 index = word * 32 + 31;
+            tampered[index] = bytes1(uint8(tampered[index]) ^ 0x01);
+            vm.expectRevert();
+            verifier.verifyProof(programVKey, tampered, proof);
+        }
+    }
+
+    /// Claim: one changed bit in the nonce or in any of the eight proof words makes the verifier refuse the proof.
+    /// Layout of the proof: 4 selector, 32 exit code, 32 key root, 32 nonce, 256 proof.
+    function test_ownProofWithTamperedProofBytesIsRefused() public {
+        (bytes32 programVKey, bytes memory publicValues, bytes memory proof) = _ownProof();
+        for (uint256 word = 0; word < 9; word++) {
+            bytes memory tampered = bytes.concat(proof);
+            uint256 index = 4 + 64 + word * 32 + 31;
+            tampered[index] = bytes1(uint8(tampered[index]) ^ 0x01);
+            vm.expectRevert();
+            // A proof word that is not a point of the curve burns all gas of the call. The cap leaves gas for the next round.
+            verifier.verifyProof{gas: 2_000_000}(programVKey, publicValues, tampered);
+        }
+    }
+
+    /// Claim: the proof does not pass under another program key, and a changed selector, exit code or key root is
+    /// refused with the matching error.
+    /// Why it matters: the program key keeps a proof of the fork observation program from passing as a light-client proof.
+    function test_ownProofUnderAnotherKeyOrWithChangedHeaderIsRefused() public {
+        (bytes32 programVKey, bytes memory publicValues, bytes memory proof) = _ownProof();
+        vm.expectRevert();
+        verifier.verifyProof(bytes32(uint256(programVKey) ^ 1), publicValues, proof);
+
+        bytes memory wrongSelector = bytes.concat(proof);
+        wrongSelector[0] = bytes1(uint8(wrongSelector[0]) ^ 0x01);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SP1Verifier.WrongVerifierSelector.selector, bytes4(wrongSelector), bytes4(EXPECTED_VERIFIER_HASH)
+            )
+        );
+        verifier.verifyProof(programVKey, publicValues, wrongSelector);
+
+        bytes memory wrongExitCode = bytes.concat(proof);
+        wrongExitCode[4 + 31] = bytes1(uint8(wrongExitCode[4 + 31]) ^ 0x01);
+        vm.expectRevert(SP1Verifier.InvalidExitCode.selector);
+        verifier.verifyProof(programVKey, publicValues, wrongExitCode);
+
+        bytes memory wrongKeyRoot = bytes.concat(proof);
+        wrongKeyRoot[4 + 32 + 31] = bytes1(uint8(wrongKeyRoot[4 + 32 + 31]) ^ 0x01);
+        vm.expectRevert(SP1Verifier.InvalidVkRoot.selector);
+        verifier.verifyProof(programVKey, publicValues, wrongKeyRoot);
+    }
+
+    // ------------------------------------------------------------------ the release proof (circuit v6.0.0, test use only)
 
     /// Control: the real proof of release v6.1.1 verifies on the verifier of its own circuit.
     /// Why it matters: every refusal below means something only because this call succeeds.

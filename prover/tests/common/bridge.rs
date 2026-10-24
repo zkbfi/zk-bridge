@@ -290,6 +290,7 @@ fn deploy_side(
     observation: Option<&ObservationFixture>,
     deposit_fee_basis_points: u16,
     flow_limiter: Address,
+    remote_light_client: Address,
 ) -> Side {
     let token = chain.deploy(
         "MockERC20",
@@ -392,11 +393,34 @@ fn deploy_side(
             ("pairs", pairs_argument(pairs)),
             (
                 "vaultTerms",
-                Argument::StaticTuple(vault_terms(deposit_fee_basis_points, flow_limiter)),
+                Argument::StaticTuple(vault_terms(
+                    deposit_fee_basis_points,
+                    flow_limiter,
+                    remote_light_client,
+                )),
             ),
             ("capellaEra", word_u64(0)),
             ("depositGate", word_address(gate)),
         ]),
+    );
+    // The read-back of `DeployBridge.s.sol`: the vault names the predicted light client of the other chain, and it
+    // starts locked.
+    assert_eq!(
+        read_address(
+            chain,
+            vault,
+            &VaultContract::remoteLightClientCall {}.abi_encode()
+        ),
+        remote_light_client,
+        "the vault names the light client of the other chain"
+    );
+    assert!(
+        !gate_flag(
+            chain,
+            vault,
+            &VaultContract::depositsOpenCall {}.abi_encode()
+        ),
+        "a new vault starts locked"
     );
     Side {
         token,
@@ -409,11 +433,22 @@ fn deploy_side(
     }
 }
 
-/// The terms of a vault: no cutoff, the fee switch and the flow limiter. A fee of zero means no fee authority, so the
-/// fee is removed from the start. A fee above zero makes the deployer the fee authority and the recipient, with the
-/// highest ceiling the vault accepts (100 basis points). A zero `flow_limiter` means no limiter.
-fn vault_terms(fee_basis_points: u16, flow_limiter: Address) -> Vec<[u8; 32]> {
+/// The address that a view call returns.
+fn read_address(chain: &TestChain, to: Address, call: &[u8]) -> Address {
+    Address::from_slice(&chain.call(to, call).expect("address call")[12..32])
+}
+
+/// The terms of a vault: no cutoff, the fee switch, the flow limiter and the light client of the other chain. A fee of
+/// zero means no fee authority, so the fee is removed from the start. A fee above zero makes the deployer the fee
+/// authority and the recipient, with the highest ceiling the vault accepts (100 basis points). A zero `flow_limiter`
+/// means no limiter. `remote_light_client` is the light client on the other chain, which the vault reads to open deposits.
+fn vault_terms(
+    fee_basis_points: u16,
+    flow_limiter: Address,
+    remote_light_client: Address,
+) -> Vec<[u8; 32]> {
     let limiter = word_address_raw(flow_limiter);
+    let remote = word_address_raw(remote_light_client);
     if fee_basis_points == 0 {
         return vec![
             word_u64_raw(0),
@@ -422,6 +457,7 @@ fn vault_terms(fee_basis_points: u16, flow_limiter: Address) -> Vec<[u8; 32]> {
             word_u64_raw(0),
             word_u64_raw(0),
             limiter,
+            remote,
         ];
     }
     let deployer = word_address_raw(DEPLOYER);
@@ -432,6 +468,7 @@ fn vault_terms(fee_basis_points: u16, flow_limiter: Address) -> Vec<[u8; 32]> {
         word_u64_raw(u64::from(fee_basis_points)),
         word_u64_raw(100),
         limiter,
+        remote,
     ]
 }
 
@@ -459,6 +496,9 @@ pub struct BridgeOptions {
     /// Deploy a test flow limiter on each chain and attach it to the vault there. The limiters allow everything until a
     /// test tells one to refuse. Without it, both vaults have no limiter (a zero address).
     pub scripted_flow_limiter: bool,
+    /// Follow both routes and open both vaults after the deployment, with the production code (`follow`), as an operator
+    /// does before the first deposit. Without it, both vaults stay locked and both light clients hold no update.
+    pub open_vaults: bool,
 }
 
 impl Default for BridgeOptions {
@@ -469,6 +509,7 @@ impl Default for BridgeOptions {
             registry_fixture: None,
             deposit_fee_basis_points: 0,
             scripted_flow_limiter: false,
+            open_vaults: true,
         }
     }
 }
@@ -499,6 +540,9 @@ pub struct Bridge {
     pub flow_limiter_a: Option<Address>,
     pub flow_limiter_b: Option<Address>,
     pub config_path: PathBuf,
+    /// The finality depth of the development beacon source, in blocks. The opening needs this many blocks after each
+    /// first update (see [`open_both_vaults`]).
+    pub finality_depth: u64,
 }
 
 impl Drop for Bridge {
@@ -636,6 +680,10 @@ pub fn deploy_bridge_with(name: &str, options: BridgeOptions) -> Bridge {
         token_a, token_b,
         "the real pair has different addresses on the two chains"
     );
+    // The light client follows the token and the verifier on both chains, so each vault can name the light client of the
+    // other chain before it exists, as the deployment script predicts it.
+    let (light_client_a, light_client_b) =
+        (DEPLOYER.create(nonce_a + 2), DEPLOYER.create(nonce_b + 2));
 
     let mut pairs_a = vec![(token_a, token_b)];
     if let Some(rogue) = rogue_token {
@@ -659,6 +707,7 @@ pub fn deploy_bridge_with(name: &str, options: BridgeOptions) -> Bridge {
         None,
         options.deposit_fee_basis_points,
         flow_limiter_a.unwrap_or(Address::ZERO),
+        light_client_b,
     );
     let gate_mode_b = if observation_fixture.is_some() {
         GATE_MODE_REGISTRY
@@ -677,9 +726,15 @@ pub fn deploy_bridge_with(name: &str, options: BridgeOptions) -> Bridge {
         observation_fixture.as_ref(),
         options.deposit_fee_basis_points,
         flow_limiter_b.unwrap_or(Address::ZERO),
+        light_client_a,
     );
     assert_eq!((side_a.token, side_a.vault), (token_a, vault_a));
     assert_eq!((side_b.token, side_b.vault), (token_b, vault_b));
+    assert_eq!(
+        (side_a.light_client, side_b.light_client),
+        (light_client_a, light_client_b),
+        "the predicted light client addresses are the deployed ones"
+    );
 
     let directory = scratch(name);
     // A registry-mode chain B also keeps its own-chain light client current, from a slot above the fixture checkpoint.
@@ -732,7 +787,7 @@ finality_depth = {depth}
     );
     let config_path = directory.join("prover.toml");
     std::fs::write(&config_path, config).unwrap();
-    Bridge {
+    let bridge = Bridge {
         chain_a,
         chain_b,
         token_a,
@@ -752,7 +807,62 @@ finality_depth = {depth}
         flow_limiter_a,
         flow_limiter_b,
         config_path,
+        finality_depth: options.finality_depth,
+    };
+    if options.open_vaults {
+        open_both_vaults(&bridge);
     }
+    bridge
+}
+
+/// What one run of `follow` printed and returned.
+pub struct FollowRun {
+    /// The exit code: 0 when every route is open, 2 when a source vault is still locked.
+    pub code: i32,
+    /// The lines of the output.
+    pub output: String,
+}
+
+/// Runs `follow` against the bridge as the command line does and returns the exit code with the output.
+pub fn follow(bridge: &Bridge) -> FollowRun {
+    let arguments = [
+        "zk-bridge-prover",
+        "--config",
+        &bridge.config_path.display().to_string(),
+        "--private-key-env",
+        "ANVIL_DEPLOYER",
+        "follow",
+    ]
+    .map(String::from)
+    .to_vec();
+    let lookup = |name: &str| (name == "ANVIL_DEPLOYER").then(|| DEPLOYER_SECRET.to_string());
+    let mut output = Vec::new();
+    let code = cli::run(arguments, &lookup, &mut output).expect("follow");
+    FollowRun {
+        code,
+        output: String::from_utf8(output).unwrap(),
+    }
+}
+
+/// Follows both routes and opens both vaults with the production code, as an operator does after a deployment. Returns
+/// how many runs of `follow` it took.
+///
+/// The first run stores one head in each destination light client. The vault of each route reads the destination light
+/// client through its own light client, and that light client stores a block of the other chain that finalized
+/// `finality_depth` blocks after it was seen. So the first run cannot open a vault: it ends with exit code 2. The harness
+/// then mines `finality_depth` blocks on each chain, which finalizes the block of each first update, and runs `follow`
+/// again. That run opens both vaults.
+pub fn open_both_vaults(bridge: &Bridge) -> usize {
+    const MOST_RUNS: usize = 4;
+    for run_number in 1..=MOST_RUNS {
+        let run = follow(bridge);
+        if run.code == 0 {
+            return run_number;
+        }
+        bridge.chain_a.mine(bridge.finality_depth);
+        bridge.chain_b.mine(bridge.finality_depth);
+    }
+    panic!("both vaults are still locked after {MOST_RUNS} runs of follow");
 }
 
 /// Runs the prover command line against the configuration of the bridge, as `once`, `status` or `withdraw` would.

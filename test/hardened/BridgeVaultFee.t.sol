@@ -82,16 +82,16 @@ contract BridgeVaultFeeTest is HardenedFixture {
         BridgeVault.TokenPair[] memory pairs = new BridgeVault.TokenPair[](1);
         pairs[0] = BridgeVault.TokenPair(localToken, address(tokenOnB), 18);
         vm.chainId(CHAIN_A);
-        return new BridgeVault(
+        return _opened(new BridgeVault(
             address(lightClientForA),
             CHAIN_A,
             CHAIN_B,
             address(vaultB),
             pairs,
-            BridgeVault.VaultTerms(0, authority_, recipient_, basisPoints, ceiling, address(0)),
+            BridgeVault.VaultTerms(0, authority_, recipient_, basisPoints, ceiling, address(0), address(lightClientForB)),
             DEFAULT_CAPELLA_ERA,
             address(gateA)
-        );
+        ));
     }
 
     /// @dev A new vault for `tokenOnA` with a live fee switch: the authority, the recipient, a fee of 25 and a ceiling of 50.

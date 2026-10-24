@@ -1153,10 +1153,11 @@ contract BeaconForkGateTest is GateSupport {
         // is built at that address, with this test's gate.
         bytes memory arguments = abi.encode(
             address(lightClientForB), CHAIN_B, CHAIN_A, ReceiptFixtures.REMOTE_VAULT, pairs,
-            BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0)), DEFAULT_CAPELLA_ERA, address(gate)
+            BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), address(lightClientForA)), DEFAULT_CAPELLA_ERA, address(gate)
         );
         deployCodeTo("BridgeVault.sol:BridgeVault", arguments, ReceiptFixtures.DESTINATION_VAULT);
         BridgeVault vault = BridgeVault(ReceiptFixtures.DESTINATION_VAULT);
+        _openDepositsWithoutProof(vault);
         destinationPairs.push(pairs[0]);
         createdVaults.push(vault);
         ReceiptFixtures.Named memory named = ReceiptFixtures.legacy();

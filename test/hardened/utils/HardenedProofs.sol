@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {BeaconLightClient} from "../../../src/hardened/BeaconLightClient.sol";
+import {BridgeVault} from "../../../src/hardened/BridgeVault.sol";
 
 /// @title HardenedProofs
 /// @notice Constants and the reference prover. The oracle key signs the digest that
@@ -28,6 +29,29 @@ abstract contract HardenedProofs is Test {
     bytes32 internal constant COMMITTEE_101 = keccak256("sync committee of period 101");
     bytes32 internal constant COMMITTEE_102 = keccak256("sync committee of period 102");
     uint256 internal constant ORACLE_KEY = uint256(keccak256("hardened reference prover oracle"));
+
+    /// @dev The storage slot of the word that holds `feeAuthority`, `feeBasisPoints` and `depositsOpen` in `BridgeVault`.
+    /// `test_openDeposits_flagSlotMatchesTheStorageLayout` pins it to the contract.
+    uint256 internal constant VAULT_FLAG_WORD_SLOT = 7;
+    /// @dev The bit offset of `depositsOpen` in that word: after the 20 bytes of `feeAuthority` and the 2 of `feeBasisPoints`.
+    uint256 internal constant VAULT_FLAG_BIT_OFFSET = 22 * 8;
+
+    /// @notice Opens deposits on `vault` by writing the flag, with no proof. For tests that are about something else than the
+    /// opening: the opening tests use the real `openDeposits`. The write keeps the other fields of the word, and the function
+    /// reads the flag back so that a moved slot fails here and not silently.
+    function _openDepositsWithoutProof(BridgeVault vault) internal {
+        bytes32 word = vm.load(address(vault), bytes32(VAULT_FLAG_WORD_SLOT));
+        vm.store(address(vault), bytes32(VAULT_FLAG_WORD_SLOT), word | bytes32(uint256(1) << VAULT_FLAG_BIT_OFFSET));
+        require(vault.depositsOpen(), "HardenedProofs: the flag slot moved");
+    }
+
+    /// @notice `vault` after `_openDepositsWithoutProof`, so a builder can return an open vault in one expression. A
+    /// construction that `vm.expectRevert` caught leaves no code at the address, and the vault passes through untouched.
+    function _opened(BridgeVault vault) internal returns (BridgeVault) {
+        if (address(vault).code.length == 0) return vault;
+        _openDepositsWithoutProof(vault);
+        return vault;
+    }
 
     /// @notice The reference prover: signs the statement as `OracleSP1Verifier` expects.
     function _prove(bytes32 programVKey, bytes memory publicValues) internal pure returns (bytes memory) {

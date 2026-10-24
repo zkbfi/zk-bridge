@@ -266,8 +266,45 @@ impl ChainClient {
     }
 
     fn run_eth_call(&self, request: Value) -> Result<Bytes> {
-        let answer = self.rpc.call("eth_call", json!([request, "latest"]))?;
+        self.run_eth_call_at(request, "latest")
+    }
+
+    fn run_eth_call_at(&self, request: Value, block: &str) -> Result<Bytes> {
+        let answer = self.rpc.call("eth_call", json!([request, block]))?;
         parse_bytes(&answer, "eth_call")
+    }
+
+    /// Calls a view function against the state after block `number`. The node must keep that state.
+    ///
+    /// # Errors
+    /// `Error::Rpc` when the call reverts or the node has no state for the block, `Error::Malformed` when the return
+    /// data does not decode.
+    pub fn view_at<C: SolCall>(&self, to: Address, call: C, number: u64) -> Result<C::Return> {
+        let request = json!({ "to": format!("{to:#x}"), "data": format!("0x{}", hex::encode(call.abi_encode())) });
+        let raw = self.run_eth_call_at(request, &quantity(number))?;
+        C::abi_decode_returns(&raw)
+            .map_err(|error| Error::Malformed(format!("{}: {error}", C::SIGNATURE)))
+    }
+
+    /// The JSON of the block with this hash without transaction bodies, or `None` when the node does not know it.
+    pub fn block_by_hash(&self, hash: B256) -> Result<Option<Value>> {
+        let block = self
+            .rpc
+            .call("eth_getBlockByHash", json!([format!("{hash:#x}"), false]))?;
+        Ok((!block.is_null()).then_some(block))
+    }
+
+    /// The `eth_getProof` answer for `account` and the storage slots `slots`, against the state after block `number`.
+    /// The node must keep that state.
+    ///
+    /// # Errors
+    /// `Error::Rpc` when the node refuses, for example because it pruned the state of the block.
+    pub fn account_proof(&self, account: Address, slots: &[B256], number: u64) -> Result<Value> {
+        let keys: Vec<String> = slots.iter().map(|slot| format!("{slot:#x}")).collect();
+        self.rpc.call(
+            "eth_getProof",
+            json!([format!("{account:#x}"), keys, quantity(number)]),
+        )
     }
 
     /// Signs and sends a transaction, and returns its hash. It estimates the gas first, so a call that would

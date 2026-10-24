@@ -8,6 +8,7 @@ cargo build --release --no-default-features   # production build: no test crate,
 cargo build --release                          # adds the development beacon source for Anvil (cargo feature dev-source)
 zk-bridge-prover --config prover.toml once                      # one pass, then exit
 zk-bridge-prover --config prover.toml run                       # loop
+zk-bridge-prover --config prover.toml follow --rounds 2         # store heads with no deposit in view, open the vaults, then exit (code 2: a vault is still locked)
 zk-bridge-prover --config prover.toml status                    # print every deposit and its state
 zk-bridge-prover --config prover.toml withdraw --tx <hash> --log-index <n>   # n = index inside the receipt
 zk-bridge-prover --config prover.toml retry --tx <hash> --log-index <n>      # send a failed deposit back to the start
@@ -56,6 +57,43 @@ so `retry` needs no chain read for that. It then does one of three things.
 - The vault already paid the nonce: the deposit becomes `confirmed`.
 - Otherwise the deposit goes back to `seen`. The attempt count is zero. The stored calldata and transaction hash are
   cleared, so the next pass builds the withdrawal again. The note keeps the reason of the failure.
+
+## Storing heads and opening the vaults before the first deposit
+
+A vault pays a deposit only when the light client on the other chain has stored a header at or below the slot of the
+deposit: the block hash layout row of the vault needs a stored header with an execution block hash as evidence, and a
+row covers only the slots from its first evidence slot. The initial checkpoint does not count, because the constructor
+stores no execution block hash for it. The block roots row needs two stored headers below the anchor, and the service
+counts only the headers that the events `HeadUpdated` name. The updates that the first deposits cause finalize a head
+after those deposits. So a deposit that arrives before the first update can never be paid, and the first withdrawal of a
+route waits for three updates.
+
+The vault cannot read the light client on the other chain, so it locks instead. A new vault is LOCKED: every deposit
+reverts with `DepositsNotOpen()` before the vault takes a token. `openDeposits` opens it for good, and anyone may call it.
+Its proof says: the light client of the vault itself (which tracks the other chain) stored a finalized block of the other
+chain, and in that block the remote light client holds a non-zero `executionBlockHashes` entry. Only `update` writes that
+entry, so the remote light client stored a head. The proof is a real `eth_getProof` proof of the state of the remote chain.
+The module `src/opening.rs` builds it, simulates `openDeposits`, and sends it only when the simulation passes. The node of
+the remote chain must serve `eth_getProof` and `eth_call` for a past block number (the block that the vault light client
+stored). Anvil does. A pruned node does not.
+
+`follow` does both jobs. First it moves the light client of each route toward the newest final header with no deposit in
+view (`--rounds` is the most updates for each route, and a route stops early when its head is current). Then, after every
+route was followed, it tries to open the source vault of each route and prints one line for each route:
+
+- `route a_to_b: deposits open`: the vault was open already.
+- `route a_to_b: deposits opened (transaction 0x...)`: this run opened the vault.
+- `route a_to_b: deposits locked: <reason>`: no proof can open the vault yet. The run sent no opening transaction.
+
+The exit code is 0 when every route is open, and 2 when a route is still locked. A locked vault is no error, so the
+updates of the run stand. The signer pays for the opening on the SOURCE chain, so the key needs gas on both chains.
+
+The order after a deployment: run `follow` on both routes, and repeat until every route reports open. The reverse route
+needs a block that finalized after the first update of the light client, so the first run leaves both vaults locked and
+the second run opens them (the Anvil tests need two runs and a few blocks between them, see `tests/common/bridge.rs`).
+With one configuration for each route (one proof for each process), run the two routes in turn. Start the bots and the
+deposits only after both routes report open. `route-health` shows the same state as `LOCKED`.
+`docs/end-to-end-real-proofs.md` shows the effect.
 
 ## Own-chain light client
 
@@ -124,7 +162,7 @@ deposits made in the last three epochs or so before a source-chain fork that its
 command reads `/eth/v1/config/fork_schedule`, `/eth/v1/beacon/genesis` and `/eth/v1/beacon/headers/head` from the
 source beacon API. It compares the schedule with the fork table of the light-client program (`lc-core`) and, when the
 source vault has a deposit gate, with the gate's `supportedVersions`. It also reads the gate (`mode`, `enforcing`,
-`isSealed`, `confirmedEpoch`) and the head slot of the destination light client. The decision is the pure function
+`isSealed`, `confirmedEpoch`), `depositsOpen()` of the source vault and the head slot of the destination light client. The decision is the pure function
 `route_health::route_status`. It does no input or output, and an interface should copy its rules.
 
 | Status | Meaning |
@@ -133,6 +171,7 @@ source vault has a deposit gate, with the gate's `supportedVersions`. It also re
 | `WARN` | An unsupported fork is scheduled beyond the margin. The reason says whether it is more than 24 hours ahead. |
 | `STOP` | An unsupported fork is active, or activates within the margin. |
 | `SEALED` | The gate is sealed. Every deposit reverts. |
+| `LOCKED` | The source vault is not open yet (`depositsOpen()` is false). It refuses every deposit before it takes a token. Run `follow` until every route says `deposits open`. |
 | `STALE` | The light client head lags the source head by more than `--stale-epochs` epochs. |
 
 `WARN` also covers the own-chain light client (see above) when its head lags the current slot by
@@ -141,13 +180,16 @@ The lag comes from the wall clock, so a stuck beacon node cannot hide it. It is 
 made now does not depend on that light client, so the exit code stays 0.
 
 The margin is the larger of `--margin-seconds` and three epochs. A smaller value is raised to three epochs. When
-several findings apply, the most severe one wins (`SEALED`, `STOP`, `STALE`, `WARN`, `OPEN`) and the others appear
-as other findings. A schedule entry with epoch 18446744073709551615 (the beacon API value for "never") is not
+several findings apply, the most severe one wins (`SEALED`, `STOP`, `LOCKED`, `STALE`, `WARN`, `OPEN`) and the others
+appear as other findings. `LOCKED` ranks below `SEALED` and `STOP`, because `follow` cures neither of them, and above
+`STALE`, because a new deployment is locked and stale at once and `follow` cures both. `LOCKED` and `SEALED` both stop
+deposits before any token moves. `STOP` is the opposite danger: the vault would take a deposit that the route can never
+deliver. A schedule entry with epoch 18446744073709551615 (the beacon API value for "never") is not
 scheduled. PulseChain lists Deneb that way, with version `0xffffffff`.
 
 Output is one line of `key=value` pairs per route, or one JSON array with `--json`. Each route shows the reason, the
 fork version, the activation epoch and time, and the seconds remaining. Exit codes: 0 when every route is `OPEN` or
-`WARN`; 2 when any route is `STOP`, `SEALED` or `STALE`; 1 when the command cannot read a route (it never reports an
+`WARN`; 2 when any route is `STOP`, `SEALED`, `LOCKED` or `STALE`; 1 when the command cannot read a route (it never reports an
 unread route as open). The check is advisory. A direct contract call skips it, and in the window before a fork such a
 call can strand funds.
 

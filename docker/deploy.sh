@@ -9,6 +9,8 @@
 #   5. Put tokens in both vaults, so each vault can pay withdrawals.
 #   6. Write /state/deployment.json, /state/prover.toml, /state/route-health.toml and a keystore for the prover.
 #
+# Both vaults start locked: they refuse deposits until the prover opens them (`prover-entry open`, see docs/local-network.md).
+#
 # Every key comes from the public Anvil development mnemonic. Nothing here is secret.
 set -euo pipefail
 
@@ -131,10 +133,13 @@ VAULT_A="$(compute_address "$DEPLOYER" $((NONCE_A + 2)))"
 LIGHT_CLIENT_B="$(compute_address "$DEPLOYER" "$NONCE_B")"
 GATE_B="$(compute_address "$DEPLOYER" $((NONCE_B + 1)))"
 VAULT_B="$(compute_address "$DEPLOYER" $((NONCE_B + 2)))"
-# A name is a hypothesis: read each relationship back from the chain.
+# A name is a hypothesis: read each relationship back from the chain. Each vault names the light client of the OTHER chain,
+# and starts locked: it refuses deposits until `prover-entry open` (the prover command `follow`) opens it.
 for pair in "$VAULT_A $RPC_A $LIGHT_CLIENT_A lightClient()(address)" "$VAULT_A $RPC_A $GATE_A depositGate()(address)" \
   "$VAULT_A $RPC_A $VAULT_B remoteVault()(address)" "$VAULT_B $RPC_B $LIGHT_CLIENT_B lightClient()(address)" \
-  "$VAULT_B $RPC_B $GATE_B depositGate()(address)" "$VAULT_B $RPC_B $VAULT_A remoteVault()(address)"; do
+  "$VAULT_B $RPC_B $GATE_B depositGate()(address)" "$VAULT_B $RPC_B $VAULT_A remoteVault()(address)" \
+  "$VAULT_A $RPC_A $LIGHT_CLIENT_B remoteLightClient()(address)" "$VAULT_B $RPC_B $LIGHT_CLIENT_A remoteLightClient()(address)" \
+  "$VAULT_A $RPC_A false depositsOpen()(bool)" "$VAULT_B $RPC_B false depositsOpen()(bool)"; do
   read -r contract rpc expected signature <<< "$pair"
   actual="$(cast call "$contract" "$signature" --rpc-url "$rpc")"
   [ "${actual,,}" = "${expected,,}" ] || fail "$signature of $contract is $actual, expected $expected"
@@ -217,4 +222,4 @@ url = "http://127.0.0.1:29000/b"' > "$STATE_DIR/route-health.toml"
 
 # The deployment file comes last: its presence tells the other services that the deployment is complete.
 mv "$STATE_DIR/deployment.json.partial" "$STATE_DIR/deployment.json"
-log "done. Next: docker compose -f docker/compose.yaml up -d prover bots"
+log "done. Next: docker compose -f docker/compose.yaml run --rm open, then docker compose -f docker/compose.yaml up -d prover bots"

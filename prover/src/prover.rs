@@ -97,6 +97,47 @@ impl ProgramKind {
     }
 }
 
+/// A prover that refuses to prove after it has made a set number of proofs. The service treats the refusal as transient,
+/// so no deposit loses an attempt, and a new process continues. See `prover.max_proofs_per_process`.
+pub struct BudgetedProver {
+    inner: std::sync::Arc<dyn Prover>,
+    remaining: std::sync::atomic::AtomicUsize,
+}
+
+impl BudgetedProver {
+    /// A prover that makes at most `budget` proofs with `inner`.
+    pub fn new(inner: std::sync::Arc<dyn Prover>, budget: usize) -> Self {
+        Self {
+            inner,
+            remaining: std::sync::atomic::AtomicUsize::new(budget),
+        }
+    }
+}
+
+impl Prover for BudgetedProver {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
+    fn prove(&self, program_vkey: B256, statement: &ProofStatement) -> Result<Proof> {
+        let taken = self.remaining.fetch_update(
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+            |left| left.checked_sub(1),
+        );
+        if taken.is_err() {
+            return Err(Error::ProofBudget(
+                "this process has made its proofs; the next process goes on".into(),
+            ));
+        }
+        self.inner.prove(program_vkey, statement)
+    }
+
+    fn require_program_key(&self, program: ProgramKind, onchain_key: B256) -> Result<()> {
+        self.inner.require_program_key(program, onchain_key)
+    }
+}
+
 /// A prover that several routes share. The routes then load a backend only once.
 impl Prover for std::sync::Arc<dyn Prover> {
     fn name(&self) -> &'static str {
@@ -463,12 +504,24 @@ impl<Client: sp1_sdk::blocking::Prover> Sp1ClientProver<Client> {
         require_matching_key(job.kind.label(), program.program_key, program_vkey)?;
         let mut stdin = sp1_sdk::SP1Stdin::new();
         stdin.write_vec(job.guest_input.clone());
+        let logger = crate::logging::Logger::standard();
+        let program_label = job.kind.label().to_string();
+        logger.info(
+            "proof_started",
+            None,
+            &[
+                ("program", program_label.clone()),
+                ("input_bytes", job.guest_input.len().to_string()),
+            ],
+        );
+        let started = std::time::Instant::now();
         let proof = self
             .client
             .prove(&program.proving_key, stdin)
             .groth16()
             .run()
             .map_err(|error| Error::Prover(format!("the SP1 Groth16 proof failed: {error}")))?;
+        let prove_seconds = started.elapsed().as_secs();
         let proven_values = proof.public_values.to_vec();
         require_native_values(&proven_values, &job.expected_values)?;
         self.client
@@ -480,6 +533,16 @@ impl<Client: sp1_sdk::blocking::Prover> Sp1ClientProver<Client> {
             .map_err(|error| Error::Prover(format!("the new proof does not verify: {error}")))?;
         let proof_bytes = proof.bytes();
         require_groth16_shape(&proof_bytes)?;
+        logger.info(
+            "proof_finished",
+            None,
+            &[
+                ("program", program_label),
+                ("prove_seconds", prove_seconds.to_string()),
+                ("total_seconds", started.elapsed().as_secs().to_string()),
+                ("proof_bytes", proof_bytes.len().to_string()),
+            ],
+        );
         Ok(Proof {
             public_values: proven_values,
             proof_bytes,
@@ -599,6 +662,24 @@ mod tests {
             matches!(error, Error::VerificationRefused(_)),
             "got {error}"
         );
+    }
+
+    /// Claim: a budgeted prover makes the proofs of its budget and then refuses with a transient error, and the refusal
+    /// reaches no inner prover.
+    /// Why it matters: the service must neither count the refusal as a failed attempt nor send a proof that was not made.
+    #[test]
+    fn a_budgeted_prover_stops_after_its_budget() {
+        let inner: std::sync::Arc<dyn Prover> = std::sync::Arc::new(OracleProver::new(oracle()));
+        let prover = BudgetedProver::new(inner, 1);
+        let vkey = B256::repeat_byte(0x42);
+        assert!(prover
+            .prove(vkey, &ProofStatement::Verified(scenario(400)))
+            .is_ok());
+        let refusal = prover
+            .prove(vkey, &ProofStatement::Verified(scenario(400)))
+            .unwrap_err();
+        assert!(matches!(refusal, Error::ProofBudget(_)), "got {refusal}");
+        assert!(crate::service::is_transient(&refusal));
     }
 
     /// Claim: a program key that differs in one bit from the stored key is refused, and the error shows both keys.

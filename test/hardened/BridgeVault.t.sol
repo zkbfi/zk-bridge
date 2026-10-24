@@ -70,7 +70,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         internal
         returns (BridgeVault)
     {
-        return new BridgeVault(client, local, remote, remoteVault_, pairs, BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0)), DEFAULT_CAPELLA_ERA, address(gateB));
+        return new BridgeVault(client, local, remote, remoteVault_, pairs, BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), address(lightClientForA)), DEFAULT_CAPELLA_ERA, address(gateB));
     }
 
     /// @dev A vault on chain B for one custom local token, paired with the fixture remote token and remote vault.
@@ -108,7 +108,7 @@ contract BridgeVaultTest is WithdrawalScenes {
         RecordingGate gate = new RecordingGate();
         vm.chainId(CHAIN_B);
         BridgeVault custom = new BridgeVault(
-            address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), _pair(address(tokenOnB), address(tokenOnA), 18), BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0)), 758, address(gate)
+            address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), _pair(address(tokenOnB), address(tokenOnA), 18), BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), address(lightClientForA)), 758, address(gate)
         );
         assertEq(custom.capellaEra(), 758);
         assertEq(address(custom.depositGate()), address(gate));
@@ -129,8 +129,8 @@ contract BridgeVaultTest is WithdrawalScenes {
         BridgeVault.TokenPair[] memory pairs = _pair(address(tokenOnB), address(tokenOnA), 18);
         vm.chainId(CHAIN_B);
         vm.expectRevert(abi.encodeWithSelector(BridgeVault.ZeroValue.selector, "depositGate"));
-        new BridgeVault(address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs, BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0)), DEFAULT_CAPELLA_ERA, address(0));
-        new BridgeVault(address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs, BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0)), DEFAULT_CAPELLA_ERA, address(gateB)); // honest path
+        new BridgeVault(address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs, BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), address(lightClientForA)), DEFAULT_CAPELLA_ERA, address(0));
+        new BridgeVault(address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs, BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), address(lightClientForA)), DEFAULT_CAPELLA_ERA, address(gateB)); // honest path
     }
 
     /// Claim: each zero constructor argument is refused with its name. Shows: three reverts with exact errors (the vault has no verifier argument).
@@ -317,9 +317,9 @@ contract BridgeVaultTest is WithdrawalScenes {
     /// @dev A vault on chain A that uses a recording gate.
     function _vaultWithRecordingGate(RecordingGate gate) internal returns (BridgeVault) {
         vm.chainId(CHAIN_A);
-        return new BridgeVault(
-            address(lightClientForA), CHAIN_A, CHAIN_B, address(vaultB), _pair(address(tokenOnA), address(tokenOnB), 18), BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0)), DEFAULT_CAPELLA_ERA, address(gate)
-        );
+        return _opened(new BridgeVault(
+            address(lightClientForA), CHAIN_A, CHAIN_B, address(vaultB), _pair(address(tokenOnA), address(tokenOnB), 18), BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), address(lightClientForB)), DEFAULT_CAPELLA_ERA, address(gate)
+        ));
     }
 
     /// Claim: the vault passes the caller's gate evidence to the gate unchanged, once per deposit. Shows: the gate
@@ -369,8 +369,9 @@ contract BridgeVaultTest is WithdrawalScenes {
         vm.chainId(CHAIN_A);
         uint64 cutoff = uint64(block.timestamp + 100);
         BridgeVault vault = new BridgeVault(
-            address(lightClientForA), CHAIN_A, CHAIN_B, address(vaultB), _pair(address(tokenOnA), address(tokenOnB), 18), BridgeVault.VaultTerms(cutoff, address(0), address(0), 0, 0, address(0)), DEFAULT_CAPELLA_ERA, address(gate)
+            address(lightClientForA), CHAIN_A, CHAIN_B, address(vaultB), _pair(address(tokenOnA), address(tokenOnB), 18), BridgeVault.VaultTerms(cutoff, address(0), address(0), 0, 0, address(0), address(lightClientForB)), DEFAULT_CAPELLA_ERA, address(gate)
         );
+        _openDepositsWithoutProof(vault);
         MockERC20 unregistered = new MockERC20("Unregistered", "UNR");
         bytes memory refusal = abi.encodeWithSelector(RecordingGate.GateRefused.selector, bytes(""));
 

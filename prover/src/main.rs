@@ -1,6 +1,7 @@
 //! The `zk-bridge-prover` binary. All logic is in the library.
 //!
-//! Exit codes: 0 for success, 1 for an error, 2 when `route-health` finds a route that refuses deposits.
+//! Exit codes: 0 for success, 1 for an error, 2 when `route-health` finds a route that refuses deposits or `follow` leaves a
+//! source vault locked.
 
 fn main() {
     let arguments: Vec<String> = std::env::args().collect();

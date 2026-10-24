@@ -10,6 +10,7 @@
 //! - [`rpc`] and [`chain`]: a small JSON-RPC client and a client for one chain.
 //! - [`light_client`]: the only module that calls `lc-core` (and, for the development source only, `lc-testkit`).
 //! - [`gate`]: evidence for the deposit gate of a vault.
+//! - [`opening`]: opens the deposits of a source vault with a proof that the remote light client stored a head.
 //! - [`fork_observation`]: proves a fork observation and sends it to the `ForkRegistry`.
 //! - [`prover`]: the proving backends. Only light-client updates are proven.
 //! - [`remote`]: the backend that sends a proof job to a GPU worker and checks the answer.
@@ -32,6 +33,7 @@ pub mod light_client;
 #[cfg(feature = "dev-source")]
 pub mod local_network;
 pub mod logging;
+pub mod opening;
 pub mod prover;
 pub mod remote;
 pub mod route;

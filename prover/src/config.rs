@@ -125,6 +125,11 @@ pub struct ProverConfig {
     /// The compiled fork observation guest, for the `sp1` backend. Without it the prover refuses observations.
     #[serde(default)]
     pub sp1_observation_elf_path: Option<PathBuf>,
+    /// The most proofs that one process makes. A process that has made them refuses further proofs with a transient error,
+    /// so a loop of `once` passes continues in a new process. SP1 keeps memory after a Groth16 proof, and a second proof in
+    /// one process needs about 30 GiB more. Default: no limit.
+    #[serde(default)]
+    pub max_proofs_per_process: Option<usize>,
     /// The base URL of the worker endpoint, for the `remote` backend.
     #[serde(default)]
     pub remote_url: Option<String>,
@@ -291,14 +296,12 @@ impl ChainConfig {
 
     /// The `lc-core` chain kind of this chain's beacon chain.
     pub fn chain_kind(&self) -> Result<ChainKind> {
-        match self.beacon.chain.as_str() {
-            "pulsechain" => Ok(ChainKind::Pulsechain),
-            "ethereum" => Ok(ChainKind::Ethereum),
-            other => Err(Error::Config(format!(
-                "{}.beacon.chain: unknown chain {other}",
-                self.name
-            ))),
-        }
+        ChainKind::from_name(&self.beacon.chain).ok_or_else(|| {
+            Error::Config(format!(
+                "{}.beacon.chain: unknown chain {}",
+                self.name, self.beacon.chain
+            ))
+        })
     }
 }
 

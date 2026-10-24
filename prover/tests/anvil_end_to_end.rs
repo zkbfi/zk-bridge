@@ -382,7 +382,8 @@ fn a_detecting_gate_admits_deposits_without_evidence() {
 }
 
 /// Claim: a deposit made after more than 2048 blocks (more than 8192 beacon slots in the dev chain) is delivered. The
-/// first light-client update jumps from the checkpoint at slot 1 to slot 1024 + 4 * 2200, past the old 8192-slot cap.
+/// light-client update for it jumps from the head that `follow` stored at the deployment, a few blocks into the chain, to
+/// slot 1024 + 4 * 2200, more than 8192 slots in one step, past the old 8192-slot cap.
 /// Why it matters: the contract lost its head-jump cap in the same change that added the historical path. If the
 /// contract or the dev source kept a cap, a chain with a long history could not be served at all.
 #[test]
@@ -399,26 +400,29 @@ fn a_head_jump_of_more_than_8192_slots_is_accepted() {
         }
         .abi_encode(),
     );
+    let head_of = |bridge: &Bridge| {
+        zk_bridge_prover::contracts::LightClientContract::headCall::abi_decode_returns(
+            &bridge
+                .chain_b
+                .call(
+                    bridge.light_client_b,
+                    &zk_bridge_prover::contracts::LightClientContract::headCall {}.abi_encode(),
+                )
+                .unwrap(),
+        )
+        .unwrap()
+    };
+    let head_before = head_of(&bridge);
     bridge.chain_a.mine(2_200);
     settle_in_epoch(&bridge.chain_a, bridge.gate_a);
     let (_, _, nonce) = deposit(&bridge, ONE_TOKEN);
     bridge.chain_a.mine(2);
     run(&bridge, &["once"]).expect("once");
     assert!(claimed(&bridge.chain_b, bridge.vault_b, nonce));
-    let head = zk_bridge_prover::contracts::LightClientContract::headCall::abi_decode_returns(
-        &bridge
-            .chain_b
-            .call(
-                // The light client of chain B is the contract deployed third on that chain (nonce 3 after the dummy transaction).
-                DEPLOYER.create(3),
-                &zk_bridge_prover::contracts::LightClientContract::headCall {}.abi_encode(),
-            )
-            .unwrap(),
-    )
-    .unwrap();
+    let head = head_of(&bridge);
     assert!(
-        head > 1 + 8192,
+        head > head_before + 8192,
         "the head moved by {} slots in the first step",
-        head - 1
+        head - head_before
     );
 }

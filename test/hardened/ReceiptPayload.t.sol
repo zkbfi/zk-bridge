@@ -47,7 +47,7 @@ contract ReceiptPayloadTest is WithdrawalScenes {
             CHAIN_A,
             ReceiptFixtures.REMOTE_VAULT,
             pairs,
-            BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0)),
+            BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), address(lightClientForA)),
             DEFAULT_CAPELLA_ERA,
             address(gateB)
         );

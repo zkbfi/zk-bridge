@@ -15,6 +15,7 @@
 
 use crate::error::{Error, Result};
 use crate::logging::Logger;
+use crate::opening::OpeningOutcome;
 use crate::state::{DepositState, Event};
 use crate::store::{DepositRecord, NewDeposit, Store};
 use alloy_primitives::B256;
@@ -94,6 +95,15 @@ pub trait RoutePorts {
     fn advance_own_light_client(&self) -> Result<usize> {
         Ok(0)
     }
+    /// Sends the next update that moves the destination light client of this route toward the newest final header of
+    /// the source chain, with no deposit in view, and returns how many updates it sent (zero or one per call). Zero means
+    /// the head already is the newest final header, or the source has none yet.
+    fn follow_light_client(&self) -> Result<usize> {
+        Ok(0)
+    }
+    /// Tries to open the deposits of the source vault of this route (see `opening.rs`). It sends a transaction only when a
+    /// proof exists. A vault that cannot be opened yet is an outcome, not an error.
+    fn open_source_vault(&self) -> Result<OpeningOutcome>;
     /// Builds the withdrawal calldata and runs native verification. It never returns calldata that native
     /// verification refused. It also makes sure the vault layout rows cover the withdrawal.
     fn build_withdrawal(&self, deposit: &NewDeposit) -> Result<Vec<u8>>;
@@ -118,6 +128,51 @@ pub struct Route {
     pub log_block_range: u64,
     /// The outside world.
     pub ports: Box<dyn RoutePorts>,
+}
+
+/// The opening of the source vault of one route, as [`Service::follow`] found it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteOpening {
+    /// The route name.
+    pub route: String,
+    /// What the attempt to open the source vault of the route did.
+    pub outcome: OpeningOutcome,
+}
+
+impl RouteOpening {
+    /// The line that the command line prints for the route.
+    pub fn summary(&self) -> String {
+        match &self.outcome {
+            OpeningOutcome::AlreadyOpen => format!("route {}: deposits open", self.route),
+            OpeningOutcome::Opened { transaction } => format!(
+                "route {}: deposits opened (transaction {transaction:#x})",
+                self.route
+            ),
+            OpeningOutcome::NotReady { reason } => {
+                format!("route {}: deposits locked: {reason}", self.route)
+            }
+        }
+    }
+}
+
+/// What [`Service::follow`] did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FollowReport {
+    /// How many light client updates it sent in all.
+    pub updates_sent: usize,
+    /// The source vault of each route, in route order.
+    pub openings: Vec<RouteOpening>,
+}
+
+impl FollowReport {
+    /// The routes whose source vault still refuses deposits.
+    pub fn locked_routes(&self) -> Vec<&str> {
+        self.openings
+            .iter()
+            .filter(|opening| matches!(opening.outcome, OpeningOutcome::NotReady { .. }))
+            .map(|opening| opening.route.as_str())
+            .collect()
+    }
 }
 
 /// Settings of the loop.
@@ -151,7 +206,7 @@ pub struct Service {
 /// A failure that a later pass may fix: the node is down or slow. It does not count as an attempt.
 pub fn is_transient(error: &Error) -> bool {
     match error {
-        Error::Http(_) | Error::Database(_) => true,
+        Error::Http(_) | Error::Database(_) | Error::ProofBudget(_) => true,
         Error::Rpc { data, .. } => data.is_none(),
         _ => false,
     }
@@ -177,6 +232,81 @@ impl Service {
     /// The store, for `status`.
     pub fn store(&self) -> &Store {
         &self.store
+    }
+
+    /// Moves the destination light client of every route toward the newest final header of its source chain, with no
+    /// deposit in view, for up to `rounds` updates per route. A route stops early when its head already is the newest
+    /// final header. When every route was followed, it tries to open the source vault of each route (see `opening.rs`),
+    /// and logs one line for each route.
+    ///
+    /// Why it exists: a vault pays a deposit only after the light client on the other chain stored a header at or below
+    /// the slot of the deposit, and the vault cannot read that light client. So the vault refuses every deposit (it is
+    /// locked) until `openDeposits` proves, through its own light client, that the other light client stored a head. The
+    /// proof needs a block of the other chain that finalized AFTER the first update of that light client. An operator runs
+    /// this on both routes after the deployment, again and again until every route is open, and only then starts deposits.
+    ///
+    /// A vault that stays locked is no failure of this call: the report lists it. The command line turns it into an exit code.
+    ///
+    /// # Errors
+    /// The first failure of an update: it stops the call. A failure to open a vault is logged and reported as locked.
+    pub fn follow(&self, rounds: usize) -> Result<FollowReport> {
+        let mut updates_sent = 0;
+        for route in &self.routes {
+            for _ in 0..rounds {
+                let updates = route.ports.follow_light_client()?;
+                self.logger.info(
+                    "light_client_followed",
+                    None,
+                    &[
+                        ("route", route.name.clone()),
+                        ("updates", updates.to_string()),
+                    ],
+                );
+                updates_sent += updates;
+                if updates == 0 {
+                    break;
+                }
+            }
+        }
+        let openings = self
+            .routes
+            .iter()
+            .map(|route| RouteOpening {
+                route: route.name.clone(),
+                outcome: self.try_to_open(route),
+            })
+            .collect();
+        Ok(FollowReport {
+            updates_sent,
+            openings,
+        })
+    }
+
+    /// Tries to open the source vault of a route and logs the outcome. A failure is a locked vault with the error as its
+    /// reason, so the other routes still get their turn.
+    fn try_to_open(&self, route: &Route) -> OpeningOutcome {
+        let outcome =
+            route
+                .ports
+                .open_source_vault()
+                .unwrap_or_else(|error| OpeningOutcome::NotReady {
+                    reason: format!("the opening failed: {error}"),
+                });
+        let route_field = ("route", route.name.clone());
+        match &outcome {
+            OpeningOutcome::AlreadyOpen => self.logger.info("deposits_open", None, &[route_field]),
+            OpeningOutcome::Opened { transaction } => self.logger.info(
+                "deposits_opened",
+                None,
+                &[route_field, ("transaction", format!("{transaction:#x}"))],
+            ),
+            OpeningOutcome::NotReady { reason } => self.logger.warn(
+                "deposits_locked",
+                None,
+                &[route_field, ("reason", reason.clone())],
+            ),
+        }
+        outcome
     }
 
     /// One pass over every route.
@@ -646,6 +776,12 @@ pub(crate) mod tests {
         /// What `advance_own_light_client` answers: the number of updates sent, or a failure.
         pub own_answer: RefCell<Box<dyn Fn() -> Result<usize>>>,
         pub own_calls: Cell<u32>,
+        /// What `follow_light_client` answers: the number of updates sent, or a failure.
+        pub follow_answer: RefCell<Box<dyn Fn() -> Result<usize>>>,
+        pub follow_calls: Cell<u32>,
+        /// What `open_source_vault` answers: the outcome of the opening, or a failure.
+        pub open_answer: RefCell<Box<dyn Fn() -> Result<OpeningOutcome>>>,
+        pub open_calls: Cell<u32>,
         /// The head of a modelled destination light client, or `None` to answer from `coverage`. With a head, a
         /// deposit above it costs one update that moves the head to the finalized block.
         pub head: Cell<Option<u64>>,
@@ -673,6 +809,10 @@ pub(crate) mod tests {
                 scans: Cell::new(0),
                 own_answer: RefCell::new(Box::new(|| Ok(0))),
                 own_calls: Cell::new(0),
+                follow_answer: RefCell::new(Box::new(|| Ok(0))),
+                follow_calls: Cell::new(0),
+                open_answer: RefCell::new(Box::new(|| Ok(OpeningOutcome::AlreadyOpen))),
+                open_calls: Cell::new(0),
                 head: Cell::new(None),
                 updates: Cell::new(0),
                 advance_calls: Cell::new(0),
@@ -724,6 +864,14 @@ pub(crate) mod tests {
         fn advance_own_light_client(&self) -> Result<usize> {
             self.0.own_calls.set(self.0.own_calls.get() + 1);
             (self.0.own_answer.borrow())()
+        }
+        fn follow_light_client(&self) -> Result<usize> {
+            self.0.follow_calls.set(self.0.follow_calls.get() + 1);
+            (self.0.follow_answer.borrow())()
+        }
+        fn open_source_vault(&self) -> Result<OpeningOutcome> {
+            self.0.open_calls.set(self.0.open_calls.get() + 1);
+            (self.0.open_answer.borrow())()
         }
         fn build_withdrawal(&self, _deposit: &NewDeposit) -> Result<Vec<u8>> {
             self.0.builds.set(self.0.builds.get() + 1);
@@ -1028,6 +1176,112 @@ pub(crate) mod tests {
             .unwrap()
             .iter()
             .all(|line| !line.contains("own_light_client")));
+    }
+
+    /// Claim: `follow` asks each route for updates until the route says zero or the rounds run out, adds up the updates, and
+    /// logs one line for each call. A failing route stops the call with its error.
+    /// Why it matters: an operator runs it before the first deposit to store the headers that the first withdrawals need.
+    /// A route that never says zero must still stop after the rounds.
+    #[test]
+    fn follow_sends_updates_until_the_head_is_current_or_the_rounds_run_out() {
+        let script = Script::new();
+        let (service, lines) = service_with(&script, Store::open_in_memory().unwrap());
+        let remaining = std::rc::Rc::new(Cell::new(2usize));
+        let counter = remaining.clone();
+        *script.follow_answer.borrow_mut() = Box::new(move || {
+            let left = counter.get();
+            counter.set(left.saturating_sub(1));
+            Ok(usize::from(left > 0))
+        });
+        assert_eq!(
+            service.follow(5).unwrap().updates_sent,
+            2,
+            "two updates, then zero ends the route"
+        );
+        assert_eq!(script.follow_calls.get(), 3);
+        let followed = lines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|line| line.contains("event=light_client_followed"))
+            .count();
+        assert_eq!(followed, 3);
+
+        script.follow_calls.set(0);
+        *script.follow_answer.borrow_mut() = Box::new(|| Ok(1));
+        assert_eq!(
+            service.follow(3).unwrap().updates_sent,
+            3,
+            "the rounds end a route that always has an update"
+        );
+        assert_eq!(script.follow_calls.get(), 3);
+
+        *script.follow_answer.borrow_mut() = Box::new(|| Err(Error::Beacon("down".into())));
+        assert!(service.follow(3).is_err());
+    }
+
+    /// Claim: after the rounds, `follow` tries to open the source vault of every route, logs one line for each outcome,
+    /// and reports a vault that stays locked without failing. A failure of the opening is a locked vault with the error as
+    /// its reason.
+    /// Why it matters: a locked vault refuses every deposit. The operator reads the lines and the report to know when to
+    /// start deposits, and one stuck route must not hide the state of the others or fail the update work that succeeded.
+    #[test]
+    fn follow_opens_the_source_vault_and_reports_a_locked_one() {
+        let script = Script::new();
+        let (service, lines) = service_with(&script, Store::open_in_memory().unwrap());
+        let report = service.follow(1).unwrap();
+        assert_eq!(script.open_calls.get(), 1);
+        assert!(report.locked_routes().is_empty());
+        assert_eq!(report.openings[0].summary(), "route a_to_b: deposits open");
+
+        let transaction = B256::repeat_byte(0xab);
+        *script.open_answer.borrow_mut() =
+            Box::new(move || Ok(OpeningOutcome::Opened { transaction }));
+        let report = service.follow(1).unwrap();
+        assert!(report.locked_routes().is_empty());
+        assert!(report.openings[0]
+            .summary()
+            .contains("deposits opened (transaction 0xabab"));
+
+        *script.open_answer.borrow_mut() = Box::new(|| {
+            Ok(OpeningOutcome::NotReady {
+                reason: "the light client on the source chain stored no update yet".into(),
+            })
+        });
+        let report = service.follow(1).unwrap();
+        assert_eq!(report.locked_routes(), vec!["a_to_b"]);
+        assert_eq!(
+            report.openings[0].summary(),
+            "route a_to_b: deposits locked: the light client on the source chain stored no update yet"
+        );
+
+        *script.open_answer.borrow_mut() = Box::new(|| Err(Error::Http("down".into())));
+        let report = service.follow(1).unwrap();
+        assert_eq!(report.locked_routes(), vec!["a_to_b"]);
+        assert!(report.openings[0]
+            .summary()
+            .contains("the opening failed: http: down"));
+
+        let lines = lines.lock().unwrap();
+        for event in ["deposits_open", "deposits_opened", "deposits_locked"] {
+            let wanted = format!("event={event} ");
+            assert!(lines.iter().any(|line| line.contains(&wanted)), "{event}");
+        }
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("event=deposits_opened")
+                && line.contains("transaction=0xabab")));
+    }
+
+    /// Claim: an update that fails stops `follow` before any vault is opened.
+    /// Why it matters: the opening proof needs the updates. A half followed route must not look opened.
+    #[test]
+    fn a_failed_update_stops_follow_before_the_opening() {
+        let script = Script::new();
+        let (service, _) = service_with(&script, Store::open_in_memory().unwrap());
+        *script.follow_answer.borrow_mut() = Box::new(|| Err(Error::Beacon("down".into())));
+        assert!(service.follow(1).is_err());
+        assert_eq!(script.open_calls.get(), 0);
     }
 
     /// Claim: while no final header covers the block, the deposit waits in `awaiting_finality` and nothing is built.

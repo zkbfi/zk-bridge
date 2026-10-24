@@ -16,6 +16,7 @@ use crate::light_client::{
     to_layout_header, verify_withdrawal_natively, withdrawal_calldata, AncestryPath, VaultContext,
     DEPOSIT_EVENT_TOPIC,
 };
+use crate::opening::{check_remote_light_client, open_source_vault, OpeningOutcome, OpeningTarget};
 use crate::prover::{OracleProver, ProgramKind, Prover};
 use crate::rpc::{parse_quantity, HttpClient, HttpRpc};
 use crate::service::{Coverage, Route, RoutePorts, SendOutcome};
@@ -31,7 +32,8 @@ const MAX_PROOFS_PER_CALL: usize = 8;
 
 /// One direction over two real chains.
 ///
-/// The source chain client sends transactions only when `own_light_client` is set: it then updates that light client.
+/// The source chain client signs: it updates the own-chain light client (when one is set) and sends `openDeposits` to the
+/// source vault.
 pub struct LiveRoute {
     source: ChainClient,
     destination: ChainClient,
@@ -53,7 +55,7 @@ pub struct LiveRoute {
 pub struct LiveRouteParts {
     /// The route name.
     pub route_name: String,
-    /// The client of the source chain. It needs the signer when `own_light_client` is set.
+    /// The client of the source chain. It needs the signer: `openDeposits` is a transaction on the source chain.
     pub source: ChainClient,
     /// The client of the destination chain (it holds the signer).
     pub destination: ChainClient,
@@ -154,6 +156,7 @@ impl LiveRoute {
                 light_client.to_string(),
             ));
         }
+        check_remote_light_client(&self.source, self.source_vault, self.light_client, name)?;
         let program_key = self
             .destination
             .view(self.light_client, LightClientContract::programVKeyCall {})?;
@@ -179,12 +182,6 @@ impl LiveRoute {
         let Some(own) = self.own_light_client else {
             return Ok(());
         };
-        self.source.sender().map_err(|_| {
-            Error::Config(format!(
-                "route {}: own_light_client is set, but the source chain has no signer",
-                self.route_name
-            ))
-        })?;
         let own_key = self
             .source
             .view(own, LightClientContract::programVKeyCall {})?;
@@ -304,6 +301,24 @@ impl LiveRoute {
             self.receipt_timeout,
         )?;
         Ok(())
+    }
+
+    /// Sends one fold that moves `light_client` on `chain` toward the newest final header of the source chain, and returns
+    /// how many updates it sent (zero or one). `light_client` tracks the beacon chain of the source chain: the light client
+    /// of the destination chain, or the own-chain light client on the source chain.
+    ///
+    /// One fold per call. The chain keeps finalizing, so a loop that chases the newest final header would not end on a fast
+    /// chain (on Anvil each update mines a block that moves the finalized block). A fold holds up to 64 updates, so a head
+    /// many periods behind catches up in one proof, or in a few calls when it lags by more than 64 periods.
+    fn follow_head(&self, chain: &ChainClient, light_client: Address) -> Result<usize> {
+        let state = read_light_client_state_of(chain, light_client)?;
+        match self.beacon.next_head_update(&state, &self.source)? {
+            UpdatePlan::Covered | UpdatePlan::NotYetFinal => Ok(0),
+            UpdatePlan::Update(statement) => {
+                self.submit_update(chain, light_client, &statement)?;
+                Ok(1)
+            }
+        }
     }
 
     /// Makes the vault layout rows cover the withdrawal: the `block_roots` row (recent path) or the
@@ -555,18 +570,23 @@ impl RoutePorts for LiveRoute {
         let Some(own) = self.own_light_client else {
             return Ok(0);
         };
-        // One fold per pass. The chain keeps finalizing, so a loop that chases the newest final header would not end on
-        // a fast chain (on Anvil each update mines a block that moves the finalized block). A fold holds up to 64
-        // updates, so a head many periods behind catches up in one proof, or in a few passes when it lags by more than
-        // 64 periods.
-        let state = read_light_client_state_of(&self.source, own)?;
-        match self.beacon.next_head_update(&state, &self.source)? {
-            UpdatePlan::Covered | UpdatePlan::NotYetFinal => Ok(0),
-            UpdatePlan::Update(statement) => {
-                self.submit_update(&self.source, own, &statement)?;
-                Ok(1)
-            }
-        }
+        self.follow_head(&self.source, own)
+    }
+
+    fn follow_light_client(&self) -> Result<usize> {
+        self.follow_head(&self.destination, self.light_client)
+    }
+
+    fn open_source_vault(&self) -> Result<OpeningOutcome> {
+        open_source_vault(
+            &self.source,
+            &self.destination,
+            &OpeningTarget {
+                vault: self.source_vault,
+                destination_light_client: self.light_client,
+                receipt_timeout: self.receipt_timeout,
+            },
+        )
     }
 
     fn build_withdrawal(&self, deposit: &NewDeposit) -> Result<Vec<u8>> {
@@ -761,13 +781,24 @@ fn build_prover(config: &Config, oracle: &Signer) -> Result<Arc<dyn Prover>> {
     }
 }
 
+/// Wraps a prover in a proof budget when the configuration sets one.
+fn limited(prover: Arc<dyn Prover>, budget: Option<usize>) -> Arc<dyn Prover> {
+    match budget {
+        Some(budget) => Arc::new(crate::prover::BudgetedProver::new(prover, budget)),
+        None => prover,
+    }
+}
+
 /// Builds the routes of a configuration. `signer` sends transactions. `oracle` signs for the oracle backend.
 ///
 /// # Errors
 /// Any connection or wiring error.
 pub fn build_routes(config: &Config, signer: &Signer, oracle: &Signer) -> Result<Vec<Route>> {
     let mut routes = Vec::new();
-    let prover = build_prover(config, oracle)?;
+    let prover = limited(
+        build_prover(config, oracle)?,
+        config.prover.max_proofs_per_process,
+    );
     for name in &config.routes {
         routes.push(build_route(config, *name, signer, &prover)?);
     }
@@ -783,11 +814,10 @@ fn build_route(
     let source_config = config.source_of(name);
     let destination_config = config.destination_of(name);
     let own_light_client = source_config.own_light_client_address()?;
-    // The source client signs only when it must update the own-chain light client.
-    let source_signer = own_light_client.map(|_| signer.clone());
+    // The source client signs for the own-chain light client update and for `openDeposits` on the source vault.
     let live = LiveRoute::connect(LiveRouteParts {
         route_name: name.as_str().to_string(),
-        source: connect_chain(source_config, source_signer)?,
+        source: connect_chain(source_config, Some(signer.clone()))?,
         destination: connect_chain(destination_config, Some(signer.clone()))?,
         source_vault: source_config.vault_address()?,
         destination_vault: destination_config.vault_address()?,

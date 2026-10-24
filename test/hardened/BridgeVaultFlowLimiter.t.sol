@@ -36,11 +36,11 @@ contract BridgeVaultFlowLimiterTest is WithdrawalScenes {
         BridgeVault.TokenPair[] memory pairs = new BridgeVault.TokenPair[](1);
         pairs[0] = BridgeVault.TokenPair(address(tokenOnA), address(tokenOnB), 18);
         vm.chainId(CHAIN_A);
-        return new BridgeVault(
+        return _opened(new BridgeVault(
             address(lightClientForA), CHAIN_A, CHAIN_B, address(vaultB), pairs,
-            BridgeVault.VaultTerms(0, feeAuthority, makeAddr("fee recipient"), 25, 50, flowLimiter),
+            BridgeVault.VaultTerms(0, feeAuthority, makeAddr("fee recipient"), 25, 50, flowLimiter, address(lightClientForB)),
             DEFAULT_CAPELLA_ERA, address(gateA)
-        );
+        ));
     }
 
     /// @dev Mints and approves for `user`, then deposits `amount` into `vault` for `bob`.

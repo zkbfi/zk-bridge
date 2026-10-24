@@ -165,7 +165,8 @@ contract DeployBridgeTest is Test {
         decimalsB[0] = tokenOnB.decimals();
         deploymentA = script.withPairs(
             script.baseDeployment(
-                config.chainA, config.chainB.chainId, config.deployer, plan.lightClientA, plan.gateA, plan.vaultA, plan.vaultB
+                config.chainA, config.chainB.chainId, config.deployer, plan.lightClientA, plan.gateA, plan.vaultA, plan.vaultB,
+                plan.lightClientB
             ),
             config.tokensA,
             config.tokensB,
@@ -173,7 +174,8 @@ contract DeployBridgeTest is Test {
         );
         deploymentB = script.withPairs(
             script.baseDeployment(
-                config.chainB, config.chainA.chainId, config.deployer, plan.lightClientB, plan.gateB, plan.vaultB, plan.vaultA
+                config.chainB, config.chainA.chainId, config.deployer, plan.lightClientB, plan.gateB, plan.vaultB, plan.vaultA,
+                plan.lightClientA
             ),
             config.tokensB,
             config.tokensA,
@@ -595,6 +597,10 @@ contract DeployBridgeTest is Test {
 
         assertEq(BridgeVault(vaultA).remoteVault(), vaultB, "vault A points at the real vault B");
         assertEq(BridgeVault(vaultB).remoteVault(), vaultA, "vault B points at the real vault A");
+        assertEq(BridgeVault(vaultA).remoteLightClient(), lightClientB, "vault A opens on the state of the light client of chain B");
+        assertEq(BridgeVault(vaultB).remoteLightClient(), lightClientA, "vault B opens on the state of the light client of chain A");
+        assertFalse(BridgeVault(vaultA).depositsOpen(), "vault A starts locked");
+        assertFalse(BridgeVault(vaultB).depositsOpen(), "vault B starts locked");
         assertEq(address(BridgeVault(vaultA).lightClient()), lightClientA);
         assertEq(address(BridgeVault(vaultB).lightClient()), lightClientB);
         assertEq(address(BridgeVault(vaultA).depositGate()), gateA, "vault A uses the gate of chain A");
@@ -671,7 +677,7 @@ contract DeployBridgeTest is Test {
             DeployBridge.FeeConfig memory fee = deploymentA.chain.fee;
             BridgeVault wrong = new BridgeVault(
                 lightClient, 1, 369, deploymentA.remoteVault, deploymentA.pairs,
-                BridgeVault.VaultTerms(0, fee.authority, fee.recipient, fee.basisPoints, fee.ceilingBasisPoints, wrongLimiters[i]),
+                BridgeVault.VaultTerms(0, fee.authority, fee.recipient, fee.basisPoints, fee.ceilingBasisPoints, wrongLimiters[i], deploymentA.remoteLightClient),
                 deploymentA.chain.lightClient.capellaEra, gate
             );
             deploymentA.predictedVault = address(wrong);
@@ -827,7 +833,8 @@ contract DeployBridgeTest is Test {
     ) internal returns (BridgeVault) {
         DeployBridge.FeeConfig memory fee = d.chain.fee;
         BridgeVault.VaultTerms memory terms = BridgeVault.VaultTerms(
-            cutoff, fee.authority, fee.recipient, fee.basisPoints, fee.ceilingBasisPoints, d.chain.flowLimiter
+            cutoff, fee.authority, fee.recipient, fee.basisPoints, fee.ceilingBasisPoints, d.chain.flowLimiter,
+            d.remoteLightClient
         );
         return new BridgeVault(lightClient, 1, 369, remoteVault, d.pairs, terms, capellaEra, gate);
     }
@@ -876,6 +883,38 @@ contract DeployBridgeTest is Test {
         script.verifyDeployment(deploymentA, address(this), gate, vault);
     }
 
+    /// Claim: the post-deploy check catches a vault that reads the wrong remote light client, and a vault that starts open.
+    /// Shows: a vault built with another remote light client fails with the field name, and so does a vault whose flag is
+    /// already set, while the honest vault passes. Matters: the remote light client is immutable and it is the only
+    /// source of the opening. A wrong one locks deposits for good or opens them on the proof of another contract.
+    function test_lock_postDeployAssertionsCatchWrongRemoteLightClientAndAnOpenStart() public {
+        DeployBridge.ChainDeployment memory deploymentA = _honestChainA();
+        address lightClient = deploymentA.predictedLightClient;
+        address gate = deploymentA.predictedGate;
+        address honestRemote = deploymentA.remoteLightClient;
+        assertTrue(honestRemote != address(0), "control: the deployment names a remote light client");
+
+        deploymentA.remoteLightClient = makeAddr("not the predicted light client of chain B");
+        BridgeVault wrongRemote = _newVaultA(
+            deploymentA, lightClient, gate, deploymentA.remoteVault, 0, deploymentA.chain.lightClient.capellaEra
+        );
+        deploymentA.remoteLightClient = honestRemote;
+        deploymentA.predictedVault = address(wrongRemote);
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "vault.remoteLightClient"));
+        script.verifyDeployment(deploymentA, lightClient, gate, address(wrongRemote));
+
+        BridgeVault startsOpen = _newVaultA(
+            deploymentA, lightClient, gate, deploymentA.remoteVault, 0, deploymentA.chain.lightClient.capellaEra
+        );
+        // The flag is bit 176 of storage word 7, beside the fee authority and the fee.
+        bytes32 word = vm.load(address(startsOpen), bytes32(uint256(7)));
+        vm.store(address(startsOpen), bytes32(uint256(7)), word | bytes32(uint256(1) << 176));
+        assertTrue(startsOpen.depositsOpen(), "control: the flag is set");
+        deploymentA.predictedVault = address(startsOpen);
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "vault.depositsOpen must start false"));
+        script.verifyDeployment(deploymentA, lightClient, gate, address(startsOpen));
+    }
+
     /// Claim: the post-deploy check catches a wrong deposit cutoff, and passes for the right deployment. Shows: a
     /// vault with cutoff 12345 fails with the field name; the vault with the configured cutoff passes. Matters: R2-08.
     function test_R2_08_postDeployAssertionsCatchWrongCutoffAndPassWhenRight() public {
@@ -902,9 +941,9 @@ contract DeployBridgeTest is Test {
         assertEq(fee.basisPoints, 25, "control: the configured fee is live");
 
         BridgeVault.VaultTerms[3] memory wrong = [
-            BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0)),
-            BridgeVault.VaultTerms(0, fee.authority, fee.recipient, 30, fee.ceilingBasisPoints, address(0)),
-            BridgeVault.VaultTerms(0, fee.authority, fee.recipient, fee.basisPoints, 100, address(0))
+            BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), deploymentA.remoteLightClient),
+            BridgeVault.VaultTerms(0, fee.authority, fee.recipient, 30, fee.ceilingBasisPoints, address(0), deploymentA.remoteLightClient),
+            BridgeVault.VaultTerms(0, fee.authority, fee.recipient, fee.basisPoints, 100, address(0), deploymentA.remoteLightClient)
         ];
         string[3] memory fields = ["vault.feeAuthority", "vault.feeBasisPoints", "vault.feeCeilingBasisPoints"];
         for (uint256 i = 0; i < wrong.length; i++) {

@@ -706,3 +706,44 @@ The vault takes the limiter at construction, and the limiter takes the vault. Th
 - Sunset: refused before the timestamp, works after it, works once, and with zero it never works.
 - End to end through the vault: the withdrawal over the allowance reverts with `FlowRefused` and stays claimable, then pays after the refill (use `vm.warp`).
 - Fuzz: over any sequence of withdrawals and time steps, the total paid in any span of 24 hours is at most two caps (a full allowance plus one window of refill) plus the excess of one oversize withdrawal. Over a long run the average is one cap per window.
+
+## Deposit lock (user decision, 2026-10-23) (built)
+
+An end-to-end run (`docs/end-to-end-real-proofs.md`) showed that a deposit made before the destination light client stored its first update can never be paid. The user decided: lock deposits on chain until the bridge can deliver them.
+
+### What a deposit at slot `s` needs
+
+A deposit on chain X at beacon slot `s` is paid by the vault on chain Y, which reads the light client on Y. That light client tracks the beacon chain of X. `I` is its checkpoint slot. `H1`, `H2` and so on are the heads that `update` stored.
+
+- **A block hash row that covers `s`.** `withdraw` calls `_blockHashGindexAt(s)`. A row grows by evidence from a stored header that has an execution block hash. The constructor stores none for `I`, so the lowest usable evidence slot is `H1`. A row that covers `s` needs evidence at a stored head `h1 <= s` and at a stored head `h2 >= s`. If `s < H1`, no row can cover `s`, and the deposit is lost for good. This is the only permanent condition.
+- **An anchor `a > s`** that the light client stored later.
+- **A row for the anchor.** The recent path (`a - s <= 8192`) needs a `block_roots` row that covers `a`. That row needs the anchor and two different stored headers below it within 8192 slots. The headers need only `headers`, so `I` counts as one. The historical path (`a - s > 8192`) needs a `historical_summaries` row at `a`. That row needs one stored header more than 8192 slots below `a`, in an era at or after `capellaEra`. `I` can serve.
+- **Why the run needed three heads.** Two earlier headers and one anchor are three stored headers, and `I` is one of them. So two updates suffice (`H1` and `H2`, with `I` within 8192 slots of `H2`). The prover counted only the headers that `HeadUpdated` events name, so it asked for three updates. The number three is an artefact of that count. The synthetic chain does not cause it. The order in which the prover validates rows does not cause it either. After `H1` is stored, every other condition heals as the prover keeps following the chain.
+
+### The lock
+
+- **Where the condition lives.** It lives in the light client on chain Y. The vault on X cannot read chain Y. No fact on chain X implies it, not even the state of the own light client of X, which tracks chain Y and not the light client on Y.
+- **The proof.** `openDeposits(OpeningProof)` proves the condition through the own light client of the vault, which tracks chain Y. The proof has four links. First, the own light client stored an execution block hash of a block of chain Y at `remoteSlot`. Second, the header in the proof hashes to that block hash, and its fourth item is the state root. Third, under that state root the account `remoteLightClient` holds a storage root (a state trie proof). Fourth, under that storage root the entry `executionBlockHashes[storedSlot]` is not zero (a storage trie proof). Only `update` writes that entry, so the light client on Y stored one update, at a head that the beacon chain of X had already finalized.
+- **Why it is enough for later deposits.** The proven block is final in chain Y and final in the own light client of the vault. A head is never later than the clock of the chain that stored it, and the proven block lies before the call. So a deposit made after the call lies at a slot `s >= H1`, as the first condition needs.
+- **Terms.** `VaultTerms.remoteLightClient` is a new constructor field. It must not be zero. The deploy script sets it from the predicted address of the light client on the other chain. `remoteLightClient` is immutable. The vault hard-codes slot 3 for the mapping `executionBlockHashes`, and a test pins that slot to the contract.
+- **One-way flag.** `bool public depositsOpen` starts false. `openDeposits` sets it and emits `DepositsOpened(remoteSlot, remoteBlockHash, storedSlot)`. A call after the opening returns at once, so two openers do not fail each other. No function clears the flag. Anyone may call `openDeposits`. It needs no key.
+- **Hot path.** `deposit` first reverts with `DepositsNotOpen()` when the flag is false. The flag shares a storage word with `feeAuthority` and `feeBasisPoints`, which `deposit` reads anyway, so the check adds no cold read. The measured cost is 173 gas (90,464 before, 90,637 after, in `test_gas_deposit_feeZero`).
+- **What the lock does not do.** It does not make the other conditions true. The prover must keep following the chain so that anchors and rows exist.
+
+### Tests
+
+`test/hardened/DepositOpening.t.sol` holds them. The tries in these tests have one leaf. Real tries (branch and extension nodes) are covered by the Anvil tests of the prover, with `eth_getProof`.
+
+- A closed vault refuses a deposit with the exact error, before every other check. A refusal test fails when the check is removed.
+- The vault opens exactly when the remote light client stored an update, and not before.
+- Refusals: an unstored slot, another header, another account, another stored slot, a malformed account or header, an empty entry.
+- The flag never closes: a second call changes nothing, and `setFee` and `nullifyFee` (which write the same storage word) keep it.
+- Pins: the slot of the mapping in the light client, and the position of the flag in the storage word.
+- End to end: the first deposit after the opening emits a log that goes into a receipt, and the destination vault pays it.
+
+## Launch sequence
+
+1. **Deploy** with `script/hardened/DeployBridge.s.sol`. Both vaults start locked. The read-back checks `remoteLightClient` and a false `depositsOpen`.
+2. **Run `zk-bridge-prover follow` on both routes.** Each run stores a head in the light client of its route. The vault on a chain opens only when the own light client of that chain has stored a block of the other chain that came after the first update of the other light client. A chain needs about two epochs to finalize, so the first run for one direction only prepares the second. Repeat `follow` until the vault of each route opens. `follow` prints `deposits open` or `deposits locked: <reason>` for each route and exits with code 2 while a route is locked. `route-health` reports a locked route as `LOCKED`.
+3. **Announce.** Tell users only after both vaults report open. A deposit before that reverts with `DepositsNotOpen()` and keeps the tokens with the sender.
+4. **Run the prover service** (`run`) as usual. It pays every deposit made after the opening.

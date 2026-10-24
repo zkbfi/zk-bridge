@@ -66,13 +66,15 @@ abstract contract HardenedFixture is HardenedProofs {
         address predictedVaultB = vm.computeCreateAddress(address(this), vm.getNonce(address(this)) + 1);
         vm.chainId(CHAIN_A);
         vaultA = new BridgeVault(
-            address(lightClientForA), CHAIN_A, CHAIN_B, predictedVaultB, pairsA, BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0)), DEFAULT_CAPELLA_ERA, address(gateA)
+            address(lightClientForA), CHAIN_A, CHAIN_B, predictedVaultB, pairsA, BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), address(lightClientForB)), DEFAULT_CAPELLA_ERA, address(gateA)
         );
         vm.chainId(CHAIN_B);
         vaultB = new BridgeVault(
-            address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairsB, BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0)), DEFAULT_CAPELLA_ERA, address(gateB)
+            address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairsB, BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), address(lightClientForA)), DEFAULT_CAPELLA_ERA, address(gateB)
         );
         require(address(vaultB) == predictedVaultB, "fixture: vaultB address prediction failed");
+        _openDepositsWithoutProof(vaultA);
+        _openDepositsWithoutProof(vaultB);
     }
 
     /// @notice A fresh light client at the standard checkpoint for the given chain.

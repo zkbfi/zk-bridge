@@ -43,6 +43,11 @@ import {ReceiptLogs} from "./ReceiptLogs.sol";
 /// lookup has one answer. Layouts move only when a container crosses a power-of-two field count; then a new route (light client and vault) is deployed
 /// beside the old one, and the old route keeps paying what it can still prove. This is the immutability trade-off of
 /// hole H-19.
+///
+/// Opening. A deposit is paid only if the light client on the other chain stored a head with an execution block hash at
+/// or below the deposit slot, because no block hash row can start earlier (see `openDeposits`). The vault cannot read
+/// that light client, so it refuses deposits until `openDeposits` proves, through its own light client, that the other
+/// light client has stored one. The opening is permanent.
 contract BridgeVault is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -61,6 +66,8 @@ contract BridgeVault is ReentrancyGuard {
     /// @param feeBasisPoints The fee on deposits at the start. It must not exceed the ceiling.
     /// @param feeCeilingBasisPoints The highest fee ever. It must not exceed `MAX_FEE_CEILING_BASIS_POINTS`.
     /// @param flowLimiter The flow limiter. Zero means no limiter from the start. Nothing can set one later.
+    /// @param remoteLightClient The light client on the other chain, which tracks the beacon chain of THIS chain and feeds
+    /// the remote vault. `openDeposits` reads its storage. It must not be zero.
     struct VaultTerms {
         uint64 cutoffTimestamp;
         address feeAuthority;
@@ -68,6 +75,7 @@ contract BridgeVault is ReentrancyGuard {
         uint16 feeBasisPoints;
         uint16 feeCeilingBasisPoints;
         address flowLimiter;
+        address remoteLightClient;
     }
 
     /// @notice One validated range of a layout table, as the range rule reads it.
@@ -143,6 +151,21 @@ contract BridgeVault is ReentrancyGuard {
         bytes32[] branch;
     }
 
+    /// @notice The evidence for `openDeposits`: a block of the remote chain whose hash the light client stored, and the
+    /// storage of the remote light client under the state root of that block.
+    /// @param remoteSlot A slot at which the light client of this vault stored an execution block hash.
+    /// @param remoteHeaderRlp The RLP of the execution block header whose hash is stored at `remoteSlot`.
+    /// @param accountProof The state trie proof of the account of `remoteLightClient`.
+    /// @param storedSlot A slot whose `executionBlockHashes` entry in the remote light client is not zero.
+    /// @param storageProof The storage trie proof of that entry.
+    struct OpeningProof {
+        uint64 remoteSlot;
+        bytes remoteHeaderRlp;
+        bytes[] accountProof;
+        uint64 storedSlot;
+        bytes[] storageProof;
+    }
+
     /// @notice The evidence for one withdrawal. Nothing in it is secret.
     struct WithdrawalProof {
         BeaconBlockHeader anchorHeader;
@@ -212,6 +235,12 @@ contract BridgeVault is ReentrancyGuard {
 
     /// @dev The index of `receiptsRoot` in the execution block header list.
     uint256 private constant RECEIPTS_ROOT_FIELD = 5;
+    /// @dev The index of `stateRoot` in the execution block header list.
+    uint256 private constant STATE_ROOT_FIELD = 3;
+    /// @dev The index of `storageRoot` in an account (nonce, balance, storage root, code hash).
+    uint256 private constant ACCOUNT_STORAGE_ROOT_FIELD = 2;
+    /// @dev The storage slot of the mapping `executionBlockHashes` in `BeaconLightClient`. A test pins it to the contract.
+    uint256 private constant EXECUTION_BLOCK_HASHES_MAPPING_SLOT = 3;
 
     /// @notice A constructor argument is zero.
     error ZeroValue(string name);
@@ -253,6 +282,16 @@ contract BridgeVault is ReentrancyGuard {
     error ZeroAmount();
     /// @notice The vault received no tokens from the transfer.
     error NothingReceived();
+    /// @notice Deposits are closed until `openDeposits` proves that the other chain can pay them.
+    error DepositsNotOpen();
+    /// @notice The light client of this vault stored no execution block hash at the slot of the opening proof.
+    error OpeningSlotNotStored(uint64 slot);
+    /// @notice The header in the opening proof does not hash to the stored execution block hash.
+    error OpeningHeaderMismatch(bytes32 expected, bytes32 actual);
+    /// @notice The header, the account or the storage entry of the opening proof does not decode to the expected fields.
+    error OpeningProofMalformed();
+    /// @notice The proven entry of the remote light client is empty.
+    error OpeningEntryEmpty(uint64 storedSlot);
 
     /// @notice The anchor header is not the finalized header stored for its slot.
     error AnchorNotStored(uint64 slot, bytes32 anchorRoot);
@@ -322,6 +361,12 @@ contract BridgeVault is ReentrancyGuard {
         uint256 indexed historicalSummariesGindex, uint64 firstSlot, uint64 lastSlot
     );
 
+    /// @notice Emitted once, when `openDeposits` proves the condition. Deposits stay open from then on.
+    /// @param remoteSlot The slot at which the light client of this vault stored the proven block of the remote chain.
+    /// @param remoteBlockHash The hash of that block.
+    /// @param storedSlot The slot whose execution block hash the remote light client had stored in that block.
+    event DepositsOpened(uint64 indexed remoteSlot, bytes32 indexed remoteBlockHash, uint64 storedSlot);
+
     /// @notice Emitted when the fee authority sets the fee.
     event FeeChanged(uint16 feeBasisPoints, address feeRecipient);
 
@@ -379,6 +424,8 @@ contract BridgeVault is ReentrancyGuard {
     IDepositGate public immutable depositGate;
     /// @notice The highest fee in basis points that the fee authority can ever set. At most 100 (1%).
     uint16 public immutable feeCeilingBasisPoints;
+    /// @notice The light client on the other chain. It tracks the beacon chain of this chain and feeds the remote vault.
+    address public immutable remoteLightClient;
 
     /// @notice The number of deposits so far. It feeds the nonce.
     uint256 public depositCount;
@@ -398,6 +445,9 @@ contract BridgeVault is ReentrancyGuard {
     address public feeAuthority;
     /// @notice The fee on each new deposit, in basis points.
     uint16 public feeBasisPoints;
+    /// @notice Whether deposits are open. It starts false and `openDeposits` sets it true for good. It shares a storage
+    /// slot with the fee authority and the fee, which `deposit` reads anyway, so the check adds almost no gas.
+    bool public depositsOpen;
     /// @notice The recipient of collected fees.
     address public feeRecipient;
     /// @notice The fees charged and not yet collected, for each local token.
@@ -428,6 +478,7 @@ contract BridgeVault is ReentrancyGuard {
         if (remoteChainId_ == 0) revert ZeroValue("remoteChainId");
         if (remoteVault_ == address(0)) revert ZeroValue("remoteVault");
         if (depositGate_ == address(0)) revert ZeroValue("depositGate");
+        if (vaultTerms.remoteLightClient == address(0)) revert ZeroValue("remoteLightClient");
         if (localChainId_ != block.chainid) revert LocalChainIdMismatch(localChainId_, block.chainid);
         if (remoteChainId_ == localChainId_) revert RemoteChainIsLocalChain();
         if (pairs.length == 0) revert NoTokenPairs();
@@ -450,6 +501,7 @@ contract BridgeVault is ReentrancyGuard {
         capellaEra = capellaEra_;
         depositGate = IDepositGate(depositGate_);
         feeCeilingBasisPoints = vaultTerms.feeCeilingBasisPoints;
+        remoteLightClient = vaultTerms.remoteLightClient;
         feeAuthority = vaultTerms.feeAuthority;
         feeBasisPoints = vaultTerms.feeBasisPoints;
         feeRecipient = vaultTerms.feeRecipient;
@@ -461,7 +513,7 @@ contract BridgeVault is ReentrancyGuard {
     }
 
     /// @notice Locks tokens and emits the deposit event. The target is always the remote chain.
-    /// @dev The gate runs first. A gate that reverts refuses the deposit, with the tokens still in the wallet of the user.
+    /// @dev The vault refuses every deposit until `openDeposits` ran. The gate runs next. A gate that reverts refuses the deposit, with the tokens still in the wallet of the user.
     /// The vault charges the fee on the amount it received, rounded down, and keeps it in `accruedFees`. The event
     /// carries the amount the vault received less the fee. That amount differs from `amount` for a fee-on-transfer token.
     /// @param token The local token.
@@ -477,6 +529,7 @@ contract BridgeVault is ReentrancyGuard {
         uint16 maxFeeBasisPoints,
         bytes calldata gateEvidence
     ) external nonReentrant returns (bytes32 nonce) {
+        if (!depositsOpen) revert DepositsNotOpen();
         depositGate.admit(gateEvidence);
         if (depositCutoffTimestamp != 0 && block.timestamp >= depositCutoffTimestamp) {
             revert DepositCutoffReached(depositCutoffTimestamp);
@@ -488,6 +541,42 @@ contract BridgeVault is ReentrancyGuard {
         if (amount == 0) revert ZeroAmount();
 
         return _recordDeposit(token, recipient, _pull(token, amount), destinationToken);
+    }
+
+    /// @notice Opens deposits for good, given proof that the remote light client has stored a head.
+    /// @dev A deposit at slot `s` is paid only if some block hash row covers `s`. A row starts at a stored head that
+    /// has an execution block hash, and the constructor of the light client stores none. So a deposit made before the
+    /// remote light client stored its first update is lost for ever. That light client lives on the other chain and
+    /// the vault cannot read it. The vault reads it through its own light client, which tracks the other chain.
+    /// The proof walks four links. 1: its light client stored the execution block hash of a block of the other chain at
+    /// `remoteSlot`. 2: the header in the proof hashes to that block hash, and it holds a state root. 3: under that
+    /// state root, the account of `remoteLightClient` holds a storage root. 4: under that storage root,
+    /// `executionBlockHashes[storedSlot]` is not zero. Only `update` writes that entry, so one update was stored, at
+    /// a head that the other beacon chain had already finalized. That block is final on the other chain and final in
+    /// the light client of this vault, so no reorganization undoes it. A deposit made now lies after that head,
+    /// because a head is never later than the clock of the chain that stored it. After the call, the flag stays true.
+    /// The call needs no key. A call after the opening returns at once, so two openers do not fail each other.
+    /// @param proof The evidence.
+    function openDeposits(OpeningProof calldata proof) external {
+        if (depositsOpen) return;
+        bytes32 blockHash = lightClient.executionBlockHashes(proof.remoteSlot);
+        if (blockHash == bytes32(0)) revert OpeningSlotNotStored(proof.remoteSlot);
+        bytes32 actual = keccak256(proof.remoteHeaderRlp);
+        if (actual != blockHash) revert OpeningHeaderMismatch(blockHash, actual);
+
+        bytes32 stateRoot = _headerField(proof.remoteHeaderRlp, STATE_ROOT_FIELD);
+        bytes memory account =
+            MerkleTrie.get(abi.encodePacked(keccak256(abi.encodePacked(remoteLightClient))), proof.accountProof, stateRoot);
+        bytes32 storageRoot = _accountStorageRoot(account);
+        bytes memory entry = MerkleTrie.get(
+            abi.encodePacked(keccak256(abi.encode(_executionBlockHashesSlot(proof.storedSlot)))),
+            proof.storageProof,
+            storageRoot
+        );
+        if (RLPReader.readBytes(entry).length == 0) revert OpeningEntryEmpty(proof.storedSlot);
+
+        depositsOpen = true;
+        emit DepositsOpened(proof.remoteSlot, blockHash, proof.storedSlot);
     }
 
     /// @notice Sets the fee on new deposits and the recipient of collected fees. Only the fee authority may call it.
@@ -877,6 +966,30 @@ contract BridgeVault is ReentrancyGuard {
             if (layout.firstSlot <= slot && slot <= layout.lastSlot) return layout.blockHashGindex;
         }
         revert LayoutNotValidated(slot);
+    }
+
+    /// @dev The storage slot of `executionBlockHashes[storedSlot]` in the remote light client: the mapping key and the
+    /// declared slot of the mapping, hashed together.
+    function _executionBlockHashesSlot(uint64 storedSlot) private pure returns (bytes32) {
+        return keccak256(abi.encode(uint256(storedSlot), EXECUTION_BLOCK_HASHES_MAPPING_SLOT));
+    }
+
+    /// @dev The 32-byte item at index `field` of an execution block header.
+    function _headerField(bytes calldata headerRlp, uint256 field) private pure returns (bytes32) {
+        RLPReader.RLPItem[] memory fields = RLPReader.readList(headerRlp);
+        if (fields.length <= field) revert OpeningProofMalformed();
+        bytes memory value = RLPReader.readBytes(fields[field]);
+        if (value.length != 32) revert OpeningProofMalformed();
+        return bytes32(value);
+    }
+
+    /// @dev The storage root of an account, from its RLP: nonce, balance, storage root and code hash.
+    function _accountStorageRoot(bytes memory account) private pure returns (bytes32) {
+        RLPReader.RLPItem[] memory fields = RLPReader.readList(account);
+        if (fields.length != 4) revert OpeningProofMalformed();
+        bytes memory root = RLPReader.readBytes(fields[ACCOUNT_STORAGE_ROOT_FIELD]);
+        if (root.length != 32) revert OpeningProofMalformed();
+        return bytes32(root);
     }
 
     /// @dev Check 5. The execution header is an RLP list. Its sixth item is the receipts root.

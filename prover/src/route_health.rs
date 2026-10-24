@@ -21,11 +21,18 @@
 //!    The margin is the larger of the configured seconds and three epochs. It is never below three epochs.
 //!    `STOP` also covers a gate in registry mode whose fork registry shows an unsupported version as the latest
 //!    observation: the gate refuses every deposit until it is sealed, and nothing in the registry clears it.
-//! 3. `STALE`: the light client head lags the source chain head by more than the configured number of epochs.
-//! 4. `WARN`: a fork the route does not support is scheduled, and it lies beyond the margin. `WARN` also covers an
+//! 3. `LOCKED`: the source vault is not open (`depositsOpen()` is false). It refuses every deposit with
+//!    `DepositsNotOpen` until `openDeposits` proves that the light client on the other chain stored a head. The prover
+//!    command `follow` does this. The vault refuses before it takes any token, so no funds are at risk, as with `SEALED`.
+//!    `STOP` means the opposite: the vault would take a deposit that the route could never deliver. A locked vault ranks
+//!    below `SEALED` and `STOP`, because `follow` cannot cure those two, so the operator must see them first. It ranks
+//!    above `STALE`, because a new deployment is stale and locked at once, and `follow` cures both: the reason must name
+//!    the command that helps.
+//! 4. `STALE`: the light client head lags the source chain head by more than the configured number of epochs.
+//! 5. `WARN`: a fork the route does not support is scheduled, and it lies beyond the margin. `WARN` also covers an
 //!    own-chain light client (the one the fork registry reads) whose head lags the current slot by the configured
 //!    number of periods or more. The default is half of the fold limit of one proof (64 updates).
-//! 5. `OPEN`: none of the above.
+//! 6. `OPEN`: none of the above.
 //!
 //! The own-chain lag is a `WARN` and never a `STOP`. A deposit made now does not depend on that light client: the
 //! vault and the gate read other contracts, and a stale head only makes old observations look fresh and makes the
@@ -81,6 +88,8 @@ pub enum Level {
     Warn,
     /// The light client head lags too far.
     Stale,
+    /// The source vault is not open yet: it refuses every deposit until `openDeposits` ran. `follow` opens it.
+    Locked,
     /// An unsupported fork is active or inside the margin.
     Stop,
     /// The gate is sealed.
@@ -94,6 +103,7 @@ impl Level {
             Self::Open => "OPEN",
             Self::Warn => "WARN",
             Self::Stale => "STALE",
+            Self::Locked => "LOCKED",
             Self::Stop => "STOP",
             Self::Sealed => "SEALED",
         }
@@ -215,6 +225,8 @@ pub struct RouteInputs {
     pub program_versions: Vec<[u8; 4]>,
     /// The deposit gate of the source vault, when the vault has one.
     pub gate: Option<GateObservation>,
+    /// Whether the source vault is open: `depositsOpen()`. A locked vault refuses every deposit.
+    pub deposits_open: bool,
     /// The head slot of the destination light client for this source chain.
     pub light_client_head_slot: u64,
     /// The head slot of the source beacon chain.
@@ -370,7 +382,7 @@ fn fork_finding_message(fork: &ForkFinding, margin_seconds: u64) -> (Level, Stri
 
 /// Decides the status of a route from fetched data. It reads no clock and no network.
 ///
-/// The most severe finding wins: sealed, then stop, then stale, then warn, then open. The other findings stay in
+/// The most severe finding wins: sealed, then stop, then locked, then stale, then warn, then open. The other findings stay in
 /// [`RouteStatus::other_findings`]. See the module documentation for each rule.
 pub fn route_status(inputs: &RouteInputs) -> RouteStatus {
     let slots_per_epoch = inputs.slots_per_epoch.max(1);
@@ -402,6 +414,12 @@ pub fn route_status(inputs: &RouteInputs) -> RouteStatus {
     }
     if let Some(reason) = unsupported_observation_reason(inputs.gate.as_ref()) {
         findings.push((Level::Stop, reason));
+    }
+    if !inputs.deposits_open {
+        findings.push((
+            Level::Locked,
+            "the source vault is locked: it refuses every deposit until it is opened. Run `follow` until every route says `deposits open`".to_string(),
+        ));
     }
     if lag_slots > inputs.settings.stale_epochs.saturating_mul(slots_per_epoch) {
         findings.push((
@@ -690,6 +708,8 @@ pub struct RouteReport {
     pub own_light_client: Option<OwnLightClientObservation>,
     /// The gate, when the source vault has one.
     pub gate: Option<GateObservation>,
+    /// Whether the source vault is open (`depositsOpen()`).
+    pub deposits_open: bool,
 }
 
 /// Converts days since 1970-01-01 to a civil date (proleptic Gregorian). Howard Hinnant's algorithm.
@@ -767,6 +787,7 @@ impl RouteReport {
                 status.own_light_client_lag_periods.unwrap_or(0)
             ));
         }
+        line.push_str(&format!(" deposits_open={}", self.deposits_open));
         match &self.gate {
             Some(gate) => line.push_str(&format!(
                 " gate={:#x} gate_mode={} gate_enforcing={} gate_sealed={} gate_confirmed_epoch={}",
@@ -830,6 +851,7 @@ impl RouteReport {
             "source_chain": self.source_chain,
             "status": status.level.as_str(),
             "refuses_deposits": status.level.refuses_deposits(),
+            "deposits_open": self.deposits_open,
             "reason": status.reason,
             "other_findings": status.other_findings,
             "fork": fork,
@@ -883,7 +905,8 @@ pub fn exit_code(reports: &[RouteReport]) -> i32 {
 }
 
 /// Builds the inputs of one route from data that is already read. The update gaps start empty: the caller probes the
-/// beacon node for them with [`find_update_gap`].
+/// beacon node for them with [`find_update_gap`]. The vault starts LOCKED (`deposits_open` is false): the caller reads
+/// `depositsOpen()` and sets it, so a caller that forgets to read it gets a refusal and never a false OPEN.
 pub fn assemble_inputs(
     kind: ChainKind,
     beacon: &BeaconFacts,
@@ -902,6 +925,7 @@ pub fn assemble_inputs(
         schedule: beacon.schedule.clone(),
         program_versions: program_versions(kind),
         gate,
+        deposits_open: false,
         light_client_head_slot,
         source_head_slot: beacon.head_slot,
         own_light_client,
@@ -957,10 +981,9 @@ fn check_route(
     let kind = source.chain_kind()?;
     let beacon = fetch_beacon_facts(&HttpClient::new(url))?;
     let source_client = connect(source)?;
-    let gate = Some(read_gate_observation(
-        &source_client,
-        source.vault_address()?,
-    )?);
+    let vault = source.vault_address()?;
+    let gate = Some(read_gate_observation(&source_client, vault)?);
+    let deposits_open = source_client.view(vault, VaultContract::depositsOpenCall {})?;
     let own_light_client = read_own_light_client(&source_client, source)?;
     let head = connect(destination)?.view(
         destination.light_client_address()?,
@@ -978,6 +1001,7 @@ fn check_route(
         .collect();
     let inputs = RouteInputs {
         update_gaps,
+        deposits_open,
         ..assemble_inputs(kind, &beacon, gate, head, own_light_client, now, settings)
     };
     Ok(RouteReport {
@@ -988,6 +1012,7 @@ fn check_route(
         source_head_slot: beacon.head_slot,
         own_light_client,
         gate: inputs.gate,
+        deposits_open,
     })
 }
 
@@ -1052,6 +1077,7 @@ mod tests {
             }],
             program_versions: vec![KNOWN],
             gate: None,
+            deposits_open: true,
             light_client_head_slot: NOW_EPOCH * 32,
             source_head_slot: NOW_EPOCH * 32,
             own_light_client: None,
@@ -1196,6 +1222,83 @@ mod tests {
         assert!(status.fork.expect("fork").seconds_remaining <= 0);
     }
 
+    /// Claim: a vault that is not open gives LOCKED, the reason names `follow`, and the route refuses deposits. An open
+    /// vault changes nothing: the same inputs stay OPEN.
+    /// Why it matters: a locked vault reverts every deposit with `DepositsNotOpen`. An interface that offers deposits would
+    /// send users into that revert, and the operator needs the command that cures it.
+    #[test]
+    fn a_locked_vault_is_locked_and_an_open_vault_is_unchanged() {
+        let mut value = inputs();
+        assert_eq!(route_status(&value).level, Level::Open, "the open control");
+        value.deposits_open = false;
+        let status = route_status(&value);
+        assert_eq!(status.level, Level::Locked);
+        assert!(status.level.refuses_deposits());
+        assert!(status.reason.contains("`follow`"), "{}", status.reason);
+    }
+
+    /// Claim: LOCKED outranks STALE and WARN, and SEALED and STOP outrank LOCKED. Every lower finding stays listed.
+    /// Why it matters: a new deployment is stale and locked, and `follow` cures both, so the reason must name `follow`. A
+    /// sealed gate or an unsupported fork is not cured by `follow`, so the operator must see it first.
+    #[test]
+    fn locked_ranks_between_stale_and_stop() {
+        let mut value = with_fork_in(48 * HOUR);
+        value.light_client_head_slot = 0;
+        value.deposits_open = false;
+        let status = route_status(&value);
+        assert_eq!(status.level, Level::Locked, "locked beats stale and warn");
+        assert_eq!(
+            status.other_findings.len(),
+            2,
+            "{:?}",
+            status.other_findings
+        );
+        value.schedule.push(ScheduleEntry {
+            version: UNKNOWN,
+            epoch: NOW_EPOCH + 1,
+        });
+        assert_eq!(route_status(&value).level, Level::Stop, "stop beats locked");
+        value.gate = Some(gate(true));
+        assert_eq!(
+            route_status(&value).level,
+            Level::Sealed,
+            "sealed beats locked"
+        );
+    }
+
+    /// Claim: the JSON and the line of a locked route show the status LOCKED, `deposits_open` false and a refusal, and the
+    /// exit code is 2.
+    /// Why it matters: scripts read these names to decide when to start deposits.
+    #[test]
+    fn a_locked_route_reports_locked_and_exit_code_two() {
+        let mut value = inputs();
+        value.deposits_open = false;
+        let report = |deposits_open| RouteReport {
+            route: "a_to_b".into(),
+            source_chain: "ethereum".into(),
+            status: route_status(&RouteInputs {
+                deposits_open,
+                ..value.clone()
+            }),
+            light_client_head_slot: 5,
+            source_head_slot: 5,
+            own_light_client: None,
+            gate: None,
+            deposits_open,
+        };
+        let locked = report(false);
+        let json = locked.to_json();
+        assert_eq!(json["status"], "LOCKED");
+        assert_eq!(json["deposits_open"], false);
+        assert_eq!(json["refuses_deposits"], true);
+        assert!(locked.human_line().contains("status=LOCKED"));
+        assert!(locked.human_line().contains("deposits_open=false"));
+        assert_eq!(exit_code(&[locked]), 2);
+        let open = report(true);
+        assert_eq!(open.to_json()["status"], "OPEN");
+        assert_eq!(exit_code(&[open]), 0);
+    }
+
     /// Claim: a gate that is sealed gives SEALED, whatever the schedule says.
     /// Why it matters: a sealed gate reverts every deposit for good.
     #[test]
@@ -1308,6 +1411,7 @@ mod tests {
                 source_head_slot: 1,
                 own_light_client: None,
                 gate: value.gate,
+                deposits_open: true,
             }
         };
         let observed = report(registry_gate(UNKNOWN, 123));
@@ -1469,6 +1573,7 @@ mod tests {
             source_head_slot: 1,
             own_light_client: value.own_light_client,
             gate: None,
+            deposits_open: true,
         };
         let none = report(inputs());
         assert_eq!(none.status.own_light_client_lag_periods, None);
@@ -1615,7 +1720,7 @@ mod tests {
         );
     }
 
-    /// Claim: the exit code is 0 for OPEN and WARN and 2 for STOP, SEALED and STALE.
+    /// Claim: the exit code is 0 for OPEN and WARN and 2 for STOP, SEALED, LOCKED and STALE.
     /// Why it matters: scripts rely on it to refuse a deposit.
     #[test]
     fn exit_code_follows_the_level() {
@@ -1630,10 +1735,11 @@ mod tests {
                 source_head_slot: 1,
                 own_light_client: None,
                 gate: None,
+                deposits_open: true,
             }
         };
         assert_eq!(exit_code(&[report(Level::Open), report(Level::Warn)]), 0);
-        for level in [Level::Stop, Level::Sealed, Level::Stale] {
+        for level in [Level::Stop, Level::Sealed, Level::Locked, Level::Stale] {
             assert_eq!(
                 exit_code(&[report(Level::Open), report(level)]),
                 2,
@@ -1759,6 +1865,15 @@ mod tests {
             now,
             HealthSettings::default(),
         );
+        assert_eq!(
+            route_status(&open).level,
+            Level::Locked,
+            "assemble_inputs starts locked"
+        );
+        let open = RouteInputs {
+            deposits_open: true,
+            ..open
+        };
         assert_eq!(route_status(&open).level, Level::Open);
 
         let mut announced = facts.clone();
@@ -1775,6 +1890,10 @@ mod tests {
             now,
             HealthSettings::default(),
         );
+        let soon = RouteInputs {
+            deposits_open: true,
+            ..soon
+        };
         assert_eq!(route_status(&soon).level, Level::Stop);
     }
 
@@ -1807,6 +1926,7 @@ mod tests {
             source_head_slot: 9,
             own_light_client: None,
             gate: None,
+            deposits_open: true,
         };
         let value = report.to_json();
         assert_eq!(value["status"], "STOP");

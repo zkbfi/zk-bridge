@@ -83,6 +83,16 @@ services:
     volumes:
       - bridge-state:/state
 
+  # One-shot. Opens both vaults: runs `follow` until each vault has the proof that the light client on the other chain stored
+  # a head. A new vault refuses every deposit until then. Run it after `deploy` and before `prover` and `bots`.
+  open:
+    <<: *prover-image
+    profiles: ["setup"]
+    command: ["prover-entry", "open"]
+    depends_on: *chains-healthy
+    volumes:
+      - bridge-state:/state
+
   # Answers the three beacon requests of `route-health` from the local chains. The prover does not use it.
   beacon-stub:
     <<: *prover-image
