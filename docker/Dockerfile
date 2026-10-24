@@ -1,8 +1,7 @@
-# Images of the local network. The build context is the repository root (see docker/compose.yaml).
+# Images of the repository. The build context is the repository root (see docker/compose.yaml).
 #
-#   target deploy   Foundry plus the compiled contracts and the deploy script.
-#   target prover   The prover service, the bots and the beacon stub, on a small Debian base.
-#   target prover-sp1   The production prover for a server: linux/amd64, feature sp1-native-gnark, the two SP1 guest ELFs.
+#   target deploy   Foundry plus the compiled contracts and the deploy script (the local network).
+#   target prover-sp1   The proof producer for a server: linux/amd64, feature sp1-native-gnark, the two SP1 guest ELFs.
 #                       Build: docker build --platform linux/amd64 --target prover-sp1 -f docker/Dockerfile .
 #                       Needs about 8 GB of memory to build. See docs/server-prover.md. Do not build it on the 2 GB VM.
 #   target prover-gpu-worker   The proving worker for a GPU host (RunPod Serverless): linux/amd64, feature sp1-cuda, the two
@@ -21,38 +20,6 @@ ARG RUNTIME_IMAGE=debian:bookworm-20260316-slim@sha256:f06537653ac770703bc45b4b1
 # build image, so the worker binary runs on it). The tag was pushed on 2026-04-30. The digest is the multi-platform index.
 # The SP1 GPU server of release v6.8.1 links libcudart.so.12 and needs a host driver for CUDA 12.8 (version 570 or newer).
 ARG CUDA_RUNTIME_IMAGE=nvidia/cuda:12.8.2-runtime-ubuntu24.04@sha256:7e62235c5d6f22a57ec8ba51f1583634fdbbf4b08a15b42dc1a60f086145c210
-
-# ---------------------------------------------------------------------------------------------------------------
-# Rust build. Two jobs only: the build VM has about 2 GB of memory. The cache mounts keep the downloaded crates
-# and the compiled dependencies between builds. The binaries are copied out inside the same RUN, because a cache
-# mount is not part of the image.
-# ---------------------------------------------------------------------------------------------------------------
-FROM ${RUST_IMAGE} AS build
-WORKDIR /build
-COPY light-client ./light-client
-COPY prover ./prover
-WORKDIR /build/prover
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/prover/target \
-    cargo build --release --locked -j 2 \
-    && mkdir /out \
-    && cp target/release/zk-bridge-prover target/release/local-network /out/
-
-# ---------------------------------------------------------------------------------------------------------------
-# The prover image: the prover, the bots and the beacon stub.
-# ---------------------------------------------------------------------------------------------------------------
-FROM ${RUNTIME_IMAGE} AS prover
-LABEL org.opencontainers.image.title="zk-bridge local network: prover and bots" \
-      org.opencontainers.image.description="Development image. The keys it uses are the public Anvil development keys."
-RUN useradd --uid 1000 --no-create-home --shell /usr/sbin/nologin bridge \
-    && mkdir /state \
-    && chown bridge:bridge /state
-COPY --from=build /out/zk-bridge-prover /out/local-network /usr/local/bin/
-COPY docker/prover-entry.sh /usr/local/bin/prover-entry
-RUN chmod 0755 /usr/local/bin/prover-entry
-USER bridge
-WORKDIR /state
 
 # ---------------------------------------------------------------------------------------------------------------
 # The deploy image: Foundry, the contracts built once, and the deploy script.
@@ -74,10 +41,10 @@ COPY --chown=foundry:foundry docker/deploy.sh docker/bridge.config.template.json
 ENTRYPOINT ["/usr/bin/bash", "/repo/docker/deploy.sh"]
 
 # ---------------------------------------------------------------------------------------------------------------
-# The production prover for a server (target prover-sp1). Platform linux/amd64.
+# The proof producer for a server (target prover-sp1). Platform linux/amd64.
 #
 # - Cargo features: sp1-native-gnark (SP1 prover on the local CPU; the Groth16 wrapper runs inside the process, so the
-#   container needs no Docker socket). Without the development source and without the local-network binaries.
+#   container needs no Docker socket). Without the signed beacon chain of the tests.
 # - Go is needed at build time only, for the Groth16 wrapper that sp1-sdk compiles. The tarball is pinned by SHA-256.
 #   The commit of go1.25.14 is dated 2026-08-19, more than 28 days before the cutoff of 2026-09-24. The Go modules of
 #   the wrapper are pinned by the go.sum file inside the crate sp1-recursion-gnark-ffi and checked by the Go checksum database.
@@ -119,7 +86,7 @@ RUN set -eu; \
     done
 
 FROM --platform=linux/amd64 ${RUNTIME_IMAGE} AS prover-sp1
-LABEL org.opencontainers.image.title="zk-bridge production prover (SP1, local CPU)"
+LABEL org.opencontainers.image.title="zk-bridge proof producer (SP1, local CPU)"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
@@ -133,7 +100,7 @@ ENV SP1_GROTH16_CIRCUIT_PATH=/state/sp1-circuits
 USER bridge
 WORKDIR /state
 ENTRYPOINT ["zk-bridge-prover"]
-CMD ["--config", "/state/prover.toml", "run"]
+CMD ["--config", "/state/prover.toml", "prove"]
 
 # ---------------------------------------------------------------------------------------------------------------
 # The proving worker for a GPU host (target prover-gpu-worker). Platform linux/amd64.

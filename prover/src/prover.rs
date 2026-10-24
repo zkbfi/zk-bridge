@@ -1,5 +1,5 @@
-//! The proving backends. Only light-client updates are proven: a withdrawal needs no proof, because the vault
-//! checks the evidence directly.
+//! The proving backends. Only light-client updates (and, for a worker, fork observations) are proven: a withdrawal
+//! needs no proof, because the vault checks the evidence directly.
 //!
 //! - [`OracleProver`] is for development and tests. It runs the program natively first and refuses to sign when
 //!   that fails. Then it signs `keccak256(programVKey ‖ sha256(publicValues))`, which `OracleSP1Verifier` accepts.
@@ -17,15 +17,15 @@
 //! 1. Build both guests reproducibly with `light-client/scripts/program-keys.sh`. Its keys are in
 //!    `light-client/program-keys.json`.
 //! 2. Set `[prover] sp1_elf_path` (light client) and `sp1_observation_elf_path` (fork observation).
-//! 3. At startup the service compares the key of each ELF with the key that the contract stores, and it refuses to
-//!    run when they differ (`Prover::require_program_key`, called from `route.rs`).
+//! 3. Before it proves, the producer compares the key of each ELF with the key that the contract stores, and it
+//!    refuses to go on when they differ (`Prover::require_program_key`, called from `produce.rs`).
 //! 4. Each proof runs the program natively first, proves in Groth16 mode, and checks that the proven public values
 //!    equal the native ones. The proof bytes are `selector ‖ proof`, which `SP1VerifierGroth16.verifyProof` reads.
 
 use crate::error::{Error, Result};
 use crate::light_client::{
     public_values, sha256, verify_light_client_natively, verify_observation_natively,
-    verify_update_natively, LightClientOutput, UpdateInput,
+    verify_update_natively, UpdateInput,
 };
 use crate::signer::Signer;
 use alloy_primitives::{keccak256, B256};
@@ -35,14 +35,8 @@ use alloy_primitives::{keccak256, B256};
 pub enum ProofStatement {
     /// A real update: the program runs natively on it first.
     Verified(UpdateInput),
-    /// An output that `DevBeaconSource` asserts on Anvil. No sync committee exists there, so there is nothing to
-    /// run the program on. The source's depth rule stands in for finality.
-    DevAsserted(LightClientOutput),
     /// A fork observation: the bytes that the fork observation guest reads. The program runs natively on it first.
     Observation(Vec<u8>),
-    /// Public values of a fork observation that a test asserts. The fixtures of the light client hold public values
-    /// and no committee data, so there is nothing to run the program on. Like `DevAsserted`, this is for Anvil only.
-    ObservationAsserted(Vec<u8>),
 }
 
 /// A proof and the public values it commits to.
@@ -67,8 +61,8 @@ pub trait Prover: Send + Sync {
     fn prove(&self, program_vkey: B256, statement: &ProofStatement) -> Result<Proof>;
 
     /// Checks the program a backend would run against the key that the destination contract stores.
-    /// The service calls it at startup with the key it read from the contract. A backend without a program of its own
-    /// (the oracle) accepts every key.
+    /// The producer calls it before it proves, with the key it read from the contract. A backend without a program of
+    /// its own (the oracle and the remote worker) accepts every key.
     ///
     /// # Errors
     /// `Error::Config` when the backend runs a program whose key differs from `onchain_key`.
@@ -94,62 +88,6 @@ impl ProgramKind {
             Self::LightClient => "light client",
             Self::ForkObservation => "fork observation",
         }
-    }
-}
-
-/// A prover that refuses to prove after it has made a set number of proofs. The service treats the refusal as transient,
-/// so no deposit loses an attempt, and a new process continues. See `prover.max_proofs_per_process`.
-pub struct BudgetedProver {
-    inner: std::sync::Arc<dyn Prover>,
-    remaining: std::sync::atomic::AtomicUsize,
-}
-
-impl BudgetedProver {
-    /// A prover that makes at most `budget` proofs with `inner`.
-    pub fn new(inner: std::sync::Arc<dyn Prover>, budget: usize) -> Self {
-        Self {
-            inner,
-            remaining: std::sync::atomic::AtomicUsize::new(budget),
-        }
-    }
-}
-
-impl Prover for BudgetedProver {
-    fn name(&self) -> &'static str {
-        self.inner.name()
-    }
-
-    fn prove(&self, program_vkey: B256, statement: &ProofStatement) -> Result<Proof> {
-        let taken = self.remaining.fetch_update(
-            std::sync::atomic::Ordering::SeqCst,
-            std::sync::atomic::Ordering::SeqCst,
-            |left| left.checked_sub(1),
-        );
-        if taken.is_err() {
-            return Err(Error::ProofBudget(
-                "this process has made its proofs; the next process goes on".into(),
-            ));
-        }
-        self.inner.prove(program_vkey, statement)
-    }
-
-    fn require_program_key(&self, program: ProgramKind, onchain_key: B256) -> Result<()> {
-        self.inner.require_program_key(program, onchain_key)
-    }
-}
-
-/// A prover that several routes share. The routes then load a backend only once.
-impl Prover for std::sync::Arc<dyn Prover> {
-    fn name(&self) -> &'static str {
-        (**self).name()
-    }
-
-    fn prove(&self, program_vkey: B256, statement: &ProofStatement) -> Result<Proof> {
-        (**self).prove(program_vkey, statement)
-    }
-
-    fn require_program_key(&self, program: ProgramKind, onchain_key: B256) -> Result<()> {
-        (**self).require_program_key(program, onchain_key)
     }
 }
 
@@ -182,9 +120,7 @@ impl Prover for OracleProver {
     fn prove(&self, program_vkey: B256, statement: &ProofStatement) -> Result<Proof> {
         let public_values = match statement {
             ProofStatement::Verified(input) => public_values(&verify_update_natively(input)?),
-            ProofStatement::DevAsserted(output) => public_values(output),
             ProofStatement::Observation(guest_input) => verify_observation_natively(guest_input)?,
-            ProofStatement::ObservationAsserted(values) => values.clone(),
         };
         let signature = self
             .oracle
@@ -273,15 +209,9 @@ pub struct GuestJob {
 /// Runs a statement natively and returns the job for a proof backend.
 ///
 /// # Errors
-/// `Error::VerificationRefused` when the program rejects the statement. `Error::Prover` for a development statement,
-/// which has no real proof.
+/// `Error::VerificationRefused` when the program rejects the statement.
 pub fn native_job(statement: &ProofStatement) -> Result<GuestJob> {
     match statement {
-        ProofStatement::DevAsserted(_) | ProofStatement::ObservationAsserted(_) => {
-            Err(Error::Prover(
-                "a development statement has no real proof; use the oracle backend on Anvil".into(),
-            ))
-        }
         ProofStatement::Observation(guest_input) => {
             native_job_from_guest_input(ProgramKind::ForkObservation, guest_input.clone())
         }
@@ -399,7 +329,7 @@ pub fn execute_program(elf: &[u8], guest_input: &[u8]) -> Result<Sp1Execution> {
 impl Sp1Prover {
     /// Reads the ELFs, runs the SP1 setup for each on the CPU client and computes the program keys.
     ///
-    /// The setup takes time and memory, so a service builds one prover and shares it (`Arc<dyn Prover>`).
+    /// The setup takes time and memory, so a process builds one prover and keeps it.
     ///
     /// # Errors
     /// `Error::Config` when a file cannot be read. `Error::Prover` when the setup fails.
@@ -508,7 +438,6 @@ impl<Client: sp1_sdk::blocking::Prover> Sp1ClientProver<Client> {
         let program_label = job.kind.label().to_string();
         logger.info(
             "proof_started",
-            None,
             &[
                 ("program", program_label.clone()),
                 ("input_bytes", job.guest_input.len().to_string()),
@@ -535,7 +464,6 @@ impl<Client: sp1_sdk::blocking::Prover> Sp1ClientProver<Client> {
         require_groth16_shape(&proof_bytes)?;
         logger.info(
             "proof_finished",
-            None,
             &[
                 ("program", program_label),
                 ("prove_seconds", prove_seconds.to_string()),
@@ -580,13 +508,11 @@ mod tests {
     use super::*;
     use crate::error::Error;
     use crate::light_client::ChainKind;
-    use alloy_primitives::hex;
     use lc_testkit::synthetic::{build_update, UpdateRecipe};
 
-    const ANVIL_SECRET: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-
+    /// A dummy oracle key. It has no value anywhere.
     fn oracle() -> Signer {
-        Signer::from_secret_bytes(&hex::decode(ANVIL_SECRET).unwrap()).unwrap()
+        Signer::from_secret_bytes(&[0x42; 32]).unwrap()
     }
 
     fn scenario(participants: usize) -> UpdateInput {
@@ -662,24 +588,6 @@ mod tests {
             matches!(error, Error::VerificationRefused(_)),
             "got {error}"
         );
-    }
-
-    /// Claim: a budgeted prover makes the proofs of its budget and then refuses with a transient error, and the refusal
-    /// reaches no inner prover.
-    /// Why it matters: the service must neither count the refusal as a failed attempt nor send a proof that was not made.
-    #[test]
-    fn a_budgeted_prover_stops_after_its_budget() {
-        let inner: std::sync::Arc<dyn Prover> = std::sync::Arc::new(OracleProver::new(oracle()));
-        let prover = BudgetedProver::new(inner, 1);
-        let vkey = B256::repeat_byte(0x42);
-        assert!(prover
-            .prove(vkey, &ProofStatement::Verified(scenario(400)))
-            .is_ok());
-        let refusal = prover
-            .prove(vkey, &ProofStatement::Verified(scenario(400)))
-            .unwrap_err();
-        assert!(matches!(refusal, Error::ProofBudget(_)), "got {refusal}");
-        assert!(crate::service::is_transient(&refusal));
     }
 
     /// Claim: a program key that differs in one bit from the stored key is refused, and the error shows both keys.

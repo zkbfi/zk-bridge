@@ -16,7 +16,7 @@
 //! The API key comes from an environment variable that the configuration names. It never appears in a file, in a log
 //! line or in an error text.
 
-use crate::config::{is_loopback_url, ProverConfig};
+use crate::config::{is_permitted_secret_url, require_environment_name, ProverConfig};
 use crate::error::{Error, Result};
 use crate::logging::Logger;
 use crate::prover::{
@@ -158,7 +158,6 @@ impl RemoteProver {
             let wait = self.settings.retry_delay * attempt;
             self.logger.warn(
                 "remote_prove_retry",
-                None,
                 &[
                     ("attempt", attempt.to_string()),
                     ("wait_seconds", wait.as_secs().to_string()),
@@ -296,14 +295,6 @@ impl Prover for RemoteProver {
     }
 }
 
-/// Whether the API key may travel to this URL: https, or http on the local machine (for tests and tunnels).
-fn is_permitted_url(url: &str) -> bool {
-    if url.starts_with("https://") {
-        return true;
-    }
-    url.starts_with("http://") && is_loopback_url(url)
-}
-
 /// Checks the remote keys of a `[prover]` section. The section holds a URL and the name of a variable, never a key.
 ///
 /// # Errors
@@ -312,7 +303,7 @@ pub fn validate_remote_config(config: &ProverConfig) -> Result<()> {
     let url = config.remote_url.as_deref().ok_or_else(|| {
         Error::Config("prover.remote_url is required for the remote backend".into())
     })?;
-    if !is_permitted_url(url) {
+    if !is_permitted_secret_url(url) {
         return Err(Error::Config(
             "prover.remote_url must start with https:// (http:// only for the local machine): the API key travels in the request".into(),
         ));
@@ -320,18 +311,7 @@ pub fn validate_remote_config(config: &ProverConfig) -> Result<()> {
     let variable = config.remote_api_key_env.as_deref().ok_or_else(|| {
         Error::Config("prover.remote_api_key_env is required for the remote backend".into())
     })?;
-    // An environment variable name is in capitals. This also stops someone from pasting the key itself here.
-    let looks_like_a_name = !variable.is_empty()
-        && variable.len() <= 64
-        && variable.starts_with(|character: char| character.is_ascii_uppercase())
-        && variable.chars().all(|character| {
-            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
-        });
-    if !looks_like_a_name {
-        return Err(Error::Config(
-            "prover.remote_api_key_env must be the NAME of an environment variable in capitals, not the key".into(),
-        ));
-    }
+    require_environment_name(variable, "prover.remote_api_key_env")?;
     if config.remote_attempts == 0 {
         return Err(Error::Config(
             "prover.remote_attempts must be at least 1".into(),
@@ -351,10 +331,12 @@ mod tests {
     use crate::config::{Config, SAMPLE_FOR_TESTS};
 
     fn remote_config(extra: &str) -> std::result::Result<Config, Error> {
-        let text = SAMPLE_FOR_TESTS.replace(
-            "backend = \"oracle\"",
-            &format!("backend = \"remote\"\n{extra}"),
-        );
+        let text = SAMPLE_FOR_TESTS
+            .replace("oracle_key_env = \"ORACLE_KEY\"\n", "")
+            .replace(
+                "backend = \"oracle\"",
+                &format!("backend = \"remote\"\n{extra}"),
+            );
         Config::load(&text, &|_| None)
     }
 
@@ -365,9 +347,12 @@ mod tests {
     #[test]
     fn a_remote_section_loads_with_defaults() {
         let config = remote_config(GOOD).unwrap();
-        assert_eq!(config.prover.remote_timeout_seconds, 900);
-        assert_eq!(config.prover.remote_attempts, 4);
-        assert_eq!(config.prover.remote_retry_delay_seconds, 10);
+        assert_eq!(config.prover_config().unwrap().remote_timeout_seconds, 900);
+        assert_eq!(config.prover_config().unwrap().remote_attempts, 4);
+        assert_eq!(
+            config.prover_config().unwrap().remote_retry_delay_seconds,
+            10
+        );
     }
 
     /// Claim: the file cannot hold the API key: a key named `api_key` is refused, and so is a value in the place of the
@@ -404,16 +389,20 @@ mod tests {
     #[test]
     fn the_key_comes_from_the_named_variable() {
         let config = remote_config(GOOD).unwrap();
-        let unset = RemoteProver::from_config(&config.prover, &|_| None, Logger::in_memory().0);
+        let unset = RemoteProver::from_config(
+            config.prover_config().unwrap(),
+            &|_| None,
+            Logger::in_memory().0,
+        );
         assert!(unset.err().unwrap().to_string().contains("RUNPOD_API_KEY"));
         let empty = RemoteProver::from_config(
-            &config.prover,
+            config.prover_config().unwrap(),
             &|_| Some("  ".into()),
             Logger::in_memory().0,
         );
         assert!(empty.is_err());
         let prover = RemoteProver::from_config(
-            &config.prover,
+            config.prover_config().unwrap(),
             &|name| (name == "RUNPOD_API_KEY").then(|| "secret-value".to_string()),
             Logger::in_memory().0,
         )

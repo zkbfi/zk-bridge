@@ -1,19 +1,22 @@
 # GPU prover
 
-This document explains how to prove on a rented GPU that exists only while a job runs. The prover service sends each proof job to a worker in a container. The worker runs on RunPod Serverless. You pay for the seconds that the worker runs.
+This document explains how to prove on a rented GPU that exists only while a job runs. The proof producer (`zk-bridge-prover prove`) sends each proof job to a worker in a container. The worker runs on RunPod Serverless. You pay for the seconds that the worker runs.
+
+The producer keeps no state and sends no transaction. It hands each proof to a stateful server, which stores it and sends it to the chain (see `prover/README.md`).
 
 Nothing here changes what the contracts trust. A proof that the verifier contract accepts is valid, whoever made it. The worker holds no key and no secret of the bridge.
 
 ## How it fits together
 
 ```
-prover service                                   RunPod Serverless endpoint
+proof producer (prove command)                  RunPod Serverless endpoint
   native run of lc-core  (refuses a bad input)
   POST /prove  ------------------------------->   prove-worker  (one container, one GPU)
   Authorization: Bearer <API key>                    native run again
                                                      SP1 GPU server: Groth16 proof
   <-------------------------------------------      proof + public values
-  checks the answer, then sends the transaction
+  checks the answer, then hands the proof off
+  (standard output or a webhook of a stateful server)
 ```
 
 The pieces in this repository:
@@ -154,7 +157,7 @@ Do these steps in the RunPod console. The names of the fields come from the page
 export RUNPOD_API_KEY=<the key>      # in the unit file or the secret store of your server, not in a repository
 ```
 
-The prover refuses a configuration that has a key named `api_key`, `apikey` or `token`. It also refuses a value for `remote_api_key_env` that is not a name in capitals. The key does not appear in logs or in error messages. A plain `http://` address is refused, except for the local machine, because the key travels in the request.
+The producer refuses a configuration that has a key named `api_key`, `apikey` or `token`. It also refuses a value for `remote_api_key_env` that is not a name in capitals. The key does not appear in logs or in error messages. A plain `http://` address is refused, except for the local machine, because the key travels in the request.
 
 The worker does not need the key. RunPod checks it at its proxy.
 
@@ -163,7 +166,7 @@ The worker does not need the key. RunPod checks it at its proxy.
 ```toml
 [prover]
 backend = "remote"
-program_vkey = "0x00a2b556cd72b5d838b34c60b0367e1ffc9ab662d4e6aabca23e3682b0f5584b"   # key of the light-client program
+program_vkey = "0x00a2b556cd72b5d838b34c60b0367e1ffc9ab662d4e6aabca23e3682b0f5584b"   # optional with a route: the command reads the key from the light client
 remote_url = "https://ENDPOINT_IDENTIFIER.api.runpod.ai"
 remote_api_key_env = "RUNPOD_API_KEY"
 remote_timeout_seconds = 900        # one request, from the first byte sent to the last byte read
@@ -173,7 +176,7 @@ remote_retry_delay_seconds = 10     # the wait before attempt n+1 is n times thi
 
 The environment variables `ZK_BRIDGE_PROVER_PROVER_REMOTE_URL` and `ZK_BRIDGE_PROVER_PROVER_REMOTE_API_KEY_ENV` override the first two keys.
 
-The service still compares `program_vkey` with `programVKey()` of the light client at startup. A fork observation proof uses the key that the fork registry stores. The proof check binds each key, so the remote backend needs no second copy.
+With a route, the `prove` command reads `programVKey()` from the destination light client and stops when `program_vkey` differs from it. In that case you can leave `program_vkey` out. A run that starts from an explicit head needs the key in the file or in `--program-vkey`. A fork observation proof uses the key that the fork registry stores. The proof check binds each key, so the remote backend needs no second copy.
 
 The timeout of 900 seconds covers the wait for a worker (2 minutes), the cold start and one proof. The RunPod page recommends at least 3 retries with delays of 5 to 10 seconds for cold starts. The defaults match that.
 
@@ -224,8 +227,8 @@ The proof on the processor that I made on a 32-thread box took 14 minutes 22 sec
 4. Create the endpoint with the settings above. Max workers 1, active workers 0.
 5. Set the API key in the environment of the prover. Check that no file in the repository holds it (`git grep` for the first characters of the key).
 6. Send one `GET /ping` through the endpoint address with the `Authorization` header. Expect 204 and then 200. Write down the time between them.
-7. Run `zk-bridge-prover --config prover.toml route-health` and confirm that it starts without a configuration error. The startup wiring check compares `program_vkey` with the contract.
-8. Prove one light-client update of a test route. Write down the total time, the time of the worker (the log line `proved`) and the cost shown in the RunPod console.
+7. Run `zk-bridge-prover --config prover.toml prove` on a test route whose light client is current. Confirm that it exits with code 3 without a configuration error. The run reads the light client and compares `program_vkey` with the contract key before it asks the worker for anything.
+8. Run `prove` on a test route whose light client lags. Write down the total time, the time of the worker (the log line `proved`) and the cost shown in the RunPod console.
 9. Check that the proof bytes have 356 bytes and that the verifier contract on the test chain accepts them. This also gives the first accepting fixture for `test/hardened/SP1VerifierGroth16.t.sol` for circuit v6.1.0, if the fixture file is not yet in the repository.
 10. Stop an endpoint worker in the middle of a proof (scale max workers to 0). Confirm that the prover retries and logs `remote_prove_retry`.
 11. Prove a fork observation and a fold of several updates. Write down the times against the 5.5 minute limit.

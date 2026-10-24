@@ -1,16 +1,16 @@
-//! One error type for the whole service.
+//! One error type for the whole crate.
 
 use alloy_primitives::{hex, Bytes};
 use std::fmt;
 
-/// A failure anywhere in the service.
+/// A failure anywhere in the crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// The configuration is invalid. The text names the key.
     Config(String),
-    /// A secret was supplied in a way the service refuses (for example on the command line).
+    /// A secret was supplied in a way the crate refuses (for example in the configuration file).
     SecretHandling(String),
-    /// The keystore or the key could not be read.
+    /// The oracle key could not be read.
     Signer(String),
     /// An HTTP request failed before a JSON-RPC answer arrived.
     Http(String),
@@ -25,23 +25,19 @@ pub enum Error {
     },
     /// A node answer has an unexpected shape.
     Malformed(String),
-    /// The SQLite file failed.
-    Database(String),
-    /// A beacon data source could not give what the service asked for.
+    /// A beacon data source could not give what the caller asked for.
     Beacon(String),
     /// Native verification refused the statement. No signature or transaction follows.
     VerificationRefused(String),
     /// The proving backend cannot prove this statement.
     Prover(String),
-    /// A transaction was mined and failed, or a node refused it.
-    Transaction(String),
+    /// The webhook refused the result, or no answer arrived.
+    Handoff(String),
     /// An input of a command line subcommand is wrong.
     Usage(String),
-    /// The process has used its proof budget (`prover.max_proofs_per_process`). The next process goes on.
-    ProofBudget(String),
 }
 
-/// The result type of the service.
+/// The result type of the crate.
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl fmt::Display for Error {
@@ -64,45 +60,15 @@ impl fmt::Display for Error {
                 None => write!(formatter, "rpc error {code}: {message}"),
             },
             Self::Malformed(reason) => write!(formatter, "malformed answer: {reason}"),
-            Self::Database(reason) => write!(formatter, "database: {reason}"),
             Self::Beacon(reason) => write!(formatter, "beacon: {reason}"),
             Self::VerificationRefused(reason) => {
                 write!(formatter, "verification refused: {reason}")
             }
             Self::Prover(reason) => write!(formatter, "prover: {reason}"),
-            Self::Transaction(reason) => write!(formatter, "transaction: {reason}"),
+            Self::Handoff(reason) => write!(formatter, "handoff: {reason}"),
             Self::Usage(reason) => write!(formatter, "usage: {reason}"),
-            Self::ProofBudget(reason) => write!(formatter, "proof budget: {reason}"),
         }
     }
 }
 
 impl std::error::Error for Error {}
-
-impl From<rusqlite::Error> for Error {
-    fn from(error: rusqlite::Error) -> Self {
-        Self::Database(error.to_string())
-    }
-}
-
-impl Error {
-    /// The first four bytes of the revert data of a failed call, when the error carries any.
-    pub fn revert_selector(&self) -> Option<[u8; 4]> {
-        match self {
-            Self::Rpc {
-                data: Some(data), ..
-            } if data.len() >= 4 => data[..4].try_into().ok(),
-            _ => None,
-        }
-    }
-
-    /// The revert data of a failed call, when the error carries any.
-    pub fn revert_data(&self) -> Option<&Bytes> {
-        match self {
-            Self::Rpc {
-                data: Some(data), ..
-            } => Some(data),
-            _ => None,
-        }
-    }
-}

@@ -1,17 +1,14 @@
-//! Signing keys: a Foundry keystore with a password file, or an environment variable for local Anvil.
+//! The key of the oracle backend, which signs proofs for the development verifier (`OracleSP1Verifier`).
 //!
-//! The service never accepts a key on the command line, in the configuration file, or in a log line.
-//! A key lives in a [`Signer`], whose `Debug` output shows the address only.
+//! The crate sends no transaction, so it holds no wallet and no keystore. The one key it can hold is the oracle key,
+//! and it reads that key from an environment variable that the configuration names. The command line, the
+//! configuration file and the logs never carry it. A key lives in a [`Signer`], whose `Debug` output shows the
+//! address only.
 
 use crate::error::{Error, Result};
-use aes::cipher::{KeyIvInit, StreamCipher};
 use alloy_primitives::{keccak256, Address, B256};
 use k256::ecdsa::SigningKey;
-use serde_json::Value;
 use std::fmt;
-use std::path::Path;
-
-type Aes128Ctr = ctr::Ctr128BE<aes::Aes128>;
 
 /// A secp256k1 key and its address.
 #[derive(Clone)]
@@ -68,7 +65,8 @@ impl Signer {
 
     /// Reads a hex secret (with or without `0x`) from the environment variable `name`.
     ///
-    /// Only for local Anvil: the caller checks that every RPC URL is a loopback address (see `config.rs`).
+    /// Only for the oracle backend, which only a development verifier accepts: the configuration refuses that backend
+    /// for a destination that is not a local chain (see `config.rs`).
     ///
     /// # Errors
     /// `Error::Signer` when the variable is missing or is not 32 bytes of hex. The message never holds the value.
@@ -79,76 +77,6 @@ impl Signer {
             .map_err(|_| Error::Signer(format!("environment variable {name} is not hex")))?;
         Self::from_secret_bytes(&bytes)
             .map_err(|_| Error::Signer(format!("environment variable {name} is not a key")))
-    }
-
-    /// Decrypts a Web3 Secret Storage version 3 keystore (the Foundry format: scrypt and AES-128-CTR).
-    ///
-    /// # Errors
-    /// `Error::Signer` for a wrong password, an unsupported key derivation, or a malformed file.
-    pub fn from_keystore(keystore_path: &Path, password_path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(keystore_path).map_err(|error| {
-            Error::Signer(format!(
-                "cannot read the keystore {}: {error}",
-                keystore_path.display()
-            ))
-        })?;
-        let password = std::fs::read_to_string(password_path).map_err(|error| {
-            Error::Signer(format!(
-                "cannot read the password file {}: {error}",
-                password_path.display()
-            ))
-        })?;
-        Self::from_keystore_text(&text, password.trim_end_matches(['\n', '\r']))
-    }
-
-    /// Decrypts keystore text with a password. See [`Signer::from_keystore`].
-    ///
-    /// # Errors
-    /// `Error::Signer` for a wrong password, an unsupported key derivation, or a malformed document.
-    pub fn from_keystore_text(text: &str, password: &str) -> Result<Self> {
-        let document: Value = serde_json::from_str(text)
-            .map_err(|error| Error::Signer(format!("keystore is not JSON: {error}")))?;
-        let crypto = document
-            .get("crypto")
-            .or_else(|| document.get("Crypto"))
-            .ok_or_else(|| missing("crypto"))?;
-        if crypto["kdf"].as_str() != Some("scrypt") {
-            return Err(Error::Signer("only scrypt keystores are supported".into()));
-        }
-        if crypto["cipher"].as_str() != Some("aes-128-ctr") {
-            return Err(Error::Signer(
-                "only aes-128-ctr keystores are supported".into(),
-            ));
-        }
-        let params = &crypto["kdfparams"];
-        let number = |name: &str| params[name].as_u64().ok_or_else(|| missing(name));
-        let (n, r, p, derived_length) =
-            (number("n")?, number("r")?, number("p")?, number("dklen")?);
-        if !n.is_power_of_two() || derived_length != 32 {
-            return Err(Error::Signer("unsupported scrypt parameters".into()));
-        }
-        let salt = hex_field(&params["salt"], "salt")?;
-        let iv = hex_field(&crypto["cipherparams"]["iv"], "iv")?;
-        let ciphertext = hex_field(&crypto["ciphertext"], "ciphertext")?;
-        let mac = hex_field(&crypto["mac"], "mac")?;
-
-        let scrypt_params =
-            scrypt::Params::new(n.trailing_zeros() as u8, r as u32, p as u32, 32)
-                .map_err(|error| Error::Signer(format!("scrypt parameters: {error}")))?;
-        let mut derived = [0u8; 32];
-        scrypt::scrypt(password.as_bytes(), &salt, &scrypt_params, &mut derived)
-            .map_err(|error| Error::Signer(format!("scrypt: {error}")))?;
-
-        let mut mac_input = derived[16..32].to_vec();
-        mac_input.extend_from_slice(&ciphertext);
-        if keccak256(&mac_input).as_slice() != mac.as_slice() {
-            return Err(Error::Signer("wrong password or damaged keystore".into()));
-        }
-        let mut secret = ciphertext;
-        let mut cipher = Aes128Ctr::new_from_slices(&derived[..16], &iv)
-            .map_err(|_| Error::Signer("bad cipher key or iv length".into()))?;
-        cipher.apply_keystream(&mut secret);
-        Self::from_secret_bytes(&secret)
     }
 
     /// The address that the key controls.
@@ -178,19 +106,7 @@ impl Signer {
     }
 }
 
-fn missing(name: &str) -> Error {
-    Error::Signer(format!(
-        "keystore field {name} is missing or has the wrong type"
-    ))
-}
-
-fn hex_field(value: &Value, name: &str) -> Result<Vec<u8>> {
-    let text = value.as_str().ok_or_else(|| missing(name))?;
-    alloy_primitives::hex::decode(text)
-        .map_err(|_| Error::Signer(format!("keystore field {name} is not hex")))
-}
-
-/// Recovers the address that signed `digest`. Used by tests and by the transaction checks.
+/// Recovers the address that signed `digest`. Tests use it to check the oracle signature.
 ///
 /// # Errors
 /// `Error::Signer` when the signature does not recover.
@@ -261,64 +177,5 @@ mod tests {
         let error = Signer::from_environment("SOME_NAME", &lookup).unwrap_err();
         assert!(!error.to_string().contains(secret));
         assert!(Signer::from_environment("SOME_NAME", &|_: &str| None).is_err());
-    }
-
-    /// Claim: a keystore made with the Web3 Secret Storage recipe decrypts with the right password and fails with
-    /// a wrong one. The test builds the keystore with the same primitives in the opposite direction.
-    /// Why it matters: a wrong password must never produce a different valid key.
-    #[test]
-    fn keystore_roundtrip_and_wrong_password() {
-        let secret = alloy_primitives::hex::decode(ANVIL_SECRET).unwrap();
-        let text = test_keystore(&secret, "correct horse", 1 << 10);
-        let signer = Signer::from_keystore_text(&text, "correct horse").unwrap();
-        assert_eq!(signer.address(), anvil_signer().address());
-        let error = Signer::from_keystore_text(&text, "wrong").unwrap_err();
-        assert!(error.to_string().contains("wrong password"));
-    }
-
-    /// Claim: a keystore that Foundry `cast wallet new` wrote (with a password file that ends in a newline) decrypts
-    /// to the address that `cast` printed when it made the file.
-    /// Why it matters: the roundtrip test uses our own encryption. This one uses an independent implementation, so a
-    /// shared mistake in our encrypt and decrypt code cannot hide.
-    #[test]
-    fn foundry_keystore_decrypts_to_the_address_cast_printed() {
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-        let signer = Signer::from_keystore(
-            &directory.join("foundry-keystore.json"),
-            &directory.join("foundry-keystore.password"),
-        )
-        .unwrap();
-        assert_eq!(
-            signer.address(),
-            address!("1e01c40fA71113192e0AA8FEEc936c0Dda4b9c21")
-        );
-    }
-
-    /// Builds a version 3 keystore for tests.
-    pub(crate) fn test_keystore(secret: &[u8], password: &str, n: u64) -> String {
-        let salt = [7u8; 32];
-        let iv = [9u8; 16];
-        let params = scrypt::Params::new(n.trailing_zeros() as u8, 8, 1, 32).unwrap();
-        let mut derived = [0u8; 32];
-        scrypt::scrypt(password.as_bytes(), &salt, &params, &mut derived).unwrap();
-        let mut ciphertext = secret.to_vec();
-        Aes128Ctr::new_from_slices(&derived[..16], &iv)
-            .unwrap()
-            .apply_keystream(&mut ciphertext);
-        let mut mac_input = derived[16..].to_vec();
-        mac_input.extend_from_slice(&ciphertext);
-        let mac = keccak256(&mac_input);
-        serde_json::json!({
-            "version": 3,
-            "crypto": {
-                "cipher": "aes-128-ctr",
-                "cipherparams": {"iv": alloy_primitives::hex::encode(iv)},
-                "ciphertext": alloy_primitives::hex::encode(&ciphertext),
-                "kdf": "scrypt",
-                "kdfparams": {"dklen": 32, "n": n, "p": 1, "r": 8, "salt": alloy_primitives::hex::encode(salt)},
-                "mac": alloy_primitives::hex::encode(mac),
-            }
-        })
-        .to_string()
     }
 }

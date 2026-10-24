@@ -1,4 +1,4 @@
-# The prover service of the hardened bridge. It is its own cargo workspace, separate from light-client/.
+# The proof producer of the hardened bridge. It is its own cargo workspace, separate from light-client/.
 # Every dependency is pinned with "=" to one exact version.
 # The date next to each line is the crates.io publish date of that version (checked on 2026-10-20).
 # The rule is: published on or before 2026-09-22 (at least 28 days before 2026-10-20).
@@ -9,7 +9,7 @@ members = ["."]
 
 [package]
 name = "zk-bridge-prover"
-description = "Keeps the hardened bridge moving: watches deposits, advances the light client, submits withdrawals."
+description = "Makes the proofs of the hardened bridge and hands them to other servers. It keeps no state and sends no transaction."
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
@@ -19,31 +19,34 @@ publish = false
 name = "zk-bridge-prover"
 path = "src/main.rs"
 
-# Bots and a beacon stub for the local network in docker/. Development only: it needs the feature `dev-source`.
 # The GPU worker for RunPod Serverless. It needs the feature `sp1-cuda` and, to run, an NVIDIA GPU. See docs/gpu-prover.md.
 [[bin]]
 name = "prove-worker"
 path = "src/bin/prove_worker.rs"
 required-features = ["sp1-cuda"]
 
-[[bin]]
-name = "local-network"
-path = "src/bin/local_network.rs"
-required-features = ["dev-source"]
+# These tests run on the signed beacon chain, which is test support. They need the feature `signed-beacon`, which the
+# default build has.
+[[test]]
+name = "signed_beacon"
+required-features = ["signed-beacon"]
 
-# Evidence builder for the red-team attacks in attacks/local/. Development only: it needs the feature `dev-source`.
-[[bin]]
-name = "attack-evidence"
-path = "../attacks/local/src/main.rs"
-required-features = ["dev-source"]
+[[test]]
+name = "produce"
+required-features = ["signed-beacon"]
+
+[[test]]
+name = "evidence"
+required-features = ["signed-beacon"]
 
 [features]
-# `dev-source` builds the development beacon source (DevBeaconSource) that serves Anvil. It needs the test crate
-# `lc-testkit` for its synthetic beacon data. A production build leaves it out: `cargo build --release --no-default-features`.
-default = ["dev-source"]
-dev-source = ["dep:lc-testkit"]
+# `signed-beacon` builds a beacon chain over local blocks with real signatures, for tests and for runs with real proofs. It
+# needs the test crate `lc-testkit` for its synthetic beacon data. A production build leaves it out:
+# `cargo build --release --no-default-features`.
+default = ["signed-beacon"]
+signed-beacon = ["dep:lc-testkit"]
 # The production proving backend: the SP1 prover on the local CPU, with no network prover. Off by default, so the
-# normal build and the Docker local network stay light. See the module documentation of src/prover.rs.
+# normal build stays light. See the module documentation of src/prover.rs.
 sp1 = ["dep:sp1-sdk"]
 # `sp1` plus the native Groth16 wrapper (Go code that sp1-sdk compiles). Without it, sp1-sdk runs the Groth16 step in a
 # Docker container. The server image uses this feature. It needs a Go toolchain at build time.
@@ -55,25 +58,20 @@ sp1-cuda = ["sp1", "sp1-sdk/cuda"]
 
 [dependencies]
 # The light-client crates. Every call goes through src/light_client.rs.
-# `lc-core` holds the builders for withdrawals, receipts, beacon states, ancestry and gate evidence.
+# `lc-core` holds the builders for withdrawals, receipts, beacon states and ancestry.
 lc-core = { path = "../light-client/crates/lc-core", features = ["json"] }
-# Synthetic beacon data for the development source only (feature `dev-source`). The tests always use it.
+# Synthetic beacon data for the signed beacon chain only (feature `signed-beacon`). The tests always use it.
 lc-testkit = { path = "../light-client/crates/lc-testkit", optional = true }
 
 alloy-primitives = { version = "=1.7.3", default-features = false, features = ["std"] } # 2026-09-10
 alloy-sol-types = { version = "=1.7.3", default-features = false, features = ["std"] } # 2026-09-10
-alloy-rlp = { version = "=0.3.16", default-features = false, features = ["std"] } # 2026-07-03
 serde = { version = "=1.0.229", features = ["derive"] } # 2026-07-18
 serde_json = { version = "=1.0.151" } # 2026-07-20
 tiny_http = { version = "=0.12.0", default-features = false } # 2022-10-06
 ureq = { version = "=3.4.2", default-features = false, features = ["rustls", "gzip"] } # 2026-09-13
-rusqlite = { version = "=0.40.2", features = ["bundled"] } # 2026-08-08
 toml = { version = "=0.9.8", default-features = false, features = ["parse", "serde"] } # 2025-10-09
 clap = { version = "=4.6.7", features = ["derive"] } # 2026-09-14
 k256 = { version = "=0.13.4", default-features = false, features = ["ecdsa", "std"] } # 2024-09-20
-scrypt = { version = "=0.11.0", default-features = false, features = ["std"] } # 2023-03-05
-aes = { version = "=0.8.4" } # 2024-02-13
-ctr = { version = "=0.9.2" } # 2022-09-30
 
 # Verifies an SP1 Groth16 proof (no_std crate, the `full` feature stays off). Published 2026-09-24.
 sp1-verifier = { version = "=6.8.1", default-features = false, features = ["std"] } # 2026-09-24

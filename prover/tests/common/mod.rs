@@ -1,567 +1,198 @@
-//! Helpers for the Anvil integration tests: start chains, build the contracts with forge, deploy them.
+//! A synthetic signed beacon chain over fake execution blocks, shared by the integration tests.
 //!
-//! Every test skips with a clear message when `anvil` or `forge` is missing.
-
+//! The chain follows a list of blocks that a test extends with [`Chain::mine`]. No execution node is involved: the beacon
+//! side stands alone, and its committee signs for real (BLS), so the light-client program accepts its updates.
 #![allow(dead_code)]
 
-pub mod bridge;
-pub mod multicall;
+use alloy_primitives::{keccak256, Address, B256, U256};
+use lc_testkit::block_bytes::PayloadFields;
+use std::net::TcpListener;
+use std::sync::{Arc, Mutex};
+use zk_bridge_prover::beacon::http::HttpBeaconSource;
+use zk_bridge_prover::beacon::{DepositBlock, StoredHead};
+use zk_bridge_prover::error::{Error, Result};
+use zk_bridge_prover::light_client::{ChainKind, LightClientOutput};
+use zk_bridge_prover::local_network::signed_beacon::checkpoint::Checkpoint;
+use zk_bridge_prover::local_network::signed_beacon::node::{
+    default_first_slot, serve, BeaconNode, BlockFeed, Mount, NodeSettings,
+};
 
-use alloy_primitives::{hex, Address, Bytes, B256, U256};
-use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
-use zk_bridge_prover::rpc::{HttpRpc, JsonRpc};
+/// The two chains whose specifications the tests cover.
+pub const KINDS: [ChainKind; 2] = [ChainKind::Ethereum, ChainKind::Pulsechain];
 
-/// The first and second Anvil development accounts. Their keys are public and worthless outside local test chains.
-pub const DEPLOYER: Address =
-    alloy_primitives::address!("f39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
-pub const RECIPIENT: Address =
-    alloy_primitives::address!("70997970C51812dc3A010C7d01b50e0d17dc79C8");
-pub const DEPLOYER_SECRET: &str =
-    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+/// The timestamp of execution block 1. Genesis follows from it and from the first slot.
+pub const FIRST_TIMESTAMP: u64 = 1_800_000_000;
 
-/// The root of the repository (the parent of `prover/`).
-pub fn repository_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repository root")
-        .to_path_buf()
+/// Blocks before the checkpoint, and blocks after it.
+pub const BLOCKS_BEFORE_CHECKPOINT: u64 = 12;
+
+pub struct Feed(Mutex<Vec<PayloadFields>>);
+
+/// The node owns its feed, and the test keeps a second handle to mine blocks.
+pub struct SharedFeed(Arc<Feed>);
+
+impl BlockFeed for SharedFeed {
+    fn latest_number(&self) -> Result<u64> {
+        Ok(self.0 .0.lock().unwrap().len() as u64)
+    }
+
+    fn payload(&self, number: u64) -> Result<PayloadFields> {
+        let blocks = self.0 .0.lock().unwrap();
+        blocks
+            .get(number as usize - 1)
+            .cloned()
+            .ok_or_else(|| Error::Malformed(format!("block {number} is unknown")))
+    }
 }
 
-/// A scratch directory under `target/`, unique for a name and this process.
-pub fn scratch(name: &str) -> PathBuf {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target/test-scratch")
-        .join(format!("{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&path);
-    std::fs::create_dir_all(&path).expect("scratch directory");
-    path
+pub fn execution_hash(number: u64) -> B256 {
+    keccak256(format!("anvil block {number}"))
 }
 
-fn tool_exists(name: &str) -> bool {
-    Command::new(name)
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+pub fn payload(number: u64, seconds_per_slot: u64) -> PayloadFields {
+    PayloadFields {
+        parent_hash: execution_hash(number - 1),
+        fee_recipient: Address::repeat_byte(0x0f),
+        state_root: keccak256(b"state"),
+        receipts_root: keccak256(format!("receipts {number}")),
+        logs_bloom: vec![0u8; 256],
+        prev_randao: keccak256(b"randao"),
+        block_number: number,
+        gas_limit: 30_000_000,
+        gas_used: 21_000,
+        timestamp: FIRST_TIMESTAMP + (number - 1) * seconds_per_slot,
+        extra_data: Vec::new(),
+        base_fee_per_gas: U256::from(7u64),
+        block_hash: execution_hash(number),
+    }
 }
 
-/// Returns false and prints why when anvil or forge is missing.
-pub fn tools_available() -> bool {
-    for tool in ["anvil", "forge"] {
-        if !tool_exists(tool) {
-            eprintln!("SKIPPED: `{tool}` is not installed or not on PATH, so the Anvil integration test cannot run");
-            return false;
+/// A node over a chain that the test mines forward.
+pub struct Chain {
+    pub kind: ChainKind,
+    feed: Arc<Feed>,
+    pub node: Arc<BeaconNode>,
+}
+
+impl Chain {
+    pub fn new(kind: ChainKind, blocks: u64) -> Self {
+        let feed = Arc::new(Feed(Mutex::new(Vec::new())));
+        let node = Arc::new(BeaconNode::new(
+            Box::new(SharedFeed(feed.clone())),
+            NodeSettings {
+                kind,
+                first_slot: default_first_slot(kind),
+                finality_slots: 2,
+                participants: 400,
+            },
+        ));
+        let chain = Self { kind, feed, node };
+        chain.mine(blocks);
+        chain
+    }
+
+    pub fn mine(&self, count: u64) {
+        let mut blocks = self.feed.0.lock().unwrap();
+        for _ in 0..count {
+            let number = blocks.len() as u64 + 1;
+            blocks.push(payload(number, self.kind.seconds_per_slot()));
         }
     }
-    true
-}
 
-/// A running Anvil process. It stops when dropped.
-pub struct Anvil {
-    child: Child,
-    pub url: String,
-    pub chain_id: u64,
-}
+    /// Mines the next block with a payload that the test changes. The timestamp and the number must stay as they are:
+    /// they fix the slot of the block.
+    pub fn mine_custom(&self, change: impl FnOnce(&mut PayloadFields)) {
+        let mut blocks = self.feed.0.lock().unwrap();
+        let number = blocks.len() as u64 + 1;
+        let mut next = payload(number, self.kind.seconds_per_slot());
+        change(&mut next);
+        blocks.push(next);
+    }
 
-impl Drop for Anvil {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+    pub fn source(&self) -> HttpBeaconSource {
+        HttpBeaconSource::new(self.kind, Box::new(self.node.clone()))
+    }
+
+    pub fn first_slot(&self) -> u64 {
+        default_first_slot(self.kind)
+    }
+
+    pub fn deposit(&self, number: u64) -> DepositBlock {
+        DepositBlock {
+            number,
+            hash: execution_hash(number),
+            timestamp: payload(number, self.kind.seconds_per_slot()).timestamp,
+        }
     }
 }
 
+/// The head that a light client holds when it starts at a checkpoint.
+pub fn head_at(checkpoint: &Checkpoint) -> StoredHead {
+    StoredHead {
+        slot: checkpoint.slot,
+        root: checkpoint.header_root,
+        next_committee_hash: checkpoint.next_committee_hash,
+    }
+}
+
+/// The head that a light client holds after an update that the program accepted.
+pub fn head_after(output: &LightClientOutput) -> StoredHead {
+    StoredHead {
+        slot: output.newHeadSlot,
+        root: output.newHeaderRoot,
+        next_committee_hash: output.nextSyncCommitteeHash,
+    }
+}
+
+/// A free local port.
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("bind")
+    TcpListener::bind("127.0.0.1:0")
+        .expect("a free port")
         .local_addr()
-        .expect("address")
+        .unwrap()
         .port()
 }
 
-/// The Anvil hardforks the tests use. `Shanghai` is the PulseChain role: no EIP-4788 (beacon roots) and no
-/// `MCOPY`. `Cancun` is the Ethereum role: the tests install the genuine EIP-4788 contract code by hand, because
-/// Anvil does not deploy it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Hardfork {
-    Shanghai,
-    Cancun,
-}
-
-impl Hardfork {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Shanghai => "shanghai",
-            Self::Cancun => "cancun",
-        }
-    }
-}
-
-/// Starts `anvil --hardfork <name>` with a chain identifier and waits until it answers.
-pub fn start_anvil(chain_id: u64, hardfork: Hardfork) -> Anvil {
+/// Serves the beacon node of `chain` on a free local port, and returns its base URL.
+pub fn serve_beacon(chain: &Chain) -> String {
     let port = free_port();
-    let child = Command::new("anvil")
-        .args([
-            "--port",
-            &port.to_string(),
-            "--chain-id",
-            &chain_id.to_string(),
-            "--hardfork",
-            hardfork.name(),
-            "--silent",
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start anvil");
-    let anvil = Anvil {
-        child,
-        url: format!("http://127.0.0.1:{port}"),
-        chain_id,
-    };
-    let rpc = HttpRpc::new(&anvil.url);
-    let start = Instant::now();
-    while rpc.call("eth_chainId", json!([])).is_err() {
-        assert!(
-            start.elapsed() < Duration::from_secs(20),
-            "anvil did not start"
+    let node = chain.node.clone();
+    std::thread::spawn(move || {
+        let _ = serve(
+            &format!("127.0.0.1:{port}"),
+            vec![Mount {
+                prefix: "a".into(),
+                node,
+            }],
         );
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    anvil
-}
-
-/// The root that forge builds. By default the repository. The variable `PROVER_TEST_CONTRACTS_ROOT` names another
-/// root (a copy of the contracts), for a check against contracts that differ from the repository.
-fn contracts_root() -> PathBuf {
-    std::env::var("PROVER_TEST_CONTRACTS_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| repository_root())
-}
-
-/// Builds the contracts with forge into a directory of this crate and returns it. It builds once per process.
-pub fn forge_output() -> &'static PathBuf {
-    static OUTPUT: OnceLock<PathBuf> = OnceLock::new();
-    OUTPUT.get_or_init(|| {
-        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/forge");
-        let out = base.join("out");
-        let status = Command::new("forge")
-            .current_dir(contracts_root())
-            .args(["build", "--root", "."])
-            .arg("--out")
-            .arg(&out)
-            .arg("--cache-path")
-            .arg(base.join("cache"))
-            .args(["--skip", "test", "--skip", "script"])
-            .output()
-            .expect("run forge build");
-        assert!(
-            status.status.success(),
-            "forge build failed: {}",
-            String::from_utf8_lossy(&status.stderr)
-        );
-        out
-    })
-}
-
-/// A constructor argument: one static word, a string, or an array of static tuples (the token pairs).
-pub enum Argument {
-    Word([u8; 32]),
-    /// A dynamic array of static words (for example `uint8[]`).
-    Words(Vec<[u8; 32]>),
-    Tuples(Vec<Vec<[u8; 32]>>),
-    /// A tuple of static words (for example a struct of addresses and integers). It sits inline in the head.
-    StaticTuple(Vec<[u8; 32]>),
-    Text(String),
-}
-
-pub fn word_u64(value: u64) -> Argument {
-    Argument::Word(U256::from(value).to_be_bytes())
-}
-
-pub fn word_address(value: Address) -> Argument {
-    let mut word = [0u8; 32];
-    word[12..].copy_from_slice(value.as_slice());
-    Argument::Word(word)
-}
-
-/// A `bytes4` word: left-aligned.
-pub fn raw_bytes4(value: [u8; 4]) -> [u8; 32] {
-    let mut word = [0u8; 32];
-    word[..4].copy_from_slice(&value);
-    word
-}
-
-pub fn word_hash(value: B256) -> Argument {
-    Argument::Word(value.0)
-}
-
-/// Encodes constructor arguments in the order of the artifact ABI, matching by parameter name
-/// (a trailing underscore is ignored). A parameter without a value stops the test with its name.
-fn encode_constructor(abi: &Value, values: &HashMap<&str, Argument>) -> Vec<u8> {
-    let Some(constructor) = abi
-        .as_array()
-        .and_then(|items| items.iter().find(|item| item["type"] == "constructor"))
-    else {
-        return Vec::new();
-    };
-    let inputs = constructor["inputs"].as_array().expect("inputs");
-    let mut head: Vec<u8> = Vec::new();
-    let mut tail: Vec<u8> = Vec::new();
-    let argument_of = |input: &Value| {
-        let name = input["name"].as_str().expect("name").trim_end_matches('_');
-        values.get(name).unwrap_or_else(|| {
-            panic!(
-                "the constructor takes `{name}` ({}), and the test has no value for it",
-                input["type"]
-            )
-        })
-    };
-    let head_size: usize = inputs
-        .iter()
-        .map(|input| match argument_of(input) {
-            Argument::StaticTuple(words) => words.len() * 32,
-            _ => 32,
-        })
-        .sum();
-    for input in inputs {
-        let argument = argument_of(input);
-        match argument {
-            Argument::Word(word) => head.extend_from_slice(word),
-            Argument::StaticTuple(words) => {
-                for word in words {
-                    head.extend_from_slice(word);
-                }
-            }
-            Argument::Words(words) => {
-                head.extend_from_slice(&U256::from(head_size + tail.len()).to_be_bytes::<32>());
-                tail.extend_from_slice(&U256::from(words.len()).to_be_bytes::<32>());
-                for word in words {
-                    tail.extend_from_slice(word);
-                }
-            }
-            Argument::Text(text) => {
-                head.extend_from_slice(&U256::from(head_size + tail.len()).to_be_bytes::<32>());
-                tail.extend_from_slice(&U256::from(text.len()).to_be_bytes::<32>());
-                tail.extend_from_slice(text.as_bytes());
-                tail.resize(tail.len().div_ceil(32) * 32, 0);
-            }
-            Argument::Tuples(tuples) => {
-                head.extend_from_slice(&U256::from(head_size + tail.len()).to_be_bytes::<32>());
-                tail.extend_from_slice(&U256::from(tuples.len()).to_be_bytes::<32>());
-                for tuple in tuples {
-                    for word in tuple {
-                        tail.extend_from_slice(word);
-                    }
-                }
-            }
+    });
+    let url = format!("http://127.0.0.1:{port}/a");
+    // The server needs a moment to bind. A connection that succeeds shows it is up.
+    for _ in 0..100 {
+        if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
+            return url;
         }
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    head.extend(tail);
-    head
+    panic!("the beacon server did not start");
 }
 
-/// One chain with its RPC client.
-pub struct TestChain {
-    pub anvil: Anvil,
-    pub rpc: HttpRpc,
-}
-
-impl TestChain {
-    pub fn start(chain_id: u64, hardfork: Hardfork) -> Self {
-        let anvil = start_anvil(chain_id, hardfork);
-        let rpc = HttpRpc::new(&anvil.url);
-        Self { anvil, rpc }
-    }
-
-    /// Sends a transaction from the unlocked deployer account and waits for the receipt.
-    pub fn send(&self, to: Option<Address>, data: &[u8]) -> Value {
-        let mut request = json!({ "from": format!("{DEPLOYER:#x}"), "data": format!("0x{}", hex::encode(data)), "gas": "0x7a1200" });
-        if let Some(to) = to {
-            request["to"] = json!(format!("{to:#x}"));
+/// Serves a JSON-RPC node on a free local port and returns its URL. `answer` gets each call object and returns its
+/// `result`. The server runs until the test process ends.
+pub fn serve_rpc(
+    answer: impl Fn(&serde_json::Value) -> serde_json::Value + Send + 'static,
+) -> String {
+    let server = tiny_http::Server::http("127.0.0.1:0").expect("a free port");
+    let port = server.server_addr().to_ip().expect("an ip address").port();
+    std::thread::spawn(move || {
+        for mut request in server.incoming_requests() {
+            let mut body = String::new();
+            std::io::Read::read_to_string(request.as_reader(), &mut body).unwrap();
+            let call: serde_json::Value = serde_json::from_str(&body).expect("a JSON-RPC call");
+            let result = answer(&call);
+            let reply = serde_json::json!({ "jsonrpc": "2.0", "id": call["id"], "result": result });
+            let _ = request.respond(tiny_http::Response::from_string(reply.to_string()));
         }
-        let hash = self
-            .rpc
-            .call("eth_sendTransaction", json!([request]))
-            .expect("send transaction");
-        let start = Instant::now();
-        loop {
-            let receipt = self
-                .rpc
-                .call("eth_getTransactionReceipt", json!([hash]))
-                .expect("receipt");
-            if !receipt.is_null() {
-                assert_eq!(receipt["status"], "0x1", "transaction failed: {receipt}");
-                return receipt;
-            }
-            assert!(
-                start.elapsed() < Duration::from_secs(20),
-                "no receipt for {hash}"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-
-    /// Sends a transaction of an explicit EIP-2718 type (0 legacy, 1 access list, 2 dynamic fee) from the unlocked
-    /// deployer account and waits for the receipt. The receipt's `type` field shows what the chain mined.
-    pub fn send_typed(&self, to: Address, data: &[u8], transaction_type: u8) -> Value {
-        let mut request = json!({
-            "from": format!("{DEPLOYER:#x}"),
-            "to": format!("{to:#x}"),
-            "data": format!("0x{}", hex::encode(data)),
-            "gas": "0x7a1200",
-            "type": format!("{transaction_type:#x}"),
-        });
-        match transaction_type {
-            0 | 1 => request["gasPrice"] = json!("0x77359400"),
-            _ => {
-                request["maxFeePerGas"] = json!("0x77359400");
-                request["maxPriorityFeePerGas"] = json!("0x3b9aca00");
-            }
-        }
-        if transaction_type == 1 {
-            request["accessList"] = json!([]);
-        }
-        let hash = self
-            .rpc
-            .call("eth_sendTransaction", json!([request]))
-            .expect("send transaction");
-        self.wait_for_receipt(&hash)
-    }
-
-    /// Waits for the receipt of a transaction hash that the node returned, and requires success.
-    pub fn wait_for_receipt(&self, hash: &Value) -> Value {
-        let start = Instant::now();
-        loop {
-            let receipt = self
-                .rpc
-                .call("eth_getTransactionReceipt", json!([hash]))
-                .expect("receipt");
-            if !receipt.is_null() {
-                assert_eq!(receipt["status"], "0x1", "transaction failed: {receipt}");
-                return receipt;
-            }
-            assert!(
-                start.elapsed() < Duration::from_secs(20),
-                "no receipt for {hash}"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-
-    /// Sends several transactions from the deployer and mines them into ONE block, in the order given. Returns the
-    /// receipts in the same order. Automine is switched off for the duration and on again afterwards.
-    pub fn send_in_one_block(&self, calls: &[(Address, Vec<u8>)]) -> Vec<Value> {
-        self.rpc
-            .call("evm_setAutomine", json!([false]))
-            .expect("stop automine");
-        let hashes: Vec<Value> = calls
-            .iter()
-            .map(|(to, data)| {
-                let request = json!({ "from": format!("{DEPLOYER:#x}"), "to": format!("{to:#x}"), "data": format!("0x{}", hex::encode(data)), "gas": "0x7a1200" });
-                self.rpc.call("eth_sendTransaction", json!([request])).expect("send transaction")
-            })
-            .collect();
-        self.rpc.call("evm_mine", json!([])).expect("mine");
-        self.rpc
-            .call("evm_setAutomine", json!([true]))
-            .expect("start automine");
-        hashes
-            .iter()
-            .map(|hash| self.wait_for_receipt(hash))
-            .collect()
-    }
-
-    /// Takes an Anvil snapshot and returns its identifier.
-    pub fn snapshot(&self) -> Value {
-        self.rpc.call("evm_snapshot", json!([])).expect("snapshot")
-    }
-
-    /// Reverts the chain to a snapshot. Every block after the snapshot disappears, as in a reorganization that
-    /// replaces them. Returns whether Anvil knew the snapshot.
-    pub fn revert_to(&self, snapshot: &Value) -> bool {
-        self.rpc
-            .call("evm_revert", json!([snapshot]))
-            .expect("revert")
-            .as_bool()
-            .unwrap_or(false)
-    }
-
-    /// The number of the latest block.
-    pub fn block_number(&self) -> u64 {
-        zk_bridge_prover::rpc::parse_quantity(
-            &self
-                .rpc
-                .call("eth_blockNumber", json!([]))
-                .expect("block number"),
-        )
-        .expect("quantity")
-    }
-
-    /// Sends a transaction from the deployer and returns its receipt WITHOUT requiring success. With an explicit gas
-    /// limit Anvil mines a failing transaction with status 0, which is what a test of a failure wants to read.
-    pub fn send_allowing_failure(&self, to: Option<Address>, data: &[u8]) -> Value {
-        let mut request = json!({ "from": format!("{DEPLOYER:#x}"), "data": format!("0x{}", hex::encode(data)), "gas": "0x7a1200" });
-        if let Some(to) = to {
-            request["to"] = json!(format!("{to:#x}"));
-        }
-        let hash = self
-            .rpc
-            .call("eth_sendTransaction", json!([request]))
-            .expect("send transaction");
-        let start = Instant::now();
-        loop {
-            let receipt = self
-                .rpc
-                .call("eth_getTransactionReceipt", json!([hash]))
-                .expect("receipt");
-            if !receipt.is_null() {
-                return receipt;
-            }
-            assert!(
-                start.elapsed() < Duration::from_secs(20),
-                "no receipt for {hash}"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-
-    /// Sends a transaction from any unlocked Anvil account and waits for a successful receipt.
-    pub fn send_from(&self, from: Address, to: Address, data: &[u8]) -> Value {
-        let request = json!({ "from": format!("{from:#x}"), "to": format!("{to:#x}"), "data": format!("0x{}", hex::encode(data)), "gas": "0x7a1200" });
-        let hash = self
-            .rpc
-            .call("eth_sendTransaction", json!([request]))
-            .expect("send transaction");
-        self.wait_for_receipt(&hash)
-    }
-
-    /// Fixes the timestamp of the next block. It must lie after the latest block.
-    pub fn set_next_block_timestamp(&self, timestamp: u64) {
-        self.rpc
-            .call("evm_setNextBlockTimestamp", json!([timestamp]))
-            .expect("set next block timestamp");
-    }
-
-    /// The revert data of a mined transaction that failed, read from a call trace. Empty when the trace has none.
-    pub fn revert_data_of(&self, transaction_hash: &Value) -> Vec<u8> {
-        let trace = self
-            .rpc
-            .call(
-                "debug_traceTransaction",
-                json!([transaction_hash, { "tracer": "callTracer" }]),
-            )
-            .expect("trace");
-        let output = trace["output"].as_str().unwrap_or("0x");
-        hex::decode(output.trim_start_matches("0x")).expect("hex")
-    }
-
-    /// The code of an account.
-    pub fn code_of(&self, account: Address) -> Vec<u8> {
-        let answer = self
-            .rpc
-            .call("eth_getCode", json!([format!("{account:#x}"), "latest"]))
-            .expect("code");
-        hex::decode(answer.as_str().expect("hex").trim_start_matches("0x")).expect("hex")
-    }
-
-    /// Deploys a contract from `forge build` output and returns its address.
-    pub fn deploy(&self, contract: &str, values: HashMap<&str, Argument>) -> Address {
-        self.deploy_from(contract, contract, values)
-    }
-
-    /// Deploys a contract whose source file has another name than the contract, for example a test double.
-    pub fn deploy_from(
-        &self,
-        source_file: &str,
-        contract: &str,
-        values: HashMap<&str, Argument>,
-    ) -> Address {
-        let path = forge_output().join(format!("{source_file}.sol/{contract}.json"));
-        let artifact: Value = serde_json::from_slice(
-            &std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display())),
-        )
-        .expect("artifact");
-        let mut data =
-            hex::decode(artifact["bytecode"]["object"].as_str().expect("bytecode")).expect("hex");
-        data.extend(encode_constructor(&artifact["abi"], &values));
-        let receipt = self.send(None, &data);
-        receipt["contractAddress"]
-            .as_str()
-            .expect("contract address")
-            .parse()
-            .expect("address")
-    }
-
-    /// Calls a view function and returns the raw return data.
-    pub fn call(&self, to: Address, data: &[u8]) -> Result<Bytes, zk_bridge_prover::error::Error> {
-        let answer = self.rpc.call("eth_call", json!([{ "to": format!("{to:#x}"), "data": format!("0x{}", hex::encode(data)) }, "latest"]))?;
-        Ok(Bytes::from(
-            hex::decode(answer.as_str().expect("hex")).expect("hex"),
-        ))
-    }
-
-    /// Moves the clock of the chain forward and mines one block, so the next block lies `seconds` later.
-    pub fn advance_time(&self, seconds: u64) {
-        self.rpc
-            .call("evm_increaseTime", json!([seconds]))
-            .expect("increase time");
-        self.rpc.call("evm_mine", json!([])).expect("mine");
-    }
-
-    /// Writes one storage word of a contract.
-    pub fn set_storage(&self, contract: Address, slot: B256, value: B256) {
-        self.rpc
-            .call(
-                "anvil_setStorageAt",
-                json!([
-                    format!("{contract:#x}"),
-                    format!("{slot:#x}"),
-                    format!("{value:#x}")
-                ]),
-            )
-            .expect("set storage");
-    }
-
-    /// Replaces the code of an account.
-    pub fn set_code(&self, account: Address, code: &[u8]) {
-        self.rpc
-            .call(
-                "anvil_setCode",
-                json!([format!("{account:#x}"), format!("0x{}", hex::encode(code))]),
-            )
-            .expect("set code");
-    }
-
-    pub fn latest_timestamp(&self) -> u64 {
-        let block = self
-            .rpc
-            .call("eth_getBlockByNumber", json!(["latest", false]))
-            .expect("block");
-        zk_bridge_prover::rpc::parse_quantity(&block["timestamp"]).expect("timestamp")
-    }
-
-    pub fn mine(&self, blocks: u64) {
-        self.rpc
-            .call("anvil_mine", json!([format!("{blocks:#x}")]))
-            .expect("mine");
-    }
-
-    pub fn nonce(&self, account: Address) -> u64 {
-        zk_bridge_prover::rpc::parse_quantity(
-            &self
-                .rpc
-                .call(
-                    "eth_getTransactionCount",
-                    json!([format!("{account:#x}"), "latest"]),
-                )
-                .expect("nonce"),
-        )
-        .expect("quantity")
-    }
+    });
+    format!("http://127.0.0.1:{port}")
 }

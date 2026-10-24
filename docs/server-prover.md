@@ -1,18 +1,25 @@
 # Server prover
 
-This document explains how to run the production prover on your own server. The prover proves with the SP1 library on the local processor. It does not use the Succinct prover network and needs no network key.
+This document explains how to run the production proof producer on your own server. The producer proves with the SP1 library on the local processor. It does not use the Succinct prover network and needs no network key.
+
+The producer is stateless. It makes a proof and hands it off (standard output or a webhook). It has no database and no wallet, and it sends no transaction. A stateful server of yours runs it, stores the proof and sends it to the chain. `prover/README.md` describes the commands and the result.
 
 The proving code is `Sp1Prover` in `prover/src/prover.rs`. It is behind the cargo feature `sp1`, which is off by default. The server image uses the feature `sp1-native-gnark`, which adds the in-process Groth16 wrapper.
 
 To prove on a rented GPU instead of a server of your own, see `docs/gpu-prover.md`.
 
-## What the prover does
+## What the producer does
 
-1. It builds the guest input for a statement. A statement is a light-client update (or a fold of up to 64 updates), or a fork observation.
-2. It runs the same program natively with `lc-core` and refuses the statement when the program rejects it.
-3. It checks that the program key of the guest program file equals the key in the request. The key comes from the contract.
-4. It proves in Groth16 mode and checks that the public values of the proof equal the native result.
-5. It returns the proof bytes (a four-byte selector, then 256 bytes of proof) and the public values. These are the arguments of `verifyProof(programVKey, publicValues, proof)`.
+One run of `zk-bridge-prover prove` makes one proof.
+
+1. It reads where the update starts: the head that the destination light client stores, or a head that you give.
+2. It fetches the updates from that head to the newest final header, and builds the guest input. The input is a fold of up to 64 updates.
+3. It runs the same program natively with `lc-core` and refuses the statement when the program rejects it.
+4. It checks that the program key of the guest program file equals the key that the light client contract stores.
+5. It proves in Groth16 mode and checks that the public values of the proof equal the native result.
+6. It checks the proof again with the crate `sp1-verifier`, and hands off the result: the proof bytes (a four-byte selector, then 256 bytes of proof), the public values and the calldata of `BeaconLightClient.update`. These are the arguments of `verifyProof(programVKey, publicValues, proof)`.
+
+The run exits with code 0 when it handed off a proof, with code 3 when the light client already holds the newest final header, and with code 1 on an error.
 
 ## Hardware
 
@@ -28,7 +35,7 @@ The page also says that a Groth16 proof through Docker may need a higher Docker 
 
 Our advice, which is our own margin and not a number from that page: use 16 cores and 32 GB of memory. The 14 GB of the wrapping step comes on top of the memory that the earlier proof steps use.
 
-I measured proof time on a server with 32 threads (see `docs/end-to-end-real-proofs.md`): a Groth16 proof of one update takes 284 to 322 seconds with the current program and peaks near 56 GiB. The prover keeps memory after a proof, so run one proof for each process. The execution sizes that I measured on a laptop are: about 31 million instructions for one real Ethereum update, about 29 million for one real PulseChain update, about 91 million for a fold of three updates, and about 117 million for a fork observation with a fold of three updates. Prove a real update on the server first and record the time before you rely on the cadence of the service.
+I measured proof time on a server with 32 threads (see `docs/end-to-end-real-proofs.md`): a Groth16 proof of one update takes 284 to 322 seconds with the current program and peaks near 56 GiB. The prover keeps memory after a proof. The `prove` command makes one proof and exits, so run one proof for each process. The execution sizes that I measured on a laptop are: about 31 million instructions for one real Ethereum update, about 29 million for one real PulseChain update, about 91 million for a fold of three updates, and about 117 million for a fork observation with a fold of three updates. Prove a real update on the server first and record the time before you rely on the cadence of the service.
 
 ## Build
 
@@ -52,7 +59,7 @@ docker build --platform linux/amd64 --target prover-sp1 -t zk-bridge-prover-sp1 
 
 The build needs about 8 GB of memory. Do not run it on the 2 GB local virtual machine. The build:
 
-- compiles the prover with `--no-default-features --features sp1-native-gnark`, so it has no development beacon source and no test crate;
+- compiles the producer with `--no-default-features --features sp1-native-gnark`, so it has no signed beacon chain and no test crate;
 - needs Go for the Groth16 wrapper. The Dockerfile downloads Go 1.25.14 and checks its SHA-256 hash (Secure Hash Algorithm, 256 bits). The Go modules come from the Go module proxy and the `go.sum` file of the crate `sp1-recursion-gnark-ffi` pins their hashes;
 - compares the SHA-256 hash of each guest program file with `light-client/program-keys.json` and fails when they differ.
 
@@ -67,31 +74,45 @@ On a developer machine, `cargo check --features sp1` and `cargo test --features 
 
 ## Configuration
 
-Copy `prover/prover.example.toml` and change the `[prover]` section:
+Copy `prover/prover.example.toml` and change the `[prover]` section and the route:
 
 ```toml
 [prover]
 backend = "sp1"
-program_vkey = "0x00a2b556cd72b5d838b34c60b0367e1ffc9ab662d4e6aabca23e3682b0f5584b"   # key of the light-client program
 sp1_elf_path = "/elf/light-client.elf"
 sp1_observation_elf_path = "/elf/fork-observation.elf"       # needed only to prove fork observations
+
+[handoff]
+targets = ["stdout", "webhook"]
+webhook_url = "https://REPLACE"
+webhook_bearer_env = "PROOF_WEBHOOK_TOKEN"                   # the NAME of a variable; the token never enters the file
+
+[routes.ethereum_to_pulsechain.source]
+chain_id = 1
+chain = "ethereum"
+beacon_url = "https://REPLACE"
+
+[routes.ethereum_to_pulsechain.destination]
+chain_id = 369
+rpc_url = "https://REPLACE"
+light_client = "0x..."
 ```
 
-The value above is the current key from `light-client/program-keys.json`. Your deployed light client must store the same value as `programVKey`.
+The command reads the program key from the light client. Your deployed light client must store the same value as `programVKey`. The current key of the light-client program is in `light-client/program-keys.json`. You may also set `prover.program_vkey`. The command then refuses a light client that stores another key.
 
-Each key also has an environment override, for example `ZK_BRIDGE_PROVER_PROVER_SP1_ELF_PATH`. Secrets stay in the Foundry keystore and the password file, as in `prover/README.md`.
+Each key of `[prover]` and `[handoff]` has an environment override, for example `ZK_BRIDGE_PROVER_PROVER_SP1_ELF_PATH`. The file holds no secret, as `prover/README.md` explains.
 
-Run the service with a volume on `/state`. The first Groth16 proof downloads the circuit files from Succinct and stores them in `/state/sp1-circuits` (set by `SP1_GROTH16_CIRCUIT_PATH`). Later proofs reuse them.
+Run the producer with a volume on `/state`. The first Groth16 proof downloads the circuit files from Succinct and stores them in `/state/sp1-circuits` (set by `SP1_GROTH16_CIRCUIT_PATH`). Later proofs reuse them.
 
 ```
-docker run -d --name zk-bridge-prover --restart unless-stopped \
+docker run --rm --name zk-bridge-prover \
   -v zk-bridge-state:/state \
   -v /srv/zk-bridge/prover.toml:/state/prover.toml:ro \
-  -v /srv/zk-bridge/keys:/state/keys:ro \
+  -e PROOF_WEBHOOK_TOKEN \
   zk-bridge-prover-sp1
 ```
 
-The default command is `--config /state/prover.toml run`. For one pass, add `once` after the image name.
+The default command is `--config /state/prover.toml prove`. Run the container once for each proof, from a scheduler or from the stateful server. The exit code tells the caller what happened (see above). Do not start the container in a loop that ignores code 3: it would restart at once and prove nothing.
 
 ## Check the program keys
 
@@ -100,42 +121,32 @@ There are four checks. The first three you can run by hand. The fourth runs by i
 1. Compare the files with the record. `light-client/scripts/program-keys.sh` prints the SHA-256 hash and the program key of each guest and compares them with `light-client/program-keys.json`.
 2. Print the key of a guest program file: `cargo prove vkey --elf light-client/elf/light-client.elf`. A file from a native `cargo prove build` gives another key than the Docker build. Use only the Docker build for a deployment.
 3. Read the key from the chain: `cast call <light client address> "programVKey()(bytes32)" --rpc-url <rpc>`. For the fork registry, call `observationProgramVKey()`.
-4. Startup check. The service reads `programVKey()` from the destination light client. It stops with a configuration error when the program file has another key, or when `program_vkey` differs from the contract. The prover also refuses each single proof whose requested key differs from the key of its program file.
+4. Check before the proof. In route mode, `prove` reads `programVKey()` from the destination light client. It stops with a configuration error when the program file has another key, or when `program_vkey` differs from the contract. The prover also refuses each single proof whose requested key differs from the key of its program file.
 
 The verifier contract is the vendored SP1 Groth16 verifier of circuit version v6.1.0. See `docs/sp1-version-policy.md` for its release, its constants and its code hash.
 
-## Point the prover at real endpoints
+## Point the producer at real endpoints
 
-Use your own nodes where you can. Public endpoints are slow and often prune data that the prover needs. Never write real addresses or keys into files that you commit.
+Use your own nodes where you can. Public endpoints are slow and often prune data that the producer needs. Never write real addresses or keys into files that you commit.
 
 | Setting | What to give |
 |---|---|
-| `chain_a.rpc_url` | An execution RPC of Ethereum. Needs `eth_call`, `eth_getLogs`, `eth_getBlockByNumber`, `eth_getBlockReceipts`, `eth_estimateGas` and `eth_sendRawTransaction`. |
-| `chain_a.beacon.url` | A beacon API of Ethereum. |
-| `chain_b.rpc_url` | An execution RPC of PulseChain, with the same methods. |
-| `chain_b.beacon.url` | A beacon API of PulseChain. |
-| `chain_*.beacon.kind` | `http`. Never `dev` on a real chain. |
-| `chain_*.beacon.chain` | `ethereum` or `pulsechain`. |
+| `routes.<name>.source.beacon_url` | A beacon API of the source chain. |
+| `routes.<name>.source.chain` | `ethereum` or `pulsechain`: the chain specification of the source beacon chain. |
+| `routes.<name>.destination.rpc_url` | An execution RPC of the destination chain. `prove` needs `eth_chainId` and `eth_call` only. |
+| `routes.<name>.destination.light_client` | The `BeaconLightClient` on the destination chain. |
 
-The beacon API must serve these paths: `/eth/v1/beacon/light_client/updates`, `/eth/v1/beacon/light_client/finality_update`, `/eth/v1/beacon/light_client/bootstrap/<root>`, `/eth/v1/beacon/headers/<id>`, `/eth/v1/beacon/blocks/<slot>/root`, `/eth/v2/beacon/blocks/<id>` and `/eth/v2/debug/beacon/states/<root>`. The debug path is often off by default; turn it on at your node. A node must keep light-client updates for every sync committee period that a light client lags behind. `route-health` warns when it cannot.
+The `evidence` command needs more: the execution RPC of the source chain with `eth_getTransactionReceipt`, `eth_getBlockByNumber` and `eth_getBlockReceipts`, the two vault addresses, and on the destination `eth_getLogs` and `eth_blockNumber`.
 
-Before the service goes live, run:
+The beacon API must serve these paths: `/eth/v1/beacon/light_client/updates`, `/eth/v1/beacon/light_client/finality_update`, `/eth/v1/beacon/light_client/bootstrap/<root>`, `/eth/v1/beacon/headers/<id>`, `/eth/v1/beacon/blocks/<slot>/root`, `/eth/v2/beacon/blocks/<id>` and `/eth/v2/debug/beacon/states/<root>`. The debug path is often off by default; turn it on at your node. A node must keep light-client updates for every sync committee period that a light client lags behind. When it does not, `prove` stops with an error that names the missing period.
 
-```
-zk-bridge-prover --config prover.toml route-health
-```
+Before you rely on the setup, run `zk-bridge-prover --config prover.toml prove` against a route whose light client is current. It reads the light client, checks the program key and the beacon node, and exits with code 3 when nothing is left to prove.
 
-It reads the fork schedule and the head of each light client and tells you whether each route can still deliver a deposit.
+## What the stateful servers do
 
-## Open the vaults before the first deposit
+The producer replaces the work of the old relayer that makes proofs. The rest belongs to your stateful servers. They post the updates, open the vaults and send the withdrawals. The launch sequence in `docs/hardened-build-contract.md` lists the steps in order.
 
-A new vault is locked. It refuses every deposit with `DepositsNotOpen()` until a proof shows that the light client on the other chain stored a head. Without this lock, a deposit made before the first update of the light client could never be paid. After the deployment, run the prover command `follow` on both routes, and repeat it until every route reports open:
-
-```
-zk-bridge-prover --config prover.toml follow --rounds 1
-```
-
-Each run stores a head in the light client of each route, then tries to open the source vault of each route. It prints `deposits open`, `deposits opened (transaction ...)` or `deposits locked: <reason>` for each route. It exits with code 2 while a route is still locked. The second run usually opens both vaults: the reverse route needs a block that finalized after the first update. With real proofs the runs are far apart in time, and each run proves one update on the server. The key of the prover pays for the opening transaction on each source chain, so it needs gas on both chains. The RPC node of each chain must serve `eth_getProof` and `eth_call` for a past block. Start the bots and the deposits only after `follow` exits with code 0. `route-health` shows the state as `LOCKED`. `prover/README.md` has the details.
+A new vault is locked. It refuses every deposit with `DepositsNotOpen()` until a proof shows that the light client on the other chain stored a head. Without this lock, a deposit made before the first update of the light client could never be paid. After the deployment, a server runs `prove` for each route, sends `updateCalldata` to the light client, and repeats until a head is stored. Then it builds the opening proof (a state proof of the remote light client from `eth_getProof`) and calls `openDeposits` on each source vault. The key of the server pays for these transactions on both chains.
 
 ## Verifying a proof before you rely on the service
 

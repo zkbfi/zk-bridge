@@ -212,35 +212,39 @@ Implements the Altair light-client sync protocol for both fork schedules:
 
 ## Prover service (`prover/`)
 
-A Rust binary that keeps the bridge moving. It holds no trusted role: every proof it submits is checked on chain, so a faulty or hostile prover can only fail to deliver, never steal. Anyone can run one.
+**Decision (2026-10-24):** the repository makes proofs and hands them to other, stateful servers. Those servers store the proofs and act on them. The crate `prover/` was a full relayer. It watched deposits, kept a SQLite file, sent every transaction and ran its own checks of route health. It now holds only the part that makes proofs. The full relayer lives on the branch `archive/full-relayer`.
+
+Several sections below were written for the relayer. Where they name the service loop, the database, the deposit states, `follow`, `route-health`, the own-chain light client updater, the flow limiter wait or the submission of a fork observation, they describe the relayer of that branch. A stateful server now does that work (see "Launch sequence"). The same holds for the tests `prover/tests/hardened_*.rs` and `prover/tests/anvil_end_to_end.rs`, which these sections name: they are Anvil tests of the relayer, and they live on that branch too. The forge tests under `test/hardened/` stay in this repository.
+
+A Rust binary that makes proofs. It holds no trusted role: every proof it makes is checked on chain, so a faulty or hostile producer can only fail to deliver, never steal. Anyone can run one. It keeps no state, holds no key for a wallet and sends no transaction.
 
 ### Responsibilities
 
-1. **Watch deposits.** Read `DepositInitiated` logs from the source vault, only from blocks at or below the source chain's `finalized` tag.
-2. **Advance the light client.** Read the destination light client's head. Fetch beacon data until a finalized header covers the deposit's block. Build a light-client update, run `verify_light_client_update` natively, prove it, and submit `BeaconLightClient.update`.
-3. **Withdraw.** Build the withdrawal witness (header, receipt proof, transaction index, log index), run `verify_withdrawal` natively, prove it, and submit `BridgeVault.withdraw`.
-4. **Persist.** Record each deposit's state (`seen`, `awaiting_finality`, `light_client_updated`, `proven`, `submitted`, `confirmed`, `failed`) in a local SQLite file, so a restart resumes without double work. Treat an on-chain "already claimed" revert as success.
+1. **Make a light-client proof (`prove`).** Read the head, the committee hashes and the program key from the destination light client, or take an explicit starting head. Fetch the updates from that head to the newest final header (a fold of up to 64 updates). Run `verify_light_client_update` natively. Get the proof from the backend. Check the public values against the native run, the shape of the proof and the program key. Hand the result off: one JSON object on standard output, a webhook, or both.
+2. **Build withdrawal evidence (`evidence`).** For a deposit that the caller names by the hash of its source transaction and the index of its log, build the calldata of `BridgeVault.withdraw` and the calls that add the missing layout rows. Run `verify_withdrawal` natively against the stored anchor. Print one JSON object.
+
+Exit codes of `prove`: 0 for a proof, 3 when the light client already holds the newest final header, 1 for an error.
 
 ### Proving backends (one trait, `Prover`)
 
-- `OracleProver` (development and tests): runs the program natively first and refuses to sign when it fails. Then it signs `keccak256(programVKey ‖ sha256(publicValues))` with the oracle key, which `OracleSP1Verifier` accepts. This models a sound proof system.
+- `OracleProver` (development and tests): runs the program natively first and refuses to sign when it fails. Then it signs `keccak256(programVKey ‖ sha256(publicValues))` with the oracle key, which `OracleSP1Verifier` accepts. This models a sound proof system. The key comes from an environment variable that the configuration names.
 - `Sp1Prover` (production): behind the cargo feature `sp1`, off by default. It calls the official `sp1-sdk` crate 6.8.1 on the local processor, with Groth16 proofs. It never uses the Succinct prover network. See `docs/server-prover.md`.
+- `RemoteProver`: sends the job to a worker on a GPU host and checks the answer. See `docs/gpu-prover.md`.
 
-### Beacon sources (one trait, `BeaconSource`)
+### Beacon source
 
 - `HttpBeaconSource`: a standard beacon API. Uses the light-client endpoints when the node serves them. Otherwise it assembles the update from block, state and committee endpoints. PulseChain's public node returns 404 for the light-client endpoints, so this path matters.
-- `DevBeaconSource` (tests on Anvil, which has no beacon chain): treats an execution block as finalized once it is a configured number of blocks deep, and produces `LightClientOutput` values for it. The harness uses this backend, so the service is the harness's reference prover. Do not write a second prover in TypeScript.
+- The tests run it on a signed beacon chain over local blocks (`prover/src/local_network/signed_beacon/`), whose committee signs for real.
 
 ### Interface
 
-- Configuration file (TOML) plus environment overrides: both chains' RPC URLs, contract addresses, chain identifiers, the beacon API URL per chain, the finality depth for `DevBeaconSource`, the database path, the polling interval.
-- Signing: a Foundry keystore file plus a password file, or `--private-key-env <NAME>` only for local Anvil. Never a key on the command line.
-- Subcommands: `run` (the loop), `once` (one pass, then exit; used by tests), `status` (print each deposit's state), `prove-withdrawal --tx <hash> --log-index <n>` (one manual proof).
-- Logs: structured, one line per state change, with the deposit nonce in every line.
+- Configuration file (TOML) plus environment overrides: the proving backend, the handoff targets, and for each route the source beacon API, the destination chain, its RPC URL and its light client. A secret never enters the file. The file names the environment variable that holds it.
+- Subcommands: `prove` and `evidence`. See `prover/README.md` for the flags and the shape of both results.
+- Logs: structured, one line per event, on standard error. Standard output carries only the result.
 
 ### Tests
 
-Unit tests for state transitions, idempotent restarts, the "already claimed" path, the refusal to sign when native verification fails, and configuration validation. Integration tests run two Anvil chains with the hardened contracts deployed, run `once` repeatedly, and assert deposits arrive in both directions, including after a restart in the middle and after a reorganization of an unfinalized block.
+Unit tests for the configuration, the checks of the producer, the handoff and the stored state. Integration tests run the producer and the commands on a signed beacon chain, with the oracle backend, and against a fake worker with a real Groth16 proof. The tests of the old relayer, with two Anvil chains, are on the branch `archive/full-relayer`.
 
 ## Change: the vault verifies withdrawals directly (user decision, 2026-10-20)
 
@@ -743,7 +747,11 @@ A deposit on chain X at beacon slot `s` is paid by the vault on chain Y, which r
 
 ## Launch sequence
 
+The contracts need no administrator, and the repository has no relayer. A stateful server of the operator does the steps below. It runs the producer (`zk-bridge-prover prove` and `evidence`) for the parts that make proofs or evidence, and it sends every transaction itself. The key of the server pays for them. A vault can be opened, and a withdrawal sent, by anyone.
+
 1. **Deploy** with `script/hardened/DeployBridge.s.sol`. Both vaults start locked. The read-back checks `remoteLightClient` and a false `depositsOpen`.
-2. **Run `zk-bridge-prover follow` on both routes.** Each run stores a head in the light client of its route. The vault on a chain opens only when the own light client of that chain has stored a block of the other chain that came after the first update of the other light client. A chain needs about two epochs to finalize, so the first run for one direction only prepares the second. Repeat `follow` until the vault of each route opens. `follow` prints `deposits open` or `deposits locked: <reason>` for each route and exits with code 2 while a route is locked. `route-health` reports a locked route as `LOCKED`.
-3. **Announce.** Tell users only after both vaults report open. A deposit before that reverts with `DepositsNotOpen()` and keeps the tokens with the sender.
-4. **Run the prover service** (`run`) as usual. It pays every deposit made after the opening.
+2. **Post light-client updates.** For each route, run `prove`. It exits with code 0 and one proof package, or with code 3 when the light client holds the newest final header. Send `updateCalldata` of the package to `destination.lightClient`. Repeat until `prove` exits with code 3. `latestFinalizedSlot` in the package shows whether the head still lags by more than one fold.
+3. **Open the vaults.** Call `openDeposits` on the source vault of each route. The call needs a proof that the remote light client stored a head: a block of the other chain whose hash the vault light client stored, the state proof of the remote light client in that block (from `eth_getProof`), and the storage proof of one stored head. The server builds this proof. The vault on a chain opens only when its own light client has stored a block of the other chain that came after the first update of the other light client. A chain needs about two epochs to finalize, so the first round of updates for one direction only prepares the second. Repeat steps 2 and 3 until the vault of each route reports `depositsOpen()`.
+4. **Announce.** Tell users only after both vaults report open. A deposit before that reverts with `DepositsNotOpen()` and keeps the tokens with the sender.
+5. **Keep the light clients current.** Run step 2 on a schedule for each route. The own-chain light client of a chain with a registry gate is a route too: its source beacon chain and its destination chain are the same chain. A deposit needs a stored header after its slot.
+6. **Pay the deposits.** For each deposit on a source vault, run `evidence --tx <hash> --log-index <n>`. Send each call of `prerequisites` in order, and read the layout views again after each call. Then send the `withdraw` call to the destination vault. Skip the deposit when `alreadyClaimed` is true. A vault with a flow limiter can refuse a withdrawal: simulate `checkWithdrawal` from the vault address first, and wait when it reverts. A refusal leaves the nonce claimable.

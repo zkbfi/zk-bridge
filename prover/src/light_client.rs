@@ -1,13 +1,9 @@
-//! The only module that calls `lc-core` (and, for the development source only, the test crate `lc-testkit`).
+//! The only module of the library that calls `lc-core`.
 //!
-//! Everything a withdrawal needs comes from `lc-core`: the JSON parsers, the receipts trie, the execution header
-//! encoder, the SSZ state parser, the ancestry builders for both paths, and the gate evidence builder.
-//! The cargo feature `dev-source` adds the synthetic beacon data for Anvil from `lc-testkit`.
-//! A production build leaves that feature out and does not link the test crate.
+//! Everything a light-client update or a withdrawal needs comes from `lc-core`: the JSON parsers, the receipts trie,
+//! the execution header encoder, the SSZ state parser, and the ancestry builders for both paths.
 
 use crate::error::{Error, Result};
-#[cfg(feature = "dev-source")]
-use alloy_primitives::keccak256;
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::{SolCall, SolEvent, SolValue};
 use lc_core::abi::{
@@ -25,13 +21,11 @@ use lc_core::types::{
 };
 use lc_core::update::FoldStep;
 use lc_core::wire::{encode_guest_input, ChainSelector, GuestInput};
-#[cfg(feature = "dev-source")]
-use lc_testkit::synthetic::{build_body_proofs, synthetic_payload_header, StateBuilder};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-pub use lc_core::abi::{ForkObservation, LightClientOutput};
+pub use lc_core::abi::LightClientOutput;
 pub use lc_core::ancestry::AncestryPath;
 pub use lc_core::layout::SLOTS_PER_HISTORICAL_ROOT;
 pub use lc_core::ssz_state::ForkData;
@@ -46,7 +40,7 @@ pub const DEPOSIT_EVENT_TOPIC: B256 = lc_core::abi::DEPOSIT_EVENT_TOPIC;
 pub enum ChainKind {
     /// Ethereum mainnet.
     Ethereum,
-    /// PulseChain. Anvil chains use it too, with synthetic beacon data.
+    /// PulseChain.
     Pulsechain,
 }
 
@@ -141,15 +135,6 @@ pub fn verify_light_client_natively(guest_input: &[u8]) -> Result<Vec<u8>> {
 pub fn verify_observation_natively(guest_input: &[u8]) -> Result<Vec<u8>> {
     lc_core::wire::run_fork_observation_guest(guest_input)
         .map_err(|error| Error::VerificationRefused(error.to_string()))
-}
-
-/// Decodes the public values of the fork observation program.
-///
-/// # Errors
-/// `Error::Malformed` when the bytes are not the 224 bytes of an encoded `ForkObservation`.
-pub fn decode_fork_observation(public_values: &[u8]) -> Result<ForkObservation> {
-    <ForkObservation as SolValue>::abi_decode(public_values)
-        .map_err(|error| Error::Malformed(format!("fork observation public values: {error}")))
 }
 
 /// The public values of the program: the ABI encoding of the output. The contract decodes these bytes.
@@ -292,7 +277,7 @@ pub struct ExecutionEvidence {
     pub receipt_proof: Vec<Bytes>,
 }
 
-/// An execution header that the service rebuilt from a node answer and checked against the hash that the node reports.
+/// An execution header that the crate rebuilt from a node answer and checked against the hash that the node reports.
 #[derive(Clone, Debug)]
 pub struct RebuiltHeader {
     /// RLP of the execution block header.
@@ -422,7 +407,7 @@ pub struct VerifiedDeposit {
 
 /// Runs the vault check natively, in the vault's order.
 ///
-/// Calls `lc_core::withdrawal::verify_withdrawal`. The service sends no withdrawal that this call refuses.
+/// Calls `lc_core::withdrawal::verify_withdrawal`. The evidence builder returns no evidence that this call refuses.
 ///
 /// # Errors
 /// `Error::VerificationRefused` with the reason code of the first failed rule.
@@ -492,7 +477,7 @@ fn unsupported_field_count(count: usize) -> Error {
     ))
 }
 
-/// A beacon state read from SSZ bytes, with the branches the service needs.
+/// A beacon state read from SSZ bytes, with the branches the crate needs.
 pub struct StateView {
     state: ParsedState,
 }
@@ -555,11 +540,6 @@ impl StateView {
         self.state.block_roots[(slot % 8192) as usize]
     }
 
-    /// The `fork` of the state.
-    pub fn fork(&self) -> ForkData {
-        self.state.fork
-    }
-
     /// Branch for `block_roots[slot % 8192]` (the recent path): the vector branch, then the field branch.
     pub fn recent_ancestry_branch(&self, slot: u64) -> Vec<B256> {
         lc_core::era::recent_ancestry_branch(&self.state, slot)
@@ -584,27 +564,6 @@ impl StateView {
             .map_err(|error| Error::Beacon(error.to_string()))?;
         lc_core::era::historical_ancestry_branch(&self.state, capella_era, slot, era_roots)
             .map_err(|error| Error::Beacon(error.to_string()))
-    }
-
-    /// The gate evidence for this state: `abi.encode(ForkEvidence)` for the header whose state this is.
-    ///
-    /// `timestamp` is the key of the beacon roots contract that holds the root of `header`. The caller has checked
-    /// that `self.root()` equals `header.state_root`.
-    ///
-    /// # Errors
-    /// `Error::Beacon` when the state root differs from the header.
-    pub fn fork_evidence(&self, timestamp: u64, header: &BeaconBlockHeader) -> Result<Vec<u8>> {
-        if self.root() != header.state_root {
-            return Err(Error::Beacon(
-                "the state does not belong to the header".into(),
-            ));
-        }
-        Ok(fork_evidence_bytes(
-            timestamp,
-            header,
-            self.state.fork,
-            &self.state.field_roots,
-        ))
     }
 
     /// Branch for `finalized_checkpoint.root`: the epoch chunk, then the field branch.
@@ -754,183 +713,6 @@ pub fn historical_summaries_gindex(chain: ChainKind, slot: u64) -> Result<u64> {
         .map_err(|error| Error::Beacon(error.to_string()))
 }
 
-/// `abi.encode(ForkEvidence)` for the gate, from the fields of a state. The version is `fork.current_version`.
-///
-/// The branch is built by `lc_core::gate::fork_version_branch`, and its index is the one that `BeaconForkGate`
-/// computes for itself. `field_roots` are the roots of all state fields; entry 3 must be the root of `fork`.
-///
-/// # Panics
-/// Panics when entry 3 of `field_roots` is not the root of `fork`.
-pub fn fork_evidence_bytes(
-    timestamp: u64,
-    header: &BeaconBlockHeader,
-    fork: ForkData,
-    field_roots: &[B256],
-) -> Vec<u8> {
-    let branch = lc_core::gate::fork_version_branch(field_roots, &fork);
-    lc_core::gate::encode_fork_evidence(timestamp, header, fork.current_version, branch)
-}
-
-/// A synthetic beacon header at `slot` over a state whose `fork` field is `fork`, with the roots of all 28 state fields.
-///
-/// The other 27 fields hold filler. The header is the input of [`fork_evidence_bytes`] for a local chain that has no
-/// beacon node. Only the local-network tools use it.
-#[cfg(feature = "dev-source")]
-pub fn synthetic_fork_header(slot: u64, fork: ForkData) -> (BeaconBlockHeader, Vec<B256>) {
-    let mut field_roots: Vec<B256> = (0..28u64)
-        .map(|field| keccak256(format!("synthetic-state-field/{field}")))
-        .collect();
-    field_roots[3] = fork.hash_tree_root();
-    let header = BeaconBlockHeader {
-        slot,
-        proposer_index: 1,
-        parent_root: keccak256(b"synthetic-parent"),
-        state_root: lc_core::ssz::merkleize(&field_roots),
-        body_root: keccak256(b"synthetic-body"),
-    };
-    (header, field_roots)
-}
-
-// ------------------------------------------------------------------ synthetic beacon data for Anvil
-
-/// A synthetic beacon header over a real execution block, with the branch to its block hash.
-#[cfg(feature = "dev-source")]
-#[derive(Clone, Debug)]
-pub struct DevHeader {
-    /// The header.
-    pub header: BeaconBlockHeader,
-    /// Branch from the execution block hash to `header.body_root`.
-    pub block_hash_branch: Vec<B256>,
-}
-
-/// Builds a synthetic header at `slot` whose body holds the execution block `block_hash`.
-///
-/// The body, the parent root and the proposer are fixed functions of the arguments, so the same arguments always
-/// give the same header root. The caller passes the state root.
-#[cfg(feature = "dev-source")]
-pub fn dev_header(
-    chain: ChainKind,
-    slot: u64,
-    block_number: u64,
-    block_hash: B256,
-    state_root: B256,
-) -> DevHeader {
-    let spec = chain.spec();
-    let payload = synthetic_payload_header(
-        spec,
-        slot,
-        block_number,
-        block_hash,
-        keccak256(b"dev-receipts"),
-    );
-    let body = build_body_proofs(spec, slot, &payload);
-    DevHeader {
-        header: BeaconBlockHeader {
-            slot,
-            proposer_index: 0,
-            parent_root: keccak256(format!("dev-parent/{slot}")),
-            state_root,
-            body_root: body.body_root,
-        },
-        block_hash_branch: body.block_hash_branch,
-    }
-}
-
-/// The root of a synthetic header whose state is not interesting (a filler state root).
-#[cfg(feature = "dev-source")]
-pub fn dev_plain_state_root(slot: u64) -> B256 {
-    keccak256(format!("dev-state/{slot}"))
-}
-
-/// A synthetic state for an anchor: `block_roots` holds the given `(slot, header root)` pairs.
-#[cfg(feature = "dev-source")]
-pub struct DevState {
-    builder: StateBuilder,
-}
-
-#[cfg(feature = "dev-source")]
-impl DevState {
-    /// Builds a state for the fork at `slot`.
-    ///
-    /// # Errors
-    /// `Error::Beacon` when the fork at `slot` is not supported by the synthetic builder.
-    pub fn new(chain: ChainKind, slot: u64, roots: &[(u64, B256)]) -> Result<Self> {
-        let fork = chain.spec().fork_at_slot(slot);
-        if lc_core::layout::state_layout_for_fork(fork).is_err()
-            || fork < lc_core::chain::ForkName::Capella
-        {
-            return Err(Error::Beacon(format!(
-                "slot {slot} is in fork {fork:?}; use a slot after the Capella fork"
-            )));
-        }
-        let mut builder = guarded("synthetic state", || StateBuilder::new(fork))?;
-        for (root_slot, root) in roots {
-            builder.set_block_root(*root_slot, *root);
-        }
-        Ok(Self { builder })
-    }
-
-    /// The state root.
-    pub fn root(&self) -> B256 {
-        self.builder.root()
-    }
-
-    /// Branch for `block_roots[slot % 8192]`.
-    pub fn ancestry_branch(&self, slot: u64) -> Vec<B256> {
-        self.builder.block_roots_branch(slot)
-    }
-
-    /// Makes `historical_summaries` hold `count` entries and sets `block_roots[slot % 8192]` of the era at list position
-    /// `index` to `root`. The tests use it to build the historical ancestry path. Other slots of that era hold filler.
-    ///
-    /// # Panics
-    /// Panics when `index >= count`.
-    pub fn set_historical_root(&mut self, count: usize, index: usize, slot: u64, root: B256) {
-        self.builder
-            .set_historical_block_root(count, index, slot, root);
-    }
-
-    /// Branch for the historical path of `slot`, in the era at list position `index`.
-    ///
-    /// # Panics
-    /// Panics when no root was set in that era (see [`DevState::set_historical_root`]).
-    pub fn historical_branch(&self, index: usize, slot: u64) -> Vec<B256> {
-        self.builder.historical_ancestry_branch(index, slot)
-    }
-}
-
-/// The output that `DevBeaconSource` asserts for a synthetic head. No signature exists on Anvil.
-///
-/// The fields `previous*` and the committee hashes come from the contract (`start_next_committee_hash` is
-/// `syncCommittees(period + 1)` of the head period).
-#[cfg(feature = "dev-source")]
-#[allow(clippy::too_many_arguments)]
-pub fn dev_output(
-    genesis_validators_root: B256,
-    previous_head_slot: u64,
-    previous_header_root: B256,
-    previous_committee_hash: B256,
-    start_next_committee_hash: B256,
-    new_header_root: B256,
-    new_head_slot: u64,
-    execution_block_hash: B256,
-    execution_block_number: u64,
-) -> LightClientOutput {
-    LightClientOutput {
-        genesisValidatorsRoot: genesis_validators_root,
-        previousHeaderRoot: previous_header_root,
-        previousHeadSlot: previous_head_slot,
-        previousSyncCommitteeHash: previous_committee_hash,
-        startNextSyncCommitteeHash: start_next_committee_hash,
-        newHeaderRoot: new_header_root,
-        newHeadSlot: new_head_slot,
-        executionBlockHash: execution_block_hash,
-        executionBlockNumber: execution_block_number,
-        syncCommitteeHash: previous_committee_hash,
-        nextSyncCommitteeHash: B256::ZERO,
-    }
-}
-
 /// SHA-256 of `data`, from `lc-core`. The oracle digest and the SSZ hashes use it.
 pub fn sha256(data: &[u8]) -> B256 {
     lc_core::ssz::sha256(data)
@@ -956,6 +738,7 @@ pub fn describe_header(header: &BeaconBlockHeader) -> String {
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
+    use alloy_primitives::keccak256;
     use lc_core::ssz::{hash_pair, merkleize, merkleize_with_limit, mix_in_length};
 
     /// A Capella-layout state whose `block_roots`, `fork` and `historical_summaries` the test controls. `eras` holds
@@ -1008,6 +791,7 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy_primitives::keccak256;
 
     /// Claim: the deposit topic equals the real signature hash `0x2d8b...5cd0`, not a hardcoded wrong constant.
     /// Why it matters: the scanner filters logs on this topic; a wrong one finds no deposit.
@@ -1055,88 +839,6 @@ mod tests {
             decode_deposit(log.topics(), &log.data[..128]).is_err(),
             "128 bytes is the shape before the token"
         );
-    }
-
-    /// Claim: a synthetic header is a pure function of its arguments.
-    /// Why it matters: a restarted service must rebuild the same header root that the light client stored.
-    #[cfg(feature = "dev-source")]
-    #[test]
-    fn dev_header_is_deterministic() {
-        let chain = ChainKind::Pulsechain;
-        let one = dev_header(
-            chain,
-            2000,
-            5,
-            B256::repeat_byte(1),
-            dev_plain_state_root(2000),
-        );
-        let two = dev_header(
-            chain,
-            2000,
-            5,
-            B256::repeat_byte(1),
-            dev_plain_state_root(2000),
-        );
-        assert_eq!(one.header.hash_tree_root(), two.header.hash_tree_root());
-        let other = dev_header(
-            chain,
-            2000,
-            5,
-            B256::repeat_byte(2),
-            dev_plain_state_root(2000),
-        );
-        assert_ne!(one.header.hash_tree_root(), other.header.hash_tree_root());
-    }
-
-    /// Claim: the gate evidence built from a synthetic state decodes as `ForkEvidence`, carries the current version
-    /// (not the previous one), and its branch verifies at the generalized index that `BeaconForkGate` computes for
-    /// depth 5, under the state root of the header. A header of another state is refused.
-    /// Why it matters: the gate decodes these bytes and computes the index itself. A byte or an index off by one
-    /// reverts every first deposit of an epoch.
-    #[test]
-    fn gate_evidence_decodes_and_verifies_like_the_gate() {
-        use alloy_sol_types::SolValue;
-        let fork = ForkData {
-            previous_version: [2, 0, 0, 0],
-            current_version: [3, 0, 0, 0],
-            epoch: 3,
-        };
-        let state = test_support::synthetic_state(100_000, fork, &[]);
-        let header = BeaconBlockHeader {
-            slot: 4242,
-            proposer_index: 7,
-            parent_root: keccak256(b"parent"),
-            state_root: state.root(),
-            body_root: keccak256(b"body"),
-        };
-        let bytes = state.fork_evidence(1_700_000_123, &header).unwrap();
-        let decoded = lc_core::gate::ForkEvidence::abi_decode(&bytes).unwrap();
-        assert_eq!(decoded.timestamp, U256::from(1_700_000_123u64));
-        assert_eq!(decoded.header.slot, 4242);
-        assert_eq!(decoded.header.stateRoot, state.root());
-        assert_eq!(decoded.version.0, [3, 0, 0, 0]);
-        assert_eq!(decoded.branch.len(), 2 + 5);
-        let gindex = (32 + 3) * 4 + 1;
-        let leaf = lc_core::gate::version_leaf(decoded.version.0);
-        assert!(lc_core::ssz::is_valid_exact_branch(
-            &leaf,
-            &decoded.branch,
-            gindex,
-            &state.root()
-        ));
-        let previous = lc_core::gate::version_leaf(fork.previous_version);
-        assert!(!lc_core::ssz::is_valid_exact_branch(
-            &previous,
-            &decoded.branch,
-            gindex,
-            &state.root()
-        ));
-
-        let other = BeaconBlockHeader {
-            state_root: B256::repeat_byte(1),
-            ..header
-        };
-        assert!(state.fork_evidence(1, &other).is_err());
     }
 
     // ---------------------------------------------------------------- real historical paths
@@ -1210,10 +912,10 @@ mod tests {
             .expect("the real block rebuilds and its receipts root matches")
     }
 
-    /// Claim: for the real PulseChain anchor, the service classifies each fixture deposit by distance: five of them
+    /// Claim: for the real PulseChain anchor, the crate classifies each fixture deposit by distance: five of them
     /// lie more than 8192 slots below the anchor (historical path), and `era_last_block` lies 5117 slots below it
     /// (recent path), although the fixture also holds a historical branch for it.
-    /// Why it matters: the vault, not the service, chooses the path. A service that built the historical branch for a
+    /// Why it matters: the vault, not the crate, chooses the path. A builder that built the historical branch for a
     /// recent distance would send a withdrawal that reverts.
     #[test]
     fn real_fixture_deposits_are_classified_by_distance() {
@@ -1241,11 +943,11 @@ mod tests {
         );
     }
 
-    /// Claim: the real historical branches pass the vault check of `lc-core` through the service functions: the
-    /// service rebuilds the real execution block and its receipts proof, assembles the calldata struct, and native
+    /// Claim: the real historical branches pass the vault check of `lc-core` through the crate functions: the
+    /// crate rebuilds the real execution block and its receipts proof, assembles the calldata struct, and native
     /// verification passes the anchor, the 44-entry historical ancestry branch, the block hash branch, the header
     /// hash and the receipt proof. It stops at the log stage, because a real block holds no deposit event of a bridge.
-    /// Why it matters: this is the withdrawal that the service sends for a deposit older than 8192 slots. The controls
+    /// Why it matters: this is the withdrawal that a server sends for a deposit older than 8192 slots. The controls
     /// show each earlier check can fail: a branch of another era, a padded branch and an unknown anchor all stop earlier.
     #[test]
     fn real_historical_withdrawal_passes_native_verification_up_to_the_log() {
@@ -1299,7 +1001,7 @@ mod tests {
         assert!(reason(&wrong_block, &context).contains("InvalidBlockHashBranch"));
     }
 
-    /// Claim: the real fixture agrees with the gindex helpers of the service: the historical summaries field of the
+    /// Claim: the real fixture agrees with the gindex helpers of the crate: the historical summaries field of the
     /// Capella layout is gindex 59, and the era of the middle block is 1326, with `capellaEra` 0 on PulseChain.
     #[test]
     fn real_fixture_matches_the_layout_constants() {

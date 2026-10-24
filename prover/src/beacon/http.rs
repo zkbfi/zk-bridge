@@ -19,20 +19,21 @@
 //! the committee handoff update of each period it passed. The source fetches them from
 //! `/eth/v1/beacon/light_client/updates?start_period=&count=` (paged, because a node returns at most a count of its
 //! own choice), puts the latest finality update last, and sends the whole list as one fold. The program takes at most
-//! 64 updates in a fold. A longer catch-up goes in successive folds on successive passes. A node that has no update
+//! 64 updates in a fold. A longer catch-up goes in successive folds on successive runs, each one starting at the head
+//! that the light client stored after the run before. A node that has no update
 //! for a needed period (pruned history) gives an error that names the period.
 //!
 //! # Old deposits
 //!
 //! The vault picks the ancestry path from the distance between the anchor and the deposit slot. Up to 8192 slots it
-//! takes `state.block_roots` of the anchor. Beyond that it takes `state.historical_summaries`, and the service builds
+//! takes `state.block_roots` of the anchor. Beyond that it takes `state.historical_summaries`, and this source builds
 //! that branch with `lc-core`:
 //!
 //! 1. It rebuilds the 8192 block roots of the deposit era from the canonical block roots of the node
 //!    (`/eth/v1/beacon/blocks/<slot>/root`, 404 for an empty slot). It never reads them from an old state: a node can
 //!    serve an old state one summary short, and that state does not hash to its own root.
-//! 2. It reads the anchor state. When an update moves the head far past a deposit, the service fetches the new
-//!    head state at once, while the node still serves it whole.
+//! 2. It reads the anchor state, which the node must still serve whole. A node serves recent states only, so the
+//!    anchor should be the newest head that the light client stores.
 //! 3. `lc-core` checks the rebuilt roots against the `block_summary_root` of the anchor state.
 //!
 //! Limits: the SSZ parser in `lc-core` reads states of the Capella, Deneb, Electra and Fulu layouts. It picks the layout
@@ -40,12 +41,9 @@
 //! only, so the assembled update path needs a Capella chain. Ethereum uses the light-client endpoints for the update.
 
 use super::{
-    BeaconSource, DepositBlock, HashEvidence, HistoricalEvidence, LightClientState, RootsEvidence,
-    UpdatePlan,
+    DepositBlock, HashEvidence, HistoricalEvidence, RootsEvidence, StoredHead, UpdatePlan,
 };
-use crate::chain::ExecutionReader;
 use crate::error::{Error, Result};
-use crate::gate::{beacon_root_at, ForkEvidenceSource, ForkRequest};
 use crate::light_client::{
     ancestry_path, assemble_update, beacon_header_from_json, block_hash_gindex, block_roots_gindex,
     committee_hash, describe_header, era_block_roots, era_of, header_root,
@@ -54,7 +52,6 @@ use crate::light_client::{
     LightClientStore, LightClientUpdate, StateView, SyncAggregate, UpdateInput,
     SLOTS_PER_HISTORICAL_ROOT,
 };
-use crate::prover::ProofStatement;
 use crate::rpc::HttpGet;
 use alloy_primitives::B256;
 use lc_core::update::MAX_FOLD_UPDATES;
@@ -459,15 +456,12 @@ impl HttpBeaconSource {
         }
     }
 
-    fn head_header(&self, light_client: &LightClientState) -> Result<BeaconHeader> {
+    fn head_header(&self, head: &StoredHead) -> Result<BeaconHeader> {
         let header = Self::require(
-            self.header_by_id(&light_client.head_slot.to_string())?,
-            &format!(
-                "a header at the light client head slot {}",
-                light_client.head_slot
-            ),
+            self.header_by_id(&head.slot.to_string())?,
+            &format!("a header at the light client head slot {}", head.slot),
         )?;
-        if header_root(&header) != light_client.head_root {
+        if header_root(&header) != head.root {
             return Err(Error::Beacon(format!(
                 "the light client head ({}) is not on this beacon chain",
                 describe_header(&header)
@@ -538,14 +532,14 @@ impl HttpBeaconSource {
     fn catch_up(
         &self,
         head: &BeaconHeader,
-        light_client: &LightClientState,
+        next_committee_hash: B256,
         latest: LightClientUpdate,
     ) -> Result<UpdateInput> {
         let periods = handoff_periods(self.chain, head.slot, &latest);
         let handoffs =
             fetch_period_updates(self.client.as_ref(), self.chain, periods.start, periods.end)?;
         let updates = assemble_fold(self.chain, head.slot, &handoffs, latest)?;
-        let store = self.store_at_head(head, light_client.next_committee_hash)?;
+        let store = self.store_at_head(head, next_committee_hash)?;
         Ok(UpdateInput {
             chain: self.chain,
             store,
@@ -614,122 +608,47 @@ impl HttpBeaconSource {
     }
 }
 
-/// How many of the newest blocks the search for a header of the epoch looks at.
-const GATE_SEARCH_BLOCKS: u64 = 16;
-
-impl ForkEvidenceSource for HttpBeaconSource {
-    /// Walks back from the latest execution block. Each block `n` has a timestamp `t`, and the beacon roots contract
-    /// holds, under `t`, the root of the parent beacon block. The first such header in the epoch of the request gives
-    /// the proof: the node serves its header by root and its state by state root.
-    ///
-    /// The state parser picks the layout from the fork at the slot of the state (Capella, Deneb, Electra or Fulu).
-    fn fork_evidence(&self, request: &ForkRequest<'_>) -> Result<Vec<u8>> {
-        let latest = request.chain.latest_block_number()?;
-        for number in (latest.saturating_sub(GATE_SEARCH_BLOCKS)..=latest).rev() {
-            let block = request
-                .chain
-                .block(number)?
-                .ok_or_else(|| Error::Malformed(format!("block {number} is unknown")))?;
-            let timestamp = crate::rpc::parse_quantity(&block["timestamp"])?;
-            let Some(root) = beacon_root_at(request.chain, request.beacon_roots, timestamp)? else {
-                continue;
-            };
-            let Some(header) = self.header_by_id(&format!("{root:#x}"))? else {
-                continue;
-            };
-            if header_root(&header) != root {
-                return Err(Error::Beacon(format!(
-                    "the node answered for root {root:#x} with another header"
-                )));
-            }
-            if header.slot / request.slots_per_epoch != request.epoch {
-                continue;
-            }
-            return self
-                .state_for(header.state_root)?
-                .fork_evidence(timestamp, &header);
-        }
-        Err(Error::Beacon(format!(
-            "no beacon header of epoch {} found among the roots of the last {GATE_SEARCH_BLOCKS} blocks; wait one slot",
-            request.epoch
-        )))
-    }
-}
-
-impl BeaconSource for HttpBeaconSource {
-    fn name(&self) -> &'static str {
-        "http"
-    }
-
-    fn chain_kind(&self) -> ChainKind {
+impl HttpBeaconSource {
+    /// The chain whose beacon API this source reads.
+    pub fn chain_kind(&self) -> ChainKind {
         self.chain
     }
 
-    fn finalized_execution_block(&self, source: &dyn ExecutionReader) -> Result<Option<u64>> {
-        source.finalized_tag_block_number()
+    /// The fold that moves a light client from `head` to the newest final header of the beacon node, or `None` when the
+    /// head already is that header.
+    ///
+    /// One fold holds up to 64 updates. A head that lags by more periods gets a fold that ends below the newest header,
+    /// and the caller asks again from the new head.
+    ///
+    /// # Errors
+    /// `Error::Beacon` when the node lacks data for the head, for a period in between, or when the head is not on this
+    /// beacon chain.
+    pub fn plan_update(&self, head: &StoredHead) -> Result<Option<UpdatePlan>> {
+        let header = self.head_header(head)?;
+        let latest = self.latest_update()?;
+        let latest_finalized_slot = latest.finalized_header.beacon.slot;
+        if latest_finalized_slot <= header.slot {
+            return Ok(None);
+        }
+        let input = self.catch_up(&header, head.next_committee_hash, latest)?;
+        Ok(Some(UpdatePlan {
+            input,
+            latest_finalized_slot,
+        }))
     }
 
-    fn next_update(
+    /// The beacon part of the withdrawal for a deposit block, anchored at a header that the light client stores.
+    ///
+    /// # Errors
+    /// `Error::Beacon` when the anchor is not on this beacon chain, the deposit slot is not before the anchor, or the
+    /// node lacks a block or a state.
+    pub fn withdrawal_path(
         &self,
         deposit: &DepositBlock,
-        light_client: &LightClientState,
-        _stored_slots: &[u64],
-        _source: &dyn ExecutionReader,
-    ) -> Result<UpdatePlan> {
-        let deposit_slot = self.slot_for_timestamp(deposit.timestamp)?;
-        if light_client.head_slot > deposit_slot {
-            return Ok(UpdatePlan::Covered);
-        }
-        let head = self.head_header(light_client)?;
-        let latest = self.latest_update()?;
-        let finalized_slot = latest.finalized_header.beacon.slot;
-        if finalized_slot <= deposit_slot || finalized_slot <= head.slot {
-            return Ok(UpdatePlan::NotYetFinal);
-        }
-        let input = self.catch_up(&head, light_client, latest)?;
-        let beyond_window = |update: &&LightClientUpdate| {
-            update
-                .finalized_header
-                .beacon
-                .slot
-                .saturating_sub(deposit_slot)
-                > WINDOW_SLOTS
-        };
-        if let Some(last) = input.updates.last().filter(beyond_window) {
-            // The deposit needs the historical path under the new head. Fetch the state of the new head now, while
-            // the node serves it whole. A failure here is not an error: the withdrawal step fetches again.
-            let _ = self.state_for(last.finalized_header.beacon.state_root);
-        }
-        Ok(UpdatePlan::Update(Box::new(ProofStatement::Verified(
-            input,
-        ))))
-    }
-
-    fn next_head_update(
-        &self,
-        light_client: &LightClientState,
-        _source: &dyn ExecutionReader,
-    ) -> Result<UpdatePlan> {
-        let head = self.head_header(light_client)?;
-        let latest = self.latest_update()?;
-        if latest.finalized_header.beacon.slot <= head.slot {
-            return Ok(UpdatePlan::Covered);
-        }
-        let input = self.catch_up(&head, light_client, latest)?;
-        Ok(UpdatePlan::Update(Box::new(ProofStatement::Verified(
-            input,
-        ))))
-    }
-
-    fn withdrawal_path(
-        &self,
-        deposit: &DepositBlock,
-        light_client: &LightClientState,
-        _stored_slots: &[u64],
-        _source: &dyn ExecutionReader,
+        anchor: &StoredHead,
     ) -> Result<BeaconPath> {
         let deposit_slot = self.slot_for_timestamp(deposit.timestamp)?;
-        let anchor = self.head_header(light_client)?;
+        let anchor = self.head_header(anchor)?;
         if deposit_slot >= anchor.slot {
             return Err(Error::Beacon(format!(
                 "deposit slot {deposit_slot} is not before the anchor slot {}",
@@ -756,11 +675,14 @@ impl BeaconSource for HttpBeaconSource {
         })
     }
 
-    fn roots_layout_evidence(
+    /// Evidence for a `block_roots` layout row that covers `anchor`, or `None` when the stored headers do not yet allow it.
+    ///
+    /// # Errors
+    /// `Error::Beacon` when the node lacks the state of the anchor.
+    pub fn roots_layout_evidence(
         &self,
         anchor: &BeaconHeader,
         stored_slots: &[u64],
-        _source: &dyn ExecutionReader,
     ) -> Result<Option<RootsEvidence>> {
         let mut earlier: Vec<u64> = stored_slots
             .iter()
@@ -783,11 +705,15 @@ impl BeaconSource for HttpBeaconSource {
         }))
     }
 
-    fn historical_layout_evidence(
+    /// Evidence for a `historical_summaries` layout row that covers `anchor`, or `None` when the stored headers do not
+    /// yet allow it (no stored slot lies in a completed era more than 8192 slots below the anchor).
+    ///
+    /// # Errors
+    /// `Error::Beacon` when the node lacks the state of the anchor or the block roots of the era.
+    pub fn historical_layout_evidence(
         &self,
         anchor: &BeaconHeader,
         stored_slots: &[u64],
-        _source: &dyn ExecutionReader,
     ) -> Result<Option<HistoricalEvidence>> {
         let capella_era = self
             .chain
@@ -817,11 +743,15 @@ impl BeaconSource for HttpBeaconSource {
         }))
     }
 
-    fn hash_layout_evidence(
+    /// Evidence for a block hash layout row from the stored header with the highest slot at or below `at_or_below`, or
+    /// `None` when no stored header qualifies.
+    ///
+    /// # Errors
+    /// `Error::Beacon` when the node lacks the block of that header.
+    pub fn hash_layout_evidence(
         &self,
         at_or_below: u64,
         stored_slots: &[u64],
-        _source: &dyn ExecutionReader,
     ) -> Result<Option<HashEvidence>> {
         let Some(slot) = stored_slots
             .iter()
@@ -847,6 +777,7 @@ impl BeaconSource for HttpBeaconSource {
 mod tests {
     use super::*;
     use crate::light_client::verify_update_natively;
+    use crate::prover::ProofStatement;
     use crate::rpc::HttpResponse;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -1073,21 +1004,6 @@ mod tests {
         }
     }
 
-    /// An execution chain for calls that never read it.
-    struct NoChain;
-
-    impl ExecutionReader for NoChain {
-        fn latest_block_number(&self) -> Result<u64> {
-            Err(Error::Beacon("not read".into()))
-        }
-        fn block_hash(&self, _number: u64) -> Result<B256> {
-            Err(Error::Beacon("not read".into()))
-        }
-        fn finalized_tag_block_number(&self) -> Result<Option<u64>> {
-            Err(Error::Beacon("not read".into()))
-        }
-    }
-
     /// A source that holds a synthetic anchor state in its cache, so no state is fetched.
     fn primed(source: &HttpBeaconSource, anchor_slot: u64, eras: &[Vec<B256>]) -> BeaconHeader {
         let state = synthetic_state(anchor_slot, fork(), eras);
@@ -1238,7 +1154,7 @@ mod tests {
         );
     }
 
-    /// Claim: for a deposit more than 8192 slots below the anchor, the service builds the historical branch, and it
+    /// Claim: for a deposit more than 8192 slots below the anchor, the source builds the historical branch, and it
     /// verifies at the generalized index that the vault builds (`lc-core`), under the anchor state root. For a deposit
     /// within 8192 slots it builds the recent branch at the recent index. A deposit header that the canonical roots do
     /// not name is refused, and a node that serves one wrong root is caught by the era formula.
@@ -1344,13 +1260,12 @@ mod tests {
             .chain(eras.iter().cloned())
             .collect();
         let anchor = primed(&source, anchor_slot, &all_eras);
-        let no_source: &dyn ExecutionReader = &NoChain;
 
         // The stored slot 3 * 8192 + 1234 holds a header whose root the era vector names.
         let earlier = 3 * 8192 + 1234;
         let stored = [earlier, anchor_slot - 100, anchor_slot];
         let evidence = source
-            .historical_layout_evidence(&anchor, &stored, no_source)
+            .historical_layout_evidence(&anchor, &stored)
             .unwrap()
             .expect("evidence");
         assert_eq!(evidence.earlier_slot, earlier);
@@ -1365,12 +1280,12 @@ mod tests {
         ));
 
         assert!(source
-            .historical_layout_evidence(&anchor, &[anchor_slot - 100, anchor_slot], no_source)
+            .historical_layout_evidence(&anchor, &[anchor_slot - 100, anchor_slot])
             .unwrap()
             .is_none());
         // A slot within 8192 slots of the anchor is not a candidate, whatever its era.
         assert!(source
-            .historical_layout_evidence(&anchor, &[5 * 8192 + 2], no_source)
+            .historical_layout_evidence(&anchor, &[5 * 8192 + 2])
             .unwrap()
             .is_none());
     }
@@ -1453,13 +1368,7 @@ mod tests {
         assert_eq!(output.syncCommitteeHash, committee_hash_of(104));
         assert_eq!(output.nextSyncCommitteeHash, committee_hash_of(105));
 
-        let oracle = crate::signer::Signer::from_secret_bytes(
-            &alloy_primitives::hex::decode(
-                "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        let oracle = crate::signer::Signer::from_secret_bytes(&[0x42; 32]).unwrap();
         let proof = crate::prover::OracleProver::new(oracle)
             .prove(B256::repeat_byte(0x42), &ProofStatement::Verified(input))
             .expect("the oracle signs the fold");

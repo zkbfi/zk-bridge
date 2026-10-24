@@ -1,16 +1,25 @@
 //! TOML configuration with environment overrides and validation.
 //!
 //! The file holds no secret. A key named `private_key`, `mnemonic`, `password`, `secret`, `seed`, `api_key` or `token`
-//! anywhere in the file is refused. The signing key comes from a Foundry keystore plus a password file (both named by path), or from
-//! the environment variable that `--private-key-env` names, for local Anvil only.
+//! anywhere in the file is refused. Where a command needs a secret (the API key of the remote worker, the bearer token
+//! of the webhook, the oracle key), the file names the environment variable that holds it. The value never enters the file.
+//!
+//! The sections:
+//!
+//! - `[prover]`: the proving backend. The `prove` command needs it.
+//! - `[handoff]`: where the `prove` command puts its result. Standard output is the default.
+//! - `[routes.<name>]`: one direction between two chains. A route names the source beacon API and the destination light
+//!   client. The `evidence` command also reads the execution endpoints and the two vaults of the route.
 //!
 //! Environment overrides: `ZK_BRIDGE_PROVER_<PATH>` where `<PATH>` is the key path in capitals, with `_` for `.`.
-//! For example `ZK_BRIDGE_PROVER_CHAIN_A_RPC_URL` or `ZK_BRIDGE_PROVER_POLL_INTERVAL_SECONDS`.
+//! For example `ZK_BRIDGE_PROVER_PROVER_REMOTE_URL`. Only the keys of `[prover]` and `[handoff]` can be overridden,
+//! because the names of routes are free text.
 
 use crate::error::{Error, Result};
 use crate::light_client::ChainKind;
 use alloy_primitives::{Address, B256};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -38,63 +47,16 @@ enum Kind {
 }
 
 /// Every key that an environment variable may override.
-const OVERRIDES: [(&str, Kind); 24] = [
-    ("database_path", Kind::Text),
-    ("poll_interval_seconds", Kind::Integer),
-    ("receipt_timeout_seconds", Kind::Integer),
+const OVERRIDES: [(&str, Kind); 8] = [
     ("prover.program_vkey", Kind::Text),
     ("prover.sp1_elf_path", Kind::Text),
     ("prover.sp1_observation_elf_path", Kind::Text),
     ("prover.remote_url", Kind::Text),
     ("prover.remote_api_key_env", Kind::Text),
-    ("chain_a.rpc_url", Kind::Text),
-    ("chain_a.chain_id", Kind::Integer),
-    ("chain_a.vault", Kind::Text),
-    ("chain_a.light_client", Kind::Text),
-    ("chain_a.own_light_client", Kind::Text),
-    ("chain_a.beacon.url", Kind::Text),
-    ("chain_a.beacon.finality_depth", Kind::Integer),
-    ("chain_b.rpc_url", Kind::Text),
-    ("chain_b.chain_id", Kind::Integer),
-    ("chain_b.vault", Kind::Text),
-    ("chain_b.light_client", Kind::Text),
-    ("chain_b.own_light_client", Kind::Text),
-    ("chain_b.beacon.url", Kind::Text),
-    ("chain_b.beacon.finality_depth", Kind::Integer),
-    ("max_attempts", Kind::Integer),
-    ("max_withdrawals_per_pass", Kind::Integer),
+    ("handoff.webhook_url", Kind::Text),
+    ("handoff.webhook_bearer_env", Kind::Text),
+    ("handoff.webhook_timeout_seconds", Kind::Integer),
 ];
-
-/// A route is one direction: deposits on the source chain, withdrawals on the destination chain.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-pub enum RouteName {
-    /// Deposits on chain A, withdrawals on chain B.
-    #[serde(rename = "a_to_b")]
-    AToB,
-    /// Deposits on chain B, withdrawals on chain A.
-    #[serde(rename = "b_to_a")]
-    BToA,
-}
-
-impl RouteName {
-    /// The stored and logged name.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::AToB => "a_to_b",
-            Self::BToA => "b_to_a",
-        }
-    }
-}
-
-/// A keystore and the file that holds its password.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct KeystoreConfig {
-    /// The path of the Foundry keystore file.
-    pub keystore: PathBuf,
-    /// The path of a file that holds the password.
-    pub password_file: PathBuf,
-}
 
 /// The proving backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -102,12 +64,23 @@ pub enum ProverBackend {
     /// The development backend that signs with the oracle key.
     #[serde(rename = "oracle")]
     Oracle,
-    /// The production backend (cargo feature `sp1`).
+    /// The production backend on the local CPU (cargo feature `sp1`).
     #[serde(rename = "sp1")]
     Sp1,
     /// A worker on a GPU host, reached over HTTP (`src/remote.rs`). It is in the default build.
     #[serde(rename = "remote")]
     Remote,
+}
+
+impl ProverBackend {
+    /// The name in the configuration file.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Oracle => "oracle",
+            Self::Sp1 => "sp1",
+            Self::Remote => "remote",
+        }
+    }
 }
 
 /// The `[prover]` section.
@@ -116,20 +89,21 @@ pub enum ProverBackend {
 pub struct ProverConfig {
     /// The backend.
     pub backend: ProverBackend,
-    /// The verification key of the light-client program. The service checks it against `programVKey()` of the light
-    /// client contract before it proves anything.
-    pub program_vkey: String,
+    /// The verification key of the light-client program. A route command reads the key from the light client contract.
+    /// When this key is set too, the two must be equal. A command that starts from an explicit head needs it, unless the
+    /// command line gives the key.
+    #[serde(default)]
+    pub program_vkey: Option<String>,
     /// The compiled light-client guest, for the `sp1` backend.
     #[serde(default)]
     pub sp1_elf_path: Option<PathBuf>,
     /// The compiled fork observation guest, for the `sp1` backend. Without it the prover refuses observations.
     #[serde(default)]
     pub sp1_observation_elf_path: Option<PathBuf>,
-    /// The most proofs that one process makes. A process that has made them refuses further proofs with a transient error,
-    /// so a loop of `once` passes continues in a new process. SP1 keeps memory after a Groth16 proof, and a second proof in
-    /// one process needs about 30 GiB more. Default: no limit.
+    /// The NAME of the environment variable that holds the oracle key, for the `oracle` backend. The key itself never
+    /// goes in the file.
     #[serde(default)]
-    pub max_proofs_per_process: Option<usize>,
+    pub oracle_key_env: Option<String>,
     /// The base URL of the worker endpoint, for the `remote` backend.
     #[serde(default)]
     pub remote_url: Option<String>,
@@ -160,157 +134,138 @@ fn default_remote_retry_delay_seconds() -> u64 {
     10
 }
 
-/// Where beacon data comes from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-pub enum BeaconKind {
-    /// A standard beacon API.
-    #[serde(rename = "http")]
-    Http,
-    /// A depth rule on an Anvil chain, which has no beacon chain.
-    #[serde(rename = "dev")]
-    Dev,
+/// Where the `prove` command puts its result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, clap::ValueEnum)]
+pub enum HandoffTarget {
+    /// One JSON object on standard output.
+    #[serde(rename = "stdout")]
+    Stdout,
+    /// One POST of the same object to `handoff.webhook_url`.
+    #[serde(rename = "webhook")]
+    Webhook,
 }
 
-/// The `[chain_x.beacon]` section. It describes the beacon chain of the chain it sits in.
+/// The `[handoff]` section.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct BeaconConfig {
-    /// `http` or `dev`.
-    pub kind: BeaconKind,
-    /// The base URL of the beacon API (kind `http`).
+pub struct HandoffConfig {
+    /// The targets. The command line can replace them. Default: standard output only.
+    #[serde(default = "default_targets")]
+    pub targets: Vec<HandoffTarget>,
+    /// The URL that receives the POST, for the `webhook` target. It must use https, or http on the local machine.
     #[serde(default)]
-    pub url: Option<String>,
-    /// `pulsechain` or `ethereum`: which `lc-core` chain specification applies.
-    pub chain: String,
-    /// The number of blocks below the latest that count as final (kind `dev`).
+    pub webhook_url: Option<String>,
+    /// The NAME of the environment variable that holds the bearer token of the webhook. Optional: without it the request
+    /// carries no `Authorization` header. The token itself never goes in the file.
     #[serde(default)]
-    pub finality_depth: Option<u64>,
-    /// The beacon slot of execution block 0 in the synthetic chain (kind `dev`). It must lie above the checkpoint
-    /// slot of the light client and after the Capella fork. Default 1024.
-    #[serde(default)]
-    pub slot_offset: Option<u64>,
+    pub webhook_bearer_env: Option<String>,
+    /// The time one request to the webhook may take.
+    #[serde(default = "default_webhook_timeout_seconds")]
+    pub webhook_timeout_seconds: u64,
+    /// How often the command sends the POST before it gives up. A proof is costly, so a short outage of the receiver
+    /// should not lose it.
+    #[serde(default = "default_webhook_attempts")]
+    pub webhook_attempts: u32,
+    /// The wait before the second attempt. The wait grows by this much for each further attempt.
+    #[serde(default = "default_webhook_retry_delay_seconds")]
+    pub webhook_retry_delay_seconds: u64,
 }
 
-/// One chain.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ChainConfig {
-    /// A short name for logs.
-    pub name: String,
-    /// The execution RPC URL.
-    pub rpc_url: String,
-    /// The block where the contracts were deployed. Scans start here. Default 0.
-    #[serde(default)]
-    pub start_block: u64,
-    /// The chain identifier. The service checks it against `eth_chainId`.
-    pub chain_id: u64,
-    /// The `BridgeVault` on this chain.
-    pub vault: String,
-    /// The `BeaconLightClient` on this chain. It tracks the OTHER chain's beacon chain.
-    pub light_client: String,
-    /// The `BeaconLightClient` of THIS chain's own beacon chain, deployed on this chain. Optional. The fork registry
-    /// of a gate in registry mode reads it for freshness and for the start of an observation. When it is set, every
-    /// route that reads deposits from this chain also keeps it current, with the beacon updates that the route fetches
-    /// for the other direction.
-    #[serde(default)]
-    pub own_light_client: Option<String>,
-    /// The beacon chain of this chain (the source of deposits made here).
-    pub beacon: BeaconConfig,
+impl Default for HandoffConfig {
+    fn default() -> Self {
+        Self {
+            targets: default_targets(),
+            webhook_url: None,
+            webhook_bearer_env: None,
+            webhook_timeout_seconds: default_webhook_timeout_seconds(),
+            webhook_attempts: default_webhook_attempts(),
+            webhook_retry_delay_seconds: default_webhook_retry_delay_seconds(),
+        }
+    }
 }
 
-fn default_poll() -> u64 {
-    12
+fn default_targets() -> Vec<HandoffTarget> {
+    vec![HandoffTarget::Stdout]
 }
-fn default_receipt_timeout() -> u64 {
-    60
+
+fn default_webhook_timeout_seconds() -> u64 {
+    30
 }
-fn default_attempts() -> u32 {
+
+fn default_webhook_attempts() -> u32 {
+    3
+}
+
+fn default_webhook_retry_delay_seconds() -> u64 {
     5
 }
-fn default_withdrawals_per_pass() -> usize {
-    32
-}
-fn default_log_range() -> u64 {
-    2_000
-}
-fn default_routes() -> Vec<RouteName> {
-    vec![RouteName::AToB, RouteName::BToA]
-}
 
-/// The whole configuration.
+/// The source side of a route: the chain where deposits happen and whose beacon chain the light client tracks.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Config {
-    /// The SQLite file.
-    pub database_path: PathBuf,
-    /// Seconds between two passes of `run`.
-    #[serde(default = "default_poll")]
-    pub poll_interval_seconds: u64,
-    /// Seconds to wait for a receipt inside one pass.
-    #[serde(default = "default_receipt_timeout")]
-    pub receipt_timeout_seconds: u64,
-    /// How many failed attempts a deposit gets before it is marked failed.
-    #[serde(default = "default_attempts")]
-    pub max_attempts: u32,
-    /// The most withdrawals that one route builds and sends in one pass.
-    #[serde(default = "default_withdrawals_per_pass")]
-    pub max_withdrawals_per_pass: usize,
+pub struct SourceConfig {
+    /// The chain identifier of the source chain.
+    pub chain_id: u64,
+    /// `pulsechain` or `ethereum`: which `lc-core` chain specification applies to the beacon chain of the source.
+    pub chain: String,
+    /// The base URL of the beacon API of the source chain.
+    pub beacon_url: String,
+    /// The execution RPC URL of the source chain. The `evidence` command needs it.
+    #[serde(default)]
+    pub rpc_url: Option<String>,
+    /// The `BridgeVault` on the source chain. The `evidence` command needs it.
+    #[serde(default)]
+    pub vault: Option<String>,
+}
+
+/// The destination side of a route: the chain with the light client that the proofs update.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DestinationConfig {
+    /// The chain identifier of the destination chain. The commands check it against `eth_chainId`.
+    pub chain_id: u64,
+    /// The execution RPC URL of the destination chain. The commands read the light client and the vault with it.
+    pub rpc_url: String,
+    /// The `BeaconLightClient` on the destination chain. It tracks the beacon chain of the source.
+    pub light_client: String,
+    /// The `BridgeVault` on the destination chain. The `evidence` command needs it.
+    #[serde(default)]
+    pub vault: Option<String>,
+    /// The block where the light client was deployed. The scan for stored heads starts here. Default 0.
+    #[serde(default)]
+    pub start_block: u64,
     /// The largest block range of one `eth_getLogs` call.
     #[serde(default = "default_log_range")]
     pub log_block_range: u64,
-    /// The transaction signer (not needed with `--private-key-env`).
-    #[serde(default)]
-    pub signer: Option<KeystoreConfig>,
-    /// The oracle signer. Defaults to the transaction signer.
-    #[serde(default)]
-    pub oracle: Option<KeystoreConfig>,
-    /// The proving backend.
-    pub prover: ProverConfig,
-    /// Chain A.
-    pub chain_a: ChainConfig,
-    /// Chain B.
-    pub chain_b: ChainConfig,
-    /// The routes to serve. Default both.
-    #[serde(default = "default_routes")]
-    pub routes: Vec<RouteName>,
 }
 
-impl ChainConfig {
-    /// The vault address.
-    pub fn vault_address(&self) -> Result<Address> {
-        parse_address(&self.vault, &format!("{}.vault", self.name))
-    }
-
-    /// The light client address.
-    pub fn light_client_address(&self) -> Result<Address> {
-        parse_address(&self.light_client, &format!("{}.light_client", self.name))
-    }
-
-    /// The own-chain light client address, or `None` when the chain has none configured.
-    pub fn own_light_client_address(&self) -> Result<Option<Address>> {
-        let Some(text) = &self.own_light_client else {
-            return Ok(None);
-        };
-        parse_address(text, &format!("{}.own_light_client", self.name)).map(Some)
-    }
-
-    /// The `lc-core` chain kind of this chain's beacon chain.
-    pub fn chain_kind(&self) -> Result<ChainKind> {
-        ChainKind::from_name(&self.beacon.chain).ok_or_else(|| {
-            Error::Config(format!(
-                "{}.beacon.chain: unknown chain {}",
-                self.name, self.beacon.chain
-            ))
-        })
-    }
+fn default_log_range() -> u64 {
+    2_000
 }
 
-impl ProverConfig {
-    /// The program verification key.
-    pub fn program_vkey_value(&self) -> Result<B256> {
-        B256::from_str(&self.program_vkey)
-            .map_err(|error| Error::Config(format!("prover.program_vkey: {error}")))
-    }
+/// One direction: deposits on the source chain, withdrawals on the destination chain.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteConfig {
+    /// The source chain.
+    pub source: SourceConfig,
+    /// The destination chain.
+    pub destination: DestinationConfig,
+}
+
+/// The whole configuration.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Config {
+    /// The proving backend. The `prove` command needs it. The `evidence` command does not.
+    #[serde(default)]
+    pub prover: Option<ProverConfig>,
+    /// Where `prove` puts its result.
+    #[serde(default)]
+    pub handoff: HandoffConfig,
+    /// The routes, by name.
+    #[serde(default)]
+    pub routes: BTreeMap<String, RouteConfig>,
 }
 
 fn parse_address(text: &str, key: &str) -> Result<Address> {
@@ -320,6 +275,63 @@ fn parse_address(text: &str, key: &str) -> Result<Address> {
         return Err(Error::Config(format!("{key}: the zero address")));
     }
     Ok(address)
+}
+
+fn require_present<'a>(value: &'a Option<String>, key: &str) -> Result<&'a str> {
+    value
+        .as_deref()
+        .ok_or_else(|| Error::Config(format!("{key} is required for this command")))
+}
+
+impl SourceConfig {
+    /// The `lc-core` chain kind of the beacon chain of the source.
+    pub fn chain_kind(&self) -> Result<ChainKind> {
+        ChainKind::from_name(&self.chain)
+            .ok_or_else(|| Error::Config(format!("source.chain: unknown chain {}", self.chain)))
+    }
+
+    /// The execution RPC URL, for a command that reads the source chain.
+    pub fn execution_url(&self) -> Result<&str> {
+        require_present(&self.rpc_url, "source.rpc_url")
+    }
+
+    /// The vault address, for a command that reads the deposit.
+    pub fn vault_address(&self) -> Result<Address> {
+        parse_address(
+            require_present(&self.vault, "source.vault")?,
+            "source.vault",
+        )
+    }
+}
+
+impl DestinationConfig {
+    /// The light client address.
+    pub fn light_client_address(&self) -> Result<Address> {
+        parse_address(&self.light_client, "destination.light_client")
+    }
+
+    /// The vault address, for a command that builds a withdrawal.
+    pub fn vault_address(&self) -> Result<Address> {
+        parse_address(
+            require_present(&self.vault, "destination.vault")?,
+            "destination.vault",
+        )
+    }
+}
+
+impl ProverConfig {
+    /// The configured program verification key, or `None` when the file sets none.
+    pub fn program_vkey_value(&self) -> Result<Option<B256>> {
+        let Some(text) = &self.program_vkey else {
+            return Ok(None);
+        };
+        let key = B256::from_str(text)
+            .map_err(|error| Error::Config(format!("prover.program_vkey: {error}")))?;
+        if key == B256::ZERO {
+            return Err(Error::Config("prover.program_vkey is zero".into()));
+        }
+        Ok(Some(key))
+    }
 }
 
 /// Whether a URL points at the local machine.
@@ -342,6 +354,35 @@ pub fn is_loopback_url(url: &str) -> bool {
             .is_ok_and(|address| address.is_loopback())
 }
 
+/// Whether a secret may travel to this URL: https, or http on the local machine (for tests and tunnels).
+pub fn is_permitted_secret_url(url: &str) -> bool {
+    url.starts_with("https://") || (url.starts_with("http://") && is_loopback_url(url))
+}
+
+/// Whether text has the shape of an environment variable name: capitals, digits and `_`, starting with a capital.
+/// This also stops someone from pasting a secret where the file wants a name.
+pub fn is_environment_name(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 64
+        && text.starts_with(|character: char| character.is_ascii_uppercase())
+        && text.chars().all(|character| {
+            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+        })
+}
+
+/// Fails unless `value` is the name of an environment variable.
+///
+/// # Errors
+/// `Error::Config` that names `key`.
+pub fn require_environment_name(value: &str, key: &str) -> Result<()> {
+    if is_environment_name(value) {
+        return Ok(());
+    }
+    Err(Error::Config(format!(
+        "{key} must be the NAME of an environment variable in capitals, not the secret"
+    )))
+}
+
 fn refuse_secret_keys(value: &toml::Value, path: &str) -> Result<()> {
     let Some(table) = value.as_table() else {
         return Ok(());
@@ -350,7 +391,7 @@ fn refuse_secret_keys(value: &toml::Value, path: &str) -> Result<()> {
         let lowered = key.to_ascii_lowercase();
         if FORBIDDEN_KEYS.contains(&lowered.as_str()) {
             return Err(Error::SecretHandling(format!(
-                "the key `{path}{key}` is not allowed: put a keystore and a password file path in the configuration, never a secret"
+                "the key `{path}{key}` is not allowed: name an environment variable in the configuration, never a secret"
             )));
         }
         refuse_secret_keys(child, &format!("{path}{key}."))?;
@@ -418,164 +459,196 @@ impl Config {
         Self::load(&text, lookup)
     }
 
+    /// The `[prover]` section.
+    ///
+    /// # Errors
+    /// `Error::Config` when the file has none.
+    pub fn prover_config(&self) -> Result<&ProverConfig> {
+        self.prover
+            .as_ref()
+            .ok_or_else(|| Error::Config("the file has no [prover] section".into()))
+    }
+
+    /// The route with this name, or the only route when `name` is `None` and the file has exactly one.
+    ///
+    /// # Errors
+    /// `Error::Usage` when the name is unknown, or when no name is given and the file does not have exactly one route.
+    pub fn route(&self, name: Option<&str>) -> Result<(&str, &RouteConfig)> {
+        let known = || self.routes.keys().cloned().collect::<Vec<_>>().join(", ");
+        if let Some(name) = name {
+            return self
+                .routes
+                .get_key_value(name)
+                .map(|(name, route)| (name.as_str(), route))
+                .ok_or_else(|| {
+                    Error::Usage(format!("no route named {name}; the file has: {}", known()))
+                });
+        }
+        let mut routes = self.routes.iter();
+        match (routes.next(), routes.next()) {
+            (Some((name, route)), None) => Ok((name.as_str(), route)),
+            _ => Err(Error::Usage(format!(
+                "name the route with --route; the file has: {}",
+                known()
+            ))),
+        }
+    }
+
     /// Checks every value that can be checked without a network.
     ///
     /// # Errors
     /// `Error::Config` naming the key.
     pub fn validate(&self) -> Result<()> {
-        if self.poll_interval_seconds == 0 {
-            return Err(Error::Config(
-                "poll_interval_seconds must be at least 1".into(),
-            ));
+        if let Some(prover) = &self.prover {
+            self.validate_prover(prover)?;
         }
-        if self.max_attempts == 0 {
-            return Err(Error::Config("max_attempts must be at least 1".into()));
+        self.validate_handoff()?;
+        for (name, route) in &self.routes {
+            validate_route(name, route)?;
         }
-        if self.max_withdrawals_per_pass == 0 {
-            return Err(Error::Config(
-                "max_withdrawals_per_pass must be at least 1".into(),
-            ));
-        }
-        if self.log_block_range == 0 {
-            return Err(Error::Config("log_block_range must be at least 1".into()));
-        }
-        if self.routes.is_empty() {
-            return Err(Error::Config("routes must name at least one route".into()));
-        }
-        if self.chain_a.chain_id == 0 || self.chain_b.chain_id == 0 {
-            return Err(Error::Config("chain_id must not be zero".into()));
-        }
-        if self.chain_a.chain_id == self.chain_b.chain_id {
-            return Err(Error::Config(format!(
-                "both chains have chain_id {}",
-                self.chain_a.chain_id
-            )));
-        }
-        if self.chain_a.name == self.chain_b.name {
-            return Err(Error::Config("the two chains need different names".into()));
-        }
-        let vkey = self.prover.program_vkey_value()?;
-        if vkey == B256::ZERO {
-            return Err(Error::Config("prover.program_vkey is zero".into()));
-        }
-        if self.prover.backend == ProverBackend::Sp1 && self.prover.sp1_elf_path.is_none() {
-            return Err(Error::Config(
+        Ok(())
+    }
+
+    fn validate_prover(&self, prover: &ProverConfig) -> Result<()> {
+        prover.program_vkey_value()?;
+        match prover.backend {
+            ProverBackend::Sp1 if prover.sp1_elf_path.is_none() => Err(Error::Config(
                 "prover.sp1_elf_path is required for the sp1 backend".into(),
+            )),
+            ProverBackend::Sp1 => Ok(()),
+            ProverBackend::Remote => crate::remote::validate_remote_config(prover),
+            ProverBackend::Oracle => self.validate_oracle(prover),
+        }
+    }
+
+    /// The oracle backend signs for a development verifier. The file must name the variable that holds the key, and no
+    /// route may point at a chain that is not local: a real chain has a real verifier.
+    fn validate_oracle(&self, prover: &ProverConfig) -> Result<()> {
+        let variable = prover.oracle_key_env.as_deref().ok_or_else(|| {
+            Error::Config("prover.oracle_key_env is required for the oracle backend".into())
+        })?;
+        require_environment_name(variable, "prover.oracle_key_env")?;
+        let remote = self
+            .routes
+            .iter()
+            .find(|(_, route)| !is_loopback_url(&route.destination.rpc_url));
+        match remote {
+            Some((name, _)) => Err(Error::Config(format!(
+                "routes.{name}: the oracle backend works only for a destination on the local machine"
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    fn validate_handoff(&self) -> Result<()> {
+        let handoff = &self.handoff;
+        if handoff.targets.is_empty() {
+            return Err(Error::Config(
+                "handoff.targets must name at least one target".into(),
             ));
         }
-        if self.prover.backend == ProverBackend::Remote {
-            crate::remote::validate_remote_config(&self.prover)?;
+        if handoff.webhook_timeout_seconds == 0 || handoff.webhook_attempts == 0 {
+            return Err(Error::Config(
+                "handoff.webhook_timeout_seconds and handoff.webhook_attempts must be at least 1"
+                    .into(),
+            ));
         }
-        for chain in [&self.chain_a, &self.chain_b] {
-            Self::validate_chain(chain)?;
+        if let Some(variable) = &handoff.webhook_bearer_env {
+            require_environment_name(variable, "handoff.webhook_bearer_env")?;
         }
-        Ok(())
+        let Some(url) = &handoff.webhook_url else {
+            return Ok(());
+        };
+        if is_permitted_secret_url(url) {
+            return Ok(());
+        }
+        Err(Error::Config(
+            "handoff.webhook_url must start with https:// (http:// only for the local machine): the bearer token travels in the request".into(),
+        ))
     }
+}
 
-    fn validate_chain(chain: &ChainConfig) -> Result<()> {
-        let name = &chain.name;
-        if !(chain.rpc_url.starts_with("http://") || chain.rpc_url.starts_with("https://")) {
-            return Err(Error::Config(format!(
-                "{name}.rpc_url must start with http:// or https://"
-            )));
-        }
-        let vault = chain.vault_address()?;
-        let light_client = chain.light_client_address()?;
+fn validate_route(name: &str, route: &RouteConfig) -> Result<()> {
+    let (source, destination) = (&route.source, &route.destination);
+    let context = |message: String| Error::Config(format!("routes.{name}: {message}"));
+    if source.chain_id == 0 || destination.chain_id == 0 {
+        return Err(context("chain_id must not be zero".into()));
+    }
+    source
+        .chain_kind()
+        .map_err(|error| context(error.to_string()))?;
+    if !is_http_url(&source.beacon_url) {
+        return Err(context(
+            "source.beacon_url must start with http:// or https://".into(),
+        ));
+    }
+    if !is_http_url(&destination.rpc_url) {
+        return Err(context(
+            "destination.rpc_url must start with http:// or https://".into(),
+        ));
+    }
+    if source
+        .rpc_url
+        .as_deref()
+        .is_some_and(|url| !is_http_url(url))
+    {
+        return Err(context(
+            "source.rpc_url must start with http:// or https://".into(),
+        ));
+    }
+    if destination.log_block_range == 0 {
+        return Err(context(
+            "destination.log_block_range must be at least 1".into(),
+        ));
+    }
+    let light_client = destination
+        .light_client_address()
+        .map_err(|error| context(error.to_string()))?;
+    let vaults = [
+        source
+            .vault
+            .as_deref()
+            .map(|text| parse_address(text, "source.vault")),
+        destination
+            .vault
+            .as_deref()
+            .map(|text| parse_address(text, "destination.vault")),
+    ];
+    for vault in vaults.into_iter().flatten() {
+        let vault = vault.map_err(|error| context(error.to_string()))?;
         if vault == light_client {
-            return Err(Error::Config(format!(
-                "{name}: vault and light_client are the same address"
-            )));
+            return Err(context(
+                "a vault and the destination light client are the same address".into(),
+            ));
         }
-        if chain
-            .own_light_client_address()?
-            .is_some_and(|own| own == vault || own == light_client)
-        {
-            return Err(Error::Config(format!(
-                "{name}: own_light_client is the same address as the vault or the light_client"
-            )));
-        }
-        chain.chain_kind()?;
-        match chain.beacon.kind {
-            BeaconKind::Http => {
-                let url = chain.beacon.url.as_deref().unwrap_or("");
-                if !(url.starts_with("http://") || url.starts_with("https://")) {
-                    return Err(Error::Config(format!(
-                        "{name}.beacon.url is required for kind http"
-                    )));
-                }
-            }
-            BeaconKind::Dev => {
-                if chain.beacon.finality_depth.is_none() {
-                    return Err(Error::Config(format!(
-                        "{name}.beacon.finality_depth is required for kind dev"
-                    )));
-                }
-                if !is_loopback_url(&chain.rpc_url) {
-                    return Err(Error::Config(format!(
-                        "{name}: the dev beacon source works only on a local chain"
-                    )));
-                }
-            }
-        }
-        Ok(())
     }
+    Ok(())
+}
 
-    /// The chain that a route reads deposits from.
-    pub fn source_of(&self, route: RouteName) -> &ChainConfig {
-        match route {
-            RouteName::AToB => &self.chain_a,
-            RouteName::BToA => &self.chain_b,
-        }
-    }
-
-    /// The chain that a route withdraws on.
-    pub fn destination_of(&self, route: RouteName) -> &ChainConfig {
-        match route {
-            RouteName::AToB => &self.chain_b,
-            RouteName::BToA => &self.chain_a,
-        }
-    }
-
-    /// Whether every RPC URL is local. Only then may `--private-key-env` be used.
-    pub fn is_local_only(&self) -> bool {
-        is_loopback_url(&self.chain_a.rpc_url) && is_loopback_url(&self.chain_b.rpc_url)
-    }
+fn is_http_url(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://")
 }
 
 /// A complete configuration for tests.
 #[cfg(test)]
 pub(crate) const SAMPLE_FOR_TESTS: &str = r#"
-database_path = "prover.sqlite"
-
 [prover]
 backend = "oracle"
+oracle_key_env = "ORACLE_KEY"
 program_vkey = "0x0000000000000000000000000000000000000000000000000000000000001234"
 
-[signer]
-keystore = "keys/prover.json"
-password_file = "keys/prover.password"
-
-[chain_a]
-name = "ethereum"
-rpc_url = "https://rpc.example.org"
+[routes.ethereum_to_pulsechain.source]
 chain_id = 1
-vault = "0x1111111111111111111111111111111111111111"
-light_client = "0x2222222222222222222222222222222222222222"
-[chain_a.beacon]
-kind = "http"
-url = "https://beacon.example.org"
 chain = "ethereum"
+beacon_url = "https://beacon.example.org"
+rpc_url = "https://rpc.example.org"
+vault = "0x1111111111111111111111111111111111111111"
 
-[chain_b]
-name = "pulsechain"
-rpc_url = "https://rpc.example.net"
+[routes.ethereum_to_pulsechain.destination]
 chain_id = 369
-vault = "0x3333333333333333333333333333333333333333"
+rpc_url = "http://127.0.0.1:8546"
 light_client = "0x4444444444444444444444444444444444444444"
-[chain_b.beacon]
-kind = "http"
-url = "https://beacon.example.net"
-chain = "pulsechain"
+vault = "0x3333333333333333333333333333333333333333"
 "#;
 
 #[cfg(test)]
@@ -588,32 +661,80 @@ mod tests {
         None
     }
 
-    /// Claim: a complete file loads, and unset keys take their defaults.
+    /// Claim: a complete file loads, unset keys take their defaults, and the only route is found without a name.
     #[test]
     fn sample_loads_with_defaults() {
         let config = Config::load(SAMPLE, &no_environment).unwrap();
-        assert_eq!(config.poll_interval_seconds, 12);
-        assert_eq!(config.routes, vec![RouteName::AToB, RouteName::BToA]);
-        assert_eq!(config.destination_of(RouteName::AToB).chain_id, 369);
-        assert!(!config.is_local_only());
+        assert_eq!(config.handoff.targets, vec![HandoffTarget::Stdout]);
+        let (name, route) = config.route(None).unwrap();
+        assert_eq!(name, "ethereum_to_pulsechain");
+        assert_eq!(route.destination.log_block_range, 2_000);
+        assert_eq!(route.destination.start_block, 0);
+        assert_eq!(route.source.chain_kind().unwrap(), ChainKind::Ethereum);
+    }
+
+    /// Claim: the example file of the repository loads, and it has the route that the documentation names.
+    /// Why it matters: an example that does not load teaches the wrong keys.
+    #[test]
+    fn the_example_file_loads() {
+        let config = Config::load(include_str!("../prover.example.toml"), &no_environment).unwrap();
+        assert_eq!(
+            config.prover_config().unwrap().backend,
+            ProverBackend::Remote
+        );
+        let (name, route) = config.route(None).unwrap();
+        assert_eq!(name, "ethereum_to_pulsechain");
+        assert!(route.source.vault_address().is_ok());
+        assert!(route.destination.vault_address().is_ok());
+    }
+
+    /// Claim: with two routes, a missing or unknown name is a usage error that lists the names.
+    /// Why it matters: a guess would prove for the wrong light client.
+    #[test]
+    fn several_routes_need_a_name() {
+        let text = format!(
+            "{SAMPLE}
+[routes.pulsechain_to_ethereum.source]
+chain_id = 369
+chain = \"pulsechain\"
+beacon_url = \"https://beacon.example.net\"
+[routes.pulsechain_to_ethereum.destination]
+chain_id = 1
+rpc_url = \"http://127.0.0.1:8545\"
+light_client = \"0x2222222222222222222222222222222222222222\"
+"
+        );
+        let config = Config::load(&text, &no_environment).unwrap();
+        for name in [None, Some("missing")] {
+            let error = config.route(name).unwrap_err();
+            assert!(matches!(error, Error::Usage(_)), "{error}");
+            assert!(
+                error.to_string().contains("pulsechain_to_ethereum"),
+                "{error}"
+            );
+        }
+        assert!(config.route(Some("pulsechain_to_ethereum")).is_ok());
     }
 
     /// Claim: environment variables override file values, with the right type.
-    /// Why it matters: operators change URLs and ids without editing the file.
+    /// Why it matters: operators change URLs and limits without editing the file.
     #[test]
     fn environment_overrides_the_file() {
         let lookup = |name: &str| match name {
-            "ZK_BRIDGE_PROVER_CHAIN_B_RPC_URL" => Some("http://127.0.0.1:8546".to_string()),
-            "ZK_BRIDGE_PROVER_POLL_INTERVAL_SECONDS" => Some("3".to_string()),
-            "ZK_BRIDGE_PROVER_CHAIN_A_BEACON_FINALITY_DEPTH" => Some("4".to_string()),
+            "ZK_BRIDGE_PROVER_HANDOFF_WEBHOOK_URL" => {
+                Some("http://127.0.0.1:9000/proofs".to_string())
+            }
+            "ZK_BRIDGE_PROVER_HANDOFF_WEBHOOK_TIMEOUT_SECONDS" => Some("5".to_string()),
             _ => None,
         };
         let config = Config::load(SAMPLE, &lookup).unwrap();
-        assert_eq!(config.chain_b.rpc_url, "http://127.0.0.1:8546");
-        assert_eq!(config.poll_interval_seconds, 3);
-        assert_eq!(config.chain_a.beacon.finality_depth, Some(4));
+        assert_eq!(
+            config.handoff.webhook_url.as_deref(),
+            Some("http://127.0.0.1:9000/proofs")
+        );
+        assert_eq!(config.handoff.webhook_timeout_seconds, 5);
         let bad = |name: &str| {
-            (name == "ZK_BRIDGE_PROVER_POLL_INTERVAL_SECONDS").then(|| "soon".to_string())
+            (name == "ZK_BRIDGE_PROVER_HANDOFF_WEBHOOK_TIMEOUT_SECONDS").then(|| "soon".to_string())
         };
         assert!(Config::load(SAMPLE, &bad)
             .unwrap_err()
@@ -622,59 +743,78 @@ mod tests {
     }
 
     /// Claim: a secret in the file is refused, at any depth, whatever the letter case.
-    /// Why it matters: a configuration file is often committed or copied. It must never hold a key.
+    /// Why it matters: a configuration file is often committed or copied. It must never hold a key or a token.
     #[test]
     fn secrets_in_the_file_are_refused() {
         for line in [
             "private_key = \"0xabc\"",
             "Mnemonic = \"a b c\"",
-            "[signer.extra]\npassword = \"x\"",
+            "[handoff]\ntoken = \"x\"",
+            "[routes.ethereum_to_pulsechain.extra]\npassword = \"x\"",
         ] {
-            let text = SAMPLE.replace("[prover]", &format!("{line}\n[prover]"));
             let text = if line.starts_with('[') {
                 format!("{SAMPLE}\n{line}")
             } else {
-                text
+                format!("{line}\n{SAMPLE}")
             };
             let error = Config::load(&text, &no_environment).unwrap_err();
             assert!(matches!(error, Error::SecretHandling(_)), "{line}: {error}");
         }
     }
 
-    /// Claim: bad values are refused with the key named: equal chain ids, a zero address, a missing beacon URL,
-    /// a vault that equals the light client, an unknown key, and a dev beacon on a remote chain.
+    /// Claim: a variable name is checked, so a pasted secret in its place is refused and the error does not echo it.
     #[test]
-    fn invalid_values_are_refused() {
-        let cases = [
+    fn a_secret_cannot_stand_in_for_a_variable_name() {
+        let pasted = "rpa_0123456789abcdef";
+        for (from, to) in [
+            ("oracle_key_env = \"ORACLE_KEY\"", format!("oracle_key_env = \"{pasted}\"")),
             (
-                "chain_id = 369",
-                "chain_id = 1",
-                "both chains have chain_id",
+                "[routes.ethereum_to_pulsechain.source]",
+                format!("[handoff]\nwebhook_bearer_env = \"{pasted}\"\n[routes.ethereum_to_pulsechain.source]"),
             ),
+        ] {
+            let error = Config::load(&SAMPLE.replace(from, &to), &no_environment).unwrap_err();
+            assert!(
+                error.to_string().contains("NAME of an environment variable"),
+                "{error}"
+            );
+            assert!(!error.to_string().contains(pasted), "{error}");
+        }
+    }
+
+    /// Claim: bad route values are refused with the route and the key named: a zero address, a vault
+    /// that equals the light client, an unknown chain, a URL without a scheme, and an unknown key.
+    #[test]
+    fn invalid_route_values_are_refused() {
+        let cases = [
             (
                 "vault = \"0x3333333333333333333333333333333333333333\"",
                 "vault = \"0x0000000000000000000000000000000000000000\"",
                 "zero address",
             ),
             (
-                "url = \"https://beacon.example.net\"",
-                "",
-                "beacon.url is required",
-            ),
-            (
-                "light_client = \"0x4444444444444444444444444444444444444444\"",
-                "light_client = \"0x3333333333333333333333333333333333333333\"",
+                "vault = \"0x3333333333333333333333333333333333333333\"",
+                "vault = \"0x4444444444444444444444444444444444444444\"",
                 "same address",
             ),
             (
-                "backend = \"oracle\"",
-                "backend = \"oracle\"\nunknown_key = 1",
+                "chain = \"ethereum\"",
+                "chain = \"solana\"",
+                "unknown chain",
+            ),
+            (
+                "beacon_url = \"https://beacon.example.org\"",
+                "beacon_url = \"beacon.example.org\"",
+                "beacon_url must start with",
+            ),
+            (
+                "chain_id = 369",
+                "chain_id = 369\nunknown_key = 1",
                 "unknown field",
             ),
         ];
         for (from, to, expected) in cases {
-            let text = SAMPLE.replace(from, to);
-            let error = Config::load(&text, &no_environment)
+            let error = Config::load(&SAMPLE.replace(from, to), &no_environment)
                 .unwrap_err()
                 .to_string();
             assert!(
@@ -682,67 +822,53 @@ mod tests {
                 "expected `{expected}` in `{error}`"
             );
         }
-        let dev = SAMPLE.replace(
-            "kind = \"http\"\nurl = \"https://beacon.example.net\"",
-            "kind = \"dev\"\nfinality_depth = 2",
-        );
-        assert!(Config::load(&dev, &no_environment)
-            .unwrap_err()
-            .to_string()
-            .contains("only on a local chain"));
     }
 
-    /// Claim: the own-chain light client is optional, parses when set, and may not repeat the vault or the light
-    /// client. An environment variable can set it.
-    /// Why it matters: a repeated address would send light-client updates to the wrong contract.
+    /// Claim: a route whose source and destination are the same chain loads. That is the route of an own-chain light client,
+    /// which tracks the beacon chain of the chain that holds it.
     #[test]
-    fn own_light_client_is_optional_and_checked() {
-        let config = Config::load(SAMPLE, &no_environment).unwrap();
-        assert_eq!(config.chain_a.own_light_client_address().unwrap(), None);
-        let with_own = SAMPLE.replace(
-            "light_client = \"0x4444444444444444444444444444444444444444\"",
-            "light_client = \"0x4444444444444444444444444444444444444444\"\nown_light_client = \"0x5555555555555555555555555555555555555555\"",
-        );
-        let config = Config::load(&with_own, &no_environment).unwrap();
-        assert_eq!(
-            config.chain_b.own_light_client_address().unwrap(),
-            Some(Address::repeat_byte(0x55))
-        );
-        assert_eq!(config.chain_a.own_light_client_address().unwrap(), None);
-        let lookup = |name: &str| {
-            (name == "ZK_BRIDGE_PROVER_CHAIN_A_OWN_LIGHT_CLIENT")
-                .then(|| "0x6666666666666666666666666666666666666666".to_string())
-        };
-        let config = Config::load(SAMPLE, &lookup).unwrap();
-        assert_eq!(
-            config.chain_a.own_light_client_address().unwrap(),
-            Some(Address::repeat_byte(0x66))
-        );
-        for repeated in [
-            "0x3333333333333333333333333333333333333333",
-            "0x4444444444444444444444444444444444444444",
-        ] {
-            let text = with_own.replace("0x5555555555555555555555555555555555555555", repeated);
-            let error = Config::load(&text, &no_environment)
-                .unwrap_err()
-                .to_string();
-            assert!(
-                error.contains("own_light_client is the same address"),
-                "{error}"
-            );
-        }
-        let zero = with_own.replace(
-            "0x5555555555555555555555555555555555555555",
-            "0x0000000000000000000000000000000000000000",
-        );
-        assert!(Config::load(&zero, &no_environment)
+    fn a_route_may_stay_on_one_chain() {
+        let same = SAMPLE.replace("chain_id = 369", "chain_id = 1");
+        assert!(Config::load(&same, &no_environment).is_ok());
+    }
+
+    /// Claim: the oracle backend is refused when a route points at a destination that is not local, and it needs the name
+    /// of its key variable.
+    /// Why it matters: the oracle key signs proofs that only a development verifier accepts. A real chain must never trust it.
+    #[test]
+    fn the_oracle_backend_is_for_local_destinations_only() {
+        let remote = SAMPLE.replace("http://127.0.0.1:8546", "https://rpc.example.net");
+        let error = Config::load(&remote, &no_environment)
             .unwrap_err()
-            .to_string()
-            .contains("zero address"));
+            .to_string();
+        assert!(
+            error.contains("only for a destination on the local machine"),
+            "{error}"
+        );
+        let unnamed = SAMPLE.replace("oracle_key_env = \"ORACLE_KEY\"\n", "");
+        let error = Config::load(&unnamed, &no_environment)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("oracle_key_env is required"), "{error}");
+    }
+
+    /// Claim: the webhook URL must use https, except on the local machine, and the targets cannot be empty.
+    /// Why it matters: the bearer token travels in the request header.
+    #[test]
+    fn the_webhook_url_must_be_https_unless_it_is_local() {
+        let with = |extra: &str| format!("{extra}\n{SAMPLE}");
+        let plain = with("[handoff]\nwebhook_url = \"http://hooks.example.org/x\"");
+        assert!(Config::load(&plain, &no_environment).is_err());
+        let secure = with("[handoff]\nwebhook_url = \"https://hooks.example.org/x\"");
+        assert!(Config::load(&secure, &no_environment).is_ok());
+        let local = with("[handoff]\nwebhook_url = \"http://localhost:9000/x\"");
+        assert!(Config::load(&local, &no_environment).is_ok());
+        let empty = with("[handoff]\ntargets = []");
+        assert!(Config::load(&empty, &no_environment).is_err());
     }
 
     /// Claim: only loopback hosts count as local.
-    /// Why it matters: `--private-key-env` is allowed only when every endpoint is local.
+    /// Why it matters: the oracle backend and plain http webhooks are allowed only when every endpoint is local.
     #[test]
     fn loopback_detection() {
         for url in [

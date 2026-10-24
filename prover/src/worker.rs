@@ -192,13 +192,12 @@ impl Worker {
             Err(error @ Error::Config(_)) => return Answer::error(400, error),
             Err(error) => {
                 self.logger
-                    .error("prove_failed", None, &[("reason", error.to_string())]);
+                    .error("prove_failed", &[("reason", error.to_string())]);
                 return Answer::error(500, error);
             }
         };
         self.logger.info(
             "proved",
-            None,
             &[
                 ("program", job.kind.label().to_string()),
                 ("seconds", started.elapsed().as_secs().to_string()),
@@ -337,21 +336,16 @@ pub fn run(
                 loading_worker.set_ready(prover);
                 loading_logger.info(
                     "worker_ready",
-                    None,
                     &[("setup_seconds", started.elapsed().as_secs().to_string())],
                 );
             }
             Err(error) => {
-                loading_logger.error("worker_load_failed", None, &[("reason", error.to_string())]);
+                loading_logger.error("worker_load_failed", &[("reason", error.to_string())]);
                 std::process::exit(1);
             }
         }
     });
-    logger.info(
-        "worker_listening",
-        None,
-        &[("port", settings.port.to_string())],
-    );
+    logger.info("worker_listening", &[("port", settings.port.to_string())]);
     serve(worker, &server);
     Ok(())
 }

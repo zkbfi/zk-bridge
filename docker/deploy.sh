@@ -7,9 +7,10 @@
 #   3. Deploy a test token and the oracle verifier on each chain.
 #   4. Run script/hardened/DeployBridge.s.sol with a configuration made from docker/bridge.config.template.json.
 #   5. Put tokens in both vaults, so each vault can pay withdrawals.
-#   6. Write /state/deployment.json, /state/prover.toml, /state/route-health.toml and a keystore for the prover.
+#   6. Write /state/deployment.json.
 #
-# Both vaults start locked: they refuse deposits until the prover opens them (`prover-entry open`, see docs/local-network.md).
+# Both vaults start locked: they refuse deposits until a stateful server opens them with `openDeposits` (see the launch
+# sequence in docs/hardened-build-contract.md and docs/local-network.md).
 #
 # Every key comes from the public Anvil development mnemonic. Nothing here is secret.
 set -euo pipefail
@@ -21,8 +22,6 @@ MNEMONIC="${ANVIL_MNEMONIC:-test test test test test test test test test test te
 REPO="${REPO:-/repo}"
 # The beacon clock of both gates. Any time in the past works.
 GATE_GENESIS_TIME=1600000000
-# The keystore password. The keystore holds a public development key, so the password is not a secret.
-KEYSTORE_PASSWORD=local-network
 # The vault gets this many whole tokens at the start. Each completed withdrawal draws on the vault of its chain.
 VAULT_LIQUIDITY_TOKENS=1000000
 # The EIP-4788 contract: address and the genuine runtime code of the specification.
@@ -49,7 +48,7 @@ has_code() { [ "$(cast code "$1" --rpc-url "$2")" != "0x" ]; }
 recorded() { sed -n "/\"$2\"/,/}/s/.*\"$1\": \"\\(0x[0-9a-fA-F]*\\)\".*/\\1/p" "$STATE_DIR/deployment.json" | head -n 1; }
 
 DEPLOYER="$(cast wallet address --mnemonic "$MNEMONIC" --mnemonic-index 0)"
-PROVER_ACCOUNT="$(cast wallet address --mnemonic "$MNEMONIC" --mnemonic-index 1)"
+ORACLE_ACCOUNT="$(cast wallet address --mnemonic "$MNEMONIC" --mnemonic-index 1)"
 
 cast chain-id --rpc-url "$RPC_A" > /dev/null || fail "chain A does not answer at $RPC_A"
 cast chain-id --rpc-url "$RPC_B" > /dev/null || fail "chain B does not answer at $RPC_B"
@@ -72,8 +71,7 @@ if [ "$nonce_a" != 0 ] || [ "$nonce_b" != 0 ]; then
   fail "the chains are not fresh (deployer nonce $nonce_a on chain A, $nonce_b on chain B) and no matching deployment is recorded. Run: docker compose -f docker/compose.yaml down -v, then start again."
 fi
 # The chains are fresh. Remove what an earlier deployment on other chains left behind.
-rm -rf "$STATE_DIR/deployment.json" "$STATE_DIR/prover.toml" "$STATE_DIR/route-health.toml" \
-  "$STATE_DIR"/prover.sqlite* "$STATE_DIR/keys"
+rm -rf "$STATE_DIR/deployment.json"
 
 # Step 2: EIP-4788 on chain A.
 cast rpc anvil_setCode "$BEACON_ROOTS" "$BEACON_ROOTS_CODE" --rpc-url "$RPC_A" > /dev/null
@@ -86,9 +84,9 @@ start_block_b="$(cast block-number --rpc-url "$RPC_B")"
 cd "$REPO"
 TOKEN_A="$(create "$RPC_A" src/mocks/MockERC20.sol:MockERC20 "Token A" TKNA)"
 TOKEN_B="$(create "$RPC_B" src/mocks/MockERC20.sol:MockERC20 "Token B" TKNB)"
-# The oracle of the verifier is the prover account: the oracle backend signs light-client proofs with the prover key.
-VERIFIER_A="$(create "$RPC_A" src/mocks/OracleSP1Verifier.sol:OracleSP1Verifier "$PROVER_ACCOUNT")"
-VERIFIER_B="$(create "$RPC_B" src/mocks/OracleSP1Verifier.sol:OracleSP1Verifier "$PROVER_ACCOUNT")"
+# The oracle of the verifier is the second Anvil account: the oracle backend of the producer signs proofs with its key.
+VERIFIER_A="$(create "$RPC_A" src/mocks/OracleSP1Verifier.sol:OracleSP1Verifier "$ORACLE_ACCOUNT")"
+VERIFIER_B="$(create "$RPC_B" src/mocks/OracleSP1Verifier.sol:OracleSP1Verifier "$ORACLE_ACCOUNT")"
 for value in "$TOKEN_A" "$TOKEN_B" "$VERIFIER_A" "$VERIFIER_B"; do
   [ -n "$value" ] || fail "a contract did not deploy"
 done
@@ -134,7 +132,7 @@ LIGHT_CLIENT_B="$(compute_address "$DEPLOYER" "$NONCE_B")"
 GATE_B="$(compute_address "$DEPLOYER" $((NONCE_B + 1)))"
 VAULT_B="$(compute_address "$DEPLOYER" $((NONCE_B + 2)))"
 # A name is a hypothesis: read each relationship back from the chain. Each vault names the light client of the OTHER chain,
-# and starts locked: it refuses deposits until `prover-entry open` (the prover command `follow`) opens it.
+# and starts locked: it refuses deposits until a stateful server opens it with `openDeposits`.
 for pair in "$VAULT_A $RPC_A $LIGHT_CLIENT_A lightClient()(address)" "$VAULT_A $RPC_A $GATE_A depositGate()(address)" \
   "$VAULT_A $RPC_A $VAULT_B remoteVault()(address)" "$VAULT_B $RPC_B $LIGHT_CLIENT_B lightClient()(address)" \
   "$VAULT_B $RPC_B $GATE_B depositGate()(address)" "$VAULT_B $RPC_B $VAULT_A remoteVault()(address)" \
@@ -156,70 +154,19 @@ liquidity="${VAULT_LIQUIDITY_TOKENS}000000000000000000"
 cast send "$TOKEN_A" 'mint(address,uint256)' "$VAULT_A" "$liquidity" --rpc-url "$RPC_A" --unlocked --from "$DEPLOYER" > /dev/null
 cast send "$TOKEN_B" 'mint(address,uint256)' "$VAULT_B" "$liquidity" --rpc-url "$RPC_B" --unlocked --from "$DEPLOYER" > /dev/null
 
-# Step 6: the files for the other services.
-mkdir -p "$STATE_DIR/keys"
-cast wallet import prover --keystore-dir "$STATE_DIR/keys" --unsafe-password "$KEYSTORE_PASSWORD" \
-  --private-key "$(cast wallet private-key --mnemonic "$MNEMONIC" --mnemonic-index 1)" > /dev/null
-printf '%s' "$KEYSTORE_PASSWORD" > "$STATE_DIR/keys/prover.password"
-
-chain_json() { # name rpc chain_id token vault gate light_client
-  printf '    "name": "%s",\n    "rpc_url": "%s",\n    "chain_id": %s,\n    "token": "%s",\n    "vault": "%s",\n    "gate": "%s",\n    "light_client": "%s",\n    "gate_genesis_time": %s\n' \
-    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$GATE_GENESIS_TIME"
+# Step 6: the record for the other services.
+chain_json() { # name rpc chain_id token vault gate light_client start_block
+  printf '    "name": "%s",\n    "rpc_url": "%s",\n    "chain_id": %s,\n    "token": "%s",\n    "vault": "%s",\n    "gate": "%s",\n    "light_client": "%s",\n    "start_block": %s,\n    "gate_genesis_time": %s\n' \
+    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$GATE_GENESIS_TIME"
 }
 {
   printf '{\n  "chain_a": {\n'
-  chain_json chain-a "$RPC_A" 1 "$TOKEN_A" "$VAULT_A" "$GATE_A" "$LIGHT_CLIENT_A"
+  chain_json chain-a "$RPC_A" 1 "$TOKEN_A" "$VAULT_A" "$GATE_A" "$LIGHT_CLIENT_A" "$start_block_a"
   printf '  },\n  "chain_b": {\n'
-  chain_json chain-b "$RPC_B" 369 "$TOKEN_B" "$VAULT_B" "$GATE_B" "$LIGHT_CLIENT_B"
+  chain_json chain-b "$RPC_B" 369 "$TOKEN_B" "$VAULT_B" "$GATE_B" "$LIGHT_CLIENT_B" "$start_block_b"
   printf '  }\n}\n'
 } > "$STATE_DIR/deployment.json.partial"
 
-prover_config() { # beacon section for chain a, for chain b
-  cat <<TOML
-database_path = "$STATE_DIR/prover.sqlite"
-poll_interval_seconds = 3
-receipt_timeout_seconds = 30
-max_attempts = 5
-
-[signer]
-keystore = "$STATE_DIR/keys/prover"
-password_file = "$STATE_DIR/keys/prover.password"
-
-[prover]
-backend = "oracle"
-program_vkey = "$PROGRAM_VKEY"
-
-[chain_a]
-name = "chain-a"
-rpc_url = "$RPC_A"
-start_block = $start_block_a
-chain_id = 1
-vault = "$VAULT_A"
-light_client = "$LIGHT_CLIENT_A"
-[chain_a.beacon]
-chain = "pulsechain"
-$1
-
-[chain_b]
-name = "chain-b"
-rpc_url = "$RPC_B"
-start_block = $start_block_b
-chain_id = 369
-vault = "$VAULT_B"
-light_client = "$LIGHT_CLIENT_B"
-[chain_b.beacon]
-chain = "pulsechain"
-$2
-TOML
-}
-# The service reads the development beacon source. `route-health` needs a beacon API, so it reads the stub.
-prover_config 'kind = "dev"
-finality_depth = 2' 'kind = "dev"
-finality_depth = 2' > "$STATE_DIR/prover.toml"
-prover_config 'kind = "http"
-url = "http://127.0.0.1:29000/a"' 'kind = "http"
-url = "http://127.0.0.1:29000/b"' > "$STATE_DIR/route-health.toml"
-
 # The deployment file comes last: its presence tells the other services that the deployment is complete.
 mv "$STATE_DIR/deployment.json.partial" "$STATE_DIR/deployment.json"
-log "done. Next: docker compose -f docker/compose.yaml run --rm open, then docker compose -f docker/compose.yaml up -d prover bots"
+log "done. The record is $STATE_DIR/deployment.json"

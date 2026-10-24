@@ -1,22 +1,12 @@
-//! Where beacon data comes from.
+//! Where beacon data comes from: a standard beacon node, read by [`http::HttpBeaconSource`].
 //!
-//! One trait, two sources. [`http::HttpBeaconSource`] talks to a beacon node. [`dev::DevBeaconSource`] serves Anvil,
-//! which has no beacon chain: it treats an execution block as final once it lies a set number of blocks below the
-//! latest block, and it builds a synthetic beacon chain over the real execution blocks.
-//!
-//! The service asks the source five things. Which source blocks are final. What the next light-client update must be
-//! for a deposit. What the next update must be to follow the newest final header, with no deposit in view (the
-//! own-chain light client). What the beacon part of a withdrawal looks like. What evidence the vault needs for its
-//! layout rows.
+//! The source answers three questions. What update folds the light client from its stored head to the newest final
+//! header of the source chain. What the beacon part of a withdrawal looks like. What evidence the destination vault
+//! needs for its layout rows.
 
-#[cfg(feature = "dev-source")]
-pub mod dev;
 pub mod http;
 
-use crate::chain::ExecutionReader;
-use crate::error::Result;
-use crate::light_client::{BeaconHeader, BeaconPath, ChainKind};
-use crate::prover::ProofStatement;
+use crate::light_client::{BeaconHeader, UpdateInput};
 use alloy_primitives::B256;
 
 /// The block of a deposit, as the source chain reports it.
@@ -30,36 +20,26 @@ pub struct DepositBlock {
     pub timestamp: u64,
 }
 
-/// What the destination light client holds, as the service read it.
+/// The head that a light client stores: where an update starts, or which header anchors a withdrawal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LightClientState {
+pub struct StoredHead {
     /// The slot of the head.
-    pub head_slot: u64,
+    pub slot: u64,
     /// The header root stored for the head.
-    pub head_root: B256,
-    /// The execution block hash stored for the head.
-    pub head_execution_hash: B256,
-    /// The genesis validators root of the tracked chain.
-    pub genesis_validators_root: B256,
-    /// Slots per sync committee period.
-    pub slots_per_period: u64,
-    /// The committee hash stored for the period of the head.
-    pub head_committee_hash: B256,
-    /// The committee hash stored for the period after the head, or zero.
+    pub root: B256,
+    /// The committee hash stored for the period after the head, or zero when the light client holds none. An update
+    /// from this head must carry the next committee exactly when this hash is not zero.
     pub next_committee_hash: B256,
 }
 
-/// The answer to "what must the light client do for this deposit", or "what must it do to follow the chain".
+/// A fold that moves a light client from its stored head toward the newest final header.
 #[derive(Clone, Debug)]
-pub enum UpdatePlan {
-    /// The light client already holds a header that covers the deposit block. Without a deposit in view, its head
-    /// already is the newest final header.
-    Covered,
-    /// The source has no final header that covers the deposit block yet. Wait.
-    NotYetFinal,
-    /// Submit this statement: a fold of one or more updates, which moves the head across as many sync committee
-    /// periods as one proof can. Afterwards ask again.
-    Update(Box<ProofStatement>),
+pub struct UpdatePlan {
+    /// The store and the updates that the light-client program reads. The updates number 1 to 64.
+    pub input: UpdateInput,
+    /// The slot of the newest final header that the beacon node reported. The fold ends there unless the head lags by
+    /// more than one fold can cover. Then the new head is lower, and a second run continues.
+    pub latest_finalized_slot: u64,
 }
 
 /// Evidence for `BridgeVault.addBlockRootsLayout`.
@@ -101,71 +81,4 @@ pub struct HistoricalEvidence {
     pub earlier_slot: u64,
     /// Branch from the stored root at `earlier_slot` to the anchor state root.
     pub branch: Vec<B256>,
-}
-
-/// A source of beacon data for one source chain.
-pub trait BeaconSource: Send + Sync {
-    /// The name that logs show.
-    fn name(&self) -> &'static str;
-
-    /// The `lc-core` chain configuration that applies to this source.
-    fn chain_kind(&self) -> ChainKind;
-
-    /// The highest source block that counts as final, or `None` when there is none yet.
-    ///
-    /// A real chain answers with its `finalized` tag. The development source answers with a depth rule.
-    fn finalized_execution_block(&self, source: &dyn ExecutionReader) -> Result<Option<u64>>;
-
-    /// What the light client must do next for a deposit.
-    fn next_update(
-        &self,
-        deposit: &DepositBlock,
-        light_client: &LightClientState,
-        stored_slots: &[u64],
-        source: &dyn ExecutionReader,
-    ) -> Result<UpdatePlan>;
-
-    /// What the light client must do next to follow the newest final header of the source chain, with no deposit in
-    /// view. `Covered` means the head already is the newest final header. `NotYetFinal` means the source has none.
-    fn next_head_update(
-        &self,
-        light_client: &LightClientState,
-        source: &dyn ExecutionReader,
-    ) -> Result<UpdatePlan>;
-
-    /// The beacon part of the withdrawal for a deposit block.
-    fn withdrawal_path(
-        &self,
-        deposit: &DepositBlock,
-        light_client: &LightClientState,
-        stored_slots: &[u64],
-        source: &dyn ExecutionReader,
-    ) -> Result<BeaconPath>;
-
-    /// Evidence for a `block_roots` layout row that covers `anchor_slot`, or `None` when the stored headers do not
-    /// yet allow it.
-    fn roots_layout_evidence(
-        &self,
-        anchor: &BeaconHeader,
-        stored_slots: &[u64],
-        source: &dyn ExecutionReader,
-    ) -> Result<Option<RootsEvidence>>;
-
-    /// Evidence for a `historical_summaries` layout row that covers `anchor.slot`, or `None` when the stored headers
-    /// do not yet allow it (no stored slot lies in a completed era more than 8192 slots below the anchor).
-    fn historical_layout_evidence(
-        &self,
-        anchor: &BeaconHeader,
-        stored_slots: &[u64],
-        source: &dyn ExecutionReader,
-    ) -> Result<Option<HistoricalEvidence>>;
-
-    /// Evidence for a block hash layout row from the stored header with the highest slot at or below `at_or_below`,
-    /// or `None` when no stored header qualifies.
-    fn hash_layout_evidence(
-        &self,
-        at_or_below: u64,
-        stored_slots: &[u64],
-        source: &dyn ExecutionReader,
-    ) -> Result<Option<HashEvidence>>;
 }

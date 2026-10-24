@@ -1,5 +1,7 @@
 # Local attack report
 
+**Note (2026-10-24):** the attack scripts, the program `attack-evidence` and the local network with bots, which this report describes, live on the branch `archive/full-relayer`. They need the relayer and the bots, which the repository no longer holds. The report stays as a record of the run of 2026-10-23.
+
 This report lists every attack that I ran against the local two-chain bridge of `docs/local-network.md`. The bots ran in the background. They paused only while a script needed an empty prover queue.
 
 Result words: **BLOCKED** means the contract or the prover refused the attack. **SUCCEEDED** means the attack did what the attacker wanted, or the check did not fire. Each SUCCEEDED line is explained in the section "Items that succeeded".

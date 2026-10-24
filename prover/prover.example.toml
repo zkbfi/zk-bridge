@@ -1,69 +1,53 @@
 # Example configuration for zk-bridge-prover. Copy it, edit it, and pass it with --config.
-# The file never holds a secret. Environment overrides: ZK_BRIDGE_PROVER_<KEY PATH IN CAPITALS>,
-# for example ZK_BRIDGE_PROVER_CHAIN_A_RPC_URL.
+# The file never holds a secret. Where a command needs one, the file names the environment variable that holds it.
+# Environment overrides for [prover] and [handoff]: ZK_BRIDGE_PROVER_<KEY PATH IN CAPITALS>,
+# for example ZK_BRIDGE_PROVER_PROVER_REMOTE_URL or ZK_BRIDGE_PROVER_HANDOFF_WEBHOOK_URL.
 
-database_path = "prover.sqlite"
-poll_interval_seconds = 12
-receipt_timeout_seconds = 60
-max_attempts = 5
-max_withdrawals_per_pass = 32   # withdrawals built and sent per route in one pass
-log_block_range = 2000
-# routes = ["a_to_b", "b_to_a"]   # default: both directions
-
-# A Foundry keystore (made with `cast wallet import`) and a file that holds its password.
-[signer]
-keystore = "keys/prover-keystore.json"
-password_file = "keys/prover.password"
-
-# Optional. The oracle backend signs light-client proofs with this key. Default: the signer above.
-# [oracle]
-# keystore = "keys/oracle-keystore.json"
-# password_file = "keys/oracle.password"
-
+# The proving backend. The `prove` command needs this section. The `evidence` command does not.
 [prover]
-backend = "oracle"          # "sp1" needs a build with the cargo feature `sp1` (docs/server-prover.md); "remote" needs none (docs/gpu-prover.md)
-# sp1_elf_path = "/elf/light-client.elf"                  # backend "sp1": the light-client guest program
-# sp1_observation_elf_path = "/elf/fork-observation.elf"  # backend "sp1": the fork observation guest program
+backend = "remote"          # "sp1" needs a build with the cargo feature `sp1` (docs/server-prover.md); "remote" needs none (docs/gpu-prover.md)
+# Optional for a route: the command reads the key from the light client and refuses a file key that differs from it.
+# Needed for a run that starts from an explicit head, unless the command line gives --program-vkey.
+# program_vkey = "0x..."
 # backend "remote" sends proof jobs to a GPU worker (docs/gpu-prover.md). The API key is read from the environment variable that
 # remote_api_key_env names. It never goes in this file.
-# remote_url = "https://REPLACE"
-# remote_api_key_env = "RUNPOD_API_KEY"
+remote_url = "https://REPLACE"
+remote_api_key_env = "RUNPOD_API_KEY"
 # remote_timeout_seconds = 900
 # remote_attempts = 4
 # remote_retry_delay_seconds = 10
-program_vkey = "0x0000000000000000000000000000000000000000000000000000000000000000"  # REPLACE: must equal programVKey() of both light clients
+# backend "sp1" proves on the local processor:
+# sp1_elf_path = "/elf/light-client.elf"                  # the light-client guest program
+# sp1_observation_elf_path = "/elf/fork-observation.elf"  # the fork observation guest program (optional)
+# backend "oracle" is for local development: it signs for a development verifier. It refuses a route whose destination
+# is not on the local machine.
+# oracle_key_env = "ORACLE_KEY"
 
-# Chain A. Its light client tracks chain B's beacon chain. Its [beacon] section describes chain A's own beacon chain.
-[chain_a]
-name = "ethereum"
-rpc_url = "https://REPLACE"
-start_block = 0             # the block where the contracts were deployed
+# Where `prove` puts its result. The default is standard output only.
+[handoff]
+targets = ["stdout"]        # "stdout", "webhook", or both. `prove --to <target>` replaces this list for one run.
+# The webhook gets one POST of the result. The URL must use https (http only on the local machine).
+# webhook_url = "https://REPLACE"
+# The token is optional. Name the variable that holds it. Without it the POST carries no Authorization header.
+# webhook_bearer_env = "PROOF_WEBHOOK_TOKEN"
+# webhook_timeout_seconds = 30
+# webhook_attempts = 3
+# webhook_retry_delay_seconds = 5
+
+# One route is one direction. The light client on the destination chain tracks the beacon chain of the source chain.
+[routes.ethereum_to_pulsechain.source]
 chain_id = 1
-vault = "0x0000000000000000000000000000000000000001"          # REPLACE
-light_client = "0x0000000000000000000000000000000000000002"   # REPLACE
-[chain_a.beacon]
-kind = "http"
-url = "https://REPLACE"
-chain = "ethereum"
-
-[chain_b]
-name = "pulsechain"
+chain = "ethereum"           # "ethereum" or "pulsechain": which fork table and chain specification the beacon chain uses
+beacon_url = "https://REPLACE"
+# The `evidence` command also needs the execution endpoint and the vault of the source chain.
 rpc_url = "https://REPLACE"
-start_block = 0
-chain_id = 369
-vault = "0x0000000000000000000000000000000000000003"          # REPLACE
-light_client = "0x0000000000000000000000000000000000000004"   # REPLACE
-# Optional. The light client of THIS chain's own beacon chain, deployed on this chain (PulseChain: the one that its
-# fork registry reads). When set, every pass sends it one update toward the newest final header. It needs a signer.
-# own_light_client = "0x0000000000000000000000000000000000000005"
-[chain_b.beacon]
-kind = "http"
-url = "https://REPLACE"
-chain = "pulsechain"
+vault = "0x0000000000000000000000000000000000000001"          # REPLACE
 
-# For a local Anvil chain, use a dev beacon and run with --private-key-env NAME:
-# [chain_a.beacon]
-# kind = "dev"
-# chain = "pulsechain"
-# finality_depth = 2
-# slot_offset = 1024        # above the light-client checkpoint slot, after the Capella fork
+[routes.ethereum_to_pulsechain.destination]
+chain_id = 369
+rpc_url = "https://REPLACE"
+light_client = "0x0000000000000000000000000000000000000002"   # REPLACE
+# The `evidence` command also needs the vault of the destination chain, and where to scan for stored heads.
+vault = "0x0000000000000000000000000000000000000003"          # REPLACE
+start_block = 0              # the block where the light client was deployed
+# log_block_range = 2000     # the largest block range of one eth_getLogs call

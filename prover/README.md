@@ -1,209 +1,206 @@
 # prover
 
-The prover service of the hardened bridge. It keeps the bridge moving and holds no trusted role: the contracts
-check everything it sends. Build contract: `docs/hardened-build-contract.md`, section "Prover service".
+The proof producer of the hardened bridge. It makes proofs and hands them to other servers. Those servers store the proofs and send them to the chains.
+
+The producer keeps no state. It has no database, no wallet, no keystore and no transaction code. It holds no trusted role: the contracts check everything that a server sends. Anyone can run it.
+
+The producer once was a full relayer. That version watched deposits, kept a database and sent every transaction. It lives on the branch `archive/full-relayer`. This crate is the part that makes proofs.
+
+Build contract: `docs/hardened-build-contract.md`, section "Prover service".
 
 ```
-cargo build --release --no-default-features   # production build: no test crate, no development beacon source
-cargo build --release                          # adds the development beacon source for Anvil (cargo feature dev-source)
-zk-bridge-prover --config prover.toml once                      # one pass, then exit
-zk-bridge-prover --config prover.toml run                       # loop
-zk-bridge-prover --config prover.toml follow --rounds 2         # store heads with no deposit in view, open the vaults, then exit (code 2: a vault is still locked)
-zk-bridge-prover --config prover.toml status                    # print every deposit and its state
-zk-bridge-prover --config prover.toml withdraw --tx <hash> --log-index <n>   # n = index inside the receipt
-zk-bridge-prover --config prover.toml retry --tx <hash> --log-index <n>      # send a failed deposit back to the start
-zk-bridge-prover --config prover.toml --private-key-env NAME once            # local Anvil only
+cargo build --release --no-default-features    # production build: no test crate, no signed beacon chain
+cargo build --release                           # adds the signed beacon chain that the tests use
+zk-bridge-prover --config prover.toml prove                              # one proof, from the head that the light client stores
+zk-bridge-prover --config prover.toml prove --route <name> --to webhook  # choose the route and the handoff target
+zk-bridge-prover --config prover.toml evidence --tx <hash> --log-index <n>   # the evidence that withdraws one deposit
 ```
 
-The command line never takes a key. Use a Foundry keystore and a password file (see `prover.example.toml`).
+The command line never takes a key. A secret lives in an environment variable, and the configuration names the variable (see `prover.example.toml`).
 
-Deposit states: `seen`, `awaiting_finality`, `light_client_updated`, `proven`, `submitted`, `confirmed`, `failed`.
-`proven` means the service built the withdrawal and `lc-core` verified it natively. A withdrawal needs no proof.
-Only light-client updates are proven.
+## The `prove` command
 
-## Bursts of deposits
+One run makes at most one proof of one light-client update. The steps are these.
 
-Each pass works on all live deposits of a route in four stages. The stages keep a burst of deposits cheap.
+1. The command reads where the update starts. With a route, it reads the head, the committee hashes and the program key from the destination light client. With `--head-slot` and `--head-root`, it takes the head from the command line and reads nothing from the destination chain.
+2. It fetches the updates from that head to the newest final header of the source beacon chain. One fold holds up to 64 updates. A light client that lags by more periods gets a fold that ends below the newest header. The next run continues from the new head.
+3. It runs the light-client program natively with `lc-core`. A fold that the program refuses ends the run with an error.
+4. It checks that the native run starts exactly at the starting head. It checks the slot, the header root and the next committee hash. With a route, it also checks the genesis validators root and the committee hash of the head period.
+5. It asks the backend for the proof.
+6. It checks the answer. The public values must equal the native public values. The proof must have the shape of its backend. A real proof must verify under the program key with the crate `sp1-verifier`, whatever backend made it.
+7. It hands the result off.
 
-1. Light-client update. The service asks for the update for the oldest deposit, then for the newest. One update covers
-   every deposit at or below its head, so it sends one update per route per pass when a deposit needs it. The oldest
-   deposit goes first because the vault layout rows need a stored header near the oldest deposit.
-2. Build. The service builds and checks the withdrawal of each covered deposit.
-3. Send. The service sends the withdrawals back to back. It does not wait for a receipt, so the transactions use
-   consecutive nonces and share blocks. The flow-limiter simulation, the check for an already claimed nonce and the
-   count of attempts still run for each deposit.
-4. Confirm. The service waits for the receipts.
+### Input
 
-A failure of one deposit costs that deposit one attempt. The other deposits go on. Before a transaction is sent, the
-service records nothing. After it is sent, the service records the hash and the state `submitted` at once. A crash
-between the two steps leaves the deposit `proven`. The next pass finds the nonce claimed, or sends it again.
+| Input | Flags |
+|---|---|
+| A route of the configuration file | `--route <name>`. The flag is optional when the file has exactly one route. |
+| An explicit head on a route | `--route <name> --head-slot <n> --head-root <hash> [--next-committee-hash <hash>] [--program-vkey <hash>]` |
+| An explicit head with no route | `--beacon-url <url> --chain <ethereum\|pulsechain> --head-slot <n> --head-root <hash> [--next-committee-hash <hash>] [--program-vkey <hash>]` |
 
-`max_withdrawals_per_pass` (default 32) limits how many withdrawals a route builds and how many it sends in one pass.
-A larger burst takes more passes. The update is still sent once.
+An explicit head needs a program key. Pass `--program-vkey`, or set `prover.program_vkey` in the file. With a route and no explicit head, the key comes from the light client. A key in the file that differs from the contract key stops the run.
 
-## Retry of a failed deposit
+The next committee hash is zero when the light client holds no next committee. The flag defaults to zero. A value that the beacon state does not match stops the run before any proof, because the contract compares that hash.
 
-A deposit in the state `failed` does not move by itself. Use `retry` when the cause is gone, for example when a
-reverted chain removed a light-client update and the update was sent again.
+### Backends
+
+| Backend | What it does | Build |
+|---|---|---|
+| `remote` | Sends the job to a worker on a GPU host, for example a RunPod endpoint. See `docs/gpu-prover.md`. | Default build |
+| `sp1` | Proves on the local processor. See `docs/server-prover.md`. | Cargo feature `sp1` or `sp1-native-gnark` |
+| `oracle` | Signs for a development verifier. For tests and local chains. It refuses a route whose destination is not on the local machine. | Default build |
+
+### Handoff
+
+The result is one JSON object. The command prints it on standard output, posts it to a webhook, or does both. The file sets the targets (`handoff.targets`), and `--to stdout` and `--to webhook` replace them for one run.
+
+- Standard output carries the object on one line and nothing else. Logs go to standard error.
+- The webhook gets one `POST` with `Content-Type: application/json`. The User-Agent is `zk-bridge-prover`. The URL must use https, or http on the local machine.
+- The bearer token is optional. The file sets `handoff.webhook_bearer_env` to the name of the variable that holds it. The command reads the variable at the start of the run. The token never enters a file or a log line.
+- A transport error or a status of 408, 429 or 5xx is retried (`webhook_attempts`, default 3). Another 4xx status is final.
+- With both targets, standard output comes first. A failed webhook then does not lose the proof. A proof is costly, so choose both targets when you cannot afford to lose one.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | A proof was made and handed off. |
+| 3 | The starting head already is the newest final header. There is nothing to prove, and nothing is printed on standard output. |
+| 1 | An error. The message is on standard error. |
+
+A server that follows a lagging light client runs `prove` in a loop. It sends the proof of each run, and it stops when the command exits with code 3.
+
+### The proof package
+
+All hashes and byte strings are `0x` hex. Slots are JSON numbers. The version of the shape is `schemaVersion`. A change that removes or renames a key raises it. Long values are shortened here.
+
+```json
+{
+  "schemaVersion": 1,
+  "route": "ethereum_to_pulsechain",
+  "programKey": "0x9999999999999999999999999999999999999999999999999999999999999999",
+  "startHeadSlot": 10862664,
+  "startHeadRoot": "0xbdc75227ae298ff4dcbd00460c3c294bd3eb55f282c7960c46125460ec9dbf90",
+  "newHeadSlot": 10862670,
+  "newHeadRoot": "0x313b8af758c40110a27481fc782d1bbd5efccb167d52806d93afb4d61ae4a061",
+  "latestFinalizedSlot": 10862670,
+  "publicValues": "0x3357ba0018a2…",
+  "proof": "0xf49023cdbecf…",
+  "updateCalldata": "0x3f37dce20000…",
+  "backend": "oracle",
+  "destination": {
+    "chainId": 369,
+    "lightClient": "0x4444444444444444444444444444444444444444"
+  },
+  "createdAt": "2026-10-24T09:30:00Z"
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `route` | The route name, or `explicit-head` when the command line gave the head and no route. |
+| `programKey` | The program key that the proof is for. The light client stores the same key as `programVKey`. |
+| `startHeadSlot`, `startHeadRoot` | The head where the update starts. The light client must still hold it as its head when the server sends the proof. |
+| `newHeadSlot`, `newHeadRoot` | The head after the update. |
+| `latestFinalizedSlot` | The newest final slot that the beacon node reported. When it is above `newHeadSlot`, run `prove` again after the update. |
+| `publicValues` | The ABI encoding of `LightClientOutput`. |
+| `proof` | The proof bytes that the verifier contract reads. |
+| `updateCalldata` | The calldata of `BeaconLightClient.update(proof, publicValues)`. Send it to `destination.lightClient`. |
+| `backend` | The backend that made the proof. |
+| `destination` | The chain identifier and the light client address. The key is absent when the command line gave the head and no route. |
+| `createdAt` | When the proof was made, as a time in UTC, such as `2026-10-24T09:30:00Z`. |
+
+A proof stays valid until the light client head moves. After another update, the stored head differs from `startHeadSlot`, and the contract refuses the proof. A server should discard such a proof and run `prove` again.
+
+## The `evidence` command
+
+A withdrawal needs no zero-knowledge proof. The destination vault checks the evidence itself. The `evidence` command builds that evidence for one deposit and prints it. It sends nothing. A server sends the calls.
 
 ```
-zk-bridge-prover --config prover.toml retry --tx <hash> --log-index <n>   # the same pair as `withdraw`
+zk-bridge-prover --config prover.toml evidence --tx <hash> --log-index <n> [--route <name>] [--anchor-slot <n>]
 ```
 
-`retry` finds the deposit by the hash of its source transaction and its log index. These are stored with the deposit,
-so `retry` needs no chain read for that. It then does one of three things.
+The deposit is the log at index `n` in the receipt of the source transaction. The index counts inside the receipt, not inside the block. The anchor is the head of the destination light client, or the stored header at `--anchor-slot`.
 
-- The deposit is not `failed`: `retry` refuses and changes nothing.
-- The vault already paid the nonce: the deposit becomes `confirmed`.
-- Otherwise the deposit goes back to `seen`. The attempt count is zero. The stored calldata and transaction hash are
-  cleared, so the next pass builds the withdrawal again. The note keeps the reason of the failure.
+The command reads two execution chains, the beacon node of the source chain and the destination light client. Then it checks its own work:
 
-## Storing heads and opening the vaults before the first deposit
+- The destination vault names the source vault, the source chain, its own chain and the light client as the file says. The command reads each relation from the vault.
+- The log comes from the source vault, is a `DepositInitiated` event, and names the destination vault and chain of the route.
+- The evidence passes the vault checks, which `lc-core` runs natively against the anchor root that the light client stores.
+- The deposit that the evidence proves equals the deposit in the log.
 
-A vault pays a deposit only when the light client on the other chain has stored a header at or below the slot of the
-deposit: the block hash layout row of the vault needs a stored header with an execution block hash as evidence, and a
-row covers only the slots from its first evidence slot. The initial checkpoint does not count, because the constructor
-stores no execution block hash for it. The block roots row needs two stored headers below the anchor, and the service
-counts only the headers that the events `HeadUpdated` name. The updates that the first deposits cause finalize a head
-after those deposits. So a deposit that arrives before the first update can never be paid, and the first withdrawal of a
-route waits for three updates.
+The result is one JSON object. Long values are shortened here.
 
-The vault cannot read the light client on the other chain, so it locks instead. A new vault is LOCKED: every deposit
-reverts with `DepositsNotOpen()` before the vault takes a token. `openDeposits` opens it for good, and anyone may call it.
-Its proof says: the light client of the vault itself (which tracks the other chain) stored a finalized block of the other
-chain, and in that block the remote light client holds a non-zero `executionBlockHashes` entry. Only `update` writes that
-entry, so the remote light client stored a head. The proof is a real `eth_getProof` proof of the state of the remote chain.
-The module `src/opening.rs` builds it, simulates `openDeposits`, and sends it only when the simulation passes. The node of
-the remote chain must serve `eth_getProof` and `eth_call` for a past block number (the block that the vault light client
-stored). Anvil does. A pruned node does not.
+```json
+{
+  "schemaVersion": 1,
+  "route": "ethereum_to_pulsechain",
+  "sourceTransactionHash": "0xabab…",
+  "logIndex": 1,
+  "deposit": {
+    "nonce": "0x7474…",
+    "token": "0x7171…",
+    "sender": "0x7272…",
+    "recipient": "0x7373…",
+    "amount": "1500000000000000000",
+    "sourceBlockNumber": 15,
+    "sourceBlockHash": "0x847b…",
+    "depositSlot": 10862670
+  },
+  "destination": { "chainId": 369, "vault": "0xb2b2…", "lightClient": "0xb3b3…" },
+  "anchor": { "slot": 10862679, "root": "0xc7a5…" },
+  "alreadyClaimed": false,
+  "withdraw": { "to": "0xb2b2…", "data": "0x30568d83…" },
+  "prerequisites": [
+    {
+      "function": "addBlockHashLayout",
+      "reason": "no validated block hash row covers the deposit slot 10862670; this call uses the stored header at slot 10862664",
+      "to": "0xb2b2…",
+      "data": "0x…"
+    }
+  ],
+  "createdAt": "2026-10-24T09:31:00Z"
+}
+```
 
-`follow` does both jobs. First it moves the light client of each route toward the newest final header with no deposit in
-view (`--rounds` is the most updates for each route, and a route stops early when its head is current). Then, after every
-route was followed, it tries to open the source vault of each route and prints one line for each route:
+The vault needs a validated layout row for each generalized index that the evidence uses. Anyone may add a row, and the chain validates it. `prerequisites` lists the calls that add the missing rows, in the order to send them. The list is empty when the vault has every row.
 
-- `route a_to_b: deposits open`: the vault was open already.
-- `route a_to_b: deposits opened (transaction 0x...)`: this run opened the vault.
-- `route a_to_b: deposits locked: <reason>`: no proof can open the vault yet. The run sent no opening transaction.
+The calls for one function are alternatives. After each call, read the layout views of the vault again, and skip the rest once a row covers the slot. The block hash row has up to two calls: one from the stored header at or below the deposit slot, and one from the stored header at or below the anchor.
 
-The exit code is 0 when every route is open, and 2 when a route is still locked. A locked vault is no error, so the
-updates of the run stand. The signer pays for the opening on the SOURCE chain, so the key needs gas on both chains.
-
-The order after a deployment: run `follow` on both routes, and repeat until every route reports open. The reverse route
-needs a block that finalized after the first update of the light client, so the first run leaves both vaults locked and
-the second run opens them (the Anvil tests need two runs and a few blocks between them, see `tests/common/bridge.rs`).
-With one configuration for each route (one proof for each process), run the two routes in turn. Start the bots and the
-deposits only after both routes report open. `route-health` shows the same state as `LOCKED`.
-`docs/end-to-end-real-proofs.md` shows the effect.
-
-## Own-chain light client
-
-A chain whose deposit gate runs in registry mode (PulseChain) has a second light client: one of its OWN beacon chain,
-deployed on that chain. The fork registry reads it for freshness and for the start of an observation. Set its address
-as `own_light_client` in the section of that chain. Each pass of `once` and `run` then sends it one proof toward the
-newest final header of that chain, built from the same beacon source that the route already reads for the other
-direction. A failed update is logged (`own_light_client_update_failed`) and never stops a deposit. At startup the
-service checks that the contract runs the configured program and follows the same beacon chain (same genesis
-validators root) as the light client on the other chain.
+When the light client stored too few heads to validate a row, the command stops with an error that says what is missing. Wait for more updates, then run it again. When `alreadyClaimed` is true, the vault paid the deposit already, and the withdrawal would revert.
 
 ## Catching up a light client that lags
 
-One update moves a light client across at most one sync committee period. The HTTP beacon source therefore builds a
-fold. It reads the committee handoff update of each period from the head period of the light client to the present
-(`/eth/v1/beacon/light_client/updates?start_period=&count=`, paged, because a node returns at most a count of its own
-choice), adds the latest finality update, and sends all of them as one proof. This holds for the light clients of both
-directions and for the own-chain light client. The program takes 64 updates in one fold, so a light client more than 64
-periods behind needs successive proofs on successive passes. When the light client already holds a next committee, the
-store of the proof carries it, read from the beacon state of the head (the contract compares its hash). The Anvil
-source (`beacon.kind = "dev"`) asserts its output and always needs one proof.
+One update moves a light client across at most one sync committee period. The beacon source therefore builds a fold. It reads the committee handoff update of each period from the head period of the light client to the present (`/eth/v1/beacon/light_client/updates?start_period=&count=`, paged, because a node returns at most a count of its own choice). It adds the latest finality update and proves all of them as one fold. When the light client already holds a next committee, the store of the proof carries it, read from the beacon state of the head. The contract compares its hash.
 
-A beacon node that pruned the update of a needed period cannot serve the catch-up. The error names the period and asks
-for a node with a longer history of light-client updates. `route-health` probes for this gap on the destination light
-client and on the own-chain light client, and gives `WARN` that names the period.
+A node that pruned the update of a needed period cannot serve the catch-up. The error names the period and asks for a node with a longer history of light-client updates.
+
+## Old deposits
+
+The vault takes `state.block_roots` of the anchor for a deposit up to 8192 slots below it, and `state.historical_summaries` beyond that. The evidence builder builds either branch with `lc-core`. For an old deposit, it rebuilds the 8192 block roots of the deposit era from the canonical block roots of the node (`/eth/v1/beacon/blocks/<slot>/root`). It never reads them from an old state. The node must still serve the state of the anchor, so anchor at the newest stored head.
 
 ## Tests
 
 ```
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo test --offline
+cargo clippy --offline --all-targets --all-features -- -D warnings
 scripts/check-crate-ages.sh        # every locked crate was published on or before 2026-09-22
 ```
 
-`tests/anvil_end_to_end.rs` needs `anvil` and `forge` and skips with a message without them. It builds the contracts
-into `target/forge`. `PROVER_TEST_CONTRACTS_ROOT` points forge at another copy of the contracts.
-
-The Anvil tests start two chains. Chain 1 (Ethereum role) runs on `cancun`. Anvil does not deploy the EIP-4788 beacon
-roots contract, so the tests install the genuine runtime code and write the beacon roots by hand. Its gate is
-`Enforcing`, so the first deposit of every epoch carries a fork proof built by the evidence builder. Chain 369
-(PulseChain role) runs on `shanghai`. It has no beacon roots contract, and its gate is `DetectBeaconRoots`.
-
-## Old deposits
-
-The vault takes `state.block_roots` of the anchor for a deposit up to 8192 slots below it, and
-`state.historical_summaries` beyond that. The service builds either branch with `lc-core`. For an old deposit it
-rebuilds the 8192 block roots of the deposit era from the node's canonical block roots
-(`/eth/v1/beacon/blocks/<slot>/root`), never from an old state, and it fetches the anchor state while it is near the
-head. It also adds the `historical_summaries` layout row of the vault when the row is missing.
-
-## Deposit gate evidence
-
-`src/gate.rs` reads a `BeaconForkGate` and returns empty evidence when the epoch is confirmed (or the gate is still
-detecting), and a fork proof when it is stale. `lc_core::gate` builds the proof. The service sends no deposit; a
-wallet, a keeper or a test calls `gate::gate_evidence_for_deposit`.
-
-## Route health
-
-```
-zk-bridge-prover --config prover.toml route-health [--json] [--margin-seconds 3600] [--stale-epochs 64] [--own-light-client-warn-periods 32]
-```
-
-The command answers one question for each route: can it still deliver a deposit made now? A route cannot deliver
-deposits made in the last three epochs or so before a source-chain fork that its light-client program does not know
-(finding HB-02, window 2). The fork schedule is not on chain, so only an off-chain tool can see the fork coming. The
-command reads `/eth/v1/config/fork_schedule`, `/eth/v1/beacon/genesis` and `/eth/v1/beacon/headers/head` from the
-source beacon API. It compares the schedule with the fork table of the light-client program (`lc-core`) and, when the
-source vault has a deposit gate, with the gate's `supportedVersions`. It also reads the gate (`mode`, `enforcing`,
-`isSealed`, `confirmedEpoch`), `depositsOpen()` of the source vault and the head slot of the destination light client. The decision is the pure function
-`route_health::route_status`. It does no input or output, and an interface should copy its rules.
-
-| Status | Meaning |
+| Test | What it shows |
 |---|---|
-| `OPEN` | No unsupported fork is scheduled, the gate is not sealed, the light client head is fresh. |
-| `WARN` | An unsupported fork is scheduled beyond the margin. The reason says whether it is more than 24 hours ahead. |
-| `STOP` | An unsupported fork is active, or activates within the margin. |
-| `SEALED` | The gate is sealed. Every deposit reverts. |
-| `LOCKED` | The source vault is not open yet (`depositsOpen()` is false). It refuses every deposit before it takes a token. Run `follow` until every route says `deposits open`. |
-| `STALE` | The light client head lags the source head by more than `--stale-epochs` epochs. |
+| `tests/produce.rs` | The producer and the `prove` command on a signed beacon chain, with the oracle backend: the package, the exit codes, the webhook and the route mode. |
+| `tests/evidence.rs` | The `evidence` command on a synthetic world: a beacon chain, a source chain with one deposit and a destination chain with a vault. The evidence passes the native vault check. |
+| `tests/signed_beacon.rs` | The beacon source on the signed beacon chain: the update from a stored head, the withdrawal path and the layout evidence. |
+| `tests/remote_prover.rs` | The remote backend against a fake worker, with a real Groth16 proof and the checks that refuse a changed proof. |
+| `tests/sp1_execute.rs` | The two guest programs in the SP1 executor against `lc-core` (cargo feature `sp1`). Run it with `cargo test --features sp1 --test sp1_execute -- --test-threads=1`. It takes about 4.5 minutes and needs the guest program files from `cargo prove build` in `light-client/guests/*`. The full Groth16 proof test is ignored on a laptop. |
 
-`WARN` also covers the own-chain light client (see above) when its head lags the current slot by
-`--own-light-client-warn-periods` periods or more. The default is 32, half of the fold limit of one proof (64 updates).
-The lag comes from the wall clock, so a stuck beacon node cannot hide it. It is a `WARN` and not a `STOP`: a deposit
-made now does not depend on that light client, so the exit code stays 0.
-
-The margin is the larger of `--margin-seconds` and three epochs. A smaller value is raised to three epochs. When
-several findings apply, the most severe one wins (`SEALED`, `STOP`, `LOCKED`, `STALE`, `WARN`, `OPEN`) and the others
-appear as other findings. `LOCKED` ranks below `SEALED` and `STOP`, because `follow` cures neither of them, and above
-`STALE`, because a new deployment is locked and stale at once and `follow` cures both. `LOCKED` and `SEALED` both stop
-deposits before any token moves. `STOP` is the opposite danger: the vault would take a deposit that the route can never
-deliver. A schedule entry with epoch 18446744073709551615 (the beacon API value for "never") is not
-scheduled. PulseChain lists Deneb that way, with version `0xffffffff`.
-
-Output is one line of `key=value` pairs per route, or one JSON array with `--json`. Each route shows the reason, the
-fork version, the activation epoch and time, and the seconds remaining. Exit codes: 0 when every route is `OPEN` or
-`WARN`; 2 when any route is `STOP`, `SEALED`, `LOCKED` or `STALE`; 1 when the command cannot read a route (it never reports an
-unread route as open). The check is advisory. A direct contract call skips it, and in the window before a fork such a
-call can strand funds.
+The Anvil tests of the old relayer, the attack scripts and the end-to-end scripts are on the branch `archive/full-relayer`.
 
 ## The seams
 
-- `src/light_client.rs` is the only file that calls `lc-core` (and `lc-testkit`, for the development source only).
-- `src/contracts.rs` holds every contract binding and the vault `deposit` call, with its `gateEvidence` argument.
-- The cargo feature `dev-source` (on by default) adds `DevBeaconSource` and the test crate behind it.
-  `--no-default-features` leaves both out.
-- The `sp1` cargo feature is off by default. It adds `Sp1Prover`, which proves on the local processor with `sp1-sdk` 6.8.1.
-  The feature `sp1-native-gnark` adds the in-process Groth16 wrapper and is the one the server image uses.
-  See the module documentation of `src/prover.rs` and `docs/server-prover.md`.
-- `tests/sp1_execute.rs` (feature `sp1`) runs the two guest programs in the SP1 executor on real and synthetic inputs and
-  compares their public values with `lc-core`. Run it with `cargo test --features sp1 --test sp1_execute -- --test-threads=1`
-  (about 4.5 minutes). It needs the guest program files from `cargo prove build` in `light-client/guests/*`.
-  The full Groth16 proof test is ignored on a laptop because it needs the server.
+- `src/light_client.rs` is the only file that calls `lc-core`.
+- `src/contracts.rs` holds every contract binding. The crate only encodes the calls that a server sends.
+- The cargo feature `signed-beacon` (on by default) adds a beacon chain over local blocks with real signatures, and the test crate behind it. `--no-default-features` leaves both out.
+- The `sp1` cargo feature is off by default. It adds `Sp1Prover`, which proves on the local processor with `sp1-sdk` 6.8.1. The feature `sp1-native-gnark` adds the in-process Groth16 wrapper, and the server image uses it. The feature `sp1-cuda` adds the GPU client and builds the `prove-worker` binary. See the module documentation of `src/prover.rs` and `docs/server-prover.md`.
 - `.cargo/config.toml` sets `GOPROXY` for the Go build of the Groth16 wrapper (feature `sp1-native-gnark`).

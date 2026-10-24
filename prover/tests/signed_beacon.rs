@@ -1,182 +1,26 @@
-//! The prover reads the synthetic signed beacon chain with `HttpBeaconSource`, the code that reads a live node.
+//! The producer reads the synthetic signed beacon chain with `HttpBeaconSource`, the code that reads a live node.
 //!
 //! The node follows a list of execution blocks that the test extends. No Anvil is involved, so the test checks the beacon
-//! side alone: the checkpoint tool, the light-client plan for a deposit, the update that the light-client program accepts,
-//! and the beacon path of the withdrawal (the ancestry branch and the block hash branch) against the generalized indices
-//! of `lc-core`. The Anvil run with real contracts is described in `docs/end-to-end-real-proofs.md`.
+//! side alone: the checkpoint tool, the update from a stored head to the newest final header, the update that the
+//! light-client program accepts, and the beacon path of the withdrawal (the ancestry branch and the block hash branch)
+//! against the generalized indices of `lc-core`. The Anvil run with real contracts is described in
+//! `docs/end-to-end-real-proofs.md`.
 
-use alloy_primitives::{keccak256, Address, B256, U256};
+mod common;
+
+use alloy_primitives::B256;
+use common::*;
 use lc_core::ancestry::ancestry_leaf_gindex;
 use lc_core::layout::BLOCK_HASH_GINDEX_CAPELLA;
 use lc_core::ssz::is_valid_exact_branch;
-use lc_testkit::block_bytes::PayloadFields;
-use std::sync::{Arc, Mutex};
-use zk_bridge_prover::beacon::http::HttpBeaconSource;
-use zk_bridge_prover::beacon::{BeaconSource, DepositBlock, LightClientState, UpdatePlan};
-use zk_bridge_prover::chain::ExecutionReader;
-use zk_bridge_prover::error::{Error, Result};
-use zk_bridge_prover::light_client::{verify_update_natively, ChainKind, LightClientOutput};
-use zk_bridge_prover::local_network::signed_beacon::checkpoint::{read_checkpoint, Checkpoint};
-use zk_bridge_prover::local_network::signed_beacon::node::{
-    default_first_slot, BeaconNode, BlockFeed, NodeSettings,
-};
-use zk_bridge_prover::prover::ProofStatement;
+use zk_bridge_prover::beacon::UpdatePlan;
+use zk_bridge_prover::light_client::{verify_update_natively, ChainKind};
+use zk_bridge_prover::local_network::signed_beacon::checkpoint::read_checkpoint;
 
-/// The timestamp of execution block 1. Genesis follows from it and from the first slot.
-const FIRST_TIMESTAMP: u64 = 1_800_000_000;
-/// Blocks before the checkpoint, and blocks after it.
-const BLOCKS_BEFORE_CHECKPOINT: u64 = 12;
-
-struct Feed(Mutex<Vec<PayloadFields>>);
-
-/// The node owns its feed, and the test keeps a second handle to mine blocks.
-struct SharedFeed(Arc<Feed>);
-
-impl BlockFeed for SharedFeed {
-    fn latest_number(&self) -> Result<u64> {
-        Ok(self.0 .0.lock().unwrap().len() as u64)
-    }
-
-    fn payload(&self, number: u64) -> Result<PayloadFields> {
-        let blocks = self.0 .0.lock().unwrap();
-        blocks
-            .get(number as usize - 1)
-            .cloned()
-            .ok_or_else(|| Error::Malformed(format!("block {number} is unknown")))
-    }
+/// The plan of an update, which the light client needs because it lags.
+fn planned(plan: Option<UpdatePlan>) -> UpdatePlan {
+    plan.expect("the light client lags, so the source must plan an update")
 }
-
-/// Answers the three questions that the beacon sources ask of the execution chain. The HTTP source asks none of them.
-struct NoExecution;
-
-impl ExecutionReader for NoExecution {
-    fn latest_block_number(&self) -> Result<u64> {
-        Err(Error::Usage(
-            "the HTTP source does not read the execution chain".into(),
-        ))
-    }
-
-    fn block_hash(&self, _number: u64) -> Result<B256> {
-        Err(Error::Usage(
-            "the HTTP source does not read the execution chain".into(),
-        ))
-    }
-
-    fn finalized_tag_block_number(&self) -> Result<Option<u64>> {
-        Err(Error::Usage(
-            "the HTTP source does not read the execution chain".into(),
-        ))
-    }
-}
-
-fn execution_hash(number: u64) -> B256 {
-    keccak256(format!("anvil block {number}"))
-}
-
-fn payload(number: u64, seconds_per_slot: u64) -> PayloadFields {
-    PayloadFields {
-        parent_hash: execution_hash(number - 1),
-        fee_recipient: Address::repeat_byte(0x0f),
-        state_root: keccak256(b"state"),
-        receipts_root: keccak256(format!("receipts {number}")),
-        logs_bloom: vec![0u8; 256],
-        prev_randao: keccak256(b"randao"),
-        block_number: number,
-        gas_limit: 30_000_000,
-        gas_used: 21_000,
-        timestamp: FIRST_TIMESTAMP + (number - 1) * seconds_per_slot,
-        extra_data: Vec::new(),
-        base_fee_per_gas: U256::from(7u64),
-        block_hash: execution_hash(number),
-    }
-}
-
-/// A node over a chain that the test mines forward.
-struct Chain {
-    kind: ChainKind,
-    feed: Arc<Feed>,
-    node: Arc<BeaconNode>,
-}
-
-impl Chain {
-    fn new(kind: ChainKind, blocks: u64) -> Self {
-        let feed = Arc::new(Feed(Mutex::new(Vec::new())));
-        let node = Arc::new(BeaconNode::new(
-            Box::new(SharedFeed(feed.clone())),
-            NodeSettings {
-                kind,
-                first_slot: default_first_slot(kind),
-                finality_slots: 2,
-                participants: 400,
-            },
-        ));
-        let chain = Self { kind, feed, node };
-        chain.mine(blocks);
-        chain
-    }
-
-    fn mine(&self, count: u64) {
-        let mut blocks = self.feed.0.lock().unwrap();
-        for _ in 0..count {
-            let number = blocks.len() as u64 + 1;
-            blocks.push(payload(number, self.kind.seconds_per_slot()));
-        }
-    }
-
-    fn source(&self) -> HttpBeaconSource {
-        HttpBeaconSource::new(self.kind, Box::new(self.node.clone()))
-    }
-
-    fn first_slot(&self) -> u64 {
-        default_first_slot(self.kind)
-    }
-
-    fn deposit(&self, number: u64) -> DepositBlock {
-        DepositBlock {
-            number,
-            hash: execution_hash(number),
-            timestamp: payload(number, self.kind.seconds_per_slot()).timestamp,
-        }
-    }
-}
-
-/// What a light client that starts at a checkpoint holds.
-fn state_at(chain: &Chain, checkpoint: &Checkpoint) -> LightClientState {
-    LightClientState {
-        head_slot: checkpoint.slot,
-        head_root: checkpoint.header_root,
-        head_execution_hash: execution_hash(checkpoint.slot - chain.first_slot() + 1),
-        genesis_validators_root: checkpoint.genesis_validators_root,
-        slots_per_period: 8192,
-        head_committee_hash: checkpoint.committee_hash,
-        next_committee_hash: checkpoint.next_committee_hash,
-    }
-}
-
-/// What a light client holds after an update that the program accepted.
-fn state_after(output: &LightClientOutput) -> LightClientState {
-    LightClientState {
-        head_slot: output.newHeadSlot,
-        head_root: output.newHeaderRoot,
-        head_execution_hash: output.executionBlockHash,
-        genesis_validators_root: output.genesisValidatorsRoot,
-        slots_per_period: 8192,
-        head_committee_hash: output.syncCommitteeHash,
-        next_committee_hash: output.startNextSyncCommitteeHash,
-    }
-}
-
-fn planned_input(plan: UpdatePlan) -> zk_bridge_prover::light_client::UpdateInput {
-    let UpdatePlan::Update(statement) = plan else {
-        panic!("the light client lags, so the source must plan an update, not {plan:?}");
-    };
-    let ProofStatement::Verified(input) = *statement else {
-        panic!("a real beacon source plans a statement that the program verifies");
-    };
-    input
-}
-
-const KINDS: [ChainKind; 2] = [ChainKind::Ethereum, ChainKind::Pulsechain];
 
 /// Claim: the checkpoint tool reads a header that the chain holds, the committee hashes of its state, and the genesis time
 /// that the first block fixes, using the standard endpoints only. The checkpoint lies `finality_slots + 1` below the tip.
@@ -208,10 +52,11 @@ fn the_checkpoint_names_a_finalized_header_of_the_chain() {
     }
 }
 
-/// Claim: for a deposit after the checkpoint, the source waits while no final header covers it, then plans a fold that the
-/// light-client program accepts and that ends after the deposit. With the light client at the new head, the source plans
-/// nothing more, and the beacon path of the withdrawal verifies: the ancestry branch from the anchor state to the deposit
-/// header, and the block hash branch from the deposit header body to the execution block hash of the deposit.
+/// Claim: with the light client at the checkpoint and no newer final header, the source plans nothing. Once the chain
+/// finalizes more, it plans a fold that the light-client program accepts, that starts at the checkpoint and ends after the
+/// deposit. With the light client at the new head, the source plans nothing more, and the beacon path of the withdrawal
+/// verifies: the ancestry branch from the anchor state to the deposit header, and the block hash branch from the deposit
+/// header body to the execution block hash of the deposit.
 /// Why it matters: this is the beacon half of a payout. The real proof proves the update, and the vault checks the path
 /// against the generalized indices that `lc-core` names.
 #[test]
@@ -219,48 +64,44 @@ fn a_deposit_is_covered_by_an_update_and_its_path_verifies() {
     for kind in KINDS {
         let chain = Chain::new(kind, BLOCKS_BEFORE_CHECKPOINT);
         let checkpoint = read_checkpoint(&chain.node, kind).expect("checkpoint");
-        let light_client = state_at(&chain, &checkpoint);
+        let head = head_at(&checkpoint);
         let source = chain.source();
+        assert!(
+            source.plan_update(&head).unwrap().is_none(),
+            "{kind:?}: the checkpoint is the newest final header"
+        );
 
         let deposit_number = BLOCKS_BEFORE_CHECKPOINT + 8;
         let deposit = chain.deposit(deposit_number);
         let deposit_slot = chain.first_slot() + deposit_number - 1;
         chain.mine(8);
-        let plan = source
-            .next_update(&deposit, &light_client, &[], &NoExecution)
-            .expect("plan");
+        let plan = planned(source.plan_update(&head).unwrap());
+        let output = verify_update_natively(&plan.input).unwrap();
         assert!(
-            matches!(plan, UpdatePlan::NotYetFinal),
-            "{kind:?}: the deposit is at the tip"
+            output.newHeadSlot < deposit_slot,
+            "{kind:?}: the deposit is at the tip, so no final header covers it yet"
         );
 
         chain.mine(10);
-        let plan = source
-            .next_update(&deposit, &light_client, &[], &NoExecution)
-            .expect("plan");
-        let input = planned_input(plan);
+        let plan = planned(source.plan_update(&head).unwrap());
         assert!(
-            input.store.next_sync_committee.is_some(),
+            plan.input.store.next_sync_committee.is_some(),
             "{kind:?}: the checkpoint holds the next committee"
         );
         let output =
-            verify_update_natively(&input).unwrap_or_else(|error| panic!("{kind:?}: {error}"));
+            verify_update_natively(&plan.input).unwrap_or_else(|error| panic!("{kind:?}: {error}"));
         assert!(output.newHeadSlot > deposit_slot, "{kind:?}");
         assert_eq!(output.previousHeadSlot, checkpoint.slot);
+        assert_eq!(output.newHeadSlot, plan.latest_finalized_slot, "{kind:?}");
 
-        let after = state_after(&output);
+        let after = head_after(&output);
         assert!(
-            matches!(
-                source
-                    .next_update(&deposit, &after, &[], &NoExecution)
-                    .unwrap(),
-                UpdatePlan::Covered
-            ),
-            "{kind:?}: the new head covers the deposit"
+            source.plan_update(&after).unwrap().is_none(),
+            "{kind:?}: the new head is the newest final header"
         );
 
         let path = source
-            .withdrawal_path(&deposit, &after, &[], &NoExecution)
+            .withdrawal_path(&deposit, &after)
             .unwrap_or_else(|error| panic!("{kind:?}: {error}"));
         assert_eq!(path.anchor_header.hash_tree_root(), output.newHeaderRoot);
         assert_eq!(path.deposit_header.slot, deposit_slot);
@@ -296,40 +137,45 @@ fn a_deposit_is_covered_by_an_update_and_its_path_verifies() {
     }
 }
 
-/// Claim: a light client that lags the chain, with no deposit in view, gets a plan that follows the newest final header,
-/// and the update is accepted by the program. With the head at the newest final header, the plan is "covered".
+/// Claim: a light client that lags the chain gets a fold that follows the newest final header, and the program accepts it.
+/// With the head at the newest final header, the plan is empty.
 #[test]
-fn the_head_update_follows_the_newest_final_header() {
+fn the_update_follows_the_newest_final_header() {
     for kind in KINDS {
         let chain = Chain::new(kind, BLOCKS_BEFORE_CHECKPOINT);
         let checkpoint = read_checkpoint(&chain.node, kind).expect("checkpoint");
-        let light_client = state_at(&chain, &checkpoint);
+        let head = head_at(&checkpoint);
         let source = chain.source();
-        assert!(
-            matches!(
-                source
-                    .next_head_update(&light_client, &NoExecution)
-                    .unwrap(),
-                UpdatePlan::Covered
-            ),
-            "{kind:?}: the checkpoint is the newest final header"
-        );
+        assert!(source.plan_update(&head).unwrap().is_none(), "{kind:?}");
         chain.mine(6);
-        let input = planned_input(
-            source
-                .next_head_update(&light_client, &NoExecution)
-                .unwrap(),
-        );
+        let plan = planned(source.plan_update(&head).unwrap());
         let output =
-            verify_update_natively(&input).unwrap_or_else(|error| panic!("{kind:?}: {error}"));
+            verify_update_natively(&plan.input).unwrap_or_else(|error| panic!("{kind:?}: {error}"));
         assert_eq!(output.newHeadSlot, checkpoint.slot + 6, "{kind:?}");
-        assert!(matches!(
-            source
-                .next_head_update(&state_after(&output), &NoExecution)
-                .unwrap(),
-            UpdatePlan::Covered
-        ));
+        assert!(source.plan_update(&head_after(&output)).unwrap().is_none());
     }
+}
+
+/// Claim: a starting head that is not on the beacon chain of the node is refused, with the slot named.
+/// Why it matters: a beacon URL for another chain would otherwise start a proof of a fold that the light client rejects.
+#[test]
+fn a_head_that_is_not_on_this_chain_is_refused() {
+    let chain = Chain::new(ChainKind::Pulsechain, BLOCKS_BEFORE_CHECKPOINT);
+    let checkpoint = read_checkpoint(&chain.node, ChainKind::Pulsechain).expect("checkpoint");
+    let foreign = zk_bridge_prover::beacon::StoredHead {
+        root: B256::repeat_byte(0xee),
+        ..head_at(&checkpoint)
+    };
+    let error = chain
+        .source()
+        .plan_update(&foreign)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("is not on this beacon chain"), "{error}");
+    assert!(
+        error.contains(&format!("slot {}", checkpoint.slot)),
+        "{error}"
+    );
 }
 
 /// Claim: the layout evidence for the block hash row verifies against the body root of a stored header.
@@ -342,7 +188,7 @@ fn the_block_hash_layout_evidence_fits_the_stored_header() {
         let checkpoint = read_checkpoint(&chain.node, kind).expect("checkpoint");
         let source = chain.source();
         let evidence = source
-            .hash_layout_evidence(checkpoint.slot, &[checkpoint.slot], &NoExecution)
+            .hash_layout_evidence(checkpoint.slot, &[checkpoint.slot])
             .expect("evidence")
             .expect("the stored slot qualifies");
         let block_hash = execution_hash(checkpoint.slot - chain.first_slot() + 1);

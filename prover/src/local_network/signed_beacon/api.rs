@@ -1,4 +1,4 @@
-//! The beacon API of the synthetic chain: the requests that `HttpBeaconSource`, `route-health` and the checkpoint tool
+//! The beacon API of the synthetic chain: the requests that `HttpBeaconSource` and the checkpoint tool
 //! make, answered from a [`SyntheticBeaconChain`].
 //!
 //! | Path | Answer |
@@ -256,9 +256,9 @@ mod tests {
         serde_json::from_slice(&answer.body).expect("JSON body")
     }
 
-    /// Claim: genesis, the fork schedule and the head header come out in the shapes that `route-health` parses, with the
+    /// Claim: genesis, the fork schedule and the head header come out in the shapes that a beacon client parses, with the
     /// genesis validators root and the fork versions of the chain specification.
-    /// Why it matters: the route-health command and the checkpoint tool read exactly these answers.
+    /// Why it matters: the checkpoint tool reads exactly these answers.
     #[test]
     fn the_chain_describes_itself_as_its_specification() {
         for kind in [ChainKind::Ethereum, ChainKind::Pulsechain] {

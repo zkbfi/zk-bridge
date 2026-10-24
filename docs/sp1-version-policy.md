@@ -95,7 +95,7 @@ Source: the security advisories of the `succinctlabs/sp1` repository on GitHub, 
 
 The contracts cannot be patched. The response is the same as for an unsupported fork:
 
-1. The operator stops proving on the affected route, and route-health reports STOP.
+1. The operator stops proving on the affected route, and the stateful servers report the route as stopped.
 2. Deploy a new route with a fixed release, and move the interface to it.
 3. The old vaults still hold deposits. Withdrawals on the old route stay possible only while its proofs stay honest. That is why the flow limiter hook exists: a limiter can cap what a forged proof drains while people move.
 

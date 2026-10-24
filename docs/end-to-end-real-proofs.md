@@ -2,6 +2,10 @@
 
 This page shows how to run the hardened bridge on two local Anvil chains with real SP1 Groth16 proofs and the real SP1 verifier contract. It lists the commands, the results of one run, and what stays synthetic.
 
+**Note (2026-10-24): this page records a run of the full relayer.** The repository no longer holds the relayer. The relayer (`zk-bridge-prover run`, `once` and `follow`), the bots, the scripts in `e2e/` and the Anvil tests live on the branch `archive/full-relayer`. To repeat this run, check out that branch. The repository now holds the proof producer (`zk-bridge-prover prove`, see `prover/README.md`) and the evidence builder (`evidence`). A stateful server posts the updates, opens the vaults and sends the withdrawals (see "Launch sequence" in `docs/hardened-build-contract.md`).
+
+The measurements below still apply to the producer. The proof, its time, its memory and the gas of `update` and `withdraw` do not depend on who sends the transaction. Where the text names the relayer, the scripts or the bots, it describes the run of that branch. The signed beacon chain that the run used is still in `prover/src/local_network/signed_beacon/`, and the tests of the producer run on it (`prover/tests/produce.rs`, `prover/tests/evidence.rs`).
+
 The local network in `docs/local-network.md` uses the oracle backend: a key signs the public values, and `OracleSP1Verifier` accepts the signature. This run replaces both. The prover proves with the SP1 library on a server, and the vendored `SP1Verifier` of circuit v6.1.0 checks each proof on chain.
 
 ## What is real and what is synthetic
@@ -37,7 +41,7 @@ The guest program has no fixed parameter that stops this. The chain specificatio
 
 Each Anvil chain mines one block per slot, with the timestamp of block `N` at exactly `genesis + slot * seconds_per_slot` (`anvil_setBlockTimestampInterval`). The light client on a chain tracks the beacon chain of the OTHER chain, and it compares the head slot with the clock of its own chain. So the two chains must run at the same speed. The scripts mine one block every 12 real seconds on chain 1 and every 10 real seconds on chain 369 (`E2E_TIME_SCALE=1`). An early try with fast blocks of equal real length but different slot length (2 seconds each) made the clocks drift apart, and the light client refused every head with `HeadInFuture`.
 
-## Run it
+## Run it (on the branch `archive/full-relayer`)
 
 Needs `anvil`, `forge` and `cast` (Foundry v1.7.0, as `docker/compose.yaml` pins), a Rust toolchain, Go for the Groth16 wrapper, and the program file of the light-client guest. Run the commands from the repository root. All paths below are relative.
 

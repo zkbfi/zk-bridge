@@ -409,21 +409,6 @@ fn the_loaded_prover_refuses_a_key_the_contract_does_not_store() {
     assert!(matches!(error, Error::Config(_)), "got {error}");
 }
 
-/// A development statement has no real proof.
-#[test]
-fn development_statements_are_refused_by_the_sp1_backend() {
-    let Some(prover) = load_prover() else {
-        return;
-    };
-    let error = prover
-        .prove(
-            prover.light_client_key(),
-            &ProofStatement::ObservationAsserted(vec![0; 224]),
-        )
-        .unwrap_err();
-    assert!(matches!(error, Error::Prover(_)), "got {error}");
-}
-
 /// The full Groth16 proof of a real update, on this machine's CPU.
 ///
 /// Ignored on a laptop. It needs the server. The SP1 documentation page "Hardware Requirements"
@@ -456,4 +441,22 @@ fn full_groth16_proof_of_a_real_update() {
         std::fs::write(&path, serde_json::to_string_pretty(&fixture).expect("json"))
             .expect("write the proof fixture");
     }
+}
+
+/// Writes the body of one `POST /prove` request for the real Ethereum update to `SP1_REQUEST_OUTPUT`, so a remote GPU
+/// worker can be measured with the same input as the processor proof. It proves nothing itself.
+#[test]
+#[ignore]
+fn write_a_remote_proof_request_for_the_real_ethereum_update() {
+    let Ok(path) = std::env::var("SP1_REQUEST_OUTPUT") else {
+        return;
+    };
+    let program_key = std::env::var("SP1_REQUEST_PROGRAM_KEY").expect("SP1_REQUEST_PROGRAM_KEY names the light-client key");
+    let request = serde_json::json!({
+        "programKey": program_key,
+        "statementKind": "lightClient",
+        "guestInput": alloy_primitives::hex::encode_prefixed(guest_input_bytes(&real_ethereum_input())),
+        "expectedPublicValues": alloy_primitives::hex::encode_prefixed(public_values(&verify_update_natively(&real_ethereum_input()).expect("native"))),
+    });
+    std::fs::write(&path, serde_json::to_string(&request).expect("json")).expect("write the request");
 }

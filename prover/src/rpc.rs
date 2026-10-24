@@ -1,7 +1,7 @@
 //! A small JSON-RPC client over HTTP, and a plain HTTP client for beacon nodes.
 //!
 //! Both send the User-Agent `zk-bridge-prover` and nothing else that names a person or a machine.
-//! The service is synchronous: one loop, one request at a time. So it needs no async runtime, and the crate
+//! The crate is synchronous: one request at a time. So it needs no async runtime, and the crate
 //! list stays short (`ureq` is blocking and small). See `Cargo.toml`.
 
 use crate::error::{Error, Result};
@@ -12,7 +12,7 @@ use std::time::Duration;
 /// The User-Agent of every request.
 pub const USER_AGENT: &str = "zk-bridge-prover";
 
-/// The largest body the service reads: a beacon state is about 20 megabytes on PulseChain.
+/// The largest body the crate reads: a beacon state is about 20 megabytes on PulseChain.
 const MAX_BODY_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Anything that answers JSON-RPC calls. Tests replace it with a fake.
@@ -176,14 +176,21 @@ pub fn quantity(value: u64) -> String {
 mod tests {
     use super::*;
 
-    /// Claim: the revert data of a node error object survives parsing, so the service can read the selector.
-    /// Why it matters: "already claimed" is recognised by the first four bytes of that data.
+    /// Claim: the revert data of a node error object survives parsing.
+    /// Why it matters: the revert data names the reason of a failed call. Dropping it would leave only "execution reverted".
     #[test]
     fn error_object_keeps_revert_data() {
         let error = rpc_error_from(
             &json!({"code": 3, "message": "execution reverted", "data": "0x1234567800"}),
         );
-        assert_eq!(error.revert_selector(), Some([0x12, 0x34, 0x56, 0x78]));
+        let Error::Rpc { code, data, .. } = error else {
+            panic!("an RPC error");
+        };
+        assert_eq!(code, 3);
+        assert_eq!(
+            data.expect("revert data").as_ref(),
+            [0x12, 0x34, 0x56, 0x78, 0x00]
+        );
     }
 
     /// Claim: quantities round-trip and a non-hex value is refused.

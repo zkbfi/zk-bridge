@@ -3,5 +3,4 @@ cache/
 node_modules/
 light-client/elf/
 broadcast/
-e2e/state/
 script/hardened/e2e.config.json

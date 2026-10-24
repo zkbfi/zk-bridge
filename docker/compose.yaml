@@ -1,4 +1,4 @@
-# A local two-chain bridge for development. Start with the commands in docs/local-network.md.
+# Two local chains and the bridge contracts for development. Start with the commands in docs/local-network.md.
 #
 # Every key here is public: the chains use the well-known Anvil development mnemonic. Do not use these keys on a real
 # chain. The ports bind to localhost only.
@@ -13,17 +13,6 @@ x-chains-healthy: &chains-healthy
     condition: service_healthy
 
 x-anvil-mnemonic: &anvil-mnemonic "test test test test test test test test test test test junk"
-
-# The prover refuses a development beacon source or a key from the environment unless every RPC URL is a loopback
-# address. So the services that talk to the chains share the network of the container host (`network_mode: host`)
-# and reach the chains on the published localhost ports. On Colima the host is the Colima virtual machine.
-x-prover-image: &prover-image
-  image: zk-bridge-local-prover:latest
-  build:
-    context: ..
-    dockerfile: docker/Dockerfile
-    target: prover
-  network_mode: host
 
 services:
   # Chain A: identifier 1, hardfork cancun (it has EIP-4788 after the deploy step installs the contract code).
@@ -66,7 +55,7 @@ services:
       retries: 30
     restart: unless-stopped
 
-  # One-shot. Deploys tokens, verifiers and the hardened bridge on both chains, and writes /state.
+  # One-shot. Deploys tokens, verifiers and the hardened bridge on both chains, and writes /state/deployment.json.
   deploy:
     profiles: ["setup"]
     image: zk-bridge-local-deploy:latest
@@ -82,46 +71,6 @@ services:
       ANVIL_MNEMONIC: *anvil-mnemonic
     volumes:
       - bridge-state:/state
-
-  # One-shot. Opens both vaults: runs `follow` until each vault has the proof that the light client on the other chain stored
-  # a head. A new vault refuses every deposit until then. Run it after `deploy` and before `prover` and `bots`.
-  open:
-    <<: *prover-image
-    profiles: ["setup"]
-    command: ["prover-entry", "open"]
-    depends_on: *chains-healthy
-    volumes:
-      - bridge-state:/state
-
-  # Answers the three beacon requests of `route-health` from the local chains. The prover does not use it.
-  beacon-stub:
-    <<: *prover-image
-    command: ["local-network", "beacon-stub", "--listen", "127.0.0.1:29000"]
-    depends_on: *chains-healthy
-    volumes:
-      - bridge-state:/state:ro
-    restart: unless-stopped
-
-  # The prover service in `run` mode, for both directions, with the oracle backend and the development beacon source.
-  prover:
-    <<: *prover-image
-    command: ["prover-entry", "run"]
-    depends_on:
-      <<: *chains-healthy
-      beacon-stub:
-        condition: service_started
-    volumes:
-      - bridge-state:/state
-    restart: unless-stopped
-
-  # Bots that deposit random small amounts in both directions for ever.
-  bots:
-    <<: *prover-image
-    command: ["local-network", "traffic"]
-    depends_on: *chains-healthy
-    volumes:
-      - bridge-state:/state:ro
-    restart: unless-stopped
 
 volumes:
   bridge-state:
