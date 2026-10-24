@@ -755,3 +755,93 @@ The contracts need no administrator, and the repository has no relayer. A statef
 4. **Announce.** Tell users only after both vaults report open. A deposit before that reverts with `DepositsNotOpen()` and keeps the tokens with the sender.
 5. **Keep the light clients current.** Run step 2 on a schedule for each route. The own-chain light client of a chain with a registry gate is a route too: its source beacon chain and its destination chain are the same chain. A deposit needs a stored header after its slot.
 6. **Pay the deposits.** For each deposit on a source vault, run `evidence --tx <hash> --log-index <n>`. Send each call of `prerequisites` in order, and read the layout views again after each call. Then send the `withdraw` call to the destination vault. Skip the deposit when `alreadyClaimed` is true. A vault with a flow limiter can refuse a withdrawal: simulate `checkWithdrawal` from the vault address first, and wait when it reverts. A refusal leaves the nonce claimable.
+
+## Message layer and token mediator (design, user decisions 2026-10-24)
+
+The vault today mixes four jobs: proving a log, lock-and-release token accounting with fixed pairs, the fee and limiter hooks, and the deposit lock. It is also close to the 24 KB contract size limit. This section splits it into layers, following the split of OmniBridge (a message bridge plus token mediators) without OmniBridge's admin parts: no proxies, no owners, no validators, no adjustable limits, no token registration.
+
+### Decisions
+
+| Question | Decision |
+|---|---|
+| Delivery of a message | Final. The bridge marks a message delivered whether the target call succeeds or reverts. Downstream contracts handle their own failures. |
+| Fees | The sender names a fee contract in the message. The bridge calls it after delivery through a fixed interface. Any failure of the fee contract falls back to the default: no payment. |
+| Order | Messages are independent. No per-sender sequence. |
+| PulseChain's existing OmniBridge tokens | Ignored. This bridge cannot mint them, so it deploys its own bridged tokens. |
+| A failed token transfer in the mediator | Open. Default in this design: the mediator records a claimable balance (see "Token mediator"). |
+
+### Layer 1: proof (exists)
+
+`BeaconLightClient`, the SP1 verifier, `BeaconForkGate`, `ForkRegistry`. No change.
+
+### Layer 2: message bridge (`MessageBridge`)
+
+Sending, on the source chain:
+
+```solidity
+function sendMessage(address target, bytes calldata data, uint256 gasLimit, address feeContract)
+    external returns (bytes32 messageId);
+
+event MessageSent(
+    bytes32 indexed messageId, address indexed sender, uint64 destinationChainId,
+    address target, uint256 gasLimit, address feeContract, bytes data
+);
+```
+
+- `messageId = keccak256(abi.encode(sourceChainId, address(this), nonce++))`. The nonce only makes identifiers unique; it implies no order.
+- The fork gate check (`admit`) and the deposit lock (`DepositsNotOpen` until `openDeposits`) move here, so every message gets them.
+- `gasLimit` has a floor and a ceiling (constants), so a message can always be executed in one block.
+
+Executing, on the destination chain:
+
+```solidity
+function executeMessage(MessageProof calldata proof) external;
+
+event MessageDelivered(bytes32 indexed messageId, bool success, bytes32 returnDataHash);
+event MessageFeeCallFailed(bytes32 indexed messageId, address feeContract);
+```
+
+1. Verify the `MessageSent` log: the anchor is a stored header; ancestry goes through `block_roots` or `historical_summaries`; then the block hash, the execution header, the receipt trie, the emitter (the remote bridge) and the destination chain. This is the verification code that is in the vault today, moved unchanged.
+2. Refuse a message identifier that was delivered before.
+3. Gas guard: refuse to execute unless `gasleft()` is enough to forward `gasLimit` to the target after the 63/64 rule, plus the bookkeeping that follows. Without this guard, an executor could give too little gas, make the target fail, and burn the message for good.
+4. Mark the identifier delivered, set the context (`messageSender()`, `messageSourceChainId()`, `messageId()`), call `target` with exactly `gasLimit` gas, clear the context, emit `MessageDelivered`.
+5. Fee: if `feeContract` is not zero, call `IMessageFee(feeContract).onMessageExecuted(messageId, msg.sender, gasUsed)` with a fixed gas cap and no value. A revert, an out-of-gas failure or a missing contract emits `MessageFeeCallFailed` and changes nothing else.
+
+```solidity
+interface IMessageFee {
+    /// Called once on the destination chain after delivery. It may pay the executor. It cannot affect delivery.
+    function onMessageExecuted(bytes32 messageId, address executor, uint256 gasUsed) external;
+}
+```
+
+The layout rows (`addBlockRootsLayout`, `addBlockHashLayout`, `addHistoricalSummariesLayout`) move here, because every message proof needs them.
+
+A target trusts a message by checking `msg.sender == bridge` and the pair (`messageSourceChainId()`, `messageSender()`).
+
+Front-running an execution does no harm: a message executes once, with the target, data and gas limit the sender fixed.
+
+### Layer 3: token mediator (`TokenMediator`)
+
+It is a target of the message bridge on each chain, and it trusts only the mediator at the same address on the other chain.
+
+- Native and bridged tokens. A token is native on the chain where it exists. Bridging a native token locks it in the mediator and mints a bridged copy on the other chain. Bridging a bridged copy back burns it and unlocks the native token. Neither side needs pre-loaded funds.
+- No registration. The bridged copy's address is `CREATE2(factory, salt = keccak256(homeChainId, homeToken))`. The first message for a token carries name, symbol and decimals; the destination deploys the copy on first use. This replaces the token pair tables and the `destinationToken` check: the destination address is computed, not looked up.
+- Accounting per native token, as OmniBridge's `mediatorBalance`: the mediator counts the amount it actually received (balance before and after), not `balanceOf`. Fee-on-transfer tokens bridge the received amount. Stray transfers to the mediator are never paid out. Rebasing tokens are refused (or documented as unsupported).
+- Native coins: ETH and PLS are wrapped on deposit (WETH, WPLS) and unwrapped on delivery.
+- Bridge and call: `relayTokensAndCall(token, recipient, amount, data, gasLimit, feeContract)` delivers the tokens and then calls the recipient with `data`.
+- The optional fee switch and the empty flow limiter hook move here from the vault.
+- A failed transfer on delivery (open decision; default): if releasing a native token to the recipient reverts (for example a blacklist), the mediator records `claimable[token][recipient] += amount` and emits an event; the recipient, or anyone for them, calls `claim(token, recipient)` later. The message itself stays delivered. The alternative is to let the delivery fail and leave the tokens locked.
+
+### Layer 4: bridged token (`BridgedToken`)
+
+A minimal ERC-20 with `mint` and `burn` callable only by the mediator, plus `permit` (EIP-2612). No owner, not upgradeable. Name and symbol follow the native token with a suffix that marks the bridge (to be chosen).
+
+### What is removed
+
+`BridgeVault` is replaced by `MessageBridge` and `TokenMediator`. The token pair tables, `remoteTokenOf`, `localTokenOf` and the pre-loaded liquidity disappear.
+
+### Tests (to write with the build)
+
+- Message bridge: delivery of a valid message; replay refused; wrong emitter, wrong chain, tampered proof refused (the existing vault reject tests, moved); delivery is final when the target reverts; the gas guard refuses an executor that sends too little gas, and a target that runs out of its own `gasLimit` is a final failure; the context is set during the call and cleared after; the fee contract is called once, and a reverting, gas-burning or missing fee contract changes nothing; independent messages can execute in any order.
+- Token mediator: native lock and bridged mint; burn and unlock back; the first message deploys the bridged copy at the computed address with the right metadata; a second token gets a second copy; fee-on-transfer accounting; stray transfers are not paid out; native coin wrap and unwrap; bridge and call; a blacklisted recipient gets a claimable balance; only the remote mediator through the bridge can trigger a release.
+- End to end on two Anvil chains with the proof producer: a token round trip and an arbitrary message, both directions.
