@@ -149,8 +149,10 @@ CMD ["--config", "/state/prover.toml", "run"]
 #   the endpoint too (docs/gpu-prover.md).
 # ---------------------------------------------------------------------------------------------------------------
 FROM --platform=linux/amd64 ${RUST_IMAGE} AS build-gpu-worker
+# protobuf-compiler and libprotobuf-dev: the build script of sp1-prover-types (pulled in by sp1-cuda) runs protoc,
+# and its proto files import the standard google/protobuf types.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential clang libclang-dev ca-certificates \
+    && apt-get install -y --no-install-recommends build-essential clang libclang-dev ca-certificates protobuf-compiler libprotobuf-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY light-client ./light-client
