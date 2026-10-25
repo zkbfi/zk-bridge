@@ -854,10 +854,9 @@ The user asked for the same interfaces as OmniBridge wherever possible, one to o
 
 | OmniBridge | This bridge |
 |---|---|
-| `requireToPassMessage(address _contract, bytes _data, uint256 _gas) returns (bytes32)` | Same. Fee contract zero. |
+| `requireToPassMessage(address _contract, bytes _data, uint256 _gas) returns (bytes32)` | Same. |
 | `requireToConfirmMessage(address _contract, bytes _data, uint256 _gas) returns (bytes32)` | Same as `requireToPassMessage` (there is no separate manual lane). |
-| — | New: `requireToPassMessageWithFee(address _contract, bytes _data, uint256 _gas, address _feeContract) returns (bytes32)`. |
-| `event UserRequestForAffirmation(bytes32 indexed messageId, bytes encodedData)` | Same, emitted by every send on both chains. `encodedData` uses the AMB message encoding (message identifier, sender, executor, gas, chain identifier lengths, data type, chain identifiers, data). A fee contract is signalled by a flag bit in the data type and its 20 bytes follow the chain identifiers. |
+| `event UserRequestForAffirmation(bytes32 indexed messageId, bytes encodedData)` | Same, emitted by every send on both chains. `encodedData` uses the AMB message encoding unchanged (message identifier, sender, executor, gas, chain identifier lengths, data type, chain identifiers, data). |
 | `event UserRequestForSignature(...)` | Not emitted (no validators sign). |
 | `executeSignatures(...)`, `executeAffirmation(...)` | Replaced by a new method: `executeMessage(MessageProof calldata proof)`. Validators are replaced by the light-client proof. |
 | `event AffirmationCompleted(address indexed sender, address indexed executor, bytes32 indexed messageId, bool status)` | Same, on every execution. |
@@ -867,7 +866,6 @@ The user asked for the same interfaces as OmniBridge wherever possible, one to o
 | `messageCallStatus(bytes32)`, `failedMessageDataHash`, `failedMessageReceiver`, `failedMessageSender` | Same. Recorded on a failed call. Delivery stays final; these are data for downstream contracts. |
 | `maxGasPerTx()` | Same. A constant ceiling for `_gas`. |
 | `sourceChainId()`, `destinationChainId()` | Same. |
-| `IMessageFee.onMessageExecuted(bytes32, address, uint256)` | New. The fee contract interface; failures fall back to no payment. |
 
 #### Token mediator: the OmniBridge interface
 
@@ -908,3 +906,31 @@ The user asked for the same interfaces as OmniBridge wherever possible, one to o
 | `wrapAndRelayTokens()`, `wrapAndRelayTokens(address _receiver)` payable | Same, in a separate router contract, as OmniBridge does. The mediator itself handles only tokens. |
 | `onTokenBridged(address, uint256, bytes)` | Same: the router unwraps WETH or WPLS and sends the coin to the recipient. |
 | `claimTokens(address, address)` | Not included (owner function). |
+
+#### Fees: the router pattern of `gibsfinance/omnibridge` (supersedes the fee contract above)
+
+The user pointed to `gibsfinance/omnibridge`, which already solves executor fees without changing the message format (`contracts/helpers/TokenOmnibridgeBase.sol`, read 2026-10-24). This design adopts it and drops the earlier `feeContract` field, `requireToPassMessageWithFee` and `IMessageFee`. The message bridge and the AMB encoding stay exactly as OmniBridge has them.
+
+How it works:
+
+1. The sender bridges tokens with `relayTokensAndCall` to a router contract on the destination chain. The `_data` is an encoded `FeeDirector`:
+   ```solidity
+   struct FeeDirector {
+       address recipient;   // who receives the tokens after the fee
+       uint256 settings;    // flag bits: 0 = take `limit` as a fixed fee; 1 = unwrap to the native coin;
+                            // 2 = price gas at the base fee only (no priority fee); 3 = fee = value * multiplier / 1e18
+       uint256 limit;       // the fixed fee, or the cap on a gas-priced fee
+       uint256 multiplier;  // 1e18-scaled: a gas-price multiplier, or a share of the value
+   }
+   ```
+2. An executor (the "runner") calls the router's entry point, which records the runner and the starting gas in one storage slot (`RUNNER_SLOT`: runner address in the high bits, `gasleft()` in the low 96 bits) and then executes the message on the bridge. In OmniBridge this is `safeExecuteSignaturesWithAutoGasLimit(address runner, bytes _data, bytes _signatures)`; here the same pattern wraps `executeMessage(MessageProof)`, as a new method `executeMessageWithRunner(address runner, MessageProof proof)` (name to confirm).
+3. The bridge delivers to the mediator, which calls the router's `onTokenBridged(address _token, uint256 _value, bytes _data)`. The router decodes the `FeeDirector`, computes the fee and splits the tokens: the fee to the runner, the rest to the recipient. Fee modes: fixed (`limit`), a share of the value (`multiplier`), or gas used (plus a fixed overhead) times `multiplier` times the base fee or gas price, capped by `limit`. The fee never exceeds the value.
+4. With no runner recorded (a plain `executeMessage` call), the router pays no fee and sends everything to the recipient.
+
+Differences from `gibsfinance/omnibridge`, because this bridge has no admin:
+- No validator filter (`validatorsFilter`, `isValidator`, `setValidatorStatus`): any runner may execute, because the proof, not the runner, is what the bridge trusts.
+- No owner and no `claimTokens`.
+
+The same idea works for arbitrary messages: a target contract that wants to pay executors reads the runner from the router slot and decides from its own payload. The bridge itself has no fee logic.
+
+`transactionHash()`: OmniBridge returns the source transaction hash because validators sign it. Here it must be proven. The receipt proof already fixes the transaction index in the source block; proving the hash needs a second trie branch (transactions root, same index). Decision pending.
