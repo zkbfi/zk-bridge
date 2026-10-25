@@ -11,7 +11,7 @@ import {MediatorFixture, MockAMB, DenyListToken, ScriptedMediatorLimiter} from "
 /// one place: a refused release cannot revert, because the message bridge marks the message delivered anyway, so the
 /// mediator records a claim and `claim` asks the limiter again.
 contract TokenMediatorFeeTest is MediatorFixture {
-    event FeeChanged(uint16 feeBasisPoints, address feeRecipient);
+    event FeeChanged(uint256 feeRate, address feeRecipient);
     event FeeNullified();
     event FeeCharged(address indexed token, uint256 fee);
     event FeesCollected(address indexed token, address indexed feeRecipient, uint256 amount);
@@ -21,7 +21,7 @@ contract TokenMediatorFeeTest is MediatorFixture {
     address internal authority = makeAddr("authority");
     address internal treasury = makeAddr("treasury");
 
-    function _feeTerms(uint16 basisPoints, uint16 ceiling, address limiter)
+    function _feeTerms(uint256 rate, uint256 ceiling, address limiter)
         internal
         view
         returns (TokenMediator.MediatorTerms memory terms)
@@ -29,8 +29,8 @@ contract TokenMediatorFeeTest is MediatorFixture {
         terms = _noTerms();
         terms.feeAuthority = authority;
         terms.feeRecipient = treasury;
-        terms.feeBasisPoints = basisPoints;
-        terms.feeCeilingBasisPoints = ceiling;
+        terms.feeRate = rate;
+        terms.feeCeiling = ceiling;
         terms.flowLimiter = limiter;
     }
 
@@ -44,30 +44,30 @@ contract TokenMediatorFeeTest is MediatorFixture {
 
     function test_theDefaultMediatorHasNoFeeAndNoAuthority() public {
         assertEq(mediatorA.feeAuthority(), address(0));
-        assertEq(mediatorA.feeBasisPoints(), 0);
+        assertEq(mediatorA.feeRate(), 0);
         vm.expectRevert(abi.encodeWithSelector(TokenMediator.NotFeeAuthority.selector, authority));
         vm.prank(authority);
-        mediatorA.setFee(1, treasury);
+        mediatorA.setFee(1e14, treasury);
         vm.expectRevert(abi.encodeWithSelector(TokenMediator.NotFeeAuthority.selector, address(0)));
         vm.prank(address(0));
-        mediatorA.setFee(1, treasury);
+        mediatorA.setFee(1e14, treasury);
     }
 
     function test_aCeilingAboveOnePercentIsRefused() public {
-        TokenMediator.MediatorTerms memory terms = _feeTerms(0, 101, address(0));
+        TokenMediator.MediatorTerms memory terms = _feeTerms(0, 1e16 + 1, address(0));
         terms.bridge = address(ambA);
         terms.remoteMediator = address(mediatorB);
         terms.remoteChainId = CHAIN_B;
-        vm.expectRevert(abi.encodeWithSelector(TokenMediator.FeeCeilingTooHigh.selector, uint16(101), uint16(100)));
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.FeeCeilingTooHigh.selector, 1e16 + 1, 1e16));
         new TokenMediator(terms);
     }
 
     function test_aFeeAboveTheCeilingIsRefusedAtTheStart() public {
-        TokenMediator.MediatorTerms memory terms = _feeTerms(51, 50, address(0));
+        TokenMediator.MediatorTerms memory terms = _feeTerms(51e14, 50e14, address(0));
         terms.bridge = address(ambA);
         terms.remoteMediator = address(mediatorB);
         terms.remoteChainId = CHAIN_B;
-        vm.expectRevert(abi.encodeWithSelector(TokenMediator.FeeAboveCeiling.selector, uint16(51), uint16(50)));
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.FeeAboveCeiling.selector, 51e14, 50e14));
         new TokenMediator(terms);
     }
 
@@ -76,13 +76,13 @@ contract TokenMediatorFeeTest is MediatorFixture {
         terms.bridge = address(ambA);
         terms.remoteMediator = address(mediatorB);
         terms.remoteChainId = CHAIN_B;
-        terms.feeCeilingBasisPoints = 10;
-        vm.expectRevert(abi.encodeWithSelector(TokenMediator.NullifiedFeeMustBeZero.selector, uint16(0), uint16(10)));
+        terms.feeCeiling = 10e14;
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.NullifiedFeeMustBeZero.selector, 0, 10e14));
         new TokenMediator(terms);
     }
 
     function test_aFeeAtTheStartNeedsARecipient() public {
-        TokenMediator.MediatorTerms memory terms = _feeTerms(10, 50, address(0));
+        TokenMediator.MediatorTerms memory terms = _feeTerms(10e14, 50e14, address(0));
         terms.feeRecipient = address(0);
         terms.bridge = address(ambA);
         terms.remoteMediator = address(mediatorB);
@@ -94,39 +94,39 @@ contract TokenMediatorFeeTest is MediatorFixture {
     // ------------------------------------------------------------------------------------------------ authority
 
     function test_theAuthoritySetsTheFeeWithinTheCeiling() public {
-        _redeploy(_feeTerms(0, 50, address(0)), _feeTerms(0, 50, address(0)));
+        _redeploy(_feeTerms(0, 50e14, address(0)), _feeTerms(0, 50e14, address(0)));
         vm.expectEmit(address(mediatorA));
-        emit FeeChanged(40, treasury);
+        emit FeeChanged(40e14, treasury);
         vm.prank(authority);
-        mediatorA.setFee(40, treasury);
-        assertEq(mediatorA.feeBasisPoints(), 40);
+        mediatorA.setFee(40e14, treasury);
+        assertEq(mediatorA.feeRate(), 40e14);
 
         vm.startPrank(authority);
-        vm.expectRevert(abi.encodeWithSelector(TokenMediator.FeeAboveCeiling.selector, uint16(51), uint16(50)));
-        mediatorA.setFee(51, treasury);
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.FeeAboveCeiling.selector, 51e14, 50e14));
+        mediatorA.setFee(51e14, treasury);
         vm.expectRevert(TokenMediator.ZeroFeeRecipient.selector);
-        mediatorA.setFee(10, address(0));
+        mediatorA.setFee(10e14, address(0));
         vm.stopPrank();
 
         vm.prank(bob);
         vm.expectRevert(abi.encodeWithSelector(TokenMediator.NotFeeAuthority.selector, bob));
-        mediatorA.setFee(10, treasury);
+        mediatorA.setFee(10e14, treasury);
     }
 
     function test_nullifyIsOneWayAndFeesAlreadyChargedCanStillBeCollected() public {
-        _redeploy(_feeTerms(100, 100, address(0)), _feeTerms(0, 0, address(0)));
+        _redeploy(_feeTerms(100e14, 100e14, address(0)), _feeTerms(0, 0, address(0)));
         _bridgeAtoB(alice, address(tokenA), bob, 10_000 ether);
 
         vm.expectEmit(address(mediatorA));
         emit FeeNullified();
         vm.prank(authority);
         mediatorA.nullifyFee();
-        assertEq(mediatorA.feeBasisPoints(), 0);
+        assertEq(mediatorA.feeRate(), 0);
         assertEq(mediatorA.feeAuthority(), address(0));
 
         vm.startPrank(authority);
         vm.expectRevert(abi.encodeWithSelector(TokenMediator.NotFeeAuthority.selector, authority));
-        mediatorA.setFee(1, treasury);
+        mediatorA.setFee(1e14, treasury);
         vm.expectRevert(abi.encodeWithSelector(TokenMediator.NotFeeAuthority.selector, authority));
         mediatorA.nullifyFee();
         vm.stopPrank();
@@ -144,12 +144,12 @@ contract TokenMediatorFeeTest is MediatorFixture {
     // ------------------------------------------------------------------------------------------------ charging
 
     function test_theFeeIsChargedOnTheReceivedAmountAndRoundedDown() public {
-        _redeploy(_feeTerms(25, 100, address(0)), _feeTerms(0, 0, address(0)));
+        _redeploy(_feeTerms(25e14, 100e14, address(0)), _feeTerms(0, 0, address(0)));
         vm.expectEmit(true, false, false, true, address(mediatorA));
         emit FeeCharged(address(tokenA), 24);
         vm.prank(alice);
         mediatorA.relayTokens(address(tokenA), bob, 9_999);
-        // 9,999 * 25 / 10,000 = 24.99, rounded down to 24.
+        // 9,999 * 0.25% = 24.99, rounded down to 24.
         assertEq(mediatorA.accruedFees(address(tokenA)), 24);
         assertEq(mediatorA.mediatorBalance(address(tokenA)), 9_975, "the record counts the net amount only");
         assertEq(tokenA.balanceOf(address(mediatorA)), 9_999);
@@ -158,8 +158,83 @@ contract TokenMediatorFeeTest is MediatorFixture {
         assertEq(IERC20(_copyOf(address(tokenA))).balanceOf(bob), 9_975, "the copy is minted for the net amount");
     }
 
+    function test_aRateFinerThanOneBasisPointChargesTheExactAmount() public {
+        // 0.0123% has more resolution than a whole basis point (0.01%) can say.
+        uint256 rate = 123_000_000_000_000;
+        _redeploy(_feeTerms(rate, 1e16, address(0)), _feeTerms(0, 0, address(0)));
+        vm.prank(alice);
+        mediatorA.relayTokens(address(tokenA), bob, 1_000_000 ether);
+        // 1,000,000 ether * 0.0123% = 123 ether.
+        assertEq(mediatorA.accruedFees(address(tokenA)), 123 ether);
+        assertEq(mediatorA.mediatorBalance(address(tokenA)), 999_877 ether);
+    }
+
+    function test_theOnePercentCapIsEnforcedAtTheStartAndInSetFee() public {
+        TokenMediator.MediatorTerms memory terms = _feeTerms(0, 1e16 + 1, address(0));
+        terms.bridge = address(ambA);
+        terms.remoteMediator = address(mediatorB);
+        terms.remoteChainId = CHAIN_B;
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.FeeCeilingTooHigh.selector, 1e16 + 1, 1e16));
+        new TokenMediator(terms);
+
+        terms = _feeTerms(0, 1e16, address(0));
+        terms.bridge = address(ambA);
+        terms.remoteMediator = address(mediatorB);
+        terms.remoteChainId = CHAIN_B;
+        TokenMediator atTheCap = new TokenMediator(terms);
+        assertEq(atTheCap.feeCeiling(), 1e16, "the cap itself is accepted");
+
+        vm.startPrank(authority);
+        atTheCap.setFee(1e16, treasury);
+        assertEq(atTheCap.feeRate(), 1e16);
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.FeeAboveCeiling.selector, 1e16 + 1, 1e16));
+        atTheCap.setFee(1e16 + 1, treasury);
+        vm.stopPrank();
+    }
+
+    function test_aTinyAmountRoundsTheFeeDownToZeroAndPaysNoFee() public {
+        _redeploy(_feeTerms(1e16, 1e16, address(0)), _feeTerms(0, 0, address(0)));
+        vm.prank(alice);
+        mediatorA.relayTokens(address(tokenA), bob, 99);
+        // 99 * 1% = 0.99, rounded down to 0.
+        assertEq(mediatorA.accruedFees(address(tokenA)), 0);
+        assertEq(mediatorA.mediatorBalance(address(tokenA)), 99);
+
+        vm.prank(alice);
+        mediatorA.relayTokens(address(tokenA), bob, 199);
+        assertEq(mediatorA.accruedFees(address(tokenA)), 1, "199 * 1% = 1.99, rounded down to 1");
+        assertEq(mediatorA.mediatorBalance(address(tokenA)), 99 + 198);
+    }
+
+    function test_aHugeAmountDoesNotOverflowAndTheFeeNeverExceedsTheAmount() public {
+        _redeploy(_feeTerms(1e16, 1e16, address(0)), _feeTerms(0, 0, address(0)));
+        // The product of this amount and the rate is far above 2^256, so a plain multiplication would revert.
+        uint256 unit = 2 ** 220;
+        uint256 amount = 100 * unit;
+        assertGt(amount, type(uint256).max / 1e16, "control: the plain product would overflow");
+        tokenA.mint(alice, amount);
+        vm.prank(alice);
+        mediatorA.relayTokens(address(tokenA), bob, amount);
+        assertEq(mediatorA.accruedFees(address(tokenA)), unit, "1% of the amount, exact");
+        assertEq(mediatorA.mediatorBalance(address(tokenA)), 99 * unit);
+    }
+
+    /// Claim: at the highest rate the contract allows, the fee is exactly the amount divided by 100, rounded down,
+    /// and never above the amount. Matters: `Math.mulDiv` keeps this true where the amount is so large that a plain
+    /// product would overflow.
+    function testFuzz_theFeeIsTheAmountOverOneHundredRoundedDownAndNeverAboveTheAmount(uint256 amount) public {
+        amount = bound(amount, 1, type(uint240).max / 2);
+        _redeploy(_feeTerms(1e16, 1e16, address(0)), _feeTerms(0, 0, address(0)));
+        tokenA.mint(alice, amount);
+        vm.prank(alice);
+        mediatorA.relayTokens(address(tokenA), bob, amount);
+        uint256 fee = mediatorA.accruedFees(address(tokenA));
+        assertEq(fee, amount / 100);
+        assertLe(fee, amount);
+    }
+
     function test_collectFeesPaysTheRecipientOnceAndAnyoneMayCall() public {
-        _redeploy(_feeTerms(100, 100, address(0)), _feeTerms(0, 0, address(0)));
+        _redeploy(_feeTerms(100e14, 100e14, address(0)), _feeTerms(0, 0, address(0)));
         _bridgeAtoB(alice, address(tokenA), bob, 10_000 ether);
         assertEq(mediatorA.accruedFees(address(tokenA)), 100 ether);
 
@@ -176,7 +251,7 @@ contract TokenMediatorFeeTest is MediatorFixture {
     }
 
     function test_theFeeOnABridgedCopyStaysAsCopiesInTheMediator() public {
-        _redeploy(_feeTerms(0, 0, address(0)), _feeTerms(100, 100, address(0)));
+        _redeploy(_feeTerms(0, 0, address(0)), _feeTerms(100e14, 100e14, address(0)));
         _bridgeAtoB(alice, address(tokenA), bob, 1_000 ether);
         address copy = _copyOf(address(tokenA));
 
@@ -193,7 +268,7 @@ contract TokenMediatorFeeTest is MediatorFixture {
     }
 
     function test_theFeeIsChargedOnTheMeasuredAmountOfAFeeOnTransferToken() public {
-        _redeploy(_feeTerms(100, 100, address(0)), _feeTerms(0, 0, address(0)));
+        _redeploy(_feeTerms(100e14, 100e14, address(0)), _feeTerms(0, 0, address(0)));
         FeeOnTransferToken taxed = new FeeOnTransferToken("Taxed", "TAX");
         taxed.mint(alice, 1_000 ether);
         vm.startPrank(alice);
@@ -207,33 +282,33 @@ contract TokenMediatorFeeTest is MediatorFixture {
     }
 
     function test_aRaiseAheadOfARelayCannotChargeMoreThanTheSenderAccepted() public {
-        _redeploy(_feeTerms(25, 100, address(0)), _feeTerms(0, 0, address(0)));
+        _redeploy(_feeTerms(25e14, 100e14, address(0)), _feeTerms(0, 0, address(0)));
         vm.prank(authority);
-        mediatorA.setFee(50, treasury);
+        mediatorA.setFee(50e14, treasury);
 
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(TokenMediator.FeeAboveLimit.selector, uint16(50), uint16(25)));
-        mediatorA.relayTokensWithFallback(address(tokenA), bob, 1_000 ether, "", alice, 25);
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.FeeAboveLimit.selector, 50e14, 25e14));
+        mediatorA.relayTokensWithFallback(address(tokenA), bob, 1_000 ether, "", alice, 25e14);
         assertEq(tokenA.balanceOf(alice), 1_000_000 ether, "the tokens stay with the sender");
 
         vm.prank(alice);
-        mediatorA.relayTokensWithFallback(address(tokenA), bob, 1_000 ether, "", alice, 50);
+        mediatorA.relayTokensWithFallback(address(tokenA), bob, 1_000 ether, "", alice, 50e14);
         assertEq(
             mediatorA.accruedFees(address(tokenA)), 5 ether, "the same relay passes with a limit that covers the fee"
         );
     }
 
     function test_theOmnibridgeFunctionsAcceptTheCurrentFee() public {
-        _redeploy(_feeTerms(25, 100, address(0)), _feeTerms(0, 0, address(0)));
+        _redeploy(_feeTerms(25e14, 100e14, address(0)), _feeTerms(0, 0, address(0)));
         vm.prank(authority);
-        mediatorA.setFee(100, treasury);
+        mediatorA.setFee(100e14, treasury);
         vm.prank(alice);
         mediatorA.relayTokens(address(tokenA), bob, 1_000 ether);
         assertEq(mediatorA.accruedFees(address(tokenA)), 10 ether, "no limit: the fee is bounded by the ceiling only");
     }
 
     function test_aRecipientThatTheTokenRefusesBlocksCollectionOnly() public {
-        _redeploy(_feeTerms(100, 100, address(0)), _feeTerms(0, 0, address(0)));
+        _redeploy(_feeTerms(100e14, 100e14, address(0)), _feeTerms(0, 0, address(0)));
         DenyListToken token = new DenyListToken();
         token.mint(alice, 1_000 ether);
         vm.startPrank(alice);
@@ -255,7 +330,7 @@ contract TokenMediatorFeeTest is MediatorFixture {
 
     function test_theLimiterSeesTheNetAmountTheLocalTokenAndTheSender() public {
         ScriptedMediatorLimiter limiter = new ScriptedMediatorLimiter();
-        _redeploy(_feeTerms(100, 100, address(limiter)), _feeTerms(0, 0, address(0)));
+        _redeploy(_feeTerms(100e14, 100e14, address(limiter)), _feeTerms(0, 0, address(0)));
         vm.prank(alice);
         mediatorA.relayTokens(address(tokenA), bob, 1_000 ether);
         assertEq(limiter.depositChecks(), 1);

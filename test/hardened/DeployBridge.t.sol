@@ -96,13 +96,13 @@ contract DeployBridgeTest is Test {
     function _liveFeeJson() internal view returns (string memory) {
         return string.concat(
             '"fee":{"authority":"', vm.toString(deployer), '","recipient":"', vm.toString(deployer),
-            '","basisPoints":"25","ceilingBasisPoints":"50"},'
+            '","rate":"2500000000000000","ceiling":"5000000000000000"},'
         );
     }
 
     /// @dev A zero authority removes the fee from the start. The fee and the ceiling must then be zero.
     function _nullifiedFeeJson() internal pure returns (string memory) {
-        return '"fee":{"authority":"0x0000000000000000000000000000000000000000","recipient":"0x0000000000000000000000000000000000000000","basisPoints":"0","ceilingBasisPoints":"0"},';
+        return '"fee":{"authority":"0x0000000000000000000000000000000000000000","recipient":"0x0000000000000000000000000000000000000000","rate":"0","ceiling":"0"},';
     }
 
     /// @dev The own-chain light client and the registry settings of PulseChain. Its genesis validators root and period
@@ -194,11 +194,11 @@ contract DeployBridgeTest is Test {
         assertEq(config.chainB.verifierCodeHash, address(verifier).codehash);
         assertEq(config.chainA.fee.authority, deployer);
         assertEq(config.chainA.fee.recipient, deployer);
-        assertEq(config.chainA.fee.basisPoints, 25);
-        assertEq(config.chainA.fee.ceilingBasisPoints, 50);
+        assertEq(config.chainA.fee.rate, 2500000000000000);
+        assertEq(config.chainA.fee.ceiling, 5000000000000000);
         assertEq(config.chainB.fee.authority, address(0), "chain B starts with the fee removed");
-        assertEq(config.chainB.fee.basisPoints, 0);
-        assertEq(config.chainB.fee.ceilingBasisPoints, 0);
+        assertEq(config.chainB.fee.rate, 0);
+        assertEq(config.chainB.fee.ceiling, 0);
         assertEq(config.chainA.wrappedNative, address(wrappedNativeOnA));
         assertEq(config.chainB.wrappedNative, address(wrappedNativeOnB));
         assertEq(uint8(config.chainA.feeRouter), uint8(DeployBridge.RouterChoice.Deploy));
@@ -259,7 +259,7 @@ contract DeployBridgeTest is Test {
         string[2] memory chains = [".chainA", ".chainB"];
         string[25] memory keys = [
             ".rpcAlias", ".chainId", ".verifier", ".verifierCodeHash", ".depositCutoffTimestamp", ".deployerNonce",
-            ".fee.authority", ".fee.recipient", ".fee.basisPoints", ".fee.ceilingBasisPoints",
+            ".fee.authority", ".fee.recipient", ".fee.rate", ".fee.ceiling",
             ".flowLimiter", ".wrappedNative", ".deployFeeRouter", ".lightClient.programVKey", ".lightClient.genesisValidatorsRoot", ".lightClient.slotsPerPeriod",
             ".lightClient.genesisTime", ".lightClient.secondsPerSlot", ".lightClient.slotsPerEpoch", ".lightClient.capellaForkEpoch", ".lightClient.capellaEra",
             ".lightClient.initialSlot", ".lightClient.initialHeaderRoot", ".lightClient.initialSyncCommitteeHash",
@@ -1015,8 +1015,8 @@ contract DeployBridgeTest is Test {
             remoteChainId: d.remoteChainId,
             feeAuthority: fee.authority,
             feeRecipient: fee.recipient,
-            feeBasisPoints: fee.basisPoints,
-            feeCeilingBasisPoints: fee.ceilingBasisPoints,
+            feeRate: fee.rate,
+            feeCeiling: fee.ceiling,
             flowLimiter: d.chain.flowLimiter
         });
     }
@@ -1199,14 +1199,14 @@ contract DeployBridgeTest is Test {
     function test_R2_08_postDeployAssertionsCatchWrongFeeSwitch() public {
         (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
         DeployBridge.FeeConfig memory fee = d.chain.fee;
-        assertEq(fee.basisPoints, 25, "control: the configured fee is live");
+        assertEq(fee.rate, 2500000000000000, "control: the configured fee is live");
 
-        string[3] memory fields = ["mediator.feeAuthority", "mediator.feeBasisPoints", "mediator.feeCeilingBasisPoints"];
+        string[3] memory fields = ["mediator.feeAuthority", "mediator.feeRate", "mediator.feeCeiling"];
         for (uint256 i = 0; i < fields.length; i++) {
             TokenMediator.MediatorTerms memory terms = _mediatorTerms(d, deployed.bridge);
-            if (i == 0) (terms.feeAuthority, terms.feeRecipient, terms.feeBasisPoints, terms.feeCeilingBasisPoints) = (address(0), address(0), 0, 0);
-            if (i == 1) terms.feeBasisPoints = 30;
-            if (i == 2) terms.feeCeilingBasisPoints = 100;
+            if (i == 0) (terms.feeAuthority, terms.feeRecipient, terms.feeRate, terms.feeCeiling) = (address(0), address(0), 0, 0);
+            if (i == 1) terms.feeRate = 3000000000000000;
+            if (i == 2) terms.feeCeiling = 1e16;
             _swapMediator(d, deployed, new TokenMediator(terms));
             vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, fields[i]));
             script.verifyDeployment(d, deployed);

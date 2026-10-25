@@ -562,17 +562,17 @@ A PulseChain consensus fork almost always arrives with an execution fork, and th
 
 ## Deposit fee switch (user decision, 2026-10-21) (built)
 
-Moved to `TokenMediator` on 2026-10-24. User decision (2026-10-25): the bridge charges a fee on both chains. The example configuration sets 10 basis points (0.1%) with the maximum ceiling of 100 basis points (1%) on each chain; the fee authority can change the rate within the ceiling, and the constant `MAX_FEE_CEILING_BASIS_POINTS = 100` stops any deployment from setting a ceiling above 1%. The fee is charged on the relay of tokens (`relayTokens` and the other relay functions), not on a message. The authority, the ceiling, `setFee`, `nullifyFee` and `collectFees` are the same. A sender who wants a guarantee uses the overload of `relayTokensWithFallback` that takes `maxFeeBasisPoints`.
+Moved to `TokenMediator` on 2026-10-24. User decision (2026-10-25): the bridge charges a fee on both chains. The fee is a rate with 18 decimals (user decision, 2026-10-25): `FEE_DENOMINATOR = 1e18` is 100%, and a basis point is `1e14`. The rate is a `uint256`, and the fee is `received * feeRate / 1e18` through `Math.mulDiv`, rounded down, so it never exceeds the received amount and does not overflow for very large amounts. The example configuration sets a rate of `1000000000000000` (0.1%) with the maximum ceiling of `10000000000000000` (1%) on each chain; the fee authority can change the rate within the ceiling, and the constant `MAX_FEE_CEILING = 1e16` stops any deployment from setting a ceiling above 1%. The fee is charged on the relay of tokens (`relayTokens` and the other relay functions), not on a message. The authority, the ceiling, `setFee`, `nullifyFee` and `collectFees` are the same. A sender who wants a guarantee uses the overload of `relayTokensWithFallback` that takes `maxFeeRate`, in the same scale.
 
 The user expects a fee in the future. Each vault gets a fee switch that is off by default and can be removed for good, either at deployment or at any time after launch.
 
 **The one role.** The fee authority is the only privileged role in the hardened build. It can set the fee on new deposits within an immutable ceiling, and nothing else. It cannot touch locked tokens, withdrawals, the light client, the gate or the layout table. It can give up its power at any time, and then nobody can ever set a fee again.
 
 **Interface.**
-- **Constructor:** it takes `feeAuthority`, `feeRecipient`, `feeBasisPoints` and `feeCeilingBasisPoints`.
-  - `feeCeilingBasisPoints` is immutable, and the code refuses any value above `MAX_FEE_CEILING_BASIS_POINTS = 100` (1%).
+- **Constructor:** it takes `feeAuthority`, `feeRecipient`, `feeRate` and `feeCeiling`.
+  - `feeCeiling` is immutable, and the code refuses any value above `MAX_FEE_CEILING = 1e16` (1%).
   - A zero `feeAuthority` means the fee is removed from the start. The constructor then requires a zero fee and a zero ceiling.
-- **`setFee(uint16 basisPoints, address recipient)`:** only the authority may call it. It requires `basisPoints <= feeCeilingBasisPoints`, and a non-zero recipient when the fee is not zero. It emits `FeeChanged`.
+- **`setFee(uint256 rate, address recipient)`:** only the authority may call it. It requires `rate <= feeCeiling`, and a non-zero recipient when the fee is not zero. It emits `FeeChanged`.
 - **`nullifyFee()`:** only the authority may call it. It sets the fee to zero and the authority to zero, and emits `FeeNullified`. This cannot be undone. `feeRecipient` stays, so it can still collect fees already charged.
 - **`deposit(token, recipient, amount, maxFeeBasisPoints, gateEvidence)`:** it reverts with `FeeAboveLimit` when the current fee is above `maxFeeBasisPoints`. So a fee raise that lands just before a pending deposit cannot charge that deposit more than its sender agreed to. This takes the place of a timelock, which the user rejected.
 - **Charging:** the vault computes the fee on the measured `received` amount, rounding down. It adds the fee to `accruedFees[token]` and bridges `received - fee` under the existing decimals rules. `DepositInitiated` carries the net amount, so the withdrawal side and the Rust reference do not change. The vault emits `FeeCharged(token, fee)`.
@@ -620,7 +620,7 @@ The script used to check only that the verifier address has code. An address wit
 - **Config:** each chain has a `verifierCodeHash` field. It is the `extcodehash` that the operator expects, for example from `cast codehash <verifier> --rpc-url <chain>`. The field must not be a placeholder or zero.
 - **Check:** `assertChainEnvironment` compares `verifier.codehash` with the field. A difference reverts with `VerifierCodeHashMismatch(chainId, verifier, expected, actual)`.
 - **Timing:** the check runs before the script broadcasts anything, in `_inspectChain` and again at the start of `deployChain`.
-- **Fee fields:** each chain also has a `fee` object with `authority`, `recipient`, `basisPoints` and `ceilingBasisPoints`. The example config uses a zero authority, which removes the fee from the start. The script reads the fee fields back from each vault after deployment.
+- **Fee fields:** each chain also has a `fee` object with `authority`, `recipient`, `rate` and `ceiling`. Both are decimal strings of the integer scaled by `1e18`. The example config uses a zero authority, which removes the fee from the start. The script reads the fee fields back from each vault after deployment.
 - **Tests:** `test/hardened/DeployBridge.t.sol` has a passing case, a case with a wrong hash, and a case with other code at the pinned address. `prover/tests/hardened_deployment.rs` runs the script against two live chains. The honest run uses the real hashes and passes. A run with a wrong hash on either chain stops before any transaction.
 
 ## Clock bound on the head (comparison finding G-04)

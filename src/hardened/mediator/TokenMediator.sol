@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IFlowLimiter} from "../IFlowLimiter.sol";
 import {IAMB} from "../IAMB.sol";
 import {IBurnableMintableERC677Token} from "./IBurnableMintableERC677Token.sol";
@@ -54,8 +55,10 @@ contract TokenMediator is ReentrancyGuard {
     /// @param remoteChainId The identifier of the other chain. A message must come from this chain.
     /// @param feeAuthority The fee authority. Zero removes the fee from the start: the fee and the ceiling must be zero.
     /// @param feeRecipient The recipient of collected fees. It must not be zero when the fee is not zero.
-    /// @param feeBasisPoints The fee on relayed tokens at the start. It must not exceed the ceiling.
-    /// @param feeCeilingBasisPoints The highest fee ever. It must not exceed `MAX_FEE_CEILING_BASIS_POINTS`.
+    /// @param feeRate The fee rate on relayed tokens at the start, scaled by `FEE_DENOMINATOR`. It must not exceed
+    /// the ceiling.
+    /// @param feeCeiling The highest fee rate ever, scaled by `FEE_DENOMINATOR`. It must not exceed
+    /// `MAX_FEE_CEILING`.
     /// @param flowLimiter The flow limiter. Zero means no limiter from the start. Nothing can set one later.
     struct MediatorTerms {
         address bridge;
@@ -63,8 +66,8 @@ contract TokenMediator is ReentrancyGuard {
         uint256 remoteChainId;
         address feeAuthority;
         address feeRecipient;
-        uint16 feeBasisPoints;
-        uint16 feeCeilingBasisPoints;
+        uint256 feeRate;
+        uint256 feeCeiling;
         address flowLimiter;
     }
 
@@ -95,7 +98,7 @@ contract TokenMediator is ReentrancyGuard {
         address fallbackRecipient;
         bytes data;
         CallMode mode;
-        uint16 maxFeeBasisPoints;
+        uint256 maxFeeRate;
     }
 
     /// @dev What a handler delivers.
@@ -117,12 +120,12 @@ contract TokenMediator is ReentrancyGuard {
         bool deployAcknowledged;
     }
 
-    /// @notice The highest fee ceiling a mediator accepts, in basis points (1%).
-    uint16 public constant MAX_FEE_CEILING_BASIS_POINTS = 100;
-    /// @notice The divisor of a fee in basis points.
-    uint256 public constant BASIS_POINTS_DENOMINATOR = 10_000;
-    /// @notice The `maxFeeBasisPoints` that the functions without a limit use: no limit.
-    uint16 public constant NO_FEE_LIMIT = type(uint16).max;
+    /// @notice The highest fee ceiling a mediator accepts: 1e16, which is 1% of `FEE_DENOMINATOR`.
+    uint256 public constant MAX_FEE_CEILING = 1e16;
+    /// @notice The divisor of a fee rate. A rate of `FEE_DENOMINATOR` is 100%.
+    uint256 public constant FEE_DENOMINATOR = 1e18;
+    /// @notice The `maxFeeRate` that the functions without a limit use: no limit.
+    uint256 public constant NO_FEE_LIMIT = type(uint256).max;
 
     /// @notice The gas that the message bridge gives the call of a release of tokens.
     uint256 public constant RELEASE_GAS_LIMIT = 250_000;
@@ -146,18 +149,18 @@ contract TokenMediator is ReentrancyGuard {
     error ZeroValue(string name);
     /// @notice The largest message of the mediator asks for more gas than the message bridge allows in one call.
     error GasLimitAboveBridgeMaximum(uint256 gasLimit, uint256 maximum);
-    /// @notice The fee ceiling is above `MAX_FEE_CEILING_BASIS_POINTS`.
-    error FeeCeilingTooHigh(uint16 ceiling, uint16 maximum);
+    /// @notice The fee ceiling is above `MAX_FEE_CEILING`.
+    error FeeCeilingTooHigh(uint256 ceiling, uint256 maximum);
     /// @notice A mediator with no fee authority must have a zero fee and a zero ceiling.
-    error NullifiedFeeMustBeZero(uint16 feeBasisPoints, uint16 feeCeilingBasisPoints);
+    error NullifiedFeeMustBeZero(uint256 feeRate, uint256 feeCeiling);
     /// @notice The fee is above the ceiling.
-    error FeeAboveCeiling(uint16 feeBasisPoints, uint16 feeCeilingBasisPoints);
+    error FeeAboveCeiling(uint256 feeRate, uint256 feeCeiling);
     /// @notice The caller is not the fee authority. After `nullifyFee` nobody is.
     error NotFeeAuthority(address caller);
     /// @notice A fee that is not zero needs a recipient.
     error ZeroFeeRecipient();
     /// @notice The fee is above the limit that the sender accepts.
-    error FeeAboveLimit(uint16 feeBasisPoints, uint16 maxFeeBasisPoints);
+    error FeeAboveLimit(uint256 feeRate, uint256 maxFeeRate);
     /// @notice No fees are waiting for collection in this token.
     error NoFeesAccrued(address token);
     /// @notice Only the flow limiter may detach itself. After a detach nobody can.
@@ -207,7 +210,7 @@ contract TokenMediator is ReentrancyGuard {
     /// @notice Emitted when the `onTokenBridged` call on a recipient fails. The tokens stay with the recipient.
     event CallbackFailed(address indexed token, address indexed recipient, bytes32 indexed messageId);
     /// @notice Emitted when the fee authority sets the fee.
-    event FeeChanged(uint16 feeBasisPoints, address feeRecipient);
+    event FeeChanged(uint256 feeRate, address feeRecipient);
     /// @notice Emitted when the fee authority gives up its power. The fee is zero from then on, for good.
     event FeeNullified();
     /// @notice Emitted when a relay is charged a fee. The fee stays in the mediator until `collectFees`.
@@ -225,13 +228,14 @@ contract TokenMediator is ReentrancyGuard {
     uint256 public immutable remoteChainId;
     /// @notice The factory that deploys the bridged copies. The mediator deploys it in its constructor.
     TokenFactory public immutable tokenFactory;
-    /// @notice The highest fee in basis points that the fee authority can ever set. At most 100 (1%).
-    uint16 public immutable feeCeilingBasisPoints;
+    /// @notice The highest fee rate that the fee authority can ever set, scaled by `FEE_DENOMINATOR`. At most 1e16
+    /// (1%).
+    uint256 public immutable feeCeiling;
 
     /// @notice The only role: it sets the fee within the ceiling. Zero means the fee was removed for good.
     address public feeAuthority;
-    /// @notice The fee on each new relay, in basis points.
-    uint16 public feeBasisPoints;
+    /// @notice The fee rate on each new relay, scaled by `FEE_DENOMINATOR` (1e18 is 100%).
+    uint256 public feeRate;
     /// @notice The recipient of collected fees.
     address public feeRecipient;
     /// @notice The fees charged and not yet collected, for each local token.
@@ -261,21 +265,21 @@ contract TokenMediator is ReentrancyGuard {
         if (largestGasLimit > bridgeMaximum) revert GasLimitAboveBridgeMaximum(largestGasLimit, bridgeMaximum);
         if (terms.remoteMediator == address(0)) revert ZeroValue("remoteMediator");
         if (terms.remoteChainId == 0) revert ZeroValue("remoteChainId");
-        if (terms.feeCeilingBasisPoints > MAX_FEE_CEILING_BASIS_POINTS) {
-            revert FeeCeilingTooHigh(terms.feeCeilingBasisPoints, MAX_FEE_CEILING_BASIS_POINTS);
+        if (terms.feeCeiling > MAX_FEE_CEILING) {
+            revert FeeCeilingTooHigh(terms.feeCeiling, MAX_FEE_CEILING);
         }
-        if (terms.feeAuthority == address(0) && (terms.feeBasisPoints != 0 || terms.feeCeilingBasisPoints != 0)) {
-            revert NullifiedFeeMustBeZero(terms.feeBasisPoints, terms.feeCeilingBasisPoints);
+        if (terms.feeAuthority == address(0) && (terms.feeRate != 0 || terms.feeCeiling != 0)) {
+            revert NullifiedFeeMustBeZero(terms.feeRate, terms.feeCeiling);
         }
-        _requireFeeTerms(terms.feeBasisPoints, terms.feeRecipient, terms.feeCeilingBasisPoints);
+        _requireFeeTerms(terms.feeRate, terms.feeRecipient, terms.feeCeiling);
 
         bridgeContract = IAMB(terms.bridge);
         mediatorContractOnOtherSide = terms.remoteMediator;
         remoteChainId = terms.remoteChainId;
         tokenFactory = new TokenFactory(address(this));
-        feeCeilingBasisPoints = terms.feeCeilingBasisPoints;
+        feeCeiling = terms.feeCeiling;
         feeAuthority = terms.feeAuthority;
-        feeBasisPoints = terms.feeBasisPoints;
+        feeRate = terms.feeRate;
         feeRecipient = terms.feeRecipient;
         flowLimiter = IFlowLimiter(terms.flowLimiter);
     }
@@ -323,7 +327,7 @@ contract TokenMediator is ReentrancyGuard {
     }
 
     /// @notice The same as the five argument form, with a limit on the fee. It reverts with `FeeAboveLimit` when the
-    /// current fee is above `maxFeeBasisPoints`, so a fee raised just before this call cannot charge more than the
+    /// current fee is above `maxFeeRate`, so a fee raised just before this call cannot charge more than the
     /// sender accepted.
     /// @dev Why an overload. The OmniBridge functions keep their signatures, so they cannot carry the limit, and they
     /// accept any fee up to the immutable ceiling of 1%. A sender who wants the guarantee calls this form. The vault
@@ -334,9 +338,9 @@ contract TokenMediator is ReentrancyGuard {
         uint256 value,
         bytes calldata data,
         address fallbackRecipient,
-        uint16 maxFeeBasisPoints
+        uint256 maxFeeRate
     ) external nonReentrant {
-        _pullAndBridge(Relay(token, receiver, fallbackRecipient, data, _modeOf(data), maxFeeBasisPoints), value);
+        _pullAndBridge(Relay(token, receiver, fallbackRecipient, data, _modeOf(data), maxFeeRate), value);
     }
 
     /// @notice The transfer callback of a token with `transferAndCall`. The token has moved `value` to the mediator
@@ -497,21 +501,21 @@ contract TokenMediator is ReentrancyGuard {
     }
 
     /// @notice Sets the fee on new relays and the recipient of collected fees. Only the fee authority may call it.
-    /// @param basisPoints The new fee. It must not exceed `feeCeilingBasisPoints`.
+    /// @param rate The new fee rate, scaled by `FEE_DENOMINATOR`. It must not exceed `feeCeiling`.
     /// @param recipient The new recipient. It must not be zero when the fee is not zero.
-    function setFee(uint16 basisPoints, address recipient) external {
+    function setFee(uint256 rate, address recipient) external {
         _requireFeeAuthority();
-        _requireFeeTerms(basisPoints, recipient, feeCeilingBasisPoints);
-        feeBasisPoints = basisPoints;
+        _requireFeeTerms(rate, recipient, feeCeiling);
+        feeRate = rate;
         feeRecipient = recipient;
-        emit FeeChanged(basisPoints, recipient);
+        emit FeeChanged(rate, recipient);
     }
 
     /// @notice Sets the fee to zero and gives up the fee authority. This cannot be undone. Only the fee authority may
     /// call it. `feeRecipient` stays, so it can still collect the fees already charged.
     function nullifyFee() external {
         _requireFeeAuthority();
-        feeBasisPoints = 0;
+        feeRate = 0;
         feeAuthority = address(0);
         emit FeeNullified();
     }
@@ -613,7 +617,7 @@ contract TokenMediator is ReentrancyGuard {
             revert InvalidReceiver(relay.receiver);
         }
         if (relay.fallbackRecipient == address(0)) revert ZeroFallback();
-        uint256 net = received - _chargeFee(relay.token, received, relay.maxFeeBasisPoints);
+        uint256 net = received - _chargeFee(relay.token, received, relay.maxFeeRate);
         if (net == 0) revert ZeroAmount();
         IFlowLimiter limiter = flowLimiter;
         if (address(limiter) != address(0)) limiter.checkDeposit(relay.token, from, net);
@@ -626,10 +630,10 @@ contract TokenMediator is ReentrancyGuard {
     }
 
     /// @dev Takes the fee from the received amount, rounded down, and books it in `accruedFees`.
-    function _chargeFee(address token, uint256 received, uint16 maxFeeBasisPoints) private returns (uint256 fee) {
-        uint16 basisPoints = feeBasisPoints;
-        if (basisPoints > maxFeeBasisPoints) revert FeeAboveLimit(basisPoints, maxFeeBasisPoints);
-        fee = received * basisPoints / BASIS_POINTS_DENOMINATOR;
+    function _chargeFee(address token, uint256 received, uint256 maxFeeRate) private returns (uint256 fee) {
+        uint256 rate = feeRate;
+        if (rate > maxFeeRate) revert FeeAboveLimit(rate, maxFeeRate);
+        fee = Math.mulDiv(received, rate, FEE_DENOMINATOR);
         if (fee == 0) return 0;
         accruedFees[token] += fee;
         emit FeeCharged(token, fee);
@@ -960,8 +964,8 @@ contract TokenMediator is ReentrancyGuard {
     }
 
     /// @dev A fee must stay within the ceiling and, when it is not zero, have a recipient.
-    function _requireFeeTerms(uint16 basisPoints, address recipient, uint16 ceiling) private pure {
-        if (basisPoints > ceiling) revert FeeAboveCeiling(basisPoints, ceiling);
-        if (basisPoints != 0 && recipient == address(0)) revert ZeroFeeRecipient();
+    function _requireFeeTerms(uint256 rate, address recipient, uint256 ceiling) private pure {
+        if (rate > ceiling) revert FeeAboveCeiling(rate, ceiling);
+        if (rate != 0 && recipient == address(0)) revert ZeroFeeRecipient();
     }
 }

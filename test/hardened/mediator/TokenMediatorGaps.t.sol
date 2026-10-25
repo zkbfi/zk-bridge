@@ -30,7 +30,7 @@ contract TokenMediatorGapsTest is MediatorFixture {
 
     // ------------------------------------------------------------------------------------------------ helpers
 
-    function _terms(uint16 basisPoints, uint16 ceiling, address limiter)
+    function _terms(uint256 rate, uint256 ceiling, address limiter)
         internal
         view
         returns (TokenMediator.MediatorTerms memory terms)
@@ -38,8 +38,8 @@ contract TokenMediatorGapsTest is MediatorFixture {
         terms = _noTerms();
         terms.feeAuthority = authority;
         terms.feeRecipient = treasury;
-        terms.feeBasisPoints = basisPoints;
-        terms.feeCeilingBasisPoints = ceiling;
+        terms.feeRate = rate;
+        terms.feeCeiling = ceiling;
         terms.flowLimiter = limiter;
     }
 
@@ -292,7 +292,7 @@ contract TokenMediatorGapsTest is MediatorFixture {
     /// The balance covers the record. Matters: the fees and the record are separate. A release and a collection must
     /// not draw on the same tokens.
     function test_aTokenThatCollectsFeesDuringAReleaseKeepsTheAccountingExact() public {
-        _redeploy(_terms(100, 100, address(0)), _terms(0, 0, address(0)));
+        _redeploy(_terms(100e14, 100e14, address(0)), _terms(0, 0, address(0)));
         MedHostileToken token = _hostileWorld(mediatorA, 1_000 ether);
         address copy = _copyOf(address(token));
         assertEq(mediatorA.accruedFees(address(token)), 10 ether);
@@ -316,7 +316,7 @@ contract TokenMediatorGapsTest is MediatorFixture {
     /// treasury once, and the accrued amount is zero. Matters: replaces `test_fee_collect_zeroesBeforeItTransfers`
     /// from the side of reentry. See the next test for the order of the writes.
     function test_aTokenCannotCallBackIntoTheMediatorWhileCollectFeesPays() public {
-        _redeploy(_terms(100, 100, address(0)), _terms(0, 0, address(0)));
+        _redeploy(_terms(100e14, 100e14, address(0)), _terms(0, 0, address(0)));
         MedHostileToken token = _hostileWorld(mediatorA, 1_000 ether);
         bytes[3] memory attempts = [
             abi.encodeCall(TokenMediator.collectFees, (address(token))),
@@ -378,7 +378,7 @@ contract TokenMediatorGapsTest is MediatorFixture {
     /// reverts with `NoFeesAccrued`. Matters: replaces `test_fee_collect_zeroesBeforeItTransfers`. A reentrant path
     /// must never see the fees as still owed.
     function test_collectFeesZeroesTheAccruedAmountBeforeItTransfers() public {
-        _redeploy(_terms(100, 100, address(0)), _terms(0, 0, address(0)));
+        _redeploy(_terms(100e14, 100e14, address(0)), _terms(0, 0, address(0)));
         MedHostileToken token = _hostileWorld(mediatorA, 1_000 ether);
         assertEq(mediatorA.accruedFees(address(token)), 10 ether);
         token.arm(
@@ -403,7 +403,7 @@ contract TokenMediatorGapsTest is MediatorFixture {
     /// Matters: completes `test_aRecipientThatTheTokenRefusesBlocksCollectionOnly`, which stops at the refusal. A
     /// refused recipient must not lock the fees for good.
     function test_aNewRecipientCollectsTheFeesThatARefusedRecipientBlocked() public {
-        _redeploy(_terms(100, 100, address(0)), _terms(0, 0, address(0)));
+        _redeploy(_terms(100e14, 100e14, address(0)), _terms(0, 0, address(0)));
         MedHostileToken token = _hostileWorld(mediatorA, 1_000 ether);
         token.setRefusingAll(true);
         vm.expectRevert();
@@ -412,19 +412,19 @@ contract TokenMediatorGapsTest is MediatorFixture {
 
         token.setRefusingAll(false);
         vm.prank(authority);
-        mediatorA.setFee(100, carol);
+        mediatorA.setFee(100e14, carol);
         mediatorA.collectFees(address(token));
         assertEq(token.balanceOf(carol), 10 ether);
         assertEq(mediatorA.accruedFees(address(token)), 0);
     }
 
     /// Claim: the fee is computed on the received amount and rounds down, and a fee under one unit books nothing.
-    /// Shows: 199 received at 100 basis points is a fee of 1 and a net of 198; 99 received is a fee of 0 with no
+    /// Shows: 199 received at 1% is a fee of 1 and a net of 198; 99 received is a fee of 0 with no
     /// `FeeCharged` event; 1 received is never taken. Matters: replaces `test_fee_roundsDownOnTheReceivedAmount`. The
     /// existing rounding test covers one amount only. Rounding favours the sender, and the mediator never books a fee
     /// it did not take.
     function test_aFeeUnderOneUnitBooksNothingAndTheNetAmountIsTheRest() public {
-        _redeploy(_terms(100, 100, address(0)), _terms(0, 0, address(0)));
+        _redeploy(_terms(100e14, 100e14, address(0)), _terms(0, 0, address(0)));
         uint256[3] memory amounts = [uint256(199), 99, 1];
         uint256[3] memory expectedFees = [uint256(1), 0, 0];
         uint256 booked;
@@ -441,31 +441,31 @@ contract TokenMediatorGapsTest is MediatorFixture {
         assertEq(tokenA.balanceOf(address(mediatorA)), 199 + 99 + 1, "the balance covers the record and the fee");
     }
 
-    /// Claim: the ceiling bounds every fee for the life of the mediator. Shows: a ceiling of 100 deploys and takes a
-    /// fee of 100; the largest `uint16` ceiling reverts; `setFee` accepts the ceiling itself; the ceiling does not move.
+    /// Claim: the ceiling bounds every fee for the life of the mediator. Shows: a ceiling of 1e16 deploys and takes a
+    /// fee of 1e16; the largest `uint256` ceiling reverts; `setFee` accepts the ceiling itself; the ceiling does not move.
     /// Matters: replaces `test_fee_ceiling_boundsEveryFee` where the existing tests stop at 101. They do not show
     /// that the maximum itself works or that the ceiling stays.
     function test_theCeilingItselfIsAcceptedAndNeverMoves() public {
-        assertEq(mediatorA.MAX_FEE_CEILING_BASIS_POINTS(), 100);
-        TokenMediator.MediatorTerms memory terms = _terms(100, 100, address(0));
+        assertEq(mediatorA.MAX_FEE_CEILING(), 1e16);
+        TokenMediator.MediatorTerms memory terms = _terms(100e14, 100e14, address(0));
         terms.bridge = address(ambA);
         terms.remoteMediator = address(mediatorB);
         terms.remoteChainId = CHAIN_B;
         TokenMediator atMaximum = new TokenMediator(terms);
-        assertEq(atMaximum.feeCeilingBasisPoints(), 100);
-        assertEq(atMaximum.feeBasisPoints(), 100);
+        assertEq(atMaximum.feeCeiling(), 1e16);
+        assertEq(atMaximum.feeRate(), 1e16);
 
-        terms.feeBasisPoints = 0;
-        terms.feeCeilingBasisPoints = type(uint16).max;
-        vm.expectRevert(abi.encodeWithSelector(TokenMediator.FeeCeilingTooHigh.selector, type(uint16).max, uint16(100)));
+        terms.feeRate = 0;
+        terms.feeCeiling = type(uint256).max;
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.FeeCeilingTooHigh.selector, type(uint256).max, uint256(1e16)));
         new TokenMediator(terms);
 
-        _redeploy(_terms(25, 50, address(0)), _terms(0, 0, address(0)));
+        _redeploy(_terms(25e14, 50e14, address(0)), _terms(0, 0, address(0)));
         vm.prank(authority);
-        mediatorA.setFee(50, carol);
-        assertEq(mediatorA.feeBasisPoints(), 50);
+        mediatorA.setFee(50e14, carol);
+        assertEq(mediatorA.feeRate(), 50e14);
         assertEq(mediatorA.feeRecipient(), carol);
-        assertEq(mediatorA.feeCeilingBasisPoints(), 50, "the ceiling did not move");
+        assertEq(mediatorA.feeCeiling(), 50e14, "the ceiling did not move");
     }
 
     /// Claim: only the fee authority sets the fee, and the fee recipient has no power over it. Shows: the recipient
@@ -473,14 +473,14 @@ contract TokenMediatorGapsTest is MediatorFixture {
     /// `test_fee_setFee_isOnlyForTheAuthority`. The existing tests try an outsider only. The recipient is the one
     /// account with a reason to raise the fee.
     function test_theFeeRecipientCannotSetOrNullifyTheFee() public {
-        _redeploy(_terms(25, 50, address(0)), _terms(0, 0, address(0)));
+        _redeploy(_terms(25e14, 50e14, address(0)), _terms(0, 0, address(0)));
         vm.startPrank(treasury);
         vm.expectRevert(abi.encodeWithSelector(TokenMediator.NotFeeAuthority.selector, treasury));
-        mediatorA.setFee(10, treasury);
+        mediatorA.setFee(10e14, treasury);
         vm.expectRevert(abi.encodeWithSelector(TokenMediator.NotFeeAuthority.selector, treasury));
         mediatorA.nullifyFee();
         vm.stopPrank();
-        assertEq(mediatorA.feeBasisPoints(), 25);
+        assertEq(mediatorA.feeRate(), 25e14);
         assertEq(mediatorA.feeAuthority(), authority);
     }
 
@@ -489,11 +489,11 @@ contract TokenMediatorGapsTest is MediatorFixture {
     /// for the two values that the existing test does not read. The recipient must keep its claim on fees charged
     /// before the nullify.
     function test_nullifyKeepsTheRecipientAndTheCeiling() public {
-        _redeploy(_terms(25, 50, address(0)), _terms(0, 0, address(0)));
+        _redeploy(_terms(25e14, 50e14, address(0)), _terms(0, 0, address(0)));
         vm.prank(authority);
         mediatorA.nullifyFee();
         assertEq(mediatorA.feeRecipient(), treasury, "the recipient stays");
-        assertEq(mediatorA.feeCeilingBasisPoints(), 50, "the ceiling is immutable");
+        assertEq(mediatorA.feeCeiling(), 50e14, "the ceiling is immutable");
     }
 
     /// Claim: a mediator built with no fee authority charges nothing, and nobody can ever set a fee. Shows: a relay
@@ -512,19 +512,19 @@ contract TokenMediatorGapsTest is MediatorFixture {
         for (uint256 i = 0; i < callers.length; i++) {
             vm.startPrank(callers[i]);
             vm.expectRevert(abi.encodeWithSelector(TokenMediator.NotFeeAuthority.selector, callers[i]));
-            mediatorA.setFee(1, bob);
+            mediatorA.setFee(1e14, bob);
             vm.expectRevert(abi.encodeWithSelector(TokenMediator.NotFeeAuthority.selector, callers[i]));
             mediatorA.nullifyFee();
             vm.stopPrank();
         }
-        assertEq(mediatorA.feeBasisPoints(), 0);
+        assertEq(mediatorA.feeRate(), 0);
 
         TokenMediator.MediatorTerms memory terms = _noTerms();
         terms.bridge = address(ambA);
         terms.remoteMediator = address(mediatorB);
         terms.remoteChainId = CHAIN_B;
-        terms.feeBasisPoints = 1;
-        vm.expectRevert(abi.encodeWithSelector(TokenMediator.NullifiedFeeMustBeZero.selector, uint16(1), uint16(0)));
+        terms.feeRate = 1e14;
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.NullifiedFeeMustBeZero.selector, uint256(1e14), uint256(0)));
         new TokenMediator(terms);
     }
 
@@ -563,7 +563,7 @@ contract TokenMediatorGapsTest is MediatorFixture {
     /// test does not read. The fee is booked before the limiter runs, so the revert must undo it.
     function test_aRefusedRelayBooksNoFeeAndNoRecord() public {
         ScriptedMediatorLimiter limiter = new ScriptedMediatorLimiter();
-        _redeploy(_terms(100, 100, address(limiter)), _terms(0, 0, address(0)));
+        _redeploy(_terms(100e14, 100e14, address(limiter)), _terms(0, 0, address(0)));
         limiter.setRefusals(true, false);
         vm.prank(alice);
         vm.expectRevert(ScriptedMediatorLimiter.FlowRefused.selector);
@@ -631,7 +631,7 @@ contract TokenMediatorGapsTest is MediatorFixture {
     /// mediator calls the limiter under its reentrancy guard, so the limiter cannot act on a half-finished call.
     function test_aLimiterCannotReenterDuringARelayOrAClaim() public {
         MedHostileLimiter limiter = new MedHostileLimiter();
-        _redeploy(_terms(100, 100, address(limiter)), _terms(0, 0, address(0)));
+        _redeploy(_terms(100e14, 100e14, address(limiter)), _terms(0, 0, address(0)));
         MedHostileLimiter.Move[3] memory attempts = [
             MedHostileLimiter.Move.ReenterRelay,
             MedHostileLimiter.Move.ReenterClaim,
@@ -711,7 +711,7 @@ contract TokenMediatorGapsTest is MediatorFixture {
     function test_aLimiterCannotMoveTheMediatorFunds() public {
         MedHostileLimiter limiterA = new MedHostileLimiter();
         MedHostileLimiter limiterB = new MedHostileLimiter();
-        _redeploy(_terms(100, 100, address(limiterA)), _terms(0, 0, address(limiterB)));
+        _redeploy(_terms(100e14, 100e14, address(limiterA)), _terms(0, 0, address(limiterB)));
         limiterA.setMove(MedHostileLimiter.Move.PullTokens);
         limiterB.setMove(MedHostileLimiter.Move.PullTokens);
 
@@ -765,9 +765,9 @@ contract TokenMediatorGapsTest is MediatorFixture {
     /// `test_gas_deposit_feeSet`. The cost of the limiter hook is its own call and its own storage.
     function test_gasOfARelayWithAFeeAndWithAnAllowingLimiter() public {
         uint256 plain = _firstRelayGas(_terms(0, 0, address(0)));
-        uint256 withFee = _firstRelayGas(_terms(25, 50, address(0)));
+        uint256 withFee = _firstRelayGas(_terms(25e14, 50e14, address(0)));
         MedHostileLimiter limiter = new MedHostileLimiter();
-        uint256 withLimiter = _firstRelayGas(_terms(25, 50, address(limiter)));
+        uint256 withLimiter = _firstRelayGas(_terms(25e14, 50e14, address(limiter)));
         console2.log("relay gas, no fee, no limiter:       ", plain);
         console2.log("relay gas, fee set:                  ", withFee);
         console2.log("relay gas, fee set, allowing limiter:", withLimiter);

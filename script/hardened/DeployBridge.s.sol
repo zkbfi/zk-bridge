@@ -74,8 +74,8 @@ contract DeployBridge is Script {
     struct FeeConfig {
         address authority;
         address recipient;
-        uint16 basisPoints;
-        uint16 ceilingBasisPoints;
+        uint256 rate;
+        uint256 ceiling;
     }
 
     /// @notice The own-chain light client and the fork registry of a chain whose gate mode is
@@ -546,8 +546,8 @@ contract DeployBridge is Script {
                     remoteChainId: deployment.remoteChainId,
                     feeAuthority: chain.fee.authority,
                     feeRecipient: chain.fee.recipient,
-                    feeBasisPoints: chain.fee.basisPoints,
-                    feeCeilingBasisPoints: chain.fee.ceilingBasisPoints,
+                    feeRate: chain.fee.rate,
+                    feeCeiling: chain.fee.ceiling,
                     flowLimiter: chain.flowLimiter
                 })
             )
@@ -655,9 +655,9 @@ contract DeployBridge is Script {
         }
         if (mediator.feeAuthority() != chain.fee.authority) revert DeploymentMismatch("mediator.feeAuthority");
         if (mediator.feeRecipient() != chain.fee.recipient) revert DeploymentMismatch("mediator.feeRecipient");
-        if (mediator.feeBasisPoints() != chain.fee.basisPoints) revert DeploymentMismatch("mediator.feeBasisPoints");
-        if (mediator.feeCeilingBasisPoints() != chain.fee.ceilingBasisPoints) {
-            revert DeploymentMismatch("mediator.feeCeilingBasisPoints");
+        if (mediator.feeRate() != chain.fee.rate) revert DeploymentMismatch("mediator.feeRate");
+        if (mediator.feeCeiling() != chain.fee.ceiling) {
+            revert DeploymentMismatch("mediator.feeCeiling");
         }
         if (address(mediator.flowLimiter()) != chain.flowLimiter) revert DeploymentMismatch("mediator.flowLimiter");
     }
@@ -721,8 +721,8 @@ contract DeployBridge is Script {
     function _readFee(string memory json, string memory prefix) private pure returns (FeeConfig memory fee) {
         fee.authority = vm.parseAddress(_readText(json, string.concat(prefix, ".authority")));
         fee.recipient = vm.parseAddress(_readText(json, string.concat(prefix, ".recipient")));
-        fee.basisPoints = uint16(_readUint(json, string.concat(prefix, ".basisPoints")));
-        fee.ceilingBasisPoints = uint16(_readUint(json, string.concat(prefix, ".ceilingBasisPoints")));
+        fee.rate = _readUint(json, string.concat(prefix, ".rate"));
+        fee.ceiling = _readUint(json, string.concat(prefix, ".ceiling"));
     }
 
     function _readObservation(string memory json, string memory prefix)

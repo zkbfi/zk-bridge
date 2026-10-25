@@ -192,11 +192,13 @@ contract MediatorHandler is Test {
     }
 
     /// @notice The fee authority tries to set the fee. A value above the ceiling must revert, and one within it must not.
-    function setFee(uint8 sideSeed, uint16 basisPoints) external {
+    /// The rate is a count of steps of 0.01% (1e14), so the fuzzed values land around the ceiling of 1% (1e16).
+    function setFee(uint8 sideSeed, uint16 rateSteps) external {
         TokenMediator mediator = sideSeed % 2 == 0 ? mediatorA : mediatorB;
-        bool withinCeiling = basisPoints <= mediator.feeCeilingBasisPoints();
+        uint256 rate = uint256(rateSteps) * 1e14;
+        bool withinCeiling = rate <= mediator.feeCeiling();
         vm.prank(authority);
-        try mediator.setFee(basisPoints, treasury) {
+        try mediator.setFee(rate, treasury) {
             if (!withinCeiling) feeSwitchViolations++;
             if (withinCeiling) feeRaisesAccepted++;
         } catch {
@@ -323,8 +325,8 @@ contract MediatorHandler is Test {
         if (fee == 0) return;
         chargedFeeCount++;
         uint256 received = _receivedAmount(mediator, token, balanceBefore, fee);
-        uint256 ceiling = mediator.feeCeilingBasisPoints();
-        if (fee * mediator.BASIS_POINTS_DENOMINATOR() > received * ceiling) feeCeilingBreaches++;
+        uint256 ceiling = mediator.feeCeiling();
+        if (fee * mediator.FEE_DENOMINATOR() > received * ceiling) feeCeilingBreaches++;
     }
 
     /// @dev The amount that a relay put into the mediator, before the fee. A native token stays in the balance. A copy
@@ -452,13 +454,13 @@ contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
         TokenMediator.MediatorTerms memory termsA = _noTerms();
         termsA.feeAuthority = authority;
         termsA.feeRecipient = treasury;
-        termsA.feeBasisPoints = 100;
-        termsA.feeCeilingBasisPoints = 100;
+        termsA.feeRate = 100e14;
+        termsA.feeCeiling = 100e14;
         TokenMediator.MediatorTerms memory termsB = _noTerms();
         termsB.feeAuthority = authority;
         termsB.feeRecipient = treasury;
-        termsB.feeBasisPoints = 50;
-        termsB.feeCeilingBasisPoints = 80;
+        termsB.feeRate = 50e14;
+        termsB.feeCeiling = 80e14;
         _deployMediators(termsA, termsB);
         handler = new MediatorHandler(ambA, ambB, mediatorA, mediatorB, treasury, authority);
         targetContract(address(handler));
@@ -538,8 +540,8 @@ contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
     function invariant_theFeeCeilingIsNeverExceeded() public view {
         assertEq(handler.feeCeilingBreaches(), 0);
         assertEq(handler.feeSwitchViolations(), 0);
-        assertLe(mediatorA.feeBasisPoints(), mediatorA.feeCeilingBasisPoints());
-        assertLe(mediatorB.feeBasisPoints(), mediatorB.feeCeilingBasisPoints());
+        assertLe(mediatorA.feeRate(), mediatorA.feeCeiling());
+        assertLe(mediatorB.feeRate(), mediatorB.feeCeiling());
     }
 
     /// Claim: the handler reaches the paying paths. Shows: after a fixed sequence, a native token is locked, its copy

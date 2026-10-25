@@ -72,8 +72,8 @@ contract BytecodeTest is MessageScenes {
                 remoteChainId: CHAIN_A,
                 feeAuthority: address(0),
                 feeRecipient: address(0),
-                feeBasisPoints: 0,
-                feeCeilingBasisPoints: 0,
+                feeRate: 0,
+                feeCeiling: 0,
                 flowLimiter: address(0)
             })
         );

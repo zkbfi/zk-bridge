@@ -10,8 +10,8 @@
     "fee": {
       "authority": "0x0000000000000000000000000000000000000000",
       "recipient": "0x0000000000000000000000000000000000000000",
-      "basisPoints": "0",
-      "ceilingBasisPoints": "0"
+      "rate": "0",
+      "ceiling": "0"
     },
     "flowLimiter": "0x0000000000000000000000000000000000000000",
     "wrappedNative": "@@WRAPPED_NATIVE_A@@",
@@ -49,8 +49,8 @@
     "fee": {
       "authority": "0x0000000000000000000000000000000000000000",
       "recipient": "0x0000000000000000000000000000000000000000",
-      "basisPoints": "0",
-      "ceilingBasisPoints": "0"
+      "rate": "0",
+      "ceiling": "0"
     },
     "flowLimiter": "0x0000000000000000000000000000000000000000",
     "wrappedNative": "@@WRAPPED_NATIVE_B@@",
