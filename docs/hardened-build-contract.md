@@ -562,7 +562,7 @@ A PulseChain consensus fork almost always arrives with an execution fork, and th
 
 ## Deposit fee switch (user decision, 2026-10-21) (built)
 
-Moved to `TokenMediator` on 2026-10-24. The fee is charged on the relay of tokens (`relayTokens` and the other relay functions), not on a message. The authority, the ceiling, `setFee`, `nullifyFee` and `collectFees` are the same. A sender who wants a guarantee uses the overload of `relayTokensWithFallback` that takes `maxFeeBasisPoints`.
+Moved to `TokenMediator` on 2026-10-24. User decision (2026-10-25): the bridge charges a fee on both chains. The example configuration sets 10 basis points (0.1%) with the maximum ceiling of 100 basis points (1%) on each chain; the fee authority can change the rate within the ceiling, and the constant `MAX_FEE_CEILING_BASIS_POINTS = 100` stops any deployment from setting a ceiling above 1%. The fee is charged on the relay of tokens (`relayTokens` and the other relay functions), not on a message. The authority, the ceiling, `setFee`, `nullifyFee` and `collectFees` are the same. A sender who wants a guarantee uses the overload of `relayTokensWithFallback` that takes `maxFeeBasisPoints`.
 
 The user expects a fee in the future. Each vault gets a fee switch that is off by default and can be removed for good, either at deployment or at any time after launch.
 
