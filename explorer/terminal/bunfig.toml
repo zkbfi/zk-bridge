@@ -1,0 +1,7 @@
+[install]
+# Refuse any package version younger than 28 days (2419200 seconds).
+minimumReleaseAge = 2419200
+exact = true
+
+[test]
+preload = ["./test/setup.ts"]

@@ -1,0 +1,433 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`view snapshots pair view, wide 120x40 1`] = `
+"┌─1 Global  [2 Pair]  3 Audit  4 Prover and costs  5 Prover setup──────────────────────────────────────────────────────┐
+│eth-pls  Ethereum <> PulseChain   in flight 12   24h 29 transfers, 147.81 USDC                                        │
+│fees accrued 1,250 USDC | 0.8 WETH | 90,000 WPLS   gate Ethereum open PulseChain warn                                 │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─Account and actions────────────────────────┐┌─Filters────────────────────────────────────────────────────────────────┐
+│Account                                     ││ Dir:all  Kind:all  Status:all  Token:all  Addr:any  Time:all           │
+│ no signer connected                        │└────────────────────────────────────────────────────────────────────────┘
+│Balances                                    │┌─Feed 1/36──────────────────────────────────────────────────────────────┐
+│ connect a signer                           ││sent     arrived  dir     knd            amount status    to            │
+│Actions                                     ││11:54:30 -        PLS>ETH tok      37.13 zkWETH sent      0x0000…ABC0   │
+│> Account and signer                        ││11:29:24 -        ETH>PLS tok        24.97 USDC waiting   0x0000…ABC0   │
+│  Bridge tokens                             ││11:07:06 -        PLS>ETH tok      39.61 zkWETH covered   0x0000…ABC0   │
+│  Send a message                            ││10:42:56 11:03:52 PLS>ETH tok        25.29 WPLS delivered 0x0000…ABC0   │
+│  Claim balances                            ││10:15:50 10:46:50 PLS>ETH msg    call 0x000…BC0 delivered 0x0000…ABC0   │
+│  Operator: post update                     ││09:49:08 10:15:48 ETH>PLS tok        16.89 USDC delivered 0x0000…ABC0   │
+│  Operator: execute message                 ││09:30:26 09:55:50 ETH>PLS tok        29.29 WETH delivered 0x0000…ABC0   │
+│                                            ││09:09:12 09:32:44 PLS>ETH tok      45.69 zkUSDC failed    0x0000…ABC0   │
+│                                            ││08:35:42 09:08:06 ETH>PLS tok        20.73 WETH fallback  0x0000…ABC0   │
+│                                            ││08:19:40 08:50:20 ETH>PLS msg    call 0x000…BC0 claimable 0x0000…ABC0   │
+│                                            ││07:54:58 -        ETH>PLS tok      21.93 zkWPLS sent      0x0000…ABC0   │
+│                                            ││07:27:44 -        ETH>PLS tok        27.13 USDC waiting   0x0000…ABC0   │
+│                                            ││07:05:50 -        PLS>ETH tok        23.37 WPLS covered   0x0000…ABC0   │
+│                                            ││06:40:27 07:12:35 PLS>ETH tok      41.05 zkUSDC delivered 0x0000…ABC0   │
+│                                            ││06:11:54 06:41:46 ETH>PLS msg    call 0x000…BC0 delivered 0x0000…ABC0   │
+│                                            ││05:49:44 06:14:20 PLS>ETH tok        46.01 WPLS delivered 0x0000…ABC0   │
+│                                            ││05:27:02 05:54:58 PLS>ETH tok        14.01 WPLS delivered 0x0000…abC1   │
+│                                            ││05:07:24 05:30:40 ETH>PLS tok         9.37 WETH failed    0x0000…ABC0   │
+│                                            ││04:38:26 05:02:30 PLS>ETH tok        32.33 WPLS fallback  0x0000…ABC0   │
+│                                            ││04:19:20 04:47:16 ETH>PLS msg    call 0x000…BC0 claimable 0x0000…ABC0   │
+│                                            ││03:48:22 -        ETH>PLS tok      18.09 zkWPLS sent      0x0000…ABC0   │
+│                                            ││03:24:12 -        ETH>PLS tok      24.09 zkWPLS waiting   0x0000…ABC0   │
+│                                            ││02:59:30 -        ETH>PLS tok        44.57 WETH covered   0x0000…ABC0   │
+│                                            ││02:38:00 03:00:08 ETH>PLS tok      29.53 zkWPLS delivered 0x0000…ABC0   │
+│                                            ││02:13:26 02:42:10 PLS>ETH msg    call 0x000…BC0 delivered 0x0000…ABC0   │
+└────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────┘
+┌─Light client heads───────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Ethereum stores PulseChain:  head 25,800,000  finalized 25,800,096  lag 96 slots (16m 00s)  updated 23m ago           │
+│PulseChain stores Ethereum:  head 14,100,000  finalized 14,100,064  lag 64 slots (12m 48s)  updated 14m ago           │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Tab area  1-4 views  ? help  q quit  Enter open  Up/Down move         FIXTURE: no transaction reaches a chain  fixture  
+"
+`;
+
+exports[`view snapshots global view, wide 120x40 1`] = `
+"┌─[1 Global]  2 Pair  3 Audit  4 Prover and costs  5 Prover setup──────────────────────────────────────────────────────┐
+│pair      chains                      light client lag                  gates               in flight last activity   │
+│eth-pls   Ethereum <> PulseChain      16m 00s / 12m 48s                 open/warn           12        1m ago          │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│Up/Down choose a pair, Enter opens it in the pair view. The default pair is eth-pls.                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Tab area  1-4 views  ? help  q quit                                   FIXTURE: no transaction reaches a chain  fixture  
+"
+`;
+
+exports[`view snapshots audit view, wide 120x40 1`] = `
+"┌─1 Global  2 Pair  [3 Audit]  4 Prover and costs  5 Prover setup──────────────────────────────────────────────────────┐
+│Escrow against bridged supply  escrow = bridged supply + in flight. 1 MISMATCH                                        │
+│token                escrow     bridged supply    in flight   difference fees accrued …es paid out                    │
+│USDC              1,250,000          1,249,000        1,000            0        1,250          400  ok                │
+│WETH                    812                800           12            0          0.8          0.2  ok                │
+│WPLS             90,000,000         90,000,300            0         -300       90,000       10,000  MISMATCH          │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│A positive difference means the mediator holds more than it owes. A negative one means more supply than escrow.       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Tab area  1-4 views  ? help  q quit                                   FIXTURE: no transaction reaches a chain  fixture  
+"
+`;
+
+exports[`view snapshots prover and costs view, wide 120x40 1`] = `
+"┌─1 Global  2 Pair  3 Audit  [4 Prover and costs]  5 Prover setup──────────────────────────────────────────────────────┐
+│Light client updates (on chain)                                                                                       │
+│time     chain               slot    gas used                cost  transaction    poster                              │
+│11:46:00 PulseChain    14,100,000      98,851        0.197702 PLS  0x0000…a001  0x0000…ABC0                           │
+│11:36:50 Ethereum      25,800,000     118,763        0.001662 ETH  0x0000…a002  0x0000…ABC0                           │
+│                                                                                                                      │
+│Total gas 217,614   Ethereum spent 0.001662 ETH   PulseChain spent 0.197702 PLS                                       │
+│Newest head 14,100,000 at 2026-10-25 11:46:00 UTC                                                                     │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│Proof timing and GPU cost are off chain, so the indexer does not hold them. A later data source may add them.         │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Tab area  1-4 views  ? help  q quit                                   FIXTURE: no transaction reaches a chain  fixture  
+"
+`;
+
+exports[`view snapshots prover setup view, wide 120x40 1`] = `
+"┌─1 Global  2 Pair  3 Audit  4 Prover and costs  [5 Prover setup]──────────────────────────────────────────────────────┐
+│Prover setup (operator only: stores configuration, nothing runs from here)                                            │
+│Secrets: an encrypted file, or env variables, or 1Password.                                                           │
+│> RunPod endpoint URL               not set                                                                           │
+│  RunPod API key                    not set                                                                           │
+│  Ethereum RPC URL                  not set                                                                           │
+│  Ethereum beacon URL               not set                                                                           │
+│  PulseChain RPC URL                not set                                                                           │
+│  PulseChain beacon URL             not set                                                                           │
+│  msgboard RPC or WebSocket URL     not set                                                                           │
+│  Directions to prove               ETH>PLS and PLS>ETH                                                               │
+│  Prove when a transfer waits       yes                                                                               │
+│  Prove at least every (seconds)    3600                                                                              │
+│  Test: endpoint /ping              Enter to run                                                                      │
+│  Test: dry proof request           Enter to run                                                                      │
+│  Test: Ethereum RPC chain id       Enter to run                                                                      │
+│  Test: PulseChain RPC chain id     Enter to run                                                                      │
+│  Test: msgboard status()           Enter to run                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│Up/Down  Enter edit or test  d forget a secret  A secret shows its last 4 characters only.                            │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Tab area  1-4 views  ? help  q quit                                   FIXTURE: no transaction reaches a chain  fixture  
+"
+`;
+
+exports[`view snapshots help overlay, wide 120x40 1`] = `
+"┌─1 Global  [2 Pair]  3 Audit  4 Prover and costs  5 Prover setup──────────────────────────────────────────────────────┐
+│eth-pls  Ethereum <> PulseChain   in flight 12   24h 29 transfers, 147.81 USDC                                        │
+│fees accrued 1,250 USDC | 0.8 WETH | 90,000 WPLS   gate Ethereum open PulseChain warn                                 │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─Account and actions────────────────────────┐┌─Filters────────────────────────────────────────────────────────────────┐
+│Account                                     ││ Dir:all  Kind:all  Status:all  Token:all  Addr:any  Time:all           │
+│ no signer connected                        │└────────────────────────────────────────────────────────────────────────┘
+│Balances                                    │┌─Feed 1/36──────────────────────────────────────────────────────────────┐
+│ connect a signer                           ││sent     arrived  dir     knd            amount status    to            │
+│Actions                                     ││11:54:30 -        PLS>ETH tok      37.13 zkWETH sent      0x0000…ABC0   │
+│> Account and signer                        ││11:29:24 -        ETH>PLS tok        24.97 USDC waiting   0x0000…ABC0   │
+│  Bridge tokens  ╔═Help═════════════════════════════════════════════════════════════════════════════╗   0x0000…ABC0   │
+│  Send a message ║1 2 3 4           Global, pair, audit, prover and costs views                     ║ed 0x0000…ABC0   │
+│  Claim balances ║Tab / Shift+Tab   Pair view: next or previous area (actions, filters, feed)       ║ed 0x0000…ABC0   │
+│  Operator: post ║Up Down (j k)     Move in the action menu, the feed or the pair list              ║ed 0x0000…ABC0   │
+│  Operator: execu║Enter             Open the action, the pair, or the details of the feed row       ║ed 0x0000…ABC0   │
+│                 ║Left Right        Filters: choose a field. Up Down change its value               ║   0x0000…ABC0   │
+│                 ║Enter on Addr     Filters: type an address. x clears every filter                 ║k  0x0000…ABC0   │
+│                 ║PageUp PageDown   Feed: move by a page                                            ║le 0x0000…ABC0   │
+│                 ║y / n             Review: sign and send, or cancel (nothing is sent before y)     ║   0x0000…ABC0   │
+│                 ║d  s  r           Review: raw calldata, skip a step, retry after an error         ║   0x0000…ABC0   │
+│                 ║Esc               Close a dialog or this help                                     ║   0x0000…ABC0   │
+│                 ║?                 Show or hide this help                                          ║ed 0x0000…ABC0   │
+│                 ║q  Ctrl+C         Quit                                                            ║ed 0x0000…ABC0   │
+│                 ║5                 Prover setup (operator only, stores configuration)              ║ed 0x0000…ABC0   │
+│                 ║                                                                                  ║ed 0x0000…abC1   │
+│                 ║                                                                                  ║   0x0000…ABC0   │
+│                 ║Press any key to close.                                                           ║k  0x0000…ABC0   │
+│                 ╚══════════════════════════════════════════════════════════════════════════════════╝le 0x0000…ABC0   │
+│                                            ││03:48:22 -        ETH>PLS tok      18.09 zkWPLS sent      0x0000…ABC0   │
+│                                            ││03:24:12 -        ETH>PLS tok      24.09 zkWPLS waiting   0x0000…ABC0   │
+│                                            ││02:59:30 -        ETH>PLS tok        44.57 WETH covered   0x0000…ABC0   │
+│                                            ││02:38:00 03:00:08 ETH>PLS tok      29.53 zkWPLS delivered 0x0000…ABC0   │
+│                                            ││02:13:26 02:42:10 PLS>ETH msg    call 0x000…BC0 delivered 0x0000…ABC0   │
+└────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────┘
+┌─Light client heads───────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Ethereum stores PulseChain:  head 25,800,000  finalized 25,800,096  lag 96 slots (16m 00s)  updated 23m ago           │
+│PulseChain stores Ethereum:  head 14,100,000  finalized 14,100,064  lag 64 slots (12m 48s)  updated 14m ago           │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Tab area  1-4 views  ? help  q quit  Enter open  Up/Down move         FIXTURE: no transaction reaches a chain  fixture  
+"
+`;
+
+exports[`view snapshots pair view, compact 80x24 1`] = `
+"┌─1 Global  [2 Pair]  3 Audit  4 Prover  5 Setup───────────────────────────────┐
+│eth-pls  Ethereum <> PulseChain   in flight 12   24h 29 transfers, 147.81 USDC│
+│fees accrued 1,250 USDC   gate ETH open PLS warn                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌─Account and actions───────────┐┌─Filters─────────────────────────────────────┐
+│Account                        ││ Dir:all  Kind:all  Status:all               │
+│ no signer connected           ││ Token:all  Addr:any  Time:all               │
+│Balances                       │└─────────────────────────────────────────────┘
+│ connect a signer              │┌─Feed 1/36───────────────────────────────────┐
+│Actions                        ││sent     arrived  dir       amount status    │
+│> Account and signer           ││11:54:30 -        P>E 37.13 zkWETH sent      │
+│  Bridge tokens                ││11:29:24 -        E>P   24.97 USDC waiting   │
+│  Send a message               ││11:07:06 -        P>E 39.61 zkWETH covered   │
+│  Claim balances               ││10:42:56 11:03:52 P>E   25.29 WPLS delivered │
+│  Operator: post update        ││10:15:50 10:46:50 P>E  msg 0x00…C0 delivered │
+│  Operator: execute message    ││09:49:08 10:15:48 E>P   16.89 USDC delivered │
+│                               ││09:30:26 09:55:50 E>P   29.29 WETH delivered │
+│                               ││09:09:12 09:32:44 P>E 45.69 zkUSDC failed    │
+└───────────────────────────────┘└─────────────────────────────────────────────┘
+┌─Light client heads───────────────────────────────────────────────────────────┐
+│ETH<-PLS head 25,800,000 fin 25,800,096 lag 96 slots (16m 00s) 23m ago        │
+│PLS<-ETH head 14,100,000 fin 14,100,064 lag 64 slots (12m 48s) 14m ago        │
+└──────────────────────────────────────────────────────────────────────────────┘
+Tab area  1-4 views  ? help … FIXTURE: no transaction reaches a chain  fixture  
+"
+`;
+
+exports[`view snapshots global view, compact 80x24 1`] = `
+"┌─[1 Global]  2 Pair  3 Audit  4 Prover  5 Setup───────────────────────────────┐
+│pair      chains                      light client lag                  gates │
+│eth-pls   Ethereum <> PulseChain      16m 00s / 12m 48s                 open/w│
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│Up/Down choose a pair, Enter opens it in the pair view. The default pair is et│
+└──────────────────────────────────────────────────────────────────────────────┘
+Tab area  1-4 views  ? help … FIXTURE: no transaction reaches a chain  fixture  
+"
+`;
+
+exports[`view snapshots audit view, compact 80x24 1`] = `
+"┌─1 Global  2 Pair  [3 Audit]  4 Prover  5 Setup───────────────────────────────┐
+│Escrow against bridged supply  escrow = bridged supply + in flight. 1 MISMATCH│
+│token           escrow         supply      diff       fees                    │
+│USDC         1,250,000      1,249,000         0      1,250  ok                │
+│WETH               812            800         0        0.8  ok                │
+│WPLS        90,000,000     90,000,300      -300     90,000  MISMATCH          │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│A positive difference means the mediator holds more than it owes. A negative o│
+└──────────────────────────────────────────────────────────────────────────────┘
+Tab area  1-4 views  ? help … FIXTURE: no transaction reaches a chain  fixture  
+"
+`;
+
+exports[`view snapshots prover and costs view, compact 80x24 1`] = `
+"┌─1 Global  2 Pair  3 Audit  [4 Prover]  5 Setup───────────────────────────────┐
+│Light client updates (on chain)                                               │
+│time     chain               slot    gas used                cost  transaction│
+│11:46:00 PulseChain    14,100,000      98,851        0.197702 PLS  0x0000…a001│
+│11:36:50 Ethereum      25,800,000     118,763        0.001662 ETH  0x0000…a002│
+│                                                                              │
+│Total gas 217,614   Ethereum spent 0.001662 ETH   PulseChain spent 0.197702 PL│
+│Newest head 14,100,000 at 2026-10-25 11:46:00 UTC                             │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│Proof timing and GPU cost are off chain, so the indexer does not hold them. A │
+└──────────────────────────────────────────────────────────────────────────────┘
+Tab area  1-4 views  ? help … FIXTURE: no transaction reaches a chain  fixture  
+"
+`;
+
+exports[`view snapshots prover setup view, compact 80x24 1`] = `
+"┌─1 Global  2 Pair  3 Audit  4 Prover  [5 Setup]───────────────────────────────┐
+│Prover setup (operator only: stores configuration, nothing runs from here)    │
+│Secrets: an encrypted file, or env variables, or 1Password.                   │
+│> RunPod endpoint URL               not set                                   │
+│  RunPod API key                    not set                                   │
+│  Ethereum RPC URL                  not set                                   │
+│  Ethereum beacon URL               not set                                   │
+│  PulseChain RPC URL                not set                                   │
+│  PulseChain beacon URL             not set                                   │
+│  msgboard RPC or WebSocket URL     not set                                   │
+│  Directions to prove               ETH>PLS and PLS>ETH                       │
+│  Prove when a transfer waits       yes                                       │
+│  Prove at least every (seconds)    3600                                      │
+│  Test: endpoint /ping              Enter to run                              │
+│  Test: dry proof request           Enter to run                              │
+│  Test: Ethereum RPC chain id       Enter to run                              │
+│  Test: PulseChain RPC chain id     Enter to run                              │
+│  Test: msgboard status()           Enter to run                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│Up/Down  Enter edit or test  d forget a secret  A secret shows its last 4 char│
+└──────────────────────────────────────────────────────────────────────────────┘
+Tab area  1-4 views  ? help … FIXTURE: no transaction reaches a chain  fixture  
+"
+`;
+
+exports[`view snapshots help overlay, compact 80x24 1`] = `
+"┌─1 Global  [2 Pair]  3 Audit  4 Prover  5 Setup───────────────────────────────┐
+│eth-pls  Ethereum <> PulseChain   in flight 12   24h 29 transfers, 147.81 USDC│
+│fees accrued 1,250 USDC   gate ETH open PLS warn                              │
+└╔═Help═══════════════════════════════════════════════════════════════════════╗┘
+┌║1 2 3 4           Global, pair, audit, prover and costs views               ║┐
+│║Tab / Shift+Tab   Pair view: next or previous area (actions, filters, feed) ║│
+│║Up Down (j k)     Move in the action menu, the feed or the pair list        ║│
+│║Enter             Open the action, the pair, or the details of the feed row ║┘
+│║Left Right        Filters: choose a field. Up Down change its value         ║┐
+│║Enter on Addr     Filters: type an address. x clears every filter           ║│
+│║PageUp PageDown   Feed: move by a page                                      ║│
+│║y / n             Review: sign and send, or cancel (nothing is sent before y║│
+│║d  s  r           Review: raw calldata, skip a step, retry after an error   ║│
+│║Esc               Close a dialog or this help                               ║│
+│║?                 Show or hide this help                                    ║│
+│║q  Ctrl+C         Quit                                                      ║│
+│║5                 Prover setup (operator only, stores configuration)        ║│
+│║                                                                            ║│
+└║                                                                            ║┘
+┌║Press any key to close.                                                     ║┐
+│╚════════════════════════════════════════════════════════════════════════════╝│
+│PLS<-ETH head 14,100,000 fin 14,100,064 lag 64 slots (12m 48s) 14m ago        │
+└──────────────────────────────────────────────────────────────────────────────┘
+Tab area  1-4 views  ? help … FIXTURE: no transaction reaches a chain  fixture  
+"
+`;

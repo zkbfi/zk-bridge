@@ -1,0 +1,109 @@
+/**
+ * Access to the chains for the dashboard: reads of the account state and the clients that the transaction flow uses.
+ * One implementation talks to RPC endpoints. The fixture implementation answers from memory, so the dashboard and
+ * its tests run with no network.
+ */
+import { createPublicClient, defineChain, http, type Address, type Hash } from 'viem'
+import type { FlowChainClient } from '../flow/transaction-flow'
+import type { ChainConfig, PairConfig, TokenInfo } from '../model/types'
+import { readChainSnapshot, type ChainSnapshotResult, type ReadClient } from './live-reads'
+
+/** The RPC URL of a chain is not set. */
+export class MissingRpcError extends Error {
+  override readonly name = 'MissingRpcError'
+}
+
+/** The native balance of one address on each chain of the pair. Null means the chain could not be read. */
+export interface NativeBalances {
+  readonly first: bigint | null
+  readonly second: bigint | null
+}
+
+/** What the dashboard needs from the chains. */
+export interface ChainAccess {
+  /** `rpc` for real endpoints, `fixture` when nothing reaches a chain. */
+  readonly mode: 'rpc' | 'fixture'
+  /** Reads the account state of both chains. */
+  readSnapshots(input: { account: Address; tokens: readonly TokenInfo[] }): Promise<readonly ChainSnapshotResult[]>
+  /** The native balance of each address on both chains. A chain that cannot be read gives null. */
+  nativeBalances(addresses: readonly Address[]): Promise<readonly NativeBalances[]>
+  /** The client for the transaction flow of a chain. It throws {@link MissingRpcError} when the URL is not set. */
+  flowClient(chainId: number): FlowChainClient
+}
+
+/**
+ * Creates chain access over RPC endpoints.
+ *
+ * @param pair The pair. Each chain names the environment variable of its RPC URL.
+ * @param environment The environment that holds the URLs. They stay out of every file and every log.
+ */
+export function createRpcChainAccess(pair: PairConfig, environment: Record<string, string | undefined>): ChainAccess {
+  const clients = new Map<number, ReturnType<typeof createClient>>()
+
+  function clientOf(chain: ChainConfig) {
+    const existing = clients.get(chain.chainId)
+    if (existing !== undefined) return existing
+    const url = environment[chain.rpcEnvironmentVariable]
+    if (url === undefined || url === '') {
+      throw new MissingRpcError(`Set ${chain.rpcEnvironmentVariable} to the RPC URL of ${chain.name}.`)
+    }
+    const created = createClient(chain, url)
+    clients.set(chain.chainId, created)
+    return created
+  }
+
+  function chainById(chainId: number): ChainConfig {
+    const chain = [pair.first, pair.second].find((candidate) => candidate.chainId === chainId)
+    if (chain === undefined) throw new Error(`Chain ${chainId} is not in pair ${pair.id}.`)
+    return chain
+  }
+
+  return {
+    mode: 'rpc',
+    async readSnapshots({ account, tokens }) {
+      return Promise.all(
+        [pair.first, pair.second].map(async (chain): Promise<ChainSnapshotResult> => {
+          try {
+            return await readChainSnapshot(clientOf(chain) as unknown as ReadClient, { chain, account, tokens })
+          } catch (error) {
+            return { status: 'error', chain, message: error instanceof Error ? error.message : String(error) }
+          }
+        }),
+      )
+    },
+    async nativeBalances(addresses) {
+      const balanceOn = async (chain: ChainConfig, address: Address): Promise<bigint | null> => {
+        try {
+          return await clientOf(chain).getBalance({ address })
+        } catch {
+          return null
+        }
+      }
+      return Promise.all(
+        addresses.map(async (address) => ({
+          first: await balanceOn(pair.first, address),
+          second: await balanceOn(pair.second, address),
+        })),
+      )
+    },
+    flowClient(chainId) {
+      return clientOf(chainById(chainId)) as unknown as FlowChainClient
+    },
+  }
+}
+
+function createClient(chain: ChainConfig, url: string) {
+  return createPublicClient({
+    chain: defineChain({
+      id: chain.chainId,
+      name: chain.name,
+      nativeCurrency: { name: chain.nativeSymbol, symbol: chain.nativeSymbol, decimals: 18 },
+      rpcUrls: { default: { http: [url] } },
+    }),
+    transport: http(url),
+    batch: { multicall: true },
+  })
+}
+
+/** A fake hash for fixture sends. */
+export const FIXTURE_TRANSACTION_HASH: Hash = `0x${'f1'.repeat(32)}`

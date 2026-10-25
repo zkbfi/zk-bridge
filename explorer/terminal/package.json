@@ -1,0 +1,29 @@
+{
+  "name": "@zk-bridge/explorer-terminal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenTUI dashboard for the zk-bridge explorer",
+  "scripts": {
+    "start": "bun run src/main.tsx",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ledgerhq/hw-app-eth": "7.8.19",
+    "@ledgerhq/hw-transport": "6.36.0",
+    "@ledgerhq/hw-transport-node-hid": "6.33.5",
+    "@opentui/core": "0.5.12",
+    "@opentui/react": "0.5.12",
+    "@scure/bip32": "2.4.0",
+    "@scure/bip39": "2.4.0",
+    "@trezor/connect": "10.0.1",
+    "react": "19.3.0",
+    "viem": "2.56.9"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "@types/react": "19.3.0",
+    "typescript": "5.9.3"
+  }
+}
