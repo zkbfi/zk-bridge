@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {BeaconLightClient} from "../../../src/hardened/BeaconLightClient.sol";
 import {BridgeVault} from "../../../src/hardened/BridgeVault.sol";
+import {BeaconProofVerifier} from "../../../src/hardened/BeaconProofVerifier.sol";
 import {BeaconBlockHeader, SSZ} from "../../../src/hardened/SSZ.sol";
 import {WithdrawalScenes} from "./WithdrawalScenes.sol";
 import {ReceiptFixtures} from "./ReceiptFixtures.sol";
@@ -43,10 +44,10 @@ abstract contract HistoricalScenes is WithdrawalScenes {
         bytes32[][] blockHashBranches;
         bytes32[][] extraBranches;
         BeaconBlockHeader evidenceHeader;
-        BridgeVault.HistoricalSummariesEvidence historicalEvidence;
-        BridgeVault.BlockRootsEvidence rootsEvidence;
-        BridgeVault.BlockHashEvidence anchorBodyEvidence;
-        BridgeVault.BlockHashEvidence lowBodyEvidence;
+        BeaconProofVerifier.HistoricalSummariesEvidence historicalEvidence;
+        BeaconProofVerifier.BlockRootsEvidence rootsEvidence;
+        BeaconProofVerifier.BlockHashEvidence anchorBodyEvidence;
+        BeaconProofVerifier.BlockHashEvidence lowBodyEvidence;
     }
 
     /// @dev A header that the scene stores in the light client.
@@ -214,7 +215,7 @@ abstract contract HistoricalScenes is WithdrawalScenes {
             bodyRoot: _rootFromBranch(_execHash(params.anchorSlot), anchorBodyBranch, BODY_GINDEX)
         });
         scene.anchorRoot = SSZ.hashTreeRootMemory(scene.anchorHeader);
-        scene.anchorBodyEvidence = BridgeVault.BlockHashEvidence(scene.anchorHeader, anchorBodyBranch);
+        scene.anchorBodyEvidence = BeaconProofVerifier.BlockHashEvidence(scene.anchorHeader, anchorBodyBranch);
         _fillEvidence(params, scene, at, branches);
     }
 
@@ -235,13 +236,13 @@ abstract contract HistoricalScenes is WithdrawalScenes {
         for (uint256 i = 0; i < params.extraStoredSlots.length; i++) {
             if (at.extra[i] != NO_LEAF) scene.extraBranches[i] = branches[at.extra[i]];
         }
-        scene.historicalEvidence = BridgeVault.HistoricalSummariesEvidence({
+        scene.historicalEvidence = BeaconProofVerifier.HistoricalSummariesEvidence({
             anchorHeader: scene.anchorHeader,
             earlierSlot: params.evidenceSlot,
             branch: branches[at.evidence]
         });
         if (params.blockRootsGindex != 0) {
-            scene.rootsEvidence = BridgeVault.BlockRootsEvidence({
+            scene.rootsEvidence = BeaconProofVerifier.BlockRootsEvidence({
                 laterHeader: scene.anchorHeader,
                 earlierSlotA: params.anchorSlot - 80,
                 earlierSlotB: params.anchorSlot - 40,
@@ -252,12 +253,12 @@ abstract contract HistoricalScenes is WithdrawalScenes {
         // The lowest body evidence is the header 40 slots below the lowest deposit; with no deposit it is the evidence header.
         if (depositCount == 0) {
             (BeaconBlockHeader memory header, bytes32[] memory branch) = _bodyEvidenceHeader(params.evidenceSlot, BODY_GINDEX);
-            scene.lowBodyEvidence = BridgeVault.BlockHashEvidence(header, branch);
+            scene.lowBodyEvidence = BeaconProofVerifier.BlockHashEvidence(header, branch);
             return;
         }
         (BeaconBlockHeader memory low, bytes32[] memory lowBranch) =
             _bodyEvidenceHeader(_lowestDeposit(params) - 40, BODY_GINDEX);
-        scene.lowBodyEvidence = BridgeVault.BlockHashEvidence(low, lowBranch);
+        scene.lowBodyEvidence = BeaconProofVerifier.BlockHashEvidence(low, lowBranch);
     }
 
     function _lowestDeposit(HistoricalParams memory params) internal pure returns (uint64 lowest) {
@@ -389,16 +390,16 @@ abstract contract HistoricalScenes is WithdrawalScenes {
     }
 
     /// @notice Adds the two block hash layouts that cover every deposit slot up to the anchor.
-    function _addBodyRows(BridgeVault vault_, HistoricalScene memory scene) internal {
+    function _addBodyRows(BeaconProofVerifier vault_, HistoricalScene memory scene) internal {
         vault_.addBlockHashLayout(BODY_GINDEX, scene.lowBodyEvidence);
         vault_.addBlockHashLayout(BODY_GINDEX, scene.anchorBodyEvidence);
     }
 
-    function _addHistoricalRow(BridgeVault vault_, HistoricalParams memory params, HistoricalScene memory scene) internal {
+    function _addHistoricalRow(BeaconProofVerifier vault_, HistoricalParams memory params, HistoricalScene memory scene) internal {
         vault_.addHistoricalSummariesLayout(params.historicalSummariesGindex, scene.historicalEvidence);
     }
 
-    function _addRecentRow(BridgeVault vault_, HistoricalParams memory params, HistoricalScene memory scene) internal {
+    function _addRecentRow(BeaconProofVerifier vault_, HistoricalParams memory params, HistoricalScene memory scene) internal {
         vault_.addBlockRootsLayout(params.blockRootsGindex, scene.rootsEvidence);
     }
 

@@ -6,6 +6,7 @@ import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.so
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {IDepositGate} from "../../src/hardened/IDepositGate.sol";
 import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
 import {OracleSP1Verifier} from "../../src/mocks/OracleSP1Verifier.sol";
@@ -128,7 +129,7 @@ contract BridgeVaultTest is WithdrawalScenes {
     function test_HB02_constructor_revertsOnZeroDepositGate() public {
         BridgeVault.TokenPair[] memory pairs = _pair(address(tokenOnB), address(tokenOnA), 18);
         vm.chainId(CHAIN_B);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.ZeroValue.selector, "depositGate"));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.ZeroValue.selector, "depositGate"));
         new BridgeVault(address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs, BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), address(lightClientForA)), DEFAULT_CAPELLA_ERA, address(0));
         new BridgeVault(address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs, BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), address(lightClientForA)), DEFAULT_CAPELLA_ERA, address(gateB)); // honest path
     }
@@ -140,11 +141,11 @@ contract BridgeVaultTest is WithdrawalScenes {
         vm.chainId(CHAIN_B);
         address client = address(lightClientForB);
 
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.ZeroValue.selector, "lightClient"));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.ZeroValue.selector, "lightClient"));
         _newVault(address(0), CHAIN_B, CHAIN_A, address(vaultA), pairs);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.ZeroValue.selector, "remoteChainId"));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.ZeroValue.selector, "remoteChainId"));
         _newVault(client, CHAIN_B, 0, address(vaultA), pairs);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.ZeroValue.selector, "remoteVault"));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.ZeroValue.selector, "remoteVault"));
         _newVault(client, CHAIN_B, CHAIN_A, address(0), pairs);
 
         _newVault(client, CHAIN_B, CHAIN_A, address(vaultA), pairs); // honest path
@@ -155,7 +156,7 @@ contract BridgeVaultTest is WithdrawalScenes {
     function test_R2_08_constructor_revertsOnLocalChainIdMismatch() public {
         BridgeVault.TokenPair[] memory pairs = _pair(address(tokenOnB), address(tokenOnA), 18);
         vm.chainId(CHAIN_B);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LocalChainIdMismatch.selector, CHAIN_A, uint256(CHAIN_B)));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LocalChainIdMismatch.selector, CHAIN_A, uint256(CHAIN_B)));
         _newVault(address(lightClientForB), CHAIN_A, CHAIN_B, address(vaultA), pairs);
         _newVault(address(lightClientForB), CHAIN_B, CHAIN_A, address(vaultA), pairs);
     }
@@ -164,7 +165,7 @@ contract BridgeVaultTest is WithdrawalScenes {
     function test_H16_constructor_revertsWhenRemoteChainIsLocalChain() public {
         BridgeVault.TokenPair[] memory pairs = _pair(address(tokenOnB), address(tokenOnA), 18);
         vm.chainId(CHAIN_B);
-        vm.expectRevert(BridgeVault.RemoteChainIsLocalChain.selector);
+        vm.expectRevert(BeaconProofVerifier.RemoteChainIsLocalChain.selector);
         _newVault(address(lightClientForB), CHAIN_B, CHAIN_B, address(vaultA), pairs);
     }
 
@@ -180,9 +181,9 @@ contract BridgeVaultTest is WithdrawalScenes {
     function test_H03_constructor_revertsOnBadTokenAddresses() public {
         vm.chainId(CHAIN_B);
         address client = address(lightClientForB);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.ZeroValue.selector, "localToken"));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.ZeroValue.selector, "localToken"));
         _newVault(client, CHAIN_B, CHAIN_A, address(vaultA), _pair(address(0), address(tokenOnA), 18));
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.ZeroValue.selector, "remoteToken"));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.ZeroValue.selector, "remoteToken"));
         _newVault(client, CHAIN_B, CHAIN_A, address(vaultA), _pair(address(tokenOnB), address(0), 18));
         vm.expectRevert(abi.encodeWithSelector(BridgeVault.TokenHasNoCode.selector, alice));
         _newVault(client, CHAIN_B, CHAIN_A, address(vaultA), _pair(alice, address(tokenOnA), 18));

@@ -1,7 +1,9 @@
-"""Generates synthetic receipt-trie fixtures for the hardened vault tests.
+"""Generates synthetic receipt-trie fixtures for the hardened vault and message bridge tests.
 
 Run: python3 -I test/hardened/fixtures/generate_receipts.py
-Writes: test/hardened/utils/ReceiptFixtures.sol and test/hardened/fixtures/receipts.json
+Writes: test/hardened/utils/ReceiptFixtures.sol and test/hardened/fixtures/receipts.json (deposit logs of the vault),
+and test/hardened/utils/MessageFixtures.sol and test/hardened/fixtures/messages.json (message logs of the message bridge,
+with a receipts trie and a transactions trie that share their indices).
 Pure Python, no dependencies. Keccak-256 is implemented below (hashlib has only NIST SHA-3).
 """
 import json
@@ -369,3 +371,209 @@ sol_path = os.path.join(here, "..", "utils", "ReceiptFixtures.sol")
 with open(sol_path, "w") as handle:
     handle.write("\n".join(lines) + "\n")
 print("root", root.hex(), "nodes", len(store))
+
+
+# ================================================================ message bridge fixtures
+# One receipts trie and one transactions trie with the same indices. Every message is written by the encoder below,
+# which follows the layout comment of `ArbitraryMessage.unpackData` in `poanetwork/tokenbridge-contracts`. It shares no
+# code with the Solidity codec, so the two agree only if both follow the layout.
+SOURCE_CHAIN = 1
+DESTINATION_CHAIN = 369
+REMOTE_BRIDGE = REMOTE_VAULT
+TARGET_RECORDER = address(0x31)
+TARGET_REVERTER = address(0x32)
+TARGET_BURNER = address(0x34)
+TARGET_REENTRANT = address(0x35)
+TARGET_SENDER = address(0x36)
+MESSAGE_VERSION = 0x00050000
+USER_REQUEST_TOPIC = keccak256(b"UserRequestForAffirmation(bytes32,bytes)")
+
+
+def chain_id_bytes(value):
+    return value.to_bytes(max(1, (value.bit_length() + 7) // 8), "big")
+
+
+def message_id(nonce_value, version=MESSAGE_VERSION, source=SOURCE_CHAIN, bridge=REMOTE_BRIDGE):
+    bridge_hash = keccak256(word(source) + bridge)
+    return version.to_bytes(4, "big") + bridge_hash[4:24] + nonce_value.to_bytes(8, "big")
+
+
+def amb_message(identifier, sender, executor, gas, data_type, source, destination, data):
+    source_bytes, destination_bytes = chain_id_bytes(source), chain_id_bytes(destination)
+    return (identifier + sender + executor + gas.to_bytes(4, "big") + bytes([len(source_bytes), len(destination_bytes), data_type])
+            + source_bytes + destination_bytes + data)
+
+
+def event_data(encoded, offset=32):
+    padded = encoded + b"\x00" * (-len(encoded) % 32)
+    return word(offset) + word(len(encoded)) + padded
+
+
+def request_log(emitter, identifier, encoded, topic=USER_REQUEST_TOPIC, data=None):
+    return [emitter, [topic, identifier], event_data(encoded) if data is None else data]
+
+
+def message(nonce_value, target, gas, data, data_type=0, source=SOURCE_CHAIN, destination=DESTINATION_CHAIN,
+            version=MESSAGE_VERSION, sender=SENDER):
+    identifier = message_id(nonce_value, version)
+    return dict(id=identifier, encoded=amb_message(identifier, sender, target, gas, data_type, source, destination, data),
+                gas=gas, target=target, data=data)
+
+
+def transaction(index, kind):
+    fields = [index, 10 ** 9, 21000 * 20, TARGET_RECORDER, 0, b"transaction " + str(index).encode(), 27, 1, 2]
+    body = rlp(fields)
+    return body if kind == 0 else bytes([kind]) + rlp([1] + fields)
+
+
+def build_trie(values):
+    keys = {i: rlp(i) for i in range(len(values))}
+    ordered = sorted(((nibbles(keys[i]), values[i]) for i in range(len(values))), key=lambda kv: kv[0])
+    nodes = {}
+    top = build(ordered, 0, nodes)
+    nodes[keccak256(top)] = top
+    return keccak256(top), top, nodes, keys
+
+
+MESSAGE_TOTAL = 40
+message_receipts = {}
+message_transactions = {}
+MESSAGE_NAMED = []  # dicts: label, index, logIndex, message, note
+
+
+def add_message(label, index, entry, note, receipt_kind=2, success=True, log=None, other_logs_before=0):
+    logs = [other_log(REMOTE_BRIDGE) for _ in range(other_logs_before)]
+    logs.append(log if log is not None else request_log(REMOTE_BRIDGE, entry["id"], entry["encoded"]))
+    message_receipts[index] = receipt(receipt_kind, success, logs)
+    message_transactions[index] = transaction(index, receipt_kind)
+    MESSAGE_NAMED.append(dict(label=label, index=index, logIndex=other_logs_before, message=entry, note=note))
+
+
+PAYLOAD = bytes(range(70))
+add_message("DELIVER", 0, message(0, TARGET_RECORDER, 500_000, PAYLOAD), "a message to the recorder, 70 bytes of data")
+add_message("CONFIRM", 1, message(1, TARGET_RECORDER, 500_000, b"confirm", data_type=0x80), "sent with requireToConfirmMessage (data type 0x80)")
+add_message("REVERTING", 2, message(2, TARGET_REVERTER, 300_000, b"fail"), "a target that always reverts")
+add_message("BURNING", 3, message(3, TARGET_BURNER, 100_000, b"burn"), "a target that burns all of its gas")
+add_message("ORDER_A", 4, message(4, TARGET_RECORDER, 300_000, b"order-a"), "independent message A")
+add_message("ORDER_B", 5, message(5, TARGET_RECORDER, 300_000, b"order-b"), "independent message B")
+add_message("ORDER_C", 6, message(6, TARGET_RECORDER, 300_000, b"order-c"), "independent message C")
+add_message("WRONG_DESTINATION", 7, message(7, TARGET_RECORDER, 200_000, b"x", destination=56), "destination chain 56")
+add_message("WRONG_SOURCE", 8, message(8, TARGET_RECORDER, 200_000, b"x", source=56), "source chain 56 from the real remote bridge")
+add_message("BAD_DATA_TYPE", 9, message(9, TARGET_RECORDER, 200_000, b"x", data_type=7), "data type 7, which no bridge sends")
+add_message("BAD_VERSION", 10, message(10, TARGET_RECORDER, 200_000, b"x", version=0x00040000), "message identifier with another format version")
+mismatch = message(11, TARGET_RECORDER, 200_000, b"x")
+add_message("ID_MISMATCH", 11, mismatch, "the topic holds another identifier than the message",
+            log=request_log(REMOTE_BRIDGE, message_id(99), mismatch["encoded"]))
+add_message("EMPTY_DATA", 12, message(12, TARGET_RECORDER, 300_000, b""), "no call data; legacy receipt and legacy transaction", receipt_kind=0)
+add_message("HIGH_GAS", 13, message(13, TARGET_RECORDER, 2_000_000, b"high-gas"), "asks for 2,000,000 gas")
+two_a, two_b = message(14, TARGET_RECORDER, 300_000, b"two-a"), message(15, TARGET_RECORDER, 300_000, b"two-b")
+message_receipts[14] = receipt(2, True, [other_log(REMOTE_BRIDGE), request_log(REMOTE_BRIDGE, two_a["id"], two_a["encoded"]),
+                                         request_log(REMOTE_BRIDGE, two_b["id"], two_b["encoded"])])
+message_transactions[14] = transaction(14, 2)
+MESSAGE_NAMED.append(dict(label="TWO_A", index=14, logIndex=1, message=two_a, note="first message of a transaction with two"))
+MESSAGE_NAMED.append(dict(label="TWO_B", index=14, logIndex=2, message=two_b, note="second message of the same transaction"))
+add_message("OTHER_EMITTER", 16, message(16, TARGET_RECORDER, 200_000, b"x"), "a message log from a contract that is not the remote bridge",
+            log=request_log(OTHER_EMITTER, message_id(16), message(16, TARGET_RECORDER, 200_000, b"x")["encoded"]))
+add_message("FAILED", 17, message(17, TARGET_RECORDER, 200_000, b"x"), "status 0 receipt with a message log", success=False)
+add_message("OTHER_TOPIC", 18, message(18, TARGET_RECORDER, 200_000, b"x"), "a log of the remote bridge with another topic 0",
+            log=request_log(REMOTE_BRIDGE, message_id(18), b"", topic=OTHER_TOPIC))
+short = message(19, TARGET_RECORDER, 200_000, b"x")
+add_message("SHORT_MESSAGE", 19, short, "the event data holds 10 bytes, fewer than a message header",
+            log=request_log(REMOTE_BRIDGE, short["id"], b"0123456789"))
+non_canonical = message(20, TARGET_RECORDER, 200_000, b"x")
+add_message("NON_CANONICAL_DATA", 20, non_canonical, "the event data starts with the offset 64 instead of 32",
+            log=request_log(REMOTE_BRIDGE, non_canonical["id"], non_canonical["encoded"],
+                            data=word(64) + word(0) + word(len(non_canonical["encoded"])) + non_canonical["encoded"] + b"\x00" * (-len(non_canonical["encoded"]) % 32)))
+add_message("REENTRANT", 21, message(21, TARGET_REENTRANT, 500_000, b"reenter"), "a target that calls executeMessage during its own delivery")
+add_message("SENDING", 22, message(22, TARGET_SENDER, 500_000, b"send"), "a target that sends a message during its own delivery")
+for index in range(MESSAGE_TOTAL):
+    if index not in message_receipts:
+        message_receipts[index] = receipt(2, True, [other_log(OTHER_EMITTER)])
+        message_transactions[index] = transaction(index, 2)
+
+receipts_root, receipts_top, receipts_nodes, message_keys = build_trie([message_receipts[i] for i in range(MESSAGE_TOTAL)])
+transactions_root, transactions_top, transactions_nodes, _ = build_trie([message_transactions[i] for i in range(MESSAGE_TOTAL)])
+receipt_proofs, transaction_proofs = {}, {}
+for entry in MESSAGE_NAMED:
+    i = entry["index"]
+    if i in receipt_proofs:
+        continue
+    receipt_proofs[i] = prove(receipts_top, message_keys[i], receipts_nodes)
+    transaction_proofs[i] = prove(transactions_top, message_keys[i], transactions_nodes)
+    assert decode(receipt_proofs[i][-1])[1] == message_receipts[i]
+    assert decode(transaction_proofs[i][-1])[1] == message_transactions[i]
+
+with open(os.path.join(here, "messages.json"), "w") as handle:
+    json.dump({
+        "receiptsRoot": "0x" + receipts_root.hex(), "transactionsRoot": "0x" + transactions_root.hex(),
+        "constants": {"remoteBridge": "0x" + REMOTE_BRIDGE.hex(), "sender": "0x" + SENDER.hex(),
+                      "recorder": "0x" + TARGET_RECORDER.hex(), "reverter": "0x" + TARGET_REVERTER.hex(),
+                      "burner": "0x" + TARGET_BURNER.hex(), "reentrant": "0x" + TARGET_REENTRANT.hex(), "sending": "0x" + TARGET_SENDER.hex(), "otherEmitter": "0x" + OTHER_EMITTER.hex(),
+                      "sourceChainId": SOURCE_CHAIN, "destinationChainId": DESTINATION_CHAIN,
+                      "userRequestTopic": "0x" + USER_REQUEST_TOPIC.hex()},
+        "messages": [dict(label=e["label"], transactionIndex=e["index"], logIndex=e["logIndex"], note=e["note"],
+                          messageId="0x" + e["message"]["id"].hex(), encoded="0x" + e["message"]["encoded"].hex(),
+                          transactionHash="0x" + keccak256(message_transactions[e["index"]]).hex(),
+                          receiptProof=["0x" + n.hex() for n in receipt_proofs[e["index"]]],
+                          transactionProof=["0x" + n.hex() for n in transaction_proofs[e["index"]]]) for e in MESSAGE_NAMED],
+    }, handle, indent=2)
+    handle.write("\n")
+
+message_lines = []
+message_lines.append("// SPDX-License-Identifier: MIT")
+message_lines.append("pragma solidity ^0.8.24;")
+message_lines.append("")
+message_lines.append("// GENERATED by test/hardened/fixtures/generate_receipts.py. Do not edit by hand.")
+message_lines.append("")
+message_lines.append("/// @notice Synthetic receipts and transactions tries (%d entries each, the same indices) with message logs." % MESSAGE_TOTAL)
+message_lines.append("library MessageFixtures {")
+message_lines.append("    bytes32 internal constant RECEIPTS_ROOT = 0x%s;" % receipts_root.hex())
+message_lines.append("    bytes32 internal constant TRANSACTIONS_ROOT = 0x%s;" % transactions_root.hex())
+message_lines.append("    address internal constant REMOTE_BRIDGE = 0x%s;" % REMOTE_BRIDGE.hex())
+message_lines.append("    address internal constant SENDER = 0x%s;" % SENDER.hex())
+message_lines.append("    address internal constant OTHER_EMITTER = 0x%s;" % OTHER_EMITTER.hex())
+message_lines.append("    address internal constant TARGET_RECORDER = 0x%s;" % TARGET_RECORDER.hex())
+message_lines.append("    address internal constant TARGET_REVERTER = 0x%s;" % TARGET_REVERTER.hex())
+message_lines.append("    address internal constant TARGET_BURNER = 0x%s;" % TARGET_BURNER.hex())
+message_lines.append("    address internal constant TARGET_REENTRANT = 0x%s;" % TARGET_REENTRANT.hex())
+message_lines.append("    address internal constant TARGET_SENDING = 0x%s;" % TARGET_SENDER.hex())
+message_lines.append("    uint64 internal constant SOURCE_CHAIN_ID = %d;" % SOURCE_CHAIN)
+message_lines.append("    uint64 internal constant DESTINATION_CHAIN_ID = %d;" % DESTINATION_CHAIN)
+message_lines.append("")
+message_lines.append("    /// @param transactionIndex The index in both tries.")
+message_lines.append("    /// @param logIndex The index of the log inside the receipt.")
+message_lines.append("    /// @param messageId The identifier of the message.")
+message_lines.append("    /// @param transactionHash The hash of the transaction at the index.")
+message_lines.append("    /// @param encoded The message as the Arbitrary Message Bridge encodes it.")
+message_lines.append("    struct Named {")
+message_lines.append("        uint256 transactionIndex;")
+message_lines.append("        uint256 logIndex;")
+message_lines.append("        bytes32 messageId;")
+message_lines.append("        bytes32 transactionHash;")
+message_lines.append("        bytes encoded;")
+message_lines.append("    }")
+message_lines.append("")
+for e in MESSAGE_NAMED:
+    message_lines.append("    /// @dev %s" % e["note"])
+    message_lines.append("    function %s() internal pure returns (Named memory) {" % e["label"].lower())
+    message_lines.append("        return Named(%d, %d, 0x%s, 0x%s, %s);" % (
+        e["index"], e["logIndex"], e["message"]["id"].hex(), keccak256(message_transactions[e["index"]]).hex(), hexlit(e["message"]["encoded"])))
+    message_lines.append("    }")
+    message_lines.append("")
+for name, proofs in (("receiptProofFor", receipt_proofs), ("transactionProofFor", transaction_proofs)):
+    message_lines.append("    /// @notice The proof nodes from the %s root to the entry at `transactionIndex`." % ("receipts" if name.startswith("receipt") else "transactions"))
+    message_lines.append("    function %s(uint256 transactionIndex) internal pure returns (bytes[] memory proof) {" % name)
+    for i, proof in proofs.items():
+        message_lines.append("        if (transactionIndex == %d) {" % i)
+        message_lines.append("            proof = new bytes[](%d);" % len(proof))
+        for j, node in enumerate(proof):
+            message_lines.append("            proof[%d] = %s;" % (j, hexlit(node)))
+        message_lines.append("            return proof;")
+        message_lines.append("        }")
+    message_lines.append('        revert("MessageFixtures: no proof for this index");')
+    message_lines.append("    }")
+    message_lines.append("")
+message_lines[-1:] = ["}"]
+with open(os.path.join(here, "..", "utils", "MessageFixtures.sol"), "w") as handle:
+    handle.write("\n".join(message_lines) + "\n")
+print("message receipts root", receipts_root.hex(), "transactions root", transactions_root.hex())

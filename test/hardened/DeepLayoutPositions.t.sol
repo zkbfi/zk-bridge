@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {SSZ} from "../../src/hardened/SSZ.sol";
 import {HistoricalScenes} from "./utils/HistoricalScenes.sol";
 import {ReceiptFixtures} from "./utils/ReceiptFixtures.sol";
@@ -58,7 +59,7 @@ contract DeepLayoutPositionsTest is HistoricalScenes {
     /// @dev A vault with no layout, and the body evidence of today: Capella (412) and Deneb or Electra (812).
     function _todaysBodies()
         internal
-        returns (BridgeVault vault_, BridgeVault.BlockHashEvidence memory capella, BridgeVault.BlockHashEvidence memory deneb)
+        returns (BridgeVault vault_, BeaconProofVerifier.BlockHashEvidence memory capella, BeaconProofVerifier.BlockHashEvidence memory deneb)
     {
         SceneParams memory capellaParams = _defaultParams();
         capellaParams.anchorBodyGindex = 412;
@@ -79,8 +80,8 @@ contract DeepLayoutPositionsTest is HistoricalScenes {
         vault_.addBlockRootsLayout(37, capellaLike.rootsEvidence);
         vault_.addBlockRootsLayout(69, electraLike.rootsEvidence);
         assertEq(vault_.stateLayouts().length, 2);
-        BridgeVault.BlockRootsEvidence memory capella = capellaLike.rootsEvidence;
-        BridgeVault.BlockRootsEvidence memory electra = electraLike.rootsEvidence;
+        BeaconProofVerifier.BlockRootsEvidence memory capella = capellaLike.rootsEvidence;
+        BeaconProofVerifier.BlockRootsEvidence memory electra = electraLike.rootsEvidence;
         assertEq(capella.branchA.length, 18);
         assertEq(electra.branchA.length, 19);
 
@@ -90,10 +91,10 @@ contract DeepLayoutPositionsTest is HistoricalScenes {
         vault_.addBlockRootsLayout(DEEP_BLOCK_ROOTS, electra);
 
         capella.branchA = _padTo(capella.branchA, 20);
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         vault_.addBlockRootsLayout(DEEP_BLOCK_ROOTS, capella);
         electra.branchA = _padTo(electra.branchA, 20);
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         vault_.addBlockRootsLayout(DEEP_BLOCK_ROOTS, electra);
 
     }
@@ -109,8 +110,8 @@ contract DeepLayoutPositionsTest is HistoricalScenes {
         vault_.addHistoricalSummariesLayout(59, capellaLike.historicalEvidence);
         vault_.addHistoricalSummariesLayout(91, electraLike.historicalEvidence);
         assertEq(vault_.historicalLayouts().length, 2);
-        BridgeVault.HistoricalSummariesEvidence memory capella = capellaLike.historicalEvidence;
-        BridgeVault.HistoricalSummariesEvidence memory electra = electraLike.historicalEvidence;
+        BeaconProofVerifier.HistoricalSummariesEvidence memory capella = capellaLike.historicalEvidence;
+        BeaconProofVerifier.HistoricalSummariesEvidence memory electra = electraLike.historicalEvidence;
         assertEq(capella.branch.length, 44);
         assertEq(electra.branch.length, 45);
 
@@ -120,10 +121,10 @@ contract DeepLayoutPositionsTest is HistoricalScenes {
         vault_.addHistoricalSummariesLayout(DEEP_SUMMARIES, electra);
 
         capella.branch = _padTo(capella.branch, 46);
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         vault_.addHistoricalSummariesLayout(DEEP_SUMMARIES, capella);
         electra.branch = _padTo(electra.branch, 46);
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         vault_.addHistoricalSummariesLayout(DEEP_SUMMARIES, electra);
 
     }
@@ -136,18 +137,18 @@ contract DeepLayoutPositionsTest is HistoricalScenes {
     /// branch was built for the path of 812. A Capella branch padded to 9 reverts the same way. The honest positions 412
     /// and 812 are accepted. Matters: the length check alone does not separate 668 from 812.
     function test_HB04_deepBlockHash668_evidenceOfTodaysLayoutsRefused() public {
-        (BridgeVault vault_, BridgeVault.BlockHashEvidence memory capella, BridgeVault.BlockHashEvidence memory deneb) =
+        (BridgeVault vault_, BeaconProofVerifier.BlockHashEvidence memory capella, BeaconProofVerifier.BlockHashEvidence memory deneb) =
             _todaysBodies();
         assertEq(capella.branch.length, 8);
         assertEq(deneb.branch.length, 9);
 
         vm.expectRevert(_lengthMismatch(9, 8));
         vault_.addBlockHashLayout(DEEP_BODY_FIVE_PAYLOAD_FOUR, capella);
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         vault_.addBlockHashLayout(DEEP_BODY_FIVE_PAYLOAD_FOUR, deneb);
 
-        BridgeVault.BlockHashEvidence memory padded = BridgeVault.BlockHashEvidence(capella.header, _padTo(capella.branch, 9));
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        BeaconProofVerifier.BlockHashEvidence memory padded = BeaconProofVerifier.BlockHashEvidence(capella.header, _padTo(capella.branch, 9));
+        vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         vault_.addBlockHashLayout(DEEP_BODY_FIVE_PAYLOAD_FOUR, padded);
 
         vault_.addBlockHashLayout(412, capella);
@@ -160,7 +161,7 @@ contract DeepLayoutPositionsTest is HistoricalScenes {
     /// Branches padded to 10 revert with `LayoutEvidenceInvalid`. The honest positions are accepted. Matters: no body of
     /// today has 32 leaves.
     function test_HB04_deepBlockHash1324_evidenceOfTodaysLayoutsRefused() public {
-        (BridgeVault vault_, BridgeVault.BlockHashEvidence memory capella, BridgeVault.BlockHashEvidence memory deneb) =
+        (BridgeVault vault_, BeaconProofVerifier.BlockHashEvidence memory capella, BeaconProofVerifier.BlockHashEvidence memory deneb) =
             _todaysBodies();
 
         vm.expectRevert(_lengthMismatch(10, 8));
@@ -168,13 +169,13 @@ contract DeepLayoutPositionsTest is HistoricalScenes {
         vm.expectRevert(_lengthMismatch(10, 9));
         vault_.addBlockHashLayout(DEEP_BODY_FIVE_PAYLOAD_FIVE, deneb);
 
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         vault_.addBlockHashLayout(
-            DEEP_BODY_FIVE_PAYLOAD_FIVE, BridgeVault.BlockHashEvidence(capella.header, _padTo(capella.branch, 10))
+            DEEP_BODY_FIVE_PAYLOAD_FIVE, BeaconProofVerifier.BlockHashEvidence(capella.header, _padTo(capella.branch, 10))
         );
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         vault_.addBlockHashLayout(
-            DEEP_BODY_FIVE_PAYLOAD_FIVE, BridgeVault.BlockHashEvidence(deneb.header, _padTo(deneb.branch, 10))
+            DEEP_BODY_FIVE_PAYLOAD_FIVE, BeaconProofVerifier.BlockHashEvidence(deneb.header, _padTo(deneb.branch, 10))
         );
 
         vault_.addBlockHashLayout(412, capella);

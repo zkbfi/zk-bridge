@@ -5,6 +5,7 @@ import {Test, console2} from "forge-std/Test.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
 import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {SSZ} from "../../src/hardened/SSZ.sol";
 import {MockERC20} from "../../src/mocks/MockERC20.sol";
 
@@ -130,20 +131,20 @@ contract LightClientFixturesTest is Test {
         bytes4 selector = bytes4(returned);
         bytes32 reason = keccak256(bytes(rustReason));
         bool matches;
-        if (reason == keccak256("AnchorNotStored")) matches = selector == BridgeVault.AnchorNotStored.selector;
+        if (reason == keccak256("AnchorNotStored")) matches = selector == BeaconProofVerifier.AnchorNotStored.selector;
         if (reason == keccak256("InvalidBlockHashBranch")) {
-            matches = selector == BridgeVault.BlockHashBranchInvalid.selector || selector == SSZ.BranchLengthMismatch.selector;
+            matches = selector == BeaconProofVerifier.BlockHashBranchInvalid.selector || selector == SSZ.BranchLengthMismatch.selector;
         }
         if (reason == keccak256("InvalidAncestryBranch")) matches = selector == _expectedAncestrySelector(json);
         if (reason == keccak256("ReceiptProofInvalid")) matches = selector == bytes4(0x08c379a0); // MerkleTrie `require` string
-        if (reason == keccak256("DepositNotBeforeAnchor")) matches = selector == BridgeVault.DepositNotBeforeAnchor.selector;
+        if (reason == keccak256("DepositNotBeforeAnchor")) matches = selector == BeaconProofVerifier.DepositNotBeforeAnchor.selector;
         if (reason == keccak256("DepositBeforeCapella")) {
             matches = _isDepositBeforeCapellaEra(json, returned);
         }
-        if (reason == keccak256("ReceiptFailed")) matches = selector == BridgeVault.ReceiptFailed.selector;
-        if (reason == keccak256("LogEmitterMismatch")) matches = selector == BridgeVault.WrongEmitter.selector;
-        if (reason == keccak256("LogIndexOutOfRange")) matches = selector == BridgeVault.LogIndexOutOfRange.selector;
-        if (reason == keccak256("LogTopicMismatch")) matches = selector == BridgeVault.WrongEventTopic.selector;
+        if (reason == keccak256("ReceiptFailed")) matches = selector == BeaconProofVerifier.ReceiptFailed.selector;
+        if (reason == keccak256("LogEmitterMismatch")) matches = selector == BeaconProofVerifier.WrongEmitter.selector;
+        if (reason == keccak256("LogIndexOutOfRange")) matches = selector == BeaconProofVerifier.LogIndexOutOfRange.selector;
+        if (reason == keccak256("LogTopicMismatch")) matches = selector == BeaconProofVerifier.WrongEventTopic.selector;
         if (reason == keccak256("TargetChainMismatch")) matches = selector == BridgeVault.WrongTargetChain.selector;
         if (reason == keccak256("DestinationVaultMismatch")) matches = selector == BridgeVault.WrongDestinationVault.selector;
         assertTrue(matches, string.concat("Solidity error differs from the Rust reason ", rustReason, " in ", path));
@@ -156,7 +157,7 @@ contract LightClientFixturesTest is Test {
         if (_contains(description, "padded") || _contains(description, "short") || _contains(description, "distance_with")) {
             return SSZ.BranchLengthMismatch.selector;
         }
-        return BridgeVault.AncestryBranchInvalid.selector;
+        return BeaconProofVerifier.AncestryBranchInvalid.selector;
     }
 
     function _contains(string memory text, string memory part) internal pure returns (bool) {
@@ -176,7 +177,7 @@ contract LightClientFixturesTest is Test {
     /// @dev True when the revert is `DepositBeforeCapellaEra(depositEra, capellaEra)` with the fixture's capella era
     /// and a deposit era below it.
     function _isDepositBeforeCapellaEra(string memory json, bytes memory returned) internal pure returns (bool) {
-        if (bytes4(returned) != BridgeVault.DepositBeforeCapellaEra.selector) return false;
+        if (bytes4(returned) != BeaconProofVerifier.DepositBeforeCapellaEra.selector) return false;
         bytes memory arguments = new bytes(returned.length - 4);
         for (uint256 i = 0; i < arguments.length; i++) {
             arguments[i] = returned[i + 4];

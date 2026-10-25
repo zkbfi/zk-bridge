@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {console2} from "forge-std/console2.sol";
 import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {BeaconBlockHeader, SSZ} from "../../src/hardened/SSZ.sol";
 import {MockERC20} from "../../src/mocks/MockERC20.sol";
 import {WithdrawalScenes} from "./utils/WithdrawalScenes.sol";
@@ -105,7 +106,7 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
         Scene memory scene = _scene(named, _defaultParams());
         BridgeVault.WithdrawalProof memory wrong = _clone(scene.proof);
         wrong.logIndex = 0;
-        _expectRejected(wrong, abi.encodeWithSelector(BridgeVault.WrongEventTopic.selector, keccak256("Unrelated(uint256)")));
+        _expectRejected(wrong, abi.encodeWithSelector(BeaconProofVerifier.WrongEventTopic.selector, keccak256("Unrelated(uint256)")));
         assertFalse(vault.claimed(named.nonce));
 
         vault.withdraw(scene.proof);
@@ -119,7 +120,7 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
         Scene memory scene = _scene(named, _defaultParams());
         BridgeVault.WithdrawalProof memory wrong = _clone(scene.proof);
         wrong.logIndex = 3;
-        _expectRejected(wrong, abi.encodeWithSelector(BridgeVault.LogIndexOutOfRange.selector, uint256(3), uint256(3)));
+        _expectRejected(wrong, abi.encodeWithSelector(BeaconProofVerifier.LogIndexOutOfRange.selector, uint256(3), uint256(3)));
         vault.withdraw(scene.proof);
         _assertPaid(named);
     }
@@ -133,7 +134,7 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
         ReceiptFixtures.Named memory fake = ReceiptFixtures.other_emitter();
         SceneParams memory params = _defaultParams();
         Scene memory scene = _scene(fake, params);
-        _expectRejected(scene.proof, abi.encodeWithSelector(BridgeVault.WrongEmitter.selector, ReceiptFixtures.REMOTE_VAULT, ReceiptFixtures.OTHER_EMITTER));
+        _expectRejected(scene.proof, abi.encodeWithSelector(BeaconProofVerifier.WrongEmitter.selector, ReceiptFixtures.REMOTE_VAULT, ReceiptFixtures.OTHER_EMITTER));
         assertEq(tokenOnB.balanceOf(ReceiptFixtures.RECIPIENT), 0);
 
         ReceiptFixtures.Named memory real = ReceiptFixtures.type2();
@@ -147,7 +148,7 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
         ReceiptFixtures.Named memory failed = ReceiptFixtures.failed();
         SceneParams memory params = _defaultParams();
         Scene memory scene = _scene(failed, params);
-        _expectRejected(scene.proof, abi.encodeWithSelector(BridgeVault.ReceiptFailed.selector));
+        _expectRejected(scene.proof, abi.encodeWithSelector(BeaconProofVerifier.ReceiptFailed.selector));
         assertFalse(vault.claimed(failed.nonce));
 
         ReceiptFixtures.Named memory real = ReceiptFixtures.legacy();
@@ -219,7 +220,7 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
         BridgeVault.WithdrawalProof memory unstored = _clone(scene.proof);
         unstored.anchorHeader.slot = params.anchorSlot + 1; // the client stored a header at params.anchorSlot only
         bytes32 root = SSZ.hashTreeRootMemory(unstored.anchorHeader);
-        _expectRejected(unstored, abi.encodeWithSelector(BridgeVault.AnchorNotStored.selector, params.anchorSlot + 1, root));
+        _expectRejected(unstored, abi.encodeWithSelector(BeaconProofVerifier.AnchorNotStored.selector, params.anchorSlot + 1, root));
 
         vault.withdraw(scene.proof);
         _assertPaid(named);
@@ -233,7 +234,7 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
         BridgeVault.WithdrawalProof memory forged = _clone(scene.proof);
         forged.anchorHeader.proposerIndex += 1;
         bytes32 root = SSZ.hashTreeRootMemory(forged.anchorHeader);
-        _expectRejected(forged, abi.encodeWithSelector(BridgeVault.AnchorNotStored.selector, forged.anchorHeader.slot, root));
+        _expectRejected(forged, abi.encodeWithSelector(BeaconProofVerifier.AnchorNotStored.selector, forged.anchorHeader.slot, root));
         vault.withdraw(scene.proof);
     }
 
@@ -244,7 +245,7 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
         empty.anchorHeader.slot = 5;
         empty.depositHeader.slot = 4;
         bytes32 root = SSZ.hashTreeRootMemory(empty.anchorHeader);
-        _expectRejected(empty, abi.encodeWithSelector(BridgeVault.AnchorNotStored.selector, uint64(5), root));
+        _expectRejected(empty, abi.encodeWithSelector(BeaconProofVerifier.AnchorNotStored.selector, uint64(5), root));
     }
 
     // ================================================================ check 2: the path by distance
@@ -278,7 +279,7 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
             blockHashGindex: 812
         });
         Scene memory far = _scene(ReceiptFixtures.legacy(), farParams);
-        _expectRejected(far.proof, abi.encodeWithSelector(BridgeVault.LayoutNotValidated.selector, farParams.anchorSlot));
+        _expectRejected(far.proof, abi.encodeWithSelector(BeaconProofVerifier.LayoutNotValidated.selector, farParams.anchorSlot));
         assertEq(vault.historicalLayouts().length, 0, "no historical row was added by the scene");
     }
 
@@ -291,11 +292,11 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
 
         BridgeVault.WithdrawalProof memory same = _clone(scene.proof);
         same.depositHeader.slot = params.anchorSlot;
-        _expectRejected(same, abi.encodeWithSelector(BridgeVault.DepositNotBeforeAnchor.selector, params.anchorSlot, params.anchorSlot));
+        _expectRejected(same, abi.encodeWithSelector(BeaconProofVerifier.DepositNotBeforeAnchor.selector, params.anchorSlot, params.anchorSlot));
 
         BridgeVault.WithdrawalProof memory later = _clone(scene.proof);
         later.depositHeader.slot = params.anchorSlot + 5;
-        _expectRejected(later, abi.encodeWithSelector(BridgeVault.DepositNotBeforeAnchor.selector, params.anchorSlot + 5, params.anchorSlot));
+        _expectRejected(later, abi.encodeWithSelector(BeaconProofVerifier.DepositNotBeforeAnchor.selector, params.anchorSlot + 5, params.anchorSlot));
 
         vault.withdraw(scene.proof);
         _assertPaid(named);
@@ -312,15 +313,15 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
 
         BridgeVault.WithdrawalProof memory sibling = _clone(scene.proof);
         sibling.ancestryBranch[3] = keccak256("attacker sibling");
-        _expectRejected(sibling, abi.encodeWithSelector(BridgeVault.AncestryBranchInvalid.selector));
+        _expectRejected(sibling, abi.encodeWithSelector(BeaconProofVerifier.AncestryBranchInvalid.selector));
 
         BridgeVault.WithdrawalProof memory header = _clone(scene.proof);
         header.depositHeader.proposerIndex += 1;
-        _expectRejected(header, abi.encodeWithSelector(BridgeVault.AncestryBranchInvalid.selector));
+        _expectRejected(header, abi.encodeWithSelector(BeaconProofVerifier.AncestryBranchInvalid.selector));
 
         BridgeVault.WithdrawalProof memory slot = _clone(scene.proof);
         slot.depositHeader.slot -= 1; // another vector index, so another path
-        _expectRejected(slot, abi.encodeWithSelector(BridgeVault.AncestryBranchInvalid.selector));
+        _expectRejected(slot, abi.encodeWithSelector(BeaconProofVerifier.AncestryBranchInvalid.selector));
 
         vault.withdraw(scene.proof);
         _assertPaid(named);
@@ -363,12 +364,12 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
 
         BridgeVault fresh = _newWithdrawalVault();
         tokenOnB.mint(address(fresh), 100e18);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutNotValidated.selector, params.anchorSlot));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutNotValidated.selector, params.anchorSlot));
         fresh.withdraw(scene.proof);
 
         vm.prank(attacker); // any caller
         fresh.addBlockRootsLayout(params.blockRootsGindex, scene.rootsEvidence);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutNotValidated.selector, params.depositSlot));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutNotValidated.selector, params.depositSlot));
         fresh.withdraw(scene.proof); // the state position is known, the body position is not
 
         _addLayouts(fresh, params, scene);
@@ -388,10 +389,10 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
         narrow.addBlockRootsLayout(params.blockRootsGindex, scene.rootsEvidence);
         narrow.addBlockHashLayout(params.anchorBodyGindex, scene.anchorBodyEvidence); // validated at the anchor slot only
         tokenOnB.mint(address(narrow), 100e18);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutNotValidated.selector, params.depositSlot));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutNotValidated.selector, params.depositSlot));
         narrow.withdraw(scene.proof);
 
-        narrow.addBlockHashLayout(params.blockHashGindex, BridgeVault.BlockHashEvidence(scene.evidenceBefore, scene.evidenceBeforeBranch));
+        narrow.addBlockHashLayout(params.blockHashGindex, BeaconProofVerifier.BlockHashEvidence(scene.evidenceBefore, scene.evidenceBeforeBranch));
         narrow.withdraw(scene.proof); // the range now reaches the deposit slot
         assertTrue(narrow.claimed(named.nonce));
     }
@@ -424,11 +425,11 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
 
         BridgeVault.WithdrawalProof memory sibling = _clone(scene.proof);
         sibling.blockHashBranch[2] = keccak256("attacker sibling");
-        _expectRejected(sibling, abi.encodeWithSelector(BridgeVault.BlockHashBranchInvalid.selector));
+        _expectRejected(sibling, abi.encodeWithSelector(BeaconProofVerifier.BlockHashBranchInvalid.selector));
 
         BridgeVault.WithdrawalProof memory otherHeader = _clone(scene.proof);
         otherHeader.executionHeaderRlp = _executionHeaderRlp(ReceiptFixtures.RECEIPTS_ROOT, 16);
-        _expectRejected(otherHeader, abi.encodeWithSelector(BridgeVault.BlockHashBranchInvalid.selector));
+        _expectRejected(otherHeader, abi.encodeWithSelector(BeaconProofVerifier.BlockHashBranchInvalid.selector));
 
         vault.withdraw(scene.proof);
         _assertPaid(named);
@@ -440,7 +441,7 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
         ReceiptFixtures.Named memory named = ReceiptFixtures.type2();
         SceneParams memory params = _defaultParams();
         Scene memory truncated = _sceneWithHeader(named, params, _executionHeaderRlp(ReceiptFixtures.RECEIPTS_ROOT, 5));
-        _expectRejected(truncated.proof, abi.encodeWithSelector(BridgeVault.MalformedExecutionHeader.selector));
+        _expectRejected(truncated.proof, abi.encodeWithSelector(BeaconProofVerifier.MalformedExecutionHeader.selector));
 
         SceneParams memory good = _defaultParams();
         vault.withdraw(_scene(named, good).proof);
@@ -526,9 +527,9 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
         ReceiptFixtures.Named memory zeroPrefixed = ReceiptFixtures.type0_prefixed();
         SceneParams memory params = _defaultParams();
         Scene memory unknownScene = _scene(unknown, params);
-        _expectRejected(unknownScene.proof, abi.encodeWithSelector(BridgeVault.MalformedReceipt.selector));
+        _expectRejected(unknownScene.proof, abi.encodeWithSelector(BeaconProofVerifier.MalformedReceipt.selector));
         Scene memory zeroScene = _buildScene(zeroPrefixed, params, _executionHeaderRlp(ReceiptFixtures.RECEIPTS_ROOT, 17));
-        _expectRejected(zeroScene.proof, abi.encodeWithSelector(BridgeVault.MalformedReceipt.selector));
+        _expectRejected(zeroScene.proof, abi.encodeWithSelector(BeaconProofVerifier.MalformedReceipt.selector));
 
         ReceiptFixtures.Named memory real = ReceiptFixtures.type2();
         vault.withdraw(_buildScene(real, params, _executionHeaderRlp(ReceiptFixtures.RECEIPTS_ROOT, 17)).proof);
@@ -700,11 +701,11 @@ contract BridgeVaultWithdrawTest is WithdrawalScenes {
 
         BridgeVault.WithdrawalProof memory past = _clone(scene.proof);
         past.logIndex = 64;
-        _expectRejected(past, abi.encodeWithSelector(BridgeVault.LogIndexOutOfRange.selector, uint256(64), uint256(64)));
+        _expectRejected(past, abi.encodeWithSelector(BeaconProofVerifier.LogIndexOutOfRange.selector, uint256(64), uint256(64)));
 
         BridgeVault.WithdrawalProof memory last = _clone(scene.proof);
         last.logIndex = 63;
-        _expectRejected(last, abi.encodeWithSelector(BridgeVault.WrongEmitter.selector, ReceiptFixtures.REMOTE_VAULT, ReceiptFixtures.OTHER_EMITTER));
+        _expectRejected(last, abi.encodeWithSelector(BeaconProofVerifier.WrongEmitter.selector, ReceiptFixtures.REMOTE_VAULT, ReceiptFixtures.OTHER_EMITTER));
 
         vault.withdraw(scene.proof); // control: log 40 pays
         _assertPaid(named);

@@ -6,13 +6,12 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 // The storage guard, never the transient one: PulseChain has no TSTORE.
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {IBeaconLightClient} from "./IBeaconLightClient.sol";
 import {IDepositGate} from "./IDepositGate.sol";
 import {IFlowLimiter} from "./IFlowLimiter.sol";
-import {BeaconBlockHeader, SSZ} from "./SSZ.sol";
+import {BeaconBlockHeader} from "./SSZ.sol";
+import {BeaconProofVerifier} from "./BeaconProofVerifier.sol";
 import {MerkleTrie} from "./vendor/optimism/trie/MerkleTrie.sol";
 import {RLPReader} from "./vendor/optimism/rlp/RLPReader.sol";
-import {ReceiptLogs} from "./ReceiptLogs.sol";
 
 /// @title BridgeVault
 /// @notice One end of a two-chain bridge. It locks tokens on deposit and pays tokens against a direct proof of
@@ -20,35 +19,14 @@ import {ReceiptLogs} from "./ReceiptLogs.sol";
 /// Only the light client uses a zero-knowledge proof. The vault has no owner, no refund, and no upgrade path.
 /// One role exists: the fee authority. It can set a deposit fee within an immutable ceiling, and it can give up that
 /// power for good. It cannot touch locked tokens, withdrawals, the light client, the gate or the layout table.
-/// @dev Fork layouts. The generalized indices of `state.block_roots`, of `state.historical_summaries` and of the
-/// execution block hash depend on the fork of the source chain. The vault holds no fixed table. Anyone may add a
-/// layout with `addBlockRootsLayout`, `addHistoricalSummariesLayout` and `addBlockHashLayout`. Two checks guard each
-/// call. First, the candidate must be the position of the named field itself in a state or body tree of a known shape
-/// (see the position rules below). Second, the chain's own stored data must prove it: the candidate position must map
-/// stored header roots (or the stored execution block hash) to the stored state (or body) root.
-///
-/// The first check is needed because the second is not enough alone. Other fields hold values that a block proposer
-/// chooses: the list `eth1_data_votes` has the same tree shape as `block_roots`, and `graffiti` or
-/// `eth1_data.block_hash` can hold a copy of the execution block hash. A proposer could place stored header roots or
-/// a stored block hash there, get that position accepted, and then forge deposits. So the vault accepts only the
-/// position of the real field.
-///
-/// Ancestry has two paths, chosen by the vault from the two slots. A deposit at most 8192 slots below the anchor is
-/// proven through `state.block_roots`. An older deposit is proven through `state.historical_summaries`, which holds the
-/// root of every completed era of 8192 block roots since Capella. So a stored head may be any distance past the one
-/// before it.
-/// A layout is usable only for the slots between the first and the last slot at which it was validated. A range
-/// never covers a slot where another position was validated, and ranges of different positions never overlap. So a
-/// position validated, then replaced, then validated again leaves the slots between without a layout, and each
-/// lookup has one answer. Layouts move only when a container crosses a power-of-two field count; then a new route (light client and vault) is deployed
-/// beside the old one, and the old route keeps paying what it can still prove. This is the immutability trade-off of
-/// hole H-19.
+/// @dev The proof checks, the fork layout table and the opening proof live in `BeaconProofVerifier`, which the message
+/// bridge shares. Read its notes on fork layouts and ancestry.
 ///
 /// Opening. A deposit is paid only if the light client on the other chain stored a head with an execution block hash at
 /// or below the deposit slot, because no block hash row can start earlier (see `openDeposits`). The vault cannot read
 /// that light client, so it refuses deposits until `openDeposits` proves, through its own light client, that the other
 /// light client has stored one. The opening is permanent.
-contract BridgeVault is ReentrancyGuard {
+contract BridgeVault is ReentrancyGuard, BeaconProofVerifier {
     using SafeERC20 for IERC20;
 
     /// @notice A token on this chain and its counterpart on the remote chain.
@@ -78,93 +56,13 @@ contract BridgeVault is ReentrancyGuard {
         address remoteLightClient;
     }
 
-    /// @notice One validated range of a layout table, as the range rule reads it.
-    /// @param gindex The validated generalized index.
-    /// @param firstSlot The lowest slot of the range.
-    /// @param lastSlot The highest slot of the range.
-    struct SlotRange {
-        uint256 gindex;
-        uint64 firstSlot;
-        uint64 lastSlot;
-    }
 
-    /// @notice A validated `block_roots` position and the state slots at which it was validated.
-    /// @param blockRootsGindex The generalized index of `BeaconState.block_roots`.
-    /// @param firstSlot The lowest state slot at which the position was validated.
-    /// @param lastSlot The highest state slot at which the position was validated.
-    struct StateLayout {
-        uint256 blockRootsGindex;
-        uint64 firstSlot;
-        uint64 lastSlot;
-    }
 
-    /// @notice A validated block hash position and the header slots at which it was validated.
-    /// @param blockHashGindex The generalized index of `BeaconBlockBody.execution_payload.block_hash`.
-    /// @param firstSlot The lowest header slot at which the position was validated.
-    /// @param lastSlot The highest header slot at which the position was validated.
-    struct BodyLayout {
-        uint256 blockHashGindex;
-        uint64 firstSlot;
-        uint64 lastSlot;
-    }
 
-    /// @notice Evidence for a `block_roots` position: two stored earlier headers under one stored later state.
-    /// @param laterHeader A stored header. Its `stateRoot` holds the block roots.
-    /// @param earlierSlotA A stored slot before and within 8192 slots of the later header.
-    /// @param earlierSlotB Another such slot.
-    /// @param branchA The branch from the stored root at `earlierSlotA` to the later state root.
-    /// @param branchB The branch from the stored root at `earlierSlotB` to the later state root.
-    struct BlockRootsEvidence {
-        BeaconBlockHeader laterHeader;
-        uint64 earlierSlotA;
-        uint64 earlierSlotB;
-        bytes32[] branchA;
-        bytes32[] branchB;
-    }
 
-    /// @notice A validated `historical_summaries` position and the state slots at which it was validated.
-    /// @param historicalSummariesGindex The generalized index of `BeaconState.historical_summaries`.
-    /// @param firstSlot The lowest state slot at which the position was validated.
-    /// @param lastSlot The highest state slot at which the position was validated.
-    struct HistoricalLayout {
-        uint256 historicalSummariesGindex;
-        uint64 firstSlot;
-        uint64 lastSlot;
-    }
 
-    /// @notice Evidence for a block hash position: a stored header whose body holds its stored execution block hash.
-    /// @param header A stored header.
-    /// @param branch The branch from the stored execution block hash to the body root of the header.
-    struct BlockHashEvidence {
-        BeaconBlockHeader header;
-        bytes32[] branch;
-    }
 
-    /// @notice Evidence for a `historical_summaries` position: a stored header in a completed era, proven at the claimed
-    /// position under a later stored anchor's state root.
-    /// @param anchorHeader A stored header. Its `stateRoot` holds `historical_summaries`.
-    /// @param earlierSlot A stored slot more than 8192 slots below the anchor, in an era at or after `capellaEra`.
-    /// @param branch The branch from the stored root at `earlierSlot` to the anchor state root. Its length is exact.
-    struct HistoricalSummariesEvidence {
-        BeaconBlockHeader anchorHeader;
-        uint64 earlierSlot;
-        bytes32[] branch;
-    }
 
-    /// @notice The evidence for `openDeposits`: a block of the remote chain whose hash the light client stored, and the
-    /// storage of the remote light client under the state root of that block.
-    /// @param remoteSlot A slot at which the light client of this vault stored an execution block hash.
-    /// @param remoteHeaderRlp The RLP of the execution block header whose hash is stored at `remoteSlot`.
-    /// @param accountProof The state trie proof of the account of `remoteLightClient`.
-    /// @param storedSlot A slot whose `executionBlockHashes` entry in the remote light client is not zero.
-    /// @param storageProof The storage trie proof of that entry.
-    struct OpeningProof {
-        uint64 remoteSlot;
-        bytes remoteHeaderRlp;
-        bytes[] accountProof;
-        uint64 storedSlot;
-        bytes[] storageProof;
-    }
 
     /// @notice The evidence for one withdrawal. Nothing in it is secret.
     struct WithdrawalProof {
@@ -189,15 +87,8 @@ contract BridgeVault is ReentrancyGuard {
         address destinationToken;
     }
 
-    /// @notice The length of `state.block_roots`. A deposit block at most this far below its anchor uses the recent path.
-    uint64 public constant SLOTS_PER_HISTORICAL_ROOT = 8192;
 
-    /// @notice `log2(SLOTS_PER_HISTORICAL_ROOT)`: the depth of the `block_roots` vector.
-    uint256 public constant BLOCK_ROOTS_VECTOR_DEPTH = 13;
 
-    /// @notice `log2(HISTORICAL_ROOTS_LIMIT)` with `HISTORICAL_ROOTS_LIMIT = 2**24`: the depth of the
-    /// `historical_summaries` list below its data node.
-    uint256 public constant HISTORICAL_SUMMARIES_LIST_DEPTH = 24;
 
     /// @notice The topic 0 of `DepositInitiated`. Withdrawals match logs against this value.
     /// @dev Solidity 0.8.28 rejects `DepositInitiated.selector` in a constant. A test pins this value to the selector.
@@ -210,40 +101,9 @@ contract BridgeVault is ReentrancyGuard {
     /// @notice The number of basis points in the whole amount.
     uint256 public constant BASIS_POINTS_DENOMINATOR = 10_000;
 
-    /// @dev The deepest accepted `block_roots` or `historical_summaries` position (the state container only).
-    uint256 private constant MAX_BLOCK_ROOTS_DEPTH = 8;
-    /// @dev The deepest accepted block hash position.
-    uint256 private constant MAX_BLOCK_HASH_DEPTH = 16;
 
-    /// @dev The index of `BeaconState.block_roots` among the state fields.
-    uint256 private constant BLOCK_ROOTS_FIELD = 5;
-    /// @dev The index of `BeaconState.historical_summaries` among the state fields (Capella through Fulu).
-    uint256 private constant HISTORICAL_SUMMARIES_FIELD = 27;
-    /// @dev The index of `execution_payload` among the `BeaconBlockBody` fields (Capella through Fulu).
-    uint256 private constant EXECUTION_PAYLOAD_FIELD = 9;
-    /// @dev The index of `block_hash` among the `ExecutionPayload` fields (Capella through Fulu).
-    uint256 private constant BLOCK_HASH_FIELD = 12;
-    /// @dev The accepted depths of the `BeaconState` tree: 32, 64 or 128 leaves (28 to 128 fields).
-    uint256 private constant MIN_STATE_DEPTH = 5;
-    uint256 private constant MAX_STATE_DEPTH = 7;
-    /// @dev The accepted depths of the `BeaconBlockBody` tree (16 or 32 leaves) and of the `ExecutionPayload` tree
-    /// (16 or 32 leaves).
-    uint256 private constant MIN_BODY_DEPTH = 4;
-    uint256 private constant MAX_BODY_DEPTH = 5;
-    uint256 private constant MIN_PAYLOAD_DEPTH = 4;
-    uint256 private constant MAX_PAYLOAD_DEPTH = 5;
 
-    /// @dev The index of `receiptsRoot` in the execution block header list.
-    uint256 private constant RECEIPTS_ROOT_FIELD = 5;
-    /// @dev The index of `stateRoot` in the execution block header list.
-    uint256 private constant STATE_ROOT_FIELD = 3;
-    /// @dev The index of `storageRoot` in an account (nonce, balance, storage root, code hash).
-    uint256 private constant ACCOUNT_STORAGE_ROOT_FIELD = 2;
-    /// @dev The storage slot of the mapping `executionBlockHashes` in `BeaconLightClient`. A test pins it to the contract.
-    uint256 private constant EXECUTION_BLOCK_HASHES_MAPPING_SLOT = 3;
 
-    /// @notice A constructor argument is zero.
-    error ZeroValue(string name);
     /// @notice The fee ceiling is above `MAX_FEE_CEILING_BASIS_POINTS`.
     error FeeCeilingTooHigh(uint16 ceiling, uint16 maximum);
     /// @notice A vault with no fee authority must have a zero fee and a zero ceiling.
@@ -258,10 +118,6 @@ contract BridgeVault is ReentrancyGuard {
     error FeeAboveLimit(uint16 feeBasisPoints, uint16 maxFeeBasisPoints);
     /// @notice No fees are waiting for collection in this token.
     error NoFeesAccrued(address token);
-    /// @notice The local chain identifier differs from `block.chainid`.
-    error LocalChainIdMismatch(uint64 configured, uint256 actual);
-    /// @notice The remote chain is the local chain.
-    error RemoteChainIsLocalChain();
     /// @notice The constructor got no token pairs.
     error NoTokenPairs();
     /// @notice A token address holds no code.
@@ -282,63 +138,9 @@ contract BridgeVault is ReentrancyGuard {
     error ZeroAmount();
     /// @notice The vault received no tokens from the transfer.
     error NothingReceived();
-    /// @notice Deposits are closed until `openDeposits` proves that the other chain can pay them.
-    error DepositsNotOpen();
-    /// @notice The light client of this vault stored no execution block hash at the slot of the opening proof.
-    error OpeningSlotNotStored(uint64 slot);
-    /// @notice The header in the opening proof does not hash to the stored execution block hash.
-    error OpeningHeaderMismatch(bytes32 expected, bytes32 actual);
-    /// @notice The header, the account or the storage entry of the opening proof does not decode to the expected fields.
-    error OpeningProofMalformed();
-    /// @notice The proven entry of the remote light client is empty.
-    error OpeningEntryEmpty(uint64 storedSlot);
 
-    /// @notice The anchor header is not the finalized header stored for its slot.
-    error AnchorNotStored(uint64 slot, bytes32 anchorRoot);
-    /// @notice The deposit block is not strictly before the anchor.
-    error DepositNotBeforeAnchor(uint64 depositSlot, uint64 anchorSlot);
-    /// @notice The deposit era is before `capellaEra`, so no historical summary covers it.
-    error DepositBeforeCapellaEra(uint64 depositEra, uint64 capellaEra);
-    /// @notice The era index does not fit in the summaries list (2**24 entries). It would spill into a neighbour.
-    error HistoricalIndexOutOfRange(uint64 index);
-    /// @notice A `historical_summaries` evidence slot is not more than 8192 slots below its anchor.
-    error EvidenceSlotNotHistorical(uint64 earlierSlot, uint64 anchorSlot);
-    /// @notice The slot lies inside the validated range of another position, so a layout cannot be validated there.
-    error LayoutRangeConflict(uint64 slot);
-    /// @notice No validated layout covers the slot. Anyone can add one with evidence.
-    error LayoutNotValidated(uint64 slot);
-    /// @notice A candidate position is zero or deeper than the bound.
-    error LayoutOutOfBounds(uint256 gindex);
-    /// @notice A layout evidence slot holds no stored header.
-    error EvidenceSlotNotStored(uint64 slot);
-    /// @notice The two earlier slots of the evidence are the same slot.
-    error EvidenceSlotsEqual(uint64 slot);
-    /// @notice An earlier slot is not before the later header, or lies more than 8192 slots below it.
-    error EvidenceSlotOutOfWindow(uint64 earlierSlot, uint64 laterSlot);
-    /// @notice The evidence does not prove the candidate position.
-    error LayoutEvidenceInvalid();
     /// @notice Deposits are closed because the cutoff time passed.
     error DepositCutoffReached(uint64 cutoff);
-    /// @notice The ancestry branch does not lead from the deposit header to the anchor state.
-    error AncestryBranchInvalid();
-    /// @notice The block hash branch does not lead from the execution block hash to the deposit header body.
-    error BlockHashBranchInvalid();
-    /// @notice The execution header does not decode to a header with a receipts root.
-    error MalformedExecutionHeader();
-    /// @notice The receipt has an unsupported type byte or does not decode.
-    error MalformedReceipt();
-    /// @notice The receipt records a failed transaction.
-    error ReceiptFailed();
-    /// @notice The log index is past the end of the receipt's logs.
-    error LogIndexOutOfRange(uint256 logIndex, uint256 logCount);
-    /// @notice A candidate position is not the position of the named field in any accepted tree shape.
-    error LayoutPositionInvalid(uint256 gindex);
-    /// @notice The log was not emitted by the remote vault.
-    error WrongEmitter(address expected, address actual);
-    /// @notice The log is not a `DepositInitiated` log.
-    error WrongEventTopic(bytes32 actual);
-    /// @notice The log has the deposit topic but not the deposit layout.
-    error MalformedLog();
     /// @notice The deposit targets another chain than this chain.
     error WrongTargetChain(uint64 expected, uint64 actual);
     /// @notice The deposit is addressed to another vault than this one.
@@ -350,22 +152,9 @@ contract BridgeVault is ReentrancyGuard {
     /// @notice Only the flow limiter may detach itself. After a detach nobody can.
     error NotFlowLimiter(address caller);
 
-    /// @notice Emitted when a validated `block_roots` position is added or its validated range grows.
-    event BlockRootsLayoutValidated(uint256 indexed blockRootsGindex, uint64 firstSlot, uint64 lastSlot);
 
-    /// @notice Emitted when a validated block hash position is added or its validated range grows.
-    event BlockHashLayoutValidated(uint256 indexed blockHashGindex, uint64 firstSlot, uint64 lastSlot);
 
-    /// @notice Emitted when a validated `historical_summaries` position is added or its validated range grows.
-    event HistoricalSummariesLayoutValidated(
-        uint256 indexed historicalSummariesGindex, uint64 firstSlot, uint64 lastSlot
-    );
 
-    /// @notice Emitted once, when `openDeposits` proves the condition. Deposits stay open from then on.
-    /// @param remoteSlot The slot at which the light client of this vault stored the proven block of the remote chain.
-    /// @param remoteBlockHash The hash of that block.
-    /// @param storedSlot The slot whose execution block hash the remote light client had stored in that block.
-    event DepositsOpened(uint64 indexed remoteSlot, bytes32 indexed remoteBlockHash, uint64 storedSlot);
 
     /// @notice Emitted when the fee authority sets the fee.
     event FeeChanged(uint16 feeBasisPoints, address feeRecipient);
@@ -406,8 +195,6 @@ contract BridgeVault is ReentrancyGuard {
         bytes32 depositBlockHash
     );
 
-    /// @notice The light client that tracks the finalized chain of the remote chain.
-    IBeaconLightClient public immutable lightClient;
     /// @notice The identifier of this chain.
     uint64 public immutable localChainId;
     /// @notice The identifier of the other chain.
@@ -417,15 +204,10 @@ contract BridgeVault is ReentrancyGuard {
     /// @notice Deposits revert at and after this timestamp. Zero disables the cutoff. Set it at deployment only
     /// when a breaking fork of the other chain is already scheduled.
     uint64 public immutable depositCutoffTimestamp;
-    /// @notice `floor(capellaForkSlot / 8192)` of the remote chain: the era of the first `historical_summaries` entry.
-    /// Ethereum 758 (Capella slot 6209536), PulseChain 0 (Capella epoch 3, slot 96). Zero is valid.
-    uint64 public immutable capellaEra;
     /// @notice The gate that `deposit` calls first. It refuses a deposit the route cannot deliver.
     IDepositGate public immutable depositGate;
     /// @notice The highest fee in basis points that the fee authority can ever set. At most 100 (1%).
     uint16 public immutable feeCeilingBasisPoints;
-    /// @notice The light client on the other chain. It tracks the beacon chain of this chain and feeds the remote vault.
-    address public immutable remoteLightClient;
 
     /// @notice The number of deposits so far. It feeds the nonce.
     uint256 public depositCount;
@@ -456,6 +238,19 @@ contract BridgeVault is ReentrancyGuard {
     /// detach. Only the limiter can detach itself, and nothing can set it. Read its code before you use this vault.
     IFlowLimiter public flowLimiter;
 
+    /// @dev The tables of `BeaconProofVerifier` live here, between `claimed` and the fee state, where they always were.
+    function _stateLayoutTable() internal view override returns (StateLayout[] storage) {
+        return _stateLayouts;
+    }
+
+    function _bodyLayoutTable() internal view override returns (BodyLayout[] storage) {
+        return _bodyLayouts;
+    }
+
+    function _historicalLayoutTable() internal view override returns (HistoricalLayout[] storage) {
+        return _historicalLayouts;
+    }
+
     /// @param lightClient_ The light client of the remote chain.
     /// @param localChainId_ The identifier of this chain. It must equal `block.chainid`.
     /// @param remoteChainId_ The identifier of the other chain.
@@ -473,7 +268,7 @@ contract BridgeVault is ReentrancyGuard {
         VaultTerms memory vaultTerms,
         uint64 capellaEra_,
         address depositGate_
-    ) {
+    ) BeaconProofVerifier(lightClient_, capellaEra_, vaultTerms.remoteLightClient) {
         if (lightClient_ == address(0)) revert ZeroValue("lightClient");
         if (remoteChainId_ == 0) revert ZeroValue("remoteChainId");
         if (remoteVault_ == address(0)) revert ZeroValue("remoteVault");
@@ -493,15 +288,12 @@ contract BridgeVault is ReentrancyGuard {
         }
         _requireFeeTerms(vaultTerms.feeBasisPoints, vaultTerms.feeRecipient, vaultTerms.feeCeilingBasisPoints);
 
-        lightClient = IBeaconLightClient(lightClient_);
         localChainId = localChainId_;
         remoteChainId = remoteChainId_;
         remoteVault = remoteVault_;
         depositCutoffTimestamp = vaultTerms.cutoffTimestamp;
-        capellaEra = capellaEra_;
         depositGate = IDepositGate(depositGate_);
         feeCeilingBasisPoints = vaultTerms.feeCeilingBasisPoints;
-        remoteLightClient = vaultTerms.remoteLightClient;
         feeAuthority = vaultTerms.feeAuthority;
         feeBasisPoints = vaultTerms.feeBasisPoints;
         feeRecipient = vaultTerms.feeRecipient;
@@ -546,34 +338,13 @@ contract BridgeVault is ReentrancyGuard {
     /// @notice Opens deposits for good, given proof that the remote light client has stored a head.
     /// @dev A deposit at slot `s` is paid only if some block hash row covers `s`. A row starts at a stored head that
     /// has an execution block hash, and the constructor of the light client stores none. So a deposit made before the
-    /// remote light client stored its first update is lost for ever. That light client lives on the other chain and
-    /// the vault cannot read it. The vault reads it through its own light client, which tracks the other chain.
-    /// The proof walks four links. 1: its light client stored the execution block hash of a block of the other chain at
-    /// `remoteSlot`. 2: the header in the proof hashes to that block hash, and it holds a state root. 3: under that
-    /// state root, the account of `remoteLightClient` holds a storage root. 4: under that storage root,
-    /// `executionBlockHashes[storedSlot]` is not zero. Only `update` writes that entry, so one update was stored, at
-    /// a head that the other beacon chain had already finalized. That block is final on the other chain and final in
-    /// the light client of this vault, so no reorganization undoes it. A deposit made now lies after that head,
-    /// because a head is never later than the clock of the chain that stored it. After the call, the flag stays true.
-    /// The call needs no key. A call after the opening returns at once, so two openers do not fail each other.
+    /// remote light client stored its first update is lost for ever. The proof is checked by `_verifyOpening`. After the
+    /// call, the flag stays true. The call needs no key. A call after the opening returns at once, so two openers do
+    /// not fail each other.
     /// @param proof The evidence.
     function openDeposits(OpeningProof calldata proof) external {
         if (depositsOpen) return;
-        bytes32 blockHash = lightClient.executionBlockHashes(proof.remoteSlot);
-        if (blockHash == bytes32(0)) revert OpeningSlotNotStored(proof.remoteSlot);
-        bytes32 actual = keccak256(proof.remoteHeaderRlp);
-        if (actual != blockHash) revert OpeningHeaderMismatch(blockHash, actual);
-
-        bytes32 stateRoot = _headerField(proof.remoteHeaderRlp, STATE_ROOT_FIELD);
-        bytes memory account =
-            MerkleTrie.get(abi.encodePacked(keccak256(abi.encodePacked(remoteLightClient))), proof.accountProof, stateRoot);
-        bytes32 storageRoot = _accountStorageRoot(account);
-        bytes memory entry = MerkleTrie.get(
-            abi.encodePacked(keccak256(abi.encode(_executionBlockHashesSlot(proof.storedSlot)))),
-            proof.storageProof,
-            storageRoot
-        );
-        if (RLPReader.readBytes(entry).length == 0) revert OpeningEntryEmpty(proof.storedSlot);
+        bytes32 blockHash = _verifyOpening(proof);
 
         depositsOpen = true;
         emit DepositsOpened(proof.remoteSlot, blockHash, proof.storedSlot);
@@ -633,14 +404,14 @@ contract BridgeVault is ReentrancyGuard {
     /// 9: state changes, then the transfer.
     /// @param proof The evidence.
     function withdraw(WithdrawalProof calldata proof) external nonReentrant {
-        _requireStoredAnchor(proof.anchorHeader);
-        _requireAncestryBranch(proof);
+        _requireStoredHeader(proof.anchorHeader);
+        _requireAncestryBranch(proof.anchorHeader, proof.depositHeader, proof.ancestryBranch);
         bytes32 blockHash = keccak256(proof.executionHeaderRlp);
-        _requireBlockHashBranch(proof, blockHash);
+        _requireBlockHashBranch(blockHash, proof.depositHeader, proof.blockHashBranch);
 
-        bytes32 receiptsRoot = _receiptsRoot(proof.executionHeaderRlp);
+        bytes32 receiptsRoot = _headerRoot(_headerItems(proof.executionHeaderRlp), RECEIPTS_ROOT_FIELD);
         bytes memory receipt = MerkleTrie.get(_encodeUint(proof.transactionIndex), proof.receiptProof, receiptsRoot);
-        Deposit memory found = _depositLog(receipt, proof.logIndex);
+        Deposit memory found = _decodeLog(_receiptLog(receipt, proof.logIndex));
 
         if (found.targetChainId != localChainId) revert WrongTargetChain(localChainId, found.targetChainId);
         if (found.destinationVault != address(this)) {
@@ -657,372 +428,40 @@ contract BridgeVault is ReentrancyGuard {
         emit WithdrawalCompleted(localToken, found.recipient, found.nonce, found.amount, blockHash);
     }
 
-    /// @notice Adds a `block_roots` position, or widens its validated range, given evidence from stored data.
-    /// @dev Open to anyone. The position must be the `block_roots` field itself: `2**d + 5` with `d` in 5 to 7. Any
-    /// other position reverts with `LayoutPositionInvalid`, even when the evidence would match (for example the position
-    /// of `eth1_data_votes`, whose entries a proposer writes). The position is accepted only when, under the stored later state root, the leaf at
-    /// `blockRootsGindex * 8192 + slot % 8192` equals the light client's stored header root, for two different
-    /// stored earlier slots. A wrong position cannot match. The position is then usable for the later header's slot.
-    /// @param blockRootsGindex The candidate generalized index of `BeaconState.block_roots`.
-    /// @param evidence Two stored earlier headers under one stored later state.
-    function addBlockRootsLayout(uint256 blockRootsGindex, BlockRootsEvidence calldata evidence) external {
-        if (blockRootsGindex == 0 || SSZ.depthOf(blockRootsGindex) > MAX_BLOCK_ROOTS_DEPTH) {
-            revert LayoutOutOfBounds(blockRootsGindex);
-        }
-        if (!_isStateFieldPosition(blockRootsGindex, BLOCK_ROOTS_FIELD)) {
-            revert LayoutPositionInvalid(blockRootsGindex);
-        }
-        _requireStoredHeader(evidence.laterHeader);
-        if (evidence.earlierSlotA == evidence.earlierSlotB) revert EvidenceSlotsEqual(evidence.earlierSlotA);
-        _requireEarlierRoot(evidence.laterHeader, evidence.earlierSlotA, blockRootsGindex, evidence.branchA);
-        _requireEarlierRoot(evidence.laterHeader, evidence.earlierSlotB, blockRootsGindex, evidence.branchB);
 
-        uint64 slot = evidence.laterHeader.slot;
-        SlotRange[] memory ranges = new SlotRange[](_stateLayouts.length);
-        for (uint256 i = 0; i < ranges.length; i++) {
-            StateLayout storage stored = _stateLayouts[i];
-            ranges[i] = SlotRange(stored.blockRootsGindex, stored.firstSlot, stored.lastSlot);
-        }
-        uint256 index = _planRange(blockRootsGindex, slot, ranges);
-        if (index == ranges.length) {
-            _stateLayouts.push(StateLayout({blockRootsGindex: blockRootsGindex, firstSlot: slot, lastSlot: slot}));
-            emit BlockRootsLayoutValidated(blockRootsGindex, slot, slot);
-            return;
-        }
-        StateLayout storage layout = _stateLayouts[index];
-        if (slot < layout.firstSlot) layout.firstSlot = slot;
-        if (slot > layout.lastSlot) layout.lastSlot = slot;
-        emit BlockRootsLayoutValidated(blockRootsGindex, layout.firstSlot, layout.lastSlot);
-    }
 
-    /// @notice Adds a block hash position, or widens its validated range, given evidence from stored data.
-    /// @dev Open to anyone. The position must be the block hash field itself: `(2**db + 9) * 2**dp + 12` with `db` and
-    /// `dp` in 4 to 5, which is 412, 668, 812 or 1324. Any other position reverts with `LayoutPositionInvalid`, even when
-    /// the evidence would match (for example `graffiti` at 18, or `eth1_data.block_hash` at 70, which a proposer can
-    /// fill with a copy of the block hash). The position is accepted only when, under the body root of a stored header, the leaf at
-    /// `blockHashGindex` equals the light client's stored execution block hash of that header.
-    /// @param blockHashGindex The candidate generalized index of `BeaconBlockBody.execution_payload.block_hash`.
-    /// @param evidence A stored header and the branch to its body root.
-    function addBlockHashLayout(uint256 blockHashGindex, BlockHashEvidence calldata evidence) external {
-        if (blockHashGindex == 0 || SSZ.depthOf(blockHashGindex) > MAX_BLOCK_HASH_DEPTH) {
-            revert LayoutOutOfBounds(blockHashGindex);
-        }
-        if (!_isBlockHashPosition(blockHashGindex)) revert LayoutPositionInvalid(blockHashGindex);
-        _requireStoredHeader(evidence.header);
-        bytes32 storedBlockHash = lightClient.executionBlockHashes(evidence.header.slot);
-        if (storedBlockHash == bytes32(0)) revert EvidenceSlotNotStored(evidence.header.slot);
-        if (!SSZ.isValidBranch(storedBlockHash, evidence.branch, blockHashGindex, evidence.header.bodyRoot)) {
-            revert LayoutEvidenceInvalid();
-        }
 
-        uint64 slot = evidence.header.slot;
-        SlotRange[] memory ranges = new SlotRange[](_bodyLayouts.length);
-        for (uint256 i = 0; i < ranges.length; i++) {
-            BodyLayout storage stored = _bodyLayouts[i];
-            ranges[i] = SlotRange(stored.blockHashGindex, stored.firstSlot, stored.lastSlot);
-        }
-        uint256 index = _planRange(blockHashGindex, slot, ranges);
-        if (index == ranges.length) {
-            _bodyLayouts.push(BodyLayout({blockHashGindex: blockHashGindex, firstSlot: slot, lastSlot: slot}));
-            emit BlockHashLayoutValidated(blockHashGindex, slot, slot);
-            return;
-        }
-        BodyLayout storage layout = _bodyLayouts[index];
-        if (slot < layout.firstSlot) layout.firstSlot = slot;
-        if (slot > layout.lastSlot) layout.lastSlot = slot;
-        emit BlockHashLayoutValidated(blockHashGindex, layout.firstSlot, layout.lastSlot);
-    }
 
-    /// @notice Adds a `historical_summaries` position, or widens its validated range, given evidence from stored data.
-    /// @dev Open to anyone. The position is accepted only when, under the stored anchor state root, the leaf at the
-    /// historical index of the candidate equals the light client's stored header root at `earlierSlot`. The index is
-    /// built as `withdraw` builds it, so the candidate must also fit the era formula. A candidate that is another
-    /// state field (`block_roots`, `finalized_checkpoint.root`, `latest_block_header`) or a list of another depth
-    /// cannot match. The position is then usable for the anchor's slot.
-    /// @param historicalSummariesGindex The candidate generalized index of `BeaconState.historical_summaries`.
-    /// @param evidence A stored anchor, a stored earlier slot in a completed era, and the branch between them.
-    function addHistoricalSummariesLayout(
-        uint256 historicalSummariesGindex,
-        HistoricalSummariesEvidence calldata evidence
-    ) external {
-        if (historicalSummariesGindex == 0 || SSZ.depthOf(historicalSummariesGindex) > MAX_BLOCK_ROOTS_DEPTH) {
-            revert LayoutOutOfBounds(historicalSummariesGindex);
-        }
-        if (!_isStateFieldPosition(historicalSummariesGindex, HISTORICAL_SUMMARIES_FIELD)) {
-            revert LayoutPositionInvalid(historicalSummariesGindex);
-        }
-        _requireStoredHeader(evidence.anchorHeader);
-        uint64 anchorSlot = evidence.anchorHeader.slot;
-        uint64 earlierSlot = evidence.earlierSlot;
-        bytes32 storedRoot = lightClient.headers(earlierSlot);
-        if (storedRoot == bytes32(0)) revert EvidenceSlotNotStored(earlierSlot);
-        if (earlierSlot >= anchorSlot || anchorSlot - earlierSlot <= SLOTS_PER_HISTORICAL_ROOT) {
-            revert EvidenceSlotNotHistorical(earlierSlot, anchorSlot);
-        }
-        uint256 leafIndex = _historicalLeafGindex(historicalSummariesGindex, _eraIndex(earlierSlot), earlierSlot);
-        if (!SSZ.isValidBranch(storedRoot, evidence.branch, leafIndex, evidence.anchorHeader.stateRoot)) {
-            revert LayoutEvidenceInvalid();
-        }
 
-        SlotRange[] memory ranges = new SlotRange[](_historicalLayouts.length);
-        for (uint256 i = 0; i < ranges.length; i++) {
-            HistoricalLayout storage stored = _historicalLayouts[i];
-            ranges[i] = SlotRange(stored.historicalSummariesGindex, stored.firstSlot, stored.lastSlot);
-        }
-        uint256 index = _planRange(historicalSummariesGindex, anchorSlot, ranges);
-        if (index == ranges.length) {
-            _historicalLayouts.push(
-                HistoricalLayout({
-                    historicalSummariesGindex: historicalSummariesGindex, firstSlot: anchorSlot, lastSlot: anchorSlot
-                })
-            );
-            emit HistoricalSummariesLayoutValidated(historicalSummariesGindex, anchorSlot, anchorSlot);
-            return;
-        }
-        HistoricalLayout storage layout = _historicalLayouts[index];
-        if (anchorSlot < layout.firstSlot) layout.firstSlot = anchorSlot;
-        if (anchorSlot > layout.lastSlot) layout.lastSlot = anchorSlot;
-        emit HistoricalSummariesLayoutValidated(historicalSummariesGindex, layout.firstSlot, layout.lastSlot);
-    }
 
-    /// @dev The range rule. Returns the index of the range of `gindex` that grows to hold `slot`, or `ranges.length`
-    /// when a new range must start. A range grows only when the grown range overlaps no range of another position, so
-    /// ranges of different positions never overlap. Reverts when `slot` is already inside the range of another position.
-    function _planRange(uint256 gindex, uint64 slot, SlotRange[] memory ranges) private pure returns (uint256) {
-        for (uint256 i = 0; i < ranges.length; i++) {
-            if (ranges[i].gindex == gindex) continue;
-            if (ranges[i].firstSlot <= slot && slot <= ranges[i].lastSlot) revert LayoutRangeConflict(slot);
-        }
-        for (uint256 i = 0; i < ranges.length; i++) {
-            if (ranges[i].gindex != gindex) continue;
-            uint64 low = slot < ranges[i].firstSlot ? slot : ranges[i].firstSlot;
-            uint64 high = slot > ranges[i].lastSlot ? slot : ranges[i].lastSlot;
-            if (_overlapsOtherPosition(gindex, low, high, ranges)) continue;
-            return i;
-        }
-        return ranges.length;
-    }
 
-    /// @dev Whether a range of a position other than `gindex` shares a slot with `low` to `high`.
-    function _overlapsOtherPosition(uint256 gindex, uint64 low, uint64 high, SlotRange[] memory ranges)
-        private
-        pure
-        returns (bool)
-    {
-        for (uint256 i = 0; i < ranges.length; i++) {
-            if (ranges[i].gindex == gindex) continue;
-            if (ranges[i].firstSlot <= high && low <= ranges[i].lastSlot) return true;
-        }
-        return false;
-    }
-
-    /// @notice The validated `block_roots` positions and their slot ranges.
-    function stateLayouts() external view returns (StateLayout[] memory) {
-        return _stateLayouts;
-    }
-
-    /// @notice The validated `historical_summaries` positions and their slot ranges.
-    function historicalLayouts() external view returns (HistoricalLayout[] memory) {
-        return _historicalLayouts;
-    }
-
-    /// @notice The validated block hash positions and their slot ranges.
-    function bodyLayouts() external view returns (BodyLayout[] memory) {
-        return _bodyLayouts;
-    }
 
     // ------------------------------------------------------------------ position rules
 
-    /// @dev Whether `gindex` is field `fieldIndex` of a `BeaconState` tree of depth 5, 6 or 7: `2**depth + fieldIndex`.
-    function _isStateFieldPosition(uint256 gindex, uint256 fieldIndex) private pure returns (bool) {
-        uint256 depth = SSZ.depthOf(gindex);
-        if (depth < MIN_STATE_DEPTH || depth > MAX_STATE_DEPTH) return false;
-        return gindex == (uint256(1) << depth) + fieldIndex;
-    }
 
-    /// @dev Whether `gindex` is `ExecutionPayload.block_hash` inside `BeaconBlockBody.execution_payload`:
-    /// `(2**bodyDepth + 9) * 2**payloadDepth + 12`, with both depths in 4 to 5.
-    function _isBlockHashPosition(uint256 gindex) private pure returns (bool) {
-        for (uint256 bodyDepth = MIN_BODY_DEPTH; bodyDepth <= MAX_BODY_DEPTH; bodyDepth++) {
-            uint256 payloadField = (uint256(1) << bodyDepth) + EXECUTION_PAYLOAD_FIELD;
-            for (uint256 payloadDepth = MIN_PAYLOAD_DEPTH; payloadDepth <= MAX_PAYLOAD_DEPTH; payloadDepth++) {
-                if (gindex == (payloadField << payloadDepth) + BLOCK_HASH_FIELD) return true;
-            }
-        }
-        return false;
-    }
 
     // ------------------------------------------------------------------ withdrawal checks
 
-    /// @dev Check 1.
-    function _requireStoredAnchor(BeaconBlockHeader calldata anchor) private view {
-        _requireStoredHeader(anchor);
-    }
 
-    /// @dev A header must equal the finalized header that the light client stored for its slot.
-    function _requireStoredHeader(BeaconBlockHeader calldata header) private view {
-        bytes32 headerRoot = SSZ.hashTreeRoot(header);
-        bytes32 stored = lightClient.headers(header.slot);
-        if (stored == bytes32(0) || stored != headerRoot) revert AnchorNotStored(header.slot, headerRoot);
-    }
 
-    /// @dev The stored root at `earlierSlot` must be the leaf at the candidate position under the later state root.
-    function _requireEarlierRoot(
-        BeaconBlockHeader calldata later,
-        uint64 earlierSlot,
-        uint256 blockRootsGindex,
-        bytes32[] calldata branch
-    ) private view {
-        if (earlierSlot >= later.slot || later.slot - earlierSlot > SLOTS_PER_HISTORICAL_ROOT) {
-            revert EvidenceSlotOutOfWindow(earlierSlot, later.slot);
-        }
-        bytes32 storedRoot = lightClient.headers(earlierSlot);
-        if (storedRoot == bytes32(0)) revert EvidenceSlotNotStored(earlierSlot);
-        uint256 elementIndex = blockRootsGindex * SLOTS_PER_HISTORICAL_ROOT + (earlierSlot % SLOTS_PER_HISTORICAL_ROOT);
-        if (!SSZ.isValidBranch(storedRoot, branch, elementIndex, later.stateRoot)) revert LayoutEvidenceInvalid();
-    }
 
-    /// @dev Checks 2 and 3. The vault picks the path from the distance: up to 8192 slots is the recent path, more is the
-    /// historical path. The prover never picks. Both leaf indices are built by pure functions, and the branch length
-    /// must be exact (`SSZ.isValidBranch` refuses padding and short branches).
-    function _requireAncestryBranch(WithdrawalProof calldata proof) private view {
-        uint64 anchorSlot = proof.anchorHeader.slot;
-        uint64 depositSlot = proof.depositHeader.slot;
-        if (depositSlot >= anchorSlot) revert DepositNotBeforeAnchor(depositSlot, anchorSlot);
-        uint256 leafIndex = anchorSlot - depositSlot <= SLOTS_PER_HISTORICAL_ROOT
-            ? _recentLeafGindex(_blockRootsGindexAt(anchorSlot), depositSlot)
-            : _historicalLeafGindex(_historicalGindexAt(anchorSlot), _eraIndex(depositSlot), depositSlot);
-        bytes32 depositRoot = SSZ.hashTreeRoot(proof.depositHeader);
-        if (!SSZ.isValidBranch(depositRoot, proof.ancestryBranch, leafIndex, proof.anchorHeader.stateRoot)) {
-            revert AncestryBranchInvalid();
-        }
-    }
 
-    /// @dev The recent path: `block_roots[depositSlot % 8192]` is at `blockRootsGindex * 8192 + depositSlot % 8192`.
-    function _recentLeafGindex(uint256 blockRootsGindex, uint64 depositSlot) private pure returns (uint256) {
-        return blockRootsGindex * SLOTS_PER_HISTORICAL_ROOT + (depositSlot % SLOTS_PER_HISTORICAL_ROOT);
-    }
 
-    /// @dev The index of the summary of a slot's era: `era - capellaEra`. The era must be at or after `capellaEra`
-    /// and the index must fit the list of 2**24 entries.
-    function _eraIndex(uint64 slot) private view returns (uint64) {
-        uint64 era = slot / SLOTS_PER_HISTORICAL_ROOT;
-        if (era < capellaEra) revert DepositBeforeCapellaEra(era, capellaEra);
-        uint64 index = era - capellaEra;
-        if (uint256(index) >= (uint256(1) << HISTORICAL_SUMMARIES_LIST_DEPTH)) revert HistoricalIndexOutOfRange(index);
-        return index;
-    }
 
-    /// @dev The historical path. Built in this order, from the index `g` of `historical_summaries` in `BeaconState`:
-    /// 1. `g` is the field. 2. `g = g * 2`: the list data root, past the length mix-in.
-    /// 3. `g = g * 2**24 + index`: the list position. 4. `g = g * 2 + 0`: `HistoricalSummary.block_summary_root`.
-    /// 5. `g = g * 2**13 + depositSlot % 8192`: the position inside that era's `block_roots`.
-    function _historicalLeafGindex(uint256 historicalSummariesGindex, uint64 index, uint64 depositSlot)
-        private
-        pure
-        returns (uint256 gindex)
-    {
-        gindex = historicalSummariesGindex;
-        gindex = gindex * 2;
-        gindex = gindex * (uint256(1) << HISTORICAL_SUMMARIES_LIST_DEPTH) + index;
-        gindex = gindex * 2 + 0;
-        gindex = gindex * (uint256(1) << BLOCK_ROOTS_VECTOR_DEPTH) + (depositSlot % SLOTS_PER_HISTORICAL_ROOT);
-    }
 
-    /// @dev Check 4.
-    function _requireBlockHashBranch(WithdrawalProof calldata proof, bytes32 blockHash) private view {
-        if (!SSZ.isValidBranch(
-                blockHash,
-                proof.blockHashBranch,
-                _blockHashGindexAt(proof.depositHeader.slot),
-                proof.depositHeader.bodyRoot
-            )) {
-            revert BlockHashBranchInvalid();
-        }
-    }
 
-    /// @dev The validated `block_roots` position whose slot range contains `slot`.
-    function _blockRootsGindexAt(uint64 slot) private view returns (uint256) {
-        for (uint256 i = 0; i < _stateLayouts.length; i++) {
-            StateLayout storage layout = _stateLayouts[i];
-            if (layout.firstSlot <= slot && slot <= layout.lastSlot) return layout.blockRootsGindex;
-        }
-        revert LayoutNotValidated(slot);
-    }
 
-    /// @dev The validated `historical_summaries` position whose slot range contains `slot`.
-    function _historicalGindexAt(uint64 slot) private view returns (uint256) {
-        for (uint256 i = 0; i < _historicalLayouts.length; i++) {
-            HistoricalLayout storage layout = _historicalLayouts[i];
-            if (layout.firstSlot <= slot && slot <= layout.lastSlot) return layout.historicalSummariesGindex;
-        }
-        revert LayoutNotValidated(slot);
-    }
 
-    /// @dev The validated block hash position whose slot range contains `slot`.
-    function _blockHashGindexAt(uint64 slot) private view returns (uint256) {
-        for (uint256 i = 0; i < _bodyLayouts.length; i++) {
-            BodyLayout storage layout = _bodyLayouts[i];
-            if (layout.firstSlot <= slot && slot <= layout.lastSlot) return layout.blockHashGindex;
-        }
-        revert LayoutNotValidated(slot);
-    }
 
-    /// @dev The storage slot of `executionBlockHashes[storedSlot]` in the remote light client: the mapping key and the
-    /// declared slot of the mapping, hashed together.
-    function _executionBlockHashesSlot(uint64 storedSlot) private pure returns (bytes32) {
-        return keccak256(abi.encode(uint256(storedSlot), EXECUTION_BLOCK_HASHES_MAPPING_SLOT));
-    }
 
-    /// @dev The 32-byte item at index `field` of an execution block header.
-    function _headerField(bytes calldata headerRlp, uint256 field) private pure returns (bytes32) {
-        RLPReader.RLPItem[] memory fields = RLPReader.readList(headerRlp);
-        if (fields.length <= field) revert OpeningProofMalformed();
-        bytes memory value = RLPReader.readBytes(fields[field]);
-        if (value.length != 32) revert OpeningProofMalformed();
-        return bytes32(value);
-    }
 
-    /// @dev The storage root of an account, from its RLP: nonce, balance, storage root and code hash.
-    function _accountStorageRoot(bytes memory account) private pure returns (bytes32) {
-        RLPReader.RLPItem[] memory fields = RLPReader.readList(account);
-        if (fields.length != 4) revert OpeningProofMalformed();
-        bytes memory root = RLPReader.readBytes(fields[ACCOUNT_STORAGE_ROOT_FIELD]);
-        if (root.length != 32) revert OpeningProofMalformed();
-        return bytes32(root);
-    }
 
-    /// @dev Check 5. The execution header is an RLP list. Its sixth item is the receipts root.
-    function _receiptsRoot(bytes calldata executionHeaderRlp) private pure returns (bytes32) {
-        RLPReader.RLPItem[] memory fields = RLPReader.readList(executionHeaderRlp);
-        if (fields.length <= RECEIPTS_ROOT_FIELD) revert MalformedExecutionHeader();
-        bytes memory root = RLPReader.readBytes(fields[RECEIPTS_ROOT_FIELD]);
-        if (root.length != 32) revert MalformedExecutionHeader();
-        return bytes32(root);
-    }
 
-    /// @dev Checks 6 and 7, up to the decoding. The receipt is an EIP-2718 envelope: a bare RLP list (legacy) or a
-    /// type byte 1 to 4 followed by an RLP list.
-    function _depositLog(bytes memory receipt, uint256 logIndex) private view returns (Deposit memory found) {
-        RLPReader.RLPItem[] memory fields = RLPReader.readList(_receiptPayload(receipt));
-        if (fields.length != 4) revert MalformedReceipt();
-        bytes memory status = RLPReader.readBytes(fields[0]);
-        if (status.length != 1 || status[0] != 0x01) revert ReceiptFailed();
-
-        (bool logFound, RLPReader.RLPItem memory log, uint256 logCount) = ReceiptLogs.itemAt(fields[3], logIndex);
-        if (!logFound) revert LogIndexOutOfRange(logIndex, logCount);
-        return _decodeLog(log);
-    }
 
     /// @dev Checks the emitter and the topics of one log, then decodes its fields.
     function _decodeLog(RLPReader.RLPItem memory log) private view returns (Deposit memory found) {
-        RLPReader.RLPItem[] memory logFields = RLPReader.readList(log);
-        if (logFields.length != 3) revert MalformedLog();
-
-        bytes memory emitter = RLPReader.readBytes(logFields[0]);
-        if (emitter.length != 20) revert MalformedLog();
-        address emitterAddress = address(bytes20(emitter));
-        if (emitterAddress != remoteVault) revert WrongEmitter(remoteVault, emitterAddress);
+        RLPReader.RLPItem[] memory logFields = _logFields(log);
+        _requireEmitter(logFields[0], remoteVault);
 
         RLPReader.RLPItem[] memory topics = RLPReader.readList(logFields[1]);
         if (topics.length == 0) revert WrongEventTopic(bytes32(0));
@@ -1037,18 +476,6 @@ contract BridgeVault is ReentrancyGuard {
         _decodeData(data, found);
     }
 
-    /// @dev Strips the EIP-2718 type byte. Legacy receipts start with a list prefix (at least 0xc0). The result is an
-    /// RLP item that points one byte into the receipt, so no byte is copied. A receipt of only a type byte gives an
-    /// item of length zero, which the reader refuses.
-    function _receiptPayload(bytes memory receipt) internal pure returns (RLPReader.RLPItem memory payload) {
-        if (receipt.length == 0) revert MalformedReceipt();
-        uint8 first = uint8(receipt[0]);
-        payload = RLPReader.toRLPItem(receipt);
-        if (first >= 0xc0) return payload;
-        if (first < 0x01 || first > 0x04) revert MalformedReceipt();
-        payload.length -= 1;
-        payload.ptr = RLPReader.MemoryPointer.wrap(RLPReader.MemoryPointer.unwrap(payload.ptr) + 1);
-    }
 
     /// @dev Decodes the five data words into `found`: amount, nonce, target chain, destination vault, destination token.
     /// The address and chain words must fit their types.
@@ -1065,33 +492,8 @@ contract BridgeVault is ReentrancyGuard {
         found.destinationToken = address(uint160(tokenWide));
     }
 
-    function _toBytes32(bytes memory value) private pure returns (bytes32) {
-        if (value.length != 32) revert MalformedLog();
-        return bytes32(value);
-    }
 
-    /// @dev A topic holds an address in its low 20 bytes. The high 12 bytes must be zero.
-    function _toAddress(bytes memory topic) private pure returns (address) {
-        uint256 word = uint256(_toBytes32(topic));
-        if (word > type(uint160).max) revert MalformedLog();
-        return address(uint160(word));
-    }
 
-    /// @dev The RLP encoding of an unsigned integer, which is the receipts trie key of a transaction index.
-    function _encodeUint(uint256 value) private pure returns (bytes memory) {
-        if (value == 0) return hex"80";
-        if (value < 0x80) return abi.encodePacked(uint8(value));
-        uint256 length;
-        for (uint256 rest = value; rest > 0; rest >>= 8) {
-            length++;
-        }
-        bytes memory encoded = new bytes(length + 1);
-        encoded[0] = bytes1(uint8(0x80 + length));
-        for (uint256 i = 0; i < length; i++) {
-            encoded[length - i] = bytes1(uint8(value >> (8 * i)));
-        }
-        return encoded;
-    }
 
     // ------------------------------------------------------------------ constructor helpers
 

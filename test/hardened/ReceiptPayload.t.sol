@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {RLPReader} from "../../src/hardened/vendor/optimism/rlp/RLPReader.sol";
 import {WithdrawalScenes} from "./utils/WithdrawalScenes.sol";
 import {ReceiptFixtures} from "./utils/ReceiptFixtures.sol";
@@ -95,13 +96,13 @@ contract ReceiptPayloadTest is WithdrawalScenes {
 
     /// Claim: an empty receipt, a zero type byte and a type byte above 4 are refused. Matters: only known layouts decode.
     function test_receiptPayload_unknownTypeBytesRejected() public {
-        vm.expectRevert(BridgeVault.MalformedReceipt.selector);
+        vm.expectRevert(BeaconProofVerifier.MalformedReceipt.selector);
         harness.payloadLength("");
-        vm.expectRevert(BridgeVault.MalformedReceipt.selector);
+        vm.expectRevert(BeaconProofVerifier.MalformedReceipt.selector);
         harness.payloadLength(_receiptOf(0x00, 5));
-        vm.expectRevert(BridgeVault.MalformedReceipt.selector);
+        vm.expectRevert(BeaconProofVerifier.MalformedReceipt.selector);
         harness.payloadLength(_receiptOf(0x05, 5));
-        vm.expectRevert(BridgeVault.MalformedReceipt.selector);
+        vm.expectRevert(BeaconProofVerifier.MalformedReceipt.selector);
         harness.payloadLength(_receiptOf(0xbf, 5));
     }
 }

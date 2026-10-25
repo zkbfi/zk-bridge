@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {BeaconLightClient} from "../../../src/hardened/BeaconLightClient.sol";
 import {BridgeVault} from "../../../src/hardened/BridgeVault.sol";
+import {BeaconProofVerifier} from "../../../src/hardened/BeaconProofVerifier.sol";
 import {BeaconBlockHeader, SSZ} from "../../../src/hardened/SSZ.sol";
 import {HardenedFixture} from "./HardenedFixture.sol";
 import {ReceiptFixtures} from "./ReceiptFixtures.sol";
@@ -33,8 +34,8 @@ abstract contract WithdrawalScenes is HardenedFixture {
         BridgeVault.WithdrawalProof proof;
         bytes32 anchorRoot;
         bytes32 blockHash;
-        BridgeVault.BlockRootsEvidence rootsEvidence;
-        BridgeVault.BlockHashEvidence anchorBodyEvidence;
+        BeaconProofVerifier.BlockRootsEvidence rootsEvidence;
+        BeaconProofVerifier.BlockHashEvidence anchorBodyEvidence;
         BeaconBlockHeader evidenceBefore;
         bytes32[] evidenceBeforeBranch;
         BeaconBlockHeader evidenceAfter;
@@ -227,15 +228,15 @@ abstract contract WithdrawalScenes is HardenedFixture {
 
     /// @notice Adds the layouts of a scene to `vault`, where the evidence is stored. Layouts the vault already
     /// holds are widened.
-    function _addLayouts(BridgeVault vault_, SceneParams memory params, Scene memory scene) internal {
+    function _addLayouts(BeaconProofVerifier vault_, SceneParams memory params, Scene memory scene) internal {
         if (lightClientForB.headers(scene.evidenceBefore.slot) == SSZ.hashTreeRootMemory(scene.evidenceBefore)) {
             vault_.addBlockHashLayout(
-                params.blockHashGindex, BridgeVault.BlockHashEvidence(scene.evidenceBefore, scene.evidenceBeforeBranch)
+                params.blockHashGindex, BeaconProofVerifier.BlockHashEvidence(scene.evidenceBefore, scene.evidenceBeforeBranch)
             );
         }
         if (lightClientForB.headers(scene.evidenceAfter.slot) == SSZ.hashTreeRootMemory(scene.evidenceAfter)) {
             vault_.addBlockHashLayout(
-                params.blockHashGindex, BridgeVault.BlockHashEvidence(scene.evidenceAfter, scene.evidenceAfterBranch)
+                params.blockHashGindex, BeaconProofVerifier.BlockHashEvidence(scene.evidenceAfter, scene.evidenceAfterBranch)
             );
         }
         if (lightClientForB.headers(params.anchorSlot) == scene.anchorRoot) {
@@ -294,14 +295,14 @@ abstract contract WithdrawalScenes is HardenedFixture {
             transactionIndex: named.transactionIndex,
             logIndex: named.logIndex
         });
-        scene.rootsEvidence = BridgeVault.BlockRootsEvidence({
+        scene.rootsEvidence = BeaconProofVerifier.BlockRootsEvidence({
             laterHeader: anchorHeader,
             earlierSlotA: _fillerSlotA(params),
             earlierSlotB: _fillerSlotB(params),
             branchA: branches[1],
             branchB: branches[2]
         });
-        scene.anchorBodyEvidence = BridgeVault.BlockHashEvidence(anchorHeader, anchorBodyBranch);
+        scene.anchorBodyEvidence = BeaconProofVerifier.BlockHashEvidence(anchorHeader, anchorBodyBranch);
 
         (scene.evidenceBefore, scene.evidenceBeforeBranch) = _bodyEvidenceHeader(params.depositSlot - 40, params.blockHashGindex);
         (scene.evidenceAfter, scene.evidenceAfterBranch) = _bodyEvidenceHeader(params.depositSlot + 40, params.blockHashGindex);
@@ -386,13 +387,22 @@ abstract contract WithdrawalScenes is HardenedFixture {
     /// @notice An RLP-encoded execution header with `fieldCount` items. The sixth item is the receipts root.
     /// A full post-Shanghai header has 17 items. Fewer items model a truncated header.
     function _executionHeaderRlp(bytes32 receiptsRoot, uint256 fieldCount) internal pure returns (bytes memory) {
+        return _executionHeaderRlp(receiptsRoot, keccak256("transactions root"), fieldCount);
+    }
+
+    /// @notice The same, with a chosen transactions root (the fifth item).
+    function _executionHeaderRlp(bytes32 receiptsRoot, bytes32 transactionsRoot, uint256 fieldCount)
+        internal
+        pure
+        returns (bytes memory)
+    {
         bytes[] memory items = new bytes[](fieldCount);
         bytes[17] memory all = [
             _rlpBytes(abi.encodePacked(keccak256("parent"))),
             _rlpBytes(abi.encodePacked(keccak256("ommers"))),
             _rlpBytes(abi.encodePacked(address(0xC0FFEE))),
             _rlpBytes(abi.encodePacked(keccak256("state root"))),
-            _rlpBytes(abi.encodePacked(keccak256("transactions root"))),
+            _rlpBytes(abi.encodePacked(transactionsRoot)),
             _rlpBytes(abi.encodePacked(receiptsRoot)),
             _rlpBytes(new bytes(256)),
             _rlpBytes(""),

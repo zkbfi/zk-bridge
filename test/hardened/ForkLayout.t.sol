@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {BeaconBlockHeader, SSZ} from "../../src/hardened/SSZ.sol";
 import {HistoricalScenes} from "./utils/HistoricalScenes.sol";
 import {ReceiptFixtures} from "./utils/ReceiptFixtures.sol";
@@ -31,11 +32,11 @@ contract ForkLayoutTest is HistoricalScenes {
         fresh = _newWithdrawalVault();
     }
 
-    function _rootsEvidence() internal view returns (BridgeVault.BlockRootsEvidence memory) {
+    function _rootsEvidence() internal view returns (BeaconProofVerifier.BlockRootsEvidence memory) {
         return scene.rootsEvidence;
     }
 
-    function _hashEvidence() internal view returns (BridgeVault.BlockHashEvidence memory) {
+    function _hashEvidence() internal view returns (BeaconProofVerifier.BlockHashEvidence memory) {
         return scene.anchorBodyEvidence;
     }
 
@@ -49,7 +50,7 @@ contract ForkLayoutTest is HistoricalScenes {
         emit BlockRootsLayoutValidated(69, params.anchorSlot, params.anchorSlot);
         vm.prank(caller);
         fresh.addBlockRootsLayout(69, _rootsEvidence());
-        BridgeVault.StateLayout[] memory layouts = fresh.stateLayouts();
+        BeaconProofVerifier.StateLayout[] memory layouts = fresh.stateLayouts();
         assertEq(layouts.length, 1);
         assertEq(layouts[0].blockRootsGindex, 69);
         assertEq(layouts[0].firstSlot, params.anchorSlot);
@@ -63,7 +64,7 @@ contract ForkLayoutTest is HistoricalScenes {
         emit BlockHashLayoutValidated(812, params.anchorSlot, params.anchorSlot);
         vm.prank(caller);
         fresh.addBlockHashLayout(812, _hashEvidence());
-        BridgeVault.BodyLayout[] memory layouts = fresh.bodyLayouts();
+        BeaconProofVerifier.BodyLayout[] memory layouts = fresh.bodyLayouts();
         assertEq(layouts.length, 1);
         assertEq(layouts[0].blockHashGindex, 812);
     }
@@ -74,9 +75,9 @@ contract ForkLayoutTest is HistoricalScenes {
     /// change back in between).
     function test_H19_widenValidatedRange() public {
         fresh.addBlockHashLayout(812, _hashEvidence()); // at the anchor slot
-        fresh.addBlockHashLayout(812, BridgeVault.BlockHashEvidence(scene.evidenceAfter, scene.evidenceAfterBranch));
-        fresh.addBlockHashLayout(812, BridgeVault.BlockHashEvidence(scene.evidenceBefore, scene.evidenceBeforeBranch));
-        BridgeVault.BodyLayout[] memory layouts = fresh.bodyLayouts();
+        fresh.addBlockHashLayout(812, BeaconProofVerifier.BlockHashEvidence(scene.evidenceAfter, scene.evidenceAfterBranch));
+        fresh.addBlockHashLayout(812, BeaconProofVerifier.BlockHashEvidence(scene.evidenceBefore, scene.evidenceBeforeBranch));
+        BeaconProofVerifier.BodyLayout[] memory layouts = fresh.bodyLayouts();
         assertEq(layouts.length, 1);
         assertEq(layouts[0].firstSlot, params.depositSlot - 40);
         assertEq(layouts[0].lastSlot, params.anchorSlot);
@@ -88,7 +89,7 @@ contract ForkLayoutTest is HistoricalScenes {
     /// Shows: position 105 is not the `block_roots` field, so the call reverts with `LayoutPositionInvalid`; the right
     /// position works. Matters: no other field of the state can pass for `block_roots`.
     function test_H19_blockRootsLayoutAtFinalizedCheckpointRejected() public {
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(105)));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutPositionInvalid.selector, uint256(105)));
         fresh.addBlockRootsLayout(105, _rootsEvidence());
         fresh.addBlockRootsLayout(69, _rootsEvidence());
     }
@@ -97,7 +98,7 @@ contract ForkLayoutTest is HistoricalScenes {
     /// Shows: same depth, other field, so the position check refuses it. Matters: state_roots holds roots of the same
     /// shape and is the most likely confusion.
     function test_H19_blockRootsLayoutAtStateRootsRejected() public {
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(70)));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutPositionInvalid.selector, uint256(70)));
         fresh.addBlockRootsLayout(70, _rootsEvidence());
         fresh.addBlockRootsLayout(69, _rootsEvidence());
     }
@@ -113,18 +114,18 @@ contract ForkLayoutTest is HistoricalScenes {
     /// Claim: zero and absurdly deep candidates are rejected before any check. Shows: 0 and 512 (depth 9) revert.
     /// Matters: a sane depth bound.
     function test_H19_blockRootsLayoutOutOfBoundsRejected() public {
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutOutOfBounds.selector, uint256(0)));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutOutOfBounds.selector, uint256(0)));
         fresh.addBlockRootsLayout(0, _rootsEvidence());
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutOutOfBounds.selector, uint256(512)));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutOutOfBounds.selector, uint256(512)));
         fresh.addBlockRootsLayout(512, _rootsEvidence());
     }
 
     /// Claim: an evidence slot with no stored header is rejected. Shows: a slot that the light client never stored
     /// reverts with its number. Matters: the check compares against stored data only (an unvalidated slot proves nothing).
     function test_H19_blockRootsLayoutWithUnstoredSlotRejected() public {
-        BridgeVault.BlockRootsEvidence memory evidence = _rootsEvidence();
+        BeaconProofVerifier.BlockRootsEvidence memory evidence = _rootsEvidence();
         evidence.earlierSlotA = evidence.earlierSlotA + 1; // not stored
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.EvidenceSlotNotStored.selector, evidence.earlierSlotA));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.EvidenceSlotNotStored.selector, evidence.earlierSlotA));
         fresh.addBlockRootsLayout(69, evidence);
         fresh.addBlockRootsLayout(69, _rootsEvidence());
     }
@@ -132,45 +133,45 @@ contract ForkLayoutTest is HistoricalScenes {
     /// Claim: the two earlier slots must differ. Shows: using one slot twice reverts. Matters: one matching leaf could
     /// be a coincidence of one position; two different slots at two different leaf indices cannot both match by chance.
     function test_H19_blockRootsLayoutWithEqualSlotsRejected() public {
-        BridgeVault.BlockRootsEvidence memory evidence = _rootsEvidence();
+        BeaconProofVerifier.BlockRootsEvidence memory evidence = _rootsEvidence();
         evidence.earlierSlotB = evidence.earlierSlotA;
         evidence.branchB = evidence.branchA;
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.EvidenceSlotsEqual.selector, evidence.earlierSlotA));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.EvidenceSlotsEqual.selector, evidence.earlierSlotA));
         fresh.addBlockRootsLayout(69, evidence);
     }
 
     /// Claim: earlier slots must lie before the later header and within 8192 slots of it. Shows: a slot equal to the
     /// later slot and one 8193 below revert. Matters: `block_roots` holds only the last 8192 roots.
     function test_H19_blockRootsLayoutWithSlotOutsideWindowRejected() public {
-        BridgeVault.BlockRootsEvidence memory evidence = _rootsEvidence();
+        BeaconProofVerifier.BlockRootsEvidence memory evidence = _rootsEvidence();
         evidence.earlierSlotA = params.anchorSlot;
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.EvidenceSlotOutOfWindow.selector, params.anchorSlot, params.anchorSlot));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.EvidenceSlotOutOfWindow.selector, params.anchorSlot, params.anchorSlot));
         fresh.addBlockRootsLayout(69, evidence);
 
         evidence = _rootsEvidence();
         evidence.earlierSlotA = params.anchorSlot - 8193;
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.EvidenceSlotOutOfWindow.selector, params.anchorSlot - 8193, params.anchorSlot));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.EvidenceSlotOutOfWindow.selector, params.anchorSlot - 8193, params.anchorSlot));
         fresh.addBlockRootsLayout(69, evidence);
     }
 
     /// Claim: the later header must be a stored header. Shows: a forged later header with a chosen state root reverts
     /// with `AnchorNotStored`. Matters: an attacker cannot choose the tree that validates the position.
     function test_H19_blockRootsLayoutWithForgedLaterHeaderRejected() public {
-        BridgeVault.BlockRootsEvidence memory evidence = _rootsEvidence();
+        BeaconProofVerifier.BlockRootsEvidence memory evidence = _rootsEvidence();
         evidence.laterHeader.stateRoot = keccak256("a state root the attacker chose");
         bytes32 root = SSZ.hashTreeRootMemory(evidence.laterHeader);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.AnchorNotStored.selector, params.anchorSlot, root));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.AnchorNotStored.selector, params.anchorSlot, root));
         fresh.addBlockRootsLayout(69, evidence);
     }
 
     /// Claim: the branches must belong to their slots. Shows: swapped branches revert. Matters: each leaf is tied to
     /// its own position.
     function test_H19_blockRootsLayoutWithSwappedBranchesRejected() public {
-        BridgeVault.BlockRootsEvidence memory evidence = _rootsEvidence();
+        BeaconProofVerifier.BlockRootsEvidence memory evidence = _rootsEvidence();
         bytes32[] memory swap = evidence.branchA;
         evidence.branchA = evidence.branchB;
         evidence.branchB = swap;
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         fresh.addBlockRootsLayout(69, evidence);
     }
 
@@ -180,7 +181,7 @@ contract ForkLayoutTest is HistoricalScenes {
     /// later) is rejected. Shows: the leaf there is not the stored execution block hash. Matters: only the block hash
     /// field can pass for the block hash field.
     function test_H19_blockHashLayoutAtParentHashRejected() public {
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(800)));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutPositionInvalid.selector, uint256(800)));
         fresh.addBlockHashLayout(800, _hashEvidence());
         fresh.addBlockHashLayout(812, _hashEvidence());
     }
@@ -190,7 +191,7 @@ contract ForkLayoutTest is HistoricalScenes {
     function test_H19_blockHashLayoutAtNeighbouringFieldsRejected() public {
         uint256[5] memory wrong = [uint256(802), 803, 805, 806, 813];
         for (uint256 i = 0; i < wrong.length; i++) {
-            vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, wrong[i]));
+            vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutPositionInvalid.selector, wrong[i]));
             fresh.addBlockHashLayout(wrong[i], _hashEvidence());
         }
         fresh.addBlockHashLayout(812, _hashEvidence());
@@ -205,46 +206,46 @@ contract ForkLayoutTest is HistoricalScenes {
 
     /// Claim: zero and absurdly deep candidates are rejected. Shows: 0 and 2^17 revert. Matters: a sane depth bound.
     function test_H19_blockHashLayoutOutOfBoundsRejected() public {
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutOutOfBounds.selector, uint256(0)));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutOutOfBounds.selector, uint256(0)));
         fresh.addBlockHashLayout(0, _hashEvidence());
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutOutOfBounds.selector, uint256(1) << 17));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutOutOfBounds.selector, uint256(1) << 17));
         fresh.addBlockHashLayout(1 << 17, _hashEvidence());
     }
 
     /// Claim: the header must be stored. Shows: a forged header (a body root of the attacker's choice) reverts, and a
     /// header at an unstored slot reverts. Matters: an unvalidated slot proves nothing.
     function test_H19_blockHashLayoutWithUnstoredHeaderRejected() public {
-        BridgeVault.BlockHashEvidence memory forged = _hashEvidence();
+        BeaconProofVerifier.BlockHashEvidence memory forged = _hashEvidence();
         forged.header.bodyRoot = keccak256("a body root the attacker chose");
         bytes32 root = SSZ.hashTreeRootMemory(forged.header);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.AnchorNotStored.selector, params.anchorSlot, root));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.AnchorNotStored.selector, params.anchorSlot, root));
         fresh.addBlockHashLayout(812, forged);
 
-        BridgeVault.BlockHashEvidence memory elsewhere = _hashEvidence();
+        BeaconProofVerifier.BlockHashEvidence memory elsewhere = _hashEvidence();
         elsewhere.header.slot = params.anchorSlot + 1;
         bytes32 elsewhereRoot = SSZ.hashTreeRootMemory(elsewhere.header);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.AnchorNotStored.selector, params.anchorSlot + 1, elsewhereRoot));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.AnchorNotStored.selector, params.anchorSlot + 1, elsewhereRoot));
         fresh.addBlockHashLayout(812, elsewhere);
     }
 
     /// Claim: the branch must belong to the stored header. Shows: the branch of another header reverts. Matters: the
     /// proven leaf is the stored block hash of THIS header.
     function test_H19_blockHashLayoutWithForeignBranchRejected() public {
-        BridgeVault.BlockHashEvidence memory evidence = _hashEvidence();
+        BeaconProofVerifier.BlockHashEvidence memory evidence = _hashEvidence();
         evidence.branch = scene.evidenceAfterBranch;
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         fresh.addBlockHashLayout(812, evidence);
     }
 
     // ================================================================ historical summaries: accepted
 
     /// @dev A deep copy, because memory structs are references and a test edits the evidence.
-    function _copy(BridgeVault.HistoricalSummariesEvidence memory evidence)
+    function _copy(BeaconProofVerifier.HistoricalSummariesEvidence memory evidence)
         internal
         pure
-        returns (BridgeVault.HistoricalSummariesEvidence memory)
+        returns (BeaconProofVerifier.HistoricalSummariesEvidence memory)
     {
-        return abi.decode(abi.encode(evidence), (BridgeVault.HistoricalSummariesEvidence));
+        return abi.decode(abi.encode(evidence), (BeaconProofVerifier.HistoricalSummariesEvidence));
     }
 
     function _historicalFixture() internal returns (HistoricalParams memory fixtureParams, HistoricalScene memory historical) {
@@ -264,7 +265,7 @@ contract ForkLayoutTest is HistoricalScenes {
         emit HistoricalSummariesLayoutValidated(SUMMARIES, HISTORICAL_ANCHOR, HISTORICAL_ANCHOR);
         vm.prank(caller);
         fresh.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
-        BridgeVault.HistoricalLayout[] memory rows = fresh.historicalLayouts();
+        BeaconProofVerifier.HistoricalLayout[] memory rows = fresh.historicalLayouts();
         assertEq(rows.length, 1);
         assertEq(rows[0].historicalSummariesGindex, SUMMARIES);
         assertEq(rows[0].firstSlot, HISTORICAL_ANCHOR);
@@ -280,7 +281,7 @@ contract ForkLayoutTest is HistoricalScenes {
         HistoricalScene memory later = _historicalScene(laterParams);
         fresh.addHistoricalSummariesLayout(SUMMARIES, later.historicalEvidence);
         fresh.addHistoricalSummariesLayout(SUMMARIES, first.historicalEvidence);
-        BridgeVault.HistoricalLayout[] memory rows = fresh.historicalLayouts();
+        BeaconProofVerifier.HistoricalLayout[] memory rows = fresh.historicalLayouts();
         assertEq(rows.length, 1);
         assertEq(rows[0].firstSlot, HISTORICAL_ANCHOR);
         assertEq(rows[0].lastSlot, 1_200_000);
@@ -290,7 +291,7 @@ contract ForkLayoutTest is HistoricalScenes {
     /// (the era of the slot is complete). Matters: this is the control of the distance tests below.
     function test_HB01_historicalLayoutAcceptedAtDistance8193() public {
         (, HistoricalScene memory historical) = _historicalFixture();
-        BridgeVault.HistoricalSummariesEvidence memory evidence = _copy(historical.historicalEvidence);
+        BeaconProofVerifier.HistoricalSummariesEvidence memory evidence = _copy(historical.historicalEvidence);
         evidence.earlierSlot = HISTORICAL_ANCHOR - 8193;
         evidence.branch = historical.extraBranches[0];
         fresh.addHistoricalSummariesLayout(SUMMARIES, evidence);
@@ -305,7 +306,7 @@ contract ForkLayoutTest is HistoricalScenes {
         (, HistoricalScene memory historical) = _historicalFixture();
         uint256[3] memory bad = [uint256(0), 512, uint256(1) << 20];
         for (uint256 i = 0; i < bad.length; i++) {
-            vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutOutOfBounds.selector, bad[i]));
+            vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutOutOfBounds.selector, bad[i]));
             fresh.addHistoricalSummariesLayout(bad[i], historical.historicalEvidence);
         }
         fresh.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
@@ -315,9 +316,9 @@ contract ForkLayoutTest is HistoricalScenes {
     /// `EvidenceSlotNotStored`. Matters: the check compares against stored data only.
     function test_HB01_historicalLayoutWithUnstoredEarlierSlotRejected() public {
         (, HistoricalScene memory historical) = _historicalFixture();
-        BridgeVault.HistoricalSummariesEvidence memory evidence = _copy(historical.historicalEvidence);
+        BeaconProofVerifier.HistoricalSummariesEvidence memory evidence = _copy(historical.historicalEvidence);
         evidence.earlierSlot = HISTORICAL_EVIDENCE + 1;
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.EvidenceSlotNotStored.selector, HISTORICAL_EVIDENCE + 1));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.EvidenceSlotNotStored.selector, HISTORICAL_EVIDENCE + 1));
         fresh.addHistoricalSummariesLayout(SUMMARIES, evidence);
         fresh.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
     }
@@ -328,33 +329,33 @@ contract ForkLayoutTest is HistoricalScenes {
     /// holds the ring, so they cannot prove the historical position.
     function test_HB01_historicalLayoutWithRecentEarlierSlotRejected() public {
         (, HistoricalScene memory historical) = _historicalFixture();
-        BridgeVault.HistoricalSummariesEvidence memory near = _copy(historical.historicalEvidence);
+        BeaconProofVerifier.HistoricalSummariesEvidence memory near = _copy(historical.historicalEvidence);
         near.earlierSlot = HISTORICAL_ANCHOR - 8192;
         near.branch = historical.extraBranches[1];
         vm.expectRevert(
             abi.encodeWithSelector(
-                BridgeVault.EvidenceSlotNotHistorical.selector, HISTORICAL_ANCHOR - 8192, HISTORICAL_ANCHOR
+                BeaconProofVerifier.EvidenceSlotNotHistorical.selector, HISTORICAL_ANCHOR - 8192, HISTORICAL_ANCHOR
             )
         );
         fresh.addHistoricalSummariesLayout(SUMMARIES, near);
 
-        BridgeVault.HistoricalSummariesEvidence memory equal = _copy(historical.historicalEvidence);
+        BeaconProofVerifier.HistoricalSummariesEvidence memory equal = _copy(historical.historicalEvidence);
         equal.earlierSlot = HISTORICAL_ANCHOR;
         vm.expectRevert(
-            abi.encodeWithSelector(BridgeVault.EvidenceSlotNotHistorical.selector, HISTORICAL_ANCHOR, HISTORICAL_ANCHOR)
+            abi.encodeWithSelector(BeaconProofVerifier.EvidenceSlotNotHistorical.selector, HISTORICAL_ANCHOR, HISTORICAL_ANCHOR)
         );
         fresh.addHistoricalSummariesLayout(SUMMARIES, equal);
 
-        BridgeVault.HistoricalSummariesEvidence memory after_ = _copy(historical.historicalEvidence);
+        BeaconProofVerifier.HistoricalSummariesEvidence memory after_ = _copy(historical.historicalEvidence);
         after_.earlierSlot = HISTORICAL_ANCHOR + 64;
         vm.expectRevert(
             abi.encodeWithSelector(
-                BridgeVault.EvidenceSlotNotHistorical.selector, HISTORICAL_ANCHOR + 64, HISTORICAL_ANCHOR
+                BeaconProofVerifier.EvidenceSlotNotHistorical.selector, HISTORICAL_ANCHOR + 64, HISTORICAL_ANCHOR
             )
         );
         fresh.addHistoricalSummariesLayout(SUMMARIES, after_);
 
-        BridgeVault.HistoricalSummariesEvidence memory boundary = _copy(historical.historicalEvidence);
+        BeaconProofVerifier.HistoricalSummariesEvidence memory boundary = _copy(historical.historicalEvidence);
         boundary.earlierSlot = HISTORICAL_ANCHOR - 8193;
         boundary.branch = historical.extraBranches[0];
         fresh.addHistoricalSummariesLayout(SUMMARIES, boundary);
@@ -364,10 +365,10 @@ contract ForkLayoutTest is HistoricalScenes {
     /// with `AnchorNotStored`. The honest anchor is accepted. Matters: an attacker cannot choose the tree.
     function test_HB01_historicalLayoutWithForgedAnchorRejected() public {
         (, HistoricalScene memory historical) = _historicalFixture();
-        BridgeVault.HistoricalSummariesEvidence memory evidence = _copy(historical.historicalEvidence);
+        BeaconProofVerifier.HistoricalSummariesEvidence memory evidence = _copy(historical.historicalEvidence);
         evidence.anchorHeader.stateRoot = keccak256("a state root the attacker chose");
         bytes32 root = SSZ.hashTreeRootMemory(evidence.anchorHeader);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.AnchorNotStored.selector, HISTORICAL_ANCHOR, root));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.AnchorNotStored.selector, HISTORICAL_ANCHOR, root));
         fresh.addHistoricalSummariesLayout(SUMMARIES, evidence);
         fresh.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
     }
@@ -377,14 +378,14 @@ contract ForkLayoutTest is HistoricalScenes {
     /// its own era index and its own slot offset.
     function test_HB01_historicalLayoutWithForeignBranchRejected() public {
         (, HistoricalScene memory historical) = _historicalFixture();
-        BridgeVault.HistoricalSummariesEvidence memory foreign = _copy(historical.historicalEvidence);
+        BeaconProofVerifier.HistoricalSummariesEvidence memory foreign = _copy(historical.historicalEvidence);
         foreign.branch = historical.extraBranches[0];
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         fresh.addHistoricalSummariesLayout(SUMMARIES, foreign);
 
-        BridgeVault.HistoricalSummariesEvidence memory tampered = _copy(historical.historicalEvidence);
+        BeaconProofVerifier.HistoricalSummariesEvidence memory tampered = _copy(historical.historicalEvidence);
         tampered.branch = _concat(_slice(tampered.branch, 0, 20), _concat(_repeat(keccak256("x"), 1), _slice(tampered.branch, 21, 45)));
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         fresh.addHistoricalSummariesLayout(SUMMARIES, tampered);
         fresh.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
     }
@@ -395,7 +396,7 @@ contract ForkLayoutTest is HistoricalScenes {
     function test_HB01_historicalLayoutWithEraBeforeCapellaRejected() public {
         (, HistoricalScene memory historical) = _historicalFixture();
         BridgeVault late = _newSecondWithdrawalVault(0, 110);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.DepositBeforeCapellaEra.selector, uint64(109), uint64(110)));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.DepositBeforeCapellaEra.selector, uint64(109), uint64(110)));
         late.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
         fresh.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
     }
@@ -406,7 +407,7 @@ contract ForkLayoutTest is HistoricalScenes {
     /// `leafGindex` (and a stand-in in every other field). Returns the evidence with the real branch of that leaf.
     function _anchorHoldingRootAt(uint64 anchorSlot, uint256 leafGindex)
         internal
-        returns (BridgeVault.HistoricalSummariesEvidence memory evidence)
+        returns (BeaconProofVerifier.HistoricalSummariesEvidence memory evidence)
     {
         bytes32 storedRoot = lightClientForB.headers(HISTORICAL_EVIDENCE);
         assertTrue(storedRoot != bytes32(0), "the evidence slot is stored");
@@ -419,7 +420,7 @@ contract ForkLayoutTest is HistoricalScenes {
             bodyRoot: keccak256(abi.encode("bad anchor body", anchorSlot))
         });
         _storeAnchor(anchorSlot, SSZ.hashTreeRootMemory(anchor));
-        evidence = BridgeVault.HistoricalSummariesEvidence({anchorHeader: anchor, earlierSlot: HISTORICAL_EVIDENCE, branch: branch});
+        evidence = BeaconProofVerifier.HistoricalSummariesEvidence({anchorHeader: anchor, earlierSlot: HISTORICAL_EVIDENCE, branch: branch});
     }
 
     /// Claim: a candidate that is `state.block_roots` (field 5, position 69) is refused although the state really holds
@@ -429,9 +430,9 @@ contract ForkLayoutTest is HistoricalScenes {
     function test_HB01_historicalLayoutAtBlockRootsFieldRejected() public {
         _historicalFixture();
         uint256 leaf = 69 * 8192 + (HISTORICAL_EVIDENCE % 8192);
-        BridgeVault.HistoricalSummariesEvidence memory bad = _anchorHoldingRootAt(1_100_000, leaf);
+        BeaconProofVerifier.HistoricalSummariesEvidence memory bad = _anchorHoldingRootAt(1_100_000, leaf);
         assertEq(bad.branch.length, 19);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(69)));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutPositionInvalid.selector, uint256(69)));
         fresh.addHistoricalSummariesLayout(69, bad);
 
         (, HistoricalScene memory honest) = _honestAfterBad();
@@ -453,9 +454,9 @@ contract ForkLayoutTest is HistoricalScenes {
     /// checkpoint root is a block root, so it is the most natural impostor.
     function test_HB01_historicalLayoutAtFinalizedCheckpointRootRejected() public {
         _historicalFixture();
-        BridgeVault.HistoricalSummariesEvidence memory bad = _anchorHoldingRootAt(1_100_000, 169);
+        BeaconProofVerifier.HistoricalSummariesEvidence memory bad = _anchorHoldingRootAt(1_100_000, 169);
         assertEq(bad.branch.length, 7);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(169)));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutPositionInvalid.selector, uint256(169)));
         fresh.addHistoricalSummariesLayout(169, bad);
         (, HistoricalScene memory honest) = _honestAfterBad();
         fresh.addHistoricalSummariesLayout(SUMMARIES, honest.historicalEvidence);
@@ -469,11 +470,11 @@ contract ForkLayoutTest is HistoricalScenes {
     /// honest anchor is accepted. Matters: the parent root of the latest header is a stored root too.
     function test_HB01_historicalLayoutAtLatestBlockHeaderRejected() public {
         _historicalFixture();
-        BridgeVault.HistoricalSummariesEvidence memory bad = _anchorHoldingRootAt(1_100_000, 68 * 8 + 2);
+        BeaconProofVerifier.HistoricalSummariesEvidence memory bad = _anchorHoldingRootAt(1_100_000, 68 * 8 + 2);
         assertEq(bad.branch.length, 9);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(68)));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutPositionInvalid.selector, uint256(68)));
         fresh.addHistoricalSummariesLayout(68, bad);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutOutOfBounds.selector, uint256(546)));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutOutOfBounds.selector, uint256(546)));
         fresh.addHistoricalSummariesLayout(546, bad);
         (, HistoricalScene memory honest) = _honestAfterBad();
         fresh.addHistoricalSummariesLayout(SUMMARIES, honest.historicalEvidence);
@@ -486,7 +487,7 @@ contract ForkLayoutTest is HistoricalScenes {
     /// header root at the position that the other limit gives. Returns the evidence with the real branch of that tree.
     function _anchorWithListDepth(uint64 anchorSlot, uint256 listDepth)
         internal
-        returns (BridgeVault.HistoricalSummariesEvidence memory evidence)
+        returns (BeaconProofVerifier.HistoricalSummariesEvidence memory evidence)
     {
         uint256 leaf = _historicalLeafWithListDepth(SUMMARIES, 0, HISTORICAL_EVIDENCE, listDepth);
         evidence = _anchorHoldingRootAt(anchorSlot, leaf);
@@ -499,16 +500,16 @@ contract ForkLayoutTest is HistoricalScenes {
     /// accepted. Matters: the list depth is part of the root, so a state with another limit cannot validate the row.
     function test_HB01_historicalLayoutWithListDepth23Rejected() public {
         _historicalFixture();
-        BridgeVault.HistoricalSummariesEvidence memory bad = _anchorWithListDepth(1_100_000, 23);
+        BeaconProofVerifier.HistoricalSummariesEvidence memory bad = _anchorWithListDepth(1_100_000, 23);
         vm.expectRevert(abi.encodeWithSelector(SSZ.BranchLengthMismatch.selector, uint256(45), uint256(44)));
         fresh.addHistoricalSummariesLayout(SUMMARIES, bad);
         bytes32[] memory real = bad.branch;
         for (uint256 place = 0; place < 45; place++) {
             bad.branch = _inserting(real, place, keccak256("arbitrary sibling"));
-            vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+            vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
             fresh.addHistoricalSummariesLayout(SUMMARIES, bad);
             bad.branch = _inserting(real, place, bytes32(0));
-            vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+            vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
             fresh.addHistoricalSummariesLayout(SUMMARIES, bad);
         }
         (, HistoricalScene memory honest) = _honestAfterBad();
@@ -521,13 +522,13 @@ contract ForkLayoutTest is HistoricalScenes {
     /// with `LayoutEvidenceInvalid` every time. The depth 24 anchor is accepted. Matters: the same as above, in the other direction.
     function test_HB01_historicalLayoutWithListDepth25Rejected() public {
         _historicalFixture();
-        BridgeVault.HistoricalSummariesEvidence memory bad = _anchorWithListDepth(1_100_000, 25);
+        BeaconProofVerifier.HistoricalSummariesEvidence memory bad = _anchorWithListDepth(1_100_000, 25);
         vm.expectRevert(abi.encodeWithSelector(SSZ.BranchLengthMismatch.selector, uint256(45), uint256(46)));
         fresh.addHistoricalSummariesLayout(SUMMARIES, bad);
         bytes32[] memory real = bad.branch;
         for (uint256 place = 0; place < 46; place++) {
             bad.branch = _without(real, place);
-            vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+            vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
             fresh.addHistoricalSummariesLayout(SUMMARIES, bad);
         }
         (, HistoricalScene memory honest) = _honestAfterBad();
@@ -557,7 +558,7 @@ contract ForkLayoutTest is HistoricalScenes {
         uint256[2] memory votesPositions = [uint256(82), 146];
         for (uint256 i = 0; i < votesPositions.length; i++) {
             (, Scene memory forged) = _storedScene(votesPositions[i], 812);
-            BridgeVault.BlockRootsEvidence memory evidence = forged.rootsEvidence;
+            BeaconProofVerifier.BlockRootsEvidence memory evidence = forged.rootsEvidence;
             assertTrue(
                 SSZ.isValidBranchMemory(
                     lightClientForB.headers(evidence.earlierSlotA),
@@ -567,7 +568,7 @@ contract ForkLayoutTest is HistoricalScenes {
                 ),
                 "the forged evidence is valid for the position"
             );
-            vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, votesPositions[i]));
+            vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutPositionInvalid.selector, votesPositions[i]));
             fresh.addBlockRootsLayout(votesPositions[i], evidence);
             assertEq(fresh.stateLayouts().length, 0, "nothing was stored");
         }
@@ -588,7 +589,7 @@ contract ForkLayoutTest is HistoricalScenes {
         }
         uint256[8] memory refused = [uint256(36), 38, 68, 70, 132, 134, 21, 261];
         for (uint256 i = 0; i < refused.length; i++) {
-            vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, refused[i]));
+            vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutPositionInvalid.selector, refused[i]));
             fresh.addBlockRootsLayout(refused[i], _rootsEvidence());
         }
         fresh.addBlockRootsLayout(69, _rootsEvidence()); // control
@@ -603,7 +604,7 @@ contract ForkLayoutTest is HistoricalScenes {
         uint256[2] memory writablePositions = [uint256(18), 70];
         for (uint256 i = 0; i < writablePositions.length; i++) {
             (, Scene memory forged) = _storedScene(69, writablePositions[i]);
-            BridgeVault.BlockHashEvidence memory evidence = forged.anchorBodyEvidence;
+            BeaconProofVerifier.BlockHashEvidence memory evidence = forged.anchorBodyEvidence;
             assertTrue(
                 SSZ.isValidBranchMemory(
                     lightClientForB.executionBlockHashes(evidence.header.slot),
@@ -613,7 +614,7 @@ contract ForkLayoutTest is HistoricalScenes {
                 ),
                 "the forged evidence is valid for the position"
             );
-            vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, writablePositions[i]));
+            vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutPositionInvalid.selector, writablePositions[i]));
             fresh.addBlockHashLayout(writablePositions[i], evidence);
             assertEq(fresh.bodyLayouts().length, 0, "nothing was stored");
         }
@@ -629,13 +630,13 @@ contract ForkLayoutTest is HistoricalScenes {
     function test_defect2_blockHashPositionRuleIsExact() public {
         vm.expectRevert(abi.encodeWithSelector(SSZ.BranchLengthMismatch.selector, uint256(8), uint256(9)));
         fresh.addBlockHashLayout(412, _hashEvidence());
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector); // depth 9 like 812, but the leaf is elsewhere
+        vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector); // depth 9 like 812, but the leaf is elsewhere
         fresh.addBlockHashLayout(668, _hashEvidence());
         vm.expectRevert(abi.encodeWithSelector(SSZ.BranchLengthMismatch.selector, uint256(10), uint256(9)));
         fresh.addBlockHashLayout(1324, _hashEvidence());
         uint256[6] memory refused = [uint256(411), 413, 667, 811, 813, 1325];
         for (uint256 i = 0; i < refused.length; i++) {
-            vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, refused[i]));
+            vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutPositionInvalid.selector, refused[i]));
             fresh.addBlockHashLayout(refused[i], _hashEvidence());
         }
         fresh.addBlockHashLayout(812, _hashEvidence()); // control

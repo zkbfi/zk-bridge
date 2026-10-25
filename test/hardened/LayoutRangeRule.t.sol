@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {HistoricalScenes} from "./utils/HistoricalScenes.sol";
 import {ReceiptFixtures} from "./utils/ReceiptFixtures.sol";
 
@@ -28,7 +29,7 @@ contract LayoutRangeRuleTest is HistoricalScenes {
     uint64 internal constant FUZZ_EVIDENCE_GAP = 10_000;
 
     BridgeVault internal vault;
-    BridgeVault.HistoricalSummariesEvidence[] internal fuzzEvidence;
+    BeaconProofVerifier.HistoricalSummariesEvidence[] internal fuzzEvidence;
     uint256[] internal fuzzPositions;
 
     /// @dev The scene of one anchor in a state of `position`, with no deposit.
@@ -59,7 +60,7 @@ contract LayoutRangeRuleTest is HistoricalScenes {
         vault.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, second.historicalEvidence);
         vault.addHistoricalSummariesLayout(DENEB_SUMMARIES, third.historicalEvidence);
 
-        BridgeVault.HistoricalLayout[] memory rows = vault.historicalLayouts();
+        BeaconProofVerifier.HistoricalLayout[] memory rows = vault.historicalLayouts();
         assertEq(rows.length, 3, "the third call starts a new range");
         assertEq(rows[0].historicalSummariesGindex, DENEB_SUMMARIES);
         assertEq(rows[0].lastSlot, FIRST_ANCHOR, "the first range stops at its own anchor");
@@ -69,7 +70,7 @@ contract LayoutRangeRuleTest is HistoricalScenes {
 
         _addBodyRows(vault, middle);
         ReceiptFixtures.Named memory named = ReceiptFixtures.type2();
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutNotValidated.selector, MIDDLE_ANCHOR));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutNotValidated.selector, MIDDLE_ANCHOR));
         vault.withdraw(_historicalProof(middle, 0, named));
 
         vault.addHistoricalSummariesLayout(DENEB_SUMMARIES, middle.historicalEvidence);
@@ -95,7 +96,7 @@ contract LayoutRangeRuleTest is HistoricalScenes {
         vault.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, above.historicalEvidence);
         vault.addHistoricalSummariesLayout(DENEB_SUMMARIES, third.historicalEvidence);
 
-        BridgeVault.HistoricalLayout[] memory rows = vault.historicalLayouts();
+        BeaconProofVerifier.HistoricalLayout[] memory rows = vault.historicalLayouts();
         assertEq(rows.length, 2);
         assertEq(rows[0].historicalSummariesGindex, DENEB_SUMMARIES);
         assertEq(rows[0].firstSlot, FIRST_ANCHOR);
@@ -114,7 +115,7 @@ contract LayoutRangeRuleTest is HistoricalScenes {
 
         vault.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, first.historicalEvidence);
         vault.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, third.historicalEvidence);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutRangeConflict.selector, SECOND_ANCHOR));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutRangeConflict.selector, SECOND_ANCHOR));
         vault.addHistoricalSummariesLayout(DENEB_SUMMARIES, second.historicalEvidence);
         assertEq(vault.historicalLayouts().length, 1);
     }
@@ -153,7 +154,7 @@ contract LayoutRangeRuleTest is HistoricalScenes {
             } catch (bytes memory reason) {
                 assertEq(
                     bytes4(reason),
-                    BridgeVault.LayoutRangeConflict.selector,
+                    BeaconProofVerifier.LayoutRangeConflict.selector,
                     "only a range conflict may refuse valid evidence"
                 );
             }
@@ -163,7 +164,7 @@ contract LayoutRangeRuleTest is HistoricalScenes {
     }
 
     function _assertNoOverlap() internal view {
-        BridgeVault.HistoricalLayout[] memory rows = vault.historicalLayouts();
+        BeaconProofVerifier.HistoricalLayout[] memory rows = vault.historicalLayouts();
         for (uint256 i = 0; i < rows.length; i++) {
             for (uint256 j = i + 1; j < rows.length; j++) {
                 if (rows[i].historicalSummariesGindex == rows[j].historicalSummariesGindex) continue;
@@ -174,7 +175,7 @@ contract LayoutRangeRuleTest is HistoricalScenes {
     }
 
     function _assertEachValidatedAnchorHasOneOwner(bool[8] memory validated) internal view {
-        BridgeVault.HistoricalLayout[] memory rows = vault.historicalLayouts();
+        BeaconProofVerifier.HistoricalLayout[] memory rows = vault.historicalLayouts();
         for (uint256 scene = 0; scene < FUZZ_SCENE_COUNT; scene++) {
             if (!validated[scene]) continue;
             uint64 anchor = FUZZ_FIRST_ANCHOR + uint64(scene) * FUZZ_ANCHOR_STEP;

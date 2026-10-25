@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {console2} from "forge-std/console2.sol";
 import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {BeaconBlockHeader, SSZ} from "../../src/hardened/SSZ.sol";
 import {HistoricalScenes} from "./utils/HistoricalScenes.sol";
 import {ReceiptFixtures} from "./utils/ReceiptFixtures.sol";
@@ -94,7 +95,7 @@ contract HistoricalAncestryTest is HistoricalScenes {
         BridgeVault.WithdrawalProof memory proof = _historicalProof(scene, 0, named);
         assertEq(proof.ancestryBranch.length, expectedBranchLength);
         _withdrawAndAssertPaid(vault_, proof, named);
-        BridgeVault.HistoricalLayout[] memory rows = vault_.historicalLayouts();
+        BeaconProofVerifier.HistoricalLayout[] memory rows = vault_.historicalLayouts();
         assertEq(rows.length, 1);
         assertEq(rows[0].historicalSummariesGindex, params.historicalSummariesGindex);
     }
@@ -240,14 +241,14 @@ contract HistoricalAncestryTest is HistoricalScenes {
         BridgeVault.WithdrawalProof memory same = _historicalProof(scene, 1, named);
         same.depositHeader.slot = ETHEREUM_ANCHOR;
         _expectRejected(
-            vault_, same, abi.encodeWithSelector(BridgeVault.DepositNotBeforeAnchor.selector, ETHEREUM_ANCHOR, ETHEREUM_ANCHOR)
+            vault_, same, abi.encodeWithSelector(BeaconProofVerifier.DepositNotBeforeAnchor.selector, ETHEREUM_ANCHOR, ETHEREUM_ANCHOR)
         );
         BridgeVault.WithdrawalProof memory later = _historicalProof(scene, 1, named);
         later.depositHeader.slot = ETHEREUM_ANCHOR + 3;
         _expectRejected(
             vault_,
             later,
-            abi.encodeWithSelector(BridgeVault.DepositNotBeforeAnchor.selector, ETHEREUM_ANCHOR + 3, ETHEREUM_ANCHOR)
+            abi.encodeWithSelector(BeaconProofVerifier.DepositNotBeforeAnchor.selector, ETHEREUM_ANCHOR + 3, ETHEREUM_ANCHOR)
         );
         _withdrawAndAssertPaid(vault_, _historicalProof(scene, 1, named), named);
     }
@@ -304,7 +305,7 @@ contract HistoricalAncestryTest is HistoricalScenes {
         for (uint256 level = 0; level < 45; level++) {
             BridgeVault.WithdrawalProof memory proof = _historicalProof(scene, 0, named);
             proof.ancestryBranch[level] = keccak256(abi.encode("attacker sibling", level));
-            _expectRejected(vault_, proof, abi.encodeWithSelector(BridgeVault.AncestryBranchInvalid.selector));
+            _expectRejected(vault_, proof, abi.encodeWithSelector(BeaconProofVerifier.AncestryBranchInvalid.selector));
         }
         _withdrawAndAssertPaid(vault_, _historicalProof(scene, 0, named), named);
     }
@@ -315,7 +316,7 @@ contract HistoricalAncestryTest is HistoricalScenes {
     function test_HB01_branchTamper_headerAndSlotRejected() public {
         (BridgeVault vault_,, HistoricalScene memory scene) = _readyEthereum(_slots(770 * 8192 + 17));
         ReceiptFixtures.Named memory named = ReceiptFixtures.legacy();
-        bytes memory refused = abi.encodeWithSelector(BridgeVault.AncestryBranchInvalid.selector);
+        bytes memory refused = abi.encodeWithSelector(BeaconProofVerifier.AncestryBranchInvalid.selector);
         BridgeVault.WithdrawalProof memory header = _historicalProof(scene, 0, named);
         header.depositHeader.proposerIndex += 1;
         _expectRejected(vault_, header, refused);
@@ -341,14 +342,14 @@ contract HistoricalAncestryTest is HistoricalScenes {
         _expectRejected(
             vault_,
             lastOfPrevious,
-            abi.encodeWithSelector(BridgeVault.DepositBeforeCapellaEra.selector, uint64(757), ETHEREUM_CAPELLA_ERA)
+            abi.encodeWithSelector(BeaconProofVerifier.DepositBeforeCapellaEra.selector, uint64(757), ETHEREUM_CAPELLA_ERA)
         );
         BridgeVault.WithdrawalProof memory genesis = _historicalProof(scene, 0, named);
         genesis.depositHeader.slot = 0;
         _expectRejected(
             vault_,
             genesis,
-            abi.encodeWithSelector(BridgeVault.DepositBeforeCapellaEra.selector, uint64(0), ETHEREUM_CAPELLA_ERA)
+            abi.encodeWithSelector(BeaconProofVerifier.DepositBeforeCapellaEra.selector, uint64(0), ETHEREUM_CAPELLA_ERA)
         );
         _withdrawAndAssertPaid(vault_, _historicalProof(scene, 0, named), named);
     }
@@ -374,12 +375,12 @@ contract HistoricalAncestryTest is HistoricalScenes {
         BridgeVault.WithdrawalProof memory atLimit = _historicalProof(scene, 0, named);
         atLimit.depositHeader.slot = (lastEra + 1) * 8192 + 100;
         _expectRejected(
-            vault_, atLimit, abi.encodeWithSelector(BridgeVault.HistoricalIndexOutOfRange.selector, uint64(2 ** 24))
+            vault_, atLimit, abi.encodeWithSelector(BeaconProofVerifier.HistoricalIndexOutOfRange.selector, uint64(2 ** 24))
         );
         BridgeVault.WithdrawalProof memory pastLimit = _historicalProof(scene, 0, named);
         pastLimit.depositHeader.slot = (lastEra + 3) * 8192 + 5;
         _expectRejected(
-            vault_, pastLimit, abi.encodeWithSelector(BridgeVault.HistoricalIndexOutOfRange.selector, uint64(2 ** 24 + 2))
+            vault_, pastLimit, abi.encodeWithSelector(BeaconProofVerifier.HistoricalIndexOutOfRange.selector, uint64(2 ** 24 + 2))
         );
         BridgeVault.WithdrawalProof memory honest = _historicalProof(scene, 0, named);
         assertEq(SSZ.depthOf(_historicalLeaf(ELECTRA_SUMMARIES, ETHEREUM_CAPELLA_ERA, lastSlot)), 45);
@@ -395,7 +396,7 @@ contract HistoricalAncestryTest is HistoricalScenes {
         HistoricalParams memory params = _ethereumParams(_slots(770 * 8192));
         HistoricalScene memory scene = _historicalScene(params);
         BridgeVault wrong = _newSecondWithdrawalVault(0, ETHEREUM_CAPELLA_ERA - 1);
-        vm.expectRevert(BridgeVault.LayoutEvidenceInvalid.selector);
+        vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         wrong.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, scene.historicalEvidence);
         right.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, scene.historicalEvidence);
         assertEq(right.historicalLayouts().length, 1);
@@ -418,7 +419,7 @@ contract HistoricalAncestryTest is HistoricalScenes {
         _expectRejected(
             vault_,
             _historicalProof(scene, 0, named),
-            abi.encodeWithSelector(BridgeVault.LayoutNotValidated.selector, ETHEREUM_ANCHOR)
+            abi.encodeWithSelector(BeaconProofVerifier.LayoutNotValidated.selector, ETHEREUM_ANCHOR)
         );
         vm.prank(attacker); // any caller
         _addHistoricalRow(vault_, params, scene);
@@ -445,10 +446,10 @@ contract HistoricalAncestryTest is HistoricalScenes {
         _expectRejected(
             vault_,
             _historicalProof(secondScene, 0, named),
-            abi.encodeWithSelector(BridgeVault.LayoutNotValidated.selector, second.anchorSlot)
+            abi.encodeWithSelector(BeaconProofVerifier.LayoutNotValidated.selector, second.anchorSlot)
         );
         _addHistoricalRow(vault_, second, secondScene);
-        BridgeVault.HistoricalLayout[] memory rows = vault_.historicalLayouts();
+        BeaconProofVerifier.HistoricalLayout[] memory rows = vault_.historicalLayouts();
         assertEq(rows.length, 1);
         assertEq(rows[0].firstSlot, first.anchorSlot);
         assertEq(rows[0].lastSlot, second.anchorSlot);
@@ -494,13 +495,13 @@ contract HistoricalAncestryTest is HistoricalScenes {
         );
         HistoricalScene memory denebScene = _historicalScene(deneb);
         BridgeVault vault_ = _newSecondWithdrawalVault(0, ETHEREUM_CAPELLA_ERA);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(90)));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutPositionInvalid.selector, uint256(90)));
         vault_.addHistoricalSummariesLayout(90, electraScene.historicalEvidence);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(92)));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutPositionInvalid.selector, uint256(92)));
         vault_.addHistoricalSummariesLayout(92, electraScene.historicalEvidence);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(58)));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutPositionInvalid.selector, uint256(58)));
         vault_.addHistoricalSummariesLayout(58, denebScene.historicalEvidence);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.LayoutPositionInvalid.selector, uint256(60)));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutPositionInvalid.selector, uint256(60)));
         vault_.addHistoricalSummariesLayout(60, denebScene.historicalEvidence);
         vault_.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, electraScene.historicalEvidence);
         vault_.addHistoricalSummariesLayout(DENEB_SUMMARIES, denebScene.historicalEvidence);
@@ -528,7 +529,7 @@ contract HistoricalAncestryTest is HistoricalScenes {
         _expectRejected(
             vault_,
             _historicalProof(electraScene, 0, named),
-            abi.encodeWithSelector(BridgeVault.LayoutNotValidated.selector, electra.anchorSlot)
+            abi.encodeWithSelector(BeaconProofVerifier.LayoutNotValidated.selector, electra.anchorSlot)
         );
         // The Deneb-like deposit still pays under its own row.
         ReceiptFixtures.Named memory older = ReceiptFixtures.legacy();

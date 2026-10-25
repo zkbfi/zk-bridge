@@ -5,20 +5,16 @@ import {Vm} from "forge-std/Vm.sol";
 import {console2} from "forge-std/console2.sol";
 import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
 import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {MockERC20} from "../../src/mocks/MockERC20.sol";
-import {WithdrawalScenes} from "./utils/WithdrawalScenes.sol";
+import {OpeningScenes} from "./utils/OpeningScenes.sol";
 import {ReceiptFixtures} from "./utils/ReceiptFixtures.sol";
 
 /// @notice Tests of the deposit lock. A vault refuses deposits until `openDeposits` proves, through its own light client,
 /// that the light client on the other chain stored a head. The state tries here have one leaf each, which is a valid
 /// trie. Branch and extension nodes of real tries are covered by the Anvil tests of the prover, which use `eth_getProof`.
-contract DepositOpeningTest is WithdrawalScenes {
+contract DepositOpeningTest is OpeningScenes {
     event DepositsOpened(uint64 indexed remoteSlot, bytes32 indexed remoteBlockHash, uint64 storedSlot);
-
-    /// @dev The mapping `executionBlockHashes` is the fourth declaration of `BeaconLightClient`: slot 3.
-    uint256 internal constant EXECUTION_BLOCK_HASHES_SLOT = 3;
-    /// @dev A slot at which the remote light client stores its first update, below the deposit slot of the first scene.
-    uint64 internal constant FIRST_UPDATE_SLOT = 823_900;
 
     /// @dev A vault on chain A, closed, with the fixture light client of chain A and the remote light client of chain B.
     BridgeVault internal closed;
@@ -44,121 +40,11 @@ contract DepositOpeningTest is WithdrawalScenes {
         );
     }
 
-    // ---------------------------------------------------------------- the model of the remote chain
-
-    /// @dev The trie key of a storage slot or an account: the hash of the 32-byte slot or of the 20-byte address.
-    function _leaf(bytes memory trieKey, bytes memory content) internal pure returns (bytes memory) {
-        bytes[] memory items = new bytes[](2);
-        items[0] = _rlpBytes(bytes.concat(bytes1(0x20), trieKey));
-        items[1] = _rlpBytes(content);
-        return _rlpList(items);
-    }
-
-    function _trimmed(bytes32 value) internal pure returns (bytes memory) {
-        uint256 skip;
-        while (skip < 32 && value[skip] == 0) skip++;
-        bytes memory out = new bytes(32 - skip);
-        for (uint256 i = 0; i < out.length; i++) {
-            out[i] = value[skip + i];
-        }
-        return out;
-    }
-
-    function _account(bytes32 storageRoot, address contractAddress, uint256 fieldCount)
-        internal
-        view
-        returns (bytes memory)
-    {
-        bytes[] memory items = new bytes[](fieldCount);
-        bytes[4] memory all = [
-            _rlpBytes(hex"01"),
-            _rlpBytes(""),
-            _rlpBytes(abi.encodePacked(storageRoot)),
-            _rlpBytes(abi.encodePacked(contractAddress.codehash))
-        ];
-        for (uint256 i = 0; i < fieldCount; i++) {
-            items[i] = all[i];
-        }
-        return _rlpList(items);
-    }
-
-    /// @dev A block header whose fourth item is `stateRoot`. The vault reads that item and no other.
-    function _header(bytes32 stateRoot) internal pure returns (bytes memory) {
-        bytes[] memory items = new bytes[](6);
-        items[0] = _rlpBytes(abi.encodePacked(keccak256("parent")));
-        items[1] = _rlpBytes(abi.encodePacked(keccak256("ommers")));
-        items[2] = _rlpBytes(abi.encodePacked(address(0xC0FFEE)));
-        items[3] = _rlpBytes(abi.encodePacked(stateRoot));
-        items[4] = _rlpBytes(abi.encodePacked(keccak256("transactions root")));
-        items[5] = _rlpBytes(abi.encodePacked(keccak256("receipts root")));
-        return _rlpList(items);
-    }
-
-    /// @dev The storage slot of `executionBlockHashes[slot]`, computed here and not by the vault.
-    function _entrySlot(uint64 slot) internal pure returns (bytes32) {
-        return keccak256(abi.encode(uint256(slot), EXECUTION_BLOCK_HASHES_SLOT));
-    }
-
-    /// @dev What a prover builds. The remote chain has a block whose state holds `remote` with one storage entry: the
-    /// entry that the remote light client really holds at `storedSlot` (read with `vm.load`, so the model cannot drift from
-    /// the contract). The light client of the vault stores the hash of that block. Returns the evidence.
-    struct Model {
-        bytes32 entryValue;
-        bytes entryLeaf;
-        bytes accountLeaf;
-        bytes header;
-    }
-
-    function _model(BeaconLightClient remote, uint64 storedSlot, bytes memory entryContent)
-        internal
-        view
-        returns (Model memory model)
-    {
-        model.entryValue = vm.load(address(remote), _entrySlot(storedSlot));
-        model.entryLeaf = _leaf(abi.encodePacked(keccak256(abi.encodePacked(_entrySlot(storedSlot)))), entryContent);
-        bytes32 storageRoot = keccak256(model.entryLeaf);
-        model.accountLeaf = _leaf(
-            abi.encodePacked(keccak256(abi.encodePacked(address(remote)))), _account(storageRoot, address(remote), 4)
+    /// @dev The whole honest preparation for a vault: see `_honestOpeningProof`.
+    function _honestProof(BridgeVault vault) internal returns (BeaconProofVerifier.OpeningProof memory) {
+        return _honestOpeningProof(
+            BeaconLightClient(address(vault.lightClient())), BeaconLightClient(vault.remoteLightClient())
         );
-        model.header = _header(keccak256(model.accountLeaf));
-    }
-
-    function _proof(Model memory model, uint64 remoteSlot, uint64 storedSlot)
-        internal
-        pure
-        returns (BridgeVault.OpeningProof memory proof)
-    {
-        proof.remoteSlot = remoteSlot;
-        proof.remoteHeaderRlp = model.header;
-        proof.accountProof = new bytes[](1);
-        proof.accountProof[0] = model.accountLeaf;
-        proof.storedSlot = storedSlot;
-        proof.storageProof = new bytes[](1);
-        proof.storageProof[0] = model.entryLeaf;
-    }
-
-    /// @dev The remote light client stores its first update, as `follow` makes it do.
-    function _remoteFollows(BeaconLightClient remote, uint64 slot) internal {
-        BeaconLightClient.LightClientOutput memory output = _outputAt(remote, GENESIS_ROOT_A, slot, _execHash(slot));
-        output.newHeaderRoot = keccak256(abi.encode("followed header", slot));
-        _submit(remote, output);
-    }
-
-    /// @dev The light client of the vault stores the block of the remote chain that holds the model. Returns its slot.
-    function _ownStores(BeaconLightClient own, bytes memory header) internal returns (uint64) {
-        _finalize(own, GENESIS_ROOT_B, keccak256(header));
-        return own.head();
-    }
-
-    /// @dev The whole honest preparation: the remote light client follows, the model is built from its real storage, and
-    /// the own light client stores the block.
-    function _honestProof(BridgeVault vault) internal returns (BridgeVault.OpeningProof memory) {
-        BeaconLightClient remote = BeaconLightClient(vault.remoteLightClient());
-        BeaconLightClient own = BeaconLightClient(address(vault.lightClient()));
-        _remoteFollows(remote, FIRST_UPDATE_SLOT);
-        Model memory model = _model(remote, FIRST_UPDATE_SLOT, _rlpBytes(_trimmed(_execHash(FIRST_UPDATE_SLOT))));
-        assertEq(model.entryValue, _execHash(FIRST_UPDATE_SLOT), "the model reads the entry from the real contract");
-        return _proof(model, _ownStores(own, model.header), FIRST_UPDATE_SLOT);
     }
 
     // ================================================================ the lock
@@ -167,7 +53,7 @@ contract DepositOpeningTest is WithdrawalScenes {
     /// Why it matters: a deposit made before the remote light client stored a head can never be paid.
     function test_lock_closedVaultRefusesDeposits() public {
         assertFalse(closed.depositsOpen());
-        vm.expectRevert(BridgeVault.DepositsNotOpen.selector);
+        vm.expectRevert(BeaconProofVerifier.DepositsNotOpen.selector);
         vm.prank(alice);
         closed.deposit(address(tokenOnA), bob, 1e18, 0, "");
         assertEq(tokenOnA.balanceOf(alice), 100e18, "nothing moved");
@@ -176,7 +62,7 @@ contract DepositOpeningTest is WithdrawalScenes {
 
     /// Claim: the lock comes before the gate and before every other check, so a refusal never depends on the evidence.
     function test_lock_isTheFirstCheck() public {
-        vm.expectRevert(BridgeVault.DepositsNotOpen.selector);
+        vm.expectRevert(BeaconProofVerifier.DepositsNotOpen.selector);
         closed.deposit(address(0xdead), address(0), 0, 0, hex"1234");
     }
 
@@ -186,7 +72,7 @@ contract DepositOpeningTest is WithdrawalScenes {
         BridgeVault.TokenPair[] memory pairs = new BridgeVault.TokenPair[](1);
         pairs[0] = BridgeVault.TokenPair(address(tokenOnA), address(tokenOnB), 18);
         vm.chainId(CHAIN_A);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.ZeroValue.selector, "remoteLightClient"));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.ZeroValue.selector, "remoteLightClient"));
         new BridgeVault(
             address(lightClientForA), CHAIN_A, CHAIN_B, address(vaultB), pairs,
             BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), address(0)),
@@ -212,7 +98,7 @@ contract DepositOpeningTest is WithdrawalScenes {
         );
         bytes memory header = _header(keccak256(accountLeaf));
         uint64 remoteSlot = _ownStores(own, header);
-        BridgeVault.OpeningProof memory early;
+        BeaconProofVerifier.OpeningProof memory early;
         early.remoteSlot = remoteSlot;
         early.remoteHeaderRlp = header;
         early.accountProof = new bytes[](1);
@@ -236,7 +122,7 @@ contract DepositOpeningTest is WithdrawalScenes {
 
     /// Claim: nobody needs a key. A stranger opens the vault.
     function test_open_needsNoKey() public {
-        BridgeVault.OpeningProof memory proof = _honestProof(closed);
+        BeaconProofVerifier.OpeningProof memory proof = _honestProof(closed);
         vm.prank(attacker);
         closed.openDeposits(proof);
         assertTrue(closed.depositsOpen());
@@ -246,26 +132,26 @@ contract DepositOpeningTest is WithdrawalScenes {
 
     /// Claim: a slot at which the own light client stored no block cannot carry an opening.
     function test_open_refusesAnUnstoredRemoteSlot() public {
-        BridgeVault.OpeningProof memory proof = _honestProof(closed);
+        BeaconProofVerifier.OpeningProof memory proof = _honestProof(closed);
         proof.remoteSlot += 1;
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.OpeningSlotNotStored.selector, proof.remoteSlot));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.OpeningSlotNotStored.selector, proof.remoteSlot));
         closed.openDeposits(proof);
     }
 
     /// Claim: a header that is not the stored block cannot carry an opening, even with a state root that fits its own proofs.
     function test_open_refusesAHeaderThatIsNotTheStoredBlock() public {
-        BridgeVault.OpeningProof memory proof = _honestProof(closed);
+        BeaconProofVerifier.OpeningProof memory proof = _honestProof(closed);
         bytes32 expected = lightClientForA.executionBlockHashes(proof.remoteSlot);
         proof.remoteHeaderRlp = _header(keccak256("another state root"));
         vm.expectRevert(
-            abi.encodeWithSelector(BridgeVault.OpeningHeaderMismatch.selector, expected, keccak256(proof.remoteHeaderRlp))
+            abi.encodeWithSelector(BeaconProofVerifier.OpeningHeaderMismatch.selector, expected, keccak256(proof.remoteHeaderRlp))
         );
         closed.openDeposits(proof);
     }
 
     /// Claim: the proof must be about the account of the remote light client. A proof of another account fails.
     function test_open_refusesAnotherAccount() public {
-        BridgeVault.OpeningProof memory proof = _honestProof(closed);
+        BeaconProofVerifier.OpeningProof memory proof = _honestProof(closed);
         // The same state, but the vault looks for the other light client of the fixture.
         BridgeVault other = _closedVault(lightClientForA, lightClientForA);
         vm.expectRevert();
@@ -275,7 +161,7 @@ contract DepositOpeningTest is WithdrawalScenes {
 
     /// Claim: a slot with no entry fails: the proof of the entry of the first update slot does not prove another slot.
     function test_open_refusesAnotherStoredSlot() public {
-        BridgeVault.OpeningProof memory proof = _honestProof(closed);
+        BeaconProofVerifier.OpeningProof memory proof = _honestProof(closed);
         proof.storedSlot = FIRST_UPDATE_SLOT + 1;
         vm.expectRevert();
         closed.openDeposits(proof);
@@ -291,7 +177,7 @@ contract DepositOpeningTest is WithdrawalScenes {
         );
         model.header = _header(keccak256(model.accountLeaf));
         uint64 remoteSlot = _ownStores(lightClientForA, model.header);
-        vm.expectRevert(BridgeVault.OpeningProofMalformed.selector);
+        vm.expectRevert(BeaconProofVerifier.OpeningProofMalformed.selector);
         closed.openDeposits(_proof(model, remoteSlot, FIRST_UPDATE_SLOT));
     }
 
@@ -302,10 +188,10 @@ contract DepositOpeningTest is WithdrawalScenes {
         items[1] = _rlpBytes(abi.encodePacked(keccak256("ommers")));
         items[2] = _rlpBytes(abi.encodePacked(address(0xC0FFEE)));
         bytes memory header = _rlpList(items);
-        BridgeVault.OpeningProof memory proof;
+        BeaconProofVerifier.OpeningProof memory proof;
         proof.remoteSlot = _ownStores(lightClientForA, header);
         proof.remoteHeaderRlp = header;
-        vm.expectRevert(BridgeVault.OpeningProofMalformed.selector);
+        vm.expectRevert(BeaconProofVerifier.OpeningProofMalformed.selector);
         closed.openDeposits(proof);
     }
 
@@ -315,7 +201,7 @@ contract DepositOpeningTest is WithdrawalScenes {
         _remoteFollows(lightClientForB, FIRST_UPDATE_SLOT);
         Model memory model = _model(lightClientForB, FIRST_UPDATE_SLOT, _rlpBytes(""));
         uint64 remoteSlot = _ownStores(lightClientForA, model.header);
-        vm.expectRevert(abi.encodeWithSelector(BridgeVault.OpeningEntryEmpty.selector, FIRST_UPDATE_SLOT));
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.OpeningEntryEmpty.selector, FIRST_UPDATE_SLOT));
         closed.openDeposits(_proof(model, remoteSlot, FIRST_UPDATE_SLOT));
     }
 
@@ -330,7 +216,7 @@ contract DepositOpeningTest is WithdrawalScenes {
         feeVault.openDeposits(_honestProofAgain(feeVault));
         assertTrue(feeVault.depositsOpen());
 
-        BridgeVault.OpeningProof memory garbage;
+        BeaconProofVerifier.OpeningProof memory garbage;
         vm.recordLogs();
         feeVault.openDeposits(garbage);
         assertEq(vm.getRecordedLogs().length, 0, "a second call emits nothing");
@@ -366,7 +252,7 @@ contract DepositOpeningTest is WithdrawalScenes {
     }
 
     /// @dev The remote light client already followed in this test, so only the own light client stores a new block.
-    function _honestProofAgain(BridgeVault vault) internal returns (BridgeVault.OpeningProof memory) {
+    function _honestProofAgain(BridgeVault vault) internal returns (BeaconProofVerifier.OpeningProof memory) {
         Model memory model =
             _model(lightClientForB, FIRST_UPDATE_SLOT, _rlpBytes(_trimmed(_execHash(FIRST_UPDATE_SLOT))));
         return _proof(model, _ownStores(BeaconLightClient(address(vault.lightClient())), model.header), FIRST_UPDATE_SLOT);
@@ -421,7 +307,7 @@ contract DepositOpeningTest is WithdrawalScenes {
 
     /// Claim: opening costs one transaction of modest size. Printed for the report.
     function test_gas_openDeposits() public {
-        BridgeVault.OpeningProof memory proof = _honestProof(closed);
+        BeaconProofVerifier.OpeningProof memory proof = _honestProof(closed);
         uint256 before = gasleft();
         closed.openDeposits(proof);
         console2.log("openDeposits gas, one-leaf tries", before - gasleft());
@@ -445,7 +331,7 @@ contract DepositOpeningTest is WithdrawalScenes {
         vm.chainId(CHAIN_A);
         vm.startPrank(alice);
         sourceToken.approve(address(source), 10e18);
-        vm.expectRevert(BridgeVault.DepositsNotOpen.selector);
+        vm.expectRevert(BeaconProofVerifier.DepositsNotOpen.selector);
         source.deposit(address(sourceToken), ReceiptFixtures.RECIPIENT, 10e18, 0, "");
         vm.stopPrank();
 
