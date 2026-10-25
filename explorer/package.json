@@ -1,0 +1,15 @@
+{
+  "name": "zk-bridge-explorer",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Indexer, terminal dashboard and shared code for the zk-bridge explorer.",
+  "engines": { "node": ">=22" },
+  "packageManager": "pnpm@12.6.0",
+  "scripts": {
+    "abis": "pnpm --filter @zk-bridge/shared run abis",
+    "test": "pnpm -r --if-present run test",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "indexer:dev": "pnpm --filter @zk-bridge/indexer run dev",
+    "indexer:start": "pnpm --filter @zk-bridge/indexer run start"
+  }
+}

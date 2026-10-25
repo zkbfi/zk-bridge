@@ -1,0 +1,13 @@
+packages:
+  - shared
+  - indexer
+  - terminal
+# Refuse any package version younger than 28 days (40320 minutes), direct or transitive.
+minimumReleaseAge: 40320
+# Run no install scripts except the two native USB modules the hardware wallets need.
+# The esbuild binary comes from its platform package; keccak falls back to its JavaScript build.
+allowBuilds:
+  esbuild: false
+  keccak: false
+  node-hid: true
+  usb: true
