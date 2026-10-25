@@ -845,3 +845,66 @@ A minimal ERC-20 with `mint` and `burn` callable only by the mediator, plus `per
 - Message bridge: delivery of a valid message; replay refused; wrong emitter, wrong chain, tampered proof refused (the existing vault reject tests, moved); delivery is final when the target reverts; the gas guard refuses an executor that sends too little gas, and a target that runs out of its own `gasLimit` is a final failure; the context is set during the call and cleared after; the fee contract is called once, and a reverting, gas-burning or missing fee contract changes nothing; independent messages can execute in any order.
 - Token mediator: native lock and bridged mint; burn and unlock back; the first message deploys the bridged copy at the computed address with the right metadata; a second token gets a second copy; fee-on-transfer accounting; stray transfers are not paid out; native coin wrap and unwrap; bridge and call; a blacklisted recipient gets a claimable balance; only the remote mediator through the bridge can trigger a release.
 - End to end on two Anvil chains with the proof producer: a token round trip and an arbitrary message, both directions.
+
+### OmniBridge interface compatibility (user decision, 2026-10-24)
+
+The user asked for the same interfaces as OmniBridge wherever possible, one to one, and new methods only for new features. The names below come from the OmniBridge source (`omni/omnibridge`, master branch, read 2026-10-24): `contracts/interfaces/IAMB.sol`, `IOmnibridge.sol`, `IERC677.sol`, `IBurnableMintableERC677Token.sol`, `BasicOmnibridge.sol`, `BasicAMBMediator.sol`, `components/*`, `modules/factory/TokenFactory.sol`, `helpers/WETHOmnibridgeRouter.sol`. This replaces the names used earlier in this section (`sendMessage`, `MessageSent`, `MessageDelivered`, `relayTokensAndCall` with a fee argument, and so on).
+
+#### Message bridge: the Arbitrary Message Bridge interface (`IAMB`)
+
+| OmniBridge | This bridge |
+|---|---|
+| `requireToPassMessage(address _contract, bytes _data, uint256 _gas) returns (bytes32)` | Same. Fee contract zero. |
+| `requireToConfirmMessage(address _contract, bytes _data, uint256 _gas) returns (bytes32)` | Same as `requireToPassMessage` (there is no separate manual lane). |
+| — | New: `requireToPassMessageWithFee(address _contract, bytes _data, uint256 _gas, address _feeContract) returns (bytes32)`. |
+| `event UserRequestForAffirmation(bytes32 indexed messageId, bytes encodedData)` | Same, emitted by every send on both chains. `encodedData` uses the AMB message encoding (message identifier, sender, executor, gas, chain identifier lengths, data type, chain identifiers, data). A fee contract is signalled by a flag bit in the data type and its 20 bytes follow the chain identifiers. |
+| `event UserRequestForSignature(...)` | Not emitted (no validators sign). |
+| `executeSignatures(...)`, `executeAffirmation(...)` | Replaced by a new method: `executeMessage(MessageProof calldata proof)`. Validators are replaced by the light-client proof. |
+| `event AffirmationCompleted(address indexed sender, address indexed executor, bytes32 indexed messageId, bool status)` | Same, on every execution. |
+| `event RelayedMessage(...)` | Not emitted (one execution event is enough). |
+| `messageSender()`, `messageId()`, `messageSourceChainId() returns (bytes32)` | Same. Set only during the call to the target. |
+| `transactionHash()` | Same name. Returns the source transaction hash when the proof carries it (to decide: proving it needs a transaction trie branch; otherwise it returns zero). |
+| `messageCallStatus(bytes32)`, `failedMessageDataHash`, `failedMessageReceiver`, `failedMessageSender` | Same. Recorded on a failed call. Delivery stays final; these are data for downstream contracts. |
+| `maxGasPerTx()` | Same. A constant ceiling for `_gas`. |
+| `sourceChainId()`, `destinationChainId()` | Same. |
+| `IMessageFee.onMessageExecuted(bytes32, address, uint256)` | New. The fee contract interface; failures fall back to no payment. |
+
+#### Token mediator: the OmniBridge interface
+
+| OmniBridge | This bridge |
+|---|---|
+| `relayTokens(address _token, address _receiver, uint256 _value)` | Same. |
+| `relayTokens(address _token, uint256 _value)` | Same. |
+| `relayTokensAndCall(address _token, address _receiver, uint256 _value, bytes _data)` | Same. |
+| `onTokenTransfer(address _from, uint256 _value, bytes _data) returns (bool)` | Same (ERC-677 entry). |
+| `handleNativeTokens`, `handleNativeTokensAndCall`, `handleBridgedTokens`, `handleBridgedTokensAndCall`, `deployAndHandleBridgedTokens`, `deployAndHandleBridgedTokensAndCall` | Same names and parameters, callable only through the message bridge by the mediator on the other side. So the message payloads match OmniBridge's. |
+| `event TokensBridgingInitiated(address indexed token, address indexed sender, uint256 value, bytes32 indexed messageId)` | Same. |
+| `event TokensBridged(address indexed token, address indexed recipient, uint256 value, bytes32 indexed messageId)` | Same. |
+| `event NewTokenRegistered(address indexed nativeToken, address indexed bridgedToken)` | Same. |
+| `bridgedTokenAddress(address)`, `nativeTokenAddress(address)`, `isTokenRegistered(address)`, `isRegisteredAsNativeToken(address)`, `mediatorBalance(address)` | Same. |
+| `bridgeContract()`, `mediatorContractOnOtherSide()` | Same (immutable values). |
+| `getBridgeInterfacesVersion()`, `getBridgeMode()` | Same. |
+| Recipient callback `onTokenBridged(address _token, uint256 _value, bytes _data)` | Same (called by `...AndCall` deliveries). |
+| `fixFailedMessage`, `requestFailedMessageFix`, `messageFixed`, `event FailedMessageFixed` | Not included: delivery is final, there are no refunds. |
+| Owner functions: `setCustomTokenAddressPair`, `fixMediatorBalance`, `claimTokens`, `claimTokensFromTokenContract`, limit setters, gas limit setters, interest functions | Not included: no admin. The limit views (`dailyLimit`, `maxPerTx`, `withinLimit` and the rest) are left out; the empty flow limiter hook covers limits. |
+| — | New: `claim(address _token, address _recipient)` and `claimable(address, address)` for a failed release (open decision). |
+| — | New: the optional fee switch (`setFee`, `nullifyFee`, `collectFees`) and `detachFlowLimiter`, kept from the vault. |
+
+#### Bridged token: `IBurnableMintableERC677Token`
+
+| OmniBridge | This bridge |
+|---|---|
+| `mint(address, uint256) returns (bool)`, `burn(uint256)` | Same, callable only by the mediator. |
+| `transferAndCall(address, uint256, bytes) returns (bool)`, `event Transfer(address indexed, address indexed, uint256, bytes)` | Same (ERC-677). |
+| `increaseAllowance`, `decreaseAllowance`, `permit` | Same. |
+| `bridgeContract()` | Same (the mediator). |
+| `claimTokens(address, address)` | Not included (owner function). |
+| `TokenFactory.deploy(string, string, uint8, uint256)` | Same signature, but deterministic (CREATE2 on home chain identifier and native token), callable only by the mediator. |
+
+#### Native coins: `WETHOmnibridgeRouter`
+
+| OmniBridge | This bridge |
+|---|---|
+| `wrapAndRelayTokens()`, `wrapAndRelayTokens(address _receiver)` payable | Same, in a separate router contract, as OmniBridge does. The mediator itself handles only tokens. |
+| `onTokenBridged(address, uint256, bytes)` | Same: the router unwraps WETH or WPLS and sends the coin to the recipient. |
+| `claimTokens(address, address)` | Not included (owner function). |
