@@ -14,7 +14,6 @@ Makes light-client update proofs on the RunPod endpoint and publishes them on ms
    - Payload: a compact binary encoding (difficulty grows by 10,000 per byte): version byte, route, program key, start slot and root, new slot and root, the 352 bytes of public values, the 356 bytes of proof. Define it in `explorer/shared` with an encoder, a decoder and tests.
    - Proof of work: `board.grind(category, payload)`, then `board.addMessage`. Grinding is a busy loop; run it off the main event loop.
    - Messages are ephemeral (about 120 blocks) and the board has a size cap. The publisher republishes the latest proof on a timer while it is still useful (until the destination light client stores a head at or past it).
-5. Also hand the result to the indexer's proof webhook for the dashboard's prover and costs view.
 
 The publisher holds no wallet: it only proves and publishes. Its secrets are the RunPod key and the valve.city RPC key, both from environment variables or `op read`, never in files or logs.
 

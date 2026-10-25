@@ -27,14 +27,14 @@ From both chains of each pair:
 - Escrow and supply: per native token, the mediator balance on its home chain and the bridged token supply on the other chain (from mint and burn events), and accrued and collected fees.
 - Status of each transfer or message, derived: sent, waiting for finality, covered by a stored head, delivered, failed call, fallback used, claimable.
 
-Proving costs are not on chain. The indexer accepts proof records from the proof producer's webhook (`zk-bridge-prover prove --to webhook`) into the same database: route, slots, backend, duration and, when known, the RunPod job time and cost.
+The indexer tracks only what lands on chain. It stores no proofs and accepts no off-chain records (user decision, 2026-10-25). Proof-related data comes from chain events: each light client head update with its transaction, gas used and poster.
 
 ## Terminal dashboard layout
 
 ```
 +--------------------------------------------------------------------------------+
 | SUMMARY (top): pair, both chains' head lag, transfers in flight, 24 h volume,   |
-| fees accrued, last proof time and cost, gate status per chain                   |
+| fees accrued, last light client update, gate status per chain                   |
 +---------------------------------------+----------------------------------------+
 | ACTION AREA (left)                    | FILTERS (fixed header of the feed)     |
 |  account and signer                   +----------------------------------------+
@@ -53,7 +53,7 @@ Views:
 - Global view: choose a pair (default `eth-pls`); one line per pair with its health.
 - Pair view: the layout above for one pair.
 - Audit view: escrow against bridged supply per token, fee balances, any mismatch flagged.
-- Prover and costs view: proof jobs, durations, RunPod time and cost, gas spent on light client updates.
+- Prover and costs view: light client updates as recorded on chain (slot, transaction, gas used, poster, time). Off-chain proof timing and RunPod cost are left out for now.
 
 The feed filters: direction, kind (token or message), status, token, address (sender or recipient), time range.
 
