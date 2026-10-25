@@ -145,8 +145,8 @@ Do these steps in the RunPod console. The names of the fields come from the page
 6. Idle timeout: this is how long a worker waits after its last job before it stops. You pay for the wait. The default is 5 seconds. Each new start costs a cold start, so choose a value that covers the gap between two proofs of one burst. 60 seconds is a reasonable first value. Change it after you have seen real traffic.
 7. FlashBoot: leave it enabled (the default). It keeps worker state after a stop and can shorten the next start.
 8. Environment variables of the endpoint: `PORT=8000` and `PORT_HEALTH=8000`. Expose HTTP port 8000 in the field "Expose HTTP Ports". The page says that a custom port needs both.
-9. Container disk: the size of the image plus about 10 GB for the Groth16 circuit files. I did not measure the circuit files. Check the size with the first live run.
-10. Optional: a network volume mounted at a path that you give to `SP1_GROTH16_CIRCUIT_PATH`. The first Groth16 proof of each fresh worker downloads the circuit files from Succinct. A volume keeps them between workers. The page says that a volume adds network latency and ties the endpoint to the data center of the volume.
+9. Container disk: 40 GB. The image is 20.6 GB unpacked, because it holds the Groth16 circuit files (7.9 GB unpacked, 6.2 GB as the pinned tarball).
+10. No network volume. The circuit files are baked into the image (`SP1_GROTH16_CIRCUIT_PATH=/opt/sp1-circuits/groth16`), pinned by the tarball SHA-256, and the build checks that `groth16_vk.bin` hashes to `VERIFIER_HASH`. A standard network volume was tried on 2026-10-25 and failed: writing the 7.9 GB on the first proof outlasted the 5.5-minute request limit (HTTP 504).
 
 ## Set the API key
 
@@ -188,7 +188,7 @@ I did not measure the cold start. The parts are:
 |---|---|---|
 | Pull of the image | No (the pricing page says so) | The image holds the CUDA runtime and a server binary of 251 MB. |
 | Start of the GPU server and the SP1 setup of two programs | Yes | Runs while `/ping` answers 204. |
-| Download of the circuit files | Yes | Only on the first Groth16 proof of a worker without a volume. |
+| Download of the circuit files | No | Baked into the image. |
 
 Record the time from the first 204 to the first 200 in the first live run. The RunPod page measures a cold start the same way.
 
@@ -240,3 +240,14 @@ The proof on the processor that I made on a 32-thread box took 14 minutes 22 sec
 - `cargo check --features sp1-cuda --all-targets` passes here. The feature compiles without CUDA, because the `sp1-cuda` crate is only a client of the GPU server.
 - I did not run the GPU server binary. I read its dynamic libraries from the file: it needs `libcudart.so.12`, `libstdc++.so.6` and glibc 2.34 or newer. Whether it finds the Groth16 circuit files in `SP1_GROTH16_CIRCUIT_PATH` is the same behaviour as the processor prover, but I did not run it.
 - The RunPod pages do not state the status code for "no workers available", the size of the circuit files, or GPU prices.
+
+## Measured on RunPod (2026-10-25, image v3, RTX 4090, real Ethereum update)
+
+| Step | Time |
+|---|---|
+| First pull of the 20.6 GB image on a new host (not billed) | about 300 s to ready |
+| Cold worker with the image cached | 24 s to ready |
+| First proof on a worker | about 50 s |
+| Warm proof | about 27 s |
+
+Every proof was 356 bytes and its public values equalled the native `lc-core` run.

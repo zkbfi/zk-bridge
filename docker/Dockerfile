@@ -132,6 +132,22 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && mkdir /out \
     && cp target/release/prove-worker /out/
 
+# The Groth16 circuit files of SP1 circuit v6.1.0 (the circuit of sp1-sdk 6.8.1), baked into the image so a cold worker reads
+# them from local disk instead of downloading 6.2 GB on its first proof. The tarball is pinned by SHA-256, and the build
+# refuses it unless groth16_vk.bin hashes to VERIFIER_HASH of the pinned on-chain verifier (docs/sp1-version-policy.md).
+FROM --platform=linux/amd64 ${RUNTIME_IMAGE} AS groth16-circuits
+ARG SP1_CIRCUIT_VERSION=v6.1.0
+ARG SP1_GROTH16_CIRCUITS_SHA256=18beebb6cd0cc9b4d4a240ee4f49511da6c2a7e51724bad4232de538a9147810
+ARG SP1_VERIFIER_HASH=4388a21c687fdd5f218d7e3d13190cac4c5355818d3605fd5fb811df468ee696
+ADD --checksum=sha256:${SP1_GROTH16_CIRCUITS_SHA256} \
+    https://sp1-circuits.s3-us-east-2.amazonaws.com/${SP1_CIRCUIT_VERSION}-groth16.tar.gz \
+    /tmp/groth16.tar.gz
+RUN mkdir -p /circuits/groth16/${SP1_CIRCUIT_VERSION} \
+    && tar -xzf /tmp/groth16.tar.gz -C /circuits/groth16/${SP1_CIRCUIT_VERSION} --exclude='._*' \
+    && rm /tmp/groth16.tar.gz \
+    && echo "${SP1_VERIFIER_HASH}  /circuits/groth16/${SP1_CIRCUIT_VERSION}/groth16_vk.bin" | sha256sum -c - \
+    && touch /circuits/groth16/${SP1_CIRCUIT_VERSION}/.complete
+
 FROM --platform=linux/amd64 ${CUDA_RUNTIME_IMAGE} AS prover-gpu-worker
 ARG SP1_GPU_SERVER_VERSION=6.8.1
 ARG SP1_GPU_SERVER_SHA256=1116d91fb36cbc0158112c78491ff665ae43ad1dbfb95c66bea0c9d530e81ec3
@@ -149,9 +165,9 @@ RUN apt-get update \
     && chown -R bridge:bridge /home/bridge /state
 COPY --from=build-gpu-worker /out/prove-worker /usr/local/bin/
 COPY --from=check-elfs /check/light-client.elf /check/fork-observation.elf /elf/
-# The Groth16 circuit files are downloaded on the first proof of a worker. Mount a network volume on /state to keep them.
+COPY --from=groth16-circuits /circuits /opt/sp1-circuits
 ENV HOME=/home/bridge \
-    SP1_GROTH16_CIRCUIT_PATH=/state/sp1-circuits \
+    SP1_GROTH16_CIRCUIT_PATH=/opt/sp1-circuits/groth16 \
     PORT=8000 \
     PORT_HEALTH=8000 \
     ZK_BRIDGE_WORKER_LIGHT_CLIENT_ELF=/elf/light-client.elf \
