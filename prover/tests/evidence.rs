@@ -1,40 +1,46 @@
-//! The `evidence` command against a synthetic world: a signed beacon chain, a source chain with one deposit, and a
-//! destination chain with a light client and a vault. The chains are JSON-RPC servers in this process.
+//! The `evidence` command against a synthetic world: a signed beacon chain, a source chain with one message, and a
+//! destination chain with a light client and a message bridge. The chains are JSON-RPC servers in this process.
 //!
-//! The execution block of the deposit is real in the way that matters: its header hashes to the block hash that the beacon
-//! block commits to, its receipts root is the root of a real receipts trie, and the receipt holds a real `DepositInitiated`
-//! log. So the withdrawal evidence that the command builds passes the native vault check of `lc-core`, which the builder
-//! runs itself. The tests then read the calldata back and compare it with what they put in.
+//! The execution block of the message is real in the way that matters: its header hashes to the block hash that the beacon
+//! block commits to, its receipts root and its transactions root are the roots of real tries, and the receipt holds a real
+//! `UserRequestForAffirmation` log. So the evidence that the command builds passes the native bridge check of `lc-core`,
+//! which the builder runs itself. The tests then read the calldata back, run the check again with their own context, and
+//! compare the result with what they put in.
 
 mod common;
 
-use alloy_primitives::{hex, Address, B256, U256};
-use alloy_sol_types::{SolCall, SolEvent};
+use alloy_primitives::{hex, keccak256, Address, Bytes, B256, U256};
+use alloy_sol_types::SolCall;
 use common::*;
-use lc_core::abi::{withdrawCall, DepositInitiated};
+use lc_core::abi::executeMessageCall;
 use lc_core::json::{execution_header_from_json, receipts_from_json};
-use lc_core::receipts::{build_receipts_trie, encode_execution_header, header_hash};
+use lc_core::message::{message_id_for, verify_message, MessageContext};
+use lc_core::receipts::{build_indexed_trie, encode_execution_header, header_hash};
+use lc_testkit::synthetic::{message_log, synthetic_transaction, MessageFields};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use zk_bridge_prover::cli;
 use zk_bridge_prover::contracts::{
-    BlockHashEvidence, BodyLayoutRow, HistoricalLayoutRow, LightClientContract, StateLayoutRow,
-    VaultContract,
+    BlockHashEvidence, BodyLayoutRow, HistoricalLayoutRow, LightClientContract,
+    MessageBridgeContract, StateLayoutRow,
 };
 use zk_bridge_prover::error::{Error, Result};
-use zk_bridge_prover::evidence::WithdrawalEvidence;
+use zk_bridge_prover::evidence::{DeliveryStatus, MessageEvidence};
 use zk_bridge_prover::light_client::{verify_update_natively, ChainKind};
 use zk_bridge_prover::local_network::signed_beacon::checkpoint::{read_checkpoint, Checkpoint};
 
-const SOURCE_VAULT: Address = Address::repeat_byte(0xb1);
-const DESTINATION_VAULT: Address = Address::repeat_byte(0xb2);
+const SOURCE_BRIDGE: Address = Address::repeat_byte(0xb1);
+const DESTINATION_BRIDGE: Address = Address::repeat_byte(0xb2);
 const LIGHT_CLIENT: Address = Address::repeat_byte(0xb3);
 const OTHER_EMITTER: Address = Address::repeat_byte(0xc1);
 const SOURCE_CHAIN_ID: u64 = 1;
 const DESTINATION_CHAIN_ID: u64 = 369;
 const SLOTS_PER_PERIOD: u64 = 8192;
-/// The log that holds the deposit. Log 0 of the same receipt belongs to another contract.
-const DEPOSIT_LOG_INDEX: u64 = 1;
+/// The transaction that sends the message. It is the second transaction of its block, so the index of the receipt and the
+/// index of the transaction are 1 and not 0.
+const MESSAGE_TRANSACTION_INDEX: u64 = 1;
+/// The log that holds the message. Log 0 of the same receipt belongs to another contract.
+const MESSAGE_LOG_INDEX: u64 = 1;
 
 fn quantity(value: u64) -> String {
     format!("{value:#x}")
@@ -44,29 +50,34 @@ fn zero_bloom() -> String {
     format!("0x{}", "00".repeat(256))
 }
 
-fn deposit_event() -> DepositInitiated {
-    DepositInitiated {
-        token: Address::repeat_byte(0x71),
+/// The honest fields of the message of the world, sent by the source bridge for the destination chain.
+fn message_fields() -> MessageFields {
+    MessageFields {
+        message_id: message_id_for(SOURCE_CHAIN_ID, SOURCE_BRIDGE, 5),
         sender: Address::repeat_byte(0x72),
-        recipient: Address::repeat_byte(0x73),
-        amount: U256::from(1_500_000_000_000_000_000u64),
-        nonce: B256::repeat_byte(0x74),
-        targetChainId: DESTINATION_CHAIN_ID,
-        destinationVault: DESTINATION_VAULT,
-        destinationToken: Address::repeat_byte(0x75),
+        executor: Address::repeat_byte(0x73),
+        gas_limit: 250_000,
+        data_type: 0,
+        source_chain_id: SOURCE_CHAIN_ID,
+        destination_chain_id: DESTINATION_CHAIN_ID,
+        data: Bytes::from_static(&[0xab, 0xcd, 0xef]),
     }
 }
 
-/// The execution block that holds the deposit, with its receipt and its transaction hash.
-struct DepositBlock {
+/// The execution block that holds the message, with its receipts and its raw transactions.
+struct SourceBlock {
     number: u64,
     block: Value,
-    receipt: Value,
+    receipts: Vec<Value>,
+    /// The raw bytes of each transaction, in block order.
+    raw_transactions: Vec<Bytes>,
     transaction: B256,
 }
 
-fn deposit_block(number: u64, timestamp: u64) -> DepositBlock {
-    let transaction = B256::repeat_byte(0xab);
+fn source_block(number: u64, timestamp: u64, fields: &MessageFields) -> SourceBlock {
+    let raw_transactions: Vec<Bytes> = (0..2).map(synthetic_transaction).collect();
+    let transaction_hashes: Vec<B256> = raw_transactions.iter().map(keccak256).collect();
+    let transaction = transaction_hashes[MESSAGE_TRANSACTION_INDEX as usize];
     let block_hash_placeholder = format!("{:#x}", B256::ZERO);
     let log = |index: u64, address: Address, topics: Vec<B256>, data: Vec<u8>| {
         json!({
@@ -76,69 +87,83 @@ fn deposit_block(number: u64, timestamp: u64) -> DepositBlock {
             "blockNumber": quantity(number),
             "blockHash": block_hash_placeholder,
             "transactionHash": format!("{transaction:#x}"),
-            "transactionIndex": "0x0",
+            "transactionIndex": quantity(MESSAGE_TRANSACTION_INDEX),
             "logIndex": quantity(index),
         })
     };
-    let event = deposit_event().encode_log_data();
-    let mut receipt = json!({
-        "type": "0x2",
-        "status": "0x1",
-        "cumulativeGasUsed": "0x5208",
-        "logsBloom": zero_bloom(),
-        "transactionHash": format!("{transaction:#x}"),
-        "transactionIndex": "0x0",
-        "blockNumber": quantity(number),
-        "logs": [
-            log(0, OTHER_EMITTER, vec![B256::repeat_byte(0x01)], vec![0x01]),
-            log(1, SOURCE_VAULT, event.topics().to_vec(), event.data.to_vec()),
-        ],
-    });
-    let receipts_root = build_receipts_trie(&receipts_from_json(&json!([receipt.clone()]))).root;
+    let event = message_log(SOURCE_BRIDGE, fields);
+    let receipt = |index: u64, logs: Vec<Value>| {
+        json!({
+            "type": "0x2",
+            "status": "0x1",
+            "cumulativeGasUsed": quantity(21_000 * (index + 1)),
+            "logsBloom": zero_bloom(),
+            "transactionHash": format!("{:#x}", transaction_hashes[index as usize]),
+            "transactionIndex": quantity(index),
+            "blockNumber": quantity(number),
+            "logs": logs,
+        })
+    };
+    let mut receipts = vec![
+        receipt(0, vec![]),
+        receipt(
+            1,
+            vec![
+                log(0, OTHER_EMITTER, vec![B256::repeat_byte(0x01)], vec![0x01]),
+                log(1, SOURCE_BRIDGE, event.topics, event.data.to_vec()),
+            ],
+        ),
+    ];
+    let receipts_root =
+        build_indexed_trie(&receipts_from_json(&Value::Array(receipts.clone()))).root;
+    let transactions_root = build_indexed_trie(&raw_transactions).root;
     let mut block = json!({
         "parentHash": format!("{:#x}", B256::repeat_byte(0x10)),
         "sha3Uncles": format!("{:#x}", B256::repeat_byte(0x11)),
         "miner": format!("{:#x}", Address::repeat_byte(0x0f)),
         "stateRoot": format!("{:#x}", B256::repeat_byte(0x12)),
-        "transactionsRoot": format!("{:#x}", B256::repeat_byte(0x13)),
+        "transactionsRoot": format!("{transactions_root:#x}"),
         "receiptsRoot": format!("{receipts_root:#x}"),
         "logsBloom": zero_bloom(),
         "difficulty": "0x0",
         "number": quantity(number),
         "gasLimit": quantity(30_000_000),
-        "gasUsed": "0x5208",
+        "gasUsed": "0xa410",
         "timestamp": quantity(timestamp),
         "extraData": "0x",
         "mixHash": format!("{:#x}", B256::repeat_byte(0x14)),
         "nonce": "0x0000000000000000",
         "baseFeePerGas": "0x7",
-        "transactions": [format!("{transaction:#x}")],
+        "transactions": transaction_hashes.iter().map(|hash| format!("{hash:#x}")).collect::<Vec<_>>(),
     });
     let hash = header_hash(&encode_execution_header(&execution_header_from_json(
         &block,
     )));
     block["hash"] = json!(format!("{hash:#x}"));
-    // The logs of the receipt name the block hash that they sit in.
-    for entry in receipt["logs"].as_array_mut().unwrap() {
-        entry["blockHash"] = json!(format!("{hash:#x}"));
+    // The logs of the receipts name the block hash that they sit in.
+    for receipt in &mut receipts {
+        receipt["blockHash"] = json!(format!("{hash:#x}"));
+        for entry in receipt["logs"].as_array_mut().unwrap() {
+            entry["blockHash"] = json!(format!("{hash:#x}"));
+        }
     }
-    receipt["blockHash"] = json!(format!("{hash:#x}"));
-    DepositBlock {
+    SourceBlock {
         number,
         block,
-        receipt,
+        receipts,
+        raw_transactions,
         transaction,
     }
 }
 
-/// The world: a beacon chain that finalized past the deposit, a light client that stores a head after the deposit, and the
-/// source chain that holds the deposit.
+/// The world: a beacon chain that finalized past the message, a light client that stores a head after the message, and the
+/// source chain that holds the message.
 struct World {
     checkpoint: Checkpoint,
     anchor_slot: u64,
     anchor_root: B256,
-    deposit_slot: u64,
-    deposit: DepositBlock,
+    source_slot: u64,
+    source: SourceBlock,
     beacon_url: String,
     source_url: String,
     // The chain must outlive the server threads that answer for it.
@@ -146,14 +171,18 @@ struct World {
 }
 
 fn world() -> World {
+    world_for(&message_fields())
+}
+
+fn world_for(fields: &MessageFields) -> World {
     let kind = ChainKind::Pulsechain;
     let chain = Chain::new(kind, BLOCKS_BEFORE_CHECKPOINT);
     let checkpoint = read_checkpoint(&chain.node, kind).expect("checkpoint");
     let number = BLOCKS_BEFORE_CHECKPOINT + 3;
     let timestamp = payload(number, kind.seconds_per_slot()).timestamp;
-    let deposit = deposit_block(number, timestamp);
-    let hash: B256 = deposit.block["hash"].as_str().unwrap().parse().unwrap();
-    let receipts_root: B256 = deposit.block["receiptsRoot"]
+    let source = source_block(number, timestamp, fields);
+    let hash: B256 = source.block["hash"].as_str().unwrap().parse().unwrap();
+    let receipts_root: B256 = source.block["receiptsRoot"]
         .as_str()
         .unwrap()
         .parse()
@@ -171,56 +200,79 @@ fn world() -> World {
         .unwrap()
         .expect("the light client lags");
     let output = verify_update_natively(&plan.input).unwrap();
-    let deposit_slot = chain.first_slot() + number - 1;
+    let source_slot = chain.first_slot() + number - 1;
     assert!(
-        output.newHeadSlot > deposit_slot,
-        "the new head covers the deposit"
+        output.newHeadSlot > source_slot,
+        "the new head covers the source block"
     );
 
     let beacon_url = serve_beacon(&chain);
-    let source_url = serve_source(&deposit);
+    let source_url = serve_source(&source, SourceNode::Complete);
     World {
         checkpoint,
         anchor_slot: output.newHeadSlot,
         anchor_root: output.newHeaderRoot,
-        deposit_slot,
-        deposit,
+        source_slot,
+        source,
         beacon_url,
         source_url,
         _chain: chain,
     }
 }
 
-fn serve_source(deposit: &DepositBlock) -> String {
-    let number = deposit.number;
-    let (block, receipt, transaction) = (
-        deposit.block.clone(),
-        deposit.receipt.clone(),
-        deposit.transaction,
+/// How the source node answers for the raw bytes of transactions.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SourceNode {
+    /// It serves the right bytes.
+    Complete,
+    /// It serves the bytes of the first transaction for every hash.
+    WrongBytes,
+    /// It lacks `eth_getRawTransactionByHash`.
+    NoRawTransactions,
+}
+
+fn serve_source(source: &SourceBlock, node: SourceNode) -> String {
+    let number = source.number;
+    let (block, receipts, transaction) = (
+        source.block.clone(),
+        source.receipts.clone(),
+        source.transaction,
     );
+    let raw_by_hash: Vec<(String, Bytes)> = source
+        .raw_transactions
+        .iter()
+        .map(|raw| (format!("{:#x}", keccak256(raw)), raw.clone()))
+        .collect();
     serve_rpc(move |call| match call["method"].as_str().unwrap() {
         "eth_chainId" => json!(quantity(SOURCE_CHAIN_ID)),
         "eth_getTransactionReceipt" if call["params"][0] == json!(format!("{transaction:#x}")) => {
-            receipt.clone()
+            receipts[MESSAGE_TRANSACTION_INDEX as usize].clone()
         }
         "eth_getBlockByNumber" if call["params"][0] == json!(quantity(number)) => block.clone(),
-        "eth_getBlockReceipts" => json!([receipt.clone()]),
+        "eth_getBlockReceipts" => json!(receipts.clone()),
+        "eth_getRawTransactionByHash" if node == SourceNode::WrongBytes => {
+            json!(hex::encode_prefixed(&raw_by_hash[0].1))
+        }
+        "eth_getRawTransactionByHash" if node == SourceNode::Complete => raw_by_hash
+            .iter()
+            .find(|(hash, _)| call["params"][0] == json!(hash))
+            .map_or(Value::Null, |(_, raw)| json!(hex::encode_prefixed(raw))),
         _ => Value::Null,
     })
 }
 
-/// What the destination chain answers about its vault.
+/// What the destination chain answers about its bridge.
 #[derive(Clone)]
 struct DestinationState {
     state_rows: Vec<StateLayoutRow>,
     body_rows: Vec<BodyLayoutRow>,
     historical_rows: Vec<HistoricalLayoutRow>,
-    claimed: bool,
-    remote_vault: Address,
+    delivery: DeliveryStatus,
+    remote_bridge: Address,
 }
 
 impl DestinationState {
-    /// A vault that has every layout row it needs and has paid nothing.
+    /// A bridge that has every layout row it needs and has delivered nothing.
     fn complete() -> Self {
         Self {
             state_rows: vec![StateLayoutRow {
@@ -234,8 +286,8 @@ impl DestinationState {
                 lastSlot: u64::MAX,
             }],
             historical_rows: vec![],
-            claimed: false,
-            remote_vault: SOURCE_VAULT,
+            delivery: DeliveryStatus::NotDelivered,
+            remote_bridge: SOURCE_BRIDGE,
         }
     }
 }
@@ -287,29 +339,42 @@ fn serve_destination(world: &World, state: DestinationState) -> String {
             LightClientContract::programVKeyCall::SELECTOR => {
                 LightClientContract::programVKeyCall::abi_encode_returns(&B256::repeat_byte(0x99))
             }
-            VaultContract::remoteVaultCall::SELECTOR => {
-                VaultContract::remoteVaultCall::abi_encode_returns(&state.remote_vault)
+            MessageBridgeContract::remoteBridgeCall::SELECTOR => {
+                MessageBridgeContract::remoteBridgeCall::abi_encode_returns(&state.remote_bridge)
             }
-            VaultContract::remoteChainIdCall::SELECTOR => {
-                VaultContract::remoteChainIdCall::abi_encode_returns(&SOURCE_CHAIN_ID)
+            MessageBridgeContract::remoteChainIdCall::SELECTOR => {
+                MessageBridgeContract::remoteChainIdCall::abi_encode_returns(&SOURCE_CHAIN_ID)
             }
-            VaultContract::localChainIdCall::SELECTOR => {
-                VaultContract::localChainIdCall::abi_encode_returns(&DESTINATION_CHAIN_ID)
+            MessageBridgeContract::localChainIdCall::SELECTOR => {
+                MessageBridgeContract::localChainIdCall::abi_encode_returns(&DESTINATION_CHAIN_ID)
             }
-            VaultContract::lightClientCall::SELECTOR => {
-                VaultContract::lightClientCall::abi_encode_returns(&LIGHT_CLIENT)
+            MessageBridgeContract::lightClientCall::SELECTOR => {
+                MessageBridgeContract::lightClientCall::abi_encode_returns(&LIGHT_CLIENT)
             }
-            VaultContract::claimedCall::SELECTOR => {
-                VaultContract::claimedCall::abi_encode_returns(&state.claimed)
+            MessageBridgeContract::messageCallStatusCall::SELECTOR => {
+                MessageBridgeContract::messageCallStatusCall::abi_encode_returns(
+                    &(state.delivery == DeliveryStatus::Succeeded),
+                )
             }
-            VaultContract::stateLayoutsCall::SELECTOR => {
-                VaultContract::stateLayoutsCall::abi_encode_returns(&state.state_rows)
+            MessageBridgeContract::failedMessageDataHashCall::SELECTOR => {
+                // A failed call leaves the keccak256 of its data. Nothing else leaves a value.
+                let hash = if state.delivery == DeliveryStatus::Failed {
+                    keccak256(message_fields().data)
+                } else {
+                    B256::ZERO
+                };
+                MessageBridgeContract::failedMessageDataHashCall::abi_encode_returns(&hash)
             }
-            VaultContract::bodyLayoutsCall::SELECTOR => {
-                VaultContract::bodyLayoutsCall::abi_encode_returns(&state.body_rows)
+            MessageBridgeContract::stateLayoutsCall::SELECTOR => {
+                MessageBridgeContract::stateLayoutsCall::abi_encode_returns(&state.state_rows)
             }
-            VaultContract::historicalLayoutsCall::SELECTOR => {
-                VaultContract::historicalLayoutsCall::abi_encode_returns(&state.historical_rows)
+            MessageBridgeContract::bodyLayoutsCall::SELECTOR => {
+                MessageBridgeContract::bodyLayoutsCall::abi_encode_returns(&state.body_rows)
+            }
+            MessageBridgeContract::historicalLayoutsCall::SELECTOR => {
+                MessageBridgeContract::historicalLayoutsCall::abi_encode_returns(
+                    &state.historical_rows,
+                )
             }
             other => panic!("unexpected call {other:?}"),
         };
@@ -356,6 +421,7 @@ impl Drop for Scratch {
 /// Runs `evidence` with a configuration for this world. `arguments` follow `evidence`.
 fn run_evidence(
     world: &World,
+    source_url: &str,
     destination_url: &str,
     arguments: &[String],
 ) -> (Result<i32>, Vec<u8>) {
@@ -375,16 +441,16 @@ fn run_evidence(
 chain_id = {SOURCE_CHAIN_ID}
 chain = "pulsechain"
 beacon_url = "{}"
-rpc_url = "{}"
-vault = "{SOURCE_VAULT:#x}"
+rpc_url = "{source_url}"
+bridge = "{SOURCE_BRIDGE:#x}"
 
 [routes.ethereum_to_pulsechain.destination]
 chain_id = {DESTINATION_CHAIN_ID}
 rpc_url = "{destination_url}"
 light_client = "{LIGHT_CLIENT:#x}"
-vault = "{DESTINATION_VAULT:#x}"
+bridge = "{DESTINATION_BRIDGE:#x}"
 "#,
-            world.beacon_url, world.source_url
+            world.beacon_url
         ),
     )
     .unwrap();
@@ -401,18 +467,23 @@ vault = "{DESTINATION_VAULT:#x}"
     (outcome, out)
 }
 
-fn deposit_arguments(world: &World, log_index: u64) -> Vec<String> {
+/// Runs `evidence` against the complete source node of the world.
+fn run(world: &World, destination_url: &str, arguments: &[String]) -> (Result<i32>, Vec<u8>) {
+    run_evidence(world, &world.source_url, destination_url, arguments)
+}
+
+fn message_arguments(world: &World, log_index: u64) -> Vec<String> {
     vec![
         "--tx".into(),
-        format!("{:#x}", world.deposit.transaction),
+        format!("{:#x}", world.source.transaction),
         "--log-index".into(),
         log_index.to_string(),
     ]
 }
 
-fn build(world: &World, state: DestinationState, log_index: u64) -> Result<WithdrawalEvidence> {
+fn build(world: &World, state: DestinationState, log_index: u64) -> Result<MessageEvidence> {
     let destination = serve_destination(world, state);
-    let (outcome, out) = run_evidence(world, &destination, &deposit_arguments(world, log_index));
+    let (outcome, out) = run(world, &destination, &message_arguments(world, log_index));
     assert_eq!(outcome?, 0);
     assert_eq!(
         out.iter().filter(|byte| **byte == b'\n').count(),
@@ -422,43 +493,45 @@ fn build(world: &World, state: DestinationState, log_index: u64) -> Result<Withd
     Ok(serde_json::from_slice(&out).expect("evidence JSON"))
 }
 
-/// Claim: for a deposit that the stored anchor covers, the command prints evidence that names the deposit, the anchor and
-/// the destination exactly, with withdraw calldata that carries the log index and the transaction index of the deposit and
-/// the two headers of the beacon path. A vault that has every row needs no prerequisite. The evidence needs no `[prover]`
-/// section and no key.
-/// Why it matters: a stateful server sends this calldata as it is. Every field it reads must describe the deposit that the
-/// vault will pay.
+/// Claim: for a message that the stored anchor covers, the command prints evidence that names the message, the anchor and
+/// the destination exactly, with `executeMessage` calldata that carries the log index and the index of the transaction (the
+/// receipt and the transaction share index 1) and the two headers of the beacon path. The calldata passes the reference
+/// check of `lc-core` under a context that the test builds on its own, and the check returns the hash of the transaction
+/// that was asked for. A bridge that has every row needs no prerequisite. The evidence needs no `[prover]` section and no key.
+/// Why it matters: a stateful server sends this calldata as it is. Every field it reads must describe the message that the
+/// bridge will execute, and the transaction hash that the target reads must be the hash of the sending transaction.
 #[test]
-fn the_evidence_names_the_deposit_and_carries_the_withdraw_calldata() {
+fn the_evidence_names_the_message_and_carries_the_execute_calldata() {
     let world = world();
     let evidence =
-        build(&world, DestinationState::complete(), DEPOSIT_LOG_INDEX).expect("evidence");
-    let event = deposit_event();
+        build(&world, DestinationState::complete(), MESSAGE_LOG_INDEX).expect("evidence");
+    let fields = message_fields();
 
     assert_eq!(evidence.route, "ethereum_to_pulsechain");
     assert_eq!(
         evidence.source_transaction_hash,
-        format!("{:#x}", world.deposit.transaction)
+        format!("{:#x}", world.source.transaction)
     );
-    assert_eq!(evidence.log_index, DEPOSIT_LOG_INDEX);
-    assert_eq!(evidence.deposit.nonce, format!("{:#x}", event.nonce));
-    assert_eq!(evidence.deposit.token, format!("{:#x}", event.token));
-    assert_eq!(evidence.deposit.sender, format!("{:#x}", event.sender));
+    assert_eq!(evidence.log_index, MESSAGE_LOG_INDEX);
     assert_eq!(
-        evidence.deposit.recipient,
-        format!("{:#x}", event.recipient)
+        evidence.message.message_id,
+        format!("{:#x}", fields.message_id)
     );
-    assert_eq!(evidence.deposit.amount, "1500000000000000000");
-    assert_eq!(evidence.deposit.source_block_number, world.deposit.number);
+    assert_eq!(evidence.message.sender, format!("{:#x}", fields.sender));
+    assert_eq!(evidence.message.executor, format!("{:#x}", fields.executor));
+    assert_eq!(evidence.message.gas_limit, 250_000);
+    assert_eq!(evidence.message.data_type, 0);
+    assert_eq!(evidence.message.data, "0xabcdef");
+    assert_eq!(evidence.message.source_block_number, world.source.number);
     assert_eq!(
-        evidence.deposit.source_block_hash,
-        world.deposit.block["hash"].as_str().unwrap()
+        evidence.message.source_block_hash,
+        world.source.block["hash"].as_str().unwrap()
     );
-    assert_eq!(evidence.deposit.deposit_slot, world.deposit_slot);
+    assert_eq!(evidence.message.source_slot, world.source_slot);
     assert_eq!(evidence.destination.chain_id, DESTINATION_CHAIN_ID);
     assert_eq!(
-        evidence.destination.vault,
-        format!("{DESTINATION_VAULT:#x}")
+        evidence.destination.bridge,
+        format!("{DESTINATION_BRIDGE:#x}")
     );
     assert_eq!(
         evidence.destination.light_client,
@@ -466,39 +539,73 @@ fn the_evidence_names_the_deposit_and_carries_the_withdraw_calldata() {
     );
     assert_eq!(evidence.anchor.slot, world.anchor_slot);
     assert_eq!(evidence.anchor.root, format!("{:#x}", world.anchor_root));
-    assert!(!evidence.already_claimed);
+    assert_eq!(evidence.delivery_status, DeliveryStatus::NotDelivered);
+    assert!(!evidence.already_delivered);
     assert!(evidence.prerequisites.is_empty());
 
-    assert_eq!(evidence.withdraw.to, format!("{DESTINATION_VAULT:#x}"));
-    let calldata = hex::decode(&evidence.withdraw.data).unwrap();
-    let call = withdrawCall::abi_decode(&calldata).expect("a withdraw call");
-    assert_eq!(call.proof.logIndex, U256::from(DEPOSIT_LOG_INDEX));
-    assert_eq!(call.proof.transactionIndex, U256::ZERO);
+    assert_eq!(evidence.execute.to, format!("{DESTINATION_BRIDGE:#x}"));
+    let calldata = hex::decode(&evidence.execute.data).unwrap();
+    let call = executeMessageCall::abi_decode(&calldata).expect("an executeMessage call");
+    assert_eq!(call.proof.logIndex, U256::from(MESSAGE_LOG_INDEX));
+    assert_eq!(
+        call.proof.receiptIndex,
+        U256::from(MESSAGE_TRANSACTION_INDEX)
+    );
+    assert_eq!(
+        call.proof.transactionIndex,
+        U256::from(MESSAGE_TRANSACTION_INDEX)
+    );
+    assert!(!call.proof.transactionProof.is_empty());
     assert_eq!(call.proof.anchorHeader.slot, world.anchor_slot);
-    assert_eq!(call.proof.depositHeader.slot, world.deposit_slot);
-}
+    assert_eq!(call.proof.sourceHeader.slot, world.source_slot);
 
-/// Claim: a deposit that the vault already paid is reported as claimed, and the rest of the evidence is unchanged.
-/// Why it matters: a server that sends the withdrawal of a paid deposit wastes gas on a revert.
-#[test]
-fn a_paid_deposit_is_reported_as_claimed() {
-    let world = world();
-    let state = DestinationState {
-        claimed: true,
-        ..DestinationState::complete()
+    let context = MessageContext {
+        remote_bridge: SOURCE_BRIDGE,
+        local_chain_id: DESTINATION_CHAIN_ID,
+        remote_chain_id: SOURCE_CHAIN_ID,
+        stored_anchor_root: world.anchor_root,
     };
-    assert!(
-        build(&world, state, DEPOSIT_LOG_INDEX)
-            .unwrap()
-            .already_claimed
+    let verified = verify_message(&call.proof, &context, ChainKind::Pulsechain.spec())
+        .expect("the calldata passes the reference check");
+    assert_eq!(verified.header, fields.header());
+    assert_eq!(verified.source_transaction_hash, world.source.transaction);
+    assert_eq!(
+        verified.source_transaction_hash,
+        keccak256(&world.source.raw_transactions[MESSAGE_TRANSACTION_INDEX as usize]),
+        "the hash of the transaction at the index of the receipt, not of the first transaction"
     );
 }
 
-/// Claim: when the vault lacks a block hash row, the evidence lists a call for each stored header that can supply it, and
+/// Claim: a message that the bridge executed is reported with its status, and the rest of the evidence is unchanged. A
+/// success and a failure both count as delivered, because the mark is final. The status reads from `messageCallStatus` and
+/// `failedMessageDataHash`.
+/// Why it matters: a server that sends the proof of an executed message wastes gas on a revert.
+#[test]
+fn an_executed_message_is_reported_with_its_status() {
+    let world = world();
+    for (delivery, word) in [
+        (DeliveryStatus::Succeeded, "succeeded"),
+        (DeliveryStatus::Failed, "failed"),
+    ] {
+        let state = DestinationState {
+            delivery,
+            ..DestinationState::complete()
+        };
+        let evidence = build(&world, state, MESSAGE_LOG_INDEX).unwrap();
+        assert_eq!(evidence.delivery_status, delivery);
+        assert!(evidence.already_delivered, "{word}");
+        assert_eq!(
+            serde_json::to_value(&evidence).unwrap()["deliveryStatus"],
+            word
+        );
+    }
+}
+
+/// Claim: when the bridge lacks a block hash row, the evidence lists a call for each stored header that can supply it, and
 /// each call carries a branch that fits the body root of its header. The first call uses the stored header at or below the
-/// deposit slot, the second the stored header at or below the anchor.
-/// Why it matters: the vault validates the row against the branch. A wrong generalized index or branch reverts the call and
-/// leaves the withdrawal stuck.
+/// source slot, the second the stored header at or below the anchor.
+/// Why it matters: the bridge validates the row against the branch. A wrong generalized index or branch reverts the call and
+/// leaves the message stuck.
 #[test]
 fn missing_block_hash_rows_become_layout_calls_that_fit_their_headers() {
     let world = world();
@@ -506,15 +613,15 @@ fn missing_block_hash_rows_become_layout_calls_that_fit_their_headers() {
         body_rows: vec![],
         ..DestinationState::complete()
     };
-    let evidence = build(&world, state, DEPOSIT_LOG_INDEX).expect("evidence");
+    let evidence = build(&world, state, MESSAGE_LOG_INDEX).expect("evidence");
     assert_eq!(evidence.prerequisites.len(), 2);
     let mut header_slots = Vec::new();
     for prerequisite in &evidence.prerequisites {
         assert_eq!(prerequisite.function, "addBlockHashLayout");
-        assert_eq!(prerequisite.call.to, format!("{DESTINATION_VAULT:#x}"));
+        assert_eq!(prerequisite.call.to, format!("{DESTINATION_BRIDGE:#x}"));
         let calldata = hex::decode(&prerequisite.call.data).unwrap();
-        let call =
-            VaultContract::addBlockHashLayoutCall::abi_decode(&calldata).expect("a layout call");
+        let call = MessageBridgeContract::addBlockHashLayoutCall::abi_decode(&calldata)
+            .expect("a layout call");
         let BlockHashEvidence { header, branch } = call.evidence;
         assert!(lc_core::ssz::is_valid_exact_branch(
             &block_hash_at_slot(header.slot),
@@ -528,7 +635,7 @@ fn missing_block_hash_rows_become_layout_calls_that_fit_their_headers() {
 }
 
 /// The execution block hash that the synthetic chain holds at a beacon slot. Neither the checkpoint slot nor the anchor
-/// slot is the deposit block, so the hash is the default one.
+/// slot is the source block, so the hash is the default one.
 fn block_hash_at_slot(slot: u64) -> B256 {
     let first_slot = zk_bridge_prover::local_network::signed_beacon::node::default_first_slot(
         ChainKind::Pulsechain,
@@ -536,9 +643,9 @@ fn block_hash_at_slot(slot: u64) -> B256 {
     execution_hash(slot - first_slot + 1)
 }
 
-/// Claim: when the vault lacks a row and the light client stored too few heads to validate it, the command fails with the
+/// Claim: when the bridge lacks a row and the light client stored too few heads to validate it, the command fails with the
 /// reason, and prints nothing.
-/// Why it matters: a partial answer would send the server into a withdrawal that cannot succeed.
+/// Why it matters: a partial answer would send the server into a delivery that cannot succeed.
 #[test]
 fn rows_that_cannot_be_validated_yet_stop_the_command() {
     let world = world();
@@ -547,10 +654,10 @@ fn rows_that_cannot_be_validated_yet_stop_the_command() {
         ..DestinationState::complete()
     };
     let destination = serve_destination(&world, state);
-    let (outcome, out) = run_evidence(
+    let (outcome, out) = run(
         &world,
         &destination,
-        &deposit_arguments(&world, DEPOSIT_LOG_INDEX),
+        &message_arguments(&world, MESSAGE_LOG_INDEX),
     );
     let error = outcome.unwrap_err().to_string();
     assert!(error.contains("not enough stored headers"), "{error}");
@@ -558,25 +665,25 @@ fn rows_that_cannot_be_validated_yet_stop_the_command() {
 }
 
 /// Claim: each wrong input stops the command with an error that names the cause: a log of another contract, a log index
-/// beyond the receipt, a vault that points at another source vault, a header that the light client does not store, and an
-/// anchor that does not lie after the deposit.
-/// Why it matters: a name is a hypothesis. Each of these would otherwise build evidence for the wrong deposit, or evidence
-/// that the vault must refuse.
+/// beyond the receipt, a bridge that points at another source bridge, a header that the light client does not store, and an
+/// anchor that does not lie after the source block.
+/// Why it matters: a name is a hypothesis. Each of these would otherwise build evidence for the wrong message, or evidence
+/// that the bridge must refuse.
 #[test]
 fn wrong_inputs_are_refused_with_their_cause() {
     let world = world();
     let complete = serve_destination(&world, DestinationState::complete());
 
-    let (outcome, out) = run_evidence(&world, &complete, &deposit_arguments(&world, 0));
+    let (outcome, out) = run(&world, &complete, &message_arguments(&world, 0));
     let error = outcome.unwrap_err();
     assert!(matches!(error, Error::Usage(_)), "{error}");
     assert!(
-        error.to_string().contains("not from the source vault"),
+        error.to_string().contains("not from the source bridge"),
         "{error}"
     );
     assert!(out.is_empty());
 
-    let (outcome, _) = run_evidence(&world, &complete, &deposit_arguments(&world, 9));
+    let (outcome, _) = run(&world, &complete, &message_arguments(&world, 9));
     assert!(outcome
         .unwrap_err()
         .to_string()
@@ -585,38 +692,97 @@ fn wrong_inputs_are_refused_with_their_cause() {
     let foreign = serve_destination(
         &world,
         DestinationState {
-            remote_vault: Address::repeat_byte(0xee),
+            remote_bridge: Address::repeat_byte(0xee),
             ..DestinationState::complete()
         },
     );
-    let (outcome, _) = run_evidence(
+    let (outcome, _) = run(
         &world,
         &foreign,
-        &deposit_arguments(&world, DEPOSIT_LOG_INDEX),
+        &message_arguments(&world, MESSAGE_LOG_INDEX),
     );
     let error = outcome.unwrap_err();
     assert!(matches!(error, Error::Config(_)), "{error}");
-    assert!(error.to_string().contains("remoteVault"), "{error}");
+    assert!(error.to_string().contains("remoteBridge"), "{error}");
 
-    let mut unknown_anchor = deposit_arguments(&world, DEPOSIT_LOG_INDEX);
+    let mut unknown_anchor = message_arguments(&world, MESSAGE_LOG_INDEX);
     unknown_anchor.extend(["--anchor-slot".to_string(), "5".to_string()]);
-    let (outcome, _) = run_evidence(&world, &complete, &unknown_anchor);
+    let (outcome, _) = run(&world, &complete, &unknown_anchor);
     assert!(outcome
         .unwrap_err()
         .to_string()
         .contains("stores no header at slot 5"));
 
-    let mut early_anchor = deposit_arguments(&world, DEPOSIT_LOG_INDEX);
+    let mut early_anchor = message_arguments(&world, MESSAGE_LOG_INDEX);
     early_anchor.extend([
         "--anchor-slot".to_string(),
         world.checkpoint.slot.to_string(),
     ]);
-    let (outcome, _) = run_evidence(&world, &complete, &early_anchor);
+    let (outcome, _) = run(&world, &complete, &early_anchor);
     assert!(
         outcome
             .unwrap_err()
             .to_string()
             .contains("is not before the anchor slot"),
-        "an anchor below the deposit cannot cover it"
+        "an anchor below the source block cannot cover it"
     );
+}
+
+/// Claim: a message for another destination chain, and a message from another source chain, are refused before any proof,
+/// with the two chains named.
+/// Why it matters: the destination bridge refuses such a message. Evidence for it would be a wasted delivery.
+#[test]
+fn a_message_for_another_chain_is_refused() {
+    for (fields, expected) in [
+        (
+            MessageFields {
+                destination_chain_id: 31337,
+                ..message_fields()
+            },
+            "is for chain 31337",
+        ),
+        (
+            MessageFields {
+                source_chain_id: 31337,
+                ..message_fields()
+            },
+            "is from chain 31337",
+        ),
+    ] {
+        let world = world_for(&fields);
+        let destination = serve_destination(&world, DestinationState::complete());
+        let (outcome, out) = run(
+            &world,
+            &destination,
+            &message_arguments(&world, MESSAGE_LOG_INDEX),
+        );
+        let error = outcome.unwrap_err();
+        assert!(matches!(error, Error::Usage(_)), "{error}");
+        assert!(error.to_string().contains(expected), "{error}");
+        assert!(out.is_empty());
+    }
+}
+
+/// Claim: a source node that serves wrong transaction bytes, or none, stops the command with the cause. The proof of the
+/// transaction needs the real bytes, because the bridge hashes them into the source transaction hash.
+/// Why it matters: with wrong bytes the rebuilt transactions root differs from the header, and no proof can verify.
+#[test]
+fn a_source_node_without_the_transaction_bytes_stops_the_command() {
+    let world = world();
+    let destination = serve_destination(&world, DestinationState::complete());
+    for (node, expected) in [
+        (SourceNode::WrongBytes, "hash to"),
+        (SourceNode::NoRawTransactions, "eth_getRawTransactionByHash"),
+    ] {
+        let source_url = serve_source(&world.source, node);
+        let (outcome, out) = run_evidence(
+            &world,
+            &source_url,
+            &destination,
+            &message_arguments(&world, MESSAGE_LOG_INDEX),
+        );
+        let error = outcome.unwrap_err().to_string();
+        assert!(error.contains(expected), "{error}");
+        assert!(out.is_empty());
+    }
 }

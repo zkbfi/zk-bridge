@@ -14,6 +14,8 @@
       "ceilingBasisPoints": "0"
     },
     "flowLimiter": "0x0000000000000000000000000000000000000000",
+    "wrappedNative": "@@WRAPPED_NATIVE_A@@",
+    "deployFeeRouter": "false",
     "lightClient": {
       "programVKey": "@@PROGRAM_VKEY@@",
       "genesisValidatorsRoot": "@@GENESIS_ROOT_B@@",
@@ -51,6 +53,8 @@
       "ceilingBasisPoints": "0"
     },
     "flowLimiter": "0x0000000000000000000000000000000000000000",
+    "wrappedNative": "@@WRAPPED_NATIVE_B@@",
+    "deployFeeRouter": "false",
     "lightClient": {
       "programVKey": "@@PROGRAM_VKEY@@",
       "genesisValidatorsRoot": "@@GENESIS_ROOT_A@@",
@@ -73,6 +77,5 @@
       "supportedVersions": [{ "version": "0x0000036c", "stateDepth": "5" }],
       "sealDepths": ["5", "6", "7"]
     }
-  },
-  "tokenPairs": [{ "chainA": "@@TOKEN_A@@", "chainB": "@@TOKEN_B@@" }]
+  }
 }

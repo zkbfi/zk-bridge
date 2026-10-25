@@ -2,27 +2,57 @@
 pragma solidity 0.8.28;
 
 import {Script, console2} from "forge-std/Script.sol";
-import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
-import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
 import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
 import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
+import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
+import {TokenMediator} from "../../src/hardened/mediator/TokenMediator.sol";
+import {TokenFactory} from "../../src/hardened/mediator/TokenFactory.sol";
+import {WETHOmnibridgeRouter} from "../../src/hardened/mediator/WETHOmnibridgeRouter.sol";
+import {FeeRouter} from "../../src/hardened/mediator/FeeRouter.sol";
+import {ITokenMediator} from "../../src/hardened/mediator/ITokenMediator.sol";
+import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 
 /// @title DeployBridge
 /// @notice Deploys the hardened bridge on two chains with predicted cross-chain addresses.
 /// @dev Run with `BRIDGE_CONFIG=<path> forge script script/hardened/DeployBridge.s.sol --account <keystore name>`.
 /// Add `--broadcast` to send the transactions. Without it, nothing reaches a chain.
-/// The script never reads a private key. The vaults start with no fork layouts. After deployment, anyone adds them
+/// The script never reads a private key. The bridges start with no fork layouts. After deployment, anyone adds them
 /// with `addBlockRootsLayout`, `addBlockHashLayout` and `addHistoricalSummariesLayout`, with evidence from the stored
-/// light-client data. Each chain gets a light client at the deployer nonce `n`, a deposit gate at `n + 1` and a vault
-/// at `n + 2`. A chain whose gate runs in `DetectBeaconRootsAndRegistry` mode (PulseChain) also gets a light client of
-/// its OWN beacon chain and a fork registry, so its layout is: light client `n`, own light client `n + 1`, registry
-/// `n + 2`, gate `n + 3`, vault `n + 4`. The light client on a chain tracks the OTHER chain's beacon chain. The deposit gate on a chain reads the
-/// beacon chain of THAT chain, because it guards the deposits made there. Each vault also names the light client of the
-/// OTHER chain (`remoteLightClient`), which it reads to open deposits. Both vaults start locked: see "Launch sequence" in
-/// `docs/hardened-build-contract.md`.
+/// light-client data. The light client on a chain tracks the OTHER chain's beacon chain. The deposit gate on a chain
+/// reads the beacon chain of THAT chain, because it guards the sends made there. Each bridge also names the light
+/// client of the OTHER chain (`remoteLightClient`), which it reads to open sends. Each bridge and each mediator names
+/// its twin on the other chain at construction, so the script predicts every address from the deployer nonces of both
+/// chains. Both bridges start locked: see "Launch sequence" in `docs/hardened-build-contract.md`.
+///
+/// The deployer sends one transaction for each contract below, in this order. `n` is `deployerNonce` of the chain.
+/// A line in brackets is a contract that only some chains get.
+///
+/// | Contract                | Offset, no registry | Offset, registry gate | Condition                          |
+/// |-------------------------|---------------------|-----------------------|------------------------------------|
+/// | light client            | n                   | n                     | always                             |
+/// | [own-chain light client]| -                   | n + 1                 | gate mode `DetectBeaconRootsAndRegistry` |
+/// | [fork registry]         | -                   | n + 2                 | gate mode `DetectBeaconRootsAndRegistry` |
+/// | deposit gate            | n + 1               | n + 3                 | always                             |
+/// | message bridge          | n + 2               | n + 4                 | always                             |
+/// | token mediator          | n + 3               | n + 5                 | always                             |
+/// | [native coin router]    | n + 4               | n + 6                 | `wrappedNative` is not zero        |
+/// | [fee router]            | next free offset    | next free offset      | `deployFeeRouter` is `true`        |
+///
+/// The mediator creates its token factory inside its constructor. The factory is the first contract of the mediator,
+/// so it sits at `computeCreateAddress(mediator, 1)` and takes no deployer nonce. A chain without a wrapped native
+/// token gets no native coin router, and the fee router (which needs that token) is then refused. The fee router takes
+/// the next free offset, so the plan has no gap.
 contract DeployBridge is Script {
+    /// @notice Whether a router is deployed.
+    enum RouterChoice {
+        Skip,
+        Deploy
+    }
+
     /// @notice The settings of one chain. The `lightClient` fields describe the OTHER chain's beacon chain.
+    /// @dev `depositCutoffTimestamp` is the `cutoffTimestamp` of `BridgeTerms`: sends stop from that time on. The key
+    /// keeps its old name for the operators of the deploy configuration.
     struct ChainConfig {
         string rpcAlias;
         uint64 chainId;
@@ -30,6 +60,8 @@ contract DeployBridge is Script {
         bytes32 verifierCodeHash;
         uint256 deployerNonce;
         uint64 depositCutoffTimestamp;
+        address wrappedNative;
+        RouterChoice feeRouter;
         FeeConfig fee;
         address flowLimiter;
         LightClientConfig lightClient;
@@ -37,7 +69,7 @@ contract DeployBridge is Script {
         ObservationConfig observation;
     }
 
-    /// @notice The deposit fee switch of the vault on a chain. A zero `authority` removes the fee from the start: the
+    /// @notice The fee switch of the mediator on a chain. A zero `authority` removes the fee from the start: the
     /// fee and the ceiling must then be zero.
     struct FeeConfig {
         address authority;
@@ -74,7 +106,7 @@ contract DeployBridge is Script {
     }
 
     /// @notice The checkpoint and the program of the light client on a chain. They describe the OTHER chain's beacon chain.
-    /// The Capella fields belong to the vault on this chain: it proves deposits of the OTHER chain.
+    /// The Capella fields belong to the bridge on this chain: it proves messages of the OTHER chain.
     struct LightClientConfig {
         bytes32 programVKey;
         bytes32 genesisValidatorsRoot;
@@ -90,42 +122,41 @@ contract DeployBridge is Script {
         bytes32 initialNextSyncCommitteeHash;
     }
 
-    /// @notice The whole configuration. `tokensA[i]` and `tokensB[i]` are the same asset on the two chains.
+    /// @notice The whole configuration.
     struct BridgeConfig {
         address deployer;
         ChainConfig chainA;
         ChainConfig chainB;
-        address[] tokensA;
-        address[] tokensB;
+    }
+
+    /// @notice The addresses of the contracts of one chain. A contract that the chain does not get is the zero address.
+    struct ChainAddresses {
+        address lightClient;
+        address observedLightClient;
+        address registry;
+        address gate;
+        address bridge;
+        address mediator;
+        address factory;
+        address wrappedRouter;
+        address feeRouter;
     }
 
     /// @notice The predicted addresses on both chains.
     struct Plan {
-        address lightClientA;
-        address observedLightClientA;
-        address registryA;
-        address gateA;
-        address vaultA;
-        address lightClientB;
-        address observedLightClientB;
-        address registryB;
-        address gateB;
-        address vaultB;
+        ChainAddresses chainA;
+        ChainAddresses chainB;
     }
 
-    /// @notice Everything that deploys one chain.
+    /// @notice Everything that deploys one chain. `plan` holds the predicted addresses on THIS chain.
     struct ChainDeployment {
         ChainConfig chain;
         address deployer;
-        address predictedLightClient;
-        address predictedObservedLightClient;
-        address predictedRegistry;
-        address predictedGate;
-        address predictedVault;
+        ChainAddresses plan;
         uint64 remoteChainId;
-        address remoteVault;
+        address remoteBridge;
+        address remoteMediator;
         address remoteLightClient;
-        BridgeVault.TokenPair[] pairs;
     }
 
     /// @notice A configuration value still holds a placeholder.
@@ -134,10 +165,6 @@ contract DeployBridge is Script {
     error ZeroConfigValue(string key);
     /// @notice The two chains share one chain identifier.
     error SameChainIdentifier(uint64 chainId);
-    /// @notice The configuration has no token pairs.
-    error NoTokenPairsConfigured();
-    /// @notice The two token lists differ in length.
-    error TokenPairLengthMismatch(uint256 tokensA, uint256 tokensB);
     /// @notice The connected chain is not the configured chain.
     error ChainIdMismatch(uint64 configured, uint256 actual);
     /// @notice The deployer nonce on the chain differs from the configuration.
@@ -148,8 +175,12 @@ contract DeployBridge is Script {
     error VerifierCodeHashMismatch(uint64 chainId, address verifier, bytes32 expected, bytes32 actual);
     /// @notice The configured flow limiter holds no code on its chain.
     error FlowLimiterHasNoCode(uint64 chainId, address flowLimiter);
-    /// @notice A token address holds no code on its chain.
-    error TokenHasNoCode(uint64 chainId, address token);
+    /// @notice The configured wrapped native token holds no code on its chain.
+    error WrappedNativeHasNoCode(uint64 chainId, address wrappedNative);
+    /// @notice The fee router needs a wrapped native token, and the chain has none in the configuration.
+    error FeeRouterNeedsWrappedNative(uint64 chainId);
+    /// @notice The `deployFeeRouter` setting is not `true` or `false`.
+    error UnknownFeeRouterSetting(string value);
     /// @notice The signer of the script is not the configured deployer.
     error DeployerMismatch(address configured, address actual);
     /// @notice An observation setting does not match the other chain's settings or the light-client key.
@@ -173,7 +204,7 @@ contract DeployBridge is Script {
 
     /// @notice The beacon roots contract of EIP-4788. The gates read the beacon block roots from it.
     address public constant BEACON_ROOTS = 0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02;
-    /// @notice The slots of one era of `historical_summaries`. The vault fixes this number.
+    /// @notice The slots of one era of `historical_summaries`. The bridge fixes this number.
     uint256 public constant SLOTS_PER_ERA = 8192;
 
     // ------------------------------------------------------------------ entry point
@@ -188,58 +219,16 @@ contract DeployBridge is Script {
         vm.stopBroadcast();
         if (signer != config.deployer) revert DeployerMismatch(config.deployer, signer);
 
-        (uint256 forkA, uint8[] memory decimalsA) = _inspectChain(config.chainA, config.deployer, config.tokensA);
-        (uint256 forkB, uint8[] memory decimalsB) = _inspectChain(config.chainB, config.deployer, config.tokensB);
+        uint256 forkA = _inspectChain(config.chainA, config.deployer);
+        uint256 forkB = _inspectChain(config.chainB, config.deployer);
         logPlan(config, plan);
 
-        (ChainDeployment memory deploymentA, ChainDeployment memory deploymentB) =
-            _deployments(config, plan, decimalsA, decimalsB);
+        (ChainDeployment memory deploymentA, ChainDeployment memory deploymentB) = buildDeployments(config, plan);
 
         vm.selectFork(forkA);
         deployChain(deploymentA);
         vm.selectFork(forkB);
         deployChain(deploymentB);
-    }
-
-    /// @dev Joins the configuration, the plan and the remote decimals into the deployment of each chain. A separate
-    /// function keeps `run` within the stack limit.
-    function _deployments(BridgeConfig memory config, Plan memory plan, uint8[] memory decimalsA, uint8[] memory decimalsB)
-        private
-        pure
-        returns (ChainDeployment memory deploymentA, ChainDeployment memory deploymentB)
-    {
-        deploymentA = withPairs(
-            baseDeployment(
-                config.chainA,
-                config.chainB.chainId,
-                config.deployer,
-                plan.lightClientA,
-                plan.gateA,
-                plan.vaultA,
-                plan.vaultB,
-                plan.lightClientB
-            ),
-            config.tokensA,
-            config.tokensB,
-            decimalsB
-        );
-        deploymentA = withRegistry(deploymentA, plan.observedLightClientA, plan.registryA);
-        deploymentB = withPairs(
-            baseDeployment(
-                config.chainB,
-                config.chainA.chainId,
-                config.deployer,
-                plan.lightClientB,
-                plan.gateB,
-                plan.vaultB,
-                plan.vaultA,
-                plan.lightClientA
-            ),
-            config.tokensB,
-            config.tokensA,
-            decimalsA
-        );
-        deploymentB = withRegistry(deploymentB, plan.observedLightClientB, plan.registryB);
     }
 
     // ------------------------------------------------------------------ configuration
@@ -255,185 +244,128 @@ contract DeployBridge is Script {
         _requireLightClientClockMatchesOtherGate(config.chainB, config.chainA);
         _requireObservationMatchesOtherChain(config.chainA, config.chainB);
         _requireObservationMatchesOtherChain(config.chainB, config.chainA);
-
-        uint256 pairCount = _arrayLength(json, ".tokenPairs");
-        if (pairCount == 0) revert NoTokenPairsConfigured();
-        config.tokensA = new address[](pairCount);
-        config.tokensB = new address[](pairCount);
-        for (uint256 i = 0; i < pairCount; i++) {
-            string memory pair = string.concat(".tokenPairs[", vm.toString(i), "]");
-            config.tokensA[i] = _toAddress(_readText(json, string.concat(pair, ".chainA")), ".tokenPairs.chainA");
-            config.tokensB[i] = _toAddress(_readText(json, string.concat(pair, ".chainB")), ".tokenPairs.chainB");
-        }
     }
 
     /// @notice Predicts every address from the deployer nonces. Nothing deploys here.
     /// @param config The validated configuration.
     function predictAddresses(BridgeConfig memory config) public pure returns (Plan memory plan) {
-        (plan.lightClientA, plan.observedLightClientA, plan.registryA, plan.gateA, plan.vaultA) =
-            _predictChain(config.deployer, config.chainA);
-        (plan.lightClientB, plan.observedLightClientB, plan.registryB, plan.gateB, plan.vaultB) =
-            _predictChain(config.deployer, config.chainB);
+        plan.chainA = _predictChain(config.deployer, config.chainA);
+        plan.chainB = _predictChain(config.deployer, config.chainB);
     }
 
-    /// @notice Prints the plan.
+    /// @notice Prints the plan. A chain without a native coin router gets a loud warning.
     /// @param config The validated configuration.
     /// @param plan The predicted addresses.
     function logPlan(BridgeConfig memory config, Plan memory plan) public pure {
         console2.log("deployer", config.deployer);
-        console2.log("chain A", config.chainA.chainId, config.chainA.rpcAlias);
-        console2.log("  nonce", config.chainA.deployerNonce);
-        console2.log("  light client", plan.lightClientA);
-        console2.log("  own-chain light client", plan.observedLightClientA);
-        console2.log("  fork registry", plan.registryA);
-        console2.log("  deposit gate", plan.gateA);
-        console2.log("  vault", plan.vaultA);
-        console2.log("chain B", config.chainB.chainId, config.chainB.rpcAlias);
-        console2.log("  nonce", config.chainB.deployerNonce);
-        console2.log("  light client", plan.lightClientB);
-        console2.log("  own-chain light client", plan.observedLightClientB);
-        console2.log("  fork registry", plan.registryB);
-        console2.log("  deposit gate", plan.gateB);
-        console2.log("  vault", plan.vaultB);
-        console2.log("token pairs", config.tokensA.length);
+        _logChain("chain A", config.chainA, plan.chainA);
+        _logChain("chain B", config.chainB, plan.chainB);
     }
 
-    /// @notice Joins the configuration of one chain with the plan. The token pairs stay empty.
-    /// @param chain The settings of the chain.
-    /// @param remoteChainId The identifier of the other chain.
-    /// @param deployer The deployer.
-    /// @param lightClient The predicted light client address on this chain.
-    /// @param gate The predicted deposit gate address on this chain.
-    /// @param vault The predicted vault address on this chain.
-    /// @param remoteVault The predicted vault address on the other chain.
-    /// @param remoteLightClient The predicted light client address on the other chain. The vault reads it to open deposits.
-    /// @dev The predicted own-chain light client and registry are zero here. Set them with `withRegistry`.
-    function baseDeployment(
-        ChainConfig memory chain,
-        uint64 remoteChainId,
-        address deployer,
-        address lightClient,
-        address gate,
-        address vault,
-        address remoteVault,
-        address remoteLightClient
-    ) public pure returns (ChainDeployment memory deployment) {
-        deployment.chain = chain;
-        deployment.deployer = deployer;
-        deployment.predictedLightClient = lightClient;
-        deployment.predictedGate = gate;
-        deployment.predictedVault = vault;
-        deployment.remoteChainId = remoteChainId;
-        deployment.remoteVault = remoteVault;
-        deployment.remoteLightClient = remoteLightClient;
-        deployment.pairs = new BridgeVault.TokenPair[](0);
-    }
-
-    /// @notice Adds the predicted own-chain light client and registry to a deployment.
-    /// @param deployment The deployment.
-    /// @param observedLightClient The predicted own-chain light client, or zero.
-    /// @param registry The predicted fork registry, or zero.
-    function withRegistry(ChainDeployment memory deployment, address observedLightClient, address registry)
+    /// @notice Joins the configuration and the plan into the deployment of each chain. Each side names the bridge, the
+    /// mediator and the light client of the other side.
+    /// @param config The validated configuration.
+    /// @param plan The predicted addresses.
+    function buildDeployments(BridgeConfig memory config, Plan memory plan)
         public
         pure
-        returns (ChainDeployment memory)
+        returns (ChainDeployment memory deploymentA, ChainDeployment memory deploymentB)
     {
-        deployment.predictedObservedLightClient = observedLightClient;
-        deployment.predictedRegistry = registry;
-        return deployment;
-    }
-
-    /// @notice Adds the token pairs to a deployment.
-    /// @param deployment The deployment without pairs.
-    /// @param localTokens The tokens on this chain.
-    /// @param remoteTokens The same assets on the other chain.
-    /// @param remoteDecimals The decimals of the remote tokens, read from the other chain.
-    function withPairs(
-        ChainDeployment memory deployment,
-        address[] memory localTokens,
-        address[] memory remoteTokens,
-        uint8[] memory remoteDecimals
-    ) public pure returns (ChainDeployment memory) {
-        deployment.pairs = new BridgeVault.TokenPair[](localTokens.length);
-        for (uint256 i = 0; i < localTokens.length; i++) {
-            deployment.pairs[i] = BridgeVault.TokenPair({
-                localToken: localTokens[i],
-                remoteToken: remoteTokens[i],
-                remoteDecimals: remoteDecimals[i]
-            });
-        }
-        return deployment;
+        deploymentA = ChainDeployment({
+            chain: config.chainA,
+            deployer: config.deployer,
+            plan: plan.chainA,
+            remoteChainId: config.chainB.chainId,
+            remoteBridge: plan.chainB.bridge,
+            remoteMediator: plan.chainB.mediator,
+            remoteLightClient: plan.chainB.lightClient
+        });
+        deploymentB = ChainDeployment({
+            chain: config.chainB,
+            deployer: config.deployer,
+            plan: plan.chainB,
+            remoteChainId: config.chainA.chainId,
+            remoteBridge: plan.chainA.bridge,
+            remoteMediator: plan.chainA.mediator,
+            remoteLightClient: plan.chainA.lightClient
+        });
     }
 
     // ------------------------------------------------------------------ chain checks
 
     /// @notice Refuses to continue when the connected chain, the deployer nonce, the verifier or its pinned code hash,
-    /// the beacon roots contract of an enforcing gate, or a non-zero flow limiter is wrong. It runs before any broadcast.
+    /// the beacon roots contract of an enforcing gate, the wrapped native token, or a non-zero flow limiter is wrong.
+    /// It runs before any broadcast.
     /// @param chain The settings of the connected chain.
     /// @param deployer The deployer.
     function assertChainEnvironment(ChainConfig memory chain, address deployer) public view {
         if (block.chainid != chain.chainId) revert ChainIdMismatch(chain.chainId, block.chainid);
         uint256 nonce = vm.getNonce(deployer);
         if (nonce != chain.deployerNonce) revert DeployerNonceMismatch(chain.chainId, chain.deployerNonce, nonce);
-        if (chain.verifier.code.length == 0) revert VerifierHasNoCode(chain.chainId, chain.verifier);
-        if (chain.verifier.codehash != chain.verifierCodeHash) {
-            revert VerifierCodeHashMismatch(chain.chainId, chain.verifier, chain.verifierCodeHash, chain.verifier.codehash);
-        }
+        _requireVerifierPin(chain);
         if (chain.gate.mode == BeaconForkGate.GateMode.Enforcing && BEACON_ROOTS.code.length == 0) {
             revert BeaconRootsHaveNoCode(chain.chainId, BEACON_ROOTS);
         }
         if (chain.flowLimiter != address(0) && chain.flowLimiter.code.length == 0) {
             revert FlowLimiterHasNoCode(chain.chainId, chain.flowLimiter);
         }
+        if (chain.wrappedNative != address(0) && chain.wrappedNative.code.length == 0) {
+            revert WrappedNativeHasNoCode(chain.chainId, chain.wrappedNative);
+        }
     }
 
     // ------------------------------------------------------------------ deployment
 
-    /// @notice Deploys the light client, the deposit gate and the vault from the deployer, then reads everything back.
-    /// @dev The caller selects the right fork first. The light client takes nonce `n`, the gate `n + 1`, the vault `n + 2`.
+    /// @notice Deploys every contract of one chain from the deployer in the order of the table above, then reads
+    /// everything back.
+    /// @dev The caller selects the right fork first.
     /// @param deployment The deployment of one chain.
-    /// @return lightClient The deployed light client.
-    /// @return gate The deployed deposit gate.
-    /// @return vault The deployed vault.
-    function deployChain(ChainDeployment memory deployment)
-        public
-        returns (address lightClient, address gate, address vault)
-    {
+    /// @return deployed The addresses of the deployed contracts. The mediator creates the factory, and the script reads
+    /// its address from the mediator.
+    function deployChain(ChainDeployment memory deployment) public returns (ChainAddresses memory deployed) {
         assertChainEnvironment(deployment.chain, deployment.deployer);
+        ChainConfig memory chain = deployment.chain;
 
         vm.startBroadcast(deployment.deployer);
-        lightClient = _deployLightClient(deployment.chain);
-        address registry;
-        address observedLightClient;
-        if (deployment.chain.gate.mode == BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry) {
-            observedLightClient = _deployObservedLightClient(deployment.chain);
-            registry = _deployRegistry(deployment.chain, observedLightClient);
+        deployed.lightClient = _deployLightClient(chain);
+        if (_hasRegistry(chain)) {
+            deployed.observedLightClient = _deployObservedLightClient(chain);
+            deployed.registry = _deployRegistry(chain, deployed.observedLightClient);
         }
-        gate = _deployGate(deployment.chain.gate, registry);
-        vault = _deployVault(deployment, lightClient, gate);
+        deployed.gate = _deployGate(chain.gate, deployed.registry);
+        deployed.bridge = _deployBridge(deployment, deployed.lightClient, deployed.gate);
+        deployed.mediator = _deployMediator(deployment, deployed.bridge);
+        deployed.factory = address(TokenMediator(deployed.mediator).tokenFactory());
+        if (chain.wrappedNative != address(0)) {
+            deployed.wrappedRouter = _deployWrappedRouter(deployed.mediator, chain.wrappedNative);
+        }
+        if (chain.feeRouter == RouterChoice.Deploy) {
+            deployed.feeRouter = _deployFeeRouter(deployed.mediator, chain.wrappedNative);
+        }
         vm.stopBroadcast();
 
-        verifyDeployment(deployment, lightClient, gate, vault);
-        verifyRegistry(deployment, gate);
+        verifyDeployment(deployment, deployed);
+        verifyRegistry(deployment, deployed.gate);
     }
 
     /// @notice Reads every immutable back and compares it with the configuration and the prediction.
     /// @param deployment The deployment of one chain.
-    /// @param lightClient The deployed light client.
-    /// @param gate The deployed deposit gate.
-    /// @param vault The deployed vault.
-    function verifyDeployment(ChainDeployment memory deployment, address lightClient, address gate, address vault)
-        public
-        view
-    {
-        if (lightClient != deployment.predictedLightClient) {
-            revert AddressNotAsPredicted("lightClient", deployment.predictedLightClient, lightClient);
-        }
-        if (gate != deployment.predictedGate) revert AddressNotAsPredicted("gate", deployment.predictedGate, gate);
-        if (vault != deployment.predictedVault) revert AddressNotAsPredicted("vault", deployment.predictedVault, vault);
-        _verifyLightClient(deployment.chain, lightClient);
-        _verifyGate(deployment.chain.gate, gate);
-        _verifyVault(deployment, lightClient, gate, vault);
+    /// @param deployed The deployed addresses.
+    function verifyDeployment(ChainDeployment memory deployment, ChainAddresses memory deployed) public view {
+        ChainAddresses memory plan = deployment.plan;
+        _requireAsPredicted("lightClient", plan.lightClient, deployed.lightClient);
+        _requireAsPredicted("gate", plan.gate, deployed.gate);
+        _requireAsPredicted("bridge", plan.bridge, deployed.bridge);
+        _requireAsPredicted("mediator", plan.mediator, deployed.mediator);
+        _requireAsPredicted("factory", plan.factory, deployed.factory);
+        _requireAsPredicted("wrappedRouter", plan.wrappedRouter, deployed.wrappedRouter);
+        _requireAsPredicted("feeRouter", plan.feeRouter, deployed.feeRouter);
+        _requireVerifierPin(deployment.chain);
+        _verifyLightClient(deployment.chain, deployed.lightClient);
+        _verifyGate(deployment.chain.gate, deployed.gate);
+        _verifyBridge(deployment, deployed);
+        _verifyMediator(deployment, deployed);
+        _verifyRouters(deployment.chain, deployed);
     }
 
     /// @notice Reads back the fork registry and the own-chain light client behind the gate. In other modes it checks
@@ -447,14 +379,10 @@ contract DeployBridge is Script {
             return;
         }
         ObservationConfig memory own = deployment.chain.observation;
-        if (registry != deployment.predictedRegistry) {
-            revert AddressNotAsPredicted("forkRegistry", deployment.predictedRegistry, registry);
-        }
+        _requireAsPredicted("forkRegistry", deployment.plan.registry, registry);
         ForkRegistry deployedRegistry = ForkRegistry(registry);
         address client = address(deployedRegistry.lightClient());
-        if (client != deployment.predictedObservedLightClient) {
-            revert AddressNotAsPredicted("observedLightClient", deployment.predictedObservedLightClient, client);
-        }
+        _requireAsPredicted("observedLightClient", deployment.plan.observedLightClient, client);
         if (address(deployedRegistry.verifier()) != deployment.chain.verifier) {
             revert DeploymentMismatch("registry.verifier");
         }
@@ -484,20 +412,54 @@ contract DeployBridge is Script {
 
     // ------------------------------------------------------------------ internals
 
-    /// @dev Light client at `n`; with a registry: own light client `n + 1`, registry `n + 2`; then gate and vault.
-    function _predictChain(address deployer, ChainConfig memory chain)
-        private
-        pure
-        returns (address lightClient, address observedLightClient, address registry, address gate, address vault)
-    {
+    /// @dev Follows the table in the contract comment. The factory takes no deployer nonce: the mediator creates it.
+    /// A router that the chain does not get stays zero and takes no nonce.
+    function _predictChain(address deployer, ChainConfig memory chain) private pure returns (ChainAddresses memory plan) {
         uint256 nonce = chain.deployerNonce;
-        lightClient = vm.computeCreateAddress(deployer, nonce++);
-        if (chain.gate.mode == BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry) {
-            observedLightClient = vm.computeCreateAddress(deployer, nonce++);
-            registry = vm.computeCreateAddress(deployer, nonce++);
+        plan.lightClient = vm.computeCreateAddress(deployer, nonce++);
+        if (_hasRegistry(chain)) {
+            plan.observedLightClient = vm.computeCreateAddress(deployer, nonce++);
+            plan.registry = vm.computeCreateAddress(deployer, nonce++);
         }
-        gate = vm.computeCreateAddress(deployer, nonce++);
-        vault = vm.computeCreateAddress(deployer, nonce);
+        plan.gate = vm.computeCreateAddress(deployer, nonce++);
+        plan.bridge = vm.computeCreateAddress(deployer, nonce++);
+        plan.mediator = vm.computeCreateAddress(deployer, nonce++);
+        plan.factory = vm.computeCreateAddress(plan.mediator, 1);
+        if (chain.wrappedNative != address(0)) plan.wrappedRouter = vm.computeCreateAddress(deployer, nonce++);
+        if (chain.feeRouter == RouterChoice.Deploy) plan.feeRouter = vm.computeCreateAddress(deployer, nonce);
+    }
+
+    /// @dev A chain whose gate runs in `DetectBeaconRootsAndRegistry` mode gets an own-chain light client and a registry.
+    function _hasRegistry(ChainConfig memory chain) private pure returns (bool) {
+        return chain.gate.mode == BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry;
+    }
+
+    function _logChain(string memory label, ChainConfig memory chain, ChainAddresses memory plan) private pure {
+        console2.log(label, chain.chainId, chain.rpcAlias);
+        console2.log("  nonce", chain.deployerNonce);
+        console2.log("  light client", plan.lightClient);
+        console2.log("  own-chain light client", plan.observedLightClient);
+        console2.log("  fork registry", plan.registry);
+        console2.log("  deposit gate", plan.gate);
+        console2.log("  message bridge", plan.bridge);
+        console2.log("  token mediator", plan.mediator);
+        console2.log("  token factory", plan.factory);
+        console2.log("  native coin router", plan.wrappedRouter);
+        console2.log("  fee router", plan.feeRouter);
+        if (chain.wrappedNative != address(0)) return;
+        console2.log("  WARNING: no wrapped native token is configured. This chain gets no native coin router.");
+    }
+
+    function _requireAsPredicted(string memory name, address predicted, address actual) private pure {
+        if (predicted != actual) revert AddressNotAsPredicted(name, predicted, actual);
+    }
+
+    /// @dev The verifier must hold code, and the code must be the pinned code.
+    function _requireVerifierPin(ChainConfig memory chain) private view {
+        if (chain.verifier.code.length == 0) revert VerifierHasNoCode(chain.chainId, chain.verifier);
+        if (chain.verifier.codehash != chain.verifierCodeHash) {
+            revert VerifierCodeHashMismatch(chain.chainId, chain.verifier, chain.verifierCodeHash, chain.verifier.codehash);
+        }
     }
 
     function _deployLightClient(ChainConfig memory chain) private returns (address) {
@@ -554,26 +516,19 @@ contract DeployBridge is Script {
         );
     }
 
-    function _deployVault(ChainDeployment memory deployment, address lightClient, address gate)
+    function _deployBridge(ChainDeployment memory deployment, address lightClient, address gate)
         private
         returns (address)
     {
         ChainConfig memory chain = deployment.chain;
         return address(
-            new BridgeVault(
+            new MessageBridge(
                 lightClient,
                 chain.chainId,
                 deployment.remoteChainId,
-                deployment.remoteVault,
-                deployment.pairs,
-                BridgeVault.VaultTerms({
-                    cutoffTimestamp: chain.depositCutoffTimestamp,
-                    feeAuthority: chain.fee.authority,
-                    feeRecipient: chain.fee.recipient,
-                    feeBasisPoints: chain.fee.basisPoints,
-                    feeCeilingBasisPoints: chain.fee.ceilingBasisPoints,
-                    flowLimiter: chain.flowLimiter,
-                    remoteLightClient: deployment.remoteLightClient
+                deployment.remoteBridge,
+                MessageBridge.BridgeTerms({
+                    cutoffTimestamp: chain.depositCutoffTimestamp, remoteLightClient: deployment.remoteLightClient
                 }),
                 chain.lightClient.capellaEra,
                 gate
@@ -581,8 +536,33 @@ contract DeployBridge is Script {
         );
     }
 
-    function _verifyLightClient(ChainConfig memory chain, address lightClient) private view {
+    function _deployMediator(ChainDeployment memory deployment, address bridge) private returns (address) {
+        ChainConfig memory chain = deployment.chain;
+        return address(
+            new TokenMediator(
+                TokenMediator.MediatorTerms({
+                    bridge: bridge,
+                    remoteMediator: deployment.remoteMediator,
+                    remoteChainId: deployment.remoteChainId,
+                    feeAuthority: chain.fee.authority,
+                    feeRecipient: chain.fee.recipient,
+                    feeBasisPoints: chain.fee.basisPoints,
+                    feeCeilingBasisPoints: chain.fee.ceilingBasisPoints,
+                    flowLimiter: chain.flowLimiter
+                })
+            )
+        );
+    }
 
+    function _deployWrappedRouter(address mediator, address wrappedNative) private returns (address) {
+        return address(new WETHOmnibridgeRouter(ITokenMediator(mediator), IWETH(wrappedNative)));
+    }
+
+    function _deployFeeRouter(address mediator, address wrappedNative) private returns (address) {
+        return address(new FeeRouter(ITokenMediator(mediator), IWETH(wrappedNative)));
+    }
+
+    function _verifyLightClient(ChainConfig memory chain, address lightClient) private view {
         BeaconLightClient client = BeaconLightClient(lightClient);
         if (address(client.verifier()) != chain.verifier) revert DeploymentMismatch("lightClient.verifier");
         if (client.programVKey() != chain.lightClient.programVKey) revert DeploymentMismatch("lightClient.programVKey");
@@ -637,57 +617,69 @@ contract DeployBridge is Script {
         }
     }
 
-    function _verifyVault(ChainDeployment memory deployment, address lightClient, address gate, address vault)
-        private
-        view
-    {
+    function _verifyBridge(ChainDeployment memory deployment, ChainAddresses memory deployed) private view {
         ChainConfig memory chain = deployment.chain;
-        BridgeVault bridgeVault = BridgeVault(vault);
-        if (address(bridgeVault.lightClient()) != lightClient) revert DeploymentMismatch("vault.lightClient");
-        if (bridgeVault.localChainId() != chain.chainId) revert DeploymentMismatch("vault.localChainId");
-        if (bridgeVault.remoteChainId() != deployment.remoteChainId) revert DeploymentMismatch("vault.remoteChainId");
-        if (bridgeVault.remoteVault() != deployment.remoteVault) revert DeploymentMismatch("vault.remoteVault");
-        if (bridgeVault.remoteLightClient() != deployment.remoteLightClient) {
-            revert DeploymentMismatch("vault.remoteLightClient");
+        MessageBridge bridge = MessageBridge(deployed.bridge);
+        if (address(bridge.lightClient()) != deployed.lightClient) revert DeploymentMismatch("bridge.lightClient");
+        if (bridge.localChainId() != chain.chainId) revert DeploymentMismatch("bridge.localChainId");
+        if (bridge.remoteChainId() != deployment.remoteChainId) revert DeploymentMismatch("bridge.remoteChainId");
+        if (bridge.remoteBridge() != deployment.remoteBridge) revert DeploymentMismatch("bridge.remoteBridge");
+        if (bridge.remoteLightClient() != deployment.remoteLightClient) {
+            revert DeploymentMismatch("bridge.remoteLightClient");
         }
-        if (bridgeVault.depositsOpen()) revert DeploymentMismatch("vault.depositsOpen must start false");
-        if (bridgeVault.depositCutoffTimestamp() != chain.depositCutoffTimestamp) {
-            revert DeploymentMismatch("vault.depositCutoffTimestamp");
+        if (bridge.depositsOpen()) revert DeploymentMismatch("bridge.depositsOpen must start false");
+        if (bridge.sendCutoffTimestamp() != chain.depositCutoffTimestamp) {
+            revert DeploymentMismatch("bridge.sendCutoffTimestamp");
         }
-        if (bridgeVault.capellaEra() != chain.lightClient.capellaEra) revert DeploymentMismatch("vault.capellaEra");
-        if (address(bridgeVault.depositGate()) != gate) revert DeploymentMismatch("vault.depositGate");
-        if (bridgeVault.feeAuthority() != chain.fee.authority) revert DeploymentMismatch("vault.feeAuthority");
-        if (bridgeVault.feeRecipient() != chain.fee.recipient) revert DeploymentMismatch("vault.feeRecipient");
-        if (bridgeVault.feeBasisPoints() != chain.fee.basisPoints) revert DeploymentMismatch("vault.feeBasisPoints");
-        if (bridgeVault.feeCeilingBasisPoints() != chain.fee.ceilingBasisPoints) {
-            revert DeploymentMismatch("vault.feeCeilingBasisPoints");
-        }
-        if (address(bridgeVault.flowLimiter()) != chain.flowLimiter) revert DeploymentMismatch("vault.flowLimiter");
+        if (bridge.capellaEra() != chain.lightClient.capellaEra) revert DeploymentMismatch("bridge.capellaEra");
+        if (address(bridge.depositGate()) != deployed.gate) revert DeploymentMismatch("bridge.depositGate");
         if (
-            bridgeVault.stateLayouts().length != 0 || bridgeVault.bodyLayouts().length != 0
-                || bridgeVault.historicalLayouts().length != 0
+            bridge.stateLayouts().length != 0 || bridge.bodyLayouts().length != 0
+                || bridge.historicalLayouts().length != 0
         ) {
-            revert DeploymentMismatch("vault.layouts must start empty");
-        }
-        for (uint256 i = 0; i < deployment.pairs.length; i++) {
-            BridgeVault.TokenPair memory pair = deployment.pairs[i];
-            if (bridgeVault.remoteTokenOf(pair.localToken) != pair.remoteToken) revert DeploymentMismatch("vault.remoteTokenOf");
-            if (bridgeVault.localTokenOf(pair.remoteToken) != pair.localToken) revert DeploymentMismatch("vault.localTokenOf");
+            revert DeploymentMismatch("bridge.layouts must start empty");
         }
     }
 
-    /// @dev Connects to the chain, runs the checks, and reads the decimals of the tokens on that chain.
-    function _inspectChain(ChainConfig memory chain, address deployer, address[] memory tokens)
-        private
-        returns (uint256 forkId, uint8[] memory decimals)
-    {
+    function _verifyMediator(ChainDeployment memory deployment, ChainAddresses memory deployed) private view {
+        ChainConfig memory chain = deployment.chain;
+        TokenMediator mediator = TokenMediator(deployed.mediator);
+        if (address(mediator.bridgeContract()) != deployed.bridge) revert DeploymentMismatch("mediator.bridgeContract");
+        if (mediator.mediatorContractOnOtherSide() != deployment.remoteMediator) {
+            revert DeploymentMismatch("mediator.mediatorContractOnOtherSide");
+        }
+        if (mediator.remoteChainId() != deployment.remoteChainId) revert DeploymentMismatch("mediator.remoteChainId");
+        if (address(mediator.tokenFactory()) != deployed.factory) revert DeploymentMismatch("mediator.tokenFactory");
+        if (TokenFactory(deployed.factory).mediator() != deployed.mediator) {
+            revert DeploymentMismatch("factory.mediator");
+        }
+        if (mediator.feeAuthority() != chain.fee.authority) revert DeploymentMismatch("mediator.feeAuthority");
+        if (mediator.feeRecipient() != chain.fee.recipient) revert DeploymentMismatch("mediator.feeRecipient");
+        if (mediator.feeBasisPoints() != chain.fee.basisPoints) revert DeploymentMismatch("mediator.feeBasisPoints");
+        if (mediator.feeCeilingBasisPoints() != chain.fee.ceilingBasisPoints) {
+            revert DeploymentMismatch("mediator.feeCeilingBasisPoints");
+        }
+        if (address(mediator.flowLimiter()) != chain.flowLimiter) revert DeploymentMismatch("mediator.flowLimiter");
+    }
+
+    /// @dev A router that the chain does not get has the zero address, and the prediction check has compared that.
+    function _verifyRouters(ChainConfig memory chain, ChainAddresses memory deployed) private view {
+        if (deployed.wrappedRouter != address(0)) {
+            WETHOmnibridgeRouter router = WETHOmnibridgeRouter(payable(deployed.wrappedRouter));
+            if (address(router.bridge()) != deployed.mediator) revert DeploymentMismatch("wrappedRouter.mediator");
+            if (address(router.WETH()) != chain.wrappedNative) revert DeploymentMismatch("wrappedRouter.wrappedNative");
+        }
+        if (deployed.feeRouter != address(0)) {
+            FeeRouter router = FeeRouter(payable(deployed.feeRouter));
+            if (address(router.bridge()) != deployed.mediator) revert DeploymentMismatch("feeRouter.mediator");
+            if (address(router.wNative()) != chain.wrappedNative) revert DeploymentMismatch("feeRouter.wrappedNative");
+        }
+    }
+
+    /// @dev Connects to the chain and runs the checks.
+    function _inspectChain(ChainConfig memory chain, address deployer) private returns (uint256 forkId) {
         forkId = vm.createSelectFork(chain.rpcAlias);
         assertChainEnvironment(chain, deployer);
-        decimals = new uint8[](tokens.length);
-        for (uint256 i = 0; i < tokens.length; i++) {
-            if (tokens[i].code.length == 0) revert TokenHasNoCode(chain.chainId, tokens[i]);
-            decimals[i] = IERC20Metadata(tokens[i]).decimals();
-        }
     }
 
     function _readChain(string memory json, string memory prefix) private view returns (ChainConfig memory chain) {
@@ -699,6 +691,11 @@ contract DeployBridge is Script {
         chain.depositCutoffTimestamp = uint64(_readUint(json, string.concat(prefix, ".depositCutoffTimestamp")));
         chain.fee = _readFee(json, string.concat(prefix, ".fee"));
         chain.flowLimiter = vm.parseAddress(_readText(json, string.concat(prefix, ".flowLimiter")));
+        chain.wrappedNative = _readOptionalAddress(json, string.concat(prefix, ".wrappedNative"));
+        chain.feeRouter = _readRouterChoice(json, string.concat(prefix, ".deployFeeRouter"));
+        if (chain.feeRouter == RouterChoice.Deploy && chain.wrappedNative == address(0)) {
+            revert FeeRouterNeedsWrappedNative(chain.chainId);
+        }
         string memory client = string.concat(prefix, ".lightClient");
         chain.lightClient.programVKey = _readBytes32(json, string.concat(client, ".programVKey"));
         chain.lightClient.genesisValidatorsRoot = _readBytes32(json, string.concat(client, ".genesisValidatorsRoot"));
@@ -853,6 +850,22 @@ contract DeployBridge is Script {
         if (_isPlaceholder(text)) revert PlaceholderValue(key);
         value = vm.parseAddress(text);
         if (value == address(0)) revert ZeroConfigValue(key);
+    }
+
+    /// @dev A key that is absent or zero means the chain has none. A placeholder is still refused.
+    function _readOptionalAddress(string memory json, string memory key) private view returns (address) {
+        if (!vm.keyExistsJson(json, key)) return address(0);
+        return vm.parseAddress(_readText(json, key));
+    }
+
+    /// @dev The setting is the text `true` or `false`, like every value of the configuration. An absent key means
+    /// `false`.
+    function _readRouterChoice(string memory json, string memory key) private view returns (RouterChoice) {
+        if (!vm.keyExistsJson(json, key)) return RouterChoice.Skip;
+        string memory text = _readText(json, key);
+        if (keccak256(bytes(text)) == keccak256("true")) return RouterChoice.Deploy;
+        if (keccak256(bytes(text)) == keccak256("false")) return RouterChoice.Skip;
+        revert UnknownFeeRouterSetting(text);
     }
 
     function _readBytes32(string memory json, string memory key) private pure returns (bytes32 value) {

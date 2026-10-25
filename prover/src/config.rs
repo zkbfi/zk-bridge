@@ -9,7 +9,7 @@
 //! - `[prover]`: the proving backend. The `prove` command needs it.
 //! - `[handoff]`: where the `prove` command puts its result. Standard output is the default.
 //! - `[routes.<name>]`: one direction between two chains. A route names the source beacon API and the destination light
-//!   client. The `evidence` command also reads the execution endpoints and the two vaults of the route.
+//!   client. The `evidence` command also reads the execution endpoints and the two bridges of the route.
 //!
 //! Environment overrides: `ZK_BRIDGE_PROVER_<PATH>` where `<PATH>` is the key path in capitals, with `_` for `.`.
 //! For example `ZK_BRIDGE_PROVER_PROVER_REMOTE_URL`. Only the keys of `[prover]` and `[handoff]` can be overridden,
@@ -200,7 +200,7 @@ fn default_webhook_retry_delay_seconds() -> u64 {
     5
 }
 
-/// The source side of a route: the chain where deposits happen and whose beacon chain the light client tracks.
+/// The source side of a route: the chain where messages are sent and whose beacon chain the light client tracks.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceConfig {
@@ -213,9 +213,9 @@ pub struct SourceConfig {
     /// The execution RPC URL of the source chain. The `evidence` command needs it.
     #[serde(default)]
     pub rpc_url: Option<String>,
-    /// The `BridgeVault` on the source chain. The `evidence` command needs it.
+    /// The `MessageBridge` on the source chain. The `evidence` command needs it.
     #[serde(default)]
-    pub vault: Option<String>,
+    pub bridge: Option<String>,
 }
 
 /// The destination side of a route: the chain with the light client that the proofs update.
@@ -224,13 +224,13 @@ pub struct SourceConfig {
 pub struct DestinationConfig {
     /// The chain identifier of the destination chain. The commands check it against `eth_chainId`.
     pub chain_id: u64,
-    /// The execution RPC URL of the destination chain. The commands read the light client and the vault with it.
+    /// The execution RPC URL of the destination chain. The commands read the light client and the bridge with it.
     pub rpc_url: String,
     /// The `BeaconLightClient` on the destination chain. It tracks the beacon chain of the source.
     pub light_client: String,
-    /// The `BridgeVault` on the destination chain. The `evidence` command needs it.
+    /// The `MessageBridge` on the destination chain. The `evidence` command needs it.
     #[serde(default)]
-    pub vault: Option<String>,
+    pub bridge: Option<String>,
     /// The block where the light client was deployed. The scan for stored heads starts here. Default 0.
     #[serde(default)]
     pub start_block: u64,
@@ -243,7 +243,7 @@ fn default_log_range() -> u64 {
     2_000
 }
 
-/// One direction: deposits on the source chain, withdrawals on the destination chain.
+/// One direction: messages are sent on the source chain and delivered on the destination chain.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouteConfig {
@@ -295,11 +295,11 @@ impl SourceConfig {
         require_present(&self.rpc_url, "source.rpc_url")
     }
 
-    /// The vault address, for a command that reads the deposit.
-    pub fn vault_address(&self) -> Result<Address> {
+    /// The bridge address, for a command that reads the message.
+    pub fn bridge_address(&self) -> Result<Address> {
         parse_address(
-            require_present(&self.vault, "source.vault")?,
-            "source.vault",
+            require_present(&self.bridge, "source.bridge")?,
+            "source.bridge",
         )
     }
 }
@@ -310,11 +310,11 @@ impl DestinationConfig {
         parse_address(&self.light_client, "destination.light_client")
     }
 
-    /// The vault address, for a command that builds a withdrawal.
-    pub fn vault_address(&self) -> Result<Address> {
+    /// The bridge address, for a command that builds a message proof.
+    pub fn bridge_address(&self) -> Result<Address> {
         parse_address(
-            require_present(&self.vault, "destination.vault")?,
-            "destination.vault",
+            require_present(&self.bridge, "destination.bridge")?,
+            "destination.bridge",
         )
     }
 }
@@ -604,21 +604,21 @@ fn validate_route(name: &str, route: &RouteConfig) -> Result<()> {
     let light_client = destination
         .light_client_address()
         .map_err(|error| context(error.to_string()))?;
-    let vaults = [
+    let bridges = [
         source
-            .vault
+            .bridge
             .as_deref()
-            .map(|text| parse_address(text, "source.vault")),
+            .map(|text| parse_address(text, "source.bridge")),
         destination
-            .vault
+            .bridge
             .as_deref()
-            .map(|text| parse_address(text, "destination.vault")),
+            .map(|text| parse_address(text, "destination.bridge")),
     ];
-    for vault in vaults.into_iter().flatten() {
-        let vault = vault.map_err(|error| context(error.to_string()))?;
-        if vault == light_client {
+    for bridge in bridges.into_iter().flatten() {
+        let bridge = bridge.map_err(|error| context(error.to_string()))?;
+        if bridge == light_client {
             return Err(context(
-                "a vault and the destination light client are the same address".into(),
+                "a bridge and the destination light client are the same address".into(),
             ));
         }
     }
@@ -642,13 +642,13 @@ chain_id = 1
 chain = "ethereum"
 beacon_url = "https://beacon.example.org"
 rpc_url = "https://rpc.example.org"
-vault = "0x1111111111111111111111111111111111111111"
+bridge = "0x1111111111111111111111111111111111111111"
 
 [routes.ethereum_to_pulsechain.destination]
 chain_id = 369
 rpc_url = "http://127.0.0.1:8546"
 light_client = "0x4444444444444444444444444444444444444444"
-vault = "0x3333333333333333333333333333333333333333"
+bridge = "0x3333333333333333333333333333333333333333"
 "#;
 
 #[cfg(test)]
@@ -684,8 +684,8 @@ mod tests {
         );
         let (name, route) = config.route(None).unwrap();
         assert_eq!(name, "ethereum_to_pulsechain");
-        assert!(route.source.vault_address().is_ok());
-        assert!(route.destination.vault_address().is_ok());
+        assert!(route.source.bridge_address().is_ok());
+        assert!(route.destination.bridge_address().is_ok());
     }
 
     /// Claim: with two routes, a missing or unknown name is a usage error that lists the names.
@@ -782,19 +782,19 @@ light_client = \"0x2222222222222222222222222222222222222222\"
         }
     }
 
-    /// Claim: bad route values are refused with the route and the key named: a zero address, a vault
+    /// Claim: bad route values are refused with the route and the key named: a zero address, a bridge
     /// that equals the light client, an unknown chain, a URL without a scheme, and an unknown key.
     #[test]
     fn invalid_route_values_are_refused() {
         let cases = [
             (
-                "vault = \"0x3333333333333333333333333333333333333333\"",
-                "vault = \"0x0000000000000000000000000000000000000000\"",
+                "bridge = \"0x3333333333333333333333333333333333333333\"",
+                "bridge = \"0x0000000000000000000000000000000000000000\"",
                 "zero address",
             ),
             (
-                "vault = \"0x3333333333333333333333333333333333333333\"",
-                "vault = \"0x4444444444444444444444444444444444444444\"",
+                "bridge = \"0x3333333333333333333333333333333333333333\"",
+                "bridge = \"0x4444444444444444444444444444444444444444\"",
                 "same address",
             ),
             (

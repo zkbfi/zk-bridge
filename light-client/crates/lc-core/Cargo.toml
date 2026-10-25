@@ -1,6 +1,6 @@
 [package]
 name = "lc-core"
-description = "Light-client and withdrawal verification for the hardened bridge. The function bodies of the SP1 guest programs."
+description = "Light-client and message verification for the hardened bridge. The function bodies of the SP1 guest programs."
 edition.workspace = true
 version.workspace = true
 license.workspace = true

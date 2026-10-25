@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {console2} from "forge-std/console2.sol";
 import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
-import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
 import {GateSupport} from "./utils/GateSupport.sol";
 import {GateAlwaysAdmits} from "./utils/GateMocks.sol";
 
-/// @notice Gas of a vault deposit with the fork gate. Each number is measured with `gasleft()` around the call, with
+/// @notice Gas of a message bridge send with the fork gate. Each number is measured with `gasleft()` around the call, with
 /// the touched accounts cooled first (`vm.cool`) so storage and account reads are cold, as in a fresh transaction.
-/// The bounds are about 20 percent above the measurement, rounded up. The plain baseline is a deposit through a gate
+/// The bounds are about 20 percent above the measurement, rounded up. The plain baseline is a send through a gate
 /// that does nothing, so it already pays the cold external call into a gate (about 2,600 gas); the extra numbers are what
-/// the real gate adds on top of that call. Since the execution canaries, a deposit before the switch also makes four
+/// the real gate adds on top of that call. Since the execution canaries, a send before the switch also makes four
 /// calls to one probe contract (one cold account, three warm calls) and one call to the BLS12-381 address; the numbers
 /// below cool those accounts too.
 contract BeaconForkGateGasTest is GateSupport {
@@ -20,55 +19,59 @@ contract BeaconForkGateGasTest is GateSupport {
         _warpIntoEpoch(EPOCH_E, 3);
     }
 
-    /// @dev Cost of one deposit call as `alice`, from a fresh (cold) state of the touched accounts.
-    function _measuredDeposit(BridgeVault vault, address gateAddress, bytes memory evidence)
-        internal
-        returns (uint256 used)
-    {
-        tokenOnA.mint(alice, 1e18);
+    /// @dev Cost of one send as `alice`, from a fresh (cold) state of the touched accounts. The bridge gives the gate
+    /// empty evidence, so the epoch must be confirmed before this call when the gate enforces.
+    function _measuredSend(MessageBridge sender, address gateAddress) internal returns (uint256 used) {
+        address target = makeAddr("target");
         vm.chainId(CHAIN_A);
-        vm.prank(alice);
-        tokenOnA.approve(address(vault), 1e18);
-        vm.cool(address(vault));
+        vm.cool(address(sender));
         vm.cool(gateAddress);
-        vm.cool(address(tokenOnA));
         vm.cool(BEACON_ROOTS);
         vm.prank(alice);
         uint256 before_ = gasleft();
-        vault.deposit(address(tokenOnA), bob, 1e18, 0, evidence);
+        sender.requireToPassMessage(target, hex"c0ffee", 100_000);
         used = before_ - gasleft();
     }
 
-    /// @dev Cools the opcode probe contract and the BLS address, which the detection modes call on every deposit.
+    /// @dev Cost of one `confirm` call from a cold gate and a cold beacon roots contract.
+    function _measuredConfirm(BeaconForkGate target, bytes memory evidence) internal returns (uint256 used) {
+        vm.cool(address(target));
+        vm.cool(BEACON_ROOTS);
+        uint256 before_ = gasleft();
+        target.confirm(evidence);
+        used = before_ - gasleft();
+    }
+
+    /// @dev Cools the opcode probe contract and the BLS address, which the detection modes call on every send.
     function _coolCanaries(BeaconForkGate target) internal {
         vm.cool(target.opcodeProbe());
         vm.cool(address(0x0b));
     }
 
-    function _plainDepositGas() internal returns (uint256) {
-        BridgeVault plain = _vaultWithGate(address(new GateAlwaysAdmits()));
-        return _measuredDeposit(plain, address(plain.depositGate()), "");
+    function _plainSendGas() internal returns (uint256) {
+        address plainGate = address(new GateAlwaysAdmits());
+        return _measuredSend(_bridgeWithGate(plainGate), plainGate);
     }
 
-    /// Claim: before detection (detection mode, no beacon roots contract) a deposit costs the plain deposit plus the
+    /// Claim: a send in detection mode before detection (no beacon roots contract) costs the plain send plus the
     /// probe, about 2,600 gas by the design estimate. Shows: the numbers for plain, for the gate with no code at the
     /// address, and for the gate with the genuine code at the address and empty storage (which reverts inside the
-    /// probe, so it costs more). Matters: PulseChain depositors pay this on every deposit until EIP-4788 arrives.
-    function test_HB02_gas_depositBeforeDetection() public {
-        uint256 plain = _plainDepositGas();
+    /// probe, so it costs more). Matters: PulseChain senders pay this on every send until EIP-4788 arrives.
+    function test_HB02_gas_sendInDetectionModeBeforeDetection() public {
+        uint256 plain = _plainSendGas();
         vm.etch(BEACON_ROOTS, "");
         BeaconForkGate detecting = _newGate(BeaconForkGate.GateMode.DetectBeaconRoots);
         _coolCanaries(detecting);
-        uint256 withGate = _measuredDeposit(_vaultWithGate(address(detecting)), address(detecting), "");
+        uint256 withGate = _measuredSend(_bridgeWithGate(address(detecting)), address(detecting));
         _etchGenuine();
         BeaconForkGate detectingGenuine = _newGate(BeaconForkGate.GateMode.DetectBeaconRoots);
         _coolCanaries(detectingGenuine);
-        uint256 withGenuine = _measuredDeposit(_vaultWithGate(address(detectingGenuine)), address(detectingGenuine), "");
-        console2.log("plain deposit (always admit gate)", plain);
-        console2.log("deposit before detection, no code at the address", withGate);
-        console2.log("  extra over plain (probe plus the gate call)", withGate - plain);
-        console2.log("deposit before detection, genuine code with empty storage", withGenuine);
-        console2.log("  extra over plain", withGenuine - plain);
+        uint256 withGenuine = _measuredSend(_bridgeWithGate(address(detectingGenuine)), address(detectingGenuine));
+        emit log_named_uint("plain send (always admit gate)", plain);
+        emit log_named_uint("send in detection mode, no code at the address", withGate);
+        emit log_named_uint("  extra over plain (probe plus the gate call)", withGate - plain);
+        emit log_named_uint("send in detection mode, genuine code with empty storage", withGenuine);
+        emit log_named_uint("  extra over plain", withGenuine - plain);
         // Before the canaries the probe cost under 1,000 gas. The opcode probe adds one cold account access (2,600 gas), the BLS12-381
         // address adds another, and each of the four probe calls burns the forwarded gas of an invalid opcode: about
         // 10,000 gas more, bounded by the caps of the gate.
@@ -76,24 +79,24 @@ contract BeaconForkGateGasTest is GateSupport {
         assertLt(withGenuine - plain, 12_000, "the same with a reverting beacon roots contract");
     }
 
-    /// Claim: a deposit before the switch, with every canary account cold as in a fresh transaction, costs a bounded
-    /// amount over the plain deposit. Shows: the gas through the gate of the fixture (`gateB`, built in `setUp`, so
+    /// Claim: a send in detection mode, with every canary account cold as in a fresh transaction, costs a bounded
+    /// amount over the plain send. Shows: the gas through the gate of the fixture (`gateB`, built in `setUp`, so
     /// that `vm.cool` takes effect on its probes; a contract created inside the test stays warm). Matters: this is the
-    /// real price a PulseChain depositor pays on every deposit until a canary fires: the beacon roots probe, the
+    /// real price a PulseChain sender pays on every send until a canary fires: the beacon roots probe, the
     /// opcode probe contract (one cold access, then warm calls) and the BLS12-381 address (a cold access).
-    function test_HB02_gas_depositBeforeTheSwitchWithColdCanaries() public {
+    function test_HB02_gas_sendInDetectionModeWithColdCanaries() public {
         vm.etch(BEACON_ROOTS, "");
-        uint256 plain = _plainDepositGas();
+        uint256 plain = _plainSendGas();
         _coolCanaries(gateB);
-        uint256 withGate = _measuredDeposit(_vaultWithGate(address(gateB)), address(gateB), "");
-        console2.log("deposit before the switch, cold canaries", withGate);
-        console2.log("  extra over plain", withGate - plain);
+        uint256 withGate = _measuredSend(_bridgeWithGate(address(gateB)), address(gateB));
+        emit log_named_uint("send in detection mode, cold canaries", withGate);
+        emit log_named_uint("  extra over plain", withGate - plain);
         assertGt(withGate - plain, 7_000, "control: the cold accesses are real");
         assertLt(withGate - plain, 12_000, "bound");
     }
 
     /// Claim: the admit call alone, before detection, costs a small fixed amount. Shows: the gas of
-    /// `gate.admit("")` as an external call with a cold gate. Matters: it separates the gate from the vault work.
+    /// `gate.admit("")` as an external call with a cold gate. Matters: it separates the gate from the bridge work.
     function test_HB02_gas_admitOnlyBeforeDetection() public {
         vm.etch(BEACON_ROOTS, "");
         BeaconForkGate detecting = _newGate(BeaconForkGate.GateMode.DetectBeaconRoots);
@@ -103,42 +106,41 @@ contract BeaconForkGateGasTest is GateSupport {
         uint256 before_ = gasleft();
         detecting.admit("");
         uint256 used = before_ - gasleft();
-        console2.log("admit only, before detection", used);
+        emit log_named_uint("admit only, before detection", used);
         assertLt(used, 18_000);
     }
 
-    /// Claim: the second deposit in a confirmed epoch costs the plain deposit plus about 2,100 gas (one cold read of
-    /// the packed state slot, plus the call). Shows: the numbers. Matters: this is the common case on Ethereum.
-    function test_HB02_gas_depositInAConfirmedEpoch() public {
+    /// Claim: a send in a confirmed epoch costs the plain send plus about 3,000 gas (one cold read of the packed state
+    /// slot, plus the dispatch and the checks). Shows: the numbers. Matters: this is the common path on Ethereum, because only the first
+    /// sender of an epoch confirms.
+    function test_HB02_gas_sendInAConfirmedEpoch() public {
         _etchMock();
         BeaconForkGate gate = _newGate(BeaconForkGate.GateMode.Enforcing);
-        BridgeVault vault = _vaultWithGate(address(gate));
+        MessageBridge sender = _bridgeWithGate(address(gate));
         gate.confirm(_honestEvidence(block.timestamp, _slotIn(EPOCH_E, 2), 6, ELECTRA));
-        uint256 plain = _plainDepositGas();
-        uint256 used = _measuredDeposit(vault, address(gate), "");
-        console2.log("deposit in a confirmed epoch", used);
-        console2.log("  extra over plain", used - plain);
-        assertLt(used - plain, 1_100);
+        uint256 plain = _plainSendGas();
+        uint256 used = _measuredSend(sender, address(gate));
+        emit log_named_uint("send in a confirmed epoch", used);
+        emit log_named_uint("  extra over plain", used - plain);
+        assertGt(used - plain, 2_100, "control: the cold read of the state slot is real");
+        assertLt(used - plain, 3_700);
     }
 
-    /// Claim: the first deposit of an epoch with a proof costs the plain deposit plus 30,000 to 40,000 gas by the
-    /// design estimate. Shows: the numbers for a depth 6 state (Electra) and a depth 5 state (Deneb). Matters: this is
-    /// what the first depositor of each epoch pays.
-    function test_HB02_gas_firstDepositWithProof() public {
+    /// Claim: the `confirm` call of the first sender of an epoch costs 30,000 to 40,000 gas by the design estimate.
+    /// Shows: the numbers for a depth 6 state (Electra) and a depth 5 state (Deneb). Matters: this is what the first
+    /// sender of each epoch pays on top of the send. The send after it costs the confirmed epoch number.
+    function test_HB02_gas_confirmWithProof() public {
         _etchMock();
-        uint256 plain = _plainDepositGas();
         BeaconForkGate gateSix = _newGate(BeaconForkGate.GateMode.Enforcing);
         bytes memory six = _honestEvidence(block.timestamp, _slotIn(EPOCH_E, 2), 6, ELECTRA);
-        uint256 usedSix = _measuredDeposit(_vaultWithGate(address(gateSix)), address(gateSix), six);
+        uint256 usedSix = _measuredConfirm(gateSix, six);
         BeaconForkGate gateFive = _newGate(BeaconForkGate.GateMode.Enforcing);
         bytes memory five = _honestEvidence(block.timestamp + 12, _slotIn(EPOCH_E, 2), 5, DENEB);
-        uint256 usedFive = _measuredDeposit(_vaultWithGate(address(gateFive)), address(gateFive), five);
-        console2.log("first deposit with proof, depth 6", usedSix);
-        console2.log("  extra over plain", usedSix - plain);
-        console2.log("first deposit with proof, depth 5", usedFive);
-        console2.log("  extra over plain", usedFive - plain);
-        assertLt(usedSix - plain, 37_000);
-        assertLt(usedFive - plain, 35_000);
-        assertGt(usedFive, plain + 20_000, "a proof costs far more than a read");
+        uint256 usedFive = _measuredConfirm(gateFive, five);
+        emit log_named_uint("confirm with proof, depth 6", usedSix);
+        emit log_named_uint("confirm with proof, depth 5", usedFive);
+        assertLt(usedSix, 37_000);
+        assertLt(usedFive, 35_000);
+        assertGt(usedFive, 20_000, "a proof costs far more than a read");
     }
 }

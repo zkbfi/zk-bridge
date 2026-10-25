@@ -1,14 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {HardenedFixture} from "./utils/HardenedFixture.sol";
+import {MessageScenes} from "./utils/MessageScenes.sol";
 import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
 import {GateGenuineBeaconRoots} from "./utils/GateMocks.sol";
 import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
+import {TokenMediator} from "../../src/hardened/mediator/TokenMediator.sol";
+import {TokenFactory} from "../../src/hardened/mediator/TokenFactory.sol";
+import {WETHOmnibridgeRouter} from "../../src/hardened/mediator/WETHOmnibridgeRouter.sol";
+import {FeeRouter} from "../../src/hardened/mediator/FeeRouter.sol";
+import {ITokenMediator} from "../../src/hardened/mediator/ITokenMediator.sol";
+import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
+import {MockWrappedNative} from "./mediator/utils/MediatorSupport.sol";
 
 /// @notice PulseChain stopped at Shanghai. It rejects MCOPY (0x5e) and TSTORE (0x5d). These tests scan the deployed
 /// runtime bytecode of the hardened contracts, skipping the data bytes that follow PUSH1 to PUSH32.
-contract BytecodeTest is HardenedFixture {
+contract BytecodeTest is MessageScenes {
     uint8 internal constant TSTORE = 0x5d;
     uint8 internal constant MCOPY = 0x5e;
     uint8 internal constant TLOAD = 0x5c;
@@ -46,23 +53,82 @@ contract BytecodeTest is HardenedFixture {
 
     // ---------------------------------------------------------------- the contracts
 
-    /// Claim: no hardened contract contains MCOPY or TSTORE (or TLOAD). Shows: the count is zero for each opcode in
-    /// the runtime code of the light client, both vaults and both fork gates (detection mode and enforcing mode), with
-    /// the vendored libraries linked in. Matters: R2-10 (the repository compiled for cancun, and PulseChain rejects
-    /// those opcodes). The gate is deployed on PulseChain too. The storage reentrancy guard, not the transient one, is
-    /// what makes this pass for the vault.
-    function test_R2_10_noMcopyOrTstoreInHardenedBytecode() public {
-        bytes[5] memory codes = [
-            address(lightClientForA).code,
-            address(vaultA).code,
-            address(vaultB).code,
-            address(gateA).code,
-            address(_newGate(BeaconForkGate.GateMode.Enforcing)).code
+    /// @dev A mediator, its factory, one bridged copy, and the two routers, built on the destination bridge. The
+    /// factory deploys the copy when its mediator asks, so the copy is real runtime code of the factory.
+    function _mediatorContracts()
+        internal
+        returns (
+            TokenMediator mediator,
+            TokenFactory factory,
+            address copy,
+            WETHOmnibridgeRouter wethRouter,
+            FeeRouter feeRouter
+        )
+    {
+        mediator = new TokenMediator(
+            TokenMediator.MediatorTerms({
+                bridge: address(bridge),
+                remoteMediator: makeAddr("remote mediator"),
+                remoteChainId: CHAIN_A,
+                feeAuthority: address(0),
+                feeRecipient: address(0),
+                feeBasisPoints: 0,
+                feeCeilingBasisPoints: 0,
+                flowLimiter: address(0)
+            })
+        );
+        factory = mediator.tokenFactory();
+        vm.prank(address(mediator));
+        copy = factory.deploy("Copy", "CPY", 18, CHAIN_A, makeAddr("native token"));
+        IWETH wrapped = IWETH(address(new MockWrappedNative()));
+        wethRouter = new WETHOmnibridgeRouter(ITokenMediator(address(mediator)), wrapped);
+        feeRouter = new FeeRouter(ITokenMediator(address(mediator)), wrapped);
+    }
+
+    /// @dev The runtime code of every contract that runs on both chains, with the names that the logs print. The fork
+    /// gate in enforcing mode and the fork registry are scanned in other tests, with the probe.
+    function _deployedContracts() internal returns (string[9] memory names, bytes[9] memory codes) {
+        (TokenMediator mediator, TokenFactory factory, address copy, WETHOmnibridgeRouter wethRouter, FeeRouter feeRouter) =
+            _mediatorContracts();
+        names = [
+            "BeaconLightClient",
+            "MessageBridge (source)",
+            "MessageBridge (destination)",
+            "BeaconForkGate",
+            "TokenMediator",
+            "TokenFactory",
+            "BridgedToken",
+            "WETHOmnibridgeRouter",
+            "FeeRouter"
         ];
+        codes = [
+            address(lightClientForA).code,
+            address(sourceBridge).code,
+            address(bridge).code,
+            address(gateA).code,
+            address(mediator).code,
+            address(factory).code,
+            copy.code,
+            address(wethRouter).code,
+            address(feeRouter).code
+        ];
+    }
+
+    /// Claim: no hardened contract contains MCOPY or TSTORE (or TLOAD). Shows: the count is zero for each opcode in
+    /// the runtime code of the light client, both message bridges, the fork gate (detection mode and enforcing mode),
+    /// the token mediator, its factory, a bridged token, the wrapped coin router and the fee router, with the vendored
+    /// libraries linked in. Matters: R2-10 (the repository compiled for cancun, and PulseChain rejects those
+    /// opcodes). Every contract that runs on both chains must pass. The storage reentrancy guard, not the transient
+    /// one, is what makes this pass for the bridge and the mediator.
+    function test_R2_10_noMcopyOrTstoreInHardenedBytecode() public {
+        (string[9] memory names, bytes[9] memory codes) = _deployedContracts();
         for (uint256 i = 0; i < codes.length; i++) {
-            assertGt(codes[i].length, 1000, "the contract has code");
+            assertGt(codes[i].length, 500, string.concat(names[i], " has code"));
             _assertNoNewOpcodes(codes[i]);
         }
+        bytes memory enforcing = address(_newGate(BeaconForkGate.GateMode.Enforcing)).code;
+        assertGt(enforcing.length, 1000, "the enforcing gate has code");
+        _assertNoNewOpcodes(enforcing);
     }
 
     function _assertNoNewOpcodes(bytes memory code) internal pure {
@@ -97,12 +163,15 @@ contract BytecodeTest is HardenedFixture {
         assertEq(_countOpcode(hex"605e5d", MCOPY), 0);
     }
 
-    /// Claim: the contracts, the fork gate included, fit the 24576-byte limit. Shows: the sizes. Matters: a
-    /// deployable contract on both chains.
-    function test_R2_10_hardenedContractsFitTheSizeLimit() public view {
-        assertLt(address(lightClientForA).code.length, 24_576);
-        assertLt(address(vaultA).code.length, 24_576);
-        assertLt(address(gateA).code.length, 24_576);
+    /// Claim: every hardened contract fits the 24576-byte limit. Shows: the runtime size of each contract is printed and
+    /// is below the limit, for the light client, both message bridges, the fork gate, the token mediator, its factory,
+    /// a bridged token, the wrapped coin router and the fee router. Matters: each contract is deployable on both chains.
+    function test_R2_10_hardenedContractsFitTheSizeLimit() public {
+        (string[9] memory names, bytes[9] memory codes) = _deployedContracts();
+        for (uint256 i = 0; i < codes.length; i++) {
+            emit log_named_uint(names[i], codes[i].length);
+            assertLt(codes[i].length, 24_576, names[i]);
+        }
     }
 
     /// Claim: the fork gate (in all three modes) and the fork registry contain none of the five canary opcodes, and

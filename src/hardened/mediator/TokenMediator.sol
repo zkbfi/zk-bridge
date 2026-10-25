@@ -5,7 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IFlowLimiter} from "../IFlowLimiter.sol";
-import {IAMB} from "./IAMB.sol";
+import {IAMB} from "../IAMB.sol";
 import {IBurnableMintableERC677Token} from "./IBurnableMintableERC677Token.sol";
 import {IERC20Receiver} from "./IERC20Receiver.sol";
 import {TokenFactory} from "./TokenFactory.sol";
@@ -144,6 +144,8 @@ contract TokenMediator is ReentrancyGuard {
     error WrongSourceChain(bytes32 expected, bytes32 actual);
     /// @notice A constructor argument is zero.
     error ZeroValue(string name);
+    /// @notice The largest message of the mediator asks for more gas than the message bridge allows in one call.
+    error GasLimitAboveBridgeMaximum(uint256 gasLimit, uint256 maximum);
     /// @notice The fee ceiling is above `MAX_FEE_CEILING_BASIS_POINTS`.
     error FeeCeilingTooHigh(uint16 ceiling, uint16 maximum);
     /// @notice A mediator with no fee authority must have a zero fee and a zero ceiling.
@@ -253,6 +255,10 @@ contract TokenMediator is ReentrancyGuard {
     /// @param terms The terms at deployment. See `MediatorTerms`.
     constructor(MediatorTerms memory terms) {
         if (terms.bridge.code.length == 0) revert ZeroValue("bridge");
+        // A message that asks for more than `maxGasPerTx` is refused at the send, so no relay would ever work.
+        uint256 largestGasLimit = DEPLOY_GAS_LIMIT + CALLBACK_GAS_LIMIT;
+        uint256 bridgeMaximum = IAMB(terms.bridge).maxGasPerTx();
+        if (largestGasLimit > bridgeMaximum) revert GasLimitAboveBridgeMaximum(largestGasLimit, bridgeMaximum);
         if (terms.remoteMediator == address(0)) revert ZeroValue("remoteMediator");
         if (terms.remoteChainId == 0) revert ZeroValue("remoteChainId");
         if (terms.feeCeilingBasisPoints > MAX_FEE_CEILING_BASIS_POINTS) {
@@ -921,13 +927,11 @@ contract TokenMediator is ReentrancyGuard {
                 return false;
             }
         }
-        NativeRecord memory record = _native[token];
         uint240 amount = uint240(value);
-        record.balance -= amount;
-        _native[token] = record;
+        _native[token].balance -= amount;
         if (IERC20(token).trySafeTransfer(to, value)) return true;
-        record.balance += amount;
-        _native[token] = record;
+        // Read the record again: a token that calls back during the transfer can lock more tokens before it refuses.
+        _native[token].balance += amount;
         return false;
     }
 

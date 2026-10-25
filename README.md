@@ -9,18 +9,19 @@ This repository holds two things. The first is a red team of the proposed Ethere
 - The repository makes proofs and hands them to other, stateful servers. It holds no relayer: no database, no wallet and no transaction code. The full relayer lives on the branch `archive/full-relayer`.
 - The SP1 backends exist (processor, GPU worker) and have produced real Groth16 proofs of real updates. SP1 is the Succinct zero-knowledge virtual machine. No real chain has seen one.
 - The oracle backend runs on Anvil and stands in for the SP1 verifier. It proves nothing about a real chain.
-- A real deployment needs a stateful server that posts the updates, opens the vaults and sends the withdrawals, an audit, and the open items listed below.
+- A real deployment needs a stateful server that posts the updates, opens the bridges and delivers the messages, an audit, and the open items listed below.
 
 ## How the hardened bridge works
 
-The bridge moves tokens between two chains. A deposit on the source chain unlocks tokens on the destination chain.
+The bridge moves messages and tokens between two chains. A message sent on the source chain is delivered to a contract on the destination chain. A token relay is a message to the token mediator on the other side.
 
 - **Light client.** Each chain has a light client contract for the other chain. It follows the source chain's sync committee. A zero-knowledge proof made with SP1 shows that the committee signed each update. The light client stores only finalized headers.
 - **Folded updates.** One proof can cover up to 64 committee handoffs. A light client that lags behind catches up in few proofs.
-- **Withdrawal with no proof.** The vault checks a withdrawal itself. It starts from a stored finalized header. It follows a Merkle path through `block_roots` (recent headers) or `historical_summaries` (old headers) to the block. It then checks the receipt and the deposit log. Only light client updates need a proof.
-- **Fork safety.** A fork that the proof program does not know would strand deposits. Each vault has a fork gate. On Ethereum, the gate reads the beacon roots contract (Ethereum Improvement Proposal 4788) and refuses a deposit that the route cannot deliver. PulseChain has no such contract today. There the gate runs in a detection mode, and it uses execution canaries (probes for new opcodes and precompiles). A fork registry on PulseChain records fork versions that a committee signature proves. No key switches any of this.
-- **Optional fee switch.** A vault can take a deposit fee. One fee authority sets it. An immutable ceiling of 1% limits it. A one-way call turns the fee off for good. Each deposit names a maximum fee, so no timelock is needed.
-- **Optional flow limiter hook.** A vault can attach one limiter contract that holds immutable rules. A refusal reverts and leaves the withdrawal claimable later. No limiter is attached: by user decision, the bridge has no flow limits, and the hook stays empty.
+- **Message layer.** `MessageBridge` has the interface of the OmniBridge Arbitrary Message Bridge. A contract calls `requireToPassMessage`. Anyone delivers the message on the other chain with `executeMessage`. The bridge starts from a stored finalized header. It follows a Merkle path through `block_roots` (recent headers) or `historical_summaries` (old headers) to the block. It then checks the receipt, the transaction and the log. Only light client updates need a proof. Delivery is final, messages are independent, and the bridge takes no executor fee.
+- **Token layer.** `TokenMediator` has the interface of the OmniBridge multi-token mediator. It locks a native token and mints a bridged copy on the other chain, at an address that the chain computes. It burns the copy and unlocks the token on the way back. A release that a payee refuses goes to a fallback address, and then to a claimable balance. `WETHOmnibridgeRouter` wraps the native coin. `FeeRouter` is an optional helper that pays a fee to the account that runs a delivery.
+- **Fork safety.** A fork that the proof program does not know would strand messages. Each bridge has a fork gate. On Ethereum, the gate reads the beacon roots contract (Ethereum Improvement Proposal 4788) and refuses a send that the route cannot deliver. A send carries no evidence. The first sender of an epoch calls `confirm` on the gate with evidence, and then sends. Later senders in the same epoch just send. PulseChain has no such contract today. There the gate runs in a detection mode, and it uses execution canaries (probes for new opcodes and precompiles). A fork registry on PulseChain records fork versions that a committee signature proves. No key switches any of this.
+- **Optional fee switch.** A mediator can take a fee on relayed tokens. One fee authority sets it. An immutable ceiling of 1% limits it. A one-way call turns the fee off for good. A relay can name a maximum fee, so no timelock is needed.
+- **Optional flow limiter hook.** A mediator can attach one limiter contract that holds immutable rules. A refused relay reverts. A refused release is recorded as a claim, because delivery is final. No limiter is attached: by user decision, the bridge has no flow limits, and the hook stays empty.
 - **Funded operator.** One funded operator runs a stateful server and pays the gas. The server runs the proof producer in `prover/`. The contracts take no proving fee. The operator holds no trusted role. The contracts check everything the operator sends.
 
 Details are in [`docs/hardened-build-contract.md`](docs/hardened-build-contract.md).
@@ -29,10 +30,10 @@ Details are in [`docs/hardened-build-contract.md`](docs/hardened-build-contract.
 
 You must trust all of the following.
 
-1. **Two thirds of the source chain's sync committee are honest.** A forged finalized header lets an attacker forge a deposit. Sync committee signatures carry no slashing. On PulseChain, about 18 withdrawal credentials hold 342 of the 512 committee seats (measured on 2026-10-21). One staking service can use many credentials, so the true number of independent parties is probably smaller. See [`docs/zk-bridge-comparison.md`](docs/zk-bridge-comparison.md).
+1. **Two thirds of the source chain's sync committee are honest.** A forged finalized header lets an attacker forge a message. Sync committee signatures carry no slashing. On PulseChain, about 18 withdrawal credentials hold 342 of the 512 committee seats (measured on 2026-10-21). One staking service can use many credentials, so the true number of independent parties is probably smaller. See [`docs/zk-bridge-comparison.md`](docs/zk-bridge-comparison.md).
 2. **The SP1 release is sound.** The verifier and the program key are fixed at deployment. A soundness bug in the pinned release lets anyone prove false updates. See [`docs/sp1-version-policy.md`](docs/sp1-version-policy.md).
 3. **The deployment checkpoint is correct.** Each light client starts from one checkpoint that people must audit. Every later proof starts from the stored state.
-4. **The flow limiter, if one is attached.** A limiter can delay withdrawals. Its rules decide how much a forged proof can drain.
+4. **The flow limiter, if one is attached.** A limiter can delay releases. Its rules decide how much a forged proof can drain.
 
 ## Findings
 
@@ -55,38 +56,39 @@ Findings in the hardened design (HB) are in the same file.
 | HB-02 | High | Built, not audited | Deposits into a route that cannot follow a fork. Fork gate, registry and canaries exist. The interface cutover before a fork is advice only. |
 | HB-03 | Critical | Fixed | A block roots layout row could point at votes that proposers write |
 | HB-04 | Critical | Fixed | A block hash layout row could point at graffiti |
-| HB-05 | High | Fixed | A deposit in a transaction with more than 32 logs was stuck |
-| HB-06 | Medium | Fixed | Nothing named the destination vault |
+| HB-05 | High | Fixed | A message in a transaction with more than 32 logs was stuck |
+| HB-06 | Medium | Fixed | Nothing named the destination vault. The retired vault bound it in the log. A message now names a destination chain, and a target trusts its own bridge address. |
 
-The code review and the comparison also produced fixes: the destination token binding, the verifier code hash pin, the clock bound on the head, and the seal evidence age check. The comparison lists gaps G-01 to G-08.
+The code review and the comparison also produced fixes: the verifier code hash pin, the clock bound on the head, and the seal evidence age check. The build of the message layer found and fixed one defect in the mediator: a hostile token could erase a nested lock in the record of a native token. The comparison lists gaps G-01 to G-08.
 
 ### Open items
 
 | Item | State |
 |---|---|
-| Refunds (H-09) | Rejected by user decision (2026-10-22). A deposit made just before an unsupported fork, or to a blacklisted recipient, stays locked. |
-| Stateful server | Not in this repository. It posts the updates, calls `openDeposits` and sends the withdrawals. The launch sequence in `docs/hardened-build-contract.md` lists its steps. |
-| Outflow cap (G-01) | Rejected by user decision (2026-10-22). The empty hook remains. A forged proof could drain a vault in one transaction. |
+| Refunds (H-09) | Rejected by user decision (2026-10-22). A message sent just before an unsupported fork stays undelivered. A release to a recipient that the token refuses goes to the fallback address, and then to a claimable balance. |
+| Stateful server | Not in this repository. It posts the updates, calls `openDeposits` and delivers the messages. The launch sequence in `docs/hardened-build-contract.md` lists its steps. |
+| Outflow cap (G-01) | Rejected by user decision (2026-10-22). The empty hook remains. A forged proof could drain a mediator in one transaction. |
 | Second proof system (G-02) | Not adopted. Reconsider if the value at risk grows. See [`docs/sp1-version-policy.md`](docs/sp1-version-policy.md). |
 | Block parser | Reads Capella blocks only. The state parser reads Capella through Fulu. |
-| Real chain checks | No real Ethereum historical path check, and no reproducible SP1 build with a program key test. |
+| Real chain checks | No real Ethereum historical path check, and no reproducible SP1 build with a program key test. The real chain fixtures hold transaction hashes and not transaction bytes, so real data stops before the transaction proof. The Rust guest programs were not rebuilt after the change to `lc-core`, so the program keys need a check. |
+| Executor fees | The bridge takes none. `FeeRouter` pays a runner for token messages. A target of an arbitrary message pays its own runner. |
 | Audit | None. Deploy the hardened code only after an audit. |
 
 ## What runs
 
-The red team tests pass when an attack **succeeds**. A green red team run means the specification fails. The hardened tests are ordinary tests. Test counts are as of 2026-10-24.
+The red team tests pass when an attack **succeeds**. A green red team run means the specification fails. The hardened tests are ordinary tests. Test counts are as of 2026-10-25.
 
 | Suite | What it proves | Command | Count |
 |---|---|---|---|
-| Forge, root | The specification's contract holes (red team), and the hardened contracts: light client, vault, fork gate, registry, layouts, fee, limiter, deploy script | `forge test` | 459 passed |
-| Light client | The Rust reference programs: update verification, folds, fork observation, layouts, state parsing | `cargo test --offline` in `light-client/` | 152 passed |
-| Prover | The proof producer and the evidence builder, on a signed beacon chain, and the remote backend against a fake worker | `cargo test --offline` in `prover/` | 129 passed |
+| Forge, root | The specification's contract holes (red team), and the hardened contracts: light client, message bridge, token mediator and routers, fork gate, registry, layouts, deploy script, and two chains in one test with real proofs | `forge test` | 645 passed |
+| Light client | The Rust reference programs: update verification, folds, fork observation, layouts, state parsing, message proofs | `cargo test --offline` in `light-client/` | 167 passed |
+| Prover | The proof producer and the message evidence builder, on a signed beacon chain, and the remote backend against a fake worker | `cargo test --offline` in `prover/` | 134 passed |
 | Harness | End-to-end red team exploits on two Anvil chains (chain 1 on port 18545, chain 369 on port 18546) | `pnpm --dir harness install && pnpm --dir harness test` | Not rerun for this note |
 | Checks | The specification's circuit does not compile, the frontend fails, the deploy script cannot deploy, and the npm package does not exist | `bash checks/run.sh` | Not rerun for this note |
 
 To run two local chains in Docker with the bridge contracts deployed, see `docs/local-network.md`. The network has no prover and no bots.
 For a run on two local chains with real SP1 Groth16 proofs and the real SP1 verifier contract (on a server, without Docker), see `docs/end-to-end-real-proofs.md`. That run used the full relayer, so it lives on the branch `archive/full-relayer`.
-To make proofs and withdrawal evidence, see `prover/README.md`. The commands are `zk-bridge-prover prove` and `zk-bridge-prover evidence`.
+To make proofs and message evidence, see `prover/README.md`. The commands are `zk-bridge-prover prove` and `zk-bridge-prover evidence`.
 
 Requirements: Foundry (`forge`, `anvil`), Node.js with pnpm, and Rust with Cargo. Clone with `--recurse-submodules`, or run `git submodule update --init`. The Anvil tests of the harness skip with a message when `anvil` or `forge` is missing. The tests of the prover need neither.
 
@@ -96,12 +98,13 @@ Requirements: Foundry (`forge`, `anvil`), Node.js with pnpm, and Rust with Cargo
 |---|---|
 | `spec/` | The original specification. Read only. |
 | `src/` | The specification's contracts, copied verbatim, plus test doubles in `src/mocks/` |
-| `src/hardened/` | The hardened contracts: light client, vault, fork gate, fork registry, clock, receipt and tree libraries |
-| `script/hardened/` | The deploy script and an example configuration |
+| `src/hardened/` | The hardened contracts: light client, message bridge (`MessageBridge`, `BeaconProofVerifier`, `AmbMessageCodec`, `IAMB`), fork gate, fork registry, clock, receipt and tree libraries |
+| `src/hardened/mediator/` | The token layer: `TokenMediator`, `TokenFactory`, `BridgedToken`, `WETHOmnibridgeRouter`, `FeeRouter` and their interfaces |
+| `script/hardened/` | The deploy script (both chains, with predicted addresses) and an example configuration |
 | `test/` | Red team forge tests |
 | `test/hardened/` | Forge tests for the hardened contracts |
 | `light-client/` | Rust reference programs and SP1 guest programs (`lc-core`, `lc-testkit`, `guests/`) |
-| `prover/` | The proof producer and the withdrawal evidence builder. A library and two commands. It keeps no state and sends no transaction. See [`prover/README.md`](prover/README.md). |
+| `prover/` | The proof producer and the message evidence builder. A library and two commands. It keeps no state and sends no transaction. See [`prover/README.md`](prover/README.md). |
 | `docker/` | The local network (two Anvil chains and a deploy job) and the images of the proof producer for a server and for a GPU worker |
 | `harness/` | Two-chain TypeScript red team tests |
 | `checks/` | Static red team checks |
@@ -117,7 +120,7 @@ Requirements: Foundry (`forge`, `anvil`), Node.js with pnpm, and Rust with Cargo
 
 ## Safety
 
-- **Never use the code in `spec/`.** The tests show that an attacker can take over its light client and drain both vaults.
+- **Never use the code in `spec/`.** The tests show that an attacker can take over its light client and drain both vaults of the specification.
 - **Deploy the hardened code only after an audit.**
 - `spec/Deployments/deploy.sh` and the shell commands in `spec/frontend-setup-notes.md` are bricked. Every original line carries a `#BRICKED# ` prefix, and the script exits before any of them. Do not un-brick them. See "Containment" in [`docs/red-team.md`](docs/red-team.md).
 - Never run `npm install @succinctlabs/sp1-sdk` from `spec/frontend-setup-notes.md`. That package does not exist, and anyone can register the name (H-21).

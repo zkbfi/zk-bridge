@@ -7,7 +7,7 @@ Regenerate:
 
 - `scripts/fetch-fixtures.sh ethereum|pulsechain|all` fetches real data and, for PulseChain, derives the light-client update
   and beacon paths from a real beacon state (`derive-pulsechain-fixtures`).
-- `cargo run -p lc-testkit --bin write-withdrawal-fixtures` writes `gindices.json` and `withdrawal/*.json`.
+- `cargo run -p lc-testkit --bin write-message-fixtures` writes `gindices.json` and `message/*.json`.
   A Rust test fails when these files are stale.
 
 ## Wrapper of raw data files
@@ -30,62 +30,78 @@ Generalized indices per fork, computed from `ethereum/consensus-specs`. Keys:
 | `forks.<fork>.historicalSummariesFieldGindex` | Generalized index of `BeaconState.historical_summaries` (59 Capella and Deneb, 91 Electra and Fulu). Field 27 in every fork, from `ethereum/consensus-specs` (`specs/capella/beacon-chain.md`, container `BeaconState`). |
 | `forks.<fork>.historicalAncestryBranchLength` | Exact length of the historical-path `ancestryBranch` (44 or 45). |
 | `historicalRootsLimit`, `historicalSummariesListDepth` | `2^24` and 24: the limit of the `historical_summaries` list and its depth. |
-| `chains.<chain>.capellaEra` | `floor(capellaForkSlot / 8192)` from the chain's fork schedule: Ethereum `758`, PulseChain `0`. The vault takes it as an immutable argument. |
+| `chains.<chain>.capellaEra` | `floor(capellaForkSlot / 8192)` from the chain's fork schedule: Ethereum `758`, PulseChain `0`. The bridge takes it as an immutable argument. |
 | `forks.<fork>.blockHashGindex` | Combined index of `BeaconBlockBody.execution_payload.block_hash` (412 Capella, 812 Deneb and later). |
 | `forks.<fork>.blockHashBranchLength` | Exact length of `blockHashBranch` (8 or 9). |
 | `forks.<fork>.finalizedRootGindex`, `currentSyncCommitteeGindex`, `nextSyncCommitteeGindex`, `executionPayloadGindex` | Light-client indices (for the SP1 program and for reference). |
-| `chains.<chain>.forkSchedule` | Rows `(activationEpoch, blockRootsGindexBase, blockHashGindex, historicalSummariesGindex)` for the vault constructor. Only forks with a supported layout appear. All numbers are decimal strings. |
+| `chains.<chain>.forkSchedule` | Rows `(activationEpoch, blockRootsGindexBase, blockHashGindex, historicalSummariesGindex)` for the bridge constructor. Only forks with a supported layout appear. All numbers are decimal strings. |
 
-The vault picks the block roots row and the `historical_summaries` index by the epoch of the ANCHOR header slot, and the block hash
-row by the epoch of the DEPOSIT header slot. Branches must have exactly the stated length.
+The bridge picks the block roots row and the `historical_summaries` index by the epoch of the ANCHOR header slot, and the block hash
+row by the epoch of the SOURCE header slot. Branches must have exactly the stated length.
 
-The vault also picks the ancestry path from the two slots, never the prover. `distance = anchorSlot - depositSlot`:
+The bridge also picks the ancestry path from the two slots, never the prover. `distance = anchorSlot - sourceSlot`:
 
-- `0 < distance <= 8192`: recent path. Leaf `hashTreeRoot(depositHeader)` at `blockRootsGindexBase + depositSlot % 8192`.
-- `distance > 8192`: historical path. `era = depositSlot / 8192`, require `era >= capellaEra`, `index = era - capellaEra`. The
+- `0 < distance <= 8192`: recent path. Leaf `hashTreeRoot(sourceHeader)` at `blockRootsGindexBase + sourceSlot % 8192`.
+- `distance > 8192`: historical path. `era = sourceSlot / 8192`, require `era >= capellaEra`, `index = era - capellaEra`. The
   generalized index, in this order: `g = historicalSummariesFieldGindex`; `g = g * 2`; `g = g * 2^24 + index`; `g = g * 2`;
-  `g = g * 2^13 + depositSlot % 8192`. The branch runs bottom to top: 13 levels inside the era's `block_roots`, the
+  `g = g * 2^13 + sourceSlot % 8192`. The branch runs bottom to top: 13 levels inside the era's `block_roots`, the
   `state_summary_root` sibling, 24 list levels, the list length chunk, then the state field levels.
-- `depositSlot >= anchorSlot`: refused (`DepositNotBeforeAnchor`).
+- `sourceSlot >= anchorSlot`: refused (`DepositNotBeforeAnchor`).
 
-## `withdrawal/<name>.json`
+## `message/<name>.json`
 
-One case per file. Keys:
+One case per file. Each case is one call of `MessageBridge.executeMessage`. Keys:
 
 | Key | Meaning |
 |---|---|
-| `name` | Same as the file stem. Names start with `capella_` or `electra_` (synthetic data in that layout) or `real_`. |
+| `name` | Same as the file stem. Names start with `capella_` or `electra_` (synthetic data in that layout). |
 | `description` | What the case shows. |
-| `beaconData`, `receiptData` | `"real"` or `"synthetic"`. A `real_*` file with `beaconData` `"synthetic"` has a real Ethereum block and receipts under a synthetic Electra-layout beacon path. |
+| `beaconData`, `receiptData` | `"synthetic"` in every case. The real fixtures hold no transaction bodies, so real data stops before the transaction proof (see "Real data" below). |
 | `chain` | Source chain: `pulsechain` (Capella layout) or `ethereum` (Electra layout, Fulu). |
 | `layout` | `capella` or `electra`. |
-| `calldata` | Hex of the full calldata of `withdraw(WithdrawalProof)`: selector `0x30568d83` then the ABI encoding of the struct. |
+| `calldata` | Hex of the full calldata of `executeMessage(MessageProof)`: selector `0xa5442804` then the ABI encoding of the struct. |
 | `anchorSlot` | `anchorHeader.slot`, as a decimal string. |
-| `ancestryPath` | `recent`, `historical`, or `none` (the deposit slot is not before the anchor slot). The path the vault takes for this case. |
-| `capellaEra` | The `capellaEra` argument of the verifying vault, as a decimal string. |
+| `ancestryPath` | `recent`, `historical`, or `none` (the source slot is not before the anchor slot). The path the bridge takes for this case. |
+| `capellaEra` | The `capellaEra` argument of the verifying bridge, as a decimal string. |
 | `storedAnchorHeaderRoot` | What `lightClient.headers(anchorSlot)` must return for this case. Zero means the slot is not stored. |
-| `remoteVault` | The vault address on the source chain (`remoteVault` in the verifying vault). |
-| `localVault` | The address of the verifying vault itself (`address(this)`). The deposit must name it as `destinationVault`. |
-| `localChainId` | `localChainId` of the verifying vault. |
-| `sourceForkSchedule` | Rows `(activationEpoch, blockRootsGindexBase, blockHashGindex)` for the verifying vault. |
+| `remoteBridge` | The bridge address on the source chain (`remoteBridge` in the verifying bridge). |
+| `localChainId`, `remoteChainId` | `localChainId` and `remoteChainId` of the verifying bridge, as decimal strings. |
+| `sourceForkSchedule` | Rows `(activationEpoch, blockRootsGindexBase, blockHashGindex)` for the verifying bridge. |
 | `expected.result` | `"accept"` or `"reject"`. |
-| `expected.deposit` | On accept: `token`, `sender`, `recipient`, `amount` (decimal string), `nonce`, `targetChainId`, `destinationVault`, `depositBlockHash`. |
+| `expected.message` | On accept: `messageId`, `sender`, `executor`, `gasLimit`, `dataType`, `sourceChainId`, `destinationChainId`, `data`, `sourceBlockHash`, `sourceTransactionHash` (the keccak256 of the transaction at the index of the receipt). |
 | `expected.reason` | On reject: the Rust reason code. Mapping to Solidity custom errors is the Solidity test's job. |
 
-Reason codes: `AnchorNotStored`, `DepositNotBeforeAnchor`, `DepositBeforeCapella`, `HistoricalIndexOutOfRange`, `InvalidAncestryBranch`, `InvalidBlockHashBranch`,
-`ReceiptProofInvalid`, `ReceiptDecode`, `ReceiptFailed`, `LogIndexOutOfRange`, `LogEmitterMismatch`, `LogTopicMismatch`,
-`LogDecode`, `TargetChainMismatch`, `DestinationVaultMismatch`, `HeaderDecode`, `UnsupportedFork`.
+Reason codes: `IndexMismatch`, `AnchorNotStored`, `DepositNotBeforeAnchor`, `DepositBeforeCapella`, `HistoricalIndexOutOfRange`,
+`InvalidAncestryBranch`, `InvalidBlockHashBranch`, `HeaderDecode`, `ReceiptProofInvalid`, `TransactionProofInvalid`,
+`ReceiptDecode`, `ReceiptFailed`, `LogIndexOutOfRange`, `LogEmitterMismatch`, `LogTopicMismatch`, `LogMalformed`,
+`MalformedEventData`, `MalformedMessage`, `MessageIdMismatch`, `MessageVersionInvalid`, `WrongSourceChain`,
+`WrongDestinationChain`, `UnknownDataType`, `UnsupportedFork`.
 
-The vault checks in the same order as the Rust function: anchor stored, path choice (deposit before anchor, then for the historical path
-`era >= capellaEra` and the index limit), ancestry branch (exact length), block hash branch (the leaf is
-`keccak256(executionHeaderRlp)`), header decode, receipt proof, receipt decode and status, log index, emitter, topic, field decode,
-target chain, destination vault. The vault state checks (registered token, unclaimed nonce) are not part of these cases.
+The bridge checks in the same order as the Rust function (`lc_core::message::verify_message`): receipt index equals transaction
+index, anchor stored, path choice (source before anchor, then for the historical path `era >= capellaEra` and the index limit),
+ancestry branch (exact length), block hash branch (the leaf is `keccak256(executionHeaderRlp)`), header decode, receipt proof,
+transaction proof (same index; the hash of the proven transaction is the source transaction hash), receipt decode and status,
+log index, emitter, topic 0, topic count, event data (`abi.encode(bytes)`), message decode, identifier of the topic against the
+identifier of the message, version, source chain, destination chain, data type. The bridge state checks (a message executes
+once, the gas guard) are not part of these cases.
+
+The cases share one synthetic block with four transactions. Receipt 1 holds 13 logs, one for each log rule: log 0 and 2 are
+honest messages, 3 is from another emitter, 4 has another topic 0, 5 names the wrong source chain, 6 the wrong destination
+chain, 7 has malformed event data, 8 a bad version, 9 a bad data type, 10 a topic identifier that differs from the message,
+11 three topics, 12 the data type of `requireToConfirmMessage`. Receipt 2 has failed status. Receipt 3 is a type 2 receipt.
+
+## Real data
+
+The real PulseChain and Ethereum blocks in `pulsechain/` and `ethereum/` hold the transaction hashes of each block and not the
+transactions. A real transaction proof needs the transaction bytes, so real data cannot pass the transaction stage. The Rust
+tests `real_beacon_path_reaches_the_log_checks` and `real_historical_message_reaches_the_transaction_stage` run the stages
+before it (beacon path, header, receipt proof, receipt) on real data, and `receipts_real.rs` proves every real receipt.
 
 ## Historical ancestry
 
-The synthetic anchor states of the withdrawal cases hold the deposit header root in every place a mixed-up proof could point
-at: `block_roots`, the era of the deposit, and the two neighbouring eras (same offset). So each wrong branch in the
-`*_reject_historical_*` and `*_reject_recent_distance_*` cases is a valid Merkle path of the anchor state, and only the vault's
+The synthetic anchor states of the message cases hold the source header root in every place a mixed-up proof could point
+at: `block_roots`, the era of the source block, and the two neighbouring eras (same offset). So each wrong branch in the
+`*_reject_historical_*` and `*_reject_recent_distance_*` cases is a valid Merkle path of the anchor state, and only the bridge's
 choice of path, index and length can refuse it.
 
 `pulsechain/historical_paths.json` is real: historical-path ancestry from a real PulseChain anchor header and state to real

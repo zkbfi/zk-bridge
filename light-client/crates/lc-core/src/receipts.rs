@@ -1,30 +1,32 @@
-//! Receipts trie builder and execution header encoder, for real and synthetic blocks.
+//! Receipts and transactions trie builder and execution header encoder, for real and synthetic blocks.
 //!
-//! The prover service builds the execution part of a withdrawal with these functions.
+//! The prover service builds the execution part of a message proof with these functions.
 
 use crate::execution::{ExecutionHeader, Log};
-use crate::withdrawal::receipt_trie_key;
+use crate::message::trie_key;
 use alloy_primitives::{keccak256, Bloom, Bytes, B256};
 use alloy_rlp::{BufMut, Encodable, Header as RlpHeader};
 use alloy_trie::proof::ProofRetainer;
 use alloy_trie::{HashBuilder, Nibbles};
 
-/// A receipts trie with the proof of every receipt.
-pub struct ReceiptsTrie {
-    /// The trie root, which goes into the block header as `receiptsRoot`.
+/// A trie keyed by the transaction index, with the proof of every value. The receipts trie and the transactions trie of
+/// a block have this shape.
+pub struct IndexedTrie {
+    /// The trie root, which goes into the block header as `receiptsRoot` or `transactionsRoot`.
     pub root: B256,
-    /// For each transaction index, the proof nodes from the root down to the receipt.
+    /// For each transaction index, the proof nodes from the root down to the value.
     pub proofs: Vec<Vec<Bytes>>,
 }
 
-/// Builds the receipts trie for EIP-2718 encoded receipts and retains a proof for each of them.
-pub fn build_receipts_trie(receipts: &[Bytes]) -> ReceiptsTrie {
-    let targets: Vec<Nibbles> = (0..receipts.len() as u64).map(receipt_trie_key).collect();
+/// Builds the trie of values by transaction index (EIP-2718 encoded receipts or transactions) and retains a proof for
+/// each of them.
+pub fn build_indexed_trie(values: &[Bytes]) -> IndexedTrie {
+    let targets: Vec<Nibbles> = (0..values.len() as u64).map(trie_key).collect();
     let mut entries: Vec<(Nibbles, usize)> = targets.iter().copied().zip(0..).collect();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     let mut builder = HashBuilder::default().with_proof_retainer(ProofRetainer::new(targets.clone()));
     for (key, index) in &entries {
-        builder.add_leaf(*key, &receipts[*index]);
+        builder.add_leaf(*key, &values[*index]);
     }
     let root = builder.root();
     let nodes = builder.take_proof_nodes();
@@ -32,7 +34,7 @@ pub fn build_receipts_trie(receipts: &[Bytes]) -> ReceiptsTrie {
         .iter()
         .map(|target| nodes.matching_nodes_sorted(target).into_iter().map(|(_, node)| node).collect())
         .collect();
-    ReceiptsTrie { root, proofs }
+    IndexedTrie { root, proofs }
 }
 
 /// Encodes a log as RLP.

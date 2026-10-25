@@ -6,7 +6,7 @@ import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
 import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
 import {AmbMessageCodec} from "../../src/hardened/AmbMessageCodec.sol";
-import {IAMB} from "../../src/hardened/mediator/IAMB.sol";
+import {IAMB} from "../../src/hardened/IAMB.sol";
 import {MessageScenes} from "./utils/MessageScenes.sol";
 import {MessageFixtures} from "./utils/MessageFixtures.sol";
 import {MessageGate} from "./utils/MessageTargets.sol";
@@ -130,7 +130,7 @@ contract MessageBridgeSendTest is MessageScenes {
     function test_send_cutoffRefusesFromItsTimestamp() public {
         uint64 cutoff = uint64(block.timestamp + 100);
         MessageBridge cut = _deploySourceBridge(cutoff, address(gateA));
-        _openSends(cut);
+        _openDepositsWithoutProof(cut);
         _send(cut, "x", 100_000);
         vm.warp(cutoff);
         vm.expectRevert(abi.encodeWithSelector(MessageBridge.SendCutoffReached.selector, cutoff));
@@ -146,7 +146,7 @@ contract MessageBridgeSendTest is MessageScenes {
     function test_gate_refusalStopsTheSendAndSpendsNoNonce() public {
         MessageGate gate = new MessageGate();
         MessageBridge gated = _deploySourceBridge(0, address(gate));
-        _openSends(gated);
+        _openDepositsWithoutProof(gated);
         bytes32 prefix = AmbMessageCodec.messageIdPrefix(CHAIN_A, address(gated));
 
         assertEq(_send(gated, "x", 100_000), prefix);

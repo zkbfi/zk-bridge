@@ -4,7 +4,7 @@ pragma solidity 0.8.28;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {IMessageExecutor} from "./IMessageExecutor.sol";
+import {MessageBridge} from "../MessageBridge.sol";
 import {ITokenMediator} from "./ITokenMediator.sol";
 import {IWETH} from "./IWETH.sol";
 
@@ -123,14 +123,14 @@ contract FeeRouter is ReentrancyGuard {
     /// @notice Executes a message on the message bridge and attributes the fee of any tokens that it delivers to this
     /// router to `runner`. Any account may call it, and `runner` need not be the caller.
     /// @param runner The account that receives the fee.
-    /// @param encodedProof The proof that the message bridge verifies, in its own encoding.
-    function executeMessageWithRunner(address runner, bytes calldata encodedProof) external {
+    /// @param proof The evidence that `MessageBridge.executeMessage` verifies. The router forwards it and does not read it.
+    function executeMessageWithRunner(address runner, MessageBridge.MessageProof calldata proof) external {
         uint256 value = uint256(uint96(gasleft())) | (uint256(uint160(runner)) << 96);
         if (value <= NOT_RUNNING) revert InvalidRunnerValue();
         if (_storedRunner() > NOT_RUNNING) revert RunnerSlotInUse();
         _storeRunner(value);
 
-        IMessageExecutor(address(bridge.bridgeContract())).executeMessage(encodedProof);
+        MessageBridge(address(bridge.bridgeContract())).executeMessage(proof);
 
         Settlement memory waiting = _settlement;
         if (waiting.held != 0) {

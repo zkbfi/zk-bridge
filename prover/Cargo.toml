@@ -58,7 +58,7 @@ sp1-cuda = ["sp1", "sp1-sdk/cuda"]
 
 [dependencies]
 # The light-client crates. Every call goes through src/light_client.rs.
-# `lc-core` holds the builders for withdrawals, receipts, beacon states and ancestry.
+# `lc-core` holds the builders for message proofs, receipts, beacon states and ancestry.
 lc-core = { path = "../light-client/crates/lc-core", features = ["json"] }
 # Synthetic beacon data for the signed beacon chain only (feature `signed-beacon`). The tests always use it.
 lc-testkit = { path = "../light-client/crates/lc-testkit", optional = true }

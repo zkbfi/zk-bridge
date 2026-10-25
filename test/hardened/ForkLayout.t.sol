@@ -1,35 +1,36 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
 import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {BeaconBlockHeader, SSZ} from "../../src/hardened/SSZ.sol";
-import {HistoricalScenes} from "./utils/HistoricalScenes.sol";
-import {ReceiptFixtures} from "./utils/ReceiptFixtures.sol";
+import {MessageScenes} from "./utils/MessageScenes.sol";
+import {MessageFixtures} from "./utils/MessageFixtures.sol";
 
 /// @notice Tests of the permissionless, self-validating fork layout table. The light client's stored data must prove a
 /// candidate position, or the call reverts. Positions of other fields of the same trees must never be accepted.
-contract ForkLayoutTest is HistoricalScenes {
+contract ForkLayoutTest is MessageScenes {
     event BlockRootsLayoutValidated(uint256 indexed blockRootsGindex, uint64 firstSlot, uint64 lastSlot);
     event BlockHashLayoutValidated(uint256 indexed blockHashGindex, uint64 firstSlot, uint64 lastSlot);
     event HistoricalSummariesLayoutValidated(uint256 indexed historicalSummariesGindex, uint64 firstSlot, uint64 lastSlot);
 
     /// @dev The historical fixture: an Electra-like state (position 91) of an anchor at slot 1,000,000, a stored evidence
-    /// slot 100,000 below it, and three extra stored slots. The default vault has capellaEra 0.
+    /// slot 100,000 below it, and three extra stored slots. The default bridge has capellaEra 0.
     uint64 internal constant HISTORICAL_ANCHOR = 1_000_000;
     uint64 internal constant HISTORICAL_EVIDENCE = 900_000;
     uint256 internal constant SUMMARIES = 91;
 
-    BridgeVault internal fresh;
+    MessageBridge internal fresh;
     SceneParams internal params;
     Scene internal scene;
 
     function setUp() public override {
         super.setUp();
-        // The scene is built and stored before the vault under test exists, so the vault starts with no layout.
+        // The scene is built and stored, but no layout is added: the bridge under test starts with no layout.
         params = _defaultParams();
-        scene = _scene(ReceiptFixtures.type2(), params);
-        fresh = _newWithdrawalVault();
+        scene = _buildScene(MessageFixtures.deliver(), params, _messageHeaderRlp());
+        _storeScene(params, scene);
+        fresh = bridge;
     }
 
     function _rootsEvidence() internal view returns (BeaconProofVerifier.BlockRootsEvidence memory) {
@@ -390,12 +391,20 @@ contract ForkLayoutTest is HistoricalScenes {
         fresh.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
     }
 
-    /// Claim: an earlier slot in an era before `capellaEra` is rejected. Shows: the evidence slot is in era 109; a vault
-    /// with capellaEra 110 reverts with `DepositBeforeCapellaEra(109, 110)`. The vault with capellaEra 0 accepts the same
+    /// Claim: an earlier slot in an era before `capellaEra` is rejected. Shows: the evidence slot is in era 109; a bridge
+    /// with capellaEra 110 reverts with `DepositBeforeCapellaEra(109, 110)`. The bridge with capellaEra 0 accepts the same
     /// evidence. Matters: no summary exists before Capella, and the index would underflow.
     function test_HB01_historicalLayoutWithEraBeforeCapellaRejected() public {
         (, HistoricalScene memory historical) = _historicalFixture();
-        BridgeVault late = _newSecondWithdrawalVault(0, 110);
+        MessageBridge late = new MessageBridge(
+            address(lightClientForB),
+            CHAIN_B,
+            CHAIN_A,
+            MessageFixtures.REMOTE_BRIDGE,
+            MessageBridge.BridgeTerms(0, address(lightClientForA)),
+            110,
+            address(gateB)
+        );
         vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.DepositBeforeCapellaEra.selector, uint64(109), uint64(110)));
         late.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
         fresh.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
@@ -538,13 +547,13 @@ contract ForkLayoutTest is HistoricalScenes {
 
     // ================================================================ position rules: fields a proposer writes
 
-    /// @dev Builds and stores a scene whose evidence uses the given positions, without adding any layout to a vault.
+    /// @dev Builds and stores a scene whose evidence uses the given positions, without adding any layout to a bridge.
     /// The evidence is real: the stored light client data and the sparse trees agree with the chosen positions.
     function _storedScene(uint256 blockRootsGindex, uint256 anchorBodyGindex) internal returns (SceneParams memory forgedParams, Scene memory forged) {
         forgedParams = _defaultParams();
         forgedParams.blockRootsGindex = blockRootsGindex;
         forgedParams.anchorBodyGindex = anchorBodyGindex;
-        forged = _buildScene(ReceiptFixtures.type2(), forgedParams, _executionHeaderRlp(ReceiptFixtures.RECEIPTS_ROOT, 17));
+        forged = _buildScene(MessageFixtures.deliver(), forgedParams, _messageHeaderRlp());
         _storeScene(forgedParams, forged);
     }
 
@@ -553,7 +562,7 @@ contract ForkLayoutTest is HistoricalScenes {
     /// that two stored header roots sit at `G * 8192 + slot % 8192` under a stored state root (the test proves that with
     /// the branch check itself), and the call still reverts with `LayoutPositionInvalid`. The honest position 69 is
     /// accepted afterwards. Matters: `eth1_data_votes` has the same tree shape as `block_roots`, and a block proposer
-    /// writes its entries. If the vault accepted that position, a proposer could pick the "block roots" and forge deposits.
+    /// writes its entries. If the bridge accepted that position, a proposer could pick the "block roots" and forge deposits.
     function test_defect1_eth1DataVotesPositionRefusedAsBlockRoots() public {
         uint256[2] memory votesPositions = [uint256(82), 146];
         for (uint256 i = 0; i < votesPositions.length; i++) {
@@ -624,7 +633,7 @@ contract ForkLayoutTest is HistoricalScenes {
 
     /// Claim: the block hash rule is `(2**db + 9) * 2**dp + 12` with `db` and `dp` in 4 to 5: 412, 668, 812, 1324. Shows:
     /// each of 412, 668 and 1324 passes the position check (it fails later, on the evidence that was built for 812), and near misses are
-    /// refused. Matters: the Rust reference accepts only 412 and 812. The vault also admits 668 and 1324, the positions
+    /// refused. Matters: the Rust reference accepts only 412 and 812. The bridge also admits 668 and 1324, the positions
     /// of the same field if the body or the payload grows to 17 or more fields. They need evidence that the stored data
     /// proves, so they cannot be used to forge.
     function test_defect2_blockHashPositionRuleIsExact() public {

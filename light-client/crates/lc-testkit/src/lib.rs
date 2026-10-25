@@ -6,6 +6,7 @@ pub mod derive_support;
 pub mod fixture_set;
 pub mod fork_observation_scenarios;
 pub mod json;
+pub mod message_blocks;
 pub mod pulsechain;
 pub mod receipts;
 pub mod ssz_state;

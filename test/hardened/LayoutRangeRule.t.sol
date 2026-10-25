@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
 import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
-import {HistoricalScenes} from "./utils/HistoricalScenes.sol";
-import {ReceiptFixtures} from "./utils/ReceiptFixtures.sol";
+import {MessageScenes} from "./utils/MessageScenes.sol";
+import {MessageFixtures} from "./utils/MessageFixtures.sol";
 
 /// @notice Tests of the range rule of the layout tables. A validated range must never cover a slot where another
 /// position was validated, so ranges of different positions never overlap and a lookup has at most one answer. The
 /// tests use the `historical_summaries` table (positions 59 and 91). The other two tables share the rule.
-contract LayoutRangeRuleTest is HistoricalScenes {
+contract LayoutRangeRuleTest is MessageScenes {
     uint64 internal constant CAPELLA_ERA = 758;
     uint64 internal constant FIRST_STORED_SLOT = 6_000_000;
     uint256 internal constant DENEB_SUMMARIES = 59;
@@ -28,7 +28,7 @@ contract LayoutRangeRuleTest is HistoricalScenes {
     uint64 internal constant FUZZ_ANCHOR_STEP = 30_000;
     uint64 internal constant FUZZ_EVIDENCE_GAP = 10_000;
 
-    BridgeVault internal vault;
+    MessageBridge internal target;
     BeaconProofVerifier.HistoricalSummariesEvidence[] internal fuzzEvidence;
     uint256[] internal fuzzPositions;
 
@@ -42,12 +42,12 @@ contract LayoutRangeRuleTest is HistoricalScenes {
     /// Claim: a position validated, then replaced, then validated again never covers the slots of its replacement.
     /// Shows: position 59 at the first anchor, position 91 at the second, position 59 at the third. The third call
     /// starts a new range for 59 instead of growing the first one over the second anchor. An anchor between the second
-    /// and the third has no layout: its withdrawal reverts with `LayoutNotValidated`. Anyone can then validate 59 at that
-    /// anchor, which grows the third range downward (not the first one upward), and the withdrawal pays. Matters: before
-    /// the rule, the first range grew to the third anchor and a withdrawal at the middle anchor used position 59 in a
+    /// and the third has no layout: its message is refused with `LayoutNotValidated`. Anyone can then validate 59 at that
+    /// anchor, which grows the third range downward (not the first one upward), and the message executes. Matters: before
+    /// the rule, the first range grew to the third anchor and a message at the middle anchor used position 59 in a
     /// state that has position 91. The safety rested on the tree shape alone.
     function test_rangeRule_positionValidatedAgainAfterAnotherStartsNewRange() public {
-        vault = _historicalWorld(FIRST_STORED_SLOT, CAPELLA_ERA);
+        target = _historicalWorld(FIRST_STORED_SLOT, CAPELLA_ERA);
         HistoricalScene memory first = _sceneAt(FIRST_ANCHOR, DENEB_SUMMARIES);
         HistoricalScene memory second = _sceneAt(SECOND_ANCHOR, ELECTRA_SUMMARIES);
         HistoricalParams memory middleParams = _historicalParams(
@@ -56,11 +56,11 @@ contract LayoutRangeRuleTest is HistoricalScenes {
         HistoricalScene memory middle = _historicalScene(middleParams);
         HistoricalScene memory third = _sceneAt(THIRD_ANCHOR, DENEB_SUMMARIES);
 
-        vault.addHistoricalSummariesLayout(DENEB_SUMMARIES, first.historicalEvidence);
-        vault.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, second.historicalEvidence);
-        vault.addHistoricalSummariesLayout(DENEB_SUMMARIES, third.historicalEvidence);
+        target.addHistoricalSummariesLayout(DENEB_SUMMARIES, first.historicalEvidence);
+        target.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, second.historicalEvidence);
+        target.addHistoricalSummariesLayout(DENEB_SUMMARIES, third.historicalEvidence);
 
-        BeaconProofVerifier.HistoricalLayout[] memory rows = vault.historicalLayouts();
+        BeaconProofVerifier.HistoricalLayout[] memory rows = target.historicalLayouts();
         assertEq(rows.length, 3, "the third call starts a new range");
         assertEq(rows[0].historicalSummariesGindex, DENEB_SUMMARIES);
         assertEq(rows[0].lastSlot, FIRST_ANCHOR, "the first range stops at its own anchor");
@@ -68,35 +68,36 @@ contract LayoutRangeRuleTest is HistoricalScenes {
         assertEq(rows[2].historicalSummariesGindex, DENEB_SUMMARIES);
         assertEq(rows[2].firstSlot, THIRD_ANCHOR);
 
-        _addBodyRows(vault, middle);
-        ReceiptFixtures.Named memory named = ReceiptFixtures.type2();
+        _addBodyRows(target, middle);
+        MessageFixtures.Named memory named = MessageFixtures.deliver();
         vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutNotValidated.selector, MIDDLE_ANCHOR));
-        vault.withdraw(_historicalProof(middle, 0, named));
+        target.executeMessage(_historicalProof(middle, 0, named));
 
-        vault.addHistoricalSummariesLayout(DENEB_SUMMARIES, middle.historicalEvidence);
-        rows = vault.historicalLayouts();
+        target.addHistoricalSummariesLayout(DENEB_SUMMARIES, middle.historicalEvidence);
+        rows = target.historicalLayouts();
         assertEq(rows.length, 3, "the middle anchor grows the third range");
         assertEq(rows[0].lastSlot, FIRST_ANCHOR);
         assertEq(rows[2].firstSlot, MIDDLE_ANCHOR);
         assertEq(rows[2].lastSlot, THIRD_ANCHOR);
-        vault.withdraw(_historicalProof(middle, 0, named));
-        assertTrue(vault.claimed(named.nonce), "the middle deposit pays once its anchor is validated");
+        target.executeMessage(_historicalProof(middle, 0, named));
+        assertTrue(target.messageCallStatus(named.messageId), "the middle message executes once its anchor is validated");
+        assertEq(recorder.callCount(), 1, "the target is called once");
     }
 
     /// Claim: a range still grows when no other position was validated in the way. Shows: position 59 at the first and
     /// the third anchor, with 91 validated only above both, gives one range from the first to the third anchor.
     /// Matters: the rule must not split ranges that are safe, because every split leaves anchors with no layout.
     function test_rangeRule_rangeGrowsWhenNothingIsInTheWay() public {
-        vault = _historicalWorld(FIRST_STORED_SLOT, CAPELLA_ERA);
+        target = _historicalWorld(FIRST_STORED_SLOT, CAPELLA_ERA);
         HistoricalScene memory first = _sceneAt(FIRST_ANCHOR, DENEB_SUMMARIES);
         HistoricalScene memory third = _sceneAt(THIRD_ANCHOR, DENEB_SUMMARIES);
         HistoricalScene memory above = _sceneAt(THIRD_ANCHOR + FUZZ_ANCHOR_STEP, ELECTRA_SUMMARIES);
 
-        vault.addHistoricalSummariesLayout(DENEB_SUMMARIES, first.historicalEvidence);
-        vault.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, above.historicalEvidence);
-        vault.addHistoricalSummariesLayout(DENEB_SUMMARIES, third.historicalEvidence);
+        target.addHistoricalSummariesLayout(DENEB_SUMMARIES, first.historicalEvidence);
+        target.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, above.historicalEvidence);
+        target.addHistoricalSummariesLayout(DENEB_SUMMARIES, third.historicalEvidence);
 
-        BeaconProofVerifier.HistoricalLayout[] memory rows = vault.historicalLayouts();
+        BeaconProofVerifier.HistoricalLayout[] memory rows = target.historicalLayouts();
         assertEq(rows.length, 2);
         assertEq(rows[0].historicalSummariesGindex, DENEB_SUMMARIES);
         assertEq(rows[0].firstSlot, FIRST_ANCHOR);
@@ -108,23 +109,23 @@ contract LayoutRangeRuleTest is HistoricalScenes {
     /// `LayoutRangeConflict`. Matters: the table never holds two answers for one slot. The range of 91 was built from
     /// real evidence at both ends, and the conflict is reported instead of hidden. Validating 59 first would have kept both.
     function test_rangeRule_slotInsideAnotherRangeRefused() public {
-        vault = _historicalWorld(FIRST_STORED_SLOT, CAPELLA_ERA);
+        target = _historicalWorld(FIRST_STORED_SLOT, CAPELLA_ERA);
         HistoricalScene memory first = _sceneAt(FIRST_ANCHOR, ELECTRA_SUMMARIES);
         HistoricalScene memory second = _sceneAt(SECOND_ANCHOR, DENEB_SUMMARIES);
         HistoricalScene memory third = _sceneAt(THIRD_ANCHOR, ELECTRA_SUMMARIES);
 
-        vault.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, first.historicalEvidence);
-        vault.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, third.historicalEvidence);
+        target.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, first.historicalEvidence);
+        target.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, third.historicalEvidence);
         vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutRangeConflict.selector, SECOND_ANCHOR));
-        vault.addHistoricalSummariesLayout(DENEB_SUMMARIES, second.historicalEvidence);
-        assertEq(vault.historicalLayouts().length, 1);
+        target.addHistoricalSummariesLayout(DENEB_SUMMARIES, second.historicalEvidence);
+        assertEq(target.historicalLayouts().length, 1);
     }
 
     // ================================================================ random orders
 
     /// @dev Builds the fuzz scenes once. Evidence goes to storage, so each fuzz run starts from the same chain.
     function _buildFuzzScenes() internal {
-        vault = _historicalWorld(FIRST_STORED_SLOT, CAPELLA_ERA);
+        target = _historicalWorld(FIRST_STORED_SLOT, CAPELLA_ERA);
         uint256[8] memory pattern = [uint256(59), 91, 59, 59, 91, 59, 91, 91];
         for (uint256 i = 0; i < FUZZ_SCENE_COUNT; i++) {
             uint64 anchor = FUZZ_FIRST_ANCHOR + uint64(i) * FUZZ_ANCHOR_STEP;
@@ -149,7 +150,7 @@ contract LayoutRangeRuleTest is HistoricalScenes {
         for (uint256 step = 0; step < 12; step++) {
             seed = uint256(keccak256(abi.encode(seed, step)));
             uint256 pick = seed % FUZZ_SCENE_COUNT;
-            try vault.addHistoricalSummariesLayout(fuzzPositions[pick], fuzzEvidence[pick]) {
+            try target.addHistoricalSummariesLayout(fuzzPositions[pick], fuzzEvidence[pick]) {
                 validated[pick] = true;
             } catch (bytes memory reason) {
                 assertEq(
@@ -164,7 +165,7 @@ contract LayoutRangeRuleTest is HistoricalScenes {
     }
 
     function _assertNoOverlap() internal view {
-        BeaconProofVerifier.HistoricalLayout[] memory rows = vault.historicalLayouts();
+        BeaconProofVerifier.HistoricalLayout[] memory rows = target.historicalLayouts();
         for (uint256 i = 0; i < rows.length; i++) {
             for (uint256 j = i + 1; j < rows.length; j++) {
                 if (rows[i].historicalSummariesGindex == rows[j].historicalSummariesGindex) continue;
@@ -175,7 +176,7 @@ contract LayoutRangeRuleTest is HistoricalScenes {
     }
 
     function _assertEachValidatedAnchorHasOneOwner(bool[8] memory validated) internal view {
-        BeaconProofVerifier.HistoricalLayout[] memory rows = vault.historicalLayouts();
+        BeaconProofVerifier.HistoricalLayout[] memory rows = target.historicalLayouts();
         for (uint256 scene = 0; scene < FUZZ_SCENE_COUNT; scene++) {
             if (!validated[scene]) continue;
             uint64 anchor = FUZZ_FIRST_ANCHOR + uint64(scene) * FUZZ_ANCHOR_STEP;

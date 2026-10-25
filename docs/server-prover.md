@@ -136,7 +136,7 @@ Use your own nodes where you can. Public endpoints are slow and often prune data
 | `routes.<name>.destination.rpc_url` | An execution RPC of the destination chain. `prove` needs `eth_chainId` and `eth_call` only. |
 | `routes.<name>.destination.light_client` | The `BeaconLightClient` on the destination chain. |
 
-The `evidence` command needs more: the execution RPC of the source chain with `eth_getTransactionReceipt`, `eth_getBlockByNumber` and `eth_getBlockReceipts`, the two vault addresses, and on the destination `eth_getLogs` and `eth_blockNumber`.
+The `evidence` command needs more: the execution RPC of the source chain with `eth_getTransactionReceipt`, `eth_getBlockByNumber` and `eth_getBlockReceipts`, `eth_getRawTransactionByHash` (the transactions trie needs the bytes of every transaction of the block), the two bridge addresses, and on the destination `eth_getLogs` and `eth_blockNumber`.
 
 The beacon API must serve these paths: `/eth/v1/beacon/light_client/updates`, `/eth/v1/beacon/light_client/finality_update`, `/eth/v1/beacon/light_client/bootstrap/<root>`, `/eth/v1/beacon/headers/<id>`, `/eth/v1/beacon/blocks/<slot>/root`, `/eth/v2/beacon/blocks/<id>` and `/eth/v2/debug/beacon/states/<root>`. The debug path is often off by default; turn it on at your node. A node must keep light-client updates for every sync committee period that a light client lags behind. When it does not, `prove` stops with an error that names the missing period.
 
@@ -144,9 +144,9 @@ Before you rely on the setup, run `zk-bridge-prover --config prover.toml prove` 
 
 ## What the stateful servers do
 
-The producer replaces the work of the old relayer that makes proofs. The rest belongs to your stateful servers. They post the updates, open the vaults and send the withdrawals. The launch sequence in `docs/hardened-build-contract.md` lists the steps in order.
+The producer replaces the work of the old relayer that makes proofs. The rest belongs to your stateful servers. They post the updates, open the bridges and deliver the messages. The launch sequence in `docs/hardened-build-contract.md` lists the steps in order.
 
-A new vault is locked. It refuses every deposit with `DepositsNotOpen()` until a proof shows that the light client on the other chain stored a head. Without this lock, a deposit made before the first update of the light client could never be paid. After the deployment, a server runs `prove` for each route, sends `updateCalldata` to the light client, and repeats until a head is stored. Then it builds the opening proof (a state proof of the remote light client from `eth_getProof`) and calls `openDeposits` on each source vault. The key of the server pays for these transactions on both chains.
+A new bridge is locked. It refuses every send with `DepositsNotOpen()` until a proof shows that the light client on the other chain stored a head. Without this lock, a message sent before the first update of the light client could never be delivered. A token relay is a send, so the lock covers it. After the deployment, a server runs `prove` for each route, sends `updateCalldata` to the light client, and repeats until a head is stored. Then it builds the opening proof (a state proof of the remote light client from `eth_getProof`) and calls `openDeposits` on each bridge. The key of the server pays for these transactions on both chains.
 
 ## Verifying a proof before you rely on the service
 

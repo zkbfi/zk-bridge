@@ -7,7 +7,6 @@ import {AmbMessageCodec} from "../../src/hardened/AmbMessageCodec.sol";
 import {BeaconBlockHeader, SSZ} from "../../src/hardened/SSZ.sol";
 import {MessageScenes} from "./utils/MessageScenes.sol";
 import {MessageFixtures} from "./utils/MessageFixtures.sol";
-import {ReceiptFixtures} from "./utils/ReceiptFixtures.sol";
 
 /// @notice Refusals of the message bridge: every way that a proof or a log can be wrong. Each test shows the exact
 /// error and then shows that the honest message still executes, so a refusal is never a side effect of a broken scene.
@@ -282,7 +281,7 @@ contract MessageBridgeProofTest is MessageScenes {
     function test_anchor_missingLayoutAndShortHeaderAreRefused() public {
         MessageBridge bare = _newDestinationBridge(lightClientForB, 0, DEFAULT_CAPELLA_ERA);
         SceneParams memory params = _defaultParams();
-        Scene memory scene = _buildScene(ReceiptFixtures.legacy(), params, _messageHeaderRlp());
+        Scene memory scene = _buildScene(MessageFixtures.deliver(), params, _messageHeaderRlp());
         _storeScene(params, scene);
         MessageFixtures.Named memory named = MessageFixtures.deliver();
         vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LayoutNotValidated.selector, params.anchorSlot));
@@ -290,7 +289,7 @@ contract MessageBridgeProofTest is MessageScenes {
 
         _addLayouts(bare, params, scene);
         SceneParams memory truncatedParams = _defaultParams();
-        Scene memory truncated = _buildScene(ReceiptFixtures.legacy(), truncatedParams, _executionHeaderRlp(MessageFixtures.RECEIPTS_ROOT, MessageFixtures.TRANSACTIONS_ROOT, 5));
+        Scene memory truncated = _buildScene(MessageFixtures.deliver(), truncatedParams, _executionHeaderRlp(MessageFixtures.RECEIPTS_ROOT, MessageFixtures.TRANSACTIONS_ROOT, 5));
         _storeScene(truncatedParams, truncated);
         _addLayouts(bare, truncatedParams, truncated);
         MessageBridge.MessageProof memory proof = _messageProof(truncated, named);
@@ -306,7 +305,7 @@ contract MessageBridgeProofTest is MessageScenes {
         internal
         returns (Scene memory scene)
     {
-        scene = _buildScene(ReceiptFixtures.legacy(), params, _executionHeaderRlp(receiptsRoot, transactionsRoot, 17));
+        scene = _buildScene(MessageFixtures.deliver(), params, _executionHeaderRlp(receiptsRoot, transactionsRoot, 17));
         _storeScene(params, scene);
         _addLayouts(bridge, params, scene);
     }

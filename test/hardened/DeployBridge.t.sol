@@ -4,29 +4,36 @@ pragma solidity ^0.8.24;
 import {Test, console2} from "forge-std/Test.sol";
 import {DeployBridge} from "../../script/hardened/DeployBridge.s.sol";
 import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
-import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
+import {TokenMediator} from "../../src/hardened/mediator/TokenMediator.sol";
+import {TokenFactory} from "../../src/hardened/mediator/TokenFactory.sol";
+import {WETHOmnibridgeRouter} from "../../src/hardened/mediator/WETHOmnibridgeRouter.sol";
+import {FeeRouter} from "../../src/hardened/mediator/FeeRouter.sol";
+import {ITokenMediator} from "../../src/hardened/mediator/ITokenMediator.sol";
+import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
 import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
 import {OracleSP1Verifier} from "../../src/mocks/OracleSP1Verifier.sol";
-import {MockERC20} from "../../src/mocks/MockERC20.sol";
-import {ScriptedFlowLimiter} from "./utils/FlowLimiterMocks.sol";
+import {MockWrappedNative} from "../../src/mocks/MockWrappedNative.sol";
+import {DeployFlowLimiter} from "./utils/DeployMocks.sol";
 
 /// @notice Tests of the deploy script logic. One Foundry chain plays both chains: the test switches `block.chainid`
 /// and the deployer nonce with cheatcodes, and it uses different nonces on the two sides so the addresses differ.
-/// Chain A is Ethereum (chain identifier 1) and chain B is PulseChain (chain identifier 369). Each chain gets a light
-/// client at nonce `n`, a deposit gate at `n + 1` and a vault at `n + 2`.
+/// Chain A is Ethereum (chain identifier 1) and chain B is PulseChain (chain identifier 369). The nonce table is in the
+/// comment of the script. Chain A has a wrapped native token and a fee router. Chain B has a wrapped native token and no
+/// fee router.
 /// The `run()` entry point needs two live endpoints (see the harness) and is not run here.
 contract DeployBridgeTest is Test {
     DeployBridge internal script;
     OracleSP1Verifier internal verifier;
-    MockERC20 internal tokenOnA;
-    MockERC20 internal tokenOnB;
+    MockWrappedNative internal wrappedNativeOnA;
+    MockWrappedNative internal wrappedNativeOnB;
 
     address internal deployer = makeAddr("deployer");
     /// @dev The flow limiter that `_chainJson` writes for chain 1. Zero, as in the example configuration, unless a test sets it.
     address internal configuredFlowLimiter;
     uint256 internal constant NONCE_A = 3;
-    uint256 internal constant NONCE_B = 8;
+    uint256 internal constant NONCE_B = 20;
     address internal constant BEACON_ROOTS = 0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02;
 
     /// @dev The fork table of Ethereum: Capella, Deneb, Electra and Fulu.
@@ -40,8 +47,8 @@ contract DeployBridgeTest is Test {
     function setUp() public {
         script = new DeployBridge();
         verifier = new OracleSP1Verifier(makeAddr("oracle"));
-        tokenOnA = new MockERC20("A", "A");
-        tokenOnB = new MockERC20("B", "B");
+        wrappedNativeOnA = new MockWrappedNative();
+        wrappedNativeOnB = new MockWrappedNative();
     }
 
     // ---------------------------------------------------------------- configuration builders
@@ -53,8 +60,9 @@ contract DeployBridgeTest is Test {
     /// @dev The settings of one chain. The light client part describes the OTHER chain. Chain 1 is Ethereum, so its
     /// light client tracks PulseChain (Capella epoch 3, era 0) and its gate follows Ethereum (enforcing from the start).
     /// Chain 369 is the reverse: its light client tracks Ethereum (Capella epoch 194048, era 758) and its gate follows
-    /// PulseChain (detects the beacon roots contract). The verifier is pinned to its real code hash. The vault on
-    /// chain 1 has a live fee switch (the deployer is the authority); the vault on chain 369 has none.
+    /// PulseChain (detects the beacon roots contract). The verifier is pinned to its real code hash. The mediator on
+    /// chain 1 has a live fee switch (the deployer is the authority); the mediator on chain 369 has none. Chain 1 deploys
+    /// the native coin router and the fee router, chain 369 only the native coin router.
     function _chainJson(uint64 chainId, uint256 nonce, string memory verifierText, string memory slot)
         internal
         view
@@ -65,7 +73,9 @@ contract DeployBridgeTest is Test {
             '","verifier":"', verifierText, '","verifierCodeHash":"', _hexString(address(verifier).codehash),
             '","depositCutoffTimestamp":"0","deployerNonce":"', vm.toString(nonce), '",',
             chainId == 1 ? _liveFeeJson() : _nullifiedFeeJson(),
-            '"flowLimiter":"', vm.toString(chainId == 1 ? configuredFlowLimiter : address(0)), '",'
+            '"flowLimiter":"', vm.toString(chainId == 1 ? configuredFlowLimiter : address(0)), '",',
+            '"wrappedNative":"', vm.toString(chainId == 1 ? address(wrappedNativeOnA) : address(wrappedNativeOnB)),
+            '","deployFeeRouter":"', chainId == 1 ? "true" : "false", '",'
         );
         string memory client = string.concat(
             '"lightClient":{"programVKey":"', _hexString(keccak256("light client program")),
@@ -145,8 +155,7 @@ contract DeployBridgeTest is Test {
         string memory verifierText = vm.toString(address(verifier));
         return string.concat(
             '{"deployer":"', deployerText, '","chainA":', _chainJson(1, NONCE_A, verifierText, slot),
-            ',"chainB":', _chainJson(369, NONCE_B, verifierText, slot),
-            ',"tokenPairs":[{"chainA":"', vm.toString(address(tokenOnA)), '","chainB":"', vm.toString(address(tokenOnB)), '"}]}'
+            ',"chainB":', _chainJson(369, NONCE_B, verifierText, slot), "}"
         );
     }
 
@@ -159,30 +168,7 @@ contract DeployBridgeTest is Test {
         view
         returns (DeployBridge.ChainDeployment memory deploymentA, DeployBridge.ChainDeployment memory deploymentB)
     {
-        uint8[] memory decimalsA = new uint8[](1);
-        decimalsA[0] = MockERC20(address(tokenOnA)).decimals();
-        uint8[] memory decimalsB = new uint8[](1);
-        decimalsB[0] = tokenOnB.decimals();
-        deploymentA = script.withPairs(
-            script.baseDeployment(
-                config.chainA, config.chainB.chainId, config.deployer, plan.lightClientA, plan.gateA, plan.vaultA, plan.vaultB,
-                plan.lightClientB
-            ),
-            config.tokensA,
-            config.tokensB,
-            decimalsB
-        );
-        deploymentB = script.withPairs(
-            script.baseDeployment(
-                config.chainB, config.chainA.chainId, config.deployer, plan.lightClientB, plan.gateB, plan.vaultB, plan.vaultA,
-                plan.lightClientA
-            ),
-            config.tokensB,
-            config.tokensA,
-            decimalsA
-        );
-        deploymentA = script.withRegistry(deploymentA, plan.observedLightClientA, plan.registryA);
-        deploymentB = script.withRegistry(deploymentB, plan.observedLightClientB, plan.registryB);
+        return script.buildDeployments(config, plan);
     }
 
     /// @dev Puts code at the beacon roots address, as an Ethereum node has it.
@@ -193,7 +179,7 @@ contract DeployBridgeTest is Test {
     // ================================================================ configuration is validated
 
     /// Claim: the script parses a complete configuration. Shows: every field lands where it belongs, including the
-    /// deposit cutoff, the Capella era of the other chain, and every gate setting of both chains.
+    /// send cutoff, the Capella era of the other chain, and every gate setting of both chains.
     /// Matters: R2-08 (the plan starts from a configuration the script understands) and HB-02 (each gate is built from
     /// the settings of its own chain, so a swapped field would fail here).
     function test_R2_08_parseConfig_acceptsCompleteConfiguration() public view {
@@ -213,8 +199,10 @@ contract DeployBridgeTest is Test {
         assertEq(config.chainB.fee.authority, address(0), "chain B starts with the fee removed");
         assertEq(config.chainB.fee.basisPoints, 0);
         assertEq(config.chainB.fee.ceilingBasisPoints, 0);
-        assertEq(config.tokensA[0], address(tokenOnA));
-        assertEq(config.tokensB[0], address(tokenOnB));
+        assertEq(config.chainA.wrappedNative, address(wrappedNativeOnA));
+        assertEq(config.chainB.wrappedNative, address(wrappedNativeOnB));
+        assertEq(uint8(config.chainA.feeRouter), uint8(DeployBridge.RouterChoice.Deploy));
+        assertEq(uint8(config.chainB.feeRouter), uint8(DeployBridge.RouterChoice.Skip));
 
         // The light client of chain A tracks PulseChain; the light client of chain B tracks Ethereum.
         assertEq(config.chainA.lightClient.capellaForkEpoch, 3);
@@ -262,16 +250,17 @@ contract DeployBridgeTest is Test {
     }
 
     /// Claim: the example file holds every key the script reads for both chains, and no key the script no longer reads.
-    /// Shows: each key exists in the example file; the removed `slotsPerHistoricalRoot` key does not. Matters: an
+    /// Shows: each key exists in the example file; the removed `slotsPerHistoricalRoot` key and the removed token pairs
+    /// do not. Matters: an
     /// example that lacks a key sends the operator into a failure the example never warned about, and an example with a
     /// dead key suggests a setting that no longer has any effect.
     function test_HB02_exampleConfigurationHoldsEveryKeyTheScriptReads() public view {
         string memory json = vm.readFile("script/hardened/bridge.config.example.json");
         string[2] memory chains = [".chainA", ".chainB"];
-        string[23] memory keys = [
+        string[25] memory keys = [
             ".rpcAlias", ".chainId", ".verifier", ".verifierCodeHash", ".depositCutoffTimestamp", ".deployerNonce",
             ".fee.authority", ".fee.recipient", ".fee.basisPoints", ".fee.ceilingBasisPoints",
-            ".flowLimiter", ".lightClient.programVKey", ".lightClient.genesisValidatorsRoot", ".lightClient.slotsPerPeriod",
+            ".flowLimiter", ".wrappedNative", ".deployFeeRouter", ".lightClient.programVKey", ".lightClient.genesisValidatorsRoot", ".lightClient.slotsPerPeriod",
             ".lightClient.genesisTime", ".lightClient.secondsPerSlot", ".lightClient.slotsPerEpoch", ".lightClient.capellaForkEpoch", ".lightClient.capellaEra",
             ".lightClient.initialSlot", ".lightClient.initialHeaderRoot", ".lightClient.initialSyncCommitteeHash",
             ".lightClient.initialNextSyncCommitteeHash"
@@ -301,8 +290,7 @@ contract DeployBridgeTest is Test {
             assertTrue(vm.keyExistsJson(json, path), path);
         }
         assertFalse(vm.keyExistsJson(json, ".chainA.observation"), "Ethereum has no registry");
-        assertTrue(vm.keyExistsJson(json, ".tokenPairs[0].chainA"));
-        assertTrue(vm.keyExistsJson(json, ".tokenPairs[0].chainB"));
+        assertFalse(vm.keyExistsJson(json, ".tokenPairs"), "the mediator needs no token registration");
     }
 
     /// Claim: a placeholder in any field is refused with the name of the field. Shows: ten fields in turn, three of
@@ -350,7 +338,7 @@ contract DeployBridgeTest is Test {
     }
 
     /// Claim: zero values are refused with the name of the field. Shows: a zero deployer, a zero verifier, a zero chain
-    /// identifier, a zero checkpoint header root, a zero committee, a zero token address, zero slots per period, and
+    /// identifier, a zero checkpoint header root, a zero committee, zero slots per period, and
     /// the zero gate settings (genesis time, seconds per slot, slots per epoch, fork version, state depth, seal depth).
     /// A zero deposit cutoff is valid (no cutoff). Matters: a zero value is an unset value (H-17).
     function test_R2_08_parseConfig_refusesZeroValues() public {
@@ -378,9 +366,6 @@ contract DeployBridgeTest is Test {
 
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.lightClient.initialNextSyncCommitteeHash"));
         script.parseConfig(vm.replace(json, vm.toString(keccak256("next committee")), zeroWord));
-
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".tokenPairs.chainA"));
-        script.parseConfig(vm.replace(json, vm.toString(address(tokenOnA)), zeroAddress));
 
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.lightClient.slotsPerPeriod"));
         script.parseConfig(vm.replace(json, '"slotsPerPeriod":"8192"', '"slotsPerPeriod":"0"'));
@@ -418,7 +403,7 @@ contract DeployBridgeTest is Test {
     /// Claim: the Capella era must be the era of the Capella fork slot of the chain the light client tracks, rounded
     /// down. Shows: a wrong era on each chain reverts with the configured and the derived value; an epoch that sits one
     /// before an era boundary and one on it give the neighbouring eras; the honest values pass. Matters: HB-01 (the
-    /// vault turns a deposit slot into an index of `historical_summaries` with this number, so a number that is too low
+    /// bridge turns a message slot into an index of `historical_summaries` with this number, so a number that is too low
     /// reads the wrong summary and one that is too high rejects every old deposit).
     function test_HB01_parseConfig_refusesCapellaEraThatDiffersFromTheForkEpoch() public {
         string memory json = _validJson();
@@ -542,83 +527,259 @@ contract DeployBridgeTest is Test {
 
     // ================================================================ prediction
 
-    /// Claim: the predicted addresses equal the deployed addresses, on both chains, before anything deploys, and the
-    /// three contracts of a chain are wired to each other. Shows: `predictAddresses` from the configuration (light
-    /// client at `n`, gate at `n + 1`, vault at `n + 2`), then two `deployChain` runs at the configured nonces; every
-    /// deployed contract sits at its predicted address, each vault points at the other vault, at its own gate and at
-    /// the Capella era of the OTHER chain, and each gate has the mode of its own chain. Matters: R2-08 (each vault needs
-    /// the other's address as an immutable) and HB-02 (a vault with the wrong gate would admit deposits unchecked).
+    /// @dev The addresses of both chains after `_deployBoth`.
+    DeployBridge.Plan internal planned;
+    DeployBridge.ChainAddresses internal deployedA;
+    DeployBridge.ChainAddresses internal deployedB;
+
+    /// @dev Deploys both chains from the configured nonces, as `run` does, and records the plan and the deployed addresses.
+    function _deployBoth() internal {
+        DeployBridge.BridgeConfig memory config = script.parseConfig(_validJson());
+        planned = script.predictAddresses(config);
+        (DeployBridge.ChainDeployment memory deploymentA, DeployBridge.ChainDeployment memory deploymentB) =
+            _deployments(config, planned);
+        _etchBeaconRoots();
+        vm.chainId(1);
+        vm.setNonce(deployer, uint64(NONCE_A));
+        deployedA = script.deployChain(deploymentA);
+        vm.chainId(369);
+        vm.setNonce(deployer, uint64(NONCE_B));
+        deployedB = script.deployChain(deploymentB);
+    }
+
+    function _assertSameAddresses(DeployBridge.ChainAddresses memory predicted, DeployBridge.ChainAddresses memory actual)
+        internal
+        pure
+    {
+        assertEq(actual.lightClient, predicted.lightClient, "light client");
+        assertEq(actual.observedLightClient, predicted.observedLightClient, "own-chain light client");
+        assertEq(actual.registry, predicted.registry, "registry");
+        assertEq(actual.gate, predicted.gate, "gate");
+        assertEq(actual.bridge, predicted.bridge, "bridge");
+        assertEq(actual.mediator, predicted.mediator, "mediator");
+        assertEq(actual.factory, predicted.factory, "factory");
+        assertEq(actual.wrappedRouter, predicted.wrappedRouter, "wrapped router");
+        assertEq(actual.feeRouter, predicted.feeRouter, "fee router");
+    }
+
+    /// Claim: the nonce table of the script is the order of the deployment. Shows: the plan puts each contract at the
+    /// documented offset on both chains (chain A has no registry and has both routers; chain B has the registry and one
+    /// router), the factory at nonce 1 of its mediator, and the two `deployChain` runs end on the nonce that the table
+    /// gives. Every deployed address equals its prediction. Matters: R2-08. Each bridge and each mediator names its twin
+    /// as an immutable, so one shifted nonce would point a contract at an address that holds something else.
     function test_R2_08_predictedAddressesMatchDeployedAddresses() public {
         DeployBridge.BridgeConfig memory config = script.parseConfig(_validJson());
         DeployBridge.Plan memory plan = script.predictAddresses(config);
-        assertEq(plan.lightClientA, vm.computeCreateAddress(deployer, NONCE_A));
-        assertEq(plan.gateA, vm.computeCreateAddress(deployer, NONCE_A + 1));
-        assertEq(plan.vaultA, vm.computeCreateAddress(deployer, NONCE_A + 2));
-        assertEq(plan.lightClientB, vm.computeCreateAddress(deployer, NONCE_B));
-        assertEq(plan.observedLightClientA, address(0), "Ethereum has no own-chain light client");
-        assertEq(plan.registryA, address(0), "Ethereum has no registry");
-        assertEq(plan.observedLightClientB, vm.computeCreateAddress(deployer, NONCE_B + 1));
-        assertEq(plan.registryB, vm.computeCreateAddress(deployer, NONCE_B + 2));
-        assertEq(plan.gateB, vm.computeCreateAddress(deployer, NONCE_B + 3));
-        assertEq(plan.vaultB, vm.computeCreateAddress(deployer, NONCE_B + 4));
+        assertEq(plan.chainA.lightClient, vm.computeCreateAddress(deployer, NONCE_A));
+        assertEq(plan.chainA.observedLightClient, address(0), "Ethereum has no own-chain light client");
+        assertEq(plan.chainA.registry, address(0), "Ethereum has no registry");
+        assertEq(plan.chainA.gate, vm.computeCreateAddress(deployer, NONCE_A + 1));
+        assertEq(plan.chainA.bridge, vm.computeCreateAddress(deployer, NONCE_A + 2));
+        assertEq(plan.chainA.mediator, vm.computeCreateAddress(deployer, NONCE_A + 3));
+        assertEq(plan.chainA.wrappedRouter, vm.computeCreateAddress(deployer, NONCE_A + 4));
+        assertEq(plan.chainA.feeRouter, vm.computeCreateAddress(deployer, NONCE_A + 5));
+        assertEq(plan.chainA.factory, vm.computeCreateAddress(plan.chainA.mediator, 1));
+        assertEq(plan.chainB.lightClient, vm.computeCreateAddress(deployer, NONCE_B));
+        assertEq(plan.chainB.observedLightClient, vm.computeCreateAddress(deployer, NONCE_B + 1));
+        assertEq(plan.chainB.registry, vm.computeCreateAddress(deployer, NONCE_B + 2));
+        assertEq(plan.chainB.gate, vm.computeCreateAddress(deployer, NONCE_B + 3));
+        assertEq(plan.chainB.bridge, vm.computeCreateAddress(deployer, NONCE_B + 4));
+        assertEq(plan.chainB.mediator, vm.computeCreateAddress(deployer, NONCE_B + 5));
+        assertEq(plan.chainB.wrappedRouter, vm.computeCreateAddress(deployer, NONCE_B + 6));
+        assertEq(plan.chainB.feeRouter, address(0), "chain B deploys no fee router");
+        assertEq(plan.chainB.factory, vm.computeCreateAddress(plan.chainB.mediator, 1));
+
         (DeployBridge.ChainDeployment memory deploymentA, DeployBridge.ChainDeployment memory deploymentB) =
             _deployments(config, plan);
-
         _etchBeaconRoots();
         vm.chainId(1);
         vm.setNonce(deployer, uint64(NONCE_A));
         uint256 gasBefore = gasleft();
-        (address lightClientA, address gateA, address vaultA) = script.deployChain(deploymentA);
-        console2.log("gas of deployChain for chain A (light client, gate, vault, read-back)", gasBefore - gasleft());
+        DeployBridge.ChainAddresses memory actualA = script.deployChain(deploymentA);
+        console2.log("gas of deployChain for chain A (all contracts and the read-back)", gasBefore - gasleft());
+        assertEq(vm.getNonce(deployer), NONCE_A + 6, "six contracts left the deployer on chain A");
         vm.chainId(369);
         vm.setNonce(deployer, uint64(NONCE_B));
         gasBefore = gasleft();
-        (address lightClientB, address gateB, address vaultB) = script.deployChain(deploymentB);
-        console2.log("gas of deployChain for chain B (light client, gate, vault, read-back)", gasBefore - gasleft());
+        DeployBridge.ChainAddresses memory actualB = script.deployChain(deploymentB);
+        console2.log("gas of deployChain for chain B (all contracts and the read-back)", gasBefore - gasleft());
+        assertEq(vm.getNonce(deployer), NONCE_B + 7, "seven contracts left the deployer on chain B");
 
-        assertEq(lightClientA, plan.lightClientA);
-        assertEq(gateA, plan.gateA);
-        assertEq(vaultA, plan.vaultA);
-        assertEq(lightClientB, plan.lightClientB);
-        assertEq(gateB, plan.gateB);
-        assertEq(vaultB, plan.vaultB);
-        assertEq(vm.getNonce(deployer), NONCE_B + 5, "five contracts left the deployer on chain B");
+        _assertSameAddresses(plan.chainA, actualA);
+        _assertSameAddresses(plan.chainB, actualB);
+    }
 
-        // PulseChain: the gate reads a registry, the registry reads a light client of PulseChain on PulseChain
-        ForkRegistry registryB = ForkRegistry(address(BeaconForkGate(gateB).forkRegistry()));
-        assertEq(address(registryB), plan.registryB);
-        assertEq(address(registryB.lightClient()), plan.observedLightClientB);
-        assertTrue(plan.observedLightClientB != lightClientB, "the own-chain light client is not the light client of Ethereum");
-        assertEq(BeaconLightClient(plan.observedLightClientB).genesisValidatorsRoot(), BeaconLightClient(lightClientA).genesisValidatorsRoot(), "both follow the PulseChain beacon chain");
-        assertEq(registryB.observationProgramVKey(), keccak256("fork observation program"));
-        assertTrue(registryB.observationProgramVKey() != BeaconLightClient(plan.observedLightClientB).programVKey());
-        assertEq(address(registryB.verifier()), address(verifier));
-        assertEq(address(BeaconForkGate(gateA).forkRegistry()), address(0), "Ethereum stays enforcing with no registry");
+    /// Claim: the mediator on each side names the real mediator of the other chain. Shows: after both deployments,
+    /// `mediatorContractOnOtherSide` of each mediator equals the deployed mediator of the other chain, which has code, and
+    /// each mediator names the bridge and the chain identifier of its own side. Matters: the remote mediator is an
+    /// immutable that decides which contract may order releases. A wrong one cannot be repaired.
+    function test_mediatorOnEachSideNamesTheRealMediatorOfTheOtherChain() public {
+        _deployBoth();
+        TokenMediator mediatorA = TokenMediator(deployedA.mediator);
+        TokenMediator mediatorB = TokenMediator(deployedB.mediator);
+        assertTrue(deployedA.mediator != deployedB.mediator, "control: the two mediators differ");
+        assertGt(deployedB.mediator.code.length, 0, "the mediator of chain B exists");
+        assertEq(mediatorA.mediatorContractOnOtherSide(), deployedB.mediator, "mediator A points at the real mediator B");
+        assertEq(mediatorB.mediatorContractOnOtherSide(), deployedA.mediator, "mediator B points at the real mediator A");
+        assertEq(address(mediatorA.bridgeContract()), deployedA.bridge);
+        assertEq(address(mediatorB.bridgeContract()), deployedB.bridge);
+        assertEq(mediatorA.remoteChainId(), 369);
+        assertEq(mediatorB.remoteChainId(), 1);
+    }
 
-        assertEq(BridgeVault(vaultA).remoteVault(), vaultB, "vault A points at the real vault B");
-        assertEq(BridgeVault(vaultB).remoteVault(), vaultA, "vault B points at the real vault A");
-        assertEq(BridgeVault(vaultA).remoteLightClient(), lightClientB, "vault A opens on the state of the light client of chain B");
-        assertEq(BridgeVault(vaultB).remoteLightClient(), lightClientA, "vault B opens on the state of the light client of chain A");
-        assertFalse(BridgeVault(vaultA).depositsOpen(), "vault A starts locked");
-        assertFalse(BridgeVault(vaultB).depositsOpen(), "vault B starts locked");
-        assertEq(address(BridgeVault(vaultA).lightClient()), lightClientA);
-        assertEq(address(BridgeVault(vaultB).lightClient()), lightClientB);
-        assertEq(address(BridgeVault(vaultA).depositGate()), gateA, "vault A uses the gate of chain A");
-        assertEq(address(BridgeVault(vaultB).depositGate()), gateB, "vault B uses the gate of chain B");
-        assertEq(BridgeVault(vaultA).capellaEra(), 0, "vault A proves PulseChain deposits: Capella era 0");
-        assertEq(BridgeVault(vaultB).capellaEra(), 758, "vault B proves Ethereum deposits: Capella era 758");
-        assertEq(BridgeVault(vaultA).remoteTokenOf(address(tokenOnA)), address(tokenOnB));
-        assertEq(BeaconLightClient(lightClientB).head(), 819264);
+    /// Claim: the bridge on each side names the real bridge and the real light client of the other chain. Shows: after both
+    /// deployments, `remoteBridge` and `remoteLightClient` of each bridge equal the deployed contracts of the other
+    /// chain, and each bridge uses its own light client, its own gate and the Capella era of the OTHER chain. Matters:
+    /// R2-08 (a bridge accepts logs only from its remote bridge) and HB-02 (a bridge with the wrong gate would admit
+    /// sends unchecked).
+    function test_bridgeOnEachSideNamesTheRealRemoteBridge() public {
+        _deployBoth();
+        MessageBridge bridgeA = MessageBridge(deployedA.bridge);
+        MessageBridge bridgeB = MessageBridge(deployedB.bridge);
+        assertGt(deployedB.bridge.code.length, 0, "the bridge of chain B exists");
+        assertEq(bridgeA.remoteBridge(), deployedB.bridge, "bridge A points at the real bridge B");
+        assertEq(bridgeB.remoteBridge(), deployedA.bridge, "bridge B points at the real bridge A");
+        assertEq(bridgeA.remoteLightClient(), deployedB.lightClient, "bridge A opens on the state of the light client of chain B");
+        assertEq(bridgeB.remoteLightClient(), deployedA.lightClient, "bridge B opens on the state of the light client of chain A");
+        assertEq(address(bridgeA.lightClient()), deployedA.lightClient);
+        assertEq(address(bridgeB.lightClient()), deployedB.lightClient);
+        assertEq(address(bridgeA.depositGate()), deployedA.gate, "bridge A uses the gate of chain A");
+        assertEq(address(bridgeB.depositGate()), deployedB.gate, "bridge B uses the gate of chain B");
+        assertEq(bridgeA.localChainId(), 1);
+        assertEq(bridgeA.remoteChainId(), 369);
+        assertEq(bridgeB.localChainId(), 369);
+        assertEq(bridgeB.remoteChainId(), 1);
+        assertEq(bridgeA.capellaEra(), 0, "bridge A proves PulseChain messages: Capella era 0");
+        assertEq(bridgeB.capellaEra(), 758, "bridge B proves Ethereum messages: Capella era 758");
+        assertEq(BeaconLightClient(deployedB.lightClient).head(), 819264);
+    }
 
-        assertTrue(BeaconForkGate(gateA).enforcing(), "the Ethereum gate enforces from deployment");
-        assertFalse(BeaconForkGate(gateB).enforcing(), "the PulseChain gate waits for a beacon root or a canary");
-        assertEq(uint8(BeaconForkGate(gateA).mode()), uint8(BeaconForkGate.GateMode.Enforcing));
-        assertEq(uint8(BeaconForkGate(gateB).mode()), uint8(BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry));
-        assertEq(BeaconForkGate(gateA).secondsPerSlot(), 12);
-        assertEq(BeaconForkGate(gateB).secondsPerSlot(), 10);
-        assertEq(BeaconForkGate(gateA).supportedVersions().length, 4);
-        assertEq(BeaconForkGate(gateB).supportedVersions().length, 1);
-        assertEq(BeaconForkGate(gateB).supportedVersions()[0].version, bytes4(0x0000036c));
+    /// Claim: both bridges start locked. Shows: `depositsOpen()` is false on both after the deployment, and the send
+    /// cutoff is the configured one. Matters: a bridge that starts open would take messages that the other chain cannot
+    /// prove yet, and those messages would be lost for good.
+    function test_lock_bothBridgesStartLockedWithTheConfiguredCutoff() public {
+        _deployBoth();
+        assertFalse(MessageBridge(deployedA.bridge).depositsOpen(), "bridge A starts locked");
+        assertFalse(MessageBridge(deployedB.bridge).depositsOpen(), "bridge B starts locked");
+        assertEq(MessageBridge(deployedA.bridge).sendCutoffTimestamp(), 0);
+        assertEq(MessageBridge(deployedB.bridge).sendCutoffTimestamp(), 0);
+
+        string memory json = vm.replace(_validJson(), '"depositCutoffTimestamp":"0"', '"depositCutoffTimestamp":"1900000000"');
+        DeployBridge.BridgeConfig memory config = script.parseConfig(json);
+        assertEq(config.chainA.depositCutoffTimestamp, 1_900_000_000, "control: the setting reaches the configuration");
+    }
+
+    /// Claim: the factory of each mediator is the predicted address, and it belongs to that mediator. Shows: the plan
+    /// holds `computeCreateAddress(mediator, 1)`; `tokenFactory()` of each deployed mediator equals it; the factory has
+    /// code and names the mediator. Matters: the script cannot send the factory in a transaction. It must predict an
+    /// address that the mediator creates, and a wrong rule would make the read-back fail on every honest deployment.
+    function test_factoryOfEachMediatorIsThePredictedAddress() public {
+        _deployBoth();
+        assertEq(planned.chainA.factory, vm.computeCreateAddress(deployedA.mediator, 1));
+        assertEq(planned.chainB.factory, vm.computeCreateAddress(deployedB.mediator, 1));
+        assertEq(address(TokenMediator(deployedA.mediator).tokenFactory()), planned.chainA.factory);
+        assertEq(address(TokenMediator(deployedB.mediator).tokenFactory()), planned.chainB.factory);
+        assertGt(planned.chainA.factory.code.length, 0);
+        assertEq(TokenFactory(planned.chainA.factory).mediator(), deployedA.mediator);
+        assertEq(TokenFactory(planned.chainB.factory).mediator(), deployedB.mediator);
+        assertTrue(planned.chainA.factory != planned.chainB.factory);
+    }
+
+    /// Claim: the native coin router and the optional fee router are deployed where the configuration asks, and they
+    /// point at the mediator and the wrapped token of their own chain. Shows: chain A has both routers, chain B has the
+    /// native coin router and no fee router; each router reads the mediator of its chain and the wrapped token of its
+    /// chain. Matters: a router on the wrong mediator would wrap coin that no mediator accepts, and a wrong wrapped token
+    /// would unwrap the wrong asset.
+    function test_routersAreDeployedAndPointAtTheMediator() public {
+        _deployBoth();
+        assertGt(deployedA.wrappedRouter.code.length, 0);
+        assertGt(deployedA.feeRouter.code.length, 0, "chain A asks for the fee router");
+        assertGt(deployedB.wrappedRouter.code.length, 0);
+        assertEq(deployedB.feeRouter, address(0), "chain B does not ask for the fee router");
+
+        assertEq(address(WETHOmnibridgeRouter(payable(deployedA.wrappedRouter)).bridge()), deployedA.mediator);
+        assertEq(address(WETHOmnibridgeRouter(payable(deployedA.wrappedRouter)).WETH()), address(wrappedNativeOnA));
+        assertEq(address(FeeRouter(payable(deployedA.feeRouter)).bridge()), deployedA.mediator);
+        assertEq(address(FeeRouter(payable(deployedA.feeRouter)).wNative()), address(wrappedNativeOnA));
+        assertEq(address(WETHOmnibridgeRouter(payable(deployedB.wrappedRouter)).bridge()), deployedB.mediator);
+        assertEq(address(WETHOmnibridgeRouter(payable(deployedB.wrappedRouter)).WETH()), address(wrappedNativeOnB));
+    }
+
+    /// Claim: a chain with no wrapped native token deploys no router, and the plan leaves no gap. Shows: with a zero
+    /// `wrappedNative` (and no fee router) the plan holds zero for both routers and the next nonce after the mediator is
+    /// unused; the deployment ends on the nonce after the mediator and its read-back passes. With the key absent the
+    /// result is the same. Matters: a gap in the plan would shift the fee router on a chain that has one, and a router
+    /// with a zero wrapped token would be a contract that can never work.
+    function test_chainWithNoWrappedNativeDeploysNoRouterAndLeavesNoGap() public {
+        string memory json = vm.replace(_validJson(), vm.toString(address(wrappedNativeOnB)), vm.toString(address(0)));
+        DeployBridge.BridgeConfig memory config = script.parseConfig(json);
+        DeployBridge.Plan memory plan = script.predictAddresses(config);
+        assertEq(plan.chainB.wrappedRouter, address(0));
+        assertEq(plan.chainB.feeRouter, address(0));
+        assertEq(plan.chainB.mediator, vm.computeCreateAddress(deployer, NONCE_B + 5), "the offsets before the router do not move");
+
+        (, DeployBridge.ChainDeployment memory deploymentB) = _deployments(config, plan);
+        _etchBeaconRoots();
+        vm.chainId(369);
+        vm.setNonce(deployer, uint64(NONCE_B));
+        DeployBridge.ChainAddresses memory deployed = script.deployChain(deploymentB);
+        assertEq(deployed.wrappedRouter, address(0));
+        assertEq(deployed.feeRouter, address(0));
+        assertEq(vm.getNonce(deployer), NONCE_B + 6, "the mediator is the last contract of the deployer");
+        _assertSameAddresses(plan.chainB, deployed);
+
+        // The key may also be absent.
+        string memory absent = vm.replace(
+            _validJson(), string.concat('"wrappedNative":"', vm.toString(address(wrappedNativeOnB)), '",'), ""
+        );
+        assertEq(script.parseConfig(absent).chainB.wrappedNative, address(0));
+
+        // A chain without a router and without a fee router at all: the plan ends on the mediator.
+        string memory bare = vm.replace(json, '"deployFeeRouter":"true"', '"deployFeeRouter":"false"');
+        bare = vm.replace(bare, vm.toString(address(wrappedNativeOnA)), vm.toString(address(0)));
+        plan = script.predictAddresses(script.parseConfig(bare));
+        assertEq(plan.chainA.wrappedRouter, address(0));
+        assertEq(plan.chainA.feeRouter, address(0));
+        assertTrue(plan.chainA.mediator != address(0));
+    }
+
+    /// Claim: the fee router needs a wrapped native token, and the setting must be `true` or `false`. Shows: a fee
+    /// router with a zero wrapped token reverts with the chain; a setting of `yes` reverts with the text; `false` and an
+    /// absent key both mean no fee router. Matters: a fee router with no wrapped token would deploy and then fail on
+    /// every use. A setting that parsed to a default could add or drop a contract and shift every later nonce.
+    function test_feeRouter_parseConfigNeedsAWrappedNativeAndAKnownSetting() public {
+        string memory json = _validJson();
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.FeeRouterNeedsWrappedNative.selector, uint64(1)));
+        script.parseConfig(vm.replace(json, vm.toString(address(wrappedNativeOnA)), vm.toString(address(0))));
+
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.UnknownFeeRouterSetting.selector, "yes"));
+        script.parseConfig(vm.replace(json, '"deployFeeRouter":"true"', '"deployFeeRouter":"yes"'));
+
+        DeployBridge.BridgeConfig memory config =
+            script.parseConfig(vm.replace(json, '"deployFeeRouter":"true"', '"deployFeeRouter":"false"'));
+        assertEq(uint8(config.chainA.feeRouter), uint8(DeployBridge.RouterChoice.Skip));
+        config = script.parseConfig(vm.replace(json, '"deployFeeRouter":"true",', ""));
+        assertEq(uint8(config.chainA.feeRouter), uint8(DeployBridge.RouterChoice.Skip), "an absent key means no fee router");
+
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.wrappedNative"));
+        script.parseConfig(vm.replace(json, vm.toString(address(wrappedNativeOnA)), "REPLACE_WITH_WRAPPED_NATIVE"));
+        script.parseConfig(json); // the honest file passes
+    }
+
+    /// Claim: the deployed bridge lets through at least the gas that its mediator asks for. Shows: for each side,
+    /// `maxGasPerTx` of the deployed bridge is not below `DEPLOY_GAS_LIMIT + CALLBACK_GAS_LIMIT` of the deployed mediator.
+    /// Matters: the mediator constructor refuses a bridge below that number (`GasLimitAboveBridgeMaximum`). The script
+    /// cannot cause it with the real bridge, and this test fails if a change of either contract breaks the pair.
+    function test_deployedBridgeLetsThroughTheGasThatTheMediatorNeeds() public {
+        _deployBoth();
+        address[2] memory mediators = [deployedA.mediator, deployedB.mediator];
+        address[2] memory bridges = [deployedA.bridge, deployedB.bridge];
+        for (uint256 i = 0; i < 2; i++) {
+            TokenMediator mediator = TokenMediator(mediators[i]);
+            uint256 needed = mediator.DEPLOY_GAS_LIMIT() + mediator.CALLBACK_GAS_LIMIT();
+            assertGe(MessageBridge(bridges[i]).maxGasPerTx(), needed);
+            assertEq(address(mediator.bridgeContract()), bridges[i], "control: the mediator reads this bridge");
+        }
     }
 
     // ================================================================ flow limiter
@@ -631,7 +792,7 @@ contract DeployBridgeTest is Test {
         assertEq(config.chainA.flowLimiter, address(0));
         assertEq(config.chainB.flowLimiter, address(0));
 
-        configuredFlowLimiter = address(new ScriptedFlowLimiter());
+        configuredFlowLimiter = address(new DeployFlowLimiter());
         config = script.parseConfig(_validJson());
         assertEq(config.chainA.flowLimiter, configuredFlowLimiter);
         assertEq(config.chainB.flowLimiter, address(0), "the setting is per chain");
@@ -639,7 +800,7 @@ contract DeployBridgeTest is Test {
 
     /// Claim: a non-zero limiter must have code on its chain. Shows: an address with no code reverts with the chain and
     /// the address; a limiter with code passes; a zero limiter passes. Matters: a limiter address with no code would make
-    /// every deposit revert on the call, and the immutable choice could not be repaired.
+    /// every relay revert on the call, and the immutable choice could not be repaired.
     function test_flowLimiter_environmentRequiresCodeForANonZeroLimiter() public {
         DeployBridge.BridgeConfig memory config = script.parseConfig(_validJson());
         _etchBeaconRoots();
@@ -652,37 +813,45 @@ contract DeployBridgeTest is Test {
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.FlowLimiterHasNoCode.selector, uint64(1), withoutCode));
         script.assertChainEnvironment(config.chainA, deployer);
 
-        config.chainA.flowLimiter = address(new ScriptedFlowLimiter());
+        config.chainA.flowLimiter = address(new DeployFlowLimiter());
         script.assertChainEnvironment(config.chainA, deployer); // honest: a limiter with code
     }
 
-    /// Claim: a deployment with a non-zero limiter puts that limiter in the vault, and the read-back refuses a vault with
-    /// another limiter or none. Shows: `deployChain` for chain A with a limiter; the vault reports it and
-    /// `verifyDeployment` passes; a vault built with no limiter and one built with another limiter each fail with the
-    /// field name. Matters: the limiter is immutable at deployment, so the read-back is the only check.
-    function test_flowLimiter_deployChainSetsItAndReadBackCatchesAWrongOne() public {
-        configuredFlowLimiter = address(new ScriptedFlowLimiter());
+    /// Claim: a non-zero wrapped native token must have code on its chain. Shows: an address with no code reverts with
+    /// the chain and the address; the real token passes; a zero token passes (no router). Matters: a router that wraps
+    /// into an address with no code would take the coin and give back nothing.
+    function test_wrappedNative_environmentRequiresCodeForANonZeroToken() public {
         DeployBridge.BridgeConfig memory config = script.parseConfig(_validJson());
-        DeployBridge.Plan memory plan = script.predictAddresses(config);
-        (DeployBridge.ChainDeployment memory deploymentA,) = _deployments(config, plan);
-
         _etchBeaconRoots();
         vm.chainId(1);
         vm.setNonce(deployer, uint64(NONCE_A));
-        (address lightClient, address gate, address vault) = script.deployChain(deploymentA);
-        assertEq(address(BridgeVault(vault).flowLimiter()), configuredFlowLimiter);
+        script.assertChainEnvironment(config.chainA, deployer); // honest
 
-        address[2] memory wrongLimiters = [address(0), address(new ScriptedFlowLimiter())];
+        address withoutCode = makeAddr("a wrapped native address with no code");
+        config.chainA.wrappedNative = withoutCode;
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.WrappedNativeHasNoCode.selector, uint64(1), withoutCode));
+        script.assertChainEnvironment(config.chainA, deployer);
+
+        config.chainA.wrappedNative = address(0);
+        script.assertChainEnvironment(config.chainA, deployer); // no token, no router, no check
+    }
+
+    /// Claim: a deployment with a non-zero limiter puts that limiter in the mediator, and the read-back refuses a
+    /// mediator with another limiter or none. Shows: `deployChain` for chain A with a limiter; the mediator reports it and
+    /// `verifyDeployment` passes; a mediator built with no limiter and one built with another limiter each fail with the
+    /// field name. Matters: the limiter is immutable at deployment, so the read-back is the only check.
+    function test_flowLimiter_deployChainSetsItAndReadBackCatchesAWrongOne() public {
+        configuredFlowLimiter = address(new DeployFlowLimiter());
+        (DeployBridge.ChainDeployment memory deploymentA, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
+        assertEq(address(TokenMediator(deployed.mediator).flowLimiter()), configuredFlowLimiter);
+
+        address[2] memory wrongLimiters = [address(0), address(new DeployFlowLimiter())];
         for (uint256 i = 0; i < wrongLimiters.length; i++) {
-            DeployBridge.FeeConfig memory fee = deploymentA.chain.fee;
-            BridgeVault wrong = new BridgeVault(
-                lightClient, 1, 369, deploymentA.remoteVault, deploymentA.pairs,
-                BridgeVault.VaultTerms(0, fee.authority, fee.recipient, fee.basisPoints, fee.ceilingBasisPoints, wrongLimiters[i], deploymentA.remoteLightClient),
-                deploymentA.chain.lightClient.capellaEra, gate
-            );
-            deploymentA.predictedVault = address(wrong);
-            vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "vault.flowLimiter"));
-            script.verifyDeployment(deploymentA, lightClient, gate, address(wrong));
+            TokenMediator.MediatorTerms memory terms = _mediatorTerms(deploymentA, deployed.bridge);
+            terms.flowLimiter = wrongLimiters[i];
+            _swapMediator(deploymentA, deployed, new TokenMediator(terms));
+            vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "mediator.flowLimiter"));
+            script.verifyDeployment(deploymentA, deployed);
         }
     }
 
@@ -690,7 +859,7 @@ contract DeployBridgeTest is Test {
 
     /// Claim: the script refuses to run when the deployer nonce differs from the configuration, on either chain.
     /// Shows: a nonce one too high and one too low revert with all three numbers; the right nonce passes.
-    /// Matters: R2-08 (a different nonce shifts every predicted address, so the vaults would point at nothing).
+    /// Matters: R2-08 (a different nonce shifts every predicted address, so the bridges would point at nothing).
     function test_R2_08_nonceGuardRefusesMismatchedNonce() public {
         DeployBridge.BridgeConfig memory config = script.parseConfig(_validJson());
         _etchBeaconRoots();
@@ -726,14 +895,11 @@ contract DeployBridgeTest is Test {
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeployerNonceMismatch.selector, uint64(1), NONCE_A, NONCE_A - 1));
         script.deployChain(deploymentA);
         assertEq(vm.getNonce(deployer), NONCE_A - 1);
-        assertEq(plan.lightClientA.code.length, 0);
-        assertEq(plan.gateA.code.length, 0);
+        assertEq(plan.chainA.lightClient.code.length, 0);
+        assertEq(plan.chainA.gate.code.length, 0);
 
         vm.setNonce(deployer, uint64(NONCE_A)); // honest
-        (address lightClient, address gate, address vault) = script.deployChain(deploymentA);
-        assertEq(lightClient, plan.lightClientA);
-        assertEq(gate, plan.gateA);
-        assertEq(vault, plan.vaultA);
+        _assertSameAddresses(plan.chainA, script.deployChain(deploymentA));
     }
 
     /// Claim: the connected chain must be the configured chain, and the verifier must have code there, and the code must
@@ -822,138 +988,228 @@ contract DeployBridgeTest is Test {
         );
     }
 
-    /// @dev A vault for chain A. The constructor reads `block.chainid`, so the caller sets chain 1 first.
-    function _newVaultA(
-        DeployBridge.ChainDeployment memory d,
-        address lightClient,
-        address gate,
-        address remoteVault,
+    /// @dev A bridge for chain A. The constructor reads `block.chainid`, so the caller sets chain 1 first.
+    function _newBridgeA(
+        DeployBridge.ChainAddresses memory deployed,
+        address remoteBridge,
+        address remoteLightClient,
         uint64 cutoff,
         uint64 capellaEra
-    ) internal returns (BridgeVault) {
-        DeployBridge.FeeConfig memory fee = d.chain.fee;
-        BridgeVault.VaultTerms memory terms = BridgeVault.VaultTerms(
-            cutoff, fee.authority, fee.recipient, fee.basisPoints, fee.ceilingBasisPoints, d.chain.flowLimiter,
-            d.remoteLightClient
+    ) internal returns (MessageBridge) {
+        return new MessageBridge(
+            deployed.lightClient, 1, 369, remoteBridge, MessageBridge.BridgeTerms(cutoff, remoteLightClient), capellaEra,
+            deployed.gate
         );
-        return new BridgeVault(lightClient, 1, 369, remoteVault, d.pairs, terms, capellaEra, gate);
     }
 
-    /// @dev Deploys the honest contracts of chain A at addresses of this test, records them as the predicted addresses,
-    /// and proves that `verifyDeployment` accepts them. Every attack test below starts here, so it can fail.
-    function _honestChainA() internal returns (DeployBridge.ChainDeployment memory deploymentA) {
+    /// @dev The honest terms of the mediator of a chain. A test changes one field and builds the tampered mediator.
+    function _mediatorTerms(DeployBridge.ChainDeployment memory d, address bridge)
+        internal
+        pure
+        returns (TokenMediator.MediatorTerms memory)
+    {
+        DeployBridge.FeeConfig memory fee = d.chain.fee;
+        return TokenMediator.MediatorTerms({
+            bridge: bridge,
+            remoteMediator: d.remoteMediator,
+            remoteChainId: d.remoteChainId,
+            feeAuthority: fee.authority,
+            feeRecipient: fee.recipient,
+            feeBasisPoints: fee.basisPoints,
+            feeCeilingBasisPoints: fee.ceilingBasisPoints,
+            flowLimiter: d.chain.flowLimiter
+        });
+    }
+
+    /// @dev Puts a tampered bridge in place of the honest one, in the plan and in the deployed record, so the
+    /// prediction check passes and the read-back must find the fault itself.
+    function _swapBridge(
+        DeployBridge.ChainDeployment memory d,
+        DeployBridge.ChainAddresses memory deployed,
+        MessageBridge wrong
+    ) internal pure {
+        d.plan.bridge = address(wrong);
+        deployed.bridge = address(wrong);
+    }
+
+    /// @dev Puts a tampered mediator and its factory in place of the honest ones, in the plan and in the record.
+    function _swapMediator(
+        DeployBridge.ChainDeployment memory d,
+        DeployBridge.ChainAddresses memory deployed,
+        TokenMediator wrong
+    ) internal view {
+        d.plan.mediator = address(wrong);
+        d.plan.factory = address(wrong.tokenFactory());
+        deployed.mediator = address(wrong);
+        deployed.factory = address(wrong.tokenFactory());
+    }
+
+    /// @dev Deploys the honest contracts of chain A for real, once for each test, and proves that `verifyDeployment`
+    /// accepts them. A second call returns a fresh copy of the same record, so a test can tamper with it again. Every
+    /// attack test below starts here, so it can fail.
+    function _honestChainA()
+        internal
+        returns (DeployBridge.ChainDeployment memory deploymentA, DeployBridge.ChainAddresses memory deployed)
+    {
         DeployBridge.BridgeConfig memory config = script.parseConfig(_validJson());
         DeployBridge.Plan memory plan = script.predictAddresses(config);
         (deploymentA,) = _deployments(config, plan);
-        vm.chainId(1);
-        BeaconLightClient lightClient = _newClient(deploymentA.chain, deploymentA.chain.lightClient.genesisValidatorsRoot);
-        BeaconForkGate gate = _newGateFrom(deploymentA.chain.gate);
-        BridgeVault vault = _newVaultA(
-            deploymentA, address(lightClient), address(gate), plan.vaultB, 0, deploymentA.chain.lightClient.capellaEra
-        );
-        deploymentA.predictedLightClient = address(lightClient);
-        deploymentA.predictedGate = address(gate);
-        deploymentA.predictedVault = address(vault);
-        script.verifyDeployment(deploymentA, address(lightClient), address(gate), address(vault)); // control
+        if (deployedA.bridge == address(0)) {
+            _etchBeaconRoots();
+            vm.chainId(1);
+            vm.setNonce(deployer, uint64(NONCE_A));
+            deployedA = script.deployChain(deploymentA);
+        }
+        deployed = _copy(deployedA);
+        script.verifyDeployment(deploymentA, deployed); // control
     }
 
-    /// Claim: the post-deploy check catches a wrong remote vault. Shows: a vault with another remote vault fails
-    /// `verifyDeployment` with the field name, while the honest vault passes; a contract at an address other than the
-    /// prediction fails with the prediction error, for the light client, the gate and the vault. Matters: R2-08 (read
+    /// Claim: the post-deploy check catches a wrong remote bridge. Shows: a bridge with another remote bridge fails
+    /// `verifyDeployment` with the field name, while the honest deployment passes; a contract at an address other than
+    /// the prediction fails with the prediction error, for each of the seven predicted contracts. Matters: R2-08 (read
     /// every immutable back, do not trust that the deployment matched).
-    function test_R2_08_postDeployAssertionsCatchWrongRemoteVault() public {
-        DeployBridge.ChainDeployment memory deploymentA = _honestChainA();
-        address lightClient = deploymentA.predictedLightClient;
-        address gate = deploymentA.predictedGate;
-        BridgeVault wrongRemote =
-            _newVaultA(deploymentA, lightClient, gate, makeAddr("not the predicted vault B"), 0, 0);
-        deploymentA.predictedVault = address(wrongRemote);
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "vault.remoteVault"));
-        script.verifyDeployment(deploymentA, lightClient, gate, address(wrongRemote));
+    function test_R2_08_postDeployAssertionsCatchWrongRemoteBridge() public {
+        (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
+        _swapBridge(
+            d, deployed, _newBridgeA(deployed, makeAddr("not the predicted bridge B"), d.remoteLightClient, 0, 0)
+        );
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "bridge.remoteBridge"));
+        script.verifyDeployment(d, deployed);
 
-        // The prediction itself is checked first, for each of the three contracts.
-        address vault = deploymentA.predictedVault;
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.AddressNotAsPredicted.selector, "vault", vault, address(this)));
-        script.verifyDeployment(deploymentA, lightClient, gate, address(this));
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.AddressNotAsPredicted.selector, "gate", gate, address(this)));
-        script.verifyDeployment(deploymentA, lightClient, address(this), vault);
+        // The prediction itself is checked first, for each contract.
+        (d, deployed) = _honestChainA();
+        string[7] memory names = ["lightClient", "gate", "bridge", "mediator", "factory", "wrappedRouter", "feeRouter"];
+        for (uint256 i = 0; i < names.length; i++) {
+            DeployBridge.ChainAddresses memory moved = _copy(deployed);
+            address predicted = _slot(moved, i);
+            _setSlot(moved, i, address(this));
+            vm.expectRevert(abi.encodeWithSelector(DeployBridge.AddressNotAsPredicted.selector, names[i], predicted, address(this)));
+            script.verifyDeployment(d, moved);
+        }
+    }
+
+    function _copy(DeployBridge.ChainAddresses memory a) internal pure returns (DeployBridge.ChainAddresses memory) {
+        return DeployBridge.ChainAddresses(
+            a.lightClient, a.observedLightClient, a.registry, a.gate, a.bridge, a.mediator, a.factory, a.wrappedRouter,
+            a.feeRouter
+        );
+    }
+
+    /// @dev Reads one of the seven predicted contracts by its position in `verifyDeployment`.
+    function _slot(DeployBridge.ChainAddresses memory a, uint256 index) internal pure returns (address) {
+        address[7] memory all = [a.lightClient, a.gate, a.bridge, a.mediator, a.factory, a.wrappedRouter, a.feeRouter];
+        return all[index];
+    }
+
+    function _setSlot(DeployBridge.ChainAddresses memory a, uint256 index, address value) internal pure {
+        if (index == 0) a.lightClient = value;
+        if (index == 1) a.gate = value;
+        if (index == 2) a.bridge = value;
+        if (index == 3) a.mediator = value;
+        if (index == 4) a.factory = value;
+        if (index == 5) a.wrappedRouter = value;
+        if (index == 6) a.feeRouter = value;
+    }
+
+    /// Claim: the post-deploy check catches a mediator that names the wrong remote mediator. Shows: a mediator built
+    /// with another remote mediator fails with the exact field name, although it is wired to the honest bridge; so does
+    /// a mediator that names another bridge, another remote chain, or a factory that another mediator made; the honest
+    /// mediator passes. Matters: the remote mediator is the only contract that may order a release on this chain. A wrong
+    /// one either strands every transfer or gives a stranger the power to mint.
+    function test_postDeployAssertionsCatchWrongRemoteMediator() public {
+        (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
+        TokenMediator.MediatorTerms memory terms = _mediatorTerms(d, deployed.bridge);
+        terms.remoteMediator = makeAddr("not the predicted mediator B");
+        _swapMediator(d, deployed, new TokenMediator(terms));
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "mediator.mediatorContractOnOtherSide"));
+        script.verifyDeployment(d, deployed);
+
+        (d, deployed) = _honestChainA();
+        terms = _mediatorTerms(d, deployed.bridge);
+        terms.remoteChainId = 56;
+        _swapMediator(d, deployed, new TokenMediator(terms));
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "mediator.remoteChainId"));
+        script.verifyDeployment(d, deployed);
+
+        // A second bridge with the same settings is a different contract, so the mediator names the wrong bridge.
+        (d, deployed) = _honestChainA();
+        MessageBridge otherBridge = _newBridgeA(deployed, d.remoteBridge, d.remoteLightClient, 0, 0);
+        _swapMediator(d, deployed, new TokenMediator(_mediatorTerms(d, address(otherBridge))));
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "mediator.bridgeContract"));
+        script.verifyDeployment(d, deployed);
+
+        // A predicted factory that another mediator made is refused at the prediction.
+        (d, deployed) = _honestChainA();
+        TokenMediator other = new TokenMediator(_mediatorTerms(d, deployed.bridge));
+        deployed.factory = address(other.tokenFactory());
         vm.expectRevert(
-            abi.encodeWithSelector(DeployBridge.AddressNotAsPredicted.selector, "lightClient", lightClient, address(this))
+            abi.encodeWithSelector(DeployBridge.AddressNotAsPredicted.selector, "factory", d.plan.factory, deployed.factory)
         );
-        script.verifyDeployment(deploymentA, address(this), gate, vault);
+        script.verifyDeployment(d, deployed);
     }
 
-    /// Claim: the post-deploy check catches a vault that reads the wrong remote light client, and a vault that starts open.
-    /// Shows: a vault built with another remote light client fails with the field name, and so does a vault whose flag is
-    /// already set, while the honest vault passes. Matters: the remote light client is immutable and it is the only
-    /// source of the opening. A wrong one locks deposits for good or opens them on the proof of another contract.
+    /// Claim: the post-deploy check catches a bridge that reads the wrong remote light client, and a bridge that starts
+    /// open. Shows: a bridge built with another remote light client fails with the field name, and so does a bridge whose
+    /// flag is already set, while the honest deployment passes. Matters: the remote light client is immutable and it is
+    /// the only source of the opening. A wrong one locks sends for good or opens them on the proof of another contract.
     function test_lock_postDeployAssertionsCatchWrongRemoteLightClientAndAnOpenStart() public {
-        DeployBridge.ChainDeployment memory deploymentA = _honestChainA();
-        address lightClient = deploymentA.predictedLightClient;
-        address gate = deploymentA.predictedGate;
-        address honestRemote = deploymentA.remoteLightClient;
-        assertTrue(honestRemote != address(0), "control: the deployment names a remote light client");
+        (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
+        assertTrue(d.remoteLightClient != address(0), "control: the deployment names a remote light client");
+        uint64 era = d.chain.lightClient.capellaEra;
 
-        deploymentA.remoteLightClient = makeAddr("not the predicted light client of chain B");
-        BridgeVault wrongRemote = _newVaultA(
-            deploymentA, lightClient, gate, deploymentA.remoteVault, 0, deploymentA.chain.lightClient.capellaEra
+        _swapBridge(
+            d, deployed, _newBridgeA(deployed, d.remoteBridge, makeAddr("not the predicted light client of chain B"), 0, era)
         );
-        deploymentA.remoteLightClient = honestRemote;
-        deploymentA.predictedVault = address(wrongRemote);
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "vault.remoteLightClient"));
-        script.verifyDeployment(deploymentA, lightClient, gate, address(wrongRemote));
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "bridge.remoteLightClient"));
+        script.verifyDeployment(d, deployed);
 
-        BridgeVault startsOpen = _newVaultA(
-            deploymentA, lightClient, gate, deploymentA.remoteVault, 0, deploymentA.chain.lightClient.capellaEra
-        );
-        // The flag is bit 176 of storage word 7, beside the fee authority and the fee.
-        bytes32 word = vm.load(address(startsOpen), bytes32(uint256(7)));
-        vm.store(address(startsOpen), bytes32(uint256(7)), word | bytes32(uint256(1) << 176));
+        (d, deployed) = _honestChainA();
+        MessageBridge startsOpen = _newBridgeA(deployed, d.remoteBridge, d.remoteLightClient, 0, era);
+        // The flag is bit 64 of storage word 0, beside the nonce (see `forge inspect MessageBridge storageLayout`).
+        bytes32 word = vm.load(address(startsOpen), bytes32(uint256(0)));
+        vm.store(address(startsOpen), bytes32(uint256(0)), word | bytes32(uint256(1) << 64));
         assertTrue(startsOpen.depositsOpen(), "control: the flag is set");
-        deploymentA.predictedVault = address(startsOpen);
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "vault.depositsOpen must start false"));
-        script.verifyDeployment(deploymentA, lightClient, gate, address(startsOpen));
+        _swapBridge(d, deployed, startsOpen);
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "bridge.depositsOpen must start false"));
+        script.verifyDeployment(d, deployed);
     }
 
-    /// Claim: the post-deploy check catches a wrong deposit cutoff, and passes for the right deployment. Shows: a
-    /// vault with cutoff 12345 fails with the field name; the vault with the configured cutoff passes. Matters: R2-08.
+    /// Claim: the post-deploy check catches a wrong send cutoff, and passes for the right deployment. Shows: a bridge
+    /// with cutoff 12345 fails with the field name; the bridge with the configured cutoff passes. Matters: R2-08.
     function test_R2_08_postDeployAssertionsCatchWrongCutoffAndPassWhenRight() public {
-        DeployBridge.ChainDeployment memory deploymentA = _honestChainA(); // its own run proves the honest vault passes
-        address lightClient = deploymentA.predictedLightClient;
-        address gate = deploymentA.predictedGate;
-        BridgeVault wrongCutoff = _newVaultA(
-            deploymentA, lightClient, gate, deploymentA.remoteVault, 12_345, deploymentA.chain.lightClient.capellaEra
-        );
-        deploymentA.predictedVault = address(wrongCutoff);
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "vault.depositCutoffTimestamp"));
-        script.verifyDeployment(deploymentA, lightClient, gate, address(wrongCutoff));
+        (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
+        _swapBridge(d, deployed, _newBridgeA(deployed, d.remoteBridge, d.remoteLightClient, 12_345, d.chain.lightClient.capellaEra));
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "bridge.sendCutoffTimestamp"));
+        script.verifyDeployment(d, deployed);
+
+        // A configured cutoff reaches the bridge: deploy again with a cutoff and read it back.
+        string memory json = vm.replace(_validJson(), '"depositCutoffTimestamp":"0"', '"depositCutoffTimestamp":"1900000000"');
+        json = vm.replace(json, string.concat('"deployerNonce":"', vm.toString(NONCE_A), '"'), '"deployerNonce":"50"');
+        DeployBridge.BridgeConfig memory config = script.parseConfig(json);
+        (d,) = _deployments(config, script.predictAddresses(config));
+        vm.setNonce(deployer, 50);
+        deployed = script.deployChain(d);
+        assertEq(MessageBridge(deployed.bridge).sendCutoffTimestamp(), 1_900_000_000);
     }
 
-    /// Claim: the post-deploy check catches a vault whose fee switch differs from the configuration. Shows: a vault
-    /// with no fee authority, a vault with another fee, and a vault with another ceiling each fail with the field name,
-    /// while the honest vault (made by `_honestChainA`) passes. Matters: the fee ceiling is immutable, so a wrong
-    /// ceiling cannot be repaired after launch.
+    /// Claim: the post-deploy check catches a mediator whose fee switch differs from the configuration. Shows: a mediator
+    /// with no fee authority, a mediator with another fee, and a mediator with another ceiling each fail with the field
+    /// name, while the honest mediator passes. Matters: the fee ceiling is immutable, so a wrong ceiling cannot be
+    /// repaired after launch.
     function test_R2_08_postDeployAssertionsCatchWrongFeeSwitch() public {
-        DeployBridge.ChainDeployment memory deploymentA = _honestChainA();
-        address lightClient = deploymentA.predictedLightClient;
-        address gate = deploymentA.predictedGate;
-        DeployBridge.FeeConfig memory fee = deploymentA.chain.fee;
+        (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
+        DeployBridge.FeeConfig memory fee = d.chain.fee;
         assertEq(fee.basisPoints, 25, "control: the configured fee is live");
 
-        BridgeVault.VaultTerms[3] memory wrong = [
-            BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), deploymentA.remoteLightClient),
-            BridgeVault.VaultTerms(0, fee.authority, fee.recipient, 30, fee.ceilingBasisPoints, address(0), deploymentA.remoteLightClient),
-            BridgeVault.VaultTerms(0, fee.authority, fee.recipient, fee.basisPoints, 100, address(0), deploymentA.remoteLightClient)
-        ];
-        string[3] memory fields = ["vault.feeAuthority", "vault.feeBasisPoints", "vault.feeCeilingBasisPoints"];
-        for (uint256 i = 0; i < wrong.length; i++) {
-            BridgeVault vault = new BridgeVault(
-                lightClient, 1, 369, deploymentA.remoteVault, deploymentA.pairs, wrong[i],
-                deploymentA.chain.lightClient.capellaEra, gate
-            );
-            deploymentA.predictedVault = address(vault);
+        string[3] memory fields = ["mediator.feeAuthority", "mediator.feeBasisPoints", "mediator.feeCeilingBasisPoints"];
+        for (uint256 i = 0; i < fields.length; i++) {
+            TokenMediator.MediatorTerms memory terms = _mediatorTerms(d, deployed.bridge);
+            if (i == 0) (terms.feeAuthority, terms.feeRecipient, terms.feeBasisPoints, terms.feeCeilingBasisPoints) = (address(0), address(0), 0, 0);
+            if (i == 1) terms.feeBasisPoints = 30;
+            if (i == 2) terms.feeCeilingBasisPoints = 100;
+            _swapMediator(d, deployed, new TokenMediator(terms));
             vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, fields[i]));
-            script.verifyDeployment(deploymentA, lightClient, gate, address(vault));
+            script.verifyDeployment(d, deployed);
         }
     }
 
@@ -961,42 +1217,38 @@ contract DeployBridgeTest is Test {
     /// validators root fails with the field name, and the honest light client passes. Matters: R2-09 (the chain binding
     /// is the point of that field).
     function test_R2_09_postDeployAssertionsCatchWrongGenesisRoot() public {
-        DeployBridge.ChainDeployment memory deploymentA = _honestChainA();
-        BeaconLightClient wrong = _newClient(deploymentA.chain, keccak256("another chain"));
-        deploymentA.predictedLightClient = address(wrong);
+        (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
+        BeaconLightClient wrong = _newClient(d.chain, keccak256("another chain"));
+        d.plan.lightClient = address(wrong);
+        deployed.lightClient = address(wrong);
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "lightClient.genesisValidatorsRoot"));
-        script.verifyDeployment(deploymentA, address(wrong), deploymentA.predictedGate, deploymentA.predictedVault);
+        script.verifyDeployment(d, deployed);
     }
 
-    /// Claim: the post-deploy check catches a wrong Capella era on the vault. Shows: a vault built with era 5 instead
-    /// of 0 fails with the field name; the honest vault passes. Matters: HB-01 (the era shifts every index into
-    /// `historical_summaries`, so a wrong era makes honest withdrawals fail or reads a neighbouring summary).
+    /// Claim: the post-deploy check catches a wrong Capella era on the bridge. Shows: a bridge built with era 5 instead
+    /// of 0 fails with the field name; the honest bridge passes. Matters: HB-01 (the era shifts every index into
+    /// `historical_summaries`, so a wrong era makes honest messages fail or reads a neighbouring summary).
     function test_HB01_postDeployAssertionsCatchWrongCapellaEra() public {
-        DeployBridge.ChainDeployment memory deploymentA = _honestChainA();
-        address lightClient = deploymentA.predictedLightClient;
-        address gate = deploymentA.predictedGate;
-        BridgeVault wrongEra = _newVaultA(deploymentA, lightClient, gate, deploymentA.remoteVault, 0, 5);
-        deploymentA.predictedVault = address(wrongEra);
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "vault.capellaEra"));
-        script.verifyDeployment(deploymentA, lightClient, gate, address(wrongEra));
+        (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
+        _swapBridge(d, deployed, _newBridgeA(deployed, d.remoteBridge, d.remoteLightClient, 0, 5));
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "bridge.capellaEra"));
+        script.verifyDeployment(d, deployed);
     }
 
-    /// Claim: the post-deploy check catches a vault wired to another deposit gate. Shows: a vault that points at a
+    /// Claim: the post-deploy check catches a bridge wired to another deposit gate. Shows: a bridge that points at a
     /// second gate with the same settings fails with the field name, although that gate is itself correct; the honest
-    /// pair passes. Matters: HB-02 (the gate is the only guard of the deposit side after an unknown fork; a vault that
+    /// pair passes. Matters: HB-02 (the gate is the only guard of the send side after an unknown fork; a bridge that
     /// uses a different gate than the one the operator checked is unguarded in practice).
-    function test_HB02_postDeployAssertionsCatchVaultWithAnotherGate() public {
-        DeployBridge.ChainDeployment memory deploymentA = _honestChainA();
-        address lightClient = deploymentA.predictedLightClient;
-        address gate = deploymentA.predictedGate;
-        BeaconForkGate otherGate = _newGateFrom(deploymentA.chain.gate);
-        assertTrue(address(otherGate) != gate, "the second gate is a different contract");
-        BridgeVault wired = _newVaultA(
-            deploymentA, lightClient, address(otherGate), deploymentA.remoteVault, 0, deploymentA.chain.lightClient.capellaEra
-        );
-        deploymentA.predictedVault = address(wired);
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "vault.depositGate"));
-        script.verifyDeployment(deploymentA, lightClient, gate, address(wired));
+    function test_HB02_postDeployAssertionsCatchBridgeWithAnotherGate() public {
+        (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
+        BeaconForkGate otherGate = _newGateFrom(d.chain.gate);
+        assertTrue(address(otherGate) != deployed.gate, "the second gate is a different contract");
+        DeployBridge.ChainAddresses memory viaOtherGate = _copy(deployed);
+        viaOtherGate.gate = address(otherGate);
+        MessageBridge wired = _newBridgeA(viaOtherGate, d.remoteBridge, d.remoteLightClient, 0, d.chain.lightClient.capellaEra);
+        _swapBridge(d, deployed, wired);
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "bridge.depositGate"));
+        script.verifyDeployment(d, deployed);
     }
 
     /// Claim: the post-deploy check reads every gate setting back. Shows: for each setting in turn (mode, genesis
@@ -1005,26 +1257,24 @@ contract DeployBridgeTest is Test {
     /// Matters: HB-02 (a wrong version table either supports a fork that the light client cannot prove, or rejects a
     /// fork it can, and a wrong seal depth lets a stranger seal the gate or blocks the seal).
     function test_HB02_postDeployAssertionsCatchEveryWrongGateSetting() public {
-        DeployBridge.ChainDeployment memory deploymentA = _honestChainA();
-        address lightClient = deploymentA.predictedLightClient;
-        address honestGate = deploymentA.predictedGate;
-        address vault = deploymentA.predictedVault;
+        (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
+        address honestGate = deployed.gate;
 
         DeployBridge.GateConfig memory tampered = script.parseConfig(_validJson()).chainA.gate;
         tampered.mode = BeaconForkGate.GateMode.DetectBeaconRoots;
-        _expectGateMismatch(deploymentA, tampered, "gate.mode");
+        _expectGateMismatch(d, deployed, tampered, "gate.mode");
 
         tampered = script.parseConfig(_validJson()).chainA.gate;
         tampered.genesisTime += 1;
-        _expectGateMismatch(deploymentA, tampered, "gate.genesisTime");
+        _expectGateMismatch(d, deployed, tampered, "gate.genesisTime");
 
         tampered = script.parseConfig(_validJson()).chainA.gate;
         tampered.secondsPerSlot = 10;
-        _expectGateMismatch(deploymentA, tampered, "gate.secondsPerSlot");
+        _expectGateMismatch(d, deployed, tampered, "gate.secondsPerSlot");
 
         tampered = script.parseConfig(_validJson()).chainA.gate;
         tampered.slotsPerEpoch = 31;
-        _expectGateMismatch(deploymentA, tampered, "gate.slotsPerEpoch");
+        _expectGateMismatch(d, deployed, tampered, "gate.slotsPerEpoch");
 
         tampered = script.parseConfig(_validJson()).chainA.gate;
         BeaconForkGate.SupportedVersion[] memory shorter = new BeaconForkGate.SupportedVersion[](3);
@@ -1032,68 +1282,122 @@ contract DeployBridgeTest is Test {
             shorter[i] = tampered.supportedVersions[i];
         }
         tampered.supportedVersions = shorter;
-        _expectGateMismatch(deploymentA, tampered, "gate.supportedVersions");
+        _expectGateMismatch(d, deployed, tampered, "gate.supportedVersions");
 
         tampered = script.parseConfig(_validJson()).chainA.gate;
         tampered.supportedVersions[3].version = bytes4(0x07000000);
-        _expectGateMismatch(deploymentA, tampered, "gate.supportedVersions.version");
+        _expectGateMismatch(d, deployed, tampered, "gate.supportedVersions.version");
 
         tampered = script.parseConfig(_validJson()).chainA.gate;
         tampered.supportedVersions[2].stateDepth = 5;
-        _expectGateMismatch(deploymentA, tampered, "gate.supportedVersions.stateDepth");
+        _expectGateMismatch(d, deployed, tampered, "gate.supportedVersions.stateDepth");
 
         tampered = script.parseConfig(_validJson()).chainA.gate;
         uint8[] memory fewerDepths = new uint8[](2);
         fewerDepths[0] = 5;
         fewerDepths[1] = 6;
         tampered.sealDepths = fewerDepths;
-        _expectGateMismatch(deploymentA, tampered, "gate.sealDepths");
+        _expectGateMismatch(d, deployed, tampered, "gate.sealDepths");
 
         tampered = script.parseConfig(_validJson()).chainA.gate;
         tampered.sealDepths[2] = 8;
-        _expectGateMismatch(deploymentA, tampered, "gate.sealDepths");
+        _expectGateMismatch(d, deployed, tampered, "gate.sealDepths");
 
-        // Honest control: the configured gate passes, with the vault wired to it.
-        deploymentA.predictedGate = honestGate;
-        script.verifyDeployment(deploymentA, lightClient, honestGate, vault);
+        // Honest control: the configured gate passes, with the bridge wired to it.
+        d.plan.gate = honestGate;
+        deployed.gate = honestGate;
+        script.verifyDeployment(d, deployed);
     }
 
     /// @dev Deploys a gate with the tampered settings, predicts it, and expects the read-back to name `field`.
     function _expectGateMismatch(
-        DeployBridge.ChainDeployment memory deploymentA,
+        DeployBridge.ChainDeployment memory d,
+        DeployBridge.ChainAddresses memory deployed,
         DeployBridge.GateConfig memory tampered,
         string memory field
     ) internal {
-        address lightClient = deploymentA.predictedLightClient;
-        address vault = deploymentA.predictedVault;
         BeaconForkGate gate = _newGateFrom(tampered);
-        deploymentA.predictedGate = address(gate);
+        d.plan.gate = address(gate);
+        deployed.gate = address(gate);
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, field));
-        script.verifyDeployment(deploymentA, lightClient, address(gate), vault);
+        script.verifyDeployment(d, deployed);
     }
 
-    /// Claim: the post-deploy check demands that all three layout tables start empty, including the table of
-    /// `historical_summaries` layouts. Shows: with one entry written into each table in turn (by storage write, because
-    /// a real entry needs light-client evidence), `verifyDeployment` fails with the field name; the honest vault
+    /// Claim: the post-deploy check demands that all three layout tables of the bridge start empty, including the table
+    /// of `historical_summaries` layouts. Shows: with one entry written into each table in turn (by storage write, because
+    /// a real entry needs light-client evidence), `verifyDeployment` fails with the field name; the honest bridge
     /// passes. Matters: HB-01 (a table that starts non-empty would mean the deployment was not the fresh contract the
     /// operator thinks; the new table is the one an old check would miss).
     function test_HB01_postDeployAssertionsCatchLayoutsThatDoNotStartEmpty() public {
-        DeployBridge.ChainDeployment memory deploymentA = _honestChainA();
-        address lightClient = deploymentA.predictedLightClient;
-        address gate = deploymentA.predictedGate;
-        address vault = deploymentA.predictedVault;
-        // Storage slots 4, 5 and 6 hold the three layout arrays (see `forge inspect BridgeVault storageLayout`).
-        for (uint256 slot = 4; slot <= 6; slot++) {
-            BridgeVault fresh = _newVaultA(
-                deploymentA, lightClient, gate, deploymentA.remoteVault, 0, deploymentA.chain.lightClient.capellaEra
-            );
+        (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
+        address honestBridge = deployed.bridge;
+        // Storage slots 6, 7 and 8 hold the three layout arrays (see `forge inspect MessageBridge storageLayout`).
+        for (uint256 slot = 6; slot <= 8; slot++) {
+            MessageBridge fresh = _newBridgeA(deployed, d.remoteBridge, d.remoteLightClient, 0, d.chain.lightClient.capellaEra);
             vm.store(address(fresh), bytes32(slot), bytes32(uint256(1)));
-            deploymentA.predictedVault = address(fresh);
-            vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "vault.layouts must start empty"));
-            script.verifyDeployment(deploymentA, lightClient, gate, address(fresh));
+            _swapBridge(d, deployed, fresh);
+            vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "bridge.layouts must start empty"));
+            script.verifyDeployment(d, deployed);
         }
-        deploymentA.predictedVault = vault;
-        script.verifyDeployment(deploymentA, lightClient, gate, vault); // honest
+        d.plan.bridge = honestBridge;
+        deployed.bridge = honestBridge;
+        script.verifyDeployment(d, deployed); // honest
+    }
+
+    /// Claim: the post-deploy check catches a router that points at the wrong mediator or the wrong wrapped token.
+    /// Shows: for the native coin router and the fee router in turn, a router built with another mediator and one built
+    /// with another wrapped token each fail with the field name; the honest routers pass. Matters: a router on the wrong
+    /// mediator or token wraps coin that the bridge cannot carry, and nothing can change a router after deployment.
+    function test_postDeployAssertionsCatchRoutersOnTheWrongMediatorOrToken() public {
+        (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
+        ITokenMediator mediator = ITokenMediator(deployed.mediator);
+        ITokenMediator otherMediator = ITokenMediator(makeAddr("another mediator"));
+        IWETH honestToken = IWETH(address(wrappedNativeOnA));
+        IWETH otherToken = IWETH(address(wrappedNativeOnB));
+        address honestWrapped = deployed.wrappedRouter;
+        address honestFee = deployed.feeRouter;
+
+        deployed.wrappedRouter = address(new WETHOmnibridgeRouter(otherMediator, otherToken));
+        d.plan.wrappedRouter = deployed.wrappedRouter;
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "wrappedRouter.mediator"));
+        script.verifyDeployment(d, deployed);
+
+        deployed.wrappedRouter = address(new WETHOmnibridgeRouter(mediator, otherToken));
+        d.plan.wrappedRouter = deployed.wrappedRouter;
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "wrappedRouter.wrappedNative"));
+        script.verifyDeployment(d, deployed);
+        d.plan.wrappedRouter = honestWrapped;
+        deployed.wrappedRouter = honestWrapped;
+
+        deployed.feeRouter = address(new FeeRouter(otherMediator, honestToken));
+        d.plan.feeRouter = deployed.feeRouter;
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "feeRouter.mediator"));
+        script.verifyDeployment(d, deployed);
+
+        deployed.feeRouter = address(new FeeRouter(mediator, otherToken));
+        d.plan.feeRouter = deployed.feeRouter;
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "feeRouter.wrappedNative"));
+        script.verifyDeployment(d, deployed);
+        d.plan.feeRouter = honestFee;
+        deployed.feeRouter = honestFee;
+
+        script.verifyDeployment(d, deployed); // honest
+    }
+
+    /// Claim: the read-back checks that the verifier still has the pinned code after the deployment. Shows: the honest
+    /// deployment passes; after other code is put at the verifier address, `verifyDeployment` fails with the expected and
+    /// the actual hash. Matters: every light client trusts the verifier, and a verifier whose code changed between the
+    /// check and the end of the deployment (or an address that never held the pinned code) would accept any proof.
+    function test_postDeployAssertionsCatchAVerifierWhoseCodeIsNotThePinnedCode() public {
+        (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
+        bytes32 pinned = address(verifier).codehash;
+        vm.etch(address(verifier), hex"600160005260206000f3");
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployBridge.VerifierCodeHashMismatch.selector, uint64(1), address(verifier), pinned, address(verifier).codehash
+            )
+        );
+        script.verifyDeployment(d, deployed);
     }
 
     // ================================================================ the fork registry on PulseChain
@@ -1200,7 +1504,7 @@ contract DeployBridgeTest is Test {
         _etchBeaconRoots();
         vm.chainId(369);
         vm.setNonce(deployer, uint64(NONCE_B));
-        (, address gateB,) = script.deployChain(deploymentB);
+        address gateB = script.deployChain(deploymentB).gate;
         script.verifyRegistry(deploymentB, gateB); // honest
 
         DeployBridge.ChainDeployment memory wrong = _deploymentB(config, plan);
@@ -1209,9 +1513,9 @@ contract DeployBridgeTest is Test {
         script.verifyRegistry(wrong, gateB);
 
         wrong = _deploymentB(config, plan);
-        wrong.predictedRegistry = makeAddr("elsewhere");
+        wrong.plan.registry = makeAddr("elsewhere");
         vm.expectRevert(
-            abi.encodeWithSelector(DeployBridge.AddressNotAsPredicted.selector, "forkRegistry", wrong.predictedRegistry, plan.registryB)
+            abi.encodeWithSelector(DeployBridge.AddressNotAsPredicted.selector, "forkRegistry", wrong.plan.registry, plan.chainB.registry)
         );
         script.verifyRegistry(wrong, gateB);
 

@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Vm} from "forge-std/Vm.sol";
 import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
-import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
 import {BeaconBlockHeader, SSZ} from "../../src/hardened/SSZ.sol";
 import {GateSupport} from "./utils/GateSupport.sol";
 import {
@@ -14,9 +14,12 @@ import {
     GateAnswersGarbage,
     GateAlwaysReverts
 } from "./utils/GateMocks.sol";
-import {ReceiptFixtures} from "./utils/ReceiptFixtures.sol";
+import {WithdrawalScenes} from "./utils/WithdrawalScenes.sol";
+import {MessageScenes} from "./utils/MessageScenes.sol";
+import {MessageFixtures} from "./utils/MessageFixtures.sol";
+import {MessageRecorder} from "./utils/MessageTargets.sol";
 
-/// @notice Tests of `BeaconForkGate` (hole HB-02, window 1) and of its use by the vault. The beacon roots contract is
+/// @notice Tests of `BeaconForkGate` (hole HB-02, window 1) and of its use by the message bridge. The beacon roots contract is
 /// modelled by `GateBeaconRootsMock` (same ring buffer), and the genuine EIP-4788 runtime code is used where the
 /// behavior of the real code matters. State trees are real sparse Merkle trees hashed with SHA-256.
 contract BeaconForkGateTest is GateSupport {
@@ -304,7 +307,7 @@ contract BeaconForkGateTest is GateSupport {
 
     // ================================================================ confirmation by epoch
 
-    /// Claim: a confirmation in epoch E admits later deposits in E with no evidence, but not in E + 1. Shows: the
+    /// Claim: a confirmation in epoch E admits later sends in E with no evidence, but not in E + 1. Shows: the
     /// state before and after, the event, `admit("")` in E, and `ForkNotConfirmed(E + 1)` after one epoch.
     /// Control: with evidence for the new epoch the next epoch is admitted again. Matters: a version change
     /// happens at an epoch boundary, so a confirmation must not outlive its epoch.
@@ -337,7 +340,7 @@ contract BeaconForkGateTest is GateSupport {
 
     /// Claim: any caller may `confirm`, and a second `confirm` in the same epoch changes nothing and takes no
     /// evidence. Shows: a keeper address confirms, a second call with empty bytes emits no event. Control: the
-    /// deposit path then admits with no evidence. Matters: a keeper can pre-pay the proof for depositors.
+    /// send path then admits with no evidence. Matters: a keeper can pre-pay the proof for senders.
     function test_HB02_confirmation_anyCallerCanConfirmAndRepeatIsANoOp() public {
         bytes memory evidence = _good();
         vm.prank(makeAddr("keeper"));
@@ -355,7 +358,7 @@ contract BeaconForkGateTest is GateSupport {
 
     /// Claim: empty evidence in an unconfirmed epoch reverts `ForkNotConfirmed(epoch)`. Shows: the exact epoch in
     /// the error. Control: the same call with honest evidence succeeds. Matters: this is the refusal that keeps
-    /// the tokens of a depositor safe after an unknown fork.
+    /// senders from posting messages that nobody can deliver after an unknown fork.
     function test_HB02_confirmation_emptyEvidenceRefused() public {
         vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.ForkNotConfirmed.selector, EPOCH_E));
         gate.admit("");
@@ -365,7 +368,7 @@ contract BeaconForkGateTest is GateSupport {
     /// Claim: a header from the previous epoch is refused, a header from the first or the last slot of the current
     /// epoch is accepted, and a header from a later epoch is refused. Shows: `HeaderNotInCurrentEpoch(header
     /// epoch, current epoch)` for the last slot of E - 1 and the first slot of E + 1. Matters: only a header of the
-    /// current epoch shows the version of the block where the deposit lands.
+    /// current epoch shows the version of the block where the send lands.
     function test_HB02_confirmation_headerEpochRules() public {
         uint256 timestamp = block.timestamp;
         bytes memory previous = _honestEvidence(timestamp, _slotIn(EPOCH_E, 0) - 1, 6, ELECTRA);
@@ -575,7 +578,7 @@ contract BeaconForkGateTest is GateSupport {
 
     /// Claim: a seal with an unknown version closes the gate for good. Shows: the event with version and slot; then
     /// `admit` reverts `GateSealed` in a confirmed epoch, with valid evidence, and with none; `confirm` and a second
-    /// `seal` revert `GateSealed`; a later epoch is no different. Control: before the seal the same deposit passes.
+    /// `seal` revert `GateSealed`; a later epoch is no different. Control: before the seal the same send passes.
     /// Matters: a sealed route must stay sealed: after an unknown fork no state is trustworthy.
     function test_HB02_seal_closesTheGateForGood() public {
         gate.admit(_good());
@@ -739,21 +742,6 @@ contract BeaconForkGateTest is GateSupport {
         gate.confirm(evidence);
     }
 
-    /// Claim: with the genuine code, an enforcing gate reads a real root end to end through a vault deposit. Shows:
-    /// the first deposit with evidence works and confirms the epoch, the second needs none. Matters: the whole
-    /// path runs against the real runtime code, not only the model.
-    function test_HB02_genuineCode_endToEndEnforcingDeposit() public {
-        _etchGenuine();
-        StateTree memory tree = _stateTree(6, ELECTRA, DENEB);
-        BeaconBlockHeader memory header = _header(_slotNow(), tree.stateRoot);
-        _setGenuine(SSZ.hashTreeRootMemory(header));
-        BridgeVault vault = _vaultWithGate(address(gate));
-        _depositWithEvidence(vault, alice, 5e18, _evidence(block.timestamp, header, ELECTRA, tree.currentBranch));
-        assertEq(tokenOnA.balanceOf(address(vault)), 5e18);
-        _depositWithEvidence(vault, alice, 1e18, "");
-        assertEq(tokenOnA.balanceOf(address(vault)), 6e18);
-    }
-
     // ================================================================ genuine code constant
 
     /// Claim: the recorded runtime code is the 97 bytes of EIP-4788 and hashes to the recorded value. Shows: the
@@ -772,9 +760,9 @@ contract BeaconForkGateTest is GateSupport {
         return _newGate(BeaconForkGate.GateMode.DetectBeaconRoots);
     }
 
-    /// Claim: with no code at the beacon roots address, detection mode admits every deposit and stays in detection.
+    /// Claim: with no code at the beacon roots address, detection mode admits every send and stays in detection.
     /// Shows: `admit("")` passes, `enforcing()` stays false, even in several epochs. Matters: PulseChain has no
-    /// EIP-4788 today and its deposits must keep working.
+    /// EIP-4788 today and its messages must keep sending.
     function test_HB02_detection_admitsWithNoCodeAtTheAddress() public {
         vm.etch(BEACON_ROOTS, "");
         BeaconForkGate detecting = _detecting();
@@ -832,7 +820,7 @@ contract BeaconForkGateTest is GateSupport {
     }
 
     /// Claim: once a root appears, detection mode becomes enforcing for good, and the sequence is: before the
-    /// root, a deposit with no evidence passes; with the root, the SAME call reverts `ForkNotConfirmed` (the revert
+    /// root, a send with no evidence passes; with the root, the SAME call reverts `ForkNotConfirmed` (the revert
     /// also undoes the switch, so `enforcing()` is still false); with evidence, the call passes, emits
     /// `BeaconRootsDetected` and `ForkConfirmed`, and `enforcing()` is true. Then the same epoch admits with no
     /// evidence. Matters: the switch is a state change that the first accepted call must leave behind.
@@ -856,7 +844,7 @@ contract BeaconForkGateTest is GateSupport {
     }
 
     /// Claim: after detection, the gate stays enforcing when the root disappears. Shows: the beacon roots
-    /// contract is replaced by an answer of zero, then removed; in the next epoch the deposit without a confirmation
+    /// contract is replaced by an answer of zero, then removed; in the next epoch the send without a confirmation
     /// reverts `ForkNotConfirmed(E + 1)` both times. Control: a gate that never detected admits in the same
     /// situation. Matters: otherwise an attacker who can break the answer (or a chain that drops the contract)
     /// switches the gate off.
@@ -909,7 +897,7 @@ contract BeaconForkGateTest is GateSupport {
         assertTrue(detectingForSeal.enforcing());
     }
 
-    /// Claim: in detection mode after the first PulseChain-style fork (a root present, an unknown version), a deposit
+    /// Claim: in detection mode after the first PulseChain-style fork (a root present, an unknown version), a send
     /// reverts, and anybody can seal. Shows: no confirmation exists for the unknown version; seal works.
     /// Matters: this is the planned behavior in the documents: the old route closes itself at the fork.
     function test_HB02_detection_unknownForkAfterDetectionCanBeSealed() public {
@@ -929,7 +917,7 @@ contract BeaconForkGateTest is GateSupport {
     /// Claim: in `Enforcing` mode the gate applies the rules from deployment, with no code at the address. Shows:
     /// `admit("")` reverts `ForkNotConfirmed`, and `confirm` and `seal` revert `BeaconRootUnavailable`.
     /// Control: with the model installed and honest evidence, the same gate admits. Matters: Ethereum must never
-    /// fall back to open deposits.
+    /// fall back to open sending.
     function test_HB02_enforcing_appliesFromDeploymentEvenWithNoCode() public {
         StateTreeAndHeader memory built = _builtElectra(block.timestamp);
         bytes memory unknown = _honestEvidence(block.timestamp + 12, _slotNow(), 6, UNKNOWN_FORK);
@@ -969,9 +957,9 @@ contract BeaconForkGateTest is GateSupport {
     /// depths from `forks.<name>.currentSyncCommitteeGindex` (gindex 54 is depth 5, 86 is depth 6). Shows: the
     /// Ethereum gate matches Capella, Deneb, Electra, Fulu and the PulseChain gate matches Capella. Forks before
     /// Capella are not listed: their blocks have no execution payload, so the route never supports them. Gloas is
-    /// not listed: its layout is unknown to the program (no fixture), so deposits stop at that fork until the route is
-    /// redeployed. Matters: a version in the gate that the program cannot read would let deposits pass that
-    /// can never be withdrawn; a missing one would stop deposits in a supported fork.
+    /// not listed: its layout is unknown to the program (no fixture), so sends stop at that fork until the route is
+    /// redeployed. Matters: a version in the gate that the program cannot read would let sends pass that
+    /// can never be delivered; a missing one would stop sends in a supported fork.
     function test_HB02_forkTable_gateEqualsTheLightClientProgramTable() public {
         string memory gindices = vm.readFile("light-client/tests/fixtures/gindices.json");
         _assertGateEqualsFixtures(gate, gindices, "ethereum", "light-client/tests/fixtures/ethereum/chain_spec.json");
@@ -1081,106 +1069,94 @@ contract BeaconForkGateTest is GateSupport {
         gate.confirm(_honestEvidence(block.timestamp + 20, _slotNow(), 5, CAPELLA));
     }
 
-    // ================================================================ vault integration
+    // ================================================================ message bridge integration
 
-    /// Claim: with an enforcing gate, the first deposit of an epoch with a proof works and emits the deposit event;
-    /// a second deposit in that epoch with empty evidence works. Shows: balances, the gate event, the deposit
-    /// count. Matters: the common deposit must stay cheap and simple.
-    function test_HB02_vault_firstDepositWithProofThenEmptyEvidence() public {
-        BridgeVault vault = _vaultWithGate(address(gate));
+    event UserRequestForAffirmation(bytes32 indexed messageId, bytes encodedData);
+
+    /// @dev The low bits of a message identifier are the send counter of the bridge.
+    function _counterOf(bytes32 messageId) internal pure returns (uint64) {
+        return uint64(uint256(messageId));
+    }
+
+    /// Claim: with an enforcing gate, a send in an unconfirmed epoch is refused; after `confirm` the send works; a
+    /// second sender in the same epoch sends with no `confirm`. Shows: `ForkNotConfirmed(E)` first, then the gate event
+    /// and the bridge event in one call pair, then a second send by another account that emits no gate event. Matters: the bridge gives
+    /// the gate empty evidence, so the first poster of an epoch pays for the proof and every later poster rides on it.
+    function test_HB02_bridge_confirmThenSendThenLaterSendersNeedNoConfirm() public {
+        MessageBridge sender = _bridgeWithGate(address(gate));
+        vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.ForkNotConfirmed.selector, EPOCH_E));
+        _send(sender, alice);
+
         bytes memory evidence = _good();
-        tokenOnA.mint(alice, 3e18);
-        vm.chainId(CHAIN_A);
-        vm.startPrank(alice);
-        tokenOnA.approve(address(vault), 3e18);
-        vm.expectEmit(true, false, false, true, address(gate));
-        emit ForkConfirmed(EPOCH_E, ELECTRA);
-        vm.expectEmit(true, true, true, false, address(vault));
-        emit BridgeVault.DepositInitiated(address(tokenOnA), alice, bob, 2e18, bytes32(0), CHAIN_B, address(vaultB), address(tokenOnB));
-        vault.deposit(address(tokenOnA), bob, 2e18, 0, evidence);
-        vault.deposit(address(tokenOnA), bob, 1e18, 0, "");
-        vm.stopPrank();
-        assertEq(tokenOnA.balanceOf(address(vault)), 3e18);
-        assertEq(vault.depositCount(), 2);
+        vm.recordLogs();
+        bytes32 first = _confirmThenSend(sender, gate, alice, evidence);
+        Vm.Log[] memory confirmLogs = vm.getRecordedLogs();
+        assertEq(confirmLogs.length, 2, "one gate event and one message");
+        assertEq(confirmLogs[0].emitter, address(gate));
+        assertEq(confirmLogs[0].topics[0], ForkConfirmed.selector, "the gate confirms the epoch");
+        assertEq(uint256(confirmLogs[0].topics[1]), EPOCH_E);
+        assertEq(confirmLogs[1].emitter, address(sender));
+        assertEq(confirmLogs[1].topics[0], UserRequestForAffirmation.selector, "the bridge logs the message");
+
+        vm.recordLogs();
+        bytes32 second = _send(sender, bob);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, 1, "the second send logs only the message");
+        assertEq(logs[0].emitter, address(sender), "the log is the message of the bridge");
+        assertEq(_counterOf(first), 0, "the refused send spent no counter value");
+        assertEq(_counterOf(second), 1);
     }
 
-    /// Claim: a deposit in a new epoch without evidence reverts and the tokens stay with the user. Shows:
-    /// `ForkNotConfirmed(E + 1)`, the balance of the user is unchanged and the vault holds nothing more.
-    /// Control: the first deposit in E passed. Matters: the refusal is the protection after an unknown fork.
-    function test_HB02_vault_newEpochWithoutEvidenceKeepsTheTokens() public {
-        BridgeVault vault = _vaultWithGate(address(gate));
-        _depositWithEvidence(vault, alice, 1e18, _good());
+    /// Claim: a send in a new epoch without a confirmation reverts and sends nothing. Shows: `ForkNotConfirmed(E + 1)`,
+    /// no log, and no counter spent: the next honest send carries the next counter value. Control: the send in E passed.
+    /// Matters: the refusal is the protection after an unknown fork, and it must leave no trace of a message.
+    function test_HB02_bridge_newEpochWithoutConfirmationSendsNothing() public {
+        MessageBridge sender = _bridgeWithGate(address(gate));
+        bytes32 inE = _confirmThenSend(sender, gate, alice, _good());
+        assertEq(_counterOf(inE), 0);
+
         _warpIntoEpoch(EPOCH_E + 1, 2);
-        tokenOnA.mint(alice, 4e18);
-        vm.chainId(CHAIN_A);
-        vm.startPrank(alice);
-        tokenOnA.approve(address(vault), 4e18);
+        vm.recordLogs();
         vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.ForkNotConfirmed.selector, EPOCH_E + 1));
-        vault.deposit(address(tokenOnA), bob, 4e18, 0, "");
-        vm.stopPrank();
-        assertEq(tokenOnA.balanceOf(alice), 4e18, "the tokens stay with the user");
-        assertEq(tokenOnA.balanceOf(address(vault)), 1e18);
+        _send(sender, bob);
+        assertEq(vm.getRecordedLogs().length, 0, "no message is logged");
+
+        bytes memory evidence = _honestEvidence(block.timestamp, _slotIn(EPOCH_E + 1, 1), 6, ELECTRA);
+        bytes32 next = _confirmThenSend(sender, gate, bob, evidence);
+        assertEq(_counterOf(next), 1, "the refused send spent no counter value");
     }
 
-    /// Claim: after a seal every deposit reverts `GateSealed`, in a confirmed epoch and with valid evidence, and the
-    /// tokens stay. Control: the deposit before the seal passes. Matters: an unknown fork must stop deposits at once.
-    function test_HB02_vault_depositAfterSealReverts() public {
-        BridgeVault vault = _vaultWithGate(address(gate));
-        _depositWithEvidence(vault, alice, 1e18, _good());
+    /// Claim: after a seal every send reverts `GateSealed`, in a confirmed epoch and after a fresh confirmation attempt.
+    /// Shows: the revert for a plain send, and the revert of `confirm` with valid evidence. Control: the send before the
+    /// seal passes. Matters: an unknown fork must stop sends at once.
+    function test_HB02_bridge_sendAfterSealReverts() public {
+        MessageBridge sender = _bridgeWithGate(address(gate));
+        _confirmThenSend(sender, gate, alice, _good());
         gate.seal(_honestEvidence(block.timestamp + 12, _slotNow(), 6, UNKNOWN_FORK));
 
+        vm.expectRevert(_err(BeaconForkGate.GateSealed.selector));
+        _send(sender, alice);
         bytes memory valid = _honestEvidence(block.timestamp + 24, _slotNow(), 6, ELECTRA);
-        tokenOnA.mint(alice, 2e18);
-        vm.chainId(CHAIN_A);
-        vm.startPrank(alice);
-        tokenOnA.approve(address(vault), 2e18);
         vm.expectRevert(_err(BeaconForkGate.GateSealed.selector));
-        vault.deposit(address(tokenOnA), bob, 1e18, 0, "");
+        gate.confirm(valid);
         vm.expectRevert(_err(BeaconForkGate.GateSealed.selector));
-        vault.deposit(address(tokenOnA), bob, 1e18, 0, valid);
-        vm.stopPrank();
-        assertEq(tokenOnA.balanceOf(alice), 2e18);
+        _send(sender, bob);
     }
 
-    /// Claim: withdrawals still pay after the gate seals, and deposits do not. Shows: a vault with an enforcing gate
-    /// takes a deposit, the gate is sealed, `withdraw` pays the receipt of the fixture, and `deposit` reverts
-    /// `GateSealed`. Matters: a seal must never trap funds that users already have a right to.
-    function test_HB02_vault_withdrawalsStillWorkAfterSeal() public {
-        BridgeVault.TokenPair[] memory pairs = new BridgeVault.TokenPair[](1);
-        pairs[0] = BridgeVault.TokenPair(address(tokenOnB), ReceiptFixtures.REMOTE_TOKEN, 18);
-        vm.chainId(CHAIN_B);
-        // The fixture receipts name `DESTINATION_VAULT` as the only vault that may pay them, so the vault under test
-        // is built at that address, with this test's gate.
-        bytes memory arguments = abi.encode(
-            address(lightClientForB), CHAIN_B, CHAIN_A, ReceiptFixtures.REMOTE_VAULT, pairs,
-            BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), address(lightClientForA)), DEFAULT_CAPELLA_ERA, address(gate)
-        );
-        deployCodeTo("BridgeVault.sol:BridgeVault", arguments, ReceiptFixtures.DESTINATION_VAULT);
-        BridgeVault vault = BridgeVault(ReceiptFixtures.DESTINATION_VAULT);
-        _openDepositsWithoutProof(vault);
-        destinationPairs.push(pairs[0]);
-        createdVaults.push(vault);
-        ReceiptFixtures.Named memory named = ReceiptFixtures.legacy();
-        Scene memory scene = _scene(named, _defaultParams());
-        tokenOnB.mint(address(vault), 1_000_000e18);
-
-        // control: the deposit passes before the seal
-        tokenOnB.mint(alice, 1e18);
-        vm.startPrank(alice);
-        tokenOnB.approve(address(vault), 1e18);
-        vault.deposit(address(tokenOnB), bob, 1e18, 0, _good());
-        vm.stopPrank();
-
-        gate.seal(_honestEvidence(block.timestamp + 12, _slotNow(), 6, UNKNOWN_FORK));
-        assertTrue(gate.isSealed());
-
-        vm.expectRevert(_err(BeaconForkGate.GateSealed.selector));
-        vm.prank(alice);
-        vault.deposit(address(tokenOnB), bob, 1e18, 0, "");
-
-        vault.withdraw(scene.proof);
-        assertEq(tokenOnB.balanceOf(ReceiptFixtures.RECIPIENT), named.amount, "the recipient got the logged amount");
-        assertTrue(vault.claimed(named.nonce));
+    /// Claim: with the genuine runtime code, an enforcing gate reads a real root end to end through a bridge send.
+    /// Shows: the send is refused before the confirmation, `confirm` and the send work, and the second send needs no
+    /// evidence. Matters: the whole path runs against the real runtime code, not only the model.
+    function test_HB02_genuineCode_endToEndEnforcingSend() public {
+        _etchGenuine();
+        StateTree memory tree = _stateTree(6, ELECTRA, DENEB);
+        BeaconBlockHeader memory header = _header(_slotNow(), tree.stateRoot);
+        _setGenuine(SSZ.hashTreeRootMemory(header));
+        MessageBridge sender = _bridgeWithGate(address(gate));
+        vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.ForkNotConfirmed.selector, EPOCH_E));
+        _send(sender, alice);
+        _confirmThenSend(sender, gate, alice, _evidence(block.timestamp, header, ELECTRA, tree.currentBranch));
+        bytes32 second = _send(sender, bob);
+        assertEq(_counterOf(second), 1);
     }
 
     // ================================================================ helpers for tests above
@@ -1200,5 +1176,39 @@ contract BeaconForkGateTest is GateSupport {
     /// @dev The header inside encoded evidence.
     function _headerOf(bytes memory evidence) internal pure returns (BeaconBlockHeader memory) {
         return abi.decode(evidence, (BeaconForkGate.ForkEvidence)).header;
+    }
+}
+
+/// @notice Delivery does not depend on the gate. A destination bridge with a sealed gate still delivers.
+contract BeaconForkGateDeliveryTest is GateSupport, MessageScenes {
+    function setUp() public override(WithdrawalScenes, MessageScenes) {
+        super.setUp();
+        _warpIntoEpoch(EPOCH_E, 3);
+        _etchMock();
+    }
+
+    /// Claim: a destination bridge whose gate is sealed still delivers a valid message, and a send through it reverts.
+    /// Shows: the gate is sealed, the send reverts `GateSealed`, and `executeMessage` calls the target once. Control: the
+    /// same bridge cannot send, so the seal is real for it. Matters: a seal must never trap a message that a user already
+    /// has a right to. Delivery never calls the gate.
+    function test_HB02_bridge_deliveryStillWorksAfterSeal() public {
+        BeaconForkGate sealedGate = _newGate(BeaconForkGate.GateMode.Enforcing);
+        bytes4 unknown = UNKNOWN_FORK;
+        sealedGate.seal(_honestEvidence(block.timestamp, _slotIn(EPOCH_E, 3), 6, unknown));
+        assertTrue(sealedGate.isSealed());
+
+        MessageBridge destination = _deployDestinationBridge(lightClientForB, 0, DEFAULT_CAPELLA_ERA, address(sealedGate));
+        _openDepositsWithoutProof(destination);
+        _registerBridge(destination);
+        Scene memory scene = _messageScene(destination);
+        MessageFixtures.Named memory named = MessageFixtures.deliver();
+
+        vm.chainId(CHAIN_B);
+        vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.GateSealed.selector));
+        destination.requireToPassMessage(makeAddr("target"), hex"c0ffee", 100_000);
+
+        destination.executeMessage(_messageProof(scene, named));
+        assertEq(recorder.callCount(), 1, "the target ran once");
+        assertTrue(destination.messageCallStatus(named.messageId), "the status records success");
     }
 }

@@ -6,7 +6,7 @@ import {BeaconProofVerifier} from "../../../src/hardened/BeaconProofVerifier.sol
 import {WithdrawalScenes} from "./WithdrawalScenes.sol";
 
 /// @notice The model of the remote chain for the tests of the deposit lock. A contract that has an `openDeposits`
-/// (the vault and the message bridge) is opened with the proof that this model builds. The state tries here have one leaf
+/// (the message bridge) is opened with the proof that this model builds. The state tries here have one leaf
 /// each, which is a valid trie. Branch and extension nodes of real tries are covered by the Anvil tests of the prover,
 /// which use `eth_getProof`.
 abstract contract OpeningScenes is WithdrawalScenes {
@@ -53,7 +53,7 @@ abstract contract OpeningScenes is WithdrawalScenes {
         return _rlpList(items);
     }
 
-    /// @dev A block header whose fourth item is `stateRoot`. The vault reads that item and no other.
+    /// @dev A block header whose fourth item is `stateRoot`. The bridge reads that item and no other.
     function _header(bytes32 stateRoot) internal pure returns (bytes memory) {
         bytes[] memory items = new bytes[](6);
         items[0] = _rlpBytes(abi.encodePacked(keccak256("parent")));
@@ -65,14 +65,14 @@ abstract contract OpeningScenes is WithdrawalScenes {
         return _rlpList(items);
     }
 
-    /// @dev The storage slot of `executionBlockHashes[slot]`, computed here and not by the vault.
+    /// @dev The storage slot of `executionBlockHashes[slot]`, computed here and not by the bridge.
     function _entrySlot(uint64 slot) internal pure returns (bytes32) {
         return keccak256(abi.encode(uint256(slot), EXECUTION_BLOCK_HASHES_SLOT));
     }
 
     /// @dev What a prover builds. The remote chain has a block whose state holds `remote` with one storage entry: the
     /// entry that the remote light client really holds at `storedSlot` (read with `vm.load`, so the model cannot drift from
-    /// the contract). The light client of the vault stores the hash of that block. Returns the evidence.
+    /// the contract). The light client of the bridge stores the hash of that block. Returns the evidence.
     struct Model {
         bytes32 entryValue;
         bytes entryLeaf;
@@ -115,7 +115,7 @@ abstract contract OpeningScenes is WithdrawalScenes {
         _submit(remote, output);
     }
 
-    /// @dev The light client of the vault stores the block of the remote chain that holds the model. Returns its slot.
+    /// @dev The light client of the bridge stores the block of the remote chain that holds the model. Returns its slot.
     function _ownStores(BeaconLightClient own, bytes memory header) internal returns (uint64) {
         _finalize(own, GENESIS_ROOT_B, keccak256(header));
         return own.head();

@@ -1,10 +1,10 @@
-//! Solidity ABI types of the public values, and the deposit event.
+//! Solidity ABI types of the public values, the message proof and the message event.
 //!
 //! The struct field order is the order of the Solidity structs in `docs/hardened-build-contract.md`
-//! (`LightClientOutput`, and `WithdrawalProof` from the section "Change: the vault verifies withdrawals directly").
+//! (`LightClientOutput`) and in `src/hardened/MessageBridge.sol` (`MessageProof`).
 //! `abi.encode` of a struct with only static fields is the concatenation of its fields, each padded to 32 bytes,
-//! which `SolValue::abi_encode` produces. `WithdrawalProof` is dynamic: its calldata is the 4-byte selector of
-//! `withdraw(WithdrawalProof)` followed by the encoding of the struct as the only argument.
+//! which `SolValue::abi_encode` produces. `MessageProof` is dynamic: its calldata is the 4-byte selector of
+//! `executeMessage(MessageProof)` followed by the encoding of the struct as the only argument.
 
 use alloy_primitives::B256;
 use alloy_sol_types::{sol, SolEvent};
@@ -40,7 +40,7 @@ sol! {
         uint64 observedAttestedSlot;
     }
 
-    /// A beacon block header, as the vault receives it in calldata.
+    /// A beacon block header, as the bridge receives it in calldata.
     #[derive(Debug, PartialEq, Eq)]
     struct BeaconBlockHeader {
         uint64 slot;
@@ -50,41 +50,34 @@ sol! {
         bytes32 bodyRoot;
     }
 
-    /// The evidence for one withdrawal: calldata of `withdraw(WithdrawalProof)`. No zero-knowledge proof is involved.
+    /// The evidence for one message: calldata of `executeMessage(MessageProof)`. No zero-knowledge proof is involved.
+    /// `receiptIndex` and `transactionIndex` must be equal: the receipt and the transaction sit at one index.
     #[derive(Debug, PartialEq, Eq)]
-    struct WithdrawalProof {
+    struct MessageProof {
         BeaconBlockHeader anchorHeader;
-        BeaconBlockHeader depositHeader;
+        BeaconBlockHeader sourceHeader;
         bytes32[] ancestryBranch;
         bytes32[] blockHashBranch;
         bytes executionHeaderRlp;
         bytes[] receiptProof;
+        uint256 receiptIndex;
+        bytes[] transactionProof;
         uint256 transactionIndex;
         uint256 logIndex;
     }
 
-    /// The vault entry point. Its selector and argument encoding make the calldata.
-    function withdraw(WithdrawalProof calldata proof) external;
+    /// The bridge entry point. Its selector and argument encoding make the calldata.
+    function executeMessage(MessageProof calldata proof) external;
 
-    /// The vault deposit event. The declaration is the single source of the topic: nothing is hardcoded.
+    /// The message event of the Arbitrary Message Bridge. The declaration is the single source of the topic.
     #[derive(Debug, PartialEq, Eq)]
-    event DepositInitiated(
-        address indexed token,
-        address indexed sender,
-        address indexed recipient,
-        uint256 amount,
-        bytes32 nonce,
-        uint64 targetChainId,
-        address destinationVault,
-        address destinationToken
-    );
+    event UserRequestForAffirmation(bytes32 indexed messageId, bytes encodedData);
 }
 
-/// Topic 0 of `DepositInitiated(address,address,address,uint256,bytes32,uint64,address,address)`.
-/// The log data has 5 words: amount, nonce, target chain, destination vault, destination token (160 bytes).
+/// Topic 0 of `UserRequestForAffirmation(bytes32,bytes)`: `keccak256` of the canonical signature.
 ///
-/// Derived from the declaration above: `keccak256` of the canonical signature.
-pub const DEPOSIT_EVENT_TOPIC: B256 = <DepositInitiated as SolEvent>::SIGNATURE_HASH;
+/// The log data is `abi.encode(bytes)` of the encoded message: the offset 32, the length, the padded bytes.
+pub const USER_REQUEST_TOPIC: B256 = <UserRequestForAffirmation as SolEvent>::SIGNATURE_HASH;
 
 #[cfg(test)]
 mod tests {
@@ -92,20 +85,13 @@ mod tests {
     use alloy_primitives::{b256, hex};
     use alloy_sol_types::SolValue;
 
-    /// Claim: the topic is the real keccak256 of the event signature (verified with `cast keccak`; the signature gained
-    /// the final `address destinationToken` parameter, so the earlier constant `0x490f...69da` is retired) and is
-    /// NOT the revision 2 constant `0x2df9...c1ee` that the revision 2 circuit hardcodes (defect R2-02).
-    /// Why it matters: with the wrong topic no deposit can ever be proven.
+    /// Claim: the topic is the real keccak256 of the event signature (verified with `cast keccak`, Foundry, 2026-10-24).
+    /// Why it matters: with the wrong topic no message can ever be proven.
     #[test]
-    fn deposit_topic_is_the_real_signature_hash_and_not_the_revision_two_constant() {
-        let expected = b256!("2d8b36b0632a230eea6da357dbb14a954a4a3101fb64d1567778dc4bf2a25cd0");
-        let revision_two = b256!("2df93605658e38812f86230cb85b0d0c35583b27b9c9769f36b6fbfda3d8c1ee");
-        assert_eq!(DEPOSIT_EVENT_TOPIC, expected);
-        assert_ne!(DEPOSIT_EVENT_TOPIC, revision_two);
-        assert_eq!(
-            DepositInitiated::SIGNATURE,
-            "DepositInitiated(address,address,address,uint256,bytes32,uint64,address,address)"
-        );
+    fn message_topic_is_the_real_signature_hash() {
+        let expected = b256!("482515ce3d9494a37ce83f18b72b363449458435fafdd7a53ddea7460fe01b58");
+        assert_eq!(USER_REQUEST_TOPIC, expected);
+        assert_eq!(UserRequestForAffirmation::SIGNATURE, "UserRequestForAffirmation(bytes32,bytes)");
     }
 
     fn sample_light_client_output() -> LightClientOutput {
@@ -188,12 +174,12 @@ mod tests {
         assert_eq!(decoded, output);
     }
 
-    /// Claim: the calldata of `withdraw(WithdrawalProof)` equals the output of
-    /// `cast calldata "withdraw(((uint64,uint64,bytes32,bytes32,bytes32),(uint64,uint64,bytes32,bytes32,bytes32),bytes32[],bytes32[],bytes,bytes[],uint256,uint256))" ...`
-    /// (Foundry, 2026-10-20) for a sample proof with two branches, a header blob and two receipt nodes.
-    /// Why it matters: the vault decodes these exact bytes, and the fixtures hold them.
+    /// Claim: the calldata of `executeMessage(MessageProof)` equals the output of
+    /// `cast calldata "executeMessage(((uint64,uint64,bytes32,bytes32,bytes32),(uint64,uint64,bytes32,bytes32,bytes32),bytes32[],bytes32[],bytes,bytes[],uint256,bytes[],uint256,uint256))" ...`
+    /// (Foundry, 2026-10-24) for a sample proof with two branches, a header blob, two receipt nodes and two transaction nodes.
+    /// Why it matters: the bridge decodes these exact bytes, and the fixtures hold them.
     #[test]
-    fn withdrawal_calldata_matches_cast() {
+    fn message_calldata_matches_cast() {
         use alloy_sol_types::SolCall;
         let header = |first: u64, second: u64, byte: u8| BeaconBlockHeader {
             slot: first,
@@ -202,18 +188,20 @@ mod tests {
             stateRoot: B256::repeat_byte(byte + 0x11),
             bodyRoot: B256::repeat_byte(byte + 0x22),
         };
-        let proof = WithdrawalProof {
+        let proof = MessageProof {
             anchorHeader: header(1, 2, 0x11),
-            depositHeader: header(4, 5, 0x44),
+            sourceHeader: header(4, 5, 0x44),
             ancestryBranch: vec![B256::repeat_byte(0x77)],
             blockHashBranch: vec![B256::repeat_byte(0x88), B256::repeat_byte(0x99)],
             executionHeaderRlp: hex!("deadbeef").into(),
             receiptProof: vec![hex!("aabb").into(), hex!("ccddeeff00").into()],
+            receiptIndex: alloy_primitives::U256::from(7u64),
+            transactionProof: vec![hex!("0102").into(), hex!("030405").into()],
             transactionIndex: alloy_primitives::U256::from(7u64),
             logIndex: alloy_primitives::U256::from(8u64),
         };
         let expected = hex!(
-            "30568d8300000000000000000000000000000000000000000000000000000000"
+            "a544280400000000000000000000000000000000000000000000000000000000"
             "0000002000000000000000000000000000000000000000000000000000000000"
             "0000000100000000000000000000000000000000000000000000000000000000"
             "0000000211111111111111111111111111111111111111111111111111111111"
@@ -225,10 +213,12 @@ mod tests {
             "4444444455555555555555555555555555555555555555555555555555555555"
             "5555555566666666666666666666666666666666666666666666666666666666"
             "6666666600000000000000000000000000000000000000000000000000000000"
-            "0000020000000000000000000000000000000000000000000000000000000000"
             "0000024000000000000000000000000000000000000000000000000000000000"
-            "000002a000000000000000000000000000000000000000000000000000000000"
+            "0000028000000000000000000000000000000000000000000000000000000000"
             "000002e000000000000000000000000000000000000000000000000000000000"
+            "0000032000000000000000000000000000000000000000000000000000000000"
+            "0000000700000000000000000000000000000000000000000000000000000000"
+            "0000040000000000000000000000000000000000000000000000000000000000"
             "0000000700000000000000000000000000000000000000000000000000000000"
             "0000000800000000000000000000000000000000000000000000000000000000"
             "0000000177777777777777777777777777777777777777777777777777777777"
@@ -244,9 +234,16 @@ mod tests {
             "00000002aabb0000000000000000000000000000000000000000000000000000"
             "0000000000000000000000000000000000000000000000000000000000000000"
             "00000005ccddeeff000000000000000000000000000000000000000000000000"
+            "0000000000000000000000000000000000000000000000000000000000000000"
+            "0000000200000000000000000000000000000000000000000000000000000000"
+            "0000004000000000000000000000000000000000000000000000000000000000"
+            "0000008000000000000000000000000000000000000000000000000000000000"
+            "0000000201020000000000000000000000000000000000000000000000000000"
+            "0000000000000000000000000000000000000000000000000000000000000000"
+            "0000000303040500000000000000000000000000000000000000000000000000"
             "00000000"
         );
-        assert_eq!(withdrawCall { proof }.abi_encode(), expected.to_vec());
-        assert_eq!(withdrawCall::SELECTOR, hex!("30568d83"));
+        assert_eq!(executeMessageCall { proof }.abi_encode(), expected.to_vec());
+        assert_eq!(executeMessageCall::SELECTOR, hex!("a5442804"));
     }
 }

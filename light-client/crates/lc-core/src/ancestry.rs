@@ -1,27 +1,27 @@
-//! The beacon path of a withdrawal: from a finalized anchor to the execution block hash of the deposit block.
+//! The beacon path of a message proof: from a finalized anchor to the execution block hash of the source block.
 //!
-//! The light client stores only finalized beacon headers, by slot. A deposit sits in an arbitrary earlier block.
+//! The light client stores only finalized beacon headers, by slot. The source transaction sits in an arbitrary earlier block.
 //! The path is:
 //!
 //! 1. `hash_tree_root(anchor_header)` equals the stored header root of the anchor slot.
-//! 2. `anchor.state_root` commits to the deposit header through one of two paths. The vault picks the path from the two
-//!    slots. The prover never picks it. `distance = anchor_slot - deposit_slot`.
-//!    - Recent path, `0 < distance <= 8192`: leaf `hash_tree_root(deposit_header)` at the generalized index of
-//!      `block_roots[deposit_slot % 8192]`. `get_block_root_at_slot` in `specs/phase0/beacon-chain.md` asserts
+//! 2. `anchor.state_root` commits to the source header through one of two paths. The bridge picks the path from the two
+//!    slots. The prover never picks it. `distance = anchor_slot - source_slot`.
+//!    - Recent path, `0 < distance <= 8192`: leaf `hash_tree_root(source_header)` at the generalized index of
+//!      `block_roots[source_slot % 8192]`. `get_block_root_at_slot` in `specs/phase0/beacon-chain.md` asserts
 //!      `slot < state.slot <= slot + SLOTS_PER_HISTORICAL_ROOT`.
-//!    - Historical path, `distance > 8192`: the era of the deposit is complete at the anchor, and
+//!    - Historical path, `distance > 8192`: the era of the source block is complete at the anchor, and
 //!      `state.historical_summaries[era - capellaEra].block_summary_root` is the root of that era's `block_roots`.
 //!      Generalized index, built in this order (see [`historical_leaf_gindex`]): the field, the list data node, the
 //!      list position, `block_summary_root`, the position inside the era.
-//! 3. `deposit.body_root` commits to `execution_payload.block_hash`. One combined branch (body field 9, then payload
+//! 3. `source.body_root` commits to `execution_payload.block_hash`. One combined branch (body field 9, then payload
 //!    field 12) leads from the block hash to the body root. The full `ExecutionPayloadHeader` is never hashed.
 //!
 //! Every hash on this path is SHA-256, except the keccak256 of the execution header.
 //!
 //! Branches must have the exact length: padding is not accepted. A branch built for the other path has the wrong
-//! length or the wrong index, so the vault refuses it.
+//! length or the wrong index, so the bridge refuses it.
 
-use crate::abi::{BeaconBlockHeader as AbiBeaconBlockHeader, WithdrawalProof};
+use crate::abi::{BeaconBlockHeader as AbiBeaconBlockHeader, MessageProof};
 use crate::chain::ChainSpec;
 use crate::error::{Error, Result};
 use crate::layout::{
@@ -56,7 +56,7 @@ impl From<&BeaconBlockHeader> for AbiBeaconBlockHeader {
     }
 }
 
-/// Which ancestry path proves the deposit header.
+/// Which ancestry path proves the source header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AncestryPath {
     /// `0 < distance <= 8192`: through `state.block_roots`.
@@ -68,12 +68,12 @@ pub enum AncestryPath {
 /// Chooses the ancestry path from the two slots. The edge belongs to the recent path: distance 8192 is recent.
 ///
 /// # Errors
-/// `DepositNotBeforeAnchor` when `deposit_slot >= anchor_slot`.
-pub fn ancestry_path_for_slots(anchor_slot: u64, deposit_slot: u64) -> Result<AncestryPath> {
-    if deposit_slot >= anchor_slot {
-        return Err(Error::DepositNotBeforeAnchor { anchor_slot, deposit_slot });
+/// `DepositNotBeforeAnchor` when `source_slot >= anchor_slot`.
+pub fn ancestry_path_for_slots(anchor_slot: u64, source_slot: u64) -> Result<AncestryPath> {
+    if source_slot >= anchor_slot {
+        return Err(Error::DepositNotBeforeAnchor { anchor_slot, source_slot });
     }
-    if anchor_slot - deposit_slot <= SLOTS_PER_HISTORICAL_ROOT {
+    if anchor_slot - source_slot <= SLOTS_PER_HISTORICAL_ROOT {
         return Ok(AncestryPath::Recent);
     }
     Ok(AncestryPath::Historical)
@@ -82,23 +82,23 @@ pub fn ancestry_path_for_slots(anchor_slot: u64, deposit_slot: u64) -> Result<An
 /// The generalized index of `block_roots[slot % 8192]`, given the generalized index of the `block_roots` field.
 ///
 /// # Errors
-/// `LayoutPositionInvalid` when the field index is not an accepted `block_roots` position (37, 69 or 133): the vault
+/// `LayoutPositionInvalid` when the field index is not an accepted `block_roots` position (37, 69 or 133): the bridge
 /// accepts no other.
-pub fn block_roots_leaf_gindex(block_roots_field_gindex: u64, deposit_slot: u64) -> Result<u64> {
+pub fn block_roots_leaf_gindex(block_roots_field_gindex: u64, source_slot: u64) -> Result<u64> {
     if !is_block_roots_position(block_roots_field_gindex) {
         return Err(Error::LayoutPositionInvalid { gindex: block_roots_field_gindex });
     }
-    Ok((block_roots_field_gindex << BLOCK_ROOTS_VECTOR_DEPTH) | (deposit_slot % SLOTS_PER_HISTORICAL_ROOT))
+    Ok((block_roots_field_gindex << BLOCK_ROOTS_VECTOR_DEPTH) | (source_slot % SLOTS_PER_HISTORICAL_ROOT))
 }
 
-/// The generalized index of `historical_summaries[index].block_summary_root.block_roots[deposit_slot % 8192]`.
+/// The generalized index of `historical_summaries[index].block_summary_root.block_roots[source_slot % 8192]`.
 ///
 /// Built in this order, from the generalized index `g` of the `historical_summaries` field in `BeaconState`:
 /// 1. `g = historical_summaries_field_gindex`
 /// 2. `g = g * 2`: the list data root, past the length mix-in
 /// 3. `g = g * 2^24 + index`: the list position (`HISTORICAL_ROOTS_LIMIT = 2^24`)
 /// 4. `g = g * 2 + 0`: `HistoricalSummary.block_summary_root`
-/// 5. `g = g * 2^13 + deposit_slot % 8192`: the position inside that era's `block_roots`
+/// 5. `g = g * 2^13 + source_slot % 8192`: the position inside that era's `block_roots`
 ///
 /// The branch for this index has `depth(field) + 1 + 24 + 1 + 13` entries: 44 in the Capella and Deneb layouts, 45 in
 /// the Electra and Fulu layouts.
@@ -106,7 +106,7 @@ pub fn block_roots_leaf_gindex(block_roots_field_gindex: u64, deposit_slot: u64)
 /// # Errors
 /// `LayoutPositionInvalid` when the field index is not an accepted `historical_summaries` position (59, 91 or 155).
 /// `HistoricalIndexOutOfRange` when `index >= 2^24`: it would spill into the neighbouring subtree.
-pub fn historical_leaf_gindex(historical_summaries_field_gindex: u64, index: u64, deposit_slot: u64) -> Result<u64> {
+pub fn historical_leaf_gindex(historical_summaries_field_gindex: u64, index: u64, source_slot: u64) -> Result<u64> {
     if !is_historical_summaries_position(historical_summaries_field_gindex) {
         return Err(Error::LayoutPositionInvalid { gindex: historical_summaries_field_gindex });
     }
@@ -117,55 +117,55 @@ pub fn historical_leaf_gindex(historical_summaries_field_gindex: u64, index: u64
     gindex *= 2;
     gindex = (gindex << HISTORICAL_SUMMARIES_LIST_DEPTH) + index;
     gindex *= 2;
-    gindex = (gindex << BLOCK_ROOTS_VECTOR_DEPTH) + deposit_slot % SLOTS_PER_HISTORICAL_ROOT;
+    gindex = (gindex << BLOCK_ROOTS_VECTOR_DEPTH) + source_slot % SLOTS_PER_HISTORICAL_ROOT;
     Ok(gindex)
 }
 
-/// The generalized index the vault uses to check the ancestry branch, for either path.
+/// The generalized index the bridge uses to check the ancestry branch, for either path.
 ///
-/// `capella_era` is the immutable `capellaEra` of the vault (`ChainSpec::capella_era`).
+/// `capella_era` is the immutable `capellaEra` of the bridge (`ChainSpec::capella_era`).
 ///
 /// # Errors
 /// `DepositNotBeforeAnchor`, `UnsupportedFork` (anchor fork), `DepositBeforeCapella`, `HistoricalIndexOutOfRange`,
 /// `LayoutPositionInvalid`.
-pub fn ancestry_leaf_gindex(spec: &ChainSpec, anchor_slot: u64, deposit_slot: u64) -> Result<u64> {
-    let path = ancestry_path_for_slots(anchor_slot, deposit_slot)?;
+pub fn ancestry_leaf_gindex(spec: &ChainSpec, anchor_slot: u64, source_slot: u64) -> Result<u64> {
+    let path = ancestry_path_for_slots(anchor_slot, source_slot)?;
     let layout = state_layout_for_fork(spec.fork_at_slot(anchor_slot))?;
     if path == AncestryPath::Recent {
-        return block_roots_leaf_gindex(layout.block_roots_gindex, deposit_slot);
+        return block_roots_leaf_gindex(layout.block_roots_gindex, source_slot);
     }
     let capella_era = spec.capella_era()?;
-    let deposit_era = deposit_slot / SLOTS_PER_HISTORICAL_ROOT;
-    if deposit_era < capella_era {
-        return Err(Error::DepositBeforeCapella { deposit_era, capella_era });
+    let source_era = source_slot / SLOTS_PER_HISTORICAL_ROOT;
+    if source_era < capella_era {
+        return Err(Error::DepositBeforeCapella { source_era, capella_era });
     }
-    historical_leaf_gindex(layout.historical_summaries_gindex, deposit_era - capella_era, deposit_slot)
+    historical_leaf_gindex(layout.historical_summaries_gindex, source_era - capella_era, source_slot)
 }
 
-/// Verifies the beacon path and returns the execution block hash of the deposit block.
+/// Verifies the beacon path and returns the execution block hash of the source block.
 ///
 /// `stored_anchor_root` is what `lightClient.headers(anchorHeader.slot)` returns. Zero means "not stored".
 ///
 /// # Errors
 /// `AnchorNotStored`, `DepositNotBeforeAnchor`, `UnsupportedFork`, `DepositBeforeCapella`, `HistoricalIndexOutOfRange`,
 /// `InvalidAncestryBranch`, `InvalidBlockHashBranch`.
-pub fn verify_beacon_path(spec: &ChainSpec, proof: &WithdrawalProof, stored_anchor_root: &B256) -> Result<B256> {
+pub fn verify_beacon_path(spec: &ChainSpec, proof: &MessageProof, stored_anchor_root: &B256) -> Result<B256> {
     let anchor = BeaconBlockHeader::from(&proof.anchorHeader);
-    let deposit = BeaconBlockHeader::from(&proof.depositHeader);
+    let source = BeaconBlockHeader::from(&proof.sourceHeader);
 
     let anchor_root = anchor.hash_tree_root();
     if *stored_anchor_root == B256::ZERO || anchor_root != *stored_anchor_root {
         return Err(Error::AnchorNotStored);
     }
 
-    let ancestry_gindex = ancestry_leaf_gindex(spec, anchor.slot, deposit.slot)?;
-    if !is_valid_exact_branch(&deposit.hash_tree_root(), &proof.ancestryBranch, ancestry_gindex, &anchor.state_root) {
+    let ancestry_gindex = ancestry_leaf_gindex(spec, anchor.slot, source.slot)?;
+    if !is_valid_exact_branch(&source.hash_tree_root(), &proof.ancestryBranch, ancestry_gindex, &anchor.state_root) {
         return Err(Error::InvalidAncestryBranch);
     }
 
     let block_hash = keccak256(&proof.executionHeaderRlp);
-    let hash_gindex = block_hash_gindex_for_fork(spec.fork_at_slot(deposit.slot))?;
-    if !is_valid_exact_branch(&block_hash, &proof.blockHashBranch, hash_gindex, &deposit.body_root) {
+    let hash_gindex = block_hash_gindex_for_fork(spec.fork_at_slot(source.slot))?;
+    if !is_valid_exact_branch(&block_hash, &proof.blockHashBranch, hash_gindex, &source.body_root) {
         return Err(Error::InvalidBlockHashBranch);
     }
     Ok(block_hash)
@@ -178,7 +178,7 @@ mod tests {
     use crate::ssz::gindex_depth;
 
     /// Claim: the path follows the distance. 1 and 8192 are recent, 8193 is historical, 0 and negative are refused.
-    /// Why it matters: the vault, not the prover, picks the path, so the edge must sit on exactly one side.
+    /// Why it matters: the bridge, not the prover, picks the path, so the edge must sit on exactly one side.
     #[test]
     fn path_follows_the_distance() {
         let anchor = 100_000;
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(ancestry_path_for_slots(anchor, anchor - 8193), Ok(AncestryPath::Historical));
         assert_eq!(
             ancestry_path_for_slots(anchor, anchor),
-            Err(Error::DepositNotBeforeAnchor { anchor_slot: anchor, deposit_slot: anchor })
+            Err(Error::DepositNotBeforeAnchor { anchor_slot: anchor, source_slot: anchor })
         );
         assert!(ancestry_path_for_slots(anchor, anchor + 1).is_err());
     }
@@ -231,8 +231,8 @@ mod tests {
         assert_eq!(historical_leaf_gindex(59, 1 << 24, 0), Err(Error::HistoricalIndexOutOfRange { index: 1 << 24 }));
     }
 
-    /// Claim: the vault picks the leaf index per path, and it takes `capellaEra` from the chain. On Ethereum a deposit in
-    /// era 758 has index 0 and a deposit in era 757 is refused; on PulseChain era 0 has index 0.
+    /// Claim: the bridge picks the leaf index per path, and it takes `capellaEra` from the chain. On Ethereum a message in
+    /// era 758 has index 0 and a message in era 757 is refused; on PulseChain era 0 has index 0.
     /// Why it matters: this is the era formula, and an off-by-one makes a whole era unreachable.
     #[test]
     fn leaf_index_uses_capella_era_of_the_chain() {
@@ -244,15 +244,15 @@ mod tests {
         assert_eq!(next_era, historical_leaf_gindex(91, 1, first_capella_slot + 8192).unwrap());
         assert_eq!(
             ancestry_leaf_gindex(&ETHEREUM_MAINNET, anchor, first_capella_slot - 1),
-            Err(Error::DepositBeforeCapella { deposit_era: 757, capella_era: 758 })
+            Err(Error::DepositBeforeCapella { source_era: 757, capella_era: 758 })
         );
         let pulsechain = ancestry_leaf_gindex(&PULSECHAIN, 10_900_000, 100).unwrap();
         assert_eq!(pulsechain, historical_leaf_gindex(59, 0, 100).unwrap());
     }
 
-    /// Claim: the leaf builders take only the positions that the vault accepts, and refuse a neighbour of each. The
+    /// Claim: the leaf builders take only the positions that the bridge accepts, and refuse a neighbour of each. The
     /// deeper positions 133 and 155 build leaves, the neighbours 36, 38, 132, 134, 58, 60, 154 and 156 do not.
-    /// Why it matters: a position that the vault refuses must not yield a leaf that a prover could use to build evidence.
+    /// Why it matters: a position that the bridge refuses must not yield a leaf that a prover could use to build evidence.
     #[test]
     fn leaf_builders_take_only_accepted_positions() {
         for position in [37, 69, 133] {

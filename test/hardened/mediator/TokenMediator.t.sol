@@ -703,6 +703,25 @@ contract TokenMediatorTest is MediatorFixture {
         new TokenMediator(terms);
     }
 
+    /// Claim: a mediator refuses a bridge that allows less gas per message than the mediator's largest message asks for.
+    /// Shows: with the ceiling one below the largest limit the constructor reverts, and with the ceiling at the largest
+    /// limit it works. Matters: such a mediator would send messages that the bridge refuses, so no relay of a new token
+    /// would ever succeed. The deploy script must fail early, not at the first relay.
+    function test_constructorRefusesABridgeWithTooLittleGasPerMessage() public {
+        TokenMediator.MediatorTerms memory terms = _noTerms();
+        terms.bridge = address(ambA);
+        terms.remoteMediator = address(mediatorB);
+        terms.remoteChainId = CHAIN_B;
+        uint256 largest = mediatorA.DEPLOY_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT();
+
+        ambA.setMaxGasPerTx(largest - 1);
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.GasLimitAboveBridgeMaximum.selector, largest, largest - 1));
+        new TokenMediator(terms);
+
+        ambA.setMaxGasPerTx(largest);
+        new TokenMediator(terms);
+    }
+
     // ------------------------------------------------------------------------------------------------ helpers
 
     function _dropSelector(bytes memory data) private pure returns (bytes memory rest) {

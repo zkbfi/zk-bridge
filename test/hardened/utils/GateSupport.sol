@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {BeaconForkGate} from "../../../src/hardened/BeaconForkGate.sol";
-import {BridgeVault} from "../../../src/hardened/BridgeVault.sol";
+import {MessageBridge} from "../../../src/hardened/MessageBridge.sol";
 import {BeaconBlockHeader, SSZ} from "../../../src/hardened/SSZ.sol";
 import {WithdrawalScenes} from "./WithdrawalScenes.sol";
 import {GateBeaconRootsMock, GateGenuineBeaconRoots} from "./GateMocks.sol";
@@ -219,25 +219,41 @@ abstract contract GateSupport is WithdrawalScenes {
         return _evidence(timestamp, header, version, tree.currentBranch);
     }
 
-    // ---------------------------------------------------------------- vault with a gate
+    // ---------------------------------------------------------------- bridge with a gate
 
-    /// @notice A vault on chain A that uses `gate`, with one token pair.
-    function _vaultWithGate(address gate) internal returns (BridgeVault) {
-        BridgeVault.TokenPair[] memory pairs = new BridgeVault.TokenPair[](1);
-        pairs[0] = BridgeVault.TokenPair(address(tokenOnA), address(tokenOnB), 18);
+    /// @notice A bridge on chain A that uses `gate`, open. Its remote bridge is a stand-in address, because the gate
+    /// tests only send. The send passes empty evidence to the gate, so the epoch must be confirmed first (see
+    /// `_confirmThenSend`).
+    function _bridgeWithGate(address gate) internal returns (MessageBridge) {
         vm.chainId(CHAIN_A);
-        return _opened(new BridgeVault(
-            address(lightClientForA), CHAIN_A, CHAIN_B, address(vaultB), pairs, BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), address(lightClientForB)), DEFAULT_CAPELLA_ERA, gate
-        ));
+        return _opened(
+            new MessageBridge(
+                address(lightClientForA),
+                CHAIN_A,
+                CHAIN_B,
+                makeAddr("remote bridge"),
+                MessageBridge.BridgeTerms(0, address(lightClientForB)),
+                DEFAULT_CAPELLA_ERA,
+                gate
+            )
+        );
     }
 
-    /// @notice Mints and approves for `user`, then deposits on `vault` with `evidence`.
-    function _depositWithEvidence(BridgeVault vault, address user, uint256 amount, bytes memory evidence) internal {
-        tokenOnA.mint(user, amount);
+    /// @notice Sends a message of `user` through `bridge`. The bridge gives the gate empty evidence.
+    function _send(MessageBridge bridge, address user) internal returns (bytes32) {
         vm.chainId(CHAIN_A);
-        vm.startPrank(user);
-        tokenOnA.approve(address(vault), amount);
-        vault.deposit(address(tokenOnA), bob, amount, 0, evidence);
-        vm.stopPrank();
+        vm.prank(user);
+        return bridge.requireToPassMessage(makeAddr("target"), hex"c0ffee", 100_000);
+    }
+
+    /// @notice The pattern for the first sender of an epoch: the sender calls `confirm` on the gate with `evidence`, and
+    /// then sends. `confirm` is open to anyone. Later senders in the same epoch send with no `confirm`.
+    function _confirmThenSend(MessageBridge bridge, BeaconForkGate gate_, address user, bytes memory evidence)
+        internal
+        returns (bytes32)
+    {
+        vm.prank(user);
+        gate_.confirm(evidence);
+        return _send(bridge, user);
     }
 }

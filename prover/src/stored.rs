@@ -1,6 +1,6 @@
 //! What a `BeaconLightClient` contract stores, read from its chain with view calls and logs only.
 //!
-//! The producer starts an update at the stored head. The evidence builder anchors a withdrawal at a stored header and
+//! The producer starts an update at the stored head. The evidence builder anchors a message proof at a stored header and
 //! needs the slots of the heads that the light client stored by updates. Both read the chain here.
 
 use crate::beacon::StoredHead;

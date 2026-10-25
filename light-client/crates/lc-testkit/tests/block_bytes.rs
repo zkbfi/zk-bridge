@@ -44,7 +44,7 @@ fn empty_list_root(limit_depth: u32) -> B256 {
 /// Claim: the parser reads the header fields and the payload of a written block, and the payload hashes to the root that
 /// `ExecutionPayloadHeader` computes from the same values, with the roots of two empty lists.
 /// Why it matters: the prover serves these blocks as a beacon node would. A shifted field would give a block hash branch
-/// that the vault rejects, or a header root that no state holds.
+/// that the bridge rejects, or a header root that no state holds.
 #[test]
 fn the_parser_reads_what_the_builder_wrote() {
     let written = block();

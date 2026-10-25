@@ -65,7 +65,7 @@ fn every_fork_parses_to_the_values_that_were_written() {
 /// Claim: on a state of each fork, the branches for the next committee, the current committee, the finalized root,
 /// `block_roots` and `historical_summaries` verify at the generalized indices of `state_layout_for_fork`, and the
 /// branch of another layout does not verify at them.
-/// Why it matters: the light-client program and the vault check these indices. If the table and the parser disagreed,
+/// Why it matters: the light-client program and the bridge check these indices. If the table and the parser disagreed,
 /// every Electra update would fail on chain, or worse, a branch would verify against the wrong field.
 #[test]
 fn branches_verify_at_the_layout_indices_of_each_fork() {

@@ -1,6 +1,6 @@
 //! Merkle-Patricia trie proof walker that returns the proven value.
 //!
-//! `alloy_trie::proof::verify_proof` needs the expected value as input. The vault gets no receipt bytes in its
+//! `alloy_trie::proof::verify_proof` needs the expected value as input. The bridge gets no receipt bytes in its
 //! calldata: the receipt is the value at the end of the proof. This walker follows the proof from the root hash,
 //! checks the keccak256 link at every step, and returns the leaf value. It is the Rust twin of the Solidity walker.
 //!

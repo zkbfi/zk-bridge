@@ -5,16 +5,19 @@
 //! of the state. Nothing in this file is synthetic.
 
 use alloy_primitives::{Address, B256};
+use lc_core::abi::MessageProof;
+use lc_core::ancestry::verify_beacon_path;
 use lc_core::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN};
+use lc_core::execution::{decode_execution_header, decode_receipt, Log};
+use lc_core::message::{extract_receipt, message_of_log, verify_message, MessageContext};
 use lc_core::update::{
     advance_light_client_store, table_fork_version, verify_light_client_update,
     verify_light_client_update_with_fork_version, verify_sync_aggregate,
 };
-use lc_core::withdrawal::{verify_withdrawal, WithdrawalContext};
 use lc_core::Error;
 use lc_testkit::json::{hex_b256, load_response};
 use lc_testkit::pulsechain::{
-    real_historical_paths, real_historical_withdrawal_proof, real_update_and_store, real_withdrawal_proof,
+    real_historical_message_proof, real_historical_paths, real_message_proof, real_update_and_store,
 };
 
 /// Claim: the PulseChain constants equal the live configuration (including the Bellatrix version `0x0000036b` that the
@@ -143,24 +146,33 @@ fn real_pulsechain_update_does_not_verify_under_ethereums_genesis_validators_roo
     assert_eq!(verify_light_client_update(&store, &update, &foreign), Err(Error::SignatureVerificationFailed));
 }
 
-fn context(anchor_root: B256, vault: Address) -> WithdrawalContext {
-    WithdrawalContext {
-        remote_vault: vault,
-        local_vault: Address::repeat_byte(0xb1),
-        local_chain_id: 1,
-        stored_anchor_root: anchor_root,
-    }
+fn context(anchor_root: B256, bridge: Address) -> MessageContext {
+    MessageContext { remote_bridge: bridge, local_chain_id: 1, remote_chain_id: 369, stored_anchor_root: anchor_root }
+}
+
+/// The real log that a message proof names. It walks the stages of `verify_message` that real data can reach: the beacon
+/// path, the header, the receipt proof and the receipt. The fixtures hold no transactions, so this helper skips the
+/// transaction stage that `verify_message` runs between the receipt proof and the receipt.
+fn real_log(proof: &MessageProof, anchor_root: B256) -> Log {
+    let block_hash = verify_beacon_path(&PULSECHAIN, proof, &anchor_root).expect("the real beacon path verifies");
+    assert_eq!(block_hash, lc_core::receipts::header_hash(&proof.executionHeaderRlp));
+    let header = decode_execution_header(&proof.executionHeaderRlp).expect("header");
+    let index = u64::try_from(proof.receiptIndex).unwrap();
+    let receipt = extract_receipt(header.receipts_root, index, &proof.receiptProof).expect("receipt proof");
+    let receipt = decode_receipt(&receipt).expect("receipt");
+    receipt.logs[usize::try_from(proof.logIndex).unwrap()].clone()
 }
 
 /// Claim: the real beacon path works for a real PulseChain block (anchor state -> block_roots -> beacon header -> block hash
-/// branch -> keccak256(header) -> receipts root -> receipt proof -> receipt -> log). A real block has no deposit event,
-/// so the vault check must reach the log stage and stop there: first on the emitter, then (with the real emitter) on the topic.
+/// branch -> keccak256(header) -> receipts root -> receipt proof -> receipt -> log). A real block has no message event,
+/// so the log check must stop on the emitter, and with the real emitter on the topic. The fixtures hold no transaction
+/// bodies, so `verify_message` itself stops one stage earlier, on the empty transaction proof, after the receipt proof passed.
 /// Why it matters: this proves the generalized indices, the SSZ roots, the trie walker and the receipt decoder on real data.
 #[test]
 fn real_beacon_path_reaches_the_log_checks() {
     for name in ["finalized", "ancestor"] {
         // Find a receipt with a log.
-        let (_, _, block) = real_withdrawal_proof(name, 0, 0);
+        let (_, _, block) = real_message_proof(name, 0, 0);
         let (transaction_index, receipt) = block
             .receipts_json
             .as_array()
@@ -170,57 +182,53 @@ fn real_beacon_path_reaches_the_log_checks() {
             .find(|(_, receipt)| !receipt["logs"].as_array().unwrap().is_empty())
             .expect("a receipt with logs");
         let emitter = Address::from_slice(&lc_testkit::json::hex_bytes(&receipt["logs"][0]["address"]));
-        let (proof, anchor_root, _) = real_withdrawal_proof(name, transaction_index as u64, 0);
+        let (proof, anchor_root, _) = real_message_proof(name, transaction_index as u64, 0);
 
-        let wrong_emitter = verify_withdrawal(&proof, &context(anchor_root, Address::repeat_byte(0xee)), &PULSECHAIN);
-        assert_eq!(
-            wrong_emitter,
-            Err(Error::LogEmitterMismatch),
-            "{name}: all earlier checks pass, the emitter is wrong"
+        let outcome = verify_message(&proof, &context(anchor_root, emitter), &PULSECHAIN);
+        assert!(
+            matches!(outcome, Err(Error::TransactionProofInvalid(_))),
+            "{name}: the beacon path, the header and the receipt proof pass, the transaction proof is empty: {outcome:?}"
         );
-        let wrong_topic = verify_withdrawal(&proof, &context(anchor_root, emitter), &PULSECHAIN);
-        assert_eq!(
-            wrong_topic,
-            Err(Error::LogTopicMismatch),
-            "{name}: the emitter matches, the topic is not a deposit"
-        );
+
+        let log = real_log(&proof, anchor_root);
+        assert_eq!(message_of_log(&log, Address::repeat_byte(0xee)), Err(Error::LogEmitterMismatch), "{name}");
+        assert_eq!(message_of_log(&log, emitter), Err(Error::LogTopicMismatch), "{name}: the emitter matches");
 
         // The light client does not store this anchor: refused before anything else.
-        let unknown = verify_withdrawal(&proof, &context(B256::repeat_byte(9), emitter), &PULSECHAIN);
+        let unknown = verify_message(&proof, &context(B256::repeat_byte(9), emitter), &PULSECHAIN);
         assert_eq!(unknown, Err(Error::AnchorNotStored));
     }
 }
 
-/// Claim: on the real path, a corrupted block_roots branch, a corrupted block hash branch, a wrong deposit slot and a
+/// Claim: on the real path, a corrupted block_roots branch, a corrupted block hash branch, a wrong source slot and a
 /// header RLP with one flipped byte are each refused by their own check (the real-data version of the rejection tests).
 #[test]
 fn real_beacon_path_rejects_tampering() {
-    let (proof, anchor_root, _) = real_withdrawal_proof("finalized", 0, 0);
+    let (proof, anchor_root, _) = real_message_proof("finalized", 0, 0);
     let ctx = context(anchor_root, Address::repeat_byte(0xee));
-    assert_eq!(
-        verify_withdrawal(&proof, &ctx, &PULSECHAIN),
-        Err(Error::LogEmitterMismatch),
-        "control reaches the log stage"
+    assert!(
+        matches!(verify_message(&proof, &ctx, &PULSECHAIN), Err(Error::TransactionProofInvalid(_))),
+        "control reaches the transaction stage"
     );
 
     let mut broken = proof.clone();
     broken.ancestryBranch[3] = B256::repeat_byte(0x55);
-    assert_eq!(verify_withdrawal(&broken, &ctx, &PULSECHAIN), Err(Error::InvalidAncestryBranch));
+    assert_eq!(verify_message(&broken, &ctx, &PULSECHAIN), Err(Error::InvalidAncestryBranch));
 
     let mut broken = proof.clone();
     broken.blockHashBranch[2] = B256::repeat_byte(0x55);
-    assert_eq!(verify_withdrawal(&broken, &ctx, &PULSECHAIN), Err(Error::InvalidBlockHashBranch));
+    assert_eq!(verify_message(&broken, &ctx, &PULSECHAIN), Err(Error::InvalidBlockHashBranch));
 
     let mut broken = proof.clone();
-    broken.depositHeader.slot -= 1;
-    assert_eq!(verify_withdrawal(&broken, &ctx, &PULSECHAIN), Err(Error::InvalidAncestryBranch));
+    broken.sourceHeader.slot -= 1;
+    assert_eq!(verify_message(&broken, &ctx, &PULSECHAIN), Err(Error::InvalidAncestryBranch));
 
     let mut rlp = proof.executionHeaderRlp.to_vec();
     let last = rlp.len() - 1;
     rlp[last] ^= 1;
     let mut broken = proof.clone();
     broken.executionHeaderRlp = rlp.into();
-    assert_eq!(verify_withdrawal(&broken, &ctx, &PULSECHAIN), Err(Error::InvalidBlockHashBranch));
+    assert_eq!(verify_message(&broken, &ctx, &PULSECHAIN), Err(Error::InvalidBlockHashBranch));
 }
 
 // ---- historical ancestry on real PulseChain data ----
@@ -264,13 +272,13 @@ fn real_era_formula_matches_the_node() {
 
     // Climb again from the stored data: leaf -> 13 levels -> block_summary_root of the matching check.
     for name in HISTORICAL_ENTRIES {
-        let deposit = paths.deposit_header(name);
+        let source = paths.source_header(name);
         let branch = paths.ancestry_branch(name);
-        let era = deposit.slot / 8192;
+        let era = source.slot / 8192;
         let check = checks.iter().find(|check| check["era"] == era).expect("a check for the era");
-        let mut node = deposit.hash_tree_root();
+        let mut node = source.hash_tree_root();
         for (height, sibling) in branch[..13].iter().enumerate() {
-            node = if (deposit.slot % 8192) >> height & 1 == 1 {
+            node = if (source.slot % 8192) >> height & 1 == 1 {
                 lc_core::ssz::hash_pair(sibling, &node)
             } else {
                 lc_core::ssz::hash_pair(&node, sibling)
@@ -283,10 +291,10 @@ fn real_era_formula_matches_the_node() {
 /// Claim: a real header in an older era is proven under a real anchor state through `historical_summaries`, at the
 /// generalized index built in the stated order, with an exact 44 entry branch: the first Capella block, both sides of an
 /// era edge (last slot of one era, first slot of the next) and a middle block. All of them are more than 8192 slots before
-/// the anchor, so the vault takes the historical path.
-/// The last block of the newest complete era is only 5117 slots before this anchor. The vault takes the RECENT path for it,
+/// the anchor, so the bridge takes the historical path.
+/// The last block of the newest complete era is only 5117 slots before this anchor. The bridge takes the RECENT path for it,
 /// so its historical branch is the reverse mix-up: a valid path of the real anchor state at the historical index that the
-/// vault refuses at the `block_roots` index.
+/// bridge refuses at the `block_roots` index.
 #[test]
 fn real_historical_ancestry_verifies() {
     use lc_core::ancestry::{ancestry_leaf_gindex, ancestry_path_for_slots, historical_leaf_gindex, AncestryPath};
@@ -295,34 +303,34 @@ fn real_historical_ancestry_verifies() {
     let paths = real_historical_paths();
     let field = CAPELLA_DENEB_STATE_LAYOUT.historical_summaries_gindex;
     for name in HISTORICAL_ENTRIES {
-        let deposit = paths.deposit_header(name);
-        let leaf = deposit.hash_tree_root();
+        let source = paths.source_header(name);
+        let leaf = source.hash_tree_root();
         let branch = paths.ancestry_branch(name);
         assert_eq!(branch.len(), 44, "{name}");
-        let historical_gindex = historical_leaf_gindex(field, deposit.slot / 8192, deposit.slot).unwrap();
+        let historical_gindex = historical_leaf_gindex(field, source.slot / 8192, source.slot).unwrap();
         assert!(
             is_valid_exact_branch(&leaf, &branch, historical_gindex, &paths.anchor.state_root),
             "{name}: slot {} at generalized index {historical_gindex}",
-            deposit.slot
+            source.slot
         );
-        let vault_gindex = ancestry_leaf_gindex(&PULSECHAIN, paths.anchor.slot, deposit.slot).unwrap();
-        let path = ancestry_path_for_slots(paths.anchor.slot, deposit.slot).unwrap();
+        let bridge_gindex = ancestry_leaf_gindex(&PULSECHAIN, paths.anchor.slot, source.slot).unwrap();
+        let path = ancestry_path_for_slots(paths.anchor.slot, source.slot).unwrap();
         if name == "era_last_block" {
             assert_eq!(path, AncestryPath::Recent, "5117 slots before the anchor");
-            assert_ne!(vault_gindex, historical_gindex);
-            assert!(!is_valid_exact_branch(&leaf, &branch, vault_gindex, &paths.anchor.state_root), "reverse mix-up");
+            assert_ne!(bridge_gindex, historical_gindex);
+            assert!(!is_valid_exact_branch(&leaf, &branch, bridge_gindex, &paths.anchor.state_root), "reverse mix-up");
             continue;
         }
         assert_eq!(path, AncestryPath::Historical, "{name}");
-        assert_eq!(vault_gindex, historical_gindex, "{name}: the vault picks the same index");
+        assert_eq!(bridge_gindex, historical_gindex, "{name}: the bridge picks the same index");
     }
     // The edge slots are the real edge: one era ends at slot 8191 and one at era_first_block - 1.
-    let first = paths.deposit_header("era_first_block").slot;
-    assert_eq!(paths.deposit_header("era_previous_last_block").slot, first - 1);
+    let first = paths.source_header("era_first_block").slot;
+    assert_eq!(paths.source_header("era_previous_last_block").slot, first - 1);
     assert_eq!(first % 8192, 0);
-    assert_eq!(paths.deposit_header("era_last_block").slot % 8192, 8191);
-    assert_eq!(paths.deposit_header("era_zero_last_block").slot, 8191);
-    assert!(paths.deposit_header("capella_fork_block").slot >= PULSECHAIN.capella_fork_slot().unwrap());
+    assert_eq!(paths.source_header("era_last_block").slot % 8192, 8191);
+    assert_eq!(paths.source_header("era_zero_last_block").slot, 8191);
+    assert!(paths.source_header("capella_fork_block").slot >= PULSECHAIN.capella_fork_slot().unwrap());
 }
 
 /// Claim: on real data every wrong version of the proof fails. The neighbouring era index on either side, the block_roots
@@ -335,19 +343,19 @@ fn real_historical_ancestry_rejects_wrong_index_length_and_entries() {
     let paths = real_historical_paths();
     let field = CAPELLA_DENEB_STATE_LAYOUT.historical_summaries_gindex;
     for name in HISTORICAL_ENTRIES {
-        let deposit = paths.deposit_header(name);
-        let (leaf, root) = (deposit.hash_tree_root(), paths.anchor.state_root);
+        let source = paths.source_header(name);
+        let (leaf, root) = (source.hash_tree_root(), paths.anchor.state_root);
         let branch = paths.ancestry_branch(name);
-        let index = deposit.slot / 8192;
+        let index = source.slot / 8192;
         let check = |branch: &[B256], gindex: u64| is_valid_exact_branch(&leaf, branch, gindex, &root);
-        assert!(check(&branch, historical_leaf_gindex(field, index, deposit.slot).unwrap()), "{name}: control");
+        assert!(check(&branch, historical_leaf_gindex(field, index, source.slot).unwrap()), "{name}: control");
         for wrong in [index + 1, index.wrapping_sub(1)] {
-            let gindex = historical_leaf_gindex(field, wrong, deposit.slot).unwrap_or(0).max(1);
+            let gindex = historical_leaf_gindex(field, wrong, source.slot).unwrap_or(0).max(1);
             assert!(!check(&branch, gindex), "{name}: wrong era index {wrong}");
         }
-        let recent = block_roots_leaf_gindex(CAPELLA_DENEB_STATE_LAYOUT.block_roots_gindex, deposit.slot).unwrap();
+        let recent = block_roots_leaf_gindex(CAPELLA_DENEB_STATE_LAYOUT.block_roots_gindex, source.slot).unwrap();
         assert!(!check(&branch, recent), "{name}: block_roots index");
-        let gindex = historical_leaf_gindex(field, index, deposit.slot).unwrap();
+        let gindex = historical_leaf_gindex(field, index, source.slot).unwrap();
         let mut padded = branch.clone();
         padded.insert(0, B256::ZERO);
         assert!(!check(&padded, gindex), "{name}: padded");
@@ -360,26 +368,32 @@ fn real_historical_ancestry_rejects_wrong_index_length_and_entries() {
     }
 }
 
-/// Claim: a full withdrawal over the real historical path reaches the log checks: anchor, historical ancestry branch, block
-/// hash branch, keccak256 of the header, receipt proof, receipt. A real block has no deposit event, so it stops at the log
-/// stage. With the wrong index (the vault's era is wrong by one, modelled by a branch of the neighbouring entry) it stops
-/// earlier, at the ancestry branch.
+/// Claim: a full message proof over the real historical path reaches the transaction stage: anchor, historical ancestry
+/// branch, block hash branch, keccak256 of the header, receipt proof. The fixtures hold no transaction bodies, so it stops
+/// on the empty transaction proof, and the log of a real block is no message. With the wrong index (a branch of the
+/// neighbouring entry) it stops earlier, at the ancestry branch.
 #[test]
-fn real_historical_withdrawal_reaches_the_log_checks() {
-    let (proof, anchor_root, block) = real_historical_withdrawal_proof(0, 0);
+fn real_historical_message_reaches_the_transaction_stage() {
+    let (proof, anchor_root, block) = real_historical_message_proof(0, 0);
     assert_eq!(proof.ancestryBranch.len(), 44);
-    assert!(proof.anchorHeader.slot - proof.depositHeader.slot > 8192, "the historical path");
+    assert!(proof.anchorHeader.slot - proof.sourceHeader.slot > 8192, "the historical path");
     let has_log = !block.receipts_json[0]["logs"].as_array().unwrap().is_empty();
     let ctx = context(anchor_root, Address::repeat_byte(0xee));
-    let expected = if has_log { Error::LogEmitterMismatch } else { Error::LogIndexOutOfRange { index: 0, logs: 0 } };
-    assert_eq!(verify_withdrawal(&proof, &ctx, &PULSECHAIN), Err(expected), "control reaches the log stage");
+    assert!(
+        matches!(verify_message(&proof, &ctx, &PULSECHAIN), Err(Error::TransactionProofInvalid(_))),
+        "control reaches the transaction stage"
+    );
+    if has_log {
+        let log = real_log(&proof, anchor_root);
+        assert_eq!(message_of_log(&log, ctx.remote_bridge), Err(Error::LogEmitterMismatch));
+    }
 
     let mut padded = proof.clone();
     padded.ancestryBranch.insert(0, B256::ZERO);
-    assert_eq!(verify_withdrawal(&padded, &ctx, &PULSECHAIN), Err(Error::InvalidAncestryBranch));
+    assert_eq!(verify_message(&padded, &ctx, &PULSECHAIN), Err(Error::InvalidAncestryBranch));
     let mut other_entry = proof.clone();
     other_entry.ancestryBranch = real_historical_paths().ancestry_branch("era_first_block");
-    assert_eq!(verify_withdrawal(&other_entry, &ctx, &PULSECHAIN), Err(Error::InvalidAncestryBranch));
-    let unknown = WithdrawalContext { stored_anchor_root: B256::repeat_byte(9), ..ctx };
-    assert_eq!(verify_withdrawal(&proof, &unknown, &PULSECHAIN), Err(Error::AnchorNotStored));
+    assert_eq!(verify_message(&other_entry, &ctx, &PULSECHAIN), Err(Error::InvalidAncestryBranch));
+    let unknown = MessageContext { stored_anchor_root: B256::repeat_byte(9), ..ctx };
+    assert_eq!(verify_message(&proof, &unknown, &PULSECHAIN), Err(Error::AnchorNotStored));
 }

@@ -1,12 +1,12 @@
-//! Builders for the ancestry branch of a withdrawal, from a parsed anchor state.
+//! Builders for the ancestry branch of a message proof, from a parsed anchor state.
 //!
-//! The vault picks the path from the two slots (see [`crate::ancestry`]). These functions build the matching branch.
+//! The bridge picks the path from the two slots (see [`crate::ancestry`]). These functions build the matching branch.
 //!
 //! - Recent path: [`recent_ancestry_branch`], the branch of `state.block_roots[slot % 8192]`.
 //! - Historical path: [`historical_ancestry_branch`], the branch of
 //!   `state.historical_summaries[era - capellaEra].block_summary_root.block_roots[slot % 8192]`.
 //!
-//! The historical path needs the 8192 block roots of the deposit era. Never read them from an old state: a node can
+//! The historical path needs the 8192 block roots of the source era. Never read them from an old state: a node can
 //! serve an old state one `historical_summaries` entry short, and that state does not hash to its own root. Rebuild the
 //! roots from the canonical block roots of the node with [`era_block_roots`]. [`historical_ancestry_branch`] then
 //! checks the result against the `block_summary_root` of the anchor state, so a wrong root cannot pass.
@@ -63,9 +63,9 @@ pub fn recent_ancestry_branch(state: &ParsedState, slot: u64) -> Vec<B256> {
     branch
 }
 
-/// The branch of the historical path, 44 entries in the Capella and Deneb layouts (45 in Electra), from the block roots of the deposit era.
+/// The branch of the historical path, 44 entries in the Capella and Deneb layouts (45 in Electra), from the block roots of the source era.
 ///
-/// `capella_era` is the immutable `capellaEra` of the vault (`ChainSpec::capella_era`). `era_roots` are the 8192 block
+/// `capella_era` is the immutable `capellaEra` of the bridge (`ChainSpec::capella_era`). `era_roots` are the 8192 block
 /// roots of the era of `slot` (see [`era_block_roots`]). The function checks that they hash to the `block_summary_root`
 /// of the anchor state, and that the finished branch leads from `era_roots[slot % 8192]` to the state root.
 ///
@@ -79,7 +79,7 @@ pub fn historical_ancestry_branch(
     era_roots: &[B256],
 ) -> Result<Vec<B256>> {
     let era = slot / SLOTS_PER_HISTORICAL_ROOT;
-    let index = era.checked_sub(capella_era).ok_or(Error::DepositBeforeCapella { deposit_era: era, capella_era })?;
+    let index = era.checked_sub(capella_era).ok_or(Error::DepositBeforeCapella { source_era: era, capella_era })?;
     let summaries = state.historical_summaries.len() as u64;
     let Some(&(blocks, states)) =
         usize::try_from(index).ok().and_then(|position| state.historical_summaries.get(position))
@@ -147,7 +147,7 @@ mod tests {
     /// Claim: the historical branch of every slot position leads from the era root to the state root at the generalized
     /// index of `lc_core::ancestry`, and has 44 entries. Roots that do not hash to the summary are refused, and so is an
     /// era the state has no summary for (the era is not complete) or one before `capellaEra`.
-    /// Why it matters: the vault checks the same index. A branch from the wrong era or the wrong roots reverts on chain.
+    /// Why it matters: the bridge checks the same index. A branch from the wrong era or the wrong roots reverts on chain.
     #[test]
     fn historical_branch_verifies_and_wrong_input_is_refused() {
         let capella_era = 2;
@@ -180,7 +180,7 @@ mod tests {
         );
         assert_eq!(
             historical_ancestry_branch(&state, capella_era, 8192, &era_of_roots(1)),
-            Err(Error::DepositBeforeCapella { deposit_era: 1, capella_era })
+            Err(Error::DepositBeforeCapella { source_era: 1, capella_era })
         );
     }
 

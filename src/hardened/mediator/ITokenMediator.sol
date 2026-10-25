@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IOmnibridge} from "./IOmnibridge.sol";
-import {IAMB} from "./IAMB.sol";
+import {IAMB} from "../IAMB.sol";
 
 /// @title ITokenMediator
 /// @notice The functions of `TokenMediator` that the routers call. `relayTokensAndCall` is the OmniBridge function.

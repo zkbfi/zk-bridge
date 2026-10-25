@@ -2,10 +2,10 @@
 
 use crate::json::{beacon_header, branch, hex_b256, light_client_update, load_response, sync_committee};
 use crate::receipts::{
-    build_receipts_trie, encode_execution_header, execution_header_from_json, header_hash, receipts_from_json,
+    build_indexed_trie, encode_execution_header, execution_header_from_json, header_hash, receipts_from_json,
 };
 use alloy_primitives::{Bytes, B256, U256};
-use lc_core::abi::WithdrawalProof;
+use lc_core::abi::MessageProof;
 use lc_core::types::{LightClientStore, LightClientUpdate};
 
 /// The real update and the store that precedes it.
@@ -47,17 +47,15 @@ pub fn rebuild_block(block_fixture: &str, receipts_fixture: &str) -> RealBlock {
     let block_hash = header_hash(&header_rlp);
     assert_eq!(block_hash, hex_b256(&block["hash"]), "the rebuilt header must hash to the node's block hash");
     let receipts = receipts_from_json(&receipts_json);
-    let trie = build_receipts_trie(&receipts);
+    let trie = build_indexed_trie(&receipts);
     RealBlock { header_rlp, block_hash, receipts, receipts_json, proofs: trie.proofs, rebuilt_root: trie.root }
 }
 
-/// A real beacon path entry: the withdrawal proof for one receipt log of a real PulseChain block.
-/// The log is not a deposit event (no vault exists on PulseChain), so the vault checks must reject it at the log stage.
-pub fn real_withdrawal_proof(
-    entry_name: &str,
-    transaction_index: u64,
-    log_index: u64,
-) -> (WithdrawalProof, B256, RealBlock) {
+/// A real beacon path entry: the message proof for one receipt log of a real PulseChain block.
+/// The fixtures hold the transaction hashes of the block and not the transactions, so the transaction proof is empty and
+/// `verify_message` stops at the transaction stage. The log is not a message event (no bridge exists on PulseChain).
+/// The tests walk the stages before and after the transaction stage one by one.
+pub fn real_message_proof(entry_name: &str, transaction_index: u64, log_index: u64) -> (MessageProof, B256, RealBlock) {
     let paths = load_response("pulsechain/beacon_paths.json");
     let anchor = beacon_header(&paths["anchor_header"]);
     let entry = paths["entries"]
@@ -75,13 +73,15 @@ pub fn real_withdrawal_proof(
         block.block_hash,
         "the beacon payload and the execution RPC agree"
     );
-    let proof = WithdrawalProof {
+    let proof = MessageProof {
         anchorHeader: (&anchor).into(),
-        depositHeader: (&beacon_header(&entry["deposit_header"])).into(),
+        sourceHeader: (&beacon_header(&entry["deposit_header"])).into(),
         ancestryBranch: branch(&entry["ancestry_branch"]),
         blockHashBranch: branch(&entry["block_hash_branch"]),
         executionHeaderRlp: block.header_rlp.clone(),
         receiptProof: block.proofs[transaction_index as usize].clone(),
+        receiptIndex: U256::from(transaction_index),
+        transactionProof: Vec::new(),
         transactionIndex: U256::from(transaction_index),
         logIndex: U256::from(log_index),
     };
@@ -118,8 +118,8 @@ impl RealHistoricalPaths {
             .unwrap_or_else(|| panic!("no historical entry {name}"))
     }
 
-    /// The deposit header of an entry.
-    pub fn deposit_header(&self, name: &str) -> lc_core::types::BeaconBlockHeader {
+    /// The source header of an entry.
+    pub fn source_header(&self, name: &str) -> lc_core::types::BeaconBlockHeader {
         beacon_header(&self.entry(name)["deposit_header"])
     }
 
@@ -129,9 +129,9 @@ impl RealHistoricalPaths {
     }
 }
 
-/// The withdrawal proof for the middle block of the historical fixture, with its real execution block and receipts.
-/// The log is not a deposit event (no vault exists on PulseChain), so the vault checks reject it at the log stage.
-pub fn real_historical_withdrawal_proof(transaction_index: u64, log_index: u64) -> (WithdrawalProof, B256, RealBlock) {
+/// The message proof for the middle block of the historical fixture, with its real execution block and receipts.
+/// The transaction proof is empty, as in [`real_message_proof`].
+pub fn real_historical_message_proof(transaction_index: u64, log_index: u64) -> (MessageProof, B256, RealBlock) {
     let paths = real_historical_paths();
     let entry = paths.entry("era_middle_block");
     let block = rebuild_block("pulsechain/path_historical_block.json", "pulsechain/path_historical_receipts.json");
@@ -140,13 +140,15 @@ pub fn real_historical_withdrawal_proof(transaction_index: u64, log_index: u64) 
         block.block_hash,
         "the beacon payload and the execution RPC agree"
     );
-    let proof = WithdrawalProof {
+    let proof = MessageProof {
         anchorHeader: (&paths.anchor).into(),
-        depositHeader: (&beacon_header(&entry["deposit_header"])).into(),
+        sourceHeader: (&beacon_header(&entry["deposit_header"])).into(),
         ancestryBranch: branch(&entry["ancestry_branch"]),
         blockHashBranch: branch(&entry["block_hash_branch"]),
         executionHeaderRlp: block.header_rlp.clone(),
         receiptProof: block.proofs[transaction_index as usize].clone(),
+        receiptIndex: U256::from(transaction_index),
+        transactionProof: Vec::new(),
         transactionIndex: U256::from(transaction_index),
         logIndex: U256::from(log_index),
     };

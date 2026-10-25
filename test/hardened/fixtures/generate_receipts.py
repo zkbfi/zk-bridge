@@ -1,9 +1,8 @@
-"""Generates synthetic receipt-trie fixtures for the hardened vault and message bridge tests.
+"""Generates synthetic receipt-trie fixtures for the message bridge tests.
 
 Run: python3 -I test/hardened/fixtures/generate_receipts.py
-Writes: test/hardened/utils/ReceiptFixtures.sol and test/hardened/fixtures/receipts.json (deposit logs of the vault),
-and test/hardened/utils/MessageFixtures.sol and test/hardened/fixtures/messages.json (message logs of the message bridge,
-with a receipts trie and a transactions trie that share their indices).
+Writes: test/hardened/utils/MessageFixtures.sol and test/hardened/fixtures/messages.json (message logs of the message
+bridge, with a receipts trie and a transactions trie that share their indices).
 Pure Python, no dependencies. Keccak-256 is implemented below (hashlib has only NIST SHA-3).
 """
 import json
@@ -204,19 +203,9 @@ def address(byte):
     return bytes([byte]) * 20
 
 
-REMOTE_VAULT = address(0x11)
-REMOTE_TOKEN = address(0x22)
-# The vault on the destination chain that may pay these deposits. The tests deploy their vault at this address.
-DESTINATION_VAULT = address(0x77)
-OTHER_DESTINATION_VAULT = address(0x88)
-# The token that the destination vault pays for REMOTE_TOKEN. The tests deploy their token on the destination chain here.
-DESTINATION_TOKEN = address(0x99)
+REMOTE_BRIDGE = address(0x11)
 OTHER_EMITTER = address(0x33)
-UNREGISTERED_TOKEN = address(0x44)
 SENDER = address(0x55)
-RECIPIENT = address(0x66)
-TARGET_CHAIN = 369
-DEPOSIT_TOPIC = keccak256(b"DepositInitiated(address,address,address,uint256,bytes32,uint64,address,address)")
 OTHER_TOPIC = keccak256(b"Unrelated(uint256)")
 
 
@@ -228,11 +217,6 @@ def pad_address(a):
     return b"\x00" * 12 + a
 
 
-def deposit_log(emitter, token, amount, nonce, target, destination=DESTINATION_VAULT, destination_token=DESTINATION_TOKEN):
-    return [emitter, [DEPOSIT_TOPIC, pad_address(token), pad_address(SENDER), pad_address(RECIPIENT)],
-            word(amount) + nonce + word(target) + pad_address(destination) + pad_address(destination_token)]
-
-
 def other_log(emitter):
     return [emitter, [OTHER_TOPIC], word(7)]
 
@@ -242,135 +226,11 @@ def receipt(kind, success, logs):
     return body if kind == 0 else bytes([kind]) + body
 
 
-def nonce(label):
-    return keccak256(b"nonce:" + label.encode())
-
-
-NAMED = []  # dicts: label, index, kind, logIndex, amount, nonce, success, note
-receipts = {}
-
-
-def add(label, index, kind, success, logs, deposit_log_index, amount, note):
-    n = nonce(label)
-    receipts[index] = receipt(kind, success, logs(n) if callable(logs) else logs)
-    NAMED.append(dict(label=label, index=index, kind=kind, success=success, logIndex=deposit_log_index,
-                      amount=amount, nonce=n, note=note))
-
-
-E18 = 10 ** 18
-add("LEGACY", 0, 0, True, lambda n: [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 1 * E18, n, TARGET_CHAIN)], 0, 1 * E18, "legacy receipt, key 0x80")
-add("ACCESS_LIST", 1, 1, True, lambda n: [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 2 * E18, n, TARGET_CHAIN)], 0, 2 * E18, "type 1 receipt")
-add("TYPE2", 2, 2, True, lambda n: [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 3 * E18, n, TARGET_CHAIN)], 0, 3 * E18, "type 2 receipt")
-n_a, n_b = nonce("TWO_A"), nonce("TWO_B")
-receipts[3] = receipt(2, True, [other_log(REMOTE_VAULT),
-                                deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 4 * E18, n_a, TARGET_CHAIN),
-                                deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 5 * E18, n_b, TARGET_CHAIN)])
-NAMED.append(dict(label="TWO_A", index=3, kind=2, success=True, logIndex=1, amount=4 * E18, nonce=n_a, note="first deposit of a receipt with two; log 0 is another event"))
-NAMED.append(dict(label="TWO_B", index=3, kind=2, success=True, logIndex=2, amount=5 * E18, nonce=n_b, note="second deposit of the same receipt"))
-add("FAILED", 4, 2, False, lambda n: [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 6 * E18, n, TARGET_CHAIN)], 0, 6 * E18, "status 0 receipt with a deposit-looking log")
-add("OTHER_EMITTER", 5, 2, True, lambda n: [deposit_log(OTHER_EMITTER, REMOTE_TOKEN, 7 * E18, n, TARGET_CHAIN)], 0, 7 * E18, "deposit log from a contract that is not the remote vault")
-add("WRONG_TARGET", 6, 2, True, lambda n: [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 8 * E18, n, 56)], 0, 8 * E18, "deposit that targets chain 56")
-add("UNREGISTERED", 7, 2, True, lambda n: [deposit_log(REMOTE_VAULT, UNREGISTERED_TOKEN, 9 * E18, n, TARGET_CHAIN)], 0, 9 * E18, "deposit of a token that is not registered")
-add("HIGH_INDEX", 130, 2, True, lambda n: [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 10 * E18, n, TARGET_CHAIN)], 0, 10 * E18, "transaction index 130, key 0x8182")
-add("TYPE3", 8, 3, True, lambda n: [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 11 * E18, n, TARGET_CHAIN)], 0, 11 * E18, "type 3 (blob) receipt")
-add("TYPE4", 9, 4, True, lambda n: [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 12 * E18, n, TARGET_CHAIN)], 0, 12 * E18, "type 4 (set code) receipt")
-add("TYPE5", 10, 5, True, lambda n: [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 13 * E18, n, TARGET_CHAIN)], 0, 13 * E18, "receipt with an unsupported type byte 5")
-add("TYPE0_PREFIXED", 11, 0, True, lambda n: [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 14 * E18, n, TARGET_CHAIN)], 0, 14 * E18, "receipt with an explicit 0x00 prefix, which no client writes")
-receipts[11] = b"\x00" + receipts[11]
-add("WRONG_DESTINATION", 12, 2, True, lambda n: [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 15 * E18, n, TARGET_CHAIN, OTHER_DESTINATION_VAULT)], 0, 15 * E18, "deposit addressed to another vault of the destination chain")
-# 64 logs: the deposit is log 40. The vendored list reader panics from 33 items on.
-add("MANY_LOGS", 13, 2, True, lambda n: [other_log(OTHER_EMITTER) for _ in range(40)] + [deposit_log(REMOTE_VAULT, REMOTE_TOKEN, 16 * E18, n, TARGET_CHAIN)] + [other_log(OTHER_EMITTER) for _ in range(23)], 40, 16 * E18, "64 logs; the deposit is log 40")
-TOTAL = 140
-for index in range(TOTAL):
-    if index not in receipts:
-        receipts[index] = receipt(2, True, [other_log(OTHER_EMITTER)])
-
-keys = {i: rlp(i) for i in range(TOTAL)}
-items = sorted(((nibbles(keys[i]), receipts[i]) for i in range(TOTAL)), key=lambda kv: kv[0])
-store = {}
-root_node = build(items, 0, store)
-root = keccak256(root_node)
-store[root] = root_node
-
-named_proofs = {}
-for entry in NAMED:
-    i = entry["index"]
-    if i not in named_proofs:
-        proof = prove(root_node, keys[i], store)
-        named_proofs[i] = proof
-        # self check: the last node holds the receipt value
-        leaf = decode(proof[-1])
-        assert leaf[1] == receipts[i]
-
 here = os.path.dirname(os.path.abspath(__file__))
-out_json = {
-    "receiptsRoot": "0x" + root.hex(),
-    "constants": {"remoteVault": "0x" + REMOTE_VAULT.hex(), "remoteToken": "0x" + REMOTE_TOKEN.hex(),
-                  "destinationVault": "0x" + DESTINATION_VAULT.hex(), "destinationToken": "0x" + DESTINATION_TOKEN.hex(), "otherDestinationVault": "0x" + OTHER_DESTINATION_VAULT.hex(),
-                  "otherEmitter": "0x" + OTHER_EMITTER.hex(), "unregisteredToken": "0x" + UNREGISTERED_TOKEN.hex(),
-                  "sender": "0x" + SENDER.hex(), "recipient": "0x" + RECIPIENT.hex(), "targetChainId": TARGET_CHAIN,
-                  "depositTopic": "0x" + DEPOSIT_TOPIC.hex()},
-    "receipts": [dict(label=e["label"], transactionIndex=e["index"], type=e["kind"], success=e["success"],
-                      logIndex=e["logIndex"], amount=str(e["amount"]), nonce="0x" + e["nonce"].hex(), note=e["note"],
-                      proof=["0x" + n.hex() for n in named_proofs[e["index"]]]) for e in NAMED],
-}
-with open(os.path.join(here, "receipts.json"), "w") as handle:
-    json.dump(out_json, handle, indent=2)
-    handle.write("\n")
 
 
 def hexlit(b):
     return 'hex"%s"' % b.hex()
-
-
-lines = []
-lines.append("// SPDX-License-Identifier: MIT")
-lines.append("pragma solidity ^0.8.24;")
-lines.append("")
-lines.append("// GENERATED by test/hardened/fixtures/generate_receipts.py. Do not edit by hand.")
-lines.append("")
-lines.append("/// @notice Synthetic receipts trie (140 receipts) with proofs for the named receipts.")
-lines.append("library ReceiptFixtures {")
-lines.append("    bytes32 internal constant RECEIPTS_ROOT = 0x%s;" % root.hex())
-lines.append("    address internal constant REMOTE_VAULT = 0x%s;" % REMOTE_VAULT.hex())
-lines.append("    address internal constant REMOTE_TOKEN = 0x%s;" % REMOTE_TOKEN.hex())
-lines.append("    address internal constant DESTINATION_VAULT = 0x%s;" % DESTINATION_VAULT.hex())
-lines.append("    address internal constant DESTINATION_TOKEN = 0x%s;" % DESTINATION_TOKEN.hex())
-lines.append("    address internal constant OTHER_DESTINATION_VAULT = 0x%s;" % OTHER_DESTINATION_VAULT.hex())
-lines.append("    address internal constant OTHER_EMITTER = 0x%s;" % OTHER_EMITTER.hex())
-lines.append("    address internal constant UNREGISTERED_TOKEN = 0x%s;" % UNREGISTERED_TOKEN.hex())
-lines.append("    address internal constant SENDER = 0x%s;" % SENDER.hex())
-lines.append("    address internal constant RECIPIENT = 0x%s;" % RECIPIENT.hex())
-lines.append("")
-lines.append("    struct Named {")
-lines.append("        uint256 transactionIndex;")
-lines.append("        uint256 logIndex;")
-lines.append("        uint256 amount;")
-lines.append("        bytes32 nonce;")
-lines.append("    }")
-lines.append("")
-for e in NAMED:
-    lines.append("    /// @dev %s" % e["note"])
-    lines.append("    function %s() internal pure returns (Named memory) {" % e["label"].lower())
-    lines.append("        return Named(%d, %d, %d, 0x%s);" % (e["index"], e["logIndex"], e["amount"], e["nonce"].hex()))
-    lines.append("    }")
-    lines.append("")
-lines.append("    /// @notice The proof nodes from the receipts root to the receipt at `transactionIndex`.")
-lines.append("    function proofFor(uint256 transactionIndex) internal pure returns (bytes[] memory proof) {")
-for i, proof in named_proofs.items():
-    lines.append("        if (transactionIndex == %d) {" % i)
-    lines.append("            proof = new bytes[](%d);" % len(proof))
-    for j, node in enumerate(proof):
-        lines.append("            proof[%d] = %s;" % (j, hexlit(node)))
-    lines.append("            return proof;")
-    lines.append("        }")
-lines.append('        revert("ReceiptFixtures: no proof for this index");')
-lines.append("    }")
-lines.append("}")
-sol_path = os.path.join(here, "..", "utils", "ReceiptFixtures.sol")
-with open(sol_path, "w") as handle:
-    handle.write("\n".join(lines) + "\n")
-print("root", root.hex(), "nodes", len(store))
 
 
 # ================================================================ message bridge fixtures
@@ -379,7 +239,6 @@ print("root", root.hex(), "nodes", len(store))
 # code with the Solidity codec, so the two agree only if both follow the layout.
 SOURCE_CHAIN = 1
 DESTINATION_CHAIN = 369
-REMOTE_BRIDGE = REMOTE_VAULT
 TARGET_RECORDER = address(0x31)
 TARGET_REVERTER = address(0x32)
 TARGET_BURNER = address(0x34)

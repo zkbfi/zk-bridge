@@ -1,7 +1,7 @@
 //! Where beacon data comes from: a standard beacon node, read by [`http::HttpBeaconSource`].
 //!
 //! The source answers three questions. What update folds the light client from its stored head to the newest final
-//! header of the source chain. What the beacon part of a withdrawal looks like. What evidence the destination vault
+//! header of the source chain. What the beacon part of a message proof looks like. What evidence the destination bridge
 //! needs for its layout rows.
 
 pub mod http;
@@ -9,9 +9,9 @@ pub mod http;
 use crate::light_client::{BeaconHeader, UpdateInput};
 use alloy_primitives::B256;
 
-/// The block of a deposit, as the source chain reports it.
+/// A source block, as the source chain reports it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DepositBlock {
+pub struct SourceBlock {
     /// The block number.
     pub number: u64,
     /// The block hash.
@@ -20,7 +20,7 @@ pub struct DepositBlock {
     pub timestamp: u64,
 }
 
-/// The head that a light client stores: where an update starts, or which header anchors a withdrawal.
+/// The head that a light client stores: where an update starts, or which header anchors a message proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StoredHead {
     /// The slot of the head.
@@ -42,7 +42,7 @@ pub struct UpdatePlan {
     pub latest_finalized_slot: u64,
 }
 
-/// Evidence for `BridgeVault.addBlockRootsLayout`.
+/// Evidence for `MessageBridge.addBlockRootsLayout`.
 #[derive(Clone, Debug)]
 pub struct RootsEvidence {
     /// The candidate generalized index of `BeaconState.block_roots`.
@@ -59,7 +59,7 @@ pub struct RootsEvidence {
     pub branch_b: Vec<B256>,
 }
 
-/// Evidence for `BridgeVault.addBlockHashLayout`.
+/// Evidence for `MessageBridge.addBlockHashLayout`.
 #[derive(Clone, Debug)]
 pub struct HashEvidence {
     /// The candidate generalized index of `execution_payload.block_hash`.
@@ -70,7 +70,7 @@ pub struct HashEvidence {
     pub branch: Vec<B256>,
 }
 
-/// Evidence for `BridgeVault.addHistoricalSummariesLayout`.
+/// Evidence for `MessageBridge.addHistoricalSummariesLayout`.
 #[derive(Clone, Debug)]
 pub struct HistoricalEvidence {
     /// The candidate generalized index of `BeaconState.historical_summaries`.

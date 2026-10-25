@@ -2,7 +2,7 @@
 
 use crate::error::{Error, Result};
 use crate::rpc::{parse_quantity, quantity, JsonRpc};
-use alloy_primitives::{hex, Address, Bytes, B256};
+use alloy_primitives::{hex, keccak256, Address, Bytes, B256};
 use alloy_sol_types::SolCall;
 use serde_json::{json, Value};
 use std::str::FromStr;
@@ -147,6 +147,43 @@ impl ChainClient {
         Ok(Value::Array(receipts))
     }
 
+    /// The raw EIP-2718 bytes of every transaction of a block, in order.
+    ///
+    /// Asks `eth_getRawTransactionByHash` for each transaction hash of the block, and checks that the keccak256 of the
+    /// answer is that hash. A transaction proof needs these bytes: they are the leaves of the transactions trie.
+    ///
+    /// # Errors
+    /// `Error::Malformed` when the block has no transaction list, when the node does not serve a transaction, or when
+    /// the bytes do not hash to the transaction hash.
+    pub fn block_raw_transactions(&self, block: &Value) -> Result<Vec<Bytes>> {
+        let hashes = block["transactions"]
+            .as_array()
+            .ok_or_else(|| Error::Malformed("block has no transactions".into()))?;
+        let mut transactions = Vec::with_capacity(hashes.len());
+        for entry in hashes {
+            let hash = parse_hash(entry, "transaction hash")?;
+            let answer = match self.rpc.call("eth_getRawTransactionByHash", json!([entry])) {
+                Ok(answer) if !answer.is_null() => answer,
+                Ok(_) | Err(Error::Rpc { .. }) => {
+                    return Err(Error::Malformed(format!(
+                        "the node of chain {} does not serve the raw bytes of transaction {hash:#x} (eth_getRawTransactionByHash)",
+                        self.name
+                    )))
+                }
+                Err(other) => return Err(other),
+            };
+            let raw = parse_bytes(&answer, "raw transaction")?;
+            if keccak256(&raw) != hash {
+                return Err(Error::Malformed(format!(
+                    "the raw bytes of transaction {hash:#x} hash to {:#x}",
+                    keccak256(&raw)
+                )));
+            }
+            transactions.push(raw);
+        }
+        Ok(transactions)
+    }
+
     /// The receipt of one transaction, or `None` when it is not mined.
     pub fn transaction_receipt(&self, hash: B256) -> Result<Option<Value>> {
         let receipt = self
@@ -229,7 +266,7 @@ mod tests {
     }
 
     /// Claim: connecting to a node that serves another chain fails.
-    /// Why it matters: a misconfigured URL would otherwise read deposits from the wrong chain.
+    /// Why it matters: a misconfigured URL would otherwise read messages from the wrong chain.
     #[test]
     fn connect_refuses_a_wrong_chain_id() {
         let error = client(|_, _| Ok(json!("0x1"))).err().expect("must fail");
@@ -254,5 +291,62 @@ mod tests {
             .block_receipts(5, &json!({"transactions": ["0x01", "0x02"]}))
             .unwrap();
         assert_eq!(receipts.as_array().unwrap().len(), 2);
+    }
+
+    /// Claim: the raw transactions of a block come back in order, and bytes that do not hash to the transaction hash are
+    /// refused. A node without the method gives an error that names it.
+    /// Why it matters: the transaction proof hashes these bytes into the trie. A wrong byte string would build a proof
+    /// for another transaction, or a trie whose root differs from the header.
+    #[test]
+    fn raw_transactions_must_hash_to_their_hashes() {
+        let first = [0x02u8, 1, 2, 3];
+        let second = [0x02u8, 4, 5, 6];
+        let hashes = json!([
+            format!("{:#x}", keccak256(first)),
+            format!("{:#x}", keccak256(second))
+        ]);
+        let honest = client(move |method, params| match method {
+            "eth_chainId" => Ok(json!("0x171")),
+            "eth_getRawTransactionByHash"
+                if params[0] == json!(format!("{:#x}", keccak256(first))) =>
+            {
+                Ok(json!(hex::encode_prefixed(first)))
+            }
+            "eth_getRawTransactionByHash" => Ok(json!(hex::encode_prefixed(second))),
+            _ => Ok(Value::Null),
+        })
+        .unwrap();
+        let block = json!({ "transactions": hashes });
+        let raw = honest.block_raw_transactions(&block).unwrap();
+        assert_eq!(
+            raw,
+            vec![Bytes::from(first.to_vec()), Bytes::from(second.to_vec())]
+        );
+
+        let swapped = client(move |method, _| match method {
+            "eth_chainId" => Ok(json!("0x171")),
+            _ => Ok(json!(hex::encode_prefixed(second))),
+        })
+        .unwrap();
+        let error = swapped
+            .block_raw_transactions(&block)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("hash to"), "{error}");
+
+        let without_method = client(|method, _| match method {
+            "eth_chainId" => Ok(json!("0x171")),
+            _ => Err(Error::Rpc {
+                code: -32601,
+                message: "no such method".into(),
+                data: None,
+            }),
+        })
+        .unwrap();
+        let error = without_method
+            .block_raw_transactions(&block)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("eth_getRawTransactionByHash"), "{error}");
     }
 }

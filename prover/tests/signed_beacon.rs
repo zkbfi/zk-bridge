@@ -2,7 +2,7 @@
 //!
 //! The node follows a list of execution blocks that the test extends. No Anvil is involved, so the test checks the beacon
 //! side alone: the checkpoint tool, the update from a stored head to the newest final header, the update that the
-//! light-client program accepts, and the beacon path of the withdrawal (the ancestry branch and the block hash branch)
+//! light-client program accepts, and the beacon path of the message proof (the ancestry branch and the block hash branch)
 //! against the generalized indices of `lc-core`. The Anvil run with real contracts is described in
 //! `docs/end-to-end-real-proofs.md`.
 
@@ -54,13 +54,13 @@ fn the_checkpoint_names_a_finalized_header_of_the_chain() {
 
 /// Claim: with the light client at the checkpoint and no newer final header, the source plans nothing. Once the chain
 /// finalizes more, it plans a fold that the light-client program accepts, that starts at the checkpoint and ends after the
-/// deposit. With the light client at the new head, the source plans nothing more, and the beacon path of the withdrawal
-/// verifies: the ancestry branch from the anchor state to the deposit header, and the block hash branch from the deposit
-/// header body to the execution block hash of the deposit.
-/// Why it matters: this is the beacon half of a payout. The real proof proves the update, and the vault checks the path
+/// source. With the light client at the new head, the source plans nothing more, and the beacon path of the message proof
+/// verifies: the ancestry branch from the anchor state to the source header, and the block hash branch from the source block
+/// header body to the execution block hash of the source.
+/// Why it matters: this is the beacon half of a delivery. The real proof proves the update, and the bridge checks the path
 /// against the generalized indices that `lc-core` names.
 #[test]
-fn a_deposit_is_covered_by_an_update_and_its_path_verifies() {
+fn a_source_block_is_covered_by_an_update_and_its_path_verifies() {
     for kind in KINDS {
         let chain = Chain::new(kind, BLOCKS_BEFORE_CHECKPOINT);
         let checkpoint = read_checkpoint(&chain.node, kind).expect("checkpoint");
@@ -71,15 +71,15 @@ fn a_deposit_is_covered_by_an_update_and_its_path_verifies() {
             "{kind:?}: the checkpoint is the newest final header"
         );
 
-        let deposit_number = BLOCKS_BEFORE_CHECKPOINT + 8;
-        let deposit = chain.deposit(deposit_number);
-        let deposit_slot = chain.first_slot() + deposit_number - 1;
+        let source_number = BLOCKS_BEFORE_CHECKPOINT + 8;
+        let source_block = chain.source_block(source_number);
+        let source_slot = chain.first_slot() + source_number - 1;
         chain.mine(8);
         let plan = planned(source.plan_update(&head).unwrap());
         let output = verify_update_natively(&plan.input).unwrap();
         assert!(
-            output.newHeadSlot < deposit_slot,
-            "{kind:?}: the deposit is at the tip, so no final header covers it yet"
+            output.newHeadSlot < source_slot,
+            "{kind:?}: the source block is at the tip, so no final header covers it yet"
         );
 
         chain.mine(10);
@@ -90,7 +90,7 @@ fn a_deposit_is_covered_by_an_update_and_its_path_verifies() {
         );
         let output =
             verify_update_natively(&plan.input).unwrap_or_else(|error| panic!("{kind:?}: {error}"));
-        assert!(output.newHeadSlot > deposit_slot, "{kind:?}");
+        assert!(output.newHeadSlot > source_slot, "{kind:?}");
         assert_eq!(output.previousHeadSlot, checkpoint.slot);
         assert_eq!(output.newHeadSlot, plan.latest_finalized_slot, "{kind:?}");
 
@@ -101,36 +101,36 @@ fn a_deposit_is_covered_by_an_update_and_its_path_verifies() {
         );
 
         let path = source
-            .withdrawal_path(&deposit, &after)
+            .message_path(&source_block, &after)
             .unwrap_or_else(|error| panic!("{kind:?}: {error}"));
         assert_eq!(path.anchor_header.hash_tree_root(), output.newHeaderRoot);
-        assert_eq!(path.deposit_header.slot, deposit_slot);
+        assert_eq!(path.source_header.slot, source_slot);
         let gindex =
-            ancestry_leaf_gindex(kind.spec(), path.anchor_header.slot, deposit_slot).unwrap();
+            ancestry_leaf_gindex(kind.spec(), path.anchor_header.slot, source_slot).unwrap();
         assert!(
             is_valid_exact_branch(
-                &path.deposit_header.hash_tree_root(),
+                &path.source_header.hash_tree_root(),
                 &path.ancestry_branch,
                 gindex,
                 &path.anchor_header.state_root
             ),
-            "{kind:?}: the deposit header is in the block roots of the anchor state"
+            "{kind:?}: the source header is in the block roots of the anchor state"
         );
         assert!(
             is_valid_exact_branch(
-                &deposit.hash,
+                &source_block.hash,
                 &path.block_hash_branch,
                 BLOCK_HASH_GINDEX_CAPELLA,
-                &path.deposit_header.body_root
+                &path.source_header.body_root
             ),
-            "{kind:?}: the deposit header holds the execution block hash"
+            "{kind:?}: the source header holds the execution block hash"
         );
         assert!(
             !is_valid_exact_branch(
-                &execution_hash(deposit_number + 1),
+                &execution_hash(source_number + 1),
                 &path.block_hash_branch,
                 BLOCK_HASH_GINDEX_CAPELLA,
-                &path.deposit_header.body_root
+                &path.source_header.body_root
             ),
             "control: another block hash does not fit the branch"
         );
@@ -179,7 +179,7 @@ fn a_head_that_is_not_on_this_chain_is_refused() {
 }
 
 /// Claim: the layout evidence for the block hash row verifies against the body root of a stored header.
-/// Why it matters: the vault accepts a layout row only when the branch of the execution block hash of a stored header fits
+/// Why it matters: the bridge accepts a layout row only when the branch of the execution block hash of a stored header fits
 /// the candidate position.
 #[test]
 fn the_block_hash_layout_evidence_fits_the_stored_header() {

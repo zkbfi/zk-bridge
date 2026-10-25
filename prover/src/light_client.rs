@@ -1,17 +1,19 @@
 //! The only module of the library that calls `lc-core`.
 //!
-//! Everything a light-client update or a withdrawal needs comes from `lc-core`: the JSON parsers, the receipts trie,
+//! Everything a light-client update or a message proof needs comes from `lc-core`: the JSON parsers, the receipts trie,
 //! the execution header encoder, the SSZ state parser, and the ancestry builders for both paths.
 
 use crate::error::{Error, Result};
 use alloy_primitives::{Address, Bytes, B256, U256};
-use alloy_sol_types::{SolCall, SolEvent, SolValue};
-use lc_core::abi::{
-    withdrawCall, BeaconBlockHeader as AbiHeader, DepositInitiated, WithdrawalProof,
-};
+use alloy_sol_types::{SolCall, SolValue};
+use lc_core::abi::{executeMessageCall, BeaconBlockHeader as AbiHeader, MessageProof};
 use lc_core::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN};
+use lc_core::execution::Log;
 use lc_core::json::{execution_header_from_json, receipts_from_json};
-use lc_core::receipts::{build_receipts_trie, encode_execution_header, header_hash};
+use lc_core::message::{
+    decode_message, message_of_log, verify_message, MessageContext, MessageHeader, VerifiedMessage,
+};
+use lc_core::receipts::{build_indexed_trie, encode_execution_header, header_hash};
 use lc_core::ssz::{branch_for_leaf, u64_chunk};
 use lc_core::ssz_state::{
     state_slot, try_parse_signed_block, try_parse_state_for_fork, ParsedState, StateForm,
@@ -32,8 +34,8 @@ pub use lc_core::ssz_state::ForkData;
 pub use lc_core::types::BeaconBlockHeader as BeaconHeader;
 pub use lc_core::types::{LightClientStore, LightClientUpdate, SyncAggregate};
 
-/// The deposit event topic 0, derived from the event declaration in `lc-core`.
-pub const DEPOSIT_EVENT_TOPIC: B256 = lc_core::abi::DEPOSIT_EVENT_TOPIC;
+/// The topic 0 of `UserRequestForAffirmation`, derived from the event declaration in `lc-core`.
+pub const USER_REQUEST_TOPIC: B256 = lc_core::abi::USER_REQUEST_TOPIC;
 
 /// Which chain configuration of `lc-core` applies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,67 +208,61 @@ pub fn to_layout_header(header: &BeaconBlockHeader) -> crate::contracts::LayoutH
     }
 }
 
-// ------------------------------------------------------------------ deposits and withdrawals
+// ------------------------------------------------------------------ messages
 
-/// A decoded `DepositInitiated` log.
+/// The source message that a log carries: the fields of the message and its call data.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DepositEvent {
-    /// Token on the source chain.
-    pub token: Address,
-    /// Depositor.
-    pub sender: Address,
-    /// Recipient on the destination chain.
-    pub recipient: Address,
-    /// Amount the vault received.
-    pub amount: U256,
-    /// The unique deposit nonce.
-    pub nonce: B256,
-    /// The destination chain.
-    pub target_chain_id: u64,
-    /// The vault on the destination chain that the deposit is addressed to.
-    pub destination_vault: Address,
-    /// The token on the destination chain that the depositing vault expects the destination vault to pay.
-    pub destination_token: Address,
+pub struct SourceMessage {
+    /// The fields of the message: identifier, sender, target, gas, data type and chains.
+    pub header: MessageHeader,
+    /// The call data for the target.
+    pub data: Bytes,
 }
 
-/// Decodes a `DepositInitiated` log from its topics and data.
+/// Decodes a `UserRequestForAffirmation` log of the source bridge into its message.
+///
+/// Calls the log checks of `lc-core`, the same ones that the destination bridge runs: the emitter, the topic 0, the two
+/// topics, the event data, the message decoding and the identifier in the topic.
 ///
 /// # Errors
-/// `Error::Malformed` when the log is not a deposit event.
-pub fn decode_deposit(topics: &[B256], data: &[u8]) -> Result<DepositEvent> {
-    if topics.first() != Some(&DEPOSIT_EVENT_TOPIC) {
+/// `Error::Malformed` when the log is not a well formed message log of `remote_bridge`.
+pub fn decode_message_log(
+    address: Address,
+    topics: &[B256],
+    data: &[u8],
+    remote_bridge: Address,
+) -> Result<SourceMessage> {
+    let log = Log {
+        address,
+        topics: topics.to_vec(),
+        data: Bytes::copy_from_slice(data),
+    };
+    let malformed = |error: lc_core::Error| Error::Malformed(format!("message log: {error}"));
+    let (topic_message_id, encoded) = message_of_log(&log, remote_bridge).map_err(malformed)?;
+    let (header, data) = decode_message(&encoded).map_err(malformed)?;
+    if header.message_id != topic_message_id {
         return Err(Error::Malformed(
-            "log topic 0 is not the deposit event".into(),
+            "message log: the identifier in the topic differs from the identifier in the message"
+                .into(),
         ));
     }
-    let event = DepositInitiated::decode_raw_log(topics.iter().copied(), data)
-        .map_err(|error| Error::Malformed(format!("deposit log: {error}")))?;
-    Ok(DepositEvent {
-        token: event.token,
-        sender: event.sender,
-        recipient: event.recipient,
-        amount: event.amount,
-        nonce: event.nonce,
-        target_chain_id: event.targetChainId,
-        destination_vault: event.destinationVault,
-        destination_token: event.destinationToken,
-    })
+    Ok(SourceMessage { header, data })
 }
 
-/// The beacon part of a withdrawal.
+/// The beacon part of a message proof.
 #[derive(Clone, Debug)]
 pub struct BeaconPath {
     /// A finalized header that the destination light client stores.
     pub anchor_header: BeaconBlockHeader,
-    /// The beacon block that carries the deposit block.
-    pub deposit_header: BeaconBlockHeader,
-    /// Branch from the deposit header root to the anchor state root.
+    /// The beacon block that carries the source block.
+    pub source_header: BeaconBlockHeader,
+    /// Branch from the source header root to the anchor state root.
     pub ancestry_branch: Vec<B256>,
-    /// Branch from the execution block hash to the deposit body root.
+    /// Branch from the execution block hash to the source body root.
     pub block_hash_branch: Vec<B256>,
 }
 
-/// The execution part of a withdrawal.
+/// The execution part of a message proof.
 #[derive(Clone, Debug)]
 pub struct ExecutionEvidence {
     /// RLP of the execution block header.
@@ -275,6 +271,8 @@ pub struct ExecutionEvidence {
     pub block_hash: B256,
     /// Merkle-Patricia nodes from the receipts root to the receipt.
     pub receipt_proof: Vec<Bytes>,
+    /// Merkle-Patricia nodes from the transactions root to the transaction at the index of the receipt.
+    pub transaction_proof: Vec<Bytes>,
 }
 
 /// An execution header that the crate rebuilt from a node answer and checked against the hash that the node reports.
@@ -286,6 +284,8 @@ pub struct RebuiltHeader {
     pub block_hash: B256,
     /// The root of the receipts trie of the block.
     pub receipts_root: B256,
+    /// The root of the transactions trie of the block.
+    pub transactions_root: B256,
 }
 
 /// Rebuilds the execution header from the JSON of a block and checks that it hashes to the `hash` field.
@@ -307,132 +307,157 @@ pub fn rebuild_execution_header(block: &Value) -> Result<RebuiltHeader> {
             header_rlp,
             block_hash,
             receipts_root: header.receipts_root,
+            transactions_root: header.transactions_root,
         })
     })?
 }
 
-/// Rebuilds the execution header and the receipt proof from node answers.
+/// Builds the proof of the receipt at `transaction_index`, and checks the rebuilt trie against the receipts root of the
+/// header.
 ///
-/// `block` is the JSON of `eth_getBlockByNumber` and `receipts` the JSON array of the block receipts, in order.
-/// The function checks the rebuilt header against the node's block hash and the rebuilt trie against the
-/// header's receipts root. A mismatch means the node answer has a shape the builder does not know.
+/// `receipts` is the JSON array of the block receipts, in order.
 ///
 /// # Errors
-/// `Error::Malformed` for a mismatch or a missing field.
-pub fn build_execution_evidence(
-    block: &Value,
+/// `Error::Malformed` for a mismatch, a missing receipt or a missing field.
+pub fn build_receipt_proof(
+    header: &RebuiltHeader,
     receipts: &Value,
     transaction_index: u64,
-) -> Result<ExecutionEvidence> {
-    let header = rebuild_execution_header(block)?;
-    guarded("execution evidence", || {
-        let trie = build_receipts_trie(&receipts_from_json(receipts));
+) -> Result<Vec<Bytes>> {
+    guarded("receipt proof", || {
+        let trie = build_indexed_trie(&receipts_from_json(receipts));
         if trie.root != header.receipts_root {
             return Err(Error::Malformed(format!(
                 "the rebuilt receipts root {:#x} differs from the header root {:#x}",
                 trie.root, header.receipts_root
             )));
         }
-        let proof = trie
-            .proofs
+        trie.proofs
             .get(transaction_index as usize)
+            .cloned()
             .ok_or_else(|| {
                 Error::Malformed(format!(
                     "no receipt at transaction index {transaction_index}"
                 ))
-            })?
-            .clone();
-        Ok(ExecutionEvidence {
-            header_rlp: header.header_rlp,
-            block_hash: header.block_hash,
-            receipt_proof: proof,
-        })
+            })
     })?
 }
 
-/// Joins the beacon path and the execution evidence into the calldata struct of `BridgeVault.withdraw`.
-pub fn assemble_withdrawal_proof(
+/// Builds the proof of the transaction at `transaction_index`, and checks the rebuilt trie against the transactions root
+/// of the header.
+///
+/// `transactions` holds the raw EIP-2718 bytes of every transaction of the block, in order.
+///
+/// # Errors
+/// `Error::Malformed` for a mismatch or a missing transaction.
+pub fn build_transaction_proof(
+    header: &RebuiltHeader,
+    transactions: &[Bytes],
+    transaction_index: u64,
+) -> Result<Vec<Bytes>> {
+    let trie = build_indexed_trie(transactions);
+    if trie.root != header.transactions_root {
+        return Err(Error::Malformed(format!(
+            "the rebuilt transactions root {:#x} differs from the header root {:#x}",
+            trie.root, header.transactions_root
+        )));
+    }
+    trie.proofs
+        .get(transaction_index as usize)
+        .cloned()
+        .ok_or_else(|| {
+            Error::Malformed(format!(
+                "no transaction at transaction index {transaction_index}"
+            ))
+        })
+}
+
+/// Rebuilds the execution header, the receipt proof and the transaction proof from node answers.
+///
+/// `block` is the JSON of `eth_getBlockByNumber`, `receipts` the JSON array of the block receipts, and `transactions` the
+/// raw bytes of the block transactions, all in order. The function checks the rebuilt header against the node's block
+/// hash and each rebuilt trie against the root in the header. A mismatch means the node answer has a shape the builder
+/// does not know.
+///
+/// # Errors
+/// `Error::Malformed` for a mismatch or a missing field.
+pub fn build_execution_evidence(
+    block: &Value,
+    receipts: &Value,
+    transactions: &[Bytes],
+    transaction_index: u64,
+) -> Result<ExecutionEvidence> {
+    let header = rebuild_execution_header(block)?;
+    Ok(ExecutionEvidence {
+        receipt_proof: build_receipt_proof(&header, receipts, transaction_index)?,
+        transaction_proof: build_transaction_proof(&header, transactions, transaction_index)?,
+        header_rlp: header.header_rlp,
+        block_hash: header.block_hash,
+    })
+}
+
+/// Joins the beacon path and the execution evidence into the calldata struct of `MessageBridge.executeMessage`. The
+/// receipt and the transaction sit at the same index, as the contract requires.
+pub fn assemble_message_proof(
     path: &BeaconPath,
     execution: &ExecutionEvidence,
     transaction_index: u64,
     log_index: u64,
-) -> WithdrawalProof {
-    WithdrawalProof {
+) -> MessageProof {
+    MessageProof {
         anchorHeader: AbiHeader::from(&path.anchor_header),
-        depositHeader: AbiHeader::from(&path.deposit_header),
+        sourceHeader: AbiHeader::from(&path.source_header),
         ancestryBranch: path.ancestry_branch.clone(),
         blockHashBranch: path.block_hash_branch.clone(),
         executionHeaderRlp: execution.header_rlp.clone(),
         receiptProof: execution.receipt_proof.clone(),
+        receiptIndex: U256::from(transaction_index),
+        transactionProof: execution.transaction_proof.clone(),
         transactionIndex: U256::from(transaction_index),
         logIndex: U256::from(log_index),
     }
 }
 
-/// The calldata of `BridgeVault.withdraw(WithdrawalProof)`.
-pub fn withdrawal_calldata(proof: &WithdrawalProof) -> Vec<u8> {
-    withdrawCall {
+/// The calldata of `MessageBridge.executeMessage(MessageProof)`.
+pub fn message_calldata(proof: &MessageProof) -> Vec<u8> {
+    executeMessageCall {
         proof: proof.clone(),
     }
     .abi_encode()
 }
 
-/// What the vault knows when it checks a withdrawal.
+/// What the destination bridge knows when it checks a message proof.
 #[derive(Clone, Copy, Debug)]
-pub struct VaultContext {
-    /// The vault on the source chain (`remoteVault` of the destination vault).
-    pub remote_vault: Address,
-    /// The destination chain identifier.
+pub struct BridgeContext {
+    /// The bridge on the source chain (`remoteBridge` of the destination bridge).
+    pub remote_bridge: Address,
+    /// The source chain identifier (`remoteChainId` of the destination bridge).
+    pub remote_chain_id: u64,
+    /// The destination chain identifier (`localChainId` of the destination bridge).
     pub local_chain_id: u64,
-    /// The destination vault itself. The deposit must name it as its destination vault.
-    pub local_vault: Address,
     /// What the destination light client stores for the anchor slot.
     pub stored_anchor_root: B256,
 }
 
-/// The deposit that native verification proved.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct VerifiedDeposit {
-    /// Token on the source chain.
-    pub token: Address,
-    /// Recipient.
-    pub recipient: Address,
-    /// Amount.
-    pub amount: U256,
-    /// Nonce.
-    pub nonce: B256,
-    /// The execution block hash of the deposit block.
-    pub deposit_block_hash: B256,
-}
-
-/// Runs the vault check natively, in the vault's order.
+/// Runs the bridge check natively, in the bridge's order.
 ///
-/// Calls `lc_core::withdrawal::verify_withdrawal`. The evidence builder returns no evidence that this call refuses.
+/// Calls `lc_core::message::verify_message`. The evidence builder returns no evidence that this call refuses.
 ///
 /// # Errors
 /// `Error::VerificationRefused` with the reason code of the first failed rule.
-pub fn verify_withdrawal_natively(
-    proof: &WithdrawalProof,
-    context: &VaultContext,
+pub fn verify_message_natively(
+    proof: &MessageProof,
+    context: &BridgeContext,
     chain: ChainKind,
-) -> Result<VerifiedDeposit> {
-    let context = lc_core::withdrawal::WithdrawalContext {
-        remote_vault: context.remote_vault,
-        local_vault: context.local_vault,
+) -> Result<VerifiedMessage> {
+    let context = MessageContext {
+        remote_bridge: context.remote_bridge,
         local_chain_id: context.local_chain_id,
+        remote_chain_id: context.remote_chain_id,
         stored_anchor_root: context.stored_anchor_root,
     };
-    let verified =
-        lc_core::withdrawal::verify_withdrawal(proof, &context, chain.spec()).map_err(|error| {
-            Error::VerificationRefused(format!("{} ({})", error, error.reason_code()))
-        })?;
-    Ok(VerifiedDeposit {
-        token: verified.token,
-        recipient: verified.recipient,
-        amount: verified.amount,
-        nonce: verified.nonce,
-        deposit_block_hash: verified.deposit_block_hash,
-    })
+    verify_message(proof, &context, chain.spec())
+        .map_err(|error| Error::VerificationRefused(format!("{} ({})", error, error.reason_code())))
 }
 
 /// The generalized index of `BeaconState.block_roots` for the fork at `slot`.
@@ -681,12 +706,12 @@ pub fn store_at(
 
 // ------------------------------------------------------------------ ancestry and gate helpers
 
-/// Which ancestry path the vault takes for two slots. The prover never chooses; it builds what the vault expects.
+/// Which ancestry path the bridge takes for two slots. The prover never chooses; it builds what the bridge expects.
 ///
 /// # Errors
-/// `Error::Beacon` when the deposit slot is not before the anchor slot.
-pub fn ancestry_path(anchor_slot: u64, deposit_slot: u64) -> Result<AncestryPath> {
-    lc_core::ancestry::ancestry_path_for_slots(anchor_slot, deposit_slot)
+/// `Error::Beacon` when the source slot is not before the anchor slot.
+pub fn ancestry_path(anchor_slot: u64, source_slot: u64) -> Result<AncestryPath> {
+    lc_core::ancestry::ancestry_path_for_slots(anchor_slot, source_slot)
         .map_err(|error| Error::Beacon(error.to_string()))
 }
 
@@ -792,53 +817,66 @@ pub(crate) mod test_support {
 mod tests {
     use super::*;
     use alloy_primitives::keccak256;
+    use lc_core::message::message_id_for;
+    use lc_testkit::synthetic::{message_log, MessageFields};
 
-    /// Claim: the deposit topic equals the real signature hash `0x2d8b...5cd0`, not a hardcoded wrong constant.
-    /// Why it matters: the scanner filters logs on this topic; a wrong one finds no deposit.
+    /// Claim: the message topic equals the real signature hash, not a hardcoded constant.
+    /// Why it matters: the destination bridge matches logs on this topic; a wrong one proves no message.
     #[test]
-    fn deposit_topic_is_the_signature_hash() {
+    fn message_topic_is_the_signature_hash() {
         assert_eq!(
-            DEPOSIT_EVENT_TOPIC,
-            keccak256(
-                "DepositInitiated(address,address,address,uint256,bytes32,uint64,address,address)"
-            )
+            USER_REQUEST_TOPIC,
+            keccak256("UserRequestForAffirmation(bytes32,bytes)")
         );
     }
 
-    /// Claim: a deposit log has 160 bytes of data (amount, nonce, target chain, destination vault, destination token),
-    /// and the decoder returns the destination vault and the destination token. A log of an earlier shape (96 or 128
-    /// bytes) is refused.
-    /// Why it matters: the route ignores deposits for other vaults by this field, so it must come from the log data and
-    /// not from a default. An old shape must fail loudly, not decode with a zero vault or a zero token.
+    fn sample_fields(nonce: u64) -> MessageFields {
+        let remote = 369;
+        MessageFields {
+            message_id: message_id_for(remote, BRIDGE, nonce),
+            sender: Address::repeat_byte(0xc3),
+            executor: Address::repeat_byte(0xd4),
+            gas_limit: 300_000,
+            data_type: 0,
+            source_chain_id: remote,
+            destination_chain_id: 1,
+            data: Bytes::from_static(&[0xab, 0xcd]),
+        }
+    }
+
+    const BRIDGE: Address = Address::repeat_byte(0xa1);
+
+    /// Claim: a message log of the source bridge decodes to the fields and the call data that the sender wrote, and the
+    /// decoder refuses a log of another emitter, a log whose topic holds another identifier, and event data that is not
+    /// `abi.encode(bytes)`.
+    /// Why it matters: the evidence command builds a proof for the message that the log shows. A decoder that took a
+    /// foreign log, or read the data in another layout, would name the wrong message.
     #[test]
-    fn decode_deposit_reads_the_destination_vault_and_token_and_refuses_old_shapes() {
-        let vault = Address::repeat_byte(0xb1);
-        let token = Address::repeat_byte(0xb2);
-        let event = DepositInitiated {
-            token: Address::repeat_byte(1),
-            sender: Address::repeat_byte(2),
-            recipient: Address::repeat_byte(3),
-            amount: U256::from(5u64),
-            nonce: B256::repeat_byte(4),
-            targetChainId: 369,
-            destinationVault: vault,
-            destinationToken: token,
-        };
-        let log = event.encode_log_data();
-        assert_eq!(log.data.len(), 160);
-        let decoded =
-            decode_deposit(log.topics(), &log.data).expect("control: the current shape decodes");
-        assert_eq!(decoded.destination_vault, vault);
-        assert_eq!(decoded.destination_token, token);
-        assert_eq!(decoded.target_chain_id, 369);
-        assert!(
-            decode_deposit(log.topics(), &log.data[..96]).is_err(),
-            "96 bytes is the first shape"
-        );
-        assert!(
-            decode_deposit(log.topics(), &log.data[..128]).is_err(),
-            "128 bytes is the shape before the token"
-        );
+    fn decode_message_log_reads_the_message_and_refuses_other_logs() {
+        let fields = sample_fields(7);
+        let log = message_log(BRIDGE, &fields);
+        let decoded = decode_message_log(log.address, &log.topics, &log.data, BRIDGE)
+            .expect("control: an honest log decodes");
+        assert_eq!(decoded.header, fields.header());
+        assert_eq!(decoded.data, fields.data);
+
+        assert!(decode_message_log(
+            log.address,
+            &log.topics,
+            &log.data,
+            Address::repeat_byte(0xee)
+        )
+        .is_err());
+
+        let mut other_identifier = log.topics.clone();
+        other_identifier[1] = B256::repeat_byte(0x55);
+        let error = decode_message_log(log.address, &other_identifier, &log.data, BRIDGE)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("identifier in the topic"), "{error}");
+
+        assert!(decode_message_log(log.address, &log.topics, &log.data[..40], BRIDGE).is_err());
+        assert!(decode_message_log(log.address, &log.topics[..1], &log.data, BRIDGE).is_err());
     }
 
     // ---------------------------------------------------------------- real historical paths
@@ -897,28 +935,36 @@ mod tests {
             let entry = self.entry(name);
             BeaconPath {
                 anchor_header: self.anchor,
-                deposit_header: beacon_header_from_json(&entry["deposit_header"])
-                    .expect("deposit header"),
+                source_header: beacon_header_from_json(&entry["deposit_header"])
+                    .expect("source header"),
                 ancestry_branch: hex_branch(&entry["ancestry_branch"]),
                 block_hash_branch: hex_branch(&entry["block_hash_branch"]),
             }
         }
     }
 
+    /// The execution evidence of the real middle block. The fixture holds the transaction hashes and not the
+    /// transactions, so the transaction proof is empty and the native check stops at the transaction stage.
     fn middle_block_evidence() -> ExecutionEvidence {
         let block = fixture("path_historical_block.json");
         let receipts = fixture("path_historical_receipts.json");
-        build_execution_evidence(&block, &receipts, 0)
-            .expect("the real block rebuilds and its receipts root matches")
+        let header = rebuild_execution_header(&block).expect("the real header rebuilds");
+        ExecutionEvidence {
+            receipt_proof: build_receipt_proof(&header, &receipts, 0)
+                .expect("the real receipts root matches"),
+            transaction_proof: Vec::new(),
+            header_rlp: header.header_rlp,
+            block_hash: header.block_hash,
+        }
     }
 
-    /// Claim: for the real PulseChain anchor, the crate classifies each fixture deposit by distance: five of them
+    /// Claim: for the real PulseChain anchor, the crate classifies each fixture block by distance: five of them
     /// lie more than 8192 slots below the anchor (historical path), and `era_last_block` lies 5117 slots below it
     /// (recent path), although the fixture also holds a historical branch for it.
-    /// Why it matters: the vault, not the crate, chooses the path. A builder that built the historical branch for a
-    /// recent distance would send a withdrawal that reverts.
+    /// Why it matters: the bridge, not the crate, chooses the path. A builder that built the historical branch for a
+    /// recent distance would send a message proof that reverts.
     #[test]
-    fn real_fixture_deposits_are_classified_by_distance() {
+    fn real_fixture_blocks_are_classified_by_distance() {
         let real = RealHistorical::load();
         for (name, expected) in [
             ("capella_fork_block", AncestryPath::Historical),
@@ -929,53 +975,52 @@ mod tests {
             ("era_last_block", AncestryPath::Recent),
         ] {
             let path = real.path(name);
-            let found = ancestry_path(path.anchor_header.slot, path.deposit_header.slot).unwrap();
+            let found = ancestry_path(path.anchor_header.slot, path.source_header.slot).unwrap();
             assert_eq!(
                 found,
                 expected,
                 "{name}: distance {}",
-                path.anchor_header.slot - path.deposit_header.slot
+                path.anchor_header.slot - path.source_header.slot
             );
         }
         assert!(
             ancestry_path(100, 100).is_err(),
-            "a deposit at the anchor slot has no path"
+            "a source block at the anchor slot has no path"
         );
     }
 
-    /// Claim: the real historical branches pass the vault check of `lc-core` through the crate functions: the
-    /// crate rebuilds the real execution block and its receipts proof, assembles the calldata struct, and native
+    /// Claim: the real historical branches pass the bridge check of `lc-core` through the crate functions: the
+    /// crate rebuilds the real execution block and its receipt proof, assembles the calldata struct, and native
     /// verification passes the anchor, the 44-entry historical ancestry branch, the block hash branch, the header
-    /// hash and the receipt proof. It stops at the log stage, because a real block holds no deposit event of a bridge.
-    /// Why it matters: this is the withdrawal that a server sends for a deposit older than 8192 slots. The controls
+    /// hash and the receipt proof. It stops at the transaction stage, because the fixture holds no transaction bytes.
+    /// Why it matters: this is the proof that a server sends for a message older than 8192 slots. The controls
     /// show each earlier check can fail: a branch of another era, a padded branch and an unknown anchor all stop earlier.
     #[test]
-    fn real_historical_withdrawal_passes_native_verification_up_to_the_log() {
+    fn real_historical_message_proof_passes_native_verification_up_to_the_transaction() {
         let real = RealHistorical::load();
         let path = real.path("era_middle_block");
         assert_eq!(path.ancestry_branch.len(), 44);
         let execution = middle_block_evidence();
-        let proof = assemble_withdrawal_proof(&path, &execution, 0, 0);
-        let context = VaultContext {
-            remote_vault: Address::repeat_byte(0xee),
-            local_vault: Address::repeat_byte(0xb1),
+        let proof = assemble_message_proof(&path, &execution, 0, 0);
+        let context = BridgeContext {
+            remote_bridge: Address::repeat_byte(0xee),
+            remote_chain_id: 369,
             local_chain_id: 1,
             stored_anchor_root: header_root(&real.anchor),
         };
-        let reason =
-            |proof: &WithdrawalProof, context: &VaultContext| match verify_withdrawal_natively(
-                proof,
-                context,
-                ChainKind::Pulsechain,
-            ) {
-                Ok(_) => "accepted".to_string(),
-                Err(Error::VerificationRefused(text)) => text,
-                Err(other) => panic!("unexpected error {other}"),
-            };
-        let at_log = reason(&proof, &context);
+        let reason = |proof: &MessageProof, context: &BridgeContext| match verify_message_natively(
+            proof,
+            context,
+            ChainKind::Pulsechain,
+        ) {
+            Ok(_) => "accepted".to_string(),
+            Err(Error::VerificationRefused(text)) => text,
+            Err(other) => panic!("unexpected error {other}"),
+        };
+        let at_transaction = reason(&proof, &context);
         assert!(
-            at_log.contains("LogEmitterMismatch") || at_log.contains("LogIndexOutOfRange"),
-            "the check passes the ancestry and the receipt proof and stops at the log: {at_log}"
+            at_transaction.contains("TransactionProofInvalid"),
+            "the check passes the ancestry and the receipt proof and stops at the transaction: {at_transaction}"
         );
 
         let mut other_era = proof.clone();
@@ -990,7 +1035,7 @@ mod tests {
             reason(&padded, &context).contains("InvalidAncestryBranch"),
             "a padded branch"
         );
-        let unknown = VaultContext {
+        let unknown = BridgeContext {
             stored_anchor_root: B256::repeat_byte(9),
             ..context
         };
@@ -1011,17 +1056,17 @@ mod tests {
             59
         );
         let middle = real.path("era_middle_block");
-        assert_eq!(era_of(middle.deposit_header.slot), 1326);
+        assert_eq!(era_of(middle.source_header.slot), 1326);
         assert_eq!(real.entry("era_middle_block")["index"], 1326);
         assert_eq!(ChainKind::Pulsechain.spec().capella_era().unwrap(), 0);
         let leaf = lc_core::ancestry::ancestry_leaf_gindex(
             ChainKind::Pulsechain.spec(),
             real.anchor.slot,
-            middle.deposit_header.slot,
+            middle.source_header.slot,
         )
         .unwrap();
         assert!(lc_core::ssz::is_valid_exact_branch(
-            &header_root(&middle.deposit_header),
+            &header_root(&middle.source_header),
             &middle.ancestry_branch,
             leaf,
             &real.anchor.state_root

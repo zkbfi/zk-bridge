@@ -1,24 +1,24 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
 import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {RLPReader} from "../../src/hardened/vendor/optimism/rlp/RLPReader.sol";
-import {WithdrawalScenes} from "./utils/WithdrawalScenes.sol";
-import {ReceiptFixtures} from "./utils/ReceiptFixtures.sol";
+import {MessageScenes} from "./utils/MessageScenes.sol";
+import {MessageFixtures} from "./utils/MessageFixtures.sol";
 
-/// @notice A vault that exposes the receipt envelope step, so a test can feed it receipts of any length.
-contract ReceiptPayloadVault is BridgeVault {
+/// @notice A message bridge that exposes the receipt envelope step, so a test can feed it receipts of any length.
+/// The step lives in `BeaconProofVerifier`, which `MessageBridge` extends.
+contract ReceiptPayloadBridge is MessageBridge {
     constructor(
         address lightClient,
         uint64 localChainId,
         uint64 remoteChainId,
-        address remoteVaultAddress,
-        TokenPair[] memory pairs,
-        VaultTerms memory terms,
+        address remoteBridgeAddress,
+        BridgeTerms memory terms,
         uint64 capellaEraValue,
         address gate
-    ) BridgeVault(lightClient, localChainId, remoteChainId, remoteVaultAddress, pairs, terms, capellaEraValue, gate) {}
+    ) MessageBridge(lightClient, localChainId, remoteChainId, remoteBridgeAddress, terms, capellaEraValue, gate) {}
 
     /// @dev The bytes that the payload item covers, and its length.
     function payloadBytes(bytes memory receipt) external pure returns (bytes memory) {
@@ -32,23 +32,20 @@ contract ReceiptPayloadVault is BridgeVault {
     }
 }
 
-/// @notice Tests of the receipt envelope step of `BridgeVault`: the type byte is skipped without a copy, and the
+/// @notice Tests of the receipt envelope step of `BeaconProofVerifier`: the type byte is skipped without a copy, and the
 /// payload must equal the receipt without its first byte at every length.
-contract ReceiptPayloadTest is WithdrawalScenes {
-    ReceiptPayloadVault internal harness;
+contract ReceiptPayloadTest is MessageScenes {
+    ReceiptPayloadBridge internal harness;
 
     function setUp() public override {
         super.setUp();
         vm.chainId(CHAIN_B);
-        BridgeVault.TokenPair[] memory pairs = new BridgeVault.TokenPair[](1);
-        pairs[0] = BridgeVault.TokenPair(address(tokenOnB), ReceiptFixtures.REMOTE_TOKEN, 18);
-        harness = new ReceiptPayloadVault(
+        harness = new ReceiptPayloadBridge(
             address(lightClientForB),
             CHAIN_B,
             CHAIN_A,
-            ReceiptFixtures.REMOTE_VAULT,
-            pairs,
-            BridgeVault.VaultTerms(0, address(0), address(0), 0, 0, address(0), address(lightClientForA)),
+            MessageFixtures.REMOTE_BRIDGE,
+            MessageBridge.BridgeTerms(0, address(lightClientForA)),
             DEFAULT_CAPELLA_ERA,
             address(gateB)
         );

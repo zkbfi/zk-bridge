@@ -7,6 +7,8 @@ This document fixes the names, paths, and interfaces for two pieces of work that
 
 Read `docs/red-team.md` first. It lists holes H-01 to H-23 against revision 1.
 
+**Status (2026-10-24).** The single contract `BridgeVault` is retired and deleted. Two layers replace it: `MessageBridge` (proof, lock, send and execute of messages) and `TokenMediator` (tokens, fee switch, flow limiter hook). The section "Message layer and token mediator" is built, and its last part ("As built") lists where the build differs from the design. Sections that describe the vault below stay as the record of the rules. Each carries a note that says where the rule lives now.
+
 ## Scope decisions (made by the user)
 
 - **H-09 is out of scope.** The user accepts that a deposit stays locked when the destination vault has no liquidity. The hardened vault therefore has **no refund function**. A refund without a cross-chain cancellation proof lets one deposit be claimed twice (once as a withdrawal, once as a refund). Leaving the refund out removes that path.
@@ -123,7 +125,9 @@ struct LightClientOutput {
 - Gas: one proof check per update, no matter the committee size (fixes H-15). Measure it.
 - No owner, no upgrade path, no pause.
 
-### `src/hardened/BridgeVault.sol`
+### `src/hardened/BridgeVault.sol` (retired)
+
+Retired on 2026-10-24. The rules below describe the vault. The proof checks moved to `BeaconProofVerifier` and `MessageBridge`. The token rules moved to `TokenMediator`. The pair tables and the destination token binding are gone, because the mediator computes the bridged copy of a token and needs no registration. See "Message layer and token mediator".
 
 Event (3 indexed parameters, fixes R2-01). It has final `destinationVault` and `destinationToken` parameters that revision 1 did not have, so its signature and topic 0 differ from revision 1. The log data is 160 bytes: `amount`, `nonce`, `targetChainId`, `destinationVault`, `destinationToken`, each padded to 32 bytes. The source vault emits its immutable `remoteVault` as `destinationVault`. The destination vault's `withdraw` requires `destinationVault == address(this)`. The source vault emits `remoteTokenOf[token]` as `destinationToken`. The destination vault requires it to equal the local token that it would pay (see "Destination token binding" at the end of this file):
 
@@ -187,7 +191,9 @@ Implements the Altair light-client sync protocol for both fork schedules:
 - Hash the `ExecutionPayloadHeader` with the field list of the header's fork (Capella has no blob fields, Deneb and later have them).
 - Return the output tuple in the exact ABI layout above, with an `abi_encode` that matches Solidity byte for byte.
 
-### Withdrawal program: `verify_withdrawal(witness, expected_source_vault) -> WithdrawalOutput`
+### Withdrawal program: `verify_withdrawal(witness, expected_source_vault) -> WithdrawalOutput` (removed)
+
+No withdrawal program exists. The native reference check is now `lc_core::message::verify_message`, the twin of `MessageBridge.executeMessage`. The text below is the first design.
 
 - Ancestry: the light client stores only one execution block per update, so the deposit block is proven against a finalized anchor. Path: the anchor's state root, then `state.block_roots` (the deposit slot must be within 8192 slots before the anchor), then the deposit beacon header, then its execution payload branch, then `keccak256(header_rlp) == deposit_block_hash`. Older deposits use the historical path through `historical_summaries`; see "Change: historical ancestry and folded updates".
 - The verifier argument of both contracts is a specific versioned SP1 verifier, never Succinct's ownable gateway. Decode the header for both Ethereum (Prague fields) and PulseChain (Shanghai fields).
@@ -221,7 +227,7 @@ A Rust binary that makes proofs. It holds no trusted role: every proof it makes 
 ### Responsibilities
 
 1. **Make a light-client proof (`prove`).** Read the head, the committee hashes and the program key from the destination light client, or take an explicit starting head. Fetch the updates from that head to the newest final header (a fold of up to 64 updates). Run `verify_light_client_update` natively. Get the proof from the backend. Check the public values against the native run, the shape of the proof and the program key. Hand the result off: one JSON object on standard output, a webhook, or both.
-2. **Build withdrawal evidence (`evidence`).** For a deposit that the caller names by the hash of its source transaction and the index of its log, build the calldata of `BridgeVault.withdraw` and the calls that add the missing layout rows. Run `verify_withdrawal` natively against the stored anchor. Print one JSON object.
+2. **Build withdrawal evidence (`evidence`).** For a deposit that the caller names by the hash of its source transaction and the index of its log, build the calldata of `MessageBridge.executeMessage` and the calls that add the missing layout rows. Run `verify_message` natively against the stored anchor. Print one JSON object (the vault version called `BridgeVault.withdraw` and `verify_withdrawal`).
 
 Exit codes of `prove`: 0 for a proof, 3 when the light client already holds the newest final header, 1 for an error.
 
@@ -247,6 +253,8 @@ Exit codes of `prove`: 0 for a proof, 3 when the light client already holds the 
 Unit tests for the configuration, the checks of the producer, the handoff and the stored state. Integration tests run the producer and the commands on a signed beacon chain, with the oracle backend, and against a fake worker with a real Groth16 proof. The tests of the old relayer, with two Anvil chains, are on the branch `archive/full-relayer`.
 
 ## Change: the vault verifies withdrawals directly (user decision, 2026-10-20)
+
+The checks below now live in `BeaconProofVerifier` and `MessageBridge.executeMessage`. The calldata names `depositHeader` and `transactionIndex` became `sourceHeader`, `receiptIndex`, `transactionIndex` and the transaction branch of `MessageBridge.MessageProof`.
 
 Nothing in a withdrawal is secret, and the evidence is a few kilobytes. So the vault checks it directly, and **the withdrawal program and its verification key are removed.** Only the light-client update (proof 1) uses SP1. A user's browser can build a withdrawal from public RPC and beacon data and submit it with no prover. This replaces the `WithdrawalOutput` section above.
 
@@ -300,7 +308,7 @@ For Merkle-Patricia proofs and RLP decoding, prefer vendoring an audited impleme
 
 ### The light-client crate's role
 
-`verify_withdrawal` stays in Rust as the reference implementation and the proof builder. It produces the exact `WithdrawalProof` calldata. A Rust test and a Solidity test run the same fixtures and must agree on accept or reject. No withdrawal guest program is built.
+`verify_message` (first `verify_withdrawal`) stays in Rust as the reference implementation and the proof builder. It produces the exact `MessageProof` calldata. A Rust test and a Solidity test run the same fixtures and must agree on accept or reject. No withdrawal guest program is built.
 
 ## Decision: source-chain forks (user decision, 2026-10-20)
 
@@ -381,6 +389,8 @@ The prover uses the fold to catch up a light client that lags by several sync co
 - If the contract stores a next committee, the prover's initial store must carry it. Otherwise `startNextSyncCommitteeHash` is zero and rule 1 refuses the update.
 
 ## Fork gate on the Ethereum vault (HB-02, 2026-10-20)
+
+The `MessageBridge` takes the place of the vault. Its send calls `admit("")` with empty evidence, and there is no way to pass evidence through a send. See "Gate evidence: confirm, then send" at the end of this file. Read "vault" in this section as "message bridge", and "deposit" as "send".
 
 The Ethereum vault refuses a deposit unless the chain's current fork version is one its route supports. This closes HB-02 window 1 on Ethereum. Window 2 (the epochs before activation) is the interface's job; see `docs/red-team-revision-2.md`, HB-02.
 
@@ -552,6 +562,8 @@ A PulseChain consensus fork almost always arrives with an execution fork, and th
 
 ## Deposit fee switch (user decision, 2026-10-21) (built)
 
+Moved to `TokenMediator` on 2026-10-24. The fee is charged on the relay of tokens (`relayTokens` and the other relay functions), not on a message. The authority, the ceiling, `setFee`, `nullifyFee` and `collectFees` are the same. A sender who wants a guarantee uses the overload of `relayTokensWithFallback` that takes `maxFeeBasisPoints`.
+
 The user expects a fee in the future. Each vault gets a fee switch that is off by default and can be removed for good, either at deployment or at any time after launch.
 
 **The one role.** The fee authority is the only privileged role in the hardened build. It can set the fee on new deposits within an immutable ceiling, and nothing else. It cannot touch locked tokens, withdrawals, the light client, the gate or the layout table. It can give up its power at any time, and then nobody can ever set a fee again.
@@ -589,6 +601,8 @@ The user expects a fee in the future. Each vault gets a fee switch that is off b
 - **Gas, withdraw:** 393,325 before for a recent withdrawal, 402,770 after. For a historical withdrawal, 424,950 before and 434,428 after. About 8,500 of the increase comes from the receipt parser, which copies the log data byte by byte. The log is 32 bytes longer (see below).
 
 ## Destination token binding (code review finding)
+
+Retired with the vault. The mediator computes the bridged copy of a native token from the home chain and the token (`CREATE2`), so no table exists that two contracts could keep in different states. The mediator trusts one remote mediator and one message bridge, and the handlers check the source chain.
 
 Before this change, `withdraw` mapped the token of the remote log through the local table only. Two vaults with different tables paid the wrong token.
 
@@ -636,6 +650,8 @@ On PulseChain, the fork registry checks freshness and the start of an observatio
 - **Tests:** unit tests cover the threshold, the clock source, the precedence and the output. `prover/tests/hardened_own_light_client.rs` runs two Anvil chains. The head moves with each pass. The registry refuses the fixture observation as a replay after the move (`ObservationNotFresh`), and accepts an observation built from the new head, which the stale head refused (`PreviousHeadSlotMismatch`). A light client of another beacon chain is refused at startup.
 
 ## Flow limiter hook (user decision, 2026-10-21) (built)
+
+Moved to `TokenMediator` on 2026-10-24. The mediator calls `checkDeposit` on a relay and `checkWithdrawal` on a release (the nonce argument is the message identifier). A refused release is recorded in `claimable` instead of reverting, because delivery of a message is final. `detachFlowLimiter` stays. No limiter is attached by default.
 
 The user asked for a hook for flow limits that can be nullified, with the rules held by an immutable contract. The user will supply the limit rules later. This section defines only the hook.
 
@@ -713,6 +729,8 @@ The vault takes the limiter at construction, and the limiter takes the vault. Th
 
 ## Deposit lock (user decision, 2026-10-23) (built)
 
+Moved to `MessageBridge` on 2026-10-24. The flag is `depositsOpen` and the call is `openDeposits(OpeningProof)`. A send on a closed bridge reverts `DepositsNotOpen()`. The proof and its checks are in `BeaconProofVerifier`. Read "vault" in this section as "message bridge", and "deposit" as "send".
+
 An end-to-end run (`docs/end-to-end-real-proofs.md`) showed that a deposit made before the destination light client stored its first update can never be paid. The user decided: lock deposits on chain until the bridge can deliver them.
 
 ### What a deposit at slot `s` needs
@@ -747,18 +765,22 @@ A deposit on chain X at beacon slot `s` is paid by the vault on chain Y, which r
 
 ## Launch sequence
 
-The contracts need no administrator, and the repository has no relayer. A stateful server of the operator does the steps below. It runs the producer (`zk-bridge-prover prove` and `evidence`) for the parts that make proofs or evidence, and it sends every transaction itself. The key of the server pays for them. A vault can be opened, and a withdrawal sent, by anyone.
+The contracts need no administrator, and the repository has no relayer. A stateful server of the operator does the steps below. It runs the producer (`zk-bridge-prover prove` and `evidence`) for the parts that make proofs or evidence, and it sends every transaction itself. The key of the server pays for them. Anyone can open a bridge and deliver a message.
 
-1. **Deploy** with `script/hardened/DeployBridge.s.sol`. Both vaults start locked. The read-back checks `remoteLightClient` and a false `depositsOpen`.
+1. **Deploy** with `script/hardened/DeployBridge.s.sol`. On each chain it deploys, in the order of the nonce table in the script: the light client, the own-chain light client and the fork registry (where the gate mode needs them), the gate, the `MessageBridge`, the `TokenMediator` (which creates its `TokenFactory`), the `WETHOmnibridgeRouter` (when the chain has a wrapped native token), and optionally the `FeeRouter`. Each side learns the bridge, the mediator and the light client of the other side from predicted addresses. Both bridges start locked. The read-back checks every address, every immutable, the pinned verifier code hash, `remoteLightClient`, and a false `depositsOpen`.
 2. **Post light-client updates.** For each route, run `prove`. It exits with code 0 and one proof package, or with code 3 when the light client holds the newest final header. Send `updateCalldata` of the package to `destination.lightClient`. Repeat until `prove` exits with code 3. `latestFinalizedSlot` in the package shows whether the head still lags by more than one fold.
-3. **Open the vaults.** Call `openDeposits` on the source vault of each route. The call needs a proof that the remote light client stored a head: a block of the other chain whose hash the vault light client stored, the state proof of the remote light client in that block (from `eth_getProof`), and the storage proof of one stored head. The server builds this proof. The vault on a chain opens only when its own light client has stored a block of the other chain that came after the first update of the other light client. A chain needs about two epochs to finalize, so the first round of updates for one direction only prepares the second. Repeat steps 2 and 3 until the vault of each route reports `depositsOpen()`.
-4. **Announce.** Tell users only after both vaults report open. A deposit before that reverts with `DepositsNotOpen()` and keeps the tokens with the sender.
-5. **Keep the light clients current.** Run step 2 on a schedule for each route. The own-chain light client of a chain with a registry gate is a route too: its source beacon chain and its destination chain are the same chain. A deposit needs a stored header after its slot.
-6. **Pay the deposits.** For each deposit on a source vault, run `evidence --tx <hash> --log-index <n>`. Send each call of `prerequisites` in order, and read the layout views again after each call. Then send the `withdraw` call to the destination vault. Skip the deposit when `alreadyClaimed` is true. A vault with a flow limiter can refuse a withdrawal: simulate `checkWithdrawal` from the vault address first, and wait when it reverts. A refusal leaves the nonce claimable.
+3. **Open the bridges.** Call `openDeposits` on the `MessageBridge` of each chain. The call needs a proof that the remote light client stored a head: a block of the other chain whose hash the own light client stored, the state proof of the remote light client in that block (from `eth_getProof`), and the storage proof of one stored head. The server builds this proof. A bridge opens only when its own light client has stored a block of the other chain that came after the first update of the other light client. A chain needs about two epochs to finalize, so the first round of updates for one direction only prepares the second. Repeat steps 2 and 3 until both bridges report `depositsOpen()`.
+4. **Announce.** Tell users only after both bridges report open. A send before that reverts with `DepositsNotOpen()` and spends nothing but gas. This covers token relays too, because the mediator sends through the bridge.
+5. **Keep the light clients current.** Run step 2 on a schedule for each route. The own-chain light client of a chain with a registry gate is a route too: its source beacon chain and its destination chain are the same chain. A message needs a stored header after its slot.
+6. **Confirm the gate.** On a chain whose gate is enforcing, the first sender of each epoch calls `BeaconForkGate.confirm(evidence)` before the send (see "Gate evidence: confirm, then send"). A keeper may confirm too. The server builds the evidence for its own sends.
+7. **Deliver the messages.** For each `UserRequestForAffirmation` log on a source bridge (a token relay emits one, and so does any message from an application), run `evidence --tx <hash> --log-index <n>`. Send each call of `prerequisites` in order, and read the layout views again after each call. Then send `execute` to the destination bridge. Skip the message when `alreadyDelivered` is true. Delivery is final: a failed call to the target is not retried by the bridge. For a message that names a `FeeRouter` as the receiver of tokens, send the same proof to `FeeRouter.executeMessageWithRunner(runner, proof)` instead, so the router can pay the fee to `runner`; the `execute.data` of the evidence holds the proof as the argument of `executeMessage`.
+8. **Claim what a release could not pay.** A release that no payee can take is recorded in `claimable`. The fallback address, or anyone for it, calls `TokenMediator.claim(token, account)`. A flow limiter that refused a release is asked again at the claim.
 
-## Message layer and token mediator (design, user decisions 2026-10-24)
+## Message layer and token mediator (user decisions 2026-10-24) (built)
 
 The vault today mixes four jobs: proving a log, lock-and-release token accounting with fixed pairs, the fee and limiter hooks, and the deposit lock. It is also close to the 24 KB contract size limit. This section splits it into layers, following the split of OmniBridge (a message bridge plus token mediators) without OmniBridge's admin parts: no proxies, no owners, no validators, no adjustable limits, no token registration.
+
+**Built.** `MessageBridge`, `TokenMediator`, `TokenFactory`, `BridgedToken`, `WETHOmnibridgeRouter` and `FeeRouter` exist, with the tests listed under "Tests" and in "As built" below. The first design text in this section used the names `sendMessage`, `MessageSent`, `MessageDelivered`, `IMessageFee` and a `feeContract` field. The OmniBridge names in "OmniBridge interface compatibility" replaced them, and the later decisions removed the fee contract. Read "As built" for the exact contract.
 
 ### Decisions
 
@@ -940,3 +962,67 @@ The same idea works for arbitrary messages: a target contract that wants to pay 
 - **`transactionHash()` is proven.** `MessageProof` carries a second Merkle Patricia trie branch from the execution header's `transactionsRoot` to the transaction at the same index as the proven receipt. The bridge hashes the transaction bytes and exposes the result through `transactionHash()` during the call. A mismatch between the two indexes is refused.
 - **A failed release goes to a fallback address.** Every token message carries a fallback address, by default the sender (the same address on the destination chain). On delivery the mediator tries the recipient; if that transfer reverts (for example a blacklist), it tries the fallback; if that also reverts, it records the amount as claimable by the fallback (`claim(token, fallback)`) and emits an event. The message stays delivered either way. Because OmniBridge's `handle*` functions have no fallback parameter, the mediator sends new variants with the fallback appended (`handleNativeTokensWithFallback`, `handleBridgedTokensWithFallback`, `deployAndHandleBridgedTokensWithFallback`, and the `...AndCall` forms); it still accepts the original OmniBridge `handle*` calls, which use the recipient as the fallback. `relayTokens`, `relayTokensAndCall` and `onTokenTransfer` keep their signatures; a new `relayTokensWithFallback(token, receiver, value, data, fallback)` sets an explicit fallback.
 - **The bridge has no executor entry point and no executor fee.** Anyone may call `executeMessage(MessageProof)`. Executors set their own fees on top of the bridge's optional fee switch, the way `gibsfinance/omnibridge` does it: with their own router that records the runner and starting gas, executes the message, and takes its fee in `onTokenBridged` from a `FeeDirector` in the payload. This repository may ship such a router as an optional helper compatible with the gibsfinance `FeeDirector`, but the bridge and the mediator do not depend on it.
+
+### Gate evidence: confirm, then send (user decision, 2026-10-24)
+
+A send carries no gate evidence, and the bridge has no new send method for it. `MessageBridge` calls `depositGate.admit("")` on every send. On an enforcing gate, a send in an epoch that nobody confirmed reverts with `ForkNotConfirmed(epoch)`.
+
+The pattern is simple. **The first poster in an epoch confirms it, and later posters in the same epoch just send.**
+
+1. The first poster calls `BeaconForkGate.confirm(evidence)`. The call is open to anyone. It needs no key. The gate stores the epoch and emits `ForkConfirmed`.
+2. The same poster then sends. This can be a second transaction, or the same transaction (see below).
+3. Every other sender in that epoch sends with no `confirm`. The gate reads one storage slot and admits the send.
+4. In the next epoch the gate refuses again, until someone confirms that epoch.
+
+Anyone may confirm, so a keeper can confirm each epoch as well. The first poster is the default, because a keeper costs about 225 transactions a day. An application may wrap both calls in its own contract.
+
+A general multicall works, with one rule. Inside a multicall, `msg.sender` of the send is the multicall contract. So the multicall is the `messageSender()` that an arbitrary message shows to its target. For a token relay, the mediator pulls the tokens from `msg.sender`, so the multicall must hold the tokens (or hold an allowance from the user) and the user must send them to it first. A target that checks the sender of a message must expect the multicall contract and not the user.
+
+Costs, measured with `forge test` (gas of the call, without the base cost and the calldata): `confirm` with a proof costs 34,738 gas at state depth 6 and 33,034 at depth 5. A send in a confirmed epoch pays 3,022 gas more than a send through a gate that admits everything. A send in detection mode, before the beacon roots contract exists, pays about 745 gas for the probe.
+
+Tests: `test/hardened/BridgeWorld.t.sol` shows the whole pattern on an enforcing gate with the real `MessageBridge`. A send in an unconfirmed epoch is refused, the first poster confirms and sends, a second sender in the same epoch sends with no `confirm`, the next epoch is refused again, and a message from the epoch is delivered on the other chain. It also shows a multicall (the receiver sees the multicall as the sender). `test/hardened/BeaconForkGate.t.sol` holds the gate rules and the unit level version of the pattern.
+
+### As built (2026-10-24)
+
+The build follows the design. This list holds every place where it differs from the design text above, or where the design left a choice open.
+
+**Names and shapes**
+- The OmniBridge names are used throughout: `requireToPassMessage`, `requireToConfirmMessage`, `UserRequestForAffirmation`, `executeMessage` (new), `AffirmationCompleted`, `messageSender`, `messageId`, `messageSourceChainId`, `transactionHash`, `messageCallStatus`, `failedMessageDataHash`, `failedMessageReceiver`, `failedMessageSender`, `maxGasPerTx`, `sourceChainId`, `destinationChainId`. The mediator keeps the OmniBridge functions, events and handler names. There is one `IAMB` (`src/hardened/IAMB.sol`). The mediator and `MessageBridge` both use it.
+- `requireToConfirmMessage` differs from `requireToPassMessage` only in the data type byte (`0x80`). Both are delivered the same way.
+- The nonce of the sender feeds the message identifier, in the OmniBridge format: version `0x00050000`, twenty bytes of the hash of the source chain and the bridge, and an eight byte nonce. It implies no order.
+- The message names a destination chain and a target. It does not name a destination bridge, as the vault log did. A second bridge on the destination chain that trusts the same remote bridge delivers the same message to a target of its own, through its own delivery book. A target must therefore trust one bridge only, with `msg.sender == bridge`. The mediator does so, and `test_secondBridge_*` in `MessageBridgeGaps.t.sol` shows it refuses a handler call from another bridge with `NotBridge`.
+
+**Gas**
+- `MAX_GAS_PER_TX` is 10,000,000. `MIN_GAS_PER_CALL` is 100. The send refuses a gas value outside this range with `GasOutOfRange`.
+- The gas guard keeps back `gasLimit + gasLimit / 63 + 1 + EXECUTION_OVERHEAD_GAS` (100,000). The call to the target forwards exactly the gas of the message. A test reads the gas at the first instruction of the target and finds the message gas to within 200 gas.
+- The mediator asks for 250,000 gas for a release, 1,000,000 with a callback, 2,000,000 for a deployment of a copy, and 2,750,000 for both. All of them fit. The mediator constructor reads `maxGasPerTx()` of its bridge and reverts with `GasLimitAboveBridgeMaximum` when the bridge allows less than the largest message. A test of the deploy script checks the same fact on the deployed pair.
+- The send refuses a call whose data starts with the selector of `transfer`, `approve`, `transferFrom`, `approveAndCall` or `transferAndCall` (`ForbiddenSelector`). OmniBridge does the same, so that a bridge cannot move the tokens of a contract that approved it.
+
+**Order and context**
+- A send checks, in this order: the lock, the cutoff, the gas range, the selector, the gate. The vault called the gate first. The gate is last because it is the only check with a cost and a side effect. A test pins the order.
+- `executeMessage` is not reentrant. A call during a delivery reverts with `MessageInProgress`. A target may send messages during its delivery. Sends do not touch the context.
+- `transactionHash()` is proven. `MessageProof` carries the transaction branch, and the receipt index and the transaction index must be equal (`IndexMismatch`).
+- The layout rows live in the bridge, in the storage that `BeaconProofVerifier` reaches through three hooks. The deposit lock moved with them: `openDeposits`, `depositsOpen` and `DepositsNotOpen`.
+- The runtime size of `MessageBridge` is 22,465 bytes. It has 2,111 bytes of room under the limit of 24,576. A new feature in the bridge needs a check of the size first.
+
+**Fees and executors**
+- There is no `IMessageFee` and no `feeContract`. The bridge has no executor fee. `FeeRouter.executeMessageWithRunner(address runner, MessageProof proof)` wraps `executeMessage`. It records the runner and the starting gas in the slot of `gibsfinance/omnibridge`, and `onTokenBridged` pays the fee from a `FeeDirector`. A fixed fee and a share fee are paid in the callback. A gas based fee is settled after the call returns, from the gas of the whole call, because this bridge forwards exactly the gas of the message and the callback cannot measure the gas of the executor. `FeeRouter` explains the rule in its comment.
+
+**Mediator**
+- `TokenMediator` creates its `TokenFactory` in its own constructor. The factory sits at the first `CREATE` address of the mediator. The deploy script predicts it and reads it back. It does not deploy a factory of its own.
+- A copy takes the name of its native token plus the suffix ` (zk-bridge)`, and the symbol prefix `zk`. The salt of the copy is `keccak256(homeChainId, homeToken)`.
+- A failed release goes to the recipient, then to the fallback address, then to `claimable[token][fallback]`. The record of a native token includes the claimable amounts, so the balance of the mediator covers `mediatorBalance + accruedFees`.
+- A defect that the invariant tests found: `_tryRelease` wrote a stale copy of the record back after a refused transfer. A hostile token could relay tokens from inside `transfer` and then refuse, and the write erased the nested lock. The function now writes to storage after the call. `test_aTokenThatRelaysDuringAReleaseAndThenRefusesKeepsTheNestedLock` covers it.
+
+**Deploy script and tools**
+- `DeployBridge.s.sol` deploys the stack of each chain with predicted addresses (see "Launch sequence"). The configuration has no token pairs. It gains `wrappedNative` and `deployFeeRouter` per chain.
+- The prover `evidence` command builds `executeMessage` calldata for a message, with the layout prerequisites and the delivery status. `lc-core` has `message::verify_message`, the native twin of `MessageBridge.executeMessage`. A fixture set in `light-client/tests/fixtures/message/` (91 cases) runs through both implementations. `test/hardened/LightClientFixtures.t.sol` requires them to agree on accept and reject.
+- The real chain fixtures hold transaction hashes and not transaction bytes. So real data stops before the transaction proof in the Rust tests. The prover needs a source node that serves `eth_getRawTransactionByHash`.
+
+**Tests added for the build**
+- `test/hardened/BridgeWorld.t.sol`: two chains in one test, with the real bridge and the real mediator on each side and proofs built from real logs (`utils/DynamicProofs.sol`, `utils/TrieBuilder.sol`, `utils/ReceiptBuilder.sol`). A token round trip, an arbitrary message, the fee router with a real runner, the gate pattern, and a multicall.
+- `test/hardened/MessageBridgeShapes.t.sol`: every receipt type, high transaction indices, long log lists, two messages in one receipt, and transaction branch checks.
+- `test/hardened/MessageBridgeGaps.t.sol`: the checks that the vault tests held and that had no counterpart.
+- `test/hardened/mediator/TokenMediatorGaps.t.sol`, `TokenMediatorInvariant.t.sol`, `TokenMediatorFuzz.t.sol`: token behaviour, the limiter and fee rules, and the solvency invariants of the mediator.
+
+**Gas of the stack** (`forge test`, one transaction per test, without the base cost and the calldata; `--isolate` figures in brackets): a token round trip costs 2,065,511 gas in four steps (2,146,744): send on chain A 155,589; execute on chain B with the deployment of the copy 1,423,690; send on chain B 90,499; execute on chain A 395,733. A later relay of the same token costs 410,423 to execute on chain B in the short form. An arbitrary message costs 37,405 to send and 484,919 to execute, 522,324 in all (588,844).

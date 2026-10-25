@@ -143,7 +143,7 @@ pub fn is_valid_normalized_merkle_branch(leaf: &B256, branch: &[B256], gindex: u
 }
 
 /// Verifies a branch against a generalized index. The branch must have exactly `floorlog2(gindex)` entries.
-/// This is the check the vault runs: no padding is accepted.
+/// This is the check the bridge runs: no padding is accepted.
 pub fn is_valid_exact_branch(leaf: &B256, branch: &[B256], gindex: u64, root: &B256) -> bool {
     let depth = gindex_depth(gindex);
     if branch.len() != depth as usize {

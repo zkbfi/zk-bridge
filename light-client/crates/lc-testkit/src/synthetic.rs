@@ -1,4 +1,4 @@
-//! Synthetic fixtures: generated BLS keys, a test-only beacon state and block body builder, and a withdrawal builder.
+//! Synthetic fixtures: generated BLS keys, a test-only beacon state and block body builder, and a message builder.
 //!
 //! These builders fill every field the verifier does not read with deterministic filler, and place the values the
 //! verifier does read at the field positions of the consensus specs. Field positions here are written as FIELD
@@ -6,17 +6,16 @@
 //! `lc_core::layout` is not copied into the builder. The real-data tests are the independent check of both.
 
 use crate::receipts::{
-    build_receipts_trie, encode_execution_header, encode_receipt, header_hash, prague_header, shanghai_header,
+    build_indexed_trie, encode_execution_header, encode_receipt, header_hash, prague_header, shanghai_header,
 };
-use alloy_primitives::{Address, Bytes, B256, U256};
-use alloy_sol_types::SolEvent;
+use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
 use bls12_381::hash_to_curve::{ExpandMsgXmd, HashToCurve};
 use bls12_381::{G1Affine, G1Projective, G2Affine, G2Projective, Scalar};
-use lc_core::abi::DepositInitiated;
-use lc_core::abi::WithdrawalProof;
+use lc_core::abi::{MessageProof, USER_REQUEST_TOPIC};
 use lc_core::bls::BLS_DST;
 use lc_core::chain::{ChainSpec, ForkName, SYNC_COMMITTEE_SIZE};
 use lc_core::execution::Log;
+use lc_core::message::{encode_event_data, encode_message, MessageHeader};
 use lc_core::ssz::{
     branch_for_leaf, branch_for_leaf_with_limit, hash_pair, merkleize, merkleize_with_limit, mix_in_length, sha256,
     u64_chunk,
@@ -447,41 +446,66 @@ pub struct ReceiptSpec {
     pub logs: Vec<Log>,
 }
 
-/// The fields of a deposit event.
-#[derive(Clone, Copy, Debug)]
-pub struct DepositFields {
-    /// Token.
-    pub token: Address,
-    /// Depositor.
+/// The fields of a message that a bridge sends.
+#[derive(Clone, Debug)]
+pub struct MessageFields {
+    /// The identifier. The honest value is `message_id_for(source chain, bridge, nonce)`.
+    pub message_id: B256,
+    /// The contract that sent the message.
     pub sender: Address,
-    /// Recipient on the target chain.
-    pub recipient: Address,
-    /// Amount.
-    pub amount: u64,
-    /// Nonce.
-    pub nonce: B256,
-    /// Target chain.
-    pub target_chain_id: u64,
-    /// The vault on the target chain that the deposit is addressed to.
-    pub destination_vault: Address,
-    /// The token that the destination vault must pay for this deposit.
-    pub destination_token: Address,
+    /// The target contract on the destination chain.
+    pub executor: Address,
+    /// The gas that the target gets.
+    pub gas_limit: u32,
+    /// `DATA_TYPE_PASS` or `DATA_TYPE_CONFIRM`.
+    pub data_type: u8,
+    /// The source chain identifier.
+    pub source_chain_id: u64,
+    /// The destination chain identifier.
+    pub destination_chain_id: u64,
+    /// The call data for the target.
+    pub data: Bytes,
 }
 
-/// A log of the `DepositInitiated` event, emitted by `emitter`.
-pub fn deposit_log(emitter: Address, fields: &DepositFields) -> Log {
-    let event = DepositInitiated {
-        token: fields.token,
-        sender: fields.sender,
-        recipient: fields.recipient,
-        amount: U256::from(fields.amount),
-        nonce: fields.nonce,
-        targetChainId: fields.target_chain_id,
-        destinationVault: fields.destination_vault,
-        destinationToken: fields.destination_token,
-    };
-    let data = event.encode_log_data();
-    Log { address: emitter, topics: data.topics().to_vec(), data: data.data.clone() }
+impl MessageFields {
+    /// The message header of these fields.
+    pub fn header(&self) -> MessageHeader {
+        MessageHeader {
+            message_id: self.message_id,
+            sender: self.sender,
+            executor: self.executor,
+            gas_limit: self.gas_limit,
+            data_type: self.data_type,
+            source_chain_id: U256::from(self.source_chain_id),
+            destination_chain_id: U256::from(self.destination_chain_id),
+        }
+    }
+}
+
+/// A log of the `UserRequestForAffirmation` event, emitted by `emitter`. The topic holds the identifier of the message.
+pub fn message_log(emitter: Address, fields: &MessageFields) -> Log {
+    raw_message_log(emitter, fields.message_id, &encode_message(&fields.header(), &fields.data))
+}
+
+/// A log of the `UserRequestForAffirmation` event with the given identifier in its topic and the given bytes as the
+/// message. Tests use it to write a message that no honest bridge writes.
+pub fn raw_message_log(emitter: Address, topic_message_id: B256, encoded_message: &[u8]) -> Log {
+    Log {
+        address: emitter,
+        topics: vec![USER_REQUEST_TOPIC, topic_message_id],
+        data: encode_event_data(encoded_message),
+    }
+}
+
+/// The bytes of the transaction at `index` in a synthetic block: a type 2 envelope byte and 128 bytes of filler. Only the
+/// hash of the bytes and their place in the transactions trie matter to the verifier. The bytes are longer than 32, as every
+/// real transaction is, so no trie node is embedded in its parent and each proof node is used.
+pub fn synthetic_transaction(index: u64) -> Bytes {
+    let mut bytes = vec![0x02];
+    for round in 0u64..4 {
+        bytes.extend_from_slice(keccak256([index.to_be_bytes(), round.to_be_bytes()].concat()).as_slice());
+    }
+    Bytes::from(bytes)
 }
 
 /// Proofs from a block body to the fields of its execution payload.
@@ -494,7 +518,7 @@ pub struct BodyProofs {
     pub block_hash_branch: Vec<B256>,
 }
 
-/// Builds a body whose payload is `payload`, and the proofs the vault and the light client read from it.
+/// Builds a body whose payload is `payload`, and the proofs the bridge and the light client read from it.
 /// The payload leaves use the field positions of `ExecutionPayload`: `block_hash` is field 12.
 pub fn build_body_proofs(spec: &ChainSpec, slot: u64, payload: &ExecutionPayloadHeader) -> BodyProofs {
     const PAYLOAD_FIELD_BLOCK_HASH: usize = 12;
@@ -509,56 +533,60 @@ pub fn build_body_proofs(spec: &ChainSpec, slot: u64, payload: &ExecutionPayload
     BodyProofs { body_root, execution_branch: body_branch, block_hash_branch: payload_branch }
 }
 
-/// A synthetic withdrawal: receipts in a block, a beacon chain that contains the block, and the calldata struct.
-pub struct WithdrawalScenario {
+/// A synthetic message proof: receipts and transactions in a block, a beacon chain that contains the block, and the
+/// calldata struct.
+pub struct MessageScenario {
     /// The chain.
     pub spec: &'static ChainSpec,
     /// The calldata struct.
-    pub proof: WithdrawalProof,
+    pub proof: MessageProof,
     /// What the light client stores for the anchor slot.
     pub stored_anchor_root: B256,
     /// The state of the anchor, for tests that rebuild the branch.
     pub anchor_state: StateBuilder,
-    /// The execution block hash of the deposit block.
-    pub deposit_block_hash: B256,
+    /// The execution block hash of the source block.
+    pub source_block_hash: B256,
+    /// The hash of the source transaction.
+    pub source_transaction_hash: B256,
 }
 
-impl WithdrawalScenario {
+impl MessageScenario {
     /// The branch through `state.block_roots`. It is a valid Merkle path of the anchor state at any distance, because the
-    /// builder always stores the deposit header root there. The vault accepts it only when the distance is at most 8192.
+    /// builder always stores the source header root there. The bridge accepts it only when the distance is at most 8192.
     pub fn recent_ancestry_branch(&self) -> Vec<B256> {
-        self.anchor_state.block_roots_branch(self.proof.depositHeader.slot)
+        self.anchor_state.block_roots_branch(self.proof.sourceHeader.slot)
     }
 
-    /// The branch through `state.historical_summaries` for the era of the deposit, or `None` when the anchor state has
+    /// The branch through `state.historical_summaries` for the era of the source block, or `None` when the anchor state has
     /// no entry for it (the era is not complete at the anchor, or it is before Capella). The builder fills the entry of
-    /// the deposit era whenever it exists, whatever the distance. The vault accepts it only when the distance is above 8192.
+    /// the source era whenever it exists, whatever the distance. The bridge accepts it only when the distance is above 8192.
     pub fn historical_ancestry_branch(&self) -> Option<Vec<B256>> {
-        let slot = self.proof.depositHeader.slot;
+        let slot = self.proof.sourceHeader.slot;
         self.historical_ancestry_branch_for_era(slot / SLOTS_PER_ERA)
     }
 
     /// The same branch built for the list position of `era`. For a neighbouring era it is the "wrong era index" attack: the
-    /// builder stores the deposit header root at the same offset in the eras next to the deposit era, so this branch is a
-    /// valid Merkle path of the anchor state and only the index of the vault rejects it.
+    /// builder stores the source header root at the same offset in the eras next to the source era, so this branch is a
+    /// valid Merkle path of the anchor state and only the index of the bridge rejects it.
     pub fn historical_ancestry_branch_for_era(&self, era: u64) -> Option<Vec<B256>> {
         let capella_era = self.spec.capella_era().expect("a Capella schedule");
         let index = usize::try_from(era.checked_sub(capella_era)?).ok()?;
         self.anchor_state
             .has_historical_era(index)
-            .then(|| self.anchor_state.historical_ancestry_branch(index, self.proof.depositHeader.slot))
+            .then(|| self.anchor_state.historical_ancestry_branch(index, self.proof.sourceHeader.slot))
     }
 }
 
-/// Builds a withdrawal scenario whose deposit receipt is receipt `transaction_index` and log `log_index`.
-pub fn build_withdrawal(
+/// Builds a message scenario whose source transaction and receipt sit at `transaction_index`, and whose message is log
+/// `log_index` of that receipt. The block holds one transaction per receipt.
+pub fn build_message(
     spec: &'static ChainSpec,
     receipts: &[ReceiptSpec],
     transaction_index: u64,
     log_index: u64,
-    deposit_slot: u64,
+    source_slot: u64,
     anchor_slot: u64,
-) -> WithdrawalScenario {
+) -> MessageScenario {
     let encoded: Vec<Bytes> = receipts
         .iter()
         .enumerate()
@@ -572,31 +600,36 @@ pub fn build_withdrawal(
             )
         })
         .collect();
-    let trie = build_receipts_trie(&encoded);
+    let receipts_trie = build_indexed_trie(&encoded);
+    let transactions: Vec<Bytes> = (0..receipts.len() as u64).map(synthetic_transaction).collect();
+    let transactions_trie = build_indexed_trie(&transactions);
 
-    let block_number = deposit_slot * 2;
-    let header = if spec.fork_at_slot(deposit_slot) >= ForkName::Deneb {
-        prague_header(block_number, trie.root)
+    let block_number = source_slot * 2;
+    let header = if spec.fork_at_slot(source_slot) >= ForkName::Deneb {
+        prague_header(block_number, receipts_trie.root, transactions_trie.root)
     } else {
-        shanghai_header(block_number, trie.root)
+        shanghai_header(block_number, receipts_trie.root, transactions_trie.root)
     };
     let header_rlp = encode_execution_header(&header);
-    assemble_withdrawal(
+    let position = transaction_index as usize;
+    assemble_message(
         spec,
         &ExecutionBlockEvidence {
             header_rlp,
             block_number,
-            receipts_root: trie.root,
-            receipt_proof: trie.proofs[transaction_index as usize].clone(),
+            receipts_root: receipts_trie.root,
+            receipt_proof: receipts_trie.proofs[position].clone(),
+            transaction_proof: transactions_trie.proofs[position].clone(),
+            transaction: transactions[position].clone(),
         },
         transaction_index,
         log_index,
-        deposit_slot,
+        source_slot,
         anchor_slot,
     )
 }
 
-/// The execution block part of a withdrawal: a header and the proof of one receipt.
+/// The execution block part of a message proof: a header and the proofs of one receipt and one transaction.
 pub struct ExecutionBlockEvidence {
     /// RLP of the execution header.
     pub header_rlp: Bytes,
@@ -606,44 +639,48 @@ pub struct ExecutionBlockEvidence {
     pub receipts_root: B256,
     /// Proof nodes of the receipt at the transaction index.
     pub receipt_proof: Vec<Bytes>,
+    /// Proof nodes of the transaction at the transaction index.
+    pub transaction_proof: Vec<Bytes>,
+    /// The bytes of that transaction.
+    pub transaction: Bytes,
 }
 
-/// Wraps execution evidence (synthetic or REAL) in a synthetic beacon chain: a deposit beacon block whose payload names
-/// the block hash, and an anchor whose state holds the deposit header in `block_roots`.
-pub fn assemble_withdrawal(
+/// Wraps execution evidence in a synthetic beacon chain: a source beacon block whose payload names the block hash, and an
+/// anchor whose state holds the source header in `block_roots`.
+pub fn assemble_message(
     spec: &'static ChainSpec,
     evidence: &ExecutionBlockEvidence,
     transaction_index: u64,
     log_index: u64,
-    deposit_slot: u64,
+    source_slot: u64,
     anchor_slot: u64,
-) -> WithdrawalScenario {
+) -> MessageScenario {
     let block_hash = header_hash(&evidence.header_rlp);
     let block_number = evidence.block_number;
     let trie_root = evidence.receipts_root;
-    let payload = synthetic_payload_header(spec, deposit_slot, block_number, block_hash, trie_root);
-    let body = build_body_proofs(spec, deposit_slot, &payload);
-    let deposit_header = BeaconBlockHeader {
-        slot: deposit_slot,
+    let payload = synthetic_payload_header(spec, source_slot, block_number, block_hash, trie_root);
+    let body = build_body_proofs(spec, source_slot, &payload);
+    let source_header = BeaconBlockHeader {
+        slot: source_slot,
         proposer_index: 7,
-        parent_root: filler("deposit-parent", deposit_slot),
-        state_root: filler("deposit-state-root", deposit_slot),
+        parent_root: filler("source-parent", source_slot),
+        state_root: filler("source-state-root", source_slot),
         body_root: body.body_root,
     };
 
     let mut anchor_state = StateBuilder::new(spec.fork_at_slot(anchor_slot));
-    let deposit_root = deposit_header.hash_tree_root();
-    anchor_state.set_block_root(deposit_slot, deposit_root);
-    // The anchor state holds the deposit header root in EVERY place a mixed-up proof could point at: block_roots, the era of
-    // the deposit, and the two neighbouring eras (same offset). So each wrong branch is a valid Merkle path and only the
-    // vault's choice of index can refuse it. An era has an entry only when it is complete at the anchor and not before Capella.
+    let source_root = source_header.hash_tree_root();
+    anchor_state.set_block_root(source_slot, source_root);
+    // The anchor state holds the source header root in EVERY place a mixed-up proof could point at: block_roots, the era of
+    // the source block, and the two neighbouring eras (same offset). So each wrong branch is a valid Merkle path and only the
+    // bridge's choice of index can refuse it. An era has an entry only when it is complete at the anchor and not before Capella.
     let capella_era = spec.capella_era().expect("a Capella schedule");
     let summary_count = (anchor_slot / SLOTS_PER_ERA).saturating_sub(capella_era) as usize;
-    let deposit_era = deposit_slot / SLOTS_PER_ERA;
-    for era in [deposit_era.wrapping_sub(1), deposit_era, deposit_era + 1] {
+    let source_era = source_slot / SLOTS_PER_ERA;
+    for era in [source_era.wrapping_sub(1), source_era, source_era + 1] {
         let Some(index) = era.checked_sub(capella_era).map(|index| index as usize) else { continue };
         if index < summary_count {
-            anchor_state.set_historical_block_root(summary_count, index, deposit_slot, deposit_root);
+            anchor_state.set_historical_block_root(summary_count, index, source_slot, source_root);
         }
     }
     let anchor_header = BeaconBlockHeader {
@@ -654,29 +691,32 @@ pub fn assemble_withdrawal(
         body_root: filler("anchor-body", anchor_slot),
     };
 
-    // The honest prover builds the branch of the path that the distance selects (the vault makes the same choice).
-    let ancestry_branch = if anchor_slot.saturating_sub(deposit_slot) > SLOTS_PER_ERA {
-        let index = (deposit_era - capella_era) as usize;
-        anchor_state.historical_ancestry_branch(index, deposit_slot)
+    // The honest prover builds the branch of the path that the distance selects (the bridge makes the same choice).
+    let ancestry_branch = if anchor_slot.saturating_sub(source_slot) > SLOTS_PER_ERA {
+        let index = (source_era - capella_era) as usize;
+        anchor_state.historical_ancestry_branch(index, source_slot)
     } else {
-        anchor_state.block_roots_branch(deposit_slot)
+        anchor_state.block_roots_branch(source_slot)
     };
 
-    let proof = WithdrawalProof {
+    let proof = MessageProof {
         anchorHeader: (&anchor_header).into(),
-        depositHeader: (&deposit_header).into(),
+        sourceHeader: (&source_header).into(),
         ancestryBranch: ancestry_branch,
         blockHashBranch: body.block_hash_branch,
         executionHeaderRlp: evidence.header_rlp.clone(),
         receiptProof: evidence.receipt_proof.clone(),
+        receiptIndex: U256::from(transaction_index),
+        transactionProof: evidence.transaction_proof.clone(),
         transactionIndex: U256::from(transaction_index),
         logIndex: U256::from(log_index),
     };
-    WithdrawalScenario {
+    MessageScenario {
         spec,
         proof,
         stored_anchor_root: anchor_header.hash_tree_root(),
         anchor_state,
-        deposit_block_hash: block_hash,
+        source_block_hash: block_hash,
+        source_transaction_hash: keccak256(&evidence.transaction),
     }
 }

@@ -1,4 +1,4 @@
-# Workspace for the light-client and withdrawal programs of the hardened bridge.
+# Workspace for the light-client and message programs of the hardened bridge.
 # The guests/ directory holds Succinct SP1 wrapper sources. It is NOT a member of this workspace
 # (see guests/README.md): this machine has no SP1 toolchain.
 [workspace]

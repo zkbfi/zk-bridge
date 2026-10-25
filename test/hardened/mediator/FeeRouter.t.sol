@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {FeeRouter} from "../../../src/hardened/mediator/FeeRouter.sol";
+import {MessageBridge} from "../../../src/hardened/MessageBridge.sol";
 import {IWETH} from "../../../src/hardened/mediator/IWETH.sol";
 import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol";
 import {MediatorFixture, MockAMB, MockWrappedNative, DenyListToken, CoinRefuser} from "./utils/MediatorSupport.sol";
@@ -48,7 +49,7 @@ contract FeeRouterTest is MediatorFixture {
     }
 
     function _runThroughRouter(address account, uint256 index) internal {
-        router.executeMessageWithRunner(account, abi.encode(address(ambB), index));
+        router.executeMessageWithRunner(account, ambA.proofOf(ambB, index));
     }
 
     function _copyB() internal view returns (IERC20) {
@@ -123,7 +124,7 @@ contract FeeRouterTest is MediatorFixture {
         // The mock bridge, like the real one, forwards exactly the gas limit of the message and holds the rest back.
         address greedy = makeAddr("greedy");
         uint256 indexTwo = _sendTokenB(_director(0, 100 ether, 1 ether), 1_000 ether);
-        router.executeMessageWithRunner{gas: 50_000_000}(greedy, abi.encode(address(ambB), indexTwo));
+        router.executeMessageWithRunner{gas: 50_000_000}(greedy, ambA.proofOf(ambB, indexTwo));
         uint256 greedyFee = _copyB().balanceOf(greedy);
 
         assertGt(greedyFee, 0);
@@ -183,7 +184,7 @@ contract FeeRouterTest is MediatorFixture {
     function test_aGasBasedFeeWithNoRunnerIsZero() public {
         vm.txGasPrice(10 gwei);
         uint256 index = _sendTokenB(_director(0, 100 ether, 1 ether), 1_000 ether);
-        ambA.executeMessage(abi.encode(address(ambB), index));
+        ambA.executeMessage(ambA.proofOf(ambB, index));
         assertEq(_copyB().balanceOf(recipient), 1_000 ether);
     }
 
@@ -218,7 +219,7 @@ contract FeeRouterTest is MediatorFixture {
     function test_noRunnerMeansNoFee() public {
         uint256 index = _sendTokenB(_director(router.FIXED_FEE(), 3 ether, 0), 100 ether);
         // Anyone executes the message on the bridge directly. The router sees no runner.
-        ambA.executeMessage(abi.encode(address(ambB), index));
+        ambA.executeMessage(ambA.proofOf(ambB, index));
         assertEq(_copyB().balanceOf(recipient), 100 ether, "everything goes to the recipient");
         assertEq(_copyB().balanceOf(runner), 0);
     }
@@ -230,14 +231,15 @@ contract FeeRouterTest is MediatorFixture {
 
         // A later direct execution pays no fee, because the slot holds no runner.
         uint256 next = _sendTokenB(_director(router.FIXED_FEE(), 1 ether, 0), 10 ether);
-        ambA.executeMessage(abi.encode(address(ambB), next));
+        ambA.executeMessage(ambA.proofOf(ambB, next));
         assertEq(_copyB().balanceOf(runner), 1 ether, "still the first fee only");
     }
 
     function test_aRunWhileAnotherRunIsInProgressIsRefused() public {
         vm.store(address(router), router.RUNNER_SLOT(), bytes32(uint256(5)));
         vm.expectRevert(FeeRouter.RunnerSlotInUse.selector);
-        router.executeMessageWithRunner(runner, "");
+        MessageBridge.MessageProof memory empty;
+        router.executeMessageWithRunner(runner, empty);
     }
 
     function test_theSlotIsTheOneOfGibsfinance() public view {

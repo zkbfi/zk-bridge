@@ -4,6 +4,7 @@
 //! so the variants matter mostly to tests: a test must show that it fails for the intended reason.
 
 use crate::chain::ForkName;
+use alloy_primitives::B256;
 use core::fmt;
 
 /// A verification failure.
@@ -48,21 +49,21 @@ pub enum Error {
     InvalidNextSyncCommitteeBranch,
     /// The current sync committee branch does not lead to the state root of the bootstrap header.
     InvalidCurrentSyncCommitteeBranch,
-    /// The deposit block is not before the anchor block. Both ancestry paths need `deposit slot < anchor slot`.
+    /// The source block is not before the anchor block. Both ancestry paths need `source slot < anchor slot`.
     DepositNotBeforeAnchor {
         /// Slot of the anchor header.
         anchor_slot: u64,
-        /// Slot of the deposit header.
-        deposit_slot: u64,
+        /// Slot of the source header.
+        source_slot: u64,
     },
-    /// The deposit era is before `capellaEra`, so no `historical_summaries` entry covers it.
+    /// The source era is before `capellaEra`, so no `historical_summaries` entry covers it.
     DepositBeforeCapella {
-        /// `deposit slot / 8192`.
-        deposit_era: u64,
+        /// `source slot / 8192`.
+        source_era: u64,
         /// `capellaEra` of the chain.
         capella_era: u64,
     },
-    /// A candidate position is not the position of the named field in any accepted tree shape. The vault refuses it with
+    /// A candidate position is not the position of the named field in any accepted tree shape. The bridge refuses it with
     /// `LayoutPositionInvalid`.
     LayoutPositionInvalid {
         /// The candidate generalized index.
@@ -70,16 +71,16 @@ pub enum Error {
     },
     /// The index into `historical_summaries` does not fit under `HISTORICAL_ROOTS_LIMIT` (2^24).
     HistoricalIndexOutOfRange {
-        /// `deposit era - capellaEra`.
+        /// `source era - capellaEra`.
         index: u64,
     },
-    /// The ancestry branch does not lead from the deposit header root to the anchor state root. The branch is the
+    /// The ancestry branch does not lead from the source header root to the anchor state root. The branch is the
     /// `block_roots` branch on the recent path and the `historical_summaries` branch on the historical path.
     InvalidAncestryBranch,
-    /// The anchor state has no `historical_summaries` entry for the era of the deposit: the era is not complete at the
+    /// The anchor state has no `historical_summaries` entry for the era of the source block: the era is not complete at the
     /// anchor state.
     HistoricalSummaryMissing {
-        /// The era of the deposit.
+        /// The era of the source block.
         era: u64,
         /// The number of entries in `historical_summaries` of the anchor state.
         summaries: u64,
@@ -113,17 +114,45 @@ pub enum Error {
     SignatureVerificationFailed,
     /// The anchor header is not the finalized header the light client stores for its slot.
     AnchorNotStored,
-    /// The block hash branch does not lead from the keccak256 of the header to the deposit body root.
+    /// The block hash branch does not lead from the keccak256 of the header to the source body root.
     InvalidBlockHashBranch,
-    /// The deposit targets another chain than the one that verifies the withdrawal.
-    TargetChainMismatch {
-        /// The target chain in the log.
-        target_chain_id: u64,
+    /// The receipt index and the transaction index of the proof differ.
+    IndexMismatch {
+        /// The index of the receipt.
+        receipt_index: alloy_primitives::U256,
+        /// The index of the transaction.
+        transaction_index: alloy_primitives::U256,
     },
-    /// The deposit is addressed to another vault than the one that verifies the withdrawal.
-    DestinationVaultMismatch {
-        /// The destination vault in the log.
-        destination_vault: alloy_primitives::Address,
+    /// The message names another source chain than the remote chain.
+    WrongSourceChain {
+        /// The remote chain of the bridge.
+        expected: u64,
+        /// The source chain in the message.
+        actual: alloy_primitives::U256,
+    },
+    /// The message names another destination chain than the chain of the verifying bridge.
+    WrongDestinationChain {
+        /// The chain of the verifying bridge.
+        expected: u64,
+        /// The destination chain in the message.
+        actual: alloy_primitives::U256,
+    },
+    /// The topic holds another message identifier than the message.
+    MessageIdMismatch {
+        /// The identifier in the second topic of the log.
+        topic_message_id: B256,
+        /// The identifier at the start of the message.
+        encoded_message_id: B256,
+    },
+    /// The message identifier has another format version than the bridge reads.
+    MessageVersionInvalid {
+        /// The identifier.
+        message_id: B256,
+    },
+    /// The message has a data type that the bridge does not send.
+    UnknownDataType {
+        /// The data type byte.
+        data_type: u8,
     },
     /// Bytes served as SSZ break a rule of the encoding: an offset or a length is out of bounds, an offset order is wrong,
     /// or a list is longer than its limit. The text names the rule.
@@ -132,6 +161,8 @@ pub enum Error {
     HeaderDecode(String),
     /// The receipt proof does not lead to the receipts root.
     ReceiptProofInvalid(String),
+    /// The transaction proof does not lead to the transactions root.
+    TransactionProofInvalid(String),
     /// The receipt bytes could not be decoded.
     ReceiptDecode(String),
     /// The receipt reports a failed transaction.
@@ -143,12 +174,16 @@ pub enum Error {
         /// The number of logs in the receipt.
         logs: usize,
     },
-    /// The log was not emitted by the expected vault.
+    /// The log was not emitted by the remote bridge.
     LogEmitterMismatch,
-    /// The first topic of the log is not the deposit event topic.
+    /// The first topic of the log is not the message event topic.
     LogTopicMismatch,
-    /// The log has the right topic but its fields do not decode as a deposit.
-    LogDecode(String),
+    /// The log has the message topic but not the layout of the event: its fields, its emitter or its topic count.
+    LogMalformed(&'static str),
+    /// The log event data is not the encoding of one `bytes` value: offset 32, the length, the bytes padded to a word.
+    MalformedEventData,
+    /// The message is shorter than its header says, or a chain identifier length is not 1 to 32.
+    MalformedMessage,
 }
 
 impl fmt::Display for Error {
@@ -182,13 +217,13 @@ impl fmt::Display for Error {
             Self::InvalidCurrentSyncCommitteeBranch => {
                 write!(formatter, "current sync committee branch does not match the header state root")
             }
-            Self::DepositNotBeforeAnchor { anchor_slot, deposit_slot } => {
-                write!(formatter, "deposit slot {deposit_slot} is not before anchor slot {anchor_slot}")
+            Self::DepositNotBeforeAnchor { anchor_slot, source_slot } => {
+                write!(formatter, "source slot {source_slot} is not before anchor slot {anchor_slot}")
             }
-            Self::DepositBeforeCapella { deposit_era, capella_era } => {
+            Self::DepositBeforeCapella { source_era, capella_era } => {
                 write!(
                     formatter,
-                    "deposit era {deposit_era} is before capellaEra {capella_era}; no historical summary covers it"
+                    "source era {source_era} is before capellaEra {capella_era}; no historical summary covers it"
                 )
             }
             Self::HistoricalIndexOutOfRange { index } => {
@@ -221,30 +256,46 @@ impl fmt::Display for Error {
             Self::AnchorNotStored => {
                 write!(formatter, "the anchor header is not the stored finalized header of its slot")
             }
-            Self::InvalidBlockHashBranch => write!(formatter, "block hash branch does not match the deposit body root"),
-            Self::TargetChainMismatch { target_chain_id } => {
-                write!(formatter, "the deposit targets chain {target_chain_id}, not this chain")
+            Self::InvalidBlockHashBranch => write!(formatter, "block hash branch does not match the source body root"),
+            Self::IndexMismatch { receipt_index, transaction_index } => {
+                write!(formatter, "receipt index {receipt_index} differs from transaction index {transaction_index}")
             }
-            Self::DestinationVaultMismatch { destination_vault } => {
-                write!(formatter, "the deposit is addressed to vault {destination_vault}, not this vault")
+            Self::WrongSourceChain { expected, actual } => {
+                write!(formatter, "the message names source chain {actual}, the remote chain is {expected}")
             }
+            Self::WrongDestinationChain { expected, actual } => {
+                write!(formatter, "the message names destination chain {actual}, this chain is {expected}")
+            }
+            Self::MessageIdMismatch { topic_message_id, encoded_message_id } => {
+                write!(
+                    formatter,
+                    "the topic holds message identifier {topic_message_id}, the message {encoded_message_id}"
+                )
+            }
+            Self::MessageVersionInvalid { message_id } => {
+                write!(formatter, "message identifier {message_id} has another format version than 0x00050000")
+            }
+            Self::UnknownDataType { data_type } => write!(formatter, "unknown message data type 0x{data_type:02x}"),
             Self::MalformedSsz(reason) => write!(formatter, "malformed SSZ: {reason}"),
             Self::HeaderDecode(reason) => write!(formatter, "cannot decode execution header: {reason}"),
             Self::ReceiptProofInvalid(reason) => write!(formatter, "receipt proof invalid: {reason}"),
+            Self::TransactionProofInvalid(reason) => write!(formatter, "transaction proof invalid: {reason}"),
             Self::ReceiptDecode(reason) => write!(formatter, "cannot decode receipt: {reason}"),
             Self::ReceiptFailed => write!(formatter, "the receipt reports a failed transaction"),
             Self::LogIndexOutOfRange { index, logs } => {
                 write!(formatter, "log index {index} is out of range, the receipt has {logs} logs")
             }
-            Self::LogEmitterMismatch => write!(formatter, "the log was not emitted by the expected vault"),
-            Self::LogTopicMismatch => write!(formatter, "the log topic is not the deposit event topic"),
-            Self::LogDecode(reason) => write!(formatter, "cannot decode deposit log: {reason}"),
+            Self::LogEmitterMismatch => write!(formatter, "the log was not emitted by the remote bridge"),
+            Self::LogTopicMismatch => write!(formatter, "the log topic is not the message event topic"),
+            Self::LogMalformed(reason) => write!(formatter, "malformed message log: {reason}"),
+            Self::MalformedEventData => write!(formatter, "the log event data is not the encoding of one bytes value"),
+            Self::MalformedMessage => write!(formatter, "the message is shorter than its header says"),
         }
     }
 }
 
 impl Error {
-    /// A stable code for the failure, used as the expected rejection reason in the withdrawal fixtures.
+    /// A stable code for the failure, used as the expected rejection reason in the message fixtures.
     pub fn reason_code(&self) -> &'static str {
         match self {
             Self::AnchorNotStored => "AnchorNotStored",
@@ -258,14 +309,21 @@ impl Error {
             Self::MalformedSsz(_) => "MalformedSsz",
             Self::HeaderDecode(_) => "HeaderDecode",
             Self::ReceiptProofInvalid(_) => "ReceiptProofInvalid",
+            Self::TransactionProofInvalid(_) => "TransactionProofInvalid",
             Self::ReceiptDecode(_) => "ReceiptDecode",
             Self::ReceiptFailed => "ReceiptFailed",
             Self::LogIndexOutOfRange { .. } => "LogIndexOutOfRange",
             Self::LogEmitterMismatch => "LogEmitterMismatch",
             Self::LogTopicMismatch => "LogTopicMismatch",
-            Self::LogDecode(_) => "LogDecode",
-            Self::TargetChainMismatch { .. } => "TargetChainMismatch",
-            Self::DestinationVaultMismatch { .. } => "DestinationVaultMismatch",
+            Self::LogMalformed(_) => "LogMalformed",
+            Self::MalformedEventData => "MalformedEventData",
+            Self::MalformedMessage => "MalformedMessage",
+            Self::IndexMismatch { .. } => "IndexMismatch",
+            Self::WrongSourceChain { .. } => "WrongSourceChain",
+            Self::WrongDestinationChain { .. } => "WrongDestinationChain",
+            Self::MessageIdMismatch { .. } => "MessageIdMismatch",
+            Self::MessageVersionInvalid { .. } => "MessageVersionInvalid",
+            Self::UnknownDataType { .. } => "UnknownDataType",
             Self::SignatureInNextPeriodWithoutCrossing => "SignatureInNextPeriodWithoutCrossing",
             _ => "LightClientUpdateRejected",
         }

@@ -23,13 +23,13 @@
 //! that the light client stored after the run before. A node that has no update
 //! for a needed period (pruned history) gives an error that names the period.
 //!
-//! # Old deposits
+//! # Old messages
 //!
-//! The vault picks the ancestry path from the distance between the anchor and the deposit slot. Up to 8192 slots it
+//! The bridge picks the ancestry path from the distance between the anchor and the source slot. Up to 8192 slots it
 //! takes `state.block_roots` of the anchor. Beyond that it takes `state.historical_summaries`, and this source builds
 //! that branch with `lc-core`:
 //!
-//! 1. It rebuilds the 8192 block roots of the deposit era from the canonical block roots of the node
+//! 1. It rebuilds the 8192 block roots of the source era from the canonical block roots of the node
 //!    (`/eth/v1/beacon/blocks/<slot>/root`, 404 for an empty slot). It never reads them from an old state: a node can
 //!    serve an old state one summary short, and that state does not hash to its own root.
 //! 2. It reads the anchor state, which the node must still serve whole. A node serves recent states only, so the
@@ -40,9 +40,7 @@
 //! from the fork that the chain schedule has at the slot of the state. The block parser reads the Capella block layout
 //! only, so the assembled update path needs a Capella chain. Ethereum uses the light-client endpoints for the update.
 
-use super::{
-    DepositBlock, HashEvidence, HistoricalEvidence, RootsEvidence, StoredHead, UpdatePlan,
-};
+use super::{HashEvidence, HistoricalEvidence, RootsEvidence, SourceBlock, StoredHead, UpdatePlan};
 use crate::error::{Error, Result};
 use crate::light_client::{
     ancestry_path, assemble_update, beacon_header_from_json, block_hash_gindex, block_roots_gindex,
@@ -426,32 +424,32 @@ impl HttpBeaconSource {
         Ok(roots)
     }
 
-    /// The ancestry branch for a deposit header under the anchor, on the path that the vault takes for the two slots.
+    /// The ancestry branch for a source header under the anchor, on the path that the bridge takes for the two slots.
     fn ancestry_branch_for(
         &self,
         anchor: &BeaconHeader,
-        deposit_slot: u64,
-        deposit_root: B256,
+        source_slot: u64,
+        source_root: B256,
     ) -> Result<Vec<B256>> {
         let state = self.state_for(anchor.state_root)?;
-        match ancestry_path(anchor.slot, deposit_slot)? {
+        match ancestry_path(anchor.slot, source_slot)? {
             AncestryPath::Recent => {
-                if state.block_root_at(deposit_slot) != deposit_root {
+                if state.block_root_at(source_slot) != source_root {
                     return Err(Error::Beacon(
-                        "the anchor state does not hold the deposit header in block_roots".into(),
+                        "the anchor state does not hold the source header in block_roots".into(),
                     ));
                 }
-                Ok(state.recent_ancestry_branch(deposit_slot))
+                Ok(state.recent_ancestry_branch(source_slot))
             }
             AncestryPath::Historical => {
-                let roots = self.era_roots(era_of(deposit_slot), &state)?;
-                if roots[(deposit_slot % SLOTS_PER_HISTORICAL_ROOT) as usize] != deposit_root {
+                let roots = self.era_roots(era_of(source_slot), &state)?;
+                if roots[(source_slot % SLOTS_PER_HISTORICAL_ROOT) as usize] != source_root {
                     return Err(Error::Beacon(format!(
-                        "the canonical block roots of era {} do not name the deposit header at slot {deposit_slot}",
-                        era_of(deposit_slot)
+                        "the canonical block roots of era {} do not name the source header at slot {source_slot}",
+                        era_of(source_slot)
                     )));
                 }
-                state.historical_ancestry_branch(self.chain, deposit_slot, &roots)
+                state.historical_ancestry_branch(self.chain, source_slot, &roots)
             }
         }
     }
@@ -637,39 +635,35 @@ impl HttpBeaconSource {
         }))
     }
 
-    /// The beacon part of the withdrawal for a deposit block, anchored at a header that the light client stores.
+    /// The beacon part of the message proof for a source block, anchored at a header that the light client stores.
     ///
     /// # Errors
-    /// `Error::Beacon` when the anchor is not on this beacon chain, the deposit slot is not before the anchor, or the
+    /// `Error::Beacon` when the anchor is not on this beacon chain, the source slot is not before the anchor, or the
     /// node lacks a block or a state.
-    pub fn withdrawal_path(
-        &self,
-        deposit: &DepositBlock,
-        anchor: &StoredHead,
-    ) -> Result<BeaconPath> {
-        let deposit_slot = self.slot_for_timestamp(deposit.timestamp)?;
+    pub fn message_path(&self, source: &SourceBlock, anchor: &StoredHead) -> Result<BeaconPath> {
+        let source_slot = self.slot_for_timestamp(source.timestamp)?;
         let anchor = self.head_header(anchor)?;
-        if deposit_slot >= anchor.slot {
+        if source_slot >= anchor.slot {
             return Err(Error::Beacon(format!(
-                "deposit slot {deposit_slot} is not before the anchor slot {}",
+                "source slot {source_slot} is not before the anchor slot {}",
                 anchor.slot
             )));
         }
         let block = Self::require(
-            self.block_by_id(&deposit_slot.to_string())?,
-            &format!("the block at slot {deposit_slot}"),
+            self.block_by_id(&source_slot.to_string())?,
+            &format!("the block at slot {source_slot}"),
         )?;
-        if block.payload.block_hash != deposit.hash {
+        if block.payload.block_hash != source.hash {
             return Err(Error::Beacon(format!(
-                "the beacon block at slot {deposit_slot} carries execution block {:#x}, not {:#x}",
-                block.payload.block_hash, deposit.hash
+                "the beacon block at slot {source_slot} carries execution block {:#x}, not {:#x}",
+                block.payload.block_hash, source.hash
             )));
         }
         let ancestry_branch =
-            self.ancestry_branch_for(&anchor, deposit_slot, header_root(&block.header))?;
+            self.ancestry_branch_for(&anchor, source_slot, header_root(&block.header))?;
         Ok(BeaconPath {
             anchor_header: anchor,
-            deposit_header: block.header,
+            source_header: block.header,
             ancestry_branch,
             block_hash_branch: block.block_hash_branch,
         })
@@ -813,7 +807,7 @@ mod tests {
 
     /// Claim: the slot of an execution timestamp is `(timestamp - genesis) / 10` on PulseChain, and a timestamp
     /// off the slot grid or before genesis is refused.
-    /// Why it matters: the deposit slot picks the beacon block that holds the deposit block.
+    /// Why it matters: the source slot picks the beacon block that holds the source block.
     #[test]
     fn slot_follows_from_the_timestamp() {
         let genesis = br#"{"data":{"genesis_time":"1000"}}"#.to_vec();
@@ -912,7 +906,7 @@ mod tests {
         assert!(output.newHeadSlot > previous_header.slot);
     }
 
-    // ---------------------------------------------------------------- old deposits
+    // ---------------------------------------------------------------- old messages
 
     use crate::light_client::test_support::synthetic_state;
     use crate::light_client::ForkData;
@@ -1039,7 +1033,7 @@ mod tests {
     /// Claim: roots that do not hash to the anchor's `block_summary_root` are refused and not cached, so one bad answer
     /// does not poison the era, and a later good answer succeeds.
     /// Why it matters: before the fix the unverified roots stayed in memory for the life of the process, and every
-    /// historical withdrawal of the era failed until a restart.
+    /// historical message proof of the era failed until a restart.
     #[test]
     fn bad_era_roots_are_not_cached_and_a_good_answer_follows() {
         let (canonical, eras) = chain_with_gaps();
@@ -1118,8 +1112,8 @@ mod tests {
     /// Claim: the era roots come from the canonical block roots of the node, one request per slot of the era, plus the
     /// search for the block before the era when its first slot is empty. An empty slot repeats the root before it. A
     /// second call for the same era makes no request.
-    /// Why it matters: the vault's `block_summary_root` is the root of exactly this vector. A wrong carry at one
-    /// slot makes every historical withdrawal of the era revert.
+    /// Why it matters: the bridge's `block_summary_root` is the root of exactly this vector. A wrong carry at one
+    /// slot makes every historical message proof of the era revert.
     #[test]
     fn era_roots_are_rebuilt_from_canonical_block_roots() {
         let (canonical, eras) = chain_with_gaps();
@@ -1154,11 +1148,11 @@ mod tests {
         );
     }
 
-    /// Claim: for a deposit more than 8192 slots below the anchor, the source builds the historical branch, and it
-    /// verifies at the generalized index that the vault builds (`lc-core`), under the anchor state root. For a deposit
-    /// within 8192 slots it builds the recent branch at the recent index. A deposit header that the canonical roots do
+    /// Claim: for a message more than 8192 slots below the anchor, the source builds the historical branch, and it
+    /// verifies at the generalized index that the bridge builds (`lc-core`), under the anchor state root. For a message
+    /// within 8192 slots it builds the recent branch at the recent index. A source header that the canonical roots do
     /// not name is refused, and a node that serves one wrong root is caught by the era formula.
-    /// Why it matters: the vault picks the path from the distance and checks the exact branch length and index.
+    /// Why it matters: the bridge picks the path from the distance and checks the exact branch length and index.
     #[test]
     fn ancestry_follows_the_distance_and_refuses_wrong_roots() {
         let (canonical, eras) = chain_with_gaps();
@@ -1175,25 +1169,25 @@ mod tests {
         let anchor = primed(&source, anchor_slot, &all_eras);
         let state_root = anchor.state_root;
 
-        let deposit_slot = 3 * 8192 + 1234;
-        let deposit_root = eras[0][1234];
+        let source_slot = 3 * 8192 + 1234;
+        let source_root = eras[0][1234];
         let branch = source
-            .ancestry_branch_for(&anchor, deposit_slot, deposit_root)
+            .ancestry_branch_for(&anchor, source_slot, source_root)
             .unwrap();
         assert_eq!(branch.len(), 44);
         let gindex =
-            ancestry_leaf_gindex(ChainKind::Pulsechain.spec(), anchor_slot, deposit_slot).unwrap();
-        assert_eq!(gindex, historical_leaf_gindex(59, 3, deposit_slot).unwrap());
+            ancestry_leaf_gindex(ChainKind::Pulsechain.spec(), anchor_slot, source_slot).unwrap();
+        assert_eq!(gindex, historical_leaf_gindex(59, 3, source_slot).unwrap());
         assert!(is_valid_exact_branch(
-            &deposit_root,
+            &source_root,
             &branch,
             gindex,
             &state_root
         ));
         assert!(!is_valid_exact_branch(
-            &deposit_root,
+            &source_root,
             &branch,
-            historical_leaf_gindex(59, 4, deposit_slot).unwrap(),
+            historical_leaf_gindex(59, 4, source_slot).unwrap(),
             &state_root
         ));
 
@@ -1214,10 +1208,10 @@ mod tests {
 
         // A header that the canonical roots do not name.
         let error = source
-            .ancestry_branch_for(&anchor, deposit_slot, keccak256(b"other"))
+            .ancestry_branch_for(&anchor, source_slot, keccak256(b"other"))
             .unwrap_err();
         assert!(
-            error.to_string().contains("do not name the deposit header"),
+            error.to_string().contains("do not name the source header"),
             "{error}"
         );
 
@@ -1243,9 +1237,9 @@ mod tests {
     }
 
     /// Claim: the historical layout evidence picks a stored slot in a completed era more than 8192 slots below the
-    /// anchor, and its branch verifies at the vault's index. With no such stored slot there is no evidence yet. An era
+    /// anchor, and its branch verifies at the bridge's index. With no such stored slot there is no evidence yet. An era
     /// that is still open at the anchor (no summary) is not a candidate.
-    /// Why it matters: the vault refuses a historical withdrawal until this row exists.
+    /// Why it matters: the bridge refuses a historical message proof until this row exists.
     #[test]
     fn historical_layout_evidence_uses_a_stored_slot_in_a_completed_era() {
         let (canonical, eras) = chain_with_gaps();

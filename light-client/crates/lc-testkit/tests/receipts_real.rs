@@ -6,7 +6,7 @@
 use alloy_primitives::{Bytes, B256};
 use alloy_trie::root::ordered_trie_root_encoded;
 use lc_core::execution::{decode_execution_header, decode_receipt};
-use lc_core::withdrawal::extract_receipt;
+use lc_core::message::extract_receipt;
 use lc_testkit::json::{hex_b256, load_response};
 use lc_testkit::pulsechain::{rebuild_block, RealBlock};
 

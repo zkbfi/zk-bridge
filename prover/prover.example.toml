@@ -39,15 +39,15 @@ targets = ["stdout"]        # "stdout", "webhook", or both. `prove --to <target>
 chain_id = 1
 chain = "ethereum"           # "ethereum" or "pulsechain": which fork table and chain specification the beacon chain uses
 beacon_url = "https://REPLACE"
-# The `evidence` command also needs the execution endpoint and the vault of the source chain.
+# The `evidence` command also needs the execution endpoint and the bridge of the source chain.
 rpc_url = "https://REPLACE"
-vault = "0x0000000000000000000000000000000000000001"          # REPLACE
+bridge = "0x0000000000000000000000000000000000000001"          # REPLACE
 
 [routes.ethereum_to_pulsechain.destination]
 chain_id = 369
 rpc_url = "https://REPLACE"
 light_client = "0x0000000000000000000000000000000000000002"   # REPLACE
-# The `evidence` command also needs the vault of the destination chain, and where to scan for stored heads.
-vault = "0x0000000000000000000000000000000000000003"          # REPLACE
+# The `evidence` command also needs the bridge of the destination chain, and where to scan for stored heads.
+bridge = "0x0000000000000000000000000000000000000003"          # REPLACE
 start_block = 0              # the block where the light client was deployed
 # log_block_range = 2000     # the largest block range of one eth_getLogs call

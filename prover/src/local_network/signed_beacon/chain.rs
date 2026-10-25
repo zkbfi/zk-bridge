@@ -576,7 +576,7 @@ mod tests {
 
     /// Claim: the state that the chain serves for a slot hashes, parsed in full, to the `state_root` of the header at that
     /// slot, and it holds the root of every earlier header in the ring, the parent included.
-    /// Why it matters: the light client stores header roots; a withdrawal proves a deposit header against the state root of
+    /// Why it matters: the light client stores header roots; a message proof proves a source header against the state root of
     /// the head. If the fast root and the served bytes disagreed, no state would match any header.
     #[test]
     fn the_served_state_hashes_to_the_state_root_of_its_header() {

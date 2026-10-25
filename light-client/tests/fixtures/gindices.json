@@ -114,18 +114,18 @@
       "syncCommitteeBranchLength": 6
     }
   },
-  "generatedBy": "cargo run -p lc-testkit --bin write-withdrawal-fixtures",
+  "generatedBy": "cargo run -p lc-testkit --bin write-message-fixtures",
   "historicalRootsLimit": "16777216",
   "historicalSummariesListDepth": 24,
   "notes": [
     "blockRootsGindexBase = blockRootsFieldGindex * 8192. The generalized index of block_roots[slot % 8192] is blockRootsGindexBase + (slot % 8192).",
     "blockHashGindex is the combined index of BeaconBlockBody.execution_payload.block_hash: executionPayloadGindex * 2^payloadDepth + 12. block_hash is field 12 of ExecutionPayload.",
-    "The vault picks the block roots row by the epoch of the ANCHOR header slot and the block hash row by the epoch of the DEPOSIT header slot.",
+    "The bridge picks the block roots row by the epoch of the ANCHOR header slot and the block hash row by the epoch of the SOURCE header slot.",
     "A branch has exactly floorlog2(gindex) entries. A branch with padding is refused.",
-    "The vault picks the ancestry path from the slots: recent when 0 < anchorSlot - depositSlot <= 8192 (leaf block_roots[depositSlot % 8192]), historical when the distance is above 8192.",
-    "Historical generalized index, in this order: g = historicalSummariesFieldGindex; g = g * 2 (list data root); g = g * 2^24 + index (HISTORICAL_ROOTS_LIMIT = 2^24); g = g * 2 + 0 (block_summary_root); g = g * 2^13 + depositSlot % 8192. index = depositSlot / 8192 - capellaEra, and the deposit era must be at least capellaEra.",
+    "The bridge picks the ancestry path from the slots: recent when 0 < anchorSlot - sourceSlot <= 8192 (leaf block_roots[sourceSlot % 8192]), historical when the distance is above 8192.",
+    "Historical generalized index, in this order: g = historicalSummariesFieldGindex; g = g * 2 (list data root); g = g * 2^24 + index (HISTORICAL_ROOTS_LIMIT = 2^24); g = g * 2 + 0 (block_summary_root); g = g * 2^13 + sourceSlot % 8192. index = sourceSlot / 8192 - capellaEra, and the source era must be at least capellaEra.",
     "historicalAncestryBranchLength is the exact length of the historical ancestry branch: 44 in the Capella and Deneb layouts, 45 in the Electra and Fulu layouts.",
-    "capellaEra = floor(capellaForkSlot / 8192): Ethereum 758 (Capella slot 6209536), PulseChain 0 (Capella epoch 3, slot 96). It is an immutable vault argument."
+    "capellaEra = floor(capellaForkSlot / 8192): Ethereum 758 (Capella slot 6209536), PulseChain 0 (Capella epoch 3, slot 96). It is an immutable bridge argument."
   ],
   "slotsPerHistoricalRoot": "8192",
   "source": "ethereum/consensus-specs master, fetched 2026-10-20. BeaconState.block_roots: specs/phase0/beacon-chain.md (field 5). BeaconState sync committee and finality indices: specs/altair/light-client/sync-protocol.md and specs/electra/light-client/sync-protocol.md. execution_payload: specs/capella/light-client/sync-protocol.md (25). ExecutionPayload field lists: specs/capella/beacon-chain.md (15 fields) and specs/deneb/beacon-chain.md (17 fields, unchanged in Electra and Fulu). BeaconState.historical_summaries: container BeaconState in specs/capella/beacon-chain.md (28 fields, historical_summaries is field 27, new in Capella; HistoricalSummary and HistoricalSummaries.LIMIT = HISTORICAL_ROOTS_LIMIT = 2^24 in the same file); specs/deneb, specs/electra and specs/fulu beacon-chain.md only append fields after it (Electra 37, Fulu 38), so it stays field 27. process_historical_summaries_update (specs/capella/beacon-chain.md) appends one summary per era."

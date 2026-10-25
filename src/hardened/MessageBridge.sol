@@ -7,7 +7,7 @@ import {MerkleTrie} from "./vendor/optimism/trie/MerkleTrie.sol";
 import {RLPReader} from "./vendor/optimism/rlp/RLPReader.sol";
 import {BeaconProofVerifier} from "./BeaconProofVerifier.sol";
 import {AmbMessageCodec} from "./AmbMessageCodec.sol";
-import {IAMB} from "./mediator/IAMB.sol";
+import {IAMB} from "./IAMB.sol";
 
 /// @title MessageBridge
 /// @notice One end of a two-chain message bridge with the interface of the OmniBridge Arbitrary Message Bridge. A

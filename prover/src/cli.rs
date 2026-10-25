@@ -61,10 +61,10 @@ pub enum Command {
     /// Exit code 0: a proof was made and handed off. Exit code 3: the starting head already is the newest final header, so
     /// there is nothing to prove. Exit code 1: an error.
     Prove(ProveArguments),
-    /// Print the evidence that withdraws one deposit, as one JSON object.
+    /// Print the evidence that delivers one message, as one JSON object.
     ///
-    /// The deposit is named by the hash of its source transaction and the index of its log inside the receipt. The object
-    /// holds the calldata of the withdrawal, and the layout calls that must go first when the vault lacks a row. The
+    /// The message is named by the hash of its source transaction and the index of its log inside the receipt. The object
+    /// holds the calldata of `executeMessage`, and the layout calls that must go first when the bridge lacks a row. The
     /// command sends nothing: a stateful server sends the calls.
     Evidence(EvidenceArguments),
 }
@@ -105,10 +105,10 @@ pub struct EvidenceArguments {
     /// The route of the configuration. It may be left out when the file has exactly one route.
     #[arg(long)]
     pub route: Option<String>,
-    /// The hash of the deposit transaction on the source chain.
+    /// The hash of the transaction on the source chain that sent the message.
     #[arg(long)]
     pub tx: String,
-    /// The index of the `DepositInitiated` log inside the receipt of that transaction.
+    /// The index of the `UserRequestForAffirmation` log inside the receipt of that transaction.
     #[arg(long)]
     pub log_index: u64,
     /// The slot of the stored header to anchor at. Default: the head of the light client.
@@ -430,8 +430,8 @@ fn evidence_request<'a>(
         source: clients.source,
         destination: clients.destination,
         beacon: clients.beacon,
-        source_vault: route.source.vault_address()?,
-        destination_vault: route.destination.vault_address()?,
+        source_bridge: route.source.bridge_address()?,
+        destination_bridge: route.destination.bridge_address()?,
         light_client: route.destination.light_client_address()?,
         transaction,
         log_index: arguments.log_index,

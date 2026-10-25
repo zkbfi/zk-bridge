@@ -1,4 +1,4 @@
-//! Derives the PulseChain light-client and withdrawal-path fixtures from raw beacon data.
+//! Derives the PulseChain light-client and message-path fixtures from raw beacon data.
 //!
 //! Usage: `derive-pulsechain-fixtures <work-dir> <fixture-dir> <beacon-url> <fetched-on>`
 //!
@@ -126,7 +126,7 @@ fn main() {
     );
     write_fixture(out, "light_client_update.json", &source, fetched_on, json!({ "update": update, "store": store }));
 
-    // Beacon paths for withdrawal proofs: anchor = attested header; deposit candidates = finalized block and the ancestor.
+    // Beacon paths for message proofs: anchor = attested header; source candidates = finalized block and the ancestor.
     let path_entry = |name: &str, block: &CheckedBlock| {
         let slot = block.block.header.slot;
         let mut roots_branch = branch_for_leaf(&state.block_roots, (slot % 8192) as usize).1;

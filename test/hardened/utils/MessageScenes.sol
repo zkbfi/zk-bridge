@@ -8,21 +8,15 @@ import {BeaconBlockHeader} from "../../../src/hardened/SSZ.sol";
 import {HistoricalScenes} from "./HistoricalScenes.sol";
 import {OpeningScenes} from "./OpeningScenes.sol";
 import {MessageFixtures} from "./MessageFixtures.sol";
-import {ReceiptFixtures} from "./ReceiptFixtures.sol";
 import {MessageRecorder, MessageReverter, MessageBurner, MessageReentrant, MessageSending} from "./MessageTargets.sol";
 
-/// @notice Builds message evidence on top of the scenes of the vault tests. The beacon levels above the receipts are the
-/// same sparse trees. The receipts trie and the transactions trie come from `MessageFixtures`.
+/// @notice The bridges, the targets and the message proofs of the bridge tests, on top of the beacon scenes. The receipts
+/// trie and the transactions trie come from `MessageFixtures`.
 ///
 /// `bridge` is the destination: chain B, at the address that the fixture messages name nowhere, with the fixture remote
 /// bridge as its remote. `sourceBridge` is the sending end, chain A, at the address of the emitter of every fixture log,
 /// so its first send has the identifier of the first fixture message.
 abstract contract MessageScenes is HistoricalScenes, OpeningScenes {
-    /// @dev The storage word that holds the nonce (the low 8 bytes), the flag `depositsOpen` (the next byte) and the
-    /// sender of the context. A test pins it.
-    uint256 internal constant BRIDGE_FLAG_WORD_SLOT = 0;
-    uint256 internal constant BRIDGE_FLAG_BIT_OFFSET = 64;
-
     /// @dev The address of the destination bridge. Fixture messages do not name it.
     address internal constant DESTINATION_BRIDGE = 0x7777777777777777777777777777777777777777;
 
@@ -55,7 +49,7 @@ abstract contract MessageScenes is HistoricalScenes, OpeningScenes {
     /// @dev The sending end on chain A, open, at the emitter address of the fixture logs.
     function _newSourceBridge(uint64 cutoff) internal returns (MessageBridge created) {
         created = _deploySourceBridge(cutoff, address(gateA));
-        _openSends(created);
+        _openDepositsWithoutProof(created);
     }
 
     /// @dev The sending end on chain A with a chosen gate. It is closed: `depositsOpen` is false.
@@ -80,7 +74,8 @@ abstract contract MessageScenes is HistoricalScenes, OpeningScenes {
         returns (MessageBridge created)
     {
         created = _deployDestinationBridge(client, cutoff, capellaEra, address(gateB));
-        _openSends(created);
+        _openDepositsWithoutProof(created);
+        _registerBridge(created);
     }
 
     /// @dev The destination on chain B with a chosen gate. It is closed: `depositsOpen` is false. An earlier bridge at
@@ -103,71 +98,21 @@ abstract contract MessageScenes is HistoricalScenes, OpeningScenes {
         created = MessageBridge(DESTINATION_BRIDGE);
     }
 
-    /// @dev Sets the flag as `openDeposits` would, without a proof. A test pins the slot and the offset.
-    function _openSends(MessageBridge target) internal {
-        bytes32 word = vm.load(address(target), bytes32(BRIDGE_FLAG_WORD_SLOT));
-        vm.store(address(target), bytes32(BRIDGE_FLAG_WORD_SLOT), word | bytes32(uint256(1) << BRIDGE_FLAG_BIT_OFFSET));
-        require(target.depositsOpen(), "MessageScenes: the flag slot moved");
-    }
-
     // ---------------------------------------------------------------- scenes
-
-    /// @dev The execution header that holds the roots of the message tries.
-    function _messageHeaderRlp() internal pure returns (bytes memory) {
-        return _executionHeaderRlp(MessageFixtures.RECEIPTS_ROOT, MessageFixtures.TRANSACTIONS_ROOT, 17);
-    }
 
     /// @dev A recent scene (the anchor is 2000 slots above the source block) with the layouts added to `target`.
     function _messageScene(MessageBridge target) internal returns (Scene memory scene) {
         SceneParams memory params = _defaultParams();
-        scene = _buildScene(ReceiptFixtures.legacy(), params, _messageHeaderRlp());
+        scene = _buildScene(MessageFixtures.deliver(), params, _messageHeaderRlp());
         _storeScene(params, scene);
         _addLayouts(target, params, scene);
     }
 
-    /// @dev The proof of one fixture message in a recent scene.
-    function _messageProof(Scene memory scene, MessageFixtures.Named memory named)
-        internal
-        pure
-        returns (MessageBridge.MessageProof memory)
-    {
-        return _proofOf(
-            scene.proof.anchorHeader,
-            scene.proof.depositHeader,
-            scene.proof.ancestryBranch,
-            scene.proof.blockHashBranch,
-            scene.proof.executionHeaderRlp,
-            named
-        );
-    }
-
-    /// @dev The proof of one fixture message with the given beacon part. The call builds a deep copy, so a test that
-    /// edits the proof never edits the scene.
-    function _proofOf(
-        BeaconBlockHeader memory anchor,
-        BeaconBlockHeader memory source,
-        bytes32[] memory ancestryBranch,
-        bytes32[] memory blockHashBranch,
-        bytes memory executionHeaderRlp,
-        MessageFixtures.Named memory named
-    ) internal pure returns (MessageBridge.MessageProof memory) {
-        return abi.decode(
-            abi.encode(
-                MessageBridge.MessageProof({
-                    anchorHeader: anchor,
-                    sourceHeader: source,
-                    ancestryBranch: ancestryBranch,
-                    blockHashBranch: blockHashBranch,
-                    executionHeaderRlp: executionHeaderRlp,
-                    receiptProof: MessageFixtures.receiptProofFor(named.transactionIndex),
-                    receiptIndex: named.transactionIndex,
-                    transactionProof: MessageFixtures.transactionProofFor(named.transactionIndex),
-                    transactionIndex: named.transactionIndex,
-                    logIndex: named.logIndex
-                })
-            ),
-            (MessageBridge.MessageProof)
-        );
+    /// @notice A light client that starts at `initialSlot`, and a destination bridge on chain B with `capellaEra`. The
+    /// fixture's `lightClientForB` is replaced, so every later scene stores its headers in the new client.
+    function _historicalWorld(uint64 initialSlot, uint64 capellaEra) internal returns (MessageBridge created) {
+        _freshLightClientForB(initialSlot);
+        created = _newDestinationBridge(lightClientForB, 0, capellaEra);
     }
 
     /// @dev Builds a historical scene for the first fixture message (an anchor more than 8192 slots above its block), makes

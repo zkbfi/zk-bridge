@@ -14,6 +14,8 @@
       "ceilingBasisPoints": "0"
     },
     "flowLimiter": "0x0000000000000000000000000000000000000000",
+    "wrappedNative": "REPLACE_WITH_WRAPPED_NATIVE_TOKEN_ADDRESS_ON_CHAIN_A_OR_THE_ZERO_ADDRESS_FOR_NO_NATIVE_COIN_ROUTER",
+    "deployFeeRouter": "false",
     "lightClient": {
       "programVKey": "REPLACE_WITH_LIGHT_CLIENT_PROGRAM_VKEY",
       "genesisValidatorsRoot": "REPLACE_WITH_GENESIS_VALIDATORS_ROOT_OF_CHAIN_B",
@@ -56,6 +58,8 @@
       "ceilingBasisPoints": "0"
     },
     "flowLimiter": "0x0000000000000000000000000000000000000000",
+    "wrappedNative": "REPLACE_WITH_WRAPPED_NATIVE_TOKEN_ADDRESS_ON_CHAIN_B_OR_THE_ZERO_ADDRESS_FOR_NO_NATIVE_COIN_ROUTER",
+    "deployFeeRouter": "false",
     "lightClient": {
       "programVKey": "REPLACE_WITH_LIGHT_CLIENT_PROGRAM_VKEY",
       "genesisValidatorsRoot": "REPLACE_WITH_GENESIS_VALIDATORS_ROOT_OF_CHAIN_A",
@@ -95,11 +99,5 @@
       "initialSyncCommitteeHash": "REPLACE_WITH_COMMITTEE_HASH_AT_CHECKPOINT",
       "initialNextSyncCommitteeHash": "REPLACE_WITH_NEXT_COMMITTEE_HASH_AT_CHECKPOINT"
     }
-  },
-  "tokenPairs": [
-    {
-      "chainA": "REPLACE_WITH_TOKEN_ADDRESS_ON_CHAIN_A",
-      "chainB": "REPLACE_WITH_TOKEN_ADDRESS_ON_CHAIN_B"
-    }
-  ]
+  }
 }

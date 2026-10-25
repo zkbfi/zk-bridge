@@ -9,7 +9,7 @@ use lc_testkit::block_bytes::PayloadFields;
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use zk_bridge_prover::beacon::http::HttpBeaconSource;
-use zk_bridge_prover::beacon::{DepositBlock, StoredHead};
+use zk_bridge_prover::beacon::{SourceBlock, StoredHead};
 use zk_bridge_prover::error::{Error, Result};
 use zk_bridge_prover::light_client::{ChainKind, LightClientOutput};
 use zk_bridge_prover::local_network::signed_beacon::checkpoint::Checkpoint;
@@ -117,8 +117,8 @@ impl Chain {
         default_first_slot(self.kind)
     }
 
-    pub fn deposit(&self, number: u64) -> DepositBlock {
-        DepositBlock {
+    pub fn source_block(&self, number: u64) -> SourceBlock {
+        SourceBlock {
             number,
             hash: execution_hash(number),
             timestamp: payload(number, self.kind.seconds_per_slot()).timestamp,

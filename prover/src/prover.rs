@@ -1,5 +1,5 @@
-//! The proving backends. Only light-client updates (and, for a worker, fork observations) are proven: a withdrawal
-//! needs no proof, because the vault checks the evidence directly.
+//! The proving backends. Only light-client updates (and, for a worker, fork observations) are proven: delivering a
+//! message needs no zero-knowledge proof, because the bridge checks the evidence directly.
 //!
 //! - [`OracleProver`] is for development and tests. It runs the program natively first and refuses to sign when
 //!   that fails. Then it signs `keccak256(programVKey ‖ sha256(publicValues))`, which `OracleSP1Verifier` accepts.

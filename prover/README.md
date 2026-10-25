@@ -4,7 +4,7 @@ The proof producer of the hardened bridge. It makes proofs and hands them to oth
 
 The producer keeps no state. It has no database, no wallet, no keystore and no transaction code. It holds no trusted role: the contracts check everything that a server sends. Anyone can run it.
 
-The producer once was a full relayer. That version watched deposits, kept a database and sent every transaction. It lives on the branch `archive/full-relayer`. This crate is the part that makes proofs.
+The producer once was a full relayer. That version watched deposits and withdrawals, kept a database and sent every transaction. It lives on the branch `archive/full-relayer`. This crate is the part that makes proofs.
 
 Build contract: `docs/hardened-build-contract.md`, section "Prover service".
 
@@ -13,7 +13,7 @@ cargo build --release --no-default-features    # production build: no test crate
 cargo build --release                           # adds the signed beacon chain that the tests use
 zk-bridge-prover --config prover.toml prove                              # one proof, from the head that the light client stores
 zk-bridge-prover --config prover.toml prove --route <name> --to webhook  # choose the route and the handoff target
-zk-bridge-prover --config prover.toml evidence --tx <hash> --log-index <n>   # the evidence that withdraws one deposit
+zk-bridge-prover --config prover.toml evidence --tx <hash> --log-index <n>   # the evidence that delivers one message
 ```
 
 The command line never takes a key. A secret lives in an environment variable, and the configuration names the variable (see `prover.example.toml`).
@@ -114,47 +114,49 @@ A proof stays valid until the light client head moves. After another update, the
 
 ## The `evidence` command
 
-A withdrawal needs no zero-knowledge proof. The destination vault checks the evidence itself. The `evidence` command builds that evidence for one deposit and prints it. It sends nothing. A server sends the calls.
+Delivering a message needs no zero-knowledge proof. The destination `MessageBridge` checks the evidence itself. The `evidence` command builds that evidence for one message and prints it. It sends nothing. A server sends the calls.
 
 ```
 zk-bridge-prover --config prover.toml evidence --tx <hash> --log-index <n> [--route <name>] [--anchor-slot <n>]
 ```
 
-The deposit is the log at index `n` in the receipt of the source transaction. The index counts inside the receipt, not inside the block. The anchor is the head of the destination light client, or the stored header at `--anchor-slot`.
+The message is the `UserRequestForAffirmation` log at index `n` in the receipt of the source transaction. The index counts inside the receipt, not inside the block. The anchor is the head of the destination light client, or the stored header at `--anchor-slot`.
 
-The command reads two execution chains, the beacon node of the source chain and the destination light client. Then it checks its own work:
+The command reads two execution chains, the beacon node of the source chain and the destination light client. For the source block it fetches the receipts and the raw bytes of every transaction (`eth_getRawTransactionByHash`, one call per transaction, each answer checked against its hash). It builds the receipts trie and the transactions trie, and it checks each root against the block header. Then it proves the receipt and the transaction at one index, as `executeMessage` requires. The source node must serve `eth_getRawTransactionByHash`. Then the command checks its own work:
 
-- The destination vault names the source vault, the source chain, its own chain and the light client as the file says. The command reads each relation from the vault.
-- The log comes from the source vault, is a `DepositInitiated` event, and names the destination vault and chain of the route.
-- The evidence passes the vault checks, which `lc-core` runs natively against the anchor root that the light client stores.
-- The deposit that the evidence proves equals the deposit in the log.
+- The destination bridge names the source bridge, the source chain, its own chain and the light client as the file says. The command reads each relation from the bridge (`remoteBridge`, `remoteChainId`, `localChainId`, `lightClient`).
+- The log comes from the source bridge and is a `UserRequestForAffirmation` event. The message names the source chain and the destination chain of the route.
+- The evidence passes the bridge checks, which `lc-core` runs natively against the anchor root that the light client stores (`lc_core::message::verify_message`). The check proves the source transaction hash. It must equal the hash that you passed in `--tx`.
+- The message that the evidence proves equals the message in the log.
 
 The result is one JSON object. Long values are shortened here.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "route": "ethereum_to_pulsechain",
   "sourceTransactionHash": "0xabab…",
   "logIndex": 1,
-  "deposit": {
-    "nonce": "0x7474…",
-    "token": "0x7171…",
+  "message": {
+    "messageId": "0x0005…",
     "sender": "0x7272…",
-    "recipient": "0x7373…",
-    "amount": "1500000000000000000",
+    "executor": "0x7373…",
+    "gasLimit": 250000,
+    "dataType": 0,
+    "data": "0xabcdef",
     "sourceBlockNumber": 15,
     "sourceBlockHash": "0x847b…",
-    "depositSlot": 10862670
+    "sourceSlot": 10862670
   },
-  "destination": { "chainId": 369, "vault": "0xb2b2…", "lightClient": "0xb3b3…" },
+  "destination": { "chainId": 369, "bridge": "0xb2b2…", "lightClient": "0xb3b3…" },
   "anchor": { "slot": 10862679, "root": "0xc7a5…" },
-  "alreadyClaimed": false,
-  "withdraw": { "to": "0xb2b2…", "data": "0x30568d83…" },
+  "deliveryStatus": "notDelivered",
+  "alreadyDelivered": false,
+  "execute": { "to": "0xb2b2…", "data": "0xa5442804…" },
   "prerequisites": [
     {
       "function": "addBlockHashLayout",
-      "reason": "no validated block hash row covers the deposit slot 10862670; this call uses the stored header at slot 10862664",
+      "reason": "no validated block hash row covers the source slot 10862670; this call uses the stored header at slot 10862664",
       "to": "0xb2b2…",
       "data": "0x…"
     }
@@ -163,11 +165,23 @@ The result is one JSON object. Long values are shortened here.
 }
 ```
 
-The vault needs a validated layout row for each generalized index that the evidence uses. Anyone may add a row, and the chain validates it. `prerequisites` lists the calls that add the missing rows, in the order to send them. The list is empty when the vault has every row.
+The bridge needs a validated layout row for each generalized index that the evidence uses. Anyone may add a row, and the chain validates it. `prerequisites` lists the calls that add the missing rows, in the order to send them. The list is empty when the bridge has every row.
 
-The calls for one function are alternatives. After each call, read the layout views of the vault again, and skip the rest once a row covers the slot. The block hash row has up to two calls: one from the stored header at or below the deposit slot, and one from the stored header at or below the anchor.
+The calls for one function are alternatives. After each call, read the layout views of the bridge again, and skip the rest once a row covers the slot. The block hash row has up to two calls: one from the stored header at or below the source slot, and one from the stored header at or below the anchor.
 
-When the light client stored too few heads to validate a row, the command stops with an error that says what is missing. Wait for more updates, then run it again. When `alreadyClaimed` is true, the vault paid the deposit already, and the withdrawal would revert.
+When the light client stored too few heads to validate a row, the command stops with an error that says what is missing. Wait for more updates, then run it again.
+
+### The delivery status
+
+A message executes once, and delivery is final. The bridge marks the message before it calls the target. The mark stays whether the call succeeds or reverts. `deliveryStatus` has three values.
+
+| Value | Meaning | Read from |
+|---|---|---|
+| `notDelivered` | The bridge never executed the message. `executeMessage` can still succeed. | `messageCallStatus` is false and `failedMessageDataHash` is zero. |
+| `succeeded` | The bridge executed the message and the call to the target succeeded. | `messageCallStatus` is true. |
+| `failed` | The bridge executed the message and the call to the target failed. The call cannot repeat. | `failedMessageDataHash` is not zero. It is the keccak256 of the call data. |
+
+`alreadyDelivered` is true for `succeeded` and for `failed`. When it is true, `executeMessage` would revert with `AlreadyDelivered`. The bridge has no public view of its delivery state. These two views give it, except for a message in progress, which exists only inside the call to the target.
 
 ## Catching up a light client that lags
 
@@ -175,9 +189,9 @@ One update moves a light client across at most one sync committee period. The be
 
 A node that pruned the update of a needed period cannot serve the catch-up. The error names the period and asks for a node with a longer history of light-client updates.
 
-## Old deposits
+## Old messages
 
-The vault takes `state.block_roots` of the anchor for a deposit up to 8192 slots below it, and `state.historical_summaries` beyond that. The evidence builder builds either branch with `lc-core`. For an old deposit, it rebuilds the 8192 block roots of the deposit era from the canonical block roots of the node (`/eth/v1/beacon/blocks/<slot>/root`). It never reads them from an old state. The node must still serve the state of the anchor, so anchor at the newest stored head.
+The bridge takes `state.block_roots` of the anchor for a source block up to 8192 slots below it, and `state.historical_summaries` beyond that. The evidence builder builds either branch with `lc-core`. For an old message, it rebuilds the 8192 block roots of the source era from the canonical block roots of the node (`/eth/v1/beacon/blocks/<slot>/root`). It never reads them from an old state. The node must still serve the state of the anchor, so anchor at the newest stored head.
 
 ## Tests
 
@@ -190,8 +204,8 @@ scripts/check-crate-ages.sh        # every locked crate was published on or befo
 | Test | What it shows |
 |---|---|
 | `tests/produce.rs` | The producer and the `prove` command on a signed beacon chain, with the oracle backend: the package, the exit codes, the webhook and the route mode. |
-| `tests/evidence.rs` | The `evidence` command on a synthetic world: a beacon chain, a source chain with one deposit and a destination chain with a vault. The evidence passes the native vault check. |
-| `tests/signed_beacon.rs` | The beacon source on the signed beacon chain: the update from a stored head, the withdrawal path and the layout evidence. |
+| `tests/evidence.rs` | The `evidence` command on a synthetic world: a beacon chain, a source chain with one message in the second transaction of a block, and a destination chain with a message bridge. The evidence passes the native bridge check, and the proven transaction hash is the hash of the sending transaction. |
+| `tests/signed_beacon.rs` | The beacon source on the signed beacon chain: the update from a stored head, the message path and the layout evidence. |
 | `tests/remote_prover.rs` | The remote backend against a fake worker, with a real Groth16 proof and the checks that refuse a changed proof. |
 | `tests/sp1_execute.rs` | The two guest programs in the SP1 executor against `lc-core` (cargo feature `sp1`). Run it with `cargo test --features sp1 --test sp1_execute -- --test-threads=1`. It takes about 4.5 minutes and needs the guest program files from `cargo prove build` in `light-client/guests/*`. The full Groth16 proof test is ignored on a laptop. |
 

@@ -4,9 +4,11 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {MockERC20} from "../../../../src/mocks/MockERC20.sol";
+import {MockWrappedNative} from "../../../../src/mocks/MockWrappedNative.sol";
 import {IFlowLimiter} from "../../../../src/hardened/IFlowLimiter.sol";
-import {IAMB} from "../../../../src/hardened/mediator/IAMB.sol";
+import {IAMB} from "../../../../src/hardened/IAMB.sol";
 import {TokenMediator} from "../../../../src/hardened/mediator/TokenMediator.sol";
+import {MessageBridge} from "../../../../src/hardened/MessageBridge.sol";
 
 /// @notice An Arbitrary Message Bridge for tests. It records every message that a mediator sends, and a test delivers
 /// it on the other side, as the real bridge would: the context (`messageSender`, `messageSourceChainId`, `messageId`)
@@ -29,11 +31,16 @@ contract MockAMB is IAMB {
     bytes32 public messageId;
     bytes32 public messageSourceChainId;
     bytes32 public transactionHash;
-    uint256 public constant maxGasPerTx = 10_000_000;
+    uint256 public maxGasPerTx = 10_000_000;
 
     constructor(uint256 chainId_, uint256 peerChainId_) {
         chainId = chainId_;
         peerChainId = peerChainId_;
+    }
+
+    /// @notice Lowers or raises the ceiling that the mock reports, so a test can check what a mediator does with it.
+    function setMaxGasPerTx(uint256 maximum) external {
+        maxGasPerTx = maximum;
     }
 
     function sentCount() external view returns (uint256) {
@@ -87,10 +94,16 @@ contract MockAMB is IAMB {
             );
     }
 
-    /// @notice The entry that the fee router calls. The proof is `abi.encode(source, index)`.
-    function executeMessage(bytes calldata encodedProof) external {
-        (MockAMB source, uint256 index) = abi.decode(encodedProof, (MockAMB, uint256));
+    /// @notice The entry that the fee router calls. The mock reads no proof: it takes the source bridge and the message
+    /// index from `abi.encode(source, index)` in the `executionHeaderRlp` field (see `proofOf`).
+    function executeMessage(MessageBridge.MessageProof calldata proof) external {
+        (MockAMB source, uint256 index) = abi.decode(proof.executionHeaderRlp, (MockAMB, uint256));
         deliver(source, index);
+    }
+
+    /// @notice A proof that names message `index` of `source`, in the form that `executeMessage` reads.
+    function proofOf(MockAMB source, uint256 index) public pure returns (MessageBridge.MessageProof memory proof) {
+        proof.executionHeaderRlp = abi.encode(source, index);
     }
 
     /// @notice Calls `target` with a chosen context. Tests use it to forge a sender or a chain.
@@ -238,21 +251,6 @@ contract HookToken is ERC20 {
         target = address(0);
         (hookOk, hookReturned) = callee.call(data);
         return true;
-    }
-}
-
-/// @notice The wrapped native token of a test chain.
-contract MockWrappedNative is ERC20 {
-    constructor() ERC20("Wrapped Native", "WNAT") {}
-
-    function deposit() external payable {
-        _mint(msg.sender, msg.value);
-    }
-
-    function withdraw(uint256 amount) external {
-        _burn(msg.sender, amount);
-        (bool ok,) = msg.sender.call{value: amount}("");
-        require(ok, "send failed");
     }
 }
 

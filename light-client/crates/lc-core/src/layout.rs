@@ -61,8 +61,8 @@ pub const BLOCK_HASH_FIELD_INDEX: u64 = 12;
 
 /// The tree depths of `BeaconState` that a layout position may have: 32, 64 or 128 leaves (up to 128 fields).
 ///
-/// The same rule as `_isStateFieldPosition` in `BridgeVault.sol`. Today's layouts use depth 5 (Capella, Deneb) and depth 6
-/// (Electra, Fulu). Depth 7 is allowed so that a later fork with more than 64 fields needs no new vault.
+/// The same rule as `_isStateFieldPosition` in `BeaconProofVerifier.sol`. Today's layouts use depth 5 (Capella, Deneb) and depth 6
+/// (Electra, Fulu). Depth 7 is allowed so that a later fork with more than 64 fields needs no new bridge.
 pub const STATE_DEPTHS: core::ops::RangeInclusive<u32> = 5..=7;
 
 /// The tree depths of `BeaconBlockBody` that a block hash position may have: 16 or 32 leaves.
@@ -119,7 +119,7 @@ pub const BLOCK_HASH_GINDEX_DENEB: u64 = EXECUTION_PAYLOAD_GINDEX * 32 + 12;
 /// Whether `gindex` is field `field_index` of a `BeaconState` tree of an accepted depth: `2^depth + field_index`.
 ///
 /// This is the one rule for `block_roots` and `historical_summaries` positions. It mirrors `_isStateFieldPosition` in
-/// `BridgeVault.sol`. The accepted positions of `block_roots` are 37, 69 and 133, and of `historical_summaries` 59, 91 and
+/// `BeaconProofVerifier.sol`. The accepted positions of `block_roots` are 37, 69 and 133, and of `historical_summaries` 59, 91 and
 /// 155. Only 37, 69, 59 and 91 exist in a layout of today.
 pub fn is_state_field_position(gindex: u64, field_index: u64) -> bool {
     if gindex == 0 {
@@ -144,7 +144,7 @@ pub fn is_historical_summaries_position(gindex: u64) -> bool {
 
 /// Whether `gindex` is the position of `execution_payload.block_hash` in a body and a payload of accepted depths:
 /// `(2^body_depth + 9) * 2^payload_depth + 12`. These are 412, 668, 812 and 1324. It mirrors `_isBlockHashPosition` in
-/// `BridgeVault.sol`. Only 412 (Capella) and 812 (Deneb and later) exist in a layout of today.
+/// `BeaconProofVerifier.sol`. Only 412 (Capella) and 812 (Deneb and later) exist in a layout of today.
 pub fn is_block_hash_position(gindex: u64) -> bool {
     BODY_DEPTHS.clone().any(|body_depth| {
         let payload_field = (1u64 << body_depth) + EXECUTION_PAYLOAD_FIELD_INDEX;
@@ -256,13 +256,13 @@ mod tests {
         }
     }
 
-    /// Claim: the position rule accepts exactly the vault's set. `block_roots` is 37, 69 or 133, `historical_summaries` is
+    /// Claim: the position rule accepts exactly the bridge's set. `block_roots` is 37, 69 or 133, `historical_summaries` is
     /// 59, 91 or 155, and the block hash is 412, 668, 812 or 1324, each written out by hand from the field index and the
     /// depth. The neighbour on each side of every accepted position is refused.
-    /// Why it matters: the vault accepts these positions and no others. A light client that knew fewer would refuse a
-    /// layout the vault accepts, and one that knew more would accept a layout the vault refuses.
+    /// Why it matters: the bridge accepts these positions and no others. A light client that knew fewer would refuse a
+    /// layout the bridge accepts, and one that knew more would accept a layout the bridge refuses.
     #[test]
-    fn position_rule_matches_the_vault() {
+    fn position_rule_matches_the_bridge() {
         for position in [37, 69, 133] {
             assert!(is_block_roots_position(position));
             assert!(!is_block_roots_position(position - 1), "{position}: the field before");
@@ -298,7 +298,7 @@ mod tests {
     }
 
     /// Claim: every position in today's layout tables obeys the rule. Why it matters: the table and the rule must not
-    /// drift apart, because the vault accepts only positions that obey the rule.
+    /// drift apart, because the bridge accepts only positions that obey the rule.
     #[test]
     fn todays_layouts_obey_the_rule() {
         for layout in [CAPELLA_DENEB_STATE_LAYOUT, ELECTRA_STATE_LAYOUT] {

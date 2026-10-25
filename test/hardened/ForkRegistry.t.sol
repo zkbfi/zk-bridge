@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
 import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
-import {BridgeVault} from "../../src/hardened/BridgeVault.sol";
+import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
 import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
 import {OracleSP1Verifier} from "../../src/mocks/OracleSP1Verifier.sol";
 import {GateSupport} from "./utils/GateSupport.sol";
@@ -211,7 +211,7 @@ contract ForkRegistryTest is GateSupport {
 
     /// Claim: the attested slot must be strictly past the light-client head. Shows: a slot equal to the head and a slot
     /// before it revert `ObservationNotFresh`; head plus one passes. Matters: without it an old signature (for example
-    /// one made under a version that the chain left long ago) could be replayed to make the gate refuse deposits
+    /// one made under a version that the chain left long ago) could be replayed to make the gate refuse sends
     /// or to seal it falsely.
     function test_HB02_registry_freshnessNeedsASlotPastTheHead() public {
         _observeExpectingRevert(
@@ -407,25 +407,20 @@ contract ForkRegistryTest is GateSupport {
         _observe(_observation(UNKNOWN_FORK, _head() + 100));
     }
 
-    /// Claim: an unsupported observed version refuses deposits and allows `seal("")`. Shows: through a real vault,
-    /// a deposit passes before any observation (control); after the registry shows an unsupported version the deposit
-    /// reverts `UnsupportedObservedVersion`, with the tokens still in the wallet; `confirm` is refused too; anyone
+    /// Claim: an unsupported observed version refuses sends and allows `seal("")`. Shows: through a real message bridge,
+    /// a send passes before any observation (control); after the registry shows an unsupported version the send
+    /// reverts `UnsupportedObservedVersion`, with no message logged; `confirm` is refused too; anyone
     /// may call `seal("")`, which emits `GateSealedByFork` and closes the gate for good. Matters: this is how a
-    /// PulseChain fork that the route cannot follow stops new deposits within minutes, with no admin.
-    function test_HB02_registryGate_unsupportedObservedVersionRefusesDepositsAndAllowsSeal() public {
-        BridgeVault vault = _vaultWithGate(address(registryGate));
-        _depositWithEvidence(vault, alice, 1e18, "");
-        assertEq(tokenOnA.balanceOf(address(vault)), 1e18, "control: admitted before the observation");
+    /// PulseChain fork that the route cannot follow stops new sends within minutes, with no admin.
+    function test_HB02_registryGate_unsupportedObservedVersionRefusesSendsAndAllowsSeal() public {
+        MessageBridge sender = _bridgeWithGate(address(registryGate));
+        _send(sender, alice);
 
         _unsupportedObserved();
-        tokenOnA.mint(alice, 1e18);
-        vm.chainId(CHAIN_A);
-        vm.startPrank(alice);
-        tokenOnA.approve(address(vault), 1e18);
+        vm.recordLogs();
         vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.UnsupportedObservedVersion.selector, UNKNOWN_FORK, _head() + 100));
-        vault.deposit(address(tokenOnA), bob, 1e18, 0, "");
-        vm.stopPrank();
-        assertEq(tokenOnA.balanceOf(alice), 1e18, "the tokens stay in the wallet");
+        _send(sender, alice);
+        assertEq(vm.getRecordedLogs().length, 0, "no message is logged");
 
         vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.UnsupportedObservedVersion.selector, UNKNOWN_FORK, _head() + 100));
         registryGate.confirm("");
@@ -441,17 +436,16 @@ contract ForkRegistryTest is GateSupport {
         registryGate.seal("");
     }
 
-    /// Claim: a supported observed version changes nothing. Shows: with ELECTRA observed, deposits are admitted as
+    /// Claim: a supported observed version changes nothing. Shows: with ELECTRA observed, sends are admitted as
     /// before and `seal("")` reverts `NoUnsupportedObservation`; an empty registry gives the same revert. Matters:
     /// ordinary observations must never close a route, and a seal must need an unsupported version in the registry.
     function test_HB02_registryGate_supportedObservedVersionChangesNothing() public {
-        BridgeVault vault = _vaultWithGate(address(registryGate));
+        MessageBridge sender = _bridgeWithGate(address(registryGate));
         vm.expectRevert(BeaconForkGate.NoUnsupportedObservation.selector);
         registryGate.seal("");
 
         _observe(_observation(ELECTRA, _head() + 100));
-        _depositWithEvidence(vault, alice, 1e18, "");
-        assertEq(tokenOnA.balanceOf(address(vault)), 1e18);
+        _send(sender, alice);
         assertFalse(registryGate.enforcing());
         vm.expectRevert(BeaconForkGate.NoUnsupportedObservation.selector);
         registryGate.seal("");

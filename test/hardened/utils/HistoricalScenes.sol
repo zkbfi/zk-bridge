@@ -2,14 +2,14 @@
 pragma solidity ^0.8.24;
 
 import {BeaconLightClient} from "../../../src/hardened/BeaconLightClient.sol";
-import {BridgeVault} from "../../../src/hardened/BridgeVault.sol";
+import {MessageBridge} from "../../../src/hardened/MessageBridge.sol";
 import {BeaconProofVerifier} from "../../../src/hardened/BeaconProofVerifier.sol";
 import {BeaconBlockHeader, SSZ} from "../../../src/hardened/SSZ.sol";
 import {WithdrawalScenes} from "./WithdrawalScenes.sol";
-import {ReceiptFixtures} from "./ReceiptFixtures.sol";
+import {MessageFixtures} from "./MessageFixtures.sol";
 
 /// @notice Builds withdrawal evidence for the historical path. The anchor state is a sparse Merkle tree. It holds the
-/// header root of each deposit at the historical position, which this file computes BY HAND (no call into the vault).
+/// header root of each deposit at the historical position, which this file computes BY HAND (no call into the bridge).
 /// Optionally the same state also holds the recent `block_roots` leaves, so one anchor can serve both paths.
 ///
 /// A scene stores these headers in the light client, in slot order: a low body evidence header (40 slots below the
@@ -80,25 +80,6 @@ abstract contract HistoricalScenes is WithdrawalScenes {
 
     // ---------------------------------------------------------------- worlds and parameters
 
-    /// @notice A light client that starts at `initialSlot`, and a vault on chain B with `capellaEra`, funded with tokens.
-    /// The fixture's `lightClientForB` is replaced, so every later scene stores its headers in the new client.
-    function _historicalWorld(uint64 initialSlot, uint64 capellaEra) internal returns (BridgeVault vault_) {
-        lightClientForB = new BeaconLightClient(
-            address(verifier),
-            LIGHT_CLIENT_VKEY,
-            GENESIS_ROOT_A,
-            SLOTS_PER_PERIOD,
-            LIGHT_CLIENT_GENESIS_TIME,
-            LIGHT_CLIENT_SECONDS_PER_SLOT,
-            initialSlot,
-            INITIAL_HEADER_ROOT,
-            COMMITTEE_100,
-            COMMITTEE_101
-        );
-        vault_ = _newWithdrawalVault(0, capellaEra);
-        tokenOnB.mint(address(vault_), 1_000_000e18);
-    }
-
     /// @notice Parameters for a state without recent leaves and without extra headers.
     function _historicalParams(
         uint64 anchorSlot,
@@ -148,7 +129,7 @@ abstract contract HistoricalScenes is WithdrawalScenes {
     // ---------------------------------------------------------------- the positions, written out by hand
 
     /// @notice The generalized index of the summary leaf of a deposit, with a list depth that the caller names.
-    /// @dev Written out here, step by step, and independent of the vault. The honest list depth is 24
+    /// @dev Written out here, step by step, and independent of the bridge. The honest list depth is 24
     /// (`HISTORICAL_ROOTS_LIMIT = 2**24`). Other depths model a state built with another limit.
     function _historicalLeafWithListDepth(uint256 field, uint64 capellaEra, uint64 slot, uint256 listDepth)
         internal
@@ -176,10 +157,10 @@ abstract contract HistoricalScenes is WithdrawalScenes {
     // ---------------------------------------------------------------- building
 
     function _defaultHeaderRlp() internal pure returns (bytes memory) {
-        return _executionHeaderRlp(ReceiptFixtures.RECEIPTS_ROOT, 17);
+        return _messageHeaderRlp();
     }
 
-    /// @notice Builds a scene and stores its headers in the light client. It adds no layout to any vault.
+    /// @notice Builds a scene and stores its headers in the light client. It adds no layout to any bridge.
     function _historicalScene(HistoricalParams memory params) internal returns (HistoricalScene memory scene) {
         scene = _buildHistorical(params, _defaultHeaderRlp());
         _storeHistorical(params, scene);
@@ -390,57 +371,52 @@ abstract contract HistoricalScenes is WithdrawalScenes {
     }
 
     /// @notice Adds the two block hash layouts that cover every deposit slot up to the anchor.
-    function _addBodyRows(BeaconProofVerifier vault_, HistoricalScene memory scene) internal {
-        vault_.addBlockHashLayout(BODY_GINDEX, scene.lowBodyEvidence);
-        vault_.addBlockHashLayout(BODY_GINDEX, scene.anchorBodyEvidence);
+    function _addBodyRows(BeaconProofVerifier bridge_, HistoricalScene memory scene) internal {
+        bridge_.addBlockHashLayout(BODY_GINDEX, scene.lowBodyEvidence);
+        bridge_.addBlockHashLayout(BODY_GINDEX, scene.anchorBodyEvidence);
     }
 
-    function _addHistoricalRow(BeaconProofVerifier vault_, HistoricalParams memory params, HistoricalScene memory scene) internal {
-        vault_.addHistoricalSummariesLayout(params.historicalSummariesGindex, scene.historicalEvidence);
+    function _addHistoricalRow(BeaconProofVerifier bridge_, HistoricalParams memory params, HistoricalScene memory scene) internal {
+        bridge_.addHistoricalSummariesLayout(params.historicalSummariesGindex, scene.historicalEvidence);
     }
 
-    function _addRecentRow(BeaconProofVerifier vault_, HistoricalParams memory params, HistoricalScene memory scene) internal {
-        vault_.addBlockRootsLayout(params.blockRootsGindex, scene.rootsEvidence);
+    function _addRecentRow(BeaconProofVerifier bridge_, HistoricalParams memory params, HistoricalScene memory scene) internal {
+        bridge_.addBlockRootsLayout(params.blockRootsGindex, scene.rootsEvidence);
     }
 
     // ---------------------------------------------------------------- proofs
 
-    /// @notice A withdrawal proof for deposit `i` with a chosen ancestry branch.
+    /// @notice A message proof for source block `i` with a chosen ancestry branch.
     function _proofWithBranch(
         HistoricalScene memory scene,
         uint256 i,
-        ReceiptFixtures.Named memory named,
+        MessageFixtures.Named memory named,
         bytes32[] memory ancestryBranch
-    ) internal pure returns (BridgeVault.WithdrawalProof memory) {
-        // A deep copy, so a test that edits the proof never edits the scene (memory structs are references).
-        return _clone(
-            BridgeVault.WithdrawalProof({
-                anchorHeader: scene.anchorHeader,
-                depositHeader: scene.depositHeaders[i],
-                ancestryBranch: ancestryBranch,
-                blockHashBranch: scene.blockHashBranches[i],
-                executionHeaderRlp: _defaultHeaderRlp(),
-                receiptProof: ReceiptFixtures.proofFor(named.transactionIndex),
-                transactionIndex: named.transactionIndex,
-                logIndex: named.logIndex
-            })
+    ) internal pure returns (MessageBridge.MessageProof memory) {
+        return _proofOf(
+            scene.anchorHeader,
+            scene.depositHeaders[i],
+            ancestryBranch,
+            scene.blockHashBranches[i],
+            _defaultHeaderRlp(),
+            named
         );
     }
 
-    /// @notice The honest historical proof of deposit `i`.
-    function _historicalProof(HistoricalScene memory scene, uint256 i, ReceiptFixtures.Named memory named)
+    /// @notice The honest historical proof of source block `i`.
+    function _historicalProof(HistoricalScene memory scene, uint256 i, MessageFixtures.Named memory named)
         internal
         pure
-        returns (BridgeVault.WithdrawalProof memory)
+        returns (MessageBridge.MessageProof memory)
     {
         return _proofWithBranch(scene, i, named, scene.historicalBranches[i]);
     }
 
-    /// @notice The recent proof of deposit `i` (only for a scene whose state holds recent leaves).
-    function _recentProof(HistoricalScene memory scene, uint256 i, ReceiptFixtures.Named memory named)
+    /// @notice The recent proof of source block `i` (only for a scene whose state holds recent leaves).
+    function _recentProof(HistoricalScene memory scene, uint256 i, MessageFixtures.Named memory named)
         internal
         pure
-        returns (BridgeVault.WithdrawalProof memory)
+        returns (MessageBridge.MessageProof memory)
     {
         return _proofWithBranch(scene, i, named, scene.recentBranches[i]);
     }

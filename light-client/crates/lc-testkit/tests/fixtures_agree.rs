@@ -1,7 +1,7 @@
-//! The shared fixtures (`tests/fixtures/gindices.json`, `tests/fixtures/withdrawal/*.json`) are what the Solidity tests load.
+//! The shared fixtures (`tests/fixtures/gindices.json`, `tests/fixtures/message/*.json`) are what the Solidity tests load.
 //! These tests keep them honest: current, correct and independent of the code that wrote them.
 
-use lc_testkit::fixture_set::{check_fixture_with_verifier, gindices_json, withdrawal_fixtures};
+use lc_testkit::fixture_set::{check_fixture_with_verifier, gindices_json, message_fixtures};
 use lc_testkit::json::{fixtures_dir, load_fixture};
 
 /// Claim: the files on disk equal what the generator produces now. A stale file (for example after a layout change) fails.
@@ -10,15 +10,15 @@ fn fixture_files_on_disk_are_current() {
     assert_eq!(
         load_fixture("gindices.json"),
         gindices_json(),
-        "run: cargo run -p lc-testkit --bin write-withdrawal-fixtures"
+        "run: cargo run -p lc-testkit --bin write-message-fixtures"
     );
-    let generated = withdrawal_fixtures();
+    let generated = message_fixtures();
     for (name, value) in &generated {
-        assert_eq!(&load_fixture(&format!("withdrawal/{name}.json")), value, "{name} is stale");
+        assert_eq!(&load_fixture(&format!("message/{name}.json")), value, "{name} is stale");
     }
-    let on_disk = std::fs::read_dir(fixtures_dir().join("withdrawal")).expect("directory").count();
-    assert_eq!(on_disk, generated.len(), "unexpected extra files in tests/fixtures/withdrawal");
-    assert!(generated.len() >= 40);
+    let on_disk = std::fs::read_dir(fixtures_dir().join("message")).expect("directory").count();
+    assert_eq!(on_disk, generated.len(), "unexpected extra files in tests/fixtures/message");
+    assert!(generated.len() >= 60);
 }
 
 /// Claim: reading each file back (decode the calldata, build the context from the file fields) gives the declared outcome in
@@ -27,8 +27,8 @@ fn fixture_files_on_disk_are_current() {
 fn every_fixture_gives_its_declared_outcome() {
     let mut accepts = 0;
     let mut rejects = 0;
-    for (name, _) in withdrawal_fixtures() {
-        let fixture = load_fixture(&format!("withdrawal/{name}.json"));
+    for (name, _) in message_fixtures() {
+        let fixture = load_fixture(&format!("message/{name}.json"));
         check_fixture_with_verifier(&fixture);
         if fixture["expected"]["result"] == "accept" {
             accepts += 1;
@@ -36,8 +36,8 @@ fn every_fixture_gives_its_declared_outcome() {
             rejects += 1;
         }
     }
-    assert!(accepts >= 8, "{accepts}");
-    assert!(rejects >= 30, "{rejects}");
+    assert!(accepts >= 10, "{accepts}");
+    assert!(rejects >= 40, "{rejects}");
 }
 
 /// Claim: the generalized indices equal numbers computed by hand from the container field lists in consensus-specs,

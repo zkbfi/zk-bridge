@@ -248,7 +248,7 @@ fetch_historical() {
   (cd "${here}" && cargo run --quiet --release -p lc-testkit --bin derive-historical-fixtures -- "${work}" "${anchor}" "${fixtures}/pulsechain" "${beacon}" "${today}" \
     "capella_fork_block=96" "era_zero_last_block=8191" "era_previous_last_block=${edge_before}" "era_first_block=${edge_after}" \
     "era_middle_block=${middle}" "era_last_block=${era_last}")
-  # Execution block and receipts of the middle block (few transactions), for the full withdrawal fixture.
+  # Execution block and receipts of the middle block (few transactions), for the full message fixture.
   local number_hex
   number_hex="$(printf '0x%x' "$(jq -r '.response.entries[] | select(.name == "era_middle_block") | .execution_block_number' "${fixtures}/pulsechain/historical_paths.json")")"
   rpc_json "${pulsechain_execution}" eth_getBlockByNumber "[\"${number_hex}\", false]" "${fixtures}/pulsechain/path_historical_block.json"

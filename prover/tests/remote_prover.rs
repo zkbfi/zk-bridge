@@ -4,7 +4,7 @@
 //! (`test/hardened/fixtures/sp1-proof-ethereum-update.json`). So the accept test runs the real local verification
 //! of `sp1-verifier`, and the refusal tests change one thing in a proof that is known to verify.
 //!
-//! Each test names what the backend must refuse and why that refusal protects a withdrawal.
+//! Each test names what the backend must refuse and why that refusal protects a message delivery.
 
 use alloy_primitives::{hex, B256};
 use lc_testkit::json::{bootstrap, light_client_update, load_response, store_from_bootstrap};

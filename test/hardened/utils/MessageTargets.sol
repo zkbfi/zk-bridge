@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IAMB} from "../../../src/hardened/mediator/IAMB.sol";
+import {IAMB} from "../../../src/hardened/IAMB.sol";
 
 /// @notice A target that records everything the bridge shows it during a call: who called, the whole context, a hash of
 /// the call data and the gas it got at its first instruction.
