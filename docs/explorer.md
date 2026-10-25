@@ -73,3 +73,11 @@ Amounts are integers in each token's base units; rates are 18-decimal (1e18 = 10
 ## Dependencies
 
 Every package version is pinned exactly and must be at least 28 days old, as for the rest of this repository.
+
+## Prover setup view (user decision, 2026-10-25)
+
+Whoever runs the proof side on their own remote GPU configures it in the dashboard. The view is deliberately tucked away: it is always the last option in every list or menu it appears in, never a default and never on the main path.
+
+It holds: the remote GPU endpoint URL (for example a RunPod load balancing endpoint) and its API key; the RPC and beacon URLs per chain; the msgboard RPC and WebSocket URL; the pair and directions to prove; the proving policy. Each value has a test action (endpoint `/ping`, RPC chain identifier, msgboard `status()`).
+
+Secrets are entered masked and never shown again (only the last four characters). They are stored in the operating system secret store where available (macOS Keychain, Linux Secret Service), otherwise in a file encrypted with a password (scrypt and AES-GCM); or the operator points at an environment variable or a 1Password reference instead of storing anything. Every log and error redacts them. The proof publisher bot reads the same configuration.
