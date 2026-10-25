@@ -27,8 +27,8 @@ The repository never installs the SP1 toolchain with `sp1up` or a `curl | bash` 
 
 | Program | ELF SHA-256 | Program key |
 |---|---|---|
-| Light client | `203cfe771e23b4f32028b019e2357432fdda15825877f21e635b0a3ddefeecc2` | `0x00ae8429b1bb3ed61eee12f070e5e3b5dcb388fc67c5550a13b331ac57608bbe` |
-| Fork observation | `52cfb556cb00d884b550949e1f7b6ba92f24283fe2a542147957d1eed54e258e` | `0x00db44aeb84b7d18ea73fd9c4594a06400fc10de8e8104fc1c6542899778cef0` |
+| Light client | `55c66798b1a1fedc2d3f4bf39e78332b77a39add8178078853e99ad259ed5a5a` | `0x00f776e8144c67435b3f3ecb3dd09e30e69b01a770bec3c9eb9d47c4d96b2f70` |
+| Fork observation | `478dedb727a6ca725aa2827e0c42685b479896f3557ad3fbcdf4791aac64cde8` | `0x003d6b1d71ba8db9c6cc3cbd4c021732cae28bfd0c7a50da3b1d6d754cbbbf61` |
 
 The two programs changed on 2026-10-23: the signature check takes the signer key from the committee aggregate key minus the keys of the absent members, and it ends in one final exponentiation. The keys above are the new ones. Any key deployed before that date belongs to the earlier programs.
 The values come from the Docker build and live in `light-client/program-keys.json`. To check them, run `light-client/scripts/program-keys.sh`. It exits with a non-zero code when a value differs.
