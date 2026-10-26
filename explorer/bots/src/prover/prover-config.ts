@@ -32,14 +32,14 @@ export function describeRoute(pair: Pair, direction: ProofDirection): RouteDescr
 }
 
 /**
- * The chain kind that the prover names for the source chain, by chain identifier. A testnet uses the kind of the
- * network family that it copies: the prover has no kind of its own for a testnet yet.
+ * The chain kind that the prover names for the source chain, by chain identifier. Each testnet has its own kind,
+ * because its genesis validators root and fork table differ from mainnet.
  */
 const PROVER_CHAIN_KINDS = {
   1: "ethereum",
   369: "pulsechain",
-  11155111: "ethereum",
-  943: "pulsechain",
+  11155111: "sepolia",
+  943: "pulsechain-testnet-v4",
 } as const satisfies Readonly<Record<number, string>>;
 
 /** A value that would break out of a quoted string in the file. */

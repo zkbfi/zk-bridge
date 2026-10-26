@@ -228,7 +228,7 @@ describe("the prover configuration of the oracle backend", () => {
     expect(() => renderProverConfig(stranger, null)).toThrow("the source chain id 5 is not a chain kind that the prover knows");
   });
 
-  it("gives a testnet the chain kind of its network family and keeps its own chain identifier", () => {
+  it("gives each testnet its own chain kind and keeps its own chain identifier", () => {
     const testnetEnvironment = {
       EXPLORER_RPC_URL_11155111: "http://127.0.0.1:5",
       EXPLORER_RPC_URL_943: "http://127.0.0.1:6",
@@ -242,11 +242,13 @@ describe("the prover configuration of the oracle backend", () => {
     });
     const forward = renderProverConfig(describeRoute(testnet, "first-to-second"), null);
     expect(forward).toContain("[routes.sepolia_to_pulsechain-testnet-v4.source]");
-    expect(forward).toContain('chain = "ethereum"');
+    expect(forward).toContain('chain = "sepolia"');
+    expect(forward).not.toContain('chain = "ethereum"');
     expect(forward).toContain("chain_id = 11155111");
     expect(forward).toContain("chain_id = 943");
     const backward = renderProverConfig(describeRoute(testnet, "second-to-first"), null);
-    expect(backward).toContain('chain = "pulsechain"');
+    expect(backward).toContain('chain = "pulsechain-testnet-v4"');
+    expect(backward).not.toContain('chain = "pulsechain"');
     expect(backward).toContain('beacon_url = "http://127.0.0.1:8"');
   });
 
