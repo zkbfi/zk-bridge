@@ -74,6 +74,7 @@ describe("publishing on the board", () => {
     expect(toWebSocketUrl("https://one.valve.city/rpc/vk_demo/evm/369")).toBe("wss://one.valve.city/rpc/vk_demo/evm/369");
     expect(toWebSocketUrl("http://127.0.0.1:8545/")).toBe("ws://127.0.0.1:8545/");
     expect(toHttpUrl("wss://one.valve.city/rpc/vk_demo/evm/369")).toBe("https://one.valve.city/rpc/vk_demo/evm/369");
+    expect(toHttpUrl("ws://127.0.0.1:8545/")).toBe("http://127.0.0.1:8545/");
   });
 });
 
