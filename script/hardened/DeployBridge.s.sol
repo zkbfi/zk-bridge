@@ -42,11 +42,10 @@ import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 /// The mediator creates its token factory inside its constructor. The factory is the first contract of the mediator,
 /// so it sits at `computeCreateAddress(mediator, 1)` and takes no deployer nonce. A chain without a wrapped native
 /// token gets no native coin router, and the delivery router (which needs that token) is then refused. The delivery router takes
-/// the next free offset, so the plan has no gap. The delivery router also needs `deliveryRouter.runner` (the one account that may
-/// deliver through it) and `deliveryRouter.rewardAddress` (the one address that receives the fees) and `deliveryRouter.failedDeliveryAddress` (the
-/// address that receives what the router cannot deliver; it may equal the reward address). The runner and the reward
-/// address are separate accounts in practice: the runner is a hot key, the reward address can be cold. The deployment
-/// reads all three back from the router and refuses a mismatch.
+/// the next free offset, so the plan has no gap. The delivery router also needs `deliveryRouter.rewardAddress` (the one address that
+/// receives the tips) and `deliveryRouter.failedDeliveryAddress` (the address that receives what the router cannot
+/// deliver; it may equal the reward address). Anyone may call the router, so it has no runner. The deployment reads
+/// both addresses back from the router and refuses a mismatch.
 contract DeployBridge is Script {
     /// @notice Whether a router is deployed.
     enum RouterChoice {
@@ -66,7 +65,6 @@ contract DeployBridge is Script {
         uint64 depositCutoffTimestamp;
         address wrappedNative;
         RouterChoice deliveryRouter;
-        address deliveryRouterRunner;
         address deliveryRouterRewardAddress;
         address deliveryRouterFailedDeliveryAddress;
         string remoteChainName;
@@ -389,7 +387,7 @@ contract DeployBridge is Script {
             deployed.wrappedRouter = _deployWrappedRouter(deployed.mediator, chain.wrappedNative);
         }
         if (chain.deliveryRouter == RouterChoice.Deploy) {
-            deployed.deliveryRouter = _deployDeliveryRouter(deployed.mediator, chain.wrappedNative, chain.deliveryRouterRunner, chain.deliveryRouterRewardAddress, chain.deliveryRouterFailedDeliveryAddress);
+            deployed.deliveryRouter = _deployDeliveryRouter(deployed.mediator, chain.wrappedNative, chain.deliveryRouterRewardAddress, chain.deliveryRouterFailedDeliveryAddress);
         }
         vm.stopBroadcast();
 
@@ -621,12 +619,11 @@ contract DeployBridge is Script {
     function _deployDeliveryRouter(
         address mediator,
         address wrappedNative,
-        address runner,
         address rewardAddress,
         address failedDeliveryAddress
     ) private returns (address) {
         return address(
-            new DeliveryRouter(ITokenMediator(mediator), IWETH(wrappedNative), runner, rewardAddress, failedDeliveryAddress)
+            new DeliveryRouter(ITokenMediator(mediator), IWETH(wrappedNative), rewardAddress, failedDeliveryAddress)
         );
     }
 
@@ -747,7 +744,6 @@ contract DeployBridge is Script {
             DeliveryRouter router = DeliveryRouter(payable(deployed.deliveryRouter));
             if (address(router.bridge()) != deployed.mediator) revert DeploymentMismatch("deliveryRouter.mediator");
             if (address(router.wNative()) != chain.wrappedNative) revert DeploymentMismatch("deliveryRouter.wrappedNative");
-            if (router.runner() != chain.deliveryRouterRunner) revert DeploymentMismatch("deliveryRouter.runner");
             if (router.rewardAddress() != chain.deliveryRouterRewardAddress) {
                 revert DeploymentMismatch("deliveryRouter.rewardAddress");
             }
@@ -779,7 +775,6 @@ contract DeployBridge is Script {
             revert DeliveryRouterNeedsWrappedNative(chain.chainId);
         }
         if (chain.deliveryRouter == RouterChoice.Deploy) {
-            chain.deliveryRouterRunner = _readAddress(json, string.concat(prefix, ".deliveryRouter.runner"));
             chain.deliveryRouterRewardAddress = _readAddress(json, string.concat(prefix, ".deliveryRouter.rewardAddress"));
             chain.deliveryRouterFailedDeliveryAddress =
                 _readAddress(json, string.concat(prefix, ".deliveryRouter.failedDeliveryAddress"));
