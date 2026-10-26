@@ -263,6 +263,6 @@ describe('refillDeliveryFee', () => {
   test('custom terms round trip through the director', () => {
     const director = { recipient: receiver as `0x${string}`, settings: FEE_SETTING.fixedFee | FEE_SETTING.baseFeeOnly, limit: 2_000_000n, multiplier: 0n }
     expect(customFieldsOf(director, 6).feeCustomBasis).toBe('base-fee-only')
-    expect(decodeFeeDirector(encodeFeeDirector(director))).toEqual({ ...director, recipient: getAddress(receiver) })
+    expect(decodeFeeDirector(encodeFeeDirector(director, { router: '0x00000000000000000000000000000000000000f1', protectedAddresses: [] }))).toEqual({ ...director, recipient: getAddress(receiver) })
   })
 })

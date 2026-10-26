@@ -207,7 +207,7 @@ describe('planRelay refuses a delivery fee that the data does not carry', () => 
 
   test('a plain mode, another receiver and other data are each refused', () => {
     expect(() => planRelay({ ...base, receiver: router, mode: { kind: 'plain' }, deliveryFee: review })).toThrow('needs relayTokensAndCall')
-    expect(() => planRelay({ ...base, receiver, mode: { kind: 'call', data: encodeFeeDirector(director) }, deliveryFee: review })).toThrow('router of the other chain as the receiver')
+    expect(() => planRelay({ ...base, receiver, mode: { kind: 'call', data: encodeFeeDirector(director, { router, protectedAddresses: [] }) }, deliveryFee: review })).toThrow('router of the other chain as the receiver')
     expect(() => planRelay({ ...base, receiver: router, mode: { kind: 'call', data: '0x' }, deliveryFee: review })).toThrow('does not hold the fee terms')
   })
 })

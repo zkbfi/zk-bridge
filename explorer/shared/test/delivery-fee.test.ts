@@ -49,6 +49,7 @@ const directorOf = (vector: Vector): FeeDirector => ({
 });
 
 const recipient = "0x00000000000000000000000000000000000000aa" as const;
+const context = { router: "0x00000000000000000000000000000000000000bb", protectedAddresses: [] } as const;
 const wei = 10n ** 18n;
 const price = { tokenValueInWei: wei, tokenDecimals: 18 };
 
@@ -62,7 +63,7 @@ describe("against vectors printed by the compiled FeeRouter", () => {
   it("encodes every director as abi.encode does, and decodes it back", () => {
     for (const vector of vectors) {
       const director = directorOf(vector);
-      expect(encodeFeeDirector(director), JSON.stringify(vector)).toBe(vector.encoded);
+      expect(encodeFeeDirector(director, context), JSON.stringify(vector)).toBe(vector.encoded);
       expect(decodeFeeDirector(vector.encoded).settings).toBe(director.settings);
       expect(decodeFeeDirector(vector.encoded).limit).toBe(director.limit);
       expect(decodeFeeDirector(vector.encoded).multiplier).toBe(director.multiplier);
@@ -91,7 +92,7 @@ describe("against vectors printed by the compiled FeeRouter", () => {
 
 describe("the encoding", () => {
   it("is four words with no offset", () => {
-    const encoded = encodeFeeDirector({ recipient, settings: 8n, limit: 0n, multiplier: 5n });
+    const encoded = encodeFeeDirector({ recipient, settings: 8n, limit: 0n, multiplier: 5n }, context);
     expect((encoded.length - 2) / 2).toBe(128);
   });
 

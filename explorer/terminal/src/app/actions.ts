@@ -2,13 +2,14 @@
  * Turns what the user typed in an action form into the steps of a transaction flow. Pure: it reads the form values
  * and the live snapshots, and throws {@link PlanInputError} with a message that tells the user what to fix.
  */
-import { encodeFeeDirector, type DeliveryCostReport } from '@zk-bridge/shared'
+import type { DeliveryCostReport } from '@zk-bridge/shared'
 import type { Address } from 'viem'
 import { parseUnits, AmountParseError } from '../format/amounts'
 import type { ChainSnapshot, ChainSnapshotResult, RewardAddressReading, TokenPosition } from '../chain/live-reads'
 import type { FlowStep } from '../flow/transaction-flow'
 import type { ChainConfig, ChainSide, PairConfig, TokenInfo } from '../model/types'
 import { buildDeliveryFeeModel, paysForDelivery, resolveDeliveryTarget, routerOf, transferValueOf, type TokenValuationsWei } from './delivery-fee-form'
+import { encodeDirectorFor, isDeploymentFeeRouter, requireValidRouterRelay } from '../tx/fee-terms-guard'
 import {
   PlanInputError,
   parseAddress,
@@ -62,6 +63,7 @@ export function buildBridgeSteps(values: Readonly<Record<string, string>>, token
   const receiver = parseAddress(values.receiver ?? '', 'receiver')
 
   if (source.kind === 'native') {
+    requireValidTermsForKnownRouter(values, { source, receiver, pair: context.pair })
     const value = parseAmount(values.amount ?? '', 18)
     if (value > snapshot.nativeBalance) throw new PlanInputError(`The amount is more than your ${chain.nativeSymbol} balance.`)
     return [{ plan: planWrapAndRelay({ chain, receiver, value }), skippable: false }]
@@ -77,7 +79,9 @@ export function buildBridgeSteps(values: Readonly<Record<string, string>>, token
     token,
     amount,
     currentFeeRate: snapshot.feeRate,
-    ...(deliveryWanted(values, { source, tokens, context }) ? deliveryRelayOf(values, { source, tokens, context, feeRate: snapshot.feeRate }) : { receiver, mode: relayModeOf(values) }),
+    ...(deliveryWanted(values, { source, tokens, context })
+      ? deliveryRelayOf(values, { source, tokens, context, feeRate: snapshot.feeRate })
+      : directRelayOf(values, { source, receiver, pair: context.pair })),
   })
   const approval: readonly FlowStep[] =
     position.allowance >= amount
@@ -89,6 +93,29 @@ export function buildBridgeSteps(values: Readonly<Record<string, string>>, token
           },
         ]
   return [...approval, { plan: relay, skippable: false }]
+}
+
+/**
+ * Refuses a relay to a fee router of the deployment whose data the router would send to its reward address. A relay
+ * that pays for delivery builds its own data and meets the same guard in the encoder.
+ */
+function requireValidTermsForKnownRouter(
+  values: Readonly<Record<string, string>>,
+  input: { source: BridgeSource; receiver: Address; pair: PairConfig },
+): void {
+  const { source, receiver, pair } = input
+  if (!isDeploymentFeeRouter(pair, receiver)) return
+  const destination = source.side === 'first' ? pair.second : pair.first
+  const mode = source.kind === 'native' ? ({ kind: 'plain' } satisfies RelayMode) : relayModeOf(values)
+  const data = mode.kind === 'plain' ? '0x' : mode.data
+  const destinationToken = source.kind === 'token' ? source.token.counterpart : null
+  requireValidRouterRelay({ pair, destination, router: receiver, data, destinationToken })
+}
+
+/** The receiver and the mode that the user typed, once the guard accepts them. */
+function directRelayOf(values: Readonly<Record<string, string>>, input: { source: BridgeSource; receiver: Address; pair: PairConfig }) {
+  requireValidTermsForKnownRouter(values, input)
+  return { receiver: input.receiver, mode: relayModeOf(values) }
 }
 
 /** What the bridge form has chosen as the source of the transfer. */
@@ -169,7 +196,7 @@ function deliveryRelayOf(
   if (chosen.kind === 'invalid') throw new PlanInputError(chosen.reason)
   return {
     receiver: router,
-    mode: { kind: 'call', data: encodeFeeDirector(chosen.director) } satisfies RelayMode,
+    mode: { kind: 'call', data: encodeDirectorFor(chosen.director, context.pair, router) } satisfies RelayMode,
     deliveryFee: {
       router,
       defaultRouter: target.router,

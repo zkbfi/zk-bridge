@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { decodeFeeDirector, encodeFeeDirector, feeModeOf, senderPriceOfToken, tokenMediatorAbi, wETHOmnibridgeRouterAbi } from "@zk-bridge/shared";
 import { buildBridgeSteps } from "@terminal/app/actions";
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
-import { planClaim, planSendMessage, planWrapAndRelay } from "@terminal/tx/plan";
+import { PlanInputError, planClaim, planSendMessage, planWrapAndRelay } from "@terminal/tx/plan";
 import { planBridgeSteps, type BridgeFormValues } from "../../src/tx/bridge-steps";
 import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS, type DeliveryOptions } from "../../src/tx/bridge-draft";
 import { selectDelivery, DEFAULT_MARGIN_RATE, DEFAULT_GAS_MULTIPLIER } from "../../src/tx/delivery-selection";
@@ -107,7 +107,7 @@ describe("planBridgeSteps with a tip", () => {
     const delivery = deliveryFor("percentage");
     const [relay] = planBridgeSteps({ values: values(), tokens, context, delivery });
     expect(relay!.plan.data).toBe(
-      encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokensAndCall", args: [usdc.address, feeRouter, parseUnits("250", 6), encodeFeeDirector(delivery.director)] }),
+      encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokensAndCall", args: [usdc.address, feeRouter, parseUnits("250", 6), encodeFeeDirector(delivery.director, { router: feeRouter, protectedAddresses: [] })] }),
     );
     const decoded = decodeFunctionData({ abi: tokenMediatorAbi, data: relay!.plan.data });
     const director = decodeFeeDirector(decoded.args![3] as `0x${string}`);
@@ -177,5 +177,40 @@ describe("other plans stay the terminal's", () => {
     const message = planSendMessage({ chain: FIXTURE_PAIR.first, target: receiver, data: "0x", gas: 100_000n });
     expect(message.functionSignature).toBe("requireToPassMessage(address,bytes,uint256)");
     expect(() => planClaim({ chain: FIXTURE_PAIR.first, token: usdc, account: FIXTURE_ACCOUNT, claimable: 0n })).toThrow(/Nothing is claimable/);
+  });
+});
+
+describe("planBridgeSteps refuses terms that the fee router would send to its reward address", () => {
+  const mediator = FIXTURE_PAIR.first.contracts.tokenMediator;
+  const bridge = FIXTURE_PAIR.second.contracts.messageBridge;
+  const zero = "0x0000000000000000000000000000000000000000";
+
+  it("with a tip, when the recipient is zero, the router, a mediator or a bridge", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+    const refused: readonly [string, RegExp][] = [
+      [zero, /zero address/],
+      [feeRouter, /router itself/],
+      [mediator, /mediator of/],
+      [bridge, /bridge of/],
+    ];
+    for (const [recipient, message] of refused) {
+      const delivery = deliveryFor();
+      const aimed = { ...delivery, director: { ...delivery.director, recipient: getAddress(recipient) } };
+      expect(() => planBridgeSteps({ values: values(), tokens, context, delivery: aimed })).toThrow(message);
+    }
+  });
+
+  it("with a tip, when a custom router is the recipient", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+    const custom = getAddress(`0x${"ee".repeat(20)}`);
+    const delivery = deliveryFor();
+    const aimed = { ...delivery, router: custom, director: { ...delivery.director, recipient: custom } };
+    expect(() => planBridgeSteps({ values: values(), tokens, context, delivery: aimed })).toThrow(/router itself/);
+  });
+
+  it("without a tip, when the receiver is a fee router and the data is not the director", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+    expect(() => planBridgeSteps({ values: values({ receiver: feeRouter }), tokens, context, delivery: null })).toThrow(PlanInputError);
+    expect(() => planBridgeSteps({ values: values({ receiver: feeRouter, mode: "call", data: "0xabcd" }), tokens, context, delivery: null })).toThrow(/128 byte/);
   });
 });

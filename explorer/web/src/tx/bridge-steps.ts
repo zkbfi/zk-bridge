@@ -7,11 +7,11 @@
  * carries no call data, so it never carries a tip.
  */
 import { getAddress, type Address } from "viem";
-import { encodeFeeDirector } from "@zk-bridge/shared";
 import { buildBridgeSteps, NATIVE_CHOICE, type BridgeContext } from "@terminal/app/actions";
 import type { ChainSnapshot } from "@terminal/chain/live-reads";
 import { parseUnits, AmountParseError } from "@terminal/format/amounts";
 import type { ChainSide, TokenInfo } from "@terminal/model/types";
+import { encodeDirectorFor } from "@terminal/tx/fee-terms-guard";
 import { PlanInputError, parseAddress, type DisplayArgument, type PlannedTransaction } from "@terminal/tx/plan";
 import type { FlowStep } from "@terminal/flow/transaction-flow";
 import { describeBridgeFees, type BridgeFeeDisclosure } from "./fee-disclosure";
@@ -110,7 +110,7 @@ export const planBridgeSteps = (input: PlanBridgeInput): readonly WebStep[] => {
   }
 
   if (isNative) throw new PlanInputError("The wrap route carries no call data, so it cannot carry a tip.");
-  const data = encodeFeeDirector(delivery.director);
+  const data = encodeDirectorFor(delivery.director, context.pair, delivery.router);
   const deployed = getAddress(delivery.router) === getAddress(delivery.defaultRouter);
   const steps = buildBridgeSteps({ ...values, receiver: delivery.router, mode: "call", data }, tokens, context);
   const adjusted = steps.map((step): FlowStep => ({

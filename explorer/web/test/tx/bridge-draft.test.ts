@@ -113,7 +113,7 @@ describe("No tip means no router at all", () => {
       expect(draft.delivery).toBeNull();
       expect(["relayTokens", "relayTokensWithFallback"]).toContain(relay.functionName);
       expect(relay.data.toLowerCase()).not.toContain(feeRouter.slice(2).toLowerCase());
-      expect(relay.data).not.toContain(encodeFeeDirector(defaultTip(receiver)).slice(2));
+      expect(relay.data).not.toContain(encodeFeeDirector(defaultTip(receiver), { router: feeRouter, protectedAddresses: [] }).slice(2));
       const decoded = decodeFunctionData({ abi: tokenMediatorAbi, data: relay.data });
       expect(getAddress(decoded.args![1] as string)).toBe(receiver);
     }

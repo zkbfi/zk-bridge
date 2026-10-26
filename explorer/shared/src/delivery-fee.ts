@@ -1,4 +1,5 @@
 import { decodeAbiParameters, encodeAbiParameters, type Address, type Hex } from "viem";
+import { assertValidFeeTerms, type FeeTermsContext } from "./fee-terms.js";
 import { parseTokenAmount, RATE_SCALE } from "./format.js";
 
 /**
@@ -81,10 +82,18 @@ export const FEE_DIRECTOR_BYTES = 128;
  * Encodes a director as `abi.encode(director)` does. The struct is static, so the result is four words with no offset.
  * This is the callback data of `relayTokensAndCall`.
  *
+ * The router sends the whole value to its reward address when the recipient is the zero address or the router, so this
+ * function refuses such a director and a recipient that is a known router, mediator or bridge. No caller can skip that.
+ *
  * @param director The director.
+ * @param context The router that receives the relay and the addresses that a recipient must not be.
+ * @throws FeeTermsError when the router would not honour the terms.
  */
-export const encodeFeeDirector = (director: FeeDirector): Hex =>
-  encodeAbiParameters(DIRECTOR_PARAMETERS, [director.recipient, director.settings, director.limit, director.multiplier]);
+export const encodeFeeDirector = (director: FeeDirector, context: FeeTermsContext): Hex => {
+  const data = encodeAbiParameters(DIRECTOR_PARAMETERS, [director.recipient, director.settings, director.limit, director.multiplier]);
+  assertValidFeeTerms({ ...context, data, destinationToken: null, destinationWrappedNative: null });
+  return data;
+};
 
 /**
  * Decodes `abi.decode(data, (FeeDirector))`.

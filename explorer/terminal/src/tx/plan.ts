@@ -3,7 +3,7 @@
  * {@link PlannedTransaction}. Nothing here reads a chain, signs, or sends, and nothing imports the terminal library,
  * so the later web interface can reuse this file as it is.
  */
-import { encodeFeeDirector, type FeeDataSource, type FeeDescription, type FeeDirector } from '@zk-bridge/shared'
+import { decodeFeeDirector, type FeeDataSource, type FeeDescription, type FeeDirector } from '@zk-bridge/shared'
 import { encodeFunctionData, erc20Abi, getAddress, isAddress, isHex, type Address, type Hex } from 'viem'
 import { feeOf, formatRateAsPercent, formatUnits } from '../format/amounts'
 import type { ChainConfig, TokenInfo } from '../model/types'
@@ -340,7 +340,22 @@ function requireDeliveryFeeMatch(deliveryFee: DeliveryFeeReview, receiver: Addre
   if (getAddress(receiver) !== getAddress(deliveryFee.router)) {
     throw new PlanInputError('A delivery fee needs the router of the other chain as the receiver.')
   }
-  if (mode.data !== encodeFeeDirector(deliveryFee.director)) throw new PlanInputError('The call data does not hold the fee terms.')
+  if (!holdsDirector(mode.data, deliveryFee.director)) throw new PlanInputError('The call data does not hold the fee terms.')
+}
+
+/** True when the data is the encoding of the director. The guard of the builders has already refused invalid terms. */
+function holdsDirector(data: Hex, director: FeeDirector): boolean {
+  try {
+    const decoded = decodeFeeDirector(data)
+    return (
+      decoded.recipient.toLowerCase() === director.recipient.toLowerCase() &&
+      decoded.settings === director.settings &&
+      decoded.limit === director.limit &&
+      decoded.multiplier === director.multiplier
+    )
+  } catch {
+    return false
+  }
 }
 
 /** The sentences about a delivery fee. The second one repeats what `FeeRouter.sol` states about a message that no runner delivers. */
