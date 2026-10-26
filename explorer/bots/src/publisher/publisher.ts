@@ -54,12 +54,14 @@ function pendingFromPackage(proofPackage: ProofPackage, payload: Hex, nowMillise
   };
 }
 
-async function postPending(dependencies: PublisherDependencies, state: PublisherState): Promise<PublisherState | null> {
+/** A publisher state that holds a proof. */
+type StateWithProof = PublisherState & { readonly pending: PendingProof };
+
+async function postPending(dependencies: PublisherDependencies, state: StateWithProof): Promise<StateWithProof | null> {
   const pending = state.pending;
-  if (pending === null) return null;
   try {
     const posted = await dependencies.board.post({ category: dependencies.category, payload: pending.payload as Hex });
-    const next: PublisherState = {
+    const next: StateWithProof = {
       ...state,
       pending: { ...pending, lastPostedAtMilliseconds: dependencies.now(), postCount: pending.postCount + 1, messageHash: posted.messageHash },
     };
@@ -110,9 +112,9 @@ export async function runPublisherStep(dependencies: PublisherDependencies): Pro
     if (!shouldRepublish({ pending, nowMilliseconds: dependencies.now(), republishSeconds: dependencies.republishSeconds })) {
       return { action: "idle", reason: "proof-posted-recently" };
     }
-    const next = await postPending(dependencies, state);
+    const next = await postPending(dependencies, { ...state, pending });
     if (next === null) return { action: "post-failed" };
-    const postCount = next.pending?.postCount ?? pending.postCount + 1;
+    const postCount = next.pending.postCount;
     return pending.postCount === 0
       ? { action: "published", postCount, newSlot: BigInt(pending.newSlot) }
       : { action: "republished", postCount };
@@ -173,7 +175,7 @@ async function proveIfWanted(
     return { action: "stale-proof" };
   }
   const nowMilliseconds = dependencies.now();
-  const withProof: PublisherState = {
+  const withProof: StateWithProof = {
     ...state,
     pending: pendingFromPackage(proofPackage, usable.payload, nowMilliseconds),
     lastProveAttempt: attempt("proof"),
@@ -220,6 +222,6 @@ async function usableAgainstHead(
     });
     return { ok: true, payload };
   } catch (error) {
-    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+    return { ok: false, reason: (error as Error).message };
   }
 }
