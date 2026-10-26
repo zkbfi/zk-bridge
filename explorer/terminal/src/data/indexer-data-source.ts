@@ -8,7 +8,7 @@
  * The routes in use: `/api/summary`, `/api/heads`, `/api/feed`, `/api/tokens`, `/api/audit`, `/api/fees`,
  * `/api/head-updates` and `/api/delivery-cost`. The indexer serves one pair. A request for another pair name is refused.
  */
-import { parseDeliveryCostReport } from '@zk-bridge/shared'
+import { parseDeliveryCostReport, secondsPerSlot } from '@zk-bridge/shared'
 import { getAddress, type Hex } from 'viem'
 import type {
   AuditRow,
@@ -224,8 +224,7 @@ function headOf(row: Record<string, unknown>, sideOf: (chainId: number) => Chain
     storedHeadSlot: stored === null ? null : BigInt(stored),
     finalizedSlot: finalized === null ? null : BigInt(finalized),
     lagSlots: lag === null ? null : BigInt(lag),
-    // PulseChain has 10 second slots and Ethereum has 12 second slots.
-    secondsPerSlot: trackedChainId === 369 ? 10 : 12,
+    secondsPerSlot: secondsPerSlot(trackedChainId),
     lastUpdateAt: nullableInteger(row.lastUpdateTimestamp),
   }
 }

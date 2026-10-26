@@ -18,6 +18,11 @@ const KNOWN_PAIRS: Readonly<Record<string, { label: string; first: ChainDefiniti
     first: { name: 'Ethereum', chainId: 1, nativeSymbol: 'ETH' },
     second: { name: 'PulseChain', chainId: 369, nativeSymbol: 'PLS' },
   },
+  'sepolia-pls943': {
+    label: 'Sepolia and PulseChain testnet v4',
+    first: { name: 'Sepolia', chainId: 11155111, nativeSymbol: 'ETH' },
+    second: { name: 'PulseChain testnet v4', chainId: 943, nativeSymbol: 'tPLS' },
+  },
 }
 
 interface ChainDefinition {

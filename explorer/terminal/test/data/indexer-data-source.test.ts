@@ -103,6 +103,17 @@ describe('indexer data source', () => {
     expect(result.feesAccrued[0]?.amount).toBe(777n)
   })
 
+  test('takes the slot length from the chain that the light client tracks, including the testnets', async () => {
+    const tracked = (trackedChainIds: [number, number]) => ({
+      ...summary,
+      heads: [head(1, trackedChainIds[0], 100, 150), head(369, trackedChainIds[1], 500, 600)],
+    })
+    const read = async (trackedChainIds: [number, number]) =>
+      (await source({ '/api/summary': tracked(trackedChainIds), '/api/tokens': tokens }).getSummary('eth-pls')).heads.map((entry) => entry.secondsPerSlot)
+    expect(await read([943, 11155111])).toEqual([10, 12])
+    expect(await read([11155111, 943])).toEqual([12, 10])
+  })
+
   test('tokens carry their counterpart and fall back to 18 decimals when the indexer could not read them', async () => {
     const list = await source({ '/api/tokens': tokens }).listTokens('eth-pls')
     expect(list[0]).toMatchObject({ symbol: 'USDC', side: 'first', decimals: 6 })
