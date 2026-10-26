@@ -2,7 +2,7 @@ import { Box, Flex, Table, Text, chakra } from "@chakra-ui/react";
 import { getAddress, isAddress } from "viem";
 import { RUNNER_NOTES, routerWarningOf } from "../tx/tip-copy";
 import { formatUnits } from "../ui/format";
-import type { BridgeDraft, DeliveryOptions, TipChoice } from "../tx/bridge-draft";
+import type { BridgeDraft, DeliveryOptions, TipChoice, TipStatus } from "../tx/bridge-draft";
 import { Field, Notice, TextInput } from "../ui/primitives";
 
 /** Props of {@link DeliveryFeeSection}. */
@@ -31,18 +31,21 @@ const MODES: readonly { readonly value: TipChoice; readonly label: string; reado
  * @param props The options, the draft and the destination chain.
  */
 export const DeliveryFeeSection = ({ destinationNativeSymbol, destinationName, options, onChange, draft }: DeliveryFeeSectionProps) => {
-  if (draft.tip === null) return null;
+  const { tip } = draft;
+  if (tip === null) return null;
   return (
     <Box as="fieldset" borderWidth="1px" borderColor="border" borderRadius="md" padding="3">
       <chakra.legend paddingX="1" fontWeight="medium" fontSize="sm">
         Tip for delivery
       </chakra.legend>
-      <TipPanel draft={draft} options={options} onChange={onChange} destinationNativeSymbol={destinationNativeSymbol} destinationName={destinationName} />
+      <TipPanel tip={tip} draft={draft} options={options} onChange={onChange} destinationNativeSymbol={destinationNativeSymbol} destinationName={destinationName} />
     </Box>
   );
 };
 
 type TipPanelProps = {
+  /** The tip of the draft. The caller has checked that the draft has one. */
+  readonly tip: TipStatus;
   readonly draft: BridgeDraft;
   readonly options: DeliveryOptions;
   readonly onChange: (next: DeliveryOptions) => void;
@@ -51,9 +54,7 @@ type TipPanelProps = {
 };
 
 /** The body of the panel: the reason when no tip can travel, or the choice of mode and what follows from it. */
-const TipPanel = ({ draft, options, onChange, destinationNativeSymbol, destinationName }: TipPanelProps) => {
-  const { tip } = draft;
-  if (tip === null) return null;
+const TipPanel = ({ tip, draft, options, onChange, destinationNativeSymbol, destinationName }: TipPanelProps) => {
   if (tip.kind === "unavailable") return <Notice tone="info">{tip.reason}</Notice>;
   return (
     <>
@@ -74,20 +75,20 @@ const TipPanel = ({ draft, options, onChange, destinationNativeSymbol, destinati
           </Flex>
         ))}
       </Box>
-      <TipDetails draft={draft} options={options} onChange={onChange} destinationNativeSymbol={destinationNativeSymbol} destinationName={destinationName} />
+      <TipDetails tip={tip} draft={draft} options={options} onChange={onChange} destinationNativeSymbol={destinationNativeSymbol} destinationName={destinationName} />
     </>
   );
 };
 
-const TipDetails = ({ draft, options, onChange, destinationNativeSymbol, destinationName }: TipPanelProps) => {
-  if (draft.tip?.kind !== "on") {
+const TipDetails = ({ tip, draft, options, onChange, destinationNativeSymbol, destinationName }: TipPanelProps) => {
+  if (tip.kind !== "on") {
     return (
       <Text fontSize="sm" marginTop="2" data-testid="no-tip-note">
         No tip: the page sends a plain relay. No router and no fee terms are involved, so no router and no runner can take a fee. Anyone can deliver your transfer directly on the bridge, for free, but nobody is paid to do it, so it may take longer.
       </Text>
     );
   }
-  return <TipFields draft={draft} options={options} onChange={onChange} destinationNativeSymbol={destinationNativeSymbol} destinationName={destinationName} />;
+  return <TipFields tip={tip} draft={draft} options={options} onChange={onChange} destinationNativeSymbol={destinationNativeSymbol} destinationName={destinationName} />;
 };
 
 const TipRunnerNotes = () => (
@@ -98,7 +99,10 @@ const TipRunnerNotes = () => (
   </Box>
 );
 
-type TipFieldsProps = TipPanelProps;
+type TipFieldsProps = Omit<TipPanelProps, "tip"> & {
+  /** The tip when it is on. The caller has checked the kind. */
+  readonly tip: Extract<TipStatus, { readonly kind: "on" }>;
+};
 
 const ModeFields = ({ options, onChange }: Pick<TipFieldsProps, "options" | "onChange">) => {
   if (options.mode === "percentage") {
@@ -148,9 +152,7 @@ const customRouterWarning = (routerText: string | null, defaultRouter: string): 
   return routerWarningOf({ router: getAddress(text), defaultRouter: getAddress(defaultRouter) });
 };
 
-const TipFields = ({ draft, options, onChange, destinationNativeSymbol, destinationName }: TipFieldsProps) => {
-  const { tip } = draft;
-  if (tip === null || tip.kind !== "on") return null;
+const TipFields = ({ tip, draft, options, onChange, destinationNativeSymbol, destinationName }: TipFieldsProps) => {
   const { target } = tip;
   const warning = customRouterWarning(options.routerText, target.router);
   return (
