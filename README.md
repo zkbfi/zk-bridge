@@ -86,6 +86,7 @@ The red team tests pass when an attack **succeeds**. A green red team run means 
 | Harness | End-to-end red team exploits on two Anvil chains (chain 1 on port 18545, chain 369 on port 18546) | `pnpm --dir harness install && pnpm --dir harness test` | Not rerun for this note |
 | Checks | The specification's circuit does not compile, the frontend fails, the deploy script cannot deploy, and the npm package does not exist | `bash checks/run.sh` | Not rerun for this note |
 
+To check that the contracts have full line, branch and function coverage, run `script/coverage-check.sh`. It exits with an error and a table when any file is below 100 percent. The header of the script lists the exclusions.
 To run two local chains in Docker with the bridge contracts deployed, see `docs/local-network.md`. The network has no prover and no bots.
 For a run on two local chains with real SP1 Groth16 proofs and the real SP1 verifier contract (on a server, without Docker), see `docs/end-to-end-real-proofs.md`. That run used the full relayer, so it lives on the branch `archive/full-relayer`.
 To make proofs and message evidence, see `prover/README.md`. The commands are `zk-bridge-prover prove` and `zk-bridge-prover evidence`.
