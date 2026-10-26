@@ -235,9 +235,47 @@ contract DeployBridge is Script {
         (ChainDeployment memory deploymentA, ChainDeployment memory deploymentB) = buildDeployments(config, plan);
 
         vm.selectFork(forkA);
-        deployChain(deploymentA);
+        ChainAddresses memory deployedA = deployChain(deploymentA);
         vm.selectFork(forkB);
-        deployChain(deploymentB);
+        ChainAddresses memory deployedB = deployChain(deploymentB);
+        console2.log("prover flags, chain A:", deploymentFlags("--chain-a", config.chainA, deployedA));
+        console2.log("prover flags, chain B:", deploymentFlags("--chain-b", config.chainB, deployedB));
+    }
+
+    /// @notice The arguments that `zk-bridge-prover deployment-file` takes for one chain, as one line.
+    /// @dev Pass these flags and not the Foundry broadcast files. Both chains use the same deployer, so two chains whose
+    /// nonce ranges overlap create contracts at the same addresses. Foundry then names a contract by the first chain
+    /// that created it, and the broadcast file of the second chain carries wrong `contractName` fields. The addresses
+    /// here come from the deployment itself, which `verifyDeployment` has checked against the prediction. The caller adds
+    /// `start_block` (the block before the first deployment transaction) and, if wanted, `rpc_url`.
+    /// @param flag The flag of the prover section: `--chain-a` or `--chain-b`.
+    /// @param chain The settings of the chain.
+    /// @param deployed The deployed addresses of the chain.
+    function deploymentFlags(string memory flag, ChainConfig memory chain, ChainAddresses memory deployed)
+        public
+        pure
+        returns (string memory line)
+    {
+        line = string.concat(flag, " chain_id=", vm.toString(chain.chainId));
+        line = _appendFlag(line, flag, "light_client", deployed.lightClient);
+        line = _appendFlag(line, flag, "gate", deployed.gate);
+        line = _appendFlag(line, flag, "bridge", deployed.bridge);
+        line = _appendFlag(line, flag, "mediator", deployed.mediator);
+        line = _appendFlag(line, flag, "token_factory", deployed.factory);
+        line = _appendFlag(line, flag, "native_router", deployed.wrappedRouter);
+        line = _appendFlag(line, flag, "wrapped_native", chain.wrappedNative);
+        line = _appendFlag(line, flag, "fee_router", deployed.feeRouter);
+        line = _appendFlag(line, flag, "fork_registry", deployed.registry);
+    }
+
+    /// @dev Adds `<flag> <key>=<address>`. A contract that the chain does not get is the zero address, which the prover
+    /// reads as absent.
+    function _appendFlag(string memory line, string memory flag, string memory key, address value)
+        private
+        pure
+        returns (string memory)
+    {
+        return string.concat(line, " ", flag, " ", key, "=", vm.toString(value));
     }
 
     // ------------------------------------------------------------------ configuration

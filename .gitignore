@@ -4,3 +4,4 @@ node_modules/
 light-client/elf/
 broadcast/
 script/hardened/e2e.config.json
+.deploy/

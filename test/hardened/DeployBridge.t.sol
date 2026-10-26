@@ -641,6 +641,61 @@ contract DeployBridgeTest is Test {
         _assertSameAddresses(plan.chainB, actualB);
     }
 
+    /// Claim: the prover flags of a chain name every deployed contract at its own role, and an absent contract is the
+    /// zero address. Shows: chain B (registry, native router, no fee router) gets its registry and a zero fee router, and
+    /// chain A (fee router, no registry) the reverse. Matters: the flags replace the `contractName` fields of the Foundry
+    /// broadcast file, which are wrong when the two chains create contracts at the same addresses (see the next test).
+    function test_deploymentFlags_nameEachContractAtItsRole() public view {
+        DeployBridge.BridgeConfig memory config = script.parseConfig(_validJson());
+        DeployBridge.Plan memory plan = script.predictAddresses(config);
+        string memory lineB = script.deploymentFlags("--chain-b", config.chainB, plan.chainB);
+        string memory expectedB = string.concat(
+            "--chain-b chain_id=369",
+            " --chain-b light_client=", vm.toString(plan.chainB.lightClient),
+            " --chain-b gate=", vm.toString(plan.chainB.gate),
+            " --chain-b bridge=", vm.toString(plan.chainB.bridge),
+            " --chain-b mediator=", vm.toString(plan.chainB.mediator),
+            " --chain-b token_factory=", vm.toString(plan.chainB.factory),
+            " --chain-b native_router=", vm.toString(plan.chainB.wrappedRouter),
+            " --chain-b wrapped_native=", vm.toString(config.chainB.wrappedNative),
+            " --chain-b fee_router=", vm.toString(address(0)),
+            " --chain-b fork_registry=", vm.toString(plan.chainB.registry)
+        );
+        assertEq(lineB, expectedB);
+        string memory lineA = script.deploymentFlags("--chain-a", config.chainA, plan.chainA);
+        assertEq(vm.contains(lineA, string.concat("--chain-a fee_router=", vm.toString(plan.chainA.feeRouter))), true);
+        assertEq(vm.contains(lineA, string.concat("--chain-a fork_registry=", vm.toString(address(0)))), true);
+    }
+
+    /// Claim: one deployer with overlapping nonce ranges creates different roles at the same address on the two chains.
+    /// Shows: with the nonces of the testnet run (2 on chain A, 1 on chain B), the gate of chain A and the fork registry of
+    /// chain B share an address, and so do every later pair. Matters: Foundry names a contract by address across chains,
+    /// so its broadcast file mislabels chain B. The deploy script prints the flags instead.
+    function test_overlappingNoncesPutDifferentRolesAtOneAddress() public pure {
+        address sharedDeployer = address(0x444b15380A4560555326158D6799914186937Ec2);
+        // Chain A: light client 2, gate 3. Chain B: light client 1, observed light client 2, registry 3.
+        DeployBridge.ChainAddresses memory chainA = _plan(sharedDeployer, 2, false);
+        DeployBridge.ChainAddresses memory chainB = _plan(sharedDeployer, 1, true);
+        assertEq(chainA.lightClient, chainB.observedLightClient, "light client of A is the own-chain light client of B");
+        assertEq(chainA.gate, chainB.registry, "gate of A is the registry of B");
+        assertEq(chainA.bridge, chainB.gate, "bridge of A is the gate of B");
+    }
+
+    function _plan(address owner, uint256 firstNonce, bool withRegistry)
+        internal
+        pure
+        returns (DeployBridge.ChainAddresses memory plan)
+    {
+        uint256 nonce = firstNonce;
+        plan.lightClient = vm.computeCreateAddress(owner, nonce++);
+        if (withRegistry) {
+            plan.observedLightClient = vm.computeCreateAddress(owner, nonce++);
+            plan.registry = vm.computeCreateAddress(owner, nonce++);
+        }
+        plan.gate = vm.computeCreateAddress(owner, nonce++);
+        plan.bridge = vm.computeCreateAddress(owner, nonce);
+    }
+
     /// Claim: the mediator on each side names the real mediator of the other chain. Shows: after both deployments,
     /// `mediatorContractOnOtherSide` of each mediator equals the deployed mediator of the other chain, which has code, and
     /// each mediator names the bridge and the chain identifier of its own side. Matters: the remote mediator is an

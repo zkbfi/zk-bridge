@@ -116,9 +116,10 @@ Both hashes must equal the pinned value. If one differs, stop.
 
 ## Step 4: fill the configuration
 
-Work on a copy outside the repository. Set the placeholders with `jq`. The checkpoint values come from the light-client bootstrap of each chain (see below).
+Work on a copy. Foundry reads a file only from a folder that `foundry.toml` allows, so the deploy script reads its configuration from `.deploy/` (listed in `.gitignore`). The file holds no secret. Set the placeholders with `jq`. The checkpoint values come from the light-client bootstrap of each chain (see below).
 
 ```sh
+mkdir -p .deploy
 jq --arg deployer "$DEPLOYER" --arg va "$VERIFIER_A" --arg vb "$VERIFIER_B" \
    --arg na "$NONCE_A" --arg nb "$NONCE_B" \
    --arg runner '<runner address>' --arg reward '<reward address, not the runner>' \
@@ -129,7 +130,7 @@ jq --arg deployer "$DEPLOYER" --arg va "$VERIFIER_A" --arg vb "$VERIFIER_B" \
     | .chainA.feeRouter.runner=$runner | .chainB.feeRouter.runner=$runner
     | .chainA.feeRouter.rewardAddress=$reward | .chainB.feeRouter.rewardAddress=$reward
     | .chainB.fee.recipient=$feeRecipient' \
-   script/testnet/bridge.config.testnet.json > "$RUN_DIR/bridge.config.json"
+   script/testnet/bridge.config.testnet.json > .deploy/bridge.config.json
 ```
 
 The runner key pays gas and signs deliveries. The reward address receives the fees. The runner bot refuses the same address for both roles. Keep them apart.
@@ -157,7 +158,7 @@ The command also prints the genesis validators root, genesis time, seconds per s
 Then run the deploy script without `--broadcast`. It checks every value and sends nothing.
 
 ```sh
-BRIDGE_CONFIG="$RUN_DIR/bridge.config.json" forge script script/hardened/DeployBridge.s.sol \
+BRIDGE_CONFIG=.deploy/bridge.config.json forge script script/hardened/DeployBridge.s.sol \
   --tc DeployBridge --account "$KEYSTORE_NAME" --sender "$DEPLOYER" 2>&1 | redact
 ```
 
@@ -168,19 +169,41 @@ A placeholder or a wrong value stops the script before any transaction.
 Run this step only when the dry run passes. A bridge starts locked.
 
 ```sh
-BRIDGE_CONFIG="$RUN_DIR/bridge.config.json" forge script script/hardened/DeployBridge.s.sol \
-  --tc DeployBridge --account "$KEYSTORE_NAME" --sender "$DEPLOYER" --broadcast --slow 2>&1 | redact | tee "$RUN_DIR/deploy.log"
+BRIDGE_CONFIG=.deploy/bridge.config.json forge script script/hardened/DeployBridge.s.sol \
+  --tc DeployBridge --account "$KEYSTORE_NAME" --sender "$DEPLOYER" --broadcast --slow --skip-simulation 2>&1 | redact | tee "$RUN_DIR/deploy.log"
 ```
 
-The log lists the addresses of each chain: light client, gate, bridge, mediator, native coin router, fee router and token factory. Write the deployment file with the prover. It reads the Foundry broadcast files and writes `$RUN_DIR/deployment.json` (mode 0600) with the fields of `deploymentChainSchema` in `explorer/shared/src/pairs.ts`.
+**Why `--skip-simulation`.** Without it, Foundry sets the gas limit of each transaction from its own local run, times 1.3. Sepolia runs the Amsterdam fork and charges much more gas for new contract code than Foundry counts. On 2026-10-26 `eth_estimateGas` on the real Sepolia endpoint gave these figures for the deploy transactions, next to the gas that the transaction used on a local fork of Sepolia:
+
+| Contract | Local fork gas used | Real Sepolia estimate |
+|---|---|---|
+| `BeaconLightClient` | 917,335 | 6,124,770 |
+| `BeaconForkGate` | 1,813,282 | 12,549,961 |
+| `MessageBridge` | 5,006,027 | 35,838,770 |
+| `TokenMediator` (largest) | 5,693,201 | 40,484,761 |
+| `WETHOmnibridgeRouter` | 574,658 | 3,871,406 |
+| `FeeRouter` | 1,396,348 | 9,824,883 |
+| Sum | 15,400,851 | 108,694,551 |
+
+The real figure is about 7 times the local figure. A limit of 1.3 times the local figure runs out of gas on Sepolia, and the deployed addresses then shift. With `--skip-simulation` and `--slow`, Foundry asks the node for each estimate when it sends the transaction, after the earlier transactions are mined, so the estimate uses the real gas rules. A plain transfer to a new account costs 207,391 gas on Sepolia (21,000 on a local fork). The block gas limit of Sepolia is 200,000,000. Chain 943 follows the usual rules: its estimates are about 1.2 times the local figures, and its block gas limit is 30,029,266. Check that your Foundry version sends transactions with a gas limit above 16,777,216 (EIP-7825) to Sepolia before the real run: nobody has sent one yet.
+
+The log lists the addresses of each chain: light client, gate, bridge, mediator, native coin router, fee router and token factory. It ends with two lines that start with `prover flags`. Those lines hold the addresses as arguments of the prover.
+
+Do not give the Foundry broadcast files to the prover. One deployer uses both chains, so the nonce ranges overlap and the two chains create contracts at the same addresses. Foundry then names a contract by the first chain that made it, and the file for chain 943 has wrong `contractName` fields (the registry is called a gate, and two contracts are called a fee router). The prover refuses such a file. The multi-chain file is also in `broadcast/multi/`, not in a folder for each chain.
+
+Write the deployment file with the prover. It writes `$RUN_DIR/deployment.json` (mode 0600) with the fields of `deploymentChainSchema` in `explorer/shared/src/pairs.ts`. The start block of a chain is the block before its first deployment transaction.
 
 ```sh
-"$PROVER" deployment-file --output "$RUN_DIR/deployment.json" \
-  --broadcast broadcast/DeployBridge.s.sol/11155111/run-latest.json \
-  --broadcast broadcast/DeployBridge.s.sol/943/run-latest.json
+RUN=broadcast/multi/DeployBridge.s.sol-latest/run.json
+HEX='def hex: ltrimstr("0x") | explode | map(if . >= 97 then . - 87 else . - 48 end) | reduce .[] as $digit (0; . * 16 + $digit);'
+START_A=$(jq "$HEX"'[.deployments[] | select(.chain == 11155111) | .receipts[].blockNumber | hex] | min - 1' "$RUN")
+START_B=$(jq "$HEX"'[.deployments[] | select(.chain == 943) | .receipts[].blockNumber | hex] | min - 1' "$RUN")
+FLAGS_A=$(sed -n 's/^ *prover flags, chain A: //p' "$RUN_DIR/deploy.log")
+FLAGS_B=$(sed -n 's/^ *prover flags, chain B: //p' "$RUN_DIR/deploy.log")
+eval "$PROVER deployment-file --output $RUN_DIR/deployment.json $FLAGS_A --chain-a start_block=$START_A $FLAGS_B --chain-b start_block=$START_B"
 ```
 
-The command refuses to overwrite without `--force` and refuses duplicate contract names. You can also give each address as `--chain-a key=value` and `--chain-b key=value`. Check `start_block` of each chain against the block of the first deployment transaction.
+The command refuses to overwrite without `--force`. Check `start_block` of each chain against the block of the first deployment transaction.
 
 ## Step 6: write the prover configuration
 
@@ -325,7 +348,7 @@ The runner also writes the outcome of each item (gas and fee earned) to the stat
 ## Step 12: clean up
 
 ```sh
-rm -rf "$RUN_DIR"
+rm -rf "$RUN_DIR" .deploy
 unset VALVE_KEY RUNPOD_API_KEY FOUNDRY_RPC_ENDPOINTS
 ```
 

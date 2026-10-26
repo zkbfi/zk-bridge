@@ -12,6 +12,7 @@ cbor_metadata = false
 fs_permissions = [
   { access = "read", path = "./out" },
   { access = "read", path = "./script/hardened" },
+  { access = "read", path = "./.deploy" },
   { access = "read", path = "./light-client/tests/fixtures" },
   { access = "read", path = "./test/hardened/fixtures" },
 ]
