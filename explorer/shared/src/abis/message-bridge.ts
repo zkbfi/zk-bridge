@@ -38,6 +38,11 @@ export const messageBridgeAbi = [
             "name": "remoteLightClient",
             "type": "address",
             "internalType": "address"
+          },
+          {
+            "name": "gloasForkSlot",
+            "type": "uint64",
+            "internalType": "uint64"
           }
         ]
       },
@@ -115,6 +120,19 @@ export const messageBridgeAbi = [
         "name": "",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "NO_GLOAS_FORK",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
       }
     ],
     "stateMutability": "view"
@@ -590,6 +608,19 @@ export const messageBridgeAbi = [
         "name": "",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "gloasForkSlot",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
       }
     ],
     "stateMutability": "view"
@@ -1310,6 +1341,22 @@ export const messageBridgeAbi = [
         "name": "maximum",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "GloasSlotRefused",
+    "inputs": [
+      {
+        "name": "slot",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "gloasForkSlot",
+        "type": "uint64",
+        "internalType": "uint64"
       }
     ]
   },

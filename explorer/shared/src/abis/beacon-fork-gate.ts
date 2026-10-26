@@ -139,6 +139,19 @@ export const beaconForkGateAbi = [
   },
   {
     "type": "function",
+    "name": "PROGRESSIVE_STATE_DEPTH",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint8",
+        "internalType": "uint8"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "admit",
     "inputs": [
       {
