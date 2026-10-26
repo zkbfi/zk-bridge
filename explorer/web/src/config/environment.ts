@@ -99,6 +99,7 @@ export const loadPairConfig = async (configuration: WebConfiguration, fetcher: T
   try {
     return buildPairConfig(configuration.pairName, JSON.parse(text));
   } catch (error) {
-    throw new ConfigurationError(`The deployment file is not usable: ${error instanceof Error ? error.message : String(error)}`);
+    // `JSON.parse` and the pair builder throw Error objects only.
+    throw new ConfigurationError(`The deployment file is not usable: ${(error as Error).message}`);
   }
 };
