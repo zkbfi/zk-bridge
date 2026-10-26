@@ -57,7 +57,8 @@ import {IWETH} from "./IWETH.sol";
 ///   refused, or the refund of a gas based fee fails: the router hands off the amount that it could not deliver.
 /// - The terms decode but name the zero address or the router itself as the recipient. The router takes the tip by the
 ///   terms, as for any delivery, and hands off the rest.
-/// - The data has no known shape. No tip can be computed, so the router hands off the whole value.
+/// - The data has no known shape: shorter than a director, or a recipient word with bits above 160, which `abi.decode`
+///   would refuse. No tip can be computed, so the router hands off the whole value.
 /// - The data is a 20 byte legacy receiver, and the token is not the wrapped native token. The router pays the token to
 ///   that receiver, with no fee, and hands off the value when the token refuses the receiver.
 /// The router never burns. When the push to `failedDeliveryAddress` fails too (a token that blocks it), the router keeps
@@ -218,7 +219,7 @@ contract DeliveryRouter is ReentrancyGuard {
             _payLegacy(token, address(bytes20(data)), value);
             return;
         }
-        if (data.length < DIRECTOR_LENGTH) {
+        if (data.length < DIRECTOR_LENGTH || _hasDirtyRecipientWord(data)) {
             _handOff(token, address(0), value, Reason.InvalidTerms);
             return;
         }
@@ -347,6 +348,16 @@ contract DeliveryRouter is ReentrancyGuard {
         assembly {
             sstore(slot, value)
         }
+    }
+
+    /// @dev True when the first word of the data has bits above 160. `abi.decode` reverts on such a word, and the callback
+    /// must never revert, so the router treats the data as having no known shape.
+    function _hasDirtyRecipientWord(bytes memory data) private pure returns (bool) {
+        uint256 firstWord;
+        assembly {
+            firstWord := mload(add(data, 32))
+        }
+        return firstWord >> 160 != 0;
     }
 
     function _isGasBased(uint256 settings) private pure returns (bool) {
