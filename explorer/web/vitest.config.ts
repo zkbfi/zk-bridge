@@ -12,6 +12,10 @@ export default defineConfig({
   },
   server: { fs: { allow: [fileURLToPath(new URL("..", import.meta.url))] } },
   test: {
+    // Share of the cores for this package. The four packages of `pnpm test` run at the same time, and the shares add
+    // up to under 100 percent of the cores (web 50, bots 25, indexer 12, shared 12). Without a share, each run takes one
+    // worker per core, and the Chakra tests of web miss their 1 second waits under the load.
+    maxWorkers: "50%",
     environment: "jsdom",
     include: ["test/**/*.test.ts", "test/**/*.test.tsx"],
     setupFiles: ["test/setup.ts"],
