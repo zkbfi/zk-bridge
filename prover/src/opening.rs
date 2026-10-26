@@ -241,6 +241,27 @@ fn hex_list(value: &Value, what: &str) -> Result<Vec<Bytes>> {
         .collect()
 }
 
+/// The RLP of the remote block header. The raw header of the node (`debug_getRawHeader`) is the exact source: a header of a
+/// newer fork has fields that the JSON of the block does not show, and a rebuild from that JSON then hashes to another
+/// value (a live Sepolia block did). A node without the method, or with a wrong answer, leaves the rebuild from the JSON.
+/// Both sources are checked against `block_hash`, so neither is trusted.
+///
+/// # Errors
+/// `Error::Malformed` when the raw header is missing and the rebuild does not hash to the block hash either. The message
+/// names both causes.
+fn remote_header_rlp(remote: &ChainClient, block: &Value, block_hash: B256) -> Result<Vec<u8>> {
+    let raw_error = match remote.raw_header(block_hash) {
+        Ok(bytes) => return Ok(bytes),
+        Err(error) => error,
+    };
+    match rebuild_execution_header(block) {
+        Ok(rebuilt) => Ok(rebuilt.header_rlp.to_vec()),
+        Err(error) => Err(Error::Malformed(format!(
+            "the remote header: the raw header failed ({raw_error}) and the rebuild from JSON failed ({error})"
+        ))),
+    }
+}
+
 /// Reads the chains, builds the proof, checks it natively and encodes the calldata of `openDeposits`.
 ///
 /// The bridge is the authority for its wiring: the command reads the chain identifiers, the own light client and the remote
@@ -294,7 +315,7 @@ pub fn build_opening_proof(request: &OpeningRequest<'_>) -> Result<OpeningPackag
             remote.name()
         ))
     })?;
-    let header = rebuild_execution_header(&block)?;
+    let header_rlp = remote_header_rlp(remote, &block, remote_block_hash)?;
     let block_number = crate::rpc::parse_quantity(&block["number"])?;
 
     let stored_slot = match request.stored_slot {
@@ -321,7 +342,7 @@ pub fn build_opening_proof(request: &OpeningRequest<'_>) -> Result<OpeningPackag
     }
     let proof = OpeningProof {
         remoteSlot: remote_slot,
-        remoteHeaderRlp: header.header_rlp.clone(),
+        remoteHeaderRlp: header_rlp.into(),
         accountProof: hex_list(&answer["accountProof"], "accountProof")?,
         storedSlot: stored_slot,
         storageProof: hex_list(&storage_entry["proof"], "storageProof")?,

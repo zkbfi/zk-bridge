@@ -68,15 +68,39 @@ fn stored_hash() -> B256 {
     B256::repeat_byte(0x5a)
 }
 
+/// Which header the remote block has.
+#[derive(Clone, Copy, PartialEq)]
+enum HeaderMode {
+    /// The fields that the JSON rebuilder knows. The node does not serve `debug_getRawHeader`.
+    Plain,
+    /// One more field than the JSON of the block shows (a Gloas header has `slotNumber`). Only `debug_getRawHeader` gives
+    /// the exact bytes, and the block hash is the hash of those bytes.
+    ExtraField,
+}
+
 /// The remote world: tries, block and answers.
 struct Remote {
     account_proof: Vec<Bytes>,
     storage_proof: Vec<Bytes>,
     block: Value,
     block_hash: B256,
+    /// What `debug_getRawHeader` answers, or `None` for a node without the method.
+    raw_header: Option<Vec<u8>>,
+}
+
+/// The RLP list of `header_rlp` with one more string item at the end.
+fn with_extra_item(header_rlp: &[u8]) -> Vec<u8> {
+    let mut buffer = header_rlp;
+    let list = alloy_rlp::Header::decode(&mut buffer).unwrap();
+    assert!(list.list && list.payload_length == buffer.len());
+    rlp_list(&[buffer.to_vec(), rlp_string(&[0x2a])])
 }
 
 fn remote() -> Remote {
+    remote_in(HeaderMode::Plain)
+}
+
+fn remote_in(mode: HeaderMode) -> Remote {
     let entry = rlp_string(stored_hash().as_slice());
     let storage_node = single_leaf(keccak256(execution_block_hashes_slot(STORED_SLOT)), &entry);
     let storage_root = keccak256(&storage_node);
@@ -107,15 +131,21 @@ fn remote() -> Remote {
         "baseFeePerGas": "0x7",
         "transactions": [],
     });
-    let block_hash = header_hash(&encode_execution_header(&execution_header_from_json(
-        &block,
-    )));
+    let rebuilt = encode_execution_header(&execution_header_from_json(&block));
+    let (block_hash, raw_header) = match mode {
+        HeaderMode::Plain => (header_hash(&rebuilt), None),
+        HeaderMode::ExtraField => {
+            let raw = with_extra_item(&rebuilt);
+            (keccak256(&raw), Some(raw))
+        }
+    };
     block["hash"] = json!(format!("{block_hash:#x}"));
     Remote {
         account_proof: vec![account_node],
         storage_proof: vec![storage_node],
         block,
         block_hash,
+        raw_header,
     }
 }
 
@@ -146,8 +176,8 @@ fn input_of(call: &Value) -> (Address, Vec<u8>) {
     (to, hex::decode(request["data"].as_str().unwrap()).unwrap())
 }
 
-fn own_chain_url() -> String {
-    serve_rpc(|call| {
+fn own_chain_url(mode: HeaderMode) -> String {
+    serve_rpc(move |call| {
         if call["method"] == "eth_chainId" {
             return json!(format!("{OWN_CHAIN_ID:#x}"));
         }
@@ -185,7 +215,7 @@ fn own_chain_url() -> String {
                 let call =
                     LightClientContract::executionBlockHashesCall::abi_decode(&data).unwrap();
                 let hash = if call.slot == REMOTE_SLOT {
-                    remote().block_hash
+                    remote_in(mode).block_hash
                 } else {
                     B256::ZERO
                 };
@@ -196,11 +226,17 @@ fn own_chain_url() -> String {
     })
 }
 
-fn remote_chain_url(tamper: Tamper) -> String {
+fn remote_chain_url(tamper: Tamper, mode: HeaderMode) -> String {
     serve_rpc(move |call| {
-        let world = remote();
+        let world = remote_in(mode);
         match call["method"].as_str().unwrap() {
             "eth_chainId" => json!(format!("{REMOTE_CHAIN_ID:#x}")),
+            "debug_getRawHeader" => {
+                assert_eq!(call["params"][0], format!("{:#x}", world.block_hash));
+                world
+                    .raw_header
+                    .map_or(Value::Null, |raw| json!(hex::encode_prefixed(raw)))
+            }
             "eth_getBlockByHash" => {
                 assert_eq!(call["params"][0], format!("{:#x}", world.block_hash));
                 world.block
@@ -256,8 +292,12 @@ impl Drop for Scratch {
 }
 
 fn run_command(tamper: Tamper, extra: &[&str]) -> (Result<i32>, Vec<u8>) {
-    let own = own_chain_url();
-    let remote = remote_chain_url(tamper);
+    run_command_in(tamper, HeaderMode::Plain, extra)
+}
+
+fn run_command_in(tamper: Tamper, mode: HeaderMode, extra: &[&str]) -> (Result<i32>, Vec<u8>) {
+    let own = own_chain_url(mode);
+    let remote = remote_chain_url(tamper, mode);
     let scratch = Scratch(std::env::temp_dir().join(format!(
         "opening-proof-{}-{}",
         std::process::id(),
@@ -358,6 +398,25 @@ fn the_command_prints_the_calldata_of_open_deposits_with_the_proof_of_the_world(
     // The slot rule of the Solidity helper, written out here: keccak256(abi.encode(uint256(storedSlot), 3)).
     let expected_slot = keccak256((U256::from(STORED_SLOT), U256::from(3u64)).abi_encode());
     assert_eq!(printed["storageSlot"], format!("{expected_slot:#x}"));
+}
+
+/// Claim: when the remote header has a field that the JSON of the block does not show, the command takes the exact bytes
+/// from `debug_getRawHeader`, so the header in the proof hashes to the block hash that the own light client stored.
+/// Why it matters: a live Sepolia block (Gloas) failed the JSON rebuild with "the rebuilt header hashes to X, the node
+/// reports Y", so the command could not open a bridge whose remote chain is Sepolia.
+#[test]
+fn a_header_with_an_extra_field_comes_from_the_raw_header() {
+    let (outcome, out) = run_command_in(Tamper::Nothing, HeaderMode::ExtraField, &[]);
+    assert_eq!(outcome.unwrap(), 0);
+    let printed: Value = serde_json::from_slice(&out).unwrap();
+    let world = remote_in(HeaderMode::ExtraField);
+    let raw = world.raw_header.unwrap();
+    assert_eq!(
+        printed["proof"]["remoteHeaderRlp"],
+        hex::encode_prefixed(&raw)
+    );
+    assert_eq!(keccak256(&raw), world.block_hash);
+    assert_eq!(printed["verifiedNatively"], true);
 }
 
 /// Claim: one flipped byte in a node of the account proof, or of the storage proof, stops the command with a refusal, and
