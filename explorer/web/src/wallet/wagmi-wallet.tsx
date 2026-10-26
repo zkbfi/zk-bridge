@@ -49,8 +49,8 @@ const WalletBridge = ({ children }: { readonly children: ReactNode }) => {
     () => ({
       status: statusOf(connection.status),
       account: connection.address ?? null,
-      chainId: connection.status === "connected" ? (connection.chainId ?? null) : null,
-      walletName: connection.status === "connected" ? (connection.connector?.name ?? null) : null,
+      chainId: connection.status === "connected" ? connection.chainId : null,
+      walletName: connection.status === "connected" ? connection.connector.name : null,
       walletAvailable: connector !== undefined,
       kind: "real",
       async connect() {
