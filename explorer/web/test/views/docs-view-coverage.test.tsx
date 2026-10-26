@@ -9,9 +9,10 @@ const pages = parseDocPages({ "/d/01-one.md": "# Page one\n\nText.\n\n## First h
 afterEach(() => vi.restoreAllMocks());
 
 describe("the docs view, edge cases", () => {
-  it("says that no page exists when the list of pages is empty and no slug is asked for", () => {
+  it("says that there are no pages, and names no page, when the list is empty and no slug is asked for", () => {
     renderPage(<DocsView slug={null} heading={null} pages={[]} />);
-    expect(screen.getByRole("status")).toHaveTextContent('There is no documentation page called ""');
+    expect(screen.getByRole("status")).toHaveTextContent("There are no documentation pages yet.");
+    expect(screen.getByRole("status")).not.toHaveTextContent("called");
   });
 
   it("scrolls to the top when the route names no heading", () => {

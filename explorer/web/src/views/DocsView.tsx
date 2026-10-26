@@ -31,6 +31,7 @@ export const DocsView = ({ slug, heading, pages = DOC_PAGES }: DocsViewProps) =>
     document.getElementById(heading)?.scrollIntoView({ block: "start" });
   }, [page, heading]);
 
+  if (page === null && slug === null) return <Notice tone="info">There are no documentation pages yet.</Notice>;
   if (page === null) return <Notice tone="warning">There is no documentation page called "{slug}".</Notice>;
   return (
     <Flex gap="6" direction={{ base: "column", md: "row" }} alignItems="flex-start">
