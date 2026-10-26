@@ -550,6 +550,8 @@ pub(crate) mod test_support {
         match kind {
             ChainKind::Ethereum => 800,
             ChainKind::Pulsechain => 1330,
+            ChainKind::Sepolia => 301,
+            ChainKind::PulsechainTestnetV4 => 101,
         }
     }
 }
@@ -562,7 +564,7 @@ mod tests {
         store_at, store_from_bootstrap_json, verify_update_natively, StateView, UpdateInput,
     };
 
-    const KINDS: [ChainKind; 2] = [ChainKind::Ethereum, ChainKind::Pulsechain];
+    const KINDS: [ChainKind; 4] = ChainKind::ALL;
 
     /// The store of a light client whose head is the header at `slot`, from the state that the chain serves for it.
     fn store_at_slot(

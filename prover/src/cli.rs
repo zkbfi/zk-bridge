@@ -99,7 +99,8 @@ pub struct ProveArguments {
     /// The beacon API of the source chain, when no route is given.
     #[arg(long, conflicts_with = "route", requires_all = ["chain", "head_slot"])]
     pub beacon_url: Option<String>,
-    /// The chain kind of the source beacon chain (`ethereum` or `pulsechain`), when no route is given.
+    /// The chain kind of the source beacon chain (`ethereum`, `pulsechain`, `sepolia` or `pulsechain-testnet-v4`), when no
+    /// route is given.
     #[arg(long, conflicts_with = "route")]
     pub chain: Option<String>,
     /// The slot of the starting head. With it, the command reads nothing from the destination chain.
@@ -171,7 +172,8 @@ fn plan_prove(config: &Config, arguments: &ProveArguments) -> Result<ProvePlan> 
             let name = arguments.chain.as_deref().unwrap_or_default();
             let chain = ChainKind::from_name(name).ok_or_else(|| {
                 Error::Usage(format!(
-                    "--chain: unknown chain `{name}`; use ethereum or pulsechain"
+                    "--chain: unknown chain `{name}`; the known chains are {}",
+                    ChainKind::known_names()
                 ))
             })?;
             (EXPLICIT_HEAD_ROUTE.to_string(), url.clone(), chain, None)

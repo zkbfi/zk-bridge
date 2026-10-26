@@ -107,12 +107,14 @@ impl BlockFeed for RpcBlockFeed {
 }
 
 /// The slot of execution block 1 when the command line gives none: 64 slots into a sync committee period that lies deep in
-/// the Capella fork of the chain (Ethereum period 760, PulseChain period 1326). The run then stays far from the period border
+/// the Capella fork of the chain (Ethereum period 760, PulseChain period 1326, Sepolia period 300, PulseChain testnet v4 period 100). The run then stays far from the period border
 /// for about 8,000 blocks.
 pub fn default_first_slot(kind: ChainKind) -> u64 {
     let period = match kind {
         ChainKind::Ethereum => 760,
         ChainKind::Pulsechain => 1326,
+        ChainKind::Sepolia => 300,
+        ChainKind::PulsechainTestnetV4 => 100,
     };
     period * kind.spec().epochs_per_sync_committee_period * kind.spec().slots_per_epoch + 64
 }

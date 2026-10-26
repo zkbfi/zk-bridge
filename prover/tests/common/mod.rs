@@ -18,7 +18,7 @@ use zk_bridge_prover::local_network::signed_beacon::node::{
 };
 
 /// The two chains whose specifications the tests cover.
-pub const KINDS: [ChainKind; 2] = [ChainKind::Ethereum, ChainKind::Pulsechain];
+pub const KINDS: [ChainKind; 4] = ChainKind::ALL;
 
 /// The timestamp of execution block 1. Genesis follows from it and from the first slot.
 pub const FIRST_TIMESTAMP: u64 = 1_800_000_000;

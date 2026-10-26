@@ -7,7 +7,9 @@ use crate::error::{Error, Result};
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::{SolCall, SolValue};
 use lc_core::abi::{executeMessageCall, BeaconBlockHeader as AbiHeader, MessageProof};
-use lc_core::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN};
+use lc_core::chain::{
+    ChainSpec, ForkName, ETHEREUM_MAINNET, PULSECHAIN, PULSECHAIN_TESTNET_V4, SEPOLIA,
+};
 use lc_core::execution::Log;
 use lc_core::json::{execution_header_from_json, receipts_from_json};
 use lc_core::message::{
@@ -44,14 +46,29 @@ pub enum ChainKind {
     Ethereum,
     /// PulseChain.
     Pulsechain,
+    /// Sepolia (chain identifier 11155111). It runs the Gloas fork. `lc-core` refuses Gloas headers and updates with a
+    /// clear error while the design of the Gloas execution payload is open, so a run on this chain stops with that error.
+    Sepolia,
+    /// PulseChain testnet v4 (chain identifier 943). It stopped at Capella, like PulseChain.
+    PulsechainTestnetV4,
 }
 
 impl ChainKind {
+    /// Every chain kind, in the order of the documentation.
+    pub const ALL: [ChainKind; 4] = [
+        Self::Ethereum,
+        Self::Pulsechain,
+        Self::Sepolia,
+        Self::PulsechainTestnetV4,
+    ];
+
     /// The `lc-core` chain specification.
     pub fn spec(self) -> &'static ChainSpec {
         match self {
             Self::Ethereum => &ETHEREUM_MAINNET,
             Self::Pulsechain => &PULSECHAIN,
+            Self::Sepolia => &SEPOLIA,
+            Self::PulsechainTestnetV4 => &PULSECHAIN_TESTNET_V4,
         }
     }
 
@@ -59,6 +76,8 @@ impl ChainKind {
         match self {
             Self::Ethereum => ChainSelector::EthereumMainnet,
             Self::Pulsechain => ChainSelector::Pulsechain,
+            Self::Sepolia => ChainSelector::Sepolia,
+            Self::PulsechainTestnetV4 => ChainSelector::PulsechainTestnetV4,
         }
     }
 
@@ -67,13 +86,41 @@ impl ChainKind {
         self.spec().seconds_per_slot
     }
 
-    /// The chain with this name in the configuration (`ethereum` or `pulsechain`), or `None`.
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "ethereum" => Some(Self::Ethereum),
-            "pulsechain" => Some(Self::Pulsechain),
-            _ => None,
+    /// The name of the chain in the configuration file and on the command line.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Ethereum => "ethereum",
+            Self::Pulsechain => "pulsechain",
+            Self::Sepolia => "sepolia",
+            Self::PulsechainTestnetV4 => "pulsechain-testnet-v4",
         }
+    }
+
+    /// The chain with this name in the configuration (see [`ChainKind::name`]), or `None`.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.name() == name)
+    }
+
+    /// The names of all chains, as one text for an error message: `ethereum, pulsechain, ...`.
+    pub fn known_names() -> String {
+        Self::ALL
+            .iter()
+            .map(|kind| kind.name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Like [`ChainKind::from_name`], but an unknown name is an error that lists the known names.
+    ///
+    /// # Errors
+    /// `Error::Config` with the unknown name and the list of known names.
+    pub fn parse(name: &str) -> Result<Self> {
+        Self::from_name(name).ok_or_else(|| {
+            Error::Config(format!(
+                "unknown chain `{name}`; the known chains are {}",
+                Self::known_names()
+            ))
+        })
     }
 }
 
@@ -647,6 +694,26 @@ impl BlockView {
         })
     }
 
+    /// Parses a block of `chain` after a check of its fork. The slot of the block comes from its first bytes, and the chain
+    /// schedule gives the fork. Only Capella blocks go to the parser. A Gloas block is refused with the refusal of
+    /// `lc-core`, and any other fork is refused by name. The parser never reads a block of another fork as Capella.
+    ///
+    /// # Errors
+    /// `Error::VerificationRefused` for a Gloas block. `Error::Malformed` for another fork than Capella, or for bytes
+    /// that are not a block.
+    pub fn parse_for_chain(bytes: &[u8], chain: ChainKind) -> Result<Self> {
+        let slot = signed_block_slot(bytes)?;
+        match chain.spec().fork_at_slot(slot) {
+            ForkName::Capella => Self::parse(bytes),
+            ForkName::Gloas => Err(Error::VerificationRefused(
+                lc_core::Error::GloasPayloadNotFinalized.to_string(),
+            )),
+            fork => Err(Error::Malformed(format!(
+                "beacon block at slot {slot} is of the fork {fork:?}; the block path reads Capella blocks only"
+            ))),
+        }
+    }
+
     /// The block as a light-client header.
     pub fn as_light_client_header(&self) -> LightClientHeader {
         LightClientHeader::full(
@@ -655,6 +722,22 @@ impl BlockView {
             self.execution_branch.clone(),
         )
     }
+}
+
+/// The slot of an SSZ `SignedBeaconBlock`: the first 8 bytes of the message that the first offset points to.
+fn signed_block_slot(bytes: &[u8]) -> Result<u64> {
+    let truncated = || Error::Malformed("beacon block: the bytes end before the slot".into());
+    let offset = bytes
+        .get(0..4)
+        .and_then(|head| <[u8; 4]>::try_from(head).ok())
+        .map(|head| u32::from_le_bytes(head) as usize)
+        .ok_or_else(truncated)?;
+    let slot = offset
+        .checked_add(8)
+        .and_then(|end| bytes.get(offset..end))
+        .and_then(|head| <[u8; 8]>::try_from(head).ok())
+        .ok_or_else(truncated)?;
+    Ok(u64::from_le_bytes(slot))
 }
 
 /// The signature part of an update, from the child block JSON (`sync_aggregate`) and its slot.
@@ -815,6 +898,90 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+
+    /// Claim: a block of a Gloas slot is refused with the `lc-core` refusal and a block of a non-Capella fork is refused
+    /// by name, while the slot is read from the bytes. Why it matters: the parser reads the Capella layout only, so a
+    /// block of another fork must never reach it. Sepolia must fail closed, never parse as Capella.
+    #[test]
+    fn a_block_of_another_fork_never_reaches_the_capella_parser() {
+        let block_at = |slot: u64| {
+            let mut bytes = vec![0u8; 4 + 96 + 8 + 4];
+            bytes[0..4].copy_from_slice(&100u32.to_le_bytes());
+            bytes[100..108].copy_from_slice(&slot.to_le_bytes());
+            bytes
+        };
+        let gloas_slot = lc_core::chain::SEPOLIA.fork_schedule.last().unwrap().epoch * 32;
+        let refusal = BlockView::parse_for_chain(&block_at(gloas_slot + 5), ChainKind::Sepolia)
+            .err()
+            .expect("refused");
+        assert!(matches!(&refusal, Error::VerificationRefused(text) if text.contains("Gloas")));
+        let deneb = BlockView::parse_for_chain(&block_at(132_608 * 32), ChainKind::Sepolia)
+            .err()
+            .expect("refused");
+        assert!(matches!(&deneb, Error::Malformed(text) if text.contains("Deneb")));
+        let capella =
+            BlockView::parse_for_chain(&block_at(4_200 * 32), ChainKind::PulsechainTestnetV4)
+                .err()
+                .expect("garbage bytes fail in the parser");
+        assert!(
+            matches!(&capella, Error::Malformed(text) if !text.contains("fork")),
+            "a Capella slot reaches the parser: {capella}"
+        );
+        assert!(BlockView::parse_for_chain(&[1, 2], ChainKind::Sepolia).is_err());
+    }
+
+    /// Claim: each chain kind names its own chain. The genesis validators root is the one that the chain serves, and
+    /// the name round-trips. Why it matters: a wrong root makes every sync committee signature fail on that chain.
+    #[test]
+    fn each_chain_kind_has_its_own_genesis_and_name() {
+        let expected = [
+            (
+                ChainKind::Ethereum,
+                "ethereum",
+                "4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95",
+            ),
+            (
+                ChainKind::Pulsechain,
+                "pulsechain",
+                "3357ba0018a2582aeabe4ae847aa17d50a3a99aaeb66293c01f80a83aecd0c90",
+            ),
+            (
+                ChainKind::Sepolia,
+                "sepolia",
+                "d8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078",
+            ),
+            (
+                ChainKind::PulsechainTestnetV4,
+                "pulsechain-testnet-v4",
+                "d81664ba97279a6fa0832041b4aee6009172b4750a99467ff670a9faf3a34e64",
+            ),
+        ];
+        assert_eq!(expected.len(), ChainKind::ALL.len());
+        for (kind, name, root) in expected {
+            assert_eq!(kind.name(), name);
+            assert_eq!(ChainKind::from_name(name), Some(kind));
+            assert_eq!(
+                format!("{:x}", kind.spec().genesis_validators_root),
+                root,
+                "{name}"
+            );
+        }
+        assert_eq!(ChainKind::Sepolia.seconds_per_slot(), 12);
+        assert_eq!(ChainKind::PulsechainTestnetV4.seconds_per_slot(), 10);
+    }
+
+    /// Claim: an unknown name is refused, and the message lists every known name. Why it matters: a typo in the file
+    /// must not select a chain, and the reader must see the valid choices.
+    #[test]
+    fn an_unknown_chain_name_is_refused_with_the_known_names() {
+        assert_eq!(ChainKind::from_name("Sepolia"), None);
+        assert_eq!(ChainKind::from_name("goerli"), None);
+        let message = ChainKind::parse("goerli").unwrap_err().to_string();
+        for kind in ChainKind::ALL {
+            assert!(message.contains(kind.name()), "{message}");
+        }
+        assert!(message.contains("goerli"));
+    }
     use super::*;
     use alloy_primitives::keccak256;
     use lc_core::message::message_id_for;

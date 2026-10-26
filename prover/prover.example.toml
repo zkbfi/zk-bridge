@@ -37,7 +37,7 @@ targets = ["stdout"]        # "stdout", "webhook", or both. `prove --to <target>
 # One route is one direction. The light client on the destination chain tracks the beacon chain of the source chain.
 [routes.ethereum_to_pulsechain.source]
 chain_id = 1
-chain = "ethereum"           # "ethereum" or "pulsechain": which fork table and chain specification the beacon chain uses
+chain = "ethereum"           # "ethereum", "pulsechain", "sepolia" or "pulsechain-testnet-v4": which fork table the beacon chain uses
 beacon_url = "https://REPLACE"
 # The `evidence` command also needs the execution endpoint and the bridge of the source chain.
 rpc_url = "https://REPLACE"

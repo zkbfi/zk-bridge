@@ -308,7 +308,7 @@ impl HttpBeaconSource {
 
     fn block_by_id(&self, id: &str) -> Result<Option<BlockView>> {
         self.get_ssz(&format!("/eth/v2/beacon/blocks/{id}"))?
-            .map(|bytes| BlockView::parse(&bytes))
+            .map(|bytes| BlockView::parse_for_chain(&bytes, self.chain))
             .transpose()
     }
 

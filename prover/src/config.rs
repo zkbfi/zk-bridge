@@ -206,7 +206,7 @@ fn default_webhook_retry_delay_seconds() -> u64 {
 pub struct SourceConfig {
     /// The chain identifier of the source chain.
     pub chain_id: u64,
-    /// `pulsechain` or `ethereum`: which `lc-core` chain specification applies to the beacon chain of the source.
+    /// `ethereum`, `pulsechain`, `sepolia` or `pulsechain-testnet-v4`: which `lc-core` chain specification applies to the beacon chain of the source.
     pub chain: String,
     /// The base URL of the beacon API of the source chain.
     pub beacon_url: String,
@@ -286,8 +286,10 @@ fn require_present<'a>(value: &'a Option<String>, key: &str) -> Result<&'a str> 
 impl SourceConfig {
     /// The `lc-core` chain kind of the beacon chain of the source.
     pub fn chain_kind(&self) -> Result<ChainKind> {
-        ChainKind::from_name(&self.chain)
-            .ok_or_else(|| Error::Config(format!("source.chain: unknown chain {}", self.chain)))
+        ChainKind::parse(&self.chain).map_err(|error| match error {
+            Error::Config(message) => Error::Config(format!("source.chain: {message}")),
+            other => other,
+        })
     }
 
     /// The execution RPC URL, for a command that reads the source chain.
@@ -671,6 +673,34 @@ mod tests {
         assert_eq!(route.destination.log_block_range, 2_000);
         assert_eq!(route.destination.start_block, 0);
         assert_eq!(route.source.chain_kind().unwrap(), ChainKind::Ethereum);
+    }
+
+    /// Claim: every chain name loads as the source chain of a route, and a misspelled name stops the load with the list of
+    /// the known names. Why it matters: a wrong chain selects wrong fork versions and every signature then fails.
+    #[test]
+    fn every_chain_name_loads_and_a_wrong_one_lists_the_choices() {
+        for kind in ChainKind::ALL {
+            let text = SAMPLE.replace(
+                "chain = \"ethereum\"",
+                &format!("chain = \"{}\"", kind.name()),
+            );
+            let config = Config::load(&text, &no_environment).unwrap();
+            assert_eq!(
+                config.route(None).unwrap().1.source.chain_kind().unwrap(),
+                kind
+            );
+        }
+        let wrong = SAMPLE.replace("chain = \"ethereum\"", "chain = \"sepolia-gloas\"");
+        let error = Config::load(&wrong, &no_environment)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("source.chain") && error.contains("sepolia-gloas"),
+            "{error}"
+        );
+        for kind in ChainKind::ALL {
+            assert!(error.contains(kind.name()), "{error}");
+        }
     }
 
     /// Claim: the example file of the repository loads, and it has the route that the documentation names.
