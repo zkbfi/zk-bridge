@@ -103,17 +103,17 @@ fn kinds() -> Vec<Kind> {
 }
 
 /// The root of a progressive list whose elements hash to `element_roots`.
-fn progressive_list_root(element_roots: &[B256]) -> B256 {
+pub(crate) fn progressive_list_root(element_roots: &[B256]) -> B256 {
     mix_in_length(&merkleize_progressive(element_roots), element_roots.len() as u64)
 }
 
 /// The root of a progressive list of basic values: `bytes` packs into chunks, `length` counts the values.
-fn progressive_packed_root(bytes: &[u8], length: u64) -> B256 {
+pub(crate) fn progressive_packed_root(bytes: &[u8], length: u64) -> B256 {
     mix_in_length(&merkleize_progressive(&pack_bytes(bytes)), length)
 }
 
 /// A 20 byte address as a chunk: right-padded with zeros.
-fn address_chunk(bytes: &[u8]) -> B256 {
+pub(crate) fn address_chunk(bytes: &[u8]) -> B256 {
     B256::right_padding_from(bytes)
 }
 
@@ -155,8 +155,12 @@ fn withdrawal_root(bytes: &[u8]) -> B256 {
     ])
 }
 
-/// `ExecutionPayloadBid`: a progressive container of 12 fields. `blob_kzg_commitments` is the only variable field.
-fn execution_payload_bid_root(bytes: &[u8]) -> Result<B256> {
+/// The 12 chunks of an `ExecutionPayloadBid` (a progressive container). `blob_kzg_commitments` is the only variable field.
+/// Chunk 0 is `parent_block_hash`, chunk 2 is `block_hash`.
+///
+/// # Errors
+/// `MalformedSsz` when the bytes break an SSZ rule.
+pub(crate) fn execution_payload_bid_chunks(bytes: &[u8]) -> Result<Vec<B256>> {
     use Kind::{Fixed, Variable};
     let f = split_container(
         bytes,
@@ -179,7 +183,7 @@ fn execution_payload_bid_root(bytes: &[u8]) -> Result<B256> {
         return malformed("blob_kzg_commitments is not a whole number of 48 byte commitments");
     }
     let commitments: Vec<B256> = f[10].chunks_exact(48).map(byte_vector_root).collect();
-    Ok(progressive_container_root(&[
+    Ok(vec![
         chunk32(f[0]),
         chunk32(f[1]),
         chunk32(f[2]),
@@ -192,7 +196,12 @@ fn execution_payload_bid_root(bytes: &[u8]) -> Result<B256> {
         u64_chunk(le_u64(f[9])),
         progressive_list_root(&commitments),
         chunk32(f[11]),
-    ]))
+    ])
+}
+
+/// `ExecutionPayloadBid`: a progressive container of 12 fields.
+fn execution_payload_bid_root(bytes: &[u8]) -> Result<B256> {
+    Ok(progressive_container_root(&execution_payload_bid_chunks(bytes)?))
 }
 
 /// Parses and hashes a Gloas `BeaconState`.

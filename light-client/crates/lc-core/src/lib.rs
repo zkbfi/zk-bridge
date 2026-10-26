@@ -23,6 +23,7 @@ pub mod observation;
 pub mod profile;
 pub mod receipts;
 pub mod ssz;
+pub mod ssz_block_gloas;
 pub mod ssz_state;
 pub mod ssz_state_gloas;
 pub mod types;

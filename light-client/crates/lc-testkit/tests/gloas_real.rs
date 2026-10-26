@@ -315,3 +315,41 @@ fn a_real_gloas_message_source_verifies_up_to_the_log() {
     // The strict decoder of the earlier forks does not read this header: the Gloas rule uses the tolerant one.
     assert!(decode_execution_header(&proof.executionHeaderRlp).is_err());
 }
+
+/// Claim: the Gloas block parser reproduces the body root of the REAL block B, and its bid branch equals the branch that the
+/// beacon node served (11 entries at index 2856, `execution_branch` of the light-client header), for the bid
+/// `parent_block_hash` that equals `state.latest_block_hash` of the state of B. A second real block with an attestation, a
+/// payload attestation and execution requests also hashes to the root of its header (`BUSY_BODY_ROOT`, read from the node).
+/// Controls: a flipped byte of the block changes the root; the branch fails at the neighbouring index 2857.
+#[test]
+fn the_real_gloas_block_hashes_to_its_body_root_and_gives_the_served_branch() {
+    use lc_core::ssz_block_gloas::try_parse_gloas_signed_block;
+    let bytes = std::fs::read(fixtures_dir().join("sepolia/gloas_head_block.ssz")).unwrap();
+    let block = try_parse_gloas_signed_block(&bytes).expect("the real block parses");
+    let update = real_update();
+    assert_eq!(block.header, update.finalized_header.beacon, "the body root equals the one in the real header");
+    assert_eq!(block.bid_parent_block_hash(), update.finalized_header.execution_block_hash());
+    assert_eq!(block.bid_parent_block_hash(), real_state().latest_block_hash().unwrap());
+    let branch = block.bid_parent_block_hash_branch();
+    assert_eq!(branch, update.finalized_header.execution_branch, "the branch that the node served");
+    assert!(is_valid_exact_branch(
+        &block.bid_parent_block_hash(),
+        &branch,
+        BLOCK_HASH_GINDEX_GLOAS,
+        &block.header.body_root
+    ));
+    assert!(!is_valid_exact_branch(&block.bid_parent_block_hash(), &branch, 2857, &block.header.body_root));
+
+    let mut changed = bytes.clone();
+    let middle = changed.len() / 2;
+    changed[middle] ^= 1;
+    let other = try_parse_gloas_signed_block(&changed);
+    assert!(other.map_or(true, |other| other.header.body_root != block.header.body_root));
+
+    let busy = std::fs::read(fixtures_dir().join("sepolia/gloas_busy_block.ssz")).unwrap();
+    let busy = try_parse_gloas_signed_block(&busy).expect("the busy block parses");
+    assert_eq!(format!("{:#x}", busy.header.body_root), BUSY_BODY_ROOT);
+}
+
+/// The `body_root` that the beacon node reported for the header of `gloas_busy_block.ssz` (slot 11441187).
+const BUSY_BODY_ROOT: &str = "0xcce11969f38eca9cb18151ffe7e288f6ba46949c8164c161dc1720fc83b151f4";

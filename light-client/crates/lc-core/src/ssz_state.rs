@@ -117,7 +117,7 @@ pub(crate) fn split_container<'a>(bytes: &'a [u8], kinds: &[Kind]) -> Result<Vec
 /// `limit` is the SSZ limit of the list type. All checks run before anything is allocated: the first offset is a
 /// multiple of 4, at least 4 and at most `bytes.len()`; the count it implies is at most `limit`; offsets never decrease
 /// and none passes the end of the input.
-fn split_variable_list(bytes: &[u8], limit: u64) -> Result<Vec<&[u8]>> {
+pub(crate) fn split_variable_list(bytes: &[u8], limit: u64) -> Result<Vec<&[u8]>> {
     if bytes.is_empty() {
         return Ok(Vec::new());
     }
@@ -653,7 +653,7 @@ pub struct ParsedBlock {
     pub body_field_roots: Vec<B256>,
 }
 
-fn signed_header_root(bytes: &[u8]) -> B256 {
+pub(crate) fn signed_header_root(bytes: &[u8]) -> B256 {
     let header = BeaconBlockHeader {
         slot: le_u64(&bytes[0..8]),
         proposer_index: le_u64(&bytes[8..16]),
@@ -664,7 +664,7 @@ fn signed_header_root(bytes: &[u8]) -> B256 {
     hash_pair(&header.hash_tree_root(), &byte_vector_root(&bytes[112..208]))
 }
 
-fn attestation_data_root(bytes: &[u8]) -> B256 {
+pub(crate) fn attestation_data_root(bytes: &[u8]) -> B256 {
     merkleize(&[
         u64_chunk(le_u64(&bytes[0..8])),
         u64_chunk(le_u64(&bytes[8..16])),
@@ -697,7 +697,7 @@ fn attestation_root(bytes: &[u8]) -> Result<B256> {
     Ok(merkleize(&[bitlist_root(parts[0], 2048)?, attestation_data_root(parts[1]), byte_vector_root(parts[2])]))
 }
 
-fn deposit_root(bytes: &[u8]) -> B256 {
+pub(crate) fn deposit_root(bytes: &[u8]) -> B256 {
     let proof_chunks: Vec<B256> = bytes[..33 * 32].chunks_exact(32).map(chunk32).collect();
     let data = &bytes[33 * 32..];
     let data_root = merkleize(&[
