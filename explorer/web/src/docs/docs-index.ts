@@ -36,7 +36,8 @@ export const parseDocPages = (files: Readonly<Record<string, string>>): readonly
       const headings = blocks.flatMap((block): DocHeading[] =>
         block.kind === "heading" && block.level > 1 ? [{ id: block.id, text: block.text, level: block.level as 2 | 3 | 4 }] : [],
       );
-      return { order: Number(match[1]), page: { slug: match[2] ?? "", title: title.text, blocks, headings } satisfies DocPage };
+      // The pattern always fills group 2, so the cast hides no missing value.
+      return { order: Number(match[1]), page: { slug: match[2] as string, title: title.text, blocks, headings } satisfies DocPage };
     })
     .sort((left, right) => left.order - right.order)
     .map((entry) => entry.page);

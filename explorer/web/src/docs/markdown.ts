@@ -58,6 +58,10 @@ const cellsOf = (line: string): readonly (readonly Inline[])[] =>
 
 const BULLET = /^\s*[-*]\s+(.*)$/;
 const NUMBERED = /^\s*\d+\.\s+(.*)$/;
+const HEADING = /^(#{1,4})\s+(.*)$/;
+
+/** The text of a capture group that the pattern always fills. */
+const captured = (match: RegExpExecArray, group: number): string => match[group] as string;
 
 /**
  * Reads a page into blocks.
@@ -66,43 +70,47 @@ const NUMBERED = /^\s*\d+\.\s+(.*)$/;
  */
 export const parseMarkdown = (source: string): readonly Block[] => {
   const lines = source.replace(/\r\n/g, "\n").split("\n");
+  // A line past the end reads as an empty line. Every loop below stops at an empty line, so none needs a length check.
+  const at = (position: number): string => lines[position] ?? "";
   const blocks: Block[] = [];
   let index = 0;
   while (index < lines.length) {
-    const line = lines[index] ?? "";
-    const heading = /^(#{1,4})\s+(.*)$/.exec(line);
+    const line = at(index);
+    const heading = HEADING.exec(line);
     if (line.trim() === "") {
       index += 1;
     } else if (line.startsWith("```")) {
       const body: string[] = [];
       index += 1;
-      while (index < lines.length && !(lines[index] ?? "").startsWith("```")) body.push(lines[index++] ?? "");
+      while (index < lines.length && !at(index).startsWith("```")) body.push(at(index++));
       index += 1;
       blocks.push({ kind: "code", text: body.join("\n") });
     } else if (heading !== null) {
-      const text = (heading[2] ?? "").trim();
-      blocks.push({ kind: "heading", level: (heading[1] ?? "#").length as 1 | 2 | 3 | 4, id: slugify(text), text });
+      const text = captured(heading, 2).trim();
+      blocks.push({ kind: "heading", level: captured(heading, 1).length as 1 | 2 | 3 | 4, id: slugify(text), text });
       index += 1;
     } else if (isTableRow(line)) {
       const rows: string[] = [];
-      while (index < lines.length && isTableRow(lines[index] ?? "")) rows.push(lines[index++] ?? "");
-      const [headerLine = "", ...rest] = rows;
-      const body = rest.filter((row) => !isTableRule(row));
-      blocks.push({ kind: "table", header: cellsOf(headerLine), rows: body.map(cellsOf) });
+      while (isTableRow(at(index))) rows.push(at(index++));
+      const body = rows.slice(1).filter((row) => !isTableRule(row));
+      blocks.push({ kind: "table", header: cellsOf(line), rows: body.map(cellsOf) });
     } else if (BULLET.test(line) || NUMBERED.test(line)) {
       const ordered = NUMBERED.test(line);
       const pattern = ordered ? NUMBERED : BULLET;
       const items: (readonly Inline[])[] = [];
-      while (index < lines.length && pattern.test(lines[index] ?? "")) items.push(parseInline((pattern.exec(lines[index++] ?? "")?.[1] ?? "").trim()));
+      for (let match = pattern.exec(at(index)); match !== null; match = pattern.exec(at(index))) {
+        items.push(parseInline(captured(match, 1).trim()));
+        index += 1;
+      }
       blocks.push({ kind: "list", ordered, items });
     } else if (line.startsWith(">")) {
       const quoted: string[] = [];
-      while (index < lines.length && (lines[index] ?? "").startsWith(">")) quoted.push((lines[index++] ?? "").replace(/^>\s?/, ""));
+      while (at(index).startsWith(">")) quoted.push(at(index++).replace(/^>\s?/, ""));
       blocks.push({ kind: "quote", children: parseInline(quoted.join(" ")) });
     } else {
       const paragraph: string[] = [];
-      while (index < lines.length && (lines[index] ?? "").trim() !== "" && !/^(#{1,4}\s|```|>|\s*[-*]\s|\s*\d+\.\s)/.test(lines[index] ?? "") && !isTableRow(lines[index] ?? "")) {
-        paragraph.push((lines[index++] ?? "").trim());
+      while (at(index).trim() !== "" && !/^(#{1,4}\s|```|>|\s*[-*]\s|\s*\d+\.\s)/.test(at(index)) && !isTableRow(at(index))) {
+        paragraph.push(at(index++).trim());
       }
       blocks.push({ kind: "paragraph", children: parseInline(paragraph.join(" ")) });
     }
