@@ -25,6 +25,11 @@ name = "prove-worker"
 path = "src/bin/prove_worker.rs"
 required-features = ["sp1-cuda"]
 
+# Builds a live update and runs the guest in the SP1 executor, with no proof. See the header of examples/live_update.rs.
+[[example]]
+name = "live_update"
+required-features = ["sp1"]
+
 # These tests run on the signed beacon chain, which is test support. They need the feature `signed-beacon`, which the
 # default build has.
 [[test]]
