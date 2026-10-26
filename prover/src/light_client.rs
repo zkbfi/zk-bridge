@@ -444,6 +444,66 @@ pub fn build_execution_evidence(
     })
 }
 
+/// The execution evidence of a block whose header is held as raw RLP (Gloas: the header has more items than the JSON
+/// rebuilder knows). The roots come from the RLP with the tolerant decoder of `lc-core`, and each rebuilt trie must have the
+/// root of the header.
+///
+/// # Errors
+/// `Error::Malformed` for an RLP that does not decode, a root mismatch or a missing entry.
+pub fn build_execution_evidence_from_raw_header(
+    header_rlp: Vec<u8>,
+    receipts: &Value,
+    transactions: &[Bytes],
+    transaction_index: u64,
+) -> Result<ExecutionEvidence> {
+    let fields = lc_core::execution::decode_execution_anchor_fields(&header_rlp)
+        .map_err(|error| Error::Malformed(format!("execution header: {error}")))?;
+    let header = RebuiltHeader {
+        block_hash: lc_core::execution::execution_block_hash(&header_rlp),
+        header_rlp: Bytes::from(header_rlp),
+        receipts_root: fields.receipts_root,
+        transactions_root: fields.transactions_root,
+    };
+    Ok(ExecutionEvidence {
+        receipt_proof: build_receipt_proof(&header, receipts, transaction_index)?,
+        transaction_proof: build_transaction_proof(&header, transactions, transaction_index)?,
+        header_rlp: header.header_rlp,
+        block_hash: header.block_hash,
+    })
+}
+
+/// A Gloas block read from SSZ bytes: its header and the branch of its bid `parent_block_hash`.
+pub struct GloasBlockView {
+    parsed: lc_core::ssz_block_gloas::ParsedGloasBlock,
+}
+
+impl GloasBlockView {
+    /// Parses and hashes a Gloas `SignedBeaconBlock` (SSZ bytes of `GET /eth/v2/beacon/blocks/<id>`).
+    ///
+    /// # Errors
+    /// `Error::Malformed` when the bytes are not a Gloas block.
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        lc_core::ssz_block_gloas::try_parse_gloas_signed_block(bytes)
+            .map(|parsed| Self { parsed })
+            .map_err(|error| Error::Malformed(format!("Gloas beacon block: {error}")))
+    }
+
+    /// The header of the block, with the body root computed from the body.
+    pub fn header(&self) -> BeaconBlockHeader {
+        self.parsed.header
+    }
+
+    /// The `parent_block_hash` of the bid: the execution block that the block builds on.
+    pub fn bid_parent_block_hash(&self) -> B256 {
+        self.parsed.bid_parent_block_hash()
+    }
+
+    /// The branch from the bid `parent_block_hash` to the body root (11 entries, index 2856).
+    pub fn bid_parent_block_hash_branch(&self) -> Vec<B256> {
+        self.parsed.bid_parent_block_hash_branch()
+    }
+}
+
 /// Joins the beacon path and the execution evidence into the calldata struct of `MessageBridge.executeMessage`. The
 /// receipt and the transaction sit at the same index, as the contract requires.
 pub fn assemble_message_proof(
@@ -752,7 +812,7 @@ impl BlockView {
     }
 
     /// Parses a block of `chain` after a check of its fork. The slot of the block comes from its first bytes, and the chain
-    /// schedule gives the fork. Only Capella blocks go to the parser. A Gloas block is refused: the prover has no Gloas body parser yet, so it cannot build message evidence from a Gloas source. Any other fork is refused by name. The parser never reads a block of another fork as Capella.
+    /// schedule gives the fork. Only Capella blocks go to the parser. A Gloas block is refused here: this path is the Capella block path, and a Gloas block goes through [`GloasBlockView`]. Any other fork is refused by name. The parser never reads a block of another fork as Capella.
     ///
     /// # Errors
     /// `Error::Malformed` for a Gloas block, for another fork than Capella, or for bytes
@@ -762,7 +822,7 @@ impl BlockView {
         match chain.spec().fork_at_slot(slot) {
             ForkName::Capella => Self::parse(bytes),
             ForkName::Gloas => Err(Error::Malformed(format!(
-                "beacon block at slot {slot} is a Gloas block: the prover has no parser for the Gloas body yet, so it cannot build the bid parent block hash branch of a message proof (the verifiers accept such a proof)"
+                "beacon block at slot {slot} is a Gloas block: this path reads Capella blocks; a Gloas block goes through GloasBlockView"
             ))),
             fork => Err(Error::Malformed(format!(
                 "beacon block at slot {slot} is of the fork {fork:?}; the block path reads Capella blocks only"

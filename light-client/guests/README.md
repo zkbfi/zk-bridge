@@ -51,8 +51,9 @@ decoder stays for earlier forks). Why it is sound: `process_execution_payload_bi
 from the bid of a parent whose payload the child confirmed. So the `parent_block_hash` of a canonical block names a payload that the
 chain accepted. A block on an empty parent names an older accepted payload, which is canonical too. The bid's own `block_hash` is
 never accepted: that payload may be withheld. The block of X needs no slot in the proof. The block hash LAYOUT stays closed to
-Gloas (`block_hash_gindex_for_fork`, `addBlockHashLayout`). The prover has no Gloas body parser yet, so it cannot build this
-evidence; the verifiers accept it.
+Gloas (`block_hash_gindex_for_fork`, `addBlockHashLayout`). The prover builds this evidence (`prover/src/beacon/http.rs`, `gloas_message_path`) with the Gloas body hasher
+`crates/lc-core/src/ssz_block_gloas.rs`. The hasher is checked against 116 real Sepolia blocks (bodies with attestations, payload
+attestations and execution requests; the lists of slashings, deposits, exits and BLS changes were empty in them).
 
 Tests: `crates/lc-testkit/tests/gloas.rs` (synthetic, the negative tests), `gloas_real.rs` (a real Sepolia finalized state, update
 and execution header, with a real BLS fold) and `execution_anchor.rs` (the decoder).

@@ -243,6 +243,28 @@ impl ChainClient {
         Ok((!block.is_null()).then_some(block))
     }
 
+    /// The raw RLP of the execution block header with this hash (`debug_getRawHeader`). A Gloas header has fields that the
+    /// JSON rebuilder does not know, so the raw bytes are the only exact source. The bytes must hash to `hash`.
+    ///
+    /// # Errors
+    /// `Error::Rpc` when the node lacks the method or the block, `Error::Malformed` for a wrong shape or a wrong hash.
+    pub fn raw_header(&self, hash: B256) -> Result<Vec<u8>> {
+        let answer = self
+            .rpc
+            .call("debug_getRawHeader", json!([format!("{hash:#x}")]))?;
+        let text = answer.as_str().ok_or_else(|| {
+            Error::Malformed("debug_getRawHeader: the result is not a string".into())
+        })?;
+        let bytes = alloy_primitives::hex::decode(text)
+            .map_err(|error| Error::Malformed(format!("debug_getRawHeader: {error}")))?;
+        if alloy_primitives::keccak256(&bytes) != hash {
+            return Err(Error::Malformed(format!(
+                "the execution node answered a header that does not hash to {hash:#x}"
+            )));
+        }
+        Ok(bytes)
+    }
+
     /// The `eth_getProof` answer for one account and some storage keys at block `block_number`.
     ///
     /// # Errors

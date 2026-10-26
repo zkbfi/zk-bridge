@@ -55,8 +55,8 @@ use crate::light_client::{
     block_hash_gindex, block_roots_gindex, committee_hash, describe_header, era_block_roots,
     era_of, header_root, historical_summaries_gindex, store_at, store_from_bootstrap_json,
     sync_aggregate_from_json, update_from_json, AncestryPath, BeaconHeader, BeaconPath, BlockView,
-    ChainKind, LightClientStore, LightClientUpdate, StateView, SyncAggregate, UpdateInput,
-    SLOTS_PER_HISTORICAL_ROOT,
+    ChainKind, GloasBlockView, LightClientStore, LightClientUpdate, StateView, SyncAggregate,
+    UpdateInput, SLOTS_PER_HISTORICAL_ROOT,
 };
 use crate::rpc::{HttpGet, JsonRpc};
 use alloy_primitives::{hex, keccak256, B256};
@@ -79,6 +79,8 @@ const MAX_EMPTY_SLOTS_BEFORE_ERA: u64 = 1_024;
 const STATE_CACHE_SIZE: usize = 2;
 /// How many eras of block roots stay in memory (each one is 8192 roots, 256 KiB). The oldest era leaves first.
 const ERA_CACHE_SIZE: usize = 64;
+/// How many slots after the slot of a Gloas execution block the search for a block that names it goes.
+const MAX_SLOTS_AFTER_PAYLOAD: u64 = 64;
 /// How many empty slots the search for an attested block skips.
 const MAX_EMPTY_SLOTS: u64 = 16;
 /// The most periods that one request of `light_client/updates` asks for (`MAX_REQUEST_LIGHT_CLIENT_UPDATES`). A node
@@ -730,6 +732,9 @@ impl HttpBeaconSource {
     pub fn message_path(&self, source: &SourceBlock, anchor: &StoredHead) -> Result<BeaconPath> {
         let source_slot = self.slot_for_timestamp(source.timestamp)?;
         let anchor = self.head_header(anchor)?;
+        if self.chain.spec().fork_at_slot(source_slot) >= ForkName::Gloas {
+            return self.gloas_message_path(source, source_slot, anchor);
+        }
         if source_slot >= anchor.slot {
             return Err(Error::Beacon(format!(
                 "source slot {source_slot} is not before the anchor slot {}",
@@ -754,6 +759,61 @@ impl HttpBeaconSource {
             ancestry_branch,
             block_hash_branch: block.block_hash_branch,
         })
+    }
+
+    /// Whether the execution block with this timestamp belongs to a beacon slot at or after the Gloas fork. Such a block is
+    /// proven through the bid of a later beacon block, and its header is read raw.
+    ///
+    /// # Errors
+    /// `Error::Beacon` when the timestamp is not on a slot boundary or lies before genesis.
+    pub fn is_gloas_source(&self, timestamp: u64) -> Result<bool> {
+        let slot = self.slot_for_timestamp(timestamp)?;
+        Ok(self.chain.spec().fork_at_slot(slot) >= ForkName::Gloas)
+    }
+
+    /// The beacon part of a message proof for an execution block X of a Gloas chain.
+    ///
+    /// The proof needs a beacon block B that comes after the block of X, is an ancestor of the anchor, and whose bid names X
+    /// as `parent_block_hash` (index 2856). The block of X needs no slot in the proof. So the source scans the canonical blocks
+    /// after the slot of X for the first one whose bid names X. The bid `block_hash` of the block of X itself is never used.
+    ///
+    /// # Errors
+    /// `Error::Beacon` when no block within [`MAX_SLOTS_AFTER_PAYLOAD`] slots names X, when B is not before the anchor, or when
+    /// the node lacks a block or a state.
+    fn gloas_message_path(
+        &self,
+        source: &SourceBlock,
+        source_slot: u64,
+        anchor: BeaconHeader,
+    ) -> Result<BeaconPath> {
+        let last = anchor
+            .slot
+            .saturating_sub(1)
+            .min(source_slot + MAX_SLOTS_AFTER_PAYLOAD);
+        for slot in source_slot + 1..=last {
+            let Some(bytes) = self.get_ssz(&format!("/eth/v2/beacon/blocks/{slot}"))? else {
+                continue;
+            };
+            let block = GloasBlockView::parse(&bytes)?;
+            if block.bid_parent_block_hash() != source.hash {
+                continue;
+            }
+            let header = block.header();
+            let ancestry_branch =
+                self.ancestry_branch_for(&anchor, header.slot, header_root(&header))?;
+            return Ok(BeaconPath {
+                anchor_header: anchor,
+                source_header: header,
+                ancestry_branch,
+                block_hash_branch: block.bid_parent_block_hash_branch(),
+            });
+        }
+        Err(Error::Beacon(format!(
+            "no canonical block between slot {} and slot {last} has a bid that names the execution block {:#x} as its parent_block_hash; the anchor at slot {} may be too early, or the payload was never confirmed",
+            source_slot + 1,
+            source.hash,
+            anchor.slot
+        )))
     }
 
     /// Evidence for a `block_roots` layout row that covers `anchor`, or `None` when the stored headers do not yet allow it.
@@ -857,6 +917,7 @@ impl HttpBeaconSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::beacon::SourceBlock;
     use crate::light_client::verify_update_natively;
     use crate::prover::ProofStatement;
     use crate::rpc::HttpResponse;
@@ -1041,6 +1102,171 @@ mod tests {
         fn call(&self, _method: &str, _params: serde_json::Value) -> Result<serde_json::Value> {
             Ok(serde_json::json!(7))
         }
+    }
+
+    /// The real Sepolia world of a Gloas message source: the execution block X of the fixtures (slot 11441215), the real
+    /// beacon block B after it (slot 11441216) whose bid names X, and a real later anchor with its state. `skipped` blocks
+    /// that name another execution block stand before B.
+    fn real_gloas_message_world(
+        skipped: usize,
+    ) -> (
+        HttpBeaconSource,
+        SourceBlock,
+        StoredHead,
+        Vec<serde_json::Value>,
+    ) {
+        let read = |name: &str| std::fs::read(sepolia_fixtures().join(name)).unwrap();
+        let json =
+            |name: &str| -> serde_json::Value { serde_json::from_slice(&read(name)).unwrap() };
+        let source_fixture = json("gloas_message_source.json");
+        let block_fixture = json("gloas_message_block.json");
+        let head_fixture = json("gloas_head_execution_header.json");
+        let anchor = beacon_header_from_json(&source_fixture["response"]["anchor_header"]).unwrap();
+        let hash = keccak256(hex::decode(head_fixture["raw_header"].as_str().unwrap()).unwrap());
+        let timestamp = block_fixture["response"]["timestamp"].as_u64().unwrap();
+        let x_slot = (timestamp - 1_655_733_600) / 12;
+        let mut pages: HashMap<String, Vec<u8>> = HashMap::from([
+            ("/eth/v1/beacon/genesis".to_string(), br#"{"data":{"genesis_time":"1655733600"}}"#.to_vec()),
+            (
+                format!("/eth/v1/beacon/headers/{}", anchor.slot),
+                serde_json::json!({"data": {"header": {"message": source_fixture["response"]["anchor_header"]}}})
+                    .to_string()
+                    .into_bytes(),
+            ),
+            (format!("/eth/v2/debug/beacon/states/{:#x}", anchor.state_root), read("gloas_anchor_state.ssz")),
+        ]);
+        for offset in 1..=skipped as u64 {
+            pages.insert(
+                format!("/eth/v2/beacon/blocks/{}", x_slot + offset),
+                read("gloas_busy_block.ssz"),
+            );
+        }
+        pages.insert(
+            format!("/eth/v2/beacon/blocks/{}", x_slot + 1 + skipped as u64),
+            read("gloas_head_block.ssz"),
+        );
+        let source = HttpBeaconSource::new(ChainKind::Sepolia, Box::new(Node(pages)));
+        let number = block_fixture["response"]["block_number"].as_u64().unwrap();
+        let stored = StoredHead {
+            slot: anchor.slot,
+            root: header_root(&anchor),
+            next_committee_hash: B256::ZERO,
+        };
+        let receipts = block_fixture["response"]["receipts"]
+            .as_array()
+            .unwrap()
+            .clone();
+        (
+            source,
+            SourceBlock {
+                number,
+                hash,
+                timestamp,
+            },
+            stored,
+            receipts,
+        )
+    }
+
+    fn real_gloas_evidence(
+        path: &BeaconPath,
+        receipts: &[serde_json::Value],
+    ) -> lc_core::abi::MessageProof {
+        let block_fixture: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(sepolia_fixtures().join("gloas_message_block.json")).unwrap(),
+        )
+        .unwrap();
+        let head_fixture: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(sepolia_fixtures().join("gloas_head_execution_header.json")).unwrap(),
+        )
+        .unwrap();
+        let transactions: Vec<alloy_primitives::Bytes> = block_fixture["response"]
+            ["raw_transactions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|raw| hex::decode(raw.as_str().unwrap()).unwrap().into())
+            .collect();
+        let execution = crate::light_client::build_execution_evidence_from_raw_header(
+            hex::decode(head_fixture["raw_header"].as_str().unwrap()).unwrap(),
+            &serde_json::Value::Array(receipts.to_vec()),
+            &transactions,
+            2,
+        )
+        .unwrap();
+        crate::light_client::assemble_message_proof(path, &execution, 2, 0)
+    }
+
+    /// Claim: for a Gloas execution block the source finds the first later canonical block whose bid names it, builds the
+    /// 11 entry branch of the bid `parent_block_hash` (index 2856) and the ancestry to a real later anchor, and the evidence
+    /// (with the raw header, the receipt proof and the transaction proof) passes the native bridge check up to the log. The log
+    /// is a real transfer log and not a bridge message, so the check ends with `LogTopicMismatch`: every earlier rule passed on
+    /// real data. A block that names another execution block is skipped. Controls: a flipped branch entry, the RLP of another
+    /// block and a flipped ancestry entry each fail with their own rule, and a world without the block fails with a clear error.
+    #[test]
+    fn a_gloas_message_source_is_found_through_the_next_blocks_bid() {
+        use crate::light_client::{verify_message_natively, BridgeContext};
+        for skipped in [0, 2] {
+            let (source, x, stored, receipts) = real_gloas_message_world(skipped);
+            assert!(source.is_gloas_source(x.timestamp).unwrap());
+            let path = source.message_path(&x, &stored).unwrap();
+            assert_eq!(
+                path.source_header.slot, 11_441_216,
+                "the real block B, found after {skipped} skipped blocks"
+            );
+            assert_eq!(path.block_hash_branch.len(), 11);
+            let proof = real_gloas_evidence(&path, &receipts);
+            let emitter = receipts[2]["logs"][0]["address"]
+                .as_str()
+                .unwrap()
+                .parse()
+                .unwrap();
+            let context = BridgeContext {
+                remote_bridge: emitter,
+                remote_chain_id: 11_155_111,
+                local_chain_id: 943,
+                stored_anchor_root: stored.root,
+            };
+            let reached_the_log = |proof: &lc_core::abi::MessageProof| {
+                verify_message_natively(proof, &context, ChainKind::Sepolia)
+                    .err()
+                    .map(|error| error.to_string())
+            };
+            let text = reached_the_log(&proof).expect("the transfer log is not a bridge message");
+            assert!(text.contains("LogTopicMismatch"), "{text}");
+
+            let mut flipped = proof.clone();
+            flipped.blockHashBranch[4].0[0] ^= 1;
+            assert!(reached_the_log(&flipped)
+                .unwrap()
+                .contains("InvalidBlockHashBranch"));
+            let mut other_block = proof.clone();
+            other_block.executionHeaderRlp = hex::decode(
+                serde_json::from_slice::<serde_json::Value>(
+                    &std::fs::read(sepolia_fixtures().join("gloas_head_execution_header.json"))
+                        .unwrap(),
+                )
+                .unwrap()["parent_raw_header"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap()
+            .into();
+            assert!(reached_the_log(&other_block)
+                .unwrap()
+                .contains("InvalidBlockHashBranch"));
+            let mut not_ancestor = proof.clone();
+            not_ancestor.ancestryBranch[2].0[0] ^= 1;
+            assert!(reached_the_log(&not_ancestor)
+                .unwrap()
+                .contains("InvalidAncestryBranch"));
+        }
+        let (source, mut x, stored, _) = real_gloas_message_world(0);
+        x.hash = B256::repeat_byte(7);
+        let Err(error) = source.message_path(&x, &stored) else {
+            panic!("no block names this hash")
+        };
+        assert!(error.to_string().contains("parent_block_hash"), "{error}");
     }
 
     /// Claim: the slot of an execution timestamp is `(timestamp - genesis) / 10` on PulseChain, and a timestamp

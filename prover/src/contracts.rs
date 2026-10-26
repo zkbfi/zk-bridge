@@ -110,6 +110,7 @@ sol! {
         function localChainId() external view returns (uint64);
         function lightClient() external view returns (address);
         function remoteLightClient() external view returns (address);
+        function gloasForkSlot() external view returns (uint64);
         function messageCallStatus(bytes32 messageId) external view returns (bool);
         function failedMessageDataHash(bytes32 messageId) external view returns (bytes32);
         function stateLayouts() external view returns (StateLayoutRow[] memory);
