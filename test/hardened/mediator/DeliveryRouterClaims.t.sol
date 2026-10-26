@@ -20,7 +20,6 @@ contract DeliveryRouterClaimsTest is MediatorFixture {
     MedDenyListWrappedNative internal weth;
     DenyListToken internal token;
     DeliveryRouter internal router;
-    address internal runner = makeAddr("runner");
     address internal reward = makeAddr("reward address");
     address internal recipient = makeAddr("recipient");
     address internal failedDelivery = makeAddr("failed delivery address");
@@ -32,7 +31,7 @@ contract DeliveryRouterClaimsTest is MediatorFixture {
     function setUp() public override {
         super.setUp();
         weth = new MedDenyListWrappedNative();
-        router = new DeliveryRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), runner, reward, failedDelivery);
+        router = new DeliveryRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), reward, failedDelivery);
         token = new DenyListToken();
         token.mint(alice, 1_000_000 ether);
         vm.startPrank(alice);
@@ -80,8 +79,8 @@ contract DeliveryRouterClaimsTest is MediatorFixture {
 
     function _run(uint256 index) internal {
         MessageBridge.MessageProof memory proof = ambA.proofOf(ambB, index);
-        vm.prank(runner, runner);
-        router.executeMessageWithRunner(proof, reward);
+        vm.prank(bob, bob);
+        router.executeMessage(proof);
     }
 
     /// @dev Delivers the message, then checks that the bridge saw a successful call.
@@ -121,7 +120,7 @@ contract DeliveryRouterClaimsTest is MediatorFixture {
         _assertRouterEmpty(address(token));
     }
 
-    /// Claim: a refused payout does not block the message when no runner executes it. Shows: a direct execution takes
+    /// Claim: a refused payout does not block the message when no one calls the router. Shows: a direct execution takes
     /// no tip, and the failed delivery address gets the whole value. Matters: the bridge stays permissionless.
     function test_aDirectDeliveryToARefusedRecipientHandsTheWholeValueOff() public {
         token.setDenied(recipient, true);
@@ -220,7 +219,7 @@ contract DeliveryRouterClaimsTest is MediatorFixture {
 
     /// Claim: the failed delivery address may equal the reward address. Shows: the tip and the hand-off both reach it.
     function test_theFailedDeliveryAddressMayEqualTheRewardAddress() public {
-        router = new DeliveryRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), runner, reward, reward);
+        router = new DeliveryRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), reward, reward);
         token.setDenied(recipient, true);
         _run(_sendCopy(abi.encode(_share(recipient, 1, 5 ether, 0)), 100 ether));
         assertEq(token.balanceOf(reward), 100 ether, "tip plus hand-off");
@@ -275,7 +274,23 @@ contract DeliveryRouterClaimsTest is MediatorFixture {
         assertEq(token.balanceOf(reward), 0);
     }
 
-    /// Claim: data of no known shape has no tip to compute, so the whole value is handed off, even when the runner
+    /// Claim: a director whose recipient word has bits above 160 is data of no known shape, so the callback does not
+    /// revert and the whole value is handed off. Shows: a 128 byte director with a dirty first word, delivered through
+    /// the router, ends at the failed delivery address in full, the reward address gets no tip, and the event names the
+    /// zero address. Matters: `abi.decode` would revert on that word, and a revert in the callback strands the tokens.
+    function test_aDirtyRecipientWordHandsTheWholeValueOff() public {
+        bytes memory dirty = abi.encode(_share(recipient, 1, 5 ether, 0));
+        dirty[0] = 0x01;
+        uint256 index = _sendCopy(dirty, 40 ether);
+        _expectHandOff(address(token), address(0), 40 ether, DeliveryRouter.Reason.InvalidTerms);
+        _run(index);
+        assertEq(token.balanceOf(failedDelivery), 40 ether, "the whole value is handed off");
+        assertEq(token.balanceOf(reward), 0, "no tip");
+        assertEq(token.balanceOf(recipient), 0);
+        _assertRouterEmpty(address(token));
+    }
+
+    /// Claim: data of no known shape has no tip to compute, so the whole value is handed off, even when the caller
     /// executes it. Shows: seven bytes and 127 bytes both reach the failed delivery address in full, and the delivery
     /// succeeds. Matters: a revert in the callback leaves the tokens in the router, because the mediator has paid it.
     function test_dataOfNoKnownShapeHandsTheWholeValueOff() public {

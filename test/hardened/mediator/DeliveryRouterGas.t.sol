@@ -24,12 +24,11 @@ contract DeliveryRouterGasTest is MediatorFixture {
 
     MockERC20 internal tokenB;
     DeliveryRouter internal router;
-    address internal runner = makeAddr("runner");
     address internal reward = makeAddr("reward address");
 
     function setUp() public override {
         super.setUp();
-        router = new DeliveryRouter(ITokenMediator(address(mediatorA)), IWETH(address(new MockWrappedNative())), runner, reward, reward);
+        router = new DeliveryRouter(ITokenMediator(address(mediatorA)), IWETH(address(new MockWrappedNative())), reward, reward);
         tokenB = new MockERC20("Token B", "TKB");
         tokenB.mint(alice, 1_000_000 ether);
         vm.startPrank(alice);
@@ -50,23 +49,23 @@ contract DeliveryRouterGasTest is MediatorFixture {
     function _measure(uint256 settings, uint256 limit, uint256 multiplier) private returns (uint256 used) {
         // A first run warms the storage of the router, as every run after the first finds it.
         MessageBridge.MessageProof memory warmProof = ambA.proofOf(ambB, _send(settings, limit, multiplier));
-        vm.prank(runner, runner);
-        router.executeMessageWithRunner(warmProof, reward);
+        vm.prank(alice, alice);
+        router.executeMessage(warmProof);
         uint256 index = _send(settings, limit, multiplier);
         MessageBridge.MessageProof memory proof = ambA.proofOf(ambB, index);
-        vm.prank(runner, runner);
+        vm.prank(alice, alice);
         uint256 before = gasleft();
-        router.executeMessageWithRunner(proof, reward);
+        router.executeMessage(proof);
         used = before - gasleft();
     }
 
     function test_gasOfADeliveryThroughTheDeliveryRouter() public {
         vm.txGasPrice(10 gwei);
         uint256 fixedFee = _measure(router.FIXED_FEE(), 1 ether, 0);
-        uint256 share = _measure(router.SHARE_OF_VALUE(), 0, 0.01 ether);
+        uint256 multiplier = _measure(router.MULTIPLIER_OF_TOTAL(), 0, 0.01 ether);
         uint256 gasBased = _measure(0, 10 ether, 1 ether);
         console2.log("delivery router delivery, fixed fee (call gas):    ", fixedFee);
-        console2.log("delivery router delivery, share fee (call gas):    ", share);
+        console2.log("delivery router delivery, multiplier of total fee (call gas):", multiplier);
         console2.log("delivery router delivery, gas based fee (call gas):", gasBased);
         console2.log("add for a transaction:                        ", TRANSACTION_BASE_GAS);
         assertLt(

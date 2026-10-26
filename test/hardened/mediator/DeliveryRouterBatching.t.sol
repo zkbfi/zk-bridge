@@ -26,7 +26,7 @@ contract DeliveryRouterBatchingTest is WorldSupport {
 
     MockERC20 internal nativeToken;
     DeliveryRouter internal router;
-    address internal runner = makeAddr("batch runner");
+    address internal batcher = makeAddr("batch caller");
     address internal reward = makeAddr("batch reward address");
     address internal recipient = makeAddr("batch recipient");
     address internal copy;
@@ -43,7 +43,7 @@ contract DeliveryRouterBatchingTest is WorldSupport {
         revertingTarget = new MessageReverter();
         quietTarget = new MessageNoop();
         router = new DeliveryRouter(
-            ITokenMediator(address(mediatorB)), IWETH(address(new MockWrappedNative())), runner, reward, reward
+            ITokenMediator(address(mediatorB)), IWETH(address(new MockWrappedNative())), reward, reward
         );
         // The first message of a token deploys its copy and costs more. Deliver it plainly, so the runs below are of the
         // common kind.
@@ -64,7 +64,7 @@ contract DeliveryRouterBatchingTest is WorldSupport {
 
     /// @dev A transfer to the router that asks for a tip of 1% of 100 tokens, with `to` as the recipient.
     function _tipMessage(address to) internal returns (Transit memory) {
-        bytes memory data = abi.encode(DeliveryRouter.FeeDirector(to, router.SHARE_OF_VALUE(), 0, ONE_PERCENT));
+        bytes memory data = abi.encode(DeliveryRouter.FeeDirector(to, router.MULTIPLIER_OF_TOTAL(), 0, ONE_PERCENT));
         vm.chainId(CHAIN_A);
         vm.recordLogs();
         vm.prank(alice);
@@ -99,15 +99,9 @@ contract DeliveryRouterBatchingTest is WorldSupport {
         output.newHeaderRoot = anchorRoot;
     }
 
-    /// @dev The `executeMessageWithRunner` call for one message, as the runner encodes it. Failure is allowed.
+    /// @dev The `executeMessage` call of the router for one message. Failure is allowed.
     function _deliverCall(Transit memory transit) internal view returns (Multicall3.Call3 memory) {
-        return _deliverCallTo(transit, reward);
-    }
-
-    function _deliverCallTo(Transit memory transit, address rewardAddress) internal view returns (Multicall3.Call3 memory) {
-        return Multicall3.Call3(
-            address(router), true, abi.encodeCall(DeliveryRouter.executeMessageWithRunner, (transit.proof, rewardAddress))
-        );
+        return Multicall3.Call3(address(router), true, abi.encodeCall(DeliveryRouter.executeMessage, (transit.proof)));
     }
 
     /// @dev The call of the block proof, straight to the light client. Failure is allowed.
@@ -135,7 +129,7 @@ contract DeliveryRouterBatchingTest is WorldSupport {
     }
 
     function _assertIdle() internal view {
-        assertEq(uint256(vm.load(address(router), router.RUNNER_SLOT())), 1, "the runner slot is idle again");
+        assertEq(uint256(vm.load(address(router), router.DELIVERY_SLOT())), 1, "the delivery slot is idle again");
         assertEq(_balance(address(router)), 0, "the router keeps nothing");
     }
 
@@ -161,7 +155,7 @@ contract DeliveryRouterBatchingTest is WorldSupport {
         bytes memory refusal = abi.encodeWithSelector(
             MessageBridge.IndexMismatch.selector, broken.proof.receiptIndex, broken.proof.transactionIndex
         );
-        Multicall3.Result[] memory results = _aggregateAs(runner, calls);
+        Multicall3.Result[] memory results = _aggregateAs(batcher, calls);
 
         assertEq(results.length, 4);
         assertTrue(results[0].success, "the update");
@@ -174,7 +168,7 @@ contract DeliveryRouterBatchingTest is WorldSupport {
         assertFalse(bridgeB.messageCallStatus(broken.messageId), "the refused message stays open");
         assertTrue(bridgeB.messageCallStatus(second.messageId));
         assertEq(_balance(reward), 2 * TIP, "the reward address holds exactly the two tips");
-        assertEq(_balance(runner), 0, "the runner holds no tip");
+        assertEq(_balance(batcher), 0, "the caller holds no tip");
         assertEq(_balance(recipient), VALUE - TIP);
         assertEq(_balance(makeAddr("recipient of the second message")), VALUE - TIP);
         assertEq(_balance(makeAddr("recipient of the broken message")), 0);
@@ -183,7 +177,7 @@ contract DeliveryRouterBatchingTest is WorldSupport {
 
     /// Claim: a message that is delivered already fails alone. Shows: the second call of the list carries
     /// `AlreadyDelivered` with the message identifier; the calls around it deliver; the delivered message got no
-    /// second tip. Matters: a second runner may win the race for a message, and that must not cost this runner the rest.
+    /// second tip. Matters: another account may win the race for a message, and that must not cost the caller the rest.
     function test_batch_aMessageDeliveredAlreadyFailsAlone() public {
         Transit memory early = _tipMessage(makeAddr("recipient of the early message"));
         Transit memory taken = _tipMessage(makeAddr("recipient of the taken message"));
@@ -195,7 +189,7 @@ contract DeliveryRouterBatchingTest is WorldSupport {
         calls[0] = _deliverCall(early);
         calls[1] = _deliverCall(taken);
         calls[2] = _deliverCall(late);
-        Multicall3.Result[] memory results = _aggregateAs(runner, calls);
+        Multicall3.Result[] memory results = _aggregateAs(batcher, calls);
 
         assertTrue(results[0].success);
         assertFalse(results[1].success);
@@ -207,56 +201,44 @@ contract DeliveryRouterBatchingTest is WorldSupport {
     }
 
     /// Claim: a call whose target reverts is a success of the router, because the bridge marks the message and records
-    /// the failure of the target. Matters: the runner reads the result of the call, and the bridge holds the truth
+    /// the failure of the target. Matters: the caller reads the result of the call, and the bridge holds the truth
     /// about the target in `messageCallStatus`.
     function test_batch_aFailingTargetIsRecordedByTheBridge() public {
         Transit memory failing = _applicationMessage(address(revertingTarget), 300_000);
         Multicall3.Call3[] memory calls = new Multicall3.Call3[](1);
         calls[0] = _deliverCall(failing);
-        Multicall3.Result[] memory results = _aggregateAs(runner, calls);
+        Multicall3.Result[] memory results = _aggregateAs(batcher, calls);
         assertTrue(results[0].success, "the bridge took the message");
         assertFalse(bridgeB.messageCallStatus(failing.messageId), "the bridge records the failed target");
     }
 
-    /// Claim: the checks of the runner hold inside a call. Shows: a stranger and the reward address get `NotRunner` in
-    /// the result of each call, and the multicall itself does not revert; nothing is delivered. Matters: the delegatecall
-    /// keeps `msg.sender`, so the block builders and searchers still cannot copy the call and take the tip.
-    function test_batch_aCallerThatIsNotTheRunnerGetsNotRunnerInTheResult() public {
-        Transit memory first = _tipMessage(recipient);
-        address[2] memory strangers = [bob, reward];
-        for (uint256 i = 0; i < strangers.length; i++) {
+    /// Claim: the router asks nothing of the caller of a batch. Shows: four different accounts, among them the reward
+    /// address itself and a contract with no origin of its own, each batch one delivery through Multicall3 with the
+    /// origin set to that account; each call succeeds, the reward address holds one tip per message, and the caller
+    /// holds nothing. Matters: no whitelist and no origin check, so any account may batch deliveries, and the tip never
+    /// follows the caller.
+    function test_batch_anyAccountMayBatchAndTheTipIgnoresIt() public {
+        address[4] memory callers = [bob, reward, makeAddr("third caller"), address(this)];
+        for (uint256 i = 0; i < callers.length; i++) {
+            Transit memory first = _tipMessage(makeAddr(string.concat("recipient of caller ", vm.toString(i))));
             Multicall3.Call3[] memory calls = new Multicall3.Call3[](1);
             calls[0] = _deliverCall(first);
-            Multicall3.Result[] memory results = _aggregateAs(strangers[i], calls);
-            assertFalse(results[0].success);
-            assertEq(results[0].returnData, abi.encodeWithSelector(DeliveryRouter.NotRunner.selector, strangers[i]));
+            uint256 callerBefore = _balance(callers[i]);
+            Multicall3.Result[] memory results = _aggregateAs(callers[i], calls);
+            assertTrue(results[0].success, "the call of any account delivers");
+            assertTrue(bridgeB.messageCallStatus(first.messageId), "the message is delivered");
+            assertEq(_balance(reward), (i + 1) * TIP, "one more tip sits in the reward address");
+            uint256 expected = callers[i] == reward ? callerBefore + TIP : callerBefore;
+            assertEq(_balance(callers[i]), expected, "the caller takes nothing, except the tip when it is the reward address");
         }
-        assertFalse(bridgeB.messageCallStatus(first.messageId), "nothing was delivered");
-        assertEq(_balance(reward), 0);
-    }
-
-    /// Claim: only the whitelisted reward address passes. Shows: another account, the runner itself and the zero
-    /// address each give `WrongRewardAddress` in the result, and a call with the right address in the same list still
-    /// delivers. Matters: a stolen runner key cannot redirect the tips.
-    function test_batch_aWrongRewardAddressFailsOnlyItsOwnCall() public {
-        address[3] memory wrong = [bob, runner, address(0)];
-        for (uint256 i = 0; i < wrong.length; i++) {
-            Transit memory first = _tipMessage(recipient);
-            Multicall3.Call3[] memory calls = _two(_deliverCallTo(first, wrong[i]), _deliverCall(first));
-            Multicall3.Result[] memory results = _aggregateAs(runner, calls);
-            assertFalse(results[0].success);
-            assertEq(results[0].returnData, abi.encodeWithSelector(DeliveryRouter.WrongRewardAddress.selector, wrong[i]));
-            assertTrue(results[1].success, "the call with the right address delivers");
-            assertEq(_balance(reward), (i + 1) * TIP, "the tip sits in the reward address");
-        }
-        assertEq(_balance(runner), 0);
         assertEq(_balance(bob), 0);
+        assertEq(_balance(makeAddr("third caller")), 0);
     }
 
     /// Claim: an empty list does nothing and returns an empty array. Matters: a bot that finds nothing to deliver must
     /// not be able to break the router.
     function test_batch_anEmptyListReturnsNothing() public {
-        Multicall3.Result[] memory results = _aggregateAs(runner, new Multicall3.Call3[](0));
+        Multicall3.Result[] memory results = _aggregateAs(batcher, new Multicall3.Call3[](0));
         assertEq(results.length, 0);
     }
 
@@ -274,7 +256,7 @@ contract DeliveryRouterBatchingTest is WorldSupport {
             mediatorA.relayTokensAndCall(address(nativeToken), address(router), VALUE, abi.encode(director));
             transits[i] = _proveForB(vm.getRecordedLogs());
         }
-        Multicall3.Result[] memory results = _aggregateAs(runner, _two(_deliverCall(transits[0]), _deliverCall(transits[1])));
+        Multicall3.Result[] memory results = _aggregateAs(batcher, _two(_deliverCall(transits[0]), _deliverCall(transits[1])));
 
         assertTrue(results[0].success);
         assertTrue(results[1].success);
@@ -285,23 +267,26 @@ contract DeliveryRouterBatchingTest is WorldSupport {
         _assertIdle();
     }
 
-    /// Claim: a direct delivery by anyone pays no tip, and the single entry still reverts on failure. Matters: the
-    /// operator who runs one message wants the error, and the user loses nothing when the runner is absent.
+    /// Claim: the single entry pays the tip to the reward address whoever calls it, a failure reverts, and a direct
+    /// delivery on the bridge pays no tip. Matters: an operator who runs one message wants the error, and the user
+    /// loses nothing when nobody calls the router.
     function test_single_tipGoesToTheRewardAddressAndAFailureReverts() public {
         Transit memory first = _tipMessage(recipient);
         vm.chainId(CHAIN_B);
-        vm.prank(runner, runner);
-        router.executeMessageWithRunner(first.proof, reward);
+        vm.prank(batcher, batcher);
+        router.executeMessage(first.proof);
         assertEq(_balance(reward), TIP);
-        assertEq(_balance(runner), 0);
-        vm.prank(runner, runner);
+        assertEq(_balance(batcher), 0);
+        vm.prank(batcher, batcher);
         vm.expectRevert(abi.encodeWithSelector(MessageBridge.AlreadyDelivered.selector, first.messageId));
-        router.executeMessageWithRunner(first.proof, reward);
+        router.executeMessage(first.proof);
         assertEq(_balance(reward), TIP, "the failed run changed nothing");
+        assertEq(uint256(vm.load(address(router), router.DELIVERY_SLOT())), 1, "a revert leaves the slot idle");
 
         Transit memory direct = _tipMessage(makeAddr("recipient of the direct message"));
         _execute(bridgeB, direct);
         assertEq(_balance(makeAddr("recipient of the direct message")), VALUE, "no tip on a direct delivery");
+        assertEq(_balance(reward), TIP, "the direct delivery added no tip");
     }
 
     // ---------------------------------------------------------------- the block proof
@@ -322,18 +307,18 @@ contract DeliveryRouterBatchingTest is WorldSupport {
 
     /// Claim: a message that rides behind its update delivers in the same transaction, and without the update it fails
     /// alone. Shows: the first run has no update, so the message call fails and the message stays open; the second run
-    /// with the update first delivers it. Matters: the runner pays for one transaction, not two.
+    /// with the update first delivers it. Matters: the caller pays for one transaction, not two.
     function test_update_theMessageNeedsTheUpdateBeforeIt() public {
         Transit memory first = _tipMessage(recipient);
         BeaconLightClient.LightClientOutput memory output = _withheldAnchor(first);
         Multicall3.Call3[] memory alone = new Multicall3.Call3[](1);
         alone[0] = _deliverCall(first);
-        Multicall3.Result[] memory results = _aggregateAs(runner, alone);
+        Multicall3.Result[] memory results = _aggregateAs(batcher, alone);
         assertFalse(results[0].success, "the anchor is not stored yet");
         assertFalse(bridgeB.messageCallStatus(first.messageId));
         assertEq(_balance(reward), 0);
 
-        results = _aggregateAs(runner, _two(_updateCall(output), _deliverCall(first)));
+        results = _aggregateAs(batcher, _two(_updateCall(output), _deliverCall(first)));
         assertTrue(results[0].success);
         assertTrue(results[1].success);
         assertEq(_balance(reward), TIP);
@@ -341,22 +326,22 @@ contract DeliveryRouterBatchingTest is WorldSupport {
 
     /// Claim: a bad update fails alone, and so does an update that someone posted first. Shows: a corrupted proof
     /// and a second post of the same update each give a failed first call, and the message after them still delivers
-    /// when the anchor is stored. Matters: another runner can win the race for the update, and that must not cost this
-    /// runner its deliveries.
+    /// when the anchor is stored. Matters: another account can win the race for the update, and that must not cost the
+    /// caller its deliveries.
     function test_update_aFailedUpdateDoesNotStopTheMessages() public {
         Transit memory first = _tipMessage(recipient);
         BeaconLightClient.LightClientOutput memory output = _withheldAnchor(first);
         Multicall3.Call3 memory bad = Multicall3.Call3(
             address(lightClientForB), true, abi.encodeCall(BeaconLightClient.update, (hex"deadbeef", abi.encode(output)))
         );
-        Multicall3.Result[] memory results = _aggregateAs(runner, _two(bad, _deliverCall(first)));
+        Multicall3.Result[] memory results = _aggregateAs(batcher, _two(bad, _deliverCall(first)));
         assertFalse(results[0].success, "a corrupted proof");
         assertFalse(results[1].success, "the anchor is still not stored");
 
         vm.chainId(CHAIN_B);
         lightClientForB.update(_lightClientProof(output), abi.encode(output));
         Transit memory second = _tipMessage(makeAddr("recipient of the second message"));
-        results = _aggregateAs(runner, _two(_updateCall(output), _deliverCall(first)));
+        results = _aggregateAs(batcher, _two(_updateCall(output), _deliverCall(first)));
         assertFalse(results[0].success, "an update posted first by someone else");
         assertTrue(results[1].success, "the message still delivers");
         assertEq(_balance(reward), TIP);
@@ -371,18 +356,18 @@ contract DeliveryRouterBatchingTest is WorldSupport {
     function test_gas_aggregate3WithOneUpdateAndTwoMessages() public {
         Transit memory warm = _tipMessage(recipient);
         vm.chainId(CHAIN_B);
-        vm.prank(runner, runner);
-        router.executeMessageWithRunner(warm.proof, reward);
+        vm.prank(batcher, batcher);
+        router.executeMessage(warm.proof);
 
         Transit memory alone = _tipMessage(recipient);
-        vm.prank(runner, runner);
+        vm.prank(batcher, batcher);
         uint256 before = gasleft();
-        router.executeMessageWithRunner(alone.proof, reward);
+        router.executeMessage(alone.proof);
         uint256 singleGas = before - gasleft();
 
         Multicall3.Call3[] memory pair = _two(_deliverCall(_tipMessage(recipient)), _deliverCall(_tipMessage(recipient)));
         vm.chainId(CHAIN_B);
-        vm.prank(runner, runner);
+        vm.prank(batcher, batcher);
         before = gasleft();
         multicall.aggregate3(pair);
         uint256 pairGas = before - gasleft();
@@ -396,7 +381,7 @@ contract DeliveryRouterBatchingTest is WorldSupport {
         calls[1] = _deliverCall(first);
         calls[2] = _deliverCall(second);
         vm.chainId(CHAIN_B);
-        vm.prank(runner, runner);
+        vm.prank(batcher, batcher);
         before = gasleft();
         Multicall3.Result[] memory results = multicall.aggregate3(calls);
         uint256 multicallGas = before - gasleft();
@@ -416,7 +401,7 @@ contract DeliveryRouterBatchingTest is WorldSupport {
         assertEq(router.rewardAddress(), reward);
         IWETH wrapped = IWETH(address(new MockWrappedNative()));
         vm.expectRevert(DeliveryRouter.ZeroRewardAddress.selector);
-        new DeliveryRouter(ITokenMediator(address(mediatorB)), wrapped, runner, address(0), reward);
+        new DeliveryRouter(ITokenMediator(address(mediatorB)), wrapped, address(0), reward);
         bytes4[3] memory selectors = [
             bytes4(keccak256("setRewardAddress(address)")),
             bytes4(keccak256("changeRewardAddress(address)")),

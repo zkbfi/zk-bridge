@@ -289,16 +289,16 @@ contract BridgeWorldTest is WorldSupport {
         assertEq(receiver.calls(), 1, "the failed message did not change the receiver");
     }
 
-    /// Claim: a runner that executes a delivery through the delivery router earns a fee, and plain execution earns none. All
-    /// of it runs through the real bridge and the real mediator. Shows: with a fixed fee the runner holds the fee in the
-    /// bridged copy and the recipient holds the rest. With a gas based fee the runner is paid from the measured gas:
+    /// Claim: a delivery through the delivery router pays a tip to the reward address, and plain execution pays none. All
+    /// of it runs through the real bridge and the real mediator. Shows: with a fixed fee the reward address holds the tip
+    /// in the bridged copy and the recipient holds the rest. With a gas based fee the reward address is paid from the measured gas:
     /// positive, below the cap, and bounded by the fee of the gas that the whole call used. A small cap binds. Plain
     /// `executeMessage` of the same kind of message pays no fee. Matters: the router relies on the callback order and on
     /// the gas rule of the bridge. Only the real bridge forwards exactly the gas of the message.
-    function test_deliveryRouterPaysARunnerThroughTheRealBridge() public {
+    function test_deliveryRouterPaysTheRewardAddressThroughTheRealBridge() public {
         MockWrappedNative wrapped = new MockWrappedNative();
         DeliveryRouter router = new DeliveryRouter(
-            ITokenMediator(address(mediatorB)), IWETH(address(wrapped)), makeAddr("fee runner"), makeAddr("fee reward address"), makeAddr("fee failed delivery address")
+            ITokenMediator(address(mediatorB)), IWETH(address(wrapped)), makeAddr("fee reward address"), makeAddr("fee failed delivery address")
         );
         // The first message of a token deploys its copy and costs more. Do it plainly, so the fee tests measure a
         // delivery of the common kind.
@@ -309,42 +309,42 @@ contract BridgeWorldTest is WorldSupport {
 
         _fixedFee(router, copy);
         _gasBasedFee(router, copy);
-        _noRunnerNoFee(router, copy);
+        _directDeliveryNoFee(router, copy);
         _defaultTipOnBothPaths(router, copy);
     }
 
-    /// Claim: the call path that the runner bot uses pays the default tip, and a direct delivery pays none. The sender
-    /// relays through the mediator of chain A to the router on chain B, with a tip of 0.1% (the share mode with the
-    /// multiplier 1e15). Path one: the runner calls `DeliveryRouter.executeMessageWithRunner`, which calls
-    /// `MessageBridge.executeMessage`, and the mediator delivers the tokens to the router. The router sees the runner,
-    /// takes the tip, and pays the recipient. Path two: anyone calls `MessageBridge.executeMessage` directly. The
-    /// mediator still delivers to the router, but no runner is recorded, so the router pays the recipient everything.
+    /// Claim: the call path through the router pays the default tip, and a direct delivery pays none. The sender
+    /// relays through the mediator of chain A to the router on chain B, with a tip of 0.1% (the multiplier of total
+    /// mode with the multiplier 1e15). Path one: an account calls `DeliveryRouter.executeMessage`, which calls
+    /// `MessageBridge.executeMessage`, and the mediator delivers the tokens to the router. The router sees the starting
+    /// gas, takes the tip, and pays the recipient. Path two: anyone calls `MessageBridge.executeMessage` directly. The
+    /// mediator still delivers to the router, but no starting gas is recorded, so the router pays the recipient everything.
     /// Matters: this is the money path of the explorer, and both paths must pay exact amounts.
     function _defaultTipOnBothPaths(DeliveryRouter router, address copy) internal {
         uint256 value = 100 ether;
         uint256 tip = 0.1 ether;
-        address viaRunner = makeAddr("recipient, tip through the runner");
+        address viaRouter = makeAddr("recipient, tip through the router");
         address viaDirect = makeAddr("recipient, direct delivery");
-        uint256 runnerBefore = BridgedToken(copy).balanceOf(router.rewardAddress());
+        uint256 rewardBefore = BridgedToken(copy).balanceOf(router.rewardAddress());
 
         Vm.Log[] memory recorded = _relayAndCallFromA(
-            alice, address(router), value, _directorData(viaRunner, router.SHARE_OF_VALUE(), 0, 1e15)
+            alice, address(router), value, _directorData(viaRouter, router.MULTIPLIER_OF_TOTAL(), 0, 1e15)
         );
         Transit memory transit = _proveForB(recorded);
         vm.chainId(CHAIN_B);
         _gasOfRouterRun(router, transit);
         assertTrue(bridgeB.messageCallStatus(transit.messageId), "the message executed through the router");
-        assertEq(BridgedToken(copy).balanceOf(router.rewardAddress()) - runnerBefore, tip, "the reward address holds exactly 0.1%");
-        assertEq(BridgedToken(copy).balanceOf(viaRunner), value - tip, "the recipient holds the rest");
+        assertEq(BridgedToken(copy).balanceOf(router.rewardAddress()) - rewardBefore, tip, "the reward address holds exactly 0.1%");
+        assertEq(BridgedToken(copy).balanceOf(viaRouter), value - tip, "the recipient holds the rest");
         assertEq(BridgedToken(copy).balanceOf(address(router)), 0, "the router keeps nothing");
 
         recorded = _relayAndCallFromA(
-            alice, address(router), value, _directorData(viaDirect, router.SHARE_OF_VALUE(), 0, 1e15)
+            alice, address(router), value, _directorData(viaDirect, router.MULTIPLIER_OF_TOTAL(), 0, 1e15)
         );
         transit = _deliverToB(recorded);
         assertTrue(bridgeB.messageCallStatus(transit.messageId), "the message executed on the bridge directly");
         assertEq(BridgedToken(copy).balanceOf(viaDirect), value, "a direct delivery pays no tip");
-        assertEq(BridgedToken(copy).balanceOf(router.rewardAddress()) - runnerBefore, tip, "the reward address earned nothing more");
+        assertEq(BridgedToken(copy).balanceOf(router.rewardAddress()) - rewardBefore, tip, "the reward address earned nothing more");
         assertEq(BridgedToken(copy).balanceOf(address(router)), 0, "the router keeps nothing");
     }
 
@@ -357,7 +357,6 @@ contract BridgeWorldTest is WorldSupport {
     }
 
     function _fixedFee(DeliveryRouter router, address copy) internal {
-        address runner = router.runner();
         address recipient = makeAddr("recipient, fixed fee");
         uint256 value = 100 ether;
         uint256 fee = 3 ether;
@@ -367,22 +366,20 @@ contract BridgeWorldTest is WorldSupport {
         Transit memory transit = _proveForB(recorded);
 
         vm.chainId(CHAIN_B);
-        address rewardAddress = router.rewardAddress();
-        vm.prank(runner, runner);
-        router.executeMessageWithRunner(transit.proof, rewardAddress);
+        vm.prank(bob, bob);
+        router.executeMessage(transit.proof);
 
         assertTrue(bridgeB.messageCallStatus(transit.messageId), "the message executed");
-        assertEq(BridgedToken(copy).balanceOf(router.rewardAddress()), fee, "the runner holds the fixed fee");
+        assertEq(BridgedToken(copy).balanceOf(router.rewardAddress()), fee, "the reward address holds the fixed tip");
         assertEq(BridgedToken(copy).balanceOf(recipient), value - fee, "the recipient holds the rest");
         assertEq(BridgedToken(copy).balanceOf(address(router)), 0, "the router keeps nothing");
     }
 
-    /// @dev The gas of one call of the runner through the router, with the reward address that the router whitelists.
+    /// @dev The gas of one call through the router, made by an account with no role.
     function _gasOfRouterRun(DeliveryRouter router, Transit memory transit) internal returns (uint256) {
-        address rewardAddress = router.rewardAddress();
-        vm.prank(router.runner(), router.runner());
+        vm.prank(bob, bob);
         uint256 before = gasleft();
-        router.executeMessageWithRunner(transit.proof, rewardAddress);
+        router.executeMessage(transit.proof);
         return before - gasleft();
     }
 
@@ -400,11 +397,11 @@ contract BridgeWorldTest is WorldSupport {
         uint256 outerGas = _gasOfRouterRun(router, transit);
 
         uint256 paid = BridgedToken(copy).balanceOf(router.rewardAddress()) - heldBefore;
-        assertGt(paid, 0, "the runner is paid");
+        assertGt(paid, 0, "the reward address is paid");
         assertLt(paid, cap, "the fee is measured, not the cap");
-        assertEq(paid + BridgedToken(copy).balanceOf(recipient), value, "the recipient and the runner hold the value");
+        assertEq(paid + BridgedToken(copy).balanceOf(recipient), value, "the recipient and the reward address hold the value");
         // The router measures inside the call and before its own payouts, so its figure is below the outer gas by the
-        // gas of the payouts (the transfers to the runner and the recipient), and never above it.
+        // gas of the payouts (the transfers to the reward address and the recipient), and never above it.
         (uint256 upper,) = router.feeInfo(copy, value, outerGas, director);
         (uint256 lower,) = router.feeInfo(copy, value, outerGas - 100_000, director);
         assertLe(paid, upper, "the fee does not exceed the fee of the outer gas");
@@ -413,10 +410,9 @@ contract BridgeWorldTest is WorldSupport {
         _cappedFee(router, copy);
     }
 
-    /// @dev A cap below the measured fee binds: the runner gets the cap.
+    /// @dev A cap below the measured fee binds: the reward address gets the cap.
     function _cappedFee(DeliveryRouter router, address copy) internal {
         uint256 value = 100 ether;
-        address cappedRunner = router.runner();
         address cappedRecipient = makeAddr("recipient, capped fee");
         Vm.Log[] memory recorded = _relayAndCallFromA(
             alice, address(router), value, _directorData(cappedRecipient, 0, 1000, 1 ether)
@@ -424,15 +420,14 @@ contract BridgeWorldTest is WorldSupport {
         Transit memory transit = _proveForB(recorded);
         vm.chainId(CHAIN_B);
         uint256 heldBefore = BridgedToken(copy).balanceOf(router.rewardAddress());
-        address rewardAddress = router.rewardAddress();
-        vm.prank(cappedRunner, cappedRunner);
-        router.executeMessageWithRunner(transit.proof, rewardAddress);
+        vm.prank(bob, bob);
+        router.executeMessage(transit.proof);
         assertEq(BridgedToken(copy).balanceOf(router.rewardAddress()) - heldBefore, 1000, "the cap binds");
         assertEq(BridgedToken(copy).balanceOf(cappedRecipient), value - 1000, "the recipient holds the rest");
     }
 
-    function _noRunnerNoFee(DeliveryRouter router, address copy) internal {
-        address recipient = makeAddr("recipient, no runner");
+    function _directDeliveryNoFee(DeliveryRouter router, address copy) internal {
+        address recipient = makeAddr("recipient, direct delivery of a fixed tip");
         uint256 value = 100 ether;
         Vm.Log[] memory recorded = _relayAndCallFromA(
             alice, address(router), value, _directorData(recipient, router.FIXED_FEE(), 3 ether, 0)

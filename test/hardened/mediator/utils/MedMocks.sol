@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {IFlowLimiter} from "../../../../src/hardened/IFlowLimiter.sol";
 import {TokenMediator} from "../../../../src/hardened/mediator/TokenMediator.sol";
 
@@ -230,5 +231,38 @@ contract MedToggleReceiver {
 
     receive() external payable {
         require(!refuse, "refused");
+    }
+}
+
+/// @notice A token that records the storage slot of a router at the moment that the router pays out. The slot is read
+/// with the `load` cheat code, so the test sees what the router holds in the middle of a delivery.
+contract SlotProbeToken is ERC20 {
+    Vm private constant VM = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+
+    address public immutable watchedRouter;
+    bytes32 public immutable watchedSlot;
+    /// @notice The slot value at the last payout from the router, or zero when there was none since the last reset.
+    uint256 public slotSeenAtPayout;
+
+    /// @param router_ The router whose slot the token reads.
+    /// @param slot_ The slot to read.
+    constructor(address router_, bytes32 slot_) ERC20("Probe", "PRB") {
+        watchedRouter = router_;
+        watchedSlot = slot_;
+    }
+
+    /// @notice Mints tokens.
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+
+    /// @notice Forgets the last reading.
+    function resetSeen() external {
+        slotSeenAtPayout = 0;
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        if (from == watchedRouter) slotSeenAtPayout = uint256(VM.load(watchedRouter, watchedSlot));
+        super._update(from, to, value);
     }
 }

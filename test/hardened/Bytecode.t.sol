@@ -79,7 +79,7 @@ contract BytecodeTest is MessageScenes {
         copy = factory.deploy("Copy", "CPY", 18, CHAIN_A, makeAddr("native token"));
         IWETH wrapped = IWETH(address(new MockWrappedNative()));
         wethRouter = new WETHOmnibridgeRouter(ITokenMediator(address(mediator)), wrapped);
-        deliveryRouter = new DeliveryRouter(ITokenMediator(address(mediator)), wrapped, makeAddr("runner"), makeAddr("reward address"), makeAddr("failed delivery address"));
+        deliveryRouter = new DeliveryRouter(ITokenMediator(address(mediator)), wrapped, makeAddr("reward address"), makeAddr("failed delivery address"));
     }
 
     /// @dev The runtime code of every contract that runs on both chains, with the names that the logs print. The fork
