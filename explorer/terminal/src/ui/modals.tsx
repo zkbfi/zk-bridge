@@ -214,7 +214,7 @@ export function HelpOverlay(props: { readonly onClose: () => void }) {
     return true
   })
   const rows: readonly (readonly [string, string])[] = [
-    ['1 2 3 4', 'Global, pair, audit, prover and costs views'],
+    ['1 2 3 4 5', 'Global, pair, audit, prover and costs, connections views'],
     ['Tab / Shift+Tab', 'Pair view: next or previous area (actions, filters, feed)'],
     ['Up Down (j k)', 'Move in the action menu, the feed or the pair list'],
     ['Enter', 'Open the action, the pair, or the details of the feed row'],
@@ -228,7 +228,7 @@ export function HelpOverlay(props: { readonly onClose: () => void }) {
     ['Esc', 'Close a dialog or this help'],
     ['?', 'Show or hide this help'],
     ['q  Ctrl+C', 'Quit'],
-    ['5', 'Prover setup (operator only, stores configuration)'],
+    ['6', 'Prover setup (operator only, stores configuration)'],
   ]
   return (
     <ModalFrame title="Help" width={84} height={rows.length + 5}>

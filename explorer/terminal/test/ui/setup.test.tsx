@@ -31,7 +31,7 @@ function recorder(target: App) {
 }
 
 async function openSetup(target: App) {
-  await target.press('5')
+  await target.press('6')
 }
 
 async function selectRow(target: App, index: number) {
@@ -46,9 +46,9 @@ describe('the Prover setup view is tucked away', () => {
   })
 
   test('the tab line lists it last at both widths', () => {
-    expect(viewTabsTitle('pair', 120).endsWith('5 Prover setup')).toBe(true)
-    expect(viewTabsTitle('pair', 80).endsWith('5 Setup')).toBe(true)
-    expect(viewTabsTitle('setup', 120).endsWith('[5 Prover setup]')).toBe(true)
+    expect(viewTabsTitle('pair', 120).endsWith('6 Prover setup')).toBe(true)
+    expect(viewTabsTitle('pair', 80).endsWith('6 Setup')).toBe(true)
+    expect(viewTabsTitle('setup', 120).endsWith('[6 Prover setup]')).toBe(true)
   })
 
   test('it is never the default: the dashboard opens on the pair view', () => {
@@ -69,14 +69,14 @@ describe('the Prover setup view is tucked away', () => {
 
   test('the key bar of the main views does not offer it', async () => {
     app = await renderApp({ width: 120, height: 40 })
-    expect(app.frame()).toContain('1-4 views')
-    expect(app.frame()).not.toMatch(/1-5 views/)
+    expect(app.frame()).toContain('1-5 views')
+    expect(app.frame()).not.toMatch(/1-6 views/)
   })
 
-  test('the number 5 opens it, and the main views stay one key away', async () => {
+  test('the number 6 opens it, and the main views stay one key away', async () => {
     app = await renderApp({ width: 120, height: 40 })
     await openSetup(app)
-    expect(app.frame()).toContain('[5 Prover setup]')
+    expect(app.frame()).toContain('[6 Prover setup]')
     expect(app.frame()).toContain('Test: endpoint /ping')
     await app.press('2')
     expect(app.frame()).toContain('[2 Pair]')

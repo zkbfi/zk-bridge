@@ -5,17 +5,16 @@
 import { useTerminalDimensions } from '@opentui/react'
 import type { Dispatch } from 'react'
 import { ACTIONS, VIEWS, VIEW_LABELS, type AppAction, type AppState, type ViewName } from '../app/app-state'
-import { useServices } from '../app/services'
+import { useConnectionStatus, useServices } from '../app/services'
 import { useSession } from '../app/session'
 import { formatDuration, formatAge, fitColumn, formatTimestamp } from '../format/text'
 import { formatUnits } from '../format/amounts'
-import { countAuditMismatches } from '../model/audit'
 import { toFeedFilter, filterKey } from '../model/filter-state'
 import type { PairHealth } from '../model/types'
 import { useKeyLayer } from './key-router'
 import { computePairLayout } from './layout'
 import { ActionPanel, FeedPanel, FilterHeader, HeadsFooter, KeyBar, Panel, SummaryBar } from './panels'
-import { auditHeader, auditLine, chainOf, formatSlot, updateGasHeader, updateGasLine } from './presenters'
+import { auditHeader, auditLine, auditVerdict, chainOf, formatSlot, updateGasHeader, updateGasLine } from './presenters'
 import { RichLine, colored, muted, plain, strong, type Line } from './rich-text'
 import { theme } from './theme'
 import { usePolling } from './use-polling'
@@ -24,7 +23,7 @@ const REFRESH_MILLISECONDS = 5_000
 
 /** The title of the top panel: the views in order, the current one in brackets. The tucked-away setup view is last. */
 export function viewTabsTitle(current: ViewName, width: number): string {
-  const short: Readonly<Record<ViewName, string>> = { global: 'Global', pair: 'Pair', audit: 'Audit', prover: 'Prover', setup: 'Setup' }
+  const short: Readonly<Record<ViewName, string>> = { global: 'Global', pair: 'Pair', audit: 'Audit', prover: 'Prover', connections: 'Conn', setup: 'Setup' }
   const labels = width >= 100 ? VIEW_LABELS : short
   return VIEWS.map((view, index) => (view === current ? `[${index + 1} ${labels[view]}]` : `${index + 1} ${labels[view]}`)).join('  ')
 }
@@ -38,6 +37,7 @@ function actionAt(index: number) {
 export function PairView(props: { readonly state: AppState; readonly dispatch: Dispatch<AppAction>; readonly modalOpen: 'yes' | 'no' }) {
   const { state, dispatch } = props
   const { pair, dataSource, now, chainAccess } = useServices()
+  const sourceLabel = useConnectionStatus()
   const session = useSession()
   const terminal = useTerminalDimensions()
   const layout = computePairLayout(terminal.width, terminal.height)
@@ -109,11 +109,11 @@ export function PairView(props: { readonly state: AppState; readonly dispatch: D
         <ActionPanel signer={session.signer} snapshots={session.snapshots} actionIndex={state.actionIndex} focused={state.focus === 'actions'} pair={pair} layout={layout} />
         <box flexDirection="column" flexGrow={1}>
           <FilterHeader state={state.filter} field={state.filterField} focused={state.focus === 'filters'} tokens={session.tokens} pair={pair} layout={layout} />
-          <FeedPanel items={items} error={feed.error} selectedIndex={state.feedIndex} focused={state.focus === 'feed'} height={feedHeight} pair={pair} layout={layout} />
+          <FeedPanel items={items} error={feed.error} selectedIndex={state.feedIndex} focused={state.focus === 'feed'} height={feedHeight} pair={pair} layout={layout} coveredFrom={feed.data?.coveredFrom ?? null} />
         </box>
       </box>
       <HeadsFooter heads={heads.data} pair={pair} now={clock} layout={layout} />
-      <KeyBar focus={state.focus} notice={state.notice} sourceLabel={dataSource.label} mode={chainAccess.mode} width={terminal.width} />
+      <KeyBar focus={state.focus} notice={state.notice} sourceLabel={sourceLabel} mode={chainAccess.mode} width={terminal.width} />
     </box>
   )
 }
@@ -129,14 +129,15 @@ function TooSmall(props: { readonly width: number; readonly height: number }) {
 
 /** A full-screen panel with the view tabs on top and the key bar below. */
 export function ViewFrame(props: { readonly view: ViewName; readonly notice: string | null; readonly children: React.ReactNode }) {
-  const { dataSource, chainAccess } = useServices()
+  const { chainAccess } = useServices()
+  const sourceLabel = useConnectionStatus()
   const terminal = useTerminalDimensions()
   return (
     <box flexDirection="column" width="100%" height="100%">
       <Panel title={viewTabsTitle(props.view, terminal.width)} grow={1}>
         {props.children}
       </Panel>
-      <KeyBar focus={null} notice={props.notice} sourceLabel={dataSource.label} mode={chainAccess.mode} width={terminal.width} />
+      <KeyBar focus={null} notice={props.notice} sourceLabel={sourceLabel} mode={chainAccess.mode} width={terminal.width} />
     </box>
   )
 }
@@ -193,7 +194,6 @@ export function AuditView(props: { readonly state: AppState }) {
   const terminal = useTerminalDimensions()
   const audit = usePolling(() => dataSource.getAudit(props.state.pairId), `audit|${props.state.pairId}`, REFRESH_MILLISECONDS)
   const rows = audit.data ?? []
-  const mismatches = countAuditMismatches(rows)
   const columns = terminal.width >= 112 ? 'full' : 'short'
   return (
     <ViewFrame view="audit" notice={props.state.notice}>
@@ -201,7 +201,7 @@ export function AuditView(props: { readonly state: AppState }) {
         line={[
           strong('Escrow against bridged supply'),
           muted('  escrow = bridged supply + in flight. '),
-          mismatches === 0 ? colored('No mismatch.', theme.good) : colored(`${mismatches} MISMATCH${mismatches === 1 ? '' : 'ES'}`, theme.bad),
+          ...auditVerdict(rows),
         ]}
       />
       <RichLine line={auditHeader(columns)} />

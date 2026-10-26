@@ -186,7 +186,7 @@ describe('the prover setup when the secret store fails', () => {
   test('a value that cannot be read shows that and nothing of the value', async () => {
     const store = failingStore({ get: 'keychain locked' })
     app = await renderApp({ width: 120, height: 40, store, savedSetup: { ...emptyProverSetup(), runpodApiKey: keyReference } })
-    await app.press('5')
+    await app.press('6')
     await app.settle(80)
     expect(app.frame()).toContain('stored (cannot read)')
   })
@@ -194,7 +194,7 @@ describe('the prover setup when the secret store fails', () => {
   test('d keeps the reference and shows the reason when the store cannot delete', async () => {
     const store = failingStore({ delete: 'keychain refused the delete' })
     app = await renderApp({ width: 120, height: 40, store, savedSetup: { ...emptyProverSetup(), runpodApiKey: keyReference } })
-    await app.press('5')
+    await app.press('6')
     await app.settle(60)
     await app.press('ARROW_DOWN')
     await app.press('d')
@@ -206,7 +206,7 @@ describe('the prover setup when the secret store fails', () => {
   test('a failed save shows the reason without the secret, keeps the editor open and lets the user try again', async () => {
     const store = failingStore({ set: 'keychain refused' })
     app = await renderApp({ width: 120, height: 40, store })
-    await app.press('5')
+    await app.press('6')
     await app.press('ARROW_DOWN')
     await app.press('RETURN')
     await app.type(RUNPOD_KEY)

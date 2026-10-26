@@ -9,6 +9,7 @@ import type { AppServices, ProverSetupServices, SigningServices } from '../../sr
 import { createFixtureChainAccess } from '../../src/chain/fixture-chain-access'
 import type { ChainAccess } from '../../src/chain/chain-access'
 import type { HttpClient } from '../../src/config/connection-tests'
+import type { ConnectionRuntime } from '../../src/data/connection-runtime'
 import {
   emptyProverSetup,
   type ProverSetup,
@@ -57,6 +58,8 @@ export interface HarnessOptions {
   /** Replaces single services of the prover setup, for example a save that fails. */
   readonly proverSetupOverrides?: Partial<ProverSetupServices>
   readonly pair?: AppServices['pair']
+  /** The live connection runtime. Default: none, as in fixture mode. */
+  readonly connection?: ConnectionRuntime | null
   readonly tokenValuationsWei?: Readonly<Record<string, bigint>>
 }
 
@@ -102,6 +105,7 @@ export async function renderApp(options: HarnessOptions) {
     pair: options.pair ?? FIXTURE_PAIR,
     dataSource: options.dataSource ?? createFixtureDataSource({ now: () => FIXTURE_NOW }),
     chainAccess,
+    connection: options.connection ?? null,
     signing,
     proverSetup,
     now: () => FIXTURE_NOW,
@@ -113,7 +117,7 @@ export async function renderApp(options: HarnessOptions) {
     quit: () => {
       quitCount += 1
     },
-    defaultPairId: FIXTURE_PAIR.id,
+    defaultPairId: (options.pair ?? FIXTURE_PAIR).id,
     tokenValuationsWei: options.tokenValuationsWei ?? {},
   }
   const setup = await testRender(<App services={services} initialSigner={options.initialSigner ?? null} />, {

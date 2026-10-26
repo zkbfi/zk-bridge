@@ -9,7 +9,7 @@
  */
 import { useTerminalDimensions } from '@opentui/react'
 import { useEffect, useMemo, useState } from 'react'
-import { PasswordRequiredError, useServices } from '../app/services'
+import { useServices } from '../app/services'
 import {
   directionsText,
   referenceOfRow,
@@ -39,14 +39,9 @@ import { useKeyLayer } from './key-router'
 import { ModalFrame } from './modals'
 import { windowStart } from './panels'
 import { ViewFrame } from './views'
+import { PasswordPrompt, storeLine, useSecretStore } from './secret-store-ui'
 import { RichLine, colored, muted, plain, strong, type Line } from './rich-text'
 import { theme } from './theme'
-
-type StoreState =
-  | { readonly phase: 'opening' }
-  | { readonly phase: 'password' }
-  | { readonly phase: 'ready'; readonly store: SecretStore }
-  | { readonly phase: 'failed'; readonly message: string }
 
 type Editing = { readonly kind: 'none' } | { readonly kind: 'text' | 'secret'; readonly row: SetupRow }
 
@@ -56,30 +51,17 @@ export function SetupView() {
   const terminal = useTerminalDimensions()
   const rows = useMemo(() => setupRows(pair), [pair])
   const [setup, setSetup] = useState<ProverSetup>(() => emptyProverSetup(pair.id))
-  const [storeState, setStoreState] = useState<StoreState>({ phase: 'opening' })
+  const secretStore = useSecretStore(proverSetup.openSecretStore)
+  const { state: storeState, store } = secretStore
   const [masks, setMasks] = useState<Readonly<Record<string, string>>>({})
   const [results, setResults] = useState<Readonly<Record<string, TestOutcome | 'running'>>>({})
   const [selected, setSelected] = useState(0)
   const [editing, setEditing] = useState<Editing>({ kind: 'none' })
   const [notice, setNotice] = useState<string | null>(null)
-  const store = storeState.phase === 'ready' ? storeState.store : null
 
   useEffect(() => {
     proverSetup.load().then(setSetup).catch((error: unknown) => setNotice(redactError(error)))
-    openStore(null)
-    // The setup and the store load once, when the view opens.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  function openStore(password: string | null) {
-    setStoreState({ phase: 'opening' })
-    proverSetup
-      .openSecretStore({ password })
-      .then((opened) => setStoreState({ phase: 'ready', store: opened }))
-      .catch((error: unknown) =>
-        setStoreState(error instanceof PasswordRequiredError ? { phase: 'password' } : { phase: 'failed', message: redactError(error, password === null ? [] : [password]) }),
-      )
-  }
+  }, [proverSetup])
 
   // Masked tails: only the masked text is kept in state, never the value.
   useEffect(() => {
@@ -180,14 +162,14 @@ export function SetupView() {
   return (
     <ViewFrame view="setup" notice={null}>
       <RichLine line={[strong('Prover setup'), muted(' (operator only: stores configuration, nothing runs from here)')]} />
-      <RichLine line={[muted(storeLine(storeState))]} />
+      <RichLine line={[muted(storeLine(storeState, (name) => `Secrets: ${name}, or env variables, or 1Password.`))]} />
       {lines.map((line, index) => (
         <RichLine key={index} line={line} />
       ))}
       <box flexGrow={1} />
       <RichLine line={[colored(notice ?? ' ', theme.warn)]} />
       <RichLine line={[muted('Up/Down  Enter edit or test  d forget a secret  A secret shows its last 4 characters only.')]} />
-      {storeState.phase === 'password' ? <PasswordPrompt onSubmit={(password) => openStore(password)} onCancel={() => setStoreState({ phase: 'failed', message: 'No secret store is open. Secrets cannot be saved.' })} /> : null}
+      {storeState.phase === 'password' ? <PasswordPrompt onSubmit={secretStore.open} onCancel={secretStore.skip} /> : null}
       {editing.kind === 'text' ? <TextEditor row={editing.row} setup={setup} onApply={(next) => { persist(next); setEditing({ kind: 'none' }) }} onCancel={() => setEditing({ kind: 'none' })} /> : null}
       {editing.kind === 'secret' ? (
         <SecretEditor
@@ -203,14 +185,6 @@ export function SetupView() {
       ) : null}
     </ViewFrame>
   )
-}
-
-function storeLine(state: StoreState): string {
-  if (state.phase === 'opening') return 'Opening the secret store…'
-  if (state.phase === 'password') return 'The secret file needs a password.'
-  if (state.phase === 'failed') return state.message
-  const names = { 'macos-keychain': 'the macOS Keychain', 'secret-service': 'the Linux Secret Service', 'encrypted-file': 'an encrypted file' }
-  return `Secrets: ${names[state.store.kind]}, or env variables, or 1Password.`
 }
 
 async function describeReference(reference: SecretReference | null, input: { store: SecretStore | null; environment: Readonly<Record<string, string | undefined>> }): Promise<string> {
@@ -241,20 +215,6 @@ function valueSegments(row: SetupRow, input: { setup: ProverSetup; pair: ReturnT
   if (row.id === 'directions') return [plain(directionsText(setup, pair))]
   if (row.id === 'whenWaits') return [plain(setup.policy.proveWhenTransferWaits ? 'yes' : 'no')]
   return [plain(String(setup.policy.intervalSeconds))]
-}
-
-function PasswordPrompt(props: { readonly onSubmit: (password: string) => void; readonly onCancel: () => void }) {
-  const form = useForm({
-    specs: [{ kind: 'secret', name: 'password', label: 'Password', hint: 'Opens the encrypted secrets file. A new file is created with this password.' }],
-    onSubmit: (values) => (values.password ?? '') === '' ? undefined : props.onSubmit(values.password ?? ''),
-    onCancel: props.onCancel,
-  })
-  return (
-    <ModalFrame title="Secrets file password" width={80} height={8}>
-      <FormView form={form} width={76} />
-      <RichLine line={[muted('No secret store was found on this machine. Enter submits. Esc skips.')]} />
-    </ModalFrame>
-  )
 }
 
 function TextEditor(props: { readonly row: SetupRow; readonly setup: ProverSetup; readonly onApply: (setup: ProverSetup) => void; readonly onCancel: () => void }) {

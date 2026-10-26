@@ -4,7 +4,7 @@
  */
 import { formatUnits } from '../format/amounts'
 import { fitColumn, fitColumnRight, formatAge, formatClock, formatDuration, shortenHex } from '../format/text'
-import { auditDifference, hasAuditMismatch } from '../model/audit'
+import { auditDifference, countAuditMismatches, countUnverifiedRows, hasAuditMismatch, isUnverifiedRow } from '../model/audit'
 import type {
   AuditRow,
   ChainConfig,
@@ -14,6 +14,7 @@ import type {
   LightClientHead,
   PairConfig,
   PairSummary,
+  PartialFigure,
   TokenAmount,
   UpdateGasRecord,
 } from '../model/types'
@@ -111,7 +112,20 @@ function lagColor(head: LightClientHead): string {
   return theme.good
 }
 
-/** The two lines of the summary bar. */
+/** The note that follows a summary with a partial figure. */
+export const PARTIAL_SUMMARY_NOTE = '(RPC: recent history only)'
+
+/** The figures of the summary that a partial answer can make wrong. */
+const SUMMARY_FIGURES: readonly PartialFigure[] = ['volume24h', 'inFlight', 'feesAccrued']
+
+/** The mark that goes before a figure that is a lower bound. Empty for a complete figure. */
+function lowerBound(summary: PairSummary, figure: PartialFigure): string {
+  return summary.partial?.includes(figure) === true ? '>=' : ''
+}
+
+/**
+ * The two lines of the summary bar. A figure that the RPC source read in part has a leading `>=`, and a note says why.
+ */
 export function summaryLines(summary: PairSummary, context: { pair: PairConfig; now: number; layout: PairLayout }): readonly Line[] {
   const { pair, layout } = context
   const volume = summary.volume24h
@@ -119,19 +133,23 @@ export function summaryLines(summary: PairSummary, context: { pair: PairConfig; 
     muted(` ${layout.mode === 'wide' ? chainOf(pair, side).name : chainOf(pair, side).nativeSymbol} `),
     colored(summary.gates[side], statusColor(summary.gates[side])),
   ])
+  const volumeMark = lowerBound(summary, 'volume24h')
+  const feesMark = lowerBound(summary, 'feesAccrued')
   const first: Line = [
     strong(pair.id),
     muted(`  ${pair.first.name} <> ${pair.second.name}   in flight `),
-    colored(String(summary.inFlight), summary.inFlight > 0 ? theme.pending : theme.muted),
+    colored(`${lowerBound(summary, 'inFlight')}${summary.inFlight}`, summary.inFlight > 0 ? theme.pending : theme.muted),
     muted('   24h '),
-    plain(`${volume.transferCount} transfers`),
-    ...(volume.byToken.length === 0 ? [] : [muted(', '), plain(formatTokenAmounts(volume.byToken.slice(0, 1)))]),
+    plain(`${volumeMark}${volume.transferCount} transfers`),
+    ...(volume.byToken.length === 0 ? [] : [muted(', '), plain(`${volumeMark}${formatTokenAmounts(volume.byToken.slice(0, 1))}`)]),
   ]
+  const hasPartialFigure = SUMMARY_FIGURES.some((figure) => lowerBound(summary, figure) !== '')
   const second: Line = [
     muted('fees accrued '),
-    plain(formatTokenAmounts(summary.feesAccrued.slice(0, layout.mode === 'wide' ? 3 : 1))),
+    plain(`${feesMark}${formatTokenAmounts(summary.feesAccrued.slice(0, layout.mode === 'wide' ? 3 : 1))}`),
     muted('   gate'),
     ...gates,
+    ...(hasPartialFigure ? [muted(`  ${PARTIAL_SUMMARY_NOTE}`)] : []),
   ]
   return [first, second]
 }
@@ -219,12 +237,32 @@ export function auditLine(row: AuditRow, columns: AuditColumns): Line {
   const cell = (value: bigint) => formatUnits(value, token.decimals, { groupThousands: true, maximumFractionDigits: 4 })
   const difference = auditDifference(row)
   const flagged = hasAuditMismatch(row)
+  const unverified = isUnverifiedRow(row)
   const full = columns === 'full'
-  const differenceText = flagged ? `${difference > 0n ? '+' : ''}${cell(difference)}` : '0'
+  const differenceText = difference !== 0n && (flagged || unverified) ? `${difference > 0n ? '+' : ''}${cell(difference)}` : '0'
   const cells = full
     ? [fitColumn(token.symbol, 8), fitColumnRight(cell(row.escrow), 18), fitColumnRight(cell(row.bridgedSupply), 18), fitColumnRight(cell(row.inFlight), 12), fitColumnRight(differenceText, 12), fitColumnRight(cell(row.accruedFees), 12), fitColumnRight(cell(row.collectedFees), 12)]
     : [fitColumn(token.symbol, 7), fitColumnRight(cell(row.escrow), 14), fitColumnRight(cell(row.bridgedSupply), 14), fitColumnRight(differenceText, 9), fitColumnRight(cell(row.accruedFees), 10)]
+  if (unverified) return [plain(cells.join(' ')), muted(`  ${UNVERIFIED_MARK}`)]
   return [colored(`${cells.join(' ')}  ${flagged ? 'MISMATCH' : 'ok'}`, flagged ? theme.bad : theme.text)]
+}
+
+/** The mark of an audit row that the data source could not verify. */
+export const UNVERIFIED_MARK = 'unverified'
+
+/**
+ * The first line of the audit view: the verdict. Mismatches show in red. Unverified rows show in a muted count. A
+ * verdict of "No mismatch." appears only when every row was verified.
+ */
+export function auditVerdict(rows: readonly AuditRow[]): Line {
+  const unverified = countUnverifiedRows(rows)
+  return [...mismatchVerdict(countAuditMismatches(rows), unverified), ...(unverified === 0 ? [] : [muted(` ${unverified} ${UNVERIFIED_MARK} ${PARTIAL_SUMMARY_NOTE}`)])]
+}
+
+function mismatchVerdict(mismatches: number, unverified: number): Line {
+  if (mismatches > 0) return [colored(`${mismatches} MISMATCH${mismatches === 1 ? '' : 'ES'}`, theme.bad)]
+  if (unverified > 0) return []
+  return [colored('No mismatch.', theme.good)]
 }
 
 /** The header of the audit table. */

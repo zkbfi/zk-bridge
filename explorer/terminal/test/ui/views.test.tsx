@@ -42,9 +42,15 @@ describe('view snapshots', () => {
       expect(app.frame()).toMatchSnapshot()
     })
 
-    test(`prover setup view, ${size.name}`, async () => {
+    test(`connections view, ${size.name}`, async () => {
       app = await renderApp(size)
       await app.press('5')
+      expect(app.frame()).toMatchSnapshot()
+    })
+
+    test(`prover setup view, ${size.name}`, async () => {
+      app = await renderApp(size)
+      await app.press('6')
       expect(app.frame()).toMatchSnapshot()
     })
 

@@ -96,14 +96,14 @@ describe('the signer dialog', () => {
 describe('the prover setup when loading, saving and opening the store fail', () => {
   test('a setup that cannot load shows the reason', async () => {
     app = await renderApp({ width: 120, height: 40, proverSetupOverrides: { load: async () => Promise.reject(new Error('setup file is damaged')) } })
-    await app.press('5')
+    await app.press('6')
     await app.settle(60)
     expect(app.frame()).toContain('setup file is damaged')
   })
 
   test('a setup that cannot be saved says so, and the change stays on screen', async () => {
     app = await renderApp({ width: 120, height: 40, proverSetupOverrides: { save: async () => Promise.reject(new Error('disk is full')) } })
-    await app.press('5')
+    await app.press('6')
     for (let step = 0; step < 7; step += 1) await app.press('ARROW_DOWN')
     await app.press('RETURN') // directions
     await app.settle(60)
@@ -120,7 +120,7 @@ describe('the prover setup when loading, saving and opening the store fail', () 
         throw new Error(`cannot decrypt with ${password}`)
       },
     })
-    await app.press('5')
+    await app.press('6')
     await app.settle(60)
     await app.type('my-file-password')
     await app.press('RETURN')
@@ -136,7 +136,7 @@ describe('the prover setup when loading, saving and opening the store fail', () 
       store: memoryStore(),
       openSecretStore: async () => Promise.reject(new PasswordRequiredError()),
     })
-    await app.press('5')
+    await app.press('6')
     await app.settle(60)
     expect(app.frame()).toContain('Secrets file password')
     await app.press('ESCAPE')
@@ -146,7 +146,7 @@ describe('the prover setup when loading, saving and opening the store fail', () 
 
   test('Esc in the text editor closes it and saves nothing', async () => {
     app = await renderApp({ width: 120, height: 40 })
-    await app.press('5')
+    await app.press('6')
     await app.press('RETURN')
     await app.type('https://abc123.api.runpod.ai')
     await app.press('ESCAPE')
@@ -167,7 +167,7 @@ describe('the tests of the prover setup view', () => {
       },
       savedSetup: { ...emptyProverSetup(), endpointUrl: 'https://abc123.api.runpod.ai' },
     })
-    await app.press('5')
+    await app.press('6')
     await app.settle(60)
     for (let step = 0; step < 10; step += 1) await app.press('ARROW_DOWN')
     await app.press('RETURN') // the ping test

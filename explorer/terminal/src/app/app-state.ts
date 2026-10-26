@@ -14,12 +14,12 @@ import type { FlowStep } from '../flow/transaction-flow'
 
 /**
  * The views. `setup` (Prover setup) is deliberately last everywhere: in this list, in the key bar and in the help.
- * It is never the default and no other view leads to it.
+ * It is never the default and no other view leads to it. `connections` comes just before it.
  */
-export type ViewName = 'global' | 'pair' | 'audit' | 'prover' | 'setup'
+export type ViewName = 'global' | 'pair' | 'audit' | 'prover' | 'connections' | 'setup'
 
-/** The views in the order of the number keys `1` to `5`. The tucked-away setup view is always the last entry. */
-export const VIEWS: readonly ViewName[] = ['global', 'pair', 'audit', 'prover', 'setup']
+/** The views in the order of the number keys `1` to `6`. The tucked-away setup view is always the last entry. */
+export const VIEWS: readonly ViewName[] = ['global', 'pair', 'audit', 'prover', 'connections', 'setup']
 
 /** The label of each view, in the order of {@link VIEWS}. */
 export const VIEW_LABELS: Readonly<Record<ViewName, string>> = {
@@ -27,6 +27,7 @@ export const VIEW_LABELS: Readonly<Record<ViewName, string>> = {
   pair: 'Pair',
   audit: 'Audit',
   prover: 'Prover and costs',
+  connections: 'Connections',
   setup: 'Prover setup',
 }
 

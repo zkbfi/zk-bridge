@@ -5,6 +5,7 @@ import { useReducer } from 'react'
 import { useKeyLayer, KeyRouterProvider } from '../ui/key-router'
 import { type ActionModalProps, BridgeModal, ClaimModal, ExecuteModal, MessageModal, UpdateModal } from '../ui/action-modals'
 import { AddressFilterModal, DetailModal, HelpOverlay, ReviewModal } from '../ui/modals'
+import { ConnectionsView } from '../ui/connections-view'
 import { SetupView } from '../ui/setup-view'
 import { SignerModal } from '../ui/signer-modal'
 import { AuditView, GlobalView, PairView, ProverView } from '../ui/views'
@@ -68,6 +69,7 @@ function CurrentView(props: { readonly state: AppState; readonly dispatch: Dispa
   if (state.view === 'global') return <GlobalView state={state} dispatch={dispatch} modalOpen={modalOpen} />
   if (state.view === 'audit') return <AuditView state={state} />
   if (state.view === 'prover') return <ProverView state={state} />
+  if (state.view === 'connections') return <ConnectionsView />
   if (state.view === 'setup') return <SetupView />
   return <PairView state={state} dispatch={dispatch} modalOpen={modalOpen} />
 }

@@ -5,7 +5,7 @@
 import type { ReactNode } from 'react'
 import type { ChainSnapshotResult } from '../chain/live-reads'
 import { formatRateAsPercent, formatUnits } from '../format/amounts'
-import { fitColumn, shortenHex } from '../format/text'
+import { fitColumn, formatTimestamp, shortenHex } from '../format/text'
 import { FILTER_FIELDS, type FilterField, type FilterState } from '../model/filter-state'
 import type { FeedItem, LightClientHead, PairConfig, PairSummary, TokenInfo } from '../model/types'
 import type { FocusArea } from '../app/app-state'
@@ -130,9 +130,11 @@ export function FeedPanel(props: {
   readonly height: number
   readonly pair: PairConfig
   readonly layout: PairLayout
+  /** Unix seconds from which the RPC source has read the history, or null when the page is complete. */
+  readonly coveredFrom: number | null
 }) {
-  const { items, error, selectedIndex, focused, height, pair, layout } = props
-  const rows = Math.max(1, height - 3)
+  const { items, error, selectedIndex, focused, height, pair, layout, coveredFrom } = props
+  const rows = Math.max(1, height - (coveredFrom === null ? 3 : 4))
   const body = (): ReactNode => {
     if (items === null) return <text fg={theme.muted}>{error === null ? 'Loading the feed…' : `Feed unavailable: ${error}`}</text>
     if (items.length === 0) return <text fg={theme.muted}>No transfers or messages match the filters.</text>
@@ -150,9 +152,15 @@ export function FeedPanel(props: {
   return (
     <Panel title={`Feed${position}`} focused={focused} grow={1}>
       <RichLine line={feedHeader(layout)} />
+      {coveredFrom === null ? null : <RichLine line={[muted(coverageNote(coveredFrom))]} />}
       {body()}
     </Panel>
   )
+}
+
+/** The line above a feed that the RPC source read in part. */
+export function coverageNote(coveredFrom: number): string {
+  return `RPC fallback: history since ${formatTimestamp(coveredFrom)} UTC`
 }
 
 /** The first row to draw so that the selected row stays in view. */
@@ -242,15 +250,16 @@ export function KeyBar(props: { readonly focus: FocusArea | null; readonly notic
     feed: 'Up/Down move  Enter details',
   }
   const banner = mode === 'fixture' ? ' FIXTURE: no transaction reaches a chain ' : ''
-  const left = `Tab area  1-4 views  ? help  q quit  ${focus === null ? '' : hints[focus]}`
+  const left = `Tab area  1-5 views  ? help  q quit  ${focus === null ? '' : hints[focus]}`
   const text = notice ?? left
+  const label = fitColumn(sourceLabel, Math.min(sourceLabel.length, Math.max(8, Math.floor(width / 2))))
   return (
     <box height={1} flexDirection="row">
       <text wrapMode="none" truncate fg={notice === null ? theme.muted : theme.warn}>
-        {fitColumn(text, Math.max(10, width - sourceLabel.length - banner.length - 3))}
+        {fitColumn(text, Math.max(10, width - label.length - banner.length - 3))}
       </text>
       <text fg={theme.bad}>{banner}</text>
-      <text fg={theme.muted}>{` ${sourceLabel}`}</text>
+      <text fg={theme.muted}>{` ${label}`}</text>
     </box>
   )
 }
