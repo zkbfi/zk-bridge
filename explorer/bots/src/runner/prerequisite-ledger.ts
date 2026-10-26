@@ -1,6 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type { Logger } from "../logging/logger.ts";
-import { budgetPause, pruneBudget, windowSpendWei, withCharge, withLoss, withSettledCharge, type SpendLimits } from "./spend-budget.ts";
+import {
+  budgetPause,
+  pruneBudget,
+  windowDeliverySpendWei,
+  windowSpendWei,
+  withCharge,
+  withDeliveryCharge,
+  withLoss,
+  withSettledCharge,
+  withSettledDeliveryCharge,
+  type SpendLimits,
+} from "./spend-budget.ts";
 import type { PrerequisiteBudgetState } from "./state.ts";
 
 /**
@@ -40,8 +51,18 @@ export interface PrerequisiteLedger {
   reserve(wei: bigint): Promise<ReserveResult>;
   /** Replaces a reservation with the actual cost. */
   settle(reservation: Reservation, actualWei: bigint): Promise<void>;
-  /** Records wei that layout calls cost for an item that was then not delivered. */
+  /** Records wei that were lost: layout calls for an item that was then not delivered, or the gas share of a delivery that did not execute. */
   recordLoss(wei: bigint): Promise<void>;
+  /**
+   * Charges the worst case of a delivery transaction before it leaves. It checks no limit and it does not count toward
+   * the sweep cap or the daily budget of layout calls: the fee repays a delivery. A send that throws never settles,
+   * so the charge stays, because the transaction may be in the pool.
+   */
+  reserveDelivery(wei: bigint): Promise<Reservation>;
+  /** Replaces a delivery reservation with the actual cost of the mined transaction. */
+  settleDelivery(reservation: Reservation, actualWei: bigint): Promise<void>;
+  /** The wei that delivery transactions cost, or may cost, in the rolling 24 hours. For logs. */
+  deliverySpendWei(): Promise<bigint>;
 }
 
 /** Input of {@link createPrerequisiteLedger}. */
@@ -108,6 +129,17 @@ export function createPrerequisiteLedger(input: PrerequisiteLedgerInput): Prereq
     async settle(reservation, actualWei) {
       await store.update((stored) => withSettledCharge(pruneBudget(stored, now()), reservation.id, actualWei));
       sweepSpentWei += actualWei - reservation.wei;
+    },
+    async reserveDelivery(wei) {
+      const reservation = { id: randomUUID(), wei };
+      await store.update((stored) => withDeliveryCharge(pruneBudget(stored, now()), { id: reservation.id, atMilliseconds: now(), wei: wei.toString() }));
+      return reservation;
+    },
+    async settleDelivery(reservation, actualWei) {
+      await store.update((stored) => withSettledDeliveryCharge(pruneBudget(stored, now()), reservation.id, actualWei));
+    },
+    async deliverySpendWei() {
+      return windowDeliverySpendWei(await store.load(), now());
     },
     async recordLoss(wei) {
       if (wei === 0n) return;

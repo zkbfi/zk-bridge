@@ -1,10 +1,12 @@
 import type { Address, Hex } from "viem";
-import type { ProofDirection } from "@zk-bridge/shared";
+import type { ProofDirection, ProofMessage } from "@zk-bridge/shared";
 import type { LightClientReader } from "../chain/light-client.ts";
 import type { FeedItem } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
 import type { StateStore } from "../runtime/state-file.ts";
-import { deliverItem, isFinal, type DeliveryDependencies, type DeliveryOutcome } from "./delivery.ts";
+import { sendBatch, type UpdateFate, type UpdateOffer } from "./batch.ts";
+import { planBatches } from "./batch-plan.ts";
+import { isFinal, prepareItem, type DeliveryDependencies, type DeliveryOutcome, type Preparation, type ReadyDelivery } from "./delivery.ts";
 import { createPrerequisiteLedger, type BudgetStore, type PrerequisiteLedger } from "./prerequisite-ledger.ts";
 import type { OutcomeSink } from "./outcomes.ts";
 import { assessProofPayload, payloadKey, type ProofRefusal } from "./proof-intake.ts";
@@ -52,6 +54,9 @@ export interface SweepSummary {
   readonly failed: number;
 }
 
+/** The counts of a sweep while it runs. */
+type SweepCounts = { -readonly [Key in keyof SweepSummary]: SweepSummary[Key] };
+
 /** The runner for one pair and direction. */
 export interface Runner {
   /** Checks one message of the board, and posts `update` when it is a proof that moves the head. */
@@ -68,8 +73,11 @@ export const RETRY_AFTER_MILLISECONDS = 5 * 60 * 1000;
 const MAXIMUM_PAGES = 5;
 const PAGE_SIZE = 100;
 
-/** Skip reasons that the next sweep can settle at once, because they only compare numbers that change with each block. */
-const CHEAP_REASONS: ReadonlySet<string> = new Set(["no-fee-offer", "fee-below-cost-plus-margin", "no-price-for-fee-token"]);
+/**
+ * Skip reasons that the next sweep can settle at once: they compare numbers that change with each block, or (anchor not
+ * stored) wait for a light client update that may land any moment.
+ */
+const CHEAP_REASONS: ReadonlySet<string> = new Set(["no-fee-offer", "fee-below-cost-plus-margin", "no-price-for-fee-token", "anchor-not-stored"]);
 
 /** Builds the runner. It keeps in memory only caches that a restart may lose; the state file keeps what must last. */
 export function createRunner(dependencies: RunnerDependencies): Runner {
@@ -78,6 +86,10 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
   const retryAfter = new Map<string, number>();
   const lastSkipReason = new Map<string, string>();
   const base = { pair: dependencies.pairName, direction: dependencies.direction };
+  /** The proof that waits to be posted: with the next batch, or alone at the end of a sweep. */
+  let pendingUpdate: ProofMessage | null = null;
+  /** What became of each update, for the caller of `handleProofPayload`. */
+  const updateHandlings = new WeakMap<ProofMessage, ProofHandling>();
 
   function remembered(payload: Hex): boolean {
     const key = payloadKey(payload);
@@ -104,24 +116,73 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
       return { handled: "refused", reason: assessment.reason, detail: assessment.detail };
     }
     const message = assessment.message;
+    // The update waits for the sweep. A batch carries it when one follows, and the sweep posts it alone when none does.
+    if (pendingUpdate === null || pendingUpdate.newSlot < message.newSlot) pendingUpdate = message;
+    await runSweep();
+    return updateHandlings.get(message) ?? { handled: "update-skipped", reason: "superseded", detail: "another update was posted or is waiting with a higher slot" };
+  }
+
+  /** Posts the update alone, with its own simulation. A revert usually means that someone else posted first. */
+  async function postUpdateAlone(message: ProofMessage): Promise<void> {
     const outcome = await queue.run(() => postUpdate({ chain: dependencies.delivery.chain, lightClient: dependencies.lightClientAddress, message }));
     if (!outcome.posted) {
-      logger.info("update_skipped", { reason: outcome.reason, detail: outcome.detail, newSlot: message.newSlot });
-      await dependencies.outcomes.record({ kind: "update", ...base, status: "skipped", reason: outcome.reason, detail: outcome.detail, startSlot: message.startSlot, newSlot: message.newSlot });
-      return { handled: "update-skipped", reason: outcome.reason, detail: outcome.detail };
+      await finishUpdate(message, { kind: "skipped", reason: outcome.reason, detail: outcome.detail });
+      return;
     }
-    logger.info("update_posted", { transactionHash: outcome.transactionHash, newSlot: message.newSlot, gasUsed: outcome.gasUsed });
-    await dependencies.outcomes.record({
-      kind: "update",
-      ...base,
-      status: "posted",
-      transactionHash: outcome.transactionHash,
-      startSlot: message.startSlot,
-      newSlot: message.newSlot,
-      gasUsed: outcome.gasUsed,
-      gasCostWei: outcome.gasUsed * outcome.effectiveGasPrice,
-    });
-    return { handled: "update-posted", transactionHash: outcome.transactionHash };
+    await finishUpdate(message, { kind: "posted", transactionHash: outcome.transactionHash, gasUsed: outcome.gasUsed, gasCostWei: outcome.gasUsed * outcome.effectiveGasPrice });
+  }
+
+  /** How an update ended. */
+  type UpdateEnding =
+    | { readonly kind: "posted"; readonly transactionHash: Hex; readonly gasUsed: bigint; readonly gasCostWei: bigint }
+    | { readonly kind: "skipped"; readonly reason: string; readonly detail: string };
+
+  /** Records how the pending update ended, answers the caller of `handleProofPayload`, and clears the pending update. */
+  async function finishUpdate(message: ProofMessage, ending: UpdateEnding): Promise<void> {
+    if (pendingUpdate === message) pendingUpdate = null;
+    const fields = { startSlot: message.startSlot, newSlot: message.newSlot };
+    if (ending.kind === "skipped") {
+      logger.info("update_skipped", { reason: ending.reason, detail: ending.detail, newSlot: message.newSlot });
+      await dependencies.outcomes.record({ kind: "update", ...base, status: "skipped", reason: ending.reason, detail: ending.detail, ...fields });
+      updateHandlings.set(message, { handled: "update-skipped", reason: ending.reason, detail: ending.detail });
+      return;
+    }
+    logger.info("update_posted", { transactionHash: ending.transactionHash, newSlot: message.newSlot, gasUsed: ending.gasUsed });
+    await dependencies.outcomes.record({ kind: "update", ...base, status: "posted", transactionHash: ending.transactionHash, ...fields, gasUsed: ending.gasUsed, gasCostWei: ending.gasCostWei });
+    updateHandlings.set(message, { handled: "update-posted", transactionHash: ending.transactionHash });
+  }
+
+  /**
+   * The update that the next batch carries, or null. An update that the head has passed is done: someone else posted
+   * it, and no transaction is needed.
+   */
+  async function offerUpdate(): Promise<UpdateOffer | null> {
+    const message = pendingUpdate;
+    if (message === null) return null;
+    const head = await dependencies.lightClient.read();
+    if (head.headSlot >= message.newSlot) {
+      await finishUpdate(message, { kind: "skipped", reason: "already-stored", detail: `the head is at slot ${head.headSlot}` });
+      return null;
+    }
+    return { message, lightClient: dependencies.lightClientAddress };
+  }
+
+  /** Learns what became of the update that a batch carried. Returns true when the update was declined as unpaid, so that no later batch offers it. */
+  async function settleUpdateFate(offer: UpdateOffer | null, fate: UpdateFate): Promise<boolean> {
+    if (offer === null || fate.kind === "not-offered") return false;
+    if (fate.kind === "mined") {
+      const ending: UpdateEnding = fate.applied
+        ? { kind: "posted", transactionHash: fate.transactionHash, gasUsed: fate.gasUsed, gasCostWei: fate.gasCostWei }
+        : { kind: "skipped", reason: "update-failed", detail: `the light client reports no head update in ${fate.transactionHash}: another account may have posted first` };
+      await finishUpdate(offer.message, ending);
+      return false;
+    }
+    if (fate.reason === "head-already-advanced" || fate.reason === "update-failed") {
+      await finishUpdate(offer.message, { kind: "skipped", reason: fate.reason, detail: fate.detail });
+      return false;
+    }
+    logger.info("update_waits", { reason: fate.reason, detail: fate.detail, newSlot: offer.message.newSlot });
+    return fate.reason === "update-unpaid";
   }
 
   async function listCovered(finished: ReadonlySet<string>): Promise<readonly FeedItem[]> {
@@ -162,21 +223,21 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
    */
   const budgetStore: BudgetStore = {
     async load() {
-      const { prerequisiteSpend, prerequisiteLosses } = await dependencies.state.load();
-      return { prerequisiteSpend, prerequisiteLosses };
+      const { prerequisiteSpend, deliverySpend, prerequisiteLosses } = await dependencies.state.load();
+      return { prerequisiteSpend, deliverySpend, prerequisiteLosses };
     },
     async update(mutate) {
       await dependencies.state.update((state) => {
-        const budget = { prerequisiteSpend: state.prerequisiteSpend, prerequisiteLosses: state.prerequisiteLosses };
+        const budget = { prerequisiteSpend: state.prerequisiteSpend, deliverySpend: state.deliverySpend, prerequisiteLosses: state.prerequisiteLosses };
         const next = mutate(budget);
         return next === budget ? state : { ...state, ...next };
       });
     },
   };
 
-  async function attempt(item: FeedItem, ledger: PrerequisiteLedger): Promise<DeliveryOutcome | null> {
+  async function attempt(item: FeedItem, ledger: PrerequisiteLedger): Promise<Preparation | null> {
     try {
-      return await queue.run(() => deliverItem(dependencies.delivery, item, ledger));
+      return await queue.run(() => prepareItem(dependencies.delivery, item, ledger));
     } catch (error) {
       logger.error("delivery_error", { messageId: item.messageId, error });
       retryAfter.set(item.messageId, dependencies.now() + RETRY_AFTER_MILLISECONDS);
@@ -184,6 +245,57 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     }
   }
 
+  /** An item that waits for a batch. `spentOnPrerequisites` is true when layout calls were sent for it. */
+  interface Pending {
+    readonly item: FeedItem;
+    readonly ready: ReadyDelivery;
+    readonly spentOnPrerequisites: boolean;
+  }
+
+  /** Records an outcome, counts it, schedules the next look at the item and stores a final result. */
+  async function settleOutcome(item: FeedItem, outcome: DeliveryOutcome, summary: SweepCounts, options: { readonly spentOnPrerequisites: boolean }): Promise<void> {
+    await record(outcome);
+    if (outcome.status === "delivered") summary.delivered += 1;
+    if (outcome.status === "skipped") summary.skipped += 1;
+    if (outcome.status === "failed") summary.failed += 1;
+    if (outcome.status === "skipped" && !CHEAP_REASONS.has(outcome.reason)) retryAfter.set(item.messageId, dependencies.now() + RETRY_AFTER_MILLISECONDS);
+    if (outcome.status === "failed") retryAfter.set(item.messageId, dependencies.now() + RETRY_AFTER_MILLISECONDS);
+    if (outcome.status === "skipped" && options.spentOnPrerequisites) retryAfter.set(item.messageId, dependencies.now() + dependencies.prerequisiteLossRefusalMilliseconds);
+    if (!isFinal(outcome)) return;
+    const proof = outcome.status === "delivered" ? outcome.transactionHash : "elsewhere";
+    await dependencies.state.update((current) => ({ ...current, finished: { ...current.finished, [item.messageId]: proof } }));
+  }
+
+  /**
+   * Sends one batch. A send that throws may have broadcast the transaction, so every item of the batch counts as failed
+   * and waits. The delivery reservation stays charged in the ledger. The layout calls of the items are a loss.
+   */
+  async function deliverBatch(batch: readonly Pending[], ledger: PrerequisiteLedger, summary: SweepCounts, update: UpdateOffer | null): Promise<boolean> {
+    let report;
+    try {
+      report = await queue.run(() => sendBatch(dependencies.delivery, ledger, { readies: batch.map((pending) => pending.ready), update }));
+    } catch (error) {
+      logger.error("delivery_batch_error", { messageIds: batch.map((pending) => pending.item.messageId), error });
+      await ledger.recordLoss(batch.reduce((sum, pending) => sum + pending.ready.prerequisiteCostWei, 0n));
+      for (const pending of batch) {
+        summary.failed += 1;
+        const wait = pending.spentOnPrerequisites ? dependencies.prerequisiteLossRefusalMilliseconds : RETRY_AFTER_MILLISECONDS;
+        retryAfter.set(pending.item.messageId, dependencies.now() + wait);
+      }
+      return false;
+    }
+    for (const [index, pending] of batch.entries()) {
+      await settleOutcome(pending.item, report.outcomes[index] as DeliveryOutcome, summary, { spentOnPrerequisites: pending.spentOnPrerequisites });
+    }
+    return settleUpdateFate(update, report.update);
+  }
+
+  /**
+   * One sweep. The runner first prepares the items oldest first: offers, evidence, layout calls. An item with a fee
+   * offer that passes waits as ready. When the preparation is over, the ready items go to the fee router in as few batches
+   * as the limits allow, and each batch is one transaction. An item without an offer goes directly to the bridge, alone.
+   * A prepared item counts as one attempt of the sweep, whether or not its batch later drops it.
+   */
   async function sweepOnce(): Promise<SweepSummary> {
     const state = await dependencies.state.load();
     const finished = new Set(Object.keys(state.finished));
@@ -198,14 +310,15 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
       logger,
     });
     let attempts = 0;
+    const waiting: Pending[] = [];
     for (const item of listed) {
       if (attempts >= dependencies.maximumDeliveriesPerSweep) break;
       if ((retryAfter.get(item.messageId) ?? 0) > dependencies.now()) continue;
       const spentBefore = ledger.spentWei;
-      const outcome = await attempt(item, ledger);
+      const preparation = await attempt(item, ledger);
       const spentOnPrerequisites = ledger.spentWei > spentBefore;
       if (spentOnPrerequisites) attempts += 1;
-      if (outcome === null) {
+      if (preparation === null) {
         summary.failed += 1;
         // An error after a layout call was attempted is spend-bearing: the reservation stays charged, the item counts
         // toward the sweep limit, and the item waits out the refusal window. The charge is an unrecovered loss.
@@ -213,25 +326,33 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
         if (spentOnPrerequisites) retryAfter.set(item.messageId, dependencies.now() + dependencies.prerequisiteLossRefusalMilliseconds);
         continue;
       }
-      if ((outcome.status === "delivered" || outcome.status === "failed") && !spentOnPrerequisites) attempts += 1;
-      await record(outcome);
-      if (outcome.status === "delivered") summary.delivered += 1;
-      if (outcome.status === "skipped") summary.skipped += 1;
-      if (outcome.status === "failed") summary.failed += 1;
-      if (outcome.status === "skipped" && !CHEAP_REASONS.has(outcome.reason)) retryAfter.set(item.messageId, dependencies.now() + RETRY_AFTER_MILLISECONDS);
-      if (outcome.status === "failed") retryAfter.set(item.messageId, dependencies.now() + RETRY_AFTER_MILLISECONDS);
-      if (outcome.status === "skipped" && spentOnPrerequisites) retryAfter.set(item.messageId, dependencies.now() + dependencies.prerequisiteLossRefusalMilliseconds);
-      if (isFinal(outcome)) {
-        const proof = outcome.status === "delivered" ? outcome.transactionHash : "elsewhere";
-        await dependencies.state.update((current) => ({ ...current, finished: { ...current.finished, [item.messageId]: proof } }));
+      if (preparation.kind === "ready") {
+        if (!spentOnPrerequisites) attempts += 1;
+        waiting.push({ item, ready: preparation.ready, spentOnPrerequisites });
+        continue;
       }
+      const { outcome } = preparation;
+      if ((outcome.status === "delivered" || outcome.status === "failed") && !spentOnPrerequisites) attempts += 1;
+      await settleOutcome(item, outcome, summary, { spentOnPrerequisites });
     }
+    const batches = planBatches(
+      waiting.map((pending) => ({ ...pending, assumedGas: pending.ready.assumedGas })),
+      { maximumBatchSize: settings.maximumBatchSize, maximumBatchGas: settings.maximumBatchGas },
+    );
+    let updateDeclined = false;
+    for (const batch of batches) {
+      const update = updateDeclined ? null : await offerUpdate();
+      if (await deliverBatch(batch, ledger, summary, update)) updateDeclined = true;
+    }
+    // No batch took the update, so it goes alone, as it did before batches existed.
+    if (pendingUpdate !== null) await postUpdateAlone(pendingUpdate);
     return summary;
   }
 
   /** A sweep never overlaps the one before it: a proof message that arrives during a sweep waits for its turn. */
   const sweepQueue = createSerialQueue();
-  const sweep = (): Promise<SweepSummary> => sweepQueue.run(sweepOnce);
+  const runSweep = (): Promise<SweepSummary> => sweepQueue.run(sweepOnce);
+  const sweep = runSweep;
 
   return { handleProofPayload, sweep };
 }

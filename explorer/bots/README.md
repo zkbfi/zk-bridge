@@ -51,7 +51,11 @@ proving policy. The **bot configuration** adds what only a bot needs. A sample i
 | `runner.indexerUrl` | The indexer. |
 | `runner.minimumMarginWei` | The fee must cover the gas cost plus this margin. Default 0. |
 | `runner.deliverWithoutOffer` | Deliver items with no fee offer, for the gas cost alone. Default off. |
-| `runner.feeRouter` | Default: `fee_router` of the deployment file. |
+| `runner.feeRouter` | Default: `fee_router` of the deployment file. The runner must sign with the account that this router whitelists: at start it reads `FeeRouter.runner()` and refuses to run when the value is another address. |
+| `runner.rewardAddress` | The address that receives the fees. Required whenever a fee router is in use; a runner that only delivers directly needs none. At start the runner reads `FeeRouter.rewardAddress()` and refuses to run when it differs from this value, or when this value is the address of the signer. The signer is a hot key that only pays gas. The reward address can be a cold account. |
+| `runner.multicall3` | The Multicall3 contract that batches the deliveries. Default `0xcA11bde05977b3631167028862bE2a173976CA11`, the canonical address. At start the runner refuses to run when the address holds no code. |
+| `runner.maximumBatchSize` | The most items in one batch transaction. Default 5. |
+| `runner.maximumBatchGas` | The most gas that the assumed gas of the items of one batch may add up to, and the upper bound of the gas limit of the batch transaction. Default 6000000. |
 | `runner.tokenValuationsWei` | Wei value of one whole token, by token address. A fee in the wrapped native token needs none. |
 | `runner.executionGasFallback` | Gas that the first fee check assumes, before a simulation exists. Default 900000. |
 | `runner.maximumPrerequisiteRounds` | The most layout calls that one delivery sends. Default 4. |
@@ -105,8 +109,8 @@ For each direction:
    - the start slot and the start root equal the stored head,
    - `zk-bridge-prover verify` accepts the Groth16 proof for that key and those public values.
    A message is looked at once in five minutes.
-3. Simulate `update(proof, publicValues)`. A revert means that another party posted first: skip. Otherwise send.
-4. Every pass, list `covered` items of the direction from the indexer. For each, oldest first:
+3. Keep the proof for the sweep (see step 6). The runner posts `update(proof, publicValues)` on its own only when no batch
+   carries it. It simulates first. A revert means that another party posted first: skip.
    - Read the call data of the message. A fee offer is a message to the mediator whose recipient is the fee router and whose
      callback data is a `FeeDirector` (recipient, settings, limit, multiplier). No offer: skip, unless `deliverWithoutOffer`.
    - Compute the fee with `FeeRouter.feeInfo(token, value, gasUsed, director)` at the current fee quote. Convert it to wei
@@ -130,7 +134,47 @@ For each direction:
      (`prerequisite-budget-exhausted`). The runner writes the worst case to the state file before it broadcasts, and
      replaces it with `gasUsed` times `effectiveGasPrice` when the receipt arrives. A send that throws, or a receipt that
      never arrives, leaves the worst case charged, because the transaction may be in the pool.
-   - Simulate `FeeRouter.executeMessageWithRunner(runner, proof)` and send it. Skip on a revert.
+   - An item with a fee offer that passed the steps above waits as ready. After the sweep prepared all items, the ready
+     items go to the fee router in as few batches as `maximumBatchSize` and `maximumBatchGas` allow, oldest first. An item
+     without an offer (`deliverWithoutOffer`) is not batched: it goes straight to the bridge with its own simulation.
+5. Send a batch through Multicall3 (`aggregate3`, failure allowed on each call). The first call is `update(proof, publicValues)`
+   at the light client when an update is offered. Each other call is `FeeRouter.executeMessageWithRunner(proof, rewardAddress)`.
+   The router pays every fee to the reward address, not to the signer. The router reads `tx.origin`, which is the signer, so
+   it accepts calls that come through Multicall3. Before the send the runner simulates the batch and drops what cannot go:
+   - It reads the result that the simulated call returns for every call. A message that the bridge shows as delivered
+     (`AlreadyDelivered`) is dropped and final (`already-delivered`). A message whose anchor the light client has not stored
+     (`AnchorNotStored`) is dropped with `anchor-not-stored`, and the next sweep tries it again. `InsufficientGas` is dropped
+     with `insufficient-gas`. Any other revert is dropped with `simulation-reverted`, the name of the error and the hash of
+     the revert data.
+   - It measures each remaining item at the router (`executeMessageWithRunner`, sent to the router itself). The gas estimate of
+     the batch is no use, because a call that fails does not revert the batch, so an estimate settles on a gas amount at
+     which calls fail. The gas of an item in a batch is its single gas plus 20000 (the call and the result of Multicall3).
+   - It judges the fee of each item again at that gas against its own cost plus `minimumMarginWei`. Items that do not pay
+     leave the batch. When the set changed, the runner simulates the smaller batch again, at most three times.
+   - The gas limit is the sum of the gas of the items and of the update, plus 30 percent, and never above `maximumBatchGas`.
+     The runner reads the result once more under this limit, so that a limit that is too short shows as failed calls.
+   - It sends only a batch in which every remaining call succeeds and every item pays. A single item uses Multicall3 too.
+   Before the send the runner reserves the worst case of the whole transaction in the state file (list `deliverySpend`) and
+   replaces it at the receipt with the actual cost. A send that throws leaves the reservation charged. This list appears in
+   the rolling spend of the logs (`delivery_batch_mined`) and does not count toward `maximumPrerequisiteSpendPerDayWei` or
+   the sweep cap: those bound gifts to other senders, and the fee repays a delivery.
+   Multicall3 writes no event and keeps no revert data, so the runner reads the events of the bridge in the receipt. An item
+   is `delivered` when the bridge wrote `AffirmationCompleted` for its message identifier. It has the same `transactionHash`
+   as the others, and its share of the gas and cost by its assumed gas. The fee tokens of an item are the transfers to the
+   reward address from the release of its tokens to the router up to the next release, so they are exact for each item. An
+   item without that event failed in the mined block (`batch-result-missing`). The cost share of the items that did not
+   execute is an unrecovered loss (`delivery_batch_loss`). A transaction that reverts as a whole fails every item
+   (`transaction-reverted`), and its whole cost is a loss.
+6. The light client update. A proof that passed step 2 waits for the sweep that follows at once. When a batch follows, the
+   batch carries the update as its first call, to the light client, and the runner posts no update of its own. A stale
+   update fails alone in Multicall3 and does not revert the batch.
+   - The gas of the update counts as cost. The surplus of the tips (fee less cost less margin, over all items) must cover
+     the cost of the update plus `minimumMarginWei`. When it does not, no batch with the update is sent: the items skip with
+     `fee-below-cost-plus-margin`, and the runner posts the update alone, as before.
+   - When the light client would refuse the update in the simulation (`HeadNotAdvancing` means that the head is at or past
+     it), the update is left out of the batch and not offered again.
+   - When no batch is sent, the sweep posts the update alone with its own simulation.
+   The outcome of the update is a line of kind `update`: `posted` (the light client wrote `HeadUpdated`) or `skipped` with the reason.
    If the final check fails after layout calls were sent, the runner logs `prerequisite_loss` with the item and the lost
    wei, records `prerequisiteCostWei` in the skip, and does not try the item again for
    `prerequisiteLossRefusalSeconds`. Any error after a layout call was attempted counts the same way: the item
@@ -140,11 +184,11 @@ For each direction:
    threshold is reached, the runner logs `prerequisite_spending_paused` with the time at which the window rolls enough to
    resume. It skips items that need layout calls with `prerequisite-budget-exhausted` and still delivers items that need none.
    No transaction is sent without a simulation of the same call that succeeded.
-5. Record the outcome.
+7. Record the outcome.
 
 **Outcomes.** Every decision is a log line (`delivery_outcome`, `delivery_skipped`, `update_posted`, `update_skipped`) and a
 line in `stateDirectory/outcomes-<pair>.jsonl`. Fields: `time`, `kind` (`delivery` or `update`), `pair`, `direction`,
-`status` (`delivered`, `skipped`, `failed`, `posted`), `reason`, `messageId`, `transactionHash`, `gasUsed`, `gasCostWei`,
+`status` (`delivered`, `skipped`, `failed`, `posted`), `reason` (new: `insufficient-gas`, `anchor-not-stored`, `batch-did-not-settle`, `batch-result-missing`), `messageId`, `transactionHash`, `gasUsed`, `gasCostWei`,
 `prerequisiteCostWei`, `feeWei`, `feeExpectedWei`, `feeReceivedTokens`, `path` (`fee-router` or `bridge`). Amounts are
 decimal strings. A skip is written once for each change of reason, not once for each pass. The state file
 `runner-<pair>-<direction>.json` holds the items that need no second look, and the layout spend and losses of the last 24 hours.

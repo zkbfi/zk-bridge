@@ -19,6 +19,7 @@ import { createRunner, type Runner } from "./runner.ts";
 import { createSerialQueue } from "./serial-queue.ts";
 import { createSourceReader } from "./source-reader.ts";
 import { INITIAL_RUNNER_STATE, runnerStateSchema } from "./state.ts";
+import { requireRewardAddress, requireWhitelistedRunner } from "./whitelist.ts";
 
 /** Replacements for the parts that touch the outside world. Tests pass fakes. */
 export interface RunnerOverrides {
@@ -44,6 +45,24 @@ function requireRunnerConfig(context: BotContext): RunnerConfig {
   const runner = context.config.runner;
   if (runner === undefined) throw new BotConfigError("The bot configuration has no runner section.");
   return runner;
+}
+
+/**
+ * The two start-up checks of a fee router: the router whitelists the signer, and it pays the configured reward address.
+ * @returns the reward address.
+ */
+async function requireFeeRouterIdentity(input: Parameters<typeof requireRewardAddress>[0]): Promise<Address> {
+  await requireWhitelistedRunner({ client: input.client, feeRouter: input.feeRouter, signerAddress: input.signerAddress, chainName: input.chainName });
+  return requireRewardAddress(input);
+}
+
+/** Refuses to run when the Multicall3 address holds no code: every batch would revert. */
+async function requireMulticall3(input: { readonly client: Pick<PublicClient, "getCode">; readonly address: Address; readonly chainName: string }): Promise<Address> {
+  const code = await input.client.getCode({ address: input.address });
+  if (code === undefined || code === "0x") {
+    throw new BotConfigError(`runner.multicall3 ${input.address} holds no code on ${input.chainName}. Deploy Multicall3 there, or name the address of its deployment.`);
+  }
+  return input.address;
 }
 
 function valuations(settings: Readonly<Record<string, string>>): Readonly<Record<string, bigint>> {
@@ -146,6 +165,18 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       logger: directionLogger,
     });
     const feeRouter = (runnerConfig.feeRouter ?? destination.contracts.feeRouter) as Address | null;
+    // A runner that only delivers directly uses no router, and needs no reward address.
+    const rewardAddress =
+      feeRouter === null
+        ? null
+        : await requireFeeRouterIdentity({
+            client: destinationPort.client,
+            feeRouter,
+            rewardAddress: runnerConfig.rewardAddress as Address | undefined,
+            signerAddress: signer.address,
+            chainName: destination.name,
+          });
+    const multicall = feeRouter === null ? null : await requireMulticall3({ client: destinationPort.client, address: runnerConfig.multicall3 as Address, chainName: destination.name });
     const delivery: DeliveryDependencies = {
       direction,
       chain: destinationPort.chain,
@@ -153,6 +184,8 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       indexer,
       source: createSourceReader(sourceClient, source.contracts.bridge),
       feeRouter,
+      multicall,
+      rewardAddress,
       wrappedNative: destination.contracts.wrappedNative,
       settings: {
         minimumMarginWei: BigInt(runnerConfig.minimumMarginWei),
@@ -164,6 +197,8 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
         maximumPrerequisiteSpendPerSweepWei: BigInt(runnerConfig.maximumPrerequisiteSpendPerSweepWei),
         maximumPrerequisiteSpendPerDayWei: BigInt(runnerConfig.maximumPrerequisiteSpendPerDayWei),
         maximumUnrecoveredPrerequisiteLossWei: BigInt(runnerConfig.maximumUnrecoveredPrerequisiteLossWei),
+        maximumBatchSize: runnerConfig.maximumBatchSize,
+        maximumBatchGas: BigInt(runnerConfig.maximumBatchGas),
       },
       logger: directionLogger,
     };
@@ -188,9 +223,9 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       logger: directionLogger,
     });
     const category = proofCategory(pair.name, direction);
+    // `handleProofPayload` sweeps after it accepts a proof: the update goes with the first batch, or alone when none follows.
     const onPayload = async (payload: `0x${string}`): Promise<void> => {
-      const handling = await runner.handleProofPayload(payload);
-      if (handling.handled === "update-posted") await runner.sweep();
+      await runner.handleProofPayload(payload);
     };
     if (!input.runOnce) {
       subscriptions.push(
@@ -199,7 +234,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
         }),
       );
     }
-    directionLogger.info("runner_started", { category, pollSeconds: runnerConfig.pollSeconds, feeRouter });
+    directionLogger.info("runner_started", { category, pollSeconds: runnerConfig.pollSeconds, feeRouter, rewardAddress });
     jobs.push(
       runLoop({
         name: `runner ${direction}`,

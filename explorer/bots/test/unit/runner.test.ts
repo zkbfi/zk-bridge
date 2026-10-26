@@ -1,10 +1,10 @@
-import { decodeFunctionData, toFunctionSelector, type Hex } from "viem";
-import { beaconLightClientAbi, feeRouterAbi, messageBridgeAbi } from "@zk-bridge/shared";
+import { decodeFunctionData, keccak256, toFunctionSelector, type Hex } from "viem";
+import { beaconLightClientAbi, feeRouterAbi, messageBridgeAbi, multicall3Abi } from "@zk-bridge/shared";
 import { describe, expect, it } from "vitest";
 import type { Simulation } from "../../src/chain/transactions.ts";
 import type { FeedItem } from "../../src/indexer/client.ts";
 import type { StateStore } from "../../src/runtime/state-file.ts";
-import { deliverItem } from "../../src/runner/delivery.ts";
+import { BATCH_ITEM_OVERHEAD_GAS, deliverItem, MAXIMUM_SETTLING_ROUNDS } from "../../src/runner/batch.ts";
 import { createPrerequisiteLedger } from "../../src/runner/prerequisite-ledger.ts";
 import type { DeliverySettings } from "../../src/runner/delivery.ts";
 import type { Logger } from "../../src/logging/logger.ts";
@@ -15,10 +15,20 @@ import {
   BRIDGE,
   FEE_ROUTER,
   LIGHT_CLIENT,
+  EXECUTED,
+  FAILED_IN_BRIDGE,
+  MULTICALL,
+  UPDATE_FAILED,
   OTHER_TOKEN,
+  REWARD_ADDRESS,
   RUNNER,
+  SKIPPED_ALREADY_DELIVERED,
+  SKIPPED_ANCHOR_NOT_STORED,
+  SKIPPED_HEAD_ADVANCED,
+  SKIPPED_INSUFFICIENT_GAS,
   WRAPPED_NATIVE,
   address,
+  emptyExecuteMessage,
   evidenceFor,
   fakeChain,
   fakeIndexer,
@@ -29,10 +39,15 @@ import {
   memoryLogger,
   memoryOutcomes,
   proofPayload,
+  transferLog,
   word,
 } from "../support/builders.ts";
 
-const EXECUTE_WITH_RUNNER = toFunctionSelector(feeRouterAbi.find((entry) => entry.type === "function" && entry.name === "executeMessageWithRunner") as never);
+const selectorOf = (name: string) => toFunctionSelector(feeRouterAbi.find((entry) => entry.type === "function" && entry.name === name) as never);
+/** The single entry. The batch simulation measures the gas of each item there. */
+const EXECUTE_WITH_RUNNER = selectorOf("executeMessageWithRunner");
+/** The batch entry. Every delivery through the fee router sends this call. */
+const EXECUTE_BATCH = toFunctionSelector(multicall3Abi.find((entry) => entry.type === "function" && entry.name === "aggregate3") as never);
 const UPDATE = toFunctionSelector(beaconLightClientAbi.find((entry) => entry.type === "function" && entry.name === "update") as never);
 
 /** A fixed fee: bit 0 of `settings`, with the fee in `limit`. */
@@ -62,12 +77,12 @@ function ledgerFor(w: { state: ReturnType<typeof memoryState>; delivery: { setti
     limits: { dailySpendWei: w.delivery.settings.maximumPrerequisiteSpendPerDayWei, unrecoveredLossWei: w.delivery.settings.maximumUnrecoveredPrerequisiteLossWei },
     store: {
       async load() {
-        const { prerequisiteSpend, prerequisiteLosses } = await w.state.load();
-        return { prerequisiteSpend, prerequisiteLosses };
+        const { prerequisiteSpend, deliverySpend, prerequisiteLosses } = await w.state.load();
+        return { prerequisiteSpend, deliverySpend, prerequisiteLosses };
       },
       async update(mutate) {
         await w.state.update((state) => {
-          const budget = { prerequisiteSpend: state.prerequisiteSpend, prerequisiteLosses: state.prerequisiteLosses };
+          const budget = { prerequisiteSpend: state.prerequisiteSpend, deliverySpend: state.deliverySpend, prerequisiteLosses: state.prerequisiteLosses };
           const next = mutate(budget);
           return next === budget ? state : { ...state, ...next };
         });
@@ -90,6 +105,8 @@ interface WorldOptions {
   maximumPrerequisiteSpendPerSweepWei?: bigint;
   maximumPrerequisiteSpendPerDayWei?: bigint;
   maximumUnrecoveredPrerequisiteLossWei?: bigint;
+  maximumBatchSize?: number;
+  maximumBatchGas?: bigint;
   /** A state that an earlier runner wrote, to test a restart. */
   state?: ReturnType<typeof memoryState>;
   startTime?: number;
@@ -100,7 +117,11 @@ function world(options: WorldOptions = {}) {
   const { logger, events } = memoryLogger();
   const chain = fakeChain();
   chain.feeTokens = 0n;
+  // One item costs 300,000 gas in a batch: the execution at the single entry plus the overhead of the batch entry.
+  chain.executionGas = 300_000n - BATCH_ITEM_OVERHEAD_GAS;
   const items = options.items ?? [];
+  // A batch lists its items oldest first, and the feed lists the newest first.
+  chain.messageIdOfPosition = (position) => ([...items].reverse()[position]?.messageId ?? word(position + 1)) as Hex;
   const indexer = fakeIndexer(items, options.data ?? {});
   const prover = fakeProver();
   const lightClient = fakeLightClient();
@@ -114,6 +135,8 @@ function world(options: WorldOptions = {}) {
     indexer,
     source: { findMessageLogIndex: async () => 0 },
     feeRouter: FEE_ROUTER,
+    multicall: MULTICALL,
+    rewardAddress: REWARD_ADDRESS,
     wrappedNative: WRAPPED_NATIVE,
     settings: {
       minimumMarginWei: options.margin ?? 0n,
@@ -125,6 +148,8 @@ function world(options: WorldOptions = {}) {
       maximumPrerequisiteSpendPerSweepWei: options.maximumPrerequisiteSpendPerSweepWei ?? 10n ** 18n,
       maximumPrerequisiteSpendPerDayWei: options.maximumPrerequisiteSpendPerDayWei ?? 10n ** 18n,
       maximumUnrecoveredPrerequisiteLossWei: options.maximumUnrecoveredPrerequisiteLossWei ?? 10n ** 18n,
+      maximumBatchSize: options.maximumBatchSize ?? 5,
+      maximumBatchGas: options.maximumBatchGas ?? 6_000_000n,
     },
     logger,
   };
@@ -220,10 +245,17 @@ describe("delivery decisions", () => {
     const summary = await w.runner.sweep();
     expect(summary).toMatchObject({ delivered: 1, skipped: 0 });
     const send = w.chain.log.find((entry) => entry.kind === "send");
-    expect(send?.request.to).toBe(FEE_ROUTER);
-    const decoded = decodeFunctionData({ abi: feeRouterAbi, data: send?.request.data as Hex });
-    expect(decoded.functionName).toBe("executeMessageWithRunner");
-    expect(decoded.args?.[0]).toBe(RUNNER);
+    expect(send?.request.to).toBe(MULTICALL);
+    const decoded = decodeFunctionData({ abi: multicall3Abi, data: send?.request.data as Hex });
+    expect(decoded.functionName).toBe("aggregate3");
+    // One call, to the fee router, with failure allowed. The signer is another account: the reward address is where the fee goes.
+    const [call] = (decoded.args as readonly [readonly { target: string; allowFailure: boolean; callData: Hex }[]])[0];
+    expect(call).toMatchObject({ target: FEE_ROUTER, allowFailure: true });
+    const inner = decodeFunctionData({ abi: feeRouterAbi, data: (call as { callData: Hex }).callData });
+    expect(inner.functionName).toBe("executeMessageWithRunner");
+    expect((inner.args as readonly unknown[])[1]).toBe(REWARD_ADDRESS);
+    expect(w.chain.account).toBe(RUNNER);
+    expect(REWARD_ADDRESS).not.toBe(RUNNER);
     expect(w.chain.unsimulatedSends()).toEqual([]);
     expect(w.outcomes.records[0]).toMatchObject({ kind: "delivery", status: "delivered", path: "fee-router", feeExpectedWei: COST + 1n });
   });
@@ -321,7 +353,7 @@ describe("delivery decisions", () => {
     expect((await w.runner.sweep()).delivered).toBe(1);
     const order = w.chain.log.filter((entry) => entry.kind !== "call").map((entry) => `${entry.kind}:${entry.request.data.slice(0, 10)}`);
     // The first simulation estimates the cost before anything is sent. The second one guards the send itself.
-    expect(order).toEqual(["simulate:0xdeadbeef", "simulate:0xdeadbeef", "send:0xdeadbeef", `simulate:${EXECUTE_WITH_RUNNER}`, `send:${EXECUTE_WITH_RUNNER}`]);
+    expect(order).toEqual(["simulate:0xdeadbeef", "simulate:0xdeadbeef", "send:0xdeadbeef", `simulate:${EXECUTE_BATCH}`, `simulate:${EXECUTE_WITH_RUNNER}`, `send:${EXECUTE_BATCH}`]);
     expect(w.chain.unsimulatedSends()).toEqual([]);
   });
 
@@ -575,8 +607,12 @@ describe("delivery decisions", () => {
         expect(sends()).toBe(2);
         expect(counter.builds).toBe(builds + 1);
         w.advance(REFUSAL_WINDOW_MILLISECONDS + 1000);
+        // The oldest item is tried again. It needs no layout call now, and it is the one attempt of the sweep: its batch
+        // is sent (and throws), and the sweep tries no third item.
         await w.runner.sweep();
-        expect(sends()).toBe(3);
+        expect(sends()).toBe(2);
+        expect(counter.builds).toBe(builds + 2);
+        expect(w.chain.log.filter((entry) => entry.kind === "send" && entry.request.data.startsWith(EXECUTE_BATCH))).toHaveLength(1);
       });
 
       it("keeps the daily budget across a restart, blocks on it, and frees it when the window rolls", async () => {
@@ -611,19 +647,23 @@ describe("delivery decisions", () => {
         };
         await w.runner.sweep();
         const reasons = w.outcomes.records.map((record) => (record.status === "skipped" ? record.reason : record.status));
-        // The newest item is last in line. Item 3 needs no layout call and is delivered, item 2 spends the budget, item 1 is paused.
-        expect(reasons).toEqual(["delivered", "delivered", "prerequisite-budget-exhausted"]);
+        // The newest item is last in line. Item 3 needs no layout call, item 2 spends the budget, item 1 is paused. The
+        // pause is recorded while the items are prepared, and the deliveries when the batch is mined.
+        expect(reasons).toEqual(["prerequisite-budget-exhausted", "delivered", "delivered"]);
         expect(w.events().filter((event) => event.event === "prerequisite_spending_paused")).toHaveLength(1);
         expect(w.chain.log.filter(isLayoutSend)).toHaveLength(1);
       });
 
       it("pauses layout calls once the unrecovered loss reaches the threshold", async () => {
         const ids = [1, 2];
-        const w = world({ items: ids.map(offerFor), data: dataFor(ids), maximumUnrecoveredPrerequisiteLossWei: COST });
+        // One attempt for each sweep: the batch judges the fee after all items of a sweep are prepared, so the loss of the
+        // first item stops the layout calls of the next sweep, not of the same one.
+        const w = world({ items: ids.map(offerFor), data: dataFor(ids), maximumUnrecoveredPrerequisiteLossWei: COST, maximumDeliveriesPerSweep: 1 });
         w.chain.feeTokens = 10_000_000n;
         listLayoutOnce(w, [layoutCall]);
         // The final check fails after the layout call is paid: a loss of exactly the threshold.
         w.chain.simulateOverride = executionGasSimulatedAt(10_000_000n);
+        await w.runner.sweep();
         await w.runner.sweep();
         expect(w.state.current.prerequisiteLosses.map((entry) => entry.wei)).toEqual([COST.toString()]);
         expect(w.chain.log.filter(isLayoutSend)).toHaveLength(1);
@@ -640,6 +680,391 @@ describe("delivery decisions", () => {
     await deliverItem(w.delivery, offerItem(), ledgerFor(w));
     expect(w.chain.unsimulatedSends()).toEqual([]);
     expect(w.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(1);
+  });
+});
+
+describe("batch delivery", () => {
+  const COST = 3_000_000n;
+
+  /** Items whose proofs differ by the slot of the anchor header, which is the identifier of the item. */
+  function batchWorld(ids: readonly number[], options: WorldOptions = {}) {
+    const items = ids.map((id) => feedItem({ id, token: WRAPPED_NATIVE }));
+    const data = Object.fromEntries(items.map((item) => [item.messageId, feeOfferData({ director: fixedFee(10n), value: 1000n, token: WRAPPED_NATIVE })]));
+    const w = world({ items, data, ...options });
+    w.chain.feeTokens = COST * 2n;
+    w.prover.evidence = async (request: { transactionHash: Hex }) => evidenceFor({ executeData: emptyExecuteMessage(BigInt(Number.parseInt(request.transactionHash.slice(2, 4), 16) - 0xa0)) });
+    return w;
+  }
+
+  const isBatchSend = (entry: { kind: string; request: { data: Hex } }) => entry.kind === "send" && entry.request.data.startsWith(EXECUTE_BATCH);
+  const batchSends = (w: ReturnType<typeof world>) => w.chain.log.filter(isBatchSend);
+  const decodedBatch = (data: Hex) => {
+    const decoded = decodeFunctionData({ abi: multicall3Abi, data });
+    if (decoded.functionName !== "aggregate3") throw new Error(`${decoded.functionName} is no batch`);
+    const calls = decoded.args[0];
+    expect(calls.every((call) => call.allowFailure)).toBe(true);
+    const updateCall = calls.find((call) => call.target.toLowerCase() === LIGHT_CLIENT.toLowerCase());
+    const itemCalls = calls.filter((call) => call.target.toLowerCase() === FEE_ROUTER.toLowerCase()).map((call) => decodeFunctionData({ abi: feeRouterAbi, data: call.callData }));
+    const proofs = itemCalls.map((inner) => (inner.functionName === "executeMessageWithRunner" ? inner : null));
+    // The update call comes first when there is one.
+    if (updateCall !== undefined) expect(calls[0]).toBe(updateCall);
+    const updateArgs = updateCall === undefined ? null : decodeFunctionData({ abi: beaconLightClientAbi, data: updateCall.callData });
+    return {
+      slots: proofs.map((inner) => Number(inner?.args[0].anchorHeader.slot)),
+      reward: proofs[0]?.args[1],
+      updateProof: updateArgs !== null && updateArgs.functionName === "update" ? updateArgs.args[0] : "0x",
+    };
+  };
+  /** The slots of the proofs of every batch that was sent, in order. */
+  const sentSlots = (w: ReturnType<typeof world>) => batchSends(w).map((entry) => decodedBatch(entry.request.data).slots);
+  const reasonsOf = (w: ReturnType<typeof world>) => w.outcomes.records.map((record) => (record.status === "skipped" ? record.reason : record.status));
+
+  it("delivers several profitable items in ONE transaction to the batch entry, with the reward address and the proofs in order, oldest first", async () => {
+    const w = batchWorld([1, 2, 3]);
+    w.chain.gasUsed = 900_000n;
+    expect(await w.runner.sweep()).toMatchObject({ listed: 3, delivered: 3, skipped: 0, failed: 0 });
+    expect(batchSends(w)).toHaveLength(1);
+    expect(w.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(1);
+    const [send] = batchSends(w);
+    expect(send?.request.to).toBe(MULTICALL);
+    // The feed lists the newest first, so item 3 is the oldest and goes first.
+    expect(decodedBatch(send?.request.data as Hex)).toEqual({ slots: [3, 2, 1], reward: REWARD_ADDRESS, updateProof: "0x" });
+    expect(w.chain.unsimulatedSends()).toEqual([]);
+    // Every item names the one transaction, and carries its third of the gas and of the cost.
+    expect(w.outcomes.records.map((record) => record.transactionHash)).toEqual([word(0xee), word(0xee), word(0xee)]);
+    expect(w.outcomes.records).toSatisfy((records: Array<Record<string, unknown>>) => records.every((record) => record.gasUsed === 300_000n && record.gasCostWei === COST && record.path === "fee-router"));
+    expect(Object.keys(w.state.current.finished).sort()).toEqual([word(1), word(2), word(3)]);
+  });
+
+  it("simulates the batch and the single entry of each item before the send, and reads the batch again under the gas limit that the send uses", async () => {
+    const w = batchWorld([1, 2]);
+    await w.runner.sweep();
+    const [terms] = w.chain.sentTerms;
+    const calls = w.chain.log.filter((entry) => entry.kind === "call" && entry.request.data.startsWith(EXECUTE_BATCH));
+    // The first read has no limit of its own. The second one runs with exactly the gas limit of the transaction.
+    expect(calls.map((entry) => (entry.request as { gas?: bigint }).gas)).toEqual([undefined, terms?.gas]);
+    const singles = w.chain.log.filter((entry) => entry.kind === "simulate" && entry.request.data.startsWith(EXECUTE_WITH_RUNNER));
+    expect(singles).toHaveLength(2);
+    // The gas of an item is measured at the router itself, not through Multicall3.
+    expect(singles.every((entry) => entry.request.to === FEE_ROUTER)).toBe(true);
+    // Multicall3 lets a call fail, so the estimate of the batch cannot size the limit. The limit is the sum of the gas of
+    // the items, 600,000, plus the buffer of 30 percent.
+    expect(terms?.gas).toBe(780_000n);
+  });
+
+  it("drops an item that the simulation shows as delivered, records it as final, and still sends the rest", async () => {
+    const w = batchWorld([1, 2, 3]);
+    w.chain.batchResult = (position, count) => (count === 3 && position === 1 ? SKIPPED_ALREADY_DELIVERED : EXECUTED);
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 2, skipped: 1 });
+    // Position 1 of [3, 2, 1] is item 2. The batch that was sent has the other two, simulated again as a set of two.
+    expect(sentSlots(w)).toEqual([[3, 1]]);
+    expect(w.outcomes.records.find((record) => record.messageId === word(2))).toMatchObject({ status: "skipped", reason: "already-delivered" });
+    expect(w.state.current.finished[word(2)]).toBe("elsewhere");
+    expect(w.state.current.finished[word(3)]).toBe(word(0xee));
+    expect(w.chain.unsimulatedSends()).toEqual([]);
+  });
+
+  it("maps a call that would fail to a skip with the reason, and sends nothing for it", async () => {
+    const w = batchWorld([1, 2, 3]);
+    w.chain.batchResult = (position, count) => {
+      if (count !== 3) return EXECUTED;
+      return [SKIPPED_INSUFFICIENT_GAS, EXECUTED, FAILED_IN_BRIDGE][position] ?? EXECUTED;
+    };
+    // Position 0 and position 2 are dropped in the first round. The batch of the one that is left is simulated again.
+    await w.runner.sweep();
+    expect(sentSlots(w)).toEqual([[2]]);
+    const byId = (id: number) => w.outcomes.records.find((record) => record.messageId === word(id));
+    expect(byId(3)).toMatchObject({ status: "skipped", reason: "insufficient-gas" });
+    expect(byId(1)).toMatchObject({ status: "skipped", reason: "simulation-reverted" });
+    expect(String(byId(1)?.detail)).toContain("IndexMismatch");
+    expect(String(byId(1)?.detail)).toContain(keccak256(FAILED_IN_BRIDGE.returnData));
+    expect(byId(2)).toMatchObject({ status: "delivered" });
+  });
+
+  it("leaves an item out of the batch when its fee does not pay at the simulated gas, though it passed the first check", async () => {
+    const w = batchWorld([1, 2, 3]);
+    // The fee is fixed at 5,000,000 wei. It passes the first check at the assumed 300,000 gas (3,000,000 wei).
+    w.chain.feeTokens = 5_000_000n;
+    // Item 2 turns out to need 600,000 gas, and 620,000 with the overhead of Multicall3: 6,200,000 wei.
+    w.chain.simulateOverride = (request) => {
+      if (!request.data.startsWith(EXECUTE_WITH_RUNNER)) return undefined;
+      const decoded = decodeFunctionData({ abi: feeRouterAbi, data: request.data });
+      const slot = decoded.functionName === "executeMessageWithRunner" ? Number(decoded.args[0].anchorHeader.slot) : 0;
+      return { ok: true, gas: slot === 2 ? 600_000n : 280_000n };
+    };
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 2, skipped: 1 });
+    expect(sentSlots(w)).toEqual([[3, 1]]);
+    expect(w.outcomes.records.find((record) => record.messageId === word(2))).toMatchObject({ status: "skipped", reason: "fee-below-cost-plus-margin", feeWei: 5_000_000n, costWei: 6_200_000n });
+    // The item that did not pay is not final: the next sweep looks at it again.
+    expect(w.state.current.finished[word(2)]).toBeUndefined();
+  });
+
+  it("splits a sweep into several batches by maximumBatchSize", async () => {
+    const w = batchWorld([1, 2, 3, 4, 5], { maximumBatchSize: 2 });
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 5 });
+    expect(sentSlots(w)).toEqual([[5, 4], [3, 2], [1]]);
+  });
+
+  it("splits a sweep into several batches by maximumBatchGas, and never gives a transaction a gas limit above it", async () => {
+    // Two items assume 600,000 gas, three would assume 900,000.
+    const w = batchWorld([1, 2, 3], { maximumBatchGas: 650_000n });
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 3 });
+    expect(sentSlots(w)).toEqual([[3, 2], [1]]);
+    // Two items would get 780,000 with the buffer. The setting caps it at 650,000. One item gets 390,000 of its own.
+    expect(w.chain.sentTerms.map((terms) => terms.gas)).toEqual([650_000n, 390_000n]);
+  });
+
+  it("sends nothing and skips every item when the simulation of the batch reverts", async () => {
+    const w = batchWorld([1, 2]);
+    w.chain.simulateOverride = (request) => (request.data.startsWith(EXECUTE_BATCH) ? { ok: false, reason: "NotRunner" } : undefined);
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 0, skipped: 2 });
+    expect(w.chain.log.some((entry) => entry.kind === "send")).toBe(false);
+    expect(w.outcomes.records).toSatisfy((records: Array<Record<string, unknown>>) => records.every((record) => record.reason === "simulation-reverted" && record.detail === "NotRunner"));
+  });
+
+  it("stops after a bounded number of rounds, and skips the items that are still in flux instead of sending an unchecked batch", async () => {
+    const w = batchWorld([1, 2, 3, 4]);
+    // The router always skips the first item of whatever batch it gets, so each round drops one more item.
+    w.chain.batchResult = (position) => (position === 0 ? SKIPPED_INSUFFICIENT_GAS : EXECUTED);
+    await w.runner.sweep();
+    expect(MAXIMUM_SETTLING_ROUNDS).toBe(3);
+    expect(w.chain.log.some((entry) => entry.kind === "send")).toBe(false);
+    expect(reasonsOf(w)).toEqual(["insufficient-gas", "insufficient-gas", "insufficient-gas", "batch-did-not-settle"]);
+  });
+
+  it("delivers an item without an offer straight to the bridge, and the items with an offer in a batch", async () => {
+    const offered = feedItem({ id: 1, token: WRAPPED_NATIVE });
+    const plain = feedItem({ id: 2 });
+    const data = {
+      [word(1)]: feeOfferData({ director: fixedFee(10n), value: 1000n, token: WRAPPED_NATIVE }),
+      [word(2)]: feeOfferData({ director: fixedFee(10n), value: 1000n, recipient: address(0x13) }),
+    };
+    const w = world({ items: [offered, plain], data, deliverWithoutOffer: true });
+    w.chain.feeTokens = COST * 2n;
+    // Only the item with an offer is in the batch.
+    w.chain.messageIdOfPosition = () => word(1);
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 2 });
+    const sends = w.chain.log.filter((entry) => entry.kind === "send");
+    expect(sends.map((entry) => entry.request.to).sort()).toEqual([BRIDGE, MULTICALL].sort());
+    expect(batchSends(w)).toHaveLength(1);
+    expect(w.outcomes.records.map((record) => record.path).sort()).toEqual(["bridge", "fee-router"]);
+  });
+
+  describe("the outcome of each item after the receipt", () => {
+    it("attributes the fee transfers to the reward address item by item, from the order of the events", async () => {
+      const w = batchWorld([1, 2]);
+      const token = WRAPPED_NATIVE;
+      w.chain.receiptLogsOfItem = (position) => [transferLog(token, REWARD_ADDRESS, position === 0 ? 111n : 222n), transferLog(token, RUNNER, 999n), transferLog(OTHER_TOKEN, REWARD_ADDRESS, 555n)];
+      await w.runner.sweep();
+      const byId = (id: number) => w.outcomes.records.find((record) => record.messageId === word(id));
+      // Item 2 is position 0 and item 1 is position 1. The signer's own transfers and other tokens do not count.
+      expect(byId(2)?.feeReceivedTokens).toBe(111n);
+      expect(byId(1)?.feeReceivedTokens).toBe(222n);
+    });
+
+    it("delivers what the bridge events call executed, fails the rest, and records the cost share of the rest as an unrecovered loss", async () => {
+      const w = batchWorld([1, 2, 3]);
+      w.chain.gasUsed = 900_000n; // 9,000,000 wei at 10 wei: a third, 3,000,000 wei, for each item.
+      // The read-only simulation sees three executions. The mined batch differs: the state moved between the two.
+      w.chain.receiptResult = (position) => [EXECUTED, SKIPPED_INSUFFICIENT_GAS, FAILED_IN_BRIDGE][position] ?? EXECUTED;
+      expect(await w.runner.sweep()).toMatchObject({ delivered: 1, skipped: 0, failed: 2 });
+      const byId = (id: number) => w.outcomes.records.find((record) => record.messageId === word(id));
+      // Positions 0, 1, 2 are items 3, 2, 1. Multicall3 keeps no revert data in the receipt, so the reason is unknown.
+      expect(byId(3)).toMatchObject({ status: "delivered", gasUsed: 300_000n, gasCostWei: COST });
+      expect(byId(2)).toMatchObject({ status: "failed", reason: "batch-result-missing" });
+      expect(byId(1)).toMatchObject({ status: "failed", reason: "batch-result-missing" });
+      expect(w.state.current.prerequisiteLosses.map((entry) => entry.wei)).toEqual(["6000000"]);
+      // Only the delivered item is final. The two others are tried again later.
+      expect(Object.keys(w.state.current.finished)).toEqual([word(3)]);
+    });
+
+    it("fails every item when the whole transaction reverts, and records the whole cost as a loss", async () => {
+      const w = batchWorld([1, 2, 3]);
+      w.chain.receiptSuccess = false;
+      w.chain.gasUsed = 900_000n;
+      expect(await w.runner.sweep()).toMatchObject({ delivered: 0, failed: 3 });
+      expect(w.outcomes.records).toHaveLength(3);
+      expect(w.outcomes.records).toSatisfy((records: Array<Record<string, unknown>>) => records.every((record) => record.status === "failed" && record.reason === "transaction-reverted" && record.transactionHash === word(0xee)));
+      expect(w.state.current.prerequisiteLosses.map((entry) => entry.wei)).toEqual(["9000000"]);
+      expect(w.state.current.finished).toEqual({});
+    });
+
+    it("fails an item that the bridge does not report in a receipt that succeeded, because its state is unknown", async () => {
+      const w = batchWorld([1, 2]);
+      const send = w.chain.send.bind(w.chain);
+      w.chain.send = async (request) => {
+        const receipt = await send(request);
+        // Only the release and the bridge event of position 0 reach the receipt.
+        return { ...receipt, logs: receipt.logs.slice(0, 2) };
+      };
+      expect(await w.runner.sweep()).toMatchObject({ delivered: 1, failed: 1 });
+      expect(w.outcomes.records.find((record) => record.messageId === word(1))).toMatchObject({ status: "failed", reason: "batch-result-missing" });
+    });
+  });
+
+  describe("the light client update in the batch", () => {
+    const PROOF = `0x${"ab".repeat(356)}`;
+    const isUpdateSend = (entry: { kind: string; request: { to: string } }) => entry.kind === "send" && entry.request.to === LIGHT_CLIENT;
+    const updateRecord = (w: ReturnType<typeof world>) => w.outcomes.records.find((record) => record.kind === "update");
+
+    it("carries the update and the messages in ONE transaction, and posts no update of its own", async () => {
+      const w = batchWorld([1, 2]);
+      w.chain.gasUsed = 900_000n; // weights: 300,000 for each item and 300,000 for the update
+      const handling = await w.runner.handleProofPayload(proofPayload({ startSlot: 100n, newSlot: 164n }));
+      expect(handling).toEqual({ handled: "update-posted", transactionHash: word(0xee) });
+      expect(w.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(1);
+      expect(w.chain.log.some(isUpdateSend)).toBe(false);
+      const [send] = batchSends(w);
+      expect(decodedBatch(send?.request.data as Hex)).toMatchObject({ slots: [2, 1], updateProof: PROOF });
+      expect(updateRecord(w)).toMatchObject({ status: "posted", transactionHash: word(0xee), newSlot: 164n, gasUsed: 300_000n, gasCostWei: COST });
+      expect(w.outcomes.records.filter((record) => record.status === "delivered")).toHaveLength(2);
+      expect(w.chain.unsimulatedSends()).toEqual([]);
+      // The update is the price of the batch and not a loss.
+      expect(w.state.current.prerequisiteLosses).toEqual([]);
+    });
+
+    it("sends an empty update when no proof waits, which behaves as a batch without update", async () => {
+      const w = batchWorld([1]);
+      await w.runner.sweep();
+      expect(sentSlots(w)).toEqual([[1]]);
+      expect(decodedBatch(batchSends(w)[0]?.request.data as Hex).updateProof).toBe("0x");
+      expect(updateRecord(w)).toBeUndefined();
+    });
+
+    it("leaves the update out when someone else posted it first: the head passed it before the batch was built", async () => {
+      const w = batchWorld([1]);
+      let reads = 0;
+      // The first read is the check of the proof. The next one finds that the head moved on.
+      w.lightClient.read = async () => ((reads += 1) === 1 ? w.lightClient.state : { ...w.lightClient.state, headSlot: 164n });
+      const handling = await w.runner.handleProofPayload(proofPayload({ startSlot: 100n, newSlot: 164n }));
+      expect(handling).toMatchObject({ handled: "update-skipped", reason: "already-stored" });
+      expect(decodedBatch(batchSends(w)[0]?.request.data as Hex).updateProof).toBe("0x");
+      expect(w.chain.log.some(isUpdateSend)).toBe(false);
+      expect(w.outcomes.records.filter((record) => record.status === "delivered")).toHaveLength(1);
+    });
+
+    it("leaves the update out when the light client would refuse it as already advanced, and still delivers", async () => {
+      const w = batchWorld([1]);
+      w.chain.updateResult = SKIPPED_HEAD_ADVANCED;
+      const handling = await w.runner.handleProofPayload(proofPayload());
+      expect(handling).toMatchObject({ handled: "update-skipped", reason: "head-already-advanced" });
+      // The batch that went out has no update, and no second transaction posts one.
+      expect(decodedBatch(batchSends(w)[0]?.request.data as Hex).updateProof).toBe("0x");
+      expect(w.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(1);
+      expect(updateRecord(w)).toMatchObject({ status: "skipped", reason: "head-already-advanced" });
+    });
+
+    it("leaves the update out when the light client would revert it, and does not offer it again", async () => {
+      const w = batchWorld([1]);
+      w.chain.updateResult = UPDATE_FAILED;
+      expect(await w.runner.handleProofPayload(proofPayload())).toMatchObject({ handled: "update-skipped", reason: "update-failed" });
+      expect(String(updateRecord(w)?.detail)).toContain("InvalidPublicValuesLength");
+      expect(w.outcomes.records.filter((record) => record.status === "delivered")).toHaveLength(1);
+    });
+
+    it("does not send a batch whose tips cover the deliveries but not the update as well, and posts the update alone", async () => {
+      const w = batchWorld([1, 2]);
+      // Each item pays 100,000 wei above its cost of 3,000,000. The update costs 300,000 gas, 3,000,000 wei.
+      w.chain.feeTokens = COST + 100_000n;
+      const handling = await w.runner.handleProofPayload(proofPayload());
+      expect(batchSends(w)).toHaveLength(0);
+      expect(w.outcomes.records.filter((record) => record.status === "skipped" && record.reason === "fee-below-cost-plus-margin")).toHaveLength(2);
+      expect(String(w.outcomes.records[0]?.detail)).toContain("light client update");
+      // The runner still posts the update, as it did before batches existed.
+      expect(w.chain.log.filter(isUpdateSend)).toHaveLength(1);
+      expect(handling).toMatchObject({ handled: "update-posted" });
+      // Next sweep, with the update out of the way, the same items pay for themselves.
+      expect(await w.runner.sweep()).toMatchObject({ delivered: 2 });
+      expect(decodedBatch(batchSends(w)[0]?.request.data as Hex).updateProof).toBe("0x");
+    });
+
+    it("sends the batch when the surplus of the tips equals the cost of the update", async () => {
+      const w = batchWorld([1, 2]);
+      // Two surpluses of 1,500,000 are 3,000,000: exactly the cost of the update.
+      w.chain.feeTokens = COST + 1_500_000n;
+      await w.runner.handleProofPayload(proofPayload());
+      expect(batchSends(w)).toHaveLength(1);
+      expect(decodedBatch(batchSends(w)[0]?.request.data as Hex).updateProof).toBe(PROOF);
+      // One wei less, and the batch with the update is not sent.
+      const short = batchWorld([1, 2]);
+      short.chain.feeTokens = COST + 1_500_000n;
+      short.chain.updateGas = 300_001n;
+      await short.runner.handleProofPayload(proofPayload());
+      expect(batchSends(short).filter((entry) => decodedBatch(entry.request.data).updateProof !== "0x")).toHaveLength(0);
+    });
+
+    it("counts the update margin: the surplus must also cover the minimum margin once", async () => {
+      const w = batchWorld([1, 2], { margin: 500n });
+      // The two items pay cost plus margin exactly, plus 1,500,000 each. The surplus after the margins is 3,000,000.
+      w.chain.feeTokens = COST + 500n + 1_500_000n;
+      await w.runner.handleProofPayload(proofPayload());
+      // 3,000,000 does not cover the update of 3,000,000 and a margin of 500.
+      expect(batchSends(w).filter((entry) => decodedBatch(entry.request.data).updateProof !== "0x")).toHaveLength(0);
+    });
+
+    it("counts the share of the update as a loss when the mined batch did not apply it", async () => {
+      const w = batchWorld([1]);
+      w.chain.gasUsed = 600_000n; // 300,000 for the item and 300,000 for the update
+      // The read-only call applies the update. The mined batch finds the head moved: the update is skipped.
+      w.chain.receiptUpdateResult = SKIPPED_HEAD_ADVANCED;
+      expect(await w.runner.handleProofPayload(proofPayload())).toMatchObject({ handled: "update-skipped" });
+      expect(w.state.current.prerequisiteLosses.map((entry) => entry.wei)).toEqual([COST.toString()]);
+    });
+
+    it("keeps an item whose anchor is not stored eligible for the next sweep, without a waiting period", async () => {
+      const w = batchWorld([1]);
+      w.chain.batchResult = () => SKIPPED_ANCHOR_NOT_STORED;
+      await w.runner.sweep();
+      expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "anchor-not-stored" });
+      expect(w.state.current.finished).toEqual({});
+      // The light client stored the header. The very next sweep delivers the item.
+      w.chain.batchResult = () => EXECUTED;
+      expect(await w.runner.sweep()).toMatchObject({ delivered: 1 });
+    });
+  });
+
+  describe("the reservation of a batch", () => {
+    it("charges the worst case of the whole transaction before the send, settles it to the actual cost at the receipt, and keeps it apart from the layout spend", async () => {
+      // A daily budget of 1 wei would stop any layout call. A delivery is not limited by it, because the fee repays it.
+      const w = batchWorld([1], { maximumPrerequisiteSpendPerDayWei: 1n });
+      let chargedAtBroadcast: string[] = [];
+      const send = w.chain.send.bind(w.chain);
+      w.chain.send = async (request) => {
+        chargedAtBroadcast = w.state.current.deliverySpend.map((entry) => entry.wei);
+        return send(request);
+      };
+      expect(await w.runner.sweep()).toMatchObject({ delivered: 1 });
+      // One item of 300,000 gas: with the buffer of 30 percent a limit of 390,000, at a maximum fee of twice the base fee of 10.
+      expect(chargedAtBroadcast).toEqual(["7800000"]);
+      expect(w.state.current.deliverySpend.map((entry) => entry.wei)).toEqual([COST.toString()]);
+      expect(w.state.current.prerequisiteSpend).toEqual([]);
+    });
+
+    it("keeps the reservation charged when the send throws, and waits before it tries the items again", async () => {
+      const w = batchWorld([1, 2]);
+      w.chain.sendFailure = new Error("connection lost after broadcast");
+      expect(await w.runner.sweep()).toMatchObject({ delivered: 0, failed: 2 });
+      // Two items: a limit of 780,000 at 20 wei.
+      expect(w.state.current.deliverySpend.map((entry) => entry.wei)).toEqual(["15600000"]);
+      expect(w.state.current.finished).toEqual({});
+      const sends = w.chain.log.filter(isBatchSend).length;
+      await w.runner.sweep();
+      expect(w.chain.log.filter(isBatchSend)).toHaveLength(sends);
+    });
+
+    it("counts the layout calls of the items of a batch that threw as a loss", async () => {
+      const w = batchWorld([1]);
+      const layoutCall = { function: "addBlockHashLayout", reason: "no row", to: BRIDGE, data: "0xdeadbeef" as Hex };
+      let builds = 0;
+      w.prover.evidence = async () => evidenceFor({ prerequisites: (builds += 1) === 1 ? [layoutCall] : [], executeData: emptyExecuteMessage(1n) });
+      const send = w.chain.send.bind(w.chain);
+      w.chain.send = async (request) => {
+        if (request.data.startsWith(EXECUTE_BATCH)) throw new Error("connection lost after broadcast");
+        return send(request);
+      };
+      await w.runner.sweep();
+      expect(w.state.current.prerequisiteLosses.map((entry) => entry.wei)).toEqual([COST.toString()]);
+    });
   });
 });
 

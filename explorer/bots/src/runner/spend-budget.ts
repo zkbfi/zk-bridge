@@ -31,12 +31,24 @@ function total(entries: readonly TimedWei[]): bigint {
 
 /** Drops the entries that are older than the window. */
 export function pruneBudget(budget: PrerequisiteBudgetState, now: number): PrerequisiteBudgetState {
-  return { prerequisiteSpend: inWindow(budget.prerequisiteSpend, now), prerequisiteLosses: inWindow(budget.prerequisiteLosses, now) };
+  return {
+    prerequisiteSpend: inWindow(budget.prerequisiteSpend, now),
+    deliverySpend: inWindow(budget.deliverySpend, now),
+    prerequisiteLosses: inWindow(budget.prerequisiteLosses, now),
+  };
 }
 
 /** The wei that layout calls cost, or may cost, in the window that ends at `now`. */
 export function windowSpendWei(budget: PrerequisiteBudgetState, now: number): bigint {
   return total(inWindow(budget.prerequisiteSpend, now));
+}
+
+/**
+ * The wei that delivery transactions cost, or may cost, in the window that ends at `now`. It is for logs and for the
+ * operator. No limit reads it: the fee of a delivery repays this spend.
+ */
+export function windowDeliverySpendWei(budget: PrerequisiteBudgetState, now: number): bigint {
+  return total(inWindow(budget.deliverySpend, now));
 }
 
 /** The unrecovered loss in the window that ends at `now`. */
@@ -52,6 +64,16 @@ export function withCharge(budget: PrerequisiteBudgetState, entry: PrerequisiteS
 /** Replaces the wei of one charge, for example with the actual cost once the receipt is known. An unknown identifier changes nothing. */
 export function withSettledCharge(budget: PrerequisiteBudgetState, id: string, wei: bigint): PrerequisiteBudgetState {
   return { ...budget, prerequisiteSpend: budget.prerequisiteSpend.map((entry) => (entry.id === id ? { ...entry, wei: wei.toString() } : entry)) };
+}
+
+/** Adds a charge for a delivery transaction. The budget is not changed. */
+export function withDeliveryCharge(budget: PrerequisiteBudgetState, entry: PrerequisiteSpendEntry): PrerequisiteBudgetState {
+  return { ...budget, deliverySpend: [...budget.deliverySpend, entry] };
+}
+
+/** Replaces the wei of one delivery charge with the actual cost. An unknown identifier changes nothing. */
+export function withSettledDeliveryCharge(budget: PrerequisiteBudgetState, id: string, wei: bigint): PrerequisiteBudgetState {
+  return { ...budget, deliverySpend: budget.deliverySpend.map((entry) => (entry.id === id ? { ...entry, wei: wei.toString() } : entry)) };
 }
 
 /** Adds an unrecovered loss. */

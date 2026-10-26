@@ -21,12 +21,12 @@ function runnerStateFile(path: string): StateStore<RunnerState> {
 function budgetStoreOf(state: StateStore<RunnerState>): BudgetStore {
   return {
     async load() {
-      const { prerequisiteSpend, prerequisiteLosses } = await state.load();
-      return { prerequisiteSpend, prerequisiteLosses };
+      const { prerequisiteSpend, deliverySpend, prerequisiteLosses } = await state.load();
+      return { prerequisiteSpend, deliverySpend, prerequisiteLosses };
     },
     async update(mutate) {
       await state.update((current) => {
-        const budget = { prerequisiteSpend: current.prerequisiteSpend, prerequisiteLosses: current.prerequisiteLosses };
+        const budget = { prerequisiteSpend: current.prerequisiteSpend, deliverySpend: current.deliverySpend, prerequisiteLosses: current.prerequisiteLosses };
         const next = mutate(budget);
         return next === budget ? current : { ...current, ...next };
       });
@@ -82,6 +82,21 @@ describe("concurrent changes to one state file", () => {
     expect(stored.prerequisiteSpend).toHaveLength(20);
     expect(sumOf(stored)).toBe(10n * 3n + 10n * 5n);
     expect(stored.prerequisiteLosses.map((entry) => entry.wei).sort()).toEqual(["11", "7"]);
+  });
+
+  it("keeps every delivery reservation of concurrent batches, apart from the layout spend, and settles each one", async () => {
+    const path = join(await scratchDirectory(), "runner.json");
+    const state = runnerStateFile(path);
+    const ledgers = [ledgerOver(state, 5n), ledgerOver(state, 5n)];
+    // The daily budget of layout calls is 5 wei. A delivery reservation of 100 wei is far above it and is still stored.
+    const reservations = await Promise.all(Array.from({ length: 10 }, (_, index) => (ledgers[index % 2] as (typeof ledgers)[number]).reserveDelivery(100n)));
+    const reserved = await state.load();
+    expect(reserved.deliverySpend).toHaveLength(10);
+    expect(reserved.prerequisiteSpend).toEqual([]);
+    expect(await ledgerOver(state, 5n).deliverySpendWei()).toBe(1000n);
+    await Promise.all(reservations.map((reservation, index) => (ledgers[index % 2] as (typeof ledgers)[number]).settleDelivery(reservation, 40n)));
+    expect((await state.load()).deliverySpend.map((entry) => entry.wei)).toEqual(Array(10).fill("40"));
+    expect(await ledgerOver(state, 5n).deliverySpendWei()).toBe(400n);
   });
 
   it("writes nothing when the change returns the state it was given", async () => {

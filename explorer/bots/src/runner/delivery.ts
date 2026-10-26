@@ -1,6 +1,6 @@
-import { decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeFunctionData, erc20Abi, type Address, type Hex } from "viem";
+import { decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeFunctionData, erc20Abi, type Address, type ContractFunctionArgs, type Hex } from "viem";
 import { feeRouterAbi, messageBridgeAbi, type ProofDirection } from "@zk-bridge/shared";
-import { sendTerms, worstCaseCostWei, type FeeQuote, type ReceiptSummary, type TransactionPort } from "../chain/transactions.ts";
+import { sendTerms, worstCaseCostWei, type FeeQuote, type ReceiptLog, type TransactionPort } from "../chain/transactions.ts";
 import type { FeedItem, IndexerClient } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
 import type { EvidencePackage, Prerequisite } from "../prover/packages.ts";
@@ -26,6 +26,10 @@ export interface DeliverySettings {
   readonly maximumPrerequisiteSpendPerDayWei: bigint;
   /** The unrecovered loss of a rolling 24 hours at which the runner stops sending layout calls. */
   readonly maximumUnrecoveredPrerequisiteLossWei: bigint;
+  /** The most items that one batch transaction delivers. */
+  readonly maximumBatchSize: number;
+  /** The most gas that one batch may use: the sum of the assumed gas of its items, and the upper bound of its gas limit. */
+  readonly maximumBatchGas: bigint;
 }
 
 /** The parts a delivery touches. Tests pass fakes for every one. */
@@ -37,6 +41,10 @@ export interface DeliveryDependencies {
   readonly source: SourceReader;
   /** The fee router of the destination chain, or null. */
   readonly feeRouter: Address | null;
+  /** The Multicall3 contract of the destination chain, which batches the calls of a delivery. Not null whenever `feeRouter` is not null. */
+  readonly multicall: Address | null;
+  /** The address that receives the fees. Not null whenever `feeRouter` is not null: the start-up check requires it. */
+  readonly rewardAddress: Address | null;
   readonly wrappedNative: Address;
   readonly settings: DeliverySettings;
   readonly logger: Logger;
@@ -57,7 +65,10 @@ export type SkipReason =
   | "prerequisite-not-approved"
   | "prerequisite-gas-above-approval"
   | "prerequisites-not-satisfied"
-  | "simulation-reverted";
+  | "simulation-reverted"
+  | "insufficient-gas"
+  | "anchor-not-stored"
+  | "batch-did-not-settle";
 
 /** The result for one item. The runner writes it to the log and the outcome file. */
 export type DeliveryOutcome =
@@ -87,7 +98,8 @@ export type DeliveryOutcome =
   | {
       readonly status: "failed";
       readonly messageId: Hex;
-      readonly reason: "transaction-reverted";
+      /** `transaction-reverted`: the whole transaction failed. `batch-result-missing`: it succeeded, but the bridge reports no execution of the item. */
+      readonly reason: "transaction-reverted" | "batch-result-missing";
       readonly transactionHash: Hex;
       readonly prerequisiteCostWei?: bigint;
     };
@@ -98,35 +110,31 @@ export function isFinal(outcome: DeliveryOutcome): boolean {
   return outcome.status === "skipped" && outcome.reason === "already-delivered";
 }
 
-type Skip = Extract<DeliveryOutcome, { status: "skipped" }>;
+/** A skipped item. */
+export type Skip = Extract<DeliveryOutcome, { status: "skipped" }>;
 
-function skip(messageId: Hex, reason: SkipReason, extra: Partial<Omit<Skip, "status" | "messageId" | "reason">> = {}): Skip {
+/** Makes a skip. */
+export function skip(messageId: Hex, reason: SkipReason, extra: Partial<Omit<Skip, "status" | "messageId" | "reason">> = {}): Skip {
   return { status: "skipped", messageId, reason, ...extra };
 }
 
-/** The call that delivers: the evidence calldata for the bridge, or the fee router call that names the runner. */
-interface FinalCall {
-  readonly to: Address;
-  readonly data: Hex;
-  readonly path: "fee-router" | "bridge";
-}
+/** The proof of one message, as `MessageBridge.executeMessage` and the fee router take it. */
+export type MessageProof = ContractFunctionArgs<typeof messageBridgeAbi, "nonpayable", "executeMessage">[0];
 
-function buildFinalCall(dependencies: DeliveryDependencies, offer: FeeOffer, evidence: EvidencePackage): FinalCall {
-  if (offer.kind === "none" || dependencies.feeRouter === null) {
-    return { to: evidence.execute.to as Address, data: evidence.execute.data as Hex, path: "bridge" };
-  }
+/** Reads the proof out of the call data of the evidence. */
+function proofOf(evidence: EvidencePackage): MessageProof {
   const decoded = decodeFunctionData({ abi: messageBridgeAbi, data: evidence.execute.data as Hex });
   if (decoded.functionName !== "executeMessage") throw new Error(`the evidence calls ${decoded.functionName}, not executeMessage`);
-  const data = encodeFunctionData({
-    abi: feeRouterAbi,
-    functionName: "executeMessageWithRunner",
-    args: [dependencies.chain.account, decoded.args[0]],
-  });
-  return { to: dependencies.feeRouter, data, path: "fee-router" };
+  return decoded.args[0];
+}
+
+/** The call data of the single entry of the fee router. The batch simulation uses it to measure the gas of one item. */
+export function singleCallData(proof: MessageProof, reward: Address): Hex {
+  return encodeFunctionData({ abi: feeRouterAbi, functionName: "executeMessageWithRunner", args: [proof, reward] });
 }
 
 /** The fee that the router would pay the runner for this gas, measured in wei. */
-async function quoteFee(
+export async function quoteFee(
   dependencies: DeliveryDependencies,
   item: FeedItem,
   offer: Extract<FeeOffer, { kind: "offer" }>,
@@ -154,10 +162,10 @@ async function quoteFee(
   return value.ok ? { ok: true, feeWei: value.wei, feeTokens } : value;
 }
 
-/** Sums the transfers of `token` to `account` in a receipt. */
-function tokensReceived(receipt: ReceiptSummary, token: Address, account: Address): bigint {
+/** Sums the transfers of `token` to `account` in a list of logs. */
+export function tokensReceived(logs: readonly ReceiptLog[], token: Address, account: Address): bigint {
   let total = 0n;
-  for (const log of receipt.logs) {
+  for (const log of logs) {
     if (log.address.toLowerCase() !== token.toLowerCase()) continue;
     try {
       const event = decodeEventLog({ abi: erc20Abi, data: log.data, topics: log.topics as [Hex, ...Hex[]] });
@@ -273,7 +281,7 @@ async function satisfyPrerequisites(
 /**
  * Marks a skip with the wei that layout calls cost before it, logs the loss and adds it to the unrecovered loss of the ledger. A skip with no spend stays as it is.
  */
-async function recordLoss(dependencies: DeliveryDependencies, ledger: PrerequisiteLedger, outcome: Skip, spentWei: bigint): Promise<Skip> {
+export async function recordLoss(dependencies: DeliveryDependencies, ledger: PrerequisiteLedger, outcome: Skip, spentWei: bigint): Promise<Skip> {
   if (spentWei === 0n) return outcome;
   dependencies.logger.warn("prerequisite_loss", { messageId: outcome.messageId, lossWei: spentWei, reason: outcome.reason });
   await ledger.recordLoss(spentWei);
@@ -320,8 +328,24 @@ async function approvePrerequisiteSpend(
   return judgement.kind === "skip" ? { kind: "skip", outcome: judgement.outcome } : { kind: "approved", approved: estimate.approved };
 }
 
+/** An item that passed every per-item step and waits for a batch. */
+export interface ReadyDelivery {
+  readonly item: FeedItem;
+  readonly messageId: Hex;
+  readonly offer: Extract<FeeOffer, { kind: "offer" }>;
+  /** The proof tuple that the evidence carries, after the layout calls. */
+  readonly proof: MessageProof;
+  /** The gas the runner assumes for the item before a simulation: `executionGasFallback`. The batch planner sums it. */
+  readonly assumedGas: bigint;
+  /** What the layout calls for this item cost. Zero when it needed none. */
+  readonly prerequisiteCostWei: bigint;
+}
+
+/** The result of {@link prepareItem}: a final outcome, or an item that waits for a batch. */
+export type Preparation = { readonly kind: "outcome"; readonly outcome: DeliveryOutcome } | { readonly kind: "ready"; readonly ready: ReadyDelivery };
+
 /**
- * Delivers one covered item, or says why not.
+ * Does the per-item work of a delivery, up to and including the layout calls.
  *
  * 1. Read the call data of the message from the indexer and look for a fee offer to the fee router.
  * 2. Price the offer at the assumed gas, and skip when the fee does not cover cost and margin. This check needs no
@@ -332,82 +356,94 @@ async function approvePrerequisiteSpend(
  *    The calls and the gas of this estimate are the approved set.
  * 5. Send the layout calls that the evidence lists, each after a simulation, each inside the approved set, and each
  *    after the ledger reserved its worst case.
- * 6. Simulate the delivery. Price the offer again at the simulated gas. Skip on a revert, or when it does not pay.
- *    Wei spent on layout calls is lost then: the skip carries the amount and the runner does not retry the item soon.
- * 7. Send `FeeRouter.executeMessageWithRunner(runner, proof)`, or `executeMessage` for an item without an offer when
- *    the configuration allows it.
  *
- * No transaction leaves without a simulation that succeeded.
+ * An item with a fee offer then returns as a {@link ReadyDelivery}. {@link sendBatch} simulates the batch, judges the fee
+ * again at the simulated gas, and sends. An item without an offer (when the configuration delivers such items) goes
+ * straight to the bridge here, with its own simulation. Wei spent on layout calls is lost when the item is then not
+ * delivered: the skip carries the amount and the runner does not retry the item soon.
  */
-export async function deliverItem(dependencies: DeliveryDependencies, item: FeedItem, ledger: PrerequisiteLedger): Promise<DeliveryOutcome> {
+export async function prepareItem(dependencies: DeliveryDependencies, item: FeedItem, ledger: PrerequisiteLedger): Promise<Preparation> {
   const messageId = item.messageId as Hex;
-  const { settings, logger, chain } = dependencies;
+  const { settings, chain } = dependencies;
+  const done = (outcome: DeliveryOutcome): Preparation => ({ kind: "outcome", outcome });
   const message = await dependencies.indexer.getMessage(item.messageId);
   const offer = readFeeOffer({ messageData: message.data as Hex, feeRouter: dependencies.feeRouter });
-  if (offer.kind === "none" && !settings.deliverWithoutOffer) return skip(messageId, "no-fee-offer", { detail: offer.reason });
+  if (offer.kind === "none" && !settings.deliverWithoutOffer) return done(skip(messageId, "no-fee-offer", { detail: offer.reason }));
 
   const quote = await chain.feeQuote();
   const early =
     offer.kind === "offer"
       ? await judgeOffer(dependencies, { item, offer, feeGasUnits: guessGas(settings), costGasUnits: guessGas(settings), quote, messageId })
       : null;
-  if (early !== null && early.kind === "skip") return early.outcome;
+  if (early !== null && early.kind === "skip") return done(early.outcome);
 
   const sourceTransaction = item.sent?.transactionHash as Hex | undefined;
-  if (sourceTransaction === undefined) return skip(messageId, "source-log-not-found", { detail: "the indexer has no send" });
+  if (sourceTransaction === undefined) return done(skip(messageId, "source-log-not-found", { detail: "the indexer has no send" }));
   const logIndex = await dependencies.source.findMessageLogIndex({ transactionHash: sourceTransaction, messageId });
-  if (logIndex === null) return skip(messageId, "source-log-not-found");
+  if (logIndex === null) return done(skip(messageId, "source-log-not-found"));
 
   let evidence: EvidencePackage;
   try {
     evidence = await dependencies.prover.evidence({ direction: dependencies.direction, transactionHash: sourceTransaction, logIndex });
   } catch (error) {
-    return skip(messageId, "evidence-failed", { detail: error instanceof Error ? error.message : String(error) });
+    return done(skip(messageId, "evidence-failed", { detail: error instanceof Error ? error.message : String(error) }));
   }
-  if (evidence.alreadyDelivered) return skip(messageId, "already-delivered", { detail: evidence.deliveryStatus });
+  if (evidence.alreadyDelivered) return done(skip(messageId, "already-delivered", { detail: evidence.deliveryStatus }));
 
   const approval = await approvePrerequisiteSpend(dependencies, ledger, { item, offer, evidence, messageId });
-  if (approval.kind === "skip") return approval.outcome;
+  if (approval.kind === "skip") return done(approval.outcome);
 
   const prepared = await satisfyPrerequisites(dependencies, ledger, { messageId, transactionHash: sourceTransaction, logIndex }, evidence, approval.approved);
-  if (!prepared.ok) return recordLoss(dependencies, ledger, prepared.outcome, prepared.costWei);
+  if (!prepared.ok) return done(await recordLoss(dependencies, ledger, prepared.outcome, prepared.costWei));
 
-  const call = buildFinalCall(dependencies, offer, prepared.evidence);
-  const simulation = await chain.simulate(call);
-  if (!simulation.ok) return recordLoss(dependencies, ledger, skip(messageId, "simulation-reverted", { detail: simulation.reason }), prepared.costWei);
-
-  const finalQuote = await chain.feeQuote();
-  const final =
-    offer.kind === "offer"
-      ? await judgeOffer(dependencies, { item, offer, feeGasUnits: simulation.gas, costGasUnits: simulation.gas, quote: finalQuote, messageId })
-      : null;
-  if (final !== null && final.kind === "skip") return recordLoss(dependencies, ledger, final.outcome, prepared.costWei);
-
-  const receipt = await chain.send({ to: call.to, data: call.data, ...sendTerms(finalQuote, simulation.gas) });
-  if (!receipt.success) {
-    await ledger.recordLoss(prepared.costWei);
-    return { status: "failed", messageId, reason: "transaction-reverted", transactionHash: receipt.hash, ...(prepared.costWei > 0n ? { prerequisiteCostWei: prepared.costWei } : {}) };
-  }
-  const token = item.transfer?.destinationToken.address as Address | undefined;
-  const feeReceivedTokens = call.path === "fee-router" && token !== undefined ? tokensReceived(receipt, token, chain.account) : null;
-  logger.info("delivery_sent", { messageId, path: call.path, transactionHash: receipt.hash, gasUsed: receipt.gasUsed });
+  if (offer.kind === "none") return done(await deliverDirect(dependencies, ledger, { item, messageId, evidence: prepared.evidence, prerequisiteCostWei: prepared.costWei }));
   return {
-    status: "delivered",
-    messageId,
-    path: call.path,
-    transactionHash: receipt.hash,
-    gasUsed: receipt.gasUsed,
-    gasCostWei: receipt.gasUsed * receipt.effectiveGasPrice,
-    prerequisiteCostWei: prepared.costWei,
-    feeExpectedWei: final !== null && final.kind === "pay" ? final.feeWei : null,
-    feeReceivedTokens,
+    kind: "ready",
+    ready: { item, messageId, offer, proof: proofOf(prepared.evidence), assumedGas: guessGas(settings), prerequisiteCostWei: prepared.costWei },
   };
 }
 
-type Judgement = { readonly kind: "pay"; readonly feeWei: bigint } | { readonly kind: "skip"; readonly outcome: Skip };
+/** Input of {@link deliverDirect}. */
+interface DirectDeliveryInput {
+  readonly item: FeedItem;
+  readonly messageId: Hex;
+  readonly evidence: EvidencePackage;
+  readonly prerequisiteCostWei: bigint;
+}
+
+/**
+ * Delivers an item that has no fee offer: the evidence call data goes to the bridge, after a simulation that succeeded.
+ * There is no fee to judge, so the configuration (`deliverWithoutOffer`) is the decision.
+ */
+async function deliverDirect(dependencies: DeliveryDependencies, ledger: PrerequisiteLedger, input: DirectDeliveryInput): Promise<DeliveryOutcome> {
+  const { messageId, evidence, prerequisiteCostWei } = input;
+  const { chain, logger } = dependencies;
+  const call = { to: evidence.execute.to as Address, data: evidence.execute.data as Hex };
+  const simulation = await chain.simulate(call);
+  if (!simulation.ok) return recordLoss(dependencies, ledger, skip(messageId, "simulation-reverted", { detail: simulation.reason }), prerequisiteCostWei);
+  const receipt = await chain.send({ ...call, ...sendTerms(await chain.feeQuote(), simulation.gas) });
+  if (!receipt.success) {
+    await ledger.recordLoss(prerequisiteCostWei);
+    return { status: "failed", messageId, reason: "transaction-reverted", transactionHash: receipt.hash, ...(prerequisiteCostWei > 0n ? { prerequisiteCostWei } : {}) };
+  }
+  logger.info("delivery_sent", { messageId, path: "bridge", transactionHash: receipt.hash, gasUsed: receipt.gasUsed });
+  return {
+    status: "delivered",
+    messageId,
+    path: "bridge",
+    transactionHash: receipt.hash,
+    gasUsed: receipt.gasUsed,
+    gasCostWei: receipt.gasUsed * receipt.effectiveGasPrice,
+    prerequisiteCostWei,
+    feeExpectedWei: null,
+    feeReceivedTokens: null,
+  };
+}
+
+export type Judgement = { readonly kind: "pay"; readonly feeWei: bigint } | { readonly kind: "skip"; readonly outcome: Skip };
 
 /** Input of {@link judgeOffer}. */
-interface JudgeOfferInput {
+export interface JudgeOfferInput {
   readonly item: FeedItem;
   readonly offer: Extract<FeeOffer, { kind: "offer" }>;
   /** The gas that the fee is quoted for: the execution, which the router repays. */
@@ -419,7 +455,7 @@ interface JudgeOfferInput {
 }
 
 /** Prices the offer at the fee gas and compares it with the cost of the cost gas. */
-async function judgeOffer(dependencies: DeliveryDependencies, input: JudgeOfferInput): Promise<Judgement> {
+export async function judgeOffer(dependencies: DeliveryDependencies, input: JudgeOfferInput): Promise<Judgement> {
   const { item, offer, feeGasUnits, costGasUnits, quote, messageId } = input;
   const priced = await quoteFee(dependencies, item, offer, feeGasUnits);
   if (!priced.ok) return { kind: "skip", outcome: skip(messageId, priced.reason) };

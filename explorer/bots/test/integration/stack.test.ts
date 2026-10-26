@@ -3,9 +3,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { encodeAbiParameters, encodePacked, keccak256, recoverAddress, sha256, toFunctionSelector, type Address, type Hex } from "viem";
+import { encodeAbiParameters, encodePacked, keccak256, recoverAddress, sha256, type Address, type Hex } from "viem";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { beaconLightClientAbi } from "@zk-bridge/shared";
+import { beaconLightClientAbi, encodeProofMessage } from "@zk-bridge/shared";
 import { emptyProverSetup, saveProverSetup, type ProverSetup } from "@zk-bridge/shared/config";
 import { createLightClientReader } from "../../src/chain/light-client.ts";
 import { createTransactionPort } from "../../src/chain/transactions.ts";
@@ -87,7 +87,7 @@ interface BotFiles {
 }
 
 /** Writes the setup file, the deployment file and the bot configuration for one bot pair, the way an operator would. */
-async function writeBotFiles(options: { name: string; boardUrl: string; indexerUrl: string; proverBinary: string; policy?: ProverSetup["policy"] }): Promise<BotFiles> {
+async function writeBotFiles(options: { name: string; boardUrl: string; indexerUrl: string; proverBinary: string; policy?: ProverSetup["policy"]; runnerIndex?: number; rewardIndex?: number }): Promise<BotFiles> {
   const directory = await mkdtemp(join(tmpdir(), `bots-${options.name}-`));
   scratch.push(directory);
   const stateDirectory = join(directory, "state");
@@ -137,7 +137,12 @@ async function writeBotFiles(options: { name: string; boardUrl: string; indexerU
         prover: { binary: options.proverBinary },
         indexerUrl: options.indexerUrl,
         pollSeconds: 1,
-        signer: { kind: "mnemonic", mnemonic: "env:RUNNER_MNEMONIC", index: ACCOUNT.runner },
+        maximumPrerequisiteSpendPerSweepWei: "1000000000000000000",
+        maximumPrerequisiteSpendPerDayWei: "10000000000000000000",
+        maximumUnrecoveredPrerequisiteLossWei: "1000000000000000000",
+        rewardAddress: account(options.rewardIndex ?? ACCOUNT.reward).address,
+        multicall3: stack.multicall3,
+        signer: { kind: "mnemonic", mnemonic: "env:RUNNER_MNEMONIC", index: options.runnerIndex ?? ACCOUNT.runner },
       },
     }),
   );
@@ -256,6 +261,34 @@ describe.skipIf(!toolsPresent)("the proof path on a local stack", () => {
     expect(proverRuns[0].args.join(" ")).not.toContain(RUNPOD_KEY);
   });
 
+  it("refuses to start when the fee router whitelists another runner than the signer, and sends nothing", async () => {
+    await board?.stop();
+    board = await startFakeBoard();
+    // The router of the stack names the account ACCOUNT.runner. This runner signs with another account.
+    const files = await writeBotFiles({ name: "wrong-runner", boardUrl: board.url, indexerUrl: indexer.url, proverBinary: FAKE_PROVER, runnerIndex: ACCOUNT.recipient });
+    const context = await loadBotContext({ configPath: files.configPath, environment: files.environment, write: () => undefined });
+    await expect(startRunner({ context, signal: new AbortController().signal, runOnce: true })).rejects.toThrow(/whitelists/);
+    expect(await stack.chain.publicClient.getTransactionCount({ address: account(ACCOUNT.recipient).address })).toBe(0);
+  });
+
+  it("refuses to start when the fee router pays another address than runner.rewardAddress, and sends nothing", async () => {
+    await board?.stop();
+    board = await startFakeBoard();
+    const nonceBefore = await stack.chain.publicClient.getTransactionCount({ address: account(ACCOUNT.runner).address });
+    const files = await writeBotFiles({ name: "wrong-reward", boardUrl: board.url, indexerUrl: indexer.url, proverBinary: FAKE_PROVER, rewardIndex: ACCOUNT.recipient });
+    const context = await loadBotContext({ configPath: files.configPath, environment: files.environment, write: () => undefined });
+    await expect(startRunner({ context, signal: new AbortController().signal, runOnce: true })).rejects.toThrow(/pays the fees to/);
+    expect(await stack.chain.publicClient.getTransactionCount({ address: account(ACCOUNT.runner).address })).toBe(nonceBefore);
+  });
+
+  it("refuses to start when the reward address is the signer", async () => {
+    await board?.stop();
+    board = await startFakeBoard();
+    const files = await writeBotFiles({ name: "reward-is-signer", boardUrl: board.url, indexerUrl: indexer.url, proverBinary: FAKE_PROVER, rewardIndex: ACCOUNT.runner });
+    const context = await loadBotContext({ configPath: files.configPath, environment: files.environment, write: () => undefined });
+    await expect(startRunner({ context, signal: new AbortController().signal, runOnce: true })).rejects.toThrow(/address of the signer/);
+  });
+
   it.skipIf(!existsSync(REAL_PROVER))("the real `zk-bridge-prover verify` refuses the oracle proof, and the chain stays where it is", async () => {
     await board?.stop();
     board = await startFakeBoard();
@@ -304,6 +337,8 @@ describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
         indexer: fakeIndexer(items, offers),
         source: { findMessageLogIndex: async () => 0 },
         feeRouter: stack.feeRouter,
+        multicall: stack.multicall3,
+        rewardAddress: account(ACCOUNT.reward).address,
         wrappedNative: stack.wrappedNative,
         settings: {
           minimumMarginWei: 0n,
@@ -316,6 +351,8 @@ describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
           maximumPrerequisiteSpendPerSweepWei: 10n ** 24n,
           maximumPrerequisiteSpendPerDayWei: 10n ** 24n,
           maximumUnrecoveredPrerequisiteLossWei: 10n ** 24n,
+          maximumBatchSize: 5,
+          maximumBatchGas: 6_000_000n,
         },
         logger,
       },
@@ -330,17 +367,19 @@ describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
     return { runner, outcomes, prover, signer };
   }
 
-  const arm = (data: Hex) => stack.chain.send(stack.mediatorBridge, "StubMediatorBridge", "arm", [stack.feeRouter, stack.token, value, data], ACCOUNT.deployer);
+  /** Arms the stub bridge. `id` names the message that the bridge reports as executed: the oldest item of the batch, which the runner sends first. */
+  const arm = (data: Hex, id: number) => stack.chain.send(stack.mediatorBridge, "StubMediatorBridge", "arm", [stack.feeRouter, stack.token, value, data, item(id).messageId], ACCOUNT.deployer);
   const item = (id: number) => feedItem({ id, token: stack.token });
   const offerData = (fields: { settings: bigint; limit: bigint; multiplier: bigint }) => feeOfferData({ director: director(fields), value, token: stack.token, recipient: stack.feeRouter });
 
   it("delivers a message whose gas based fee pays, and the router pays the runner and the recipient", async () => {
     const offer = { settings: 0n, limit: 10n ** 18n, multiplier: 3n * 10n ** 18n };
     const callback = encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], [recipient(), offer.settings, offer.limit, offer.multiplier]);
-    await arm(callback);
+    await arm(callback, 1);
     const first = item(1);
     const { runner, outcomes, signer } = await makeRunner([first], { [first.messageId]: offerData(offer) });
-    const before = { runner: await balanceOf(signer.address), recipient: await balanceOf(recipient()) };
+    const reward = account(ACCOUNT.reward).address;
+    const before = { runner: await balanceOf(signer.address), reward: await balanceOf(reward), recipient: await balanceOf(recipient()) };
 
     expect(await runner.sweep()).toMatchObject({ delivered: 1, skipped: 0, failed: 0 });
 
@@ -348,7 +387,9 @@ describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
     expect(outcome).toMatchObject({ kind: "delivery", status: "delivered", path: "fee-router" });
     const feeReceived = outcome.feeReceivedTokens as bigint;
     expect(feeReceived).toBeGreaterThan(0n);
-    expect(await balanceOf(signer.address)).toBe(before.runner + feeReceived);
+    // The fee goes to the reward address. The signer is a hot key that only pays gas, and it receives no token.
+    expect(await balanceOf(reward)).toBe(before.reward + feeReceived);
+    expect(await balanceOf(signer.address)).toBe(before.runner);
     // The recipient gets the value less the fee. The router keeps nothing.
     expect(await balanceOf(recipient())).toBe(before.recipient + value - feeReceived);
     expect(await balanceOf(stack.feeRouter)).toBe(0n);
@@ -360,7 +401,7 @@ describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
   it("skips a message whose fee is far below the gas cost, and sends no transaction", async () => {
     const offer = { settings: 1n, limit: 1_000_000_000n, multiplier: 0n }; // a fixed fee of 1e9 wei
     const callback = encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], [recipient(), offer.settings, offer.limit, offer.multiplier]);
-    await arm(callback);
+    await arm(callback, 2);
     const stingy = item(2);
     const { runner, outcomes, prover, signer } = await makeRunner([stingy], { [stingy.messageId]: offerData(offer) });
     const nonce = await stack.chain.publicClient.getTransactionCount({ address: signer.address });
@@ -371,11 +412,11 @@ describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
     expect(await stack.chain.publicClient.getTransactionCount({ address: signer.address })).toBe(nonce);
   });
 
-  it("skips a message that the bridge already delivered: the simulation reverts, and nothing is sent", async () => {
+  it("skips a message that the bridge already delivered: the simulation shows it, and nothing is sent", async () => {
     // The previous test left the stub armed and delivered by the first test: running it again reverts.
     const offer = { settings: 0n, limit: 10n ** 18n, multiplier: 3n * 10n ** 18n };
     const callback = encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], [recipient(), offer.settings, offer.limit, offer.multiplier]);
-    await arm(callback);
+    await arm(callback, 3);
     // Deliver it once outside the runner, then let the runner try.
     const direct = item(3);
     const first = await makeRunner([direct], { [direct.messageId]: offerData(offer) });
@@ -385,10 +426,43 @@ describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
     const nonce = await stack.chain.publicClient.getTransactionCount({ address: second.signer.address });
 
     expect(await second.runner.sweep()).toMatchObject({ delivered: 0, skipped: 1 });
-    const outcome = second.outcomes.records[0] as unknown as { reason: string; detail: string };
-    expect(outcome.reason).toBe("simulation-reverted");
-    expect(outcome.detail).toContain(toFunctionSelector("AlreadyDelivered()"));
+    // The router reads the AlreadyDelivered refusal of the bridge as a skip, so the item is final.
+    expect(second.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "already-delivered" });
     expect(await stack.chain.publicClient.getTransactionCount({ address: second.signer.address })).toBe(nonce);
+  });
+  it("carries the light client update and the message in ONE transaction, and the fee goes to the reward address", async () => {
+    const offer = { settings: 0n, limit: 10n ** 18n, multiplier: 3n * 10n ** 18n };
+    await arm(encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], [recipient(), offer.settings, offer.limit, offer.multiplier]), 5);
+    const only = item(5);
+    const { runner, outcomes, signer } = await makeRunner([only], { [only.messageId]: offerData(offer) });
+    const headBefore = await head();
+    const update = await buildOracleUpdate(stack, headBefore + 36n);
+    const payload = encodeProofMessage({ version: 1, pair: "eth-pls", direction: "first-to-second", programKey: stack.programKey, ...update });
+    const nonceBefore = await stack.chain.publicClient.getTransactionCount({ address: signer.address });
+
+    const handling = await runner.handleProofPayload(payload);
+
+    expect(handling.handled).toBe("update-posted");
+    expect(await head()).toBe(update.newSlot);
+    // One transaction did both: the update and the delivery.
+    expect(await stack.chain.publicClient.getTransactionCount({ address: signer.address })).toBe(nonceBefore + 1);
+    expect(outcomes.records.find((record) => record.kind === "update")).toMatchObject({ status: "posted", newSlot: update.newSlot });
+    expect(outcomes.records.find((record) => record.kind === "delivery")).toMatchObject({ status: "delivered", path: "fee-router" });
+  });
+
+  it("drops the item that the bridge already delivered from a batch, and still sends the batch of the others in one transaction", async () => {
+    const offer = { settings: 0n, limit: 10n ** 18n, multiplier: 3n * 10n ** 18n };
+    await arm(encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], [recipient(), offer.settings, offer.limit, offer.multiplier]), 7);
+    // The stub holds one armed message. Two items carry its proof: the second one reverts with AlreadyDelivered once the first ran.
+    const first = item(6);
+    const second = item(7);
+    const { runner, outcomes, signer } = await makeRunner([first, second], { [first.messageId]: offerData(offer), [second.messageId]: offerData(offer) });
+    const nonceBefore = await stack.chain.publicClient.getTransactionCount({ address: signer.address });
+
+    expect(await runner.sweep()).toMatchObject({ delivered: 1, skipped: 1 });
+
+    expect(await stack.chain.publicClient.getTransactionCount({ address: signer.address })).toBe(nonceBefore + 1);
+    expect(outcomes.records.map((record) => (record.status === "skipped" ? record.reason : record.status)).sort()).toEqual(["already-delivered", "delivered"]);
   });
 });
 

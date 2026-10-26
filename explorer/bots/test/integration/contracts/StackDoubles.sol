@@ -10,6 +10,7 @@ pragma solidity 0.8.28;
 import {BeaconLightClient} from "../../../../../src/hardened/BeaconLightClient.sol";
 import {FeeRouter} from "../../../../../src/hardened/mediator/FeeRouter.sol";
 import {MessageBridge} from "../../../../../src/hardened/MessageBridge.sol";
+import {Multicall3} from "../../../../../src/hardened/vendor/multicall3/Multicall3.sol";
 import {ISP1Verifier} from "../../../../../src/hardened/ISP1Verifier.sol";
 import {MockERC20} from "../../../../../src/mocks/MockERC20.sol";
 import {MockWrappedNative} from "../../../../../src/mocks/MockWrappedNative.sol";
@@ -41,7 +42,6 @@ contract ProofSizedVerifier is ISP1Verifier {
 /// are the real ones.
 contract StubMediatorBridge {
     error BadProof();
-    error AlreadyDelivered();
 
     uint64 public constant VALID_ANCHOR_SLOT = 4242;
 
@@ -50,13 +50,18 @@ contract StubMediatorBridge {
     uint256 public value;
     bytes public data;
     bool public delivered;
+    bytes32 public messageId;
+
+    event AffirmationCompleted(address indexed sender, address indexed executor, bytes32 indexed messageId, bool status);
 
     function bridgeContract() external view returns (address) {
         return address(this);
     }
 
-    function arm(address router_, address token_, uint256 value_, bytes calldata data_) external {
+    /// @param messageId_ The identifier that the bridge reports in `AffirmationCompleted` when the message executes.
+    function arm(address router_, address token_, uint256 value_, bytes calldata data_, bytes32 messageId_) external {
         router = router_;
+        messageId = messageId_;
         token = token_;
         value = value_;
         data = data_;
@@ -65,9 +70,10 @@ contract StubMediatorBridge {
 
     function executeMessage(MessageBridge.MessageProof calldata proof) external {
         if (proof.anchorHeader.slot != VALID_ANCHOR_SLOT) revert BadProof();
-        if (delivered) revert AlreadyDelivered();
+        if (delivered) revert MessageBridge.AlreadyDelivered(bytes32(0));
         delivered = true;
         MockERC20(token).mint(router, value);
         FeeRouter(payable(router)).onTokenBridged(token, value, data);
+        emit AffirmationCompleted(address(this), router, messageId, true);
     }
 }

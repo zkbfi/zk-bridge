@@ -5,6 +5,11 @@ import { assertSignedTransactionMatches, type Signer } from "../signing/open-sig
 export interface CallRequest {
   readonly to: Address;
   readonly data: Hex;
+  /**
+   * The gas limit of a read-only {@link TransactionPort.call}. Without it the node picks its own, usually the block limit.
+   * A call that must show what a transaction with a given limit does (a batch skips items that lack gas) sets it.
+   */
+  readonly gas?: bigint;
 }
 
 /** The result of a simulation: the gas of the call, or the reason it reverts. */
@@ -136,6 +141,7 @@ export function createTransactionPort(input: TransactionPortInput): TransactionP
         account: signer.address,
         to: request.to,
         data: request.data,
+        ...(request.gas === undefined ? {} : { gas: request.gas }),
         maxFeePerGas: quote.baseFee + quote.priorityFee,
         maxPriorityFeePerGas: quote.priorityFee,
       });

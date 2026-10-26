@@ -1,3 +1,4 @@
+import { MULTICALL3_ADDRESS } from "@zk-bridge/shared";
 import { parseReferenceText, type SecretReference } from "@zk-bridge/shared/config";
 import { z } from "zod";
 
@@ -119,6 +120,19 @@ export const runnerSchema = z
     /** The fee router on the destination chain. Default: the `fee_router` of the deployment file. */
     feeRouter: addressSchema.optional(),
     /**
+     * The Multicall3 contract that batches the deliveries (`aggregate3`, failure allowed on each call). The default is
+     * the canonical address, which most chains share. A chain without a contract there needs a deployment. The runner
+     * checks at start that the address holds code.
+     */
+    multicall3: addressSchema.default(MULTICALL3_ADDRESS),
+    /**
+     * The address that receives the fees. The fee router pays it, not the signer: the signer is a hot key that only pays
+     * gas, and this address can be a cold account. Required whenever a fee router is in use (the runner checks that at
+     * start, because the router comes from the deployment file). It must differ from the signer, and it must equal
+     * `rewardAddress()` of the router. A runner that only delivers directly needs none.
+     */
+    rewardAddress: addressSchema.optional(),
+    /**
      * The value of one whole token in wei of the native coin, as a whole number. A fee in the wrapped native token
      * needs no entry. A fee in any other token needs one, or the runner skips the item.
      */
@@ -129,6 +143,13 @@ export const runnerSchema = z
     priorityFeeWei: weiSchema.optional(),
     /** The most items that one sweep delivers. */
     maximumDeliveriesPerSweep: z.number().int().positive().default(10),
+    /** The most items that one batch transaction delivers through the fee router. */
+    maximumBatchSize: z.number().int().positive().default(5),
+    /**
+     * The most gas that one batch may use. The sum of the gas assumed for the items of a batch stays within it, and it is
+     * the upper bound of the gas limit of the batch transaction.
+     */
+    maximumBatchGas: z.number().int().positive().default(6_000_000),
     /** The most layout calls that one delivery sends before it gives up. */
     maximumPrerequisiteRounds: z.number().int().positive().default(4),
     /** Gas that the runner assumes for a layout call it cannot simulate before the call before it is mined. */

@@ -12,13 +12,15 @@ import { REPOSITORY_ROOT, startAnvil, type AnvilChain } from "../../../../indexe
 export const ANVIL_MNEMONIC = "test test test test test test test test test test test junk";
 
 /** Accounts of the stack, by index of the mnemonic. Account 0 deploys. */
-export const ACCOUNT = { deployer: 0, oracle: 1, runner: 2, recipient: 3 } as const;
+/** The reward account receives the fees. It is not the runner: the runner is a hot key that only pays gas. */
+export const ACCOUNT = { deployer: 0, oracle: 1, runner: 2, recipient: 3, reward: 4 } as const;
 
 const ARTIFACTS: ReadonlyArray<readonly [name: string, file: string]> = [
   ["ProofSizedVerifier", "StackDoubles.sol/ProofSizedVerifier.json"],
   ["StubMediatorBridge", "StackDoubles.sol/StubMediatorBridge.json"],
   ["BeaconLightClient", "BeaconLightClient.sol/BeaconLightClient.json"],
   ["FeeRouter", "FeeRouter.sol/FeeRouter.json"],
+  ["Multicall3", "Multicall3.sol/Multicall3.json"],
   ["MockERC20", "MockERC20.sol/MockERC20.json"],
   ["MockWrappedNative", "MockWrappedNative.sol/MockWrappedNative.json"],
 ];
@@ -64,6 +66,7 @@ export interface Stack {
   readonly lightClient: Address;
   readonly verifier: Address;
   readonly feeRouter: Address;
+  readonly multicall3: Address;
   readonly mediatorBridge: Address;
   readonly wrappedNative: Address;
   readonly token: Address;
@@ -96,9 +99,10 @@ export async function startStack(artifacts: SyntheticArtifacts): Promise<Stack> 
   ]);
   const mediatorBridge = await chain.deploy("StubMediatorBridge");
   const wrappedNative = await chain.deploy("MockWrappedNative");
-  const feeRouter = await chain.deploy("FeeRouter", [mediatorBridge, wrappedNative]);
+  const feeRouter = await chain.deploy("FeeRouter", [mediatorBridge, wrappedNative, account(ACCOUNT.runner).address, account(ACCOUNT.reward).address]);
+  const multicall3 = await chain.deploy("Multicall3");
   const token = await chain.deploy("MockERC20", ["Fee Token", "FEE"]);
-  return { anvil, chain, lightClient, verifier, feeRouter, mediatorBridge, wrappedNative, token, programKey };
+  return { anvil, chain, lightClient, verifier, feeRouter, multicall3, mediatorBridge, wrappedNative, token, programKey };
 }
 
 /** An update that the stack accepts, with the pieces that a proof package carries. */

@@ -1,18 +1,9 @@
-import { decodeAbiParameters, type Address, type Hex } from "viem";
-import { decodeMediatorMessage } from "@zk-bridge/shared";
+import type { Address, Hex } from "viem";
+import { decodeFeeDirector, decodeMediatorMessage, FEE_DIRECTOR_BYTES, tokenUnitsToWeiFloor, type FeeDirector } from "@zk-bridge/shared";
 import type { FeeQuote } from "../chain/transactions.ts";
 
-/** The `FeeDirector` that the sender of the tokens put in the callback data (`FeeRouter.sol`). */
-export interface FeeDirector {
-  readonly recipient: Address;
-  /** Flag bits: 1 fixed fee, 2 unwrap to the native coin, 4 base fee only, 8 share of the value. */
-  readonly settings: bigint;
-  readonly limit: bigint;
-  readonly multiplier: bigint;
-}
-
-/** The `settings` bit that unwraps the wrapped native token to the native coin. */
-export const UNWRAP_SETTING = 2n;
+/** The director is the shared one: it matches `FeeRouter.sol` and the vectors of the router (`@zk-bridge/shared`). */
+export type { FeeDirector };
 
 /** Why a message carries no fee offer. */
 export type NoOfferReason =
@@ -41,8 +32,6 @@ export interface ReadFeeOfferInput {
   readonly feeRouter: Address | null;
 }
 
-const FEE_DIRECTOR_BYTES = 128;
-
 /**
  * Reads the fee offer of a message. A sender that wants a runner to deliver relays the tokens to the fee router with a
  * `FeeDirector` as callback data. In the message that is a mediator handler call whose recipient is the router and
@@ -57,11 +46,8 @@ export function readFeeOffer(input: ReadFeeOfferInput): FeeOffer {
   const bytes = (message.callbackData.length - 2) / 2;
   if (bytes === 20) return { kind: "none", reason: "legacy-native-receiver" };
   if (bytes !== FEE_DIRECTOR_BYTES) return { kind: "none", reason: "malformed-fee-director" };
-  const [recipient, settings, limit, multiplier] = decodeAbiParameters(
-    [{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }],
-    message.callbackData,
-  );
-  return { kind: "offer", director: { recipient, settings, limit, multiplier }, value: message.value };
+  const director = decodeFeeDirector(message.callbackData);
+  return { kind: "offer", director, value: message.value };
 }
 
 /** Input of {@link valueFeeInWei}. */
@@ -87,8 +73,8 @@ export function valueFeeInWei(input: ValueFeeInput): FeeValue {
   const token = input.token.toLowerCase();
   if (token === input.wrappedNative.toLowerCase()) return { ok: true, wei: input.fee };
   const valuation = input.valuationsWei[token];
-  if (valuation === undefined) return { ok: false, reason: "no-price-for-fee-token" };
-  return { ok: true, wei: (input.fee * valuation) / 10n ** BigInt(input.decimals) };
+  if (valuation === undefined || valuation <= 0n) return { ok: false, reason: "no-price-for-fee-token" };
+  return { ok: true, wei: tokenUnitsToWeiFloor(input.fee, { tokenValueInWei: valuation, tokenDecimals: input.decimals }) };
 }
 
 /** Input of {@link decideDelivery}. */
