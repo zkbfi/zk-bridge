@@ -15,7 +15,7 @@ export const secretReferenceSchema: z.ZodType<SecretReference> = z.union([
     try {
       return parseReferenceText(text);
     } catch (error) {
-      context.addIssue({ code: "custom", message: error instanceof Error ? error.message : String(error) });
+      context.addIssue({ code: "custom", message: (error as Error).message });
       return z.NEVER;
     }
   }),
@@ -217,7 +217,7 @@ export class BotConfigError extends Error {
 export function parseBotConfig(value: unknown): BotConfig {
   const result = botConfigSchema.safeParse(value);
   if (result.success) return result.data;
-  const issue = result.error.issues[0];
-  const where = issue === undefined ? "config" : `config.${issue.path.join(".")}`;
-  throw new BotConfigError(`${where}: ${issue?.message ?? "invalid"}`);
+  // A failed parse holds at least one issue.
+  const issue = result.error.issues[0] as (typeof result.error.issues)[number];
+  throw new BotConfigError(`config.${issue.path.join(".")}: ${issue.message}`);
 }

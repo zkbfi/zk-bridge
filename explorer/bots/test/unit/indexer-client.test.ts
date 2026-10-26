@@ -13,7 +13,7 @@ afterEach(() => {
 describe("listFeed", () => {
   it("asks for the direction, the statuses and the limit, and returns the page", async () => {
     const item = feedItem({ id: 3 });
-    const fetch = vi.fn(async (_url: URL | string, _init?: RequestInit) => jsonResponse({ items: [item], nextCursor: "next-1" }));
+    const fetch = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) => jsonResponse({ items: [item], nextCursor: "next-1" }));
     const client = createIndexerClient({ baseUrl: "http://127.0.0.1:42069", fetch });
     const page = await client.listFeed({ sourceChainId: 1, destinationChainId: 369, statuses: ["covered", "pending"], limit: 25 });
     expect(page).toEqual({ items: [item], nextCursor: "next-1" });
@@ -23,7 +23,7 @@ describe("listFeed", () => {
   });
 
   it("adds the cursor when the query has one", async () => {
-    const fetch = vi.fn(async (_url: URL | string, _init?: RequestInit) => jsonResponse({ items: [], nextCursor: null }));
+    const fetch = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) => jsonResponse({ items: [], nextCursor: null }));
     const client = createIndexerClient({ baseUrl: "http://127.0.0.1:42069", fetch });
     await client.listFeed({ sourceChainId: 1, destinationChainId: 369, statuses: ["covered"], limit: 5, cursor: "abc" });
     expect((fetch.mock.calls[0]![0] as URL).searchParams.get("cursor")).toBe("abc");
@@ -39,7 +39,7 @@ describe("listFeed", () => {
 
 describe("getMessage", () => {
   it("returns the item with the call data of its message", async () => {
-    const fetch = vi.fn(async (_url: URL | string, _init?: RequestInit) => jsonResponse({ ...feedItem(), data: "0xdeadbeef" }));
+    const fetch = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) => jsonResponse({ ...feedItem(), data: "0xdeadbeef" }));
     const message = await createIndexerClient({ baseUrl: "http://127.0.0.1:42069", fetch }).getMessage(word(7));
     expect(message.data).toBe("0xdeadbeef");
     expect((fetch.mock.calls[0]![0] as URL).pathname).toBe(`/api/messages/${word(7)}`);
