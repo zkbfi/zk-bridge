@@ -37,7 +37,7 @@ export const PROOF_MESSAGE_BYTES = 3 + 32 + 8 + 32 + 8 + 32 + PUBLIC_VALUES_BYTE
 /**
  * The code of each pair in a message. A code never changes meaning, so the list only grows. Zero is never a pair.
  */
-export const PROOF_PAIR_CODES = { "eth-pls": 1 } as const satisfies Readonly<Record<string, number>>;
+export const PROOF_PAIR_CODES = { "eth-pls": 1, "sepolia-pls943": 2 } as const satisfies Readonly<Record<string, number>>;
 
 /** The direction of a proof: which side of the pair is the source of the beacon chain that the proof follows. */
 export type ProofDirection = "first-to-second" | "second-to-first";

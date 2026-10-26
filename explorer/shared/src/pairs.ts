@@ -55,6 +55,13 @@ export const PAIR_DEFINITIONS: readonly PairDefinition[] = [
       { name: "pulsechain", chainId: 369 },
     ],
   },
+  {
+    name: "sepolia-pls943",
+    sides: [
+      { name: "sepolia", chainId: 11155111 },
+      { name: "pulsechain-testnet-v4", chainId: 943 },
+    ],
+  },
 ];
 
 /** The pair that runs when none is named. */

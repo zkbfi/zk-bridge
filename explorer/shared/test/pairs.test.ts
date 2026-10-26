@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describePair, loadPair, otherSide, sideOf } from "../src/pairs.js";
+import { DEFAULT_PAIR_NAME, PAIR_DEFINITIONS, beaconVariableName, describePair, finalityVariableName, loadPair, otherSide, rpcVariableName, sideOf } from "../src/pairs.js";
 
 const section = (chainId: number, seed: string) => ({
   name: `chain-${chainId}`,
@@ -104,5 +104,104 @@ describe("the finality override", () => {
       loadPair({ environment: {}, deployment }).sides[0].finalitySeconds,
     );
     expect(loadPair({ environment: { EXPLORER_FINALITY_SECONDS_1: "0" }, deployment }).sides[0].finalitySeconds).toBe(0);
+  });
+});
+
+describe("the pair registry", () => {
+  it("holds both known pairs and keeps eth-pls the default", () => {
+    expect(PAIR_DEFINITIONS.map((definition) => definition.name)).toEqual(["eth-pls", "sepolia-pls943"]);
+    expect(DEFAULT_PAIR_NAME).toBe("eth-pls");
+    expect(loadPair({ environment: {}, deployment }).name).toBe("eth-pls");
+  });
+
+  it("joins Sepolia (11155111) and PulseChain testnet v4 (943) in the second pair", () => {
+    const definition = PAIR_DEFINITIONS.find((candidate) => candidate.name === "sepolia-pls943");
+    expect(definition?.sides).toEqual([
+      { name: "sepolia", chainId: 11155111 },
+      { name: "pulsechain-testnet-v4", chainId: 943 },
+    ]);
+  });
+
+  it("gives every chain identifier to one pair side only, so that a chain never belongs to two pairs by accident", () => {
+    const chainIds = PAIR_DEFINITIONS.flatMap((definition) => definition.sides.map((side) => side.chainId));
+    expect(new Set(chainIds).size).toBe(chainIds.length);
+  });
+});
+
+describe("the sepolia-pls943 pair", () => {
+  const testnet = { chain_a: section(11155111, "3"), chain_b: section(943, "4") };
+  const load = (deploymentFile: unknown, environment = {}) => loadPair({ pairName: "sepolia-pls943", environment, deployment: deploymentFile });
+
+  it("matches sections by chain identifier and keeps the sides in registry order", () => {
+    const pair = load(testnet);
+    expect(pair.name).toBe("sepolia-pls943");
+    expect(pair.sides.map((side) => [side.name, side.chainId])).toEqual([
+      ["sepolia", 11155111],
+      ["pulsechain-testnet-v4", 943],
+    ]);
+    expect(pair.sides[0].contracts.bridge).toBe(`0x${"3".repeat(40)}`);
+    expect(pair.sides[1].contracts.bridge).toBe(`0x${"4".repeat(40)}`);
+    expect(pair.sides[0].rpcUrl).toBe("http://127.0.0.1:11183111");
+    expect(pair.sides[1].rpcUrl).toBe("http://127.0.0.1:28943");
+  });
+
+  it("gives the same sides when the file lists the sections in the other order", () => {
+    const pair = load({ chain_a: testnet.chain_b, chain_b: testnet.chain_a });
+    expect(pair.sides[0].chainId).toBe(11155111);
+    expect(pair.sides[0].contracts.bridge).toBe(`0x${"3".repeat(40)}`);
+    expect(pair.sides[1].chainId).toBe(943);
+    expect(pair.sides[1].contracts.bridge).toBe(`0x${"4".repeat(40)}`);
+  });
+
+  it("refuses a file that holds the mainnet sections, because the chain identifiers differ", () => {
+    expect(() => load(deployment)).toThrow(/chain 11155111/);
+  });
+
+  it("refuses a file that lacks the section of chain 943 and names that chain", () => {
+    expect(() => load({ chain_a: testnet.chain_a })).toThrow(/chain 943, found 0/);
+  });
+
+  it("takes the default finality from the slot length of each chain: 768 seconds on Sepolia, 640 on chain 943", () => {
+    const pair = load(testnet);
+    expect(pair.sides[0].finalitySeconds).toBe(768);
+    expect(pair.sides[1].finalitySeconds).toBe(640);
+  });
+
+  it("reads the endpoints and the finality override by the new chain identifiers only", () => {
+    const pair = load(testnet, {
+      EXPLORER_RPC_URL_11155111: "https://rpc.example/sepolia",
+      EXPLORER_BEACON_URL_943: "https://beacon.example/943",
+      EXPLORER_FINALITY_SECONDS_943: "99",
+      EXPLORER_FINALITY_SECONDS_369: "5",
+    });
+    expect(pair.sides[0].rpcUrl).toBe("https://rpc.example/sepolia");
+    expect(pair.sides[0].beaconUrl).toBeNull();
+    expect(pair.sides[1].beaconUrl).toBe("https://beacon.example/943");
+    expect(pair.sides[1].finalitySeconds).toBe(99);
+    expect(pair.sides[0].finalitySeconds).toBe(768);
+  });
+
+  it("finds each side by chain identifier", () => {
+    const pair = load(testnet);
+    expect(otherSide(pair, 11155111).chainId).toBe(943);
+    expect(otherSide(pair, 943).chainId).toBe(11155111);
+    expect(() => otherSide(pair, 1)).toThrow(/not in pair sepolia-pls943/);
+  });
+});
+
+describe("an unknown pair", () => {
+  it("lists both known names in the error", () => {
+    expect(() => loadPair({ pairName: "nope", environment: {}, deployment })).toThrow('unknown pair "nope" (known: eth-pls, sepolia-pls943)');
+  });
+});
+
+describe("the variable names", () => {
+  it("name the chain identifier of the new chains", () => {
+    expect(rpcVariableName(11155111)).toBe("EXPLORER_RPC_URL_11155111");
+    expect(rpcVariableName(943)).toBe("EXPLORER_RPC_URL_943");
+    expect(beaconVariableName(11155111)).toBe("EXPLORER_BEACON_URL_11155111");
+    expect(beaconVariableName(943)).toBe("EXPLORER_BEACON_URL_943");
+    expect(finalityVariableName(11155111)).toBe("EXPLORER_FINALITY_SECONDS_11155111");
+    expect(finalityVariableName(943)).toBe("EXPLORER_FINALITY_SECONDS_943");
   });
 });

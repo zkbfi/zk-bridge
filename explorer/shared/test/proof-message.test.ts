@@ -136,6 +136,15 @@ describe("proof message codec", () => {
   });
 });
 
+describe("the pair code of the testnet pair", () => {
+  it("is 2 on the wire (version 1, pair code 2, direction 0), and the message decodes back to the testnet pair, not to eth-pls", () => {
+    const encoded = encodeProofMessage(sample({ pair: "sepolia-pls943" }));
+    expect(encoded.slice(2, 8)).toBe("010200");
+    expect(decodeProofMessage(encoded).pair).toBe("sepolia-pls943");
+    expect(decodeProofMessage(encodeProofMessage(sample())).pair).toBe("eth-pls");
+  });
+});
+
 describe("category names", () => {
   it("names the pair and the direction, as docs/bots.md says", () => {
     expect(proofCategoryName("eth-pls", "first-to-second")).toBe(
@@ -155,6 +164,15 @@ describe("category names", () => {
 
   it("refuses an unknown pair", () => {
     expect(() => proofCategoryName("nope", "first-to-second")).toThrow(ProofMessageError);
+  });
+
+  it("names the testnet pair after its sides, in both directions", () => {
+    expect(proofCategoryName("sepolia-pls943", "first-to-second")).toBe(
+      "zk-bridge/sepolia-pls943/sepolia-to-pulsechain-testnet-v4/light-client-update/v1",
+    );
+    expect(proofCategoryName("sepolia-pls943", "second-to-first")).toBe(
+      "zk-bridge/sepolia-pls943/pulsechain-testnet-v4-to-sepolia/light-client-update/v1",
+    );
   });
 });
 
