@@ -6,6 +6,15 @@
 # It exits with code 1 when any route fails, and with code 2 when the setup is wrong.
 #
 # Usage:  VALVE_KEY=$(op read 'op://valve/valve city unlimited key v3/password') script/testnet/preflight.sh
+#         ENDPOINTS=public script/testnet/preflight.sh
+#
+# ENDPOINTS selects the servers (default: valve):
+#   valve   one.valve.city for both layers. It needs VALVE_KEY.
+#   public  keyless public servers: lodestar-sepolia.chainsafe.io (beacon, Sepolia) and
+#           rpc-testnet-pulsechain.g4mm4.io (beacon under /beacon-api, and execution, chain 943).
+#           The execution layer of Sepolia has no public server in this script: set SEPOLIA_RPC_URL to check it.
+#           Chain 943 serves no light_client routes (its node does not run the light-client server). The script
+#           reports them as INFO and does not count them: the prover assembles updates from debug states there.
 #
 # The key comes only from the environment variable VALVE_KEY. The script never prints it:
 #   - the key reaches curl through a configuration file on standard input, so it is not in any process list;
@@ -15,7 +24,8 @@
 set -uo pipefail
 
 readonly BASE_URL="https://one.valve.city"
-readonly USER_AGENT="Mozilla/5.0 (compatible; preflight/1.0)"
+readonly ENDPOINTS="${ENDPOINTS:-valve}"
+readonly USER_AGENT="Mozilla/5.0 (compatible; zk-bridge/1.0)"
 readonly CHAIN_IDS=(11155111 943)
 readonly SLOTS_PER_PERIOD=8192
 readonly STATE_PROBE_BYTES=64
@@ -51,8 +61,41 @@ request() {
   return 0
 }
 
+# The beacon base address of the current chain, without a trailing slash.
+beacon_base() {
+  if [ "$ENDPOINTS" = "valve" ]; then
+    printf '%s/beacon/%s/%s' "$BASE_URL" "$VALVE_KEY" "$CHAIN_ID"
+    return
+  fi
+  case "$CHAIN_ID" in
+    11155111) printf 'https://lodestar-sepolia.chainsafe.io' ;;
+    943) printf 'https://rpc-testnet-pulsechain.g4mm4.io/beacon-api' ;;
+  esac
+}
+
+# The execution address of the current chain. Empty when none is known.
+rpc_base() {
+  if [ "$ENDPOINTS" = "valve" ]; then
+    printf '%s/rpc/%s/evm/%s' "$BASE_URL" "$VALVE_KEY" "$CHAIN_ID"
+    return
+  fi
+  case "$CHAIN_ID" in
+    11155111) printf '%s' "${SEPOLIA_RPC_URL:-}" ;;
+    943) printf 'https://rpc-testnet-pulsechain.g4mm4.io' ;;
+  esac
+}
+
+# True for a route that the current endpoint is known not to serve, so a 404 is information and not a failure.
+route_is_optional() {
+  [ "$ENDPOINTS" = "public" ] && [ "$CHAIN_ID" = "943" ] && [[ "$1" == light_client* ]]
+}
+
 report() {
   local label="$1" status="$2" verdict="$3" note="${4:-}"
+  if [ "$verdict" = "FAIL" ] && route_is_optional "$label"; then
+    verdict="INFO"
+    note="not served by this endpoint"
+  fi
   [ "$verdict" = "FAIL" ] && fail_count=$((fail_count + 1))
   printf '%-4s %-5s chain=%-8s %s%s\n' "$verdict" "$status" "$CHAIN_ID" "$label" "${note:+  ($note)}"
 }
@@ -60,7 +103,7 @@ report() {
 # Checks one beacon route. Arguments: label, path, accept header, optional jq filter that must be true on the body.
 check_beacon() {
   local label="$1" path="$2" accept="$3" filter="${4:-}" status
-  status=$(request GET "$BASE_URL/beacon/$VALVE_KEY/$CHAIN_ID$path" "$accept")
+  status=$(request GET "$(beacon_base)$path" "$accept")
   if [ "$status" != "200" ]; then
     report "$label $path" "${status:-000}" FAIL
     return
@@ -73,8 +116,13 @@ check_beacon() {
 }
 
 check_rpc() {
-  local status answer
-  status=$(request POST "$BASE_URL/rpc/$VALVE_KEY/evm/$CHAIN_ID" "application/json" \
+  local status answer endpoint
+  endpoint=$(rpc_base)
+  if [ -z "$endpoint" ]; then
+    report "rpc eth_chainId" "n/a" INFO "no execution endpoint known; set SEPOLIA_RPC_URL"
+    return
+  fi
+  status=$(request POST "$endpoint" "application/json" \
     '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}')
   if [ "$status" != "200" ]; then
     report "rpc eth_chainId" "${status:-000}" FAIL
@@ -133,7 +181,8 @@ check_chain() {
 }
 
 main() {
-  if [ -z "${VALVE_KEY:-}" ]; then
+  case "$ENDPOINTS" in valve | public) ;; *) echo "ENDPOINTS must be valve or public" >&2; return 2 ;; esac
+  if [ "$ENDPOINTS" = "valve" ] && [ -z "${VALVE_KEY:-}" ]; then
     echo "VALVE_KEY is not set. Run: VALVE_KEY=\$(op read 'op://valve/valve city unlimited key v3/password') $0" >&2
     return 2
   fi
