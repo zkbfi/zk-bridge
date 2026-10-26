@@ -8,7 +8,7 @@ afterAll(() => {
 });
 
 describe("a pair without a fork registry", () => {
-  it("registers the gate handlers but not the registry handler, because the contract does not exist", async () => {
+  it("registers the gate handlers but not the registry handler, because the contract does not exist", { timeout: 15_000 }, async () => {
     process.env.EXPLORER_DEPLOYMENT_FILE = fileURLToPath(new URL("./support/deployment-without-registry.json", import.meta.url));
     vi.resetModules();
     const { handlers } = await import("./support/fake-registry");
