@@ -1,4 +1,4 @@
-//! The command line: `prove`, `evidence` and `verify`.
+//! The command line: `prove`, `evidence`, `verify` and the helpers `checkpoint`, `opening-proof` and `deployment-file`.
 //!
 //! All three commands are stateless. They read configuration, chains and a beacon node, print or post one JSON object, and exit.
 //! Neither one takes a key, sends a transaction or opens a file for writing. The only secrets they use are named by
@@ -11,6 +11,7 @@
 use crate::beacon::http::HttpBeaconSource;
 use crate::beacon::StoredHead;
 use crate::chain::ChainClient;
+use crate::checkpoint::build_checkpoint;
 use crate::config::{
     Config, DestinationConfig, HandoffTarget, ProverBackend, ProverConfig, RouteConfig,
 };
@@ -74,6 +75,31 @@ pub enum Command {
     /// before it spends gas on `update`. It prints one JSON object and exits with code 0 when the proof verifies. It
     /// exits with code 1 and an error message when the proof does not verify, or when an argument is not valid.
     Verify(VerifyArguments),
+    /// Print the checkpoint values that a new light client needs, as one JSON object.
+    ///
+    /// The values are the slot and the root of one finalized header, the hashes of its current and next sync committee,
+    /// and the chain facts of the deploy configuration. All come from the same finalized root. The command reads the
+    /// beacon API only: first the light-client bootstrap route, and the finalized state when the node answers 404 there.
+    /// Sepolia fails with the Gloas refusal of `lc-core` and prints nothing.
+    Checkpoint(CheckpointArguments),
+}
+
+/// The arguments of `checkpoint`.
+#[derive(Debug, Args)]
+pub struct CheckpointArguments {
+    /// The route of the configuration: its source beacon API and chain are used. It may be left out when the file has
+    /// exactly one route and no `--beacon-url` is given.
+    #[arg(long, conflicts_with_all = ["beacon_url", "chain"])]
+    pub route: Option<String>,
+    /// The beacon API of the chain, when no route is given. It may have a path prefix.
+    #[arg(long, requires = "chain")]
+    pub beacon_url: Option<String>,
+    /// The chain kind (`ethereum`, `pulsechain`, `sepolia` or `pulsechain-testnet-v4`), when no route is given.
+    #[arg(long, requires = "beacon_url")]
+    pub chain: Option<String>,
+    /// The root of the finalized header to use. Default: the newest finalized header of the node.
+    #[arg(long)]
+    pub finalized_root: Option<String>,
 }
 
 /// The arguments of `verify`.
@@ -170,12 +196,7 @@ fn plan_prove(config: &Config, arguments: &ProveArguments) -> Result<ProvePlan> 
     let (route_name, source_url, chain, destination) = match &arguments.beacon_url {
         Some(url) => {
             let name = arguments.chain.as_deref().unwrap_or_default();
-            let chain = ChainKind::from_name(name).ok_or_else(|| {
-                Error::Usage(format!(
-                    "--chain: unknown chain `{name}`; the known chains are {}",
-                    ChainKind::known_names()
-                ))
-            })?;
+            let chain = parse_chain(name)?;
             (EXPLICIT_HEAD_ROUTE.to_string(), url.clone(), chain, None)
         }
         None => {
@@ -487,6 +508,57 @@ fn run_verify(arguments: &VerifyArguments, out: &mut dyn std::io::Write) -> Resu
     Ok(0)
 }
 
+/// Prints the checkpoint of a beacon API as one JSON object.
+///
+/// # Errors
+/// `Error::Usage` for flags that do not fit. The errors of [`crate::checkpoint::build_checkpoint`] otherwise.
+fn run_checkpoint(
+    config: Option<&Config>,
+    arguments: &CheckpointArguments,
+    out: &mut dyn std::io::Write,
+) -> Result<i32> {
+    let (url, chain) = match (&arguments.beacon_url, config) {
+        (Some(url), _) => (
+            url.clone(),
+            parse_chain(arguments.chain.as_deref().unwrap_or_default())?,
+        ),
+        (None, Some(config)) => {
+            let (_, route) = config.route(arguments.route.as_deref())?;
+            (route.source.beacon_url.clone(), route.source.chain_kind()?)
+        }
+        (None, None) => {
+            return Err(Error::Usage(
+                "checkpoint needs a route or --beacon-url".into(),
+            ))
+        }
+    };
+    let finalized_root = arguments
+        .finalized_root
+        .as_deref()
+        .map(|text| parse_hash(text, "--finalized-root"))
+        .transpose()?;
+    let client = HttpClient::new(&url);
+    let report = build_checkpoint(&client, chain, finalized_root)?;
+    write_json(out, &report.to_json())?;
+    Ok(0)
+}
+
+/// Writes one JSON object and a newline.
+fn write_json(out: &mut dyn std::io::Write, value: &serde_json::Value) -> Result<()> {
+    writeln!(out, "{value}")
+        .map_err(|error| Error::Usage(format!("cannot write the result: {error}")))
+}
+
+/// The chain kind named by a flag, or a usage error that lists the known names.
+fn parse_chain(name: &str) -> Result<ChainKind> {
+    ChainKind::from_name(name).ok_or_else(|| {
+        Error::Usage(format!(
+            "--chain: unknown chain `{name}`; the known chains are {}",
+            ChainKind::known_names()
+        ))
+    })
+}
+
 /// Help and version requests are no errors: their text goes to `out` and the exit code is 0. Any other parse failure is a
 /// usage error.
 fn report_parse_error(error: &clap::Error, out: &mut dyn std::io::Write) -> Result<i32> {
@@ -518,10 +590,17 @@ pub fn run(
     if let Command::Verify(verify) = &cli.command {
         return run_verify(verify, out);
     }
+    // `checkpoint` with a beacon URL needs no file either.
+    if let Command::Checkpoint(checkpoint) = &cli.command {
+        if checkpoint.beacon_url.is_some() {
+            return run_checkpoint(None, checkpoint, out);
+        }
+    }
     let config = Config::load_file(&cli.config, lookup)?;
     match &cli.command {
         Command::Prove(prove) => run_prove(&config, prove, lookup, out),
         Command::Evidence(evidence) => run_evidence(&config, evidence, out),
+        Command::Checkpoint(checkpoint) => run_checkpoint(Some(&config), checkpoint, out),
         Command::Verify(_) => unreachable!("verify returned above"),
     }
 }
@@ -829,5 +908,64 @@ mod tests {
         let (outcome, _) = verify_outcome(&key, &values, "0xzz");
         let message = outcome.unwrap_err().to_string();
         assert!(message.contains("--proof"), "{message}");
+    }
+
+    /// Claim: `checkpoint` takes a route or a beacon URL with a chain, never both. An unknown chain is refused with the list of
+    /// known names, and a bad root is refused before any request. Why it matters: a wrong chain would check the genesis
+    /// of another chain and print values that fit no contract.
+    #[test]
+    fn checkpoint_flags_fit_together() {
+        let parse = |parts: &[&str]| {
+            let mut all = vec!["checkpoint"];
+            all.extend_from_slice(parts);
+            Cli::try_parse_from(arguments(&all))
+        };
+        assert!(parse(&[
+            "--route",
+            "a",
+            "--beacon-url",
+            "http://x",
+            "--chain",
+            "sepolia"
+        ])
+        .is_err());
+        assert!(parse(&["--beacon-url", "http://x"]).is_err());
+        assert!(parse(&["--chain", "sepolia"]).is_err());
+        assert!(parse(&["--beacon-url", "http://x", "--chain", "sepolia"]).is_ok());
+        let mut out = Vec::new();
+        let error = run(
+            arguments(&[
+                "checkpoint",
+                "--beacon-url",
+                "http://127.0.0.1:1",
+                "--chain",
+                "goerli",
+            ]),
+            &|_| None,
+            &mut out,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("goerli") && error.contains("pulsechain-testnet-v4"),
+            "{error}"
+        );
+        let error = run(
+            arguments(&[
+                "checkpoint",
+                "--beacon-url",
+                "http://127.0.0.1:1",
+                "--chain",
+                "sepolia",
+                "--finalized-root",
+                "0x12",
+            ]),
+            &|_| None,
+            &mut out,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("--finalized-root"), "{error}");
+        assert!(out.is_empty());
     }
 }

@@ -39,6 +39,10 @@ required-features = ["signed-beacon"]
 name = "evidence"
 required-features = ["signed-beacon"]
 
+[[test]]
+name = "checkpoint"
+required-features = ["signed-beacon"]
+
 [features]
 # `signed-beacon` builds a beacon chain over local blocks with real signatures, for tests and for runs with real proofs. It
 # needs the test crate `lc-testkit` for its synthetic beacon data. A production build leaves it out:

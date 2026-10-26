@@ -22,6 +22,7 @@
 
 pub mod beacon;
 pub mod chain;
+pub mod checkpoint;
 pub mod cli;
 pub mod config;
 pub mod contracts;

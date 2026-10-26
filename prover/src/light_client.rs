@@ -837,6 +837,67 @@ pub fn store_from_bootstrap_json(data: &Value) -> Result<LightClientStore> {
     })
 }
 
+/// A parsed `light_client/bootstrap` answer: the beacon header, the current committee and the branch that ties the
+/// committee to the state root of the header.
+#[derive(Clone, Debug)]
+pub struct BootstrapView {
+    /// The beacon header of the bootstrap.
+    pub header: BeaconBlockHeader,
+    /// The current sync committee of the header.
+    pub committee: SyncCommittee,
+    /// The branch from the committee to `header.state_root`.
+    pub branch: Vec<B256>,
+}
+
+/// Parses the `data` object of a `light_client/bootstrap` answer. It checks nothing else: see
+/// [`BootstrapView::verify_committee`].
+///
+/// # Errors
+/// `Error::Malformed` when the object lacks a field.
+pub fn bootstrap_from_json(data: &Value) -> Result<BootstrapView> {
+    guarded("bootstrap", || {
+        let bootstrap = lc_core::json::bootstrap(data);
+        BootstrapView {
+            header: bootstrap.header.beacon,
+            committee: bootstrap.committee,
+            branch: bootstrap.branch,
+        }
+    })
+}
+
+impl BootstrapView {
+    /// Checks that the committee belongs to the state root of the header, with the committee position of the fork at the
+    /// slot of the header. Returns the committee hash.
+    ///
+    /// # Errors
+    /// `Error::VerificationRefused` for a Gloas slot (the refusal of `lc-core`) or when the branch does not verify.
+    pub fn verify_committee(&self, chain: ChainKind) -> Result<B256> {
+        let layout = state_layout_at(chain, self.header.slot)?;
+        let hash = committee_hash(&self.committee)?;
+        if !lc_core::ssz::is_valid_exact_branch(
+            &hash,
+            &self.branch,
+            layout.current_sync_committee_gindex,
+            &self.header.state_root,
+        ) {
+            return Err(Error::VerificationRefused(
+                "the bootstrap committee does not belong to the state root of its header".into(),
+            ));
+        }
+        Ok(hash)
+    }
+}
+
+/// The state layout of the fork that `chain` has at `slot`.
+///
+/// # Errors
+/// `Error::VerificationRefused` with the text of `lc-core` when the fork is Gloas or has no light-client layout. The
+/// prover never reads a Gloas object with another layout.
+pub fn state_layout_at(chain: ChainKind, slot: u64) -> Result<lc_core::layout::StateLayout> {
+    lc_core::layout::state_layout_for_fork(chain.spec().fork_at_slot(slot))
+        .map_err(|error| Error::VerificationRefused(error.to_string()))
+}
+
 /// The `slot` of a beacon header JSON-free pair, used by the beacon sources for readable errors.
 pub fn describe_header(header: &BeaconBlockHeader) -> String {
     format!("slot {} root {:#x}", header.slot, header.hash_tree_root())
