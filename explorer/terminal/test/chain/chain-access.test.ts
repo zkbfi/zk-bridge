@@ -158,7 +158,7 @@ describe('createRpcChainAccess', () => {
   test('the default client factory builds a viem client for the chain, with its id, name and native symbol, and sends nothing', () => {
     const access = createRpcChainAccess(FIXTURE_PAIR, urls)
     const client = access.flowClient(369) as unknown as {
-      chain: { id: number; name: string; nativeCurrency: { symbol: string; decimals: number }; rpcUrls: { default: { http: string[] } } }
+      chain: { id: number; name: string; nativeCurrency: { name: string; symbol: string; decimals: number }; rpcUrls: { default: { http: string[] } } }
     }
     expect(client.chain.id).toBe(369)
     expect(client.chain.name).toBe('PulseChain')
