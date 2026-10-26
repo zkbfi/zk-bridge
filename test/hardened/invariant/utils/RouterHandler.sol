@@ -47,10 +47,10 @@ struct Item {
 /// the contracts state.
 /// @dev What it does. Senders relay native tokens and bridged copies both ways, through the plain forms, the forms with a
 /// fallback, the forms with a call, a delivery router, the wrapped native router, and the wrap and relay form. Messages
-/// wait in a list and arrive in random order, by three paths: directly, through `executeMessageWithRunner` with the
-/// runner as origin, and in a batch through Multicall3 with the runner as origin. Time moves, accounts wrap and unwrap the
+/// wait in a list and arrive in random order, by three paths: directly, through `executeMessage` of a router from
+/// an outside caller (caller and origin the same), and in a batch through Multicall3 from an outside caller. Time moves, accounts wrap and unwrap the
 /// coin, accounts are denied and allowed, claims are paid, fees are collected, and strangers send tokens to a mediator.
-/// An attacker tries the runner entry, the callback entry and the coin entry of the routers.
+/// An attacker tries the callback entry and the coin entry of the routers.
 ///
 /// What it claims. The mock bridge reads no proof, so the handler never delivers a message twice itself. It counts the
 /// executions of each message from the `AffirmationCompleted` logs, as a check on itself. The handler does not claim to
@@ -321,20 +321,16 @@ contract RouterHandler is RouterWorld {
         refusingReceiver.setRefuse(!refusingReceiver.refuse());
     }
 
-    /// @notice An attacker tries the entries that only the runner, the reward address or the mediator may use. Each try
-    /// must revert, and no message may execute.
+    /// @notice An attacker tries the entries that only the mediator or the wrapped token may use. Each try must
+    /// revert, and no message may execute.
     function attack(uint8 kindSeed, uint8 routerSeed) external observed {
         uint256 chain = routerSeed % 2;
         DeliveryRouter router = deliveryRouterAt(chain, (routerSeed >> 1) % ROUTERS_PER_CHAIN);
-        MessageBridge.MessageProof memory proof = bridgeOf(chain).proofOf(bridgeOf(1 - chain), 0);
-        uint256 kind = kindSeed % 6;
+        uint256 kind = kindSeed % 3;
         uint256 executedBefore = _executionTotal();
-        if (kind == 0) _attackRunnerEntry(router, proof, stranger, router.rewardAddress());
-        if (kind == 1) _attackRunnerEntry(router, proof, runner, stranger);
-        if (kind == 2) _attackCallback(address(router));
-        if (kind == 3) _attackCoinEntry(address(router));
-        if (kind == 4) _attackThroughMulticall(router, proof);
-        if (kind == 5) _attackCallback(address(wethRouters[chain]));
+        if (kind == 0) _attackCallback(address(router));
+        if (kind == 1) _attackCoinEntry(address(router));
+        if (kind == 2) _attackCallback(address(wethRouters[chain]));
         if (_executionTotal() != executedBefore) _violate("an attack executed a message");
     }
 
@@ -670,9 +666,10 @@ contract RouterHandler is RouterWorld {
         if (path == Path.RouterSingle) {
             routerDeliveries++;
             Multicall3.Call3 memory call = _routerCall(items[0], bridge);
-            vm.prank(runner, runner);
+            address caller = _callerFor(items[0].messageId);
+            vm.prank(caller, caller);
             (bool ok,) = call.target.call(call.callData);
-            if (!ok) _violate("a router refused the runner");
+            if (!ok) _violate("a router refused a caller");
             return;
         }
         batchDeliveries++;
@@ -680,11 +677,17 @@ contract RouterHandler is RouterWorld {
         for (uint256 i = 0; i < items.length; i++) {
             calls[i] = _routerCall(items[i], bridge);
         }
-        vm.prank(runner, runner);
+        address batcher = _callerFor(items[0].messageId);
+        vm.prank(batcher, batcher);
         Multicall3.Result[] memory results = multicall.aggregate3(calls);
         for (uint256 i = 0; i < results.length; i++) {
-            if (!results[i].success) _violate("a router refused the runner in a batch");
+            if (!results[i].success) _violate("a router refused a caller in a batch");
         }
+    }
+
+    /// @dev The outside account that makes the call for a message. Any account may, so the choice follows the message.
+    function _callerFor(uint256 messageId) private view returns (address) {
+        return callers[messageId % callers.length];
     }
 
     function _routerCall(Item memory item, MockAMB bridge) private view returns (Multicall3.Call3 memory) {
@@ -692,7 +695,7 @@ contract RouterHandler is RouterWorld {
         DeliveryRouter router = DeliveryRouter(payable(item.executor));
         MessageBridge.MessageProof memory proof = bridge.proofOf(bridgeOf(message.sourceChain), message.index);
         return Multicall3.Call3(
-            item.executor, true, abi.encodeCall(router.executeMessageWithRunner, (proof, router.rewardAddress()))
+            item.executor, true, abi.encodeCall(router.executeMessage, (proof))
         );
     }
 
@@ -785,7 +788,9 @@ contract RouterHandler is RouterWorld {
             if (gained > allowed) _violate("a reward address gained more than the terms allow");
             if (gained > 0) tipsPaid++;
         }
-        if (holding(u, runner) != 0) _violate("the runner received tokens");
+        for (uint256 i = 0; i < callers.length; i++) {
+            if (holding(u, callers[i]) != 0) _violate("a caller received tokens");
+        }
         if (holding(u, stranger) != 0) _violate("a stranger received tokens");
     }
 
@@ -882,21 +887,6 @@ contract RouterHandler is RouterWorld {
 
     // ------------------------------------------------------------------------------------------------- attacks
 
-    /// @dev A call of `executeMessageWithRunner` with an origin or a reward address that the router refuses.
-    function _attackRunnerEntry(
-        DeliveryRouter router,
-        MessageBridge.MessageProof memory proof,
-        address origin,
-        address reward
-    ) private {
-        vm.prank(origin, origin);
-        try router.executeMessageWithRunner(proof, reward) {
-            _violate("a refused origin or reward address ran a message");
-        } catch {
-            attacksRefused++;
-        }
-    }
-
     /// @dev A call of `onTokenBridged` from a stranger. Both routers accept the callback of their mediator only.
     function _attackCallback(address router) private {
         bytes memory callData = abi.encodeWithSignature("onTokenBridged(address,uint256,bytes)", tokenAt(1), 1, "");
@@ -913,17 +903,6 @@ contract RouterHandler is RouterWorld {
         (bool ok,) = router.call{value: 1}("");
         if (ok) _violate("a stranger sent the coin to a router");
         if (!ok) attacksRefused++;
-    }
-
-    function _attackThroughMulticall(DeliveryRouter router, MessageBridge.MessageProof memory proof) private {
-        Multicall3.Call3[] memory calls = new Multicall3.Call3[](1);
-        calls[0] = Multicall3.Call3(
-            address(router), true, abi.encodeCall(router.executeMessageWithRunner, (proof, router.rewardAddress()))
-        );
-        vm.prank(stranger, stranger);
-        Multicall3.Result[] memory results = multicall.aggregate3(calls);
-        if (results[0].success) _violate("a batch under a stranger origin ran a message");
-        if (!results[0].success) attacksRefused++;
     }
 
     function _executionTotal() private view returns (uint256 total) {

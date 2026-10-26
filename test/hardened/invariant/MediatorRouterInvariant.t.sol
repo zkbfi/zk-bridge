@@ -99,7 +99,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
     /// Claim: a message executes at most once, nothing fails, and the handler broke no rule. Shows: the count of
     /// executions of every message is at most one, no delivery call failed, no message identifier repeated, and the
     /// handler recorded no violation: every delivery split its value exactly into recipient, tip, hand-off and protocol fee, no tip
-    /// passed the terms, no stranger origin or reward address ran a message, and the fee rate never rose. Matters: the
+    /// passed the terms, no caller received a token, and the fee rate never rose. Matters: the
     /// bridge marks a message delivered whether or not the call succeeded, so a failed call loses tokens.
     function invariant_noViolationAndNoRepeatedExecution() public view {
         for (uint256 i = 0; i < handler.messageCount(); i++) {
@@ -111,7 +111,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
 
     /// Claim: a delivery router holds exactly what it recorded, no coin, and no run stays open. Shows: after every action,
     /// each of the six delivery routers holds, in each of the ten tokens, a balance that equals the sum of its claimable
-    /// records (only the failed delivery address can have one, and the balance equals its own `totalClaimable`), exactly; it holds none of the coin; and its runner slot is at
+    /// records (only the failed delivery address can have one, and the balance equals its own `totalClaimable`), exactly; it holds none of the coin; and its delivery slot is at
     /// most 1 (not running). The two wrapped native routers hold nothing. Matters: the routers have no owner and no way
     /// to recover a token. A balance with no record behind it would be lost for good, and a record with no balance
     /// behind it would take from another claimant.
@@ -126,19 +126,22 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
                     assertEq(stated, sum, "totalClaimable differs from the sum of the claimable balances");
                 }
                 assertEq(address(router).balance, 0, "a router holds the coin");
-                assertLe(uint256(vm.load(address(router), router.RUNNER_SLOT())), 1, "the runner slot is open");
+                assertLe(uint256(vm.load(address(router), router.DELIVERY_SLOT())), 1, "the delivery slot is open");
             }
             _assertEmpty(address(handler.wethRouterAt(chain)));
         }
     }
 
-    /// Claim: only the immutable reward address earns, and the hot runner earns nothing. Shows: the runner, a stranger
-    /// and every router are never paid by any delivery (the handler reports a breach as a violation), and the routers
-    /// name their reward address and runner as the immutables that they were built with. Matters: a stolen runner key
-    /// must not redirect a tip.
-    function invariant_theRunnerAndStrangersHoldNothing() public view {
+    /// Claim: the tip, whenever taken, goes to the immutable reward address, and a caller earns nothing. Shows: no
+    /// outside caller and no stranger is ever paid by any delivery, whoever calls and by whichever path (the handler
+    /// reports a breach as a violation, and a direct delivery pays no tip), and the routers name the reward address and
+    /// the failed delivery address that they were built with. Matters: any account may call a router, so a tip that
+    /// followed the caller would be a prize for front-running.
+    function invariant_theTipGoesToTheRewardAddressAndCallersHoldNothing() public view {
         for (uint256 index = 0; index < 10; index++) {
-            assertEq(handler.holding(index, handler.runnerAddress()), 0, "the runner");
+            for (uint256 c = 0; c < handler.callerCount(); c++) {
+                assertEq(handler.holding(index, handler.callerAt(c)), 0, "a caller");
+            }
             assertEq(handler.holding(index, handler.strangerAddress()), 0, "a stranger");
         }
         for (uint256 chain = 0; chain < 2; chain++) {

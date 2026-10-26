@@ -35,7 +35,7 @@ contract CountingTarget {
 
 /// @notice Drives the real `MessageBridge` pair of `WorldSupport` with real proofs. Messages go both ways: application
 /// messages, tokens to accounts and tokens to a `DeliveryRouter` with a tip. Deliveries come in four forms: a direct call, the
-/// router with the runner as origin, a Multicall3 batch with the runner as origin, and replays of delivered messages. A
+/// router from an outside caller, a Multicall3 batch from an outside caller, and replays of delivered messages. A
 /// proof is built once at send time, and the handler delivers it at any later point, in any order.
 /// @dev What this handler claims. It counts every execution that did not revert, for each identifier (`executions`). The
 /// target keeps its own count. The invariants require that both stay at most one. A refused attempt must change no
@@ -60,7 +60,8 @@ contract RealBridgeHandler is WorldSupport {
     DeliveryRouter public routerA;
     DeliveryRouter public routerB;
     Multicall3 public multicall;
-    address public runner = makeAddr("real bridge runner");
+    address public caller = makeAddr("real bridge caller");
+    address public outsider = makeAddr("real bridge outsider");
     address public rewardA = makeAddr("real bridge reward on A");
     address public rewardB = makeAddr("real bridge reward on B");
     address public carol = makeAddr("carol");
@@ -88,8 +89,8 @@ contract RealBridgeHandler is WorldSupport {
     uint256 public replayExecutions;
     uint256 public wrongBridgeAttempts;
     uint256 public wrongBridgeExecutions;
-    uint256 public strangerAttempts;
-    uint256 public strangerExecutions;
+    uint256 public outsiderAttempts;
+    uint256 public outsiderDeliveries;
     uint256 public duplicateIdentifiers;
     uint256 public outOfOrderDeliveries;
 
@@ -98,8 +99,8 @@ contract RealBridgeHandler is WorldSupport {
         nativeToken = new MockERC20("Token A", "TKA");
         countingTarget = new CountingTarget();
         multicall = new Multicall3();
-        routerA = new DeliveryRouter(ITokenMediator(address(mediatorA)), IWETH(address(new MockWrappedNative())), runner, rewardA, rewardA);
-        routerB = new DeliveryRouter(ITokenMediator(address(mediatorB)), IWETH(address(new MockWrappedNative())), runner, rewardB, rewardB);
+        routerA = new DeliveryRouter(ITokenMediator(address(mediatorA)), IWETH(address(new MockWrappedNative())), rewardA, rewardA);
+        routerB = new DeliveryRouter(ITokenMediator(address(mediatorB)), IWETH(address(new MockWrappedNative())), rewardB, rewardB);
         _actors.push(alice);
         _actors.push(bob);
         _actors.push(carol);
@@ -139,7 +140,7 @@ contract RealBridgeHandler is WorldSupport {
 
     /// @notice Every account that can hold a token of this world, apart from the mediators.
     function holders() public view returns (address[] memory list) {
-        list = new address[](_actors.length + 5);
+        list = new address[](_actors.length + 6);
         for (uint256 i = 0; i < _actors.length; i++) {
             list[i] = _actors[i];
         }
@@ -147,7 +148,8 @@ contract RealBridgeHandler is WorldSupport {
         list[_actors.length + 1] = address(routerB);
         list[_actors.length + 2] = rewardA;
         list[_actors.length + 3] = rewardB;
-        list[_actors.length + 4] = runner;
+        list[_actors.length + 4] = caller;
+        list[_actors.length + 5] = outsider;
     }
 
     // ----------------------------------------------------------------------------------------------------- sending
@@ -236,30 +238,29 @@ contract RealBridgeHandler is WorldSupport {
         directDeliveries++;
     }
 
-    /// @notice Delivers through the router, with the runner as the origin of the transaction.
+    /// @notice Delivers through the router, with `caller` as the caller and the origin of the transaction.
     function deliverViaRouter(uint256 seed) external {
         (bool found, uint256 index) = _pickByExecutions(seed, 0);
         if (!found) return;
         _noteOrder(index);
-        if (!_tryRouter(index, runner)) return;
+        if (!_tryRouter(index, caller)) return;
         _recordRouterExecution(index);
         routerDeliveries++;
     }
 
-    /// @notice Delivers through the router with an origin that is not the runner. The router must refuse.
-    function deliverViaRouterAsStranger(uint256 seed) external {
+    /// @notice Delivers through the router from another account. Any account may, so the delivery must succeed and pay
+    /// the same tip to the same reward address as a delivery from `caller` would.
+    function deliverViaRouterAsOutsider(uint256 seed) external {
         (bool found, uint256 index) = _pickByExecutions(seed, 0);
         if (!found) return;
-        bytes32 before = _fingerprint();
-        strangerAttempts++;
-        if (_tryRouter(index, makeAddr("stranger"))) {
-            strangerExecutions++;
-            executions[_sent[index].messageId]++;
-        }
-        if (_fingerprint() != before) replayChanges++;
+        _noteOrder(index);
+        outsiderAttempts++;
+        if (!_tryRouter(index, outsider)) return;
+        _recordRouterExecution(index);
+        outsiderDeliveries++;
     }
 
-    /// @notice Runs a Multicall3 batch of deliveries with the runner as origin. The batch may repeat a message, and may hold
+    /// @notice Runs a Multicall3 batch of deliveries from `caller`. The batch may repeat a message, and may hold
     /// messages that are delivered already. All its messages go to the same chain, the one of the first pick.
     function deliverViaBatch(uint256 firstSeed, uint256 secondSeed, uint256 thirdSeed, uint256 fourthSeed) external {
         if (_sent.length == 0) return;
@@ -282,7 +283,7 @@ contract RealBridgeHandler is WorldSupport {
         uint256 path = pathSeed % 3;
         bool executed;
         if (path == 0) executed = _tryDirect(index);
-        if (path == 1) executed = _tryRouter(index, runner);
+        if (path == 1) executed = _tryRouter(index, caller);
         if (executed && path != 2) executions[_sent[index].messageId]++;
         if (path == 2) {
             uint256[] memory single = new uint256[](1);
@@ -351,7 +352,7 @@ contract RealBridgeHandler is WorldSupport {
         if (modeSeed % 2 == 0) {
             uint256 multiplier = bound(tipSeed, 0.001 ether, 0.05 ether);
             tip = amount * multiplier / 1 ether;
-            data = abi.encode(DeliveryRouter.FeeDirector(receiver, router.SHARE_OF_VALUE(), 0, multiplier));
+            data = abi.encode(DeliveryRouter.FeeDirector(receiver, router.MULTIPLIER_OF_TOTAL(), 0, multiplier));
             return (data, tip);
         }
         tip = bound(tipSeed, 1, amount);
@@ -415,10 +416,9 @@ contract RealBridgeHandler is WorldSupport {
         Sent storage message = _sent[index];
         DeliveryRouter router = _routerOf(message);
         MessageBridge.MessageProof memory proof = abi.decode(message.proof, (MessageBridge.MessageProof));
-        address reward = router.rewardAddress();
         vm.chainId(_destinationOf(message).localChainId());
         vm.prank(origin, origin);
-        try router.executeMessageWithRunner(proof, reward) {
+        try router.executeMessage(proof) {
             return true;
         } catch {
             return false;
@@ -453,16 +453,15 @@ contract RealBridgeHandler is WorldSupport {
     function _runBatch(uint256[] memory indexes) private returns (uint256 executed) {
         Sent storage first = _sent[indexes[0]];
         DeliveryRouter router = _routerOf(first);
-        address reward = router.rewardAddress();
         Multicall3.Call3[] memory calls = new Multicall3.Call3[](indexes.length);
         for (uint256 i = 0; i < indexes.length; i++) {
             MessageBridge.MessageProof memory proof = abi.decode(_sent[indexes[i]].proof, (MessageBridge.MessageProof));
             calls[i] = Multicall3.Call3(
-                address(router), true, abi.encodeCall(DeliveryRouter.executeMessageWithRunner, (proof, reward))
+                address(router), true, abi.encodeCall(DeliveryRouter.executeMessage, (proof))
             );
         }
         vm.chainId(_destinationOf(first).localChainId());
-        vm.prank(runner, runner);
+        vm.prank(caller, caller);
         Multicall3.Result[] memory results = multicall.aggregate3(calls);
         batchesRun++;
         for (uint256 i = 0; i < results.length; i++) {
@@ -519,7 +518,7 @@ contract RealBridgeInvariantTest is StdInvariant, Test {
         selectors[4] = RealBridgeHandler.relayCopyBackToRouter.selector;
         selectors[5] = RealBridgeHandler.deliverDirect.selector;
         selectors[6] = RealBridgeHandler.deliverViaRouter.selector;
-        selectors[7] = RealBridgeHandler.deliverViaRouterAsStranger.selector;
+        selectors[7] = RealBridgeHandler.deliverViaRouterAsOutsider.selector;
         selectors[8] = RealBridgeHandler.deliverViaBatch.selector;
         selectors[9] = RealBridgeHandler.replay.selector;
         selectors[10] = RealBridgeHandler.deliverOnWrongBridge.selector;
@@ -547,14 +546,12 @@ contract RealBridgeInvariantTest is StdInvariant, Test {
         }
     }
 
-    /// Claim: no refused attempt succeeds or changes a balance. Shows: a replay, a call from a stranger origin and a proof
-    /// on the wrong bridge never execute, and the balances of the mediators, the routers, the reward addresses, the
-    /// accounts and the runner are the same before and after every such attempt. Matters: a replay that moved tokens
+    /// Claim: no refused attempt succeeds or changes a balance. Shows: a replay and a proof on the wrong bridge never
+    /// execute, and the balances of the mediators, the routers, the reward addresses, the accounts and the callers are the same before and after every such attempt. Matters: a replay that moved tokens
     /// would be a double spend even if the bridge reported a revert.
     function invariant_refusedAttemptsChangeNothing() public view {
         assertEq(handler.replayExecutions(), 0, "a replay executed");
         assertEq(handler.replayChanges(), 0, "a refused attempt changed a balance");
-        assertEq(handler.strangerExecutions(), 0, "a stranger origin executed through the router");
         assertEq(handler.wrongBridgeExecutions(), 0, "a proof executed on the wrong bridge");
     }
 
@@ -599,7 +596,7 @@ contract RealBridgeInvariantTest is StdInvariant, Test {
     }
 
     /// Claim: a router keeps nothing. Shows: after every action neither router holds the token, the copy or the native
-    /// coin, and the runner slot is idle (at most one). Matters: a token that stays in a router has no owner to recover
+    /// coin, and the delivery slot is idle (at most one). Matters: a token that stays in a router has no owner to recover
     /// it, and a slot left in use would block the next run.
     function invariant_routersHoldNothing() public view {
         address token = address(handler.nativeToken());
@@ -609,26 +606,29 @@ contract RealBridgeInvariantTest is StdInvariant, Test {
             assertEq(IERC20(token).balanceOf(routers[i]), 0, "the router holds the token");
             assertEq(routers[i].balance, 0, "the router holds the native coin");
             if (copyToken != address(0)) assertEq(IERC20(copyToken).balanceOf(routers[i]), 0, "the router holds the copy");
-            assertLe(uint256(vm.load(routers[i], DeliveryRouter(payable(routers[i])).RUNNER_SLOT())), 1, "the slot is idle");
+            assertLe(uint256(vm.load(routers[i], DeliveryRouter(payable(routers[i])).DELIVERY_SLOT())), 1, "the slot is idle");
         }
     }
 
     /// Claim: only the reward address receives tips, and exactly the tips of the router deliveries. Shows: the reward
     /// address of each router holds the sum of the tips that the handler computed from the terms of the messages that the
-    /// router delivered; the runner holds nothing. Matters: a tip that goes anywhere else, or a direct delivery that
-    /// pays a tip, breaks the equality.
+    /// router delivered, whoever called it; the callers hold nothing. Matters: a tip that goes anywhere else, or a
+    /// direct delivery that pays a tip, breaks the equality.
     function invariant_onlyTheRewardAddressesReceiveTips() public view {
         address copyToken = handler.copy();
         uint256 tipsOnB = copyToken == address(0) ? 0 : IERC20(copyToken).balanceOf(handler.rewardB());
         assertEq(tipsOnB, handler.tipsPaidOnB(), "reward address on chain B");
         assertEq(handler.nativeToken().balanceOf(handler.rewardA()), handler.tipsPaidOnA(), "reward address on chain A");
-        assertEq(handler.nativeToken().balanceOf(handler.runner()), 0, "the runner holds no native token");
-        if (copyToken != address(0)) assertEq(IERC20(copyToken).balanceOf(handler.runner()), 0, "the runner holds no copy");
+        address[2] memory callers = [handler.caller(), handler.outsider()];
+        for (uint256 i = 0; i < callers.length; i++) {
+            assertEq(handler.nativeToken().balanceOf(callers[i]), 0, "a caller holds no native token");
+            if (copyToken != address(0)) assertEq(IERC20(copyToken).balanceOf(callers[i]), 0, "a caller holds no copy");
+        }
     }
 
     /// Claim: the handler reaches every path. Shows: a fixed sequence sends all four kinds both ways and delivers them
-    /// out of order by a direct call, the router and a batch with a repeat; replays through all three paths, a stranger
-    /// origin and a wrong bridge are refused; tips are paid; the copy returns. Matters: an invariant over a handler that
+    /// out of order by a direct call, the router and a batch with a repeat; replays through all three paths and a wrong
+    /// bridge are refused; tips are paid; the copy returns. Matters: an invariant over a handler that
     /// never acts proves nothing.
     function test_handlerReachesThePayingPaths() public {
         handler.sendApplication(0, 1);
@@ -639,7 +639,8 @@ contract RealBridgeInvariantTest is StdInvariant, Test {
         assertEq(handler.sentCount(), 5);
 
         // Out of order: the newest first (index 4 of the 5 undelivered), through the router.
-        handler.deliverViaRouterAsStranger(4);
+        handler.deliverViaRouterAsOutsider(4);
+        assertEq(handler.outsiderDeliveries(), 1, "an outsider delivers through the router");
         handler.deliverViaRouter(4);
         assertEq(handler.routerDeliveries(), 1);
         assertGt(handler.outOfOrderDeliveries(), 0);
@@ -658,7 +659,7 @@ contract RealBridgeInvariantTest is StdInvariant, Test {
         assertEq(handler.replayRefusals(), 3, "every replay is refused");
         handler.deliverOnWrongBridge(2);
         assertEq(handler.wrongBridgeAttempts(), 1);
-        assertEq(handler.strangerAttempts(), 1);
+        assertEq(handler.outsiderAttempts(), 1);
 
         // The copy exists now. It returns plainly and with a tip, and the application message toward A is delivered.
         handler.relayCopyBack(0, 50 ether, 1);

@@ -38,7 +38,9 @@ abstract contract RouterWorld is MediatorFixture {
     uint256 internal constant RECIPIENT_COUNT = 9;
 
     address internal treasury = makeAddr("treasury");
-    address internal runner = makeAddr("runner");
+    /// @dev Outside accounts that execute messages through a router. Any account may do it, and none of them may ever
+    /// hold a token: the tip goes to the reward address and never to the caller.
+    address[] internal callers;
     address internal stranger = makeAddr("stranger");
     /// @dev The account that sends the coin to a router in an attack. It is a holder, so the coin that it keeps counts.
     address internal attacker = makeAddr("attacker");
@@ -109,8 +111,12 @@ abstract contract RouterWorld is MediatorFixture {
         return homes[index];
     }
 
-    function runnerAddress() external view returns (address) {
-        return runner;
+    function callerCount() external view returns (uint256) {
+        return callers.length;
+    }
+
+    function callerAt(uint256 index) external view returns (address) {
+        return callers[index];
     }
 
     function strangerAddress() external view returns (address) {
@@ -241,13 +247,16 @@ abstract contract RouterWorld is MediatorFixture {
 
     function _deployRouters() private {
         multicall = new Multicall3();
+        callers.push(makeAddr("caller one"));
+        callers.push(makeAddr("caller two"));
+        callers.push(makeAddr("caller three"));
         rewards.push(makeAddr("reward account"));
         rewards.push(address(new CoinRefuser()));
         rewards.push(address(new GasBurner()));
         for (uint256 chain = 0; chain < 2; chain++) {
             for (uint256 k = 0; k < ROUTERS_PER_CHAIN; k++) {
                 deliveryRouters[chain * ROUTERS_PER_CHAIN + k] = new DeliveryRouter(
-                    ITokenMediator(address(mediatorOf(chain))), IWETH(address(wrapped[chain])), runner, rewards[k], failedSink
+                    ITokenMediator(address(mediatorOf(chain))), IWETH(address(wrapped[chain])), rewards[k], failedSink
                 );
             }
             wethRouters[chain] = new WETHOmnibridgeRouter(
@@ -274,7 +283,9 @@ abstract contract RouterWorld is MediatorFixture {
         for (uint256 i = 0; i < rewards.length; i++) {
             holders.push(rewards[i]);
         }
-        holders.push(runner);
+        for (uint256 i = 0; i < callers.length; i++) {
+            holders.push(callers[i]);
+        }
         holders.push(stranger);
         holders.push(attacker);
         holders.push(failedSink);
