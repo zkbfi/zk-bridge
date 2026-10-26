@@ -2,6 +2,7 @@ import { db } from "ponder:api";
 import { messages, tokens, transfers } from "ponder:schema";
 import { and, desc, eq, gte, isNotNull, lt, lte, or, sql, inArray } from "ponder";
 import type { Hono } from "hono";
+import type { Hex } from "viem";
 import { encodeCursor, parseFeedQuery, type FeedFilters } from "../../lib/feed-query";
 import { feedItemView, indexTokens } from "../views";
 
@@ -38,6 +39,15 @@ const conditionsOf = (filters: FeedFilters) => {
 };
 
 /**
+ * The cursor that follows a full page. A page is full only when the query found more rows than the limit, and the limit
+ * is at least 1, so the page has a last row. The query keeps only sent messages, so that row has a send time.
+ */
+const cursorAfter = (page: readonly { readonly messages: { readonly sentTimestamp: bigint | null; readonly messageId: Hex } }[]): string => {
+  const last = page[page.length - 1] as (typeof page)[number];
+  return encodeCursor({ sentTimestamp: last.messages.sentTimestamp as bigint, messageId: last.messages.messageId });
+};
+
+/**
  * Registers `GET /api/feed` and `GET /api/messages/:messageId`.
  *
  * @param app The Hono application.
@@ -56,14 +66,9 @@ export const registerFeedRoutes = (app: Hono): void => {
       .limit(filters.limit + 1);
     const page = rows.slice(0, filters.limit);
     const index = indexTokens(await db.select().from(tokens));
-    const last = page[page.length - 1];
-    const hasMore = rows.length > filters.limit && last !== undefined && last.messages.sentTimestamp !== null;
     return c.json({
       items: page.map((row) => feedItemView(row.messages, row.transfers, index)),
-      nextCursor:
-        hasMore && last !== undefined && last.messages.sentTimestamp !== null
-          ? encodeCursor({ sentTimestamp: last.messages.sentTimestamp, messageId: last.messages.messageId })
-          : null,
+      nextCursor: rows.length > filters.limit ? cursorAfter(page) : null,
     });
   });
 

@@ -3,7 +3,7 @@ import { chainTips, deliveryCosts, messages, transfers } from "ponder:schema";
 import { and, desc, eq, isNotNull, ne } from "ponder";
 import type { Hono } from "hono";
 import { env } from "node:process";
-import { DELIVERY_KINDS, type DeliveryKind } from "@zk-bridge/shared";
+import type { DeliveryKind } from "@zk-bridge/shared";
 import { buildDeliveryCostReport, classifyDelivery } from "../../lib/delivery-cost";
 import { parseDeliveryCostSettings } from "../../lib/delivery-cost-settings";
 import { pair } from "../../lib/pair";
@@ -60,12 +60,16 @@ export const registerDeliveryCostRoutes = (app: Hono): void => {
     const chainId = text !== undefined && /^\d+$/.test(text) ? Number(text) : null;
     if (chainId === null) return c.json({ error: "chainId is required and must be a whole number" }, 400);
     if (!pair.sides.some((side) => side.chainId === chainId)) return c.json({ error: `unknown chainId ${chainId}` }, 400);
-    const [tokenCallback, token, message] = await Promise.all(DELIVERY_KINDS.map((kind) => newestSamples(chainId, kind)));
+    const [tokenCallback, token, message] = await Promise.all([
+      newestSamples(chainId, "token_callback"),
+      newestSamples(chainId, "token"),
+      newestSamples(chainId, "message"),
+    ]);
     const [tip] = await db.select().from(chainTips).where(eq(chainTips.chainId, chainId)).limit(1);
     return c.json(
       buildDeliveryCostReport({
         chainId,
-        samples: { token_callback: tokenCallback ?? [], token: token ?? [], message: message ?? [] },
+        samples: { token_callback: tokenCallback, token, message },
         baseFee: tip ?? null,
         settings,
       }),

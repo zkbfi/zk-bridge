@@ -92,7 +92,8 @@ export const percentileNearestRank = (values: readonly bigint[], percentile: num
   if (values.length === 0) return null;
   const sorted = [...values].sort((left, right) => Number(left - right > 0n) - Number(left - right < 0n));
   const rank = (BigInt(values.length) * BigInt(percentile) + 99n) / 100n;
-  return sorted[Number(rank) - 1] ?? null;
+  // The rank is from 1 to the number of values, so the element exists.
+  return sorted[Number(rank) - 1] as bigint;
 };
 
 /** The newest base fee row of a chain. */
