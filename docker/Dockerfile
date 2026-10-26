@@ -122,15 +122,41 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential clang libclang-dev ca-certificates protobuf-compiler libprotobuf-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
-COPY light-client ./light-client
-COPY prover ./prover
+# Layer order, slowest to change first: toolchain and packages (above), then the dependency build, then the prover
+# source. The cache mounts keep the cargo registry, the git dependencies and the target directory between builds on
+# one builder, so a change in prover/src recompiles only the crate zk-bridge-prover. The light-client files that the
+# prover compiles come first. The ELFs and program-keys.json are not copied here: the prover build does not read them.
+COPY light-client/Cargo.toml light-client/Cargo.lock light-client/rust-toolchain.toml ./light-client/
+COPY light-client/crates ./light-client/crates
+COPY prover/Cargo.toml prover/Cargo.lock prover/rust-toolchain.toml ./prover/
 WORKDIR /build/prover
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/prover/target \
-    cargo build --release --locked --no-default-features --features sp1-cuda --bin prove-worker \
-    && mkdir /out \
-    && cp target/release/prove-worker /out/
+# Dependency-only build: stub targets stand in for the prover source, so this layer depends on the manifests only.
+# The examples and tests are named in Cargo.toml, so cargo needs a file for each, even though it does not build them.
+RUN --mount=type=cache,id=zk-bridge-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=zk-bridge-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=zk-bridge-gpu-target,target=/build/prover/target \
+    set -eu; \
+    mkdir -p src/bin examples tests; \
+    : > src/lib.rs; \
+    echo 'fn main() {}' > src/main.rs; \
+    echo 'fn main() {}' > src/bin/prove_worker.rs; \
+    echo 'fn main() {}' > examples/live_update.rs; \
+    for name in signed_beacon produce evidence checkpoint opening_proof; do : > "tests/${name}.rs"; done; \
+    cargo build --release --locked --no-default-features --features sp1-cuda --bin prove-worker; \
+    rm -rf src examples tests
+COPY prover/src ./src
+# Cargo compares file times. The files of the context can be older than the stub objects, so mark the source as new.
+RUN --mount=type=cache,id=zk-bridge-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=zk-bridge-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=zk-bridge-gpu-target,target=/build/prover/target \
+    set -eu; \
+    mkdir -p examples tests; \
+    echo 'fn main() {}' > examples/live_update.rs; \
+    for name in signed_beacon produce evidence checkpoint opening_proof; do : > "tests/${name}.rs"; done; \
+    find src -type f -exec touch {} +; \
+    cargo build --release --locked --no-default-features --features sp1-cuda --bin prove-worker; \
+    mkdir /out; \
+    cp target/release/prove-worker /out/
 
 # The Groth16 circuit files of SP1 circuit v6.1.0 (the circuit of sp1-sdk 6.8.1), baked into the image so a cold worker reads
 # them from local disk instead of downloading 6.2 GB on its first proof. The tarball is pinned by SHA-256, and the build
@@ -163,9 +189,10 @@ RUN apt-get update \
     && tar -xzf /tmp/sp1-gpu-server.tar.gz -C /home/bridge/.sp1/bin \
     && rm /tmp/sp1-gpu-server.tar.gz \
     && chown -R bridge:bridge /home/bridge /state
+# Layer order: the circuit files (6 GB, almost never change), then the worker binary, then the ELFs, which change most often.
+COPY --from=groth16-circuits /circuits /opt/sp1-circuits
 COPY --from=build-gpu-worker /out/prove-worker /usr/local/bin/
 COPY --from=check-elfs /check/light-client.elf /check/fork-observation.elf /elf/
-COPY --from=groth16-circuits /circuits /opt/sp1-circuits
 ENV HOME=/home/bridge \
     SP1_GROTH16_CIRCUIT_PATH=/opt/sp1-circuits/groth16 \
     PORT=8000 \
