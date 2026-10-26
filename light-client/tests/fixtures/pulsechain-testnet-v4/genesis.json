@@ -1,0 +1,11 @@
+{
+  "source_url": "http (beacon node of the chain, host not recorded): GET /eth/v1/beacon/genesis",
+  "fetched_on": "2026-10-26",
+  "response": {
+    "data": {
+      "genesis_time": "1681356369",
+      "genesis_validators_root": "0xd81664ba97279a6fa0832041b4aee6009172b4750a99467ff670a9faf3a34e64",
+      "genesis_fork_version": "0x00000943"
+    }
+  }
+}

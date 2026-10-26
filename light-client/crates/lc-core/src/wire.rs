@@ -7,11 +7,14 @@
 //!
 //! Field order follows the struct order in [`crate::types`].
 //!
+//! Chain selector tags: 1 Ethereum mainnet, 2 PulseChain, 3 Sepolia, 4 PulseChain testnet v4. A new chain takes the next
+//! free tag. An existing tag never changes.
+//!
 //! Layout of the guest input: chain selector (1 byte), the store, then a list of 1 to 64 steps. Each step is a fork
 //! version (4 bytes) followed by one update. A fold applies the steps in order (`update::verify_fold_with_layout`).
 //! The decoder refuses a count above 64. A count of 0 decodes, and the fold then refuses it.
 
-use crate::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN};
+use crate::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN, PULSECHAIN_TESTNET_V4, SEPOLIA};
 use crate::error::{Error, Result};
 use crate::observation::{verify_fork_observation, Observation};
 use crate::types::{
@@ -28,6 +31,10 @@ pub enum ChainSelector {
     EthereumMainnet,
     /// PulseChain.
     Pulsechain,
+    /// Sepolia (chain identifier 11155111).
+    Sepolia,
+    /// PulseChain testnet v4 (chain identifier 943).
+    PulsechainTestnetV4,
 }
 
 impl ChainSelector {
@@ -36,6 +43,30 @@ impl ChainSelector {
         match self {
             Self::EthereumMainnet => &ETHEREUM_MAINNET,
             Self::Pulsechain => &PULSECHAIN,
+            Self::Sepolia => &SEPOLIA,
+            Self::PulsechainTestnetV4 => &PULSECHAIN_TESTNET_V4,
+        }
+    }
+
+    /// The wire tag. Tags 1 and 2 are the first two chains. New chains take new tags after them, and a tag never
+    /// changes: the bytes of an existing input stay valid.
+    pub const fn wire_tag(self) -> u8 {
+        match self {
+            Self::EthereumMainnet => 1,
+            Self::Pulsechain => 2,
+            Self::Sepolia => 3,
+            Self::PulsechainTestnetV4 => 4,
+        }
+    }
+
+    /// The chain of a wire tag, or `None` for an unknown tag.
+    pub const fn from_wire_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::EthereumMainnet),
+            2 => Some(Self::Pulsechain),
+            3 => Some(Self::Sepolia),
+            4 => Some(Self::PulsechainTestnetV4),
+            _ => None,
         }
     }
 }
@@ -154,10 +185,7 @@ impl Writer {
         }
     }
     fn chain(&mut self, chain: ChainSelector) {
-        self.fixed(&[match chain {
-            ChainSelector::EthereumMainnet => 1,
-            ChainSelector::Pulsechain => 2,
-        }]);
+        self.fixed(&[chain.wire_tag()]);
     }
     fn steps(&mut self, steps: &[FoldStep]) {
         self.u32(steps.len());
@@ -300,11 +328,7 @@ impl<'a> Reader<'a> {
         Ok(SyncAggregate { sync_committee_bits, sync_committee_signature })
     }
     fn chain(&mut self) -> Result<ChainSelector> {
-        match self.take(1)?[0] {
-            1 => Ok(ChainSelector::EthereumMainnet),
-            2 => Ok(ChainSelector::Pulsechain),
-            _ => Err(wire_error("unknown chain selector")),
-        }
+        ChainSelector::from_wire_tag(self.take(1)?[0]).ok_or_else(|| wire_error("unknown chain selector"))
     }
     fn store(&mut self) -> Result<LightClientStore> {
         let header_root = self.b256()?;

@@ -12,8 +12,11 @@ Regenerate:
 
 ## Wrapper of raw data files
 
-`ethereum/*.json`, `pulsechain/*.json` have the shape `{ "source_url", "fetched_on", "response" }`
+`ethereum/*.json`, `pulsechain/*.json`, `sepolia/*.json` and `pulsechain-testnet-v4/*.json` have the shape `{ "source_url", "fetched_on", "response" }`
 (`"request"` is added for JSON-RPC calls). `response` is the beacon API or JSON-RPC result.
+`sepolia/` and `pulsechain-testnet-v4/` hold three raw beacon responses each (`chain_spec.json`, `genesis.json`, `fork_schedule.json`),
+fetched 2026-10-26. The `source_url` names the endpoint path; the host was not recorded. A test in
+`crates/lc-testkit/tests/testnets.rs` compares every constant of the chain with them.
 Files named `derived`: `pulsechain/light_client_update.json` and `pulsechain/beacon_paths.json` carry a `source_url`
 that lists the real endpoints the tool read; every branch in them was computed from a real beacon state and checked against the
 roots that the node reports.

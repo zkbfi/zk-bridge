@@ -3,6 +3,8 @@
 //! Values for Ethereum mainnet come from a live beacon API (see `tests/fixtures/ethereum/chain_spec.json`
 //! and `scripts/fetch-fixtures.sh`). Values for PulseChain come from the build contract and from
 //! `https://rpc-pulsechain.g4mm4.io/beacon-api` (see `tests/fixtures/pulsechain/chain_spec.json`).
+//! Values for Sepolia and PulseChain testnet v4 come from the beacon API of a node of each chain (see
+//! `tests/fixtures/sepolia/` and `tests/fixtures/pulsechain-testnet-v4/`).
 //! A test compares each constant with its fixture, so a typing error cannot hide.
 
 use crate::error::{Error, Result};
@@ -48,7 +50,9 @@ pub enum ForkName {
     Electra,
     /// Keeps the Electra light-client layout.
     Fulu,
-    /// Not scheduled on Ethereum mainnet. Its layout is unknown here and is rejected.
+    /// Not scheduled on Ethereum mainnet. Active on Sepolia from epoch 353024. It replaces the execution payload in the
+    /// block body by a signed bid, and it makes `BeaconState` and `BeaconBlockBody` progressive containers. See
+    /// [`crate::layout::GLOAS_STATE_LAYOUT`].
     Gloas,
 }
 
@@ -189,6 +193,60 @@ pub const PULSECHAIN: ChainSpec = ChainSpec {
     epochs_per_sync_committee_period: 256,
 };
 
+/// The fork schedule of Sepolia (chain identifier 11155111).
+///
+/// Source: `GET /eth/v1/config/spec` and `GET /eth/v1/config/fork_schedule` of a Sepolia beacon node, fetched
+/// 2026-10-26 (`tests/fixtures/sepolia/`). The specification also lists a Heze fork (version `0x90000077`, epoch
+/// `18446744073709551615`). `ForkName` has no Heze, so the table leaves it out, as the mainnet table leaves out forks
+/// that this crate does not know.
+const SEPOLIA_FORKS: [ForkEntry; 8] = [
+    ForkEntry { epoch: 0, fork_version: [0x90, 0x00, 0x00, 0x69], fork_name: ForkName::Phase0 },
+    ForkEntry { epoch: 50, fork_version: [0x90, 0x00, 0x00, 0x70], fork_name: ForkName::Altair },
+    ForkEntry { epoch: 100, fork_version: [0x90, 0x00, 0x00, 0x71], fork_name: ForkName::Bellatrix },
+    ForkEntry { epoch: 56_832, fork_version: [0x90, 0x00, 0x00, 0x72], fork_name: ForkName::Capella },
+    ForkEntry { epoch: 132_608, fork_version: [0x90, 0x00, 0x00, 0x73], fork_name: ForkName::Deneb },
+    ForkEntry { epoch: 222_464, fork_version: [0x90, 0x00, 0x00, 0x74], fork_name: ForkName::Electra },
+    ForkEntry { epoch: 272_640, fork_version: [0x90, 0x00, 0x00, 0x75], fork_name: ForkName::Fulu },
+    ForkEntry { epoch: 353_024, fork_version: [0x90, 0x00, 0x00, 0x76], fork_name: ForkName::Gloas },
+];
+
+/// Sepolia (chain identifier 11155111). Genesis time 1655733600, 12 seconds per slot.
+///
+/// Source: `/eth/v1/beacon/genesis` and `/eth/v1/config/spec` of a Sepolia beacon node, fetched 2026-10-26.
+pub const SEPOLIA: ChainSpec = ChainSpec {
+    name: "sepolia",
+    genesis_validators_root: b256!("d8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078"),
+    fork_schedule: &SEPOLIA_FORKS,
+    seconds_per_slot: 12,
+    slots_per_epoch: 32,
+    epochs_per_sync_committee_period: 256,
+};
+
+/// The fork schedule of PulseChain testnet v4 (`CONFIG_NAME` `pulsechain-testnet-v4`).
+///
+/// Source: `GET /eth/v1/config/spec` and `GET /eth/v1/config/fork_schedule` of a node of the chain, fetched 2026-10-26
+/// (`tests/fixtures/pulsechain-testnet-v4/`). Like PulseChain mainnet, it stopped at Capella: Deneb is never scheduled
+/// (`DENEB_FORK_EPOCH` is `18446744073709551615`, version `0xffffffff`).
+const PULSECHAIN_TESTNET_V4_FORKS: [ForkEntry; 5] = [
+    ForkEntry { epoch: 0, fork_version: [0x00, 0x00, 0x09, 0x43], fork_name: ForkName::Phase0 },
+    ForkEntry { epoch: 1, fork_version: [0x00, 0x00, 0x09, 0x44], fork_name: ForkName::Altair },
+    ForkEntry { epoch: 2, fork_version: [0x00, 0x00, 0x09, 0x45], fork_name: ForkName::Bellatrix },
+    ForkEntry { epoch: 4_200, fork_version: [0x00, 0x00, 0x09, 0x46], fork_name: ForkName::Capella },
+    ForkEntry { epoch: FAR_FUTURE_EPOCH, fork_version: [0xff, 0xff, 0xff, 0xff], fork_name: ForkName::Deneb },
+];
+
+/// PulseChain testnet v4 (chain identifier 943). Genesis time 1681356369, 10 seconds per slot.
+///
+/// Source: `/eth/v1/beacon/genesis` and `/eth/v1/config/spec` of a node of the chain, fetched 2026-10-26.
+pub const PULSECHAIN_TESTNET_V4: ChainSpec = ChainSpec {
+    name: "pulsechain-testnet-v4",
+    genesis_validators_root: b256!("d81664ba97279a6fa0832041b4aee6009172b4750a99467ff670a9faf3a34e64"),
+    fork_schedule: &PULSECHAIN_TESTNET_V4_FORKS,
+    seconds_per_slot: 10,
+    slots_per_epoch: 32,
+    epochs_per_sync_committee_period: 256,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,5 +307,59 @@ mod tests {
         assert_eq!(ETHEREUM_MAINNET.period_at_slot(8192), 1);
         assert_eq!(PULSECHAIN.period_at_slot(10_870_784), 1327);
         assert_eq!(PULSECHAIN.period_at_slot(10_870_783), 1326);
+    }
+
+    /// Claim: on Sepolia the fork version switches exactly at each fork epoch, never one epoch early. The epochs and
+    /// versions are written by hand from the fork schedule of the beacon node.
+    #[test]
+    fn sepolia_fork_version_switches_exactly_at_each_epoch() {
+        let schedule: [(u64, [u8; 4]); 8] = [
+            (0, [0x90, 0, 0, 0x69]),
+            (50, [0x90, 0, 0, 0x70]),
+            (100, [0x90, 0, 0, 0x71]),
+            (56_832, [0x90, 0, 0, 0x72]),
+            (132_608, [0x90, 0, 0, 0x73]),
+            (222_464, [0x90, 0, 0, 0x74]),
+            (272_640, [0x90, 0, 0, 0x75]),
+            (353_024, [0x90, 0, 0, 0x76]),
+        ];
+        for (position, (epoch, version)) in schedule.iter().enumerate() {
+            assert_eq!(SEPOLIA.fork_version_at(*epoch), *version, "at epoch {epoch}");
+            if position > 0 {
+                assert_eq!(SEPOLIA.fork_version_at(epoch - 1), schedule[position - 1].1, "one epoch before {epoch}");
+            }
+        }
+        assert_eq!(SEPOLIA.fork_version_at(u64::MAX - 1), [0x90, 0, 0, 0x76], "no later fork is known");
+        assert_eq!(SEPOLIA.fork_at_slot(353_024 * 32 - 1), ForkName::Fulu);
+        assert_eq!(SEPOLIA.fork_at_slot(353_024 * 32), ForkName::Gloas);
+    }
+
+    /// Claim: on PulseChain testnet v4 the fork version switches exactly at epochs 1, 2 and 4200, and Deneb never starts.
+    #[test]
+    fn pulsechain_testnet_v4_fork_version_switches_exactly_at_each_epoch() {
+        assert_eq!(PULSECHAIN_TESTNET_V4.fork_version_at(0), [0, 0, 0x09, 0x43]);
+        assert_eq!(PULSECHAIN_TESTNET_V4.fork_version_at(1), [0, 0, 0x09, 0x44]);
+        assert_eq!(PULSECHAIN_TESTNET_V4.fork_version_at(2), [0, 0, 0x09, 0x45]);
+        assert_eq!(PULSECHAIN_TESTNET_V4.fork_version_at(4_199), [0, 0, 0x09, 0x45]);
+        assert_eq!(PULSECHAIN_TESTNET_V4.fork_version_at(4_200), [0, 0, 0x09, 0x46]);
+        for epoch in [4_201, 1 << 40, u64::MAX - 1] {
+            assert_eq!(PULSECHAIN_TESTNET_V4.fork_entry_at_epoch(epoch).fork_name, ForkName::Capella);
+        }
+    }
+
+    /// Claim: `capellaEra` is written out by hand. Sepolia: Capella epoch 56832, slot 56832 * 32 = 1818624, and
+    /// 1818624 / 8192 = 222 exactly (222 * 8192 = 1818624). Chain 943: Capella epoch 4200, slot 4200 * 32 = 134400, and
+    /// 134400 / 8192 = 16 with integer division (16 * 8192 = 131072, the rest is 3328).
+    #[test]
+    fn capella_era_of_the_testnets_is_written_by_hand() {
+        assert_eq!(56_832 * 32, 1_818_624);
+        assert_eq!(222 * 8_192, 1_818_624);
+        assert_eq!(SEPOLIA.capella_fork_slot(), Some(1_818_624));
+        assert_eq!(SEPOLIA.capella_era(), Ok(222));
+        assert_eq!(4_200 * 32, 134_400);
+        assert_eq!(16 * 8_192, 131_072);
+        assert_eq!(134_400 - 131_072, 3_328);
+        assert_eq!(PULSECHAIN_TESTNET_V4.capella_fork_slot(), Some(134_400));
+        assert_eq!(PULSECHAIN_TESTNET_V4.capella_era(), Ok(16));
     }
 }

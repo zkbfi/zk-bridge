@@ -1,0 +1,28 @@
+{
+  "source_url": "http (beacon node of the chain, host not recorded): GET /eth/v1/config/fork_schedule",
+  "fetched_on": "2026-10-26",
+  "response": {
+    "data": [
+      {
+        "previous_version": "0x00000943",
+        "current_version": "0x00000943",
+        "epoch": "0"
+      },
+      {
+        "previous_version": "0x00000943",
+        "current_version": "0x00000944",
+        "epoch": "1"
+      },
+      {
+        "previous_version": "0x00000944",
+        "current_version": "0x00000945",
+        "epoch": "2"
+      },
+      {
+        "previous_version": "0x00000945",
+        "current_version": "0x00000946",
+        "epoch": "4200"
+      }
+    ]
+  }
+}
