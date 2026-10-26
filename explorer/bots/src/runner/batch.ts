@@ -20,6 +20,7 @@ import {
   tokensReceived,
   type DeliveryDependencies,
   type DeliveryOutcome,
+  type Judgement,
   type ReadyDelivery,
   type Skip,
 } from "./delivery.ts";
@@ -240,13 +241,15 @@ async function evaluateBatch(dependencies: DeliveryDependencies, readies: readon
   const judgements = await Promise.all(
     readies.map((ready, index) => judgeOffer(dependencies, { item: ready.item, offer: ready.offer, feeGasUnits: itemGas[index] as bigint, costGasUnits: itemGas[index] as bigint, quote, messageId: ready.messageId })),
   );
-  const unpaid: Dropped[] = readies.flatMap((ready, index) => {
-    const judgement = judgements[index];
-    return judgement !== undefined && judgement.kind === "skip" ? [{ ready, outcome: judgement.outcome }] : [];
-  });
+  const unpaid: Dropped[] = [];
+  const feeWei: bigint[] = [];
+  for (const [index, ready] of readies.entries()) {
+    const judgement = judgements[index] as Judgement;
+    if (judgement.kind === "pay") feeWei.push(judgement.feeWei);
+    else unpaid.push({ ready, outcome: judgement.outcome });
+  }
   if (unpaid.length > 0) return { kind: "dropped", dropped: unpaid, droppedUpdate: null };
 
-  const feeWei = judgements.map((judgement) => (judgement.kind === "pay" ? judgement.feeWei : 0n));
   const updateGas = update === null ? 0n : await gasOfUpdate(chain, update);
   const unpaidUpdate = unpaidUpdateOf({ dependencies, readies, feeWei, itemGas, updateGas, quote });
   if (unpaidUpdate !== null) return unpaidUpdate;
