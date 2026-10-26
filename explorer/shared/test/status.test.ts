@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveStatus, isCovered, isInFlight, defaultFinalitySeconds, type StatusFacts } from "../src/status.js";
+import { deriveStatus, isCovered, isInFlight, defaultFinalitySeconds, secondsPerSlot, type StatusFacts } from "../src/status.js";
 
 const base: StatusFacts = {
   delivery: "none",
@@ -62,5 +62,16 @@ describe("helpers", () => {
   it("uses two epochs of the source chain as the default finality window", () => {
     expect(defaultFinalitySeconds(1)).toBe(768);
     expect(defaultFinalitySeconds(369)).toBe(640);
+  });
+  it("gives each testnet the window of the network family that it copies: Sepolia like Ethereum, chain 943 like PulseChain", () => {
+    expect(defaultFinalitySeconds(11155111)).toBe(12 * 32 * 2);
+    expect(defaultFinalitySeconds(943)).toBe(10 * 32 * 2);
+    expect(defaultFinalitySeconds(11155111)).toBe(defaultFinalitySeconds(1));
+    expect(defaultFinalitySeconds(943)).toBe(defaultFinalitySeconds(369));
+  });
+  it("reads the slot length from the table and falls back to 12 seconds for a chain that has no entry", () => {
+    expect([1, 369, 11155111, 943].map(secondsPerSlot)).toEqual([12, 10, 12, 10]);
+    expect(secondsPerSlot(5)).toBe(12);
+    expect(defaultFinalitySeconds(5)).toBe(768);
   });
 });
