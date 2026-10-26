@@ -160,3 +160,31 @@ contract MedHostileLimiter is IFlowLimiter {
         moveError = failure;
     }
 }
+
+/// @notice A token that takes a cut of every transfer that leaves one chosen sender, as a token with a transfer tax
+/// does. The cut is zero until a test sets it, so the token can enter a mediator whole and leave it short.
+contract MedCutToken is ERC20 {
+    uint256 internal constant DENOMINATOR = 10_000;
+
+    address public cutSender;
+    uint256 public cutBasisPoints;
+
+    constructor() ERC20("Cut", "CUT") {}
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+
+    /// @notice From now on, a transfer from `sender` burns `basisPoints` of its value on the way.
+    function setCut(address sender, uint256 basisPoints) external {
+        cutSender = sender;
+        cutBasisPoints = basisPoints;
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        if (from != cutSender || from == address(0) || to == address(0)) return super._update(from, to, value);
+        uint256 cut = value * cutBasisPoints / DENOMINATOR;
+        super._update(from, address(0), cut);
+        super._update(from, to, value - cut);
+    }
+}

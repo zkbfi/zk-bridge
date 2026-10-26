@@ -18,6 +18,7 @@ import {
     CoinReverter,
     ContractWallet
 } from "./utils/MediatorSupport.sol";
+import {MedCutToken} from "./utils/MedMocks.sol";
 
 /// @notice Tests of the executor fee router. Tokens flow from chain B to chain A, where the router lives. A runner
 /// executes the message through the router and earns the fee that the sender wrote in the `FeeDirector`.
@@ -430,6 +431,47 @@ contract FeeRouterTest is MediatorFixture {
         assertEq(token.balanceOf(recipient), 50 ether, "the fee that the runner could not take goes to the recipient");
         assertEq(token.balanceOf(reward), 0);
         assertEq(token.balanceOf(address(router)), 0);
+    }
+
+    /// Claim: a token that takes a cut on transfer cannot make the router pay more than it holds. Shows: the mediator
+    /// reports 100 but the router receives 90, so the fee (a fixed 3) and the share of the recipient are computed on 90:
+    /// the reward address gets 3, the recipient gets 87, and the router holds nothing. Matters: a cut would otherwise
+    /// make the payout of the recipient revert and block the message.
+    function test_aTokenThatTakesACutOnTransferIsPaidOutOfWhatTheRouterHolds() public {
+        MedCutToken token = new MedCutToken();
+        token.mint(alice, 100 ether);
+        vm.startPrank(alice);
+        token.approve(address(mediatorA), type(uint256).max);
+        mediatorA.relayTokens(address(token), alice, 100 ether);
+        vm.stopPrank();
+        _deliverAtoB(_lastIndexA());
+        address copy = _copyOf(address(token));
+        token.setCut(address(mediatorA), 1_000);
+
+        vm.startPrank(alice);
+        IERC20(copy).approve(address(mediatorB), type(uint256).max);
+        mediatorB.relayTokensAndCall(
+            copy, address(router), 100 ether, abi.encode(_director(router.FIXED_FEE(), 3 ether, 0))
+        );
+        vm.stopPrank();
+        _runThroughRouter(_lastIndexB());
+
+        assertEq(token.balanceOf(reward), 3 ether, "the fixed fee");
+        assertEq(token.balanceOf(recipient), 87 ether, "the rest of the 90 that arrived");
+        assertEq(token.balanceOf(address(router)), 0, "the router keeps nothing");
+    }
+
+    /// Claim: a gas based fee with a cap of zero takes no fee and holds nothing back. Shows: the recipient gets the whole
+    /// value, the reward address gets nothing, and the runner slot returns to the idle value. Matters: a cap of zero
+    /// means that the sender pays no tip, and the router must not hold a settlement that it cannot pay.
+    function test_aGasBasedFeeWithACapOfZeroTakesNoFee() public {
+        vm.txGasPrice(10 gwei);
+        uint256 index = _sendTokenB(_director(0, 0, 1 ether), 100 ether);
+        _runThroughRouter(index);
+        assertEq(_copyB().balanceOf(reward), 0, "no fee");
+        assertEq(_copyB().balanceOf(recipient), 100 ether, "the whole value");
+        assertEq(_copyB().balanceOf(address(router)), 0);
+        assertEq(uint256(vm.load(address(router), router.RUNNER_SLOT())), 1, "back to the idle value");
     }
 
     // ------------------------------------------------------------------------------------------------ access
