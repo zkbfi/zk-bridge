@@ -31,10 +31,7 @@ use crate::bls::verify_aggregate_by_subtraction;
 use crate::chain::DOMAIN_SYNC_COMMITTEE;
 use crate::chain::{ChainSpec, ForkName, GENESIS_SLOT, MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZE};
 use crate::error::{Error, Result};
-use crate::layout::{
-    compact_block_hash_gindex_for_fork, execution_header_form_for_fork, state_layout_for_fork, StateLayout,
-    EXECUTION_PAYLOAD_GINDEX,
-};
+use crate::layout::{execution_header_form_for_fork, state_layout_for_fork, StateLayout, EXECUTION_PAYLOAD_GINDEX};
 use crate::profile::tracked;
 use crate::ssz::is_valid_normalized_merkle_branch;
 use crate::types::{
@@ -78,18 +75,15 @@ fn branch_is_valid(leaf: &B256, branch: &[B256], gindex: u64, root: &B256) -> bo
 /// `InvalidExecutionBranch(which)` for a bad branch.
 pub fn verify_execution_branch(spec: &ChainSpec, header: &LightClientHeader, which: &'static str) -> Result<()> {
     let fork = spec.fork_at_slot(header.beacon.slot);
+    if fork >= ForkName::Gloas {
+        return Err(Error::GloasPayloadNotFinalized);
+    }
     let (leaf, gindex) = match header.form {
         HeaderForm::Full => {
             execution_header_form_for_fork(fork)?;
             (header.execution.hash_tree_root_for_slot(spec, header.beacon.slot)?, EXECUTION_PAYLOAD_GINDEX)
         }
-        HeaderForm::Compact => {
-            let gindex = compact_block_hash_gindex_for_fork(fork)?;
-            if header.execution_block_hash() == B256::ZERO {
-                return Err(Error::ZeroExecutionBlockHash(which));
-            }
-            (header.execution_block_hash(), gindex)
-        }
+        HeaderForm::Compact => return Err(Error::GloasPayloadNotFinalized),
     };
     if branch_is_valid(&leaf, &header.execution_branch, gindex, &header.beacon.body_root) {
         return Ok(());
@@ -97,18 +91,22 @@ pub fn verify_execution_branch(spec: &ChainSpec, header: &LightClientHeader, whi
     Err(Error::InvalidExecutionBranch(which))
 }
 
-/// Requires the header shape that the fork of the attested header dictates: compact for every header of a Gloas-typed
-/// update, full for every header of an earlier one.
-fn require_header_form(spec: &ChainSpec, update: &LightClientUpdate) -> Result<()> {
-    let wanted = match spec.fork_at_slot(update.attested_header.beacon.slot) >= ForkName::Gloas {
-        true => HeaderForm::Compact,
-        false => HeaderForm::Full,
-    };
-    if update.attested_header.form != wanted {
-        return Err(Error::HeaderFormMismatch("attested"));
-    }
-    if update.finalized_header.form != wanted {
-        return Err(Error::HeaderFormMismatch("finalized"));
+/// Refuses every Gloas input and every compact header.
+///
+/// Fail closed. Under Gloas the execution payload is revealed apart from the beacon block and may be withheld. The compact
+/// header carries the bid's `parent_block_hash`, which is not the execution block of the slot, and no block number. A
+/// message proof anchored to it would not be sound. The refusal covers the attested slot, the finalized slot, the
+/// signature slot and the form of both headers, so no Gloas data reaches an output.
+///
+/// # Errors
+/// `GloasPayloadNotFinalized`.
+fn refuse_gloas(spec: &ChainSpec, update: &LightClientUpdate) -> Result<()> {
+    let slots = [update.attested_header.beacon.slot, update.finalized_header.beacon.slot, update.signature_slot];
+    let in_gloas_epoch = slots.iter().any(|slot| spec.fork_at_slot(*slot) >= ForkName::Gloas);
+    let compact =
+        update.attested_header.form == HeaderForm::Compact || update.finalized_header.form == HeaderForm::Compact;
+    if in_gloas_epoch || compact {
+        return Err(Error::GloasPayloadNotFinalized);
     }
     Ok(())
 }
@@ -223,7 +221,7 @@ pub fn verify_with_layout(
     }
 
     // Both headers must be valid light-client headers of a supported fork, in the shape the attested fork dictates.
-    require_header_form(spec, update)?;
+    refuse_gloas(spec, update)?;
     verify_execution_branch(spec, attested, "attested")?;
     verify_execution_branch(spec, finalized, "finalized")?;
 

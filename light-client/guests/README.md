@@ -23,23 +23,25 @@ no valid signature (`real_update_verifies_only_with_the_correct_fork_version` sh
 The chain selector picks the genesis validators root. The root is part of the public values, so the contract binds the proof to
 its chain.
 
-## Gloas (Sepolia from epoch 353024)
+## Gloas (Sepolia from epoch 353024): refused
 
-`lc_core` reads Gloas light-client data. The guest body is the same: one ELF serves every chain through `ChainSelector`
+`lc_core` REFUSES Gloas. Every update with an attested, finalized or signature slot in a Gloas epoch, and every header in the
+compact form, fails with `Error::GloasPayloadNotFinalized`. The guest produces no output. The wire decoder rejects the compact
+form. `state_layout_for_fork(Gloas)` refuses too. Mainnet and PulseChain behaviour is unchanged.
+
+Why. Under Gloas the execution payload is revealed apart from the beacon block and may be withheld. The compact header holds the
+`parent_block_hash` of the bid. That hash is the last confirmed payload, not the execution block of the slot, and the header has
+no block number. A message proof that anchors to it would not be sound.
+
+What stays. `crates/lc-core/src/layout.rs` keeps the derived progressive indices (finality root 735, committees 2945 and 2946,
+bid parent hash 2856, `block_roots` 352, `historical_summaries` 2950) with tests that derive them from the container field
+lists. Tests check the real branches of a live Sepolia update at the pure function level. A future design needs these facts.
+
+The deployed Solidity position rules also reject the progressive positions, so a Gloas source chain needs a Solidity change in
+`BeaconProofVerifier` and `BeaconForkGate`.
+
+The program keys change on the next reproducible build, because one ELF serves every chain through `ChainSelector`
 (Ethereum mainnet 1, PulseChain 2, Sepolia 3, PulseChain testnet v4 4).
-
-- A Gloas-typed update uses the compact header for every header: `beacon`, `execution_block_hash`, `execution_branch`
-  (11 entries). The wire format marks it with the flag `0x80` on the chain selector byte and a form byte before each header.
-  Inputs with only full headers keep the original bytes.
-- The state layout is progressive: finality root 735, current committee 2945, next committee 2946. The execution block
-  hash is at index 2856 of the body, through the signed bid.
-- The output `executionBlockNumber` is 0 for a compact header, because the header has no block number.
-- Caution: the Gloas hash is the PARENT block hash of the bid (`parent_block_hash`). It is not the execution block of the
-  same slot. Do not anchor message proofs to it without a design review. See the final notes in `crates/lc-core/src/layout.rs`
-  (`BLOCK_HASH_GINDEX_GLOAS`).
-- The deployed Solidity position rules reject the Gloas positions. A Gloas source chain needs a change in
-  `BeaconProofVerifier` and `BeaconForkGate`.
-- The program keys change on the next reproducible build. Do not build them before the design review.
 
 ## How to build
 

@@ -348,7 +348,8 @@ impl<'a> Reader<'a> {
         let beacon = self.beacon()?;
         match form {
             HEADER_FORM_FULL => Ok(LightClientHeader::full(beacon, self.payload()?, self.branch()?)),
-            HEADER_FORM_COMPACT => Ok(LightClientHeader::compact(beacon, self.b256()?, self.branch()?)),
+            // Fail closed: the compact (Gloas) form is refused. See `Error::GloasPayloadNotFinalized`.
+            HEADER_FORM_COMPACT => Err(Error::GloasPayloadNotFinalized),
             _ => Err(wire_error("unknown header form")),
         }
     }

@@ -104,6 +104,11 @@ pub enum Error {
     /// A compact (Gloas) header names the zero execution block hash in an epoch that has a block hash. The bridge reports
     /// this hash, and the contract refuses zero.
     ZeroExecutionBlockHash(&'static str),
+    /// A Gloas epoch or a compact header form was refused. Under the Gloas fork the execution payload is revealed apart
+    /// from the beacon block and may be withheld. The `execution_block_hash` of a Gloas header is the bid's
+    /// `parent_block_hash`, which is not the execution block of that slot, and the header has no block number. A message
+    /// proof that anchors to it would not be sound, so the program refuses all of it until the payload design is decided.
+    GloasPayloadNotFinalized,
     /// The header shape does not fit the update: a Gloas-typed update (attested slot in a Gloas epoch) needs the compact
     /// shape for every header, and an earlier update needs the full shape.
     HeaderFormMismatch(&'static str),
@@ -203,6 +208,10 @@ impl fmt::Display for Error {
             }
             Self::InvalidSlotOrder(reason) => write!(formatter, "invalid slot order: {reason}"),
             Self::UnsupportedFork { fork } => write!(formatter, "unsupported fork for light-client proofs: {fork:?}"),
+            Self::GloasPayloadNotFinalized => write!(
+                formatter,
+                "Gloas is refused: the execution payload is not finalized by the beacon block alone (design pending)"
+            ),
             Self::ExecutionHeaderForkMismatch { fork } => {
                 write!(formatter, "execution payload header fields do not match fork {fork:?}")
             }
@@ -318,6 +327,7 @@ impl Error {
             Self::InvalidAncestryBranch => "InvalidAncestryBranch",
             Self::InvalidBlockHashBranch => "InvalidBlockHashBranch",
             Self::UnsupportedFork { .. } => "UnsupportedFork",
+            Self::GloasPayloadNotFinalized => "GloasPayloadNotFinalized",
             Self::MalformedSsz(_) => "MalformedSsz",
             Self::HeaderDecode(_) => "HeaderDecode",
             Self::ReceiptProofInvalid(_) => "ReceiptProofInvalid",

@@ -359,7 +359,7 @@ pub const HISTORICAL_SUMMARIES_GINDEX_GLOAS: u64 = 2950;
 /// never).
 pub const BLOCK_HASH_GINDEX_GLOAS: u64 = 2856;
 
-/// Layout of the Gloas `BeaconState` (46 fields, progressive).
+/// Layout of the Gloas `BeaconState` (46 fields, progressive). Derivation only: `state_layout_for_fork` refuses Gloas.
 ///
 /// The positions are NOT of the form `2^depth + field_index`. The deployed Solidity rules (`_isStateFieldPosition` in
 /// `BeaconProofVerifier.sol`) reject `block_roots` 352 (depth 8) and `historical_summaries` 2950 (depth 11), so a Gloas
@@ -479,7 +479,8 @@ pub fn state_layout_for_fork(fork: ForkName) -> Result<StateLayout> {
     match fork {
         ForkName::Capella | ForkName::Deneb => Ok(CAPELLA_DENEB_STATE_LAYOUT),
         ForkName::Electra | ForkName::Fulu => Ok(ELECTRA_STATE_LAYOUT),
-        ForkName::Gloas => Ok(GLOAS_STATE_LAYOUT),
+        // Fail closed: see `Error::GloasPayloadNotFinalized`. `GLOAS_STATE_LAYOUT` stays for the derivation tests only.
+        ForkName::Gloas => Err(Error::GloasPayloadNotFinalized),
         ForkName::Phase0 | ForkName::Altair | ForkName::Bellatrix => Err(Error::UnsupportedFork { fork }),
     }
 }
@@ -549,7 +550,7 @@ mod tests {
     /// Claim: forks without execution payloads or with an unknown layout are refused.
     #[test]
     fn unsupported_forks_are_refused() {
-        // Gloas left this list on purpose: it has a layout now (see the Gloas tests below). It still has no payload header.
+        // Gloas has its own refusal (`GloasPayloadNotFinalized`), tested in `gloas_indices_derive_from_the_field_lists`.
         for fork in [ForkName::Phase0, ForkName::Altair, ForkName::Bellatrix] {
             assert_eq!(state_layout_for_fork(fork), Err(Error::UnsupportedFork { fork }));
         }
@@ -650,7 +651,8 @@ mod tests {
         assert_eq!(EXECUTION_PAYLOAD_BID.fields.len(), 12);
         assert_eq!(EXECUTION_PAYLOAD_BID.field_position("parent_block_hash"), Some(0));
 
-        assert_eq!(GLOAS_STATE_LAYOUT, state_layout_for_fork(ForkName::Gloas).unwrap());
+        // Fail closed: the selector refuses Gloas although the derived layout exists.
+        assert_eq!(state_layout_for_fork(ForkName::Gloas), Err(Error::GloasPayloadNotFinalized));
         let mut shuffled = BEACON_STATE_GLOAS.fields.to_vec();
         shuffled.swap(20, 21);
         let moved = ContainerDefinition { fields: Box::leak(shuffled.into_boxed_slice()), ..BEACON_STATE_GLOAS };
