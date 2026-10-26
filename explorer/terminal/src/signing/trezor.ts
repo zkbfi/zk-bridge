@@ -178,8 +178,17 @@ async function startApi(input: TrezorSourceInput): Promise<TrezorApi> {
   return api
 }
 
-async function loadTrezorConnect(): Promise<TrezorApi> {
-  const loaded = await import('@trezor/connect')
+/** Loads Trezor Connect on the first call, so a user without a Trezor never loads it. */
+export async function loadTrezorConnect(): Promise<TrezorApi> {
+  return parseTrezorConnect(await import('@trezor/connect'))
+}
+
+/**
+ * Takes the library out of the loaded module.
+ *
+ * @throws HardwareWalletError `unavailable` when the module has no default export with an `init` function.
+ */
+export function parseTrezorConnect(loaded: unknown): TrezorApi {
   const api: unknown = (loaded as { default?: unknown }).default
   if (typeof api !== 'object' || api === null || typeof (api as TrezorApi).init !== 'function') {
     throw hardwareError('unavailable', 'Trezor Connect did not load')

@@ -33,6 +33,8 @@ export type LedgerConnector = () => Promise<LedgerConnection>
 export interface LedgerSourceInput {
   /** Replaces the USB HID connection. Tests pass a simulated device here. */
   readonly connect?: LedgerConnector
+  /** Replaces the load of the USB HID libraries, for the default connection. Tests pass fakes here. */
+  readonly loadModules?: LedgerModuleLoader
   /** Called with text the user must read on the device. */
   readonly onDevicePrompt?: (message: string) => void
 }
@@ -53,7 +55,7 @@ const STATUS = {
  * The connection opens on the first call. The same connection serves every address and signer of this source.
  */
 export function createLedgerSource(input: LedgerSourceInput = {}): AddressSource {
-  const connect = input.connect ?? connectOverUsb
+  const connect = input.connect ?? (async () => openUsbConnection(await (input.loadModules ?? loadLedgerUsbModules)()))
   let connection: Promise<LedgerConnection> | null = null
 
   function openConnection(): Promise<LedgerConnection> {
@@ -167,14 +169,27 @@ function isAppClosedStatus(statusCode: number | undefined): boolean {
   )
 }
 
-/** The default connector: USB HID through the Ledger libraries. It loads them on the first call. */
-async function connectOverUsb(): Promise<LedgerConnection> {
-  const [{ default: hidModule }, ethModule] = await Promise.all([
-    import('@ledgerhq/hw-transport-node-hid'),
-    import('@ledgerhq/hw-app-eth'),
-  ])
-  const transport = await unwrapDefault<{ create(): Promise<LedgerTransportHandle> }>(hidModule).create()
-  const EthereumApp = unwrapDefault<new (transport: LedgerTransportHandle) => LedgerEthereumApp>(ethModule.default)
+/** The two libraries of the default connection, as the module loader returns them. */
+export interface LedgerUsbModules {
+  /** The USB HID transport class. */
+  readonly hidTransport: unknown
+  /** The Ledger Ethereum app class. */
+  readonly ethereumApp: unknown
+}
+
+/** Loads the USB HID libraries. */
+export type LedgerModuleLoader = () => Promise<LedgerUsbModules>
+
+/** Loads the USB HID libraries on the first call, so a user without a Ledger never loads the native module. */
+export async function loadLedgerUsbModules(): Promise<LedgerUsbModules> {
+  const [hid, eth] = await Promise.all([import('@ledgerhq/hw-transport-node-hid'), import('@ledgerhq/hw-app-eth')])
+  return { hidTransport: hid.default, ethereumApp: eth.default }
+}
+
+/** Opens the first Ledger over USB HID with the given libraries. */
+export async function openUsbConnection(modules: LedgerUsbModules): Promise<LedgerConnection> {
+  const transport = await unwrapDefault<{ create(): Promise<LedgerTransportHandle> }>(modules.hidTransport).create()
+  const EthereumApp = unwrapDefault<new (transport: LedgerTransportHandle) => LedgerEthereumApp>(modules.ethereumApp)
   return { app: new EthereumApp(transport), close: () => transport.close() }
 }
 

@@ -7,10 +7,8 @@
 import {
   parseTransaction,
   recoverTransactionAddress,
-  serializeTransaction,
   type Address,
   type Hex,
-  type Signature,
   type TransactionSerializableEIP1559,
 } from 'viem'
 
@@ -64,11 +62,6 @@ export interface AddressSource {
 /** A signature came back that does not belong to the transaction or to the signer. */
 export class SignatureMismatchError extends Error {
   override readonly name = 'SignatureMismatchError'
-}
-
-/** Builds the serialized signed transaction from a signature. */
-export function serializeSigned(transaction: TransactionSerializableEIP1559, signature: Signature): Hex {
-  return serializeTransaction(transaction, signature)
 }
 
 /**

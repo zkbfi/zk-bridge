@@ -117,4 +117,26 @@ describe('decryptKeystore', () => {
     expect((error as Error).message).not.toContain('hunter2')
     expect((error as Error).message).not.toContain(ANVIL_FIRST_KEY.slice(2, 12))
   })
+
+  test('refuses a crypto section with a missing field or missing key derivation parameters', async () => {
+    const withoutCiphertext = JSON.parse(castKeystore)
+    delete withoutCiphertext.crypto.ciphertext
+    const withoutParameters = JSON.parse(castKeystore)
+    delete withoutParameters.crypto.kdfparams
+    for (const keystore of [withoutCiphertext, withoutParameters]) {
+      await expect(decryptKeystore(JSON.stringify(keystore), CAST_PASSWORD)).rejects.toThrow(
+        'The crypto section of the keystore is incomplete.',
+      )
+    }
+  })
+
+  test('refuses a key derivation parameter that is not a positive integer, and names it', async () => {
+    for (const bad of [0, -8, 1.5, '8192', null]) {
+      const keystore = JSON.parse(castKeystore)
+      keystore.crypto.kdfparams.n = bad
+      await expect(decryptKeystore(JSON.stringify(keystore), CAST_PASSWORD)).rejects.toThrow(
+        'The key derivation parameter n is missing or invalid.',
+      )
+    }
+  })
 })
