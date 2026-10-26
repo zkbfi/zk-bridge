@@ -139,7 +139,7 @@ For each direction:
      without an offer (`deliverWithoutOffer`) is not batched: it goes straight to the bridge with its own simulation.
 5. Send a batch through Multicall3 (`aggregate3`, failure allowed on each call). The first call is `update(proof, publicValues)`
    at the light client when an update is offered. Each other call is `FeeRouter.executeMessageWithRunner(proof, rewardAddress)`.
-   The router pays every fee to the reward address, not to the signer. The router reads `tx.origin`, which is the signer, so
+   The router pays every fee to the reward address, not to the signer. When the router cannot deliver the tokens to a recipient, it hands them to its `failedDeliveryAddress`. The router reads `tx.origin`, which is the signer, so
    it accepts calls that come through Multicall3. Before the send the runner simulates the batch and drops what cannot go:
    - It reads the result that the simulated call returns for every call. A message that the bridge shows as delivered
      (`AlreadyDelivered`) is dropped and final (`already-delivered`). A message whose anchor the light client has not stored

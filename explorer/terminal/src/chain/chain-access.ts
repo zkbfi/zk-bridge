@@ -6,7 +6,7 @@
 import { createPublicClient, defineChain, http, type Address, type Hash } from 'viem'
 import type { FlowChainClient } from '../flow/transaction-flow'
 import type { ChainConfig, PairConfig, TokenInfo } from '../model/types'
-import { readChainSnapshot, readRewardAddress, type ChainSnapshotResult, type ReadClient, type RewardAddressReading } from './live-reads'
+import { readChainSnapshot, readRouterAddresses, type ChainSnapshotResult, type ReadClient, type RouterAddressesReading } from './live-reads'
 
 /** The RPC URL of a chain is not set. */
 export class MissingRpcError extends Error {
@@ -33,8 +33,8 @@ export interface ChainAccess {
   readSnapshots(input: { account: Address; tokens: readonly TokenInfo[] }): Promise<readonly ChainSnapshotResult[]>
   /** The native balance of each address on both chains. A chain that cannot be read gives null. */
   nativeBalances(addresses: readonly Address[]): Promise<readonly NativeBalances[]>
-  /** Reads the address that receives the tips of a fee router on a chain. It never throws. */
-  readRewardAddress(input: { chainId: number; router: Address }): Promise<RewardAddressReading>
+  /** Reads the reward address and the failed delivery address of a fee router on a chain. It never throws. */
+  readRouterAddresses(input: { chainId: number; router: Address }): Promise<RouterAddressesReading>
   /** The client for the transaction flow of a chain. It throws {@link MissingRpcError} when the URL is not set. */
   flowClient(chainId: number): FlowChainClient
 }
@@ -99,9 +99,9 @@ export function createRpcChainAccess(
         })),
       )
     },
-    async readRewardAddress({ chainId, router }) {
+    async readRouterAddresses({ chainId, router }) {
       try {
-        return await readRewardAddress(clientOf(chainById(chainId)), { router })
+        return await readRouterAddresses(clientOf(chainById(chainId)), { router })
       } catch (error) {
         return { kind: 'unreadable', reason: error instanceof Error ? error.message : String(error) }
       }

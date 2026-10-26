@@ -143,4 +143,43 @@ describe("buildConfirmView", () => {
     const view = buildConfirmView({ ...step, plan: { ...step.plan, data: "0xdeadbeef" } });
     expect(view.blockedReason).toMatch(/cannot read this call/);
   });
+
+  describe("the addresses that the router answers", () => {
+    const rewardAddress = getAddress(`0x${"11".repeat(20)}`);
+    const failedDeliveryAddress = getAddress(`0x${"22".repeat(20)}`);
+
+    it("names the failed delivery address that the router returned, and the reward address for the tip, never swapped", async () => {
+      const view = buildConfirmView(await relayStep({ mode: "percentage" }), { kind: "read", rewardAddress, failedDeliveryAddress });
+      expect(view.delivery?.failedDeliveryText).toBe(`the tokens go to ${failedDeliveryAddress} (failed delivery address of the router)`);
+      expect(view.delivery?.failedDeliveryText).not.toContain(rewardAddress);
+      expect(view.delivery?.rewardAddressText).toBe(rewardAddress);
+      expect(view.delivery?.routerAddressesWarning).toBeNull();
+    });
+
+    it("checksums the addresses", async () => {
+      const view = buildConfirmView(await relayStep({ mode: "percentage" }), {
+        kind: "read",
+        rewardAddress: rewardAddress.toLowerCase() as typeof rewardAddress,
+        failedDeliveryAddress: `0x${"ab".repeat(20)}`,
+      });
+      expect(view.delivery?.failedDeliveryText).toContain(getAddress(`0x${"ab".repeat(20)}`));
+    });
+
+    it.each([
+      ["an unreadable reading", { kind: "unreadable", reason: "execution reverted" } as const],
+      ["a missing reading", undefined],
+    ])("names no address and warns the user to check the router for %s", async (_name, reading) => {
+      const view = buildConfirmView(await relayStep({ mode: "percentage" }), reading);
+      const delivery = view.delivery!;
+      expect(delivery.rewardAddressText).toBe("unknown");
+      expect(delivery.failedDeliveryText).toMatch(/^unknown: the page could not read the failed delivery address/);
+      expect(delivery.failedDeliveryText).not.toMatch(/0x[0-9a-fA-F]{40}/);
+      expect(delivery.routerAddressesWarning).toMatch(/Check the router before you sign/);
+      expect(view.blockedReason).toBeNull();
+    });
+
+    it("adds no address lines to a relay with no tip", async () => {
+      expect(buildConfirmView(await relayStep({ mode: "none" }), { kind: "read", rewardAddress, failedDeliveryAddress }).delivery).toBeNull();
+    });
+  });
 });

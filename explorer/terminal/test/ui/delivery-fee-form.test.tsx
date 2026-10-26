@@ -109,36 +109,43 @@ describe('the tip field of the bridge form', () => {
     await screen.press('RETURN')
     await screen.settle(120)
     const frame = screen.frame()
-    for (const shown of ['relayTokensAndCall(address,address,uint256,bytes)', 'Tip for delivery', 'Router', '(the fee router of the deployment)', 'Tip mode', 'percentage of the transfer', 'Tip now', '(exact)', 'Tip goes to']) {
+    for (const shown of ['relayTokensAndCall(address,address,uint256,bytes)', 'Tip for delivery', 'Router', '(the fee router of the deployment)', 'Tip mode', 'percentage of the transfer', 'Tip goes to', 'On failure']) {
       expect(frame).toContain(shown)
     }
     expect(chainAccess.sentTransactions).toHaveLength(0)
   })
 
-  test('Enter reads the reward address from the router and the review shows it; a second address proves it is read', async () => {
-    for (const address of ['0x00000000000000000000000000000000000000f1', '0x00000000000000000000000000000000000000f2'] as const) {
-      const chainAccess = createFixtureChainAccess(FIXTURE_PAIR, { allowance: 10n ** 30n, rewardAddress: { kind: 'read', address } })
+  test('Enter reads both addresses from the router and the review shows them; a second pair proves they are read', async () => {
+    const pairs = [
+      ['0x00000000000000000000000000000000000000f1', '0x00000000000000000000000000000000000000f3'],
+      ['0x00000000000000000000000000000000000000f2', '0x00000000000000000000000000000000000000f4'],
+    ] as const
+    for (const [rewardAddress, failedDeliveryAddress] of pairs) {
+      const chainAccess = createFixtureChainAccess(FIXTURE_PAIR, { allowance: 10n ** 30n, routerAddresses: { kind: 'read', rewardAddress, failedDeliveryAddress } })
       const screen = await openOnTipField({ tokenValuationsWei: priced, chainAccess })
       await screen.press('RETURN')
       await screen.settle(120)
       const frame = screen.frame()
       expect(frame).toContain('Tip goes to')
-      expect(frame).toContain(getAddress(address))
-      expect(frame).not.toContain('did not return its reward address')
+      expect(frame).toContain(getAddress(rewardAddress))
+      expect(frame).toContain('On failure')
+      expect(frame).toContain(getAddress(failedDeliveryAddress))
+      expect(frame).not.toContain('did not return its addresses')
       screen.destroy()
       app = null
     }
   })
 
   test('Enter with a router that does not answer still opens the review, with the warning and no address', async () => {
-    const chainAccess = createFixtureChainAccess(FIXTURE_PAIR, { allowance: 10n ** 30n, rewardAddress: { kind: 'unreadable', reason: 'execution reverted' } })
+    const chainAccess = createFixtureChainAccess(FIXTURE_PAIR, { allowance: 10n ** 30n, routerAddresses: { kind: 'unreadable', reason: 'execution reverted' } })
     const screen = await openOnTipField({ tokenValuationsWei: priced, chainAccess })
     await screen.press('RETURN')
     await screen.settle(120)
     const frame = screen.frame()
     expect(frame).toContain('relayTokensAndCall(address,address,uint256,bytes)')
     expect(frame).toContain('Tip goes to   unknown')
-    expect(frame).toContain('Warning: the router did not return its reward address (execution reverted).')
+    expect(frame).toMatch(/On failure\s*unknown/)
+    expect(frame).toContain('Warning: the router did not return its addresses (execution reverted).')
   })
 
   test('is not offered when the deployment has no fee router for the destination, and the form says why', async () => {

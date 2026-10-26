@@ -82,7 +82,7 @@ export const FEE_DIRECTOR_BYTES = 128;
  * Encodes a director as `abi.encode(director)` does. The struct is static, so the result is four words with no offset.
  * This is the callback data of `relayTokensAndCall`.
  *
- * The router sends the whole value to its reward address when the recipient is the zero address or the router, so this
+ * The router hands the value to its failed delivery address when the recipient is the zero address or the router, so this
  * function refuses such a director and a recipient that is a known router, mediator or bridge. No caller can skip that.
  *
  * @param director The director.

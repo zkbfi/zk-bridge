@@ -90,23 +90,32 @@ async function readBigint(
 }
 
 /**
- * What the fee router says about the address that receives its tips. `unreadable` means the router did not answer
- * `rewardAddress()` with an address: the read failed, or the router is of an older version that has no such function.
+ * What the fee router says about the two addresses that it pays: the reward address, which receives the tips, and the
+ * failed delivery address, which receives what the router cannot deliver. `unreadable` means the router did not answer
+ * `rewardAddress()` or `failedDeliveryAddress()` with an address: the read failed, or the router is of an older version.
  */
-export type RewardAddressReading =
-  | { readonly kind: 'read'; readonly address: Address }
+export type RouterAddressesReading =
+  | { readonly kind: 'read'; readonly rewardAddress: Address; readonly failedDeliveryAddress: Address }
   | { readonly kind: 'unreadable'; readonly reason: string }
 
+/** Reads one address of a fee router. It throws when the router does not answer with a non-zero address. */
+async function readRouterAddress(client: ReadClient, input: { router: Address; functionName: 'rewardAddress' | 'failedDeliveryAddress' }): Promise<Address> {
+  const value = await client.readContract({ address: input.router, abi: feeRouterAbi, functionName: input.functionName })
+  if (typeof value !== 'string' || !isAddress(value, { strict: false })) throw new Error('The router did not return an address.')
+  if (value === zeroAddress) throw new Error(`The router returned the zero address for ${input.functionName}().`)
+  return getAddress(value)
+}
+
 /**
- * Reads `rewardAddress()` of a fee router. It never throws; a failure becomes an `unreadable` result. The zero address
- * is also unreadable: the router of this version refuses it in the constructor, so it is not that router.
+ * Reads `rewardAddress()` and `failedDeliveryAddress()` of a fee router. It never throws; a failure becomes an
+ * `unreadable` result. The zero address is also unreadable: the router of this version refuses it in the constructor,
+ * so it is not that router.
  */
-export async function readRewardAddress(client: ReadClient, input: { router: Address }): Promise<RewardAddressReading> {
+export async function readRouterAddresses(client: ReadClient, input: { router: Address }): Promise<RouterAddressesReading> {
   try {
-    const value = await client.readContract({ address: input.router, abi: feeRouterAbi, functionName: 'rewardAddress' })
-    if (typeof value !== 'string' || !isAddress(value, { strict: false })) return { kind: 'unreadable', reason: 'The router did not return an address.' }
-    if (value === zeroAddress) return { kind: 'unreadable', reason: 'The router returned the zero address.' }
-    return { kind: 'read', address: getAddress(value) }
+    const rewardAddress = await readRouterAddress(client, { router: input.router, functionName: 'rewardAddress' })
+    const failedDeliveryAddress = await readRouterAddress(client, { router: input.router, functionName: 'failedDeliveryAddress' })
+    return { kind: 'read', rewardAddress, failedDeliveryAddress }
   } catch (error) {
     return { kind: 'unreadable', reason: error instanceof Error ? error.message.split('\n')[0]! : String(error) }
   }

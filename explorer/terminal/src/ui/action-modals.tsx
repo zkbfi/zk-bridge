@@ -159,14 +159,14 @@ export function BridgeModal(props: ActionModalProps) {
     { kind: 'text', name: DELIVERY_FIELD.router, label: 'Router (advanced)', placeholder: 'blank is the fee router of the deployment', visibleWhen: whenActive(), hint: 'The last step before delivery, chosen in the extra data. Blank targets the fee router of the deployment on the other chain. Only its one whitelisted runner account can deliver through it. That account does not receive the tip; the reward address of the router does.' },
     { kind: 'text', name: DELIVERY_FIELD.recipient, label: 'Fee recipient', placeholder: 'blank is the receiver above', visibleWhen: whenActive(), hint: 'Receives the tokens after the fee. Blank means the receiver above.' },
   ]
-  /** Asks the router for its reward address, then builds the review. The read never throws; a failed read becomes a line on the review. */
+  /** Asks the router for its reward address and its failed delivery address, then builds the review. The read never throws; a failed read becomes a line on the review. */
   const submitBridge = async (values: Values): Promise<void> => {
     try {
       if (signer === null) throw new PlanInputError('Connect a signer first.')
       const context = { pair, snapshots: session.snapshots, signerAddress: signer.address, deliveryCost: report.data, tokenValuationsWei }
       const wanted = deliveryRouterOf(values, session.tokens, context)
-      const rewardAddress = wanted === null ? undefined : await chainAccess.readRewardAddress(wanted)
-      props.onReview('Bridge tokens', buildBridgeSteps(values, session.tokens, { ...context, ...(rewardAddress === undefined ? {} : { rewardAddress }) }))
+      const routerAddresses = wanted === null ? undefined : await chainAccess.readRouterAddresses(wanted)
+      props.onReview('Bridge tokens', buildBridgeSteps(values, session.tokens, { ...context, ...(routerAddresses === undefined ? {} : { routerAddresses }) }))
       setError(null)
     } catch (caught) {
       setError(messageOf(caught))

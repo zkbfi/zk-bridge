@@ -6,7 +6,7 @@ import type { Address, Hash } from 'viem'
 import type { FlowChainClient } from '../flow/transaction-flow'
 import type { PairConfig, TokenInfo } from '../model/types'
 import { FIXTURE_TRANSACTION_HASH, type ChainAccess } from './chain-access'
-import type { ChainSnapshotResult, RewardAddressReading } from './live-reads'
+import type { ChainSnapshotResult, RouterAddressesReading } from './live-reads'
 
 /** The numbers that the fixture chains report. */
 export interface FixtureChainNumbers {
@@ -16,15 +16,19 @@ export interface FixtureChainNumbers {
   readonly allowance: bigint
   /** The gas estimate for every call. Default: 150,000. */
   readonly gasEstimate: bigint
-  /** What every fee router answers to `rewardAddress()`. Default: a fixed sample address. */
-  readonly rewardAddress: RewardAddressReading
+  /** What every fee router answers to `rewardAddress()` and `failedDeliveryAddress()`. Default: two fixed sample addresses. */
+  readonly routerAddresses: RouterAddressesReading
 }
 
 const DEFAULT_NUMBERS: FixtureChainNumbers = {
   feeRate: 10n ** 15n,
   allowance: 0n,
   gasEstimate: 150_000n,
-  rewardAddress: { kind: 'read', address: '0x00000000000000000000000000000000000000Ab' },
+  routerAddresses: {
+    kind: 'read',
+    rewardAddress: '0x00000000000000000000000000000000000000Ab',
+    failedDeliveryAddress: '0x00000000000000000000000000000000000000Cd',
+  },
 }
 
 /** Creates chain access over memory. */
@@ -76,8 +80,8 @@ export function createFixtureChainAccess(
     async nativeBalances(addresses) {
       return addresses.map((_, index) => ({ first: BigInt(index + 1) * 10n ** 18n, second: BigInt(index) * 10n ** 21n }))
     },
-    async readRewardAddress() {
-      return settings.rewardAddress
+    async readRouterAddresses() {
+      return settings.routerAddresses
     },
     flowClient: () => flowClient,
   }

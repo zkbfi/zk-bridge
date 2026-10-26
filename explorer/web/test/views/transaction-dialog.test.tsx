@@ -50,6 +50,37 @@ describe("the confirm dialog", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it("shows the reward address and the failed delivery address that the router returned, not swapped", async () => {
+    const rewardAddress = getAddress(`0x${"11".repeat(20)}`);
+    const failedDeliveryAddress = getAddress(`0x${"22".repeat(20)}`);
+    renderPage(<TransactionDialog steps={await stepsOf({ allowance: 10n ** 12n, delivery: true })} onClose={() => undefined} />, {
+      routerAddresses: { kind: "read", rewardAddress, failedDeliveryAddress },
+    });
+    const delivery = await screen.findByTestId("confirm-delivery");
+    await waitFor(() => expect(within(delivery).getByTestId("confirm-failed-delivery")).toHaveTextContent(failedDeliveryAddress));
+    expect(within(delivery).getByTestId("confirm-failed-delivery")).toHaveTextContent(`the tokens go to ${failedDeliveryAddress}`);
+    expect(within(delivery).getByTestId("confirm-failed-delivery")).not.toHaveTextContent(rewardAddress);
+    expect(within(delivery).getByText("Tip goes to").nextSibling).toHaveTextContent(rewardAddress);
+    expect(within(delivery).queryByTestId("confirm-router-addresses-warning")).toBeNull();
+  });
+
+  it("uses the fixture router addresses by default", async () => {
+    renderPage(<TransactionDialog steps={await stepsOf({ allowance: 10n ** 12n, delivery: true })} onClose={() => undefined} />);
+    const failed = await screen.findByTestId("confirm-failed-delivery");
+    await waitFor(() => expect(failed).toHaveTextContent(getAddress("0x00000000000000000000000000000000000000Cd")));
+  });
+
+  it("names no address and warns when the router addresses are unreadable", async () => {
+    renderPage(<TransactionDialog steps={await stepsOf({ allowance: 10n ** 12n, delivery: true })} onClose={() => undefined} />, {
+      routerAddresses: { kind: "unreadable", reason: "execution reverted" },
+    });
+    const warning = await screen.findByTestId("confirm-router-addresses-warning");
+    expect(warning).toHaveTextContent(/Check the router before you sign/);
+    const failed = screen.getByTestId("confirm-failed-delivery");
+    expect(failed).toHaveTextContent(/could not read the failed delivery address/);
+    expect(failed.textContent).not.toMatch(/0x[0-9a-fA-F]{40}/);
+  });
+
   it("shows that no router is involved when there is no tip", async () => {
     renderPage(<TransactionDialog steps={await stepsOf({ allowance: 10n ** 12n, delivery: false })} onClose={() => undefined} />);
     expect(await screen.findByTestId("confirm-no-router")).toHaveTextContent(/No router is involved/);

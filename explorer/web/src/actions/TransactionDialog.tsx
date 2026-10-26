@@ -1,4 +1,5 @@
 import { Box, Button, Flex, Stack, Text } from "@chakra-ui/react";
+import { useRouterAddresses } from "../app/queries";
 import { buildConfirmView, type ConfirmLine, type ConfirmView } from "../tx/confirm-model";
 import type { WebStep } from "../tx/bridge-steps";
 import type { SequenceState } from "../tx/transaction-sequence";
@@ -93,6 +94,19 @@ const Review = ({ view, prepared, position }: ReviewProps) => {
               <Notice tone="warning">{view.delivery.routerWarning}</Notice>
             </Box>
           )}
+          <DataRow label="Tip goes to">
+            <Mono>{view.delivery.rewardAddressText}</Mono>
+          </DataRow>
+          <DataRow label="If delivery fails">
+            <Text as="span" data-testid="confirm-failed-delivery">
+              {view.delivery.failedDeliveryText}
+            </Text>
+          </DataRow>
+          {view.delivery.routerAddressesWarning === null ? null : (
+            <Box data-testid="confirm-router-addresses-warning">
+              <Notice tone="warning">{view.delivery.routerAddressesWarning}</Notice>
+            </Box>
+          )}
           <DataRow label="Tip mode">{view.delivery.tipMode}</DataRow>
           <DataRow label="Tip now">
             <Text as="span" data-testid="confirm-tip-now">
@@ -149,7 +163,9 @@ const Review = ({ view, prepared, position }: ReviewProps) => {
 export const TransactionDialog = ({ steps, onClose }: TransactionDialogProps) => {
   const { state, sequence } = useTransactionSequence(steps);
   const step = state.steps[state.stepIndex];
-  const view = step === undefined ? null : buildConfirmView(step);
+  const delivery = step?.disclosure.delivery ?? null;
+  const routerAddresses = useRouterAddresses(step?.disclosure.destinationChainId ?? null, delivery?.router ?? null, { enabled: delivery !== null });
+  const view = step === undefined ? null : buildConfirmView(step, routerAddresses.data);
   const blockedMessage = state.phase === "review" && view !== null ? view.blockedReason : null;
   const cancel = (): void => {
     sequence.cancel();

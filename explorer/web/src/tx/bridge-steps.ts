@@ -23,6 +23,8 @@ export type StepDisclosure = {
   readonly feesApplyTo: "this-transaction" | "next-transaction";
   /** The native coin of the destination chain, which prices the cost lines of a delivery fee. Null for a step that is not a relay. */
   readonly destinationNativeSymbol: string | null;
+  /** The chain that delivers the message, where the router lives. Null for a step that is not a relay. */
+  readonly destinationChainId: number | null;
   /** The token that the amount is in, for the fee lines. Null for a step that is not a relay. */
   readonly amountToken: { readonly symbol: string; readonly decimals: number } | null;
   /** The bridge fees of a relay, or null for a step that is not a relay. */
@@ -106,7 +108,7 @@ export const planBridgeSteps = (input: PlanBridgeInput): readonly WebStep[] => {
 
   if (delivery === null) {
     const steps = buildBridgeSteps({ ...values }, tokens, context);
-    return withDisclosure(steps, { amountToken, destinationNativeSymbol: destinationChain.nativeSymbol, bridgeFees, delivery: null });
+    return withDisclosure(steps, { amountToken, destinationNativeSymbol: destinationChain.nativeSymbol, destinationChainId: destinationChain.chainId, bridgeFees, delivery: null });
   }
 
   if (isNative) throw new PlanInputError("The wrap route carries no call data, so it cannot carry a tip.");
@@ -120,7 +122,7 @@ export const planBridgeSteps = (input: PlanBridgeInput): readonly WebStep[] => {
         ? { ...step.plan, arguments: step.plan.arguments.map((argument) => explainRouterReceiver(argument, { chainName: destinationChain.name, recipient: receiver, deployed })) }
         : step.plan,
   }));
-  return withDisclosure(adjusted, { amountToken, destinationNativeSymbol: destinationChain.nativeSymbol, bridgeFees, delivery });
+  return withDisclosure(adjusted, { amountToken, destinationNativeSymbol: destinationChain.nativeSymbol, destinationChainId: destinationChain.chainId, bridgeFees, delivery });
 };
 
 /**

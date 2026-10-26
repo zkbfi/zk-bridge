@@ -160,7 +160,7 @@ export function createConnectionRuntime(input: ConnectionRuntimeInput): Connecti
       },
       readSnapshots: (request) => chainAccess.readSnapshots(request),
       nativeBalances: (addresses) => chainAccess.nativeBalances(addresses),
-      readRewardAddress: (request) => chainAccess.readRewardAddress(request),
+      readRouterAddresses: (request) => chainAccess.readRouterAddresses(request),
       flowClient: (chainId) => chainAccess.flowClient(chainId),
     },
     connection: () => connection,

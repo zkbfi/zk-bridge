@@ -105,7 +105,7 @@ describe('apply', () => {
     expect(access.mode).toBe('rpc')
     await expect(access.readSnapshots({ account: `0x${'1'.repeat(40)}`, tokens: [] })).rejects.toThrow('build 2')
     await expect(access.nativeBalances([])).rejects.toThrow('build 2')
-    await expect(access.readRewardAddress({ chainId: 1, router: `0x${'2'.repeat(40)}` })).rejects.toThrow('build 2')
+    await expect(access.readRouterAddresses({ chainId: 1, router: `0x${'2'.repeat(40)}` })).rejects.toThrow('build 2')
     expect(() => access.flowClient(369)).toThrow('build 2')
   })
 

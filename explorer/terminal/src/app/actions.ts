@@ -5,7 +5,7 @@
 import type { DeliveryCostReport } from '@zk-bridge/shared'
 import type { Address } from 'viem'
 import { parseUnits, AmountParseError } from '../format/amounts'
-import type { ChainSnapshot, ChainSnapshotResult, RewardAddressReading, TokenPosition } from '../chain/live-reads'
+import type { ChainSnapshot, ChainSnapshotResult, RouterAddressesReading, TokenPosition } from '../chain/live-reads'
 import type { FlowStep } from '../flow/transaction-flow'
 import type { ChainConfig, ChainSide, PairConfig, TokenInfo } from '../model/types'
 import { buildDeliveryFeeModel, paysForDelivery, resolveDeliveryTarget, routerOf, transferValueOf, type TokenValuationsWei } from './delivery-fee-form'
@@ -32,10 +32,10 @@ export interface BridgeContext {
   /** The user's prices of tokens in wei, by lowercase address. Default: none. */
   readonly tokenValuationsWei?: TokenValuationsWei
   /**
-   * What the router of the delivery fee says about the address that receives the tip: read with
-   * {@link deliveryRouterOf}. Absent means nobody read it, and the review says so.
+   * What the router of the delivery fee says about the address that receives the tip and the address that receives
+   * what it cannot deliver: read with {@link deliveryRouterOf}. Absent means nobody read it, and the review says so.
    */
-  readonly rewardAddress?: RewardAddressReading
+  readonly routerAddresses?: RouterAddressesReading
 }
 
 /** The separator in a token choice value: `<side>:<address or native>`. */
@@ -96,7 +96,7 @@ export function buildBridgeSteps(values: Readonly<Record<string, string>>, token
 }
 
 /**
- * Refuses a relay to a fee router of the deployment whose data the router would send to its reward address. A relay
+ * Refuses a relay to a fee router of the deployment whose data the router would hand to its failed delivery address. A relay
  * that pays for delivery builds its own data and meets the same guard in the encoder.
  */
 function requireValidTermsForKnownRouter(
@@ -149,11 +149,11 @@ function deliveryWanted(
 }
 
 /** The reading of a review that nobody asked the router for. The review must not show an address it never read. */
-const NOT_READ_REWARD_ADDRESS: RewardAddressReading = { kind: 'unreadable', reason: 'The reward address was not read from the router.' }
+const NOT_READ_ROUTER_ADDRESSES: RouterAddressesReading = { kind: 'unreadable', reason: 'The addresses were not read from the router.' }
 
 /**
- * The router and the chain whose `rewardAddress()` the review of this form needs to show, or null when the form builds
- * no delivery fee. The form reads the address from the router, then passes it in the context.
+ * The router and the chain whose `rewardAddress()` and `failedDeliveryAddress()` the review of this form needs to show, or null when the form builds
+ * no delivery fee. The form reads the addresses from the router, then passes it in the context.
  */
 export function deliveryRouterOf(
   values: Readonly<Record<string, string>>,
@@ -205,7 +205,7 @@ function deliveryRelayOf(
       token: target.token,
       description: chosen.description,
       dataSource,
-      rewardAddress: context.rewardAddress ?? NOT_READ_REWARD_ADDRESS,
+      routerAddresses: context.routerAddresses ?? NOT_READ_ROUTER_ADDRESSES,
     },
   }
 }

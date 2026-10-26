@@ -105,7 +105,7 @@ export function fakeChainAccesses() {
       nativeBalances: async () => {
         throw new Error(`build ${build}`)
       },
-      readRewardAddress: async () => {
+      readRouterAddresses: async () => {
         throw new Error(`build ${build}`)
       },
       flowClient: () => {

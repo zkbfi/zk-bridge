@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { erc20Abi, type Address } from 'viem'
-import { readChainSnapshot, readRewardAddress, type ReadClient } from '../../src/chain/live-reads'
+import { readChainSnapshot, readRouterAddresses, type ReadClient } from '../../src/chain/live-reads'
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from '../../src/data/fixtures'
 import { tokenMediatorAbi } from '../../src/tx/abis'
 
@@ -104,7 +104,7 @@ describe('readChainSnapshot', () => {
   })
 })
 
-describe('readRewardAddress with a failure that is not an Error', () => {
+describe('readRouterAddresses with a failure that is not an Error', () => {
   test('keeps the text of the failure as the reason', async () => {
     const client: ReadClient = {
       async getBalance() {
@@ -114,6 +114,6 @@ describe('readRewardAddress with a failure that is not an Error', () => {
         throw 'bare text'
       },
     }
-    expect(await readRewardAddress(client, { router: '0x00000000000000000000000000000000000000a2' })).toEqual({ kind: 'unreadable', reason: 'bare text' })
+    expect(await readRouterAddresses(client, { router: '0x00000000000000000000000000000000000000a2' })).toEqual({ kind: 'unreadable', reason: 'bare text' })
   })
 })

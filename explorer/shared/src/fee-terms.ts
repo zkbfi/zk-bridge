@@ -4,9 +4,9 @@ import { sameAddress, ZERO_ADDRESS } from "./address.js";
 /**
  * The guard for the data of a relay to a `FeeRouter`.
  *
- * The router records the whole value for its reward address when the terms are invalid: a recipient that is the zero
- * address or the router itself, or data that is neither 20 bytes nor at least 128 bytes. The contract keeps that
- * behaviour on purpose. So every interface must refuse to build such a transfer. This module is the one place that
+ * The router hands the value to its failed delivery address when the terms are invalid: a recipient that is the zero
+ * address or the router itself (after the tip, when the delivery pays one), or data that is neither 20 bytes nor at
+ * least 128 bytes (the whole value). The contract keeps that behaviour on purpose. So every interface must refuse to build such a transfer. This module is the one place that
  * decides, and `encodeFeeDirector` calls it, so no caller can skip it.
  */
 
@@ -84,7 +84,7 @@ const recipientOf = (data: Hex, length: number): Address => {
 };
 
 /**
- * Refuses data that the router would send to its reward address, and the one legacy shape that has no native coin to unwrap.
+ * Refuses data that the router would hand to its failed delivery address, and the one legacy shape that has no native coin to unwrap.
  *
  * @param input The router, the data, the token and the protected addresses.
  * @throws FeeTermsError with a sentence for the user.
@@ -96,13 +96,13 @@ export const assertValidFeeTerms = (input: FeeTermsInput): void => {
   const length = bytesOf(data);
   if (length !== LEGACY_RECEIVER_BYTES && length !== DIRECTOR_DATA_BYTES) {
     throw new FeeTermsError(
-      `The call data to a fee router must be the ${DIRECTOR_DATA_BYTES} byte fee terms, not ${length} bytes. The router sends other data to its reward address.`,
+      `The call data to a fee router must be the ${DIRECTOR_DATA_BYTES} byte fee terms, not ${length} bytes. The router hands other data to its failed delivery address.`,
     );
   }
   if (length === LEGACY_RECEIVER_BYTES) assertLegacyToken(input);
   const recipient = recipientOf(data, length);
-  if (sameAddress(recipient, ZERO_ADDRESS)) throw new FeeTermsError("The recipient of the fee terms is the zero address. The router would send the whole value to its reward address.");
-  if (sameAddress(recipient, router)) throw new FeeTermsError("The recipient of the fee terms is the router itself. The router would send the whole value to its reward address.");
+  if (sameAddress(recipient, ZERO_ADDRESS)) throw new FeeTermsError("The recipient of the fee terms is the zero address. The router would hand the value to its failed delivery address.");
+  if (sameAddress(recipient, router)) throw new FeeTermsError("The recipient of the fee terms is the router itself. The router would hand the value to its failed delivery address.");
   const clash = input.protectedAddresses.find((protectedAddress) => sameAddress(protectedAddress.address, recipient));
   if (clash !== undefined) throw new FeeTermsError(`The recipient of the fee terms is ${clash.label}. Tokens sent there are lost to you. Name your own account.`);
 };

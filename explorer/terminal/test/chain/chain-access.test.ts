@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { Address } from 'viem'
+import { getAddress, type Address } from 'viem'
 import { createRpcChainAccess, FIXTURE_TRANSACTION_HASH, MissingRpcError, type RpcClient, type RpcClientFactory } from '../../src/chain/chain-access'
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from '../../src/data/fixtures'
 import type { ChainConfig } from '../../src/model/types'
@@ -116,32 +116,33 @@ describe('createRpcChainAccess', () => {
     expect(await access.nativeBalances([account])).toEqual([{ first: null, second: null }])
   })
 
-  test('readRewardAddress asks the router on the named chain and returns what it answers', async () => {
+  test('readRouterAddresses asks the router on the named chain for both addresses and returns what it answers', async () => {
     const reward = '0x00000000000000000000000000000000000000f1'
-    const asked: number[] = []
-    const { factory } = fakeFactory({ 369: { contract: (name) => (asked.push(369), name === 'rewardAddress' ? reward : null) } })
-    const reading = await createRpcChainAccess(FIXTURE_PAIR, urls, factory).readRewardAddress({ chainId: 369, router })
-    expect(reading).toEqual({ kind: 'read', address: '0x00000000000000000000000000000000000000f1' })
-    expect(asked).toEqual([369])
+    const failedDelivery = '0x00000000000000000000000000000000000000f2'
+    const asked: string[] = []
+    const { factory } = fakeFactory({ 369: { contract: (name) => (asked.push(name), name === 'rewardAddress' ? reward : failedDelivery) } })
+    const reading = await createRpcChainAccess(FIXTURE_PAIR, urls, factory).readRouterAddresses({ chainId: 369, router })
+    expect(reading).toEqual({ kind: 'read', rewardAddress: getAddress(reward), failedDeliveryAddress: getAddress(failedDelivery) })
+    expect(asked).toEqual(['rewardAddress', 'failedDeliveryAddress'])
   })
 
-  test('readRewardAddress is unreadable, with the reason, for a chain with no URL', async () => {
-    const reading = await createRpcChainAccess(FIXTURE_PAIR, {}, fakeFactory().factory).readRewardAddress({ chainId: 369, router })
+  test('readRouterAddresses is unreadable, with the reason, for a chain with no URL', async () => {
+    const reading = await createRpcChainAccess(FIXTURE_PAIR, {}, fakeFactory().factory).readRouterAddresses({ chainId: 369, router })
     expect(reading).toEqual({ kind: 'unreadable', reason: 'Set EXPLORER_RPC_URL_369 to the RPC URL of PulseChain.' })
   })
 
-  test('readRewardAddress is unreadable for a chain that is not in the pair, and creates no client', async () => {
+  test('readRouterAddresses is unreadable for a chain that is not in the pair, and creates no client', async () => {
     const { factory, created } = fakeFactory()
-    const reading = await createRpcChainAccess(FIXTURE_PAIR, urls, factory).readRewardAddress({ chainId: 5, router })
+    const reading = await createRpcChainAccess(FIXTURE_PAIR, urls, factory).readRouterAddresses({ chainId: 5, router })
     expect(reading).toEqual({ kind: 'unreadable', reason: 'Chain 5 is not in pair eth-pls.' })
     expect(created).toHaveLength(0)
   })
 
-  test('readRewardAddress keeps the text of a failure that is not an Error', async () => {
+  test('readRouterAddresses keeps the text of a failure that is not an Error', async () => {
     const access = createRpcChainAccess(FIXTURE_PAIR, urls, () => {
       throw 'factory broke'
     })
-    expect(await access.readRewardAddress({ chainId: 1, router })).toEqual({ kind: 'unreadable', reason: 'factory broke' })
+    expect(await access.readRouterAddresses({ chainId: 1, router })).toEqual({ kind: 'unreadable', reason: 'factory broke' })
   })
 
   test('flowClient throws MissingRpcError for a chain with no URL, and a plain error for a chain outside the pair', () => {

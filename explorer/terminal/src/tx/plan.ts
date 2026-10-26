@@ -7,7 +7,7 @@ import { decodeFeeDirector, type FeeDataSource, type FeeDescription, type FeeDir
 import { encodeFunctionData, erc20Abi, getAddress, isAddress, isHex, type Address, type Hex } from 'viem'
 import { feeOf, formatRateAsPercent, formatUnits } from '../format/amounts'
 import type { ChainConfig, TokenInfo } from '../model/types'
-import type { RewardAddressReading } from '../chain/live-reads'
+import type { RouterAddressesReading } from '../chain/live-reads'
 import { messageBridgeAbi, tokenMediatorAbi, wrappedNativeRouterAbi } from './abis'
 
 /** One line of the argument list of a transaction, as the confirmation screen shows it. */
@@ -44,8 +44,8 @@ export interface DeliveryFeeReview {
   readonly description: FeeDescription
   /** The gas and the base fee that the amount now uses. */
   readonly dataSource: FeeDataSource
-  /** What the router on the destination chain says about the address that receives the tip. */
-  readonly rewardAddress: RewardAddressReading
+  /** What the router on the destination chain says about the address that receives the tip and the address that receives what it cannot deliver. */
+  readonly routerAddresses: RouterAddressesReading
 }
 
 /** A transaction that the dashboard offers for confirmation. It has no nonce or gas yet. */
@@ -362,7 +362,7 @@ function holdsDirector(data: Hex, director: FeeDirector): boolean {
 function deliveryFeeNotes(deliveryFee: DeliveryFeeReview): string[] {
   return [
     `The receiver is the router ${getAddress(deliveryFee.router)} on ${deliveryFee.routerChainName}. The tokens go to ${getAddress(deliveryFee.director.recipient)} after the tip.`,
-    'The tip goes to the reward address of the fee router, not to the runner account that signs the delivery. Only the one whitelisted runner account can deliver through the router, and it receives no tip. When anyone else delivers on the bridge directly, no reward address is recorded, no tip is paid, and the recipient gets everything.',
+    'The tip goes to the reward address of the fee router, not to the runner account that signs the delivery. Only the one whitelisted runner account can deliver through the router, and it receives no tip. When anyone else delivers on the bridge directly, no reward address is recorded, no tip is paid, and the recipient gets everything. When the router cannot deliver to the recipient, it hands the tokens to its failed delivery address.',
   ]
 }
 

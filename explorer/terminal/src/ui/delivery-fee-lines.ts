@@ -5,7 +5,7 @@
  */
 import { FEE_SETTING, TIP_MODE_NAMES, feeModeOf, routerInWords, type FeeDirector, type FeeOption } from '@zk-bridge/shared'
 import { getAddress } from 'viem'
-import type { RewardAddressReading } from '../chain/live-reads'
+import type { RouterAddressesReading } from '../chain/live-reads'
 import type { DeliveryFeeState, DeliveryTarget } from '../app/delivery-fee-form'
 import { formatRateAsPercent, formatUnits } from '../format/amounts'
 import type { DeliveryFeeReview } from '../tx/plan'
@@ -39,14 +39,21 @@ export function feeFlagsInWords(settings: bigint): string {
 }
 
 /**
- * The lines that name the address that receives the tip. The reading comes from the router itself. When it failed,
- * the lines say so and do not name any address: the screen must not claim a destination that nobody confirmed.
+ * The lines that name the address that receives the tip and the address that receives what the router cannot deliver.
+ * The reading comes from the router itself. When it failed, the lines say so and do not name any address: the screen
+ * must not claim a destination that nobody confirmed.
  */
-export function rewardAddressLines(reading: RewardAddressReading): readonly Line[] {
-  if (reading.kind === 'read') return [reviewRow('Tip goes to', `${getAddress(reading.address)} (reward address of the router)`)]
+export function routerAddressLines(reading: RouterAddressesReading): readonly Line[] {
+  if (reading.kind === 'read') {
+    return [
+      reviewRow('Tip goes to', `${getAddress(reading.rewardAddress)} (reward address of the router)`),
+      reviewRow('On failure', `the tokens go to ${getAddress(reading.failedDeliveryAddress)} (failed delivery address of the router)`),
+    ]
+  }
   return [
     reviewRow('Tip goes to', 'unknown'),
-    [colored(`Warning: the router did not return its reward address (${reading.reason}).`, theme.warn)],
+    reviewRow('On failure', 'unknown'),
+    [colored(`Warning: the router did not return its addresses (${reading.reason}).`, theme.warn)],
     [colored('It may be an older router that pays the tip to the runner, or not a fee router. Check it before you send.', theme.warn)],
   ]
 }
@@ -142,7 +149,7 @@ export function deliveryFeeReviewLines(deliveryFee: DeliveryFeeReview): readonly
     reviewRow('Router', routerInWords(deliveryFee.router, deliveryFee.defaultRouter)),
     reviewRow('Tip mode', TIP_MODE_NAMES[description.mode]),
     reviewRow('Recipient', getAddress(director.recipient)),
-    ...rewardAddressLines(deliveryFee.rewardAddress),
+    ...routerAddressLines(deliveryFee.routerAddresses),
     reviewRow('Flags', feeFlagsInWords(director.settings)),
     reviewRow('Limit', limitInWords(director, token)),
     reviewRow('Multiplier', multiplierInWords(director)),

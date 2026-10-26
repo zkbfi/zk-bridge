@@ -13,7 +13,7 @@ export const ANVIL_MNEMONIC = "test test test test test test test test test test
 
 /** Accounts of the stack, by index of the mnemonic. Account 0 deploys. */
 /** The reward account receives the fees. It is not the runner: the runner is a hot key that only pays gas. */
-export const ACCOUNT = { deployer: 0, oracle: 1, runner: 2, recipient: 3, reward: 4 } as const;
+export const ACCOUNT = { deployer: 0, oracle: 1, runner: 2, recipient: 3, reward: 4, failedDelivery: 5 } as const;
 
 const ARTIFACTS: ReadonlyArray<readonly [name: string, file: string]> = [
   ["ProofSizedVerifier", "StackDoubles.sol/ProofSizedVerifier.json"],
@@ -99,7 +99,7 @@ export async function startStack(artifacts: SyntheticArtifacts): Promise<Stack> 
   ]);
   const mediatorBridge = await chain.deploy("StubMediatorBridge");
   const wrappedNative = await chain.deploy("MockWrappedNative");
-  const feeRouter = await chain.deploy("FeeRouter", [mediatorBridge, wrappedNative, account(ACCOUNT.runner).address, account(ACCOUNT.reward).address]);
+  const feeRouter = await chain.deploy("FeeRouter", [mediatorBridge, wrappedNative, account(ACCOUNT.runner).address, account(ACCOUNT.reward).address, account(ACCOUNT.failedDelivery).address]);
   const multicall3 = await chain.deploy("Multicall3");
   const token = await chain.deploy("MockERC20", ["Fee Token", "FEE"]);
   return { anvil, chain, lightClient, verifier, feeRouter, multicall3, mediatorBridge, wrappedNative, token, programKey };

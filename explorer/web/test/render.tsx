@@ -8,6 +8,7 @@ import { render, type RenderResult } from "@testing-library/react";
 import type { ReactElement } from "react";
 import type { Hash } from "viem";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
+import type { RouterAddressesReading } from "@terminal/chain/live-reads";
 import type { DeliveryCostReport } from "@zk-bridge/shared";
 import { ActionsContext, type ActionsPort } from "../src/app/actions-context";
 import { createServices, ServicesProvider, type Services } from "../src/app/services";
@@ -27,6 +28,8 @@ export type RenderPageOptions = {
   readonly report?: DeliveryReportOptions;
   /** Replaces the delivery cost report entirely. */
   readonly reportOverride?: (chainId: number) => DeliveryCostReport;
+  /** What every router answers for its reward address and failed delivery address. Default: the fixture sample addresses. */
+  readonly routerAddresses?: RouterAddressesReading;
   /** Receives the dialogs that components ask for. */
   readonly actions?: ActionsPort;
 };
@@ -36,6 +39,10 @@ export const buildTestServices = (options: RenderPageOptions = {}): Services => 
   const base = createServices(readConfiguration({ VITE_EXPLORER_DATA: "fixture" }), FIXTURE_PAIR);
   return {
     ...base,
+    chainAccess:
+      options.routerAddresses === undefined
+        ? base.chainAccess
+        : { ...base.chainAccess, readRouterAddresses: async () => options.routerAddresses as RouterAddressesReading },
     dataSource: {
       ...base.dataSource,
       getDeliveryCost: async (chainId) => (options.reportOverride === undefined ? buildDeliveryReport(chainId, options.report) : options.reportOverride(chainId)),

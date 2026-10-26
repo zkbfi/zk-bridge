@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { Address, Hex } from "viem";
 import type { DeliveryCostReport } from "@zk-bridge/shared";
 import type { FeedFilter } from "@terminal/model/types";
+import type { RouterAddressesReading } from "@terminal/chain/live-reads";
 import { useServices } from "./services";
 
 const POLL_MILLISECONDS = 15_000;
@@ -84,6 +85,20 @@ export const useDeliveryCost = (chainId: number, options: { readonly enabled: bo
 export const useMessage = (messageId: Hex) => {
   const { indexer } = useServices();
   return useQuery({ queryKey: ["message", messageId], queryFn: () => indexer.message(messageId), refetchInterval: POLL_MILLISECONDS });
+};
+
+/**
+ * What the router answers to `rewardAddress()` and `failedDeliveryAddress()` on the destination chain. The read never
+ * throws: a failure comes back as an `unreadable` reading. It is read once, because the two addresses are immutable.
+ */
+export const useRouterAddresses = (chainId: number | null, router: Address | null, options: { readonly enabled: boolean }) => {
+  const { chainAccess } = useServices();
+  return useQuery<RouterAddressesReading>({
+    queryKey: ["router-addresses", chainId, router],
+    queryFn: () => chainAccess.readRouterAddresses({ chainId: chainId as number, router: router as Address }),
+    enabled: options.enabled && chainId !== null && router !== null,
+    staleTime: Infinity,
+  });
 };
 
 /** The priority fee that a delivery on a chain pays now, in wei per gas. */

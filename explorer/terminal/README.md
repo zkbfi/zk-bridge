@@ -85,16 +85,18 @@ sets or changes the rate, and the runner supplies no rate.
   `EXPLORER_TOKEN_VALUATIONS_WEI`. Without a value the panel says `no value of the token is configured`, and the
   default tip still stands. The gas multiplier then asks for your coin price.
 - The panel reads `GET /api/delivery-cost?chainId=<id>` from the indexer, and `EXPLORER_DATA=fixture` serves a built-in
-  report. The confirmation screen shows the router, the tip mode, the recipient, the address that receives the tip, the flags, the limit, the multiplier in
+  report. The confirmation screen shows the router, the tip mode, the recipient, the address that receives the tip, the address that receives the tokens when delivery fails, the flags, the limit, the multiplier in
   words, the tip now with its label (`exact`, or `estimate, at most X`), the most that the tip can be, and the data
   source.
 - The fee router whitelists exactly one account, its immutable `runner`. Only that runner account can deliver through
   the router, and it does not receive the tip. The router pays the tip to its immutable `rewardAddress`. The runner
   names that address with each delivery, and the call reverts unless it matches. When anyone else delivers on the
-  bridge directly, no tip is paid and the recipient gets everything. A direct delivery costs you nothing.
-- The confirmation screen reads `rewardAddress()` from the router on the destination chain at the moment you press
-  Enter, and shows it as `Tip goes to`. When the router does not answer (an older router, a wrong address, or a dead
-  endpoint), the line says `unknown` and a warning explains why. The warning does not block the send: you decide.
+  bridge directly, no tip is paid and the recipient gets everything. A direct delivery costs you nothing. The router keeps
+  no claim record for the recipient. When it cannot deliver to the recipient, it hands the tokens to its immutable
+  `failedDeliveryAddress`.
+- The confirmation screen reads `rewardAddress()` and `failedDeliveryAddress()` from the router on the destination chain
+  at the moment you press Enter, and shows them as `Tip goes to` and `On failure`. When the router does not answer (an older router, a wrong address, or a dead
+  endpoint), both lines say `unknown` and a warning explains why. The warning does not block the send: you decide.
 
 ## Layout of the code
 

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { FEE_SETTING, decodeFeeDirector, encodeFeeDirector, maximumFee } from '@zk-bridge/shared'
 import { decodeFunctionData, getAddress } from 'viem'
 import { buildBridgeSteps, deliveryRouterOf } from '../../src/app/actions'
-import type { RewardAddressReading } from '../../src/chain/live-reads'
+import type { RouterAddressesReading } from '../../src/chain/live-reads'
 import { createFixtureChainAccess } from '../../src/chain/fixture-chain-access'
 import { FIXTURE_ACCOUNT, FIXTURE_NOW, FIXTURE_PAIR, FIXTURE_TOKENS, buildFixtureDeliveryCost } from '../../src/data/fixtures'
 import { tokenMediatorAbi } from '../../src/tx/abis'
@@ -16,7 +16,7 @@ const receiver = '0x00000000000000000000000000000000000000d1'
 const valuations = { [zkUsdc.address.toLowerCase()]: 400_000_000_000_000n }
 const values = { token: `first:${usdc.address}`, amount: '100', receiver, mode: 'plain', delivery: 'yes', feeMode: 'percentage', feeMargin: '10', feePriorityGwei: '1' }
 
-async function stepsFor(overrides: Record<string, string>, extra: { pair?: typeof FIXTURE_PAIR; deliveryCost?: ReturnType<typeof buildFixtureDeliveryCost> | null; tokenValuationsWei?: Record<string, bigint>; rewardAddress?: RewardAddressReading } = {}) {
+async function stepsFor(overrides: Record<string, string>, extra: { pair?: typeof FIXTURE_PAIR; deliveryCost?: ReturnType<typeof buildFixtureDeliveryCost> | null; tokenValuationsWei?: Record<string, bigint>; routerAddresses?: RouterAddressesReading } = {}) {
   const snapshots = await createFixtureChainAccess(FIXTURE_PAIR).readSnapshots({ account: FIXTURE_ACCOUNT, tokens: FIXTURE_TOKENS })
   return buildBridgeSteps({ ...values, ...overrides }, FIXTURE_TOKENS, {
     pair: extra.pair ?? FIXTURE_PAIR,
@@ -24,7 +24,7 @@ async function stepsFor(overrides: Record<string, string>, extra: { pair?: typeo
     signerAddress: FIXTURE_ACCOUNT,
     deliveryCost: extra.deliveryCost === undefined ? buildFixtureDeliveryCost(369, FIXTURE_NOW) : extra.deliveryCost,
     tokenValuationsWei: extra.tokenValuationsWei ?? valuations,
-    ...(extra.rewardAddress === undefined ? {} : { rewardAddress: extra.rewardAddress }),
+    ...(extra.routerAddresses === undefined ? {} : { routerAddresses: extra.routerAddresses }),
   })
 }
 
@@ -95,29 +95,36 @@ describe('relay that pays for delivery', () => {
     expect(text).toContain('Only the one whitelisted runner account can deliver through the router, and it receives no tip')
     expect(text).not.toContain('pays the tip only to its one whitelisted runner')
     expect(text).toContain('no reward address is recorded, no tip is paid, and the recipient gets everything')
+    expect(text).toContain('When the router cannot deliver to the recipient, it hands the tokens to its failed delivery address.')
   })
 
-  test('the confirmation screen shows the reward address that the router returned, whichever it is', async () => {
+  test('the confirmation screen shows the two addresses that the router returned, whichever they are', async () => {
     const first = '0x00000000000000000000000000000000000000f1'
     const second = '0x00000000000000000000000000000000000000f2'
-    for (const rewardAddress of [first, second] as const) {
-      const text = await reviewTextOf(await relayOf({}, { rewardAddress: { kind: 'read', address: rewardAddress } }))
+    const third = '0x00000000000000000000000000000000000000f3'
+    for (const [rewardAddress, failedDeliveryAddress] of [[first, second], [second, third]] as const) {
+      const text = await reviewTextOf(await relayOf({}, { routerAddresses: { kind: 'read', rewardAddress, failedDeliveryAddress } }))
       expect(text).toContain(`Tip goes to   ${getAddress(rewardAddress)} (reward address of the router)`)
-      expect(text).not.toContain('Warning: the router did not return its reward address')
+      expect(text).toMatch(new RegExp(`On failure\\s*the tokens go to ${getAddress(failedDeliveryAddress)} \\(failed delivery address of the router\\)`))
+      expect(text).not.toContain('Warning: the router did not return its addresses')
     }
-    const other = await reviewTextOf(await relayOf({}, { rewardAddress: { kind: 'read', address: second } }))
-    expect(other).not.toContain(getAddress(first))
+    // A reader who trusts the screen must not see the tip address where the rescued tokens go.
+    const swapped = await reviewTextOf(await relayOf({}, { routerAddresses: { kind: 'read', rewardAddress: second, failedDeliveryAddress: third } }))
+    expect(swapped).not.toContain(getAddress(first))
+    expect(swapped).not.toContain(`the tokens go to ${getAddress(second)}`)
   })
 
-  test('a failed read says so plainly, names no address, and does not block the send', async () => {
-    const reason = 'execution reverted: the function rewardAddress() does not exist'
-    const plan = await relayOf({}, { rewardAddress: { kind: 'unreadable', reason } })
+  test('a failed read says so plainly, names no address in either row, and does not block the send', async () => {
+    const reason = 'The contract function "failedDeliveryAddress" reverted.'
+    const plan = await relayOf({}, { routerAddresses: { kind: 'unreadable', reason } })
     const text = await reviewTextOf(plan)
     expect(text).toContain('Tip goes to   unknown')
-    expect(text).toContain('Warning: the router did not return its reward address')
+    expect(text).toMatch(/On failure\s*unknown/)
+    expect(text).toContain('Warning: the router did not return its addresses')
     expect(text).toContain(reason)
     expect(text).toContain('It may be an older router that pays the tip to the runner')
     expect(text).not.toContain('(reward address of the router)')
+    expect(text).not.toContain('(failed delivery address of the router)')
     // The plan still exists: the user decides.
     expect(plan.functionName).toBe('relayTokensAndCall')
   })
@@ -125,7 +132,8 @@ describe('relay that pays for delivery', () => {
   test('a build that nobody gave a reading to shows the warning and never an invented address', async () => {
     const text = await reviewTextOf(await relayOf({}))
     expect(text).toContain('Tip goes to   unknown')
-    expect(text).toContain('The reward address was not read from the router.')
+    expect(text).toMatch(/On failure\s*unknown/)
+    expect(text).toContain('The addresses were not read from the router.')
   })
 
   test('the router to ask is the router that the form names: the default, or the advanced field', async () => {
@@ -203,7 +211,7 @@ describe('planRelay refuses a delivery fee that the data does not carry', () => 
   const director = { recipient: getAddress(receiver), settings: FEE_SETTING.fixedFee, limit: 1n, multiplier: 0n }
   const router = FIXTURE_PAIR.second.contracts.feeRouter!
   const base = { chain: FIXTURE_PAIR.first, token: usdc, amount: 5n, currentFeeRate: 0n }
-  const review = { router, defaultRouter: router, routerChainName: 'PulseChain', director, token: { symbol: 'zkbUSDC', decimals: 6 }, description: undefined as never, dataSource: undefined as never, rewardAddress: { kind: 'read' as const, address: router } }
+  const review = { router, defaultRouter: router, routerChainName: 'PulseChain', director, token: { symbol: 'zkbUSDC', decimals: 6 }, description: undefined as never, dataSource: undefined as never, routerAddresses: { kind: 'read' as const, rewardAddress: router, failedDeliveryAddress: router } }
 
   test('a plain mode, another receiver and other data are each refused', () => {
     expect(() => planRelay({ ...base, receiver: router, mode: { kind: 'plain' }, deliveryFee: review })).toThrow('needs relayTokensAndCall')

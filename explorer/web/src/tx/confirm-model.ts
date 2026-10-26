@@ -4,6 +4,7 @@
  */
 import { decodeFeeDirector, feeModeOf, TIP_MODE_NAMES, type FeeDirector } from "@zk-bridge/shared";
 import { formatUnits, formatRateAsPercent } from "@terminal/format/amounts";
+import type { RouterAddressesReading } from "@terminal/chain/live-reads";
 import { decodeKnownCall } from "@terminal/tx/decode";
 import type { DisplayArgument } from "@terminal/tx/plan";
 import { decodeFunctionData, getAddress, isAddress, type AbiFunction, type Address, type Hex } from "viem";
@@ -34,6 +35,12 @@ export type DeliveryView = {
   readonly routerText: string;
   /** A warning when the router is not the fee router of the deployment, or null. */
   readonly routerWarning: string | null;
+  /** The address that receives the tip, as the router answered, or `unknown`. */
+  readonly rewardAddressText: string;
+  /** What happens when the router cannot deliver: `the tokens go to <address>`, or a sentence that the address could not be read. */
+  readonly failedDeliveryText: string;
+  /** A warning to check the router before signing when its addresses could not be read, or null. */
+  readonly routerAddressesWarning: string | null;
   /** The tip mode in words: `percentage of the transfer`, `fixed amount` or `gas multiplier`. */
   readonly tipMode: string;
   /** The tip now, with its label: `0.25 zkbUSDC (exact)` or `about 1 WPLS now (estimate, at most 2 WPLS)`. */
@@ -111,7 +118,27 @@ const noRouterNoticeOf = (step: WebStep): string | null => {
   return RELAY_FUNCTIONS.includes(step.plan.functionName) ? NO_ROUTER_NOTICE : null;
 };
 
-const deliveryViewOf = (step: WebStep): DeliveryView | null => {
+const ADDRESSES_UNREADABLE_WARNING =
+  "The page could not read the reward address and the failed delivery address from the router. Check the router before you sign: you do not know who gets the tip, or who gets the tokens when delivery fails.";
+
+type RouterAddressesView = Pick<DeliveryView, "rewardAddressText" | "failedDeliveryText" | "routerAddressesWarning">;
+
+const routerAddressesViewOf = (reading: RouterAddressesReading | undefined): RouterAddressesView => {
+  if (reading === undefined || reading.kind === "unreadable") {
+    return {
+      rewardAddressText: "unknown",
+      failedDeliveryText: "unknown: the page could not read the failed delivery address of the router",
+      routerAddressesWarning: ADDRESSES_UNREADABLE_WARNING,
+    };
+  }
+  return {
+    rewardAddressText: getAddress(reading.rewardAddress),
+    failedDeliveryText: `the tokens go to ${getAddress(reading.failedDeliveryAddress)} (failed delivery address of the router)`,
+    routerAddressesWarning: null,
+  };
+};
+
+const deliveryViewOf = (step: WebStep, routerAddresses: RouterAddressesReading | undefined): DeliveryView | null => {
   const { delivery } = step.disclosure;
   if (delivery === null) return null;
   const { description, suggestions, token } = delivery;
@@ -123,6 +150,7 @@ const deliveryViewOf = (step: WebStep): DeliveryView | null => {
     formula: description.formula,
     routerText: getAddress(delivery.router),
     routerWarning: routerWarningOf(delivery),
+    ...routerAddressesViewOf(routerAddresses),
     tipMode: TIP_MODE_NAMES[description.mode],
     tipNow: description.summary,
     runnerMaximum: `The runner can take at most ${withSymbol(delivery.maximumRunnerTake, token)}. Everything else goes to the recipient.`,
@@ -141,8 +169,10 @@ const deliveryViewOf = (step: WebStep): DeliveryView | null => {
  * Builds the dialog for one step.
  *
  * @param step The planned transaction and its disclosure.
+ * @param routerAddresses What the router answered for its reward address and failed delivery address. Undefined when
+ * the page has not read them: the dialog then names no address.
  */
-export const buildConfirmView = (step: WebStep): ConfirmView => {
+export const buildConfirmView = (step: WebStep, routerAddresses?: RouterAddressesReading): ConfirmView => {
   const { plan } = step;
   const decoded = decodeKnownCall(plan.data, confirmableAbis);
   const blockedReason = blockedReasonOf(step, decoded);
@@ -154,7 +184,7 @@ export const buildConfirmView = (step: WebStep): ConfirmView => {
     arguments: decoded === null ? [] : mergeMeanings(decoded.arguments, plan.arguments),
     valueText: `${formatUnits(plan.value, 18)} ${plan.chain.nativeSymbol}`,
     bridgeFees: bridgeViewOf(step),
-    delivery: deliveryViewOf(step),
+    delivery: deliveryViewOf(step, routerAddresses),
     noRouterNotice: noRouterNoticeOf(step),
     notes: plan.notes,
     blockedReason,

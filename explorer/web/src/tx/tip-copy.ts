@@ -15,6 +15,7 @@ export const NO_ROUTER_NOTICE =
  */
 export const RUNNER_NOTES: readonly string[] = [
   "Only one whitelisted runner can collect tips through a router. The fee router pays the tip to that runner, and only when that runner delivers the message through the router.",
+  "When the router cannot deliver the tokens to the recipient, it hands them to its failed delivery address. The router pays the tip first.",
   "When anyone else calls the bridge directly to deliver, no runner is recorded and no tip is paid. The recipient then gets the whole amount.",
 ];
 

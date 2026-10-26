@@ -62,7 +62,13 @@ The interface sends your tokens to a router on the destination chain, with `rela
 
 Only one whitelisted runner can collect tips through a router. The fee router of a deployment names exactly one runner when it is deployed. No owner can change it. Any other account that calls the router fails.
 
-The router pays the tip to that runner, and only when that runner delivers the message through the router. The runner takes the tip from your tokens. The recipient gets the rest.
+The router pays the tip to its reward address, and only when that runner delivers the message through the router. The tip comes from your tokens. The recipient gets the rest.
+
+## When the router cannot deliver
+
+The router can fail to deliver the tokens to the recipient. Then it pays the tip first. It hands the rest of the tokens to its failed delivery address. The router sets both addresses when it is deployed, and nobody can change them.
+
+The confirm dialog reads both addresses from the router on the destination chain. It shows them as "Tip goes to" and "If delivery fails". When the page cannot read an address, the dialog says so and names no address. Check the router before you sign.
 
 ## A direct delivery pays no tip
 

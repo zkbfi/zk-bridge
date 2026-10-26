@@ -58,7 +58,7 @@ export interface RouterRelay {
 }
 
 /**
- * Refuses a relay to a router whose terms the router would send to its reward address.
+ * Refuses a relay to a router whose terms the router would hand to its failed delivery address.
  *
  * @throws PlanInputError with a sentence for the user.
  */

@@ -23,6 +23,11 @@ export const feeRouterAbi = [
         "name": "rewardAddress_",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "failedDeliveryAddress_",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "nonpayable"
@@ -154,24 +159,6 @@ export const feeRouterAbi = [
     "inputs": [
       {
         "name": "token",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "account",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "claimNative",
-    "inputs": [
-      {
-        "name": "account",
         "type": "address",
         "internalType": "address"
       }
@@ -329,6 +316,19 @@ export const feeRouterAbi = [
   },
   {
     "type": "function",
+    "name": "failedDeliveryAddress",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "feeInfo",
     "inputs": [
       {
@@ -471,37 +471,6 @@ export const feeRouterAbi = [
   },
   {
     "type": "event",
-    "name": "ClaimableRecorded",
-    "inputs": [
-      {
-        "name": "token",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "account",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "cause",
-        "type": "uint8",
-        "indexed": false,
-        "internalType": "enum FeeRouter.Cause"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
     "name": "Claimed",
     "inputs": [
       {
@@ -511,12 +480,6 @@ export const feeRouterAbi = [
         "internalType": "address"
       },
       {
-        "name": "account",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
         "name": "amount",
         "type": "uint256",
         "indexed": false,
@@ -526,20 +489,35 @@ export const feeRouterAbi = [
     "anonymous": false
   },
   {
-    "type": "error",
-    "name": "ClaimTransferFailed",
+    "type": "event",
+    "name": "DeliveryFailed",
     "inputs": [
       {
         "name": "token",
         "type": "address",
+        "indexed": true,
         "internalType": "address"
       },
       {
-        "name": "account",
+        "name": "recipient",
         "type": "address",
+        "indexed": true,
         "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "reason",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum FeeRouter.Reason"
       }
-    ]
+    ],
+    "anonymous": false
   },
   {
     "type": "error",
@@ -587,11 +565,6 @@ export const feeRouterAbi = [
         "name": "token",
         "type": "address",
         "internalType": "address"
-      },
-      {
-        "name": "account",
-        "type": "address",
-        "internalType": "address"
       }
     ]
   },
@@ -626,6 +599,11 @@ export const feeRouterAbi = [
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "ZeroFailedDeliveryAddress",
+    "inputs": []
   },
   {
     "type": "error",
