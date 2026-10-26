@@ -45,7 +45,7 @@ import {
 
 const selectorOf = (name: string) => toFunctionSelector(deliveryRouterAbi.find((entry) => entry.type === "function" && entry.name === name) as never);
 /** The single entry. The batch simulation measures the gas of each item there. */
-const EXECUTE_WITH_RUNNER = selectorOf("executeMessageWithRunner");
+const EXECUTE_SINGLE = selectorOf("executeMessage");
 /** The batch entry. Every delivery through the delivery router sends this call. */
 const EXECUTE_BATCH = toFunctionSelector(multicall3Abi.find((entry) => entry.type === "function" && entry.name === "aggregate3") as never);
 const UPDATE = toFunctionSelector(beaconLightClientAbi.find((entry) => entry.type === "function" && entry.name === "update") as never);
@@ -239,7 +239,7 @@ describe("delivery decisions", () => {
   const offerData = (token = WRAPPED_NATIVE) => ({ [word(OFFER_ID)]: feeOfferData({ director: fixedFee(10n), value: 1000n, token }) });
   const COST = 3_000_000n;
 
-  it("delivers when the fee covers the cost, through the delivery router, naming the runner", async () => {
+  it("delivers when the fee covers the cost, through the delivery router, with the proof only", async () => {
     const w = world({ items: [offerItem()], data: offerData() });
     w.chain.feeTokens = COST + 1n;
     const summary = await w.runner.sweep();
@@ -248,14 +248,13 @@ describe("delivery decisions", () => {
     expect(send?.request.to).toBe(MULTICALL);
     const decoded = decodeFunctionData({ abi: multicall3Abi, data: send?.request.data as Hex });
     expect(decoded.functionName).toBe("aggregate3");
-    // One call, to the delivery router, with failure allowed. The signer is another account: the reward address is where the fee goes.
+    // One call, to the delivery router, with failure allowed. The router pays the tip to its own reward address, so the call names none.
     const [call] = (decoded.args as readonly [readonly { target: string; allowFailure: boolean; callData: Hex }[]])[0];
     expect(call).toMatchObject({ target: DELIVERY_ROUTER, allowFailure: true });
     const inner = decodeFunctionData({ abi: deliveryRouterAbi, data: (call as { callData: Hex }).callData });
-    expect(inner.functionName).toBe("executeMessageWithRunner");
-    expect((inner.args as readonly unknown[])[1]).toBe(REWARD_ADDRESS);
+    expect(inner.functionName).toBe("executeMessage");
+    expect(inner.args).toHaveLength(1);
     expect(w.chain.account).toBe(RUNNER);
-    expect(REWARD_ADDRESS).not.toBe(RUNNER);
     expect(w.chain.unsimulatedSends()).toEqual([]);
     expect(w.outcomes.records[0]).toMatchObject({ kind: "delivery", status: "delivered", path: "delivery-router", feeExpectedWei: COST + 1n });
   });
@@ -291,7 +290,7 @@ describe("delivery decisions", () => {
     const w = world({ items: [offerItem()], data: offerData() });
     w.chain.feeTokens = COST * 2n;
     w.chain.simulateOverride = (request): Simulation | undefined =>
-      request.data.startsWith(EXECUTE_WITH_RUNNER) ? { ok: false, reason: "AlreadyDelivered" } : undefined;
+      request.data.startsWith(EXECUTE_SINGLE) ? { ok: false, reason: "AlreadyDelivered" } : undefined;
     const summary = await w.runner.sweep();
     expect(summary.skipped).toBe(1);
     expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "simulation-reverted", detail: "AlreadyDelivered" });
@@ -353,7 +352,7 @@ describe("delivery decisions", () => {
     expect((await w.runner.sweep()).delivered).toBe(1);
     const order = w.chain.log.filter((entry) => entry.kind !== "call").map((entry) => `${entry.kind}:${entry.request.data.slice(0, 10)}`);
     // The first simulation estimates the cost before anything is sent. The second one guards the send itself.
-    expect(order).toEqual(["simulate:0xdeadbeef", "simulate:0xdeadbeef", "send:0xdeadbeef", `simulate:${EXECUTE_BATCH}`, `simulate:${EXECUTE_WITH_RUNNER}`, `send:${EXECUTE_BATCH}`]);
+    expect(order).toEqual(["simulate:0xdeadbeef", "simulate:0xdeadbeef", "send:0xdeadbeef", `simulate:${EXECUTE_BATCH}`, `simulate:${EXECUTE_SINGLE}`, `send:${EXECUTE_BATCH}`]);
     expect(w.chain.unsimulatedSends()).toEqual([]);
   });
 
@@ -437,7 +436,7 @@ describe("delivery decisions", () => {
     const offerFor = (id: number) => feedItem({ id, token: WRAPPED_NATIVE });
     const dataFor = (ids: readonly number[]) => Object.fromEntries(ids.map((id) => [word(id), feeOfferData({ director: fixedFee(10n), value: 1000n, token: WRAPPED_NATIVE })]));
     const executionGasSimulatedAt = (gas: bigint) => (request: { data: Hex }): Simulation | undefined =>
-      request.data.startsWith(EXECUTE_WITH_RUNNER) ? { ok: true, gas } : undefined;
+      request.data.startsWith(EXECUTE_SINGLE) ? { ok: true, gas } : undefined;
 
     it("refuses an item before any layout call when the fee passes the first check but not layout calls plus execution", async () => {
       const w = world({ items: [offerFor(1)], data: dataFor([1]) });
@@ -705,13 +704,12 @@ describe("batch delivery", () => {
     expect(calls.every((call) => call.allowFailure)).toBe(true);
     const updateCall = calls.find((call) => call.target.toLowerCase() === LIGHT_CLIENT.toLowerCase());
     const itemCalls = calls.filter((call) => call.target.toLowerCase() === DELIVERY_ROUTER.toLowerCase()).map((call) => decodeFunctionData({ abi: deliveryRouterAbi, data: call.callData }));
-    const proofs = itemCalls.map((inner) => (inner.functionName === "executeMessageWithRunner" ? inner : null));
+    const proofs = itemCalls.map((inner) => (inner.functionName === "executeMessage" ? inner : null));
     // The update call comes first when there is one.
     if (updateCall !== undefined) expect(calls[0]).toBe(updateCall);
     const updateArgs = updateCall === undefined ? null : decodeFunctionData({ abi: beaconLightClientAbi, data: updateCall.callData });
     return {
       slots: proofs.map((inner) => Number(inner?.args[0].anchorHeader.slot)),
-      reward: proofs[0]?.args[1],
       updateProof: updateArgs !== null && updateArgs.functionName === "update" ? updateArgs.args[0] : "0x",
     };
   };
@@ -719,7 +717,7 @@ describe("batch delivery", () => {
   const sentSlots = (w: ReturnType<typeof world>) => batchSends(w).map((entry) => decodedBatch(entry.request.data).slots);
   const reasonsOf = (w: ReturnType<typeof world>) => w.outcomes.records.map((record) => (record.status === "skipped" ? record.reason : record.status));
 
-  it("delivers several profitable items in ONE transaction to the batch entry, with the reward address and the proofs in order, oldest first", async () => {
+  it("delivers several profitable items in ONE transaction to the batch entry, with the proofs in order, oldest first", async () => {
     const w = batchWorld([1, 2, 3]);
     w.chain.gasUsed = 900_000n;
     expect(await w.runner.sweep()).toMatchObject({ listed: 3, delivered: 3, skipped: 0, failed: 0 });
@@ -728,7 +726,7 @@ describe("batch delivery", () => {
     const [send] = batchSends(w);
     expect(send?.request.to).toBe(MULTICALL);
     // The feed lists the newest first, so item 3 is the oldest and goes first.
-    expect(decodedBatch(send?.request.data as Hex)).toEqual({ slots: [3, 2, 1], reward: REWARD_ADDRESS, updateProof: "0x" });
+    expect(decodedBatch(send?.request.data as Hex)).toEqual({ slots: [3, 2, 1], updateProof: "0x" });
     expect(w.chain.unsimulatedSends()).toEqual([]);
     // Every item names the one transaction, and carries its third of the gas and of the cost.
     expect(w.outcomes.records.map((record) => record.transactionHash)).toEqual([word(0xee), word(0xee), word(0xee)]);
@@ -743,7 +741,7 @@ describe("batch delivery", () => {
     const calls = w.chain.log.filter((entry) => entry.kind === "call" && entry.request.data.startsWith(EXECUTE_BATCH));
     // The first read has no limit of its own. The second one runs with exactly the gas limit of the transaction.
     expect(calls.map((entry) => (entry.request as { gas?: bigint }).gas)).toEqual([undefined, terms?.gas]);
-    const singles = w.chain.log.filter((entry) => entry.kind === "simulate" && entry.request.data.startsWith(EXECUTE_WITH_RUNNER));
+    const singles = w.chain.log.filter((entry) => entry.kind === "simulate" && entry.request.data.startsWith(EXECUTE_SINGLE));
     expect(singles).toHaveLength(2);
     // The gas of an item is measured at the router itself, not through Multicall3.
     expect(singles.every((entry) => entry.request.to === DELIVERY_ROUTER)).toBe(true);
@@ -787,9 +785,9 @@ describe("batch delivery", () => {
     w.chain.feeTokens = 5_000_000n;
     // Item 2 turns out to need 600,000 gas, and 620,000 with the overhead of Multicall3: 6,200,000 wei.
     w.chain.simulateOverride = (request) => {
-      if (!request.data.startsWith(EXECUTE_WITH_RUNNER)) return undefined;
+      if (!request.data.startsWith(EXECUTE_SINGLE)) return undefined;
       const decoded = decodeFunctionData({ abi: deliveryRouterAbi, data: request.data });
-      const slot = decoded.functionName === "executeMessageWithRunner" ? Number(decoded.args[0].anchorHeader.slot) : 0;
+      const slot = decoded.functionName === "executeMessage" ? Number(decoded.args[0].anchorHeader.slot) : 0;
       return { ok: true, gas: slot === 2 ? 600_000n : 280_000n };
     };
     expect(await w.runner.sweep()).toMatchObject({ delivered: 2, skipped: 1 });

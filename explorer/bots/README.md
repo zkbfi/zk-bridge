@@ -51,8 +51,7 @@ proving policy. The **bot configuration** adds what only a bot needs. A sample i
 | `runner.indexerUrl` | The indexer. |
 | `runner.minimumMarginWei` | The fee must cover the gas cost plus this margin. Default 0. |
 | `runner.deliverWithoutOffer` | Deliver items with no fee offer, for the gas cost alone. Default off. |
-| `runner.deliveryRouter` | Default: `delivery_router` of the deployment file. The runner must sign with the account that this router whitelists: at start it reads `DeliveryRouter.runner()` and refuses to run when the value is another address. |
-| `runner.rewardAddress` | The address that receives the fees. Required whenever a delivery router is in use; a runner that only delivers directly needs none. At start the runner reads `DeliveryRouter.rewardAddress()` and refuses to run when it differs from this value, or when this value is the address of the signer. The signer is a hot key that only pays gas. The reward address can be a cold account. |
+| `runner.deliveryRouter` | Default: `delivery_router` of the deployment file. At start the runner reads `DeliveryRouter.rewardAddress()` from it and logs the value. The runner uses that address only for its accounting and its display. The router decides where each tip goes, so the configuration names no reward address. When the read fails, the runner stops with an error that names the router and the chain. |
 | `runner.multicall3` | The Multicall3 contract that batches the deliveries. Default `0xcA11bde05977b3631167028862bE2a173976CA11`, the canonical address. At start the runner refuses to run when the address holds no code. |
 | `runner.maximumBatchSize` | The most items in one batch transaction. Default 5. |
 | `runner.maximumBatchGas` | The most gas that the assumed gas of the items of one batch may add up to, and the upper bound of the gas limit of the batch transaction. Default 6000000. |
@@ -138,15 +137,16 @@ For each direction:
      items go to the delivery router in as few batches as `maximumBatchSize` and `maximumBatchGas` allow, oldest first. An item
      without an offer (`deliverWithoutOffer`) is not batched: it goes straight to the bridge with its own simulation.
 5. Send a batch through Multicall3 (`aggregate3`, failure allowed on each call). The first call is `update(proof, publicValues)`
-   at the light client when an update is offered. Each other call is `DeliveryRouter.executeMessageWithRunner(proof, rewardAddress)`.
-   The router pays every fee to the reward address, not to the signer. When the router cannot deliver the tokens to a recipient, it hands them to its `failedDeliveryAddress`. The router reads `tx.origin`, which is the signer, so
-   it accepts calls that come through Multicall3. Before the send the runner simulates the batch and drops what cannot go:
+   at the light client when an update is offered. Each other call is `DeliveryRouter.executeMessage(proof)`.
+   Any account may send that call. The router pays every tip to its own reward address, so a copy of a delivery gains the
+   copier nothing. When the router cannot deliver the tokens to a recipient, it hands them to its `failedDeliveryAddress`.
+   Before the send the runner simulates the batch and drops what cannot go:
    - It reads the result that the simulated call returns for every call. A message that the bridge shows as delivered
      (`AlreadyDelivered`) is dropped and final (`already-delivered`). A message whose anchor the light client has not stored
      (`AnchorNotStored`) is dropped with `anchor-not-stored`, and the next sweep tries it again. `InsufficientGas` is dropped
      with `insufficient-gas`. Any other revert is dropped with `simulation-reverted`, the name of the error and the hash of
      the revert data.
-   - It measures each remaining item at the router (`executeMessageWithRunner`, sent to the router itself). The gas estimate of
+   - It measures each remaining item at the router (`executeMessage`, sent to the router itself). The gas estimate of
      the batch is no use, because a call that fails does not revert the batch, so an estimate settles on a gas amount at
      which calls fail. The gas of an item in a batch is its single gas plus 20000 (the call and the result of Multicall3).
    - It judges the fee of each item again at that gas against its own cost plus `minimumMarginWei`. Items that do not pay

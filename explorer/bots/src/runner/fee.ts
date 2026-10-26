@@ -1,5 +1,5 @@
 import type { Address, Hex } from "viem";
-import { decodeFeeDirector, decodeMediatorMessage, FEE_DIRECTOR_BYTES, tokenUnitsToWeiFloor, type FeeDirector } from "@zk-bridge/shared";
+import { decodeMediatorMessage, payoutOf, readDeliveryTerms, tokenUnitsToWeiFloor, type FeeDirector, type PayoutKind } from "@zk-bridge/shared";
 import type { FeeQuote } from "../chain/transactions.ts";
 
 /** The director is the shared one: it matches `DeliveryRouter.sol` and the vectors of the router (`@zk-bridge/shared`). */
@@ -12,7 +12,7 @@ export type NoOfferReason =
   | "recipient-is-not-the-delivery-router"
   | "no-callback-data"
   | "legacy-native-receiver"
-  | "malformed-fee-director";
+  | "unknown-callback-data";
 
 /** What the message offers to the runner. */
 export type FeeOffer =
@@ -43,11 +43,26 @@ export function readFeeOffer(input: ReadFeeOfferInput): FeeOffer {
   if (message === null) return { kind: "none", reason: "not-a-token-message" };
   if (message.recipient.toLowerCase() !== input.deliveryRouter.toLowerCase()) return { kind: "none", reason: "recipient-is-not-the-delivery-router" };
   if (message.callbackData === null) return { kind: "none", reason: "no-callback-data" };
-  const bytes = (message.callbackData.length - 2) / 2;
-  if (bytes === 20) return { kind: "none", reason: "legacy-native-receiver" };
-  if (bytes !== FEE_DIRECTOR_BYTES) return { kind: "none", reason: "malformed-fee-director" };
-  const director = decodeFeeDirector(message.callbackData);
-  return { kind: "offer", director, value: message.value };
+  const terms = readDeliveryTerms(message.callbackData);
+  if (terms.kind === "legacy") return { kind: "none", reason: "legacy-native-receiver" };
+  if (terms.kind === "unknown") return { kind: "none", reason: "unknown-callback-data" };
+  return { kind: "offer", director: terms.director, value: message.value };
+}
+
+/** Input of {@link payoutOfOffer}. */
+export interface PayoutOfOfferInput {
+  readonly director: FeeDirector;
+  /** The token that the mediator releases to the router. */
+  readonly token: Address;
+  readonly wrappedNative: Address;
+}
+
+/**
+ * How the router pays the tip. The native coin only when the settings ask to unwrap and the token is the wrapped native
+ * token. For any other token the router pays the plain token, so the tip needs a valuation like any other token.
+ */
+export function payoutOfOffer(input: PayoutOfOfferInput): PayoutKind {
+  return payoutOf(input.director.settings, input.token.toLowerCase() === input.wrappedNative.toLowerCase());
 }
 
 /** Input of {@link valueFeeInWei}. */
@@ -66,8 +81,9 @@ export interface ValueFeeInput {
 export type FeeValue = { readonly ok: true; readonly wei: bigint } | { readonly ok: false; readonly reason: "no-price-for-fee-token" };
 
 /**
- * Turns the fee into wei, the unit of the gas cost. The wrapped native token is worth one wei per base unit. Any
- * other token needs a configured valuation. Without one the runner cannot compare, so it skips.
+ * Turns the fee into wei, the unit of the gas cost. The wrapped native token is worth one wei per base unit, whether the
+ * router pays it as the token or unwraps it. Any other token needs a configured valuation, also when the settings ask to
+ * unwrap: the router then pays the plain token. Without a valuation the runner cannot compare, so it skips.
  */
 export function valueFeeInWei(input: ValueFeeInput): FeeValue {
   const token = input.token.toLowerCase();

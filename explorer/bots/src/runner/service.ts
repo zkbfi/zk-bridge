@@ -19,7 +19,7 @@ import { createRunner, type Runner } from "./runner.ts";
 import { createSerialQueue } from "./serial-queue.ts";
 import { createSourceReader } from "./source-reader.ts";
 import { INITIAL_RUNNER_STATE, runnerStateSchema } from "./state.ts";
-import { requireRewardAddress, requireWhitelistedRunner } from "./whitelist.ts";
+import { readRewardAddress } from "./router-reader.ts";
 
 /** Replacements for the parts that touch the outside world. Tests pass fakes. */
 export interface RunnerOverrides {
@@ -45,15 +45,6 @@ function requireRunnerConfig(context: BotContext): RunnerConfig {
   const runner = context.config.runner;
   if (runner === undefined) throw new BotConfigError("The bot configuration has no runner section.");
   return runner;
-}
-
-/**
- * The two start-up checks of a delivery router: the router whitelists the signer, and it pays the configured reward address.
- * @returns the reward address.
- */
-async function requireDeliveryRouterIdentity(input: Parameters<typeof requireRewardAddress>[0]): Promise<Address> {
-  await requireWhitelistedRunner({ client: input.client, deliveryRouter: input.deliveryRouter, signerAddress: input.signerAddress, chainName: input.chainName });
-  return requireRewardAddress(input);
 }
 
 /** Refuses to run when the Multicall3 address holds no code: every batch would revert. */
@@ -182,17 +173,8 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       logger: directionLogger,
     });
     const deliveryRouter = (runnerConfig.deliveryRouter ?? destination.contracts.deliveryRouter) as Address | null;
-    // A runner that only delivers directly uses no router, and needs no reward address.
-    const rewardAddress =
-      deliveryRouter === null
-        ? null
-        : await requireDeliveryRouterIdentity({
-            client: destinationPort.client,
-            deliveryRouter,
-            rewardAddress: runnerConfig.rewardAddress as Address | undefined,
-            signerAddress: signer.address,
-            chainName: destination.name,
-          });
+    // A runner that only delivers directly uses no router, and reads no reward address.
+    const rewardAddress = deliveryRouter === null ? null : await readRewardAddress({ client: destinationPort.client, deliveryRouter, chainName: destination.name });
     const multicall = deliveryRouter === null ? null : await requireMulticall3({ client: destinationPort.client, address: runnerConfig.multicall3 as Address, chainName: destination.name });
     const delivery: DeliveryDependencies = {
       direction,

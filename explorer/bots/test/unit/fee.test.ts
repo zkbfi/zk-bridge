@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideDelivery, readFeeOffer, valueFeeInWei } from "../../src/runner/fee.ts";
+import { decideDelivery, payoutOfOffer, readFeeOffer, valueFeeInWei } from "../../src/runner/fee.ts";
 import { DELIVERY_ROUTER, OTHER_TOKEN, WRAPPED_NATIVE, address, feeOfferData } from "../support/builders.ts";
 import { encodeFunctionData } from "viem";
 import { tokenMediatorAbi } from "@zk-bridge/shared";
@@ -30,9 +30,9 @@ describe("reading the fee offer", () => {
     const legacy = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleBridgedTokensAndCall", args: [OTHER_TOKEN, DELIVERY_ROUTER, 1n, address(0x14)] });
     expect(reason(legacy)).toBe("legacy-native-receiver");
     const short = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleBridgedTokensAndCall", args: [OTHER_TOKEN, DELIVERY_ROUTER, 1n, "0x1234"] });
-    expect(reason(short)).toBe("malformed-fee-director");
+    expect(reason(short)).toBe("unknown-callback-data");
     const empty = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleBridgedTokensAndCall", args: [OTHER_TOKEN, DELIVERY_ROUTER, 1n, "0x"] });
-    expect(reason(empty)).toBe("malformed-fee-director");
+    expect(reason(empty)).toBe("unknown-callback-data");
   });
 });
 
@@ -46,6 +46,20 @@ describe("valuing the fee in wei", () => {
   it("scales another token by its configured value and its decimals", () => {
     const valued = valueFeeInWei({ ...base, fee: 2_500_000n, token: OTHER_TOKEN, decimals: 6, valuationsWei: { [OTHER_TOKEN.toLowerCase()]: 4_000_000_000_000_000n } });
     expect(valued).toEqual({ ok: true, wei: 10_000_000_000_000_000n });
+  });
+
+  it("prices an unwrap request on another token as a token payout, so it needs a valuation", () => {
+    const unwrap = { ...director, settings: 2n };
+    expect(payoutOfOffer({ director: unwrap, token: OTHER_TOKEN, wrappedNative: WRAPPED_NATIVE })).toBe("token");
+    expect(valueFeeInWei({ ...base, director: unwrap, fee: 500n, token: OTHER_TOKEN, decimals: 18 })).toEqual({ ok: false, reason: "no-price-for-fee-token" });
+    const valued = valueFeeInWei({ ...base, director: unwrap, fee: 500n, token: OTHER_TOKEN, decimals: 18, valuationsWei: { [OTHER_TOKEN.toLowerCase()]: 2n * 10n ** 18n } });
+    expect(valued).toEqual({ ok: true, wei: 1_000n });
+  });
+
+  it("pays the native coin only for an unwrap request on the wrapped native token", () => {
+    const unwrap = { ...director, settings: 2n };
+    expect(payoutOfOffer({ director: unwrap, token: WRAPPED_NATIVE.toUpperCase().replace("0X", "0x") as `0x${string}`, wrappedNative: WRAPPED_NATIVE })).toBe("native");
+    expect(payoutOfOffer({ director, token: WRAPPED_NATIVE, wrappedNative: WRAPPED_NATIVE })).toBe("token");
   });
 
   it("will not guess the price of a token it does not know", () => {

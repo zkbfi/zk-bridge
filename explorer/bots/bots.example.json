@@ -21,7 +21,6 @@
     "pollSeconds": 30,
     "minimumMarginWei": "0",
     "deliverWithoutOffer": false,
-    "rewardAddress": "0x1111111111111111111111111111111111111111",
     "maximumBatchSize": 5,
     "maximumBatchGas": 6000000,
     "tokenValuationsWei": {},

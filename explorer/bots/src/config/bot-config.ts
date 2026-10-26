@@ -126,13 +126,6 @@ export const runnerSchema = z
      */
     multicall3: addressSchema.default(MULTICALL3_ADDRESS),
     /**
-     * The address that receives the fees. The delivery router pays it, not the signer: the signer is a hot key that only pays
-     * gas, and this address can be a cold account. Required whenever a delivery router is in use (the runner checks that at
-     * start, because the router comes from the deployment file). It must differ from the signer, and it must equal
-     * `rewardAddress()` of the router. A runner that only delivers directly needs none.
-     */
-    rewardAddress: addressSchema.optional(),
-    /**
      * The value of one whole token in wei of the native coin, as a whole number. A fee in the wrapped native token
      * needs no entry. A fee in any other token needs one, or the runner skips the item.
      */

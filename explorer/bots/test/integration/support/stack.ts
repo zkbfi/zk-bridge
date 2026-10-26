@@ -11,9 +11,12 @@ import { REPOSITORY_ROOT, startAnvil, type AnvilChain } from "../../../../indexe
 /** The published development mnemonic of Anvil and of `docker/compose.yaml`. It holds no value. */
 export const ANVIL_MNEMONIC = "test test test test test test test test test test test junk";
 
-/** Accounts of the stack, by index of the mnemonic. Account 0 deploys. */
-/** The reward account receives the fees. It is not the runner: the runner is a hot key that only pays gas. */
-export const ACCOUNT = { deployer: 0, oracle: 1, runner: 2, recipient: 3, reward: 4, failedDelivery: 5 } as const;
+/**
+ * Accounts of the stack, by index of the mnemonic. Account 0 deploys. The reward account receives the tips: the router
+ * names it at its construction. The runner is a hot key that only pays gas. The copier is any other account that sends
+ * the same delivery.
+ */
+export const ACCOUNT = { deployer: 0, oracle: 1, runner: 2, recipient: 3, reward: 4, failedDelivery: 5, copier: 6 } as const;
 
 const ARTIFACTS: ReadonlyArray<readonly [name: string, file: string]> = [
   ["ProofSizedVerifier", "StackDoubles.sol/ProofSizedVerifier.json"],
@@ -99,7 +102,7 @@ export async function startStack(artifacts: SyntheticArtifacts): Promise<Stack> 
   ]);
   const mediatorBridge = await chain.deploy("StubMediatorBridge");
   const wrappedNative = await chain.deploy("MockWrappedNative");
-  const deliveryRouter = await chain.deploy("DeliveryRouter", [mediatorBridge, wrappedNative, account(ACCOUNT.runner).address, account(ACCOUNT.reward).address, account(ACCOUNT.failedDelivery).address]);
+  const deliveryRouter = await chain.deploy("DeliveryRouter", [mediatorBridge, wrappedNative, account(ACCOUNT.reward).address, account(ACCOUNT.failedDelivery).address]);
   const multicall3 = await chain.deploy("Multicall3");
   const token = await chain.deploy("MockERC20", ["Fee Token", "FEE"]);
   return { anvil, chain, lightClient, verifier, deliveryRouter, multicall3, mediatorBridge, wrappedNative, token, programKey };

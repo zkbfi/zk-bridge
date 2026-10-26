@@ -3,9 +3,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { encodeAbiParameters, encodePacked, keccak256, recoverAddress, sha256, type Address, type Hex } from "viem";
+import { decodeFunctionData, encodePacked, keccak256, recoverAddress, sha256, type Address, type Hex } from "viem";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { beaconLightClientAbi, encodeProofMessage } from "@zk-bridge/shared";
+import { beaconLightClientAbi, encodeFeeDirector, encodeProofMessage, messageBridgeAbi, multicall3Abi, deliveryRouterAbi } from "@zk-bridge/shared";
 import { emptyProverSetup, saveProverSetup, type ProverSetup } from "@zk-bridge/shared/config";
 import { createLightClientReader } from "../../src/chain/light-client.ts";
 import { createTransactionPort } from "../../src/chain/transactions.ts";
@@ -87,7 +87,7 @@ interface BotFiles {
 }
 
 /** Writes the setup file, the deployment file and the bot configuration for one bot pair, the way an operator would. */
-async function writeBotFiles(options: { name: string; boardUrl: string; indexerUrl: string; proverBinary: string; policy?: ProverSetup["policy"]; runnerIndex?: number; rewardIndex?: number }): Promise<BotFiles> {
+async function writeBotFiles(options: { name: string; boardUrl: string; indexerUrl: string; proverBinary: string; policy?: ProverSetup["policy"]; deliveryRouter?: Address }): Promise<BotFiles> {
   const directory = await mkdtemp(join(tmpdir(), `bots-${options.name}-`));
   scratch.push(directory);
   const stateDirectory = join(directory, "state");
@@ -140,9 +140,9 @@ async function writeBotFiles(options: { name: string; boardUrl: string; indexerU
         maximumPrerequisiteSpendPerSweepWei: "1000000000000000000",
         maximumPrerequisiteSpendPerDayWei: "10000000000000000000",
         maximumUnrecoveredPrerequisiteLossWei: "1000000000000000000",
-        rewardAddress: account(options.rewardIndex ?? ACCOUNT.reward).address,
+        ...(options.deliveryRouter === undefined ? {} : { deliveryRouter: options.deliveryRouter }),
         multicall3: stack.multicall3,
-        signer: { kind: "mnemonic", mnemonic: "env:RUNNER_MNEMONIC", index: options.runnerIndex ?? ACCOUNT.runner },
+        signer: { kind: "mnemonic", mnemonic: "env:RUNNER_MNEMONIC", index: ACCOUNT.runner },
       },
     }),
   );
@@ -239,7 +239,10 @@ describe.skipIf(!toolsPresent)("the proof path on a local stack", () => {
     const updates = await stack.chain.publicClient.getContractEvents({ address: stack.lightClient, abi: beaconLightClientAbi, eventName: "HeadUpdated", fromBlock: 0n });
     expect(updates).toHaveLength(1);
     expect(updates[0]?.args.slot).toBe(164n);
-    const outcomes = readFileSync(join(files.stateDirectory, "outcomes-eth-pls.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    // The runner writes the outcome after the receipt, so the head can move a moment before the file exists.
+    const outcomesPath = join(files.stateDirectory, "outcomes-eth-pls.jsonl");
+    await waitFor("the outcome of the update", async () => (existsSync(outcomesPath) ? true : undefined));
+    const outcomes = readFileSync(outcomesPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
     expect(outcomes).toEqual([expect.objectContaining({ kind: "update", status: "posted", startSlot: "100", newSlot: "164" })]);
 
     // The publisher sees the head at the end of its proof and posts nothing more, even when the republish time has come.
@@ -261,32 +264,29 @@ describe.skipIf(!toolsPresent)("the proof path on a local stack", () => {
     expect(proverRuns[0].args.join(" ")).not.toContain(RUNPOD_KEY);
   });
 
-  it("refuses to start when the delivery router whitelists another runner than the signer, and sends nothing", async () => {
+  it("reads the reward address from the router at start up, and logs it", async () => {
     await board?.stop();
     board = await startFakeBoard();
-    // The router of the stack names the account ACCOUNT.runner. This runner signs with another account.
-    const files = await writeBotFiles({ name: "wrong-runner", boardUrl: board.url, indexerUrl: indexer.url, proverBinary: FAKE_PROVER, runnerIndex: ACCOUNT.recipient });
-    const context = await loadBotContext({ configPath: files.configPath, environment: files.environment, write: () => undefined });
-    await expect(startRunner({ context, signal: new AbortController().signal, runOnce: true })).rejects.toThrow(/whitelists/);
-    expect(await stack.chain.publicClient.getTransactionCount({ address: account(ACCOUNT.recipient).address })).toBe(0);
+    const files = await writeBotFiles({ name: "reads-reward", boardUrl: board.url, indexerUrl: indexer.url, proverBinary: FAKE_PROVER });
+    const lines: string[] = [];
+    const context = await loadBotContext({ configPath: files.configPath, environment: files.environment, write: (line) => lines.push(line) });
+    await startRunner({ context, signal: new AbortController().signal, runOnce: true });
+    const started = lines.map((line) => JSON.parse(line) as Record<string, unknown>).find((line) => line.event === "runner_started");
+    // The configuration names no reward address. The value comes from `rewardAddress()` of the deployed router.
+    expect(started).toMatchObject({ deliveryRouter: stack.deliveryRouter, rewardAddress: account(ACCOUNT.reward).address });
   });
 
-  it("refuses to start when the delivery router pays another address than runner.rewardAddress, and sends nothing", async () => {
+  it("stops the start with an error that names the router and the chain when the router has no reward address to read, and sends nothing", async () => {
     await board?.stop();
     board = await startFakeBoard();
     const nonceBefore = await stack.chain.publicClient.getTransactionCount({ address: account(ACCOUNT.runner).address });
-    const files = await writeBotFiles({ name: "wrong-reward", boardUrl: board.url, indexerUrl: indexer.url, proverBinary: FAKE_PROVER, rewardIndex: ACCOUNT.recipient });
+    // Multicall3 has no `rewardAddress()`, so the read reverts.
+    const files = await writeBotFiles({ name: "no-reward", boardUrl: board.url, indexerUrl: indexer.url, proverBinary: FAKE_PROVER, deliveryRouter: stack.multicall3 });
     const context = await loadBotContext({ configPath: files.configPath, environment: files.environment, write: () => undefined });
-    await expect(startRunner({ context, signal: new AbortController().signal, runOnce: true })).rejects.toThrow(/pays the fees to/);
+    await expect(startRunner({ context, signal: new AbortController().signal, runOnce: true })).rejects.toThrow(
+      new RegExp(`Cannot read rewardAddress\\(\\) of the delivery router ${stack.multicall3} on `),
+    );
     expect(await stack.chain.publicClient.getTransactionCount({ address: account(ACCOUNT.runner).address })).toBe(nonceBefore);
-  });
-
-  it("refuses to start when the reward address is the signer", async () => {
-    await board?.stop();
-    board = await startFakeBoard();
-    const files = await writeBotFiles({ name: "reward-is-signer", boardUrl: board.url, indexerUrl: indexer.url, proverBinary: FAKE_PROVER, rewardIndex: ACCOUNT.runner });
-    const context = await loadBotContext({ configPath: files.configPath, environment: files.environment, write: () => undefined });
-    await expect(startRunner({ context, signal: new AbortController().signal, runOnce: true })).rejects.toThrow(/address of the signer/);
   });
 
   it.skipIf(!existsSync(REAL_PROVER))("the real `zk-bridge-prover verify` refuses the oracle proof, and the chain stays where it is", async () => {
@@ -315,8 +315,14 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
   const balanceOf = (holder: Address) => stack.chain.publicClient.readContract({ address: stack.token, abi: abiOf("MockERC20"), functionName: "balanceOf", args: [holder] }) as Promise<bigint>;
 
   const director = (fields: { settings: bigint; limit: bigint; multiplier: bigint }) => ({ recipient: recipient(), ...fields });
+  /**
+   * The callback data of an offer, from the shared encoder. The context names the fee token as the wrapped native token,
+   * so the guard accepts every setting: one test offers an unwrap request on a plain token, as a hand written relay could.
+   */
+  const callbackOf = (fields: { settings: bigint; limit: bigint; multiplier: bigint }) =>
+    encodeFeeDirector(director(fields), { router: stack.deliveryRouter, protectedAddresses: [], destinationToken: stack.token, destinationWrappedNative: stack.token });
 
-  async function makeRunner(items: ReturnType<typeof feedItem>[], offers: Record<string, Hex>) {
+  async function makeRunner(items: ReturnType<typeof feedItem>[], offers: Record<string, Hex>, overrides: { tokenValuationsWei?: Record<string, bigint> } = {}) {
     const signer = await createMnemonicSource({ mnemonic: ANVIL_MNEMONIC }).openSigner(`m/44'/60'/0'/0/${ACCOUNT.runner}`);
     const chain = createTransactionPort({ client: stack.chain.publicClient, signer, chainId: 369, receiptTimeoutMilliseconds: 60_000 });
     const prover = fakeProver({ evidence: () => evidenceFor({ executeData: emptyExecuteMessage(4242n) }) });
@@ -344,7 +350,7 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
           minimumMarginWei: 0n,
           deliverWithoutOffer: false,
           // One whole fee token is worth one whole native coin.
-          tokenValuationsWei: { [stack.token.toLowerCase()]: 10n ** 18n },
+          tokenValuationsWei: overrides.tokenValuationsWei ?? { [stack.token.toLowerCase()]: 10n ** 18n },
           executionGasFallback: 400_000n,
           maximumPrerequisiteRounds: 2,
           prerequisiteGasFallback: 300_000n,
@@ -374,7 +380,7 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
 
   it("delivers a message whose gas based fee pays, and the router pays the runner and the recipient", async () => {
     const offer = { settings: 0n, limit: 10n ** 18n, multiplier: 3n * 10n ** 18n };
-    const callback = encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], [recipient(), offer.settings, offer.limit, offer.multiplier]);
+    const callback = callbackOf(offer);
     await arm(callback, 1);
     const first = item(1);
     const { runner, outcomes, signer } = await makeRunner([first], { [first.messageId]: offerData(offer) });
@@ -395,12 +401,12 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
     expect(await balanceOf(stack.deliveryRouter)).toBe(0n);
     // The fee covered the cost: that is what the runner decided on.
     expect(feeReceived).toBeGreaterThanOrEqual(outcome.gasCostWei as bigint);
-    console.info(`gas used by executeMessageWithRunner on the stack: ${outcome.gasUsed}; fee in tokens: ${feeReceived}; cost in wei: ${outcome.gasCostWei}`);
+    console.info(`gas used by executeMessage on the stack: ${outcome.gasUsed}; fee in tokens: ${feeReceived}; cost in wei: ${outcome.gasCostWei}`);
   });
 
   it("skips a message whose fee is far below the gas cost, and sends no transaction", async () => {
     const offer = { settings: 1n, limit: 1_000_000_000n, multiplier: 0n }; // a fixed fee of 1e9 wei
-    const callback = encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], [recipient(), offer.settings, offer.limit, offer.multiplier]);
+    const callback = callbackOf(offer);
     await arm(callback, 2);
     const stingy = item(2);
     const { runner, outcomes, prover, signer } = await makeRunner([stingy], { [stingy.messageId]: offerData(offer) });
@@ -415,7 +421,7 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
   it("skips a message that the bridge already delivered: the simulation shows it, and nothing is sent", async () => {
     // The previous test left the stub armed and delivered by the first test: running it again reverts.
     const offer = { settings: 0n, limit: 10n ** 18n, multiplier: 3n * 10n ** 18n };
-    const callback = encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], [recipient(), offer.settings, offer.limit, offer.multiplier]);
+    const callback = callbackOf(offer);
     await arm(callback, 3);
     // Deliver it once outside the runner, then let the runner try.
     const direct = item(3);
@@ -432,7 +438,7 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
   });
   it("carries the light client update and the message in ONE transaction, and the fee goes to the reward address", async () => {
     const offer = { settings: 0n, limit: 10n ** 18n, multiplier: 3n * 10n ** 18n };
-    await arm(encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], [recipient(), offer.settings, offer.limit, offer.multiplier]), 5);
+    await arm(callbackOf(offer), 5);
     const only = item(5);
     const { runner, outcomes, signer } = await makeRunner([only], { [only.messageId]: offerData(offer) });
     const headBefore = await head();
@@ -452,7 +458,7 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
 
   it("drops the item that the bridge already delivered from a batch, and still sends the batch of the others in one transaction", async () => {
     const offer = { settings: 0n, limit: 10n ** 18n, multiplier: 3n * 10n ** 18n };
-    await arm(encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], [recipient(), offer.settings, offer.limit, offer.multiplier]), 7);
+    await arm(callbackOf(offer), 7);
     // The stub holds one armed message. Two items carry its proof: the second one reverts with AlreadyDelivered once the first ran.
     const first = item(6);
     const second = item(7);
@@ -463,6 +469,63 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
 
     expect(await stack.chain.publicClient.getTransactionCount({ address: signer.address })).toBe(nonceBefore + 1);
     expect(outcomes.records.map((record) => (record.status === "skipped" ? record.reason : record.status)).sort()).toEqual(["already-delivered", "delivered"]);
+  });
+  it("delivers through executeMessage of the router: the batch holds the call with the proof only, and the signer is not named anywhere", async () => {
+    const offer = { settings: 1n, limit: 10n ** 17n, multiplier: 0n };
+    await arm(callbackOf(offer), 8);
+    const only = item(8);
+    const { runner, outcomes, signer } = await makeRunner([only], { [only.messageId]: offerData(offer) });
+    expect(await runner.sweep()).toMatchObject({ delivered: 1 });
+    const transactionHash = (outcomes.records[0] as Record<string, unknown>).transactionHash as Hex;
+    const sent = await stack.chain.publicClient.getTransaction({ hash: transactionHash });
+    expect(sent.from.toLowerCase()).toBe(signer.address.toLowerCase());
+    expect(sent.input.toLowerCase()).not.toContain(signer.address.slice(2).toLowerCase());
+    expect(sent.to?.toLowerCase()).toBe(stack.multicall3.toLowerCase());
+    const batch = decodeFunctionData({ abi: multicall3Abi, data: sent.input });
+    if (batch.functionName !== "aggregate3") throw new Error(`${batch.functionName} is no batch`);
+    const [call] = batch.args[0];
+    expect(call?.target.toLowerCase()).toBe(stack.deliveryRouter.toLowerCase());
+    expect(call?.allowFailure).toBe(true);
+    const inner = decodeFunctionData({ abi: deliveryRouterAbi, data: (call as { callData: Hex }).callData });
+    expect(inner.functionName).toBe("executeMessage");
+    expect(inner.args).toHaveLength(1);
+  });
+
+  it("pays the tip to the reward address when another account sends a copy of the delivery, so the copy gains nothing", async () => {
+    const offer = { settings: 1n, limit: 10n ** 17n, multiplier: 0n };
+    await arm(callbackOf(offer), 9);
+    const reward = account(ACCOUNT.reward).address;
+    const copier = account(ACCOUNT.copier).address;
+    const before = { reward: await balanceOf(reward), copier: await balanceOf(copier), recipient: await balanceOf(recipient()) };
+    const decoded = decodeFunctionData({ abi: messageBridgeAbi, data: emptyExecuteMessage(4242n) });
+    if (decoded.functionName !== "executeMessage") throw new Error("the proof is not an executeMessage call");
+
+    await stack.chain.send(stack.deliveryRouter, "DeliveryRouter", "executeMessage", [decoded.args[0]], ACCOUNT.copier);
+
+    expect(await balanceOf(reward)).toBe(before.reward + offer.limit);
+    expect(await balanceOf(copier)).toBe(before.copier);
+    expect(await balanceOf(recipient())).toBe(before.recipient + value - offer.limit);
+    expect(await balanceOf(stack.deliveryRouter)).toBe(0n);
+  });
+
+  it("prices an unwrap request on a token that is not the wrapped native token as a token payout: it needs a valuation, and the router pays the plain token", async () => {
+    // Settings 2n: gas based fee with the unwrap flag. The fee token is not the wrapped native token.
+    const offer = { settings: 2n, limit: 10n ** 18n, multiplier: 3n * 10n ** 18n };
+    await arm(callbackOf(offer), 10);
+    const unwrap = item(10);
+    const { runner, outcomes } = await makeRunner([unwrap], { [unwrap.messageId]: offerData(offer) }, { tokenValuationsWei: {} });
+    // With no valuation of the token the runner cannot price the tip. It does not treat the tip as native coin.
+    expect(await runner.sweep()).toMatchObject({ delivered: 0, skipped: 1 });
+    expect(outcomes.records[0]).toMatchObject({ status: "skipped", reason: "no-price-for-fee-token" });
+
+    const reward = account(ACCOUNT.reward).address;
+    const before = { token: await balanceOf(reward), native: await stack.chain.publicClient.getBalance({ address: reward }) };
+    const priced = await makeRunner([unwrap], { [unwrap.messageId]: offerData(offer) });
+    expect(await priced.runner.sweep()).toMatchObject({ delivered: 1, skipped: 0 });
+    const outcome = priced.outcomes.records[0] as Record<string, unknown>;
+    expect(outcome.feeReceivedTokens as bigint).toBeGreaterThan(0n);
+    expect(await balanceOf(reward)).toBe(before.token + (outcome.feeReceivedTokens as bigint));
+    expect(await stack.chain.publicClient.getBalance({ address: reward })).toBe(before.native);
   });
 });
 

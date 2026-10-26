@@ -4,6 +4,7 @@ import {
   encodeProofMessage,
   multicall3Abi,
   deliveryRouterAbi,
+  encodeFeeDirector,
   messageBridgeAbi,
   tokenMediatorAbi,
   type ProofDirection,
@@ -100,10 +101,9 @@ export function fakeLightClient(initial: Partial<LightClientState> = {}): LightC
 
 /** The call data of a message that relays tokens to a delivery router with a director. */
 export function feeOfferData(options: { director: FeeDirector; value: bigint; recipient?: Address; token?: Address }): Hex {
-  const callback = encodeAbiParameters(
-    [{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }],
-    [options.director.recipient, options.director.settings, options.director.limit, options.director.multiplier],
-  );
+  // The words do not depend on the token. The context names the wrapped native token twice so that the guard of the
+  // shared module accepts every setting: a test may offer a message that the terminal would refuse to build.
+  const callback = encodeFeeDirector(options.director, { router: DELIVERY_ROUTER, protectedAddresses: [], destinationToken: WRAPPED_NATIVE, destinationWrappedNative: WRAPPED_NATIVE });
   return encodeFunctionData({
     abi: tokenMediatorAbi,
     functionName: "handleBridgedTokensAndCall",
@@ -306,7 +306,7 @@ export interface FakeChain extends TransactionPort {
   receiptLogsOfItem: (position: number) => ReceiptLog[];
 }
 
-const EXECUTE_MESSAGE_SINGLE = selectorOf("executeMessageWithRunner");
+const EXECUTE_MESSAGE_SINGLE = selectorOf("executeMessage");
 const UPDATE_SELECTOR = toFunctionSelector(beaconLightClientAbi.find((entry) => entry.type === "function" && entry.name === "update") as never);
 
 function selectorOf(name: string): Hex {
@@ -335,7 +335,7 @@ function messageIdAtFor(chain: FakeChain, request: CallRequest, position: number
   const call = calls[position];
   if (call === undefined) return chain.messageIdOfPosition(position);
   const inner = decodeFunctionData({ abi: deliveryRouterAbi, data: call.callData });
-  const slot = inner.functionName === "executeMessageWithRunner" ? inner.args[0].anchorHeader.slot : 0n;
+  const slot = inner.functionName === "executeMessage" ? inner.args[0].anchorHeader.slot : 0n;
   return slot > 0n ? word(Number(slot)) : chain.messageIdOfPosition(position);
 }
 

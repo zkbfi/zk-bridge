@@ -115,15 +115,15 @@ function routerOf(dependencies: DeliveryDependencies): { readonly deliveryRouter
 
 /**
  * The calls of a batch, in order: the update at the light client when one is offered, then one
- * `executeMessageWithRunner` at the delivery router for each item. Multicall3 allows failure on each, so no call reverts another.
+ * `executeMessage` at the delivery router for each item. Multicall3 allows failure on each, so no call reverts another.
  */
 function batchCalls(dependencies: DeliveryDependencies, readies: readonly ReadyDelivery[], update: UpdateOffer | null): BatchedCall[] {
-  const { deliveryRouter, reward } = routerOf(dependencies);
+  const { deliveryRouter } = routerOf(dependencies);
   const updateCalls: BatchedCall[] =
     update === null
       ? []
       : [{ target: update.lightClient, callData: encodeFunctionData({ abi: beaconLightClientAbi, functionName: "update", args: [update.message.proof, update.message.publicValues] }) }];
-  return [...updateCalls, ...readies.map((ready) => ({ target: deliveryRouter, callData: singleCallData(ready.proof, reward) }))];
+  return [...updateCalls, ...readies.map((ready) => ({ target: deliveryRouter, callData: singleCallData(ready.proof) }))];
 }
 
 function batchCall(dependencies: DeliveryDependencies, readies: readonly ReadyDelivery[], update: UpdateOffer | null): CallRequest {
@@ -213,7 +213,7 @@ function reasonOf(error: unknown): string {
  */
 async function evaluateBatch(dependencies: DeliveryDependencies, readies: readonly ReadyDelivery[], update: UpdateOffer | null): Promise<Evaluation> {
   const { chain, settings } = dependencies;
-  const { reward, deliveryRouter } = routerOf(dependencies);
+  const { deliveryRouter } = routerOf(dependencies);
   const call = batchCall(dependencies, readies, update);
   const shape = { count: readies.length, hasUpdate: update !== null };
   const simulation = await chain.simulate(call);
@@ -228,7 +228,7 @@ async function evaluateBatch(dependencies: DeliveryDependencies, readies: readon
   const unmeasurable: Dropped[] = [];
   const itemGas: bigint[] = [];
   for (const ready of readies) {
-    const single = await chain.simulate({ to: deliveryRouter, data: singleCallData(ready.proof, reward) });
+    const single = await chain.simulate({ to: deliveryRouter, data: singleCallData(ready.proof) });
     if (!single.ok) {
       unmeasurable.push({ ready, outcome: skip(ready.messageId, "simulation-reverted", { detail: single.reason }) });
       continue;

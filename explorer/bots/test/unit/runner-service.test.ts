@@ -29,7 +29,6 @@ const runnerSection = (indexerUrl: string, extra: Record<string, unknown> = {}) 
     prover: { binary: "/bin/zk-bridge-prover" },
     indexerUrl,
     signer: { kind: "private-key", key: "env:RUNNER_KEY" },
-    rewardAddress: REWARD_ADDRESS,
     maximumPrerequisiteSpendPerSweepWei: "5000",
     maximumPrerequisiteSpendPerDayWei: "20000",
     maximumUnrecoveredPrerequisiteLossWei: "10000",
@@ -59,15 +58,15 @@ async function prepare(options: ServiceWorldOptions & { runnerExtra?: Record<str
 }
 
 interface ClientAnswers {
-  runner?: Address;
   rewardAddress?: Address;
+  failRewardRead?: boolean;
   code?: string | undefined;
   failHead?: boolean;
 }
 
 function clientWith(answers: ClientAnswers = {}) {
   const readContract = vi.fn(async ({ functionName }: { functionName: string }) => {
-    if (functionName === "runner") return answers.runner ?? SIGNER_ADDRESS;
+    if (functionName === "rewardAddress" && answers.failRewardRead === true) throw new Error("execution reverted");
     if (functionName === "rewardAddress") return answers.rewardAddress ?? REWARD_ADDRESS;
     if (functionName === "head" && answers.failHead === true) throw new Error("rpc down");
     if (functionName === "head") return 100n;
@@ -174,17 +173,18 @@ describe("startRunner refuses to start", () => {
     expect(makeClient).not.toHaveBeenCalled();
   });
 
-  it("when the delivery router does not whitelist the signer, and releases the lock", async () => {
+  it("when the reward address of the delivery router cannot be read, names the router and the chain, and releases the lock", async () => {
     const started = await prepare();
-    const { overrides } = standardOverrides({ publicClient: () => clientWith({ runner: REWARD_ADDRESS }) });
-    await expect(run(started, overrides)).rejects.toThrow(/whitelists/);
+    const { overrides } = standardOverrides({ publicClient: () => clientWith({ failRewardRead: true }) });
+    await expect(run(started, overrides)).rejects.toThrow(/Cannot read rewardAddress\(\) of the delivery router 0x\w+ on .+: execution reverted/);
     expect(existsSync(join(started.created.directory, "state", "runner-eth-pls-first-to-second.json.lock"))).toBe(false);
   });
 
-  it("when the delivery router pays another address than the reward address", async () => {
+  it("reads the reward address from the router and logs it, with no check against the signer", async () => {
     const started = await prepare();
     const { overrides } = standardOverrides({ publicClient: () => clientWith({ rewardAddress: SIGNER_ADDRESS }) });
-    await expect(run(started, overrides)).rejects.toThrow(/pays the fees to/);
+    await run(started, overrides);
+    expect(started.created.events().find((event) => event.event === "runner_started")).toMatchObject({ rewardAddress: SIGNER_ADDRESS });
   });
 
   it.each([["undefined", undefined], ["empty", "0x"]])("when Multicall3 holds no code (%s)", async (_name, code) => {
@@ -197,7 +197,7 @@ describe("startRunner refuses to start", () => {
     const started = await prepare();
     const { overrides } = standardOverrides();
     const { publicClient: _unused, ...withoutClient } = overrides;
-    await expect(run(started, withoutClient)).rejects.toThrow(/Cannot read runner\(\) of the delivery router/);
+    await expect(run(started, withoutClient)).rejects.toThrow(/Cannot read rewardAddress\(\) of the delivery router/);
   }, 60_000);
 });
 
@@ -242,7 +242,7 @@ describe("startRunner runs one pass", () => {
     expect(started.created.logLines.join("\n")).not.toContain(SIGNER_KEY);
   });
 
-  it("delivers without a router when the deployment has none, and needs no reward address and no Multicall3", async () => {
+  it("delivers without a router when the deployment has none, and reads no reward address and needs no Multicall3", async () => {
     const started = await prepare({ omitDeliveryRouter: true });
     const { overrides, client } = standardOverrides({ publicClient: () => clientWith({ code: undefined }) });
     await run(started, overrides);

@@ -1,12 +1,12 @@
 import { decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeFunctionData, erc20Abi, type Address, type ContractFunctionArgs, type Hex } from "viem";
-import { deliveryRouterAbi, messageBridgeAbi, type ProofDirection } from "@zk-bridge/shared";
+import { deliveryRouterAbi, messageBridgeAbi, type PayoutKind, type ProofDirection } from "@zk-bridge/shared";
 import { sendTerms, worstCaseCostWei, type FeeQuote, type ReceiptLog, type TransactionPort } from "../chain/transactions.ts";
 import type { FeedItem, IndexerClient } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
 import type { EvidencePackage, Prerequisite } from "../prover/packages.ts";
 import type { ProverBinary } from "../prover/prover-binary.ts";
 import type { PrerequisiteLedger } from "./prerequisite-ledger.ts";
-import { decideDelivery, readFeeOffer, valueFeeInWei, type FeeOffer } from "./fee.ts";
+import { decideDelivery, payoutOfOffer, readFeeOffer, valueFeeInWei, type FeeOffer } from "./fee.ts";
 import type { SourceReader } from "./source-reader.ts";
 
 /** The settings of a delivery that come from the bot configuration. */
@@ -43,7 +43,7 @@ export interface DeliveryDependencies {
   readonly deliveryRouter: Address | null;
   /** The Multicall3 contract of the destination chain, which batches the calls of a delivery. Not null whenever `deliveryRouter` is not null. */
   readonly multicall: Address | null;
-  /** The address that receives the fees. Not null whenever `deliveryRouter` is not null: the start-up check requires it. */
+  /** The address that receives the tips, read from the router at start up. It serves the accounting and the log. Not null whenever `deliveryRouter` is not null. */
   readonly rewardAddress: Address | null;
   readonly wrappedNative: Address;
   readonly settings: DeliverySettings;
@@ -128,18 +128,21 @@ function proofOf(evidence: EvidencePackage): MessageProof {
   return decoded.args[0];
 }
 
-/** The call data of the single entry of the delivery router. The batch simulation uses it to measure the gas of one item. */
-export function singleCallData(proof: MessageProof, reward: Address): Hex {
-  return encodeFunctionData({ abi: deliveryRouterAbi, functionName: "executeMessageWithRunner", args: [proof, reward] });
+/**
+ * The call data of the entry of the delivery router: `executeMessage(proof)`. Any account may send it, because the router
+ * pays the tip to its own reward address. The batch simulation uses it to measure the gas of one item.
+ */
+export function singleCallData(proof: MessageProof): Hex {
+  return encodeFunctionData({ abi: deliveryRouterAbi, functionName: "executeMessage", args: [proof] });
 }
 
-/** The fee that the router would pay the runner for this gas, measured in wei. */
+/** The fee that the router would pay to its reward address for this gas, measured in wei. `payout` tells how the router pays it. */
 export async function quoteFee(
   dependencies: DeliveryDependencies,
   item: FeedItem,
   offer: Extract<FeeOffer, { kind: "offer" }>,
   gasUnits: bigint,
-): Promise<{ readonly ok: true; readonly feeWei: bigint; readonly feeTokens: bigint } | { readonly ok: false; readonly reason: "no-price-for-fee-token" }> {
+): Promise<{ readonly ok: true; readonly feeWei: bigint; readonly feeTokens: bigint; readonly payout: PayoutKind } | { readonly ok: false; readonly reason: "no-price-for-fee-token" }> {
   const token = item.transfer?.destinationToken;
   if (token === undefined) return { ok: false, reason: "no-price-for-fee-token" };
   const { director } = offer;
@@ -155,11 +158,11 @@ export async function quoteFee(
     token: token.address as Address,
     decimals: token.decimals,
     director,
-    // The wrapped native token and its unwrapped payout are both worth one wei per base unit.
     wrappedNative: dependencies.wrappedNative,
     valuationsWei: dependencies.settings.tokenValuationsWei,
   });
-  return value.ok ? { ok: true, feeWei: value.wei, feeTokens } : value;
+  const payout = payoutOfOffer({ director, token: token.address as Address, wrappedNative: dependencies.wrappedNative });
+  return value.ok ? { ok: true, feeWei: value.wei, feeTokens, payout } : value;
 }
 
 /** Sums the transfers of `token` to `account` in a list of logs. */
@@ -466,7 +469,7 @@ export async function judgeOffer(dependencies: DeliveryDependencies, input: Judg
     outcome: skip(messageId, "fee-below-cost-plus-margin", {
       feeWei: priced.feeWei,
       costWei: decision.costWei,
-      detail: `short by ${decision.shortfallWei} wei at ${costGasUnits} gas`,
+      detail: `short by ${decision.shortfallWei} wei at ${costGasUnits} gas, tip paid as ${priced.payout}`,
     }),
   };
 }

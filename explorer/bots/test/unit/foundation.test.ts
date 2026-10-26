@@ -81,11 +81,22 @@ describe("the bot configuration", () => {
     expect(config.runner?.prerequisiteLossRefusalSeconds).toBe(1800);
     expect(config.runner?.maximumBatchSize).toBe(5);
     expect(config.runner?.maximumBatchGas).toBe(6_000_000);
-    // The router comes from the deployment file, so the start of the runner checks the reward address, not the parser.
-    expect(config.runner?.rewardAddress).toBeUndefined();
   });
 
-  it("checks the shape of the reward address and the batch limits", () => {
+  it("refuses a reward address in the runner section, because the router decides where the tips go", () => {
+    const runner = {
+      prover: { binary: "p" },
+      indexerUrl: "http://127.0.0.1:1",
+      signer: { kind: "private-key", key: "env:RUNNER_PRIVATE_KEY" },
+      maximumPrerequisiteSpendPerSweepWei: "5000",
+      maximumPrerequisiteSpendPerDayWei: "20000",
+      maximumUnrecoveredPrerequisiteLossWei: "10000",
+      rewardAddress: "0x1111111111111111111111111111111111111111",
+    };
+    expect(() => parseBotConfig({ ...minimal, runner })).toThrow(/rewardAddress/);
+  });
+
+  it("checks the batch limits", () => {
     const runner = (extra: Record<string, unknown>) => ({
       prover: { binary: "p" },
       indexerUrl: "http://127.0.0.1:1",
@@ -95,9 +106,7 @@ describe("the bot configuration", () => {
       maximumUnrecoveredPrerequisiteLossWei: "10000",
       ...extra,
     });
-    const reward = "0x1111111111111111111111111111111111111111";
-    expect(parseBotConfig({ ...minimal, runner: runner({ rewardAddress: reward, maximumBatchSize: 3, maximumBatchGas: 2_000_000 }) }).runner).toMatchObject({ rewardAddress: reward, maximumBatchSize: 3, maximumBatchGas: 2_000_000 });
-    expect(() => parseBotConfig({ ...minimal, runner: runner({ rewardAddress: "0x1234" }) })).toThrow(/config\.runner\.rewardAddress/);
+    expect(parseBotConfig({ ...minimal, runner: runner({ maximumBatchSize: 3, maximumBatchGas: 2_000_000 }) }).runner).toMatchObject({ maximumBatchSize: 3, maximumBatchGas: 2_000_000 });
     expect(() => parseBotConfig({ ...minimal, runner: runner({ maximumBatchSize: 0 }) })).toThrow(/config\.runner\.maximumBatchSize/);
     expect(() => parseBotConfig({ ...minimal, runner: runner({ maximumBatchGas: -1 }) })).toThrow(/config\.runner\.maximumBatchGas/);
   });
