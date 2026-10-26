@@ -13,7 +13,7 @@ bun test                                        # tests
 bunx tsc --noEmit                               # type check
 ```
 
-Keys: `1` to `4` views, `Tab` area, arrows move, `Enter` opens, `?` help, `q` quit. `5` opens the Prover setup view,
+Keys: `1` to `5` views (global, pair, audit, prover and costs, connections), `Tab` area, arrows move, `Enter` opens, `?` help, `q` quit. `6` opens the Prover setup view,
 which is deliberately the last option everywhere.
 
 ## Environment variables
@@ -21,9 +21,9 @@ which is deliberately the last option everywhere.
 | Variable | Use |
 |---|---|
 | `EXPLORER_DATA=fixture` | Built-in sample data and simulated sends. |
-| `EXPLORER_INDEXER_URL` | Indexer API. Default `http://localhost:42069`. |
+| `EXPLORER_INDEXER_URL` | Indexer API. A URL that you set in the Connections view wins over it. Default `http://localhost:42069`. |
 | `EXPLORER_PAIR`, `EXPLORER_DEPLOYMENT_FILE` | Pair (default `eth-pls`) and the deployment JSON that `docker/deploy.sh` writes. |
-| `EXPLORER_RPC_URL_<chainId>` | RPC URL of each chain. Keyed URLs: keep them out of files. |
+| `EXPLORER_RPC_URL_<chainId>` | RPC URL of each chain. A URL that you set in the Connections view wins over it. The `rpc_url` of the deployment file is the weaker default. Keyed URLs: keep them out of files. |
 | `EXPLORER_PRIVATE_KEY`, `EXPLORER_PRIVATE_KEY_FILE` | Signer at startup. The variable is removed from the environment when read. The file must be mode 0600. |
 | `EXPLORER_KEYSTORE_FILE` | Prefills the keystore dialog. The password is always prompted. |
 | `EXPLORER_MNEMONIC`, `EXPLORER_MNEMONIC_PASSPHRASE` | Used when the mnemonic field is left empty. Removed from the environment when read. |
@@ -31,6 +31,25 @@ which is deliberately the last option everywhere.
 | `EXPLORER_HANDOFF_FILE`, `EXPLORER_EVIDENCE_FILE` | Prefill the operator dialogs. |
 | `EXPLORER_CONFIG_DIR` | Where the Prover setup file lives. |
 | `EXPLORER_TOKEN_VALUATIONS_WEI` | Optional prices for delivery fee suggestions. A JSON object from a token address to the value of one whole token in wei, as a decimal text. The wrapped native token needs no entry (one whole token is 10^18 wei). The bots take the same setting as `tokenValuationsWei`. |
+
+## Connections: the indexer first, RPC as fallback
+
+The dashboard reads the indexer. When the indexer is unreachable, answers with an error, or is more than 300 seconds behind the chain head, it reads the chains by RPC instead. It checks the indexer again from time to time and goes back when it is healthy. The footer shows `indexer` or `RPC fallback: <reason>`. The full rules, and what RPC mode cannot give, are in `docs/explorer.md` (section "Data sources: the indexer first, RPC as fallback").
+
+Key `5` opens the Connections view. It lists the indexer URL and the RPC URL of each chain, and for each one where it comes from: set by you, from the environment, or default. The order is: your setting, then the environment, then the `rpc_url` of the deployment file (and `http://localhost:42069` for the indexer).
+
+| Key | Action |
+|---|---|
+| `Enter` on a URL | Type a new URL into a masked field. An RPC URL is tested first with `eth_chainId`. A URL of another chain, or one that fails, is refused and not saved. |
+| `d` on a URL | Forget your setting. The row uses the next source. |
+| `Enter` on a test row | Test the URL in force now. |
+| `Enter` on `Check the indexer now` | Check the indexer now and switch the source if the check says so. |
+
+A change applies at once. The dashboard builds new clients and keeps its screens, so no restart is needed.
+
+An RPC URL can hold an API key. The view shows only the host and the last four characters of the rest. The URL goes to the secret store (the Keychain on macOS, the Secret Service on Linux, or an encrypted file with a password), never to a settings file. Every log line and error message is redacted. When the store needs a password, the dashboard starts with your environment settings, and the Connections view asks for the password and then applies your stored settings.
+
+In RPC mode some figures are partial. The summary bar marks them with `>=` and a note, the audit view shows `unverified` for a row that it cannot prove, and the feed says `history since <time>`.
 
 ## Tip for delivery (voluntary delivery fee)
 

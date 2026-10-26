@@ -8,6 +8,7 @@ The browser interface for the bridge. It shows the same views and does the same 
 - **Pair view.** Summary across the top. On the left: the connected account, the balances on both chains, and the actions (bridge tokens, wrap the native coin, send a message, claim). On the right: the feed under a fixed filter bar (direction, kind, status, token, address, time range), with the time on both chains and the status of each row. In the footer: the light client head of each chain.
 - **Other views.** Global (choose a pair, default `eth-pls`), audit (escrow against bridged supply, and fees), prover and costs (light client updates recorded on chain), the page of one transfer, the page of one address, and the Docs view.
 - **Docs.** User documentation in `explorer/web/docs/pages/*.md`, rendered inside the page. The palette searches every title and heading. The pages are for the web interface. If the terminal needs the same text, move the folder to `explorer/docs/` and change the glob in `src/docs/docs-index.ts`.
+- **Connections.** The header shows where the data comes from: `indexer`, or `RPC fallback: <reason>`. The page `#/settings` (in the palette: "Connections: indexer and RPC URLs") sets the indexer URL and the RPC URL of each chain. See "Connections" below.
 - **Not here: the Prover setup view.** It holds operator secrets (a remote endpoint key and RPC keys), so it lives in the terminal only. A browser page must never hold such secrets.
 
 ## Fees: what you see before you sign
@@ -47,14 +48,22 @@ Vite copies every `VITE_` variable into the page at build time, so all of them a
 | Variable | Meaning | Default |
 |---|---|---|
 | `VITE_EXPLORER_DATA` | `live`, or `fixture` for sample data and a simulated wallet. | `live` |
-| `VITE_EXPLORER_INDEXER_URL` | Base URL of the indexer (`explorer/indexer`). | `http://localhost:42069` |
+| `VITE_EXPLORER_INDEXER_URL` | Base URL of the indexer (`explorer/indexer`). A URL that you set on the connections page wins over it. | none. The registry default is `http://localhost:42069`. |
 | `VITE_EXPLORER_PAIR` | Pair name. | `eth-pls` |
 | `VITE_EXPLORER_DEPLOYMENT_URL` | URL of the deployment JSON that `docker/deploy.sh` writes. | none |
 | `VITE_EXPLORER_DEPLOYMENT_JSON` | The same JSON, inline. Wins over the URL. | none |
-| `VITE_EXPLORER_RPC_URL_<chainId>` | Public RPC endpoint of each chain, for balances, allowances, gas and fees. | none |
+| `VITE_EXPLORER_RPC_URL_<chainId>` | Public RPC endpoint of each chain, for balances, allowances, gas and fees, and for the RPC fallback. A URL that you set on the connections page wins over it. The `rpc_url` of the deployment JSON is the weaker default. | none |
 | `VITE_WALLETCONNECT_PROJECT_ID` | Reserved. See "Wallets". | none |
 
 A live page needs a deployment (URL or inline JSON). The page serves one pair, because the indexer serves one. The global view lists the known pairs and marks the others as not configured.
+
+## Connections
+
+The page reads the indexer. When the indexer is unreachable, answers with an error, or is more than 300 seconds behind the chain head, the page reads the chains by RPC instead, and it goes back when the indexer is healthy. The header badge says which source answers. The rules, and what RPC mode cannot give, are in `docs/explorer.md` (section "Data sources: the indexer first, RPC as fallback"). Partial figures are marked: the summary says "at least", the audit shows "unverified" for a row that it cannot prove, and the feed says "history since <time>".
+
+The page `#/settings` shows the indexer URL and the RPC URL of each chain, where each one comes from (set by you, from the environment, or default), and lets you test, save and forget your own. The order is: your setting, then the `VITE_` variable, then the `rpc_url` of the deployment JSON (and `http://localhost:42069` for the indexer). The test of an RPC URL sends `eth_chainId`. The page refuses to save a URL of another chain or one that fails. A change applies at once, with no reload.
+
+**The browser keeps these URLs in its local storage, in clear text.** Anyone who can use this browser profile can read them. An RPC URL can hold an API key, so use a key that you can replace. The page shows only the host and the last four characters of the rest, and it removes every URL from error messages. When the browser blocks its storage, the setting lasts until you close the page, and the page says so.
 
 ## Wallets
 
@@ -71,7 +80,8 @@ A live page needs a deployment (URL or inline JSON). The page serves one pair, b
 ## Code layout
 
 - `src/config`: environment, deployment loading, the secret check.
-- `src/data`: the calls to the indexer that the terminal data source does not make (one message, a lookup by transaction hash), and the fixture client.
+- `src/data`: the calls to the indexer that the terminal data source does not make (one message, a lookup by transaction hash) with the RPC fallback, and the fixture client.
+- `src/config/connection-storage.ts`: your settings in local storage, every access guarded. The runtime itself is `explorer/terminal/src/data/connection-runtime.ts`, which both dashboards use.
 - `src/tx`: pure planning. `bridge-steps.ts` calls the terminal builder (`buildBridgeSteps`), so calldata equals what the terminal builds for the same inputs. `bridge-draft.ts` is everything the form can say before Review. `confirm-model.ts` is the text of the confirm dialog. `transaction-sequence.ts` is the confirm-before-send state machine.
 - `src/search`: the palette model, the identifier lookups, the recent list, the palette.
 - `src/docs`: the Markdown reader and the page index. No markup is ever injected as HTML.

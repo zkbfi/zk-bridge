@@ -63,6 +63,8 @@ No endpoint, key or address of a deployment is committed. The API never shows RP
 
 Stable. Add fields freely. Do not rename or remove a field without telling the terminal and web authors.
 
+The shapes come from `shared/src/api-views.ts`, and the message, transfer and status rules from `shared/src/message-merge.ts`, `shared/src/send-decoding.ts` and `shared/src/status.ts`. The dashboards use the RPC data source (`shared/src/rpc`) when this indexer is not available, and it builds its answers with the same functions. So a field that you add here belongs in `api-views.ts`. `test/unit/rpc-equivalence.test.ts` feeds one synthetic history to the handlers of this indexer and to the RPC data source, and compares the feed, one message and the tokens.
+
 Conventions:
 
 - Every endpoint is `GET` and answers JSON. Errors answer `{ "error": "..." }` with status 400, 404 or 503.
@@ -247,7 +249,7 @@ Prefer the JSON routes above for the dashboard: they join tokens, format amounts
 
 ## Tests
 
-- Unit: `test/unit`. Message merge order, send decoding, feed query parsing, audit rule, beacon helper, pair loading. Shared: AMB codec against vectors that `AmbMessageCodec.sol` produced (`shared/vectors/GenerateAmbVectors.s.sol`), mediator payloads, status, formatting, pair registry, ABIs.
+- Unit: `test/unit`. Handlers, routes, beacon helper, pair loading, the row types against the shared types, and the equivalence with the RPC data source. Shared (message merge order, send decoding, feed query parsing, audit rule, the RPC data source): AMB codec against vectors that `AmbMessageCodec.sol` produced (`shared/vectors/GenerateAmbVectors.s.sol`), mediator payloads, status, formatting, pair registry, ABIs.
 - Integration `test/integration/synthetic.test.ts`: two Anvil chains with test doubles that emit the real event signatures (`test/contracts/Synthetic.sol`), a real Postgres server and the real Ponder process. It covers the delivered side, which needs proofs on the real contracts.
 - Integration `test/integration/real-stack.test.ts`: the real contracts from `docker/deploy.sh`. See the file header for what it covers.
 

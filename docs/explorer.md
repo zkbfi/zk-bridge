@@ -6,12 +6,12 @@ User decisions (2026-10-25): the explorer lives in this repository under `explor
 
 | Path | What it is | Runtime |
 |---|---|---|
-| `explorer/shared` | Contract ABIs (generated from the Foundry build output), the chain pair registry, shared types, number formatting | any |
+| `explorer/shared` | Contract ABIs (generated from the Foundry build output), the chain pair registry, shared types, number formatting, the message and status rules that the indexer uses, the RPC data source, and the connection settings | any |
 | `explorer/indexer` | Ponder project that indexes both chains of a pair into a local database and serves it | Node.js |
 | `explorer/terminal` | OpenTUI dashboard | Bun |
 | `explorer/web` | Later: React web interface on the same indexer API | browser |
 
-"Load the data instantly": the dashboard never scans a chain itself. It reads the indexer's database through the indexer's API, so it opens with history already in place and live updates arrive as the indexer follows new blocks.
+"Load the data instantly": with the indexer, the dashboard never scans a chain itself. It reads the indexer's database through the indexer's API, so it opens with history already in place and live updates arrive as the indexer follows new blocks. When the indexer is not available, the RPC source takes over (see "Data sources: the indexer first, RPC as fallback").
 
 ## Pairs
 
@@ -28,6 +28,63 @@ From both chains of each pair:
 - Status of each transfer or message, derived: sent, waiting for finality, covered by a stored head, delivered, failed call, fallback used, claimable.
 
 The indexer tracks only what lands on chain. It stores no proofs and accepts no off-chain records (user decision, 2026-10-25). Proof-related data comes from chain events: each light client head update with its transaction, gas used and poster.
+
+## Data sources: the indexer first, RPC as fallback (user decision, 2026-10-26)
+
+The indexer is the upgrade. It holds the whole history and answers at once. The dashboards still work when it does not: they fall back to a data source that reads the chains by RPC. Both sources answer in the same shape, so no screen knows which one it reads.
+
+### When the dashboard falls back, and when it returns
+
+The terminal and the web page use the indexer while it is healthy. They switch to the RPC source for one of these reasons:
+
+| Reason | What it means |
+|---|---|
+| `no indexer URL is set` | No source of settings names an indexer. |
+| `indexer unreachable` | The request failed at the network level or timed out. |
+| `indexer error: <text>` | The indexer answered with an error status, or an answer that the client cannot read. |
+| `indexer <n> s behind the chain head` | The newest block that the indexer holds is more than 300 seconds older than the newest block of a chain. The check reads `/api/heads` and compares it with the clock of the chains (the wall clock when a chain has no RPC URL). |
+
+No timer runs. A read checks the indexer when its interval has passed: every 30 seconds for a healthy indexer (the lag check) and every 15 seconds for a failed one. When a check of a failed indexer succeeds, the dashboard goes back to it.
+
+The screens show the active source. The terminal shows it in the footer. The web page shows it as a badge in the header. The text is `indexer` or `RPC fallback: <reason>`.
+
+### How the RPC source reads
+
+- It reads `eth_getLogs` in bounded windows. The block span is configurable (default 2000 blocks). A node that refuses a window for its size gets two half windows, down to 50 blocks. Any other error stops the read at once.
+- It reads newest first. A request reads at most 6 older windows (configurable), then answers with what it has and a cursor. The next request with that cursor reads further back. New blocks are read as they come, and the last 24 blocks are read again to follow a reorganization.
+- It joins the two chains by message identifier. It uses the code of the indexer: the decoding of a send (`decodeSend`), the merge of facts into a message and a transfer row (`mergeMessage`, `mergeTransfer`), the status rules (`deriveStatus`), the audit sum (`auditToken`), the feed query (`parseFeedQuery`) and the shape of every answer (`explorer/shared/src/api-views.ts`). These modules moved from `explorer/indexer` to `explorer/shared`. The indexer imports them from there. A test fails when a row type of the indexer and its shared type differ.
+- It reads the current state from the contracts and not from events when a contract can say it: the stored head of each light client, the gate flags and the newest confirmed epoch, whether sends are open, the escrow, the fees held, and the supply of a bridged copy. A bridged copy counts only when the mediator of its chain names the native token back, so the relationship is read in both directions.
+- **A message is listed only when it is known fully.** A delivery lies on the other chain and after the send. So a message sent before the scan of the destination chain starts could look undelivered. The source lists only messages sent after the later of the two scan starts (`coveredFrom`). Every message that it lists has the status that it has with the whole history.
+
+### What RPC mode cannot give
+
+A figure that RPC mode cannot complete is marked, never shown as exact. Each answer carries a `coverage` block with the list of partial figures. The terminal and the web page show the mark.
+
+| Figure | In RPC mode |
+|---|---|
+| Feed | Recent history only. The page says `history since <time>`. |
+| Transfers in flight | At least the count in the scanned history, unless the scan reached the first block of the deployment. |
+| Volume of the last 24 hours | Exact when the scan reaches back 24 hours or to the first block of the deployment. Partial otherwise. |
+| Fees accrued, fees collected | The fees held now are exact for each known token (a contract read). The list of tokens comes from the scanned history, and so does the collected total. Both are partial until the scan is complete. |
+| Audit | The escrow, the fees and the supply are exact. The transfers in flight come from the scanned history, so the row shows `unverified` and is never flagged as a mismatch while the history is partial. |
+| Light client heads | The stored head and the lag are exact. The finalized slot comes from the finalized execution block of the tracked chain (`(timestamp - genesis time) / seconds per slot`). It is unknown when the node does not serve the `finalized` tag. The time and the count of updates come from the scanned history. |
+| Gate | The flags, the sends state and the newest confirmed epoch are exact. The confirmation time comes from the event when it is in the scanned history. Otherwise it is the start of the confirmed epoch, and the answer says so. |
+| Delivery cost | The base fee is exact. No delivery is measured, so the gas is the default and the report says `default`. |
+| One message | Found in the scanned history only. A search by transaction reads the receipt, and the next request for that message reads back to that block, up to 80 windows. |
+
+Routes that the dashboards do not use are not served in RPC mode: `/api/escrow`, `/api/claimables`, `/api/gate`, `/api/registry`, `/api/light-client-costs` and the GraphQL route.
+
+### Settable and updatable URLs
+
+The indexer URL and the RPC URL of each chain can be set in both dashboards. A setting takes effect at once, with no restart: the dashboard builds new clients and keeps the same screens.
+
+- **Order of precedence.** The setting of the user, then the environment or the deployment of the page (`EXPLORER_INDEXER_URL` and `EXPLORER_RPC_URL_<chainId>` in the terminal, `VITE_EXPLORER_INDEXER_URL` and `VITE_EXPLORER_RPC_URL_<chainId>` in the web page), then the default of the pair registry (the `rpc_url` of the section of the deployment file, and `http://localhost:42069` for the indexer). A blank setting counts as no setting, so forgetting a setting returns to the next source.
+- **Where the terminal keeps them.** In the secret store of the operating system, or in the encrypted file when the system has none. The names are `explorer.connection.indexer` and `explorer.connection.rpc.<chainId>`. An RPC URL can hold an API key, so no settings file holds one. The Connections view (key `5`) sits before the Prover setup view, which stays last.
+- **Where the web page keeps them.** In the local storage of the browser, in clear text. The page warns about this. Every access of the storage is guarded, because a browser can block it. When a write fails, the setting lasts until the page closes, and the page says so.
+- **What the screens show.** Only a masked form: the host, and the last four characters of the rest. A log line or an error message goes through the redactor first. It removes the whole URL, the user name, the password, the path and each query value of every URL in use.
+- **The test.** The test of an RPC URL sends `eth_chainId`. A URL whose chain identifier is not the chain of the row is refused, and nothing is saved. A URL that fails the test is not saved either. The test of an indexer URL asks `/api/heads`.
+
+Code: `explorer/shared/src/rpc` (the RPC source), `explorer/shared/src/fallback.ts` (the rule), `explorer/shared/src/connection.ts` (the indexer with the RPC source behind it), `explorer/shared/src/connection-settings.ts` (precedence, masking, redaction), `explorer/terminal/src/data/connection-runtime.ts` (the live runtime that both dashboards use).
 
 ## Terminal dashboard layout
 
