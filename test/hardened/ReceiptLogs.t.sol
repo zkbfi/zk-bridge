@@ -25,6 +25,15 @@ contract ReceiptLogsHarness {
     }
 }
 
+/// @notice Hands `ReceiptLogs` an item that the vendored `toRLPItem` would never build: a list of length zero.
+contract ReceiptLogsEmptyItemHarness {
+    function itemAtOfEmptyItem() external pure returns (bool found, uint256 count) {
+        RLPReader.RLPItem memory empty =
+            RLPReader.RLPItem({length: 0, ptr: RLPReader.MemoryPointer.wrap(0x80)});
+        (found,, count) = ReceiptLogs.itemAt(empty, 0);
+    }
+}
+
 /// @notice Tests of the item walker that replaces the vendored `readList` for the logs of a receipt. The vendored
 /// reader holds at most 32 items. A transaction can emit more logs than that, and the deposit it holds must stay
 /// withdrawable.
@@ -207,5 +216,32 @@ contract ReceiptLogsTest is Test {
         harness.itemAt("", 0);
         (bool found,,) = harness.itemAt(hex"c0", 0); // control: the empty list is valid and has no item
         assertFalse(found);
+    }
+
+    /// Claim: a long string header with no length byte after it is refused at an item. Shows: a list that holds only the
+    /// prefix 0xb8 reverts with `ContentLengthMismatch`, where the same prefix followed by a length byte and a string
+    /// of that length is read. Matters: the length bytes of an item must lie inside the list.
+    function test_walkerRefusesAnItemWhoseLengthBytesAreMissing() public {
+        vm.expectRevert(ContentLengthMismatch.selector);
+        harness.itemAt(hex"c1b8", 0);
+        (bool found, bytes memory raw,) = harness.itemAt(bytes.concat(hex"f83a", hex"b838", new bytes(56)), 0);
+        assertTrue(found, "control: a string of 56 bytes behind a length byte");
+        assertEq(raw.length, 58, "the item with its header");
+    }
+
+    /// Claim: a long string item that claims more bytes than the list holds is refused. Shows: the prefix 0xb8 0x38 (a
+    /// string of 56 bytes) followed by 10 bytes reverts with `ContentLengthMismatch`. Matters: a length that runs past
+    /// the end of the list must never read beyond the receipt.
+    function test_walkerRefusesALongItemThatRunsPastTheEnd() public {
+        vm.expectRevert(ContentLengthMismatch.selector);
+        harness.itemAt(bytes.concat(hex"cc", hex"b838", new bytes(10)), 0);
+    }
+
+    /// Claim: the walker refuses an item of length zero. Shows: `EmptyItem` for a hand built item with no bytes, which
+    /// the vendored `toRLPItem` never makes. Matters: a header cannot be read from no bytes.
+    function test_walkerRefusesAnItemOfLengthZero() public {
+        ReceiptLogsEmptyItemHarness emptyHarness = new ReceiptLogsEmptyItemHarness();
+        vm.expectRevert(EmptyItem.selector);
+        emptyHarness.itemAtOfEmptyItem();
     }
 }
