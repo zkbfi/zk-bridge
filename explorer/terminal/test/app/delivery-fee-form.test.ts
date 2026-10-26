@@ -152,6 +152,11 @@ describe('buildDeliveryFeeModel', () => {
     expect(garbled.kind === 'invalid' && garbled.reason).toContain('The fixed amount is not valid')
   })
 
+  test('refuses a fixed amount above 256 bits with a reason instead of crashing', () => {
+    const huge = readyModel(stateFor({ ...baseValues, feeFixed: `1${'0'.repeat(80)}`, feeMode: 'fixed' })).chosen
+    expect(huge).toEqual({ kind: 'invalid', reason: 'The fixed amount is too large: it must fit in 256 bits.' })
+  })
+
   test('the gas multiplier mode uses the typed multiplier and the base fee ceiling as the cap', () => {
     const low = readyModel(nativeState({ ...nativeValues, feeMode: 'gas', feeMultiplier: '1.2', feeCeilingGwei: '14' })).chosen
     const high = readyModel(nativeState({ ...nativeValues, feeMode: 'gas', feeMultiplier: '1.2', feeCeilingGwei: '28' })).chosen

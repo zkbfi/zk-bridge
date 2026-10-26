@@ -7,7 +7,7 @@
  * fee router) is a plain relay, and the draft says why, as the terminal does.
  */
 import { getAddress, type Address } from "viem";
-import type { DeliveryCostReport, PayoutKind, SenderPrice } from "@zk-bridge/shared";
+import { UINT256_MAXIMUM, type DeliveryCostReport, type PayoutKind, type SenderPrice } from "@zk-bridge/shared";
 import { bridgeSourceOf, type BridgeContext } from "@terminal/app/actions";
 import { DEFAULT_TIP_PERCENT_TEXT, resolveDeliveryTarget, senderPriceText, type DeliveryTarget } from "@terminal/app/delivery-fee-form";
 import type { ChainSide, PairConfig, TokenInfo } from "@terminal/model/types";
@@ -182,6 +182,7 @@ const readTipInputs = (options: DeliveryOptions, target: DeliveryTarget, default
   const fixedText = options.fixedText.trim();
   const fixedAmount = fixedText === "" ? null : parseDecimalText(fixedText, target.token.decimals);
   if (fixedText !== "" && fixedAmount === null) return failure(`The fixed amount must be a number with at most ${target.token.decimals} fraction digits.`);
+  if (fixedAmount !== null && fixedAmount > UINT256_MAXIMUM) return failure("The fixed amount is too large: it must fit in 256 bits.");
   const price = priceOf(options.senderPriceText ?? defaultPriceText, target.token.decimals);
   if (!price.ok) return price;
   return { ok: true, value: { router: router.value, percentageRate, fixedAmount, marginRate: margin, gasMargin, baseFeeCeilingWei, ...price.value } };

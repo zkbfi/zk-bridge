@@ -25,6 +25,7 @@ import {
   type GasPriceBasis,
   type PayoutKind,
   type SenderPrice,
+  UINT256_MAXIMUM,
 } from '@zk-bridge/shared'
 import type { Address } from 'viem'
 import { AmountParseError, RATE_SCALE, formatUnits, parsePercentAsRate, parseUnits } from '../format/amounts'
@@ -185,7 +186,9 @@ function attempt<Value>(read: () => Value): Parsed<Value> {
 /** Runs a read of an amount and names the field in the message when the text is not a valid amount. */
 function readAmount(label: string, read: () => bigint): bigint {
   try {
-    return read()
+    const amount = read()
+    if (amount > UINT256_MAXIMUM) throw new PlanInputError(`The ${label} is too large: it must fit in 256 bits.`)
+    return amount
   } catch (error) {
     if (error instanceof AmountParseError) throw new PlanInputError(`The ${label} is not valid: ${error.message}.`)
     throw error

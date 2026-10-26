@@ -128,11 +128,10 @@ describe("computeBridgeDraft: the payout and the failures of the planner", () =>
     expect(plain.delivery!.director.settings & FEE_SETTING.unwrap).toBe(0n);
   });
 
-  // This test records what the code does today. A fixed tip above the range of the director makes the encoder throw,
-  // and the draft passes the throw on. The page should show a sentence instead. The report of this work lists the defect.
-  it("passes on the failure of the encoder when a fixed tip is above the range of the director", async () => {
+  it("blocks the draft with a sentence, and does not throw, when a fixed tip is above the range of the director", async () => {
     const huge = `1${"0".repeat(80)}`;
     const loaded = await data();
-    expect(() => computeBridgeDraft(values(), options({ mode: "fixed", fixedText: huge }), loaded)).toThrow(/not in safe 256-bit unsigned integer range/);
+    const draft = computeBridgeDraft(values(), options({ mode: "fixed", fixedText: huge }), loaded);
+    expect(draft).toMatchObject({ status: "blocked", reason: "The fixed amount is too large: it must fit in 256 bits." });
   });
 });

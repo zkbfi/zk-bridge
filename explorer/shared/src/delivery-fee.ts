@@ -29,7 +29,7 @@ export const TOKEN_GAS_OVERHEAD = 100_000n;
 export const NATIVE_GAS_OVERHEAD = 50_000n;
 
 /** The largest value of a `uint256`. */
-const UINT256_MAXIMUM = 2n ** 256n - 1n;
+export const UINT256_MAXIMUM = 2n ** 256n - 1n;
 /** The router keeps the multiplier of a waiting gas based fee in 96 bits and clamps a larger one. */
 const UINT96_MAXIMUM = 2n ** 96n - 1n;
 
