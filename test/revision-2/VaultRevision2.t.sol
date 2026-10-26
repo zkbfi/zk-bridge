@@ -16,7 +16,7 @@ import {FakeDepositEmitter} from "../../src/mocks/FakeDepositEmitter.sol";
 
 /// @notice Tests against revision 2 of `ZKBridgeVault`. "fixConfirmed" tests show that a revision 2 fix
 /// holds. Tests named after an R2 identifier pass when the defect is real. The refund path (H-09) is out
-/// of scope by the user's decision, so no test calls it. It is a mention only: `requestRefund` exists in
+/// of scope by the user's decision. `Revision2Guards.t.sol` pins its behaviour so that the coverage gate holds. It is a mention only: `requestRefund` exists in
 /// the specification and a refund without a cancellation proof can pay one deposit twice.
 contract VaultRevision2Test is Revision2Fixture {
     bytes32 internal constant ROOT = keccak256("block that holds the deposit");
