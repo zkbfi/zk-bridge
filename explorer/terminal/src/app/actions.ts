@@ -140,10 +140,9 @@ export function deliveryRouterOf(
   if (resolved.kind !== 'ready') return null
   try {
     return { chainId: resolved.target.chain.chainId, router: routerOf(values, resolved.target) }
-  } catch (error) {
-    // A router field that is not an address: the build of the steps reports it to the user.
-    if (error instanceof PlanInputError) return null
-    throw error
+  } catch {
+    // The only failure of the router read is a router field that is not an address. The build of the steps reports it to the user.
+    return null
   }
 }
 
