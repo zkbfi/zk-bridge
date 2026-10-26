@@ -308,3 +308,18 @@ The worker now answers `/ping` with 503 after the proving client has failed a pr
 ### Holding the start state
 
 Chain 943 serves a correct state only for the newest finalized header. The `prove` command reads the state of the start head, so a start head that is no longer the newest fails with a root mismatch. The runs above used a small local proxy for the beacon API. It holds the state of the start head, which I read while it was the newest, and forwards every other path. Then I waited for a newer finalized header and ran `prove` with `--beacon-url` pointing at the proxy. Sepolia worked the same way.
+
+## Image v5 (2026-10-26)
+
+| Item | Value |
+|---|---|
+| Image | `ghcr.io/[private]/zk-bridge-prover-gpu-worker:v5` |
+| Digest | `sha256:f93ccd70ac081d4c6084f1377fb7df11f5fac3284bfc26fca1c573089779abfc` |
+| Built from | commit `a618ecb`, on the [private], in a fresh folder, target `prover-gpu-worker`, platform linux/amd64 |
+| Light client program key | `0x002a566f7e3d1e6996f7ffa35668291bfc7bce325ed34fe55ef41a2be3fd15cf` (unchanged from v4) |
+| Fork observation program key | `0x00c2a9c5a7b0826c85a59ca0dbeccae5309093072e40d26548b9b0c4183d3f39` (unchanged from v4) |
+| Endpoint | `43nsvfb8svkosr` runs v5. Only the image changed. The pool is still `ADA_24`. |
+
+Checks inside the image: `light-client.elf` hashes to `d7633e82...9bbf` and `fork-observation.elf` to `5a2535fa...91bf`, both equal to `light-client/program-keys.json`. The file `groth16_vk.bin` hashes to `4388a21c687fdd5f218d7e3d13190cac4c5355818d3605fd5fb811df468ee696`, which is `VERIFIER_HASH`. v5 holds the worker health fix (`/ping` answers 503 after a failed proof). A first proof on v5 is not measured yet.
+
+The push of the 6 GB circuit layer takes about 35 minutes over the Wi-Fi of the [private] (3 MB/s). The first two pushes ended with "use of closed network connection". The third, after a fresh login, completed. Log in again before each retry.
