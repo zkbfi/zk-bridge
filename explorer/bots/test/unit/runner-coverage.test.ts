@@ -61,7 +61,7 @@ function world(options: WorldOptions = {}) {
   chain.feeTokens = COST * 2n;
   chain.executionGas = 300_000n - BATCH_ITEM_OVERHEAD_GAS;
   const items = options.items ?? (options.ids ?? []).map((id) => feedItem({ id, token: WRAPPED_NATIVE }));
-  chain.messageIdOfPosition = (position) => [...items].reverse()[position]?.messageId ?? word(position + 1);
+  chain.messageIdOfPosition = (position) => (([...items].reverse()[position]?.messageId ?? word(position + 1)) as Hex);
   const offer = feeOfferData({ director: { recipient: address(0x12), settings: 1n, limit: 10n, multiplier: 0n }, value: 1000n, token: WRAPPED_NATIVE });
   const indexer = fakeIndexer(items, Object.fromEntries(items.map((item) => [item.messageId, offer])));
   const prover = fakeProver();
