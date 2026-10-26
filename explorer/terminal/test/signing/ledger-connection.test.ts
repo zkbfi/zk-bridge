@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import Eth from '@ledgerhq/hw-app-eth'
-import { HardwareWalletError } from '../../src/signing/hardware-error'
+import { HardwareWalletError, type HardwareFailure } from '../../src/signing/hardware-error'
 import {
   createLedgerSource,
   loadLedgerUsbModules,
@@ -24,7 +24,7 @@ describe('mapLedgerError', () => {
   })
 
   test('names each status word of the Ethereum app', () => {
-    const expected: ReadonlyArray<readonly [number, string]> = [
+    const expected: ReadonlyArray<readonly [number, HardwareFailure]> = [
       [0x6985, 'rejected'],
       [0x5515, 'locked'],
       [0x6a80, 'blind-signing-disabled'],

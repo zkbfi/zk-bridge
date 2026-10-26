@@ -166,7 +166,7 @@ describe('Trezor library start', () => {
   })
 
   test('parseTrezorConnect accepts a library with init and refuses other shapes', () => {
-    const library = { init: async () => {} }
+    const library = { init: async () => {} } as unknown as TrezorApi
     expect(parseTrezorConnect({ default: library })).toBe(library)
     for (const loaded of [{}, { default: null }, { default: 'text' }, { default: {} }, { default: { init: 1 } }]) {
       expect(() => parseTrezorConnect(loaded)).toThrow('Trezor Connect did not load')
