@@ -29,7 +29,25 @@ describe("loadPairFromEnvironment", () => {
     expect(pair.sides[0].startBlock).toBe(3);
   });
 
-  it("names the variable when the file is missing", () => {
-    expect(() => loadPairFromEnvironment({ EXPLORER_DEPLOYMENT_FILE: "/nonexistent/x.json" })).toThrow(/EXPLORER_DEPLOYMENT_FILE/);
+  it("names the variable and the path when the file is missing", () => {
+    expect(() => loadPairFromEnvironment({ EXPLORER_DEPLOYMENT_FILE: "/nonexistent/x.json" })).toThrow(
+      /^cannot read the deployment file \/nonexistent\/x\.json \(set EXPLORER_DEPLOYMENT_FILE\): ENOENT/,
+    );
+  });
+
+  it("names the variable when the file is not JSON", () => {
+    const directory = mkdtempSync(join(tmpdir(), "explorer-pair-"));
+    writeFileSync(join(directory, "bad.json"), "{not json");
+    expect(() => loadPairFromEnvironment({ EXPLORER_DEPLOYMENT_FILE: "bad.json" }, directory)).toThrow(/set EXPLORER_DEPLOYMENT_FILE\): .*JSON/);
+  });
+
+  it("looks for ../deployments/<pair>.json when no file is named, and the pair defaults to eth-pls", () => {
+    const directory = mkdtempSync(join(tmpdir(), "explorer-pair-"));
+    expect(() => loadPairFromEnvironment({}, join(directory, "workspace"))).toThrow(
+      `cannot read the deployment file ${join(directory, "deployments", "eth-pls.json")}`,
+    );
+    expect(() => loadPairFromEnvironment({ EXPLORER_PAIR: "other" }, join(directory, "workspace"))).toThrow(
+      `${join(directory, "deployments", "other.json")}`,
+    );
   });
 });

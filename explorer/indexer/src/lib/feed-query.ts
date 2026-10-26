@@ -84,14 +84,14 @@ export const parseFeedQuery = (params: URLSearchParams): FeedQueryResult => {
   const fail = (name: string, value: string): FeedQueryResult => ({ ok: false, problem: `invalid ${name}: ${value}` });
   const direction = params.get("direction");
   const parsedDirection = direction === null ? null : parseDirection(direction);
-  if (parsedDirection === undefined) return fail("direction", direction ?? "");
+  if (parsedDirection === undefined) return fail("direction", String(direction));
 
   const kind = params.get("kind");
   if (kind !== null && kind !== "token" && kind !== "message") return fail("kind", kind);
 
   const status = params.get("status");
   const statuses = status === null ? [] : parseStatuses(status);
-  if (statuses === null) return fail("status", status ?? "");
+  if (statuses === null) return fail("status", String(status));
 
   const tokenText = params.get("token");
   const token = tokenText === null ? null : parseAddress(tokenText);
@@ -109,7 +109,7 @@ export const parseFeedQuery = (params: URLSearchParams): FeedQueryResult => {
   if (toText !== null && to === null) return fail("to", toText);
 
   const limit = parseLimit(params.get("limit"));
-  if (limit === null) return fail("limit", params.get("limit") ?? "");
+  if (limit === null) return fail("limit", String(params.get("limit")));
 
   const cursorText = params.get("cursor");
   const cursor = cursorText === null ? null : parseCursor(cursorText);

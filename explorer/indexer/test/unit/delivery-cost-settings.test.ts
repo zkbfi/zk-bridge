@@ -33,6 +33,18 @@ describe("parseDeliveryCostSettings", () => {
     });
   });
 
+  it("refuses a count that passes the safe integer range", () => {
+    expect(() => parseDeliveryCostSettings({ EXPLORER_DELIVERY_SAMPLE_LIMIT: "9007199254740992" }, [])).toThrow(
+      "EXPLORER_DELIVERY_SAMPLE_LIMIT is too large: 9007199254740992",
+    );
+    expect(parseDeliveryCostSettings({ EXPLORER_DELIVERY_SAMPLE_LIMIT: "9007199254740991" }, []).sampleLimit).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it("trims a value and says why a coin price is not usable", () => {
+    expect(parseDeliveryCostSettings({ EXPLORER_PROOF_COST_USD: " 0.5 " }, []).proofCostUsd).toBe("0.5");
+    expect(() => parseDeliveryCostSettings({ EXPLORER_NATIVE_COIN_PRICE_USD_369: "0" }, [369])).toThrow(/^EXPLORER_NATIVE_COIN_PRICE_USD_369 is not usable: /);
+  });
+
   it.each([
     ["EXPLORER_DELIVERY_SAMPLE_LIMIT", "0"],
     ["EXPLORER_DELIVERY_SAMPLE_LIMIT", "ten"],

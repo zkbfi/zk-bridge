@@ -39,9 +39,9 @@ const readSmallPositiveInteger = (environment: Environment, name: string, fallba
   return Number(value);
 };
 
-const readDecimalText = (environment: Environment, name: string, fallback: string | null): string | null => {
-  const text = environment[name]?.trim() ?? fallback;
-  if (text === null || text === undefined) return null;
+const readDecimalText = (environment: Environment, name: string): string | null => {
+  const text = environment[name]?.trim();
+  if (text === undefined) return null;
   if (!/^\d+(\.\d+)?$/.test(text)) throw new Error(`${name} must be a decimal such as 0.02, not "${text}"`);
   return text;
 };
@@ -58,18 +58,19 @@ const readDecimalText = (environment: Environment, name: string, fallback: strin
  * @throws When a value is malformed, or a coin price is zero.
  */
 export const parseDeliveryCostSettings = (environment: Environment, chainIds: readonly number[]): DeliveryCostSettings => {
-  const proofCostUsd = readDecimalText(environment, "EXPLORER_PROOF_COST_USD", DEFAULT_PROOF_COST_USD) ?? DEFAULT_PROOF_COST_USD;
+  const proofCostUsd = readDecimalText(environment, "EXPLORER_PROOF_COST_USD") ?? DEFAULT_PROOF_COST_USD;
   const deliveriesPerProof = readSmallPositiveInteger(environment, "EXPLORER_DELIVERIES_PER_PROOF", 1);
   const nativeCoinPriceUsdByChain: Record<number, string> = {};
   for (const chainId of chainIds) {
     const name = `EXPLORER_NATIVE_COIN_PRICE_USD_${chainId}`;
-    const price = readDecimalText(environment, name, null);
+    const price = readDecimalText(environment, name);
     if (price === null) continue;
     // Fails here, with the variable named, on a zero price or on more than 18 fraction digits.
     try {
       proofCostWei({ proofCostUsd, nativeCoinPriceUsd: price, deliveriesPerProof });
     } catch (error) {
-      throw new Error(`${name} is not usable: ${error instanceof Error ? error.message : String(error)}`);
+      // `proofCostWei` throws only `Error` objects.
+      throw new Error(`${name} is not usable: ${(error as Error).message}`);
     }
     nativeCoinPriceUsdByChain[chainId] = price;
   }

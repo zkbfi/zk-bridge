@@ -143,3 +143,15 @@ describe("buildDeliveryCostReport", () => {
     expect(report.baseFee).toEqual({ wei: null, blockNumber: 1, timestamp: 2 });
   });
 });
+
+describe("a base fee row without a base fee", () => {
+  it("reports no wei for a chain that has no base fee, but keeps the block and the time", () => {
+    const report = buildDeliveryCostReport({
+      chainId: 369,
+      samples: emptySamples,
+      baseFee: { blockNumber: 7n, timestamp: 1_700_000_000n, baseFeePerGas: null },
+      settings,
+    });
+    expect(report.baseFee).toEqual({ wei: null, blockNumber: 7, timestamp: 1_700_000_000 });
+  });
+});

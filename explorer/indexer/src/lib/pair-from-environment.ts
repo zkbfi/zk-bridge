@@ -24,8 +24,8 @@ export const loadPairFromEnvironment = (
   try {
     deployment = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`cannot read the deployment file ${path} (set EXPLORER_DEPLOYMENT_FILE): ${reason}`);
+    // `readFileSync` and `JSON.parse` throw only `Error` objects.
+    throw new Error(`cannot read the deployment file ${path} (set EXPLORER_DEPLOYMENT_FILE): ${(error as Error).message}`);
   }
   return loadPair({ pairName, environment, deployment });
 };

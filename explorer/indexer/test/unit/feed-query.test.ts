@@ -48,9 +48,31 @@ describe("parseFeedQuery", () => {
     ["from=-1"],
     ["to=1.5"],
     ["limit=0"],
+    ["limit=abc"],
+    ["limit=-1"],
     ["limit=201"],
     ["cursor=garbage"],
   ])("refuses %s", (query) => {
     expect(parse(query).ok).toBe(false);
+  });
+
+  it.each([
+    ["direction=abc", "invalid direction: abc"],
+    ["kind=other", "invalid kind: other"],
+    ["status=sent,bogus", "invalid status: sent,bogus"],
+    ["token=0x12", "invalid token: 0x12"],
+    ["address=nope", "invalid address: nope"],
+    ["from=-1", "invalid from: -1"],
+    ["to=1.5", "invalid to: 1.5"],
+    ["limit=abc", "invalid limit: abc"],
+    ["limit=201", "invalid limit: 201"],
+    ["cursor=garbage", "invalid cursor: garbage"],
+  ])("names the field and the value when it refuses %s", (query, problem) => {
+    expect(parse(query)).toEqual({ ok: false, problem });
+  });
+
+  it("accepts the limits 1 and 200", () => {
+    expect(parse("limit=1").ok && parse("limit=1")).toMatchObject({ filters: { limit: 1 } });
+    expect(parse("limit=200")).toMatchObject({ ok: true, filters: { limit: 200 } });
   });
 });
