@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { FEE_SETTING } from '@zk-bridge/shared'
+import { settingsOf } from '@zk-bridge/shared'
 import { getAddress } from 'viem'
 import { bridgeSourceOf } from '../../src/app/actions'
 import {
@@ -41,19 +41,19 @@ describe('a custom fee', () => {
     const chosen = chosenOf({ ...customValues, feeCustomKind: 'fixed', feeCustomLimit: '2.5' })
     if (chosen.kind !== 'ready') throw new Error(`chosen is ${chosen.kind}`)
     expect(chosen.mode).toBe('custom')
-    expect(chosen.director).toEqual({ recipient: getAddress(receiver), settings: FEE_SETTING.fixedFee, limit: 2_500_000n, multiplier: 0n })
+    expect(chosen.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'fixed' }), limit: 2_500_000n, multiplier: 0n })
   })
 
   test('with no kind chosen the kind is fixed, and a blank limit is zero', () => {
     const chosen = chosenOf(customValues)
     if (chosen.kind !== 'ready') throw new Error(`chosen is ${chosen.kind}`)
-    expect(chosen.director).toEqual({ recipient: getAddress(receiver), settings: FEE_SETTING.fixedFee, limit: 0n, multiplier: 0n })
+    expect(chosen.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'fixed' }), limit: 0n, multiplier: 0n })
   })
 
   test('a share keeps the multiplier, drops the limit, and allows exactly one', () => {
     const half = chosenOf({ ...customValues, feeCustomKind: 'share', feeCustomMultiplier: '0.5', feeCustomLimit: '9' })
     if (half.kind !== 'ready') throw new Error(`chosen is ${half.kind}`)
-    expect(half.director).toEqual({ recipient: getAddress(receiver), settings: FEE_SETTING.shareOfValue, limit: 0n, multiplier: 5n * 10n ** 17n })
+    expect(half.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 5n * 10n ** 17n })
     const whole = chosenOf({ ...customValues, feeCustomKind: 'share', feeCustomMultiplier: '1' })
     expect(whole.kind).toBe('ready')
   })
@@ -71,7 +71,7 @@ describe('a custom fee', () => {
     expect(transaction.director).toEqual({ recipient: getAddress(receiver), settings: 0n, limit: 3_000_000n, multiplier: 12n * 10n ** 17n })
     const baseOnly = chosenOf({ ...customValues, feeCustomKind: 'gas', feeCustomMultiplier: '1.2', feeCustomBasis: 'base-fee-only' })
     if (baseOnly.kind !== 'ready') throw new Error(`chosen is ${baseOnly.kind}`)
-    expect(baseOnly.director.settings).toBe(FEE_SETTING.baseFeeOnly)
+    expect(baseOnly.director.settings).toBe(settingsOf({ mode: 'gas', gasPrice: 'base-fee-only' }))
   })
 
   test('a gas based fee needs a multiplier above zero', () => {

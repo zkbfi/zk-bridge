@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { FEE_SETTING } from '@zk-bridge/shared'
+import { settingsOf } from '@zk-bridge/shared'
 import { bridgeSourceOf } from '../../src/app/actions'
 import { buildDeliveryFeeModel, resolveDeliveryTarget, type Values } from '../../src/app/delivery-fee-form'
 import { FIXTURE_NOW, FIXTURE_PAIR, FIXTURE_TOKENS, buildFixtureDeliveryCost } from '../../src/data/fixtures'
@@ -92,10 +92,10 @@ describe('words for the terms of a director', () => {
   const director = { recipient: '0x00000000000000000000000000000000000000d1' as const, limit: 2_500_000n }
   test('flags, multiplier and limit are written out', () => {
     expect(feeFlagsInWords(0n)).toBe('none (gas based fee, paid in the token)')
-    expect(feeFlagsInWords(FEE_SETTING.fixedFee | FEE_SETTING.unwrap)).toBe('fixed fee, paid in the native coin')
-    expect(feeFlagsInWords(FEE_SETTING.baseFeeOnly)).toBe('gas priced at the base fee only')
+    expect(feeFlagsInWords(settingsOf({ mode: 'fixed', payout: 'native' }))).toBe('fixed fee, paid in the native coin')
+    expect(feeFlagsInWords(settingsOf({ mode: 'gas', gasPrice: 'base-fee-only' }))).toBe('gas priced at the base fee only')
     expect(multiplierInWords({ ...director, settings: 0n, multiplier: 3_600_000_000n })).toBe('0.0000000036 token units for each wei of gas cost (your price and margin are folded in)')
-    expect(multiplierInWords({ ...director, settings: FEE_SETTING.shareOfValue, multiplier: 5n * 10n ** 15n })).toBe('0.5% of the transfer')
+    expect(multiplierInWords({ ...director, settings: settingsOf({ mode: 'share' }), multiplier: 5n * 10n ** 15n })).toBe('0.5% of the transfer')
     expect(limitInWords({ ...director, settings: 0n, multiplier: 1n }, { symbol: 'USDC', decimals: 6 })).toBe('2.5 USDC (the most the fee can be)')
   })
 })

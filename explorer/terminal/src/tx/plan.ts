@@ -64,7 +64,7 @@ export interface PlannedTransaction {
   readonly charge: ChargedFee | null
   /** Plain sentences that the confirmation screen shows below the arguments. */
   readonly notes: readonly string[]
-  /** The delivery fee of a relay that pays a runner. Absent for every other transaction. */
+  /** The delivery fee of a relay that pays a tip for delivery. Absent for every other transaction. */
   readonly deliveryFee?: DeliveryFeeReview
 }
 
@@ -358,11 +358,11 @@ function holdsDirector(data: Hex, director: FeeDirector): boolean {
   }
 }
 
-/** The sentences about a delivery fee. The second one repeats what `DeliveryRouter.sol` states about a message that no runner delivers. */
+/** The sentences about a delivery fee. The second one repeats what `DeliveryRouter.sol` states about a message that the bridge delivers directly. */
 function deliveryFeeNotes(deliveryFee: DeliveryFeeReview): string[] {
   return [
     `The receiver is the router ${getAddress(deliveryFee.router)} on ${deliveryFee.routerChainName}. The tokens go to ${getAddress(deliveryFee.director.recipient)} after the tip.`,
-    'The tip goes to the reward address of the delivery router, not to the runner account that signs the delivery. Only the one whitelisted runner account can deliver through the router, and it receives no tip. When anyone else delivers on the bridge directly, no reward address is recorded, no tip is paid, and the recipient gets everything. When the router cannot deliver to the recipient, it hands the tokens to its failed delivery address.',
+    'The tip goes to the reward address of the delivery router. Anyone can deliver through the router, and the account that signs the delivery receives no tip, so a copied delivery gains the copier nothing. When someone delivers on the bridge directly, no tip is paid, and the recipient gets everything. When the router cannot deliver to the recipient, it hands the tokens to its failed delivery address.',
   ]
 }
 

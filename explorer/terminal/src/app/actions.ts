@@ -196,7 +196,7 @@ function deliveryRelayOf(
   if (chosen.kind === 'invalid') throw new PlanInputError(chosen.reason)
   return {
     receiver: router,
-    mode: { kind: 'call', data: encodeDirectorFor(chosen.director, context.pair, router) } satisfies RelayMode,
+    mode: { kind: 'call', data: encodeDirectorFor(chosen.director, context.pair, { router, destination: target.chain, destinationToken: input.source.token.counterpart }) } satisfies RelayMode,
     deliveryFee: {
       router,
       defaultRouter: target.router,

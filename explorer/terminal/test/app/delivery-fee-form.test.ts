@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { getAddress } from 'viem'
-import { FEE_SETTING, decodeFeeDirector, encodeFeeDirector, feeModeOf } from '@zk-bridge/shared'
+import { settingsOf, decodeFeeDirector, encodeFeeDirector, feeModeOf, requestedPayoutOf } from '@zk-bridge/shared'
 import { bridgeSourceOf } from '../../src/app/actions'
 import {
   buildDeliveryFeeModel,
@@ -44,6 +44,39 @@ function readyModel(state: DeliveryFeeState) {
   if (state.kind !== 'ready') throw new Error(`state is ${state.kind}`)
   return state.model
 }
+
+describe('the native coin payout', () => {
+  const chosenDirector = (state: DeliveryFeeState) => {
+    const { chosen } = readyModel(state)
+    if (chosen.kind !== 'ready') throw new Error('the fee is not ready')
+    return chosen.director
+  }
+  const modes: readonly Values[] = [
+    { feeMode: 'percentage' },
+    { feeMode: 'fixed', feeFixed: '1' },
+    { feeMode: 'custom', feeCustomKind: 'fixed', feeCustomLimit: '1' },
+    { feeMode: 'custom', feeCustomKind: 'share', feeCustomMultiplier: '0.01' },
+  ]
+
+  test('is never requested for a token that is not the wrapped native token, whatever the form says', () => {
+    for (const mode of modes) {
+      const director = chosenDirector(stateFor({ ...baseValues, ...mode, feePayout: 'native' }))
+      expect(requestedPayoutOf(director.settings)).toBe('token')
+    }
+  })
+
+  test('is requested for the wrapped native token when the form asks for it', () => {
+    expect(targetFor(nativeValues, {}, nativePair).isWrappedNative).toBe(true)
+    for (const mode of modes) {
+      const director = chosenDirector(nativeState({ ...nativeValues, ...mode, feePayout: 'native' }))
+      expect(requestedPayoutOf(director.settings)).toBe('native')
+    }
+  })
+
+  test('stays a token payout for the wrapped native token when the form does not ask for the native coin', () => {
+    expect(requestedPayoutOf(chosenDirector(nativeState({ ...nativeValues, feePayout: 'token' })).settings)).toBe('token')
+  })
+})
 
 describe('resolveDeliveryTarget', () => {
   test('names the delivery router of the destination chain, not of the source chain', () => {
@@ -131,7 +164,7 @@ describe('buildDeliveryFeeModel', () => {
   test('an edited percentage rebuilds the director and the description', () => {
     const model = readyModel(stateFor({ ...baseValues, feePercent: '0.5' }))
     if (model.chosen.kind !== 'ready') throw new Error('0.5 percent is valid')
-    expect(model.chosen.director).toEqual({ recipient: getAddress(receiver), settings: FEE_SETTING.shareOfValue, limit: 0n, multiplier: 5n * 10n ** 15n })
+    expect(model.chosen.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 5n * 10n ** 15n })
     expect(model.chosen.description.certaintyLabel).toBe('exact')
     expect(model.chosen.description.nowUnits).toBe(499_500n) // 0.5 percent of 99.9 zkbUSDC, rounded down
   })
@@ -198,7 +231,7 @@ describe('buildDeliveryFeeModel', () => {
   test('the default tip is 0.1 percent', () => {
     const chosen = readyModel(stateFor(baseValues)).chosen
     if (chosen.kind !== 'ready') throw new Error('valid')
-    expect(chosen.director).toEqual({ recipient: getAddress(receiver), settings: FEE_SETTING.shareOfValue, limit: 0n, multiplier: 10n ** 15n })
+    expect(chosen.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 10n ** 15n })
     expect(chosen.description.nowUnits).toBe(99_900n)
   })
 
@@ -261,8 +294,8 @@ describe('refillDeliveryFee', () => {
   })
 
   test('custom terms round trip through the director', () => {
-    const director = { recipient: receiver as `0x${string}`, settings: FEE_SETTING.fixedFee | FEE_SETTING.baseFeeOnly, limit: 2_000_000n, multiplier: 0n }
+    const director = { recipient: receiver as `0x${string}`, settings: settingsOf({ mode: 'gas', gasPrice: 'base-fee-only' }), limit: 2_000_000n, multiplier: 1n }
     expect(customFieldsOf(director, 6).feeCustomBasis).toBe('base-fee-only')
-    expect(decodeFeeDirector(encodeFeeDirector(director, { router: '0x00000000000000000000000000000000000000f1', protectedAddresses: [] }))).toEqual({ ...director, recipient: getAddress(receiver) })
+    expect(decodeFeeDirector(encodeFeeDirector(director, { router: '0x00000000000000000000000000000000000000f1', protectedAddresses: [], destinationToken: null, destinationWrappedNative: null }))).toEqual({ ...director, recipient: getAddress(receiver) })
   })
 })

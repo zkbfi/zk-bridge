@@ -131,7 +131,7 @@ export function BridgeModal(props: ActionModalProps) {
         { value: 'no', label: 'No tip' },
       ],
       visibleWhen: offersDelivery,
-      hint: 'Yes adds a tip for delivery on the other chain. The router pays it to its reward address, not to the runner account. You fix the tip now; nothing at delivery changes it. It uses relayTokensAndCall to the router, and the Mode field is not used. No sends a plain relay.',
+      hint: 'Yes adds a tip for delivery on the other chain. The router pays it to its reward address. Anyone may deliver, and a copied delivery gains the copier nothing. You fix the tip now; nothing at delivery changes it. It uses relayTokensAndCall to the router, and the Mode field is not used. No sends a plain relay.',
     },
     { kind: 'choice', name: DELIVERY_FIELD.mode, label: 'Tip mode', choices: FEE_MODE_CHOICES, visibleWhen: whenActive(), hint: 'Choosing a mode fills the numbers with the suggestion. Edit them from there.' },
     { kind: 'text', name: DELIVERY_FIELD.percent, label: 'Percentage', initial: DEFAULT_TIP_PERCENT_TEXT, placeholder: 'blank means 0.1', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'percentage'), hint: 'A percent of the transfer, for example 0.1. The router takes this share for its reward address and the recipient gets the rest.' },
@@ -144,7 +144,7 @@ export function BridgeModal(props: ActionModalProps) {
     { kind: 'text', name: DELIVERY_FIELD.customMultiplier, label: 'Multiplier', placeholder: '0', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'custom'), hint: 'A decimal. A share: 0.005 is 0.5 percent. A gas based fee: the factor on the gas price.' },
     { kind: 'choice', name: DELIVERY_FIELD.customBasis, label: 'Gas price', choices: [{ value: 'transaction', label: 'Transaction gas price' }, { value: 'base-fee-only', label: 'Base fee only' }], visibleWhen: whenActive((values) => feeFormModeOf(values) === 'custom' && values[DELIVERY_FIELD.customKind] === 'gas'), hint: 'Base fee only leaves the priority fee out of the gas based fee.' },
     { kind: 'text', name: DELIVERY_FIELD.margin, label: 'Margin percent', initial: DEFAULT_MARGIN_PERCENT, visibleWhen: whenActive((values) => feeFormModeOf(values) !== 'custom'), hint: 'The profit on top of the cost that the suggestions add.' },
-    { kind: 'text', name: DELIVERY_FIELD.priority, label: 'Priority fee gwei', initial: DEFAULT_PRIORITY_GWEI, visibleWhen: whenActive(), hint: 'The tip that the runner pays per gas. It enters the cost of the delivery.' },
+    { kind: 'text', name: DELIVERY_FIELD.priority, label: 'Priority fee gwei', initial: DEFAULT_PRIORITY_GWEI, visibleWhen: whenActive(), hint: 'The priority fee per gas that you expect the delivery to pay. It enters the cost of the delivery.' },
     {
       kind: 'choice',
       name: DELIVERY_FIELD.payout,
@@ -156,7 +156,7 @@ export function BridgeModal(props: ActionModalProps) {
       }),
       hint: 'The destination token is the wrapped native token, so the router can unwrap the fee.',
     },
-    { kind: 'text', name: DELIVERY_FIELD.router, label: 'Router (advanced)', placeholder: 'blank is the default delivery router', visibleWhen: whenActive(), hint: 'The last step before delivery, chosen in the extra data. Blank targets the default delivery router on the other chain. Only its one whitelisted runner account can deliver through it. That account does not receive the tip; the reward address of the router does.' },
+    { kind: 'text', name: DELIVERY_FIELD.router, label: 'Router (advanced)', placeholder: 'blank is the default delivery router', visibleWhen: whenActive(), hint: 'The last step before delivery, chosen in the extra data. Blank targets the default delivery router on the other chain. Anyone can deliver through it. The tip always goes to the reward address of the router, so a copied delivery gains the copier nothing.' },
     { kind: 'text', name: DELIVERY_FIELD.recipient, label: 'Fee recipient', placeholder: 'blank is the receiver above', visibleWhen: whenActive(), hint: 'Receives the tokens after the fee. Blank means the receiver above.' },
   ]
   /** Asks the router for its reward address and its failed delivery address, then builds the review. The read never throws; a failed read becomes a line on the review. */

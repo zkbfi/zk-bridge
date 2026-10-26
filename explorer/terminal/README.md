@@ -57,7 +57,7 @@ User documentation lives in `explorer/web/docs/pages` (see `05-fees-explained.md
 
 The bridge form has a choice field `Tip for delivery`. It is `Yes` by default, at 0.1 percent of the transfer (the
 percentage mode, multiplier 1e15). You can edit the tip or choose `No tip`. You fix the tip now: nothing at delivery
-sets or changes the rate, and the runner supplies no rate.
+sets or changes the rate, and the account that delivers supplies no rate.
 
 - The field is offered for a token transfer when the deployment file names a delivery router (`delivery_router`) for the
   destination chain. When it does not, the form hides the field and sends a plain relay, and the note under the form
@@ -88,12 +88,13 @@ sets or changes the rate, and the runner supplies no rate.
   report. The confirmation screen shows the router, the tip mode, the recipient, the address that receives the tip, the address that receives the tokens when delivery fails, the flags, the limit, the multiplier in
   words, the tip now with its label (`exact`, or `estimate, at most X`), the most that the tip can be, and the data
   source.
-- The delivery router whitelists exactly one account, its immutable `runner`. Only that runner account can deliver through
-  the router, and it does not receive the tip. The router pays the tip to its immutable `rewardAddress`. The runner
-  names that address with each delivery, and the call reverts unless it matches. When anyone else delivers on the
-  bridge directly, no tip is paid and the recipient gets everything. A direct delivery costs you nothing. The router keeps
-  no claim record for the recipient. When it cannot deliver to the recipient, it hands the tokens to its immutable
+- Anyone can deliver through the delivery router with `executeMessage(proof)`. The router pays the tip to its immutable
+  `rewardAddress`, never to the account that delivers. A copied delivery therefore gains the copier nothing. When
+  someone delivers on the bridge directly, no tip is paid and the recipient gets everything. The router keeps no claim
+  record for the recipient. When it cannot deliver to the recipient, it hands the tokens to its immutable
   `failedDeliveryAddress`.
+- The native coin payout (the `UNWRAP` flag) exists for the wrapped native token only. The form offers it for that token
+  alone. The terminal refuses the flag for every other token, also in hand written call data to a delivery router.
 - The confirmation screen reads `rewardAddress()` and `failedDeliveryAddress()` from the router on the destination chain
   at the moment you press Enter, and shows them as `Tip goes to` and `On failure`. When the router does not answer (an older router, a wrong address, or a dead
   endpoint), both lines say `unknown` and a warning explains why. The warning does not block the send: you decide.

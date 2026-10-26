@@ -18,10 +18,24 @@ const protectedChainOf = (chain: ChainConfig): ProtectedChain => ({
 /** Both chains of the pair, as the shared guard reads them. */
 export const protectedChainsOf = (pair: PairConfig): readonly ProtectedChain[] => [protectedChainOf(pair.first), protectedChainOf(pair.second)]
 
-/** The context of the shared guard for a relay to `router`. */
-export const feeTermsContextOf = (pair: PairConfig, router: Address): FeeTermsContext => ({
-  router,
+/** The router that receives a relay, the chain it is on and the token that it receives. */
+export interface RouterTarget {
+  readonly router: Address
+  /** The chain that the router is on. */
+  readonly destination: ChainConfig
+  /** The token that the router receives, or null for the wrap route or an unknown token. */
+  readonly destinationToken: Address | null
+}
+
+/**
+ * The context of the shared guard for a relay to a router. The guard refuses the unwrap flag for every token that is not
+ * the wrapped native token of the destination chain.
+ */
+export const feeTermsContextOf = (pair: PairConfig, target: RouterTarget): FeeTermsContext => ({
+  router: target.router,
   protectedAddresses: protectedAddressesOf(protectedChainsOf(pair)),
+  destinationToken: target.destinationToken,
+  destinationWrappedNative: target.destination.contracts.wrappedNative,
 })
 
 /** True when the receiver is a default delivery router, on either chain. */
@@ -42,19 +56,14 @@ const refusingAsPlanInputError = <Result>(run: () => Result): Result => {
  *
  * @throws PlanInputError when the router would not honour the terms.
  */
-export const encodeDirectorFor = (director: FeeDirector, pair: PairConfig, router: Address): Hex =>
-  refusingAsPlanInputError(() => encodeFeeDirector(director, feeTermsContextOf(pair, router)))
+export const encodeDirectorFor = (director: FeeDirector, pair: PairConfig, target: RouterTarget): Hex =>
+  refusingAsPlanInputError(() => encodeFeeDirector(director, feeTermsContextOf(pair, target)))
 
 /** What a relay to a router carries. */
-export interface RouterRelay {
+export interface RouterRelay extends RouterTarget {
   readonly pair: PairConfig
-  /** The chain that the router is on. */
-  readonly destination: ChainConfig
-  readonly router: Address
   /** The callback data. A plain relay carries none: pass `0x`. */
   readonly data: Hex
-  /** The token that the router receives, or null for the wrap route. */
-  readonly destinationToken: Address | null
 }
 
 /**
@@ -64,10 +73,5 @@ export interface RouterRelay {
  */
 export const requireValidRouterRelay = (relay: RouterRelay): void =>
   refusingAsPlanInputError(() =>
-    assertValidFeeTerms({
-      ...feeTermsContextOf(relay.pair, relay.router),
-      data: relay.data,
-      destinationToken: relay.destinationToken,
-      destinationWrappedNative: relay.destination.contracts.wrappedNative,
-    }),
+    assertValidFeeTerms({ ...feeTermsContextOf(relay.pair, relay), data: relay.data }),
   )

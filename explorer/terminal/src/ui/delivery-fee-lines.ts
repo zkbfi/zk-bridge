@@ -3,7 +3,7 @@
  * function is pure and returns lines, so a test reads the text without a terminal. The amounts and the labels
  * (`exact`, `estimate, at most X`) come from `@zk-bridge/shared`.
  */
-import { FEE_SETTING, TIP_MODE_NAMES, feeModeOf, routerInWords, type FeeDirector, type FeeOption } from '@zk-bridge/shared'
+import { TIP_MODE_NAMES, feeModeOf, routerInWords, settingFlagsOf, type FeeDirector, type FeeOption, type SettingFlagName } from '@zk-bridge/shared'
 import { getAddress } from 'viem'
 import type { RouterAddressesReading } from '../chain/live-reads'
 import type { DeliveryFeeState, DeliveryTarget } from '../app/delivery-fee-form'
@@ -27,14 +27,17 @@ const rowOf = (width: number) => (label: string, value: string): Line => [muted(
 const row = rowOf(LABEL_WIDTH)
 const reviewRow = rowOf(REVIEW_LABEL_WIDTH)
 
+/** The words of each flag. The record is exhaustive: a new flag in the shared module fails the typecheck here. */
+const FLAG_WORDS: Readonly<Record<SettingFlagName, string>> = {
+  FIXED_FEE: 'fixed fee',
+  MULTIPLIER_OF_TOTAL: 'share of the value',
+  UNWRAP: 'paid in the native coin',
+  EXCLUDE_PRIORITY: 'gas priced at the base fee only',
+}
+
 /** The flag bits of `settings`, in words. */
 export function feeFlagsInWords(settings: bigint): string {
-  const flags = [
-    ...((settings & FEE_SETTING.fixedFee) === 0n ? [] : ['fixed fee']),
-    ...((settings & FEE_SETTING.shareOfValue) === 0n ? [] : ['share of the value']),
-    ...((settings & FEE_SETTING.unwrap) === 0n ? [] : ['paid in the native coin']),
-    ...((settings & FEE_SETTING.baseFeeOnly) === 0n ? [] : ['gas priced at the base fee only']),
-  ]
+  const flags = settingFlagsOf(settings).map((name) => FLAG_WORDS[name])
   return flags.length === 0 ? 'none (gas based fee, paid in the token)' : flags.join(', ')
 }
 
@@ -54,7 +57,7 @@ export function routerAddressLines(reading: RouterAddressesReading): readonly Li
     reviewRow('Tip goes to', 'unknown'),
     reviewRow('On failure', 'unknown'),
     [colored(`Warning: the router did not return its addresses (${reading.reason}).`, theme.warn)],
-    [colored('It may be an older router that pays the tip to the runner, or not a delivery router. Check it before you send.', theme.warn)],
+    [colored('It may be an older router that has no reward address, or not a delivery router. Check it before you send.', theme.warn)],
   ]
 }
 

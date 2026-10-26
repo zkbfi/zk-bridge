@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { decodeFeeDirector } from '@zk-bridge/shared'
+import { decodeFeeDirector, requestedPayoutOf, settingsOf } from '@zk-bridge/shared'
 import { buildBridgeSteps } from '../../src/app/actions'
 import { createFixtureChainAccess } from '../../src/chain/fixture-chain-access'
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS, buildFixtureDeliveryCost, FIXTURE_NOW } from '../../src/data/fixtures'
@@ -8,6 +8,7 @@ import { PlanInputError } from '../../src/tx/plan'
 
 const usdc = FIXTURE_TOKENS[0]!
 const router = FIXTURE_PAIR.second.contracts.deliveryRouter!
+const target = { router, destination: FIXTURE_PAIR.second, destinationToken: usdc.counterpart }
 const person = '0x00000000000000000000000000000000000000d1'
 const word = (address: string) => address.slice(2).toLowerCase().padStart(64, '0')
 const directorFor = (recipient: string) => `0x${word(recipient)}${'0'.repeat(63)}8${'0'.repeat(64)}${'0'.repeat(63)}5`
@@ -63,6 +64,19 @@ describe('a hand written relay to a delivery router', () => {
     expect(steps.length).toBeGreaterThan(0)
   })
 
+  test('is refused when the data asks to unwrap a token that is not the wrapped native token', async () => {
+    const unwrapping = `0x${word(person)}${'0'.repeat(63)}2${'0'.repeat(64)}${'0'.repeat(64)}`
+    await expect(stepsFor({ receiver: router, mode: 'call', data: unwrapping })).rejects.toThrow(/unwrap/)
+    await expect(stepsFor({ receiver: router, mode: 'call', data: unwrapping })).rejects.toThrow(PlanInputError)
+  })
+
+  test('is built when the data asks to unwrap the wrapped native token', async () => {
+    const pair = { ...FIXTURE_PAIR, second: { ...FIXTURE_PAIR.second, contracts: { ...FIXTURE_PAIR.second.contracts, wrappedNative: usdc.counterpart! } } }
+    const unwrapping = `0x${word(person)}${'0'.repeat(63)}2${'0'.repeat(64)}${'0'.repeat(64)}`
+    const steps = await stepsFor({ receiver: router, mode: 'call', data: unwrapping }, pair)
+    expect(steps.length).toBeGreaterThan(0)
+  })
+
   test('is refused for the wrap route with no data', async () => {
     await expect(stepsFor({ token: 'first:native', receiver: router })).rejects.toThrow(/128 byte/)
   })
@@ -112,17 +126,37 @@ describe('the helpers', () => {
   })
 
   test('encodeDirectorFor reports a refusal as a PlanInputError and keeps a valid encoding', () => {
-    expect(() => encodeDirectorFor(director(router), FIXTURE_PAIR, router)).toThrow(PlanInputError)
-    expect(decodeFeeDirector(encodeDirectorFor(director(person), FIXTURE_PAIR, router)).multiplier).toBe(5n)
+    expect(() => encodeDirectorFor(director(router), FIXTURE_PAIR, target)).toThrow(PlanInputError)
+    expect(decodeFeeDirector(encodeDirectorFor(director(person), FIXTURE_PAIR, target)).multiplier).toBe(5n)
   })
 
   test('the context lists a router, a mediator and a bridge for each chain that has them', () => {
-    expect(feeTermsContextOf(FIXTURE_PAIR, router).protectedAddresses).toHaveLength(5)
+    expect(feeTermsContextOf(FIXTURE_PAIR, target).protectedAddresses).toHaveLength(5)
+  })
+
+  test('the context names the token and the wrapped native token of the destination chain', () => {
+    const context = feeTermsContextOf(FIXTURE_PAIR, target)
+    expect(context.destinationToken).toBe(usdc.counterpart)
+    expect(context.destinationWrappedNative).toBe(FIXTURE_PAIR.second.contracts.wrappedNative)
+  })
+
+  test('encodeDirectorFor refuses the unwrap flag for a token that is not the wrapped native token', () => {
+    const unwrapping = { ...director(person), settings: settingsOf({ mode: 'share', payout: 'native' }) }
+    expect(() => encodeDirectorFor(unwrapping, FIXTURE_PAIR, target)).toThrow(/unwrap/)
+    expect(() => encodeDirectorFor(unwrapping, FIXTURE_PAIR, target)).toThrow(PlanInputError)
+    expect(() => encodeDirectorFor(unwrapping, FIXTURE_PAIR, { ...target, destinationToken: null })).toThrow(PlanInputError)
+  })
+
+  test('encodeDirectorFor keeps the unwrap flag for the wrapped native token', () => {
+    const unwrapping = { ...director(person), settings: settingsOf({ mode: 'share', payout: 'native' }) }
+    const wrapped = FIXTURE_PAIR.second.contracts.wrappedNative!
+    const data = encodeDirectorFor(unwrapping, FIXTURE_PAIR, { ...target, destinationToken: wrapped })
+    expect(requestedPayoutOf(decodeFeeDirector(data).settings)).toBe('native')
   })
 
   test('other errors pass through unchanged', () => {
     expect(() => requireValidRouterRelay({ pair: FIXTURE_PAIR, destination: FIXTURE_PAIR.second, router: '0x12' as `0x${string}`, data: '0x', destinationToken: null })).toThrow(PlanInputError)
-    expect(() => encodeDirectorFor({ ...director(person), settings: -1n }, FIXTURE_PAIR, router)).toThrow()
-    expect(() => encodeDirectorFor({ ...director(person), settings: -1n }, FIXTURE_PAIR, router)).not.toThrow(PlanInputError)
+    expect(() => encodeDirectorFor({ ...director(person), settings: -1n }, FIXTURE_PAIR, target)).toThrow()
+    expect(() => encodeDirectorFor({ ...director(person), settings: -1n }, FIXTURE_PAIR, target)).not.toThrow(PlanInputError)
   })
 })

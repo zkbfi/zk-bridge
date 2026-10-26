@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { FEE_SETTING, decodeFeeDirector, encodeFeeDirector, maximumFee } from '@zk-bridge/shared'
+import { settingsOf, decodeFeeDirector, encodeFeeDirector, maximumFee } from '@zk-bridge/shared'
 import { decodeFunctionData, getAddress } from 'viem'
 import { buildBridgeSteps, deliveryRouterOf } from '../../src/app/actions'
 import type { RouterAddressesReading } from '../../src/chain/live-reads'
@@ -48,7 +48,7 @@ describe('relay that pays for delivery', () => {
     expect(token).toBe(usdc.address)
     expect(relayReceiver).toBe(FIXTURE_PAIR.second.contracts.deliveryRouter!)
     expect(amount).toBe(100_000_000n)
-    expect(decodeFeeDirector(data)).toEqual({ recipient: getAddress(receiver), settings: FEE_SETTING.shareOfValue, limit: 0n, multiplier: 5n * 10n ** 15n })
+    expect(decodeFeeDirector(data)).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 5n * 10n ** 15n })
     expect(plan.deliveryFee?.director).toEqual(decodeFeeDirector(data))
   })
 
@@ -56,7 +56,7 @@ describe('relay that pays for delivery', () => {
     const plan = await relayOf({ feeMode: 'fixed', feeFixed: '1.5', feePayout: 'native' })
     const [, , , data] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as [string, string, bigint, `0x${string}`]
     // zkbUSDC is not the wrapped native token of the fixture pair, so the native payout is ignored.
-    expect(decodeFeeDirector(data).settings).toBe(FEE_SETTING.fixedFee)
+    expect(decodeFeeDirector(data).settings).toBe(settingsOf({ mode: 'fixed' }))
     expect(decodeFeeDirector(data).limit).toBe(1_500_000n)
   })
 
@@ -91,10 +91,10 @@ describe('relay that pays for delivery', () => {
     expect(text).toContain('Most the tip  0.4995 zkbUSDC')
     expect(text).toContain('Data source   measured from 40 recent deliveries, p90, 210000 gas')
     expect(text).toContain('on PulseChain. The tokens go to')
-    expect(text).toContain('The tip goes to the reward address of the delivery router, not to the runner account')
-    expect(text).toContain('Only the one whitelisted runner account can deliver through the router, and it receives no tip')
-    expect(text).not.toContain('pays the tip only to its one whitelisted runner')
-    expect(text).toContain('no reward address is recorded, no tip is paid, and the recipient gets everything')
+    expect(text).toContain('The tip goes to the reward address of the delivery router.')
+    expect(text).toContain('Anyone can deliver through the router, and the account that signs the delivery receives no tip, so a copied delivery gains the copier nothing')
+    expect(text).not.toMatch(/runner|whitelist/)
+    expect(text).toContain('no tip is paid, and the recipient gets everything')
     expect(text).toContain('When the router cannot deliver to the recipient, it hands the tokens to its failed delivery address.')
   })
 
@@ -122,7 +122,7 @@ describe('relay that pays for delivery', () => {
     expect(text).toMatch(/On failure\s*unknown/)
     expect(text).toContain('Warning: the router did not return its addresses')
     expect(text).toContain(reason)
-    expect(text).toContain('It may be an older router that pays the tip to the runner')
+    expect(text).toContain('It may be an older router that has no reward address')
     expect(text).not.toContain('(reward address of the router)')
     expect(text).not.toContain('(failed delivery address of the router)')
     // The plan still exists: the user decides.
@@ -160,7 +160,7 @@ describe('relay that pays for delivery', () => {
   test('the tip is 0.1 percent when the percentage is blank: the default, in the share mode', async () => {
     const plan = await relayOf({ feeMode: 'percentage', feePercent: '' })
     const [, , , data] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as [string, string, bigint, `0x${string}`]
-    expect(decodeFeeDirector(data)).toEqual({ recipient: getAddress(receiver), settings: FEE_SETTING.shareOfValue, limit: 0n, multiplier: 10n ** 15n })
+    expect(decodeFeeDirector(data)).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 10n ** 15n })
     expect(plan.deliveryFee?.description.summary).toBe('0.0999 zkbUSDC (exact)')
   })
 
@@ -208,14 +208,14 @@ describe('relay that pays for delivery', () => {
 })
 
 describe('planRelay refuses a delivery fee that the data does not carry', () => {
-  const director = { recipient: getAddress(receiver), settings: FEE_SETTING.fixedFee, limit: 1n, multiplier: 0n }
+  const director = { recipient: getAddress(receiver), settings: settingsOf({ mode: 'fixed' }), limit: 1n, multiplier: 0n }
   const router = FIXTURE_PAIR.second.contracts.deliveryRouter!
   const base = { chain: FIXTURE_PAIR.first, token: usdc, amount: 5n, currentFeeRate: 0n }
   const review = { router, defaultRouter: router, routerChainName: 'PulseChain', director, token: { symbol: 'zkbUSDC', decimals: 6 }, description: undefined as never, dataSource: undefined as never, routerAddresses: { kind: 'read' as const, rewardAddress: router, failedDeliveryAddress: router } }
 
   test('a plain mode, another receiver and other data are each refused', () => {
     expect(() => planRelay({ ...base, receiver: router, mode: { kind: 'plain' }, deliveryFee: review })).toThrow('needs relayTokensAndCall')
-    expect(() => planRelay({ ...base, receiver, mode: { kind: 'call', data: encodeFeeDirector(director, { router, protectedAddresses: [] }) }, deliveryFee: review })).toThrow('router of the other chain as the receiver')
+    expect(() => planRelay({ ...base, receiver, mode: { kind: 'call', data: encodeFeeDirector(director, { router, protectedAddresses: [], destinationToken: null, destinationWrappedNative: null }) }, deliveryFee: review })).toThrow('router of the other chain as the receiver')
     expect(() => planRelay({ ...base, receiver: router, mode: { kind: 'call', data: '0x' }, deliveryFee: review })).toThrow('does not hold the fee terms')
   })
 })

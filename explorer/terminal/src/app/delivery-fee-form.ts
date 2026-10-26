@@ -1,7 +1,7 @@
 /**
  * The logic of the "Pay for delivery" part of the bridge form, with no rendering. A sender who pays for delivery
- * relays tokens to the delivery router of the other chain. The call data names the fee terms (a `FeeDirector`), and a runner
- * that delivers the transfer through the router takes the fee from the tokens.
+ * relays tokens to the delivery router of the other chain. The call data names the fee terms (a `FeeDirector`), and the router
+ * takes the tip from the tokens and pays it to its reward address. Anyone may deliver the transfer.
  *
  * Every function here is pure. It reads the form values and the delivery cost report and returns plain data. The
  * amounts and the labels (`exact`, `estimate, at most X`) come from `@zk-bridge/shared`, so the terminal and the web
@@ -9,11 +9,11 @@
  */
 import {
   DEFAULT_TIP_PERCENTAGE_MULTIPLIER,
-  FEE_SETTING,
   buildFeeSuggestions,
   defaultTip,
   describeFee,
   feeModeOf,
+  gasPriceBasisOf,
   type DeliveryCostBreakdown,
   type DeliveryCostReport,
   type FeeDataSource,
@@ -25,6 +25,7 @@ import {
   type GasPriceBasis,
   type PayoutKind,
   type SenderPrice,
+  settingsOf,
   UINT256_MAXIMUM,
 } from '@zk-bridge/shared'
 import type { Address } from 'viem'
@@ -61,7 +62,7 @@ export const DEFAULT_TIP_PERCENT_TEXT = formatUnits(DEFAULT_TIP_PERCENTAGE_MULTI
 
 /** The default margin on top of the cost, in percent. Same as the suggestion of `@zk-bridge/shared`. */
 export const DEFAULT_MARGIN_PERCENT = '10'
-/** The default priority fee that the runner is assumed to pay, in gwei. The user edits it. */
+/** The default priority fee that the sender expects the delivery to pay, in gwei. The user edits it. */
 export const DEFAULT_PRIORITY_GWEI = '1'
 /** The margin on the gas cost that a blank field of the gas multiplier mode means. Same as the suggestion of `@zk-bridge/shared`. */
 export const DEFAULT_GAS_MULTIPLIER_TEXT = '1.2'
@@ -329,8 +330,6 @@ function chooseFee(input: ChooseInput): ChosenFee {
   return { kind: 'ready', mode, director: director.value, description: described.value }
 }
 
-const payoutBits = (payout: PayoutKind): bigint => (payout === 'native' ? FEE_SETTING.unwrap : 0n)
-
 function suggestedDirector(option: FeeOption): Parsed<FeeDirector> {
   if (option.kind === 'unavailable') return { ok: false, reason: option.reason }
   return { ok: true, value: option.director }
@@ -338,44 +337,43 @@ function suggestedDirector(option: FeeOption): Parsed<FeeDirector> {
 
 function directorOf(mode: FeeFormMode, input: ChooseInput): Parsed<FeeDirector> {
   const { values, target, recipient, payout } = input
-  const bits = payoutBits(payout)
   if (mode === 'percentage') {
     const text = valueOf(values, DELIVERY_FIELD.percent)
     if (text === '') return { ok: true, value: defaultTip(recipient, payout) }
     return attempt(() => {
       const multiplier = parseRatePercent('percentage', text)
       if (multiplier > RATE_SCALE) throw new PlanInputError('The percentage is above 100 percent.')
-      return { recipient, settings: FEE_SETTING.shareOfValue | bits, limit: 0n, multiplier }
+      return { recipient, settings: settingsOf({ mode: 'share', payout }), limit: 0n, multiplier }
     })
   }
   if (mode === 'fixed') {
     const text = valueOf(values, DELIVERY_FIELD.fixed)
     if (text === '') return suggestedDirector(input.suggestions.fixed)
-    return attempt(() => ({ recipient, settings: FEE_SETTING.fixedFee | bits, limit: parseNumber('fixed amount', text, target.token.decimals), multiplier: 0n }))
+    return attempt(() => ({ recipient, settings: settingsOf({ mode: 'fixed', payout }), limit: parseNumber('fixed amount', text, target.token.decimals), multiplier: 0n }))
   }
   if (mode === 'gas') {
     if (!input.gasInputs.ok) return { ok: false, reason: input.gasInputs.reason }
     return suggestedDirector(input.suggestions.gasMultiplier)
   }
-  return customDirector(values, { recipient, bits, decimals: target.token.decimals })
+  return customDirector(values, { recipient, payout, decimals: target.token.decimals })
 }
 
 /** The kinds of a custom fee, in the order of the form. */
 export const CUSTOM_KINDS = ['fixed', 'share', 'gas'] as const
 
-function customDirector(values: Values, input: { recipient: Address; bits: bigint; decimals: number }): Parsed<FeeDirector> {
+function customDirector(values: Values, input: { recipient: Address; payout: PayoutKind; decimals: number }): Parsed<FeeDirector> {
   return attempt(() => {
     const kind = values[DELIVERY_FIELD.customKind] ?? 'fixed'
     const limit = parseNumber('limit', valueOf(values, DELIVERY_FIELD.customLimit) || '0', input.decimals)
     const multiplier = parseNumber('multiplier', valueOf(values, DELIVERY_FIELD.customMultiplier) || '0', 18)
     const basis: GasPriceBasis = values[DELIVERY_FIELD.customBasis] === 'base-fee-only' ? 'base-fee-only' : 'transaction'
-    if (kind === 'fixed') return { recipient: input.recipient, settings: FEE_SETTING.fixedFee | input.bits, limit, multiplier: 0n }
+    if (kind === 'fixed') return { recipient: input.recipient, settings: settingsOf({ mode: 'fixed', payout: input.payout }), limit, multiplier: 0n }
     if (kind === 'share') {
       if (multiplier > RATE_SCALE) throw new PlanInputError('The multiplier of a share is above 1, which is above 100 percent.')
-      return { recipient: input.recipient, settings: FEE_SETTING.shareOfValue | input.bits, limit: 0n, multiplier }
+      return { recipient: input.recipient, settings: settingsOf({ mode: 'share', payout: input.payout }), limit: 0n, multiplier }
     }
     if (multiplier === 0n) throw new PlanInputError('The multiplier of a gas based fee must be above zero.')
-    return { recipient: input.recipient, settings: input.bits | (basis === 'base-fee-only' ? FEE_SETTING.baseFeeOnly : 0n), limit, multiplier }
+    return { recipient: input.recipient, settings: settingsOf({ mode: 'gas', payout: input.payout, gasPrice: basis }), limit, multiplier }
   })
 }
 
@@ -416,7 +414,7 @@ export function customFieldsOf(director: FeeDirector, decimals: number): Values 
     [DELIVERY_FIELD.customKind]: mode,
     [DELIVERY_FIELD.customLimit]: formatUnits(director.limit, decimals),
     [DELIVERY_FIELD.customMultiplier]: formatUnits(director.multiplier, 18),
-    [DELIVERY_FIELD.customBasis]: (director.settings & FEE_SETTING.baseFeeOnly) !== 0n ? 'base-fee-only' : 'transaction',
+    [DELIVERY_FIELD.customBasis]: gasPriceBasisOf(director.settings),
   }
 }
 

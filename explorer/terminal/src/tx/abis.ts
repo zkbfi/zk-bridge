@@ -22,13 +22,6 @@ export const tokenMediatorAbi = parseAbi([
   'function nativeTokenAddress(address bridgedToken) view returns (address)',
 ])
 
-/** The delivery router: the account that may deliver through it, the address that receives the tips, and the address that receives what it cannot deliver. */
-export const deliveryRouterAbi = parseAbi([
-  'function runner() view returns (address)',
-  'function rewardAddress() view returns (address)',
-  'function failedDeliveryAddress() view returns (address)',
-])
-
 /** The router that wraps the native coin and relays it. */
 export const wrappedNativeRouterAbi = parseAbi([
   'function wrapAndRelayTokens() payable',
@@ -53,6 +46,15 @@ export const messageBridgeAbi = parseAbi([
   'function addBlockHashLayout(uint256 blockHashGindex, BlockHashEvidence evidence)',
   'function addHistoricalSummariesLayout(uint256 historicalSummariesGindex, HistoricalSummariesEvidence evidence)',
   'function maxGasPerTx() pure returns (uint256)',
+])
+
+/** The delivery router: the delivery entry point, the address that receives the tips, the address that receives what it cannot deliver, and the base fee view. */
+export const deliveryRouterAbi = parseAbi([
+  ...messageBridgeStructures,
+  'function executeMessage(MessageProof proof)',
+  'function rewardAddress() view returns (address)',
+  'function failedDeliveryAddress() view returns (address)',
+  'function baseFee(bool excludePriority) view returns (uint256)',
 ])
 
 /** The light client: post an update and read the stored head. */
