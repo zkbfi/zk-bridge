@@ -12,7 +12,9 @@
 //!
 //! The routes:
 //!
-//! - `GET /ping`: 204 while the SP1 setup runs, then 200 with `{"status":"ready"}`.
+//! - `GET /ping`: 204 while the SP1 setup runs, then 200 with `{"status":"ready"}`. After a proof has failed inside the
+//!   proving client it answers 503, because the GPU server child process may be dead and does not restart. RunPod then
+//!   removes the worker and starts a new one.
 //! - `POST /prove`: the body is a [`ProveRequestBody`]. The answer is a [`ProveResponseBody`] with status 200, or
 //!   `{"error": "..."}` with the status that [`Worker::handle`] documents.
 //!
@@ -27,6 +29,7 @@ use alloy_primitives::{hex, B256};
 use std::io::Read as _;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// The largest request body that the worker reads. RunPod limits a request to 30 MB.
@@ -95,6 +98,8 @@ impl Answer {
 pub struct Worker {
     prover: OnceLock<Box<dyn GuestProver>>,
     one_proof_at_a_time: Mutex<()>,
+    /// Set when the proving client failed a proof. It never resets: only a new worker is known to be sound.
+    proving_client_failed: AtomicBool,
     logger: Logger,
 }
 
@@ -104,6 +109,7 @@ impl Worker {
         Self {
             prover: OnceLock::new(),
             one_proof_at_a_time: Mutex::new(()),
+            proving_client_failed: AtomicBool::new(false),
             logger,
         }
     }
@@ -118,7 +124,7 @@ impl Worker {
     ///
     /// | Request | Answer |
     /// |---|---|
-    /// | `GET /ping` | 204 while starting, 200 when ready |
+    /// | `GET /ping` | 204 while starting, 200 when ready, 503 after the proving client failed a proof |
     /// | `POST /prove`, worker not ready | 503 |
     /// | `POST /prove`, body is not a valid request | 400 |
     /// | `POST /prove`, key not held, or held for the other statement kind | 400 |
@@ -138,6 +144,12 @@ impl Worker {
     }
 
     fn ping(&self) -> Answer {
+        if self.proving_client_failed.load(Ordering::SeqCst) {
+            return Answer::error(
+                503,
+                "the proving client failed a proof; the worker needs a restart",
+            );
+        }
         if self.prover.get().is_none() {
             return Answer::empty(204);
         }
@@ -191,6 +203,9 @@ impl Worker {
             Ok(proof) => proof,
             Err(error @ Error::Config(_)) => return Answer::error(400, error),
             Err(error) => {
+                // The GPU server is a child process. When it dies, every later proof fails at once ("Broken pipe"),
+                // and nothing restarts it. So a failed proof marks the whole worker as unhealthy.
+                self.proving_client_failed.store(true, Ordering::SeqCst);
                 self.logger
                     .error("prove_failed", &[("reason", error.to_string())]);
                 return Answer::error(500, error);
@@ -465,6 +480,41 @@ mod tests {
         let answer = worker.handle("GET", "/ping", b"");
         assert_eq!(answer.status, 200);
         assert_eq!(answer.body, br#"{"status":"ready"}"#);
+    }
+
+    /// Claim: after the proving client fails a proof, `/ping` answers 503 and stays 503.
+    /// Why it matters: on 2026-10-26 a worker lost its GPU server to a memory limit. It kept answering `/ping` with 200
+    /// and failed every later job at once, so RunPod never replaced it and the client ran out of attempts.
+    #[test]
+    fn ping_is_503_for_good_after_a_failed_proof() {
+        let (worker, _stub) = ready_worker(Outcome::Failure);
+        assert_eq!(worker.handle("GET", "/ping", b"").status, 200);
+        let input = light_client_input(400);
+        let answer = worker.handle(
+            "POST",
+            "/prove",
+            &request_body(LIGHT_CLIENT_KEY, "lightClient", &input),
+        );
+        assert_eq!(answer.status, 500);
+        let ping = worker.handle("GET", "/ping", b"");
+        assert_eq!(ping.status, 503);
+        assert!(error_of(&ping).contains("restart"));
+        assert_eq!(worker.handle("GET", "/ping", b"").status, 503);
+    }
+
+    /// Claim: a refused key does not mark the worker as unhealthy.
+    /// Why it matters: a wrong key is the caller's mistake. Replacing the worker would not help and would cost a cold start.
+    #[test]
+    fn a_refused_key_keeps_ping_at_200() {
+        let (worker, _stub) = ready_worker(Outcome::WrongKey);
+        let input = light_client_input(400);
+        let answer = worker.handle(
+            "POST",
+            "/prove",
+            &request_body(LIGHT_CLIENT_KEY, "lightClient", &input),
+        );
+        assert_eq!(answer.status, 400);
+        assert_eq!(worker.handle("GET", "/ping", b"").status, 200);
     }
 
     /// Claim: a proof job before the setup ends gets 503, which the client retries.
