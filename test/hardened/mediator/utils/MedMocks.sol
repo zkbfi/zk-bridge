@@ -188,3 +188,47 @@ contract MedCutToken is ERC20 {
         super._update(from, to, value - cut);
     }
 }
+
+/// @notice A wrapped native token that refuses every transfer to the accounts on its deny list, as a wrapped token with
+/// a blocklist would. The coin that it pays on `withdraw` is not a transfer of the token, so a denied account can still
+/// receive the coin.
+contract MedDenyListWrappedNative is ERC20 {
+    error TransferRefused(address to);
+    error NativeTransferFailed();
+
+    mapping(address account => bool) public denied;
+
+    constructor() ERC20("Wrapped Deny", "WDENY") {}
+
+    function deposit() external payable {
+        _mint(msg.sender, msg.value);
+    }
+
+    function withdraw(uint256 amount) external {
+        _burn(msg.sender, amount);
+        (bool sent,) = msg.sender.call{value: amount}("");
+        if (!sent) revert NativeTransferFailed();
+    }
+
+    function setDenied(address account, bool isDenied) external {
+        denied[account] = isDenied;
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        if (denied[to]) revert TransferRefused(to);
+        super._update(from, to, value);
+    }
+}
+
+/// @notice A receiver of the native coin that refuses it on command.
+contract MedToggleReceiver {
+    bool public refuse = true;
+
+    function setRefuse(bool refuse_) external {
+        refuse = refuse_;
+    }
+
+    receive() external payable {
+        require(!refuse, "refused");
+    }
+}

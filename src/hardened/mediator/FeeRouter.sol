@@ -48,7 +48,19 @@ import {IWETH} from "./IWETH.sol";
 ///   value 1, which keeps the slot non-zero after the first use.
 /// - There is no `EIP1559_ENABLED` switch. The router reads `block.basefee`.
 ///
-/// A recipient that the token itself refuses leaves the tokens in the router: the sender chose that recipient.
+/// Nothing stays in the router. The mediator calls `onTokenBridged` after it paid the router, and it keeps no hold on a
+/// failed call: the tokens stay with the router. So a revert in the callback would strand them, and the router never
+/// reverts there. Instead it records what it cannot pay in `claimable`. Three cases, all chosen by the sender.
+/// - The token refuses the payout to a valid recipient (a blocklist, a revert). The router records the amount for that
+///   recipient, after the tip has gone to the reward address. The recipient, or anyone for it, calls `claim`, or
+///   `claimNative` for the wrapped native token.
+/// - The terms are invalid: the recipient is the zero address or the router itself, or the data has no known shape.
+///   No account owns the tokens then, so the router records them for the reward address, with no fee split. The
+///   sender gave the tokens away by choosing invalid terms.
+/// - The data is a 20 byte legacy receiver, and the token is not the wrapped native token. There is nothing to unwrap,
+///   so the router pays the token to that receiver, with no fee.
+/// `totalClaimable(token)` is the sum of the records of a token, and the router never pays a delivery from that part of
+/// its balance. So the balance of the router in each token equals the sum of its claims, and it holds no coin at rest.
 contract FeeRouter is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -112,6 +124,8 @@ contract FeeRouter is ReentrancyGuard {
     bytes32 public constant RUNNER_SLOT = keccak256(abi.encode("omnibridgerouter.runner"));
 
     uint256 private constant NOT_RUNNING = 1;
+    /// @dev The length of an encoded `FeeDirector`: four words.
+    uint256 private constant DIRECTOR_LENGTH = 128;
 
     /// @notice The origin of the transaction is not the runner of this router.
     error NotRunner(address caller);
@@ -131,6 +145,23 @@ contract FeeRouter is ReentrancyGuard {
     error InvalidRunnerValue();
     /// @notice The coin came from an account that is not the wrapped token.
     error NotWrappedTokenSender(address sender);
+    /// @notice The account has nothing recorded in this token.
+    error NothingToClaim(address token, address account);
+    /// @notice The coin of `claimNative` reached the account neither as the coin nor as the wrapped token.
+    error ClaimTransferFailed(address token, address account);
+
+    /// @dev Why an amount was recorded for an account.
+    enum Cause {
+        PayoutRefused,
+        InvalidTerms
+    }
+
+    /// @notice Emitted when the router records an amount that it could not pay. `account` is the recipient, or the
+    /// reward address for invalid terms.
+    event ClaimableRecorded(address indexed token, address indexed account, uint256 amount, Cause cause);
+    /// @notice Emitted when `claim` or `claimNative` pays a record. For `claimNative`, `token` is the wrapped native
+    /// token.
+    event Claimed(address indexed token, address indexed account, uint256 amount);
 
     /// @notice The mediator on this chain.
     ITokenMediator public immutable bridge;
@@ -142,6 +173,11 @@ contract FeeRouter is ReentrancyGuard {
     /// @notice The only address that a call may name as the reward address, and so the only address that receives a
     /// fee. It has no setter and no owner.
     address public immutable rewardAddress;
+
+    /// @notice What the router owes to an account, in a token, after a payout that failed or invalid terms.
+    mapping(address token => mapping(address account => uint256)) public claimable;
+    /// @notice The sum of `claimable` over the accounts, for each token.
+    mapping(address token => uint256) public totalClaimable;
 
     Settlement private _settlement;
 
@@ -178,17 +214,21 @@ contract FeeRouter is ReentrancyGuard {
     /// @param data An encoded `FeeDirector`, or the 20 byte address of a native coin receiver.
     function onTokenBridged(address token, uint256 value, bytes memory data) external nonReentrant {
         if (msg.sender != address(bridge)) revert NotMediator(msg.sender);
-        uint256 balance = IERC20(token).balanceOf(address(this));
-        // A token that takes a cut on transfer delivers less than the mediator reports.
-        if (balance < value) value = balance;
+        value = _freeBalance(token, value);
 
         if (data.length == 20) {
-            // The legacy form: the wrapped native token to the native coin, with no fee.
-            wNative.withdraw(value);
-            _payNative(address(bytes20(data)), value);
+            _payLegacy(token, address(bytes20(data)), value);
+            return;
+        }
+        if (data.length < DIRECTOR_LENGTH) {
+            _record(token, rewardAddress, value, Cause.InvalidTerms);
             return;
         }
         FeeDirector memory director = abi.decode(data, (FeeDirector));
+        if (!_canReceive(director.recipient)) {
+            _record(token, rewardAddress, value, Cause.InvalidTerms);
+            return;
+        }
         Payout payout = director.settings & UNWRAP != 0 && token == address(wNative) ? Payout.Native : Payout.Token;
         if (payout == Payout.Native) wNative.withdraw(value);
 
@@ -199,7 +239,28 @@ contract FeeRouter is ReentrancyGuard {
             _payNative(director.recipient, toRecipient);
             return;
         }
-        IERC20(token).safeTransfer(director.recipient, toRecipient);
+        _payToken(token, director.recipient, toRecipient);
+    }
+
+    /// @notice Pays what the router recorded for an account in a token. Anyone may call it, and it pays `account` only.
+    /// A token that still refuses `account` reverts, and the record stays.
+    /// @param token The token.
+    /// @param account The account that the record names.
+    function claim(address token, address account) external nonReentrant {
+        uint256 amount = _debit(token, account);
+        IERC20(token).safeTransfer(account, amount);
+        emit Claimed(token, account, amount);
+    }
+
+    /// @notice Pays the record of an account in the wrapped native token as the native coin. The router unwraps and
+    /// sends with at most `NATIVE_SEND_GAS`. An account that refuses the coin gets the wrapped token. When that fails
+    /// too, the call reverts and the record stays.
+    /// @param account The account that the record names.
+    function claimNative(address account) external nonReentrant {
+        uint256 amount = _debit(address(wNative), account);
+        wNative.withdraw(amount);
+        if (!_trySendNative(account, amount)) revert ClaimTransferFailed(address(wNative), account);
+        emit Claimed(address(wNative), account, amount);
     }
 
     /// @notice The fee and the amount for the recipient that the router computes.
@@ -263,7 +324,7 @@ contract FeeRouter is ReentrancyGuard {
             _payNative(waiting.recipient, refund);
             return;
         }
-        IERC20(waiting.token).trySafeTransfer(waiting.recipient, refund);
+        _payToken(waiting.token, waiting.recipient, refund);
     }
 
     /// @dev The two checks that every execute function makes first.
@@ -345,11 +406,68 @@ contract FeeRouter is ReentrancyGuard {
         return sent;
     }
 
-    /// @dev Sends the unwrapped coin. A receiver that refuses it gets the wrapped token.
+    /// @dev Sends the unwrapped coin. A receiver that refuses it gets the wrapped token. A receiver that refuses both
+    /// gets a record.
     function _payNative(address recipient, uint256 amount) private {
-        (bool sent,) = recipient.call{value: amount, gas: NATIVE_SEND_GAS}("");
-        if (sent) return;
+        if (_trySendNative(recipient, amount)) return;
+        _record(address(wNative), recipient, amount, Cause.PayoutRefused);
+    }
+
+    /// @dev Sends the coin, and on a refusal wraps it again and sends the wrapped token. When it returns false the
+    /// router holds the amount as the wrapped token.
+    function _trySendNative(address to, uint256 amount) private returns (bool) {
+        (bool sent,) = to.call{value: amount, gas: NATIVE_SEND_GAS}("");
+        if (sent) return true;
         wNative.deposit{value: amount}();
-        IERC20(address(wNative)).safeTransfer(recipient, amount);
+        return IERC20(address(wNative)).trySafeTransfer(to, amount);
+    }
+
+    /// @dev Pays a token. A token that refuses the recipient leaves a record for it.
+    function _payToken(address token, address recipient, uint256 amount) private {
+        if (IERC20(token).trySafeTransfer(recipient, amount)) return;
+        _record(token, recipient, amount, Cause.PayoutRefused);
+    }
+
+    /// @dev The legacy form: the receiver gets the coin for the wrapped native token, and the token itself for any
+    /// other token, with no fee in both cases.
+    function _payLegacy(address token, address receiver, uint256 value) private {
+        if (!_canReceive(receiver)) {
+            _record(token, rewardAddress, value, Cause.InvalidTerms);
+            return;
+        }
+        if (token != address(wNative)) {
+            _payToken(token, receiver, value);
+            return;
+        }
+        wNative.withdraw(value);
+        _payNative(receiver, value);
+    }
+
+    /// @dev An account that can own a payout: not the zero address and not the router, which has no way to pay itself.
+    function _canReceive(address account) private view returns (bool) {
+        return account != address(0) && account != address(this);
+    }
+
+    /// @dev The part of the balance that no record owns, up to `value`. A token that takes a cut on transfer delivers
+    /// less than the mediator reports, and the records of other accounts are not for this delivery.
+    function _freeBalance(address token, uint256 value) private view returns (uint256) {
+        uint256 balance = IERC20(token).balanceOf(address(this));
+        uint256 owed = totalClaimable[token];
+        uint256 free = balance > owed ? balance - owed : 0;
+        return free < value ? free : value;
+    }
+
+    function _record(address token, address account, uint256 amount, Cause cause) private {
+        if (amount == 0) return;
+        claimable[token][account] += amount;
+        totalClaimable[token] += amount;
+        emit ClaimableRecorded(token, account, amount, cause);
+    }
+
+    function _debit(address token, address account) private returns (uint256 amount) {
+        amount = claimable[token][account];
+        if (amount == 0) revert NothingToClaim(token, account);
+        claimable[token][account] = 0;
+        totalClaimable[token] -= amount;
     }
 }
