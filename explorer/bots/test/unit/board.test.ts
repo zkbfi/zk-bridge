@@ -85,6 +85,7 @@ describe("reading the board", () => {
   async function fakeSocketNode(notificationMethod: string) {
     const sockets: WebSocket[] = [];
     const subscriptions: Array<{ id: string; category: unknown }> = [];
+    const unsubscribed: string[] = [];
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await new Promise<void>((resolve) => server.once("listening", resolve));
     server.on("connection", (socket) => {
@@ -97,6 +98,11 @@ describe("reading the board", () => {
           socket.send(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: id }));
           return;
         }
+        if (request.method === "msgboard_unsubscribe") {
+          unsubscribed.push(String(request.params[0]));
+          socket.send(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: true }));
+          return;
+        }
         if (request.method === "msgboard_content") {
           socket.send(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { [category]: [{ category, data: "0xaa", hash: word(9) }] } }));
         }
@@ -105,7 +111,7 @@ describe("reading the board", () => {
     closers.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
     const notify = (socket: WebSocket, id: string, data: Hex, method = notificationMethod) =>
       socket.send(JSON.stringify({ jsonrpc: "2.0", method, params: { subscription: id, result: { category, data, hash: word(7) } } }));
-    return { url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}`, sockets, subscriptions, notify };
+    return { url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}`, sockets, subscriptions, unsubscribed, notify };
   }
 
   const waitFor = async (condition: () => boolean) => {
@@ -147,6 +153,21 @@ describe("reading the board", () => {
     await feed.subscribe(category, (message) => received.push(message.data));
     node.notify(node.sockets[0] as WebSocket, node.subscriptions[0]?.id as string, "0x05");
     await waitFor(() => received.length === 1);
+  });
+
+  it("closes a subscription on the node, and delivers nothing after it", async () => {
+    const node = await fakeSocketNode("msgboard_subscription");
+    const { logger } = memoryLogger();
+    const feed = createBoardFeed({ boardUrl: node.url, reconnectDelayMilliseconds: 20, logger });
+    closers.push(() => feed.close());
+    const received: Hex[] = [];
+    const subscription = await feed.subscribe(category, (message) => received.push(message.data));
+    const id = node.subscriptions[0]?.id as string;
+    await subscription.close();
+    expect(node.unsubscribed).toEqual([id]);
+    node.notify(node.sockets[0] as WebSocket, id, "0x09");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(received).toEqual([]);
   });
 
   it("reads the messages now on the board, to fill the gap that a dropped socket leaves", async () => {

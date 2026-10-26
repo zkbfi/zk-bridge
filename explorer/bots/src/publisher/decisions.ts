@@ -56,7 +56,6 @@ export interface ProvingPolicy {
 
 /** Input of {@link decideProving}. */
 export interface ProvingInput {
-  readonly pendingStatus: PendingStatus;
   readonly nowMilliseconds: number;
   readonly policy: ProvingPolicy;
   readonly state: PublisherState;
@@ -69,14 +68,13 @@ export interface ProvingInput {
 /** Why the publisher proves, or why it does not. */
 export type ProvingDecision =
   | { readonly prove: true; readonly reason: "transfer-waiting" | "interval" }
-  | { readonly prove: false; readonly reason: "proof-pending" | "backoff" | "up-to-date-recently" | "no-demand" };
+  | { readonly prove: false; readonly reason: "backoff" | "up-to-date-recently" | "no-demand" };
 
 /**
- * Decides whether to run the prover now. The order is: a useful proof makes a new one pointless; a recent failure or
+ * Decides whether to run the prover now. The caller asks only when it holds no useful proof. The order is: a recent failure or
  * a recent "nothing to prove" answer waits; a waiting transfer proves; the interval proves.
  */
 export async function decideProving(input: ProvingInput): Promise<ProvingDecision> {
-  if (input.pendingStatus === "useful") return { prove: false, reason: "proof-pending" };
   const attempt = input.state.lastProveAttempt;
   const sinceAttemptSeconds = attempt === null ? Number.POSITIVE_INFINITY : (input.nowMilliseconds - attempt.atMilliseconds) / 1000;
   if (attempt?.outcome === "failed" && sinceAttemptSeconds < input.retryBackoffSeconds) return { prove: false, reason: "backoff" };

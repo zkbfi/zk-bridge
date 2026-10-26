@@ -143,7 +143,6 @@ async function proveIfWanted(
 ): Promise<PublisherStepResult> {
   const { logger } = dependencies;
   const decision = await decideProving({
-    pendingStatus: "none",
     nowMilliseconds: dependencies.now(),
     policy: dependencies.policy,
     state,

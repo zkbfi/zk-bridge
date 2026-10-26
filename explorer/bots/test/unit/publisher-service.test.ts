@@ -58,8 +58,8 @@ const readySetup = (boardUrl: string, extra: ServiceWorldOptions["setup"] = {}):
 });
 const environmentFor = (boardUrl: string) => ({ RUNPOD_API_KEY: RUNPOD_KEY, BOARD_URL: boardUrl, PATH: "/custom/bin" });
 
-function start(created: ServiceWorld, overrides: PublisherOverrides) {
-  return startPublisher({ context: created.context, signal: new AbortController().signal, runOnce: true, overrides });
+function start(created: ServiceWorld, overrides?: PublisherOverrides) {
+  return startPublisher({ context: created.context, signal: new AbortController().signal, runOnce: true, ...(overrides === undefined ? {} : { overrides }) });
 }
 
 describe("startPublisher refuses an incomplete setup", () => {
@@ -70,7 +70,7 @@ describe("startPublisher refuses an incomplete setup", () => {
 
   it("names a missing remote prover endpoint", async () => {
     const created = await world({ config: publisherConfig });
-    await expect(start(created, {})).rejects.toThrow("The setup file has no remote prover endpoint (endpointUrl).");
+    await expect(start(created)).rejects.toThrow("The setup file has no remote prover endpoint (endpointUrl).");
   });
 
   it("names a missing reference to the RunPod key", async () => {

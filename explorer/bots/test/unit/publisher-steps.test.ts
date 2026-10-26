@@ -140,7 +140,6 @@ describe("runPublisherStep", () => {
 describe("decideProving", () => {
   it("proves by the interval when it never made a proof", async () => {
     const decision = await decideProving({
-      pendingStatus: "none",
       nowMilliseconds: NOW,
       policy: { proveWhenTransferWaits: false, intervalSeconds: 60 },
       state: INITIAL_PUBLISHER_STATE,
