@@ -230,6 +230,8 @@ contract DeployBridgeTest is Test {
         assertEq(config.chainA.lightClient.capellaEra, 0);
         assertEq(config.chainB.lightClient.capellaForkEpoch, 194048);
         assertEq(config.chainB.lightClient.capellaEra, 758);
+        assertEq(config.chainA.lightClient.gloasForkSlot, type(uint64).max, "no gloasForkEpoch: no Gloas fork");
+        assertEq(config.chainB.lightClient.gloasForkSlot, type(uint64).max);
 
         // The gate of chain A follows Ethereum, the gate of chain B follows PulseChain.
         assertEq(uint8(config.chainA.gate.mode), uint8(BeaconForkGate.GateMode.Enforcing));
@@ -259,6 +261,15 @@ contract DeployBridgeTest is Test {
         assertEq(config.chainB.gate.supportedVersions[0].version, bytes4(0x0000036c));
         assertEq(config.chainB.gate.supportedVersions[0].stateDepth, 5);
         assertEq(script.BEACON_ROOTS(), BEACON_ROOTS, "the script uses the address of EIP-4788");
+    }
+
+    /// Claim: the optional key `gloasForkEpoch` of a light client becomes the Gloas fork slot of its bridge:
+    /// epoch 353024 with 32 slots per epoch is slot 11296768. Matters: the bridge refuses body-layout proofs from that slot on.
+    function test_parseConfig_readsTheGloasForkEpoch() public view {
+        string memory json = vm.replace(_validJson(), '"capellaEra":"758",', '"capellaEra":"758","gloasForkEpoch":"353024",');
+        DeployBridge.BridgeConfig memory config = script.parseConfig(json);
+        assertEq(config.chainB.lightClient.gloasForkSlot, 353_024 * 32);
+        assertEq(config.chainA.lightClient.gloasForkSlot, type(uint64).max);
     }
 
     /// Claim: the example configuration cannot be used as it is. Shows: reading the shipped example file reverts with a
@@ -1068,7 +1079,7 @@ contract DeployBridgeTest is Test {
         uint64 capellaEra
     ) internal returns (MessageBridge) {
         return new MessageBridge(
-            deployed.lightClient, 1, 369, remoteBridge, MessageBridge.BridgeTerms(cutoff, remoteLightClient), capellaEra,
+            deployed.lightClient, 1, 369, remoteBridge, MessageBridge.BridgeTerms(cutoff, remoteLightClient, type(uint64).max), capellaEra,
             deployed.gate
         );
     }

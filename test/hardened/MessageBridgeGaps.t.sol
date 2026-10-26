@@ -249,7 +249,7 @@ contract MessageBridgeGapsTest is MessageScenes, DynamicProofs {
     /// chain that started its capella fork in the first era has a real era of zero.
     function test_constructor_storesAnyCapellaEraIncludingZero() public {
         vm.chainId(CHAIN_B);
-        MessageBridge.BridgeTerms memory terms = MessageBridge.BridgeTerms(0, address(lightClientForA));
+        MessageBridge.BridgeTerms memory terms = MessageBridge.BridgeTerms(0, address(lightClientForA), type(uint64).max);
         MessageBridge zero = new MessageBridge(
             address(lightClientForB), CHAIN_B, CHAIN_A, MessageFixtures.REMOTE_BRIDGE, terms, 0, address(gateB)
         );
@@ -406,7 +406,7 @@ contract MessageBridgeGapsTest is MessageScenes, DynamicProofs {
             CHAIN_B,
             CHAIN_A,
             MessageFixtures.REMOTE_BRIDGE,
-            MessageBridge.BridgeTerms(0, address(lightClientForA)),
+            MessageBridge.BridgeTerms(0, address(lightClientForA), type(uint64).max),
             DEFAULT_CAPELLA_ERA,
             address(gateB)
         );

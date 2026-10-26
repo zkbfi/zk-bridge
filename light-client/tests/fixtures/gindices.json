@@ -115,6 +115,18 @@
     }
   },
   "generatedBy": "cargo run -p lc-testkit --bin write-message-fixtures",
+  "gloas": {
+    "blockRootsBranchLength": 21,
+    "blockRootsFieldGindex": 352,
+    "forkVersionBranchLength": 7,
+    "forkVersionGindex": 169,
+    "historicalAncestryBranchLength": 50,
+    "historicalSummariesFieldGindex": 2950,
+    "latestBlockHashBranchLength": 11,
+    "latestBlockHashGindex": 2947,
+    "note": "latestBlockHashGindex anchors the execution block of a finalized Gloas head. No block hash position of the body is used: the body holds a bid, and a message proof from a Gloas source block is refused.",
+    "source": "specs/gloas/beacon-chain.md (BeaconState, 46 fields, ProgressiveContainer) with eip-7495 and eip-7916, and specs/gloas/light-client/sync-protocol.md. Derived by lc_core::layout::path_gindex from the field list."
+  },
   "historicalRootsLimit": "16777216",
   "historicalSummariesListDepth": 24,
   "notes": [

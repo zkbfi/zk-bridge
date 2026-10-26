@@ -1,0 +1,25 @@
+{
+  "fetched_on": "2026-10-26",
+  "response": {
+    "branch": [
+      "0x9000007500000000000000000000000000000000000000000000000000000000",
+      "0x99a833dda35b3bc1ebf59f1b8f2bb7b05fd63f76ec5055415e0ac798f126efcc",
+      "0x2a19f1fad0aa91a406cf91de7fa9f252cf6baa19f1a568ad1c1e669b63191884",
+      "0xb621e0aba2ec45b46c03fff724acc85a5d25885311c6a3faf73649ccf46b957c",
+      "0x157771f157ea78f2e212411cd734b3f68e2e5d9c69518b23cbb7c9dec982c48d",
+      "0x607db06200000000000000000000000000000000000000000000000000000000",
+      "0xffffffffff3f0000000000000000000000000000000000000000000000000000"
+    ],
+    "header": {
+      "body_root": "0x3a911e8b67c7fbb983397e53a6f04895e9c4a9658a48f622a40b60062c7676ff",
+      "parent_root": "0xd0b2c78258f89e1871896d18dbb4efc508526ea48bb25c4fa320a1bebb7ab9e1",
+      "proposer_index": "1853",
+      "slot": "11441216",
+      "state_root": "0x5533de6fc2f9dc44c8948e257f6ae187dbf77c4a747ea5cd41819daf3fe86707"
+    },
+    "previous_version": "0x9000007500000000000000000000000000000000000000000000000000000000",
+    "state_root": "0x5533de6fc2f9dc44c8948e257f6ae187dbf77c4a747ea5cd41819daf3fe86707",
+    "version": "0x9000007600000000000000000000000000000000000000000000000000000000"
+  },
+  "source_url": "derived: lc_core progressive_fork_version_branch over the state in gloas_head_state.ssz (Sepolia, 2026-10-26); the header is the finalized header of gloas_head_finality_update.json"
+}

@@ -412,7 +412,8 @@ Immutable configuration, checked against the chain spec by the deploy script:
 - `beaconRoots`: `0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02` (EIP-4788);
 - `genesisTime`, `secondsPerSlot` (12), `slotsPerEpoch` (32);
 - `supportedVersions`: a list of `(bytes4 version, uint8 stateDepth)` pairs. It must equal the light-client program's fork table, and a test compares the two. Expected values: Capella `0x03000000` depth 5; Deneb `0x04000000` depth 5; Electra `0x05000000` depth 6; Fulu `0x06000000` depth 6. Take each depth from `ethereum/consensus-specs` and cite it.
-- `sealDepths`: the depths allowed for a seal proof, namely 5, 6 and 7. Depth 7 covers a future fork that crosses 64 state fields.
+- `sealDepths`: the depths allowed for a seal proof, namely 5, 6 and 7. Depth 7 covers a future fork that crosses 64 state fields. The value 255 (`PROGRESSIVE_STATE_DEPTH`) also stands for a progressive state (see below).
+- Gloas. The Gloas `BeaconState` is a progressive container, so the version leaf is at the fixed index 169 (7 siblings), not at the depth formula. A supported version with `stateDepth` 255 uses that index. A seal proof of 7 siblings is also tried at 169 when 255 is in `sealDepths`. Config values 0 and 32 to 254 stay refused.
 
 Immutable mode: `Enforcing` (Ethereum) or `DetectBeaconRoots` (PulseChain), from a configuration enum, not a boolean.
 
@@ -824,6 +825,8 @@ interface IMessageFee {
 ```
 
 The layout rows (`addBlockRootsLayout`, `addBlockHashLayout`, `addHistoricalSummariesLayout`) move here, because every message proof needs them.
+
+Gloas guard. The position rules also take the fixed Gloas positions of `block_roots` (352) and `historical_summaries` (2950). The body-layout path refuses every slot at or after the immutable `gloasForkSlot` (`GloasSlotRefused`): from the fork on, `executionBlockHashes[slot]` holds `state.latest_block_hash`, which is an earlier payload, and the body holds only a bid. So a message proof from a Gloas source block cannot pass. The opening proof still works with a Gloas head, because it checks an execution header RLP against the stored hash.
 
 A target trusts a message by checking `msg.sender == bridge` and the pair (`messageSourceChainId()`, `messageSender()`).
 

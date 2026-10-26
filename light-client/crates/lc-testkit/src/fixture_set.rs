@@ -46,6 +46,39 @@ fn schedule_rows(spec: &ChainSpec) -> Vec<Value> {
         .collect()
 }
 
+/// The Gloas positions, derived from the field lists of `lc_core::layout` (not copied from its constants), and checked
+/// against the constants. The state is a progressive container, so these are fixed numbers and not `2^depth + index`.
+fn gloas_json() -> Value {
+    use lc_core::layout::{
+        path_gindex, BEACON_STATE_GLOAS, BLOCK_ROOTS_GINDEX_GLOAS, FORK, FORK_VERSION_GINDEX_GLOAS,
+        HISTORICAL_SUMMARIES_GINDEX_GLOAS, LATEST_BLOCK_HASH_GINDEX_GLOAS,
+    };
+    let state = &BEACON_STATE_GLOAS;
+    let derived = |path: &[(&lc_core::layout::ContainerDefinition, &str)]| path_gindex(path).expect("a known field");
+    let block_roots = derived(&[(state, "block_roots")]);
+    let summaries = derived(&[(state, "historical_summaries")]);
+    let latest = derived(&[(state, "latest_block_hash")]);
+    let fork_version = derived(&[(state, "fork"), (&FORK, "current_version")]);
+    assert_eq!(block_roots, BLOCK_ROOTS_GINDEX_GLOAS);
+    assert_eq!(summaries, HISTORICAL_SUMMARIES_GINDEX_GLOAS);
+    assert_eq!(latest, LATEST_BLOCK_HASH_GINDEX_GLOAS);
+    assert_eq!(fork_version, FORK_VERSION_GINDEX_GLOAS);
+    json!({
+        "source": "specs/gloas/beacon-chain.md (BeaconState, 46 fields, ProgressiveContainer) with eip-7495 and eip-7916, and specs/gloas/light-client/sync-protocol.md. Derived by lc_core::layout::path_gindex from the field list.",
+        "forkVersionGindex": fork_version,
+        "forkVersionBranchLength": gindex_depth(fork_version),
+        "blockRootsFieldGindex": block_roots,
+        "blockRootsBranchLength": gindex_depth(block_roots << BLOCK_ROOTS_VECTOR_DEPTH),
+        "historicalSummariesFieldGindex": summaries,
+        "historicalAncestryBranchLength": gindex_depth(
+            historical_leaf_gindex(summaries, 0, 0).expect("index 0 is in range")
+        ),
+        "latestBlockHashGindex": latest,
+        "latestBlockHashBranchLength": gindex_depth(latest),
+        "note": "latestBlockHashGindex anchors the execution block of a finalized Gloas head. No block hash position of the body is used: the body holds a bid, and a message proof from a Gloas source block is refused.",
+    })
+}
+
 /// `tests/fixtures/gindices.json`: every generalized index the bridge and the light client need, per fork, with sources.
 pub fn gindices_json() -> Value {
     let fork_entry = |fork: ForkName| {
@@ -87,6 +120,7 @@ pub fn gindices_json() -> Value {
         "historicalRootsLimit": (1u64 << HISTORICAL_SUMMARIES_LIST_DEPTH).to_string(),
         "historicalSummariesListDepth": HISTORICAL_SUMMARIES_LIST_DEPTH,
         "slotsPerHistoricalRoot": SLOTS_PER_HISTORICAL_ROOT.to_string(),
+        "gloas": gloas_json(),
         "forks": {
             "capella": fork_entry(ForkName::Capella),
             "deneb": fork_entry(ForkName::Deneb),

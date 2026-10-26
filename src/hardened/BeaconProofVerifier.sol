@@ -24,6 +24,12 @@ import {ReceiptLogs} from "./ReceiptLogs.sol";
 /// a stored block hash there, get that position accepted, and then forge logs. So only the position of the real field
 /// is accepted.
 ///
+/// Gloas. From Gloas on, `BeaconState` is a progressive container (EIP-7495, EIP-7916), so a field no longer sits at
+/// `2**depth + index`. Its position is one fixed number, which later forks keep. `block_roots` sits at 352 and
+/// `historical_summaries` at 2950. The position rules take those two numbers next to the depth rule, and no other
+/// number of a deeper tree: the rule for an older fork is not looser. The body of a Gloas block holds a bid and no payload,
+/// so no position of the block hash is accepted for a Gloas source block, and a message proof from one cannot pass.
+///
 /// Ancestry has two paths, chosen from the two slots. A block at most 8192 slots below the anchor is proven through
 /// `state.block_roots`. An older block is proven through `state.historical_summaries`, which holds the root of every
 /// completed era of 8192 block roots since Capella. So a stored head may be any distance past the one before it.
@@ -125,6 +131,9 @@ abstract contract BeaconProofVerifier {
         bytes[] storageProof;
     }
 
+    /// @notice The value of `gloasForkSlot` for a route whose remote chain has no Gloas fork.
+    uint64 public constant NO_GLOAS_FORK = type(uint64).max;
+
     /// @notice The length of `state.block_roots`. A deposit block at most this far below its anchor uses the recent path.
     uint64 public constant SLOTS_PER_HISTORICAL_ROOT = 8192;
 
@@ -135,8 +144,18 @@ abstract contract BeaconProofVerifier {
     /// `historical_summaries` list below its data node.
     uint256 public constant HISTORICAL_SUMMARIES_LIST_DEPTH = 24;
 
-    /// @dev The deepest accepted `block_roots` or `historical_summaries` position (the state container only).
+    /// @dev The deepest accepted `block_roots` or `historical_summaries` position (the state container only), apart from
+    /// the fixed Gloas position of `historical_summaries`.
     uint256 private constant MAX_BLOCK_ROOTS_DEPTH = 8;
+
+    /// @dev The position of `BeaconState.block_roots` in the progressive Gloas state: field 5 is chunk 5, the first leaf of
+    /// the 16 leaf subtree at node 22, which starts at 352 (`specs/gloas/light-client/sync-protocol.md` fixes the rules,
+    /// and `lc-core` derives the number from the field list).
+    uint256 private constant GLOAS_BLOCK_ROOTS_GINDEX = 352;
+
+    /// @dev The position of `BeaconState.historical_summaries` in the progressive Gloas state: field 27 is chunk 27, the
+    /// seventh leaf of the 64 leaf subtree at node 46, which starts at 2944.
+    uint256 private constant GLOAS_HISTORICAL_SUMMARIES_GINDEX = 2950;
 
     /// @dev The deepest accepted block hash position.
     uint256 private constant MAX_BLOCK_HASH_DEPTH = 16;
@@ -222,6 +241,10 @@ abstract contract BeaconProofVerifier {
     /// @notice A `historical_summaries` evidence slot is not more than 8192 slots below its anchor.
     error EvidenceSlotNotHistorical(uint64 earlierSlot, uint64 anchorSlot);
 
+    /// @notice The body-layout path was asked about a slot at or after the Gloas fork. The stored hash of such a slot is
+    /// `latest_block_hash`, not the payload of the block of that slot, and the body holds only a bid.
+    error GloasSlotRefused(uint64 slot, uint64 gloasForkSlot);
+
     /// @notice The slot lies inside the validated range of another position, so a layout cannot be validated there.
     error LayoutRangeConflict(uint64 slot);
 
@@ -297,15 +320,24 @@ abstract contract BeaconProofVerifier {
     uint64 public immutable capellaEra;
     /// @notice The light client on the other chain. It tracks the beacon chain of this chain and feeds the remote contract.
     address public immutable remoteLightClient;
+    /// @notice The first slot of the Gloas fork on the remote chain, or `NO_GLOAS_FORK` when the route has none.
+    /// @dev From this slot on, `lightClient.executionBlockHashes(slot)` holds `state.latest_block_hash` of the finalized
+    /// state: the newest payload that a block confirmed BEFORE the slot, not the payload of the slot. The body of a Gloas
+    /// block holds a bid and no payload. So the body-layout path (`addBlockHashLayout` and `_requireBlockHashBranch`) must
+    /// never read a stored hash at or after this slot as the payload of the beacon block of that slot. Both refuse it. A
+    /// Gloas head is used only through the opening proof, which checks an execution header RLP against the stored hash.
+    uint64 public immutable gloasForkSlot;
 
     /// @param lightClient_ The light client of the remote chain.
     /// @param capellaEra_ `floor(capellaForkSlot / 8192)` of the remote chain. The deploy script checks it.
     /// @param remoteLightClient_ The light client on the other chain. `openDeposits` reads its storage.
+    /// @param gloasForkSlot_ The first slot of Gloas on the remote chain, or `NO_GLOAS_FORK`. The deploy script checks it.
     /// @dev The constructor only stores. The contract on top checks the values, in the order of its own arguments.
-    constructor(address lightClient_, uint64 capellaEra_, address remoteLightClient_) {
+    constructor(address lightClient_, uint64 capellaEra_, address remoteLightClient_, uint64 gloasForkSlot_) {
         lightClient = IBeaconLightClient(lightClient_);
         capellaEra = capellaEra_;
         remoteLightClient = remoteLightClient_;
+        gloasForkSlot = gloasForkSlot_;
     }
 
     // ------------------------------------------------------------------ storage hooks
@@ -377,6 +409,7 @@ abstract contract BeaconProofVerifier {
         BeaconBlockHeader calldata sourceHeader,
         bytes32[] calldata branch
     ) internal view {
+        _requireBeforeGloas(sourceHeader.slot);
         if (!SSZ.isValidBranch(blockHash, branch, _blockHashGindexAt(sourceHeader.slot), sourceHeader.bodyRoot)) {
             revert BlockHashBranchInvalid();
         }
@@ -423,8 +456,8 @@ abstract contract BeaconProofVerifier {
     }
 
     /// @notice Adds a `block_roots` position, or widens its validated range, given evidence from stored data.
-    /// @dev Open to anyone. The position must be the `block_roots` field itself: `2**d + 5` with `d` in 5 to 7. Any
-    /// other position reverts with `LayoutPositionInvalid`, even when the evidence would match (for example the position
+    /// @dev Open to anyone. The position must be the `block_roots` field itself: `2**d + 5` with `d` in 5 to 7, or 352
+    /// (Gloas). Any other position reverts with `LayoutPositionInvalid`, even when the evidence would match (for example the position
     /// of `eth1_data_votes`, whose entries a proposer writes). The position is accepted only when, under the stored later state root, the leaf at
     /// `blockRootsGindex * 8192 + slot % 8192` equals the light client's stored header root, for two different
     /// stored earlier slots. A wrong position cannot match. The position is then usable for the later header's slot.
@@ -434,9 +467,7 @@ abstract contract BeaconProofVerifier {
         if (blockRootsGindex == 0 || SSZ.depthOf(blockRootsGindex) > MAX_BLOCK_ROOTS_DEPTH) {
             revert LayoutOutOfBounds(blockRootsGindex);
         }
-        if (!_isStateFieldPosition(blockRootsGindex, BLOCK_ROOTS_FIELD)) {
-            revert LayoutPositionInvalid(blockRootsGindex);
-        }
+        if (!_isBlockRootsPosition(blockRootsGindex)) revert LayoutPositionInvalid(blockRootsGindex);
         _requireStoredHeader(evidence.laterHeader);
         if (evidence.earlierSlotA == evidence.earlierSlotB) revert EvidenceSlotsEqual(evidence.earlierSlotA);
         _requireEarlierRoot(evidence.laterHeader, evidence.earlierSlotA, blockRootsGindex, evidence.branchA);
@@ -474,6 +505,7 @@ abstract contract BeaconProofVerifier {
         }
         if (!_isBlockHashPosition(blockHashGindex)) revert LayoutPositionInvalid(blockHashGindex);
         _requireStoredHeader(evidence.header);
+        _requireBeforeGloas(evidence.header.slot);
         bytes32 storedBlockHash = lightClient.executionBlockHashes(evidence.header.slot);
         if (storedBlockHash == bytes32(0)) revert EvidenceSlotNotStored(evidence.header.slot);
         if (!SSZ.isValidBranch(storedBlockHash, evidence.branch, blockHashGindex, evidence.header.bodyRoot)) {
@@ -510,10 +542,14 @@ abstract contract BeaconProofVerifier {
         uint256 historicalSummariesGindex,
         HistoricalSummariesEvidence calldata evidence
     ) external {
-        if (historicalSummariesGindex == 0 || SSZ.depthOf(historicalSummariesGindex) > MAX_BLOCK_ROOTS_DEPTH) {
+        if (
+            historicalSummariesGindex == 0
+                || (SSZ.depthOf(historicalSummariesGindex) > MAX_BLOCK_ROOTS_DEPTH
+                    && historicalSummariesGindex != GLOAS_HISTORICAL_SUMMARIES_GINDEX)
+        ) {
             revert LayoutOutOfBounds(historicalSummariesGindex);
         }
-        if (!_isStateFieldPosition(historicalSummariesGindex, HISTORICAL_SUMMARIES_FIELD)) {
+        if (!_isHistoricalSummariesPosition(historicalSummariesGindex)) {
             revert LayoutPositionInvalid(historicalSummariesGindex);
         }
         _requireStoredHeader(evidence.anchorHeader);
@@ -597,6 +633,18 @@ abstract contract BeaconProofVerifier {
         return _bodyLayoutTable();
     }
 
+    /// @dev Whether `gindex` is `BeaconState.block_roots`: field 5 of a plain tree of depth 5, 6 or 7, or the fixed Gloas
+    /// position.
+    function _isBlockRootsPosition(uint256 gindex) private pure returns (bool) {
+        return _isStateFieldPosition(gindex, BLOCK_ROOTS_FIELD) || gindex == GLOAS_BLOCK_ROOTS_GINDEX;
+    }
+
+    /// @dev Whether `gindex` is `BeaconState.historical_summaries`: field 27 of a plain tree of depth 5, 6 or 7, or the fixed
+    /// Gloas position.
+    function _isHistoricalSummariesPosition(uint256 gindex) private pure returns (bool) {
+        return _isStateFieldPosition(gindex, HISTORICAL_SUMMARIES_FIELD) || gindex == GLOAS_HISTORICAL_SUMMARIES_GINDEX;
+    }
+
     /// @dev Whether `gindex` is field `fieldIndex` of a `BeaconState` tree of depth 5, 6 or 7: `2**depth + fieldIndex`.
     function _isStateFieldPosition(uint256 gindex, uint256 fieldIndex) private pure returns (bool) {
         uint256 depth = SSZ.depthOf(gindex);
@@ -614,6 +662,11 @@ abstract contract BeaconProofVerifier {
             }
         }
         return false;
+    }
+
+    /// @dev The body-layout path is for slots before the Gloas fork only.
+    function _requireBeforeGloas(uint64 slot) private view {
+        if (slot >= gloasForkSlot) revert GloasSlotRefused(slot, gloasForkSlot);
     }
 
     /// @dev A header must equal the finalized header that the light client stored for its slot.

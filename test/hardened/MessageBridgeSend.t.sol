@@ -29,7 +29,7 @@ contract MessageBridgeSendTest is MessageScenes {
     }
 
     function _terms(address remoteLightClient_) internal pure returns (MessageBridge.BridgeTerms memory) {
-        return MessageBridge.BridgeTerms(0, remoteLightClient_);
+        return MessageBridge.BridgeTerms(0, remoteLightClient_, type(uint64).max);
     }
 
     // ================================================================ the message that a send logs

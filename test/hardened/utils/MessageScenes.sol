@@ -28,6 +28,9 @@ abstract contract MessageScenes is HistoricalScenes, OpeningScenes {
     MessageReentrant internal reentrant;
     MessageSending internal sending;
 
+    /// @dev The Gloas fork slot of the destination bridges that the next `_deployDestinationBridge` creates.
+    uint64 internal bridgeGloasForkSlot = type(uint64).max;
+
     function setUp() public virtual override {
         super.setUp();
         recorder = MessageRecorder(_putTarget(MessageFixtures.TARGET_RECORDER, address(new MessageRecorder())));
@@ -61,7 +64,7 @@ abstract contract MessageScenes is HistoricalScenes, OpeningScenes {
             "MessageBridge.sol:MessageBridge",
             abi.encode(
                 address(lightClientForA), CHAIN_A, CHAIN_B, DESTINATION_BRIDGE,
-                MessageBridge.BridgeTerms(cutoff, address(lightClientForB)), DEFAULT_CAPELLA_ERA, gate
+                MessageBridge.BridgeTerms(cutoff, address(lightClientForB), type(uint64).max), DEFAULT_CAPELLA_ERA, gate
             ),
             MessageFixtures.REMOTE_BRIDGE
         );
@@ -91,7 +94,7 @@ abstract contract MessageScenes is HistoricalScenes, OpeningScenes {
             "MessageBridge.sol:MessageBridge",
             abi.encode(
                 address(client), CHAIN_B, CHAIN_A, MessageFixtures.REMOTE_BRIDGE,
-                MessageBridge.BridgeTerms(cutoff, address(lightClientForA)), capellaEra, gate
+                MessageBridge.BridgeTerms(cutoff, address(lightClientForA), bridgeGloasForkSlot), capellaEra, gate
             ),
             DESTINATION_BRIDGE
         );

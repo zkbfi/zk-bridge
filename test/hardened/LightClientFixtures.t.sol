@@ -289,7 +289,7 @@ contract LightClientFixturesTest is Test {
             localChain,
             remoteChain,
             remoteBridge,
-            MessageBridge.BridgeTerms(0, makeAddr("remote light client")),
+            MessageBridge.BridgeTerms(0, makeAddr("remote light client"), type(uint64).max),
             capellaEra,
             UNUSED_GATE
         );

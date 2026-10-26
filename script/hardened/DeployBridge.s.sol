@@ -124,6 +124,7 @@ contract DeployBridge is Script {
         uint64 slotsPerEpoch;
         uint64 capellaForkEpoch;
         uint64 capellaEra;
+        uint64 gloasForkSlot;
         uint64 initialSlot;
         bytes32 initialHeaderRoot;
         bytes32 initialSyncCommitteeHash;
@@ -536,12 +537,21 @@ contract DeployBridge is Script {
                 deployment.remoteChainId,
                 deployment.remoteBridge,
                 MessageBridge.BridgeTerms({
-                    cutoffTimestamp: chain.depositCutoffTimestamp, remoteLightClient: deployment.remoteLightClient
+                    cutoffTimestamp: chain.depositCutoffTimestamp,
+                    remoteLightClient: deployment.remoteLightClient,
+                    gloasForkSlot: chain.lightClient.gloasForkSlot
                 }),
                 chain.lightClient.capellaEra,
                 gate
             )
         );
+    }
+
+    /// @dev The optional key `gloasForkEpoch` of the remote chain, as a slot. Absent means the chain has no Gloas fork.
+    function _readGloasForkSlot(string memory json, string memory client) private view returns (uint64) {
+        string memory key = string.concat(client, ".gloasForkEpoch");
+        if (!vm.keyExistsJson(json, key)) return type(uint64).max;
+        return uint64(_readNonZeroUint(json, key)) * uint64(_readNonZeroUint(json, string.concat(client, ".slotsPerEpoch")));
     }
 
     function _deployMediator(ChainDeployment memory deployment, address bridge) private returns (address) {
@@ -645,6 +655,7 @@ contract DeployBridge is Script {
             revert DeploymentMismatch("bridge.sendCutoffTimestamp");
         }
         if (bridge.capellaEra() != chain.lightClient.capellaEra) revert DeploymentMismatch("bridge.capellaEra");
+        if (bridge.gloasForkSlot() != chain.lightClient.gloasForkSlot) revert DeploymentMismatch("bridge.gloasForkSlot");
         if (address(bridge.depositGate()) != deployed.gate) revert DeploymentMismatch("bridge.depositGate");
         if (
             bridge.stateLayouts().length != 0 || bridge.bodyLayouts().length != 0
@@ -732,6 +743,7 @@ contract DeployBridge is Script {
         chain.lightClient.slotsPerEpoch = uint64(_readNonZeroUint(json, string.concat(client, ".slotsPerEpoch")));
         chain.lightClient.capellaForkEpoch = uint64(_readNonZeroUint(json, string.concat(client, ".capellaForkEpoch")));
         chain.lightClient.capellaEra = uint64(_readUint(json, string.concat(client, ".capellaEra")));
+        chain.lightClient.gloasForkSlot = _readGloasForkSlot(json, client);
         chain.lightClient.initialSlot = uint64(_readNonZeroUint(json, string.concat(client, ".initialSlot")));
         chain.lightClient.initialHeaderRoot = _readBytes32(json, string.concat(client, ".initialHeaderRoot"));
         chain.lightClient.initialSyncCommitteeHash = _readBytes32(json, string.concat(client, ".initialSyncCommitteeHash"));

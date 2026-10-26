@@ -42,9 +42,12 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
     /// @param cutoffTimestamp Sends revert from this timestamp on. Zero means no cutoff.
     /// @param remoteLightClient The light client on the other chain, which tracks the beacon chain of THIS chain and
     /// feeds the remote bridge. `openDeposits` reads its storage. It must not be zero.
+    /// @param gloasForkSlot The first slot of Gloas on the remote chain, or `NO_GLOAS_FORK`. Body-layout proofs from a
+    /// slot at or after it are refused.
     struct BridgeTerms {
         uint64 cutoffTimestamp;
         address remoteLightClient;
+        uint64 gloasForkSlot;
     }
 
     /// @notice The evidence for one message. Nothing in it is secret.
@@ -191,7 +194,7 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
         BridgeTerms memory bridgeTerms,
         uint64 capellaEra_,
         address depositGate_
-    ) BeaconProofVerifier(lightClient_, capellaEra_, bridgeTerms.remoteLightClient) {
+    ) BeaconProofVerifier(lightClient_, capellaEra_, bridgeTerms.remoteLightClient, bridgeTerms.gloasForkSlot) {
         if (lightClient_ == address(0)) revert ZeroValue("lightClient");
         if (remoteChainId_ == 0) revert ZeroValue("remoteChainId");
         if (remoteBridge_ == address(0)) revert ZeroValue("remoteBridge");

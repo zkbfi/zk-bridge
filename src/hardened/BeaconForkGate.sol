@@ -22,6 +22,12 @@ import {BeaconBlockHeader, SSZ} from "./SSZ.sol";
 /// The generalized index of the version leaf is computed here from the configured depth, never taken from the caller.
 /// If the caller could choose it, a proof of `Fork.previous_version` would pass for the current version.
 ///
+/// Gloas makes `BeaconState` a progressive container, and then the position of `fork.current_version` is not
+/// `(2**depth + 3) * 4 + 1` for any depth. It is the fixed number 169: `fork` is chunk 3 of the progressive tree (node 42)
+/// and `current_version` is field 1 of the three field `Fork` container (node 42 * 4 + 1). The state depth of a supported
+/// version carries the marker `PROGRESSIVE_STATE_DEPTH` for such a state. A progressive layout fixes its early
+/// positions for good, so the marker also covers the forks after Gloas, and a seal proof may use it too.
+///
 /// A third mode, `DetectBeaconRootsAndRegistry` (PulseChain), adds two things to detection. First, execution canaries:
 /// one tiny probe contract that runs one new opcode per call (`TSTORE`, `MCOPY`, `BLOBBASEFEE`, `CLZ`, chosen by the
 /// first byte of the calldata), and a call to the first BLS12-381 precompile. A PulseChain consensus fork almost always arrives with an execution fork, and the first canary
@@ -51,9 +57,10 @@ contract BeaconForkGate is IDepositGate {
         Bls12381Precompile
     }
 
-    /// @notice A supported fork version and the depth of the `BeaconState` tree in that fork.
+    /// @notice A supported fork version and the layout of the `BeaconState` tree in that fork.
     /// @param version The value of `Fork.current_version`.
-    /// @param stateDepth The depth of the `BeaconState` tree: 5 up to 32 fields, 6 up to 64 fields.
+    /// @param stateDepth The depth of the `BeaconState` tree: 5 up to 32 fields, 6 up to 64 fields. The value
+    /// `PROGRESSIVE_STATE_DEPTH` marks a progressive state (Gloas on) instead. It is no depth: its position is fixed.
     struct SupportedVersion {
         bytes4 version;
         uint8 stateDepth;
@@ -84,6 +91,16 @@ contract BeaconForkGate is IDepositGate {
     uint256 public constant MAX_SUPPORTED_VERSIONS = 6;
     /// @notice The largest state depth the gate accepts in its configuration.
     uint8 public constant MAX_STATE_DEPTH = 31;
+    /// @notice The marker of a progressive `BeaconState` (Gloas on) in the `stateDepth` of a supported version and in the
+    /// seal depths. The position of the version leaf is then the fixed index 169, and the branch has 7 entries.
+    uint8 public constant PROGRESSIVE_STATE_DEPTH = 255;
+    /// @dev `get_generalized_index(BeaconState, "fork", "current_version")` in the progressive Gloas state: chunk 3 of the
+    /// progressive tree is node 42, and field 1 of `Fork` is 42 * 4 + 1.
+    uint256 private constant PROGRESSIVE_VERSION_GINDEX = 169;
+    /// @dev The siblings of chunk 3 inside the progressive state: the chunk next to it, the subtree of chunks 1 to 4, the
+    /// rest of the tree, the first chunk, and the `active_fields` chunk. A seal proof of such a state has this many plus
+    /// `FORK_DEPTH` entries.
+    uint256 private constant PROGRESSIVE_STATE_BRANCH = 5;
     /// @dev The depth of the `Fork` container (three fields).
     uint256 private constant FORK_DEPTH = 2;
     /// @dev The position of `fork` among the `BeaconState` fields.
@@ -139,7 +156,7 @@ contract BeaconForkGate is IDepositGate {
     error TooManySupportedVersions(uint256 count);
     /// @notice A supported version appears twice.
     error DuplicateSupportedVersion(bytes4 version);
-    /// @notice A state depth is zero or above `MAX_STATE_DEPTH`.
+    /// @notice A state depth is zero or above `MAX_STATE_DEPTH`, and is not `PROGRESSIVE_STATE_DEPTH`.
     error StateDepthOutOfRange(uint8 depth);
     /// @notice The gate is sealed. No deposit passes, and the seal never clears.
     error GateSealed();
@@ -319,8 +336,13 @@ contract BeaconForkGate is IDepositGate {
         if (proof.header.slot < minimumSlot) revert SealEvidenceTooOld(proof.header.slot, minimumSlot);
         if (proof.branch.length < FORK_DEPTH + 1) revert SealDepthNotAllowed(0);
         uint256 depth = proof.branch.length - FORK_DEPTH;
-        if (depth > MAX_STATE_DEPTH || (_sealDepthMask >> depth) & 1 == 0) revert SealDepthNotAllowed(depth);
-        _requireVersionLeaf(proof, depth);
+        bool plainAllowed = depth <= MAX_STATE_DEPTH && (_sealDepthMask >> depth) & 1 == 1;
+        bool progressiveAllowed =
+            depth == PROGRESSIVE_STATE_BRANCH && (_sealDepthMask >> PROGRESSIVE_STATE_DEPTH) & 1 == 1;
+        if (!plainAllowed && !progressiveAllowed) revert SealDepthNotAllowed(depth);
+        bool proven = (plainAllowed && _isVersionLeaf(proof, _versionGindex(depth)))
+            || (progressiveAllowed && _isVersionLeaf(proof, PROGRESSIVE_VERSION_GINDEX));
+        if (!proven) revert ForkProofInvalid();
 
         _state.isSealed = true;
         emit GateSealedByFork(proof.version, proof.header.slot);
@@ -359,16 +381,17 @@ contract BeaconForkGate is IDepositGate {
         }
     }
 
-    /// @notice The state depths allowed in a seal proof, in ascending order.
+    /// @notice The state depths allowed in a seal proof, in ascending order. `PROGRESSIVE_STATE_DEPTH` comes last when the
+    /// gate allows a progressive state.
     function sealDepths() external view returns (uint8[] memory depths) {
         uint256 mask = _sealDepthMask;
         uint256 count;
-        for (uint256 depth = 0; depth <= MAX_STATE_DEPTH; depth++) {
+        for (uint256 depth = 0; depth <= PROGRESSIVE_STATE_DEPTH; depth++) {
             if ((mask >> depth) & 1 == 1) count++;
         }
         depths = new uint8[](count);
         uint256 next;
-        for (uint256 depth = 0; depth <= MAX_STATE_DEPTH; depth++) {
+        for (uint256 depth = 0; depth <= PROGRESSIVE_STATE_DEPTH; depth++) {
             if ((mask >> depth) & 1 == 1) depths[next++] = uint8(depth);
         }
     }
@@ -558,13 +581,30 @@ contract BeaconForkGate is IDepositGate {
         if (headerRoot != root) revert HeaderRootMismatch(root, headerRoot);
     }
 
-    /// @dev The version, right-padded to 32 bytes, must be the leaf at `BeaconState.fork.current_version`. The index
-    /// is computed here: field 3 of the state, then field 1 of the three-field `Fork` container.
+    /// @dev The version, right-padded to 32 bytes, must be the leaf at `BeaconState.fork.current_version`. The index is
+    /// computed here: see `_versionGindex`.
     function _requireVersionLeaf(ForkEvidence memory proof, uint256 stateDepth) private pure {
-        uint256 forkIndex = (uint256(1) << stateDepth) + FORK_FIELD_INDEX;
-        uint256 gindex = forkIndex * 4 + 1;
-        if (!SSZ.isValidBranchMemory(bytes32(proof.version), proof.branch, gindex, proof.header.stateRoot)) {
-            revert ForkProofInvalid();
+        if (!_isVersionLeaf(proof, _versionGindex(stateDepth))) revert ForkProofInvalid();
+    }
+
+    /// @dev Whether the branch leads from the padded version to the state root at `gindex`. A branch of another length
+    /// reverts in `SSZ`.
+    function _isVersionLeaf(ForkEvidence memory proof, uint256 gindex) private pure returns (bool) {
+        return SSZ.isValidBranchMemory(bytes32(proof.version), proof.branch, gindex, proof.header.stateRoot);
+    }
+
+    /// @dev The index of the version leaf for a state layout. A plain tree of `stateDepth` puts `fork` at field 3, then
+    /// `current_version` at field 1 of the three field `Fork` container: `((2**depth + 3) * 4) + 1`. The progressive marker
+    /// gives the fixed index 169.
+    function _versionGindex(uint256 stateDepth) private pure returns (uint256) {
+        if (stateDepth == PROGRESSIVE_STATE_DEPTH) return PROGRESSIVE_VERSION_GINDEX;
+        return (((uint256(1) << stateDepth) + FORK_FIELD_INDEX) * 4) + 1;
+    }
+
+    /// @dev A layout value of the configuration: a depth from 1 to `MAX_STATE_DEPTH`, or the progressive marker.
+    function _requireLayout(uint8 layout) private pure {
+        if (layout == 0 || (layout > MAX_STATE_DEPTH && layout != PROGRESSIVE_STATE_DEPTH)) {
+            revert StateDepthOutOfRange(layout);
         }
     }
 
@@ -582,9 +622,7 @@ contract BeaconForkGate is IDepositGate {
         uint256 word;
         for (uint256 i = 0; i < versions.length; i++) {
             SupportedVersion memory entry = versions[i];
-            if (entry.stateDepth == 0 || entry.stateDepth > MAX_STATE_DEPTH) {
-                revert StateDepthOutOfRange(entry.stateDepth);
-            }
+            _requireLayout(entry.stateDepth);
             for (uint256 j = 0; j < i; j++) {
                 if (versions[j].version == entry.version) revert DuplicateSupportedVersion(entry.version);
             }
@@ -602,7 +640,7 @@ contract BeaconForkGate is IDepositGate {
 
     function _maskOf(uint8[] memory depths) private pure returns (uint256 mask) {
         for (uint256 i = 0; i < depths.length; i++) {
-            if (depths[i] == 0 || depths[i] > MAX_STATE_DEPTH) revert StateDepthOutOfRange(depths[i]);
+            _requireLayout(depths[i]);
             mask |= uint256(1) << depths[i];
         }
     }
