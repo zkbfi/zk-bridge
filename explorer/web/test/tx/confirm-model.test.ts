@@ -37,11 +37,11 @@ describe("buildConfirmView", () => {
     expect(view.blockedReason).toBeNull();
   });
 
-  it("shows the delivery fee, its label, the maximum that the runner can take, the cost lines and the data source", async () => {
+  it("shows the delivery fee, its label, the maximum that the tip can take, the cost lines and the data source", async () => {
     const step = await relayStep({ mode: "percentage" });
     const view = buildConfirmView(step);
     expect(view.delivery?.certaintyLabel).toBe("exact");
-    expect(view.delivery?.runnerMaximum).toMatch(/^The runner can take at most [\d.]+ zkbUSDC\./);
+    expect(view.delivery?.tipMaximum).toMatch(/^The tip can take at most [\d.]+ zkbUSDC\./);
     expect(view.delivery?.costLines.map((line) => line.label)).toEqual(["Gas cost", "Proof cost", "Margin"]);
     // The delivery runs on PulseChain, so its cost is in PLS, not in the ETH of the chain that the transfer leaves.
     for (const line of view.delivery?.costLines ?? []) expect(line.text).toMatch(/ PLS \(estimate: /);
@@ -49,10 +49,11 @@ describe("buildConfirmView", () => {
     expect(view.delivery?.baseFee).toContain("base fee 7 gwei");
     expect(view.delivery?.directorLines.map((line) => line.label)).toEqual(["Recipient after the fee", "Settings", "Limit", "Multiplier"]);
     expect(view.delivery?.directorLines[0]?.text).toBe(receiver);
+    expect(view.delivery?.directorLines[1]?.text).toBe("8 (percentage of the transfer; flags MULTIPLIER_OF_TOTAL)");
     expect(view.functionSignature).toBe("relayTokensAndCall(address,address,uint256,bytes)");
   });
 
-  it("shows the router, the tip mode, the tip now and its maximum, and the two facts about the runner", async () => {
+  it("shows the router, the tip mode, the tip now and its maximum, and the facts about who delivers", async () => {
     const view = buildConfirmView(await relayStep({ mode: "percentage" }));
     const delivery = view.delivery!;
     expect(delivery.routerText).toBe(getAddress(FIXTURE_PAIR.second.contracts.deliveryRouter!));
@@ -60,9 +61,9 @@ describe("buildConfirmView", () => {
     expect(delivery.tipMode).toBe("percentage of the transfer");
     // The router receives 250 less 0.1 percent at each end: 249.50025. The tip is 0.1 percent of that, cut to the unit.
     expect(delivery.tipNow).toBe("0.2495 zkbUSDC (exact)");
-    expect(delivery.runnerMaximum).toBe("The runner can take at most 0.24975 zkbUSDC. Everything else goes to the recipient.");
-    expect(delivery.runnerNotes.join(" ")).toMatch(/Only one whitelisted runner can collect tips through a router/);
-    expect(delivery.runnerNotes.join(" ")).toMatch(/anyone else calls the bridge directly.*no tip is paid.*recipient then gets the whole amount/);
+    expect(delivery.tipMaximum).toBe("The tip can take at most 0.24975 zkbUSDC. Everything else goes to the recipient.");
+    expect(delivery.tipNotes.join(" ")).toMatch(/Anyone can deliver through the delivery router.*reward address.*copied delivery gains the copier nothing/);
+    expect(delivery.tipNotes.join(" ")).toMatch(/anyone calls the bridge directly to deliver, without the router, no tip is paid.*recipient then gets the whole amount/);
   });
 
   it("names the tip now as an estimate, with its maximum, for a gas multiplier", async () => {
@@ -111,7 +112,7 @@ describe("buildConfirmView", () => {
     const approval = buildConfirmView(draft.steps[0]!);
     expect(approval.functionSignature).toBe("approve(address,uint256)");
     expect(approval.bridgeFees?.appliesTo).toBe("paid by the relay that follows this allowance");
-    expect(approval.delivery?.runnerMaximum).toMatch(/The runner can take at most/);
+    expect(approval.delivery?.tipMaximum).toMatch(/The tip can take at most/);
     expect(approval.blockedReason).toBeNull();
     expect(buildConfirmView(draft.steps[1]!).bridgeFees?.appliesTo).toBe("paid by this transaction");
   });

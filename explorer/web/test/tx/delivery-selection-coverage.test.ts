@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FEE_SETTING, senderPriceOfToken } from "@zk-bridge/shared";
+import { FIXED_FEE, senderPriceOfToken, UNWRAP } from "@zk-bridge/shared";
 import { selectDelivery, DEFAULT_GAS_MULTIPLIER, DEFAULT_MARGIN_RATE, type DeliverySelectionInput } from "../../src/tx/delivery-selection";
 import { buildDeliveryReport } from "../helpers";
 
@@ -30,14 +30,14 @@ describe("selectDelivery: the payout and the failures of the arithmetic", () => 
   it("sets the unwrap bit with the fixed fee bit when a fixed tip pays out the native coin", () => {
     const selection = selectDelivery(input({ mode: "fixed", fixedAmount: 5n * 10n ** 17n, payout: "native" }), ROUTERS);
     if (selection.kind !== "available") throw new Error(selection.reason);
-    expect(selection.director.settings).toBe(FEE_SETTING.fixedFee | FEE_SETTING.unwrap);
+    expect(selection.director.settings).toBe(FIXED_FEE | UNWRAP);
     expect(selection.director.limit).toBe(5n * 10n ** 17n);
   });
 
   it("sets only the fixed fee bit when a fixed tip pays out the token", () => {
     const selection = selectDelivery(input({ mode: "fixed", fixedAmount: 5n * 10n ** 17n, payout: "token" }), ROUTERS);
     if (selection.kind !== "available") throw new Error(selection.reason);
-    expect(selection.director.settings).toBe(FEE_SETTING.fixedFee);
+    expect(selection.director.settings).toBe(FIXED_FEE);
   });
 
   it("says that the transfer is too small when the delivery costs more than the transfer", () => {

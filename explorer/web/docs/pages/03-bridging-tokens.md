@@ -61,7 +61,7 @@ The interface shows both transactions in full before your wallet asks you to sig
 
 The bridge charges a fee on PulseChain only. Ethereum charges no fee. The fee falls over time and has no administrator. The page Fees explained has the schedule.
 
-The interface also tips a runner by default, at 0.1 percent of the transfer. This tip is separate from the bridge fee. The runner keeps it as payment for the delivery. You can edit the tip or remove it. The wrap route carries no tip.
+The interface also adds a tip for delivery by default, at 0.1 percent of the transfer. This tip is separate from the bridge fee. The delivery router pays it to its reward address, as payment for the delivery. You can edit the tip or remove it. The wrap route carries no tip.
 
 The recipient receives the amount after the bridge fee. The feed shows this net amount.
 

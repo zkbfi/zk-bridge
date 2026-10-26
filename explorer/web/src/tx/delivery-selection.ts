@@ -2,16 +2,16 @@
  * The tip for delivery. It turns the form inputs and the indexer report into one fee director, with every label that
  * the page shows: exact or estimate, the guaranteed maximum, the cost lines and the data source. The arithmetic lives in
  * `@zk-bridge/shared` (`buildFeeSuggestions`, `describeFee`); this file only picks the mode and adds the maximum that
- * the runner can take from the amount that is still in the transfer.
+ * the tip can take from the amount that is still in the transfer.
  */
 import type { Address } from "viem";
 import {
   buildFeeSuggestions,
   defaultTip,
   describeFee,
-  FEE_SETTING,
   maximumFee,
   RATE_SCALE,
+  settingsOf,
   type DeliveryCostReport,
   type FeeDescription,
   type FeeDirector,
@@ -41,7 +41,7 @@ export type DeliverySelectionInput = {
   readonly senderPrice: SenderPrice | null;
   readonly payout: PayoutKind;
   readonly report: DeliveryCostReport;
-  /** The priority fee that the runner pays, in wei per gas. */
+  /** The priority fee that the deliverer pays, in wei per gas. */
   readonly priorityFeeWei: bigint;
   /** The share of the transfer for the percentage mode, scaled by 1e18. */
   readonly percentageRate: bigint;
@@ -65,8 +65,8 @@ export type DeliverySelection = DeliveryRouters & {
   readonly director: FeeDirector;
   readonly description: FeeDescription;
   readonly suggestions: FeeSuggestions;
-  /** The most that the runner can take, in base units of the token. For a gas based tip it is the limit. */
-  readonly maximumRunnerTake: bigint;
+  /** The most that the tip can take, in base units of the token. For a gas based tip it is the limit. */
+  readonly maximumTip: bigint;
   readonly token: FeeToken;
   readonly baseFeeCeilingWei: bigint | null;
 };
@@ -79,8 +79,6 @@ export const DEFAULT_MARGIN_RATE = RATE_SCALE / 10n;
 
 /** The default gas multiplier: 1.2. */
 export const DEFAULT_GAS_MULTIPLIER = (RATE_SCALE * 12n) / 10n;
-
-const payoutBits = (payout: PayoutKind): bigint => (payout === "native" ? FEE_SETTING.unwrap : 0n);
 
 const needsPrice = (symbol: string): DeliveryUnavailable => ({
   kind: "unavailable",
@@ -95,7 +93,7 @@ const directorOf = (input: DeliverySelectionInput, suggestions: FeeSuggestions):
     return { ...defaultTip(input.recipient, input.payout), multiplier: input.percentageRate };
   }
   if (input.mode === "fixed" && input.fixedAmount !== null) {
-    return { recipient: input.recipient, settings: FEE_SETTING.fixedFee | payoutBits(input.payout), limit: input.fixedAmount, multiplier: 0n };
+    return { recipient: input.recipient, settings: settingsOf({ mode: "fixed", payout: input.payout }), limit: input.fixedAmount, multiplier: 0n };
   }
   const option = input.mode === "fixed" ? suggestions.fixed : suggestions.gasMultiplier;
   return option.kind === "available" ? option.director : { kind: "unavailable", reason: option.reason };
@@ -143,7 +141,7 @@ export const selectDelivery = (input: DeliverySelectionInput, routers: DeliveryR
       director,
       description,
       suggestions,
-      maximumRunnerTake: maximumFee(director, input.transferValueAtMost),
+      maximumTip: maximumFee(director, input.transferValueAtMost),
       token,
       baseFeeCeilingWei: input.baseFeeCeilingWei,
       ...routers,

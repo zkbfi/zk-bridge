@@ -7,7 +7,7 @@ Most users never read this page. It is for operators who want to make proofs or 
 You need this page in three cases.
 
 - You want to run the proof publisher, which makes and shares light client proofs.
-- You want to run a delivery runner, which delivers transfers and earns tips.
+- You want to run a delivery runner, which delivers transfers through a delivery router.
 - You run your own remote graphics processor for proofs.
 
 You do not need a bot to use the bridge. You only need a wallet.
@@ -33,6 +33,8 @@ For each transfer, the runner reads the tip. It compares the tip with its own ga
 The runner simulates every transaction first. It never sends a transaction that would revert. It holds a wallet on the destination chain.
 
 ## How the runner treats tips
+
+Anyone can deliver through a delivery router. The router pays every tip to its reward address, not to the wallet that delivers. The runner earns the tip only when the reward address of the router is its own. Check the reward address of a router before you run a runner against it.
 
 The runner skips transfers with no tip. You can change this with the setting `deliverWithoutOffer`. The default is off.
 

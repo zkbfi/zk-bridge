@@ -66,7 +66,7 @@ Some transfers end in a different state. The page How the bridge works explains 
 
 Anyone can deliver a covered transfer. A delivery needs a proof and costs gas on the destination chain.
 
-A person or a program called a runner often does this work for a tip. The interface tips the runner by default, at 0.1 percent of the transfer. You can edit the tip or remove it. The page Fees explained shows how the tip works. A direct delivery by anyone else pays no tip, and the recipient gets the whole amount.
+Anyone can do this work. A person or a program called a runner often does it. The interface adds a tip by default, at 0.1 percent of the transfer. The delivery router pays the tip to its own reward address. You can edit the tip or remove it. The page Fees explained shows how the tip works. A direct delivery on the bridge, without the router, pays no tip, and the recipient gets the whole amount.
 
 If nobody delivers your transfer, you can deliver it yourself. The terminal dashboard has an action for this. The web interface is meant to offer the same action.
 

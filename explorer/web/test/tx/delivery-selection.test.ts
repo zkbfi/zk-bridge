@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultTip, feeModeOf, FEE_SETTING, senderPriceOfToken } from "@zk-bridge/shared";
+import { defaultTip, feeModeOf, requestedPayoutOf, senderPriceOfToken, settingFlagsOf, settingsOf } from "@zk-bridge/shared";
 import { selectDelivery, DEFAULT_GAS_MULTIPLIER, DEFAULT_MARGIN_RATE, type DeliverySelectionInput } from "../../src/tx/delivery-selection";
 import { buildDeliveryReport } from "../helpers";
 
@@ -44,7 +44,7 @@ describe("selectDelivery", () => {
     expect(selection.director).toEqual(defaultTip(RECIPIENT));
     expect(selection.description.certainty).toBe("exact");
     expect(selection.description.nowUnits).toBe(10n ** 17n);
-    expect(selection.maximumRunnerTake).toBe(10n ** 17n);
+    expect(selection.maximumTip).toBe(10n ** 17n);
   });
 
   it("needs no price for a percentage tip, and leaves the cost lines out when no price is known", () => {
@@ -63,15 +63,16 @@ describe("selectDelivery", () => {
   });
 
   it("sets the unwrap bit when the payout is the native coin", () => {
-    expect(available({ payout: "native" }).director.settings & FEE_SETTING.unwrap).toBe(FEE_SETTING.unwrap);
+    expect(settingFlagsOf(available({ payout: "native" }).director.settings)).toContain("UNWRAP");
+    expect(requestedPayoutOf(available({ payout: "native" }).director.settings)).toBe("native");
   });
 
   it("labels a gas multiplier tip an estimate and states the guaranteed maximum", () => {
     const selection = available({ mode: "gas-multiplier" });
     expect(selection.description.certainty).toBe("estimate");
     expect(selection.description.certaintyLabel).toMatch(/^estimate, at most /);
-    expect(selection.maximumRunnerTake).toBe(selection.director.limit);
-    expect(selection.description.nowUnits).toBeLessThanOrEqual(selection.maximumRunnerTake);
+    expect(selection.maximumTip).toBe(selection.director.limit);
+    expect(selection.description.nowUnits).toBeLessThanOrEqual(selection.maximumTip);
   });
 
   it("works for any token: the price of the sender is folded into the multiplier", () => {
@@ -90,13 +91,13 @@ describe("selectDelivery", () => {
   it("raises the maximum when the user raises the ceiling base fee, and never lowers the estimate now", () => {
     const low = available({ mode: "gas-multiplier", baseFeeCeilingWei: 10n * GWEI });
     const high = available({ mode: "gas-multiplier", baseFeeCeilingWei: 100n * GWEI });
-    expect(high.maximumRunnerTake).toBeGreaterThan(low.maximumRunnerTake);
+    expect(high.maximumTip).toBeGreaterThan(low.maximumTip);
     expect(high.description.nowUnits).toBe(low.description.nowUnits);
   });
 
   it("states the maximum from the amount that is still in the transfer, not from the amount after the destination fee", () => {
     const selection = available({ transferValue: 99n * 10n ** 18n, transferValueAtMost: 100n * 10n ** 18n });
-    expect((100n * 10n ** 18n * selection.director.multiplier) / 10n ** 18n).toBe(selection.maximumRunnerTake);
+    expect((100n * 10n ** 18n * selection.director.multiplier) / 10n ** 18n).toBe(selection.maximumTip);
   });
 
   it("tells where the gas comes from: measured deliveries, or a default when none is measured", () => {
@@ -110,7 +111,7 @@ describe("selectDelivery", () => {
   it("follows the report: more measured deliveries with higher gas give a higher gas based estimate", () => {
     const before = available({ mode: "gas-multiplier", report: buildDeliveryReport(369, { p90Gas: 210_000n }) });
     const after = available({ mode: "gas-multiplier", report: buildDeliveryReport(369, { p90Gas: 420_000n }) });
-    expect(after.maximumRunnerTake).toBeGreaterThan(before.maximumRunnerTake);
+    expect(after.maximumTip).toBeGreaterThan(before.maximumTip);
   });
 
   it("flags a report with no coin price, so the form can say that the proof cost is left out", () => {
@@ -125,10 +126,10 @@ describe("selectDelivery", () => {
 
   it("builds a fixed tip from the typed amount with no price, and from the suggestion with one", () => {
     const typed = available({ mode: "fixed", fixedAmount: 5n * 10n ** 17n, tokenValueInWei: null, senderPrice: null });
-    expect(typed.director).toMatchObject({ settings: FEE_SETTING.fixedFee, limit: 5n * 10n ** 17n, multiplier: 0n });
+    expect(typed.director).toMatchObject({ settings: settingsOf({ mode: "fixed" }), limit: 5n * 10n ** 17n, multiplier: 0n });
     expect(typed.description.certainty).toBe("exact");
     const suggested = available({ mode: "fixed" });
-    expect(suggested.maximumRunnerTake).toBe(suggested.director.limit);
+    expect(suggested.maximumTip).toBe(suggested.director.limit);
   });
 
   it("carries the router of the relay and the router of the deployment, so the dialog can mark a different one", () => {

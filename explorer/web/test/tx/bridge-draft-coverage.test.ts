@@ -1,6 +1,6 @@
 import { getAddress } from "viem";
 import { describe, expect, it } from "vitest";
-import { defaultTip, FEE_SETTING } from "@zk-bridge/shared";
+import { defaultTip, requestedPayoutOf, UNWRAP } from "@zk-bridge/shared";
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS, type DeliveryOptions } from "../../src/tx/bridge-draft";
 import type { BridgeFormValues } from "../../src/tx/bridge-steps";
@@ -124,8 +124,14 @@ describe("computeBridgeDraft: the payout and the failures of the planner", () =>
     const form = values({ token: `first:${weth.address}`, amount: "2" });
     const native = computeBridgeDraft(form, options({ payoutNative: true }), wrapped);
     const plain = computeBridgeDraft(form, options({ payoutNative: false }), wrapped);
-    expect(native.delivery!.director.settings & FEE_SETTING.unwrap).toBe(FEE_SETTING.unwrap);
-    expect(plain.delivery!.director.settings & FEE_SETTING.unwrap).toBe(0n);
+    expect(requestedPayoutOf(native.delivery!.director.settings)).toBe("native");
+    expect(requestedPayoutOf(plain.delivery!.director.settings)).toBe("token");
+  });
+
+  it("never offers the native coin for a token that is not the wrapped native token, even when the option is set", async () => {
+    const draft = computeBridgeDraft(values(), options({ payoutNative: true }), await data());
+    expect(draft.status).toBe("ready");
+    expect(draft.delivery!.director.settings & UNWRAP).toBe(0n);
   });
 
   it("blocks the draft with a sentence, and does not throw, when a fixed tip is above the range of the director", async () => {

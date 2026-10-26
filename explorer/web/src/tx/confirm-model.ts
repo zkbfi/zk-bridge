@@ -2,14 +2,14 @@
  * What the confirm dialog shows before the wallet opens. The call is decoded from the calldata itself, not taken from
  * the plan, and the two must agree. When they do not, the dialog blocks the signature.
  */
-import { decodeFeeDirector, feeModeOf, TIP_MODE_NAMES, type FeeDirector } from "@zk-bridge/shared";
+import { decodeFeeDirector, feeModeOf, settingFlagsOf, TIP_MODE_NAMES, type FeeDirector } from "@zk-bridge/shared";
 import { formatUnits, formatRateAsPercent } from "@terminal/format/amounts";
 import type { RouterAddressesReading } from "@terminal/chain/live-reads";
 import { decodeKnownCall } from "@terminal/tx/decode";
 import type { DisplayArgument } from "@terminal/tx/plan";
 import { decodeFunctionData, getAddress, isAddress, type AbiFunction, type Address, type Hex } from "viem";
 import type { WebStep } from "./bridge-steps";
-import { NO_ROUTER_NOTICE, RUNNER_NOTES, routerWarningOf } from "./tip-copy";
+import { NO_ROUTER_NOTICE, TIP_NOTES, routerWarningOf } from "./tip-copy";
 import { confirmableAbis } from "./web-abis";
 
 /** One labelled line of the dialog. */
@@ -49,10 +49,10 @@ export type DeliveryView = {
   readonly certaintyLabel: string;
   readonly summary: string;
   readonly formula: string;
-  /** The most that the runner can take, as a sentence with the amount. */
-  readonly runnerMaximum: string;
-  /** What the runner and a direct delivery mean for the tip: one whitelisted runner, no tip on a direct delivery. */
-  readonly runnerNotes: readonly string[];
+  /** The most that the tip can take, as a sentence with the amount. */
+  readonly tipMaximum: string;
+  /** What the router and a direct delivery mean for the tip: anyone can deliver, the tip goes to the reward address, no tip on a direct delivery. */
+  readonly tipNotes: readonly string[];
   readonly costLines: readonly ConfirmLine[];
   readonly dataSource: string;
   readonly baseFee: string;
@@ -82,11 +82,17 @@ const withSymbol = (units: bigint, token: { readonly symbol: string; readonly de
   `${formatUnits(units, token.decimals)} ${token.symbol}`;
 
 
+/** The names of the flags that the settings set, as a suffix such as `; flags UNWRAP, FIXED_FEE`. Empty when no flag is set. */
+const flagsText = (settings: bigint): string => {
+  const flags = settingFlagsOf(settings);
+  return flags.length === 0 ? "" : `; flags ${flags.join(", ")}`;
+};
+
 const directorLinesOf = (director: FeeDirector, token: { readonly symbol: string; readonly decimals: number }): readonly ConfirmLine[] => {
   const mode = feeModeOf(director.settings);
   return [
     { label: "Recipient after the fee", text: getAddress(director.recipient) },
-    { label: "Settings", text: `${director.settings} (${TIP_MODE_NAMES[mode]})` },
+    { label: "Settings", text: `${director.settings} (${TIP_MODE_NAMES[mode]}${flagsText(director.settings)})` },
     { label: "Limit", text: `${director.limit} base units (${withSymbol(director.limit, token)})` },
     { label: "Multiplier", text: `${director.multiplier} (${mode === "share" ? `${formatRateAsPercent(director.multiplier)} of the value` : `${formatUnits(director.multiplier, 18)} times the gas price`})` },
   ];
@@ -153,8 +159,8 @@ const deliveryViewOf = (step: WebStep, routerAddresses: RouterAddressesReading |
     ...routerAddressesViewOf(routerAddresses),
     tipMode: TIP_MODE_NAMES[description.mode],
     tipNow: description.summary,
-    runnerMaximum: `The runner can take at most ${withSymbol(delivery.maximumRunnerTake, token)}. Everything else goes to the recipient.`,
-    runnerNotes: RUNNER_NOTES,
+    tipMaximum: `The tip can take at most ${withSymbol(delivery.maximumTip, token)}. Everything else goes to the recipient.`,
+    tipNotes: TIP_NOTES,
     costLines: description.breakdown.map((line) => ({
       label: line.label,
       text: `${formatUnits(line.amountWei, 18)} ${native} (estimate: ${line.note})`,

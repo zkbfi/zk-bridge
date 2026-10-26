@@ -81,7 +81,7 @@ const parseAmountText = (text: string, decimals: number): bigint => {
 const explainRouterReceiver = (argument: DisplayArgument, input: { chainName: string; recipient: Address; deployed: boolean }): DisplayArgument => {
   if (argument.name !== "receiver") return argument;
   const owner = input.deployed ? "delivery router" : "router (not the default delivery router)";
-  return { ...argument, meaning: `${owner} on ${input.chainName}: pays its one runner the tip, then sends the rest to ${input.recipient}` };
+  return { ...argument, meaning: `${owner} on ${input.chainName}: pays the tip to its reward address, then sends the rest to ${input.recipient}` };
 };
 
 /**
@@ -112,7 +112,9 @@ export const planBridgeSteps = (input: PlanBridgeInput): readonly WebStep[] => {
   }
 
   if (isNative) throw new PlanInputError("The wrap route carries no call data, so it cannot carry a tip.");
-  const data = encodeDirectorFor(delivery.director, context.pair, delivery.router);
+  // The wrap route threw above, so a token is chosen here. Its counterpart is the token that the router receives.
+  const destinationToken = (token as TokenInfo).counterpart;
+  const data = encodeDirectorFor(delivery.director, context.pair, { router: delivery.router, destination: destinationChain, destinationToken });
   const deployed = getAddress(delivery.router) === getAddress(delivery.defaultRouter);
   const steps = buildBridgeSteps({ ...values, receiver: delivery.router, mode: "call", data }, tokens, context);
   const adjusted = steps.map((step): FlowStep => ({

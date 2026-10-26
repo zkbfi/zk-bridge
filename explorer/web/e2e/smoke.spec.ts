@@ -33,7 +33,7 @@ test("search jumps to a view, the bridge form tips by default, and the confirm d
   // The tip is on by default at 0.1 percent. Nothing to turn on.
   await expect(form.getByRole("radio", { name: /Percentage of the amount/ })).toBeChecked();
   await expect(form.getByTestId("delivery-summary")).toContainText("(exact)");
-  await expect(form.getByTestId("tip-runner-notes")).toContainText("Only one whitelisted runner");
+  await expect(form.getByTestId("tip-notes")).toContainText("Anyone can deliver through the delivery router");
   await form.getByLabel(/^Your coin price/).fill("3000");
   await expect(form.getByTestId("delivery-data-source")).toContainText("measured from 40 recent deliveries, p90");
   await shoot(page, "bridge-form-delivery-fee");
@@ -42,11 +42,11 @@ test("search jumps to a view, the bridge form tips by default, and the confirm d
   const dialog = page.getByRole("dialog", { name: "Review before you sign" });
   // The first step is the allowance. It already shows the fees of the relay that follows.
   await expect(dialog.getByText("Step 1 of 2")).toBeVisible();
-  await expect(dialog.getByTestId("confirm-runner-maximum")).toContainText("The runner can take at most");
+  await expect(dialog.getByTestId("confirm-tip-maximum")).toContainText("The tip can take at most");
   await expect(dialog.getByTestId("confirm-tip-now")).toContainText("(exact)");
   await dialog.getByRole("button", { name: "Send to wallet" }).click();
   await expect(dialog.getByText("Step 2 of 2")).toBeVisible();
-  await expect(dialog.getByTestId("confirm-runner-maximum")).toContainText("The runner can take at most");
+  await expect(dialog.getByTestId("confirm-tip-maximum")).toContainText("The tip can take at most");
   await shoot(page, "confirm-dialog");
   await dialog.getByRole("button", { name: "Send to wallet" }).click();
   await expect(dialog.getByText(/Done\./)).toBeVisible();

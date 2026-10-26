@@ -1,6 +1,6 @@
 import { decodeFunctionData, encodeFunctionData, erc20Abi, getAddress, parseUnits } from "viem";
 import { describe, expect, it } from "vitest";
-import { decodeFeeDirector, encodeFeeDirector, feeModeOf, senderPriceOfToken, tokenMediatorAbi, wETHOmnibridgeRouterAbi } from "@zk-bridge/shared";
+import { decodeFeeDirector, encodeFeeDirector, feeModeOf, senderPriceOfToken, settingsOf, tokenMediatorAbi, wETHOmnibridgeRouterAbi } from "@zk-bridge/shared";
 import { buildBridgeSteps } from "@terminal/app/actions";
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import { PlanInputError, planClaim, planSendMessage, planWrapAndRelay } from "@terminal/tx/plan";
@@ -107,7 +107,7 @@ describe("planBridgeSteps with a tip", () => {
     const delivery = deliveryFor("percentage");
     const [relay] = planBridgeSteps({ values: values(), tokens, context, delivery });
     expect(relay!.plan.data).toBe(
-      encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokensAndCall", args: [usdc.address, deliveryRouter, parseUnits("250", 6), encodeFeeDirector(delivery.director, { router: deliveryRouter, protectedAddresses: [] })] }),
+      encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokensAndCall", args: [usdc.address, deliveryRouter, parseUnits("250", 6), encodeFeeDirector(delivery.director, { router: deliveryRouter, protectedAddresses: [], destinationToken: usdc.counterpart, destinationWrappedNative: FIXTURE_PAIR.second.contracts.wrappedNative })] }),
     );
     const decoded = decodeFunctionData({ abi: tokenMediatorAbi, data: relay!.plan.data });
     const director = decodeFeeDirector(decoded.args![3] as `0x${string}`);
@@ -117,11 +117,11 @@ describe("planBridgeSteps with a tip", () => {
     expect(relay!.disclosure.delivery).toBe(delivery);
   });
 
-  it("explains in the arguments that the receiver is the delivery router, and that only its runner is paid", async () => {
+  it("explains in the arguments that the receiver is the delivery router, and that the tip goes to its reward address", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
     const [relay] = planBridgeSteps({ values: values(), tokens, context, delivery: deliveryFor() });
     const argument = relay!.plan.arguments.find((candidate) => candidate.name === "receiver");
-    expect(argument?.meaning).toMatch(/^delivery router on PulseChain: pays its one runner the tip/);
+    expect(argument?.meaning).toMatch(/^delivery router on PulseChain: pays the tip to its reward address/);
   });
 
   it("marks a router that is not the default delivery router", async () => {
@@ -131,6 +131,13 @@ describe("planBridgeSteps with a tip", () => {
     const [relay] = planBridgeSteps({ values: values(), tokens, context, delivery });
     expect(relay!.plan.arguments.find((candidate) => candidate.name === "receiver")?.meaning).toMatch(/^router \(not the default delivery router\) on PulseChain/);
     expect(getAddress(decodeFunctionData({ abi: tokenMediatorAbi, data: relay!.plan.data }).args![1] as string)).toBe(other);
+  });
+
+  it("refuses a hand written unwrap request for a token that is not the wrapped native token", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+    const base = deliveryFor();
+    const delivery = { ...base, director: { ...base.director, settings: settingsOf({ mode: "share", payout: "native" }) } };
+    expect(() => planBridgeSteps({ values: values(), tokens, context, delivery })).toThrow(/unwrapping works only for the wrapped native token/);
   });
 
   it("refuses a tip on the wrap route, which carries no call data", async () => {

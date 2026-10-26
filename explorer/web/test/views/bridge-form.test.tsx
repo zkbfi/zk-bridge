@@ -58,15 +58,16 @@ describe("the bridge form: fees before any signature", () => {
     expect(screen.getByLabelText("Percentage of the amount")).toHaveValue("0.1");
     const quote = await screen.findByTestId("delivery-quote");
     expect(within(quote).getByTestId("delivery-summary")).toHaveTextContent("0.2495 zkbUSDC (exact)");
-    expect(within(quote).getByTestId("runner-maximum")).toHaveTextContent("The runner can take at most 0.24975 zkbUSDC.");
+    expect(within(quote).getByTestId("tip-maximum")).toHaveTextContent("The tip can take at most 0.24975 zkbUSDC.");
     await waitFor(() => expect(screen.getByRole("button", { name: "Review transaction" })).toBeEnabled());
   });
 
-  it("explains that one whitelisted runner collects tips, and that a direct delivery pays no tip", async () => {
+  it("explains that anyone can deliver, that the tip goes to the reward address, and that a direct delivery pays no tip", async () => {
     await renderForm();
-    const notes = screen.getByTestId("tip-runner-notes");
-    expect(notes).toHaveTextContent("Only one whitelisted runner can collect tips through a router");
-    expect(notes).toHaveTextContent(/calls the bridge directly to deliver, no runner is recorded and no tip is paid. The recipient then gets the whole amount/);
+    const notes = screen.getByTestId("tip-notes");
+    expect(notes).toHaveTextContent("Anyone can deliver through the delivery router");
+    expect(notes).toHaveTextContent(/pays the tip to its reward address.*copied delivery gains the copier nothing/);
+    expect(notes).toHaveTextContent(/calls the bridge directly to deliver, without the router, no tip is paid. The recipient then gets the whole amount/);
   });
 
   it("shows the percentage, the cost lines and the data source once a coin price is known", async () => {
@@ -135,7 +136,7 @@ describe("the bridge form: fees before any signature", () => {
     const summary = await screen.findByTestId("delivery-summary");
     await waitFor(() => expect(summary).toHaveTextContent(/estimate, at most [\d.]+ WPLS\)$/));
     expect(summary).toHaveTextContent(/^about [\d.]+ WPLS now/);
-    expect(screen.getByTestId("runner-maximum")).toHaveTextContent(/at most [\d.]+ WPLS/);
+    expect(screen.getByTestId("tip-maximum")).toHaveTextContent(/at most [\d.]+ WPLS/);
   });
 
   it("raises the maximum when the user raises the ceiling", async () => {
@@ -143,9 +144,9 @@ describe("the bridge form: fees before any signature", () => {
     await userEvent.selectOptions(screen.getByLabelText("Token"), `first:${weth.address}`);
     await typeAmount("2");
     await userEvent.click(screen.getByRole("radio", { name: /Gas multiplier with a ceiling/ }));
-    const before = (await screen.findByTestId("runner-maximum")).textContent;
+    const before = (await screen.findByTestId("tip-maximum")).textContent;
     await userEvent.type(screen.getByLabelText("Ceiling base fee (gwei)"), "500");
-    await waitFor(() => expect(screen.getByTestId("runner-maximum").textContent).not.toBe(before));
+    await waitFor(() => expect(screen.getByTestId("tip-maximum").textContent).not.toBe(before));
   });
 
   it("shows the router of the deployment as the default of the advanced field, with no warning", async () => {

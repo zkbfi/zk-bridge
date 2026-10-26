@@ -39,8 +39,8 @@ describe("the confirm dialog", () => {
     expect(within(delivery).getByText(getAddress(FIXTURE_PAIR.second.contracts.deliveryRouter!))).toBeInTheDocument();
     expect(within(delivery).getByText("percentage of the transfer")).toBeInTheDocument();
     expect(within(delivery).getByTestId("confirm-tip-now")).toHaveTextContent(/\(exact\)$/);
-    expect(within(delivery).getByTestId("confirm-runner-maximum")).toHaveTextContent(/The runner can take at most/);
-    expect(within(delivery).getByTestId("confirm-runner-notes")).toHaveTextContent(/Only one whitelisted runner can collect tips.*recipient then gets the whole amount/);
+    expect(within(delivery).getByTestId("confirm-tip-maximum")).toHaveTextContent(/The tip can take at most/);
+    expect(within(delivery).getByTestId("confirm-tip-notes")).toHaveTextContent(/Anyone can deliver through the delivery router.*recipient then gets the whole amount/);
     expect(within(delivery).queryByTestId("confirm-router-warning")).toBeNull();
     expect(within(delivery).getByText("Gas cost")).toBeInTheDocument();
     expect(within(delivery).getByText("Proof cost")).toBeInTheDocument();

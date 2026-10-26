@@ -1,6 +1,6 @@
 import { Box, Flex, Table, Text, chakra } from "@chakra-ui/react";
 import { getAddress, isAddress } from "viem";
-import { RUNNER_NOTES, routerWarningOf } from "../tx/tip-copy";
+import { TIP_NOTES, routerWarningOf } from "../tx/tip-copy";
 import { formatUnits } from "../ui/format";
 import type { BridgeDraft, DeliveryOptions, TipChoice, TipStatus } from "../tx/bridge-draft";
 import { Field, Notice, TextInput } from "../ui/primitives";
@@ -25,7 +25,7 @@ const MODES: readonly { readonly value: TipChoice; readonly label: string; reado
 /**
  * The "Tip for delivery" part of the bridge form. The tip is on by default at 0.1 percent of the transfer. The user can
  * edit it, change the mode, or remove it. The panel shows what the user pays: the amount, whether it is exact or an
- * estimate, the most that the runner can take, the cost lines and the data behind them. When no tip can travel, the
+ * estimate, the most that the tip can take, the cost lines and the data behind them. When no tip can travel, the
  * panel says why and the page sends a plain relay.
  *
  * @param props The options, the draft and the destination chain.
@@ -59,9 +59,9 @@ const TipPanel = ({ tip, draft, options, onChange, destinationNativeSymbol, dest
   return (
     <>
       <Text fontSize="sm" color="fg.muted">
-        A tip pays the runner that delivers your transfer on {destinationName}. It is on by default at 0.1 percent. You fix it now. Nothing at delivery changes it.
+        A tip pays for the delivery of your transfer on {destinationName}. The router sends it to its reward address. It is on by default at 0.1 percent. You fix it now. Nothing at delivery changes it.
       </Text>
-      <TipRunnerNotes />
+      <TipNotes />
       <Box role="radiogroup" aria-label="How to tip for delivery" marginTop="2">
         {MODES.map((mode) => (
           <Flex key={mode.value} alignItems="center" gap="2" paddingY="1">
@@ -84,16 +84,16 @@ const TipDetails = ({ tip, draft, options, onChange, destinationNativeSymbol, de
   if (tip.kind !== "on") {
     return (
       <Text fontSize="sm" marginTop="2" data-testid="no-tip-note">
-        No tip: the page sends a plain relay. No router and no fee terms are involved, so no router and no runner can take a fee. Anyone can deliver your transfer directly on the bridge, for free, but nobody is paid to do it, so it may take longer.
+        No tip: the page sends a plain relay. No router and no fee terms are involved, so no router can take a fee. Anyone can deliver your transfer directly on the bridge, for free, but nobody is paid to do it, so it may take longer.
       </Text>
     );
   }
   return <TipFields tip={tip} draft={draft} options={options} onChange={onChange} destinationNativeSymbol={destinationNativeSymbol} destinationName={destinationName} />;
 };
 
-const TipRunnerNotes = () => (
-  <Box fontSize="sm" color="fg.muted" marginTop="1" data-testid="tip-runner-notes">
-    {RUNNER_NOTES.map((note) => (
+const TipNotes = () => (
+  <Box fontSize="sm" color="fg.muted" marginTop="1" data-testid="tip-notes">
+    {TIP_NOTES.map((note) => (
       <Text key={note}>{note}</Text>
     ))}
   </Box>
@@ -108,7 +108,7 @@ const ModeFields = ({ options, onChange }: Pick<TipFieldsProps, "options" | "onC
   if (options.mode === "percentage") {
     return (
       <Box flex="1 1 8rem">
-        <Field label="Percentage of the amount" hint="For example 0.1. The runner takes this share. The recipient gets the rest.">
+        <Field label="Percentage of the amount" hint="For example 0.1. The tip takes this share. The recipient gets the rest.">
           {(id) => <TextInput id={id} inputMode="decimal" value={options.percentText} onChange={(event) => onChange({ ...options, percentText: event.target.value })} />}
         </Field>
       </Box>
@@ -182,7 +182,7 @@ const TipFields = ({ tip, draft, options, onChange, destinationNativeSymbol, des
         <chakra.summary fontSize="sm" fontWeight="medium" cursor="pointer">
           Advanced: router
         </chakra.summary>
-        <Field label={`Router on ${destinationName}`} hint="The router that receives the relay and pays the tip. The default is the default delivery router. Its one whitelisted runner delivers.">
+        <Field label={`Router on ${destinationName}`} hint="The router that receives the relay and pays the tip. The default is the default delivery router. Anyone can deliver through it, and it pays the tip to its own reward address.">
           {(id) => (
             <TextInput id={id} spellCheck={false} autoComplete="off" value={options.routerText ?? target.router} onChange={(event) => onChange({ ...options, routerText: event.target.value })} />
           )}
@@ -213,8 +213,8 @@ const DeliveryQuote = ({ draft, destinationNativeSymbol, destinationName }: { re
       <Text fontSize="sm" color="fg.muted">
         How it is computed: {description.formula}.
       </Text>
-      <Text fontSize="sm" fontWeight="medium" marginTop="1" data-testid="runner-maximum">
-        The runner can take at most {formatUnits(delivery.maximumRunnerTake, token.decimals)} {token.symbol}.
+      <Text fontSize="sm" fontWeight="medium" marginTop="1" data-testid="tip-maximum">
+        The tip can take at most {formatUnits(delivery.maximumTip, token.decimals)} {token.symbol}.
       </Text>
       {description.certainty === "estimate" ? (
         <Text fontSize="sm" color="orange.fg">

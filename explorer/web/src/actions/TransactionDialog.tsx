@@ -113,14 +113,14 @@ const Review = ({ view, prepared, position }: ReviewProps) => {
               {view.delivery.tipNow}
             </Text>
           </DataRow>
-          <Text fontSize="sm" fontWeight="medium" data-testid="confirm-runner-maximum">
-            {view.delivery.runnerMaximum}
+          <Text fontSize="sm" fontWeight="medium" data-testid="confirm-tip-maximum">
+            {view.delivery.tipMaximum}
           </Text>
           <Text fontSize="sm" color="fg.muted">
             It is {view.delivery.certaintyLabel}. How it is computed: {view.delivery.formula}.
           </Text>
-          <Box fontSize="sm" color="fg.muted" data-testid="confirm-runner-notes">
-            {view.delivery.runnerNotes.map((note) => (
+          <Box fontSize="sm" color="fg.muted" data-testid="confirm-tip-notes">
+            {view.delivery.tipNotes.map((note) => (
               <Text key={note}>{note}</Text>
             ))}
           </Box>

@@ -34,7 +34,7 @@ The contracts have no administrator. They have no upgrade keys, no pause and no 
 
 The fee has no authority. The schedule is fixed, and the fee recipient cannot change. No person can raise the fee or move escrowed tokens.
 
-The bridge uses no validators. A runner or a deliverer holds no trusted role for the transfer: anyone can deliver it, and the contracts check everything that they send. The delivery router names one runner to collect tips. That role decides who gets the tip. It never decides who can deliver.
+The bridge uses no validators. A runner or a deliverer holds no trusted role for the transfer: anyone can deliver it, and the contracts check everything that they send. The delivery router has no list of allowed runners. It pays every tip to one reward address that it fixes at deployment. A copied delivery gains the copier nothing.
 
 ## The deposit gate
 
