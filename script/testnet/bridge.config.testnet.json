@@ -79,7 +79,7 @@
     "depositCutoffTimestamp": "0",
     "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_943_AFTER_THE_VERIFIER_DEPLOYMENT",
     "fee": {
-      "recipient": "REPLACE_WITH_FEE_RECIPIENT_ON_943",
+      "recipient": "0x24E6cc8b82D086762Ef58fa1FF3f4d0702892718",
       "startRate": "1000000000000000",
       "stepRate": "100000000000000",
       "floorRate": "500000000000000",
