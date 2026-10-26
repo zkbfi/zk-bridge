@@ -1,5 +1,5 @@
 {
-  "source_url": "http (Sepolia beacon node, host not recorded): GET /eth/v1/beacon/light_client/finality_update",
+  "source_url": "https://lodestar-sepolia.chainsafe.io: GET /eth/v1/beacon/light_client/finality_update",
   "fetched_on": "2026-10-26",
   "response": {
     "data": {

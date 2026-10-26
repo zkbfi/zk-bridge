@@ -1,5 +1,5 @@
 {
-  "source_url": "http (beacon node of the chain, host not recorded): GET /eth/v1/config/spec",
+  "source_url": "http (one.valve.city beacon proxy, key redacted, chain 11155111): GET /eth/v1/config/spec",
   "fetched_on": "2026-10-26",
   "response": {
     "data": {
