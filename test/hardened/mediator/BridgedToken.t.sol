@@ -63,8 +63,8 @@ contract BridgedTokenTest is MediatorFixture {
 
     function test_bridgeContractIsTheMediatorAndTheMetadataIsSet() public view {
         assertEq(copy.bridgeContract(), address(mediatorB));
-        assertEq(copy.name(), "Token A (zk-bridge)");
-        assertEq(copy.symbol(), "zkTKA");
+        assertEq(copy.name(), "Token A from Chain A");
+        assertEq(copy.symbol(), "zkbTKA");
         assertEq(copy.decimals(), 18);
     }
 
@@ -78,7 +78,7 @@ contract BridgedTokenTest is MediatorFixture {
         bytes32 domain = keccak256(
             abi.encode(
                 keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-                keccak256(bytes("Token A (zk-bridge)")),
+                keccak256(bytes("Token A from Chain A")),
                 keccak256(bytes("1")),
                 block.chainid,
                 address(copy)
@@ -116,7 +116,7 @@ contract BridgedTokenTest is MediatorFixture {
         bytes32 expected = keccak256(
             abi.encode(
                 keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-                keccak256(bytes("Token A (zk-bridge)")),
+                keccak256(bytes("Token A from Chain A")),
                 keccak256(bytes("1")),
                 block.chainid,
                 address(copy)

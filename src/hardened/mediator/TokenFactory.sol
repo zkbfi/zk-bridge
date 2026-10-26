@@ -24,10 +24,17 @@ contract TokenFactory is ITokenParameters {
     /// @notice The only account that may call `deploy`, and the only account that may mint and burn the copies.
     address public immutable mediator;
 
+    /// @notice The name of the chain where the native tokens of this factory live. The mediator adds it to the name of
+    /// each copy. It is set in the constructor and nothing changes it.
+    string public homeChainName;
+
     Parameters private _pending;
 
-    constructor(address mediator_) {
+    /// @param mediator_ The mediator that owns the factory.
+    /// @param homeChainName_ The name of the other chain, where the native tokens live.
+    constructor(address mediator_, string memory homeChainName_) {
         mediator = mediator_;
+        homeChainName = homeChainName_;
     }
 
     /// @notice Deploys the copy of `nativeToken`. It reverts when the copy exists.

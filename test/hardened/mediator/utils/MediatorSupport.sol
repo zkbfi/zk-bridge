@@ -257,6 +257,32 @@ contract HookToken is ERC20 {
 /// @notice A contract that cannot receive the native coin.
 contract CoinRefuser {}
 
+/// @notice A receiver that burns all the gas that it is given, then fails.
+contract GasBurner {
+    receive() external payable {
+        while (true) {}
+    }
+}
+
+/// @notice A receiver that reverts with data.
+contract CoinReverter {
+    error Refused();
+
+    receive() external payable {
+        revert Refused();
+    }
+}
+
+/// @notice A contract wallet that needs some gas to receive: it writes one fresh storage slot, which costs about 24,000
+/// gas, so a call with the 2,300 gas stipend fails and a call with 50,000 gas passes.
+contract ContractWallet {
+    uint256 public received;
+
+    receive() external payable {
+        received += 1;
+    }
+}
+
 /// @notice A flow limiter for tests. It refuses on command and records what the mediator passes.
 contract ScriptedMediatorLimiter is IFlowLimiter {
     error FlowRefused();
@@ -328,9 +354,14 @@ abstract contract MediatorFixture is Test {
         tokenA.approve(address(mediatorA), type(uint256).max);
     }
 
+    /// @dev The names that the mediators take for the two chains. A test sets them before it deploys the mediators.
+    string internal nameOfChainA = "Chain A";
+    string internal nameOfChainB = "Chain B";
+
     /// @dev Terms with no fee and no limiter. The fixture fills in the bridge and the remote mediator.
     function _noTerms() internal pure returns (TokenMediator.MediatorTerms memory terms) {
         terms.remoteChainId = 1;
+        terms.remoteChainName = "Chain";
     }
 
     function _deployMediators(TokenMediator.MediatorTerms memory termsA, TokenMediator.MediatorTerms memory termsB)
@@ -344,9 +375,11 @@ abstract contract MediatorFixture is Test {
         termsA.bridge = address(ambA);
         termsA.remoteMediator = predictedB;
         termsA.remoteChainId = CHAIN_B;
+        termsA.remoteChainName = nameOfChainB;
         termsB.bridge = address(ambB);
         termsB.remoteMediator = predictedA;
         termsB.remoteChainId = CHAIN_A;
+        termsB.remoteChainName = nameOfChainA;
         mediatorA = new TokenMediator(termsA);
         mediatorB = new TokenMediator(termsB);
         assertEq(address(mediatorA), predictedA);

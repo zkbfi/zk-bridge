@@ -15,7 +15,9 @@ import {ITokenMediator} from "./ITokenMediator.sol";
 /// data. The mediator calls `onTokenBridged`, and the router unwraps and sends the coin.
 ///
 /// Divergence from OmniBridge: when the receiver cannot take the coin, the router wraps it again and sends the wrapped
-/// token. OmniBridge reverts, which would leave the tokens in a router that has no owner to recover them.
+/// token. OmniBridge reverts, which would leave the tokens in a router that has no owner to recover them. The router
+/// sends the coin with a fixed gas amount (`NATIVE_SEND_GAS`), not with all its gas. A receiver that burns gas then
+/// cannot leave the router too little gas for the fallback.
 contract WETHOmnibridgeRouter {
     using SafeERC20 for IWETH;
 
@@ -29,6 +31,10 @@ contract WETHOmnibridgeRouter {
     error NotWrappedTokenSender(address sender);
     /// @notice A relay with a call needs data, because the mediator calls only when there is data.
     error EmptyData();
+
+    /// @notice The gas that the router gives the receiver of the native coin. It is enough for the `receive` function of
+    /// a smart-contract wallet, and it is a bound: a receiver cannot burn more.
+    uint256 public constant NATIVE_SEND_GAS = 50_000;
 
     /// @notice The mediator on this chain.
     ITokenMediator public immutable bridge;
@@ -70,7 +76,7 @@ contract WETHOmnibridgeRouter {
         address receiver = address(bytes20(data));
 
         WETH.withdraw(value);
-        (bool sent,) = receiver.call{value: value}("");
+        (bool sent,) = receiver.call{value: value, gas: NATIVE_SEND_GAS}("");
         if (sent) return;
         WETH.deposit{value: value}();
         WETH.safeTransfer(receiver, value);

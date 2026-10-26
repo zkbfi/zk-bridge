@@ -107,6 +107,7 @@ abstract contract WorldSupport is GateSupport, DynamicProofs {
         terms.bridge = bridge_;
         terms.remoteMediator = remoteMediator;
         terms.remoteChainId = remoteChainId;
+        terms.remoteChainName = remoteChainId == CHAIN_A ? "Chain A" : "Chain B";
     }
 
     // ---------------------------------------------------------------- proofs and delivery

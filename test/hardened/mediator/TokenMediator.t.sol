@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {FeeOnTransferToken} from "../../../src/mocks/FeeOnTransferToken.sol";
 import {BridgedToken} from "../../../src/hardened/mediator/BridgedToken.sol";
 import {TokenFactory} from "../../../src/hardened/mediator/TokenFactory.sol";
@@ -75,10 +76,41 @@ contract TokenMediatorTest is MediatorFixture {
         _bridgeAtoB(alice, address(sixDecimals), bob, 1_000_000);
 
         BridgedToken copy = BridgedToken(_copyOf(address(sixDecimals)));
-        assertEq(copy.name(), "USD Coin (zk-bridge)");
-        assertEq(copy.symbol(), "zkUSDC");
+        assertEq(copy.name(), "USD Coin from Chain A");
+        assertEq(copy.symbol(), "zkbUSDC");
         assertEq(copy.decimals(), 6);
         assertEq(address(copy), mediatorB.tokenFactory().predictAddress(CHAIN_A, address(sixDecimals)));
+    }
+
+    /// Claim: a copy is named for its native token and its home chain, in both directions. Shows: with the chains named
+    /// Ethereum (A) and PulseChain (B), the copy on chain B of `Wrapped Ether` is `Wrapped Ether from Ethereum` with the
+    /// symbol `zkbWETH`, and the copy on chain A of `Pulse Token` is `Pulse Token from PulseChain` with the symbol
+    /// `zkbPLS`. The factory holds the name. Matters: the name is the only sign of where a token came from. A wrong
+    /// name or a missing separator rule would mislead holders, and no setter can fix a name later.
+    function test_aCopyIsNamedForItsNativeTokenAndItsHomeChain() public {
+        nameOfChainA = "Ethereum";
+        nameOfChainB = "PulseChain";
+        _deployMediators(_noTerms(), _noTerms());
+        MockERC20 weth = new MockERC20("Wrapped Ether", "WETH");
+        MockERC20 pulse = new MockERC20("Pulse Token", "PLS");
+        weth.mint(alice, 10 ether);
+        pulse.mint(alice, 10 ether);
+        vm.startPrank(alice);
+        weth.approve(address(mediatorA), type(uint256).max);
+        pulse.approve(address(mediatorB), type(uint256).max);
+        vm.stopPrank();
+
+        _bridgeAtoB(alice, address(weth), bob, 1 ether);
+        BridgedToken onB = BridgedToken(mediatorB.bridgedTokenAddress(address(weth)));
+        assertEq(onB.name(), "Wrapped Ether from Ethereum");
+        assertEq(onB.symbol(), "zkbWETH");
+        assertEq(mediatorB.tokenFactory().homeChainName(), "Ethereum");
+
+        _bridgeBtoA(alice, address(pulse), bob, 1 ether);
+        BridgedToken onA = BridgedToken(mediatorA.bridgedTokenAddress(address(pulse)));
+        assertEq(onA.name(), "Pulse Token from PulseChain");
+        assertEq(onA.symbol(), "zkbPLS");
+        assertEq(mediatorA.tokenFactory().homeChainName(), "PulseChain");
     }
 
     function test_theSecondTokenGetsItsOwnCopy() public {
@@ -96,7 +128,7 @@ contract TokenMediatorTest is MediatorFixture {
         assertTrue(copyOne != copyTwo, "one copy for each token");
         assertEq(IERC20(copyOne).balanceOf(bob), 1 ether);
         assertEq(IERC20(copyTwo).balanceOf(bob), 2 ether);
-        assertEq(BridgedToken(copyTwo).name(), "Other (zk-bridge)");
+        assertEq(BridgedToken(copyTwo).name(), "Other from Chain A");
         assertEq(copyTwo, mediatorB.tokenFactory().predictAddress(CHAIN_A, address(other)));
     }
 
@@ -700,6 +732,11 @@ contract TokenMediatorTest is MediatorFixture {
 
         terms.remoteChainId = 0;
         vm.expectRevert(abi.encodeWithSelector(TokenMediator.ZeroValue.selector, "remoteChainId"));
+        new TokenMediator(terms);
+        terms.remoteChainId = CHAIN_B;
+
+        terms.remoteChainName = "";
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.ZeroValue.selector, "remoteChainName"));
         new TokenMediator(terms);
     }
 

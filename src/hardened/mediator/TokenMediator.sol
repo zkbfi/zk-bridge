@@ -64,6 +64,8 @@ contract TokenMediator is ReentrancyGuard {
     /// @param feeFloorRate The lowest rate. It must not exceed the start rate.
     /// @param feeStepPeriod The length of one step in seconds. It must not be zero when the step is not zero.
     /// @param flowLimiter The flow limiter. Zero means no limiter from the start. Nothing can set one later.
+    /// @param remoteChainName The name of the other chain, for example `Ethereum`. A bridged copy takes it in its name.
+    /// It cannot be empty and it cannot change.
     struct MediatorTerms {
         address bridge;
         address remoteMediator;
@@ -74,6 +76,7 @@ contract TokenMediator is ReentrancyGuard {
         uint256 feeFloorRate;
         uint256 feeStepPeriod;
         address flowLimiter;
+        string remoteChainName;
     }
 
     /// @dev Which side of a transfer a fee was charged on. Outgoing is the relay on the source chain. Incoming is the
@@ -141,10 +144,12 @@ contract TokenMediator is ReentrancyGuard {
     /// @notice The gas that the message bridge gives the call that deploys a bridged copy and releases tokens.
     uint256 public constant DEPLOY_GAS_LIMIT = 2_000_000;
 
-    /// @notice The suffix that a bridged copy adds to the name of its native token.
-    string public constant NAME_SUFFIX = " (zk-bridge)";
-    /// @notice The prefix that a bridged copy adds to the symbol of its native token.
-    string public constant SYMBOL_PREFIX = "zk";
+    /// @notice The text between the name of a native token and the name of its home chain, in the name of a bridged
+    /// copy. The copy of `Wrapped Ether` from Ethereum is `Wrapped Ether from Ethereum`.
+    string public constant NAME_CONNECTOR = " from ";
+    /// @notice The prefix that a bridged copy adds to the symbol of its native token, with no separator. The copy of
+    /// `WETH` is `zkbWETH`.
+    string public constant SYMBOL_PREFIX = "zkb";
 
     /// @notice The caller of a handler is not the message bridge.
     error NotBridge(address caller);
@@ -268,12 +273,13 @@ contract TokenMediator is ReentrancyGuard {
         if (largestGasLimit > bridgeMaximum) revert GasLimitAboveBridgeMaximum(largestGasLimit, bridgeMaximum);
         if (terms.remoteMediator == address(0)) revert ZeroValue("remoteMediator");
         if (terms.remoteChainId == 0) revert ZeroValue("remoteChainId");
+        if (bytes(terms.remoteChainName).length == 0) revert ZeroValue("remoteChainName");
         _requireFeeSchedule(terms);
 
         bridgeContract = IAMB(terms.bridge);
         mediatorContractOnOtherSide = terms.remoteMediator;
         remoteChainId = terms.remoteChainId;
-        tokenFactory = new TokenFactory(address(this));
+        tokenFactory = _createFactory(terms.remoteChainName);
         feeRecipient = terms.feeRecipient;
         feeStartRate = terms.feeStartRate;
         feeStepRate = terms.feeStepRate;
@@ -281,6 +287,11 @@ contract TokenMediator is ReentrancyGuard {
         feeStepPeriod = terms.feeStepPeriod;
         feeStartTime = block.timestamp;
         flowLimiter = IFlowLimiter(terms.flowLimiter);
+    }
+
+    /// @dev A function of its own, so the constructor keeps its stack small.
+    function _createFactory(string memory remoteChainName) private returns (TokenFactory) {
+        return new TokenFactory(address(this), remoteChainName);
     }
 
     /// @dev The caller must be the message bridge, passing a message from the mediator on the other chain.
@@ -830,7 +841,7 @@ contract TokenMediator is ReentrancyGuard {
         string memory baseName = bytes(name).length == 0 ? symbol : name;
         string memory baseSymbol = bytes(symbol).length == 0 ? name : symbol;
         copy = tokenFactory.deploy(
-            string.concat(baseName, NAME_SUFFIX),
+            string.concat(baseName, NAME_CONNECTOR, tokenFactory.homeChainName()),
             string.concat(SYMBOL_PREFIX, baseSymbol),
             decimals,
             remoteChainId,

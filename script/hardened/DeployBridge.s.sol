@@ -42,7 +42,10 @@ import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 /// The mediator creates its token factory inside its constructor. The factory is the first contract of the mediator,
 /// so it sits at `computeCreateAddress(mediator, 1)` and takes no deployer nonce. A chain without a wrapped native
 /// token gets no native coin router, and the fee router (which needs that token) is then refused. The fee router takes
-/// the next free offset, so the plan has no gap.
+/// the next free offset, so the plan has no gap. The fee router also needs `feeRouter.runner` (the one account that may
+/// deliver through it) and `feeRouter.rewardAddress` (the one address that receives the fees). The two are separate
+/// accounts in practice: the runner is a hot key, the reward address can be cold. The deployment reads both back from
+/// the router and refuses a mismatch.
 contract DeployBridge is Script {
     /// @notice Whether a router is deployed.
     enum RouterChoice {
@@ -62,6 +65,9 @@ contract DeployBridge is Script {
         uint64 depositCutoffTimestamp;
         address wrappedNative;
         RouterChoice feeRouter;
+        address feeRouterRunner;
+        address feeRouterRewardAddress;
+        string remoteChainName;
         FeeConfig fee;
         address flowLimiter;
         LightClientConfig lightClient;
@@ -342,7 +348,7 @@ contract DeployBridge is Script {
             deployed.wrappedRouter = _deployWrappedRouter(deployed.mediator, chain.wrappedNative);
         }
         if (chain.feeRouter == RouterChoice.Deploy) {
-            deployed.feeRouter = _deployFeeRouter(deployed.mediator, chain.wrappedNative);
+            deployed.feeRouter = _deployFeeRouter(deployed.mediator, chain.wrappedNative, chain.feeRouterRunner, chain.feeRouterRewardAddress);
         }
         vm.stopBroadcast();
 
@@ -551,7 +557,8 @@ contract DeployBridge is Script {
                     feeStepRate: chain.fee.stepRate,
                     feeFloorRate: chain.fee.floorRate,
                     feeStepPeriod: chain.fee.stepPeriodSeconds,
-                    flowLimiter: chain.flowLimiter
+                    flowLimiter: chain.flowLimiter,
+                    remoteChainName: chain.remoteChainName
                 })
             )
         );
@@ -561,8 +568,11 @@ contract DeployBridge is Script {
         return address(new WETHOmnibridgeRouter(ITokenMediator(mediator), IWETH(wrappedNative)));
     }
 
-    function _deployFeeRouter(address mediator, address wrappedNative) private returns (address) {
-        return address(new FeeRouter(ITokenMediator(mediator), IWETH(wrappedNative)));
+    function _deployFeeRouter(address mediator, address wrappedNative, address runner, address rewardAddress)
+        private
+        returns (address)
+    {
+        return address(new FeeRouter(ITokenMediator(mediator), IWETH(wrappedNative), runner, rewardAddress));
     }
 
     function _verifyLightClient(ChainConfig memory chain, address lightClient) private view {
@@ -656,6 +666,10 @@ contract DeployBridge is Script {
         if (TokenFactory(deployed.factory).mediator() != deployed.mediator) {
             revert DeploymentMismatch("factory.mediator");
         }
+        string memory homeChainName = TokenFactory(deployed.factory).homeChainName();
+        if (keccak256(bytes(homeChainName)) != keccak256(bytes(chain.remoteChainName))) {
+            revert DeploymentMismatch("factory.homeChainName");
+        }
         if (mediator.feeRecipient() != chain.fee.recipient) revert DeploymentMismatch("mediator.feeRecipient");
         if (mediator.feeStartRate() != chain.fee.startRate) revert DeploymentMismatch("mediator.feeStartRate");
         if (mediator.feeStepRate() != chain.fee.stepRate) revert DeploymentMismatch("mediator.feeStepRate");
@@ -677,6 +691,10 @@ contract DeployBridge is Script {
             FeeRouter router = FeeRouter(payable(deployed.feeRouter));
             if (address(router.bridge()) != deployed.mediator) revert DeploymentMismatch("feeRouter.mediator");
             if (address(router.wNative()) != chain.wrappedNative) revert DeploymentMismatch("feeRouter.wrappedNative");
+            if (router.runner() != chain.feeRouterRunner) revert DeploymentMismatch("feeRouter.runner");
+            if (router.rewardAddress() != chain.feeRouterRewardAddress) {
+                revert DeploymentMismatch("feeRouter.rewardAddress");
+            }
         }
     }
 
@@ -692,6 +710,7 @@ contract DeployBridge is Script {
         chain.verifier = _readAddress(json, string.concat(prefix, ".verifier"));
         chain.verifierCodeHash = _readBytes32(json, string.concat(prefix, ".verifierCodeHash"));
         chain.deployerNonce = _readUint(json, string.concat(prefix, ".deployerNonce"));
+        chain.remoteChainName = _readText(json, string.concat(prefix, ".remoteChainName"));
         chain.depositCutoffTimestamp = uint64(_readUint(json, string.concat(prefix, ".depositCutoffTimestamp")));
         chain.fee = _readFee(json, string.concat(prefix, ".fee"));
         chain.flowLimiter = vm.parseAddress(_readText(json, string.concat(prefix, ".flowLimiter")));
@@ -699,6 +718,10 @@ contract DeployBridge is Script {
         chain.feeRouter = _readRouterChoice(json, string.concat(prefix, ".deployFeeRouter"));
         if (chain.feeRouter == RouterChoice.Deploy && chain.wrappedNative == address(0)) {
             revert FeeRouterNeedsWrappedNative(chain.chainId);
+        }
+        if (chain.feeRouter == RouterChoice.Deploy) {
+            chain.feeRouterRunner = _readAddress(json, string.concat(prefix, ".feeRouter.runner"));
+            chain.feeRouterRewardAddress = _readAddress(json, string.concat(prefix, ".feeRouter.rewardAddress"));
         }
         string memory client = string.concat(prefix, ".lightClient");
         chain.lightClient.programVKey = _readBytes32(json, string.concat(client, ".programVKey"));

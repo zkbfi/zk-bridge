@@ -55,6 +55,14 @@ contract BytecodeTest is MessageScenes {
 
     /// @dev A mediator, its factory, one bridged copy, and the two routers, built on the destination bridge. The
     /// factory deploys the copy when its mediator asks, so the copy is real runtime code of the factory.
+    /// @dev Terms with no fee and no flow limiter. A function of its own keeps the stack of the caller small.
+    function _mediatorTerms() private returns (TokenMediator.MediatorTerms memory terms) {
+        terms.bridge = address(bridge);
+        terms.remoteMediator = makeAddr("remote mediator");
+        terms.remoteChainId = CHAIN_A;
+        terms.remoteChainName = "Chain A";
+    }
+
     function _mediatorContracts()
         internal
         returns (
@@ -65,25 +73,13 @@ contract BytecodeTest is MessageScenes {
             FeeRouter feeRouter
         )
     {
-        mediator = new TokenMediator(
-            TokenMediator.MediatorTerms({
-                bridge: address(bridge),
-                remoteMediator: makeAddr("remote mediator"),
-                remoteChainId: CHAIN_A,
-                feeRecipient: address(0),
-                feeStartRate: 0,
-                feeStepRate: 0,
-                feeFloorRate: 0,
-                feeStepPeriod: 0,
-                flowLimiter: address(0)
-            })
-        );
+        mediator = new TokenMediator(_mediatorTerms());
         factory = mediator.tokenFactory();
         vm.prank(address(mediator));
         copy = factory.deploy("Copy", "CPY", 18, CHAIN_A, makeAddr("native token"));
         IWETH wrapped = IWETH(address(new MockWrappedNative()));
         wethRouter = new WETHOmnibridgeRouter(ITokenMediator(address(mediator)), wrapped);
-        feeRouter = new FeeRouter(ITokenMediator(address(mediator)), wrapped);
+        feeRouter = new FeeRouter(ITokenMediator(address(mediator)), wrapped, makeAddr("runner"), makeAddr("reward address"));
     }
 
     /// @dev The runtime code of every contract that runs on both chains, with the names that the logs print. The fork

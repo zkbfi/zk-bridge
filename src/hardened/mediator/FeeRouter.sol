@@ -9,30 +9,40 @@ import {ITokenMediator} from "./ITokenMediator.sol";
 import {IWETH} from "./IWETH.sol";
 
 /// @title FeeRouter
-/// @notice An optional helper that lets an executor earn a fee for the execution of a message, with no change to the
-/// message bridge or the mediator. It is the router pattern of `gibsfinance/omnibridge`
+/// @notice An optional helper that lets one fixed executor earn a fee for the execution of a message, with no change to
+/// the message bridge or the mediator. It is the router pattern of `gibsfinance/omnibridge`
 /// (`contracts/helpers/TokenOmnibridgeBase.sol`), and it reads the same `FeeDirector`.
 /// @dev Flow. 1: a sender relays tokens with `relayTokensAndCall` to this router on the destination chain, with an
-/// encoded `FeeDirector` as data. 2: an executor calls `executeMessageWithRunner`, which stores the runner and the
+/// encoded `FeeDirector` as data. 2: the runner calls `executeMessageWithRunner` and names the reward
+/// address. The router stores the reward address and the
 /// starting gas in one slot (`RUNNER_SLOT`) and executes the message on the bridge. 3: the mediator releases the tokens
-/// to the router and calls `onTokenBridged`. 4: the router reads the slot, computes the fee, pays the runner, and
-/// pays the rest to the recipient. When no runner is stored, because someone executed the message another way, the
-/// recipient gets everything. A data field of 20 bytes is the legacy form: the address that receives the unwrapped
-/// native coin, with no fee.
+/// to the router and calls `onTokenBridged`. 4: the router reads the slot, computes the fee, pays the reward address,
+/// and pays the rest to the recipient. When no reward address is stored, because someone executed the message on the
+/// bridge directly, the recipient gets everything and the router takes no fee. A data field of 20 bytes is the legacy
+/// form: the address that receives the unwrapped native coin, with no fee.
 ///
 /// Divergences from `gibsfinance/omnibridge`.
-/// - There is no owner, no `claimTokens` and no validator filter: the bridge trusts the proof, so any account may run a
-///   message.
-/// - Any account may name a runner, so the payment of the runner never blocks the payment of the recipient: when the
-///   runner cannot receive its fee, the recipient gets the fee as well. A native coin that the recipient cannot receive
-///   is paid as the wrapped token.
+/// - There is no owner, no `claimTokens` and no validator filter. One account, the immutable `runner`, may call
+///   `executeMessageWithRunner`. This stops front-running by block builders and searchers: without it, any account
+///   could copy the call of the runner and take the fee. The bridge stays permissionless. Anyone may call
+///   `MessageBridge.executeMessage` directly. The router then sees no reward address, takes no fee, and the recipient
+///   gets everything, so the user loses nothing.
+/// - The tip does not go to the runner. The runner is the hot account that signs the transactions. It names a reward
+///   address with each call, and the call reverts unless that address equals the immutable `rewardAddress`. So a
+///   stolen runner key can run deliveries but cannot redirect the tips.
+/// - The reward address is an account that can refuse the fee, so its payment never blocks the payment of the
+///   recipient: when it cannot receive its fee, the recipient gets the fee as well. A native coin that the recipient
+///   cannot receive is paid as the wrapped token.
+/// - The runner check reads `tx.origin`, so the runner can batch many deliveries, and the block proof, in one
+///   transaction through a generic Multicall3 contract (`aggregate3` with `allowFailure`). The router knows nothing about
+///   batching. A failed call never reverts the others.
 /// - The gas based fee is settled after the bridge call returns. In `gibsfinance/omnibridge` the callback measures
 ///   `startGas - gasleft()` itself. That works there because the bridge forwards all its gas. This bridge forwards
 ///   exactly the gas limit of the message, so the callback runs in a frame that started with less gas than the
 ///   router, and the difference would include the gas that the executor supplied and the bridge held back. An executor
 ///   could then raise its own fee to the cap at no cost. So for a gas based fee the router pays the recipient the value
 ///   less the cap, keeps the cap (`Settlement`), and `executeMessageWithRunner` computes the fee from the gas used by
-///   the whole call, pays the runner, and sends the rest of the cap to the recipient. Fixed and share fees need no gas
+///   the whole call, pays the reward address, and sends the rest of the cap to the recipient. Fixed and share fees need no gas
 ///   and are paid in the callback.
 /// - The slot uses regular storage (the compiler target has no transient storage), so it is set and cleared with the
 ///   value 1, which keeps the slot non-zero after the first use.
@@ -92,11 +102,25 @@ contract FeeRouter is ReentrancyGuard {
     /// @notice Gas added to the measured gas of a native coin payout.
     uint256 public constant NATIVE_GAS_OVERHEAD = 50_000;
 
-    /// @notice The slot that holds the runner (high 160 bits) and the starting gas (low 96 bits) while a message runs.
+    /// @notice The gas that the router gives an account that receives the native coin: the recipient or the reward address. It
+    /// is enough for the `receive` function of a smart-contract wallet, and it is a bound: a receiver cannot burn more,
+    /// so the fallback (wrap again and send the wrapped token) always has gas.
+    uint256 public constant NATIVE_SEND_GAS = 50_000;
+
+    /// @notice The slot that holds the reward address (high 160 bits) and the starting gas (low 96 bits) while a
+    /// message runs.
     bytes32 public constant RUNNER_SLOT = keccak256(abi.encode("omnibridgerouter.runner"));
 
     uint256 private constant NOT_RUNNING = 1;
 
+    /// @notice The origin of the transaction is not the runner of this router.
+    error NotRunner(address caller);
+    /// @notice The reward address of a call is not the one that this router whitelists.
+    error WrongRewardAddress(address reward);
+    /// @notice The runner of the constructor is the zero address.
+    error ZeroRunner();
+    /// @notice The reward address of the constructor is the zero address.
+    error ZeroRewardAddress();
     /// @notice The caller of `onTokenBridged` is not the mediator.
     error NotMediator(address caller);
     /// @notice A message is running already through this router.
@@ -110,37 +134,43 @@ contract FeeRouter is ReentrancyGuard {
     ITokenMediator public immutable bridge;
     /// @notice The wrapped native token that `UNWRAP` unwraps.
     IWETH public immutable wNative;
+    /// @notice The only account that may call `executeMessageWithRunner`. It does not receive the fee. It has no setter and
+    /// no owner.
+    address public immutable runner;
+    /// @notice The only address that a call may name as the reward address, and so the only address that receives a
+    /// fee. It has no setter and no owner.
+    address public immutable rewardAddress;
 
     Settlement private _settlement;
 
     /// @param bridge_ The mediator on this chain.
     /// @param wNative_ The wrapped native token of this chain.
-    constructor(ITokenMediator bridge_, IWETH wNative_) {
+    /// @param runner_ The externally owned account that runs the deliveries. It cannot be the zero address.
+    /// @param rewardAddress_ The address that receives the fees. It cannot be the zero address.
+    constructor(ITokenMediator bridge_, IWETH wNative_, address runner_, address rewardAddress_) {
+        if (runner_ == address(0)) revert ZeroRunner();
+        if (rewardAddress_ == address(0)) revert ZeroRewardAddress();
         bridge = bridge_;
         wNative = wNative_;
+        runner = runner_;
+        rewardAddress = rewardAddress_;
     }
 
     /// @notice Executes a message on the message bridge and attributes the fee of any tokens that it delivers to this
-    /// router to `runner`. Any account may call it, and `runner` need not be the caller.
-    /// @param runner The account that receives the fee.
+    /// router to the reward address. Only the runner may call it. It reverts when the delivery fails, so the runner
+    /// sees the error.
     /// @param proof The evidence that `MessageBridge.executeMessage` verifies. The router forwards it and does not read it.
-    function executeMessageWithRunner(address runner, MessageBridge.MessageProof calldata proof) external {
-        uint256 value = uint256(uint96(gasleft())) | (uint256(uint160(runner)) << 96);
-        if (value <= NOT_RUNNING) revert InvalidRunnerValue();
+    /// @param reward The reward address. It must equal `rewardAddress`.
+    function executeMessageWithRunner(MessageBridge.MessageProof calldata proof, address reward) external {
+        _requireRunnerAndReward(reward);
         if (_storedRunner() > NOT_RUNNING) revert RunnerSlotInUse();
-        _storeRunner(value);
 
+        uint256 value = _begin(reward);
         MessageBridge(address(bridge.bridgeContract())).executeMessage(proof);
-
-        Settlement memory waiting = _settlement;
-        if (waiting.held != 0) {
-            delete _settlement;
-            _settle(waiting, runner, uint256(uint96(value)) - gasleft());
-        }
-        _storeRunner(NOT_RUNNING);
+        _finish(value, reward);
     }
 
-    /// @notice The callback of the mediator. It splits the tokens between the runner and the recipient.
+    /// @notice The callback of the mediator. It splits the tokens between the reward address and the recipient.
     /// @param token The token that the mediator released to the router.
     /// @param value The amount that the mediator reports.
     /// @param data An encoded `FeeDirector`, or the 20 byte address of a native coin receiver.
@@ -160,8 +190,8 @@ contract FeeRouter is ReentrancyGuard {
         Payout payout = director.settings & UNWRAP != 0 && token == address(wNative) ? Payout.Native : Payout.Token;
         if (payout == Payout.Native) wNative.withdraw(value);
 
-        uint256 runner = _storedRunner();
-        uint256 toRecipient = runner > NOT_RUNNING ? _takeFee(token, payout, value, runner, director) : value;
+        uint256 stored = _storedRunner();
+        uint256 toRecipient = stored > NOT_RUNNING ? _takeFee(token, payout, value, director, _rewardOf(stored)) : value;
         if (toRecipient == 0) return;
         if (payout == Payout.Native) {
             _payNative(director.recipient, toRecipient);
@@ -176,7 +206,7 @@ contract FeeRouter is ReentrancyGuard {
     /// @param gasUsed The gas that the whole execution used, for a gas based fee. It is not read for a fixed or share
     /// fee.
     /// @param director The fee terms.
-    /// @return fee The fee for the runner.
+    /// @return fee The fee for the reward address.
     /// @return toRecipient The amount for the recipient.
     function feeInfo(address token, uint256 value, uint256 gasUsed, FeeDirector calldata director)
         external
@@ -196,13 +226,13 @@ contract FeeRouter is ReentrancyGuard {
     /// @dev Takes the fee in the callback when it needs no gas figure. For a gas based fee it sets the cap aside and
     /// leaves the settlement to the end of `executeMessageWithRunner`.
     /// @return toRecipient What the recipient receives now.
-    function _takeFee(address token, Payout payout, uint256 value, uint256 runner, FeeDirector memory director)
+    function _takeFee(address token, Payout payout, uint256 value, FeeDirector memory director, address reward)
         private
         returns (uint256 toRecipient)
     {
         if (!_isGasBased(director.settings)) {
             uint256 fee = _fee(value, 0, director, 0);
-            if (fee == 0 || !_tryPay(token, payout, address(uint160(runner >> 96)), fee)) return value;
+            if (fee == 0 || !_tryPay(token, payout, reward, fee)) return value;
             return value - fee;
         }
         uint256 held = director.limit > value ? value : director.limit;
@@ -219,12 +249,12 @@ contract FeeRouter is ReentrancyGuard {
         return value - held;
     }
 
-    /// @dev Pays the runner the gas based fee, and sends the rest of the held cap to the recipient.
-    function _settle(Settlement memory waiting, address runner, uint256 gasUsed) private {
+    /// @dev Pays the reward address the gas based fee, and sends the rest of the held cap to the recipient.
+    function _settle(Settlement memory waiting, uint256 gasUsed, address reward) private {
         uint256 overhead = waiting.payout == Payout.Native ? NATIVE_GAS_OVERHEAD : TOKEN_GAS_OVERHEAD;
         uint256 fee = (gasUsed + overhead) * waiting.multiplier * _gasPrice(waiting.gasPrice) / 1 ether;
         if (fee > waiting.held) fee = waiting.held;
-        if (fee > 0 && !_tryPay(waiting.token, waiting.payout, runner, fee)) fee = 0;
+        if (fee > 0 && !_tryPay(waiting.token, waiting.payout, reward, fee)) fee = 0;
         uint256 refund = waiting.held - fee;
         if (refund == 0) return;
         if (waiting.payout == Payout.Native) {
@@ -234,10 +264,42 @@ contract FeeRouter is ReentrancyGuard {
         IERC20(waiting.token).trySafeTransfer(waiting.recipient, refund);
     }
 
-    function _storedRunner() private view returns (uint256 runner) {
+    /// @dev The two checks that every execute function makes first.
+    function _requireRunnerAndReward(address reward) private view {
+        // `tx.origin`, not `msg.sender`: the runner may reach the router through a generic multicall contract, which then
+        // is `msg.sender`. The runner signs the transaction, so a copier of the call cannot pass. The reward address is
+        // immutable, so a contract that tricks the runner into a call still cannot redirect a tip.
+        // forge-lint: disable-next-line(tx-origin)
+        if (tx.origin != runner) revert NotRunner(tx.origin);
+        if (reward != rewardAddress) revert WrongRewardAddress(reward);
+    }
+
+    /// @dev Stores the reward address and the starting gas, which marks a run. Returns the stored value.
+    function _begin(address reward) private returns (uint256 value) {
+        value = uint256(uint96(gasleft())) | (uint256(uint160(reward)) << 96);
+        if (value <= NOT_RUNNING) revert InvalidRunnerValue();
+        _storeRunner(value);
+    }
+
+    /// @dev Settles a gas based fee that waits, and clears the slot. `value` is the value that `_begin` returned.
+    function _finish(uint256 value, address reward) private {
+        Settlement memory waiting = _settlement;
+        if (waiting.held != 0) {
+            delete _settlement;
+            _settle(waiting, uint256(uint96(value)) - gasleft(), reward);
+        }
+        _storeRunner(NOT_RUNNING);
+    }
+
+
+    function _rewardOf(uint256 stored) private pure returns (address) {
+        return address(uint160(stored >> 96));
+    }
+
+    function _storedRunner() private view returns (uint256 stored) {
         bytes32 slot = RUNNER_SLOT;
         assembly {
-            runner := sload(slot)
+            stored := sload(slot)
         }
     }
 
@@ -278,13 +340,13 @@ contract FeeRouter is ReentrancyGuard {
     /// @dev Pays without reverting. Tokens and coins both report whether the payee took them.
     function _tryPay(address token, Payout payout, address to, uint256 amount) private returns (bool) {
         if (payout == Payout.Token) return IERC20(token).trySafeTransfer(to, amount);
-        (bool sent,) = to.call{value: amount}("");
+        (bool sent,) = to.call{value: amount, gas: NATIVE_SEND_GAS}("");
         return sent;
     }
 
     /// @dev Sends the unwrapped coin. A receiver that refuses it gets the wrapped token.
     function _payNative(address recipient, uint256 amount) private {
-        (bool sent,) = recipient.call{value: amount}("");
+        (bool sent,) = recipient.call{value: amount, gas: NATIVE_SEND_GAS}("");
         if (sent) return;
         wNative.deposit{value: amount}();
         IERC20(address(wNative)).safeTransfer(recipient, amount);

@@ -482,6 +482,7 @@ contract MessageBridgeGapsTest is MessageScenes, DynamicProofs {
         terms.bridge = address(bridge);
         terms.remoteMediator = MessageFixtures.SENDER;
         terms.remoteChainId = CHAIN_A;
+        terms.remoteChainName = "Chain A";
         TokenMediator mediator = new TokenMediator(terms);
         MessageBridge second = _secondBridge();
 

@@ -1,6 +1,7 @@
 {
   "deployer": "@@DEPLOYER@@",
   "chainA": {
+    "remoteChainName": "PulseChain",
     "rpcAlias": "@@RPC_A@@",
     "chainId": "1",
     "verifier": "@@VERIFIER_A@@",
@@ -17,6 +18,10 @@
     "flowLimiter": "0x0000000000000000000000000000000000000000",
     "wrappedNative": "@@WRAPPED_NATIVE_A@@",
     "deployFeeRouter": "false",
+    "feeRouter": {
+      "runner": "REPLACE_WITH_THE_ONE_ACCOUNT_THAT_DELIVERS_THROUGH_THE_FEE_ROUTER_WHEN_DEPLOYED",
+      "rewardAddress": "REPLACE_WITH_THE_ADDRESS_THAT_RECEIVES_THE_FEES_OF_THE_FEE_ROUTER_WHEN_DEPLOYED"
+    },
     "lightClient": {
       "programVKey": "@@PROGRAM_VKEY@@",
       "genesisValidatorsRoot": "@@GENESIS_ROOT_B@@",
@@ -41,6 +46,7 @@
     }
   },
   "chainB": {
+    "remoteChainName": "Ethereum",
     "rpcAlias": "@@RPC_B@@",
     "chainId": "369",
     "verifier": "@@VERIFIER_B@@",
@@ -57,6 +63,10 @@
     "flowLimiter": "0x0000000000000000000000000000000000000000",
     "wrappedNative": "@@WRAPPED_NATIVE_B@@",
     "deployFeeRouter": "false",
+    "feeRouter": {
+      "runner": "REPLACE_WITH_THE_ONE_ACCOUNT_THAT_DELIVERS_THROUGH_THE_FEE_ROUTER_WHEN_DEPLOYED",
+      "rewardAddress": "REPLACE_WITH_THE_ADDRESS_THAT_RECEIVES_THE_FEES_OF_THE_FEE_ROUTER_WHEN_DEPLOYED"
+    },
     "lightClient": {
       "programVKey": "@@PROGRAM_VKEY@@",
       "genesisValidatorsRoot": "@@GENESIS_ROOT_A@@",

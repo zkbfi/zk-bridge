@@ -6,7 +6,16 @@ import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
 import {WETHOmnibridgeRouter} from "../../../src/hardened/mediator/WETHOmnibridgeRouter.sol";
 import {IWETH} from "../../../src/hardened/mediator/IWETH.sol";
 import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol";
-import {MediatorFixture, MockAMB, MockWrappedNative, RecordingReceiver, CoinRefuser} from "./utils/MediatorSupport.sol";
+import {
+    MediatorFixture,
+    MockAMB,
+    MockWrappedNative,
+    RecordingReceiver,
+    CoinRefuser,
+    GasBurner,
+    CoinReverter,
+    ContractWallet
+} from "./utils/MediatorSupport.sol";
 
 /// @notice Tests of the router that wraps the native coin on the way out and unwraps it on delivery.
 contract WETHOmnibridgeRouterTest is MediatorFixture {
@@ -91,6 +100,64 @@ contract WETHOmnibridgeRouterTest is MediatorFixture {
         assertEq(weth.balanceOf(address(refuser)), 1 ether, "paid as the wrapped token, not stranded");
         assertEq(weth.balanceOf(address(routerA)), 0);
         assertEq(address(routerA).balance, 0);
+    }
+
+    /// @dev Sends `value` of the wrapped token back to the router with `receiver` as data and delivers the message with
+    /// exactly the gas limit that the mediator asked for. Returns whether the delivery passed.
+    function _returnCoin(address receiver, uint256 value) internal returns (bool ok) {
+        vm.prank(alice);
+        routerA.wrapAndRelayTokens{value: value}(bob);
+        _deliverAtoB(_lastIndexA());
+        address copy = _copyOf(address(weth));
+        vm.startPrank(bob);
+        IERC20(copy).approve(address(mediatorB), type(uint256).max);
+        mediatorB.relayTokensAndCall(copy, address(routerA), value, abi.encodePacked(receiver));
+        vm.stopPrank();
+        uint256 index = _lastIndexB();
+        assertEq(
+            ambB.messageAt(index).gasLimit,
+            mediatorB.RELEASE_GAS_LIMIT() + mediatorB.CALLBACK_GAS_LIMIT(),
+            "the gas limit of a release with a call"
+        );
+        (ok,) = _deliverBtoA(index);
+    }
+
+    function _assertRouterHoldsNothing() internal view {
+        assertEq(weth.balanceOf(address(routerA)), 0, "no wrapped token stays in the router");
+        assertEq(address(routerA).balance, 0, "no coin stays in the router");
+    }
+
+    /// Claim: a receiver that burns all the gas it is given cannot strand the value. Shows: at exactly the gas limit of
+    /// the message, the router gives the receiver 50,000 gas, keeps the rest, wraps the coin again and sends the wrapped
+    /// token. The delivery passes and the router holds nothing. Matters: with all gas forwarded, the receiver would
+    /// leave nothing for the fallback, the callback would fail without effect, and the tokens would sit in a router
+    /// with no owner.
+    function test_aReceiverThatBurnsAllItsGasGetsTheWrappedTokenAtTheExactGasLimit() public {
+        GasBurner burner = new GasBurner();
+        assertTrue(_returnCoin(address(burner), 2 ether), "the delivery does not run out of gas");
+        assertEq(weth.balanceOf(address(burner)), 2 ether);
+        assertEq(address(burner).balance, 0);
+        _assertRouterHoldsNothing();
+    }
+
+    function test_aReceiverThatRevertsGetsTheWrappedToken() public {
+        CoinReverter reverter = new CoinReverter();
+        assertTrue(_returnCoin(address(reverter), 2 ether));
+        assertEq(weth.balanceOf(address(reverter)), 2 ether);
+        _assertRouterHoldsNothing();
+    }
+
+    function test_aContractWalletThatNeedsSomeGasGetsTheCoin() public {
+        ContractWallet wallet = new ContractWallet();
+        assertTrue(_returnCoin(address(wallet), 2 ether));
+        assertEq(address(wallet).balance, 2 ether, "the wallet took the coin with the gas it was given");
+        assertEq(wallet.received(), 1);
+        assertEq(weth.balanceOf(address(wallet)), 0);
+        _assertRouterHoldsNothing();
+    }
+
+    function test_theGasGivenToTheReceiverIsFixed() public view {
+        assertEq(routerA.NATIVE_SEND_GAS(), 50_000);
     }
 
     function test_relayTokensAndCallWrapsAndCallsTheReceiverOnTheOtherChain() public {
