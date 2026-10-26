@@ -54,6 +54,8 @@ export interface HarnessOptions {
   readonly savedSetup?: ProverSetup
   readonly environment?: Record<string, string | undefined>
   readonly openSecretStore?: ProverSetupServices['openSecretStore']
+  readonly pair?: AppServices['pair']
+  readonly tokenValuationsWei?: Readonly<Record<string, bigint>>
 }
 
 const noStartupSecrets = { privateKey: undefined, mnemonic: undefined, mnemonicPassphrase: undefined }
@@ -94,7 +96,7 @@ export async function renderApp(options: HarnessOptions) {
   }
   let quitCount = 0
   const services: AppServices = {
-    pair: FIXTURE_PAIR,
+    pair: options.pair ?? FIXTURE_PAIR,
     dataSource: options.dataSource ?? createFixtureDataSource({ now: () => FIXTURE_NOW }),
     chainAccess,
     signing,
@@ -109,6 +111,7 @@ export async function renderApp(options: HarnessOptions) {
       quitCount += 1
     },
     defaultPairId: FIXTURE_PAIR.id,
+    tokenValuationsWei: options.tokenValuationsWei ?? {},
   }
   const setup = await testRender(<App services={services} initialSigner={options.initialSigner ?? null} />, {
     width: options.width,

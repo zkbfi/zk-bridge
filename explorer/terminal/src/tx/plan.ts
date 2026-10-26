@@ -3,9 +3,11 @@
  * {@link PlannedTransaction}. Nothing here reads a chain, signs, or sends, and nothing imports the terminal library,
  * so the later web interface can reuse this file as it is.
  */
+import { encodeFeeDirector, type FeeDataSource, type FeeDescription, type FeeDirector } from '@zk-bridge/shared'
 import { encodeFunctionData, erc20Abi, getAddress, isAddress, isHex, type Address, type Hex } from 'viem'
 import { feeOf, formatRateAsPercent, formatUnits } from '../format/amounts'
 import type { ChainConfig, TokenInfo } from '../model/types'
+import type { RewardAddressReading } from '../chain/live-reads'
 import { messageBridgeAbi, tokenMediatorAbi, wrappedNativeRouterAbi } from './abis'
 
 /** One line of the argument list of a transaction, as the confirmation screen shows it. */
@@ -27,6 +29,25 @@ export interface ChargedFee {
   readonly amount: bigint
 }
 
+/** What the confirmation screen tells about the delivery fee that a relay carries. */
+export interface DeliveryFeeReview {
+  /** The router that the relay targets on the destination chain: the receiver of the relay. */
+  readonly router: Address
+  /** The fee router of the deployment on that chain. The review warns when `router` differs from it. */
+  readonly defaultRouter: Address
+  readonly routerChainName: string
+  /** The fee terms that the call data holds. */
+  readonly director: FeeDirector
+  /** The token that the fee is paid in, on the destination chain. */
+  readonly token: { readonly symbol: string; readonly decimals: number }
+  /** The amount now, the maximum and the label (`exact` or `estimate, at most X`). */
+  readonly description: FeeDescription
+  /** The gas and the base fee that the amount now uses. */
+  readonly dataSource: FeeDataSource
+  /** What the router on the destination chain says about the address that receives the tip. */
+  readonly rewardAddress: RewardAddressReading
+}
+
 /** A transaction that the dashboard offers for confirmation. It has no nonce or gas yet. */
 export interface PlannedTransaction {
   readonly title: string
@@ -43,6 +64,8 @@ export interface PlannedTransaction {
   readonly charge: ChargedFee | null
   /** Plain sentences that the confirmation screen shows below the arguments. */
   readonly notes: readonly string[]
+  /** The delivery fee of a relay that pays a runner. Absent for every other transaction. */
+  readonly deliveryFee?: DeliveryFeeReview
 }
 
 /** A named failure of input validation. The message tells the user what to fix. */
@@ -100,6 +123,11 @@ export interface RelayInput {
   readonly mode: RelayMode
   /** The current fee rate of the mediator, 1e18-scaled, as read from the chain. */
   readonly currentFeeRate: bigint
+  /**
+   * The delivery fee. The mode must be `call` with the encoded director as data, and the receiver must be the fee
+   * router. The plan refuses any other combination, so a review never shows a fee that the data does not hold.
+   */
+  readonly deliveryFee?: DeliveryFeeReview
 }
 
 /**
@@ -113,6 +141,7 @@ export function planRelay(input: RelayInput): PlannedTransaction {
   const { chain, token, receiver, amount, mode, currentFeeRate } = input
   if (amount <= 0n) throw new PlanInputError('The amount must be above zero.')
   requireAddress(receiver, 'receiver')
+  if (input.deliveryFee !== undefined) requireDeliveryFeeMatch(input.deliveryFee, receiver, mode)
   const fee = feeOf(amount, currentFeeRate)
   const charge: ChargedFee = { token, rate: currentFeeRate, amount: fee }
   const common = { chain, to: chain.contracts.tokenMediator, contractLabel: 'TokenMediator', value: 0n, charge }
@@ -154,7 +183,8 @@ export function planRelay(input: RelayInput): PlannedTransaction {
         args: [token.address, receiver, amount, mode.data],
       }),
       arguments: [tokenArgument, receiverArgument, amountArgument, bytesArgument('data', mode.data)],
-      notes: [...notes, 'The receiver gets a call to onTokenBridged with this data, even when the data is empty.'],
+      notes: [...notes, ...(input.deliveryFee === undefined ? [] : deliveryFeeNotes(input.deliveryFee)), 'The receiver gets a call to onTokenBridged with this data, even when the data is empty.'],
+      ...(input.deliveryFee === undefined ? {} : { deliveryFee: input.deliveryFee }),
     }
   }
 
@@ -307,6 +337,23 @@ export function parseAddress(text: string, name: string): Address {
   const trimmed = text.trim()
   if (!isAddress(trimmed, { strict: false })) throw new PlanInputError(`The ${name} is not an address.`)
   return getAddress(trimmed)
+}
+
+/** Refuses a delivery fee that the receiver or the call data does not carry. */
+function requireDeliveryFeeMatch(deliveryFee: DeliveryFeeReview, receiver: Address, mode: RelayMode): void {
+  if (mode.kind !== 'call') throw new PlanInputError('A delivery fee needs relayTokensAndCall.')
+  if (getAddress(receiver) !== getAddress(deliveryFee.router)) {
+    throw new PlanInputError('A delivery fee needs the router of the other chain as the receiver.')
+  }
+  if (mode.data !== encodeFeeDirector(deliveryFee.director)) throw new PlanInputError('The call data does not hold the fee terms.')
+}
+
+/** The sentences about a delivery fee. The second one repeats what `FeeRouter.sol` states about a message that no runner delivers. */
+function deliveryFeeNotes(deliveryFee: DeliveryFeeReview): string[] {
+  return [
+    `The receiver is the router ${getAddress(deliveryFee.router)} on ${deliveryFee.routerChainName}. The tokens go to ${getAddress(deliveryFee.director.recipient)} after the tip.`,
+    'The tip goes to the reward address of the fee router, not to the runner account that signs the delivery. Only the one whitelisted runner account can deliver through the router, and it receives no tip. When anyone else delivers on the bridge directly, no reward address is recorded, no tip is paid, and the recipient gets everything.',
+  ]
 }
 
 function bytesArgument(name: string, data: Hex): DisplayArgument {

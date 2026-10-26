@@ -3,6 +3,7 @@
  * snapshots. Every address here is a made-up pattern, not a deployed contract. The clock is a parameter, so a test
  * pins the time.
  */
+import type { DeliveryCostReport } from '@zk-bridge/shared'
 import { getAddress, type Address, type Hex } from 'viem'
 import { auditDifference } from '../model/audit'
 import { filterFeed } from '../model/feed-filter'
@@ -69,11 +70,11 @@ export const FIXTURE_PAIR: PairConfig = {
 /** The sample tokens: three native on Ethereum or PulseChain, and their bridged copies. */
 export const FIXTURE_TOKENS: readonly TokenInfo[] = [
   { address: address('1001'), symbol: 'USDC', decimals: 6, side: 'first', counterpart: address('2001') },
-  { address: address('2001'), symbol: 'zkUSDC', decimals: 6, side: 'second', counterpart: address('1001') },
+  { address: address('2001'), symbol: 'zkbUSDC', decimals: 6, side: 'second', counterpart: address('1001') },
   { address: address('1002'), symbol: 'WETH', decimals: 18, side: 'first', counterpart: address('2002') },
-  { address: address('2002'), symbol: 'zkWETH', decimals: 18, side: 'second', counterpart: address('1002') },
+  { address: address('2002'), symbol: 'zkbWETH', decimals: 18, side: 'second', counterpart: address('1002') },
   { address: address('2003'), symbol: 'WPLS', decimals: 18, side: 'second', counterpart: address('1003') },
-  { address: address('1003'), symbol: 'zkWPLS', decimals: 18, side: 'first', counterpart: address('2003') },
+  { address: address('1003'), symbol: 'zkbWPLS', decimals: 18, side: 'first', counterpart: address('2003') },
 ]
 
 /** A made-up account that the fixtures use as the connected account. */
@@ -187,6 +188,27 @@ export interface FixtureDataSourceInput {
   readonly now?: () => number
 }
 
+/**
+ * The sample delivery cost report of one chain. The delivery with a callback is measured (40 deliveries, p90). The
+ * other two kinds are defaults, so the sample mode shows both kinds of data source line. The base fee is 7 gwei and
+ * the native coin costs 2500 dollars, so one delivery pays 8000000000000 wei of a 0.02 dollar proof.
+ *
+ * @param chainId The chain that the report is for.
+ * @param now The clock in unix seconds. The base fee block is 12 seconds old.
+ */
+export function buildFixtureDeliveryCost(chainId: number, now: number): DeliveryCostReport {
+  return {
+    chainId,
+    baseFee: { wei: '7000000000', blockNumber: 21_000_000, timestamp: now - 12 },
+    proofCost: { usd: '0.02', nativeCoinPriceUsd: '2500', deliveriesPerProof: 1, wei: '8000000000000', isEstimate: true },
+    kinds: {
+      token_callback: { sampleCount: 40, averageGas: '185000', p90Gas: '210000', defaultGas: '300000', isDefault: false },
+      token: { sampleCount: 0, averageGas: null, p90Gas: null, defaultGas: '250000', isDefault: true },
+      message: { sampleCount: 0, averageGas: null, p90Gas: null, defaultGas: '200000', isDefault: true },
+    },
+  }
+}
+
 /** Creates a data source over the fixture data. */
 export function createFixtureDataSource(input: FixtureDataSourceInput = {}): DataSource {
   const now = input.now ?? (() => FIXTURE_NOW)
@@ -244,6 +266,9 @@ export function createFixtureDataSource(input: FixtureDataSourceInput = {}): Dat
     },
     async listTokens() {
       return FIXTURE_TOKENS
+    },
+    async getDeliveryCost(chainId) {
+      return buildFixtureDeliveryCost(chainId, now())
     },
   }
 }

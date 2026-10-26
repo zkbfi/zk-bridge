@@ -25,6 +25,11 @@ export interface UseFormOptions {
   readonly onSubmit: (values: FormValues) => void
   /** Called when the user presses Escape. */
   readonly onCancel: () => void
+  /**
+   * Called after each edit of a value. It receives the values before and after the edit and returns the values to keep,
+   * so a form can fill one field from another. It must be pure. Default: keep the edit as it is.
+   */
+  readonly onEdit?: (previous: FormValues, next: FormValues) => FormValues
   /** `off` leaves the form on screen and stops it from taking keys, for example while a request runs. */
   readonly enabled?: 'on' | 'off'
 }
@@ -40,6 +45,8 @@ export interface FormHandle {
 /** Owns the state of a form and routes keys and paste events to it, on the modal layer. */
 export function useForm(options: UseFormOptions): FormHandle {
   const { specs, onSubmit, onCancel } = options
+  const refine = (previous: FormState, next: FormState): FormState =>
+    options.onEdit === undefined ? next : { ...next, values: options.onEdit(previous.values, next.values) }
   const [state, setState] = useState<FormState>(() => createFormState(specs, options.overrides))
   const latest = useRef(state)
   latest.current = state
@@ -56,7 +63,7 @@ export function useForm(options: UseFormOptions): FormHandle {
       const handlers: Record<FormOutcome, () => void> = {
         submit: () => onSubmit(latest.current.values),
         cancel: onCancel,
-        edited: () => commit(result.state),
+        edited: () => commit(refine(latest.current, result.state)),
         moved: () => commit(result.state),
         ignored: () => undefined,
       }
@@ -68,10 +75,10 @@ export function useForm(options: UseFormOptions): FormHandle {
 
   usePaste((event) => {
     if (options.enabled === 'off') return
-    commit(applyFormPaste(specs, latest.current, new TextDecoder().decode(event.bytes)))
+    commit(refine(latest.current, applyFormPaste(specs, latest.current, new TextDecoder().decode(event.bytes))))
   })
 
-  return { state, specs, set: (name, value) => commit(setValue(latest.current, name, value)) }
+  return { state, specs, set: (name, value) => commit(refine(latest.current, setValue(latest.current, name, value))) }
 }
 
 /** The widest a field label is. */

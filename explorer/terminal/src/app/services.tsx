@@ -90,6 +90,8 @@ export interface AppServices {
   readonly quit: () => void
   /** The pair the dashboard opens on. */
   readonly defaultPairId: string
+  /** The value of one whole token in wei, by lowercase address, for delivery fee suggestions. See `config/token-valuations.ts`. */
+  readonly tokenValuationsWei: Readonly<Record<string, bigint>>
 }
 
 const ServicesContext = createContext<AppServices | null>(null)

@@ -55,6 +55,9 @@ describe('confirm before send: bridge tokens', () => {
     await openAction(app, 1)
     await app.press('TAB')
     await app.type('1')
+    await app.press('TAB') // receiver
+    await app.press('TAB') // tip for delivery
+    await app.press('ARROW_RIGHT') // no tip: a plain relay
     await app.press('RETURN')
     await app.settle(80)
     await app.press('y')
@@ -80,6 +83,9 @@ describe('confirm before send: bridge tokens', () => {
     await openAction(app, 1)
     await app.press('TAB')
     await app.type('1')
+    await app.press('TAB') // receiver
+    await app.press('TAB') // tip for delivery
+    await app.press('ARROW_RIGHT') // no tip: a plain relay
     await app.press('RETURN')
     await app.settle(80)
     expect(app.frame()).toContain('Relay USDC to the other chain')
@@ -93,7 +99,9 @@ describe('confirm before send: bridge tokens', () => {
     await app.press('TAB')
     await app.type('2.5')
     await app.press('TAB') // receiver
-    await app.press('TAB') // mode
+    await app.press('TAB') // tip for delivery
+    await app.press('ARROW_RIGHT') // no tip: a plain relay
+    await app.press('ARROW_UP') // mode, which shows once the tip is off
     await app.press('ARROW_RIGHT') // call
     await app.press('ARROW_RIGHT') // fallback
     await app.press('RETURN')

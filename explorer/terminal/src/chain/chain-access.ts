@@ -6,7 +6,7 @@
 import { createPublicClient, defineChain, http, type Address, type Hash } from 'viem'
 import type { FlowChainClient } from '../flow/transaction-flow'
 import type { ChainConfig, PairConfig, TokenInfo } from '../model/types'
-import { readChainSnapshot, type ChainSnapshotResult, type ReadClient } from './live-reads'
+import { readChainSnapshot, readRewardAddress, type ChainSnapshotResult, type ReadClient, type RewardAddressReading } from './live-reads'
 
 /** The RPC URL of a chain is not set. */
 export class MissingRpcError extends Error {
@@ -27,6 +27,8 @@ export interface ChainAccess {
   readSnapshots(input: { account: Address; tokens: readonly TokenInfo[] }): Promise<readonly ChainSnapshotResult[]>
   /** The native balance of each address on both chains. A chain that cannot be read gives null. */
   nativeBalances(addresses: readonly Address[]): Promise<readonly NativeBalances[]>
+  /** Reads the address that receives the tips of a fee router on a chain. It never throws. */
+  readRewardAddress(input: { chainId: number; router: Address }): Promise<RewardAddressReading>
   /** The client for the transaction flow of a chain. It throws {@link MissingRpcError} when the URL is not set. */
   flowClient(chainId: number): FlowChainClient
 }
@@ -85,6 +87,13 @@ export function createRpcChainAccess(pair: PairConfig, environment: Record<strin
           second: await balanceOn(pair.second, address),
         })),
       )
+    },
+    async readRewardAddress({ chainId, router }) {
+      try {
+        return await readRewardAddress(clientOf(chainById(chainId)) as unknown as ReadClient, { router })
+      } catch (error) {
+        return { kind: 'unreadable', reason: error instanceof Error ? error.message : String(error) }
+      }
     },
     flowClient(chainId) {
       return clientOf(chainById(chainId)) as unknown as FlowChainClient

@@ -9,6 +9,7 @@
  * - Signers: `EXPLORER_PRIVATE_KEY`, `EXPLORER_PRIVATE_KEY_FILE`, `EXPLORER_KEYSTORE_FILE`, `EXPLORER_MNEMONIC`,
  *   `EXPLORER_MNEMONIC_FILE`, `EXPLORER_MNEMONIC_PASSPHRASE`, `EXPLORER_TREZOR_CONTACT`.
  * - Operator files: `EXPLORER_HANDOFF_FILE`, `EXPLORER_EVIDENCE_FILE`.
+ * - `EXPLORER_TOKEN_VALUATIONS_WEI` prices of tokens in wei, for delivery fee suggestions (see `config/token-valuations.ts`).
  *
  * The secrets in that list are removed from the process environment as soon as they are read.
  */
@@ -25,6 +26,7 @@ import {
 import { createRpcChainAccess } from './chain/chain-access'
 import { createFixtureChainAccess } from './chain/fixture-chain-access'
 import { DEFAULT_PAIR_ID, buildPairConfig } from './config/pairs'
+import { parseTokenValuations, TOKEN_VALUATIONS_VARIABLE } from './config/token-valuations'
 import { createFixtureDataSource, FIXTURE_PAIR } from './data/fixtures'
 import { createIndexerDataSource } from './data/indexer-data-source'
 import type { Signer } from './signing/signer'
@@ -48,6 +50,7 @@ async function buildServices(environment: Record<string, string | undefined>): P
       now: () => Math.floor(Date.now() / 1000),
       readTextFile: (path) => readFile(path, 'utf8'),
       defaultPairId: pair.id,
+      tokenValuationsWei: parseTokenValuations(environment[TOKEN_VALUATIONS_VARIABLE]),
     },
   }
 }

@@ -20,6 +20,9 @@
       "bun"
     ],
     "paths": {
+      "@zk-bridge/shared": [
+        "../shared/src/index.ts"
+      ],
       "@zk-bridge/shared/config": [
         "../shared/src/config/index.ts"
       ]

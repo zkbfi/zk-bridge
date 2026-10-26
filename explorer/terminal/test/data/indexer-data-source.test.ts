@@ -10,7 +10,7 @@ const usdcCopy = '0x00000000000000000000000000000000000b0001'
 const tokens = {
   tokens: [
     { chainId: 1, address: usdcHome, symbol: 'USDC', name: 'USD Coin', decimals: 6, metadataRead: true, isBridgedCopy: false, homeChainId: 1, homeToken: usdcHome },
-    { chainId: 369, address: usdcCopy, symbol: 'zkUSDC', name: 'USD Coin (zk-bridge)', decimals: 6, metadataRead: true, isBridgedCopy: true, homeChainId: 1, homeToken: usdcHome },
+    { chainId: 369, address: usdcCopy, symbol: 'zkbUSDC', name: 'USD Coin from Ethereum', decimals: 6, metadataRead: true, isBridgedCopy: true, homeChainId: 1, homeToken: usdcHome },
     { chainId: 1, address: '0x00000000000000000000000000000000000a0002', symbol: null, name: null, decimals: 18, metadataRead: false, isBridgedCopy: false, homeChainId: 1, homeToken: '0x00000000000000000000000000000000000a0002' },
   ],
 }

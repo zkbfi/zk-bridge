@@ -2,9 +2,9 @@
  * Live reads from the chains: balances, allowances, claimable amounts and the fee rate. They use the RPC endpoints,
  * not the indexer, because a value that a transaction depends on must be current.
  */
-import { erc20Abi, type Abi, type Address } from 'viem'
+import { erc20Abi, isAddress, getAddress, zeroAddress, type Abi, type Address } from 'viem'
 import type { ChainConfig, TokenInfo } from '../model/types'
-import { tokenMediatorAbi } from '../tx/abis'
+import { feeRouterAbi, tokenMediatorAbi } from '../tx/abis'
 
 /** The part of a viem public client that the reads need. */
 export interface ReadClient {
@@ -87,4 +87,27 @@ async function readBigint(
   const value = await client.readContract(parameters)
   if (typeof value === 'bigint') return value
   throw new Error(`${parameters.functionName} did not return an integer`)
+}
+
+/**
+ * What the fee router says about the address that receives its tips. `unreadable` means the router did not answer
+ * `rewardAddress()` with an address: the read failed, or the router is of an older version that has no such function.
+ */
+export type RewardAddressReading =
+  | { readonly kind: 'read'; readonly address: Address }
+  | { readonly kind: 'unreadable'; readonly reason: string }
+
+/**
+ * Reads `rewardAddress()` of a fee router. It never throws; a failure becomes an `unreadable` result. The zero address
+ * is also unreadable: the router of this version refuses it in the constructor, so it is not that router.
+ */
+export async function readRewardAddress(client: ReadClient, input: { router: Address }): Promise<RewardAddressReading> {
+  try {
+    const value = await client.readContract({ address: input.router, abi: feeRouterAbi, functionName: 'rewardAddress' })
+    if (typeof value !== 'string' || !isAddress(value, { strict: false })) return { kind: 'unreadable', reason: 'The router did not return an address.' }
+    if (value === zeroAddress) return { kind: 'unreadable', reason: 'The router returned the zero address.' }
+    return { kind: 'read', address: getAddress(value) }
+  } catch (error) {
+    return { kind: 'unreadable', reason: error instanceof Error ? error.message.split('\n')[0]! : String(error) }
+  }
 }

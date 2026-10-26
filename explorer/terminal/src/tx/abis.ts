@@ -22,6 +22,12 @@ export const tokenMediatorAbi = parseAbi([
   'function nativeTokenAddress(address bridgedToken) view returns (address)',
 ])
 
+/** The fee router: the account that may deliver through it, and the address that receives the tips. */
+export const feeRouterAbi = parseAbi([
+  'function runner() view returns (address)',
+  'function rewardAddress() view returns (address)',
+])
+
 /** The router that wraps the native coin and relays it. */
 export const wrappedNativeRouterAbi = parseAbi([
   'function wrapAndRelayTokens() payable',

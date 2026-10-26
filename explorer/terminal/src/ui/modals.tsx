@@ -223,6 +223,8 @@ export function HelpOverlay(props: { readonly onClose: () => void }) {
     ['PageUp PageDown', 'Feed: move by a page'],
     ['y / n', 'Review: sign and send, or cancel (nothing is sent before y)'],
     ['d  s  r', 'Review: raw calldata, skip a step, retry after an error'],
+    ['Pay for delivery', 'Bridge form: Left Right chooses Yes. The fee fields and the live cost show'],
+    ['Docs', 'User docs: explorer/web/docs/pages (fees: 05-fees-explained.md)'],
     ['Esc', 'Close a dialog or this help'],
     ['?', 'Show or hide this help'],
     ['q  Ctrl+C', 'Quit'],

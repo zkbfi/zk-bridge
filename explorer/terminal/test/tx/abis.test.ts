@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { toFunctionSelector, type Abi, type AbiFunction } from 'viem'
 import {
   beaconLightClientAbi,
+  feeRouterAbi,
   messageBridgeAbi,
   tokenMediatorAbi,
   wrappedNativeRouterAbi,
@@ -47,6 +48,7 @@ function expectEveryFunctionIn(fragment: Abi, reference: Abi): void {
 const cases: ReadonlyArray<{ fragment: Abi; contract: string; sharedName: string }> = [
   { fragment: tokenMediatorAbi, contract: 'TokenMediator', sharedName: 'tokenMediatorAbi' },
   { fragment: wrappedNativeRouterAbi, contract: 'WETHOmnibridgeRouter', sharedName: 'wETHOmnibridgeRouterAbi' },
+  { fragment: feeRouterAbi, contract: 'FeeRouter', sharedName: 'feeRouterAbi' },
   { fragment: messageBridgeAbi, contract: 'MessageBridge', sharedName: 'messageBridgeAbi' },
   { fragment: beaconLightClientAbi, contract: 'BeaconLightClient', sharedName: 'beaconLightClientAbi' },
 ]

@@ -130,7 +130,7 @@ describe('filters', () => {
     await app.press('ARROW_DOWN')
     expect(app.frame()).toContain('Token:USDC')
     expect(app.frame()).toMatch(/Feed 1\/\d+/)
-    expect(app.frame()).not.toContain('zkWETH')
+    expect(app.frame()).not.toContain('zkbWETH')
   })
 
   test('the address filter takes typed text, matches sender or recipient, and refuses a bad address', async () => {

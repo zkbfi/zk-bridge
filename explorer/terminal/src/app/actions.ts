@@ -2,11 +2,13 @@
  * Turns what the user typed in an action form into the steps of a transaction flow. Pure: it reads the form values
  * and the live snapshots, and throws {@link PlanInputError} with a message that tells the user what to fix.
  */
+import { encodeFeeDirector, type DeliveryCostReport } from '@zk-bridge/shared'
 import type { Address } from 'viem'
 import { parseUnits, AmountParseError } from '../format/amounts'
-import type { ChainSnapshot, ChainSnapshotResult, TokenPosition } from '../chain/live-reads'
+import type { ChainSnapshot, ChainSnapshotResult, RewardAddressReading, TokenPosition } from '../chain/live-reads'
 import type { FlowStep } from '../flow/transaction-flow'
-import type { ChainSide, PairConfig, TokenInfo } from '../model/types'
+import type { ChainConfig, ChainSide, PairConfig, TokenInfo } from '../model/types'
+import { buildDeliveryFeeModel, paysForDelivery, resolveDeliveryTarget, routerOf, transferValueOf, type TokenValuationsWei } from './delivery-fee-form'
 import {
   PlanInputError,
   parseAddress,
@@ -24,6 +26,15 @@ export interface BridgeContext {
   readonly pair: PairConfig
   readonly snapshots: readonly ChainSnapshotResult[] | null
   readonly signerAddress: Address
+  /** The delivery cost report of the destination chain. It is needed when the user pays for delivery. */
+  readonly deliveryCost?: DeliveryCostReport | null
+  /** The user's prices of tokens in wei, by lowercase address. Default: none. */
+  readonly tokenValuationsWei?: TokenValuationsWei
+  /**
+   * What the router of the delivery fee says about the address that receives the tip: read with
+   * {@link deliveryRouterOf}. Absent means nobody read it, and the review says so.
+   */
+  readonly rewardAddress?: RewardAddressReading
 }
 
 /** The separator in a token choice value: `<side>:<address or native>`. */
@@ -45,30 +56,28 @@ export function nativeChoiceValue(side: ChainSide): string {
  * @param values The form values: token, amount, receiver, mode, data, fallback, maxFeePercent.
  */
 export function buildBridgeSteps(values: Readonly<Record<string, string>>, tokens: readonly TokenInfo[], context: BridgeContext): readonly FlowStep[] {
-  const [sideText = '', identity = ''] = (values.token ?? '').split(':')
-  const side: ChainSide = sideText === 'second' ? 'second' : 'first'
-  const chain = side === 'first' ? context.pair.first : context.pair.second
+  const source = bridgeSourceOf(values, tokens, context.pair)
+  const { chain, side } = source
   const snapshot = snapshotOf(context.snapshots, side)
   const receiver = parseAddress(values.receiver ?? '', 'receiver')
 
-  if (identity === NATIVE_CHOICE) {
+  if (source.kind === 'native') {
     const value = parseAmount(values.amount ?? '', 18)
     if (value > snapshot.nativeBalance) throw new PlanInputError(`The amount is more than your ${chain.nativeSymbol} balance.`)
     return [{ plan: planWrapAndRelay({ chain, receiver, value }), skippable: false }]
   }
 
-  const token = tokens.find((candidate) => candidate.side === side && candidate.address.toLowerCase() === identity.toLowerCase())
-  if (token === undefined) throw new PlanInputError('Choose a token.')
+  if (source.kind === 'none') throw new PlanInputError('Choose a token.')
+  const { token } = source
   const amount = parseAmount(values.amount ?? '', token.decimals)
   const position = positionOf(snapshot, token)
   if (amount > position.balance) throw new PlanInputError(`The amount is more than your ${token.symbol} balance.`)
   const relay = planRelay({
     chain,
     token,
-    receiver,
     amount,
-    mode: relayModeOf(values),
     currentFeeRate: snapshot.feeRate,
+    ...(deliveryWanted(values, { source, tokens, context }) ? deliveryRelayOf(values, { source, tokens, context, feeRate: snapshot.feeRate }) : { receiver, mode: relayModeOf(values) }),
   })
   const approval: readonly FlowStep[] =
     position.allowance >= amount
@@ -80,6 +89,99 @@ export function buildBridgeSteps(values: Readonly<Record<string, string>>, token
           },
         ]
   return [...approval, { plan: relay, skippable: false }]
+}
+
+/** What the bridge form has chosen as the source of the transfer. */
+export type BridgeSource =
+  | { readonly kind: 'none'; readonly side: ChainSide; readonly chain: ChainConfig }
+  | { readonly kind: 'native'; readonly side: ChainSide; readonly chain: ChainConfig }
+  | { readonly kind: 'token'; readonly side: ChainSide; readonly chain: ChainConfig; readonly token: TokenInfo }
+
+/** Reads the token choice of the form: the side, and the token or the native coin. */
+export function bridgeSourceOf(values: Readonly<Record<string, string>>, tokens: readonly TokenInfo[], pair: PairConfig): BridgeSource {
+  const [sideText = '', identity = ''] = (values.token ?? '').split(':')
+  const side: ChainSide = sideText === 'second' ? 'second' : 'first'
+  const chain = side === 'first' ? pair.first : pair.second
+  if (identity === NATIVE_CHOICE) return { kind: 'native', side, chain }
+  const token = tokens.find((candidate) => candidate.side === side && candidate.address.toLowerCase() === identity.toLowerCase())
+  return token === undefined ? { kind: 'none', side, chain } : { kind: 'token', side, chain, token }
+}
+
+/**
+ * True when the relay carries a tip: the user left the tip on and the transfer can carry one. The tip is on by default.
+ * A transfer that cannot carry one (the native coin route, or a chain with no fee router in the deployment) is a plain
+ * relay, and the form says why on its note.
+ */
+function deliveryWanted(
+  values: Readonly<Record<string, string>>,
+  input: { source: Extract<BridgeSource, { kind: 'token' }>; tokens: readonly TokenInfo[]; context: BridgeContext },
+): boolean {
+  if (!paysForDelivery(values)) return false
+  const resolved = resolveDeliveryTarget({ source: input.source, pair: input.context.pair, tokens: input.tokens, valuations: input.context.tokenValuationsWei ?? {} })
+  return resolved.kind === 'ready'
+}
+
+/** The reading of a review that nobody asked the router for. The review must not show an address it never read. */
+const NOT_READ_REWARD_ADDRESS: RewardAddressReading = { kind: 'unreadable', reason: 'The reward address was not read from the router.' }
+
+/**
+ * The router and the chain whose `rewardAddress()` the review of this form needs to show, or null when the form builds
+ * no delivery fee. The form reads the address from the router, then passes it in the context.
+ */
+export function deliveryRouterOf(
+  values: Readonly<Record<string, string>>,
+  tokens: readonly TokenInfo[],
+  context: BridgeContext,
+): { readonly chainId: number; readonly router: Address } | null {
+  const source = bridgeSourceOf(values, tokens, context.pair)
+  if (source.kind !== 'token') return null
+  if (!deliveryWanted(values, { source, tokens, context })) return null
+  const resolved = resolveDeliveryTarget({ source, pair: context.pair, tokens, valuations: context.tokenValuationsWei ?? {} })
+  if (resolved.kind !== 'ready') return null
+  try {
+    return { chainId: resolved.target.chain.chainId, router: routerOf(values, resolved.target) }
+  } catch (error) {
+    // A router field that is not an address: the build of the steps reports it to the user.
+    if (error instanceof PlanInputError) return null
+    throw error
+  }
+}
+
+/**
+ * The receiver, the call data and the review of a relay that pays for delivery. The receiver is the fee router of the
+ * other chain. The call data is the encoded fee terms. The amount that the router receives is the amount less the fee
+ * of the mediator.
+ */
+function deliveryRelayOf(
+  values: Readonly<Record<string, string>>,
+  input: { source: Extract<BridgeSource, { kind: 'token' }>; tokens: readonly TokenInfo[]; context: BridgeContext; feeRate: bigint },
+) {
+  const { context } = input
+  const resolved = resolveDeliveryTarget({ source: input.source, pair: context.pair, tokens: input.tokens, valuations: context.tokenValuationsWei ?? {} })
+  if (resolved.kind === 'unavailable') throw new PlanInputError(resolved.reason)
+  if (context.deliveryCost === undefined || context.deliveryCost === null) {
+    throw new PlanInputError('The delivery cost is not loaded yet. Wait for it, or choose No for Pay for delivery.')
+  }
+  const { target } = resolved
+  const state = buildDeliveryFeeModel({ values, target, report: context.deliveryCost, transferValue: transferValueOf(values.amount ?? '', input.source.token.decimals, input.feeRate) })
+  if (state.kind === 'needs-amount') throw new PlanInputError('The amount is too small: nothing reaches the fee router after the bridge fee.')
+  if (state.kind === 'unavailable') throw new PlanInputError(state.reason)
+  const { chosen, dataSource, router } = state.model
+  if (chosen.kind === 'invalid') throw new PlanInputError(chosen.reason)
+  return {
+    receiver: router,
+    mode: { kind: 'call', data: encodeFeeDirector(chosen.director) } satisfies RelayMode,
+    deliveryFee: {
+      router,
+      defaultRouter: target.router,
+      routerChainName: target.chain.name,
+      director: chosen.director,
+      token: target.token,
+      description: chosen.description,
+      dataSource,
+      rewardAddress: context.rewardAddress ?? NOT_READ_REWARD_ADDRESS,
+    },
+  }
 }
 
 function relayModeOf(values: Readonly<Record<string, string>>): RelayMode {

@@ -1,0 +1,232 @@
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { getAddress } from "viem";
+import { describe, expect, it, vi } from "vitest";
+import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
+import type { TokenInfo } from "@terminal/model/types";
+import { BridgeForm } from "../../src/actions/BridgeForm";
+import type { WebStep } from "../../src/tx/bridge-steps";
+import { buildFixtureContext } from "../helpers";
+import { renderPage, type RenderPageOptions } from "../render";
+
+const usdc = FIXTURE_TOKENS[0]!;
+const weth = FIXTURE_TOKENS[2]!;
+
+/** WETH on Ethereum arrives on PulseChain as the wrapped native token, which is worth one coin per token, so its price is known. */
+const WRAPPED_TOKENS: readonly TokenInfo[] = [
+  { ...weth, counterpart: FIXTURE_PAIR.second.contracts.wrappedNative },
+  { address: FIXTURE_PAIR.second.contracts.wrappedNative!, symbol: "WPLS", decimals: 18, side: "second", counterpart: weth.address },
+];
+
+const renderForm = async (options: RenderPageOptions & { readonly tokens?: readonly TokenInfo[]; readonly variant?: "tokens" | "wrap"; readonly onReview?: (steps: readonly WebStep[]) => void } = {}) => {
+  const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+  const onReview = options.onReview ?? vi.fn();
+  renderPage(<BridgeForm variant={options.variant ?? "tokens"} pair={FIXTURE_PAIR} tokens={options.tokens ?? tokens} context={context} account={FIXTURE_ACCOUNT} onReview={onReview} />, options);
+  return { onReview };
+};
+
+const typeAmount = (text: string) => userEvent.type(screen.getByLabelText(/^Amount to send/), text);
+
+describe("the bridge form: fees before any signature", () => {
+  it("disables Review until the transaction can be built, and says why", async () => {
+    await renderForm();
+    const review = screen.getByRole("button", { name: "Review transaction" });
+    expect(review).toBeDisabled();
+    expect(review).toHaveAccessibleDescription("Enter an amount.");
+    await typeAmount("99999999");
+    expect(review).toBeDisabled();
+    expect(review).toHaveAccessibleDescription(/more than your USDC balance/);
+    await userEvent.clear(screen.getByLabelText(/^Amount to send/));
+    await typeAmount("250");
+    await waitFor(() => expect(review).toBeEnabled());
+  });
+
+  it("shows the exact bridge fee as soon as the amount is valid", async () => {
+    await renderForm();
+    await typeAmount("250");
+    const fee = await screen.findByTestId("bridge-fee");
+    expect(fee).toHaveTextContent("Bridge fee (exact)");
+    expect(fee).toHaveTextContent("On Ethereum: 0.1% = 0.25 USDC.");
+    expect(fee).toHaveTextContent("at most 0.24975 USDC");
+    expect(fee).toHaveTextContent("The rate only falls.");
+  });
+
+  it("turns the tip on by default at 0.1 percent, with no click, and shows what it costs", async () => {
+    await renderForm();
+    await typeAmount("250");
+    expect(screen.getByRole("radio", { name: /Percentage of the amount/ })).toBeChecked();
+    expect(screen.getByLabelText("Percentage of the amount")).toHaveValue("0.1");
+    const quote = await screen.findByTestId("delivery-quote");
+    expect(within(quote).getByTestId("delivery-summary")).toHaveTextContent("0.2495 zkbUSDC (exact)");
+    expect(within(quote).getByTestId("runner-maximum")).toHaveTextContent("The runner can take at most 0.24975 zkbUSDC.");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Review transaction" })).toBeEnabled());
+  });
+
+  it("explains that one whitelisted runner collects tips, and that a direct delivery pays no tip", async () => {
+    await renderForm();
+    const notes = screen.getByTestId("tip-runner-notes");
+    expect(notes).toHaveTextContent("Only one whitelisted runner can collect tips through a router");
+    expect(notes).toHaveTextContent(/calls the bridge directly to deliver, no runner is recorded and no tip is paid. The recipient then gets the whole amount/);
+  });
+
+  it("shows the percentage, the cost lines and the data source once a coin price is known", async () => {
+    await renderForm();
+    await typeAmount("250");
+    expect(await screen.findByTestId("no-cost-lines")).toHaveTextContent("Enter your coin price");
+    await userEvent.type(screen.getByLabelText(/^Your coin price \(zkbUSDC for one PLS\)/), "3000");
+    const quote = await screen.findByTestId("delivery-quote");
+    const table = await within(quote).findByRole("table", { name: "Cost breakdown of the delivery" });
+    for (const line of ["Gas cost", "Proof cost", "Margin"]) expect(within(table).getByText(new RegExp(line))).toBeInTheDocument();
+    expect(within(table).getAllByText(/PLS on PulseChain$/).length).toBe(3);
+    expect(screen.getByTestId("delivery-data-source")).toHaveTextContent("measured from 40 recent deliveries, p90");
+    expect(screen.getByTestId("delivery-data-source")).toHaveTextContent(/base fee 7 gwei at block 21000000/);
+  });
+
+  it("says that the data is a default when no delivery is measured yet", async () => {
+    await renderForm({ report: { sampleCount: 0 } });
+    await typeAmount("250");
+    expect(await screen.findByTestId("delivery-data-source")).toHaveTextContent("default, no deliveries measured yet");
+  });
+
+  it("warns that the proof cost is left out when the indexer has no coin price", async () => {
+    await renderForm({ report: { proofCostWei: null } });
+    await typeAmount("250");
+    expect(await screen.findByText(/no price of the native coin, so the proof cost is left out/)).toBeInTheDocument();
+  });
+
+  it("edits the percentage, and the tip follows", async () => {
+    await renderForm();
+    await typeAmount("250");
+    const percentage = screen.getByLabelText("Percentage of the amount");
+    await userEvent.clear(percentage);
+    await userEvent.type(percentage, "0.5");
+    await waitFor(() => expect(screen.getByTestId("delivery-summary")).toHaveTextContent("1.247501 zkbUSDC (exact)"));
+  });
+
+  it("labels the price field as the user's own, and fills it from the valuation of a wrapped native token", async () => {
+    await renderForm({ tokens: WRAPPED_TOKENS });
+    await userEvent.selectOptions(screen.getByLabelText("Token"), `first:${weth.address}`);
+    const price = screen.getByLabelText(/^Your coin price \(WPLS for one PLS\)/);
+    expect(price).toHaveValue("1");
+    expect(screen.getByText(/Your own price\. The page cannot verify it/)).toBeInTheDocument();
+  });
+
+  it("offers the gas multiplier for any token, asks for a price, and labels it an estimate with a maximum", async () => {
+    await renderForm();
+    await typeAmount("250");
+    const radio = screen.getByRole("radio", { name: /Gas multiplier with a ceiling/ });
+    expect(radio).toBeEnabled();
+    expect(screen.queryByText(/only for the wrapped native/)).toBeNull();
+    await userEvent.click(radio);
+    expect((await screen.findAllByText(/Enter your coin price/)).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole("button", { name: "Review transaction" })).toBeDisabled();
+    await userEvent.type(screen.getByLabelText(/^Your coin price/), "3000");
+    const summary = await screen.findByTestId("delivery-summary");
+    await waitFor(() => expect(summary).toHaveTextContent(/estimate, at most [\d.]+ zkbUSDC\)$/));
+    expect(screen.getByText(/This is an estimate: the real tip follows the gas price/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review transaction" })).toBeEnabled();
+  });
+
+  it("labels a gas multiplier tip an estimate for the wrapped native token with no price typed", async () => {
+    await renderForm({ tokens: WRAPPED_TOKENS });
+    await userEvent.selectOptions(screen.getByLabelText("Token"), `first:${weth.address}`);
+    await typeAmount("2");
+    await userEvent.click(screen.getByRole("radio", { name: /Gas multiplier with a ceiling/ }));
+    const summary = await screen.findByTestId("delivery-summary");
+    await waitFor(() => expect(summary).toHaveTextContent(/estimate, at most [\d.]+ WPLS\)$/));
+    expect(summary).toHaveTextContent(/^about [\d.]+ WPLS now/);
+    expect(screen.getByTestId("runner-maximum")).toHaveTextContent(/at most [\d.]+ WPLS/);
+  });
+
+  it("raises the maximum when the user raises the ceiling", async () => {
+    await renderForm({ tokens: WRAPPED_TOKENS });
+    await userEvent.selectOptions(screen.getByLabelText("Token"), `first:${weth.address}`);
+    await typeAmount("2");
+    await userEvent.click(screen.getByRole("radio", { name: /Gas multiplier with a ceiling/ }));
+    const before = (await screen.findByTestId("runner-maximum")).textContent;
+    await userEvent.type(screen.getByLabelText("Ceiling base fee (gwei)"), "500");
+    await waitFor(() => expect(screen.getByTestId("runner-maximum").textContent).not.toBe(before));
+  });
+
+  it("shows the router of the deployment as the default of the advanced field, with no warning", async () => {
+    await renderForm();
+    const router = screen.getByLabelText("Router on PulseChain");
+    expect(router).toHaveValue(getAddress(FIXTURE_PAIR.second.contracts.feeRouter!));
+    expect(screen.queryByTestId("tip-router-warning")).toBeNull();
+  });
+
+  it("marks a router that is not the one of the deployment, and sends the relay to it", async () => {
+    const { onReview } = await renderForm();
+    await typeAmount("250");
+    const other = getAddress(`0x${"ee".repeat(20)}`);
+    const router = screen.getByLabelText("Router on PulseChain");
+    await userEvent.clear(router);
+    await userEvent.type(router, other);
+    expect(await screen.findByTestId("tip-router-warning")).toHaveTextContent("is not the fee router of the deployment");
+    const review = screen.getByRole("button", { name: "Review transaction" });
+    await waitFor(() => expect(review).toBeEnabled());
+    await userEvent.click(review);
+    const steps = (onReview as ReturnType<typeof vi.fn>).mock.calls[0]![0] as readonly WebStep[];
+    expect(steps.at(-1)!.disclosure.delivery?.router).toBe(other);
+  });
+
+  it("removes the tip with No tip: a plain relay, the receiver mode returns, and the page says what that means", async () => {
+    const { onReview } = await renderForm();
+    await typeAmount("250");
+    await screen.findByTestId("delivery-quote");
+    expect(screen.queryByLabelText("How the receiver gets it")).toBeNull();
+    await userEvent.click(screen.getByRole("radio", { name: /No tip: deliver directly, no router/ }));
+    expect(screen.queryByTestId("delivery-quote")).toBeNull();
+    expect(screen.getByTestId("no-tip-note")).toHaveTextContent(/No router and no fee terms are involved.*Anyone can deliver your transfer directly on the bridge, for free.*may take longer/);
+    expect(screen.getByLabelText("How the receiver gets it")).toBeInTheDocument();
+    const review = screen.getByRole("button", { name: "Review transaction" });
+    await waitFor(() => expect(review).toBeEnabled());
+    await userEvent.click(review);
+    const steps = (onReview as ReturnType<typeof vi.fn>).mock.calls[0]![0] as readonly WebStep[];
+    expect(steps.at(-1)!.disclosure.delivery).toBeNull();
+    expect(steps.at(-1)!.plan.functionName).toBe("relayTokens");
+  });
+
+  it("sends a plain relay toward a chain with no fee router, and says so", async () => {
+    await renderForm();
+    await userEvent.selectOptions(screen.getByLabelText("Token"), `second:${FIXTURE_TOKENS[4]!.address}`);
+    expect(screen.getByText(/no fee router for Ethereum.*plain relay, with no tip/)).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /No tip/ })).toBeNull();
+    expect(screen.getByLabelText("How the receiver gets it")).toBeInTheDocument();
+  });
+
+  it("hands the planned steps to the review, and the last one carries the tip", async () => {
+    const { onReview } = await renderForm();
+    await typeAmount("250");
+    await screen.findByTestId("delivery-quote");
+    const review = screen.getByRole("button", { name: "Review transaction" });
+    await waitFor(() => expect(review).toBeEnabled());
+    await userEvent.click(review);
+    expect(onReview).toHaveBeenCalledTimes(1);
+    const steps = (onReview as ReturnType<typeof vi.fn>).mock.calls[0]![0] as readonly WebStep[];
+    expect(steps.at(-1)!.disclosure.delivery).not.toBeNull();
+    expect(steps.at(-1)!.plan.functionName).toBe("relayTokensAndCall");
+  });
+
+  it("offers no tip on the wrap route, says why, and sends a plain wrap", async () => {
+    const { onReview } = await renderForm({ variant: "wrap" });
+    await typeAmount("1");
+    expect(await screen.findByText(/wrap route carries no call data, so it cannot carry a tip. The page sends a plain relay, with no tip/)).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /No tip/ })).toBeNull();
+    const review = screen.getByRole("button", { name: "Review transaction" });
+    await waitFor(() => expect(review).toBeEnabled());
+    await userEvent.click(review);
+    const steps = (onReview as ReturnType<typeof vi.fn>).mock.calls[0]![0] as readonly WebStep[];
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.plan.functionName).toBe("wrapAndRelayTokens");
+    expect(steps[0]!.disclosure.delivery).toBeNull();
+  });
+
+  it("lists only the native coin of each chain in the wrap variant", async () => {
+    await renderForm({ variant: "wrap" });
+    const options = within(screen.getByLabelText("Coin to wrap")).getAllByRole("option").map((option) => option.textContent);
+    expect(options).toEqual([expect.stringMatching(/^Wrap ETH on Ethereum/), expect.stringMatching(/^Wrap PLS on PulseChain/)]);
+    await typeAmount("1");
+    expect(await screen.findByTestId("bridge-fee")).toHaveTextContent("0.001 wrapped ETH");
+  });
+});

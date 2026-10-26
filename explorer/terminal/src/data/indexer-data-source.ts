@@ -5,9 +5,10 @@
  * amounts are decimal strings of base units. This file turns amounts into `bigint` at the edge and never uses a
  * `number` for an amount.
  *
- * The routes in use: `/api/summary`, `/api/heads`, `/api/feed`, `/api/tokens`, `/api/audit`, `/api/fees` and
- * `/api/head-updates`. The indexer serves one pair. A request for another pair name is refused.
+ * The routes in use: `/api/summary`, `/api/heads`, `/api/feed`, `/api/tokens`, `/api/audit`, `/api/fees`,
+ * `/api/head-updates` and `/api/delivery-cost`. The indexer serves one pair. A request for another pair name is refused.
  */
+import { parseDeliveryCostReport } from '@zk-bridge/shared'
 import { getAddress, type Hex } from 'viem'
 import type {
   AuditRow,
@@ -185,6 +186,15 @@ export function createIndexerDataSource(input: IndexerDataSourceInput): DataSour
     async listTokens(pairId) {
       requirePair(pairId)
       return loadTokens()
+    },
+
+    async getDeliveryCost(chainId) {
+      const body = await getJson(`${base}/api/delivery-cost?chainId=${encodeURIComponent(String(chainId))}`)
+      try {
+        return parseDeliveryCostReport(body)
+      } catch (error) {
+        throw new IndexerResponseError(`The delivery cost answer is not valid: ${error instanceof Error ? error.message : String(error)}`)
+      }
     },
   }
 }

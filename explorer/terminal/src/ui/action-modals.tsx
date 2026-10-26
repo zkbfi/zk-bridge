@@ -3,18 +3,37 @@
  * Each form builds the steps of a transaction flow and hands them to the review screen. None sends anything itself.
  */
 import { useState } from 'react'
-import { buildBridgeSteps, buildClaimSteps, buildMessageSteps, claimableEntries, nativeChoiceValue, tokenChoiceValue } from '../app/actions'
+import type { DeliveryCostReport } from '@zk-bridge/shared'
+import { bridgeSourceOf, buildBridgeSteps, deliveryRouterOf, buildClaimSteps, buildMessageSteps, claimableEntries, nativeChoiceValue, tokenChoiceValue } from '../app/actions'
+import {
+  CUSTOM_KINDS,
+  DELIVERY_FIELD,
+  DEFAULT_MARGIN_PERCENT,
+  DEFAULT_TIP_PERCENT_TEXT,
+  DEFAULT_PRIORITY_GWEI,
+  buildDeliveryFeeModel,
+  feeFormModeOf,
+  paysForDelivery,
+  refillDeliveryFee,
+  resolveDeliveryTarget,
+  transferValueOf,
+  type DeliveryFeeState,
+  type DeliveryTarget,
+  type Values,
+} from '../app/delivery-fee-form'
 import { useServices } from '../app/services'
 import { useSession } from '../app/session'
 import type { FlowStep } from '../flow/transaction-flow'
 import { OperatorFileError, planLightClientUpdate, planMessageExecution } from '../tx/operator'
 import { PlanInputError, amountMeaning } from '../tx/plan'
 import type { FieldSpec } from './form'
+import { deliveryPanelLines } from './delivery-fee-lines'
 import { FormView, useForm } from './form-view'
 import { useKeyLayer } from './key-router'
 import { ModalFrame } from './modals'
-import { RichLine, colored, muted, plain } from './rich-text'
+import { RichLine, RichLines, colored, muted, plain } from './rich-text'
 import { theme } from './theme'
+import { usePolling } from './use-polling'
 
 /** What every action modal receives. */
 export interface ActionModalProps {
@@ -41,12 +60,39 @@ function useSubmitError() {
   return { error, attempt, setError }
 }
 
-/** The form that bridges tokens: relayTokens, relayTokensAndCall or relayTokensWithFallback. */
+/** How often the delivery cost reloads while the fee fields are open, in milliseconds. */
+const DELIVERY_COST_INTERVAL_MILLISECONDS = 15_000
+
+const FEE_MODE_CHOICES = [
+  { value: 'percentage', label: 'Percentage of the transfer' },
+  { value: 'fixed', label: 'Fixed amount' },
+  { value: 'gas', label: 'Gas multiplier' },
+  { value: 'custom', label: 'Custom terms' },
+] as const
+
+const CUSTOM_KIND_LABELS: Readonly<Record<(typeof CUSTOM_KINDS)[number], string>> = { fixed: 'Fixed amount', share: 'Share of the value', gas: 'Gas based' }
+
+/** The form that bridges tokens: relayTokens, relayTokensAndCall or relayTokensWithFallback, with an optional delivery fee. */
 export function BridgeModal(props: ActionModalProps) {
-  const { pair } = useServices()
+  const { pair, dataSource, tokenValuationsWei, chainAccess } = useServices()
   const session = useSession()
-  const { error, attempt } = useSubmitError()
+  const { error, setError } = useSubmitError()
   const signer = session.signer
+  const targetOf = (values: Values) => resolveDeliveryTarget({ source: bridgeSourceOf(values, session.tokens, pair), pair, tokens: session.tokens, valuations: tokenValuationsWei })
+  const deliveryActive = (values: Values): boolean => paysForDelivery(values) && targetOf(values).kind === 'ready'
+  const feeRateOf = (values: Values): bigint => {
+    const side = bridgeSourceOf(values, session.tokens, pair).side
+    const found = (session.snapshots ?? []).find((result) => result.status === 'ok' && result.snapshot.chain.side === side)
+    return found?.status === 'ok' ? found.snapshot.feeRate : 0n
+  }
+  const stateFor = (values: Values, report: DeliveryCostReport | null): { state: DeliveryFeeState; target: DeliveryTarget } | null => {
+    const resolved = targetOf(values)
+    const source = bridgeSourceOf(values, session.tokens, pair)
+    if (resolved.kind === 'unavailable' || report === null || source.kind !== 'token') return null
+    const transferValue = transferValueOf(values.amount ?? '', source.token.decimals, feeRateOf(values))
+    return { state: buildDeliveryFeeModel({ values, target: resolved.target, report, transferValue }), target: resolved.target }
+  }
+
   const tokenChoices = [
     ...(['first', 'second'] as const).flatMap((side) => {
       const chain = side === 'first' ? pair.first : pair.second
@@ -55,6 +101,8 @@ export function BridgeModal(props: ActionModalProps) {
       return [...own, ...router]
     }),
   ]
+  const offersDelivery = (values: Values): boolean => targetOf(values).kind === 'ready'
+  const whenActive = (extra: (values: Values) => boolean = () => true) => (values: Values) => deliveryActive(values) && extra(values)
   const specs: readonly FieldSpec[] = [
     { kind: 'choice', name: 'token', label: 'Token', choices: tokenChoices.length === 0 ? [{ value: '', label: 'no tokens loaded' }] : tokenChoices, hint: 'Left or Right chooses the token and its chain.' },
     { kind: 'text', name: 'amount', label: 'Amount', placeholder: 'for example 2.5', hint: 'A decimal in whole tokens.' },
@@ -68,28 +116,99 @@ export function BridgeModal(props: ActionModalProps) {
         { value: 'call', label: 'relayTokensAndCall' },
         { value: 'fallback', label: 'relayTokensWithFallback' },
       ],
+      visibleWhen: (values) => !deliveryActive(values),
       hint: 'Call also calls onTokenBridged on the receiver. Fallback names an address for a failed payment.',
     },
-    { kind: 'text', name: 'data', label: 'Call data', placeholder: '0x… (empty for none)', visibleWhen: (values) => values.mode !== 'plain', hint: 'Hex bytes for onTokenBridged.' },
-    { kind: 'text', name: 'fallback', label: 'Fallback recipient', initial: signer?.address ?? '', visibleWhen: (values) => values.mode === 'fallback', hint: 'Paid when the receiver cannot be paid.' },
+    { kind: 'text', name: 'data', label: 'Call data', placeholder: '0x… (empty for none)', visibleWhen: (values) => !deliveryActive(values) && values.mode !== 'plain', hint: 'Hex bytes for onTokenBridged.' },
+    { kind: 'text', name: 'fallback', label: 'Fallback recipient', initial: signer?.address ?? '', visibleWhen: (values) => !deliveryActive(values) && values.mode === 'fallback', hint: 'Paid when the receiver cannot be paid.' },
+    {
+      kind: 'choice',
+      name: DELIVERY_FIELD.delivery,
+      label: 'Tip for delivery',
+      initial: 'yes',
+      choices: [
+        { value: 'yes', label: 'Yes, 0.1% by default' },
+        { value: 'no', label: 'No tip' },
+      ],
+      visibleWhen: offersDelivery,
+      hint: 'Yes adds a tip for delivery on the other chain. The router pays it to its reward address, not to the runner account. You fix the tip now; nothing at delivery changes it. It uses relayTokensAndCall to the router, and the Mode field is not used. No sends a plain relay.',
+    },
+    { kind: 'choice', name: DELIVERY_FIELD.mode, label: 'Tip mode', choices: FEE_MODE_CHOICES, visibleWhen: whenActive(), hint: 'Choosing a mode fills the numbers with the suggestion. Edit them from there.' },
+    { kind: 'text', name: DELIVERY_FIELD.percent, label: 'Percentage', initial: DEFAULT_TIP_PERCENT_TEXT, placeholder: 'blank means 0.1', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'percentage'), hint: 'A percent of the transfer, for example 0.1. The router takes this share for its reward address and the recipient gets the rest.' },
+    { kind: 'text', name: DELIVERY_FIELD.fixed, label: 'Fixed amount', placeholder: 'blank uses the suggestion', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'fixed'), hint: 'An amount of the token that the reward address is paid in, in whole tokens.' },
+    { kind: 'text', name: DELIVERY_FIELD.multiplier, label: 'Gas multiplier', placeholder: 'blank means 1.2', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'gas'), hint: 'A decimal such as 1.2: the router takes the gas cost times this for its reward address, never above the limit.' },
+    { kind: 'text', name: DELIVERY_FIELD.senderPrice, label: 'Your coin price', placeholder: 'tokens for one native coin', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'gas'), hint: 'Your own price: how many whole tokens one whole native coin of the other chain is worth. Nothing at delivery reads it. It is folded into the multiplier now.' },
+    { kind: 'text', name: DELIVERY_FIELD.ceiling, label: 'Base fee ceiling', placeholder: 'blank means twice the base fee now', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'gas'), hint: 'In gwei. A base fee above this cannot raise the most that the router can take.' },
+    { kind: 'choice', name: DELIVERY_FIELD.customKind, label: 'Custom kind', choices: CUSTOM_KINDS.map((kind) => ({ value: kind, label: CUSTOM_KIND_LABELS[kind] })), visibleWhen: whenActive((values) => feeFormModeOf(values) === 'custom'), hint: 'Left or Right chooses how the router reads the numbers.' },
+    { kind: 'text', name: DELIVERY_FIELD.customLimit, label: 'Limit', placeholder: '0', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'custom'), hint: 'Whole tokens. The fixed fee, or the cap of a gas based fee.' },
+    { kind: 'text', name: DELIVERY_FIELD.customMultiplier, label: 'Multiplier', placeholder: '0', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'custom'), hint: 'A decimal. A share: 0.005 is 0.5 percent. A gas based fee: the factor on the gas price.' },
+    { kind: 'choice', name: DELIVERY_FIELD.customBasis, label: 'Gas price', choices: [{ value: 'transaction', label: 'Transaction gas price' }, { value: 'base-fee-only', label: 'Base fee only' }], visibleWhen: whenActive((values) => feeFormModeOf(values) === 'custom' && values[DELIVERY_FIELD.customKind] === 'gas'), hint: 'Base fee only leaves the priority fee out of the gas based fee.' },
+    { kind: 'text', name: DELIVERY_FIELD.margin, label: 'Margin percent', initial: DEFAULT_MARGIN_PERCENT, visibleWhen: whenActive((values) => feeFormModeOf(values) !== 'custom'), hint: 'The profit on top of the cost that the suggestions add.' },
+    { kind: 'text', name: DELIVERY_FIELD.priority, label: 'Priority fee gwei', initial: DEFAULT_PRIORITY_GWEI, visibleWhen: whenActive(), hint: 'The tip that the runner pays per gas. It enters the cost of the delivery.' },
+    {
+      kind: 'choice',
+      name: DELIVERY_FIELD.payout,
+      label: 'Pay the reward address in',
+      choices: [{ value: 'token', label: 'The token' }, { value: 'native', label: 'The native coin (unwrap)' }],
+      visibleWhen: whenActive((values) => {
+        const resolved = targetOf(values)
+        return resolved.kind === 'ready' && resolved.target.isWrappedNative
+      }),
+      hint: 'The destination token is the wrapped native token, so the router can unwrap the fee.',
+    },
+    { kind: 'text', name: DELIVERY_FIELD.router, label: 'Router (advanced)', placeholder: 'blank is the fee router of the deployment', visibleWhen: whenActive(), hint: 'The last step before delivery, chosen in the extra data. Blank targets the fee router of the deployment on the other chain. Only its one whitelisted runner account can deliver through it. That account does not receive the tip; the reward address of the router does.' },
+    { kind: 'text', name: DELIVERY_FIELD.recipient, label: 'Fee recipient', placeholder: 'blank is the receiver above', visibleWhen: whenActive(), hint: 'Receives the tokens after the fee. Blank means the receiver above.' },
   ]
+  /** Asks the router for its reward address, then builds the review. The read never throws; a failed read becomes a line on the review. */
+  const submitBridge = async (values: Values): Promise<void> => {
+    try {
+      if (signer === null) throw new PlanInputError('Connect a signer first.')
+      const context = { pair, snapshots: session.snapshots, signerAddress: signer.address, deliveryCost: report.data, tokenValuationsWei }
+      const wanted = deliveryRouterOf(values, session.tokens, context)
+      const rewardAddress = wanted === null ? undefined : await chainAccess.readRewardAddress(wanted)
+      props.onReview('Bridge tokens', buildBridgeSteps(values, session.tokens, { ...context, ...(rewardAddress === undefined ? {} : { rewardAddress }) }))
+      setError(null)
+    } catch (caught) {
+      setError(messageOf(caught))
+    }
+  }
   const form = useForm({
     specs,
-    onSubmit: (values) =>
-      attempt(() => {
-        if (signer === null) throw new PlanInputError('Connect a signer first.')
-        const steps = buildBridgeSteps(values, session.tokens, { pair, snapshots: session.snapshots, signerAddress: signer.address })
-        props.onReview('Bridge tokens', steps)
-      }),
+    // `report` is declared below the form because it depends on the form values. The edit handler runs after the render.
+    onEdit: (previous, next) => refillDeliveryFee(previous, next, { stateFor: (values) => stateFor(values, report.data) }),
+    onSubmit: (values) => void submitBridge(values),
     onCancel: props.onClose,
   })
+  const values = form.state.values
+  const resolved = targetOf(values)
+  const wantedChainId = deliveryActive(values) && resolved.kind === 'ready' ? resolved.target.chain.chainId : null
+  const report = usePolling<DeliveryCostReport | null>(
+    () => (wantedChainId === null ? Promise.resolve(null) : dataSource.getDeliveryCost(wantedChainId)),
+    `delivery-cost|${wantedChainId ?? 'off'}`,
+    wantedChainId === null ? 0 : DELIVERY_COST_INTERVAL_MILLISECONDS,
+  )
+  const panel = deliveryPanelLines(panelInputOf({ resolved, report, state: stateFor(values, report.data) }))
+  const note = resolved.kind === 'unavailable' && (bridgeSourceOf(values, session.tokens, pair).kind === 'token' || paysForDelivery(values)) ? resolved.reason : null
   return (
-    <ModalFrame title="Bridge tokens" width={96} height={16}>
+    <ModalFrame title="Bridge tokens" width={96} height={wantedChainId === null ? 17 : 41}>
       <FormView form={form} width={92} />
+      {wantedChainId === null ? null : <RichLines lines={panel} />}
       <RichLine line={[colored(error ?? ' ', theme.bad)]} />
+      {note === null ? null : <RichLine line={[muted(note)]} />}
       <RichLine line={[muted('Enter reviews the transaction. Nothing is sent before you confirm it. Esc cancels.')]} />
     </ModalFrame>
   )
+}
+
+function panelInputOf(input: {
+  readonly resolved: ReturnType<typeof resolveDeliveryTarget>
+  readonly report: { readonly data: DeliveryCostReport | null; readonly error: string | null }
+  readonly state: { state: DeliveryFeeState; target: DeliveryTarget } | null
+}): Parameters<typeof deliveryPanelLines>[0] {
+  const chainName = input.resolved.kind === 'ready' ? input.resolved.target.chain.name : 'the other chain'
+  if (input.report.error !== null && input.report.data === null) return { kind: 'failed', chainName, reason: input.report.error }
+  if (input.state === null) return { kind: 'loading', chainName }
+  return { kind: 'state', state: input.state.state, target: input.state.target }
 }
 
 /** The form that sends an arbitrary message with requireToPassMessage. */

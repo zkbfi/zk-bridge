@@ -6,6 +6,7 @@ import { keccak256 } from 'viem'
 import { formatRateAsPercent, formatUnits } from '../format/amounts'
 import type { PreparedTransaction } from '../tx/prepare'
 import { colored, muted, plain, strong, type Line } from './rich-text'
+import { deliveryFeeReviewLines } from './delivery-fee-lines'
 import { theme } from './theme'
 
 const LABEL_WIDTH = 14
@@ -54,6 +55,7 @@ export function reviewLines(prepared: PreparedTransaction, options: { position: 
             `${formatRateAsPercent(plan.charge.rate)} = ${formatUnits(plan.charge.amount, plan.charge.token.decimals)} ${plan.charge.token.symbol}, taken by the mediator`,
           ),
         ]),
+    ...(plan.deliveryFee === undefined ? [] : deliveryFeeReviewLines(plan.deliveryFee)),
     ...plan.notes.map((note): Line => [colored(`* ${note}`, theme.warn)]),
     ...(options.calldata === 'full'
       ? [[muted(`Calldata (${calldataBytes} bytes)`)] as Line, ...wrapHexLines(plan.data, options.wrapWidth)]

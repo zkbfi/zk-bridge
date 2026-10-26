@@ -1,0 +1,108 @@
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { getAddress } from "viem";
+import { describe, expect, it, vi } from "vitest";
+import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
+import { TransactionDialog } from "../../src/actions/TransactionDialog";
+import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS } from "../../src/tx/bridge-draft";
+import type { WebStep } from "../../src/tx/bridge-steps";
+import { buildDeliveryReport, buildFixtureContext } from "../helpers";
+import { renderPage } from "../render";
+
+const usdc = FIXTURE_TOKENS[0]!;
+
+const stepsOf = async (input: { readonly allowance: bigint; readonly delivery: boolean }): Promise<readonly WebStep[]> => {
+  const { context, tokens } = await buildFixtureContext({ allowance: input.allowance });
+  const draft = computeBridgeDraft(
+    { token: `first:${usdc.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", fallback: "" },
+    { ...DEFAULT_DELIVERY_OPTIONS, mode: input.delivery ? "percentage" : "none", senderPriceText: "1" },
+    { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
+  );
+  if (draft.status !== "ready") throw new Error(draft.reason ?? "not ready");
+  return draft.steps;
+};
+
+describe("the confirm dialog", () => {
+  it("shows chain, contract, function, decoded arguments, value and fees before the wallet opens", async () => {
+    const onSend = vi.fn();
+    renderPage(<TransactionDialog steps={await stepsOf({ allowance: 10n ** 12n, delivery: true })} onClose={() => undefined} />, { onSend });
+    const review = await screen.findByTestId("confirm-review");
+    expect(within(review).getByText("Ethereum (chain 1)")).toBeInTheDocument();
+    expect(within(review).getByText(/^TokenMediator at 0x/)).toBeInTheDocument();
+    expect(within(review).getByText("relayTokensAndCall(address,address,uint256,bytes)")).toBeInTheDocument();
+    expect(within(review).getByText("Value sent").nextSibling).toHaveTextContent("0 ETH");
+    expect(within(review).getByText("value")).toBeInTheDocument();
+    expect(within(review).getByText("250000000")).toBeInTheDocument();
+    expect(within(review).getByText(/Bridge fee on the source chain/)).toBeInTheDocument();
+    const delivery = within(review).getByTestId("confirm-delivery");
+    expect(delivery).toHaveTextContent(/Tip for delivery \(paid by this transaction\)/);
+    expect(within(delivery).getByText(getAddress(FIXTURE_PAIR.second.contracts.feeRouter!))).toBeInTheDocument();
+    expect(within(delivery).getByText("percentage of the transfer")).toBeInTheDocument();
+    expect(within(delivery).getByTestId("confirm-tip-now")).toHaveTextContent(/\(exact\)$/);
+    expect(within(delivery).getByTestId("confirm-runner-maximum")).toHaveTextContent(/The runner can take at most/);
+    expect(within(delivery).getByTestId("confirm-runner-notes")).toHaveTextContent(/Only one whitelisted runner can collect tips.*recipient then gets the whole amount/);
+    expect(within(delivery).queryByTestId("confirm-router-warning")).toBeNull();
+    expect(within(delivery).getByText("Gas cost")).toBeInTheDocument();
+    expect(within(delivery).getByText("Proof cost")).toBeInTheDocument();
+    expect(within(delivery).getByText("Margin")).toBeInTheDocument();
+    expect(within(delivery).getByText(/measured from 40 recent deliveries, p90/)).toBeInTheDocument();
+    expect(within(review).getByText("Network fee")).toBeInTheDocument();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("shows that no router is involved when there is no tip", async () => {
+    renderPage(<TransactionDialog steps={await stepsOf({ allowance: 10n ** 12n, delivery: false })} onClose={() => undefined} />);
+    expect(await screen.findByTestId("confirm-no-router")).toHaveTextContent(/No router is involved/);
+    expect(screen.queryByTestId("confirm-delivery")).toBeNull();
+  });
+
+  it("hands the transaction to the wallet only when the user presses the send button", async () => {
+    const onSend = vi.fn();
+    renderPage(<TransactionDialog steps={await stepsOf({ allowance: 10n ** 12n, delivery: false })} onClose={() => undefined} />, { onSend });
+    const send = await screen.findByRole("button", { name: "Send to wallet" });
+    expect(onSend).not.toHaveBeenCalled();
+    await userEvent.click(send);
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/Done\. Every transaction is confirmed/)).toBeInTheDocument();
+  });
+
+  it("walks an allowance step and then the relay, each in full, and labels the position", async () => {
+    const onSend = vi.fn();
+    renderPage(<TransactionDialog steps={await stepsOf({ allowance: 0n, delivery: false })} onClose={() => undefined} />, { onSend });
+    expect(await screen.findByText("Step 1 of 2")).toBeInTheDocument();
+    expect(screen.getByText("approve(address,uint256)")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Send to wallet" }));
+    expect(await screen.findByText("Step 2 of 2")).toBeInTheDocument();
+    expect(screen.getByText("relayTokens(address,address,uint256)")).toBeInTheDocument();
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the send button and explains when the calldata does not match what was planned", async () => {
+    const steps = await stepsOf({ allowance: 10n ** 12n, delivery: false });
+    const forged: WebStep[] = [{ ...steps[0]!, plan: { ...steps[0]!.plan, data: "0xdeadbeef" } }];
+    renderPage(<TransactionDialog steps={forged} onClose={() => undefined} />);
+    const send = await screen.findByRole("button", { name: "Send to wallet" });
+    expect(send).toBeDisabled();
+    expect(screen.getByRole("alert")).toHaveTextContent(/cannot read this call/);
+  });
+
+  it("closes without sending when the user cancels", async () => {
+    const onSend = vi.fn();
+    const onClose = vi.fn();
+    renderPage(<TransactionDialog steps={await stepsOf({ allowance: 10n ** 12n, delivery: false })} onClose={onClose} />, { onSend });
+    await screen.findByRole("button", { name: "Send to wallet" });
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onClose).toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("is a labelled modal dialog that closes on Escape", async () => {
+    const onClose = vi.fn();
+    renderPage(<TransactionDialog steps={await stepsOf({ allowance: 10n ** 12n, delivery: false })} onClose={onClose} />);
+    const dialog = await screen.findByRole("dialog", { name: "Review before you sign" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalled();
+    expect(FIXTURE_ACCOUNT).toBeTruthy();
+  });
+});
