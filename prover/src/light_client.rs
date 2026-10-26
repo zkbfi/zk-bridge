@@ -752,19 +752,18 @@ impl BlockView {
     }
 
     /// Parses a block of `chain` after a check of its fork. The slot of the block comes from its first bytes, and the chain
-    /// schedule gives the fork. Only Capella blocks go to the parser. A Gloas block is refused with the refusal of
-    /// `lc-core` (a message proof from a Gloas source block is not supported), and any other fork is refused by name. The parser never reads a block of another fork as Capella.
+    /// schedule gives the fork. Only Capella blocks go to the parser. A Gloas block is refused: the prover has no Gloas body parser yet, so it cannot build message evidence from a Gloas source. Any other fork is refused by name. The parser never reads a block of another fork as Capella.
     ///
     /// # Errors
-    /// `Error::VerificationRefused` for a Gloas block. `Error::Malformed` for another fork than Capella, or for bytes
+    /// `Error::Malformed` for a Gloas block, for another fork than Capella, or for bytes
     /// that are not a block.
     pub fn parse_for_chain(bytes: &[u8], chain: ChainKind) -> Result<Self> {
         let slot = signed_block_slot(bytes)?;
         match chain.spec().fork_at_slot(slot) {
             ForkName::Capella => Self::parse(bytes),
-            ForkName::Gloas => Err(Error::VerificationRefused(
-                lc_core::Error::GloasPayloadNotFinalized.to_string(),
-            )),
+            ForkName::Gloas => Err(Error::Malformed(format!(
+                "beacon block at slot {slot} is a Gloas block: the prover has no parser for the Gloas body yet, so it cannot build the bid parent block hash branch of a message proof (the verifiers accept such a proof)"
+            ))),
             fork => Err(Error::Malformed(format!(
                 "beacon block at slot {slot} is of the fork {fork:?}; the block path reads Capella blocks only"
             ))),
@@ -1032,7 +1031,7 @@ mod tests {
         let refusal = BlockView::parse_for_chain(&block_at(gloas_slot + 5), ChainKind::Sepolia)
             .err()
             .expect("refused");
-        assert!(matches!(&refusal, Error::VerificationRefused(text) if text.contains("Gloas")));
+        assert!(matches!(&refusal, Error::Malformed(text) if text.contains("Gloas")));
         let deneb = BlockView::parse_for_chain(&block_at(132_608 * 32), ChainKind::Sepolia)
             .err()
             .expect("refused");
