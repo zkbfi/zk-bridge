@@ -41,8 +41,6 @@ contract LightClientSync {
 
         for (uint256 i = 0; i < signatures.length; i++) {
             address validatorAddress = signingRoot.recover(signatures[i]);
-            if (validatorAddress == address(0)) continue;
-
             // FIXED (Gas Optimization): Force off-chain sorting to achieve O(N) execution velocity.
             // This strictly forbids duplicate entries or backward out-of-order execution states.
             require(validatorAddress > lastValidatorAddress, "Signatures not strictly ordered or duplicate detected");
