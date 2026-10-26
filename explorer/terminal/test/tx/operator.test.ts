@@ -216,3 +216,43 @@ describe('planMessageExecution', () => {
     expect(planMessageExecution(evidence({ prerequisites: [] }), FIXTURE_PAIR).steps).toHaveLength(1)
   })
 })
+
+describe('the fields of an evidence file are checked one by one', () => {
+  const messageFor = (changes: Record<string, unknown>): string => {
+    try {
+      planMessageExecution(evidence(changes), FIXTURE_PAIR)
+    } catch (error) {
+      if (error instanceof OperatorFileError) return error.message
+      throw error
+    }
+    throw new Error('the file was accepted')
+  }
+
+  test('a list of prerequisites that is not an array is refused with its path', () => {
+    expect(messageFor({ prerequisites: { function: 'addBlockHashLayout' } })).toBe('evidence.prerequisites must be an array.')
+  })
+
+  test('a text field that holds another type is refused with its path', () => {
+    expect(messageFor({ deliveryStatus: 5 })).toBe('evidence.deliveryStatus must be a string.')
+  })
+
+  test('a number field must be a whole number of zero or more', () => {
+    const expected = 'evidence.logIndex must be a non-negative integer.'
+    expect(messageFor({ logIndex: -1 })).toBe(expected)
+    expect(messageFor({ logIndex: 1.5 })).toBe(expected)
+    expect(messageFor({ logIndex: '1' })).toBe(expected)
+  })
+
+  test('a hex field must start with 0x and hold whole bytes', () => {
+    const expected = 'evidence.execute.data must be 0x hex with whole bytes.'
+    expect(messageFor({ execute: { to: bridge, data: '0x123' } })).toBe(expected)
+    expect(messageFor({ execute: { to: bridge, data: '0xzz' } })).toBe(expected)
+    expect(messageFor({ execute: { to: bridge, data: 'abcd' } })).toBe(expected)
+  })
+
+  test('an address field must be forty hex digits', () => {
+    const expected = 'evidence.destination.bridge must be an address.'
+    expect(messageFor({ destination: { chainId: 369, bridge: '0x1234', lightClient } })).toBe(expected)
+    expect(messageFor({ destination: { chainId: 369, bridge: 'nope', lightClient } })).toBe(expected)
+  })
+})
