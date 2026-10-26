@@ -111,8 +111,9 @@ export const createTransactionSequence = (dependencies: SequenceDependencies): T
     }
   };
 
+  // No staleness check here. From `confirm` until the result, the phase is "wallet" or "confirming", and in those phases
+  // neither `start` nor `cancel` changes the generation, so no other call can make this result stale.
   const sendPrepared = async (prepared: PreparedTransaction): Promise<void> => {
-    const mine = generation;
     try {
       const hash = await dependencies.sendTransaction({
         chainId: prepared.plan.chain.chainId,
@@ -121,10 +122,8 @@ export const createTransactionSequence = (dependencies: SequenceDependencies): T
         value: prepared.plan.value,
         gas: prepared.gasLimit,
       });
-      if (mine !== generation) return;
       publish({ phase: "confirming", submittedHash: hash });
       const receipt = await dependencies.clientFor(prepared.plan.chain.chainId).waitForTransactionReceipt({ hash });
-      if (mine !== generation) return;
       const outcome: SequenceOutcome = { title: prepared.plan.title, status: receipt.status, transactionHash: hash };
       if (receipt.status === "reverted") {
         return publish({ phase: "error", outcomes: [...state.outcomes, outcome], error: `The transaction ${hash} reverted.` });
@@ -132,7 +131,6 @@ export const createTransactionSequence = (dependencies: SequenceDependencies): T
       publish({ outcomes: [...state.outcomes, outcome], stepIndex: state.stepIndex + 1 });
       await prepareCurrent();
     } catch (error) {
-      if (mine !== generation) return;
       publish({ phase: "error", submittedHash: null, error: `Not sent: ${messageOf(error)}` });
     }
   };
