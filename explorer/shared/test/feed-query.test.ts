@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_FEED_LIMIT, encodeCursor, parseFeedQuery } from "../../src/lib/feed-query";
+import { DEFAULT_FEED_LIMIT, encodeCursor, parseFeedQuery } from "../src/feed-query.js";
 
 const parse = (query: string) => parseFeedQuery(new URLSearchParams(query));
 const id = `0x${"0a".repeat(32)}`;

@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
 import { messages, tokens, transfers } from "../../ponder.schema";
 import { registerFeedRoutes } from "../../src/api/routes/feed";
-import { encodeCursor } from "../../src/lib/feed-query";
+import { encodeCursor } from "@zk-bridge/shared";
 import { calls, respondWith, type QueryCall } from "./support/fake-api";
 import { addressOf, hashOf, sentMessageRow } from "./support/handler-fixtures";
 

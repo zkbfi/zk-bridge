@@ -1,6 +1,9 @@
-import { decodeAmbMessage, decodeMediatorMessage, otherSide, sameAddress, type MediatorMessage, type Pair } from "@zk-bridge/shared";
 import type { Hex } from "viem";
-import type { MessageRow } from "./messages";
+import { sameAddress } from "./address.js";
+import { decodeAmbMessage } from "./amb.js";
+import { decodeMediatorMessage, type MediatorMessage } from "./mediator-message.js";
+import type { MessageRow } from "./message-merge.js";
+import { otherSide, type Pair } from "./pairs.js";
 
 /** What a `UserRequestForAffirmation` log tells about a message. */
 export type DecodedSend = {

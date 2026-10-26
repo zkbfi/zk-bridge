@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { encodeFunctionData } from "viem";
 import { buildMessageId, encodeAmbMessage, tokenMediatorAbi } from "@zk-bridge/shared";
 import { bridgeStates, deliveryCosts, messages, transfers } from "../../ponder.schema";
-import { AFFIRMATION_COMPLETED_SELECTOR } from "../../src/lib/delivery-cost";
+import { AFFIRMATION_COMPLETED_SELECTOR } from "@zk-bridge/shared";
 import { callHandler } from "./support/fake-registry";
 import {
   BRIDGE_ON_ETHEREUM,

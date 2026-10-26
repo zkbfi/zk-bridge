@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditToken } from "../../src/lib/audit";
+import { auditToken } from "../src/audit.js";
 
 const base = { homeChainId: 1, token: "0xabc", escrow: 0n, accruedFees: 0n, bridgedSupply: 0n, pendingForward: 0n, pendingBackward: 0n };
 

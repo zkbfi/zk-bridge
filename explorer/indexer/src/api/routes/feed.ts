@@ -3,8 +3,7 @@ import { messages, tokens, transfers } from "ponder:schema";
 import { and, desc, eq, gte, isNotNull, lt, lte, or, sql, inArray } from "ponder";
 import type { Hono } from "hono";
 import type { Hex } from "viem";
-import { encodeCursor, parseFeedQuery, type FeedFilters } from "../../lib/feed-query";
-import { feedItemView, indexTokens } from "../views";
+import { encodeCursor, feedItemView, indexTokens, parseFeedQuery, type FeedFilters } from "@zk-bridge/shared";
 
 /** Builds the SQL conditions for the feed filters. */
 const conditionsOf = (filters: FeedFilters) => {

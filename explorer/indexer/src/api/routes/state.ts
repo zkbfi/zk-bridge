@@ -16,11 +16,23 @@ import {
 } from "ponder:schema";
 import { and, desc, eq, notInArray, sql, sum, gt, lt } from "ponder";
 import type { Hono } from "hono";
-import { describePair, normalizeAddress } from "@zk-bridge/shared";
-import { auditToken } from "../../lib/audit";
+import {
+  amountOf,
+  auditItemView,
+  auditToken,
+  describePair,
+  escrowView,
+  feeBalanceView,
+  headUpdateView,
+  indexTokens,
+  normalizeAddress,
+  numberOf,
+  supplyView,
+  tokenListItemView,
+  tokenView,
+} from "@zk-bridge/shared";
 import { pair } from "../../lib/pair";
 import { loadGates, loadHeads } from "../heads";
-import { amountOf, escrowView, indexTokens, numberOf, supplyView, tokenView } from "../views";
 
 const PAID_STATUSES = ["delivered", "fallback_used"];
 
@@ -54,20 +66,7 @@ export const registerStateRoutes = (app: Hono): void => {
       .orderBy(desc(headUpdates.timestamp), desc(headUpdates.slot))
       .limit(limitOf(c.req.query("limit"), 50));
     return c.json({
-      items: rows.map((row) => ({
-        chainId: row.chainId,
-        slot: numberOf(row.slot),
-        headerRoot: row.headerRoot,
-        executionBlockHash: row.executionBlockHash,
-        executionBlockNumber: numberOf(row.executionBlockNumber),
-        transactionHash: row.transactionHash,
-        blockNumber: numberOf(row.blockNumber),
-        timestamp: numberOf(row.timestamp),
-        gasUsed: amountOf(row.gasUsed),
-        effectiveGasPrice: amountOf(row.effectiveGasPrice),
-        costWei: amountOf(row.costWei),
-        poster: row.poster,
-      })),
+      items: rows.map(headUpdateView),
     });
   });
 
@@ -133,14 +132,7 @@ export const registerStateRoutes = (app: Hono): void => {
   app.get("/api/tokens", async (c) => {
     const rows = await db.select().from(tokens);
     const index = indexTokens(rows);
-    return c.json({
-      tokens: rows.map((row) => ({
-        ...tokenView(row.chainId, row.address, index),
-        registeredTransactionHash: row.registeredTransactionHash,
-        registeredBlockNumber: numberOf(row.registeredBlockNumber),
-        registeredTimestamp: numberOf(row.registeredTimestamp),
-      })),
-    });
+    return c.json({ tokens: rows.map((row) => tokenListItemView(row, index)) });
   });
 
   app.get("/api/audit", async (c) => {
@@ -161,18 +153,7 @@ export const registerStateRoutes = (app: Hono): void => {
         pendingForward,
         pendingBackward,
       });
-      results.push({
-        token: tokenView(row.chainId, row.token, index),
-        bridgedToken: copy === undefined ? null : tokenView(copy.chainId, copy.token, index),
-        escrow: amountOf(audit.escrow),
-        accruedFees: amountOf(audit.accruedFees),
-        bridgedSupply: amountOf(audit.bridgedSupply),
-        pendingForward: amountOf(audit.pendingForward),
-        pendingBackward: amountOf(audit.pendingBackward),
-        expectedEscrow: amountOf(audit.expectedEscrow),
-        difference: amountOf(audit.difference),
-        mismatch: audit.mismatch,
-      });
+      results.push(auditItemView({ audit, homeChainId: row.chainId, copy: copy ?? null }, index));
     }
     return c.json({ generatedNote: "the escrow and the supply are read at different blocks; recheck a mismatch once", tokens: results });
   });
@@ -191,13 +172,7 @@ export const registerStateRoutes = (app: Hono): void => {
       db.select().from(feeEvents).orderBy(desc(feeEvents.timestamp)).limit(limitOf(c.req.query("limit"), 50)),
     ]);
     return c.json({
-      balances: balances.map((row) => ({
-        chainId: row.chainId,
-        token: tokenView(row.chainId, row.token, index),
-        charged: amountOf(row.charged),
-        collected: amountOf(row.collected),
-        accrued: amountOf(row.accrued),
-      })),
+      balances: balances.map((row) => feeBalanceView(row, index)),
       terms: terms.map((row) => ({
         chainId: row.chainId,
         rate: amountOf(row.rate),

@@ -1,9 +1,8 @@
 import { and, eq, inArray, isNull, lte } from "ponder";
 import { messages, chainTips, lightClientHeads, transfers } from "ponder:schema";
-import { isCovered, sideOf } from "@zk-bridge/shared";
+import { isCovered, mergeMessage, sideOf, type MessageRow } from "@zk-bridge/shared";
 import type { Hex } from "viem";
 import type { Context } from "ponder:registry";
-import { mergeMessage, type MessageRow } from "./messages";
 import { pair } from "./pair";
 
 type AnyContext = Context<"MessageBridge:AffirmationCompleted">;

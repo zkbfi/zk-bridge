@@ -3,9 +3,7 @@ import { chainTips, deliveryCosts, messages, transfers } from "ponder:schema";
 import { and, desc, eq, isNotNull, ne } from "ponder";
 import type { Hono } from "hono";
 import { env } from "node:process";
-import type { DeliveryKind } from "@zk-bridge/shared";
-import { buildDeliveryCostReport, classifyDelivery } from "../../lib/delivery-cost";
-import { parseDeliveryCostSettings } from "../../lib/delivery-cost-settings";
+import { buildDeliveryCostReport, classifyDelivery, parseDeliveryCostSettings, type DeliveryKind } from "@zk-bridge/shared";
 import { pair } from "../../lib/pair";
 
 /** The settings are read once. A malformed variable stops the process at start. */

@@ -1,4 +1,4 @@
-import { mergeMessage } from "../../../src/lib/messages";
+import { mergeMessage } from "@zk-bridge/shared";
 import { createFakeClient, type ReadCall } from "./fake-client";
 import { createFakeDatabase } from "./fake-database";
 

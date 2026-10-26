@@ -1,9 +1,7 @@
 import { ponder } from "ponder:registry";
 import { bridgeStates, deliveryCosts } from "ponder:schema";
-import { otherSide, sideOf } from "@zk-bridge/shared";
-import { isSingleDelivery } from "../lib/delivery-cost";
+import { decodeSend, isSingleDelivery, otherSide, sideOf } from "@zk-bridge/shared";
 import { pair } from "../lib/pair";
-import { decodeSend } from "../lib/send-decoding";
 import { writeMessage } from "../lib/message-store";
 import { writeTransfer } from "../lib/transfer-store";
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseDeliveryCostSettings } from "../../src/lib/delivery-cost-settings";
+import { parseDeliveryCostSettings } from "../src/delivery-cost-settings.js";
 
 describe("parseDeliveryCostSettings", () => {
   it("uses the documented defaults and no coin price", () => {

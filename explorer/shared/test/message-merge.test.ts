@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeMessage, type MessageRow } from "../../src/lib/messages";
+import { mergeMessage, type MessageRow } from "../src/message-merge.js";
 
 const id = `0x${"ab".repeat(32)}` as const;
 const base = { messageId: id, sourceChainId: 1, destinationChainId: 369, finalitySeconds: 768 };

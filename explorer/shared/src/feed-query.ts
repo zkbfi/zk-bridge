@@ -1,5 +1,6 @@
-import { MESSAGE_STATUSES, normalizeAddress, type MessageStatus } from "@zk-bridge/shared";
 import type { Address, Hex } from "viem";
+import { normalizeAddress } from "./address.js";
+import { MESSAGE_STATUSES, type MessageStatus } from "./status.js";
 
 /** The filters of the feed, parsed and normalized. */
 export type FeedFilters = {

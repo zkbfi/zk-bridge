@@ -1,4 +1,4 @@
-import { DEFAULT_PROOF_COST_USD, proofCostWei } from "@zk-bridge/shared";
+import { DEFAULT_PROOF_COST_USD, proofCostWei } from "./delivery-fee.js";
 
 /**
  * The default gas of one delivery transaction. It is the sum that Foundry measured: the fee router delivery call with

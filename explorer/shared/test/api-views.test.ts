@@ -8,8 +8,8 @@ import {
   supplyView,
   tokenKey,
   tokenView,
-} from "../../src/api/views";
-import { addressOf, hashOf, sentMessageRow } from "./support/handler-fixtures";
+} from "../src/api-views.js";
+import { addressOf, hashOf, sentMessageRow } from "./support/fixtures.js";
 
 const token = addressOf("aa");
 const native = addressOf("bb");

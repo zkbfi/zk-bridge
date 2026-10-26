@@ -1,12 +1,8 @@
 import { getAbiItem, toEventSelector, type Address, type Hex } from "viem";
-import {
-  messageBridgeAbi,
-  proofCostWei,
-  type DeliveryCostReport,
-  type DeliveryKind,
-  type DeliveryKindReport,
-} from "@zk-bridge/shared";
-import type { DeliveryCostSettings } from "./delivery-cost-settings";
+import { messageBridgeAbi } from "./abis/index.js";
+import type { DeliveryCostReport, DeliveryKind, DeliveryKindReport } from "./delivery-cost-report.js";
+import { proofCostWei } from "./delivery-fee.js";
+import type { DeliveryCostSettings } from "./delivery-cost-settings.js";
 
 /** The topic of the `AffirmationCompleted` event of the bridge, taken from the interface. */
 export const AFFIRMATION_COMPLETED_SELECTOR: Hex = toEventSelector(

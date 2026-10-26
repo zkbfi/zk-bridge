@@ -1,10 +1,9 @@
 import { db, publicClients } from "ponder:api";
 import { chainTips, gateStates, lightClientHeads, bridgeStates } from "ponder:schema";
 import { eq } from "ponder";
-import { beaconForkGateAbi, otherSide, type PairSide } from "@zk-bridge/shared";
+import { beaconForkGateAbi, gateView, headView, otherSide, type GateFlags, type PairSide } from "@zk-bridge/shared";
 import { createTimedCache, fetchFinalizedSlot } from "../lib/beacon";
 import { pair } from "../lib/pair";
-import { numberOf } from "./views";
 
 const finalizedSlotCache = createTimedCache<number | null>(10_000);
 const blockTimestampCache = new Map<string, number | null>();
@@ -40,32 +39,11 @@ const headOf = async (side: PairSide) => {
       ? null
       : await finalizedSlotCache.get(tracked.beaconUrl, () => fetchFinalizedSlot(tracked.beaconUrl as string));
   const headBlockTimestamp = head === undefined ? null : await blockTimestamp(tracked, head.executionBlockNumber);
-  const lagSeconds =
-    headBlockTimestamp === null || trackedTip === undefined ? null : Math.max(0, Number(trackedTip.timestamp) - headBlockTimestamp);
-  return {
-    chainId: side.chainId,
-    name: side.name,
-    lightClient: side.contracts.lightClient,
-    trackedChainId: tracked.chainId,
-    storedHeadSlot: numberOf(head?.slot),
-    storedHeadExecutionBlock: numberOf(head?.executionBlockNumber),
-    storedHeadExecutionTimestamp: headBlockTimestamp,
-    lastUpdateTimestamp: numberOf(head?.updatedTimestamp),
-    updateCount: head?.updateCount ?? 0,
-    finalizedSlot,
-    lagSlots: finalizedSlot === null || head === undefined ? null : Math.max(0, finalizedSlot - Number(head.slot)),
-    lagSeconds,
-    trackedChainTipBlock: numberOf(trackedTip?.blockNumber),
-    trackedChainTipTimestamp: numberOf(trackedTip?.timestamp),
-    ownChainTipBlock: numberOf(ownTip?.blockNumber),
-    ownChainTipTimestamp: numberOf(ownTip?.timestamp),
-  };
+  return headView({ side, tracked, head, finalizedSlot, headBlockTimestamp, trackedTip, ownTip });
 };
 
 /** The light client heads of both sides. */
 export const loadHeads = () => Promise.all(pair.sides.map(headOf));
-
-type GateFlags = { readonly enforcing: boolean; readonly sealed: boolean };
 
 const gateFlagsCache = createTimedCache<GateFlags | null>(5_000);
 
@@ -91,21 +69,7 @@ const gateOf = async (side: PairSide) => {
   const live = await readGateFlags(side);
   const [gate] = await db.select().from(gateStates).where(eq(gateStates.chainId, side.chainId));
   const [bridge] = await db.select().from(bridgeStates).where(eq(bridgeStates.chainId, side.chainId));
-  return {
-    chainId: side.chainId,
-    name: side.name,
-    gate: side.contracts.gate,
-    enforcing: live?.enforcing ?? gate?.enforcing ?? null,
-    sealed: live?.sealed ?? gate?.sealed ?? null,
-    sealedVersion: gate?.sealedVersion ?? null,
-    sealedSlot: numberOf(gate?.sealedSlot),
-    lastConfirmedEpoch: numberOf(gate?.lastConfirmedEpoch),
-    lastConfirmedVersion: gate?.lastConfirmedVersion ?? null,
-    lastConfirmedTimestamp: numberOf(gate?.lastConfirmedTimestamp),
-    confirmations: gate?.confirmations ?? 0,
-    depositsOpen: bridge?.depositsOpen ?? false,
-    depositsOpenedTimestamp: numberOf(bridge?.openedTimestamp),
-  };
+  return gateView({ side, live, gate, bridge });
 };
 
 /** The gate and send state of both sides. */

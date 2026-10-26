@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, encodeFunctionData, type Address } from "viem";
-import { buildMessageId, encodeAmbMessage, loadPair, tokenMediatorAbi } from "@zk-bridge/shared";
-import { decodeSend } from "../../src/lib/send-decoding";
+import { buildMessageId, encodeAmbMessage, loadPair, tokenMediatorAbi } from "../src/index.js";
+import { decodeSend } from "../src/send-decoding.js";
 
 const section = (chainId: number, digit: string) => ({
   chain_id: chainId,

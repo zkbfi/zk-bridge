@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseDeliveryCostReport } from "@zk-bridge/shared";
+import { parseDeliveryCostReport } from "../src/index.js";
 import {
   AFFIRMATION_COMPLETED_SELECTOR,
   averageRoundingHalfUp,
@@ -9,8 +9,8 @@ import {
   isSingleDelivery,
   percentileNearestRank,
   type ReceiptLog,
-} from "../../src/lib/delivery-cost";
-import { parseDeliveryCostSettings } from "../../src/lib/delivery-cost-settings";
+} from "../src/delivery-cost.js";
+import { parseDeliveryCostSettings } from "../src/delivery-cost-settings.js";
 
 const bridge = "0x00000000000000000000000000000000000000b1" as const;
 const other = "0x00000000000000000000000000000000000000c2" as const;
