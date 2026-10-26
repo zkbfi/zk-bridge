@@ -45,6 +45,40 @@ describe("the rolling spend budget", () => {
     expect(budgetPause(budget, LIMITS, 1)).toMatchObject({ kind: "loss-threshold" });
   });
 
+  it("settles only the charge with the identifier and leaves the others at their reserved wei", () => {
+    const budget = withCharge(withCharge(EMPTY, { id: "a", atMilliseconds: 0, wei: "10" }), { id: "b", atMilliseconds: 1, wei: "20" });
+    expect(withSettledCharge(budget, "b", 7n).prerequisiteSpend).toEqual([
+      { id: "a", atMilliseconds: 0, wei: "10" },
+      { id: "b", atMilliseconds: 1, wei: "7" },
+    ]);
+    expect(withSettledCharge(budget, "unknown", 7n)).toEqual(budget);
+  });
+
+  it("resumes at the roll-out of the entry after which the total falls below the limit, not at the first entry", () => {
+    // Three charges of 60 against a limit of 100: the total is 180. Dropping the oldest leaves 120, still at or above
+    // the limit. Dropping the second leaves 60, below it. So spending resumes when the second charge rolls out.
+    const budget = [0, 1000, 2000].reduce((sum, at) => withCharge(sum, { id: `c${at}`, atMilliseconds: at, wei: "60" }), EMPTY as Parameters<typeof withCharge>[0]);
+    expect(budgetPause(budget, LIMITS, 3000)?.resumesAtMilliseconds).toBe(1000 + SPEND_WINDOW_MILLISECONDS);
+  });
+
+  it("sorts the entries oldest first, whatever the order of the list", () => {
+    const budget = withCharge(withCharge(EMPTY, { id: "late", atMilliseconds: 1000, wei: "60" }), { id: "early", atMilliseconds: 0, wei: "60" });
+    expect(budgetPause(budget, LIMITS, 2000)?.resumesAtMilliseconds).toBe(SPEND_WINDOW_MILLISECONDS);
+  });
+
+  it("names the last entry as the resume point when the limit is zero, because no total is below zero", () => {
+    const budget = withLoss(withLoss(EMPTY, { atMilliseconds: 5, wei: "1" }), { atMilliseconds: 9, wei: "1" });
+    expect(budgetPause(budget, { dailySpendWei: 100n, unrecoveredLossWei: 0n }, 10)?.resumesAtMilliseconds).toBe(9 + SPEND_WINDOW_MILLISECONDS);
+  });
+
+  it("resumes at once when the limit is zero and nothing is lost, because there is no entry to wait for", () => {
+    expect(budgetPause(EMPTY, { dailySpendWei: 100n, unrecoveredLossWei: 0n }, 10)).toEqual({
+      kind: "loss-threshold",
+      detail: "0 wei lost in the last 24 hours, the threshold is 0",
+      resumesAtMilliseconds: 0,
+    });
+  });
+
   it("reads a state file that has a layout list but no delivery list, and gives it an empty one", () => {
     const before = runnerStateSchema.parse({ schemaVersion: 1, finished: {}, prerequisiteSpend: [{ id: "a", atMilliseconds: 1, wei: "5" }], prerequisiteLosses: [] });
     expect(before.deliverySpend).toEqual([]);

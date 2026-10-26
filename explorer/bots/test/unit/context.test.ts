@@ -78,6 +78,64 @@ describe("loading the context", () => {
     await expect(loadBotContext({ configPath: "/nonexistent/bots.json", environment: {}, write: () => undefined })).rejects.toThrow(/Cannot read the bot configuration/);
   });
 
+  it("names a configuration file that is not JSON", async () => {
+    const { configPath } = await files(emptyProverSetup());
+    await writeFile(configPath, "{ not json");
+    await expect(loadBotContext({ configPath, environment: {}, write: () => undefined })).rejects.toThrow(`The bot configuration at ${configPath} is not valid JSON.`);
+  });
+
+  it("names a deployment file that is not JSON", async () => {
+    const { configPath, directory } = await files(emptyProverSetup());
+    await writeFile(join(directory, "deployment.json"), "[");
+    await expect(loadBotContext({ configPath, environment: {}, write: () => undefined })).rejects.toThrow(`The deployment file at ${join(directory, "deployment.json")} is not valid JSON.`);
+  });
+
+  it("reads the deployment path from the environment when the configuration names none", async () => {
+    const { configPath, directory } = await files(emptyProverSetup(), { deploymentFile: undefined });
+    const context = await loadBotContext({
+      configPath,
+      environment: { EXPLORER_DEPLOYMENT_FILE: join(directory, "deployment.json"), EXPLORER_RPC_URL_1: "http://127.0.0.1:1", EXPLORER_RPC_URL_369: "http://127.0.0.1:2" },
+      write: () => undefined,
+    });
+    expect(context.pair.sides[0].chainId).toBe(1);
+  });
+
+  it("treats an empty deployment variable as unset", async () => {
+    const { configPath } = await files(emptyProverSetup(), { deploymentFile: undefined });
+    await expect(loadBotContext({ configPath, environment: { EXPLORER_DEPLOYMENT_FILE: "" }, write: () => undefined })).rejects.toThrow(
+      "Set deploymentFile in the bot configuration, or the variable EXPLORER_DEPLOYMENT_FILE.",
+    );
+  });
+
+  it("finds the setup file of the dashboard when the configuration names none", async () => {
+    const { configPath, directory } = await files(emptyProverSetup(), { setupFile: undefined });
+    const context = await loadBotContext({
+      configPath,
+      environment: { EXPLORER_CONFIG_DIR: directory, EXPLORER_RPC_URL_1: "http://127.0.0.1:1", EXPLORER_RPC_URL_369: "http://127.0.0.1:2" },
+      write: () => undefined,
+    });
+    expect(context.setup.pair).toBe(emptyProverSetup().pair);
+  });
+
+  it("fails on a pair that the registry does not know, with a message from the registry", async () => {
+    const { configPath } = await files({ ...emptyProverSetup(), pair: "no-such-pair" });
+    await expect(loadBotContext({ configPath, environment: {}, write: () => undefined })).rejects.toThrow(/no-such-pair/);
+  });
+
+  it("removes the password of the encrypted secret file from the log, and reads no password when the variable is unset", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "bots-context-password-"));
+    scratch.push(directory);
+    const { configPath } = await files(emptyProverSetup(), { secretStore: { kind: "encrypted-file", file: join(directory, "secrets.enc.json"), passwordVariable: "STORE_PASSWORD" } });
+    const base = { EXPLORER_RPC_URL_1: "http://127.0.0.1:1", EXPLORER_RPC_URL_369: "http://127.0.0.1:2" };
+    const lines: string[] = [];
+    const context = await loadBotContext({ configPath, environment: { ...base, STORE_PASSWORD: "hunter2-hunter2" }, write: (line) => lines.push(line) });
+    context.logger.info("note", { text: "password is hunter2-hunter2" });
+    expect(lines.join("")).not.toContain("hunter2-hunter2");
+    const withoutPassword = files(emptyProverSetup(), { secretStore: { kind: "none", passwordVariable: "STORE_PASSWORD" } });
+    const second = await loadBotContext({ configPath: (await withoutPassword).configPath, environment: base, write: () => undefined });
+    expect(second.vault.knownSecrets()).toEqual([]);
+  });
+
   it("puts the light client on the destination side of each direction", async () => {
     const { configPath } = await files(emptyProverSetup());
     const context = await loadBotContext({ configPath, environment: { EXPLORER_RPC_URL_1: "http://127.0.0.1:1", EXPLORER_RPC_URL_369: "http://127.0.0.1:2" }, write: () => undefined });

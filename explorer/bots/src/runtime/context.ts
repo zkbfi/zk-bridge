@@ -31,7 +31,7 @@ async function readJson(path: string, what: string): Promise<unknown> {
   try {
     text = await readFile(path, "utf8");
   } catch (error) {
-    throw new BotConfigError(`Cannot read the ${what} at ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new BotConfigError(`Cannot read the ${what} at ${path}: ${(error as Error).message}`);
   }
   try {
     return JSON.parse(text);

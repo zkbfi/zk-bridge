@@ -51,11 +51,6 @@ export function windowDeliverySpendWei(budget: PrerequisiteBudgetState, now: num
   return total(inWindow(budget.deliverySpend, now));
 }
 
-/** The unrecovered loss in the window that ends at `now`. */
-export function windowLossWei(budget: PrerequisiteBudgetState, now: number): bigint {
-  return total(inWindow(budget.prerequisiteLosses, now));
-}
-
 /** Adds a charge. The budget is not changed. */
 export function withCharge(budget: PrerequisiteBudgetState, entry: PrerequisiteSpendEntry): PrerequisiteBudgetState {
   return { ...budget, prerequisiteSpend: [...budget.prerequisiteSpend, entry] };
