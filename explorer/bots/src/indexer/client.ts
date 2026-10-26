@@ -69,7 +69,7 @@ export function createIndexerClient(input: IndexerClientInput): IndexerClient {
     const response = await doFetch(new URL(path, input.baseUrl), { signal: AbortSignal.timeout(input.timeoutMilliseconds ?? 15_000) });
     if (!response.ok) throw new IndexerError(`the indexer answered ${response.status} for ${path.split("?")[0]}`);
     const parsed = schema.safeParse(await response.json());
-    if (!parsed.success) throw new IndexerError(`the indexer answered an unexpected shape for ${path.split("?")[0]}: ${parsed.error.issues[0]?.message ?? "invalid"}`);
+    if (!parsed.success) throw new IndexerError(`the indexer answered an unexpected shape for ${path.split("?")[0]}: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
     return parsed.data;
   }
   return {

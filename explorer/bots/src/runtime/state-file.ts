@@ -67,7 +67,7 @@ async function readState<State>(input: StateFileInput<State>): Promise<State> {
     throw new StateFileError(`The state file ${input.path} is not valid JSON. Move it away to start from nothing.`);
   }
   const parsed = input.schema.safeParse(value);
-  if (!parsed.success) throw new StateFileError(`The state file ${input.path} has an unexpected shape: ${parsed.error.issues[0]?.message ?? "invalid"}.`);
+  if (!parsed.success) throw new StateFileError(`The state file ${input.path} has an unexpected shape: ${parsed.error.issues.map((issue) => issue.message).join("; ")}.`);
   return parsed.data;
 }
 
