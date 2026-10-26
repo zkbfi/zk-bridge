@@ -2,19 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from '../../src/data/fixtures'
 import { planClaim } from '../../src/tx/plan'
 import { applyFormKey, createFormState, type FieldSpec, type FormKey } from '../../src/ui/form'
-import { feeModeName } from '../../src/ui/delivery-fee-lines'
 import { reviewLines, wrapHexLines } from '../../src/ui/review-lines'
 import { lineText } from '../../src/ui/rich-text'
 
 const key = (name: string, sequence = name): FormKey => ({ name, sequence, ctrl: false, shift: false, meta: false, option: false })
-
-describe('the name of a fee mode', () => {
-  test('each mode has its own words for the confirmation screen', () => {
-    expect(feeModeName('share')).toBe('percentage of the transfer')
-    expect(feeModeName('fixed')).toBe('fixed amount')
-    expect(feeModeName('gas')).toBe('gas multiplier')
-  })
-})
 
 describe('wrapHexLines', () => {
   test('cuts the text into lines of the width and keeps every character in order', () => {

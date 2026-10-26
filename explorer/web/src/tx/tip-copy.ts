@@ -2,19 +2,12 @@
  * The words about the tip that the fee panel and the confirm dialog share, so that the two always say the same thing.
  */
 import { getAddress } from "viem";
-import type { FeeMode } from "@zk-bridge/shared";
+import { FEE_ROUTER_NAME } from "@zk-bridge/shared";
 import type { DeliveryRouters } from "./delivery-selection";
 
 /** What the confirm dialog says about a relay that carries no tip: no router, no fee terms, only a direct delivery. */
 export const NO_ROUTER_NOTICE =
   "No router is involved. This relay carries no tip and no fee terms, so no router and no runner can take a fee. Anyone can deliver it directly on the bridge, for free. It may take longer.";
-
-/** The name of each tip mode, for a person. */
-export const TIP_MODE_NAMES: Readonly<Record<FeeMode, string>> = {
-  share: "percentage of the transfer",
-  fixed: "fixed amount",
-  gas: "gas multiplier",
-};
 
 /**
  * What a tip means for the runner and for a direct delivery. The fee router whitelists one runner. Anyone may still call
@@ -34,4 +27,4 @@ export const RUNNER_NOTES: readonly string[] = [
 export const routerWarningOf = (routers: DeliveryRouters): string | null =>
   getAddress(routers.router) === getAddress(routers.defaultRouter)
     ? null
-    : `This router is not the fee router of the deployment (${getAddress(routers.defaultRouter)}). The tip terms are written for the fee router. Another router can read them in a different way. Use it only if you trust it.`;
+    : `This router is not ${FEE_ROUTER_NAME} (${getAddress(routers.defaultRouter)}). The tip terms are written for the fee router. Another router can read them in a different way. Use it only if you trust it.`;

@@ -3,7 +3,7 @@
  * function is pure and returns lines, so a test reads the text without a terminal. The amounts and the labels
  * (`exact`, `estimate, at most X`) come from `@zk-bridge/shared`.
  */
-import { FEE_SETTING, feeModeOf, type FeeDirector, type FeeMode, type FeeOption } from '@zk-bridge/shared'
+import { FEE_SETTING, TIP_MODE_NAMES, feeModeOf, routerInWords, type FeeDirector, type FeeOption } from '@zk-bridge/shared'
 import { getAddress } from 'viem'
 import type { RewardAddressReading } from '../chain/live-reads'
 import type { DeliveryFeeState, DeliveryTarget } from '../app/delivery-fee-form'
@@ -27,13 +27,6 @@ const rowOf = (width: number) => (label: string, value: string): Line => [muted(
 const row = rowOf(LABEL_WIDTH)
 const reviewRow = rowOf(REVIEW_LABEL_WIDTH)
 
-/** The name of a fee mode for a person. */
-export function feeModeName(mode: FeeMode): string {
-  if (mode === 'share') return 'percentage of the transfer'
-  if (mode === 'fixed') return 'fixed amount'
-  return 'gas multiplier'
-}
-
 /** The flag bits of `settings`, in words. */
 export function feeFlagsInWords(settings: bigint): string {
   const flags = [
@@ -43,12 +36,6 @@ export function feeFlagsInWords(settings: bigint): string {
     ...((settings & FEE_SETTING.baseFeeOnly) === 0n ? [] : ['gas priced at the base fee only']),
   ]
   return flags.length === 0 ? 'none (gas based fee, paid in the token)' : flags.join(', ')
-}
-
-/** The router in words. A router other than the one of the deployment is marked, because the terms are written for the fee router. */
-export function routerInWords(router: string, defaultRouter: string): string {
-  const address = getAddress(router)
-  return address === getAddress(defaultRouter) ? `${address} (the fee router of the deployment)` : `${address} (not the fee router of the deployment)`
 }
 
 /**
@@ -153,7 +140,7 @@ export function deliveryFeeReviewLines(deliveryFee: DeliveryFeeReview): readonly
   return [
     [strong('Tip for delivery', theme.accent)],
     reviewRow('Router', routerInWords(deliveryFee.router, deliveryFee.defaultRouter)),
-    reviewRow('Tip mode', feeModeName(description.mode)),
+    reviewRow('Tip mode', TIP_MODE_NAMES[description.mode]),
     reviewRow('Recipient', getAddress(director.recipient)),
     ...rewardAddressLines(deliveryFee.rewardAddress),
     reviewRow('Flags', feeFlagsInWords(director.settings)),

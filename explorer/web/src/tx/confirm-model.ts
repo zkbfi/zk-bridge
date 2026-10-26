@@ -2,13 +2,13 @@
  * What the confirm dialog shows before the wallet opens. The call is decoded from the calldata itself, not taken from
  * the plan, and the two must agree. When they do not, the dialog blocks the signature.
  */
-import { decodeFeeDirector, feeModeOf, type FeeDirector } from "@zk-bridge/shared";
+import { decodeFeeDirector, feeModeOf, TIP_MODE_NAMES, type FeeDirector } from "@zk-bridge/shared";
 import { formatUnits, formatRateAsPercent } from "@terminal/format/amounts";
 import { decodeKnownCall } from "@terminal/tx/decode";
 import type { DisplayArgument } from "@terminal/tx/plan";
 import { decodeFunctionData, getAddress, isAddress, type AbiFunction, type Address, type Hex } from "viem";
 import type { WebStep } from "./bridge-steps";
-import { NO_ROUTER_NOTICE, RUNNER_NOTES, routerWarningOf, TIP_MODE_NAMES } from "./tip-copy";
+import { NO_ROUTER_NOTICE, RUNNER_NOTES, routerWarningOf } from "./tip-copy";
 import { confirmableAbis } from "./web-abis";
 
 /** One labelled line of the dialog. */
