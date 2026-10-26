@@ -27,7 +27,10 @@ export type Services = {
   readonly now: () => number;
 };
 
-const KNOWN_PAIR_LABELS: Readonly<Record<string, string>> = { "eth-pls": "Ethereum and PulseChain" };
+const KNOWN_PAIR_LABELS: Readonly<Record<string, string>> = {
+  "eth-pls": "Ethereum and PulseChain",
+  "sepolia-pls943": "Sepolia and PulseChain testnet v4",
+};
 
 const knownPairsOf = (pair: PairConfig): Services["knownPairs"] =>
   knownPairIds().map((id) => ({ id, label: KNOWN_PAIR_LABELS[id] ?? id, configured: id === pair.id }));

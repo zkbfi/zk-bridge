@@ -25,8 +25,11 @@ describe("createServices for a fixture page", () => {
     expect(services.now()).toBe(FIXTURE_NOW);
   });
 
-  it("lists the known pair with its name, marked as the configured one", () => {
-    expect(services.knownPairs).toEqual([{ id: "eth-pls", label: "Ethereum and PulseChain", configured: true }]);
+  it("lists both known pairs with their names, marking only the configured one", () => {
+    expect(services.knownPairs).toEqual([
+      { id: "eth-pls", label: "Ethereum and PulseChain", configured: true },
+      { id: "sepolia-pls943", label: "Sepolia and PulseChain testnet v4", configured: false },
+    ]);
   });
 });
 
