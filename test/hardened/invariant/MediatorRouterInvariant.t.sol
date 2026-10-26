@@ -328,4 +328,13 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         }
         assertEq(account.balance, 0, "a router holds the coin");
     }
+
+    /// Claim: the bridged copy of the deny list token refuses nobody, so a router pays a denied account there and
+    /// hands nothing off. Shows: the sequence that the deep run shrank to (deny recipient 1, then a routed relay of the
+    /// copy) raises no violation. Matters: the handler once expected a hand-off for the copy, which is a plain mint.
+    function test_theCopyOfTheDenyListTokenIsPaidToADeniedAccount() public {
+        handler.toggleDeny(1);
+        handler.relay(89, 14, 3, 0, 13100816989, 88226229587750968710862750950606603947805906805010179756, 0);
+        assertEq(handler.violations(), 0, handler.firstViolation());
+    }
 }

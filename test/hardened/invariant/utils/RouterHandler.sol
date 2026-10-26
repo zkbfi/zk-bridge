@@ -603,10 +603,13 @@ contract RouterHandler is RouterWorld {
         return _deliverableOr(router, universe, abi.decode(reading.callData, (FeeRouter.FeeDirector)).recipient);
     }
 
+    /// @dev The deny list token itself refuses accounts. Its bridged copy (universe 9) is a plain mint and refuses nobody.
+    uint256 private constant DENY_TOKEN_UNIVERSE = 4;
+
     /// @dev `account` when the router can pay it, and the failed delivery address of the router when it cannot: the
     /// account is invalid, or the deny list token refuses it.
     function _deliverableOr(FeeRouter router, uint256 universe, address account) private view returns (address) {
-        bool refused = universe % NATIVE_COUNT == 4 && denyToken.denied(account);
+        bool refused = universe == DENY_TOKEN_UNIVERSE && denyToken.denied(account);
         return account == address(0) || account == address(router) || refused ? router.failedDeliveryAddress() : account;
     }
 
