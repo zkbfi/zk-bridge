@@ -10,6 +10,7 @@
 //!
 //! A Gloas header is read like any other: the state is hashed with the Gloas layout (progressive containers) and compared with the header.
 
+use crate::beacon::http::bootstrap_unavailable;
 use crate::error::{Error, Result};
 use crate::light_client::{
     beacon_header_from_json, bootstrap_from_json, committee_hash, header_root, state_layout_at,
@@ -271,7 +272,7 @@ pub fn build_checkpoint(
     let answer = get(client, &path, "application/json")?;
     let mut checkpoint = match answer.status {
         200 => from_bootstrap(client, chain, &header, root, &answer)?,
-        404 => {
+        status if bootstrap_unavailable(status) => {
             let state = read_state(client, chain, &header)?.ok_or_else(|| {
                 Error::Beacon(
                     "the node serves neither the light-client bootstrap nor the state of the header".into(),

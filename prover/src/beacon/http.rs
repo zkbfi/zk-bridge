@@ -107,6 +107,14 @@ fn get_json_from(client: &dyn HttpGet, path: &str) -> Result<Option<Value>> {
     }
 }
 
+/// Whether a status of the `light_client/bootstrap` route means "no bootstrap for this root", so the caller reads the state
+/// of the header instead. A node answers 404 or 501 when it serves no light-client routes. Lodestar answers 500
+/// (`syncCommitteeWitness not available`) for a root that it no longer holds. The state is hashed in full and compared with
+/// the header, so a fallback after any of these statuses trusts nothing new.
+pub fn bootstrap_unavailable(status: u16) -> bool {
+    matches!(status, 404 | 500 | 501)
+}
+
 /// Collects the items for the periods `first..end` from a source that answers a request for `count` periods from
 /// `start` with the items it chooses to give. The source may give fewer than `count`, and it may skip a period.
 ///
@@ -588,10 +596,18 @@ impl HttpBeaconSource {
     /// The store at the head with no next committee: the bootstrap endpoint first, the state of the head second.
     fn store_without_next_committee(&self, head: &BeaconHeader) -> Result<LightClientStore> {
         let root = header_root(head);
-        if let Some(answer) =
-            self.get_json(&format!("/eth/v1/beacon/light_client/bootstrap/{root:#x}"))?
-        {
+        let path = format!("/eth/v1/beacon/light_client/bootstrap/{root:#x}");
+        let response = self.client.get(&path, JSON)?;
+        if response.status == 200 {
+            let answer: Value = serde_json::from_slice(&response.body)
+                .map_err(|error| Error::Malformed(format!("GET {path}: {error}")))?;
             return store_from_bootstrap_json(&answer["data"]);
+        }
+        if !bootstrap_unavailable(response.status) {
+            return Err(Error::Beacon(format!(
+                "GET {path}: status {}",
+                response.status
+            )));
         }
         let state = self.state_for(head.state_root)?;
         Ok(store_at(head, &state, false))
@@ -2114,6 +2130,64 @@ mod tests {
             );
             assert!(store.next_sync_committee.is_none(), "{fork:?}");
         }
+    }
+
+    /// A node that answers every path with a fixed status, except the paths that it serves.
+    struct StatusNode {
+        status: u16,
+        pages: HashMap<String, Vec<u8>>,
+    }
+
+    impl HttpGet for StatusNode {
+        fn get(&self, path_and_query: &str, _accept: &str) -> Result<HttpResponse> {
+            Ok(match self.pages.get(path_and_query) {
+                Some(body) => HttpResponse {
+                    status: 200,
+                    body: body.clone(),
+                },
+                None => HttpResponse {
+                    status: self.status,
+                    body: br#"{"code":500,"message":"syncCommitteeWitness not available"}"#
+                        .to_vec(),
+                },
+            })
+        }
+    }
+
+    /// Claim: when the node answers the bootstrap route with 500 (Lodestar, for a root that it no longer holds) or 404, and
+    /// serves the state of the head, the store comes from the state. Any other status stops the run.
+    /// Why it matters: a live Sepolia run from a head that is not the newest finalized header failed on this answer.
+    #[test]
+    fn store_at_head_reads_the_state_when_the_bootstrap_is_unavailable() {
+        let (_, head, state) = head_with_state(ForkName::Electra);
+        let bytes = StateBytes::new(
+            ForkName::Electra,
+            head.slot,
+            state.current_committee().clone(),
+            state.next_committee().clone(),
+        )
+        .to_ssz();
+        let path = format!("/eth/v2/debug/beacon/states/{:#x}", head.state_root);
+        for status in [404, 500, 501] {
+            let node = StatusNode {
+                status,
+                pages: HashMap::from([(path.clone(), bytes.clone())]),
+            };
+            let source = HttpBeaconSource::new(ChainKind::Ethereum, Box::new(node));
+            let store = source
+                .store_at_head(&head, B256::ZERO)
+                .unwrap_or_else(|error| panic!("status {status}: {error}"));
+            assert_eq!(&store.current_sync_committee, state.current_committee());
+        }
+        let node = StatusNode {
+            status: 503,
+            pages: HashMap::from([(path, bytes)]),
+        };
+        let refused = HttpBeaconSource::new(ChainKind::Ethereum, Box::new(node));
+        assert!(matches!(
+            refused.store_at_head(&head, B256::ZERO),
+            Err(Error::Beacon(message)) if message.contains("status 503")
+        ));
     }
 
     /// Claim: when the stored hash is not the hash of the next committee in the state, `store_at_head` fails with an

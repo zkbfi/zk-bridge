@@ -148,6 +148,46 @@ fn a_node_without_light_client_routes_gives_the_values_of_the_finalized_state() 
     }
 }
 
+/// Claim: a node that answers the bootstrap route with status 500 (Lodestar does so for a root that it no longer holds)
+/// still gives the checkpoint, built from the state of the header. A status that no part of the command expects stops it.
+/// Why it matters: a run against Sepolia from an older finalized root failed on this answer before the fallback.
+#[test]
+fn a_bootstrap_that_answers_500_falls_back_to_the_state() {
+    struct Failing<'a> {
+        inner: PublicNode<'a>,
+        status: u16,
+    }
+    impl HttpGet for Failing<'_> {
+        fn get(&self, path: &str, accept: &str) -> Result<HttpResponse> {
+            if path.contains("/light_client/bootstrap/") {
+                return answer(
+                    self.status,
+                    json!({"code": self.status, "message": "syncCommitteeWitness not available"}),
+                );
+            }
+            self.inner.get(path, accept)
+        }
+    }
+    let kind = ChainKind::Sepolia;
+    let chain = Chain::new(kind, BLOCKS_BEFORE_CHECKPOINT);
+    let failing = |status| Failing {
+        inner: public_node(&chain, Hide::default()),
+        status,
+    };
+    let report = build_checkpoint(&failing(500), kind, None).expect("checkpoint");
+    assert_eq!(report.source, CheckpointSource::DebugState);
+    let state = state_of_the_checkpoint(&chain, report.initial_header_root);
+    assert_eq!(
+        report.initial_sync_committee_hash,
+        committee_hash(state.current_committee()).unwrap()
+    );
+    let refused = build_checkpoint(&failing(503), kind, None).unwrap_err();
+    assert!(
+        matches!(&refused, Error::Beacon(message) if message.contains("status 503")),
+        "got {refused}"
+    );
+}
+
 /// Claim: when the bootstrap route answers, its committee branch is checked and the values equal those of the state path.
 /// A bootstrap whose committee is changed is refused. When the state is also missing, the next hash is zero and
 /// `nextCommitteeKnown` is false.
