@@ -4,8 +4,12 @@
   "private": true,
   "type": "module",
   "description": "The proof publisher and the delivery runner of the zk-bridge explorer.",
-  "bin": { "zk-bridge-bot": "./bin/zk-bridge-bot.mjs" },
-  "engines": { "node": ">=22" },
+  "bin": {
+    "zk-bridge-bot": "./bin/zk-bridge-bot.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node bin/zk-bridge-bot.mjs",
     "test": "vitest run",
@@ -22,6 +26,7 @@
   "devDependencies": {
     "@types/node": "24.13.6",
     "@types/ws": "8.18.1",
+    "@vitest/coverage-v8": "4.1.11",
     "typescript": "5.9.3",
     "vitest": "4.1.11",
     "ws": "8.21.3"
