@@ -70,6 +70,8 @@ describe("parseMarkdown, the block kinds that the first test leaves out", () => 
 describe("parseInline, edge cases", () => {
   it("reads nested marks, italic with an underscore, and keeps unmatched marks as text", () => {
     expect(parseInline("**a _b_**")).toEqual([{ kind: "bold", children: [{ kind: "text", text: "a " }, { kind: "italic", children: [{ kind: "text", text: "b" }] }] }]);
+    expect(parseInline("**a *b***")).toEqual([{ kind: "bold", children: [{ kind: "text", text: "a " }, { kind: "italic", children: [{ kind: "text", text: "b" }] }] }]);
+    expect(parseInline("**a** and **b**").map((item) => item.kind)).toEqual(["bold", "text", "bold"]);
     expect(parseInline("_x_")).toEqual([{ kind: "italic", children: [{ kind: "text", text: "x" }] }]);
     expect(parseInline("2 * 3 and a_b")).toEqual([{ kind: "text", text: "2 * 3 and a_b" }]);
   });

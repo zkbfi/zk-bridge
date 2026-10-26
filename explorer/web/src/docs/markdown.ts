@@ -31,7 +31,8 @@ export const slugify = (text: string): string =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
-const INLINE_PATTERN = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*\s][^*]*\*|_[^_\s][^_]*_)/;
+// Bold holds plain text and whole italic spans, so that "**a *b***" reads as bold around "a" and an italic "b".
+const INLINE_PATTERN = /(\*\*(?:[^*]|\*[^*\s][^*]*\*)+\*\*|`[^`]+`|\*[^*\s][^*]*\*|_[^_\s][^_]*_)/;
 
 /**
  * Reads the inline marks of one line of text.
