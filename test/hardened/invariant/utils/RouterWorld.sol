@@ -29,8 +29,8 @@ import {
 /// 1 are native to A (a plain token and the wrapped native token of A), tokens 2 and 3 are native to B (a plain token and
 /// the wrapped native token of B), and token 4 is native to A and refuses transfers to accounts on a deny list. The
 /// universe has ten tokens: index `u` below 5 is the native token, and index `u + 5` is its bridged copy. The deny list
-/// token never goes through a fee router, because a router leaves the tokens of a recipient that the token refuses
-/// (see the contract notes of `FeeRouter`).
+/// token goes through the fee routers too: a router records a payout that the token refuses, and the invariants check
+/// that it holds exactly what it recorded.
 abstract contract RouterWorld is MediatorFixture {
     uint256 internal constant NATIVE_COUNT = 5;
     uint256 internal constant UNIVERSE = 10;
@@ -187,6 +187,34 @@ abstract contract RouterWorld is MediatorFixture {
         for (uint256 i = 0; i < holders.length; i++) {
             total += mediator.claimable(token, holders[i]);
         }
+    }
+
+    /// @notice What `router` has recorded for the holders in a token of the universe, and the total that it states.
+    /// @return sum The sum of `claimable` over the holders.
+    /// @return stated `totalClaimable` of the router.
+    function routerClaimableOfHolders(FeeRouter router, uint256 universeIndex)
+        public
+        view
+        returns (uint256 sum, uint256 stated)
+    {
+        address token = tokenAt(universeIndex);
+        for (uint256 i = 0; i < holders.length; i++) {
+            sum += router.claimable(token, holders[i]);
+        }
+        stated = router.totalClaimable(token);
+    }
+
+    /// @notice What the fee routers of the chain of a token of the universe have recorded for one account.
+    function routerClaimableFor(uint256 universeIndex, address account) public view returns (uint256 total) {
+        uint256 chain = chainOfToken(universeIndex);
+        for (uint256 k = 0; k < ROUTERS_PER_CHAIN; k++) {
+            total += feeRouterAt(chain, k).claimable(tokenAt(universeIndex), account);
+        }
+    }
+
+    /// @notice What `account` has of a token of the universe: what it holds, and what a fee router recorded for it.
+    function standing(uint256 universeIndex, address account) public view returns (uint256) {
+        return holding(universeIndex, account) + routerClaimableFor(universeIndex, account);
     }
 
     // ------------------------------------------------------------------------------------------------ deployment

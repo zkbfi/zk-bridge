@@ -27,7 +27,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         targetContract(address(handler));
         // One outside sender. A sender that is a holder would receive coin from the test runner and break the sum of the coin.
         targetSender(makeAddr("fuzzer"));
-        bytes4[] memory selectors = new bytes4[](17);
+        bytes4[] memory selectors = new bytes4[](19);
         selectors[0] = RouterHandler.relay.selector;
         selectors[1] = RouterHandler.relay.selector;
         selectors[2] = RouterHandler.relay.selector;
@@ -45,6 +45,8 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         selectors[14] = RouterHandler.donate.selector;
         selectors[15] = RouterHandler.toggleRefusal.selector;
         selectors[16] = RouterHandler.deliver.selector;
+        selectors[17] = RouterHandler.claimFromRouter.selector;
+        selectors[18] = RouterHandler.claimFromRouter.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
     }
 
@@ -107,15 +109,23 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         assertEq(handler.violations(), 0, handler.firstViolation());
     }
 
-    /// Claim: no router holds a token or the coin after a call returns, and no run is left open. Shows: after every
-    /// action, each of the six fee routers and the two wrapped routers holds none of the ten tokens and none of the coin,
-    /// and the runner slot of each fee router is at most 1 (not running). Matters: the routers have no owner and no
-    /// way to recover a token, so any balance that stays is lost.
-    function invariant_noRouterHoldsAnythingAndNoRunStaysOpen() public view {
+    /// Claim: a fee router holds exactly what it recorded, no coin, and no run stays open. Shows: after every action,
+    /// each of the six fee routers holds, in each of the ten tokens, a balance that equals the sum of its claimable
+    /// balances (and equals its own `totalClaimable`), exactly; it holds none of the coin; and its runner slot is at
+    /// most 1 (not running). The two wrapped native routers hold nothing. Matters: the routers have no owner and no way
+    /// to recover a token. A balance with no record behind it would be lost for good, and a record with no balance
+    /// behind it would take from another claimant.
+    function invariant_aRouterHoldsExactlyWhatItRecordedAndNoRunStaysOpen() public view {
         for (uint256 chain = 0; chain < 2; chain++) {
             for (uint256 k = 0; k < 3; k++) {
                 FeeRouter router = handler.feeRouterAt(chain, k);
-                _assertEmpty(address(router));
+                for (uint256 u = 0; u < 10; u++) {
+                    (uint256 sum, uint256 stated) = handler.routerClaimableOfHolders(router, u);
+                    uint256 balance = handler.balanceOrZero(handler.tokenAt(u), address(router));
+                    assertEq(balance, sum, "a router balance differs from the sum of its claimable balances");
+                    assertEq(stated, sum, "totalClaimable differs from the sum of the claimable balances");
+                }
+                assertEq(address(router).balance, 0, "a router holds the coin");
                 assertLe(uint256(vm.load(address(router), router.RUNNER_SLOT())), 1, "the runner slot is open");
             }
             _assertEmpty(address(handler.wethRouterAt(chain)));
@@ -266,6 +276,30 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         handler.toggleDeny(1);
         handler.claim(4, 1);
         assertGt(handler.claimsPaid(), 0, "a claim was paid");
+
+        // The three cases that used to strand value in a fee router, each with a recipient that the sender chose. Token 4
+        // refuses the denied accounts, and the copies on chain B go back to it on chain A. In `detail`, bits 136.. choose
+        // the receiver (1 the router, 2 the zero address) and bits 144.. choose data of no known shape (1).
+        handler.toggleDeny(0);
+        // A payout that the token refuses, after a tip that a router executes.
+        handler.relay(4, 1, 3, 2, 9e18 + 1, (1 << 32) | (1 << 40), 1);
+        handler.deliver(handler.pendingCount() - 1, 1, 0x55, 30 gwei);
+        assertGt(handler.payoutsRefused(), 0, "a payout was refused and recorded");
+        // Terms that name the router, terms that name nobody, data of no known shape, a legacy receiver that is the router.
+        handler.relay(4, 1, 3, 2, 9e18 + 1, uint256(1) << 136, 0);
+        handler.relay(4, 1, 3, 2, 9e18 + 1, uint256(2) << 136, 0);
+        handler.relay(4, 1, 3, 2, 9e18 + 1, uint256(1) << 144, 0);
+        handler.relay(4, 1, 4, 2, 9e18 + 1, uint256(1) << 136, 0);
+        assertGt(handler.termsForfeited(), 0, "invalid terms were forfeited");
+        // The legacy form with a token that cannot unwrap pays the token to the receiver.
+        handler.relay(4, 1, 4, 2, 9e18 + 1, 5, 0);
+        assertGt(handler.legacyTokenPayouts(), 0, "the legacy form paid a token");
+        // The claims: refused while the token refuses the account, paid after.
+        handler.claimFromRouter(4, 0);
+        assertGt(handler.routerClaimsRefused(), 0, "a claim was refused while the token refused");
+        handler.toggleDeny(0);
+        handler.claimFromRouter(4, 0);
+        assertGt(handler.routerClaimsPaid(), 0, "a claim was paid");
 
         // Fees, time, strangers, attacks.
         handler.collectFees(0);
