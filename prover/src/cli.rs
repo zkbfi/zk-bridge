@@ -1,6 +1,6 @@
-//! The command line: `prove` and `evidence`.
+//! The command line: `prove`, `evidence` and `verify`.
 //!
-//! Both commands are stateless. They read configuration, chains and a beacon node, print or post one JSON object, and exit.
+//! All three commands are stateless. They read configuration, chains and a beacon node, print or post one JSON object, and exit.
 //! Neither one takes a key, sends a transaction or opens a file for writing. The only secrets they use are named by
 //! environment variables in the configuration file (see `config.rs`).
 //!
@@ -20,11 +20,12 @@ use crate::handoff::{Handoff, PackageDestination};
 use crate::light_client::ChainKind;
 use crate::logging::Logger;
 use crate::produce::{produce, ProduceRequest, Production, EXPLICIT_HEAD_ROUTE};
-use crate::prover::{OracleProver, Prover};
+use crate::prover::{require_groth16_shape, OracleProver, Prover};
+use crate::remote::verify_groth16;
 use crate::rpc::{HttpClient, HttpRpc};
 use crate::signer::Signer;
 use crate::stored::{read_stored_state, StoredState};
-use alloy_primitives::B256;
+use alloy_primitives::{hex, B256};
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -67,6 +68,26 @@ pub enum Command {
     /// holds the calldata of `executeMessage`, and the layout calls that must go first when the bridge lacks a row. The
     /// command sends nothing: a stateful server sends the calls.
     Evidence(EvidenceArguments),
+    /// Check one Groth16 proof against a program key and public values, as the light client verifier does.
+    ///
+    /// It needs no configuration file, no network and no key. A server that reads a proof from a message board runs it
+    /// before it spends gas on `update`. It prints one JSON object and exits with code 0 when the proof verifies. It
+    /// exits with code 1 and an error message when the proof does not verify, or when an argument is not valid.
+    Verify(VerifyArguments),
+}
+
+/// The arguments of `verify`.
+#[derive(Debug, Args)]
+pub struct VerifyArguments {
+    /// The program key that the proof is for, as `0x` and 64 hex digits. The light client stores it as `programVKey`.
+    #[arg(long)]
+    pub program_vkey: String,
+    /// The public values that the proof commits to, as `0x` hex.
+    #[arg(long)]
+    pub public_values: String,
+    /// The proof bytes that the verifier contract reads, as `0x` hex.
+    #[arg(long)]
+    pub proof: String,
 }
 
 /// The arguments of `prove`.
@@ -442,6 +463,28 @@ fn evidence_request<'a>(
     })
 }
 
+fn parse_bytes(text: &str, flag: &str) -> Result<Vec<u8>> {
+    hex::decode(text).map_err(|error| Error::Usage(format!("{flag}: not hex: {error}")))
+}
+
+/// Verifies a Groth16 proof with the crate `sp1-verifier`, after the shape check that stops a proof of another circuit.
+///
+/// # Errors
+/// `Error::Usage` for a value that is not hex. `Error::Prover` when the proof has the wrong shape or does not verify.
+fn run_verify(arguments: &VerifyArguments, out: &mut dyn std::io::Write) -> Result<i32> {
+    let program_key = parse_hash(&arguments.program_vkey, "--program-vkey")?;
+    let public_values = parse_bytes(&arguments.public_values, "--public-values")?;
+    let proof_bytes = parse_bytes(&arguments.proof, "--proof")?;
+    require_groth16_shape(&proof_bytes)?;
+    verify_groth16(program_key, &public_values, &proof_bytes)?;
+    writeln!(
+        out,
+        "{{\"valid\":true,\"programKey\":\"{program_key:#x}\"}}"
+    )
+    .map_err(|error| Error::Usage(format!("cannot write the result: {error}")))?;
+    Ok(0)
+}
+
 /// Help and version requests are no errors: their text goes to `out` and the exit code is 0. Any other parse failure is a
 /// usage error.
 fn report_parse_error(error: &clap::Error, out: &mut dyn std::io::Write) -> Result<i32> {
@@ -469,10 +512,15 @@ pub fn run(
         Ok(cli) => cli,
         Err(error) => return report_parse_error(&error, out),
     };
+    // `verify` reads no file, so a missing configuration must not stop it.
+    if let Command::Verify(verify) = &cli.command {
+        return run_verify(verify, out);
+    }
     let config = Config::load_file(&cli.config, lookup)?;
     match &cli.command {
         Command::Prove(prove) => run_prove(&config, prove, lookup, out),
         Command::Evidence(evidence) => run_evidence(&config, evidence, out),
+        Command::Verify(_) => unreachable!("verify returned above"),
     }
 }
 
@@ -507,16 +555,23 @@ mod tests {
 
     const ROOT: &str = "0x2222222222222222222222222222222222222222222222222222222222222222";
 
-    /// Claim: the command set is `prove` and `evidence`. The commands of the old relayer, and every flag that names a key,
-    /// are gone.
+    /// Claim: the command set is `prove`, `evidence` and `verify`. The commands of the old relayer, and every flag that
+    /// names a key, are gone.
     /// Why it matters: the crate holds no wallet. A command or flag that came back would reopen that door.
     #[test]
     fn only_the_two_commands_exist_and_no_flag_takes_a_key() {
-        for name in ["prove", "evidence"] {
-            let extra: &[&str] = if name == "evidence" {
-                &["--tx", ROOT, "--log-index", "0"]
-            } else {
-                &[]
+        for name in ["prove", "evidence", "verify"] {
+            let extra: &[&str] = match name {
+                "evidence" => &["--tx", ROOT, "--log-index", "0"],
+                "verify" => &[
+                    "--program-vkey",
+                    ROOT,
+                    "--public-values",
+                    "0x",
+                    "--proof",
+                    "0x",
+                ],
+                _ => &[],
             };
             let mut all = vec![name];
             all.extend_from_slice(extra);
@@ -687,5 +742,90 @@ mod tests {
         let key = "0x".to_string() + &"42".repeat(32);
         let built = build_prover(prover, &|name| (name == "ORACLE_KEY").then(|| key.clone()));
         assert_eq!(built.unwrap().name(), "oracle");
+    }
+
+    /// A real Groth16 proof of a real Ethereum update, with its program key and public values.
+    fn real_proof() -> (String, String, String) {
+        let path = format!(
+            "{}/../test/hardened/fixtures/sp1-proof-ethereum-update.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"));
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let field = |name: &str| value[name].as_str().unwrap().to_string();
+        (field("programVKey"), field("publicValues"), field("proof"))
+    }
+
+    fn verify_outcome(key: &str, values: &str, proof: &str) -> (Result<i32>, String) {
+        let mut out = Vec::new();
+        let outcome = run(
+            arguments(&[
+                "--config",
+                "/nonexistent/prover.toml",
+                "verify",
+                "--program-vkey",
+                key,
+                "--public-values",
+                values,
+                "--proof",
+                proof,
+            ]),
+            &|_| None,
+            &mut out,
+        );
+        (outcome, String::from_utf8(out).unwrap())
+    }
+
+    /// Claim: `verify` accepts a real proof for its own key and values, needs no configuration file, and prints one JSON
+    /// line with the key.
+    /// Why it matters: the delivery runner trusts this answer before it spends gas on `update`.
+    #[test]
+    fn verify_accepts_a_real_proof_without_a_configuration_file() {
+        let (key, values, proof) = real_proof();
+        let (outcome, printed) = verify_outcome(&key, &values, &proof);
+        assert_eq!(outcome.unwrap(), 0);
+        assert_eq!(
+            printed,
+            format!("{{\"valid\":true,\"programKey\":\"{key}\"}}\n")
+        );
+    }
+
+    /// Claim: `verify` refuses a proof when one input changes: the public values, the program key, the length or the
+    /// selector. It prints nothing on standard output for a refusal.
+    /// Why it matters: each change is a forged proof, and a runner that accepted one would post a transaction that
+    /// reverts, or trust a head that the chain never stored.
+    #[test]
+    fn verify_refuses_every_changed_input() {
+        let (key, values, proof) = real_proof();
+        let flipped_values = format!(
+            "{}{:02x}",
+            &values[..values.len() - 2],
+            u8::from_str_radix(&values[values.len() - 2..], 16).unwrap() ^ 1
+        );
+        let other_key = format!("0x{}", "42".repeat(32));
+        let shorter = proof[..proof.len() - 2].to_string();
+        let other_selector = format!("0x00000000{}", &proof[10..]);
+        for (case, key, values, proof) in [
+            ("public values", &key, &flipped_values, &proof),
+            ("program key", &other_key, &values, &proof),
+            ("length", &key, &values, &shorter),
+            ("selector", &key, &values, &other_selector),
+        ] {
+            let (outcome, printed) = verify_outcome(key, values, proof);
+            assert!(
+                matches!(outcome, Err(Error::Prover(_))),
+                "{case}: {outcome:?}"
+            );
+            assert_eq!(printed, "", "{case}");
+        }
+    }
+
+    /// Claim: text that is not hex is a usage error that names the flag, not a verification failure.
+    #[test]
+    fn verify_names_the_flag_that_is_not_hex() {
+        let (key, values, _) = real_proof();
+        let (outcome, _) = verify_outcome(&key, &values, "0xzz");
+        let message = outcome.unwrap_err().to_string();
+        assert!(message.contains("--proof"), "{message}");
     }
 }

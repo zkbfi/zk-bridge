@@ -14,6 +14,7 @@ cargo build --release                           # adds the signed beacon chain t
 zk-bridge-prover --config prover.toml prove                              # one proof, from the head that the light client stores
 zk-bridge-prover --config prover.toml prove --route <name> --to webhook  # choose the route and the handoff target
 zk-bridge-prover --config prover.toml evidence --tx <hash> --log-index <n>   # the evidence that delivers one message
+zk-bridge-prover verify --program-vkey <hash> --public-values <hex> --proof <hex>   # check one Groth16 proof locally
 ```
 
 The command line never takes a key. A secret lives in an environment variable, and the configuration names the variable (see `prover.example.toml`).
@@ -182,6 +183,20 @@ A message executes once, and delivery is final. The bridge marks the message bef
 | `failed` | The bridge executed the message and the call to the target failed. The call cannot repeat. | `failedMessageDataHash` is not zero. It is the keccak256 of the call data. |
 
 `alreadyDelivered` is true for `succeeded` and for `failed`. When it is true, `executeMessage` would revert with `AlreadyDelivered`. The bridge has no public view of its delivery state. These two views give it, except for a message in progress, which exists only inside the call to the target.
+
+## The `verify` command
+
+`verify` checks one Groth16 proof against a program key and public values with the crate `sp1-verifier`, the check that
+the `prove` command runs on an answer of the backend. It reads no configuration file, makes no network call and takes no
+key. The delivery runner calls it before it posts `update`, so a forged proof costs no gas.
+
+```
+zk-bridge-prover verify --program-vkey 0x<64 hex> --public-values 0x<352 bytes> --proof 0x<356 bytes>
+```
+
+On success it prints `{"valid":true,"programKey":"0x..."}` and exits with code 0. It exits with code 1 and an error on
+standard error when the proof has the wrong length or selector, or does not verify for that key and those values. A
+proof from the `oracle` backend is not a Groth16 proof, so `verify` refuses it.
 
 ## Catching up a light client that lags
 
