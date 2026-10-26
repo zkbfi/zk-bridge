@@ -264,3 +264,24 @@ Every proof was 356 bytes and its public values equalled the native `lc-core` ru
 | Endpoint | `43nsvfb8svkosr` runs v4 (release 5). Only the image changed. |
 
 The image holds the rebuilt ELFs (testnet chain selectors and Gloas). The ELF hashes in the image equal `light-client/program-keys.json`. The file `groth16_vk.bin` in the image hashes to `VERIFIER_HASH`, and the build checks this. The first proof on v4 is not measured yet.
+
+## First live run on v4 (2026-10-26): no proof, a defect found
+
+I tried one real proof of a finalized light-client update of chain 943 (start head slot 11168480, newer final header 11168512 or later) through the endpoint `43nsvfb8svkosr`. No proof came back. The run did not reach the verify step, and I did not try Sepolia.
+
+What happened:
+
+- The `prove` command read the start state and built the update. The producer needs the state of the start head, and chain 943 serves it correctly only while that head is the newest. So I held the state in memory with a small local proxy for the beacon API.
+- The worker answered `/ping` with 200, then started the proof. The container log shows the Groth16 steps: reading the R1CS took 28 s, reading the proving key took 16 s, and the constraint system solver finished with 15972262 constraints.
+- Then the container hit its host memory limit of 28.87 GiB (system log: "high memory utilization 27.67GiB / 28.87GiB", then "triggered memory limits (OOM)"). The GPU server child process died. The worker returned status 500 with `CudaClientError: early eof`.
+- The worker does not recover. `/ping` still answers 200, and every later request fails at once with `Broken pipe`, because the worker does not restart the GPU server. Three more runs (4 and 10 attempts) all failed this way.
+
+Cause: the endpoint pools `ADA_24` and `AMPERE_24` also gave two workers on `NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb`, a 24 GB slice of a larger card with a 28.87 GiB host memory share. The Groth16 step needs more than that (the processor run needed 61 GB at peak). The earlier real proofs of 2026-10-25 ran on an RTX 4090 worker. The endpoint also showed 3 workers although max workers is 1, and the proxy sent requests to the failed workers.
+
+Fixes to make (not done here, because they change the endpoint or the image):
+
+1. Limit the endpoint to the RTX 4090 type so that no MIG slice gets a worker.
+2. Make `prove-worker` answer `/ping` with 503, or exit, after the GPU server dies, so RunPod replaces the worker.
+3. Check the host memory at start and refuse to start below a limit that the Groth16 step needs.
+
+Not measured: cold start of v4, prove time of v4, cost, local verify of a v4 proof, public values of a real block. Record them after the fixes.
