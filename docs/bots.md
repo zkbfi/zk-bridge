@@ -15,6 +15,8 @@ Makes light-client update proofs on the RunPod endpoint and publishes them on ms
    - Proof of work: `board.grind(category, payload)`, then `board.addMessage`. Grinding is a busy loop; run it off the main event loop.
    - Messages are ephemeral (about 120 blocks) and the board has a size cap. The publisher republishes the latest proof on a timer while it is still useful (until the destination light client stores a head at or past it).
 
+**Prove from the newest finalized head (chain 943).** The public beacon node of chain 943 serves the state of a finalized header correctly only while it is the newest finalized one. An older state comes back 64 bytes short and does not hash to the header, so the prover refuses it ("the state hashes to ... not ..."). The publisher must run `prove` while the head that the destination light client stores is still the newest finalized header, and must publish at once. A light client that lags by one finalization or more cannot be advanced through this node. See `docs/testnet-run.md`, item 3 of the status list.
+
 The publisher holds no wallet: it only proves and publishes. Its secrets are the RunPod key and the valve.city RPC key, both from environment variables or `op read`, never in files or logs.
 
 ## 2. Delivery runner
