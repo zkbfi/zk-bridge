@@ -19,6 +19,11 @@ export interface FeedPage {
   readonly items: readonly FeedItem[]
   /** True when older rows exist beyond this page. */
   readonly hasMore: boolean
+  /**
+   * Unix seconds. Set by the RPC data source when it has read only part of the history: rows sent before this time are
+   * not listed. Absent when the page covers the whole history.
+   */
+  readonly coveredFrom?: number
 }
 
 /** A data source for the dashboard. Every call may reject; the views show the error and keep the last good data. */

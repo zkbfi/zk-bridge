@@ -8,7 +8,7 @@
  * The routes in use: `/api/summary`, `/api/heads`, `/api/feed`, `/api/tokens`, `/api/audit`, `/api/fees`,
  * `/api/head-updates` and `/api/delivery-cost`. The indexer serves one pair. A request for another pair name is refused.
  */
-import { parseDeliveryCostReport, secondsPerSlot } from '@zk-bridge/shared'
+import { RPC_PARTIAL_FIGURES, parseDeliveryCostReport, secondsPerSlot, type PartialFigure } from '@zk-bridge/shared'
 import { getAddress, type Hex } from 'viem'
 import type {
   AuditRow,
@@ -115,6 +115,7 @@ export function createIndexerDataSource(input: IndexerDataSourceInput): DataSour
           byToken: volumeRows.flatMap((row) => amountsOf(row, 'volume', tokens, sideOf)),
         },
         feesAccrued: array(body.feesAccrued, 'feesAccrued').flatMap((row) => amountsOf(record(row, 'fee row'), 'accrued', tokens, sideOf)),
+        ...partialOf(coverageOf(body)),
       }
     },
 
@@ -122,7 +123,8 @@ export function createIndexerDataSource(input: IndexerDataSourceInput): DataSour
       requirePair(pairId)
       const body = record(await getJson(`${base}/api/feed?${feedQuery(filter, limit, pair)}`), 'feed answer')
       const items = array(body.items, 'items').map((item) => feedItemOf(record(item, 'feed item'), pair, sideOf))
-      return { items, hasMore: typeof body.nextCursor === 'string' }
+      const coverage = coverageOf(body)
+      return { items, hasMore: typeof body.nextCursor === 'string', ...(coverage !== null && !coverage.complete ? { coveredFrom: coverage.coveredFrom } : {}) }
     },
 
     async getHeads(pairId) {
@@ -138,6 +140,7 @@ export function createIndexerDataSource(input: IndexerDataSourceInput): DataSour
         loadTokens(),
       ])
       const collected = array(record(fees, 'fees answer').balances, 'balances').map((row) => record(row, 'balance row'))
+      const auditPartial = coverageOf(record(audit, 'audit answer'))?.partial.includes('audit') === true
       return array(record(audit, 'audit answer').tokens, 'audit tokens').flatMap((row): AuditRow[] => {
         const entry = record(row, 'audit row')
         const token = tokenFromView(entry.token, tokens, sideOf)
@@ -154,6 +157,7 @@ export function createIndexerDataSource(input: IndexerDataSourceInput): DataSour
             inFlight: bigint(entry.pendingForward, 'pendingForward') + bigint(entry.pendingBackward, 'pendingBackward'),
             accruedFees: bigint(entry.accruedFees, 'accruedFees'),
             collectedFees: collectedRow === undefined ? 0n : bigint(collectedRow.collected, 'collected'),
+            ...(auditPartial ? { partial: true } : {}),
           },
         ]
       })
@@ -208,6 +212,29 @@ export function feedQuery(filter: FeedFilter, limit: number, pair: PairConfig): 
   if (filter.sentAtOrAfter !== undefined) parameters.set('from', String(filter.sentAtOrAfter))
   parameters.set('limit', String(Math.min(limit, 200)))
   return parameters.toString()
+}
+
+/** The coverage block that the RPC data source adds to an answer. The indexer sends none. */
+interface Coverage {
+  readonly complete: boolean
+  readonly coveredFrom: number
+  readonly partial: readonly PartialFigure[]
+}
+
+/**
+ * Reads the coverage block of an answer, or null when the answer has none (the indexer holds the whole history).
+ * A figure name that this client does not know is dropped, so a newer source cannot break an older client.
+ */
+function coverageOf(body: Record<string, unknown>): Coverage | null {
+  if (body.coverage === undefined) return null
+  const coverage = record(body.coverage, 'coverage')
+  const names = array(coverage.partial, 'coverage.partial').filter((name): name is PartialFigure => (RPC_PARTIAL_FIGURES as readonly unknown[]).includes(name))
+  return { complete: coverage.complete === true, coveredFrom: integer(coverage.coveredFrom, 'coverage.coveredFrom'), partial: names }
+}
+
+/** The `partial` field of a summary, only when some figure is partial. */
+function partialOf(coverage: Coverage | null): { readonly partial?: readonly PartialFigure[] } {
+  return coverage === null || coverage.partial.length === 0 ? {} : { partial: coverage.partial }
 }
 
 function chainIdOf(pair: PairConfig, side: ChainSide): number {

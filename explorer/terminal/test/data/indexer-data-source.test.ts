@@ -190,3 +190,52 @@ describe('gate status', () => {
     expect(gatesOf([], sideOf, 2_000)).toEqual({ first: 'unknown', second: 'unknown' })
   })
 })
+
+describe('the coverage block of an answer from the RPC source', () => {
+  const auditAnswer = {
+    tokens: [{ token: { chainId: 1, address: usdcHome }, escrow: '1000', accruedFees: '5', bridgedSupply: '900', pendingForward: '0', pendingBackward: '0' }],
+  }
+  const noFees = { balances: [] }
+  const coverage = (extra: Record<string, unknown>) => ({ complete: false, coveredFrom: 1_700, partial: [], ...extra })
+
+  test('a summary names the partial figures that this client knows, and drops a name that it does not know', async () => {
+    const answer = { ...summary, coverage: coverage({ partial: ['volume24h', 'inFlight', 'a-figure-from-a-newer-source'] }) }
+    const result = await source({ '/api/summary': answer, '/api/tokens': tokens }).getSummary('eth-pls')
+    expect(result.partial).toEqual(['volume24h', 'inFlight'])
+  })
+
+  test('a summary without a coverage block has no partial field, so the figures read as complete', async () => {
+    const result = await source({ '/api/summary': summary, '/api/tokens': tokens }).getSummary('eth-pls')
+    expect('partial' in result).toBe(false)
+  })
+
+  test('a summary whose coverage names no figure has no partial field either', async () => {
+    const answer = { ...summary, coverage: coverage({ complete: true, partial: [] }) }
+    const result = await source({ '/api/summary': answer, '/api/tokens': tokens }).getSummary('eth-pls')
+    expect('partial' in result).toBe(false)
+  })
+
+  test('a feed page carries coveredFrom only when the history is incomplete', async () => {
+    const partial = await source({ '/api/feed': { items: [feedItem], nextCursor: null, coverage: coverage({ coveredFrom: 1_234 }) } }).getFeed('eth-pls', {}, 50)
+    expect(partial.coveredFrom).toBe(1_234)
+    const complete = await source({ '/api/feed': { items: [feedItem], nextCursor: null, coverage: coverage({ complete: true, coveredFrom: 1_234 }) } }).getFeed('eth-pls', {}, 50)
+    expect('coveredFrom' in complete).toBe(false)
+    const indexer = await source({ '/api/feed': { items: [feedItem], nextCursor: null } }).getFeed('eth-pls', {}, 50)
+    expect('coveredFrom' in indexer).toBe(false)
+  })
+
+  test('an audit row is partial when the coverage names the audit, and complete otherwise', async () => {
+    const answers = (block: unknown) => ({ '/api/audit': { ...auditAnswer, ...(block === undefined ? {} : { coverage: block }) }, '/api/fees': noFees, '/api/tokens': tokens })
+    const partial = await source(answers(coverage({ partial: ['audit'] }))).getAudit('eth-pls')
+    expect(partial[0]?.partial).toBe(true)
+    const otherFigure = await source(answers(coverage({ partial: ['feed'] }))).getAudit('eth-pls')
+    expect('partial' in otherFigure[0]!).toBe(false)
+    const indexer = await source(answers(undefined)).getAudit('eth-pls')
+    expect('partial' in indexer[0]!).toBe(false)
+  })
+
+  test('a coverage block that is malformed is refused, not trusted', async () => {
+    await expect(source({ '/api/feed': { items: [], nextCursor: null, coverage: { complete: false, coveredFrom: 'yesterday', partial: [] } } }).getFeed('eth-pls', {}, 5)).rejects.toThrow()
+    await expect(source({ '/api/feed': { items: [], nextCursor: null, coverage: { complete: false, coveredFrom: 1, partial: 'feed' } } }).getFeed('eth-pls', {}, 5)).rejects.toThrow()
+  })
+})

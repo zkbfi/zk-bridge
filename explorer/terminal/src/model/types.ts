@@ -3,6 +3,9 @@
  * A data source (see `../data/data-source.ts`) maps its own records to these types.
  */
 import type { Address, Hex } from 'viem'
+import type { PartialFigure } from '@zk-bridge/shared'
+
+export type { PartialFigure }
 
 /** One of the two chains of a pair. The pair registry fixes which chain is first and which is second. */
 export type ChainSide = 'first' | 'second'
@@ -58,6 +61,8 @@ export interface ChainConfig {
   readonly nativeSymbol: string
   /** The name of the environment variable that holds the RPC URL of this chain. */
   readonly rpcEnvironmentVariable: string
+  /** The RPC URL that the deployment file names (`rpc_url`), the weakest source of the RPC URL. Absent when it names none. */
+  readonly registryRpcUrl?: string
   readonly contracts: {
     readonly messageBridge: Address
     readonly tokenMediator: Address
@@ -128,6 +133,11 @@ export interface PairSummary {
     readonly byToken: readonly TokenAmount[]
   }
   readonly feesAccrued: readonly TokenAmount[]
+  /**
+   * Figures that the RPC data source could not complete, because it reads only recent history. Absent for the indexer,
+   * which holds the whole history. A figure named here is a lower bound or may miss older rows.
+   */
+  readonly partial?: readonly PartialFigure[]
 }
 
 /** A row of the feed: a token transfer or a message. */
@@ -181,6 +191,11 @@ export interface AuditRow {
   readonly inFlight: bigint
   readonly accruedFees: bigint
   readonly collectedFees: bigint
+  /**
+   * True when the RPC data source built `inFlight` from recent history only. The difference of such a row is not proof
+   * of a mismatch, because an older transfer in flight is missing from `inFlight`.
+   */
+  readonly partial?: boolean
 }
 
 /** The gas that one light client update used. */

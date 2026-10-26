@@ -4,53 +4,12 @@
  *
  * No test starts a proof. The proof test sends a request that the worker must refuse before it proves anything.
  */
-import { redactError, redactSecrets } from '@zk-bridge/shared/config'
+import { redactError } from '@zk-bridge/shared/config'
+import { describeStatus, failOutcome, fetchClient, passOutcome, testRpcChainId } from '@zk-bridge/shared'
+import type { HttpClient, HttpRequest, HttpResponse, TestOutcome } from '@zk-bridge/shared'
 
-/** One HTTP request. */
-export interface HttpRequest {
-  readonly url: string
-  readonly method: 'GET' | 'POST'
-  readonly headers?: Readonly<Record<string, string>>
-  readonly body?: string
-}
-
-/** One HTTP answer. */
-export interface HttpResponse {
-  readonly status: number
-  readonly text: string
-}
-
-/** Sends a request. A test passes a fake. */
-export type HttpClient = (request: HttpRequest) => Promise<HttpResponse>
-
-/** The outcome of one test. */
-export interface TestOutcome {
-  readonly ok: 'pass' | 'fail'
-  /** One redacted sentence for the screen. */
-  readonly message: string
-}
-
-/** The longest that a test waits, in milliseconds. */
-const TIMEOUT_MILLISECONDS = 15_000
-
-/** The HTTP client that uses `fetch`, with a time limit. */
-export const fetchClient: HttpClient = async (request) => {
-  const response = await fetch(request.url, {
-    method: request.method,
-    ...(request.headers === undefined ? {} : { headers: { ...request.headers } }),
-    ...(request.body === undefined ? {} : { body: request.body }),
-    signal: AbortSignal.timeout(TIMEOUT_MILLISECONDS),
-  })
-  return { status: response.status, text: (await response.text()).slice(0, 2_000) }
-}
-
-function pass(message: string): TestOutcome {
-  return { ok: 'pass', message }
-}
-
-function fail(message: string, secrets: readonly string[]): TestOutcome {
-  return { ok: 'fail', message: redactSecrets(message, secrets) }
-}
+export { fetchClient, testRpcChainId }
+export type { HttpClient, HttpRequest, HttpResponse, TestOutcome }
 
 /**
  * `GET /ping` on the RunPod endpoint. 200 means the worker is ready and 204 means it is starting.
@@ -59,11 +18,11 @@ export async function testEndpointPing(http: HttpClient, input: { endpointUrl: s
   const secrets = [input.apiKey]
   try {
     const response = await http({ url: `${input.endpointUrl.replace(/\/$/, '')}/ping`, method: 'GET', headers: { Authorization: `Bearer ${input.apiKey}` } })
-    if (response.status === 200) return pass('The worker answers /ping with 200: ready.')
-    if (response.status === 204) return pass('The worker answers /ping with 204: it is starting. Try again in a minute.')
-    return fail(describeStatus(response, 'the ping'), secrets)
+    if (response.status === 200) return passOutcome('The worker answers /ping with 200: ready.')
+    if (response.status === 204) return passOutcome('The worker answers /ping with 204: it is starting. Try again in a minute.')
+    return failOutcome(describeStatus(response, 'the ping'), secrets)
   } catch (error) {
-    return fail(`The ping did not complete: ${redactError(error, secrets)}`, secrets)
+    return failOutcome(`The ping did not complete: ${redactError(error, secrets)}`, secrets)
   }
 }
 
@@ -81,32 +40,11 @@ export async function testDryProofRequest(http: HttpClient, input: { endpointUrl
       headers: { Authorization: `Bearer ${input.apiKey}`, 'Content-Type': 'application/json' },
       body,
     })
-    if (response.status === 400) return pass('The worker refused the empty request with 400, as it should. No proof ran.')
-    if (response.status === 200) return fail('The worker returned a proof for an empty request. That is not expected: check the endpoint.', secrets)
-    return fail(describeStatus(response, 'the dry request'), secrets)
+    if (response.status === 400) return passOutcome('The worker refused the empty request with 400, as it should. No proof ran.')
+    if (response.status === 200) return failOutcome('The worker returned a proof for an empty request. That is not expected: check the endpoint.', secrets)
+    return failOutcome(describeStatus(response, 'the dry request'), secrets)
   } catch (error) {
-    return fail(`The request did not complete: ${redactError(error, secrets)}`, secrets)
-  }
-}
-
-/** `eth_chainId` on an RPC URL. The answer must equal the chain that the setup names. */
-export async function testRpcChainId(http: HttpClient, input: { rpcUrl: string; expectedChainId: number }): Promise<TestOutcome> {
-  const secrets = [input.rpcUrl]
-  try {
-    const response = await http({
-      url: input.rpcUrl,
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_chainId', params: [] }),
-    })
-    if (response.status !== 200) return fail(describeStatus(response, 'eth_chainId'), secrets)
-    const answer = JSON.parse(response.text) as { result?: unknown }
-    if (typeof answer.result !== 'string') return fail('The node returned no chain identifier.', secrets)
-    const found = Number.parseInt(answer.result, 16)
-    if (found !== input.expectedChainId) return fail(`The node is on chain ${found}, not chain ${input.expectedChainId}.`, secrets)
-    return pass(`The node reports chain ${found}.`)
-  } catch (error) {
-    return fail(`eth_chainId did not complete: ${redactError(error, secrets)}`, secrets)
+    return failOutcome(`The request did not complete: ${redactError(error, secrets)}`, secrets)
   }
 }
 
@@ -124,18 +62,11 @@ export async function testMsgboardStatus(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'msgboard_status', params: [] }),
     })
-    if (response.status !== 200) return fail(describeStatus(response, 'msgboard_status'), secrets)
+    if (response.status !== 200) return failOutcome(describeStatus(response, 'msgboard_status'), secrets)
     const answer = JSON.parse(response.text) as { result?: unknown; error?: { message?: string } }
-    if (answer.error !== undefined) return fail(`msgboard_status returned an error: ${answer.error.message ?? 'unknown'}`, secrets)
-    return pass('msgboard_status answered.')
+    if (answer.error !== undefined) return failOutcome(`msgboard_status returned an error: ${answer.error.message ?? 'unknown'}`, secrets)
+    return passOutcome('msgboard_status answered.')
   } catch (error) {
-    return fail(`msgboard_status did not complete: ${redactError(error, secrets)}`, secrets)
+    return failOutcome(`msgboard_status did not complete: ${redactError(error, secrets)}`, secrets)
   }
-}
-
-function describeStatus(response: HttpResponse, what: string): string {
-  if (response.status === 401 || response.status === 403) return `The server refused ${what} with ${response.status}: check the API key.`
-  if (response.status === 404) return `The server answered ${what} with 404: check the address.`
-  if (response.status === 503 || /no workers available/i.test(response.text)) return `No worker is available now (${response.status}). Wait for one to start.`
-  return `The server answered ${what} with ${response.status}: ${response.text.slice(0, 120)}`
 }
