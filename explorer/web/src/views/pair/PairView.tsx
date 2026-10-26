@@ -2,6 +2,7 @@ import { Box, Button, Grid, Stack, Text } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
 import { useFeed, useHeads, useSnapshots, useSummary, useTokens } from "../../app/queries";
 import { useServices } from "../../app/services";
+import { formatTimestamp } from "../../ui/format";
 import { Notice, Panel } from "../../ui/primitives";
 import { useWallet } from "../../wallet/wallet-port";
 import { ActionArea } from "./ActionArea";
@@ -59,6 +60,11 @@ export const PairView = ({ pairId, initialToken }: PairViewProps) => {
           </Box>
           <Box padding="3">
             {feed.error === null ? null : <Notice tone="warning">The feed did not refresh ({feed.error.message}). The rows are the last good ones.</Notice>}
+            {feed.data?.coveredFrom === undefined ? null : (
+              <Text fontSize="xs" color="fg.muted" marginBottom="2">
+                RPC fallback: history since {formatTimestamp(feed.data.coveredFrom)} UTC
+              </Text>
+            )}
             {feed.data === undefined ? <Text color="fg.muted">Loading the feed…</Text> : <FeedTable pair={pair} items={feed.data.items} />}
             {feed.data?.hasMore === true ? (
               <Button marginTop="2" variant="outline" size="sm" onClick={() => setLimit(limit + PAGE_SIZE)}>

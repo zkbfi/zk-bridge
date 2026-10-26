@@ -1,6 +1,7 @@
 import { Box, Flex, Text } from "@chakra-ui/react";
 import type { ReactNode } from "react";
 import type { GateStatus, PairConfig, PairSummary } from "@terminal/model/types";
+import type { PartialFigure } from "@zk-bridge/shared";
 import { formatAge, formatAmountWithSymbol } from "../../ui/format";
 import { Notice } from "../../ui/primitives";
 
@@ -54,6 +55,9 @@ export const SummaryBar = ({ pair, summary, error, now }: SummaryBarProps) => {
   const updates = summary.heads.flatMap((head) => (head.lastUpdateAt === null ? [] : [head.lastUpdateAt]));
   const lastUpdate = updates.length === 0 ? null : Math.max(...updates);
   const volume = summary.volume24h.byToken.map((entry) => formatAmountWithSymbol(entry.amount, entry.token)).join(" · ");
+  const partial = summary.partial ?? [];
+  const atLeast = (figure: PartialFigure): string => (partial.includes(figure) ? "at least " : "");
+  const anyPartial = (["volume24h", "inFlight", "feesAccrued"] as const).some((figure) => partial.includes(figure));
   const fees = summary.feesAccrued.map((entry) => formatAmountWithSymbol(entry.amount, entry.token)).join(" · ");
   return (
     <Box>
@@ -62,11 +66,17 @@ export const SummaryBar = ({ pair, summary, error, now }: SummaryBarProps) => {
         <Stat term="Pair">
           {pair.id}: {pair.first.name} and {pair.second.name}
         </Stat>
-        <Stat term="In flight">{summary.inFlight}</Stat>
+        <Stat term="In flight">
+          {atLeast("inFlight")}
+          {summary.inFlight}
+        </Stat>
         <Stat term="Volume, 24 hours">
+          {atLeast("volume24h")}
           {summary.volume24h.transferCount} transfers{volume === "" ? "" : `, ${volume}`}
         </Stat>
-        <Stat term="Fees accrued">{fees === "" ? "none" : fees}</Stat>
+        <Stat term="Fees accrued">
+          {fees === "" ? "none" : `${atLeast("feesAccrued")}${fees}`}
+        </Stat>
         {(["first", "second"] as const).map((side) => {
           const chain = side === "first" ? pair.first : pair.second;
           return (
@@ -79,6 +89,11 @@ export const SummaryBar = ({ pair, summary, error, now }: SummaryBarProps) => {
         })}
         <Stat term="Last light client update">{lastUpdate === null ? "none seen" : formatAge(now, lastUpdate)}</Stat>
       </Flex>
+      {anyPartial ? (
+        <Text fontSize="xs" color="fg.muted" marginTop="1">
+          RPC fallback: recent history only
+        </Text>
+      ) : null}
     </Box>
   );
 };

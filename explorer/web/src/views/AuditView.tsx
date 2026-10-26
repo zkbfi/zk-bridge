@@ -1,11 +1,22 @@
 import { Box, Heading, Table, Text } from "@chakra-ui/react";
-import { auditDifference, countAuditMismatches, hasAuditMismatch } from "@terminal/model/audit";
+import { auditDifference } from "@terminal/model/audit";
 import { useAudit } from "../app/queries";
 import { useServices } from "../app/services";
 import { formatUnits } from "../ui/format";
 import { Notice } from "../ui/primitives";
+import { auditVerdict, tallyAudit, type AuditVerdict } from "./audit-model";
 
 const cell = (value: bigint, decimals: number): string => formatUnits(value, decimals, { groupThousands: true, maximumFractionDigits: 6 });
+
+const DIFFERENCE_TEXT: Readonly<Record<AuditVerdict, (difference: bigint, decimals: number) => string>> = {
+  matches: () => "0",
+  mismatch: (difference, decimals) => `${difference > 0n ? "+" : ""}${cell(difference, decimals)}`,
+  unverified: () => "unknown",
+};
+
+const VERDICT_COLORS: Readonly<Record<AuditVerdict, string>> = { matches: "green.fg", mismatch: "red.fg", unverified: "fg.muted" };
+
+const VERDICT_WORDS: Readonly<Record<AuditVerdict, string>> = { matches: "Matches", mismatch: "Mismatch", unverified: "unverified (recent history only)" };
 
 /**
  * The audit view: for each native token, the escrow that the home mediator holds against the supply of its copy on the
@@ -15,7 +26,7 @@ export const AuditView = () => {
   const { pair } = useServices();
   const audit = useAudit(pair.id);
   const rows = audit.data;
-  const mismatches = rows === undefined ? 0 : countAuditMismatches(rows);
+  const { mismatches, unverified, checked } = tallyAudit(rows ?? []);
   return (
     <Box>
       <Heading as="h1" size="lg" marginBottom="1">
@@ -28,9 +39,18 @@ export const AuditView = () => {
       {rows === undefined ? <Text color="fg.muted">Loading…</Text> : null}
       {rows === undefined ? null : (
         <>
-          <Notice tone={mismatches === 0 ? "info" : "error"}>
-            {mismatches === 0 ? `All ${rows.length} tokens match.` : `${mismatches} of ${rows.length} tokens do not match. Check twice before you raise an alarm: the two chains are read at different blocks.`}
-          </Notice>
+          {checked === 0 ? null : (
+            <Notice tone={mismatches === 0 ? "info" : "error"}>
+              {mismatches === 0
+                ? `All ${unverified === 0 ? rows.length : `${checked} checked`} tokens match.`
+                : `${mismatches} of ${rows.length} tokens do not match. Check twice before you raise an alarm: the two chains are read at different blocks.`}
+            </Notice>
+          )}
+          {unverified === 0 ? null : (
+            <Notice tone="warning">
+              {unverified} of {rows.length} tokens are unverified (recent history only). The RPC fallback cannot see older transfers in flight, so it cannot prove a match or a mismatch.
+            </Notice>
+          )}
           <Box overflowX="auto" marginTop="3">
             <Table.Root aria-label="Escrow against bridged supply">
               <Table.Header>
@@ -48,7 +68,7 @@ export const AuditView = () => {
               <Table.Body>
                 {rows.map((row) => {
                   const difference = auditDifference(row);
-                  const flagged = hasAuditMismatch(row);
+                  const verdict = auditVerdict(row);
                   const decimals = row.token.decimals;
                   return (
                     <Table.Row key={`${row.token.side}-${row.token.address}`}>
@@ -56,11 +76,11 @@ export const AuditView = () => {
                       <Table.Cell textAlign="end">{cell(row.escrow, decimals)}</Table.Cell>
                       <Table.Cell textAlign="end">{cell(row.bridgedSupply, decimals)}</Table.Cell>
                       <Table.Cell textAlign="end">{cell(row.inFlight, decimals)}</Table.Cell>
-                      <Table.Cell textAlign="end">{flagged ? `${difference > 0n ? "+" : ""}${cell(difference, decimals)}` : "0"}</Table.Cell>
+                      <Table.Cell textAlign="end">{DIFFERENCE_TEXT[verdict](difference, decimals)}</Table.Cell>
                       <Table.Cell textAlign="end">{cell(row.accruedFees, decimals)}</Table.Cell>
                       <Table.Cell textAlign="end">{cell(row.collectedFees, decimals)}</Table.Cell>
-                      <Table.Cell color={flagged ? "red.fg" : "green.fg"} fontWeight="medium">
-                        {flagged ? "Mismatch" : "Matches"}
+                      <Table.Cell color={VERDICT_COLORS[verdict]} fontWeight="medium">
+                        {VERDICT_WORDS[verdict]}
                       </Table.Cell>
                     </Table.Row>
                   );
