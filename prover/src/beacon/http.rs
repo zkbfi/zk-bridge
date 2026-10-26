@@ -36,22 +36,31 @@
 //!    anchor should be the newest head that the light client stores.
 //! 3. `lc-core` checks the rebuilt roots against the `block_summary_root` of the anchor state.
 //!
-//! Limits: the SSZ parser in `lc-core` reads states of the Capella, Deneb, Electra and Fulu layouts. It picks the layout
+//! # Gloas
+//!
+//! A Gloas finalized header proves `state.latest_block_hash`, and the program reads the block number from the RLP of
+//! that execution block. So after a fold is chosen, [`HttpBeaconSource::plan_update`] reads the state of each Gloas
+//! finalized header (hashed in full and compared with the state root), asks an [`ExecutionHeaders`] source for the
+//! raw header of `latest_block_hash`, and attaches both through `anchor_gloas_header`. Without an execution source the
+//! run stops with an error that names `source.rpc_url`. A message proof from a Gloas source block is refused.
+//!
+//! Limits: the SSZ parser in `lc-core` reads states of the Capella, Deneb, Electra, Fulu and Gloas layouts. It picks the layout
 //! from the fork that the chain schedule has at the slot of the state. The block parser reads the Capella block layout
 //! only, so the assembled update path needs a Capella chain. Ethereum uses the light-client endpoints for the update.
 
 use super::{HashEvidence, HistoricalEvidence, RootsEvidence, SourceBlock, StoredHead, UpdatePlan};
 use crate::error::{Error, Result};
 use crate::light_client::{
-    ancestry_path, assemble_update, beacon_header_from_json, block_hash_gindex, block_roots_gindex,
-    committee_hash, describe_header, era_block_roots, era_of, header_root,
-    historical_summaries_gindex, store_at, store_from_bootstrap_json, sync_aggregate_from_json,
-    update_from_json, AncestryPath, BeaconHeader, BeaconPath, BlockView, ChainKind,
-    LightClientStore, LightClientUpdate, StateView, SyncAggregate, UpdateInput,
+    ancestry_path, anchor_gloas_header, assemble_update, beacon_header_from_json,
+    block_hash_gindex, block_roots_gindex, committee_hash, describe_header, era_block_roots,
+    era_of, header_root, historical_summaries_gindex, store_at, store_from_bootstrap_json,
+    sync_aggregate_from_json, update_from_json, AncestryPath, BeaconHeader, BeaconPath, BlockView,
+    ChainKind, LightClientStore, LightClientUpdate, StateView, SyncAggregate, UpdateInput,
     SLOTS_PER_HISTORICAL_ROOT,
 };
-use crate::rpc::HttpGet;
-use alloy_primitives::B256;
+use crate::rpc::{HttpGet, JsonRpc};
+use alloy_primitives::{hex, keccak256, B256};
+use lc_core::chain::ForkName;
 use lc_core::update::MAX_FOLD_UPDATES;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -226,10 +235,52 @@ pub fn assemble_fold(
     Ok(fold)
 }
 
+/// Where the raw execution block headers come from (a Gloas finalized header needs one).
+pub trait ExecutionHeaders: Send + Sync {
+    /// The RLP of the execution block header with this hash. The caller checks that it hashes to `hash`.
+    ///
+    /// # Errors
+    /// `Error::Rpc` or `Error::Http` when the node does not answer, `Error::Malformed` for a wrong shape.
+    fn raw_header(&self, hash: B256) -> Result<Vec<u8>>;
+}
+
+/// Raw headers from an execution node with `debug_getRawHeader` (geth, erigon and reth serve it).
+pub struct RpcExecutionHeaders {
+    rpc: Box<dyn JsonRpc>,
+}
+
+impl RpcExecutionHeaders {
+    /// Reads headers through `rpc`.
+    pub fn new(rpc: Box<dyn JsonRpc>) -> Self {
+        Self { rpc }
+    }
+}
+
+impl ExecutionHeaders for RpcExecutionHeaders {
+    fn raw_header(&self, hash: B256) -> Result<Vec<u8>> {
+        let answer = self.rpc.call(
+            "debug_getRawHeader",
+            serde_json::json!([format!("{hash:#x}")]),
+        )?;
+        let text = answer.as_str().ok_or_else(|| {
+            Error::Malformed("debug_getRawHeader: the result is not a string".into())
+        })?;
+        let bytes = hex::decode(text)
+            .map_err(|error| Error::Malformed(format!("debug_getRawHeader: {error}")))?;
+        if keccak256(&bytes) != hash {
+            return Err(Error::Beacon(format!(
+                "the execution node answered a header that does not hash to {hash:#x}"
+            )));
+        }
+        Ok(bytes)
+    }
+}
+
 /// A beacon node.
 pub struct HttpBeaconSource {
     chain: ChainKind,
     client: Box<dyn HttpGet>,
+    execution_headers: Option<Box<dyn ExecutionHeaders>>,
     genesis_time: Mutex<Option<u64>>,
     state_cache: Mutex<Vec<(B256, Arc<StateView>)>>,
     era_cache: Mutex<Vec<(u64, Arc<Vec<B256>>)>>,
@@ -241,10 +292,45 @@ impl HttpBeaconSource {
         Self {
             chain,
             client,
+            execution_headers: None,
             genesis_time: Mutex::new(None),
             state_cache: Mutex::new(Vec::new()),
             era_cache: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The same source with an execution header source. A fold with a Gloas finalized header needs it.
+    pub fn with_execution_headers(mut self, headers: Box<dyn ExecutionHeaders>) -> Self {
+        self.execution_headers = Some(headers);
+        self
+    }
+
+    /// Attaches the execution anchor to every Gloas finalized header of `updates` (see the module documentation, "Gloas").
+    ///
+    /// # Errors
+    /// `Error::Config` when a header needs the anchor and the source has no execution source. The errors of
+    /// `anchor_gloas_header` and of the reads.
+    fn anchor_gloas_updates(&self, updates: &mut [LightClientUpdate]) -> Result<()> {
+        for update in updates {
+            let finalized = &update.finalized_header;
+            if self.chain.spec().fork_at_slot(finalized.beacon.slot) < ForkName::Gloas {
+                continue;
+            }
+            let headers = self.execution_headers.as_ref().ok_or_else(|| {
+                Error::Config(
+                    "a Gloas finalized header needs the execution header of state.latest_block_hash: set source.rpc_url (or --source-rpc-url)"
+                        .into(),
+                )
+            })?;
+            let state = self.state_for(finalized.beacon.state_root)?;
+            let hash = state
+                .latest_block_hash()
+                .ok_or_else(|| Error::Beacon("the finalized state is not a Gloas state".into()))?;
+            let rlp = headers.raw_header(hash)?;
+            update.finalized_header =
+                anchor_gloas_header(self.chain, &finalized.beacon, &state, rlp)?;
+        }
+        Ok(())
     }
 
     /// GET and parse JSON. `None` when the node says 404 or 501 (the endpoint is not served or the object is unknown).
@@ -628,7 +714,8 @@ impl HttpBeaconSource {
         if latest_finalized_slot <= header.slot {
             return Ok(None);
         }
-        let input = self.catch_up(&header, head.next_committee_hash, latest)?;
+        let mut input = self.catch_up(&header, head.next_committee_hash, latest)?;
+        self.anchor_gloas_updates(&mut input.updates)?;
         Ok(Some(UpdatePlan {
             input,
             latest_finalized_slot,
@@ -803,6 +890,157 @@ mod tests {
             ChainKind::Pulsechain,
             Box::new(Node(pages.into_iter().collect())),
         )
+    }
+
+    /// Serves the raw header of one hash and refuses every other.
+    struct OneHeader {
+        hash: B256,
+        rlp: Vec<u8>,
+    }
+
+    impl ExecutionHeaders for OneHeader {
+        fn raw_header(&self, hash: B256) -> Result<Vec<u8>> {
+            assert_eq!(
+                hash, self.hash,
+                "the source asked for the header of state.latest_block_hash"
+            );
+            Ok(self.rlp.clone())
+        }
+    }
+
+    fn sepolia_fixtures() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../light-client/tests/fixtures/sepolia")
+    }
+
+    /// A Sepolia source over REAL Gloas data: the finality update of a Sepolia node, its finalized state, and the raw
+    /// execution header of `state.latest_block_hash`. The head of the light client is a header that shares the real state
+    /// root and lies 1000 slots earlier, so the store (the current committee) comes from the real state. Returns the
+    /// source, the head, and the hash of the execution header.
+    fn real_gloas_source(with_headers: bool) -> (HttpBeaconSource, StoredHead, B256) {
+        let update: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(sepolia_fixtures().join("gloas_head_finality_update.json")).unwrap(),
+        )
+        .unwrap();
+        let wrapper: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(sepolia_fixtures().join("gloas_head_execution_header.json")).unwrap(),
+        )
+        .unwrap();
+        let state = std::fs::read(sepolia_fixtures().join("gloas_head_state.ssz")).unwrap();
+        let rlp = hex::decode(wrapper["raw_header"].as_str().unwrap()).unwrap();
+        let finalized = &update["response"]["data"]["finalized_header"]["beacon"];
+        let mut head = finalized.clone();
+        let head_slot = finalized["slot"].as_str().unwrap().parse::<u64>().unwrap() - 1_000;
+        head["slot"] = serde_json::json!(head_slot.to_string());
+        let head_root = header_root(&beacon_header_from_json(&head).unwrap());
+        let state_root = finalized["state_root"].as_str().unwrap().to_string();
+        let pages: HashMap<String, Vec<u8>> = HashMap::from([
+            (
+                format!("/eth/v1/beacon/headers/{head_slot}"),
+                serde_json::json!({"data": {"header": {"message": head}}})
+                    .to_string()
+                    .into_bytes(),
+            ),
+            (
+                "/eth/v1/beacon/light_client/finality_update".to_string(),
+                update["response"].to_string().into_bytes(),
+            ),
+            (format!("/eth/v2/debug/beacon/states/{state_root}"), state),
+        ]);
+        let hash = lc_core::execution::execution_block_hash(&rlp);
+        let mut source = HttpBeaconSource::new(ChainKind::Sepolia, Box::new(Node(pages)));
+        if with_headers {
+            source = source.with_execution_headers(Box::new(OneHeader { hash, rlp }));
+        }
+        let stored = StoredHead {
+            slot: head_slot,
+            root: head_root,
+            next_committee_hash: B256::ZERO,
+        };
+        (source, stored, hash)
+    }
+
+    /// Claim: the plan for a REAL Sepolia Gloas head carries a finalized header anchored in its real state, with the real
+    /// execution header RLP. The program accepts the plan natively (real BLS signature) and reports the block that
+    /// `state.latest_block_hash` names, with its number from the RLP. Why it matters: this is what the prover sends to the
+    /// guest on Sepolia.
+    #[test]
+    fn a_gloas_plan_anchors_the_finalized_header_in_the_real_state() {
+        let (source, stored, hash) = real_gloas_source(true);
+        let plan = source.plan_update(&stored).unwrap().expect("a plan");
+        let finalized = &plan.input.updates[0].finalized_header;
+        assert_eq!(finalized.execution_block_hash(), hash);
+        assert_eq!(finalized.execution_branch.len(), 11);
+        assert!(!finalized.execution_header_rlp.is_empty());
+        let output = verify_update_natively(&plan.input).expect("the real Gloas fold verifies");
+        assert_eq!(output.executionBlockHash, hash);
+        assert_ne!(output.executionBlockNumber, 0);
+    }
+
+    /// Claim: without an execution source the plan for a Gloas head stops with a clear configuration error that names
+    /// `source.rpc_url`, and builds no update. Why it matters: the program needs the RLP, and an update without it
+    /// would be refused later at the cost of a proof run.
+    #[test]
+    fn a_gloas_plan_without_an_execution_source_names_the_missing_setting() {
+        let (source, stored, _) = real_gloas_source(false);
+        let Err(error) = source.plan_update(&stored) else {
+            panic!("the plan must fail");
+        };
+        assert!(
+            matches!(&error, Error::Config(text) if text.contains("source.rpc_url")),
+            "{error}"
+        );
+    }
+
+    /// Claim: an execution node that answers the header of another block is refused, so a node cannot choose the block
+    /// number. The header must hash to `state.latest_block_hash`.
+    #[test]
+    fn a_wrong_execution_header_is_refused_before_a_proof_run() {
+        let (source, stored, hash) = real_gloas_source(false);
+        let wrapper: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(sepolia_fixtures().join("gloas_head_execution_header.json")).unwrap(),
+        )
+        .unwrap();
+        let parent = hex::decode(wrapper["parent_raw_header"].as_str().unwrap()).unwrap();
+        let source = source.with_execution_headers(Box::new(OneHeader { hash, rlp: parent }));
+        let Err(error) = source.plan_update(&stored) else {
+            panic!("the plan must fail");
+        };
+        assert!(
+            error.to_string().contains("state.latest_block_hash"),
+            "{error}"
+        );
+    }
+
+    /// Claim: the RPC header source refuses an answer that does not hash to the requested hash, and reads the raw header
+    /// from `debug_getRawHeader`.
+    #[test]
+    fn the_rpc_header_source_checks_the_hash() {
+        struct Fixed(String);
+        impl JsonRpc for Fixed {
+            fn call(&self, method: &str, _params: serde_json::Value) -> Result<serde_json::Value> {
+                assert_eq!(method, "debug_getRawHeader");
+                Ok(serde_json::json!(self.0))
+            }
+        }
+        let wrapper: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(sepolia_fixtures().join("gloas_head_execution_header.json")).unwrap(),
+        )
+        .unwrap();
+        let raw = wrapper["raw_header"].as_str().unwrap().to_string();
+        let bytes = hex::decode(&raw).unwrap();
+        let hash = keccak256(&bytes);
+        let good = RpcExecutionHeaders::new(Box::new(Fixed(raw)));
+        assert_eq!(good.raw_header(hash).unwrap(), bytes);
+        assert!(good.raw_header(B256::repeat_byte(1)).is_err());
+        let not_text = RpcExecutionHeaders::new(Box::new(Fixed2));
+        assert!(not_text.raw_header(hash).is_err());
+    }
+
+    struct Fixed2;
+    impl JsonRpc for Fixed2 {
+        fn call(&self, _method: &str, _params: serde_json::Value) -> Result<serde_json::Value> {
+            Ok(serde_json::json!(7))
+        }
     }
 
     /// Claim: the slot of an execution timestamp is `(timestamp - genesis) / 10` on PulseChain, and a timestamp

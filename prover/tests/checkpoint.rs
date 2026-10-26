@@ -246,9 +246,33 @@ fn a_named_root_fixes_every_value() {
     assert!(build_checkpoint(&node, kind, Some(B256::repeat_byte(7))).is_err());
 }
 
-/// A node that answers for Sepolia in a Gloas slot. It records every request.
+/// A node that answers for Sepolia in a Gloas slot with REAL data: the finalized header of a Sepolia beacon node and the
+/// SSZ state of that header (`light-client/tests/fixtures/sepolia/`, fetched 2026-10-26). It serves no light-client
+/// route, like the nodes of the testnets. It records every request.
 struct GloasNode {
     requests: Mutex<Vec<String>>,
+    header: Value,
+    state: Vec<u8>,
+}
+
+fn light_client_fixtures() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../light-client/tests/fixtures/sepolia")
+}
+
+impl GloasNode {
+    fn real() -> Self {
+        let update: Value = serde_json::from_slice(
+            &std::fs::read(light_client_fixtures().join("gloas_head_finality_update.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        let state = std::fs::read(light_client_fixtures().join("gloas_head_state.ssz")).unwrap();
+        Self {
+            requests: Mutex::new(Vec::new()),
+            header: update["response"]["data"]["finalized_header"]["beacon"].clone(),
+            state,
+        }
+    }
 }
 
 impl HttpGet for GloasNode {
@@ -271,36 +295,49 @@ impl HttpGet for GloasNode {
             ),
             "/eth/v1/beacon/headers/finalized" => answer(
                 200,
-                json!({"finalized": true, "data": {"header": {"message": {
-                    "slot": (353_024u64 * 32 + 64).to_string(),
-                    "proposer_index": "1",
-                    "parent_root": format!("0x{}", "01".repeat(32)),
-                    "state_root": format!("0x{}", "02".repeat(32)),
-                    "body_root": format!("0x{}", "03".repeat(32)),
-                }}}}),
+                json!({"finalized": true, "data": {"header": {"message": self.header}}}),
             ),
-            _ => panic!("a Gloas header must stop the command before {path}"),
+            _ if path.starts_with("/eth/v1/beacon/light_client/") => {
+                answer(404, json!({"message": "not served"}))
+            }
+            _ if path.starts_with("/eth/v2/debug/beacon/states/") => Ok(HttpResponse {
+                status: 200,
+                body: self.state.clone(),
+            }),
+            _ => panic!("unexpected request {path}"),
         }
     }
 }
 
-/// Claim: for Sepolia in a Gloas slot the command fails with the `lc-core` refusal and sends no bootstrap or state
-/// request, so it never falls back to a Capella parse. Why it matters: a half answer would deploy a light client that
-/// cannot follow the chain.
+/// Claim: for Sepolia in a Gloas slot the command builds the checkpoint from the REAL finalized state, hashed in full
+/// with the Gloas layout and compared with the state root of the header. The committee hashes are those of the
+/// committees in that state, and the node was asked for the state of the header root and nothing else (no Capella
+/// parse of a Gloas state). Control: a state with one flipped byte is refused because it does not hash to the header.
 #[test]
-fn sepolia_in_a_gloas_slot_is_refused_before_any_bootstrap_or_state_request() {
-    let node = GloasNode {
-        requests: Mutex::new(Vec::new()),
-    };
-    let error = build_checkpoint(&node, ChainKind::Sepolia, None).expect_err("refused");
-    assert!(
-        matches!(&error, Error::VerificationRefused(text) if text.contains("Gloas is refused")),
-        "{error}"
+fn sepolia_in_a_gloas_slot_builds_a_checkpoint_from_the_real_state() {
+    let node = GloasNode::real();
+    let report = build_checkpoint(&node, ChainKind::Sepolia, None).expect("a Gloas checkpoint");
+    assert_eq!(report.source, CheckpointSource::DebugState);
+    let state = StateView::parse(&node.state, ChainKind::Sepolia).expect("the real state");
+    assert_eq!(report.initial_slot, state.slot());
+    assert_eq!(
+        report.initial_sync_committee_hash,
+        committee_hash(state.current_committee()).unwrap()
     );
-    let requests = node.requests.lock().unwrap();
-    assert!(!requests
-        .iter()
-        .any(|path| path.contains("bootstrap") || path.contains("states")));
+    assert_eq!(
+        report.initial_next_sync_committee_hash,
+        committee_hash(state.next_committee()).unwrap()
+    );
+    assert!(report.next_committee_known);
+    assert_ne!(
+        report.initial_sync_committee_hash,
+        report.initial_next_sync_committee_hash
+    );
+
+    let mut broken = GloasNode::real();
+    *broken.state.last_mut().unwrap() ^= 1;
+    let error = build_checkpoint(&broken, ChainKind::Sepolia, None).expect_err("a broken state");
+    assert!(error.to_string().contains("hashes to"), "{error}");
 }
 
 /// Claim: a node of another chain is refused by its genesis validators root.

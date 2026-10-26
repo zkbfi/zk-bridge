@@ -8,7 +8,7 @@
 //! starting head already is the newest final header and there is nothing to prove, and 1 for an error. `evidence` returns
 //! 0 or 1.
 
-use crate::beacon::http::HttpBeaconSource;
+use crate::beacon::http::{HttpBeaconSource, RpcExecutionHeaders};
 use crate::beacon::StoredHead;
 use crate::chain::ChainClient;
 use crate::checkpoint::build_checkpoint;
@@ -84,7 +84,6 @@ pub enum Command {
     /// The values are the slot and the root of one finalized header, the hashes of its current and next sync committee,
     /// and the chain facts of the deploy configuration. All come from the same finalized root. The command reads the
     /// beacon API only: first the light-client bootstrap route, and the finalized state when the node answers 404 there.
-    /// Sepolia fails with the Gloas refusal of `lc-core` and prints nothing.
     Checkpoint(CheckpointArguments),
     /// Print the evidence of `MessageBridge.openDeposits` for the source bridge of a route, as one JSON object.
     ///
@@ -184,6 +183,10 @@ pub struct ProveArguments {
     /// route is given.
     #[arg(long, conflicts_with = "route")]
     pub chain: Option<String>,
+    /// The execution RPC of the source chain, when no route is given. A Gloas source needs it for the execution header of
+    /// `state.latest_block_hash`. With a route, `source.rpc_url` of the file is used.
+    #[arg(long, conflicts_with = "route", requires = "beacon_url")]
+    pub source_rpc_url: Option<String>,
     /// The slot of the starting head. With it, the command reads nothing from the destination chain.
     #[arg(long, requires = "head_root")]
     pub head_slot: Option<u64>,
@@ -233,6 +236,7 @@ enum StartingPoint {
 struct ProvePlan {
     route_name: String,
     beacon_url: String,
+    source_rpc_url: Option<String>,
     chain: ChainKind,
     destination: Option<DestinationConfig>,
     starting_point: StartingPoint,
@@ -248,17 +252,24 @@ fn parse_hash(text: &str, flag: &str) -> Result<B256> {
 /// `Error::Usage` for flags that do not fit together or a route that cannot be chosen. `Error::Config` when an explicit
 /// head has no program key.
 fn plan_prove(config: &Config, arguments: &ProveArguments) -> Result<ProvePlan> {
-    let (route_name, source_url, chain, destination) = match &arguments.beacon_url {
+    let (route_name, source_url, source_rpc_url, chain, destination) = match &arguments.beacon_url {
         Some(url) => {
             let name = arguments.chain.as_deref().unwrap_or_default();
             let chain = parse_chain(name)?;
-            (EXPLICIT_HEAD_ROUTE.to_string(), url.clone(), chain, None)
+            (
+                EXPLICIT_HEAD_ROUTE.to_string(),
+                url.clone(),
+                arguments.source_rpc_url.clone(),
+                chain,
+                None,
+            )
         }
         None => {
             let (name, route) = config.route(arguments.route.as_deref())?;
             (
                 name.to_string(),
                 route.source.beacon_url.clone(),
+                route.source.rpc_url.clone(),
                 route.source.chain_kind()?,
                 Some(route.destination.clone()),
             )
@@ -293,6 +304,7 @@ fn plan_prove(config: &Config, arguments: &ProveArguments) -> Result<ProvePlan> 
     Ok(ProvePlan {
         route_name,
         beacon_url: source_url,
+        source_rpc_url,
         chain,
         destination,
         starting_point,
@@ -356,6 +368,16 @@ pub fn build_prover(
 
 fn beacon_source(chain: ChainKind, url: &str) -> HttpBeaconSource {
     HttpBeaconSource::new(chain, Box::new(HttpClient::new(url)))
+}
+
+/// Gives the source an execution header source when the run has a source RPC URL.
+fn with_execution_headers(source: HttpBeaconSource, rpc_url: Option<&str>) -> HttpBeaconSource {
+    match rpc_url {
+        Some(url) => source.with_execution_headers(Box::new(RpcExecutionHeaders::new(Box::new(
+            HttpRpc::new(url),
+        )))),
+        None => source,
+    }
 }
 
 fn connect(name: &str, chain_id: u64, rpc_url: &str) -> Result<ChainClient> {
@@ -457,7 +479,10 @@ fn run_prove(
             ("start_head_slot", start.head.slot.to_string()),
         ],
     );
-    let source = beacon_source(plan.chain, &plan.beacon_url);
+    let source = with_execution_headers(
+        beacon_source(plan.chain, &plan.beacon_url),
+        plan.source_rpc_url.as_deref(),
+    );
     match produce(&source, prover.as_ref(), &request)? {
         Production::UpToDate { head_slot } => {
             logger.info("up_to_date", &[("head_slot", head_slot.to_string())]);

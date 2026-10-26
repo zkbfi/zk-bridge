@@ -46,8 +46,9 @@ pub enum ChainKind {
     Ethereum,
     /// PulseChain.
     Pulsechain,
-    /// Sepolia (chain identifier 11155111). It runs the Gloas fork. `lc-core` refuses Gloas headers and updates with a
-    /// clear error while the design of the Gloas execution payload is open, so a run on this chain stops with that error.
+    /// Sepolia (chain identifier 11155111). It runs the Gloas fork from epoch 353024. A Gloas finalized header needs the
+    /// state and the execution header RLP of `state.latest_block_hash`: see [`anchor_gloas_header`]. A message proof from
+    /// a Gloas source block is refused.
     Sepolia,
     /// PulseChain testnet v4 (chain identifier 943). It stopped at Capella, like PulseChain.
     PulsechainTestnetV4,
@@ -535,17 +536,18 @@ const STATE_FIELD_CURRENT_SYNC_COMMITTEE: usize = 22;
 const STATE_FIELD_NEXT_SYNC_COMMITTEE: usize = 23;
 const BODY_FIELD_EXECUTION_PAYLOAD: usize = 9;
 const PAYLOAD_FIELD_BLOCK_HASH: usize = 12;
-/// The field counts of the layouts that the parser supports: Capella and Deneb (28), Electra (37), Fulu (38).
-const SUPPORTED_STATE_FIELD_COUNTS: [usize; 3] = [
+/// The field counts of the layouts that the parser supports: Capella and Deneb (28), Electra (37), Fulu (38), Gloas (46).
+const SUPPORTED_STATE_FIELD_COUNTS: [usize; 4] = [
     StateForm::Capella.field_count(),
     StateForm::Electra.field_count(),
     StateForm::Fulu.field_count(),
+    StateForm::Gloas.field_count(),
 ];
 
 /// The error for a state whose field count no supported layout has.
 fn unsupported_field_count(count: usize) -> Error {
     Error::Beacon(format!(
-        "the state has {count} fields; only the Capella and Deneb (28 fields), Electra (37 fields) and Fulu (38 fields) layouts are supported"
+        "the state has {count} fields; only the Capella and Deneb (28 fields), Electra (37 fields), Fulu (38 fields) and Gloas (46 fields) layouts are supported"
     ))
 }
 
@@ -556,7 +558,7 @@ pub struct StateView {
 
 impl StateView {
     /// Parses and hashes a state (SSZ bytes of `GET /eth/v2/debug/beacon/states/<id>`). The layout comes from the fork
-    /// that the chain schedule has at the slot of the state: Capella, Deneb, Electra or Fulu.
+    /// that the chain schedule has at the slot of the state: Capella, Deneb, Electra, Fulu or Gloas.
     ///
     /// # Errors
     /// `Error::Malformed` when the bytes are not a state of that fork, or when the fork has no parser.
@@ -641,19 +643,74 @@ impl StateView {
     /// Branch for `finalized_checkpoint.root`: the epoch chunk, then the field branch.
     pub fn finality_branch(&self) -> Vec<B256> {
         let mut branch = vec![u64_chunk(self.state.finalized_checkpoint.0)];
-        branch.extend(branch_for_leaf(&self.state.field_roots, STATE_FIELD_FINALIZED_CHECKPOINT).1);
+        branch.extend(self.state.field_branch(STATE_FIELD_FINALIZED_CHECKPOINT));
         branch
     }
 
     /// Branch for `next_sync_committee`.
     pub fn next_committee_branch(&self) -> Vec<B256> {
-        branch_for_leaf(&self.state.field_roots, STATE_FIELD_NEXT_SYNC_COMMITTEE).1
+        self.state.field_branch(STATE_FIELD_NEXT_SYNC_COMMITTEE)
     }
 
     /// Branch for `current_sync_committee`.
     pub fn current_committee_branch(&self) -> Vec<B256> {
-        branch_for_leaf(&self.state.field_roots, STATE_FIELD_CURRENT_SYNC_COMMITTEE).1
+        self.state.field_branch(STATE_FIELD_CURRENT_SYNC_COMMITTEE)
     }
+
+    /// `state.latest_block_hash`, for a Gloas state. `None` for an earlier fork.
+    pub fn latest_block_hash(&self) -> Option<B256> {
+        self.state.latest_block_hash()
+    }
+}
+
+/// The finalized header of a Gloas update with its execution anchor: the beacon header, `state.latest_block_hash` of its
+/// state, the 11 entry branch from that field to the state root (generalized index 2947), and the RLP of the execution
+/// header with that hash. The program checks all of it and reads the block number from the RLP.
+///
+/// The function repeats the checks of the program before it builds the header, so a wrong state or RLP stops the
+/// prover and not the proof run: the state must hash to the state root of the header, and the RLP must hash to
+/// `latest_block_hash`. Nothing here trusts the node: the state root is proven against the beacon header, and the RLP
+/// against the hash that the state names.
+///
+/// # Errors
+/// `Error::Beacon` when the state is not the post-state of the header, is not a Gloas state, or when the RLP is not the
+/// header of `latest_block_hash`. `Error::VerificationRefused` when the result fails the check of `lc-core`.
+pub fn anchor_gloas_header(
+    chain: ChainKind,
+    header: &BeaconBlockHeader,
+    state: &StateView,
+    execution_header_rlp: Vec<u8>,
+) -> Result<LightClientHeader> {
+    if state.root() != header.state_root {
+        return Err(Error::Beacon(format!(
+            "the state {:#x} is not the post-state of the finalized header at slot {} (state root {:#x})",
+            state.root(),
+            header.slot,
+            header.state_root
+        )));
+    }
+    let hash = state.latest_block_hash().ok_or_else(|| {
+        Error::Beacon(
+            "the finalized state is not a Gloas state: it has no latest_block_hash".into(),
+        )
+    })?;
+    let rlp_hash = lc_core::execution::execution_block_hash(&execution_header_rlp);
+    if rlp_hash != hash {
+        return Err(Error::Beacon(format!(
+            "the execution header hashes to {rlp_hash:#x}, but state.latest_block_hash is {hash:#x}"
+        )));
+    }
+    let anchored = LightClientHeader::compact(
+        *header,
+        hash,
+        state
+            .state
+            .field_branch(lc_core::ssz_state_gloas::GLOAS_FIELD_LATEST_BLOCK_HASH),
+        execution_header_rlp,
+    );
+    lc_core::update::verify_finalized_execution(chain.spec(), &anchored)
+        .map_err(|error| Error::VerificationRefused(error.to_string()))?;
+    Ok(anchored)
 }
 
 /// A beacon block read from SSZ bytes, with the execution branches.
@@ -696,7 +753,7 @@ impl BlockView {
 
     /// Parses a block of `chain` after a check of its fork. The slot of the block comes from its first bytes, and the chain
     /// schedule gives the fork. Only Capella blocks go to the parser. A Gloas block is refused with the refusal of
-    /// `lc-core`, and any other fork is refused by name. The parser never reads a block of another fork as Capella.
+    /// `lc-core` (a message proof from a Gloas source block is not supported), and any other fork is refused by name. The parser never reads a block of another fork as Capella.
     ///
     /// # Errors
     /// `Error::VerificationRefused` for a Gloas block. `Error::Malformed` for another fork than Capella, or for bytes
@@ -891,8 +948,7 @@ impl BootstrapView {
 /// The state layout of the fork that `chain` has at `slot`.
 ///
 /// # Errors
-/// `Error::VerificationRefused` with the text of `lc-core` when the fork is Gloas or has no light-client layout. The
-/// prover never reads a Gloas object with another layout.
+/// `Error::VerificationRefused` with the text of `lc-core` when the fork has no light-client layout (before Capella).
 pub fn state_layout_at(chain: ChainKind, slot: u64) -> Result<lc_core::layout::StateLayout> {
     lc_core::layout::state_layout_for_fork(chain.spec().fork_at_slot(slot))
         .map_err(|error| Error::VerificationRefused(error.to_string()))
@@ -952,6 +1008,7 @@ pub(crate) mod test_support {
             fork,
             finalized_checkpoint: (0, B256::ZERO),
             historical_summaries,
+            shape: lc_core::layout::ContainerShape::Plain,
         })
         .expect("a Capella layout")
     }

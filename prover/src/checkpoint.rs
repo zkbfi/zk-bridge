@@ -8,7 +8,7 @@
 //! branch proves that the committee belongs to the header. A node that does not run the light-client server answers 404.
 //! Then the finalized state gives the same values, and the state root must equal the `state_root` of the header.
 //!
-//! A Gloas header is refused with the error of `lc-core`. The command prints nothing then.
+//! A Gloas header is read like any other: the state is hashed with the Gloas layout (progressive containers) and compared with the header.
 
 use crate::error::{Error, Result};
 use crate::light_client::{
@@ -257,8 +257,7 @@ fn report(
 /// Builds the checkpoint of `finalized_root`, or of the newest finalized header when it is `None`.
 ///
 /// # Errors
-/// `Error::VerificationRefused` for a Gloas header (Sepolia), with the text of `lc-core`, before any bootstrap or state
-/// request. `Error::Beacon` when the node lacks a route or its answers disagree. `Error::Malformed` for a wrong shape.
+/// `Error::Beacon` when the node lacks a route or its answers disagree. `Error::Malformed` for a wrong shape.
 pub fn build_checkpoint(
     client: &dyn HttpGet,
     chain: ChainKind,
