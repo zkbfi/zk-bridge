@@ -112,6 +112,7 @@ contract RouterHandler is RouterWorld {
     uint256 public failedDeliveries;
     uint256 public payoutsRefused;
     uint256 public termsForfeited;
+    uint256 public tippedInvalidTerms;
     uint256 public routerClaimsPaid;
     uint256 public routerClaimsRefused;
     uint256 public legacyTokenPayouts;
@@ -262,27 +263,26 @@ contract RouterHandler is RouterWorld {
         }
     }
 
-    /// @notice Pays a record of a fee router. Anyone may call the router for an account. The seeds choose where the
-    /// search starts. A token that refuses the account may refuse the claim, and the record must then stay. Any other
-    /// claim must pay the whole record to the account, and clear it.
-    function claimFromRouter(uint8 universeSeed, uint8 holderSeed) external observed {
-        for (uint256 step = 0; step < UNIVERSE * holders.length; step++) {
-            uint256 universe = (universeSeed + step / holders.length) % UNIVERSE;
-            address account = holders[(holderSeed + step) % holders.length];
+    /// @notice Pays a record of a fee router. Anyone may call the router, and it pays its failed delivery address only.
+    /// The seed chooses where the search starts. A token that refuses the address may refuse the claim, and the record
+    /// must then stay. Any other claim must pay the whole record to that address, and clear it.
+    function claimFromRouter(uint8 universeSeed) external observed {
+        for (uint256 step = 0; step < UNIVERSE; step++) {
+            uint256 universe = (universeSeed + step) % UNIVERSE;
             address token = tokenAt(universe);
-            FeeRouter router = _routerWithRecord(universe, account);
+            FeeRouter router = _routerWithRecord(universe);
             if (address(router) == address(0)) continue;
-            uint256 recorded = router.claimable(token, account);
-            uint256 before = balanceOrZero(token, account);
-            bool refusedByToken = universe == 4 && denyToken.denied(account);
-            try router.claim(token, account) {
+            uint256 recorded = router.claimable(token, failedSink);
+            uint256 before = balanceOrZero(token, failedSink);
+            bool refusedByToken = universe == 4 && denyToken.denied(failedSink);
+            try router.claim(token) {
                 if (refusedByToken) _violate("a router paid an account that the token refuses");
-                if (balanceOrZero(token, account) - before != recorded) _violate("a claim did not pay the record");
-                if (router.claimable(token, account) != 0) _violate("a paid record remains");
+                if (balanceOrZero(token, failedSink) - before != recorded) _violate("a claim did not pay the record");
+                if (router.claimable(token, failedSink) != 0) _violate("a paid record remains");
                 routerClaimsPaid++;
             } catch {
                 if (!refusedByToken) _violate("a claim on a token that refuses nobody reverted");
-                if (router.claimable(token, account) != recorded) _violate("a refused claim changed the record");
+                if (router.claimable(token, failedSink) != recorded) _violate("a refused claim changed the record");
                 routerClaimsRefused++;
             }
             return;
@@ -309,9 +309,10 @@ contract RouterHandler is RouterWorld {
         timeAdvances++;
     }
 
-    /// @notice Denies or allows an account on the deny list token.
+    /// @notice Denies or allows an account on the deny list token: a recipient, or the failed delivery address.
     function toggleDeny(uint8 accountSeed) external observed {
-        address account = recipients[accountSeed % recipients.length];
+        uint256 pick = accountSeed % (recipients.length + 1);
+        address account = pick == recipients.length ? failedSink : recipients[pick];
         denyToken.setDenied(account, !denyToken.denied(account));
     }
 
@@ -339,10 +340,10 @@ contract RouterHandler is RouterWorld {
 
     // ---------------------------------------------------------------------------------------------- modifier
 
-    function _routerWithRecord(uint256 universe, address account) private view returns (FeeRouter) {
+    function _routerWithRecord(uint256 universe) private view returns (FeeRouter) {
         uint256 chain = chainOfToken(universe);
         for (uint256 k = 0; k < ROUTERS_PER_CHAIN; k++) {
-            if (feeRouterAt(chain, k).claimable(tokenAt(universe), account) != 0) return feeRouterAt(chain, k);
+            if (feeRouterAt(chain, k).claimable(tokenAt(universe), failedSink) != 0) return feeRouterAt(chain, k);
         }
         return FeeRouter(payable(address(0)));
     }
@@ -580,29 +581,33 @@ contract RouterHandler is RouterWorld {
         item.reading = MessageReading.read(bridgeOf(message.sourceChain).messageAt(message.index).data);
         uint256 index = _nativeIndexOf(item.reading.nativeToken);
         item.universe = item.reading.releasesNative ? index : index + NATIVE_COUNT;
-        item.payee = _payeeOf(item.reading, chainOfToken(item.universe));
+        item.payee = _payeeOf(item.reading, item.universe);
         item.payeeBefore = standing(item.universe, item.payee);
     }
 
     /// @dev Who ends with the value after the fee and the tip. A fee router pays the recipient of the terms, or the
-    /// receiver that the 20 byte data names. The wrapped router pays the receiver that its 20 byte data names.
-    function _payeeOf(MessageReading.Reading memory reading, uint256 chain) private view returns (address) {
+    /// receiver that the 20 byte data names, and hands off to its failed delivery address when it cannot. The wrapped
+    /// router pays the receiver that its 20 byte data names.
+    function _payeeOf(MessageReading.Reading memory reading, uint256 universe) private view returns (address) {
+        uint256 chain = chainOfToken(universe);
         if (!reading.hasCall) return reading.recipient;
         if (reading.recipient == address(wethRouters[chain])) {
             return reading.callData.length == 20 ? address(bytes20(reading.callData)) : reading.recipient;
         }
         if (!_isFeeRouter(reading.recipient, chain)) return reading.recipient;
-        // A fee router pays the account that the data names. Invalid terms, and data of no known shape, go to its reward
+        // Invalid terms, a payout that the token refuses and data of no known shape all go to the failed delivery
         // address.
         FeeRouter router = FeeRouter(payable(reading.recipient));
-        if (reading.callData.length == 20) return _payableOr(router, address(bytes20(reading.callData)));
-        if (reading.callData.length != 128) return router.rewardAddress();
-        return _payableOr(router, abi.decode(reading.callData, (FeeRouter.FeeDirector)).recipient);
+        if (reading.callData.length == 20) return _deliverableOr(router, universe, address(bytes20(reading.callData)));
+        if (reading.callData.length != 128) return router.failedDeliveryAddress();
+        return _deliverableOr(router, universe, abi.decode(reading.callData, (FeeRouter.FeeDirector)).recipient);
     }
 
-    /// @dev `account` when the router can pay it, and the reward address of the router when it cannot.
-    function _payableOr(FeeRouter router, address account) private view returns (address) {
-        return account == address(0) || account == address(router) ? router.rewardAddress() : account;
+    /// @dev `account` when the router can pay it, and the failed delivery address of the router when it cannot: the
+    /// account is invalid, or the deny list token refuses it.
+    function _deliverableOr(FeeRouter router, uint256 universe, address account) private view returns (address) {
+        bool refused = universe % NATIVE_COUNT == 4 && denyToken.denied(account);
+        return account == address(0) || account == address(router) || refused ? router.failedDeliveryAddress() : account;
     }
 
     function _nativeIndexOf(address nativeToken) private view returns (uint256) {
@@ -700,10 +705,10 @@ contract RouterHandler is RouterWorld {
                     _violate("the call of a delivery failed");
                 }
             }
-            if (logs[i].topics[0] == FeeRouter.ClaimableRecorded.selector && _isFeeRouter(logs[i].emitter, destination)) {
-                FeeRouter.Cause cause = abi.decode(_dataAfterAmount(logs[i].data), (FeeRouter.Cause));
-                if (cause == FeeRouter.Cause.PayoutRefused) payoutsRefused++;
-                if (cause == FeeRouter.Cause.InvalidTerms) termsForfeited++;
+            if (logs[i].topics[0] == FeeRouter.DeliveryFailed.selector && _isFeeRouter(logs[i].emitter, destination)) {
+                FeeRouter.Reason cause = abi.decode(_dataAfterAmount(logs[i].data), (FeeRouter.Reason));
+                if (cause == FeeRouter.Reason.PayoutRefused) payoutsRefused++;
+                if (cause == FeeRouter.Reason.InvalidTerms) termsForfeited++;
             }
             if (logs[i].emitter != address(mediatorOf(destination))) continue;
             bytes32 topic = logs[i].topics[0];
@@ -713,7 +718,7 @@ contract RouterHandler is RouterWorld {
         }
     }
 
-    /// @dev The data of a `ClaimableRecorded` log is the amount and then the cause. Returns the cause word alone.
+    /// @dev The data of a `DeliveryFailed` log is the amount and then the cause. Returns the cause word alone.
     function _dataAfterAmount(bytes memory data) private pure returns (bytes memory cause) {
         cause = new bytes(32);
         for (uint256 i = 0; i < 32; i++) {
@@ -755,13 +760,13 @@ contract RouterHandler is RouterWorld {
     // -------------------------------------------------------------------------------------------------- checks
 
     /// @dev The delivered value is split between the holders, the claims and the fee, with nothing left over: the
-    /// recipient, the tip and the protocol fee add up to the released value. The fee is the share of each message at
+    /// recipient, the tip, the hand-off and the protocol fee add up to the released value. The fee is the share of each message at
     /// the rate of the mediator, rounded down.
     function _checkMoney(uint256 u, Probe memory before, uint256 value, uint256 fee) private {
         Probe memory after_ = _probe(u);
         if (after_.accrued - before.accrued != fee) _violate("the protocol fee is not the share of the rate");
         uint256 paid = (after_.held - before.held) + (after_.claimed - before.claimed);
-        if (paid + fee != value) _violate("recipient plus tip plus protocol fee is not the released value");
+        if (paid + fee != value) _violate("recipient plus tip plus hand-off plus protocol fee is not the released value");
     }
 
     /// @dev A reward address gains only from a message that a router executed when the message names that router, and
@@ -789,7 +794,6 @@ contract RouterHandler is RouterWorld {
         if (item.executor != address(feeRouterAt(chainOfToken(item.universe), j))) return 0;
         if (item.reading.callData.length != 128) return 0;
         FeeRouter.FeeDirector memory director = abi.decode(item.reading.callData, (FeeRouter.FeeDirector));
-        if (_isInvalid(director.recipient, item.executor)) return 0;
         uint256 net = item.reading.value - FeeSchedule.feeOn(item.reading.value, rate);
         return _directorCap(director, net, gasUsed);
     }
@@ -828,9 +832,10 @@ contract RouterHandler is RouterWorld {
         if (item.reading.callData.length == 128 && _isFeeRouter(item.reading.recipient, destination)) {
             bool attributed = item.executor == item.reading.recipient;
             bool invalid = _isInvalid(abi.decode(item.reading.callData, (FeeRouter.FeeDirector)).recipient, item.reading.recipient);
-            if (invalid && tip != 0) _violate("invalid terms paid a tip");
+            if (invalid && !attributed && tip != 0) _violate("a direct delivery paid a tip");
+            if (invalid && attributed && tip != 0) tippedInvalidTerms++;
             if (attributed && !invalid) routedDeliveries++;
-            if (attributed && !invalid) _checkAttributed(item, net, tip, gasUsed);
+            if (attributed) _checkAttributed(item, net, tip, gasUsed);
         } else if (tip != 0) {
             _violate("a message with no fee terms paid a tip");
         }

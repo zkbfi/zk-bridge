@@ -298,7 +298,7 @@ contract BridgeWorldTest is WorldSupport {
     function test_feeRouterPaysARunnerThroughTheRealBridge() public {
         MockWrappedNative wrapped = new MockWrappedNative();
         FeeRouter router = new FeeRouter(
-            ITokenMediator(address(mediatorB)), IWETH(address(wrapped)), makeAddr("fee runner"), makeAddr("fee reward address")
+            ITokenMediator(address(mediatorB)), IWETH(address(wrapped)), makeAddr("fee runner"), makeAddr("fee reward address"), makeAddr("fee failed delivery address")
         );
         // The first message of a token deploys its copy and costs more. Do it plainly, so the fee tests measure a
         // delivery of the common kind.

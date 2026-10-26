@@ -98,7 +98,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
 
     /// Claim: a message executes at most once, nothing fails, and the handler broke no rule. Shows: the count of
     /// executions of every message is at most one, no delivery call failed, no message identifier repeated, and the
-    /// handler recorded no violation: every delivery split its value exactly into recipient, tip and protocol fee, no tip
+    /// handler recorded no violation: every delivery split its value exactly into recipient, tip, hand-off and protocol fee, no tip
     /// passed the terms, no stranger origin or reward address ran a message, and the fee rate never rose. Matters: the
     /// bridge marks a message delivered whether or not the call succeeded, so a failed call loses tokens.
     function invariant_noViolationAndNoRepeatedExecution() public view {
@@ -111,7 +111,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
 
     /// Claim: a fee router holds exactly what it recorded, no coin, and no run stays open. Shows: after every action,
     /// each of the six fee routers holds, in each of the ten tokens, a balance that equals the sum of its claimable
-    /// balances (and equals its own `totalClaimable`), exactly; it holds none of the coin; and its runner slot is at
+    /// records (only the failed delivery address can have one, and the balance equals its own `totalClaimable`), exactly; it holds none of the coin; and its runner slot is at
     /// most 1 (not running). The two wrapped native routers hold nothing. Matters: the routers have no owner and no way
     /// to recover a token. A balance with no record behind it would be lost for good, and a record with no balance
     /// behind it would take from another claimant.
@@ -145,6 +145,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
             for (uint256 k = 0; k < 3; k++) {
                 FeeRouter router = handler.feeRouterAt(chain, k);
                 assertEq(router.rewardAddress(), handler.rewardAt(k), "the reward address changed");
+                assertEq(router.failedDeliveryAddress(), handler.failedSinkAddress(), "the failed delivery address changed");
             }
         }
     }
@@ -281,7 +282,9 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         // refuses the denied accounts, and the copies on chain B go back to it on chain A. In `detail`, bits 136.. choose
         // the receiver (1 the router, 2 the zero address) and bits 144.. choose data of no known shape (1).
         handler.toggleDeny(0);
-        // A payout that the token refuses, after a tip that a router executes.
+        // A payout that the token refuses, after a tip that a router executes. The failed delivery address is denied
+        // too (accounts are the recipients, then the failed delivery address at index 9), so the push fails and a record stays.
+        handler.toggleDeny(9);
         handler.relay(4, 1, 3, 2, 9e18 + 1, (1 << 32) | (1 << 40), 1);
         handler.deliver(handler.pendingCount() - 1, 1, 0x55, 30 gwei);
         assertGt(handler.payoutsRefused(), 0, "a payout was refused and recorded");
@@ -290,15 +293,19 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         handler.relay(4, 1, 3, 2, 9e18 + 1, uint256(2) << 136, 0);
         handler.relay(4, 1, 3, 2, 9e18 + 1, uint256(1) << 144, 0);
         handler.relay(4, 1, 4, 2, 9e18 + 1, uint256(1) << 136, 0);
-        assertGt(handler.termsForfeited(), 0, "invalid terms were forfeited");
+        assertGt(handler.termsForfeited(), 0, "invalid terms were handed off");
+        // Terms that decode but name the router, run by the router: the tip is paid, the rest is handed off.
+        handler.relay(4, 1, 3, 2, 9e18 + 1, (uint256(1) << 136) | (2 << 48) | (4000 << 56), 1);
+        handler.deliver(handler.pendingCount() - 1, 1, 0x55, 30 gwei);
+        assertGt(handler.tippedInvalidTerms(), 0, "invalid terms still paid the tip");
         // The legacy form with a token that cannot unwrap pays the token to the receiver.
         handler.relay(4, 1, 4, 2, 9e18 + 1, 5, 0);
         assertGt(handler.legacyTokenPayouts(), 0, "the legacy form paid a token");
         // The claims: refused while the token refuses the account, paid after.
-        handler.claimFromRouter(4, 0);
+        handler.claimFromRouter(4);
         assertGt(handler.routerClaimsRefused(), 0, "a claim was refused while the token refused");
-        handler.toggleDeny(0);
-        handler.claimFromRouter(4, 0);
+        handler.toggleDeny(9);
+        handler.claimFromRouter(4);
         assertGt(handler.routerClaimsPaid(), 0, "a claim was paid");
 
         // Fees, time, strangers, attacks.

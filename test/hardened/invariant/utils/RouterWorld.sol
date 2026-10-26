@@ -42,6 +42,10 @@ abstract contract RouterWorld is MediatorFixture {
     address internal stranger = makeAddr("stranger");
     /// @dev The account that sends the coin to a router in an attack. It is a holder, so the coin that it keeps counts.
     address internal attacker = makeAddr("attacker");
+    /// @dev The failed delivery address of every fee router. It is a holder and it can be denied on the deny list token,
+    /// so a hand-off to it may fail and leave a record in the router. It differs from every reward address, so a tip
+    /// and a hand-off never mix in the checks.
+    address internal failedSink = makeAddr("failed delivery");
     address[] internal actors;
     /// @dev Four actors, then a contract that refuses the coin, a contract that burns its gas, a contract wallet, a
     /// receiver that records callbacks and a receiver that refuses them. Nine accounts that a message may name.
@@ -111,6 +115,10 @@ abstract contract RouterWorld is MediatorFixture {
 
     function strangerAddress() external view returns (address) {
         return stranger;
+    }
+
+    function failedSinkAddress() external view returns (address) {
+        return failedSink;
     }
 
     function holderCount() external view returns (uint256) {
@@ -189,7 +197,8 @@ abstract contract RouterWorld is MediatorFixture {
         }
     }
 
-    /// @notice What `router` has recorded for the holders in a token of the universe, and the total that it states.
+    /// @notice What `router` has recorded in a token of the universe (only its failed delivery address can have a record,
+    /// and that address is a holder), and the total that it states.
     /// @return sum The sum of `claimable` over the holders.
     /// @return stated `totalClaimable` of the router.
     function routerClaimableOfHolders(FeeRouter router, uint256 universeIndex)
@@ -238,7 +247,7 @@ abstract contract RouterWorld is MediatorFixture {
         for (uint256 chain = 0; chain < 2; chain++) {
             for (uint256 k = 0; k < ROUTERS_PER_CHAIN; k++) {
                 feeRouters[chain * ROUTERS_PER_CHAIN + k] = new FeeRouter(
-                    ITokenMediator(address(mediatorOf(chain))), IWETH(address(wrapped[chain])), runner, rewards[k]
+                    ITokenMediator(address(mediatorOf(chain))), IWETH(address(wrapped[chain])), runner, rewards[k], failedSink
                 );
             }
             wethRouters[chain] = new WETHOmnibridgeRouter(
@@ -268,6 +277,7 @@ abstract contract RouterWorld is MediatorFixture {
         holders.push(runner);
         holders.push(stranger);
         holders.push(attacker);
+        holders.push(failedSink);
         for (uint256 i = 0; i < feeRouters.length; i++) {
             holders.push(address(feeRouters[i]));
         }

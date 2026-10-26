@@ -43,7 +43,7 @@ contract FeeRouterBatchingTest is WorldSupport {
         revertingTarget = new MessageReverter();
         quietTarget = new MessageNoop();
         router = new FeeRouter(
-            ITokenMediator(address(mediatorB)), IWETH(address(new MockWrappedNative())), runner, reward
+            ITokenMediator(address(mediatorB)), IWETH(address(new MockWrappedNative())), runner, reward, reward
         );
         // The first message of a token deploys its copy and costs more. Deliver it plainly, so the runs below are of the
         // common kind.
@@ -416,7 +416,7 @@ contract FeeRouterBatchingTest is WorldSupport {
         assertEq(router.rewardAddress(), reward);
         IWETH wrapped = IWETH(address(new MockWrappedNative()));
         vm.expectRevert(FeeRouter.ZeroRewardAddress.selector);
-        new FeeRouter(ITokenMediator(address(mediatorB)), wrapped, runner, address(0));
+        new FeeRouter(ITokenMediator(address(mediatorB)), wrapped, runner, address(0), reward);
         bytes4[3] memory selectors = [
             bytes4(keccak256("setRewardAddress(address)")),
             bytes4(keccak256("changeRewardAddress(address)")),

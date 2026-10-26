@@ -28,6 +28,7 @@ contract FeeRouterTest is MediatorFixture {
     FeeRouter internal router;
     address internal runner = makeAddr("runner");
     address internal reward = makeAddr("reward address");
+    address internal failedDelivery = makeAddr("failed delivery address");
     address internal recipient = makeAddr("recipient");
 
     function setUp() public override {
@@ -46,7 +47,7 @@ contract FeeRouterTest is MediatorFixture {
     }
 
     function _routerFor(address rewardAccount) internal returns (FeeRouter) {
-        return new FeeRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), runner, rewardAccount);
+        return new FeeRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), runner, rewardAccount, failedDelivery);
     }
 
     /// @dev A new router whose reward address is `account`. Call it before the message is sent: the sender names the
@@ -517,8 +518,11 @@ contract FeeRouterTest is MediatorFixture {
 
     function test_theRunnerIsFixedAtDeployment() public {
         assertEq(router.runner(), runner);
+        assertEq(router.failedDeliveryAddress(), failedDelivery, "the failed delivery address is fixed");
+        vm.expectRevert(FeeRouter.ZeroFailedDeliveryAddress.selector);
+        new FeeRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), runner, reward, address(0));
         vm.expectRevert(FeeRouter.ZeroRunner.selector);
-        new FeeRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), address(0), reward);
+        new FeeRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), address(0), reward, failedDelivery);
 
         // No function changes the runner.
         bytes4[3] memory selectors = [

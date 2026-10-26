@@ -29,7 +29,7 @@ contract FeeRouterGasTest is MediatorFixture {
 
     function setUp() public override {
         super.setUp();
-        router = new FeeRouter(ITokenMediator(address(mediatorA)), IWETH(address(new MockWrappedNative())), runner, reward);
+        router = new FeeRouter(ITokenMediator(address(mediatorA)), IWETH(address(new MockWrappedNative())), runner, reward, reward);
         tokenB = new MockERC20("Token B", "TKB");
         tokenB.mint(alice, 1_000_000 ether);
         vm.startPrank(alice);

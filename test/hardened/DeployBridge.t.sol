@@ -32,6 +32,7 @@ contract DeployBridgeTest is Test {
     address internal deployer = makeAddr("deployer");
     address internal feeRunner = makeAddr("fee runner");
     address internal feeReward = makeAddr("fee reward address");
+    address internal feeFailedDelivery = makeAddr("fee failed delivery address");
     /// @dev The flow limiter that `_chainJson` writes for chain 1. Zero, as in the example configuration, unless a test sets it.
     address internal configuredFlowLimiter;
     uint256 internal constant NONCE_A = 3;
@@ -103,7 +104,8 @@ contract DeployBridgeTest is Test {
     function _feeRouterJson(uint64 chainId) internal view returns (string memory) {
         if (chainId != 1) return "";
         return string.concat(
-            '"feeRouter":{"runner":"', vm.toString(feeRunner), '","rewardAddress":"', vm.toString(feeReward), '"},'
+            '"feeRouter":{"runner":"', vm.toString(feeRunner), '","rewardAddress":"', vm.toString(feeReward),
+            '","failedDeliveryAddress":"', vm.toString(feeFailedDelivery), '"},'
         );
     }
 
@@ -222,6 +224,8 @@ contract DeployBridgeTest is Test {
         assertEq(uint8(config.chainB.feeRouter), uint8(DeployBridge.RouterChoice.Skip));
         assertEq(config.chainA.feeRouterRunner, feeRunner, "the runner of the fee router");
         assertEq(config.chainA.feeRouterRewardAddress, feeReward, "the reward address of the fee router");
+        assertEq(config.chainA.feeRouterFailedDeliveryAddress, feeFailedDelivery, "the failed delivery address");
+        assertEq(config.chainB.feeRouterFailedDeliveryAddress, address(0), "chain B has no fee router and so none");
         assertEq(config.chainB.feeRouterRunner, address(0), "chain B has no fee router and so no runner");
         assertEq(config.chainB.feeRouterRewardAddress, address(0), "chain B has no fee router and so no reward address");
 
@@ -289,10 +293,10 @@ contract DeployBridgeTest is Test {
     function test_HB02_exampleConfigurationHoldsEveryKeyTheScriptReads() public view {
         string memory json = vm.readFile("script/hardened/bridge.config.example.json");
         string[2] memory chains = [".chainA", ".chainB"];
-        string[29] memory keys = [
+        string[30] memory keys = [
             ".remoteChainName", ".rpcAlias", ".chainId", ".verifier", ".verifierCodeHash", ".depositCutoffTimestamp", ".deployerNonce",
             ".fee.recipient", ".fee.startRate", ".fee.stepRate", ".fee.floorRate", ".fee.stepPeriodSeconds",
-            ".flowLimiter", ".wrappedNative", ".deployFeeRouter", ".feeRouter.runner", ".feeRouter.rewardAddress", ".lightClient.programVKey", ".lightClient.genesisValidatorsRoot", ".lightClient.slotsPerPeriod",
+            ".flowLimiter", ".wrappedNative", ".deployFeeRouter", ".feeRouter.runner", ".feeRouter.rewardAddress", ".feeRouter.failedDeliveryAddress", ".lightClient.programVKey", ".lightClient.genesisValidatorsRoot", ".lightClient.slotsPerPeriod",
             ".lightClient.genesisTime", ".lightClient.secondsPerSlot", ".lightClient.slotsPerEpoch", ".lightClient.capellaForkEpoch", ".lightClient.capellaEra",
             ".lightClient.initialSlot", ".lightClient.initialHeaderRoot", ".lightClient.initialSyncCommitteeHash",
             ".lightClient.initialNextSyncCommitteeHash"
@@ -792,6 +796,11 @@ contract DeployBridgeTest is Test {
         assertEq(
             FeeRouter(payable(deployedA.feeRouter)).rewardAddress(), feeReward, "the reward address is the configured one"
         );
+        assertEq(
+            FeeRouter(payable(deployedA.feeRouter)).failedDeliveryAddress(),
+            feeFailedDelivery,
+            "the failed delivery address is the configured one"
+        );
         assertEq(address(WETHOmnibridgeRouter(payable(deployedB.wrappedRouter)).bridge()), deployedB.mediator);
         assertEq(address(WETHOmnibridgeRouter(payable(deployedB.wrappedRouter)).WETH()), address(wrappedNativeOnB));
     }
@@ -864,7 +873,8 @@ contract DeployBridgeTest is Test {
     function test_feeRouter_parseConfigNeedsARealRunner() public {
         string memory json = _validJson();
         string memory runnerText = string.concat(
-            '"feeRouter":{"runner":"', vm.toString(feeRunner), '","rewardAddress":"', vm.toString(feeReward), '"},'
+            '"feeRouter":{"runner":"', vm.toString(feeRunner), '","rewardAddress":"', vm.toString(feeReward),
+            '","failedDeliveryAddress":"', vm.toString(feeFailedDelivery), '"},'
         );
 
         vm.expectRevert();
@@ -901,6 +911,27 @@ contract DeployBridgeTest is Test {
         string memory skipped = vm.replace(json, '"deployFeeRouter":"true"', '"deployFeeRouter":"false"');
         skipped = vm.replace(skipped, vm.toString(feeReward), "REPLACE_WITH_THE_REWARD_ADDRESS");
         assertEq(script.parseConfig(skipped).chainA.feeRouterRewardAddress, address(0), "no fee router, no reward read");
+    }
+
+    /// Claim: a fee router that the configuration deploys needs a real failed delivery address. Shows: a missing key, a
+    /// placeholder and the zero address each revert. Matters: the address is immutable, and the router hands every
+    /// failed delivery to it.
+    function test_feeRouter_parseConfigNeedsARealFailedDeliveryAddress() public {
+        string memory json = _validJson();
+        string memory text = string.concat(',"failedDeliveryAddress":"', vm.toString(feeFailedDelivery), '"');
+
+        vm.expectRevert();
+        script.parseConfig(vm.replace(json, text, ""));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.feeRouter.failedDeliveryAddress")
+        );
+        script.parseConfig(vm.replace(json, vm.toString(feeFailedDelivery), "REPLACE_WITH_THE_FAILED_DELIVERY_ADDRESS"));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.feeRouter.failedDeliveryAddress")
+        );
+        script.parseConfig(vm.replace(json, vm.toString(feeFailedDelivery), vm.toString(address(0))));
     }
 
     /// Claim: the deployed bridge lets through at least the gas that its mediator asks for. Shows: for each side,
@@ -1515,24 +1546,33 @@ contract DeployBridgeTest is Test {
         d.plan.wrappedRouter = honestWrapped;
         deployed.wrappedRouter = honestWrapped;
 
-        deployed.feeRouter = address(new FeeRouter(otherMediator, honestToken, feeRunner, feeReward));
+        deployed.feeRouter = address(new FeeRouter(otherMediator, honestToken, feeRunner, feeReward, feeFailedDelivery));
         d.plan.feeRouter = deployed.feeRouter;
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "feeRouter.mediator"));
         script.verifyDeployment(d, deployed);
 
-        deployed.feeRouter = address(new FeeRouter(mediator, otherToken, feeRunner, feeReward));
+        deployed.feeRouter = address(new FeeRouter(mediator, otherToken, feeRunner, feeReward, feeFailedDelivery));
         d.plan.feeRouter = deployed.feeRouter;
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "feeRouter.wrappedNative"));
         script.verifyDeployment(d, deployed);
 
-        deployed.feeRouter = address(new FeeRouter(mediator, honestToken, makeAddr("another runner"), feeReward));
+        deployed.feeRouter = address(new FeeRouter(mediator, honestToken, makeAddr("another runner"), feeReward, feeFailedDelivery));
         d.plan.feeRouter = deployed.feeRouter;
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "feeRouter.runner"));
         script.verifyDeployment(d, deployed);
 
-        deployed.feeRouter = address(new FeeRouter(mediator, honestToken, feeRunner, makeAddr("another reward address")));
+        deployed.feeRouter = address(
+            new FeeRouter(mediator, honestToken, feeRunner, makeAddr("another reward address"), feeFailedDelivery)
+        );
         d.plan.feeRouter = deployed.feeRouter;
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "feeRouter.rewardAddress"));
+        script.verifyDeployment(d, deployed);
+
+        deployed.feeRouter = address(
+            new FeeRouter(mediator, honestToken, feeRunner, feeReward, makeAddr("another failed delivery address"))
+        );
+        d.plan.feeRouter = deployed.feeRouter;
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "feeRouter.failedDeliveryAddress"));
         script.verifyDeployment(d, deployed);
         d.plan.feeRouter = honestFee;
         deployed.feeRouter = honestFee;

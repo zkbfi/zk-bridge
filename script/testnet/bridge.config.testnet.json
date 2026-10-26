@@ -30,7 +30,8 @@
     "deployFeeRouter": "true",
     "feeRouter": {
       "runner": "REPLACE_WITH_RUNNER_ADDRESS",
-      "rewardAddress": "REPLACE_WITH_REWARD_ADDRESS"
+      "rewardAddress": "REPLACE_WITH_REWARD_ADDRESS",
+      "failedDeliveryAddress": "0x24E6cc8b82D086762Ef58fa1FF3f4d0702892718"
     },
     "lightClient": {
       "programVKey": "0x002a566f7e3d1e6996f7ffa35668291bfc7bce325ed34fe55ef41a2be3fd15cf",
@@ -89,7 +90,8 @@
     "deployFeeRouter": "true",
     "feeRouter": {
       "runner": "REPLACE_WITH_RUNNER_ADDRESS",
-      "rewardAddress": "REPLACE_WITH_REWARD_ADDRESS"
+      "rewardAddress": "REPLACE_WITH_REWARD_ADDRESS",
+      "failedDeliveryAddress": "0x24E6cc8b82D086762Ef58fa1FF3f4d0702892718"
     },
     "lightClient": {
       "programVKey": "0x002a566f7e3d1e6996f7ffa35668291bfc7bce325ed34fe55ef41a2be3fd15cf",

@@ -98,8 +98,8 @@ contract RealBridgeHandler is WorldSupport {
         nativeToken = new MockERC20("Token A", "TKA");
         countingTarget = new CountingTarget();
         multicall = new Multicall3();
-        routerA = new FeeRouter(ITokenMediator(address(mediatorA)), IWETH(address(new MockWrappedNative())), runner, rewardA);
-        routerB = new FeeRouter(ITokenMediator(address(mediatorB)), IWETH(address(new MockWrappedNative())), runner, rewardB);
+        routerA = new FeeRouter(ITokenMediator(address(mediatorA)), IWETH(address(new MockWrappedNative())), runner, rewardA, rewardA);
+        routerB = new FeeRouter(ITokenMediator(address(mediatorB)), IWETH(address(new MockWrappedNative())), runner, rewardB, rewardB);
         _actors.push(alice);
         _actors.push(bob);
         _actors.push(carol);

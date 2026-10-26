@@ -43,9 +43,10 @@ import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 /// so it sits at `computeCreateAddress(mediator, 1)` and takes no deployer nonce. A chain without a wrapped native
 /// token gets no native coin router, and the fee router (which needs that token) is then refused. The fee router takes
 /// the next free offset, so the plan has no gap. The fee router also needs `feeRouter.runner` (the one account that may
-/// deliver through it) and `feeRouter.rewardAddress` (the one address that receives the fees). The two are separate
-/// accounts in practice: the runner is a hot key, the reward address can be cold. The deployment reads both back from
-/// the router and refuses a mismatch.
+/// deliver through it) and `feeRouter.rewardAddress` (the one address that receives the fees) and `feeRouter.failedDeliveryAddress` (the
+/// address that receives what the router cannot deliver; it may equal the reward address). The runner and the reward
+/// address are separate accounts in practice: the runner is a hot key, the reward address can be cold. The deployment
+/// reads all three back from the router and refuses a mismatch.
 contract DeployBridge is Script {
     /// @notice Whether a router is deployed.
     enum RouterChoice {
@@ -67,6 +68,7 @@ contract DeployBridge is Script {
         RouterChoice feeRouter;
         address feeRouterRunner;
         address feeRouterRewardAddress;
+        address feeRouterFailedDeliveryAddress;
         string remoteChainName;
         FeeConfig fee;
         address flowLimiter;
@@ -387,7 +389,7 @@ contract DeployBridge is Script {
             deployed.wrappedRouter = _deployWrappedRouter(deployed.mediator, chain.wrappedNative);
         }
         if (chain.feeRouter == RouterChoice.Deploy) {
-            deployed.feeRouter = _deployFeeRouter(deployed.mediator, chain.wrappedNative, chain.feeRouterRunner, chain.feeRouterRewardAddress);
+            deployed.feeRouter = _deployFeeRouter(deployed.mediator, chain.wrappedNative, chain.feeRouterRunner, chain.feeRouterRewardAddress, chain.feeRouterFailedDeliveryAddress);
         }
         vm.stopBroadcast();
 
@@ -616,11 +618,16 @@ contract DeployBridge is Script {
         return address(new WETHOmnibridgeRouter(ITokenMediator(mediator), IWETH(wrappedNative)));
     }
 
-    function _deployFeeRouter(address mediator, address wrappedNative, address runner, address rewardAddress)
-        private
-        returns (address)
-    {
-        return address(new FeeRouter(ITokenMediator(mediator), IWETH(wrappedNative), runner, rewardAddress));
+    function _deployFeeRouter(
+        address mediator,
+        address wrappedNative,
+        address runner,
+        address rewardAddress,
+        address failedDeliveryAddress
+    ) private returns (address) {
+        return address(
+            new FeeRouter(ITokenMediator(mediator), IWETH(wrappedNative), runner, rewardAddress, failedDeliveryAddress)
+        );
     }
 
     function _verifyLightClient(ChainConfig memory chain, address lightClient) private view {
@@ -744,6 +751,9 @@ contract DeployBridge is Script {
             if (router.rewardAddress() != chain.feeRouterRewardAddress) {
                 revert DeploymentMismatch("feeRouter.rewardAddress");
             }
+            if (router.failedDeliveryAddress() != chain.feeRouterFailedDeliveryAddress) {
+                revert DeploymentMismatch("feeRouter.failedDeliveryAddress");
+            }
         }
     }
 
@@ -771,6 +781,8 @@ contract DeployBridge is Script {
         if (chain.feeRouter == RouterChoice.Deploy) {
             chain.feeRouterRunner = _readAddress(json, string.concat(prefix, ".feeRouter.runner"));
             chain.feeRouterRewardAddress = _readAddress(json, string.concat(prefix, ".feeRouter.rewardAddress"));
+            chain.feeRouterFailedDeliveryAddress =
+                _readAddress(json, string.concat(prefix, ".feeRouter.failedDeliveryAddress"));
         }
         string memory client = string.concat(prefix, ".lightClient");
         chain.lightClient.programVKey = _readBytes32(json, string.concat(client, ".programVKey"));
