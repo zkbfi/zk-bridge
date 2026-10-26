@@ -4,16 +4,50 @@ This page lists the ordered commands to run the bridge on Sepolia (chain 1115511
 
 ## Status on 2026-10-26: read this first
 
-The preflight (`script/testnet/preflight.sh`) found these facts. They decide whether the run can finish.
+Read items 1 to 3 before you spend time on the rest. They decide whether the run can finish.
 
-1. **Light-client routes answer 404 on both chains.** The routes `light_client/bootstrap`, `light_client/updates` and `light_client/finality_update` fail. The routes `debug/beacon/states` fail too. All other routes answer 200. Sepolia needs the light-client routes, because the assembled update path reads the Capella block layout only. Chain 943 can use the debug states instead. Run the preflight again when the proxy allows the routes.
-2. **The program keys cover mainnet only.** The guest program in `light-client/guests/light-client` selects `EthereumMainnet` or `Pulsechain` in `lc-core` (`ChainSelector`). Those two chains have fixed genesis validators roots and fork tables. Sepolia and chain 943 have other roots and other fork versions. A proof from the current program fails on testnet updates. A testnet run needs a new program build with new keys, and a new RunPod image that holds the new program file. Until then, the keys in `bridge.config.testnet.json` are the mainnet keys.
-3. **Sepolia is already past the Fulu fork.** `config/fork_schedule` lists version `0x90000076` from epoch 353024. The table `ETHEREUM_FORKS` in `lc-core` knows mainnet versions only. The gate entry for `0x90000076` uses state depth 6. That depth is not checked against the consensus specification.
-4. **The explorer knows one pair.** `PAIR_DEFINITIONS` in `explorer/shared/src/pairs.ts` holds `eth-pls` (chains 1 and 369). The bots cannot run for chains 11155111 and 943 until a pair is added.
-5. **Three helpers do not exist in this repository.** No command builds the `openDeposits` proof. No command prints the sync committee hashes of a checkpoint. No command writes the deployment file on a public chain, because only `docker/deploy.sh` writes it, for the local stack.
-6. **The wrapped native token of chain 943 is unknown.** The configuration holds a placeholder for it.
+1. **Sepolia runs the Gloas fork, and the program refuses it.** Sepolia is on fork version `0x90000076` since epoch 353024. That version is **Gloas**, not Fulu. Fulu is `0x90000075` (epoch 272640). The consensus specification `specs/gloas/` and a live Sepolia block (version `gloas`, with the key `signed_execution_payload_bid` in the body) confirm it. Gloas changes what the light client reads: `BeaconState` and `BeaconBlockBody` become progressive containers, so the generalized indices change (finality root 735, current committee 2945, next committee 2946, execution block hash 2856, `block_roots` 352, `historical_summaries` 2950). The block hash in a Gloas light-client header is the `parent_block_hash` of the bid. It is not the execution block of the same slot, because the payload is revealed apart from the beacon block and can be withheld. The header has no block number. A message proof that anchors to that hash is not sound, so `lc-core` fails closed: every Gloas slot and the compact header form give the error `GloasPayloadNotFinalized`, and the guest produces no output. A correct design is still open (see "What a Gloas design needs" below). Until then no light client can follow Sepolia, and the run cannot finish on Sepolia.
+2. **The program keys change.** One guest program serves every chain through the chain selector in its input. The selector now has four values (Ethereum mainnet, PulseChain, Sepolia, PulseChain testnet v4), so the program file changes, and so do its keys. **This includes the mainnet key** `0x00f776e8...2f70`, and the fork observation key too, because both programs share `lc-core`. The behaviour on mainnet is the same, but the key is not. The keys in `bridge.config.testnet.json` are still the old keys. They are wrong for any new build. Rebuild on the [private] with `light-client/scripts/program-keys.sh --write`, copy the two files to `light-client/elf/`, build the new RunPod image, and write the new keys into the configuration. Nobody has built this yet.
+3. **Chain 943 is ready on the prover side.** Its beacon node serves no light-client routes (404). The prover assembles the updates from debug states instead. A real finalized state of 4.8 MB and its block parse correctly: the computed roots equal the header roots.
+4. **Public endpoints work.** You do not need the valve.city key to read the beacon chains. Run `ENDPOINTS=public script/testnet/preflight.sh`. See "Endpoints" below.
+5. **The explorer knows the pair `sepolia-pls943`.** The bots can run for chains 11155111 and 943.
+6. **The helpers exist.** `checkpoint`, `opening-proof` and `deployment-file` are subcommands of the prover (steps 4, 5 and 8).
+7. **The wrapped native token of chain 943 is known.** It is `0x70499adEBB11Efd915E3b69E700c331778628707` (symbol `WPLS`, name `Wrapped Pulse`, 18 decimals). The configuration holds it. See "Checks done on 2026-10-26".
 
 Multicall3 at `0xcA11bde05977b3631167028862bE2a173976CA11` has code on both chains. The runtime code is the same on both.
+
+### What a Gloas design needs
+
+This is a description, not an implementation. The owner decides the design.
+
+- **Which container proves the payload.** The beacon block commits to the payload only through the bid: `BeaconBlockBody.signed_execution_payload_bid.message`. Its `block_hash` is the hash of the payload that the builder promises. The revealed `ExecutionPayloadEnvelope` is a separate signed message and is in no beacon root. The block number and the receipts root are not in any beacon container. They come from the execution block header (RLP), whose Keccak hash must equal the proven `block_hash`. The bridge already does that for receipts.
+- **Generalized indices (derived from the progressive container rules, checked against the four constants of `specs/gloas/light-client/sync-protocol.md`).** In the body: bid message at 714, `parent_block_hash` at 2856 (the spec constant), `block_hash` at 22857 (field 2 of the bid, depth 14). In the state: `latest_block_hash` at 2947, `execution_payload_availability` at 2963 (a bit vector indexed by slot modulo 8192), `block_roots` at 352, `historical_summaries` at 2950, finality root 735, committees 2945 and 2946.
+- **How payload finality is established.** A header at slot S proves only the bid. The payload of S counts only when a later block confirms it: the state transition of the child (`process_parent_execution_payload`) sets `state.latest_block_hash` to the bid hash of the parent and sets the availability bit of the parent slot. So the light client needs, for the finalized header F, a branch from `F.state_root` to `latest_block_hash` (2947) and to the availability bit, or a branch from the attested state. `latest_block_hash` in the state of F is final and equals the last payload confirmed up to F, which is the payload of an earlier slot. The program must also bind that hash to a slot: prove the bid `block_hash` in the body of the beacon block at that slot (22857) and the availability bit of that slot. The program must not use `parent_block_hash` as the block of the slot.
+- **Contracts.** `BeaconProofVerifier` position rules (depth 5 to 7 for state fields, 4 to 5 for body and payload) reject all progressive positions. `BeaconForkGate` computes the fork version position as `(2^depth + 3) * 4 + 1`, but the Gloas position is 169 and no depth gives it. `BeaconLightClient` stores a block number for each hash; Gloas headers carry none. All three need a change and a new deployment.
+- **Prover.** `ssz_state.rs` stops at Fulu. Gloas needs progressive list hashing for validators, balances, participation, pending lists, builders and more.
+
+## Endpoints
+
+| Chain | Beacon (no key) | Execution (no key) | Light-client routes |
+|---|---|---|---|
+| Sepolia 11155111 | `https://lodestar-sepolia.chainsafe.io` | none known; use the valve.city route | bootstrap, updates, finality_update: 200 |
+| Chain 943 | `https://rpc-testnet-pulsechain.g4mm4.io/beacon-api` | `https://rpc-testnet-pulsechain.g4mm4.io` | 404 (use debug states) |
+| PulseChain mainnet | `https://rpc-pulsechain.g4mm4.io/beacon-api` | | 404 |
+
+The valve.city proxy (`https://one.valve.city/beacon/$VALVE_KEY/<chainId>`) answers genesis, config and fork schedule, but 404 for light-client and debug state routes. The prover accepts a path prefix such as `/beacon-api` in `beacon_url`. It sends the User-Agent `Mozilla/5.0 (compatible; zk-bridge/1.0)`.
+
+```sh
+ENDPOINTS=public script/testnet/preflight.sh          # keyless, no VALVE_KEY needed
+SEPOLIA_RPC_URL=<url> ENDPOINTS=public script/testnet/preflight.sh   # also check the Sepolia execution layer
+script/testnet/preflight.sh                           # valve.city, needs VALVE_KEY
+```
+
+With `ENDPOINTS=public`, the light-client routes of chain 943 print `INFO` and do not count as failures.
+
+## Checks done on 2026-10-26
+
+- Chain 943, `eth_getCode` at `0x70499adEBB11Efd915E3b69E700c331778628707`: 4,119 hex characters of code with the selectors `deposit()` (`d0e30db0`) and `withdraw(uint256)` (`2e1a7d4d`). `symbol()` is `WPLS`, `name()` is `Wrapped Pulse`, `decimals()` is 18, and `totalSupply()` equals the balance of the contract. That is the behaviour of a canonical wrapped native token. I did not find the address in a document of the PulseChain or gibsfinance projects, so check it once more against the PulseX testnet documentation before you rely on it for value.
+- Sepolia, the configured wrapped native token `0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9`: code with the same two selectors, symbol `WETH`, 18 decimals.
 
 ## Step 0: set up the shell
 
@@ -38,7 +72,7 @@ If `op read` fails with an authorization timeout, unlock 1Password and run it ag
 script/testnet/preflight.sh
 ```
 
-The script prints one line for each route. It exits with 0 when all routes answer. Do not continue to step 5 until the light-client routes show OK on both chains.
+The script prints one line for each route. It exits with 0 when all counted routes answer. Do not continue to step 5 until the light-client routes of Sepolia show OK. Chain 943 serves none, and the prover uses debug states there. Sepolia cannot pass step 7 while the program refuses Gloas (see item 1 of the status).
 
 ## Step 2: build the prover
 
@@ -79,13 +113,13 @@ Work on a copy outside the repository. Set the placeholders with `jq`. The check
 jq --arg deployer "$DEPLOYER" --arg va "$VERIFIER_A" --arg vb "$VERIFIER_B" \
    --arg na "$NONCE_A" --arg nb "$NONCE_B" \
    --arg runner '<runner address>' --arg reward '<reward address, not the runner>' \
-   --arg feeRecipient '<fee recipient on chain 943>' --arg wpls '<wrapped Pulse address on chain 943>' \
+   --arg feeRecipient '<fee recipient on chain 943>' \
    '.deployer=$deployer
     | .chainA.verifier=$va | .chainB.verifier=$vb
     | .chainA.deployerNonce=$na | .chainB.deployerNonce=$nb
     | .chainA.feeRouter.runner=$runner | .chainB.feeRouter.runner=$runner
     | .chainA.feeRouter.rewardAddress=$reward | .chainB.feeRouter.rewardAddress=$reward
-    | .chainB.fee.recipient=$feeRecipient | .chainB.wrappedNative=$wpls' \
+    | .chainB.fee.recipient=$feeRecipient' \
    script/testnet/bridge.config.testnet.json > "$RUN_DIR/bridge.config.json"
 ```
 
@@ -99,7 +133,14 @@ ROOT=$(beacon 943 /eth/v1/beacon/headers/finalized | jq -r .data.root)
 beacon 943 "/eth/v1/beacon/light_client/bootstrap/$ROOT" > "$RUN_DIR/bootstrap-943.json"
 ```
 
-The values `initialSlot` and `initialHeaderRoot` come from `.data.header.beacon` in the bootstrap and the root you used. The committee hash is the Simple Serialize hash tree root of the `SyncCommittee` in the bootstrap. The function `committee_hash` in `prover/src/light_client.rs` computes it. No command prints it yet, so write a small program that calls it. The next committee hash is zero when the bootstrap holds no next committee. Fill these fields:
+The prover prints all four values from one finalized root with the command `checkpoint`. It reads the bootstrap route. When that route answers 404 (chain 943), it builds the values from the finalized debug state and checks the state root against the header. The next committee hash is zero when none is known (the field `nextCommitteeKnown` says which).
+
+```sh
+"$PROVER" checkpoint --beacon-url https://rpc-testnet-pulsechain.g4mm4.io/beacon-api --chain pulsechain-testnet-v4
+"$PROVER" checkpoint --beacon-url https://lodestar-sepolia.chainsafe.io --chain sepolia   # refuses Gloas today, exit 1
+```
+
+The command also prints the genesis validators root, genesis time, seconds per slot, Capella fork epoch and `capellaEra`. Compare them with the configuration. Fill these fields:
 
 - `chainA.lightClient.*` and `chainB.observation.*` from chain 943.
 - `chainB.lightClient.*` from Sepolia.
@@ -122,7 +163,15 @@ BRIDGE_CONFIG="$RUN_DIR/bridge.config.json" forge script script/hardened/DeployB
   --tc DeployBridge --account "$KEYSTORE_NAME" --sender "$DEPLOYER" --broadcast --slow 2>&1 | redact | tee "$RUN_DIR/deploy.log"
 ```
 
-The log lists the addresses of each chain: light client, gate, bridge, mediator, native coin router, fee router and token factory. Write them into a deployment file (`$RUN_DIR/deployment.json`) with the fields that `deploymentChainSchema` in `explorer/shared/src/pairs.ts` lists. Set `start_block` to the block of the first deployment transaction on each chain.
+The log lists the addresses of each chain: light client, gate, bridge, mediator, native coin router, fee router and token factory. Write the deployment file with the prover. It reads the Foundry broadcast files and writes `$RUN_DIR/deployment.json` (mode 0600) with the fields of `deploymentChainSchema` in `explorer/shared/src/pairs.ts`.
+
+```sh
+"$PROVER" deployment-file --output "$RUN_DIR/deployment.json" \
+  --broadcast broadcast/DeployBridge.s.sol/11155111/run-latest.json \
+  --broadcast broadcast/DeployBridge.s.sol/943/run-latest.json
+```
+
+The command refuses to overwrite without `--force` and refuses duplicate contract names. You can also give each address as `--chain-a key=value` and `--chain-b key=value`. Check `start_block` of each chain against the block of the first deployment transaction.
 
 ## Step 6: write the prover configuration
 
@@ -140,8 +189,8 @@ targets = ["stdout"]
 
 [routes.sepolia_to_pulsechain_testnet.source]
 chain_id = 11155111
-chain = "ethereum"
-beacon_url = "https://one.valve.city/beacon/$VALVE_KEY/11155111"
+chain = "sepolia"
+beacon_url = "https://lodestar-sepolia.chainsafe.io"
 rpc_url = "https://one.valve.city/rpc/$VALVE_KEY/evm/11155111"
 bridge = "<bridge on Sepolia>"
 
@@ -154,8 +203,8 @@ start_block = <first block on chain 943>
 
 [routes.pulsechain_testnet_to_sepolia.source]
 chain_id = 943
-chain = "pulsechain"
-beacon_url = "https://one.valve.city/beacon/$VALVE_KEY/943"
+chain = "pulsechain-testnet-v4"
+beacon_url = "https://rpc-testnet-pulsechain.g4mm4.io/beacon-api"
 rpc_url = "https://one.valve.city/rpc/$VALVE_KEY/evm/943"
 bridge = "<bridge on chain 943>"
 
@@ -168,7 +217,7 @@ start_block = <first block on Sepolia>
 EOF
 ```
 
-The key `chain` accepts `ethereum` and `pulsechain` only. Those names select the mainnet tables (see "Status", item 2).
+The key `chain` accepts `ethereum`, `pulsechain`, `sepolia` and `pulsechain-testnet-v4`. Each name selects its own fork table and genesis validators root. The route from Sepolia stops with the Gloas refusal (status, item 1). The beacon addresses above need no key. You can use the valve.city addresses for the other routes if you prefer.
 
 ## Step 7: first light-client update through the RunPod endpoint
 
@@ -198,7 +247,14 @@ Repeat for the other direction with `--route pulsechain_testnet_to_sepolia`, the
 
 A bridge opens only after its own light client stored a block that came after the first update of the other light client. Chains need about two epochs to finalize, so repeat step 7 once more for both directions before you open.
 
-The call is `openDeposits(OpeningProof)` on the bridge of each chain. The proof holds a remote block, the state proof of the remote light client (from `eth_getProof`), and the storage proof of one stored head. See `docs/hardened-build-contract.md`, "Launch sequence", step 3. No command in this repository builds this proof. Build it with a script of your own, then check the result.
+The call is `openDeposits(OpeningProof)` on the bridge of each chain. The proof holds a remote block, the state proof of the remote light client (from `eth_getProof`), and the storage proof of one stored head. See `docs/hardened-build-contract.md`, "Launch sequence", step 3. The prover builds the proof and checks it natively before it prints anything. It sends nothing.
+
+```sh
+"$PROVER" --config "$RUN_DIR/prover.toml" opening-proof --route sepolia_to_pulsechain_testnet
+"$PROVER" --config "$RUN_DIR/prover.toml" opening-proof --route pulsechain_testnet_to_sepolia
+```
+
+The JSON holds `to` and `calldata`. Send the calldata with `cast send` (sends a transaction). The command takes `--bridge-source`, `--remote-slot` and `--stored-slot` when you want to choose them.
 
 ```sh
 cast call "<bridge on Sepolia>" 'depositsOpen()(bool)' --rpc-url sepolia
@@ -213,7 +269,7 @@ The gate of Sepolia is enforcing. The first sender of each epoch calls `BeaconFo
 
 ## Step 10: start the bots
 
-Add a pair for the two chains to `explorer/shared/src/pairs.ts` first (see "Status", item 4). Then write the bot configuration from `explorer/bots/bots.example.json` into `$RUN_DIR/bots.json`. Set these values:
+The pair `sepolia-pls943` is in `explorer/shared/src/pairs.ts`. Set `"pair": "sepolia-pls943"` in the bot configuration. Write the bot configuration from `explorer/bots/bots.example.json` into `$RUN_DIR/bots.json`. Set these values:
 
 - `deploymentFile`: `$RUN_DIR/deployment.json`.
 - `publisher.prover.binary` and `runner.prover.binary`: the path in `$PROVER`.
