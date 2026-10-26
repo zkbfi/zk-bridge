@@ -21,3 +21,6 @@ export * from "./delivery-cost.js";
 export * from "./delivery-cost-settings.js";
 export * from "./api-views.js";
 export * from "./token-facts.js";
+export * from "./rpc/chain-reader.js";
+export * from "./rpc/explorer-api.js";
+export * from "./rpc/explorer-state.js";

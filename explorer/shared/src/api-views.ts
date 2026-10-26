@@ -315,11 +315,14 @@ export const lastHeadUpdateView = (chainId: number, row: HeadUpdateRow | undefin
         },
       };
 
+/** The stored head of a light client. The RPC data source does not always know when the head was stored. */
+export type HeadViewRow = Omit<LightClientHeadRow, "updatedTimestamp"> & { readonly updatedTimestamp: bigint | null };
+
 /** What the light client view of one side needs. The light client on `side` tracks the beacon chain of `tracked`. */
 export type HeadViewInput = {
   readonly side: PairSide;
   readonly tracked: PairSide;
-  readonly head: LightClientHeadRow | undefined;
+  readonly head: HeadViewRow | undefined;
   /** The finalized slot of the tracked chain, or null when no beacon endpoint answers. */
   readonly finalizedSlot: number | null;
   /** The timestamp of the execution block that the stored head holds, or null when it is unknown. */
