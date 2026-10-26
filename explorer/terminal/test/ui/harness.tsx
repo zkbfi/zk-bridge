@@ -54,6 +54,8 @@ export interface HarnessOptions {
   readonly savedSetup?: ProverSetup
   readonly environment?: Record<string, string | undefined>
   readonly openSecretStore?: ProverSetupServices['openSecretStore']
+  /** Replaces single services of the prover setup, for example a save that fails. */
+  readonly proverSetupOverrides?: Partial<ProverSetupServices>
   readonly pair?: AppServices['pair']
   readonly tokenValuationsWei?: Readonly<Record<string, bigint>>
 }
@@ -77,6 +79,7 @@ export async function renderApp(options: HarnessOptions) {
       saved.push(setup)
     },
     openSecretStore: options.openSecretStore ?? (async () => store),
+    ...options.proverSetupOverrides,
   }
   const signing: SigningServices = {
     startupSecrets: noStartupSecrets,
