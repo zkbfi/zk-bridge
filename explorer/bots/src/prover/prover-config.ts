@@ -31,6 +31,17 @@ export function describeRoute(pair: Pair, direction: ProofDirection): RouteDescr
   return { name: `${source.name}_to_${destination.name}`, source, destination };
 }
 
+/**
+ * The chain kind that the prover names for the source chain, by chain identifier. A testnet uses the kind of the
+ * network family that it copies: the prover has no kind of its own for a testnet yet.
+ */
+const PROVER_CHAIN_KINDS = {
+  1: "ethereum",
+  369: "pulsechain",
+  11155111: "ethereum",
+  943: "pulsechain",
+} as const satisfies Readonly<Record<number, string>>;
+
 /** A value that would break out of a quoted string in the file. */
 const UNSAFE_TEXT = /["\\\n\r]/;
 
@@ -60,8 +71,9 @@ function backendLines(backend: BackendSection): readonly string[] {
  */
 export function renderProverConfig(route: RouteDescription, backend: BackendSection | null): string {
   const { source, destination } = route;
-  if (source.name !== "ethereum" && source.name !== "pulsechain") {
-    throw new Error(`the source chain name "${source.name}" is not a chain kind that the prover knows`);
+  const chainKind = (PROVER_CHAIN_KINDS as Readonly<Record<number, string>>)[source.chainId];
+  if (chainKind === undefined) {
+    throw new Error(`the source chain id ${source.chainId} is not a chain kind that the prover knows`);
   }
   if (source.beaconUrl === null) throw new Error(`the ${source.name} side has no beacon endpoint`);
   const lines: string[] = [];
@@ -69,7 +81,7 @@ export function renderProverConfig(route: RouteDescription, backend: BackendSect
   lines.push(
     `[routes.${route.name}.source]`,
     `chain_id = ${source.chainId}`,
-    `chain = ${quoted(source.name, "source chain")}`,
+    `chain = ${quoted(chainKind, "source chain")}`,
     `beacon_url = ${quoted(source.beaconUrl, "source beacon endpoint")}`,
     `rpc_url = ${quoted(source.rpcUrl, "source rpc endpoint")}`,
     `bridge = ${quoted(source.contracts.bridge, "source bridge")}`,

@@ -223,9 +223,31 @@ describe("the prover configuration of the oracle backend", () => {
     expect(() => renderProverConfig(route, { kind: "oracle", keyVariable: 'A"B' })).toThrow("oracle key variable holds a character that the prover configuration cannot carry");
   });
 
-  it("refuses a source chain that the prover does not know", () => {
-    const stranger = { ...route, source: { ...route.source, name: "other" } };
-    expect(() => renderProverConfig(stranger, null)).toThrow('the source chain name "other" is not a chain kind that the prover knows');
+  it("refuses a source chain that the prover does not know, by chain identifier", () => {
+    const stranger = { ...route, source: { ...route.source, chainId: 5 } };
+    expect(() => renderProverConfig(stranger, null)).toThrow("the source chain id 5 is not a chain kind that the prover knows");
+  });
+
+  it("gives a testnet the chain kind of its network family and keeps its own chain identifier", () => {
+    const testnetEnvironment = {
+      EXPLORER_RPC_URL_11155111: "http://127.0.0.1:5",
+      EXPLORER_RPC_URL_943: "http://127.0.0.1:6",
+      EXPLORER_BEACON_URL_11155111: "http://127.0.0.1:7",
+      EXPLORER_BEACON_URL_943: "http://127.0.0.1:8",
+    };
+    const testnet = loadPair({
+      pairName: "sepolia-pls943",
+      environment: testnetEnvironment,
+      deployment: { chain_a: section(11155111, 0x30), chain_b: section(943, 0x40) },
+    });
+    const forward = renderProverConfig(describeRoute(testnet, "first-to-second"), null);
+    expect(forward).toContain("[routes.sepolia_to_pulsechain-testnet-v4.source]");
+    expect(forward).toContain('chain = "ethereum"');
+    expect(forward).toContain("chain_id = 11155111");
+    expect(forward).toContain("chain_id = 943");
+    const backward = renderProverConfig(describeRoute(testnet, "second-to-first"), null);
+    expect(backward).toContain('chain = "pulsechain"');
+    expect(backward).toContain('beacon_url = "http://127.0.0.1:8"');
   });
 
   it("accepts both chain kinds that the prover knows", () => {
