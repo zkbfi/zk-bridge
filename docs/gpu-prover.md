@@ -265,23 +265,46 @@ Every proof was 356 bytes and its public values equalled the native `lc-core` ru
 
 The image holds the rebuilt ELFs (testnet chain selectors and Gloas). The ELF hashes in the image equal `light-client/program-keys.json`. The file `groth16_vk.bin` in the image hashes to `VERIFIER_HASH`, and the build checks this. The first proof on v4 is not measured yet.
 
-## First live run on v4 (2026-10-26): no proof, a defect found
+## First live runs on v4 (2026-10-26)
 
-I tried one real proof of a finalized light-client update of chain 943 (start head slot 11168480, newer final header 11168512 or later) through the endpoint `43nsvfb8svkosr`. No proof came back. The run did not reach the verify step, and I did not try Sepolia.
+### GPU type requirement: pool `ADA_24` only
 
-What happened:
+The Groth16 step needs more host memory than a MIG slice gives. A first attempt ran with the pools `ADA_24` and `AMPERE_24`. Two workers landed on `NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb`, a 24 GB slice of a larger card. Its host memory share is 28.87 GiB. The container hit that limit during the Groth16 proof (system log: "high memory utilization 27.67GiB / 28.87GiB", then "triggered memory limits (OOM)"). The GPU server child process died. The worker kept answering `/ping` with 200 and failed every later job at once with `CudaClientError ... Broken pipe`. Four runs (with 4 and 10 attempts) failed this way, and the client never reached a good worker.
 
-- The `prove` command read the start state and built the update. The producer needs the state of the start head, and chain 943 serves it correctly only while that head is the newest. So I held the state in memory with a small local proxy for the beacon API.
-- The worker answered `/ping` with 200, then started the proof. The container log shows the Groth16 steps: reading the R1CS took 28 s, reading the proving key took 16 s, and the constraint system solver finished with 15972262 constraints.
-- Then the container hit its host memory limit of 28.87 GiB (system log: "high memory utilization 27.67GiB / 28.87GiB", then "triggered memory limits (OOM)"). The GPU server child process died. The worker returned status 500 with `CudaClientError: early eof`.
-- The worker does not recover. `/ping` still answers 200, and every later request fails at once with `Broken pipe`, because the worker does not restart the GPU server. Three more runs (4 and 10 attempts) all failed this way.
+The endpoint now uses pool `ADA_24` only (RTX 4090, $1.10 per hour serverless). Keep it that way. Do not add a pool that can hand out a MIG slice.
 
-Cause: the endpoint pools `ADA_24` and `AMPERE_24` also gave two workers on `NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb`, a 24 GB slice of a larger card with a 28.87 GiB host memory share. The Groth16 step needs more than that (the processor run needed 61 GB at peak). The earlier real proofs of 2026-10-25 ran on an RTX 4090 worker. The endpoint also showed 3 workers although max workers is 1, and the proxy sent requests to the failed workers.
+### Results on RTX 4090 (pool `ADA_24`)
 
-Fixes to make (not done here, because they change the endpoint or the image):
+Both proofs came from the `prove` command in remote mode, with `remote_api_key_env = "RUNPOD_API_KEY"`. The program key was `0x002a566f7e3d1e6996f7ffa35668291bfc7bce325ed34fe55ef41a2be3fd15cf`. Each proof has 356 bytes. `zk-bridge-prover verify` accepted both against that key (`{"valid":true}`, exit code 0).
 
-1. Limit the endpoint to the RTX 4090 type so that no MIG slice gets a worker.
-2. Make `prove-worker` answer `/ping` with 503, or exit, after the GPU server dies, so RunPod replaces the worker.
-3. Check the host memory at start and refuse to start below a limit that the Groth16 step needs.
+| Item | Chain 943 (pulsechain-testnet-v4) | Sepolia |
+|---|---|---|
+| Start head slot | 11168480 | 11442368 |
+| New head slot | 11168544 | 11442400 |
+| Execution block number in the public values | 25742593 | 12000041 |
+| Execution block hash in the public values | `0x3dc1ad0a...63b1` | `0x32ef6c92...f3f3` |
+| The node agrees on the block hash | yes (`eth_getBlockByNumber`) | yes (`eth_getBlockByNumber`) |
+| Time of the `prove` command | 204 s | 120 s |
 
-Not measured: cold start of v4, prove time of v4, cost, local verify of a v4 proof, public values of a real block. Record them after the fixes.
+How to read the times:
+
+- **Sepolia, worker log.** The worker started at 19:33:09 UTC. It was ready at 19:33:31 (21 s from start, 14 s of SP1 setup). The first request got status 502 while the worker started, and the client retried after 10 s. The proof started at 19:34:03. The worker logged `proved seconds=58`. This is the first proof on a new worker. It includes 19 s to read the R1CS file and 5 s to read the proving key, and the Groth16 step itself took 15.5 s.
+- **Chain 943.** The command took 204 s from start to hand-off. The log of that worker was not available (the log call returned nothing), so I cannot split the time. The worker had started at 19:24:19, 24 s before the request. The result is slower than Sepolia and than the 50 s of v3. I did not find the reason. Measure it again on a warm worker.
+- **Sepolia input.** The guest input was 51465 bytes. A Gloas update needs the source node (`--source-rpc-url`) for the execution header.
+
+Estimated cost at $1.10 per hour ($0.000306 per second). A worker bills from its start to its stop, including the 60 s idle timeout.
+
+| Run | Billed time | Cost |
+|---|---|---|
+| Sepolia, one proof | 19:33:09 to 19:36:01 = about 172 s | about $0.053 |
+| Chain 943, one proof | 19:24:19 to about 19:29:07 = about 288 s | about $0.088 |
+
+Both include the cold start and the idle wait. A warm worker costs about $0.0003 per second of proof.
+
+### Worker health fix
+
+The worker now answers `/ping` with 503 after the proving client has failed a proof, and it stays at 503. RunPod then removes the worker and starts a new one. A refused key (status 400) does not change the health. The change is in `prover/src/worker.rs`, with the tests `ping_is_503_for_good_after_a_failed_proof` and `a_refused_key_keeps_ping_at_200`. The image `v4` does not hold this change. Build `v5` to get it.
+
+### Holding the start state
+
+Chain 943 serves a correct state only for the newest finalized header. The `prove` command reads the state of the start head, so a start head that is no longer the newest fails with a root mismatch. The runs above used a small local proxy for the beacon API. It holds the state of the start head, which I read while it was the newest, and forwards every other path. Then I waited for a newer finalized header and ran `prove` with `--beacon-url` pointing at the proxy. Sepolia worked the same way.
