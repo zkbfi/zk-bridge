@@ -110,6 +110,16 @@ describe("the shell: one search field instead of a menu", () => {
     expect(within(dialog).getByText(/sample data, nothing reaches a network/)).toBeInTheDocument();
   });
 
+  it("opens the connections page from the palette, and keeps the settings action for the settings dialog", async () => {
+    renderPage(<Shell />, { connected: false });
+    await searchFor("connections");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(window.location.hash).toBe("#/settings"));
+    expect(await screen.findByRole("heading", { name: "Connections" })).toBeInTheDocument();
+    expect(document.title).toBe("Connections · zk-bridge explorer");
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+  });
+
   it("remembers what the user opened and offers it first the next time", async () => {
     renderPage(<Shell />, { connected: false });
     await searchFor("audit");

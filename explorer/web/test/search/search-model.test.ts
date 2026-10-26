@@ -115,6 +115,23 @@ describe("actionResults", () => {
   });
 });
 
+describe("viewResults: the connections page", () => {
+  it("offers a result that opens the settings route, and finds it by the words indexer and RPC", () => {
+    const results = viewResults("eth-pls");
+    const connections = results.find((result) => result.id === "view:settings");
+    expect(connections?.title).toBe("Connections: indexer and RPC URLs");
+    expect(connections?.jump).toEqual({ type: "route", route: { name: "settings" } });
+    expect(rankResults("rpc", results)[0]?.id).toBe("view:settings");
+    expect(rankResults("indexer", results)[0]?.id).toBe("view:settings");
+  });
+
+  it("keeps every view in the empty-query list, so the extra result does not push the docs out", () => {
+    const groups = emptyQueryGroups([], viewResults("eth-pls"));
+    expect(groups[0]?.results.map((result) => result.id)).toContain("view:docs");
+    expect(groups[0]?.results).toHaveLength(viewResults("eth-pls").length);
+  });
+});
+
 describe("moveHighlight", () => {
   it("moves down and up and wraps at both ends", () => {
     expect(moveHighlight(0, 3, "ArrowDown")).toBe(1);

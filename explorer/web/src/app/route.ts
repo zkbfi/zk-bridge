@@ -10,6 +10,7 @@ export type Route =
   | { readonly name: "pair"; readonly pairId: string; readonly token: Address | null }
   | { readonly name: "audit" }
   | { readonly name: "prover" }
+  | { readonly name: "settings" }
   | { readonly name: "docs"; readonly slug: string | null; readonly heading: string | null }
   | { readonly name: "address"; readonly address: Address }
   | { readonly name: "message"; readonly messageId: Hex };
@@ -36,6 +37,7 @@ export const parseRoute = (hash: string): Route => {
   }
   if (head === "audit") return { name: "audit" };
   if (head === "prover") return { name: "prover" };
+  if (head === "settings") return { name: "settings" };
   if (head === "docs") return { name: "docs", slug: first ?? null, heading: second ?? null };
   if (head === "address" && first !== undefined && isAddress(first, { strict: false })) return { name: "address", address: getAddress(first) };
   if (head === "message" && first !== undefined && MESSAGE_IDENTIFIER.test(first)) return { name: "message", messageId: first.toLowerCase() as Hex };
@@ -51,6 +53,7 @@ export const formatRoute = (route: Route): string => {
   if (route.name === "global") return "#/";
   if (route.name === "audit") return "#/audit";
   if (route.name === "prover") return "#/prover";
+  if (route.name === "settings") return "#/settings";
   if (route.name === "address") return `#/address/${route.address}`;
   if (route.name === "message") return `#/message/${route.messageId}`;
   if (route.name === "pair") return `#/pair/${encodeURIComponent(route.pairId)}${route.token === null ? "" : `?token=${route.token}`}`;
@@ -66,6 +69,7 @@ export const routeTitle = (route: Route): string => {
     pair: "Pair view",
     audit: "Audit",
     prover: "Prover and costs",
+    settings: "Connections",
     docs: "Docs",
     address: "Address",
     message: "Transfer or message",

@@ -34,6 +34,25 @@ describe("the settings of a live page", () => {
   });
 });
 
+describe("the settings of a live page without an indexer variable", () => {
+  it("says default for the indexer, because the registry default decides", () => {
+    const base = buildTestServices();
+    renderSettings({ configuration: { ...base.configuration, dataMode: "live" as const, indexerUrl: null, rpcUrls: {} } });
+    expect(within(screen.getByRole("dialog", { name: "Settings" })).getByText("Indexer").nextSibling).toHaveTextContent("default");
+  });
+});
+
+describe("the link to the connections page", () => {
+  it("points at the settings route and closes the dialog when it is used", async () => {
+    const onClose = vi.fn();
+    renderWithWallet(<SettingsDialog theme="system" onTheme={() => undefined} onRecentCleared={() => undefined} onClose={onClose} />, { wallet: disconnectedWallet() });
+    const link = screen.getByRole("link", { name: "Connections: indexer and RPC URLs" });
+    expect(link).toHaveAttribute("href", "#/settings");
+    await userEvent.click(link);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("the settings of a fixture page", () => {
   it("says that the indexer is none and that nothing reaches a network", () => {
     renderSettings();

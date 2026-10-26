@@ -12,11 +12,13 @@ import { GlobalView } from "../views/GlobalView";
 import { MessageView } from "../views/MessageView";
 import { PairView } from "../views/pair/PairView";
 import { ProverView } from "../views/ProverView";
+import { ConnectionsView } from "../views/ConnectionsView";
 import { Notice } from "../ui/primitives";
 import { ActionsContext } from "./actions-context";
 import { parseRoute, formatRoute, routeTitle, type Route } from "./route";
 import { useServices } from "./services";
 import { SettingsDialog } from "./SettingsDialog";
+import { SourceBadge } from "./SourceBadge";
 import { useThemeChoice } from "./theme";
 
 const FORM_DIALOGS: Readonly<Record<string, FormDialogName>> = { bridge: "bridge", wrap: "wrap", "send-message": "message", claim: "claim" };
@@ -60,6 +62,7 @@ const renderRoute = (route: Route) => {
   if (route.name === "pair") return <PairView key={`${route.pairId}-${route.token ?? "all"}`} pairId={route.pairId} initialToken={route.token} />;
   if (route.name === "audit") return <AuditView />;
   if (route.name === "prover") return <ProverView />;
+  if (route.name === "settings") return <ConnectionsView />;
   if (route.name === "docs") return <DocsView slug={route.slug} heading={route.heading} />;
   if (route.name === "address") return <AddressView address={route.address} />;
   return <MessageView messageId={route.messageId} />;
@@ -134,6 +137,7 @@ export const Shell = () => {
               Ctrl K
             </Text>
           </Button>
+          <SourceBadge />
           <Text fontSize="sm" color="fg.muted" whiteSpace="nowrap" display={{ base: "none", sm: "block" }}>
             {shortAccount(wallet.status === "connected" ? wallet.account : null)}
           </Text>

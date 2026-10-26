@@ -46,14 +46,19 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose }: Set
         <DataRow label="Pair">
           <Mono>{pair.id}</Mono>
         </DataRow>
-        <DataRow label="Indexer">{configuration.dataMode === "fixture" ? "none" : hostOf(configuration.indexerUrl)}</DataRow>
+        <DataRow label="Indexer">{configuration.dataMode === "fixture" ? "none" : configuration.indexerUrl === null ? "default" : hostOf(configuration.indexerUrl)}</DataRow>
         {rpcRows.map((row) => (
           <DataRow key={row.chain.chainId} label={`${row.chain.name} RPC`}>
             {row.url === undefined ? "not set" : hostOf(row.url)}
           </DataRow>
         ))}
         <Text fontSize="xs" color="fg.muted" marginTop="1">
-          The page was built with these values. Change them in the build environment, not here. Only the host shows.
+          The page was built with these values. Only the host shows. You can set other URLs on the Connections page.
+        </Text>
+        <Text fontSize="sm" marginTop="1">
+          <a href="#/settings" onClick={onClose}>
+            Connections: indexer and RPC URLs
+          </a>
         </Text>
       </Box>
       <Box marginTop="4">

@@ -69,6 +69,7 @@ export const viewResults = (defaultPairId: string): readonly SearchResult[] => [
   { id: "view:pair", kind: "view", title: "Pair view", subtitle: "Actions, feed and light client heads", keywords: ["dashboard", "feed", "transfers", defaultPairId], jump: { type: "route", route: { name: "pair", pairId: defaultPairId, token: null } } },
   { id: "view:audit", kind: "view", title: "Audit", subtitle: "Escrow against bridged supply, and fees", keywords: ["escrow", "supply", "mismatch", "fees"], jump: { type: "route", route: { name: "audit" } } },
   { id: "view:prover", kind: "view", title: "Prover and costs", subtitle: "Light client updates recorded on chain", keywords: ["updates", "gas", "poster", "costs", "proof"], jump: { type: "route", route: { name: "prover" } } },
+  { id: "view:settings", kind: "view", title: "Connections: indexer and RPC URLs", subtitle: "Set the indexer and the RPC URL of each chain", keywords: ["endpoint", "rpc", "indexer", "fallback", "url", "connection"], jump: { type: "route", route: { name: "settings" } } },
   { id: "view:docs", kind: "view", title: "Docs", subtitle: "How to use the bridge", keywords: ["help", "guide", "documentation"], jump: { type: "route", route: { name: "docs", slug: null, heading: null } } },
 ];
 
@@ -220,7 +221,7 @@ const GROUP_LIMITS: Readonly<Record<ResultKind | "recent", number>> = {
   address: 3,
   token: 6,
   pair: 4,
-  view: 5,
+  view: 6,
   action: 6,
   doc: 8,
 };

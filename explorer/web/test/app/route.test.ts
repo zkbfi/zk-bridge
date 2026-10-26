@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatRoute, HOME_ROUTE, parseRoute, type Route } from "../../src/app/route";
+import { formatRoute, HOME_ROUTE, parseRoute, routeTitle, type Route } from "../../src/app/route";
 
 const ADDRESS = "0x52908400098527886E0F7030069857D2E4169EE7";
 const MESSAGE = `0x${"ab".repeat(32)}`;
@@ -10,6 +10,7 @@ const routes: readonly Route[] = [
   { name: "pair", pairId: "eth-pls", token: ADDRESS },
   { name: "audit" },
   { name: "prover" },
+  { name: "settings" },
   { name: "docs", slug: null, heading: null },
   { name: "docs", slug: "fees-explained", heading: null },
   { name: "docs", slug: "fees-explained", heading: "the-data-source-line" },
@@ -34,5 +35,10 @@ describe("route", () => {
 
   it("drops a token filter that is not an address", () => {
     expect(parseRoute("#/pair/eth-pls?token=nonsense")).toEqual({ name: "pair", pairId: "eth-pls", token: null });
+  });
+
+  it("gives the settings route its own hash and title, so a link opens the connections page", () => {
+    expect(formatRoute({ name: "settings" })).toBe("#/settings");
+    expect(routeTitle({ name: "settings" })).toBe("Connections");
   });
 });
