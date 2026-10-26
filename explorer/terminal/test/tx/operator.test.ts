@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { encodeAbiParameters, encodeFunctionData, type Hex } from 'viem'
 import { FIXTURE_PAIR } from '../../src/data/fixtures'
 import { OperatorFileError, encodeUpdateCalldata, planLightClientUpdate, planMessageExecution } from '../../src/tx/operator'
-import { lightClientOutputParameters, messageBridgeAbi } from '../../src/tx/abis'
+import { messageBridgeAbi } from '../../src/tx/abis'
+import { lightClientOutputParameters } from './light-client-output'
 
 const word = (digit: string): Hex => `0x${digit.repeat(64)}`
 const header = (slot: bigint) => ({

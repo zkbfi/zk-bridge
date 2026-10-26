@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test'
 import {
   AmountParseError,
   RATE_SCALE,
-  feeOf,
   formatRateAsPercent,
   formatUnits,
   parsePercentAsRate,
@@ -77,11 +76,5 @@ describe('rates', () => {
       expect(parsePercentAsRate(formatRateAsPercent(rate))).toBe(rate)
     }
     expect(() => parsePercentAsRate('0.12345678901234567')).toThrow(AmountParseError)
-  })
-
-  test('feeOf cuts toward zero as the mediator does', () => {
-    expect(feeOf(1_000_000n, 10n ** 15n)).toBe(1_000n)
-    expect(feeOf(999n, 10n ** 15n)).toBe(0n)
-    expect(feeOf(10n ** 30n + 1n, 10n ** 16n)).toBe(10n ** 28n)
   })
 })

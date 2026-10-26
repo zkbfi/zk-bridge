@@ -60,24 +60,6 @@ export const beaconLightClientAbi = parseAbi([
   'function head() view returns (uint64)',
 ])
 
-/** The public values that the light client program outputs, in `abi.encode` order. */
-export const lightClientOutputParameters = [
-  { name: 'genesisValidatorsRoot', type: 'bytes32' },
-  { name: 'previousHeaderRoot', type: 'bytes32' },
-  { name: 'previousHeadSlot', type: 'uint64' },
-  { name: 'previousSyncCommitteeHash', type: 'bytes32' },
-  { name: 'startNextSyncCommitteeHash', type: 'bytes32' },
-  { name: 'newHeaderRoot', type: 'bytes32' },
-  { name: 'newHeadSlot', type: 'uint64' },
-  { name: 'executionBlockHash', type: 'bytes32' },
-  { name: 'executionBlockNumber', type: 'uint64' },
-  { name: 'syncCommitteeHash', type: 'bytes32' },
-  { name: 'nextSyncCommitteeHash', type: 'bytes32' },
-] as const
-
-/** The byte length of the encoded light client output: eleven static words. */
-export const LIGHT_CLIENT_OUTPUT_LENGTH = 352
-
 /** Every ABI that the dashboard can decode a transaction with. */
 export const knownAbis = [
   tokenMediatorAbi,

@@ -6,8 +6,8 @@
  * calldata and with the pair configuration before it offers a transaction. A file that points at another contract is
  * refused, not corrected.
  */
+import { decodeLightClientOutput, type LightClientOutput } from '@zk-bridge/shared'
 import {
-  decodeAbiParameters,
   decodeFunctionData,
   encodeFunctionData,
   getAddress,
@@ -16,12 +16,7 @@ import {
   type Hex,
 } from 'viem'
 import type { ChainConfig, PairConfig } from '../model/types'
-import {
-  LIGHT_CLIENT_OUTPUT_LENGTH,
-  beaconLightClientAbi,
-  lightClientOutputParameters,
-  messageBridgeAbi,
-} from './abis'
+import { beaconLightClientAbi, messageBridgeAbi } from './abis'
 import { decodeKnownCall, selectorOf } from './decode'
 import type { DisplayArgument, PlannedTransaction } from './plan'
 
@@ -85,7 +80,7 @@ export function planLightClientUpdate(text: string, pair: PairConfig): PlannedTr
   requireEqual(call.proof, proof, 'the proof in updateCalldata', 'the proof in the file')
   requireEqual(call.publicValues, publicValues, 'the public values in updateCalldata', 'the public values in the file')
 
-  const output = decodeLightClientOutput(publicValues)
+  const output = readLightClientOutput(publicValues)
   requireEqual(output.previousHeadSlot, startHeadSlot, 'previousHeadSlot in the public values', 'startHeadSlot')
   requireEqual(output.newHeadSlot, newHeadSlot, 'newHeadSlot in the public values', 'newHeadSlot')
   requireEqual(
@@ -250,33 +245,12 @@ function decodeUpdateCalldata(data: Hex): { proof: Hex; publicValues: Hex } {
   }
 }
 
-function decodeLightClientOutput(publicValues: Hex) {
-  const length = (publicValues.length - 2) / 2
-  if (length !== LIGHT_CLIENT_OUTPUT_LENGTH) {
-    throw new OperatorFileError(`The public values are ${length} bytes, not ${LIGHT_CLIENT_OUTPUT_LENGTH}.`)
-  }
-  const values = decodeAbiParameters(lightClientOutputParameters, publicValues)
-  const [
-    genesisValidatorsRoot,
-    previousHeaderRoot,
-    previousHeadSlot,
-    previousSyncCommitteeHash,
-    startNextSyncCommitteeHash,
-    newHeaderRoot,
-    newHeadSlot,
-    executionBlockHash,
-    executionBlockNumber,
-  ] = values
-  return {
-    genesisValidatorsRoot,
-    previousHeaderRoot,
-    previousHeadSlot,
-    previousSyncCommitteeHash,
-    startNextSyncCommitteeHash,
-    newHeaderRoot,
-    newHeadSlot,
-    executionBlockHash,
-    executionBlockNumber,
+/** Reads the public values with the shared decoder, and reports a bad file as an {@link OperatorFileError}. */
+function readLightClientOutput(publicValues: Hex): LightClientOutput {
+  try {
+    return decodeLightClientOutput(publicValues)
+  } catch (error) {
+    throw new OperatorFileError(`The public values are not a light client output: ${(error as Error).message}.`)
   }
 }
 

@@ -4,8 +4,10 @@
  * Every amount is a `bigint` in base units. These functions never convert to `number`, so no value loses precision.
  */
 
-/** The scale of a rate: `1e18` means 100 percent. */
-export const RATE_SCALE = 10n ** 18n
+import { RATE_SCALE, applyRate } from '@zk-bridge/shared'
+
+// The scale of a rate (`1e18` is 100 percent) and the fee arithmetic live in `@zk-bridge/shared`.
+export { RATE_SCALE }
 
 /** The number of decimal places that a percent needs to show a 1e18-scaled rate exactly (`rate / 1e16`). */
 const PERCENT_DECIMALS = 16
@@ -86,14 +88,10 @@ export function parsePercentAsRate(text: string): bigint {
 }
 
 /**
- * Computes the fee that the token mediator takes: `value * rate / 1e18`, cut toward zero as the contract does.
- *
- * @param value The amount that the mediator receives, in base units.
- * @param rate The fee rate, 1e18-scaled.
+ * The fee that the token mediator takes: `value * rate / 1e18`, cut toward zero as the contract does.
+ * It is the shared `applyRate`, kept under the name that the confirmation screens use.
  */
-export function feeOf(value: bigint, rate: bigint): bigint {
-  return (value * rate) / RATE_SCALE
-}
+export const feeOf = applyRate
 
 function assertDecimals(decimals: number): void {
   if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) {
