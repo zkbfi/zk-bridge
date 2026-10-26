@@ -59,7 +59,7 @@ impl Logger {
         )
     }
 
-    /// Writes one line.
+    /// Writes one line. Every URL in a value loses its path and query, because a path can hold a key.
     pub fn log(&self, level: Level, event: &str, fields: &[(&str, String)]) {
         let line = format_line(unix_seconds(), level, event, fields);
         match &self.sink {
@@ -108,11 +108,44 @@ fn quote_if_needed(value: &str) -> String {
     )
 }
 
+/// Replaces every URL in `text` by its scheme and host. The path, the query, the fragment and any user information go,
+/// because a node URL often carries a key in its path (`https://host/beacon/KEY/943`) or in its query.
+///
+/// A URL ends at the first space, quote, bracket, comma or closing parenthesis.
+pub fn redact_urls(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = ["https://", "http://"]
+        .iter()
+        .filter_map(|scheme| rest.find(scheme))
+        .min()
+    {
+        result.push_str(&rest[..start]);
+        let url_and_after = &rest[start..];
+        let end = url_and_after
+            .find(|character: char| character.is_whitespace() || "\"'<>()[]{},".contains(character))
+            .unwrap_or(url_and_after.len());
+        let (url, after) = url_and_after.split_at(end);
+        result.push_str(&origin_of(url));
+        rest = after;
+    }
+    result.push_str(rest);
+    result
+}
+
+/// The scheme and host (with a port) of a URL, without user information, path, query or fragment.
+fn origin_of(url: &str) -> String {
+    let (scheme, remainder) = url.split_once("://").unwrap_or(("https", url));
+    let authority = remainder.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    format!("{scheme}://{host}/...")
+}
+
 /// Builds one line. Separate from [`Logger::log`] so a test can fix the time.
 pub fn format_line(timestamp: u64, level: Level, event: &str, fields: &[(&str, String)]) -> String {
     let mut line = format!("ts={timestamp} level={} event={event}", level.name());
     for (key, value) in fields {
-        write!(line, " {key}={}", quote_if_needed(value)).expect("write to string");
+        write!(line, " {key}={}", quote_if_needed(&redact_urls(value))).expect("write to string");
     }
     line
 }
@@ -139,5 +172,32 @@ mod tests {
             format_line(7, Level::Warn, "retry", &[]),
             "ts=7 level=warn event=retry"
         );
+    }
+
+    /// Claim: a URL loses its path, query and user information in a log line and in the error text, for a base with a path
+    /// prefix and for a base with a key segment. Why it matters: node URLs carry keys in the path, and a log is shared.
+    #[test]
+    fn urls_with_a_key_are_cut_to_their_host() {
+        for url in [
+            "https://one.example/beacon/SECRETKEY/943",
+            "https://rpc.example/beacon-api/eth/v1/x?key=SECRETKEY",
+            "https://user:SECRETKEY@rpc.example:8545/path",
+            "http://127.0.0.1:5052/SECRETKEY",
+        ] {
+            let text = format!("GET {url}: status 500 (see {url}), retry");
+            let redacted = redact_urls(&text);
+            assert!(!redacted.contains("SECRETKEY"), "{redacted}");
+            assert!(
+                redacted.contains("status 500") && redacted.contains(", retry"),
+                "{redacted}"
+            );
+            let line = format_line(1, Level::Warn, "failed", &[("url", url.to_string())]);
+            assert!(!line.contains("SECRETKEY"), "{line}");
+        }
+        assert_eq!(
+            redact_urls("a https://h.example/p/KEY b"),
+            "a https://h.example/... b"
+        );
+        assert_eq!(redact_urls("no url here"), "no url here");
     }
 }

@@ -13,7 +13,7 @@
 use crate::config::{HandoffConfig, HandoffTarget};
 use crate::error::{Error, Result};
 use crate::logging::Logger;
-use crate::rpc::build_agent;
+use crate::rpc::{build_agent, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::Duration;
@@ -233,7 +233,7 @@ enum Attempt {
 }
 
 fn post_with_retries(webhook: &WebhookSettings, body: &str, logger: &Logger) -> Result<()> {
-    let agent = build_agent(webhook.timeout);
+    let agent = build_agent(webhook.timeout, USER_AGENT);
     let mut last_reason = String::new();
     for attempt in 1..=webhook.attempts {
         match post_once(&agent, webhook, body) {

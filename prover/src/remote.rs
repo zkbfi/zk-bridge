@@ -23,7 +23,7 @@ use crate::prover::{
     native_job, require_groth16_shape, require_native_values, GuestJob, ProgramKind, Proof,
     ProofStatement, Prover,
 };
-use crate::rpc::build_agent;
+use crate::rpc::{build_agent, USER_AGENT};
 use alloy_primitives::{hex, B256};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -99,7 +99,7 @@ pub struct RemoteProver {
 impl RemoteProver {
     /// A backend for `settings`. It sends nothing until the first proof.
     pub fn new(settings: RemoteSettings, logger: Logger) -> Self {
-        let agent = build_agent(settings.timeout);
+        let agent = build_agent(settings.timeout, USER_AGENT);
         Self {
             settings,
             agent,

@@ -10,7 +10,10 @@ fn main() {
     match zk_bridge_prover::cli::run(arguments, &lookup, &mut out) {
         Ok(code) => std::process::exit(code),
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!(
+                "error: {}",
+                zk_bridge_prover::logging::redact_urls(&error.to_string())
+            );
             std::process::exit(1);
         }
     }

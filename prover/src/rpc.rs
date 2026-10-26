@@ -1,16 +1,22 @@
 //! A small JSON-RPC client over HTTP, and a plain HTTP client for beacon nodes.
 //!
-//! Both send the User-Agent `zk-bridge-prover` and nothing else that names a person or a machine.
+//! Both send the neutral User-Agent [`NEUTRAL_USER_AGENT`], which public nodes accept, and nothing else that names a person
+//! or a machine.
 //! The crate is synchronous: one request at a time. So it needs no async runtime, and the crate
 //! list stays short (`ureq` is blocking and small). See `Cargo.toml`.
 
 use crate::error::{Error, Result};
+use crate::logging::redact_urls;
 use alloy_primitives::{hex, Bytes};
 use serde_json::{json, Value};
 use std::time::Duration;
 
-/// The User-Agent of every request.
+/// The User-Agent of requests to servers of the operator: the webhook and the remote prover.
 pub const USER_AGENT: &str = "zk-bridge-prover";
+
+/// The User-Agent of requests to public nodes (beacon API and JSON-RPC). Some public nodes refuse an unknown client name,
+/// so this one looks like a common client and names no person and no machine.
+pub const NEUTRAL_USER_AGENT: &str = "Mozilla/5.0 (compatible; zk-bridge/1.0)";
 
 /// The largest body the crate reads: a beacon state is about 20 megabytes on PulseChain.
 const MAX_BODY_BYTES: u64 = 512 * 1024 * 1024;
@@ -24,11 +30,11 @@ pub trait JsonRpc: Send + Sync {
     fn call(&self, method: &str, params: Value) -> Result<Value>;
 }
 
-pub(crate) fn build_agent(timeout: Duration) -> ureq::Agent {
+pub(crate) fn build_agent(timeout: Duration, user_agent: &str) -> ureq::Agent {
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
         .http_status_as_error(false)
-        .user_agent(USER_AGENT)
+        .user_agent(user_agent)
         .build();
     ureq::Agent::new_with_config(config)
 }
@@ -44,7 +50,7 @@ impl HttpRpc {
     pub fn new(url: &str) -> Self {
         Self {
             url: url.to_string(),
-            agent: build_agent(Duration::from_secs(60)),
+            agent: build_agent(Duration::from_secs(60), NEUTRAL_USER_AGENT),
         }
     }
 }
@@ -76,12 +82,13 @@ impl JsonRpc for HttpRpc {
             .post(&self.url)
             .header("Content-Type", "application/json")
             .send(body.as_str())
-            .map_err(|error| Error::Http(format!("{method}: {error}")))?;
+            .map_err(|error| Error::Http(redact_urls(&format!("{method}: {error}"))))?;
         let status = response.status().as_u16();
-        let text = response
-            .body_mut()
-            .read_to_string()
-            .map_err(|error| Error::Http(format!("{method}: reading the answer: {error}")))?;
+        let text = response.body_mut().read_to_string().map_err(|error| {
+            Error::Http(redact_urls(&format!(
+                "{method}: reading the answer: {error}"
+            )))
+        })?;
         let answer: Value = match serde_json::from_str(&text) {
             Ok(answer) => answer,
             Err(_) if status != 200 => {
@@ -117,6 +124,17 @@ pub trait HttpGet: Send + Sync {
     fn get(&self, path_and_query: &str, accept: &str) -> Result<HttpResponse>;
 }
 
+/// Joins a base URL and a route. The base may have a path prefix (`https://host/beacon-api`), a key segment
+/// (`https://host/beacon/KEY/943`) and a trailing slash. The route starts with `/` and may hold a query string. The
+/// result has exactly one slash between the two.
+pub fn join_url(base_url: &str, path_and_query: &str) -> String {
+    format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        path_and_query.trim_start_matches('/')
+    )
+}
+
 /// An [`HttpGet`] over `ureq`.
 pub struct HttpClient {
     base_url: String,
@@ -124,24 +142,24 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
-    /// A client with a 120 second timeout per request. `base_url` has no trailing slash after the call.
+    /// A client with a 120 second timeout per request. `base_url` may end with a slash and may hold a path prefix.
     pub fn new(base_url: &str) -> Self {
         Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
-            agent: build_agent(Duration::from_secs(120)),
+            base_url: base_url.to_string(),
+            agent: build_agent(Duration::from_secs(120), NEUTRAL_USER_AGENT),
         }
     }
 }
 
 impl HttpGet for HttpClient {
     fn get(&self, path_and_query: &str, accept: &str) -> Result<HttpResponse> {
-        let url = format!("{}{}", self.base_url, path_and_query);
+        let url = join_url(&self.base_url, path_and_query);
         let mut response = self
             .agent
             .get(&url)
             .header("Accept", accept)
             .call()
-            .map_err(|error| Error::Http(format!("GET {path_and_query}: {error}")))?;
+            .map_err(|error| Error::Http(redact_urls(&format!("GET {path_and_query}: {error}"))))?;
         let status = response.status().as_u16();
         let body = response
             .body_mut()
@@ -149,7 +167,9 @@ impl HttpGet for HttpClient {
             .limit(MAX_BODY_BYTES)
             .read_to_vec()
             .map_err(|error| {
-                Error::Http(format!("GET {path_and_query}: reading the body: {error}"))
+                Error::Http(redact_urls(&format!(
+                    "GET {path_and_query}: reading the body: {error}"
+                )))
             })?;
         Ok(HttpResponse { status, body })
     }
@@ -191,6 +211,78 @@ mod tests {
             data.expect("revert data").as_ref(),
             [0x12, 0x34, 0x56, 0x78, 0x00]
         );
+    }
+
+    /// Claim: a path prefix of the base URL is kept, a trailing slash is tolerated, the query string stays intact, and a base
+    /// with a key segment still works. Why it matters: public beacon nodes sit behind a prefix such as `/beacon-api`.
+    /// Dropping the prefix sends the request to the wrong route.
+    #[test]
+    fn a_base_url_with_a_path_prefix_joins_cleanly() {
+        let route = "/eth/v1/beacon/light_client/updates?start_period=3&count=2";
+        let expected = |base: &str| format!("{base}{route}");
+        for base in [
+            "https://host.example/beacon-api",
+            "https://host.example/beacon/KEY/943",
+            "https://host.example",
+            "http://127.0.0.1:5052",
+        ] {
+            assert_eq!(join_url(base, route), expected(base), "plain {base}");
+            assert_eq!(
+                join_url(&format!("{base}/"), route),
+                expected(base),
+                "slash {base}"
+            );
+            assert_eq!(
+                join_url(&format!("{base}//"), route),
+                expected(base),
+                "slashes {base}"
+            );
+        }
+        assert_eq!(
+            join_url("https://h.example/p", "eth/v1/x"),
+            "https://h.example/p/eth/v1/x"
+        );
+    }
+
+    /// Claim: the clients of public nodes send the neutral User-Agent and the operator clients send their own name.
+    #[test]
+    fn user_agents_are_fixed() {
+        assert_eq!(
+            NEUTRAL_USER_AGENT,
+            "Mozilla/5.0 (compatible; zk-bridge/1.0)"
+        );
+        assert_eq!(USER_AGENT, "zk-bridge-prover");
+    }
+
+    /// Claim: the real client sends the request to the prefixed route with its query, and sends the neutral User-Agent.
+    /// Why it matters: this is the check on the wire, not only on the join function.
+    #[test]
+    fn the_client_reaches_a_prefixed_route_with_the_neutral_agent() {
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind");
+        let port = server.server_addr().to_ip().expect("ip").port();
+        let handle = std::thread::spawn(move || {
+            let request = server.recv().expect("request");
+            let seen = (
+                request.url().to_string(),
+                request
+                    .headers()
+                    .iter()
+                    .find(|header| header.field.equiv("User-Agent"))
+                    .map(|header| header.value.to_string()),
+            );
+            request
+                .respond(tiny_http::Response::from_string("ok"))
+                .expect("respond");
+            seen
+        });
+        let client = HttpClient::new(&format!("http://127.0.0.1:{port}/beacon/KEY/943/"));
+        let answer = client
+            .get("/eth/v1/beacon/headers/finalized?x=1", "application/json")
+            .expect("answer");
+        assert_eq!(answer.status, 200);
+        let (url, agent) = handle.join().expect("server thread");
+        assert_eq!(url, "/beacon/KEY/943/eth/v1/beacon/headers/finalized?x=1");
+        assert_eq!(agent.as_deref(), Some(NEUTRAL_USER_AGENT));
     }
 
     /// Claim: quantities round-trip and a non-hex value is refused.

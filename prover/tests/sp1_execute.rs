@@ -451,12 +451,14 @@ fn write_a_remote_proof_request_for_the_real_ethereum_update() {
     let Ok(path) = std::env::var("SP1_REQUEST_OUTPUT") else {
         return;
     };
-    let program_key = std::env::var("SP1_REQUEST_PROGRAM_KEY").expect("SP1_REQUEST_PROGRAM_KEY names the light-client key");
+    let program_key = std::env::var("SP1_REQUEST_PROGRAM_KEY")
+        .expect("SP1_REQUEST_PROGRAM_KEY names the light-client key");
     let request = serde_json::json!({
         "programKey": program_key,
         "statementKind": "lightClient",
         "guestInput": alloy_primitives::hex::encode_prefixed(guest_input_bytes(&real_ethereum_input())),
         "expectedPublicValues": alloy_primitives::hex::encode_prefixed(public_values(&verify_update_natively(&real_ethereum_input()).expect("native"))),
     });
-    std::fs::write(&path, serde_json::to_string(&request).expect("json")).expect("write the request");
+    std::fs::write(&path, serde_json::to_string(&request).expect("json"))
+        .expect("write the request");
 }
