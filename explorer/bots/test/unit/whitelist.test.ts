@@ -38,6 +38,14 @@ describe("the whitelisted runner of the fee router", () => {
   it("refuses when the router cannot be read, so a wrong address is not taken for a router", async () => {
     await expect(check(async () => { throw new Error("execution reverted"); })).rejects.toThrow(/Cannot read runner\(\)/);
   });
+
+  it("gives the text of a failure that is no error object as the reason", async () => {
+    await expect(
+      check(async () => {
+        throw "connection closed";
+      }),
+    ).rejects.toThrow(`Cannot read runner() of the fee router ${FEE_ROUTER} on PulseChain: connection closed`);
+  });
 });
 
 describe("the reward address of the fee router", () => {
@@ -91,5 +99,15 @@ describe("the reward address of the fee router", () => {
 
   it("refuses when the router cannot be read", async () => {
     await expect(checkReward({ stored: async () => { throw new Error("execution reverted"); } })).rejects.toThrow(/Cannot read rewardAddress\(\)/);
+  });
+
+  it("gives the text of a failure that is no error object as the reason", async () => {
+    await expect(
+      checkReward({
+        stored: async () => {
+          throw "connection closed";
+        },
+      }),
+    ).rejects.toThrow(`Cannot read rewardAddress() of the fee router ${FEE_ROUTER} on PulseChain: connection closed`);
   });
 });
