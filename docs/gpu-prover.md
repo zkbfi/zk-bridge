@@ -251,3 +251,16 @@ The proof on the processor that I made on a 32-thread box took 14 minutes 22 sec
 | Warm proof | about 27 s |
 
 Every proof was 356 bytes and its public values equalled the native `lc-core` run.
+
+## Image v4 (2026-10-26)
+
+| Item | Value |
+|---|---|
+| Image | `ghcr.io/[private]/zk-bridge-prover-gpu-worker:v4` |
+| Digest | `sha256:d9f491f92e66c9bf7e8a3355da0083fd244138aa38e106bbd8e982818c401ea4` |
+| Built from | commit `10976fb`, on the [private], target `prover-gpu-worker`, platform linux/amd64 |
+| Light client program key | `0x002a566f7e3d1e6996f7ffa35668291bfc7bce325ed34fe55ef41a2be3fd15cf` |
+| Fork observation program key | `0x00c2a9c5a7b0826c85a59ca0dbeccae5309093072e40d26548b9b0c4183d3f39` |
+| Endpoint | `43nsvfb8svkosr` runs v4 (release 5). Only the image changed. |
+
+The image holds the rebuilt ELFs (testnet chain selectors and Gloas). The ELF hashes in the image equal `light-client/program-keys.json`. The file `groth16_vk.bin` in the image hashes to `VERIFIER_HASH`, and the build checks this. The first proof on v4 is not measured yet.
