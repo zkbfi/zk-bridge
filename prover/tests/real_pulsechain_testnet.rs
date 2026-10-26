@@ -43,7 +43,11 @@ fn a_real_block_of_testnet_v4_parses_to_the_header_of_the_node() {
     assert_eq!(view.header.state_root, expected.state_root, "state root");
     assert_eq!(view.header, expected);
     assert_eq!(header_root(&view.header), root_of(&answer["data"]["root"]));
-    assert_eq!(view.execution_branch.len(), 4, "the Capella execution branch");
+    assert_eq!(
+        view.execution_branch.len(),
+        4,
+        "the Capella execution branch"
+    );
 }
 
 /// Claim: the same real data against the live node. The finalized state parses, its root equals the `state_root` of the

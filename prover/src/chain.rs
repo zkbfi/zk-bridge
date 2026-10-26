@@ -212,11 +212,52 @@ impl ChainClient {
     /// # Errors
     /// `Error::Rpc` when the call reverts, `Error::Malformed` when the return data does not decode.
     pub fn view<C: SolCall>(&self, to: Address, call: C) -> Result<C::Return> {
+        self.view_at(to, call, None)
+    }
+
+    /// Calls a view function at block `block_number`, or at the latest block when it is `None`. A node serves old blocks
+    /// only while it keeps their state.
+    ///
+    /// # Errors
+    /// `Error::Rpc` when the call reverts or the node lacks the state, `Error::Malformed` when the return data does not
+    /// decode.
+    pub fn view_at<C: SolCall>(
+        &self,
+        to: Address,
+        call: C,
+        block_number: Option<u64>,
+    ) -> Result<C::Return> {
         let request = json!({ "to": format!("{to:#x}"), "data": format!("0x{}", hex::encode(call.abi_encode())) });
-        let answer = self.rpc.call("eth_call", json!([request, "latest"]))?;
+        let block = block_number.map_or_else(|| "latest".to_string(), quantity);
+        let answer = self.rpc.call("eth_call", json!([request, block]))?;
         let raw = parse_bytes(&answer, "eth_call")?;
         C::abi_decode_returns(&raw)
             .map_err(|error| Error::Malformed(format!("{}: {error}", C::SIGNATURE)))
+    }
+
+    /// The JSON of the block with this hash, without transaction bodies, or `None` when the node does not know it.
+    pub fn block_by_hash(&self, hash: B256) -> Result<Option<Value>> {
+        let block = self
+            .rpc
+            .call("eth_getBlockByHash", json!([format!("{hash:#x}"), false]))?;
+        Ok((!block.is_null()).then_some(block))
+    }
+
+    /// The `eth_getProof` answer for one account and some storage keys at block `block_number`.
+    ///
+    /// # Errors
+    /// `Error::Rpc` when the node lacks the state of the block.
+    pub fn account_proof(
+        &self,
+        address: Address,
+        storage_keys: &[B256],
+        block_number: u64,
+    ) -> Result<Value> {
+        let keys: Vec<String> = storage_keys.iter().map(|key| format!("{key:#x}")).collect();
+        self.rpc.call(
+            "eth_getProof",
+            json!([format!("{address:#x}"), keys, quantity(block_number)]),
+        )
     }
 
     /// The number of the latest block.

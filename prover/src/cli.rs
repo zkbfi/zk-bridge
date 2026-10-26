@@ -20,13 +20,14 @@ use crate::evidence::{build_evidence, EvidenceRequest};
 use crate::handoff::{Handoff, PackageDestination};
 use crate::light_client::ChainKind;
 use crate::logging::Logger;
+use crate::opening::{build_opening_proof, OpeningRequest};
 use crate::produce::{produce, ProduceRequest, Production, EXPLICIT_HEAD_ROUTE};
 use crate::prover::{require_groth16_shape, OracleProver, Prover};
 use crate::remote::verify_groth16;
 use crate::rpc::{HttpClient, HttpRpc};
 use crate::signer::Signer;
 use crate::stored::{read_stored_state, StoredState};
-use alloy_primitives::{hex, B256};
+use alloy_primitives::{hex, Address, B256};
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -82,6 +83,29 @@ pub enum Command {
     /// beacon API only: first the light-client bootstrap route, and the finalized state when the node answers 404 there.
     /// Sepolia fails with the Gloas refusal of `lc-core` and prints nothing.
     Checkpoint(CheckpointArguments),
+    /// Print the evidence of `MessageBridge.openDeposits` for the source bridge of a route, as one JSON object.
+    ///
+    /// The object holds the calldata and its decoded parts. The command reads the source chain (the bridge and its own
+    /// light client) and the destination chain (the block and the storage of the remote light client), checks the proof
+    /// natively as the contract does, and prints it only when it verifies. It sends nothing.
+    OpeningProof(OpeningProofArguments),
+}
+
+/// The arguments of `opening-proof`.
+#[derive(Debug, Args)]
+pub struct OpeningProofArguments {
+    /// The route of the configuration. It may be left out when the file has exactly one route.
+    #[arg(long)]
+    pub route: Option<String>,
+    /// The bridge to open, on the source chain. Default: `source.bridge` of the route.
+    #[arg(long)]
+    pub bridge_source: Option<String>,
+    /// The slot of the own light client whose stored block hash anchors the proof. Default: the head of the own light client.
+    #[arg(long)]
+    pub remote_slot: Option<u64>,
+    /// The slot of the remote light client to prove. Default: its head in the remote block.
+    #[arg(long)]
+    pub stored_slot: Option<u64>,
 }
 
 /// The arguments of `checkpoint`.
@@ -543,6 +567,44 @@ fn run_checkpoint(
     Ok(0)
 }
 
+/// Prints the opening proof of the source bridge of a route as one JSON object.
+///
+/// # Errors
+/// The errors of [`build_opening_proof`], and `Error::Usage` for a bad address.
+fn run_opening_proof(
+    config: &Config,
+    arguments: &OpeningProofArguments,
+    out: &mut dyn std::io::Write,
+) -> Result<i32> {
+    let (name, route) = config.route(arguments.route.as_deref())?;
+    let bridge = match &arguments.bridge_source {
+        Some(text) => Address::from_str(text)
+            .map_err(|error| Error::Usage(format!("--bridge-source: {error}")))?,
+        None => route.source.bridge_address()?,
+    };
+    let own = connect(
+        "source",
+        route.source.chain_id,
+        route.source.execution_url()?,
+    )?;
+    let remote = connect(
+        "destination",
+        route.destination.chain_id,
+        &route.destination.rpc_url,
+    )?;
+    let package = build_opening_proof(&OpeningRequest {
+        route: name,
+        own_chain: &own,
+        remote_chain: &remote,
+        bridge,
+        remote_light_client: route.destination.light_client_address()?,
+        remote_slot: arguments.remote_slot,
+        stored_slot: arguments.stored_slot,
+    })?;
+    write_json(out, &package.to_json())?;
+    Ok(0)
+}
+
 /// Writes one JSON object and a newline.
 fn write_json(out: &mut dyn std::io::Write, value: &serde_json::Value) -> Result<()> {
     writeln!(out, "{value}")
@@ -601,6 +663,7 @@ pub fn run(
         Command::Prove(prove) => run_prove(&config, prove, lookup, out),
         Command::Evidence(evidence) => run_evidence(&config, evidence, out),
         Command::Checkpoint(checkpoint) => run_checkpoint(Some(&config), checkpoint, out),
+        Command::OpeningProof(opening) => run_opening_proof(&config, opening, out),
         Command::Verify(_) => unreachable!("verify returned above"),
     }
 }

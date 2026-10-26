@@ -13,6 +13,7 @@ sol! {
     interface LightClientContract {
         function head() external view returns (uint64);
         function headers(uint64 slot) external view returns (bytes32);
+        function executionBlockHashes(uint64 slot) external view returns (bytes32);
         function syncCommittees(uint64 period) external view returns (bytes32);
         function genesisValidatorsRoot() external view returns (bytes32);
         function slotsPerPeriod() external view returns (uint64);
@@ -108,6 +109,7 @@ sol! {
         function remoteChainId() external view returns (uint64);
         function localChainId() external view returns (uint64);
         function lightClient() external view returns (address);
+        function remoteLightClient() external view returns (address);
         function messageCallStatus(bytes32 messageId) external view returns (bool);
         function failedMessageDataHash(bytes32 messageId) external view returns (bytes32);
         function stateLayouts() external view returns (StateLayoutRow[] memory);
@@ -225,6 +227,14 @@ mod tests {
             (
                 MessageBridgeContract::lightClientCall::SELECTOR,
                 "lightClient()",
+            ),
+            (
+                MessageBridgeContract::remoteLightClientCall::SELECTOR,
+                "remoteLightClient()",
+            ),
+            (
+                LightClientContract::executionBlockHashesCall::SELECTOR,
+                "executionBlockHashes(uint64)",
             ),
             (
                 MessageBridgeContract::messageCallStatusCall::SELECTOR,

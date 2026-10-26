@@ -33,6 +33,7 @@ pub mod light_client;
 #[cfg(feature = "signed-beacon")]
 pub mod local_network;
 pub mod logging;
+pub mod opening;
 pub mod produce;
 pub mod prover;
 pub mod remote;

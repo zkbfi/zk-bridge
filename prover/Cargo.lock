@@ -7102,6 +7102,7 @@ name = "zk-bridge-prover"
 version = "0.1.0"
 dependencies = [
  "alloy-primitives",
+ "alloy-rlp",
  "alloy-sol-types",
  "clap",
  "k256",
