@@ -19,6 +19,12 @@ export interface NativeBalances {
   readonly second: bigint | null
 }
 
+/** What the chain access needs from the client of one chain: the reads and the transaction flow calls. */
+export type RpcClient = ReadClient & FlowChainClient
+
+/** Creates the client of one chain from its description and its RPC URL. A test passes a fake. */
+export type RpcClientFactory = (chain: ChainConfig, url: string) => RpcClient
+
 /** What the dashboard needs from the chains. */
 export interface ChainAccess {
   /** `rpc` for real endpoints, `fixture` when nothing reaches a chain. */
@@ -38,11 +44,16 @@ export interface ChainAccess {
  *
  * @param pair The pair. Each chain names the environment variable of its RPC URL.
  * @param environment The environment that holds the URLs. They stay out of every file and every log.
+ * @param createClient Creates the client of one chain. The default uses viem over HTTP.
  */
-export function createRpcChainAccess(pair: PairConfig, environment: Record<string, string | undefined>): ChainAccess {
-  const clients = new Map<number, ReturnType<typeof createClient>>()
+export function createRpcChainAccess(
+  pair: PairConfig,
+  environment: Record<string, string | undefined>,
+  createClient: RpcClientFactory = createViemClient,
+): ChainAccess {
+  const clients = new Map<number, RpcClient>()
 
-  function clientOf(chain: ChainConfig) {
+  function clientOf(chain: ChainConfig): RpcClient {
     const existing = clients.get(chain.chainId)
     if (existing !== undefined) return existing
     const url = environment[chain.rpcEnvironmentVariable]
@@ -66,7 +77,7 @@ export function createRpcChainAccess(pair: PairConfig, environment: Record<strin
       return Promise.all(
         [pair.first, pair.second].map(async (chain): Promise<ChainSnapshotResult> => {
           try {
-            return await readChainSnapshot(clientOf(chain) as unknown as ReadClient, { chain, account, tokens })
+            return await readChainSnapshot(clientOf(chain), { chain, account, tokens })
           } catch (error) {
             return { status: 'error', chain, message: error instanceof Error ? error.message : String(error) }
           }
@@ -90,19 +101,20 @@ export function createRpcChainAccess(pair: PairConfig, environment: Record<strin
     },
     async readRewardAddress({ chainId, router }) {
       try {
-        return await readRewardAddress(clientOf(chainById(chainId)) as unknown as ReadClient, { router })
+        return await readRewardAddress(clientOf(chainById(chainId)), { router })
       } catch (error) {
         return { kind: 'unreadable', reason: error instanceof Error ? error.message : String(error) }
       }
     },
     flowClient(chainId) {
-      return clientOf(chainById(chainId)) as unknown as FlowChainClient
+      return clientOf(chainById(chainId))
     },
   }
 }
 
-function createClient(chain: ChainConfig, url: string) {
-  return createPublicClient({
+/** The default client factory: a viem public client over HTTP with batched multicall. It opens no connection until a call. */
+function createViemClient(chain: ChainConfig, url: string): RpcClient {
+  const client = createPublicClient({
     chain: defineChain({
       id: chain.chainId,
       name: chain.name,
@@ -112,6 +124,8 @@ function createClient(chain: ChainConfig, url: string) {
     transport: http(url),
     batch: { multicall: true },
   })
+  // The viem client has the methods of both interfaces. Its own types are wider than the two narrow interfaces.
+  return client as unknown as RpcClient
 }
 
 /** A fake hash for fixture sends. */
