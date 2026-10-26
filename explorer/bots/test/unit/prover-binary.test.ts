@@ -1,0 +1,235 @@
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { loadPair, type Pair } from "@zk-bridge/shared";
+import type { CommandExecutor, CommandSpec } from "../../src/prover/execute-command.ts";
+import { EXIT_UP_TO_DATE, ProverCommandError, ProverOutputError, createProverBinary } from "../../src/prover/prover-binary.ts";
+import { describeRoute, renderProverConfig } from "../../src/prover/prover-config.ts";
+import { evidenceFor, memoryLogger, word } from "../support/builders.ts";
+
+function section(chainId: number, seed: number) {
+  const make = (offset: number) => `0x${(seed + offset).toString(16).padStart(2, "0").repeat(20)}`;
+  return { chain_id: chainId, bridge: make(1), mediator: make(2), token_factory: make(3), native_router: make(4), wrapped_native: make(5), gate: make(6), light_client: make(7), start_block: 5 };
+}
+const environment = {
+  EXPLORER_RPC_URL_1: "http://127.0.0.1:1",
+  EXPLORER_RPC_URL_369: "http://127.0.0.1:2",
+  EXPLORER_BEACON_URL_1: "http://127.0.0.1:3",
+  EXPLORER_BEACON_URL_369: "http://127.0.0.1:4",
+};
+const pair: Pair = loadPair({ environment, deployment: { chain_a: section(1, 0x10), chain_b: section(369, 0x20) } });
+const remote = { kind: "remote", mode: { mode: "load-balancing" }, endpoint: "https://worker.example.org", apiKeyVariable: "RUNPOD_API_KEY" } as const;
+
+const proofPackage = {
+  schemaVersion: 1,
+  route: "ethereum_to_pulsechain",
+  programKey: word(0x42),
+  startHeadSlot: 100,
+  startHeadRoot: word(1),
+  newHeadSlot: 164,
+  newHeadRoot: word(2),
+  latestFinalizedSlot: 200,
+  publicValues: "0x01",
+  proof: "0x02",
+  updateCalldata: "0x03",
+  backend: "remote",
+  createdAt: "2026-10-25T00:00:00Z",
+};
+
+const scratch: string[] = [];
+afterEach(async () => {
+  await Promise.all(scratch.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+
+interface Seen {
+  readonly spec: CommandSpec;
+  readonly configText: string | null;
+  readonly configMode: number | null;
+  readonly configPath: string | null;
+}
+
+async function setup(answer: { code: number; stdout?: string; stderr?: string }, extra: { backend?: typeof remote | null; secret?: boolean; defaultDirectory?: boolean } = {}) {
+  const directory = await mkdtemp(join(tmpdir(), "prover-binary-"));
+  scratch.push(directory);
+  const seen: Seen[] = [];
+  const executor: CommandExecutor = async (spec) => {
+    const configPath = spec.args[1] === undefined || !spec.args[0]?.startsWith("--config") ? null : spec.args[1];
+    seen.push({
+      spec,
+      configPath,
+      configText: configPath === null ? null : readFileSync(configPath, "utf8"),
+      configMode: configPath === null ? null : statSync(configPath).mode & 0o777,
+    });
+    return { code: answer.code, stdout: answer.stdout ?? "", stderr: answer.stderr ?? "" };
+  };
+  const { logger, events } = memoryLogger();
+  const binary = createProverBinary({
+    binaryPath: "/bin/zk-bridge-prover",
+    pair,
+    executor,
+    timeoutMilliseconds: 777,
+    backend: extra.backend === undefined ? remote : extra.backend,
+    proverSecret: extra.secret === true ? { variable: "RUNPOD_API_KEY", value: "rpa_TESTONLY1234567890abcdefghijkl" } : null,
+    baseEnvironment: { PATH: "/usr/bin" },
+    ...(extra.defaultDirectory === true ? {} : { temporaryDirectory: join(directory, "nested") }),
+    logger,
+  });
+  return { binary, seen, directory, events };
+}
+
+describe("prove", () => {
+  it("runs the binary with the route and the file, and returns the proof package", async () => {
+    const { binary, seen, directory } = await setup({ code: 0, stdout: `${JSON.stringify(proofPackage)}\n` }, { secret: true });
+    expect(await binary.prove({ direction: "first-to-second" })).toEqual({ kind: "proof", proofPackage });
+    const { spec, configText, configMode, configPath } = seen[0]!;
+    expect(spec.command).toBe("/bin/zk-bridge-prover");
+    expect(spec.args).toEqual(["--config", configPath, "prove", "--route", "ethereum_to_pulsechain", "--to", "stdout"]);
+    expect(spec.timeoutMilliseconds).toBe(777);
+    expect(configText).toBe(renderProverConfig(describeRoute(pair, "first-to-second"), remote));
+    expect(configMode).toBe(0o600);
+    expect(spec.environment).toEqual({ PATH: "/usr/bin", RUNPOD_API_KEY: "rpa_TESTONLY1234567890abcdefghijkl" });
+    expect(spec.args.join(" ")).not.toContain("rpa_TESTONLY");
+    expect(configText).not.toContain("rpa_TESTONLY");
+    expect(existsSync(configPath!)).toBe(false);
+    expect(await readdir(join(directory, "nested"))).toEqual([]);
+  });
+
+  it("keeps the secret out of the child environment when none is given", async () => {
+    const { binary, seen } = await setup({ code: 0, stdout: JSON.stringify(proofPackage) });
+    await binary.prove({ direction: "second-to-first" });
+    expect(seen[0]!.spec.environment).toEqual({ PATH: "/usr/bin" });
+    expect(seen[0]!.spec.args).toContain("pulsechain_to_ethereum");
+  });
+
+  it("reports up to date for exit code 3, and removes the file", async () => {
+    expect(EXIT_UP_TO_DATE).toBe(3);
+    const { binary, seen } = await setup({ code: 3 });
+    expect(await binary.prove({ direction: "first-to-second" })).toEqual({ kind: "up-to-date" });
+    expect(existsSync(seen[0]!.configPath!)).toBe(false);
+  });
+
+  it("throws the command error with the code and the tail of standard error for another failure", async () => {
+    const { binary } = await setup({ code: 2, stderr: `  ${"x".repeat(2000)}end\n` });
+    const failure = await binary.prove({ direction: "first-to-second" }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ProverCommandError);
+    expect(failure).toMatchObject({ command: "prove", exitCode: 2 });
+    const detail = (failure as ProverCommandError).detail;
+    expect(detail).toHaveLength(1500);
+    expect(detail.endsWith("xxxend")).toBe(true);
+    expect((failure as Error).message).toBe(`zk-bridge-prover prove exited with code 2: ${detail}`);
+  });
+
+  it("keeps a short standard error whole, without its surrounding blanks", async () => {
+    const { binary } = await setup({ code: 1, stderr: "\n  cannot reach the worker \n" });
+    await expect(binary.prove({ direction: "first-to-second" })).rejects.toThrow("zk-bridge-prover prove exited with code 1: cannot reach the worker");
+  });
+
+  it("refuses to run without a proving backend, before it writes a file", async () => {
+    const { binary, seen, directory } = await setup({ code: 0 }, { backend: null });
+    await expect(binary.prove({ direction: "first-to-second" })).rejects.toThrow("this prover wrapper has no proving backend");
+    expect(seen).toEqual([]);
+    expect(await readdir(directory)).toEqual([]);
+  });
+
+  it.each([
+    ["no output", "", "prove printed 0 lines on standard output, expected one"],
+    ["two lines", "{}\n{}\n", "prove printed 2 lines on standard output, expected one"],
+    ["text that is not JSON", "not json\n", "prove printed a line that is not JSON"],
+  ])("rejects %s", async (_name, stdout, message) => {
+    const { binary } = await setup({ code: 0, stdout });
+    const failure = await binary.prove({ direction: "first-to-second" }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ProverOutputError);
+    expect((failure as Error).message).toBe(message);
+  });
+
+  it("names every broken field of a package of the wrong shape, and removes the file", async () => {
+    const { binary, seen } = await setup({ code: 0, stdout: JSON.stringify({ ...proofPackage, schemaVersion: 2, proof: "nothex" }) });
+    const failure = await binary.prove({ direction: "first-to-second" }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ProverOutputError);
+    expect((failure as Error).message).toMatch(/^prove printed an unexpected package: Invalid input: expected 1; must be 0x hex$/);
+    expect(existsSync(seen[0]!.configPath!)).toBe(false);
+  });
+
+  it("writes the file under the system temporary directory when no directory is given", async () => {
+    const { binary, seen } = await setup({ code: 3 }, { defaultDirectory: true });
+    await binary.prove({ direction: "first-to-second" });
+    expect(seen[0]!.configPath!.startsWith(tmpdir())).toBe(true);
+  });
+});
+
+describe("evidence", () => {
+  const evidence = evidenceFor();
+
+  it("runs the binary with the route, the transaction and the log index, with no backend section", async () => {
+    const { binary, seen } = await setup({ code: 0, stdout: JSON.stringify(evidence) });
+    expect(await binary.evidence({ direction: "first-to-second", transactionHash: word(0xa1), logIndex: 4 })).toEqual(evidence);
+    const { spec, configText, configPath } = seen[0]!;
+    expect(spec.args).toEqual(["--config", configPath, "evidence", "--route", "ethereum_to_pulsechain", "--tx", word(0xa1), "--log-index", "4"]);
+    expect(configText).toBe(renderProverConfig(describeRoute(pair, "first-to-second"), null));
+  });
+
+  it("throws the command error when the binary fails", async () => {
+    const { binary } = await setup({ code: 5, stderr: "no such transaction" });
+    await expect(binary.evidence({ direction: "first-to-second", transactionHash: word(1), logIndex: 0 })).rejects.toThrow("zk-bridge-prover evidence exited with code 5: no such transaction");
+  });
+
+  it("names every broken field of evidence of the wrong shape", async () => {
+    const { binary } = await setup({ code: 0, stdout: JSON.stringify({ ...evidence, alreadyDelivered: "no", logIndex: -1 }) });
+    const failure = await binary.evidence({ direction: "first-to-second", transactionHash: word(1), logIndex: 0 }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ProverOutputError);
+    expect((failure as Error).message.startsWith("evidence printed an unexpected package: ")).toBe(true);
+    expect((failure as Error).message).toContain("; ");
+  });
+});
+
+describe("verify", () => {
+  const request = { programKey: word(0x42), publicValues: "0x0102", proof: "0x0304" } as const;
+
+  it("passes the three values as arguments to the verify command and needs no file", async () => {
+    const { binary, seen, events } = await setup({ code: 0, stdout: JSON.stringify({ valid: true, programKey: word(0x42) }) });
+    await expect(binary.verify(request)).resolves.toBeUndefined();
+    expect(seen[0]!.spec.args).toEqual(["verify", "--program-vkey", word(0x42), "--public-values", "0x0102", "--proof", "0x0304"]);
+    expect(seen[0]!.configPath).toBeNull();
+    expect(events()[0]).toMatchObject({ level: "debug", event: "prover_command", command: "verify" });
+  });
+
+  it("throws the command error when the proof does not verify", async () => {
+    const { binary } = await setup({ code: 1, stderr: "proof is invalid" });
+    await expect(binary.verify(request)).rejects.toThrow("zk-bridge-prover verify exited with code 1: proof is invalid");
+  });
+
+  it.each([
+    ["an answer that says the proof is not valid", { valid: false, programKey: word(0x42) }],
+    ["an answer that lacks the program key", { valid: true }],
+  ])("rejects %s, even though the exit code is 0", async (_name, body) => {
+    const { binary } = await setup({ code: 0, stdout: JSON.stringify(body) });
+    await expect(binary.verify(request)).rejects.toThrow(new ProverOutputError("verify printed an unexpected answer"));
+  });
+});
+
+describe("the prover configuration of the oracle backend", () => {
+  const route = describeRoute(pair, "first-to-second");
+
+  it("names the key by its variable", () => {
+    const text = renderProverConfig(route, { kind: "oracle", keyVariable: "ORACLE_KEY" });
+    expect(text).toContain('backend = "oracle"');
+    expect(text).toContain('oracle_key_env = "ORACLE_KEY"');
+    expect(text).not.toContain("remote_url");
+  });
+
+  it("refuses a variable name that would break out of its quotes", () => {
+    expect(() => renderProverConfig(route, { kind: "oracle", keyVariable: 'A"B' })).toThrow("oracle key variable holds a character that the prover configuration cannot carry");
+  });
+
+  it("refuses a source chain that the prover does not know", () => {
+    const stranger = { ...route, source: { ...route.source, name: "other" } };
+    expect(() => renderProverConfig(stranger, null)).toThrow('the source chain name "other" is not a chain kind that the prover knows');
+  });
+
+  it("accepts both chain kinds that the prover knows", () => {
+    expect(renderProverConfig(describeRoute(pair, "second-to-first"), null)).toContain('chain = "pulsechain"');
+    expect(renderProverConfig(route, null)).toContain('chain = "ethereum"');
+  });
+});

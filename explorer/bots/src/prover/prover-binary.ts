@@ -143,7 +143,7 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary {
         if (output.code === EXIT_UP_TO_DATE) return { kind: "up-to-date" } as const;
         if (output.code !== 0) throw new ProverCommandError("prove", output.code, tailOf(output.stderr));
         const parsed = proofPackageSchema.safeParse(parseSingleJsonLine(output.stdout, "prove"));
-        if (!parsed.success) throw new ProverOutputError(`prove printed an unexpected package: ${parsed.error.issues[0]?.message ?? "invalid"}`);
+        if (!parsed.success) throw new ProverOutputError(`prove printed an unexpected package: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
         return { kind: "proof", proofPackage: parsed.data } as const;
       });
     },
@@ -162,7 +162,7 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary {
         ]);
         if (output.code !== 0) throw new ProverCommandError("evidence", output.code, tailOf(output.stderr));
         const parsed = evidencePackageSchema.safeParse(parseSingleJsonLine(output.stdout, "evidence"));
-        if (!parsed.success) throw new ProverOutputError(`evidence printed an unexpected package: ${parsed.error.issues[0]?.message ?? "invalid"}`);
+        if (!parsed.success) throw new ProverOutputError(`evidence printed an unexpected package: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
         return parsed.data;
       });
     },
