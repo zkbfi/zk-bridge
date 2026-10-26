@@ -163,7 +163,7 @@ An item:
 
 The rule: `escrow = bridgedSupply + pendingForward + pendingBackward`. `pendingForward` is the value locked on the home chain and not yet paid on the other chain. `pendingBackward` is the value burned on the other chain and not yet paid on the home chain. A transfer is paid when its status is `delivered` or `fallback_used`. `claimable` and `failed_call` count as pending, because the tokens are held or owed. `difference` is `escrow - expectedEscrow`: negative means the copy is under-backed. Accrued fees sit outside the escrow. The two sides are read at different blocks. Check a `mismatch` twice before you raise an alarm.
 
-`GET /api/fees?limit=` returns `{ balances: [{ chainId, token, charged, collected, accrued }], terms: [{ chainId, rate, recipient, nullified }], events: [...] }`. `rate` is in the units of `TokenMediator.FEE_DENOMINATOR`.
+`GET /api/fees?limit=` returns `{ balances: [{ chainId, token, charged, collected, accrued }], terms: [{ chainId, rate, recipient }], events: [...] }`. `rate` is `currentFeeRate()` at the last charged fee, in the units of `TokenMediator.FEE_DENOMINATOR`. The fee follows a fixed declining schedule with no admin, so no event announces it. A fee event has `kind` `charged_outgoing`, `charged_incoming` or `collected`.
 
 `GET /api/claimables?address=&limit=` returns `{ outstanding: [{ chainId, token, account, outstanding, recordedTotal, claimedTotal }], events: [{ chainId, kind, token, account, fallbackRecipient, value, messageId, transactionHash, timestamp }] }`. `kind` is `fallback_used`, `claimable_recorded`, `claimed` or `callback_failed`.
 
@@ -182,7 +182,7 @@ Ponder writes the tables into the schema that `--schema` names (default for `pon
 | `bridged_supply` | `chain_id, token` | `minted`, `burned`, `supply` of a copy. |
 | `claimables` | `chain_id, token, account` | `outstanding`, `recorded_total`, `claimed_total`. |
 | `claim_events` | `id` | Fallback, claimable, claim and callback events. |
-| `fee_events`, `fee_balances`, `fee_terms` | | Fee events, totals per token, current terms. |
+| `fee_events`, `fee_balances`, `fee_terms` | | Fee events, totals per token, the last read rate and recipient. |
 | `head_updates` | `chain_id, slot` | Every head update: header root, execution block, transaction, `gas_used`, `effective_gas_price`, `cost_wei`, `poster`. |
 | `light_client_heads` | `chain_id` | Newest head per chain. |
 | `chain_tips` | `chain_id` | Newest indexed block and time per chain. |

@@ -1,0 +1,350 @@
+import { decodeFunctionData, toFunctionSelector, type Hex } from "viem";
+import { beaconLightClientAbi, feeRouterAbi, messageBridgeAbi } from "@zk-bridge/shared";
+import { describe, expect, it } from "vitest";
+import type { Simulation } from "../../src/chain/transactions.ts";
+import type { FeedItem } from "../../src/indexer/client.ts";
+import type { StateFile } from "../../src/runtime/state-file.ts";
+import { deliverItem } from "../../src/runner/delivery.ts";
+import { createRunner } from "../../src/runner/runner.ts";
+import { createSerialQueue } from "../../src/runner/serial-queue.ts";
+import { INITIAL_RUNNER_STATE, type RunnerState } from "../../src/runner/state.ts";
+import {
+  BRIDGE,
+  FEE_ROUTER,
+  LIGHT_CLIENT,
+  OTHER_TOKEN,
+  RUNNER,
+  WRAPPED_NATIVE,
+  address,
+  evidenceFor,
+  fakeChain,
+  fakeIndexer,
+  fakeLightClient,
+  fakeProver,
+  feeOfferData,
+  feedItem,
+  memoryLogger,
+  memoryOutcomes,
+  proofPayload,
+  word,
+} from "../support/builders.ts";
+
+const EXECUTE_WITH_RUNNER = toFunctionSelector(feeRouterAbi.find((entry) => entry.type === "function" && entry.name === "executeMessageWithRunner") as never);
+const UPDATE = toFunctionSelector(beaconLightClientAbi.find((entry) => entry.type === "function" && entry.name === "update") as never);
+
+/** A fixed fee: bit 0 of `settings`, with the fee in `limit`. */
+const fixedFee = (fee: bigint) => ({ recipient: address(0x12), settings: 1n, limit: fee, multiplier: 0n });
+
+function memoryState(): StateFile<RunnerState> & { current: RunnerState } {
+  const state = {
+    current: INITIAL_RUNNER_STATE,
+    async load() {
+      return state.current;
+    },
+    async save(next: RunnerState) {
+      state.current = next;
+    },
+  };
+  return state;
+}
+
+interface WorldOptions {
+  items?: FeedItem[];
+  data?: Record<string, Hex>;
+  margin?: bigint;
+  deliverWithoutOffer?: boolean;
+  valuations?: Record<string, bigint>;
+  executionGasFallback?: bigint;
+  maximumDeliveriesPerSweep?: number;
+}
+
+/** A runner on fakes: chain, indexer, prover, board payloads. Base fee 10 wei, 300,000 gas: a cost of 3,000,000 wei. */
+function world(options: WorldOptions = {}) {
+  const { logger, events } = memoryLogger();
+  const chain = fakeChain();
+  chain.feeTokens = 0n;
+  const items = options.items ?? [];
+  const indexer = fakeIndexer(items, options.data ?? {});
+  const prover = fakeProver();
+  const lightClient = fakeLightClient();
+  const state = memoryState();
+  const outcomes = memoryOutcomes();
+  let clock = 1_000_000;
+  const delivery = {
+    direction: "first-to-second" as const,
+    chain,
+    prover,
+    indexer,
+    source: { findMessageLogIndex: async () => 0 },
+    feeRouter: FEE_ROUTER,
+    wrappedNative: WRAPPED_NATIVE,
+    settings: {
+      minimumMarginWei: options.margin ?? 0n,
+      deliverWithoutOffer: options.deliverWithoutOffer ?? false,
+      tokenValuationsWei: options.valuations ?? {},
+      executionGasFallback: options.executionGasFallback ?? 300_000n,
+      maximumPrerequisiteRounds: 3,
+    },
+    logger,
+  };
+  const runner = createRunner({
+    pairName: "eth-pls",
+    direction: "first-to-second",
+    sourceChainId: 1,
+    destinationChainId: 369,
+    lightClientAddress: LIGHT_CLIENT,
+    lightClient,
+    delivery,
+    state,
+    outcomes,
+    queue: createSerialQueue(),
+    now: () => clock,
+    maximumDeliveriesPerSweep: options.maximumDeliveriesPerSweep ?? 10,
+    logger,
+  });
+  return { runner, chain, prover, lightClient, state, outcomes, events, indexer, delivery, advance: (milliseconds: number) => (clock += milliseconds) };
+}
+
+describe("proof intake and the update", () => {
+  it("posts update when the head is behind a verified proof that starts at the head", async () => {
+    const w = world();
+    const handling = await w.runner.handleProofPayload(proofPayload({ startSlot: 100n, newSlot: 164n }));
+    expect(handling.handled).toBe("update-posted");
+    // Simulated first, then sent, and both to the light client with the update selector.
+    expect(w.chain.log.map((entry) => entry.kind)).toEqual(["simulate", "send"]);
+    expect(w.chain.log.every((entry) => entry.request.to === LIGHT_CLIENT && entry.request.data.startsWith(UPDATE))).toBe(true);
+    expect(w.chain.unsimulatedSends()).toEqual([]);
+    expect(w.outcomes.records[0]).toMatchObject({ kind: "update", status: "posted", newSlot: 164n });
+  });
+
+  it("refuses a proof that does not verify, and sends nothing", async () => {
+    const w = world();
+    w.prover.verify = async () => {
+      throw new Error("the Groth16 proof does not verify");
+    };
+    const handling = await w.runner.handleProofPayload(proofPayload());
+    expect(handling).toMatchObject({ handled: "refused", reason: "proof-does-not-verify" });
+    expect(w.chain.log).toEqual([]);
+  });
+
+  it("refuses a proof whose start is not the stored head, before it spends time on the proof", async () => {
+    const w = world();
+    const wrongSlot = await w.runner.handleProofPayload(proofPayload({ startSlot: 96n, newSlot: 164n }));
+    expect(wrongSlot).toMatchObject({ handled: "refused", reason: "start-slot-differs-from-head" });
+    // Same slot, another root: the head root of the fake is word(101), the proof was built for word(101) at slot 100 only.
+    w.lightClient.state = { ...w.lightClient.state, headRoot: word(0xaa) };
+    const wrongRoot = await w.runner.handleProofPayload(proofPayload({ startSlot: 100n, newSlot: 165n }));
+    expect(wrongRoot).toMatchObject({ handled: "refused", reason: "start-root-differs-from-head" });
+    expect(w.chain.log).toEqual([]);
+    expect((w.prover as { verifications: number }).verifications).toBe(0);
+  });
+
+  it("refuses another program key, another pair or direction, a proof that is already stored, and text that is no proof", async () => {
+    const w = world();
+    expect(await w.runner.handleProofPayload(proofPayload({ programKey: word(0x43) }))).toMatchObject({ reason: "program-key-mismatch" });
+    expect(await w.runner.handleProofPayload(proofPayload({ direction: "second-to-first" }))).toMatchObject({ reason: "wrong-direction" });
+    w.lightClient.state = { ...w.lightClient.state, headSlot: 164n };
+    expect(await w.runner.handleProofPayload(proofPayload({ startSlot: 100n, newSlot: 164n }))).toMatchObject({ reason: "already-stored" });
+    expect(await w.runner.handleProofPayload("0x0102" as Hex)).toMatchObject({ reason: "undecodable" });
+    expect(w.chain.log).toEqual([]);
+  });
+
+  it("does not send when the simulation reverts, because another runner posted first", async () => {
+    const w = world();
+    w.chain.simulateOverride = () => ({ ok: false, reason: "PreviousHeadSlotMismatch" });
+    const handling = await w.runner.handleProofPayload(proofPayload());
+    expect(handling).toMatchObject({ handled: "update-skipped", reason: "simulation-reverted" });
+    expect(w.chain.log.map((entry) => entry.kind)).toEqual(["simulate"]);
+  });
+
+  it("looks at a republished message once", async () => {
+    const w = world();
+    const payload = proofPayload();
+    await w.runner.handleProofPayload(payload);
+    expect(await w.runner.handleProofPayload(payload)).toEqual({ handled: "duplicate" });
+    expect((w.prover as { verifications: number }).verifications).toBe(1);
+  });
+});
+
+describe("delivery decisions", () => {
+  const OFFER_ID = 1;
+  const offerItem = (token = WRAPPED_NATIVE) => feedItem({ id: OFFER_ID, token });
+  const offerData = (token = WRAPPED_NATIVE) => ({ [word(OFFER_ID)]: feeOfferData({ director: fixedFee(10n), value: 1000n, token }) });
+  const COST = 3_000_000n;
+
+  it("delivers when the fee covers the cost, through the fee router, naming the runner", async () => {
+    const w = world({ items: [offerItem()], data: offerData() });
+    w.chain.feeTokens = COST + 1n;
+    const summary = await w.runner.sweep();
+    expect(summary).toMatchObject({ delivered: 1, skipped: 0 });
+    const send = w.chain.log.find((entry) => entry.kind === "send");
+    expect(send?.request.to).toBe(FEE_ROUTER);
+    const decoded = decodeFunctionData({ abi: feeRouterAbi, data: send?.request.data as Hex });
+    expect(decoded.functionName).toBe("executeMessageWithRunner");
+    expect(decoded.args?.[0]).toBe(RUNNER);
+    expect(w.chain.unsimulatedSends()).toEqual([]);
+    expect(w.outcomes.records[0]).toMatchObject({ kind: "delivery", status: "delivered", path: "fee-router", feeExpectedWei: COST + 1n });
+  });
+
+  it("delivers at the exact boundary: fee equals cost plus margin", async () => {
+    const w = world({ items: [offerItem()], data: offerData(), margin: 500n });
+    w.chain.feeTokens = COST + 500n;
+    expect((await w.runner.sweep()).delivered).toBe(1);
+  });
+
+  it("skips when the fee is one wei short of cost plus margin, and builds no evidence", async () => {
+    const w = world({ items: [offerItem()], data: offerData(), margin: 500n });
+    w.chain.feeTokens = COST + 499n;
+    const summary = await w.runner.sweep();
+    expect(summary).toMatchObject({ delivered: 0, skipped: 1 });
+    expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "fee-below-cost-plus-margin", feeWei: COST + 499n, costWei: COST });
+    expect((w.prover as { evidenceRuns: number }).evidenceRuns).toBe(0);
+    expect(w.chain.log.some((entry) => entry.kind === "send")).toBe(false);
+  });
+
+  it("checks the fee again at the simulated gas, and skips when the real cost is higher than the assumed cost", async () => {
+    const w = world({ items: [offerItem()], data: offerData(), executionGasFallback: 100_000n });
+    w.chain.feeTokens = 2_000_000n; // pays for 100,000 gas at 10 wei, not for 300,000
+    w.chain.gas = 300_000n;
+    const summary = await w.runner.sweep();
+    expect(summary).toMatchObject({ delivered: 0, skipped: 1 });
+    expect(w.outcomes.records[0]).toMatchObject({ reason: "fee-below-cost-plus-margin", costWei: COST });
+    expect((w.prover as { evidenceRuns: number }).evidenceRuns).toBe(1);
+    expect(w.chain.log.some((entry) => entry.kind === "send")).toBe(false);
+  });
+
+  it("skips and sends nothing when the delivery simulation reverts", async () => {
+    const w = world({ items: [offerItem()], data: offerData() });
+    w.chain.feeTokens = COST * 2n;
+    w.chain.simulateOverride = (request): Simulation | undefined =>
+      request.data.startsWith(EXECUTE_WITH_RUNNER) ? { ok: false, reason: "AlreadyDelivered" } : undefined;
+    const summary = await w.runner.sweep();
+    expect(summary.skipped).toBe(1);
+    expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "simulation-reverted", detail: "AlreadyDelivered" });
+    expect(w.chain.log.some((entry) => entry.kind === "send")).toBe(false);
+  });
+
+  it("skips an item with no fee offer, unless the configuration delivers such items, and then uses the bridge directly", async () => {
+    const plain = feedItem({ id: 2 });
+    const data = { [word(2)]: feeOfferData({ director: fixedFee(10n), value: 1000n, recipient: address(0x13) }) };
+    const strict = world({ items: [plain], data });
+    expect((await strict.runner.sweep()).skipped).toBe(1);
+    expect(strict.outcomes.records[0]).toMatchObject({ reason: "no-fee-offer", detail: "recipient-is-not-the-fee-router" });
+    expect((strict.prover as { evidenceRuns: number }).evidenceRuns).toBe(0);
+
+    const lenient = world({ items: [plain], data, deliverWithoutOffer: true });
+    expect((await lenient.runner.sweep()).delivered).toBe(1);
+    const send = lenient.chain.log.find((entry) => entry.kind === "send");
+    expect(send?.request.to).toBe(BRIDGE);
+    expect(decodeFunctionData({ abi: messageBridgeAbi, data: send?.request.data as Hex }).functionName).toBe("executeMessage");
+    expect(lenient.chain.unsimulatedSends()).toEqual([]);
+  });
+
+  it("cannot compare a fee in a token that has no price, and prices it when the configuration gives one", async () => {
+    const six = feedItem({ id: 1, token: OTHER_TOKEN, decimals: 6 });
+    const data = offerData(OTHER_TOKEN);
+    const unpriced = world({ items: [six], data });
+    unpriced.chain.feeTokens = 2_000_000n;
+    await unpriced.runner.sweep();
+    expect(unpriced.outcomes.records[0]).toMatchObject({ reason: "no-price-for-fee-token" });
+
+    // 2,000,000 base units of a 6 decimal token are 2 tokens. At 5e15 wei a token the fee is 1e16 wei: it pays.
+    const priced = world({ items: [six], data, valuations: { [OTHER_TOKEN.toLowerCase()]: 5_000_000_000_000_000n } });
+    priced.chain.feeTokens = 2_000_000n;
+    expect((await priced.runner.sweep()).delivered).toBe(1);
+    expect(priced.outcomes.records[0]).toMatchObject({ feeExpectedWei: 10_000_000_000_000_000n });
+  });
+
+  it("skips an item that the bridge shows as delivered, and never looks at it again", async () => {
+    const w = world({ items: [offerItem()], data: offerData() });
+    w.chain.feeTokens = COST * 2n;
+    w.prover.evidence = async () => evidenceFor({ alreadyDelivered: true });
+    await w.runner.sweep();
+    expect(w.outcomes.records[0]).toMatchObject({ reason: "already-delivered" });
+    expect(Object.keys(w.state.current.finished)).toEqual([word(OFFER_ID)]);
+    const runs = (w.prover as { evidenceRuns: number }).evidenceRuns;
+    await w.runner.sweep();
+    expect((w.prover as { evidenceRuns: number }).evidenceRuns).toBe(runs);
+  });
+
+  it("sends the layout calls first, each after a simulation, then the delivery", async () => {
+    const w = world({ items: [offerItem()], data: offerData() });
+    w.chain.feeTokens = COST * 2n;
+    const layoutCall = { function: "addBlockHashLayout", reason: "no row", to: BRIDGE, data: "0xdeadbeef" as Hex };
+    let builds = 0;
+    w.prover.evidence = async () => {
+      builds += 1;
+      return evidenceFor({ prerequisites: builds === 1 ? [layoutCall] : [] });
+    };
+    expect((await w.runner.sweep()).delivered).toBe(1);
+    const order = w.chain.log.filter((entry) => entry.kind !== "call").map((entry) => `${entry.kind}:${entry.request.data.slice(0, 10)}`);
+    expect(order).toEqual(["simulate:0xdeadbeef", "send:0xdeadbeef", `simulate:${EXECUTE_WITH_RUNNER}`, `send:${EXECUTE_WITH_RUNNER}`]);
+    expect(w.chain.unsimulatedSends()).toEqual([]);
+  });
+
+  it("skips when a layout call reverts in simulation", async () => {
+    const w = world({ items: [offerItem()], data: offerData() });
+    w.chain.feeTokens = COST * 2n;
+    w.prover.evidence = async () => evidenceFor({ prerequisites: [{ function: "addBlockHashLayout", reason: "no row", to: BRIDGE, data: "0xdeadbeef" }] });
+    w.chain.simulateOverride = (request) => (request.data === "0xdeadbeef" ? { ok: false, reason: "RowExists" } : undefined);
+    await w.runner.sweep();
+    expect(w.outcomes.records[0]).toMatchObject({ reason: "prerequisite-reverted" });
+    expect(w.chain.log.some((entry) => entry.kind === "send")).toBe(false);
+  });
+
+  it("delivers at most the configured number of items in one sweep", async () => {
+    const items = [1, 2, 3].map((id) => feedItem({ id, token: WRAPPED_NATIVE }));
+    const data = Object.fromEntries(items.map((item) => [item.messageId, feeOfferData({ director: fixedFee(10n), value: 1000n, token: WRAPPED_NATIVE })]));
+    const w = world({ items, data, maximumDeliveriesPerSweep: 2 });
+    w.chain.feeTokens = COST * 2n;
+    expect((await w.runner.sweep()).delivered).toBe(2);
+  });
+
+  it("waits before it builds evidence again for an item whose evidence failed", async () => {
+    const w = world({ items: [offerItem()], data: offerData() });
+    w.chain.feeTokens = COST * 2n;
+    w.prover.evidence = async () => {
+      throw new Error("the source node does not serve eth_getRawTransactionByHash");
+    };
+    await w.runner.sweep();
+    expect(w.outcomes.records[0]).toMatchObject({ reason: "evidence-failed" });
+    await w.runner.sweep();
+    expect(w.outcomes.records).toHaveLength(1);
+    w.advance(6 * 60 * 1000);
+    w.prover.evidence = async () => evidenceFor();
+    expect((await w.runner.sweep()).delivered).toBe(1);
+  });
+
+  it("survives a restart: a delivered item is not delivered again", async () => {
+    const w = world({ items: [offerItem()], data: offerData() });
+    w.chain.feeTokens = COST * 2n;
+    expect((await w.runner.sweep()).delivered).toBe(1);
+    // A new runner over the same state file, as after a restart.
+    const restarted = createRunner({
+      pairName: "eth-pls",
+      direction: "first-to-second",
+      sourceChainId: 1,
+      destinationChainId: 369,
+      lightClientAddress: LIGHT_CLIENT,
+      lightClient: w.lightClient,
+      delivery: w.delivery,
+      state: w.state,
+      outcomes: w.outcomes,
+      queue: createSerialQueue(),
+      now: () => 1_000_000,
+      maximumDeliveriesPerSweep: 10,
+      logger: memoryLogger().logger,
+    });
+    const sends = w.chain.log.filter((entry) => entry.kind === "send").length;
+    expect(await restarted.sweep()).toMatchObject({ listed: 0, delivered: 0 });
+    expect(w.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(sends);
+  });
+
+  it("never sends a transaction that it did not simulate", async () => {
+    const w = world({ items: [offerItem()], data: offerData() });
+    w.chain.feeTokens = COST * 2n;
+    await deliverItem(w.delivery, offerItem());
+    expect(w.chain.unsimulatedSends()).toEqual([]);
+    expect(w.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(1);
+  });
+});

@@ -6,3 +6,5 @@ export * from "./mediator-message.js";
 export * from "./pairs.js";
 export * from "./status.js";
 export * from "./events.js";
+export * from "./proof-message.js";
+export * from "./fee-schedule.js";

@@ -266,7 +266,7 @@ export function updateGasHeader(): Line {
 
 /** The fee rate and a sentence for the account panel, for example `fee 0.1%`. */
 export function feeText(snapshot: ChainSnapshot): string {
-  return `fee ${formatRateAsPercent(snapshot.feeRate)} (ceiling ${formatRateAsPercent(snapshot.feeCeiling)})`
+  return `fee ${formatRateAsPercent(snapshot.feeRate)}`
 }
 
 /** The text of a gate status for the global view. */

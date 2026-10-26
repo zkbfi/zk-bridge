@@ -12,8 +12,6 @@ import type { ChainSnapshotResult } from './live-reads'
 export interface FixtureChainNumbers {
   /** The fee rate of the mediator, 1e18-scaled. Default: 0.1 percent. */
   readonly feeRate: bigint
-  /** The fee ceiling, 1e18-scaled. Default: 1 percent. */
-  readonly feeCeiling: bigint
   /** The allowance the account has given the mediator, in base units. Default: zero. */
   readonly allowance: bigint
   /** The gas estimate for every call. Default: 150,000. */
@@ -22,7 +20,6 @@ export interface FixtureChainNumbers {
 
 const DEFAULT_NUMBERS: FixtureChainNumbers = {
   feeRate: 10n ** 15n,
-  feeCeiling: 10n ** 16n,
   allowance: 0n,
   gasEstimate: 150_000n,
 }
@@ -62,7 +59,6 @@ export function createFixtureChainAccess(
           chain,
           nativeBalance: 12n * 10n ** 18n,
           feeRate: settings.feeRate,
-          feeCeiling: settings.feeCeiling,
           positions: tokens
             .filter((token) => token.side === chain.side)
             .map((token, index) => ({

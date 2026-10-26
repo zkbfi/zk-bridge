@@ -9,9 +9,11 @@ import type { AppServices, ProverSetupServices, SigningServices } from '../../sr
 import { createFixtureChainAccess } from '../../src/chain/fixture-chain-access'
 import type { ChainAccess } from '../../src/chain/chain-access'
 import type { HttpClient } from '../../src/config/connection-tests'
-import type { ProverSetup } from '../../src/config/prover-setup'
-import { emptyProverSetup } from '../../src/config/prover-setup'
-import type { SecretStore } from '../../src/config/secret-store'
+import {
+  emptyProverSetup,
+  type ProverSetup,
+  type SecretStore,
+} from '@zk-bridge/shared/config'
 import { FIXTURE_NOW, FIXTURE_PAIR, createFixtureDataSource } from '../../src/data/fixtures'
 import type { DataSource } from '../../src/data/data-source'
 import { signerFromPrivateKeyText } from '../../src/signing/key-sources'

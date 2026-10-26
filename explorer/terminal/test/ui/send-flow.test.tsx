@@ -86,7 +86,7 @@ describe('confirm before send: bridge tokens', () => {
     expect(app.frame()).not.toContain('Step 1 of')
   })
 
-  test('the fallback mode shows the six-argument call with the fee limit as a percentage', async () => {
+  test('the fallback mode shows the five-argument call and the current fee rate', async () => {
     const chainAccess = createFixtureChainAccess(FIXTURE_PAIR, { allowance: 10n ** 30n })
     app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess })
     await openAction(app, 1)
@@ -99,10 +99,9 @@ describe('confirm before send: bridge tokens', () => {
     await app.press('RETURN')
     await app.settle(80)
     const frame = app.frame()
-    expect(frame).toContain('relayTokensWithFallback(address,address,uint256,bytes,address,uint256)')
-    expect(frame).toContain('maxFeeRate')
-    expect(frame).toContain('1000000000000000')
-    expect(frame).toContain('(0.1%)')
+    expect(frame).toContain('relayTokensWithFallback(address,address,uint256,bytes,address)')
+    expect(frame).not.toContain('maxFeeRate')
+    expect(frame).toContain('Fee rate 0.1%')
   })
 
   test('shows input errors on the form and opens no review', async () => {

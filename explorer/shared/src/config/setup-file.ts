@@ -4,7 +4,7 @@
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { emptyProverSetup, parseProverSetup, type ProverSetup } from './prover-setup'
+import { emptyProverSetup, parseProverSetup, type ProverSetup } from './prover-setup.js'
 
 /** The directory of the dashboard configuration: `EXPLORER_CONFIG_DIR`, else the XDG directory, else `~/.config`. */
 export function configDirectory(environment: Readonly<Record<string, string | undefined>>): string {

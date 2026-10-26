@@ -4,26 +4,28 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { testDryProofRequest, testEndpointPing, testMsgboardStatus, testRpcChainId, type HttpClient } from '../../src/config/connection-tests'
 import {
-  ProverSetupError,
-  emptyProverSetup,
-  parseProverSetup,
-  parseReferenceText,
-  referenceText,
-} from '../../src/config/prover-setup'
-import { REDACTED, maskSecret, redactError, redactSecrets } from '../../src/config/redaction'
-import {
-  WrongPasswordError,
   chooseSecretStore,
+  type CommandRunner,
   createEncryptedFileStore,
   createKeychainStore,
   createSecretServiceStore,
   decryptSecrets,
+  emptyProverSetup,
   encryptSecrets,
+  loadProverSetup,
+  maskSecret,
+  parseProverSetup,
+  parseReferenceText,
+  ProverSetupError,
+  REDACTED,
+  redactError,
+  redactSecrets,
+  referenceText,
   resolveSecretReference,
+  saveProverSetup,
   SecretResolutionError,
-  type CommandRunner,
-} from '../../src/config/secret-store'
-import { loadProverSetup, saveProverSetup } from '../../src/config/setup-file'
+  WrongPasswordError,
+} from '@zk-bridge/shared/config'
 
 // Made-up values with the real shapes. None is a live key.
 const RUNPOD_KEY = 'rpa_TESTONLY1234567890abcdefghijkl'

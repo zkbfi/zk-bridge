@@ -203,7 +203,6 @@ export const registerStateRoutes = (app: Hono): void => {
         rate: amountOf(row.rate),
         rateScale: "the rate is in the units that TokenMediator.FEE_DENOMINATOR defines",
         recipient: row.recipient,
-        nullified: row.nullified,
       })),
       events: events.map((row) => ({
         chainId: row.chainId,

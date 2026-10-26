@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { VIEWS, VIEW_LABELS, createAppState } from '../../src/app/app-state'
 import { PasswordRequiredError } from '../../src/app/services'
 import type { HttpClient } from '../../src/config/connection-tests'
-import { emptyProverSetup } from '../../src/config/prover-setup'
+import { emptyProverSetup } from '@zk-bridge/shared/config'
 import { viewTabsTitle } from '../../src/ui/views'
 import { memoryStore, renderApp } from './harness'
 

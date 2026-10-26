@@ -22,9 +22,18 @@ import {
   type SetupRow,
 } from '../app/setup-model'
 import { testDryProofRequest, testEndpointPing, testMsgboardStatus, testRpcChainId, type TestOutcome } from '../config/connection-tests'
-import { ProverSetupError, emptyProverSetup, parseReferenceText, referenceText, type ProverSetup, type SecretReference } from '../config/prover-setup'
-import { maskSecret, redactError } from '../config/redaction'
-import { resolveSecretReference, type SecretStore } from '../config/secret-store'
+import {
+  emptyProverSetup,
+  maskSecret,
+  parseReferenceText,
+  type ProverSetup,
+  ProverSetupError,
+  redactError,
+  referenceText,
+  resolveSecretReference,
+  type SecretReference,
+  type SecretStore,
+} from '@zk-bridge/shared/config'
 import { FormView, useForm } from './form-view'
 import { useKeyLayer } from './key-router'
 import { ModalFrame } from './modals'

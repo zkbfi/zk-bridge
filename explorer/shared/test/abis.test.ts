@@ -29,8 +29,6 @@ describe("generated ABIs hold the events that the indexer reads", () => {
         "CallbackFailed",
         "FeeCharged",
         "FeesCollected",
-        "FeeChanged",
-        "FeeNullified",
       ]),
     );
   });

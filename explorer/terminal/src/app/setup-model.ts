@@ -10,7 +10,7 @@ import {
   type ProveDirection,
   type ProverSetup,
   type SecretReference,
-} from '../config/prover-setup'
+} from '@zk-bridge/shared/config'
 import type { PairConfig } from '../model/types'
 
 /** What a row does when the user presses Enter. */

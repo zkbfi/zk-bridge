@@ -6,9 +6,18 @@ import type { ChainAccess } from '../chain/chain-access'
 import type { DataSource } from '../data/data-source'
 import type { PairConfig } from '../model/types'
 import { fetchClient, type HttpClient } from '../config/connection-tests'
-import type { ProverSetup } from '../config/prover-setup'
-import { encryptedSecretsPath, loadProverSetup, saveProverSetup, setupFilePath } from '../config/setup-file'
-import { chooseSecretStore, createEncryptedFileStore, spawnRunner, type CommandRunner, type SecretStore } from '../config/secret-store'
+import {
+  chooseSecretStore,
+  type CommandRunner,
+  createEncryptedFileStore,
+  encryptedSecretsPath,
+  loadProverSetup,
+  type ProverSetup,
+  saveProverSetup,
+  type SecretStore,
+  setupFilePath,
+  spawnRunner,
+} from '@zk-bridge/shared/config'
 import { readSecretFile, signerFromKeystoreFile, signerFromPrivateKeyFile, signerFromPrivateKeyText, takeEnvironmentSecret, SECRET_VARIABLES, type Environment } from '../signing/key-sources'
 import { createLedgerSource, type LedgerSourceInput } from '../signing/ledger'
 import { createMnemonicSource } from '../signing/mnemonic'

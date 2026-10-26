@@ -10,6 +10,8 @@
     "test": "pnpm -r --if-present run test",
     "typecheck": "pnpm -r --if-present run typecheck",
     "indexer:dev": "pnpm --filter @zk-bridge/indexer run dev",
-    "indexer:start": "pnpm --filter @zk-bridge/indexer run start"
+    "indexer:start": "pnpm --filter @zk-bridge/indexer run start",
+    "bots:publisher": "pnpm --filter @zk-bridge/bots run start publisher",
+    "bots:runner": "pnpm --filter @zk-bridge/bots run start runner"
   }
 }

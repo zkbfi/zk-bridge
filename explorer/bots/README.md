@@ -1,0 +1,160 @@
+# Bots: proof publisher and delivery runner
+
+Two bots in TypeScript. They share `explorer/shared` (ABIs, pair registry, message decoding, setup file, secret store,
+redactor) with the indexer and the terminal dashboard. Design: `docs/bots.md`.
+
+- The **publisher** makes light client update proofs on a remote graphics processor and posts them on msgboard. It holds no wallet.
+- The **runner** reads those proofs, posts `update` to the destination light client when it is behind, and delivers
+  covered transfers and messages for the fee that each transfer offers. It holds a wallet on the destination chain.
+
+## Commands
+
+All commands run in `explorer/`.
+
+```sh
+pnpm install
+pnpm --filter @zk-bridge/bots run test                # unit tests (no network, no chain)
+pnpm --filter @zk-bridge/bots run test:integration    # local chain: needs anvil and forge; compiles the repository once
+pnpm --filter @zk-bridge/bots run typecheck
+
+pnpm --filter @zk-bridge/bots run start publisher --config bots.json
+pnpm --filter @zk-bridge/bots run start runner --config bots.json
+# add --once to run one pass and exit
+```
+
+The binary name is `zk-bridge-bot` (`bin/zk-bridge-bot.mjs`). It runs the TypeScript source with `tsx`, because the
+workspace has no build step. Logs go to standard error as one JSON object per line. Nothing else prints.
+
+The bots call `zk-bridge-prover` (`prover/`). Build it first: `cargo build --release` in `prover/`.
+The runner needs the `verify` command, which this change added to the prover.
+
+## Configuration
+
+Two files. The **setup file** is the one that the terminal dashboard writes in its Prover setup view
+(`~/.config/zk-bridge-explorer/prover-setup.json`, or `EXPLORER_CONFIG_DIR`). It holds the remote prover endpoint, the
+references to the RunPod key and to the RPC and beacon endpoints, the msgboard endpoint, the pair, the directions and the
+proving policy. The **bot configuration** adds what only a bot needs. A sample is `bots.example.json`.
+
+| Field | Meaning |
+|---|---|
+| `setupFile` | The setup file. Default: the dashboard path. |
+| `deploymentFile` | The file that `docker/deploy.sh` writes (or the variable `EXPLORER_DEPLOYMENT_FILE`). |
+| `stateDirectory` | State files and the outcome log. |
+| `secretStore` | `none` (default), `system` (Keychain or Secret Service, else the encrypted file) or `encrypted-file`, with `passwordVariable`. |
+| `maximumMessageBytes` | The largest msgboard message. Default 8192. |
+| `publisher.prover.binary`, `.timeoutSeconds` | The `zk-bridge-prover` binary. |
+| `publisher.apiKeyVariable` | The variable that the prover reads the RunPod key from. Default `RUNPOD_API_KEY`. |
+| `publisher.remote` | `{ "mode": "load-balancing" }`. The only mode today. |
+| `publisher.pollSeconds`, `.republishSeconds`, `.retryBackoffSeconds` | 30, 600 and 120. |
+| `publisher.indexerUrl` | Required when the policy proves when a transfer waits. |
+| `runner.signer` | `private-key`, `keystore`, `mnemonic`, `ledger` or `trezor`, as in the dashboard. |
+| `runner.indexerUrl` | The indexer. |
+| `runner.minimumMarginWei` | The fee must cover the gas cost plus this margin. Default 0. |
+| `runner.deliverWithoutOffer` | Deliver items with no fee offer, for the gas cost alone. Default off. |
+| `runner.feeRouter` | Default: `fee_router` of the deployment file. |
+| `runner.tokenValuationsWei` | Wei value of one whole token, by token address. A fee in the wrapped native token needs none. |
+| `runner.executionGasFallback` | Gas that the first fee check assumes, before a simulation exists. Default 900000. |
+
+A secret is a reference: `env:NAME`, `op://vault/item/field`, or `{ "source": "store", "name": "..." }`. A secret value in
+the file is refused. Every resolved secret is removed from every log line, error and outcome line, by value and by shape
+(`vk_...`, `rpa_...`, bearer tokens, keys in query strings, `/rpc/<key>` paths).
+
+## The publisher, step by step
+
+For each direction of the setup file, every `pollSeconds`:
+
+1. Read the stored head, its header root and the program key from the destination light client.
+2. If the latest proof is at or below the stored head, drop it (`covered`). If the head moved to another slot, drop it (`head-moved`).
+3. If the latest proof still starts at the stored head, post it again when the last post is `republishSeconds` old.
+   A message lasts about 120 blocks on the board.
+4. Otherwise decide by policy whether to prove: not after a failure inside `retryBackoffSeconds`; not within 120 seconds of
+   a "nothing to prove" answer; yes when `proveWhenTransferWaits` and the indexer lists a `waiting_for_finality` item; yes
+   when `intervalSeconds` have passed since the last proof (zero means never by time).
+5. Run `zk-bridge-prover prove --route <route> --to stdout` with the remote backend. The bot writes the prover
+   configuration file for one run into a fresh directory of mode 0700 (file mode 0600) and deletes it afterwards. The RunPod key
+   goes to the child process only in the environment variable that the file names, never on the command line.
+   Exit code 3 means nothing to prove. Any other failure waits for the backoff.
+6. Check the package: the program key equals the light client key, the start equals the stored head. Encode the proof
+   message (`encodeProofMessage` in `explorer/shared`). Save it to the state file. A crash after the proof loses nothing.
+7. Grind the proof of work in a worker thread (`src/msgboard/grind-worker.mjs`), then post with `msgboard_addMessage`.
+
+The state file `publisher-<pair>-<direction>.json` holds the latest proof and the last attempts. A restart continues
+from it.
+
+**Remote jobs.** The publisher knows only the interface `ProofSource` (`src/publisher/proof-source.ts`). Today it is
+the prover binary with the remote backend against a load balancing endpoint: one `POST /prove` that answers when the
+proof is ready, 30 to 75 seconds. A queue endpoint (submit, then poll, or a webhook) is a second `ProofSource` plus a case
+in `remoteModeSchema` and `renderProverConfig`. Callers do not change. The setup file and the key handling stay as they are.
+
+## The runner, step by step
+
+For each direction:
+
+1. Subscribe to the msgboard category (`MsgBoardWsClient.subscribeMessages` with the category filter). The client routes
+   notifications by subscription identifier and reconnects after a close, for example the valve.city close after 60 seconds
+   with code 4008. Each pass also reads `msgboard_content` for the category, to fill gaps.
+2. For each message: decode it. Ignore it unless it names this pair and direction. Refuse it unless
+   - the program key equals `programVKey()` of the destination light client,
+   - the proof ends above the stored head,
+   - the start slot and the start root equal the stored head,
+   - `zk-bridge-prover verify` accepts the Groth16 proof for that key and those public values.
+   A message is looked at once in five minutes.
+3. Simulate `update(proof, publicValues)`. A revert means that another party posted first: skip. Otherwise send.
+4. Every pass, list `covered` items of the direction from the indexer. For each, oldest first:
+   - Read the call data of the message. A fee offer is a message to the mediator whose recipient is the fee router and whose
+     callback data is a `FeeDirector` (recipient, settings, limit, multiplier). No offer: skip, unless `deliverWithoutOffer`.
+   - Compute the fee with `FeeRouter.feeInfo(token, value, gasUsed, director)` at the current fee quote. Convert it to wei
+     (the wrapped native token one for one, other tokens through `tokenValuationsWei`; no price means skip).
+   - Gas cost = gas × (base fee + priority fee). Deliver only when fee ≥ cost + `minimumMarginWei`. The first check uses
+     `executionGasFallback` and needs no evidence. The second check uses the gas of the simulation.
+   - Build the evidence with `zk-bridge-prover evidence`. The log index inside the receipt comes from the source receipt.
+     Skip when the bridge shows the message as delivered.
+   - Send the layout calls that the evidence lists, one at a time, each after a simulation. Build the evidence again after
+     each call, because the calls of one function are alternatives.
+   - Simulate `FeeRouter.executeMessageWithRunner(runner, proof)` and send it. Skip on a revert.
+   No transaction is sent without a simulation of the same call that succeeded.
+5. Record the outcome.
+
+**Outcomes.** Every decision is a log line (`delivery_outcome`, `delivery_skipped`, `update_posted`, `update_skipped`) and a
+line in `stateDirectory/outcomes-<pair>.jsonl`. Fields: `time`, `kind` (`delivery` or `update`), `pair`, `direction`,
+`status` (`delivered`, `skipped`, `failed`, `posted`), `reason`, `messageId`, `transactionHash`, `gasUsed`, `gasCostWei`,
+`prerequisiteCostWei`, `feeWei`, `feeExpectedWei`, `feeReceivedTokens`, `path` (`fee-router` or `bridge`). Amounts are
+decimal strings. A skip is written once for each change of reason, not once for each pass. The state file
+`runner-<pair>-<direction>.json` holds the items that need no second look.
+
+## msgboard size limit
+
+The proof message is 823 bytes: version, pair, direction (3), program key (32), start slot and root (40), new slot and
+root (40), public values (352) and proof (356). The difficulty grows by 10,000 for each byte, so the message adds about 8.2
+million to the base of 2^24.
+
+The limit: 8 KiB (8192 bytes) per message. Sources: the node implementation of the board in `erigon-pulse`
+(`msgboard/msgboardcfg/config.go`, `MsgSizeLimit: 8 * 1024`, flag `--msgboard.msgsize.limit`), and the mock node of
+`@msgboard/hardhat` (`messageSizeLimit: 8n * 1024n`). The sdk README says only that the board has a size cap. The
+`valve-tech/reth` fork is not on this machine, so the live limit of the valve.city nodes is not verified. The publisher
+refuses a payload over `maximumMessageBytes` before it grinds. The board also caps the total size and count of messages,
+and drops new messages when a burst fills it.
+
+## Tests
+
+Unit tests (`test/unit`, no network, no chain, no secret): the codec lives in `explorer/shared`; here are the publisher
+decisions (nothing to prove, republish timing, stop when covered, restart, failure backoff, key handling) with a fake prover
+script and a fake board; the runner decisions (bad proof refused, wrong start head refused, behind then update, fee below
+margin skipped, fee above delivered, simulation revert skipped, layout calls first, never send without simulation) with
+fakes for chain, indexer and prover; the board client against a fake node and a fake socket node, including a close with
+code 4008; the real grind worker; the real `zk-bridge-prover verify` against a real Groth16 proof.
+
+Integration test (`test/integration/stack.test.ts`): a local Anvil chain with the real `BeaconLightClient` and the real
+`FeeRouter`. See the header of the file for what is real and what is synthetic: the update values and the proof (no beacon
+chain exists on the local stack), the prover (a script), the msgboard node (in this process), and the mediator and bridge
+(a stub that releases tokens to the real router).
+
+## Limits and open items
+
+- Dependencies: `explorer/terminal` keeps its own lockfile and is not a workspace dependency. The runner imports the
+  signers of the terminal by path (`src/signing/open-signer.ts`). Move them to `explorer/shared` when the terminal joins
+  the workspace.
+- The first fee check assumes `executionGasFallback`. Calibrate it from `gasUsed` in the outcome file.
+- A fee paid in the native coin (unwrap) has no receipt log, so `feeReceivedTokens` is null. `feeExpectedWei` still holds the promise of `feeInfo`.
+- The runner posts `update` without a fee check. It costs gas and earns nothing by itself.
+- A real delivery needs the prover to build evidence against a beacon node and the source chain node, which must serve `eth_getRawTransactionByHash`.

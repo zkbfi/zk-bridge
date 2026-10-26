@@ -7,7 +7,6 @@ import { buildBridgeSteps, buildClaimSteps, buildMessageSteps, claimableEntries,
 import { useServices } from '../app/services'
 import { useSession } from '../app/session'
 import type { FlowStep } from '../flow/transaction-flow'
-import { formatRateAsPercent } from '../format/amounts'
 import { OperatorFileError, planLightClientUpdate, planMessageExecution } from '../tx/operator'
 import { PlanInputError, amountMeaning } from '../tx/plan'
 import type { FieldSpec } from './form'
@@ -42,7 +41,7 @@ function useSubmitError() {
   return { error, attempt, setError }
 }
 
-/** The form that bridges tokens: relayTokens, relayTokensAndCall or relayTokensWithFallback with a fee limit. */
+/** The form that bridges tokens: relayTokens, relayTokensAndCall or relayTokensWithFallback. */
 export function BridgeModal(props: ActionModalProps) {
   const { pair } = useServices()
   const session = useSession()
@@ -56,8 +55,6 @@ export function BridgeModal(props: ActionModalProps) {
       return [...own, ...router]
     }),
   ]
-  const firstOk = session.snapshots?.find((result) => result.status === 'ok')
-  const currentRate = firstOk?.status === 'ok' ? formatRateAsPercent(firstOk.snapshot.feeRate).replace('%', '') : ''
   const specs: readonly FieldSpec[] = [
     { kind: 'choice', name: 'token', label: 'Token', choices: tokenChoices.length === 0 ? [{ value: '', label: 'no tokens loaded' }] : tokenChoices, hint: 'Left or Right chooses the token and its chain.' },
     { kind: 'text', name: 'amount', label: 'Amount', placeholder: 'for example 2.5', hint: 'A decimal in whole tokens.' },
@@ -75,14 +72,6 @@ export function BridgeModal(props: ActionModalProps) {
     },
     { kind: 'text', name: 'data', label: 'Call data', placeholder: '0x… (empty for none)', visibleWhen: (values) => values.mode !== 'plain', hint: 'Hex bytes for onTokenBridged.' },
     { kind: 'text', name: 'fallback', label: 'Fallback recipient', initial: signer?.address ?? '', visibleWhen: (values) => values.mode === 'fallback', hint: 'Paid when the receiver cannot be paid.' },
-    {
-      kind: 'text',
-      name: 'maxFeePercent',
-      label: 'Max fee (percent)',
-      initial: currentRate,
-      visibleWhen: (values) => values.mode === 'fallback',
-      hint: 'The call reverts if the fee rises above this. Empty means no limit.',
-    },
   ]
   const form = useForm({
     specs,

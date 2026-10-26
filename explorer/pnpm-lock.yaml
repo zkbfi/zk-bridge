@@ -166,6 +166,40 @@ importers:
 
   .: {}
 
+  bots:
+    dependencies:
+      '@msgboard/sdk':
+        specifier: 0.4.0
+        version: 0.4.0(typescript@5.9.3)(zod@4.6.5)
+      '@zk-bridge/shared':
+        specifier: workspace:*
+        version: link:../shared
+      tsx:
+        specifier: 4.23.15
+        version: 4.23.15
+      viem:
+        specifier: 2.56.9
+        version: 2.56.9(typescript@5.9.3)(zod@4.6.5)
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@types/node':
+        specifier: 24.13.6
+        version: 24.13.6
+      '@types/ws':
+        specifier: 8.18.1
+        version: 8.18.1
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.6)(vite@8.3.1(@types/node@24.13.6)(esbuild@0.28.2)(tsx@4.23.15))
+      ws:
+        specifier: 8.21.3
+        version: 8.21.3
+
   indexer:
     dependencies:
       '@zk-bridge/shared':
@@ -791,6 +825,15 @@ packages:
 
   '@ledgerhq/types-live@6.124.0':
     resolution: {integrity: sha512-jQkeg5rFYiKto9pVFbUvASjjpmHUYhtvEgUfPlt8dEATDCla8fSxp3nNdY+XfV1L3demLXBkcAM7MvbCPKXnHQ==}
+
+  '@msgboard/core@0.4.0':
+    resolution: {integrity: sha512-VdIf8zTGg7DnCNAr/z8YBairW8pjtzD6ExbZasbHIk0znFer0pnqnq6AqhUG8m5Sg5HU7RZsY1onpxYIKDK5bA==}
+
+  '@msgboard/pow-grinder@0.4.0':
+    resolution: {integrity: sha512-Z7ai4JbUdH2stfk4W7JGT+AdwWszpVgkwGXDIvjth81QKgBHcf6gm4AXhShcsUv5GaDLTNrrC48Vx8gaQFf9rw==}
+
+  '@msgboard/sdk@0.4.0':
+    resolution: {integrity: sha512-HeAx2nynLk5xV/G4ZyPUX9mVXESSwNZyiegf8yR2m0XjHGhE4FIrKGlGDksnaiwS4kQrV1TQE3WUetLdCdXqjQ==}
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     resolution: {integrity: sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ==}
@@ -1900,6 +1943,9 @@ packages:
 
   '@types/web@0.0.345':
     resolution: {integrity: sha512-n98OqjEZfqMmPWAFU8oROj0wuzFKPLuirFgtTS34QxEGWurVSq+osFTOP1QWGoDK58uwjoV/E6IC1KY6I/QWKg==}
+
+  '@types/ws@8.18.1':
+    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
   '@vitest/expect@4.1.11':
     resolution: {integrity: sha512-VX2x5vNJXET47KAFzwERI+KRMtTTCSWTfSMKsW7JsUsXV4psq++e3DvZpuTDOpHcxytiDs6p2nhVb2tVDiiUYw==}
@@ -3511,6 +3557,18 @@ packages:
       utf-8-validate:
         optional: true
 
+  ws@8.21.3:
+    resolution: {integrity: sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   ws@8.22.0:
     resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
     engines: {node: '>=10.0.0'}
@@ -4058,6 +4116,34 @@ snapshots:
     dependencies:
       bignumber.js: 9.3.1
       rxjs: 7.8.2
+
+  '@msgboard/core@0.4.0(typescript@5.9.3)(zod@4.6.5)':
+    dependencies:
+      bn.js: 5.2.5
+      elliptic: 6.6.1
+      viem: 2.56.9(typescript@5.9.3)(zod@4.6.5)
+    transitivePeerDependencies:
+      - bufferutil
+      - typescript
+      - utf-8-validate
+      - zod
+
+  '@msgboard/pow-grinder@0.4.0': {}
+
+  '@msgboard/sdk@0.4.0(typescript@5.9.3)(zod@4.6.5)':
+    dependencies:
+      '@msgboard/core': 0.4.0(typescript@5.9.3)(zod@4.6.5)
+      '@msgboard/pow-grinder': 0.4.0
+      bn.js: 5.2.5
+      debug: 4.4.3
+      elliptic: 6.6.1
+      viem: 2.56.9(typescript@5.9.3)(zod@4.6.5)
+    transitivePeerDependencies:
+      - bufferutil
+      - supports-color
+      - typescript
+      - utf-8-validate
+      - zod
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
@@ -5322,6 +5408,10 @@ snapshots:
   '@types/w3c-web-usb@1.0.14': {}
 
   '@types/web@0.0.345': {}
+
+  '@types/ws@8.18.1':
+    dependencies:
+      '@types/node': 24.13.6
 
   '@vitest/expect@4.1.11':
     dependencies:
@@ -6866,6 +6956,8 @@ snapshots:
   ws@7.5.13: {}
 
   ws@8.21.0: {}
+
+  ws@8.21.3: {}
 
   ws@8.22.0: {}
 

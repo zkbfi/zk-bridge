@@ -379,9 +379,9 @@ describe("the indexer follows synthetic chains", () => {
   });
 
   it("indexes fees, the gate, the registry and the opening of sends", async () => {
-    await chainA.send(mediatorA, "SyntheticMediator", "feeChanged", [10n ** 15n, chainA.accounts[7]]);
-    await chainA.send(mediatorA, "SyntheticMediator", "feeCharged", [tokenA, 1_000n]);
-    await chainA.send(mediatorA, "SyntheticMediator", "feeCharged", [tokenA, 500n]);
+    await chainA.send(mediatorA, "SyntheticMediator", "setSchedule", [10n ** 15n, chainA.accounts[7]]);
+    await chainA.send(mediatorA, "SyntheticMediator", "feeCharged", [tokenA, 1_000n, 0]);
+    await chainA.send(mediatorA, "SyntheticMediator", "feeCharged", [tokenA, 500n, 1]);
     await chainA.send(mediatorA, "SyntheticMediator", "feesCollected", [tokenA, chainA.accounts[7], 700n]);
     await chainB.send(gateB, "SyntheticGate", "confirm", [7n, "0x0000036c"]);
     await chainA.send(gateA, "SyntheticGate", "seal", ["0x12345678", 999n]);
@@ -389,11 +389,12 @@ describe("the indexer follows synthetic chains", () => {
     await chainB.send(bridgeB, "SyntheticBridge", "open", [77n, keccak256(toHex("remote")), 76n]);
 
     const fees = await waitFor("fee balances", async () => {
-      const result = await api<{ balances: { accrued: string; charged: string; collected: string }[]; terms: { rate: string; nullified: boolean }[] }>("/api/fees");
+      const result = await api<{ balances: { accrued: string; charged: string; collected: string }[]; terms: { rate: string }[]; events: { kind: string }[] }>("/api/fees");
       return result.body.balances.length > 0 && result.body.balances[0]?.collected === "700" ? result.body : undefined;
     });
     expect(fees.balances[0]).toMatchObject({ charged: "1500", collected: "700", accrued: "800" });
-    expect(fees.terms[0]).toMatchObject({ rate: (10n ** 15n).toString(), nullified: false });
+    expect(fees.terms[0]).toMatchObject({ rate: (10n ** 15n).toString() });
+    expect(fees.events.map((event) => event.kind)).toEqual(expect.arrayContaining(["charged_outgoing", "charged_incoming", "collected"]));
 
     const gate = await waitFor("gate events", async () => {
       const result = await api<{ sides: { chainId: number; sealed: boolean; enforcing: boolean; lastConfirmedEpoch: number | null; depositsOpen: boolean }[] }>("/api/gate");

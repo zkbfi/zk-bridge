@@ -58,8 +58,6 @@ export type RelayMode =
       readonly kind: 'fallback'
       readonly data: Hex
       readonly fallbackRecipient: Address
-      /** The highest fee rate that the sender accepts, 1e18-scaled. Absent means the contract default: no limit. */
-      readonly maxFeeRate?: bigint
     }
 
 /** Input of {@link planApproval}. */
@@ -107,10 +105,9 @@ export interface RelayInput {
 /**
  * Plans `relayTokens`, `relayTokensAndCall` or `relayTokensWithFallback` on the token mediator.
  *
- * The fallback mode picks the six-argument overload when a `maxFeeRate` is set. That overload reverts when the fee
- * rate rises above the limit, so a sender is never charged more than they accepted.
+ * The fee rate follows a fixed schedule that only falls, so the plan needs no limit on the fee.
  *
- * @throws PlanInputError for a zero amount, a zero receiver, or a fee limit below the current fee rate.
+ * @throws PlanInputError for a zero amount or a zero receiver.
  */
 export function planRelay(input: RelayInput): PlannedTransaction {
   const { chain, token, receiver, amount, mode, currentFeeRate } = input
@@ -173,39 +170,18 @@ export function planRelay(input: RelayInput): PlannedTransaction {
     bytesArgument('data', mode.data),
     fallbackArgument,
   ]
-  if (mode.maxFeeRate === undefined) {
-    return {
-      ...common,
-      title: `Relay ${token.symbol} with a fallback recipient`,
-      functionSignature: 'relayTokensWithFallback(address,address,uint256,bytes,address)',
-      functionName: 'relayTokensWithFallback',
-      data: encodeFunctionData({
-        abi: tokenMediatorAbi,
-        functionName: 'relayTokensWithFallback',
-        args: [token.address, receiver, amount, mode.data, mode.fallbackRecipient],
-      }),
-      arguments: baseArguments,
-      notes: [...notes, 'No fee limit is set: any fee up to the contract ceiling applies.'],
-    }
-  }
-  if (mode.maxFeeRate < currentFeeRate) {
-    throw new PlanInputError('The fee limit is below the current fee rate, so the call would revert.')
-  }
   return {
     ...common,
-    title: `Relay ${token.symbol} with a fallback recipient and a fee limit`,
-    functionSignature: 'relayTokensWithFallback(address,address,uint256,bytes,address,uint256)',
+    title: `Relay ${token.symbol} with a fallback recipient`,
+    functionSignature: 'relayTokensWithFallback(address,address,uint256,bytes,address)',
     functionName: 'relayTokensWithFallback',
     data: encodeFunctionData({
       abi: tokenMediatorAbi,
       functionName: 'relayTokensWithFallback',
-      args: [token.address, receiver, amount, mode.data, mode.fallbackRecipient, mode.maxFeeRate],
+      args: [token.address, receiver, amount, mode.data, mode.fallbackRecipient],
     }),
-    arguments: [
-      ...baseArguments,
-      { name: 'maxFeeRate', type: 'uint256', value: mode.maxFeeRate.toString(), meaning: rateMeaning(mode.maxFeeRate) },
-    ],
-    notes: [...notes, 'The call reverts if the fee rate rises above the limit before it is mined.'],
+    arguments: baseArguments,
+    notes,
   }
 }
 

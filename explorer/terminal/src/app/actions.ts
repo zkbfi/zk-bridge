@@ -3,7 +3,7 @@
  * and the live snapshots, and throws {@link PlanInputError} with a message that tells the user what to fix.
  */
 import type { Address } from 'viem'
-import { RATE_SCALE, parsePercentAsRate, parseUnits, AmountParseError } from '../format/amounts'
+import { parseUnits, AmountParseError } from '../format/amounts'
 import type { ChainSnapshot, ChainSnapshotResult, TokenPosition } from '../chain/live-reads'
 import type { FlowStep } from '../flow/transaction-flow'
 import type { ChainSide, PairConfig, TokenInfo } from '../model/types'
@@ -88,11 +88,7 @@ function relayModeOf(values: Readonly<Record<string, string>>): RelayMode {
   const data = parseHexBytes(values.data ?? '')
   if (mode === 'call') return { kind: 'call', data }
   const fallbackRecipient = parseAddress(values.fallback ?? '', 'fallback recipient')
-  const limitText = (values.maxFeePercent ?? '').trim()
-  if (limitText === '') return { kind: 'fallback', data, fallbackRecipient }
-  const maxFeeRate = parseRate(limitText)
-  if (maxFeeRate > RATE_SCALE) throw new PlanInputError('The fee limit cannot be above 100%.')
-  return { kind: 'fallback', data, fallbackRecipient, maxFeeRate }
+  return { kind: 'fallback', data, fallbackRecipient }
 }
 
 /** Builds the single step of the send-a-message form. */
@@ -155,11 +151,3 @@ function parseAmount(text: string, decimals: number): bigint {
   }
 }
 
-function parseRate(text: string): bigint {
-  try {
-    return parsePercentAsRate(text)
-  } catch (error) {
-    if (error instanceof AmountParseError) throw new PlanInputError(error.message)
-    throw error
-  }
-}

@@ -36,3 +36,16 @@ The runner holds a wallet on the destination chain (the same signer options as t
 - Idempotent and restart-safe: both bots can stop and start without double work beyond a reverted simulation.
 - Metrics and logs in a form the dashboard can read.
 - Dependencies pinned exactly and at least 28 days old.
+
+## Implementation (2026-10-25)
+
+Code: `explorer/bots`. Commands, configuration and tests: `explorer/bots/README.md`.
+
+Decisions:
+- **Proving.** The publisher runs `zk-bridge-prover prove --route <route> --to stdout` with the remote backend. The Rust producer keeps all the checks. The bot writes a short-lived prover configuration file (mode 0600, deleted after the run) from the setup file, and passes the RunPod key only in the environment variable that the file names.
+- **Remote jobs.** The publisher depends on the interface `ProofSource`. A queue endpoint becomes a second implementation. Nothing else changes.
+- **Proof message.** 823 bytes: `explorer/shared/src/proof-message.ts`. Category: `zk-bridge/<pair>/<source>-to-<destination>/light-client-update/v1`.
+- **Size limit.** 8 KiB per message in the board node implementation that is on this machine (`erigon-pulse`) and in the sdk mock. The `valve-tech/reth` fork is not available locally, so the live limit is not verified.
+- **Local verification.** The prover has a new command, `zk-bridge-prover verify --program-vkey --public-values --proof`. It reads no configuration file. It checks the Groth16 proof with `sp1-verifier`.
+- **Fee check.** The runner compares the fee of `FeeRouter.feeInfo` in wei with the gas cost at the current base fee plus the priority fee, plus a margin. Tokens other than the wrapped native token need a configured value in wei.
+- **Shared code.** The setup schema, the secret store, the setup file and the redactor moved from `explorer/terminal/src/config` to `explorer/shared/src/config`. The terminal imports them as `@zk-bridge/shared/config`.

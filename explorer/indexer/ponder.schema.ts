@@ -175,7 +175,7 @@ export const claimEvents = onchainTable(
   (table) => ({ messageIndex: index().on(table.messageId) }),
 );
 
-/** Fee events. `kind` is `charged`, `collected`, `changed` or `nullified`. */
+/** Fee events. `kind` is `charged_outgoing`, `charged_incoming` or `collected`. */
 export const feeEvents = onchainTable(
   "fee_events",
   (t) => ({
@@ -185,7 +185,7 @@ export const feeEvents = onchainTable(
     token: t.hex(),
     amount: t.bigint(),
     recipient: t.hex(),
-    /** For `changed`: the new rate scaled by 1e18. */
+    /** Not used by any current kind. Kept null. */
     rate: t.bigint(),
     transactionHash: t.hex().notNull(),
     blockNumber: t.bigint().notNull(),
@@ -207,12 +207,12 @@ export const feeBalances = onchainTable(
   (table) => ({ pk: primaryKey({ columns: [table.chainId, table.token] }) }),
 );
 
-/** The current fee terms of the mediator on a chain. */
+/** The fee of the mediator on a chain, read from the contract at the last charged fee. The schedule never changes. */
 export const feeTerms = onchainTable("fee_terms", (t) => ({
   chainId: t.integer().primaryKey(),
+  /** `currentFeeRate()` at the last charged fee, scaled by 1e18. The rate only falls. */
   rate: t.bigint().notNull(),
   recipient: t.hex(),
-  nullified: t.boolean().notNull(),
 }));
 
 /** One light client head update. `chainId` is the chain that holds the light client (the destination). */

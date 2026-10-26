@@ -1,7 +1,7 @@
 import { and, eq } from "ponder";
 import { ponder } from "ponder:registry";
 import { bridgedSupply, claimEvents, claimables, feeBalances, feeEvents, feeTerms, messages, tokens } from "ponder:schema";
-import { otherSide } from "@zk-bridge/shared";
+import { otherSide, sideOf, tokenMediatorAbi } from "@zk-bridge/shared";
 import { refreshEscrow } from "../lib/escrow";
 import { writeMessage } from "../lib/message-store";
 import { pair } from "../lib/pair";
@@ -223,14 +223,28 @@ ponder.on("TokenMediator:CallbackFailed", async ({ event, context }) => {
   });
 });
 
-/** A relay was charged a fee. It stays in the mediator until collected. */
+/** The direction of a charged fee: a relay on the source chain (0) or a delivery on the destination chain (1). */
+const feeKindOf = (direction: number): string => (direction === 0 ? "charged_outgoing" : "charged_incoming");
+
+/**
+ * A relay or a delivery was charged a fee. It stays in the mediator until collected. The fee schedule is immutable and
+ * no event announces it, so the current rate and the recipient are read from the contract here.
+ */
 ponder.on("TokenMediator:FeeCharged", async ({ event, context }) => {
   const chainId = context.chain.id;
-  const { token, fee } = event.args;
+  const { token, fee, direction } = event.args;
+  const mediator = sideOf(pair, chainId).contracts.mediator;
+  const options = { abi: tokenMediatorAbi, address: mediator } as const;
+  const [rate, recipient] = await Promise.all([
+    context.client.readContract({ ...options, functionName: "currentFeeRate" }),
+    context.client.readContract({ ...options, functionName: "feeRecipient" }),
+  ]);
+  const terms = { chainId, rate, recipient };
+  await context.db.insert(feeTerms).values(terms).onConflictDoUpdate(terms);
   await context.db.insert(feeEvents).values({
     id: event.id,
     chainId,
-    kind: "charged",
+    kind: feeKindOf(direction),
     token,
     amount: fee,
     recipient: null,
@@ -285,47 +299,6 @@ ponder.on("TokenMediator:FeesCollected", async ({ event, context }) => {
     blockNumber: event.block.number,
     timestamp: event.block.timestamp,
   });
-});
-
-/** The fee authority set a new rate (scaled by the mediator's fee denominator) and recipient. */
-ponder.on("TokenMediator:FeeChanged", async ({ event, context }) => {
-  const chainId = context.chain.id;
-  await context.db.insert(feeEvents).values({
-    id: event.id,
-    chainId,
-    kind: "changed",
-    token: null,
-    amount: null,
-    recipient: event.args.feeRecipient,
-    rate: event.args.feeRate,
-    transactionHash: event.transaction.hash,
-    blockNumber: event.block.number,
-    timestamp: event.block.timestamp,
-  });
-  const row = { chainId, rate: event.args.feeRate, recipient: event.args.feeRecipient, nullified: false };
-  const existing = await context.db.find(feeTerms, { chainId });
-  const merged = { ...row, nullified: existing?.nullified ?? false };
-  await context.db.insert(feeTerms).values(merged).onConflictDoUpdate(merged);
-});
-
-/** The fee authority gave up its power. The fee is zero for good. */
-ponder.on("TokenMediator:FeeNullified", async ({ event, context }) => {
-  const chainId = context.chain.id;
-  await context.db.insert(feeEvents).values({
-    id: event.id,
-    chainId,
-    kind: "nullified",
-    token: null,
-    amount: null,
-    recipient: null,
-    rate: 0n,
-    transactionHash: event.transaction.hash,
-    blockNumber: event.block.number,
-    timestamp: event.block.timestamp,
-  });
-  const existing = await context.db.find(feeTerms, { chainId });
-  const row = { chainId, rate: 0n, recipient: existing?.recipient ?? null, nullified: true };
-  await context.db.insert(feeTerms).values(row).onConflictDoUpdate(row);
 });
 
 /**

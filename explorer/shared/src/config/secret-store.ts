@@ -6,12 +6,13 @@
  * through the standard input of `security -i`, and the Secret Service store sends it through the standard input of
  * `secret-tool`. This module has no dependency on the terminal library, so the bots can import it.
  */
+import { spawn } from 'node:child_process'
 import { createCipheriv, createDecipheriv, randomBytes, scrypt } from 'node:crypto'
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { promisify } from 'node:util'
-import { redactSecrets } from './redaction'
-import type { SecretReference } from './prover-setup'
+import { redactSecrets } from './redaction.js'
+import type { SecretReference } from './prover-setup.js'
 
 /** The result of running a command. */
 export interface CommandResult {
@@ -39,16 +40,21 @@ export class SecretStoreError extends Error {
   override readonly name = 'SecretStoreError'
 }
 
-/** The command runner that spawns a real process. */
-export const spawnRunner: CommandRunner = async (command, args, standardInput) => {
-  const child = Bun.spawn([command, ...args], {
-    stdin: standardInput === undefined ? 'ignore' : new TextEncoder().encode(standardInput),
-    stdout: 'pipe',
-    stderr: 'pipe',
+/**
+ * The command runner that spawns a real process with `node:child_process`, which Node.js and Bun both run.
+ * A command that cannot start (for example a missing `op`) answers with code 127 and the reason on standard error.
+ */
+export const spawnRunner: CommandRunner = (command, args, standardInput) =>
+  new Promise((resolve) => {
+    const child = spawn(command, [...args], { stdio: [standardInput === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] })
+    const stdout: Buffer[] = []
+    const stderr: Buffer[] = []
+    child.stdout?.on('data', (chunk: Buffer) => stdout.push(chunk))
+    child.stderr?.on('data', (chunk: Buffer) => stderr.push(chunk))
+    child.on('error', (error) => resolve({ code: 127, stdout: '', stderr: error.message }))
+    child.on('close', (code) => resolve({ code: code ?? 1, stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8') }))
+    if (standardInput !== undefined) child.stdin?.end(standardInput)
   })
-  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
-  return { code, stdout, stderr }
-}
 
 function failure(action: string, result: CommandResult, secret?: string): SecretStoreError {
   return new SecretStoreError(redactSecrets(`${action} failed (exit ${result.code}): ${result.stderr.trim()}`, secret === undefined ? [] : [secret]))

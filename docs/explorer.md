@@ -68,7 +68,7 @@ The signer never leaves the dashboard process. Every transaction is shown in ful
 
 ## Numbers
 
-Amounts are integers in each token's base units; rates are 18-decimal (1e18 = 100%). The display formats them with the token's decimals; the stored values are never rounded.
+Amounts are integers in each token's base units; rates are 18-decimal (1e18 = 100%). The fee follows a fixed declining schedule with no admin (see the fee schedule in `docs/hardened-build-contract.md`): a fee event is `charged_outgoing`, `charged_incoming` or `collected`, and the fee panel shows the current rate that the mediator reports. `explorer/shared` has `feeRateAt`, a copy of the contract math that is tested against vectors from the contract. The display formats them with the token's decimals; the stored values are never rounded.
 
 ## Dependencies
 

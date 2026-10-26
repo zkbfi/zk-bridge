@@ -34,11 +34,14 @@ which is deliberately the last option everywhere.
 ## Layout of the code
 
 - `src/tx`, `src/signing`, `src/flow`, `src/format`, `src/model`, `src/config`: no terminal library inside. The web
-  interface can reuse them. `src/config` (setup schema, secret store, redaction) is also meant for the bots.
+  interface can reuse them. The setup schema, the secret store, the setup file and the redactor moved to
+  `explorer/shared/src/config` (import `@zk-bridge/shared/config`), because the bots read the same file. `src/config`
+  keeps the pair mirror and the connection tests. The bots import `src/signing` by path.
 - `src/ui`, `src/app`: the OpenTUI views.
 
 ## Joining the workspace
 
-`explorer/pnpm-workspace.yaml` already lists `terminal`. This package keeps its own `bun.lock` and does not import
-`@zk-bridge/shared` yet: it mirrors the pair loader (`src/config/pairs.ts`) and keeps small ABI fragments
+`explorer/pnpm-workspace.yaml` already lists `terminal`. This package keeps its own `bun.lock` and imports only
+`@zk-bridge/shared/config` from the workspace, through the `paths` entry of its `tsconfig.json` (Bun and `tsc` both read
+it), so `bun install --frozen-lockfile` still works. Besides that, it mirrors the pair loader (`src/config/pairs.ts`) and keeps small ABI fragments
 (`src/tx/abis.ts`) that tests check against the shared ABIs and the Foundry output.

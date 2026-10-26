@@ -4,7 +4,7 @@
  *
  * No test starts a proof. The proof test sends a request that the worker must refuse before it proves anything.
  */
-import { redactError, redactSecrets } from './redaction'
+import { redactError, redactSecrets } from '@zk-bridge/shared/config'
 
 /** One HTTP request. */
 export interface HttpRequest {

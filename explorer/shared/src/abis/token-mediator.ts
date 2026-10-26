@@ -25,22 +25,27 @@ export const tokenMediatorAbi = [
             "internalType": "uint256"
           },
           {
-            "name": "feeAuthority",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
             "name": "feeRecipient",
             "type": "address",
             "internalType": "address"
           },
           {
-            "name": "feeRate",
+            "name": "feeStartRate",
             "type": "uint256",
             "internalType": "uint256"
           },
           {
-            "name": "feeCeiling",
+            "name": "feeStepRate",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "feeFloorRate",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "feeStepPeriod",
             "type": "uint256",
             "internalType": "uint256"
           },
@@ -95,19 +100,6 @@ export const tokenMediatorAbi = [
   },
   {
     "type": "function",
-    "name": "MAX_FEE_CEILING",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "NAME_SUFFIX",
     "inputs": [],
     "outputs": [
@@ -115,19 +107,6 @@ export const tokenMediatorAbi = [
         "name": "",
         "type": "string",
         "internalType": "string"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "NO_FEE_LIMIT",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -263,6 +242,19 @@ export const tokenMediatorAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "currentFeeRate",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -445,20 +437,7 @@ export const tokenMediatorAbi = [
   },
   {
     "type": "function",
-    "name": "feeAuthority",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "feeCeiling",
+    "name": "feeFloorRate",
     "inputs": [],
     "outputs": [
       {
@@ -471,8 +450,14 @@ export const tokenMediatorAbi = [
   },
   {
     "type": "function",
-    "name": "feeRate",
-    "inputs": [],
+    "name": "feeRateAt",
+    "inputs": [
+      {
+        "name": "timestamp",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
     "outputs": [
       {
         "name": "",
@@ -491,6 +476,58 @@ export const tokenMediatorAbi = [
         "name": "",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "feeStartRate",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "feeStartTime",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "feeStepPeriod",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "feeStepRate",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -878,13 +915,6 @@ export const tokenMediatorAbi = [
   },
   {
     "type": "function",
-    "name": "nullifyFee",
-    "inputs": [],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
     "name": "onTokenTransfer",
     "inputs": [
       {
@@ -1009,44 +1039,6 @@ export const tokenMediatorAbi = [
         "name": "fallbackRecipient",
         "type": "address",
         "internalType": "address"
-      },
-      {
-        "name": "maxFeeRate",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "relayTokensWithFallback",
-    "inputs": [
-      {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "receiver",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "value",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "data",
-        "type": "bytes",
-        "internalType": "bytes"
-      },
-      {
-        "name": "fallbackRecipient",
-        "type": "address",
-        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -1064,24 +1056,6 @@ export const tokenMediatorAbi = [
       }
     ],
     "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "setFee",
-    "inputs": [
-      {
-        "name": "rate",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "recipient",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -1210,25 +1184,6 @@ export const tokenMediatorAbi = [
   },
   {
     "type": "event",
-    "name": "FeeChanged",
-    "inputs": [
-      {
-        "name": "feeRate",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "feeRecipient",
-        "type": "address",
-        "indexed": false,
-        "internalType": "address"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
     "name": "FeeCharged",
     "inputs": [
       {
@@ -1242,14 +1197,14 @@ export const tokenMediatorAbi = [
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
+      },
+      {
+        "name": "direction",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum TokenMediator.FeeDirection"
       }
     ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "FeeNullified",
-    "inputs": [],
     "anonymous": false
   },
   {
@@ -1389,15 +1344,15 @@ export const tokenMediatorAbi = [
   },
   {
     "type": "error",
-    "name": "FeeAboveCeiling",
+    "name": "FeeFloorAboveStart",
     "inputs": [
       {
-        "name": "feeRate",
+        "name": "feeFloorRate",
         "type": "uint256",
         "internalType": "uint256"
       },
       {
-        "name": "feeCeiling",
+        "name": "feeStartRate",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -1405,31 +1360,10 @@ export const tokenMediatorAbi = [
   },
   {
     "type": "error",
-    "name": "FeeAboveLimit",
+    "name": "FeeStartRateTooHigh",
     "inputs": [
       {
-        "name": "feeRate",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "maxFeeRate",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "FeeCeilingTooHigh",
-    "inputs": [
-      {
-        "name": "ceiling",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "maximum",
+        "name": "feeStartRate",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -1534,17 +1468,6 @@ export const tokenMediatorAbi = [
   },
   {
     "type": "error",
-    "name": "NotFeeAuthority",
-    "inputs": [
-      {
-        "name": "caller",
-        "type": "address",
-        "internalType": "address"
-      }
-    ]
-  },
-  {
-    "type": "error",
     "name": "NotFlowLimiter",
     "inputs": [
       {
@@ -1567,22 +1490,6 @@ export const tokenMediatorAbi = [
         "name": "account",
         "type": "address",
         "internalType": "address"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "NullifiedFeeMustBeZero",
-    "inputs": [
-      {
-        "name": "feeRate",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "feeCeiling",
-        "type": "uint256",
-        "internalType": "uint256"
       }
     ]
   },
@@ -1695,6 +1602,11 @@ export const tokenMediatorAbi = [
   {
     "type": "error",
     "name": "ZeroFeeRecipient",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroFeeStepPeriod",
     "inputs": []
   },
   {

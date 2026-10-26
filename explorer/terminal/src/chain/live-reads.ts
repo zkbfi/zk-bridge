@@ -31,10 +31,8 @@ export interface TokenPosition {
 export interface ChainSnapshot {
   readonly chain: ChainConfig
   readonly nativeBalance: bigint
-  /** The fee rate of the mediator, 1e18-scaled. */
+  /** The fee rate of the mediator now, 1e18-scaled. The schedule only falls and has no admin. */
   readonly feeRate: bigint
-  /** The fee ceiling of the mediator, 1e18-scaled. */
-  readonly feeCeiling: bigint
   readonly positions: readonly TokenPosition[]
 }
 
@@ -57,13 +55,12 @@ export async function readChainSnapshot(client: ReadClient, input: SnapshotInput
   const mediator = chain.contracts.tokenMediator
   const tokens = input.tokens.filter((token) => token.side === chain.side)
   try {
-    const [nativeBalance, feeRate, feeCeiling, positions] = await Promise.all([
+    const [nativeBalance, feeRate, positions] = await Promise.all([
       client.getBalance({ address: account }),
-      readBigint(client, { address: mediator, abi: tokenMediatorAbi, functionName: 'feeRate' }),
-      readBigint(client, { address: mediator, abi: tokenMediatorAbi, functionName: 'feeCeiling' }),
+      readBigint(client, { address: mediator, abi: tokenMediatorAbi, functionName: 'currentFeeRate' }),
       Promise.all(tokens.map((token) => readPosition(client, { chain, account, token }))),
     ])
-    return { status: 'ok', snapshot: { chain, nativeBalance, feeRate, feeCeiling, positions } }
+    return { status: 'ok', snapshot: { chain, nativeBalance, feeRate, positions } }
   } catch (error) {
     return { status: 'error', chain, message: error instanceof Error ? error.message : String(error) }
   }
