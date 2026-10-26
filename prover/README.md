@@ -15,9 +15,35 @@ zk-bridge-prover --config prover.toml prove                              # one p
 zk-bridge-prover --config prover.toml prove --route <name> --to webhook  # choose the route and the handoff target
 zk-bridge-prover --config prover.toml evidence --tx <hash> --log-index <n>   # the evidence that delivers one message
 zk-bridge-prover verify --program-vkey <hash> --public-values <hex> --proof <hex>   # check one Groth16 proof locally
+zk-bridge-prover checkpoint --beacon-url <url> --chain <name>            # the values that a new light client starts from
+zk-bridge-prover --config prover.toml opening-proof --route <name>       # the evidence of openDeposits
+zk-bridge-prover deployment-file --output <path> --broadcast <file> ...  # the deployment file of the explorer
 ```
 
 The command line never takes a key. A secret lives in an environment variable, and the configuration names the variable (see `prover.example.toml`).
+
+## Chains
+
+A route names its source chain with `source.chain`, and `--chain` takes the same names.
+
+| Name | Chain | Fork | Light-client routes of the public node |
+|---|---|---|---|
+| `ethereum` | Ethereum mainnet | Fulu | served |
+| `pulsechain` | PulseChain (369) | Capella | 404: the producer builds updates from blocks and states |
+| `sepolia` | Sepolia (11155111) | Gloas | served, but refused (see below) |
+| `pulsechain-testnet-v4` | PulseChain testnet v4 (943) | Capella | 404: the producer builds updates from blocks and states |
+
+Each name selects the fork table and the genesis validators root of `lc-core`. An unknown name stops the command, and the message lists the known names.
+
+**Sepolia runs the Gloas fork, and `lc-core` refuses Gloas.** The design of the Gloas execution payload is open. `lc-core` refuses every Gloas header, update and state with the error `Gloas is refused: the execution payload is not finalized by the beacon block alone (design pending)`. The producer shows that error as it is and exits with code 1. It never reads a Gloas object with the Capella layout, and it prints no half answer. The `checkpoint` command stops on a Gloas header before it asks for a bootstrap or a state. Chain 943 stays at Capella and works.
+
+### Beacon URLs
+
+`beacon_url` and `--beacon-url` may hold a path prefix, for example `https://rpc-testnet-pulsechain.g4mm4.io/beacon-api`, or a key segment such as `https://host/beacon/<key>/943`. The client keeps the prefix, tolerates trailing slashes and puts one slash between the prefix and each route. Query strings stay as they are.
+
+The HTTP clients for beacon nodes and execution nodes send the User-Agent `Mozilla/5.0 (compatible; zk-bridge/1.0)`, because some public nodes refuse an unknown client name. The webhook and the remote prover get `zk-bridge-prover`.
+
+A URL never appears in a log line or an error message in full. Logs and error text keep the scheme and the host and replace the rest with `/...`, because the path and the query can hold a key.
 
 ## The `prove` command
 
@@ -198,6 +224,62 @@ On success it prints `{"valid":true,"programKey":"0x..."}` and exits with code 0
 standard error when the proof has the wrong length or selector, or does not verify for that key and those values. A
 proof from the `oracle` backend is not a Groth16 proof, so `verify` refuses it.
 
+## The `checkpoint` command
+
+A new light client starts at one finalized header. `checkpoint` prints the values that the deploy configuration needs, as one JSON object on standard output. All four values come from the same finalized root.
+
+```
+zk-bridge-prover checkpoint --beacon-url https://rpc-testnet-pulsechain.g4mm4.io/beacon-api --chain pulsechain-testnet-v4
+zk-bridge-prover --config prover.toml checkpoint --route <name> [--finalized-root <hash>]
+```
+
+With a route, the command uses the beacon URL and the chain of the source. With `--beacon-url`, it needs no configuration file. Without `--finalized-root`, it uses the newest finalized header of the node.
+
+| Key | Meaning |
+|---|---|
+| `initialSlot`, `initialHeaderRoot` | The slot and the root of the finalized header. |
+| `initialSyncCommitteeHash` | The hash of the sync committee of the period of that header. |
+| `initialNextSyncCommitteeHash` | The hash of the next sync committee. Zero when none is known. |
+| `nextCommitteeKnown` | False when the hash above is zero because no next committee was read. |
+| `source` | `bootstrap` or `debugState`: where the committee values came from. |
+| `chain`, `genesisValidatorsRoot`, `genesisTime`, `secondsPerSlot`, `capellaForkEpoch`, `capellaEra` | Chain facts. The command checks the node against the specification of `lc-core` first, and it stops on a difference. |
+
+The command reads the `light_client/bootstrap` route first and checks the branch that ties the committee to the header. When the node answers 404 there (chain 943), it reads the finalized state, checks that the state hashes to the `state_root` of the header, and takes both committee hashes from the state. A Gloas header (Sepolia) stops the command with the Gloas error before any bootstrap or state request.
+
+## The `opening-proof` command
+
+`openDeposits` needs a proof that the remote light client stored a head (launch sequence, step 3). The command builds it for the source bridge of a route and prints it. It sends nothing.
+
+```
+zk-bridge-prover --config prover.toml opening-proof --route <name> [--bridge-source <address>] [--remote-slot <n>] [--stored-slot <n>]
+```
+
+The source chain holds the bridge to open and its own light client. The destination chain holds the remote light client. The command reads the chain identifiers, the own light client and the remote light client from the bridge, and it stops when the configuration disagrees. Then it follows the four links of `BeaconProofVerifier._verifyOpening`:
+
+1. The own light client stored the block hash of a destination block at `remoteSlot`. The default is its head.
+2. The command fetches that block, rebuilds the header RLP and checks its hash. Field 3 is the state root.
+3. `eth_getProof` gives the account proof of the remote light client under that state root.
+4. `eth_getProof` gives the storage proof of `executionBlockHashes[storedSlot]`. The slot is `keccak256(abi.encode(storedSlot, 3))`. The default `storedSlot` is the head of the remote light client in that block.
+
+Before it prints, the command decodes its own calldata and runs the same walk natively (`opening::verify_opening`). A flipped proof node, a wrong key or an empty entry stops the command with an error and nothing on standard output. The destination node must serve `eth_getProof` and `eth_call` for the old block. The output holds `calldata` (send it to `to`), the decoded `proof` and the facts of the check.
+
+## The `deployment-file` command
+
+The explorer reads a deployment file with one section for each chain (`explorer/shared/src/pairs.ts`). The command writes it.
+
+```
+zk-bridge-prover deployment-file --output deployment.json \
+  --broadcast broadcast/DeployBridge.s.sol/11155111/run-latest.json --broadcast broadcast/DeployBridge.s.sol/943/run-latest.json
+zk-bridge-prover deployment-file --output deployment.json --chain-a chain_id=11155111 --chain-a bridge=0x... --chain-b chain_id=943 ...
+```
+
+- The sections are `chain_a` and `chain_b`. Each has `chain_id`, `bridge`, `mediator`, `token_factory`, `native_router`, `wrapped_native`, `gate`, `light_client`, `start_block`, and `fee_router` and `fork_registry` when the chain has them.
+- A broadcast file gives the names from its `contractName` fields. The factory is the first contract of the mediator. The wrapped native token is the second argument of the router. `start_block` is the block before the first deployment transaction. The first `BeaconLightClient` is the light client. A name that occurs twice stops the command.
+- A `--chain-a key=value` pair overrides the file. A pair with `chain_id` picks the deployment of that chain from the files. Without it, the section takes the deployment at its position.
+- Every address has 20 bytes and the `0x` prefix. The required addresses are not zero. `native_router` and `wrapped_native` are both zero for a chain without a wrapped native token.
+- The file has no `rpc_url` unless you pass one. The command refuses a URL with a path, a query or user information, because those parts hold keys. Set `EXPLORER_RPC_URL_<chain id>` for the explorer instead.
+- The file has mode 0600. The command refuses to replace a file unless you pass `--force`.
+
 ## Catching up a light client that lags
 
 One update moves a light client across at most one sync committee period. The beacon source therefore builds a fold. It reads the committee handoff update of each period from the head period of the light client to the present (`/eth/v1/beacon/light_client/updates?start_period=&count=`, paged, because a node returns at most a count of its own choice). It adds the latest finality update and proves all of them as one fold. When the light client already holds a next committee, the store of the proof carries it, read from the beacon state of the head. The contract compares its hash.
@@ -220,6 +302,10 @@ scripts/check-crate-ages.sh        # every locked crate was published on or befo
 |---|---|
 | `tests/produce.rs` | The producer and the `prove` command on a signed beacon chain, with the oracle backend: the package, the exit codes, the webhook and the route mode. |
 | `tests/evidence.rs` | The `evidence` command on a synthetic world: a beacon chain, a source chain with one message in the second transaction of a block, and a destination chain with a message bridge. The evidence passes the native bridge check, and the proven transaction hash is the hash of the sending transaction. |
+| `tests/checkpoint.rs` | The `checkpoint` command on a node with and without the light-client routes, a flipped committee branch, a named root, a wrong chain, and the Gloas refusal of Sepolia before any bootstrap request. |
+| `tests/opening_proof.rs` | The `opening-proof` command against two mock chains with real tries, a flipped node in each proof, and the constants that must equal the Solidity constants. |
+| `tests/deployment_file.rs` | The `deployment-file` command: the explorer rules in Rust, the broadcast file, the mode, the overwrite rule and every refusal. |
+| `tests/real_pulsechain_testnet.rs` | A real block of chain 943 parsed to its header. The ignored test downloads the finalized state and block of the public node and compares the roots (`cargo test --test real_pulsechain_testnet -- --ignored`, needs network). |
 | `tests/signed_beacon.rs` | The beacon source on the signed beacon chain: the update from a stored head, the message path and the layout evidence. |
 | `tests/remote_prover.rs` | The remote backend against a fake worker, with a real Groth16 proof and the checks that refuse a changed proof. |
 | `tests/sp1_execute.rs` | The two guest programs in the SP1 executor against `lc-core` (cargo feature `sp1`). Run it with `cargo test --features sp1 --test sp1_execute -- --test-threads=1`. It takes about 4.5 minutes and needs the guest program files from `cargo prove build` in `light-client/guests/*`. The full Groth16 proof test is ignored on a laptop. |
