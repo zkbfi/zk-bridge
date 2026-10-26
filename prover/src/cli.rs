@@ -15,6 +15,9 @@ use crate::checkpoint::build_checkpoint;
 use crate::config::{
     Config, DestinationConfig, HandoffTarget, ProverBackend, ProverConfig, RouteConfig,
 };
+use crate::deployment::{
+    build_sections, deployment_json, drafts_from_broadcast, write_private_file, Existing,
+};
 use crate::error::{Error, Result};
 use crate::evidence::{build_evidence, EvidenceRequest};
 use crate::handoff::{Handoff, PackageDestination};
@@ -89,6 +92,34 @@ pub enum Command {
     /// light client) and the destination chain (the block and the storage of the remote light client), checks the proof
     /// natively as the contract does, and prints it only when it verifies. It sends nothing.
     OpeningProof(OpeningProofArguments),
+    /// Write the deployment file that the explorer reads (`chain_a` and `chain_b` sections), and print a summary.
+    ///
+    /// The addresses come from `--chain-a` and `--chain-b` pairs, from Foundry broadcast files, or from both (a pair
+    /// overrides the file). The command checks every address, writes the file with mode 0600, refuses to replace a file
+    /// without `--force`, and writes no `rpc_url` unless a pair gives a URL without a path or query.
+    DeploymentFile(DeploymentFileArguments),
+}
+
+/// The arguments of `deployment-file`.
+#[derive(Debug, Args)]
+pub struct DeploymentFileArguments {
+    /// The file to write.
+    #[arg(long)]
+    pub output: PathBuf,
+    /// Replace the file when it exists.
+    #[arg(long)]
+    pub force: bool,
+    /// A Foundry broadcast file (`broadcast/.../run-latest.json`). Repeat for one file for each chain. The names come
+    /// from the `contractName` fields.
+    #[arg(long)]
+    pub broadcast: Vec<PathBuf>,
+    /// A `key=value` pair for the section `chain_a`. Repeat it. Keys: chain_id, rpc_url, bridge, mediator, token_factory,
+    /// native_router, wrapped_native, gate, light_client, fee_router, fork_registry, start_block.
+    #[arg(long)]
+    pub chain_a: Vec<String>,
+    /// A `key=value` pair for the section `chain_b`. The keys are those of `--chain-a`.
+    #[arg(long)]
+    pub chain_b: Vec<String>,
 }
 
 /// The arguments of `opening-proof`.
@@ -605,6 +636,41 @@ fn run_opening_proof(
     Ok(0)
 }
 
+/// Writes the deployment file and prints a summary of it.
+///
+/// # Errors
+/// `Error::Usage` for a missing or wrong value, an unreadable broadcast file or an existing output file.
+fn run_deployment_file(
+    arguments: &DeploymentFileArguments,
+    out: &mut dyn std::io::Write,
+) -> Result<i32> {
+    let mut drafts = Vec::new();
+    for path in &arguments.broadcast {
+        let text = std::fs::read_to_string(path)
+            .map_err(|error| Error::Usage(format!("{}: {error}", path.display())))?;
+        let file: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|error| Error::Usage(format!("{}: {error}", path.display())))?;
+        drafts.extend(drafts_from_broadcast(&file)?);
+    }
+    let sections = build_sections(drafts, &arguments.chain_a, &arguments.chain_b)?;
+    let content = format!("{:#}\n", deployment_json(&sections));
+    let existing = if arguments.force {
+        Existing::Replace
+    } else {
+        Existing::Refuse
+    };
+    write_private_file(&arguments.output, &content, existing)?;
+    write_json(
+        out,
+        &serde_json::json!({
+            "written": arguments.output.display().to_string(),
+            "mode": "0600",
+            "chains": [sections[0].chain_id, sections[1].chain_id],
+        }),
+    )?;
+    Ok(0)
+}
+
 /// Writes one JSON object and a newline.
 fn write_json(out: &mut dyn std::io::Write, value: &serde_json::Value) -> Result<()> {
     writeln!(out, "{value}")
@@ -652,6 +718,10 @@ pub fn run(
     if let Command::Verify(verify) = &cli.command {
         return run_verify(verify, out);
     }
+    // `deployment-file` reads no configuration either.
+    if let Command::DeploymentFile(deployment) = &cli.command {
+        return run_deployment_file(deployment, out);
+    }
     // `checkpoint` with a beacon URL needs no file either.
     if let Command::Checkpoint(checkpoint) = &cli.command {
         if checkpoint.beacon_url.is_some() {
@@ -664,6 +734,7 @@ pub fn run(
         Command::Evidence(evidence) => run_evidence(&config, evidence, out),
         Command::Checkpoint(checkpoint) => run_checkpoint(Some(&config), checkpoint, out),
         Command::OpeningProof(opening) => run_opening_proof(&config, opening, out),
+        Command::DeploymentFile(_) => unreachable!("deployment-file returned above"),
         Command::Verify(_) => unreachable!("verify returned above"),
     }
 }
