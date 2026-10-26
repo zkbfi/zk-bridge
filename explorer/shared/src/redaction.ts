@@ -39,6 +39,8 @@ const RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/("(?:api[_-]?key|token|secret|password)"\s*:\s*")[^"]+(")/gi, `$1${REDACTED}$2`],
   // A keyed RPC path: /rpc/<key>/...
   [/(\/rpc\/)[A-Za-z0-9_-]{8,}/g, `$1${REDACTED}`],
+  // A versioned provider path: /v2/<key>, /v3/<key> (Alchemy, Infura and similar).
+  [/(\/v\d+\/)[A-Za-z0-9_-]{16,}/g, `$1${REDACTED}`],
   // Credentials in a URL: scheme://user:password@host
   [/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^/\s@]+@/gi, `$1${REDACTED}@`],
 ]

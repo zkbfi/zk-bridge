@@ -24,6 +24,11 @@ describe("redactSecrets", () => {
     expect(redactSecrets("pin 1234 ok", ["1234"])).toBe("pin 1234 ok");
   });
 
+  it("removes the key of a versioned provider path such as /v3/<key>, and keeps a short path", () => {
+    expect(redactSecrets("GET https://rpc.example.org/v3/FAKEKEY1234567890 failed")).toBe(`GET https://rpc.example.org/v3/${REDACTED} failed`);
+    expect(redactSecrets("GET https://rpc.example.org/v3/health failed")).toBe("GET https://rpc.example.org/v3/health failed");
+  });
+
   it.each([
     ["key vk_abc-123_X end", `key ${REDACTED} end`],
     ["key rpa_abc-123_X end", `key ${REDACTED} end`],

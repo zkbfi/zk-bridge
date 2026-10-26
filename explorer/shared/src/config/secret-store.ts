@@ -11,7 +11,7 @@ import { createCipheriv, createDecipheriv, randomBytes, scrypt } from 'node:cryp
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { promisify } from 'node:util'
-import { redactSecrets } from './redaction.js'
+import { redactSecrets } from '../redaction.js'
 import type { SecretReference } from './prover-setup.js'
 
 /** The result of running a command. */

@@ -121,6 +121,11 @@ export type LoadPairOptions = {
   readonly environment: RegistryEnvironment;
   /** The parsed deployment file. */
   readonly deployment: unknown;
+  /**
+   * Whether a chain must have an RPC endpoint. Default true. With false, a chain that has none gets `rpcUrl` "", so a
+   * dashboard can start and let the user set the endpoint later.
+   */
+  readonly requireRpcUrl?: boolean;
 };
 
 const findDefinition = (pairName: string): PairDefinition => {
@@ -162,14 +167,14 @@ const buildSide = (
 ): PairSide => {
   const section = findChainSection(options.deployment, definition.chainId);
   const rpcUrl = options.environment[rpcVariableName(definition.chainId)] ?? section.rpc_url;
-  if (rpcUrl === undefined || rpcUrl === "") {
+  if ((rpcUrl === undefined || rpcUrl === "") && options.requireRpcUrl !== false) {
     throw new Error(`set ${rpcVariableName(definition.chainId)} to the RPC endpoint of chain ${definition.chainId}`);
   }
   const beaconUrl = options.environment[beaconVariableName(definition.chainId)];
   return {
     name: definition.name,
     chainId: definition.chainId,
-    rpcUrl,
+    rpcUrl: rpcUrl ?? "",
     beaconUrl: beaconUrl === undefined || beaconUrl === "" ? null : beaconUrl,
     startBlock: section.start_block,
     finalitySeconds: finalityOf(options.environment, definition.chainId),

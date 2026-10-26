@@ -4,6 +4,7 @@
  * browser cannot do.
  */
 export * from './prover-setup.js'
-export * from './redaction.js'
+export * from '../redaction.js'
 export * from './secret-store.js'
 export * from './setup-file.js'
+export * from './connection-store.js'

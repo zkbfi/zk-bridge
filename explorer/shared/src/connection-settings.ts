@@ -1,0 +1,166 @@
+import { maskSecret, redactSecrets } from "./redaction.js";
+
+/**
+ * The connections of the dashboards: the indexer URL and one RPC URL per chain. This module holds the pure rules that
+ * the terminal and the web page share: where a setting comes from, what a valid URL is, how a URL shows on a screen,
+ * and how it is kept out of logs. An RPC URL can embed an API key, so every function here treats a URL as a secret.
+ */
+
+/** The settings that the user typed. A chain or the indexer with no entry has no user setting. */
+export type ConnectionSettings = {
+  readonly indexerUrl: string | null;
+  readonly rpcUrls: Readonly<Record<number, string>>;
+};
+
+/** The address of the indexer when nothing sets another. */
+export const DEFAULT_INDEXER_URL = "http://localhost:42069";
+
+/** No user setting at all. */
+export const EMPTY_CONNECTION_SETTINGS: ConnectionSettings = { indexerUrl: null, rpcUrls: {} };
+
+/** Where a resolved setting comes from, from the strongest to the weakest. */
+export type SettingSource = "user" | "environment" | "default";
+
+/** The order of precedence: the user setting, then the environment, then the registry default. */
+export const SETTING_SOURCES: readonly SettingSource[] = ["user", "environment", "default"];
+
+/** A setting after resolution. */
+export type ResolvedSetting = { readonly value: string; readonly source: SettingSource };
+
+/** The settings that one source offers. An absent, empty or blank value means that the source has no setting. */
+export type ConnectionLayer = {
+  readonly indexerUrl?: string | null | undefined;
+  readonly rpcUrls?: Readonly<Record<number, string | null | undefined>> | undefined;
+};
+
+/** The settings in force. */
+export type ResolvedConnection = {
+  readonly indexerUrl: ResolvedSetting | null;
+  readonly rpcUrls: Readonly<Record<number, ResolvedSetting | null>>;
+};
+
+/** The inputs of {@link resolveConnection}. */
+export type ResolveConnectionInput = {
+  readonly chainIds: readonly number[];
+  /** What the user set in the settings view. */
+  readonly user: ConnectionLayer;
+  /** What the environment or the deployment of the page set (`EXPLORER_*` variables, `VITE_EXPLORER_*` variables). */
+  readonly environment: ConnectionLayer;
+  /** What the pair registry offers (`rpc_url` of the deployment file, and the standard indexer address). */
+  readonly registry: ConnectionLayer;
+};
+
+const present = (value: string | null | undefined): string | null => {
+  const trimmed = value?.trim();
+  return trimmed === undefined || trimmed === "" ? null : trimmed;
+};
+
+const firstSetting = (candidates: readonly (readonly [SettingSource, string | null | undefined])[]): ResolvedSetting | null => {
+  for (const [source, raw] of candidates) {
+    const value = present(raw);
+    if (value !== null) return { value, source };
+  }
+  return null;
+};
+
+/**
+ * Picks each setting from the strongest source that has it: the user setting, then the environment, then the registry
+ * default. A source that holds only blanks is skipped, so clearing a user setting returns to the weaker source.
+ *
+ * @param input The chains and the three layers.
+ */
+export const resolveConnection = (input: ResolveConnectionInput): ResolvedConnection => {
+  const layers = [
+    ["user", input.user],
+    ["environment", input.environment],
+    ["default", input.registry],
+  ] as const;
+  return {
+    indexerUrl: firstSetting(layers.map(([source, layer]) => [source, layer.indexerUrl] as const)),
+    rpcUrls: Object.fromEntries(
+      input.chainIds.map((chainId) => [chainId, firstSetting(layers.map(([source, layer]) => [source, layer.rpcUrls?.[chainId]] as const))]),
+    ),
+  };
+};
+
+/** The words for a source, for the settings screens. */
+export const describeSource = (source: SettingSource): string => {
+  if (source === "user") return "set by you";
+  if (source === "environment") return "from the environment";
+  return "default";
+};
+
+/** The result of reading a URL that the user typed. */
+export type ParsedUrl = { readonly ok: true; readonly url: string } | { readonly ok: false; readonly message: string };
+
+/** The kind of service that a URL names. */
+export type UrlPurpose = "rpc" | "indexer";
+
+/**
+ * Checks a URL that the user typed. The URL must use http or https and must hold no space, quote or backslash,
+ * because the macOS Keychain store cannot hold those. The message never repeats the URL, because it can hold a key.
+ * An indexer URL loses a trailing slash.
+ *
+ * @param text What the user typed.
+ * @param purpose Which service the URL names, for the wording of the message.
+ */
+export const parseConnectionUrl = (text: string, purpose: UrlPurpose): ParsedUrl => {
+  const trimmed = text.trim();
+  const service = purpose === "rpc" ? "RPC" : "indexer";
+  if (/[\s"'\\]/.test(trimmed)) return { ok: false, message: `The ${service} URL must not hold a space, a quote or a backslash.` };
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return { ok: false, message: `The ${service} URL is not a URL. Start it with http:// or https://.` };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { ok: false, message: `The ${service} URL must start with http:// or https://.` };
+  }
+  return { ok: true, url: purpose === "indexer" ? trimmed.replace(/\/+$/, "") : trimmed };
+};
+
+/**
+ * The pieces of a URL that can be a secret: the whole URL, the user name, the password, the path and each query value.
+ * Pass them to the redactor with the other known secrets.
+ *
+ * @param url A URL, possibly with a key inside.
+ */
+export const urlSecrets = (url: string): readonly string[] => {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return [url];
+  }
+  const path = parsed.pathname.replace(/^\/+/, "");
+  const queryValues = [...parsed.searchParams.values()];
+  return [url, parsed.username, parsed.password, path, parsed.search.replace(/^\?/, ""), ...queryValues].filter((piece) => piece !== "");
+};
+
+/**
+ * Removes every secret part of the given URLs from a text, and the other secret shapes that the redactor knows.
+ * Use it on every log line and every error message that can mention a connection.
+ *
+ * @param text The text to clean.
+ * @param urls The URLs in use.
+ */
+export const redactConnectionText = (text: string, urls: readonly string[]): string =>
+  redactSecrets(text, urls.flatMap(urlSecrets));
+
+/**
+ * A URL for a screen: the scheme and the host stay, and everything after the host shows only as stars and its last four
+ * characters. The user name and the password never show.
+ *
+ * @param url The URL. A text that is not a URL shows as a masked secret.
+ */
+export const maskUrl = (url: string): string => {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return maskSecret(url);
+  }
+  const rest = `${parsed.pathname.replace(/^\/+/, "")}${parsed.search}`;
+  return rest === "" ? parsed.origin : `${parsed.origin}/${maskSecret(rest)}`;
+};

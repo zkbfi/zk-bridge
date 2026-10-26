@@ -43,6 +43,13 @@ describe("loadPair", () => {
     expect(pair.sides[1].beaconUrl).toBeNull();
   });
 
+  it("lets a chain start with no endpoint when the caller does not require one, so the user can set it later", () => {
+    const stripped = { chain_a: { ...deployment.chain_a, rpc_url: undefined }, chain_b: deployment.chain_b };
+    const pair = loadPair({ environment: {}, deployment: stripped, requireRpcUrl: false });
+    expect(pair.sides[0].rpcUrl).toBe("");
+    expect(pair.sides[1].rpcUrl).toBe("http://127.0.0.1:28369");
+  });
+
   it("fails when no endpoint exists for a chain", () => {
     const stripped = { chain_a: { ...deployment.chain_a, rpc_url: undefined }, chain_b: deployment.chain_b };
     expect(() => loadPair({ environment: {}, deployment: stripped })).toThrow(/EXPLORER_RPC_URL_1/);
