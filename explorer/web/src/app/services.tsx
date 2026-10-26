@@ -3,16 +3,18 @@
  * `useServices`, so a test hands in fixtures and the page never reaches the network.
  */
 import { createContext, useContext, type ReactNode } from "react";
-import { createRpcChainAccess, type ChainAccess } from "@terminal/chain/chain-access";
+import type { ChainAccess } from "@terminal/chain/chain-access";
 import { createFixtureChainAccess } from "@terminal/chain/fixture-chain-access";
 import { knownPairIds } from "@terminal/config/pairs";
 import type { DataSource } from "@terminal/data/data-source";
 import { createFixtureDataSource, FIXTURE_NOW } from "@terminal/data/fixtures";
-import { createIndexerDataSource } from "@terminal/data/indexer-data-source";
+import { createConnectionRuntime, type ConnectionRuntime } from "@terminal/data/connection-runtime";
 import type { PairConfig } from "@terminal/model/types";
+import type { ExplorerConnectionInput, ExplorerConnection, Pair } from "@zk-bridge/shared";
+import { loadUserConnections, type ConnectionStorage } from "../config/connection-storage";
 import type { WebConfiguration } from "../config/environment";
 import { createFixtureIndexerClient } from "../data/fixture-indexer-client";
-import { createIndexerClient, type IndexerClient } from "../data/indexer-client";
+import { createFallbackIndexerClient, type IndexerClient } from "../data/indexer-client";
 
 /** Everything that a component reads from outside React. */
 export type Services = {
@@ -23,6 +25,8 @@ export type Services = {
   readonly dataSource: DataSource;
   readonly indexer: IndexerClient;
   readonly chainAccess: ChainAccess;
+  /** The live connections with their fallback, or null on a fixture page. */
+  readonly connection: ConnectionRuntime | null;
   /** The clock in unix seconds. The fixture page pins it so that the sample data stays the same. */
   readonly now: () => number;
 };
@@ -35,13 +39,27 @@ const KNOWN_PAIR_LABELS: Readonly<Record<string, string>> = {
 const knownPairsOf = (pair: PairConfig): Services["knownPairs"] =>
   knownPairIds().map((id) => ({ id, label: KNOWN_PAIR_LABELS[id] ?? id, configured: id === pair.id }));
 
+/** What a live page needs besides the configuration. A fixture page needs none of it. */
+export type LiveServicesOptions = {
+  /** The pair with the addresses and the start blocks that the RPC source needs. */
+  readonly sharedPair: Pair | null;
+  /** Where the settings of the user live. Null: no storage. */
+  readonly storage?: ConnectionStorage | null;
+  /** Options for every connection, such as the clock. A test uses it. */
+  readonly connectionOptions?: Partial<ExplorerConnectionInput>;
+  /** Replaces the connection factory. A test uses it. */
+  readonly createConnection?: (input: ExplorerConnectionInput) => ExplorerConnection;
+};
+
 /**
  * Builds the services for a configuration and a pair.
  *
  * @param configuration The page configuration.
  * @param pair The configured pair.
+ * @param live The shared pair and the storage of a live page.
+ * @throws When a live page has no shared pair.
  */
-export const createServices = (configuration: WebConfiguration, pair: PairConfig): Services => {
+export const createServices = (configuration: WebConfiguration, pair: PairConfig, live: LiveServicesOptions = { sharedPair: null }): Services => {
   const base = { configuration, pair, knownPairs: knownPairsOf(pair) };
   if (configuration.dataMode === "fixture") {
     return {
@@ -49,17 +67,25 @@ export const createServices = (configuration: WebConfiguration, pair: PairConfig
       dataSource: createFixtureDataSource(),
       indexer: createFixtureIndexerClient({ pair }),
       chainAccess: createFixtureChainAccess(pair),
+      connection: null,
       now: () => FIXTURE_NOW,
     };
   }
-  const environment = Object.fromEntries(
-    [pair.first, pair.second].map((chain) => [chain.rpcEnvironmentVariable, configuration.rpcUrls[chain.chainId]]),
-  );
+  if (live.sharedPair === null) throw new Error("A live page needs the pair in its shared form.");
+  const connection = createConnectionRuntime({
+    pair,
+    sharedPair: live.sharedPair,
+    environment: { indexerUrl: configuration.indexerUrl, rpcUrls: configuration.rpcUrls },
+    user: loadUserConnections(live.storage ?? null),
+    ...(live.createConnection === undefined ? {} : { createConnection: live.createConnection }),
+    ...(live.connectionOptions === undefined ? {} : { connectionOptions: live.connectionOptions }),
+  });
   return {
     ...base,
-    dataSource: createIndexerDataSource({ baseUrl: configuration.indexerUrl, pair }),
-    indexer: createIndexerClient({ baseUrl: configuration.indexerUrl }),
-    chainAccess: createRpcChainAccess(pair, environment),
+    dataSource: connection.dataSource,
+    indexer: createFallbackIndexerClient(connection),
+    chainAccess: connection.chainAccess,
+    connection,
     now: () => Math.floor(Date.now() / 1000),
   };
 };

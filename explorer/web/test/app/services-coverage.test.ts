@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FIXTURE_NOW, FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { createServices } from "../../src/app/services";
 import { readConfiguration } from "../../src/config/environment";
+import { sharedPairForTests } from "../support/live";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -25,6 +26,10 @@ describe("createServices for a fixture page", () => {
     expect(services.now()).toBe(FIXTURE_NOW);
   });
 
+  it("has no connection runtime, because sample data uses no connections", () => {
+    expect(services.connection).toBeNull();
+  });
+
   it("lists both known pairs with their names, marking only the configured one", () => {
     expect(services.knownPairs).toEqual([
       { id: "eth-pls", label: "Ethereum and PulseChain", configured: true },
@@ -35,19 +40,23 @@ describe("createServices for a fixture page", () => {
 
 describe("createServices for a live page", () => {
   it("reads through the indexer and the real endpoints of the page", () => {
-    const services = createServices(liveConfiguration(), FIXTURE_PAIR);
+    const services = createServices(liveConfiguration(), FIXTURE_PAIR, { sharedPair: sharedPairForTests() });
     expect(services.dataSource.label).toBe("indexer");
     expect(services.chainAccess.mode).toBe("rpc");
+  });
+
+  it("refuses to start a live page that has no pair in its shared form", () => {
+    expect(() => createServices(liveConfiguration(), FIXTURE_PAIR)).toThrow(/shared form/);
   });
 
   it("reads the clock of the machine, in whole seconds", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(1_700_000_000_999));
-    expect(createServices(liveConfiguration(), FIXTURE_PAIR).now()).toBe(1_700_000_000);
+    expect(createServices(liveConfiguration(), FIXTURE_PAIR, { sharedPair: sharedPairForTests() }).now()).toBe(1_700_000_000);
   });
 
   it("gives the RPC address of each chain to the chain access under the variable name of that chain", () => {
-    const services = createServices(liveConfiguration(), FIXTURE_PAIR);
+    const services = createServices(liveConfiguration(), FIXTURE_PAIR, { sharedPair: sharedPairForTests() });
     expect(() => services.chainAccess.flowClient(FIXTURE_PAIR.first.chainId)).not.toThrow();
     expect(() => services.chainAccess.flowClient(FIXTURE_PAIR.second.chainId)).not.toThrow();
   });
@@ -58,7 +67,7 @@ describe("createServices for a live page", () => {
       VITE_EXPLORER_DEPLOYMENT_URL: "https://example.org/deployment.json",
       VITE_EXPLORER_RPC_URL_1: "https://eth.example.org",
     });
-    const services = createServices(configuration, FIXTURE_PAIR);
+    const services = createServices(configuration, FIXTURE_PAIR, { sharedPair: sharedPairForTests({ withRegistryRpcUrl: false }) });
     expect(() => services.chainAccess.flowClient(FIXTURE_PAIR.second.chainId)).toThrow();
   });
 });

@@ -1,4 +1,5 @@
 import type { PairConfig } from "@terminal/model/types";
+import { loadPair, type Pair } from "@zk-bridge/shared";
 import { buildPairConfig, DEFAULT_PAIR_ID } from "@terminal/config/pairs";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { assertNoSecrets, ConfigurationError } from "./secret-scan";
@@ -9,8 +10,8 @@ export type DataMode = "live" | "fixture";
 /** Everything that the page reads at build time from `VITE_` variables. */
 export type WebConfiguration = {
   readonly dataMode: DataMode;
-  /** The base URL of the indexer, without a trailing slash. */
-  readonly indexerUrl: string;
+  /** The base URL of the indexer, without a trailing slash. Null when the variable is unset: the registry default then applies. */
+  readonly indexerUrl: string | null;
   readonly pairName: string;
   /** Public RPC endpoint by chain identifier. */
   readonly rpcUrls: Readonly<Record<number, string>>;
@@ -32,9 +33,6 @@ export const VARIABLES = {
   deploymentJson: "VITE_EXPLORER_DEPLOYMENT_JSON",
   walletConnect: "VITE_WALLETCONNECT_PROJECT_ID",
 } as const;
-
-/** The indexer address when none is set. */
-export const DEFAULT_INDEXER_URL = "http://localhost:42069";
 
 const present = (value: string | undefined): string | null => (value === undefined || value.trim() === "" ? null : value.trim());
 
@@ -64,7 +62,7 @@ export const readConfiguration = (environment: Readonly<Record<string, string | 
   }
   const configuration: WebConfiguration = {
     dataMode: mode,
-    indexerUrl: (present(environment[VARIABLES.indexerUrl]) ?? DEFAULT_INDEXER_URL).replace(/\/$/, ""),
+    indexerUrl: present(environment[VARIABLES.indexerUrl])?.replace(/\/$/, "") ?? null,
     pairName: present(environment[VARIABLES.pair]) ?? DEFAULT_PAIR_ID,
     rpcUrls: rpcUrlsOf(environment),
     deploymentJson: present(environment[VARIABLES.deploymentJson]),
@@ -87,6 +85,22 @@ const defaultFetcher: TextFetcher = async (url) => {
 };
 
 /**
+ * Fetches the deployment file once and returns a configuration that holds its text inline. The page then reads the
+ * file one time, for both the views and the RPC source. A configuration that holds the text already, and a fixture
+ * page, come back unchanged.
+ *
+ * @param configuration The configuration.
+ * @param fetcher Replaces `fetch`.
+ */
+export const withDeploymentText = async (configuration: WebConfiguration, fetcher: TextFetcher = defaultFetcher): Promise<WebConfiguration> => {
+  if (configuration.dataMode === "fixture" || configuration.deploymentJson !== null) return configuration;
+  return { ...configuration, deploymentJson: await fetcher(configuration.deploymentUrl ?? "") };
+};
+
+const readDeploymentText = async (configuration: WebConfiguration, fetcher: TextFetcher): Promise<string> =>
+  configuration.deploymentJson ?? (await fetcher(configuration.deploymentUrl ?? ""));
+
+/**
  * Builds the pair from the deployment file. A fixture page uses the built-in sample pair.
  *
  * @param configuration The configuration.
@@ -95,11 +109,30 @@ const defaultFetcher: TextFetcher = async (url) => {
  */
 export const loadPairConfig = async (configuration: WebConfiguration, fetcher: TextFetcher = defaultFetcher): Promise<PairConfig> => {
   if (configuration.dataMode === "fixture") return FIXTURE_PAIR;
-  const text = configuration.deploymentJson ?? (await fetcher(configuration.deploymentUrl ?? ""));
+  const text = await readDeploymentText(configuration, fetcher);
   try {
     return buildPairConfig(configuration.pairName, JSON.parse(text));
   } catch (error) {
     // `JSON.parse` and the pair builder throw Error objects only.
+    throw new ConfigurationError(`The deployment file is not usable: ${(error as Error).message}`);
+  }
+};
+
+/**
+ * Builds the pair in the form that the RPC source needs: the addresses and the start blocks. It reads the same
+ * deployment text as {@link loadPairConfig}. A chain with no RPC URL in the file gets an empty URL, because the
+ * user can set one later. A fixture page needs no such pair and gets null.
+ *
+ * @param configuration The configuration.
+ * @param fetcher Replaces `fetch`.
+ * @throws ConfigurationError when the deployment text is not JSON or does not describe the pair.
+ */
+export const loadSharedPair = async (configuration: WebConfiguration, fetcher: TextFetcher = defaultFetcher): Promise<Pair | null> => {
+  if (configuration.dataMode === "fixture") return null;
+  const text = await readDeploymentText(configuration, fetcher);
+  try {
+    return loadPair({ pairName: configuration.pairName, environment: {}, deployment: JSON.parse(text), requireRpcUrl: false });
+  } catch (error) {
     throw new ConfigurationError(`The deployment file is not usable: ${(error as Error).message}`);
   }
 };

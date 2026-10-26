@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { loadPairConfig, readConfiguration, DEFAULT_INDEXER_URL } from "../../src/config/environment";
+import { describe, expect, it, vi } from "vitest";
+import { loadPairConfig, loadSharedPair, readConfiguration, withDeploymentText } from "../../src/config/environment";
 import { ConfigurationError } from "../../src/config/secret-scan";
 
 const DEPLOYMENT = JSON.stringify({
@@ -21,8 +21,8 @@ describe("readConfiguration", () => {
     expect(configuration.dataMode).toBe("live");
   });
 
-  it("uses the local indexer when none is set", () => {
-    expect(readConfiguration({ VITE_EXPLORER_DEPLOYMENT_URL: "https://example.org/d.json" }).indexerUrl).toBe(DEFAULT_INDEXER_URL);
+  it("leaves the indexer unset when no variable names it, so the registry default decides later", () => {
+    expect(readConfiguration({ VITE_EXPLORER_DEPLOYMENT_URL: "https://example.org/d.json" }).indexerUrl).toBeNull();
   });
 
   it("refuses a live page with no deployment file, so the page never guesses addresses", () => {
@@ -70,5 +70,76 @@ describe("loadPairConfig", () => {
   it("explains a deployment file that does not describe the pair", async () => {
     const configuration = readConfiguration({ VITE_EXPLORER_DEPLOYMENT_JSON: "{}" });
     await expect(loadPairConfig(configuration)).rejects.toThrow(/not usable/);
+  });
+});
+
+const section = (chainId: number, byte: string, extra: Record<string, unknown> = {}) => ({
+  chain_id: chainId,
+  bridge: `0x${byte.repeat(20)}`,
+  mediator: `0x${byte.repeat(20)}`,
+  token_factory: `0x${byte.repeat(20)}`,
+  native_router: `0x${byte.repeat(20)}`,
+  wrapped_native: `0x${byte.repeat(20)}`,
+  gate: `0x${byte.repeat(20)}`,
+  light_client: `0x${byte.repeat(20)}`,
+  start_block: 100,
+  ...extra,
+});
+
+const FULL_DEPLOYMENT = JSON.stringify({ chain_a: section(1, "11"), chain_b: section(369, "44") });
+
+describe("loadSharedPair", () => {
+  it("builds the pair with the addresses of the deployment and no RPC URL, because the user can set one later", async () => {
+    const pair = await loadSharedPair(readConfiguration({ VITE_EXPLORER_DEPLOYMENT_JSON: FULL_DEPLOYMENT }));
+    expect(pair?.sides.map((side) => side.chainId)).toEqual([1, 369]);
+    expect(pair?.sides.map((side) => side.rpcUrl)).toEqual(["", ""]);
+  });
+
+  it("reads the same deployment text as the view pair, through the fetcher when only a URL is set", async () => {
+    const seen: string[] = [];
+    const pair = await loadSharedPair(readConfiguration({ VITE_EXPLORER_DEPLOYMENT_URL: "https://example.org/d.json" }), async (url) => {
+      seen.push(url);
+      return FULL_DEPLOYMENT;
+    });
+    expect(seen).toEqual(["https://example.org/d.json"]);
+    expect(pair?.name).toBe("eth-pls");
+  });
+
+  it("needs no pair on a fixture page and reads no file", async () => {
+    const fetcher = vi.fn();
+    expect(await loadSharedPair(readConfiguration({ VITE_EXPLORER_DATA: "fixture" }), fetcher)).toBeNull();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("explains a deployment file that does not describe the pair", async () => {
+    await expect(loadSharedPair(readConfiguration({ VITE_EXPLORER_DEPLOYMENT_JSON: "{}" }))).rejects.toThrow(/^The deployment file is not usable: /);
+  });
+});
+
+describe("withDeploymentText", () => {
+  it("fetches the file once and holds its text inline, so two loaders share one read", async () => {
+    const fetcher = vi.fn(async () => DEPLOYMENT);
+    const configuration = await withDeploymentText(readConfiguration({ VITE_EXPLORER_DEPLOYMENT_URL: "https://example.org/d.json" }), fetcher);
+    expect(configuration.deploymentJson).toBe(DEPLOYMENT);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a configuration that holds the text already, and a fixture configuration, unchanged", async () => {
+    const fetcher = vi.fn();
+    const inline = readConfiguration({ VITE_EXPLORER_DEPLOYMENT_JSON: FULL_DEPLOYMENT });
+    const fixture = readConfiguration({ VITE_EXPLORER_DATA: "fixture" });
+    expect(await withDeploymentText(inline, fetcher)).toBe(inline);
+    expect(await withDeploymentText(fixture, fetcher)).toBe(fixture);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("fetches with an empty address when a hand-made configuration names no source", async () => {
+    const seen: string[] = [];
+    const base = readConfiguration({ VITE_EXPLORER_DEPLOYMENT_JSON: FULL_DEPLOYMENT });
+    await withDeploymentText({ ...base, deploymentJson: null, deploymentUrl: null }, async (url) => {
+      seen.push(url);
+      return "{}";
+    });
+    expect(seen).toEqual([""]);
   });
 });

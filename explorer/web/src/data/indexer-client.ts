@@ -64,3 +64,38 @@ export const createIndexerClient = (input: IndexerClientInput): IndexerClient =>
     },
   };
 };
+
+/** The part of the connection runtime that the fallback client needs. */
+export type FallbackConnectionPort = {
+  /** The newest connection. The runtime rebuilds it when the settings change, so read it at each call. */
+  readonly connection: () => {
+    readonly baseUrl: string;
+    readonly request: (url: string) => Promise<{ readonly status: number; readonly body: unknown }>;
+    readonly run: <value>(operations: { readonly viaIndexer: () => Promise<value>; readonly viaRpc: () => Promise<value> }) => Promise<value>;
+    readonly rpc: { readonly findMessageByTransaction: (transactionHash: Hex) => Promise<Hex | null> };
+  };
+};
+
+/**
+ * Creates a client that falls back to the RPC source. A message read goes through the connection, which answers from
+ * the indexer or from the chains. A lookup by transaction hash tries the GraphQL route first, then the chains.
+ *
+ * @param runtime The connection runtime.
+ */
+export const createFallbackIndexerClient = (runtime: FallbackConnectionPort): IndexerClient => ({
+  async message(messageId) {
+    const connection = runtime.connection();
+    const path = `/api/messages/${messageId.toLowerCase()}`;
+    const response = await connection.request(`${connection.baseUrl}${path}`);
+    if (response.status === 404) return null;
+    if (response.status !== 200) throw new IndexerResponseError(`The indexer answered ${response.status} for ${path}.`);
+    return parseMessageDetail(response.body);
+  },
+  findMessageByTransaction(transactionHash) {
+    const connection = runtime.connection();
+    return connection.run({
+      viaIndexer: () => createIndexerClient({ baseUrl: connection.baseUrl }).findMessageByTransaction(transactionHash),
+      viaRpc: () => connection.rpc.findMessageByTransaction(transactionHash),
+    });
+  },
+});

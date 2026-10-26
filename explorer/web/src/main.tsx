@@ -3,7 +3,8 @@ import { createRoot } from "react-dom/client";
 import { Providers } from "./app/Providers";
 import { createServices } from "./app/services";
 import { Shell } from "./app/Shell";
-import { loadPairConfig, readConfiguration } from "./config/environment";
+import { loadPairConfig, loadSharedPair, readConfiguration, withDeploymentText } from "./config/environment";
+import { browserStorage } from "./search/recent-items";
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("The page has no element with the identifier root.");
@@ -24,9 +25,10 @@ const showStartupProblem = (message: string): void => {
 };
 
 const start = async (): Promise<void> => {
-  const configuration = readConfiguration(import.meta.env);
+  const configuration = await withDeploymentText(readConfiguration(import.meta.env));
   const pair = await loadPairConfig(configuration);
-  const services = createServices(configuration, pair);
+  const sharedPair = await loadSharedPair(configuration);
+  const services = createServices(configuration, pair, { sharedPair, storage: browserStorage() });
   mount.render(
     <StrictMode>
       <Providers services={services}>

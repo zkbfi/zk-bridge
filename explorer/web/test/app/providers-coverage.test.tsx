@@ -7,6 +7,7 @@ import { Providers } from "../../src/app/Providers";
 import { createServices, useServices } from "../../src/app/services";
 import { readConfiguration } from "../../src/config/environment";
 import { useWallet } from "../../src/wallet/wallet-port";
+import { sharedPairForTests } from "../support/live";
 
 const Probe = () => {
   const wallet = useWallet();
@@ -38,7 +39,7 @@ describe("Providers", () => {
       VITE_EXPLORER_RPC_URL_1: "https://eth.example.org",
       VITE_EXPLORER_RPC_URL_369: "https://pls.example.org",
     });
-    const services = createServices(configuration, FIXTURE_PAIR);
+    const services = createServices(configuration, FIXTURE_PAIR, { sharedPair: sharedPairForTests() });
     render(
       <Providers services={services}>
         <Probe />
