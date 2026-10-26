@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getAddress, type Address, type PublicClient } from "viem";
@@ -106,8 +106,8 @@ async function waitForEvent(created: ServiceWorld, name: string): Promise<void> 
   expect(created.events().some((event) => event.event === name)).toBe(true);
 }
 
-function run(started: Started, overrides: RunnerOverrides, options: { runOnce?: boolean; signal?: AbortSignal } = {}) {
-  return startRunner({ context: started.created.context, signal: options.signal ?? new AbortController().signal, runOnce: options.runOnce ?? true, overrides });
+function run(started: Started, overrides: RunnerOverrides | undefined, options: { runOnce?: boolean; signal?: AbortSignal } = {}) {
+  return startRunner({ context: started.created.context, signal: options.signal ?? new AbortController().signal, runOnce: options.runOnce ?? true, ...(overrides === undefined ? {} : { overrides }) });
 }
 
 function standardOverrides(extra: RunnerOverrides = {}) {
@@ -160,7 +160,7 @@ describe("startRunner refuses to start", () => {
 
   it("without a msgboard endpoint, and then holds no lock", async () => {
     const started = await prepare({ setup: { msgboardUrl: null } });
-    await expect(run(started, standardOverrides().overrides)).rejects.toThrow("The setup file has no msgboard endpoint (msgboardUrl).");
+    await expect(run(started, undefined)).rejects.toThrow("The setup file has no msgboard endpoint (msgboardUrl).");
     expect(existsSync(join(started.created.directory, "state", "runner-eth-pls-first-to-second.json.lock"))).toBe(false);
   });
 
@@ -273,6 +273,57 @@ describe("startRunner runs one pass", () => {
     await run(started, rest);
     expect(started.node.requests.some((request) => request.method === "msgboard_content")).toBe(true);
     expect(started.created.events().find((event) => event.event === "runner_sweep")).toBeDefined();
+  });
+});
+
+describe("startRunner with a proof on the board", () => {
+  /** A client that answers the chain reads, and reverts every call so that the update is skipped. */
+  function revertingClient() {
+    const client = clientWith();
+    return Object.assign(client, {
+      getBlock: async () => ({ baseFeePerGas: 10n }),
+      estimateMaxPriorityFeePerGas: async () => 0n,
+      call: async () => {
+        throw new Error("execution reverted");
+      },
+    });
+  }
+
+  async function runWithProof(environment: Record<string, string | undefined>) {
+    const started = await prepare({ environment });
+    const specs: Array<{ command: string; args: readonly string[]; environment: Readonly<Record<string, string>> }> = [];
+    const { feed } = fakeFeed([{ category: proofCategory("eth-pls", "first-to-second"), data: proofPayload(), hash: word(1) }]);
+    const overrides = standardOverrides({
+      feed,
+      publicClient: () => revertingClient(),
+      executor: async (spec) => {
+        specs.push(spec);
+        return { code: 0, stdout: `${JSON.stringify({ valid: true, programKey: PROGRAM_KEY })}\n`, stderr: "" };
+      },
+    }).overrides;
+    const { prover: _unused, ...withoutProver } = overrides;
+    await run(started, withoutProver);
+    return { started, specs };
+  }
+
+  it("verifies the proof with the prover binary of the configuration, which sees only the PATH", async () => {
+    const { specs } = await runWithProof({ PATH: "/custom/bin", RUNNER_KEY: SIGNER_KEY });
+    expect(specs).toHaveLength(1);
+    expect(specs[0]).toMatchObject({ command: "/bin/zk-bridge-prover", args: expect.arrayContaining(["verify", "--program-vkey", PROGRAM_KEY]) });
+    expect(specs[0]!.environment).toEqual({ PATH: "/custom/bin" });
+  });
+
+  it("gives the prover a default PATH when the environment has none", async () => {
+    const { specs } = await runWithProof({ PATH: undefined, RUNNER_KEY: SIGNER_KEY });
+    expect(specs[0]!.environment).toEqual({ PATH: "/usr/bin:/bin" });
+  });
+
+  it("records the outcome of the update in the outcome file, stamped by the clock it is given", async () => {
+    const { started } = await runWithProof({ PATH: "/custom/bin", RUNNER_KEY: SIGNER_KEY });
+    const lines = readFileSync(join(started.created.directory, "state", "outcomes-eth-pls.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(lines).toEqual([
+      expect.objectContaining({ time: new Date(1_800_000_000_000).toISOString(), kind: "update", status: "skipped", pair: "eth-pls", direction: "first-to-second", startSlot: "100", newSlot: "164" }),
+    ]);
   });
 });
 

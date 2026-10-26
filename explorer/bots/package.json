@@ -12,7 +12,8 @@
   },
   "scripts": {
     "start": "node bin/zk-bridge-bot.mjs",
-    "test": "vitest run",
+    "test": "vitest run --coverage",
+    "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "typecheck": "tsc --noEmit"
   },
