@@ -1,0 +1,290 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {StdInvariant} from "forge-std/StdInvariant.sol";
+import {Test} from "forge-std/Test.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {BridgedToken} from "../../../src/hardened/mediator/BridgedToken.sol";
+import {FeeRouter} from "../../../src/hardened/mediator/FeeRouter.sol";
+import {TokenFactory} from "../../../src/hardened/mediator/TokenFactory.sol";
+import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
+import {RouterHandler} from "./utils/RouterHandler.sol";
+
+/// @notice Invariants of the two mediators, the fee routers and the wrapped native router, under random sequences of
+/// relays, deliveries by three paths, claims, fee collection, time and attacks. See `RouterHandler` for the actions and
+/// for what the handler claims, and `RouterWorld` for the two chains.
+/// forge-config: default.invariant.runs = 8
+/// forge-config: default.invariant.depth = 40
+/// forge-config: default.invariant.fail-on-revert = true
+/// forge-config: deep.invariant.runs = 2000
+/// forge-config: deep.invariant.depth = 100
+/// forge-config: deep.invariant.fail-on-revert = true
+contract MediatorRouterInvariantTest is StdInvariant, Test {
+    RouterHandler internal handler;
+
+    function setUp() public {
+        handler = new RouterHandler();
+        targetContract(address(handler));
+        // One outside sender. A sender that is a holder would receive coin from the test runner and break the sum of the coin.
+        targetSender(makeAddr("fuzzer"));
+        bytes4[] memory selectors = new bytes4[](17);
+        selectors[0] = RouterHandler.relay.selector;
+        selectors[1] = RouterHandler.relay.selector;
+        selectors[2] = RouterHandler.relay.selector;
+        selectors[3] = RouterHandler.deliver.selector;
+        selectors[4] = RouterHandler.deliver.selector;
+        selectors[5] = RouterHandler.deliver.selector;
+        selectors[6] = RouterHandler.deliverNewest.selector;
+        selectors[7] = RouterHandler.claim.selector;
+        selectors[8] = RouterHandler.collectFees.selector;
+        selectors[9] = RouterHandler.advanceTime.selector;
+        selectors[10] = RouterHandler.toggleDeny.selector;
+        selectors[11] = RouterHandler.attack.selector;
+        selectors[12] = RouterHandler.wrapCoin.selector;
+        selectors[13] = RouterHandler.unwrapCoin.selector;
+        selectors[14] = RouterHandler.donate.selector;
+        selectors[15] = RouterHandler.toggleRefusal.selector;
+        selectors[16] = RouterHandler.deliver.selector;
+        targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
+    }
+
+    // ------------------------------------------------------------------------------------------------ invariants
+
+    /// Claim: the record of a native token equals what stands behind it. Shows: for each native token, the record of
+    /// the home mediator equals the supply of the bridged copy, plus the claims on the home chain, plus the claims on the
+    /// other chain, plus the value of the messages in flight (in both directions). The supply includes the copies that
+    /// the other mediator holds as fees. Matters: this is the whole solvency of the bridge. A copy without a record
+    /// behind it, or a record without a copy, a claim or a message, is a loss or a theft. The claims are in the sum
+    /// because a release that a token refused burned its copies and left the record in place, and a mint that a copy
+    /// refused is recorded as a claim and not minted.
+    function invariant_theRecordEqualsTheCopiesPlusTheClaimsPlusTheMessagesInFlight() public view {
+        for (uint256 index = 0; index < 5; index++) {
+            address native = handler.nativeAt(index);
+            uint256 home = handler.homeOf(index);
+            uint256 record = handler.mediatorOf(home).mediatorBalance(native);
+            uint256 backing = handler.supplyOrZero(handler.copyAt(index)) + handler.claimableOfHolders(index)
+                + handler.claimableOfHolders(index + 5) + handler.inFlight(native);
+            assertEq(record, backing, "record != copy supply + claims + in flight");
+        }
+    }
+
+    /// Claim: the home mediator holds exactly what its record and its fees say. Shows: for each native token,
+    /// `balanceOf(mediator)` equals the record plus the accrued fees plus what strangers sent by plain transfer. For each
+    /// bridged copy, the other mediator holds the accrued fees and what strangers sent, and nothing else. Matters:
+    /// the contracts state that the balance covers `mediatorBalance + accruedFees`. The test tightens it to equality for
+    /// tokens that charge nothing on transfer, so a leak in either direction shows.
+    function invariant_theMediatorHoldsTheRecordAndTheFeesExactly() public view {
+        for (uint256 index = 0; index < 5; index++) {
+            address native = handler.nativeAt(index);
+            address copy = handler.copyAt(index);
+            uint256 home = handler.homeOf(index);
+            uint256 held = handler.balanceOrZero(native, address(handler.mediatorOf(home)));
+            assertEq(
+                held,
+                handler.mediatorOf(home).mediatorBalance(native) + handler.mediatorOf(home).accruedFees(native)
+                    + handler.donated(native),
+                "native balance"
+            );
+            uint256 heldCopies = handler.balanceOrZero(copy, address(handler.mediatorOf(1 - home)));
+            assertEq(
+                heldCopies,
+                handler.mediatorOf(1 - home).accruedFees(copy) + handler.donated(copy),
+                "copy balance"
+            );
+        }
+    }
+
+    /// Claim: a message executes at most once, nothing fails, and the handler broke no rule. Shows: the count of
+    /// executions of every message is at most one, no delivery call failed, no message identifier repeated, and the
+    /// handler recorded no violation: every delivery split its value exactly into recipient, tip and protocol fee, no tip
+    /// passed the terms, no stranger origin or reward address ran a message, and the fee rate never rose. Matters: the
+    /// bridge marks a message delivered whether or not the call succeeded, so a failed call loses tokens.
+    function invariant_noViolationAndNoRepeatedExecution() public view {
+        for (uint256 i = 0; i < handler.messageCount(); i++) {
+            assertLe(handler.executions(handler.messageAt(i).bridgeMessageId), 1, "a message executed twice");
+        }
+        assertEq(handler.failedDeliveries(), 0, "a delivery failed");
+        assertEq(handler.violations(), 0, handler.firstViolation());
+    }
+
+    /// Claim: no router holds a token or the coin after a call returns, and no run is left open. Shows: after every
+    /// action, each of the six fee routers and the two wrapped routers holds none of the ten tokens and none of the coin,
+    /// and the runner slot of each fee router is at most 1 (not running). Matters: the routers have no owner and no
+    /// way to recover a token, so any balance that stays is lost.
+    function invariant_noRouterHoldsAnythingAndNoRunStaysOpen() public view {
+        for (uint256 chain = 0; chain < 2; chain++) {
+            for (uint256 k = 0; k < 3; k++) {
+                FeeRouter router = handler.feeRouterAt(chain, k);
+                _assertEmpty(address(router));
+                assertLe(uint256(vm.load(address(router), router.RUNNER_SLOT())), 1, "the runner slot is open");
+            }
+            _assertEmpty(address(handler.wethRouterAt(chain)));
+        }
+    }
+
+    /// Claim: only the immutable reward address earns, and the hot runner earns nothing. Shows: the runner, a stranger
+    /// and every router are never paid by any delivery (the handler reports a breach as a violation), and the routers
+    /// name their reward address and runner as the immutables that they were built with. Matters: a stolen runner key
+    /// must not redirect a tip.
+    function invariant_theRunnerAndStrangersHoldNothing() public view {
+        for (uint256 index = 0; index < 10; index++) {
+            assertEq(handler.holding(index, handler.runnerAddress()), 0, "the runner");
+            assertEq(handler.holding(index, handler.strangerAddress()), 0, "a stranger");
+        }
+        for (uint256 chain = 0; chain < 2; chain++) {
+            for (uint256 k = 0; k < 3; k++) {
+                FeeRouter router = handler.feeRouterAt(chain, k);
+                assertEq(router.rewardAddress(), handler.rewardAt(k), "the reward address changed");
+            }
+        }
+    }
+
+    /// Claim: the wrapped native token is backed one for one, and the coin is conserved. Shows: the supply of each
+    /// wrapped token equals the coin that it holds, and the coin of the holders and the two wrapped tokens equals the
+    /// coin that the handler created. Matters: the routers wrap and unwrap, and a rounding or a double unwrap would
+    /// break the backing.
+    function invariant_theWrappedNativeTokenIsBackedAndTheCoinIsConserved() public view {
+        uint256 coin;
+        for (uint256 chain = 0; chain < 2; chain++) {
+            assertEq(handler.wrappedAt(chain).totalSupply(), address(handler.wrappedAt(chain)).balance, "backing");
+            coin += address(handler.wrappedAt(chain)).balance;
+        }
+        for (uint256 i = 0; i < handler.holderCount(); i++) {
+            coin += handler.holderAt(i).balance;
+        }
+        assertEq(coin, handler.coinDealt(), "the coin changed");
+    }
+
+    /// Claim: the fee rate never rises over time, and stays between the floor and the start. Shows: the handler saw
+    /// no rise after any action; and the rate a day, a year and ten years from now is not above the rate now, and not
+    /// under the floor. Matters: a sender reads the rate and relies on it not rising.
+
+    function invariant_theFeeRateIsMonotoneAndAboveTheFloor() public view {
+        for (uint256 chain = 0; chain < 2; chain++) {
+            TokenMediator mediator = handler.mediatorOf(chain);
+            uint256 now_ = mediator.currentFeeRate();
+            assertLe(now_, mediator.feeStartRate());
+            assertGe(now_, mediator.feeFloorRate());
+            assertEq(now_, handler.lastRate(chain), "the last observed rate");
+            uint256[3] memory later = [uint256(1 days), 365 days, 3650 days];
+            for (uint256 i = 0; i < later.length; i++) {
+                uint256 rate = mediator.feeRateAt(block.timestamp + later[i]);
+                assertLe(rate, now_, "the rate rose over time");
+                assertGe(rate, mediator.feeFloorRate(), "the rate fell under the floor");
+            }
+        }
+    }
+
+    /// Claim: the copies are where the factory rule puts them, and the two registries agree. Shows: for each deployed
+    /// copy, the other mediator maps the native token to the copy and the copy back to the native token, the copy
+    /// stands at the address that the factory predicts from the chain and the native token, the copy obeys the mediator
+    /// of its chain, and its name, symbol and decimals follow the rule of the mediator. The home mediator knows no copy
+    /// for it. Matters: a copy at another address, or a registry that does not point back, would let a second token
+    /// pass as the first.
+    function invariant_theCopiesAreWhereTheFactoryRuleSaysAndTheRegistriesAgree() public view {
+        for (uint256 index = 0; index < 5; index++) {
+            address native = handler.nativeAt(index);
+            address copy = handler.copyAt(index);
+            uint256 home = handler.homeOf(index);
+            TokenMediator away = handler.mediatorOf(1 - home);
+            TokenMediator homeMediator = handler.mediatorOf(home);
+            assertEq(homeMediator.bridgedTokenAddress(native), address(0), "the home chain has a copy of its own token");
+            assertEq(homeMediator.nativeTokenAddress(native), address(0), "the native token is a copy");
+            if (copy.code.length == 0) {
+                assertEq(away.bridgedTokenAddress(native), address(0), "registered with no code");
+                continue;
+            }
+            assertEq(away.bridgedTokenAddress(native), copy, "forward registry");
+            assertEq(away.nativeTokenAddress(copy), native, "reverse registry");
+            TokenFactory factory = away.tokenFactory();
+            assertEq(factory.predictAddress(away.remoteChainId(), native), copy, "factory rule");
+            assertEq(BridgedToken(copy).bridgeContract(), address(away), "the copy obeys its mediator");
+            assertEq(IERC20Metadata(copy).decimals(), IERC20Metadata(native).decimals(), "decimals");
+            assertEq(
+                IERC20Metadata(copy).name(),
+                string.concat(IERC20Metadata(native).name(), " from ", factory.homeChainName()),
+                "name"
+            );
+            assertEq(
+                IERC20Metadata(copy).symbol(), string.concat("zkb", IERC20Metadata(native).symbol()), "symbol"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------------------------------- reach
+
+    /// Claim: the handler reaches the paying paths. Shows: after a fixed sequence, every counter of a path is above
+    /// zero: direct, router and batch deliveries, a routed delivery with a tip, a native payout, a fallback, a recorded
+    /// claim and its payment, a failed callback, fee collection, the wrapped router, and refused attacks. Matters: an
+    /// invariant over a handler that never acts proves nothing.
+    function test_handlerReachesThePayingPaths() public {
+        // A fee router delivery with a fixed fee, then a share, then gas based, each executed by its own router.
+        // Route 3, director shape in detail bits 32..: 0 fixed, 1 share, 2 gas, 3 gas on the base fee.
+        for (uint256 shape = 0; shape < 4; shape++) {
+            handler.relay(0, 0, 3, 0, 5e18, (shape << 32) | (1 << 40) | 7, 1);
+            handler.deliver(0, 1, 0x55, 30 gwei);
+        }
+        assertGt(handler.routerDeliveries(), 0, "router deliveries");
+        assertGt(handler.routedDeliveries(), 0, "routed deliveries");
+        assertGt(handler.tipsPaid(), 0, "a tip was paid");
+
+        // A batch of four through Multicall3.
+        for (uint256 i = 0; i < 4; i++) {
+            handler.relay(0, 0, 3, uint8(i), 3e18, (i << 32) | (1 << 40) | i, 1);
+        }
+        handler.deliver(0, 2, 0x55, 30 gwei);
+        assertGt(handler.batchDeliveries(), 0, "batch deliveries");
+
+        // A direct delivery, and a delivery that waits.
+        handler.relay(0, 0, 0, 1, 2e18, 3, 1);
+        handler.deliver(0, 0, 0, 0);
+        assertGt(handler.directDeliveries(), 0, "direct deliveries");
+
+        // The wrapped native token goes to B by the wrap form and comes back to A through the fee router and unwrap.
+        handler.relay(1, 0, 6, 2, 4e18, 1, 1);
+        handler.deliver(0, 0, 0, 0);
+        handler.relay(1, 1, 3, 2, 1e18, (1 << 32) | 5 | (1 << 8), 1);
+        handler.deliver(0, 1, 0x55, 30 gwei);
+        handler.relay(1, 0, 6, 2, 4e18, 1, 1);
+        handler.deliver(0, 0, 0, 0);
+        handler.relay(1, 1, 5, 2, 1e18, 2, 1);
+        handler.deliver(0, 1, 0x55, 30 gwei);
+        assertGt(handler.wethRouterDeliveries(), 0, "the wrapped router was reached");
+
+        // A recipient that the token refuses. Actor 2 holds copies of the deny list token. Actors 0 and 1 are denied.
+        // The first release names a denied receiver and a fallback that is allowed (the fallback is paid). The second
+        // names two denied accounts (a claim is recorded). Both are delivered at once (timing seed 0).
+        handler.relay(4, 0, 1, 0, 9e18, 2 | (2 << 8), 0);
+        handler.toggleDeny(0);
+        handler.toggleDeny(1);
+        handler.relay(4, 1, 1, 2, 1e18, 0 | (3 << 8), 0);
+        assertGt(handler.fallbacksUsed(), 0, "a fallback was used");
+        handler.relay(4, 1, 1, 2, 1e18, 0 | (1 << 8), 0);
+        assertGt(handler.claimsRecorded(), 0, "a claim was recorded");
+        handler.advanceTime(40 days);
+        handler.toggleDeny(0);
+        handler.toggleDeny(1);
+        handler.claim(4, 1);
+        assertGt(handler.claimsPaid(), 0, "a claim was paid");
+
+        // Fees, time, strangers, attacks.
+        handler.collectFees(0);
+        handler.collectFees(5);
+        handler.donate(0, 0, 1 ether);
+        for (uint256 kind = 0; kind < 6; kind++) {
+            handler.attack(uint8(kind), uint8(kind));
+        }
+        assertGt(handler.attacksRefused(), 0, "attacks were refused");
+        assertGt(handler.feesCollected(), 0, "fees were collected");
+        assertEq(handler.violations(), 0, handler.firstViolation());
+    }
+
+    // --------------------------------------------------------------------------------------------------- helpers
+
+    function _assertEmpty(address account) internal view {
+        for (uint256 u = 0; u < 10; u++) {
+            assertEq(handler.balanceOrZero(handler.tokenAt(u), account), 0, "a router holds a token");
+        }
+        assertEq(account.balance, 0, "a router holds the coin");
+    }
+}

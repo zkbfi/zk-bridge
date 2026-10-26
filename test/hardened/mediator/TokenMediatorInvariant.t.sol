@@ -485,6 +485,9 @@ contract MediatorHandler is Test {
 /// forge-config: default.invariant.runs = 64
 /// forge-config: default.invariant.depth = 100
 /// forge-config: default.invariant.fail-on-revert = true
+/// forge-config: deep.invariant.runs = 2000
+/// forge-config: deep.invariant.depth = 100
+/// forge-config: deep.invariant.fail-on-revert = true
 contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
     MediatorHandler internal handler;
     address internal treasury = makeAddr("treasury");
