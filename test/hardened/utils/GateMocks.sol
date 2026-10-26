@@ -181,6 +181,17 @@ library GateProbeCodes {
         return hex"60025f5260205ff3";
     }
 
+    /// @notice A stand-in for the `BLS12_G1ADD` precompile in raw code. It returns the generator for any call with 256
+    /// bytes of input and reverts for any other length. It costs about 100 gas, so it fits the gas that the gate gives
+    /// the precompile even in a build with no optimizer, where `GateBlsG1AddMock` costs more.
+    /// @dev `CALLDATASIZE PUSH2 0x0100 EQ PUSH1 0x0b JUMPI PUSH0 PUSH0 REVERT JUMPDEST`, then
+    /// `PUSH1 0x80 PUSH1 0x16 PUSH0 CODECOPY PUSH1 0x80 PUSH0 RETURN`, then the 128 bytes of the generator.
+    function blsG1AddAnswersTheGenerator() internal pure returns (bytes memory) {
+        return abi.encodePacked(
+            hex"3661010014600b575f5ffd5b", hex"60806016", hex"5f39", hex"60805ff3", GateBlsPoints.generator()
+        );
+    }
+
     /// @notice A probe that succeeds and returns nothing.
     function returnsNothing() internal pure returns (bytes memory) {
         return hex"00";

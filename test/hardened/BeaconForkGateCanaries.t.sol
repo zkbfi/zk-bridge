@@ -223,6 +223,43 @@ contract BeaconForkGateCanariesTest is GateSupport {
         assertTrue(gate.enforcing());
     }
 
+    /// Claim: the gate fires the BLS12-381 canary when the precompile answers the known input with the generator, and the
+    /// gate sends exactly that input. Shows: a stand-in in raw code (cheap enough for the gas that the gate gives the
+    /// precompile in any build) makes `admit("")` emit `Bls12381Precompile`, and the call to address 0x0b carries the
+    /// generator and 128 zero bytes. Matters: this is the same rule as the test with the Solidity stand-in, which needs
+    /// the optimizer to fit the gas cap.
+    function test_HB02_canary_blsPrecompileFiresWithACheapStandIn() public {
+        vm.etch(BLS_G1_ADD, GateProbeCodes.blsG1AddAnswersTheGenerator());
+        vm.expectCall(BLS_G1_ADD, abi.encodePacked(GateBlsPoints.generator(), new bytes(128)));
+        vm.expectEmit(address(gate));
+        emit ExecutionCanaryFired(BeaconForkGate.Canary.Bls12381Precompile);
+        vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.ForkNotConfirmed.selector, EPOCH_E));
+        gate.admit("");
+    }
+
+    /// Claim: the constructor refuses to build a gate when the probe cannot be deployed. Shows: with code planted at the
+    /// address that the probe would take, the deployment reverts with `ProbeDeploymentFailed`, and with the address free
+    /// it succeeds. Matters: a gate with no probe would admit every deposit and never detect a canary.
+    function test_HB02_canary_constructorRefusesAProbeThatCannotBeDeployed() public {
+        address nextGate = vm.computeCreateAddress(address(this), vm.getNonce(address(this)));
+        address probeAddress = vm.computeCreateAddress(nextGate, 1);
+        vm.etch(probeAddress, hex"00");
+        // The failed creation of the probe burns all the gas that it gets, so the build runs with a fixed amount of gas.
+        vm.expectRevert(BeaconForkGate.ProbeDeploymentFailed.selector);
+        this.buildGateWithFixedGas{gas: 5_000_000}();
+
+        vm.etch(probeAddress, "");
+        address freeGate = vm.computeCreateAddress(address(this), vm.getNonce(address(this)));
+        BeaconForkGate built = BeaconForkGate(this.buildGateWithFixedGas{gas: 5_000_000}());
+        assertEq(address(built), freeGate);
+        assertEq(built.opcodeProbe(), vm.computeCreateAddress(freeGate, 1));
+    }
+
+    /// @dev Builds a gate from this contract, so that a test can cap the gas of the build.
+    function buildGateWithFixedGas() external returns (address) {
+        return address(_newGate(BeaconForkGate.GateMode.DetectBeaconRoots));
+    }
+
     // ================================================================ real opcodes
 
     /// Claim: the raw probe bytes run the real opcodes, each path alone. Shows: under `vm.setEvmVersion("cancun")` a
