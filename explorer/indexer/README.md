@@ -43,11 +43,11 @@ curl -s 'localhost:42069/api/feed?status=sent,covered&limit=20'
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `EXPLORER_PAIR` | Pair name. Known: `eth-pls` (chain 1 and chain 369). | `eth-pls` |
+| `EXPLORER_PAIR` | Pair name. Known: `eth-pls` (chain 1 and chain 369), `sepolia-pls943` (chain 11155111 and chain 943). | `eth-pls` |
 | `EXPLORER_DEPLOYMENT_FILE` | Deployment JSON: one section per chain with `chain_id`, `bridge`, `mediator`, `token_factory`, `native_router`, `wrapped_native`, `gate`, `light_client`, `start_block`, and optional `fee_router` and `fork_registry`. A section matches a side by `chain_id`. `rpc_url` in the file is a fallback. | `../deployments/<pair>.json` |
 | `EXPLORER_RPC_URL_<chainId>` | Execution endpoint. Comes from the environment because URLs can carry keys. | the `rpc_url` of the file |
 | `EXPLORER_BEACON_URL_<chainId>` | Beacon node endpoint of that chain. Optional. Used for the finalized slot in `/api/heads`. | none |
-| `EXPLORER_FINALITY_SECONDS_<chainId>` | Seconds before a send counts as `waiting_for_finality`. | 768 (chain 369: 640) |
+| `EXPLORER_FINALITY_SECONDS_<chainId>` | Seconds before a send counts as `waiting_for_finality`. | 768 (chains 369 and 943: 640) |
 | `EXPLORER_TIP_INTERVAL_BLOCKS` | Blocks between two clock updates. | 5 |
 | `EXPLORER_DELIVERY_SAMPLE_LIMIT` | How many of the newest recorded deliveries of each kind feed `/api/delivery-cost`. | 200 |
 | `EXPLORER_DEFAULT_DELIVERY_GAS` | Gas that `/api/delivery-cost` gives for a kind with no samples. The default is the Foundry measured sum: the fee router delivery call with the gas based fee (about 197807 gas, `test/hardened/mediator/FeeRouterGas.t.sol`), plus the bridge proof check (290655 gas, `test/hardened/MessageBridgeGas.t.sol`), plus 21000 gas of transaction base. That sum is 509462. The default rounds it up to 550000 for calldata. | 550000 |
