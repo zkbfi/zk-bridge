@@ -117,6 +117,40 @@ Replace `<registry>`, `<account>` and `<tag>` with your own. Use an exact tag fo
 
 Do not build on the 2 GB local virtual machine. The build needs about 8 GB of memory. It needs no GPU and no CUDA toolkit.
 
+### Build on the [private] with the cache
+
+Use `script/build-gpu-image.sh`. It builds in one persistent directory on the build host (`~/zk-bridge-build/gpu-image` on the [private], host name `[private]`), so the BuildKit cache stays between builds.
+
+```
+script/build-gpu-image.sh --tag zk-bridge-prover-gpu-worker:local          # build only, never pushes
+script/build-gpu-image.sh --tag ghcr.io/<account>/zk-bridge-prover-gpu-worker:<tag> --push
+script/build-gpu-image.sh --no-cache --tag zk-bridge-prover-gpu-worker:local   # a cold build, for timing
+```
+
+The script does five things. It fixes the ownership of the build directory. It syncs the tracked files of `HEAD` (`git archive`) and the two ELFs of `light-client/elf/` into it. It runs `docker build`. It fixes the ownership again. It prints the elapsed time and the image identifier, and with `--push` the registry digest. Commit your changes first: it builds `HEAD`, not the working tree.
+
+Docker runs as root. A program-keys run or a build can leave root-owned files in the build directory, and the next sync then fails. The old workaround was a fresh folder for each build. The script now runs this instead, at the start and at the end:
+
+```
+docker run --rm -v "$HOME/zk-bridge-build/gpu-image:/w" <pinned runtime image> chown -R "$(id -u):$(id -g)" /w
+```
+
+Run the same command by hand after a manual `light-client/scripts/program-keys.sh` run in that directory.
+
+The layers of the `build-gpu-worker` stage go from slowest to fastest changing: toolchain and packages, the light-client crates and the manifests, a dependency-only build from stub sources (one cache mount each for the cargo registry, the git dependencies and the target directory), then `prover/src`. The final stage puts the GPU server download, the 6 GB circuit files, the worker binary and the ELFs in that order. A change in `prover/src` now rebuilds one crate and writes two small layers. The checksums, the `VERIFIER_HASH` check, the ELF check and every pinned version are unchanged.
+
+Measured on the [private] (32 cores) on 2026-10-26, target `prover-gpu-worker`, same sources and ELFs:
+
+| Step | Before | After |
+|---|---|---|
+| Cold build (`--no-cache`, empty cargo caches) | 145 s | 153 s |
+| Rebuild after a one-line change in `prover/src` | 49 s | 6 s |
+| Rebuild with no change | 2 s | 1 s |
+
+The two images have the same ELF hashes, the same `prove-worker` binary hash (`414e4998...`), the same GPU server hash, the same `groth16_vk.bin` hash (`4388a21c...`, the `VERIFIER_HASH`), the same file ownership and modes, and the same environment, user, entry point and labels. The cold build does not get faster: it compiles the same crates. The gain is in every build after the first. Before the change, the circuit files sat after the worker binary, so every source change rewrote the 6 GB layer.
+
+`light-client/scripts/program-keys.sh` also skips its Docker build now, when the hash of the guest sources matches `light-client/program-keys.source-hash`. Use `--force` to build anyway. On the [private] the full check took 165 s and the skip took under 1 s.
+
 What the image holds:
 
 - The base is `nvidia/cuda:12.8.2-runtime-ubuntu24.04`, pinned by tag and digest. The tag was pushed on 2026-04-30, so it meets the age rule of 28 days before 2026-09-24.

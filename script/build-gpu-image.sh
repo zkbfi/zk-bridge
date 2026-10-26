@@ -65,7 +65,7 @@ git archive HEAD | tar -x -C "${staging}"
 mkdir -p "${staging}/light-client/elf"
 cp light-client/elf/light-client.elf light-client/elf/fork-observation.elf "${staging}/light-client/elf/"
 # Same files give the same content. rsync keeps the file times, and --delete removes files that left the repository.
-rsync -a --delete --exclude '/light-client/target' --exclude '/prover/target' "${staging}/" "${host}:${build_directory}/"
+rsync -a --delete --exclude 'target/' "${staging}/" "${host}:${build_directory}/"
 echo "synced HEAD $(git rev-parse --short HEAD) to ${host}:${build_directory}"
 
 build_started="${SECONDS}"

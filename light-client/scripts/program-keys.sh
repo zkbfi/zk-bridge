@@ -77,7 +77,7 @@ skip_is_allowed() {
 
 if skip_is_allowed; then
   echo "build inputs unchanged (source hash ${current_hash}); skipping the Docker build. Use --force to build anyway."
-  echo "program keys match program-keys.json (recorded at the last --write)"
+  echo "program keys match program-keys.json (recorded after the last full match)"
   exit 0
 fi
 
