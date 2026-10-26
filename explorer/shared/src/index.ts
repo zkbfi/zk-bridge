@@ -20,3 +20,4 @@ export * from "./feed-query.js";
 export * from "./delivery-cost.js";
 export * from "./delivery-cost-settings.js";
 export * from "./api-views.js";
+export * from "./token-facts.js";

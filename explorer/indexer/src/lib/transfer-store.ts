@@ -1,9 +1,7 @@
 import { transfers } from "ponder:schema";
+import { mergeTransfer, type TransferRow } from "@zk-bridge/shared";
 import type { Hex } from "viem";
 import type { IndexingDatabase } from "./message-store";
-
-/** One row of the `transfers` table. */
-export type TransferRow = typeof transfers.$inferSelect;
 
 /** The inputs of `writeTransfer`. */
 export type WriteTransferInput = {
@@ -22,24 +20,12 @@ export type WriteTransferInput = {
  */
 export const writeTransfer = async (input: WriteTransferInput): Promise<void> => {
   const existing = await input.database.find(transfers, { messageId: input.messageId });
-  const base: TransferRow = existing ?? {
+  const merged = mergeTransfer({
     messageId: input.messageId,
     sourceChainId: input.sourceChainId,
     destinationChainId: input.destinationChainId,
-    sourceToken: null,
-    destinationToken: null,
-    sender: null,
-    recipient: null,
-    fallbackRecipient: null,
-    value: null,
-    deliveredValue: null,
-    paidTo: null,
-    handler: null,
-    deploysCopy: false,
-    hasCallback: false,
-    sourceIsNative: null,
-    sentTimestamp: null,
-  };
-  const merged = { ...base, ...input.patch };
+    existing,
+    patch: input.patch,
+  });
   await input.database.insert(transfers).values(merged).onConflictDoUpdate(merged);
 };

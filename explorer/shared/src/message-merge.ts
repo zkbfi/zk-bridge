@@ -1,4 +1,5 @@
 import type { Hex } from "viem";
+import type { TransferRow } from "./api-views.js";
 import { deriveStatus, type DeliveryOutcome } from "./status.js";
 
 /**
@@ -128,4 +129,45 @@ export const mergeMessage = (input: MergeMessageInput): MessageRow => {
   const base = input.existing ?? emptyRow(input.messageId, input.sourceChainId, input.destinationChainId);
   const merged: MessageRow = { ...base, ...input.patch };
   return { ...merged, status: statusOfRow(merged, input.latestSourceTimestamp, input.finalitySeconds) };
+};
+
+/** The facts to add to a transfer row. A key that is present replaces the stored value, even when the new value is null. */
+export type TransferPatch = Partial<TransferRow>;
+
+/** The inputs of {@link mergeTransfer}. */
+export type MergeTransferInput = {
+  readonly messageId: Hex;
+  readonly sourceChainId: number;
+  readonly destinationChainId: number;
+  /** The stored row, or null when this is the first fact about the transfer. */
+  readonly existing: TransferRow | null;
+  readonly patch: TransferPatch;
+};
+
+/**
+ * Adds facts to the transfer row of a message, creating it when needed. Facts arrive from both chains in any order, so
+ * every key of the patch replaces the stored value and every other key stays.
+ *
+ * @param input The identity of the transfer, the stored row and the new facts.
+ */
+export const mergeTransfer = (input: MergeTransferInput): TransferRow => {
+  const base: TransferRow = input.existing ?? {
+    messageId: input.messageId,
+    sourceChainId: input.sourceChainId,
+    destinationChainId: input.destinationChainId,
+    sourceToken: null,
+    destinationToken: null,
+    sender: null,
+    recipient: null,
+    fallbackRecipient: null,
+    value: null,
+    deliveredValue: null,
+    paidTo: null,
+    handler: null,
+    deploysCopy: false,
+    hasCallback: false,
+    sourceIsNative: null,
+    sentTimestamp: null,
+  };
+  return { ...base, ...input.patch };
 };
