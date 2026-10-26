@@ -104,16 +104,20 @@ pub enum Error {
     /// A compact (Gloas) header names the zero execution block hash in an epoch that has a block hash. The bridge reports
     /// this hash, and the contract refuses zero.
     ZeroExecutionBlockHash(&'static str),
-    /// A Gloas epoch or a compact header form was refused. Under the Gloas fork the execution payload is revealed apart
-    /// from the beacon block and may be withheld. The `execution_block_hash` of a Gloas header is the bid's
-    /// `parent_block_hash`, which is not the execution block of that slot, and the header has no block number. A message
-    /// proof that anchors to it would not be sound, so the program refuses all of it until the payload design is decided.
+    /// A Gloas source block of a message proof was refused. A Gloas block body holds a bid and no payload. The payload of a
+    /// slot is revealed apart from the beacon block and may be withheld, so no rule binds a message proof to the payload
+    /// of a Gloas source block yet. The head of the light client is not affected: a Gloas head is anchored on
+    /// `state.latest_block_hash` of its finalized state.
     GloasPayloadNotFinalized,
     /// The header shape does not fit the update: a Gloas-typed update (attested slot in a Gloas epoch) needs the compact
     /// shape for every header, and an earlier update needs the full shape.
     HeaderFormMismatch(&'static str),
-    /// The execution payload branch does not lead to the body root of the named header.
+    /// The execution branch of the named header is invalid. Full and pre-Gloas compact header: the branch does not lead to
+    /// the body root. Gloas compact header: the branch does not lead from `latest_block_hash` to the state root.
     InvalidExecutionBranch(&'static str),
+    /// The execution header RLP of a compact finalized header does not hash to the execution block hash that the header
+    /// names. The block number comes from this RLP, so a mismatch gives no block number.
+    ExecutionHeaderHashMismatch,
     /// A public key is not a valid, non-identity point in the right subgroup.
     InvalidPublicKey {
         /// Position of the key in the participant list.
@@ -210,7 +214,7 @@ impl fmt::Display for Error {
             Self::UnsupportedFork { fork } => write!(formatter, "unsupported fork for light-client proofs: {fork:?}"),
             Self::GloasPayloadNotFinalized => write!(
                 formatter,
-                "Gloas is refused: the execution payload is not finalized by the beacon block alone (design pending)"
+                "a Gloas source block is refused: its payload is not bound to the block (the head of the light client is not affected)"
             ),
             Self::ExecutionHeaderForkMismatch { fork } => {
                 write!(formatter, "execution payload header fields do not match fork {fork:?}")
@@ -264,6 +268,9 @@ impl fmt::Display for Error {
             }
             Self::InvalidExecutionBranch(which) => {
                 write!(formatter, "execution branch of the {which} header is invalid")
+            }
+            Self::ExecutionHeaderHashMismatch => {
+                write!(formatter, "the execution header RLP does not hash to the execution block hash of the finalized header")
             }
             Self::ZeroExecutionBlockHash(which) => {
                 write!(formatter, "the {which} header names a zero execution block hash")

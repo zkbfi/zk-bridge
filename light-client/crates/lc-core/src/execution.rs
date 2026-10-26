@@ -137,6 +137,86 @@ pub fn decode_execution_header(rlp: &[u8]) -> Result<ExecutionHeader> {
     Err(header_error("more fields than the Prague header has"))
 }
 
+/// The most items a header list may hold for the tolerant decoder. A header has 15 items at its start and gains one
+/// with each fork (Amsterdam has 23). The limit only bounds the walk over untrusted bytes.
+const MAX_HEADER_ITEMS: usize = 64;
+
+/// Position of `receiptsRoot` in the execution header list. It has not moved since Frontier.
+const HEADER_ITEM_RECEIPTS_ROOT: usize = 5;
+/// Position of `number` in the execution header list.
+const HEADER_ITEM_NUMBER: usize = 8;
+/// Position of `timestamp` in the execution header list.
+const HEADER_ITEM_TIMESTAMP: usize = 11;
+/// The items every header has from Frontier on: `parentHash` up to `nonce`. Later forks append after them.
+const HEADER_ITEMS_FROM_FRONTIER: usize = 15;
+
+/// The fields of an execution header that the light client reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExecutionAnchorFields {
+    /// Block number: item 8 of the header list.
+    pub number: u64,
+    /// Receipts root: item 5.
+    pub receipts_root: B256,
+    /// Timestamp: item 11.
+    pub timestamp: u64,
+}
+
+/// Reads `number`, `receiptsRoot` and `timestamp` from the RLP of an execution header of ANY field count.
+///
+/// Execution headers grow with each fork (Amsterdam adds `blockAccessListHash` and `slotNumber`, 23 items), but the first
+/// 15 items have kept their positions since Frontier. This decoder pins the three positions it reads, checks their
+/// types (a 32 byte string and two canonical integers), and walks the other items by their RLP length prefix without
+/// reading them. It needs at least 15 items, and the items must fill the list exactly. It does not decide whether the
+/// header is valid for a fork: the caller binds the bytes by their keccak256 hash, so the positions are those of the
+/// header that the chain hashed.
+///
+/// # Errors
+/// `HeaderDecode` for malformed RLP, fewer than 15 items, more than 64 items, a field of the wrong type or trailing bytes.
+pub fn decode_execution_anchor_fields(rlp: &[u8]) -> Result<ExecutionAnchorFields> {
+    let mut outer = rlp;
+    let list = RlpHeader::decode(&mut outer).map_err(header_error)?;
+    if !list.list {
+        return Err(header_error("header is not an RLP list"));
+    }
+    if list.payload_length != outer.len() {
+        return Err(header_error("trailing bytes after the header list"));
+    }
+    let mut receipts_root = None;
+    let mut number = None;
+    let mut timestamp = None;
+    let mut count = 0usize;
+    let mut rest = outer;
+    while !rest.is_empty() {
+        if count == MAX_HEADER_ITEMS {
+            return Err(header_error("more than 64 items in the header list"));
+        }
+        let mut item = rest;
+        let item_header = RlpHeader::decode(&mut item).map_err(header_error)?;
+        let item_length = rest.len() - item.len() + item_header.payload_length;
+        if item_length > rest.len() {
+            return Err(header_error("an item runs past the end of the header list"));
+        }
+        let mut whole = &rest[..item_length];
+        match count {
+            HEADER_ITEM_RECEIPTS_ROOT => receipts_root = Some(B256::decode(&mut whole).map_err(header_error)?),
+            HEADER_ITEM_NUMBER => number = Some(u64::decode(&mut whole).map_err(header_error)?),
+            HEADER_ITEM_TIMESTAMP => timestamp = Some(u64::decode(&mut whole).map_err(header_error)?),
+            _ => {}
+        }
+        rest = &rest[item_length..];
+        count += 1;
+    }
+    if count < HEADER_ITEMS_FROM_FRONTIER {
+        return Err(header_error("fewer than 15 items in the header list"));
+    }
+    match (receipts_root, number, timestamp) {
+        (Some(receipts_root), Some(number), Some(timestamp)) => {
+            Ok(ExecutionAnchorFields { number, receipts_root, timestamp })
+        }
+        _ => Err(header_error("the header list lacks receipts root, number or timestamp")),
+    }
+}
+
 /// The keccak256 hash of raw header bytes: the execution block hash.
 pub fn execution_block_hash(header_rlp: &[u8]) -> B256 {
     keccak256(header_rlp)

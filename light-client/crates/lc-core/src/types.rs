@@ -189,17 +189,18 @@ pub enum HeaderForm {
     /// (generalized index 25).
     #[default]
     Full,
-    /// The Gloas shape: `beacon`, `execution_block_hash` and `execution_branch` to the block hash
-    /// (`specs/gloas/light-client/sync-protocol.md`, "Modified `LightClientHeader`"). There is no payload header, so no
-    /// block number. Every header inside a Gloas-typed object has this shape, even one whose slot is before the Gloas fork.
+    /// The Gloas shape: `beacon`, `execution_block_hash`, `execution_branch` and the execution header RLP
+    /// (`specs/gloas/light-client/sync-protocol.md`, "Modified `LightClientHeader`", plus the RLP). There is no payload
+    /// header, so the block number comes from the RLP. Every header inside a Gloas-typed object has this shape, even one
+    /// whose slot is before the Gloas fork.
     Compact,
 }
 
 /// A light-client header: the beacon header plus the execution data and its branch.
 ///
 /// Two shapes exist, named by [`LightClientHeader::form`]. Build a header with [`LightClientHeader::full`] or
-/// [`LightClientHeader::compact`], and read the execution data with [`LightClientHeader::execution_block_hash`] and
-/// [`LightClientHeader::execution_block_number`].
+/// [`LightClientHeader::compact`]. The verifier returns the proven execution block hash and number
+/// (`update::verify_finalized_execution`).
 ///
 /// In the compact form only `execution.block_hash` is meaningful. Every other field of `execution` is its default value,
 /// and the verifier, the wire format and the output never read it.
@@ -210,9 +211,13 @@ pub struct LightClientHeader {
     /// The execution payload header from the block body (full form), or a placeholder that holds only the block hash
     /// (compact form).
     pub execution: ExecutionPayloadHeader,
-    /// Full form: branch from the execution payload root to `beacon.body_root`. Compact form: branch from the execution
-    /// block hash to `beacon.body_root`.
+    /// Full form: branch from the execution payload root to `beacon.body_root`. Compact form before Gloas: branch from the
+    /// execution block hash to `beacon.body_root`. Compact form from Gloas on: branch from `state.latest_block_hash` to
+    /// `beacon.state_root` (generalized index 2947).
     pub execution_branch: Vec<B256>,
+    /// Compact form of a finalized header: the RLP of the execution block header that hashes to the execution block hash.
+    /// The block number comes from it. Empty in the full form, and ignored for an attested header.
+    pub execution_header_rlp: Vec<u8>,
     /// Which of the two shapes this header has.
     pub form: HeaderForm,
 }
@@ -220,28 +225,24 @@ pub struct LightClientHeader {
 impl LightClientHeader {
     /// A header in the full form.
     pub fn full(beacon: BeaconBlockHeader, execution: ExecutionPayloadHeader, execution_branch: Vec<B256>) -> Self {
-        Self { beacon, execution, execution_branch, form: HeaderForm::Full }
+        Self { beacon, execution, execution_branch, execution_header_rlp: Vec::new(), form: HeaderForm::Full }
     }
 
-    /// A header in the compact (Gloas) form.
-    pub fn compact(beacon: BeaconBlockHeader, execution_block_hash: B256, execution_branch: Vec<B256>) -> Self {
+    /// A header in the compact (Gloas) form. `execution_header_rlp` is empty until a prover fills it.
+    pub fn compact(
+        beacon: BeaconBlockHeader,
+        execution_block_hash: B256,
+        execution_branch: Vec<B256>,
+        execution_header_rlp: Vec<u8>,
+    ) -> Self {
         let execution =
             ExecutionPayloadHeader { block_hash: execution_block_hash, ..ExecutionPayloadHeader::default() };
-        Self { beacon, execution, execution_branch, form: HeaderForm::Compact }
+        Self { beacon, execution, execution_branch, execution_header_rlp, form: HeaderForm::Compact }
     }
 
-    /// The execution block hash that the header names, in either form.
+    /// The execution block hash that the header names, in either form. The verifier has not checked it yet.
     pub fn execution_block_hash(&self) -> B256 {
         self.execution.block_hash
-    }
-
-    /// The execution block number. A compact header has none, so this returns 0 for it. The program output reports 0 then.
-    /// Do not read 0 as "block 0": check [`LightClientHeader::form`] first.
-    pub fn execution_block_number(&self) -> u64 {
-        match self.form {
-            HeaderForm::Full => self.execution.block_number,
-            HeaderForm::Compact => 0,
-        }
     }
 }
 

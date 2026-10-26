@@ -24,6 +24,7 @@ pub mod profile;
 pub mod receipts;
 pub mod ssz;
 pub mod ssz_state;
+pub mod ssz_state_gloas;
 pub mod types;
 pub mod update;
 pub mod wire;

@@ -214,8 +214,13 @@ fn a_wrong_form_is_refused() {
     let (fulu, _) = state_of(ForkName::Fulu);
     let result = try_parse_state_for_fork(&fulu.to_ssz(), ForkName::Electra);
     assert!(matches!(result, Err(Error::MalformedSsz(_))), "Fulu as Electra");
-    for fork in [ForkName::Altair, ForkName::Gloas] {
-        assert_eq!(try_parse_state_for_fork(&capella.to_ssz(), fork).err(), Some(Error::UnsupportedFork { fork }));
-    }
+    assert_eq!(
+        try_parse_state_for_fork(&capella.to_ssz(), ForkName::Altair).err(),
+        Some(Error::UnsupportedFork { fork: ForkName::Altair })
+    );
+    // A Capella state is not a Gloas state: the Gloas parser reads the same bytes by its own field list and refuses them.
+    let result = try_parse_state_for_fork(&capella.to_ssz(), ForkName::Gloas);
+    assert!(matches!(result, Err(Error::MalformedSsz(_))), "Capella as Gloas");
     assert_eq!(StateForm::for_fork(ForkName::Electra), Ok(StateForm::Electra));
+    assert_eq!(StateForm::for_fork(ForkName::Gloas), Ok(StateForm::Gloas));
 }

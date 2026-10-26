@@ -48,3 +48,20 @@ pub fn prague_header(number: u64, receipts_root: B256, transactions_root: B256) 
         ..shanghai_header(number, receipts_root, transactions_root)
     }
 }
+
+/// An Amsterdam-style execution header as RLP: the Prague header with `blockAccessListHash` (EIP-7928) and `slotNumber`
+/// (EIP-7843) after `requestsHash`, 23 items in all. The strict `ExecutionHeader` of `lc-core` holds 21 items at most, so
+/// the two items are appended to the encoding. Sepolia headers have this shape since Gloas.
+pub fn amsterdam_header_rlp(number: u64, receipts_root: B256, transactions_root: B256) -> Bytes {
+    use alloy_rlp::{Encodable, Header};
+    let prague = encode_execution_header(&prague_header(number, receipts_root, transactions_root));
+    let mut outer = prague.as_ref();
+    let list = Header::decode(&mut outer).expect("a list header");
+    let mut payload = outer[..list.payload_length].to_vec();
+    B256::repeat_byte(0x0a).encode(&mut payload);
+    (number * 2).encode(&mut payload);
+    let mut out = Vec::new();
+    Header { list: true, payload_length: payload.len() }.encode(&mut out);
+    out.extend_from_slice(&payload);
+    Bytes::from(out)
+}

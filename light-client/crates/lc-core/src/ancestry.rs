@@ -22,7 +22,7 @@
 //! length or the wrong index, so the bridge refuses it.
 
 use crate::abi::{BeaconBlockHeader as AbiBeaconBlockHeader, MessageProof};
-use crate::chain::{ChainSpec, ForkName};
+use crate::chain::ChainSpec;
 use crate::error::{Error, Result};
 use crate::layout::{
     block_hash_gindex_for_fork, is_block_roots_position, is_historical_summaries_position, state_layout_for_fork,
@@ -130,13 +130,10 @@ pub fn historical_leaf_gindex(historical_summaries_field_gindex: u64, index: u64
 /// `LayoutPositionInvalid`.
 pub fn ancestry_leaf_gindex(spec: &ChainSpec, anchor_slot: u64, source_slot: u64) -> Result<u64> {
     let path = ancestry_path_for_slots(anchor_slot, source_slot)?;
-    let anchor_fork = spec.fork_at_slot(anchor_slot);
-    // A Gloas anchor has a progressive state. Its `block_roots` and `historical_summaries` positions (352 and 2950) fail
-    // the position rules of the deployed Solidity, and the block hash path goes through the bid. Refuse it by name.
-    if anchor_fork >= ForkName::Gloas {
-        return Err(Error::UnsupportedFork { fork: anchor_fork });
-    }
-    let layout = state_layout_for_fork(anchor_fork)?;
+    // A Gloas anchor has a progressive state: its `block_roots` is at 352 and its `historical_summaries` at 2950, and the
+    // position rules take both. The anchor only proves the SOURCE HEADER. The execution block of the source comes from the
+    // source body, and `verify_beacon_path` refuses a Gloas source there.
+    let layout = state_layout_for_fork(spec.fork_at_slot(anchor_slot))?;
     if path == AncestryPath::Recent {
         return block_roots_leaf_gindex(layout.block_roots_gindex, source_slot);
     }
@@ -256,17 +253,37 @@ mod tests {
         assert_eq!(pulsechain, historical_leaf_gindex(59, 0, 100).unwrap());
     }
 
-    /// Claim: a Gloas anchor is refused by name instead of failing on a position rule. The first Gloas slot of Sepolia is 353024 * 32
-    /// (Gloas). The control: the Fulu slot before the fork builds a leaf.
+    /// Claim: a Gloas anchor builds its leaves at the progressive positions. The recent leaf is `352 * 8192 + slot % 8192`
+    /// (depth 21) and the historical leaf follows the stated order from 2950 (depth 50). The first Gloas slot of Sepolia is
+    /// 353024 * 32. A Fulu anchor of the slot before still builds the Electra leaf (depth 19), so the fork of the ANCHOR
+    /// selects the layout.
     #[test]
-    fn a_gloas_anchor_is_unsupported() {
+    fn a_gloas_anchor_builds_progressive_leaves() {
         use crate::chain::SEPOLIA;
         let gloas_slot = 353_024 * 32;
+        let recent = ancestry_leaf_gindex(&SEPOLIA, gloas_slot + 100, gloas_slot + 50).unwrap();
+        assert_eq!(recent, 352 * 8192 + (gloas_slot + 50) % 8192);
+        assert_eq!(gindex_depth(recent), 21);
+        let source = gloas_slot - 20_000;
+        let historical = ancestry_leaf_gindex(&SEPOLIA, gloas_slot + 100, source).unwrap();
+        let era_index = source / 8192 - SEPOLIA.capella_era().unwrap();
+        assert_eq!(historical, historical_leaf_gindex(2950, era_index, source).unwrap());
+        assert_eq!(gindex_depth(historical), 11 + 1 + 24 + 1 + 13);
+        let electra = ancestry_leaf_gindex(&SEPOLIA, gloas_slot - 1, gloas_slot - 50).unwrap();
+        assert_eq!(gindex_depth(electra), 19);
+    }
+
+    /// Claim: a message proof from a GLOAS SOURCE block is refused with `GloasPayloadNotFinalized`, also under a Gloas
+    /// anchor. The body of a Gloas block holds a bid, and no rule binds it to a payload that a later block confirmed.
+    /// The control is the Fulu source under the same Gloas anchor, which gets its block hash index (812).
+    #[test]
+    fn a_gloas_source_block_has_no_block_hash_index() {
+        use crate::chain::SEPOLIA;
         assert_eq!(
-            ancestry_leaf_gindex(&SEPOLIA, gloas_slot + 100, gloas_slot + 50),
-            Err(Error::UnsupportedFork { fork: ForkName::Gloas })
+            block_hash_gindex_for_fork(SEPOLIA.fork_at_slot(353_024 * 32 + 5)),
+            Err(Error::GloasPayloadNotFinalized)
         );
-        assert!(ancestry_leaf_gindex(&SEPOLIA, gloas_slot - 1, gloas_slot - 50).is_ok());
+        assert_eq!(block_hash_gindex_for_fork(SEPOLIA.fork_at_slot(353_024 * 32 - 5)), Ok(812));
     }
 
     /// Claim: the leaf builders take only the positions that the bridge accepts, and refuse a neighbour of each. The

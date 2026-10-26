@@ -82,7 +82,7 @@ pub fn light_client_header(value: &Value) -> LightClientHeader {
         (Some(execution), None) => {
             LightClientHeader::full(beacon, execution_payload_header(execution), execution_branch)
         }
-        (None, Some(hash)) => LightClientHeader::compact(beacon, hex_b256(hash), execution_branch),
+        (None, Some(hash)) => LightClientHeader::compact(beacon, hex_b256(hash), execution_branch, Vec::new()),
         _ => panic!("a light-client header has exactly one of `execution` and `execution_block_hash`"),
     }
 }

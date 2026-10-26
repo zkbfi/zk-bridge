@@ -31,7 +31,11 @@ use crate::bls::verify_aggregate_by_subtraction;
 use crate::chain::DOMAIN_SYNC_COMMITTEE;
 use crate::chain::{ChainSpec, ForkName, GENESIS_SLOT, MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZE};
 use crate::error::{Error, Result};
-use crate::layout::{execution_header_form_for_fork, state_layout_for_fork, StateLayout, EXECUTION_PAYLOAD_GINDEX};
+use crate::execution::{decode_execution_anchor_fields, execution_block_hash};
+use crate::layout::{
+    compact_block_hash_gindex_for_fork, execution_header_form_for_fork, state_layout_for_fork, StateLayout,
+    EXECUTION_PAYLOAD_GINDEX, LATEST_BLOCK_HASH_GINDEX_GLOAS,
+};
 use crate::profile::tracked;
 use crate::ssz::is_valid_normalized_merkle_branch;
 use crate::types::{
@@ -61,52 +65,119 @@ fn branch_is_valid(leaf: &B256, branch: &[B256], gindex: u64, root: &B256) -> bo
     tracked("merkle_branch", || is_valid_normalized_merkle_branch(leaf, branch, gindex, root))
 }
 
+/// The execution block of a finalized header, after every check.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VerifiedExecution {
+    /// The execution block hash.
+    pub block_hash: B256,
+    /// The execution block number. A compact header has no payload header, so it comes from the RLP that hashes to the
+    /// block hash.
+    pub block_number: u64,
+}
+
 /// Checks the execution branch of one light-client header (`is_valid_light_client_header`, Capella and later).
 ///
-/// Full form: the payload header is hashed and the branch is checked at generalized index 25 (`EXECUTION_PAYLOAD_GINDEX`).
-/// A full header in a Gloas epoch is refused, because Gloas has no payload header.
+/// Full form: the payload header is hashed and the branch is checked at generalized index 25 (`EXECUTION_PAYLOAD_GINDEX`)
+/// against the body root. A full header in a Gloas epoch is refused, because Gloas has no payload header.
 ///
-/// Compact form (Gloas light-client objects): `execution_block_hash` is the leaf, and the index follows the epoch of the
-/// header's OWN slot: 2856 in a Gloas epoch, 812 from Deneb to Fulu, 412 in Capella
-/// ([`compact_block_hash_gindex_for_fork`]). A header before Capella is refused, and so is a zero block hash.
+/// Compact form, header slot before Gloas: `execution_block_hash` is the leaf and the branch leads to the body root at
+/// 812 (Deneb to Fulu) or 412 (Capella). A zero hash is refused.
+///
+/// Compact form, header slot in Gloas: the leaf is `execution_block_hash` and the branch leads to the STATE root of the
+/// header at [`LATEST_BLOCK_HASH_GINDEX_GLOAS`] (2947). So the hash is `state.latest_block_hash` of the post-state of the
+/// header. The bid in the body is never read. Consensus writes `latest_block_hash` only for a payload that a block of the
+/// chain confirmed (`apply_parent_execution_payload` in `specs/gloas/beacon-chain.md`), so for a FINALIZED header it names
+/// an execution block in finalized history. It is the newest confirmed payload before the slot of the header, not the
+/// payload of the slot itself.
 ///
 /// # Errors
 /// `UnsupportedFork`, `HeaderDecode` for a malformed header, `ZeroExecutionBlockHash(which)`,
 /// `InvalidExecutionBranch(which)` for a bad branch.
 pub fn verify_execution_branch(spec: &ChainSpec, header: &LightClientHeader, which: &'static str) -> Result<()> {
     let fork = spec.fork_at_slot(header.beacon.slot);
-    if fork >= ForkName::Gloas {
-        return Err(Error::GloasPayloadNotFinalized);
-    }
-    let (leaf, gindex) = match header.form {
+    let (leaf, gindex, root) = match header.form {
         HeaderForm::Full => {
             execution_header_form_for_fork(fork)?;
-            (header.execution.hash_tree_root_for_slot(spec, header.beacon.slot)?, EXECUTION_PAYLOAD_GINDEX)
+            (
+                header.execution.hash_tree_root_for_slot(spec, header.beacon.slot)?,
+                EXECUTION_PAYLOAD_GINDEX,
+                &header.beacon.body_root,
+            )
         }
-        HeaderForm::Compact => return Err(Error::GloasPayloadNotFinalized),
+        HeaderForm::Compact => {
+            if header.execution_block_hash() == B256::ZERO {
+                return Err(Error::ZeroExecutionBlockHash(which));
+            }
+            match fork >= ForkName::Gloas {
+                true => (header.execution_block_hash(), LATEST_BLOCK_HASH_GINDEX_GLOAS, &header.beacon.state_root),
+                false => {
+                    (header.execution_block_hash(), compact_block_hash_gindex_for_fork(fork)?, &header.beacon.body_root)
+                }
+            }
+        }
     };
-    if branch_is_valid(&leaf, &header.execution_branch, gindex, &header.beacon.body_root) {
+    if branch_is_valid(&leaf, &header.execution_branch, gindex, root) {
         return Ok(());
     }
     Err(Error::InvalidExecutionBranch(which))
 }
 
-/// Refuses every Gloas input and every compact header.
+/// The execution block of a FINALIZED header: the branch check of [`verify_execution_branch`], then the block number.
 ///
-/// Fail closed. Under Gloas the execution payload is revealed apart from the beacon block and may be withheld. The compact
-/// header carries the bid's `parent_block_hash`, which is not the execution block of the slot, and no block number. A
-/// message proof anchored to it would not be sound. The refusal covers the attested slot, the finalized slot, the
-/// signature slot and the form of both headers, so no Gloas data reaches an output.
+/// Full form: hash and number come from the payload header that the branch binds. Compact form: the RLP of the header must
+/// hash (keccak256) to the proven execution block hash, and the number is item 8 of that RLP
+/// ([`decode_execution_anchor_fields`], which accepts the field count of any fork). A wrong RLP, or the RLP of another
+/// block, gives `ExecutionHeaderHashMismatch`: there is no output with a made-up number.
 ///
 /// # Errors
-/// `GloasPayloadNotFinalized`.
-fn refuse_gloas(spec: &ChainSpec, update: &LightClientUpdate) -> Result<()> {
-    let slots = [update.attested_header.beacon.slot, update.finalized_header.beacon.slot, update.signature_slot];
-    let in_gloas_epoch = slots.iter().any(|slot| spec.fork_at_slot(*slot) >= ForkName::Gloas);
-    let compact =
-        update.attested_header.form == HeaderForm::Compact || update.finalized_header.form == HeaderForm::Compact;
-    if in_gloas_epoch || compact {
-        return Err(Error::GloasPayloadNotFinalized);
+/// The errors of [`verify_execution_branch`], `ExecutionHeaderHashMismatch`, and `HeaderDecode` for an RLP that does not
+/// decode.
+pub fn verify_finalized_execution(spec: &ChainSpec, header: &LightClientHeader) -> Result<VerifiedExecution> {
+    verify_execution_branch(spec, header, "finalized")?;
+    match header.form {
+        HeaderForm::Full => Ok(VerifiedExecution {
+            block_hash: header.execution_block_hash(),
+            block_number: header.execution.block_number,
+        }),
+        HeaderForm::Compact => {
+            let block_hash = header.execution_block_hash();
+            if execution_block_hash(&header.execution_header_rlp) != block_hash {
+                return Err(Error::ExecutionHeaderHashMismatch);
+            }
+            let fields = decode_execution_anchor_fields(&header.execution_header_rlp)?;
+            Ok(VerifiedExecution { block_hash, block_number: fields.number })
+        }
+    }
+}
+
+/// Checks the execution part of the ATTESTED header. Its execution data does not reach the output: the committee signs the
+/// beacon header, and the output reads the finalized header only. So a Gloas compact attested header is not checked at all
+/// (its node-served branch leads to the bid in the body, which the verifier never reads). Every other header gets the
+/// branch check of the specification.
+///
+/// # Errors
+/// The errors of [`verify_execution_branch`].
+fn verify_attested_execution(spec: &ChainSpec, header: &LightClientHeader) -> Result<()> {
+    let compact_in_gloas =
+        header.form == HeaderForm::Compact && spec.fork_at_slot(header.beacon.slot) >= ForkName::Gloas;
+    if compact_in_gloas {
+        return Ok(());
+    }
+    verify_execution_branch(spec, header, "attested")
+}
+
+/// Requires the header shape that the fork of the attested header dictates: compact for every header of a Gloas-typed
+/// update, full for every header of an earlier one.
+fn require_header_form(spec: &ChainSpec, update: &LightClientUpdate) -> Result<()> {
+    let wanted = match spec.fork_at_slot(update.attested_header.beacon.slot) >= ForkName::Gloas {
+        true => HeaderForm::Compact,
+        false => HeaderForm::Full,
+    };
+    if update.attested_header.form != wanted {
+        return Err(Error::HeaderFormMismatch("attested"));
+    }
+    if update.finalized_header.form != wanted {
+        return Err(Error::HeaderFormMismatch("finalized"));
     }
     Ok(())
 }
@@ -221,9 +292,9 @@ pub fn verify_with_layout(
     }
 
     // Both headers must be valid light-client headers of a supported fork, in the shape the attested fork dictates.
-    refuse_gloas(spec, update)?;
-    verify_execution_branch(spec, attested, "attested")?;
-    verify_execution_branch(spec, finalized, "finalized")?;
+    require_header_form(spec, update)?;
+    verify_attested_execution(spec, attested)?;
+    let finalized_execution = verify_finalized_execution(spec, finalized)?;
 
     // Periods: store period sp, finalized period np, attested period ap, signature period sig.
     let store_period = spec.period_at_slot(store.header_slot);
@@ -324,9 +395,8 @@ pub fn verify_with_layout(
         startNextSyncCommitteeHash: start_next_hash,
         newHeaderRoot: finalized_root,
         newHeadSlot: finalized.beacon.slot,
-        executionBlockHash: finalized.execution_block_hash(),
-        // 0 for a compact (Gloas) header, which has no block number. The contract stores the number only in a view.
-        executionBlockNumber: finalized.execution_block_number(),
+        executionBlockHash: finalized_execution.block_hash,
+        executionBlockNumber: finalized_execution.block_number,
         syncCommitteeHash: new_committee_hash,
         nextSyncCommitteeHash: next_hash,
     };

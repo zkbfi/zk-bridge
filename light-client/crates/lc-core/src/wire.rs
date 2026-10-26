@@ -15,7 +15,7 @@
 //! | Format | Selected by | Header bytes |
 //! |---|---|---|
 //! | Original | chain selector byte `1` to `4` | full header: beacon header, payload header, branch. No form byte. |
-//! | Extended | chain selector byte `0x80 \| tag` | a form byte, then the header. Form `0` is the full header as above. Form `1` is the compact (Gloas) header: beacon header, execution block hash (32 bytes), branch. |
+//! | Extended | chain selector byte `0x80 \| tag` | a form byte, then the header. Form `0` is the full header as above. Form `1` is the compact (Gloas) header: beacon header, execution block hash (32 bytes), branch, execution header RLP (bytes). |
 //!
 //! The encoder writes the original format unless a header is compact, so the bytes of every mainnet input stay as they
 //! were. The decoder reads both. In the extended format every header carries its own form byte, so one fold can run
@@ -103,6 +103,10 @@ const HEADER_FORM_FULL: u8 = 0;
 /// Form byte of a compact header (Gloas).
 const HEADER_FORM_COMPACT: u8 = 1;
 
+/// The most bytes of an execution header RLP in a compact header. A header is about 600 bytes today (23 items, a 256 byte
+/// bloom, a 32 byte extra data), and the limit leaves room for later forks.
+const MAX_EXECUTION_HEADER_RLP: usize = 4096;
+
 fn wire_error(reason: &str) -> Error {
     Error::HeaderDecode(format!("wire format: {reason}"))
 }
@@ -175,6 +179,9 @@ impl Writer {
             HeaderForm::Compact => self.fixed(header.execution_block_hash().as_slice()),
         }
         self.branch(&header.execution_branch);
+        if header.form == HeaderForm::Compact {
+            self.bytes(&header.execution_header_rlp);
+        }
     }
     fn committee(&mut self, committee: &SyncCommittee) {
         self.u32(committee.pubkeys.len());
@@ -348,8 +355,11 @@ impl<'a> Reader<'a> {
         let beacon = self.beacon()?;
         match form {
             HEADER_FORM_FULL => Ok(LightClientHeader::full(beacon, self.payload()?, self.branch()?)),
-            // Fail closed: the compact (Gloas) form is refused. See `Error::GloasPayloadNotFinalized`.
-            HEADER_FORM_COMPACT => Err(Error::GloasPayloadNotFinalized),
+            HEADER_FORM_COMPACT => {
+                let block_hash = self.b256()?;
+                let branch = self.branch()?;
+                Ok(LightClientHeader::compact(beacon, block_hash, branch, self.bytes(MAX_EXECUTION_HEADER_RLP)?))
+            }
             _ => Err(wire_error("unknown header form")),
         }
     }

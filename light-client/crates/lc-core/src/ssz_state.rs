@@ -1,5 +1,5 @@
-//! Parser and hasher for real SSZ data: `BeaconState` (Capella, Deneb, Electra and Fulu layouts) and the Capella
-//! `SignedBeaconBlock`.
+//! Parser and hasher for real SSZ data: `BeaconState` (Capella, Deneb, Electra and Fulu layouts here, the Gloas layout in
+//! [`crate::ssz_state_gloas`]) and the Capella `SignedBeaconBlock`.
 //!
 //! The prover service uses it to compute REAL Merkle branches from a beacon state and a block
 //! body that a node served as SSZ. The hasher is written from the consensus-specs container definitions
@@ -14,30 +14,32 @@
 
 use crate::chain::ForkName;
 use crate::error::{Error, Result};
-use crate::layout::ExecutionHeaderForm;
+use crate::layout::{ContainerShape, ExecutionHeaderForm};
 use crate::ssz::{
-    byte_list_root, byte_vector_root, hash_pair, merkleize, merkleize_with_limit, mix_in_length, pack_bytes, u64_chunk,
+    byte_list_root, byte_vector_root, ceil_log2, hash_pair, merkleize, merkleize_with_limit, mix_in_length, pack_bytes,
+    progressive_container_branch, progressive_container_root, u64_chunk,
 };
+use crate::ssz_state_gloas::{try_parse_gloas_state, GLOAS_FIELD_LATEST_BLOCK_HASH, GLOAS_STATE_FIELD_COUNT};
 use crate::types::{BeaconBlockHeader, BlobGasFields, ExecutionPayloadHeader, SyncCommittee};
 use alloy_primitives::{Address, B256, U256};
 
-fn le_u64(bytes: &[u8]) -> u64 {
+pub(crate) fn le_u64(bytes: &[u8]) -> u64 {
     u64::from_le_bytes(bytes[..8].try_into().expect("8 bytes"))
 }
 
-fn chunk32(bytes: &[u8]) -> B256 {
+pub(crate) fn chunk32(bytes: &[u8]) -> B256 {
     B256::from_slice(bytes)
 }
 
 /// Whether a container field has a fixed size (in bytes) or is variable (a 4-byte offset in the fixed part).
 #[derive(Clone, Copy)]
-enum Kind {
+pub(crate) enum Kind {
     Fixed(usize),
     Variable,
 }
 
 /// The error for bytes that break an SSZ rule.
-fn malformed<T>(reason: impl Into<String>) -> Result<T> {
+pub(crate) fn malformed<T>(reason: impl Into<String>) -> Result<T> {
     Err(Error::MalformedSsz(reason.into()))
 }
 
@@ -62,7 +64,7 @@ fn checked_offset(bytes: &[u8], position: usize, minimum: usize) -> Result<usize
 /// The first variable offset must equal the size of the fixed part, offsets must not decrease, and none may pass the end
 /// of the input (`simple-serialize.md` of consensus-specs, "Deserialization"). A container with no variable field must
 /// have exactly the fixed size.
-fn split_container<'a>(bytes: &'a [u8], kinds: &[Kind]) -> Result<Vec<&'a [u8]>> {
+pub(crate) fn split_container<'a>(bytes: &'a [u8], kinds: &[Kind]) -> Result<Vec<&'a [u8]>> {
     let fixed_length: usize = kinds.iter().map(|kind| if let Kind::Fixed(size) = kind { *size } else { 4 }).sum();
     let has_variable = kinds.iter().any(|kind| matches!(kind, Kind::Variable));
     if bytes.len() < fixed_length || (!has_variable && bytes.len() != fixed_length) {
@@ -137,12 +139,17 @@ fn split_variable_list(bytes: &[u8], limit: u64) -> Result<Vec<&[u8]>> {
     Ok(offsets.windows(2).map(|pair| &bytes[pair[0]..pair[1]]).collect())
 }
 
-fn list_root(element_roots: &[B256], limit: u64) -> B256 {
+pub(crate) fn list_root(element_roots: &[B256], limit: u64) -> B256 {
     mix_in_length(&merkleize_with_limit(element_roots, limit), element_roots.len() as u64)
 }
 
 /// The roots of a list of fixed-size elements. The input must be a whole number of elements, at most `limit`.
-fn fixed_list_roots(bytes: &[u8], element_size: usize, limit: u64, hash: impl Fn(&[u8]) -> B256) -> Result<Vec<B256>> {
+pub(crate) fn fixed_list_roots(
+    bytes: &[u8],
+    element_size: usize,
+    limit: u64,
+    hash: impl Fn(&[u8]) -> B256,
+) -> Result<Vec<B256>> {
     if !bytes.len().is_multiple_of(element_size) {
         return malformed(format!("{} bytes are not a whole number of {element_size}-byte elements", bytes.len()));
     }
@@ -153,15 +160,15 @@ fn fixed_list_roots(bytes: &[u8], element_size: usize, limit: u64, hash: impl Fn
     Ok(bytes.chunks_exact(element_size).map(hash).collect())
 }
 
-fn checkpoint_root(bytes: &[u8]) -> B256 {
+pub(crate) fn checkpoint_root(bytes: &[u8]) -> B256 {
     hash_pair(&u64_chunk(le_u64(bytes)), &chunk32(&bytes[8..40]))
 }
 
-fn eth1_data_root(bytes: &[u8]) -> B256 {
+pub(crate) fn eth1_data_root(bytes: &[u8]) -> B256 {
     merkleize(&[chunk32(&bytes[0..32]), u64_chunk(le_u64(&bytes[32..40])), chunk32(&bytes[40..72])])
 }
 
-fn validator_root(bytes: &[u8]) -> B256 {
+pub(crate) fn validator_root(bytes: &[u8]) -> B256 {
     let mut slashed = [0u8; 32];
     slashed[0] = bytes[88];
     merkleize(&[
@@ -312,7 +319,7 @@ impl ForkData {
 
 /// A parsed `BeaconState`: the root of every field, plus the parts the tool reads.
 pub struct ParsedState {
-    /// The hash tree root of each field, in field order: 28 in Capella and Deneb, 37 in Electra.
+    /// The hash tree root of each field, in field order: 28 in Capella and Deneb, 37 in Electra, 38 in Fulu, 46 in Gloas.
     pub field_roots: Vec<B256>,
     /// `state_roots` are not needed; `block_roots` as 8192 chunks.
     pub block_roots: Vec<B256>,
@@ -328,12 +335,54 @@ pub struct ParsedState {
     pub finalized_checkpoint: (u64, B256),
     /// `historical_summaries` as `(block_summary_root, state_summary_root)` pairs, in list order.
     pub historical_summaries: Vec<(B256, B256)>,
+    /// How the container merkleizes its fields: plain up to Fulu, progressive from Gloas.
+    pub shape: ContainerShape,
 }
 
 impl ParsedState {
     /// The state root.
     pub fn root(&self) -> B256 {
-        merkleize(&self.field_roots)
+        match self.shape {
+            ContainerShape::Plain => merkleize(&self.field_roots),
+            ContainerShape::Progressive { .. } => progressive_container_root(&self.field_roots),
+        }
+    }
+
+    /// The generalized index of field `index` of the state: `2^ceil_log2(fields) + index` for a plain container, and the
+    /// progressive position for a progressive one.
+    ///
+    /// # Panics
+    /// Panics when `index` is outside the fields.
+    pub fn field_gindex(&self, index: usize) -> u64 {
+        assert!(index < self.field_roots.len(), "field index out of range");
+        match self.shape {
+            ContainerShape::Plain => (1u64 << ceil_log2(self.field_roots.len() as u64)) + index as u64,
+            ContainerShape::Progressive { .. } => {
+                crate::layout::progressive_chunk_gindex(2, index as u64).expect("a field index fits 64 bits")
+            }
+        }
+    }
+
+    /// The branch from field `index` to the state root, bottom to top. Its length is the depth of
+    /// [`ParsedState::field_gindex`].
+    ///
+    /// # Panics
+    /// Panics when `index` is outside the fields.
+    pub fn field_branch(&self, index: usize) -> Vec<B256> {
+        match self.shape {
+            ContainerShape::Plain => crate::ssz::branch_for_leaf(&self.field_roots, index).1,
+            ContainerShape::Progressive { .. } => progressive_container_branch(&self.field_roots, index).1,
+        }
+    }
+
+    /// `state.latest_block_hash`, for a Gloas state. `None` for an earlier fork, which has no such field.
+    pub fn latest_block_hash(&self) -> Option<B256> {
+        match self.shape {
+            ContainerShape::Progressive { width: GLOAS_STATE_FIELD_COUNT } => {
+                Some(self.field_roots[GLOAS_FIELD_LATEST_BLOCK_HASH])
+            }
+            _ => None,
+        }
     }
 }
 
@@ -349,22 +398,23 @@ pub enum StateForm {
     Electra,
     /// 38 fields: Electra plus `proposer_lookahead` (a vector of 64 validator indices).
     Fulu,
+    /// 46 fields in a progressive container: [`crate::ssz_state_gloas`].
+    Gloas,
 }
 
 impl StateForm {
     /// The state form of a fork.
     ///
     /// # Errors
-    /// `UnsupportedFork` for forks without a parser here: before Capella, and Gloas.
+    /// `UnsupportedFork` for forks without a parser here: before Capella.
     pub fn for_fork(fork: ForkName) -> Result<Self> {
         match fork {
             ForkName::Capella => Ok(Self::Capella),
             ForkName::Deneb => Ok(Self::Deneb),
             ForkName::Electra => Ok(Self::Electra),
             ForkName::Fulu => Ok(Self::Fulu),
-            ForkName::Phase0 | ForkName::Altair | ForkName::Bellatrix | ForkName::Gloas => {
-                Err(Error::UnsupportedFork { fork })
-            }
+            ForkName::Gloas => Ok(Self::Gloas),
+            ForkName::Phase0 | ForkName::Altair | ForkName::Bellatrix => Err(Error::UnsupportedFork { fork }),
         }
     }
 
@@ -374,13 +424,15 @@ impl StateForm {
             Self::Capella | Self::Deneb => 28,
             Self::Electra => 37,
             Self::Fulu => 38,
+            Self::Gloas => GLOAS_STATE_FIELD_COUNT,
         }
     }
 
+    /// The payload header form of the state. Gloas has no payload header in the state, so it has none.
     const fn header_form(self) -> ExecutionHeaderForm {
         match self {
             Self::Capella => ExecutionHeaderForm::Capella,
-            Self::Deneb | Self::Electra | Self::Fulu => ExecutionHeaderForm::Deneb,
+            Self::Deneb | Self::Electra | Self::Fulu | Self::Gloas => ExecutionHeaderForm::Deneb,
         }
     }
 
@@ -472,6 +524,9 @@ pub fn try_parse_state_for_fork(bytes: &[u8], fork: ForkName) -> Result<ParsedSt
 /// # Errors
 /// `MalformedSsz` when the bytes break an SSZ rule. Nothing is allocated before the offsets are checked.
 pub fn try_parse_state_form(bytes: &[u8], form: StateForm) -> Result<ParsedState> {
+    if form == StateForm::Gloas {
+        return try_parse_gloas_state(bytes);
+    }
     let f = split_container(bytes, &form.kinds())?;
     let header = |slice: &[u8]| {
         BeaconBlockHeader {
@@ -547,6 +602,7 @@ pub fn try_parse_state_form(bytes: &[u8], form: StateForm) -> Result<ParsedState
             .chunks_exact(64)
             .map(|item| (chunk32(&item[0..32]), chunk32(&item[32..64])))
             .collect(),
+        shape: ContainerShape::Plain,
     })
 }
 
@@ -567,7 +623,7 @@ fn electra_field_roots(f: &[&[u8]]) -> Result<Vec<B256>> {
 }
 
 /// `PendingDeposit`: public key, withdrawal credentials, amount, signature, slot.
-fn pending_deposit_root(bytes: &[u8]) -> B256 {
+pub(crate) fn pending_deposit_root(bytes: &[u8]) -> B256 {
     merkleize(&[
         byte_vector_root(&bytes[0..48]),
         chunk32(&bytes[48..80]),
@@ -578,12 +634,12 @@ fn pending_deposit_root(bytes: &[u8]) -> B256 {
 }
 
 /// `PendingPartialWithdrawal`: validator index, amount, withdrawable epoch.
-fn pending_partial_withdrawal_root(bytes: &[u8]) -> B256 {
+pub(crate) fn pending_partial_withdrawal_root(bytes: &[u8]) -> B256 {
     merkleize(&[u64_chunk(le_u64(&bytes[0..8])), u64_chunk(le_u64(&bytes[8..16])), u64_chunk(le_u64(&bytes[16..24]))])
 }
 
 /// `PendingConsolidation`: source index, target index.
-fn pending_consolidation_root(bytes: &[u8]) -> B256 {
+pub(crate) fn pending_consolidation_root(bytes: &[u8]) -> B256 {
     hash_pair(&u64_chunk(le_u64(&bytes[0..8])), &u64_chunk(le_u64(&bytes[8..16])))
 }
 

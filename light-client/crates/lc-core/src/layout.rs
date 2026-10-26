@@ -211,6 +211,14 @@ pub const CHECKPOINT: ContainerDefinition = ContainerDefinition {
     fields: &["epoch", "root"],
 };
 
+/// `Fork`: `previous_version`, `current_version`, `epoch`. Source: `specs/phase0/beacon-chain.md`, section "Fork".
+pub const FORK: ContainerDefinition = ContainerDefinition {
+    name: "Fork",
+    source: "specs/phase0/beacon-chain.md, Fork",
+    shape: ContainerShape::Plain,
+    fields: &["previous_version", "current_version", "epoch"],
+};
+
 /// `SignedExecutionPayloadBid`: a plain container. Source: `specs/gloas/beacon-chain.md`, section
 /// "SignedExecutionPayloadBid".
 pub const SIGNED_EXECUTION_PAYLOAD_BID: ContainerDefinition = ContainerDefinition {
@@ -348,6 +356,23 @@ pub const BLOCK_ROOTS_GINDEX_GLOAS: u64 = 352;
 /// `HISTORICAL_ROOTS_LIMIT` = 2^24 (not in the Gloas lists of modified types; the upgrade copies it).
 pub const HISTORICAL_SUMMARIES_GINDEX_GLOAS: u64 = 2950;
 
+/// `get_generalized_index(BeaconState, "fork", "current_version")` in Gloas = 169. `fork` is chunk 3, the second leaf of the
+/// 4 leaf subtree at node 10 under the rest node 5: node 42. `Fork` has three fields, so it is a plain container of depth 2,
+/// and `current_version` (field 1) is node 42 * 4 + 1. The branch has 7 entries. `BeaconForkGate` checks it for a route whose
+/// fork version is Gloas.
+pub const FORK_VERSION_GINDEX_GLOAS: u64 = 169;
+
+/// `get_generalized_index(BeaconState, "latest_block_hash")` in Gloas = 2947, derived like [`BLOCK_ROOTS_GINDEX_GLOAS`]:
+/// `latest_block_hash` is field 24 of the state, chunk 24 is leaf 2944 + 3 of the 64 leaf subtree at node 46. Depth 11.
+///
+/// This is the anchor of the execution block of a finalized Gloas head. The state transition writes the field in
+/// `process_parent_execution_payload` (`specs/gloas/beacon-chain.md`, function `apply_parent_execution_payload`): when the
+/// block builds on a FULL parent, `state.latest_block_hash = parent_bid.block_hash`. A block that builds on an EMPTY parent
+/// leaves it alone. So in the post-state of a finalized block the field names the newest execution payload that a
+/// beacon block of the finalized chain confirmed. That payload sits in finalized history, one slot or more before the
+/// finalized slot. It is never the payload of the finalized slot itself: that payload is confirmed by a later block.
+pub const LATEST_BLOCK_HASH_GINDEX_GLOAS: u64 = 2947;
+
 /// `EXECUTION_BLOCK_HASH_GINDEX_GLOAS`: `get_generalized_index(BeaconBlockBody, "signed_execution_payload_bid", "message",
 /// "parent_block_hash")` = 2856. Source: `specs/gloas/light-client/sync-protocol.md`, section "New constants".
 ///
@@ -359,11 +384,11 @@ pub const HISTORICAL_SUMMARIES_GINDEX_GLOAS: u64 = 2950;
 /// never).
 pub const BLOCK_HASH_GINDEX_GLOAS: u64 = 2856;
 
-/// Layout of the Gloas `BeaconState` (46 fields, progressive). Derivation only: `state_layout_for_fork` refuses Gloas.
+/// Layout of the Gloas `BeaconState` (46 fields, progressive).
 ///
-/// The positions are NOT of the form `2^depth + field_index`. The deployed Solidity rules (`_isStateFieldPosition` in
-/// `BeaconProofVerifier.sol`) reject `block_roots` 352 (depth 8) and `historical_summaries` 2950 (depth 11), so a Gloas
-/// source chain needs a Solidity change. See [`is_gloas_block_roots_position`].
+/// The positions are NOT of the form `2^depth + field_index`. `BeaconProofVerifier` accepts `block_roots` 352 (depth 8)
+/// and `historical_summaries` 2950 (depth 11) as two fixed positions next to the depth rule. See
+/// [`is_gloas_block_roots_position`].
 pub const GLOAS_STATE_LAYOUT: StateLayout = StateLayout {
     finalized_root_gindex: FINALIZED_ROOT_GINDEX_GLOAS,
     current_sync_committee_gindex: CURRENT_SYNC_COMMITTEE_GINDEX_GLOAS,
@@ -372,39 +397,39 @@ pub const GLOAS_STATE_LAYOUT: StateLayout = StateLayout {
     historical_summaries_gindex: HISTORICAL_SUMMARIES_GINDEX_GLOAS,
 };
 
-/// Whether `gindex` is the position of `block_roots` in the Gloas `BeaconState` (352).
-///
-/// The deployed Solidity rule (`_isStateFieldPosition`) REJECTS this position: it accepts depths 5 to 7 only, and 352 has
-/// depth 8. A bridge that must accept a Gloas source chain needs a Solidity change in `BeaconProofVerifier` and
-/// `BeaconForkGate`. [`is_block_roots_position`] keeps the Solidity rule and returns false for 352.
+/// Whether `gindex` is the position of `block_roots` in the Gloas `BeaconState` (352). A progressive container fixes the
+/// position of each field for good, so the position is one number and not a depth rule.
 pub fn is_gloas_block_roots_position(gindex: u64) -> bool {
     gindex == BLOCK_ROOTS_GINDEX_GLOAS
 }
 
-/// Whether `gindex` is the position of `historical_summaries` in the Gloas `BeaconState` (2950). The deployed Solidity
-/// rule rejects it (depth 11). See [`is_gloas_block_roots_position`].
+/// Whether `gindex` is the position of `historical_summaries` in the Gloas `BeaconState` (2950).
 pub fn is_gloas_historical_summaries_position(gindex: u64) -> bool {
     gindex == HISTORICAL_SUMMARIES_GINDEX_GLOAS
 }
 
 /// Whether `gindex` is the position of the execution block hash in the Gloas `BeaconBlockBody` (2856, through the bid).
-/// The deployed Solidity rule (`_isBlockHashPosition`) accepts 412, 668, 812 and 1324 only, so it rejects 2856.
+///
+/// The bridge does NOT accept it: [`is_block_hash_position`] rejects 2856, so a message proof from a Gloas source block
+/// stays refused. The bid of a block names no execution block that a later block confirmed, except through the
+/// `parent_block_hash` of the NEXT block, and no rule builds that binding yet.
 pub fn is_gloas_block_hash_position(gindex: u64) -> bool {
     gindex == BLOCK_HASH_GINDEX_GLOAS
 }
 
 /// The generalized index that proves the execution block hash of a light-client header in the COMPACT form
-/// (`execution_block_hash` plus `execution_branch`), chosen by the fork at the slot of the header itself.
+/// (`execution_block_hash` plus `execution_branch`) when the header slot is BEFORE Gloas: Deneb to Fulu 812, Capella 412.
 ///
-/// This is `is_valid_light_client_header` of `specs/gloas/light-client/sync-protocol.md`: Gloas 2856, Deneb to Fulu 812,
-/// Capella 412.
+/// A compact header can sit before the fork, because every header of a Gloas-typed update has the compact shape
+/// (`specs/gloas/light-client/sync-protocol.md`, "Modified `is_valid_light_client_header`"). A compact header of a Gloas
+/// slot is anchored in the state, not in the body: see [`LATEST_BLOCK_HASH_GINDEX_GLOAS`].
 ///
 /// # Errors
 /// `UnsupportedFork` before Capella. The specification accepts a zero hash with an empty branch there, but the bridge
-/// needs a non-zero execution block hash, so it refuses these headers.
+/// needs a non-zero execution block hash, so it refuses these headers. `GloasPayloadNotFinalized` for Gloas.
 pub fn compact_block_hash_gindex_for_fork(fork: ForkName) -> Result<u64> {
     match fork {
-        ForkName::Gloas => Ok(BLOCK_HASH_GINDEX_GLOAS),
+        ForkName::Gloas => Err(Error::GloasPayloadNotFinalized),
         ForkName::Deneb | ForkName::Electra | ForkName::Fulu => Ok(BLOCK_HASH_GINDEX_DENEB),
         ForkName::Capella => Ok(BLOCK_HASH_GINDEX_CAPELLA),
         ForkName::Phase0 | ForkName::Altair | ForkName::Bellatrix => Err(Error::UnsupportedFork { fork }),
@@ -427,14 +452,16 @@ pub fn is_state_field_position(gindex: u64, field_index: u64) -> bool {
     gindex == (1u64 << depth) + field_index
 }
 
-/// Whether `gindex` is the position of `block_roots` in a state of an accepted depth (37, 69 or 133).
+/// Whether `gindex` is the position of `block_roots` in a state of an accepted depth (37, 69 or 133), or the fixed Gloas
+/// position 352. It mirrors `_isBlockRootsPosition` in `BeaconProofVerifier.sol`.
 pub fn is_block_roots_position(gindex: u64) -> bool {
-    is_state_field_position(gindex, BLOCK_ROOTS_FIELD_INDEX)
+    is_state_field_position(gindex, BLOCK_ROOTS_FIELD_INDEX) || is_gloas_block_roots_position(gindex)
 }
 
-/// Whether `gindex` is the position of `historical_summaries` in a state of an accepted depth (59, 91 or 155).
+/// Whether `gindex` is the position of `historical_summaries` in a state of an accepted depth (59, 91 or 155), or the
+/// fixed Gloas position 2950. It mirrors `_isHistoricalSummariesPosition` in `BeaconProofVerifier.sol`.
 pub fn is_historical_summaries_position(gindex: u64) -> bool {
-    is_state_field_position(gindex, HISTORICAL_SUMMARIES_FIELD_INDEX)
+    is_state_field_position(gindex, HISTORICAL_SUMMARIES_FIELD_INDEX) || is_gloas_historical_summaries_position(gindex)
 }
 
 /// Whether `gindex` is the position of `execution_payload.block_hash` in a body and a payload of accepted depths:
@@ -450,8 +477,12 @@ pub fn is_block_hash_position(gindex: u64) -> bool {
 /// Selects the `execution_payload.block_hash` generalized index for a fork.
 ///
 /// # Errors
-/// `UnsupportedFork` for forks without a supported layout.
+/// `UnsupportedFork` for forks without a supported layout. `GloasPayloadNotFinalized` for Gloas: the body of a Gloas block
+/// holds a bid and no payload, and no rule binds a message proof to the payload of a Gloas source block yet.
 pub fn block_hash_gindex_for_fork(fork: ForkName) -> Result<u64> {
+    if fork >= ForkName::Gloas {
+        return Err(Error::GloasPayloadNotFinalized);
+    }
     match execution_header_form_for_fork(fork)? {
         ExecutionHeaderForm::Capella => Ok(BLOCK_HASH_GINDEX_CAPELLA),
         ExecutionHeaderForm::Deneb => Ok(BLOCK_HASH_GINDEX_DENEB),
@@ -479,8 +510,7 @@ pub fn state_layout_for_fork(fork: ForkName) -> Result<StateLayout> {
     match fork {
         ForkName::Capella | ForkName::Deneb => Ok(CAPELLA_DENEB_STATE_LAYOUT),
         ForkName::Electra | ForkName::Fulu => Ok(ELECTRA_STATE_LAYOUT),
-        // Fail closed: see `Error::GloasPayloadNotFinalized`. `GLOAS_STATE_LAYOUT` stays for the derivation tests only.
-        ForkName::Gloas => Err(Error::GloasPayloadNotFinalized),
+        ForkName::Gloas => Ok(GLOAS_STATE_LAYOUT),
         ForkName::Phase0 | ForkName::Altair | ForkName::Bellatrix => Err(Error::UnsupportedFork { fork }),
     }
 }
@@ -566,12 +596,12 @@ mod tests {
     /// layout the bridge accepts, and one that knew more would accept a layout the bridge refuses.
     #[test]
     fn position_rule_matches_the_bridge() {
-        for position in [37, 69, 133] {
+        for position in [37, 69, 133, 352] {
             assert!(is_block_roots_position(position));
             assert!(!is_block_roots_position(position - 1), "{position}: the field before");
             assert!(!is_block_roots_position(position + 1), "{position}: the field after");
         }
-        for position in [59, 91, 155] {
+        for position in [59, 91, 155, 2950] {
             assert!(is_historical_summaries_position(position));
             assert!(!is_historical_summaries_position(position - 1), "{position}: the field before");
             assert!(!is_historical_summaries_position(position + 1), "{position}: the field after");
@@ -613,7 +643,7 @@ mod tests {
     }
 
     /// Claim: every Gloas index DERIVES from the field lists, and the derived values equal the constants of the
-    /// specification (735, 2945, 2946, 2856). The control: a reordered field list gives another number, so the derivation
+    /// specification (735, 2945, 2946, 2856) and 2947 for `latest_block_hash` (field 24). The control: a reordered field list gives another number, so the derivation
     /// depends on the names.
     #[test]
     fn gloas_indices_derive_from_the_field_lists() {
@@ -651,8 +681,10 @@ mod tests {
         assert_eq!(EXECUTION_PAYLOAD_BID.fields.len(), 12);
         assert_eq!(EXECUTION_PAYLOAD_BID.field_position("parent_block_hash"), Some(0));
 
-        // Fail closed: the selector refuses Gloas although the derived layout exists.
-        assert_eq!(state_layout_for_fork(ForkName::Gloas), Err(Error::GloasPayloadNotFinalized));
+        assert_eq!(state_layout_for_fork(ForkName::Gloas), Ok(GLOAS_STATE_LAYOUT));
+        assert_eq!(state.field_position("latest_block_hash"), Some(24));
+        assert_eq!(path_gindex(&[(state, "latest_block_hash")]), Some(2947));
+        assert_eq!(2947, LATEST_BLOCK_HASH_GINDEX_GLOAS);
         let mut shuffled = BEACON_STATE_GLOAS.fields.to_vec();
         shuffled.swap(20, 21);
         let moved = ContainerDefinition { fields: Box::leak(shuffled.into_boxed_slice()), ..BEACON_STATE_GLOAS };
@@ -680,50 +712,54 @@ mod tests {
         assert_eq!(gindex_depth(CURRENT_SYNC_COMMITTEE_GINDEX_GLOAS), 11);
         assert_eq!(gindex_depth(NEXT_SYNC_COMMITTEE_GINDEX_GLOAS), 11);
         assert_eq!(gindex_depth(BLOCK_HASH_GINDEX_GLOAS), 11);
+        assert_eq!(gindex_depth(LATEST_BLOCK_HASH_GINDEX_GLOAS), 11);
         assert_eq!(gindex_depth(BLOCK_ROOTS_GINDEX_GLOAS), 8);
         assert_eq!(gindex_depth(HISTORICAL_SUMMARIES_GINDEX_GLOAS), 11);
     }
 
-    /// Claim: the deployed Solidity position rules reject every Gloas position, and the separate Gloas rules accept exactly
-    /// these and no neighbour. This is the finding for the owner: a Gloas source chain needs a Solidity change.
+    /// Claim: the position rules accept the two Gloas state positions (352 and 2950) and no neighbour, and still refuse the
+    /// Gloas block hash position 2856. The refusal is on purpose: a message proof from a Gloas source block has no sound
+    /// binding to its payload yet.
     #[test]
-    fn solidity_rules_reject_gloas_positions() {
-        assert!(!is_block_roots_position(352));
-        assert!(!is_historical_summaries_position(2950));
+    fn position_rules_take_gloas_state_positions_and_refuse_the_gloas_block_hash() {
+        assert!(is_block_roots_position(352) && !is_block_roots_position(351) && !is_block_roots_position(353));
+        assert!(
+            is_historical_summaries_position(2950)
+                && !is_historical_summaries_position(2949)
+                && !is_historical_summaries_position(2951)
+        );
         assert!(!is_block_hash_position(2856));
+        assert!(!is_block_roots_position(2950) && !is_historical_summaries_position(352));
         assert!(is_gloas_block_roots_position(352) && !is_gloas_block_roots_position(353));
         assert!(is_gloas_historical_summaries_position(2950) && !is_gloas_historical_summaries_position(2949));
         assert!(is_gloas_block_hash_position(2856) && !is_gloas_block_hash_position(2857));
     }
 
-    /// Claim: the compact header index follows the fork of the header slot: 412, 812 (Deneb, Electra, Fulu), 2856; before
-    /// Capella it is refused.
+    /// Claim: the compact header index follows the fork of the header slot: 412, 812 (Deneb, Electra, Fulu); before
+    /// Capella it is refused, and Gloas has no body index (its header is anchored in the state).
     #[test]
     fn compact_block_hash_index_follows_the_fork() {
         assert_eq!(compact_block_hash_gindex_for_fork(ForkName::Capella), Ok(412));
         for fork in [ForkName::Deneb, ForkName::Electra, ForkName::Fulu] {
             assert_eq!(compact_block_hash_gindex_for_fork(fork), Ok(812));
         }
-        assert_eq!(compact_block_hash_gindex_for_fork(ForkName::Gloas), Ok(2856));
+        assert_eq!(compact_block_hash_gindex_for_fork(ForkName::Gloas), Err(Error::GloasPayloadNotFinalized));
+        assert_eq!(block_hash_gindex_for_fork(ForkName::Gloas), Err(Error::GloasPayloadNotFinalized));
         assert_eq!(
             compact_block_hash_gindex_for_fork(ForkName::Bellatrix),
             Err(Error::UnsupportedFork { fork: ForkName::Bellatrix })
         );
     }
 
-    /// Claim: the `fork` field of the Gloas state is chunk 3, and `fork.current_version` is node 169, which the gate would
-    /// have to check with a progressive rule. The deployed gate computes `(2^depth + 3) * 4 + 1`, which is 105 at depth 5
-    /// and 217 at depth 6 and 441 at depth 7: none of them is 169.
+    /// Claim: the `fork` field of the Gloas state is chunk 3, and `fork.current_version` is node 169, which the gate checks
+    /// with a progressive rule. The depth rule `(2^depth + 3) * 4 + 1` gives 141 at depth 5, 269 at depth 6 and 525 at
+    /// depth 7: none of them is 169.
     #[test]
-    fn gloas_fork_version_index_differs_from_the_gate_rule() {
-        let fork_container = ContainerDefinition {
-            name: "Fork",
-            source: "specs/phase0/beacon-chain.md, Fork",
-            shape: ContainerShape::Plain,
-            fields: &["previous_version", "current_version", "epoch"],
-        };
-        let derived = path_gindex(&[(&BEACON_STATE_GLOAS, "fork"), (&fork_container, "current_version")]);
+    fn gloas_fork_version_index_differs_from_the_depth_rule() {
+        let derived = path_gindex(&[(&BEACON_STATE_GLOAS, "fork"), (&FORK, "current_version")]);
         assert_eq!(derived, Some(169));
+        assert_eq!(derived, Some(FORK_VERSION_GINDEX_GLOAS));
+        assert_eq!(gindex_depth(FORK_VERSION_GINDEX_GLOAS), 7);
         for depth in 5..=7u32 {
             assert_ne!(((1u64 << depth) + 3) * 4 + 1, 169);
         }

@@ -11,8 +11,13 @@
 //!
 //! The branch holds `2 + depth` entries, where `depth` is the depth of the state tree: 5 up to 32 fields (Capella,
 //! Deneb), 6 up to 64 fields (Electra, Fulu).
+//!
+//! Gloas makes the state a progressive container, so the position is the fixed index 169
+//! ([`crate::layout::FORK_VERSION_GINDEX_GLOAS`]): `fork` is chunk 3, node 42, and `current_version` is node 42 * 4 + 1. The
+//! branch holds 7 entries, the same count as depth 5, so the length does not tell the two apart. The gate takes the
+//! layout from its configuration (a supported version with the progressive marker), never from the caller.
 
-use crate::ssz::{branch_for_leaf, hash_pair, zero_hash};
+use crate::ssz::{branch_for_leaf, hash_pair, progressive_container_branch, zero_hash};
 use crate::ssz_state::ForkData;
 use alloy_primitives::{FixedBytes, B256, U256};
 use alloy_sol_types::{sol, SolValue};
@@ -59,6 +64,26 @@ pub fn fork_version_branch(field_roots: &[B256], fork: &ForkData) -> Vec<B256> {
     let [previous, _, epoch] = fork.leaves();
     let mut branch = vec![previous, hash_pair(&epoch, &zero_hash(0))];
     branch.extend(branch_for_leaf(field_roots, STATE_FIELD_FORK).1);
+    branch
+}
+
+/// The branch from `Fork.current_version` to the root of a Gloas (progressive) state. 7 entries: the two inside `Fork`, then
+/// the five siblings of chunk 3 in the progressive tree (the sibling chunk, the subtree of chunks 1 to 4, the rest of the
+/// tree, and the `active_fields` chunk, counted from the leaf).
+///
+/// `field_roots` are the 46 field roots of the state. Entry 3 must be the root of `fork`.
+///
+/// # Panics
+/// Panics when entry 3 of `field_roots` is not the root of `fork`.
+pub fn progressive_fork_version_branch(field_roots: &[B256], fork: &ForkData) -> Vec<B256> {
+    assert_eq!(
+        field_roots[STATE_FIELD_FORK],
+        fork.hash_tree_root(),
+        "the fork does not match the fork field of the state"
+    );
+    let [previous, _, epoch] = fork.leaves();
+    let mut branch = vec![previous, hash_pair(&epoch, &zero_hash(0))];
+    branch.extend(progressive_container_branch(field_roots, STATE_FIELD_FORK).1);
     branch
 }
 
@@ -128,6 +153,40 @@ mod tests {
             // The gate's formula, spelled out: field 3 of a tree of 2^depth leaves, then field 1 of 4.
             assert_eq!(gindex, ((1u64 << depth) + 3) * 4 + 1);
         }
+    }
+
+    /// Claim: for a Gloas (progressive) state the branch leads from the padded current version to the state root at the
+    /// fixed index 169, with 7 entries. It fails at the three depth-rule indices that have 7 entries or fewer in the gate
+    /// (141, 269, 525), for the previous version, and with a flipped entry.
+    /// Why it matters: the gate must take exactly one position per layout, and the progressive one is not on the depth rule.
+    #[test]
+    fn progressive_branch_proves_the_current_version_at_169() {
+        use crate::layout::FORK_VERSION_GINDEX_GLOAS;
+        use crate::ssz::progressive_container_root;
+        let fork =
+            ForkData { previous_version: [0x90, 0, 0, 0x75], current_version: [0x90, 0, 0, 0x76], epoch: 353_024 };
+        let roots = state_with(&fork, 46);
+        let root = progressive_container_root(&roots);
+        let branch = progressive_fork_version_branch(&roots, &fork);
+        assert_eq!(branch.len(), 7);
+        assert!(is_valid_exact_branch(&version_leaf(fork.current_version), &branch, FORK_VERSION_GINDEX_GLOAS, &root));
+        assert!(!is_valid_exact_branch(
+            &version_leaf(fork.previous_version),
+            &branch,
+            FORK_VERSION_GINDEX_GLOAS,
+            &root
+        ));
+        for depth in 5..=7 {
+            assert!(!is_valid_exact_branch(&version_leaf(fork.current_version), &branch, version_gindex(depth), &root));
+        }
+        let mut flipped = branch.clone();
+        flipped[4].0[0] ^= 1;
+        assert!(!is_valid_exact_branch(
+            &version_leaf(fork.current_version),
+            &flipped,
+            FORK_VERSION_GINDEX_GLOAS,
+            &root
+        ));
     }
 
     /// Claim: the encoding is the Solidity `abi.encode` of the struct: one offset word, then the head of the struct

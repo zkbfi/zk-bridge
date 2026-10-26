@@ -14,9 +14,7 @@
 use crate::ancestry::historical_leaf_gindex;
 use crate::error::{Error, Result};
 use crate::layout::{HISTORICAL_SUMMARIES_FIELD_INDEX, HISTORICAL_SUMMARIES_LIST_DEPTH, SLOTS_PER_HISTORICAL_ROOT};
-use crate::ssz::{
-    branch_for_leaf, branch_for_leaf_with_limit, ceil_log2, hash_pair, is_valid_exact_branch, merkleize, u64_chunk,
-};
+use crate::ssz::{branch_for_leaf, branch_for_leaf_with_limit, hash_pair, is_valid_exact_branch, merkleize, u64_chunk};
 use crate::ssz_state::ParsedState;
 use alloy_primitives::B256;
 use std::collections::BTreeMap;
@@ -25,10 +23,10 @@ use std::collections::BTreeMap;
 const STATE_FIELD_BLOCK_ROOTS: usize = 5;
 
 /// The generalized index of `historical_summaries` in the state: field 27 of a tree whose depth the number of fields
-/// gives (5 for the 28 fields of Capella and Deneb, 6 for the 37 of Electra). It equals `historical_summaries_gindex` of
-/// the matching `StateLayout` in `layout.rs`, and a test compares the two.
+/// gives (5 for the 28 fields of Capella and Deneb, 6 for the 37 of Electra), or the progressive position 2950 in Gloas. It
+/// equals `historical_summaries_gindex` of the matching `StateLayout` in `layout.rs`, and a test compares the two.
 fn historical_summaries_gindex(state: &ParsedState) -> u64 {
-    (1u64 << ceil_log2(state.field_roots.len() as u64)) + HISTORICAL_SUMMARIES_FIELD_INDEX
+    state.field_gindex(HISTORICAL_SUMMARIES_FIELD_INDEX as usize)
 }
 
 /// The first slot of an era.
@@ -59,7 +57,7 @@ pub fn era_block_roots(era: u64, canonical: &BTreeMap<u64, B256>) -> Result<Vec<
 /// The branch of `block_roots[slot % 8192]` in the state: the vector branch, then the field branch.
 pub fn recent_ancestry_branch(state: &ParsedState, slot: u64) -> Vec<B256> {
     let mut branch = branch_for_leaf(&state.block_roots, (slot % SLOTS_PER_HISTORICAL_ROOT) as usize).1;
-    branch.extend(branch_for_leaf(&state.field_roots, STATE_FIELD_BLOCK_ROOTS).1);
+    branch.extend(state.field_branch(STATE_FIELD_BLOCK_ROOTS));
     branch
 }
 
@@ -95,7 +93,7 @@ pub fn historical_ancestry_branch(
     branch.push(states);
     branch.extend(branch_for_leaf_with_limit(&summary_roots, position, HISTORICAL_SUMMARIES_LIST_DEPTH).1);
     branch.push(u64_chunk(summaries));
-    branch.extend(branch_for_leaf(&state.field_roots, HISTORICAL_SUMMARIES_FIELD_INDEX as usize).1);
+    branch.extend(state.field_branch(HISTORICAL_SUMMARIES_FIELD_INDEX as usize));
     let gindex = historical_leaf_gindex(historical_summaries_gindex(state), index, slot)?;
     let leaf = era_roots[(slot % SLOTS_PER_HISTORICAL_ROOT) as usize];
     if !is_valid_exact_branch(&leaf, &branch, gindex, &state.root()) {
@@ -137,7 +135,18 @@ mod tests {
             fork: ForkData { previous_version: [2, 0, 0, 0], current_version: [3, 0, 0, 0], epoch: 3 },
             finalized_checkpoint: (0, B256::ZERO),
             historical_summaries,
+            shape: crate::layout::ContainerShape::Plain,
         }
+    }
+
+    /// A Gloas-shaped state: 46 filler field roots in a progressive container, with `block_roots` (field 5) and
+    /// `historical_summaries` (field 27) set as in [`state_with_eras`].
+    fn gloas_state_with_eras(anchor_slot: u64, eras: &[Vec<B256>]) -> ParsedState {
+        let plain = state_with_eras(anchor_slot, eras);
+        let mut field_roots: Vec<B256> = (0..46u64).map(|field| keccak256(format!("gloas-field/{field}"))).collect();
+        field_roots[5] = plain.field_roots[5];
+        field_roots[27] = plain.field_roots[27];
+        ParsedState { field_roots, shape: crate::layout::ContainerShape::Progressive { width: 46 }, ..plain }
     }
 
     fn era_of_roots(era: u64) -> Vec<B256> {
@@ -193,6 +202,46 @@ mod tests {
         let gindex = crate::ancestry::block_roots_leaf_gindex(37, slot).unwrap();
         assert_eq!(branch.len(), 18);
         assert!(is_valid_exact_branch(&state.block_roots[(slot % 8192) as usize], &branch, gindex, &state.root()));
+    }
+
+    /// Claim: under a Gloas (progressive) anchor the recent branch has 21 entries and leads to the state root at
+    /// `352 * 8192 + slot % 8192`, and the historical branch has 50 entries and leads there at the index that starts from 2950.
+    /// Each branch fails at the index of the Electra layout (69 and 91). The state root is the progressive container root.
+    /// Why it matters: the contract accepts these two positions for a Gloas anchor, and the prover builds exactly these branches.
+    #[test]
+    fn gloas_branches_verify_at_the_progressive_positions() {
+        let capella_era = 2;
+        let eras = [era_of_roots(2), era_of_roots(3)];
+        let state = gloas_state_with_eras(8192 * 5 + 100, &eras);
+        assert_eq!(state.field_gindex(5), 352);
+        assert_eq!(state.field_gindex(27), 2950);
+        assert_eq!(state.root(), crate::ssz::progressive_container_root(&state.field_roots));
+
+        let slot = 8192 * 5 - 50;
+        let recent = recent_ancestry_branch(&state, slot);
+        assert_eq!(recent.len(), 21);
+        let leaf = state.block_roots[(slot % 8192) as usize];
+        assert!(is_valid_exact_branch(
+            &leaf,
+            &recent,
+            crate::ancestry::block_roots_leaf_gindex(352, slot).unwrap(),
+            &state.root()
+        ));
+        assert!(!is_valid_exact_branch(
+            &leaf,
+            &recent,
+            crate::ancestry::block_roots_leaf_gindex(69, slot).unwrap(),
+            &state.root()
+        ));
+
+        let source = 8192 * 3 + 4000;
+        let roots = &eras[1];
+        let branch = historical_ancestry_branch(&state, capella_era, source, roots).unwrap();
+        assert_eq!(branch.len(), 50);
+        let gindex = historical_leaf_gindex(2950, 1, source).unwrap();
+        assert!(is_valid_exact_branch(&roots[(source % 8192) as usize], &branch, gindex, &state.root()));
+        let electra = historical_leaf_gindex(91, 1, source).unwrap();
+        assert!(!is_valid_exact_branch(&roots[(source % 8192) as usize], &branch, electra, &state.root()));
     }
 
     /// Claim: an empty slot repeats the root of the block before it, including across the era border, and a map with

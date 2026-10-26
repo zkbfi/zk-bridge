@@ -6,7 +6,8 @@
 //! `lc_core::layout` is not copied into the builder. The real-data tests are the independent check of both.
 
 use crate::receipts::{
-    build_indexed_trie, encode_execution_header, encode_receipt, header_hash, prague_header, shanghai_header,
+    amsterdam_header_rlp, build_indexed_trie, encode_execution_header, encode_receipt, header_hash, prague_header,
+    shanghai_header,
 };
 use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
 use bls12_381::hash_to_curve::{ExpandMsgXmd, HashToCurve};
@@ -43,6 +44,8 @@ const STATE_FIELD_FINALIZED_CHECKPOINT: usize = 20;
 const STATE_FIELD_CURRENT_SYNC_COMMITTEE: usize = 22;
 /// Field index of `next_sync_committee`.
 const STATE_FIELD_NEXT_SYNC_COMMITTEE: usize = 23;
+/// Field index of `latest_block_hash` in the Gloas `BeaconState` (it takes the place of the payload header of field 24).
+const GLOAS_STATE_FIELD_LATEST_BLOCK_HASH: usize = 24;
 /// Field index of `execution_payload` in `BeaconBlockBody`.
 const BODY_FIELD_EXECUTION_PAYLOAD: usize = 9;
 
@@ -501,9 +504,19 @@ impl GloasStateBuilder {
         self.chunks[STATE_FIELD_NEXT_SYNC_COMMITTEE] = committee.hash_tree_root().expect("committee root");
     }
 
+    /// Sets `latest_block_hash` (field 24).
+    pub fn set_latest_block_hash(&mut self, hash: B256) {
+        self.chunks[GLOAS_STATE_FIELD_LATEST_BLOCK_HASH] = hash;
+    }
+
     /// The state root.
     pub fn root(&self) -> B256 {
         progressive_container_root(&self.chunks)
+    }
+
+    /// Branch for `latest_block_hash`. 11 entries.
+    pub fn latest_block_hash_branch(&self) -> Vec<B256> {
+        progressive_container_branch(&self.chunks, GLOAS_STATE_FIELD_LATEST_BLOCK_HASH).1
     }
 
     /// Branch for `finalized_checkpoint.root`: the epoch chunk, then 8 entries of the progressive state. 9 in all.
@@ -548,7 +561,35 @@ pub fn synthetic_compact_header(
         state_root,
         body_root,
     };
-    LightClientHeader::compact(beacon, execution_block_hash, branch)
+    LightClientHeader::compact(beacon, execution_block_hash, branch, Vec::new())
+}
+
+/// A compact FINALIZED header for a Gloas-typed update, with the execution block of number `block_number`.
+///
+/// The execution block is an Amsterdam-shaped header (23 items). Its hash is the proven execution block hash. In a Gloas slot
+/// the hash is `latest_block_hash` of a synthetic Gloas state that the header's `state_root` commits to, with the branch at
+/// index 2947. In a slot before Gloas the hash is the payload block hash of a synthetic Capella to Fulu body, with the
+/// branch at 812 or 412. The RLP is attached in both cases.
+pub fn synthetic_compact_finalized_header(spec: &ChainSpec, slot: u64, block_number: u64) -> LightClientHeader {
+    let rlp = amsterdam_header_rlp(block_number, filler("receipts", slot), filler("transactions", slot));
+    let block_hash = keccak256(&rlp);
+    let beacon = BeaconBlockHeader {
+        slot,
+        proposer_index: slot % 1000,
+        parent_root: filler("parent-root", slot),
+        state_root: filler("finalized-state-root", slot),
+        body_root: filler("finalized-body-root", slot),
+    };
+    if spec.fork_at_slot(slot) >= ForkName::Gloas {
+        let mut state = GloasStateBuilder::default();
+        state.set_latest_block_hash(block_hash);
+        let beacon = BeaconBlockHeader { state_root: state.root(), ..beacon };
+        return LightClientHeader::compact(beacon, block_hash, state.latest_block_hash_branch(), rlp.to_vec());
+    }
+    let payload = synthetic_payload_header(spec, slot, block_number, block_hash, filler("receipts", slot));
+    let proofs = build_body_proofs(spec, slot, &payload);
+    let beacon = BeaconBlockHeader { body_root: proofs.body_root, ..beacon };
+    LightClientHeader::compact(beacon, block_hash, proofs.block_hash_branch, rlp.to_vec())
 }
 
 /// A store and a Gloas-typed update (every header compact) that verify together, unless the test breaks them.
@@ -561,6 +602,8 @@ pub struct GloasUpdateScenario {
     pub update: LightClientUpdate,
     /// The synthetic Gloas state of the attested header, for tests that need more branches from it.
     pub attested_state: GloasStateBuilder,
+    /// The block number inside the execution header RLP of the finalized header.
+    pub finalized_block_number: u64,
 }
 
 /// Builds a Gloas-typed update on `spec` with the same recipe as [`build_update`]. The attested slot must be in a Gloas
@@ -572,12 +615,8 @@ pub fn build_gloas_update(spec: &'static ChainSpec, recipe: UpdateRecipe) -> Glo
     let attested_period = spec.period_at_slot(recipe.attested_slot);
     let signature_period = spec.period_at_slot(recipe.signature_slot);
 
-    let finalized_header = synthetic_compact_header(
-        spec,
-        recipe.finalized_slot,
-        filler("finalized-state-root", recipe.finalized_slot),
-        filler("exec-block-hash", recipe.finalized_slot),
-    );
+    let finalized_block_number = recipe.finalized_slot / 2 + 12_000_000;
+    let finalized_header = synthetic_compact_finalized_header(spec, recipe.finalized_slot, finalized_block_number);
     let mut state = GloasStateBuilder::default();
     state.set_finalized_checkpoint(spec.epoch_at_slot(recipe.finalized_slot), finalized_header.beacon.hash_tree_root());
     let attested_current = committee_for(spec, attested_period);
@@ -615,7 +654,7 @@ pub fn build_gloas_update(spec: &'static ChainSpec, recipe: UpdateRecipe) -> Glo
             .store_knows_next_committee
             .then(|| committee_for(spec, store_period + 1).committee.clone()),
     };
-    GloasUpdateScenario { spec, store, update, attested_state: state }
+    GloasUpdateScenario { spec, store, update, attested_state: state, finalized_block_number }
 }
 
 /// A chain of updates that walks across sync committee periods, as the updates of a lagging light client are.
