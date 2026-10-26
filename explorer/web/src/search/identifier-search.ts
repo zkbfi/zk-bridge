@@ -18,6 +18,11 @@ export type IdentifierSearchOutcome = {
 const subtitleOf = (detail: MessageDetail, pair: PairConfig, foundBy: "identifier" | "transaction"): string =>
   `${detail.kind === "token" ? "Transfer" : "Message"} · ${detail.status.replace(/_/g, " ")} · ${chainNameOf(pair, detail.sourceChainId)} to ${chainNameOf(pair, detail.destinationChainId)} · found by ${foundBy}`;
 
+const found = (detail: MessageDetail, pair: PairConfig, foundBy: "identifier" | "transaction"): IdentifierSearchOutcome => ({
+  results: [transferResult({ messageId: detail.id, subtitle: subtitleOf(detail, pair, foundBy) })],
+  problem: null,
+});
+
 /**
  * Looks up a query that is an address or a 32 byte hash.
  *
@@ -32,15 +37,12 @@ export const searchIdentifiers = async (
   if (shape.kind !== "hash") return { results: [], problem: null };
   try {
     const byIdentifier = await dependencies.indexer.message(shape.hash);
-    if (byIdentifier !== null) {
-      return { results: [transferResult({ messageId: byIdentifier.id, subtitle: subtitleOf(byIdentifier, dependencies.pair, "identifier") })], problem: null };
-    }
+    if (byIdentifier !== null) return found(byIdentifier, dependencies.pair, "identifier");
     const messageId = await dependencies.indexer.findMessageByTransaction(shape.hash);
     const byTransaction = messageId === null ? null : await dependencies.indexer.message(messageId);
-    if (byTransaction === null) {
-      return { results: [], problem: "The indexer knows no message with this identifier or transaction hash." };
-    }
-    return { results: [transferResult({ messageId: byTransaction.id, subtitle: subtitleOf(byTransaction, dependencies.pair, "transaction") })], problem: null };
+    return byTransaction === null
+      ? { results: [], problem: "The indexer knows no message with this identifier or transaction hash." }
+      : found(byTransaction, dependencies.pair, "transaction");
   } catch (error) {
     return { results: [], problem: `The indexer lookup failed: ${error instanceof Error ? error.message : String(error)}` };
   }
