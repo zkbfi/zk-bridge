@@ -10,6 +10,7 @@
     "reason": "WrongDestinationChain",
     "result": "reject"
   },
+  "gloasForkSlot": "18446744073709551615",
   "layout": "capella",
   "localChainId": "31337",
   "name": "capella_reject_context_with_another_local_chain",

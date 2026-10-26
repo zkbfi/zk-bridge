@@ -141,6 +141,8 @@ pub fn decode_execution_header(rlp: &[u8]) -> Result<ExecutionHeader> {
 /// with each fork (Amsterdam has 23). The limit only bounds the walk over untrusted bytes.
 const MAX_HEADER_ITEMS: usize = 64;
 
+/// Position of `transactionsRoot` in the execution header list.
+const HEADER_ITEM_TRANSACTIONS_ROOT: usize = 4;
 /// Position of `receiptsRoot` in the execution header list. It has not moved since Frontier.
 const HEADER_ITEM_RECEIPTS_ROOT: usize = 5;
 /// Position of `number` in the execution header list.
@@ -153,6 +155,8 @@ const HEADER_ITEMS_FROM_FRONTIER: usize = 15;
 /// The fields of an execution header that the light client reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExecutionAnchorFields {
+    /// Transactions root: item 4.
+    pub transactions_root: B256,
     /// Block number: item 8 of the header list.
     pub number: u64,
     /// Receipts root: item 5.
@@ -161,10 +165,10 @@ pub struct ExecutionAnchorFields {
     pub timestamp: u64,
 }
 
-/// Reads `number`, `receiptsRoot` and `timestamp` from the RLP of an execution header of ANY field count.
+/// Reads `transactionsRoot`, `receiptsRoot`, `number` and `timestamp` from the RLP of an execution header of ANY field count.
 ///
 /// Execution headers grow with each fork (Amsterdam adds `blockAccessListHash` and `slotNumber`, 23 items), but the first
-/// 15 items have kept their positions since Frontier. This decoder pins the three positions it reads, checks their
+/// 15 items have kept their positions since Frontier. This decoder pins the four positions it reads, checks their
 /// types (a 32 byte string and two canonical integers), and walks the other items by their RLP length prefix without
 /// reading them. It needs at least 15 items, and the items must fill the list exactly. It does not decide whether the
 /// header is valid for a fork: the caller binds the bytes by their keccak256 hash, so the positions are those of the
@@ -181,6 +185,7 @@ pub fn decode_execution_anchor_fields(rlp: &[u8]) -> Result<ExecutionAnchorField
     if list.payload_length != outer.len() {
         return Err(header_error("trailing bytes after the header list"));
     }
+    let mut transactions_root = None;
     let mut receipts_root = None;
     let mut number = None;
     let mut timestamp = None;
@@ -198,6 +203,7 @@ pub fn decode_execution_anchor_fields(rlp: &[u8]) -> Result<ExecutionAnchorField
         }
         let mut whole = &rest[..item_length];
         match count {
+            HEADER_ITEM_TRANSACTIONS_ROOT => transactions_root = Some(B256::decode(&mut whole).map_err(header_error)?),
             HEADER_ITEM_RECEIPTS_ROOT => receipts_root = Some(B256::decode(&mut whole).map_err(header_error)?),
             HEADER_ITEM_NUMBER => number = Some(u64::decode(&mut whole).map_err(header_error)?),
             HEADER_ITEM_TIMESTAMP => timestamp = Some(u64::decode(&mut whole).map_err(header_error)?),
@@ -209,11 +215,11 @@ pub fn decode_execution_anchor_fields(rlp: &[u8]) -> Result<ExecutionAnchorField
     if count < HEADER_ITEMS_FROM_FRONTIER {
         return Err(header_error("fewer than 15 items in the header list"));
     }
-    match (receipts_root, number, timestamp) {
-        (Some(receipts_root), Some(number), Some(timestamp)) => {
-            Ok(ExecutionAnchorFields { number, receipts_root, timestamp })
+    match (transactions_root, receipts_root, number, timestamp) {
+        (Some(transactions_root), Some(receipts_root), Some(number), Some(timestamp)) => {
+            Ok(ExecutionAnchorFields { transactions_root, number, receipts_root, timestamp })
         }
-        _ => Err(header_error("the header list lacks receipts root, number or timestamp")),
+        _ => Err(header_error("the header list lacks transactions root, receipts root, number or timestamp")),
     }
 }
 

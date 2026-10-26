@@ -104,10 +104,9 @@ pub enum Error {
     /// A compact (Gloas) header names the zero execution block hash in an epoch that has a block hash. The bridge reports
     /// this hash, and the contract refuses zero.
     ZeroExecutionBlockHash(&'static str),
-    /// A Gloas source block of a message proof was refused. A Gloas block body holds a bid and no payload. The payload of a
-    /// slot is revealed apart from the beacon block and may be withheld, so no rule binds a message proof to the payload
-    /// of a Gloas source block yet. The head of the light client is not affected: a Gloas head is anchored on
-    /// `state.latest_block_hash` of its finalized state.
+    /// A block hash LAYOUT position was asked for a Gloas block. A Gloas body holds a bid and no payload, so it has no
+    /// `execution_payload.block_hash` position. A message proof from a Gloas source reads the fixed index of the bid
+    /// `parent_block_hash` instead (`layout::message_block_hash_gindex_for_fork`).
     GloasPayloadNotFinalized,
     /// The header shape does not fit the update: a Gloas-typed update (attested slot in a Gloas epoch) needs the compact
     /// shape for every header, and an earlier update needs the full shape.
@@ -214,7 +213,7 @@ impl fmt::Display for Error {
             Self::UnsupportedFork { fork } => write!(formatter, "unsupported fork for light-client proofs: {fork:?}"),
             Self::GloasPayloadNotFinalized => write!(
                 formatter,
-                "a Gloas source block is refused: its payload is not bound to the block (the head of the light client is not affected)"
+                "a Gloas block body has no execution payload block hash position (a message source reads the bid parent block hash)"
             ),
             Self::ExecutionHeaderForkMismatch { fork } => {
                 write!(formatter, "execution payload header fields do not match fork {fork:?}")

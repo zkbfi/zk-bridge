@@ -28,7 +28,8 @@ import {ReceiptLogs} from "./ReceiptLogs.sol";
 /// `2**depth + index`. Its position is one fixed number, which later forks keep. `block_roots` sits at 352 and
 /// `historical_summaries` at 2950. The position rules take those two numbers next to the depth rule, and no other
 /// number of a deeper tree: the rule for an older fork is not looser. The body of a Gloas block holds a bid and no payload,
-/// so no position of the block hash is accepted for a Gloas source block, and a message proof from one cannot pass.
+/// so no layout position of the block hash exists for a Gloas slot. A message source at or after `gloasForkSlot` is a beacon
+/// block B after the execution block X, and the fixed index 2856 (the bid `parent_block_hash` of B) must equal the hash of X.
 ///
 /// Ancestry has two paths, chosen from the two slots. A block at most 8192 slots below the anchor is proven through
 /// `state.block_roots`. An older block is proven through `state.historical_summaries`, which holds the root of every
@@ -153,6 +154,20 @@ abstract contract BeaconProofVerifier {
     /// and `lc-core` derives the number from the field list).
     uint256 private constant GLOAS_BLOCK_ROOTS_GINDEX = 352;
 
+    /// @dev The position of `signed_execution_payload_bid.message.parent_block_hash` in the progressive Gloas
+    /// `BeaconBlockBody`: field 10 of the body is node 357, `message` is 714, the bid is progressive and its first chunk
+    /// `parent_block_hash` is 714 * 4 = 2856 (`specs/gloas/light-client/sync-protocol.md`, `EXECUTION_BLOCK_HASH_GINDEX_GLOAS`).
+    /// The branch has 11 entries. The position is fixed by the progressive layout, so no layout evidence names it.
+    ///
+    /// The rule for a message source at or after `gloasForkSlot`: the source header is a beacon block B AFTER the block of
+    /// the proven execution block X, and `parent_block_hash` of B equals the hash of X. Why it is sound:
+    /// `process_execution_payload_bid` asserts `bid.parent_block_hash == state.latest_block_hash`, and `latest_block_hash` is
+    /// written only by `apply_parent_execution_payload`, from the bid of a parent whose payload the child confirmed. So the
+    /// `parent_block_hash` of a block of the canonical chain names a payload that the chain accepted. A block on an empty
+    /// parent names an older accepted payload, which is canonical too. The bid's own `block_hash` is never accepted: that
+    /// payload may be withheld. B must be an ancestor of the stored head, which the ancestry branch proves.
+    uint256 private constant GLOAS_BID_PARENT_BLOCK_HASH_GINDEX = 2856;
+
     /// @dev The position of `BeaconState.historical_summaries` in the progressive Gloas state: field 27 is chunk 27, the
     /// seventh leaf of the 64 leaf subtree at node 46, which starts at 2944.
     uint256 private constant GLOAS_HISTORICAL_SUMMARIES_GINDEX = 2950;
@@ -241,8 +256,9 @@ abstract contract BeaconProofVerifier {
     /// @notice A `historical_summaries` evidence slot is not more than 8192 slots below its anchor.
     error EvidenceSlotNotHistorical(uint64 earlierSlot, uint64 anchorSlot);
 
-    /// @notice The body-layout path was asked about a slot at or after the Gloas fork. The stored hash of such a slot is
-    /// `latest_block_hash`, not the payload of the block of that slot, and the body holds only a bid.
+    /// @notice `addBlockHashLayout` was asked about a slot at or after the Gloas fork. The stored hash of such a slot is
+    /// `latest_block_hash`, not the payload of the block of that slot, and the body holds only a bid. A message source
+    /// at or after the fork takes no layout: it reads the fixed bid index.
     error GloasSlotRefused(uint64 slot, uint64 gloasForkSlot);
 
     /// @notice The slot lies inside the validated range of another position, so a layout cannot be validated there.
@@ -323,9 +339,10 @@ abstract contract BeaconProofVerifier {
     /// @notice The first slot of the Gloas fork on the remote chain, or `NO_GLOAS_FORK` when the route has none.
     /// @dev From this slot on, `lightClient.executionBlockHashes(slot)` holds `state.latest_block_hash` of the finalized
     /// state: the newest payload that a block confirmed BEFORE the slot, not the payload of the slot. The body of a Gloas
-    /// block holds a bid and no payload. So the body-layout path (`addBlockHashLayout` and `_requireBlockHashBranch`) must
-    /// never read a stored hash at or after this slot as the payload of the beacon block of that slot. Both refuse it. A
-    /// Gloas head is used only through the opening proof, which checks an execution header RLP against the stored hash.
+    /// block holds a bid and no payload. So `addBlockHashLayout` never reads a stored hash at or after this slot as the
+    /// payload of the beacon block of that slot, and refuses it. A message source at or after this slot reads the bid
+    /// `parent_block_hash` of a LATER block (`GLOAS_BID_PARENT_BLOCK_HASH_GINDEX`). A Gloas head is used through the
+    /// opening proof, which checks an execution header RLP against the stored hash.
     uint64 public immutable gloasForkSlot;
 
     /// @param lightClient_ The light client of the remote chain.
@@ -403,14 +420,18 @@ abstract contract BeaconProofVerifier {
         if (!SSZ.isValidBranch(sourceRoot, branch, leafIndex, anchorHeader.stateRoot)) revert AncestryBranchInvalid();
     }
 
-    /// @dev Check 4. The execution block hash must sit in the body of the source header at the validated position.
+    /// @dev Check 4. The execution block hash must sit in the body of the source header. Before the Gloas fork it is at the
+    /// validated payload block hash position. At or after `gloasForkSlot` it is the bid `parent_block_hash` at the fixed
+    /// index 2856 (see `GLOAS_BID_PARENT_BLOCK_HASH_GINDEX`).
     function _requireBlockHashBranch(
         bytes32 blockHash,
         BeaconBlockHeader calldata sourceHeader,
         bytes32[] calldata branch
     ) internal view {
-        _requireBeforeGloas(sourceHeader.slot);
-        if (!SSZ.isValidBranch(blockHash, branch, _blockHashGindexAt(sourceHeader.slot), sourceHeader.bodyRoot)) {
+        uint256 gindex = sourceHeader.slot >= gloasForkSlot
+            ? GLOAS_BID_PARENT_BLOCK_HASH_GINDEX
+            : _blockHashGindexAt(sourceHeader.slot);
+        if (!SSZ.isValidBranch(blockHash, branch, gindex, sourceHeader.bodyRoot)) {
             revert BlockHashBranchInvalid();
         }
     }

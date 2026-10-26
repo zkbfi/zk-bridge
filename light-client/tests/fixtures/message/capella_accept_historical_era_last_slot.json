@@ -21,6 +21,7 @@
     },
     "result": "accept"
   },
+  "gloasForkSlot": "18446744073709551615",
   "layout": "capella",
   "localChainId": "1",
   "name": "capella_accept_historical_era_last_slot",

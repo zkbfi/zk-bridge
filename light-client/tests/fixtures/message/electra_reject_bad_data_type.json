@@ -10,6 +10,7 @@
     "reason": "UnknownDataType",
     "result": "reject"
   },
+  "gloasForkSlot": "18446744073709551615",
   "layout": "electra",
   "localChainId": "369",
   "name": "electra_reject_bad_data_type",

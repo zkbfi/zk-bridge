@@ -10,6 +10,7 @@
     "reason": "InvalidBlockHashBranch",
     "result": "reject"
   },
+  "gloasForkSlot": "18446744073709551615",
   "layout": "capella",
   "localChainId": "1",
   "name": "capella_reject_short_block_hash_branch",

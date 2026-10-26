@@ -14,8 +14,9 @@
 use crate::abi::{MessageProof, USER_REQUEST_TOPIC};
 use crate::ancestry::verify_beacon_path;
 use crate::chain::ChainSpec;
+use crate::chain::ForkName;
 use crate::error::{Error, Result};
-use crate::execution::{decode_execution_header, decode_receipt, Log};
+use crate::execution::{decode_execution_anchor_fields, decode_execution_header, decode_receipt, Log};
 use crate::mpt::extract_proven_value;
 use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
 use alloy_trie::proof::verify_proof;
@@ -269,6 +270,19 @@ pub fn require_acceptable_message(
     Ok(())
 }
 
+/// The receipts root and the transactions root of the execution header of the proof.
+///
+/// A source header at or after the Gloas fork reads them with the tolerant decoder, because an Amsterdam header has more
+/// items than the strict decoder knows. Every earlier fork keeps the strict decoder, as before.
+fn trie_roots(spec: &ChainSpec, proof: &MessageProof) -> Result<(B256, B256)> {
+    if spec.fork_at_slot(proof.sourceHeader.slot) >= ForkName::Gloas {
+        let fields = decode_execution_anchor_fields(&proof.executionHeaderRlp)?;
+        return Ok((fields.receipts_root, fields.transactions_root));
+    }
+    let header = decode_execution_header(&proof.executionHeaderRlp)?;
+    Ok((header.receipts_root, header.transactions_root))
+}
+
 /// Verifies a message proof and returns the message it proves.
 ///
 /// # Errors
@@ -281,11 +295,11 @@ pub fn verify_message(proof: &MessageProof, context: &MessageContext, spec: &Cha
         });
     }
     let source_block_hash = verify_beacon_path(spec, proof, &context.stored_anchor_root)?;
-    let header = decode_execution_header(&proof.executionHeaderRlp)?;
+    let (receipts_root, transactions_root) = trie_roots(spec, proof)?;
 
     let index = index_to_u64(proof.receiptIndex)?;
-    let receipt_bytes = extract_receipt(header.receipts_root, index, &proof.receiptProof)?;
-    let transaction_bytes = extract_transaction(header.transactions_root, index, &proof.transactionProof)?;
+    let receipt_bytes = extract_receipt(receipts_root, index, &proof.receiptProof)?;
+    let transaction_bytes = extract_transaction(transactions_root, index, &proof.transactionProof)?;
     let source_transaction_hash = keccak256(&transaction_bytes);
 
     let receipt = decode_receipt(&receipt_bytes)?;

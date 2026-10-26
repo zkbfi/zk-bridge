@@ -249,3 +249,69 @@ fn the_real_fork_version_branch_verifies_at_169() {
         ));
     }
 }
+
+/// The real message source: the real execution block X of the fixtures, the real beacon block B (the finalized header of the
+/// real update) whose bid names X as `parent_block_hash`, and a real later anchor A. The log is a REAL log of X (a transfer
+/// log of Sepolia, not a bridge message), so the proof reaches the log checks and stops there.
+fn real_message_proof() -> (lc_core::abi::MessageProof, B256, alloy_primitives::Address) {
+    use alloy_primitives::{Address, Bytes};
+    use lc_core::json::{beacon_header, hex_b256, hex_to_bytes};
+    let fixture = load_response("sepolia/gloas_message_source.json");
+    let nodes = |key: &str| -> Vec<Bytes> { fixture[key].as_array().unwrap().iter().map(hex_to_bytes).collect() };
+    let branch = |key: &str| -> Vec<B256> { fixture[key].as_array().unwrap().iter().map(hex_b256).collect() };
+    let anchor = beacon_header(&fixture["anchor_header"]);
+    let source = beacon_header(&fixture["source_header"]);
+    let index = alloy_primitives::U256::from(fixture["transaction_index"].as_u64().unwrap());
+    let proof = lc_core::abi::MessageProof {
+        anchorHeader: (&anchor).into(),
+        sourceHeader: (&source).into(),
+        ancestryBranch: branch("ancestry_branch"),
+        blockHashBranch: branch("block_hash_branch"),
+        executionHeaderRlp: Bytes::from(real_header_rlp()),
+        receiptProof: nodes("receipt_proof"),
+        receiptIndex: index,
+        transactionProof: nodes("transaction_proof"),
+        transactionIndex: index,
+        logIndex: alloy_primitives::U256::ZERO,
+    };
+    let emitter: Address = fixture["log"]["address"].as_str().unwrap().parse().unwrap();
+    (proof, anchor.hash_tree_root(), emitter)
+}
+
+/// Claim: a REAL Gloas message source verifies up to the log. The source block B is the real beacon block whose bid names
+/// the real execution block X as `parent_block_hash` (node-served branch of 11 entries at index 2856), the anchor is a real
+/// later header whose real state holds B in `block_roots` (index 352), the RLP is the real 23 item header, and the
+/// receipt and transaction proofs are real (the tries rebuilt from the node answers have the roots of the header). The
+/// beacon path returns the hash of X. The log is not a bridge message, so `verify_message` ends at the log check with
+/// `LogTopicMismatch`, which shows that every earlier check passed on real data.
+/// Controls: a flipped branch entry, the RLP of the parent block, and a flipped ancestry entry each fail with their own error.
+#[test]
+fn a_real_gloas_message_source_verifies_up_to_the_log() {
+    use lc_core::ancestry::verify_beacon_path;
+    use lc_core::message::{verify_message, MessageContext};
+    let (proof, anchor_root, emitter) = real_message_proof();
+    let x_hash = keccak256(real_header_rlp());
+    assert_eq!(proof.blockHashBranch.len(), 11);
+    assert_eq!(verify_beacon_path(&SEPOLIA, &proof, &anchor_root), Ok(x_hash));
+
+    let context = MessageContext {
+        remote_bridge: emitter,
+        local_chain_id: 943,
+        remote_chain_id: 11_155_111,
+        stored_anchor_root: anchor_root,
+    };
+    assert_eq!(verify_message(&proof, &context, &SEPOLIA).err(), Some(Error::LogTopicMismatch));
+
+    let mut flipped = proof.clone();
+    flipped.blockHashBranch[4].0[0] ^= 1;
+    assert_eq!(verify_beacon_path(&SEPOLIA, &flipped, &anchor_root), Err(Error::InvalidBlockHashBranch));
+    let wrapper = load_fixture("sepolia/gloas_head_execution_header.json");
+    let mut parent = proof.clone();
+    parent.executionHeaderRlp = hex::decode(wrapper["parent_raw_header"].as_str().unwrap()).unwrap().into();
+    assert_eq!(verify_beacon_path(&SEPOLIA, &parent, &anchor_root), Err(Error::InvalidBlockHashBranch));
+    let mut not_ancestor = proof.clone();
+    not_ancestor.ancestryBranch[3].0[0] ^= 1;
+    assert_eq!(verify_beacon_path(&SEPOLIA, &not_ancestor, &anchor_root), Err(Error::InvalidAncestryBranch));
+    // The strict decoder of the earlier forks does not read this header: the Gloas rule uses the tolerant one.
+    assert!(decode_execution_header(&proof.executionHeaderRlp).is_err());
+}

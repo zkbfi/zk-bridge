@@ -10,6 +10,7 @@
     "reason": "LogIndexOutOfRange",
     "result": "reject"
   },
+  "gloasForkSlot": "18446744073709551615",
   "layout": "electra",
   "localChainId": "369",
   "name": "electra_reject_log_index_out_of_range",

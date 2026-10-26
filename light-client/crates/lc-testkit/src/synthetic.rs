@@ -55,6 +55,7 @@ fn state_field_count(fork: ForkName) -> usize {
         ForkName::Capella | ForkName::Deneb => 28,
         ForkName::Electra => 37,
         ForkName::Fulu => 38,
+        ForkName::Gloas => 46,
         other => panic!("no synthetic state for {other:?}"),
     }
 }
@@ -136,6 +137,8 @@ pub fn sign_with_first_members(committee: &TestCommittee, count: usize, signing_
 
 /// A test-only `BeaconState`: field roots with filler, and the fields the light client reads.
 pub struct StateBuilder {
+    /// Plain up to Fulu, a progressive container from Gloas.
+    progressive: bool,
     leaves: Vec<B256>,
     block_roots: Vec<B256>,
     /// Hash tree root of each `HistoricalSummary`, in list order.
@@ -155,7 +158,7 @@ impl StateBuilder {
     pub fn new(fork: ForkName) -> Self {
         let leaves = (0..state_field_count(fork) as u64).map(|index| filler("state-field", index)).collect();
         let block_roots = (0..8192u64).map(|index| filler("block-root", index)).collect();
-        Self { leaves, block_roots, summaries: Vec::new(), eras: HashMap::new() }
+        Self { progressive: fork >= ForkName::Gloas, leaves, block_roots, summaries: Vec::new(), eras: HashMap::new() }
     }
 
     /// Sets `finalized_checkpoint` to `Checkpoint { epoch, root }`.
@@ -218,30 +221,41 @@ impl StateBuilder {
 
     /// The state root.
     pub fn root(&self) -> B256 {
-        merkleize(&self.field_leaves())
+        match self.progressive {
+            true => progressive_container_root(&self.field_leaves()),
+            false => merkleize(&self.field_leaves()),
+        }
+    }
+
+    /// The branch from field `index` to the state root, for the shape of this state.
+    fn field_branch(&self, index: usize) -> Vec<B256> {
+        match self.progressive {
+            true => progressive_container_branch(&self.field_leaves(), index).1,
+            false => branch_for_leaf(&self.field_leaves(), index).1,
+        }
     }
 
     /// Branch for `finalized_checkpoint.root`: the epoch chunk, then the field branch.
     pub fn finality_branch(&self, epoch: u64) -> Vec<B256> {
         let mut branch = vec![u64_chunk(epoch)];
-        branch.extend(branch_for_leaf(&self.field_leaves(), STATE_FIELD_FINALIZED_CHECKPOINT).1);
+        branch.extend(self.field_branch(STATE_FIELD_FINALIZED_CHECKPOINT));
         branch
     }
 
     /// Branch for `current_sync_committee`.
     pub fn current_committee_branch(&self) -> Vec<B256> {
-        branch_for_leaf(&self.field_leaves(), STATE_FIELD_CURRENT_SYNC_COMMITTEE).1
+        self.field_branch(STATE_FIELD_CURRENT_SYNC_COMMITTEE)
     }
 
     /// Branch for `next_sync_committee`.
     pub fn next_committee_branch(&self) -> Vec<B256> {
-        branch_for_leaf(&self.field_leaves(), STATE_FIELD_NEXT_SYNC_COMMITTEE).1
+        self.field_branch(STATE_FIELD_NEXT_SYNC_COMMITTEE)
     }
 
     /// Branch for `block_roots[slot % 8192]`: the vector branch, then the field branch.
     pub fn block_roots_branch(&self, slot: u64) -> Vec<B256> {
         let mut branch = branch_for_leaf(&self.block_roots, (slot % 8192) as usize).1;
-        branch.extend(branch_for_leaf(&self.field_leaves(), STATE_FIELD_BLOCK_ROOTS).1);
+        branch.extend(self.field_branch(STATE_FIELD_BLOCK_ROOTS));
         branch
     }
 }
@@ -259,7 +273,7 @@ impl StateBuilder {
         branch.push(record.state_summary_root);
         branch.extend(branch_for_leaf_with_limit(&self.summaries, index, HISTORICAL_LIST_DEPTH).1);
         branch.push(u64_chunk(self.summaries.len() as u64));
-        branch.extend(branch_for_leaf(&self.field_leaves(), STATE_FIELD_HISTORICAL_SUMMARIES).1);
+        branch.extend(self.field_branch(STATE_FIELD_HISTORICAL_SUMMARIES));
         branch
     }
 }
@@ -445,6 +459,17 @@ pub fn gloas_body(parent_block_hash: B256) -> GloasBody {
     gloas_body_with_others(parent_block_hash, |_, _| B256::ZERO)
 }
 
+/// A Gloas body whose bid holds `hash` in bid field `field` and zero chunks elsewhere. Field 0 is `parent_block_hash`, field 1
+/// `parent_block_root`, field 2 `block_hash`. The test of a wrong position puts the hash in another field and proves it
+/// with the branch of that field.
+pub fn gloas_body_with_hash_in(field: usize, hash: B256) -> GloasBody {
+    let mut body = gloas_body(B256::ZERO);
+    body.bid_chunks[field] = hash;
+    let signed_bid_root = hash_pair(&progressive_container_root(&body.bid_chunks), &B256::ZERO);
+    body.body_chunks[GLOAS_BODY_FIELD_SIGNED_BID] = signed_bid_root;
+    body
+}
+
 /// Like [`gloas_body`], but every other field of the body and of the bid is a filler hash derived from `salt`. Two
 /// bodies with different salts have different siblings, so a branch of one does not verify against the other.
 pub fn gloas_body_salted(parent_block_hash: B256, salt: &str) -> GloasBody {
@@ -469,7 +494,13 @@ impl GloasBody {
     /// The branch from `parent_block_hash` to the body root, bottom to top: 2 entries inside the bid (the rest of the
     /// progressive tree and `active_fields`), the bid signature, then 8 entries inside the body. 11 entries in all.
     pub fn block_hash_branch(&self) -> Vec<B256> {
-        let mut branch = progressive_container_branch(&self.bid_chunks, 0).1;
+        self.bid_field_branch(0)
+    }
+
+    /// The branch from field `field` of the bid message to the body root. Field 0 is `parent_block_hash` (index 2856), field 1
+    /// is `parent_block_root`, field 2 is `block_hash` (index 22857, 14 entries).
+    pub fn bid_field_branch(&self, field: usize) -> Vec<B256> {
+        let mut branch = progressive_container_branch(&self.bid_chunks, field).1;
         branch.push(B256::ZERO);
         branch.extend(progressive_container_branch(&self.body_chunks, GLOAS_BODY_FIELD_SIGNED_BID).1);
         branch
@@ -836,6 +867,18 @@ pub fn build_message(
     source_slot: u64,
     anchor_slot: u64,
 ) -> MessageScenario {
+    let evidence = message_evidence(spec, receipts, transaction_index, source_slot);
+    assemble_message(spec, &evidence, transaction_index, log_index, source_slot, anchor_slot)
+}
+
+/// The execution block of a synthetic message: the receipts and transactions in tries, a header whose form follows the
+/// fork of `source_slot` (Shanghai, Prague or Amsterdam), and the proofs of the entry at `transaction_index`.
+pub fn message_evidence(
+    spec: &ChainSpec,
+    receipts: &[ReceiptSpec],
+    transaction_index: u64,
+    source_slot: u64,
+) -> ExecutionBlockEvidence {
     let encoded: Vec<Bytes> = receipts
         .iter()
         .enumerate()
@@ -854,28 +897,22 @@ pub fn build_message(
     let transactions_trie = build_indexed_trie(&transactions);
 
     let block_number = source_slot * 2;
-    let header = if spec.fork_at_slot(source_slot) >= ForkName::Deneb {
-        prague_header(block_number, receipts_trie.root, transactions_trie.root)
-    } else {
-        shanghai_header(block_number, receipts_trie.root, transactions_trie.root)
+    let header_rlp = match spec.fork_at_slot(source_slot) {
+        ForkName::Gloas => amsterdam_header_rlp(block_number, receipts_trie.root, transactions_trie.root),
+        fork if fork >= ForkName::Deneb => {
+            encode_execution_header(&prague_header(block_number, receipts_trie.root, transactions_trie.root))
+        }
+        _ => encode_execution_header(&shanghai_header(block_number, receipts_trie.root, transactions_trie.root)),
     };
-    let header_rlp = encode_execution_header(&header);
     let position = transaction_index as usize;
-    assemble_message(
-        spec,
-        &ExecutionBlockEvidence {
-            header_rlp,
-            block_number,
-            receipts_root: receipts_trie.root,
-            receipt_proof: receipts_trie.proofs[position].clone(),
-            transaction_proof: transactions_trie.proofs[position].clone(),
-            transaction: transactions[position].clone(),
-        },
-        transaction_index,
-        log_index,
-        source_slot,
-        anchor_slot,
-    )
+    ExecutionBlockEvidence {
+        header_rlp,
+        block_number,
+        receipts_root: receipts_trie.root,
+        receipt_proof: receipts_trie.proofs[position].clone(),
+        transaction_proof: transactions_trie.proofs[position].clone(),
+        transaction: transactions[position].clone(),
+    }
 }
 
 /// The execution block part of a message proof: a header and the proofs of one receipt and one transaction.
@@ -905,10 +942,37 @@ pub fn assemble_message(
     anchor_slot: u64,
 ) -> MessageScenario {
     let block_hash = header_hash(&evidence.header_rlp);
-    let block_number = evidence.block_number;
-    let trie_root = evidence.receipts_root;
-    let payload = synthetic_payload_header(spec, source_slot, block_number, block_hash, trie_root);
-    let body = build_body_proofs(spec, source_slot, &payload);
+    let body = match spec.fork_at_slot(source_slot) >= ForkName::Gloas {
+        // A Gloas source block B: its bid names the execution block as its `parent_block_hash` (index 2856).
+        true => {
+            let gloas = gloas_body(block_hash);
+            BodyProofs {
+                body_root: gloas.root(),
+                execution_branch: Vec::new(),
+                block_hash_branch: gloas.block_hash_branch(),
+            }
+        }
+        false => {
+            let payload =
+                synthetic_payload_header(spec, source_slot, evidence.block_number, block_hash, evidence.receipts_root);
+            build_body_proofs(spec, source_slot, &payload)
+        }
+    };
+    assemble_message_with_body(spec, evidence, &body, transaction_index, log_index, source_slot, anchor_slot)
+}
+
+/// Like [`assemble_message`], with the body proofs of the source block chosen by the caller. A test uses it to put the
+/// execution block hash at the wrong place of a body and still have a valid ancestry path to the source header.
+pub fn assemble_message_with_body(
+    spec: &'static ChainSpec,
+    evidence: &ExecutionBlockEvidence,
+    body: &BodyProofs,
+    transaction_index: u64,
+    log_index: u64,
+    source_slot: u64,
+    anchor_slot: u64,
+) -> MessageScenario {
+    let block_hash = header_hash(&evidence.header_rlp);
     let source_header = BeaconBlockHeader {
         slot: source_slot,
         proposer_index: 7,
@@ -952,7 +1016,7 @@ pub fn assemble_message(
         anchorHeader: (&anchor_header).into(),
         sourceHeader: (&source_header).into(),
         ancestryBranch: ancestry_branch,
-        blockHashBranch: body.block_hash_branch,
+        blockHashBranch: body.block_hash_branch.clone(),
         executionHeaderRlp: evidence.header_rlp.clone(),
         receiptProof: evidence.receipt_proof.clone(),
         receiptIndex: U256::from(transaction_index),

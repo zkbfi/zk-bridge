@@ -13,8 +13,11 @@
 //!      `state.historical_summaries[era - capellaEra].block_summary_root` is the root of that era's `block_roots`.
 //!      Generalized index, built in this order (see [`historical_leaf_gindex`]): the field, the list data node, the
 //!      list position, `block_summary_root`, the position inside the era.
-//! 3. `source.body_root` commits to `execution_payload.block_hash`. One combined branch (body field 9, then payload
-//!    field 12) leads from the block hash to the body root. The full `ExecutionPayloadHeader` is never hashed.
+//! 3. `source.body_root` commits to the execution block hash. Before Gloas: `execution_payload.block_hash`, one combined
+//!    branch (body field 9, then payload field 12). From Gloas on: the `parent_block_hash` of the bid of the source block
+//!    (index 2856), and the source block is a block AFTER the execution block (see
+//!    [`crate::layout::message_block_hash_gindex_for_fork`] for the soundness argument). The full
+//!    `ExecutionPayloadHeader` is never hashed.
 //!
 //! Every hash on this path is SHA-256, except the keccak256 of the execution header.
 //!
@@ -25,8 +28,8 @@ use crate::abi::{BeaconBlockHeader as AbiBeaconBlockHeader, MessageProof};
 use crate::chain::ChainSpec;
 use crate::error::{Error, Result};
 use crate::layout::{
-    block_hash_gindex_for_fork, is_block_roots_position, is_historical_summaries_position, state_layout_for_fork,
-    BLOCK_ROOTS_VECTOR_DEPTH, HISTORICAL_SUMMARIES_LIST_DEPTH, SLOTS_PER_HISTORICAL_ROOT,
+    is_block_roots_position, is_historical_summaries_position, message_block_hash_gindex_for_fork,
+    state_layout_for_fork, BLOCK_ROOTS_VECTOR_DEPTH, HISTORICAL_SUMMARIES_LIST_DEPTH, SLOTS_PER_HISTORICAL_ROOT,
 };
 use crate::ssz::is_valid_exact_branch;
 use crate::types::BeaconBlockHeader;
@@ -167,7 +170,7 @@ pub fn verify_beacon_path(spec: &ChainSpec, proof: &MessageProof, stored_anchor_
     }
 
     let block_hash = keccak256(&proof.executionHeaderRlp);
-    let hash_gindex = block_hash_gindex_for_fork(spec.fork_at_slot(source.slot))?;
+    let hash_gindex = message_block_hash_gindex_for_fork(spec.fork_at_slot(source.slot))?;
     if !is_valid_exact_branch(&block_hash, &proof.blockHashBranch, hash_gindex, &source.body_root) {
         return Err(Error::InvalidBlockHashBranch);
     }
@@ -273,17 +276,18 @@ mod tests {
         assert_eq!(gindex_depth(electra), 19);
     }
 
-    /// Claim: a message proof from a GLOAS SOURCE block is refused with `GloasPayloadNotFinalized`, also under a Gloas
-    /// anchor. The body of a Gloas block holds a bid, and no rule binds it to a payload that a later block confirmed.
-    /// The control is the Fulu source under the same Gloas anchor, which gets its block hash index (812).
+    /// Claim: the index of the execution block of a message source follows the fork of the SOURCE slot: 812 for Fulu, and
+    /// 2856 (the bid `parent_block_hash`) from Gloas on. The layout function `block_hash_gindex_for_fork` stays closed to
+    /// Gloas. Why it matters: a Gloas index in a Fulu slot, or the reverse, points at another node of the body.
     #[test]
-    fn a_gloas_source_block_has_no_block_hash_index() {
+    fn a_gloas_source_reads_the_bid_parent_hash() {
         use crate::chain::SEPOLIA;
-        assert_eq!(
-            block_hash_gindex_for_fork(SEPOLIA.fork_at_slot(353_024 * 32 + 5)),
-            Err(Error::GloasPayloadNotFinalized)
-        );
-        assert_eq!(block_hash_gindex_for_fork(SEPOLIA.fork_at_slot(353_024 * 32 - 5)), Ok(812));
+        use crate::layout::block_hash_gindex_for_fork;
+        let gloas = SEPOLIA.fork_at_slot(353_024 * 32 + 5);
+        let fulu = SEPOLIA.fork_at_slot(353_024 * 32 - 5);
+        assert_eq!(message_block_hash_gindex_for_fork(gloas), Ok(2856));
+        assert_eq!(message_block_hash_gindex_for_fork(fulu), Ok(812));
+        assert_eq!(block_hash_gindex_for_fork(gloas), Err(Error::GloasPayloadNotFinalized));
     }
 
     /// Claim: the leaf builders take only the positions that the bridge accepts, and refuse a neighbour of each. The

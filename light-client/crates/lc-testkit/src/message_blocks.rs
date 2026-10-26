@@ -13,10 +13,10 @@ pub const ATTACKER: Address = address!("00000000000000000000000000000000000000ee
 
 /// The chain identifier of the source chain of a spec.
 pub fn remote_chain_id(spec: &ChainSpec) -> u64 {
-    if spec.name == "pulsechain" {
-        369
-    } else {
-        1
+    match spec.name {
+        "pulsechain" => 369,
+        "sepolia" => 11_155_111,
+        _ => 1,
     }
 }
 

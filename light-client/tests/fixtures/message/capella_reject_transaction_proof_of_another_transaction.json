@@ -10,6 +10,7 @@
     "reason": "TransactionProofInvalid",
     "result": "reject"
   },
+  "gloasForkSlot": "18446744073709551615",
   "layout": "capella",
   "localChainId": "1",
   "name": "capella_reject_transaction_proof_of_another_transaction",

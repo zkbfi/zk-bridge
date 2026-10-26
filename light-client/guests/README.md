@@ -41,8 +41,18 @@ the body is never read. (`process_execution_payload_bid` asserts `bid.parent_blo
 light-client `execution_block_hash` of the specification, the bid `parent_block_hash`, has the same value. The guest still proves
 it from the state, as designed.)
 
-What stays refused. A message proof from a Gloas SOURCE block: the body holds a bid, and no rule binds it to a confirmed payload.
-`block_hash_gindex_for_fork(Gloas)` and the contract (`gloasForkSlot`) refuse it. A Gloas anchor with a pre-Gloas source works.
+Message source. A message in execution block X of a Gloas chain is proven by a beacon block B that comes AFTER the block of X
+and is an ancestor of the stored head (the usual `block_roots` or `historical_summaries` ancestry). The body branch of B leads to
+`signed_execution_payload_bid.message.parent_block_hash` (index 2856,
+`specs/gloas/light-client/sync-protocol.md`, `EXECUTION_BLOCK_HASH_GINDEX_GLOAS`), which must equal `keccak256(RLP of X)`. The
+receipts root and the transactions root come from that RLP (tolerant decoder for a source at or after the fork only; the strict
+decoder stays for earlier forks). Why it is sound: `process_execution_payload_bid` asserts
+`bid.parent_block_hash == state.latest_block_hash`, and `latest_block_hash` is written only by `apply_parent_execution_payload`
+from the bid of a parent whose payload the child confirmed. So the `parent_block_hash` of a canonical block names a payload that the
+chain accepted. A block on an empty parent names an older accepted payload, which is canonical too. The bid's own `block_hash` is
+never accepted: that payload may be withheld. The block of X needs no slot in the proof. The block hash LAYOUT stays closed to
+Gloas (`block_hash_gindex_for_fork`, `addBlockHashLayout`). The prover has no Gloas body parser yet, so it cannot build this
+evidence; the verifiers accept it.
 
 Tests: `crates/lc-testkit/tests/gloas.rs` (synthetic, the negative tests), `gloas_real.rs` (a real Sepolia finalized state, update
 and execution header, with a real BLS fold) and `execution_anchor.rs` (the decoder).

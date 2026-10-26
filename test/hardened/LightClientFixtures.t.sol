@@ -31,7 +31,7 @@ contract LightClientFixturesTest is Test {
     uint256 internal constant BODY_LAYOUTS_SLOT = 7;
     uint256 internal constant HISTORICAL_LAYOUTS_SLOT = 8;
     /// @dev The number of fixture files the Rust reference writes. A change in the set must be a deliberate change here.
-    uint256 internal constant EXPECTED_FIXTURE_COUNT = 91;
+    uint256 internal constant EXPECTED_FIXTURE_COUNT = 100;
     /// @dev The bridge never calls its deposit gate during `executeMessage`, so any non-zero address stands in for it.
     address internal constant UNUSED_GATE = address(0x6a7e);
     uint64 internal constant SLOTS_PER_EPOCH = 32;
@@ -54,7 +54,7 @@ contract LightClientFixturesTest is Test {
     /// with the fixture calldata succeeds exactly when Rust says accept. An accepted message calls the target once with
     /// the logged data, shows it the logged identifier, sender, source chain and transaction hash, and is marked as
     /// delivered with a successful call. A rejected fixture fails with the Solidity error that names the same failed
-    /// check as the Rust reason, and the target is not called. The set has exactly 91 files, and both the capella and the
+    /// check as the Rust reason, and the target is not called. The set has exactly 100 files, and both the capella and the
     /// electra layout have at least four accepted historical-path fixtures. Matters: two independent implementations of
     /// the check (the build contract requires them to agree on accept and reject). The accept fixtures are the control of
     /// the reject fixtures: the same set-up delivers an honest proof.
@@ -88,7 +88,7 @@ contract LightClientFixturesTest is Test {
     function test_R2_04_layoutSlotsAreThoseOfTheBridge() public {
         vm.chainId(1);
         BeaconLightClient client = _client(100, keccak256("header"));
-        MessageBridge bridge = _newBridge(client, 1, 369, address(0xa1), 0);
+        MessageBridge bridge = _newBridge(client, 1, 369, address(0xa1), 0, type(uint64).max);
         _writeLayout(address(bridge), STATE_LAYOUTS_SLOT, 0, 11, 64, 95);
         _writeLayout(address(bridge), BODY_LAYOUTS_SLOT, 0, 22, 64, 95);
         _writeLayout(address(bridge), HISTORICAL_LAYOUTS_SLOT, 0, 33, 64, 95);
@@ -272,7 +272,8 @@ contract LightClientFixturesTest is Test {
             localChain,
             uint64(vm.parseUint(vm.parseJsonString(json, ".remoteChainId"))),
             vm.parseJsonAddress(json, ".remoteBridge"),
-            uint64(vm.parseUint(vm.parseJsonString(json, ".capellaEra")))
+            uint64(vm.parseUint(vm.parseJsonString(json, ".capellaEra"))),
+            uint64(vm.parseUint(vm.parseJsonString(json, ".gloasForkSlot")))
         );
         _seedLayouts(bridge, json);
     }
@@ -282,14 +283,15 @@ contract LightClientFixturesTest is Test {
         uint64 localChain,
         uint64 remoteChain,
         address remoteBridge,
-        uint64 capellaEra
+        uint64 capellaEra,
+        uint64 gloasForkSlot
     ) internal returns (MessageBridge) {
         return new MessageBridge(
             address(client),
             localChain,
             remoteChain,
             remoteBridge,
-            MessageBridge.BridgeTerms(0, makeAddr("remote light client"), type(uint64).max),
+            MessageBridge.BridgeTerms(0, makeAddr("remote light client"), gloasForkSlot),
             capellaEra,
             UNUSED_GATE
         );
@@ -339,7 +341,8 @@ contract LightClientFixturesTest is Test {
             uint256 historicalGindex =
                 vm.parseUint(vm.parseJsonString(json, string.concat(row, ".historicalSummariesGindex")));
             _writeLayout(address(bridge), STATE_LAYOUTS_SLOT, stateCount++, rootsBase, first, last);
-            _writeLayout(address(bridge), BODY_LAYOUTS_SLOT, bodyCount++, hashGindex, first, last);
+            // A Gloas row names no block hash position (0): a Gloas source reads the fixed bid index.
+            if (hashGindex != 0) _writeLayout(address(bridge), BODY_LAYOUTS_SLOT, bodyCount++, hashGindex, first, last);
             _writeLayout(address(bridge), HISTORICAL_LAYOUTS_SLOT, historicalCount++, historicalGindex, first, last);
         }
         vm.store(address(bridge), bytes32(STATE_LAYOUTS_SLOT), bytes32(stateCount));

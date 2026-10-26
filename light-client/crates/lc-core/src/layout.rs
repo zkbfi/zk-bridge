@@ -410,9 +410,9 @@ pub fn is_gloas_historical_summaries_position(gindex: u64) -> bool {
 
 /// Whether `gindex` is the position of the execution block hash in the Gloas `BeaconBlockBody` (2856, through the bid).
 ///
-/// The bridge does NOT accept it: [`is_block_hash_position`] rejects 2856, so a message proof from a Gloas source block
-/// stays refused. The bid of a block names no execution block that a later block confirmed, except through the
-/// `parent_block_hash` of the NEXT block, and no rule builds that binding yet.
+/// It is not a layout position: [`is_block_hash_position`] rejects it, so `addBlockHashLayout` stays closed to Gloas. A
+/// message proof reads it through [`message_block_hash_gindex_for_fork`], as the fixed rule of a source header at or after
+/// the Gloas fork.
 pub fn is_gloas_block_hash_position(gindex: u64) -> bool {
     gindex == BLOCK_HASH_GINDEX_GLOAS
 }
@@ -486,6 +486,29 @@ pub fn block_hash_gindex_for_fork(fork: ForkName) -> Result<u64> {
     match execution_header_form_for_fork(fork)? {
         ExecutionHeaderForm::Capella => Ok(BLOCK_HASH_GINDEX_CAPELLA),
         ExecutionHeaderForm::Deneb => Ok(BLOCK_HASH_GINDEX_DENEB),
+    }
+}
+
+/// The index that proves the execution block of a MESSAGE source header, chosen by the fork of that header's slot.
+///
+/// Before Gloas it is `execution_payload.block_hash` of the body ([`block_hash_gindex_for_fork`]). From Gloas on it is
+/// `signed_execution_payload_bid.message.parent_block_hash` ([`BLOCK_HASH_GINDEX_GLOAS`], 2856). The source header is then
+/// a beacon block `B` that comes AFTER the block of the proven execution block `X`, not the block of `X`.
+///
+/// Why this is sound. `process_execution_payload_bid` asserts `bid.parent_block_hash == state.latest_block_hash`
+/// (`specs/gloas/beacon-chain.md`). `state.latest_block_hash` is written only by `apply_parent_execution_payload`, from
+/// the `block_hash` of a parent bid whose payload the child block confirmed (a FULL parent). So `parent_block_hash` of a
+/// block on the canonical chain always names a payload that the canonical chain accepted. A block on an EMPTY parent
+/// names an older accepted payload, which is also canonical. The bridge never accepts the bid's own `block_hash`: that
+/// payload may be withheld. The block of `X` needs no slot in the proof: any ancestor of the stored head whose bid
+/// names `X` as its parent proves `X`.
+///
+/// # Errors
+/// `UnsupportedFork` for forks without a supported layout.
+pub fn message_block_hash_gindex_for_fork(fork: ForkName) -> Result<u64> {
+    match fork >= ForkName::Gloas {
+        true => Ok(BLOCK_HASH_GINDEX_GLOAS),
+        false => block_hash_gindex_for_fork(fork),
     }
 }
 

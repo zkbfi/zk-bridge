@@ -11,7 +11,7 @@ use alloy_primitives::{hex, Address, B256, U256};
 use alloy_sol_types::SolCall;
 use lc_core::abi::{executeMessageCall, MessageProof};
 use lc_core::ancestry::{ancestry_path_for_slots, historical_leaf_gindex, AncestryPath};
-use lc_core::chain::{ChainSpec, ForkName, ETHEREUM_MAINNET, FAR_FUTURE_EPOCH, PULSECHAIN};
+use lc_core::chain::{ChainSpec, ForkName, ETHEREUM_MAINNET, FAR_FUTURE_EPOCH, PULSECHAIN, SEPOLIA};
 use lc_core::layout::{
     block_hash_gindex_for_fork, state_layout_for_fork, BLOCK_ROOTS_VECTOR_DEPTH, EXECUTION_PAYLOAD_GINDEX,
     HISTORICAL_SUMMARIES_LIST_DEPTH, SLOTS_PER_HISTORICAL_ROOT,
@@ -34,7 +34,12 @@ fn schedule_rows(spec: &ChainSpec) -> Vec<Value> {
         .filter(|entry| entry.epoch != FAR_FUTURE_EPOCH)
         .filter_map(|entry| {
             let layout = state_layout_for_fork(entry.fork_name).ok()?;
-            let block_hash_gindex = block_hash_gindex_for_fork(entry.fork_name).ok()?;
+            // A Gloas row has no body layout position: its block hash index is the fixed rule of a message source (index
+            // 2856), so the row names 0 and the harness seeds no body layout for it.
+            let block_hash_gindex = match entry.fork_name >= ForkName::Gloas {
+                true => 0,
+                false => block_hash_gindex_for_fork(entry.fork_name).ok()?,
+            };
             Some(json!({
                 "activationEpoch": entry.epoch.to_string(),
                 "fork": format!("{:?}", entry.fork_name).to_lowercase(),
@@ -191,7 +196,17 @@ fn render(case: Case) -> (String, Value) {
         (_, other) => panic!("case {} did not give the declared outcome: {other:?}", case.name),
     };
     let calldata = executeMessageCall { proof: case.proof.clone() }.abi_encode();
-    let layout = if case.spec.name == "pulsechain" { "capella" } else { "electra" };
+    let layout = match case.spec.name {
+        "pulsechain" => "capella",
+        "sepolia" => "gloas",
+        _ => "electra",
+    };
+    let gloas_fork_slot = case
+        .spec
+        .fork_schedule
+        .iter()
+        .find(|entry| entry.fork_name == ForkName::Gloas && entry.epoch != FAR_FUTURE_EPOCH)
+        .map_or(u64::MAX, |entry| entry.epoch * case.spec.slots_per_epoch);
     let ancestry_path = match ancestry_path_for_slots(case.proof.anchorHeader.slot, case.proof.sourceHeader.slot) {
         Ok(AncestryPath::Recent) => "recent",
         Ok(AncestryPath::Historical) => "historical",
@@ -212,6 +227,7 @@ fn render(case: Case) -> (String, Value) {
         "remoteBridge": text(case.remote_bridge),
         "localChainId": case.local_chain_id.to_string(),
         "remoteChainId": case.remote_chain_id.to_string(),
+        "gloasForkSlot": gloas_fork_slot.to_string(),
         "sourceForkSchedule": schedule_rows(case.spec),
         "expected": expected,
     });
@@ -651,10 +667,123 @@ fn historical_cases(spec: &'static ChainSpec, prefix: &str, local_chain_id: u64,
     cases
 }
 
+/// The cases of a Gloas SOURCE chain (Sepolia): the source block of the proof is a beacon block B at or after the Gloas fork
+/// whose bid names the execution block X as its `parent_block_hash` (index 2856). B comes after the block of X. The anchor
+/// is a Gloas state (progressive, `block_roots` at 352, `historical_summaries` at 2950).
+fn gloas_cases() -> Vec<Case> {
+    use crate::synthetic::{assemble_message_with_body, gloas_body_with_hash_in, message_evidence, BodyProofs};
+    let spec: &'static ChainSpec = &SEPOLIA;
+    let local = 943;
+    let gloas_slot = 353_024 * 32;
+    let (source_slot, anchor_slot) = (gloas_slot + 3_000, gloas_slot + 3_500);
+    let receipts = standard_receipts(spec, local);
+    let case = |name: &str, description: &str, scenario: MessageScenario, expected: Expected| Case {
+        name: format!("gloas_{name}"),
+        description: description.to_string(),
+        spec,
+        proof: scenario.proof,
+        stored_anchor_root: scenario.stored_anchor_root,
+        remote_bridge: BRIDGE,
+        local_chain_id: local,
+        remote_chain_id: remote_chain_id(spec),
+        expected,
+    };
+    let base = |name: &str, description: &str, tx: u64, log: u64, expected: Expected| {
+        case(name, description, build_message(spec, &receipts, tx, log, source_slot, anchor_slot), expected)
+    };
+    let with_body = |field: usize, source: u64, anchor: u64| {
+        let evidence = message_evidence(spec, &receipts, 1, source);
+        let block_hash = alloy_primitives::keccak256(&evidence.header_rlp);
+        let gloas = gloas_body_with_hash_in(field, block_hash);
+        let body = BodyProofs {
+            body_root: gloas.root(),
+            execution_branch: Vec::new(),
+            block_hash_branch: gloas.bid_field_branch(field),
+        };
+        assemble_message_with_body(spec, &evidence, &body, 1, 0, source, anchor)
+    };
+    let mut cases = vec![
+        base(
+            "accept_recent_bid_parent_hash",
+            "The source block is a Gloas beacon block B. Its bid names the execution block as parent_block_hash (index 2856). Recent path.",
+            1,
+            0,
+            Expected::Accept,
+        ),
+        base(
+            "accept_second_message_in_same_receipt",
+            "Type 0 receipt with two messages in a Gloas execution block; the proof names log 2.",
+            1,
+            2,
+            Expected::Accept,
+        ),
+        base(
+            "reject_failed_status_receipt",
+            "A Gloas execution block with a failed receipt: the receipt proof is read from the RLP header and the status is refused.",
+            2,
+            0,
+            Expected::Reject("ReceiptFailed"),
+        ),
+    ];
+    // Historical path: the anchor is more than 8192 slots after B.
+    cases.push(case(
+        "accept_historical_bid_parent_hash",
+        "The anchor is more than 8192 slots after B: the historical path through index 2950, with the bid parent hash of B.",
+        build_message(spec, &receipts, 1, 0, source_slot, source_slot + 20_000),
+        Expected::Accept,
+    ));
+    // The bid's own `block_hash` is never the anchor of a message: a body that holds X only in bid field 2.
+    let mut bid_block_hash = with_body(2, source_slot, anchor_slot);
+    bid_block_hash.proof.blockHashBranch = {
+        let evidence = message_evidence(spec, &receipts, 1, source_slot);
+        gloas_body_with_hash_in(2, alloy_primitives::keccak256(&evidence.header_rlp)).bid_field_branch(2)
+    };
+    cases.push(case(
+        "reject_bid_block_hash_instead_of_parent_block_hash",
+        "The bid of B holds X in block_hash (bid field 2, index 22857) and the proof carries that branch: 14 entries, not the 11 of index 2856.",
+        bid_block_hash,
+        Expected::Reject("InvalidBlockHashBranch"),
+    ));
+    cases.push(case(
+        "reject_hash_in_the_neighbouring_bid_field",
+        "The bid of B holds X in parent_block_root (bid field 1, index 2857) and the proof carries that branch: same length, wrong position.",
+        with_body(1, source_slot, anchor_slot),
+        Expected::Reject("InvalidBlockHashBranch"),
+    ));
+    let mut wrong_rlp = base("x", "x", 1, 0, Expected::Accept);
+    wrong_rlp.proof.executionHeaderRlp = message_evidence(spec, &receipts, 1, source_slot + 1).header_rlp;
+    wrong_rlp.name = "gloas_reject_rlp_of_another_block".into();
+    wrong_rlp.description =
+        "The RLP is the header of another execution block: it does not hash to the parent_block_hash of the bid."
+            .into();
+    wrong_rlp.expected = Expected::Reject("InvalidBlockHashBranch");
+    cases.push(wrong_rlp);
+    let mut not_ancestor = base("x", "x", 1, 0, Expected::Accept);
+    flip_node(&mut not_ancestor.proof.ancestryBranch[6]);
+    not_ancestor.name = "gloas_reject_source_block_is_not_an_ancestor".into();
+    not_ancestor.description =
+        "One entry of the ancestry branch is flipped: B is not proven to be an ancestor of the stored head.".into();
+    not_ancestor.expected = Expected::Reject("InvalidAncestryBranch");
+    cases.push(not_ancestor);
+    // B before the fork: a Fulu block with the Gloas branch (11 entries) in place of its own 9.
+    let mut before_fork = build_message(spec, &receipts, 1, 0, gloas_slot - 3_000, anchor_slot);
+    let evidence = message_evidence(spec, &receipts, 1, gloas_slot - 3_000);
+    before_fork.proof.blockHashBranch =
+        gloas_body_with_hash_in(0, alloy_primitives::keccak256(&evidence.header_rlp)).block_hash_branch();
+    cases.push(case(
+        "reject_source_before_the_gloas_fork_with_the_bid_branch",
+        "B is a Fulu block (before the fork) and the proof carries the Gloas branch of 11 entries instead of the 9 of the payload block hash.",
+        before_fork,
+        Expected::Reject("InvalidBlockHashBranch"),
+    ));
+    cases
+}
+
 /// All message fixtures as `(file stem, JSON)`.
 pub fn message_fixtures() -> Vec<(String, Value)> {
     let mut cases = synthetic_cases(&PULSECHAIN, "capella", 1, 10_900_000);
     cases.extend(synthetic_cases(&ETHEREUM_MAINNET, "electra", 369, 15_500_000));
+    cases.extend(gloas_cases());
     cases.into_iter().map(render).collect()
 }
 
@@ -664,7 +793,11 @@ pub fn message_fixtures() -> Vec<(String, Value)> {
 /// Panics with the fixture name when the Rust outcome differs from the declared outcome.
 pub fn check_fixture_with_verifier(fixture: &Value) {
     let name = fixture["name"].as_str().expect("name");
-    let spec: &ChainSpec = if fixture["chain"] == "pulsechain" { &PULSECHAIN } else { &ETHEREUM_MAINNET };
+    let spec: &ChainSpec = match fixture["chain"].as_str() {
+        Some("pulsechain") => &PULSECHAIN,
+        Some("sepolia") => &SEPOLIA,
+        _ => &ETHEREUM_MAINNET,
+    };
     let calldata = hex_bytes(&fixture["calldata"]);
     let proof = executeMessageCall::abi_decode(&calldata).unwrap_or_else(|error| panic!("{name}: {error}")).proof;
     let number = |key: &str| -> u64 { fixture[key].as_str().expect(key).parse().expect(key) };
