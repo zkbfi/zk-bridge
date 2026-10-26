@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { erc20Abi, type Address } from 'viem'
-import { readChainSnapshot, type ReadClient } from '../../src/chain/live-reads'
+import { readChainSnapshot, readRewardAddress, type ReadClient } from '../../src/chain/live-reads'
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from '../../src/data/fixtures'
 import { tokenMediatorAbi } from '../../src/tx/abis'
 
@@ -106,7 +106,6 @@ describe('readChainSnapshot', () => {
 
 describe('readRewardAddress with a failure that is not an Error', () => {
   test('keeps the text of the failure as the reason', async () => {
-    const { readRewardAddress } = await import('../../src/chain/live-reads')
     const client: ReadClient = {
       async getBalance() {
         return 0n
