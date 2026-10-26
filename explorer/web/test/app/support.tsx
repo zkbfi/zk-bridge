@@ -5,7 +5,7 @@
 import { ChakraProvider, defaultSystem } from "@chakra-ui/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, type RenderResult } from "@testing-library/react";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { ActionsContext, type ActionsPort } from "../../src/app/actions-context";
 import { ServicesProvider, type Services } from "../../src/app/services";
@@ -42,23 +42,31 @@ export type RenderWithWalletOptions = {
 };
 
 /**
+ * A wrapper component with the fixture services and the given wallet. Pass it as the `wrapper` option of `render`, so
+ * that `rerender` keeps the providers.
+ *
+ * @param options The wallet, the service overrides and the actions port.
+ */
+export const walletWrapper = (options: RenderWithWalletOptions) => {
+  const services: Services = { ...buildTestServices(), ...options.services };
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, refetchInterval: false } } });
+  return ({ children }: { readonly children: ReactNode }) => (
+    <ChakraProvider value={defaultSystem}>
+      <QueryClientProvider client={queryClient}>
+        <ServicesProvider services={services}>
+          <WalletContext.Provider value={options.wallet}>
+            <ActionsContext.Provider value={options.actions ?? { open: () => undefined }}>{children}</ActionsContext.Provider>
+          </WalletContext.Provider>
+        </ServicesProvider>
+      </QueryClientProvider>
+    </ChakraProvider>
+  );
+};
+
+/**
  * Renders a component with the fixture services and the given wallet.
  *
  * @param ui The component.
  * @param options The wallet, the service overrides and the actions port.
  */
-export const renderWithWallet = (ui: ReactElement, options: RenderWithWalletOptions): RenderResult => {
-  const services: Services = { ...buildTestServices(), ...options.services };
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, refetchInterval: false } } });
-  return render(
-    <ChakraProvider value={defaultSystem}>
-      <QueryClientProvider client={queryClient}>
-        <ServicesProvider services={services}>
-          <WalletContext.Provider value={options.wallet}>
-            <ActionsContext.Provider value={options.actions ?? { open: () => undefined }}>{ui}</ActionsContext.Provider>
-          </WalletContext.Provider>
-        </ServicesProvider>
-      </QueryClientProvider>
-    </ChakraProvider>,
-  );
-};
+export const renderWithWallet = (ui: ReactElement, options: RenderWithWalletOptions): RenderResult => render(ui, { wrapper: walletWrapper(options) });
