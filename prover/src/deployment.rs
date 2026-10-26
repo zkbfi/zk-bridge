@@ -314,7 +314,7 @@ pub fn drafts_from_broadcast(file: &Value) -> Result<Vec<SectionDraft>> {
 
 /// The options of one section: the flags, and the draft chosen from the broadcast file.
 fn section_from(
-    drafts: &mut Vec<Option<SectionDraft>>,
+    drafts: &mut [Option<SectionDraft>],
     position: usize,
     pairs: &[String],
     section: &str,

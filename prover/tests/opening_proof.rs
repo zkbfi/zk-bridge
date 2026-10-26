@@ -394,9 +394,7 @@ fn the_proof_of_the_world() -> OpeningProof {
     let world = remote();
     OpeningProof {
         remoteSlot: REMOTE_SLOT,
-        remoteHeaderRlp: Bytes::from(encode_execution_header(&execution_header_from_json(
-            &world.block,
-        ))),
+        remoteHeaderRlp: encode_execution_header(&execution_header_from_json(&world.block)),
         accountProof: world.account_proof,
         storedSlot: STORED_SLOT,
         storageProof: world.storage_proof,
