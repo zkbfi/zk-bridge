@@ -183,6 +183,43 @@ contract DepositOpeningTest is MessageScenes {
         closed.openDeposits(proof);
     }
 
+    /// Claim: a state root item that is not 32 bytes wide is refused with `OpeningProofMalformed`. Shows: a header whose
+    /// state root item is 31 bytes reverts. Matters: a short item must not be padded into a state root.
+    function test_open_refusesAStateRootThatIsNotThirtyTwoBytes() public {
+        bytes[] memory items = new bytes[](6);
+        items[0] = _rlpBytes(abi.encodePacked(keccak256("parent")));
+        items[1] = _rlpBytes(abi.encodePacked(keccak256("ommers")));
+        items[2] = _rlpBytes(abi.encodePacked(address(0xC0FFEE)));
+        items[3] = _rlpBytes(new bytes(31));
+        items[4] = _rlpBytes(abi.encodePacked(keccak256("transactions root")));
+        items[5] = _rlpBytes(abi.encodePacked(keccak256("receipts root")));
+        bytes memory header = _rlpList(items);
+        BeaconProofVerifier.OpeningProof memory proof;
+        proof.remoteSlot = _ownStores(lightClientForA, header);
+        proof.remoteHeaderRlp = header;
+        vm.expectRevert(BeaconProofVerifier.OpeningProofMalformed.selector);
+        closed.openDeposits(proof);
+    }
+
+    /// Claim: an account whose storage root item is not 32 bytes wide is refused with `OpeningProofMalformed`, even
+    /// though the account has four fields and sits under the state root. Matters: a short item must not be padded into
+    /// the storage root that the entry proof is checked against.
+    function test_open_refusesAStorageRootThatIsNotThirtyTwoBytes() public {
+        _remoteFollows(lightClientForB, FIRST_UPDATE_SLOT);
+        Model memory model =
+            _model(lightClientForB, FIRST_UPDATE_SLOT, _rlpBytes(_trimmed(_execHash(FIRST_UPDATE_SLOT))));
+        bytes[] memory fields = new bytes[](4);
+        fields[0] = _rlpBytes(hex"01");
+        fields[1] = _rlpBytes("");
+        fields[2] = _rlpBytes(new bytes(31));
+        fields[3] = _rlpBytes(abi.encodePacked(address(lightClientForB).codehash));
+        model.accountLeaf = _leaf(abi.encodePacked(keccak256(abi.encodePacked(address(lightClientForB)))), _rlpList(fields));
+        model.header = _header(keccak256(model.accountLeaf));
+        uint64 remoteSlot = _ownStores(lightClientForA, model.header);
+        vm.expectRevert(BeaconProofVerifier.OpeningProofMalformed.selector);
+        closed.openDeposits(_proof(model, remoteSlot, FIRST_UPDATE_SLOT));
+    }
+
     /// Claim: an entry that holds the encoding of the empty value is refused with `OpeningEntryEmpty`. Shows: the error
     /// names the stored slot. Matters: a real trie never holds a zero entry, because a zero value removes the entry, so
     /// this guards the bridge against a decoding gap.

@@ -182,6 +182,61 @@ contract MessageBridgeShapesTest is MessageScenes, DynamicProofs {
         _deliverAndCheck(_prove(supported, _messageLogIndex(zeroRecorded)), supported, zeroId);
     }
 
+    // ================================================================ malformed logs
+
+    /// @dev A proof for the log of a real send after `edit` changed that log. The log index stays the same.
+    function _proofWithLogEdited(bytes memory data, function(ReceiptBuilder.LogEntry memory) pure edit)
+        internal
+        returns (MessageBridge.MessageProof memory proof, bytes32 id, SourceTransaction memory source)
+    {
+        Vm.Log[] memory recorded;
+        (recorded, id) = _sendOnSource(data);
+        source = _sourceOf(recorded, 2, 3);
+        uint256 logIndex = _messageLogIndex(recorded);
+        edit(source.logs[logIndex]);
+        proof = _prove(source, logIndex);
+    }
+
+    function _dropTopics(ReceiptBuilder.LogEntry memory entry) private pure {
+        entry.topics = new bytes32[](0);
+    }
+
+    function _truncateData(ReceiptBuilder.LogEntry memory entry) private pure {
+        bytes memory shortened = new bytes(63);
+        for (uint256 i = 0; i < 63; i++) {
+            shortened[i] = entry.data[i];
+        }
+        entry.data = shortened;
+    }
+
+    function _appendWordToData(ReceiptBuilder.LogEntry memory entry) private pure {
+        entry.data = bytes.concat(entry.data, bytes32(0));
+    }
+
+    /// Claim: a log with no topics is refused with `WrongEventTopic` of zero. Shows: the exact error. Matters: the
+    /// first topic names the event, and a log with none is not a message request.
+    function test_log_withoutTopicsIsRefused() public {
+        (MessageBridge.MessageProof memory proof, bytes32 id,) = _proofWithLogEdited("no topics", _dropTopics);
+        _expectRefusal(proof, abi.encodeWithSelector(BeaconProofVerifier.WrongEventTopic.selector, bytes32(0)));
+        assertFalse(bridge.messageCallStatus(id), "nothing was delivered");
+    }
+
+    /// Claim: event data shorter than one offset word and one length word is refused with `MalformedEventData`. Shows:
+    /// the exact error for 63 bytes. Matters: the length word must exist before the bridge reads it.
+    function test_log_dataShorterThanTwoWordsIsRefused() public {
+        (MessageBridge.MessageProof memory proof, bytes32 id,) = _proofWithLogEdited("short data", _truncateData);
+        _expectRefusal(proof, abi.encodeWithSelector(MessageBridge.MalformedEventData.selector));
+        assertFalse(bridge.messageCallStatus(id), "nothing was delivered");
+    }
+
+    /// Claim: event data with a trailing word after the padded message is refused with `MalformedEventData`, though the
+    /// offset and the length are right. Matters: one message has one encoding, so a replay with extra bytes is refused.
+    function test_log_dataWithATrailingWordIsRefused() public {
+        (MessageBridge.MessageProof memory proof, bytes32 id,) = _proofWithLogEdited("trailing word", _appendWordToData);
+        _expectRefusal(proof, abi.encodeWithSelector(MessageBridge.MalformedEventData.selector));
+        assertFalse(bridge.messageCallStatus(id), "nothing was delivered");
+    }
+
     // ================================================================ transaction index
 
     /// @dev Sends, builds a block that ends at `index` and delivers. The key of the index is checked first.

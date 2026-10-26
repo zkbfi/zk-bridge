@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
 import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
 import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {BeaconBlockHeader, SSZ} from "../../src/hardened/SSZ.sol";
@@ -82,6 +83,26 @@ contract ForkLayoutTest is MessageScenes {
         assertEq(layouts.length, 1);
         assertEq(layouts[0].firstSlot, params.depositSlot - 40);
         assertEq(layouts[0].lastSlot, params.anchorSlot);
+    }
+
+    /// Claim: evidence at an earlier anchor than the validated range widens the range downward. Shows: position 69 is
+    /// validated at the later of two stored anchors, then at the earlier one. The event and the table then show the
+    /// earlier slot as the first slot and the later slot as the last slot. Matters: a message at the earlier anchor
+    /// needs the layout, and the range may only grow from stored evidence.
+    function test_H19_widenBlockRootsRangeDownward() public {
+        SceneParams memory laterParams = _defaultParams();
+        Scene memory later = _buildScene(MessageFixtures.deliver(), laterParams, _messageHeaderRlp());
+        _storeScene(laterParams, later);
+        assertGt(laterParams.anchorSlot, params.anchorSlot, "the second scene is the later one");
+
+        fresh.addBlockRootsLayout(69, later.rootsEvidence);
+        vm.expectEmit(true, false, false, true, address(fresh));
+        emit BlockRootsLayoutValidated(69, params.anchorSlot, laterParams.anchorSlot);
+        fresh.addBlockRootsLayout(69, _rootsEvidence());
+        BeaconProofVerifier.StateLayout[] memory layouts = fresh.stateLayouts();
+        assertEq(layouts.length, 1, "the same position widens and adds no row");
+        assertEq(layouts[0].firstSlot, params.anchorSlot);
+        assertEq(layouts[0].lastSlot, laterParams.anchorSlot);
     }
 
     // ================================================================ rejected: block roots
@@ -227,6 +248,40 @@ contract ForkLayoutTest is MessageScenes {
         bytes32 elsewhereRoot = SSZ.hashTreeRootMemory(elsewhere.header);
         vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.AnchorNotStored.selector, params.anchorSlot + 1, elsewhereRoot));
         fresh.addBlockHashLayout(812, elsewhere);
+    }
+
+    /// Claim: the checkpoint header of a light client cannot validate a block hash position. Shows: the constructor of
+    /// the light client stores the header root of its checkpoint and no execution block hash, so the call reverts with
+    /// `EvidenceSlotNotStored` and the slot, and the table stays empty. Matters: the check compares against the stored
+    /// execution block hash, and zero must never stand for a block hash.
+    function test_H19_blockHashLayoutAtTheCheckpointSlotRejected() public {
+        BeaconBlockHeader memory checkpoint = BeaconBlockHeader({
+            slot: INITIAL_SLOT,
+            proposerIndex: 1,
+            parentRoot: keccak256("checkpoint parent"),
+            stateRoot: keccak256("checkpoint state"),
+            bodyRoot: keccak256("checkpoint body")
+        });
+        BeaconLightClient client = new BeaconLightClient(
+            address(verifier),
+            LIGHT_CLIENT_VKEY,
+            GENESIS_ROOT_A,
+            SLOTS_PER_PERIOD,
+            LIGHT_CLIENT_GENESIS_TIME,
+            LIGHT_CLIENT_SECONDS_PER_SLOT,
+            INITIAL_SLOT,
+            SSZ.hashTreeRootMemory(checkpoint),
+            COMMITTEE_100,
+            COMMITTEE_101
+        );
+        assertEq(client.executionBlockHashes(INITIAL_SLOT), bytes32(0), "the checkpoint has no execution block hash");
+        MessageBridge atCheckpoint = _deployDestinationBridge(client, 0, DEFAULT_CAPELLA_ERA, address(gateB));
+
+        BeaconProofVerifier.BlockHashEvidence memory evidence = _hashEvidence();
+        evidence.header = checkpoint;
+        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.EvidenceSlotNotStored.selector, INITIAL_SLOT));
+        atCheckpoint.addBlockHashLayout(812, evidence);
+        assertEq(atCheckpoint.bodyLayouts().length, 0, "nothing was validated");
     }
 
     /// Claim: the branch must belong to the stored header. Shows: the branch of another header reverts. Matters: the
