@@ -30,7 +30,6 @@ contract DeployBridgeTest is Test {
     MockWrappedNative internal wrappedNativeOnB;
 
     address internal deployer = makeAddr("deployer");
-    address internal feeRunner = makeAddr("fee runner");
     address internal feeReward = makeAddr("fee reward address");
     address internal feeFailedDelivery = makeAddr("fee failed delivery address");
     /// @dev The flow limiter that `_chainJson` writes for chain 1. Zero, as in the example configuration, unless a test sets it.
@@ -104,7 +103,7 @@ contract DeployBridgeTest is Test {
     function _deliveryRouterJson(uint64 chainId) internal view returns (string memory) {
         if (chainId != 1) return "";
         return string.concat(
-            '"deliveryRouter":{"runner":"', vm.toString(feeRunner), '","rewardAddress":"', vm.toString(feeReward),
+            '"deliveryRouter":{"rewardAddress":"', vm.toString(feeReward),
             '","failedDeliveryAddress":"', vm.toString(feeFailedDelivery), '"},'
         );
     }
@@ -222,11 +221,9 @@ contract DeployBridgeTest is Test {
         assertEq(config.chainB.wrappedNative, address(wrappedNativeOnB));
         assertEq(uint8(config.chainA.deliveryRouter), uint8(DeployBridge.RouterChoice.Deploy));
         assertEq(uint8(config.chainB.deliveryRouter), uint8(DeployBridge.RouterChoice.Skip));
-        assertEq(config.chainA.deliveryRouterRunner, feeRunner, "the runner of the delivery router");
         assertEq(config.chainA.deliveryRouterRewardAddress, feeReward, "the reward address of the delivery router");
         assertEq(config.chainA.deliveryRouterFailedDeliveryAddress, feeFailedDelivery, "the failed delivery address");
         assertEq(config.chainB.deliveryRouterFailedDeliveryAddress, address(0), "chain B has no delivery router and so none");
-        assertEq(config.chainB.deliveryRouterRunner, address(0), "chain B has no delivery router and so no runner");
         assertEq(config.chainB.deliveryRouterRewardAddress, address(0), "chain B has no delivery router and so no reward address");
 
         // The light client of chain A tracks PulseChain; the light client of chain B tracks Ethereum.
@@ -293,10 +290,10 @@ contract DeployBridgeTest is Test {
     function test_HB02_exampleConfigurationHoldsEveryKeyTheScriptReads() public view {
         string memory json = vm.readFile("script/hardened/bridge.config.example.json");
         string[2] memory chains = [".chainA", ".chainB"];
-        string[30] memory keys = [
+        string[29] memory keys = [
             ".remoteChainName", ".rpcAlias", ".chainId", ".verifier", ".verifierCodeHash", ".depositCutoffTimestamp", ".deployerNonce",
             ".fee.recipient", ".fee.startRate", ".fee.stepRate", ".fee.floorRate", ".fee.stepPeriodSeconds",
-            ".flowLimiter", ".wrappedNative", ".deployDeliveryRouter", ".deliveryRouter.runner", ".deliveryRouter.rewardAddress", ".deliveryRouter.failedDeliveryAddress", ".lightClient.programVKey", ".lightClient.genesisValidatorsRoot", ".lightClient.slotsPerPeriod",
+            ".flowLimiter", ".wrappedNative", ".deployDeliveryRouter", ".deliveryRouter.rewardAddress", ".deliveryRouter.failedDeliveryAddress", ".lightClient.programVKey", ".lightClient.genesisValidatorsRoot", ".lightClient.slotsPerPeriod",
             ".lightClient.genesisTime", ".lightClient.secondsPerSlot", ".lightClient.slotsPerEpoch", ".lightClient.capellaForkEpoch", ".lightClient.capellaEra",
             ".lightClient.initialSlot", ".lightClient.initialHeaderRoot", ".lightClient.initialSyncCommitteeHash",
             ".lightClient.initialNextSyncCommitteeHash"
@@ -792,7 +789,6 @@ contract DeployBridgeTest is Test {
         assertEq(address(WETHOmnibridgeRouter(payable(deployedA.wrappedRouter)).WETH()), address(wrappedNativeOnA));
         assertEq(address(DeliveryRouter(payable(deployedA.deliveryRouter)).bridge()), deployedA.mediator);
         assertEq(address(DeliveryRouter(payable(deployedA.deliveryRouter)).wNative()), address(wrappedNativeOnA));
-        assertEq(DeliveryRouter(payable(deployedA.deliveryRouter)).runner(), feeRunner, "the runner is the configured account");
         assertEq(
             DeliveryRouter(payable(deployedA.deliveryRouter)).rewardAddress(), feeReward, "the reward address is the configured one"
         );
@@ -866,38 +862,13 @@ contract DeployBridgeTest is Test {
         script.parseConfig(json); // the honest file passes
     }
 
-    /// Claim: a delivery router that the configuration deploys needs a runner, and the runner is a real address. Shows: a
-    /// missing runner, a placeholder and the zero address each revert; a chain that deploys no delivery router reads no
-    /// runner, so a placeholder there does not matter. Matters: the runner is immutable. A router with a zero or
-    /// placeholder runner would deploy with nobody able to deliver through it, and no one could fix it.
-    function test_deliveryRouter_parseConfigNeedsARealRunner() public {
-        string memory json = _validJson();
-        string memory runnerText = string.concat(
-            '"deliveryRouter":{"runner":"', vm.toString(feeRunner), '","rewardAddress":"', vm.toString(feeReward),
-            '","failedDeliveryAddress":"', vm.toString(feeFailedDelivery), '"},'
-        );
-
-        vm.expectRevert();
-        script.parseConfig(vm.replace(json, runnerText, ""));
-
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.deliveryRouter.runner"));
-        script.parseConfig(vm.replace(json, vm.toString(feeRunner), "REPLACE_WITH_THE_RUNNER"));
-
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.deliveryRouter.runner"));
-        script.parseConfig(vm.replace(json, vm.toString(feeRunner), vm.toString(address(0))));
-
-        string memory skipped = vm.replace(json, '"deployDeliveryRouter":"true"', '"deployDeliveryRouter":"false"');
-        skipped = vm.replace(skipped, vm.toString(feeRunner), "REPLACE_WITH_THE_RUNNER");
-        assertEq(script.parseConfig(skipped).chainA.deliveryRouterRunner, address(0), "no delivery router, no runner read");
-    }
-
     /// Claim: a delivery router that the configuration deploys needs a real reward address. Shows: a missing key, a
     /// placeholder and the zero address each revert, and a chain that deploys no delivery router reads no reward address.
     /// Matters: the reward address is immutable. A router with a zero reward address refuses to deploy, and a
     /// placeholder that slipped through would send every tip to an address that nobody controls.
     function test_deliveryRouter_parseConfigNeedsARealRewardAddress() public {
         string memory json = _validJson();
-        string memory rewardText = string.concat(',"rewardAddress":"', vm.toString(feeReward), '"');
+        string memory rewardText = string.concat('"rewardAddress":"', vm.toString(feeReward), '",');
 
         vm.expectRevert();
         script.parseConfig(vm.replace(json, rewardText, ""));
@@ -1546,30 +1517,25 @@ contract DeployBridgeTest is Test {
         d.plan.wrappedRouter = honestWrapped;
         deployed.wrappedRouter = honestWrapped;
 
-        deployed.deliveryRouter = address(new DeliveryRouter(otherMediator, honestToken, feeRunner, feeReward, feeFailedDelivery));
+        deployed.deliveryRouter = address(new DeliveryRouter(otherMediator, honestToken, feeReward, feeFailedDelivery));
         d.plan.deliveryRouter = deployed.deliveryRouter;
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "deliveryRouter.mediator"));
         script.verifyDeployment(d, deployed);
 
-        deployed.deliveryRouter = address(new DeliveryRouter(mediator, otherToken, feeRunner, feeReward, feeFailedDelivery));
+        deployed.deliveryRouter = address(new DeliveryRouter(mediator, otherToken, feeReward, feeFailedDelivery));
         d.plan.deliveryRouter = deployed.deliveryRouter;
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "deliveryRouter.wrappedNative"));
         script.verifyDeployment(d, deployed);
 
-        deployed.deliveryRouter = address(new DeliveryRouter(mediator, honestToken, makeAddr("another runner"), feeReward, feeFailedDelivery));
-        d.plan.deliveryRouter = deployed.deliveryRouter;
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "deliveryRouter.runner"));
-        script.verifyDeployment(d, deployed);
-
         deployed.deliveryRouter = address(
-            new DeliveryRouter(mediator, honestToken, feeRunner, makeAddr("another reward address"), feeFailedDelivery)
+            new DeliveryRouter(mediator, honestToken, makeAddr("another reward address"), feeFailedDelivery)
         );
         d.plan.deliveryRouter = deployed.deliveryRouter;
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "deliveryRouter.rewardAddress"));
         script.verifyDeployment(d, deployed);
 
         deployed.deliveryRouter = address(
-            new DeliveryRouter(mediator, honestToken, feeRunner, feeReward, makeAddr("another failed delivery address"))
+            new DeliveryRouter(mediator, honestToken, feeReward, makeAddr("another failed delivery address"))
         );
         d.plan.deliveryRouter = deployed.deliveryRouter;
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "deliveryRouter.failedDeliveryAddress"));
