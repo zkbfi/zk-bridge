@@ -132,7 +132,7 @@ Use your own nodes where you can. Public endpoints are slow and often prune data
 | Setting | What to give |
 |---|---|
 | `routes.<name>.source.beacon_url` | A beacon API of the source chain. The URL may have a path prefix (`https://host/beacon-api`) or a key segment. Logs and errors never show the path. |
-| `routes.<name>.source.chain` | `ethereum`, `pulsechain`, `sepolia` or `pulsechain-testnet-v4`: the chain specification of the source beacon chain. Sepolia runs the Gloas fork, which `lc-core` refuses, so a Sepolia run stops with that error. See `prover/README.md`, section "Chains". |
+| `routes.<name>.source.chain` | `ethereum`, `pulsechain`, `sepolia` or `pulsechain-testnet-v4`: the chain specification of the source beacon chain. Sepolia runs the Gloas fork: the route also needs `source.rpc_url` for the execution header of `state.latest_block_hash`. See `prover/README.md`, section "Chains". |
 | `routes.<name>.destination.rpc_url` | An execution RPC of the destination chain. `prove` needs `eth_chainId` and `eth_call` only. |
 | `routes.<name>.destination.light_client` | The `BeaconLightClient` on the destination chain. |
 

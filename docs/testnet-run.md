@@ -6,7 +6,7 @@ This page lists the ordered commands to run the bridge on Sepolia (chain 1115511
 
 Read items 1 to 3 before you spend time on the rest. They decide whether the run can finish.
 
-1. **Sepolia runs the Gloas fork, and the program refuses it.** Sepolia is on fork version `0x90000076` since epoch 353024. That version is **Gloas**, not Fulu. Fulu is `0x90000075` (epoch 272640). The consensus specification `specs/gloas/` and a live Sepolia block (version `gloas`, with the key `signed_execution_payload_bid` in the body) confirm it. Gloas changes what the light client reads: `BeaconState` and `BeaconBlockBody` become progressive containers, so the generalized indices change (finality root 735, current committee 2945, next committee 2946, execution block hash 2856, `block_roots` 352, `historical_summaries` 2950). The block hash in a Gloas light-client header is the `parent_block_hash` of the bid. It is not the execution block of the same slot, because the payload is revealed apart from the beacon block and can be withheld. The header has no block number. A message proof that anchors to that hash is not sound, so `lc-core` fails closed: every Gloas slot and the compact header form give the error `GloasPayloadNotFinalized`, and the guest produces no output. A correct design is still open (see "What a Gloas design needs" below). Until then no light client can follow Sepolia, and the run cannot finish on Sepolia.
+1. **Sepolia runs the Gloas fork, and the light client now follows it.** Sepolia is on fork version `0x90000076` since epoch 353024. That version is **Gloas**, not Fulu (`0x90000075`, epoch 272640). Gloas makes `BeaconState` and `BeaconBlockBody` progressive containers, so the generalized indices change (see "How Gloas is handled" below). The program anchors a Gloas head on `state.latest_block_hash` of the finalized state and reads the block number from the execution header RLP. A message proof from a Gloas source block stays refused: sends from Sepolia after epoch 353024 cannot be delivered until a later change binds that payload (see below). The openDeposits proof and the head of the light client work. The program ELFs are not rebuilt yet.
 2. **The program keys change.** One guest program serves every chain through the chain selector in its input. The selector now has four values (Ethereum mainnet, PulseChain, Sepolia, PulseChain testnet v4), so the program file changes, and so do its keys. **This includes the mainnet key** `0x00f776e8...2f70`, and the fork observation key too, because both programs share `lc-core`. The behaviour on mainnet is the same, but the key is not. The keys in `bridge.config.testnet.json` are still the old keys. They are wrong for any new build. Rebuild on the [private] with `light-client/scripts/program-keys.sh --write`, copy the two files to `light-client/elf/`, build the new RunPod image, and write the new keys into the configuration. Nobody has built this yet.
 3. **Chain 943 is ready on the prover side.** Its beacon node serves no light-client routes (404). The prover assembles the updates from debug states instead. A real finalized state of 4.8 MB and its block parse correctly: the computed roots equal the header roots.
 4. **Public endpoints work.** You do not need the valve.city key to read the beacon chains. Run `ENDPOINTS=public script/testnet/preflight.sh`. See "Endpoints" below.
@@ -16,15 +16,24 @@ Read items 1 to 3 before you spend time on the rest. They decide whether the run
 
 Multicall3 at `0xcA11bde05977b3631167028862bE2a173976CA11` has code on both chains. The runtime code is the same on both.
 
-### What a Gloas design needs
+### How Gloas is handled
 
-This is a description, not an implementation. The owner decides the design.
+Sources: `specs/gloas/beacon-chain.md` (`BeaconState`, `BeaconBlockBody`, `ExecutionPayloadBid`, `apply_parent_execution_payload`, `process_execution_payload_bid`), `eip-7495.md`, `eip-7916.md`, `specs/gloas/light-client/sync-protocol.md`. Every index below is derived from the field lists in `light-client/crates/lc-core/src/layout.rs` and written to `light-client/tests/fixtures/gindices.json` (key `gloas`).
 
-- **Which container proves the payload.** The beacon block commits to the payload only through the bid: `BeaconBlockBody.signed_execution_payload_bid.message`. Its `block_hash` is the hash of the payload that the builder promises. The revealed `ExecutionPayloadEnvelope` is a separate signed message and is in no beacon root. The block number and the receipts root are not in any beacon container. They come from the execution block header (RLP), whose Keccak hash must equal the proven `block_hash`. The bridge already does that for receipts.
-- **Generalized indices (derived from the progressive container rules, checked against the four constants of `specs/gloas/light-client/sync-protocol.md`).** In the body: bid message at 714, `parent_block_hash` at 2856 (the spec constant), `block_hash` at 22857 (field 2 of the bid, depth 14). In the state: `latest_block_hash` at 2947, `execution_payload_availability` at 2963 (a bit vector indexed by slot modulo 8192), `block_roots` at 352, `historical_summaries` at 2950, finality root 735, committees 2945 and 2946.
-- **How payload finality is established.** A header at slot S proves only the bid. The payload of S counts only when a later block confirms it: the state transition of the child (`process_parent_execution_payload`) sets `state.latest_block_hash` to the bid hash of the parent and sets the availability bit of the parent slot. So the light client needs, for the finalized header F, a branch from `F.state_root` to `latest_block_hash` (2947) and to the availability bit, or a branch from the attested state. `latest_block_hash` in the state of F is final and equals the last payload confirmed up to F, which is the payload of an earlier slot. The program must also bind that hash to a slot: prove the bid `block_hash` in the body of the beacon block at that slot (22857) and the availability bit of that slot. The program must not use `parent_block_hash` as the block of the slot.
-- **Contracts.** `BeaconProofVerifier` position rules (depth 5 to 7 for state fields, 4 to 5 for body and payload) reject all progressive positions. `BeaconForkGate` computes the fork version position as `(2^depth + 3) * 4 + 1`, but the Gloas position is 169 and no depth gives it. `BeaconLightClient` stores a block number for each hash; Gloas headers carry none. All three need a change and a new deployment.
-- **Prover.** `ssz_state.rs` stops at Fulu. Gloas needs progressive list hashing for validators, balances, participation, pending lists, builders and more.
+- **Head anchor.** `state.latest_block_hash` (field 24 of 46) is at index 2947, 11 siblings, under `finalized_header.state_root`. `apply_parent_execution_payload` writes it when a block builds on a FULL parent (`state.latest_block_hash = parent_bid.block_hash`). A block on an EMPTY parent leaves it. So in the post-state of a finalized block it names the newest payload that the finalized chain confirmed: one slot or more before the finalized slot, never the payload of the finalized slot. `process_execution_payload_bid` asserts `bid.parent_block_hash == state.latest_block_hash`, so the specification's `execution_block_hash` (index 2856) has the same value. The program does not read the bid.
+- **Block number and receipts root.** The prover supplies the execution header RLP. The guest checks `keccak256(rlp) == latest_block_hash` and reads item 8 (number). The decoder takes any field count (Amsterdam has 23 items, with `blockAccessListHash` and `slotNumber`) and pins items 5, 8 and 11.
+- **Other indices.** Finality root 735, current committee 2945, next committee 2946, `block_roots` 352, `historical_summaries` 2950, `fork.current_version` 169 (7 siblings, the gate).
+- **Contracts.** `BeaconProofVerifier` takes 352 and 2950 next to the depth rule. `BeaconForkGate` takes the marker 255 (progressive) for a supported version and a seal depth, and checks index 169. The bridge takes `gloasForkSlot` (config key `gloasForkEpoch` of the light client of the Gloas chain): the body-layout path refuses every slot from that slot on.
+- **Prover.** It hashes the Gloas state, reads `debug_getRawHeader` from `source.rpc_url`, and attaches both. See `prover/README.md`.
+- **Still refused.** A message proof from a Gloas source block. The stored hash of a Gloas slot is `latest_block_hash`, and the body holds a bid, so nothing binds a log to a Gloas block yet. The binding that the specification supports is the `parent_block_hash` of the NEXT block (a block whose bid names the payload as its parent), which needs a separate decision.
+
+### What the [private] rebuild must regenerate
+
+1. The two program ELFs (`light-client.elf`, `fork-observation.elf`) with `light-client/scripts/program-keys.sh --write`, because `lc-core` and the wire format changed. Copy them to `light-client/elf/`.
+2. `light-client/program-keys.json`, and the keys in `script/testnet/bridge.config.testnet.json` and in the mainnet configuration (`lightClientProgramVKey`, `programVKey`, `observationProgramVKey`). The verifier code hash does not change.
+3. The RunPod GPU image with the new ELFs, and its `VERIFIER_HASH` check.
+4. The contract bytecode changed (`BeaconProofVerifier`, `BeaconForkGate`, `MessageBridge`): any pinned code hash or predicted address from the old build is stale. The deploy script prints the new ones.
+
 
 ## Endpoints
 
@@ -72,7 +81,7 @@ If `op read` fails with an authorization timeout, unlock 1Password and run it ag
 script/testnet/preflight.sh
 ```
 
-The script prints one line for each route. It exits with 0 when all counted routes answer. Do not continue to step 5 until the light-client routes of Sepolia show OK. Chain 943 serves none, and the prover uses debug states there. Sepolia cannot pass step 7 while the program refuses Gloas (see item 1 of the status).
+The script prints one line for each route. It exits with 0 when all counted routes answer. Do not continue to step 5 until the light-client routes of Sepolia show OK. Chain 943 serves none, and the prover uses debug states there.
 
 ## Step 2: build the prover
 
@@ -137,7 +146,7 @@ The prover prints all four values from one finalized root with the command `chec
 
 ```sh
 "$PROVER" checkpoint --beacon-url https://rpc-testnet-pulsechain.g4mm4.io/beacon-api --chain pulsechain-testnet-v4
-"$PROVER" checkpoint --beacon-url https://lodestar-sepolia.chainsafe.io --chain sepolia   # refuses Gloas today, exit 1
+"$PROVER" checkpoint --beacon-url https://lodestar-sepolia.chainsafe.io --chain sepolia   # reads the Gloas state; a Gloas run needs source.rpc_url for the execution header
 ```
 
 The command also prints the genesis validators root, genesis time, seconds per slot, Capella fork epoch and `capellaEra`. Compare them with the configuration. Fill these fields:
@@ -217,7 +226,7 @@ start_block = <first block on Sepolia>
 EOF
 ```
 
-The key `chain` accepts `ethereum`, `pulsechain`, `sepolia` and `pulsechain-testnet-v4`. Each name selects its own fork table and genesis validators root. The route from Sepolia stops with the Gloas refusal (status, item 1). The beacon addresses above need no key. You can use the valve.city addresses for the other routes if you prefer.
+The key `chain` accepts `ethereum`, `pulsechain`, `sepolia` and `pulsechain-testnet-v4`. Each name selects its own fork table and genesis validators root. The route from Sepolia needs `source.rpc_url` for the execution header of the Gloas head (status, item 1). The beacon addresses above need no key. You can use the valve.city addresses for the other routes if you prefer.
 
 ## Step 7: first light-client update through the RunPod endpoint
 

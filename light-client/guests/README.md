@@ -23,22 +23,29 @@ no valid signature (`real_update_verifies_only_with_the_correct_fork_version` sh
 The chain selector picks the genesis validators root. The root is part of the public values, so the contract binds the proof to
 its chain.
 
-## Gloas (Sepolia from epoch 353024): refused
+## Gloas (Sepolia from epoch 353024)
 
-`lc_core` REFUSES Gloas. Every update with an attested, finalized or signature slot in a Gloas epoch, and every header in the
-compact form, fails with `Error::GloasPayloadNotFinalized`. The guest produces no output. The wire decoder rejects the compact
-form. `state_layout_for_fork(Gloas)` refuses too. Mainnet and PulseChain behaviour is unchanged.
+How the head is anchored. A Gloas finalized header is a compact header (`HeaderForm::Compact`): the beacon header, an
+execution block hash, a branch, and the RLP of that execution block header. The hash is `state.latest_block_hash` of the
+post-state of the finalized header. The branch has 11 entries and leads from that field to `beacon.state_root` at generalized
+index 2947 (field 24 of the progressive state). The guest hashes the RLP with keccak256, requires the hash to equal the proven
+block hash, and reads the block number from item 8 of the RLP. The decoder accepts the field count of any fork (Amsterdam has
+23 items) and pins the positions of `receiptsRoot` (5), `number` (8) and `timestamp` (11). The output keeps its shape, with a real
+block number and never a zero. The attested header is not read for execution data: the committee signs the beacon header.
 
-Why. Under Gloas the execution payload is revealed apart from the beacon block and may be withheld. The compact header holds the
-`parent_block_hash` of the bid. That hash is the last confirmed payload, not the execution block of the slot, and the header has
-no block number. A message proof that anchors to it would not be sound.
+What `latest_block_hash` names. `process_parent_execution_payload` (`specs/gloas/beacon-chain.md`, `apply_parent_execution_payload`)
+sets it to the `block_hash` of the parent bid when the child block builds on a FULL parent. A block on an EMPTY parent leaves it.
+So in the post-state of a finalized block it names the newest payload that a block of the finalized chain confirmed. That payload is
+in finalized history, one slot or more before the finalized slot. It is never the payload of the finalized slot itself. The bid in
+the body is never read. (`process_execution_payload_bid` asserts `bid.parent_block_hash == state.latest_block_hash`, so the
+light-client `execution_block_hash` of the specification, the bid `parent_block_hash`, has the same value. The guest still proves
+it from the state, as designed.)
 
-What stays. `crates/lc-core/src/layout.rs` keeps the derived progressive indices (finality root 735, committees 2945 and 2946,
-bid parent hash 2856, `block_roots` 352, `historical_summaries` 2950) with tests that derive them from the container field
-lists. Tests check the real branches of a live Sepolia update at the pure function level. A future design needs these facts.
+What stays refused. A message proof from a Gloas SOURCE block: the body holds a bid, and no rule binds it to a confirmed payload.
+`block_hash_gindex_for_fork(Gloas)` and the contract (`gloasForkSlot`) refuse it. A Gloas anchor with a pre-Gloas source works.
 
-The deployed Solidity position rules also reject the progressive positions, so a Gloas source chain needs a Solidity change in
-`BeaconProofVerifier` and `BeaconForkGate`.
+Tests: `crates/lc-testkit/tests/gloas.rs` (synthetic, the negative tests), `gloas_real.rs` (a real Sepolia finalized state, update
+and execution header, with a real BLS fold) and `execution_anchor.rs` (the decoder).
 
 The program keys change on the next reproducible build, because one ELF serves every chain through `ChainSelector`
 (Ethereum mainnet 1, PulseChain 2, Sepolia 3, PulseChain testnet v4 4).

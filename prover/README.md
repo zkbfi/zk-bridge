@@ -30,12 +30,12 @@ A route names its source chain with `source.chain`, and `--chain` takes the same
 |---|---|---|---|
 | `ethereum` | Ethereum mainnet | Fulu | served |
 | `pulsechain` | PulseChain (369) | Capella | 404: the producer builds updates from blocks and states |
-| `sepolia` | Sepolia (11155111) | Gloas | served, but refused (see below) |
+| `sepolia` | Sepolia (11155111) | Gloas | served; needs the execution RPC (see below) |
 | `pulsechain-testnet-v4` | PulseChain testnet v4 (943) | Capella | 404: the producer builds updates from blocks and states |
 
 Each name selects the fork table and the genesis validators root of `lc-core`. An unknown name stops the command, and the message lists the known names.
 
-**Sepolia runs the Gloas fork, and `lc-core` refuses Gloas.** The design of the Gloas execution payload is open. `lc-core` refuses every Gloas header, update and state with the error `Gloas is refused: the execution payload is not finalized by the beacon block alone (design pending)`. The producer shows that error as it is and exits with code 1. It never reads a Gloas object with the Capella layout, and it prints no half answer. The `checkpoint` command stops on a Gloas header before it asks for a bootstrap or a state. Chain 943 stays at Capella and works.
+**Sepolia runs the Gloas fork.** A Gloas finalized header proves `state.latest_block_hash` from its state, and the program reads the block number from the RLP of that execution block. So for each Gloas finalized header the producer downloads the state (3.6 MB), hashes it in full with the Gloas layout, compares the root with the header, asks the source execution node for `debug_getRawHeader` of `latest_block_hash` (the hash is checked), and attaches both. A route needs `source.rpc_url`; `prove --beacon-url` needs `--source-rpc-url`. Without it the producer stops with an error that names the setting. A message proof from a Gloas source block is refused by `lc-core`. Chain 943 stays at Capella and works.
 
 ### Beacon URLs
 
@@ -302,7 +302,7 @@ scripts/check-crate-ages.sh        # every locked crate was published on or befo
 |---|---|
 | `tests/produce.rs` | The producer and the `prove` command on a signed beacon chain, with the oracle backend: the package, the exit codes, the webhook and the route mode. |
 | `tests/evidence.rs` | The `evidence` command on a synthetic world: a beacon chain, a source chain with one message in the second transaction of a block, and a destination chain with a message bridge. The evidence passes the native bridge check, and the proven transaction hash is the hash of the sending transaction. |
-| `tests/checkpoint.rs` | The `checkpoint` command on a node with and without the light-client routes, a flipped committee branch, a named root, a wrong chain, and the Gloas refusal of Sepolia before any bootstrap request. |
+| `tests/checkpoint.rs` | The `checkpoint` command on a node with and without the light-client routes, a flipped committee branch, a named root, a wrong chain, and a Sepolia checkpoint from the real Gloas state. |
 | `tests/opening_proof.rs` | The `opening-proof` command against two mock chains with real tries, a flipped node in each proof, and the constants that must equal the Solidity constants. |
 | `tests/deployment_file.rs` | The `deployment-file` command: the explorer rules in Rust, the broadcast file, the mode, the overwrite rule and every refusal. |
 | `tests/real_pulsechain_testnet.rs` | A real block of chain 943 parsed to its header. The ignored test downloads the finalized state and block of the public node and compares the roots (`cargo test --test real_pulsechain_testnet -- --ignored`, needs network). |

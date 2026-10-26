@@ -21,6 +21,15 @@ Files named `derived`: `pulsechain/light_client_update.json` and `pulsechain/bea
 that lists the real endpoints the tool read; every branch in them was computed from a real beacon state and checked against the
 roots that the node reports.
 
+## Real Sepolia Gloas head (`sepolia/gloas_head_*`, `sepolia/gloas_fork_version.json`)
+
+Fetched 2026-10-26 from a Sepolia beacon node and a Sepolia execution node. `gloas_head_finality_update.json` is a finality update (real
+sync aggregate). `gloas_head_state.ssz` is the SSZ `BeaconState` whose root is the `state_root` of its finalized header (3.6 MB, Gloas
+layout). `gloas_head_execution_header.json` holds `debug_getRawHeader` and the block of the execution block that `state.latest_block_hash`
+of that state names (23 items, Amsterdam), and the raw header of its parent as a header of another block. `gloas_fork_version.json` is
+derived: the branch of `fork.current_version` (7 entries, index 169) over the same state. The tests are `gloas_real.rs` (lc-core and
+the prover `checkpoint` and plan tests) and `test/hardened/GloasGate.t.sol`. Regenerate by fetching the same four objects again.
+
 ## `gindices.json`
 
 Generalized indices per fork, computed from `ethereum/consensus-specs`. Keys:
@@ -37,6 +46,7 @@ Generalized indices per fork, computed from `ethereum/consensus-specs`. Keys:
 | `forks.<fork>.blockHashGindex` | Combined index of `BeaconBlockBody.execution_payload.block_hash` (412 Capella, 812 Deneb and later). |
 | `forks.<fork>.blockHashBranchLength` | Exact length of `blockHashBranch` (8 or 9). |
 | `forks.<fork>.finalizedRootGindex`, `currentSyncCommitteeGindex`, `nextSyncCommitteeGindex`, `executionPayloadGindex` | Light-client indices (for the SP1 program and for reference). |
+| `gloas.*` | The Gloas positions, derived from the field lists by `lc-core`: `forkVersionGindex` 169, `blockRootsFieldGindex` 352, `historicalSummariesFieldGindex` 2950, `latestBlockHashGindex` 2947, with branch lengths. |
 | `chains.<chain>.forkSchedule` | Rows `(activationEpoch, blockRootsGindexBase, blockHashGindex, historicalSummariesGindex)` for the bridge constructor. Only forks with a supported layout appear. All numbers are decimal strings. |
 
 The bridge picks the block roots row and the `historical_summaries` index by the epoch of the ANCHOR header slot, and the block hash
