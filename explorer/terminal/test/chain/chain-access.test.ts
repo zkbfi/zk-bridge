@@ -164,7 +164,7 @@ describe('createRpcChainAccess', () => {
     expect(client.chain.name).toBe('PulseChain')
     expect(client.chain.nativeCurrency).toEqual({ name: 'PLS', symbol: 'PLS', decimals: 18 })
     expect(client.chain.rpcUrls.default.http).toEqual(['http://second.rpc.test'])
-    expect(access.flowClient(369)).toBe(client as unknown as RpcClient)
+    expect(access.flowClient(369) as unknown).toBe(client)
   })
 
   test('the fixture transaction hash is a 32 byte hash', () => {

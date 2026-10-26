@@ -80,11 +80,6 @@ export function createIndexerDataSource(input: IndexerDataSourceInput): DataSour
     return array(body.heads, 'heads').map((head) => headOf(record(head, 'head'), sideOf))
   }
 
-  async function loadGates(): Promise<Readonly<Record<ChainSide, GateStatus>>> {
-    const summary = record(await getJson(`${base}/api/summary`), 'summary answer')
-    return gatesOf(array(summary.gates, 'gates'), sideOf, now())
-  }
-
   return {
     label: 'indexer',
     async listPairs(): Promise<readonly PairHealth[]> {
