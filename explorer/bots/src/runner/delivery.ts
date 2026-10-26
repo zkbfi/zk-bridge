@@ -1,5 +1,5 @@
 import { decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeFunctionData, erc20Abi, type Address, type ContractFunctionArgs, type Hex } from "viem";
-import { feeRouterAbi, messageBridgeAbi, type ProofDirection } from "@zk-bridge/shared";
+import { deliveryRouterAbi, messageBridgeAbi, type ProofDirection } from "@zk-bridge/shared";
 import { sendTerms, worstCaseCostWei, type FeeQuote, type ReceiptLog, type TransactionPort } from "../chain/transactions.ts";
 import type { FeedItem, IndexerClient } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
@@ -39,11 +39,11 @@ export interface DeliveryDependencies {
   readonly prover: ProverBinary;
   readonly indexer: IndexerClient;
   readonly source: SourceReader;
-  /** The fee router of the destination chain, or null. */
-  readonly feeRouter: Address | null;
-  /** The Multicall3 contract of the destination chain, which batches the calls of a delivery. Not null whenever `feeRouter` is not null. */
+  /** The delivery router of the destination chain, or null. */
+  readonly deliveryRouter: Address | null;
+  /** The Multicall3 contract of the destination chain, which batches the calls of a delivery. Not null whenever `deliveryRouter` is not null. */
   readonly multicall: Address | null;
-  /** The address that receives the fees. Not null whenever `feeRouter` is not null: the start-up check requires it. */
+  /** The address that receives the fees. Not null whenever `deliveryRouter` is not null: the start-up check requires it. */
   readonly rewardAddress: Address | null;
   readonly wrappedNative: Address;
   readonly settings: DeliverySettings;
@@ -75,7 +75,7 @@ export type DeliveryOutcome =
   | {
       readonly status: "delivered";
       readonly messageId: Hex;
-      readonly path: "fee-router" | "bridge";
+      readonly path: "delivery-router" | "bridge";
       readonly transactionHash: Hex;
       readonly gasUsed: bigint;
       readonly gasCostWei: bigint;
@@ -118,7 +118,7 @@ export function skip(messageId: Hex, reason: SkipReason, extra: Partial<Omit<Ski
   return { status: "skipped", messageId, reason, ...extra };
 }
 
-/** The proof of one message, as `MessageBridge.executeMessage` and the fee router take it. */
+/** The proof of one message, as `MessageBridge.executeMessage` and the delivery router take it. */
 export type MessageProof = ContractFunctionArgs<typeof messageBridgeAbi, "nonpayable", "executeMessage">[0];
 
 /** Reads the proof out of the call data of the evidence. */
@@ -128,9 +128,9 @@ function proofOf(evidence: EvidencePackage): MessageProof {
   return decoded.args[0];
 }
 
-/** The call data of the single entry of the fee router. The batch simulation uses it to measure the gas of one item. */
+/** The call data of the single entry of the delivery router. The batch simulation uses it to measure the gas of one item. */
 export function singleCallData(proof: MessageProof, reward: Address): Hex {
-  return encodeFunctionData({ abi: feeRouterAbi, functionName: "executeMessageWithRunner", args: [proof, reward] });
+  return encodeFunctionData({ abi: deliveryRouterAbi, functionName: "executeMessageWithRunner", args: [proof, reward] });
 }
 
 /** The fee that the router would pay the runner for this gas, measured in wei. */
@@ -144,12 +144,12 @@ export async function quoteFee(
   if (token === undefined) return { ok: false, reason: "no-price-for-fee-token" };
   const { director } = offer;
   const data = encodeFunctionData({
-    abi: feeRouterAbi,
+    abi: deliveryRouterAbi,
     functionName: "feeInfo",
     args: [token.address as Address, offer.value, gasUnits, director],
   });
-  const answer = await dependencies.chain.call({ to: dependencies.feeRouter as Address, data });
-  const [feeTokens] = decodeFunctionResult({ abi: feeRouterAbi, functionName: "feeInfo", data: answer });
+  const answer = await dependencies.chain.call({ to: dependencies.deliveryRouter as Address, data });
+  const [feeTokens] = decodeFunctionResult({ abi: deliveryRouterAbi, functionName: "feeInfo", data: answer });
   const value = valueFeeInWei({
     fee: feeTokens,
     token: token.address as Address,
@@ -347,7 +347,7 @@ export type Preparation = { readonly kind: "outcome"; readonly outcome: Delivery
 /**
  * Does the per-item work of a delivery, up to and including the layout calls.
  *
- * 1. Read the call data of the message from the indexer and look for a fee offer to the fee router.
+ * 1. Read the call data of the message from the indexer and look for a fee offer to the delivery router.
  * 2. Price the offer at the assumed gas, and skip when the fee does not cover cost and margin. This check needs no
  *    evidence, so an item that does not pay costs no proving time.
  * 3. Build the evidence (`zk-bridge-prover evidence`). Skip when the message is delivered already.
@@ -367,7 +367,7 @@ export async function prepareItem(dependencies: DeliveryDependencies, item: Feed
   const { settings, chain } = dependencies;
   const done = (outcome: DeliveryOutcome): Preparation => ({ kind: "outcome", outcome });
   const message = await dependencies.indexer.getMessage(item.messageId);
-  const offer = readFeeOffer({ messageData: message.data as Hex, feeRouter: dependencies.feeRouter });
+  const offer = readFeeOffer({ messageData: message.data as Hex, deliveryRouter: dependencies.deliveryRouter });
   if (offer.kind === "none" && !settings.deliverWithoutOffer) return done(skip(messageId, "no-fee-offer", { detail: offer.reason }));
 
   const quote = await chain.feeQuote();

@@ -8,24 +8,24 @@ import {BeaconLightClient} from "../../../src/hardened/BeaconLightClient.sol";
 import {MessageBridge} from "../../../src/hardened/MessageBridge.sol";
 import {Multicall3} from "../../../src/hardened/vendor/multicall3/Multicall3.sol";
 import {BridgedToken} from "../../../src/hardened/mediator/BridgedToken.sol";
-import {FeeRouter} from "../../../src/hardened/mediator/FeeRouter.sol";
+import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol";
 import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol";
 import {IWETH} from "../../../src/hardened/mediator/IWETH.sol";
 import {MockWrappedNative} from "./utils/MediatorSupport.sol";
 import {MessageReverter, MessageNoop} from "../utils/MessageTargets.sol";
 import {WorldSupport} from "../utils/WorldSupport.sol";
 
-/// @notice The batching of deliveries through Multicall3 (`aggregate3`, `allowFailure`) and the fee router, through the real bridge, the real mediator and real proofs. The mock
-/// bridge of `FeeRouter.t.sol` reads no proof, so only this world shows the refusals of the bridge, the update of the
+/// @notice The batching of deliveries through Multicall3 (`aggregate3`, `allowFailure`) and the delivery router, through the real bridge, the real mediator and real proofs. The mock
+/// bridge of `DeliveryRouter.t.sol` reads no proof, so only this world shows the refusals of the bridge, the update of the
 /// light client and the gas of a whole run.
-contract FeeRouterBatchingTest is WorldSupport {
+contract DeliveryRouterBatchingTest is WorldSupport {
     uint256 internal constant VALUE = 100 ether;
     /// @dev A share fee of 1%.
     uint256 internal constant ONE_PERCENT = 0.01 ether;
     uint256 internal constant TIP = 1 ether;
 
     MockERC20 internal nativeToken;
-    FeeRouter internal router;
+    DeliveryRouter internal router;
     address internal runner = makeAddr("batch runner");
     address internal reward = makeAddr("batch reward address");
     address internal recipient = makeAddr("batch recipient");
@@ -42,7 +42,7 @@ contract FeeRouterBatchingTest is WorldSupport {
         nativeToken.approve(address(mediatorA), type(uint256).max);
         revertingTarget = new MessageReverter();
         quietTarget = new MessageNoop();
-        router = new FeeRouter(
+        router = new DeliveryRouter(
             ITokenMediator(address(mediatorB)), IWETH(address(new MockWrappedNative())), runner, reward, reward
         );
         // The first message of a token deploys its copy and costs more. Deliver it plainly, so the runs below are of the
@@ -64,7 +64,7 @@ contract FeeRouterBatchingTest is WorldSupport {
 
     /// @dev A transfer to the router that asks for a tip of 1% of 100 tokens, with `to` as the recipient.
     function _tipMessage(address to) internal returns (Transit memory) {
-        bytes memory data = abi.encode(FeeRouter.FeeDirector(to, router.SHARE_OF_VALUE(), 0, ONE_PERCENT));
+        bytes memory data = abi.encode(DeliveryRouter.FeeDirector(to, router.SHARE_OF_VALUE(), 0, ONE_PERCENT));
         vm.chainId(CHAIN_A);
         vm.recordLogs();
         vm.prank(alice);
@@ -106,7 +106,7 @@ contract FeeRouterBatchingTest is WorldSupport {
 
     function _deliverCallTo(Transit memory transit, address rewardAddress) internal view returns (Multicall3.Call3 memory) {
         return Multicall3.Call3(
-            address(router), true, abi.encodeCall(FeeRouter.executeMessageWithRunner, (transit.proof, rewardAddress))
+            address(router), true, abi.encodeCall(DeliveryRouter.executeMessageWithRunner, (transit.proof, rewardAddress))
         );
     }
 
@@ -229,7 +229,7 @@ contract FeeRouterBatchingTest is WorldSupport {
             calls[0] = _deliverCall(first);
             Multicall3.Result[] memory results = _aggregateAs(strangers[i], calls);
             assertFalse(results[0].success);
-            assertEq(results[0].returnData, abi.encodeWithSelector(FeeRouter.NotRunner.selector, strangers[i]));
+            assertEq(results[0].returnData, abi.encodeWithSelector(DeliveryRouter.NotRunner.selector, strangers[i]));
         }
         assertFalse(bridgeB.messageCallStatus(first.messageId), "nothing was delivered");
         assertEq(_balance(reward), 0);
@@ -245,7 +245,7 @@ contract FeeRouterBatchingTest is WorldSupport {
             Multicall3.Call3[] memory calls = _two(_deliverCallTo(first, wrong[i]), _deliverCall(first));
             Multicall3.Result[] memory results = _aggregateAs(runner, calls);
             assertFalse(results[0].success);
-            assertEq(results[0].returnData, abi.encodeWithSelector(FeeRouter.WrongRewardAddress.selector, wrong[i]));
+            assertEq(results[0].returnData, abi.encodeWithSelector(DeliveryRouter.WrongRewardAddress.selector, wrong[i]));
             assertTrue(results[1].success, "the call with the right address delivers");
             assertEq(_balance(reward), (i + 1) * TIP, "the tip sits in the reward address");
         }
@@ -265,7 +265,7 @@ contract FeeRouterBatchingTest is WorldSupport {
     /// call must not leak into the fee of another, and the one settlement slot is free again for the next call.
     function test_batch_aGasBasedFeeSettlesInsideEachCall() public {
         vm.txGasPrice(1 gwei);
-        FeeRouter.FeeDirector memory director = FeeRouter.FeeDirector(recipient, 0, 1 ether, 1 ether);
+        DeliveryRouter.FeeDirector memory director = DeliveryRouter.FeeDirector(recipient, 0, 1 ether, 1 ether);
         Transit[] memory transits = new Transit[](2);
         for (uint256 i = 0; i < 2; i++) {
             vm.chainId(CHAIN_A);
@@ -415,8 +415,8 @@ contract FeeRouterBatchingTest is WorldSupport {
     function test_theRewardAddressIsFixedAndNeverZero() public {
         assertEq(router.rewardAddress(), reward);
         IWETH wrapped = IWETH(address(new MockWrappedNative()));
-        vm.expectRevert(FeeRouter.ZeroRewardAddress.selector);
-        new FeeRouter(ITokenMediator(address(mediatorB)), wrapped, runner, address(0), reward);
+        vm.expectRevert(DeliveryRouter.ZeroRewardAddress.selector);
+        new DeliveryRouter(ITokenMediator(address(mediatorB)), wrapped, runner, address(0), reward);
         bytes4[3] memory selectors = [
             bytes4(keccak256("setRewardAddress(address)")),
             bytes4(keccak256("changeRewardAddress(address)")),

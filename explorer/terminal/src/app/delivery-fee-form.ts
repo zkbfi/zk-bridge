@@ -1,6 +1,6 @@
 /**
  * The logic of the "Pay for delivery" part of the bridge form, with no rendering. A sender who pays for delivery
- * relays tokens to the fee router of the other chain. The call data names the fee terms (a `FeeDirector`), and a runner
+ * relays tokens to the delivery router of the other chain. The call data names the fee terms (a `FeeDirector`), and a runner
  * that delivers the transfer through the router takes the fee from the tokens.
  *
  * Every function here is pure. It reads the form values and the delivery cost report and returns plain data. The
@@ -49,7 +49,7 @@ export const DELIVERY_FIELD = {
   customLimit: 'feeCustomLimit',
   customMultiplier: 'feeCustomMultiplier',
   customBasis: 'feeCustomBasis',
-  router: 'feeRouter',
+  router: 'deliveryRouter',
   senderPrice: 'feeSenderPrice',
 } as const
 
@@ -75,10 +75,10 @@ export type Values = Readonly<Record<string, string>>
 /** The value of one whole token in wei, by lowercase token address. The user supplies it for tokens that are not the wrapped native token. */
 export type TokenValuationsWei = Readonly<Record<string, bigint>>
 
-/** Where the fee is paid and in what: the destination chain, its fee router and the token that the router pays out. */
+/** Where the fee is paid and in what: the destination chain, its delivery router and the token that the router pays out. */
 export interface DeliveryTarget {
   readonly chain: ChainConfig
-  /** The fee router of the deployment on the destination chain: the default router. The extra data may name another. */
+  /** The default delivery router on the destination chain: the default router. The extra data may name another. */
   readonly router: Address
   /** The token that the router pays out: the token on the destination chain. */
   readonly token: { readonly symbol: string; readonly decimals: number }
@@ -103,8 +103,8 @@ export interface ResolveTargetInput {
 }
 
 /**
- * Finds the fee router and the payout token for the chosen source. Delivery fees need a token transfer with call data
- * and a fee router in the deployment. When one is missing, this says so and the form offers no fee.
+ * Finds the delivery router and the payout token for the chosen source. Delivery fees need a token transfer with call data
+ * and a delivery router in the deployment. When one is missing, this says so and the form offers no fee.
  *
  * @param input The source of the transfer, the pair and the known prices.
  */
@@ -115,8 +115,8 @@ export function resolveDeliveryTarget(input: ResolveTargetInput): DeliveryTarget
     return { kind: 'unavailable', reason: 'The wrap and relay route carries no call data, so it cannot pay for delivery. Choose a token.' }
   }
   const chain = source.side === 'first' ? pair.second : pair.first
-  if (chain.contracts.feeRouter === null) {
-    return { kind: 'unavailable', reason: `The deployment names no fee router for ${chain.name}, so a delivery fee is not offered.` }
+  if (chain.contracts.deliveryRouter === null) {
+    return { kind: 'unavailable', reason: `The deployment names no delivery router for ${chain.name}, so a delivery fee is not offered.` }
   }
   const counterpart = source.token.counterpart
   const known = counterpart === null ? undefined : input.tokens.find((candidate) => candidate.side !== source.side && candidate.address.toLowerCase() === counterpart.toLowerCase())
@@ -125,7 +125,7 @@ export function resolveDeliveryTarget(input: ResolveTargetInput): DeliveryTarget
   const wrappedNative = chain.contracts.wrappedNative
   const isWrappedNative = counterpart !== null && wrappedNative !== null && wrappedNative.toLowerCase() === counterpart.toLowerCase()
   const valueInWei = isWrappedNative ? WEI_PER_WHOLE_COIN : counterpart === null ? null : (input.valuations[counterpart.toLowerCase()] ?? null)
-  return { kind: 'ready', target: { chain, router: chain.contracts.feeRouter, token, isWrappedNative, valueInWei } }
+  return { kind: 'ready', target: { chain, router: chain.contracts.deliveryRouter, token, isWrappedNative, valueInWei } }
 }
 
 /** What the user chose, once it is a director. */
@@ -157,7 +157,7 @@ export interface DeliveryFeeInput {
   readonly values: Values
   readonly target: DeliveryTarget
   readonly report: DeliveryCostReport
-  /** The amount that reaches the fee router, in base units of the destination token. Null when the amount is not valid yet. */
+  /** The amount that reaches the delivery router, in base units of the destination token. Null when the amount is not valid yet. */
   readonly transferValue: bigint | null
 }
 
@@ -470,7 +470,7 @@ function customStart(previous: Values, context: RefillContext): Values {
 }
 
 /**
- * The amount that reaches the fee router: the amount that the user typed, less the fee of the mediator.
+ * The amount that reaches the delivery router: the amount that the user typed, less the fee of the mediator.
  *
  * @param amountText What the user typed, in whole tokens.
  * @param decimals The decimals of the token.

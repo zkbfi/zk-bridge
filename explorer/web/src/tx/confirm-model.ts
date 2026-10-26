@@ -33,7 +33,7 @@ export type DeliveryView = {
   readonly appliesTo: string;
   /** The address of the router that receives the relay. */
   readonly routerText: string;
-  /** A warning when the router is not the fee router of the deployment, or null. */
+  /** A warning when the router is not the default delivery router, or null. */
   readonly routerWarning: string | null;
   /** The address that receives the tip, as the router answered, or `unknown`. */
   readonly rewardAddressText: string;

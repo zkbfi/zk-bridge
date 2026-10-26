@@ -10,7 +10,7 @@ import {
   BRIDGE,
   EXECUTED,
   FAILED_IN_BRIDGE,
-  FEE_ROUTER,
+  DELIVERY_ROUTER,
   LIGHT_CLIENT,
   MULTICALL,
   REWARD_ADDRESS,
@@ -68,7 +68,7 @@ function recordingLedger(): PrerequisiteLedger & { readonly calls: Array<{ reado
 }
 
 /** A chain and the dependencies of a batch on it. An item costs 3,000,000 wei and its fee is 10,000,000 wei. */
-function setup(options: { feeRouter?: DeliveryDependencies["feeRouter"]; rewardAddress?: DeliveryDependencies["rewardAddress"]; multicall?: DeliveryDependencies["multicall"] } = {}) {
+function setup(options: { deliveryRouter?: DeliveryDependencies["deliveryRouter"]; rewardAddress?: DeliveryDependencies["rewardAddress"]; multicall?: DeliveryDependencies["multicall"] } = {}) {
   const chain = fakeChain();
   chain.executionGas = ITEM_GAS - BATCH_ITEM_OVERHEAD_GAS;
   chain.feeTokens = FEE_WEI;
@@ -79,7 +79,7 @@ function setup(options: { feeRouter?: DeliveryDependencies["feeRouter"]; rewardA
     prover: fakeProver(),
     indexer: fakeIndexer([], {}),
     source: { findMessageLogIndex: async () => 0 },
-    feeRouter: options.feeRouter === undefined ? FEE_ROUTER : options.feeRouter,
+    deliveryRouter: options.deliveryRouter === undefined ? DELIVERY_ROUTER : options.deliveryRouter,
     multicall: options.multicall === undefined ? MULTICALL : options.multicall,
     rewardAddress: options.rewardAddress === undefined ? REWARD_ADDRESS : options.rewardAddress,
     wrappedNative: WRAPPED_NATIVE,
@@ -141,13 +141,13 @@ const MINED = word(0xee);
 
 describe("the configuration that a batch needs", () => {
   it.each([
-    ["the fee router", { feeRouter: null }],
+    ["the delivery router", { deliveryRouter: null }],
     ["the reward address", { rewardAddress: null }],
     ["the Multicall3 address", { multicall: null }],
   ])("refuses to start without %s, and touches neither the chain nor the ledger", async (_name, missing) => {
     const { chain, dependencies, ledger } = setup(missing);
     await expect(sendBatch(dependencies, ledger, { readies: [readyItem(1)], update: null })).rejects.toThrow(
-      "a batch needs a fee router, a reward address and a Multicall3 address, and the runner has none",
+      "a batch needs a delivery router, a reward address and a Multicall3 address, and the runner has none",
     );
     expect(chain.log).toEqual([]);
     expect(ledger.calls).toEqual([]);
@@ -256,7 +256,7 @@ describe("the read under the gas limit of the send", () => {
       {
         status: "delivered",
         messageId: word(1),
-        path: "fee-router",
+        path: "delivery-router",
         transactionHash: MINED,
         gasUsed: ITEM_GAS,
         gasCostWei: ITEM_COST_WEI,
@@ -269,7 +269,7 @@ describe("the read under the gas limit of the send", () => {
     const sent = chain.log.filter((entry) => entry.kind === "send");
     expect(sent).toHaveLength(1);
     const decoded = decodeFunctionData({ abi: multicall3Abi, data: sent[0]?.request.data as Hex });
-    expect(decoded.functionName === "aggregate3" ? decoded.args[0].map((call) => call.target) : []).toEqual([FEE_ROUTER]);
+    expect(decoded.functionName === "aggregate3" ? decoded.args[0].map((call) => call.target) : []).toEqual([DELIVERY_ROUTER]);
     expect(events().filter((event) => event.event === "delivery_batch_mined")).toHaveLength(1);
   });
 
@@ -362,7 +362,7 @@ describe("the receipt of a batch", () => {
       {
         status: "delivered",
         messageId: word(1),
-        path: "fee-router",
+        path: "delivery-router",
         transactionHash: MINED,
         gasUsed: ITEM_GAS,
         gasCostWei: ITEM_COST_WEI,

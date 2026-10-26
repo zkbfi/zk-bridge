@@ -2,7 +2,7 @@ import { isAddress, type Address, type Hex } from "viem";
 import { sameAddress, ZERO_ADDRESS } from "./address.js";
 
 /**
- * The guard for the data of a relay to a `FeeRouter`.
+ * The guard for the data of a relay to a `DeliveryRouter`.
  *
  * The router hands the value to its failed delivery address when the terms are invalid: a recipient that is the zero
  * address or the router itself (after the tip, when the delivery pays one), or data that is neither 20 bytes nor at
@@ -25,7 +25,7 @@ export interface ProtectedAddress {
 export interface FeeTermsContext {
   /** The router that receives the relay. */
   readonly router: Address;
-  /** The addresses that a recipient must not be: the fee routers, the mediators and the bridges of the deployment. */
+  /** The addresses that a recipient must not be: the delivery routers, the mediators and the bridges of the deployment. */
   readonly protectedAddresses: readonly ProtectedAddress[];
 }
 
@@ -49,30 +49,30 @@ export interface ProtectedChain {
   readonly name: string;
   readonly bridge: Address;
   readonly mediator: Address;
-  readonly feeRouter: Address | null;
+  readonly deliveryRouter: Address | null;
 }
 
 /**
- * Lists the addresses that a fee recipient must never be: for each chain the fee router, the mediator and the bridge.
+ * Lists the addresses that a fee recipient must never be: for each chain the delivery router, the mediator and the bridge.
  *
  * @param chains The chains of the deployment, both sides of the pair.
  */
 export const protectedAddressesOf = (chains: readonly ProtectedChain[]): readonly ProtectedAddress[] =>
   chains.flatMap((chain) => [
-    ...(chain.feeRouter === null ? [] : [{ label: `the fee router of ${chain.name}`, address: chain.feeRouter }]),
+    ...(chain.deliveryRouter === null ? [] : [{ label: `the delivery router of ${chain.name}`, address: chain.deliveryRouter }]),
     { label: `the mediator of ${chain.name}`, address: chain.mediator },
     { label: `the bridge of ${chain.name}`, address: chain.bridge },
   ]);
 
 /**
- * True when the address is one of the fee routers in the list. The terminal and the web page use it to decide that a
+ * True when the address is one of the delivery routers in the list. The terminal and the web page use it to decide that a
  * receiver is a router, so a hand written relay to a router gets the same check as a delivery fee.
  *
  * @param address Any address.
  * @param chains The chains of the deployment.
  */
-export const isKnownFeeRouter = (address: Address, chains: readonly ProtectedChain[]): boolean =>
-  chains.some((chain) => chain.feeRouter !== null && sameAddress(chain.feeRouter, address));
+export const isKnownDeliveryRouter = (address: Address, chains: readonly ProtectedChain[]): boolean =>
+  chains.some((chain) => chain.deliveryRouter !== null && sameAddress(chain.deliveryRouter, address));
 
 const bytesOf = (data: Hex): number => (data.length - 2) / 2;
 
@@ -92,11 +92,11 @@ const recipientOf = (data: Hex, length: number): Address => {
 export const assertValidFeeTerms = (input: FeeTermsInput): void => {
   const { data, router } = input;
   if (!isAddress(router, { strict: false })) throw new FeeTermsError("The router is not an address.");
-  if (!/^0x([0-9a-fA-F]{2})*$/.test(data)) throw new FeeTermsError("The call data to a fee router must be hex with an even number of digits.");
+  if (!/^0x([0-9a-fA-F]{2})*$/.test(data)) throw new FeeTermsError("The call data to a delivery router must be hex with an even number of digits.");
   const length = bytesOf(data);
   if (length !== LEGACY_RECEIVER_BYTES && length !== DIRECTOR_DATA_BYTES) {
     throw new FeeTermsError(
-      `The call data to a fee router must be the ${DIRECTOR_DATA_BYTES} byte fee terms, not ${length} bytes. The router hands other data to its failed delivery address.`,
+      `The call data to a delivery router must be the ${DIRECTOR_DATA_BYTES} byte fee terms, not ${length} bytes. The router hands other data to its failed delivery address.`,
     );
   }
   if (length === LEGACY_RECEIVER_BYTES) assertLegacyToken(input);

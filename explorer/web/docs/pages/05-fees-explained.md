@@ -60,7 +60,7 @@ The interface sends your tokens to a router on the destination chain, with `rela
 
 ## Who can collect the tip
 
-Only one whitelisted runner can collect tips through a router. The fee router of a deployment names exactly one runner when it is deployed. No owner can change it. Any other account that calls the router fails.
+Only one whitelisted runner can collect tips through a router. The delivery router of a deployment names exactly one runner when it is deployed. No owner can change it. Any other account that calls the router fails.
 
 The router pays the tip to its reward address, and only when that runner delivers the message through the router. The tip comes from your tokens. The recipient gets the rest.
 
@@ -79,11 +79,11 @@ The bridge stays open to everyone. Anyone can call the bridge directly to delive
 Two cases cannot carry a tip. In both cases the interface sends a plain relay and tells you why on the form.
 
 - The wrap route. It wraps the native coin and relays it in one call. This call has no call data, so it has no place for the tip.
-- A destination chain with no fee router in the deployment.
+- A destination chain with no delivery router in the deployment.
 
 ## The router field
 
-The form has an advanced field named "Router". It starts with the fee router of the deployment on the destination chain. You can name another router. The confirm dialog shows the router address. It marks a router that is not the fee router of the deployment. The tip settings are written for the fee router. Another router can read them in a different way. Use it only if you trust it.
+The form has an advanced field named "Router". It starts with the default delivery router on the destination chain. You can name another router. The confirm dialog shows the router address. It marks a router that is not the default delivery router. The tip settings are written for the delivery router. Another router can read them in a different way. Use it only if you trust it.
 
 ## The modes
 

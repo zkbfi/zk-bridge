@@ -29,7 +29,7 @@ describe('the live panel of the bridge form', () => {
     expect(panel()).toBe(
       [
         'Delivery cost on PulseChain',
-        'Router          0x0000000000000000000000000000000000000Aa2 (the fee router of the deployment)',
+        'Router          0x0000000000000000000000000000000000000Aa2 (the default delivery router)',
         'Gas             210000 gas, measured from 40 recent deliveries, p90',
         'Base fee        7 gwei at block 21000000 (2026-10-25T11:59:48.000Z)',
         'Cost            gas 0.00168 PLS + proof 0.000008 PLS + margin -0.00164804 PLS',

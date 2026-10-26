@@ -11,7 +11,7 @@ import { buildDeliveryReport, buildFixtureContext } from "../helpers";
 
 const usdc = FIXTURE_TOKENS[0]!;
 const receiver = getAddress(`0x${"cd".repeat(20)}`);
-const feeRouter = FIXTURE_PAIR.second.contracts.feeRouter!;
+const deliveryRouter = FIXTURE_PAIR.second.contracts.deliveryRouter!;
 
 const values = (overrides: Partial<BridgeFormValues> = {}): BridgeFormValues => ({
   token: `first:${usdc.address}`,
@@ -23,7 +23,7 @@ const values = (overrides: Partial<BridgeFormValues> = {}): BridgeFormValues => 
   ...overrides,
 });
 
-const ROUTERS = { router: feeRouter, defaultRouter: feeRouter } as const;
+const ROUTERS = { router: deliveryRouter, defaultRouter: deliveryRouter } as const;
 const WRAPPED_PRICE = senderPriceOfToken({ tokenValueInWei: 10n ** 18n, tokenDecimals: 18 });
 
 const deliveryFor = (mode: "percentage" | "gas-multiplier" | "fixed" = "percentage") => {
@@ -102,12 +102,12 @@ describe("planBridgeSteps without a delivery fee: calldata equals what the termi
 });
 
 describe("planBridgeSteps with a tip", () => {
-  it("sends the tokens to the fee router with the encoded fee director as call data", async () => {
+  it("sends the tokens to the delivery router with the encoded fee director as call data", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
     const delivery = deliveryFor("percentage");
     const [relay] = planBridgeSteps({ values: values(), tokens, context, delivery });
     expect(relay!.plan.data).toBe(
-      encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokensAndCall", args: [usdc.address, feeRouter, parseUnits("250", 6), encodeFeeDirector(delivery.director, { router: feeRouter, protectedAddresses: [] })] }),
+      encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokensAndCall", args: [usdc.address, deliveryRouter, parseUnits("250", 6), encodeFeeDirector(delivery.director, { router: deliveryRouter, protectedAddresses: [] })] }),
     );
     const decoded = decodeFunctionData({ abi: tokenMediatorAbi, data: relay!.plan.data });
     const director = decodeFeeDirector(decoded.args![3] as `0x${string}`);
@@ -117,19 +117,19 @@ describe("planBridgeSteps with a tip", () => {
     expect(relay!.disclosure.delivery).toBe(delivery);
   });
 
-  it("explains in the arguments that the receiver is the fee router, and that only its runner is paid", async () => {
+  it("explains in the arguments that the receiver is the delivery router, and that only its runner is paid", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
     const [relay] = planBridgeSteps({ values: values(), tokens, context, delivery: deliveryFor() });
     const argument = relay!.plan.arguments.find((candidate) => candidate.name === "receiver");
-    expect(argument?.meaning).toMatch(/^fee router on PulseChain: pays its one runner the tip/);
+    expect(argument?.meaning).toMatch(/^delivery router on PulseChain: pays its one runner the tip/);
   });
 
-  it("marks a router that is not the fee router of the deployment", async () => {
+  it("marks a router that is not the default delivery router", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
     const other = getAddress(`0x${"ee".repeat(20)}`);
     const delivery = { ...deliveryFor(), router: other };
     const [relay] = planBridgeSteps({ values: values(), tokens, context, delivery });
-    expect(relay!.plan.arguments.find((candidate) => candidate.name === "receiver")?.meaning).toMatch(/^router \(not the fee router of the deployment\) on PulseChain/);
+    expect(relay!.plan.arguments.find((candidate) => candidate.name === "receiver")?.meaning).toMatch(/^router \(not the default delivery router\) on PulseChain/);
     expect(getAddress(decodeFunctionData({ abi: tokenMediatorAbi, data: relay!.plan.data }).args![1] as string)).toBe(other);
   });
 
@@ -180,7 +180,7 @@ describe("other plans stay the terminal's", () => {
   });
 });
 
-describe("planBridgeSteps refuses terms that the fee router would send to its reward address", () => {
+describe("planBridgeSteps refuses terms that the delivery router would send to its reward address", () => {
   const mediator = FIXTURE_PAIR.first.contracts.tokenMediator;
   const bridge = FIXTURE_PAIR.second.contracts.messageBridge;
   const zero = "0x0000000000000000000000000000000000000000";
@@ -189,7 +189,7 @@ describe("planBridgeSteps refuses terms that the fee router would send to its re
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
     const refused: readonly [string, RegExp][] = [
       [zero, /zero address/],
-      [feeRouter, /router itself/],
+      [deliveryRouter, /router itself/],
       [mediator, /mediator of/],
       [bridge, /bridge of/],
     ];
@@ -208,9 +208,9 @@ describe("planBridgeSteps refuses terms that the fee router would send to its re
     expect(() => planBridgeSteps({ values: values(), tokens, context, delivery: aimed })).toThrow(/router itself/);
   });
 
-  it("without a tip, when the receiver is a fee router and the data is not the director", async () => {
+  it("without a tip, when the receiver is a delivery router and the data is not the director", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
-    expect(() => planBridgeSteps({ values: values({ receiver: feeRouter }), tokens, context, delivery: null })).toThrow(PlanInputError);
-    expect(() => planBridgeSteps({ values: values({ receiver: feeRouter, mode: "call", data: "0xabcd" }), tokens, context, delivery: null })).toThrow(/128 byte/);
+    expect(() => planBridgeSteps({ values: values({ receiver: deliveryRouter }), tokens, context, delivery: null })).toThrow(PlanInputError);
+    expect(() => planBridgeSteps({ values: values({ receiver: deliveryRouter, mode: "call", data: "0xabcd" }), tokens, context, delivery: null })).toThrow(/128 byte/);
   });
 });

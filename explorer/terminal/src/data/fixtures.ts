@@ -46,7 +46,7 @@ export const FIXTURE_PAIR: PairConfig = {
       wrappedNativeRouter: address('d1'),
       wrappedNative: address('e1'),
       gate: address('f1'),
-      feeRouter: null,
+      deliveryRouter: null,
     },
   },
   second: {
@@ -62,7 +62,7 @@ export const FIXTURE_PAIR: PairConfig = {
       wrappedNativeRouter: address('d2'),
       wrappedNative: address('e2'),
       gate: address('f2'),
-      feeRouter: address('aa2'),
+      deliveryRouter: address('aa2'),
     },
   },
 }

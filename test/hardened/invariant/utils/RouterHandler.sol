@@ -5,7 +5,7 @@ import {Vm} from "forge-std/Vm.sol";
 import {IAMB} from "../../../../src/hardened/IAMB.sol";
 import {MessageBridge} from "../../../../src/hardened/MessageBridge.sol";
 import {FeeSchedule} from "../../../../src/hardened/mediator/FeeSchedule.sol";
-import {FeeRouter} from "../../../../src/hardened/mediator/FeeRouter.sol";
+import {DeliveryRouter} from "../../../../src/hardened/mediator/DeliveryRouter.sol";
 import {TokenMediator} from "../../../../src/hardened/mediator/TokenMediator.sol";
 import {WETHOmnibridgeRouter} from "../../../../src/hardened/mediator/WETHOmnibridgeRouter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -28,11 +28,11 @@ struct Probe {
 
 /// @notice One message that an operation delivers.
 /// @param messageId The position in the list of messages of the handler.
-/// @param executor The fee router that executes the message, or the zero address for a direct execution.
+/// @param executor The delivery router that executes the message, or the zero address for a direct execution.
 /// @param reading What the message delivers.
 /// @param universe The token of the universe that the delivery pays.
 /// @param payee The account that should end with the value after the fee and the tip: the recipient of the terms for a
-/// fee router, the receiver in the data for the legacy form and the wrapped router, and the recipient otherwise.
+/// delivery router, the receiver in the data for the legacy form and the wrapped router, and the recipient otherwise.
 /// @param payeeBefore What the payee holds before, in the sense of `held`.
 struct Item {
     uint256 messageId;
@@ -46,7 +46,7 @@ struct Item {
 /// @notice Drives the two chains of `RouterWorld` with random sequences and checks every delivery against the rules that
 /// the contracts state.
 /// @dev What it does. Senders relay native tokens and bridged copies both ways, through the plain forms, the forms with a
-/// fallback, the forms with a call, a fee router, the wrapped native router, and the wrap and relay form. Messages
+/// fallback, the forms with a call, a delivery router, the wrapped native router, and the wrap and relay form. Messages
 /// wait in a list and arrive in random order, by three paths: directly, through `executeMessageWithRunner` with the
 /// runner as origin, and in a batch through Multicall3 with the runner as origin. Time moves, accounts wrap and unwrap the
 /// coin, accounts are denied and allowed, claims are paid, fees are collected, and strangers send tokens to a mediator.
@@ -263,14 +263,14 @@ contract RouterHandler is RouterWorld {
         }
     }
 
-    /// @notice Pays a record of a fee router. Anyone may call the router, and it pays its failed delivery address only.
+    /// @notice Pays a record of a delivery router. Anyone may call the router, and it pays its failed delivery address only.
     /// The seed chooses where the search starts. A token that refuses the address may refuse the claim, and the record
     /// must then stay. Any other claim must pay the whole record to that address, and clear it.
     function claimFromRouter(uint8 universeSeed) external observed {
         for (uint256 step = 0; step < UNIVERSE; step++) {
             uint256 universe = (universeSeed + step) % UNIVERSE;
             address token = tokenAt(universe);
-            FeeRouter router = _routerWithRecord(universe);
+            DeliveryRouter router = _routerWithRecord(universe);
             if (address(router) == address(0)) continue;
             uint256 recorded = router.claimable(token, failedSink);
             uint256 before = balanceOrZero(token, failedSink);
@@ -325,7 +325,7 @@ contract RouterHandler is RouterWorld {
     /// must revert, and no message may execute.
     function attack(uint8 kindSeed, uint8 routerSeed) external observed {
         uint256 chain = routerSeed % 2;
-        FeeRouter router = feeRouterAt(chain, (routerSeed >> 1) % ROUTERS_PER_CHAIN);
+        DeliveryRouter router = deliveryRouterAt(chain, (routerSeed >> 1) % ROUTERS_PER_CHAIN);
         MessageBridge.MessageProof memory proof = bridgeOf(chain).proofOf(bridgeOf(1 - chain), 0);
         uint256 kind = kindSeed % 6;
         uint256 executedBefore = _executionTotal();
@@ -340,12 +340,12 @@ contract RouterHandler is RouterWorld {
 
     // ---------------------------------------------------------------------------------------------- modifier
 
-    function _routerWithRecord(uint256 universe) private view returns (FeeRouter) {
+    function _routerWithRecord(uint256 universe) private view returns (DeliveryRouter) {
         uint256 chain = chainOfToken(universe);
         for (uint256 k = 0; k < ROUTERS_PER_CHAIN; k++) {
-            if (feeRouterAt(chain, k).claimable(tokenAt(universe), failedSink) != 0) return feeRouterAt(chain, k);
+            if (deliveryRouterAt(chain, k).claimable(tokenAt(universe), failedSink) != 0) return deliveryRouterAt(chain, k);
         }
-        return FeeRouter(payable(address(0)));
+        return DeliveryRouter(payable(address(0)));
     }
 
     /// @dev Checks after every action: the fee rate of each chain never rises, never passes its start and never falls
@@ -434,8 +434,8 @@ contract RouterHandler is RouterWorld {
         }
     }
 
-    function _routerOf(Plan memory plan) private view returns (FeeRouter) {
-        return feeRouterAt(1 - plan.source, uint8(plan.detail >> 16) % ROUTERS_PER_CHAIN);
+    function _routerOf(Plan memory plan) private view returns (DeliveryRouter) {
+        return deliveryRouterAt(1 - plan.source, uint8(plan.detail >> 16) % ROUTERS_PER_CHAIN);
     }
 
     /// @dev The data of the relay: empty for the plain routes, a call for route 2, the terms for route 3, and the
@@ -448,7 +448,7 @@ contract RouterHandler is RouterWorld {
         return "";
     }
 
-    /// @dev The data for a fee router: the terms, or one time in eight data of no known shape (bits 144.. equal 1).
+    /// @dev The data for a delivery router: the terms, or one time in eight data of no known shape (bits 144.. equal 1).
     function _termsData(Plan memory plan, address receiver) private view returns (bytes memory) {
         if (uint8(plan.detail >> 144) % 8 == 1) return new bytes(_oddLengthFor(plan.detail));
         return abi.encode(_director(plan, _invalidOr(plan, receiver)));
@@ -496,10 +496,10 @@ contract RouterHandler is RouterWorld {
         }
     }
 
-    /// @dev The fee terms for one message to a fee router. The seeds reach a fixed fee, a share, a gas based fee that
+    /// @dev The fee terms for one message to a delivery router. The seeds reach a fixed fee, a share, a gas based fee that
     /// reads the price of the transaction, a gas based fee that reads the base fee, with and without the unwrap bit, and
     /// a limit that is below, near and above the value.
-    function _director(Plan memory plan, address receiver) private view returns (FeeRouter.FeeDirector memory) {
+    function _director(Plan memory plan, address receiver) private view returns (DeliveryRouter.FeeDirector memory) {
         uint256 detail = plan.detail;
         uint256 shape = uint8(detail >> 32) % 4;
         uint256 settings = shape == 0 ? 1 : shape == 1 ? 8 : shape == 2 ? 0 : 4;
@@ -507,7 +507,7 @@ contract RouterHandler is RouterWorld {
         uint256 limitKind = uint8(detail >> 48) % 4;
         uint256 limit = limitKind == 0 ? plan.amount : limitKind == 1 ? 0 : bound(detail >> 56, 0, plan.amount);
         uint256 multiplier = shape == 1 ? bound(detail >> 120, 0, 1.5e18) : bound(detail >> 120, 0, 5e18);
-        return FeeRouter.FeeDirector(receiver, settings, limit, multiplier);
+        return DeliveryRouter.FeeDirector(receiver, settings, limit, multiplier);
     }
 
     function _refused(string memory reason) private returns (bool) {
@@ -569,10 +569,10 @@ contract RouterHandler is RouterWorld {
     function _executorFor(address recipient, uint256 destination, uint256 pick) private view returns (address) {
         if (pick != 0) {
             for (uint256 k = 0; k < ROUTERS_PER_CHAIN; k++) {
-                if (recipient == address(feeRouterAt(destination, k))) return recipient;
+                if (recipient == address(deliveryRouterAt(destination, k))) return recipient;
             }
         }
-        return address(feeRouterAt(destination, pick % ROUTERS_PER_CHAIN));
+        return address(deliveryRouterAt(destination, pick % ROUTERS_PER_CHAIN));
     }
 
     function _itemFor(uint256 id) private view returns (Item memory item) {
@@ -585,7 +585,7 @@ contract RouterHandler is RouterWorld {
         item.payeeBefore = standing(item.universe, item.payee);
     }
 
-    /// @dev Who ends with the value after the fee and the tip. A fee router pays the recipient of the terms, or the
+    /// @dev Who ends with the value after the fee and the tip. A delivery router pays the recipient of the terms, or the
     /// receiver that the 20 byte data names, and hands off to its failed delivery address when it cannot. The wrapped
     /// router pays the receiver that its 20 byte data names.
     function _payeeOf(MessageReading.Reading memory reading, uint256 universe) private view returns (address) {
@@ -594,13 +594,13 @@ contract RouterHandler is RouterWorld {
         if (reading.recipient == address(wethRouters[chain])) {
             return reading.callData.length == 20 ? address(bytes20(reading.callData)) : reading.recipient;
         }
-        if (!_isFeeRouter(reading.recipient, chain)) return reading.recipient;
+        if (!_isDeliveryRouter(reading.recipient, chain)) return reading.recipient;
         // Invalid terms, a payout that the token refuses and data of no known shape all go to the failed delivery
         // address.
-        FeeRouter router = FeeRouter(payable(reading.recipient));
+        DeliveryRouter router = DeliveryRouter(payable(reading.recipient));
         if (reading.callData.length == 20) return _deliverableOr(router, universe, address(bytes20(reading.callData)));
         if (reading.callData.length != 128) return router.failedDeliveryAddress();
-        return _deliverableOr(router, universe, abi.decode(reading.callData, (FeeRouter.FeeDirector)).recipient);
+        return _deliverableOr(router, universe, abi.decode(reading.callData, (DeliveryRouter.FeeDirector)).recipient);
     }
 
     /// @dev The deny list token itself refuses accounts. Its bridged copy (universe 9) is a plain mint and refuses nobody.
@@ -608,7 +608,7 @@ contract RouterHandler is RouterWorld {
 
     /// @dev `account` when the router can pay it, and the failed delivery address of the router when it cannot: the
     /// account is invalid, or the deny list token refuses it.
-    function _deliverableOr(FeeRouter router, uint256 universe, address account) private view returns (address) {
+    function _deliverableOr(DeliveryRouter router, uint256 universe, address account) private view returns (address) {
         bool refused = universe == DENY_TOKEN_UNIVERSE && denyToken.denied(account);
         return account == address(0) || account == address(router) || refused ? router.failedDeliveryAddress() : account;
     }
@@ -689,7 +689,7 @@ contract RouterHandler is RouterWorld {
 
     function _routerCall(Item memory item, MockAMB bridge) private view returns (Multicall3.Call3 memory) {
         Message storage message = _messages[item.messageId];
-        FeeRouter router = FeeRouter(payable(item.executor));
+        DeliveryRouter router = DeliveryRouter(payable(item.executor));
         MessageBridge.MessageProof memory proof = bridge.proofOf(bridgeOf(message.sourceChain), message.index);
         return Multicall3.Call3(
             item.executor, true, abi.encodeCall(router.executeMessageWithRunner, (proof, router.rewardAddress()))
@@ -708,10 +708,10 @@ contract RouterHandler is RouterWorld {
                     _violate("the call of a delivery failed");
                 }
             }
-            if (logs[i].topics[0] == FeeRouter.DeliveryFailed.selector && _isFeeRouter(logs[i].emitter, destination)) {
-                FeeRouter.Reason cause = abi.decode(_dataAfterAmount(logs[i].data), (FeeRouter.Reason));
-                if (cause == FeeRouter.Reason.PayoutRefused) payoutsRefused++;
-                if (cause == FeeRouter.Reason.InvalidTerms) termsForfeited++;
+            if (logs[i].topics[0] == DeliveryRouter.DeliveryFailed.selector && _isDeliveryRouter(logs[i].emitter, destination)) {
+                DeliveryRouter.Reason cause = abi.decode(_dataAfterAmount(logs[i].data), (DeliveryRouter.Reason));
+                if (cause == DeliveryRouter.Reason.PayoutRefused) payoutsRefused++;
+                if (cause == DeliveryRouter.Reason.InvalidTerms) termsForfeited++;
             }
             if (logs[i].emitter != address(mediatorOf(destination))) continue;
             bytes32 topic = logs[i].topics[0];
@@ -794,14 +794,14 @@ contract RouterHandler is RouterWorld {
     /// the smaller of the limit and the gas bound; and never more than the value after the protocol fee.
     function _tipCap(Item memory item, uint256 j, uint256 rate, uint256 gasUsed) private view returns (uint256) {
         if (item.executor == address(0) || item.executor != item.reading.recipient) return 0;
-        if (item.executor != address(feeRouterAt(chainOfToken(item.universe), j))) return 0;
+        if (item.executor != address(deliveryRouterAt(chainOfToken(item.universe), j))) return 0;
         if (item.reading.callData.length != 128) return 0;
-        FeeRouter.FeeDirector memory director = abi.decode(item.reading.callData, (FeeRouter.FeeDirector));
+        DeliveryRouter.FeeDirector memory director = abi.decode(item.reading.callData, (DeliveryRouter.FeeDirector));
         uint256 net = item.reading.value - FeeSchedule.feeOn(item.reading.value, rate);
         return _directorCap(director, net, gasUsed);
     }
 
-    function _directorCap(FeeRouter.FeeDirector memory director, uint256 net, uint256 gasUsed)
+    function _directorCap(DeliveryRouter.FeeDirector memory director, uint256 net, uint256 gasUsed)
         private
         view
         returns (uint256 cap)
@@ -830,11 +830,11 @@ contract RouterHandler is RouterWorld {
         }
         uint256 got = standing(item.universe, item.payee) - item.payeeBefore;
         if (item.reading.recipient == address(wethRouters[destination])) wethRouterDeliveries++;
-        bool legacyToRouter = item.reading.callData.length == 20 && _isFeeRouter(item.reading.recipient, destination);
+        bool legacyToRouter = item.reading.callData.length == 20 && _isDeliveryRouter(item.reading.recipient, destination);
         if (legacyToRouter && !isWrappedNativeOfItsChain(item.universe)) legacyTokenPayouts++;
-        if (item.reading.callData.length == 128 && _isFeeRouter(item.reading.recipient, destination)) {
+        if (item.reading.callData.length == 128 && _isDeliveryRouter(item.reading.recipient, destination)) {
             bool attributed = item.executor == item.reading.recipient;
-            bool invalid = _isInvalid(abi.decode(item.reading.callData, (FeeRouter.FeeDirector)).recipient, item.reading.recipient);
+            bool invalid = _isInvalid(abi.decode(item.reading.callData, (DeliveryRouter.FeeDirector)).recipient, item.reading.recipient);
             if (invalid && !attributed && tip != 0) _violate("a direct delivery paid a tip");
             if (invalid && attributed && tip != 0) tippedInvalidTerms++;
             if (attributed && !invalid) routedDeliveries++;
@@ -848,7 +848,7 @@ contract RouterHandler is RouterWorld {
     }
 
     function _checkAttributed(Item memory item, uint256 net, uint256 tip, uint256 gasUsed) private {
-        FeeRouter.FeeDirector memory director = abi.decode(item.reading.callData, (FeeRouter.FeeDirector));
+        DeliveryRouter.FeeDirector memory director = abi.decode(item.reading.callData, (DeliveryRouter.FeeDirector));
         uint256 rewardIndex = _rewardIndexOf(item);
         bool payoutNative = director.settings & 2 != 0 && isWrappedNativeOfItsChain(item.universe);
         bool rewardAccepts = !payoutNative || rewardIndex == 0;
@@ -866,25 +866,25 @@ contract RouterHandler is RouterWorld {
         return recipient == address(0) || recipient == router;
     }
 
-    function _isFeeRouter(address account, uint256 chain) private view returns (bool) {
+    function _isDeliveryRouter(address account, uint256 chain) private view returns (bool) {
         for (uint256 k = 0; k < ROUTERS_PER_CHAIN; k++) {
-            if (account == address(feeRouterAt(chain, k))) return true;
+            if (account == address(deliveryRouterAt(chain, k))) return true;
         }
         return false;
     }
 
     function _rewardIndexOf(Item memory item) private view returns (uint256) {
         for (uint256 k = 0; k < ROUTERS_PER_CHAIN; k++) {
-            if (item.executor == address(feeRouterAt(chainOfToken(item.universe), k))) return k;
+            if (item.executor == address(deliveryRouterAt(chainOfToken(item.universe), k))) return k;
         }
-        revert("RouterHandler: not a fee router");
+        revert("RouterHandler: not a delivery router");
     }
 
     // ------------------------------------------------------------------------------------------------- attacks
 
     /// @dev A call of `executeMessageWithRunner` with an origin or a reward address that the router refuses.
     function _attackRunnerEntry(
-        FeeRouter router,
+        DeliveryRouter router,
         MessageBridge.MessageProof memory proof,
         address origin,
         address reward
@@ -915,7 +915,7 @@ contract RouterHandler is RouterWorld {
         if (!ok) attacksRefused++;
     }
 
-    function _attackThroughMulticall(FeeRouter router, MessageBridge.MessageProof memory proof) private {
+    function _attackThroughMulticall(DeliveryRouter router, MessageBridge.MessageProof memory proof) private {
         Multicall3.Call3[] memory calls = new Multicall3.Call3[](1);
         calls[0] = Multicall3.Call3(
             address(router), true, abi.encodeCall(router.executeMessageWithRunner, (proof, router.rewardAddress()))

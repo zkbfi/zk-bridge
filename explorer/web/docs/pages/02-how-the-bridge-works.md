@@ -76,7 +76,7 @@ Your send is older than the finality window. No stored head covers it yet. Despi
 
 ### Covered
 
-The destination light client stored a head at or after the block of your send. Anyone can now prove and deliver your message. If you left the tip on, the runner of the fee router is likely to deliver it soon.
+The destination light client stored a head at or after the block of your send. Anyone can now prove and deliver your message. If you left the tip on, the runner of the delivery router is likely to deliver it soon.
 
 ### Delivered
 

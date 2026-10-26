@@ -1,24 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { BotConfigError } from "../../src/config/bot-config.ts";
 import { requireRewardAddress, requireWhitelistedRunner } from "../../src/runner/whitelist.ts";
-import { FEE_ROUTER, address } from "../support/builders.ts";
+import { DELIVERY_ROUTER, address } from "../support/builders.ts";
 
 const SIGNER = address(0x31);
 const OTHER = address(0x32);
 
 const clientWith = (answer: () => Promise<`0x${string}`>) => ({
   readContract: (async (request: { address: string; functionName: string }) => {
-    expect(request.address).toBe(FEE_ROUTER);
+    expect(request.address).toBe(DELIVERY_ROUTER);
     expect(request.functionName).toBe("runner");
     return answer();
   }) as never,
 });
 
 const check = (answer: () => Promise<`0x${string}`>, signerAddress = SIGNER) =>
-  requireWhitelistedRunner({ client: clientWith(answer), feeRouter: FEE_ROUTER, signerAddress, chainName: "PulseChain" });
+  requireWhitelistedRunner({ client: clientWith(answer), deliveryRouter: DELIVERY_ROUTER, signerAddress, chainName: "PulseChain" });
 
-describe("the whitelisted runner of the fee router", () => {
-  it("starts when FeeRouter.runner() is the address of the signer", async () => {
+describe("the whitelisted runner of the delivery router", () => {
+  it("starts when DeliveryRouter.runner() is the address of the signer", async () => {
     await expect(check(async () => SIGNER)).resolves.toBeUndefined();
   });
 
@@ -44,17 +44,17 @@ describe("the whitelisted runner of the fee router", () => {
       check(async () => {
         throw "connection closed";
       }),
-    ).rejects.toThrow(`Cannot read runner() of the fee router ${FEE_ROUTER} on PulseChain: connection closed`);
+    ).rejects.toThrow(`Cannot read runner() of the delivery router ${DELIVERY_ROUTER} on PulseChain: connection closed`);
   });
 });
 
-describe("the reward address of the fee router", () => {
+describe("the reward address of the delivery router", () => {
   const REWARD = address(0x41);
   const OTHER_REWARD = address(0x42);
 
   const rewardClient = (answer: () => Promise<`0x${string}`>) => ({
     readContract: (async (request: { address: string; functionName: string }) => {
-      expect(request.address).toBe(FEE_ROUTER);
+      expect(request.address).toBe(DELIVERY_ROUTER);
       expect(request.functionName).toBe("rewardAddress");
       return answer();
     }) as never,
@@ -63,7 +63,7 @@ describe("the reward address of the fee router", () => {
   const checkReward = (input: { stored?: () => Promise<`0x${string}`>; configured?: `0x${string}` | undefined; signer?: `0x${string}` }) =>
     requireRewardAddress({
       client: rewardClient(input.stored ?? (async () => REWARD)),
-      feeRouter: FEE_ROUTER,
+      deliveryRouter: DELIVERY_ROUTER,
       rewardAddress: "configured" in input ? input.configured : REWARD,
       signerAddress: input.signer ?? SIGNER,
       chainName: "PulseChain",
@@ -108,6 +108,6 @@ describe("the reward address of the fee router", () => {
           throw "connection closed";
         },
       }),
-    ).rejects.toThrow(`Cannot read rewardAddress() of the fee router ${FEE_ROUTER} on PulseChain: connection closed`);
+    ).rejects.toThrow(`Cannot read rewardAddress() of the delivery router ${DELIVERY_ROUTER} on PulseChain: connection closed`);
   });
 });

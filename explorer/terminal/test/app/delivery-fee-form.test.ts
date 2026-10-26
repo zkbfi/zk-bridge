@@ -46,18 +46,18 @@ function readyModel(state: DeliveryFeeState) {
 }
 
 describe('resolveDeliveryTarget', () => {
-  test('names the fee router of the destination chain, not of the source chain', () => {
+  test('names the delivery router of the destination chain, not of the source chain', () => {
     const target = targetFor(baseValues)
     expect(target.chain.name).toBe('PulseChain')
-    expect(target.router).toBe(FIXTURE_PAIR.second.contracts.feeRouter!)
+    expect(target.router).toBe(FIXTURE_PAIR.second.contracts.deliveryRouter!)
     expect(target.token).toEqual({ symbol: 'zkbUSDC', decimals: 6 })
   })
 
-  test('says so and offers nothing when the deployment names no fee router for the destination', () => {
-    const wpls = FIXTURE_TOKENS[4]! // on PulseChain, so the destination is Ethereum, which has no fee router
+  test('says so and offers nothing when the deployment names no delivery router for the destination', () => {
+    const wpls = FIXTURE_TOKENS[4]! // on PulseChain, so the destination is Ethereum, which has no delivery router
     const values = { ...baseValues, token: `second:${wpls.address}` }
     const result = resolveDeliveryTarget({ source: bridgeSourceOf(values, FIXTURE_TOKENS, FIXTURE_PAIR), pair: FIXTURE_PAIR, tokens: FIXTURE_TOKENS, valuations: {} })
-    expect(result).toEqual({ kind: 'unavailable', reason: 'The deployment names no fee router for Ethereum, so a delivery fee is not offered.' })
+    expect(result).toEqual({ kind: 'unavailable', reason: 'The deployment names no delivery router for Ethereum, so a delivery fee is not offered.' })
   })
 
   test('the wrap and relay route carries no call data, so it is unavailable', () => {
@@ -188,10 +188,10 @@ describe('buildDeliveryFeeModel', () => {
   })
 
   test('the router is the one of the deployment unless the form names another', () => {
-    expect(readyModel(stateFor(baseValues)).router).toBe(FIXTURE_PAIR.second.contracts.feeRouter!)
+    expect(readyModel(stateFor(baseValues)).router).toBe(FIXTURE_PAIR.second.contracts.deliveryRouter!)
     const other = '0x00000000000000000000000000000000000000f7'
-    expect(readyModel(stateFor({ ...baseValues, feeRouter: other })).router).toBe(getAddress(other))
-    const bad = stateFor({ ...baseValues, feeRouter: 'abc' })
+    expect(readyModel(stateFor({ ...baseValues, deliveryRouter: other })).router).toBe(getAddress(other))
+    const bad = stateFor({ ...baseValues, deliveryRouter: 'abc' })
     expect(bad.kind === 'unavailable' && bad.reason).toContain('router')
   })
 

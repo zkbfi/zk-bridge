@@ -3,7 +3,7 @@
  * address when the terms are invalid, so no form may build such a transfer. This module gives the shared guard the
  * addresses of the deployment and turns its error into a {@link PlanInputError}.
  */
-import { FeeTermsError, assertValidFeeTerms, encodeFeeDirector, isKnownFeeRouter, protectedAddressesOf, type FeeDirector, type FeeTermsContext, type ProtectedChain } from '@zk-bridge/shared'
+import { FeeTermsError, assertValidFeeTerms, encodeFeeDirector, isKnownDeliveryRouter, protectedAddressesOf, type FeeDirector, type FeeTermsContext, type ProtectedChain } from '@zk-bridge/shared'
 import type { Address, Hex } from 'viem'
 import type { ChainConfig, PairConfig } from '../model/types'
 import { PlanInputError } from './plan'
@@ -12,7 +12,7 @@ const protectedChainOf = (chain: ChainConfig): ProtectedChain => ({
   name: chain.name,
   bridge: chain.contracts.messageBridge,
   mediator: chain.contracts.tokenMediator,
-  feeRouter: chain.contracts.feeRouter,
+  deliveryRouter: chain.contracts.deliveryRouter,
 })
 
 /** Both chains of the pair, as the shared guard reads them. */
@@ -24,8 +24,8 @@ export const feeTermsContextOf = (pair: PairConfig, router: Address): FeeTermsCo
   protectedAddresses: protectedAddressesOf(protectedChainsOf(pair)),
 })
 
-/** True when the receiver is a fee router of the deployment, on either chain. */
-export const isDeploymentFeeRouter = (pair: PairConfig, receiver: Address): boolean => isKnownFeeRouter(receiver, protectedChainsOf(pair))
+/** True when the receiver is a default delivery router, on either chain. */
+export const isDeploymentDeliveryRouter = (pair: PairConfig, receiver: Address): boolean => isKnownDeliveryRouter(receiver, protectedChainsOf(pair))
 
 /** Runs a guarded step and reports its refusal as a {@link PlanInputError}. */
 const refusingAsPlanInputError = <Result>(run: () => Result): Result => {

@@ -9,7 +9,7 @@ import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {MockWrappedNative} from "../../../src/mocks/MockWrappedNative.sol";
 import {IAMB} from "../../../src/hardened/IAMB.sol";
 import {MessageBridge} from "../../../src/hardened/MessageBridge.sol";
-import {FeeRouter} from "../../../src/hardened/mediator/FeeRouter.sol";
+import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol";
 import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
 import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol";
 import {IWETH} from "../../../src/hardened/mediator/IWETH.sol";
@@ -34,7 +34,7 @@ contract CountingTarget {
 }
 
 /// @notice Drives the real `MessageBridge` pair of `WorldSupport` with real proofs. Messages go both ways: application
-/// messages, tokens to accounts and tokens to a `FeeRouter` with a tip. Deliveries come in four forms: a direct call, the
+/// messages, tokens to accounts and tokens to a `DeliveryRouter` with a tip. Deliveries come in four forms: a direct call, the
 /// router with the runner as origin, a Multicall3 batch with the runner as origin, and replays of delivered messages. A
 /// proof is built once at send time, and the handler delivers it at any later point, in any order.
 /// @dev What this handler claims. It counts every execution that did not revert, for each identifier (`executions`). The
@@ -57,8 +57,8 @@ contract RealBridgeHandler is WorldSupport {
 
     MockERC20 public nativeToken;
     CountingTarget public countingTarget;
-    FeeRouter public routerA;
-    FeeRouter public routerB;
+    DeliveryRouter public routerA;
+    DeliveryRouter public routerB;
     Multicall3 public multicall;
     address public runner = makeAddr("real bridge runner");
     address public rewardA = makeAddr("real bridge reward on A");
@@ -98,8 +98,8 @@ contract RealBridgeHandler is WorldSupport {
         nativeToken = new MockERC20("Token A", "TKA");
         countingTarget = new CountingTarget();
         multicall = new Multicall3();
-        routerA = new FeeRouter(ITokenMediator(address(mediatorA)), IWETH(address(new MockWrappedNative())), runner, rewardA, rewardA);
-        routerB = new FeeRouter(ITokenMediator(address(mediatorB)), IWETH(address(new MockWrappedNative())), runner, rewardB, rewardB);
+        routerA = new DeliveryRouter(ITokenMediator(address(mediatorA)), IWETH(address(new MockWrappedNative())), runner, rewardA, rewardA);
+        routerB = new DeliveryRouter(ITokenMediator(address(mediatorB)), IWETH(address(new MockWrappedNative())), runner, rewardB, rewardB);
         _actors.push(alice);
         _actors.push(bob);
         _actors.push(carol);
@@ -342,7 +342,7 @@ contract RealBridgeHandler is WorldSupport {
     }
 
     /// @dev The encoded fee terms for a router and the tip that they must produce for `amount`.
-    function _directorData(FeeRouter router, uint256 amount, uint8 receiverSeed, uint8 modeSeed, uint96 tipSeed)
+    function _directorData(DeliveryRouter router, uint256 amount, uint8 receiverSeed, uint8 modeSeed, uint96 tipSeed)
         private
         view
         returns (bytes memory data, uint256 tip)
@@ -351,11 +351,11 @@ contract RealBridgeHandler is WorldSupport {
         if (modeSeed % 2 == 0) {
             uint256 multiplier = bound(tipSeed, 0.001 ether, 0.05 ether);
             tip = amount * multiplier / 1 ether;
-            data = abi.encode(FeeRouter.FeeDirector(receiver, router.SHARE_OF_VALUE(), 0, multiplier));
+            data = abi.encode(DeliveryRouter.FeeDirector(receiver, router.SHARE_OF_VALUE(), 0, multiplier));
             return (data, tip);
         }
         tip = bound(tipSeed, 1, amount);
-        data = abi.encode(FeeRouter.FeeDirector(receiver, router.FIXED_FEE(), tip, 0));
+        data = abi.encode(DeliveryRouter.FeeDirector(receiver, router.FIXED_FEE(), tip, 0));
     }
 
     /// @dev Builds the proof of the message among the recorded logs and stores it.
@@ -370,7 +370,7 @@ contract RealBridgeHandler is WorldSupport {
         return message.towardB ? bridgeB : bridgeA;
     }
 
-    function _routerOf(Sent storage message) private view returns (FeeRouter) {
+    function _routerOf(Sent storage message) private view returns (DeliveryRouter) {
         return message.towardB ? routerB : routerA;
     }
 
@@ -413,7 +413,7 @@ contract RealBridgeHandler is WorldSupport {
 
     function _tryRouter(uint256 index, address origin) private returns (bool) {
         Sent storage message = _sent[index];
-        FeeRouter router = _routerOf(message);
+        DeliveryRouter router = _routerOf(message);
         MessageBridge.MessageProof memory proof = abi.decode(message.proof, (MessageBridge.MessageProof));
         address reward = router.rewardAddress();
         vm.chainId(_destinationOf(message).localChainId());
@@ -452,13 +452,13 @@ contract RealBridgeHandler is WorldSupport {
     /// @dev Runs the batch and counts the deliveries that succeeded. Returns how many messages executed.
     function _runBatch(uint256[] memory indexes) private returns (uint256 executed) {
         Sent storage first = _sent[indexes[0]];
-        FeeRouter router = _routerOf(first);
+        DeliveryRouter router = _routerOf(first);
         address reward = router.rewardAddress();
         Multicall3.Call3[] memory calls = new Multicall3.Call3[](indexes.length);
         for (uint256 i = 0; i < indexes.length; i++) {
             MessageBridge.MessageProof memory proof = abi.decode(_sent[indexes[i]].proof, (MessageBridge.MessageProof));
             calls[i] = Multicall3.Call3(
-                address(router), true, abi.encodeCall(FeeRouter.executeMessageWithRunner, (proof, reward))
+                address(router), true, abi.encodeCall(DeliveryRouter.executeMessageWithRunner, (proof, reward))
             );
         }
         vm.chainId(_destinationOf(first).localChainId());
@@ -609,7 +609,7 @@ contract RealBridgeInvariantTest is StdInvariant, Test {
             assertEq(IERC20(token).balanceOf(routers[i]), 0, "the router holds the token");
             assertEq(routers[i].balance, 0, "the router holds the native coin");
             if (copyToken != address(0)) assertEq(IERC20(copyToken).balanceOf(routers[i]), 0, "the router holds the copy");
-            assertLe(uint256(vm.load(routers[i], FeeRouter(payable(routers[i])).RUNNER_SLOT())), 1, "the slot is idle");
+            assertLe(uint256(vm.load(routers[i], DeliveryRouter(payable(routers[i])).RUNNER_SLOT())), 1, "the slot is idle");
         }
     }
 

@@ -38,7 +38,7 @@ The account that calls the delivery function on the destination chain. Anyone ca
 
 The address that gets the tokens when the receiver cannot take them. The default is the sender, at the same address on the other chain.
 
-## Fee router
+## Delivery router
 
 An optional contract on the destination chain. It receives your tokens and pays the tip to its one whitelisted runner, when that runner delivers them through the router. It sends the rest to the recipient. When anyone else delivers on the bridge directly, it pays no tip.
 
@@ -80,7 +80,7 @@ To send tokens or a message across the bridge. The functions of the mediator tha
 
 ## Runner
 
-A person or a program that delivers covered transfers for a tip. A runner holds a wallet on the destination chain. A fee router whitelists one runner to collect tips.
+A person or a program that delivers covered transfers for a tip. A runner holds a wallet on the destination chain. A delivery router whitelists one runner to collect tips.
 
 ## Slot
 
@@ -92,7 +92,7 @@ A group of 512 validators of the source chain. Its members sign the headers they
 
 ## Tip for delivery
 
-A voluntary amount that you offer to a runner for delivering your transfer. The interface sets it by default at 0.1 percent of the transfer. It is separate from the bridge fee. Only the one whitelisted runner of the fee router can collect it. A direct delivery by anyone else pays no tip.
+A voluntary amount that you offer to a runner for delivering your transfer. The interface sets it by default at 0.1 percent of the transfer. It is separate from the bridge fee. Only the one whitelisted runner of the delivery router can collect it. A direct delivery by anyone else pays no tip.
 
 ## Wrapped native token
 

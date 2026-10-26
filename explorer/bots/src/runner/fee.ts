@@ -2,14 +2,14 @@ import type { Address, Hex } from "viem";
 import { decodeFeeDirector, decodeMediatorMessage, FEE_DIRECTOR_BYTES, tokenUnitsToWeiFloor, type FeeDirector } from "@zk-bridge/shared";
 import type { FeeQuote } from "../chain/transactions.ts";
 
-/** The director is the shared one: it matches `FeeRouter.sol` and the vectors of the router (`@zk-bridge/shared`). */
+/** The director is the shared one: it matches `DeliveryRouter.sol` and the vectors of the router (`@zk-bridge/shared`). */
 export type { FeeDirector };
 
 /** Why a message carries no fee offer. */
 export type NoOfferReason =
-  | "no-fee-router-configured"
+  | "no-delivery-router-configured"
   | "not-a-token-message"
-  | "recipient-is-not-the-fee-router"
+  | "recipient-is-not-the-delivery-router"
   | "no-callback-data"
   | "legacy-native-receiver"
   | "malformed-fee-director";
@@ -28,20 +28,20 @@ export type FeeOffer =
 export interface ReadFeeOfferInput {
   /** The call data of the message: a call to the mediator on the destination chain. */
   readonly messageData: Hex;
-  /** The fee router of the destination chain, or null when none is configured. */
-  readonly feeRouter: Address | null;
+  /** The delivery router of the destination chain, or null when none is configured. */
+  readonly deliveryRouter: Address | null;
 }
 
 /**
- * Reads the fee offer of a message. A sender that wants a runner to deliver relays the tokens to the fee router with a
+ * Reads the fee offer of a message. A sender that wants a runner to deliver relays the tokens to the delivery router with a
  * `FeeDirector` as callback data. In the message that is a mediator handler call whose recipient is the router and
  * whose callback data holds the four words of the director.
  */
 export function readFeeOffer(input: ReadFeeOfferInput): FeeOffer {
-  if (input.feeRouter === null) return { kind: "none", reason: "no-fee-router-configured" };
+  if (input.deliveryRouter === null) return { kind: "none", reason: "no-delivery-router-configured" };
   const message = decodeMediatorMessage(input.messageData);
   if (message === null) return { kind: "none", reason: "not-a-token-message" };
-  if (message.recipient.toLowerCase() !== input.feeRouter.toLowerCase()) return { kind: "none", reason: "recipient-is-not-the-fee-router" };
+  if (message.recipient.toLowerCase() !== input.deliveryRouter.toLowerCase()) return { kind: "none", reason: "recipient-is-not-the-delivery-router" };
   if (message.callbackData === null) return { kind: "none", reason: "no-callback-data" };
   const bytes = (message.callbackData.length - 2) / 2;
   if (bytes === 20) return { kind: "none", reason: "legacy-native-receiver" };

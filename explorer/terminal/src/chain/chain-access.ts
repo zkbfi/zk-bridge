@@ -33,7 +33,7 @@ export interface ChainAccess {
   readSnapshots(input: { account: Address; tokens: readonly TokenInfo[] }): Promise<readonly ChainSnapshotResult[]>
   /** The native balance of each address on both chains. A chain that cannot be read gives null. */
   nativeBalances(addresses: readonly Address[]): Promise<readonly NativeBalances[]>
-  /** Reads the reward address and the failed delivery address of a fee router on a chain. It never throws. */
+  /** Reads the reward address and the failed delivery address of a delivery router on a chain. It never throws. */
   readRouterAddresses(input: { chainId: number; router: Address }): Promise<RouterAddressesReading>
   /** The client for the transaction flow of a chain. It throws {@link MissingRpcError} when the URL is not set. */
   flowClient(chainId: number): FlowChainClient

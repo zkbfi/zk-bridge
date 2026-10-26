@@ -9,7 +9,7 @@ import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
 import {TokenMediator} from "../../src/hardened/mediator/TokenMediator.sol";
 import {TokenFactory} from "../../src/hardened/mediator/TokenFactory.sol";
 import {WETHOmnibridgeRouter} from "../../src/hardened/mediator/WETHOmnibridgeRouter.sol";
-import {FeeRouter} from "../../src/hardened/mediator/FeeRouter.sol";
+import {DeliveryRouter} from "../../src/hardened/mediator/DeliveryRouter.sol";
 import {ITokenMediator} from "../../src/hardened/mediator/ITokenMediator.sol";
 import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 
@@ -37,13 +37,13 @@ import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 /// | message bridge          | n + 2               | n + 4                 | always                             |
 /// | token mediator          | n + 3               | n + 5                 | always                             |
 /// | [native coin router]    | n + 4               | n + 6                 | `wrappedNative` is not zero        |
-/// | [fee router]            | next free offset    | next free offset      | `deployFeeRouter` is `true`        |
+/// | [delivery router]            | next free offset    | next free offset      | `deployDeliveryRouter` is `true`        |
 ///
 /// The mediator creates its token factory inside its constructor. The factory is the first contract of the mediator,
 /// so it sits at `computeCreateAddress(mediator, 1)` and takes no deployer nonce. A chain without a wrapped native
-/// token gets no native coin router, and the fee router (which needs that token) is then refused. The fee router takes
-/// the next free offset, so the plan has no gap. The fee router also needs `feeRouter.runner` (the one account that may
-/// deliver through it) and `feeRouter.rewardAddress` (the one address that receives the fees) and `feeRouter.failedDeliveryAddress` (the
+/// token gets no native coin router, and the delivery router (which needs that token) is then refused. The delivery router takes
+/// the next free offset, so the plan has no gap. The delivery router also needs `deliveryRouter.runner` (the one account that may
+/// deliver through it) and `deliveryRouter.rewardAddress` (the one address that receives the fees) and `deliveryRouter.failedDeliveryAddress` (the
 /// address that receives what the router cannot deliver; it may equal the reward address). The runner and the reward
 /// address are separate accounts in practice: the runner is a hot key, the reward address can be cold. The deployment
 /// reads all three back from the router and refuses a mismatch.
@@ -65,10 +65,10 @@ contract DeployBridge is Script {
         uint256 deployerNonce;
         uint64 depositCutoffTimestamp;
         address wrappedNative;
-        RouterChoice feeRouter;
-        address feeRouterRunner;
-        address feeRouterRewardAddress;
-        address feeRouterFailedDeliveryAddress;
+        RouterChoice deliveryRouter;
+        address deliveryRouterRunner;
+        address deliveryRouterRewardAddress;
+        address deliveryRouterFailedDeliveryAddress;
         string remoteChainName;
         FeeConfig fee;
         address flowLimiter;
@@ -150,7 +150,7 @@ contract DeployBridge is Script {
         address mediator;
         address factory;
         address wrappedRouter;
-        address feeRouter;
+        address deliveryRouter;
     }
 
     /// @notice The predicted addresses on both chains.
@@ -188,10 +188,10 @@ contract DeployBridge is Script {
     error FlowLimiterHasNoCode(uint64 chainId, address flowLimiter);
     /// @notice The configured wrapped native token holds no code on its chain.
     error WrappedNativeHasNoCode(uint64 chainId, address wrappedNative);
-    /// @notice The fee router needs a wrapped native token, and the chain has none in the configuration.
-    error FeeRouterNeedsWrappedNative(uint64 chainId);
-    /// @notice The `deployFeeRouter` setting is not `true` or `false`.
-    error UnknownFeeRouterSetting(string value);
+    /// @notice The delivery router needs a wrapped native token, and the chain has none in the configuration.
+    error DeliveryRouterNeedsWrappedNative(uint64 chainId);
+    /// @notice The `deployDeliveryRouter` setting is not `true` or `false`.
+    error UnknownDeliveryRouterSetting(string value);
     /// @notice The signer of the script is not the configured deployer.
     error DeployerMismatch(address configured, address actual);
     /// @notice An observation setting does not match the other chain's settings or the light-client key.
@@ -266,7 +266,7 @@ contract DeployBridge is Script {
         line = _appendFlag(line, flag, "token_factory", deployed.factory);
         line = _appendFlag(line, flag, "native_router", deployed.wrappedRouter);
         line = _appendFlag(line, flag, "wrapped_native", chain.wrappedNative);
-        line = _appendFlag(line, flag, "fee_router", deployed.feeRouter);
+        line = _appendFlag(line, flag, "delivery_router", deployed.deliveryRouter);
         line = _appendFlag(line, flag, "fork_registry", deployed.registry);
     }
 
@@ -388,8 +388,8 @@ contract DeployBridge is Script {
         if (chain.wrappedNative != address(0)) {
             deployed.wrappedRouter = _deployWrappedRouter(deployed.mediator, chain.wrappedNative);
         }
-        if (chain.feeRouter == RouterChoice.Deploy) {
-            deployed.feeRouter = _deployFeeRouter(deployed.mediator, chain.wrappedNative, chain.feeRouterRunner, chain.feeRouterRewardAddress, chain.feeRouterFailedDeliveryAddress);
+        if (chain.deliveryRouter == RouterChoice.Deploy) {
+            deployed.deliveryRouter = _deployDeliveryRouter(deployed.mediator, chain.wrappedNative, chain.deliveryRouterRunner, chain.deliveryRouterRewardAddress, chain.deliveryRouterFailedDeliveryAddress);
         }
         vm.stopBroadcast();
 
@@ -408,7 +408,7 @@ contract DeployBridge is Script {
         _requireAsPredicted("mediator", plan.mediator, deployed.mediator);
         _requireAsPredicted("factory", plan.factory, deployed.factory);
         _requireAsPredicted("wrappedRouter", plan.wrappedRouter, deployed.wrappedRouter);
-        _requireAsPredicted("feeRouter", plan.feeRouter, deployed.feeRouter);
+        _requireAsPredicted("deliveryRouter", plan.deliveryRouter, deployed.deliveryRouter);
         _requireVerifierPin(deployment.chain);
         _verifyLightClient(deployment.chain, deployed.lightClient);
         _verifyGate(deployment.chain.gate, deployed.gate);
@@ -475,7 +475,7 @@ contract DeployBridge is Script {
         plan.mediator = vm.computeCreateAddress(deployer, nonce++);
         plan.factory = vm.computeCreateAddress(plan.mediator, 1);
         if (chain.wrappedNative != address(0)) plan.wrappedRouter = vm.computeCreateAddress(deployer, nonce++);
-        if (chain.feeRouter == RouterChoice.Deploy) plan.feeRouter = vm.computeCreateAddress(deployer, nonce);
+        if (chain.deliveryRouter == RouterChoice.Deploy) plan.deliveryRouter = vm.computeCreateAddress(deployer, nonce);
     }
 
     /// @dev A chain whose gate runs in `DetectBeaconRootsAndRegistry` mode gets an own-chain light client and a registry.
@@ -494,7 +494,7 @@ contract DeployBridge is Script {
         console2.log("  token mediator", plan.mediator);
         console2.log("  token factory", plan.factory);
         console2.log("  native coin router", plan.wrappedRouter);
-        console2.log("  fee router", plan.feeRouter);
+        console2.log("  delivery router", plan.deliveryRouter);
         if (chain.wrappedNative != address(0)) return;
         console2.log("  WARNING: no wrapped native token is configured. This chain gets no native coin router.");
     }
@@ -618,7 +618,7 @@ contract DeployBridge is Script {
         return address(new WETHOmnibridgeRouter(ITokenMediator(mediator), IWETH(wrappedNative)));
     }
 
-    function _deployFeeRouter(
+    function _deployDeliveryRouter(
         address mediator,
         address wrappedNative,
         address runner,
@@ -626,7 +626,7 @@ contract DeployBridge is Script {
         address failedDeliveryAddress
     ) private returns (address) {
         return address(
-            new FeeRouter(ITokenMediator(mediator), IWETH(wrappedNative), runner, rewardAddress, failedDeliveryAddress)
+            new DeliveryRouter(ITokenMediator(mediator), IWETH(wrappedNative), runner, rewardAddress, failedDeliveryAddress)
         );
     }
 
@@ -743,16 +743,16 @@ contract DeployBridge is Script {
             if (address(router.bridge()) != deployed.mediator) revert DeploymentMismatch("wrappedRouter.mediator");
             if (address(router.WETH()) != chain.wrappedNative) revert DeploymentMismatch("wrappedRouter.wrappedNative");
         }
-        if (deployed.feeRouter != address(0)) {
-            FeeRouter router = FeeRouter(payable(deployed.feeRouter));
-            if (address(router.bridge()) != deployed.mediator) revert DeploymentMismatch("feeRouter.mediator");
-            if (address(router.wNative()) != chain.wrappedNative) revert DeploymentMismatch("feeRouter.wrappedNative");
-            if (router.runner() != chain.feeRouterRunner) revert DeploymentMismatch("feeRouter.runner");
-            if (router.rewardAddress() != chain.feeRouterRewardAddress) {
-                revert DeploymentMismatch("feeRouter.rewardAddress");
+        if (deployed.deliveryRouter != address(0)) {
+            DeliveryRouter router = DeliveryRouter(payable(deployed.deliveryRouter));
+            if (address(router.bridge()) != deployed.mediator) revert DeploymentMismatch("deliveryRouter.mediator");
+            if (address(router.wNative()) != chain.wrappedNative) revert DeploymentMismatch("deliveryRouter.wrappedNative");
+            if (router.runner() != chain.deliveryRouterRunner) revert DeploymentMismatch("deliveryRouter.runner");
+            if (router.rewardAddress() != chain.deliveryRouterRewardAddress) {
+                revert DeploymentMismatch("deliveryRouter.rewardAddress");
             }
-            if (router.failedDeliveryAddress() != chain.feeRouterFailedDeliveryAddress) {
-                revert DeploymentMismatch("feeRouter.failedDeliveryAddress");
+            if (router.failedDeliveryAddress() != chain.deliveryRouterFailedDeliveryAddress) {
+                revert DeploymentMismatch("deliveryRouter.failedDeliveryAddress");
             }
         }
     }
@@ -774,15 +774,15 @@ contract DeployBridge is Script {
         chain.fee = _readFee(json, string.concat(prefix, ".fee"));
         chain.flowLimiter = vm.parseAddress(_readText(json, string.concat(prefix, ".flowLimiter")));
         chain.wrappedNative = _readOptionalAddress(json, string.concat(prefix, ".wrappedNative"));
-        chain.feeRouter = _readRouterChoice(json, string.concat(prefix, ".deployFeeRouter"));
-        if (chain.feeRouter == RouterChoice.Deploy && chain.wrappedNative == address(0)) {
-            revert FeeRouterNeedsWrappedNative(chain.chainId);
+        chain.deliveryRouter = _readRouterChoice(json, string.concat(prefix, ".deployDeliveryRouter"));
+        if (chain.deliveryRouter == RouterChoice.Deploy && chain.wrappedNative == address(0)) {
+            revert DeliveryRouterNeedsWrappedNative(chain.chainId);
         }
-        if (chain.feeRouter == RouterChoice.Deploy) {
-            chain.feeRouterRunner = _readAddress(json, string.concat(prefix, ".feeRouter.runner"));
-            chain.feeRouterRewardAddress = _readAddress(json, string.concat(prefix, ".feeRouter.rewardAddress"));
-            chain.feeRouterFailedDeliveryAddress =
-                _readAddress(json, string.concat(prefix, ".feeRouter.failedDeliveryAddress"));
+        if (chain.deliveryRouter == RouterChoice.Deploy) {
+            chain.deliveryRouterRunner = _readAddress(json, string.concat(prefix, ".deliveryRouter.runner"));
+            chain.deliveryRouterRewardAddress = _readAddress(json, string.concat(prefix, ".deliveryRouter.rewardAddress"));
+            chain.deliveryRouterFailedDeliveryAddress =
+                _readAddress(json, string.concat(prefix, ".deliveryRouter.failedDeliveryAddress"));
         }
         string memory client = string.concat(prefix, ".lightClient");
         chain.lightClient.programVKey = _readBytes32(json, string.concat(client, ".programVKey"));
@@ -955,7 +955,7 @@ contract DeployBridge is Script {
         string memory text = _readText(json, key);
         if (keccak256(bytes(text)) == keccak256("true")) return RouterChoice.Deploy;
         if (keccak256(bytes(text)) == keccak256("false")) return RouterChoice.Skip;
-        revert UnknownFeeRouterSetting(text);
+        revert UnknownDeliveryRouterSetting(text);
     }
 
     function _readBytes32(string memory json, string memory key) private pure returns (bytes32 value) {

@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MockERC20} from "../../../src/mocks/MockERC20.sol";
-import {FeeRouter} from "../../../src/hardened/mediator/FeeRouter.sol";
+import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol";
 import {MessageBridge} from "../../../src/hardened/MessageBridge.sol";
 import {IWETH} from "../../../src/hardened/mediator/IWETH.sol";
 import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol";
@@ -16,23 +16,23 @@ import {MedCutToken, MedDenyListWrappedNative, MedToggleReceiver} from "./utils/
 /// cover each hand-off: a token that refuses the recipient, terms that decode but name nobody who can receive, data of
 /// no known shape, a legacy receiver, the native coin, and a refused refund of a gas based fee. Tokens flow from chain B
 /// back to the router on chain A.
-contract FeeRouterClaimsTest is MediatorFixture {
+contract DeliveryRouterClaimsTest is MediatorFixture {
     MedDenyListWrappedNative internal weth;
     DenyListToken internal token;
-    FeeRouter internal router;
+    DeliveryRouter internal router;
     address internal runner = makeAddr("runner");
     address internal reward = makeAddr("reward address");
     address internal recipient = makeAddr("recipient");
     address internal failedDelivery = makeAddr("failed delivery address");
     address internal copy;
 
-    event DeliveryFailed(address indexed token, address indexed recipient, uint256 amount, FeeRouter.Reason reason);
+    event DeliveryFailed(address indexed token, address indexed recipient, uint256 amount, DeliveryRouter.Reason reason);
     event Claimed(address indexed token, uint256 amount);
 
     function setUp() public override {
         super.setUp();
         weth = new MedDenyListWrappedNative();
-        router = new FeeRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), runner, reward, failedDelivery);
+        router = new DeliveryRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), runner, reward, failedDelivery);
         token = new DenyListToken();
         token.mint(alice, 1_000_000 ether);
         vm.startPrank(alice);
@@ -49,9 +49,9 @@ contract FeeRouterClaimsTest is MediatorFixture {
     function _share(address to, uint256 settings, uint256 limit, uint256 multiplier)
         internal
         pure
-        returns (FeeRouter.FeeDirector memory)
+        returns (DeliveryRouter.FeeDirector memory)
     {
-        return FeeRouter.FeeDirector(to, settings, limit, multiplier);
+        return DeliveryRouter.FeeDirector(to, settings, limit, multiplier);
     }
 
     /// @dev Sends the copy of the deny list token from chain B to the router, with `data`, and returns the message.
@@ -91,7 +91,7 @@ contract FeeRouterClaimsTest is MediatorFixture {
     }
 
     /// @dev Expects the hand-off event of the router.
-    function _expectHandOff(address handedToken, address named, uint256 amount, FeeRouter.Reason reason) internal {
+    function _expectHandOff(address handedToken, address named, uint256 amount, DeliveryRouter.Reason reason) internal {
         vm.expectEmit(true, true, false, true, address(router));
         emit DeliveryFailed(handedToken, named, amount, reason);
     }
@@ -112,7 +112,7 @@ contract FeeRouterClaimsTest is MediatorFixture {
         token.setDenied(recipient, true);
         uint256 index = _sendCopy(abi.encode(_share(recipient, 1, 5 ether, 0)), 100 ether);
 
-        _expectHandOff(address(token), recipient, 95 ether, FeeRouter.Reason.PayoutRefused);
+        _expectHandOff(address(token), recipient, 95 ether, DeliveryRouter.Reason.PayoutRefused);
         _run(index);
 
         assertEq(token.balanceOf(reward), 5 ether, "the tip");
@@ -154,7 +154,7 @@ contract FeeRouterClaimsTest is MediatorFixture {
         token.setDenied(failedDelivery, true);
         uint256 index = _sendCopy(abi.encode(_share(recipient, 1, 5 ether, 0)), 100 ether);
 
-        _expectHandOff(address(token), recipient, 95 ether, FeeRouter.Reason.PayoutRefused);
+        _expectHandOff(address(token), recipient, 95 ether, DeliveryRouter.Reason.PayoutRefused);
         _run(index);
 
         assertEq(token.balanceOf(reward), 5 ether, "the tip");
@@ -185,7 +185,7 @@ contract FeeRouterClaimsTest is MediatorFixture {
         assertEq(token.balanceOf(failedDelivery), 95 ether, "paid to the address, not the caller");
         assertEq(token.balanceOf(bob), 0);
         _assertRouterEmpty(address(token));
-        vm.expectRevert(abi.encodeWithSelector(FeeRouter.NothingToClaim.selector, address(token)));
+        vm.expectRevert(abi.encodeWithSelector(DeliveryRouter.NothingToClaim.selector, address(token)));
         router.claim(address(token));
     }
 
@@ -220,7 +220,7 @@ contract FeeRouterClaimsTest is MediatorFixture {
 
     /// Claim: the failed delivery address may equal the reward address. Shows: the tip and the hand-off both reach it.
     function test_theFailedDeliveryAddressMayEqualTheRewardAddress() public {
-        router = new FeeRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), runner, reward, reward);
+        router = new DeliveryRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), runner, reward, reward);
         token.setDenied(recipient, true);
         _run(_sendCopy(abi.encode(_share(recipient, 1, 5 ether, 0)), 100 ether));
         assertEq(token.balanceOf(reward), 100 ether, "tip plus hand-off");
@@ -233,7 +233,7 @@ contract FeeRouterClaimsTest is MediatorFixture {
     /// the reward address gets the fixed fee, and the failed delivery address gets the rest.
     function test_theRouterAsRecipientPaysTheTipAndHandsTheRestOff() public {
         uint256 index = _sendCopy(abi.encode(_share(address(router), 1, 5 ether, 0)), 100 ether);
-        _expectHandOff(address(token), address(router), 95 ether, FeeRouter.Reason.InvalidTerms);
+        _expectHandOff(address(token), address(router), 95 ether, DeliveryRouter.Reason.InvalidTerms);
         _run(index);
 
         assertEq(token.balanceOf(reward), 5 ether, "the tip");
@@ -246,7 +246,7 @@ contract FeeRouterClaimsTest is MediatorFixture {
     /// the zero address.
     function test_theZeroAddressAsRecipientPaysTheShareAndHandsTheRestOff() public {
         uint256 index = _sendCopy(abi.encode(_share(address(0), 8, 0, 0.1 ether)), 100 ether);
-        _expectHandOff(address(token), address(0), 90 ether, FeeRouter.Reason.InvalidTerms);
+        _expectHandOff(address(token), address(0), 90 ether, DeliveryRouter.Reason.InvalidTerms);
         _run(index);
 
         assertEq(token.balanceOf(reward), 10 ether);
@@ -280,7 +280,7 @@ contract FeeRouterClaimsTest is MediatorFixture {
     /// succeeds. Matters: a revert in the callback leaves the tokens in the router, because the mediator has paid it.
     function test_dataOfNoKnownShapeHandsTheWholeValueOff() public {
         uint256 index = _sendCopy(hex"01020304050607", 10 ether);
-        _expectHandOff(address(token), address(0), 10 ether, FeeRouter.Reason.InvalidTerms);
+        _expectHandOff(address(token), address(0), 10 ether, DeliveryRouter.Reason.InvalidTerms);
         _run(index);
         _run(_sendCopy(new bytes(127), 20 ether));
         assertEq(token.balanceOf(failedDelivery), 30 ether);
@@ -314,7 +314,7 @@ contract FeeRouterClaimsTest is MediatorFixture {
     function test_theLegacyFormToARefusedReceiverIsHandedOff() public {
         token.setDenied(carol, true);
         uint256 index = _sendCopy(abi.encodePacked(carol), 100 ether);
-        _expectHandOff(address(token), carol, 100 ether, FeeRouter.Reason.PayoutRefused);
+        _expectHandOff(address(token), carol, 100 ether, DeliveryRouter.Reason.PayoutRefused);
         _run(index);
         assertEq(token.balanceOf(failedDelivery), 100 ether);
         _assertRouterEmpty(address(token));
@@ -329,7 +329,7 @@ contract FeeRouterClaimsTest is MediatorFixture {
         MedToggleReceiver receiver = new MedToggleReceiver();
         weth.setDenied(address(receiver), true);
         uint256 index = _sendWrapped(abi.encode(_share(address(receiver), 3, 0.5 ether, 0)), 5 ether);
-        _expectHandOff(address(weth), address(receiver), 4.5 ether, FeeRouter.Reason.PayoutRefused);
+        _expectHandOff(address(weth), address(receiver), 4.5 ether, DeliveryRouter.Reason.PayoutRefused);
         _run(index);
 
         assertEq(reward.balance, 0.5 ether, "the tip as the coin");

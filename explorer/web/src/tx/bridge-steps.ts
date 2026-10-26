@@ -2,7 +2,7 @@
  * The steps of the bridge form for the web page. The plain path is the terminal's own builder (`buildBridgeSteps`), so
  * the calldata of an approval, a relay, a relay with a call and a relay with a fallback is the same as the terminal
  * builds for the same inputs. The tip path changes only three inputs: the receiver becomes the router of the
- * destination chain (the fee router of the deployment, or the one that the user named), the mode becomes "call", and the
+ * destination chain (the default delivery router, or the one that the user named), the mode becomes "call", and the
  * data becomes the encoded fee director. The page then adds the disclosure that the confirm dialog shows. The wrap route
  * carries no call data, so it never carries a tip.
  */
@@ -80,7 +80,7 @@ const parseAmountText = (text: string, decimals: number): bigint => {
 
 const explainRouterReceiver = (argument: DisplayArgument, input: { chainName: string; recipient: Address; deployed: boolean }): DisplayArgument => {
   if (argument.name !== "receiver") return argument;
-  const owner = input.deployed ? "fee router" : "router (not the fee router of the deployment)";
+  const owner = input.deployed ? "delivery router" : "router (not the default delivery router)";
   return { ...argument, meaning: `${owner} on ${input.chainName}: pays its one runner the tip, then sends the rest to ${input.recipient}` };
 };
 

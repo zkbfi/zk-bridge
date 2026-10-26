@@ -117,8 +117,8 @@ export const runnerSchema = z
     minimumMarginWei: weiSchema.default("0"),
     /** Deliver items that have no fee offer, for the gas cost alone. Off by default. */
     deliverWithoutOffer: z.boolean().default(false),
-    /** The fee router on the destination chain. Default: the `fee_router` of the deployment file. */
-    feeRouter: addressSchema.optional(),
+    /** The delivery router on the destination chain. Default: the `delivery_router` of the deployment file. */
+    deliveryRouter: addressSchema.optional(),
     /**
      * The Multicall3 contract that batches the deliveries (`aggregate3`, failure allowed on each call). The default is
      * the canonical address, which most chains share. A chain without a contract there needs a deployment. The runner
@@ -126,8 +126,8 @@ export const runnerSchema = z
      */
     multicall3: addressSchema.default(MULTICALL3_ADDRESS),
     /**
-     * The address that receives the fees. The fee router pays it, not the signer: the signer is a hot key that only pays
-     * gas, and this address can be a cold account. Required whenever a fee router is in use (the runner checks that at
+     * The address that receives the fees. The delivery router pays it, not the signer: the signer is a hot key that only pays
+     * gas, and this address can be a cold account. Required whenever a delivery router is in use (the runner checks that at
      * start, because the router comes from the deployment file). It must differ from the signer, and it must equal
      * `rewardAddress()` of the router. A runner that only delivers directly needs none.
      */
@@ -143,7 +143,7 @@ export const runnerSchema = z
     priorityFeeWei: weiSchema.optional(),
     /** The most items that one sweep delivers. */
     maximumDeliveriesPerSweep: z.number().int().positive().default(10),
-    /** The most items that one batch transaction delivers through the fee router. */
+    /** The most items that one batch transaction delivers through the delivery router. */
     maximumBatchSize: z.number().int().positive().default(5),
     /**
      * The most gas that one batch may use. The sum of the gas assumed for the items of a batch stays within it, and it is

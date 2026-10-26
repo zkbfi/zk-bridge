@@ -26,7 +26,7 @@ pub const SECTION_KEYS: [&str; 12] = [
     "wrapped_native",
     "gate",
     "light_client",
-    "fee_router",
+    "delivery_router",
     "fork_registry",
     "start_block",
 ];
@@ -55,8 +55,8 @@ pub struct SectionDraft {
     pub gate: Option<Address>,
     /// The `BeaconLightClient` that tracks the other chain.
     pub light_client: Option<Address>,
-    /// The `FeeRouter`, when the chain has one.
-    pub fee_router: Option<Address>,
+    /// The `DeliveryRouter`, when the chain has one.
+    pub delivery_router: Option<Address>,
     /// The `ForkRegistry`, when the chain has one.
     pub fork_registry: Option<Address>,
     /// The first block to index: the block before the first deployment transaction.
@@ -84,8 +84,8 @@ pub struct ChainSection {
     pub gate: Address,
     /// The `BeaconLightClient`. It is not zero.
     pub light_client: Address,
-    /// The `FeeRouter`, or `None`.
-    pub fee_router: Option<Address>,
+    /// The `DeliveryRouter`, or `None`.
+    pub delivery_router: Option<Address>,
     /// The `ForkRegistry`, or `None`.
     pub fork_registry: Option<Address>,
     /// The first block to index.
@@ -157,7 +157,7 @@ impl SectionDraft {
                 "wrapped_native" => self.wrapped_native = Some(address()?),
                 "gate" => self.gate = Some(address()?),
                 "light_client" => self.light_client = Some(address()?),
-                "fee_router" => self.fee_router = Some(address()?),
+                "delivery_router" => self.delivery_router = Some(address()?),
                 "fork_registry" => self.fork_registry = Some(address()?),
                 other => {
                     return Err(usage(format!(
@@ -208,7 +208,7 @@ impl SectionDraft {
             wrapped_native,
             gate: required(self.gate, "gate")?,
             light_client: required(self.light_client, "light_client")?,
-            fee_router: self.fee_router.filter(|address| *address != Address::ZERO),
+            delivery_router: self.delivery_router.filter(|address| *address != Address::ZERO),
             fork_registry: self
                 .fork_registry
                 .filter(|address| *address != Address::ZERO),
@@ -290,7 +290,7 @@ fn draft_of_deployment(deployment: &Value) -> Result<SectionDraft> {
         wrapped_native,
         gate: single("BeaconForkGate")?,
         light_client,
-        fee_router: single("FeeRouter")?,
+        delivery_router: single("DeliveryRouter")?,
         fork_registry: single("ForkRegistry")?,
         start_block: first_block.map(|block| block.saturating_sub(1)),
     })
@@ -342,7 +342,7 @@ fn section_from(
         wrapped_native: flags.wrapped_native.or(base.wrapped_native),
         gate: flags.gate.or(base.gate),
         light_client: flags.light_client.or(base.light_client),
-        fee_router: flags.fee_router.or(base.fee_router),
+        delivery_router: flags.delivery_router.or(base.delivery_router),
         fork_registry: flags.fork_registry.or(base.fork_registry),
         start_block: flags.start_block.or(base.start_block),
     };
@@ -376,7 +376,7 @@ fn lowercase(address: Address) -> String {
 }
 
 impl ChainSection {
-    /// The JSON object of the section, with the keys of [`SECTION_KEYS`]. `rpc_url`, `fee_router` and `fork_registry` are
+    /// The JSON object of the section, with the keys of [`SECTION_KEYS`]. `rpc_url`, `delivery_router` and `fork_registry` are
     /// left out when absent.
     pub fn to_json(&self) -> Value {
         let mut section = Map::new();
@@ -396,7 +396,7 @@ impl ChainSection {
             section.insert(key.into(), json!(lowercase(address)));
         }
         for (key, address) in [
-            ("fee_router", self.fee_router),
+            ("delivery_router", self.delivery_router),
             ("fork_registry", self.fork_registry),
         ] {
             if let Some(address) = address {

@@ -1,8 +1,8 @@
 import { DEFAULT_PROOF_COST_USD, proofCostWei } from "./delivery-fee.js";
 
 /**
- * The default gas of one delivery transaction. It is the sum that Foundry measured: the fee router delivery call with
- * the gas based fee (about 198850 gas, `test/hardened/mediator/FeeRouterGas.t.sol`), plus the proof check of the bridge
+ * The default gas of one delivery transaction. It is the sum that Foundry measured: the delivery router delivery call with
+ * the gas based fee (about 198850 gas, `test/hardened/mediator/DeliveryRouterGas.t.sol`), plus the proof check of the bridge
  * (290655 gas, `test/hardened/MessageBridgeGas.t.sol`), plus the 21000 gas base of a transaction. The sum is 510505.
  * The default rounds it up to 550000 to leave room for calldata.
  */

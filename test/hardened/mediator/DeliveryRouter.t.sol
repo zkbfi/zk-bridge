@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MockERC20} from "../../../src/mocks/MockERC20.sol";
-import {FeeRouter} from "../../../src/hardened/mediator/FeeRouter.sol";
+import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol";
 import {MessageBridge} from "../../../src/hardened/MessageBridge.sol";
 import {Multicall3} from "../../../src/hardened/vendor/multicall3/Multicall3.sol";
 import {IWETH} from "../../../src/hardened/mediator/IWETH.sol";
@@ -20,12 +20,12 @@ import {
 } from "./utils/MediatorSupport.sol";
 import {MedCutToken} from "./utils/MedMocks.sol";
 
-/// @notice Tests of the executor fee router. Tokens flow from chain B to chain A, where the router lives. A runner
+/// @notice Tests of the executor delivery router. Tokens flow from chain B to chain A, where the router lives. A runner
 /// executes the message through the router and earns the fee that the sender wrote in the `FeeDirector`.
-contract FeeRouterTest is MediatorFixture {
+contract DeliveryRouterTest is MediatorFixture {
     MockERC20 internal tokenB;
     MockWrappedNative internal weth;
-    FeeRouter internal router;
+    DeliveryRouter internal router;
     address internal runner = makeAddr("runner");
     address internal reward = makeAddr("reward address");
     address internal failedDelivery = makeAddr("failed delivery address");
@@ -46,8 +46,8 @@ contract FeeRouterTest is MediatorFixture {
         vm.deal(alice, 1_000 ether);
     }
 
-    function _routerFor(address rewardAccount) internal returns (FeeRouter) {
-        return new FeeRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), runner, rewardAccount, failedDelivery);
+    function _routerFor(address rewardAccount) internal returns (DeliveryRouter) {
+        return new DeliveryRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), runner, rewardAccount, failedDelivery);
     }
 
     /// @dev A new router whose reward address is `account`. Call it before the message is sent: the sender names the
@@ -59,13 +59,13 @@ contract FeeRouterTest is MediatorFixture {
     function _director(uint256 settings, uint256 limit, uint256 multiplier)
         internal
         view
-        returns (FeeRouter.FeeDirector memory)
+        returns (DeliveryRouter.FeeDirector memory)
     {
-        return FeeRouter.FeeDirector(recipient, settings, limit, multiplier);
+        return DeliveryRouter.FeeDirector(recipient, settings, limit, multiplier);
     }
 
     /// @dev Chain B to the router on chain A. Returns the index of the message.
-    function _sendTokenB(FeeRouter.FeeDirector memory director, uint256 value) internal returns (uint256) {
+    function _sendTokenB(DeliveryRouter.FeeDirector memory director, uint256 value) internal returns (uint256) {
         vm.prank(alice);
         mediatorB.relayTokensAndCall(address(tokenB), address(router), value, abi.encode(director));
         return _lastIndexB();
@@ -84,7 +84,7 @@ contract FeeRouterTest is MediatorFixture {
     }
 
     /// @dev Gives alice the copy of the wrapped token on chain B and sends it back to the router with a director.
-    function _sendWrappedBack(FeeRouter.FeeDirector memory director, uint256 value, bytes memory data)
+    function _sendWrappedBack(DeliveryRouter.FeeDirector memory director, uint256 value, bytes memory data)
         internal
         returns (uint256)
     {
@@ -118,17 +118,17 @@ contract FeeRouterTest is MediatorFixture {
     /// Multicall3, and a copier of the call still cannot take the tip.
     function test_theRunnerCheckReadsTheOriginSoMulticall3CanBatch() public {
         Multicall3 multicall = new Multicall3();
-        FeeRouter.FeeDirector memory director = _director(router.FIXED_FEE(), 3 ether, 0);
+        DeliveryRouter.FeeDirector memory director = _director(router.FIXED_FEE(), 3 ether, 0);
         MessageBridge.MessageProof memory proof = ambA.proofOf(ambB, _sendTokenB(director, 100 ether));
         Multicall3.Call3[] memory calls = new Multicall3.Call3[](1);
         calls[0] = Multicall3.Call3(
-            address(router), true, abi.encodeCall(FeeRouter.executeMessageWithRunner, (proof, reward))
+            address(router), true, abi.encodeCall(DeliveryRouter.executeMessageWithRunner, (proof, reward))
         );
 
         vm.prank(bob, bob);
         Multicall3.Result[] memory refused = multicall.aggregate3(calls);
         assertFalse(refused[0].success);
-        assertEq(refused[0].returnData, abi.encodeWithSelector(FeeRouter.NotRunner.selector, bob));
+        assertEq(refused[0].returnData, abi.encodeWithSelector(DeliveryRouter.NotRunner.selector, bob));
         assertEq(_copyB().balanceOf(reward), 0, "a copier delivers nothing");
 
         vm.prank(runner, runner);
@@ -292,7 +292,7 @@ contract FeeRouterTest is MediatorFixture {
 
     function test_aRunWhileAnotherRunIsInProgressIsRefused() public {
         vm.store(address(router), router.RUNNER_SLOT(), bytes32(uint256(5)));
-        vm.expectRevert(FeeRouter.RunnerSlotInUse.selector);
+        vm.expectRevert(DeliveryRouter.RunnerSlotInUse.selector);
         MessageBridge.MessageProof memory empty;
         vm.prank(runner, runner);
         router.executeMessageWithRunner(empty, reward);
@@ -330,8 +330,8 @@ contract FeeRouterTest is MediatorFixture {
     /// @dev A native coin delivery to `receiver` with a 10 percent share fee for the runner, delivered at exactly the gas
     /// limit that the mediator asked for.
     function _deliverNativeTo(address receiver, uint256 value) internal returns (uint256 toRecipientBefore) {
-        FeeRouter.FeeDirector memory director =
-            FeeRouter.FeeDirector(receiver, router.UNWRAP() | router.SHARE_OF_VALUE(), 0, 0.1 ether);
+        DeliveryRouter.FeeDirector memory director =
+            DeliveryRouter.FeeDirector(receiver, router.UNWRAP() | router.SHARE_OF_VALUE(), 0, 0.1 ether);
         uint256 index = _sendWrappedBack(director, value, "");
         assertEq(
             ambB.messageAt(index).gasLimit,
@@ -384,8 +384,8 @@ contract FeeRouterTest is MediatorFixture {
 
     function test_unwrapWithARecipientThatCannotTakeTheCoinPaysTheWrappedToken() public {
         address refuser = address(new CoinRefuser());
-        FeeRouter.FeeDirector memory director =
-            FeeRouter.FeeDirector(refuser, router.UNWRAP() | router.SHARE_OF_VALUE(), 0, 0.1 ether);
+        DeliveryRouter.FeeDirector memory director =
+            DeliveryRouter.FeeDirector(refuser, router.UNWRAP() | router.SHARE_OF_VALUE(), 0, 0.1 ether);
         uint256 index = _sendWrappedBack(director, 5 ether, "");
         _runThroughRouter(index);
         assertEq(weth.balanceOf(refuser), 4.5 ether, "paid as the wrapped token");
@@ -486,7 +486,7 @@ contract FeeRouterTest is MediatorFixture {
         address[3] memory others = [bob, recipient, alice];
         for (uint256 i = 0; i < others.length; i++) {
             vm.prank(others[i], others[i]);
-            vm.expectRevert(abi.encodeWithSelector(FeeRouter.NotRunner.selector, others[i]));
+            vm.expectRevert(abi.encodeWithSelector(DeliveryRouter.NotRunner.selector, others[i]));
             router.executeMessageWithRunner(proof, reward);
         }
         assertEq(_copyB().balanceOf(recipient), 0, "nothing was delivered");
@@ -500,7 +500,7 @@ contract FeeRouterTest is MediatorFixture {
     /// the bridge stays permissionless, so a user is never stuck if the runner is offline, and the user pays nothing.
     function test_aDirectDeliveryPaysNoTipInAnyMode() public {
         vm.txGasPrice(10 gwei);
-        FeeRouter.FeeDirector[3] memory directors = [
+        DeliveryRouter.FeeDirector[3] memory directors = [
             _director(router.FIXED_FEE(), 3 ether, 0),
             _director(router.SHARE_OF_VALUE(), 0, 0.02 ether),
             _director(0, 100 ether, 1 ether)
@@ -519,10 +519,10 @@ contract FeeRouterTest is MediatorFixture {
     function test_theRunnerIsFixedAtDeployment() public {
         assertEq(router.runner(), runner);
         assertEq(router.failedDeliveryAddress(), failedDelivery, "the failed delivery address is fixed");
-        vm.expectRevert(FeeRouter.ZeroFailedDeliveryAddress.selector);
-        new FeeRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), runner, reward, address(0));
-        vm.expectRevert(FeeRouter.ZeroRunner.selector);
-        new FeeRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), address(0), reward, failedDelivery);
+        vm.expectRevert(DeliveryRouter.ZeroFailedDeliveryAddress.selector);
+        new DeliveryRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), runner, reward, address(0));
+        vm.expectRevert(DeliveryRouter.ZeroRunner.selector);
+        new DeliveryRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), address(0), reward, failedDelivery);
 
         // No function changes the runner.
         bytes4[3] memory selectors = [
@@ -538,7 +538,7 @@ contract FeeRouterTest is MediatorFixture {
 
     function test_onlyTheMediatorCanCallOnTokenBridged() public {
         vm.prank(bob);
-        vm.expectRevert(abi.encodeWithSelector(FeeRouter.NotMediator.selector, bob));
+        vm.expectRevert(abi.encodeWithSelector(DeliveryRouter.NotMediator.selector, bob));
         router.onTokenBridged(address(tokenB), 1, abi.encode(_director(0, 0, 0)));
     }
 
@@ -546,7 +546,7 @@ contract FeeRouterTest is MediatorFixture {
         vm.prank(bob);
         (bool ok, bytes memory returned) = address(router).call{value: 0}("");
         assertFalse(ok);
-        assertEq(returned, abi.encodeWithSelector(FeeRouter.NotWrappedTokenSender.selector, bob));
+        assertEq(returned, abi.encodeWithSelector(DeliveryRouter.NotWrappedTokenSender.selector, bob));
     }
 
     function test_theRouterHasNoOwnerNoClaimAndNoValidatorFilter() public view {

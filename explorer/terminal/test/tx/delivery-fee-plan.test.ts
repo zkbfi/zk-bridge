@@ -40,13 +40,13 @@ async function reviewTextOf(plan: Awaited<ReturnType<typeof relayOf>>): Promise<
 }
 
 describe('relay that pays for delivery', () => {
-  test('the calldata is relayTokensAndCall to the fee router of the other chain with the chosen director as data', async () => {
+  test('the calldata is relayTokensAndCall to the delivery router of the other chain with the chosen director as data', async () => {
     const plan = await relayOf({ feeMode: 'percentage', feePercent: '0.5' })
     const decoded = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data })
     expect(decoded.functionName).toBe('relayTokensAndCall')
     const [token, relayReceiver, amount, data] = decoded.args as [string, string, bigint, `0x${string}`]
     expect(token).toBe(usdc.address)
-    expect(relayReceiver).toBe(FIXTURE_PAIR.second.contracts.feeRouter!)
+    expect(relayReceiver).toBe(FIXTURE_PAIR.second.contracts.deliveryRouter!)
     expect(amount).toBe(100_000_000n)
     expect(decodeFeeDirector(data)).toEqual({ recipient: getAddress(receiver), settings: FEE_SETTING.shareOfValue, limit: 0n, multiplier: 5n * 10n ** 15n })
     expect(plan.deliveryFee?.director).toEqual(decodeFeeDirector(data))
@@ -82,7 +82,7 @@ describe('relay that pays for delivery', () => {
       .map(lineText)
       .join('\n')
     expect(text).toContain('Tip for delivery')
-    expect(text).toContain(`Router        ${FIXTURE_PAIR.second.contracts.feeRouter!} (the fee router of the deployment)`)
+    expect(text).toContain(`Router        ${FIXTURE_PAIR.second.contracts.deliveryRouter!} (the default delivery router)`)
     expect(text).toContain('Tip mode      percentage of the transfer')
     expect(text).toContain(`Recipient     ${getAddress(receiver)}`)
     expect(text).toContain('Flags         share of the value')
@@ -91,7 +91,7 @@ describe('relay that pays for delivery', () => {
     expect(text).toContain('Most the tip  0.4995 zkbUSDC')
     expect(text).toContain('Data source   measured from 40 recent deliveries, p90, 210000 gas')
     expect(text).toContain('on PulseChain. The tokens go to')
-    expect(text).toContain('The tip goes to the reward address of the fee router, not to the runner account')
+    expect(text).toContain('The tip goes to the reward address of the delivery router, not to the runner account')
     expect(text).toContain('Only the one whitelisted runner account can deliver through the router, and it receives no tip')
     expect(text).not.toContain('pays the tip only to its one whitelisted runner')
     expect(text).toContain('no reward address is recorded, no tip is paid, and the recipient gets everything')
@@ -139,16 +139,16 @@ describe('relay that pays for delivery', () => {
   test('the router to ask is the router that the form names: the default, or the advanced field', async () => {
     const snapshots = await createFixtureChainAccess(FIXTURE_PAIR).readSnapshots({ account: FIXTURE_ACCOUNT, tokens: FIXTURE_TOKENS })
     const context = { pair: FIXTURE_PAIR, snapshots, signerAddress: FIXTURE_ACCOUNT, deliveryCost: buildFixtureDeliveryCost(369, FIXTURE_NOW), tokenValuationsWei: valuations }
-    expect(deliveryRouterOf({ ...values }, FIXTURE_TOKENS, context)).toEqual({ chainId: FIXTURE_PAIR.second.chainId, router: FIXTURE_PAIR.second.contracts.feeRouter! })
+    expect(deliveryRouterOf({ ...values }, FIXTURE_TOKENS, context)).toEqual({ chainId: FIXTURE_PAIR.second.chainId, router: FIXTURE_PAIR.second.contracts.deliveryRouter! })
     const chosen = '0x00000000000000000000000000000000000000c7'
-    expect(deliveryRouterOf({ ...values, feeRouter: chosen }, FIXTURE_TOKENS, context)).toEqual({ chainId: FIXTURE_PAIR.second.chainId, router: getAddress(chosen) })
+    expect(deliveryRouterOf({ ...values, deliveryRouter: chosen }, FIXTURE_TOKENS, context)).toEqual({ chainId: FIXTURE_PAIR.second.chainId, router: getAddress(chosen) })
     expect(deliveryRouterOf({ ...values, delivery: 'no' }, FIXTURE_TOKENS, context)).toBeNull()
     expect(deliveryRouterOf({ ...values, token: 'first:native' }, FIXTURE_TOKENS, context)).toBeNull()
   })
 
   test('refuses a tip without a loaded report, and sends a plain relay where no tip can travel', async () => {
     await expect(stepsFor({}, { deliveryCost: null })).rejects.toThrow('The delivery cost is not loaded yet')
-    // A chain with no fee router in the deployment, and the wrap route, carry no tip. The relay is the plain one.
+    // A chain with no delivery router in the deployment, and the wrap route, carry no tip. The relay is the plain one.
     const wpls = FIXTURE_TOKENS[4]!
     const withoutRouter = await relayOf({ token: `second:${wpls.address}` })
     expect(withoutRouter.deliveryFee).toBeUndefined()
@@ -166,16 +166,16 @@ describe('relay that pays for delivery', () => {
 
   test('the router is chosen in the extra data: the relay targets the router of the form, and the review marks it', async () => {
     const chosen = '0x00000000000000000000000000000000000000f7'
-    const plan = await relayOf({ feeMode: 'percentage', feePercent: '0.1', feeRouter: chosen })
+    const plan = await relayOf({ feeMode: 'percentage', feePercent: '0.1', deliveryRouter: chosen })
     const [, relayReceiver] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as [string, string, bigint, `0x${string}`]
     expect(relayReceiver).toBe(getAddress(chosen))
     expect(plan.deliveryFee?.router).toBe(getAddress(chosen))
-    expect(plan.deliveryFee?.defaultRouter).toBe(FIXTURE_PAIR.second.contracts.feeRouter!)
+    expect(plan.deliveryFee?.defaultRouter).toBe(FIXTURE_PAIR.second.contracts.deliveryRouter!)
     const text = reviewLines({ plan, from: FIXTURE_ACCOUNT, unsigned: { type: 'eip1559', chainId: 1, nonce: 1, to: plan.to, data: plan.data, value: 0n, gas: 1n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n }, gasEstimate: 1n, gasLimit: 1n, maximumNetworkFee: 1n }, { position: null, calldata: 'summary', wrapWidth: 80 })
       .map(lineText)
       .join('\n')
-    expect(text).toContain(`${getAddress(chosen)} (not the fee router of the deployment)`)
-    await expect(stepsFor({ feeRouter: 'not an address' })).rejects.toThrow(PlanInputError)
+    expect(text).toContain(`${getAddress(chosen)} (not the default delivery router)`)
+    await expect(stepsFor({ deliveryRouter: 'not an address' })).rejects.toThrow(PlanInputError)
   })
 
   test('the gas multiplier works for a token that is not the native coin: the sender price is folded into the multiplier', async () => {
@@ -209,7 +209,7 @@ describe('relay that pays for delivery', () => {
 
 describe('planRelay refuses a delivery fee that the data does not carry', () => {
   const director = { recipient: getAddress(receiver), settings: FEE_SETTING.fixedFee, limit: 1n, multiplier: 0n }
-  const router = FIXTURE_PAIR.second.contracts.feeRouter!
+  const router = FIXTURE_PAIR.second.contracts.deliveryRouter!
   const base = { chain: FIXTURE_PAIR.first, token: usdc, amount: 5n, currentFeeRate: 0n }
   const review = { router, defaultRouter: router, routerChainName: 'PulseChain', director, token: { symbol: 'zkbUSDC', decimals: 6 }, description: undefined as never, dataSource: undefined as never, routerAddresses: { kind: 'read' as const, rewardAddress: router, failedDeliveryAddress: router } }
 

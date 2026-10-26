@@ -5,7 +5,7 @@ import { ConfigurationError } from "../../src/config/secret-scan";
 
 const DEPLOYMENT = JSON.stringify({
   chain_a: { chain_id: 1, bridge: `0x${"11".repeat(20)}`, mediator: `0x${"22".repeat(20)}`, light_client: `0x${"33".repeat(20)}` },
-  chain_b: { chain_id: 369, bridge: `0x${"44".repeat(20)}`, mediator: `0x${"55".repeat(20)}`, light_client: `0x${"66".repeat(20)}`, fee_router: `0x${"77".repeat(20)}` },
+  chain_b: { chain_id: 369, bridge: `0x${"44".repeat(20)}`, mediator: `0x${"55".repeat(20)}`, light_client: `0x${"66".repeat(20)}`, delivery_router: `0x${"77".repeat(20)}` },
 });
 
 const live = (overrides: Partial<WebConfiguration> = {}): WebConfiguration => ({

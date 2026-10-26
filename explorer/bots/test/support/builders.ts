@@ -3,7 +3,7 @@ import {
   beaconLightClientAbi,
   encodeProofMessage,
   multicall3Abi,
-  feeRouterAbi,
+  deliveryRouterAbi,
   messageBridgeAbi,
   tokenMediatorAbi,
   type ProofDirection,
@@ -23,7 +23,7 @@ export const word = (seed: number): Hex => `0x${seed.toString(16).padStart(2, "0
 /** An address with every byte set to `seed`. */
 export const address = (seed: number): Address => `0x${seed.toString(16).padStart(2, "0").repeat(20)}`;
 
-export const FEE_ROUTER = address(0x77);
+export const DELIVERY_ROUTER = address(0x77);
 /** The Multicall3 contract that batches the calls of a delivery. */
 export const MULTICALL = address(0x3c);
 export const WRAPPED_NATIVE = address(0x88);
@@ -98,7 +98,7 @@ export function fakeLightClient(initial: Partial<LightClientState> = {}): LightC
   return reader;
 }
 
-/** The call data of a message that relays tokens to a fee router with a director. */
+/** The call data of a message that relays tokens to a delivery router with a director. */
 export function feeOfferData(options: { director: FeeDirector; value: bigint; recipient?: Address; token?: Address }): Hex {
   const callback = encodeAbiParameters(
     [{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }],
@@ -107,7 +107,7 @@ export function feeOfferData(options: { director: FeeDirector; value: bigint; re
   return encodeFunctionData({
     abi: tokenMediatorAbi,
     functionName: "handleBridgedTokensAndCall",
-    args: [options.token ?? OTHER_TOKEN, options.recipient ?? FEE_ROUTER, options.value, callback],
+    args: [options.token ?? OTHER_TOKEN, options.recipient ?? DELIVERY_ROUTER, options.value, callback],
   });
 }
 
@@ -126,7 +126,7 @@ export function feedItem(options: { id?: number; token?: Address; decimals?: num
     transfer: {
       sourceToken: { chainId: 1, address: address(0x55), symbol: "SRC", decimals: options.decimals ?? 18 },
       destinationToken: { chainId: 369, address: options.token ?? OTHER_TOKEN, symbol: "DST", decimals: options.decimals ?? 18 },
-      recipient: FEE_ROUTER,
+      recipient: DELIVERY_ROUTER,
       value: "1000000000000000000",
     },
   };
@@ -255,12 +255,12 @@ export function headUpdatedLog(slot: bigint): ReceiptLog {
 
 /** The release of tokens to the router that opens the logs of an executed item: the mediator mints or unlocks to the router. */
 export function releaseToRouterLog(token: Address = OTHER_TOKEN): ReceiptLog {
-  return transferLog(token, FEE_ROUTER, 1n);
+  return transferLog(token, DELIVERY_ROUTER, 1n);
 }
 
 /** The `Transfer` log of a token that pays `value` to `to`. */
 export function transferLog(token: Address, to: Address, value: bigint): ReceiptLog {
-  const topics = encodeEventTopics({ abi: erc20Abi, eventName: "Transfer", args: { from: FEE_ROUTER, to } }) as Hex[];
+  const topics = encodeEventTopics({ abi: erc20Abi, eventName: "Transfer", args: { from: DELIVERY_ROUTER, to } }) as Hex[];
   return { address: token, topics, data: encodeAbiParameters([{ type: "uint256" }], [value]) };
 }
 
@@ -310,7 +310,7 @@ const EXECUTE_MESSAGE_SINGLE = selectorOf("executeMessageWithRunner");
 const UPDATE_SELECTOR = toFunctionSelector(beaconLightClientAbi.find((entry) => entry.type === "function" && entry.name === "update") as never);
 
 function selectorOf(name: string): Hex {
-  const entry = feeRouterAbi.find((candidate) => candidate.type === "function" && candidate.name === name);
+  const entry = deliveryRouterAbi.find((candidate) => candidate.type === "function" && candidate.name === name);
   if (entry === undefined) throw new Error(`${name} is not in the ABI`);
   return toFunctionSelector(entry as never);
 }
@@ -334,7 +334,7 @@ function messageIdAtFor(chain: FakeChain, request: CallRequest, position: number
   const calls = decoded.args[0].filter((call) => call.target.toLowerCase() !== LIGHT_CLIENT.toLowerCase());
   const call = calls[position];
   if (call === undefined) return chain.messageIdOfPosition(position);
-  const inner = decodeFunctionData({ abi: feeRouterAbi, data: call.callData });
+  const inner = decodeFunctionData({ abi: deliveryRouterAbi, data: call.callData });
   const slot = inner.functionName === "executeMessageWithRunner" ? inner.args[0].anchorHeader.slot : 0n;
   return slot > 0n ? word(Number(slot)) : chain.messageIdOfPosition(position);
 }
@@ -394,11 +394,11 @@ export function fakeChain(): FakeChain {
         return encodeFunctionResult({ abi: multicall3Abi, functionName: "aggregate3", result: results });
       }
       // The other read-only call a delivery makes is `feeInfo`.
-      const question = decodeFunctionData({ abi: feeRouterAbi, data: request.data });
+      const question = decodeFunctionData({ abi: deliveryRouterAbi, data: request.data });
       if (question.functionName !== "feeInfo") throw new Error(`the fake chain does not answer ${question.functionName}`);
       const [, value, gasUsed] = question.args;
       const fee = chain.feeTokensOf === null ? chain.feeTokens : chain.feeTokensOf({ value, gasUsed });
-      return encodeFunctionResult({ abi: feeRouterAbi, functionName: "feeInfo", result: [fee, 0n] });
+      return encodeFunctionResult({ abi: deliveryRouterAbi, functionName: "feeInfo", result: [fee, 0n] });
     },
     async send(request): Promise<ReceiptSummary> {
       log.push({ kind: "send", request: { to: request.to, data: request.data } });

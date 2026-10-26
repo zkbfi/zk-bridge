@@ -3,12 +3,12 @@ pragma solidity 0.8.28;
 
 // Test doubles for the integration test of the explorer bots. They are never deployed anywhere else.
 //
-// The test deploys the REAL BeaconLightClient and the REAL FeeRouter next to these doubles. The doubles replace the two
+// The test deploys the REAL BeaconLightClient and the REAL DeliveryRouter next to these doubles. The doubles replace the two
 // parts that need a beacon chain: the proof verifier (no Groth16 proof exists for a made-up update) and the mediator with
 // its message bridge (no receipt proof exists for a made-up message).
 
 import {BeaconLightClient} from "../../../../../src/hardened/BeaconLightClient.sol";
-import {FeeRouter} from "../../../../../src/hardened/mediator/FeeRouter.sol";
+import {DeliveryRouter} from "../../../../../src/hardened/mediator/DeliveryRouter.sol";
 import {MessageBridge} from "../../../../../src/hardened/MessageBridge.sol";
 import {Multicall3} from "../../../../../src/hardened/vendor/multicall3/Multicall3.sol";
 import {ISP1Verifier} from "../../../../../src/hardened/ISP1Verifier.sol";
@@ -36,7 +36,7 @@ contract ProofSizedVerifier is ISP1Verifier {
     }
 }
 
-/// @dev One contract that plays the token mediator and its message bridge for the fee router. `executeMessage` accepts a
+/// @dev One contract that plays the token mediator and its message bridge for the delivery router. `executeMessage` accepts a
 /// proof whose anchor slot is `VALID_ANCHOR_SLOT` and nothing else. It then does what the mediator does: it releases the
 /// armed tokens to the router and calls `onTokenBridged` with the armed data. The router, the fee maths and the payouts
 /// are the real ones.
@@ -73,7 +73,7 @@ contract StubMediatorBridge {
         if (delivered) revert MessageBridge.AlreadyDelivered(bytes32(0));
         delivered = true;
         MockERC20(token).mint(router, value);
-        FeeRouter(payable(router)).onTokenBridged(token, value, data);
+        DeliveryRouter(payable(router)).onTokenBridged(token, value, data);
         emit AffirmationCompleted(address(this), router, messageId, true);
     }
 }

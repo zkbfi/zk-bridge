@@ -53,7 +53,7 @@ const context = { router: "0x00000000000000000000000000000000000000bb", protecte
 const wei = 10n ** 18n;
 const price = { tokenValueInWei: wei, tokenDecimals: 18 };
 
-describe("against vectors printed by the compiled FeeRouter", () => {
+describe("against vectors printed by the compiled DeliveryRouter", () => {
   it("has vectors, including overflows that revert", () => {
     expect(vectors.length).toBeGreaterThan(2000);
     expect(vectors.some((vector) => vector.reverts)).toBe(true);

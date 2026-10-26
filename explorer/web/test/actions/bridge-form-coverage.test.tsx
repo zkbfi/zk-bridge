@@ -95,7 +95,7 @@ describe("the tip fields of each mode", () => {
     expect(screen.getByTestId("tip-advanced")).toHaveAttribute("open");
     await userEvent.selectOptions(screen.getByLabelText("Token"), `second:${FIXTURE_PAIR.second.contracts.wrappedNative}`);
     await userEvent.selectOptions(screen.getByLabelText("Token"), `first:${weth.address}`);
-    expect(screen.getByLabelText("Router on PulseChain")).toHaveValue(getAddress(FIXTURE_PAIR.second.contracts.feeRouter!));
+    expect(screen.getByLabelText("Router on PulseChain")).toHaveValue(getAddress(FIXTURE_PAIR.second.contracts.deliveryRouter!));
     expect(screen.getByLabelText(/^Your coin price/)).toHaveValue("1");
   });
 });

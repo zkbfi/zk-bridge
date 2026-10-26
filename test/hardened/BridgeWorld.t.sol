@@ -8,7 +8,7 @@ import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
 import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
 import {BridgedToken} from "../../src/hardened/mediator/BridgedToken.sol";
-import {FeeRouter} from "../../src/hardened/mediator/FeeRouter.sol";
+import {DeliveryRouter} from "../../src/hardened/mediator/DeliveryRouter.sol";
 import {ITokenMediator} from "../../src/hardened/mediator/ITokenMediator.sol";
 import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 import {MockWrappedNative} from "./mediator/utils/MediatorSupport.sol";
@@ -289,15 +289,15 @@ contract BridgeWorldTest is WorldSupport {
         assertEq(receiver.calls(), 1, "the failed message did not change the receiver");
     }
 
-    /// Claim: a runner that executes a delivery through the fee router earns a fee, and plain execution earns none. All
+    /// Claim: a runner that executes a delivery through the delivery router earns a fee, and plain execution earns none. All
     /// of it runs through the real bridge and the real mediator. Shows: with a fixed fee the runner holds the fee in the
     /// bridged copy and the recipient holds the rest. With a gas based fee the runner is paid from the measured gas:
     /// positive, below the cap, and bounded by the fee of the gas that the whole call used. A small cap binds. Plain
     /// `executeMessage` of the same kind of message pays no fee. Matters: the router relies on the callback order and on
     /// the gas rule of the bridge. Only the real bridge forwards exactly the gas of the message.
-    function test_feeRouterPaysARunnerThroughTheRealBridge() public {
+    function test_deliveryRouterPaysARunnerThroughTheRealBridge() public {
         MockWrappedNative wrapped = new MockWrappedNative();
-        FeeRouter router = new FeeRouter(
+        DeliveryRouter router = new DeliveryRouter(
             ITokenMediator(address(mediatorB)), IWETH(address(wrapped)), makeAddr("fee runner"), makeAddr("fee reward address"), makeAddr("fee failed delivery address")
         );
         // The first message of a token deploys its copy and costs more. Do it plainly, so the fee tests measure a
@@ -315,12 +315,12 @@ contract BridgeWorldTest is WorldSupport {
 
     /// Claim: the call path that the runner bot uses pays the default tip, and a direct delivery pays none. The sender
     /// relays through the mediator of chain A to the router on chain B, with a tip of 0.1% (the share mode with the
-    /// multiplier 1e15). Path one: the runner calls `FeeRouter.executeMessageWithRunner`, which calls
+    /// multiplier 1e15). Path one: the runner calls `DeliveryRouter.executeMessageWithRunner`, which calls
     /// `MessageBridge.executeMessage`, and the mediator delivers the tokens to the router. The router sees the runner,
     /// takes the tip, and pays the recipient. Path two: anyone calls `MessageBridge.executeMessage` directly. The
     /// mediator still delivers to the router, but no runner is recorded, so the router pays the recipient everything.
     /// Matters: this is the money path of the explorer, and both paths must pay exact amounts.
-    function _defaultTipOnBothPaths(FeeRouter router, address copy) internal {
+    function _defaultTipOnBothPaths(DeliveryRouter router, address copy) internal {
         uint256 value = 100 ether;
         uint256 tip = 0.1 ether;
         address viaRunner = makeAddr("recipient, tip through the runner");
@@ -353,10 +353,10 @@ contract BridgeWorldTest is WorldSupport {
         pure
         returns (bytes memory)
     {
-        return abi.encode(FeeRouter.FeeDirector(recipient, settings, limit, multiplier));
+        return abi.encode(DeliveryRouter.FeeDirector(recipient, settings, limit, multiplier));
     }
 
-    function _fixedFee(FeeRouter router, address copy) internal {
+    function _fixedFee(DeliveryRouter router, address copy) internal {
         address runner = router.runner();
         address recipient = makeAddr("recipient, fixed fee");
         uint256 value = 100 ether;
@@ -378,7 +378,7 @@ contract BridgeWorldTest is WorldSupport {
     }
 
     /// @dev The gas of one call of the runner through the router, with the reward address that the router whitelists.
-    function _gasOfRouterRun(FeeRouter router, Transit memory transit) internal returns (uint256) {
+    function _gasOfRouterRun(DeliveryRouter router, Transit memory transit) internal returns (uint256) {
         address rewardAddress = router.rewardAddress();
         vm.prank(router.runner(), router.runner());
         uint256 before = gasleft();
@@ -386,12 +386,12 @@ contract BridgeWorldTest is WorldSupport {
         return before - gasleft();
     }
 
-    function _gasBasedFee(FeeRouter router, address copy) internal {
+    function _gasBasedFee(DeliveryRouter router, address copy) internal {
         vm.txGasPrice(1 gwei);
         address recipient = makeAddr("recipient, gas based fee");
         uint256 value = 100 ether;
         uint256 cap = 1 ether;
-        FeeRouter.FeeDirector memory director = FeeRouter.FeeDirector(recipient, 0, cap, 1 ether);
+        DeliveryRouter.FeeDirector memory director = DeliveryRouter.FeeDirector(recipient, 0, cap, 1 ether);
         Vm.Log[] memory recorded = _relayAndCallFromA(alice, address(router), value, abi.encode(director));
         Transit memory transit = _proveForB(recorded);
 
@@ -414,7 +414,7 @@ contract BridgeWorldTest is WorldSupport {
     }
 
     /// @dev A cap below the measured fee binds: the runner gets the cap.
-    function _cappedFee(FeeRouter router, address copy) internal {
+    function _cappedFee(DeliveryRouter router, address copy) internal {
         uint256 value = 100 ether;
         address cappedRunner = router.runner();
         address cappedRecipient = makeAddr("recipient, capped fee");
@@ -431,7 +431,7 @@ contract BridgeWorldTest is WorldSupport {
         assertEq(BridgedToken(copy).balanceOf(cappedRecipient), value - 1000, "the recipient holds the rest");
     }
 
-    function _noRunnerNoFee(FeeRouter router, address copy) internal {
+    function _noRunnerNoFee(DeliveryRouter router, address copy) internal {
         address recipient = makeAddr("recipient, no runner");
         uint256 value = 100 ether;
         Vm.Log[] memory recorded = _relayAndCallFromA(

@@ -3,11 +3,11 @@ import { decodeFeeDirector } from '@zk-bridge/shared'
 import { buildBridgeSteps } from '../../src/app/actions'
 import { createFixtureChainAccess } from '../../src/chain/fixture-chain-access'
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS, buildFixtureDeliveryCost, FIXTURE_NOW } from '../../src/data/fixtures'
-import { encodeDirectorFor, feeTermsContextOf, isDeploymentFeeRouter, requireValidRouterRelay } from '../../src/tx/fee-terms-guard'
+import { encodeDirectorFor, feeTermsContextOf, isDeploymentDeliveryRouter, requireValidRouterRelay } from '../../src/tx/fee-terms-guard'
 import { PlanInputError } from '../../src/tx/plan'
 
 const usdc = FIXTURE_TOKENS[0]!
-const router = FIXTURE_PAIR.second.contracts.feeRouter!
+const router = FIXTURE_PAIR.second.contracts.deliveryRouter!
 const person = '0x00000000000000000000000000000000000000d1'
 const word = (address: string) => address.slice(2).toLowerCase().padStart(64, '0')
 const directorFor = (recipient: string) => `0x${word(recipient)}${'0'.repeat(63)}8${'0'.repeat(64)}${'0'.repeat(63)}5`
@@ -23,13 +23,13 @@ async function stepsFor(values: Record<string, string>, pair = FIXTURE_PAIR) {
   })
 }
 
-describe('a hand written relay to a fee router', () => {
+describe('a hand written relay to a delivery router', () => {
   test('is built when the data is a valid director', async () => {
     const steps = await stepsFor({ receiver: router, mode: 'call', data: directorFor(person) })
     expect(steps.length).toBeGreaterThan(0)
   })
 
-  test('is refused for a recipient that is zero, the router, another fee router, a mediator or a bridge', async () => {
+  test('is refused for a recipient that is zero, the router, another delivery router, a mediator or a bridge', async () => {
     const own = FIXTURE_PAIR.first.contracts
     const other = FIXTURE_PAIR.second.contracts
     const refused: readonly [string, RegExp][] = [
@@ -93,7 +93,7 @@ describe('a relay that pays for delivery', () => {
     expect(steps.length).toBeGreaterThan(0)
   })
 
-  test('is refused when the recipient is a fee router, a mediator or a bridge, before any review', async () => {
+  test('is refused when the recipient is a delivery router, a mediator or a bridge, before any review', async () => {
     for (const recipient of [router, FIXTURE_PAIR.first.contracts.tokenMediator, FIXTURE_PAIR.second.contracts.messageBridge]) {
       await expect(deliveryStepsFor({ receiver: recipient })).rejects.toThrow(PlanInputError)
     }
@@ -105,10 +105,10 @@ describe('a relay that pays for delivery', () => {
 })
 
 describe('the helpers', () => {
-  test('know the fee routers of the deployment in any letter case', () => {
-    expect(isDeploymentFeeRouter(FIXTURE_PAIR, router)).toBe(true)
-    expect(isDeploymentFeeRouter(FIXTURE_PAIR, router.toLowerCase() as `0x${string}`)).toBe(true)
-    expect(isDeploymentFeeRouter(FIXTURE_PAIR, person)).toBe(false)
+  test('know the delivery routers of the deployment in any letter case', () => {
+    expect(isDeploymentDeliveryRouter(FIXTURE_PAIR, router)).toBe(true)
+    expect(isDeploymentDeliveryRouter(FIXTURE_PAIR, router.toLowerCase() as `0x${string}`)).toBe(true)
+    expect(isDeploymentDeliveryRouter(FIXTURE_PAIR, person)).toBe(false)
   })
 
   test('encodeDirectorFor reports a refusal as a PlanInputError and keeps a valid encoding', () => {

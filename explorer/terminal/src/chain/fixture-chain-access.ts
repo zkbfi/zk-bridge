@@ -16,7 +16,7 @@ export interface FixtureChainNumbers {
   readonly allowance: bigint
   /** The gas estimate for every call. Default: 150,000. */
   readonly gasEstimate: bigint
-  /** What every fee router answers to `rewardAddress()` and `failedDeliveryAddress()`. Default: two fixed sample addresses. */
+  /** What every delivery router answers to `rewardAddress()` and `failedDeliveryAddress()`. Default: two fixed sample addresses. */
   readonly routerAddresses: RouterAddressesReading
 }
 

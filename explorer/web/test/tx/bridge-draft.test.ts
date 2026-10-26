@@ -9,7 +9,7 @@ import { buildDeliveryReport, buildFixtureContext } from "../helpers";
 const usdc = FIXTURE_TOKENS[0]!;
 const weth = FIXTURE_TOKENS[2]!;
 const receiver = getAddress(`0x${"cd".repeat(20)}`);
-const feeRouter = getAddress(FIXTURE_PAIR.second.contracts.feeRouter!);
+const deliveryRouter = getAddress(FIXTURE_PAIR.second.contracts.deliveryRouter!);
 const values = (overrides: Partial<BridgeFormValues> = {}): BridgeFormValues => ({ token: `first:${usdc.address}`, amount: "100", receiver, mode: "plain", data: "", fallback: "", ...overrides });
 const options = (overrides: Partial<DeliveryOptions> = {}): DeliveryOptions => ({ ...DEFAULT_DELIVERY_OPTIONS, ...overrides });
 
@@ -56,7 +56,7 @@ describe("computeBridgeDraft", () => {
 });
 
 describe("the default tip", () => {
-  it("is on with no choice from the user: 0.1 percent of the transfer, to the receiver, through the fee router of the deployment", async () => {
+  it("is on with no choice from the user: 0.1 percent of the transfer, to the receiver, through the default delivery router", async () => {
     expect(DEFAULT_DELIVERY_OPTIONS.mode).toBe("percentage");
     expect(DEFAULT_DELIVERY_OPTIONS.percentText).toBe("0.1");
     const draft = computeBridgeDraft(values(), DEFAULT_DELIVERY_OPTIONS, await data());
@@ -68,7 +68,7 @@ describe("the default tip", () => {
     expect(relay.disclosure.delivery).toBe(draft.delivery);
     const decoded = decodeFunctionData({ abi: tokenMediatorAbi, data: relay.plan.data });
     expect(decoded.functionName).toBe("relayTokensAndCall");
-    expect(getAddress(decoded.args![1] as string)).toBe(feeRouter);
+    expect(getAddress(decoded.args![1] as string)).toBe(deliveryRouter);
     expect(decodeFeeDirector(decoded.args![3] as `0x${string}`)).toEqual(defaultTip(receiver));
   });
 
@@ -112,8 +112,8 @@ describe("No tip means no router at all", () => {
       const relay = draft.steps.at(-1)!.plan;
       expect(draft.delivery).toBeNull();
       expect(["relayTokens", "relayTokensWithFallback"]).toContain(relay.functionName);
-      expect(relay.data.toLowerCase()).not.toContain(feeRouter.slice(2).toLowerCase());
-      expect(relay.data).not.toContain(encodeFeeDirector(defaultTip(receiver), { router: feeRouter, protectedAddresses: [] }).slice(2));
+      expect(relay.data.toLowerCase()).not.toContain(deliveryRouter.slice(2).toLowerCase());
+      expect(relay.data).not.toContain(encodeFeeDirector(defaultTip(receiver), { router: deliveryRouter, protectedAddresses: [] }).slice(2));
       const decoded = decodeFunctionData({ abi: tokenMediatorAbi, data: relay.data });
       expect(getAddress(decoded.args![1] as string)).toBe(receiver);
     }
@@ -136,11 +136,11 @@ describe("when no tip can travel", () => {
     expect(draft.steps.at(-1)!.plan.functionName).toBe("wrapAndRelayTokens");
   });
 
-  it("sends a plain relay toward a chain with no fee router, and says why", async () => {
+  it("sends a plain relay toward a chain with no delivery router, and says why", async () => {
     const wpls = FIXTURE_TOKENS.find((token) => token.symbol === "WPLS")!;
     const draft = computeBridgeDraft(values({ token: `second:${wpls.address}`, amount: "1" }), DEFAULT_DELIVERY_OPTIONS, await data());
     expect(draft.status).toBe("ready");
-    expect(draft.tip).toMatchObject({ kind: "unavailable", reason: expect.stringMatching(/no fee router for Ethereum.*plain relay, with no tip/) });
+    expect(draft.tip).toMatchObject({ kind: "unavailable", reason: expect.stringMatching(/no delivery router for Ethereum.*plain relay, with no tip/) });
     expect(draft.steps.at(-1)!.plan.functionName).toBe("relayTokens");
   });
 });
@@ -177,20 +177,20 @@ describe("the price field", () => {
 });
 
 describe("the router field", () => {
-  it("defaults to the fee router of the deployment on the destination chain", async () => {
+  it("defaults to the default delivery router on the destination chain", async () => {
     const draft = computeBridgeDraft(values(), DEFAULT_DELIVERY_OPTIONS, await data());
-    expect(draft.tip?.kind === "on" && draft.tip.target.router).toBe(feeRouter);
-    expect(draft.delivery).toMatchObject({ router: feeRouter, defaultRouter: feeRouter });
+    expect(draft.tip?.kind === "on" && draft.tip.target.router).toBe(deliveryRouter);
+    expect(draft.delivery).toMatchObject({ router: deliveryRouter, defaultRouter: deliveryRouter });
   });
 
   it("sends the relay to the router that the user names, and keeps the router of the deployment to mark the difference", async () => {
     const other = getAddress(`0x${"ee".repeat(20)}`);
     const draft = computeBridgeDraft(values(), options({ routerText: other }), await data());
     expect(draft.status).toBe("ready");
-    expect(draft.delivery).toMatchObject({ router: other, defaultRouter: feeRouter });
+    expect(draft.delivery).toMatchObject({ router: other, defaultRouter: deliveryRouter });
     const decoded = decodeFunctionData({ abi: tokenMediatorAbi, data: draft.steps.at(-1)!.plan.data });
     expect(getAddress(decoded.args![1] as string)).toBe(other);
-    expect(draft.steps.at(-1)!.plan.arguments.find((argument) => argument.name === "receiver")?.meaning).toMatch(/not the fee router of the deployment/);
+    expect(draft.steps.at(-1)!.plan.arguments.find((argument) => argument.name === "receiver")?.meaning).toMatch(/not the default delivery router/);
   });
 
   it("refuses text that is not an address", async () => {

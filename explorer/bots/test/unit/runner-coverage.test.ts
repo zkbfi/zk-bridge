@@ -8,7 +8,7 @@ import { createRunner, PAYLOAD_MEMORY_MILLISECONDS, RETRY_AFTER_MILLISECONDS } f
 import { createSerialQueue } from "../../src/runner/serial-queue.ts";
 import { INITIAL_RUNNER_STATE, type RunnerState } from "../../src/runner/state.ts";
 import {
-  FEE_ROUTER,
+  DELIVERY_ROUTER,
   LIGHT_CLIENT,
   MULTICALL,
   REWARD_ADDRESS,
@@ -77,7 +77,7 @@ function world(options: WorldOptions = {}) {
     prover,
     indexer,
     source: { findMessageLogIndex: async () => 0 },
-    feeRouter: FEE_ROUTER,
+    deliveryRouter: DELIVERY_ROUTER,
     multicall: MULTICALL,
     rewardAddress: REWARD_ADDRESS,
     wrappedNative: WRAPPED_NATIVE,

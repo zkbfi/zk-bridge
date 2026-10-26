@@ -26,7 +26,7 @@ import { startFakeIndexer, type FakeIndexer } from "../support/fake-indexer.ts";
 import type { SyntheticArtifacts } from "../../../indexer/test/integration/support/chains";
 
 /**
- * The bots against a local chain with the REAL `BeaconLightClient` and the REAL `FeeRouter`.
+ * The bots against a local chain with the REAL `BeaconLightClient` and the REAL `DeliveryRouter`.
  *
  * Real: both bots with their configuration files, secret references and loops; the contracts named above; signing and
  * sending of transactions; simulation; gas pricing from the chain; the worker thread that grinds proof of work; the
@@ -118,7 +118,7 @@ async function writeBotFiles(options: { name: string; boardUrl: string; indexerU
       wrapped_native: real ? stack.wrappedNative : filler(5),
       gate: filler(6),
       light_client: real ? stack.lightClient : filler(7),
-      fee_router: real ? stack.feeRouter : null,
+      delivery_router: real ? stack.deliveryRouter : null,
       start_block: 0,
     };
   };
@@ -261,7 +261,7 @@ describe.skipIf(!toolsPresent)("the proof path on a local stack", () => {
     expect(proverRuns[0].args.join(" ")).not.toContain(RUNPOD_KEY);
   });
 
-  it("refuses to start when the fee router whitelists another runner than the signer, and sends nothing", async () => {
+  it("refuses to start when the delivery router whitelists another runner than the signer, and sends nothing", async () => {
     await board?.stop();
     board = await startFakeBoard();
     // The router of the stack names the account ACCOUNT.runner. This runner signs with another account.
@@ -271,7 +271,7 @@ describe.skipIf(!toolsPresent)("the proof path on a local stack", () => {
     expect(await stack.chain.publicClient.getTransactionCount({ address: account(ACCOUNT.recipient).address })).toBe(0);
   });
 
-  it("refuses to start when the fee router pays another address than runner.rewardAddress, and sends nothing", async () => {
+  it("refuses to start when the delivery router pays another address than runner.rewardAddress, and sends nothing", async () => {
     await board?.stop();
     board = await startFakeBoard();
     const nonceBefore = await stack.chain.publicClient.getTransactionCount({ address: account(ACCOUNT.runner).address });
@@ -308,7 +308,7 @@ describe.skipIf(!toolsPresent)("the proof path on a local stack", () => {
   });
 });
 
-describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
+describe.skipIf(!toolsPresent)("delivery through the real delivery router", () => {
   const recipient = () => account(ACCOUNT.recipient).address;
   const value = 5n * 10n ** 18n;
   const abiOf = (name: string) => artifacts[name]?.abi as never;
@@ -336,7 +336,7 @@ describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
         prover,
         indexer: fakeIndexer(items, offers),
         source: { findMessageLogIndex: async () => 0 },
-        feeRouter: stack.feeRouter,
+        deliveryRouter: stack.deliveryRouter,
         multicall: stack.multicall3,
         rewardAddress: account(ACCOUNT.reward).address,
         wrappedNative: stack.wrappedNative,
@@ -368,9 +368,9 @@ describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
   }
 
   /** Arms the stub bridge. `id` names the message that the bridge reports as executed: the oldest item of the batch, which the runner sends first. */
-  const arm = (data: Hex, id: number) => stack.chain.send(stack.mediatorBridge, "StubMediatorBridge", "arm", [stack.feeRouter, stack.token, value, data, item(id).messageId], ACCOUNT.deployer);
+  const arm = (data: Hex, id: number) => stack.chain.send(stack.mediatorBridge, "StubMediatorBridge", "arm", [stack.deliveryRouter, stack.token, value, data, item(id).messageId], ACCOUNT.deployer);
   const item = (id: number) => feedItem({ id, token: stack.token });
-  const offerData = (fields: { settings: bigint; limit: bigint; multiplier: bigint }) => feeOfferData({ director: director(fields), value, token: stack.token, recipient: stack.feeRouter });
+  const offerData = (fields: { settings: bigint; limit: bigint; multiplier: bigint }) => feeOfferData({ director: director(fields), value, token: stack.token, recipient: stack.deliveryRouter });
 
   it("delivers a message whose gas based fee pays, and the router pays the runner and the recipient", async () => {
     const offer = { settings: 0n, limit: 10n ** 18n, multiplier: 3n * 10n ** 18n };
@@ -384,7 +384,7 @@ describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
     expect(await runner.sweep()).toMatchObject({ delivered: 1, skipped: 0, failed: 0 });
 
     const outcome = outcomes.records[0] as Record<string, unknown>;
-    expect(outcome).toMatchObject({ kind: "delivery", status: "delivered", path: "fee-router" });
+    expect(outcome).toMatchObject({ kind: "delivery", status: "delivered", path: "delivery-router" });
     const feeReceived = outcome.feeReceivedTokens as bigint;
     expect(feeReceived).toBeGreaterThan(0n);
     // The fee goes to the reward address. The signer is a hot key that only pays gas, and it receives no token.
@@ -392,7 +392,7 @@ describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
     expect(await balanceOf(signer.address)).toBe(before.runner);
     // The recipient gets the value less the fee. The router keeps nothing.
     expect(await balanceOf(recipient())).toBe(before.recipient + value - feeReceived);
-    expect(await balanceOf(stack.feeRouter)).toBe(0n);
+    expect(await balanceOf(stack.deliveryRouter)).toBe(0n);
     // The fee covered the cost: that is what the runner decided on.
     expect(feeReceived).toBeGreaterThanOrEqual(outcome.gasCostWei as bigint);
     console.info(`gas used by executeMessageWithRunner on the stack: ${outcome.gasUsed}; fee in tokens: ${feeReceived}; cost in wei: ${outcome.gasCostWei}`);
@@ -447,7 +447,7 @@ describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
     // One transaction did both: the update and the delivery.
     expect(await stack.chain.publicClient.getTransactionCount({ address: signer.address })).toBe(nonceBefore + 1);
     expect(outcomes.records.find((record) => record.kind === "update")).toMatchObject({ status: "posted", newSlot: update.newSlot });
-    expect(outcomes.records.find((record) => record.kind === "delivery")).toMatchObject({ status: "delivered", path: "fee-router" });
+    expect(outcomes.records.find((record) => record.kind === "delivery")).toMatchObject({ status: "delivered", path: "delivery-router" });
   });
 
   it("drops the item that the bridge already delivered from a batch, and still sends the batch of the others in one transaction", async () => {

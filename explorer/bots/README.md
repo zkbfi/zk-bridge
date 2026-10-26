@@ -51,8 +51,8 @@ proving policy. The **bot configuration** adds what only a bot needs. A sample i
 | `runner.indexerUrl` | The indexer. |
 | `runner.minimumMarginWei` | The fee must cover the gas cost plus this margin. Default 0. |
 | `runner.deliverWithoutOffer` | Deliver items with no fee offer, for the gas cost alone. Default off. |
-| `runner.feeRouter` | Default: `fee_router` of the deployment file. The runner must sign with the account that this router whitelists: at start it reads `FeeRouter.runner()` and refuses to run when the value is another address. |
-| `runner.rewardAddress` | The address that receives the fees. Required whenever a fee router is in use; a runner that only delivers directly needs none. At start the runner reads `FeeRouter.rewardAddress()` and refuses to run when it differs from this value, or when this value is the address of the signer. The signer is a hot key that only pays gas. The reward address can be a cold account. |
+| `runner.deliveryRouter` | Default: `delivery_router` of the deployment file. The runner must sign with the account that this router whitelists: at start it reads `DeliveryRouter.runner()` and refuses to run when the value is another address. |
+| `runner.rewardAddress` | The address that receives the fees. Required whenever a delivery router is in use; a runner that only delivers directly needs none. At start the runner reads `DeliveryRouter.rewardAddress()` and refuses to run when it differs from this value, or when this value is the address of the signer. The signer is a hot key that only pays gas. The reward address can be a cold account. |
 | `runner.multicall3` | The Multicall3 contract that batches the deliveries. Default `0xcA11bde05977b3631167028862bE2a173976CA11`, the canonical address. At start the runner refuses to run when the address holds no code. |
 | `runner.maximumBatchSize` | The most items in one batch transaction. Default 5. |
 | `runner.maximumBatchGas` | The most gas that the assumed gas of the items of one batch may add up to, and the upper bound of the gas limit of the batch transaction. Default 6000000. |
@@ -111,9 +111,9 @@ For each direction:
    A message is looked at once in five minutes.
 3. Keep the proof for the sweep (see step 6). The runner posts `update(proof, publicValues)` on its own only when no batch
    carries it. It simulates first. A revert means that another party posted first: skip.
-   - Read the call data of the message. A fee offer is a message to the mediator whose recipient is the fee router and whose
+   - Read the call data of the message. A fee offer is a message to the mediator whose recipient is the delivery router and whose
      callback data is a `FeeDirector` (recipient, settings, limit, multiplier). No offer: skip, unless `deliverWithoutOffer`.
-   - Compute the fee with `FeeRouter.feeInfo(token, value, gasUsed, director)` at the current fee quote. Convert it to wei
+   - Compute the fee with `DeliveryRouter.feeInfo(token, value, gasUsed, director)` at the current fee quote. Convert it to wei
      (the wrapped native token one for one, other tokens through `tokenValuationsWei`; no price means skip).
    - Gas cost = gas × (base fee + priority fee). Deliver only when fee ≥ cost + `minimumMarginWei`. The first check uses
      `executionGasFallback` and needs no evidence. The second check uses the gas of the simulation.
@@ -135,10 +135,10 @@ For each direction:
      replaces it with `gasUsed` times `effectiveGasPrice` when the receipt arrives. A send that throws, or a receipt that
      never arrives, leaves the worst case charged, because the transaction may be in the pool.
    - An item with a fee offer that passed the steps above waits as ready. After the sweep prepared all items, the ready
-     items go to the fee router in as few batches as `maximumBatchSize` and `maximumBatchGas` allow, oldest first. An item
+     items go to the delivery router in as few batches as `maximumBatchSize` and `maximumBatchGas` allow, oldest first. An item
      without an offer (`deliverWithoutOffer`) is not batched: it goes straight to the bridge with its own simulation.
 5. Send a batch through Multicall3 (`aggregate3`, failure allowed on each call). The first call is `update(proof, publicValues)`
-   at the light client when an update is offered. Each other call is `FeeRouter.executeMessageWithRunner(proof, rewardAddress)`.
+   at the light client when an update is offered. Each other call is `DeliveryRouter.executeMessageWithRunner(proof, rewardAddress)`.
    The router pays every fee to the reward address, not to the signer. When the router cannot deliver the tokens to a recipient, it hands them to its `failedDeliveryAddress`. The router reads `tx.origin`, which is the signer, so
    it accepts calls that come through Multicall3. Before the send the runner simulates the batch and drops what cannot go:
    - It reads the result that the simulated call returns for every call. A message that the bridge shows as delivered
@@ -189,7 +189,7 @@ For each direction:
 **Outcomes.** Every decision is a log line (`delivery_outcome`, `delivery_skipped`, `update_posted`, `update_skipped`) and a
 line in `stateDirectory/outcomes-<pair>.jsonl`. Fields: `time`, `kind` (`delivery` or `update`), `pair`, `direction`,
 `status` (`delivered`, `skipped`, `failed`, `posted`), `reason` (new: `insufficient-gas`, `anchor-not-stored`, `batch-did-not-settle`, `batch-result-missing`), `messageId`, `transactionHash`, `gasUsed`, `gasCostWei`,
-`prerequisiteCostWei`, `feeWei`, `feeExpectedWei`, `feeReceivedTokens`, `path` (`fee-router` or `bridge`). Amounts are
+`prerequisiteCostWei`, `feeWei`, `feeExpectedWei`, `feeReceivedTokens`, `path` (`delivery-router` or `bridge`). Amounts are
 decimal strings. A skip is written once for each change of reason, not once for each pass. The state file
 `runner-<pair>-<direction>.json` holds the items that need no second look, and the layout spend and losses of the last 24 hours.
 
@@ -216,7 +216,7 @@ fakes for chain, indexer and prover; the board client against a fake node and a 
 code 4008; the real grind worker; the real `zk-bridge-prover verify` against a real Groth16 proof.
 
 Integration test (`test/integration/stack.test.ts`): a local Anvil chain with the real `BeaconLightClient` and the real
-`FeeRouter`. See the header of the file for what is real and what is synthetic: the update values and the proof (no beacon
+`DeliveryRouter`. See the header of the file for what is real and what is synthetic: the update values and the proof (no beacon
 chain exists on the local stack), the prover (a script), the msgboard node (in this process), and the mediator and bridge
 (a stub that releases tokens to the real router).
 

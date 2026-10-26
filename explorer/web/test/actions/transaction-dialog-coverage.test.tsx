@@ -103,11 +103,11 @@ describe("the confirm dialog after a failure", () => {
 });
 
 describe("the confirm dialog review of a tip", () => {
-  it("warns about a router that is not the fee router of the deployment", async () => {
+  it("warns about a router that is not the default delivery router", async () => {
     const other = getAddress(`0x${"ee".repeat(20)}`);
     const steps = await stepsOf({ options: { mode: "percentage", routerText: other } });
     renderWithWallet(<TransactionDialog steps={steps} onClose={() => undefined} />, { wallet: connectedWallet() });
-    expect(await screen.findByTestId("confirm-router-warning")).toHaveTextContent("This router is not the fee router of the deployment");
+    expect(await screen.findByTestId("confirm-router-warning")).toHaveTextContent("This router is not the default delivery router");
   });
 
   it("leaves out the cost lines when no coin price is known", async () => {

@@ -10,7 +10,7 @@ import { z } from "zod";
 /** The kinds of delivery that the indexer measures separately. */
 export const DELIVERY_KINDS = ["token_callback", "token", "message"] as const;
 
-/** A token delivery with a callback (through the fee router), a plain token delivery, or a message with no tokens. */
+/** A token delivery with a callback (through the delivery router), a plain token delivery, or a message with no tokens. */
 export type DeliveryKind = (typeof DELIVERY_KINDS)[number];
 
 const amountText = z.string().regex(/^\d+$/);

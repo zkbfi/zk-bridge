@@ -9,7 +9,7 @@ import type { ChainSnapshot, ChainSnapshotResult, RouterAddressesReading, TokenP
 import type { FlowStep } from '../flow/transaction-flow'
 import type { ChainConfig, ChainSide, PairConfig, TokenInfo } from '../model/types'
 import { buildDeliveryFeeModel, paysForDelivery, resolveDeliveryTarget, routerOf, transferValueOf, type TokenValuationsWei } from './delivery-fee-form'
-import { encodeDirectorFor, isDeploymentFeeRouter, requireValidRouterRelay } from '../tx/fee-terms-guard'
+import { encodeDirectorFor, isDeploymentDeliveryRouter, requireValidRouterRelay } from '../tx/fee-terms-guard'
 import {
   PlanInputError,
   parseAddress,
@@ -96,7 +96,7 @@ export function buildBridgeSteps(values: Readonly<Record<string, string>>, token
 }
 
 /**
- * Refuses a relay to a fee router of the deployment whose data the router would hand to its failed delivery address. A relay
+ * Refuses a relay to a default delivery router whose data the router would hand to its failed delivery address. A relay
  * that pays for delivery builds its own data and meets the same guard in the encoder.
  */
 function requireValidTermsForKnownRouter(
@@ -104,7 +104,7 @@ function requireValidTermsForKnownRouter(
   input: { source: BridgeSource; receiver: Address; pair: PairConfig },
 ): void {
   const { source, receiver, pair } = input
-  if (!isDeploymentFeeRouter(pair, receiver)) return
+  if (!isDeploymentDeliveryRouter(pair, receiver)) return
   const destination = source.side === 'first' ? pair.second : pair.first
   const mode = source.kind === 'native' ? ({ kind: 'plain' } satisfies RelayMode) : relayModeOf(values)
   const data = mode.kind === 'plain' ? '0x' : mode.data
@@ -136,7 +136,7 @@ export function bridgeSourceOf(values: Readonly<Record<string, string>>, tokens:
 
 /**
  * True when the relay carries a tip: the user left the tip on and the transfer can carry one. The tip is on by default.
- * A transfer that cannot carry one (the native coin route, or a chain with no fee router in the deployment) is a plain
+ * A transfer that cannot carry one (the native coin route, or a chain with no delivery router in the deployment) is a plain
  * relay, and the form says why on its note.
  */
 function deliveryWanted(
@@ -174,7 +174,7 @@ export function deliveryRouterOf(
 }
 
 /**
- * The receiver, the call data and the review of a relay that pays for delivery. The receiver is the fee router of the
+ * The receiver, the call data and the review of a relay that pays for delivery. The receiver is the delivery router of the
  * other chain. The call data is the encoded fee terms. The amount that the router receives is the amount less the fee
  * of the mediator.
  */
@@ -190,7 +190,7 @@ function deliveryRelayOf(
   }
   const { target } = resolved
   const state = buildDeliveryFeeModel({ values, target, report: context.deliveryCost, transferValue: transferValueOf(values.amount ?? '', input.source.token.decimals, input.feeRate) })
-  if (state.kind === 'needs-amount') throw new PlanInputError('The amount is too small: nothing reaches the fee router after the bridge fee.')
+  if (state.kind === 'needs-amount') throw new PlanInputError('The amount is too small: nothing reaches the delivery router after the bridge fee.')
   if (state.kind === 'unavailable') throw new PlanInputError(state.reason)
   const { chosen, dataSource, router } = state.model
   if (chosen.kind === 'invalid') throw new PlanInputError(chosen.reason)

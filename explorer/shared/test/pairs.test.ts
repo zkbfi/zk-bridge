@@ -83,18 +83,18 @@ describe("loadPair", () => {
 describe("the optional contracts of a chain section", () => {
   const withOptional = (extra: Record<string, unknown>) => ({ chain_a: { ...deployment.chain_a, ...extra }, chain_b: deployment.chain_b });
 
-  it("gives null when the deployment file has no fee router and no fork registry, or has null", () => {
+  it("gives null when the deployment file has no delivery router and no fork registry, or has null", () => {
     const missing = loadPair({ environment: {}, deployment });
-    expect(missing.sides[0].contracts.feeRouter).toBeNull();
+    expect(missing.sides[0].contracts.deliveryRouter).toBeNull();
     expect(missing.sides[0].contracts.forkRegistry).toBeNull();
-    const explicitNull = loadPair({ environment: {}, deployment: withOptional({ fee_router: null, fork_registry: null }) });
-    expect(explicitNull.sides[0].contracts.feeRouter).toBeNull();
+    const explicitNull = loadPair({ environment: {}, deployment: withOptional({ delivery_router: null, fork_registry: null }) });
+    expect(explicitNull.sides[0].contracts.deliveryRouter).toBeNull();
     expect(explicitNull.sides[0].contracts.forkRegistry).toBeNull();
   });
 
-  it("lowercases a fee router and a fork registry when the file has them", () => {
-    const pair = loadPair({ environment: {}, deployment: withOptional({ fee_router: `0x${"AB".repeat(20)}`, fork_registry: `0x${"CD".repeat(20)}` }) });
-    expect(pair.sides[0].contracts.feeRouter).toBe(`0x${"ab".repeat(20)}`);
+  it("lowercases a delivery router and a fork registry when the file has them", () => {
+    const pair = loadPair({ environment: {}, deployment: withOptional({ delivery_router: `0x${"AB".repeat(20)}`, fork_registry: `0x${"CD".repeat(20)}` }) });
+    expect(pair.sides[0].contracts.deliveryRouter).toBe(`0x${"ab".repeat(20)}`);
     expect(pair.sides[0].contracts.forkRegistry).toBe(`0x${"cd".repeat(20)}`);
   });
 });

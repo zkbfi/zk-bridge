@@ -52,7 +52,7 @@ async function prepare(options: ServiceWorldOptions & { runnerExtra?: Record<str
     config: { ...runnerSection(indexer.url, options.runnerExtra), ...options.config },
     setup: { msgboardUrl: { source: "environment", variable: "BOARD_URL" }, directions: options.directions ?? ["first-to-second"], ...options.setup },
     environment: { RUNNER_KEY: SIGNER_KEY, BOARD_URL: node.url, PATH: "/custom/bin", ...options.environment },
-    ...(options.omitFeeRouter === undefined ? {} : { omitFeeRouter: options.omitFeeRouter }),
+    ...(options.omitDeliveryRouter === undefined ? {} : { omitDeliveryRouter: options.omitDeliveryRouter }),
   });
   closers.push(created.cleanup);
   return { created, indexer, node };
@@ -174,14 +174,14 @@ describe("startRunner refuses to start", () => {
     expect(makeClient).not.toHaveBeenCalled();
   });
 
-  it("when the fee router does not whitelist the signer, and releases the lock", async () => {
+  it("when the delivery router does not whitelist the signer, and releases the lock", async () => {
     const started = await prepare();
     const { overrides } = standardOverrides({ publicClient: () => clientWith({ runner: REWARD_ADDRESS }) });
     await expect(run(started, overrides)).rejects.toThrow(/whitelists/);
     expect(existsSync(join(started.created.directory, "state", "runner-eth-pls-first-to-second.json.lock"))).toBe(false);
   });
 
-  it("when the fee router pays another address than the reward address", async () => {
+  it("when the delivery router pays another address than the reward address", async () => {
     const started = await prepare();
     const { overrides } = standardOverrides({ publicClient: () => clientWith({ rewardAddress: SIGNER_ADDRESS }) });
     await expect(run(started, overrides)).rejects.toThrow(/pays the fees to/);
@@ -197,7 +197,7 @@ describe("startRunner refuses to start", () => {
     const started = await prepare();
     const { overrides } = standardOverrides();
     const { publicClient: _unused, ...withoutClient } = overrides;
-    await expect(run(started, withoutClient)).rejects.toThrow(/Cannot read runner\(\) of the fee router/);
+    await expect(run(started, withoutClient)).rejects.toThrow(/Cannot read runner\(\) of the delivery router/);
   }, 60_000);
 });
 
@@ -243,19 +243,19 @@ describe("startRunner runs one pass", () => {
   });
 
   it("delivers without a router when the deployment has none, and needs no reward address and no Multicall3", async () => {
-    const started = await prepare({ omitFeeRouter: true });
+    const started = await prepare({ omitDeliveryRouter: true });
     const { overrides, client } = standardOverrides({ publicClient: () => clientWith({ code: undefined }) });
     await run(started, overrides);
-    expect(started.created.events().find((event) => event.event === "runner_started")).toMatchObject({ feeRouter: null, rewardAddress: null });
+    expect(started.created.events().find((event) => event.event === "runner_started")).toMatchObject({ deliveryRouter: null, rewardAddress: null });
     expect(client.getCode).not.toHaveBeenCalled();
   });
 
   it("uses the router that the configuration names over the one in the deployment", async () => {
     const named = `0x${"5a".repeat(20)}`;
-    const started = await prepare({ runnerExtra: { feeRouter: named } });
+    const started = await prepare({ runnerExtra: { deliveryRouter: named } });
     const { overrides } = standardOverrides();
     await run(started, overrides);
-    expect(started.created.events().find((event) => event.event === "runner_started")).toMatchObject({ feeRouter: named });
+    expect(started.created.events().find((event) => event.event === "runner_started")).toMatchObject({ deliveryRouter: named });
   });
 
   it("builds the prover wrapper itself when none is given, and reads the priority fee that the configuration sets", async () => {

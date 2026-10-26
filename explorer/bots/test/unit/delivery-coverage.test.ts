@@ -35,7 +35,7 @@ function setup(options: SetupOptions = {}) {
     prover,
     indexer: fakeIndexer([item], { [item.messageId]: options.deliverWithoutOffer === true ? "0x" : offerData }),
     source: { findMessageLogIndex: async () => (options.logIndex === undefined ? 0 : options.logIndex) },
-    feeRouter: address(0x77),
+    deliveryRouter: address(0x77),
     multicall: MULTICALL,
     rewardAddress: REWARD_ADDRESS,
     wrappedNative: WRAPPED_NATIVE,

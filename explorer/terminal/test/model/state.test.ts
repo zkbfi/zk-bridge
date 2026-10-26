@@ -149,7 +149,7 @@ describe('pair configuration', () => {
     expect(pair.first.chainId).toBe(1)
     expect(pair.second.chainId).toBe(369)
     expect(pair.first.rpcEnvironmentVariable).toBe('EXPLORER_RPC_URL_1')
-    expect(pair.first.contracts.feeRouter).toBeNull()
+    expect(pair.first.contracts.deliveryRouter).toBeNull()
   })
 
   test('refuses an unknown pair, a missing chain and a section without a required address', () => {

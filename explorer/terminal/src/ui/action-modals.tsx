@@ -156,7 +156,7 @@ export function BridgeModal(props: ActionModalProps) {
       }),
       hint: 'The destination token is the wrapped native token, so the router can unwrap the fee.',
     },
-    { kind: 'text', name: DELIVERY_FIELD.router, label: 'Router (advanced)', placeholder: 'blank is the fee router of the deployment', visibleWhen: whenActive(), hint: 'The last step before delivery, chosen in the extra data. Blank targets the fee router of the deployment on the other chain. Only its one whitelisted runner account can deliver through it. That account does not receive the tip; the reward address of the router does.' },
+    { kind: 'text', name: DELIVERY_FIELD.router, label: 'Router (advanced)', placeholder: 'blank is the default delivery router', visibleWhen: whenActive(), hint: 'The last step before delivery, chosen in the extra data. Blank targets the default delivery router on the other chain. Only its one whitelisted runner account can deliver through it. That account does not receive the tip; the reward address of the router does.' },
     { kind: 'text', name: DELIVERY_FIELD.recipient, label: 'Fee recipient', placeholder: 'blank is the receiver above', visibleWhen: whenActive(), hint: 'Receives the tokens after the fee. Blank means the receiver above.' },
   ]
   /** Asks the router for its reward address and its failed delivery address, then builds the review. The read never throws; a failed read becomes a line on the review. */

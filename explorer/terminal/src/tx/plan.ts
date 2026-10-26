@@ -33,7 +33,7 @@ export interface ChargedFee {
 export interface DeliveryFeeReview {
   /** The router that the relay targets on the destination chain: the receiver of the relay. */
   readonly router: Address
-  /** The fee router of the deployment on that chain. The review warns when `router` differs from it. */
+  /** The default delivery router on that chain. The review warns when `router` differs from it. */
   readonly defaultRouter: Address
   readonly routerChainName: string
   /** The fee terms that the call data holds. */
@@ -358,11 +358,11 @@ function holdsDirector(data: Hex, director: FeeDirector): boolean {
   }
 }
 
-/** The sentences about a delivery fee. The second one repeats what `FeeRouter.sol` states about a message that no runner delivers. */
+/** The sentences about a delivery fee. The second one repeats what `DeliveryRouter.sol` states about a message that no runner delivers. */
 function deliveryFeeNotes(deliveryFee: DeliveryFeeReview): string[] {
   return [
     `The receiver is the router ${getAddress(deliveryFee.router)} on ${deliveryFee.routerChainName}. The tokens go to ${getAddress(deliveryFee.director.recipient)} after the tip.`,
-    'The tip goes to the reward address of the fee router, not to the runner account that signs the delivery. Only the one whitelisted runner account can deliver through the router, and it receives no tip. When anyone else delivers on the bridge directly, no reward address is recorded, no tip is paid, and the recipient gets everything. When the router cannot deliver to the recipient, it hands the tokens to its failed delivery address.',
+    'The tip goes to the reward address of the delivery router, not to the runner account that signs the delivery. Only the one whitelisted runner account can deliver through the router, and it receives no tip. When anyone else delivers on the bridge directly, no reward address is recorded, no tip is paid, and the recipient gets everything. When the router cannot deliver to the recipient, it hands the tokens to its failed delivery address.',
   ]
 }
 

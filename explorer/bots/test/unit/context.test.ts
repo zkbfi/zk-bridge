@@ -16,7 +16,7 @@ afterEach(async () => {
 
 function section(chainId: number, seed: number) {
   const address = (offset: number) => `0x${(seed + offset).toString(16).padStart(2, "0").repeat(20)}`;
-  return { chain_id: chainId, bridge: address(1), mediator: address(2), token_factory: address(3), native_router: address(4), wrapped_native: address(5), gate: address(6), light_client: address(7), fee_router: address(8), start_block: 5 };
+  return { chain_id: chainId, bridge: address(1), mediator: address(2), token_factory: address(3), native_router: address(4), wrapped_native: address(5), gate: address(6), light_client: address(7), delivery_router: address(8), start_block: 5 };
 }
 
 async function files(setup: ProverSetup, config: Record<string, unknown> = {}) {
@@ -54,7 +54,7 @@ describe("loading the context", () => {
     });
     expect(context.pair.sides[0].rpcUrl).toContain(VALVE_KEY);
     expect(context.pair.sides[1].beaconUrl).toBe("http://127.0.0.1:5053");
-    expect(context.pair.sides[1].contracts.feeRouter).toBe(`0x${"28".repeat(20)}`);
+    expect(context.pair.sides[1].contracts.deliveryRouter).toBe(`0x${"28".repeat(20)}`);
     context.logger.info("connected", { rpc: context.pair.sides[0].rpcUrl });
     expect(lines.join("\n")).not.toContain(VALVE_KEY);
   });

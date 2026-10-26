@@ -72,7 +72,7 @@ export interface ChainConfig {
     /** The wrapped native token (WETH or WPLS) that the router wraps into. */
     readonly wrappedNative: Address | null
     readonly gate: Address | null
-    readonly feeRouter: Address | null
+    readonly deliveryRouter: Address | null
   }
 }
 

@@ -48,11 +48,11 @@ function requireRunnerConfig(context: BotContext): RunnerConfig {
 }
 
 /**
- * The two start-up checks of a fee router: the router whitelists the signer, and it pays the configured reward address.
+ * The two start-up checks of a delivery router: the router whitelists the signer, and it pays the configured reward address.
  * @returns the reward address.
  */
-async function requireFeeRouterIdentity(input: Parameters<typeof requireRewardAddress>[0]): Promise<Address> {
-  await requireWhitelistedRunner({ client: input.client, feeRouter: input.feeRouter, signerAddress: input.signerAddress, chainName: input.chainName });
+async function requireDeliveryRouterIdentity(input: Parameters<typeof requireRewardAddress>[0]): Promise<Address> {
+  await requireWhitelistedRunner({ client: input.client, deliveryRouter: input.deliveryRouter, signerAddress: input.signerAddress, chainName: input.chainName });
   return requireRewardAddress(input);
 }
 
@@ -181,26 +181,26 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       temporaryDirectory: join(context.config.stateDirectory, "tmp"),
       logger: directionLogger,
     });
-    const feeRouter = (runnerConfig.feeRouter ?? destination.contracts.feeRouter) as Address | null;
+    const deliveryRouter = (runnerConfig.deliveryRouter ?? destination.contracts.deliveryRouter) as Address | null;
     // A runner that only delivers directly uses no router, and needs no reward address.
     const rewardAddress =
-      feeRouter === null
+      deliveryRouter === null
         ? null
-        : await requireFeeRouterIdentity({
+        : await requireDeliveryRouterIdentity({
             client: destinationPort.client,
-            feeRouter,
+            deliveryRouter,
             rewardAddress: runnerConfig.rewardAddress as Address | undefined,
             signerAddress: signer.address,
             chainName: destination.name,
           });
-    const multicall = feeRouter === null ? null : await requireMulticall3({ client: destinationPort.client, address: runnerConfig.multicall3 as Address, chainName: destination.name });
+    const multicall = deliveryRouter === null ? null : await requireMulticall3({ client: destinationPort.client, address: runnerConfig.multicall3 as Address, chainName: destination.name });
     const delivery: DeliveryDependencies = {
       direction,
       chain: destinationPort.chain,
       prover,
       indexer,
       source: createSourceReader(sourceClient, source.contracts.bridge),
-      feeRouter,
+      deliveryRouter,
       multicall,
       rewardAddress,
       wrappedNative: destination.contracts.wrappedNative,
@@ -239,7 +239,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
         }),
       );
     }
-    directionLogger.info("runner_started", { category, pollSeconds: runnerConfig.pollSeconds, feeRouter, rewardAddress });
+    directionLogger.info("runner_started", { category, pollSeconds: runnerConfig.pollSeconds, deliveryRouter, rewardAddress });
     jobs.push(
       runLoop({
         name: `runner ${direction}`,

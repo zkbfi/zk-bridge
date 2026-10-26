@@ -27,8 +27,8 @@
     },
     "flowLimiter": "0x0000000000000000000000000000000000000000",
     "wrappedNative": "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9",
-    "deployFeeRouter": "true",
-    "feeRouter": {
+    "deployDeliveryRouter": "true",
+    "deliveryRouter": {
       "runner": "0x848bF275d91A0A1d3eF2786dC71CA33C5997D06d",
       "rewardAddress": "0x24E6cc8b82D086762Ef58fa1FF3f4d0702892718",
       "failedDeliveryAddress": "0x24E6cc8b82D086762Ef58fa1FF3f4d0702892718"
@@ -87,8 +87,8 @@
     },
     "flowLimiter": "0x0000000000000000000000000000000000000000",
     "wrappedNative": "0x70499adEBB11Efd915E3b69E700c331778628707",
-    "deployFeeRouter": "true",
-    "feeRouter": {
+    "deployDeliveryRouter": "true",
+    "deliveryRouter": {
       "runner": "0x848bF275d91A0A1d3eF2786dC71CA33C5997D06d",
       "rewardAddress": "0x24E6cc8b82D086762Ef58fa1FF3f4d0702892718",
       "failedDeliveryAddress": "0x24E6cc8b82D086762Ef58fa1FF3f4d0702892718"

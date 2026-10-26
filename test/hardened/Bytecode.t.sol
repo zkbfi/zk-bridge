@@ -8,7 +8,7 @@ import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
 import {TokenMediator} from "../../src/hardened/mediator/TokenMediator.sol";
 import {TokenFactory} from "../../src/hardened/mediator/TokenFactory.sol";
 import {WETHOmnibridgeRouter} from "../../src/hardened/mediator/WETHOmnibridgeRouter.sol";
-import {FeeRouter} from "../../src/hardened/mediator/FeeRouter.sol";
+import {DeliveryRouter} from "../../src/hardened/mediator/DeliveryRouter.sol";
 import {ITokenMediator} from "../../src/hardened/mediator/ITokenMediator.sol";
 import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 import {MockWrappedNative} from "./mediator/utils/MediatorSupport.sol";
@@ -70,7 +70,7 @@ contract BytecodeTest is MessageScenes {
             TokenFactory factory,
             address copy,
             WETHOmnibridgeRouter wethRouter,
-            FeeRouter feeRouter
+            DeliveryRouter deliveryRouter
         )
     {
         mediator = new TokenMediator(_mediatorTerms());
@@ -79,13 +79,13 @@ contract BytecodeTest is MessageScenes {
         copy = factory.deploy("Copy", "CPY", 18, CHAIN_A, makeAddr("native token"));
         IWETH wrapped = IWETH(address(new MockWrappedNative()));
         wethRouter = new WETHOmnibridgeRouter(ITokenMediator(address(mediator)), wrapped);
-        feeRouter = new FeeRouter(ITokenMediator(address(mediator)), wrapped, makeAddr("runner"), makeAddr("reward address"), makeAddr("failed delivery address"));
+        deliveryRouter = new DeliveryRouter(ITokenMediator(address(mediator)), wrapped, makeAddr("runner"), makeAddr("reward address"), makeAddr("failed delivery address"));
     }
 
     /// @dev The runtime code of every contract that runs on both chains, with the names that the logs print. The fork
     /// gate in enforcing mode and the fork registry are scanned in other tests, with the probe.
     function _deployedContracts() internal returns (string[9] memory names, bytes[9] memory codes) {
-        (TokenMediator mediator, TokenFactory factory, address copy, WETHOmnibridgeRouter wethRouter, FeeRouter feeRouter) =
+        (TokenMediator mediator, TokenFactory factory, address copy, WETHOmnibridgeRouter wethRouter, DeliveryRouter deliveryRouter) =
             _mediatorContracts();
         names = [
             "BeaconLightClient",
@@ -96,7 +96,7 @@ contract BytecodeTest is MessageScenes {
             "TokenFactory",
             "BridgedToken",
             "WETHOmnibridgeRouter",
-            "FeeRouter"
+            "DeliveryRouter"
         ];
         codes = [
             address(lightClientForA).code,
@@ -107,13 +107,13 @@ contract BytecodeTest is MessageScenes {
             address(factory).code,
             copy.code,
             address(wethRouter).code,
-            address(feeRouter).code
+            address(deliveryRouter).code
         ];
     }
 
     /// Claim: no hardened contract contains MCOPY or TSTORE (or TLOAD). Shows: the count is zero for each opcode in
     /// the runtime code of the light client, both message bridges, the fork gate (detection mode and enforcing mode),
-    /// the token mediator, its factory, a bridged token, the wrapped coin router and the fee router, with the vendored
+    /// the token mediator, its factory, a bridged token, the wrapped coin router and the delivery router, with the vendored
     /// libraries linked in. Matters: R2-10 (the repository compiled for cancun, and PulseChain rejects those
     /// opcodes). Every contract that runs on both chains must pass. The storage reentrancy guard, not the transient
     /// one, is what makes this pass for the bridge and the mediator.
@@ -162,7 +162,7 @@ contract BytecodeTest is MessageScenes {
 
     /// Claim: every hardened contract fits the 24576-byte limit. Shows: the runtime size of each contract is printed and
     /// is below the limit, for the light client, both message bridges, the fork gate, the token mediator, its factory,
-    /// a bridged token, the wrapped coin router and the fee router. Matters: each contract is deployable on both chains.
+    /// a bridged token, the wrapped coin router and the delivery router. Matters: each contract is deployable on both chains.
     function test_R2_10_hardenedContractsFitTheSizeLimit() public {
         (string[9] memory names, bytes[9] memory codes) = _deployedContracts();
         for (uint256 i = 0; i < codes.length; i++) {

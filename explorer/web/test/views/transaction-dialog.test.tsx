@@ -36,7 +36,7 @@ describe("the confirm dialog", () => {
     expect(within(review).getByText(/Bridge fee on the source chain/)).toBeInTheDocument();
     const delivery = within(review).getByTestId("confirm-delivery");
     expect(delivery).toHaveTextContent(/Tip for delivery \(paid by this transaction\)/);
-    expect(within(delivery).getByText(getAddress(FIXTURE_PAIR.second.contracts.feeRouter!))).toBeInTheDocument();
+    expect(within(delivery).getByText(getAddress(FIXTURE_PAIR.second.contracts.deliveryRouter!))).toBeInTheDocument();
     expect(within(delivery).getByText("percentage of the transfer")).toBeInTheDocument();
     expect(within(delivery).getByTestId("confirm-tip-now")).toHaveTextContent(/\(exact\)$/);
     expect(within(delivery).getByTestId("confirm-runner-maximum")).toHaveTextContent(/The runner can take at most/);

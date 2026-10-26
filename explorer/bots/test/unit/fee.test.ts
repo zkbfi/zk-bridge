@@ -1,37 +1,37 @@
 import { describe, expect, it } from "vitest";
 import { decideDelivery, readFeeOffer, valueFeeInWei } from "../../src/runner/fee.ts";
-import { FEE_ROUTER, OTHER_TOKEN, WRAPPED_NATIVE, address, feeOfferData } from "../support/builders.ts";
+import { DELIVERY_ROUTER, OTHER_TOKEN, WRAPPED_NATIVE, address, feeOfferData } from "../support/builders.ts";
 import { encodeFunctionData } from "viem";
 import { tokenMediatorAbi } from "@zk-bridge/shared";
 
 const director = { recipient: address(0x12), settings: 8n, limit: 0n, multiplier: 10n ** 16n };
 
 describe("reading the fee offer", () => {
-  it("reads the FeeDirector from the callback data of a message to the fee router", () => {
-    const offer = readFeeOffer({ messageData: feeOfferData({ director, value: 5000n }), feeRouter: FEE_ROUTER });
+  it("reads the FeeDirector from the callback data of a message to the delivery router", () => {
+    const offer = readFeeOffer({ messageData: feeOfferData({ director, value: 5000n }), deliveryRouter: DELIVERY_ROUTER });
     expect(offer).toEqual({ kind: "offer", director, value: 5000n });
   });
 
   it("compares the router address without regard to letter case", () => {
-    const offer = readFeeOffer({ messageData: feeOfferData({ director, value: 1n }), feeRouter: FEE_ROUTER.toUpperCase().replace("0X", "0x") as `0x${string}` });
+    const offer = readFeeOffer({ messageData: feeOfferData({ director, value: 1n }), deliveryRouter: DELIVERY_ROUTER.toUpperCase().replace("0X", "0x") as `0x${string}` });
     expect(offer.kind).toBe("offer");
   });
 
   it("finds no offer for each way a message can lack one", () => {
-    const reason = (messageData: `0x${string}`, feeRouter: typeof FEE_ROUTER | null = FEE_ROUTER) => {
-      const offer = readFeeOffer({ messageData, feeRouter });
+    const reason = (messageData: `0x${string}`, deliveryRouter: typeof DELIVERY_ROUTER | null = DELIVERY_ROUTER) => {
+      const offer = readFeeOffer({ messageData, deliveryRouter });
       return offer.kind === "none" ? offer.reason : "offer";
     };
-    expect(reason(feeOfferData({ director, value: 1n }), null)).toBe("no-fee-router-configured");
+    expect(reason(feeOfferData({ director, value: 1n }), null)).toBe("no-delivery-router-configured");
     expect(reason("0xdeadbeef")).toBe("not-a-token-message");
-    expect(reason(feeOfferData({ director, value: 1n, recipient: address(0x13) }))).toBe("recipient-is-not-the-fee-router");
-    const plain = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleBridgedTokens", args: [OTHER_TOKEN, FEE_ROUTER, 1n] });
+    expect(reason(feeOfferData({ director, value: 1n, recipient: address(0x13) }))).toBe("recipient-is-not-the-delivery-router");
+    const plain = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleBridgedTokens", args: [OTHER_TOKEN, DELIVERY_ROUTER, 1n] });
     expect(reason(plain)).toBe("no-callback-data");
-    const legacy = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleBridgedTokensAndCall", args: [OTHER_TOKEN, FEE_ROUTER, 1n, address(0x14)] });
+    const legacy = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleBridgedTokensAndCall", args: [OTHER_TOKEN, DELIVERY_ROUTER, 1n, address(0x14)] });
     expect(reason(legacy)).toBe("legacy-native-receiver");
-    const short = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleBridgedTokensAndCall", args: [OTHER_TOKEN, FEE_ROUTER, 1n, "0x1234"] });
+    const short = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleBridgedTokensAndCall", args: [OTHER_TOKEN, DELIVERY_ROUTER, 1n, "0x1234"] });
     expect(reason(short)).toBe("malformed-fee-director");
-    const empty = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleBridgedTokensAndCall", args: [OTHER_TOKEN, FEE_ROUTER, 1n, "0x"] });
+    const empty = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleBridgedTokensAndCall", args: [OTHER_TOKEN, DELIVERY_ROUTER, 1n, "0x"] });
     expect(reason(empty)).toBe("malformed-fee-director");
   });
 });

@@ -19,7 +19,7 @@ const ARTIFACTS: ReadonlyArray<readonly [name: string, file: string]> = [
   ["ProofSizedVerifier", "StackDoubles.sol/ProofSizedVerifier.json"],
   ["StubMediatorBridge", "StackDoubles.sol/StubMediatorBridge.json"],
   ["BeaconLightClient", "BeaconLightClient.sol/BeaconLightClient.json"],
-  ["FeeRouter", "FeeRouter.sol/FeeRouter.json"],
+  ["DeliveryRouter", "DeliveryRouter.sol/DeliveryRouter.json"],
   ["Multicall3", "Multicall3.sol/Multicall3.json"],
   ["MockERC20", "MockERC20.sol/MockERC20.json"],
   ["MockWrappedNative", "MockWrappedNative.sol/MockWrappedNative.json"],
@@ -65,7 +65,7 @@ export interface Stack {
   readonly chain: ChainHandle;
   readonly lightClient: Address;
   readonly verifier: Address;
-  readonly feeRouter: Address;
+  readonly deliveryRouter: Address;
   readonly multicall3: Address;
   readonly mediatorBridge: Address;
   readonly wrappedNative: Address;
@@ -78,7 +78,7 @@ export const account = (index: number) => mnemonicToAccount(ANVIL_MNEMONIC, { ad
 
 /**
  * Starts Anvil as chain 369 and deploys: the real `BeaconLightClient` with the proof-sized oracle verifier, the real
- * `FeeRouter`, a stub mediator and bridge, a wrapped native token and a token. The light client starts at slot 100.
+ * `DeliveryRouter`, a stub mediator and bridge, a wrapped native token and a token. The light client starts at slot 100.
  */
 export async function startStack(artifacts: SyntheticArtifacts): Promise<Stack> {
   const anvil = await startAnvil(369, "shanghai");
@@ -99,10 +99,10 @@ export async function startStack(artifacts: SyntheticArtifacts): Promise<Stack> 
   ]);
   const mediatorBridge = await chain.deploy("StubMediatorBridge");
   const wrappedNative = await chain.deploy("MockWrappedNative");
-  const feeRouter = await chain.deploy("FeeRouter", [mediatorBridge, wrappedNative, account(ACCOUNT.runner).address, account(ACCOUNT.reward).address, account(ACCOUNT.failedDelivery).address]);
+  const deliveryRouter = await chain.deploy("DeliveryRouter", [mediatorBridge, wrappedNative, account(ACCOUNT.runner).address, account(ACCOUNT.reward).address, account(ACCOUNT.failedDelivery).address]);
   const multicall3 = await chain.deploy("Multicall3");
   const token = await chain.deploy("MockERC20", ["Fee Token", "FEE"]);
-  return { anvil, chain, lightClient, verifier, feeRouter, multicall3, mediatorBridge, wrappedNative, token, programKey };
+  return { anvil, chain, lightClient, verifier, deliveryRouter, multicall3, mediatorBridge, wrappedNative, token, programKey };
 }
 
 /** An update that the stack accepts, with the pieces that a proof package carries. */

@@ -4,7 +4,7 @@
  */
 import { erc20Abi, isAddress, getAddress, zeroAddress, type Abi, type Address } from 'viem'
 import type { ChainConfig, TokenInfo } from '../model/types'
-import { feeRouterAbi, tokenMediatorAbi } from '../tx/abis'
+import { deliveryRouterAbi, tokenMediatorAbi } from '../tx/abis'
 
 /** The part of a viem public client that the reads need. */
 export interface ReadClient {
@@ -90,7 +90,7 @@ async function readBigint(
 }
 
 /**
- * What the fee router says about the two addresses that it pays: the reward address, which receives the tips, and the
+ * What the delivery router says about the two addresses that it pays: the reward address, which receives the tips, and the
  * failed delivery address, which receives what the router cannot deliver. `unreadable` means the router did not answer
  * `rewardAddress()` or `failedDeliveryAddress()` with an address: the read failed, or the router is of an older version.
  */
@@ -98,16 +98,16 @@ export type RouterAddressesReading =
   | { readonly kind: 'read'; readonly rewardAddress: Address; readonly failedDeliveryAddress: Address }
   | { readonly kind: 'unreadable'; readonly reason: string }
 
-/** Reads one address of a fee router. It throws when the router does not answer with a non-zero address. */
+/** Reads one address of a delivery router. It throws when the router does not answer with a non-zero address. */
 async function readRouterAddress(client: ReadClient, input: { router: Address; functionName: 'rewardAddress' | 'failedDeliveryAddress' }): Promise<Address> {
-  const value = await client.readContract({ address: input.router, abi: feeRouterAbi, functionName: input.functionName })
+  const value = await client.readContract({ address: input.router, abi: deliveryRouterAbi, functionName: input.functionName })
   if (typeof value !== 'string' || !isAddress(value, { strict: false })) throw new Error('The router did not return an address.')
   if (value === zeroAddress) throw new Error(`The router returned the zero address for ${input.functionName}().`)
   return getAddress(value)
 }
 
 /**
- * Reads `rewardAddress()` and `failedDeliveryAddress()` of a fee router. It never throws; a failure becomes an
+ * Reads `rewardAddress()` and `failedDeliveryAddress()` of a delivery router. It never throws; a failure becomes an
  * `unreadable` result. The zero address is also unreadable: the router of this version refuses it in the constructor,
  * so it is not that router.
  */

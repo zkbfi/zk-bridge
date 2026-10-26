@@ -54,7 +54,7 @@ export function routerAddressLines(reading: RouterAddressesReading): readonly Li
     reviewRow('Tip goes to', 'unknown'),
     reviewRow('On failure', 'unknown'),
     [colored(`Warning: the router did not return its addresses (${reading.reason}).`, theme.warn)],
-    [colored('It may be an older router that pays the tip to the runner, or not a fee router. Check it before you send.', theme.warn)],
+    [colored('It may be an older router that pays the tip to the runner, or not a delivery router. Check it before you send.', theme.warn)],
   ]
 }
 

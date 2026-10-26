@@ -292,7 +292,7 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
 
   /**
    * One sweep. The runner first prepares the items oldest first: offers, evidence, layout calls. An item with a fee
-   * offer that passes waits as ready. When the preparation is over, the ready items go to the fee router in as few batches
+   * offer that passes waits as ready. When the preparation is over, the ready items go to the delivery router in as few batches
    * as the limits allow, and each batch is one transaction. An item without an offer goes directly to the bridge, alone.
    * A prepared item counts as one attempt of the sweep, whether or not its batch later drops it.
    */

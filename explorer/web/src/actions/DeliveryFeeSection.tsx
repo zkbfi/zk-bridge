@@ -182,7 +182,7 @@ const TipFields = ({ tip, draft, options, onChange, destinationNativeSymbol, des
         <chakra.summary fontSize="sm" fontWeight="medium" cursor="pointer">
           Advanced: router
         </chakra.summary>
-        <Field label={`Router on ${destinationName}`} hint="The router that receives the relay and pays the tip. The default is the fee router of the deployment. Its one whitelisted runner delivers.">
+        <Field label={`Router on ${destinationName}`} hint="The router that receives the relay and pays the tip. The default is the default delivery router. Its one whitelisted runner delivers.">
           {(id) => (
             <TextInput id={id} spellCheck={false} autoComplete="off" value={options.routerText ?? target.router} onChange={(event) => onChange({ ...options, routerText: event.target.value })} />
           )}

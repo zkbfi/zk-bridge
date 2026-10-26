@@ -223,7 +223,7 @@ contract ImmutabilityTest is Test {
             "out/BridgedToken.sol/BridgedToken.json",
             "out/TokenFactory.sol/TokenFactory.json",
             "out/WETHOmnibridgeRouter.sol/WETHOmnibridgeRouter.json",
-            "out/FeeRouter.sol/FeeRouter.json"
+            "out/DeliveryRouter.sol/DeliveryRouter.json"
         ];
         string[9] memory banned = [
             "owner", "transferOwnership", "renounceOwnership", "upgradeTo", "upgradeToAndCall", "setVerifier",

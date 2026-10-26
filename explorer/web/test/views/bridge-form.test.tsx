@@ -151,7 +151,7 @@ describe("the bridge form: fees before any signature", () => {
   it("shows the router of the deployment as the default of the advanced field, with no warning", async () => {
     await renderForm();
     const router = screen.getByLabelText("Router on PulseChain");
-    expect(router).toHaveValue(getAddress(FIXTURE_PAIR.second.contracts.feeRouter!));
+    expect(router).toHaveValue(getAddress(FIXTURE_PAIR.second.contracts.deliveryRouter!));
     expect(screen.queryByTestId("tip-router-warning")).toBeNull();
   });
 
@@ -162,7 +162,7 @@ describe("the bridge form: fees before any signature", () => {
     const router = screen.getByLabelText("Router on PulseChain");
     await userEvent.clear(router);
     await userEvent.type(router, other);
-    expect(await screen.findByTestId("tip-router-warning")).toHaveTextContent("is not the fee router of the deployment");
+    expect(await screen.findByTestId("tip-router-warning")).toHaveTextContent("is not the default delivery router");
     const review = screen.getByRole("button", { name: "Review transaction" });
     await waitFor(() => expect(review).toBeEnabled());
     await userEvent.click(review);
@@ -187,10 +187,10 @@ describe("the bridge form: fees before any signature", () => {
     expect(steps.at(-1)!.plan.functionName).toBe("relayTokens");
   });
 
-  it("sends a plain relay toward a chain with no fee router, and says so", async () => {
+  it("sends a plain relay toward a chain with no delivery router, and says so", async () => {
     await renderForm();
     await userEvent.selectOptions(screen.getByLabelText("Token"), `second:${FIXTURE_TOKENS[4]!.address}`);
-    expect(screen.getByText(/no fee router for Ethereum.*plain relay, with no tip/)).toBeInTheDocument();
+    expect(screen.getByText(/no delivery router for Ethereum.*plain relay, with no tip/)).toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: /No tip/ })).toBeNull();
     expect(screen.getByLabelText("How the receiver gets it")).toBeInTheDocument();
   });

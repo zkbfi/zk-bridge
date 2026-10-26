@@ -22,8 +22,8 @@ export const tokenMediatorAbi = parseAbi([
   'function nativeTokenAddress(address bridgedToken) view returns (address)',
 ])
 
-/** The fee router: the account that may deliver through it, the address that receives the tips, and the address that receives what it cannot deliver. */
-export const feeRouterAbi = parseAbi([
+/** The delivery router: the account that may deliver through it, the address that receives the tips, and the address that receives what it cannot deliver. */
+export const deliveryRouterAbi = parseAbi([
   'function runner() view returns (address)',
   'function rewardAddress() view returns (address)',
   'function failedDeliveryAddress() view returns (address)',

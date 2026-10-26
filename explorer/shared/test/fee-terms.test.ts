@@ -4,7 +4,7 @@ import { encodeFeeDirector, type FeeDirector } from "../src/delivery-fee.js";
 import {
   assertValidFeeTerms,
   FeeTermsError,
-  isKnownFeeRouter,
+  isKnownDeliveryRouter,
   protectedAddressesOf,
   type FeeTermsInput,
   type ProtectedChain,
@@ -17,9 +17,9 @@ const otherToken = "0x4444444444444444444444444444444444444444";
 const person = "0x00000000000000000000000000000000000000aa";
 
 const chains: readonly ProtectedChain[] = [
-  { name: "ethereum", bridge: "0x5555555555555555555555555555555555555555", mediator: "0x6666666666666666666666666666666666666666", feeRouter: router },
-  { name: "pulsechain", bridge: "0x7777777777777777777777777777777777777777", mediator: "0x8888888888888888888888888888888888888888", feeRouter: otherRouter },
-  { name: "no router chain", bridge: "0x9999999999999999999999999999999999999999", mediator: "0xaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaA", feeRouter: null },
+  { name: "ethereum", bridge: "0x5555555555555555555555555555555555555555", mediator: "0x6666666666666666666666666666666666666666", deliveryRouter: router },
+  { name: "pulsechain", bridge: "0x7777777777777777777777777777777777777777", mediator: "0x8888888888888888888888888888888888888888", deliveryRouter: otherRouter },
+  { name: "no router chain", bridge: "0x9999999999999999999999999999999999999999", mediator: "0xaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaA", deliveryRouter: null },
 ];
 const context = { router, protectedAddresses: protectedAddressesOf(chains) } as const;
 const director = (recipient: string): FeeDirector => ({ recipient: recipient as FeeDirector["recipient"], settings: 8n, limit: 0n, multiplier: 5n });
@@ -51,9 +51,9 @@ describe("assertValidFeeTerms refuses what the router would send to its reward a
 
   it("the zero address as recipient", () => refuses(directorData("0x0000000000000000000000000000000000000000"), /zero address/));
   it("the router as recipient, in another letter case", () => refuses(directorData(router.toUpperCase().replace("0X", "0x")), /router itself/));
-  it("a fee router of either chain", () => {
-    refuses(directorData(otherRouter), /fee router of pulsechain/);
-    refuses(directorData(router), /fee router of ethereum/, { router: otherRouter });
+  it("a delivery router of either chain", () => {
+    refuses(directorData(otherRouter), /delivery router of pulsechain/);
+    refuses(directorData(router), /delivery router of ethereum/, { router: otherRouter });
   });
   it("the mediator and the bridge of either chain", () => {
     for (const chain of chains) {
@@ -87,7 +87,7 @@ describe("the encoder cannot be bypassed", () => {
   it("refuses a director that the guard refuses", () => {
     expect(() => encodeFeeDirector(director("0x0000000000000000000000000000000000000000"), context)).toThrow(/zero address/);
     expect(() => encodeFeeDirector(director(router), context)).toThrow(/router itself/);
-    expect(() => encodeFeeDirector(director(otherRouter), context)).toThrow(/fee router of pulsechain/);
+    expect(() => encodeFeeDirector(director(otherRouter), context)).toThrow(/delivery router of pulsechain/);
     expect(() => encodeFeeDirector(director(chains[1]!.bridge), context)).toThrow(/bridge of pulsechain/);
   });
 
@@ -106,12 +106,12 @@ describe("deployment lists", () => {
   it("protects the router, mediator and bridge of each chain, and skips a missing router", () => {
     const labels = protectedAddressesOf(chains).map((entry) => entry.label);
     expect(labels).toHaveLength(8);
-    expect(labels).not.toContain("the fee router of no router chain");
+    expect(labels).not.toContain("the delivery router of no router chain");
   });
 
-  it("knows a fee router of either chain in any letter case, and nothing else", () => {
-    expect(isKnownFeeRouter(otherRouter.toUpperCase().replace("0X", "0x") as `0x${string}`, chains)).toBe(true);
-    expect(isKnownFeeRouter(router, chains)).toBe(true);
-    expect(isKnownFeeRouter(person, chains)).toBe(false);
+  it("knows a delivery router of either chain in any letter case, and nothing else", () => {
+    expect(isKnownDeliveryRouter(otherRouter.toUpperCase().replace("0X", "0x") as `0x${string}`, chains)).toBe(true);
+    expect(isKnownDeliveryRouter(router, chains)).toBe(true);
+    expect(isKnownDeliveryRouter(person, chains)).toBe(false);
   });
 });

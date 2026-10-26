@@ -44,13 +44,13 @@ curl -s 'localhost:42069/api/feed?status=sent,covered&limit=20'
 | Variable | Meaning | Default |
 |---|---|---|
 | `EXPLORER_PAIR` | Pair name. Known: `eth-pls` (chain 1 and chain 369), `sepolia-pls943` (chain 11155111 and chain 943). | `eth-pls` |
-| `EXPLORER_DEPLOYMENT_FILE` | Deployment JSON: one section per chain with `chain_id`, `bridge`, `mediator`, `token_factory`, `native_router`, `wrapped_native`, `gate`, `light_client`, `start_block`, and optional `fee_router` and `fork_registry`. A section matches a side by `chain_id`. `rpc_url` in the file is a fallback. | `../deployments/<pair>.json` |
+| `EXPLORER_DEPLOYMENT_FILE` | Deployment JSON: one section per chain with `chain_id`, `bridge`, `mediator`, `token_factory`, `native_router`, `wrapped_native`, `gate`, `light_client`, `start_block`, and optional `delivery_router` and `fork_registry`. A section matches a side by `chain_id`. `rpc_url` in the file is a fallback. | `../deployments/<pair>.json` |
 | `EXPLORER_RPC_URL_<chainId>` | Execution endpoint. Comes from the environment because URLs can carry keys. | the `rpc_url` of the file |
 | `EXPLORER_BEACON_URL_<chainId>` | Beacon node endpoint of that chain. Optional. Used for the finalized slot in `/api/heads`. | none |
 | `EXPLORER_FINALITY_SECONDS_<chainId>` | Seconds before a send counts as `waiting_for_finality`. | 768 (chains 369 and 943: 640) |
 | `EXPLORER_TIP_INTERVAL_BLOCKS` | Blocks between two clock updates. | 5 |
 | `EXPLORER_DELIVERY_SAMPLE_LIMIT` | How many of the newest recorded deliveries of each kind feed `/api/delivery-cost`. | 200 |
-| `EXPLORER_DEFAULT_DELIVERY_GAS` | Gas that `/api/delivery-cost` gives for a kind with no samples. The default is the Foundry measured sum: the fee router delivery call with the gas based fee (about 197807 gas, `test/hardened/mediator/FeeRouterGas.t.sol`), plus the bridge proof check (290655 gas, `test/hardened/MessageBridgeGas.t.sol`), plus 21000 gas of transaction base. That sum is 509462. The default rounds it up to 550000 for calldata. | 550000 |
+| `EXPLORER_DEFAULT_DELIVERY_GAS` | Gas that `/api/delivery-cost` gives for a kind with no samples. The default is the Foundry measured sum: the delivery router delivery call with the gas based fee (about 197807 gas, `test/hardened/mediator/DeliveryRouterGas.t.sol`), plus the bridge proof check (290655 gas, `test/hardened/MessageBridgeGas.t.sol`), plus 21000 gas of transaction base. That sum is 509462. The default rounds it up to 550000 for calldata. | 550000 |
 | `EXPLORER_PROOF_COST_USD` | The cost of one proof, in US dollars, as a decimal text. | 0.02 |
 | `EXPLORER_DELIVERIES_PER_PROOF` | How many deliveries one proof covers. | 1 |
 | `EXPLORER_NATIVE_COIN_PRICE_USD_<chainId>` | The price of the native coin of that chain in US dollars, as a decimal text. Without it, `proofCost.wei` is null. | none |
@@ -89,7 +89,7 @@ In flight means `sent`, `waiting_for_finality` or `covered`.
 
 ### Endpoints
 
-`GET /api/pair` returns `{ name, sides: [{ name, chainId, startBlock, finalitySeconds, contracts }] }`. `contracts` holds `bridge`, `mediator`, `tokenFactory`, `nativeRouter`, `wrappedNative`, `gate`, `lightClient`, `feeRouter`, `forkRegistry` (the last two can be null).
+`GET /api/pair` returns `{ name, sides: [{ name, chainId, startBlock, finalitySeconds, contracts }] }`. `contracts` holds `bridge`, `mediator`, `tokenFactory`, `nativeRouter`, `wrappedNative`, `gate`, `lightClient`, `deliveryRouter`, `forkRegistry` (the last two can be null).
 
 `GET /api/summary` is the top bar and the footer in one call. Query: `now` replaces the clock (tests).
 
@@ -170,7 +170,7 @@ An item:
 
 The gas is `gasUsed` of the whole delivery transaction. The indexer records it for each `AffirmationCompleted` event (table `delivery_costs`), except when the same transaction holds more than one delivery of the bridge: a batch has no gas that belongs to one message, so the indexer records nothing for it. `averageGas` is the mean rounded half up. `p90Gas` is the 90th percentile by nearest rank, with the rank rounded up. Only the newest `EXPLORER_DELIVERY_SAMPLE_LIMIT` samples of each kind count.
 
-The kind rules: `token_callback` is a `token` message whose transfer has a callback (a delivery through the fee router). `token` is a `token` message without a callback. `message` is every other message kind. The send and the delivery arrive in either order, and a delivery that arrives first creates the `messages` row with the placeholder kind `message`. So a delivery counts only after its send is indexed (`sent_timestamp` is set), and a `token` delivery also needs its `transfers` row. Until then the delivery is left out, and it joins the figures when its send arrives. The kind is not stored in `delivery_costs`.
+The kind rules: `token_callback` is a `token` message whose transfer has a callback (a delivery through the delivery router). `token` is a `token` message without a callback. `message` is every other message kind. The send and the delivery arrive in either order, and a delivery that arrives first creates the `messages` row with the placeholder kind `message`. So a delivery counts only after its send is indexed (`sent_timestamp` is set), and a `token` delivery also needs its `transfers` row. Until then the delivery is left out, and it joins the figures when its send arrives. The kind is not stored in `delivery_costs`.
 
 When a kind has no samples, `isDefault` is true and `defaultGas` is a configured default, not a measure. Figures improve by themselves as the indexer records more deliveries. `proofCost.wei` comes from configured prices with exact integer math, and `isEstimate` is always true. `baseFee` is the base fee of the newest block that the clock handler saw (every `EXPLORER_TIP_INTERVAL_BLOCKS` blocks), and is null before the first block or on a chain without a base fee.
 

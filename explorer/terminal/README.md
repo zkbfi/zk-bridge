@@ -59,13 +59,13 @@ The bridge form has a choice field `Tip for delivery`. It is `Yes` by default, a
 percentage mode, multiplier 1e15). You can edit the tip or choose `No tip`. You fix the tip now: nothing at delivery
 sets or changes the rate, and the runner supplies no rate.
 
-- The field is offered for a token transfer when the deployment file names a fee router (`fee_router`) for the
+- The field is offered for a token transfer when the deployment file names a delivery router (`delivery_router`) for the
   destination chain. When it does not, the form hides the field and sends a plain relay, and the note under the form
   says why. The wrap and relay route carries no call data, so it never carries a tip.
 - `Yes` always sends `relayTokensAndCall`. The `Mode`, `Call data` and `Fallback recipient` fields disappear, because the
   call data now holds the tip terms. The tokens go to the `Fee recipient` after the tip (blank means the `Receiver`
   field).
-- `Router (advanced)` chooses the router in the extra data: the receiver of the relay. Blank means the fee router of
+- `Router (advanced)` chooses the router in the extra data: the receiver of the relay. Blank means the delivery router of
   the deployment on the destination chain. The confirmation screen shows the router and marks one that is not the router
   of the deployment.
 - `Tip mode` is `Percentage`, `Fixed amount`, `Gas multiplier` or `Custom terms`. The percentage starts at `0.1`.
@@ -88,7 +88,7 @@ sets or changes the rate, and the runner supplies no rate.
   report. The confirmation screen shows the router, the tip mode, the recipient, the address that receives the tip, the address that receives the tokens when delivery fails, the flags, the limit, the multiplier in
   words, the tip now with its label (`exact`, or `estimate, at most X`), the most that the tip can be, and the data
   source.
-- The fee router whitelists exactly one account, its immutable `runner`. Only that runner account can deliver through
+- The delivery router whitelists exactly one account, its immutable `runner`. Only that runner account can deliver through
   the router, and it does not receive the tip. The router pays the tip to its immutable `rewardAddress`. The runner
   names that address with each delivery, and the call reverts unless it matches. When anyone else delivers on the
   bridge directly, no tip is paid and the recipient gets everything. A direct delivery costs you nothing. The router keeps

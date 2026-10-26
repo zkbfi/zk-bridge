@@ -53,7 +53,7 @@ describe('buildBridgeSteps input checks', () => {
 describe('deliveryRouterOf', () => {
   test('is null when the router field is not an address, so the build of the steps can tell the user', async () => {
     const context = await contextOf({ deliveryCost: buildFixtureDeliveryCost(369, FIXTURE_NOW) })
-    const tipValues = { ...values, delivery: 'yes', feeRouter: 'not an address' }
+    const tipValues = { ...values, delivery: 'yes', deliveryRouter: 'not an address' }
     expect(deliveryRouterOf(tipValues, FIXTURE_TOKENS, context)).toBeNull()
     expect(() => buildBridgeSteps(tipValues, FIXTURE_TOKENS, { ...context, tokenValuationsWei: { [zkUsdc.address.toLowerCase()]: 400_000_000_000_000n } })).toThrow(
       PlanInputError,

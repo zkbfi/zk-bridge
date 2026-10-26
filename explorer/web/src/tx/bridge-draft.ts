@@ -4,7 +4,7 @@
  * transaction in any other place.
  *
  * The tip for delivery is on by default. A transfer that cannot carry a tip (the wrap route, or a destination with no
- * fee router) is a plain relay, and the draft says why, as the terminal does.
+ * delivery router) is a plain relay, and the draft says why, as the terminal does.
  */
 import { getAddress, type Address } from "viem";
 import { UINT256_MAXIMUM, type DeliveryCostReport, type PayoutKind, type SenderPrice } from "@zk-bridge/shared";
@@ -39,7 +39,7 @@ export type DeliveryOptions = {
    */
   readonly senderPriceText: string | null;
   /**
-   * The router of the relay. Null means the user has not typed one, so the field shows the fee router of the deployment
+   * The router of the relay. Null means the user has not typed one, so the field shows the default delivery router
    * on the destination chain. An empty text also takes that router.
    */
   readonly routerText: string | null;
@@ -123,7 +123,7 @@ export type TipStatusInput = {
 };
 
 /**
- * Tells whether the relay carries a tip. The wrap route and a destination with no fee router cannot carry one. Otherwise
+ * Tells whether the relay carries a tip. The wrap route and a destination with no delivery router cannot carry one. Otherwise
  * the tip is on unless the user chose No tip.
  *
  * @param input The form values, the options, the pair and the token valuations.

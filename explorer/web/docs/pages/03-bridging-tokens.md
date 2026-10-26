@@ -38,7 +38,7 @@ Use it when the receiver is a normal account.
 
 `relayTokensAndCall` delivers the tokens and then calls the receiver. It takes the same values plus call data. After the tokens arrive, the receiver contract gets a callback named `onTokenBridged` with your data.
 
-Use it when the receiver is a contract that must act on the tokens. The interface also uses this function to send your tip through the fee router. The page Fees explained covers that case.
+Use it when the receiver is a contract that must act on the tokens. The interface also uses this function to send your tip through the delivery router. The page Fees explained covers that case.
 
 ### relayTokensWithFallback
 

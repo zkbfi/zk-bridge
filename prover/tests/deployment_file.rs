@@ -21,7 +21,7 @@ const REQUIRED_ADDRESSES: [&str; 7] = [
     "gate",
     "light_client",
 ];
-const OPTIONAL_ADDRESSES: [&str; 2] = ["fee_router", "fork_registry"];
+const OPTIONAL_ADDRESSES: [&str; 2] = ["delivery_router", "fork_registry"];
 
 struct Scratch(PathBuf);
 
@@ -157,7 +157,7 @@ fn a_file_from_flags_passes_the_explorer_rules() {
             file[section].get("rpc_url").is_none(),
             "no rpc_url by default"
         );
-        assert!(file[section].get("fee_router").is_none());
+        assert!(file[section].get("delivery_router").is_none());
         for key in file[section].as_object().unwrap().keys() {
             assert!(SECTION_KEYS.contains(&key.as_str()), "{key}");
         }
@@ -264,7 +264,7 @@ fn a_chain_without_wrapped_native_and_a_plain_rpc_url_are_accepted() {
     a.push(format!("native_router={zero}"));
     a.push(format!("wrapped_native={zero}"));
     a.push("rpc_url=https://node.example".into());
-    a.push(format!("fee_router={zero}"));
+    a.push(format!("delivery_router={zero}"));
     a.push(format!("fork_registry={}", address(0x77)));
     assert_eq!(
         run(&arguments(&output, &a, &pairs(943, 0x40))).0.unwrap(),
@@ -275,7 +275,7 @@ fn a_chain_without_wrapped_native_and_a_plain_rpc_url_are_accepted() {
     assert_eq!(file["chain_a"]["native_router"], zero);
     assert_eq!(file["chain_a"]["rpc_url"], "https://node.example");
     assert!(
-        file["chain_a"].get("fee_router").is_none(),
+        file["chain_a"].get("delivery_router").is_none(),
         "a zero optional address is left out"
     );
     assert_eq!(file["chain_a"]["fork_registry"], address(0x77));
@@ -366,7 +366,7 @@ fn a_broadcast_file_gives_the_addresses_by_contract_name() {
     let mut all = arguments(
         &output,
         &[],
-        &["fee_router=0x9999999999999999999999999999999999999999".to_string()],
+        &["delivery_router=0x9999999999999999999999999999999999999999".to_string()],
     );
     all.extend(["--broadcast".to_string(), file.display().to_string()]);
     assert_eq!(run(&all).0.unwrap(), 0);
@@ -405,11 +405,11 @@ fn a_broadcast_file_gives_the_addresses_by_contract_name() {
         "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
     assert_eq!(
-        b["fee_router"], "0x9999999999999999999999999999999999999999",
+        b["delivery_router"], "0x9999999999999999999999999999999999999999",
         "the flag adds it"
     );
     assert_eq!(b["start_block"], 19);
-    assert!(a.get("fee_router").is_none());
+    assert!(a.get("delivery_router").is_none());
 
     // A chain identifier in the flags picks the deployment of that chain, whatever the order of the file.
     let swapped = scratch.path("swapped.json");

@@ -8,7 +8,7 @@ import {MessageBridge} from "../MessageBridge.sol";
 import {ITokenMediator} from "./ITokenMediator.sol";
 import {IWETH} from "./IWETH.sol";
 
-/// @title FeeRouter
+/// @title DeliveryRouter
 /// @notice An optional helper that lets one fixed executor earn a fee for the execution of a message, with no change to
 /// the message bridge or the mediator. It is the router pattern of `gibsfinance/omnibridge`
 /// (`contracts/helpers/TokenOmnibridgeBase.sol`), and it reads the same `FeeDirector`.
@@ -63,7 +63,7 @@ import {IWETH} from "./IWETH.sol";
 /// a record in `claimable` for that address, and anyone may call `claim` to pay it. `totalClaimable(token)` is the sum
 /// of the records of a token, and the router never pays a delivery from that part of its balance. So the balance of the
 /// router in each token equals its records, and it holds no coin at rest.
-contract FeeRouter is ReentrancyGuard {
+contract DeliveryRouter is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @notice What the sender of the tokens asks for.

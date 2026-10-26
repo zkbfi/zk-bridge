@@ -94,7 +94,7 @@ contract MockAMB is IAMB {
             );
     }
 
-    /// @notice The entry that the fee router calls. The mock reads no proof: it takes the source bridge and the message
+    /// @notice The entry that the delivery router calls. The mock reads no proof: it takes the source bridge and the message
     /// index from `abi.encode(source, index)` in the `executionHeaderRlp` field (see `proofOf`).
     function executeMessage(MessageBridge.MessageProof calldata proof) external {
         (MockAMB source, uint256 index) = abi.decode(proof.executionHeaderRlp, (MockAMB, uint256));

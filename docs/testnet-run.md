@@ -128,8 +128,8 @@ jq --arg deployer "$DEPLOYER" --arg va "$VERIFIER_A" --arg vb "$VERIFIER_B" \
    '.deployer=$deployer
     | .chainA.verifier=$va | .chainB.verifier=$vb
     | .chainA.deployerNonce=$na | .chainB.deployerNonce=$nb
-    | .chainA.feeRouter.runner=$runner | .chainB.feeRouter.runner=$runner
-    | .chainA.feeRouter.rewardAddress=$reward | .chainB.feeRouter.rewardAddress=$reward
+    | .chainA.deliveryRouter.runner=$runner | .chainB.deliveryRouter.runner=$runner
+    | .chainA.deliveryRouter.rewardAddress=$reward | .chainB.deliveryRouter.rewardAddress=$reward
     | .chainB.fee.recipient=$feeRecipient' \
    script/testnet/bridge.config.testnet.json > .deploy/bridge.config.json
 ```
@@ -183,14 +183,14 @@ BRIDGE_CONFIG=.deploy/bridge.config.json forge script script/hardened/DeployBrid
 | `MessageBridge` | 5,006,027 | 35,838,770 |
 | `TokenMediator` (largest) | 5,693,201 | 40,484,761 |
 | `WETHOmnibridgeRouter` | 574,658 | 3,871,406 |
-| `FeeRouter` | 1,396,348 | 9,824,883 |
+| `DeliveryRouter` | 1,396,348 | 9,824,883 |
 | Sum | 15,400,851 | 108,694,551 |
 
 The real figure is about 7 times the local figure. A limit of 1.3 times the local figure runs out of gas on Sepolia, and the deployed addresses then shift. With `--skip-simulation` and `--slow`, Foundry asks the node for each estimate when it sends the transaction, after the earlier transactions are mined, so the estimate uses the real gas rules. A plain transfer to a new account costs 207,391 gas on Sepolia (21,000 on a local fork). The block gas limit of Sepolia is 200,000,000. Chain 943 follows the usual rules: its estimates are about 1.2 times the local figures, and its block gas limit is 30,029,266. Check that your Foundry version sends transactions with a gas limit above 16,777,216 (EIP-7825) to Sepolia before the real run: nobody has sent one yet.
 
-The log lists the addresses of each chain: light client, gate, bridge, mediator, native coin router, fee router and token factory. It ends with two lines that start with `prover flags`. Those lines hold the addresses as arguments of the prover.
+The log lists the addresses of each chain: light client, gate, bridge, mediator, native coin router, delivery router and token factory. It ends with two lines that start with `prover flags`. Those lines hold the addresses as arguments of the prover.
 
-Do not give the Foundry broadcast files to the prover. One deployer uses both chains, so the nonce ranges overlap and the two chains create contracts at the same addresses. Foundry then names a contract by the first chain that made it, and the file for chain 943 has wrong `contractName` fields (the registry is called a gate, and two contracts are called a fee router). The prover refuses such a file. The multi-chain file is also in `broadcast/multi/`, not in a folder for each chain.
+Do not give the Foundry broadcast files to the prover. One deployer uses both chains, so the nonce ranges overlap and the two chains create contracts at the same addresses. Foundry then names a contract by the first chain that made it, and the file for chain 943 has wrong `contractName` fields (the registry is called a gate, and two contracts are called a delivery router). The prover refuses such a file. The multi-chain file is also in `broadcast/multi/`, not in a folder for each chain.
 
 Write the deployment file with the prover. It writes `$RUN_DIR/deployment.json` (mode 0600) with the fields of `deploymentChainSchema` in `explorer/shared/src/pairs.ts`. The start block of a chain is the block before its first deployment transaction.
 
@@ -325,7 +325,7 @@ Add `--once` to run one pass and exit. The runner refuses to start when the rout
 
 ## Step 11: send one transfer and measure the delivery gas
 
-Send one token relay with a fee offer from Sepolia to chain 943 through the mediator (sends a transaction). Use the terminal dashboard or `relayTokensAndCall` on the mediator with a `FeeDirector` that names the fee router. Keep the transaction hash as `SEND_TX`.
+Send one token relay with a fee offer from Sepolia to chain 943 through the mediator (sends a transaction). Use the terminal dashboard or `relayTokensAndCall` on the mediator with a `FeeDirector` that names the delivery router. Keep the transaction hash as `SEND_TX`.
 
 When the runner delivers, read the gas from the receipts. Keep each delivery hash as `DELIVERY_TX`.
 

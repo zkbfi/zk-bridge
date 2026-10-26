@@ -55,7 +55,7 @@ describe("buildConfirmView", () => {
   it("shows the router, the tip mode, the tip now and its maximum, and the two facts about the runner", async () => {
     const view = buildConfirmView(await relayStep({ mode: "percentage" }));
     const delivery = view.delivery!;
-    expect(delivery.routerText).toBe(getAddress(FIXTURE_PAIR.second.contracts.feeRouter!));
+    expect(delivery.routerText).toBe(getAddress(FIXTURE_PAIR.second.contracts.deliveryRouter!));
     expect(delivery.routerWarning).toBeNull();
     expect(delivery.tipMode).toBe("percentage of the transfer");
     // The router receives 250 less 0.1 percent at each end: 249.50025. The tip is 0.1 percent of that, cut to the unit.
@@ -71,12 +71,12 @@ describe("buildConfirmView", () => {
     expect(view.delivery?.tipNow).toMatch(/^about [\d.]+ zkbUSDC now \(estimate, at most [\d.]+ zkbUSDC\)$/);
   });
 
-  it("warns about a router that is not the fee router of the deployment, and keeps the transfer allowed", async () => {
+  it("warns about a router that is not the default delivery router, and keeps the transfer allowed", async () => {
     const other = getAddress(`0x${"ee".repeat(20)}`);
     const view = buildConfirmView(await relayStep({ mode: "percentage", routerText: other }));
     expect(view.delivery?.routerText).toBe(other);
-    expect(view.delivery?.routerWarning).toContain("is not the fee router of the deployment");
-    expect(view.delivery?.routerWarning).toContain(getAddress(FIXTURE_PAIR.second.contracts.feeRouter!));
+    expect(view.delivery?.routerWarning).toContain("is not the default delivery router");
+    expect(view.delivery?.routerWarning).toContain(getAddress(FIXTURE_PAIR.second.contracts.deliveryRouter!));
     expect(view.blockedReason).toBeNull();
   });
 

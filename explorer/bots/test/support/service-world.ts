@@ -7,12 +7,12 @@ import { PROGRAM_KEY, proofMessage } from "./builders.ts";
 
 function section(chainId: number, seed: number) {
   const address = (offset: number) => `0x${(seed + offset).toString(16).padStart(2, "0").repeat(20)}`;
-  return { chain_id: chainId, bridge: address(1), mediator: address(2), token_factory: address(3), native_router: address(4), wrapped_native: address(5), gate: address(6), light_client: address(7), fee_router: address(8), start_block: 5 };
+  return { chain_id: chainId, bridge: address(1), mediator: address(2), token_factory: address(3), native_router: address(4), wrapped_native: address(5), gate: address(6), light_client: address(7), delivery_router: address(8), start_block: 5 };
 }
 
 function withoutRouter(deployment: ReturnType<typeof section>, options: ServiceWorldOptions) {
-  if (options.omitFeeRouter !== true) return deployment;
-  const { fee_router: _omitted, ...rest } = deployment;
+  if (options.omitDeliveryRouter !== true) return deployment;
+  const { delivery_router: _omitted, ...rest } = deployment;
   return rest;
 }
 
@@ -31,8 +31,8 @@ export interface ServiceWorldOptions {
   /** Replaces whole sections of the bot configuration. */
   readonly config?: Record<string, unknown>;
   readonly environment?: Record<string, string | undefined>;
-  /** Leave the fee router out of the deployment file, as a deployment without a router does. */
-  readonly omitFeeRouter?: boolean;
+  /** Leave the delivery router out of the deployment file, as a deployment without a router does. */
+  readonly omitDeliveryRouter?: boolean;
 }
 
 /**

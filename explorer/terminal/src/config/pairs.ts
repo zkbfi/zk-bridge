@@ -82,7 +82,7 @@ function buildChain(side: ChainSide, definition: ChainDefinition, deployment: un
       wrappedNativeRouter: optionalAddress(section, 'native_router'),
       wrappedNative: optionalAddress(section, 'wrapped_native'),
       gate: optionalAddress(section, 'gate'),
-      feeRouter: optionalAddress(section, 'fee_router'),
+      deliveryRouter: optionalAddress(section, 'delivery_router'),
     },
   }
 }

@@ -5,7 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MockERC20} from "../../../../src/mocks/MockERC20.sol";
 import {MockWrappedNative} from "../../../../src/mocks/MockWrappedNative.sol";
 import {TokenMediator} from "../../../../src/hardened/mediator/TokenMediator.sol";
-import {FeeRouter} from "../../../../src/hardened/mediator/FeeRouter.sol";
+import {DeliveryRouter} from "../../../../src/hardened/mediator/DeliveryRouter.sol";
 import {WETHOmnibridgeRouter} from "../../../../src/hardened/mediator/WETHOmnibridgeRouter.sol";
 import {ITokenMediator} from "../../../../src/hardened/mediator/ITokenMediator.sol";
 import {IWETH} from "../../../../src/hardened/mediator/IWETH.sol";
@@ -22,14 +22,14 @@ import {
 
 /// @title RouterWorld
 /// @notice The two chains of the invariant suite: two mediators with a falling fee, each joined to a mock bridge, and on
-/// each chain a wrapped native token, three fee routers, one wrapped native router and one Multicall3. It holds the
+/// each chain a wrapped native token, three delivery routers, one wrapped native router and one Multicall3. It holds the
 /// lists that the handler and the invariants both read: the native tokens, the bridged copies, and every account that can
 /// hold a token. The two chains live in one test chain, as in `MediatorFixture`.
 /// @dev Chain 0 is chain A (identifier 1) and chain 1 is chain B (identifier 369). Five native tokens exist. Tokens 0 and
 /// 1 are native to A (a plain token and the wrapped native token of A), tokens 2 and 3 are native to B (a plain token and
 /// the wrapped native token of B), and token 4 is native to A and refuses transfers to accounts on a deny list. The
 /// universe has ten tokens: index `u` below 5 is the native token, and index `u + 5` is its bridged copy. The deny list
-/// token goes through the fee routers too: a router records a payout that the token refuses, and the invariants check
+/// token goes through the delivery routers too: a router records a payout that the token refuses, and the invariants check
 /// that it holds exactly what it recorded.
 abstract contract RouterWorld is MediatorFixture {
     uint256 internal constant NATIVE_COUNT = 5;
@@ -42,7 +42,7 @@ abstract contract RouterWorld is MediatorFixture {
     address internal stranger = makeAddr("stranger");
     /// @dev The account that sends the coin to a router in an attack. It is a holder, so the coin that it keeps counts.
     address internal attacker = makeAddr("attacker");
-    /// @dev The failed delivery address of every fee router. It is a holder and it can be denied on the deny list token,
+    /// @dev The failed delivery address of every delivery router. It is a holder and it can be denied on the deny list token,
     /// so a hand-off to it may fail and leave a record in the router. It differs from every reward address, so a tip
     /// and a hand-off never mix in the checks.
     address internal failedSink = makeAddr("failed delivery");
@@ -57,7 +57,7 @@ abstract contract RouterWorld is MediatorFixture {
     address[] internal holders;
 
     MockWrappedNative[2] internal wrapped;
-    FeeRouter[6] internal feeRouters;
+    DeliveryRouter[6] internal deliveryRouters;
     WETHOmnibridgeRouter[2] internal wethRouters;
     Multicall3 internal multicall;
     DenyListToken internal denyToken;
@@ -133,8 +133,8 @@ abstract contract RouterWorld is MediatorFixture {
         return rewards[index];
     }
 
-    function feeRouterAt(uint256 chain, uint256 index) public view returns (FeeRouter) {
-        return feeRouters[chain * ROUTERS_PER_CHAIN + index];
+    function deliveryRouterAt(uint256 chain, uint256 index) public view returns (DeliveryRouter) {
+        return deliveryRouters[chain * ROUTERS_PER_CHAIN + index];
     }
 
     function wethRouterAt(uint256 chain) external view returns (WETHOmnibridgeRouter) {
@@ -201,7 +201,7 @@ abstract contract RouterWorld is MediatorFixture {
     /// and that address is a holder), and the total that it states.
     /// @return sum The sum of `claimable` over the holders.
     /// @return stated `totalClaimable` of the router.
-    function routerClaimableOfHolders(FeeRouter router, uint256 universeIndex)
+    function routerClaimableOfHolders(DeliveryRouter router, uint256 universeIndex)
         public
         view
         returns (uint256 sum, uint256 stated)
@@ -213,15 +213,15 @@ abstract contract RouterWorld is MediatorFixture {
         stated = router.totalClaimable(token);
     }
 
-    /// @notice What the fee routers of the chain of a token of the universe have recorded for one account.
+    /// @notice What the delivery routers of the chain of a token of the universe have recorded for one account.
     function routerClaimableFor(uint256 universeIndex, address account) public view returns (uint256 total) {
         uint256 chain = chainOfToken(universeIndex);
         for (uint256 k = 0; k < ROUTERS_PER_CHAIN; k++) {
-            total += feeRouterAt(chain, k).claimable(tokenAt(universeIndex), account);
+            total += deliveryRouterAt(chain, k).claimable(tokenAt(universeIndex), account);
         }
     }
 
-    /// @notice What `account` has of a token of the universe: what it holds, and what a fee router recorded for it.
+    /// @notice What `account` has of a token of the universe: what it holds, and what a delivery router recorded for it.
     function standing(uint256 universeIndex, address account) public view returns (uint256) {
         return holding(universeIndex, account) + routerClaimableFor(universeIndex, account);
     }
@@ -246,7 +246,7 @@ abstract contract RouterWorld is MediatorFixture {
         rewards.push(address(new GasBurner()));
         for (uint256 chain = 0; chain < 2; chain++) {
             for (uint256 k = 0; k < ROUTERS_PER_CHAIN; k++) {
-                feeRouters[chain * ROUTERS_PER_CHAIN + k] = new FeeRouter(
+                deliveryRouters[chain * ROUTERS_PER_CHAIN + k] = new DeliveryRouter(
                     ITokenMediator(address(mediatorOf(chain))), IWETH(address(wrapped[chain])), runner, rewards[k], failedSink
                 );
             }
@@ -278,8 +278,8 @@ abstract contract RouterWorld is MediatorFixture {
         holders.push(stranger);
         holders.push(attacker);
         holders.push(failedSink);
-        for (uint256 i = 0; i < feeRouters.length; i++) {
-            holders.push(address(feeRouters[i]));
+        for (uint256 i = 0; i < deliveryRouters.length; i++) {
+            holders.push(address(deliveryRouters[i]));
         }
         holders.push(address(wethRouters[0]));
         holders.push(address(wethRouters[1]));

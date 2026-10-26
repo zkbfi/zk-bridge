@@ -3,7 +3,7 @@ import {
   beaconLightClientAbi,
   decodeAggregate3,
   encodeAggregate3,
-  feeRouterAbi,
+  deliveryRouterAbi,
   messageBridgeAbi,
   type BatchedCall,
   type BatchedCallResult,
@@ -28,7 +28,7 @@ import type { PrerequisiteLedger } from "./prerequisite-ledger.ts";
 
 /**
  * The gas that Multicall3 adds to each call, beyond the single entry of the router: the call, the copy of the proof and
- * the result. The batch test of the router (`FeeRouterBatching.t.sol`) measures about 17,000, so this rounds up. The
+ * the result. The batch test of the router (`DeliveryRouterBatching.t.sol`) measures about 17,000, so this rounds up. The
  * batch simulation needs it because it measures the gas of an item at the single entry.
  */
 export const BATCH_ITEM_OVERHEAD_GAS = 20_000n;
@@ -106,24 +106,24 @@ type Evaluation =
   | { readonly kind: "send"; readonly plan: SendPlan }
   | { readonly kind: "dropped"; readonly dropped: readonly Dropped[]; readonly droppedUpdate: UpdateDrop | null };
 
-function routerOf(dependencies: DeliveryDependencies): { readonly feeRouter: Address; readonly reward: Address; readonly multicall: Address } {
-  if (dependencies.feeRouter === null || dependencies.rewardAddress === null || dependencies.multicall === null) {
-    throw new Error("a batch needs a fee router, a reward address and a Multicall3 address, and the runner has none");
+function routerOf(dependencies: DeliveryDependencies): { readonly deliveryRouter: Address; readonly reward: Address; readonly multicall: Address } {
+  if (dependencies.deliveryRouter === null || dependencies.rewardAddress === null || dependencies.multicall === null) {
+    throw new Error("a batch needs a delivery router, a reward address and a Multicall3 address, and the runner has none");
   }
-  return { feeRouter: dependencies.feeRouter, reward: dependencies.rewardAddress, multicall: dependencies.multicall };
+  return { deliveryRouter: dependencies.deliveryRouter, reward: dependencies.rewardAddress, multicall: dependencies.multicall };
 }
 
 /**
  * The calls of a batch, in order: the update at the light client when one is offered, then one
- * `executeMessageWithRunner` at the fee router for each item. Multicall3 allows failure on each, so no call reverts another.
+ * `executeMessageWithRunner` at the delivery router for each item. Multicall3 allows failure on each, so no call reverts another.
  */
 function batchCalls(dependencies: DeliveryDependencies, readies: readonly ReadyDelivery[], update: UpdateOffer | null): BatchedCall[] {
-  const { feeRouter, reward } = routerOf(dependencies);
+  const { deliveryRouter, reward } = routerOf(dependencies);
   const updateCalls: BatchedCall[] =
     update === null
       ? []
       : [{ target: update.lightClient, callData: encodeFunctionData({ abi: beaconLightClientAbi, functionName: "update", args: [update.message.proof, update.message.publicValues] }) }];
-  return [...updateCalls, ...readies.map((ready) => ({ target: feeRouter, callData: singleCallData(ready.proof, reward) }))];
+  return [...updateCalls, ...readies.map((ready) => ({ target: deliveryRouter, callData: singleCallData(ready.proof, reward) }))];
 }
 
 function batchCall(dependencies: DeliveryDependencies, readies: readonly ReadyDelivery[], update: UpdateOffer | null): CallRequest {
@@ -147,7 +147,7 @@ async function readResults(chain: TransactionPort, call: CallRequest, shape: { r
 }
 
 /** The errors that the calls of a batch can revert with: the bridge, the router and the light client. */
-const BATCH_ERRORS_ABI = [...messageBridgeAbi, ...feeRouterAbi, ...beaconLightClientAbi].filter((entry) => entry.type === "error") as Abi;
+const BATCH_ERRORS_ABI = [...messageBridgeAbi, ...deliveryRouterAbi, ...beaconLightClientAbi].filter((entry) => entry.type === "error") as Abi;
 
 /** The name of the error in revert data, or null when the data is empty or holds an error that this build does not know. */
 function errorNameOf(returnData: Hex): string | null {
@@ -213,7 +213,7 @@ function reasonOf(error: unknown): string {
  */
 async function evaluateBatch(dependencies: DeliveryDependencies, readies: readonly ReadyDelivery[], update: UpdateOffer | null): Promise<Evaluation> {
   const { chain, settings } = dependencies;
-  const { reward, feeRouter } = routerOf(dependencies);
+  const { reward, deliveryRouter } = routerOf(dependencies);
   const call = batchCall(dependencies, readies, update);
   const shape = { count: readies.length, hasUpdate: update !== null };
   const simulation = await chain.simulate(call);
@@ -228,7 +228,7 @@ async function evaluateBatch(dependencies: DeliveryDependencies, readies: readon
   const unmeasurable: Dropped[] = [];
   const itemGas: bigint[] = [];
   for (const ready of readies) {
-    const single = await chain.simulate({ to: feeRouter, data: singleCallData(ready.proof, reward) });
+    const single = await chain.simulate({ to: deliveryRouter, data: singleCallData(ready.proof, reward) });
     if (!single.ok) {
       unmeasurable.push({ ready, outcome: skip(ready.messageId, "simulation-reverted", { detail: single.reason }) });
       continue;
@@ -363,7 +363,7 @@ function isTransferTo(log: ReceiptSummary["logs"][number], account: Address): bo
  * batch. The tokens of one item are known exactly, and there is no need to divide a sum among items.
  */
 function readReceipt(dependencies: DeliveryDependencies, readies: readonly ReadyDelivery[], update: UpdateOffer | null, receipt: ReceiptSummary): ReceiptReading {
-  const { feeRouter, reward } = routerOf(dependencies);
+  const { deliveryRouter, reward } = routerOf(dependencies);
   const executed = new Set<Hex>();
   for (const log of receipt.logs) {
     const messageId = affirmedMessageOf(log);
@@ -371,7 +371,7 @@ function readReceipt(dependencies: DeliveryDependencies, readies: readonly Ready
   }
   const segments: ReceiptSummary["logs"][number][][] = [];
   for (const log of receipt.logs) {
-    if (isTransferTo(log, feeRouter)) segments.push([]);
+    if (isTransferTo(log, deliveryRouter)) segments.push([]);
     segments.at(-1)?.push(log);
   }
   const tokensByMessage = new Map<Hex, bigint>();
@@ -432,11 +432,11 @@ async function settleReceipt(
     const weight = plan.itemGas[index] as bigint;
     if (reading.executed.has(ready.messageId)) {
       const gasUsed = shareOf(receipt.gasUsed, weight, totalWeight);
-      dependencies.logger.info("delivery_sent", { messageId: ready.messageId, path: "fee-router", transactionHash: receipt.hash, gasUsed });
+      dependencies.logger.info("delivery_sent", { messageId: ready.messageId, path: "delivery-router", transactionHash: receipt.hash, gasUsed });
       outcomes.push({
         status: "delivered",
         messageId: ready.messageId,
-        path: "fee-router",
+        path: "delivery-router",
         transactionHash: receipt.hash,
         gasUsed,
         gasCostWei: gasUsed * receipt.effectiveGasPrice,
@@ -482,7 +482,7 @@ export interface SendBatchInput {
  * Sends the ready items through Multicall3 (`aggregate3`, failure allowed on each call), in one transaction, and returns one outcome for
  * each item in the order given, and the fate of the update.
  *
- * The update call goes first inside the transaction, to the light client, and the item calls follow, to the fee router.
+ * The update call goes first inside the transaction, to the light client, and the item calls follow, to the delivery router.
  * A stale or wrong update never reverts the batch. The simulation finds out first: an update that the light client would refuse leaves
  * the batch, and so does a batch whose tips do not pay for the update as well.
  *

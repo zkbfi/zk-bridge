@@ -4,8 +4,8 @@ import { parseTokenAmount, RATE_SCALE } from "./format.js";
 
 /**
  * Voluntary delivery fees. A sender who wants a runner to deliver a transfer writes a `FeeDirector` in the callback data
- * of `relayTokensAndCall`, aimed at the `FeeRouter` of the destination chain. This module builds that director, encodes
- * it, and computes the fee that the router takes. It is the TypeScript side of `FeeRouter.sol`. The test in
+ * of `relayTokensAndCall`, aimed at the `DeliveryRouter` of the destination chain. This module builds that director, encodes
+ * it, and computes the fee that the router takes. It is the TypeScript side of `DeliveryRouter.sol`. The test in
  * `test/delivery-fee.test.ts` checks it against vectors that the compiled router printed
  * (`vectors/GenerateDeliveryFeeVectors.s.sol`), so the two cannot drift.
  *
@@ -24,9 +24,9 @@ export const FEE_SETTING = {
   shareOfValue: 8n,
 } as const;
 
-/** Gas that the router adds to the measured gas of a token payout. Same as `FeeRouter.TOKEN_GAS_OVERHEAD`. */
+/** Gas that the router adds to the measured gas of a token payout. Same as `DeliveryRouter.TOKEN_GAS_OVERHEAD`. */
 export const TOKEN_GAS_OVERHEAD = 100_000n;
-/** Gas that the router adds to the measured gas of a native coin payout. Same as `FeeRouter.NATIVE_GAS_OVERHEAD`. */
+/** Gas that the router adds to the measured gas of a native coin payout. Same as `DeliveryRouter.NATIVE_GAS_OVERHEAD`. */
 export const NATIVE_GAS_OVERHEAD = 50_000n;
 
 /** The largest value of a `uint256`. */
@@ -34,7 +34,7 @@ export const UINT256_MAXIMUM = 2n ** 256n - 1n;
 /** The router keeps the multiplier of a waiting gas based fee in 96 bits and clamps a larger one. */
 const UINT96_MAXIMUM = 2n ** 96n - 1n;
 
-/** The `FeeDirector` struct of `FeeRouter.sol`. */
+/** The `FeeDirector` struct of `DeliveryRouter.sol`. */
 export interface FeeDirector {
   /** Who receives the tokens after the fee. */
   readonly recipient: Address;
@@ -425,14 +425,14 @@ export interface ExpectedFeeInput {
   readonly payout?: PayoutKind;
 }
 
-/** The split that `FeeRouter.feeInfo` returns. */
+/** The split that `DeliveryRouter.feeInfo` returns. */
 export interface FeeSplit {
   readonly fee: bigint;
   readonly toRecipient: bigint;
 }
 
 /**
- * The fee that the router takes, as `FeeRouter.feeInfo` computes it. Fixed: `limit`. Share: `value * multiplier / 1e18`.
+ * The fee that the router takes, as `DeliveryRouter.feeInfo` computes it. Fixed: `limit`. Share: `value * multiplier / 1e18`.
  * Gas based: `(gasUsed + overhead) * multiplier * gasPrice / 1e18`, capped by `limit`. The fee never passes the value.
  *
  * `feeInfo` reads the multiplier in full. When it settles a gas based fee, the router clamps the multiplier to 96 bits.

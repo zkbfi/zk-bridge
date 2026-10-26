@@ -5,12 +5,12 @@ import {StdInvariant} from "forge-std/StdInvariant.sol";
 import {Test} from "forge-std/Test.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {BridgedToken} from "../../../src/hardened/mediator/BridgedToken.sol";
-import {FeeRouter} from "../../../src/hardened/mediator/FeeRouter.sol";
+import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol";
 import {TokenFactory} from "../../../src/hardened/mediator/TokenFactory.sol";
 import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
 import {RouterHandler} from "./utils/RouterHandler.sol";
 
-/// @notice Invariants of the two mediators, the fee routers and the wrapped native router, under random sequences of
+/// @notice Invariants of the two mediators, the delivery routers and the wrapped native router, under random sequences of
 /// relays, deliveries by three paths, claims, fee collection, time and attacks. See `RouterHandler` for the actions and
 /// for what the handler claims, and `RouterWorld` for the two chains.
 /// forge-config: default.invariant.runs = 8
@@ -109,8 +109,8 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         assertEq(handler.violations(), 0, handler.firstViolation());
     }
 
-    /// Claim: a fee router holds exactly what it recorded, no coin, and no run stays open. Shows: after every action,
-    /// each of the six fee routers holds, in each of the ten tokens, a balance that equals the sum of its claimable
+    /// Claim: a delivery router holds exactly what it recorded, no coin, and no run stays open. Shows: after every action,
+    /// each of the six delivery routers holds, in each of the ten tokens, a balance that equals the sum of its claimable
     /// records (only the failed delivery address can have one, and the balance equals its own `totalClaimable`), exactly; it holds none of the coin; and its runner slot is at
     /// most 1 (not running). The two wrapped native routers hold nothing. Matters: the routers have no owner and no way
     /// to recover a token. A balance with no record behind it would be lost for good, and a record with no balance
@@ -118,7 +118,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
     function invariant_aRouterHoldsExactlyWhatItRecordedAndNoRunStaysOpen() public view {
         for (uint256 chain = 0; chain < 2; chain++) {
             for (uint256 k = 0; k < 3; k++) {
-                FeeRouter router = handler.feeRouterAt(chain, k);
+                DeliveryRouter router = handler.deliveryRouterAt(chain, k);
                 for (uint256 u = 0; u < 10; u++) {
                     (uint256 sum, uint256 stated) = handler.routerClaimableOfHolders(router, u);
                     uint256 balance = handler.balanceOrZero(handler.tokenAt(u), address(router));
@@ -143,7 +143,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         }
         for (uint256 chain = 0; chain < 2; chain++) {
             for (uint256 k = 0; k < 3; k++) {
-                FeeRouter router = handler.feeRouterAt(chain, k);
+                DeliveryRouter router = handler.deliveryRouterAt(chain, k);
                 assertEq(router.rewardAddress(), handler.rewardAt(k), "the reward address changed");
                 assertEq(router.failedDeliveryAddress(), handler.failedSinkAddress(), "the failed delivery address changed");
             }
@@ -229,7 +229,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
     /// claim and its payment, a failed callback, fee collection, the wrapped router, and refused attacks. Matters: an
     /// invariant over a handler that never acts proves nothing.
     function test_handlerReachesThePayingPaths() public {
-        // A fee router delivery with a fixed fee, then a share, then gas based, each executed by its own router.
+        // A delivery router delivery with a fixed fee, then a share, then gas based, each executed by its own router.
         // Route 3, director shape in detail bits 32..: 0 fixed, 1 share, 2 gas, 3 gas on the base fee.
         for (uint256 shape = 0; shape < 4; shape++) {
             handler.relay(0, 0, 3, 0, 5e18, (shape << 32) | (1 << 40) | 7, 1);
@@ -251,7 +251,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         handler.deliver(0, 0, 0, 0);
         assertGt(handler.directDeliveries(), 0, "direct deliveries");
 
-        // The wrapped native token goes to B by the wrap form and comes back to A through the fee router and unwrap.
+        // The wrapped native token goes to B by the wrap form and comes back to A through the delivery router and unwrap.
         handler.relay(1, 0, 6, 2, 4e18, 1, 1);
         handler.deliver(0, 0, 0, 0);
         handler.relay(1, 1, 3, 2, 1e18, (1 << 32) | 5 | (1 << 8), 1);
@@ -278,7 +278,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         handler.claim(4, 1);
         assertGt(handler.claimsPaid(), 0, "a claim was paid");
 
-        // The three cases that used to strand value in a fee router, each with a recipient that the sender chose. Token 4
+        // The three cases that used to strand value in a delivery router, each with a recipient that the sender chose. Token 4
         // refuses the denied accounts, and the copies on chain B go back to it on chain A. In `detail`, bits 136.. choose
         // the receiver (1 the router, 2 the zero address) and bits 144.. choose data of no known shape (1).
         handler.toggleDeny(0);

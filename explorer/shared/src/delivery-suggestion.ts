@@ -195,7 +195,7 @@ export interface BuildFeeSuggestionsInput {
   readonly token: FeeToken;
   readonly payout?: PayoutKind;
   readonly report: DeliveryCostReport;
-  /** Default: `token_callback`, the delivery through the fee router. */
+  /** Default: `token_callback`, the delivery through the delivery router. */
   readonly kind?: DeliveryKind;
   /** The priority fee that the runner pays, in wei per gas. */
   readonly priorityFeeWei: bigint;

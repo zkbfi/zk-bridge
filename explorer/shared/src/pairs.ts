@@ -12,8 +12,8 @@ export type SideContracts = {
   readonly wrappedNative: Address;
   readonly gate: Address;
   readonly lightClient: Address;
-  /** Optional: a `FeeRouter`. It emits no events, so the indexer does not read it. */
-  readonly feeRouter: Address | null;
+  /** Optional: a `DeliveryRouter`. It emits no events, so the indexer does not read it. */
+  readonly deliveryRouter: Address | null;
   /** Optional: a `ForkRegistry`, deployed on PulseChain only. */
   readonly forkRegistry: Address | null;
 };
@@ -80,7 +80,7 @@ const deploymentChainSchema = z.object({
   wrapped_native: addressField,
   gate: addressField,
   light_client: addressField,
-  fee_router: addressField.nullish(),
+  delivery_router: addressField.nullish(),
   fork_registry: addressField.nullish(),
   start_block: z.number().int().nonnegative(),
 });
@@ -186,7 +186,7 @@ const buildSide = (
       wrappedNative: normalizeAddress(section.wrapped_native),
       gate: normalizeAddress(section.gate),
       lightClient: normalizeAddress(section.light_client),
-      feeRouter: optionalAddress(section.fee_router),
+      deliveryRouter: optionalAddress(section.delivery_router),
       forkRegistry: optionalAddress(section.fork_registry),
     },
   };

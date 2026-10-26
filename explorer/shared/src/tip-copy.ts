@@ -12,16 +12,16 @@ export const TIP_MODE_NAMES: Readonly<Record<FeeMode, string>> = {
 };
 
 /** How the words name the router that the tip terms are written for. */
-export const FEE_ROUTER_NAME = "the fee router of the deployment";
+export const DELIVERY_ROUTER_NAME = "the default delivery router";
 
 /**
  * The router in words. A router other than the one of the deployment is marked, because the tip terms are written for
- * the fee router.
+ * the delivery router.
  *
  * @param router The router of the relay.
- * @param defaultRouter The fee router of the deployment.
+ * @param defaultRouter The default delivery router.
  */
 export const routerInWords = (router: string, defaultRouter: string): string => {
   const address = getAddress(router);
-  return address === getAddress(defaultRouter) ? `${address} (${FEE_ROUTER_NAME})` : `${address} (not ${FEE_ROUTER_NAME})`;
+  return address === getAddress(defaultRouter) ? `${address} (${DELIVERY_ROUTER_NAME})` : `${address} (not ${DELIVERY_ROUTER_NAME})`;
 };

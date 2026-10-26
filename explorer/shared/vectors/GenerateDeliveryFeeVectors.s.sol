@@ -3,19 +3,19 @@ pragma solidity 0.8.28;
 
 import {Script} from "forge-std/Script.sol";
 import {console2} from "forge-std/console2.sol";
-import {FeeRouter} from "src/hardened/mediator/FeeRouter.sol";
+import {DeliveryRouter} from "src/hardened/mediator/DeliveryRouter.sol";
 import {ITokenMediator} from "src/hardened/mediator/ITokenMediator.sol";
 import {IWETH} from "src/hardened/mediator/IWETH.sol";
 
 /// @dev Calls `feeInfo` through an external call, so that a revert can be caught and printed.
 contract DeliveryFeeProbe {
-    FeeRouter public immutable router;
+    DeliveryRouter public immutable router;
 
-    constructor(FeeRouter router_) {
+    constructor(DeliveryRouter router_) {
         router = router_;
     }
 
-    function feeInfo(address token, uint256 value, uint256 gasUsed, FeeRouter.FeeDirector calldata director)
+    function feeInfo(address token, uint256 value, uint256 gasUsed, DeliveryRouter.FeeDirector calldata director)
         external
         view
         returns (uint256 fee, uint256 toRecipient)
@@ -25,7 +25,7 @@ contract DeliveryFeeProbe {
 }
 
 /// @title GenerateDeliveryFeeVectors
-/// @notice Prints test vectors of the fee router: the encoding of a `FeeDirector` and the answer of `feeInfo`, one JSON
+/// @notice Prints test vectors of the delivery router: the encoding of a `FeeDirector` and the answer of `feeInfo`, one JSON
 /// object per line. Run from the repository root:
 ///   forge script explorer/shared/vectors/GenerateDeliveryFeeVectors.s.sol --tc GenerateDeliveryFeeVectors --root . 2>&1 | grep '^  VECTOR ' | sed 's/^  VECTOR //' > explorer/shared/test/fixtures/delivery-fee-vectors.jsonl
 /// The test in explorer/shared/test/delivery-fee.test.ts reads the saved lines, so the TypeScript copy and the router
@@ -37,7 +37,7 @@ contract GenerateDeliveryFeeVectors is Script {
     DeliveryFeeProbe private probe;
 
     function run() external {
-        probe = new DeliveryFeeProbe(new FeeRouter(ITokenMediator(address(0xB1D6E)), IWETH(WRAPPED_NATIVE), address(0xA11CE), address(0xB0B)));
+        probe = new DeliveryFeeProbe(new DeliveryRouter(ITokenMediator(address(0xB1D6E)), IWETH(WRAPPED_NATIVE), address(0xA11CE), address(0xB0B)));
 
         // Every combination of the four flag bits, with the values around the edges.
         uint256[8] memory values = [uint256(0), 1, 999, 1 ether, 1_000 ether, 10 ** 30, type(uint128).max, type(uint256).max];
@@ -113,7 +113,7 @@ contract GenerateDeliveryFeeVectors is Script {
 
     function _print(Case memory c) private {
         address recipient = address(uint160(uint256(keccak256(abi.encode(c.settings, c.value, c.limit, c.multiplier)))));
-        FeeRouter.FeeDirector memory director = FeeRouter.FeeDirector(recipient, c.settings, c.limit, c.multiplier);
+        DeliveryRouter.FeeDirector memory director = DeliveryRouter.FeeDirector(recipient, c.settings, c.limit, c.multiplier);
         vm.fee(c.baseFee);
         vm.txGasPrice(c.baseFee + c.priorityFee);
         string memory head = _head(c, director);
@@ -129,7 +129,7 @@ contract GenerateDeliveryFeeVectors is Script {
         }
     }
 
-    function _head(Case memory c, FeeRouter.FeeDirector memory director) private view returns (string memory) {
+    function _head(Case memory c, DeliveryRouter.FeeDirector memory director) private view returns (string memory) {
         return string.concat(
             _directorFields(director),
             "\",\"wrappedNative\":", c.wrappedNative ? "true" : "false",
@@ -140,7 +140,7 @@ contract GenerateDeliveryFeeVectors is Script {
         );
     }
 
-    function _directorFields(FeeRouter.FeeDirector memory director) private view returns (string memory) {
+    function _directorFields(DeliveryRouter.FeeDirector memory director) private view returns (string memory) {
         return string.concat(
             "VECTOR {\"recipient\":\"", vm.toString(director.recipient),
             "\",\"settings\":\"", vm.toString(director.settings),

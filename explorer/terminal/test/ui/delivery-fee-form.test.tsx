@@ -40,7 +40,7 @@ describe('the tip field of the bridge form', () => {
   test('is on by default at 0.1 percent, with the fee fields, the router field and the live panel shown', async () => {
     const screen = await openOnTipField({ tokenValuationsWei: priced })
     const frame = screen.frame()
-    for (const shown of ['Tip for delivery', 'Yes, 0.1% by default', 'Tip mode', 'Percentage of the transfer', 'Percentage', '0.1', 'Router (advanced)', 'Fee recipient', 'Margin percent', 'Priority fee gwei', 'Delivery cost on PulseChain', 'Router          0x', '(the fee router of the deployment)', 'measured from 40 recent deliveries, p90', 'Base fee', 'at block 21000000', 'Your tip        0.0999 zkbUSDC (exact)']) {
+    for (const shown of ['Tip for delivery', 'Yes, 0.1% by default', 'Tip mode', 'Percentage of the transfer', 'Percentage', '0.1', 'Router (advanced)', 'Fee recipient', 'Margin percent', 'Priority fee gwei', 'Delivery cost on PulseChain', 'Router          0x', '(the default delivery router)', 'measured from 40 recent deliveries, p90', 'Base fee', 'at block 21000000', 'Your tip        0.0999 zkbUSDC (exact)']) {
       expect(frame).toContain(shown)
     }
     // The Mode field (relayTokens) is gone: the call data holds the tip terms.
@@ -109,7 +109,7 @@ describe('the tip field of the bridge form', () => {
     await screen.press('RETURN')
     await screen.settle(120)
     const frame = screen.frame()
-    for (const shown of ['relayTokensAndCall(address,address,uint256,bytes)', 'Tip for delivery', 'Router', '(the fee router of the deployment)', 'Tip mode', 'percentage of the transfer', 'Tip goes to', 'On failure']) {
+    for (const shown of ['relayTokensAndCall(address,address,uint256,bytes)', 'Tip for delivery', 'Router', '(the default delivery router)', 'Tip mode', 'percentage of the transfer', 'Tip goes to', 'On failure']) {
       expect(frame).toContain(shown)
     }
     expect(chainAccess.sentTransactions).toHaveLength(0)
@@ -148,14 +148,14 @@ describe('the tip field of the bridge form', () => {
     expect(frame).toContain('Warning: the router did not return its addresses (execution reverted).')
   })
 
-  test('is not offered when the deployment has no fee router for the destination, and the form says why', async () => {
+  test('is not offered when the deployment has no delivery router for the destination, and the form says why', async () => {
     const screen = await openOnTipField({ tokenValuationsWei: priced })
-    // Back to the token field, then to zkbUSDC on PulseChain: its destination is Ethereum, which has no fee router.
+    // Back to the token field, then to zkbUSDC on PulseChain: its destination is Ethereum, which has no delivery router.
     for (let step = 0; step < 3; step += 1) await screen.press('ARROW_UP') // receiver, amount, token
     for (let step = 0; step < 4; step += 1) await screen.press('ARROW_RIGHT')
     const frame = screen.frame()
     expect(frame).toContain('zkbUSDC on PulseChain')
     expect(frame).not.toContain('Tip for delivery')
-    expect(frame).toContain('The deployment names no fee router for Ethereum')
+    expect(frame).toContain('The deployment names no delivery router for Ethereum')
   })
 })

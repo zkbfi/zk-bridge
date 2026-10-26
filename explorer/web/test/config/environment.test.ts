@@ -4,7 +4,7 @@ import { ConfigurationError } from "../../src/config/secret-scan";
 
 const DEPLOYMENT = JSON.stringify({
   chain_a: { chain_id: 1, bridge: `0x${"11".repeat(20)}`, mediator: `0x${"22".repeat(20)}`, light_client: `0x${"33".repeat(20)}` },
-  chain_b: { chain_id: 369, bridge: `0x${"44".repeat(20)}`, mediator: `0x${"55".repeat(20)}`, light_client: `0x${"66".repeat(20)}`, fee_router: `0x${"77".repeat(20)}` },
+  chain_b: { chain_id: 369, bridge: `0x${"44".repeat(20)}`, mediator: `0x${"55".repeat(20)}`, light_client: `0x${"66".repeat(20)}`, delivery_router: `0x${"77".repeat(20)}` },
 });
 
 describe("readConfiguration", () => {
@@ -53,7 +53,7 @@ describe("loadPairConfig", () => {
     const configuration = readConfiguration({ VITE_EXPLORER_DEPLOYMENT_JSON: DEPLOYMENT });
     const pair = await loadPairConfig(configuration);
     expect(pair.first.chainId).toBe(1);
-    expect(pair.second.contracts.feeRouter?.toLowerCase()).toBe(`0x${"77".repeat(20)}`);
+    expect(pair.second.contracts.deliveryRouter?.toLowerCase()).toBe(`0x${"77".repeat(20)}`);
   });
 
   it("fetches the deployment file when a URL is set", async () => {

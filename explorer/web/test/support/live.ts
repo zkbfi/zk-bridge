@@ -35,7 +35,7 @@ const section = (chainId: number, byte: string, extra: Record<string, unknown> =
 
 const deployment = (options: { readonly withRegistryRpcUrl: boolean }) => ({
   chain_a: section(1, "11"),
-  chain_b: section(369, "44", { fee_router: `0x${"77".repeat(20)}`, ...(options.withRegistryRpcUrl ? { rpc_url: "https://registry.example.org/pls" } : {}) }),
+  chain_b: section(369, "44", { delivery_router: `0x${"77".repeat(20)}`, ...(options.withRegistryRpcUrl ? { rpc_url: "https://registry.example.org/pls" } : {}) }),
 });
 
 /** A pair in the shared form. Chain 369 has a registry RPC URL. Chain 1 has none. */

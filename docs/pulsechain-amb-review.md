@@ -167,7 +167,7 @@ I found no incident report, forum thread or announcement about the second pair, 
 The PulseChain router sends with a 2,300 gas stipend and falls back to a forced send. Our routers send with all the gas left:
 
 - `src/hardened/mediator/WETHOmnibridgeRouter.sol:73`: `(bool sent,) = receiver.call{value: value}("");`. On failure, lines 75 and 76 wrap again and transfer.
-- `src/hardened/mediator/FeeRouter.sol:293` (`_tryPay`) and `:299` (`_payNative`) do the same.
+- `src/hardened/mediator/DeliveryRouter.sol:293` (`_tryPay`) and `:299` (`_payNative`) do the same.
 
 The failure chain:
 
@@ -179,7 +179,7 @@ The failure chain:
 
 The gas numbers in steps 3 and 4 are my estimate, not a measurement. A receiver that refuses cheaply (a plain revert) is handled correctly today. Only a receiver that burns gas breaks the fallback.
 
-Change: cap the gas of the coin send, for example `receiver.call{value: value, gas: NATIVE_SEND_GAS}("")` with a constant sized for a smart wallet (for example 50,000), and keep the wrap fallback. Do the same in `FeeRouter._tryPay` and `_payNative`. As an alternative, copy the OmniBridge pattern: `send`, then a `Sacrifice` contract that self-destructs to the receiver. Under the Ethereum Cancun rules (EIP-6780), self-destruct in the creating transaction still moves the balance. I did not confirm which rule set PulseChain runs. Add a test with a receiver that loops until out of gas, and assert that the receiver ends with the wrapped token and that the router holds nothing.
+Change: cap the gas of the coin send, for example `receiver.call{value: value, gas: NATIVE_SEND_GAS}("")` with a constant sized for a smart wallet (for example 50,000), and keep the wrap fallback. Do the same in `DeliveryRouter._tryPay` and `_payNative`. As an alternative, copy the OmniBridge pattern: `send`, then a `Sacrifice` contract that self-destructs to the receiver. Under the Ethereum Cancun rules (EIP-6780), self-destruct in the creating transaction still moves the balance. I did not confirm which rule set PulseChain runs. Add a test with a receiver that loops until out of gas, and assert that the receiver ends with the wrapped token and that the router holds nothing.
 
 ### 3.2 The callback must see the net value (handled)
 
