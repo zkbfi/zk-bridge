@@ -146,8 +146,17 @@ export function createDefaultSigningServices(environment: Environment): SigningS
   }
 }
 
-/** The Prover setup services that use the real file system, commands and network. */
-export function createDefaultProverSetupServices(environment: Environment): ProverSetupServices {
+/**
+ * The Prover setup services that use the real file system, commands and network.
+ *
+ * @param environment The environment that names the configuration directory.
+ * @param options `platform` picks the secret store. It defaults to the platform that runs the program. A test passes a
+ * platform that has no operating system store, so the encrypted file is used and no real command runs.
+ */
+export function createDefaultProverSetupServices(
+  environment: Environment,
+  options: { readonly platform?: NodeJS.Platform } = {},
+): ProverSetupServices {
   return {
     environment,
     run: spawnRunner,
@@ -156,7 +165,7 @@ export function createDefaultProverSetupServices(environment: Environment): Prov
     save: (setup) => saveProverSetup(setupFilePath(environment), setup),
     async openSecretStore({ password }) {
       return chooseSecretStore({
-        platform: process.platform,
+        platform: options.platform ?? process.platform,
         run: spawnRunner,
         fallback: async () => {
           if (password === null) throw new PasswordRequiredError()
