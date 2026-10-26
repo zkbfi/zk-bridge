@@ -739,13 +739,6 @@ abstract contract BeaconProofVerifier {
         return bytes32(value);
     }
 
-    /// @dev A topic holds an address in its low 20 bytes. The high 12 bytes must be zero.
-    function _toAddress(bytes memory topic) internal pure returns (address) {
-        uint256 word = uint256(_toBytes32(topic));
-        if (word > type(uint160).max) revert MalformedLog();
-        return address(uint160(word));
-    }
-
     /// @dev The RLP encoding of an unsigned integer, which is the receipts trie key of a transaction index.
     function _encodeUint(uint256 value) internal pure returns (bytes memory) {
         if (value == 0) return hex"80";
