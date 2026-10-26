@@ -182,15 +182,67 @@ impl ExecutionPayloadHeader {
     }
 }
 
-/// A light-client header: the beacon header plus the execution payload header and its branch.
+/// Which wire shape a light-client header has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum HeaderForm {
+    /// The Capella to Fulu shape: `beacon`, the full `execution` payload header and `execution_branch` to the payload root
+    /// (generalized index 25).
+    #[default]
+    Full,
+    /// The Gloas shape: `beacon`, `execution_block_hash` and `execution_branch` to the block hash
+    /// (`specs/gloas/light-client/sync-protocol.md`, "Modified `LightClientHeader`"). There is no payload header, so no
+    /// block number. Every header inside a Gloas-typed object has this shape, even one whose slot is before the Gloas fork.
+    Compact,
+}
+
+/// A light-client header: the beacon header plus the execution data and its branch.
+///
+/// Two shapes exist, named by [`LightClientHeader::form`]. Build a header with [`LightClientHeader::full`] or
+/// [`LightClientHeader::compact`], and read the execution data with [`LightClientHeader::execution_block_hash`] and
+/// [`LightClientHeader::execution_block_number`].
+///
+/// In the compact form only `execution.block_hash` is meaningful. Every other field of `execution` is its default value,
+/// and the verifier, the wire format and the output never read it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LightClientHeader {
     /// The beacon block header.
     pub beacon: BeaconBlockHeader,
-    /// The execution payload header from the block body.
+    /// The execution payload header from the block body (full form), or a placeholder that holds only the block hash
+    /// (compact form).
     pub execution: ExecutionPayloadHeader,
-    /// Branch from the execution payload root to `beacon.body_root`.
+    /// Full form: branch from the execution payload root to `beacon.body_root`. Compact form: branch from the execution
+    /// block hash to `beacon.body_root`.
     pub execution_branch: Vec<B256>,
+    /// Which of the two shapes this header has.
+    pub form: HeaderForm,
+}
+
+impl LightClientHeader {
+    /// A header in the full form.
+    pub fn full(beacon: BeaconBlockHeader, execution: ExecutionPayloadHeader, execution_branch: Vec<B256>) -> Self {
+        Self { beacon, execution, execution_branch, form: HeaderForm::Full }
+    }
+
+    /// A header in the compact (Gloas) form.
+    pub fn compact(beacon: BeaconBlockHeader, execution_block_hash: B256, execution_branch: Vec<B256>) -> Self {
+        let execution =
+            ExecutionPayloadHeader { block_hash: execution_block_hash, ..ExecutionPayloadHeader::default() };
+        Self { beacon, execution, execution_branch, form: HeaderForm::Compact }
+    }
+
+    /// The execution block hash that the header names, in either form.
+    pub fn execution_block_hash(&self) -> B256 {
+        self.execution.block_hash
+    }
+
+    /// The execution block number. A compact header has none, so this returns 0 for it. The program output reports 0 then.
+    /// Do not read 0 as "block 0": check [`LightClientHeader::form`] first.
+    pub fn execution_block_number(&self) -> u64 {
+        match self.form {
+            HeaderForm::Full => self.execution.block_number,
+            HeaderForm::Compact => 0,
+        }
+    }
 }
 
 /// The aggregate of one block: who signed and the signature.

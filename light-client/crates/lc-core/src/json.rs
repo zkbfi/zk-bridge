@@ -73,12 +73,17 @@ pub fn execution_payload_header(value: &Value) -> ExecutionPayloadHeader {
     }
 }
 
-/// Parses a light-client header (`beacon`, `execution`, `execution_branch`).
+/// Parses a light-client header in either form. The keys decide: `execution` means the full form (Capella to Fulu),
+/// `execution_block_hash` means the compact form (Gloas). A header with both or neither is malformed.
 pub fn light_client_header(value: &Value) -> LightClientHeader {
-    LightClientHeader {
-        beacon: beacon_header(&value["beacon"]),
-        execution: execution_payload_header(&value["execution"]),
-        execution_branch: branch(&value["execution_branch"]),
+    let beacon = beacon_header(&value["beacon"]);
+    let execution_branch = branch(&value["execution_branch"]);
+    match (value.get("execution"), value.get("execution_block_hash")) {
+        (Some(execution), None) => {
+            LightClientHeader::full(beacon, execution_payload_header(execution), execution_branch)
+        }
+        (None, Some(hash)) => LightClientHeader::compact(beacon, hex_b256(hash), execution_branch),
+        _ => panic!("a light-client header has exactly one of `execution` and `execution_block_hash`"),
     }
 }
 
@@ -107,10 +112,16 @@ pub fn light_client_update(data: &Value) -> LightClientUpdate {
         committee: sync_committee(committee),
         branch: branch(&data["next_sync_committee_branch"]),
     });
+    let attested_header = light_client_header(&data["attested_header"]);
+    let finalized_header = light_client_header(&data["finalized_header"]);
+    assert_eq!(
+        attested_header.form, finalized_header.form,
+        "all headers of one light-client update use one form (Gloas objects use the compact form for every header)"
+    );
     LightClientUpdate {
-        attested_header: light_client_header(&data["attested_header"]),
+        attested_header,
         next_sync_committee,
-        finalized_header: light_client_header(&data["finalized_header"]),
+        finalized_header,
         finality_branch: branch(&data["finality_branch"]),
         sync_aggregate: sync_aggregate(&data["sync_aggregate"]),
         signature_slot: decimal_u64(&data["signature_slot"]),

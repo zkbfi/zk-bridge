@@ -101,6 +101,12 @@ pub enum Error {
         /// Number of updates given.
         count: usize,
     },
+    /// A compact (Gloas) header names the zero execution block hash in an epoch that has a block hash. The bridge reports
+    /// this hash, and the contract refuses zero.
+    ZeroExecutionBlockHash(&'static str),
+    /// The header shape does not fit the update: a Gloas-typed update (attested slot in a Gloas epoch) needs the compact
+    /// shape for every header, and an earlier update needs the full shape.
+    HeaderFormMismatch(&'static str),
     /// The execution payload branch does not lead to the body root of the named header.
     InvalidExecutionBranch(&'static str),
     /// A public key is not a valid, non-identity point in the right subgroup.
@@ -249,6 +255,12 @@ impl fmt::Display for Error {
             }
             Self::InvalidExecutionBranch(which) => {
                 write!(formatter, "execution branch of the {which} header is invalid")
+            }
+            Self::ZeroExecutionBlockHash(which) => {
+                write!(formatter, "the {which} header names a zero execution block hash")
+            }
+            Self::HeaderFormMismatch(which) => {
+                write!(formatter, "the {which} header has the wrong shape for the fork of the attested header")
             }
             Self::InvalidPublicKey { index } => write!(formatter, "public key {index} is not a valid point"),
             Self::InvalidSignatureEncoding => write!(formatter, "signature is not a valid point"),

@@ -298,8 +298,8 @@ pub fn synthetic_light_client_header(
     execution: ExecutionPayloadHeader,
 ) -> LightClientHeader {
     let BodyProofs { body_root, execution_branch, .. } = build_body_proofs(spec, slot, &execution);
-    LightClientHeader {
-        beacon: BeaconBlockHeader {
+    LightClientHeader::full(
+        BeaconBlockHeader {
             slot,
             proposer_index: slot % 1000,
             parent_root: filler("parent-root", slot),
@@ -308,7 +308,7 @@ pub fn synthetic_light_client_header(
         },
         execution,
         execution_branch,
-    }
+    )
 }
 
 /// Parameters of a synthetic update.

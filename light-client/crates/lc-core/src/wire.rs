@@ -10,6 +10,17 @@
 //! Chain selector tags: 1 Ethereum mainnet, 2 PulseChain, 3 Sepolia, 4 PulseChain testnet v4. A new chain takes the next
 //! free tag. An existing tag never changes.
 //!
+//! Header encodings. A light-client header has two shapes (`crate::types::HeaderForm`):
+//!
+//! | Format | Selected by | Header bytes |
+//! |---|---|---|
+//! | Original | chain selector byte `1` to `4` | full header: beacon header, payload header, branch. No form byte. |
+//! | Extended | chain selector byte `0x80 \| tag` | a form byte, then the header. Form `0` is the full header as above. Form `1` is the compact (Gloas) header: beacon header, execution block hash (32 bytes), branch. |
+//!
+//! The encoder writes the original format unless a header is compact, so the bytes of every mainnet input stay as they
+//! were. The decoder reads both. In the extended format every header carries its own form byte, so one fold can run
+//! across the Gloas fork.
+//!
 //! Layout of the guest input: chain selector (1 byte), the store, then a list of 1 to 64 steps. Each step is a fork
 //! version (4 bytes) followed by one update. A fold applies the steps in order (`update::verify_fold_with_layout`).
 //! The decoder refuses a count above 64. A count of 0 decodes, and the fold then refuses it.
@@ -18,8 +29,8 @@ use crate::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN, PULSECHAIN_TESTNET_V
 use crate::error::{Error, Result};
 use crate::observation::{verify_fork_observation, Observation};
 use crate::types::{
-    BeaconBlockHeader, BlobGasFields, BlsPublicKey, ExecutionPayloadHeader, LightClientHeader, LightClientStore,
-    LightClientUpdate, NextSyncCommittee, SyncAggregate, SyncCommittee,
+    BeaconBlockHeader, BlobGasFields, BlsPublicKey, ExecutionPayloadHeader, HeaderForm, LightClientHeader,
+    LightClientStore, LightClientUpdate, NextSyncCommittee, SyncAggregate, SyncCommittee,
 };
 use crate::update::{verify_light_client_fold_with_fork_versions, FoldStep, MAX_FOLD_UPDATES};
 use alloy_primitives::{Address, B256, U256};
@@ -83,11 +94,21 @@ pub struct GuestInput {
     pub steps: Vec<FoldStep>,
 }
 
+/// Set on the chain selector byte when the input is in the extended format: a form byte precedes every header.
+const EXTENDED_FORMAT_FLAG: u8 = 0x80;
+
+/// Form byte of a full header (Capella to Fulu).
+const HEADER_FORM_FULL: u8 = 0;
+
+/// Form byte of a compact header (Gloas).
+const HEADER_FORM_COMPACT: u8 = 1;
+
 fn wire_error(reason: &str) -> Error {
     Error::HeaderDecode(format!("wire format: {reason}"))
 }
 
-struct Writer(Vec<u8>);
+/// The bytes so far, and whether the input is in the extended format (a form byte before every header).
+struct Writer(Vec<u8>, bool);
 
 impl Writer {
     fn u64(&mut self, value: u64) {
@@ -142,8 +163,17 @@ impl Writer {
         }
     }
     fn header(&mut self, header: &LightClientHeader) {
+        if self.1 {
+            self.fixed(&[match header.form {
+                HeaderForm::Full => HEADER_FORM_FULL,
+                HeaderForm::Compact => HEADER_FORM_COMPACT,
+            }]);
+        }
         self.beacon(&header.beacon);
-        self.payload(&header.execution);
+        match header.form {
+            HeaderForm::Full => self.payload(&header.execution),
+            HeaderForm::Compact => self.fixed(header.execution_block_hash().as_slice()),
+        }
         self.branch(&header.execution_branch);
     }
     fn committee(&mut self, committee: &SyncCommittee) {
@@ -185,7 +215,8 @@ impl Writer {
         }
     }
     fn chain(&mut self, chain: ChainSelector) {
-        self.fixed(&[chain.wire_tag()]);
+        let flag = if self.1 { EXTENDED_FORMAT_FLAG } else { 0 };
+        self.fixed(&[chain.wire_tag() | flag]);
     }
     fn steps(&mut self, steps: &[FoldStep]) {
         self.u32(steps.len());
@@ -196,16 +227,29 @@ impl Writer {
     }
 }
 
+/// Whether any header of the steps is in the compact (Gloas) form.
+fn uses_compact_headers(steps: &[FoldStep]) -> bool {
+    steps.iter().any(|step| {
+        step.update.attested_header.form == HeaderForm::Compact
+            || step.update.finalized_header.form == HeaderForm::Compact
+    })
+}
+
 /// Encodes the guest input.
+///
+/// The bytes of an input whose headers are all in the full form are the bytes of the original format: nothing changes
+/// for Ethereum mainnet and PulseChain. An input with a compact (Gloas) header uses the extended format, which sets the
+/// flag `0x80` on the chain selector byte and writes a form byte before every header (see the module documentation).
 pub fn encode_guest_input(input: &GuestInput) -> Vec<u8> {
-    let mut writer = Writer(Vec::new());
+    let mut writer = Writer(Vec::new(), uses_compact_headers(&input.steps));
     writer.chain(input.chain);
     writer.store(&input.store);
     writer.steps(&input.steps);
     writer.0
 }
 
-struct Reader<'a>(&'a [u8]);
+/// The bytes left, and whether the input is in the extended format (set by [`Reader::chain`]).
+struct Reader<'a>(&'a [u8], bool);
 
 impl<'a> Reader<'a> {
     fn take(&mut self, length: usize) -> Result<&'a [u8]> {
@@ -300,7 +344,13 @@ impl<'a> Reader<'a> {
         })
     }
     fn header(&mut self) -> Result<LightClientHeader> {
-        Ok(LightClientHeader { beacon: self.beacon()?, execution: self.payload()?, execution_branch: self.branch()? })
+        let form = if self.1 { self.take(1)?[0] } else { HEADER_FORM_FULL };
+        let beacon = self.beacon()?;
+        match form {
+            HEADER_FORM_FULL => Ok(LightClientHeader::full(beacon, self.payload()?, self.branch()?)),
+            HEADER_FORM_COMPACT => Ok(LightClientHeader::compact(beacon, self.b256()?, self.branch()?)),
+            _ => Err(wire_error("unknown header form")),
+        }
     }
     fn update(&mut self) -> Result<LightClientUpdate> {
         let attested_header = self.header()?;
@@ -328,7 +378,9 @@ impl<'a> Reader<'a> {
         Ok(SyncAggregate { sync_committee_bits, sync_committee_signature })
     }
     fn chain(&mut self) -> Result<ChainSelector> {
-        ChainSelector::from_wire_tag(self.take(1)?[0]).ok_or_else(|| wire_error("unknown chain selector"))
+        let byte = self.take(1)?[0];
+        self.1 = byte & EXTENDED_FORMAT_FLAG != 0;
+        ChainSelector::from_wire_tag(byte & !EXTENDED_FORMAT_FLAG).ok_or_else(|| wire_error("unknown chain selector"))
     }
     fn store(&mut self) -> Result<LightClientStore> {
         let header_root = self.b256()?;
@@ -358,7 +410,7 @@ impl<'a> Reader<'a> {
 /// # Errors
 /// `HeaderDecode` with a wire-format reason for truncated, oversized or trailing input.
 pub fn decode_guest_input(bytes: &[u8]) -> Result<GuestInput> {
-    let mut reader = Reader(bytes);
+    let mut reader = Reader(bytes, false);
     let chain = reader.chain()?;
     let store = reader.store()?;
     let steps = reader.steps()?;
@@ -396,7 +448,7 @@ pub struct ObservationGuestInput {
 /// the light-client guest), then the observation: attested beacon header (112 bytes: slot, proposer index, parent, state and body roots), signature slot (`u64`),
 /// participation bits (64 bytes), signature (96 bytes), fork version (4 bytes).
 pub fn encode_observation_input(input: &ObservationGuestInput) -> Vec<u8> {
-    let mut writer = Writer(Vec::new());
+    let mut writer = Writer(Vec::new(), uses_compact_headers(&input.steps));
     writer.chain(input.chain);
     writer.store(&input.store);
     writer.steps(&input.steps);
@@ -412,7 +464,7 @@ pub fn encode_observation_input(input: &ObservationGuestInput) -> Vec<u8> {
 /// # Errors
 /// `HeaderDecode` with a wire-format reason for truncated, oversized (more than 64 steps) or trailing input.
 pub fn decode_observation_input(bytes: &[u8]) -> Result<ObservationGuestInput> {
-    let mut reader = Reader(bytes);
+    let mut reader = Reader(bytes, false);
     let chain = reader.chain()?;
     let store = reader.store()?;
     let steps = reader.steps()?;

@@ -3,7 +3,9 @@
 //! The parsers panic with a clear message on malformed input: a malformed fixture is a bug.
 
 use alloy_primitives::hex;
-use lc_core::types::{BeaconBlockHeader, ExecutionPayloadHeader, LightClientHeader, LightClientUpdate, SyncCommittee};
+use lc_core::types::{
+    BeaconBlockHeader, ExecutionPayloadHeader, HeaderForm, LightClientHeader, LightClientUpdate, SyncCommittee,
+};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -72,12 +74,21 @@ fn execution_payload_header_json(header: &ExecutionPayloadHeader) -> Value {
     value
 }
 
+/// A light-client header as the beacon API writes it: the full form has `execution`, the compact (Gloas) form has
+/// `execution_block_hash`.
 pub fn light_client_header_json(header: &LightClientHeader) -> Value {
-    json!({
-        "beacon": beacon_header_json(&header.beacon),
-        "execution": execution_payload_header_json(&header.execution),
-        "execution_branch": branch_json(&header.execution_branch),
-    })
+    match header.form {
+        HeaderForm::Full => json!({
+            "beacon": beacon_header_json(&header.beacon),
+            "execution": execution_payload_header_json(&header.execution),
+            "execution_branch": branch_json(&header.execution_branch),
+        }),
+        HeaderForm::Compact => json!({
+            "beacon": beacon_header_json(&header.beacon),
+            "execution_block_hash": hex_text(header.execution_block_hash().as_slice()),
+            "execution_branch": branch_json(&header.execution_branch),
+        }),
+    }
 }
 
 pub fn branch_json(branch: &[alloy_primitives::B256]) -> Vec<String> {

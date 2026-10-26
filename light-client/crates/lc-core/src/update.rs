@@ -29,14 +29,17 @@
 use crate::abi::LightClientOutput;
 use crate::bls::verify_aggregate_by_subtraction;
 use crate::chain::DOMAIN_SYNC_COMMITTEE;
-use crate::chain::{ChainSpec, GENESIS_SLOT, MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZE};
+use crate::chain::{ChainSpec, ForkName, GENESIS_SLOT, MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZE};
 use crate::error::{Error, Result};
-use crate::layout::{execution_header_form_for_fork, state_layout_for_fork, StateLayout, EXECUTION_PAYLOAD_GINDEX};
+use crate::layout::{
+    compact_block_hash_gindex_for_fork, execution_header_form_for_fork, state_layout_for_fork, StateLayout,
+    EXECUTION_PAYLOAD_GINDEX,
+};
 use crate::profile::tracked;
 use crate::ssz::is_valid_normalized_merkle_branch;
 use crate::types::{
-    compute_domain, compute_signing_root, LightClientHeader, LightClientStore, LightClientUpdate, SyncAggregate,
-    SyncCommittee,
+    compute_domain, compute_signing_root, HeaderForm, LightClientHeader, LightClientStore, LightClientUpdate,
+    SyncAggregate, SyncCommittee,
 };
 use alloy_primitives::B256;
 
@@ -61,18 +64,53 @@ fn branch_is_valid(leaf: &B256, branch: &[B256], gindex: u64, root: &B256) -> bo
     tracked("merkle_branch", || is_valid_normalized_merkle_branch(leaf, branch, gindex, root))
 }
 
-/// Checks the execution payload branch of one light-client header (`is_valid_light_client_header`, Capella and later).
+/// Checks the execution branch of one light-client header (`is_valid_light_client_header`, Capella and later).
+///
+/// Full form: the payload header is hashed and the branch is checked at generalized index 25 (`EXECUTION_PAYLOAD_GINDEX`).
+/// A full header in a Gloas epoch is refused, because Gloas has no payload header.
+///
+/// Compact form (Gloas light-client objects): `execution_block_hash` is the leaf, and the index follows the epoch of the
+/// header's OWN slot: 2856 in a Gloas epoch, 812 from Deneb to Fulu, 412 in Capella
+/// ([`compact_block_hash_gindex_for_fork`]). A header before Capella is refused, and so is a zero block hash.
 ///
 /// # Errors
-/// `UnsupportedFork`, `HeaderDecode` for a malformed header, `InvalidExecutionBranch(which)` for a bad branch.
+/// `UnsupportedFork`, `HeaderDecode` for a malformed header, `ZeroExecutionBlockHash(which)`,
+/// `InvalidExecutionBranch(which)` for a bad branch.
 pub fn verify_execution_branch(spec: &ChainSpec, header: &LightClientHeader, which: &'static str) -> Result<()> {
-    execution_header_form_for_fork(spec.fork_at_slot(header.beacon.slot))?;
-    let leaf = header.execution.hash_tree_root_for_slot(spec, header.beacon.slot)?;
-    let valid = branch_is_valid(&leaf, &header.execution_branch, EXECUTION_PAYLOAD_GINDEX, &header.beacon.body_root);
-    if valid {
+    let fork = spec.fork_at_slot(header.beacon.slot);
+    let (leaf, gindex) = match header.form {
+        HeaderForm::Full => {
+            execution_header_form_for_fork(fork)?;
+            (header.execution.hash_tree_root_for_slot(spec, header.beacon.slot)?, EXECUTION_PAYLOAD_GINDEX)
+        }
+        HeaderForm::Compact => {
+            let gindex = compact_block_hash_gindex_for_fork(fork)?;
+            if header.execution_block_hash() == B256::ZERO {
+                return Err(Error::ZeroExecutionBlockHash(which));
+            }
+            (header.execution_block_hash(), gindex)
+        }
+    };
+    if branch_is_valid(&leaf, &header.execution_branch, gindex, &header.beacon.body_root) {
         return Ok(());
     }
     Err(Error::InvalidExecutionBranch(which))
+}
+
+/// Requires the header shape that the fork of the attested header dictates: compact for every header of a Gloas-typed
+/// update, full for every header of an earlier one.
+fn require_header_form(spec: &ChainSpec, update: &LightClientUpdate) -> Result<()> {
+    let wanted = match spec.fork_at_slot(update.attested_header.beacon.slot) >= ForkName::Gloas {
+        true => HeaderForm::Compact,
+        false => HeaderForm::Full,
+    };
+    if update.attested_header.form != wanted {
+        return Err(Error::HeaderFormMismatch("attested"));
+    }
+    if update.finalized_header.form != wanted {
+        return Err(Error::HeaderFormMismatch("finalized"));
+    }
+    Ok(())
 }
 
 /// Verifies a sync aggregate over `signed_root` (a beacon block root) with an explicit fork version.
@@ -184,7 +222,8 @@ pub fn verify_with_layout(
         return Err(Error::NotFinalizedProgress("the finalized slot is not after the stored head"));
     }
 
-    // Both headers must be valid light-client headers of a supported fork.
+    // Both headers must be valid light-client headers of a supported fork, in the shape the attested fork dictates.
+    require_header_form(spec, update)?;
     verify_execution_branch(spec, attested, "attested")?;
     verify_execution_branch(spec, finalized, "finalized")?;
 
@@ -287,8 +326,9 @@ pub fn verify_with_layout(
         startNextSyncCommitteeHash: start_next_hash,
         newHeaderRoot: finalized_root,
         newHeadSlot: finalized.beacon.slot,
-        executionBlockHash: finalized.execution.block_hash,
-        executionBlockNumber: finalized.execution.block_number,
+        executionBlockHash: finalized.execution_block_hash(),
+        // 0 for a compact (Gloas) header, which has no block number. The contract stores the number only in a view.
+        executionBlockNumber: finalized.execution_block_number(),
         syncCommitteeHash: new_committee_hash,
         nextSyncCommitteeHash: next_hash,
     };
