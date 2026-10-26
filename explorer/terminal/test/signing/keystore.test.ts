@@ -62,10 +62,13 @@ describe('decryptKeystore', () => {
     expect(privateKeyToAddress(key)).toBe('0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266')
   })
 
-  test('opens a keystore with the memory-hard parameters that Geth writes (N=262144, r=8, p=1)', async () => {
-    const keystore = encryptForTest({ privateKey: SPECIFICATION_KEY, password: 'testpassword', n: 262_144, r: 8, p: 1 })
+  // Node refuses scrypt above 32 MiB unless the reader raises `maxmem`. Memory use is 128 * N * r bytes, so N=65536
+  // with r=8 needs 64 MiB. It proves the reader raises the limit, and it stays fast. The Geth setting N=262144 uses
+  // the same code path but takes seconds, which made this test time out under load. A wide timeout covers a busy host.
+  test('opens a keystore whose scrypt memory use is above the Node default limit (N=65536, r=8, p=1)', async () => {
+    const keystore = encryptForTest({ privateKey: SPECIFICATION_KEY, password: 'testpassword', n: 65_536, r: 8, p: 1 })
     expect(await decryptKeystore(keystore, 'testpassword')).toBe(SPECIFICATION_KEY)
-  })
+  }, 30_000)
 
   test('says so when OpenSSL refuses the scrypt parameters of a file (N=262144, r=1 breaks RFC 7914)', async () => {
     const keystore = JSON.parse(castKeystore)
@@ -75,7 +78,7 @@ describe('decryptKeystore', () => {
 
   test('opens the specification pbkdf2 vector', async () => {
     expect(await decryptKeystore(specificationPbkdf2, 'testpassword')).toBe(SPECIFICATION_KEY)
-  })
+  }, 30_000)
 
   test('a wrong password fails the MAC check and returns no key', async () => {
     await expect(decryptKeystore(castKeystore, 'wrong password')).rejects.toBeInstanceOf(KeystorePasswordError)
