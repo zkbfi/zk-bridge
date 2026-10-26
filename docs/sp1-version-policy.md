@@ -27,10 +27,10 @@ The repository never installs the SP1 toolchain with `sp1up` or a `curl | bash` 
 
 | Program | ELF SHA-256 | Program key |
 |---|---|---|
-| Light client | `55c66798b1a1fedc2d3f4bf39e78332b77a39add8178078853e99ad259ed5a5a` | `0x00f776e8144c67435b3f3ecb3dd09e30e69b01a770bec3c9eb9d47c4d96b2f70` |
-| Fork observation | `478dedb727a6ca725aa2827e0c42685b479896f3557ad3fbcdf4791aac64cde8` | `0x003d6b1d71ba8db9c6cc3cbd4c021732cae28bfd0c7a50da3b1d6d754cbbbf61` |
+| Light client | `d7633e82ff6ca4a6b99db4148d888bcd4f353e05bdb3729db8b18513f7c89bbf` | `0x002a566f7e3d1e6996f7ffa35668291bfc7bce325ed34fe55ef41a2be3fd15cf` |
+| Fork observation | `5a2535fa97ba17f64c8de4d3c14fa2dff57f3f6279e41113ae75c194132a91bf` | `0x00c2a9c5a7b0826c85a59ca0dbeccae5309093072e40d26548b9b0c4183d3f39` |
 
-The two programs changed on 2026-10-23: the signature check takes the signer key from the committee aggregate key minus the keys of the absent members, and it ends in one final exponentiation. The keys above are the new ones. Any key deployed before that date belongs to the earlier programs.
+The two programs changed on 2026-10-26 (testnet chain selectors and Gloas support, commit 7fc5afa). Two Docker builds on the [private] gave identical hashes and keys. An earlier change, on 2026-10-23: the signature check takes the signer key from the committee aggregate key minus the keys of the absent members, and it ends in one final exponentiation. The keys above are the new ones. Any key deployed before that date belongs to the earlier programs.
 The values come from the Docker build and live in `light-client/program-keys.json`. To check them, run `light-client/scripts/program-keys.sh`. It exits with a non-zero code when a value differs.
 A native build (`cargo prove build` without `--docker`) gives different ELF hashes and keys, because the output depends on the build machine. Deploy only the Docker keys.
 These keys are the values for `programVKey` (light client) and `observationProgramVKey` (fork observation) in the deploy configuration.
