@@ -19,5 +19,15 @@ export default defineConfig({
     // Chakra renders slowly in jsdom, and a busy machine slows it more.
     testTimeout: 60_000,
     hookTimeout: 60_000,
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "lcov"],
+      include: ["src/**"],
+      exclude: [
+        // Thin entry: mounts the application and calls tested modules only.
+        "src/main.tsx",
+      ],
+      thresholds: { lines: 100, branches: 100, functions: 100, statements: 100 },
+    },
   },
 });
