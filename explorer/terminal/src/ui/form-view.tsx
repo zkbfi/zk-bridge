@@ -8,7 +8,6 @@ import {
   applyFormKey,
   applyFormPaste,
   createFormState,
-  setValue,
   visibleFields,
   type FieldSpec,
   type FormOutcome,
@@ -38,8 +37,6 @@ export interface UseFormOptions {
 export interface FormHandle {
   readonly state: FormState
   readonly specs: readonly FieldSpec[]
-  /** Replaces one value from code, for example a default that arrives late. */
-  set(name: string, value: string): void
 }
 
 /** Owns the state of a form and routes keys and paste events to it, on the modal layer. */
@@ -78,7 +75,7 @@ export function useForm(options: UseFormOptions): FormHandle {
     commit(refine(latest.current, applyFormPaste(specs, latest.current, new TextDecoder().decode(event.bytes))))
   })
 
-  return { state, specs, set: (name, value) => commit(refine(latest.current, setValue(latest.current, name, value))) }
+  return { state, specs }
 }
 
 /** The widest a field label is. */

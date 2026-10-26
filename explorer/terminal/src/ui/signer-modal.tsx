@@ -8,7 +8,6 @@ import { useEffect, useState } from 'react'
 import { useServices } from '../app/services'
 import { useSession } from '../app/session'
 import { formatUnits } from '../format/amounts'
-import { shortenHex } from '../format/text'
 import { DEFAULT_PATH_TEMPLATE } from '../signing/mnemonic'
 import type { AddressSource, DerivedAddress, Signer } from '../signing/signer'
 import type { FieldSpec } from './form'
@@ -282,9 +281,4 @@ function TemplateForm(props: { readonly current: string; readonly onApply: (temp
       <text fg={theme.bad}>{error ?? ' '}</text>
     </ModalFrame>
   )
-}
-
-/** The text for the address in the account panel is built from the signer. Exported for the panel tests. */
-export function signerSummary(signer: Signer): string {
-  return `${signer.description} ${shortenHex(signer.address, 6)}`
 }

@@ -63,7 +63,7 @@ function useScroll(total: number, rows: number) {
   const maximum = Math.max(0, total - rows)
   const clamped = Math.min(offset, maximum)
   const move = (step: number) => setOffset(Math.max(0, Math.min(clamped + step, maximum)))
-  return { offset: clamped, move, reset: () => setOffset(0) }
+  return { offset: clamped, move }
 }
 
 /** The review of a sequence of transactions: shows each in full and sends only after an explicit yes. */

@@ -77,12 +77,3 @@ export function useKeyLayer(layer: KeyLayer, handler: KeyHandler, options: KeyLa
     return router.register({ layer, run: (key) => latest.current(key) })
   }, [router, layer, enabled])
 }
-
-/** The text that a key press adds to a text field, or null when the key is not a character. */
-export function printableCharacter(key: KeyEvent): string | null {
-  if (key.ctrl || key.meta || key.option) return null
-  const { sequence } = key
-  if (sequence.length !== 1) return null
-  const code = sequence.charCodeAt(0)
-  return code >= 0x20 && code !== 0x7f ? sequence : null
-}

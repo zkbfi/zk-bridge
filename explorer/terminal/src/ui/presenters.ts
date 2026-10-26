@@ -2,9 +2,8 @@
  * Pure functions that turn data into the text of the views. No rendering happens here, so a unit test can check each
  * number and column without a terminal.
  */
-import { formatRateAsPercent, formatUnits } from '../format/amounts'
+import { formatUnits } from '../format/amounts'
 import { fitColumn, fitColumnRight, formatAge, formatClock, formatDuration, shortenHex } from '../format/text'
-import type { ChainSnapshot } from '../chain/live-reads'
 import { auditDifference, hasAuditMismatch } from '../model/audit'
 import type {
   AuditRow,
@@ -12,7 +11,6 @@ import type {
   ChainSide,
   FeedItem,
   FeedStatus,
-  GateStatus,
   LightClientHead,
   PairConfig,
   PairSummary,
@@ -262,14 +260,4 @@ export function updateGasHeader(): Line {
       `${fitColumn('time', 9)}${fitColumn('chain', 12)}${fitColumnRight('slot', 12)}${fitColumnRight('gas used', 12)}${fitColumnRight('cost', 20)}  ${fitColumn('transaction', 13)}  poster`,
     ),
   ]
-}
-
-/** The fee rate and a sentence for the account panel, for example `fee 0.1%`. */
-export function feeText(snapshot: ChainSnapshot): string {
-  return `fee ${formatRateAsPercent(snapshot.feeRate)}`
-}
-
-/** The text of a gate status for the global view. */
-export function gateText(status: GateStatus): string {
-  return status
 }
