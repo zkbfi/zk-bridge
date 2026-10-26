@@ -7,8 +7,9 @@ exact = true
 preload = ["./test/setup.ts"]
 coverage = true
 coverageSkipTestFiles = true
-# Bun reports line and function coverage only. It does not report branch coverage.
-coverageThreshold = { line = 1.0, function = 1.0 }
+# Bun reports line and function coverage only. It reports no branch coverage and has no statement threshold.
+# The threshold keys are `lines` and `functions`. Bun ignores unknown keys such as `line` without a warning.
+coverageThreshold = { lines = 1.0, functions = 1.0 }
 coverageReporter = ["text"]
 # explorer/shared has its own coverage-enforced suite, so terminal does not count it.
 coveragePathIgnorePatterns = ["../shared/**", "test/**"]
