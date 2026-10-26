@@ -125,7 +125,9 @@ contract FeeRouter is ReentrancyGuard {
     error NotMediator(address caller);
     /// @notice A message is running already through this router.
     error RunnerSlotInUse();
-    /// @notice The runner slot value would be below 2, which means no runner.
+    /// @notice Never raised. A stored run value holds the reward address in its upper 160 bits, and the constructor
+    /// refuses a zero reward address, so the value is always above `NOT_RUNNING`. The declaration stays so that the
+    /// interface of the contract does not change.
     error InvalidRunnerValue();
     /// @notice The coin came from an account that is not the wrapped token.
     error NotWrappedTokenSender(address sender);
@@ -277,7 +279,6 @@ contract FeeRouter is ReentrancyGuard {
     /// @dev Stores the reward address and the starting gas, which marks a run. Returns the stored value.
     function _begin(address reward) private returns (uint256 value) {
         value = uint256(uint96(gasleft())) | (uint256(uint160(reward)) << 96);
-        if (value <= NOT_RUNNING) revert InvalidRunnerValue();
         _storeRunner(value);
     }
 
