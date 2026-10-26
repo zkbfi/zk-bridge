@@ -1,0 +1,120 @@
+{
+  "_notes": [
+    "Pair: chain A is Sepolia (11155111), chain B is PulseChain testnet v4 (943). Built from script/hardened/bridge.config.example.json on 2026-10-26.",
+    "Values for genesis, clock and fork data were read from the beacon endpoints of one.valve.city (genesis, config/spec, config/fork_schedule: all HTTP 200).",
+    "MISSING, needs the light_client and debug state routes (HTTP 404 on 2026-10-26): initialSlot, initialHeaderRoot, initialSyncCommitteeHash and initialNextSyncCommitteeHash of all three checkpoints. Fill them from light_client/bootstrap at one finalized root of the same chain, all four from the same bootstrap.",
+    "BLOCKER, not a config value: the light-client program in light-client/program-keys.json proves only Ethereum mainnet and PulseChain mainnet (lc-core ChainSelector). Sepolia and 943 need a new program build with new keys. The keys below are the current ones and will not verify testnet updates.",
+    "UNVERIFIED: Sepolia is already on fork version 0x90000076 (epoch 353024). The stateDepth 6 for it is an assumption (fewer than 65 BeaconState fields). Check it against ethereum/consensus-specs before deployment.",
+    "943 wrapped native token (testnet v4 WPLS) is not known: no address was found in the repository. Fill wrappedNative of chain B, or set it to the zero address and deployFeeRouter to false.",
+    "Multicall3 0xcA11bde05977b3631167028862bE2a173976CA11 has code on both chains (eth_getCode, 2026-10-26): same runtime code, 3808 bytes.",
+    "Foundry resolves rpcAlias from the environment: FOUNDRY_RPC_ENDPOINTS='{sepolia=\"<url>\",pulsechain_testnet_v4=\"<url>\"}'. See docs/testnet-run.md. Never write the key into this file."
+  ],
+  "deployer": "REPLACE_WITH_DEPLOYER_ADDRESS",
+  "chainA": {
+    "remoteChainName": "PulseChain Testnet",
+    "rpcAlias": "sepolia",
+    "chainId": "11155111",
+    "verifier": "REPLACE_WITH_SP1_VERIFIER_ADDRESS_ON_SEPOLIA_AFTER_ITS_DEPLOYMENT",
+    "verifierCodeHash": "0xe5878a94678c40ab6b1bebc391f4d4c12f44bedb8291921b5c0f5a251ec6e84b",
+    "depositCutoffTimestamp": "0",
+    "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_SEPOLIA_AFTER_THE_VERIFIER_DEPLOYMENT",
+    "fee": {
+      "recipient": "0x0000000000000000000000000000000000000000",
+      "startRate": "0",
+      "stepRate": "0",
+      "floorRate": "0",
+      "stepPeriodSeconds": "0"
+    },
+    "flowLimiter": "0x0000000000000000000000000000000000000000",
+    "wrappedNative": "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9",
+    "deployFeeRouter": "true",
+    "feeRouter": {
+      "runner": "REPLACE_WITH_RUNNER_ADDRESS",
+      "rewardAddress": "REPLACE_WITH_REWARD_ADDRESS"
+    },
+    "lightClient": {
+      "programVKey": "0x00f776e8144c67435b3f3ecb3dd09e30e69b01a770bec3c9eb9d47c4d96b2f70",
+      "genesisValidatorsRoot": "0xd81664ba97279a6fa0832041b4aee6009172b4750a99467ff670a9faf3a34e64",
+      "slotsPerPeriod": "8192",
+      "genesisTime": "1681356369",
+      "secondsPerSlot": "10",
+      "slotsPerEpoch": "32",
+      "capellaForkEpoch": "4200",
+      "capellaEra": "16",
+      "initialSlot": "REPLACE_WITH_FINALIZED_SLOT_OF_943_AT_DEPLOYMENT_FROM_LIGHT_CLIENT_BOOTSTRAP",
+      "initialHeaderRoot": "REPLACE_WITH_HEADER_ROOT_OF_943_AT_THAT_SLOT",
+      "initialSyncCommitteeHash": "REPLACE_WITH_COMMITTEE_HASH_OF_943_AT_THAT_SLOT",
+      "initialNextSyncCommitteeHash": "REPLACE_WITH_NEXT_COMMITTEE_HASH_OF_943_AT_THAT_SLOT"
+    },
+    "gate": {
+      "mode": "Enforcing",
+      "genesisTime": "1655733600",
+      "secondsPerSlot": "12",
+      "slotsPerEpoch": "32",
+      "supportedVersions": [
+        { "version": "0x90000075", "stateDepth": "6" },
+        { "version": "0x90000076", "stateDepth": "6" }
+      ],
+      "sealDepths": ["5", "6", "7"]
+    }
+  },
+  "chainB": {
+    "remoteChainName": "Sepolia",
+    "rpcAlias": "pulsechain_testnet_v4",
+    "chainId": "943",
+    "verifier": "REPLACE_WITH_SP1_VERIFIER_ADDRESS_ON_943_AFTER_ITS_DEPLOYMENT",
+    "verifierCodeHash": "0xe5878a94678c40ab6b1bebc391f4d4c12f44bedb8291921b5c0f5a251ec6e84b",
+    "depositCutoffTimestamp": "0",
+    "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_943_AFTER_THE_VERIFIER_DEPLOYMENT",
+    "fee": {
+      "recipient": "REPLACE_WITH_FEE_RECIPIENT_ON_943",
+      "startRate": "1000000000000000",
+      "stepRate": "100000000000000",
+      "floorRate": "500000000000000",
+      "stepPeriodSeconds": "31536000"
+    },
+    "flowLimiter": "0x0000000000000000000000000000000000000000",
+    "wrappedNative": "REPLACE_WITH_TESTNET_V4_WPLS_ADDRESS_ON_943",
+    "deployFeeRouter": "true",
+    "feeRouter": {
+      "runner": "REPLACE_WITH_RUNNER_ADDRESS",
+      "rewardAddress": "REPLACE_WITH_REWARD_ADDRESS"
+    },
+    "lightClient": {
+      "programVKey": "0x00f776e8144c67435b3f3ecb3dd09e30e69b01a770bec3c9eb9d47c4d96b2f70",
+      "genesisValidatorsRoot": "0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078",
+      "slotsPerPeriod": "8192",
+      "genesisTime": "1655733600",
+      "secondsPerSlot": "12",
+      "slotsPerEpoch": "32",
+      "capellaForkEpoch": "56832",
+      "capellaEra": "222",
+      "initialSlot": "REPLACE_WITH_FINALIZED_SLOT_OF_SEPOLIA_AT_DEPLOYMENT_FROM_LIGHT_CLIENT_BOOTSTRAP",
+      "initialHeaderRoot": "REPLACE_WITH_HEADER_ROOT_OF_SEPOLIA_AT_THAT_SLOT",
+      "initialSyncCommitteeHash": "REPLACE_WITH_COMMITTEE_HASH_OF_SEPOLIA_AT_THAT_SLOT",
+      "initialNextSyncCommitteeHash": "REPLACE_WITH_NEXT_COMMITTEE_HASH_OF_SEPOLIA_AT_THAT_SLOT"
+    },
+    "gate": {
+      "mode": "DetectBeaconRootsAndRegistry",
+      "genesisTime": "1681356369",
+      "secondsPerSlot": "10",
+      "slotsPerEpoch": "32",
+      "supportedVersions": [
+        { "version": "0x00000946", "stateDepth": "5" }
+      ],
+      "sealDepths": ["5", "6", "7"]
+    },
+    "observation": {
+      "lightClientProgramVKey": "0x00f776e8144c67435b3f3ecb3dd09e30e69b01a770bec3c9eb9d47c4d96b2f70",
+      "observationProgramVKey": "0x003d6b1d71ba8db9c6cc3cbd4c021732cae28bfd0c7a50da3b1d6d754cbbbf61",
+      "genesisValidatorsRoot": "0xd81664ba97279a6fa0832041b4aee6009172b4750a99467ff670a9faf3a34e64",
+      "slotsPerPeriod": "8192",
+      "genesisTime": "1681356369",
+      "secondsPerSlot": "10",
+      "initialSlot": "REPLACE_WITH_FINALIZED_SLOT_OF_943_AT_DEPLOYMENT_FROM_LIGHT_CLIENT_BOOTSTRAP",
+      "initialHeaderRoot": "REPLACE_WITH_HEADER_ROOT_OF_943_AT_THAT_SLOT",
+      "initialSyncCommitteeHash": "REPLACE_WITH_COMMITTEE_HASH_OF_943_AT_THAT_SLOT",
+      "initialNextSyncCommitteeHash": "REPLACE_WITH_NEXT_COMMITTEE_HASH_OF_943_AT_THAT_SLOT"
+    }
+  }
+}
