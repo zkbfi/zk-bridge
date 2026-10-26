@@ -649,11 +649,11 @@ impl BlockView {
 
     /// The block as a light-client header.
     pub fn as_light_client_header(&self) -> LightClientHeader {
-        LightClientHeader {
-            beacon: self.header,
-            execution: self.payload.clone(),
-            execution_branch: self.execution_branch.clone(),
-        }
+        LightClientHeader::full(
+            self.header,
+            self.payload.clone(),
+            self.execution_branch.clone(),
+        )
     }
 }
 
