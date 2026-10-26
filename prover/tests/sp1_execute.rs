@@ -88,6 +88,8 @@ fn selector(kind: ChainKind) -> ChainSelector {
     match kind {
         ChainKind::Ethereum => ChainSelector::EthereumMainnet,
         ChainKind::Pulsechain => ChainSelector::Pulsechain,
+        ChainKind::Sepolia => ChainSelector::Sepolia,
+        ChainKind::PulsechainTestnetV4 => ChainSelector::PulsechainTestnetV4,
     }
 }
 
