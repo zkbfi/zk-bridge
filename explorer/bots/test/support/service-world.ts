@@ -10,6 +10,12 @@ function section(chainId: number, seed: number) {
   return { chain_id: chainId, bridge: address(1), mediator: address(2), token_factory: address(3), native_router: address(4), wrapped_native: address(5), gate: address(6), light_client: address(7), fee_router: address(8), start_block: 5 };
 }
 
+function withoutRouter(deployment: ReturnType<typeof section>, options: ServiceWorldOptions) {
+  if (options.omitFeeRouter !== true) return deployment;
+  const { fee_router: _omitted, ...rest } = deployment;
+  return rest;
+}
+
 /** The directory that a world keeps its files in, and the context loaded from them. */
 export interface ServiceWorld {
   readonly context: BotContext;
@@ -25,6 +31,8 @@ export interface ServiceWorldOptions {
   /** Replaces whole sections of the bot configuration. */
   readonly config?: Record<string, unknown>;
   readonly environment?: Record<string, string | undefined>;
+  /** Leave the fee router out of the deployment file, as a deployment without a router does. */
+  readonly omitFeeRouter?: boolean;
 }
 
 /**
@@ -37,7 +45,7 @@ export async function createServiceWorld(options: ServiceWorldOptions = {}): Pro
   const deploymentFile = join(directory, "deployment.json");
   const configPath = join(directory, "bots.json");
   await saveProverSetup(setupFile, { ...emptyProverSetup(), ...options.setup });
-  await writeFile(deploymentFile, JSON.stringify({ chain_a: section(1, 0x10), chain_b: section(369, 0x20) }));
+  await writeFile(deploymentFile, JSON.stringify({ chain_a: withoutRouter(section(1, 0x10), options), chain_b: withoutRouter(section(369, 0x20), options) }));
   await writeFile(configPath, JSON.stringify({ schemaVersion: 1, stateDirectory: join(directory, "state"), setupFile, deploymentFile, logLevel: "debug", ...options.config }));
   const logLines: string[] = [];
   const context = await loadBotContext({

@@ -13,7 +13,7 @@ import { acquireLock, type HeldLock } from "../runtime/lock-file.ts";
 import { runLoop } from "../runtime/loop.ts";
 import { createStateFile } from "../runtime/state-file.ts";
 import { openSigner, type Signer } from "../signing/open-signer.ts";
-import type { DeliveryDependencies } from "./delivery.ts";
+import type { DeliveryDependencies, DeliverySettings } from "./delivery.ts";
 import { createFileOutcomeSink } from "./outcomes.ts";
 import { createRunner, type Runner } from "./runner.ts";
 import { createSerialQueue } from "./serial-queue.ts";
@@ -63,6 +63,23 @@ async function requireMulticall3(input: { readonly client: Pick<PublicClient, "g
     throw new BotConfigError(`runner.multicall3 ${input.address} holds no code on ${input.chainName}. Deploy Multicall3 there, or name the address of its deployment.`);
   }
   return input.address;
+}
+
+/** The delivery settings that the runner section of the configuration sets, with the wei texts read as numbers. */
+export function deliverySettingsOf(runnerConfig: RunnerConfig): DeliverySettings {
+  return {
+    minimumMarginWei: BigInt(runnerConfig.minimumMarginWei),
+    deliverWithoutOffer: runnerConfig.deliverWithoutOffer,
+    tokenValuationsWei: valuations(runnerConfig.tokenValuationsWei),
+    executionGasFallback: BigInt(runnerConfig.executionGasFallback),
+    maximumPrerequisiteRounds: runnerConfig.maximumPrerequisiteRounds,
+    prerequisiteGasFallback: BigInt(runnerConfig.prerequisiteGasFallback),
+    maximumPrerequisiteSpendPerSweepWei: BigInt(runnerConfig.maximumPrerequisiteSpendPerSweepWei),
+    maximumPrerequisiteSpendPerDayWei: BigInt(runnerConfig.maximumPrerequisiteSpendPerDayWei),
+    maximumUnrecoveredPrerequisiteLossWei: BigInt(runnerConfig.maximumUnrecoveredPrerequisiteLossWei),
+    maximumBatchSize: runnerConfig.maximumBatchSize,
+    maximumBatchGas: BigInt(runnerConfig.maximumBatchGas),
+  };
 }
 
 function valuations(settings: Readonly<Record<string, string>>): Readonly<Record<string, bigint>> {
@@ -187,19 +204,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       multicall,
       rewardAddress,
       wrappedNative: destination.contracts.wrappedNative,
-      settings: {
-        minimumMarginWei: BigInt(runnerConfig.minimumMarginWei),
-        deliverWithoutOffer: runnerConfig.deliverWithoutOffer,
-        tokenValuationsWei: valuations(runnerConfig.tokenValuationsWei),
-        executionGasFallback: BigInt(runnerConfig.executionGasFallback),
-        maximumPrerequisiteRounds: runnerConfig.maximumPrerequisiteRounds,
-        prerequisiteGasFallback: BigInt(runnerConfig.prerequisiteGasFallback),
-        maximumPrerequisiteSpendPerSweepWei: BigInt(runnerConfig.maximumPrerequisiteSpendPerSweepWei),
-        maximumPrerequisiteSpendPerDayWei: BigInt(runnerConfig.maximumPrerequisiteSpendPerDayWei),
-        maximumUnrecoveredPrerequisiteLossWei: BigInt(runnerConfig.maximumUnrecoveredPrerequisiteLossWei),
-        maximumBatchSize: runnerConfig.maximumBatchSize,
-        maximumBatchGas: BigInt(runnerConfig.maximumBatchGas),
-      },
+      settings: deliverySettingsOf(runnerConfig),
       logger: directionLogger,
     };
     const runner: Runner = createRunner({
