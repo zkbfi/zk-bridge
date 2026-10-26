@@ -1,4 +1,6 @@
-# Review of the PulseChain bridge: the second WPLS path, and lessons for our bridge
+# Review of the PulseChain bridges: the second bridge for WPLS, and lessons for our bridge
+
+**The bridge you most likely meant.** The "second bridge" that was deployed so PLS could be delivered is the **WPLS bridge**. Its mediators are `0x0e18d0…3996` (PulseChain) and `0xe20E33…68bF` (Ethereum), and its router is `0xf868dA…8499`. gib.show lists it as type `omnibridge-wpls` under the `pulsechain-bridge` provider. It has its own mediators, router, token, fee manager, gas limit manager and token pair. It does **not** have its own message bridge: it sends through the same Arbitrary Message Bridge pair as the general bridge (section 4.2). In the sections below, "second bridge" means this WPLS mediator pair. The separate TokensEx bridge to BNB Chain is a different deployment, by a different owner, and it has nothing to do with PLS delivery (section 4.3).
 
 Date of research: 2026-10-25. All on-chain reads use `cast call` against the keyed valve.city endpoint for chain 369 (PulseChain, written `$PLS`) and chain 1 (Ethereum, written `$ETH`). Explorer facts come from the Blockscout APIs of `api.scan.pulsechain.com` and `eth.blockscout.com`.
 
@@ -6,7 +8,7 @@ In this document, "AMB" means the Arbitrary Message Bridge of the OmniBridge (To
 
 ## Summary
 
-The premise needs one correction. I found **no second AMB**. The PulseChain bridge has one AMB pair, and both AMB proxies are still at implementation version 1. What PulseChain added 18 days after launch is a **second token mediator pair, dedicated to WPLS**, a **WPLS router** that unwraps to native PLS, and a **new WPLS token on Ethereum**. The new mediator pair uses the same AMB pair as the first.
+The second bridge exists as a second mediator pair, not as a second message bridge. The PulseChain bridge has one AMB pair, and both AMB proxies are still at implementation version 1. What PulseChain added 18 days after launch is a **second token mediator pair, dedicated to WPLS**, a **WPLS router** that unwraps to native PLS, and a **new WPLS token on Ethereum**. The new mediator pair uses the same AMB pair as the first.
 
 The reason is visible on chain. The first, general mediator pair bridged WPLS like any other PulseChain token. A user bridged WPLS on 2023-05-16, the day after launch. The Ethereum mediator then auto-deployed a WPLS copy through its token factory (`0x97Ac…5341`). OmniBridge cannot re-point a token that is already bridged: `setCustomTokenAddressPair` requires `bridgedTokenAddress(native) == 0`. So to get a different Ethereum WPLS (a pre-deployed token, a fixed pair set at initialization, and a router that delivers native PLS), the team deployed a whole new mediator pair. Two WPLS tokens on Ethereum now exist side by side, each fully backed.
 
@@ -43,7 +45,7 @@ On-chain configuration (`cast call <proxy> '<getter>' --rpc-url $PLS` or `$ETH`)
 
 `version() == 1` on both proxies means that nobody upgraded either AMB after the first implementation. So no AMB change was made for PLS.
 
-The PulseChain explorer also lists other `HomeAMB` and `ForeignAMB` contracts (for example `0x774ea23f…9583`, `0x4257322e…2ec7`). PulseChain copied the Ethereum state at its fork in May 2023, so those are copies of Gnosis Chain deployments. The PulseChain deployer did not create them, and the front end does not use them. Source: `https://api.scan.pulsechain.com/api/v2/search?q=HomeAMB`.
+The PulseChain explorer also lists other `HomeAMB` and `ForeignAMB` contracts (`https://api.scan.pulsechain.com/api/v2/search?q=HomeAMB`). One of them, `0x774ea23f…9583`, is the implementation of the separate TokensEx message bridge to BNB Chain (section 4). The others, such as `0x4257322e…2ec7`, have Gnosis Chain names. I assume they are copies of Ethereum state from the PulseChain fork, but I did not check each one. None of them serves the PulseChain-to-Ethereum bridge.
 
 ### 1.2 The first mediator pair (general tokens)
 
@@ -217,9 +219,87 @@ The PulseChain AMB limits size by its validators and its gas. I found nothing ab
 
 For tokens, our mediator never reverts on a refusing recipient. It tries the recipient, then the fallback, then records a claim (`TokenMediator.sol:891-907`, `:928-942`). That is stronger than both PulseChain mediators, which revert. The gap is only in the coin send of the routers (3.1).
 
+## 4. Every bridge deployment involving PulseChain that gib.show knows
+
+### 4.1 The gib.show configuration
+
+The gib.show collectors are in `gibsfinance/assets`. The file `packages/server/src/collect/collectables.ts` (read with `gh api repos/gibsfinance/assets/contents/...`) configures an `OmnibridgeCollector` with four entries. The collector names each list provider `<providerPrefix>-bridge`, with a `testnet-<prefix>-` prefix for testnets.
+
+| gib.show provider | Type | Home (PulseChain) mediator | Foreign mediator |
+|---|---|---|---|
+| `pulsechain-bridge` | `omnibridge` | `0x4fD0aaa7506f3d9cB8274bdB946Ec42A1b8751Ef` (369) | `0x1715a3E4A142d8b698131108995174F37aEBA10D` (1) |
+| `pulsechain-bridge` (comment `// for wpls`) | `omnibridge-wpls` | `0x0e18d0d556b652794EF12Bf68B2dC857EF5f3996` (369) | `0xe20E337DB2a00b1C37139c873B92a0AAd3F468bF` (1) |
+| `tokensex-bridge` | `omnibridge` | `0xf1DFc63e10fF01b8c3d307529b47AefaD2154C0e` (369) | `0xb4005881e81a6ecd2c1f75d58e8e41f28d59c6b1` (56, BNB Chain) |
+| `testnet-v4-pulsechain-bridge` | `omnibridge` | `0x6B08a50865aDeCe6e3869D9AfbB316d0a0436B6c` (943) | `0x546e37DAA15cdb82fd1a717E5dEEa4AF08D4349A` (11155111, Sepolia) |
+
+The collector config holds mediator addresses only. It has no message bridge or router addresses, and no comments about why the bridges exist.
+
+**How the collector treats the WPLS pair.** In `packages/server/src/collect/omnibridge.ts`, the WPLS entry has the same `providerPrefix: 'pulsechain'`. So it writes into the same provider (`pulsechain-bridge`) and the same `home` and `foreign` lists as the general pair. The only difference is `type: c.type ?? 'omnibridge'` in the bridge record (`db.insertBridge`), which stores `omnibridge-wpls`. Token discovery is the same for both: the collector reads `NewTokenRegistered(address indexed native, address indexed bridged)` events from each mediator. The WPLS entry reuses the general pair's start blocks. So gib.show presents the WPLS pair as part of the PulseChain bridge, not as a separate provider.
+
+### 4.2 The four mediators and their message bridges (from chain state)
+
+Reads use the keyed valve.city endpoint for chains 369 and 1, except where marked. The 1Password session timed out partway through, so I made the owner reads marked "public" with read-only public RPCs: `https://rpc.pulsechain.com`, `https://eth.blockscout.com/api/eth-rpc` and `https://ethereum-rpc.publicnode.com`. The valve.city endpoint returns "Unsupported chain" for 56, so BNB Chain reads use `https://bsc-dataseed.bnbchain.org`.
+
+All six proxies are OmniBridge `EternalStorageProxy` contracts, not EIP-1967 proxies. `cast storage <proxy> 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a9b6ceaff7c84b4c41` returns zero on each mediator I checked: `0x4fD0…`, `0x0e18…`, `0xf1DF…` (public), `0x1715…` (public) and `0xb400…`. The implementation comes from the `implementation()` getter.
+
+| Mediator | `bridgeContract()` | `mediatorContractOnOtherSide()` | `implementation()` | `owner()` | `upgradeabilityOwner()` |
+|---|---|---|---|---|---|
+| General, home `0x4fD0…51Ef` | `0x6ef79F…8b2b` | `0x1715…A10D` | `0xe64b29…72E4` | `0x4792865c…e7dF` (public) | `0xF3BEC23E…55C9` |
+| General, foreign `0x1715…A10D` | `0xd0764F…636c` | `0x4fD0…51Ef` | `0xB7DF1E00…B873` (explorer) | `0x610094aB…bfc6` (public) | `0x13A9594a…7801` (public) |
+| **WPLS, home `0x0e18…3996`** | **`0x6ef79F…8b2b`** | `0xe20E…68bF` | `0xE38a26…0faA` | `0x4792865c…e7dF` | `0xF3BEC23E…55C9` |
+| **WPLS, foreign `0xe20E…68bF`** | **`0xd0764F…636c`** | `0x0e18…3996` | `0xb825Fd1E…E276` | `0x610094aB…bfc6` | `0x13A9594a…7801` |
+| TokensEx, home `0xf1DF…4C0e` | `0xA3177000…718B` | `0xB400…c6b1` | `0x129cB265…eC3f` | `0xE3D1Ed8C…94dF` | `0xE3D1Ed8C…94dF` |
+| TokensEx, foreign `0xb400…c6b1` (BNB Chain) | `0x8C0Db248…69E7` | `0xf1DF…4C0e` | `0xB78dd6cd…B4D3` | `0xE3D1Ed8C…94dF` | `0xE3D1Ed8C…94dF` |
+
+**Plain answer: the WPLS pair uses the same message bridge as the general pair.** Both home mediators return `0x6ef79F…8b2b`, and both foreign mediators return `0xd0764F…636c`. The two pairs also share the mediator owner and the proxy owner on each side. Only TokensEx has its own message bridge.
+
+The three message bridge pairs:
+
+| Message bridge | `implementation()` | `version()` | `owner()` / `upgradeabilityOwner()` | `validatorContract()` | `requiredSignatures()` | Validators | `maxGasPerTx()` |
+|---|---|---|---|---|---|---|---|
+| PulseChain–Ethereum, home `0x6ef79F…8b2b` | `0xD346C53c…50B8` | 1 | `0x415F4919…d838` / `0x75225BD3…32E9` | `0x0FD542ff…95b7` (owner `0x6aBE2F53…4165`) | 5 | 8 | 2,000,000 |
+| PulseChain–Ethereum, foreign `0xd0764F…636c` | `0xe9869995…2467` | 1 | `0x0Fb17ADb…805F` / `0xDf5d165A…e585` | `0x2fa878Ab…C95d` (owner `0x3eA02EF8…513f`) | 5 | 8 | 2,000,000 |
+| TokensEx, home `0xA3177000…718B` | `0x774ea23f…9583` | 1 | `0xE3D1Ed8C…94dF` / same | `0x81462287…0E3b` (owner `0xE3D1…94dF`) | 3 | 9 | **1e24** |
+| TokensEx, foreign `0x8C0Db248…69E7` (BNB Chain) | `0xB186D0aE…5596` | 1 | `0xE3D1Ed8C…94dF` / same | `0xaF252be5…a853` (owner `0xE3D1…94dF`) | 3 | 9 | 2,000,000 |
+
+Validator lists come from `validatorList()(address[])` on each validator contract:
+
+- **PulseChain–Ethereum, the same eight on both sides:** `0xf6ab64f4…3FC0`, `0x1dAD947d…bf8c`, `0xd4Aa3dFe…8fbD`, `0xfB18Da3b…3533`, `0xe158313e…beDa`, `0x5ECfE775…D74E`, `0xFE9a08BB…dd2C`, `0xe3B95d01…1F69`.
+- **TokensEx, the same nine on both sides:** `0xAEC06A83…a40C`, `0x93f41b79…8397`, `0x1688722C…05d1`, `0x67eE3406…8c41`, `0x1b59833a…91e1`, `0x1B5658E9…57ae`, `0x5aD7C508…84cE`, `0xefb8E686…53A7`, `0x2A82F390…Ff06`.
+
+No validator appears in both sets. Both pairs report interface version 6.2.0.
+
+### 4.3 TokensEx: a separate OmniBridge deployment
+
+- **Separate message bridge, mediators and validators.** See the tables above.
+- **Deployer and owner.** One externally owned account, `0xE3D1Ed8C1e570f406B333c84D1CbcB5eb25E94dF`, created the PulseChain proxies (explorer `creator_address_hash`). It owns everything on both chains: the mediators, the proxies, the message bridges and the validator contracts. `cast code 0xE3D1…94dF --rpc-url https://rpc.pulsechain.com` returns `0x`, so it is not a multisig contract. It shares no account with the PulseChain team's deployer (`0x30e2…2539`) or with that bridge's owners.
+- **Dates.** The home message bridge proxy was created at PulseChain block 17,494,240 on 2023-06-10 19:13 UTC (transaction `0xf5accd83…eeb8`). The home mediator proxy was created at block 17,494,316 on 2023-06-10 19:26 UTC (transaction `0xb08cd3b9…6e63`). Sources were verified on 2023-06-11 and 2023-08-28.
+- **Public link.** `https://bridge.pulsechain.com/version.json` lists `https://tokensex.link` ("Token Express") under `community_frontends`.
+- **Code changes against the PulseChain–Ethereum general home mediator.** I diffed the verified sources of `0x129cB265…eC3f` and `0xe64b29…72E4`. They have the same contract set and the same compiler (0.7.5).
+  - The constructor suffix is `" from BSC (TokensExpress)"`.
+  - `_handleTokens` returns the value after the fee, and all three receiver callbacks get that net value. This is the same fix as in the WPLS build.
+  - `bridgeSpecificActionsOnTokenTransfer` and `_recordBridgeOperation` take an extra `_senderOrigin`, and `TokensBridgingInitiated` emits it.
+  - The native coin send (`AddressHelper.safeSendValue`: `send`, then a self-destruct fallback) is unchanged.
+- **Native coins.** I found no TokensEx router for PLS or BNB in the gib.show config or on chain. I did not search BNB Chain for one. Nothing I read ties TokensEx to PLS delivery.
+- **Configuration risk.** `maxGasPerTx` on the TokensEx home message bridge is 1e24, which places no practical limit on the gas a message may ask for. The foreign side uses 2,000,000. Three of nine validator signatures release funds, against five of eight on the PulseChain–Ethereum bridge. All admin roles sit in one externally owned account.
+
+### 4.4 The testnet
+
+The front end testnet configuration gives these addresses. I did not read their chain state.
+
+| Role | PulseChain testnet v4 (943) | Sepolia (11155111) |
+|---|---|---|
+| Mediator | `0x6B08a508…6B6c` | `0x546e37DA…349A` |
+| Message bridge | `0xf902DE27…11fE` | `0x67e190aa…C694` |
+| WPLS mediator | `0x81c10846…3F50` | not read |
+
+The testnet has the same two-pair layout as mainnet.
+
 ## What I could not confirm
 
 - The team's stated reason for the WPLS pair. No public announcement or repository commit was read.
 - Whether PulseChain has activated EIP-6780. This matters only if we copy the `Sacrifice` pattern.
 - The exact gas that a gas-burning receiver leaves our router (3.1). It is an estimate. A test must measure it.
 - The cause of the small surplus of locked WPLS over the supply of `0xA882…`.
+- Whether TokensEx has a native coin router on either chain, and the BNB Chain deployment dates of its contracts.
+- The chain state of the testnet contracts.
