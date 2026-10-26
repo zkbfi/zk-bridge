@@ -1,6 +1,7 @@
 import { ponder } from "ponder:registry";
-import { bridgeStates } from "ponder:schema";
-import { otherSide } from "@zk-bridge/shared";
+import { bridgeStates, deliveryCosts } from "ponder:schema";
+import { otherSide, sideOf } from "@zk-bridge/shared";
+import { isSingleDelivery } from "../lib/delivery-cost";
 import { pair } from "../lib/pair";
 import { decodeSend } from "../lib/send-decoding";
 import { writeMessage } from "../lib/message-store";
@@ -62,6 +63,20 @@ ponder.on("MessageBridge:AffirmationCompleted", async ({ event, context }) => {
       executedBy: event.transaction.from,
     },
   });
+  const bridge = sideOf(pair, context.chain.id).contracts.bridge;
+  // The receipt that Ponder attaches to the event has no logs, so the handler reads the full receipt (cached by Ponder).
+  const receipt = await context.client.getTransactionReceipt({ hash: event.transaction.hash });
+  if (!isSingleDelivery(receipt.logs, bridge)) return;
+  const cost = {
+    messageId: event.args.messageId,
+    destinationChainId: context.chain.id,
+    transactionHash: event.transaction.hash,
+    blockNumber: event.block.number,
+    timestamp: event.block.timestamp,
+    gasUsed: event.transactionReceipt.gasUsed,
+    effectiveGasPrice: event.transactionReceipt.effectiveGasPrice,
+  };
+  await context.db.insert(deliveryCosts).values(cost).onConflictDoUpdate(cost);
 });
 
 /** The bridge on this chain opened its sends. */

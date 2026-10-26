@@ -255,7 +255,28 @@ export const chainTips = onchainTable("chain_tips", (t) => ({
   chainId: t.integer().primaryKey(),
   blockNumber: t.bigint().notNull(),
   timestamp: t.bigint().notNull(),
+  /** The base fee of that block in wei per gas. Null when the chain has no base fee or the block did not report one. */
+  baseFeePerGas: t.bigint(),
 }));
+
+/**
+ * The gas of one delivery transaction, one row per delivered message. The row holds no kind, because the send and the
+ * delivery arrive in either order. The report classifies at query time from `messages` and `transfers`.
+ * `gasUsed` is the gas of the whole transaction receipt. A batch transaction has no row, since its gas cannot be split.
+ */
+export const deliveryCosts = onchainTable(
+  "delivery_costs",
+  (t) => ({
+    messageId: t.hex().primaryKey(),
+    destinationChainId: t.integer().notNull(),
+    transactionHash: t.hex().notNull(),
+    blockNumber: t.bigint().notNull(),
+    timestamp: t.bigint().notNull(),
+    gasUsed: t.bigint().notNull(),
+    effectiveGasPrice: t.bigint().notNull(),
+  }),
+  (table) => ({ chainTimeIndex: index().on(table.destinationChainId, table.timestamp) }),
+);
 
 /** Gate events. `kind` is `confirmed`, `sealed`, `beacon_roots_detected` or `canary_fired`. */
 export const gateEvents = onchainTable(

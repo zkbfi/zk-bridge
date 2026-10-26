@@ -49,7 +49,8 @@ export default createConfig({
   ordering: "multichain",
   chains: Object.fromEntries(pair.sides.map((side) => [side.name, { id: side.chainId, rpc: side.rpcUrl }])),
   contracts: {
-    MessageBridge: { abi: messageBridgeAbi, chain: chainEntries((side) => side.contracts.bridge) },
+    // Receipts give the gas of each delivery transaction (`delivery_costs`).
+    MessageBridge: { abi: messageBridgeAbi, includeTransactionReceipts: true, chain: chainEntries((side) => side.contracts.bridge) },
     TokenMediator: { abi: tokenMediatorAbi, chain: chainEntries((side) => side.contracts.mediator) },
     // The bridged copies. A copy exists once the mediator registers it, so each entry finds its addresses through the
     // factory event. Mints and burns are two entries because each filters on one indexed argument.

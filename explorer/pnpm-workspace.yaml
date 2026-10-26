@@ -3,6 +3,7 @@ packages:
   - indexer
   - terminal
   - bots
+  - web
 # Refuse any package version younger than 28 days (40320 minutes), direct or transitive.
 minimumReleaseAge: 40320
 # Run no install scripts except the two native USB modules the hardware wallets need.

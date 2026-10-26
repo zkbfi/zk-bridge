@@ -6,7 +6,12 @@ import { pair } from "../lib/pair";
 
 /** Every few blocks: store the chain clock and age the sends that passed the finality window. */
 ponder.on("ChainTip:block", async ({ event, context }) => {
-  const row = { chainId: context.chain.id, blockNumber: event.block.number, timestamp: event.block.timestamp };
+  const row = {
+    chainId: context.chain.id,
+    blockNumber: event.block.number,
+    timestamp: event.block.timestamp,
+    baseFeePerGas: event.block.baseFeePerGas ?? null,
+  };
   await context.db.insert(chainTips).values(row).onConflictDoUpdate(row);
   await ageMessages(context.db, context.chain.id, event.block.timestamp);
 });

@@ -49,6 +49,11 @@ curl -s 'localhost:42069/api/feed?status=sent,covered&limit=20'
 | `EXPLORER_BEACON_URL_<chainId>` | Beacon node endpoint of that chain. Optional. Used for the finalized slot in `/api/heads`. | none |
 | `EXPLORER_FINALITY_SECONDS_<chainId>` | Seconds before a send counts as `waiting_for_finality`. | 768 (chain 369: 640) |
 | `EXPLORER_TIP_INTERVAL_BLOCKS` | Blocks between two clock updates. | 5 |
+| `EXPLORER_DELIVERY_SAMPLE_LIMIT` | How many of the newest recorded deliveries of each kind feed `/api/delivery-cost`. | 200 |
+| `EXPLORER_DEFAULT_DELIVERY_GAS` | Gas that `/api/delivery-cost` gives for a kind with no samples. The default is the Foundry measured sum: the fee router delivery call with the gas based fee (about 197807 gas, `test/hardened/mediator/FeeRouterGas.t.sol`), plus the bridge proof check (290655 gas, `test/hardened/MessageBridgeGas.t.sol`), plus 21000 gas of transaction base. That sum is 509462. The default rounds it up to 550000 for calldata. | 550000 |
+| `EXPLORER_PROOF_COST_USD` | The cost of one proof, in US dollars, as a decimal text. | 0.02 |
+| `EXPLORER_DELIVERIES_PER_PROOF` | How many deliveries one proof covers. | 1 |
+| `EXPLORER_NATIVE_COIN_PRICE_USD_<chainId>` | The price of the native coin of that chain in US dollars, as a decimal text. Without it, `proofCost.wei` is null. | none |
 | `DATABASE_URL` | Postgres connection string. Without it, Ponder uses its embedded PGlite database in `.ponder/pglite`. | PGlite |
 | `PORT` / `--port` | HTTP port. | 42069 |
 
@@ -146,6 +151,27 @@ An item:
 
 `GET /api/light-client-costs` returns `{ perChain: [{ chainId, updates, gasUsed, costWei }], perPoster: [{ chainId, poster, updates, gasUsed, costWei }] }`. Sums are decimal strings. `costWei` is in the smallest unit of the chain's coin.
 
+`GET /api/delivery-cost?chainId=` returns what a delivery costs on one destination chain. A missing or unknown `chainId` gives status 400 and `{ error }`. The shape is `DeliveryCostReport` in `shared/src/delivery-cost-report.ts` (check it with `parseDeliveryCostReport`). Gas and wei are decimal strings.
+
+```json
+{
+  "chainId": 369,
+  "baseFee": { "wei": "2000000000", "blockNumber": 25000000, "timestamp": 1760000000 },
+  "proofCost": { "usd": "0.02", "nativeCoinPriceUsd": "0.00005", "deliveriesPerProof": 1, "wei": "400000000000000000000", "isEstimate": true },
+  "kinds": {
+    "token_callback": { "sampleCount": 0, "averageGas": null, "p90Gas": null, "defaultGas": "550000", "isDefault": true },
+    "token": { "sampleCount": 12, "averageGas": "301220", "p90Gas": "310004", "defaultGas": "550000", "isDefault": false },
+    "message": { "sampleCount": 3, "averageGas": "296810", "p90Gas": "297500", "defaultGas": "550000", "isDefault": false }
+  }
+}
+```
+
+The gas is `gasUsed` of the whole delivery transaction. The indexer records it for each `AffirmationCompleted` event (table `delivery_costs`), except when the same transaction holds more than one delivery of the bridge: a batch has no gas that belongs to one message, so the indexer records nothing for it. `averageGas` is the mean rounded half up. `p90Gas` is the 90th percentile by nearest rank, with the rank rounded up. Only the newest `EXPLORER_DELIVERY_SAMPLE_LIMIT` samples of each kind count.
+
+The kind rules: `token_callback` is a `token` message whose transfer has a callback (a delivery through the fee router). `token` is a `token` message without a callback. `message` is every other message kind. The send and the delivery arrive in either order, and a delivery that arrives first creates the `messages` row with the placeholder kind `message`. So a delivery counts only after its send is indexed (`sent_timestamp` is set), and a `token` delivery also needs its `transfers` row. Until then the delivery is left out, and it joins the figures when its send arrives. The kind is not stored in `delivery_costs`.
+
+When a kind has no samples, `isDefault` is true and `defaultGas` is a configured default, not a measure. Figures improve by themselves as the indexer records more deliveries. `proofCost.wei` comes from configured prices with exact integer math, and `isEstimate` is always true. `baseFee` is the base fee of the newest block that the clock handler saw (every `EXPLORER_TIP_INTERVAL_BLOCKS` blocks), and is null before the first block or on a chain without a base fee.
+
 `GET /api/gate` returns `{ sides: [...as summary.gates], events: [{ chainId, kind, epoch, version, slot, canary, transactionHash, blockNumber, timestamp }] }`. `kind` is `confirmed`, `sealed`, `beacon_roots_detected` or `canary_fired`. `enforcing` and `sealed` come from the gate contract.
 
 `GET /api/registry` returns `{ observations: [{ chainId, version, slot, transactionHash, blockNumber, timestamp }] }`.
@@ -185,7 +211,8 @@ Ponder writes the tables into the schema that `--schema` names (default for `pon
 | `fee_events`, `fee_balances`, `fee_terms` | | Fee events, totals per token, the last read rate and recipient. |
 | `head_updates` | `chain_id, slot` | Every head update: header root, execution block, transaction, `gas_used`, `effective_gas_price`, `cost_wei`, `poster`. |
 | `light_client_heads` | `chain_id` | Newest head per chain. |
-| `chain_tips` | `chain_id` | Newest indexed block and time per chain. |
+| `chain_tips` | `chain_id` | Newest indexed block and time per chain, and its `base_fee_per_gas` (null when absent). |
+| `delivery_costs` | `message_id` | `gas_used` and `effective_gas_price` of the delivery transaction, one row per delivered message. No row for a batch. Index on `destination_chain_id, timestamp`. |
 | `gate_events`, `gate_states` | | Gate events and the folded state. |
 | `registry_observations` | `chain_id, version` | Fork versions the registry observed. |
 | `bridge_states` | `chain_id` | Whether sends are open. |
