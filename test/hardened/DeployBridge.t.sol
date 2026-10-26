@@ -61,7 +61,7 @@ contract DeployBridgeTest is Test {
     /// light client tracks PulseChain (Capella epoch 3, era 0) and its gate follows Ethereum (enforcing from the start).
     /// Chain 369 is the reverse: its light client tracks Ethereum (Capella epoch 194048, era 758) and its gate follows
     /// PulseChain (detects the beacon roots contract). The verifier is pinned to its real code hash. The mediator on
-    /// chain 1 has a live fee switch (the deployer is the authority); the mediator on chain 369 has none. Chain 1 deploys
+    /// chain 1 has a live fee schedule (the deployer is the recipient); the mediator on chain 369 has none. Chain 1 deploys
     /// the native coin router and the fee router, chain 369 only the native coin router.
     function _chainJson(uint64 chainId, uint256 nonce, string memory verifierText, string memory slot)
         internal
@@ -95,14 +95,14 @@ contract DeployBridgeTest is Test {
 
     function _liveFeeJson() internal view returns (string memory) {
         return string.concat(
-            '"fee":{"authority":"', vm.toString(deployer), '","recipient":"', vm.toString(deployer),
-            '","rate":"2500000000000000","ceiling":"5000000000000000"},'
+            '"fee":{"recipient":"', vm.toString(deployer),
+            '","startRate":"2500000000000000","stepRate":"500000000000000","floorRate":"500000000000000","stepPeriodSeconds":"31536000"},'
         );
     }
 
-    /// @dev A zero authority removes the fee from the start. The fee and the ceiling must then be zero.
+    /// @dev A start rate of zero means no fee, and then the recipient may be the zero address.
     function _nullifiedFeeJson() internal pure returns (string memory) {
-        return '"fee":{"authority":"0x0000000000000000000000000000000000000000","recipient":"0x0000000000000000000000000000000000000000","rate":"0","ceiling":"0"},';
+        return '"fee":{"recipient":"0x0000000000000000000000000000000000000000","startRate":"0","stepRate":"0","floorRate":"0","stepPeriodSeconds":"0"},';
     }
 
     /// @dev The own-chain light client and the registry settings of PulseChain. Its genesis validators root and period
@@ -192,13 +192,16 @@ contract DeployBridgeTest is Test {
         assertEq(config.chainA.depositCutoffTimestamp, 0);
         assertEq(config.chainA.verifierCodeHash, address(verifier).codehash, "the pin is the code hash of the verifier");
         assertEq(config.chainB.verifierCodeHash, address(verifier).codehash);
-        assertEq(config.chainA.fee.authority, deployer);
         assertEq(config.chainA.fee.recipient, deployer);
-        assertEq(config.chainA.fee.rate, 2500000000000000);
-        assertEq(config.chainA.fee.ceiling, 5000000000000000);
-        assertEq(config.chainB.fee.authority, address(0), "chain B starts with the fee removed");
-        assertEq(config.chainB.fee.rate, 0);
-        assertEq(config.chainB.fee.ceiling, 0);
+        assertEq(config.chainA.fee.startRate, 2500000000000000);
+        assertEq(config.chainA.fee.stepRate, 500000000000000);
+        assertEq(config.chainA.fee.floorRate, 500000000000000);
+        assertEq(config.chainA.fee.stepPeriodSeconds, 31536000);
+        assertEq(config.chainB.fee.recipient, address(0), "chain B has no fee recipient");
+        assertEq(config.chainB.fee.startRate, 0, "chain B charges no fee");
+        assertEq(config.chainB.fee.stepRate, 0);
+        assertEq(config.chainB.fee.floorRate, 0);
+        assertEq(config.chainB.fee.stepPeriodSeconds, 0);
         assertEq(config.chainA.wrappedNative, address(wrappedNativeOnA));
         assertEq(config.chainB.wrappedNative, address(wrappedNativeOnB));
         assertEq(uint8(config.chainA.feeRouter), uint8(DeployBridge.RouterChoice.Deploy));
@@ -257,9 +260,9 @@ contract DeployBridgeTest is Test {
     function test_HB02_exampleConfigurationHoldsEveryKeyTheScriptReads() public view {
         string memory json = vm.readFile("script/hardened/bridge.config.example.json");
         string[2] memory chains = [".chainA", ".chainB"];
-        string[25] memory keys = [
+        string[26] memory keys = [
             ".rpcAlias", ".chainId", ".verifier", ".verifierCodeHash", ".depositCutoffTimestamp", ".deployerNonce",
-            ".fee.authority", ".fee.recipient", ".fee.rate", ".fee.ceiling",
+            ".fee.recipient", ".fee.startRate", ".fee.stepRate", ".fee.floorRate", ".fee.stepPeriodSeconds",
             ".flowLimiter", ".wrappedNative", ".deployFeeRouter", ".lightClient.programVKey", ".lightClient.genesisValidatorsRoot", ".lightClient.slotsPerPeriod",
             ".lightClient.genesisTime", ".lightClient.secondsPerSlot", ".lightClient.slotsPerEpoch", ".lightClient.capellaForkEpoch", ".lightClient.capellaEra",
             ".lightClient.initialSlot", ".lightClient.initialHeaderRoot", ".lightClient.initialSyncCommitteeHash",
@@ -1013,10 +1016,11 @@ contract DeployBridgeTest is Test {
             bridge: bridge,
             remoteMediator: d.remoteMediator,
             remoteChainId: d.remoteChainId,
-            feeAuthority: fee.authority,
             feeRecipient: fee.recipient,
-            feeRate: fee.rate,
-            feeCeiling: fee.ceiling,
+            feeStartRate: fee.startRate,
+            feeStepRate: fee.stepRate,
+            feeFloorRate: fee.floorRate,
+            feeStepPeriod: fee.stepPeriodSeconds,
             flowLimiter: d.chain.flowLimiter
         });
     }
@@ -1192,21 +1196,28 @@ contract DeployBridgeTest is Test {
         assertEq(MessageBridge(deployed.bridge).sendCutoffTimestamp(), 1_900_000_000);
     }
 
-    /// Claim: the post-deploy check catches a mediator whose fee switch differs from the configuration. Shows: a mediator
-    /// with no fee authority, a mediator with another fee, and a mediator with another ceiling each fail with the field
-    /// name, while the honest mediator passes. Matters: the fee ceiling is immutable, so a wrong ceiling cannot be
-    /// repaired after launch.
+    /// Claim: the post-deploy check catches a mediator whose fee schedule differs from the configuration. Shows: a
+    /// mediator with another recipient, start rate, step, floor or period fails with the field name, while the honest
+    /// mediator passes. Matters: the schedule is immutable, so a wrong schedule cannot be repaired after launch.
     function test_R2_08_postDeployAssertionsCatchWrongFeeSwitch() public {
         (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
         DeployBridge.FeeConfig memory fee = d.chain.fee;
-        assertEq(fee.rate, 2500000000000000, "control: the configured fee is live");
+        assertEq(fee.startRate, 2500000000000000, "control: the configured fee is live");
 
-        string[3] memory fields = ["mediator.feeAuthority", "mediator.feeRate", "mediator.feeCeiling"];
+        string[5] memory fields = [
+            "mediator.feeRecipient",
+            "mediator.feeStartRate",
+            "mediator.feeStepRate",
+            "mediator.feeFloorRate",
+            "mediator.feeStepPeriod"
+        ];
         for (uint256 i = 0; i < fields.length; i++) {
             TokenMediator.MediatorTerms memory terms = _mediatorTerms(d, deployed.bridge);
-            if (i == 0) (terms.feeAuthority, terms.feeRecipient, terms.feeRate, terms.feeCeiling) = (address(0), address(0), 0, 0);
-            if (i == 1) terms.feeRate = 3000000000000000;
-            if (i == 2) terms.feeCeiling = 1e16;
+            if (i == 0) terms.feeRecipient = address(0xBEEF);
+            if (i == 1) terms.feeStartRate = 3000000000000000;
+            if (i == 2) terms.feeStepRate = 400000000000000;
+            if (i == 3) terms.feeFloorRate = 400000000000000;
+            if (i == 4) terms.feeStepPeriod = 1000;
             _swapMediator(d, deployed, new TokenMediator(terms));
             vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, fields[i]));
             script.verifyDeployment(d, deployed);

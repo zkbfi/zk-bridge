@@ -7,7 +7,7 @@ This document fixes the names, paths, and interfaces for two pieces of work that
 
 Read `docs/red-team.md` first. It lists holes H-01 to H-23 against revision 1.
 
-**Status (2026-10-24).** The single contract `BridgeVault` is retired and deleted. Two layers replace it: `MessageBridge` (proof, lock, send and execute of messages) and `TokenMediator` (tokens, fee switch, flow limiter hook). The section "Message layer and token mediator" is built, and its last part ("As built") lists where the build differs from the design. Sections that describe the vault below stay as the record of the rules. Each carries a note that says where the rule lives now.
+**Status (2026-10-24).** The single contract `BridgeVault` is retired and deleted. Two layers replace it: `MessageBridge` (proof, lock, send and execute of messages) and `TokenMediator` (tokens, fee schedule, flow limiter hook). The section "Message layer and token mediator" is built, and its last part ("As built") lists where the build differs from the design. Sections that describe the vault below stay as the record of the rules. Each carries a note that says where the rule lives now.
 
 ## Scope decisions (made by the user)
 
@@ -560,45 +560,32 @@ A PulseChain consensus fork almost always arrives with an execution fork, and th
   - A probe that consumes all forwarded gas still costs at most the bound.
 - **Decision (2026-10-22): probe on every deposit.** The code review asked whether the canaries could run less often, for example once per block or only in `confirm` and `seal`. They stay on every deposit. The probes exist to catch the first deposit after a fork; probing less often would admit the deposits made in that gap, which are the ones that lock. The cost is about 9,800 gas on a cold deposit before the switch, and nothing after it.
 
-## Deposit fee switch (user decision, 2026-10-21) (built)
+## Fee schedule (user decision, 2026-10-25) (built)
 
-Moved to `TokenMediator` on 2026-10-24. User decision (2026-10-25): the bridge charges a fee on both chains. The fee is a rate with 18 decimals (user decision, 2026-10-25): `FEE_DENOMINATOR = 1e18` is 100%, and a basis point is `1e14`. The rate is a `uint256`, and the fee is `received * feeRate / 1e18` through `Math.mulDiv`, rounded down, so it never exceeds the received amount and does not overflow for very large amounts. The example configuration sets a rate of `1000000000000000` (0.1%) with the maximum ceiling of `10000000000000000` (1%) on each chain; the fee authority can change the rate within the ceiling, and the constant `MAX_FEE_CEILING = 1e16` stops any deployment from setting a ceiling above 1%. The fee is charged on the relay of tokens (`relayTokens` and the other relay functions), not on a message. The authority, the ceiling, `setFee`, `nullifyFee` and `collectFees` are the same. A sender who wants a guarantee uses the overload of `relayTokensWithFallback` that takes `maxFeeRate`, in the same scale.
+**Decision, 2026-10-25.** There is no admin and no fee authority. Fees are collected on PulseChain, in both directions, under one fixed schedule that falls with time. Ethereum charges no fee. This replaces the fee switch of 2026-10-21 (a fee authority, `setFee`, `nullifyFee`, an immutable ceiling, the 1% constant `MAX_FEE_CEILING` and the sender limit `maxFeeRate`). All of those are removed from `TokenMediator`. The 1% is gone as a contract constant. The only built-in bound is that the start rate cannot exceed `FEE_DENOMINATOR`.
 
-The user expects a fee in the future. Each vault gets a fee switch that is off by default and can be removed for good, either at deployment or at any time after launch.
+**The schedule.** Five immutable values set it, all by the constructor of `TokenMediator`: `feeStartRate`, `feeStepRate`, `feeFloorRate`, `feeStepPeriod` (seconds) and `feeStartTime` (the timestamp of the deployment block). A rate is scaled by `FEE_DENOMINATOR = 1e18`, where 1e18 is 100% and a basis point is 1e14.
 
-**The one role.** The fee authority is the only privileged role in the hardened build. It can set the fee on new deposits within an immutable ceiling, and nothing else. It cannot touch locked tokens, withdrawals, the light client, the gate or the layout table. It can give up its power at any time, and then nobody can ever set a fee again.
+`rate(t) = max(feeStartRate - feeStepRate * floor((t - feeStartTime) / feeStepPeriod), feeFloorRate)`
 
-**Interface.**
-- **Constructor:** it takes `feeAuthority`, `feeRecipient`, `feeRate` and `feeCeiling`.
-  - `feeCeiling` is immutable, and the code refuses any value above `MAX_FEE_CEILING = 1e16` (1%).
-  - A zero `feeAuthority` means the fee is removed from the start. The constructor then requires a zero fee and a zero ceiling.
-- **`setFee(uint256 rate, address recipient)`:** only the authority may call it. It requires `rate <= feeCeiling`, and a non-zero recipient when the fee is not zero. It emits `FeeChanged`.
-- **`nullifyFee()`:** only the authority may call it. It sets the fee to zero and the authority to zero, and emits `FeeNullified`. This cannot be undone. `feeRecipient` stays, so it can still collect fees already charged.
-- **`deposit(token, recipient, amount, maxFeeBasisPoints, gateEvidence)`:** it reverts with `FeeAboveLimit` when the current fee is above `maxFeeBasisPoints`. So a fee raise that lands just before a pending deposit cannot charge that deposit more than its sender agreed to. This takes the place of a timelock, which the user rejected.
-- **Charging:** the vault computes the fee on the measured `received` amount, rounding down. It adds the fee to `accruedFees[token]` and bridges `received - fee` under the existing decimals rules. `DepositInitiated` carries the net amount, so the withdrawal side and the Rust reference do not change. The vault emits `FeeCharged(token, fee)`.
-- **`collectFees(token)`:** anyone may call it. It sends `accruedFees[token]` to `feeRecipient` and zeroes it first. A deposit never transfers to the recipient, so a recipient that a token refuses cannot block deposits.
+The rate is `feeStartRate` at or before the start time, and when the step is zero. The math lives in the pure library `src/hardened/mediator/FeeSchedule.sol` (`rateAt` and `feeOn`). The mediator builds the struct from its immutables in one private view helper, and the views and both charge points call the library. It does not overflow and does not underflow for any timestamp: the step count is compared with the number of steps that reach the floor before it is multiplied. `explorer/shared/src/fee-schedule.ts` has the same function in `bigint`, and its test reads vectors that the Solidity library printed (`explorer/shared/vectors/GenerateFeeScheduleVectors.s.sol` writes `test/fixtures/fee-schedule-vectors.jsonl`), so the two cannot drift.
 
-**Why these choices.**
-- **The fee is on the deposit side.** The source vault knows the amount before anything is bridged, and the withdrawal stays a pure proof check. A fee paid to whoever submits a proof would need the proof to commit to that address, as noted in H-15. That is not part of this change.
-- **The ceiling is immutable.** Users can read the worst case before they deposit, for the vault's whole life.
-- **Collection is pull-based.** Deposits never depend on a transfer to the recipient.
+**Deployment values.** PulseChain: start 1e15 (10 basis points), step 1e14 (1 basis point), floor 5e14 (5 basis points), period 31,536,000 seconds (365 days). So the fee is 0.10% in year one, 0.09% in year two, 0.08%, 0.07%, 0.06%, and 0.05% from year six on. Ethereum: all zero and a zero recipient (a start rate of zero means no fee). The example configuration `script/hardened/bridge.config.example.json` holds these values. The 1% is the choice of this deployment at most, never a constant of the contract.
 
-**Tests.**
-- **Nullified at the start:** a vault with no authority charges no fee, and `setFee` reverts for everyone.
-- **Ceiling:** a fee above the ceiling and a ceiling above 1% both revert.
-- **Nullify:** it is one-way. Every later `setFee` and `nullifyFee` reverts, and fees already charged can still be collected.
-- **Fee raise ahead of a deposit:** with `maxFeeBasisPoints` below the new fee, the deposit reverts and the tokens stay with the sender. Without the raise, the same deposit succeeds.
-- **Collection:** a recipient that the token refuses blocks only `collectFees`, never `deposit`.
-- **Accounting:** a fee-on-transfer token is charged on the measured amount. A withdrawal of the net amount works end to end, and the vault balance covers withdrawals plus accrued fees.
-- **Gas:** measured with a fee of zero and with a fee set.
+**Constructor checks.** `feeStartRate <= FEE_DENOMINATOR` (`FeeStartRateTooHigh`), `feeFloorRate <= feeStartRate` (`FeeFloorAboveStart`), `feeStepPeriod > 0` when `feeStepRate > 0` (`ZeroFeeStepPeriod`), and a non-zero `feeRecipient` when `feeStartRate > 0` (`ZeroFeeRecipient`).
 
-**As built.**
-- **Constructor shape:** the vault takes one struct (then named `DepositTerms`, now `VaultTerms`) in place of `depositCutoffTimestamp`. It holds `cutoffTimestamp`, `feeAuthority`, `feeRecipient`, `feeBasisPoints` and `feeCeilingBasisPoints`. A ninth constructor argument does not compile without the intermediate representation (stack too deep).
-- **Extra guards:** a zero authority never passes the authority check, so no caller can use the zero address. `collectFees` reverts with `NoFeesAccrued` when nothing is waiting, and with `ZeroFeeRecipient` when the recipient is zero.
-- **Storage:** the fee state sits after the layout tables, so the earlier storage slots keep their place.
-- **Tests:** `test/hardened/BridgeVaultFee.t.sol` holds every test above. `prover/tests/hardened_happy_path.rs` shows a deposit with a fee, the proof, and the payout of the net amount on the other chain.
-- **Gas, deposit:** 85,303 before the fee switch. 88,312 with the fee at zero (3,009 more). 112,051 with a fee of 25 basis points (26,748 more: one new storage slot and one event). All are first deposits with cold storage.
-- **Gas, withdraw:** 393,325 before for a recent withdrawal, 402,770 after. For a historical withdrawal, 424,950 before and 434,428 after. About 8,500 of the increase comes from the receipt parser, which copies the log data byte by byte. The log is 32 bytes longer (see below).
+**Two charge points, one rate.** The same schedule applies on the same mediator to a relay (outgoing) and to a delivery (incoming):
+- **Outgoing.** `relayTokens` and the other relay functions take the fee from the measured received amount, rounded down, before the flow limiter and before the lock or the burn. The message carries the net amount.
+- **Incoming.** A `handle*` or `deployAndHandle*` delivery takes the fee from the delivered value, rounded down, once, before any payee is tried. A native token leaves `mediatorBalance` and stays in the mediator as `accruedFees[token]`; `mediatorBalance` drops by the whole value, so it still equals the supply of the copy on the other chain. A bridged copy mints the fee to the mediator itself as `accruedFees[copy]`, so the supply of the copy still equals `mediatorBalance` of the native token. The fee is never above the value. A release that goes to the fallback address or to `claimable` has paid its fee already: the claim takes no second fee. The flow limiter, `TokensBridged` and the callback see the net amount.
+- **Events.** `FeeCharged(token, fee, direction)` carries `FeeDirection.Outgoing` (0) or `FeeDirection.Incoming` (1). The OmniBridge events are unchanged.
+
+**No protection for the sender is needed.** The rate only falls, so the rate that a sender reads before the relay is the highest rate that the relay or the delivery can meet. The message payloads are the original OmniBridge payloads and the original fallback payloads; they carry no maximum. There is no `maxFeeRate` overload.
+
+**Views and collection.** `currentFeeRate()` and `feeRateAt(timestamp)`. `feeRecipient` is immutable and cannot change. `collectFees(token)` (anyone may call it) sends `accruedFees[token]` to it and zeroes the record first. A recipient that a token refuses blocks `collectFees` only.
+
+**Tests.** `test/hardened/mediator/FeeSchedule.t.sol` tests the library directly: the deployment values just before and after each year boundary, the floor, year 1000, the largest `uint64` and `uint256` timestamps, a zero step, a zero start, a start equal to the floor, a floor that whole steps do not reach (start 10, step 3, floor 2 gives 10, 7, 4, 2), and a fuzz test against a step by step reference. `TokenMediatorFeeSchedule.t.sol` tests the mediator: the schedule at each boundary, the constructor refusals, a zero fee mediator, incoming charges on a bridged mint and on a native release with exact amounts, a round trip that charges both directions on PulseChain and none on Ethereum, the fee once on the fallback and claimable paths, the net amount at the flow limiter, rounding down, and the absence of any admin function. `Immutability.t.sol` lists the state-changing functions of `TokenMediator`: none of them sets a fee or a recipient. The invariant test moves time and checks every fee against the current rate. Two mutations were checked to fail the suite: removing the floor-above-start refusal, and removing the floor clamp.
+
+**Gas.** Runtime size of `TokenMediator`: 18,080 bytes (17,899 before this change), under the limit of 24,576. The gas test (`test_gasOfRelayAndDelivery`, fee off, so it shows the cost of reading the schedule) gives, before and after: first relay of a token 130,175 and 128,495; a later relay 43,420 and 43,740; a bridged copy relay 86,200 and 84,519; a native release 44,878 and 45,811; a bridged mint in short form 15,613 and 16,546. With the fee on, a delivery adds one `accruedFees` write, and a bridged mint adds a mint to the mediator as well.
 
 ## Destination token binding (code review finding)
 
@@ -620,7 +607,7 @@ The script used to check only that the verifier address has code. An address wit
 - **Config:** each chain has a `verifierCodeHash` field. It is the `extcodehash` that the operator expects, for example from `cast codehash <verifier> --rpc-url <chain>`. The field must not be a placeholder or zero.
 - **Check:** `assertChainEnvironment` compares `verifier.codehash` with the field. A difference reverts with `VerifierCodeHashMismatch(chainId, verifier, expected, actual)`.
 - **Timing:** the check runs before the script broadcasts anything, in `_inspectChain` and again at the start of `deployChain`.
-- **Fee fields:** each chain also has a `fee` object with `authority`, `recipient`, `rate` and `ceiling`. Both are decimal strings of the integer scaled by `1e18`. The example config uses a zero authority, which removes the fee from the start. The script reads the fee fields back from each vault after deployment.
+- **Fee fields:** each chain also has a `fee` object with `recipient`, `startRate`, `stepRate`, `floorRate` and `stepPeriodSeconds`, all decimal strings. Rates are integers scaled by `1e18`. The example config sets Ethereum to zero everywhere (no fee, and a zero recipient is allowed only then) and PulseChain to 1e15, 1e14, 5e14 and 31536000 with a placeholder recipient. The script reads every fee field back from each mediator after deployment.
 - **Tests:** `test/hardened/DeployBridge.t.sol` has a passing case, a case with a wrong hash, and a case with other code at the pinned address. `prover/tests/hardened_deployment.rs` runs the script against two live chains. The honest run uses the real hashes and passes. A run with a wrong hash on either chain stops before any transaction.
 
 ## Clock bound on the head (comparison finding G-04)
@@ -908,7 +895,7 @@ The user asked for the same interfaces as OmniBridge wherever possible, one to o
 | `fixFailedMessage`, `requestFailedMessageFix`, `messageFixed`, `event FailedMessageFixed` | Not included: delivery is final, there are no refunds. |
 | Owner functions: `setCustomTokenAddressPair`, `fixMediatorBalance`, `claimTokens`, `claimTokensFromTokenContract`, limit setters, gas limit setters, interest functions | Not included: no admin. The limit views (`dailyLimit`, `maxPerTx`, `withinLimit` and the rest) are left out; the empty flow limiter hook covers limits. |
 | — | New: `claim(address _token, address _recipient)` and `claimable(address, address)` for a failed release (open decision). |
-| — | New: the optional fee switch (`setFee`, `nullifyFee`, `collectFees`) and `detachFlowLimiter`, kept from the vault. |
+| — | New: the fee schedule (`currentFeeRate`, `feeRateAt`, `collectFees`) and `detachFlowLimiter`. There is no fee admin. |
 
 #### Bridged token: `IBurnableMintableERC677Token`
 
@@ -1012,6 +999,7 @@ The build follows the design. This list holds every place where it differs from 
 - `TokenMediator` creates its `TokenFactory` in its own constructor. The factory sits at the first `CREATE` address of the mediator. The deploy script predicts it and reads it back. It does not deploy a factory of its own.
 - A copy takes the name of its native token plus the suffix ` (zk-bridge)`, and the symbol prefix `zk`. The salt of the copy is `keccak256(homeChainId, homeToken)`.
 - A failed release goes to the recipient, then to the fallback address, then to `claimable[token][fallback]`. The record of a native token includes the claimable amounts, so the balance of the mediator covers `mediatorBalance + accruedFees`.
+- The incoming fee (decision 2026-10-25) leaves `mediatorBalance` at the delivery and joins `accruedFees`; a bridged copy mints it to the mediator. See the section "Fee schedule".
 - A defect that the invariant tests found: `_tryRelease` wrote a stale copy of the record back after a refused transfer. A hostile token could relay tokens from inside `transfer` and then refuse, and the write erased the nested lock. The function now writes to storage after the call. `test_aTokenThatRelaysDuringAReleaseAndThenRefusesKeepsTheNestedLock` covers it.
 
 **Deploy script and tools**

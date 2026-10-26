@@ -49,7 +49,6 @@ contract MediatorHandler is Test {
     TokenMediator public immutable mediatorA;
     TokenMediator public immutable mediatorB;
     address public immutable treasury;
-    address public immutable authority;
     DenyListToken public immutable denyToken;
     address public immutable attacker = address(0xBAD);
 
@@ -67,30 +66,28 @@ contract MediatorHandler is Test {
     uint256 public claimsPaid;
     uint256 public claimAttemptsRefused;
     uint256 public feesCollectedTotal;
-    uint256 public feeRaisesAccepted;
-    uint256 public feeRaisesRefused;
     uint256 public outOfOrderDeliveries;
     uint256 public forgedAttempts;
     uint256 public forgedSuccesses;
     uint256 public forgedChanges;
-    uint256 public feeCeilingBreaches;
-    uint256 public feeSwitchViolations;
+    uint256 public feeRateBreaches;
     uint256 public chargedFeeCount;
+    uint256 public incomingFeeCount;
+    uint256 public incomingFeeBreaches;
+    uint256 public timeAdvances;
 
     constructor(
         MockAMB ambA_,
         MockAMB ambB_,
         TokenMediator mediatorA_,
         TokenMediator mediatorB_,
-        address treasury_,
-        address authority_
+        address treasury_
     ) {
         ambA = ambA_;
         ambB = ambB_;
         mediatorA = mediatorA_;
         mediatorB = mediatorB_;
         treasury = treasury_;
-        authority = authority_;
         denyToken = new DenyListToken();
         _addNative(address(new MockERC20("Plain A", "PLA")), Direction.AtoB);
         _addNative(address(new FeeOnTransferToken("Taxed A", "TXA")), Direction.AtoB);
@@ -191,20 +188,11 @@ contract MediatorHandler is Test {
         feesCollectedTotal += accrued;
     }
 
-    /// @notice The fee authority tries to set the fee. A value above the ceiling must revert, and one within it must not.
-    /// The rate is a count of steps of 0.01% (1e14), so the fuzzed values land around the ceiling of 1% (1e16).
-    function setFee(uint8 sideSeed, uint16 rateSteps) external {
-        TokenMediator mediator = sideSeed % 2 == 0 ? mediatorA : mediatorB;
-        uint256 rate = uint256(rateSteps) * 1e14;
-        bool withinCeiling = rate <= mediator.feeCeiling();
-        vm.prank(authority);
-        try mediator.setFee(rate, treasury) {
-            if (!withinCeiling) feeSwitchViolations++;
-            if (withinCeiling) feeRaisesAccepted++;
-        } catch {
-            if (withinCeiling) feeSwitchViolations++;
-            if (!withinCeiling) feeRaisesRefused++;
-        }
+    /// @notice Moves time forward by up to 400 days, so the fee schedule steps down during a run. The fee rate only
+    /// falls, and the checks below use the rate at the time of each charge.
+    function advanceTime(uint32 secondsSeed) external {
+        vm.warp(block.timestamp + bound(secondsSeed, 1, 400 days));
+        timeAdvances++;
     }
 
     /// @notice Denies or allows an account on the token with a deny list, so that releases to it fail.
@@ -325,8 +313,7 @@ contract MediatorHandler is Test {
         if (fee == 0) return;
         chargedFeeCount++;
         uint256 received = _receivedAmount(mediator, token, balanceBefore, fee);
-        uint256 ceiling = mediator.feeCeiling();
-        if (fee * mediator.FEE_DENOMINATOR() > received * ceiling) feeCeilingBreaches++;
+        if (fee * mediator.FEE_DENOMINATOR() > received * mediator.currentFeeRate()) feeRateBreaches++;
     }
 
     /// @dev The amount that a relay put into the mediator, before the fee. A native token stays in the balance. A copy
@@ -365,11 +352,64 @@ contract MediatorHandler is Test {
         }
         message.delivered = true;
         pendingCount--;
+        TokenMediator destination = message.direction == Direction.AtoB ? mediatorB : mediatorA;
+        bytes memory data = (message.direction == Direction.AtoB ? ambA : ambB).messageAt(message.index).data;
+        (address token, uint256 gross) = _tokenAndValueOf(data);
+        uint256 feesBefore = destination.accruedFees(_destinationTokenOf(destination, data, token));
+        uint256 rate = destination.currentFeeRate();
         bool ok;
         if (message.direction == Direction.AtoB) (ok,) = ambB.deliver(ambA, message.index);
         if (message.direction == Direction.BtoA) (ok,) = ambA.deliver(ambB, message.index);
         if (!ok) failedDeliveries++;
         if (ok && _isRelease(message)) deliveredReleases++;
+        if (!ok) return;
+        uint256 fee = destination.accruedFees(_destinationTokenOf(destination, data, token)) - feesBefore;
+        _checkIncomingFee(fee, gross, rate);
+    }
+
+    /// @dev The fee of a delivery is at most the share of the gross value at the current rate. It also counts the
+    /// paths that the test must reach.
+    function _checkIncomingFee(uint256 fee, uint256 gross, uint256 rate) private {
+        if (fee == 0) return;
+        incomingFeeCount++;
+        if (fee * 1e18 > gross * rate) incomingFeeBreaches++;
+    }
+
+    /// @dev The token that a message names and the gross value that it delivers. The token, the recipient and the
+    /// value come first in every release message. A deploying message has the name, the symbol and the decimals
+    /// between the token and the recipient.
+    function _tokenAndValueOf(bytes memory data) private pure returns (address token, uint256 value) {
+        bytes memory arguments = new bytes(data.length - 4);
+        for (uint256 i = 0; i < arguments.length; i++) {
+            arguments[i] = data[i + 4];
+        }
+        if (_isDeploy(bytes4(data))) {
+            (token,,,,, value) = abi.decode(arguments, (address, string, string, uint8, address, uint256));
+            return (token, value);
+        }
+        (token,, value) = abi.decode(arguments, (address, address, uint256));
+    }
+
+    function _isDeploy(bytes4 selector) private pure returns (bool) {
+        return selector == TokenMediator.deployAndHandleBridgedTokens.selector
+            || selector == TokenMediator.deployAndHandleBridgedTokensAndCall.selector
+            || selector == TokenMediator.deployAndHandleBridgedTokensWithFallback.selector
+            || selector == TokenMediator.deployAndHandleBridgedTokensAndCallWithFallback.selector;
+    }
+
+    /// @dev The token on the destination chain whose fees grow: the named token when it is native there, and
+    /// otherwise its copy, which is zero until the first delivery.
+    function _destinationTokenOf(TokenMediator destination, bytes memory data, address token)
+        private
+        view
+        returns (address)
+    {
+        bytes4 selector = bytes4(data);
+        bool releasesNative = selector == TokenMediator.handleNativeTokens.selector
+            || selector == TokenMediator.handleNativeTokensAndCall.selector
+            || selector == TokenMediator.handleNativeTokensWithFallback.selector
+            || selector == TokenMediator.handleNativeTokensAndCallWithFallback.selector;
+        return releasesNative ? token : destination.bridgedTokenAddress(token);
     }
 
     function _isRelease(Pending storage message) private view returns (bool) {
@@ -447,22 +487,25 @@ contract MediatorHandler is Test {
 /// forge-config: default.invariant.fail-on-revert = true
 contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
     MediatorHandler internal handler;
-    address internal authority = makeAddr("authority");
     address internal treasury = makeAddr("treasury");
 
+    /// @dev Both chains take a fee that falls with time: 1% falling 0.2% a year to 0.3% on chain A, and 0.5% falling
+    /// 0.1% every 200 days to 0.1% on chain B. The handler moves time, so the rate steps down during a run.
     function setUp() public override {
         TokenMediator.MediatorTerms memory termsA = _noTerms();
-        termsA.feeAuthority = authority;
         termsA.feeRecipient = treasury;
-        termsA.feeRate = 100e14;
-        termsA.feeCeiling = 100e14;
+        termsA.feeStartRate = 100e14;
+        termsA.feeStepRate = 20e14;
+        termsA.feeFloorRate = 30e14;
+        termsA.feeStepPeriod = 365 days;
         TokenMediator.MediatorTerms memory termsB = _noTerms();
-        termsB.feeAuthority = authority;
         termsB.feeRecipient = treasury;
-        termsB.feeRate = 50e14;
-        termsB.feeCeiling = 80e14;
+        termsB.feeStartRate = 50e14;
+        termsB.feeStepRate = 10e14;
+        termsB.feeFloorRate = 10e14;
+        termsB.feeStepPeriod = 200 days;
         _deployMediators(termsA, termsB);
-        handler = new MediatorHandler(ambA, ambB, mediatorA, mediatorB, treasury, authority);
+        handler = new MediatorHandler(ambA, ambB, mediatorA, mediatorB, treasury);
         targetContract(address(handler));
         bytes4[] memory selectors = new bytes4[](12);
         selectors[0] = MediatorHandler.relayNativeAndDeliver.selector;
@@ -473,7 +516,7 @@ contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
         selectors[5] = MediatorHandler.deliverNewestPending.selector;
         selectors[6] = MediatorHandler.claim.selector;
         selectors[7] = MediatorHandler.collectFees.selector;
-        selectors[8] = MediatorHandler.setFee.selector;
+        selectors[8] = MediatorHandler.advanceTime.selector;
         selectors[9] = MediatorHandler.toggleDeny.selector;
         selectors[10] = MediatorHandler.forge.selector;
         // Deliveries are the most useful action, so the list names it twice.
@@ -534,14 +577,16 @@ contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
         assertEq(handler.forgedChanges(), 0, "a forged message changed the state");
     }
 
-    /// Claim: no fee passes the ceiling, and the fee switch obeys it. Shows: every charged fee is at most the ceiling
-    /// share of the amount that it applies to; the live fee never exceeds the ceiling; `setFee` above the ceiling
-    /// always reverts and within it never does. Matters: users read the worst case before they relay.
-    function invariant_theFeeCeilingIsNeverExceeded() public view {
-        assertEq(handler.feeCeilingBreaches(), 0);
-        assertEq(handler.feeSwitchViolations(), 0);
-        assertLe(mediatorA.feeRate(), mediatorA.feeCeiling());
-        assertLe(mediatorB.feeRate(), mediatorB.feeCeiling());
+    /// Claim: no fee passes the schedule. Shows: every outgoing and incoming fee is at most the current rate share of
+    /// the amount that it applies to; the current rate stays between the floor and the start rate. Matters: users
+    /// read the schedule before they relay, and the schedule is the worst case.
+    function invariant_noFeePassesTheSchedule() public view {
+        assertEq(handler.feeRateBreaches(), 0, "an outgoing fee passed the rate");
+        assertEq(handler.incomingFeeBreaches(), 0, "an incoming fee passed the rate");
+        assertLe(mediatorA.currentFeeRate(), mediatorA.feeStartRate());
+        assertGe(mediatorA.currentFeeRate(), mediatorA.feeFloorRate());
+        assertLe(mediatorB.currentFeeRate(), mediatorB.feeStartRate());
+        assertGe(mediatorB.currentFeeRate(), mediatorB.feeFloorRate());
     }
 
     /// Claim: the handler reaches the paying paths. Shows: after a fixed sequence, a native token is locked, its copy
@@ -590,10 +635,13 @@ contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
         handler.collectFees(0, 0);
         handler.collectFees(0, 1);
         assertGt(handler.feesCollectedTotal(), 0, "fees were collected");
-        handler.setFee(0, 40);
-        handler.setFee(0, 101);
-        assertEq(handler.feeRaisesAccepted(), 1);
-        assertEq(handler.feeRaisesRefused(), 1);
+        assertGt(handler.incomingFeeCount(), 0, "deliveries were charged an incoming fee");
+        handler.advanceTime(400 days);
+        assertEq(handler.timeAdvances(), 1);
+        assertLt(mediatorA.currentFeeRate(), mediatorA.feeStartRate(), "the schedule stepped down");
+        handler.relayNativeAndDeliver(0, 0, 100 ether, 1);
+        assertEq(handler.failedDeliveries(), 0);
+        assertEq(handler.incomingFeeBreaches(), 0);
 
         handler.forge(0, 0, 0, 5 ether, 0);
         handler.forge(1, 1, 1, 5 ether, 1);
@@ -601,7 +649,7 @@ contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
         assertEq(handler.forgedAttempts(), 3);
         assertEq(handler.forgedSuccesses(), 0);
         assertEq(handler.forgedChanges(), 0);
-        assertEq(handler.feeCeilingBreaches(), 0);
+        assertEq(handler.feeRateBreaches(), 0);
     }
 
     function _claimsOnToken(uint256 index) internal view returns (uint256 total) {

@@ -8,10 +8,11 @@
     "depositCutoffTimestamp": "0",
     "deployerNonce": "@@NONCE_A@@",
     "fee": {
-      "authority": "0x0000000000000000000000000000000000000000",
       "recipient": "0x0000000000000000000000000000000000000000",
-      "rate": "0",
-      "ceiling": "0"
+      "startRate": "0",
+      "stepRate": "0",
+      "floorRate": "0",
+      "stepPeriodSeconds": "0"
     },
     "flowLimiter": "0x0000000000000000000000000000000000000000",
     "wrappedNative": "@@WRAPPED_NATIVE_A@@",
@@ -47,10 +48,11 @@
     "depositCutoffTimestamp": "0",
     "deployerNonce": "@@NONCE_B@@",
     "fee": {
-      "authority": "0x0000000000000000000000000000000000000000",
       "recipient": "0x0000000000000000000000000000000000000000",
-      "rate": "0",
-      "ceiling": "0"
+      "startRate": "0",
+      "stepRate": "0",
+      "floorRate": "0",
+      "stepPeriodSeconds": "0"
     },
     "flowLimiter": "0x0000000000000000000000000000000000000000",
     "wrappedNative": "@@WRAPPED_NATIVE_B@@",

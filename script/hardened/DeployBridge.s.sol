@@ -69,13 +69,15 @@ contract DeployBridge is Script {
         ObservationConfig observation;
     }
 
-    /// @notice The fee switch of the mediator on a chain. A zero `authority` removes the fee from the start: the
-    /// fee and the ceiling must then be zero.
+    /// @notice The fee schedule of the mediator on a chain. The mediator has no fee authority. A zero `startRate` means
+    /// no fee, and then the recipient may be the zero address. The rate starts at `startRate` and falls by `stepRate`
+    /// after each `stepPeriodSeconds`, down to `floorRate`. All rates are scaled by 1e18.
     struct FeeConfig {
-        address authority;
         address recipient;
-        uint256 rate;
-        uint256 ceiling;
+        uint256 startRate;
+        uint256 stepRate;
+        uint256 floorRate;
+        uint256 stepPeriodSeconds;
     }
 
     /// @notice The own-chain light client and the fork registry of a chain whose gate mode is
@@ -544,10 +546,11 @@ contract DeployBridge is Script {
                     bridge: bridge,
                     remoteMediator: deployment.remoteMediator,
                     remoteChainId: deployment.remoteChainId,
-                    feeAuthority: chain.fee.authority,
                     feeRecipient: chain.fee.recipient,
-                    feeRate: chain.fee.rate,
-                    feeCeiling: chain.fee.ceiling,
+                    feeStartRate: chain.fee.startRate,
+                    feeStepRate: chain.fee.stepRate,
+                    feeFloorRate: chain.fee.floorRate,
+                    feeStepPeriod: chain.fee.stepPeriodSeconds,
                     flowLimiter: chain.flowLimiter
                 })
             )
@@ -653,11 +656,12 @@ contract DeployBridge is Script {
         if (TokenFactory(deployed.factory).mediator() != deployed.mediator) {
             revert DeploymentMismatch("factory.mediator");
         }
-        if (mediator.feeAuthority() != chain.fee.authority) revert DeploymentMismatch("mediator.feeAuthority");
         if (mediator.feeRecipient() != chain.fee.recipient) revert DeploymentMismatch("mediator.feeRecipient");
-        if (mediator.feeRate() != chain.fee.rate) revert DeploymentMismatch("mediator.feeRate");
-        if (mediator.feeCeiling() != chain.fee.ceiling) {
-            revert DeploymentMismatch("mediator.feeCeiling");
+        if (mediator.feeStartRate() != chain.fee.startRate) revert DeploymentMismatch("mediator.feeStartRate");
+        if (mediator.feeStepRate() != chain.fee.stepRate) revert DeploymentMismatch("mediator.feeStepRate");
+        if (mediator.feeFloorRate() != chain.fee.floorRate) revert DeploymentMismatch("mediator.feeFloorRate");
+        if (mediator.feeStepPeriod() != chain.fee.stepPeriodSeconds) {
+            revert DeploymentMismatch("mediator.feeStepPeriod");
         }
         if (address(mediator.flowLimiter()) != chain.flowLimiter) revert DeploymentMismatch("mediator.flowLimiter");
     }
@@ -716,13 +720,14 @@ contract DeployBridge is Script {
         }
     }
 
-    /// @dev The fee switch of one vault. The authority and the recipient may be the zero address: a zero authority
-    /// is a fee removed from the start. The vault constructor checks the rest.
+    /// @dev The fee schedule of one mediator. The recipient may be the zero address when the start rate is zero. The
+    /// mediator constructor checks the schedule.
     function _readFee(string memory json, string memory prefix) private pure returns (FeeConfig memory fee) {
-        fee.authority = vm.parseAddress(_readText(json, string.concat(prefix, ".authority")));
         fee.recipient = vm.parseAddress(_readText(json, string.concat(prefix, ".recipient")));
-        fee.rate = _readUint(json, string.concat(prefix, ".rate"));
-        fee.ceiling = _readUint(json, string.concat(prefix, ".ceiling"));
+        fee.startRate = _readUint(json, string.concat(prefix, ".startRate"));
+        fee.stepRate = _readUint(json, string.concat(prefix, ".stepRate"));
+        fee.floorRate = _readUint(json, string.concat(prefix, ".floorRate"));
+        fee.stepPeriodSeconds = _readUint(json, string.concat(prefix, ".stepPeriodSeconds"));
     }
 
     function _readObservation(string memory json, string memory prefix)

@@ -70,10 +70,11 @@ contract BytecodeTest is MessageScenes {
                 bridge: address(bridge),
                 remoteMediator: makeAddr("remote mediator"),
                 remoteChainId: CHAIN_A,
-                feeAuthority: address(0),
                 feeRecipient: address(0),
-                feeRate: 0,
-                feeCeiling: 0,
+                feeStartRate: 0,
+                feeStepRate: 0,
+                feeFloorRate: 0,
+                feeStepPeriod: 0,
                 flowLimiter: address(0)
             })
         );

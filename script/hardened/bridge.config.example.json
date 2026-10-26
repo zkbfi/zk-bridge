@@ -8,12 +8,12 @@
     "depositCutoffTimestamp": "REPLACE_WITH_CUTOFF_UNIX_TIME_OR_0_FOR_NONE",
     "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_CHAIN_A",
     "fee": {
-      "authority": "REPLACE_WITH_FEE_AUTHORITY_ON_CHAIN_A",
-      "recipient": "REPLACE_WITH_FEE_RECIPIENT_ON_CHAIN_A",
-      "rate": "1000000000000000",
-      "ceiling": "10000000000000000"
-    },
-    "flowLimiter": "0x0000000000000000000000000000000000000000",
+      "recipient": "0x0000000000000000000000000000000000000000",
+      "startRate": "0",
+      "stepRate": "0",
+      "floorRate": "0",
+      "stepPeriodSeconds": "0"
+    },    "flowLimiter": "0x0000000000000000000000000000000000000000",
     "wrappedNative": "REPLACE_WITH_WRAPPED_NATIVE_TOKEN_ADDRESS_ON_CHAIN_A_OR_THE_ZERO_ADDRESS_FOR_NO_NATIVE_COIN_ROUTER",
     "deployFeeRouter": "false",
     "lightClient": {
@@ -52,10 +52,11 @@
     "depositCutoffTimestamp": "REPLACE_WITH_CUTOFF_UNIX_TIME_OR_0_FOR_NONE",
     "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_CHAIN_B",
     "fee": {
-      "authority": "REPLACE_WITH_FEE_AUTHORITY_ON_CHAIN_B",
       "recipient": "REPLACE_WITH_FEE_RECIPIENT_ON_CHAIN_B",
-      "rate": "1000000000000000",
-      "ceiling": "10000000000000000"
+      "startRate": "1000000000000000",
+      "stepRate": "100000000000000",
+      "floorRate": "500000000000000",
+      "stepPeriodSeconds": "31536000"
     },
     "flowLimiter": "0x0000000000000000000000000000000000000000",
     "wrappedNative": "REPLACE_WITH_WRAPPED_NATIVE_TOKEN_ADDRESS_ON_CHAIN_B_OR_THE_ZERO_ADDRESS_FOR_NO_NATIVE_COIN_ROUTER",
