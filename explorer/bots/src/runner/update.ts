@@ -1,6 +1,6 @@
 import { encodeFunctionData, type Address } from "viem";
 import { beaconLightClientAbi, type ProofMessage } from "@zk-bridge/shared";
-import type { TransactionPort } from "../chain/transactions.ts";
+import { sendTerms, type TransactionPort } from "../chain/transactions.ts";
 
 /** The result of an attempt to post `update`. */
 export type UpdateOutcome =
@@ -24,7 +24,7 @@ export async function postUpdate(input: {
   const request = { to: input.lightClient, data };
   const simulation = await input.chain.simulate(request);
   if (!simulation.ok) return { posted: false, reason: "simulation-reverted", detail: simulation.reason };
-  const receipt = await input.chain.send({ ...request, gas: simulation.gas });
+  const receipt = await input.chain.send({ ...request, ...sendTerms(await input.chain.feeQuote(), simulation.gas) });
   if (!receipt.success) return { posted: false, reason: "transaction-reverted", detail: receipt.hash };
   return { posted: true, transactionHash: receipt.hash, gasUsed: receipt.gasUsed, effectiveGasPrice: receipt.effectiveGasPrice };
 }

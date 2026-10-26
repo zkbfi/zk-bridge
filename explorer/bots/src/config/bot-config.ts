@@ -139,6 +139,17 @@ export const runnerSchema = z
      * also counts toward `maximumDeliveriesPerSweep`.
      */
     maximumPrerequisiteSpendPerSweepWei: weiSchema,
+    /**
+     * The most wei that layout calls may cost, reservations included, in a rolling 24 hours. Required. The runner keeps
+     * the spend in its state file, so a restart does not reset it. At the limit the runner sends no layout call until the
+     * window rolls. It still delivers items that need none.
+     */
+    maximumPrerequisiteSpendPerDayWei: weiSchema,
+    /**
+     * The unrecovered loss at which the runner stops sending layout calls, over a rolling 24 hours. Required. A loss is
+     * the layout spend on an item that was then not delivered.
+     */
+    maximumUnrecoveredPrerequisiteLossWei: weiSchema,
     /** Seconds in which the runner does not try an item again after it paid layout calls for it and did not deliver. */
     prerequisiteLossRefusalSeconds: positiveSeconds.default(1800),
     /** Seconds to wait for a receipt. */

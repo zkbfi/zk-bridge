@@ -140,6 +140,8 @@ export async function startRunner(input: StartRunnerInput): Promise<void> {
         maximumPrerequisiteRounds: runnerConfig.maximumPrerequisiteRounds,
         prerequisiteGasFallback: BigInt(runnerConfig.prerequisiteGasFallback),
         maximumPrerequisiteSpendPerSweepWei: BigInt(runnerConfig.maximumPrerequisiteSpendPerSweepWei),
+        maximumPrerequisiteSpendPerDayWei: BigInt(runnerConfig.maximumPrerequisiteSpendPerDayWei),
+        maximumUnrecoveredPrerequisiteLossWei: BigInt(runnerConfig.maximumUnrecoveredPrerequisiteLossWei),
       },
       logger: directionLogger,
     };

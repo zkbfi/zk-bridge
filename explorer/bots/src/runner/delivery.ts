@@ -1,10 +1,11 @@
 import { decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeFunctionData, erc20Abi, type Address, type Hex } from "viem";
 import { feeRouterAbi, messageBridgeAbi, type ProofDirection } from "@zk-bridge/shared";
-import type { FeeQuote, ReceiptSummary, TransactionPort } from "../chain/transactions.ts";
+import { sendTerms, worstCaseCostWei, type FeeQuote, type ReceiptSummary, type TransactionPort } from "../chain/transactions.ts";
 import type { FeedItem, IndexerClient } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
 import type { EvidencePackage, Prerequisite } from "../prover/packages.ts";
 import type { ProverBinary } from "../prover/prover-binary.ts";
+import type { PrerequisiteLedger } from "./prerequisite-ledger.ts";
 import { decideDelivery, readFeeOffer, valueFeeInWei, type FeeOffer } from "./fee.ts";
 import type { SourceReader } from "./source-reader.ts";
 
@@ -21,21 +22,10 @@ export interface DeliverySettings {
   readonly prerequisiteGasFallback: bigint;
   /** The most wei that the layout calls of one sweep may cost. */
   readonly maximumPrerequisiteSpendPerSweepWei: bigint;
-}
-
-/**
- * The wei that the layout calls of one sweep have cost so far. The runner makes one ledger for each sweep and passes it
- * to every delivery. Layout rows help every sender, so this spend is a gift that the fee of one item may never repay.
- * The ledger is the one mutable value of a delivery: it must grow at the moment a layout call is mined.
- */
-export interface PrerequisiteLedger {
-  readonly capWei: bigint;
-  spentWei: bigint;
-}
-
-/** Makes an empty ledger with a cap in wei. */
-export function createPrerequisiteLedger(capWei: bigint): PrerequisiteLedger {
-  return { capWei, spentWei: 0n };
+  /** The most wei that layout calls may cost, reservations included, in a rolling 24 hours. The state file keeps it. */
+  readonly maximumPrerequisiteSpendPerDayWei: bigint;
+  /** The unrecovered loss of a rolling 24 hours at which the runner stops sending layout calls. */
+  readonly maximumUnrecoveredPrerequisiteLossWei: bigint;
 }
 
 /** The parts a delivery touches. Tests pass fakes for every one. */
@@ -64,6 +54,8 @@ export type SkipReason =
   | "prerequisite-reverted"
   | "prerequisite-failed"
   | "prerequisite-budget-exhausted"
+  | "prerequisite-not-approved"
+  | "prerequisite-gas-above-approval"
   | "prerequisites-not-satisfied"
   | "simulation-reverted";
 
@@ -177,28 +169,48 @@ function tokensReceived(receipt: ReceiptSummary, token: Address, account: Addres
   return total;
 }
 
+/** A layout call that the estimate approved, with the gas that the estimate assumed for it. */
+interface ApprovedPrerequisite {
+  readonly to: Address;
+  readonly data: Hex;
+  readonly function: string;
+  /** The simulated gas, or the fallback for a call that could not be simulated yet. The send may not need more. */
+  readonly gas: bigint;
+}
+
 /** The result of {@link estimatePrerequisites}. */
 type PrerequisiteEstimate =
-  | { readonly ok: true; readonly gasUnits: bigint }
+  | { readonly ok: true; readonly gasUnits: bigint; readonly approved: readonly ApprovedPrerequisite[] }
   | { readonly ok: false; readonly outcome: Skip };
 
 /**
  * Estimates the gas of every layout call that the evidence lists, and sends none. The first call can be simulated now.
  * A later call may depend on the call before it, so a revert there is no proof of a fault: the configured fallback
  * stands in for it. The calls of one function are alternatives, so the sum is an upper bound.
+ * The calls and the gas of the result are the approved set: the sends may use no other call and no more gas.
  */
 async function estimatePrerequisites(dependencies: DeliveryDependencies, messageId: Hex, evidence: EvidencePackage): Promise<PrerequisiteEstimate> {
   const { settings, chain } = dependencies;
   const listed = evidence.prerequisites.slice(0, settings.maximumPrerequisiteRounds);
-  let gasUnits = 0n;
+  const approved: ApprovedPrerequisite[] = [];
   for (const [index, prerequisite] of listed.entries()) {
-    const simulation = await chain.simulate({ to: prerequisite.to as Address, data: prerequisite.data as Hex });
+    const call = { to: prerequisite.to as Address, data: prerequisite.data as Hex };
+    const simulation = await chain.simulate(call);
     if (!simulation.ok && index === 0) {
       return { ok: false, outcome: skip(messageId, "prerequisite-reverted", { detail: `${prerequisite.function}: ${simulation.reason}` }) };
     }
-    gasUnits += simulation.ok ? simulation.gas : settings.prerequisiteGasFallback;
+    approved.push({ ...call, function: prerequisite.function, gas: simulation.ok ? simulation.gas : settings.prerequisiteGasFallback });
   }
-  return { ok: true, gasUnits };
+  return { ok: true, approved, gasUnits: approved.reduce((sum, entry) => sum + entry.gas, 0n) };
+}
+
+/** The most wei that the approved calls can cost when each is sent at the terms of `quote`. */
+function worstCaseSpendWei(approved: readonly ApprovedPrerequisite[], quote: FeeQuote): bigint {
+  return approved.reduce((sum, entry) => sum + worstCaseCostWei(sendTerms(quote, entry.gas)), 0n);
+}
+
+function sameCall(left: { readonly to: string; readonly data: string }, right: { readonly to: string; readonly data: string }): boolean {
+  return left.to.toLowerCase() === right.to.toLowerCase() && left.data.toLowerCase() === right.data.toLowerCase();
 }
 
 /** The result of {@link satisfyPrerequisites}. The cost is what the calls cost, also when the result is a skip. */
@@ -209,25 +221,45 @@ type PrerequisiteResult =
 /**
  * Sends the layout calls that the evidence lists, one at a time. After each call the evidence is built again, because
  * the calls of one function are alternatives: the next build lists none of them once a row covers the slot.
- * Each mined call adds its cost to the ledger.
+ *
+ * Before each send the runner checks, in this order, that
+ *
+ * 1. the call is in the approved set, and not sent yet;
+ * 2. the simulation succeeds and wants no more gas than the estimate assumed;
+ * 3. the worst case of the send (gas limit times maximum fee per gas) fits the sweep cap, the daily budget and the loss
+ *    threshold. The ledger charges that worst case before the call leaves, and settles to the actual cost at the receipt.
+ *
+ * A send that throws never settles. The reservation stays charged, because the transaction may be in the pool.
  */
 async function satisfyPrerequisites(
   dependencies: DeliveryDependencies,
   ledger: PrerequisiteLedger,
   request: { readonly messageId: Hex; readonly transactionHash: Hex; readonly logIndex: number },
   first: EvidencePackage,
+  approved: readonly ApprovedPrerequisite[],
 ): Promise<PrerequisiteResult> {
   let evidence = first;
   let costWei = 0n;
+  const unsent = [...approved];
   for (let round = 0; round < dependencies.settings.maximumPrerequisiteRounds; round += 1) {
     const next: Prerequisite | undefined = evidence.prerequisites[0];
     if (next === undefined) return { ok: true, evidence, costWei };
     const call = { to: next.to as Address, data: next.data as Hex };
+    const approvedIndex = unsent.findIndex((entry) => sameCall(entry, call));
+    const approval = unsent[approvedIndex];
+    if (approval === undefined) return { ok: false, costWei, outcome: skip(request.messageId, "prerequisite-not-approved", { detail: `${next.function} was not in the approved estimate` }) };
+    unsent.splice(approvedIndex, 1);
     const simulation = await dependencies.chain.simulate(call);
     if (!simulation.ok) return { ok: false, costWei, outcome: skip(request.messageId, "prerequisite-reverted", { detail: `${next.function}: ${simulation.reason}` }) };
-    const receipt = await dependencies.chain.send({ ...call, gas: simulation.gas });
+    if (simulation.gas > approval.gas) {
+      return { ok: false, costWei, outcome: skip(request.messageId, "prerequisite-gas-above-approval", { detail: `${next.function} now needs ${simulation.gas} gas, the estimate approved ${approval.gas}` }) };
+    }
+    const terms = sendTerms(await dependencies.chain.feeQuote(), approval.gas);
+    const reserved = await ledger.reserve(worstCaseCostWei(terms));
+    if (!reserved.ok) return { ok: false, costWei, outcome: skip(request.messageId, "prerequisite-budget-exhausted", { detail: reserved.detail }) };
+    const receipt = await dependencies.chain.send({ ...call, ...terms });
     const callCostWei = receipt.gasUsed * receipt.effectiveGasPrice;
-    ledger.spentWei += callCostWei;
+    await ledger.settle(reserved.reservation, callCostWei);
     costWei += callCostWei;
     if (!receipt.success) return { ok: false, costWei, outcome: skip(request.messageId, "prerequisite-failed", { detail: `${next.function} in ${receipt.hash}` }) };
     dependencies.logger.info("prerequisite_sent", { messageId: request.messageId, function: next.function, transactionHash: receipt.hash, gasUsed: receipt.gasUsed });
@@ -239,11 +271,12 @@ async function satisfyPrerequisites(
 }
 
 /**
- * Marks a skip with the wei that layout calls cost before it, and logs the loss. A skip with no spend stays as it is.
+ * Marks a skip with the wei that layout calls cost before it, logs the loss and adds it to the unrecovered loss of the ledger. A skip with no spend stays as it is.
  */
-function recordLoss(dependencies: DeliveryDependencies, outcome: Skip, spentWei: bigint): Skip {
+async function recordLoss(dependencies: DeliveryDependencies, ledger: PrerequisiteLedger, outcome: Skip, spentWei: bigint): Promise<Skip> {
   if (spentWei === 0n) return outcome;
   dependencies.logger.warn("prerequisite_loss", { messageId: outcome.messageId, lossWei: spentWei, reason: outcome.reason });
+  await ledger.recordLoss(spentWei);
   return { ...outcome, prerequisiteCostWei: spentWei };
 }
 
@@ -252,29 +285,30 @@ function guessGas(settings: DeliverySettings): bigint {
   return settings.executionGasFallback;
 }
 
+/** The result of {@link approvePrerequisiteSpend}: the approved calls, a skip, or nothing to approve. */
+type Approval = { readonly kind: "skip"; readonly outcome: Skip } | { readonly kind: "approved"; readonly approved: readonly ApprovedPrerequisite[] };
+
 /**
- * Checks, before any layout call leaves (and does nothing when the evidence lists none), that the offer repays the layout calls and the execution together, and that
- * the sweep has budget for the layout calls. Returns the skip when it does not.
+ * Checks, before any layout call leaves, that the offer repays the layout calls and the execution together, and that
+ * the budgets have room for the worst case of the layout calls. The estimate and each later reservation use the same
+ * maximum fee per gas. Does nothing when the evidence lists no layout call, so an item that needs none is never paused.
+ * Returns the approved set, or the skip.
  */
 async function approvePrerequisiteSpend(
   dependencies: DeliveryDependencies,
   ledger: PrerequisiteLedger,
   context: { readonly item: FeedItem; readonly offer: FeeOffer; readonly evidence: EvidencePackage; readonly messageId: Hex },
-): Promise<Skip | null> {
+): Promise<Approval> {
   const { item, offer, evidence, messageId } = context;
   const { settings, chain } = dependencies;
-  if (evidence.prerequisites.length === 0) return null;
+  if (evidence.prerequisites.length === 0) return { kind: "approved", approved: [] };
   const estimate = await estimatePrerequisites(dependencies, messageId, evidence);
-  if (!estimate.ok) return estimate.outcome;
+  if (!estimate.ok) return { kind: "skip", outcome: estimate.outcome };
   const quote = await chain.feeQuote();
-  const estimatedSpendWei = estimate.gasUnits * (quote.baseFee + quote.priorityFee);
-  if (ledger.spentWei + estimatedSpendWei > ledger.capWei) {
-    return skip(messageId, "prerequisite-budget-exhausted", {
-      costWei: estimatedSpendWei,
-      detail: `${ledger.spentWei} of ${ledger.capWei} wei spent this sweep`,
-    });
-  }
-  if (offer.kind !== "offer") return null;
+  const worstCaseWei = worstCaseSpendWei(estimate.approved, quote);
+  const refusal = await ledger.refusal(worstCaseWei);
+  if (refusal !== null) return { kind: "skip", outcome: skip(messageId, "prerequisite-budget-exhausted", { costWei: worstCaseWei, detail: refusal }) };
+  if (offer.kind !== "offer") return { kind: "approved", approved: estimate.approved };
   const judgement = await judgeOffer(dependencies, {
     item,
     offer,
@@ -283,7 +317,7 @@ async function approvePrerequisiteSpend(
     quote,
     messageId,
   });
-  return judgement.kind === "skip" ? judgement.outcome : null;
+  return judgement.kind === "skip" ? { kind: "skip", outcome: judgement.outcome } : { kind: "approved", approved: estimate.approved };
 }
 
 /**
@@ -294,8 +328,10 @@ async function approvePrerequisiteSpend(
  *    evidence, so an item that does not pay costs no proving time.
  * 3. Build the evidence (`zk-bridge-prover evidence`). Skip when the message is delivered already.
  * 4. Estimate the gas of every layout call. Require that the fee covers the layout calls and the execution together, plus
- *    the margin, and that the layout calls fit in the budget of the sweep. Skip before any layout call leaves.
- * 5. Send the layout calls that the evidence lists, each after a simulation.
+ *    the margin, and that the worst case of the layout calls fits the budgets. Skip before any layout call leaves.
+ *    The calls and the gas of this estimate are the approved set.
+ * 5. Send the layout calls that the evidence lists, each after a simulation, each inside the approved set, and each
+ *    after the ledger reserved its worst case.
  * 6. Simulate the delivery. Price the offer again at the simulated gas. Skip on a revert, or when it does not pay.
  *    Wei spent on layout calls is lost then: the skip carries the amount and the runner does not retry the item soon.
  * 7. Send `FeeRouter.executeMessageWithRunner(runner, proof)`, or `executeMessage` for an item without an offer when
@@ -330,25 +366,26 @@ export async function deliverItem(dependencies: DeliveryDependencies, item: Feed
   }
   if (evidence.alreadyDelivered) return skip(messageId, "already-delivered", { detail: evidence.deliveryStatus });
 
-  const refusal = await approvePrerequisiteSpend(dependencies, ledger, { item, offer, evidence, messageId });
-  if (refusal !== null) return refusal;
+  const approval = await approvePrerequisiteSpend(dependencies, ledger, { item, offer, evidence, messageId });
+  if (approval.kind === "skip") return approval.outcome;
 
-  const prepared = await satisfyPrerequisites(dependencies, ledger, { messageId, transactionHash: sourceTransaction, logIndex }, evidence);
-  if (!prepared.ok) return recordLoss(dependencies, prepared.outcome, prepared.costWei);
+  const prepared = await satisfyPrerequisites(dependencies, ledger, { messageId, transactionHash: sourceTransaction, logIndex }, evidence, approval.approved);
+  if (!prepared.ok) return recordLoss(dependencies, ledger, prepared.outcome, prepared.costWei);
 
   const call = buildFinalCall(dependencies, offer, prepared.evidence);
   const simulation = await chain.simulate(call);
-  if (!simulation.ok) return recordLoss(dependencies, skip(messageId, "simulation-reverted", { detail: simulation.reason }), prepared.costWei);
+  if (!simulation.ok) return recordLoss(dependencies, ledger, skip(messageId, "simulation-reverted", { detail: simulation.reason }), prepared.costWei);
 
   const finalQuote = await chain.feeQuote();
   const final =
     offer.kind === "offer"
       ? await judgeOffer(dependencies, { item, offer, feeGasUnits: simulation.gas, costGasUnits: simulation.gas, quote: finalQuote, messageId })
       : null;
-  if (final !== null && final.kind === "skip") return recordLoss(dependencies, final.outcome, prepared.costWei);
+  if (final !== null && final.kind === "skip") return recordLoss(dependencies, ledger, final.outcome, prepared.costWei);
 
-  const receipt = await chain.send({ to: call.to, data: call.data, gas: simulation.gas });
+  const receipt = await chain.send({ to: call.to, data: call.data, ...sendTerms(finalQuote, simulation.gas) });
   if (!receipt.success) {
+    await ledger.recordLoss(prepared.costWei);
     return { status: "failed", messageId, reason: "transaction-reverted", transactionHash: receipt.hash, ...(prepared.costWei > 0n ? { prerequisiteCostWei: prepared.costWei } : {}) };
   }
   const token = item.transfer?.destinationToken.address as Address | undefined;

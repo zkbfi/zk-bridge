@@ -26,7 +26,9 @@
     "maximumDeliveriesPerSweep": 10,
     "maximumPrerequisiteRounds": 4,
     "prerequisiteGasFallback": 300000,
-    "maximumPrerequisiteSpendPerSweepWei": "1000000000000000000000",
+    "maximumPrerequisiteSpendPerSweepWei": "50000000000000000",
+    "maximumPrerequisiteSpendPerDayWei": "200000000000000000",
+    "maximumUnrecoveredPrerequisiteLossWei": "100000000000000000",
     "prerequisiteLossRefusalSeconds": 1800,
     "receiptTimeoutSeconds": 300
   }

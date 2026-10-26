@@ -7,7 +7,7 @@ import {
   type ProofDirection,
   type ProofMessage,
 } from "@zk-bridge/shared";
-import type { CallRequest, FeeQuote, ReceiptSummary, Simulation, TransactionPort } from "../../src/chain/transactions.ts";
+import type { CallRequest, FeeQuote, ReceiptSummary, SendTerms, Simulation, TransactionPort } from "../../src/chain/transactions.ts";
 import type { LightClientReader, LightClientState } from "../../src/chain/light-client.ts";
 import type { FeedItem, IndexerClient, MessageWithData } from "../../src/indexer/client.ts";
 import { createLogger, type Logger } from "../../src/logging/logger.ts";
@@ -215,6 +215,12 @@ export function memoryOutcomes(): OutcomeSink & { records: OutcomeRecord[] } {
 /** A chain whose answers the test sets. Every call is recorded, in order. */
 export interface FakeChain extends TransactionPort {
   readonly log: Array<{ readonly kind: "simulate" | "call" | "send"; readonly request: CallRequest }>;
+  /** The terms of every send, in order. */
+  readonly sentTerms: SendTerms[];
+  /** Makes the next send throw after it was broadcast, as a lost connection does. */
+  sendFailure: Error | null;
+  /** Replaces the gas used that a receipt reports. Default: the simulated gas of the chain. */
+  gasUsed: bigint | null;
   quote: FeeQuote;
   /** The gas that a simulation reports. */
   gas: bigint;
@@ -233,6 +239,9 @@ export function fakeChain(): FakeChain {
     chainId: 369,
     account: RUNNER,
     log,
+    sentTerms: [],
+    sendFailure: null,
+    gasUsed: null,
     quote: { baseFee: 10n, priorityFee: 0n },
     gas: 300_000n,
     simulateOverride: null,
@@ -252,7 +261,9 @@ export function fakeChain(): FakeChain {
     },
     async send(request): Promise<ReceiptSummary> {
       log.push({ kind: "send", request: { to: request.to, data: request.data } });
-      return { hash: word(0xee), success: chain.receiptSuccess, gasUsed: chain.gas, effectiveGasPrice: chain.quote.baseFee + chain.quote.priorityFee, blockNumber: 1n, logs: [] };
+      chain.sentTerms.push({ gas: request.gas, maxFeePerGas: request.maxFeePerGas, maxPriorityFeePerGas: request.maxPriorityFeePerGas });
+      if (chain.sendFailure !== null) throw chain.sendFailure;
+      return { hash: word(0xee), success: chain.receiptSuccess, gasUsed: chain.gasUsed ?? chain.gas, effectiveGasPrice: chain.quote.baseFee + chain.quote.priorityFee, blockNumber: 1n, logs: [] };
     },
     unsimulatedSends() {
       return log

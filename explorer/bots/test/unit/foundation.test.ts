@@ -68,7 +68,7 @@ describe("the bot configuration", () => {
         prover: { binary: "/usr/local/bin/zk-bridge-prover" },
         indexerUrl: "http://127.0.0.1:42069",
         signer: { kind: "private-key", key: "env:RUNNER_PRIVATE_KEY" },
-        maximumPrerequisiteSpendPerSweepWei: "5000",
+        maximumPrerequisiteSpendPerSweepWei: "5000", maximumPrerequisiteSpendPerDayWei: "20000", maximumUnrecoveredPrerequisiteLossWei: "10000",
       },
     });
     expect(config.maximumMessageBytes).toBe(8192);
@@ -87,7 +87,7 @@ describe("the bot configuration", () => {
   });
 
   it("accepts a 1Password reference and refuses a secret typed where a reference belongs", () => {
-    const runner = (key: string) => ({ prover: { binary: "p" }, indexerUrl: "http://127.0.0.1:1", signer: { kind: "private-key", key }, maximumPrerequisiteSpendPerSweepWei: "5000" });
+    const runner = (key: string) => ({ prover: { binary: "p" }, indexerUrl: "http://127.0.0.1:1", signer: { kind: "private-key", key }, maximumPrerequisiteSpendPerSweepWei: "5000", maximumPrerequisiteSpendPerDayWei: "20000", maximumUnrecoveredPrerequisiteLossWei: "10000" });
     expect(parseBotConfig({ ...minimal, runner: runner("op://vault/item/field") }).runner?.signer).toMatchObject({ key: { source: "onepassword" } });
     expect(() => parseBotConfig({ ...minimal, runner: runner(`0x${"ab".repeat(32)}`) })).toThrow(BotConfigError);
   });

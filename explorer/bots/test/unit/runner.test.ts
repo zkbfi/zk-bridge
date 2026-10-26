@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 import type { Simulation } from "../../src/chain/transactions.ts";
 import type { FeedItem } from "../../src/indexer/client.ts";
 import type { StateFile } from "../../src/runtime/state-file.ts";
-import { createPrerequisiteLedger, deliverItem } from "../../src/runner/delivery.ts";
+import { deliverItem } from "../../src/runner/delivery.ts";
+import { createPrerequisiteLedger } from "../../src/runner/prerequisite-ledger.ts";
+import type { DeliverySettings } from "../../src/runner/delivery.ts";
+import type { Logger } from "../../src/logging/logger.ts";
 import { createRunner } from "../../src/runner/runner.ts";
 import { createSerialQueue } from "../../src/runner/serial-queue.ts";
 import { INITIAL_RUNNER_STATE, type RunnerState } from "../../src/runner/state.ts";
@@ -49,6 +52,26 @@ function memoryState(): StateFile<RunnerState> & { current: RunnerState } {
 }
 
 const REFUSAL_WINDOW_MILLISECONDS = 30 * 60 * 1000;
+const DAY_MILLISECONDS = 24 * 60 * 60 * 1000;
+
+/** A ledger over the state of a world, as the runner makes one for each sweep. */
+function ledgerFor(w: { state: ReturnType<typeof memoryState>; delivery: { settings: DeliverySettings; logger: Logger } }, now: () => number = () => 1_000_000) {
+  return createPrerequisiteLedger({
+    capWei: w.delivery.settings.maximumPrerequisiteSpendPerSweepWei,
+    limits: { dailySpendWei: w.delivery.settings.maximumPrerequisiteSpendPerDayWei, unrecoveredLossWei: w.delivery.settings.maximumUnrecoveredPrerequisiteLossWei },
+    store: {
+      async load() {
+        const { prerequisiteSpend, prerequisiteLosses } = await w.state.load();
+        return { prerequisiteSpend, prerequisiteLosses };
+      },
+      async save(budget) {
+        await w.state.save({ ...(await w.state.load()), ...budget });
+      },
+    },
+    now,
+    logger: w.delivery.logger,
+  });
+}
 
 interface WorldOptions {
   items?: FeedItem[];
@@ -60,6 +83,11 @@ interface WorldOptions {
   maximumDeliveriesPerSweep?: number;
   prerequisiteGasFallback?: bigint;
   maximumPrerequisiteSpendPerSweepWei?: bigint;
+  maximumPrerequisiteSpendPerDayWei?: bigint;
+  maximumUnrecoveredPrerequisiteLossWei?: bigint;
+  /** A state that an earlier runner wrote, to test a restart. */
+  state?: ReturnType<typeof memoryState>;
+  startTime?: number;
 }
 
 /** A runner on fakes: chain, indexer, prover, board payloads. Base fee 10 wei, 300,000 gas: a cost of 3,000,000 wei. */
@@ -71,9 +99,9 @@ function world(options: WorldOptions = {}) {
   const indexer = fakeIndexer(items, options.data ?? {});
   const prover = fakeProver();
   const lightClient = fakeLightClient();
-  const state = memoryState();
+  const state = options.state ?? memoryState();
   const outcomes = memoryOutcomes();
-  let clock = 1_000_000;
+  let clock = options.startTime ?? 1_000_000;
   const delivery = {
     direction: "first-to-second" as const,
     chain,
@@ -90,6 +118,8 @@ function world(options: WorldOptions = {}) {
       maximumPrerequisiteRounds: 3,
       prerequisiteGasFallback: options.prerequisiteGasFallback ?? 300_000n,
       maximumPrerequisiteSpendPerSweepWei: options.maximumPrerequisiteSpendPerSweepWei ?? 10n ** 18n,
+      maximumPrerequisiteSpendPerDayWei: options.maximumPrerequisiteSpendPerDayWei ?? 10n ** 18n,
+      maximumUnrecoveredPrerequisiteLossWei: options.maximumUnrecoveredPrerequisiteLossWei ?? 10n ** 18n,
     },
     logger,
   };
@@ -405,11 +435,12 @@ describe("delivery decisions", () => {
 
     it("stops paying for layout calls when the sweep budget is spent, and refuses before it sends", async () => {
       const ids = [1, 2, 3];
-      const w = world({ items: ids.map(offerFor), data: dataFor(ids), maximumPrerequisiteSpendPerSweepWei: 4_000_000n });
+      const w = world({ items: ids.map(offerFor), data: dataFor(ids), maximumPrerequisiteSpendPerSweepWei: 10_000_000n });
       w.chain.feeTokens = 100_000_000n;
       listLayoutOnce(w, [layoutCall]);
       const summary = await w.runner.sweep();
-      // One layout call costs 3,000,000. The second would take the sweep to 6,000,000, over the cap of 4,000,000.
+      // One layout call costs 3,000,000 and reserves its worst case of 7,800,000. The second reservation would take the
+      // sweep to 3,000,000 + 7,800,000, over the cap of 10,000,000.
       expect(summary).toMatchObject({ delivered: 1, skipped: 2 });
       expect(w.chain.log.filter(isLayoutSend)).toHaveLength(1);
       expect(w.outcomes.records.filter((record) => record.status === "skipped").map((record) => record.reason)).toEqual(["prerequisite-budget-exhausted", "prerequisite-budget-exhausted"]);
@@ -444,12 +475,164 @@ describe("delivery decisions", () => {
       await w.runner.sweep();
       expect(counter.builds).toBe(builds + 1);
     });
+
+    describe("spend accounting", () => {
+      /** The worst case of one layout call at 300,000 gas: a limit of 390,000 gas at a maximum fee of 20 wei. */
+      const RESERVED = 7_800_000n;
+      const spentIn = (w: ReturnType<typeof world>) => w.state.current.prerequisiteSpend.map((entry) => BigInt(entry.wei));
+
+      it("refuses a send whose worst case would exceed the cap after reservation, though the estimate fit", async () => {
+        const w = world({ items: [offerFor(1)], data: dataFor([1]), maximumPrerequisiteSpendPerSweepWei: 8_000_000n });
+        w.chain.feeTokens = 10n ** 12n;
+        listLayoutOnce(w, [layoutCall]);
+        // The estimate prices 7,800,000 at a base fee of 10. The base fee rises before the send, so the reservation is higher.
+        let simulations = 0;
+        w.chain.simulateOverride = (request) => {
+          if (request.data === layoutCall.data && (simulations += 1) === 2) w.chain.quote = { baseFee: 100n, priorityFee: 0n };
+          return undefined;
+        };
+        await w.runner.sweep();
+        expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "prerequisite-budget-exhausted" });
+        expect(w.chain.log.some(isLayoutSend)).toBe(false);
+        expect(spentIn(w)).toEqual([]);
+      });
+
+      it("sends the layout call at the limit and the fee that the reservation priced", async () => {
+        const w = world({ items: [offerFor(1)], data: dataFor([1]) });
+        w.chain.feeTokens = 2n * COST;
+        listLayoutOnce(w, [layoutCall]);
+        await w.runner.sweep();
+        const [terms] = w.chain.sentTerms;
+        expect(terms).toEqual({ gas: 390_000n, maxFeePerGas: 20n, maxPriorityFeePerGas: 0n });
+        expect((terms?.gas ?? 0n) * (terms?.maxFeePerGas ?? 0n)).toBe(RESERVED);
+      });
+
+      it("refuses a layout call whose simulation now wants more gas than the approved estimate", async () => {
+        const w = world({ items: [offerFor(1)], data: dataFor([1]) });
+        w.chain.feeTokens = 10n ** 12n;
+        listLayoutOnce(w, [layoutCall]);
+        let simulations = 0;
+        w.chain.simulateOverride = (request) => (request.data === layoutCall.data && (simulations += 1) === 2 ? { ok: true, gas: 300_001n } : undefined);
+        await w.runner.sweep();
+        expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "prerequisite-gas-above-approval" });
+        expect(w.chain.log.some(isLayoutSend)).toBe(false);
+      });
+
+      it("refuses a layout call that was not in the approved estimate, and counts the loss of the calls before it", async () => {
+        const w = world({ items: [offerFor(1)], data: dataFor([1]) });
+        w.chain.feeTokens = 10n ** 12n;
+        let builds = 0;
+        // The first build lists one call. After it is mined the evidence lists another one, which nobody approved.
+        w.prover.evidence = async () => evidenceFor({ prerequisites: (builds += 1) === 1 ? [layoutCall] : [secondLayoutCall] });
+        await w.runner.sweep();
+        expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "prerequisite-not-approved", prerequisiteCostWei: COST });
+        expect(w.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(1);
+        expect(w.state.current.prerequisiteLosses.map((entry) => entry.wei)).toEqual([COST.toString()]);
+      });
+
+      it("charges the reservation before the send and corrects it to the actual cost at the receipt", async () => {
+        const w = world({ items: [offerFor(1)], data: dataFor([1]) });
+        w.chain.feeTokens = 2n * COST;
+        listLayoutOnce(w, [layoutCall]);
+        let chargedAtBroadcast: bigint[] = [];
+        const send = w.chain.send.bind(w.chain);
+        w.chain.send = async (request) => {
+          if (request.data === layoutCall.data) chargedAtBroadcast = spentIn(w);
+          return send(request);
+        };
+        await w.runner.sweep();
+        expect(chargedAtBroadcast).toEqual([RESERVED]);
+        expect(spentIn(w)).toEqual([COST]);
+      });
+
+      it("keeps the reservation charged when the send throws", async () => {
+        const w = world({ items: [offerFor(1)], data: dataFor([1]) });
+        w.chain.feeTokens = 2n * COST;
+        listLayoutOnce(w, [layoutCall]);
+        w.chain.sendFailure = new Error("connection lost after broadcast");
+        expect(await w.runner.sweep()).toMatchObject({ failed: 1, delivered: 0 });
+        expect(spentIn(w)).toEqual([RESERVED]);
+      });
+
+      it("counts an error after a layout call toward the sweep limit and the refusal window", async () => {
+        const ids = [1, 2, 3];
+        const w = world({ items: ids.map(offerFor), data: dataFor(ids), maximumDeliveriesPerSweep: 1 });
+        w.chain.feeTokens = 2n * COST;
+        const counter = listLayoutOnce(w, [layoutCall]);
+        w.chain.sendFailure = new Error("connection lost after broadcast");
+        await w.runner.sweep();
+        // The error used the one attempt of the sweep, so no second item was tried.
+        expect(w.chain.log.filter(isLayoutSend)).toHaveLength(1);
+        const builds = counter.builds;
+        const sends = () => w.chain.log.filter(isLayoutSend).length;
+        // The oldest item waits out the window: the next sweep tries another one, never the first again.
+        await w.runner.sweep();
+        expect(sends()).toBe(2);
+        expect(counter.builds).toBe(builds + 1);
+        w.advance(REFUSAL_WINDOW_MILLISECONDS + 1000);
+        await w.runner.sweep();
+        expect(sends()).toBe(3);
+      });
+
+      it("keeps the daily budget across a restart, blocks on it, and frees it when the window rolls", async () => {
+        const first = world({ items: [offerFor(1)], data: dataFor([1]), maximumPrerequisiteSpendPerDayWei: 10_000_000n });
+        first.chain.feeTokens = 2n * COST;
+        listLayoutOnce(first, [layoutCall]);
+        expect((await first.runner.sweep()).delivered).toBe(1);
+        expect(spentIn(first)).toEqual([COST]);
+        // A new runner with new memory over the same state file. The 3,000,000 spent plus a reservation of 7,800,000 passes 10,000,000.
+        const restarted = world({ items: [offerFor(2)], data: dataFor([2]), maximumPrerequisiteSpendPerDayWei: 10_000_000n, state: first.state });
+        restarted.chain.feeTokens = 2n * COST;
+        listLayoutOnce(restarted, [layoutCall]);
+        await restarted.runner.sweep();
+        expect(restarted.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "prerequisite-budget-exhausted" });
+        expect(restarted.chain.log.some(isLayoutSend)).toBe(false);
+        restarted.advance(DAY_MILLISECONDS + 1);
+        expect((await restarted.runner.sweep()).delivered).toBe(1);
+      });
+
+      it("pauses layout calls once the daily budget is reached, warns, and still delivers an item that needs none", async () => {
+        const w = world({ items: [offerFor(1), offerFor(2), offerFor(3)], data: dataFor([1, 2, 3]), maximumPrerequisiteSpendPerDayWei: 8_000_000n });
+        w.chain.feeTokens = 10n ** 12n;
+        // The first call reports 800,000 gas used: 8,000,000 wei, the whole budget.
+        w.chain.gasUsed = 800_000n;
+        const needsLayout = new Set([word(0xa1), word(0xa2)].map((hash) => hash.toLowerCase()));
+        const built = new Map<string, number>();
+        w.prover.evidence = async (request: { transactionHash: Hex }) => {
+          const count = (built.get(request.transactionHash) ?? 0) + 1;
+          built.set(request.transactionHash, count);
+          const wanted = needsLayout.has(request.transactionHash.toLowerCase()) && count === 1;
+          return evidenceFor({ prerequisites: wanted ? [layoutCall] : [] });
+        };
+        await w.runner.sweep();
+        const reasons = w.outcomes.records.map((record) => (record.status === "skipped" ? record.reason : record.status));
+        // The newest item is last in line. Item 3 needs no layout call and is delivered, item 2 spends the budget, item 1 is paused.
+        expect(reasons).toEqual(["delivered", "delivered", "prerequisite-budget-exhausted"]);
+        expect(w.events().filter((event) => event.event === "prerequisite_spending_paused")).toHaveLength(1);
+        expect(w.chain.log.filter(isLayoutSend)).toHaveLength(1);
+      });
+
+      it("pauses layout calls once the unrecovered loss reaches the threshold", async () => {
+        const ids = [1, 2];
+        const w = world({ items: ids.map(offerFor), data: dataFor(ids), maximumUnrecoveredPrerequisiteLossWei: COST });
+        w.chain.feeTokens = 10_000_000n;
+        listLayoutOnce(w, [layoutCall]);
+        // The final check fails after the layout call is paid: a loss of exactly the threshold.
+        w.chain.simulateOverride = executionGasSimulatedAt(10_000_000n);
+        await w.runner.sweep();
+        expect(w.state.current.prerequisiteLosses.map((entry) => entry.wei)).toEqual([COST.toString()]);
+        expect(w.chain.log.filter(isLayoutSend)).toHaveLength(1);
+        expect(w.outcomes.records.at(-1)).toMatchObject({ status: "skipped", reason: "prerequisite-budget-exhausted" });
+        expect(String((w.outcomes.records.at(-1) as { detail?: string }).detail)).toContain("loss-threshold");
+        expect(w.events().some((event) => event.event === "prerequisite_spending_paused")).toBe(true);
+      });
+    });
   });
 
   it("never sends a transaction that it did not simulate", async () => {
     const w = world({ items: [offerItem()], data: offerData() });
     w.chain.feeTokens = COST * 2n;
-    await deliverItem(w.delivery, offerItem(), createPrerequisiteLedger(10n ** 18n));
+    await deliverItem(w.delivery, offerItem(), ledgerFor(w));
     expect(w.chain.unsimulatedSends()).toEqual([]);
     expect(w.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(1);
   });

@@ -4,11 +4,12 @@ import type { LightClientReader } from "../chain/light-client.ts";
 import type { FeedItem } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
 import type { StateFile } from "../runtime/state-file.ts";
-import { createPrerequisiteLedger, deliverItem, isFinal, type PrerequisiteLedger, type DeliveryDependencies, type DeliveryOutcome } from "./delivery.ts";
+import { deliverItem, isFinal, type DeliveryDependencies, type DeliveryOutcome } from "./delivery.ts";
+import { createPrerequisiteLedger, type PrerequisiteLedger } from "./prerequisite-ledger.ts";
 import type { OutcomeSink } from "./outcomes.ts";
 import { assessProofPayload, payloadKey, type ProofRefusal } from "./proof-intake.ts";
 import type { SerialQueue } from "./serial-queue.ts";
-import type { RunnerState } from "./state.ts";
+import type { PrerequisiteBudgetState, RunnerState } from "./state.ts";
 import { postUpdate } from "./update.ts";
 
 /** Everything the runner needs for one pair and direction. */
@@ -25,7 +26,10 @@ export interface RunnerDependencies {
   readonly outcomes: OutcomeSink;
   readonly queue: SerialQueue;
   readonly now: () => number;
-  /** The most deliveries a sweep tries. A sweep that spent gas on layout calls counts for one, also when it skipped. */
+  /**
+   * The most deliveries a sweep tries. A sweep that reserved or spent gas on layout calls counts for one, also when it
+   * skipped, and also when a call threw.
+   */
   readonly maximumDeliveriesPerSweep: number;
   /** How long an item is not tried again after layout calls were paid for it and the delivery did not follow. */
   readonly prerequisiteLossRefusalMilliseconds: number;
@@ -151,6 +155,17 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     await dependencies.outcomes.record({ kind: "delivery", ...base, ...fields });
   }
 
+  /** The rolling spend lives in the state file, next to the finished items. Each write keeps the other part as it is. */
+  const budgetStore = {
+    async load(): Promise<PrerequisiteBudgetState> {
+      const { prerequisiteSpend, prerequisiteLosses } = await dependencies.state.load();
+      return { prerequisiteSpend, prerequisiteLosses };
+    },
+    async save(budget: PrerequisiteBudgetState): Promise<void> {
+      await dependencies.state.save({ ...(await dependencies.state.load()), ...budget });
+    },
+  };
+
   async function attempt(item: FeedItem, ledger: PrerequisiteLedger): Promise<DeliveryOutcome | null> {
     try {
       return await queue.run(() => deliverItem(dependencies.delivery, item, ledger));
@@ -166,7 +181,14 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     const finished = new Set(Object.keys(state.finished));
     const listed = await listCovered(finished);
     const summary = { listed: listed.length, delivered: 0, skipped: 0, failed: 0 };
-    const ledger = createPrerequisiteLedger(dependencies.delivery.settings.maximumPrerequisiteSpendPerSweepWei);
+    const { settings } = dependencies.delivery;
+    const ledger = createPrerequisiteLedger({
+      capWei: settings.maximumPrerequisiteSpendPerSweepWei,
+      limits: { dailySpendWei: settings.maximumPrerequisiteSpendPerDayWei, unrecoveredLossWei: settings.maximumUnrecoveredPrerequisiteLossWei },
+      store: budgetStore,
+      now: dependencies.now,
+      logger,
+    });
     let attempts = 0;
     for (const item of listed) {
       if (attempts >= dependencies.maximumDeliveriesPerSweep) break;
@@ -177,6 +199,9 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
       if (spentOnPrerequisites) attempts += 1;
       if (outcome === null) {
         summary.failed += 1;
+        // An error after a layout call was attempted is spend-bearing: the reservation stays charged, the item counts
+        // toward the sweep limit, and the item waits out the refusal window. The charge is an unrecovered loss.
+        if (spentOnPrerequisites) await ledger.recordLoss(ledger.spentWei - spentBefore);
         if (spentOnPrerequisites) retryAfter.set(item.messageId, dependencies.now() + dependencies.prerequisiteLossRefusalMilliseconds);
         continue;
       }

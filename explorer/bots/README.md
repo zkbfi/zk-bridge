@@ -56,7 +56,9 @@ proving policy. The **bot configuration** adds what only a bot needs. A sample i
 | `runner.executionGasFallback` | Gas that the first fee check assumes, before a simulation exists. Default 900000. |
 | `runner.maximumPrerequisiteRounds` | The most layout calls that one delivery sends. Default 4. |
 | `runner.prerequisiteGasFallback` | Gas that the runner assumes for a layout call that it cannot simulate before the call before it is mined. Default 300000. |
-| `runner.maximumPrerequisiteSpendPerSweepWei` | Required. The most wei that the layout calls of one sweep may cost. A sweep that sent a layout call counts toward `maximumDeliveriesPerSweep`. |
+| `runner.maximumPrerequisiteSpendPerSweepWei` | Required. The most wei that the layout calls of one sweep may cost, counted at the worst case of each send. A sweep that reserved or sent a layout call counts toward `maximumDeliveriesPerSweep`. The example file uses 0.05 of the native coin. |
+| `runner.maximumPrerequisiteSpendPerDayWei` | Required. The most wei that layout calls may cost in a rolling 24 hours. The runner keeps the spend in its state file, so a restart does not reset it. At the limit the runner sends no layout call until the window rolls. The example file uses 0.2 of the native coin. |
+| `runner.maximumUnrecoveredPrerequisiteLossWei` | Required. The loss at which the runner stops sending layout calls, over a rolling 24 hours. A loss is the layout spend on an item that was then not delivered. The example file uses 0.1 of the native coin. |
 | `runner.prerequisiteLossRefusalSeconds` | After layout calls were paid for an item and the delivery did not follow, the runner does not try the item for this long. Default 1800. |
 
 A secret is a reference: `env:NAME`, `op://vault/item/field`, or `{ "source": "store", "name": "..." }`. A secret value in
@@ -117,14 +119,26 @@ For each direction:
      `prerequisiteGasFallback` for a later call that cannot be simulated yet. Skip unless the fee covers the layout calls
      plus the execution (`executionGasFallback`) at the current base fee plus priority fee, plus `minimumMarginWei`. Skip
      with `prerequisite-budget-exhausted` when the layout calls would take the sweep over
-     `maximumPrerequisiteSpendPerSweepWei`. No layout call is sent before these checks pass.
+     `maximumPrerequisiteSpendPerSweepWei`, over the daily budget, or when the loss threshold is reached. The check prices
+     the worst case of each call: its gas limit (the simulated gas plus 30 percent) times the maximum fee per gas that the
+     send uses (twice the base fee plus the priority fee). No layout call is sent before these checks pass. The calls and
+     the gas of this estimate are the approved set.
    - Send the layout calls that the evidence lists, one at a time, each after a simulation. Build the evidence again after
-     each call, because the calls of one function are alternatives.
+     each call, because the calls of one function are alternatives. Before each send the runner refuses (a) a call that is
+     not in the approved set (`prerequisite-not-approved`), (b) a simulation that wants more gas than the estimate
+     assumed (`prerequisite-gas-above-approval`), and (c) a send whose worst case would take the spend over a cap
+     (`prerequisite-budget-exhausted`). The runner writes the worst case to the state file before it broadcasts, and
+     replaces it with `gasUsed` times `effectiveGasPrice` when the receipt arrives. A send that throws, or a receipt that
+     never arrives, leaves the worst case charged, because the transaction may be in the pool.
    - Simulate `FeeRouter.executeMessageWithRunner(runner, proof)` and send it. Skip on a revert.
    If the final check fails after layout calls were sent, the runner logs `prerequisite_loss` with the item and the lost
    wei, records `prerequisiteCostWei` in the skip, and does not try the item again for
-   `prerequisiteLossRefusalSeconds`. Layout rows help every sender, so the cap and the count toward
-   `maximumDeliveriesPerSweep` bound the loss that an attacker can cause with items that pass the first check only.
+   `prerequisiteLossRefusalSeconds`. Any error after a layout call was attempted counts the same way: the item
+   counts toward `maximumDeliveriesPerSweep`, waits out the refusal window, and its charge is a loss. Layout rows help
+   every sender, so the sweep cap, the daily budget, the loss threshold and the count toward `maximumDeliveriesPerSweep`
+   bound the loss that an attacker can cause with items that pass the first check only. When the daily budget or the loss
+   threshold is reached, the runner logs `prerequisite_spending_paused` with the time at which the window rolls enough to
+   resume. It skips items that need layout calls with `prerequisite-budget-exhausted` and still delivers items that need none.
    No transaction is sent without a simulation of the same call that succeeded.
 5. Record the outcome.
 
@@ -133,7 +147,7 @@ line in `stateDirectory/outcomes-<pair>.jsonl`. Fields: `time`, `kind` (`deliver
 `status` (`delivered`, `skipped`, `failed`, `posted`), `reason`, `messageId`, `transactionHash`, `gasUsed`, `gasCostWei`,
 `prerequisiteCostWei`, `feeWei`, `feeExpectedWei`, `feeReceivedTokens`, `path` (`fee-router` or `bridge`). Amounts are
 decimal strings. A skip is written once for each change of reason, not once for each pass. The state file
-`runner-<pair>-<direction>.json` holds the items that need no second look.
+`runner-<pair>-<direction>.json` holds the items that need no second look, and the layout spend and losses of the last 24 hours.
 
 ## msgboard size limit
 

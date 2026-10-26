@@ -314,6 +314,8 @@ describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
           maximumPrerequisiteRounds: 2,
           prerequisiteGasFallback: 300_000n,
           maximumPrerequisiteSpendPerSweepWei: 10n ** 24n,
+          maximumPrerequisiteSpendPerDayWei: 10n ** 24n,
+          maximumUnrecoveredPrerequisiteLossWei: 10n ** 24n,
         },
         logger,
       },

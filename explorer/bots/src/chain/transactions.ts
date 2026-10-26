@@ -46,12 +46,45 @@ export interface TransactionPort {
   /** A read-only call. @throws when the call reverts. */
   call(request: CallRequest): Promise<Hex>;
   feeQuote(): Promise<FeeQuote>;
-  /** Signs, sends and waits for the receipt. */
-  send(request: CallRequest & { readonly gas: bigint }): Promise<ReceiptSummary>;
+  /**
+   * Signs, sends and waits for the receipt. The port sends exactly the gas limit and the fees of the request, so the
+   * caller can price the worst case of the transaction before it leaves. Build the request with {@link sendTerms}.
+   * @throws when the transaction may have been broadcast and no receipt arrived.
+   */
+  send(request: SendRequest): Promise<ReceiptSummary>;
 }
 
 /** The share of gas added to an estimate when a transaction is sent: 30 percent. The bridge forwards an exact gas limit, and a short estimate would revert. */
 export const GAS_BUFFER_PERCENT = 30n;
+
+/** The gas limit and the fee limits of one transaction. The most it can cost is `gas * maxFeePerGas`. */
+export interface SendTerms {
+  /** The gas limit of the transaction, with the buffer. */
+  readonly gas: bigint;
+  readonly maxFeePerGas: bigint;
+  readonly maxPriorityFeePerGas: bigint;
+}
+
+/** A call with the terms it is sent under. */
+export type SendRequest = CallRequest & SendTerms;
+
+/**
+ * The terms that a send uses for a simulated gas amount: the gas plus the buffer, a maximum fee of twice the base fee
+ * plus the priority fee, and the priority fee. One function makes the terms, so an estimate, a reservation and the
+ * transaction all use the same price.
+ */
+export function sendTerms(quote: FeeQuote, simulatedGas: bigint): SendTerms {
+  return {
+    gas: simulatedGas + (simulatedGas * GAS_BUFFER_PERCENT) / 100n,
+    maxFeePerGas: quote.baseFee * 2n + quote.priorityFee,
+    maxPriorityFeePerGas: quote.priorityFee,
+  };
+}
+
+/** The most wei that a transaction can cost under its terms. */
+export function worstCaseCostWei(terms: SendTerms): bigint {
+  return terms.gas * terms.maxFeePerGas;
+}
 
 /** Input of {@link createTransactionPort}. */
 export interface TransactionPortInput {
@@ -109,7 +142,6 @@ export function createTransactionPort(input: TransactionPortInput): TransactionP
       return result.data ?? "0x";
     },
     async send(request) {
-      const quote = await feeQuote();
       const nonce = await client.getTransactionCount({ address: signer.address, blockTag: "pending" });
       const unsigned: TransactionSerializableEIP1559 = {
         type: "eip1559",
@@ -118,9 +150,9 @@ export function createTransactionPort(input: TransactionPortInput): TransactionP
         to: request.to,
         value: 0n,
         data: request.data,
-        gas: request.gas + (request.gas * GAS_BUFFER_PERCENT) / 100n,
-        maxFeePerGas: quote.baseFee * 2n + quote.priorityFee,
-        maxPriorityFeePerGas: quote.priorityFee,
+        gas: request.gas,
+        maxFeePerGas: request.maxFeePerGas,
+        maxPriorityFeePerGas: request.maxPriorityFeePerGas,
       };
       const signed = await signer.signTransaction(unsigned);
       await assertSignedTransactionMatches({ signed, unsigned, expectedSigner: signer.address });
