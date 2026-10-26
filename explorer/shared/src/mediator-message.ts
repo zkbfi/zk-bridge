@@ -42,9 +42,9 @@ export const decodeMediatorMessage = (data: Hex): MediatorMessage | null => {
   }
   const handler = decoded.functionName;
   if (!/^(handle(Native|Bridged)Tokens|deployAndHandleBridgedTokens)/.test(handler)) return null;
-  const item = tokenMediatorAbi.find((entry) => entry.type === "function" && entry.name === handler);
-  if (item === undefined || item.type !== "function") return null;
-  const named = namedArguments(item, decoded.args ?? []);
+  // The decoder took the name from this ABI, so the item exists. A handler has named inputs and so has arguments.
+  const item = tokenMediatorAbi.find((entry) => entry.type === "function" && entry.name === handler) as FunctionItem;
+  const named = namedArguments(item, decoded.args as readonly unknown[]);
   const recipient = asAddress(named.recipient);
   return {
     handler,
@@ -61,9 +61,8 @@ export const decodeMediatorMessage = (data: Hex): MediatorMessage | null => {
   };
 };
 
+type FunctionItem = Extract<(typeof tokenMediatorAbi)[number], { readonly type: "function" }>;
+
 /** Pairs the positional arguments of a decoded call with the parameter names of its ABI item. */
-const namedArguments = (
-  item: { readonly inputs?: readonly { readonly name?: string }[] },
-  args: readonly unknown[],
-): Record<string, unknown> =>
-  Object.fromEntries((item.inputs ?? []).map((input, index) => [input.name ?? String(index), args[index]]));
+const namedArguments = (item: FunctionItem, args: readonly unknown[]): Record<string, unknown> =>
+  Object.fromEntries(item.inputs.map((input, index) => [input.name, args[index]]));

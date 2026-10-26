@@ -16,6 +16,7 @@ import {
   suggestFixed,
   suggestGasMultiplier,
   suggestPercentage,
+  weiToTokenUnitsCeiling,
   type FeeDirector,
 } from "../src/delivery-fee.js";
 
@@ -289,5 +290,27 @@ describe("defaultTip", () => {
 
   it("sets the unwrap flag for a native payout", () => {
     expect(defaultTip(recipient, "native").settings).toBe(FEE_SETTING.shareOfValue | FEE_SETTING.unwrap);
+  });
+});
+
+describe("the price check and a zero cost", () => {
+  const goodPrice = { tokenValueInWei: 10n ** 18n, tokenDecimals: 18 };
+
+  it.each([-1, 78, 1.5, Number.NaN])("refuses token decimals of %s", (tokenDecimals) => {
+    expect(() => weiToTokenUnitsCeiling(1n, { ...goodPrice, tokenDecimals })).toThrow(new RangeError(`invalid token decimals: ${tokenDecimals}`));
+  });
+
+  it("accepts the limits 0 and 77 for token decimals", () => {
+    expect(weiToTokenUnitsCeiling(1n, { ...goodPrice, tokenDecimals: 0 })).toBe(1n);
+    expect(weiToTokenUnitsCeiling(1n, { ...goodPrice, tokenDecimals: 77 })).toBe(10n ** 59n);
+  });
+
+  it("refuses a token value of zero wei", () => {
+    expect(() => weiToTokenUnitsCeiling(1n, { ...goodPrice, tokenValueInWei: 0n })).toThrow("must be above zero");
+  });
+
+  it("gives a fixed fee of zero for a cost of zero, whatever the margin", () => {
+    const director = suggestFixed({ recipient, ...goodPrice, marginRate: 10n ** 17n, costWei: 0n, transferValue: 0n });
+    expect(director).toEqual({ recipient, settings: FEE_SETTING.fixedFee, limit: 0n, multiplier: 0n });
   });
 });

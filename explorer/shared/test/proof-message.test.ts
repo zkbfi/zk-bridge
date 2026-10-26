@@ -1,5 +1,5 @@
 import { encodeAbiParameters, keccak256, stringToBytes, type Hex } from "viem";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   PROOF_BYTES,
   PROOF_MESSAGE_BYTES,
@@ -155,5 +155,50 @@ describe("category names", () => {
 
   it("refuses an unknown pair", () => {
     expect(() => proofCategoryName("nope", "first-to-second")).toThrow(ProofMessageError);
+  });
+});
+
+describe("refusals of the encoder and the decoder", () => {
+  it("refuses public values that are not 352 bytes", () => {
+    expect(() => decodeLightClientOutput("0x00")).toThrow(new ProofMessageError("wrong-field-size", "public values must be 352 bytes"));
+  });
+
+  it("refuses a slot that does not fit in 64 bits, and names the field", () => {
+    expect(() => encodeProofMessage(sample({ newSlot: 1n << 64n }))).toThrow(
+      new ProofMessageError("wrong-field-size", "new slot must fit in 64 bits"),
+    );
+    expect(() => encodeProofMessage(sample({ startSlot: -1n }))).toThrow(
+      new ProofMessageError("wrong-field-size", "start slot must fit in 64 bits"),
+    );
+  });
+
+  it("accepts the largest slot of 64 bits in the slot check", () => {
+    expect(() => encodeProofMessage(sample({ newSlot: (1n << 64n) - 1n }))).toThrow(
+      new ProofMessageError("inconsistent-public-values", "the slots and roots of the header differ from the public values"),
+    );
+  });
+
+  it("refuses an unknown direction", () => {
+    expect(() => encodeProofMessage(sample({ direction: "sideways" as never }))).toThrow(
+      new ProofMessageError("unknown-direction", 'direction "sideways"'),
+    );
+  });
+
+  it("refuses a field of the wrong size", () => {
+    expect(() => encodeProofMessage(sample({ programKey: "0x00" }))).toThrow(new ProofMessageError("wrong-field-size", "program key must be 32 bytes"));
+  });
+
+  it("does not hide an error that is not a ProofMessageError as an ignorable message", async () => {
+    vi.resetModules();
+    vi.doMock("viem", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("viem")>()),
+      hexToBytes: () => {
+        throw new TypeError("a bug, not a bad message");
+      },
+    }));
+    const { tryDecodeProofMessage: isolated } = await import("../src/proof-message.js");
+    expect(() => isolated("0x01")).toThrow(new TypeError("a bug, not a bad message"));
+    vi.doUnmock("viem");
+    vi.resetModules();
   });
 });

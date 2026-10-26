@@ -58,3 +58,9 @@ describe("formatDuration", () => {
     expect(formatDuration(-4)).toBe("0s");
   });
 });
+
+describe("formatTokenAmount with a negative value", () => {
+  it("puts the sign in front of the grouped integer and the fraction", () => {
+    expect(formatTokenAmount(-1_234_500_000n, 6, { thousandsSeparator: "," })).toBe("-1,234.5");
+  });
+});

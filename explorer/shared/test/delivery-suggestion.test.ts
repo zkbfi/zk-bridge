@@ -140,3 +140,43 @@ describe("describeFee", () => {
     expect(description.summary).toBe("about 50 TKN now (estimate, at most 50 TKN)");
   });
 });
+
+describe("the base fee note", () => {
+  it("leaves out the time and the block when the report has none", () => {
+    const source = describeDataSource(report({ baseFee: { wei: "10000000000", blockNumber: null, timestamp: null } }), "token");
+    expect(source.baseFeeDescription).toBe("base fee 10 gwei");
+  });
+
+  it("leaves out only the block when only the block is missing, and only the time when only the time is missing", () => {
+    expect(describeDataSource(report({ baseFee: { wei: "10000000000", blockNumber: null, timestamp: 1_790_000_000 } }), "token").baseFeeDescription).toBe(
+      "base fee 10 gwei (2026-09-21T14:13:20.000Z)",
+    );
+    expect(describeDataSource(report({ baseFee: { wei: "10000000000", blockNumber: 12, timestamp: null } }), "token").baseFeeDescription).toBe(
+      "base fee 10 gwei at block 12",
+    );
+  });
+});
+
+describe("the payout kind", () => {
+  it("unwraps the payout in all three directors when the payout is native", () => {
+    const suggestions = buildFeeSuggestions({ ...base, payout: "native", report: report() });
+    if (suggestions.percentage.kind !== "available" || suggestions.fixed.kind !== "available" || suggestions.gasMultiplier.kind !== "available") {
+      throw new Error("all three should be available");
+    }
+    for (const director of [suggestions.percentage.director, suggestions.fixed.director, suggestions.gasMultiplier.director]) {
+      expect(director.settings & FEE_SETTING.unwrap).toBe(FEE_SETTING.unwrap);
+    }
+  });
+
+  it("keeps the payout in the token when none is named", () => {
+    const suggestions = buildFeeSuggestions({ ...base, report: report() });
+    if (suggestions.percentage.kind !== "available") throw new Error("available");
+    expect(suggestions.percentage.director.settings & FEE_SETTING.unwrap).toBe(0n);
+  });
+});
+
+describe("an error that is not a range error", () => {
+  it("is not hidden as an unavailable suggestion, because it is a bug and not a bad input", () => {
+    expect(() => buildFeeSuggestions({ ...base, senderPrice: {} as never, report: report() })).toThrow(TypeError);
+  });
+});

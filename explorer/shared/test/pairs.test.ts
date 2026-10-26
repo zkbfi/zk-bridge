@@ -72,3 +72,37 @@ describe("loadPair", () => {
     expect(() => otherSide(pair, 5)).toThrow();
   });
 });
+
+describe("the optional contracts of a chain section", () => {
+  const withOptional = (extra: Record<string, unknown>) => ({ chain_a: { ...deployment.chain_a, ...extra }, chain_b: deployment.chain_b });
+
+  it("gives null when the deployment file has no fee router and no fork registry, or has null", () => {
+    const missing = loadPair({ environment: {}, deployment });
+    expect(missing.sides[0].contracts.feeRouter).toBeNull();
+    expect(missing.sides[0].contracts.forkRegistry).toBeNull();
+    const explicitNull = loadPair({ environment: {}, deployment: withOptional({ fee_router: null, fork_registry: null }) });
+    expect(explicitNull.sides[0].contracts.feeRouter).toBeNull();
+    expect(explicitNull.sides[0].contracts.forkRegistry).toBeNull();
+  });
+
+  it("lowercases a fee router and a fork registry when the file has them", () => {
+    const pair = loadPair({ environment: {}, deployment: withOptional({ fee_router: `0x${"AB".repeat(20)}`, fork_registry: `0x${"CD".repeat(20)}` }) });
+    expect(pair.sides[0].contracts.feeRouter).toBe(`0x${"ab".repeat(20)}`);
+    expect(pair.sides[0].contracts.forkRegistry).toBe(`0x${"cd".repeat(20)}`);
+  });
+});
+
+describe("the finality override", () => {
+  it.each(["abc", "-1", "1.5"])("refuses the value %j and names the variable", (value) => {
+    expect(() => loadPair({ environment: { EXPLORER_FINALITY_SECONDS_1: value }, deployment })).toThrow(
+      "EXPLORER_FINALITY_SECONDS_1 must be a whole number",
+    );
+  });
+
+  it("treats an empty value as no override and accepts zero", () => {
+    expect(loadPair({ environment: { EXPLORER_FINALITY_SECONDS_1: "" }, deployment }).sides[0].finalitySeconds).toBe(
+      loadPair({ environment: {}, deployment }).sides[0].finalitySeconds,
+    );
+    expect(loadPair({ environment: { EXPLORER_FINALITY_SECONDS_1: "0" }, deployment }).sides[0].finalitySeconds).toBe(0);
+  });
+});

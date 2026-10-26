@@ -11,7 +11,8 @@
   },
   "scripts": {
     "abis": "node scripts/generate-abis.mjs",
-    "test": "vitest run",
+    "test": "vitest run --coverage",
+    "test:unit": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

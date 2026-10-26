@@ -10,7 +10,8 @@ import {
   messageNonce,
 } from "../src/amb.js";
 import { decodeMediatorMessage } from "../src/mediator-message.js";
-import type { Address, Hex } from "viem";
+import { encodeFunctionData, type Address, type Hex } from "viem";
+import { tokenMediatorAbi } from "../src/abis/index.js";
 
 type MessageVector = {
   kind: "message";
@@ -132,6 +133,15 @@ describe("mediator payloads against vectors from TokenMediator.sol selectors", (
     expect(withCall?.metadata).toEqual({ name: "Wrapped Ether", symbol: "WETH", decimals: 18 });
     expect(withCall?.callbackData).toBe("0xaabb");
     expect(withCall?.value).toBe(7n);
+  });
+
+  it("returns null for a call to a mediator function that is not a handler", () => {
+    const data = encodeFunctionData({
+      abi: tokenMediatorAbi,
+      functionName: "relayTokens",
+      args: ["0x90f79bf6eb2c4f870365e785982e1f101e93b906", 1n],
+    });
+    expect(decodeMediatorMessage(data)).toBeNull();
   });
 
   it("returns null for an arbitrary message", () => {
