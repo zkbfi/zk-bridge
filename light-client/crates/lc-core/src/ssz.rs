@@ -197,6 +197,84 @@ pub fn branch_for_leaf_with_limit(leaves: &[B256], index: usize, depth: u32) -> 
     (layer[0], branch)
 }
 
+/// `merkleize_progressive(chunks)` of the progressive Merkle tree (`num_leaves` starts at 1).
+///
+/// Source: `eip-7916.md`, section "Progressive Merkle tree". The first chunk sits alone, the next 4 chunks share a subtree,
+/// then 16, 64 and so on. Each step is `hash(merkleize(chunks[:n], n), merkleize_progressive(chunks[n:], n * 4))`. An
+/// empty tail is the zero chunk.
+pub fn merkleize_progressive(chunks: &[B256]) -> B256 {
+    merkleize_progressive_from(chunks, 1)
+}
+
+fn merkleize_progressive_from(chunks: &[B256], num_leaves: u64) -> B256 {
+    if chunks.is_empty() {
+        return B256::ZERO;
+    }
+    let take = chunks.len().min(num_leaves as usize);
+    let subtree = merkleize_with_limit(&chunks[..take], num_leaves);
+    hash_pair(&subtree, &merkleize_progressive_from(&chunks[take..], num_leaves * 4))
+}
+
+/// The `active_fields` chunk of a progressive container whose `width` fields are all active: a bit vector of `width`
+/// ones, least significant bit first, padded with zeros to 32 bytes.
+///
+/// Source: `eip-7495.md`, section "Merkleization" (`mix_in_active_fields`, `pack_bits`). The Gloas containers write
+/// `ACTIVE_FIELDS = active_fields(width=N)`. The consensus specs file does not define `active_fields`. This crate reads
+/// it as "N active fields in a row", which agrees with the field counts: each Gloas container has exactly `width` fields.
+///
+/// # Panics
+/// Panics when `width` is above 256 (the limit of a progressive container).
+pub fn active_fields_chunk(width: usize) -> B256 {
+    assert!(width <= 256, "a progressive container has at most 256 fields");
+    let mut chunk = [0u8; 32];
+    for bit in 0..width {
+        chunk[bit / 8] |= 1 << (bit % 8);
+    }
+    B256::from(chunk)
+}
+
+/// The hash tree root of a progressive container whose fields are all active: `hash(merkleize_progressive(field_roots),
+/// active_fields)`. `field_roots` holds the hash tree root of each field, in order.
+pub fn progressive_container_root(field_roots: &[B256]) -> B256 {
+    hash_pair(&merkleize_progressive(field_roots), &active_fields_chunk(field_roots.len()))
+}
+
+/// Builds the branch and the root for chunk `index` of a progressive Merkle tree. The branch runs from the sibling of the
+/// chunk up to the sibling of the root of the progressive tree. The root is `merkleize_progressive(chunks)`.
+///
+/// # Panics
+/// Panics when `index` is outside `chunks`.
+pub fn progressive_branch_for_leaf(chunks: &[B256], index: usize) -> (B256, Vec<B256>) {
+    assert!(index < chunks.len(), "chunk index out of range");
+    progressive_branch_from(chunks, index, 1)
+}
+
+fn progressive_branch_from(chunks: &[B256], index: usize, num_leaves: u64) -> (B256, Vec<B256>) {
+    let take = chunks.len().min(num_leaves as usize);
+    if index < take {
+        let (subtree, mut branch) = branch_for_leaf_with_limit(&chunks[..take], index, ceil_log2(num_leaves));
+        let rest = merkleize_progressive_from(&chunks[take..], num_leaves * 4);
+        branch.push(rest);
+        return (hash_pair(&subtree, &rest), branch);
+    }
+    let (rest, mut branch) = progressive_branch_from(&chunks[take..], index - take, num_leaves * 4);
+    let subtree = merkleize_with_limit(&chunks[..take], num_leaves);
+    branch.push(subtree);
+    (hash_pair(&subtree, &rest), branch)
+}
+
+/// Builds the branch and the root for field `index` of a progressive container whose fields are all active. The last
+/// branch entry is the `active_fields` chunk. The root equals [`progressive_container_root`].
+///
+/// # Panics
+/// Panics when `index` is outside `field_roots`.
+pub fn progressive_container_branch(field_roots: &[B256], index: usize) -> (B256, Vec<B256>) {
+    let (progressive_root, mut branch) = progressive_branch_for_leaf(field_roots, index);
+    let active = active_fields_chunk(field_roots.len());
+    branch.push(active);
+    (hash_pair(&progressive_root, &active), branch)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,5 +351,66 @@ mod tests {
     fn byte_list_root_mixes_length() {
         assert_ne!(byte_list_root(&[1, 0], 32), byte_list_root(&[1], 32));
         assert_eq!(byte_list_root(&[], 32), mix_in_length(&zero_hash(0), 0));
+    }
+
+    /// Claim: `merkleize_progressive` follows the definition for 0, 1, 2 and 6 chunks, written out by hand. With 6 chunks
+    /// the first chunk sits alone, chunks 1 to 4 fill a 4 leaf subtree, and chunk 5 starts a 16 leaf subtree.
+    #[test]
+    fn progressive_merkleization_follows_the_definition() {
+        let c: Vec<B256> = (1..=6u64).map(u64_chunk).collect();
+        assert_eq!(merkleize_progressive(&[]), B256::ZERO);
+        assert_eq!(merkleize_progressive(&c[..1]), hash_pair(&c[0], &B256::ZERO));
+        let two_tail = hash_pair(&hash_pair(&hash_pair(&c[1], &B256::ZERO), &zero_hash(1)), &B256::ZERO);
+        assert_eq!(merkleize_progressive(&c[..2]), hash_pair(&c[0], &two_tail));
+        let four = hash_pair(&hash_pair(&c[1], &c[2]), &hash_pair(&c[3], &c[4]));
+        let sixteen = {
+            let mut node = hash_pair(&c[5], &B256::ZERO);
+            for level in 1..4 {
+                node = hash_pair(&node, &zero_hash(level));
+            }
+            node
+        };
+        let expected = hash_pair(&c[0], &hash_pair(&four, &hash_pair(&sixteen, &B256::ZERO)));
+        assert_eq!(merkleize_progressive(&c), expected);
+        assert_ne!(merkleize_progressive(&c), merkleize_progressive(&c[..5]), "the sixth chunk changes the root");
+    }
+
+    /// Claim: the active fields chunk is a little-endian bit vector: 13 ones are the bytes `ff 1f`, 46 ones are
+    /// `ff ff ff ff ff 3f`, and the container root mixes it in on the right.
+    #[test]
+    fn active_fields_chunk_is_a_bit_vector() {
+        assert_eq!(&active_fields_chunk(13)[..3], &[0xff, 0x1f, 0x00]);
+        assert_eq!(&active_fields_chunk(46)[..7], &[0xff, 0xff, 0xff, 0xff, 0xff, 0x3f, 0x00]);
+        assert_eq!(active_fields_chunk(0), B256::ZERO);
+        let fields = [u64_chunk(9)];
+        assert_eq!(
+            progressive_container_root(&fields),
+            hash_pair(&hash_pair(&fields[0], &B256::ZERO), &active_fields_chunk(1))
+        );
+    }
+
+    /// Claim: a branch from the progressive builder leads from every chunk to the container root, for container sizes on
+    /// both sides of each subtree boundary (1, 2, 5, 6, 21, 22, 85, 86). The control: the wrong index does not verify.
+    #[test]
+    fn progressive_branches_lead_to_the_root() {
+        for count in [1usize, 2, 5, 6, 21, 22, 85, 86] {
+            let chunks: Vec<B256> = (1..=count as u64).map(u64_chunk).collect();
+            for index in 0..count {
+                let (root, branch) = progressive_container_branch(&chunks, index);
+                assert_eq!(root, progressive_container_root(&chunks), "{count} chunks");
+                let depth = branch.len() as u32;
+                // The generalized index is not used here: only the bit path through the branch is. Rebuild it from the
+                // branch length and check that some position verifies and the neighbouring position does not.
+                let verifies = (0..1u64 << depth.min(20))
+                    .any(|position| is_valid_merkle_branch(&chunks[index], &branch, depth, position, &root));
+                assert!(verifies, "{count} chunks, chunk {index}");
+            }
+        }
+        let chunks: Vec<B256> = (1..=7u64).map(u64_chunk).collect();
+        let (root, branch) = progressive_container_branch(&chunks, 3);
+        let positions: Vec<u64> = (0..1u64 << branch.len())
+            .filter(|position| is_valid_merkle_branch(&chunks[3], &branch, branch.len() as u32, *position, &root))
+            .collect();
+        assert_eq!(positions.len(), 1, "exactly one position verifies");
     }
 }
