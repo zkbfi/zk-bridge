@@ -72,7 +72,7 @@ lc-core = { path = "../light-client/crates/lc-core", features = ["json"] }
 lc-testkit = { path = "../light-client/crates/lc-testkit", optional = true }
 
 alloy-primitives = { version = "=1.7.3", default-features = false, features = ["std"] } # 2026-09-10
-alloy-rlp = { version = "=0.3.16", default-features = false, features = ["std"] } # the version of Cargo.lock, which scripts/check-crate-ages.sh checks
+alloy-rlp = { version = "=0.3.16", default-features = false, features = ["std"] } # 2026-07-03
 alloy-sol-types = { version = "=1.7.3", default-features = false, features = ["std"] } # 2026-09-10
 serde = { version = "=1.0.229", features = ["derive"] } # 2026-07-18
 serde_json = { version = "=1.0.151" } # 2026-07-20
