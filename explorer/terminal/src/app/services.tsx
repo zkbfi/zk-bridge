@@ -1,8 +1,9 @@
 /**
  * The services that the views use, passed down by context so tests can replace every one of them.
  */
-import { createContext, useContext, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useSyncExternalStore, type ReactNode } from 'react'
 import type { ChainAccess } from '../chain/chain-access'
+import type { ConnectionRuntime } from '../data/connection-runtime'
 import type { DataSource } from '../data/data-source'
 import type { PairConfig } from '../model/types'
 import { fetchClient, type HttpClient } from '../config/connection-tests'
@@ -80,6 +81,11 @@ export interface AppServices {
   readonly pair: PairConfig
   readonly dataSource: DataSource
   readonly chainAccess: ChainAccess
+  /**
+   * The live connections (indexer first, RPC fallback behind it), or null in fixture mode. When it is set,
+   * `dataSource` and `chainAccess` are the proxies of this runtime. The Connections view reads and changes the URLs here.
+   */
+  readonly connection: ConnectionRuntime | null
   readonly signing: SigningServices
   readonly proverSetup: ProverSetupServices
   /** The clock, in unix seconds. */
@@ -106,6 +112,16 @@ export function useServices(): AppServices {
   const services = useContext(ServicesContext)
   if (services === null) throw new Error('useServices needs a ServicesProvider above it.')
   return services
+}
+
+/**
+ * The label of the active data source: `indexer`, `RPC fallback: <reason>`, or the fixed label of fixture data. The
+ * component that calls this hook draws again when the source changes.
+ */
+export function useConnectionStatus(): string {
+  const { connection, dataSource } = useServices()
+  const subscribe = useCallback((listener: () => void) => (connection === null ? () => undefined : connection.subscribe(listener)), [connection])
+  return useSyncExternalStore(subscribe, () => (connection === null ? dataSource.label : connection.source().label))
 }
 
 /**

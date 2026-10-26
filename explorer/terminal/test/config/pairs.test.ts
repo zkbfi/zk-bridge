@@ -55,3 +55,33 @@ describe('the sepolia-pls943 pair', () => {
     expect(() => buildPairConfig('sepolia-pls943', {})).toThrow('exactly one section for chain 11155111, found 0.')
   })
 })
+
+describe('the registry RPC URL of a chain', () => {
+  const address = `0x${'5'.repeat(40)}`
+  const section = (chainId: number, extra: Record<string, unknown> = {}) => ({
+    chain_id: chainId,
+    bridge: address,
+    mediator: address,
+    light_client: address,
+    ...extra,
+  })
+  const build = (firstExtra: Record<string, unknown>) => buildPairConfig('eth-pls', { a: section(1, firstExtra), b: section(369) })
+
+  test('is the rpc_url of the deployment section when it is a non-empty http or https URL', () => {
+    expect(build({ rpc_url: 'https://rpc.example.test/path' }).first.registryRpcUrl).toBe('https://rpc.example.test/path')
+    expect(build({ rpc_url: 'http://127.0.0.1:8545' }).first.registryRpcUrl).toBe('http://127.0.0.1:8545')
+    expect(build({ rpc_url: '  https://rpc.example.test  ' }).first.registryRpcUrl).toBe('https://rpc.example.test')
+  })
+
+  test('belongs to its own chain: the other chain has none when its section names none', () => {
+    const config = build({ rpc_url: 'https://rpc.example.test/path' })
+    expect('registryRpcUrl' in config.second).toBe(false)
+  })
+
+  test('is absent for an empty value, a blank value, another scheme, a number or no field', () => {
+    for (const rpc_url of ['', '   ', 'ftp://rpc.example.test', 'wss://rpc.example.test', 'rpc.example.test', 'https://', 42, null]) {
+      expect('registryRpcUrl' in build({ rpc_url }).first).toBe(false)
+    }
+    expect('registryRpcUrl' in build({}).first).toBe(false)
+  })
+})

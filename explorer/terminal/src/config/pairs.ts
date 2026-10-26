@@ -74,6 +74,7 @@ function buildChain(side: ChainSide, definition: ChainDefinition, deployment: un
     name: definition.name,
     nativeSymbol: definition.nativeSymbol,
     rpcEnvironmentVariable: rpcVariableName(definition.chainId),
+    ...registryRpcUrlOf(section),
     contracts: {
       messageBridge: requiredAddress(section, 'bridge', definition.chainId),
       tokenMediator: requiredAddress(section, 'mediator', definition.chainId),
@@ -84,6 +85,13 @@ function buildChain(side: ChainSide, definition: ChainDefinition, deployment: un
       feeRouter: optionalAddress(section, 'fee_router'),
     },
   }
+}
+
+/** The `rpc_url` of a deployment section, as a one-field object, only when it is a non-empty http or https URL. */
+function registryRpcUrlOf(section: Record<string, unknown>): { readonly registryRpcUrl?: string } {
+  const value = section.rpc_url
+  if (typeof value !== 'string' || !/^https?:\/\/\S/i.test(value.trim())) return {}
+  return { registryRpcUrl: value.trim() }
 }
 
 function findSection(deployment: unknown, chainId: number): Record<string, unknown> {
