@@ -2,20 +2,15 @@ import type { Address } from "viem";
 import type { DeliveryCostReport, DeliveryKind } from "./delivery-cost-report.js";
 import {
   deliveryCostBreakdown,
-  expectedFee,
-  feeModeOf,
-  maximumFee,
   senderPriceOfToken,
   suggestFixed,
   suggestGasMultiplier,
   suggestPercentage,
   tokenUnitsToWeiFloor,
   type DeliveryCostBreakdown,
-  type FeeDirector,
-  type FeeMode,
-  type PayoutKind,
   type SenderPrice,
 } from "./delivery-fee.js";
+import { expectedFee, feeModeOf, maximumFee, type FeeDirector, type FeeMode, type PayoutKind } from "./delivery-terms.js";
 import { formatRate, formatTokenAmount, RATE_SCALE } from "./format.js";
 
 /**

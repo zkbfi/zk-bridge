@@ -1,134 +1,21 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  decodeFeeDirector,
   defaultTip,
   deliveryCostBreakdown,
   deliveryCostWei,
-  encodeFeeDirector,
-  expectedFee,
-  FEE_SETTING,
   gasMultiplierOf,
-  feeModeOf,
-  maximumFee,
   proofCostWei,
   senderPriceOfToken,
   suggestFixed,
   suggestGasMultiplier,
   suggestPercentage,
   weiToTokenUnitsCeiling,
-  type FeeDirector,
 } from "../src/delivery-fee.js";
-
-type Vector = {
-  recipient: `0x${string}`;
-  settings: string;
-  limit: string;
-  multiplier: string;
-  encoded: `0x${string}`;
-  wrappedNative: boolean;
-  value: string;
-  gasUsed: string;
-  baseFee: string;
-  priorityFee: string;
-  reverts: boolean;
-  fee: string;
-  toRecipient: string;
-};
-
-const vectors = readFileSync(new URL("./fixtures/delivery-fee-vectors.jsonl", import.meta.url), "utf8")
-  .split("\n")
-  .filter((line) => line.length > 0)
-  .map((line) => JSON.parse(line) as Vector);
-
-const directorOf = (vector: Vector): FeeDirector => ({
-  recipient: vector.recipient,
-  settings: BigInt(vector.settings),
-  limit: BigInt(vector.limit),
-  multiplier: BigInt(vector.multiplier),
-});
+import { feeModeOf, MULTIPLIER_OF_TOTAL, FIXED_FEE, UNWRAP, EXCLUDE_PRIORITY, expectedFee } from "../src/delivery-terms.js";
 
 const recipient = "0x00000000000000000000000000000000000000aa" as const;
-const context = { router: "0x00000000000000000000000000000000000000bb", protectedAddresses: [] } as const;
 const wei = 10n ** 18n;
 const price = { tokenValueInWei: wei, tokenDecimals: 18 };
-
-describe("against vectors printed by the compiled DeliveryRouter", () => {
-  it("has vectors, including overflows that revert", () => {
-    expect(vectors.length).toBeGreaterThan(2000);
-    expect(vectors.some((vector) => vector.reverts)).toBe(true);
-    expect(vectors.some((vector) => !vector.reverts && BigInt(vector.fee) > 0n)).toBe(true);
-  });
-
-  it("encodes every director as abi.encode does, and decodes it back", () => {
-    for (const vector of vectors) {
-      const director = directorOf(vector);
-      expect(encodeFeeDirector(director, context), JSON.stringify(vector)).toBe(vector.encoded);
-      expect(decodeFeeDirector(vector.encoded).settings).toBe(director.settings);
-      expect(decodeFeeDirector(vector.encoded).limit).toBe(director.limit);
-      expect(decodeFeeDirector(vector.encoded).multiplier).toBe(director.multiplier);
-      expect(decodeFeeDirector(vector.encoded).recipient.toLowerCase()).toBe(director.recipient.toLowerCase());
-    }
-  }, 30_000);
-
-  it("computes the fee and the rest as feeInfo does, and throws where the router reverts", () => {
-    for (const vector of vectors) {
-      const run = () =>
-        expectedFee(directorOf(vector), {
-          value: BigInt(vector.value),
-          gasUsed: BigInt(vector.gasUsed),
-          baseFeeWei: BigInt(vector.baseFee),
-          priorityFeeWei: BigInt(vector.priorityFee),
-          payout: vector.wrappedNative && (BigInt(vector.settings) & FEE_SETTING.unwrap) !== 0n ? "native" : "token",
-        });
-      if (vector.reverts) {
-        expect(run, JSON.stringify(vector)).toThrow(RangeError);
-        continue;
-      }
-      expect(run(), JSON.stringify(vector)).toEqual({ fee: BigInt(vector.fee), toRecipient: BigInt(vector.toRecipient) });
-    }
-  });
-});
-
-describe("the encoding", () => {
-  it("is four words with no offset", () => {
-    const encoded = encodeFeeDirector({ recipient, settings: 8n, limit: 0n, multiplier: 5n }, context);
-    expect((encoded.length - 2) / 2).toBe(128);
-  });
-
-  it("refuses data of another length", () => {
-    expect(() => decodeFeeDirector("0x1234")).toThrow(RangeError);
-  });
-});
-
-describe("the fee modes", () => {
-  it("lets fixed win over share, as the router does", () => {
-    expect(feeModeOf(FEE_SETTING.fixedFee | FEE_SETTING.shareOfValue)).toBe("fixed");
-    expect(feeModeOf(FEE_SETTING.shareOfValue)).toBe("share");
-    expect(feeModeOf(0n)).toBe("gas");
-    expect(feeModeOf(FEE_SETTING.unwrap | FEE_SETTING.baseFeeOnly)).toBe("gas");
-  });
-
-  it("takes the limit in fixed mode, never above the value", () => {
-    const director = { recipient, settings: FEE_SETTING.fixedFee, limit: 500n, multiplier: 0n };
-    expect(expectedFee(director, { value: 1_000n, gasUsed: 0n, baseFeeWei: 0n }).fee).toBe(500n);
-    expect(expectedFee(director, { value: 100n, gasUsed: 0n, baseFeeWei: 0n })).toEqual({ fee: 100n, toRecipient: 0n });
-  });
-
-  it("prices gas at the base fee only when the flag is set", () => {
-    const base = { recipient, limit: 10n ** 30n, multiplier: wei };
-    const input = { value: 10n ** 30n, gasUsed: 0n, baseFeeWei: 7n, priorityFeeWei: 3n };
-    expect(expectedFee({ ...base, settings: 0n }, input).fee).toBe(100_000n * 10n);
-    expect(expectedFee({ ...base, settings: FEE_SETTING.baseFeeOnly }, input).fee).toBe(100_000n * 7n);
-    expect(expectedFee({ ...base, settings: 0n }, { ...input, payout: "native" }).fee).toBe(50_000n * 10n);
-  });
-
-  it("reports the maximum: the limit for gas, the amount for the others", () => {
-    expect(maximumFee({ recipient, settings: 0n, limit: 500n, multiplier: wei }, 1_000n)).toBe(500n);
-    expect(maximumFee({ recipient, settings: 0n, limit: 5_000n, multiplier: wei }, 1_000n)).toBe(1_000n);
-    expect(maximumFee({ recipient, settings: FEE_SETTING.shareOfValue, limit: 0n, multiplier: wei / 100n }, 1_000n)).toBe(10n);
-  });
-});
 
 describe("the cost of a delivery", () => {
   it("multiplies gas by the gas price and keeps the proof share as its own line", () => {
@@ -166,7 +53,7 @@ describe("suggestPercentage", () => {
       const taken = expectedFee(director, { value: transferValue, gasUsed: 0n, baseFeeWei: 0n }).fee;
       const required = (costWei * 11n + 9n) / 10n;
       expect(taken, `${costWei} on ${transferValue}`).toBeGreaterThanOrEqual(required);
-      expect(director.settings).toBe(FEE_SETTING.shareOfValue);
+      expect(director.settings).toBe(MULTIPLIER_OF_TOTAL);
     }
   });
 
@@ -199,7 +86,7 @@ describe("suggestPercentage", () => {
   });
 
   it("sets the unwrap flag for a native payout", () => {
-    expect(suggestPercentage({ ...input, costWei: 1n, transferValue: 10n, payout: "native" }).settings).toBe(FEE_SETTING.shareOfValue | FEE_SETTING.unwrap);
+    expect(suggestPercentage({ ...input, costWei: 1n, transferValue: 10n, payout: "native" }).settings).toBe(MULTIPLIER_OF_TOTAL | UNWRAP);
   });
 });
 
@@ -207,7 +94,7 @@ describe("suggestFixed", () => {
   it("is the cost plus the margin, rounded up", () => {
     const director = suggestFixed({ recipient, ...price, marginRate: wei / 10n, costWei: 1_001n, transferValue: 10_000n });
     expect(director.limit).toBe(1_102n);
-    expect(director.settings).toBe(FEE_SETTING.fixedFee);
+    expect(director.settings).toBe(FIXED_FEE);
   });
 
   it("refuses a transfer below the fee", () => {
@@ -240,14 +127,14 @@ describe("suggestGasMultiplier", () => {
   it("uses the smaller overhead and the unwrap flag for a native payout", () => {
     const director = suggestGasMultiplier({ ...input, payout: "native" });
     expect(director.limit).toBe(((400_000n + 50_000n) * 12n * 20n) / 10n);
-    expect(director.settings).toBe(FEE_SETTING.unwrap);
+    expect(director.settings).toBe(UNWRAP);
   });
 
   it("drops the priority fee from the ceiling with the base fee flag", () => {
     const withPriority = suggestGasMultiplier({ ...input, priorityFeeCeilingWei: 5n });
     const baseOnly = suggestGasMultiplier({ ...input, priorityFeeCeilingWei: 5n, gasPrice: "base-fee-only" });
     expect(withPriority.limit).toBeGreaterThan(baseOnly.limit);
-    expect(baseOnly.settings).toBe(FEE_SETTING.baseFeeOnly);
+    expect(baseOnly.settings).toBe(EXCLUDE_PRIORITY);
   });
 
   it("gives a limit of zero at a ceiling of zero, and refuses a zero price, a zero margin or an oversized multiplier", () => {
@@ -284,13 +171,13 @@ describe("suggestGasMultiplier", () => {
 describe("defaultTip", () => {
   it("is 0.1 percent in the share mode, and takes exactly that from a transfer", () => {
     const director = defaultTip(recipient);
-    expect(director).toEqual({ recipient, settings: FEE_SETTING.shareOfValue, limit: 0n, multiplier: 10n ** 15n });
+    expect(director).toEqual({ recipient, settings: MULTIPLIER_OF_TOTAL, limit: 0n, multiplier: 10n ** 15n });
     expect(feeModeOf(director.settings)).toBe("share");
     expect(expectedFee(director, { value: 100n * wei, gasUsed: 0n, baseFeeWei: 0n })).toEqual({ fee: wei / 10n, toRecipient: 100n * wei - wei / 10n });
   });
 
   it("sets the unwrap flag for a native payout", () => {
-    expect(defaultTip(recipient, "native").settings).toBe(FEE_SETTING.shareOfValue | FEE_SETTING.unwrap);
+    expect(defaultTip(recipient, "native").settings).toBe(MULTIPLIER_OF_TOTAL | UNWRAP);
   });
 });
 
@@ -312,6 +199,6 @@ describe("the price check and a zero cost", () => {
 
   it("gives a fixed fee of zero for a cost of zero, whatever the margin", () => {
     const director = suggestFixed({ recipient, ...goodPrice, marginRate: 10n ** 17n, costWei: 0n, transferValue: 0n });
-    expect(director).toEqual({ recipient, settings: FEE_SETTING.fixedFee, limit: 0n, multiplier: 0n });
+    expect(director).toEqual({ recipient, settings: FIXED_FEE, limit: 0n, multiplier: 0n });
   });
 });

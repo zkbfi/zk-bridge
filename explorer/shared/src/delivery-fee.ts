@@ -1,132 +1,25 @@
-import { decodeAbiParameters, encodeAbiParameters, type Address, type Hex } from "viem";
-import { assertValidFeeTerms, type FeeTermsContext } from "./fee-terms.js";
+import { type Address } from "viem";
+import {
+  ceilingDivide,
+  gasOverheadOf,
+  settingsOf,
+  UINT96_MAXIMUM,
+  type FeeDirector,
+  type GasPriceBasis,
+  type PayoutKind,
+} from "./delivery-terms.js";
 import { parseTokenAmount, RATE_SCALE } from "./format.js";
 
 /**
- * Voluntary delivery fees. A sender who wants a runner to deliver a transfer writes a `FeeDirector` in the callback data
- * of `relayTokensAndCall`, aimed at the `DeliveryRouter` of the destination chain. This module builds that director, encodes
- * it, and computes the fee that the router takes. It is the TypeScript side of `DeliveryRouter.sol`. The test in
- * `test/delivery-fee.test.ts` checks it against vectors that the compiled router printed
- * (`vectors/GenerateDeliveryFeeVectors.s.sol`), so the two cannot drift.
+ * Voluntary delivery tips: the suggestions. A sender who wants a delivery writes a `FeeDirector` in the callback data of
+ * `relayTokensAndCall`, aimed at the `DeliveryRouter` of the destination chain. This module turns a cost, a price and a
+ * margin into that director. It never sets a settings bit or computes a router fee itself: `delivery-terms.ts` holds the
+ * flags, the encoding and the fee formulas that mirror the contract, and this module calls it.
  *
  * All amounts are bigint. A rate or a multiplier is scaled by `RATE_SCALE` (1e18).
  */
 
-/** The bits of `FeeDirector.settings`. */
-export const FEE_SETTING = {
-  /** The fee is `limit`. */
-  fixedFee: 1n,
-  /** Unwrap the wrapped native token to the native coin. */
-  unwrap: 2n,
-  /** Price gas at the base fee only, with no priority fee. */
-  baseFeeOnly: 4n,
-  /** The fee is `value * multiplier / 1e18`. */
-  shareOfValue: 8n,
-} as const;
-
-/** Gas that the router adds to the measured gas of a token payout. Same as `DeliveryRouter.TOKEN_GAS_OVERHEAD`. */
-export const TOKEN_GAS_OVERHEAD = 100_000n;
-/** Gas that the router adds to the measured gas of a native coin payout. Same as `DeliveryRouter.NATIVE_GAS_OVERHEAD`. */
-export const NATIVE_GAS_OVERHEAD = 50_000n;
-
-/** The largest value of a `uint256`. */
-export const UINT256_MAXIMUM = 2n ** 256n - 1n;
-/** The router keeps the multiplier of a waiting gas based fee in 96 bits and clamps a larger one. */
-const UINT96_MAXIMUM = 2n ** 96n - 1n;
-
-/** The `FeeDirector` struct of `DeliveryRouter.sol`. */
-export interface FeeDirector {
-  /** Who receives the tokens after the fee. */
-  readonly recipient: Address;
-  /** Flag bits: see {@link FEE_SETTING}. */
-  readonly settings: bigint;
-  /** The fixed fee, or the cap on the gas based fee. In base units of the transferred token. */
-  readonly limit: bigint;
-  /** Scaled by 1e18: the share of the value, or the factor on the gas price. */
-  readonly multiplier: bigint;
-}
-
-/** How the router computes the fee. Fixed wins over share, as in the router. */
-export type FeeMode = "fixed" | "share" | "gas";
-
-/** How the payout travels. `native` needs the unwrap flag and the wrapped native token. */
-export type PayoutKind = "token" | "native";
-
-/** Which gas price a gas based fee uses. */
-export type GasPriceBasis = "transaction" | "base-fee-only";
-
-/**
- * Tells how the router computes the fee of a director.
- *
- * @param settings The flag bits.
- */
-export const feeModeOf = (settings: bigint): FeeMode => {
-  if ((settings & FEE_SETTING.fixedFee) !== 0n) return "fixed";
-  if ((settings & FEE_SETTING.shareOfValue) !== 0n) return "share";
-  return "gas";
-};
-
-const OVERHEAD_OF: Readonly<Record<PayoutKind, bigint>> = { token: TOKEN_GAS_OVERHEAD, native: NATIVE_GAS_OVERHEAD };
-
-const DIRECTOR_PARAMETERS = [
-  { type: "address", name: "recipient" },
-  { type: "uint256", name: "settings" },
-  { type: "uint256", name: "limit" },
-  { type: "uint256", name: "multiplier" },
-] as const;
-
-/** The size of an encoded director: four words. */
-export const FEE_DIRECTOR_BYTES = 128;
-
-/**
- * Encodes a director as `abi.encode(director)` does. The struct is static, so the result is four words with no offset.
- * This is the callback data of `relayTokensAndCall`.
- *
- * The router hands the value to its failed delivery address when the recipient is the zero address or the router, so this
- * function refuses such a director and a recipient that is a known router, mediator or bridge. No caller can skip that.
- *
- * @param director The director.
- * @param context The router that receives the relay and the addresses that a recipient must not be.
- * @throws FeeTermsError when the router would not honour the terms.
- */
-export const encodeFeeDirector = (director: FeeDirector, context: FeeTermsContext): Hex => {
-  const data = encodeAbiParameters(DIRECTOR_PARAMETERS, [director.recipient, director.settings, director.limit, director.multiplier]);
-  assertValidFeeTerms({ ...context, data, destinationToken: null, destinationWrappedNative: null });
-  return data;
-};
-
-/**
- * Decodes `abi.decode(data, (FeeDirector))`.
- *
- * @param data Exactly 128 bytes.
- * @throws When the data is not 128 bytes, or when the address word has bits above 160.
- */
-export const decodeFeeDirector = (data: Hex): FeeDirector => {
-  const bytes = (data.length - 2) / 2;
-  if (bytes !== FEE_DIRECTOR_BYTES) throw new RangeError(`a fee director is ${FEE_DIRECTOR_BYTES} bytes, not ${bytes}`);
-  const [recipient, settings, limit, multiplier] = decodeAbiParameters(DIRECTOR_PARAMETERS, data);
-  return { recipient, settings, limit, multiplier };
-};
-
-const divideRoundingUp = (numerator: bigint, denominator: bigint): bigint =>
-  (numerator + denominator - 1n) / denominator;
-
-/** Multiplies like checked Solidity arithmetic: the router reverts when a product passes 256 bits. */
-const checkedProduct = (...factors: readonly bigint[]): bigint => {
-  let product = 1n;
-  for (const factor of factors) {
-    product *= factor;
-    if (product > UINT256_MAXIMUM) throw new RangeError("the fee arithmetic overflows 256 bits, so the router would revert");
-  }
-  return product;
-};
-
-/** Adds like checked Solidity arithmetic. */
-const checkedSum = (left: bigint, right: bigint): bigint => {
-  const sum = left + right;
-  if (sum > UINT256_MAXIMUM) throw new RangeError("the fee arithmetic overflows 256 bits, so the router would revert");
-  return sum;
-};
+const divideRoundingUp = ceilingDivide;
 
 const requireNonNegative = (name: string, value: bigint): void => {
   if (value < 0n) throw new RangeError(`${name} must not be negative`);
@@ -261,8 +154,6 @@ export interface SuggestPercentageInput extends TokenPrice {
   readonly payout?: PayoutKind;
 }
 
-const payoutSettings = (payout: PayoutKind | undefined): bigint => (payout === "native" ? FEE_SETTING.unwrap : 0n);
-
 /**
  * Suggests a share of the transfer. The multiplier is the fee over the value, scaled by 1e18, rounded up at every step,
  * so the fee that the router takes (`value * multiplier / 1e18`, rounded down) is never below the cost plus the margin.
@@ -275,7 +166,7 @@ export const suggestPercentage = (input: SuggestPercentageInput): FeeDirector =>
   requireNonNegative("costWei", input.costWei);
   requireNonNegative("transferValue", input.transferValue);
   requireNonNegative("marginRate", input.marginRate);
-  const settings = FEE_SETTING.shareOfValue | payoutSettings(input.payout);
+  const settings = settingsOf({ mode: "share", payout: input.payout });
   if (input.costWei === 0n) {
     requirePrice(input);
     return { recipient: input.recipient, settings, limit: 0n, multiplier: 0n };
@@ -300,7 +191,7 @@ export const suggestFixed = (input: SuggestPercentageInput): FeeDirector => {
   requireNonNegative("costWei", input.costWei);
   requireNonNegative("transferValue", input.transferValue);
   requireNonNegative("marginRate", input.marginRate);
-  const settings = FEE_SETTING.fixedFee | payoutSettings(input.payout);
+  const settings = settingsOf({ mode: "fixed", payout: input.payout });
   const costUnits = input.costWei === 0n ? 0n : weiToTokenUnitsCeiling(input.costWei, input);
   const limit = divideRoundingUp(costUnits * (RATE_SCALE + input.marginRate), RATE_SCALE);
   if (limit > input.transferValue) throw new RangeError("the transfer is too small to pay for its delivery");
@@ -343,7 +234,7 @@ export const DEFAULT_TIP_PERCENTAGE_MULTIPLIER = RATE_SCALE / 1000n;
  */
 export const defaultTip = (recipient: Address, payout?: PayoutKind): FeeDirector => ({
   recipient,
-  settings: FEE_SETTING.shareOfValue | payoutSettings(payout),
+  settings: settingsOf({ mode: "share", payout }),
   limit: 0n,
   multiplier: DEFAULT_TIP_PERCENTAGE_MULTIPLIER,
 });
@@ -405,70 +296,8 @@ export const suggestGasMultiplier = (input: SuggestGasMultiplierInput): FeeDirec
   const multiplier = gasMultiplierOf(input.senderPrice, input.margin);
   const priorityFeeCeilingWei = gasPrice === "base-fee-only" ? 0n : (input.priorityFeeCeilingWei ?? 0n);
   requireNonNegative("priorityFeeCeilingWei", priorityFeeCeilingWei);
-  const gas = input.deliveryGas + (input.overheadGas ?? OVERHEAD_OF[payout]);
+  const gas = input.deliveryGas + (input.overheadGas ?? gasOverheadOf(payout));
   const limit = divideRoundingUp(gas * multiplier * (input.baseFeeCeilingWei + priorityFeeCeilingWei), RATE_SCALE);
-  const settings = payoutSettings(payout) | (gasPrice === "base-fee-only" ? FEE_SETTING.baseFeeOnly : 0n);
+  const settings = settingsOf({ mode: "gas", payout, gasPrice });
   return { recipient: input.recipient, settings, limit, multiplier };
-};
-
-/** Input of {@link expectedFee}. */
-export interface ExpectedFeeInput {
-  /** The amount that the mediator releases to the router, in base units. */
-  readonly value: bigint;
-  /** The gas that the router measures, for a gas based fee. It does not matter for a fixed or share fee. */
-  readonly gasUsed: bigint;
-  /** The base fee of the destination chain, in wei per gas. */
-  readonly baseFeeWei: bigint;
-  /** The priority fee, in wei per gas. The transaction gas price is the base fee plus this. Default: zero. */
-  readonly priorityFeeWei?: bigint;
-  /** `native` when the token is the wrapped native token and the unwrap flag is set. Default: `token`. */
-  readonly payout?: PayoutKind;
-}
-
-/** The split that `DeliveryRouter.feeInfo` returns. */
-export interface FeeSplit {
-  readonly fee: bigint;
-  readonly toRecipient: bigint;
-}
-
-/**
- * The fee that the router takes, as `DeliveryRouter.feeInfo` computes it. Fixed: `limit`. Share: `value * multiplier / 1e18`.
- * Gas based: `(gasUsed + overhead) * multiplier * gasPrice / 1e18`, capped by `limit`. The fee never passes the value.
- *
- * `feeInfo` reads the multiplier in full. When it settles a gas based fee, the router clamps the multiplier to 96 bits.
- * {@link suggestGasMultiplier} refuses a larger multiplier, so the two agree for every director that this module builds.
- *
- * @param director The fee terms.
- * @param input The value, the gas and the prices.
- * @throws When the router would revert on an overflow of 256 bits.
- */
-export const expectedFee = (director: FeeDirector, input: ExpectedFeeInput): FeeSplit => {
-  const fee = clampToValue(rawFee(director, input), input.value);
-  return { fee, toRecipient: input.value - fee };
-};
-
-const clampToValue = (fee: bigint, value: bigint): bigint => (fee > value ? value : fee);
-
-const rawFee = (director: FeeDirector, input: ExpectedFeeInput): bigint => {
-  const mode = feeModeOf(director.settings);
-  if (mode === "fixed") return director.limit;
-  if (mode === "share") return checkedProduct(input.value, director.multiplier) / RATE_SCALE;
-  const priorityFeeWei = (director.settings & FEE_SETTING.baseFeeOnly) !== 0n ? 0n : (input.priorityFeeWei ?? 0n);
-  const overhead = OVERHEAD_OF[input.payout ?? "token"];
-  const uncapped = checkedProduct(checkedSum(input.gasUsed, overhead), director.multiplier, checkedSum(input.baseFeeWei, priorityFeeWei)) / RATE_SCALE;
-  return uncapped > director.limit ? director.limit : uncapped;
-};
-
-/**
- * The most that a runner can take for a director from a transfer of `value`: the fee with no gas figure counted for a
- * fixed or share fee, and the cap for a gas based fee. In all cases it is no more than the value.
- *
- * @param director The fee terms.
- * @param value The amount that the mediator releases, in base units.
- * @throws When a share fee would overflow 256 bits.
- */
-export const maximumFee = (director: FeeDirector, value: bigint): bigint => {
-  const mode = feeModeOf(director.settings);
-  if (mode === "gas") return clampToValue(director.limit, value);
-  return expectedFee(director, { value, gasUsed: 0n, baseFeeWei: 0n }).fee;
 };

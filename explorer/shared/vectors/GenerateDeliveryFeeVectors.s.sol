@@ -25,10 +25,13 @@ contract DeliveryFeeProbe {
 }
 
 /// @title GenerateDeliveryFeeVectors
-/// @notice Prints test vectors of the delivery router: the encoding of a `FeeDirector` and the answer of `feeInfo`, one JSON
-/// object per line. Run from the repository root:
-///   forge script explorer/shared/vectors/GenerateDeliveryFeeVectors.s.sol --tc GenerateDeliveryFeeVectors --root . 2>&1 | grep '^  VECTOR ' | sed 's/^  VECTOR //' > explorer/shared/test/fixtures/delivery-fee-vectors.jsonl
-/// The test in explorer/shared/test/delivery-fee.test.ts reads the saved lines, so the TypeScript copy and the router
+/// @notice Prints test vectors of the delivery router: the constants of the router (the name and the value of every
+/// settings flag and gas overhead), the encoding of a `FeeDirector` and the answer of `feeInfo`, one JSON object per
+/// line. Run from the repository root:
+///   forge script explorer/shared/vectors/GenerateDeliveryFeeVectors.s.sol --tc GenerateDeliveryFeeVectors --root . > /tmp/vectors.log 2>&1
+///   grep '^  VECTOR ' /tmp/vectors.log | sed 's/^  VECTOR //' > explorer/shared/test/fixtures/delivery-fee-vectors.jsonl
+///   grep '^  CONSTANTS ' /tmp/vectors.log | sed 's/^  CONSTANTS //' > explorer/shared/test/fixtures/delivery-router-constants.json
+/// The test in explorer/shared/test/delivery-terms.test.ts reads the saved lines, so the TypeScript copy and the router
 /// cannot drift. A line with `"reverts":true` is a case where the router reverts on an overflow.
 contract GenerateDeliveryFeeVectors is Script {
     address private constant WRAPPED_NATIVE = address(0xBEEF);
@@ -39,6 +42,7 @@ contract GenerateDeliveryFeeVectors is Script {
     function run() external {
         probe = new DeliveryFeeProbe(new DeliveryRouter(ITokenMediator(address(0xB1D6E)), IWETH(WRAPPED_NATIVE), address(0xA11CE), address(0xB0B)));
 
+        _printConstants(probe.router());
         // Every combination of the four flag bits, with the values around the edges.
         uint256[8] memory values = [uint256(0), 1, 999, 1 ether, 1_000 ether, 10 ** 30, type(uint128).max, type(uint256).max];
         uint256[4] memory limits = [uint256(0), 1 gwei, 5 ether, type(uint256).max];
@@ -85,6 +89,20 @@ contract GenerateDeliveryFeeVectors is Script {
                 (seed >> 200) % 2 == 0
             );
         }
+    }
+
+    function _printConstants(DeliveryRouter router) private view {
+        console2.log(
+            string.concat(
+                "CONSTANTS {\"FIXED_FEE\":\"", vm.toString(router.FIXED_FEE()),
+                "\",\"UNWRAP\":\"", vm.toString(router.UNWRAP()),
+                "\",\"EXCLUDE_PRIORITY\":\"", vm.toString(router.EXCLUDE_PRIORITY()),
+                "\",\"MULTIPLIER_OF_TOTAL\":\"", vm.toString(router.MULTIPLIER_OF_TOTAL()),
+                "\",\"TOKEN_GAS_OVERHEAD\":\"", vm.toString(router.TOKEN_GAS_OVERHEAD()),
+                "\",\"NATIVE_GAS_OVERHEAD\":\"", vm.toString(router.NATIVE_GAS_OVERHEAD()),
+                "\"}"
+            )
+        );
     }
 
     struct Case {

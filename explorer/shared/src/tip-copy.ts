@@ -2,7 +2,7 @@
  * The words about the tip that the web page and the terminal share, so that both always say the same thing.
  */
 import { getAddress } from "viem";
-import type { FeeMode } from "./delivery-fee.js";
+import type { FeeMode } from "./delivery-terms.js";
 
 /** The name of each tip mode, for a person. */
 export const TIP_MODE_NAMES: Readonly<Record<FeeMode, string>> = {

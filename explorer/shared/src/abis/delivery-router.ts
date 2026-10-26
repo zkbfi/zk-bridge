@@ -15,11 +15,6 @@ export const deliveryRouterAbi = [
         "internalType": "contract IWETH"
       },
       {
-        "name": "runner_",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
         "name": "rewardAddress_",
         "type": "address",
         "internalType": "address"
@@ -38,7 +33,20 @@ export const deliveryRouterAbi = [
   },
   {
     "type": "function",
-    "name": "BASE_FEE_ONLY",
+    "name": "DELIVERY_SLOT",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "EXCLUDE_PRIORITY",
     "inputs": [],
     "outputs": [
       {
@@ -52,6 +60,19 @@ export const deliveryRouterAbi = [
   {
     "type": "function",
     "name": "FIXED_FEE",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MULTIPLIER_OF_TOTAL",
     "inputs": [],
     "outputs": [
       {
@@ -90,32 +111,6 @@ export const deliveryRouterAbi = [
   },
   {
     "type": "function",
-    "name": "RUNNER_SLOT",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "SHARE_OF_VALUE",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "TOKEN_GAS_OVERHEAD",
     "inputs": [],
     "outputs": [
@@ -131,6 +126,25 @@ export const deliveryRouterAbi = [
     "type": "function",
     "name": "UNWRAP",
     "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "baseFee",
+    "inputs": [
+      {
+        "name": "excludePriority",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
     "outputs": [
       {
         "name": "",
@@ -192,7 +206,7 @@ export const deliveryRouterAbi = [
   },
   {
     "type": "function",
-    "name": "executeMessageWithRunner",
+    "name": "executeMessage",
     "inputs": [
       {
         "name": "proof",
@@ -304,11 +318,6 @@ export const deliveryRouterAbi = [
             "internalType": "uint256"
           }
         ]
-      },
-      {
-        "name": "reward",
-        "type": "address",
-        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -426,19 +435,6 @@ export const deliveryRouterAbi = [
   },
   {
     "type": "function",
-    "name": "runner",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "totalClaimable",
     "inputs": [
       {
@@ -521,23 +517,12 @@ export const deliveryRouterAbi = [
   },
   {
     "type": "error",
-    "name": "InvalidRunnerValue",
+    "name": "DeliveryInProgress",
     "inputs": []
   },
   {
     "type": "error",
     "name": "NotMediator",
-    "inputs": [
-      {
-        "name": "caller",
-        "type": "address",
-        "internalType": "address"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "NotRunner",
     "inputs": [
       {
         "name": "caller",
@@ -575,26 +560,10 @@ export const deliveryRouterAbi = [
   },
   {
     "type": "error",
-    "name": "RunnerSlotInUse",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "SafeERC20FailedOperation",
     "inputs": [
       {
         "name": "token",
-        "type": "address",
-        "internalType": "address"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "WrongRewardAddress",
-    "inputs": [
-      {
-        "name": "reward",
         "type": "address",
         "internalType": "address"
       }
@@ -608,11 +577,6 @@ export const deliveryRouterAbi = [
   {
     "type": "error",
     "name": "ZeroRewardAddress",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "ZeroRunner",
     "inputs": []
   }
 ] as const;

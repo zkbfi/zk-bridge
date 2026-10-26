@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseDeliveryCostReport, type DeliveryCostReport } from "../src/delivery-cost-report.js";
 import { buildFeeSuggestions, describeDataSource, describeFee } from "../src/delivery-suggestion.js";
-import { FEE_SETTING } from "../src/delivery-fee.js";
+import { FIXED_FEE, UNWRAP } from "../src/delivery-terms.js";
 
 const recipient = "0x00000000000000000000000000000000000000aa" as const;
 const wei = 10n ** 18n;
@@ -126,7 +126,7 @@ describe("describeFee", () => {
   const context = { transferValue: 1_000n, token: { symbol: "TKN", decimals: 0, valueInWei: wei }, gasUsed: 0n, baseFeeWei: 0n, priorityFeeWei: 0n, cost: null };
 
   it("states a fixed fee as exact", () => {
-    const description = describeFee({ recipient, settings: FEE_SETTING.fixedFee, limit: 30n, multiplier: 0n }, context);
+    const description = describeFee({ recipient, settings: FIXED_FEE, limit: 30n, multiplier: 0n }, context);
     expect(description.summary).toBe("30 TKN (exact)");
     expect(description.maximumUnits).toBe(30n);
     expect(description.breakdown).toEqual([]);
@@ -164,14 +164,14 @@ describe("the payout kind", () => {
       throw new Error("all three should be available");
     }
     for (const director of [suggestions.percentage.director, suggestions.fixed.director, suggestions.gasMultiplier.director]) {
-      expect(director.settings & FEE_SETTING.unwrap).toBe(FEE_SETTING.unwrap);
+      expect(director.settings & UNWRAP).toBe(UNWRAP);
     }
   });
 
   it("keeps the payout in the token when none is named", () => {
     const suggestions = buildFeeSuggestions({ ...base, report: report() });
     if (suggestions.percentage.kind !== "available") throw new Error("available");
-    expect(suggestions.percentage.director.settings & FEE_SETTING.unwrap).toBe(0n);
+    expect(suggestions.percentage.director.settings & UNWRAP).toBe(0n);
   });
 });
 
