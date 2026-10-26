@@ -317,11 +317,6 @@ export function amountMeaning(amount: bigint, token: TokenInfo): string {
   return `${formatUnits(amount, token.decimals)} ${token.symbol}`
 }
 
-/** Describes a 1e18-scaled rate as an exact percentage. */
-export function rateMeaning(rate: bigint): string {
-  return formatRateAsPercent(rate)
-}
-
 /** Reads user text as a hex byte string. An empty string is the empty byte string. */
 export function parseHexBytes(text: string): Hex {
   const trimmed = text.trim()

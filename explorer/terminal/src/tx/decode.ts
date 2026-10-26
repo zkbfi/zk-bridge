@@ -43,15 +43,6 @@ export function decodeKnownCall(data: Hex, abis: readonly Abi[] = knownAbis): De
   return null
 }
 
-/** Names the function behind a four-byte selector, or `null` when no known ABI has it. */
-export function functionSignatureOfSelector(selector: Hex, abis: readonly Abi[] = knownAbis): string | null {
-  for (const abi of abis) {
-    const item = abi.find((entry): entry is AbiFunction => entry.type === 'function' && toFunctionSelector(entry) === selector)
-    if (item !== undefined) return toFunctionSignature(item)
-  }
-  return null
-}
-
 /** The selector of calldata: the first four bytes, or `null` for shorter data. */
 export function selectorOf(data: Hex): Hex | null {
   return data.length >= 10 ? (data.slice(0, 10) as Hex) : null
