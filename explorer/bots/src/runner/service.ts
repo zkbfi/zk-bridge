@@ -9,6 +9,7 @@ import { createBoardFeed, type BoardFeed } from "../msgboard/board.ts";
 import { executeCommand, type CommandExecutor } from "../prover/execute-command.ts";
 import { createProverBinary, type ProverBinary } from "../prover/prover-binary.ts";
 import { sidesOfDirection, type BotContext } from "../runtime/context.ts";
+import { acquireLock, type HeldLock } from "../runtime/lock-file.ts";
 import { runLoop } from "../runtime/loop.ts";
 import { createStateFile } from "../runtime/state-file.ts";
 import { openSigner, type Signer } from "../signing/open-signer.ts";
@@ -49,17 +50,38 @@ function valuations(settings: Readonly<Record<string, string>>): Readonly<Record
   return Object.fromEntries(Object.entries(settings).map(([token, wei]) => [token.toLowerCase(), BigInt(wei)]));
 }
 
+function runnerStatePath(context: BotContext, direction: ProofDirection): string {
+  return join(context.config.stateDirectory, `runner-${context.pair.name}-${direction}.json`);
+}
+
 /**
- * Starts the delivery runner. For each direction of the setup file it
+ * Starts the delivery runner. It first takes a lock file next to the state file of each direction, so that no second
+ * runner process writes the same state. It releases the locks when the runner stops, also when it stops with an error.
+ *
+ * @throws LockHeldError when a live process already runs a runner over one of the state files.
+ * @throws BotConfigError when a required setting is missing.
+ */
+export async function startRunner(input: StartRunnerInput): Promise<void> {
+  const locks: HeldLock[] = [];
+  try {
+    for (const path of new Set((input.context.setup.directions as readonly ProofDirection[]).map((direction) => runnerStatePath(input.context, direction)))) {
+      locks.push(await acquireLock({ path: `${path}.lock` }));
+    }
+    await runRunner(input);
+  } finally {
+    await Promise.all(locks.map((lock) => lock.release()));
+  }
+}
+
+/**
+ * Runs the delivery runner. For each direction of the setup file it
  *
  * 1. subscribes to the msgboard category of the direction, and reads the board again on each pass for the messages
  *    that a dropped socket missed;
  * 2. checks each proof message and posts `update` when the light client is behind;
  * 3. sweeps the covered, undelivered items of the indexer and delivers those whose fee pays.
- *
- * @throws BotConfigError when a required setting is missing.
  */
-export async function startRunner(input: StartRunnerInput): Promise<void> {
+async function runRunner(input: StartRunnerInput): Promise<void> {
   const { context, signal } = input;
   const runnerConfig = requireRunnerConfig(context);
   const { setup, pair, vault, logger } = context;
@@ -154,7 +176,7 @@ export async function startRunner(input: StartRunnerInput): Promise<void> {
       lightClient: createLightClientReader(destinationPort.client, destination.contracts.lightClient),
       delivery,
       state: createStateFile({
-        path: join(context.config.stateDirectory, `runner-${pair.name}-${direction}.json`),
+        path: runnerStatePath(context, direction),
         schema: runnerStateSchema,
         initial: INITIAL_RUNNER_STATE,
       }),

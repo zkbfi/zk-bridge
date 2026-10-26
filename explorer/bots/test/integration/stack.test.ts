@@ -16,7 +16,7 @@ import { createRunner } from "../../src/runner/runner.ts";
 import { startRunner } from "../../src/runner/service.ts";
 import type { ProverBinary } from "../../src/prover/prover-binary.ts";
 import { INITIAL_RUNNER_STATE, type RunnerState } from "../../src/runner/state.ts";
-import type { StateFile } from "../../src/runtime/state-file.ts";
+import type { StateStore } from "../../src/runtime/state-file.ts";
 import { ANVIL_MNEMONIC, ACCOUNT, account, buildOracleUpdate, compileStackContracts, startStack, type Stack } from "./support/stack.ts";
 import { waitFor } from "../../../indexer/test/integration/support/processes";
 import { createMnemonicSource } from "../../../terminal/src/signing/mnemonic.ts";
@@ -289,7 +289,7 @@ describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
     const prover = fakeProver({ evidence: () => evidenceFor({ executeData: emptyExecuteMessage(4242n) }) });
     const { logger } = memoryLogger();
     const outcomes = memoryOutcomes();
-    const state: StateFile<RunnerState> = { async load() { return INITIAL_RUNNER_STATE; }, async save() {} };
+    const state: StateStore<RunnerState> = { async load() { return INITIAL_RUNNER_STATE; }, async update(mutate) { return mutate(INITIAL_RUNNER_STATE); } };
     const runner = createRunner({
       pairName: "eth-pls",
       direction: "first-to-second",

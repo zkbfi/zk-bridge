@@ -3,10 +3,14 @@ import type { Logger } from "../logging/logger.ts";
 import { budgetPause, pruneBudget, windowSpendWei, withCharge, withLoss, withSettledCharge, type SpendLimits } from "./spend-budget.ts";
 import type { PrerequisiteBudgetState } from "./state.ts";
 
-/** Where the rolling budget lives between sweeps and restarts. The runner backs it with its state file. */
+/**
+ * Where the rolling budget lives between sweeps and restarts. The runner backs it with its state file.
+ * A change is a function of the freshest stored budget. The store applies it under one lock, so two changes never
+ * overwrite each other. A function that returns the budget it was given changes nothing.
+ */
 export interface BudgetStore {
   load(): Promise<PrerequisiteBudgetState>;
-  save(budget: PrerequisiteBudgetState): Promise<void>;
+  update(mutate: (budget: PrerequisiteBudgetState) => PrerequisiteBudgetState): Promise<void>;
 }
 
 /** Wei that the ledger charged before a send, to be settled to the actual cost. */
@@ -55,12 +59,8 @@ export function createPrerequisiteLedger(input: PrerequisiteLedgerInput): Prereq
   let sweepSpentWei = 0n;
   let warnedOfPause = false;
 
-  async function current(): Promise<PrerequisiteBudgetState> {
-    return pruneBudget(await store.load(), now());
-  }
-
-  async function refusal(wei: bigint): Promise<string | null> {
-    const budget = await current();
+  /** The refusal for `wei` more against a budget that is already pruned, or null. Warns once about a pause. */
+  function refusalFor(budget: PrerequisiteBudgetState, wei: bigint): string | null {
     const pause = budgetPause(budget, limits, now());
     if (pause !== null) {
       if (!warnedOfPause) {
@@ -80,6 +80,10 @@ export function createPrerequisiteLedger(input: PrerequisiteLedgerInput): Prereq
     return null;
   }
 
+  async function refusal(wei: bigint): Promise<string | null> {
+    return refusalFor(pruneBudget(await store.load(), now()), wei);
+  }
+
   return {
     capWei,
     get spentWei() {
@@ -87,20 +91,27 @@ export function createPrerequisiteLedger(input: PrerequisiteLedgerInput): Prereq
     },
     refusal,
     async reserve(wei) {
-      const detail = await refusal(wei);
-      if (detail !== null) return { ok: false, detail };
       const reservation = { id: randomUUID(), wei };
-      await store.save(withCharge(await current(), { id: reservation.id, atMilliseconds: now(), wei: wei.toString() }));
+      const verdict: { detail: string | null } = { detail: null };
+      // The check and the charge happen on one freshly loaded budget under the lock, so concurrent reservations
+      // cannot all pass the check against the same stale total.
+      await store.update((stored) => {
+        const budget = pruneBudget(stored, now());
+        verdict.detail = refusalFor(budget, wei);
+        if (verdict.detail !== null) return stored;
+        return withCharge(budget, { id: reservation.id, atMilliseconds: now(), wei: wei.toString() });
+      });
+      if (verdict.detail !== null) return { ok: false, detail: verdict.detail };
       sweepSpentWei += wei;
       return { ok: true, reservation };
     },
     async settle(reservation, actualWei) {
-      await store.save(withSettledCharge(await current(), reservation.id, actualWei));
+      await store.update((stored) => withSettledCharge(pruneBudget(stored, now()), reservation.id, actualWei));
       sweepSpentWei += actualWei - reservation.wei;
     },
     async recordLoss(wei) {
       if (wei === 0n) return;
-      await store.save(withLoss(await current(), { atMilliseconds: now(), wei: wei.toString() }));
+      await store.update((stored) => withLoss(pruneBudget(stored, now()), { atMilliseconds: now(), wei: wei.toString() }));
     },
   };
 }

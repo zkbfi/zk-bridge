@@ -3,7 +3,7 @@ import { beaconLightClientAbi, feeRouterAbi, messageBridgeAbi } from "@zk-bridge
 import { describe, expect, it } from "vitest";
 import type { Simulation } from "../../src/chain/transactions.ts";
 import type { FeedItem } from "../../src/indexer/client.ts";
-import type { StateFile } from "../../src/runtime/state-file.ts";
+import type { StateStore } from "../../src/runtime/state-file.ts";
 import { deliverItem } from "../../src/runner/delivery.ts";
 import { createPrerequisiteLedger } from "../../src/runner/prerequisite-ledger.ts";
 import type { DeliverySettings } from "../../src/runner/delivery.ts";
@@ -38,14 +38,15 @@ const UPDATE = toFunctionSelector(beaconLightClientAbi.find((entry) => entry.typ
 /** A fixed fee: bit 0 of `settings`, with the fee in `limit`. */
 const fixedFee = (fee: bigint) => ({ recipient: address(0x12), settings: 1n, limit: fee, multiplier: 0n });
 
-function memoryState(): StateFile<RunnerState> & { current: RunnerState } {
+function memoryState(): StateStore<RunnerState> & { current: RunnerState } {
   const state = {
     current: INITIAL_RUNNER_STATE,
     async load() {
       return state.current;
     },
-    async save(next: RunnerState) {
-      state.current = next;
+    async update(mutate: (current: RunnerState) => RunnerState) {
+      state.current = mutate(state.current);
+      return state.current;
     },
   };
   return state;
@@ -64,8 +65,12 @@ function ledgerFor(w: { state: ReturnType<typeof memoryState>; delivery: { setti
         const { prerequisiteSpend, prerequisiteLosses } = await w.state.load();
         return { prerequisiteSpend, prerequisiteLosses };
       },
-      async save(budget) {
-        await w.state.save({ ...(await w.state.load()), ...budget });
+      async update(mutate) {
+        await w.state.update((state) => {
+          const budget = { prerequisiteSpend: state.prerequisiteSpend, prerequisiteLosses: state.prerequisiteLosses };
+          const next = mutate(budget);
+          return next === budget ? state : { ...state, ...next };
+        });
       },
     },
     now,
@@ -635,5 +640,23 @@ describe("delivery decisions", () => {
     await deliverItem(w.delivery, offerItem(), ledgerFor(w));
     expect(w.chain.unsimulatedSends()).toEqual([]);
     expect(w.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(1);
+  });
+});
+
+describe("sweeps of one runner", () => {
+  it("never overlap: a second sweep waits until the first ends", async () => {
+    const w = world({ items: [feedItem({ id: 1, token: WRAPPED_NATIVE })], data: { [word(1)]: feeOfferData({ director: fixedFee(10n), value: 1000n, token: WRAPPED_NATIVE }) } });
+    let running = 0;
+    let overlapped = false;
+    const listFeed = w.indexer.listFeed.bind(w.indexer);
+    w.indexer.listFeed = async (query) => {
+      running += 1;
+      overlapped = overlapped || running > 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      running -= 1;
+      return listFeed(query);
+    };
+    await Promise.all([w.runner.sweep(), w.runner.sweep(), w.runner.sweep()]);
+    expect(overlapped).toBe(false);
   });
 });

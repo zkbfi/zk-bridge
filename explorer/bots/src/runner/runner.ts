@@ -3,12 +3,12 @@ import type { ProofDirection } from "@zk-bridge/shared";
 import type { LightClientReader } from "../chain/light-client.ts";
 import type { FeedItem } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
-import type { StateFile } from "../runtime/state-file.ts";
+import type { StateStore } from "../runtime/state-file.ts";
 import { deliverItem, isFinal, type DeliveryDependencies, type DeliveryOutcome } from "./delivery.ts";
-import { createPrerequisiteLedger, type PrerequisiteLedger } from "./prerequisite-ledger.ts";
+import { createPrerequisiteLedger, type BudgetStore, type PrerequisiteLedger } from "./prerequisite-ledger.ts";
 import type { OutcomeSink } from "./outcomes.ts";
 import { assessProofPayload, payloadKey, type ProofRefusal } from "./proof-intake.ts";
-import type { SerialQueue } from "./serial-queue.ts";
+import { createSerialQueue, type SerialQueue } from "./serial-queue.ts";
 import type { PrerequisiteBudgetState, RunnerState } from "./state.ts";
 import { postUpdate } from "./update.ts";
 
@@ -22,7 +22,8 @@ export interface RunnerDependencies {
   readonly lightClient: LightClientReader;
   /** The delivery parts: the chain, the prover, the indexer, the source reader and the fee settings. */
   readonly delivery: DeliveryDependencies;
-  readonly state: StateFile<RunnerState>;
+  /** The state file. The runner changes it only through `update`, because another writer may share the file. */
+  readonly state: StateStore<RunnerState>;
   readonly outcomes: OutcomeSink;
   readonly queue: SerialQueue;
   readonly now: () => number;
@@ -155,14 +156,21 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     await dependencies.outcomes.record({ kind: "delivery", ...base, ...fields });
   }
 
-  /** The rolling spend lives in the state file, next to the finished items. Each write keeps the other part as it is. */
-  const budgetStore = {
-    async load(): Promise<PrerequisiteBudgetState> {
+  /**
+   * The rolling spend lives in the state file, next to the finished items. Each change applies to the freshly loaded
+   * state under the lock of the file and keeps the other part as it is.
+   */
+  const budgetStore: BudgetStore = {
+    async load() {
       const { prerequisiteSpend, prerequisiteLosses } = await dependencies.state.load();
       return { prerequisiteSpend, prerequisiteLosses };
     },
-    async save(budget: PrerequisiteBudgetState): Promise<void> {
-      await dependencies.state.save({ ...(await dependencies.state.load()), ...budget });
+    async update(mutate) {
+      await dependencies.state.update((state) => {
+        const budget = { prerequisiteSpend: state.prerequisiteSpend, prerequisiteLosses: state.prerequisiteLosses };
+        const next = mutate(budget);
+        return next === budget ? state : { ...state, ...next };
+      });
     },
   };
 
@@ -176,7 +184,7 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     }
   }
 
-  async function sweep(): Promise<SweepSummary> {
+  async function sweepOnce(): Promise<SweepSummary> {
     const state = await dependencies.state.load();
     const finished = new Set(Object.keys(state.finished));
     const listed = await listCovered(finished);
@@ -215,12 +223,15 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
       if (outcome.status === "skipped" && spentOnPrerequisites) retryAfter.set(item.messageId, dependencies.now() + dependencies.prerequisiteLossRefusalMilliseconds);
       if (isFinal(outcome)) {
         const proof = outcome.status === "delivered" ? outcome.transactionHash : "elsewhere";
-        const current = await dependencies.state.load();
-        await dependencies.state.save({ ...current, finished: { ...current.finished, [item.messageId]: proof } });
+        await dependencies.state.update((current) => ({ ...current, finished: { ...current.finished, [item.messageId]: proof } }));
       }
     }
     return summary;
   }
+
+  /** A sweep never overlaps the one before it: a proof message that arrives during a sweep waits for its turn. */
+  const sweepQueue = createSerialQueue();
+  const sweep = (): Promise<SweepSummary> => sweepQueue.run(sweepOnce);
 
   return { handleProofPayload, sweep };
 }
