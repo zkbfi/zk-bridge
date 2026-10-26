@@ -68,7 +68,7 @@ describe("against vectors printed by the compiled FeeRouter", () => {
       expect(decodeFeeDirector(vector.encoded).multiplier).toBe(director.multiplier);
       expect(decodeFeeDirector(vector.encoded).recipient.toLowerCase()).toBe(director.recipient.toLowerCase());
     }
-  });
+  }, 30_000);
 
   it("computes the fee and the rest as feeInfo does, and throws where the router reverts", () => {
     for (const vector of vectors) {

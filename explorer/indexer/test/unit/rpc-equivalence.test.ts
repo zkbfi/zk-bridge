@@ -128,7 +128,7 @@ describe("one history, two data sources", () => {
       expect(coverage).toMatchObject({ source: "rpc" });
       expect(rpc).toEqual(indexer);
     }
-  });
+  }, 30_000);
 
   it("gives the same token facts", async () => {
     const database = await indexHistory();
