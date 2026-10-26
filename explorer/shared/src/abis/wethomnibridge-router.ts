@@ -23,6 +23,19 @@ export const wETHOmnibridgeRouterAbi = [
   },
   {
     "type": "function",
+    "name": "NATIVE_SEND_GAS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "WETH",
     "inputs": [],
     "outputs": [

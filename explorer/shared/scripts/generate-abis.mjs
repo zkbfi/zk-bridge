@@ -16,6 +16,7 @@ const contractNames = [
   "BeaconLightClient",
   "BeaconForkGate",
   "ForkRegistry",
+  "Multicall3",
 ];
 
 const here = dirname(fileURLToPath(import.meta.url));

@@ -53,6 +53,11 @@ export const tokenMediatorAbi = [
             "name": "flowLimiter",
             "type": "address",
             "internalType": "address"
+          },
+          {
+            "name": "remoteChainName",
+            "type": "string",
+            "internalType": "string"
           }
         ]
       }
@@ -100,7 +105,7 @@ export const tokenMediatorAbi = [
   },
   {
     "type": "function",
-    "name": "NAME_SUFFIX",
+    "name": "NAME_CONNECTOR",
     "inputs": [],
     "outputs": [
       {

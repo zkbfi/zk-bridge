@@ -8,3 +8,4 @@ export { feeRouterAbi } from "./fee-router.js";
 export { beaconLightClientAbi } from "./beacon-light-client.js";
 export { beaconForkGateAbi } from "./beacon-fork-gate.js";
 export { forkRegistryAbi } from "./fork-registry.js";
+export { multicall3Abi } from "./multicall3.js";

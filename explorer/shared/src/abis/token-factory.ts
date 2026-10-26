@@ -8,6 +8,11 @@ export const tokenFactoryAbi = [
         "name": "mediator_",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "homeChainName_",
+        "type": "string",
+        "internalType": "string"
       }
     ],
     "stateMutability": "nonpayable"
@@ -50,6 +55,19 @@ export const tokenFactoryAbi = [
       }
     ],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "homeChainName",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",

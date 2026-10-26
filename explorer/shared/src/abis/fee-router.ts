@@ -13,6 +13,16 @@ export const feeRouterAbi = [
         "name": "wNative_",
         "type": "address",
         "internalType": "contract IWETH"
+      },
+      {
+        "name": "runner_",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "rewardAddress_",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "nonpayable"
@@ -50,6 +60,19 @@ export const feeRouterAbi = [
   {
     "type": "function",
     "name": "NATIVE_GAS_OVERHEAD",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "NATIVE_SEND_GAS",
     "inputs": [],
     "outputs": [
       {
@@ -129,11 +152,6 @@ export const feeRouterAbi = [
     "type": "function",
     "name": "executeMessageWithRunner",
     "inputs": [
-      {
-        "name": "runner",
-        "type": "address",
-        "internalType": "address"
-      },
       {
         "name": "proof",
         "type": "tuple",
@@ -244,6 +262,11 @@ export const feeRouterAbi = [
             "internalType": "uint256"
           }
         ]
+      },
+      {
+        "name": "reward",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -335,6 +358,32 @@ export const feeRouterAbi = [
   },
   {
     "type": "function",
+    "name": "rewardAddress",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "runner",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "wNative",
     "inputs": [],
     "outputs": [
@@ -354,6 +403,17 @@ export const feeRouterAbi = [
   {
     "type": "error",
     "name": "NotMediator",
+    "inputs": [
+      {
+        "name": "caller",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "NotRunner",
     "inputs": [
       {
         "name": "caller",
@@ -393,5 +453,26 @@ export const feeRouterAbi = [
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "WrongRewardAddress",
+    "inputs": [
+      {
+        "name": "reward",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ZeroRewardAddress",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroRunner",
+    "inputs": []
   }
 ] as const;
