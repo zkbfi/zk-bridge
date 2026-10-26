@@ -17,8 +17,8 @@ use lc_core::chain::{ChainSpec, ForkName, SYNC_COMMITTEE_SIZE};
 use lc_core::execution::Log;
 use lc_core::message::{encode_event_data, encode_message, MessageHeader};
 use lc_core::ssz::{
-    branch_for_leaf, branch_for_leaf_with_limit, hash_pair, merkleize, merkleize_with_limit, mix_in_length, sha256,
-    u64_chunk,
+    branch_for_leaf, branch_for_leaf_with_limit, hash_pair, merkleize, merkleize_with_limit, mix_in_length,
+    progressive_container_branch, progressive_container_root, sha256, u64_chunk,
 };
 use lc_core::types::{
     compute_signing_root, sync_committee_domain, BeaconBlockHeader, BlobGasFields, BlsPublicKey,
@@ -406,6 +406,216 @@ pub fn build_update(spec: &'static ChainSpec, recipe: UpdateRecipe) -> UpdateSce
             .then(|| committee_for(spec, store_period + 1).committee.clone()),
     };
     UpdateScenario { spec, store, update, attested_state: state }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Gloas (SYNTHETIC)
+// ---------------------------------------------------------------------------------------------------------------------
+//
+// These builders make a Gloas body and a Gloas state that commit to the values the light client reads. Every other
+// field is a zero chunk (body, bid) or a filler hash (state). They are synthetic: the roots are not roots of real
+// blocks. Field positions are written as FIELD INDICES from the field lists of `specs/gloas/beacon-chain.md`, not as
+// generalized indices, so a mistake in `lc_core::layout` is not copied into the builder. The progressive hashing comes
+// from `lc_core::ssz` (`progressive_container_root`), which a real Sepolia branch also checks.
+
+/// Field index of `signed_execution_payload_bid` in the Gloas `BeaconBlockBody`.
+const GLOAS_BODY_FIELD_SIGNED_BID: usize = 10;
+/// Number of fields of the Gloas `BeaconBlockBody`.
+const GLOAS_BODY_FIELDS: usize = 13;
+/// Number of fields of `ExecutionPayloadBid`.
+const GLOAS_BID_FIELDS: usize = 12;
+/// Number of fields of the Gloas `BeaconState`.
+const GLOAS_STATE_FIELDS: usize = 46;
+
+/// A synthetic Gloas block body: all fields are zero chunks except `signed_execution_payload_bid`, whose bid commits to
+/// `parent_block_hash`. The bid signature is a zero chunk.
+#[derive(Clone, Debug)]
+pub struct GloasBody {
+    bid_chunks: Vec<B256>,
+    body_chunks: Vec<B256>,
+}
+
+/// Builds the synthetic Gloas body for a bid with the given `parent_block_hash` (bid field 0). Every other field is a zero
+/// chunk, so two bodies with different hashes have the same branch. Use [`gloas_body_salted`] for a body whose branch
+/// differs.
+pub fn gloas_body(parent_block_hash: B256) -> GloasBody {
+    gloas_body_with_others(parent_block_hash, |_, _| B256::ZERO)
+}
+
+/// Like [`gloas_body`], but every other field of the body and of the bid is a filler hash derived from `salt`. Two
+/// bodies with different salts have different siblings, so a branch of one does not verify against the other.
+pub fn gloas_body_salted(parent_block_hash: B256, salt: &str) -> GloasBody {
+    gloas_body_with_others(parent_block_hash, |label, index| filler(&format!("{salt}/{label}"), index))
+}
+
+fn gloas_body_with_others(parent_block_hash: B256, other: impl Fn(&str, u64) -> B256) -> GloasBody {
+    let mut bid_chunks: Vec<B256> = (0..GLOAS_BID_FIELDS as u64).map(|index| other("bid", index)).collect();
+    bid_chunks[0] = parent_block_hash;
+    let signed_bid_root = hash_pair(&progressive_container_root(&bid_chunks), &B256::ZERO);
+    let mut body_chunks: Vec<B256> = (0..GLOAS_BODY_FIELDS as u64).map(|index| other("body", index)).collect();
+    body_chunks[GLOAS_BODY_FIELD_SIGNED_BID] = signed_bid_root;
+    GloasBody { bid_chunks, body_chunks }
+}
+
+impl GloasBody {
+    /// The body root.
+    pub fn root(&self) -> B256 {
+        progressive_container_root(&self.body_chunks)
+    }
+
+    /// The branch from `parent_block_hash` to the body root, bottom to top: 2 entries inside the bid (the rest of the
+    /// progressive tree and `active_fields`), the bid signature, then 8 entries inside the body. 11 entries in all.
+    pub fn block_hash_branch(&self) -> Vec<B256> {
+        let mut branch = progressive_container_branch(&self.bid_chunks, 0).1;
+        branch.push(B256::ZERO);
+        branch.extend(progressive_container_branch(&self.body_chunks, GLOAS_BODY_FIELD_SIGNED_BID).1);
+        branch
+    }
+}
+
+/// A synthetic Gloas `BeaconState`: filler field roots, and the fields the light client reads.
+#[derive(Clone, Debug)]
+pub struct GloasStateBuilder {
+    chunks: Vec<B256>,
+}
+
+impl Default for GloasStateBuilder {
+    fn default() -> Self {
+        Self { chunks: (0..GLOAS_STATE_FIELDS as u64).map(|index| filler("gloas-state-field", index)).collect() }
+    }
+}
+
+impl GloasStateBuilder {
+    /// Sets `finalized_checkpoint` (field 20) to `Checkpoint { epoch, root }`.
+    pub fn set_finalized_checkpoint(&mut self, epoch: u64, root: B256) {
+        self.chunks[STATE_FIELD_FINALIZED_CHECKPOINT] = hash_pair(&u64_chunk(epoch), &root);
+    }
+
+    /// Sets `current_sync_committee` (field 22).
+    pub fn set_current_committee(&mut self, committee: &SyncCommittee) {
+        self.chunks[STATE_FIELD_CURRENT_SYNC_COMMITTEE] = committee.hash_tree_root().expect("committee root");
+    }
+
+    /// Sets `next_sync_committee` (field 23).
+    pub fn set_next_committee(&mut self, committee: &SyncCommittee) {
+        self.chunks[STATE_FIELD_NEXT_SYNC_COMMITTEE] = committee.hash_tree_root().expect("committee root");
+    }
+
+    /// The state root.
+    pub fn root(&self) -> B256 {
+        progressive_container_root(&self.chunks)
+    }
+
+    /// Branch for `finalized_checkpoint.root`: the epoch chunk, then 8 entries of the progressive state. 9 in all.
+    pub fn finality_branch(&self, epoch: u64) -> Vec<B256> {
+        let mut branch = vec![u64_chunk(epoch)];
+        branch.extend(progressive_container_branch(&self.chunks, STATE_FIELD_FINALIZED_CHECKPOINT).1);
+        branch
+    }
+
+    /// Branch for `current_sync_committee`. 11 entries.
+    pub fn current_committee_branch(&self) -> Vec<B256> {
+        progressive_container_branch(&self.chunks, STATE_FIELD_CURRENT_SYNC_COMMITTEE).1
+    }
+
+    /// Branch for `next_sync_committee`. 11 entries.
+    pub fn next_committee_branch(&self) -> Vec<B256> {
+        progressive_container_branch(&self.chunks, STATE_FIELD_NEXT_SYNC_COMMITTEE).1
+    }
+}
+
+/// A compact light-client header for `slot`, whose body commits to `execution_block_hash`. The body follows the fork at the
+/// slot of the header: a progressive Gloas body (bid parent block hash, index 2856) in a Gloas epoch, and the
+/// Capella to Fulu body (payload block hash, index 412 or 812) before. Both are synthetic.
+pub fn synthetic_compact_header(
+    spec: &ChainSpec,
+    slot: u64,
+    state_root: B256,
+    execution_block_hash: B256,
+) -> LightClientHeader {
+    let (body_root, branch) = if spec.fork_at_slot(slot) >= ForkName::Gloas {
+        let body = gloas_body(execution_block_hash);
+        (body.root(), body.block_hash_branch())
+    } else {
+        let payload = synthetic_payload_header(spec, slot, slot * 2, execution_block_hash, filler("receipts", slot));
+        let proofs = build_body_proofs(spec, slot, &payload);
+        (proofs.body_root, proofs.block_hash_branch)
+    };
+    let beacon = BeaconBlockHeader {
+        slot,
+        proposer_index: slot % 1000,
+        parent_root: filler("parent-root", slot),
+        state_root,
+        body_root,
+    };
+    LightClientHeader::compact(beacon, execution_block_hash, branch)
+}
+
+/// A store and a Gloas-typed update (every header compact) that verify together, unless the test breaks them.
+pub struct GloasUpdateScenario {
+    /// The chain.
+    pub spec: &'static ChainSpec,
+    /// The store before the update.
+    pub store: LightClientStore,
+    /// The update.
+    pub update: LightClientUpdate,
+    /// The synthetic Gloas state of the attested header, for tests that need more branches from it.
+    pub attested_state: GloasStateBuilder,
+}
+
+/// Builds a Gloas-typed update on `spec` with the same recipe as [`build_update`]. The attested slot must be in a Gloas
+/// epoch. The finalized slot may be before the fork: its header is then a compact header over a pre-Gloas body. The
+/// committee signs for real.
+pub fn build_gloas_update(spec: &'static ChainSpec, recipe: UpdateRecipe) -> GloasUpdateScenario {
+    assert!(spec.fork_at_slot(recipe.attested_slot) >= ForkName::Gloas, "the attested slot must be in a Gloas epoch");
+    let store_period = spec.period_at_slot(recipe.store_slot);
+    let attested_period = spec.period_at_slot(recipe.attested_slot);
+    let signature_period = spec.period_at_slot(recipe.signature_slot);
+
+    let finalized_header = synthetic_compact_header(
+        spec,
+        recipe.finalized_slot,
+        filler("finalized-state-root", recipe.finalized_slot),
+        filler("exec-block-hash", recipe.finalized_slot),
+    );
+    let mut state = GloasStateBuilder::default();
+    state.set_finalized_checkpoint(spec.epoch_at_slot(recipe.finalized_slot), finalized_header.beacon.hash_tree_root());
+    let attested_current = committee_for(spec, attested_period);
+    let attested_next = committee_for(spec, attested_period + 1);
+    state.set_current_committee(&attested_current.committee);
+    state.set_next_committee(&attested_next.committee);
+    let attested_header = synthetic_compact_header(
+        spec,
+        recipe.attested_slot,
+        state.root(),
+        filler("exec-block-hash", recipe.attested_slot),
+    );
+
+    let signing_committee = committee_for(spec, signature_period);
+    let domain = sync_committee_domain(spec, recipe.signature_slot);
+    let signing_root = compute_signing_root(&attested_header.beacon.hash_tree_root(), &domain);
+    let sync_aggregate = sign_with_first_members(&signing_committee, recipe.participants, &signing_root);
+    let next_sync_committee = recipe.include_next_committee.then(|| NextSyncCommittee {
+        committee: attested_next.committee.clone(),
+        branch: state.next_committee_branch(),
+    });
+    let update = LightClientUpdate {
+        attested_header,
+        next_sync_committee,
+        finalized_header,
+        finality_branch: state.finality_branch(spec.epoch_at_slot(recipe.finalized_slot)),
+        sync_aggregate,
+        signature_slot: recipe.signature_slot,
+    };
+    let store = LightClientStore {
+        header_root: filler("store-header-root", recipe.store_slot),
+        header_slot: recipe.store_slot,
+        current_sync_committee: committee_for(spec, store_period).committee.clone(),
+        next_sync_committee: recipe
+            .store_knows_next_committee
+            .then(|| committee_for(spec, store_period + 1).committee.clone()),
+    };
+    GloasUpdateScenario { spec, store, update, attested_state: state }
 }
 
 /// A chain of updates that walks across sync committee periods, as the updates of a lagging light client are.
