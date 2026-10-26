@@ -312,6 +312,8 @@ describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
           tokenValuationsWei: { [stack.token.toLowerCase()]: 10n ** 18n },
           executionGasFallback: 400_000n,
           maximumPrerequisiteRounds: 2,
+          prerequisiteGasFallback: 300_000n,
+          maximumPrerequisiteSpendPerSweepWei: 10n ** 24n,
         },
         logger,
       },
@@ -320,6 +322,7 @@ describe.skipIf(!toolsPresent)("delivery through the real fee router", () => {
       queue: createSerialQueue(),
       now: Date.now,
       maximumDeliveriesPerSweep: 5,
+      prerequisiteLossRefusalMilliseconds: 1_800_000,
       logger,
     });
     return { runner, outcomes, prover, signer };

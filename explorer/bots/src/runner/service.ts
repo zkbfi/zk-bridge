@@ -138,6 +138,8 @@ export async function startRunner(input: StartRunnerInput): Promise<void> {
         tokenValuationsWei: valuations(runnerConfig.tokenValuationsWei),
         executionGasFallback: BigInt(runnerConfig.executionGasFallback),
         maximumPrerequisiteRounds: runnerConfig.maximumPrerequisiteRounds,
+        prerequisiteGasFallback: BigInt(runnerConfig.prerequisiteGasFallback),
+        maximumPrerequisiteSpendPerSweepWei: BigInt(runnerConfig.maximumPrerequisiteSpendPerSweepWei),
       },
       logger: directionLogger,
     };
@@ -158,6 +160,7 @@ export async function startRunner(input: StartRunnerInput): Promise<void> {
       queue: queueOf(destination.chainId),
       now,
       maximumDeliveriesPerSweep: runnerConfig.maximumDeliveriesPerSweep,
+      prerequisiteLossRefusalMilliseconds: runnerConfig.prerequisiteLossRefusalSeconds * 1000,
       logger: directionLogger,
     });
     const category = proofCategory(pair.name, direction);

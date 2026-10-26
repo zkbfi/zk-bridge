@@ -54,6 +54,10 @@ proving policy. The **bot configuration** adds what only a bot needs. A sample i
 | `runner.feeRouter` | Default: `fee_router` of the deployment file. |
 | `runner.tokenValuationsWei` | Wei value of one whole token, by token address. A fee in the wrapped native token needs none. |
 | `runner.executionGasFallback` | Gas that the first fee check assumes, before a simulation exists. Default 900000. |
+| `runner.maximumPrerequisiteRounds` | The most layout calls that one delivery sends. Default 4. |
+| `runner.prerequisiteGasFallback` | Gas that the runner assumes for a layout call that it cannot simulate before the call before it is mined. Default 300000. |
+| `runner.maximumPrerequisiteSpendPerSweepWei` | Required. The most wei that the layout calls of one sweep may cost. A sweep that sent a layout call counts toward `maximumDeliveriesPerSweep`. |
+| `runner.prerequisiteLossRefusalSeconds` | After layout calls were paid for an item and the delivery did not follow, the runner does not try the item for this long. Default 1800. |
 
 A secret is a reference: `env:NAME`, `op://vault/item/field`, or `{ "source": "store", "name": "..." }`. A secret value in
 the file is refused. Every resolved secret is removed from every log line, error and outcome line, by value and by shape
@@ -109,9 +113,18 @@ For each direction:
      `executionGasFallback` and needs no evidence. The second check uses the gas of the simulation.
    - Build the evidence with `zk-bridge-prover evidence`. The log index inside the receipt comes from the source receipt.
      Skip when the bridge shows the message as delivered.
+   - Before the first layout call, estimate the gas of every layout call: simulate the first, and use
+     `prerequisiteGasFallback` for a later call that cannot be simulated yet. Skip unless the fee covers the layout calls
+     plus the execution (`executionGasFallback`) at the current base fee plus priority fee, plus `minimumMarginWei`. Skip
+     with `prerequisite-budget-exhausted` when the layout calls would take the sweep over
+     `maximumPrerequisiteSpendPerSweepWei`. No layout call is sent before these checks pass.
    - Send the layout calls that the evidence lists, one at a time, each after a simulation. Build the evidence again after
      each call, because the calls of one function are alternatives.
    - Simulate `FeeRouter.executeMessageWithRunner(runner, proof)` and send it. Skip on a revert.
+   If the final check fails after layout calls were sent, the runner logs `prerequisite_loss` with the item and the lost
+   wei, records `prerequisiteCostWei` in the skip, and does not try the item again for
+   `prerequisiteLossRefusalSeconds`. Layout rows help every sender, so the cap and the count toward
+   `maximumDeliveriesPerSweep` bound the loss that an attacker can cause with items that pass the first check only.
    No transaction is sent without a simulation of the same call that succeeded.
 5. Record the outcome.
 

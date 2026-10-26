@@ -4,7 +4,7 @@ import type { LightClientReader } from "../chain/light-client.ts";
 import type { FeedItem } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
 import type { StateFile } from "../runtime/state-file.ts";
-import { deliverItem, isFinal, type DeliveryDependencies, type DeliveryOutcome } from "./delivery.ts";
+import { createPrerequisiteLedger, deliverItem, isFinal, type PrerequisiteLedger, type DeliveryDependencies, type DeliveryOutcome } from "./delivery.ts";
 import type { OutcomeSink } from "./outcomes.ts";
 import { assessProofPayload, payloadKey, type ProofRefusal } from "./proof-intake.ts";
 import type { SerialQueue } from "./serial-queue.ts";
@@ -25,7 +25,10 @@ export interface RunnerDependencies {
   readonly outcomes: OutcomeSink;
   readonly queue: SerialQueue;
   readonly now: () => number;
+  /** The most deliveries a sweep tries. A sweep that spent gas on layout calls counts for one, also when it skipped. */
   readonly maximumDeliveriesPerSweep: number;
+  /** How long an item is not tried again after layout calls were paid for it and the delivery did not follow. */
+  readonly prerequisiteLossRefusalMilliseconds: number;
   readonly logger: Logger;
 }
 
@@ -148,9 +151,9 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     await dependencies.outcomes.record({ kind: "delivery", ...base, ...fields });
   }
 
-  async function attempt(item: FeedItem): Promise<DeliveryOutcome | null> {
+  async function attempt(item: FeedItem, ledger: PrerequisiteLedger): Promise<DeliveryOutcome | null> {
     try {
-      return await queue.run(() => deliverItem(dependencies.delivery, item));
+      return await queue.run(() => deliverItem(dependencies.delivery, item, ledger));
     } catch (error) {
       logger.error("delivery_error", { messageId: item.messageId, error });
       retryAfter.set(item.messageId, dependencies.now() + RETRY_AFTER_MILLISECONDS);
@@ -163,22 +166,28 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     const finished = new Set(Object.keys(state.finished));
     const listed = await listCovered(finished);
     const summary = { listed: listed.length, delivered: 0, skipped: 0, failed: 0 };
+    const ledger = createPrerequisiteLedger(dependencies.delivery.settings.maximumPrerequisiteSpendPerSweepWei);
     let attempts = 0;
     for (const item of listed) {
       if (attempts >= dependencies.maximumDeliveriesPerSweep) break;
       if ((retryAfter.get(item.messageId) ?? 0) > dependencies.now()) continue;
-      const outcome = await attempt(item);
+      const spentBefore = ledger.spentWei;
+      const outcome = await attempt(item, ledger);
+      const spentOnPrerequisites = ledger.spentWei > spentBefore;
+      if (spentOnPrerequisites) attempts += 1;
       if (outcome === null) {
         summary.failed += 1;
+        if (spentOnPrerequisites) retryAfter.set(item.messageId, dependencies.now() + dependencies.prerequisiteLossRefusalMilliseconds);
         continue;
       }
-      if (outcome.status === "delivered" || outcome.status === "failed") attempts += 1;
+      if ((outcome.status === "delivered" || outcome.status === "failed") && !spentOnPrerequisites) attempts += 1;
       await record(outcome);
       if (outcome.status === "delivered") summary.delivered += 1;
       if (outcome.status === "skipped") summary.skipped += 1;
       if (outcome.status === "failed") summary.failed += 1;
       if (outcome.status === "skipped" && !CHEAP_REASONS.has(outcome.reason)) retryAfter.set(item.messageId, dependencies.now() + RETRY_AFTER_MILLISECONDS);
       if (outcome.status === "failed") retryAfter.set(item.messageId, dependencies.now() + RETRY_AFTER_MILLISECONDS);
+      if (outcome.status === "skipped" && spentOnPrerequisites) retryAfter.set(item.messageId, dependencies.now() + dependencies.prerequisiteLossRefusalMilliseconds);
       if (isFinal(outcome)) {
         const proof = outcome.status === "delivered" ? outcome.transactionHash : "elsewhere";
         const current = await dependencies.state.load();

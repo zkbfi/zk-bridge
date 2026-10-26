@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Simulation } from "../../src/chain/transactions.ts";
 import type { FeedItem } from "../../src/indexer/client.ts";
 import type { StateFile } from "../../src/runtime/state-file.ts";
-import { deliverItem } from "../../src/runner/delivery.ts";
+import { createPrerequisiteLedger, deliverItem } from "../../src/runner/delivery.ts";
 import { createRunner } from "../../src/runner/runner.ts";
 import { createSerialQueue } from "../../src/runner/serial-queue.ts";
 import { INITIAL_RUNNER_STATE, type RunnerState } from "../../src/runner/state.ts";
@@ -48,6 +48,8 @@ function memoryState(): StateFile<RunnerState> & { current: RunnerState } {
   return state;
 }
 
+const REFUSAL_WINDOW_MILLISECONDS = 30 * 60 * 1000;
+
 interface WorldOptions {
   items?: FeedItem[];
   data?: Record<string, Hex>;
@@ -56,6 +58,8 @@ interface WorldOptions {
   valuations?: Record<string, bigint>;
   executionGasFallback?: bigint;
   maximumDeliveriesPerSweep?: number;
+  prerequisiteGasFallback?: bigint;
+  maximumPrerequisiteSpendPerSweepWei?: bigint;
 }
 
 /** A runner on fakes: chain, indexer, prover, board payloads. Base fee 10 wei, 300,000 gas: a cost of 3,000,000 wei. */
@@ -84,6 +88,8 @@ function world(options: WorldOptions = {}) {
       tokenValuationsWei: options.valuations ?? {},
       executionGasFallback: options.executionGasFallback ?? 300_000n,
       maximumPrerequisiteRounds: 3,
+      prerequisiteGasFallback: options.prerequisiteGasFallback ?? 300_000n,
+      maximumPrerequisiteSpendPerSweepWei: options.maximumPrerequisiteSpendPerSweepWei ?? 10n ** 18n,
     },
     logger,
   };
@@ -100,6 +106,7 @@ function world(options: WorldOptions = {}) {
     queue: createSerialQueue(),
     now: () => clock,
     maximumDeliveriesPerSweep: options.maximumDeliveriesPerSweep ?? 10,
+    prerequisiteLossRefusalMilliseconds: REFUSAL_WINDOW_MILLISECONDS,
     logger,
   });
   return { runner, chain, prover, lightClient, state, outcomes, events, indexer, delivery, advance: (milliseconds: number) => (clock += milliseconds) };
@@ -278,7 +285,8 @@ describe("delivery decisions", () => {
     };
     expect((await w.runner.sweep()).delivered).toBe(1);
     const order = w.chain.log.filter((entry) => entry.kind !== "call").map((entry) => `${entry.kind}:${entry.request.data.slice(0, 10)}`);
-    expect(order).toEqual(["simulate:0xdeadbeef", "send:0xdeadbeef", `simulate:${EXECUTE_WITH_RUNNER}`, `send:${EXECUTE_WITH_RUNNER}`]);
+    // The first simulation estimates the cost before anything is sent. The second one guards the send itself.
+    expect(order).toEqual(["simulate:0xdeadbeef", "simulate:0xdeadbeef", "send:0xdeadbeef", `simulate:${EXECUTE_WITH_RUNNER}`, `send:${EXECUTE_WITH_RUNNER}`]);
     expect(w.chain.unsimulatedSends()).toEqual([]);
   });
 
@@ -333,6 +341,7 @@ describe("delivery decisions", () => {
       queue: createSerialQueue(),
       now: () => 1_000_000,
       maximumDeliveriesPerSweep: 10,
+      prerequisiteLossRefusalMilliseconds: REFUSAL_WINDOW_MILLISECONDS,
       logger: memoryLogger().logger,
     });
     const sends = w.chain.log.filter((entry) => entry.kind === "send").length;
@@ -340,10 +349,107 @@ describe("delivery decisions", () => {
     expect(w.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(sends);
   });
 
+  describe("the cost of layout calls", () => {
+    const layoutCall = { function: "addBlockHashLayout", reason: "no row", to: BRIDGE, data: "0xdeadbeef" as Hex };
+    const secondLayoutCall = { function: "addSlotLayout", reason: "no row", to: BRIDGE, data: "0xbeefbeef" as Hex };
+    const isLayoutSend = (entry: { kind: string; request: { data: Hex } }) => entry.kind === "send" && entry.request.data.startsWith("0xdeadbeef");
+
+    /** Evidence that lists the layout calls on the first build for a source transaction, and none after. */
+    function listLayoutOnce(w: ReturnType<typeof world>, calls: ReadonlyArray<typeof layoutCall>) {
+      const built = new Map<string, number>();
+      const counter = { builds: 0 };
+      w.prover.evidence = async (request: { transactionHash: Hex }) => {
+        counter.builds += 1;
+        const count = (built.get(request.transactionHash) ?? 0) + 1;
+        built.set(request.transactionHash, count);
+        return evidenceFor({ prerequisites: count === 1 ? [...calls] : [] });
+      };
+      return counter;
+    }
+
+    const offerFor = (id: number) => feedItem({ id, token: WRAPPED_NATIVE });
+    const dataFor = (ids: readonly number[]) => Object.fromEntries(ids.map((id) => [word(id), feeOfferData({ director: fixedFee(10n), value: 1000n, token: WRAPPED_NATIVE })]));
+    const executionGasSimulatedAt = (gas: bigint) => (request: { data: Hex }): Simulation | undefined =>
+      request.data.startsWith(EXECUTE_WITH_RUNNER) ? { ok: true, gas } : undefined;
+
+    it("refuses an item before any layout call when the fee passes the first check but not layout calls plus execution", async () => {
+      const w = world({ items: [offerFor(1)], data: dataFor([1]) });
+      // The first check prices 300,000 gas at 10 wei: 3,000,000. The fee covers that, and not the 6,000,000 of layout call plus execution.
+      w.chain.feeTokens = COST + 1n;
+      listLayoutOnce(w, [layoutCall]);
+      const summary = await w.runner.sweep();
+      expect(summary).toMatchObject({ delivered: 0, skipped: 1 });
+      expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "fee-below-cost-plus-margin", costWei: 2n * COST });
+      expect(w.outcomes.records[0]).not.toHaveProperty("prerequisiteCostWei");
+      expect(w.chain.log.some((entry) => entry.kind === "send")).toBe(false);
+    });
+
+    it("uses the fallback gas for a layout call that cannot be simulated before the call before it", async () => {
+      const w = world({ items: [offerFor(1)], data: dataFor([1]), prerequisiteGasFallback: 1_000_000n });
+      // The first call costs 300,000 gas, the second 1,000,000 by the fallback, the execution 300,000: 16,000,000 wei.
+      w.chain.feeTokens = 10_000_000n;
+      w.chain.simulateOverride = (request) => (request.data === secondLayoutCall.data ? { ok: false, reason: "RowMissing" } : undefined);
+      listLayoutOnce(w, [layoutCall, secondLayoutCall]);
+      await w.runner.sweep();
+      expect(w.outcomes.records[0]).toMatchObject({ reason: "fee-below-cost-plus-margin", costWei: 16_000_000n });
+      expect(w.chain.log.some((entry) => entry.kind === "send")).toBe(false);
+    });
+
+    it("delivers the honest case and records what the layout call cost", async () => {
+      const w = world({ items: [offerFor(1)], data: dataFor([1]) });
+      w.chain.feeTokens = 2n * COST;
+      listLayoutOnce(w, [layoutCall]);
+      expect((await w.runner.sweep()).delivered).toBe(1);
+      expect(w.outcomes.records[0]).toMatchObject({ status: "delivered", prerequisiteCostWei: COST });
+    });
+
+    it("stops paying for layout calls when the sweep budget is spent, and refuses before it sends", async () => {
+      const ids = [1, 2, 3];
+      const w = world({ items: ids.map(offerFor), data: dataFor(ids), maximumPrerequisiteSpendPerSweepWei: 4_000_000n });
+      w.chain.feeTokens = 100_000_000n;
+      listLayoutOnce(w, [layoutCall]);
+      const summary = await w.runner.sweep();
+      // One layout call costs 3,000,000. The second would take the sweep to 6,000,000, over the cap of 4,000,000.
+      expect(summary).toMatchObject({ delivered: 1, skipped: 2 });
+      expect(w.chain.log.filter(isLayoutSend)).toHaveLength(1);
+      expect(w.outcomes.records.filter((record) => record.status === "skipped").map((record) => record.reason)).toEqual(["prerequisite-budget-exhausted", "prerequisite-budget-exhausted"]);
+    });
+
+    it("counts an item that cost layout gas toward the delivery limit, even when its delivery was skipped", async () => {
+      const ids = [1, 2, 3];
+      const w = world({ items: ids.map(offerFor), data: dataFor(ids), maximumDeliveriesPerSweep: 1 });
+      w.chain.feeTokens = 10_000_000n;
+      listLayoutOnce(w, [layoutCall]);
+      // The delivery simulation says 10,000,000 gas. The final check fails after the layout call is paid.
+      w.chain.simulateOverride = executionGasSimulatedAt(10_000_000n);
+      await w.runner.sweep();
+      expect(w.chain.log.filter(isLayoutSend)).toHaveLength(1);
+    });
+
+    it("records the loss when the final check fails after layout calls, and does not try the item again in the window", async () => {
+      const w = world({ items: [offerFor(1)], data: dataFor([1]) });
+      w.chain.feeTokens = 10_000_000n;
+      const counter = listLayoutOnce(w, [layoutCall]);
+      w.chain.simulateOverride = executionGasSimulatedAt(10_000_000n);
+      await w.runner.sweep();
+      expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "fee-below-cost-plus-margin", prerequisiteCostWei: COST });
+      const loss = w.events().find((event) => event.event === "prerequisite_loss");
+      expect(loss).toMatchObject({ messageId: word(1), lossWei: COST.toString() });
+      const builds = counter.builds;
+      await w.runner.sweep();
+      w.advance(REFUSAL_WINDOW_MILLISECONDS - 1000);
+      await w.runner.sweep();
+      expect(counter.builds).toBe(builds);
+      w.advance(2000);
+      await w.runner.sweep();
+      expect(counter.builds).toBe(builds + 1);
+    });
+  });
+
   it("never sends a transaction that it did not simulate", async () => {
     const w = world({ items: [offerItem()], data: offerData() });
     w.chain.feeTokens = COST * 2n;
-    await deliverItem(w.delivery, offerItem());
+    await deliverItem(w.delivery, offerItem(), createPrerequisiteLedger(10n ** 18n));
     expect(w.chain.unsimulatedSends()).toEqual([]);
     expect(w.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(1);
   });

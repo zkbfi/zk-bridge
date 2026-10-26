@@ -131,6 +131,16 @@ export const runnerSchema = z
     maximumDeliveriesPerSweep: z.number().int().positive().default(10),
     /** The most layout calls that one delivery sends before it gives up. */
     maximumPrerequisiteRounds: z.number().int().positive().default(4),
+    /** Gas that the runner assumes for a layout call it cannot simulate before the call before it is mined. */
+    prerequisiteGasFallback: z.number().int().positive().default(300_000),
+    /**
+     * The most wei that the layout calls of one sweep may cost. Required: layout rows help every sender, so an item
+     * whose fee later fails the final check still costs the runner this spend. A sweep that spends on layout calls
+     * also counts toward `maximumDeliveriesPerSweep`.
+     */
+    maximumPrerequisiteSpendPerSweepWei: weiSchema,
+    /** Seconds in which the runner does not try an item again after it paid layout calls for it and did not deliver. */
+    prerequisiteLossRefusalSeconds: positiveSeconds.default(1800),
     /** Seconds to wait for a receipt. */
     receiptTimeoutSeconds: positiveSeconds.default(300),
   })

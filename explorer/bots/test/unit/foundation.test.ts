@@ -68,6 +68,7 @@ describe("the bot configuration", () => {
         prover: { binary: "/usr/local/bin/zk-bridge-prover" },
         indexerUrl: "http://127.0.0.1:42069",
         signer: { kind: "private-key", key: "env:RUNNER_PRIVATE_KEY" },
+        maximumPrerequisiteSpendPerSweepWei: "5000",
       },
     });
     expect(config.maximumMessageBytes).toBe(8192);
@@ -76,10 +77,17 @@ describe("the bot configuration", () => {
     expect(config.runner?.signer).toEqual({ kind: "private-key", key: { source: "environment", variable: "RUNNER_PRIVATE_KEY" } });
     expect(config.runner?.minimumMarginWei).toBe("0");
     expect(config.runner?.deliverWithoutOffer).toBe(false);
+    expect(config.runner?.prerequisiteGasFallback).toBe(300_000);
+    expect(config.runner?.prerequisiteLossRefusalSeconds).toBe(1800);
+  });
+
+  it("refuses a runner without a cap on the layout spend of a sweep, because the cap bounds an attack on the runner gas", () => {
+    const runner = { prover: { binary: "p" }, indexerUrl: "http://127.0.0.1:1", signer: { kind: "private-key", key: "env:RUNNER_PRIVATE_KEY" } };
+    expect(() => parseBotConfig({ ...minimal, runner })).toThrow(/config\.runner\.maximumPrerequisiteSpendPerSweepWei/);
   });
 
   it("accepts a 1Password reference and refuses a secret typed where a reference belongs", () => {
-    const runner = (key: string) => ({ prover: { binary: "p" }, indexerUrl: "http://127.0.0.1:1", signer: { kind: "private-key", key } });
+    const runner = (key: string) => ({ prover: { binary: "p" }, indexerUrl: "http://127.0.0.1:1", signer: { kind: "private-key", key }, maximumPrerequisiteSpendPerSweepWei: "5000" });
     expect(parseBotConfig({ ...minimal, runner: runner("op://vault/item/field") }).runner?.signer).toMatchObject({ key: { source: "onepassword" } });
     expect(() => parseBotConfig({ ...minimal, runner: runner(`0x${"ab".repeat(32)}`) })).toThrow(BotConfigError);
   });
