@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
-# Coverage gate for the contracts of this repository.
+# The single gate for the contracts of this repository: the whole forge suite under coverage, plus the tests that need
+# optimized bytecode, plus the 100 percent rule.
 #
 # Usage:   script/coverage-check.sh [lcov-output-path]
-# Result:  exit 0 when every measured file has 100 percent lines, branches
-#          and functions. Exit 1 and a table of the offending files otherwise.
+# Result:  exit 0 when every test passes and every measured file has 100 percent
+#          lines, branches and functions. Exit 1 and a table of the offending
+#          files otherwise.
+#
+# One gate, not two: this script runs every test of the default profile. Most run
+# under coverage. The twelve optimizer tests below run in a second step with
+# `forge test` and the real optimizer. So `forge test` followed by this
+# script runs the suite twice for nothing. Run only this script, or only
+# `forge test` while you iterate. The deep fuzz profile is not part of it: use
+# script/test-deep.sh.
 #
 # Coverage exclusions (the only ones allowed):
 #   vendor   - src/hardened/vendor is vendored third party code.
@@ -15,7 +24,7 @@
 # tests depend on optimized bytecode (gas budgets, the contract size limit,
 # the canary that depends on gas cost, and the verifier code hash). They
 # fail under coverage and pass under `forge test`. They are not weakened.
-# They are skipped here only. `forge test` must still run them.
+# The coverage run skips them, and the second step of this script runs them.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -29,6 +38,9 @@ forge coverage \
   --report-file "$lcov_path" \
   --no-match-coverage 'vendor|test|script|mocks' \
   --no-match-test "$optimizer_dependent_tests"
+
+# The twelve optimizer tests, with the optimizer on, as `forge test` runs them.
+forge test --match-test "$optimizer_dependent_tests"
 
 awk '
   function pct(hit, found) { return found == 0 ? 100 : 100 * hit / found }
