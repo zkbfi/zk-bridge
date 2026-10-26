@@ -183,8 +183,9 @@ const rawDataArgument = (calldata: Hex): Hex | null => {
   for (const abi of confirmableAbis) {
     try {
       const call = decodeFunctionData({ abi, data: calldata });
-      const item = abi.find((entry): entry is AbiFunction => entry.type === "function" && entry.name === call.functionName);
-      const index = item?.inputs.findIndex((input) => input.name === "data") ?? -1;
+      // The decoder returns only a function name that the ABI holds, so the search always finds the item.
+      const item = abi.find((entry): entry is AbiFunction => entry.type === "function" && entry.name === call.functionName) as AbiFunction;
+      const index = item.inputs.findIndex((input) => input.name === "data");
       const value = index < 0 ? undefined : call.args?.[index];
       if (typeof value === "string") return value as Hex;
     } catch {

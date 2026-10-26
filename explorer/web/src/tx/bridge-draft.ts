@@ -99,23 +99,19 @@ const WEI_PER_COIN = 10n ** 18n;
 
 const sideOfChoice = (choice: string): ChainSide => (choice.startsWith("second:") ? "second" : "first");
 
-const parseDecimalText = (text: string, decimals: number): bigint | null => {
+/** Runs a parser of user text. Text that is not a number gives null. Any other failure is a defect and propagates. */
+const orNull = (parse: () => bigint): bigint | null => {
   try {
-    return parseUnits(text, decimals);
+    return parse();
   } catch (error) {
     if (error instanceof AmountParseError) return null;
     throw error;
   }
 };
 
-const parsePercentText = (text: string): bigint | null => {
-  try {
-    return parsePercentAsRate(text);
-  } catch (error) {
-    if (error instanceof AmountParseError) return null;
-    throw error;
-  }
-};
+const parseDecimalText = (text: string, decimals: number): bigint | null => orNull(() => parseUnits(text, decimals));
+
+const parsePercentText = (text: string): bigint | null => orNull(() => parsePercentAsRate(text));
 
 /** Input of {@link tipStatusOf}. */
 export type TipStatusInput = {
