@@ -8,7 +8,10 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "json-summary"],
       include: ["src/**"],
-      exclude: [],
+      exclude: [
+        // Thin worker entry: it only wires the thread to runGrindJob, which grind-job.test.ts covers.
+        "src/msgboard/grind-worker.mjs",
+      ],
       thresholds: { lines: 100, branches: 100, functions: 100, statements: 100 },
     },
   },
