@@ -182,22 +182,22 @@ function attempt<Value>(read: () => Value): Parsed<Value> {
   }
 }
 
-function parseNumber(label: string, text: string, decimals: number): bigint {
+/** Runs a read of an amount and names the field in the message when the text is not a valid amount. */
+function readAmount(label: string, read: () => bigint): bigint {
   try {
-    return parseUnits(text, decimals)
+    return read()
   } catch (error) {
     if (error instanceof AmountParseError) throw new PlanInputError(`The ${label} is not valid: ${error.message}.`)
     throw error
   }
 }
 
+function parseNumber(label: string, text: string, decimals: number): bigint {
+  return readAmount(label, () => parseUnits(text, decimals))
+}
+
 function parseRatePercent(label: string, text: string): bigint {
-  try {
-    return parsePercentAsRate(text)
-  } catch (error) {
-    if (error instanceof AmountParseError) throw new PlanInputError(`The ${label} is not valid: ${error.message}.`)
-    throw error
-  }
+  return readAmount(label, () => parsePercentAsRate(text))
 }
 
 const valueOf = (values: Values, name: string): string => (values[name] ?? '').trim()
