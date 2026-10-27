@@ -794,9 +794,9 @@ contract RouterHandler is RouterWorld {
                 if (sameToken && items[k].payee == items[i].payee && _isTokenPayoutByARouter(items[k])) sharing++;
             }
             for (uint256 j = 0; j < rewards.length; j++) {
-                rewardsOfTheToken += _transfersTo(logs, token, rewards[j]);
+                rewardsOfTheToken += _transfersFromTo(logs, token, items[i].reading.recipient, rewards[j]);
             }
-            uint256 received = _transfersTo(logs, token, items[i].payee);
+            uint256 received = _transfersFromTo(logs, token, items[i].reading.recipient, items[i].payee);
             if (received > sharing) _violate("a payee received more than one transfer for one delivery");
             if (rewardsOfTheToken > items.length) {
                 _violate("a reward address received more than one transfer for one delivery");
@@ -825,12 +825,19 @@ contract RouterHandler is RouterWorld {
         return !(director.settings & 2 != 0 && isWrappedNativeOfItsChain(item.universe));
     }
 
-    /// @dev The number of `Transfer` events of `token` in the logs whose payee is `to`.
-    function _transfersTo(Vm.Log[] memory logs, address token, address to) private pure returns (uint256 count) {
+    /// @dev The number of `Transfer` events of `token` in the logs that go from `from` to `to`. A router pays with one
+    /// transfer from itself, so the count leaves out the direct mints and unlocks of other messages in the same batch.
+    function _transfersFromTo(Vm.Log[] memory logs, address token, address from, address to)
+        private
+        pure
+        returns (uint256 count)
+    {
         for (uint256 i = 0; i < logs.length; i++) {
-            bool isTransferTo = logs[i].emitter == token && logs[i].topics.length == 3
-                && logs[i].topics[0] == TRANSFER_TOPIC && address(uint160(uint256(logs[i].topics[2]))) == to;
-            if (isTransferTo) count++;
+            bool isTransfer = logs[i].emitter == token && logs[i].topics.length == 3 && logs[i].topics[0] == TRANSFER_TOPIC;
+            if (!isTransfer) continue;
+            bool matches = address(uint160(uint256(logs[i].topics[1]))) == from
+                && address(uint160(uint256(logs[i].topics[2]))) == to;
+            if (matches) count++;
         }
     }
 
