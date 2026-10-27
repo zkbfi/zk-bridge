@@ -8,13 +8,6 @@
     "verifierCodeHash": "@@VERIFIER_CODE_HASH_A@@",
     "depositCutoffTimestamp": "0",
     "deployerNonce": "@@NONCE_A@@",
-    "fee": {
-      "recipient": "0x0000000000000000000000000000000000000000",
-      "startRate": "0",
-      "stepRate": "0",
-      "floorRate": "0",
-      "stepPeriodSeconds": "0"
-    },
     "flowLimiter": "0x0000000000000000000000000000000000000000",
     "wrappedNative": "@@WRAPPED_NATIVE_A@@",
     "deployDeliveryRouter": "false",
@@ -53,13 +46,6 @@
     "verifierCodeHash": "@@VERIFIER_CODE_HASH_B@@",
     "depositCutoffTimestamp": "0",
     "deployerNonce": "@@NONCE_B@@",
-    "fee": {
-      "recipient": "0x0000000000000000000000000000000000000000",
-      "startRate": "0",
-      "stepRate": "0",
-      "floorRate": "0",
-      "stepPeriodSeconds": "0"
-    },
     "flowLimiter": "0x0000000000000000000000000000000000000000",
     "wrappedNative": "@@WRAPPED_NATIVE_B@@",
     "deployDeliveryRouter": "false",

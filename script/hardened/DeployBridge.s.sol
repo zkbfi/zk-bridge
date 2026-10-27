@@ -68,22 +68,10 @@ contract DeployBridge is Script {
         address deliveryRouterRewardAddress;
         address deliveryRouterFailedDeliveryAddress;
         string remoteChainName;
-        FeeConfig fee;
         address flowLimiter;
         LightClientConfig lightClient;
         GateConfig gate;
         ObservationConfig observation;
-    }
-
-    /// @notice The fee schedule of the mediator on a chain. The mediator has no fee authority. A zero `startRate` means
-    /// no fee, and then the recipient may be the zero address. The rate starts at `startRate` and falls by `stepRate`
-    /// after each `stepPeriodSeconds`, down to `floorRate`. All rates are scaled by 1e18.
-    struct FeeConfig {
-        address recipient;
-        uint256 startRate;
-        uint256 stepRate;
-        uint256 floorRate;
-        uint256 stepPeriodSeconds;
     }
 
     /// @notice The own-chain light client and the fork registry of a chain whose gate mode is
@@ -600,11 +588,6 @@ contract DeployBridge is Script {
                     bridge: bridge,
                     remoteMediator: deployment.remoteMediator,
                     remoteChainId: deployment.remoteChainId,
-                    feeRecipient: chain.fee.recipient,
-                    feeStartRate: chain.fee.startRate,
-                    feeStepRate: chain.fee.stepRate,
-                    feeFloorRate: chain.fee.floorRate,
-                    feeStepPeriod: chain.fee.stepPeriodSeconds,
                     flowLimiter: chain.flowLimiter,
                     remoteChainName: chain.remoteChainName
                 })
@@ -723,13 +706,6 @@ contract DeployBridge is Script {
         if (keccak256(bytes(homeChainName)) != keccak256(bytes(chain.remoteChainName))) {
             revert DeploymentMismatch("factory.homeChainName");
         }
-        if (mediator.feeRecipient() != chain.fee.recipient) revert DeploymentMismatch("mediator.feeRecipient");
-        if (mediator.feeStartRate() != chain.fee.startRate) revert DeploymentMismatch("mediator.feeStartRate");
-        if (mediator.feeStepRate() != chain.fee.stepRate) revert DeploymentMismatch("mediator.feeStepRate");
-        if (mediator.feeFloorRate() != chain.fee.floorRate) revert DeploymentMismatch("mediator.feeFloorRate");
-        if (mediator.feeStepPeriod() != chain.fee.stepPeriodSeconds) {
-            revert DeploymentMismatch("mediator.feeStepPeriod");
-        }
         if (address(mediator.flowLimiter()) != chain.flowLimiter) revert DeploymentMismatch("mediator.flowLimiter");
     }
 
@@ -767,7 +743,6 @@ contract DeployBridge is Script {
         chain.deployerNonce = _readUint(json, string.concat(prefix, ".deployerNonce"));
         chain.remoteChainName = _readText(json, string.concat(prefix, ".remoteChainName"));
         chain.depositCutoffTimestamp = uint64(_readUint(json, string.concat(prefix, ".depositCutoffTimestamp")));
-        chain.fee = _readFee(json, string.concat(prefix, ".fee"));
         chain.flowLimiter = vm.parseAddress(_readText(json, string.concat(prefix, ".flowLimiter")));
         chain.wrappedNative = _readOptionalAddress(json, string.concat(prefix, ".wrappedNative"));
         chain.deliveryRouter = _readRouterChoice(json, string.concat(prefix, ".deployDeliveryRouter"));
@@ -798,16 +773,6 @@ contract DeployBridge is Script {
         if (chain.gate.mode == BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry) {
             chain.observation = _readObservation(json, string.concat(prefix, ".observation"));
         }
-    }
-
-    /// @dev The fee schedule of one mediator. The recipient may be the zero address when the start rate is zero. The
-    /// mediator constructor checks the schedule.
-    function _readFee(string memory json, string memory prefix) private pure returns (FeeConfig memory fee) {
-        fee.recipient = vm.parseAddress(_readText(json, string.concat(prefix, ".recipient")));
-        fee.startRate = _readUint(json, string.concat(prefix, ".startRate"));
-        fee.stepRate = _readUint(json, string.concat(prefix, ".stepRate"));
-        fee.floorRate = _readUint(json, string.concat(prefix, ".floorRate"));
-        fee.stepPeriodSeconds = _readUint(json, string.concat(prefix, ".stepPeriodSeconds"));
     }
 
     function _readObservation(string memory json, string memory prefix)

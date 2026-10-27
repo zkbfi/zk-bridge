@@ -6,10 +6,10 @@ pragma solidity ^0.8.24;
 /// refuses the call, and the whole transaction is undone. A limiter holds no tokens and no approval, so it cannot move
 /// funds. It may change its own state, for example to record usage.
 interface IFlowLimiter {
-    /// @notice Checks a deposit, or reverts. The vault calls it after it measures the received amount and takes the fee.
+    /// @notice Checks a deposit, or reverts. The vault calls it after it measures the received amount.
     /// @param token The local token.
     /// @param depositor The sender of the deposit.
-    /// @param amount The net amount that the vault bridges, after the fee.
+    /// @param amount The amount that the vault bridges.
     function checkDeposit(address token, address depositor, uint256 amount) external;
 
     /// @notice Checks a withdrawal, or reverts. The vault calls it after every proof check and before it marks the

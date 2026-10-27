@@ -18,13 +18,6 @@
     "verifierCodeHash": "0xe5878a94678c40ab6b1bebc391f4d4c12f44bedb8291921b5c0f5a251ec6e84b",
     "depositCutoffTimestamp": "0",
     "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_SEPOLIA_AFTER_THE_VERIFIER_DEPLOYMENT",
-    "fee": {
-      "recipient": "0x0000000000000000000000000000000000000000",
-      "startRate": "0",
-      "stepRate": "0",
-      "floorRate": "0",
-      "stepPeriodSeconds": "0"
-    },
     "flowLimiter": "0x0000000000000000000000000000000000000000",
     "wrappedNative": "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9",
     "deployDeliveryRouter": "true",
@@ -77,13 +70,6 @@
     "verifierCodeHash": "0xe5878a94678c40ab6b1bebc391f4d4c12f44bedb8291921b5c0f5a251ec6e84b",
     "depositCutoffTimestamp": "0",
     "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_943_AFTER_THE_VERIFIER_DEPLOYMENT",
-    "fee": {
-      "recipient": "0x24E6cc8b82D086762Ef58fa1FF3f4d0702892718",
-      "startRate": "1000000000000000",
-      "stepRate": "100000000000000",
-      "floorRate": "500000000000000",
-      "stepPeriodSeconds": "31536000"
-    },
     "flowLimiter": "0x0000000000000000000000000000000000000000",
     "wrappedNative": "0x70499adEBB11Efd915E3b69E700c331778628707",
     "deployDeliveryRouter": "true",

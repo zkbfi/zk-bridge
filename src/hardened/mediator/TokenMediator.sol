@@ -8,7 +8,6 @@ import {IFlowLimiter} from "../IFlowLimiter.sol";
 import {IAMB} from "../IAMB.sol";
 import {IBurnableMintableERC677Token} from "./IBurnableMintableERC677Token.sol";
 import {IERC20Receiver} from "./IERC20Receiver.sol";
-import {FeeSchedule} from "./FeeSchedule.sol";
 import {TokenFactory} from "./TokenFactory.sol";
 import {TokenReader} from "./TokenReader.sol";
 
@@ -29,7 +28,7 @@ import {TokenReader} from "./TokenReader.sol";
 /// what it locked, less what it released, counted from the amount it received (balance before and after a pull). A
 /// token that arrives by a plain transfer is in no record, and nothing pays it out. A fee on transfer token bridges
 /// the amount that arrived. The record includes the amounts waiting in `claimable`, so the balance of the mediator
-/// covers `mediatorBalance + accruedFees` for each native token.
+/// covers `mediatorBalance` for each native token.
 ///
 /// Rebasing tokens are not supported. A token whose balance changes with no transfer (a rebase, an interest bearing
 /// token, a token with a negative rebase) can leave the record above the real balance, and then releases fail. The
@@ -43,10 +42,7 @@ import {TokenReader} from "./TokenReader.sol";
 ///
 /// Divergences from OmniBridge. The handlers also check `messageSourceChainId`. `deploy` takes the native token.
 /// Tokens are not registered by an owner. There are no limits, no failed message fix and no claim of stray tokens.
-/// The fee follows a fixed schedule that the constructor sets. The mediator has no owner and no fee authority. The
-/// same rate applies to a relay on this chain (outgoing) and to a delivery on this chain (incoming). The rate starts at
-/// `feeStartRate` and falls by `feeStepRate` after each `feeStepPeriod`, down to `feeFloorRate`. It never rises, so a
-/// sender who reads the rate today pays no more later. A start rate of zero means no fee.
+/// The mediator charges no fee.
 contract TokenMediator is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -56,13 +52,6 @@ contract TokenMediator is ReentrancyGuard {
     /// accepts. With deployment from the same account and the same nonce on both chains, it has the address of this
     /// mediator.
     /// @param remoteChainId The identifier of the other chain. A message must come from this chain.
-    /// @param feeRecipient The recipient of collected fees. It cannot change. It must not be zero when the start rate is
-    /// not zero.
-    /// @param feeStartRate The fee rate at deployment, scaled by `FEE_DENOMINATOR`. It must not exceed
-    /// `FEE_DENOMINATOR`. Zero means no fee.
-    /// @param feeStepRate The amount that the rate falls after each period, scaled by `FEE_DENOMINATOR`.
-    /// @param feeFloorRate The lowest rate. It must not exceed the start rate.
-    /// @param feeStepPeriod The length of one step in seconds. It must not be zero when the step is not zero.
     /// @param flowLimiter The flow limiter. Zero means no limiter from the start. Nothing can set one later.
     /// @param remoteChainName The name of the other chain, for example `Ethereum`. A bridged copy takes it in its name.
     /// It cannot be empty and it cannot change.
@@ -70,20 +59,8 @@ contract TokenMediator is ReentrancyGuard {
         address bridge;
         address remoteMediator;
         uint256 remoteChainId;
-        address feeRecipient;
-        uint256 feeStartRate;
-        uint256 feeStepRate;
-        uint256 feeFloorRate;
-        uint256 feeStepPeriod;
         address flowLimiter;
         string remoteChainName;
-    }
-
-    /// @dev Which side of a transfer a fee was charged on. Outgoing is the relay on the source chain. Incoming is the
-    /// delivery on the destination chain.
-    enum FeeDirection {
-        Outgoing,
-        Incoming
     }
 
     /// @dev Whether the delivery calls `onTokenBridged` on the account that received the tokens.
@@ -134,9 +111,6 @@ contract TokenMediator is ReentrancyGuard {
         bool deployAcknowledged;
     }
 
-    /// @notice The divisor of a fee rate. A rate of `FEE_DENOMINATOR` is 100%.
-    uint256 public constant FEE_DENOMINATOR = FeeSchedule.DENOMINATOR;
-
     /// @notice The gas that the message bridge gives the call of a release of tokens.
     uint256 public constant RELEASE_GAS_LIMIT = 250_000;
     /// @notice The extra gas for the callback of a release with a call.
@@ -161,23 +135,13 @@ contract TokenMediator is ReentrancyGuard {
     error ZeroValue(string name);
     /// @notice The largest message of the mediator asks for more gas than the message bridge allows in one call.
     error GasLimitAboveBridgeMaximum(uint256 gasLimit, uint256 maximum);
-    /// @notice The start rate of the fee is above `FEE_DENOMINATOR`, which is 100%.
-    error FeeStartRateTooHigh(uint256 feeStartRate);
-    /// @notice The floor of the fee is above the start rate.
-    error FeeFloorAboveStart(uint256 feeFloorRate, uint256 feeStartRate);
-    /// @notice A fee that falls needs a step period that is not zero.
-    error ZeroFeeStepPeriod();
-    /// @notice A fee that is not zero needs a recipient.
-    error ZeroFeeRecipient();
-    /// @notice No fees are waiting for collection in this token.
-    error NoFeesAccrued(address token);
     /// @notice Only the flow limiter may detach itself. After a detach nobody can.
     error NotFlowLimiter(address caller);
     /// @notice The receiver on the other chain is the zero address, or the mediator on the other chain.
     error InvalidReceiver(address receiver);
     /// @notice The fallback address is zero.
     error ZeroFallback();
-    /// @notice The amount after the fee is zero.
+    /// @notice The amount to bridge is zero.
     error ZeroAmount();
     /// @notice The token took more from the mediator than the sender named. The token is not supported.
     error ReceivedMoreThanSent(uint256 received, uint256 sent);
@@ -198,7 +162,7 @@ contract TokenMediator is ReentrancyGuard {
     /// @notice The token refused the payment of a claim.
     error ClaimTransferFailed(address token, address account);
 
-    /// @notice Emitted when a sender starts a transfer, with the amount after the fee.
+    /// @notice Emitted when a sender starts a transfer, with the amount that arrived.
     event TokensBridgingInitiated(
         address indexed token, address indexed sender, uint256 value, bytes32 indexed messageId
     );
@@ -217,11 +181,6 @@ contract TokenMediator is ReentrancyGuard {
     event Claimed(address indexed token, address indexed account, uint256 value);
     /// @notice Emitted when the `onTokenBridged` call on a recipient fails. The tokens stay with the recipient.
     event CallbackFailed(address indexed token, address indexed recipient, bytes32 indexed messageId);
-    /// @notice Emitted when a relay or a delivery is charged a fee. The fee stays in the mediator until
-    /// `collectFees`. `token` is the token on this chain.
-    event FeeCharged(address indexed token, uint256 fee, FeeDirection direction);
-    /// @notice Emitted when accrued fees are sent to the fee recipient.
-    event FeesCollected(address indexed token, address indexed feeRecipient, uint256 amount);
     /// @notice Emitted when the flow limiter detaches itself. The mediator never calls it again.
     event FlowLimiterDetached(address indexed limiter);
 
@@ -233,21 +192,6 @@ contract TokenMediator is ReentrancyGuard {
     uint256 public immutable remoteChainId;
     /// @notice The factory that deploys the bridged copies. The mediator deploys it in its constructor.
     TokenFactory public immutable tokenFactory;
-    /// @notice The recipient of collected fees. It cannot change.
-    address public immutable feeRecipient;
-    /// @notice The fee rate at `feeStartTime`, scaled by `FEE_DENOMINATOR` (1e18 is 100%). Zero means no fee.
-    uint256 public immutable feeStartRate;
-    /// @notice The amount that the fee rate falls after each `feeStepPeriod`, scaled by `FEE_DENOMINATOR`.
-    uint256 public immutable feeStepRate;
-    /// @notice The lowest fee rate, scaled by `FEE_DENOMINATOR`.
-    uint256 public immutable feeFloorRate;
-    /// @notice The length of one step of the fee schedule, in seconds.
-    uint256 public immutable feeStepPeriod;
-    /// @notice The start of the fee schedule: the timestamp of the block that deployed the mediator.
-    uint256 public immutable feeStartTime;
-
-    /// @notice The fees charged and not yet collected, for each local token.
-    mapping(address token => uint256) public accruedFees;
     /// @notice The flow limiter that every relay and release must pass. Zero means none. Only the limiter can detach
     /// itself, and nothing can set it.
     IFlowLimiter public flowLimiter;
@@ -274,18 +218,11 @@ contract TokenMediator is ReentrancyGuard {
         if (terms.remoteMediator == address(0)) revert ZeroValue("remoteMediator");
         if (terms.remoteChainId == 0) revert ZeroValue("remoteChainId");
         if (bytes(terms.remoteChainName).length == 0) revert ZeroValue("remoteChainName");
-        _requireFeeSchedule(terms);
 
         bridgeContract = IAMB(terms.bridge);
         mediatorContractOnOtherSide = terms.remoteMediator;
         remoteChainId = terms.remoteChainId;
         tokenFactory = _createFactory(terms.remoteChainName);
-        feeRecipient = terms.feeRecipient;
-        feeStartRate = terms.feeStartRate;
-        feeStepRate = terms.feeStepRate;
-        feeFloorRate = terms.feeFloorRate;
-        feeStepPeriod = terms.feeStepPeriod;
-        feeStartTime = block.timestamp;
         flowLimiter = IFlowLimiter(terms.flowLimiter);
     }
 
@@ -475,7 +412,7 @@ contract TokenMediator is ReentrancyGuard {
     }
 
     // ---------------------------------------------------------------------------------------------------------
-    // Claims, fees and the flow limiter
+    // Claims and the flow limiter
     // ---------------------------------------------------------------------------------------------------------
 
     /// @notice Pays what a failed release left for an account. Anyone may call it, and it pays `account` only.
@@ -493,20 +430,6 @@ contract TokenMediator is ReentrancyGuard {
         emit Claimed(token, account, amount);
     }
 
-    /// @notice Sends the accrued fees of a token to the fee recipient. Anyone may call it. The recipient cannot
-    /// change.
-    /// @dev The balance is zeroed before the transfer. A relay never transfers to the recipient, so a recipient that
-    /// a token refuses blocks this call only.
-    /// @param token The token on this chain.
-    function collectFees(address token) external nonReentrant {
-        uint256 amount = accruedFees[token];
-        if (amount == 0) revert NoFeesAccrued(token);
-        address recipient = feeRecipient;
-        accruedFees[token] = 0;
-        IERC20(token).safeTransfer(recipient, amount);
-        emit FeesCollected(token, recipient, amount);
-    }
-
     /// @notice Detaches the flow limiter for good. Only the limiter itself may call it, so its own rules decide when.
     /// Nothing can attach a limiter again.
     function detachFlowLimiter() external {
@@ -519,19 +442,6 @@ contract TokenMediator is ReentrancyGuard {
     // ---------------------------------------------------------------------------------------------------------
     // Views
     // ---------------------------------------------------------------------------------------------------------
-
-    /// @notice The fee rate now, for a relay and for a delivery, scaled by `FEE_DENOMINATOR`.
-    function currentFeeRate() public view returns (uint256) {
-        return feeRateAt(block.timestamp);
-    }
-
-    /// @notice The fee rate at a time, scaled by `FEE_DENOMINATOR`. It is the start rate before the end of the first
-    /// period, and then falls by the step after each period down to the floor: `max(start - step * floor((time -
-    /// start time) / period), floor)`.
-    /// @dev The math is in `FeeSchedule`, a pure library, which has the same function in TypeScript for the dashboard.
-    function feeRateAt(uint256 timestamp) public view returns (uint256) {
-        return FeeSchedule.rateAt(_feeSchedule(), timestamp);
-    }
 
     /// @notice The amount of a native token that the mediator owes to the other chain. It is not `balanceOf`.
     function mediatorBalance(address token) external view returns (uint256) {
@@ -589,7 +499,7 @@ contract TokenMediator is ReentrancyGuard {
             receiver = address(bytes20(data));
             payload = _dropAddress(data);
         }
-        uint256 accounted = accruedFees[token] + _native[token].balance;
+        uint256 accounted = _native[token].balance;
         uint256 balance = IERC20(token).balanceOf(address(this));
         if (balance < accounted + value) {
             revert UnbackedTransfer(token, value, balance > accounted ? balance - accounted : 0);
@@ -597,56 +507,47 @@ contract TokenMediator is ReentrancyGuard {
         _bridge(Relay(token, receiver, from, payload, _modeOf(payload)), from, value);
     }
 
-    /// @dev Charges the fee, asks the limiter, locks or burns, and sends the message.
-    function _bridge(Relay memory relay, address from, uint256 received) private {
+    /// @dev Asks the limiter, locks or burns, and sends the message.
+    function _bridge(Relay memory relay, address from, uint256 value) private {
         if (relay.receiver == address(0) || relay.receiver == mediatorContractOnOtherSide) {
             revert InvalidReceiver(relay.receiver);
         }
         if (relay.fallbackRecipient == address(0)) revert ZeroFallback();
-        uint256 net = received - _chargeFee(relay.token, received);
-        if (net == 0) revert ZeroAmount();
+        if (value == 0) revert ZeroAmount();
         IFlowLimiter limiter = flowLimiter;
-        if (address(limiter) != address(0)) limiter.checkDeposit(relay.token, from, net);
+        if (address(limiter) != address(0)) limiter.checkDeposit(relay.token, from, value);
 
         address nativeToken = nativeTokenAddress[relay.token];
         (bytes memory payload, MessageKind kind) =
-            nativeToken == address(0) ? _lockAndEncode(relay, net) : _burnAndEncode(relay, nativeToken, net);
+            nativeToken == address(0) ? _lockAndEncode(relay, value) : _burnAndEncode(relay, nativeToken, value);
         bytes32 messageId = bridgeContract.requireToPassMessage(mediatorContractOnOtherSide, payload, _gasLimitOf(kind));
-        emit TokensBridgingInitiated(relay.token, from, net, messageId);
-    }
-
-    /// @dev Takes the outgoing fee from the received amount, rounded down, and books it in `accruedFees`.
-    function _chargeFee(address token, uint256 received) private returns (uint256 fee) {
-        fee = FeeSchedule.feeOn(received, currentFeeRate());
-        if (fee == 0) return 0;
-        accruedFees[token] += fee;
-        emit FeeCharged(token, fee, FeeDirection.Outgoing);
+        emit TokensBridgingInitiated(relay.token, from, value, messageId);
     }
 
     /// @dev A native token: records the lock and builds the message that mints, or unlocks, on the other chain. Until
     /// the other chain proves the copy exists, the message deploys it.
-    function _lockAndEncode(Relay memory relay, uint256 net) private returns (bytes memory, MessageKind) {
+    function _lockAndEncode(Relay memory relay, uint256 value) private returns (bytes memory, MessageKind) {
         NativeRecord memory record = _native[relay.token];
-        uint256 newBalance = record.balance + net;
+        uint256 newBalance = record.balance + value;
         if (newBalance > type(uint240).max) revert MediatorBalanceOverflow(relay.token);
         _native[relay.token] = NativeRecord(uint240(newBalance), true, record.deployAcknowledged);
 
-        if (record.deployAcknowledged) return _encodeBridged(relay, net);
-        return _encodeDeploy(relay, net);
+        if (record.deployAcknowledged) return _encodeBridged(relay, value);
+        return _encodeDeploy(relay, value);
     }
 
     /// @dev A bridged copy: burns it and builds the message that unlocks the native token on the other chain.
-    function _burnAndEncode(Relay memory relay, address nativeToken, uint256 net)
+    function _burnAndEncode(Relay memory relay, address nativeToken, uint256 value)
         private
         returns (bytes memory, MessageKind)
     {
-        IBurnableMintableERC677Token(relay.token).burn(net);
+        IBurnableMintableERC677Token(relay.token).burn(value);
         bool sameFallback = relay.fallbackRecipient == relay.receiver;
         if (relay.mode == CallMode.WithCall) {
             return sameFallback
                 ? (
                     abi.encodeWithSelector(
-                        this.handleNativeTokensAndCall.selector, nativeToken, relay.receiver, net, relay.data
+                        this.handleNativeTokensAndCall.selector, nativeToken, relay.receiver, value, relay.data
                     ),
                     MessageKind.ReleaseAndCall
                 )
@@ -655,7 +556,7 @@ contract TokenMediator is ReentrancyGuard {
                         this.handleNativeTokensAndCallWithFallback.selector,
                         nativeToken,
                         relay.receiver,
-                        net,
+                        value,
                         relay.data,
                         relay.fallbackRecipient
                     ),
@@ -664,7 +565,7 @@ contract TokenMediator is ReentrancyGuard {
         }
         return sameFallback
             ? (
-                abi.encodeWithSelector(this.handleNativeTokens.selector, nativeToken, relay.receiver, net),
+                abi.encodeWithSelector(this.handleNativeTokens.selector, nativeToken, relay.receiver, value),
                 MessageKind.Release
             )
             : (
@@ -672,7 +573,7 @@ contract TokenMediator is ReentrancyGuard {
                     this.handleNativeTokensWithFallback.selector,
                     nativeToken,
                     relay.receiver,
-                    net,
+                    value,
                     relay.fallbackRecipient
                 ),
                 MessageKind.Release
@@ -681,13 +582,13 @@ contract TokenMediator is ReentrancyGuard {
 
     /// @dev The short form message for a native token whose copy exists. With the recipient as fallback it is the
     /// OmniBridge payload, byte for byte.
-    function _encodeBridged(Relay memory relay, uint256 net) private pure returns (bytes memory, MessageKind) {
+    function _encodeBridged(Relay memory relay, uint256 value) private pure returns (bytes memory, MessageKind) {
         bool sameFallback = relay.fallbackRecipient == relay.receiver;
         if (relay.mode == CallMode.WithCall) {
             return sameFallback
                 ? (
                     abi.encodeWithSelector(
-                        this.handleBridgedTokensAndCall.selector, relay.token, relay.receiver, net, relay.data
+                        this.handleBridgedTokensAndCall.selector, relay.token, relay.receiver, value, relay.data
                     ),
                     MessageKind.ReleaseAndCall
                 )
@@ -696,7 +597,7 @@ contract TokenMediator is ReentrancyGuard {
                         this.handleBridgedTokensAndCallWithFallback.selector,
                         relay.token,
                         relay.receiver,
-                        net,
+                        value,
                         relay.data,
                         relay.fallbackRecipient
                     ),
@@ -705,7 +606,7 @@ contract TokenMediator is ReentrancyGuard {
         }
         return sameFallback
             ? (
-                abi.encodeWithSelector(this.handleBridgedTokens.selector, relay.token, relay.receiver, net),
+                abi.encodeWithSelector(this.handleBridgedTokens.selector, relay.token, relay.receiver, value),
                 MessageKind.Release
             )
             : (
@@ -713,7 +614,7 @@ contract TokenMediator is ReentrancyGuard {
                     this.handleBridgedTokensWithFallback.selector,
                     relay.token,
                     relay.receiver,
-                    net,
+                    value,
                     relay.fallbackRecipient
                 ),
                 MessageKind.Release
@@ -721,7 +622,7 @@ contract TokenMediator is ReentrancyGuard {
     }
 
     /// @dev The first message for a native token: it carries the name, the symbol and the decimals.
-    function _encodeDeploy(Relay memory relay, uint256 net) private view returns (bytes memory, MessageKind) {
+    function _encodeDeploy(Relay memory relay, uint256 value) private view returns (bytes memory, MessageKind) {
         string memory name = TokenReader.readName(relay.token);
         string memory symbol = TokenReader.readSymbol(relay.token);
         if (bytes(name).length == 0 && bytes(symbol).length == 0) revert NoTokenName(relay.token);
@@ -737,7 +638,7 @@ contract TokenMediator is ReentrancyGuard {
                         symbol,
                         decimals,
                         relay.receiver,
-                        net,
+                        value,
                         relay.data
                     ),
                     MessageKind.DeployAndCall
@@ -750,7 +651,7 @@ contract TokenMediator is ReentrancyGuard {
                         symbol,
                         decimals,
                         relay.receiver,
-                        net,
+                        value,
                         relay.data,
                         relay.fallbackRecipient
                     ),
@@ -760,7 +661,13 @@ contract TokenMediator is ReentrancyGuard {
         return sameFallback
             ? (
                 abi.encodeWithSelector(
-                    this.deployAndHandleBridgedTokens.selector, relay.token, name, symbol, decimals, relay.receiver, net
+                    this.deployAndHandleBridgedTokens.selector,
+                    relay.token,
+                    name,
+                    symbol,
+                    decimals,
+                    relay.receiver,
+                    value
                 ),
                 MessageKind.Deploy
             )
@@ -772,7 +679,7 @@ contract TokenMediator is ReentrancyGuard {
                     symbol,
                     decimals,
                     relay.receiver,
-                    net,
+                    value,
                     relay.fallbackRecipient
                 ),
                 MessageKind.Deploy
@@ -860,28 +767,10 @@ contract TokenMediator is ReentrancyGuard {
             uint256 held = _native[token].balance;
             if (held < delivery.value) revert InsufficientMediatorBalance(token, held, delivery.value);
         }
-        delivery.value -= _chargeIncomingFee(side, token, delivery.value);
         address paidTo = _pay(side, token, delivery, messageId);
         if (paidTo == address(0)) return;
         emit TokensBridged(token, paidTo, delivery.value, messageId);
         if (delivery.mode == CallMode.WithCall) _callback(paidTo, token, delivery, messageId);
-    }
-
-    /// @dev Takes the incoming fee from the delivered value, rounded down, once, before any payee is tried, so a
-    /// release that goes to the fallback address or to `claimable` pays the fee no second time. A native token leaves
-    /// the record and stays in the mediator as an accrued fee. A bridged copy is minted to the mediator as an accrued
-    /// fee. The fee is never above the value, because the rate is at most `FEE_DENOMINATOR`.
-    /// @return fee The fee.
-    function _chargeIncomingFee(Side side, address token, uint256 value) private returns (uint256 fee) {
-        fee = FeeSchedule.feeOn(value, currentFeeRate());
-        if (fee == 0) return 0;
-        if (side == Side.Bridged) {
-            IBurnableMintableERC677Token(token).mint(address(this), fee);
-        } else {
-            _native[token].balance -= uint240(fee);
-        }
-        accruedFees[token] += fee;
-        emit FeeCharged(token, fee, FeeDirection.Incoming);
     }
 
     /// @dev Tries the recipient, then the fallback address, and records a claim when both refuse or when the flow
@@ -953,23 +842,5 @@ contract TokenMediator is ReentrancyGuard {
 
     function _sideOf(address token) private view returns (Side) {
         return nativeTokenAddress[token] == address(0) ? Side.Native : Side.Bridged;
-    }
-
-    // ---------------------------------------------------------------------------------------------------------
-    // Fee schedule, internal
-    // ---------------------------------------------------------------------------------------------------------
-
-    /// @dev The immutables as a schedule, for the pure math of `FeeSchedule`.
-    function _feeSchedule() private view returns (FeeSchedule.Schedule memory) {
-        return FeeSchedule.Schedule(feeStartTime, feeStartRate, feeStepRate, feeFloorRate, feeStepPeriod);
-    }
-
-    /// @dev The start rate is at most 100%, the floor is at most the start, a step needs a period, and a fee needs a
-    /// recipient.
-    function _requireFeeSchedule(MediatorTerms memory terms) private pure {
-        if (terms.feeStartRate > FEE_DENOMINATOR) revert FeeStartRateTooHigh(terms.feeStartRate);
-        if (terms.feeFloorRate > terms.feeStartRate) revert FeeFloorAboveStart(terms.feeFloorRate, terms.feeStartRate);
-        if (terms.feeStepRate != 0 && terms.feeStepPeriod == 0) revert ZeroFeeStepPeriod();
-        if (terms.feeStartRate != 0 && terms.feeRecipient == address(0)) revert ZeroFeeRecipient();
     }
 }
