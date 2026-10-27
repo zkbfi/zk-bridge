@@ -11,7 +11,6 @@ const contractNames = [
   "TokenMediator",
   "BridgedToken",
   "TokenFactory",
-  "WETHOmnibridgeRouter",
   "DeliveryRouter",
   "BeaconLightClient",
   "BeaconForkGate",

@@ -9,7 +9,6 @@ const section = (chainId: number, digit: string) => ({
   bridge: `0x${digit.repeat(40)}`,
   mediator: `0x${digit.repeat(40)}`,
   token_factory: `0x${digit.repeat(40)}`,
-  native_router: `0x${digit.repeat(40)}`,
   wrapped_native: `0x${digit.repeat(40)}`,
   gate: `0x${digit.repeat(40)}`,
   light_client: `0x${digit.repeat(40)}`,

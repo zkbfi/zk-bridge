@@ -422,6 +422,24 @@ export const deliveryRouterAbi = [
   },
   {
     "type": "function",
+    "name": "relayTokensAndCall",
+    "inputs": [
+      {
+        "name": "receiver",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "data",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
     "name": "rewardAddress",
     "inputs": [],
     "outputs": [
@@ -432,6 +450,19 @@ export const deliveryRouterAbi = [
       }
     ],
     "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "sweep",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -464,6 +495,26 @@ export const deliveryRouterAbi = [
       }
     ],
     "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "wrapAndRelayTokens",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "wrapAndRelayTokens",
+    "inputs": [
+      {
+        "name": "receiver",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
   },
   {
     "type": "event",
@@ -516,9 +567,44 @@ export const deliveryRouterAbi = [
     "anonymous": false
   },
   {
+    "type": "event",
+    "name": "Swept",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
     "type": "error",
     "name": "DeliveryInProgress",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "EmptyData",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidReceiver",
+    "inputs": [
+      {
+        "name": "receiver",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   },
   {
     "type": "error",
@@ -545,6 +631,17 @@ export const deliveryRouterAbi = [
   {
     "type": "error",
     "name": "NothingToClaim",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "NothingToSweep",
     "inputs": [
       {
         "name": "token",

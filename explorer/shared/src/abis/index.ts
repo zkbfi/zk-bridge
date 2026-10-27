@@ -3,7 +3,6 @@ export { messageBridgeAbi } from "./message-bridge.js";
 export { tokenMediatorAbi } from "./token-mediator.js";
 export { bridgedTokenAbi } from "./bridged-token.js";
 export { tokenFactoryAbi } from "./token-factory.js";
-export { wETHOmnibridgeRouterAbi } from "./wethomnibridge-router.js";
 export { deliveryRouterAbi } from "./delivery-router.js";
 export { beaconLightClientAbi } from "./beacon-light-client.js";
 export { beaconForkGateAbi } from "./beacon-fork-gate.js";

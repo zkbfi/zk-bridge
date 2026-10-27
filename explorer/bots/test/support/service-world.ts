@@ -7,7 +7,7 @@ import { PROGRAM_KEY, proofMessage } from "./builders.ts";
 
 function section(chainId: number, seed: number) {
   const address = (offset: number) => `0x${(seed + offset).toString(16).padStart(2, "0").repeat(20)}`;
-  return { chain_id: chainId, bridge: address(1), mediator: address(2), token_factory: address(3), native_router: address(4), wrapped_native: address(5), gate: address(6), light_client: address(7), delivery_router: address(8), start_block: 5 };
+  return { chain_id: chainId, bridge: address(1), mediator: address(2), token_factory: address(3), wrapped_native: address(5), gate: address(6), light_client: address(7), delivery_router: address(8), start_block: 5 };
 }
 
 function withoutRouter(deployment: ReturnType<typeof section>, options: ServiceWorldOptions) {

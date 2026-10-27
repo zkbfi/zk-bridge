@@ -183,7 +183,6 @@ describe("the indexer follows synthetic chains", () => {
       rpc_url: rpc,
       wrapped_native: tokenA,
       token_factory: addresses.mediator,
-      native_router: addresses.mediator,
       start_block: 0,
       ...addresses,
     });

@@ -8,7 +8,6 @@ export type SideContracts = {
   readonly bridge: Address;
   readonly mediator: Address;
   readonly tokenFactory: Address;
-  readonly nativeRouter: Address;
   readonly wrappedNative: Address;
   readonly gate: Address;
   readonly lightClient: Address;
@@ -76,7 +75,6 @@ const deploymentChainSchema = z.object({
   bridge: addressField,
   mediator: addressField,
   token_factory: addressField,
-  native_router: addressField,
   wrapped_native: addressField,
   gate: addressField,
   light_client: addressField,
@@ -182,7 +180,6 @@ const buildSide = (
       bridge: normalizeAddress(section.bridge),
       mediator: normalizeAddress(section.mediator),
       tokenFactory: normalizeAddress(section.token_factory),
-      nativeRouter: normalizeAddress(section.native_router),
       wrappedNative: normalizeAddress(section.wrapped_native),
       gate: normalizeAddress(section.gate),
       lightClient: normalizeAddress(section.light_client),

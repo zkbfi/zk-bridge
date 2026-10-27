@@ -114,7 +114,6 @@ async function writeBotFiles(options: { name: string; boardUrl: string; indexerU
       bridge: real ? stack.mediatorBridge : filler(1),
       mediator: real ? stack.mediatorBridge : filler(2),
       token_factory: filler(3),
-      native_router: filler(4),
       wrapped_native: real ? stack.wrappedNative : filler(5),
       gate: filler(6),
       light_client: real ? stack.lightClient : filler(7),

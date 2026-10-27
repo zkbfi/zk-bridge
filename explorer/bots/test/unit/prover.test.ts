@@ -22,7 +22,6 @@ function section(chainId: number, seed: number) {
     bridge: address(1),
     mediator: address(2),
     token_factory: address(3),
-    native_router: address(4),
     wrapped_native: address(5),
     gate: address(6),
     light_client: address(7),

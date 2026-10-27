@@ -11,7 +11,7 @@ import { evidenceFor, memoryLogger, word } from "../support/builders.ts";
 
 function section(chainId: number, seed: number) {
   const make = (offset: number) => `0x${(seed + offset).toString(16).padStart(2, "0").repeat(20)}`;
-  return { chain_id: chainId, bridge: make(1), mediator: make(2), token_factory: make(3), native_router: make(4), wrapped_native: make(5), gate: make(6), light_client: make(7), start_block: 5 };
+  return { chain_id: chainId, bridge: make(1), mediator: make(2), token_factory: make(3), wrapped_native: make(5), gate: make(6), light_client: make(7), start_block: 5 };
 }
 const environment = {
   EXPLORER_RPC_URL_1: "http://127.0.0.1:1",

@@ -10,7 +10,6 @@ const section = (chainId: number, seed: string) => ({
   bridge: `0x${seed.repeat(40)}`,
   mediator: `0x${"AB".repeat(20)}`,
   token_factory: `0x${seed.repeat(40)}`,
-  native_router: `0x${seed.repeat(40)}`,
   gate: `0x${seed.repeat(40)}`,
   light_client: `0x${seed.repeat(40)}`,
   start_block: 7,
