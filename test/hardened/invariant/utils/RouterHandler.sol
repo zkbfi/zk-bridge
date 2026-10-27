@@ -4,7 +4,6 @@ pragma solidity ^0.8.24;
 import {Vm} from "forge-std/Vm.sol";
 import {IAMB} from "../../../../src/hardened/IAMB.sol";
 import {MessageBridge} from "../../../../src/hardened/MessageBridge.sol";
-import {FeeSchedule} from "../../../../src/hardened/mediator/FeeSchedule.sol";
 import {DeliveryRouter} from "../../../../src/hardened/mediator/DeliveryRouter.sol";
 import {TokenMediator} from "../../../../src/hardened/mediator/TokenMediator.sol";
 import {WETHOmnibridgeRouter} from "../../../../src/hardened/mediator/WETHOmnibridgeRouter.sol";
@@ -17,12 +16,10 @@ import {RouterWorld} from "./RouterWorld.sol";
 /// @notice The money that sits around one token of the universe before and after a delivery.
 /// @param held What the holders hold, counting the coin for the wrapped native token.
 /// @param claimed What the holders can claim.
-/// @param accrued The fees that wait in the mediator.
 /// @param rewardHeld What each reward address holds, in the sense of `held`.
 struct Probe {
     uint256 held;
     uint256 claimed;
-    uint256 accrued;
     uint256[3] rewardHeld;
 }
 
@@ -31,7 +28,7 @@ struct Probe {
 /// @param executor The delivery router that executes the message, or the zero address for a direct execution.
 /// @param reading What the message delivers.
 /// @param universe The token of the universe that the delivery pays.
-/// @param payee The account that should end with the value after the fee and the tip: the recipient of the terms for a
+/// @param payee The account that should end with the value after the tip: the recipient of the terms for a
 /// delivery router, the receiver in the data for the legacy form and the wrapped router, and the recipient otherwise.
 /// @param payeeBefore What the payee holds before, in the sense of `held`.
 struct Item {
@@ -48,8 +45,8 @@ struct Item {
 /// @dev What it does. Senders relay native tokens and bridged copies both ways, through the plain forms, the forms with a
 /// fallback, the forms with a call, a delivery router, the wrapped native router, and the wrap and relay form. Messages
 /// wait in a list and arrive in random order, by three paths: directly, through `executeMessage` of a router from
-/// an outside caller (caller and origin the same), and in a batch through Multicall3 from an outside caller. Time moves, accounts wrap and unwrap the
-/// coin, accounts are denied and allowed, claims are paid, fees are collected, and strangers send tokens to a mediator.
+/// an outside caller (caller and origin the same), and in a batch through Multicall3 from an outside caller. Accounts wrap and unwrap the
+/// coin, accounts are denied and allowed, claims are paid, and strangers send tokens to a mediator.
 /// An attacker tries the callback entry and the coin entry of the routers.
 ///
 /// What it claims. The mock bridge reads no proof, so the handler never delivers a message twice itself. It counts the
@@ -92,7 +89,6 @@ contract RouterHandler is RouterWorld {
     mapping(address nativeToken => uint256) public inFlight;
     /// @notice The tokens that strangers sent to a mediator by plain transfer, for each token and mediator.
     mapping(address token => uint256) public donated;
-    uint256[2] public lastRate;
     uint256 public coinDealt;
 
     uint256 public violations;
@@ -110,9 +106,7 @@ contract RouterHandler is RouterWorld {
     uint256 public claimsRecorded;
     uint256 public callbacksFailed;
     uint256 public claimsPaid;
-    uint256 public feesCollected;
     uint256 public attacksRefused;
-    uint256 public timeAdvances;
     uint256 public wethRouterDeliveries;
     uint256 public outOfOrderDeliveries;
     uint256 public failedDeliveries;
@@ -128,10 +122,7 @@ contract RouterHandler is RouterWorld {
     /// transfer if it was paid, and none otherwise.
     uint256 public exactTransferChecks;
 
-    constructor() RouterWorld() {
-        lastRate[0] = mediatorA.currentFeeRate();
-        lastRate[1] = mediatorB.currentFeeRate();
-    }
+    constructor() RouterWorld() {}
 
     // ----------------------------------------------------------------------------------------------- views
 
@@ -170,7 +161,7 @@ contract RouterHandler is RouterWorld {
         uint96 amountSeed,
         uint256 detail,
         uint8 timingSeed
-    ) external observed {
+    ) external {
         Plan memory plan;
         plan.index = tokenSeed % NATIVE_COUNT;
         plan.source = leaveSeed % 2 == 0 ? homes[plan.index] : 1 - homes[plan.index];
@@ -189,7 +180,7 @@ contract RouterHandler is RouterWorld {
     }
 
     /// @notice Wraps the coin of an actor into the wrapped native token of a chain.
-    function wrapCoin(uint8 chainSeed, uint8 actorSeed, uint96 amountSeed) external observed {
+    function wrapCoin(uint8 chainSeed, uint8 actorSeed, uint96 amountSeed) external {
         uint256 chain = chainSeed % 2;
         address account = actors[actorSeed % actors.length];
         uint256 amount = bound(amountSeed, 1, MAXIMUM_AMOUNT);
@@ -199,7 +190,7 @@ contract RouterHandler is RouterWorld {
     }
 
     /// @notice Unwraps part of the wrapped native token of an actor.
-    function unwrapCoin(uint8 chainSeed, uint8 actorSeed, uint96 amountSeed) external observed {
+    function unwrapCoin(uint8 chainSeed, uint8 actorSeed, uint96 amountSeed) external {
         uint256 chain = chainSeed % 2;
         address account = actors[actorSeed % actors.length];
         uint256 held = wrapped[chain].balanceOf(account);
@@ -209,7 +200,7 @@ contract RouterHandler is RouterWorld {
     }
 
     /// @notice A stranger sends tokens of the universe to a mediator by plain transfer. Nothing pays them out.
-    function donate(uint8 universeSeed, uint8 actorSeed, uint96 amountSeed) external observed {
+    function donate(uint8 universeSeed, uint8 actorSeed, uint96 amountSeed) external {
         uint256 universe = universeSeed % UNIVERSE;
         if (isWrappedNativeOfItsChain(universe)) return;
         address token = tokenAt(universe);
@@ -234,7 +225,7 @@ contract RouterHandler is RouterWorld {
 
     /// @notice Delivers a message that waits, by the path that the seed chooses. A direct execution takes one message.
     /// A router takes one message. A batch takes up to four messages for the same chain through Multicall3.
-    function deliver(uint256 messageSeed, uint8 pathSeed, uint8 routerSeed, uint256 priceSeed) external observed {
+    function deliver(uint256 messageSeed, uint8 pathSeed, uint8 routerSeed, uint256 priceSeed) external {
         if (_pending.length == 0) return;
         vm.txGasPrice(1 + priceSeed % 100 gwei);
         vm.fee((priceSeed >> 64) % 50 gwei);
@@ -249,7 +240,7 @@ contract RouterHandler is RouterWorld {
     }
 
     /// @notice Delivers the newest message that waits, which is the opposite of the order of sending.
-    function deliverNewest() external observed {
+    function deliverNewest() external {
         if (_pending.length == 0) return;
         _deliverDirect(_pending[_pending.length - 1]);
     }
@@ -258,7 +249,7 @@ contract RouterHandler is RouterWorld {
 
     /// @notice Pays a claim. The seeds choose where the search starts: the first claim at or after the chosen token
     /// and holder is paid. The call may fail while the token still refuses the holder.
-    function claim(uint8 universeSeed, uint8 holderSeed) external observed {
+    function claim(uint8 universeSeed, uint8 holderSeed) external {
         for (uint256 step = 0; step < UNIVERSE * holders.length; step++) {
             uint256 universe = (universeSeed + step / holders.length) % UNIVERSE;
             address account = holders[(holderSeed + step) % holders.length];
@@ -277,7 +268,7 @@ contract RouterHandler is RouterWorld {
     /// @notice Pays a record of a delivery router. Anyone may call the router, and it pays its failed delivery address only.
     /// The seed chooses where the search starts. A token that refuses the address may refuse the claim, and the record
     /// must then stay. Any other claim must pay the whole record to that address, and clear it.
-    function claimFromRouter(uint8 universeSeed) external observed {
+    function claimFromRouter(uint8 universeSeed) external {
         for (uint256 step = 0; step < UNIVERSE; step++) {
             uint256 universe = (universeSeed + step) % UNIVERSE;
             address token = tokenAt(universe);
@@ -300,41 +291,21 @@ contract RouterHandler is RouterWorld {
         }
     }
 
-    /// @notice Sends the accrued fees of a token of the universe to the treasury.
-    function collectFees(uint8 universeSeed) external observed {
-        uint256 universe = universeSeed % UNIVERSE;
-        address token = tokenAt(universe);
-        TokenMediator mediator = mediatorOf(chainOfToken(universe));
-        if (mediator.accruedFees(token) == 0) return;
-        uint256 before = balanceOrZero(token, treasury);
-        uint256 accrued = mediator.accruedFees(token);
-        mediator.collectFees(token);
-        if (balanceOrZero(token, treasury) - before != accrued) _violate("the treasury did not receive the accrued fees");
-        if (mediator.accruedFees(token) != 0) _violate("collected fees remain accrued");
-        feesCollected++;
-    }
-
-    /// @notice Moves time forward by up to 45 days, so the fee schedules step down during a run.
-    function advanceTime(uint32 secondsSeed) external observed {
-        vm.warp(block.timestamp + bound(secondsSeed, 1, 45 days));
-        timeAdvances++;
-    }
-
     /// @notice Denies or allows an account on the deny list token: a recipient, or the failed delivery address.
-    function toggleDeny(uint8 accountSeed) external observed {
+    function toggleDeny(uint8 accountSeed) external {
         uint256 pick = accountSeed % (recipients.length + 1);
         address account = pick == recipients.length ? failedSink : recipients[pick];
         denyToken.setDenied(account, !denyToken.denied(account));
     }
 
     /// @notice Lets the receiver that refuses callbacks refuse or accept for a while.
-    function toggleRefusal() external observed {
+    function toggleRefusal() external {
         refusingReceiver.setRefuse(!refusingReceiver.refuse());
     }
 
     /// @notice An attacker tries the entries that only the mediator or the wrapped token may use. Each try must
     /// revert, and no message may execute.
-    function attack(uint8 kindSeed, uint8 routerSeed) external observed {
+    function attack(uint8 kindSeed, uint8 routerSeed) external {
         uint256 chain = routerSeed % 2;
         DeliveryRouter router = deliveryRouterAt(chain, (routerSeed >> 1) % ROUTERS_PER_CHAIN);
         uint256 kind = kindSeed % 3;
@@ -350,27 +321,11 @@ contract RouterHandler is RouterWorld {
     function _routerWithRecord(uint256 universe) private view returns (DeliveryRouter) {
         uint256 chain = chainOfToken(universe);
         for (uint256 k = 0; k < ROUTERS_PER_CHAIN; k++) {
-            if (deliveryRouterAt(chain, k).claimable(tokenAt(universe), failedSink) != 0) return deliveryRouterAt(chain, k);
+            if (deliveryRouterAt(chain, k).claimable(tokenAt(universe), failedSink) != 0) {
+                return deliveryRouterAt(chain, k);
+            }
         }
         return DeliveryRouter(payable(address(0)));
-    }
-
-    /// @dev Checks after every action: the fee rate of each chain never rises, never passes its start and never falls
-    /// under its floor.
-    modifier observed() {
-        _;
-        _observeRates();
-    }
-
-    function _observeRates() private {
-        for (uint256 chain = 0; chain < 2; chain++) {
-            TokenMediator mediator = mediatorOf(chain);
-            uint256 rate = mediator.currentFeeRate();
-            if (rate > lastRate[chain]) _violate("a fee rate rose");
-            if (rate < mediator.feeFloorRate()) _violate("a fee rate fell under its floor");
-            if (rate > mediator.feeStartRate()) _violate("a fee rate passed its start");
-            lastRate[chain] = rate;
-        }
     }
 
     // ------------------------------------------------------------------------------------------ sending, internal
@@ -592,7 +547,7 @@ contract RouterHandler is RouterWorld {
         item.payeeBefore = standing(item.universe, item.payee);
     }
 
-    /// @dev Who ends with the value after the fee and the tip. A delivery router pays the recipient of the terms, or the
+    /// @dev Who ends with the value after the tip. A delivery router pays the recipient of the terms, or the
     /// receiver that the 20 byte data names, and hands off to its failed delivery address when it cannot. The wrapped
     /// router pays the receiver that its 20 byte data names.
     function _payeeOf(MessageReading.Reading memory reading, uint256 universe) private view returns (address) {
@@ -630,15 +585,12 @@ contract RouterHandler is RouterWorld {
     /// @dev Executes the items on their destination chain, reads the logs, and checks the money.
     function _operate(Item[] memory items, Path path) private {
         uint256 destination = 1 - _messages[items[0].messageId].sourceChain;
-        uint256 rate = mediatorOf(destination).currentFeeRate();
         Probe[] memory before = new Probe[](UNIVERSE);
         uint256[] memory expectedValue = new uint256[](UNIVERSE);
-        uint256[] memory expectedFee = new uint256[](UNIVERSE);
         for (uint256 i = 0; i < items.length; i++) {
             uint256 u = items[i].universe;
             if (expectedValue[u] == 0) before[u] = _probe(u);
             expectedValue[u] += items[i].reading.value;
-            expectedFee[u] += FeeSchedule.feeOn(items[i].reading.value, rate);
         }
         if (_isOutOfOrder(items[0].messageId)) outOfOrderDeliveries++;
 
@@ -655,11 +607,11 @@ contract RouterHandler is RouterWorld {
         }
         for (uint256 u = 0; u < UNIVERSE; u++) {
             if (expectedValue[u] == 0) continue;
-            _checkMoney(u, before[u], expectedValue[u], expectedFee[u]);
-            _checkTips(u, before[u], items, rate);
+            _checkMoney(u, before[u], expectedValue[u]);
+            _checkTips(u, before[u], items);
         }
         _checkTransferCounts(items, logs);
-        if (items.length == 1) _checkSingle(items[0], before[items[0].universe], rate);
+        if (items.length == 1) _checkSingle(items[0], before[items[0].universe]);
         for (uint256 i = 0; i < items.length; i++) {
             _finish(items[i]);
         }
@@ -704,9 +656,7 @@ contract RouterHandler is RouterWorld {
         Message storage message = _messages[item.messageId];
         DeliveryRouter router = DeliveryRouter(payable(item.executor));
         MessageBridge.MessageProof memory proof = bridge.proofOf(bridgeOf(message.sourceChain), message.index);
-        return Multicall3.Call3(
-            item.executor, true, abi.encodeCall(router.executeMessage, (proof))
-        );
+        return Multicall3.Call3(item.executor, true, abi.encodeCall(router.executeMessage, (proof)));
     }
 
     /// @dev Counts the executions that the logs of the destination bridge show, and the events of the mediator.
@@ -721,7 +671,10 @@ contract RouterHandler is RouterWorld {
                     _violate("the call of a delivery failed");
                 }
             }
-            if (logs[i].topics[0] == DeliveryRouter.DeliveryFailed.selector && _isDeliveryRouter(logs[i].emitter, destination)) {
+            if (
+                logs[i].topics[0] == DeliveryRouter.DeliveryFailed.selector
+                    && _isDeliveryRouter(logs[i].emitter, destination)
+            ) {
                 DeliveryRouter.Reason cause = abi.decode(_dataAfterAmount(logs[i].data), (DeliveryRouter.Reason));
                 if (cause == DeliveryRouter.Reason.PayoutRefused) payoutsRefused++;
                 if (cause == DeliveryRouter.Reason.InvalidTerms) termsForfeited++;
@@ -767,7 +720,6 @@ contract RouterHandler is RouterWorld {
     function _probe(uint256 universe) private view returns (Probe memory probe) {
         probe.held = heldByHolders(universe);
         probe.claimed = claimableOfHolders(universe);
-        probe.accrued = mediatorOf(chainOfToken(universe)).accruedFees(tokenAt(universe));
         for (uint256 j = 0; j < 3; j++) {
             probe.rewardHeld[j] = holding(universe, rewards[j]);
         }
@@ -775,25 +727,23 @@ contract RouterHandler is RouterWorld {
 
     // -------------------------------------------------------------------------------------------------- checks
 
-    /// @dev The delivered value is split between the holders, the claims and the fee, with nothing left over: the
-    /// recipient, the tip, the hand-off and the protocol fee add up to the released value. The fee is the share of each message at
-    /// the rate of the mediator, rounded down.
-    function _checkMoney(uint256 u, Probe memory before, uint256 value, uint256 fee) private {
+    /// @dev The delivered value is split between the holders and the claims, with nothing left over: the recipient, the
+    /// tip and the hand-off add up to the released value.
+    function _checkMoney(uint256 u, Probe memory before, uint256 value) private {
         Probe memory after_ = _probe(u);
-        if (after_.accrued - before.accrued != fee) _violate("the protocol fee is not the share of the rate");
         uint256 paid = (after_.held - before.held) + (after_.claimed - before.claimed);
-        if (paid + fee != value) _violate("recipient plus tip plus hand-off plus protocol fee is not the released value");
+        if (paid != value) _violate("recipient plus tip plus hand-off is not the released value");
     }
 
     /// @dev A reward address gains only from a message that a router executed when the message names that router, and
     /// never more than the cap that the terms of the message allow.
-    function _checkTips(uint256 u, Probe memory before, Item[] memory items, uint256 rate) private {
+    function _checkTips(uint256 u, Probe memory before, Item[] memory items) private {
         for (uint256 j = 0; j < 3; j++) {
             uint256 gained = holding(u, rewards[j]) - before.rewardHeld[j];
             uint256 allowed;
             for (uint256 i = 0; i < items.length; i++) {
                 if (items[i].universe != u) continue;
-                allowed += _tipCap(items[i], j, rate);
+                allowed += _tipCap(items[i], j);
             }
             if (gained > allowed) _violate("a reward address gained more than the terms allow");
             if (gained > 0) tipsPaid++;
@@ -806,21 +756,16 @@ contract RouterHandler is RouterWorld {
 
     /// @dev The most that reward address `j` may gain from one item: zero unless the item names a router with reward `j`
     /// and the same router executes it. The cap follows the terms of the sender: the fixed fee, the share of the value, or
-    /// the smaller of the limit and the gas bound (the supplied gas plus the overhead, since the router measures from its entry); and never more than the value after the protocol fee.
-    function _tipCap(Item memory item, uint256 j, uint256 rate) private view returns (uint256) {
+    /// the smaller of the limit and the gas bound (the supplied gas plus the overhead, since the router measures from its entry); and never more than the value.
+    function _tipCap(Item memory item, uint256 j) private view returns (uint256) {
         if (item.executor == address(0) || item.executor != item.reading.recipient) return 0;
         if (item.executor != address(deliveryRouterAt(chainOfToken(item.universe), j))) return 0;
         if (item.reading.callData.length != 128) return 0;
         DeliveryRouter.FeeDirector memory director = abi.decode(item.reading.callData, (DeliveryRouter.FeeDirector));
-        uint256 net = item.reading.value - FeeSchedule.feeOn(item.reading.value, rate);
-        return _directorCap(director, net);
+        return _directorCap(director, item.reading.value);
     }
 
-    function _directorCap(DeliveryRouter.FeeDirector memory director, uint256 net)
-        private
-        view
-        returns (uint256 cap)
-    {
+    function _directorCap(DeliveryRouter.FeeDirector memory director, uint256 net) private view returns (uint256 cap) {
         if (director.settings & 1 != 0) return director.limit < net ? director.limit : net;
         if (director.settings & 8 != 0) {
             cap = net * director.multiplier / 1 ether;
@@ -853,7 +798,9 @@ contract RouterHandler is RouterWorld {
             }
             uint256 received = _transfersTo(logs, token, items[i].payee);
             if (received > sharing) _violate("a payee received more than one transfer for one delivery");
-            if (rewardsOfTheToken > items.length) _violate("a reward address received more than one transfer for one delivery");
+            if (rewardsOfTheToken > items.length) {
+                _violate("a reward address received more than one transfer for one delivery");
+            }
             if (items.length == 1) _checkExactTransfers(items[0], received, rewardsOfTheToken);
         }
     }
@@ -889,9 +836,9 @@ contract RouterHandler is RouterWorld {
 
     /// @dev The exact checks of one message. A message that its own router executes pays exactly the fixed fee or the
     /// share, unless the reward address refuses the coin. The payee receives the rest. A message that no router
-    /// attributes pays no tip, and its payee gets the whole value after the protocol fee.
-    function _checkSingle(Item memory item, Probe memory before, uint256 rate) private {
-        uint256 net = item.reading.value - FeeSchedule.feeOn(item.reading.value, rate);
+    /// attributes pays no tip, and its payee gets the whole value.
+    function _checkSingle(Item memory item, Probe memory before) private {
+        uint256 net = item.reading.value;
         uint256 destination = chainOfToken(item.universe);
         uint256 tip;
         for (uint256 j = 0; j < 3; j++) {
@@ -899,11 +846,14 @@ contract RouterHandler is RouterWorld {
         }
         uint256 got = standing(item.universe, item.payee) - item.payeeBefore;
         if (item.reading.recipient == address(wethRouters[destination])) wethRouterDeliveries++;
-        bool legacyToRouter = item.reading.callData.length == 20 && _isDeliveryRouter(item.reading.recipient, destination);
+        bool legacyToRouter =
+            item.reading.callData.length == 20 && _isDeliveryRouter(item.reading.recipient, destination);
         if (legacyToRouter && !isWrappedNativeOfItsChain(item.universe)) legacyTokenPayouts++;
         if (item.reading.callData.length == 128 && _isDeliveryRouter(item.reading.recipient, destination)) {
             bool attributed = item.executor == item.reading.recipient;
-            bool invalid = _isInvalid(abi.decode(item.reading.callData, (DeliveryRouter.FeeDirector)).recipient, item.reading.recipient);
+            bool invalid = _isInvalid(
+                abi.decode(item.reading.callData, (DeliveryRouter.FeeDirector)).recipient, item.reading.recipient
+            );
             if (invalid && !attributed && tip != 0) _violate("a direct delivery paid a tip");
             if (invalid && attributed && tip != 0) tippedInvalidTerms++;
             if (attributed && !invalid) routedDeliveries++;

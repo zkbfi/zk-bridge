@@ -11,7 +11,7 @@ import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
 import {RouterHandler} from "./utils/RouterHandler.sol";
 
 /// @notice Invariants of the two mediators, the delivery routers and the wrapped native router, under random sequences of
-/// relays, deliveries by three paths, claims, fee collection, time and attacks. See `RouterHandler` for the actions and
+/// relays, deliveries by three paths, claims and attacks. See `RouterHandler` for the actions and
 /// for what the handler claims, and `RouterWorld` for the two chains.
 /// forge-config: default.invariant.runs = 8
 /// forge-config: default.invariant.depth = 40
@@ -27,7 +27,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         targetContract(address(handler));
         // One outside sender. A sender that is a holder would receive coin from the test runner and break the sum of the coin.
         targetSender(makeAddr("fuzzer"));
-        bytes4[] memory selectors = new bytes4[](19);
+        bytes4[] memory selectors = new bytes4[](17);
         selectors[0] = RouterHandler.relay.selector;
         selectors[1] = RouterHandler.relay.selector;
         selectors[2] = RouterHandler.relay.selector;
@@ -36,17 +36,15 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         selectors[5] = RouterHandler.deliver.selector;
         selectors[6] = RouterHandler.deliverNewest.selector;
         selectors[7] = RouterHandler.claim.selector;
-        selectors[8] = RouterHandler.collectFees.selector;
-        selectors[9] = RouterHandler.advanceTime.selector;
-        selectors[10] = RouterHandler.toggleDeny.selector;
-        selectors[11] = RouterHandler.attack.selector;
-        selectors[12] = RouterHandler.wrapCoin.selector;
-        selectors[13] = RouterHandler.unwrapCoin.selector;
-        selectors[14] = RouterHandler.donate.selector;
-        selectors[15] = RouterHandler.toggleRefusal.selector;
-        selectors[16] = RouterHandler.deliver.selector;
-        selectors[17] = RouterHandler.claimFromRouter.selector;
-        selectors[18] = RouterHandler.claimFromRouter.selector;
+        selectors[8] = RouterHandler.toggleDeny.selector;
+        selectors[9] = RouterHandler.attack.selector;
+        selectors[10] = RouterHandler.wrapCoin.selector;
+        selectors[11] = RouterHandler.unwrapCoin.selector;
+        selectors[12] = RouterHandler.donate.selector;
+        selectors[13] = RouterHandler.toggleRefusal.selector;
+        selectors[14] = RouterHandler.deliver.selector;
+        selectors[15] = RouterHandler.claimFromRouter.selector;
+        selectors[16] = RouterHandler.claimFromRouter.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
     }
 
@@ -54,8 +52,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
 
     /// Claim: the record of a native token equals what stands behind it. Shows: for each native token, the record of
     /// the home mediator equals the supply of the bridged copy, plus the claims on the home chain, plus the claims on the
-    /// other chain, plus the value of the messages in flight (in both directions). The supply includes the copies that
-    /// the other mediator holds as fees. Matters: this is the whole solvency of the bridge. A copy without a record
+    /// other chain, plus the value of the messages in flight (in both directions). Matters: this is the whole solvency of the bridge. A copy without a record
     /// behind it, or a record without a copy, a claim or a message, is a loss or a theft. The claims are in the sum
     /// because a release that a token refused burned its copies and left the record in place, and a mint that a copy
     /// refused is recorded as a claim and not minted.
@@ -70,37 +67,28 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         }
     }
 
-    /// Claim: the home mediator holds exactly what its record and its fees say. Shows: for each native token,
-    /// `balanceOf(mediator)` equals the record plus the accrued fees plus what strangers sent by plain transfer. For each
-    /// bridged copy, the other mediator holds the accrued fees and what strangers sent, and nothing else. Matters:
-    /// the contracts state that the balance covers `mediatorBalance + accruedFees`. The test tightens it to equality for
-    /// tokens that charge nothing on transfer, so a leak in either direction shows.
-    function invariant_theMediatorHoldsTheRecordAndTheFeesExactly() public view {
+    /// Claim: the home mediator holds exactly what its record says, and the other mediator holds no copy. Shows: for
+    /// each native token, `balanceOf(mediator)` equals the record plus what strangers sent by plain transfer. For each
+    /// bridged copy, the other mediator holds what strangers sent, and nothing else. Matters: the mediator takes no cut
+    /// of a relay or of a release, so the balance has no other term. The test tightens the stated cover to equality
+    /// for tokens that charge nothing on transfer, so a leak in either direction shows.
+    function invariant_theMediatorHoldsTheRecordExactly() public view {
         for (uint256 index = 0; index < 5; index++) {
             address native = handler.nativeAt(index);
             address copy = handler.copyAt(index);
             uint256 home = handler.homeOf(index);
             uint256 held = handler.balanceOrZero(native, address(handler.mediatorOf(home)));
-            assertEq(
-                held,
-                handler.mediatorOf(home).mediatorBalance(native) + handler.mediatorOf(home).accruedFees(native)
-                    + handler.donated(native),
-                "native balance"
-            );
+            assertEq(held, handler.mediatorOf(home).mediatorBalance(native) + handler.donated(native), "native balance");
             uint256 heldCopies = handler.balanceOrZero(copy, address(handler.mediatorOf(1 - home)));
-            assertEq(
-                heldCopies,
-                handler.mediatorOf(1 - home).accruedFees(copy) + handler.donated(copy),
-                "copy balance"
-            );
+            assertEq(heldCopies, handler.donated(copy), "copy balance");
         }
     }
 
     /// Claim: a message executes at most once, nothing fails, and the handler broke no rule. Shows: the count of
     /// executions of every message is at most one, no delivery call failed, no message identifier repeated, and the
-    /// handler recorded no violation: every delivery split its value exactly into recipient, tip, hand-off and protocol fee, no tip
+    /// handler recorded no violation: every delivery split its value exactly into recipient, tip and hand-off, no tip
     /// passed the terms, no caller received a token, in every token payout by a router the payee received exactly one transfer
-    /// and a reward address at most one, and the fee rate never rose. Matters: the
+    /// and a reward address at most one. Matters: the
     /// bridge marks a message delivered whether or not the call succeeded, so a failed call loses tokens.
     function invariant_noViolationAndNoRepeatedExecution() public view {
         for (uint256 i = 0; i < handler.messageCount(); i++) {
@@ -150,7 +138,9 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
             for (uint256 k = 0; k < 3; k++) {
                 DeliveryRouter router = handler.deliveryRouterAt(chain, k);
                 assertEq(router.rewardAddress(), handler.rewardAt(k), "the reward address changed");
-                assertEq(router.failedDeliveryAddress(), handler.failedSinkAddress(), "the failed delivery address changed");
+                assertEq(
+                    router.failedDeliveryAddress(), handler.failedSinkAddress(), "the failed delivery address changed"
+                );
             }
         }
     }
@@ -169,26 +159,6 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
             coin += handler.holderAt(i).balance;
         }
         assertEq(coin, handler.coinDealt(), "the coin changed");
-    }
-
-    /// Claim: the fee rate never rises over time, and stays between the floor and the start. Shows: the handler saw
-    /// no rise after any action; and the rate a day, a year and ten years from now is not above the rate now, and not
-    /// under the floor. Matters: a sender reads the rate and relies on it not rising.
-
-    function invariant_theFeeRateIsMonotoneAndAboveTheFloor() public view {
-        for (uint256 chain = 0; chain < 2; chain++) {
-            TokenMediator mediator = handler.mediatorOf(chain);
-            uint256 now_ = mediator.currentFeeRate();
-            assertLe(now_, mediator.feeStartRate());
-            assertGe(now_, mediator.feeFloorRate());
-            assertEq(now_, handler.lastRate(chain), "the last observed rate");
-            uint256[3] memory later = [uint256(1 days), 365 days, 3650 days];
-            for (uint256 i = 0; i < later.length; i++) {
-                uint256 rate = mediator.feeRateAt(block.timestamp + later[i]);
-                assertLe(rate, now_, "the rate rose over time");
-                assertGe(rate, mediator.feeFloorRate(), "the rate fell under the floor");
-            }
-        }
     }
 
     /// Claim: the copies are where the factory rule puts them, and the two registries agree. Shows: for each deployed
@@ -221,9 +191,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
                 string.concat(IERC20Metadata(native).name(), " from ", factory.homeChainName()),
                 "name"
             );
-            assertEq(
-                IERC20Metadata(copy).symbol(), string.concat("zkb", IERC20Metadata(native).symbol()), "symbol"
-            );
+            assertEq(IERC20Metadata(copy).symbol(), string.concat("zkb", IERC20Metadata(native).symbol()), "symbol");
         }
     }
 
@@ -231,7 +199,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
 
     /// Claim: the handler reaches the paying paths. Shows: after a fixed sequence, every counter of a path is above
     /// zero: direct, router and batch deliveries, a routed delivery with a tip, a native payout, a fallback, a recorded
-    /// claim and its payment, a failed callback, fee collection, the wrapped router, and refused attacks. Matters: an
+    /// claim and its payment, a failed callback, the wrapped router, and refused attacks. Matters: an
     /// invariant over a handler that never acts proves nothing.
     function test_handlerReachesThePayingPaths() public {
         // A delivery router delivery with a fixed fee, then a share, then gas based, each executed by its own router.
@@ -275,11 +243,12 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         handler.relay(4, 0, 1, 0, 9e18, 2 | (2 << 8), 0);
         handler.toggleDeny(0);
         handler.toggleDeny(1);
-        handler.relay(4, 1, 1, 2, 1e18, 0 | (3 << 8), 0);
+        // The amount seeds of the two copy relays are small, so that actor 2 keeps copies for the second one: the
+        // first release holds 10,000 units, and a seed above the balance would spend all of it.
+        handler.relay(4, 1, 1, 2, 1_000, 0 | (3 << 8), 0);
         assertGt(handler.fallbacksUsed(), 0, "a fallback was used");
-        handler.relay(4, 1, 1, 2, 1e18, 0 | (1 << 8), 0);
+        handler.relay(4, 1, 1, 2, 1_000, 0 | (1 << 8), 0);
         assertGt(handler.claimsRecorded(), 0, "a claim was recorded");
-        handler.advanceTime(40 days);
         handler.toggleDeny(0);
         handler.toggleDeny(1);
         handler.claim(4, 1);
@@ -315,15 +284,12 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         handler.claimFromRouter(4);
         assertGt(handler.routerClaimsPaid(), 0, "a claim was paid");
 
-        // Fees, time, strangers, attacks.
-        handler.collectFees(0);
-        handler.collectFees(5);
+        // Strangers and attacks.
         handler.donate(0, 0, 1 ether);
         for (uint256 kind = 0; kind < 6; kind++) {
             handler.attack(uint8(kind), uint8(kind));
         }
         assertGt(handler.attacksRefused(), 0, "attacks were refused");
-        assertGt(handler.feesCollected(), 0, "fees were collected");
         assertEq(handler.violations(), 0, handler.firstViolation());
     }
 

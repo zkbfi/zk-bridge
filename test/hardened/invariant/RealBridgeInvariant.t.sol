@@ -562,7 +562,7 @@ contract RealBridgeInvariantTest is StdInvariant, Test {
     }
 
     /// Claim: custody. Shows, as `TokenMediator` defines it with no fee: the record of chain A equals the supply of the
-    /// copy on chain B, plus the amounts waiting in `claimable` on both chains, plus the net value of every token message
+    /// copy on chain B, plus the amounts waiting in `claimable` on both chains, plus the value of every token message
     /// that is not executed (in flight in either direction); the token balance of the mediator on chain A equals the
     /// record; the copy balance of the mediator on chain B is zero (no fee); the supply of the copy equals the balances of
     /// all accounts that can hold it. Matters: every copy is backed by a locked token, and every locked token is owed to a
@@ -585,9 +585,9 @@ contract RealBridgeInvariantTest is StdInvariant, Test {
             if (handler.executions(id) == 0) inFlight += net;
         }
         assertEq(record, supply + claims + inFlight, "record == copy supply + claims + in flight");
-        assertEq(IERC20(token).balanceOf(address(handler.mediatorOnA())), record, "balance == record + fees (no fee)");
+        assertEq(IERC20(token).balanceOf(address(handler.mediatorOnA())), record, "balance == record");
         if (copyToken == address(0)) return;
-        assertEq(IERC20(copyToken).balanceOf(address(handler.mediatorOnB())), 0, "no copy is held as a fee");
+        assertEq(IERC20(copyToken).balanceOf(address(handler.mediatorOnB())), 0, "no copy stays in the mediator");
         uint256 held;
         for (uint256 i = 0; i < list.length; i++) {
             held += IERC20(copyToken).balanceOf(list[i]);

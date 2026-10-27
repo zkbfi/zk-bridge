@@ -21,7 +21,7 @@ import {
 } from "../../mediator/utils/MediatorSupport.sol";
 
 /// @title RouterWorld
-/// @notice The two chains of the invariant suite: two mediators with a falling fee, each joined to a mock bridge, and on
+/// @notice The two chains of the invariant suite: two mediators, each joined to a mock bridge, and on
 /// each chain a wrapped native token, three delivery routers, one wrapped native router and one Multicall3. It holds the
 /// lists that the handler and the invariants both read: the native tokens, the bridged copies, and every account that can
 /// hold a token. The two chains live in one test chain, as in `MediatorFixture`.
@@ -37,7 +37,6 @@ abstract contract RouterWorld is MediatorFixture {
     uint256 internal constant ROUTERS_PER_CHAIN = 3;
     uint256 internal constant RECIPIENT_COUNT = 9;
 
-    address internal treasury = makeAddr("treasury");
     /// @dev Outside accounts that execute messages through a router. Any account may do it, and none of them may ever
     /// hold a token: the tip goes to the reward address and never to the caller.
     address[] internal callers;
@@ -70,19 +69,7 @@ abstract contract RouterWorld is MediatorFixture {
     uint256[] internal homes;
 
     constructor() {
-        TokenMediator.MediatorTerms memory termsA = _noTerms();
-        termsA.feeRecipient = treasury;
-        termsA.feeStartRate = 3e16;
-        termsA.feeStepRate = 5e15;
-        termsA.feeFloorRate = 5e15;
-        termsA.feeStepPeriod = 30 days;
-        TokenMediator.MediatorTerms memory termsB = _noTerms();
-        termsB.feeRecipient = treasury;
-        termsB.feeStartRate = 1e16;
-        termsB.feeStepRate = 1e15;
-        termsB.feeFloorRate = 1e15;
-        termsB.feeStepPeriod = 20 days;
-        _deployMediators(termsA, termsB);
+        _deployMediators(_noTerms(), _noTerms());
         _deployTokens();
         _deployRouters();
         _listAccounts();
@@ -259,9 +246,8 @@ abstract contract RouterWorld is MediatorFixture {
                     ITokenMediator(address(mediatorOf(chain))), IWETH(address(wrapped[chain])), rewards[k], failedSink
                 );
             }
-            wethRouters[chain] = new WETHOmnibridgeRouter(
-                ITokenMediator(address(mediatorOf(chain))), IWETH(address(wrapped[chain]))
-            );
+            wethRouters[chain] =
+                new WETHOmnibridgeRouter(ITokenMediator(address(mediatorOf(chain))), IWETH(address(wrapped[chain])));
         }
     }
 

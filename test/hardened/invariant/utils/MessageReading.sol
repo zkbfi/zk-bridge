@@ -12,7 +12,7 @@ library MessageReading {
     /// @param releasesNative True when the message releases the native token on its home chain, and false when it mints
     /// or deploys the bridged copy.
     /// @param recipient The account that should receive the tokens.
-    /// @param value The gross value of the release, before the incoming fee.
+    /// @param value The value of the release.
     /// @param hasCall True when the delivery calls `onTokenBridged` on the account that received the tokens.
     /// @param callData The data of that call. Empty when `hasCall` is false.
     /// @param fallbackRecipient The account that receives the tokens when the recipient cannot.
