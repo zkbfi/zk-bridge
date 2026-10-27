@@ -3,7 +3,7 @@
  * address when the terms are invalid, so no form may build such a transfer. This module gives the shared guard the
  * addresses of the deployment and turns its error into a {@link PlanInputError}.
  */
-import { FeeTermsError, assertValidFeeTerms, encodeFeeDirector, isKnownDeliveryRouter, protectedAddressesOf, type FeeDirector, type FeeTermsContext, type ProtectedChain } from '@zk-bridge/shared'
+import { FeeTermsError, assertValidFeeTerms, encodeFeeDirector, isKnownDeliveryRouter, protectedAddressesOf, type DeliveryCall, type FeeDirector, type FeeTermsContext, type ProtectedChain } from '@zk-bridge/shared'
 import type { Address, Hex } from 'viem'
 import type { ChainConfig, PairConfig } from '../model/types'
 import { PlanInputError } from './plan'
@@ -53,12 +53,12 @@ const refusingAsPlanInputError = <Result>(run: () => Result): Result => {
 }
 
 /**
- * Encodes a director for a relay to `router`.
+ * Encodes a director for a relay to `router`, with the call that the router makes after the delivery when there is one.
  *
  * @throws PlanInputError when the router would not honour the terms.
  */
-export const encodeDirectorFor = (director: FeeDirector, pair: PairConfig, target: RouterTarget): Hex =>
-  refusingAsPlanInputError(() => encodeFeeDirector(director, feeTermsContextOf(pair, target)))
+export const encodeDirectorFor = (director: FeeDirector, pair: PairConfig, target: RouterTarget, call?: DeliveryCall): Hex =>
+  refusingAsPlanInputError(() => encodeFeeDirector(director, feeTermsContextOf(pair, target), call))
 
 /** What a relay to a router carries. */
 export interface RouterRelay extends RouterTarget {

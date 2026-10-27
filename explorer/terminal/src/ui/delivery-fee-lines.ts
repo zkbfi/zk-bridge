@@ -154,6 +154,17 @@ function chosenLines(chosen: DeliveryFeeStateReady['chosen'], target: DeliveryTa
   ]
 }
 
+/** The call after the delivery: its target and its call data, and for a gas based tip the warning that the call counts. */
+function callReviewLines(deliveryFee: DeliveryFeeReview): readonly Line[] {
+  const { call, description } = deliveryFee
+  if (call === undefined) return []
+  return [
+    reviewRow('Call target', getAddress(call.target)),
+    reviewRow('Call data', call.data === '0x' ? '0x (empty)' : `${call.data} (${(call.data.length - 2) / 2} bytes)`),
+    ...(description.mode === 'gas' ? [[colored('Warning: a gas based tip counts the gas of the call, so expect the tip to reach its limit.', theme.warn)] as Line] : []),
+  ]
+}
+
 /**
  * The lines of the delivery fee on the confirmation screen: the mode, the numbers, the amount now with its label, the
  * most that the router can pay as the tip, and the data behind the amount.
@@ -174,6 +185,7 @@ export function deliveryFeeReviewLines(deliveryFee: DeliveryFeeReview): readonly
     reviewRow('Multiplier', multiplierInWords(director)),
     reviewRow('Tip now', description.summary),
     reviewRow('Most the tip', `${formatUnits(description.maximumUnits, token.decimals)} ${token.symbol} (the tip never passes this)`),
+    ...callReviewLines(deliveryFee),
     reviewRow('Data source', `${dataSource.description}, ${dataSource.gas} gas`),
     reviewRow('Base fee', dataSource.baseFeeDescription.replace(/^base fee /, '')),
   ]

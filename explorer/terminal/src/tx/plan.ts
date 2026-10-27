@@ -3,7 +3,7 @@
  * {@link PlannedTransaction}. Nothing here reads a chain, signs, or sends, and nothing imports the terminal library,
  * so the later web interface can reuse this file as it is.
  */
-import { decodeFeeDirector, type FeeDataSource, type FeeDescription, type FeeDirector } from '@zk-bridge/shared'
+import { decodeDeliveryCall, decodeFeeDirector, type DeliveryCall, type FeeDataSource, type FeeDescription, type FeeDirector } from '@zk-bridge/shared'
 import { encodeFunctionData, erc20Abi, getAddress, isAddress, isHex, type Address, type Hex } from 'viem'
 import { formatUnits } from '../format/amounts'
 import type { ChainConfig, TokenInfo } from '../model/types'
@@ -29,6 +29,8 @@ export interface DeliveryFeeReview {
   readonly routerChainName: string
   /** The fee terms that the call data holds. */
   readonly director: FeeDirector
+  /** The call that the router makes after the delivery, from the router with no native value. Absent when the relay asks for none. */
+  readonly call?: DeliveryCall
   /** The token that the fee is paid in, on the destination chain. */
   readonly token: { readonly symbol: string; readonly decimals: number }
   /** The amount now, the maximum and the label (`exact` or `estimate, at most X`). */
@@ -278,22 +280,31 @@ function requireDeliveryFeeMatch(deliveryFee: DeliveryFeeReview, receiver: Addre
   if (getAddress(receiver) !== getAddress(deliveryFee.router)) {
     throw new PlanInputError('A delivery fee needs the router of the other chain as the receiver.')
   }
-  if (!holdsDirector(mode.data, deliveryFee.director)) throw new PlanInputError('The call data does not hold the fee terms.')
+  if (!holdsTerms(mode.data, deliveryFee)) throw new PlanInputError('The call data does not hold the fee terms and the call that the review shows.')
 }
 
-/** True when the data is the encoding of the director. The guard of the builders has already refused invalid terms. */
-function holdsDirector(data: Hex, director: FeeDirector): boolean {
+/** True when the data holds the director and the call that the review shows. The guard of the builders has already refused invalid terms. */
+function holdsTerms(data: Hex, deliveryFee: DeliveryFeeReview): boolean {
   try {
-    const decoded = decodeFeeDirector(data)
-    return (
-      decoded.recipient.toLowerCase() === director.recipient.toLowerCase() &&
-      decoded.settings === director.settings &&
-      decoded.limit === director.limit &&
-      decoded.multiplier === director.multiplier
-    )
+    return holdsDirector(decodeFeeDirector(data), deliveryFee.director) && holdsCall(decodeDeliveryCall(data), deliveryFee.call ?? null)
   } catch {
     return false
   }
+}
+
+function holdsDirector(decoded: FeeDirector, director: FeeDirector): boolean {
+  return (
+    decoded.recipient.toLowerCase() === director.recipient.toLowerCase() &&
+    decoded.settings === director.settings &&
+    decoded.limit === director.limit &&
+    decoded.multiplier === director.multiplier
+  )
+}
+
+/** True when both name no call, or both name the same target and the same call data. */
+function holdsCall(decoded: DeliveryCall | null, shown: DeliveryCall | null): boolean {
+  if (decoded === null || shown === null) return decoded === shown
+  return decoded.target.toLowerCase() === shown.target.toLowerCase() && decoded.data.toLowerCase() === shown.data.toLowerCase()
 }
 
 /** The sentences about a delivery fee. The second one repeats what `DeliveryRouter.sol` states about a message that the bridge delivers directly. */

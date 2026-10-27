@@ -53,6 +53,8 @@ export const DELIVERY_FIELD = {
   customMultiplier: 'feeCustomMultiplier',
   customBasis: 'feeCustomBasis',
   router: 'deliveryRouter',
+  callTarget: 'callTarget',
+  callData: 'callData',
   senderPrice: 'feeSenderPrice',
 } as const
 

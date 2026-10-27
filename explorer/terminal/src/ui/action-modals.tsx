@@ -150,6 +150,8 @@ export function BridgeModal(props: ActionModalProps) {
       hint: 'The destination token is the wrapped native token, so the router can unwrap the fee.',
     },
     { kind: 'text', name: DELIVERY_FIELD.router, label: 'Router (advanced)', placeholder: 'blank is the default delivery router', visibleWhen: whenActive(), hint: 'The last step before delivery, chosen in the extra data. Blank targets the default delivery router on the other chain. Anyone can deliver through it. The tip always goes to the reward address of the router, so a copied delivery gains the copier nothing.' },
+    { kind: 'text', name: DELIVERY_FIELD.callTarget, label: 'Call target (optional)', placeholder: 'blank makes no call', visibleWhen: whenActive(), hint: 'A contract that the router calls once, after it pays the recipient. The call comes from the router and sends no native coin. A gas based tip counts the gas of the call.' },
+    { kind: 'text', name: DELIVERY_FIELD.callData, label: 'Call data (optional)', placeholder: '0x… (empty for none)', visibleWhen: whenActive(), hint: 'Hex bytes for the call. It needs a call target. A target with no call data makes a call with empty data.' },
     { kind: 'text', name: DELIVERY_FIELD.recipient, label: 'Fee recipient', placeholder: 'blank is the receiver above', visibleWhen: whenActive(), hint: 'Receives the tokens after the fee. Blank means the receiver above.' },
     { kind: 'text', name: 'gasLimit', label: 'Gas limit (optional)', placeholder: 'blank uses the default', hint: 'Gas for the release on the other chain. The mediator uses the larger of this and its default, and refuses a value above the bridge maximum.' },
   ]
@@ -184,7 +186,7 @@ export function BridgeModal(props: ActionModalProps) {
   const panel = deliveryPanelLines(panelInputOf({ resolved, report, state: stateFor(values, report.data) }))
   const note = resolved.kind === 'unavailable' && (bridgeSourceOf(values, session.tokens, pair).kind === 'token' || paysForDelivery(values)) ? resolved.reason : null
   return (
-    <ModalFrame title="Bridge tokens" width={96} height={wantedChainId === null ? 18 : 46}>
+    <ModalFrame title="Bridge tokens" width={96} height={wantedChainId === null ? 18 : 48}>
       <FormView form={form} width={92} />
       {wantedChainId === null ? null : <RichLines lines={panel} />}
       <RichLine line={[colored(error ?? ' ', theme.bad)]} />

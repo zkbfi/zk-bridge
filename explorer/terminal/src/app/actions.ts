@@ -2,13 +2,13 @@
  * Turns what the user typed in an action form into the steps of a transaction flow. Pure: it reads the form values
  * and the live snapshots, and throws {@link PlanInputError} with a message that tells the user what to fix.
  */
-import type { DeliveryCostReport } from '@zk-bridge/shared'
+import type { DeliveryCall, DeliveryCostReport } from '@zk-bridge/shared'
 import type { Address } from 'viem'
 import { parseUnits, AmountParseError } from '../format/amounts'
 import type { ChainSnapshot, ChainSnapshotResult, RouterAddressesReading, TokenPosition } from '../chain/live-reads'
 import type { FlowStep } from '../flow/transaction-flow'
 import type { ChainConfig, ChainSide, PairConfig, TokenInfo } from '../model/types'
-import { buildDeliveryFeeModel, paysForDelivery, resolveDeliveryTarget, routerOf, transferValueOf, type TokenValuationsWei } from './delivery-fee-form'
+import { DELIVERY_FIELD, buildDeliveryFeeModel, paysForDelivery, resolveDeliveryTarget, routerOf, transferValueOf, type TokenValuationsWei } from './delivery-fee-form'
 import { encodeDirectorFor, isDeploymentDeliveryRouter, requireValidRouterRelay } from '../tx/fee-terms-guard'
 import {
   PlanInputError,
@@ -193,14 +193,16 @@ function deliveryRelayOf(
   if (state.kind === 'unavailable') throw new PlanInputError(state.reason)
   const { chosen, dataSource, router } = state.model
   if (chosen.kind === 'invalid') throw new PlanInputError(chosen.reason)
+  const call = deliveryCallOf(values)
   return {
     receiver: router,
-    mode: { kind: 'call', data: encodeDirectorFor(chosen.director, context.pair, { router, destination: target.chain, destinationToken: input.source.token.counterpart }) } satisfies RelayMode,
+    mode: { kind: 'call', data: encodeDirectorFor(chosen.director, context.pair, { router, destination: target.chain, destinationToken: input.source.token.counterpart }, call ?? undefined) } satisfies RelayMode,
     deliveryFee: {
       router,
       defaultRouter: target.router,
       routerChainName: target.chain.name,
       director: chosen.director,
+      ...(call === null ? {} : { call }),
       token: target.token,
       description: chosen.description,
       dataSource,
@@ -215,6 +217,19 @@ function relayModeOf(values: Readonly<Record<string, string>>): RelayMode {
   const data = parseHexBytes(values.data ?? '')
   if (mode === 'call') return { kind: 'call', data }
   throw new PlanInputError(`The mode "${mode}" is not known.`)
+}
+
+/**
+ * The optional call after the delivery: null when both fields are empty. A target with no call data is a call with empty
+ * call data. Call data with no target is an error, because the router reads the call data only after a target.
+ */
+export function deliveryCallOf(values: Readonly<Record<string, string>>): DeliveryCall | null {
+  const targetText = (values[DELIVERY_FIELD.callTarget] ?? '').trim()
+  const dataText = (values[DELIVERY_FIELD.callData] ?? '').trim()
+  const data = parseHexBytes(dataText)
+  if (targetText === '' && data === '0x') return null
+  if (targetText === '') throw new PlanInputError('The call data needs a call target. Name the contract to call, or clear the call data.')
+  return { target: parseAddress(targetText, 'call target'), data }
 }
 
 /** The optional gas limit of the bridge form: undefined when the field is empty, else a positive whole number. */
