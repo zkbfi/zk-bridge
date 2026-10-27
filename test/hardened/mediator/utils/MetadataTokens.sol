@@ -25,10 +25,8 @@ contract DecimalsReturningToken is ERC20 {
     }
 }
 
-/// @notice A token that has a name and a symbol and no `decimals()` function at all.
-contract NoDecimalsToken {
-    string public name = "No Decimals";
-    string public symbol = "NOD";
+/// @notice A token with balances, allowances and transfers, and no metadata functions. A child adds the ones that it has.
+abstract contract BareToken {
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
 
@@ -53,4 +51,30 @@ contract NoDecimalsToken {
         balanceOf[to] += amount;
         return true;
     }
+}
+
+/// @notice A token that has a name and a symbol and no `decimals()` function at all.
+contract NoDecimalsToken is BareToken {
+    string public name = "No Decimals";
+    string public symbol = "NOD";
+}
+
+/// @notice A token that has a name and no symbol function.
+contract OnlyNameToken is BareToken {
+    string public name = "Only Name";
+    uint8 public decimals = 18;
+}
+
+/// @notice A token that has a symbol and no name function.
+contract OnlySymbolToken is BareToken {
+    string public symbol = "ONLY";
+    uint8 public decimals = 18;
+}
+
+/// @notice A token of the old style: the name and the symbol are `bytes32` values padded with zero bytes, as the first
+/// stablecoin and Maker tokens have them.
+contract Bytes32MetadataToken is BareToken {
+    bytes32 public name = "Maker";
+    bytes32 public symbol = "MKR";
+    uint8 public decimals = 18;
 }
