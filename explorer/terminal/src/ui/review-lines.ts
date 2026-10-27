@@ -3,7 +3,7 @@
  * contract, function, decoded arguments, value, gas estimate and fees.
  */
 import { keccak256 } from 'viem'
-import { formatRateAsPercent, formatUnits } from '../format/amounts'
+import { formatUnits } from '../format/amounts'
 import type { PreparedTransaction } from '../tx/prepare'
 import { colored, muted, plain, strong, type Line } from './rich-text'
 import { deliveryFeeReviewLines } from './delivery-fee-lines'
@@ -47,14 +47,6 @@ export function reviewLines(prepared: PreparedTransaction, options: { position: 
       'Network fee',
       `at most ${formatUnits(prepared.maximumNetworkFee, 18)} ${symbol} (max fee ${formatUnits(unsigned.maxFeePerGas ?? 0n, 9)} gwei, tip ${formatUnits(unsigned.maxPriorityFeePerGas ?? 0n, 9)} gwei)`,
     ),
-    ...(plan.charge === null
-      ? []
-      : [
-          row(
-            'Bridge fee',
-            `${formatRateAsPercent(plan.charge.rate)} = ${formatUnits(plan.charge.amount, plan.charge.token.decimals)} ${plan.charge.token.symbol}, taken by the mediator`,
-          ),
-        ]),
     ...(plan.deliveryFee === undefined ? [] : deliveryFeeReviewLines(plan.deliveryFee)),
     ...plan.notes.map((note): Line => [colored(`* ${note}`, theme.warn)]),
     ...(options.calldata === 'full'

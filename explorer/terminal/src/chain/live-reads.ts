@@ -1,5 +1,5 @@
 /**
- * Live reads from the chains: balances, allowances, claimable amounts and the fee rate. They use the RPC endpoints,
+ * Live reads from the chains: balances, allowances, and claimable amounts. They use the RPC endpoints,
  * not the indexer, because a value that a transaction depends on must be current.
  */
 import { erc20Abi, isAddress, getAddress, zeroAddress, type Abi, type Address } from 'viem'
@@ -31,8 +31,6 @@ export interface TokenPosition {
 export interface ChainSnapshot {
   readonly chain: ChainConfig
   readonly nativeBalance: bigint
-  /** The fee rate of the mediator now, 1e18-scaled. The schedule only falls and has no admin. */
-  readonly feeRate: bigint
   readonly positions: readonly TokenPosition[]
 }
 
@@ -55,12 +53,11 @@ export async function readChainSnapshot(client: ReadClient, input: SnapshotInput
   const mediator = chain.contracts.tokenMediator
   const tokens = input.tokens.filter((token) => token.side === chain.side)
   try {
-    const [nativeBalance, feeRate, positions] = await Promise.all([
+    const [nativeBalance, positions] = await Promise.all([
       client.getBalance({ address: account }),
-      readBigint(client, { address: mediator, abi: tokenMediatorAbi, functionName: 'currentFeeRate' }),
       Promise.all(tokens.map((token) => readPosition(client, { chain, account, token }))),
     ])
-    return { status: 'ok', snapshot: { chain, nativeBalance, feeRate, positions } }
+    return { status: 'ok', snapshot: { chain, nativeBalance, positions } }
   } catch (error) {
     return { status: 'error', chain, message: error instanceof Error ? error.message : String(error) }
   }

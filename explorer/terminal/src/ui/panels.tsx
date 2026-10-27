@@ -4,7 +4,7 @@
  */
 import type { ReactNode } from 'react'
 import type { ChainSnapshotResult } from '../chain/live-reads'
-import { formatRateAsPercent, formatUnits } from '../format/amounts'
+import { formatUnits } from '../format/amounts'
 import { fitColumn, formatTimestamp, shortenHex } from '../format/text'
 import { FILTER_FIELDS, type FilterField, type FilterState } from '../model/filter-state'
 import type { FeedItem, LightClientHead, PairConfig, PairSummary, TokenInfo } from '../model/types'
@@ -229,7 +229,7 @@ function balanceLines(input: {
       return [[strong(` ${chain.nativeSymbol} `), plain([native, ...tokens.map((token) => token.text)].join(' | '))]]
     }
     return [
-      [strong(` ${chain.name}`), muted(`  ${native}  fee ${formatRateAsPercent(snapshot.feeRate)}`)],
+      [strong(` ${chain.name}`), muted(`  ${native}`)],
       ...tokens.map(
         (token): Line => [
           muted('   '),

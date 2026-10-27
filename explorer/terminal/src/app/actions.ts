@@ -78,9 +78,8 @@ export function buildBridgeSteps(values: Readonly<Record<string, string>>, token
     chain,
     token,
     amount,
-    currentFeeRate: snapshot.feeRate,
     ...(deliveryWanted(values, { source, tokens, context })
-      ? deliveryRelayOf(values, { source, tokens, context, feeRate: snapshot.feeRate })
+      ? deliveryRelayOf(values, { source, tokens, context })
       : directRelayOf(values, { source, receiver, pair: context.pair })),
   })
   const approval: readonly FlowStep[] =
@@ -175,12 +174,11 @@ export function deliveryRouterOf(
 
 /**
  * The receiver, the call data and the review of a relay that pays for delivery. The receiver is the delivery router of the
- * other chain. The call data is the encoded fee terms. The amount that the router receives is the amount less the fee
- * of the mediator.
+ * other chain. The call data is the encoded fee terms. The router receives the whole amount.
  */
 function deliveryRelayOf(
   values: Readonly<Record<string, string>>,
-  input: { source: Extract<BridgeSource, { kind: 'token' }>; tokens: readonly TokenInfo[]; context: BridgeContext; feeRate: bigint },
+  input: { source: Extract<BridgeSource, { kind: 'token' }>; tokens: readonly TokenInfo[]; context: BridgeContext },
 ) {
   const { context } = input
   const resolved = resolveDeliveryTarget({ source: input.source, pair: context.pair, tokens: input.tokens, valuations: context.tokenValuationsWei ?? {} })
@@ -189,8 +187,8 @@ function deliveryRelayOf(
     throw new PlanInputError('The delivery cost is not loaded yet. Wait for it, or choose No for Pay for delivery.')
   }
   const { target } = resolved
-  const state = buildDeliveryFeeModel({ values, target, report: context.deliveryCost, transferValue: transferValueOf(values.amount ?? '', input.source.token.decimals, input.feeRate) })
-  if (state.kind === 'needs-amount') throw new PlanInputError('The amount is too small: nothing reaches the delivery router after the bridge fee.')
+  const state = buildDeliveryFeeModel({ values, target, report: context.deliveryCost, transferValue: transferValueOf(values.amount ?? '', input.source.token.decimals) })
+  if (state.kind === 'needs-amount') throw new PlanInputError('The amount is too small: enter an amount above zero to pay for delivery.')
   if (state.kind === 'unavailable') throw new PlanInputError(state.reason)
   const { chosen, dataSource, router } = state.model
   if (chosen.kind === 'invalid') throw new PlanInputError(chosen.reason)

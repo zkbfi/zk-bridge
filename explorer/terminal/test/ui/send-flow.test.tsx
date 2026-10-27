@@ -68,8 +68,8 @@ describe('confirm before send: bridge tokens', () => {
     expect(second).toContain('Step 2 of 2')
     expect(second).toContain('Relay USDC to the other chain')
     expect(second).toContain('relayTokens(address,address,uint256)')
-    expect(second).toContain('Bridge fee')
-    expect(second).toContain('0.1% = 0.001 USDC')
+    expect(second).not.toContain('Bridge fee')
+    expect(second).not.toContain('taken by the mediator')
     // The relay is not sent before its own confirmation.
     expect(chainAccess.sentTransactions).toHaveLength(1)
     await app.press('y')
@@ -93,7 +93,7 @@ describe('confirm before send: bridge tokens', () => {
     expect(app.frame()).not.toContain('Step 1 of')
   })
 
-  test('the fallback mode shows the five-argument call and the current fee rate', async () => {
+  test('the fallback mode shows the five-argument call and no mediator fee', async () => {
     const chainAccess = createFixtureChainAccess(FIXTURE_PAIR, { allowance: 10n ** 30n })
     app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess })
     await openAction(app, 1)
@@ -110,7 +110,8 @@ describe('confirm before send: bridge tokens', () => {
     const frame = app.frame()
     expect(frame).toContain('relayTokensWithFallback(address,address,uint256,bytes,address)')
     expect(frame).not.toContain('maxFeeRate')
-    expect(frame).toContain('Fee rate 0.1%')
+    expect(frame).not.toContain('Fee rate')
+    expect(frame).not.toContain('Bridge fee')
   })
 
   test('shows input errors on the form and opens no review', async () => {

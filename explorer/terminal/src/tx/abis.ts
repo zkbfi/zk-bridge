@@ -14,10 +14,8 @@ export const tokenMediatorAbi = parseAbi([
   'function relayTokensAndCall(address token, address receiver, uint256 value, bytes data)',
   'function relayTokensWithFallback(address token, address receiver, uint256 value, bytes data, address fallbackRecipient)',
   'function claim(address token, address account)',
-  'function currentFeeRate() view returns (uint256)',
   'function claimable(address token, address account) view returns (uint256)',
   'function mediatorBalance(address token) view returns (uint256)',
-  'function accruedFees(address token) view returns (uint256)',
   'function bridgedTokenAddress(address nativeToken) view returns (address)',
   'function nativeTokenAddress(address bridgedToken) view returns (address)',
 ])

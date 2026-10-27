@@ -116,7 +116,7 @@ function lagColor(head: LightClientHead): string {
 export const PARTIAL_SUMMARY_NOTE = '(RPC: recent history only)'
 
 /** The figures of the summary that a partial answer can make wrong. */
-const SUMMARY_FIGURES: readonly PartialFigure[] = ['volume24h', 'inFlight', 'feesAccrued']
+const SUMMARY_FIGURES: readonly PartialFigure[] = ['volume24h', 'inFlight']
 
 /** The mark that goes before a figure that is a lower bound. Empty for a complete figure. */
 function lowerBound(summary: PairSummary, figure: PartialFigure): string {
@@ -134,7 +134,6 @@ export function summaryLines(summary: PairSummary, context: { pair: PairConfig; 
     colored(summary.gates[side], statusColor(summary.gates[side])),
   ])
   const volumeMark = lowerBound(summary, 'volume24h')
-  const feesMark = lowerBound(summary, 'feesAccrued')
   const first: Line = [
     strong(pair.id),
     muted(`  ${pair.first.name} <> ${pair.second.name}   in flight `),
@@ -145,9 +144,7 @@ export function summaryLines(summary: PairSummary, context: { pair: PairConfig; 
   ]
   const hasPartialFigure = SUMMARY_FIGURES.some((figure) => lowerBound(summary, figure) !== '')
   const second: Line = [
-    muted('fees accrued '),
-    plain(`${feesMark}${formatTokenAmounts(summary.feesAccrued.slice(0, layout.mode === 'wide' ? 3 : 1))}`),
-    muted('   gate'),
+    muted('gate'),
     ...gates,
     ...(hasPartialFigure ? [muted(`  ${PARTIAL_SUMMARY_NOTE}`)] : []),
   ]
@@ -219,7 +216,6 @@ export function detailLines(item: FeedItem, pair: PairConfig): readonly Line[] {
       : [
           row('Token', `${item.token.symbol} ${item.token.address}`),
           row('Amount', `${formatUnits(item.amount, item.token.decimals)} ${item.token.symbol} (${item.amount} base units)`),
-          row('Fee', item.fee === null ? '-' : `${formatUnits(item.fee, item.token.decimals)} ${item.token.symbol}`),
         ]),
     row(`Sent on ${from.name}`, `${new Date(item.sentAt * 1000).toISOString()}`),
     row('Source tx', item.sourceTransactionHash),
@@ -228,7 +224,7 @@ export function detailLines(item: FeedItem, pair: PairConfig): readonly Line[] {
   ]
 }
 
-/** The columns of the audit table. The short form drops the in-flight and collected-fee columns. */
+/** The columns of the audit table. The short form drops the in-flight column. */
 export type AuditColumns = 'full' | 'short'
 
 /** One audit row as a line of fixed columns. */
@@ -241,8 +237,8 @@ export function auditLine(row: AuditRow, columns: AuditColumns): Line {
   const full = columns === 'full'
   const differenceText = difference !== 0n && (flagged || unverified) ? `${difference > 0n ? '+' : ''}${cell(difference)}` : '0'
   const cells = full
-    ? [fitColumn(token.symbol, 8), fitColumnRight(cell(row.escrow), 18), fitColumnRight(cell(row.bridgedSupply), 18), fitColumnRight(cell(row.inFlight), 12), fitColumnRight(differenceText, 12), fitColumnRight(cell(row.accruedFees), 12), fitColumnRight(cell(row.collectedFees), 12)]
-    : [fitColumn(token.symbol, 7), fitColumnRight(cell(row.escrow), 14), fitColumnRight(cell(row.bridgedSupply), 14), fitColumnRight(differenceText, 9), fitColumnRight(cell(row.accruedFees), 10)]
+    ? [fitColumn(token.symbol, 8), fitColumnRight(cell(row.escrow), 18), fitColumnRight(cell(row.bridgedSupply), 18), fitColumnRight(cell(row.inFlight), 12), fitColumnRight(differenceText, 12)]
+    : [fitColumn(token.symbol, 7), fitColumnRight(cell(row.escrow), 14), fitColumnRight(cell(row.bridgedSupply), 14), fitColumnRight(differenceText, 9)]
   if (unverified) return [plain(cells.join(' ')), muted(`  ${UNVERIFIED_MARK}`)]
   return [colored(`${cells.join(' ')}  ${flagged ? 'MISMATCH' : 'ok'}`, flagged ? theme.bad : theme.text)]
 }
@@ -269,8 +265,8 @@ function mismatchVerdict(mismatches: number, unverified: number): Line {
 export function auditHeader(columns: AuditColumns): Line {
   const full = columns === 'full'
   const cells = full
-    ? [fitColumn('token', 8), fitColumnRight('escrow', 18), fitColumnRight('bridged supply', 18), fitColumnRight('in flight', 12), fitColumnRight('difference', 12), fitColumnRight('fees accrued', 12), fitColumnRight('fees paid out', 12)]
-    : [fitColumn('token', 7), fitColumnRight('escrow', 14), fitColumnRight('supply', 14), fitColumnRight('diff', 9), fitColumnRight('fees', 10)]
+    ? [fitColumn('token', 8), fitColumnRight('escrow', 18), fitColumnRight('bridged supply', 18), fitColumnRight('in flight', 12), fitColumnRight('difference', 12)]
+    : [fitColumn('token', 7), fitColumnRight('escrow', 14), fitColumnRight('supply', 14), fitColumnRight('diff', 9)]
   return [muted(cells.join(' '))]
 }
 

@@ -46,7 +46,7 @@ describe('the fixture data source with the default clock', () => {
     const usdc = FIXTURE_TOKENS[0]!
     const expected = recent.filter((item) => item.token === usdc).reduce((sum, item) => sum + (item.amount ?? 0n), 0n)
     expect(summary.volume24h.byToken).toEqual([{ token: usdc, amount: expected }])
-    expect(summary.feesAccrued).toEqual(FIXTURE_AUDIT.map((row) => ({ token: row.token, amount: row.accruedFees })))
+    expect(summary).not.toHaveProperty('feesAccrued')
   })
 
   test('returns the audit rows and the tokens that the fixtures define', async () => {

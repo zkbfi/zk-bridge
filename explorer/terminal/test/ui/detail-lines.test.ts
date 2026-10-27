@@ -10,24 +10,20 @@ const textOf = (item: FeedItem) => detailLines(item, FIXTURE_PAIR).map(lineText)
 const valueOf = (lines: readonly string[], label: string) => lines.find((line) => line.startsWith(label))?.slice(14).trim()
 
 describe('the detail lines of a feed item', () => {
-  test('a token transfer lists the token, the amount in base units, the fee and the recipient label', () => {
-    const lines = textOf({ ...tokenItem, fee: 15n * 10n ** BigInt(tokenItem.token!.decimals - 1) })
+  test('a token transfer lists the token, the amount in base units and the recipient label, with no fee row', () => {
+    const lines = textOf(tokenItem)
     const token = tokenItem.token!
     expect(valueOf(lines, 'Recipient')).toBe(tokenItem.recipient)
     expect(valueOf(lines, 'Token')).toBe(`${token.symbol} ${token.address}`)
     expect(valueOf(lines, 'Amount')).toContain(`(${tokenItem.amount} base units)`)
-    expect(valueOf(lines, 'Fee')).toBe(`1.5 ${token.symbol}`)
+    expect(valueOf(lines, 'Fee')).toBeUndefined()
   })
 
-  test('a token transfer with no fee reading shows a dash for the fee', () => {
-    expect(valueOf(textOf({ ...tokenItem, fee: null }), 'Fee')).toBe('-')
-  })
-
-  test('a message labels its recipient as the executor and has no token, amount or fee rows', () => {
-    const lines = textOf({ ...tokenItem, kind: 'message', token: null, amount: null, fee: null })
+  test('a message labels its recipient as the executor and has no token or amount rows', () => {
+    const lines = textOf({ ...tokenItem, kind: 'message', token: null, amount: null })
     expect(valueOf(lines, 'Executor')).toBe(tokenItem.recipient)
     expect(valueOf(lines, 'Kind')).toBe('message')
-    for (const label of ['Recipient', 'Token', 'Amount', 'Fee']) expect(valueOf(lines, label)).toBeUndefined()
+    for (const label of ['Recipient', 'Token', 'Amount']) expect(valueOf(lines, label)).toBeUndefined()
   })
 
   test('an item that has not arrived says so and shows a dash for the target transaction', () => {

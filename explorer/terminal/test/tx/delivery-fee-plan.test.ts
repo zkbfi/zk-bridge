@@ -73,7 +73,7 @@ describe('relay that pays for delivery', () => {
     const plan = await relayOf({ token: `first:${FIXTURE_TOKENS[2]!.address}`, feeMode: 'gas', feeMultiplier: '1.2' }, { pair, tokenValuationsWei: {} })
     const review = plan.deliveryFee!
     expect(review.description.certainty).toBe('estimate')
-    expect(review.description.maximumUnits).toBe(maximumFee(review.director, 99_900_000_000_000_000_000n))
+    expect(review.description.maximumUnits).toBe(maximumFee(review.director, 100_000_000_000_000_000_000n))
   })
 
   test('the confirmation screen states mode, numbers, label, maximum, data source and the router rule', async () => {
@@ -87,8 +87,8 @@ describe('relay that pays for delivery', () => {
     expect(text).toContain(`Recipient     ${getAddress(receiver)}`)
     expect(text).toContain('Flags         share of the value')
     expect(text).toContain('Multiplier    0.5% of the transfer')
-    expect(text).toContain('Tip now       0.4995 zkbUSDC (exact)')
-    expect(text).toContain('Most the tip  0.4995 zkbUSDC')
+    expect(text).toContain('Tip now       0.5 zkbUSDC (exact)')
+    expect(text).toContain('Most the tip  0.5 zkbUSDC')
     expect(text).toContain('Data source   measured from 40 recent deliveries, p90, 210000 gas')
     expect(text).toContain('on PulseChain. The tokens go to')
     expect(text).toContain('The tip goes to the reward address of the delivery router.')
@@ -161,7 +161,7 @@ describe('relay that pays for delivery', () => {
     const plan = await relayOf({ feeMode: 'percentage', feePercent: '' })
     const [, , , data] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as [string, string, bigint, `0x${string}`]
     expect(decodeFeeDirector(data)).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 10n ** 15n })
-    expect(plan.deliveryFee?.description.summary).toBe('0.0999 zkbUSDC (exact)')
+    expect(plan.deliveryFee?.description.summary).toBe('0.1 zkbUSDC (exact)')
   })
 
   test('the router is chosen in the extra data: the relay targets the router of the form, and the review marks it', async () => {
@@ -210,7 +210,7 @@ describe('relay that pays for delivery', () => {
 describe('planRelay refuses a delivery fee that the data does not carry', () => {
   const director = { recipient: getAddress(receiver), settings: settingsOf({ mode: 'fixed' }), limit: 1n, multiplier: 0n }
   const router = FIXTURE_PAIR.second.contracts.deliveryRouter!
-  const base = { chain: FIXTURE_PAIR.first, token: usdc, amount: 5n, currentFeeRate: 0n }
+  const base = { chain: FIXTURE_PAIR.first, token: usdc, amount: 5n }
   const review = { router, defaultRouter: router, routerChainName: 'PulseChain', director, token: { symbol: 'zkbUSDC', decimals: 6 }, description: undefined as never, dataSource: undefined as never, routerAddresses: { kind: 'read' as const, rewardAddress: router, failedDeliveryAddress: router } }
 
   test('a plain mode, another receiver and other data are each refused', () => {

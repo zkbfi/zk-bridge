@@ -19,7 +19,6 @@ const chain = FIXTURE_PAIR.first
 const receiver = '0x0000000000000000000000000000000000000abc'
 const fallbackRecipient = '0x0000000000000000000000000000000000000abd'
 const AMOUNT = 2_500_000n
-const ZERO_FEE = 0n
 
 const EXPECTED = {
   relay:
@@ -37,7 +36,7 @@ const EXPECTED = {
 
 describe('planRelay', () => {
   test('plain relay encodes relayTokens(token, receiver, value) and targets the mediator', () => {
-    const plan = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, currentFeeRate: ZERO_FEE })
+    const plan = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' } })
     expect(plan.data).toBe(EXPECTED.relay as `0x${string}`)
     expect(plan.to).toBe(chain.contracts.tokenMediator)
     expect(plan.functionSignature).toBe('relayTokens(address,address,uint256)')
@@ -51,7 +50,6 @@ describe('planRelay', () => {
       receiver,
       amount: AMOUNT,
       mode: { kind: 'call', data: '0xdeadbeef' },
-      currentFeeRate: ZERO_FEE,
     })
     expect(plan.data).toBe(EXPECTED.call as `0x${string}`)
     expect(plan.functionName).toBe('relayTokensAndCall')
@@ -64,28 +62,25 @@ describe('planRelay', () => {
       receiver,
       amount: AMOUNT,
       mode: { kind: 'fallback', data: '0x', fallbackRecipient },
-      currentFeeRate: ZERO_FEE,
     })
     expect(plan.data).toBe(EXPECTED.fallbackFive as `0x${string}`)
     expect(plan.arguments.map((argument) => argument.name)).not.toContain('maxFeeRate')
   })
 
-  test('computes the fee the way the mediator does and shows what arrives', () => {
-    const plan = planRelay({ chain, token: usdc, receiver, amount: 1_999_999n, mode: { kind: 'plain' }, currentFeeRate: 10n ** 15n })
-    // 1999999 * 0.1% = 1999.999, which the mediator cuts to 1999.
-    expect(plan.charge).toEqual({ token: usdc, rate: 10n ** 15n, amount: 1_999n })
-    expect(plan.notes[0]).toContain('0.1%')
-    expect(plan.notes[0]).toContain('0.001999 USDC')
-    expect(plan.notes[0]).toContain('1.998 USDC')
+  test('the mediator takes no fee: the plan names the whole amount and carries no fee note', () => {
+    const plan = planRelay({ chain, token: usdc, receiver, amount: 1_999_999n, mode: { kind: 'plain' } })
+    expect(plan.arguments.find((argument) => argument.name === 'value')?.value).toBe('1999999')
+    expect(plan.notes).toEqual(['If the receiver cannot be paid there, the release goes to the sender at the same address.'])
+    expect(plan).not.toHaveProperty('charge')
   })
 
   test('refuses a zero amount and a receiver that is not an address', () => {
-    expect(() => planRelay({ chain, token: usdc, receiver, amount: 0n, mode: { kind: 'plain' }, currentFeeRate: 0n })).toThrow(PlanInputError)
-    expect(() => planRelay({ chain, token: usdc, receiver: '0x12', amount: 1n, mode: { kind: 'plain' }, currentFeeRate: 0n })).toThrow(PlanInputError)
+    expect(() => planRelay({ chain, token: usdc, receiver, amount: 0n, mode: { kind: 'plain' } })).toThrow(PlanInputError)
+    expect(() => planRelay({ chain, token: usdc, receiver: '0x12', amount: 1n, mode: { kind: 'plain' } })).toThrow(PlanInputError)
   })
 
   test('every plan decodes back to the arguments that went in', () => {
-    const plan = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, currentFeeRate: 0n })
+    const plan = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' } })
     const decoded = decodeKnownCall(plan.data)
     expect(decoded?.functionName).toBe('relayTokens')
     expect(decoded?.arguments.map((argument) => argument.value)).toEqual([

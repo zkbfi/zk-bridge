@@ -188,7 +188,7 @@ function pairLine(health: PairHealth, defaultPairId: string, nowSeconds: number)
   ]
 }
 
-/** The audit view: escrow against bridged supply per token, fees, and every mismatch flagged. */
+/** The audit view: escrow against bridged supply per token, and every mismatch flagged. */
 export function AuditView(props: { readonly state: AppState }) {
   const { dataSource } = useServices()
   const terminal = useTerminalDimensions()

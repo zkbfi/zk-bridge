@@ -5,7 +5,7 @@
  * amounts are decimal strings of base units. This file turns amounts into `bigint` at the edge and never uses a
  * `number` for an amount.
  *
- * The routes in use: `/api/summary`, `/api/heads`, `/api/feed`, `/api/tokens`, `/api/audit`, `/api/fees`,
+ * The routes in use: `/api/summary`, `/api/heads`, `/api/feed`, `/api/tokens`, `/api/audit`,
  * `/api/head-updates` and `/api/delivery-cost`. The indexer serves one pair. A request for another pair name is refused.
  */
 import { RPC_PARTIAL_FIGURES, parseDeliveryCostReport, secondsPerSlot, type PartialFigure } from '@zk-bridge/shared'
@@ -114,7 +114,6 @@ export function createIndexerDataSource(input: IndexerDataSourceInput): DataSour
           transferCount: volumeRows.reduce((sum, row) => sum + integer(row.transfers, 'transfers'), 0),
           byToken: volumeRows.flatMap((row) => amountsOf(row, 'volume', tokens, sideOf)),
         },
-        feesAccrued: array(body.feesAccrued, 'feesAccrued').flatMap((row) => amountsOf(record(row, 'fee row'), 'accrued', tokens, sideOf)),
         ...partialOf(coverageOf(body)),
       }
     },
@@ -134,29 +133,18 @@ export function createIndexerDataSource(input: IndexerDataSourceInput): DataSour
 
     async getAudit(pairId): Promise<readonly AuditRow[]> {
       requirePair(pairId)
-      const [audit, fees, tokens] = await Promise.all([
-        getJson(`${base}/api/audit`),
-        getJson(`${base}/api/fees`),
-        loadTokens(),
-      ])
-      const collected = array(record(fees, 'fees answer').balances, 'balances').map((row) => record(row, 'balance row'))
+      const [audit, tokens] = await Promise.all([getJson(`${base}/api/audit`), loadTokens()])
       const auditPartial = coverageOf(record(audit, 'audit answer'))?.partial.includes('audit') === true
       return array(record(audit, 'audit answer').tokens, 'audit tokens').flatMap((row): AuditRow[] => {
         const entry = record(row, 'audit row')
         const token = tokenFromView(entry.token, tokens, sideOf)
         if (token === null) return []
-        const collectedRow = collected.find((candidate) => {
-          const view = candidate.token as { address?: string; chainId?: number } | null
-          return view?.address?.toLowerCase() === token.address.toLowerCase() && view.chainId === chainIdOf(pair, token.side)
-        })
         return [
           {
             token,
             escrow: bigint(entry.escrow, 'escrow'),
             bridgedSupply: bigint(entry.bridgedSupply, 'bridgedSupply'),
             inFlight: bigint(entry.pendingForward, 'pendingForward') + bigint(entry.pendingBackward, 'pendingBackward'),
-            accruedFees: bigint(entry.accruedFees, 'accruedFees'),
-            collectedFees: collectedRow === undefined ? 0n : bigint(collectedRow.collected, 'collected'),
             ...(auditPartial ? { partial: true } : {}),
           },
         ]
@@ -235,10 +223,6 @@ function coverageOf(body: Record<string, unknown>): Coverage | null {
 /** The `partial` field of a summary, only when some figure is partial. */
 function partialOf(coverage: Coverage | null): { readonly partial?: readonly PartialFigure[] } {
   return coverage === null || coverage.partial.length === 0 ? {} : { partial: coverage.partial }
-}
-
-function chainIdOf(pair: PairConfig, side: ChainSide): number {
-  return side === 'first' ? pair.first.chainId : pair.second.chainId
 }
 
 function headOf(row: Record<string, unknown>, sideOf: (chainId: number) => ChainSide): LightClientHead {
@@ -337,8 +321,6 @@ function feedItemOf(item: Record<string, unknown>, pair: PairConfig, sideOf: (ch
     recipient: getAddress(string(transfer?.recipient ?? item.executor, 'recipient')),
     token: sourceToken,
     amount: transfer === null || transfer.value === null ? null : bigint(transfer.value, 'value'),
-    // The API gives no fee per transfer. The audit and summary views carry fee totals.
-    fee: null,
     sentAt: integer(sent.timestamp, 'sent.timestamp'),
     deliveredAt: delivered === null ? null : nullableInteger(delivered.timestamp),
     sourceTransactionHash: hex(sent.transactionHash, 'sent.transactionHash'),

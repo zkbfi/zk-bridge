@@ -34,7 +34,6 @@ const summary = {
   ],
   inFlight: { total: 3, byStatus: {}, byDirection: {} },
   volume24h: [{ chainId: 1, token: { chainId: 1, address: usdcHome }, volume: '12345678901234567890', transfers: 4 }],
-  feesAccrued: [{ chainId: 1, token: { chainId: 1, address: usdcHome }, accrued: '777' }],
   lastHeadUpdates: [{ chainId: 1, update: { timestamp: 1_800 } }, { chainId: 369, update: null }],
 }
 
@@ -100,7 +99,7 @@ describe('indexer data source', () => {
     expect(result.gates).toEqual({ first: 'open', second: 'unknown' })
     expect(result.volume24h.byToken[0]?.amount).toBe(12_345_678_901_234_567_890n)
     expect(result.volume24h.transferCount).toBe(4)
-    expect(result.feesAccrued[0]?.amount).toBe(777n)
+    expect(result).not.toHaveProperty('feesAccrued')
   })
 
   test('takes the slot length from the chain that the light client tracks, including the testnets', async () => {
@@ -122,23 +121,21 @@ describe('indexer data source', () => {
     expect(list[2]?.decimals).toBe(18)
   })
 
-  test('the audit sums both pending directions into in flight and takes collected fees from the fee balances', async () => {
+  test('the audit sums both pending directions into in flight and carries no fee column', async () => {
     const audit = {
       tokens: [
         {
           token: { chainId: 1, address: usdcHome },
           escrow: '1000',
-          accruedFees: '5',
           bridgedSupply: '900',
           pendingForward: '60',
           pendingBackward: '40',
         },
       ],
     }
-    const fees = { balances: [{ chainId: 1, token: { chainId: 1, address: usdcHome }, charged: '12', collected: '7', accrued: '5' }] }
-    const rows = await source({ '/api/audit': audit, '/api/fees': fees, '/api/tokens': tokens }).getAudit('eth-pls')
+    const rows = await source({ '/api/audit': audit, '/api/tokens': tokens }).getAudit('eth-pls')
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ escrow: 1000n, bridgedSupply: 900n, inFlight: 100n, accruedFees: 5n, collectedFees: 7n })
+    expect(rows[0]).toEqual({ token: expect.objectContaining({ address: usdcHome }), escrow: 1000n, bridgedSupply: 900n, inFlight: 100n })
   })
 
   test('the prover report holds head updates only', async () => {
@@ -195,7 +192,6 @@ describe('the coverage block of an answer from the RPC source', () => {
   const auditAnswer = {
     tokens: [{ token: { chainId: 1, address: usdcHome }, escrow: '1000', accruedFees: '5', bridgedSupply: '900', pendingForward: '0', pendingBackward: '0' }],
   }
-  const noFees = { balances: [] }
   const coverage = (extra: Record<string, unknown>) => ({ complete: false, coveredFrom: 1_700, partial: [], ...extra })
 
   test('a summary names the partial figures that this client knows, and drops a name that it does not know', async () => {
@@ -225,7 +221,7 @@ describe('the coverage block of an answer from the RPC source', () => {
   })
 
   test('an audit row is partial when the coverage names the audit, and complete otherwise', async () => {
-    const answers = (block: unknown) => ({ '/api/audit': { ...auditAnswer, ...(block === undefined ? {} : { coverage: block }) }, '/api/fees': noFees, '/api/tokens': tokens })
+    const answers = (block: unknown) => ({ '/api/audit': { ...auditAnswer, ...(block === undefined ? {} : { coverage: block }) }, '/api/tokens': tokens })
     const partial = await source(answers(coverage({ partial: ['audit'] }))).getAudit('eth-pls')
     expect(partial[0]?.partial).toBe(true)
     const otherFigure = await source(answers(coverage({ partial: ['feed'] }))).getAudit('eth-pls')

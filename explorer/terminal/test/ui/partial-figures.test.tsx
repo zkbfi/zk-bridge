@@ -84,22 +84,20 @@ describe('summary figures that the RPC source read in part', () => {
 
   test('each partial figure gets a leading >= and the note shows once', async () => {
     const base = await summary()
-    const [first, second] = textOf({ ...base, partial: ['volume24h', 'inFlight', 'feesAccrued'] })
+    const [first, second] = textOf({ ...base, partial: ['volume24h', 'inFlight'] })
     expect(first).toContain(`in flight >=${base.inFlight}`)
     expect(first).toContain(`24h >=${base.volume24h.transferCount} transfers`)
     expect(first).toMatch(/, >=[\d.,]+ \w+/)
-    expect(second).toContain('fees accrued >=')
+    expect(second).not.toContain('fees accrued')
     expect(second).toContain(PARTIAL_SUMMARY_NOTE)
     expect([first, second].join('\n').split(PARTIAL_SUMMARY_NOTE)).toHaveLength(2)
   })
 
-  test('only the named figure is marked: a partial volume leaves in flight and fees exact', async () => {
+  test('only the named figure is marked: a partial volume leaves in flight exact', async () => {
     const base = await summary()
     const [first, second] = textOf({ ...base, partial: ['volume24h'] })
     expect(first).toContain(`in flight ${base.inFlight}`)
     expect(first).toContain(`24h >=${base.volume24h.transferCount} transfers`)
-    expect(second).toContain('fees accrued ')
-    expect(second).not.toContain('fees accrued >=')
     expect(second).toContain(PARTIAL_SUMMARY_NOTE)
   })
 

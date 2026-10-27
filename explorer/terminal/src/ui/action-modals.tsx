@@ -80,16 +80,11 @@ export function BridgeModal(props: ActionModalProps) {
   const signer = session.signer
   const targetOf = (values: Values) => resolveDeliveryTarget({ source: bridgeSourceOf(values, session.tokens, pair), pair, tokens: session.tokens, valuations: tokenValuationsWei })
   const deliveryActive = (values: Values): boolean => paysForDelivery(values) && targetOf(values).kind === 'ready'
-  const feeRateOf = (values: Values): bigint => {
-    const side = bridgeSourceOf(values, session.tokens, pair).side
-    const found = (session.snapshots ?? []).find((result) => result.status === 'ok' && result.snapshot.chain.side === side)
-    return found?.status === 'ok' ? found.snapshot.feeRate : 0n
-  }
   const stateFor = (values: Values, report: DeliveryCostReport | null): { state: DeliveryFeeState; target: DeliveryTarget } | null => {
     const resolved = targetOf(values)
     const source = bridgeSourceOf(values, session.tokens, pair)
     if (resolved.kind === 'unavailable' || report === null || source.kind !== 'token') return null
-    const transferValue = transferValueOf(values.amount ?? '', source.token.decimals, feeRateOf(values))
+    const transferValue = transferValueOf(values.amount ?? '', source.token.decimals)
     return { state: buildDeliveryFeeModel({ values, target: resolved.target, report, transferValue }), target: resolved.target }
   }
 

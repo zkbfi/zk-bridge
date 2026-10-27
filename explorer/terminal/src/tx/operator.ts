@@ -113,7 +113,6 @@ export function planLightClientUpdate(text: string, pair: PairConfig): PlannedTr
       { name: 'publicValues.newHeaderRoot', type: 'bytes32', value: output.newHeaderRoot },
       { name: 'publicValues.executionBlockNumber', type: 'uint64', value: output.executionBlockNumber.toString() },
     ],
-    charge: null,
     notes: [
       `The light client moves from slot ${output.previousHeadSlot} to slot ${output.newHeadSlot}.`,
       'The contract refuses the update when its stored head is no longer the start head.',
@@ -192,7 +191,6 @@ export function planMessageExecution(text: string, pair: PairConfig): ExecutionS
         { name: 'sourceTransactionHash', type: 'bytes32', value: summary.sourceTransactionHash },
         ...executeCall.arguments,
       ],
-      charge: null,
       notes: [
         'The bridge checks the evidence itself. No proof is needed. The message runs once, even if the call reverts.',
         `The target ${summary.executor} receives the call with ${summary.gasLimit} gas.`,
@@ -228,7 +226,6 @@ function prerequisiteStep(
       data,
       value: 0n,
       arguments: decoded.arguments,
-      charge: null,
       notes: ['The bridge needs a validated layout row before it can check the evidence. The chain validates the row.'],
     },
   }

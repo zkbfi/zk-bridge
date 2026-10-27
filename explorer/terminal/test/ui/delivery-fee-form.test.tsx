@@ -40,7 +40,7 @@ describe('the tip field of the bridge form', () => {
   test('is on by default at 0.1 percent, with the fee fields, the router field and the live panel shown', async () => {
     const screen = await openOnTipField({ tokenValuationsWei: priced })
     const frame = screen.frame()
-    for (const shown of ['Tip for delivery', 'Yes, 0.1% by default', 'Tip mode', 'Percentage of the transfer', 'Percentage', '0.1', 'Router (advanced)', 'Fee recipient', 'Margin percent', 'Priority fee gwei', 'Delivery cost on PulseChain', 'Router          0x', '(the default delivery router)', 'measured from 40 recent deliveries, p90', 'Base fee', 'at block 21000000', 'Your tip        0.0999 zkbUSDC (exact)']) {
+    for (const shown of ['Tip for delivery', 'Yes, 0.1% by default', 'Tip mode', 'Percentage of the transfer', 'Percentage', '0.1', 'Router (advanced)', 'Fee recipient', 'Margin percent', 'Priority fee gwei', 'Delivery cost on PulseChain', 'Router          0x', '(the default delivery router)', 'measured from 40 recent deliveries, p90', 'Base fee', 'at block 21000000', 'Your tip        0.1 zkbUSDC (exact)']) {
       expect(frame).toContain(shown)
     }
     // The Mode field (relayTokens) is gone: the call data holds the tip terms.
@@ -100,7 +100,7 @@ describe('the tip field of the bridge form', () => {
     const screen = await openOnTipField()
     const frame = screen.frame()
     expect(frame).toContain('unavailable: no value of the token is configured')
-    expect(frame).toContain('Your tip        0.0999 zkbUSDC (exact)')
+    expect(frame).toContain('Your tip        0.1 zkbUSDC (exact)')
   })
 
   test('Enter reviews relayTokensAndCall to the router with the tip terms, and sends nothing', async () => {

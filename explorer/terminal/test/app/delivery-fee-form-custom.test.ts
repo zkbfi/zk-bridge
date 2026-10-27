@@ -27,7 +27,7 @@ function targetFor(values: Values): DeliveryTarget {
 
 function stateFor(values: Values, reportOverride = report): DeliveryFeeState {
   const target = targetFor(values)
-  return buildDeliveryFeeModel({ values, target, report: reportOverride, transferValue: transferValueOf(values.amount ?? '', target.token.decimals, 10n ** 15n) })
+  return buildDeliveryFeeModel({ values, target, report: reportOverride, transferValue: transferValueOf(values.amount ?? '', target.token.decimals) })
 }
 
 function chosenOf(values: Values) {

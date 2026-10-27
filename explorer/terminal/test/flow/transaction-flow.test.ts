@@ -19,7 +19,7 @@ const chain = FIXTURE_PAIR.first
 const usdc = FIXTURE_TOKENS[0]!
 const receiver = '0x0000000000000000000000000000000000000abc'
 
-const relayPlan = planRelay({ chain, token: usdc, receiver, amount: 1_000_000n, mode: { kind: 'plain' }, currentFeeRate: 10n ** 15n })
+const relayPlan = planRelay({ chain, token: usdc, receiver, amount: 1_000_000n, mode: { kind: 'plain' } })
 const approvalPlan = planApproval({ chain, token: usdc, spender: chain.contracts.tokenMediator, spenderLabel: 'TokenMediator', amount: 1_000_000n })
 
 interface FakeClientOptions {

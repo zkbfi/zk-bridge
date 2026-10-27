@@ -124,7 +124,6 @@ export function buildFixtureFeed(nowSeconds: number): readonly FeedItem[] {
       recipient: FIXTURE_ACCOUNTS[next() % FIXTURE_ACCOUNTS.length] ?? FIXTURE_ACCOUNT,
       token,
       amount,
-      fee: amount === null ? null : amount / 1_000n,
       sentAt,
       deliveredAt: pending ? null : sentAt + 1_100 + (next() % 900),
       sourceTransactionHash: hash(0x5000 + row),
@@ -167,9 +166,9 @@ const wpls = FIXTURE_TOKENS[4]!
 
 /** The sample audit rows. The last row has a mismatch on purpose. */
 export const FIXTURE_AUDIT: readonly AuditRow[] = [
-  { token: usdc, escrow: 1_250_000_000_000n, bridgedSupply: 1_249_000_000_000n, inFlight: 1_000_000_000n, accruedFees: 1_250_000_000n, collectedFees: 400_000_000n },
-  { token: weth, escrow: 812n * 10n ** 18n, bridgedSupply: 800n * 10n ** 18n, inFlight: 12n * 10n ** 18n, accruedFees: 8n * 10n ** 17n, collectedFees: 2n * 10n ** 17n },
-  { token: wpls, escrow: 90_000_000n * 10n ** 18n, bridgedSupply: 90_000_300n * 10n ** 18n, inFlight: 0n, accruedFees: 90_000n * 10n ** 18n, collectedFees: 10_000n * 10n ** 18n },
+  { token: usdc, escrow: 1_250_000_000_000n, bridgedSupply: 1_249_000_000_000n, inFlight: 1_000_000_000n },
+  { token: weth, escrow: 812n * 10n ** 18n, bridgedSupply: 800n * 10n ** 18n, inFlight: 12n * 10n ** 18n },
+  { token: wpls, escrow: 90_000_000n * 10n ** 18n, bridgedSupply: 90_000_300n * 10n ** 18n, inFlight: 0n },
 ]
 
 /** The sample prover report. */
@@ -227,7 +226,6 @@ export function createFixtureDataSource(input: FixtureDataSourceInput = {}): Dat
         transferCount: recent.length,
         byToken: [{ token: usdc, amount: recent.filter((item) => item.token === usdc).reduce((sum, item) => sum + (item.amount ?? 0n), 0n) }],
       },
-      feesAccrued: FIXTURE_AUDIT.map((row) => ({ token: row.token, amount: row.accruedFees })),
     }
   }
 

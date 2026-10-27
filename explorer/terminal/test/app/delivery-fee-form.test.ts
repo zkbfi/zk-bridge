@@ -29,7 +29,7 @@ function targetFor(values: Values, valuations: Record<string, bigint> = price, p
 }
 
 function stateFor(values: Values, valuations: Record<string, bigint> = price, reportOverride = report, pair: PairConfig = FIXTURE_PAIR, decimals = 6): DeliveryFeeState {
-  return buildDeliveryFeeModel({ values, target: targetFor(values, valuations, pair), report: reportOverride, transferValue: transferValueOf(values.amount ?? '', decimals, 10n ** 15n) })
+  return buildDeliveryFeeModel({ values, target: targetFor(values, valuations, pair), report: reportOverride, transferValue: transferValueOf(values.amount ?? '', decimals) })
 }
 
 // A gas based fee fits only the wrapped native token (price 10^18, 18 decimals): WETH on Ethereum bridges to zkbWETH,
@@ -166,7 +166,7 @@ describe('buildDeliveryFeeModel', () => {
     if (model.chosen.kind !== 'ready') throw new Error('0.5 percent is valid')
     expect(model.chosen.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 5n * 10n ** 15n })
     expect(model.chosen.description.certaintyLabel).toBe('exact')
-    expect(model.chosen.description.nowUnits).toBe(499_500n) // 0.5 percent of 99.9 zkbUSDC, rounded down
+    expect(model.chosen.description.nowUnits).toBe(500_000n) // 0.5 percent of 100 zkbUSDC: the mediator takes no fee, so the whole amount counts
   })
 
   test('the recipient defaults to the receiver and can be changed', () => {
@@ -232,7 +232,7 @@ describe('buildDeliveryFeeModel', () => {
     const chosen = readyModel(stateFor(baseValues)).chosen
     if (chosen.kind !== 'ready') throw new Error('valid')
     expect(chosen.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 10n ** 15n })
-    expect(chosen.description.nowUnits).toBe(99_900n)
+    expect(chosen.description.nowUnits).toBe(100_000n)
   })
 
   test('needs an amount before it can say anything', () => {

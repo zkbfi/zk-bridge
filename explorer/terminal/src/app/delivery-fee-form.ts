@@ -468,16 +468,14 @@ function customStart(previous: Values, context: RefillContext): Values {
 }
 
 /**
- * The amount that reaches the delivery router: the amount that the user typed, less the fee of the mediator.
+ * The amount that reaches the delivery router: the amount that the user typed. The mediator takes no fee.
  *
  * @param amountText What the user typed, in whole tokens.
  * @param decimals The decimals of the token.
- * @param feeRate The fee rate of the mediator, 1e18-scaled. Use zero when it is not read yet.
- * @returns The amount in base units, or null when the text is not an amount above zero or nothing is left after the fee.
+ * @returns The amount in base units, or null when the text is not an amount above zero.
  */
-export function transferValueOf(amountText: string, decimals: number, feeRate: bigint): bigint | null {
+export function transferValueOf(amountText: string, decimals: number): bigint | null {
   const amount = attempt(() => parseUnits(amountText, decimals))
   if (!amount.ok) return null
-  const remaining = amount.value - (amount.value * feeRate) / RATE_SCALE
-  return remaining > 0n ? remaining : null
+  return amount.value > 0n ? amount.value : null
 }

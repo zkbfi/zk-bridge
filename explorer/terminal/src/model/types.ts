@@ -132,7 +132,6 @@ export interface PairSummary {
     readonly transferCount: number
     readonly byToken: readonly TokenAmount[]
   }
-  readonly feesAccrued: readonly TokenAmount[]
   /**
    * Figures that the RPC data source could not complete, because it reads only recent history. Absent for the indexer,
    * which holds the whole history. A figure named here is a lower bound or may miss older rows.
@@ -152,10 +151,8 @@ export interface FeedItem {
   readonly recipient: Address
   /** Present for a token transfer. */
   readonly token: TokenInfo | null
-  /** The amount after the fee, in base units. Present for a token transfer. */
+  /** The amount that the mediator locked or burned, in base units. Present for a token transfer. */
   readonly amount: bigint | null
-  /** The fee charged on the source chain, in base units of the token. */
-  readonly fee: bigint | null
   /** Unix seconds of the send on the source chain. */
   readonly sentAt: number
   /** Unix seconds of the delivery on the destination chain, or null while pending. */
@@ -187,10 +184,8 @@ export interface AuditRow {
   readonly escrow: bigint
   /** The total supply of the bridged copy on the other chain. */
   readonly bridgedSupply: bigint
-  /** Net amounts sent and not yet delivered. */
+  /** Amounts sent and not yet delivered. */
   readonly inFlight: bigint
-  readonly accruedFees: bigint
-  readonly collectedFees: bigint
   /**
    * True when the RPC data source built `inFlight` from recent history only. The difference of such a row is not proof
    * of a mismatch, because an older transfer in flight is missing from `inFlight`.

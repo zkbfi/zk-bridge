@@ -5,7 +5,7 @@
  */
 import { decodeFeeDirector, type FeeDataSource, type FeeDescription, type FeeDirector } from '@zk-bridge/shared'
 import { encodeFunctionData, erc20Abi, getAddress, isAddress, isHex, type Address, type Hex } from 'viem'
-import { feeOf, formatRateAsPercent, formatUnits } from '../format/amounts'
+import { formatUnits } from '../format/amounts'
 import type { ChainConfig, TokenInfo } from '../model/types'
 import type { RouterAddressesReading } from '../chain/live-reads'
 import { messageBridgeAbi, tokenMediatorAbi, wrappedNativeRouterAbi } from './abis'
@@ -18,15 +18,6 @@ export interface DisplayArgument {
   readonly value: string
   /** A reading of the value for a person: a token amount, a percentage, or a symbol. Absent when there is none. */
   readonly meaning?: string
-}
-
-/** A fee that the contract charges, as far as the dashboard can compute it before sending. */
-export interface ChargedFee {
-  readonly token: TokenInfo
-  /** The rate, 1e18-scaled. */
-  readonly rate: bigint
-  /** The amount that the contract takes, in base units. */
-  readonly amount: bigint
 }
 
 /** What the confirmation screen tells about the delivery fee that a relay carries. */
@@ -61,7 +52,6 @@ export interface PlannedTransaction {
   /** The native coin that the transaction sends, in wei. */
   readonly value: bigint
   readonly arguments: readonly DisplayArgument[]
-  readonly charge: ChargedFee | null
   /** Plain sentences that the confirmation screen shows below the arguments. */
   readonly notes: readonly string[]
   /** The delivery fee of a relay that pays a tip for delivery. Absent for every other transaction. */
@@ -108,7 +98,6 @@ export function planApproval(input: ApprovalInput): PlannedTransaction {
       { name: 'spender', type: 'address', value: getAddress(spender), meaning: spenderLabel },
       { name: 'amount', type: 'uint256', value: amount.toString(), meaning: amountMeaning(amount, token) },
     ],
-    charge: null,
     notes: ['This allows the mediator to pull exactly this amount. It is not an unlimited allowance.'],
   }
 }
@@ -121,8 +110,6 @@ export interface RelayInput {
   /** The amount to pull from the sender, in base units. */
   readonly amount: bigint
   readonly mode: RelayMode
-  /** The current fee rate of the mediator, 1e18-scaled, as read from the chain. */
-  readonly currentFeeRate: bigint
   /**
    * The delivery fee. The mode must be `call` with the encoded director as data, and the receiver must be the fee
    * router. The plan refuses any other combination, so a review never shows a fee that the data does not hold.
@@ -133,18 +120,16 @@ export interface RelayInput {
 /**
  * Plans `relayTokens`, `relayTokensAndCall` or `relayTokensWithFallback` on the token mediator.
  *
- * The fee rate follows a fixed schedule that only falls, so the plan needs no limit on the fee.
+ * The mediator takes no fee: the other chain receives the whole amount.
  *
  * @throws PlanInputError for a zero amount or a zero receiver.
  */
 export function planRelay(input: RelayInput): PlannedTransaction {
-  const { chain, token, receiver, amount, mode, currentFeeRate } = input
+  const { chain, token, receiver, amount, mode } = input
   if (amount <= 0n) throw new PlanInputError('The amount must be above zero.')
   requireAddress(receiver, 'receiver')
   if (input.deliveryFee !== undefined) requireDeliveryFeeMatch(input.deliveryFee, receiver, mode)
-  const fee = feeOf(amount, currentFeeRate)
-  const charge: ChargedFee = { token, rate: currentFeeRate, amount: fee }
-  const common = { chain, to: chain.contracts.tokenMediator, contractLabel: 'TokenMediator', value: 0n, charge }
+  const common = { chain, to: chain.contracts.tokenMediator, contractLabel: 'TokenMediator', value: 0n }
   const tokenArgument = { name: 'token', type: 'address', value: getAddress(token.address), meaning: token.symbol }
   const receiverArgument = { name: 'receiver', type: 'address', value: getAddress(receiver) }
   const amountArgument = {
@@ -153,7 +138,6 @@ export function planRelay(input: RelayInput): PlannedTransaction {
     value: amount.toString(),
     meaning: amountMeaning(amount, token),
   }
-  const notes = relayNotes({ token, amount, fee, currentFeeRate })
 
   if (mode.kind === 'plain') {
     return {
@@ -167,7 +151,7 @@ export function planRelay(input: RelayInput): PlannedTransaction {
         args: [token.address, receiver, amount],
       }),
       arguments: [tokenArgument, receiverArgument, amountArgument],
-      notes: [...notes, 'If the receiver cannot be paid there, the release goes to the sender at the same address.'],
+      notes: ['If the receiver cannot be paid there, the release goes to the sender at the same address.'],
     }
   }
 
@@ -183,7 +167,7 @@ export function planRelay(input: RelayInput): PlannedTransaction {
         args: [token.address, receiver, amount, mode.data],
       }),
       arguments: [tokenArgument, receiverArgument, amountArgument, bytesArgument('data', mode.data)],
-      notes: [...notes, ...(input.deliveryFee === undefined ? [] : deliveryFeeNotes(input.deliveryFee)), 'The receiver gets a call to onTokenBridged with this data, even when the data is empty.'],
+      notes: [...(input.deliveryFee === undefined ? [] : deliveryFeeNotes(input.deliveryFee)), 'The receiver gets a call to onTokenBridged with this data, even when the data is empty.'],
       ...(input.deliveryFee === undefined ? {} : { deliveryFee: input.deliveryFee }),
     }
   }
@@ -211,7 +195,7 @@ export function planRelay(input: RelayInput): PlannedTransaction {
       args: [token.address, receiver, amount, mode.data, mode.fallbackRecipient],
     }),
     arguments: baseArguments,
-    notes,
+    notes: [],
   }
 }
 
@@ -240,7 +224,6 @@ export function planWrapAndRelay(input: WrapAndRelayInput): PlannedTransaction {
     data: encodeFunctionData({ abi: wrappedNativeRouterAbi, functionName: 'wrapAndRelayTokens', args: [receiver] }),
     value,
     arguments: [{ name: 'receiver', type: 'address', value: getAddress(receiver) }],
-    charge: null,
     notes: [`The transaction sends ${value.toString()} wei of ${chain.nativeSymbol}. The router wraps it, then relays it.`],
   }
 }
@@ -273,7 +256,6 @@ export function planSendMessage(input: SendMessageInput): PlannedTransaction {
       bytesArgument('data', data),
       { name: 'gas', type: 'uint256', value: gas.toString() },
     ],
-    charge: null,
     notes: ['The target contract on the other chain receives this call from the bridge. Delivery happens once.'],
   }
 }
@@ -304,7 +286,6 @@ export function planClaim(input: ClaimInput): PlannedTransaction {
       { name: 'token', type: 'address', value: getAddress(token.address), meaning: token.symbol },
       { name: 'account', type: 'address', value: getAddress(account) },
     ],
-    charge: null,
     notes: [`The mediator pays ${amountMeaning(claimable, token)} to the account.`],
   }
 }
@@ -369,15 +350,6 @@ function deliveryFeeNotes(deliveryFee: DeliveryFeeReview): string[] {
 function bytesArgument(name: string, data: Hex): DisplayArgument {
   const length = (data.length - 2) / 2
   return { name, type: 'bytes', value: data, meaning: `${length} bytes` }
-}
-
-function relayNotes(input: { token: TokenInfo; amount: bigint; fee: bigint; currentFeeRate: bigint }): string[] {
-  const { token, amount, fee, currentFeeRate } = input
-  const net = amount - fee
-  return [
-    `Fee rate ${formatRateAsPercent(currentFeeRate)}: the mediator takes ${amountMeaning(fee, token)}. ` +
-      `${amountMeaning(net, token)} reaches the other chain.`,
-  ]
 }
 
 function requireAddress(value: string, name: string): void {

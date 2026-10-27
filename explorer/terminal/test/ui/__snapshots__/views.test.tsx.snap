@@ -3,7 +3,7 @@
 exports[`view snapshots pair view, wide 120x40 1`] = `
 "┌─1 Global  [2 Pair]  3 Audit  4 Prover and costs  5 Connections  6 Prover setup───────────────────────────────────────┐
 │eth-pls  Ethereum <> PulseChain   in flight 12   24h 29 transfers, 147.81 USDC                                        │
-│fees accrued 1,250 USDC | 0.8 WETH | 90,000 WPLS   gate Ethereum open PulseChain warn                                 │
+│gate Ethereum open PulseChain warn                                                                                    │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌─Account and actions────────────────────────┐┌─Filters────────────────────────────────────────────────────────────────┐
 │Account                                     ││ Dir:all  Kind:all  Status:all  Token:all  Addr:any  Time:all           │
@@ -91,10 +91,10 @@ Tab area  1-5 views  ? help  q quit                                   FIXTURE: n
 exports[`view snapshots audit view, wide 120x40 1`] = `
 "┌─1 Global  2 Pair  [3 Audit]  4 Prover and costs  5 Connections  6 Prover setup───────────────────────────────────────┐
 │Escrow against bridged supply  escrow = bridged supply + in flight. 1 MISMATCH                                        │
-│token                escrow     bridged supply    in flight   difference fees accrued …es paid out                    │
-│USDC              1,250,000          1,249,000        1,000            0        1,250          400  ok                │
-│WETH                    812                800           12            0          0.8          0.2  ok                │
-│WPLS             90,000,000         90,000,300            0         -300       90,000       10,000  MISMATCH          │
+│token                escrow     bridged supply    in flight   difference                                              │
+│USDC              1,250,000          1,249,000        1,000            0  ok                                          │
+│WETH                    812                800           12            0  ok                                          │
+│WPLS             90,000,000         90,000,300            0         -300  MISMATCH                                    │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -267,7 +267,7 @@ Tab area  1-5 views  ? help  q quit                                   FIXTURE: n
 exports[`view snapshots help overlay, wide 120x40 1`] = `
 "┌─1 Global  [2 Pair]  3 Audit  4 Prover and costs  5 Connections  6 Prover setup───────────────────────────────────────┐
 │eth-pls  Ethereum <> PulseChain   in flight 12   24h 29 transfers, 147.81 USDC                                        │
-│fees accrued 1,250 USDC | 0.8 WETH | 90,000 WPLS   gate Ethereum open PulseChain warn                                 │
+│gate Ethereum open PulseChain warn                                                                                    │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌─Account and actions────────────────────────┐┌─Filters────────────────────────────────────────────────────────────────┐
 │Account                                     ││ Dir:all  Kind:all  Status:all  Token:all  Addr:any  Time:all           │
@@ -311,7 +311,7 @@ Tab area  1-5 views  ? help  q quit  Enter open  Up/Down move         FIXTURE: n
 exports[`view snapshots pair view, compact 80x24 1`] = `
 "┌─1 Global  [2 Pair]  3 Audit  4 Prover  5 Conn  6 Setup───────────────────────┐
 │eth-pls  Ethereum <> PulseChain   in flight 12   24h 29 transfers, 147.81 USDC│
-│fees accrued 1,250 USDC   gate ETH open PLS warn                              │
+│gate ETH open PLS warn                                                        │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌─Account and actions───────────┐┌─Filters─────────────────────────────────────┐
 │Account                        ││ Dir:all  Kind:all  Status:all               │
@@ -367,10 +367,10 @@ Tab area  1-5 views  ? help … FIXTURE: no transaction reaches a chain  fixture
 exports[`view snapshots audit view, compact 80x24 1`] = `
 "┌─1 Global  2 Pair  [3 Audit]  4 Prover  5 Conn  6 Setup───────────────────────┐
 │Escrow against bridged supply  escrow = bridged supply + in flight. 1 MISMATCH│
-│token           escrow         supply      diff       fees                    │
-│USDC         1,250,000      1,249,000         0      1,250  ok                │
-│WETH               812            800         0        0.8  ok                │
-│WPLS        90,000,000     90,000,300      -300     90,000  MISMATCH          │
+│token           escrow         supply      diff                               │
+│USDC         1,250,000      1,249,000         0  ok                           │
+│WETH               812            800         0  ok                           │
+│WPLS        90,000,000     90,000,300      -300  MISMATCH                     │
 │                                                                              │
 │                                                                              │
 │                                                                              │

@@ -38,8 +38,8 @@ function recordingClient(answer: (call: Call) => unknown, balance: bigint | Erro
 }
 
 describe('readChainSnapshot', () => {
-  test('reads the balance, the fee rate and the three amounts of each token of its own chain, from the right contracts', async () => {
-    const answers: Record<string, bigint> = { currentFeeRate: 1_000n, balanceOf: 11n, allowance: 22n, claimable: 33n }
+  test('reads the balance and the three amounts of each token of its own chain, from the right contracts', async () => {
+    const answers: Record<string, bigint> = { balanceOf: 11n, allowance: 22n, claimable: 33n }
     const client = recordingClient((call) => answers[call.functionName], 777n)
     const result = await readChainSnapshot(client, { chain, account, tokens: FIXTURE_TOKENS })
     expect(result).toEqual({
@@ -47,7 +47,6 @@ describe('readChainSnapshot', () => {
       snapshot: {
         chain,
         nativeBalance: 777n,
-        feeRate: 1_000n,
         positions: [
           { token: usdcFirst, balance: 11n, allowance: 22n, claimable: 33n },
           { token: wethFirst, balance: 11n, allowance: 22n, claimable: 33n },
@@ -58,11 +57,11 @@ describe('readChainSnapshot', () => {
     expect(client.balanceQueries).toEqual([account])
     // Tokens of the other chain are not read.
     expect(client.calls.some((call) => call.address === usdcSecond.address)).toBe(false)
-    expect(client.calls).toContainEqual({ address: mediator, functionName: 'currentFeeRate', args: undefined })
+    expect(client.calls.some((call) => call.functionName === 'currentFeeRate')).toBe(false)
     expect(client.calls).toContainEqual({ address: usdcFirst.address, functionName: 'balanceOf', args: [account] })
     expect(client.calls).toContainEqual({ address: usdcFirst.address, functionName: 'allowance', args: [account, mediator] })
     expect(client.calls).toContainEqual({ address: mediator, functionName: 'claimable', args: [usdcFirst.address, account] })
-    expect(client.calls).toHaveLength(1 + 3 * 3)
+    expect(client.calls).toHaveLength(3 * 3)
   })
 
   test('sends each read with the abi of its contract, so a wrong abi cannot pass', async () => {
@@ -77,17 +76,17 @@ describe('readChainSnapshot', () => {
       },
     }
     await readChainSnapshot(client, { chain, account, tokens: [usdcFirst] })
-    expect(abis).toEqual([tokenMediatorAbi, erc20Abi, erc20Abi, tokenMediatorAbi])
+    expect(abis).toEqual([erc20Abi, erc20Abi, tokenMediatorAbi])
   })
 
-  test('a chain with no token still reads the balance and the fee rate', async () => {
+  test('a chain with no token still reads the balance', async () => {
     const result = await readChainSnapshot(recordingClient(() => 9n), { chain, account, tokens: [usdcSecond] })
-    expect(result).toEqual({ status: 'ok', snapshot: { chain, nativeBalance: 5n, feeRate: 9n, positions: [] } })
+    expect(result).toEqual({ status: 'ok', snapshot: { chain, nativeBalance: 5n, positions: [] } })
   })
 
   test('an answer that is not an integer becomes an error result that names the function', async () => {
-    const result = await readChainSnapshot(recordingClient(() => '12'), { chain, account, tokens: [] })
-    expect(result).toEqual({ status: 'error', chain, message: 'currentFeeRate did not return an integer' })
+    const result = await readChainSnapshot(recordingClient(() => '12'), { chain, account, tokens: [usdcFirst] })
+    expect(result).toEqual({ status: 'error', chain, message: 'balanceOf did not return an integer' })
   })
 
   test('a failed read becomes an error result with the message, and one that is not an Error becomes text', async () => {
@@ -100,7 +99,7 @@ describe('readChainSnapshot', () => {
         throw 'plain text failure'
       },
     }
-    expect(await readChainSnapshot(thrower, { chain, account, tokens: [] })).toEqual({ status: 'error', chain, message: 'plain text failure' })
+    expect(await readChainSnapshot(thrower, { chain, account, tokens: [usdcFirst] })).toEqual({ status: 'error', chain, message: 'plain text failure' })
   })
 })
 

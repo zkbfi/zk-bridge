@@ -43,9 +43,9 @@ describe('createRpcChainAccess', () => {
       369: { balance: () => 200n, contract: () => 2n },
     })
     const results = await createRpcChainAccess(FIXTURE_PAIR, urls, factory).readSnapshots({ account, tokens: FIXTURE_TOKENS })
-    expect(results.map((result) => (result.status === 'ok' ? [result.snapshot.chain.chainId, result.snapshot.nativeBalance, result.snapshot.feeRate] : null))).toEqual([
-      [1, 100n, 1n],
-      [369, 200n, 2n],
+    expect(results.map((result) => (result.status === 'ok' ? [result.snapshot.chain.chainId, result.snapshot.nativeBalance] : null))).toEqual([
+      [1, 100n],
+      [369, 200n],
     ])
     expect(created.map((entry) => [entry.chain.chainId, entry.url])).toEqual([
       [1, 'http://first.rpc.test'],
