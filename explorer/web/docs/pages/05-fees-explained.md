@@ -4,7 +4,7 @@ The bridge charges no fee. The only fee is the voluntary tip for delivery. The t
 
 ## The tip for delivery
 
-A runner delivers a covered transfer when the tip pays for the work. The tip is the one thing that you set. The interface turns the tip on by default. The default is 0.1 percent of the transfer, in the percentage mode. You can edit the tip, change its mode, or remove it with the choice "No tip".
+A runner delivers a covered transfer when the tip pays for the work. The tip is the one thing that you set. The interface turns the tip on by default. The default is the gas based mode at the base fee, with a margin of 100 percent. Its limit is the price ceiling, at twice the base fee now. The deliverer's gas choice decides how much of the limit the tip takes, so expect the tip to reach the limit. You can edit the tip, change its mode to percentage or fixed, or remove it with the choice "No tip".
 
 You fix the tip when the transfer leaves. Nothing at delivery sets or changes it. The deliverer supplies no rate.
 
@@ -43,7 +43,7 @@ The router knows three tip modes. Each one sets the tip in a different way.
 
 - Percent of the value: the tip is a share of the tokens that arrive.
 - A fixed amount: the tip is one set number of tokens.
-- A gas based tip: the tip is the gas cost of the delivery times a multiplier, with a cap.
+- A gas based tip: the tip is the gas that the deliverer's transaction makes available, times the gas price and a multiplier, up to the limit.
 
 The settings flags that carry the mode have these names: `FIXED_FEE` (a fixed amount), `MULTIPLIER_OF_TOTAL` (percent of the value), `EXCLUDE_PRIORITY` (price the gas at the base fee only, with no priority fee) and `UNWRAP` (pay in the native coin). A fixed amount wins over a percentage when both flags are set. With neither mode flag, the tip is gas based.
 
@@ -57,15 +57,28 @@ You pay a share of the transfer value. The default is 0.1 percent. You can type 
 
 You pay a fixed amount, in whole tokens. If you leave the amount empty, the form suggests one that covers the cost plus a margin. The suggestion needs your coin price. The amount is exact.
 
-### Gas multiplier with a ceiling
+### Gas based, up to the limit
 
-You pay for the gas that the delivery uses, times a multiplier. The tip follows the gas price at delivery. A ceiling limits it. This mode works for any token.
+This is the default mode. You pay for the gas that the deliverer's transaction makes available, times the gas price and a multiplier. The limit is the price ceiling: the tip never goes above it. This mode works for any token.
 
-The amount is an estimate. The label reads "estimate, at most X". X is the ceiling, in the units of your token. The default suggestion uses a multiplier of 1.2. It sets the ceiling at the tip for twice the base fee of now.
+The deliverer chooses the gas limit of the transaction. The bridge forwards only the message gas limit, so gas that the deliverer holds back above it counts. For this reason the deliverer's gas choice decides the tip. Expect the tip to reach the limit.
+
+The amount is an estimate. The label reads "estimate, at most X". X is the limit, in the units of your token. The form and the confirm dialog show the limit as the price ceiling.
+
+The default has these terms:
+
+- The gas price is the base fee only. The router flag `EXCLUDE_PRIORITY` sets it.
+- The margin is 100 percent. The multiplier is 2. The page turns it into token units with your coin price: the multiplier is your price of one wei, times 2, times 1e18, rounded up.
+- The limit is the tip at the ceiling base fee. The ceiling is twice the base fee now. The delivery gas comes from the indexer (the 90th percentile of recent deliveries), or from the default of 550000 gas.
+- The proof cost stays in the cost breakdown.
+
+Some chains report no base fee. On such a chain the base fee flag would make the tip zero. The default then reads the whole gas price, with the same margin, and the form says why.
+
+If you have typed no coin price and the page knows no value of the token, the page cannot compute the gas based tip. It shows a notice that asks you to enter your price. There is no fixed fallback: a fixed amount needs the same price to turn a cost into tokens. The percentage and fixed modes stay available.
 
 ### Your coin price
 
-The gas multiplier needs a price: how many tokens one native coin of the destination chain is worth. The field "Your coin price" holds it. The price is your own. The page cannot verify it, and nothing at delivery reads it. The interface folds the price into the multiplier when the transfer leaves. For the wrapped native token, the field starts at 1. For another token, you type it.
+The gas based mode needs a price: how many tokens one native coin of the destination chain is worth. The field "Your coin price" holds it. The price is your own. The page cannot verify it, and nothing at delivery reads it. The interface folds the price into the multiplier when the transfer leaves. For the wrapped native token, the field starts at 1. For another token, you type it.
 
 ## What exact and estimate mean
 
@@ -81,7 +94,7 @@ The form shows three lines when it knows your coin price. Every line is an estim
 - Proof cost: a share of the cost of one proof.
 - Margin: the tip minus the other two lines. This is what the reward address keeps after the cost.
 
-The suggestion for the fixed amount uses a margin of 10 percent by default. A margin of zero covers the cost and nothing more. A runner that requires a margin above zero skips such a tip.
+The suggestion for the fixed amount uses a margin of 10 percent by default. The gas based default uses a margin of 100 percent on the gas cost. A margin of zero covers the cost and nothing more. A runner that requires a margin above zero skips such a tip.
 
 The proof cost comes from a price in US dollars set by the operator. The default is 0.02, the measured cost of one warm proof. The indexer converts it with a configured price of the native coin. If no price is set, the form leaves the proof cost out and says so.
 

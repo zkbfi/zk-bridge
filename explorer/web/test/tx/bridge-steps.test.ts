@@ -1,12 +1,12 @@
 import { decodeFunctionData, encodeFunctionData, erc20Abi, getAddress, parseUnits } from "viem";
 import { describe, expect, it } from "vitest";
-import { decodeFeeDirector, encodeFeeDirector, feeModeOf, senderPriceOfToken, settingsOf, tokenMediatorAbi, wETHOmnibridgeRouterAbi } from "@zk-bridge/shared";
+import { DEFAULT_GAS_MARGIN, decodeFeeDirector, encodeFeeDirector, feeModeOf, senderPriceOfToken, settingsOf, tokenMediatorAbi, wETHOmnibridgeRouterAbi } from "@zk-bridge/shared";
 import { buildBridgeSteps } from "@terminal/app/actions";
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import { PlanInputError, planClaim, planSendMessage, planWrapAndRelay } from "@terminal/tx/plan";
 import { planBridgeSteps, type BridgeFormValues } from "../../src/tx/bridge-steps";
 import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS, type DeliveryOptions } from "../../src/tx/bridge-draft";
-import { selectDelivery, DEFAULT_MARGIN_RATE, DEFAULT_GAS_MULTIPLIER } from "../../src/tx/delivery-selection";
+import { selectDelivery, DEFAULT_MARGIN_RATE } from "../../src/tx/delivery-selection";
 import { buildDeliveryReport, buildFixtureContext } from "../helpers";
 
 const usdc = FIXTURE_TOKENS[0]!;
@@ -42,7 +42,8 @@ const deliveryFor = (mode: "percentage" | "gas-multiplier" | "fixed" = "percenta
       percentageRate: 10n ** 15n,
       fixedAmount: null,
       marginRate: DEFAULT_MARGIN_RATE,
-      gasMargin: DEFAULT_GAS_MULTIPLIER,
+      gasMargin: DEFAULT_GAS_MARGIN,
+      destinationName: "PulseChain",
       baseFeeCeilingWei: null,
     },
     ROUTERS,
@@ -161,9 +162,9 @@ describe("calldata parity with the terminal for a tipped relay", () => {
   };
 
   it.each([
-    ["the default tip", {}, { feeMode: "percentage" }],
-    ["a typed percentage", { percentText: "0.25" }, { feeMode: "percentage", feePercent: "0.25" }],
-    ["a gas multiplier with the price of the sender", { mode: "gas-multiplier" as const }, { feeMode: "gas", feeSenderPrice: "3000" }],
+    ["the default percentage", { mode: "percentage" as const }, { feeMode: "percentage" }],
+    ["a typed percentage", { mode: "percentage" as const, percentText: "0.25" }, { feeMode: "percentage", feePercent: "0.25" }],
+    ["a gas multiplier with the price of the sender", { mode: "gas-multiplier" as const, gasMultiplierText: "1.2" }, { feeMode: "gas", feeSenderPrice: "3000", feeMultiplier: "1.2" }],
     ["a gas multiplier with a ceiling", { mode: "gas-multiplier" as const, ceilingGweiText: "50", gasMultiplierText: "1.5" }, { feeMode: "gas", feeSenderPrice: "3000", feeCeilingGwei: "50", feeMultiplier: "1.5" }],
     ["a fixed amount", { mode: "fixed" as const, fixedText: "0.75" }, { feeMode: "fixed", feeFixed: "0.75" }],
     ["the suggested fixed amount", { mode: "fixed" as const }, { feeMode: "fixed" }],

@@ -2,7 +2,7 @@
  * What the confirm dialog shows before the wallet opens. The call is decoded from the calldata itself, not taken from
  * the plan, and the two must agree. When they do not, the dialog blocks the signature.
  */
-import { decodeFeeDirector, feeModeOf, settingFlagsOf, TIP_MODE_NAMES, type FeeDirector } from "@zk-bridge/shared";
+import { decodeFeeDirector, feeModeOf, GAS_MODE_HELP, settingFlagsOf, TIP_MODE_NAMES, type FeeDirector, type FeeMode } from "@zk-bridge/shared";
 import { formatUnits, formatRateAsPercent } from "@terminal/format/amounts";
 import type { RouterAddressesReading } from "@terminal/chain/live-reads";
 import { decodeKnownCall } from "@terminal/tx/decode";
@@ -34,7 +34,7 @@ export type DeliveryView = {
   readonly failedDeliveryText: string;
   /** A warning to check the router before signing when its addresses could not be read, or null. */
   readonly routerAddressesWarning: string | null;
-  /** The tip mode in words: `percentage of the transfer`, `fixed amount` or `gas multiplier`. */
+  /** The tip mode in words: `percentage of the transfer`, `fixed amount` or `gas based, up to the limit`. */
   readonly tipMode: string;
   /** The tip now, with its label: `0.25 zkbUSDC (exact)` or `about 1 WPLS now (estimate, at most 2 WPLS)`. */
   readonly tipNow: string;
@@ -42,8 +42,12 @@ export type DeliveryView = {
   readonly certaintyLabel: string;
   readonly summary: string;
   readonly formula: string;
-  /** The most that the tip can take, as a sentence with the amount. */
+  /** The most that the tip can take, as a sentence with the amount. For a gas based tip it names the limit as the price ceiling. */
   readonly tipMaximum: string;
+  /** What the gas based mode means (the limit, and the gas choice of the deliverer), or null for another mode. */
+  readonly gasModeHelp: string | null;
+  /** A sentence about the gas price basis or a missing price of the default gas based tip, or null. */
+  readonly gasNotice: string | null;
   /** What the router and a direct delivery mean for the tip: anyone can deliver, the tip goes to the reward address, no tip on a direct delivery. */
   readonly tipNotes: readonly string[];
   readonly costLines: readonly ConfirmLine[];
@@ -68,6 +72,11 @@ export type ConfirmView = {
   readonly notes: readonly string[];
   /** Why the signature is blocked, or null when it is allowed. */
   readonly blockedReason: string | null;
+};
+
+const tipMaximumOf = (mode: FeeMode, amount: string): string => {
+  if (mode === "gas") return `The limit is ${amount}. It is the price ceiling, and the tip can take at most the limit. Expect the tip to reach it. Everything else goes to the recipient.`;
+  return `The tip can take at most ${amount}. Everything else goes to the recipient.`;
 };
 
 const withSymbol = (units: bigint, token: { readonly symbol: string; readonly decimals: number }): string =>
@@ -138,7 +147,9 @@ const deliveryViewOf = (step: WebStep, routerAddresses: RouterAddressesReading |
     ...routerAddressesViewOf(routerAddresses),
     tipMode: TIP_MODE_NAMES[description.mode],
     tipNow: description.summary,
-    tipMaximum: `The tip can take at most ${withSymbol(delivery.maximumTip, token)}. Everything else goes to the recipient.`,
+    tipMaximum: tipMaximumOf(description.mode, withSymbol(delivery.maximumTip, token)),
+    gasModeHelp: description.mode === "gas" ? GAS_MODE_HELP : null,
+    gasNotice: delivery.notice,
     tipNotes: TIP_NOTES,
     costLines: description.breakdown.map((line) => ({
       label: line.label,

@@ -1,6 +1,7 @@
 import { Box, Flex, Table, Text, chakra } from "@chakra-ui/react";
 import { getAddress, isAddress } from "viem";
-import { TIP_NOTES, routerWarningOf } from "../tx/tip-copy";
+import { GAS_MODE_HELP } from "@zk-bridge/shared";
+import { GAS_MODE_LABEL, TIP_NOTES, routerWarningOf } from "../tx/tip-copy";
 import { formatUnits } from "../ui/format";
 import type { BridgeDraft, DeliveryOptions, TipChoice, TipStatus } from "../tx/bridge-draft";
 import { Field, Notice, TextInput } from "../ui/primitives";
@@ -16,15 +17,15 @@ export type DeliveryFeeSectionProps = {
 };
 
 const MODES: readonly { readonly value: TipChoice; readonly label: string; readonly note: string }[] = [
+  { value: "gas-multiplier", label: GAS_MODE_LABEL, note: "estimate; the limit is the price ceiling" },
   { value: "percentage", label: "Percentage of the amount", note: "exact amount" },
-  { value: "gas-multiplier", label: "Gas multiplier with a ceiling", note: "estimate, with a guaranteed maximum" },
   { value: "fixed", label: "Fixed amount", note: "exact amount" },
   { value: "none", label: "No tip: deliver directly, no router", note: "anyone can deliver; may take longer" },
 ];
 
 /**
- * The "Tip for delivery" part of the bridge form. The tip is on by default at 0.1 percent of the transfer. The user can
- * edit it, change the mode, or remove it. The panel shows what the user pays: the amount, whether it is exact or an
+ * The "Tip for delivery" part of the bridge form. The tip is on by default as a gas based tip at the base fee, with a margin
+ * of 100 percent and a limit that is the price ceiling. The user can edit it, change the mode, or remove it. The panel shows what the user pays: the amount, whether it is exact or an
  * estimate, the most that the tip can take, the cost lines and the data behind them. When no tip can travel, the
  * panel says why and the page sends a plain relay.
  *
@@ -59,7 +60,7 @@ const TipPanel = ({ tip, draft, options, onChange, destinationNativeSymbol, dest
   return (
     <>
       <Text fontSize="sm" color="fg.muted">
-        A tip pays for the delivery of your transfer on {destinationName}. The router sends it to its reward address. It is on by default at 0.1 percent. You fix it now. Nothing at delivery changes it.
+        A tip pays for the delivery of your transfer on {destinationName}. The router sends it to its reward address. It is on by default as a gas based tip: the limit is the most it can take, and the deliverer's gas choice decides how much of the limit it takes. You fix the terms now. Nothing at delivery changes them.
       </Text>
       <TipNotes />
       <Box role="radiogroup" aria-label="How to tip for delivery" marginTop="2">
@@ -133,12 +134,12 @@ const ModeFields = ({ options, onChange }: Pick<TipFieldsProps, "options" | "onC
   return (
     <>
       <Box flex="1 1 8rem">
-        <Field label="Gas multiplier" hint="1.2 pays 20 percent above the gas cost.">
+        <Field label="Gas multiplier" hint="2 is a margin of 100 percent. 1.2 is a margin of 20 percent.">
           {(id) => <TextInput id={id} inputMode="decimal" value={options.gasMultiplierText} onChange={(event) => onChange({ ...options, gasMultiplierText: event.target.value })} />}
         </Field>
       </Box>
       <Box flex="1 1 10rem">
-        <Field label="Ceiling base fee (gwei)" hint="Empty means twice the base fee now.">
+        <Field label="Ceiling base fee (gwei)" hint="Empty means twice the base fee now. It sets the limit, which is the price ceiling.">
           {(id) => <TextInput id={id} inputMode="decimal" value={options.ceilingGweiText} onChange={(event) => onChange({ ...options, ceilingGweiText: event.target.value })} />}
         </Field>
       </Box>
@@ -157,6 +158,16 @@ const TipFields = ({ tip, draft, options, onChange, destinationNativeSymbol, des
   const warning = customRouterWarning(options.routerText, target.router);
   return (
     <Box marginTop="3">
+      {options.mode === "gas-multiplier" ? (
+        <Text fontSize="sm" color="fg.muted" marginBottom="2" data-testid="gas-mode-help">
+          {GAS_MODE_HELP}
+        </Text>
+      ) : null}
+      {draft.tipNotice === null ? null : (
+        <Box marginBottom="2" data-testid="tip-notice">
+          <Notice tone="info">{draft.tipNotice}</Notice>
+        </Box>
+      )}
       <Flex gap="2" flexWrap="wrap">
         <ModeFields options={options} onChange={onChange} />
         <Box flex="2 1 14rem">
@@ -201,7 +212,7 @@ const TipFields = ({ tip, draft, options, onChange, destinationNativeSymbol, des
 const DeliveryQuote = ({ draft, destinationNativeSymbol, destinationName }: { readonly draft: BridgeDraft; readonly destinationNativeSymbol: string; readonly destinationName: string }) => {
   const { delivery, deliveryProblem } = draft;
   if (delivery === null) {
-    return <Box marginTop="3">{deliveryProblem === null ? <Text fontSize="sm" color="fg.muted">Enter an amount and a receiver to see the tip.</Text> : <Notice tone="warning">{deliveryProblem}</Notice>}</Box>;
+    return <Box marginTop="3">{deliveryProblem === null || deliveryProblem === draft.tipNotice ? <Text fontSize="sm" color="fg.muted">Enter an amount and a receiver to see the tip.</Text> : <Notice tone="warning">{deliveryProblem}</Notice>}</Box>;
   }
   const { description, suggestions, token } = delivery;
   const unit = `${destinationNativeSymbol} on ${destinationName}`;
@@ -214,11 +225,13 @@ const DeliveryQuote = ({ draft, destinationNativeSymbol, destinationName }: { re
         How it is computed: {description.formula}.
       </Text>
       <Text fontSize="sm" fontWeight="medium" marginTop="1" data-testid="tip-maximum">
-        The tip can take at most {formatUnits(delivery.maximumTip, token.decimals)} {token.symbol}.
+        {description.mode === "gas"
+          ? `The limit is ${formatUnits(delivery.maximumTip, token.decimals)} ${token.symbol}. It is the price ceiling. Expect the tip to reach it.`
+          : `The tip can take at most ${formatUnits(delivery.maximumTip, token.decimals)} ${token.symbol}.`}
       </Text>
       {description.certainty === "estimate" ? (
         <Text fontSize="sm" color="orange.fg">
-          This is an estimate: the real tip follows the gas price when the transfer is delivered. It can never pass the maximum above.
+          This is an estimate: the real tip follows the gas that the deliverer's transaction makes available and the gas price at delivery. It can never pass the limit.
         </Text>
       ) : null}
       {description.breakdown.length === 0 ? (

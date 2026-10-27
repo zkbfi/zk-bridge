@@ -2,7 +2,7 @@
  * The words about the tip that the fee panel and the confirm dialog share, so that the two always say the same thing.
  */
 import { getAddress } from "viem";
-import { DELIVERY_ROUTER_NAME } from "@zk-bridge/shared";
+import { DELIVERY_ROUTER_NAME, TIP_MODE_NAMES } from "@zk-bridge/shared";
 import type { DeliveryRouters } from "./delivery-selection";
 
 /** What the confirm dialog says about a relay that carries no tip: no router, no fee terms, only a direct delivery. */
@@ -30,3 +30,6 @@ export const routerWarningOf = (routers: DeliveryRouters): string | null =>
   getAddress(routers.router) === getAddress(routers.defaultRouter)
     ? null
     : `This router is not ${DELIVERY_ROUTER_NAME} (${getAddress(routers.defaultRouter)}). The tip terms are written for the delivery router. Another router can read them in a different way. Use it only if you trust it.`;
+
+/** The label of the gas based mode in the option list: the shared name, with a capital letter. */
+export const GAS_MODE_LABEL = `${TIP_MODE_NAMES.gas.charAt(0).toUpperCase()}${TIP_MODE_NAMES.gas.slice(1)}`;

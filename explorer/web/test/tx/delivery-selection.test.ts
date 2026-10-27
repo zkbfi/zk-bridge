@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { defaultTip, feeModeOf, requestedPayoutOf, senderPriceOfToken, settingFlagsOf, settingsOf } from "@zk-bridge/shared";
-import { selectDelivery, DEFAULT_GAS_MULTIPLIER, DEFAULT_MARGIN_RATE, type DeliverySelectionInput } from "../../src/tx/delivery-selection";
+import { buildFeeSuggestions, DEFAULT_GAS_MARGIN, defaultTip, encodeFeeDirector, EXCLUDE_PRIORITY, feeModeOf, requestedPayoutOf, senderPriceOfToken, settingFlagsOf, settingsOf } from "@zk-bridge/shared";
+import { selectDelivery, DEFAULT_MARGIN_RATE, type DeliverySelectionInput } from "../../src/tx/delivery-selection";
+import { encodeAbiParameters } from "viem";
 import { buildDeliveryReport } from "../helpers";
 
 const RECIPIENT = `0x${"12".repeat(20)}` as const;
@@ -27,7 +28,8 @@ const input = (overrides: Partial<DeliverySelectionInput> = {}): DeliverySelecti
   percentageRate: 10n ** 15n,
   fixedAmount: null,
   marginRate: DEFAULT_MARGIN_RATE,
-  gasMargin: DEFAULT_GAS_MULTIPLIER,
+  gasMargin: DEFAULT_GAS_MARGIN,
+  destinationName: "PulseChain",
   baseFeeCeilingWei: null,
   ...overrides,
 });
@@ -79,13 +81,13 @@ describe("selectDelivery", () => {
     // 3,000 USDC (6 decimals) for one native coin: one wei is worth 3,000 * 10^6 / 10^18 base units.
     const price = { numerator: 3_000n * 10n ** 6n, denominator: 10n ** 18n };
     const selection = available({ mode: "gas-multiplier", token: { symbol: "zkbUSDC", decimals: 6 }, tokenValueInWei: 10n ** 18n / 3_000n, senderPrice: price, transferValue: 249_000_000n, transferValueAtMost: 249_750_000n });
-    expect(selection.director.multiplier).toBe((price.numerator * DEFAULT_GAS_MULTIPLIER + price.denominator - 1n) / price.denominator);
+    expect(selection.director.multiplier).toBe((price.numerator * DEFAULT_GAS_MARGIN + price.denominator - 1n) / price.denominator);
     expect(selection.description.certainty).toBe("estimate");
   });
 
   it("asks for the price of the sender when a gas multiplier has none", () => {
     const selection = selectDelivery(input({ mode: "gas-multiplier", tokenValueInWei: null, senderPrice: null, token: { symbol: "zkbUSDC", decimals: 6 } }), ROUTERS);
-    expect(selection).toEqual({ kind: "unavailable", reason: expect.stringContaining("Enter your coin price") });
+    expect(selection).toEqual({ kind: "unavailable", reason: expect.stringContaining("Enter your price of the native coin") });
   });
 
   it("raises the maximum when the user raises the ceiling base fee, and never lowers the estimate now", () => {
@@ -142,5 +144,75 @@ describe("selectDelivery", () => {
     const report = buildDeliveryReport(369);
     const empty = { ...report, baseFee: { ...report.baseFee, wei: null } };
     expect(selectDelivery(input({ report: empty }), ROUTERS)).toEqual({ kind: "unavailable", reason: expect.stringContaining("no base fee") });
+  });
+});
+
+describe("selectDelivery: the default gas based tip", () => {
+  const gas = (overrides: Partial<DeliverySelectionInput> = {}) => available({ mode: "gas-multiplier", ...overrides });
+
+  it("reads the base fee only on a chain that reports one, and says nothing", () => {
+    const selection = gas({ destinationBaseFee: "reported" });
+    expect(selection.director.settings & EXCLUDE_PRIORITY).toBe(EXCLUDE_PRIORITY);
+    expect(selection.gasPrice).toBe("base-fee-only");
+    expect(selection.notice).toBeNull();
+  });
+
+  it("reads the base fee only when the chain config names no base fee support", () => {
+    expect(gas().gasPrice).toBe("base-fee-only");
+  });
+
+  it("falls back to the whole gas price on a chain with no base fee, and says why", () => {
+    const selection = gas({ destinationBaseFee: "none" });
+    expect(selection.director.settings & EXCLUDE_PRIORITY).toBe(0n);
+    expect(selection.gasPrice).toBe("transaction");
+    expect(selection.notice).toBe("PulseChain reports no base fee, so the tip reads the whole gas price.");
+  });
+
+  it("asks for a price when neither the sender nor the valuation gives one, with no fixed fallback", () => {
+    const selection = selectDelivery(input({ mode: "gas-multiplier", tokenValueInWei: null, senderPrice: null, token: { symbol: "zkbUSDC", decimals: 6 } }), ROUTERS);
+    expect(selection).toEqual({ kind: "unavailable", reason: expect.stringContaining("Enter your price of the native coin in this token") });
+  });
+
+  it("sets the multiplier to the price times 2e18, rounded up, for a margin of 100 percent", () => {
+    const price = { numerator: 3_001n * 10n ** 6n + 1n, denominator: 10n ** 18n };
+    const selection = gas({ token: { symbol: "zkbUSDC", decimals: 6 }, tokenValueInWei: 10n ** 18n / 3_000n, senderPrice: price });
+    const expected = (price.numerator * 2n * 10n ** 18n + price.denominator - 1n) / price.denominator;
+    expect(selection.director.multiplier).toBe(expected);
+  });
+
+  it("sets the limit to the tip at the ceiling base fee of twice the base fee now", () => {
+    const selection = gas();
+    const suggestion = buildFeeSuggestions({
+      recipient: RECIPIENT,
+      transferValue: 100n * 10n ** 18n,
+      token: { ...WRAPPED, valueInWei: 10n ** 18n },
+      report: buildDeliveryReport(369),
+      priorityFeeWei: GWEI,
+      gasPrice: "base-fee-only",
+    }).gasMultiplier;
+    if (suggestion.kind !== "available") throw new Error(suggestion.reason);
+    expect(selection.director.limit).toBe(suggestion.director.limit);
+    expect(selection.maximumTip).toBe(selection.director.limit);
+    // The base fee now is 7 gwei in the report, and the ceiling is twice that, so the limit is twice the tip now.
+    expect(selection.director.limit).toBeGreaterThanOrEqual(selection.description.nowUnits * 2n - 1n);
+    expect(selection.director.limit).toBeLessThanOrEqual(selection.description.nowUnits * 2n + 1n);
+  });
+
+  it("keeps the proof cost in the cost breakdown", () => {
+    expect(gas().description.breakdown.map((line) => line.id)).toContain("proof");
+  });
+
+  it("encodes the default director as the abi encoding of the recipient, the settings, the limit and the multiplier", () => {
+    const { director } = gas();
+    const expected = encodeAbiParameters(
+      [{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }],
+      [RECIPIENT, 4n, director.limit, director.multiplier],
+    );
+    expect(encodeFeeDirector(director, { router: ROUTER, protectedAddresses: [], destinationToken: null, destinationWrappedNative: null })).toBe(expected);
+  });
+
+  it("gives the percentage and fixed modes no notice, and keeps them selectable on a chain with no base fee", () => {
+    expect(available({ destinationBaseFee: "none" }).notice).toBeNull();
+    expect(available({ mode: "fixed", destinationBaseFee: "none" }).notice).toBeNull();
   });
 });

@@ -59,7 +59,7 @@ The interface shows both transactions in full before your wallet asks you to sig
 
 ## Fees overview
 
-The bridge charges no fee. The only fee is the voluntary tip for delivery. The interface adds this tip by default, at 0.1 percent of the transfer. The delivery router pays it to its reward address, as payment for the delivery. You can edit the tip or remove it. The wrap route carries no tip. The page Fees explained covers the tip.
+The bridge charges no fee. The only fee is the voluntary tip for delivery. The interface adds this tip by default, as a gas based tip. Its limit is the most that it can take, and you should expect it to reach the limit. The delivery router pays it to its reward address, as payment for the delivery. You can edit the tip or remove it. The wrap route carries no tip. The page Fees explained covers the tip.
 
 The recipient receives the whole amount that you send, less the tip when you choose one. The feed shows the amount of the transfer.
 

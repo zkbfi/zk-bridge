@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { getAddress } from "viem";
 import { describe, expect, it, vi } from "vitest";
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
+import { GAS_MODE_HELP } from "@zk-bridge/shared";
 import { TransactionDialog } from "../../src/actions/TransactionDialog";
 import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS } from "../../src/tx/bridge-draft";
 import type { WebStep } from "../../src/tx/bridge-steps";
@@ -21,6 +22,35 @@ const stepsOf = async (input: { readonly allowance: bigint; readonly delivery: b
   if (draft.status !== "ready") throw new Error(draft.reason ?? "not ready");
   return draft.steps;
 };
+
+const gasStepsOf = async (pair: typeof FIXTURE_PAIR): Promise<readonly WebStep[]> => {
+  const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+  const draft = computeBridgeDraft(
+    { token: `first:${usdc.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", fallback: "" },
+    { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "3000" },
+    { pair, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
+  );
+  if (draft.status !== "ready") throw new Error(draft.reason ?? "not ready");
+  return draft.steps;
+};
+
+describe("the confirm dialog: the default gas based tip", () => {
+  it("shows the limit as the price ceiling and what the gas based mode means, with no notice on a chain that reports a base fee", async () => {
+    renderPage(<TransactionDialog steps={await gasStepsOf(FIXTURE_PAIR)} onClose={() => undefined} />, {});
+    const delivery = await screen.findByTestId("confirm-delivery");
+    expect(within(delivery).getByText("gas based, up to the limit")).toBeInTheDocument();
+    expect(within(delivery).getByTestId("confirm-tip-maximum")).toHaveTextContent(/^The limit is [\d.]+ zkbUSDC\. It is the price ceiling/);
+    expect(within(delivery).getByTestId("confirm-gas-mode-help")).toHaveTextContent(GAS_MODE_HELP);
+    expect(within(delivery).queryByTestId("confirm-gas-notice")).toBeNull();
+  });
+
+  it("shows the notice that a chain with no base fee makes the tip read the whole gas price", async () => {
+    const pair = { ...FIXTURE_PAIR, second: { ...FIXTURE_PAIR.second, baseFee: "none" as const } };
+    renderPage(<TransactionDialog steps={await gasStepsOf(pair)} onClose={() => undefined} />, {});
+    const delivery = await screen.findByTestId("confirm-delivery");
+    expect(within(delivery).getByTestId("confirm-gas-notice")).toHaveTextContent("PulseChain reports no base fee, so the tip reads the whole gas price.");
+  });
+});
 
 describe("the confirm dialog", () => {
   it("shows chain, contract, function, decoded arguments, value and tip before the wallet opens", async () => {

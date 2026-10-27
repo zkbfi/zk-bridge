@@ -16,6 +16,6 @@ describe("computeBridgeDraft: a failure that is not a problem of the input", () 
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
     const form = { token: `first:${FIXTURE_TOKENS[0]!.address}`, amount: "100", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain" as const, data: "", fallback: "" };
     const data = { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n };
-    expect(() => computeBridgeDraft(form, DEFAULT_DELIVERY_OPTIONS, data)).toThrow(TypeError);
+    expect(() => computeBridgeDraft(form, { ...DEFAULT_DELIVERY_OPTIONS, mode: "percentage" }, data)).toThrow(TypeError);
   });
 });

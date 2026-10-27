@@ -1,5 +1,6 @@
 import { getAddress } from "viem";
 import { describe, expect, it } from "vitest";
+import { GAS_MODE_HELP } from "@zk-bridge/shared";
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import { buildConfirmView } from "../../src/tx/confirm-model";
 import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS } from "../../src/tx/bridge-draft";
@@ -67,8 +68,34 @@ describe("buildConfirmView", () => {
 
   it("names the tip now as an estimate, with its maximum, for a gas multiplier", async () => {
     const view = buildConfirmView(await relayStep({ mode: "gas-multiplier", senderPriceText: "3000" }));
-    expect(view.delivery?.tipMode).toBe("gas multiplier");
+    expect(view.delivery?.tipMode).toBe("gas based, up to the limit");
     expect(view.delivery?.tipNow).toMatch(/^about [\d.]+ zkbUSDC now \(estimate, at most [\d.]+ zkbUSDC\)$/);
+  });
+
+  it("names the limit of a gas based tip as the price ceiling, and says that the deliverer's gas choice decides", async () => {
+    const delivery = buildConfirmView(await relayStep({ mode: "gas-multiplier", senderPriceText: "3000" })).delivery!;
+    expect(delivery.tipMaximum).toMatch(/^The limit is [\d.]+ zkbUSDC\. It is the price ceiling.*Expect the tip to reach it\./);
+    expect(delivery.gasModeHelp).toBe(GAS_MODE_HELP);
+    expect(delivery.gasNotice).toBeNull();
+  });
+
+  it("carries the notice of a destination chain with no base fee", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+    const noBaseFeePair = { ...FIXTURE_PAIR, second: { ...FIXTURE_PAIR.second, baseFee: "none" as const } };
+    const draft = computeBridgeDraft(
+      { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", fallback: "" },
+      { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "3000" },
+      { pair: noBaseFeePair, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
+    );
+    if (draft.status !== "ready") throw new Error(draft.reason ?? "not ready");
+    const delivery = buildConfirmView(draft.steps.at(-1)!).delivery!;
+    expect(delivery.gasNotice).toBe("PulseChain reports no base fee, so the tip reads the whole gas price.");
+  });
+
+  it("gives a percentage tip no gas help and no gas notice", async () => {
+    const delivery = buildConfirmView(await relayStep({ mode: "percentage" })).delivery!;
+    expect(delivery.gasModeHelp).toBeNull();
+    expect(delivery.gasNotice).toBeNull();
   });
 
   it("warns about a router that is not the default delivery router, and keeps the transfer allowed", async () => {
@@ -104,7 +131,7 @@ describe("buildConfirmView", () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 0n });
     const draft = computeBridgeDraft(
       { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", fallback: "" },
-      { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "1" },
+      { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "1", mode: "percentage" },
       { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
     );
     if (draft.status !== "ready") throw new Error(draft.reason ?? "not ready");

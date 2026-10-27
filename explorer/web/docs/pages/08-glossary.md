@@ -92,7 +92,7 @@ A group of 512 validators of the source chain. Its members sign the headers they
 
 ## Tip for delivery
 
-A voluntary amount that you offer for the delivery of your transfer. The interface sets it by default at 0.1 percent of the transfer. The bridge itself charges no fee, so the tip is the only fee. The delivery router pays it to its reward address. A direct delivery on the bridge, without the router, pays no tip.
+A voluntary amount that you offer for the delivery of your transfer. The interface sets it by default as a gas based tip with a limit. The limit is the price ceiling. The bridge itself charges no fee, so the tip is the only fee. The delivery router pays it to its reward address. A direct delivery on the bridge, without the router, pays no tip.
 
 ## Wrapped native token
 

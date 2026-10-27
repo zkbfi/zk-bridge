@@ -114,6 +114,16 @@ const Review = ({ view, prepared, position }: ReviewProps) => {
           <Text fontSize="sm" fontWeight="medium" data-testid="confirm-tip-maximum">
             {view.delivery.tipMaximum}
           </Text>
+          {view.delivery.gasModeHelp === null ? null : (
+            <Text fontSize="sm" color="fg.muted" data-testid="confirm-gas-mode-help">
+              {view.delivery.gasModeHelp}
+            </Text>
+          )}
+          {view.delivery.gasNotice === null ? null : (
+            <Box data-testid="confirm-gas-notice">
+              <Notice tone="info">{view.delivery.gasNotice}</Notice>
+            </Box>
+          )}
           <Text fontSize="sm" color="fg.muted">
             It is {view.delivery.certaintyLabel}. How it is computed: {view.delivery.formula}.
           </Text>

@@ -52,9 +52,9 @@ describe("the tip fields of each mode", () => {
   it("edits the gas multiplier", async () => {
     await renderForm();
     await userEvent.type(screen.getByLabelText(/^Amount to send/), "250");
-    await userEvent.click(screen.getByRole("radio", { name: /Gas multiplier with a ceiling/ }));
+    await userEvent.click(screen.getByRole("radio", { name: /Gas based, up to the limit/ }));
     const multiplier = screen.getByLabelText("Gas multiplier");
-    expect(multiplier).toHaveValue("1.2");
+    expect(multiplier).toHaveValue("2");
     await userEvent.clear(multiplier);
     await userEvent.type(multiplier, "1.5");
     expect(multiplier).toHaveValue("1.5");

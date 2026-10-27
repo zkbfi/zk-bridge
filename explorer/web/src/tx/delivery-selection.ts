@@ -8,15 +8,19 @@ import type { Address } from "viem";
 import {
   buildFeeSuggestions,
   defaultTip,
+  defaultTipChoiceOf,
+  gasPriceBasisFor,
   describeFee,
   maximumFee,
   RATE_SCALE,
   settingsOf,
+  type BaseFeeSupport,
   type DeliveryCostReport,
   type FeeDescription,
   type FeeDirector,
   type FeeSuggestions,
   type FeeToken,
+  type GasPriceBasis,
   type PayoutKind,
   type SenderPrice,
 } from "@zk-bridge/shared";
@@ -40,6 +44,10 @@ export type DeliverySelectionInput = {
   /** The sender's price of one wei of the destination native coin, in base units of the token. Null when none is known. */
   readonly senderPrice: SenderPrice | null;
   readonly payout: PayoutKind;
+  /** The name of the destination chain, for the words of the notice. */
+  readonly destinationName: string;
+  /** Whether the destination chain reports a base fee. Default: `reported`. `none` makes the gas based tip read the whole gas price. */
+  readonly destinationBaseFee?: BaseFeeSupport;
   readonly report: DeliveryCostReport;
   /** The priority fee that the deliverer pays, in wei per gas. */
   readonly priorityFeeWei: bigint;
@@ -69,6 +77,10 @@ export type DeliverySelection = DeliveryRouters & {
   readonly maximumTip: bigint;
   readonly token: FeeToken;
   readonly baseFeeCeilingWei: bigint | null;
+  /** The gas price that a gas based tip reads: the base fee only, or the whole gas price on a chain with no base fee. */
+  readonly gasPrice: GasPriceBasis;
+  /** A sentence about the gas based default for the user, or null. Only the gas based mode carries one. */
+  readonly notice: string | null;
 };
 
 /** The choice cannot be built. The reason is a sentence for the user. */
@@ -77,13 +89,12 @@ export type DeliveryUnavailable = { readonly kind: "unavailable"; readonly reaso
 /** The default margin: ten percent. Only the fixed suggestion uses it. */
 export const DEFAULT_MARGIN_RATE = RATE_SCALE / 10n;
 
-/** The default gas multiplier: 1.2. */
-export const DEFAULT_GAS_MULTIPLIER = (RATE_SCALE * 12n) / 10n;
-
 const needsPrice = (symbol: string): DeliveryUnavailable => ({
   kind: "unavailable",
   reason: `Enter your coin price: how many ${symbol} one native coin of the destination chain is worth.`,
 });
+
+const needsSenderPrice = (notice: string): DeliveryUnavailable => ({ kind: "unavailable", reason: notice });
 
 const isUnavailable = (value: FeeDirector | DeliveryUnavailable): value is DeliveryUnavailable => "kind" in value;
 
@@ -101,15 +112,24 @@ const directorOf = (input: DeliverySelectionInput, suggestions: FeeSuggestions):
 
 /**
  * Builds the fee director for the chosen mode. The percentage mode needs no price: it is a share of the transfer. The
- * fixed suggestion and the gas multiplier need the price of the sender.
+ * fixed suggestion and the gas based mode need the price of the sender. The gas based mode reads the gas price basis of
+ * the destination chain, and its limit is the price ceiling: the deliverer's gas choice decides the tip, up to the limit.
  *
  * @param input The transfer, the token, the report and the prices.
  * @param routers The router of the relay and the router of the deployment. The selection carries them to the dialog.
  */
 export const selectDelivery = (input: DeliverySelectionInput, routers: DeliveryRouters): DeliverySelection | DeliveryUnavailable => {
   if (input.report.baseFee.wei === null) return { kind: "unavailable", reason: "The indexer has seen no block on the destination chain yet, so there is no base fee." };
-  const needsSuggestionPrice = input.mode === "gas-multiplier" || (input.mode === "fixed" && input.fixedAmount === null);
-  if (needsSuggestionPrice && input.tokenValueInWei === null) return needsPrice(input.token.symbol);
+  const choice = defaultTipChoiceOf({
+    senderPrice: input.senderPrice,
+    tokenValueInWei: input.tokenValueInWei,
+    tokenDecimals: input.token.decimals,
+    chainName: input.destinationName,
+    ...(input.destinationBaseFee === undefined ? {} : { destinationBaseFee: input.destinationBaseFee }),
+  });
+  const notice = input.mode === "gas-multiplier" ? choice.notice : null;
+  if (input.mode === "gas-multiplier" && choice.priceSource === "missing") return needsSenderPrice(choice.notice as string); // The notice of a missing price is never null.
+  if (input.mode === "fixed" && input.fixedAmount === null && input.tokenValueInWei === null) return needsPrice(input.token.symbol);
   const token: FeeToken = { ...input.token, valueInWei: input.tokenValueInWei ?? 1n };
   try {
     const suggestions = buildFeeSuggestions({
@@ -121,6 +141,7 @@ export const selectDelivery = (input: DeliverySelectionInput, routers: DeliveryR
       priorityFeeWei: input.priorityFeeWei,
       marginRate: input.marginRate,
       gasMargin: input.gasMargin,
+      gasPrice: choice.gasPrice,
       ...(input.senderPrice === null ? {} : { senderPrice: input.senderPrice }),
       ...(input.baseFeeCeilingWei === null ? {} : { baseFeeCeilingWei: input.baseFeeCeilingWei }),
     });
@@ -144,6 +165,8 @@ export const selectDelivery = (input: DeliverySelectionInput, routers: DeliveryR
       maximumTip: maximumFee(director, input.transferValueAtMost),
       token,
       baseFeeCeilingWei: input.baseFeeCeilingWei,
+      gasPrice: choice.gasPrice,
+      notice,
       ...routers,
     };
   } catch (error) {

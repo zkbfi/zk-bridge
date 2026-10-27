@@ -9,7 +9,9 @@ import { buildDeliveryReport, buildFixtureContext } from "../helpers";
 const usdc = FIXTURE_TOKENS[0]!;
 const receiver = getAddress(`0x${"cd".repeat(20)}`);
 const values = (overrides: Partial<BridgeFormValues> = {}): BridgeFormValues => ({ token: `first:${usdc.address}`, amount: "100", receiver, mode: "plain", data: "", fallback: "", ...overrides });
-const options = (overrides: Partial<DeliveryOptions> = {}): DeliveryOptions => ({ ...DEFAULT_DELIVERY_OPTIONS, ...overrides });
+/** The percentage mode: these tests read the percentage rules. The default mode is the gas based mode. */
+const PERCENT: DeliveryOptions = { ...DEFAULT_DELIVERY_OPTIONS, mode: "percentage" };
+const options = (overrides: Partial<DeliveryOptions> = {}): DeliveryOptions => ({ ...PERCENT, ...overrides });
 
 const data = async (overrides: { readonly report?: ReturnType<typeof buildDeliveryReport> | null; readonly priorityFeeWei?: bigint | null } = {}) => {
   const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
@@ -24,22 +26,22 @@ const data = async (overrides: { readonly report?: ReturnType<typeof buildDelive
 
 describe("computeBridgeDraft: the token and the amount", () => {
   it("asks for a token when none is chosen", async () => {
-    expect(computeBridgeDraft(values({ token: "" }), DEFAULT_DELIVERY_OPTIONS, await data())).toMatchObject({ status: "incomplete", reason: "Choose a token.", steps: [] });
+    expect(computeBridgeDraft(values({ token: "" }), PERCENT, await data())).toMatchObject({ status: "incomplete", reason: "Choose a token.", steps: [] });
   });
 
   it("asks for a token when the choice names a token that the list does not hold", async () => {
     const unknown = `first:0x${"99".repeat(20)}`;
-    expect(computeBridgeDraft(values({ token: unknown }), DEFAULT_DELIVERY_OPTIONS, await data())).toMatchObject({ status: "incomplete", reason: "Choose a token." });
+    expect(computeBridgeDraft(values({ token: unknown }), PERCENT, await data())).toMatchObject({ status: "incomplete", reason: "Choose a token." });
   });
 
   it("blocks an amount of zero", async () => {
-    expect(computeBridgeDraft(values({ amount: "0" }), DEFAULT_DELIVERY_OPTIONS, await data())).toMatchObject({ status: "blocked", reason: "The amount must be above zero." });
+    expect(computeBridgeDraft(values({ amount: "0" }), PERCENT, await data())).toMatchObject({ status: "blocked", reason: "The amount must be above zero." });
   });
 
   it("says that the balances load when no chain snapshot is ready", async () => {
     const loaded = await data();
     const loading = { ...loaded, context: { ...loaded.context, snapshots: null } };
-    const draft = computeBridgeDraft(values(), DEFAULT_DELIVERY_OPTIONS, loading);
+    const draft = computeBridgeDraft(values(), PERCENT, loading);
     expect(draft.status).toBe("incomplete");
     expect(draft.reason).toBe("The balances of the source chain are loading. Check the RPC URLs if this stays.");
   });
@@ -50,7 +52,7 @@ describe("computeBridgeDraft: the token and the amount", () => {
     const failed = { status: "error" as const, chain: FIXTURE_PAIR.first, message: "endpoint down" };
     expect(first!.status).toBe("ok");
     expect(second!.status).toBe("ok");
-    const draft = computeBridgeDraft(values(), DEFAULT_DELIVERY_OPTIONS, { ...loaded, context: { ...loaded.context, snapshots: [failed, second!] } });
+    const draft = computeBridgeDraft(values(), PERCENT, { ...loaded, context: { ...loaded.context, snapshots: [failed, second!] } });
     expect(draft.status).toBe("incomplete");
     expect(draft.reason).toMatch(/are loading/);
   });
@@ -58,7 +60,7 @@ describe("computeBridgeDraft: the token and the amount", () => {
   it("throws, and does not blame the user, when a token has a decimals value that no token can have", async () => {
     const loaded = await data();
     const broken = loaded.tokens.map((token) => (token.address === usdc.address ? { ...token, decimals: 256 } : token));
-    expect(() => computeBridgeDraft(values(), DEFAULT_DELIVERY_OPTIONS, { ...loaded, tokens: broken })).toThrow(RangeError);
+    expect(() => computeBridgeDraft(values(), PERCENT, { ...loaded, tokens: broken })).toThrow(RangeError);
   });
 });
 
@@ -70,8 +72,8 @@ describe("computeBridgeDraft: the tip inputs", () => {
 
   it.each([
     ["the margin", { marginPercentText: "ten" }, "The margin must be a percentage such as 10."],
-    ["the gas multiplier text", { gasMultiplierText: "fast" }, "The gas multiplier must be a number above zero, such as 1.2."],
-    ["a gas multiplier of zero", { gasMultiplierText: "0" }, "The gas multiplier must be a number above zero, such as 1.2."],
+    ["the gas multiplier text", { gasMultiplierText: "fast" }, "The gas multiplier must be a number above zero, such as 2."],
+    ["a gas multiplier of zero", { gasMultiplierText: "0" }, "The gas multiplier must be a number above zero, such as 2."],
     ["the ceiling", { ceilingGweiText: "high" }, "The ceiling must be a number of gwei."],
     ["the fixed amount", { fixedText: "1.1234567" }, "The fixed amount must be a number with at most 6 fraction digits."],
   ] as const)("blocks the draft and names the problem with %s", async (_name, change, sentence) => {
@@ -87,12 +89,12 @@ describe("computeBridgeDraft: the tip inputs", () => {
   });
 
   it("waits for the priority fee before it builds a tip", async () => {
-    const draft = computeBridgeDraft(values(), DEFAULT_DELIVERY_OPTIONS, await data({ priorityFeeWei: null }));
+    const draft = computeBridgeDraft(values(), PERCENT, await data({ priorityFeeWei: null }));
     expect(draft).toMatchObject({ status: "blocked", reason: "The priority fee of the destination chain has not loaded yet.", delivery: null });
   });
 
   it("asks for the receiver before it builds a tip when the receiver is not an address", async () => {
-    const draft = computeBridgeDraft(values({ receiver: "0x1234" }), DEFAULT_DELIVERY_OPTIONS, await data());
+    const draft = computeBridgeDraft(values({ receiver: "0x1234" }), PERCENT, await data());
     expect(draft).toMatchObject({ status: "blocked", reason: "Enter the receiver first.", deliveryProblem: "Enter the receiver first." });
   });
 

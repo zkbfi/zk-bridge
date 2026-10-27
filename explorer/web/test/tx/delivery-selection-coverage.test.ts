@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { FIXED_FEE, senderPriceOfToken, UNWRAP } from "@zk-bridge/shared";
-import { selectDelivery, DEFAULT_GAS_MULTIPLIER, DEFAULT_MARGIN_RATE, type DeliverySelectionInput } from "../../src/tx/delivery-selection";
+import { DEFAULT_GAS_MARGIN, FIXED_FEE, senderPriceOfToken, UNWRAP } from "@zk-bridge/shared";
+import { selectDelivery, DEFAULT_MARGIN_RATE, type DeliverySelectionInput } from "../../src/tx/delivery-selection";
 import { buildDeliveryReport } from "../helpers";
 
 const RECIPIENT = `0x${"12".repeat(20)}` as const;
@@ -21,7 +21,8 @@ const input = (overrides: Partial<DeliverySelectionInput> = {}): DeliverySelecti
   percentageRate: 10n ** 15n,
   fixedAmount: null,
   marginRate: DEFAULT_MARGIN_RATE,
-  gasMargin: DEFAULT_GAS_MULTIPLIER,
+  gasMargin: DEFAULT_GAS_MARGIN,
+  destinationName: "PulseChain",
   baseFeeCeilingWei: null,
   ...overrides,
 });

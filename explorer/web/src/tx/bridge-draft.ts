@@ -6,8 +6,8 @@
  * The tip for delivery is on by default. A transfer that cannot carry a tip (the wrap route, or a destination with no
  * delivery router) is a plain relay, and the draft says why, as the terminal does.
  */
-import { getAddress, type Address } from "viem";
-import { UINT256_MAXIMUM, type DeliveryCostReport, type PayoutKind, type SenderPrice } from "@zk-bridge/shared";
+import { formatUnits, getAddress, type Address } from "viem";
+import { DEFAULT_GAS_MARGIN, defaultTipChoiceOf, UINT256_MAXIMUM, type DeliveryCostReport, type PayoutKind, type SenderPrice } from "@zk-bridge/shared";
 import { bridgeSourceOf, type BridgeContext } from "@terminal/app/actions";
 import { DEFAULT_TIP_PERCENT_TEXT, resolveDeliveryTarget, senderPriceText, type DeliveryTarget } from "@terminal/app/delivery-fee-form";
 import type { ChainSide, PairConfig, TokenInfo } from "@terminal/model/types";
@@ -28,7 +28,7 @@ export type DeliveryOptions = {
   readonly fixedText: string;
   /** The margin in percent that the fixed suggestion adds. */
   readonly marginPercentText: string;
-  /** The gas multiplier, as typed (`1.2`). */
+  /** The factor on the gas cost for the gas based mode, as typed (`2`, a margin of 100 percent). */
   readonly gasMultiplierText: string;
   /** The ceiling base fee in gwei, as typed. Empty takes twice the base fee now. */
   readonly ceilingGweiText: string;
@@ -82,11 +82,16 @@ export type BridgeDraft = {
   readonly tip: TipStatus | null;
   /** The default text of the price field, from the valuation of the token. Empty when none is known. */
   readonly defaultSenderPriceText: string;
+  /**
+   * What the form tells the user about the default gas based tip: the destination chain has no base fee, or no price is
+   * known. Null when there is nothing to say, when the tip is off, or when another mode is chosen.
+   */
+  readonly tipNotice: string | null;
 };
 
-const EMPTY_DRAFT: BridgeDraft = { status: "incomplete", reason: null, steps: [], amountToken: null, delivery: null, deliveryProblem: null, tip: null, defaultSenderPriceText: "" };
+const EMPTY_DRAFT: BridgeDraft = { status: "incomplete", reason: null, steps: [], amountToken: null, delivery: null, deliveryProblem: null, tip: null, defaultSenderPriceText: "", tipNotice: null };
 
-/** The default tip, in percent. It is the default of `defaultTip` in `@zk-bridge/shared`: 0.1 percent. */
+/** The default share for the percentage mode, in percent. It is the default of `defaultTip` in `@zk-bridge/shared`: 0.1 percent. */
 export const DEFAULT_TIP_PERCENT = DEFAULT_TIP_PERCENT_TEXT;
 
 /** The words that end every reason why no tip travels. */
@@ -133,6 +138,20 @@ export const tipStatusOf = (input: TipStatusInput): TipStatus => {
   return { kind: input.options.mode === "none" ? "off" : "on", target: resolved.target };
 };
 
+/** The notice of the default tip, from the shared choice. Only the gas based mode of a tip that is on has one. */
+const tipNoticeOf = (options: DeliveryOptions, tip: TipStatus, defaultPriceText: string): string | null => {
+  if (tip.kind !== "on" || options.mode !== "gas-multiplier") return null;
+  const price = priceOf(options.senderPriceText ?? defaultPriceText, tip.target.token.decimals);
+  if (!price.ok) return null;
+  return defaultTipChoiceOf({
+    senderPrice: price.value.senderPrice,
+    tokenValueInWei: price.value.tokenValueInWei,
+    tokenDecimals: tip.target.token.decimals,
+    chainName: tip.target.chain.name,
+    ...(tip.target.chain.baseFee === undefined ? {} : { destinationBaseFee: tip.target.chain.baseFee }),
+  }).notice;
+};
+
 type TipInputs = {
   readonly router: Address;
   readonly percentageRate: bigint;
@@ -172,7 +191,7 @@ const readTipInputs = (options: DeliveryOptions, target: DeliveryTarget, default
   const margin = parsePercentText(options.marginPercentText);
   if (margin === null) return failure("The margin must be a percentage such as 10.");
   const gasMargin = parseDecimalText(options.gasMultiplierText, 18);
-  if (gasMargin === null || gasMargin <= 0n) return failure("The gas multiplier must be a number above zero, such as 1.2.");
+  if (gasMargin === null || gasMargin <= 0n) return failure("The gas multiplier must be a number above zero, such as 2.");
   const ceilingText = options.ceilingGweiText.trim();
   const baseFeeCeilingWei = ceilingText === "" ? null : parseDecimalText(ceilingText, 9);
   if (ceilingText !== "" && baseFeeCeilingWei === null) return failure("The ceiling must be a number of gwei.");
@@ -213,6 +232,8 @@ const buildDelivery = (input: {
       tokenValueInWei: inputs.value.tokenValueInWei,
       senderPrice: inputs.value.senderPrice,
       payout,
+      destinationName: target.chain.name,
+      ...(target.chain.baseFee === undefined ? {} : { destinationBaseFee: target.chain.baseFee }),
       report: data.report,
       priorityFeeWei: data.priorityFeeWei,
       percentageRate: inputs.value.percentageRate,
@@ -247,7 +268,7 @@ export const computeBridgeDraft = (values: BridgeFormValues, options: DeliveryOp
   const amountToken = token === null || token === undefined ? { symbol: `wrapped ${sourceChain.nativeSymbol}`, decimals: 18 } : { symbol: token.symbol, decimals: token.decimals };
   const tip = tipStatusOf({ values, options, pair: data.pair, tokens: data.tokens, valuations: data.context.tokenValuationsWei ?? {} });
   const defaultSenderPriceText = tip.kind === "unavailable" ? "" : senderPriceText(tip.target);
-  const early = { ...EMPTY_DRAFT, amountToken, tip, defaultSenderPriceText };
+  const early = { ...EMPTY_DRAFT, amountToken, tip, defaultSenderPriceText, tipNotice: tipNoticeOf(options, tip, defaultSenderPriceText) };
   if (values.amount.trim() === "") return { ...early, reason: "Enter an amount." };
   const amount = parseDecimalText(values.amount, decimals);
   if (amount === null) return { ...early, status: "blocked", reason: `The amount must be a plain number with at most ${decimals} fraction digits.` };
@@ -272,13 +293,19 @@ export const computeBridgeDraft = (values: BridgeFormValues, options: DeliveryOp
   }
 };
 
-/** The tip options before the user touches them: the default tip of 0.1 percent of the transfer. */
+/** The default factor on the gas cost, as text: `2`, a margin of 100 percent. It comes from `@zk-bridge/shared`. */
+export const DEFAULT_GAS_MARGIN_TEXT = formatUnits(DEFAULT_GAS_MARGIN, 18);
+
+/**
+ * The tip options before the user touches them: the gas based tip at the base fee, with a margin of 100 percent. Its
+ * limit is the price ceiling, twice the base fee now, and the deliverer's gas choice decides how much of it the tip takes.
+ */
 export const DEFAULT_DELIVERY_OPTIONS: DeliveryOptions = {
-  mode: "percentage",
+  mode: "gas-multiplier",
   percentText: DEFAULT_TIP_PERCENT,
   fixedText: "",
   marginPercentText: "10",
-  gasMultiplierText: "1.2",
+  gasMultiplierText: DEFAULT_GAS_MARGIN_TEXT,
   ceilingGweiText: "",
   senderPriceText: null,
   routerText: null,
