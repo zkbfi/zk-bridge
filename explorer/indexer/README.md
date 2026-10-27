@@ -107,7 +107,7 @@ In flight means `sent`, `waiting_for_finality` or `covered`.
 }
 ```
 
-`volume24h` sums the net amount of transfers sent in the last 24 hours, per source chain and source token. `lastHeadUpdates[].update` is null when the light client has not stored a head.
+`volume24h` sums the amount of transfers sent in the last 24 hours, per source chain and source token. `lastHeadUpdates[].update` is null when the light client has not stored a head.
 
 `GET /api/heads` returns `{ heads: [...] }`, one per side. The light client on a side tracks the other chain: `trackedChainId`. Fields: `chainId`, `name`, `lightClient`, `trackedChainId`, `storedHeadSlot`, `storedHeadExecutionBlock`, `storedHeadExecutionTimestamp`, `lastUpdateTimestamp`, `updateCount`, `finalizedSlot` (needs a beacon URL, else null), `lagSlots` (`finalizedSlot - storedHeadSlot`), `lagSeconds` (newest indexed time of the tracked chain minus the time of the head's execution block), `trackedChainTipBlock`, `trackedChainTipTimestamp`, `ownChainTipBlock`, `ownChainTipTimestamp`. Unknown values are null.
 
