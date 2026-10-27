@@ -16,8 +16,8 @@ interface IMintable {
 
 /// @notice Drives two mediators joined by two mock bridges. Four kinds of native token live on the two chains: a plain
 /// token and a fee on transfer token and a token with a deny list on chain A, and a plain token on chain B. Senders
-/// relay natives and copies, messages arrive late and out of order, accounts claim, the fee is set, the fees are
-/// collected, and an attacker forges messages.
+/// relay natives and copies, messages arrive late and out of order, accounts claim, anyone donates tokens by a plain
+/// transfer, and an attacker forges messages.
 /// @dev What this handler claims. Every message that it sends is delivered at most once, by the mock bridge, with the
 /// context that the real bridge would set. The mock does not read a proof, so the handler does not show that the
 /// message bridge refuses a forged proof. It shows that the mediators refuse a forged context: a wrong sender, a wrong
@@ -48,7 +48,6 @@ contract MediatorHandler is Test {
     MockAMB public immutable ambB;
     TokenMediator public immutable mediatorA;
     TokenMediator public immutable mediatorB;
-    address public immutable treasury;
     DenyListToken public immutable denyToken;
     address public immutable attacker = address(0xBAD);
 
@@ -57,6 +56,10 @@ contract MediatorHandler is Test {
     Direction[] internal _homeDirection;
     address[] public actors;
     Pending[] internal _pending;
+    /// @dev For each native token, the tokens that arrived at the home mediator by a plain transfer.
+    mapping(uint256 index => uint256) public donated;
+    /// @dev For each native token, the value of the messages that are sent and not yet delivered.
+    mapping(uint256 index => uint256) public inFlight;
 
     uint256 public pendingCount;
     uint256 public failedDeliveries;
@@ -65,29 +68,18 @@ contract MediatorHandler is Test {
     uint256 public deliveredReleases;
     uint256 public claimsPaid;
     uint256 public claimAttemptsRefused;
-    uint256 public feesCollectedTotal;
+    uint256 public donatedCount;
     uint256 public outOfOrderDeliveries;
     uint256 public forgedAttempts;
     uint256 public forgedSuccesses;
     uint256 public forgedChanges;
-    uint256 public feeRateBreaches;
-    uint256 public chargedFeeCount;
-    uint256 public incomingFeeCount;
-    uint256 public incomingFeeBreaches;
-    uint256 public timeAdvances;
+    uint256 public relayValueMismatches;
 
-    constructor(
-        MockAMB ambA_,
-        MockAMB ambB_,
-        TokenMediator mediatorA_,
-        TokenMediator mediatorB_,
-        address treasury_
-    ) {
+    constructor(MockAMB ambA_, MockAMB ambB_, TokenMediator mediatorA_, TokenMediator mediatorB_) {
         ambA = ambA_;
         ambB = ambB_;
         mediatorA = mediatorA_;
         mediatorB = mediatorB_;
-        treasury = treasury_;
         denyToken = new DenyListToken();
         _addNative(address(new MockERC20("Plain A", "PLA")), Direction.AtoB);
         _addNative(address(new FeeOnTransferToken("Taxed A", "TXA")), Direction.AtoB);
@@ -172,27 +164,14 @@ contract MediatorHandler is Test {
         }
     }
 
-    /// @notice Sends the accrued fees of a native token or a copy to the recipient.
-    function collectFees(uint8 tokenSeed, uint8 sideSeed) external {
+    /// @notice Sends tokens to the home mediator by a plain transfer, as a mistaken sender does. The record does not
+    /// count them, and nothing pays them out.
+    function donate(uint8 tokenSeed, uint96 amountSeed) external {
         uint256 index = tokenSeed % _natives.length;
-        bool onHomeSide = sideSeed % 2 == 0;
-        TokenMediator mediator = onHomeSide ? homeMediator(index) : awayMediator(index);
-        address token = onHomeSide ? _natives[index] : copyOf(index);
-        if (token == address(0)) return;
-        uint256 accrued = mediator.accruedFees(token);
-        if (accrued == 0) return;
-        uint256 before = IERC20(token).balanceOf(treasury);
-        mediator.collectFees(token);
-        // A fee on transfer token takes its own share, so the treasury receives at most the accrued amount.
-        assertLe(IERC20(token).balanceOf(treasury) - before, accrued, "the treasury received more than accrued");
-        feesCollectedTotal += accrued;
-    }
-
-    /// @notice Moves time forward by up to 400 days, so the fee schedule steps down during a run. The fee rate only
-    /// falls, and the checks below use the rate at the time of each charge.
-    function advanceTime(uint32 secondsSeed) external {
-        vm.warp(block.timestamp + bound(secondsSeed, 1, 400 days));
-        timeAdvances++;
+        uint256 amount = bound(amountSeed, 1, MAXIMUM_AMOUNT);
+        IMintable(_natives[index]).mint(address(homeMediator(index)), amount);
+        donated[index] += amount;
+        donatedCount++;
     }
 
     /// @notice Denies or allows an account on the token with a deny list, so that releases to it fail.
@@ -280,8 +259,15 @@ contract MediatorHandler is Test {
         if (timing == Timing.DeliverNow) _deliver(_pending.length - 1);
     }
 
-    /// @dev Relays with the plain form or with an explicit fallback, by the seed. It records the fee that the relay
-    /// charged and checks it against the ceiling. It queues the message.
+    /// @dev The balance of the mediator and the supply of the token before a relay. A native token stays in the
+    /// balance. A copy leaves the supply.
+    struct Snapshot {
+        uint256 balance;
+        uint256 supply;
+    }
+
+    /// @dev Relays with the plain form or with an explicit fallback, by the seed. It checks that the message carries
+    /// exactly the value that the mediator took in, and it queues the message.
     function _relay(
         TokenMediator mediator,
         address token,
@@ -290,54 +276,42 @@ contract MediatorHandler is Test {
         uint8 receiverSeed,
         Direction direction
     ) private {
-        address receiver = _actor(receiverSeed);
-        address fallbackRecipient = _actor(receiverSeed >> 2);
         MockAMB bridge = direction == Direction.AtoB ? ambA : ambB;
-        uint256 feesBefore = mediator.accruedFees(token);
-        uint256 balanceBefore = IERC20(token).balanceOf(address(mediator));
+        Snapshot memory before = _snapshot(mediator, token);
         vm.startPrank(sender);
         IERC20(token).approve(address(mediator), amount);
-        if (receiverSeed % 2 == 0) mediator.relayTokens(token, receiver, amount);
-        if (receiverSeed % 2 == 1) mediator.relayTokensWithFallback(token, receiver, amount, "", fallbackRecipient);
+        if (receiverSeed % 2 == 0) mediator.relayTokens(token, _actor(receiverSeed), amount);
+        if (receiverSeed % 2 == 1) {
+            mediator.relayTokensWithFallback(token, _actor(receiverSeed), amount, "", _actor(receiverSeed >> 2));
+        }
         vm.stopPrank();
-        _checkFee(mediator, token, balanceBefore, feesBefore);
+        _recordSent(bridge, _movedIn(mediator, token, before));
         _pending.push(Pending(direction, bridge.sentCount() - 1, false));
         pendingCount++;
     }
 
-    /// @dev The fee charged by one relay is the growth of `accruedFees`. The amount that the fee applies to is the
-    /// growth of the balance of the mediator for a native token. For a copy, the balance grows by the fee only, and the
-    /// relayed amount is the fee plus the burned net amount, so the check uses the supply that fell.
-    function _checkFee(TokenMediator mediator, address token, uint256 balanceBefore, uint256 feesBefore) private {
-        uint256 fee = mediator.accruedFees(token) - feesBefore;
-        if (fee == 0) return;
-        chargedFeeCount++;
-        uint256 received = _receivedAmount(mediator, token, balanceBefore, fee);
-        if (fee * mediator.FEE_DENOMINATOR() > received * mediator.currentFeeRate()) feeRateBreaches++;
+    function _snapshot(TokenMediator mediator, address token) private view returns (Snapshot memory) {
+        return Snapshot(IERC20(token).balanceOf(address(mediator)), IERC20(token).totalSupply());
     }
 
-    /// @dev The amount that a relay put into the mediator, before the fee. A native token stays in the balance. A copy
-    /// is burned, except for the fee, so the amount is the burn plus the fee, which the mediator logs as the net value.
-    function _receivedAmount(TokenMediator mediator, address token, uint256 balanceBefore, uint256 fee)
-        private
-        view
-        returns (uint256)
-    {
-        if (mediator.nativeTokenAddress(token) == address(0)) {
-            return IERC20(token).balanceOf(address(mediator)) - balanceBefore;
-        }
-        // A copy: the sender gave `value`, the mediator burned `value - fee`. The last message holds the net value.
-        MockAMB bridge = mediator == mediatorA ? ambA : ambB;
-        bytes memory data = bridge.messageAt(bridge.sentCount() - 1).data;
-        uint256 net = _netValueOf(data);
-        return net + fee;
+    /// @dev What a relay took in: the growth of the balance for a native token, the fall of the supply for a copy.
+    function _movedIn(TokenMediator mediator, address token, Snapshot memory before) private view returns (uint256) {
+        if (mediator.nativeTokenAddress(token) != address(0)) return before.supply - IERC20(token).totalSupply();
+        return IERC20(token).balanceOf(address(mediator)) - before.balance;
     }
 
-    /// @dev Reads the value of a release message: the third argument of every `handleNative...` call.
-    function _netValueOf(bytes memory data) private pure returns (uint256 value) {
-        assembly {
-            value := mload(add(data, 100))
+    /// @dev Counts a message whose value is not what the relay took in, and adds the value to the tokens in flight.
+    function _recordSent(MockAMB bridge, uint256 movedIn) private {
+        (address token, uint256 value) = _tokenAndValueOf(bridge.messageAt(bridge.sentCount() - 1).data);
+        if (value != movedIn) relayValueMismatches++;
+        inFlight[_nativeIndexOf(token)] += value;
+    }
+
+    function _nativeIndexOf(address token) private view returns (uint256) {
+        for (uint256 i = 0; i < _natives.length; i++) {
+            if (_natives[i] == token) return i;
         }
+        revert("not a native token of the handler");
     }
 
     function _deliver(uint256 pendingIndex) private {
@@ -352,30 +326,18 @@ contract MediatorHandler is Test {
         }
         message.delivered = true;
         pendingCount--;
-        TokenMediator destination = message.direction == Direction.AtoB ? mediatorB : mediatorA;
         bytes memory data = (message.direction == Direction.AtoB ? ambA : ambB).messageAt(message.index).data;
-        (address token, uint256 gross) = _tokenAndValueOf(data);
-        uint256 feesBefore = destination.accruedFees(_destinationTokenOf(destination, data, token));
-        uint256 rate = destination.currentFeeRate();
+        (address token, uint256 value) = _tokenAndValueOf(data);
         bool ok;
         if (message.direction == Direction.AtoB) (ok,) = ambB.deliver(ambA, message.index);
         if (message.direction == Direction.BtoA) (ok,) = ambA.deliver(ambB, message.index);
         if (!ok) failedDeliveries++;
         if (ok && _isRelease(message)) deliveredReleases++;
         if (!ok) return;
-        uint256 fee = destination.accruedFees(_destinationTokenOf(destination, data, token)) - feesBefore;
-        _checkIncomingFee(fee, gross, rate);
+        inFlight[_nativeIndexOf(token)] -= value;
     }
 
-    /// @dev The fee of a delivery is at most the share of the gross value at the current rate. It also counts the
-    /// paths that the test must reach.
-    function _checkIncomingFee(uint256 fee, uint256 gross, uint256 rate) private {
-        if (fee == 0) return;
-        incomingFeeCount++;
-        if (fee * 1e18 > gross * rate) incomingFeeBreaches++;
-    }
-
-    /// @dev The token that a message names and the gross value that it delivers. The token, the recipient and the
+    /// @dev The token that a message names and the value that it delivers. The token, the recipient and the
     /// value come first in every release message. A deploying message has the name, the symbol and the decimals
     /// between the token and the recipient.
     function _tokenAndValueOf(bytes memory data) private pure returns (address token, uint256 value) {
@@ -395,21 +357,6 @@ contract MediatorHandler is Test {
             || selector == TokenMediator.deployAndHandleBridgedTokensAndCall.selector
             || selector == TokenMediator.deployAndHandleBridgedTokensWithFallback.selector
             || selector == TokenMediator.deployAndHandleBridgedTokensAndCallWithFallback.selector;
-    }
-
-    /// @dev The token on the destination chain whose fees grow: the named token when it is native there, and
-    /// otherwise its copy, which is zero until the first delivery.
-    function _destinationTokenOf(TokenMediator destination, bytes memory data, address token)
-        private
-        view
-        returns (address)
-    {
-        bytes4 selector = bytes4(data);
-        bool releasesNative = selector == TokenMediator.handleNativeTokens.selector
-            || selector == TokenMediator.handleNativeTokensAndCall.selector
-            || selector == TokenMediator.handleNativeTokensWithFallback.selector
-            || selector == TokenMediator.handleNativeTokensAndCallWithFallback.selector;
-        return releasesNative ? token : destination.bridgedTokenAddress(token);
     }
 
     function _isRelease(Pending storage message) private view returns (bool) {
@@ -490,27 +437,12 @@ contract MediatorHandler is Test {
 /// forge-config: deep.invariant.fail-on-revert = true
 contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
     MediatorHandler internal handler;
-    address internal treasury = makeAddr("treasury");
 
-    /// @dev Both chains take a fee that falls with time: 1% falling 0.2% a year to 0.3% on chain A, and 0.5% falling
-    /// 0.1% every 200 days to 0.1% on chain B. The handler moves time, so the rate steps down during a run.
     function setUp() public override {
-        TokenMediator.MediatorTerms memory termsA = _noTerms();
-        termsA.feeRecipient = treasury;
-        termsA.feeStartRate = 100e14;
-        termsA.feeStepRate = 20e14;
-        termsA.feeFloorRate = 30e14;
-        termsA.feeStepPeriod = 365 days;
-        TokenMediator.MediatorTerms memory termsB = _noTerms();
-        termsB.feeRecipient = treasury;
-        termsB.feeStartRate = 50e14;
-        termsB.feeStepRate = 10e14;
-        termsB.feeFloorRate = 10e14;
-        termsB.feeStepPeriod = 200 days;
-        _deployMediators(termsA, termsB);
-        handler = new MediatorHandler(ambA, ambB, mediatorA, mediatorB, treasury);
+        _deployMediators(_noTerms(), _noTerms());
+        handler = new MediatorHandler(ambA, ambB, mediatorA, mediatorB);
         targetContract(address(handler));
-        bytes4[] memory selectors = new bytes4[](12);
+        bytes4[] memory selectors = new bytes4[](11);
         selectors[0] = MediatorHandler.relayNativeAndDeliver.selector;
         selectors[1] = MediatorHandler.relayNativeDeferred.selector;
         selectors[2] = MediatorHandler.relayCopyAndDeliver.selector;
@@ -518,50 +450,49 @@ contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
         selectors[4] = MediatorHandler.deliverPending.selector;
         selectors[5] = MediatorHandler.deliverNewestPending.selector;
         selectors[6] = MediatorHandler.claim.selector;
-        selectors[7] = MediatorHandler.collectFees.selector;
-        selectors[8] = MediatorHandler.advanceTime.selector;
-        selectors[9] = MediatorHandler.toggleDeny.selector;
-        selectors[10] = MediatorHandler.forge.selector;
+        selectors[7] = MediatorHandler.donate.selector;
+        selectors[8] = MediatorHandler.toggleDeny.selector;
+        selectors[9] = MediatorHandler.forge.selector;
         // Deliveries are the most useful action, so the list names it twice.
-        selectors[11] = MediatorHandler.deliverPending.selector;
+        selectors[10] = MediatorHandler.deliverPending.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
     }
 
-    /// Claim: for each native token the mediator holds at least what it owes plus the fees. Shows: after every call
-    /// sequence, balance >= record + accrued fees, and the record covers every amount that waits in `claimable`. The
-    /// fees of a copy are held as copies, so the copy balance of the mediator covers them. Matters: the record
-    /// already counts the claimable amounts (a refused release returns to it), so the claims are not added a
-    /// second time. Honest limit: the balance of a token that charges a fee on transfer is the real balance.
-    function invariant_balanceCoversTheRecordAndTheFees() public view {
+    /// Claim: the home mediator holds exactly its record plus the tokens that arrived by a plain transfer, and the
+    /// away mediator holds no copy. Shows: after every call sequence, for each native token, balance == record +
+    /// donations, the record covers every amount that waits in `claimable`, and the copy balance of the away mediator
+    /// is zero. Matters: the mediator takes no cut of a relay or of a release, so nothing else can stay in it. The
+    /// record already counts the claimable amounts (a refused release returns to it), so the claims are not added a
+    /// second time. Honest limit: for a token that charges a fee on transfer, the balance is the real balance, and the
+    /// record counts what arrived.
+    function invariant_theHomeBalanceIsTheRecordPlusDonations() public view {
         for (uint256 i = 0; i < handler.nativeCount(); i++) {
             address token = handler.nativeAt(i);
             TokenMediator home = handler.homeMediator(i);
             uint256 record = home.mediatorBalance(token);
-            assertGe(IERC20(token).balanceOf(address(home)), record + home.accruedFees(token), "native balance");
+            assertEq(IERC20(token).balanceOf(address(home)), record + handler.donated(i), "native balance");
 
             assertGe(record, _claimsOnToken(i), "the record covers the claims");
 
             address copy = handler.copyOf(i);
             if (copy == address(0)) continue;
-            TokenMediator away = handler.awayMediator(i);
-            assertGe(IERC20(copy).balanceOf(address(away)), away.accruedFees(copy), "copy fees are held");
+            assertEq(IERC20(copy).balanceOf(address(handler.awayMediator(i))), 0, "no copy stays in the mediator");
         }
     }
 
-    /// Claim: the copies and the claims never exceed the record, and together they equal it when no message is in
-    /// flight. Shows: supply of the copy + claims <= record always; supply + claims == record at rest; a native token
-    /// with no copy has an empty record at rest. Matters: a copy without a locked token behind it is a claim on
-    /// nothing. The claims are part of the sum because a release that the token refused burned its copies on the other
-    /// chain and stays in the record, owed to the fallback.
-    function invariant_theCopiesAndTheClaimsEqualTheRecordWhenNothingIsInFlight() public view {
+    /// Claim: the record equals the copies, plus the claims, plus the value in flight, at every moment. Shows: for each
+    /// native token, record == supply of the copy + claims + the value of the messages that are sent and not
+    /// delivered. A native token with no copy has only the value in flight. Matters: a copy without a locked token
+    /// behind it is a claim on nothing, and a locked token without a copy or a message is lost. The claims are part of
+    /// the sum because a release that the token refused burned its copies on the other chain and stays in the record,
+    /// owed to the fallback.
+    function invariant_theRecordIsTheCopiesPlusTheClaimsPlusWhatIsInFlight() public view {
         for (uint256 i = 0; i < handler.nativeCount(); i++) {
             address token = handler.nativeAt(i);
             uint256 record = handler.homeMediator(i).mediatorBalance(token);
             address copy = handler.copyOf(i);
-            uint256 backed = (copy == address(0) ? 0 : IERC20(copy).totalSupply()) + _claimsOnToken(i);
-            assertLe(backed, record, "the copies and the claims exceed the record");
-            if (handler.pendingCount() != 0) continue;
-            assertEq(backed, record, "at rest the copies and the claims equal the record");
+            uint256 supply = copy == address(0) ? 0 : IERC20(copy).totalSupply();
+            assertEq(record, supply + _claimsOnToken(i) + handler.inFlight(i), "the record is not accounted for");
         }
     }
 
@@ -580,20 +511,15 @@ contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
         assertEq(handler.forgedChanges(), 0, "a forged message changed the state");
     }
 
-    /// Claim: no fee passes the schedule. Shows: every outgoing and incoming fee is at most the current rate share of
-    /// the amount that it applies to; the current rate stays between the floor and the start rate. Matters: users
-    /// read the schedule before they relay, and the schedule is the worst case.
-    function invariant_noFeePassesTheSchedule() public view {
-        assertEq(handler.feeRateBreaches(), 0, "an outgoing fee passed the rate");
-        assertEq(handler.incomingFeeBreaches(), 0, "an incoming fee passed the rate");
-        assertLe(mediatorA.currentFeeRate(), mediatorA.feeStartRate());
-        assertGe(mediatorA.currentFeeRate(), mediatorA.feeFloorRate());
-        assertLe(mediatorB.currentFeeRate(), mediatorB.feeStartRate());
-        assertGe(mediatorB.currentFeeRate(), mediatorB.feeFloorRate());
+    /// Claim: a message carries exactly the value that its relay took in. Shows: over every relay, the value in the
+    /// message equals the growth of the mediator balance for a native token, and the fall of the supply for a copy.
+    /// Matters: the mediator keeps no share of a relay, so the bridged amount is the relayed amount.
+    function invariant_everyMessageCarriesTheValueThatTheRelayTookIn() public view {
+        assertEq(handler.relayValueMismatches(), 0, "a message carries another value than the relay took in");
     }
 
     /// Claim: the handler reaches the paying paths. Shows: after a fixed sequence, a native token is locked, its copy
-    /// is minted and returned and released, fees accrue and are collected, a release to a denied account is claimed,
+    /// is minted and returned and released, a donation stays out of the record, a release to a denied account is claimed,
     /// messages arrive out of order, and forged messages are tried. Matters: an invariant over a handler that never acts
     /// proves nothing.
     function test_handlerReachesThePayingPaths() public {
@@ -608,15 +534,15 @@ contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
         assertTrue(copy != address(0), "the copy exists");
         assertGt(IERC20(copy).totalSupply(), 0);
 
-        // The way back, with a fee on chain B.
+        // The way back.
         handler.relayCopyAndDeliver(0, 1, 50 ether, 3);
         assertEq(handler.deliveredReleases(), 1, "a release paid");
         assertEq(handler.failedDeliveries(), 0);
-        assertGt(mediatorA.accruedFees(handler.nativeAt(0)), 0, "fees accrue on chain A");
-        assertGt(mediatorB.accruedFees(copy), 0, "fees accrue on chain B");
-        assertGt(handler.chargedFeeCount(), 0);
+        assertEq(handler.relayValueMismatches(), 0);
+        assertEq(handler.inFlight(0), 0, "nothing is in flight at rest");
+        assertEq(mediatorA.mediatorBalance(handler.nativeAt(0)), 250 ether, "the release left the record");
 
-        // The fee on transfer token and the token on chain B.
+        // The token that charges a fee on transfer and the token on chain B.
         handler.relayNativeAndDeliver(1, 2, 70 ether, 0);
         handler.relayNativeAndDeliver(3, 3, 60 ether, 0);
         assertTrue(handler.copyOf(1) != address(0));
@@ -635,16 +561,15 @@ contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
         handler.claim(2, 2);
         assertGt(handler.claimsPaid(), 0, "a claim paid");
 
-        handler.collectFees(0, 0);
-        handler.collectFees(0, 1);
-        assertGt(handler.feesCollectedTotal(), 0, "fees were collected");
-        assertGt(handler.incomingFeeCount(), 0, "deliveries were charged an incoming fee");
-        handler.advanceTime(400 days);
-        assertEq(handler.timeAdvances(), 1);
-        assertLt(mediatorA.currentFeeRate(), mediatorA.feeStartRate(), "the schedule stepped down");
+        handler.donate(0, 7 ether);
+        assertEq(handler.donatedCount(), 1);
+        assertEq(
+            IERC20(handler.nativeAt(0)).balanceOf(address(mediatorA)),
+            mediatorA.mediatorBalance(handler.nativeAt(0)) + handler.donated(0),
+            "a donation stays out of the record"
+        );
         handler.relayNativeAndDeliver(0, 0, 100 ether, 1);
         assertEq(handler.failedDeliveries(), 0);
-        assertEq(handler.incomingFeeBreaches(), 0);
 
         handler.forge(0, 0, 0, 5 ether, 0);
         handler.forge(1, 1, 1, 5 ether, 1);
@@ -652,7 +577,6 @@ contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
         assertEq(handler.forgedAttempts(), 3);
         assertEq(handler.forgedSuccesses(), 0);
         assertEq(handler.forgedChanges(), 0);
-        assertEq(handler.feeRateBreaches(), 0);
     }
 
     function _claimsOnToken(uint256 index) internal view returns (uint256 total) {

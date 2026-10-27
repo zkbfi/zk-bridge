@@ -98,7 +98,7 @@ abstract contract WorldSupport is GateSupport, DynamicProofs {
         vm.chainId(CHAIN_A);
     }
 
-    /// @dev Mediator terms with no fee and no flow limiter.
+    /// @dev Mediator terms with no flow limiter.
     function _mediatorTerms(address bridge_, address remoteMediator, uint256 remoteChainId)
         internal
         pure

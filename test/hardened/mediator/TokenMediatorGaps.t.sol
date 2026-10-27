@@ -15,30 +15,18 @@ import {MediatorFixture, MockAMB, ScriptedMediatorLimiter} from "./utils/Mediato
 import {MedBonusToken, MedHostileToken, MedHostileLimiter} from "./utils/MedMocks.sol";
 
 /// @notice The checks that the vault tests held and that no other mediator test makes: tokens that misbehave on the
-/// way in and on the way out, hostile tokens and limiters that call back into the mediator, the pull-based fee
-/// collection, and the independence of the limiter checks. Each test names the vault test that it replaces.
+/// way in and on the way out, hostile tokens and limiters that call back into the mediator, and the independence of the limiter checks. Each test names the vault test that it replaces.
 contract TokenMediatorGapsTest is MediatorFixture {
     event ClaimableRecorded(address indexed token, address indexed account, uint256 value, bytes32 indexed messageId);
     event FallbackUsed(
         address indexed token, address indexed recipient, address indexed fallbackRecipient, bytes32 messageId
     );
-    event FeeCharged(address indexed token, uint256 fee, TokenMediator.FeeDirection direction);
-    event FeesCollected(address indexed token, address indexed feeRecipient, uint256 amount);
-
-    address internal treasury = makeAddr("treasury");
 
     // ------------------------------------------------------------------------------------------------ helpers
 
-    /// @dev A fee that does not change: the start rate and the floor are the rate, and the step is zero.
-    function _flatFeeTerms(uint256 rate, address limiter)
-        internal
-        view
-        returns (TokenMediator.MediatorTerms memory terms)
-    {
+    /// @dev Terms with the given flow limiter, or none when it is zero.
+    function _limiterTerms(address limiter) internal pure returns (TokenMediator.MediatorTerms memory terms) {
         terms = _noTerms();
-        terms.feeRecipient = treasury;
-        terms.feeStartRate = rate;
-        terms.feeFloorRate = rate;
         terms.flowLimiter = limiter;
     }
 
@@ -77,19 +65,12 @@ contract TokenMediatorGapsTest is MediatorFixture {
         assertTrue(ok);
     }
 
-    /// @dev The tokens of a native token on chain A are backed: the balance covers the record and the fees, and
+    /// @dev The tokens of a native token on chain A are backed: the balance covers the record, and
     /// the copies on chain B equal the record once every message is delivered.
     function _assertBacked(address token, address copy) internal view {
         uint256 record = mediatorA.mediatorBalance(token);
-        assertGe(IERC20(token).balanceOf(address(mediatorA)), record + mediatorA.accruedFees(token), "balance");
+        assertGe(IERC20(token).balanceOf(address(mediatorA)), record, "balance");
         assertEq(IERC20(copy).totalSupply(), record, "the copies equal the record");
-    }
-
-    function _feeEventsOf(address emitter) internal view returns (uint256 count) {
-        Vm.Log[] memory logs = vm.getRecordedLogs();
-        for (uint256 i = 0; i < logs.length; i++) {
-            if (logs[i].emitter == emitter && logs[i].topics[0] == FeeCharged.selector) count++;
-        }
     }
 
     // ------------------------------------------------------------------------------------------------ relay inputs
@@ -286,68 +267,13 @@ contract TokenMediatorGapsTest is MediatorFixture {
         _assertBacked(address(token), copy);
     }
 
-    /// Claim: a token that collects the fees while the mediator pays it out cannot make the mediator pay them twice.
-    /// Shows: with 10 of fees accrued, the nested `collectFees` pays the treasury 10, and the accrued amount is zero.
-    /// The balance covers the record. Matters: the fees and the record are separate. A release and a collection must
-    /// not draw on the same tokens.
-    function test_aTokenThatCollectsFeesDuringAReleaseKeepsTheAccountingExact() public {
-        _redeploy(_flatFeeTerms(100e14, address(0)), _flatFeeTerms(0, address(0)));
-        MedHostileToken token = _hostileWorld(mediatorA, 1_000 ether);
-        address copy = _copyOf(address(token));
-        assertEq(mediatorA.accruedFees(address(token)), 10 ether);
-        uint256 index = _sendBack(copy, alice, carol, 100 ether);
-        token.arm(
-            address(mediatorA), abi.encodeCall(TokenMediator.collectFees, (address(token))), MedHostileToken.Ending.Pay
-        );
-
-        (bool ok,) = _deliverBtoA(index);
-        assertTrue(ok);
-        assertTrue(token.hookOk());
-        assertEq(token.balanceOf(treasury), 11 ether, "the fees are paid once: 10 ether outgoing, 1 ether incoming");
-        assertEq(mediatorA.accruedFees(address(token)), 0);
-        assertEq(token.balanceOf(carol), 99 ether, "100 ether less the 1% incoming fee");
-        assertEq(mediatorA.mediatorBalance(address(token)), 890 ether);
-        _assertBacked(address(token), copy);
-    }
-
-    /// Claim: a token that calls back into the mediator while `collectFees` pays it cannot collect twice, relay or
-    /// claim. Shows: for each of the three calls the guard refuses with its own error, the collection pays the
-    /// treasury once, and the accrued amount is zero. Matters: replaces `test_fee_collect_zeroesBeforeItTransfers`
-    /// from the side of reentry. See the next test for the order of the writes.
-    function test_aTokenCannotCallBackIntoTheMediatorWhileCollectFeesPays() public {
-        _redeploy(_flatFeeTerms(100e14, address(0)), _flatFeeTerms(0, address(0)));
-        MedHostileToken token = _hostileWorld(mediatorA, 1_000 ether);
-        bytes[3] memory attempts = [
-            abi.encodeCall(TokenMediator.collectFees, (address(token))),
-            abi.encodeCall(TokenMediator.claim, (address(token), alice)),
-            abi.encodeWithSignature("relayTokens(address,uint256)", address(token), 1 ether)
-        ];
-        token.mint(alice, 300 ether);
-        for (uint256 i = 0; i < attempts.length; i++) {
-            vm.prank(alice);
-            mediatorA.relayTokens(address(token), alice, 100 ether);
-            uint256 fees = mediatorA.accruedFees(address(token));
-            uint256 treasuryBefore = token.balanceOf(treasury);
-            token.arm(address(mediatorA), attempts[i], MedHostileToken.Ending.Pay);
-
-            mediatorA.collectFees(address(token));
-            assertFalse(token.hookOk(), "the nested call failed");
-            assertEq(
-                token.hookReturned(), abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector)
-            );
-            assertEq(token.balanceOf(treasury) - treasuryBefore, fees, "paid once");
-            assertEq(mediatorA.accruedFees(address(token)), 0);
-        }
-    }
-
     /// Claim: a token that calls back into the mediator while `claim` pays it is refused by the guard. Shows: for
     /// each of the three calls the guard error, and the account is paid once. Matters: `claim` moves the record, so a
     /// nested call must not run on a half-finished state.
     function test_aTokenCannotCallBackIntoTheMediatorWhileClaimPays() public {
         MedHostileToken token = _hostileWorld(mediatorA, 100 ether);
         address copy = _copyOf(address(token));
-        bytes[3] memory attempts = [
-            abi.encodeCall(TokenMediator.collectFees, (address(token))),
+        bytes[2] memory attempts = [
             abi.encodeCall(TokenMediator.claim, (address(token), alice)),
             abi.encodeWithSignature("relayTokens(address,uint256)", address(token), 1 ether)
         ];
@@ -370,56 +296,6 @@ contract TokenMediatorGapsTest is MediatorFixture {
         _assertBacked(address(token), copy);
     }
 
-    // ------------------------------------------------------------------------------------------------ fees
-
-    /// Claim: `collectFees` sets the accrued amount to zero before it transfers. Shows: a token that reads
-    /// `accruedFees` during the transfer reads zero; the event names the recipient and the amount; a second call
-    /// reverts with `NoFeesAccrued`. Matters: replaces `test_fee_collect_zeroesBeforeItTransfers`. A reentrant path
-    /// must never see the fees as still owed.
-    function test_collectFeesZeroesTheAccruedAmountBeforeItTransfers() public {
-        _redeploy(_flatFeeTerms(100e14, address(0)), _flatFeeTerms(0, address(0)));
-        MedHostileToken token = _hostileWorld(mediatorA, 1_000 ether);
-        assertEq(mediatorA.accruedFees(address(token)), 10 ether);
-        token.arm(
-            address(mediatorA),
-            abi.encodeWithSignature("accruedFees(address)", address(token)),
-            MedHostileToken.Ending.Pay
-        );
-
-        vm.expectEmit(true, true, false, true, address(mediatorA));
-        emit FeesCollected(address(token), treasury, 10 ether);
-        mediatorA.collectFees(address(token));
-        assertEq(token.hooksRun(), 1, "the probe ran during the transfer");
-        assertEq(abi.decode(token.hookReturned(), (uint256)), 0, "the amount was zero before the transfer");
-        assertEq(token.balanceOf(treasury), 10 ether);
-
-        vm.expectRevert(abi.encodeWithSelector(TokenMediator.NoFeesAccrued.selector, address(token)));
-        mediatorA.collectFees(address(token));
-    }
-
-    /// Claim: the fee is computed on the received amount and rounds down, and a fee under one unit books nothing.
-    /// Shows: 199 received at 1% is a fee of 1 and a net of 198; 99 received is a fee of 0 with no
-    /// `FeeCharged` event; 1 received is never taken. Matters: replaces `test_fee_roundsDownOnTheReceivedAmount`. The
-    /// existing rounding test covers one amount only. Rounding favours the sender, and the mediator never books a fee
-    /// it did not take.
-    function test_aFeeUnderOneUnitBooksNothingAndTheNetAmountIsTheRest() public {
-        _redeploy(_flatFeeTerms(100e14, address(0)), _flatFeeTerms(0, address(0)));
-        uint256[3] memory amounts = [uint256(199), 99, 1];
-        uint256[3] memory expectedFees = [uint256(1), 0, 0];
-        uint256 booked;
-        for (uint256 i = 0; i < amounts.length; i++) {
-            vm.recordLogs();
-            vm.prank(alice);
-            mediatorA.relayTokens(address(tokenA), bob, amounts[i]);
-            uint256 feeEvents = _feeEventsOf(address(mediatorA));
-            booked += expectedFees[i];
-            assertEq(feeEvents, expectedFees[i], "one event only when a fee is booked");
-            assertEq(mediatorA.accruedFees(address(tokenA)), booked);
-        }
-        assertEq(mediatorA.mediatorBalance(address(tokenA)), 199 + 99 + 1 - 1, "the record counts the net amounts");
-        assertEq(tokenA.balanceOf(address(mediatorA)), 199 + 99 + 1, "the balance covers the record and the fee");
-    }
-
     // ------------------------------------------------------------------------------------------------ flow limiter
 
     /// Claim: the refusals of a relay and of a release are independent. Shows: a limiter that refuses relays still
@@ -427,7 +303,7 @@ contract TokenMediatorGapsTest is MediatorFixture {
     /// `test_flowLimiter_refusalsAreIndependent`. Each hook is its own check.
     function test_theRefusalsOfARelayAndOfAReleaseAreIndependent() public {
         ScriptedMediatorLimiter limiter = new ScriptedMediatorLimiter();
-        _redeploy(_flatFeeTerms(0, address(limiter)), _flatFeeTerms(0, address(0)));
+        _redeploy(_limiterTerms(address(limiter)), _limiterTerms(address(0)));
         _bridgeAtoB(alice, address(tokenA), bob, 100 ether);
         address copy = _copyOf(address(tokenA));
 
@@ -449,18 +325,17 @@ contract TokenMediatorGapsTest is MediatorFixture {
         assertEq(limiter.withdrawalChecks(), 1, "the refused check reverted inside the handler and left no count");
     }
 
-    /// Claim: a refused relay leaves no fee and no record. Shows: with a fee set and a limiter that refuses, the
-    /// accrued fees, the record and the registration stay empty, and the sender keeps the tokens. Matters: replaces
-    /// `test_flowLimiter_refusedDeposit_revertsAndSucceedsAfterAllow` for the fee and the record, which the existing
-    /// test does not read. The fee is booked before the limiter runs, so the revert must undo it.
-    function test_aRefusedRelayBooksNoFeeAndNoRecord() public {
+    /// Claim: a refused relay leaves no record. Shows: with a limiter that refuses, the record and the registration
+    /// stay empty, and the sender keeps the tokens. Matters: replaces
+    /// `test_flowLimiter_refusedDeposit_revertsAndSucceedsAfterAllow` for the record, which the existing test does not
+    /// read. The lock is written before the limiter runs, so the revert must undo it.
+    function test_aRefusedRelayLeavesNoRecord() public {
         ScriptedMediatorLimiter limiter = new ScriptedMediatorLimiter();
-        _redeploy(_flatFeeTerms(100e14, address(limiter)), _flatFeeTerms(0, address(0)));
+        _redeploy(_limiterTerms(address(limiter)), _limiterTerms(address(0)));
         limiter.setRefusals(true, false);
         vm.prank(alice);
         vm.expectRevert(ScriptedMediatorLimiter.FlowRefused.selector);
         mediatorA.relayTokens(address(tokenA), bob, 1_000 ether);
-        assertEq(mediatorA.accruedFees(address(tokenA)), 0, "the fee is not booked");
         assertEq(mediatorA.mediatorBalance(address(tokenA)), 0);
         assertFalse(mediatorA.isRegisteredAsNativeToken(address(tokenA)));
         assertEq(tokenA.balanceOf(alice), 1_000_000 ether);
@@ -474,7 +349,7 @@ contract TokenMediatorGapsTest is MediatorFixture {
     /// the mediator-level form is this one: a limiter that records usage must never record a refused release.
     function test_theLimiterIsNotAskedAboutAReleaseTheMediatorRefuses() public {
         ScriptedMediatorLimiter limiter = new ScriptedMediatorLimiter();
-        _redeploy(_flatFeeTerms(0, address(limiter)), _flatFeeTerms(0, address(0)));
+        _redeploy(_limiterTerms(address(limiter)), _limiterTerms(address(0)));
         _bridgeAtoB(alice, address(tokenA), bob, 10 ether);
         bytes memory release =
             abi.encodeWithSelector(TokenMediator.handleNativeTokens.selector, address(tokenA), carol, 1 ether);
@@ -499,13 +374,13 @@ contract TokenMediatorGapsTest is MediatorFixture {
     }
 
     /// Claim: only the limiter can detach, and a mediator with no limiter refuses every other caller too. Shows:
-    /// the fee recipient and other accounts revert with `NotFlowLimiter` on a mediator with a limiter and on one
+    /// other accounts revert with `NotFlowLimiter` on a mediator with a limiter and on one
     /// without. Matters: replaces `test_flowLimiter_detach_isOnlyForTheLimiterAndOneWay` for the callers that the
     /// existing test does not try.
     function test_noOtherAccountCanDetachTheLimiter() public {
         ScriptedMediatorLimiter limiter = new ScriptedMediatorLimiter();
-        _redeploy(_flatFeeTerms(0, address(limiter)), _flatFeeTerms(0, address(0)));
-        address[3] memory outsiders = [treasury, address(mediatorB), alice];
+        _redeploy(_limiterTerms(address(limiter)), _limiterTerms(address(0)));
+        address[3] memory outsiders = [carol, address(mediatorB), alice];
         for (uint256 i = 0; i < outsiders.length; i++) {
             vm.prank(outsiders[i]);
             vm.expectRevert(abi.encodeWithSelector(TokenMediator.NotFlowLimiter.selector, outsiders[i]));
@@ -518,17 +393,14 @@ contract TokenMediatorGapsTest is MediatorFixture {
     }
 
     /// Claim: a limiter cannot re-enter the mediator when the mediator asks it about a relay or a claim. Shows: from
-    /// `checkDeposit` and from the check inside `claim`, a call to `relayTokens`, `claim` or `collectFees` fails with
+    /// `checkDeposit` and from the check inside `claim`, a call to `relayTokens` or `claim` fails with
     /// the guard error, and the outer call completes. Matters: replaces `test_flowLimiter_cannotReenter`. The
     /// mediator calls the limiter under its reentrancy guard, so the limiter cannot act on a half-finished call.
     function test_aLimiterCannotReenterDuringARelayOrAClaim() public {
         MedHostileLimiter limiter = new MedHostileLimiter();
-        _redeploy(_flatFeeTerms(100e14, address(limiter)), _flatFeeTerms(0, address(0)));
-        MedHostileLimiter.Move[3] memory attempts = [
-            MedHostileLimiter.Move.ReenterRelay,
-            MedHostileLimiter.Move.ReenterClaim,
-            MedHostileLimiter.Move.ReenterCollect
-        ];
+        _redeploy(_limiterTerms(address(limiter)), _limiterTerms(address(0)));
+        MedHostileLimiter.Move[2] memory attempts =
+            [MedHostileLimiter.Move.ReenterRelay, MedHostileLimiter.Move.ReenterClaim];
         bytes memory guardError = abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector);
         for (uint256 i = 0; i < attempts.length; i++) {
             limiter.setMove(attempts[i]);
@@ -536,7 +408,7 @@ contract TokenMediatorGapsTest is MediatorFixture {
             mediatorA.relayTokens(address(tokenA), bob, 100 ether);
             assertEq(limiter.moveError(), guardError, "relay: the guard refused the reentry");
         }
-        assertEq(ambA.sentCount(), 3, "all three outer relays completed");
+        assertEq(ambA.sentCount(), 2, "both outer relays completed");
 
         // A claim waits for dave. The claim asks the limiter again, and the limiter tries each move.
         limiter.setMove(MedHostileLimiter.Move.None);
@@ -544,14 +416,14 @@ contract TokenMediatorGapsTest is MediatorFixture {
         limiter.setRefusals(false, true);
         (bool ok,) = _deliverBtoA(_sendBack(_copyOf(address(tokenA)), bob, dave, 10 ether));
         assertTrue(ok);
-        assertEq(mediatorA.claimable(address(tokenA), dave), 9.9 ether, "10 ether less the 1% incoming fee");
+        assertEq(mediatorA.claimable(address(tokenA), dave), 10 ether, "the whole release waits");
         limiter.setRefusals(false, false);
         for (uint256 i = 0; i < attempts.length; i++) {
             limiter.setMove(attempts[i]);
             if (i == 0) {
                 mediatorA.claim(address(tokenA), dave);
                 assertEq(limiter.moveError(), guardError, "claim: the guard refused the reentry");
-                assertEq(tokenA.balanceOf(dave), 9.9 ether, "the outer claim completed");
+                assertEq(tokenA.balanceOf(dave), 10 ether, "the outer claim completed");
             }
             if (i > 0) {
                 // The claim is spent. Make a new one, so that each move runs inside a claim.
@@ -574,7 +446,7 @@ contract TokenMediatorGapsTest is MediatorFixture {
     /// protection here is that the limiter has no standing.
     function test_aLimiterHasNoStandingDuringARelease() public {
         MedHostileLimiter limiter = new MedHostileLimiter();
-        _redeploy(_flatFeeTerms(0, address(limiter)), _flatFeeTerms(0, address(0)));
+        _redeploy(_limiterTerms(address(limiter)), _limiterTerms(address(0)));
         _bridgeAtoB(alice, address(tokenA), bob, 100 ether);
         address copy = _copyOf(address(tokenA));
 
@@ -603,7 +475,7 @@ contract TokenMediatorGapsTest is MediatorFixture {
     function test_aLimiterCannotMoveTheMediatorFunds() public {
         MedHostileLimiter limiterA = new MedHostileLimiter();
         MedHostileLimiter limiterB = new MedHostileLimiter();
-        _redeploy(_flatFeeTerms(100e14, address(limiterA)), _flatFeeTerms(0, address(limiterB)));
+        _redeploy(_limiterTerms(address(limiterA)), _limiterTerms(address(limiterB)));
         limiterA.setMove(MedHostileLimiter.Move.PullTokens);
         limiterB.setMove(MedHostileLimiter.Move.PullTokens);
 
@@ -611,18 +483,18 @@ contract TokenMediatorGapsTest is MediatorFixture {
         mediatorA.relayTokens(address(tokenA), bob, 1_000 ether);
         assertEq(
             limiterA.moveError(),
-            abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, address(limiterA), 0, 990 ether),
+            abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, address(limiterA), 0, 1_000 ether),
             "relay of a native token"
         );
         assertEq(tokenA.balanceOf(address(limiterA)), 0);
-        assertEq(tokenA.balanceOf(address(mediatorA)), 1_000 ether, "the mediator holds the lock and the fee");
+        assertEq(tokenA.balanceOf(address(mediatorA)), 1_000 ether, "the mediator holds the lock");
 
         (bool ok,) = _deliverAtoB(0);
         assertTrue(ok);
         address copy = _copyOf(address(tokenA));
         assertEq(
             limiterB.moveError(),
-            abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, address(limiterB), 0, 990 ether),
+            abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, address(limiterB), 0, 1_000 ether),
             "release of a copy"
         );
         assertEq(IERC20(copy).balanceOf(address(limiterB)), 0);
@@ -643,35 +515,29 @@ contract TokenMediatorGapsTest is MediatorFixture {
         assertTrue(ok);
         assertEq(
             limiterA.moveError(),
-            abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, address(limiterA), 0, 99 ether),
-            "release of a native token, net of the 1% incoming fee"
+            abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, address(limiterA), 0, 100 ether),
+            "release of a native token"
         );
         assertEq(tokenA.balanceOf(address(limiterA)), 0);
-        assertEq(
-            tokenA.balanceOf(address(mediatorA)), lockedBefore - 99 ether, "only the net release left the mediator"
-        );
+        assertEq(tokenA.balanceOf(address(mediatorA)), lockedBefore - 100 ether, "only the release left the mediator");
     }
 
-    /// Claim: a limiter that allows adds a bounded cost to a relay, and a fee adds a bounded cost too. Shows: the gas
-    /// of the first relay of a token on a fresh mediator with no fee and no limiter, with a fee, and with a fee and an
-    /// allowing limiter, printed for the report. The figures are the total gas, with no correction for the mock bridge.
-    /// Matters: replaces `test_gas_deposit_withAllowingLimiter`, `test_gas_deposit_feeZero` and
-    /// `test_gas_deposit_feeSet`. The cost of the limiter hook is its own call and its own storage.
-    function test_gasOfARelayWithAFeeAndWithAnAllowingLimiter() public {
-        uint256 plain = _firstRelayGas(_flatFeeTerms(0, address(0)));
-        uint256 withFee = _firstRelayGas(_flatFeeTerms(25e14, address(0)));
+    /// Claim: a limiter that allows adds a bounded cost to a relay. Shows: the gas of the first relay of a token on a
+    /// fresh mediator with no limiter and with an allowing limiter, printed for the report. The figures are the total
+    /// gas, with no correction for the mock bridge. Matters: replaces `test_gas_deposit_withAllowingLimiter`. The cost
+    /// of the limiter hook is its own call and its own storage.
+    function test_gasOfARelayWithAnAllowingLimiter() public {
+        uint256 plain = _firstRelayGas(_limiterTerms(address(0)));
         MedHostileLimiter limiter = new MedHostileLimiter();
-        uint256 withLimiter = _firstRelayGas(_flatFeeTerms(25e14, address(limiter)));
-        console2.log("relay gas, no fee, no limiter:       ", plain);
-        console2.log("relay gas, fee set:                  ", withFee);
-        console2.log("relay gas, fee set, allowing limiter:", withLimiter);
-        assertGt(withLimiter, withFee, "the limiter call costs something");
-        assertLt(withLimiter - withFee, 60_000, "the limiter hook stays cheap");
-        assertLt(withFee - plain, 60_000, "the fee stays cheap");
+        uint256 withLimiter = _firstRelayGas(_limiterTerms(address(limiter)));
+        console2.log("relay gas, no limiter:       ", plain);
+        console2.log("relay gas, allowing limiter: ", withLimiter);
+        assertGt(withLimiter, plain, "the limiter call costs something");
+        assertLt(withLimiter - plain, 60_000, "the limiter hook stays cheap");
     }
 
     function _firstRelayGas(TokenMediator.MediatorTerms memory terms) internal returns (uint256) {
-        _redeploy(terms, _flatFeeTerms(0, address(0)));
+        _redeploy(terms, _limiterTerms(address(0)));
         vm.prank(alice);
         uint256 gasBefore = gasleft();
         mediatorA.relayTokens(address(tokenA), bob, 100 ether);

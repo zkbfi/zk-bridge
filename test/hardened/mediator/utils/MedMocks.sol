@@ -88,7 +88,6 @@ contract MedHostileLimiter is IFlowLimiter {
         None,
         ReenterRelay,
         ReenterClaim,
-        ReenterCollect,
         CallHandler,
         PullTokens
     }
@@ -136,12 +135,6 @@ contract MedHostileLimiter is IFlowLimiter {
         }
         if (move == Move.ReenterClaim) {
             try TokenMediator(mediator).claim(token, address(this)) {}
-            catch (bytes memory reason) {
-                failure = reason;
-            }
-        }
-        if (move == Move.ReenterCollect) {
-            try TokenMediator(mediator).collectFees(token) {}
             catch (bytes memory reason) {
                 failure = reason;
             }

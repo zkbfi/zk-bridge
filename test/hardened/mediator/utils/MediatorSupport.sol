@@ -358,7 +358,7 @@ abstract contract MediatorFixture is Test {
     string internal nameOfChainA = "Chain A";
     string internal nameOfChainB = "Chain B";
 
-    /// @dev Terms with no fee and no limiter. The fixture fills in the bridge and the remote mediator.
+    /// @dev Terms with no limiter. The fixture fills in the bridge and the remote mediator.
     function _noTerms() internal pure returns (TokenMediator.MediatorTerms memory terms) {
         terms.remoteChainId = 1;
         terms.remoteChainName = "Chain";
