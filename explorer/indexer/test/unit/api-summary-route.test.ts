@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { feeBalances, headUpdates, messages, tokens, transfers } from "../../ponder.schema";
+import { headUpdates, messages, tokens, transfers } from "../../ponder.schema";
 import { registerSummaryRoutes } from "../../src/api/routes/summary";
 import { pair } from "../../src/lib/pair";
 import { calls, publicClients, respondWith, type QueryCall } from "./support/fake-api";
@@ -33,7 +33,6 @@ const tokenRow = {
 type Tables = {
   inFlight?: unknown[];
   volume?: unknown[];
-  fees?: unknown[];
   updates?: Record<string, unknown>[];
 };
 
@@ -43,7 +42,6 @@ const serve = (tables: Tables) =>
     if (call.table === tokens) return [tokenRow];
     if (call.table === messages) return tables.inFlight ?? [];
     if (call.table === transfers) return tables.volume ?? [];
-    if (call.table === feeBalances) return tables.fees ?? [];
     if (call.table === headUpdates) return (tables.updates ?? []).filter((row) => call.whereValues.includes(row.chainId));
     return [];
   });
@@ -69,7 +67,7 @@ describe("GET /api/summary", () => {
       byDirection: {},
     });
     expect(body.volume24h).toEqual([]);
-    expect(body.feesAccrued).toEqual([]);
+    expect(body).not.toHaveProperty("feesAccrued");
     expect(body.lastHeadUpdates).toEqual([
       { chainId: 1, update: null },
       { chainId: 369, update: null },
@@ -116,17 +114,6 @@ describe("GET /api/summary", () => {
       { chainId: 1, token: expect.objectContaining({ address: token, symbol: "USDT" }), volume: "500", transfers: 3 },
       { chainId: 369, token: null, volume: "0", transfers: 1 },
     ]);
-  });
-
-  it("lists only the balances with accrued fees above zero", async () => {
-    serve({
-      fees: [
-        { chainId: 1, token, charged: 10n, collected: 4n, accrued: 6n },
-        { chainId: 1, token: addressOf("bb"), charged: 5n, collected: 5n, accrued: 0n },
-      ],
-    });
-    const { body } = await get("/api/summary?now=1000000");
-    expect(body.feesAccrued).toEqual([{ chainId: 1, token: expect.objectContaining({ address: token }), accrued: "6" }]);
   });
 
   it("shows the newest head update of each side, with numbers and strings, and null for a side with none", async () => {

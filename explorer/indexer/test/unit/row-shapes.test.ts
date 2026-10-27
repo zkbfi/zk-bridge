@@ -3,7 +3,6 @@ import type {
   BridgeStateRow,
   ChainTipRow,
   EscrowRow,
-  FeeBalanceRow,
   GateStateRow,
   HeadUpdateRow,
   LightClientHeadRow,
@@ -17,7 +16,6 @@ import type {
   bridgeStates,
   chainTips,
   escrow,
-  feeBalances,
   gateStates,
   headUpdates,
   lightClientHeads,
@@ -42,7 +40,6 @@ describe("the shared row types match the tables of the indexer", () => {
     same<TokenRow, typeof tokens.$inferSelect>(true);
     same<EscrowRow, typeof escrow.$inferSelect>(true);
     same<SupplyRow, typeof bridgedSupply.$inferSelect>(true);
-    same<FeeBalanceRow, typeof feeBalances.$inferSelect>(true);
     same<HeadUpdateRow, typeof headUpdates.$inferSelect>(true);
     same<LightClientHeadRow, typeof lightClientHeads.$inferSelect>(true);
     same<ChainTipRow, typeof chainTips.$inferSelect>(true);

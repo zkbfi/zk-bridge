@@ -4,9 +4,6 @@ import {
   claimables,
   claimEvents,
   escrow,
-  feeBalances,
-  feeEvents,
-  feeTerms,
   gateEvents,
   headUpdates,
   messages,
@@ -22,7 +19,6 @@ import {
   auditToken,
   describePair,
   escrowView,
-  feeBalanceView,
   headUpdateView,
   indexTokens,
   normalizeAddress,
@@ -42,7 +38,7 @@ const limitOf = (text: string | undefined, fallback: number): number => {
 };
 
 /**
- * Registers the state routes: pair, heads, head updates, costs, gate, registry, tokens, audit, fees, claimables.
+ * Registers the state routes: pair, heads, head updates, costs, gate, registry, tokens, audit, claimables.
  *
  * @param app The Hono application.
  */
@@ -148,7 +144,6 @@ export const registerStateRoutes = (app: Hono): void => {
         homeChainId: row.chainId,
         token: row.token,
         escrow: row.balance,
-        accruedFees: row.accruedFees,
         bridgedSupply: copy?.supply ?? 0n,
         pendingForward,
         pendingBackward,
@@ -162,35 +157,6 @@ export const registerStateRoutes = (app: Hono): void => {
     const index = indexTokens(await db.select().from(tokens));
     const [escrows, supplies] = await Promise.all([db.select().from(escrow), db.select().from(bridgedSupply)]);
     return c.json({ escrow: escrows.map((row) => escrowView(row, index)), bridgedSupply: supplies.map((row) => supplyView(row, index)) });
-  });
-
-  app.get("/api/fees", async (c) => {
-    const index = indexTokens(await db.select().from(tokens));
-    const [balances, terms, events] = await Promise.all([
-      db.select().from(feeBalances),
-      db.select().from(feeTerms),
-      db.select().from(feeEvents).orderBy(desc(feeEvents.timestamp)).limit(limitOf(c.req.query("limit"), 50)),
-    ]);
-    return c.json({
-      balances: balances.map((row) => feeBalanceView(row, index)),
-      terms: terms.map((row) => ({
-        chainId: row.chainId,
-        rate: amountOf(row.rate),
-        rateScale: "the rate is in the units that TokenMediator.FEE_DENOMINATOR defines",
-        recipient: row.recipient,
-      })),
-      events: events.map((row) => ({
-        chainId: row.chainId,
-        kind: row.kind,
-        token: tokenView(row.chainId, row.token, index),
-        amount: amountOf(row.amount),
-        recipient: row.recipient,
-        rate: amountOf(row.rate),
-        transactionHash: row.transactionHash,
-        blockNumber: numberOf(row.blockNumber),
-        timestamp: numberOf(row.timestamp),
-      })),
-    });
   });
 
   app.get("/api/claimables", async (c) => {

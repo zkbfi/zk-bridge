@@ -6,9 +6,6 @@ import {
   claimEvents,
   claimables,
   escrow,
-  feeBalances,
-  feeEvents,
-  feeTerms,
   gateEvents,
   headUpdates,
   registryObservations,
@@ -223,7 +220,6 @@ describe("GET /api/audit", () => {
     chainId: 1,
     token,
     balance,
-    accruedFees: 2n,
     updatedBlockNumber: 9n,
     updatedTimestamp: 90n,
   });
@@ -253,7 +249,6 @@ describe("GET /api/audit", () => {
         token: expect.objectContaining({ chainId: 1, address: nativeToken }),
         bridgedToken: expect.objectContaining({ chainId: 369, address: copyToken }),
         escrow: "100",
-        accruedFees: "2",
         bridgedSupply: "60",
         pendingForward: "30",
         pendingBackward: "10",
@@ -316,48 +311,13 @@ describe("GET /api/escrow", () => {
     serve(
       new Map<unknown, unknown[]>([
         [tokens, tokenRows],
-        [escrow, [{ chainId: 1, token: nativeToken, balance: 100n, accruedFees: 2n, updatedBlockNumber: 9n, updatedTimestamp: 90n }]],
+        [escrow, [{ chainId: 1, token: nativeToken, balance: 100n, updatedBlockNumber: 9n, updatedTimestamp: 90n }]],
         [bridgedSupply, [{ chainId: 369, token: copyToken, nativeToken, homeChainId: 1, minted: 80n, burned: 20n, supply: 60n, updatedBlockNumber: 9n, updatedTimestamp: 90n }]],
       ]),
     );
     const { body } = await get("/api/escrow");
-    expect(body.escrow).toEqual([expect.objectContaining({ chainId: 1, balance: "100", accruedFees: "2", token: expect.objectContaining({ symbol: "USDT" }) })]);
+    expect(body.escrow).toEqual([expect.objectContaining({ chainId: 1, balance: "100", token: expect.objectContaining({ symbol: "USDT" }) })]);
     expect(body.bridgedSupply).toEqual([expect.objectContaining({ chainId: 369, minted: "80", burned: "20", supply: "60", homeChainId: 1 })]);
-  });
-});
-
-describe("GET /api/fees", () => {
-  it("shows the balances, the terms and the events with amounts as strings", async () => {
-    serve(
-      new Map<unknown, unknown[]>([
-        [tokens, tokenRows],
-        [feeBalances, [{ chainId: 1, token: nativeToken, charged: 10n, collected: 4n, accrued: 6n }]],
-        [feeTerms, [{ chainId: 1, rate: 1_000n, recipient: addressOf("f1") }]],
-        [
-          feeEvents,
-          [{ id: "e1", chainId: 1, kind: "collected", token: nativeToken, amount: 4n, recipient: addressOf("f1"), rate: null, transactionHash: hashOf("aa"), blockNumber: 9n, timestamp: 90n }],
-        ],
-      ]),
-    );
-    const { body } = await get("/api/fees?limit=3");
-    expect(body.balances).toEqual([{ chainId: 1, token: expect.objectContaining({ symbol: "USDT" }), charged: "10", collected: "4", accrued: "6" }]);
-    expect(body.terms).toEqual([
-      { chainId: 1, rate: "1000", rateScale: "the rate is in the units that TokenMediator.FEE_DENOMINATOR defines", recipient: addressOf("f1") },
-    ]);
-    expect(body.events).toEqual([
-      {
-        chainId: 1,
-        kind: "collected",
-        token: expect.objectContaining({ address: nativeToken }),
-        amount: "4",
-        recipient: addressOf("f1"),
-        rate: null,
-        transactionHash: hashOf("aa"),
-        blockNumber: 9,
-        timestamp: 90,
-      },
-    ]);
-    expect(calls.find((call) => call.table === feeEvents)?.limit).toBe(3);
   });
 });
 

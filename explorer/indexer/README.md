@@ -102,7 +102,6 @@ In flight means `sent`, `waiting_for_finality` or `covered`.
               "confirmations": 3, "depositsOpen": true, "depositsOpenedTimestamp": 1789000000 }],
   "inFlight": { "total": 3, "byStatus": { "sent": 1, "waiting_for_finality": 1, "covered": 1 }, "byDirection": { "1>369": 2, "369>1": 1 } },
   "volume24h": [{ "chainId": 1, "token": { "...": "token object" }, "volume": "1150000", "transfers": 3 }],
-  "feesAccrued": [{ "chainId": 1, "token": { "...": "..." }, "accrued": "800" }],
   "lastHeadUpdates": [{ "chainId": 369, "update": { "slot": 101, "executionBlockNumber": 55, "transactionHash": "0x..", "timestamp": 1789999900,
                        "gasUsed": "5400000", "costWei": "...", "poster": "0x.." } }]
 }
@@ -145,7 +144,7 @@ An item:
 }
 ```
 
-`sent`, `covered`, `delivered` and `transfer` are null when they do not apply. `executor` is the message target. For a token message it is the mediator on the destination chain. `transfer.value` is the net amount after the bridge fee. `sentTimestamp` and `deliveredTimestamp` are times on different chains.
+`sent`, `covered`, `delivered` and `transfer` are null when they do not apply. `executor` is the message target. For a token message it is the mediator on the destination chain. `transfer.value` is the amount that the mediator locked or burned. `sentTimestamp` and `deliveredTimestamp` are times on different chains.
 
 `GET /api/messages/:messageId` returns one item as above, plus `data` (the call data as hex).
 
@@ -180,18 +179,17 @@ When a kind has no samples, `isDefault` is true and `defaultGas` is a configured
 
 `GET /api/tokens` returns `{ tokens: [token object + registeredTransactionHash, registeredBlockNumber, registeredTimestamp] }`.
 
-`GET /api/escrow` returns `{ escrow: [{ chainId, token, balance, accruedFees, updatedBlockNumber, updatedTimestamp }], bridgedSupply: [{ chainId, token, nativeToken, homeChainId, minted, burned, supply, ... }] }`. `balance` is `mediatorBalance(token)` read from the contract. `supply` is mints minus burns of the copy.
+`GET /api/escrow` returns `{ escrow: [{ chainId, token, balance, updatedBlockNumber, updatedTimestamp }], bridgedSupply: [{ chainId, token, nativeToken, homeChainId, minted, burned, supply, ... }] }`. `balance` is `mediatorBalance(token)` read from the contract. `supply` is mints minus burns of the copy.
 
 `GET /api/audit` is the escrow check for each native token:
 
 ```json
-{ "tokens": [{ "token": {}, "bridgedToken": {}, "escrow": "750000", "accruedFees": "0", "bridgedSupply": "750000",
+{ "tokens": [{ "token": {}, "bridgedToken": {}, "escrow": "750000", "bridgedSupply": "750000",
                "pendingForward": "0", "pendingBackward": "0", "expectedEscrow": "750000", "difference": "0", "mismatch": false }] }
 ```
 
-The rule: `escrow = bridgedSupply + pendingForward + pendingBackward`. `pendingForward` is the value locked on the home chain and not yet paid on the other chain. `pendingBackward` is the value burned on the other chain and not yet paid on the home chain. A transfer is paid when its status is `delivered` or `fallback_used`. `claimable` and `failed_call` count as pending, because the tokens are held or owed. `difference` is `escrow - expectedEscrow`: negative means the copy is under-backed. Accrued fees sit outside the escrow. The two sides are read at different blocks. Check a `mismatch` twice before you raise an alarm.
+The rule: `escrow = bridgedSupply + pendingForward + pendingBackward`. `pendingForward` is the value locked on the home chain and not yet paid on the other chain. `pendingBackward` is the value burned on the other chain and not yet paid on the home chain. A transfer is paid when its status is `delivered` or `fallback_used`. `claimable` and `failed_call` count as pending, because the tokens are held or owed. `difference` is `escrow - expectedEscrow`: negative means the copy is under-backed. The mediator charges no fee, so the escrow must equal the sum exactly. The two sides are read at different blocks. Check a `mismatch` twice before you raise an alarm.
 
-`GET /api/fees?limit=` returns `{ balances: [{ chainId, token, charged, collected, accrued }], terms: [{ chainId, rate, recipient }], events: [...] }`. `rate` is `currentFeeRate()` at the last charged fee, in the units of `TokenMediator.FEE_DENOMINATOR`. The fee follows a fixed declining schedule with no admin, so no event announces it. A fee event has `kind` `charged_outgoing`, `charged_incoming` or `collected`.
 
 `GET /api/claimables?address=&limit=` returns `{ outstanding: [{ chainId, token, account, outstanding, recordedTotal, claimedTotal }], events: [{ chainId, kind, token, account, fallbackRecipient, value, messageId, transactionHash, timestamp }] }`. `kind` is `fallback_used`, `claimable_recorded`, `claimed` or `callback_failed`.
 
@@ -206,11 +204,10 @@ Ponder writes the tables into the schema that `--schema` names (default for `pon
 | `messages` | `message_id` | One row per message: ids, chains, `direction`, `kind`, `status`, sender, executor, gas, data, send and delivery facts, `covered_by_head_slot`, `fallback_used`, `claimable_outstanding`. |
 | `transfers` | `message_id` | Token view of a `token` message: tokens, sender, recipient, fallback, `value`, `delivered_value`, `paid_to`, `source_is_native`. |
 | `tokens` | `chain_id, address` | Metadata, `is_bridged_copy`, home chain and home token. |
-| `escrow` | `chain_id, token` | `balance`, `accrued_fees` of a native token. |
+| `escrow` | `chain_id, token` | `balance` of a native token. |
 | `bridged_supply` | `chain_id, token` | `minted`, `burned`, `supply` of a copy. |
 | `claimables` | `chain_id, token, account` | `outstanding`, `recorded_total`, `claimed_total`. |
 | `claim_events` | `id` | Fallback, claimable, claim and callback events. |
-| `fee_events`, `fee_balances`, `fee_terms` | | Fee events, totals per token, the last read rate and recipient. |
 | `head_updates` | `chain_id, slot` | Every head update: header root, execution block, transaction, `gas_used`, `effective_gas_price`, `cost_wei`, `poster`. |
 | `light_client_heads` | `chain_id` | Newest head per chain. |
 | `chain_tips` | `chain_id` | Newest indexed block and time per chain, and its `base_fee_per_gas` (null when absent). |
@@ -244,7 +241,7 @@ Prefer the JSON routes above for the dashboard: they join tokens, format amounts
 - Both chains are indexed with Ponder ordering "multichain": each chain on its own clock. A message row can start from the send or from the delivery. Every writer merges its facts into the row and recomputes `status` with `deriveStatus` (`shared/src/status.ts`), a pure function. The order of arrival does not change the result.
 - Coverage: a `HeadUpdated` event on the destination reads `executionBlockNumber(hash)` from the light client. Every uncovered message of that direction with `sent_block_number <= executionBlockNumber` becomes covered. A send that arrives later checks the stored head.
 - Clock: a block handler runs every few blocks on each chain. It stores the chain time and moves old `sent` rows to `waiting_for_finality`.
-- Escrow: after each mediator event that can change it, the handler reads `mediatorBalance` and `accruedFees` from the contract at that block. The contract is the authority.
+- Escrow: after each mediator event that can change it, the handler reads `mediatorBalance` from the contract at that block. The contract is the authority.
 - Supply: from `Transfer` events of bridged copies that go from or to the zero address. The copies are found through `NewTokenRegistered`.
 
 ## Tests

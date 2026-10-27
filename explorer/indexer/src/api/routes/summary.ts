@@ -1,8 +1,8 @@
 import { db } from "ponder:api";
-import { feeBalances, headUpdates, messages, tokens, transfers } from "ponder:schema";
+import { headUpdates, messages, tokens, transfers } from "ponder:schema";
 import { and, desc, eq, gte, inArray, sql, sum } from "ponder";
 import type { Hono } from "hono";
-import { IN_FLIGHT_STATUSES, feeAccruedView, indexTokens, inFlightView, lastHeadUpdateView, volumeView } from "@zk-bridge/shared";
+import { IN_FLIGHT_STATUSES, indexTokens, inFlightView, lastHeadUpdateView, volumeView } from "@zk-bridge/shared";
 import { pair } from "../../lib/pair";
 import { loadGates, loadHeads } from "../heads";
 
@@ -39,7 +39,6 @@ export const registerSummaryRoutes = (app: Hono): void => {
       .from(transfers)
       .where(and(gte(transfers.sentTimestamp, BigInt(now - SECONDS_PER_DAY))))
       .groupBy(transfers.sourceChainId, transfers.sourceToken);
-    const feeRows = await db.select().from(feeBalances);
     return c.json({
       pair: pair.name,
       now,
@@ -47,7 +46,6 @@ export const registerSummaryRoutes = (app: Hono): void => {
       gates: await loadGates(),
       inFlight: inFlightView(inFlightRows, IN_FLIGHT_STATUSES),
       volume24h: volumeRows.map((row) => volumeView(row, index)),
-      feesAccrued: feeRows.filter((row) => row.accrued > 0n).map((row) => feeAccruedView(row, index)),
       lastHeadUpdates: await lastHeadUpdates(),
     });
   });

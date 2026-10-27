@@ -19,20 +19,20 @@ const input = (database: ReturnType<typeof createFakeDatabase>, client: ReturnTy
 });
 
 describe("refreshEscrow", () => {
-  it("stores the balance and the accrued fees that the mediator reports, with the block of the event", async () => {
+  it("stores the balance that the mediator reports, with the block of the event", async () => {
     const database = createFakeDatabase();
     const client = createFakeClient(({ functionName }) => {
       if (functionName === "nativeTokenAddress") return zero;
-      return functionName === "mediatorBalance" ? 500n : 7n;
+      return 500n;
     });
     await refreshEscrow(input(database, client, 100n));
     expect(database.rows(escrow)).toEqual([
-      { chainId: 1, token, balance: 500n, accruedFees: 7n, updatedBlockNumber: 100n, updatedTimestamp: 1_200n },
+      { chainId: 1, token, balance: 500n, updatedBlockNumber: 100n, updatedTimestamp: 1_200n },
     ]);
     const mediator = sideOf(pair, 1).contracts.mediator;
     const reads = client.readContract.mock.calls.map(([call]) => [call.functionName, call.address, call.args]);
     expect(reads).toContainEqual(["mediatorBalance", mediator, [token]]);
-    expect(reads).toContainEqual(["accruedFees", mediator, [token]]);
+    expect(reads).not.toContainEqual(["accruedFees", mediator, [token]]);
   });
 
   it("replaces the stored row on a later event", async () => {
@@ -42,7 +42,7 @@ describe("refreshEscrow", () => {
     const second = createFakeClient(({ functionName }) => (functionName === "nativeTokenAddress" ? zero : 900n));
     await refreshEscrow(input(database, second, 200n));
     expect(database.rows(escrow)).toEqual([
-      { chainId: 1, token, balance: 900n, accruedFees: 900n, updatedBlockNumber: 200n, updatedTimestamp: 2_400n },
+      { chainId: 1, token, balance: 900n, updatedBlockNumber: 200n, updatedTimestamp: 2_400n },
     ]);
   });
 

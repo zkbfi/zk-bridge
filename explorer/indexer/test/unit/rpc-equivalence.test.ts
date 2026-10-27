@@ -140,7 +140,7 @@ describe("one history, two data sources", () => {
     expect(byKey(rpc)).toEqual(indexer);
   });
 
-  it("records the fee and claim events that the history holds, so the history is the one that the handlers saw", async () => {
+  it("records the claim events that the history holds, so the history is the one that the handlers saw", async () => {
     const database = await indexHistory();
     expect(database.rows(claimEvents).map((row) => row.kind).sort()).toEqual(["callback_failed", "claimable_recorded", "claimable_recorded", "claimed", "fallback_used"]);
   });

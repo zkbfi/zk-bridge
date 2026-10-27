@@ -378,23 +378,11 @@ describe("the indexer follows synthetic chains", () => {
     expect((await api("/api/feed?limit=0")).status).toBe(400);
   });
 
-  it("indexes fees, the gate, the registry and the opening of sends", async () => {
-    await chainA.send(mediatorA, "SyntheticMediator", "setSchedule", [10n ** 15n, chainA.accounts[7]]);
-    await chainA.send(mediatorA, "SyntheticMediator", "feeCharged", [tokenA, 1_000n, 0]);
-    await chainA.send(mediatorA, "SyntheticMediator", "feeCharged", [tokenA, 500n, 1]);
-    await chainA.send(mediatorA, "SyntheticMediator", "feesCollected", [tokenA, chainA.accounts[7], 700n]);
+  it("indexes the gate, the registry and the opening of sends", async () => {
     await chainB.send(gateB, "SyntheticGate", "confirm", [7n, "0x0000036c"]);
     await chainA.send(gateA, "SyntheticGate", "seal", ["0x12345678", 999n]);
     await chainB.send(registryB, "SyntheticRegistry", "observe", ["0x0000036c", 1234n]);
     await chainB.send(bridgeB, "SyntheticBridge", "open", [77n, keccak256(toHex("remote")), 76n]);
-
-    const fees = await waitFor("fee balances", async () => {
-      const result = await api<{ balances: { accrued: string; charged: string; collected: string }[]; terms: { rate: string }[]; events: { kind: string }[] }>("/api/fees");
-      return result.body.balances.length > 0 && result.body.balances[0]?.collected === "700" ? result.body : undefined;
-    });
-    expect(fees.balances[0]).toMatchObject({ charged: "1500", collected: "700", accrued: "800" });
-    expect(fees.terms[0]).toMatchObject({ rate: (10n ** 15n).toString() });
-    expect(fees.events.map((event) => event.kind)).toEqual(expect.arrayContaining(["charged_outgoing", "charged_incoming", "collected"]));
 
     const gate = await waitFor("gate events", async () => {
       const result = await api<{ sides: { chainId: number; sealed: boolean; enforcing: boolean; lastConfirmedEpoch: number | null; depositsOpen: boolean }[] }>("/api/gate");
@@ -417,12 +405,10 @@ describe("the indexer follows synthetic chains", () => {
       pair: string;
       inFlight: { total: number; byStatus: Record<string, number> };
       volume24h: { chainId: number; token: { address: string } | null; volume: string; transfers: number }[];
-      feesAccrued: { accrued: string }[];
       lastHeadUpdates: { chainId: number; update: { slot: number; poster: string; gasUsed: string } | null }[];
       heads: { chainId: number; storedHeadSlot: number | null }[];
     }>(`/api/summary?now=${Math.floor(Date.now() / 1000)}`);
     expect(summary.body.pair).toBe("eth-pls");
-    expect(summary.body.feesAccrued[0]?.accrued).toBe("800");
     const volume = summary.body.volume24h.find((row) => row.token?.address === tokenA.toLowerCase());
     expect(volume).toMatchObject({ chainId: 1, volume: "1150000", transfers: 3 });
     // Only the arbitrary message that waited for finality is still in flight, and a head covers it.

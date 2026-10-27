@@ -4,9 +4,6 @@ import {
   claimEvents,
   claimables,
   escrow,
-  feeBalances,
-  feeEvents,
-  feeTerms,
   messages,
   tokens,
   transfers,
@@ -26,7 +23,7 @@ const native = addressOf("44");
 const account = addressOf("55");
 const other = addressOf("66");
 
-/** Answers the reads of the handlers: the token metadata, the escrow, the fee terms and the native token behind a token. */
+/** Answers the reads of the handlers: the token metadata, the escrow and the native token behind a token. */
 const answers =
   (behind: string = ZERO) =>
   ({ functionName }: ReadCall) => {
@@ -36,9 +33,6 @@ const answers =
       decimals: 6,
       nativeTokenAddress: behind,
       mediatorBalance: 500n,
-      accruedFees: 7n,
-      currentFeeRate: 1_000_000_000_000_000n,
-      feeRecipient: other,
     };
     return values[functionName];
   };
@@ -47,7 +41,6 @@ const escrowRow = (chainId: number, tokenAddress: string, blockNumber = 100n) =>
   chainId,
   token: tokenAddress,
   balance: 500n,
-  accruedFees: 7n,
   updatedBlockNumber: blockNumber,
   updatedTimestamp: 1_000n,
 });
@@ -224,66 +217,6 @@ describe("TokenMediator:CallbackFailed", () => {
     await callHandler("TokenMediator:CallbackFailed", { event: createEvent({ messageId, token, recipient: account }, { id: "e1" }), context });
     expect(database.row(messages, { messageId })).toMatchObject({ callbackFailed: true, sourceChainId: 1 });
     expect(database.row(claimEvents, { id: "e1" })).toMatchObject({ kind: "callback_failed", account, value: null, fallbackRecipient: null, messageId });
-  });
-});
-
-describe("TokenMediator:FeeCharged", () => {
-  const name = "TokenMediator:FeeCharged";
-
-  it("reads the rate and the recipient from the mediator of the chain and stores them as the terms", async () => {
-    const { database, client, context } = createContext(369, answers());
-    await callHandler(name, { event: createEvent({ token, fee: 3n, direction: 0 }, { id: "e1" }), context });
-    const reads = client.readContract.mock.calls.map(([call]) => [call.address, call.functionName]);
-    expect(reads).toContainEqual([MEDIATOR_ON_PULSECHAIN, "currentFeeRate"]);
-    expect(reads).toContainEqual([MEDIATOR_ON_PULSECHAIN, "feeRecipient"]);
-    expect(reads).not.toContainEqual([MEDIATOR_ON_ETHEREUM, "currentFeeRate"]);
-    expect(database.row(feeTerms, { chainId: 369 })).toEqual({ chainId: 369, rate: 1_000_000_000_000_000n, recipient: other });
-  });
-
-  it("stores an outgoing fee as an event and in the balance, and refreshes the escrow", async () => {
-    const { database, context } = createContext(369, answers());
-    await callHandler(name, { event: createEvent({ token, fee: 3n, direction: 0 }, { id: "e1" }), context });
-    expect(database.row(feeEvents, { id: "e1" })).toEqual({
-      id: "e1",
-      chainId: 369,
-      kind: "charged_outgoing",
-      token,
-      amount: 3n,
-      recipient: null,
-      rate: null,
-      transactionHash: hashOf("aa"),
-      blockNumber: 100n,
-      timestamp: 1_000n,
-    });
-    expect(database.row(feeBalances, { chainId: 369, token })).toEqual({ chainId: 369, token, charged: 3n, collected: 0n, accrued: 3n });
-    expect(database.row(escrow, { chainId: 369, token })).toEqual(escrowRow(369, token));
-  });
-
-  it("names an incoming fee and adds it to the earlier charges, keeping the collected total", async () => {
-    const { database, context } = createContext(369, answers());
-    database.seed(feeBalances, { chainId: 369, token, charged: 10n, collected: 4n, accrued: 6n });
-    await callHandler(name, { event: createEvent({ token, fee: 3n, direction: 1 }, { id: "e1" }), context });
-    expect(database.row(feeEvents, { id: "e1" })).toMatchObject({ kind: "charged_incoming" });
-    expect(database.row(feeBalances, { chainId: 369, token })).toEqual({ chainId: 369, token, charged: 13n, collected: 4n, accrued: 9n });
-  });
-});
-
-describe("TokenMediator:FeesCollected", () => {
-  const name = "TokenMediator:FeesCollected";
-
-  it("stores the collection and subtracts it from the accrued fees", async () => {
-    const { database, context } = createContext(369, answers());
-    database.seed(feeBalances, { chainId: 369, token, charged: 10n, collected: 4n, accrued: 6n });
-    await callHandler(name, { event: createEvent({ token, feeRecipient: other, amount: 6n }, { id: "e1" }), context });
-    expect(database.row(feeEvents, { id: "e1" })).toMatchObject({ kind: "collected", recipient: other, amount: 6n, rate: null });
-    expect(database.row(feeBalances, { chainId: 369, token })).toEqual({ chainId: 369, token, charged: 10n, collected: 10n, accrued: 0n });
-    expect(database.row(escrow, { chainId: 369, token })).toEqual(escrowRow(369, token));
-  });
-
-  it("takes the collected amount as the charged amount when no charge was seen, so the accrued fees are zero", async () => {
-    const { database, context } = createContext(369, answers());
-    await callHandler(name, { event: createEvent({ token, feeRecipient: other, amount: 6n }, { id: "e1" }), context });
-    expect(database.row(feeBalances, { chainId: 369, token })).toEqual({ chainId: 369, token, charged: 6n, collected: 6n, accrued: 0n });
   });
 });
 

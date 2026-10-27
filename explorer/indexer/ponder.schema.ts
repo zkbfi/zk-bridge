@@ -68,7 +68,7 @@ export const transfers = onchainTable(
     sender: t.hex(),
     recipient: t.hex(),
     fallbackRecipient: t.hex(),
-    /** The amount that was locked or burned, after the bridge fee. Base units of the source token. */
+    /** The amount that was locked or burned, Base units of the source token. */
     value: t.bigint(),
     /** The amount that the delivery paid, from `TokensBridged`. Null until a payment. */
     deliveredValue: t.bigint(),
@@ -109,7 +109,7 @@ export const tokens = onchainTable(
   (table) => ({ pk: primaryKey({ columns: [table.chainId, table.address] }) }),
 );
 
-/** Mediator balance of a native token on its home chain, and its accrued fees. Read from the contract. */
+/** Mediator balance of a native token on its home chain. Read from the contract. */
 export const escrow = onchainTable(
   "escrow",
   (t) => ({
@@ -117,8 +117,6 @@ export const escrow = onchainTable(
     token: t.hex().notNull(),
     /** `mediatorBalance(token)`: the tokens locked for holders of the bridged copy. */
     balance: t.bigint().notNull(),
-    /** `accruedFees(token)`: fees charged and not yet collected. Not part of `balance`. */
-    accruedFees: t.bigint().notNull(),
     updatedBlockNumber: t.bigint().notNull(),
     updatedTimestamp: t.bigint().notNull(),
   }),
@@ -174,46 +172,6 @@ export const claimEvents = onchainTable(
   }),
   (table) => ({ messageIndex: index().on(table.messageId) }),
 );
-
-/** Fee events. `kind` is `charged_outgoing`, `charged_incoming` or `collected`. */
-export const feeEvents = onchainTable(
-  "fee_events",
-  (t) => ({
-    id: t.text().primaryKey(),
-    chainId: t.integer().notNull(),
-    kind: t.text().notNull(),
-    token: t.hex(),
-    amount: t.bigint(),
-    recipient: t.hex(),
-    /** Not used by any current kind. Kept null. */
-    rate: t.bigint(),
-    transactionHash: t.hex().notNull(),
-    blockNumber: t.bigint().notNull(),
-    timestamp: t.bigint().notNull(),
-  }),
-  (table) => ({ chainIndex: index().on(table.chainId, table.kind) }),
-);
-
-/** Fee totals per chain and token. `accrued` is `charged - collected`. */
-export const feeBalances = onchainTable(
-  "fee_balances",
-  (t) => ({
-    chainId: t.integer().notNull(),
-    token: t.hex().notNull(),
-    charged: t.bigint().notNull(),
-    collected: t.bigint().notNull(),
-    accrued: t.bigint().notNull(),
-  }),
-  (table) => ({ pk: primaryKey({ columns: [table.chainId, table.token] }) }),
-);
-
-/** The fee of the mediator on a chain, read from the contract at the last charged fee. The schedule never changes. */
-export const feeTerms = onchainTable("fee_terms", (t) => ({
-  chainId: t.integer().primaryKey(),
-  /** `currentFeeRate()` at the last charged fee, scaled by 1e18. The rate only falls. */
-  rate: t.bigint().notNull(),
-  recipient: t.hex(),
-}));
 
 /** One light client head update. `chainId` is the chain that holds the light client (the destination). */
 export const headUpdates = onchainTable(

@@ -63,14 +63,9 @@ contract SyntheticMediator {
     event ClaimableRecorded(address indexed token, address indexed account, uint256 value, bytes32 indexed messageId);
     event Claimed(address indexed token, address indexed account, uint256 value);
     event CallbackFailed(address indexed token, address indexed recipient, bytes32 indexed messageId);
-    event FeeCharged(address indexed token, uint256 fee, uint8 direction);
-    event FeesCollected(address indexed token, address indexed feeRecipient, uint256 amount);
 
     mapping(address => uint256) public mediatorBalance;
     mapping(address => address) public nativeTokenAddress;
-    mapping(address => uint256) public accruedFees;
-    uint256 public currentFeeRate;
-    address public feeRecipient;
 
     function setBalance(address token, uint256 value) external {
         mediatorBalance[token] = value;
@@ -78,10 +73,6 @@ contract SyntheticMediator {
 
     function setNative(address copy, address nativeToken) external {
         nativeTokenAddress[copy] = nativeToken;
-    }
-
-    function setAccrued(address token, uint256 value) external {
-        accruedFees[token] = value;
     }
 
     function initiated(address token, address sender, uint256 value, bytes32 messageId) external {
@@ -110,19 +101,6 @@ contract SyntheticMediator {
 
     function callbackFailed(address token, address recipient, bytes32 messageId) external {
         emit CallbackFailed(token, recipient, messageId);
-    }
-
-    function setSchedule(uint256 rate, address recipient) external {
-        currentFeeRate = rate;
-        feeRecipient = recipient;
-    }
-
-    function feeCharged(address token, uint256 fee, uint8 direction) external {
-        emit FeeCharged(token, fee, direction);
-    }
-
-    function feesCollected(address token, address feeRecipient, uint256 amount) external {
-        emit FeesCollected(token, feeRecipient, amount);
     }
 }
 
