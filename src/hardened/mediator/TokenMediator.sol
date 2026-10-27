@@ -48,7 +48,7 @@ import {TokenReader} from "./TokenReader.sol";
 /// Divergences from OmniBridge. The handlers also check `messageSourceChainId`. `deploy` takes the native token.
 /// Tokens are not registered by an owner. There are no limits, no failed message fix and no claim of stray tokens.
 /// The mediator charges no fee.
-contract TokenMediator is ReentrancyGuard {
+contract TokenMediator is ITokenMediator, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @notice The terms at deployment.
