@@ -14,11 +14,11 @@ import {RouterWorld} from "./RouterWorld.sol";
 
 /// @notice The money that sits around one token of the universe before and after a delivery.
 /// @param held What the holders hold, counting the coin for the wrapped native token.
-/// @param claimed What the holders can claim.
+/// @param stuck The value of failed releases of the token, which stay in the mediator.
 /// @param rewardHeld What each reward address holds, in the sense of `held`.
 struct Probe {
     uint256 held;
-    uint256 claimed;
+    uint256 stuck;
     uint256[3] rewardHeld;
 }
 
@@ -42,7 +42,7 @@ struct Item {
 /// @notice Drives the two chains of `RouterWorld` with random sequences and checks every delivery against the rules that
 /// the contracts state.
 /// @dev What it does. Senders relay native tokens and bridged copies both ways, through the plain forms, the forms with a
-/// fallback, the forms with a call, a delivery router, and the wrap and relay form of a delivery router. Messages
+/// call, a delivery router, and the wrap and relay form of a delivery router. Messages
 /// wait in a list and arrive in random order, by three paths: directly, through `executeMessage` of a router from
 /// an outside caller (caller and origin the same), and in a batch through Multicall3 from an outside caller. Accounts wrap and unwrap the
 /// coin, accounts are denied and allowed, claims are paid, and strangers send tokens to a mediator.
@@ -88,6 +88,8 @@ contract RouterHandler is RouterWorld {
     mapping(address nativeToken => uint256) public inFlight;
     /// @notice The tokens that strangers sent to a mediator by plain transfer, for each token and mediator.
     mapping(address token => uint256) public donated;
+    /// @notice For each token, the value of releases that failed. It stays in the mediator, owed to nobody.
+    mapping(address token => uint256) public stuckOf;
     uint256 public coinDealt;
 
     uint256 public violations;
@@ -101,10 +103,8 @@ contract RouterHandler is RouterWorld {
     uint256 public routedDeliveries;
     uint256 public tipsPaid;
     uint256 public nativePayouts;
-    uint256 public fallbacksUsed;
-    uint256 public claimsRecorded;
+    uint256 public releasesFailed;
     uint256 public callbacksFailed;
-    uint256 public claimsPaid;
     uint256 public attacksRefused;
     uint256 public outOfOrderDeliveries;
     uint256 public failedDeliveries;
@@ -154,7 +154,7 @@ contract RouterHandler is RouterWorld {
     }
 
     /// @notice One relay. The seeds choose the token, the chain it leaves, the route, the sender, the amount, and the
-    /// details of the receiver, the fallback and the fee terms. The message waits unless the timing seed delivers it now.
+    /// details of the receiver and the fee terms. The message waits unless the timing seed delivers it now.
     function relay(
         uint8 tokenSeed,
         uint8 leaveSeed,
@@ -248,24 +248,6 @@ contract RouterHandler is RouterWorld {
     }
 
     // ---------------------------------------------------------------------------------------- other actions
-
-    /// @notice Pays a claim. The seeds choose where the search starts: the first claim at or after the chosen token
-    /// and holder is paid. The call may fail while the token still refuses the holder.
-    function claim(uint8 universeSeed, uint8 holderSeed) external {
-        for (uint256 step = 0; step < UNIVERSE * holders.length; step++) {
-            uint256 universe = (universeSeed + step / holders.length) % UNIVERSE;
-            address account = holders[(holderSeed + step) % holders.length];
-            TokenMediator mediator = mediatorOf(chainOfToken(universe));
-            address token = tokenAt(universe);
-            if (mediator.claimable(token, account) == 0) continue;
-            try mediator.claim(token, account) {
-                claimsPaid++;
-            } catch {
-                if (universe != 4 && universe != 9) _violate("a claim on a token that refuses nobody reverted");
-            }
-            return;
-        }
-    }
 
     /// @notice Pays a record of a delivery router. Anyone may call the router, and it pays its failed delivery address only.
     /// The seed chooses where the search starts. A token that refuses the address may refuse the claim, and the record
@@ -377,7 +359,7 @@ contract RouterHandler is RouterWorld {
         vm.prank(sender);
         IERC20Transfer(copy).approve(address(mediatorB), amount);
         vm.prank(sender);
-        try mediatorB.relayTokensWithFallback(copy, address(router), amount, data, sender) {}
+        try mediatorB.relayTokensAndCall(copy, address(router), amount, data) {}
         catch {
             _violate("a relay of the reentry test reverted");
         }
@@ -527,7 +509,6 @@ contract RouterHandler is RouterWorld {
         TokenMediator mediator = mediatorOf(plan.source);
         address token = tokenAt(plan.universe);
         address receiver = recipients[uint8(plan.detail) % RECIPIENT_COUNT];
-        address fallbackRecipient = recipients[uint8(plan.detail >> 8) % RECIPIENT_COUNT];
         vm.prank(plan.sender);
         IERC20Transfer(token).approve(address(mediator), plan.amount);
 
@@ -535,17 +516,17 @@ contract RouterHandler is RouterWorld {
         bytes memory data = _dataFor(plan, receiver);
         if (plan.route == 3 || plan.route == 4) target = address(_routerOf(plan));
         vm.prank(plan.sender);
-        if (plan.route == 0) {
-            try mediator.relayTokens(token, receiver, plan.amount) {
+        if (plan.route == 0 || data.length == 0) {
+            try mediator.relayTokens(token, target, plan.amount) {
                 return true;
             } catch {
                 return _refused("a plain relay reverted");
             }
         }
-        try mediator.relayTokensWithFallback(token, target, plan.amount, data, fallbackRecipient) {
+        try mediator.relayTokensAndCall(token, target, plan.amount, data) {
             return true;
         } catch {
-            return _refused("a relay with a fallback reverted");
+            return _refused("a relay with a call reverted");
         }
     }
 
@@ -831,8 +812,10 @@ contract RouterHandler is RouterWorld {
             }
             if (logs[i].emitter != address(mediatorOf(destination))) continue;
             bytes32 topic = logs[i].topics[0];
-            if (topic == TokenMediator.FallbackUsed.selector) fallbacksUsed++;
-            if (topic == TokenMediator.ClaimableRecorded.selector) claimsRecorded++;
+            if (topic == TokenMediator.ReleaseFailed.selector) {
+                releasesFailed++;
+                stuckOf[address(uint160(uint256(logs[i].topics[1])))] += abi.decode(logs[i].data, (uint256));
+            }
             if (topic == TokenMediator.CallbackFailed.selector) callbacksFailed++;
         }
     }
@@ -869,7 +852,7 @@ contract RouterHandler is RouterWorld {
 
     function _probe(uint256 universe) private view returns (Probe memory probe) {
         probe.held = heldByHolders(universe);
-        probe.claimed = claimableOfHolders(universe);
+        probe.stuck = stuckOf[tokenAt(universe)];
         for (uint256 j = 0; j < 3; j++) {
             probe.rewardHeld[j] = holding(universe, rewards[j]);
         }
@@ -877,11 +860,11 @@ contract RouterHandler is RouterWorld {
 
     // -------------------------------------------------------------------------------------------------- checks
 
-    /// @dev The delivered value is split between the holders and the claims, with nothing left over: the recipient, the
+    /// @dev The delivered value is split between the holders and the failed releases, with nothing left over: the recipient, the
     /// tip and the hand-off add up to the released value.
     function _checkMoney(uint256 u, Probe memory before, uint256 value) private {
         Probe memory after_ = _probe(u);
-        uint256 paid = (after_.held - before.held) + (after_.claimed - before.claimed);
+        uint256 paid = (after_.held - before.held) + (after_.stuck - before.stuck);
         if (paid != value) _violate("recipient plus tip plus hand-off is not the released value");
     }
 

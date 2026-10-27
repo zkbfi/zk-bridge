@@ -8,25 +8,24 @@ import {MediatorFixture, MockAMB} from "./utils/MediatorSupport.sol";
 /// @notice Fuzz tests of the token mediator: the amount that a relay locks is the amount that the message names.
 contract TokenMediatorFuzzTest is MediatorFixture {
     /// @dev The fields of the first message of a relay with a receiver other than the sender, which deploys the copy
-    /// on the other chain and names a fallback.
+    /// on the other chain.
     struct DeployMessage {
         address token;
         address recipient;
         uint256 value;
-        address fallbackRecipient;
     }
 
     /// @dev External so that a test can slice the call data of a message with `data[4:]`.
     function decodeDeployMessage(bytes calldata data) external pure returns (DeployMessage memory message) {
-        (address token,,,, address recipient, uint256 value, address fallbackRecipient) =
-            abi.decode(data[4:], (address, string, string, uint8, address, uint256, address));
-        message = DeployMessage(token, recipient, value, fallbackRecipient);
+        (address token,,,, address recipient, uint256 value) =
+            abi.decode(data[4:], (address, string, string, uint8, address, uint256));
+        message = DeployMessage(token, recipient, value);
     }
 
     function _firstMessage() internal view returns (DeployMessage memory) {
         MockAMB.Sent memory message = ambA.messageAt(0);
         assertEq(ambA.sentCount(), 1, "a relay sends one message");
-        assertEq(_selectorOf(message.data), TokenMediator.deployAndHandleBridgedTokensWithFallback.selector);
+        assertEq(_selectorOf(message.data), TokenMediator.deployAndHandleBridgedTokens.selector);
         return this.decodeDeployMessage(message.data);
     }
 
@@ -46,7 +45,6 @@ contract TokenMediatorFuzzTest is MediatorFixture {
         assertEq(message.value, amount, "the message names the held amount");
         assertEq(message.token, address(tokenA));
         assertEq(message.recipient, bob);
-        assertEq(message.fallbackRecipient, alice);
     }
 
     /// Claim: for any amount, a fee-on-transfer relay bridges what arrived, never what the sender asked for. Shows: for

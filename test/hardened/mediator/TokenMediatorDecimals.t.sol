@@ -86,7 +86,7 @@ contract TokenMediatorDecimalsTest is MediatorFixture {
                 hex"01"
             ),
             abi.encodeWithSelector(
-                TokenMediator.deployAndHandleBridgedTokensWithFallback.selector,
+                TokenMediator.deployAndHandleBridgedTokens.selector,
                 nativeToken,
                 "N",
                 "S",
@@ -96,7 +96,7 @@ contract TokenMediatorDecimalsTest is MediatorFixture {
                 carol
             ),
             abi.encodeWithSelector(
-                TokenMediator.deployAndHandleBridgedTokensAndCallWithFallback.selector,
+                TokenMediator.deployAndHandleBridgedTokensAndCall.selector,
                 nativeToken,
                 "N",
                 "S",

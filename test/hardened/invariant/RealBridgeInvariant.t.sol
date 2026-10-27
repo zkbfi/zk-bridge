@@ -562,29 +562,24 @@ contract RealBridgeInvariantTest is StdInvariant, Test {
     }
 
     /// Claim: custody. Shows, as `TokenMediator` defines it with no fee: the record of chain A equals the supply of the
-    /// copy on chain B, plus the amounts waiting in `claimable` on both chains, plus the value of every token message
+    /// copy on chain B, plus the value of every token message
     /// that is not executed (in flight in either direction); the token balance of the mediator on chain A equals the
     /// record; the copy balance of the mediator on chain B is zero (no fee); the supply of the copy equals the balances of
     /// all accounts that can hold it. Matters: every copy is backed by a locked token, and every locked token is owed to a
-    /// copy, a claim or a message.
+    /// copy or a message. The token never fails a release, so no stuck value exists here.
     function invariant_custodyIdentity() public view {
         address token = address(handler.nativeToken());
         address copyToken = handler.copy();
         uint256 supply = copyToken == address(0) ? 0 : IERC20(copyToken).totalSupply();
         uint256 record = handler.mediatorOnA().mediatorBalance(token);
 
-        uint256 claims;
         address[] memory list = handler.holders();
-        for (uint256 i = 0; i < list.length; i++) {
-            claims += handler.mediatorOnA().claimable(token, list[i]);
-            if (copyToken != address(0)) claims += handler.mediatorOnB().claimable(copyToken, list[i]);
-        }
         uint256 inFlight;
         for (uint256 i = 0; i < handler.sentCount(); i++) {
             (bytes32 id,,, uint256 net) = handler.sentAt(i);
             if (handler.executions(id) == 0) inFlight += net;
         }
-        assertEq(record, supply + claims + inFlight, "record == copy supply + claims + in flight");
+        assertEq(record, supply + inFlight, "record == copy supply + in flight");
         assertEq(IERC20(token).balanceOf(address(handler.mediatorOnA())), record, "balance == record");
         if (copyToken == address(0)) return;
         assertEq(IERC20(copyToken).balanceOf(address(handler.mediatorOnB())), 0, "no copy stays in the mediator");

@@ -73,11 +73,11 @@ contract TokenMediatorCallRoutesTest is MediatorFixture {
     }
 
     /// Claim: once the copy exists, a callback relay with another receiver has the form
-    /// `handleBridgedTokensAndCallWithFallback` with the sender as the fallback. Shows: the exact message. A receiver
+    /// `handleBridgedTokensAndCall`, with no address of the sender. Shows: the exact message. A receiver
     /// that refuses the callback still keeps the tokens, because the payout comes before the call, and the delivery
     /// emits `CallbackFailed` with the copy, the receiver and the message identifier. Matters: a failed callback must
     /// neither revert the delivery nor move the tokens.
-    function test_callWithFallback_afterTheCopyExistsKeepsThePayoutWhenTheCallRefuses() public {
+    function test_callToAnotherReceiver_afterTheCopyExistsKeepsThePayoutWhenTheCallRefuses() public {
         _teachTheNativeSideThatTheCopyExists();
         selfReceiver.setRefuse(true);
         uint256 sentBefore = ambA.sentCount();
@@ -87,12 +87,11 @@ contract TokenMediatorCallRoutesTest is MediatorFixture {
         assertEq(
             message.data,
             abi.encodeWithSelector(
-                TokenMediator.handleBridgedTokensAndCallWithFallback.selector,
+                TokenMediator.handleBridgedTokensAndCall.selector,
                 address(tokenA),
                 address(selfReceiver),
                 5 ether,
-                hex"02",
-                alice
+                hex"02"
             )
         );
 
@@ -103,7 +102,7 @@ contract TokenMediatorCallRoutesTest is MediatorFixture {
         (bool ok,) = _deliverAtoB(sentBefore);
         assertTrue(ok, "the delivery itself is final");
         assertEq(IERC20(copy).balanceOf(address(selfReceiver)), 5 ether, "the receiver keeps the payout");
-        assertEq(IERC20(copy).balanceOf(alice), aliceBefore, "the fallback is not paid");
+        assertEq(IERC20(copy).balanceOf(alice), aliceBefore, "nobody but the receiver is paid");
         assertEq(selfReceiver.calls(), 0);
     }
 

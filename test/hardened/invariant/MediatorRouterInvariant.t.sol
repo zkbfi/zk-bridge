@@ -35,7 +35,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         selectors[4] = RouterHandler.deliver.selector;
         selectors[5] = RouterHandler.deliver.selector;
         selectors[6] = RouterHandler.deliverNewest.selector;
-        selectors[7] = RouterHandler.claim.selector;
+        selectors[7] = RouterHandler.deliver.selector;
         selectors[8] = RouterHandler.toggleDeny.selector;
         selectors[9] = RouterHandler.attack.selector;
         selectors[10] = RouterHandler.wrapCoin.selector;
@@ -53,24 +53,23 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
     // ------------------------------------------------------------------------------------------------ invariants
 
     /// Claim: the record of a native token equals what stands behind it. Shows: for each native token, the record of
-    /// the home mediator equals the supply of the bridged copy, plus the claims on the home chain, plus the claims on the
-    /// other chain, plus the value of the messages in flight (in both directions). Matters: this is the whole solvency of the bridge. A copy without a record
-    /// behind it, or a record without a copy, a claim or a message, is a loss or a theft. The claims are in the sum
-    /// because a release that a token refused burned its copies and left the record in place, and a mint that a copy
-    /// refused is recorded as a claim and not minted.
-    function invariant_theRecordEqualsTheCopiesPlusTheClaimsPlusTheMessagesInFlight() public view {
+    /// the home mediator equals the supply of the bridged copy plus the value of the messages in flight (in both
+    /// directions). Matters: this is the whole solvency of the bridge. A copy without a record behind it, or a record
+    /// without a copy or a message, is a loss or a theft. A release that a token refused burned its copies and lowered
+    /// the record by the same value, so the sum holds.
+    function invariant_theRecordEqualsTheCopiesPlusTheMessagesInFlight() public view {
         for (uint256 index = 0; index < 5; index++) {
             address native = handler.nativeAt(index);
             uint256 home = handler.homeOf(index);
             uint256 record = handler.mediatorOf(home).mediatorBalance(native);
-            uint256 backing = handler.supplyOrZero(handler.copyAt(index)) + handler.claimableOfHolders(index)
-                + handler.claimableOfHolders(index + 5) + handler.inFlight(native);
-            assertEq(record, backing, "record != copy supply + claims + in flight");
+            uint256 backing = handler.supplyOrZero(handler.copyAt(index)) + handler.inFlight(native);
+            assertEq(record, backing, "record != copy supply + in flight");
         }
     }
 
     /// Claim: the home mediator holds exactly what its record says, and the other mediator holds no copy. Shows: for
-    /// each native token, `balanceOf(mediator)` equals the record plus what strangers sent by plain transfer. For each
+    /// each native token, `balanceOf(mediator)` equals the record plus the value of failed releases plus what strangers
+    /// sent by plain transfer. For each
     /// bridged copy, the other mediator holds what strangers sent, and nothing else. Matters: the mediator takes no cut
     /// of a relay or of a release, so the balance has no other term. The test tightens the stated cover to equality
     /// for tokens that charge nothing on transfer, so a leak in either direction shows.
@@ -80,7 +79,11 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
             address copy = handler.copyAt(index);
             uint256 home = handler.homeOf(index);
             uint256 held = handler.balanceOrZero(native, address(handler.mediatorOf(home)));
-            assertEq(held, handler.mediatorOf(home).mediatorBalance(native) + handler.donated(native), "native balance");
+            assertEq(
+                held,
+                handler.mediatorOf(home).mediatorBalance(native) + handler.stuckOf(native) + handler.donated(native),
+                "native balance"
+            );
             uint256 heldCopies = handler.balanceOrZero(copy, address(handler.mediatorOf(1 - home)));
             assertEq(heldCopies, handler.donated(copy), "copy balance");
         }
@@ -199,8 +202,8 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
     // -------------------------------------------------------------------------------------------------- reach
 
     /// Claim: the handler reaches the paying paths. Shows: after a fixed sequence, every counter of a path is above
-    /// zero: direct, router and batch deliveries, a routed delivery with a tip, a native payout, a fallback, a recorded
-    /// claim and its payment, a failed callback, the wrapped router, and refused attacks. Matters: an
+    /// zero: direct, router and batch deliveries, a routed delivery with a tip, a native payout, a failed
+    /// release, a failed callback, the wrapped router, and refused attacks. Matters: an
     /// invariant over a handler that never acts proves nothing.
     function test_handlerReachesThePayingPaths() public {
         // A delivery router delivery with a fixed fee, then a share, then gas based, each executed by its own router.
@@ -238,21 +241,19 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         handler.deliver(0, 1, 0x55, 30 gwei);
 
         // A recipient that the token refuses. Actor 2 holds copies of the deny list token. Actors 0 and 1 are denied.
-        // The first release names a denied receiver and a fallback that is allowed (the fallback is paid). The second
-        // names two denied accounts (a claim is recorded). Both are delivered at once (timing seed 0).
+        // The releases name denied receivers (the release fails, and nobody else is paid). They are
+        // delivered at once (timing seed 0).
         handler.relay(4, 0, 1, 0, 9e18, 2 | (2 << 8), 0);
         handler.toggleDeny(0);
         handler.toggleDeny(1);
         // The amount seeds of the two copy relays are small, so that actor 2 keeps copies for the second one: the
         // first release holds 10,000 units, and a seed above the balance would spend all of it.
         handler.relay(4, 1, 1, 2, 1_000, 0 | (3 << 8), 0);
-        assertGt(handler.fallbacksUsed(), 0, "a fallback was used");
         handler.relay(4, 1, 1, 2, 1_000, 0 | (1 << 8), 0);
-        assertGt(handler.claimsRecorded(), 0, "a claim was recorded");
+        assertGt(handler.releasesFailed(), 0, "a release failed");
+        assertGt(handler.stuckOf(handler.tokenAt(4)), 0, "the failed value is counted");
         handler.toggleDeny(0);
         handler.toggleDeny(1);
-        handler.claim(4, 1);
-        assertGt(handler.claimsPaid(), 0, "a claim was paid");
 
         // The three cases that used to strand value in a delivery router, each with a recipient that the sender chose. Token 4
         // refuses the denied accounts, and the copies on chain B go back to it on chain A. In `detail`, bits 136.. choose

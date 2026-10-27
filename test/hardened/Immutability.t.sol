@@ -73,33 +73,24 @@ contract ImmutabilityTest is Test {
     }
 
     /// Claim: the token mediator has no owner, upgrade path, pause, or setter for the bridge, the remote mediator or the
-    /// factory. Shows: the ABI lists exactly these state-changing functions: the relay functions (`relayTokens`,
-    /// `relayTokensAndCall`, `relayTokensWithFallback`, `relayTokensWithOptions`), the ERC-677 entry `onTokenTransfer`, the twelve handlers
-    /// that only the message bridge may call for the remote mediator, `claim` and
-    /// `detachFlowLimiter`. The mediator has no fee and no function that pays an account that a release does not
+    /// factory. Shows: the ABI lists exactly these state-changing functions: the relay functions (`relayTokens` and
+    /// `relayTokensAndCall`, each with a version that has a gas limit; the names are the same), the ERC-677 entry
+    /// `onTokenTransfer`, the six handlers that only the message bridge may call for the remote mediator and
+    /// `detachFlowLimiter`. The mediator has no claim function: a failed release is final. The mediator has no fee and no function that pays an account that a release does not
     /// name. Only the flow limiter can call `detachFlowLimiter`, and no function sets or replaces a limiter. Matters:
     /// H-04 (no key can redirect the mediator or reach the tokens that it holds).
     function test_H04_tokenMediator_onlyRelayHandlerAndClaimFunctionsChangeState() public view {
-        string[] memory allowed = new string[](19);
+        string[] memory allowed = new string[](10);
         allowed[0] = "relayTokens";
         allowed[1] = "relayTokensAndCall";
-        allowed[2] = "relayTokensWithFallback";
-        allowed[3] = "onTokenTransfer";
-        allowed[4] = "handleNativeTokens";
-        allowed[5] = "handleNativeTokensAndCall";
-        allowed[6] = "handleNativeTokensWithFallback";
-        allowed[7] = "handleNativeTokensAndCallWithFallback";
-        allowed[8] = "handleBridgedTokens";
-        allowed[9] = "handleBridgedTokensAndCall";
-        allowed[10] = "handleBridgedTokensWithFallback";
-        allowed[11] = "handleBridgedTokensAndCallWithFallback";
-        allowed[12] = "deployAndHandleBridgedTokens";
-        allowed[13] = "deployAndHandleBridgedTokensAndCall";
-        allowed[14] = "deployAndHandleBridgedTokensWithFallback";
-        allowed[15] = "deployAndHandleBridgedTokensAndCallWithFallback";
-        allowed[16] = "claim";
-        allowed[17] = "detachFlowLimiter";
-        allowed[18] = "relayTokensWithOptions";
+        allowed[2] = "onTokenTransfer";
+        allowed[3] = "handleNativeTokens";
+        allowed[4] = "handleNativeTokensAndCall";
+        allowed[5] = "handleBridgedTokens";
+        allowed[6] = "handleBridgedTokensAndCall";
+        allowed[7] = "deployAndHandleBridgedTokens";
+        allowed[8] = "deployAndHandleBridgedTokensAndCall";
+        allowed[9] = "detachFlowLimiter";
         _assertSameNames(_mutatingFunctions("out/TokenMediator.sol/TokenMediator.json"), allowed);
     }
 
@@ -133,7 +124,7 @@ contract ImmutabilityTest is Test {
 
     /// Claim: neither the message bridge nor the token mediator has a refund or a reclaim function. Shows: no function
     /// name in either ABI, in any case, contains "refund" or "reclaim". Matters: H-09. A failed delivery stays failed
-    /// and a failed release goes to its fallback address or to `claim`, so no key and no caller can take tokens back
+    /// and a failed release becomes a claim of its recipient, so no key and no caller can take tokens back
     /// from a sender on a path of its own.
     function test_H09_messageBridgeAndMediatorHaveNoRefundFunction() public view {
         string[2] memory artifacts =

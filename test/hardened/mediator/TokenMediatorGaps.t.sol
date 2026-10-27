@@ -17,10 +17,7 @@ import {MedBonusToken, MedHostileToken, MedHostileLimiter} from "./utils/MedMock
 /// @notice The checks that the vault tests held and that no other mediator test makes: tokens that misbehave on the
 /// way in and on the way out, hostile tokens and limiters that call back into the mediator, and the independence of the limiter checks. Each test names the vault test that it replaces.
 contract TokenMediatorGapsTest is MediatorFixture {
-    event ClaimableRecorded(address indexed token, address indexed account, uint256 value, bytes32 indexed messageId);
-    event FallbackUsed(
-        address indexed token, address indexed recipient, address indexed fallbackRecipient, bytes32 messageId
-    );
+    event ReleaseFailed(address indexed token, address indexed recipient, uint256 value, bytes32 indexed messageId);
 
     // ------------------------------------------------------------------------------------------------ helpers
 
@@ -36,7 +33,7 @@ contract TokenMediatorGapsTest is MediatorFixture {
         tokenA.approve(address(mediatorA), type(uint256).max);
     }
 
-    /// @dev Sends `value` of a copy from `from` on chain B back to `receiver`, with `from` as the fallback. It does
+    /// @dev Sends `value` of a copy from `from` on chain B back to `receiver`. It does
     /// not deliver. It returns the index of the message on chain B.
     function _sendBack(address copy, address from, address receiver, uint256 value) internal returns (uint256) {
         vm.startPrank(from);
@@ -135,13 +132,12 @@ contract TokenMediatorGapsTest is MediatorFixture {
 
     // ------------------------------------------------------------------------------------------------ odd tokens
 
-    /// Claim: a token whose `transfer` returns false can be relayed, and its release never burns the claim. Shows:
-    /// the relay works (its `transferFrom` is fine); the release does not revert, so the message stays delivered; the
-    /// amount is claimable by the fallback; the record and the balance keep the tokens; `claim` reverts with
-    /// `ClaimTransferFailed` and keeps the amount. Matters: replaces
-    /// `test_H13_withdraw_returnsFalseTokenRevertsAndKeepsClaim`. The vault reverted. The mediator cannot, so the
-    /// claim moves to `claimable`.
-    function test_aTokenThatReturnsFalseOnTransferLeavesAClaimableAmount() public {
+    /// Claim: a token whose `transfer` returns false can be relayed, and its release never reverts. Shows: the relay
+    /// works (its `transferFrom` is fine); the release does not revert, so the message stays delivered; `ReleaseFailed`
+    /// names the recipient; nobody is paid; the record falls by the release (the copies are burned) and the tokens stay
+    /// in the mediator, owed to nobody. Matters: replaces `test_H13_withdraw_returnsFalseTokenRevertsAndKeepsClaim`.
+    /// The vault reverted. The mediator cannot, and a failed release is final.
+    function test_aTokenThatReturnsFalseOnTransferEndsWithAFinalFailedRelease() public {
         ReturnsFalseToken bad = new ReturnsFalseToken("Bad", "BAD");
         bad.mint(alice, 100 ether);
         vm.prank(alice);
@@ -152,19 +148,14 @@ contract TokenMediatorGapsTest is MediatorFixture {
         uint256 index = _sendBack(copy, alice, bob, 60 ether);
         bytes32 id = ambB.messageAt(index).id;
         vm.expectEmit(true, true, true, true, address(mediatorA));
-        emit ClaimableRecorded(address(bad), alice, 60 ether, id);
+        emit ReleaseFailed(address(bad), bob, 60 ether, id);
         (bool ok,) = _deliverBtoA(index);
         assertTrue(ok, "the delivery does not revert, which would lose the tokens");
         assertEq(bad.balanceOf(bob), 0);
         assertEq(bad.balanceOf(alice), 0);
-        assertEq(mediatorA.claimable(address(bad), alice), 60 ether, "the fallback can claim it");
-        assertEq(mediatorA.mediatorBalance(address(bad)), 100 ether, "the record keeps the amount");
+        assertEq(mediatorA.mediatorBalance(address(bad)), 40 ether, "the record fell by the release");
         assertEq(bad.balanceOf(address(mediatorA)), 100 ether, "the tokens stay in the mediator");
-
-        vm.expectRevert(abi.encodeWithSelector(TokenMediator.ClaimTransferFailed.selector, address(bad), alice));
-        mediatorA.claim(address(bad), alice);
-        assertEq(mediatorA.claimable(address(bad), alice), 60 ether, "the failed claim keeps the amount");
-        assertEq(mediatorA.mediatorBalance(address(bad)), 100 ether);
+        assertEq(IERC20(copy).totalSupply(), 40 ether, "the record equals the copies that remain");
     }
 
     /// Claim: a token that returns nothing (as USDT does) works in both directions. Shows: relay, mint of the copy
@@ -215,9 +206,9 @@ contract TokenMediatorGapsTest is MediatorFixture {
     }
 
     /// Claim: the same, when the token refuses the first payment after its callback. Shows: the first payment
-    /// fails, the fallback receives the 60, and the record still counts the nested lock of 10: the record equals the
-    /// balance and the supply of the copies. Matters: a release restores the record after a refusal. A restore from
-    /// a stale copy would erase what the nested relay locked, and the copies would exceed the record.
+    /// fails, `ReleaseFailed` names carol, and the record still counts the nested lock of 10: the record equals the
+    /// supply of the copies. The 60 stay in the mediator, owed to nobody. Matters: a release lowers the record once,
+    /// before the transfer. A stale write after the refusal would erase what the nested relay locked.
     function test_aTokenThatRelaysDuringAReleaseAndThenRefusesKeepsTheNestedLock() public {
         MedHostileToken token = _hostileWorld(mediatorA, 100 ether);
         token.fundSelf(address(mediatorA), 10 ether);
@@ -229,71 +220,57 @@ contract TokenMediatorGapsTest is MediatorFixture {
             MedHostileToken.Ending.Refuse
         );
 
-        vm.expectEmit(true, true, true, false, address(mediatorA));
-        emit FallbackUsed(address(token), carol, alice, ambB.messageAt(index).id);
+        vm.expectEmit(true, true, true, true, address(mediatorA));
+        emit ReleaseFailed(address(token), carol, 60 ether, ambB.messageAt(index).id);
         assertTrue(_deliverBtoAWithGas(index, 1_500_000));
-        assertEq(token.balanceOf(alice) - aliceBefore, 60 ether, "the fallback received the release");
+        assertEq(token.balanceOf(alice), aliceBefore, "nobody else is paid");
+        assertEq(token.balanceOf(carol), 0, "carol is not paid");
         (bool delivered,) = _deliverAtoB(_lastIndexA());
         assertTrue(delivered);
         assertEq(mediatorA.mediatorBalance(address(token)), 50 ether, "the nested lock stays in the record");
-        _assertBacked(address(token), _copyOf(address(token)));
+        address copy = _copyOf(address(token));
+        assertEq(IERC20(copy).totalSupply(), 50 ether, "the copies equal the record");
+        assertEq(token.balanceOf(address(mediatorA)), 110 ether, "the failed 60 stay in the mediator");
     }
 
-    /// Claim: a token that claims for another account while the mediator pays it out cannot corrupt the accounting.
-    /// Shows: a claim of 60 waits for alice. During a release of 20 to carol, the token calls `claim`. Alice is paid
-    /// once, carol is paid once, and the record, the balance and the supply agree. Matters: `claim` and the release
-    /// both move the record, so a nested one must not undo the other.
-    function test_aTokenThatClaimsDuringAReleaseKeepsTheAccountingExact() public {
-        MedHostileToken token = _hostileWorld(mediatorA, 100 ether);
-        address copy = _copyOf(address(token));
-        token.setRefusingAll(true);
-        (bool ok,) = _deliverBtoA(_sendBack(copy, alice, bob, 60 ether));
-        assertTrue(ok);
-        assertEq(mediatorA.claimable(address(token), alice), 60 ether, "control: a claim waits");
-        token.setRefusingAll(false);
+    /// Claim: a release that reaches the transfer with no more gas than `TRANSFER_GAS_RESERVE` makes no call to the
+    /// token, and ends as a failed release. Shows: with the smallest gas that still delivers, so little that the reserve is all
+    /// that is left, the handler does not revert, `ReleaseFailed` names the recipient, the token never ran, and the tokens
+    /// stay in the mediator. Matters: the reserve keeps the event affordable, so a starved delivery still ends cleanly.
+    function test_aReleaseThatReachesTheTransferWithOnlyTheReserveLeftEndsAsAFailedRelease() public {
+        _bridgeAtoB(alice, address(tokenA), bob, 100 ether);
+        uint256 index = _sendBack(_copyOf(address(tokenA)), bob, carol, 60 ether);
+        MockAMB.Sent memory message = ambB.messageAt(index);
+        // The control: the same message with the gas of a normal delivery pays carol.
+        uint256 snapshot = vm.snapshotState();
+        (bool paidOk,) =
+            ambA.execute(message.target, message.data, message.sender, bytes32(CHAIN_B), message.id, 400_000);
+        assertTrue(paidOk);
+        assertEq(tokenA.balanceOf(carol), 60 ether, "control: enough gas pays");
+        vm.revertToState(snapshot);
 
-        uint256 index = _sendBack(copy, alice, carol, 20 ether);
-        uint256 aliceBefore = token.balanceOf(alice);
-        token.arm(
-            address(mediatorA), abi.encodeCall(TokenMediator.claim, (address(token), alice)), MedHostileToken.Ending.Pay
-        );
-        (ok,) = _deliverBtoA(index);
-        assertTrue(ok);
-        assertTrue(token.hookOk(), "the nested claim ran");
-        assertEq(token.balanceOf(alice) - aliceBefore, 60 ether, "alice is paid once");
-        assertEq(token.balanceOf(carol), 20 ether);
-        assertEq(mediatorA.claimable(address(token), alice), 0);
-        assertEq(mediatorA.mediatorBalance(address(token)), 20 ether);
-        _assertBacked(address(token), copy);
+        uint256 gas = _smallestGasThatDelivers(message);
+        assertGt(gas, 0, "some gas delivers the message");
+        assertLt(gas, 80_000, "the smallest delivering gas is below the figure of a paid release");
+        vm.expectEmit(true, true, true, true, address(mediatorA));
+        emit ReleaseFailed(address(tokenA), carol, 60 ether, message.id);
+        (bool ok,) = ambA.execute(message.target, message.data, message.sender, bytes32(CHAIN_B), message.id, gas);
+        assertTrue(ok, "the handler did not revert");
+        assertEq(tokenA.balanceOf(carol), 0, "the token never ran");
+        assertEq(mediatorA.mediatorBalance(address(tokenA)), 40 ether, "the record fell by the release");
+        assertEq(tokenA.balanceOf(address(mediatorA)), 100 ether, "the tokens stay in the mediator");
     }
 
-    /// Claim: a token that calls back into the mediator while `claim` pays it is refused by the guard. Shows: for
-    /// each of the three calls the guard error, and the account is paid once. Matters: `claim` moves the record, so a
-    /// nested call must not run on a half-finished state.
-    function test_aTokenCannotCallBackIntoTheMediatorWhileClaimPays() public {
-        MedHostileToken token = _hostileWorld(mediatorA, 100 ether);
-        address copy = _copyOf(address(token));
-        bytes[2] memory attempts = [
-            abi.encodeCall(TokenMediator.claim, (address(token), alice)),
-            abi.encodeWithSignature("relayTokens(address,uint256)", address(token), 1 ether)
-        ];
-        for (uint256 i = 0; i < attempts.length; i++) {
-            token.setRefusingAll(true);
-            _deliverBtoA(_sendBack(copy, alice, bob, 10 ether));
-            token.setRefusingAll(false);
-            uint256 aliceBefore = token.balanceOf(alice);
-            uint256 recordBefore = mediatorA.mediatorBalance(address(token));
-            token.arm(address(mediatorA), attempts[i], MedHostileToken.Ending.Pay);
-
-            mediatorA.claim(address(token), alice);
-            assertFalse(token.hookOk(), "the nested call failed");
-            assertEq(
-                token.hookReturned(), abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector)
-            );
-            assertEq(token.balanceOf(alice) - aliceBefore, 10 ether, "paid once");
-            assertEq(mediatorA.mediatorBalance(address(token)), recordBefore - 10 ether);
+    /// @dev The smallest gas, in steps of 250, with which the handler does not run out of gas. At that figure the
+    /// handler reaches the transfer with less than the reserve, so it skips the transfer.
+    function _smallestGasThatDelivers(MockAMB.Sent memory message) internal returns (uint256) {
+        for (uint256 gas = 20_000; gas < 400_000; gas += 250) {
+            uint256 snapshot = vm.snapshotState();
+            (bool ok,) = ambA.execute(message.target, message.data, message.sender, bytes32(CHAIN_B), message.id, gas);
+            vm.revertToState(snapshot);
+            if (ok) return gas;
         }
-        _assertBacked(address(token), copy);
+        return 0;
     }
 
     // ------------------------------------------------------------------------------------------------ flow limiter
@@ -320,7 +297,7 @@ contract TokenMediatorGapsTest is MediatorFixture {
         uint256 index = _sendBack(copy, bob, dave, 10 ether);
         (bool ok,) = _deliverBtoA(index);
         assertTrue(ok);
-        assertEq(mediatorA.claimable(address(tokenA), dave), 10 ether, "the release is held while releases are refused");
+        assertEq(tokenA.balanceOf(dave), 0, "the release is refused while releases are refused");
         assertEq(limiter.depositChecks(), 2, "the refused relay and the later relay");
         assertEq(limiter.withdrawalChecks(), 1, "the refused check reverted inside the handler and left no count");
     }
@@ -392,51 +369,22 @@ contract TokenMediatorGapsTest is MediatorFixture {
         assertEq(address(mediatorA.flowLimiter()), address(limiter), "outsiders changed nothing");
     }
 
-    /// Claim: a limiter cannot re-enter the mediator when the mediator asks it about a relay or a claim. Shows: from
-    /// `checkDeposit` and from the check inside `claim`, a call to `relayTokens` or `claim` fails with
-    /// the guard error, and the outer call completes. Matters: replaces `test_flowLimiter_cannotReenter`. The
-    /// mediator calls the limiter under its reentrancy guard, so the limiter cannot act on a half-finished call.
-    function test_aLimiterCannotReenterDuringARelayOrAClaim() public {
+    /// Claim: a limiter cannot re-enter the mediator when the mediator asks it about a relay. Shows: from
+    /// `checkDeposit`, a call to `relayTokens` fails with the guard error, and the outer call completes. Matters:
+    /// replaces `test_flowLimiter_cannotReenter`. The mediator calls the limiter under its reentrancy guard, so the
+    /// limiter cannot act on a half-finished call.
+    function test_aLimiterCannotReenterDuringARelay() public {
         MedHostileLimiter limiter = new MedHostileLimiter();
         _redeploy(_limiterTerms(address(limiter)), _limiterTerms(address(0)));
-        MedHostileLimiter.Move[2] memory attempts =
-            [MedHostileLimiter.Move.ReenterRelay, MedHostileLimiter.Move.ReenterClaim];
-        bytes memory guardError = abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector);
-        for (uint256 i = 0; i < attempts.length; i++) {
-            limiter.setMove(attempts[i]);
-            vm.prank(alice);
-            mediatorA.relayTokens(address(tokenA), bob, 100 ether);
-            assertEq(limiter.moveError(), guardError, "relay: the guard refused the reentry");
-        }
-        assertEq(ambA.sentCount(), 2, "both outer relays completed");
-
-        // A claim waits for dave. The claim asks the limiter again, and the limiter tries each move.
-        limiter.setMove(MedHostileLimiter.Move.None);
-        _bridgeAtoB(alice, address(tokenA), bob, 100 ether);
-        limiter.setRefusals(false, true);
-        (bool ok,) = _deliverBtoA(_sendBack(_copyOf(address(tokenA)), bob, dave, 10 ether));
-        assertTrue(ok);
-        assertEq(mediatorA.claimable(address(tokenA), dave), 10 ether, "the whole release waits");
-        limiter.setRefusals(false, false);
-        for (uint256 i = 0; i < attempts.length; i++) {
-            limiter.setMove(attempts[i]);
-            if (i == 0) {
-                mediatorA.claim(address(tokenA), dave);
-                assertEq(limiter.moveError(), guardError, "claim: the guard refused the reentry");
-                assertEq(tokenA.balanceOf(dave), 10 ether, "the outer claim completed");
-            }
-            if (i > 0) {
-                // The claim is spent. Make a new one, so that each move runs inside a claim.
-                limiter.setMove(MedHostileLimiter.Move.None);
-                limiter.setRefusals(false, true);
-                (ok,) = _deliverBtoA(_sendBack(_copyOf(address(tokenA)), bob, dave, 10 ether));
-                assertTrue(ok);
-                limiter.setRefusals(false, false);
-                limiter.setMove(attempts[i]);
-                mediatorA.claim(address(tokenA), dave);
-                assertEq(limiter.moveError(), guardError, "claim: the guard refused the reentry");
-            }
-        }
+        limiter.setMove(MedHostileLimiter.Move.ReenterRelay);
+        vm.prank(alice);
+        mediatorA.relayTokens(address(tokenA), bob, 100 ether);
+        assertEq(
+            limiter.moveError(),
+            abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector),
+            "relay: the guard refused the reentry"
+        );
+        assertEq(ambA.sentCount(), 1, "the outer relay completed");
     }
 
     /// Claim: from the check of a release, a limiter cannot call a handler or spend the mediator's tokens. Shows: a

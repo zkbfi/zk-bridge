@@ -36,22 +36,69 @@ contract DeliveryRouterWrapTest is MediatorFixture {
         assertEq(IERC20(_copyOf(address(weth))).balanceOf(alice), 2 ether);
     }
 
-    function test_wrapAndRelayTokensToAReceiverNamesTheCallerAsFallback() public {
+    /// Claim: a wrap and send to a receiver sends the OmniBridge payload and names no address but the receiver. Shows:
+    /// the exact message, with no address of the caller, and the receiver on the other chain holds the copy. Matters:
+    /// the mediator pays the receiver only, and this router has no fallback option.
+    function test_wrapAndRelayTokensToAReceiverNamesNoOtherAddress() public {
         vm.prank(alice);
         routerA.wrapAndRelayTokens{value: 1 ether}(bob);
         bytes memory expected = abi.encodeWithSelector(
-            TokenMediator.deployAndHandleBridgedTokensWithFallback.selector,
+            TokenMediator.deployAndHandleBridgedTokens.selector,
             address(weth),
             "Wrapped Native",
             "WNAT",
             uint8(18),
             bob,
-            1 ether,
-            alice
+            1 ether
         );
-        assertEq(ambA.messageAt(0).data, expected, "the fallback is the caller, not the router");
+        assertEq(ambA.messageAt(0).data, expected, "the receiver is the only address");
         _deliverAtoB(0);
         assertEq(IERC20(_copyOf(address(weth))).balanceOf(bob), 1 ether);
+    }
+
+    /// Claim: the wrap and send with a gas limit passes the limit to the mediator, which applies its rule. Shows: a
+    /// request above the default is the gas limit of the message, a request below it gives the default, a request
+    /// above the bridge maximum reverts with the mediator error and the caller keeps the coin, and the payload is
+    /// the same as without a limit. Matters: a router user needs the gas option of the mediator.
+    function test_wrapAndRelayTokensWithAGasLimitFollowsTheMediatorRule() public {
+        vm.startPrank(alice);
+        routerA.wrapAndRelayTokens{value: 1 ether}(bob);
+        routerA.wrapAndRelayTokens{value: 1 ether}(bob, 3_000_000);
+        routerA.wrapAndRelayTokens{value: 1 ether}(bob, 1);
+        vm.stopPrank();
+        assertEq(ambA.messageAt(0).gasLimit, mediatorA.DEPLOY_GAS_LIMIT(), "the default");
+        assertEq(ambA.messageAt(1).gasLimit, 3_000_000, "the request is above the default");
+        assertEq(ambA.messageAt(2).gasLimit, mediatorA.DEPLOY_GAS_LIMIT(), "the request is below the default");
+        assertEq(ambA.messageAt(1).data, ambA.messageAt(0).data, "the payload does not change");
+
+        uint256 maximum = ambA.maxGasPerTx();
+        uint256 before = alice.balance;
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.GasLimitAboveBridgeMaximum.selector, maximum + 1, maximum));
+        routerA.wrapAndRelayTokens{value: 1 ether}(bob, maximum + 1);
+        assertEq(alice.balance, before, "the caller keeps the coin");
+    }
+
+    /// Claim: the wrap and call with a gas limit passes the limit and the data to the mediator. Shows: the message is
+    /// `deployAndHandleBridgedTokensAndCall` with the data, the gas limit is the request when it is above the default,
+    /// and the receiver sees the data. A request below the default gives the default. Empty data is still refused.
+    function test_relayTokensAndCallWithAGasLimitFollowsTheMediatorRule() public {
+        RecordingReceiver receiver = new RecordingReceiver();
+        uint256 callDefault = mediatorA.DEPLOY_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT();
+        vm.startPrank(alice);
+        routerA.relayTokensAndCall{value: 1 ether}(address(receiver), hex"7777", 5_000_000);
+        routerA.relayTokensAndCall{value: 1 ether}(address(receiver), hex"7777", 1);
+        vm.expectRevert(DeliveryRouter.EmptyData.selector);
+        routerA.relayTokensAndCall{value: 1 ether}(address(receiver), "", 5_000_000);
+        vm.stopPrank();
+        assertEq(ambA.messageAt(0).gasLimit, 5_000_000, "the request is above the default");
+        assertEq(ambA.messageAt(1).gasLimit, callDefault, "the request is below the default");
+        assertEq(
+            _selectorOf(ambA.messageAt(0).data), TokenMediator.deployAndHandleBridgedTokensAndCall.selector
+        );
+        _deliverAtoB(0);
+        assertEq(receiver.lastData(), hex"7777");
+        assertEq(receiver.lastValue(), 1 ether);
     }
 
     /// @dev Bridges `value` of the wrapped token to the copy on chain B, owned by bob.

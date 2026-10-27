@@ -61,8 +61,8 @@ contract TokenMediatorGasTest is MediatorFixture {
 
         // Delivery on the other chain: the first message deploys the copy, later messages mint.
         uint256 deployLimit = mediatorB.DEPLOY_GAS_LIMIT();
-        console2.log("delivery: deployAndHandleBridgedTokensWithFallback, first:", _gasOfDeliveryAtoB(0, deployLimit));
-        console2.log("delivery: deployAndHandleBridgedTokensWithFallback, later:", _gasOfDeliveryAtoB(1, deployLimit));
+        console2.log("delivery: deployAndHandleBridgedTokens, first:", _gasOfDeliveryAtoB(0, deployLimit));
+        console2.log("delivery: deployAndHandleBridgedTokens, later:", _gasOfDeliveryAtoB(1, deployLimit));
         console2.log("delivery: deployAndHandle..., second token (second copy): ", _gasOfDeliveryAtoB(2, deployLimit));
 
         // Relay of a copy: burn path. Delivery on the native side: unlock.

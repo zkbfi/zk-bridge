@@ -178,15 +178,6 @@ abstract contract RouterWorld is MediatorFixture {
         }
     }
 
-    /// @notice The sum of the claims of the holders on a token of the universe, on the mediator of its chain.
-    function claimableOfHolders(uint256 universeIndex) public view returns (uint256 total) {
-        TokenMediator mediator = mediatorOf(chainOfToken(universeIndex));
-        address token = tokenAt(universeIndex);
-        for (uint256 i = 0; i < holders.length; i++) {
-            total += mediator.claimable(token, holders[i]);
-        }
-    }
-
     /// @notice What `router` has recorded in a token of the universe (only its failed delivery address can have a record,
     /// and that address is a holder), and the total that it states.
     /// @return sum The sum of `claimable` over the holders.

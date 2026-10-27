@@ -18,18 +18,14 @@ import {
 } from "./utils/MediatorSupport.sol";
 
 /// @notice Tests of the token mediator: the two directions, the first message that deploys the copy, the accounting,
-/// the callers that may trigger a release, the callback, and the fallback and claim path.
+/// the callers that may trigger a release, the callback, and the path of a release that fails.
 contract TokenMediatorTest is MediatorFixture {
     event TokensBridgingInitiated(
         address indexed token, address indexed sender, uint256 value, bytes32 indexed messageId
     );
     event TokensBridged(address indexed token, address indexed recipient, uint256 value, bytes32 indexed messageId);
     event NewTokenRegistered(address indexed nativeToken, address indexed bridgedToken);
-    event FallbackUsed(
-        address indexed token, address indexed recipient, address indexed fallbackRecipient, bytes32 messageId
-    );
-    event ClaimableRecorded(address indexed token, address indexed account, uint256 value, bytes32 indexed messageId);
-    event Claimed(address indexed token, address indexed account, uint256 value);
+    event ReleaseFailed(address indexed token, address indexed recipient, uint256 value, bytes32 indexed messageId);
     event CallbackFailed(address indexed token, address indexed recipient, bytes32 indexed messageId);
 
     // ------------------------------------------------------------------------------------------------ directions
@@ -49,7 +45,7 @@ contract TokenMediatorTest is MediatorFixture {
         assertEq(message.target, address(mediatorB), "the target is the mediator on the other chain");
         assertEq(message.sender, address(mediatorA));
         assertEq(message.gasLimit, mediatorA.DEPLOY_GAS_LIMIT());
-        assertEq(_selectorOf(message.data), TokenMediator.deployAndHandleBridgedTokensWithFallback.selector);
+        assertEq(_selectorOf(message.data), TokenMediator.deployAndHandleBridgedTokens.selector);
 
         address predicted = mediatorB.tokenFactory().predictAddress(CHAIN_A, address(tokenA));
         vm.expectEmit(true, true, false, true, address(mediatorB));
@@ -157,7 +153,7 @@ contract TokenMediatorTest is MediatorFixture {
         assertEq(
             message.data,
             abi.encodeWithSelector(TokenMediator.handleNativeTokens.selector, address(tokenA), bob, 150 ether),
-            "with the recipient as fallback the payload is the OmniBridge payload"
+            "the payload is the OmniBridge payload"
         );
         assertEq(message.gasLimit, mediatorB.RELEASE_GAS_LIMIT());
 
@@ -194,8 +190,8 @@ contract TokenMediatorTest is MediatorFixture {
         mediatorA.relayTokens(address(tokenA), bob, 10 ether);
         mediatorA.relayTokens(address(tokenA), bob, 20 ether);
         vm.stopPrank();
-        assertEq(_selectorOf(ambA.messageAt(0).data), TokenMediator.deployAndHandleBridgedTokensWithFallback.selector);
-        assertEq(_selectorOf(ambA.messageAt(1).data), TokenMediator.deployAndHandleBridgedTokensWithFallback.selector);
+        assertEq(_selectorOf(ambA.messageAt(0).data), TokenMediator.deployAndHandleBridgedTokens.selector);
+        assertEq(_selectorOf(ambA.messageAt(1).data), TokenMediator.deployAndHandleBridgedTokens.selector);
 
         (bool second,) = _deliverAtoB(1);
         (bool first,) = _deliverAtoB(0);
@@ -203,26 +199,12 @@ contract TokenMediatorTest is MediatorFixture {
         assertEq(IERC20(_copyOf(address(tokenA))).balanceOf(bob), 30 ether);
     }
 
-    function test_theFallbackOfTheSenderIsInThePayloadWhenItDiffersFromTheReceiver() public {
-        vm.prank(alice);
-        mediatorA.relayTokens(address(tokenA), bob, 1 ether);
-        bytes memory expected = abi.encodeWithSelector(
-            TokenMediator.deployAndHandleBridgedTokensWithFallback.selector,
-            address(tokenA),
-            "Token A",
-            "TKA",
-            uint8(18),
-            bob,
-            1 ether,
-            alice
-        );
-        assertEq(ambA.messageAt(0).data, expected);
-    }
-
-    function test_theOmnibridgePayloadIsSentWhenReceiverAndFallbackAreTheSame() public {
-        vm.prank(alice);
+    function test_theOmnibridgePayloadCarriesNoFallbackWhateverTheReceiverIs() public {
+        vm.startPrank(alice);
         mediatorA.relayTokens(address(tokenA), 1 ether);
-        bytes memory expected = abi.encodeWithSelector(
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether);
+        vm.stopPrank();
+        bytes memory toSender = abi.encodeWithSelector(
             TokenMediator.deployAndHandleBridgedTokens.selector,
             address(tokenA),
             "Token A",
@@ -231,7 +213,17 @@ contract TokenMediatorTest is MediatorFixture {
             alice,
             1 ether
         );
-        assertEq(ambA.messageAt(0).data, expected);
+        bytes memory toOther = abi.encodeWithSelector(
+            TokenMediator.deployAndHandleBridgedTokens.selector,
+            address(tokenA),
+            "Token A",
+            "TKA",
+            uint8(18),
+            bob,
+            1 ether
+        );
+        assertEq(ambA.messageAt(0).data, toSender);
+        assertEq(ambA.messageAt(1).data, toOther, "a receiver other than the sender adds nothing to the payload");
     }
 
     // ------------------------------------------------------------------------------------------------ accounting
@@ -326,7 +318,7 @@ contract TokenMediatorTest is MediatorFixture {
 
     function test_everyHandlerRefusesACallerThatIsNotTheBridge() public {
         bytes[] memory calls = _allHandlerCalls();
-        assertEq(calls.length, 12, "twelve handlers");
+        assertEq(calls.length, 6, "six handlers");
         for (uint256 i = 0; i < calls.length; i++) {
             vm.prank(bob);
             (bool ok, bytes memory returned) = address(mediatorA).call(calls[i]);
@@ -390,7 +382,7 @@ contract TokenMediatorTest is MediatorFixture {
         mediatorA.relayTokensAndCall(address(tokenA), address(receiver), 100 ether, "hello");
         MockAMB.Sent memory message = ambA.messageAt(0);
         assertEq(message.gasLimit, mediatorA.DEPLOY_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT());
-        assertEq(_selectorOf(message.data), TokenMediator.deployAndHandleBridgedTokensAndCallWithFallback.selector);
+        assertEq(_selectorOf(message.data), TokenMediator.deployAndHandleBridgedTokensAndCall.selector);
 
         (bool ok,) = _deliverAtoB(0);
         assertTrue(ok);
@@ -426,7 +418,7 @@ contract TokenMediatorTest is MediatorFixture {
         IERC20(copy).approve(address(mediatorB), type(uint256).max);
         mediatorB.relayTokensAndCall(copy, address(receiver), 4 ether, hex"c0ffee");
         vm.stopPrank();
-        assertEq(_selectorOf(ambB.messageAt(0).data), TokenMediator.handleNativeTokensAndCallWithFallback.selector);
+        assertEq(_selectorOf(ambB.messageAt(0).data), TokenMediator.handleNativeTokensAndCall.selector);
 
         (bool ok,) = _deliverBtoA(0);
         assertTrue(ok);
@@ -451,26 +443,24 @@ contract TokenMediatorTest is MediatorFixture {
         assertEq(IERC20(predicted).balanceOf(address(receiver)), 5 ether);
     }
 
-    function test_relayWithFallbackCallsOnlyWhenThereIsData() public {
+    /// Claim: `relayTokens` never calls the receiver, and `relayTokensAndCall` always does, as OmniBridge does, even
+    /// with empty data. Shows: the first message is the plain form and the second is the form with a call.
+    /// Matters: a receiver that expects a callback must get one whatever the length of the data.
+    function test_relayTokensAndCallSendsTheCallFormEvenWithEmptyData() public {
         vm.startPrank(alice);
-        mediatorA.relayTokensWithFallback(address(tokenA), bob, 1 ether, "", carol);
-        mediatorA.relayTokensWithFallback(address(tokenA), bob, 1 ether, "d", carol);
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether);
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, "");
         vm.stopPrank();
-        assertEq(_selectorOf(ambA.messageAt(0).data), TokenMediator.deployAndHandleBridgedTokensWithFallback.selector);
-        assertEq(
-            _selectorOf(ambA.messageAt(1).data), TokenMediator.deployAndHandleBridgedTokensAndCallWithFallback.selector
-        );
-        // The explicit fallback is in the payload.
-        (,,,,,, address fallbackRecipient) = abi.decode(
-            _dropSelector(ambA.messageAt(0).data), (address, string, string, uint8, address, uint256, address)
-        );
-        assertEq(fallbackRecipient, carol);
+        assertEq(_selectorOf(ambA.messageAt(0).data), TokenMediator.deployAndHandleBridgedTokens.selector);
+        assertEq(_selectorOf(ambA.messageAt(1).data), TokenMediator.deployAndHandleBridgedTokensAndCall.selector);
     }
 
-    // ------------------------------------------------------------------------------------------------ fallback and claim
+    // ------------------------------------------------------------------------------------------------ claim
 
-    function test_aRecipientThatTheTokenRefusesIsPaidThroughTheFallback() public {
-        DenyListToken token = new DenyListToken();
+    /// @dev Bridges `value` of a fresh deny list token from alice to alice, then sends `value` of its copy from alice
+    /// on chain B to `receiver`, and returns the token. The caller denies `receiver` before the delivery.
+    function _denyListTokenSentBackTo(address receiver, uint256 value) private returns (DenyListToken token) {
+        token = new DenyListToken();
         token.mint(alice, 100 ether);
         vm.startPrank(alice);
         token.approve(address(mediatorA), type(uint256).max);
@@ -479,100 +469,59 @@ contract TokenMediatorTest is MediatorFixture {
         _deliverAtoB(0);
         address copy = _copyOf(address(token));
 
-        token.setDenied(bob, true);
+        token.setDenied(receiver, true);
         vm.startPrank(alice);
         IERC20(copy).approve(address(mediatorB), type(uint256).max);
-        mediatorB.relayTokensWithFallback(copy, bob, 60 ether, "", carol);
+        mediatorB.relayTokens(copy, receiver, value);
         vm.stopPrank();
+    }
+
+    /// Claim: a recipient that the token refuses ends the release for good, and nobody else is paid. Shows: the
+    /// delivery does not revert, `ReleaseFailed` names the recipient, the recipient and the sender receive nothing, the
+    /// record falls by the release (the copies are burned) and the tokens stay in the mediator, owed to nobody. A
+    /// second delivery of a later message to an accepted account still works. Matters: the mediator pays the
+    /// recipient and only the recipient, there is no claim, and the books of the two chains agree.
+    function test_aRecipientThatTheTokenRefusesEndsTheReleaseForGood() public {
+        DenyListToken token = _denyListTokenSentBackTo(bob, 60 ether);
 
         bytes32 id = ambB.messageAt(0).id;
         vm.expectEmit(true, true, true, true, address(mediatorA));
-        emit FallbackUsed(address(token), bob, carol, id);
-        vm.expectEmit(true, true, true, true, address(mediatorA));
-        emit TokensBridged(address(token), carol, 60 ether, id);
+        emit ReleaseFailed(address(token), bob, 60 ether, id);
         (bool ok,) = _deliverBtoA(0);
         assertTrue(ok, "the delivery does not revert");
-        assertEq(token.balanceOf(carol), 60 ether, "the fallback received the tokens");
-        assertEq(token.balanceOf(bob), 0);
-        assertEq(mediatorA.mediatorBalance(address(token)), 40 ether, "the record fell by the release");
-    }
-
-    function test_theSenderIsTheDefaultFallback() public {
-        DenyListToken token = new DenyListToken();
-        token.mint(alice, 100 ether);
-        vm.startPrank(alice);
-        token.approve(address(mediatorA), type(uint256).max);
-        mediatorA.relayTokens(address(token), alice, 100 ether);
-        vm.stopPrank();
-        _deliverAtoB(0);
-        address copy = _copyOf(address(token));
-
-        token.setDenied(bob, true);
-        vm.startPrank(alice);
-        IERC20(copy).approve(address(mediatorB), type(uint256).max);
-        mediatorB.relayTokens(copy, bob, 30 ether);
-        vm.stopPrank();
-        (bool ok,) = _deliverBtoA(0);
-        assertTrue(ok);
-        assertEq(token.balanceOf(alice), 30 ether, "the sender is paid on the other chain at the same address");
-    }
-
-    function test_whenBothRefuseTheAmountIsClaimableByTheFallback() public {
-        DenyListToken token = new DenyListToken();
-        token.mint(alice, 100 ether);
-        vm.startPrank(alice);
-        token.approve(address(mediatorA), type(uint256).max);
-        mediatorA.relayTokens(address(token), alice, 100 ether);
-        vm.stopPrank();
-        _deliverAtoB(0);
-        address copy = _copyOf(address(token));
-
-        token.setDenied(bob, true);
-        token.setDenied(carol, true);
-        vm.startPrank(alice);
-        IERC20(copy).approve(address(mediatorB), type(uint256).max);
-        mediatorB.relayTokensWithFallback(copy, bob, 60 ether, "", carol);
-        vm.stopPrank();
-
-        bytes32 id = ambB.messageAt(0).id;
-        vm.expectEmit(true, true, true, true, address(mediatorA));
-        emit ClaimableRecorded(address(token), carol, 60 ether, id);
-        (bool ok,) = _deliverBtoA(0);
-        assertTrue(ok, "the message stays delivered");
-        assertEq(mediatorA.claimable(address(token), carol), 60 ether);
+        assertEq(token.balanceOf(bob), 0, "the recipient received nothing");
+        assertEq(token.balanceOf(alice), 0, "nobody else is paid");
         assertEq(token.balanceOf(address(mediatorA)), 100 ether, "the tokens are still in the mediator");
-        assertEq(mediatorA.mediatorBalance(address(token)), 100 ether, "the record still counts them");
+        assertEq(mediatorA.mediatorBalance(address(token)), 40 ether, "the record fell by the release");
+        assertEq(IERC20(_copyOf(address(token))).totalSupply(), 40 ether, "the record equals the copies that remain");
 
-        // While the token still refuses the fallback, the claim fails and the amount stays.
+        token.setDenied(bob, false);
         vm.prank(dave);
-        vm.expectRevert(abi.encodeWithSelector(TokenMediator.ClaimTransferFailed.selector, address(token), carol));
-        mediatorA.claim(address(token), carol);
-        assertEq(mediatorA.claimable(address(token), carol), 60 ether);
+        (bool claimed,) = address(mediatorA).call(abi.encodeWithSignature("claim(address,address)", address(token), bob));
+        assertFalse(claimed, "the mediator has no claim function");
+        assertEq(token.balanceOf(bob), 0, "nothing pays the release later");
 
-        token.setDenied(carol, false);
-        vm.expectEmit(true, true, false, true, address(mediatorA));
-        emit Claimed(address(token), carol, 60 ether);
-        vm.prank(dave);
-        mediatorA.claim(address(token), carol);
-        assertEq(token.balanceOf(carol), 60 ether, "anyone may claim for the account, and it pays the account");
-        assertEq(token.balanceOf(dave), 0);
-        assertEq(mediatorA.claimable(address(token), carol), 0);
-        assertEq(mediatorA.mediatorBalance(address(token)), 40 ether);
-
-        vm.expectRevert(abi.encodeWithSelector(TokenMediator.NothingToClaim.selector, address(token), carol));
-        mediatorA.claim(address(token), carol);
+        vm.startPrank(alice);
+        mediatorB.relayTokens(_copyOf(address(token)), carol, 10 ether);
+        vm.stopPrank();
+        _deliverBtoA(1);
+        assertEq(token.balanceOf(carol), 10 ether, "a later release to an accepted account is paid");
+        assertEq(mediatorA.mediatorBalance(address(token)), 30 ether);
     }
 
-    function test_mintToTheZeroAddressFallsBackToTheFallback() public {
+    function test_aMintToTheZeroAddressFailsAndMintsNothing() public {
         _bridgeAtoB(alice, address(tokenA), alice, 1 ether);
         address copy = _copyOf(address(tokenA));
         bytes memory call = abi.encodeWithSelector(
-            TokenMediator.handleBridgedTokensWithFallback.selector, address(tokenA), address(0), 5 ether, carol
+            TokenMediator.handleBridgedTokens.selector, address(tokenA), address(0), 5 ether
         );
+        vm.expectEmit(true, true, true, true, address(mediatorB));
+        emit ReleaseFailed(copy, address(0), 5 ether, bytes32(uint256(3)));
         (bool ok,) =
             ambB.execute(address(mediatorB), call, address(mediatorA), bytes32(CHAIN_A), bytes32(uint256(3)), 1_000_000);
         assertTrue(ok);
-        assertEq(IERC20(copy).balanceOf(carol), 5 ether);
+        assertEq(IERC20(copy).totalSupply(), 1 ether, "nothing was minted");
+        assertEq(IERC20(copy).balanceOf(carol), 0, "nobody else is paid");
     }
 
     // ------------------------------------------------------------------------------------------------ input checks
@@ -586,10 +535,8 @@ contract TokenMediatorTest is MediatorFixture {
         vm.stopPrank();
     }
 
-    function test_relayRefusesAZeroFallbackAndAZeroAmount() public {
+    function test_relayRefusesAZeroAmount() public {
         vm.startPrank(alice);
-        vm.expectRevert(TokenMediator.ZeroFallback.selector);
-        mediatorA.relayTokensWithFallback(address(tokenA), bob, 1 ether, "", address(0));
         vm.expectRevert(TokenMediator.ZeroAmount.selector);
         mediatorA.relayTokens(address(tokenA), bob, 0);
         vm.stopPrank();
@@ -620,10 +567,8 @@ contract TokenMediatorTest is MediatorFixture {
         MockAMB.Sent memory message = ambB.messageAt(0);
         assertEq(
             message.data,
-            abi.encodeWithSelector(
-                TokenMediator.handleNativeTokensWithFallback.selector, address(tokenA), carol, 40 ether, bob
-            ),
-            "the receiver is carol, the fallback is the sender"
+            abi.encodeWithSelector(TokenMediator.handleNativeTokens.selector, address(tokenA), carol, 40 ether),
+            "the receiver is carol and the payload has no other address"
         );
     }
 
@@ -635,7 +580,7 @@ contract TokenMediatorTest is MediatorFixture {
         vm.prank(bob);
         copy.transferAndCall(address(mediatorB), 40 ether, abi.encodePacked(address(receiver), hex"1234"));
         MockAMB.Sent memory message = ambB.messageAt(0);
-        assertEq(_selectorOf(message.data), TokenMediator.handleNativeTokensAndCallWithFallback.selector);
+        assertEq(_selectorOf(message.data), TokenMediator.handleNativeTokensAndCall.selector);
         _deliverBtoA(0);
         assertEq(receiver.lastData(), hex"1234");
         assertEq(receiver.lastValue(), 40 ether);
@@ -761,48 +706,19 @@ contract TokenMediatorTest is MediatorFixture {
 
     // ------------------------------------------------------------------------------------------------ helpers
 
-    function _dropSelector(bytes memory data) private pure returns (bytes memory rest) {
-        rest = new bytes(data.length - 4);
-        for (uint256 i = 0; i < rest.length; i++) {
-            rest[i] = data[i + 4];
-        }
-    }
-
-    /// @dev One call of each of the twelve handlers, with arbitrary arguments.
+    /// @dev One call of each of the six handlers, with arbitrary arguments.
     function _allHandlerCalls() private view returns (bytes[] memory calls) {
         address token = address(tokenA);
-        calls = new bytes[](12);
+        calls = new bytes[](6);
         calls[0] = abi.encodeWithSelector(TokenMediator.handleNativeTokens.selector, token, bob, 1);
         calls[1] = abi.encodeWithSelector(TokenMediator.handleNativeTokensAndCall.selector, token, bob, 1, hex"01");
-        calls[2] = abi.encodeWithSelector(TokenMediator.handleNativeTokensWithFallback.selector, token, bob, 1, carol);
-        calls[3] = abi.encodeWithSelector(
-            TokenMediator.handleNativeTokensAndCallWithFallback.selector, token, bob, 1, hex"01", carol
-        );
-        calls[4] = abi.encodeWithSelector(TokenMediator.handleBridgedTokens.selector, token, bob, 1);
-        calls[5] = abi.encodeWithSelector(TokenMediator.handleBridgedTokensAndCall.selector, token, bob, 1, hex"01");
-        calls[6] = abi.encodeWithSelector(TokenMediator.handleBridgedTokensWithFallback.selector, token, bob, 1, carol);
-        calls[7] = abi.encodeWithSelector(
-            TokenMediator.handleBridgedTokensAndCallWithFallback.selector, token, bob, 1, hex"01", carol
-        );
-        calls[8] = abi.encodeWithSelector(
+        calls[2] = abi.encodeWithSelector(TokenMediator.handleBridgedTokens.selector, token, bob, 1);
+        calls[3] = abi.encodeWithSelector(TokenMediator.handleBridgedTokensAndCall.selector, token, bob, 1, hex"01");
+        calls[4] = abi.encodeWithSelector(
             TokenMediator.deployAndHandleBridgedTokens.selector, token, "N", "S", uint8(18), bob, 1
         );
-        calls[9] = abi.encodeWithSelector(
+        calls[5] = abi.encodeWithSelector(
             TokenMediator.deployAndHandleBridgedTokensAndCall.selector, token, "N", "S", uint8(18), bob, 1, hex"01"
-        );
-        calls[10] = abi.encodeWithSelector(
-            TokenMediator.deployAndHandleBridgedTokensWithFallback.selector, token, "N", "S", uint8(18), bob, 1, carol
-        );
-        calls[11] = abi.encodeWithSelector(
-            TokenMediator.deployAndHandleBridgedTokensAndCallWithFallback.selector,
-            token,
-            "N",
-            "S",
-            uint8(18),
-            bob,
-            1,
-            hex"01",
-            carol
         );
     }
 }

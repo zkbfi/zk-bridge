@@ -23,8 +23,10 @@ import {IWETH} from "./IWETH.sol";
 ///
 /// Source side. `wrapAndRelayTokens` and `relayTokensAndCall` follow `WETHOmnibridgeRouter` of OmniBridge
 /// (`contracts/helpers/WETHOmnibridgeRouter.sol`) without its owner, its `claimTokens` and its destination role. They
-/// wrap the coin and relay the wrapped token with `relayTokensWithFallback`. The fallback address on the other chain is
-/// the caller, not the router, because the router may not exist there. A receiver that is the zero address or this
+/// wrap the coin and relay the wrapped token with `relayTokens` or `relayTokensAndCall` of the mediator. The mediator
+/// pays the receiver only, and a release that the receiver cannot take becomes a claim of the receiver. This router has
+/// no fallback option. The entry points with a gas limit pass it to the mediator, which uses the larger of the request
+/// and its default. A receiver that is the zero address or this
 /// router is refused. The router sends nothing that it holds: the wrap and the relay run in one call. There is no second
 /// router for the unwrap: the `UNWRAP` flag and the 20 byte legacy data of `onTokenBridged` do it, as in
 /// `gibsfinance/omnibridge`, so the bridge needs one contract on each chain.
@@ -214,12 +216,18 @@ contract DeliveryRouter is ReentrancyGuard {
 
     /// @notice Wraps the coin and relays it to the caller on the other chain.
     function wrapAndRelayTokens() external payable {
-        _wrapAndRelay(msg.sender, "");
+        _wrapAndRelay(msg.sender, "", 0);
     }
 
     /// @notice Wraps the coin and relays it to `receiver` on the other chain.
     function wrapAndRelayTokens(address receiver) external payable {
-        _wrapAndRelay(receiver, "");
+        _wrapAndRelay(receiver, "", 0);
+    }
+
+    /// @notice Wraps the coin and relays it to `receiver` on the other chain, with a gas limit that the caller chooses.
+    /// @param gasLimit The gas that the call on the other chain gets, at least. The mediator applies its rule.
+    function wrapAndRelayTokens(address receiver, uint256 gasLimit) external payable {
+        _wrapAndRelay(receiver, "", gasLimit);
     }
 
     /// @notice Wraps the coin, relays it to `receiver` and calls `onTokenBridged` on it with `data`. Name a
@@ -227,7 +235,15 @@ contract DeliveryRouter is ReentrancyGuard {
     /// coin back there.
     function relayTokensAndCall(address receiver, bytes calldata data) external payable {
         if (data.length == 0) revert EmptyData();
-        _wrapAndRelay(receiver, data);
+        _wrapAndRelay(receiver, data, 0);
+    }
+
+    /// @notice Wraps the coin, relays it to `receiver` and calls it with `data`, with a gas limit that the caller
+    /// chooses. See `relayTokensAndCall` without a gas limit.
+    /// @param gasLimit The gas that the call on the other chain gets, at least. The mediator applies its rule.
+    function relayTokensAndCall(address receiver, bytes calldata data, uint256 gasLimit) external payable {
+        if (data.length == 0) revert EmptyData();
+        _wrapAndRelay(receiver, data, gasLimit);
     }
 
     /// @notice Executes a message on the message bridge, and takes the tip of any tokens that it delivers to this
@@ -312,10 +328,13 @@ contract DeliveryRouter is ReentrancyGuard {
         if (msg.sender != address(wNative)) revert NotWrappedTokenSender(msg.sender);
     }
 
-    function _wrapAndRelay(address receiver, bytes memory data) private {
+    /// @dev Wraps the coin and relays the wrapped token. Empty data means a plain relay. A gas limit of zero means the
+    /// default of the message.
+    function _wrapAndRelay(address receiver, bytes memory data, uint256 gasLimit) private {
         if (receiver == address(0) || receiver == address(this)) revert InvalidReceiver(receiver);
         wNative.deposit{value: msg.value}();
-        bridge.relayTokensWithFallback(address(wNative), receiver, msg.value, data, msg.sender);
+        if (data.length == 0) return bridge.relayTokens(address(wNative), receiver, msg.value, gasLimit);
+        bridge.relayTokensAndCall(address(wNative), receiver, msg.value, data, gasLimit);
     }
 
     /// @dev The delivery of one callback. The guard is held while it runs, so a payout hook that makes the mediator call

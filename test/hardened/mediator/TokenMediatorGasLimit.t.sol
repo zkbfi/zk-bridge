@@ -4,7 +4,6 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
-import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol";
 import {MediatorFixture, MockAMB, RecordingReceiver} from "./utils/MediatorSupport.sol";
 
 /// @notice The gas limit that a sender chooses for a message. OmniBridge sets the gas limit of each selector and token
@@ -16,14 +15,6 @@ contract TokenMediatorGasLimitTest is MediatorFixture {
     function setUp() public override {
         super.setUp();
         receiver = new RecordingReceiver();
-    }
-
-    function _options(address to, bytes memory data, address fallbackRecipient, uint256 gasLimit)
-        internal
-        pure
-        returns (ITokenMediator.RelayOptions memory)
-    {
-        return ITokenMediator.RelayOptions(to, data, fallbackRecipient, gasLimit);
     }
 
     /// @dev A first message and a trip back, so that the native side sends the short form from now on.
@@ -61,7 +52,7 @@ contract TokenMediatorGasLimitTest is MediatorFixture {
         assertEq(_lastGasLimitA(), mediatorA.RELEASE_GAS_LIMIT(), "later relay: release");
 
         vm.prank(alice);
-        mediatorA.relayTokensWithFallback(address(tokenA), bob, 1 ether, hex"02", carol);
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, hex"02");
         assertEq(
             _lastGasLimitA(),
             mediatorA.RELEASE_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT(),
@@ -69,7 +60,7 @@ contract TokenMediatorGasLimitTest is MediatorFixture {
         );
     }
 
-    // ================================================================ the options entry point
+    // ================================================================ the entry points with a gas limit
 
     /// Claim: a sender may ask for more gas than the default, and the mediator asks the bridge for exactly that.
     /// Shows: a release with a request of 400,000 gives a message limit of 400,000, and a release with a call and a
@@ -77,9 +68,9 @@ contract TokenMediatorGasLimitTest is MediatorFixture {
     function test_aRequestAboveTheDefaultIsUsed() public {
         _teachTheNativeSideThatTheCopyExists();
         vm.startPrank(alice);
-        mediatorA.relayTokensWithOptions(address(tokenA), 1 ether, _options(bob, "", bob, 400_000));
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether, 400_000);
         assertEq(_lastGasLimitA(), 400_000, "release");
-        mediatorA.relayTokensWithOptions(address(tokenA), 1 ether, _options(bob, hex"01", bob, 3_000_000));
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, hex"01", 3_000_000);
         assertEq(_lastGasLimitA(), 3_000_000, "release and call");
         vm.stopPrank();
 
@@ -87,7 +78,7 @@ contract TokenMediatorGasLimitTest is MediatorFixture {
         second.mint(alice, 5 ether);
         vm.startPrank(alice);
         second.approve(address(mediatorA), type(uint256).max);
-        mediatorA.relayTokensWithOptions(address(second), 1 ether, _options(bob, "", bob, 4_000_000));
+        mediatorA.relayTokens(address(second), bob, 1 ether, 4_000_000);
         vm.stopPrank();
         assertEq(_lastGasLimitA(), 4_000_000, "deploy");
     }
@@ -97,14 +88,12 @@ contract TokenMediatorGasLimitTest is MediatorFixture {
     /// starve the handler of the gas that its own work needs.
     function test_aRequestBelowTheDefaultGivesTheDefault() public {
         vm.startPrank(alice);
-        mediatorA.relayTokensWithOptions(address(tokenA), 1 ether, _options(bob, "", bob, 0));
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether, 0);
         assertEq(_lastGasLimitA(), mediatorA.DEPLOY_GAS_LIMIT(), "deploy, zero");
-        mediatorA.relayTokensWithOptions(address(tokenA), 1 ether, _options(bob, "", bob, 1));
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether, 1);
         assertEq(_lastGasLimitA(), mediatorA.DEPLOY_GAS_LIMIT(), "deploy, one");
-        mediatorA.relayTokensWithOptions(
-            address(tokenA),
-            1 ether,
-            _options(bob, hex"01", bob, mediatorA.DEPLOY_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT() - 1)
+        mediatorA.relayTokensAndCall(
+            address(tokenA), bob, 1 ether, hex"01", mediatorA.DEPLOY_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT() - 1
         );
         assertEq(
             _lastGasLimitA(), mediatorA.DEPLOY_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT(), "deploy and call, one less"
@@ -113,70 +102,76 @@ contract TokenMediatorGasLimitTest is MediatorFixture {
 
         _teachTheNativeSideThatTheCopyExists();
         vm.startPrank(alice);
-        mediatorA.relayTokensWithOptions(
-            address(tokenA), 1 ether, _options(bob, "", bob, mediatorA.RELEASE_GAS_LIMIT() - 1)
-        );
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether, mediatorA.RELEASE_GAS_LIMIT() - 1);
         assertEq(_lastGasLimitA(), mediatorA.RELEASE_GAS_LIMIT(), "release, one less");
-        mediatorA.relayTokensWithOptions(
-            address(tokenA), 1 ether, _options(bob, "", bob, mediatorA.RELEASE_GAS_LIMIT())
-        );
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether, mediatorA.RELEASE_GAS_LIMIT());
         assertEq(_lastGasLimitA(), mediatorA.RELEASE_GAS_LIMIT(), "release, equal");
+        mediatorA.relayTokensAndCall(
+            address(tokenA), bob, 1 ether, hex"01", mediatorA.RELEASE_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT() - 1
+        );
+        assertEq(
+            _lastGasLimitA(),
+            mediatorA.RELEASE_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT(),
+            "release and call, one less"
+        );
         vm.stopPrank();
     }
 
     /// Claim: a request above the maximum of the bridge is refused with the existing error, and the maximum itself is
-    /// allowed. Shows: the error carries the request and the maximum, and no tokens move. Matters: the bridge would
-    /// refuse the send anyway, but with an error that does not name the mediator rule.
+    /// allowed. Shows: the error carries the request and the maximum, no tokens move, and both overloads obey the rule.
+    /// Matters: the bridge would refuse the send anyway, but with an error that does not name the mediator rule.
     function test_aRequestAboveTheBridgeMaximumIsRefused() public {
         uint256 maximum = ambA.maxGasPerTx();
         uint256 balanceBefore = tokenA.balanceOf(alice);
-        vm.prank(alice);
+        vm.startPrank(alice);
         vm.expectRevert(abi.encodeWithSelector(TokenMediator.GasLimitAboveBridgeMaximum.selector, maximum + 1, maximum));
-        mediatorA.relayTokensWithOptions(address(tokenA), 1 ether, _options(bob, "", bob, maximum + 1));
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether, maximum + 1);
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.GasLimitAboveBridgeMaximum.selector, maximum + 1, maximum));
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, hex"01", maximum + 1);
+        vm.stopPrank();
         assertEq(tokenA.balanceOf(alice), balanceBefore, "nothing moved");
         assertEq(ambA.sentCount(), 0, "nothing sent");
 
-        vm.prank(alice);
-        mediatorA.relayTokensWithOptions(address(tokenA), 1 ether, _options(bob, "", bob, maximum));
-        assertEq(_lastGasLimitA(), maximum, "the maximum is allowed");
-    }
-
-    /// Claim: the options entry point keeps the checks of the other entry points. Shows: a zero receiver, the remote
-    /// mediator as receiver and a zero fallback revert with their own errors.
-    function test_theOptionsKeepTheChecksOfTheOtherEntryPoints() public {
         vm.startPrank(alice);
-        vm.expectRevert(abi.encodeWithSelector(TokenMediator.InvalidReceiver.selector, address(0)));
-        mediatorA.relayTokensWithOptions(address(tokenA), 1 ether, _options(address(0), "", bob, 0));
-        vm.expectRevert(abi.encodeWithSelector(TokenMediator.InvalidReceiver.selector, address(mediatorB)));
-        mediatorA.relayTokensWithOptions(address(tokenA), 1 ether, _options(address(mediatorB), "", bob, 0));
-        vm.expectRevert(TokenMediator.ZeroFallback.selector);
-        mediatorA.relayTokensWithOptions(address(tokenA), 1 ether, _options(bob, "", address(0), 0));
-        vm.expectRevert(TokenMediator.ZeroAmount.selector);
-        mediatorA.relayTokensWithOptions(address(tokenA), 0, _options(bob, "", bob, 0));
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether, maximum);
+        assertEq(_lastGasLimitA(), maximum, "the maximum is allowed");
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, hex"01", maximum);
+        assertEq(_lastGasLimitA(), maximum, "the maximum is allowed with a call");
         vm.stopPrank();
     }
 
-    /// Claim: the receiver, the data and the fallback of the options reach the other chain unchanged, and the data is
-    /// opaque. Shows: with the short form after the return trip, the message is exactly `handleBridgedTokensAndCallWithFallback`
-    /// with the sender chosen fallback. The data is arbitrary bytes (a fee director of a router has such a shape, and
-    /// the mediator never reads it). The receiver sees the same bytes in `onTokenBridged`. Empty data in the options
-    /// means a plain release, with no callback.
-    function test_theOptionsReachTheOtherChainUnchanged() public {
+    /// Claim: the overloads with a gas limit keep the checks of the other entry points. Shows: a zero receiver, the
+    /// remote mediator as receiver and a zero amount revert with their own errors.
+    function test_theGasLimitOverloadsKeepTheChecksOfTheOtherEntryPoints() public {
+        vm.startPrank(alice);
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.InvalidReceiver.selector, address(0)));
+        mediatorA.relayTokens(address(tokenA), address(0), 1 ether, 0);
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.InvalidReceiver.selector, address(mediatorB)));
+        mediatorA.relayTokens(address(tokenA), address(mediatorB), 1 ether, 0);
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.InvalidReceiver.selector, address(0)));
+        mediatorA.relayTokensAndCall(address(tokenA), address(0), 1 ether, hex"01", 0);
+        vm.expectRevert(TokenMediator.ZeroAmount.selector);
+        mediatorA.relayTokens(address(tokenA), bob, 0, 0);
+        vm.expectRevert(TokenMediator.ZeroAmount.selector);
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 0, hex"01", 0);
+        vm.stopPrank();
+    }
+
+    /// Claim: the receiver and the data reach the other chain unchanged, and the data is opaque. Shows: with the short
+    /// form after the return trip, the message is exactly `handleBridgedTokensAndCall`, with no other address. The data
+    /// is arbitrary bytes (a fee director of a router has such a shape, and the mediator never reads it). The receiver
+    /// sees the same bytes in `onTokenBridged`. The overload without data sends the plain release, with no callback.
+    function test_theGasLimitOverloadsSendTheOmnibridgePayload() public {
         _teachTheNativeSideThatTheCopyExists();
         bytes memory opaque = abi.encodePacked(hex"deadbeef", uint256(7), bytes32(type(uint256).max), hex"00");
         vm.prank(alice);
-        mediatorA.relayTokensWithOptions(address(tokenA), 5 ether, _options(address(receiver), opaque, carol, 600_000));
+        mediatorA.relayTokensAndCall(address(tokenA), address(receiver), 5 ether, opaque, 600_000);
         uint256 index = _lastIndexA();
         MockAMB.Sent memory message = ambA.messageAt(index);
         assertEq(
             message.data,
             abi.encodeWithSelector(
-                TokenMediator.handleBridgedTokensAndCallWithFallback.selector,
-                address(tokenA),
-                address(receiver),
-                5 ether,
-                opaque,
-                carol
+                TokenMediator.handleBridgedTokensAndCall.selector, address(tokenA), address(receiver), 5 ether, opaque
             ),
             "the payload"
         );
@@ -189,14 +184,27 @@ contract TokenMediatorGasLimitTest is MediatorFixture {
         assertEq(receiver.lastValue(), 5 ether);
 
         vm.prank(alice);
-        mediatorA.relayTokensWithOptions(address(tokenA), 2 ether, _options(bob, "", carol, 0));
+        mediatorA.relayTokens(address(tokenA), bob, 2 ether, 0);
         assertEq(
             ambA.messageAt(_lastIndexA()).data,
-            abi.encodeWithSelector(
-                TokenMediator.handleBridgedTokensWithFallback.selector, address(tokenA), bob, 2 ether, carol
-            ),
-            "empty data is a plain release"
+            abi.encodeWithSelector(TokenMediator.handleBridgedTokens.selector, address(tokenA), bob, 2 ether),
+            "no data is a plain release"
         );
+    }
+
+    /// Claim: a gas limit from the sender changes nothing in the payload. Shows: the same relay with and without a gas
+    /// limit gives the same data, and only the gas limit of the message differs. Matters: the gas limit is a request to
+    /// the bridge and no part of the message that the other chain reads.
+    function test_theGasLimitIsNotPartOfThePayload() public {
+        _teachTheNativeSideThatTheCopyExists();
+        vm.startPrank(alice);
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether);
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether, 900_000);
+        vm.stopPrank();
+        uint256 last = _lastIndexA();
+        assertEq(ambA.messageAt(last).data, ambA.messageAt(last - 1).data, "same payload");
+        assertEq(ambA.messageAt(last - 1).gasLimit, mediatorA.RELEASE_GAS_LIMIT());
+        assertEq(ambA.messageAt(last).gasLimit, 900_000);
     }
 
     /// Claim: the receiver on the other chain gets the gas that the sender asked for, because the message carries it.
@@ -213,7 +221,7 @@ contract TokenMediatorGasLimitTest is MediatorFixture {
         assertEq(heavy.finished(), 0, "the default gas is too little for the callback");
 
         vm.prank(alice);
-        mediatorA.relayTokensWithOptions(address(tokenA), 1 ether, _options(address(heavy), hex"01", alice, 2_000_000));
+        mediatorA.relayTokensAndCall(address(tokenA), address(heavy), 1 ether, hex"01", 2_000_000);
         (ok,) = _deliverAtoB(_lastIndexA());
         assertTrue(ok);
         assertEq(heavy.finished(), 1, "the requested gas is enough for the callback");

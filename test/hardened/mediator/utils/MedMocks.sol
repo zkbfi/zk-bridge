@@ -88,7 +88,6 @@ contract MedHostileLimiter is IFlowLimiter {
     enum Move {
         None,
         ReenterRelay,
-        ReenterClaim,
         CallHandler,
         PullTokens
     }
@@ -130,12 +129,6 @@ contract MedHostileLimiter is IFlowLimiter {
         bytes memory failure;
         if (move == Move.ReenterRelay) {
             try TokenMediator(mediator).relayTokens(token, amount) {}
-            catch (bytes memory reason) {
-                failure = reason;
-            }
-        }
-        if (move == Move.ReenterClaim) {
-            try TokenMediator(mediator).claim(token, address(this)) {}
             catch (bytes memory reason) {
                 failure = reason;
             }

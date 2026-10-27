@@ -39,3 +39,19 @@ contract InvalidOpcodeToken is ERC20 {
         }
     }
 }
+
+/// @notice A token whose `transfer` always reverts, with a reason. `transferFrom` works, so the token can enter the
+/// mediator and then never leave it by a transfer.
+contract RevertingToken is ERC20 {
+    error TransferAlwaysReverts();
+
+    constructor() ERC20("Reverting", "REV") {}
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+
+    function transfer(address, uint256) public pure override returns (bool) {
+        revert TransferAlwaysReverts();
+    }
+}

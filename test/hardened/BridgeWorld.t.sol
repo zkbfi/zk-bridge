@@ -157,9 +157,8 @@ contract BridgeWorldTest is WorldSupport {
     function test_tokenRelayRoundTrip() public {
         // Step 1 and 2: send on A, execute on B (the first message, so it deploys the copy).
         (Vm.Log[] memory sentOnA, uint256 sendGasOnA) = _relayFromA(alice, receiverOnB, AMOUNT);
-        // `relayTokens` names the sender as the fallback of the release, so the messages are the `WithFallback` forms.
         (, bytes memory firstData) = _messageOf(sentOnA, bridgeA);
-        assertEq(_selectorOfData(firstData), mediatorB.deployAndHandleBridgedTokensWithFallback.selector, "the first message deploys");
+        assertEq(_selectorOfData(firstData), mediatorB.deployAndHandleBridgedTokens.selector, "the first message deploys");
         assertFalse(mediatorA.isBridgedTokenDeployAcknowledged(address(nativeToken)), "no return trip yet");
 
         Transit memory toB = _deliverToB(sentOnA);
@@ -194,7 +193,7 @@ contract BridgeWorldTest is WorldSupport {
         // A second relay after the return trip is the short form, and it costs less to execute.
         (Vm.Log[] memory secondOnA,) = _relayFromA(alice, receiverOnB, AMOUNT);
         (, bytes memory secondData) = _messageOf(secondOnA, bridgeA);
-        assertEq(_selectorOfData(secondData), mediatorB.handleBridgedTokensWithFallback.selector, "the short form");
+        assertEq(_selectorOfData(secondData), mediatorB.handleBridgedTokens.selector, "the short form");
         Transit memory second = _deliverToB(secondOnA);
         assertEq(BridgedToken(copy).balanceOf(receiverOnB), AMOUNT, "the short form mints to the receiver");
         assertLt(second.gasUsed, toB.gasUsed, "the short form is cheaper than the deploy form");

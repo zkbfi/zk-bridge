@@ -12,7 +12,7 @@ import {MediatorFixture, ScriptedMediatorLimiter} from "./utils/MediatorSupport.
 /// limiter again.
 contract TokenMediatorLimiterTest is MediatorFixture {
     event FlowLimiterDetached(address indexed limiter);
-    event ClaimableRecorded(address indexed token, address indexed account, uint256 value, bytes32 indexed messageId);
+    event ReleaseFailed(address indexed token, address indexed recipient, uint256 value, bytes32 indexed messageId);
     event TokensBridgingInitiated(
         address indexed token, address indexed sender, uint256 value, bytes32 indexed messageId
     );
@@ -119,7 +119,11 @@ contract TokenMediatorLimiterTest is MediatorFixture {
         assertEq(tokenA.balanceOf(carol), 60 ether);
     }
 
-    function test_aLimiterThatRefusesAReleaseLeavesAClaimAndTheDeliveryHolds() public {
+    /// Claim: a limiter that refuses a release makes the release final, and the delivery still holds. Shows:
+    /// `ReleaseFailed` names carol, the handler does not revert, carol gets nothing, the record falls by the release
+    /// (the copies are burned) and the tokens stay in the mediator, owed to nobody. Asking the limiter again later
+    /// changes nothing, because the mediator keeps no claim.
+    function test_aLimiterThatRefusesAReleaseMakesItFinalAndTheDeliveryHolds() public {
         ScriptedMediatorLimiter limiter = new ScriptedMediatorLimiter();
         _redeploy(_limiterTerms(address(limiter)), _limiterTerms(address(0)));
         _bridgeAtoB(alice, address(tokenA), bob, 100 ether);
@@ -132,23 +136,17 @@ contract TokenMediatorLimiterTest is MediatorFixture {
         limiter.setRefusals(false, true);
         bytes32 id = ambB.messageAt(0).id;
         vm.expectEmit(true, true, true, true, address(mediatorA));
-        emit ClaimableRecorded(address(tokenA), carol, 60 ether, id);
+        emit ReleaseFailed(address(tokenA), carol, 60 ether, id);
         (bool ok,) = _deliverBtoA(0);
         assertTrue(ok, "the refusal does not revert the delivery, which would lose the tokens");
         assertEq(tokenA.balanceOf(carol), 0);
-        assertEq(mediatorA.claimable(address(tokenA), carol), 60 ether);
-        assertEq(mediatorA.mediatorBalance(address(tokenA)), 100 ether, "the record still counts the amount");
-
-        // The claim asks the limiter again. A refusal reverts and the claim stays.
-        vm.expectRevert(ScriptedMediatorLimiter.FlowRefused.selector);
-        mediatorA.claim(address(tokenA), carol);
-        assertEq(mediatorA.claimable(address(tokenA), carol), 60 ether);
+        assertEq(mediatorA.mediatorBalance(address(tokenA)), 40 ether, "the record fell by the release");
+        assertEq(tokenA.balanceOf(address(mediatorA)), 100 ether, "the tokens stay in the mediator");
+        assertEq(IERC20(copy).totalSupply(), 40 ether, "the record equals the copies that remain");
 
         limiter.setRefusals(false, false);
-        mediatorA.claim(address(tokenA), carol);
-        assertEq(tokenA.balanceOf(carol), 60 ether);
-        assertEq(limiter.lastWithdrawalNonce(), bytes32(0), "a claim has a zero nonce");
-        assertEq(mediatorA.mediatorBalance(address(tokenA)), 40 ether);
+        assertEq(tokenA.balanceOf(carol), 0, "nothing pays the release later");
+        assertEq(limiter.withdrawalChecks(), 0, "the refused check reverted inside the handler and left no count");
     }
 
     function test_onlyTheLimiterCanDetachAndItIsOneWay() public {

@@ -16,7 +16,7 @@ interface IMintable {
 
 /// @notice Drives two mediators joined by two mock bridges. Four kinds of native token live on the two chains: a plain
 /// token and a fee on transfer token and a token with a deny list on chain A, and a plain token on chain B. Senders
-/// relay natives and copies, messages arrive late and out of order, accounts claim, anyone donates tokens by a plain
+/// relay natives and copies, messages arrive late and out of order, anyone donates tokens by a plain
 /// transfer, and an attacker forges messages.
 /// @dev What this handler claims. Every message that it sends is delivered at most once, by the mock bridge, with the
 /// context that the real bridge would set. The mock does not read a proof, so the handler does not show that the
@@ -60,14 +60,15 @@ contract MediatorHandler is Test {
     mapping(uint256 index => uint256) public donated;
     /// @dev For each native token, the value of the messages that are sent and not yet delivered.
     mapping(uint256 index => uint256) public inFlight;
+    /// @dev For each native token, the value of releases that failed: it stays in the home mediator, owed to nobody.
+    mapping(uint256 index => uint256) public stuck;
 
     uint256 public pendingCount;
     uint256 public failedDeliveries;
     uint256 public relaysFromNative;
     uint256 public relaysFromCopy;
     uint256 public deliveredReleases;
-    uint256 public claimsPaid;
-    uint256 public claimAttemptsRefused;
+    uint256 public failedReleases;
     uint256 public donatedCount;
     uint256 public outOfOrderDeliveries;
     uint256 public forgedAttempts;
@@ -147,21 +148,6 @@ contract MediatorHandler is Test {
     function deliverNewestPending() external {
         if (pendingCount == 0) return;
         _deliver(_nthPending(pendingCount - 1));
-    }
-
-    /// @notice Pays what a failed release left for an account. The call may fail while the token still refuses.
-    function claim(uint8 tokenSeed, uint8 actorSeed) external {
-        uint256 index = tokenSeed % _natives.length;
-        address account = _actor(actorSeed);
-        TokenMediator mediator = homeMediator(index);
-        address token = _natives[index];
-        uint256 amount = mediator.claimable(token, account);
-        if (amount == 0) return;
-        try mediator.claim(token, account) {
-            claimsPaid += amount;
-        } catch {
-            claimAttemptsRefused++;
-        }
     }
 
     /// @notice Sends tokens to the home mediator by a plain transfer, as a mistaken sender does. The record does not
@@ -266,7 +252,7 @@ contract MediatorHandler is Test {
         uint256 supply;
     }
 
-    /// @dev Relays with the plain form or with an explicit fallback, by the seed. It checks that the message carries
+    /// @dev Relays with the plain form or with the form that has a gas limit, by the seed. It checks that the message carries
     /// exactly the value that the mediator took in, and it queues the message.
     function _relay(
         TokenMediator mediator,
@@ -282,7 +268,7 @@ contract MediatorHandler is Test {
         IERC20(token).approve(address(mediator), amount);
         if (receiverSeed % 2 == 0) mediator.relayTokens(token, _actor(receiverSeed), amount);
         if (receiverSeed % 2 == 1) {
-            mediator.relayTokensWithFallback(token, _actor(receiverSeed), amount, "", _actor(receiverSeed >> 2));
+            mediator.relayTokens(token, _actor(receiverSeed), amount, uint256(receiverSeed) * 1_000);
         }
         vm.stopPrank();
         _recordSent(bridge, _movedIn(mediator, token, before));
@@ -329,12 +315,22 @@ contract MediatorHandler is Test {
         bytes memory data = (message.direction == Direction.AtoB ? ambA : ambB).messageAt(message.index).data;
         (address token, uint256 value) = _tokenAndValueOf(data);
         bool ok;
+        bool isRelease = _isRelease(message);
+        uint256 index = _nativeIndexOf(token);
+        uint256 heldBefore = IERC20(token).balanceOf(address(homeMediator(index)));
         if (message.direction == Direction.AtoB) (ok,) = ambB.deliver(ambA, message.index);
         if (message.direction == Direction.BtoA) (ok,) = ambA.deliver(ambB, message.index);
         if (!ok) failedDeliveries++;
-        if (ok && _isRelease(message)) deliveredReleases++;
         if (!ok) return;
-        inFlight[_nativeIndexOf(token)] -= value;
+        inFlight[index] -= value;
+        if (!isRelease) return;
+        // A release that paid took exactly its value out of the home mediator. A failed one took nothing out.
+        uint256 paidOut = heldBefore - IERC20(token).balanceOf(address(homeMediator(index)));
+        if (paidOut == value) deliveredReleases++;
+        if (paidOut != value) {
+            failedReleases++;
+            stuck[index] += value;
+        }
     }
 
     /// @dev The token that a message names and the value that it delivers. The token, the recipient and the
@@ -355,8 +351,8 @@ contract MediatorHandler is Test {
     function _isDeploy(bytes4 selector) private pure returns (bool) {
         return selector == TokenMediator.deployAndHandleBridgedTokens.selector
             || selector == TokenMediator.deployAndHandleBridgedTokensAndCall.selector
-            || selector == TokenMediator.deployAndHandleBridgedTokensWithFallback.selector
-            || selector == TokenMediator.deployAndHandleBridgedTokensAndCallWithFallback.selector;
+            || selector == TokenMediator.deployAndHandleBridgedTokens.selector
+            || selector == TokenMediator.deployAndHandleBridgedTokensAndCall.selector;
     }
 
     function _isRelease(Pending storage message) private view returns (bool) {
@@ -367,8 +363,7 @@ contract MediatorHandler is Test {
         assembly {
             selector := mload(add(data, 0x20))
         }
-        return selector == TokenMediator.handleNativeTokens.selector
-            || selector == TokenMediator.handleNativeTokensWithFallback.selector;
+        return selector == TokenMediator.handleNativeTokens.selector;
     }
 
     /// @dev The position among the messages that are not delivered, counted in the order of sending.
@@ -397,7 +392,7 @@ contract MediatorHandler is Test {
     }
 
     /// @dev One hash over everything that a forged message could change: the balances of the mediators and the
-    /// attacker, the records, the claims of the attacker, the supply of the copies, and the registry of the copies.
+    /// attacker, the records, the supply of the copies, and the registry of the copies.
     function _fingerprint() public view returns (bytes32 digest) {
         digest = keccak256("fingerprint");
         for (uint256 i = 0; i < _natives.length; i++) {
@@ -410,7 +405,6 @@ contract MediatorHandler is Test {
                     IERC20(token).balanceOf(address(mediatorB)),
                     IERC20(token).balanceOf(attacker),
                     homeMediator(i).mediatorBalance(token),
-                    homeMediator(i).claimable(token, attacker),
                     copy
                 )
             );
@@ -442,37 +436,35 @@ contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
         _deployMediators(_noTerms(), _noTerms());
         handler = new MediatorHandler(ambA, ambB, mediatorA, mediatorB);
         targetContract(address(handler));
-        bytes4[] memory selectors = new bytes4[](11);
+        bytes4[] memory selectors = new bytes4[](10);
         selectors[0] = MediatorHandler.relayNativeAndDeliver.selector;
         selectors[1] = MediatorHandler.relayNativeDeferred.selector;
         selectors[2] = MediatorHandler.relayCopyAndDeliver.selector;
         selectors[3] = MediatorHandler.relayCopyDeferred.selector;
         selectors[4] = MediatorHandler.deliverPending.selector;
         selectors[5] = MediatorHandler.deliverNewestPending.selector;
-        selectors[6] = MediatorHandler.claim.selector;
-        selectors[7] = MediatorHandler.donate.selector;
-        selectors[8] = MediatorHandler.toggleDeny.selector;
-        selectors[9] = MediatorHandler.forge.selector;
+        selectors[6] = MediatorHandler.donate.selector;
+        selectors[7] = MediatorHandler.toggleDeny.selector;
+        selectors[8] = MediatorHandler.forge.selector;
         // Deliveries are the most useful action, so the list names it twice.
-        selectors[10] = MediatorHandler.deliverPending.selector;
+        selectors[9] = MediatorHandler.deliverPending.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
     }
 
-    /// Claim: the home mediator holds exactly its record plus the tokens that arrived by a plain transfer, and the
-    /// away mediator holds no copy. Shows: after every call sequence, for each native token, balance == record +
-    /// donations, the record covers every amount that waits in `claimable`, and the copy balance of the away mediator
-    /// is zero. Matters: the mediator takes no cut of a relay or of a release, so nothing else can stay in it. The
-    /// record already counts the claimable amounts (a refused release returns to it), so the claims are not added a
-    /// second time. Honest limit: for a token that charges a fee on transfer, the balance is the real balance, and the
-    /// record counts what arrived.
-    function invariant_theHomeBalanceIsTheRecordPlusDonations() public view {
+    /// Claim: the home mediator holds exactly its record, plus the tokens of failed releases, plus the tokens that
+    /// arrived by a plain transfer, and the away mediator holds no copy. Shows: after every call sequence, for each
+    /// native token, balance == record + stuck + donations, and the copy balance of the away mediator is zero.
+    /// Matters: the mediator takes no cut of a relay or of a release. A failed release leaves its tokens in the
+    /// mediator, owed to nobody, and the record falls by them: the other chain burned the copies. Honest limit: for a
+    /// token that charges a fee on transfer, the balance is the real balance, and the record counts what arrived.
+    function invariant_theHomeBalanceIsTheRecordPlusStuckPlusDonations() public view {
         for (uint256 i = 0; i < handler.nativeCount(); i++) {
             address token = handler.nativeAt(i);
             TokenMediator home = handler.homeMediator(i);
             uint256 record = home.mediatorBalance(token);
-            assertEq(IERC20(token).balanceOf(address(home)), record + handler.donated(i), "native balance");
-
-            assertGe(record, _claimsOnToken(i), "the record covers the claims");
+            assertEq(
+                IERC20(token).balanceOf(address(home)), record + handler.stuck(i) + handler.donated(i), "native balance"
+            );
 
             address copy = handler.copyOf(i);
             if (copy == address(0)) continue;
@@ -480,19 +472,18 @@ contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
         }
     }
 
-    /// Claim: the record equals the copies, plus the claims, plus the value in flight, at every moment. Shows: for each
-    /// native token, record == supply of the copy + claims + the value of the messages that are sent and not
+    /// Claim: the record equals the copies plus the value in flight, at every moment, whether or not a release failed.
+    /// Shows: for each native token, record == supply of the copy + the value of the messages that are sent and not
     /// delivered. A native token with no copy has only the value in flight. Matters: a copy without a locked token
-    /// behind it is a claim on nothing, and a locked token without a copy or a message is lost. The claims are part of
-    /// the sum because a release that the token refused burned its copies on the other chain and stays in the record,
-    /// owed to the fallback.
-    function invariant_theRecordIsTheCopiesPlusTheClaimsPlusWhatIsInFlight() public view {
+    /// behind it is a claim on nothing, and a locked token without a copy or a message is lost. A failed release
+    /// burned its copies on the other chain and lowered the record by the same value, so the sum holds.
+    function invariant_theRecordIsTheCopiesPlusWhatIsInFlight() public view {
         for (uint256 i = 0; i < handler.nativeCount(); i++) {
             address token = handler.nativeAt(i);
             uint256 record = handler.homeMediator(i).mediatorBalance(token);
             address copy = handler.copyOf(i);
             uint256 supply = copy == address(0) ? 0 : IERC20(copy).totalSupply();
-            assertEq(record, supply + _claimsOnToken(i) + handler.inFlight(i), "the record is not accounted for");
+            assertEq(record, supply + handler.inFlight(i), "the record is not accounted for");
         }
     }
 
@@ -548,18 +539,22 @@ contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
         assertTrue(handler.copyOf(1) != address(0));
         assertTrue(handler.copyOf(3) != address(0));
 
-        // A release to a denied account goes to the fallback, and to a claim when both are denied.
+        // A release to a denied account is final: it fails, and the tokens stay in the mediator.
         handler.relayNativeAndDeliver(2, 0, 80 ether, 0);
         handler.toggleDeny(1);
         handler.toggleDeny(2);
-        // Seed 9: the receiver is actor 1, and the explicit fallback is actor 2. Both are denied.
+        // Seed 9: the receiver is actor 1, who is denied.
         handler.relayCopyAndDeliver(2, 0, 10 ether, 9);
-        assertGt(_claimsOnToken(2), 0, "a release is held for a claim");
+        assertEq(handler.failedReleases(), 1, "the release to a denied account failed");
+        assertEq(handler.stuck(2), 10 ether, "its value stays in the mediator");
+        assertEq(handler.failedDeliveries(), 0, "the handler did not revert");
+        assertEq(
+            mediatorA.mediatorBalance(handler.nativeAt(2)) + handler.stuck(2),
+            IERC20(handler.nativeAt(2)).balanceOf(address(mediatorA)),
+            "the balance is the record plus the stuck value"
+        );
         handler.toggleDeny(1);
         handler.toggleDeny(2);
-        handler.claim(2, 1);
-        handler.claim(2, 2);
-        assertGt(handler.claimsPaid(), 0, "a claim paid");
 
         handler.donate(0, 7 ether);
         assertEq(handler.donatedCount(), 1);
@@ -577,12 +572,5 @@ contract TokenMediatorInvariantTest is StdInvariant, MediatorFixture {
         assertEq(handler.forgedAttempts(), 3);
         assertEq(handler.forgedSuccesses(), 0);
         assertEq(handler.forgedChanges(), 0);
-    }
-
-    function _claimsOnToken(uint256 index) internal view returns (uint256 total) {
-        address token = handler.nativeAt(index);
-        for (uint256 j = 0; j < handler.actorCount(); j++) {
-            total += handler.homeMediator(index).claimable(token, handler.actors(j));
-        }
     }
 }

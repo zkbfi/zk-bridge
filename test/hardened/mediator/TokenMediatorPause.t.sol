@@ -11,14 +11,13 @@ import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
 import {WorldSupport} from "../utils/WorldSupport.sol";
 import {DenyListToken} from "./utils/MediatorSupport.sol";
 
-/// @notice A token that an issuer can freeze, and a fallback address that is a contract. Both run through the real
-/// bridge and the real mediator. A release that the token refuses goes to the fallback address of the message, then to
-/// the claim record of the fallback address. The tests assert who is paid, who is not, and every balance.
+/// @notice A token that an issuer can freeze, and a recipient that is a contract. Both run through the real bridge and
+/// the real mediator. A release that the token refuses is final: the handler emits `ReleaseFailed`, and nobody is paid. The
+/// tests assert who is paid, who is not, and every balance.
 contract TokenMediatorPauseTest is WorldSupport {
     uint256 internal constant AMOUNT = 100 ether;
 
     address internal recipient = makeAddr("recipient on A");
-    address internal fallbackAccount = makeAddr("fallback on A");
     address internal stranger = makeAddr("a stranger");
 
     /// @dev Locks `AMOUNT` of `token` on chain A for bob on chain B, and delivers the message.
@@ -33,13 +32,13 @@ contract TokenMediatorPauseTest is WorldSupport {
         copy = mediatorB.bridgedTokenAddress(token);
     }
 
-    /// @dev Bob sends the copy back to `to`, with `fallbackTo` as the fallback. Returns the proof, not yet executed.
-    function _sendBack(address copy, address to, address fallbackTo) internal returns (Transit memory) {
+    /// @dev Bob sends the copy back to `to`. Returns the proof, not yet executed.
+    function _sendBack(address copy, address to) internal returns (Transit memory) {
         vm.chainId(CHAIN_B);
         vm.startPrank(bob);
         BridgedToken(copy).approve(address(mediatorB), type(uint256).max);
         vm.recordLogs();
-        mediatorB.relayTokensWithFallback(copy, to, AMOUNT, "", fallbackTo);
+        mediatorB.relayTokens(copy, to, AMOUNT);
         vm.stopPrank();
         return _proveForA(vm.getRecordedLogs());
     }
@@ -57,53 +56,33 @@ contract TokenMediatorPauseTest is WorldSupport {
         }
     }
 
-    /// Claim: a token that is paused during a release sends the amount to the claim record of the fallback address.
-    /// After the unpause, anyone can trigger the claim, and the fallback address is paid, not the caller. Shows: with
-    /// the pause on, the handler does not revert, nobody holds tokens, and `claimable` holds the amount for the fallback
-    /// address and not for the recipient. A claim while the token is still paused reverts and keeps the record. After
-    /// the unpause, a stranger calls `claim`: the fallback address holds the amount, the stranger and the recipient hold
-    /// nothing, the record and `mediatorBalance` are zero, and a second claim reverts. Matters: this is the safe path
-    /// for a token that an issuer freezes, and the pause may be short.
-    function test_aPausedTokenLeavesAClaimForTheFallbackAddress() public {
+    /// Claim: a token that is paused during a release ends the release for good. Shows: with the pause on, the
+    /// handler does not revert, `ReleaseFailed` names the recipient and the amount, nobody holds tokens, the record
+    /// falls by the release and the tokens stay in the mediator, owed to nobody. After the unpause nothing pays the
+    /// recipient: the mediator has no claim. Matters: this is the cost of a token that an issuer freezes, and it is
+    /// the rule of the design: if tokens get stuck, they are stuck for good.
+    function test_aPausedTokenEndsTheReleaseForGood() public {
         PausableToken token = new PausableToken("Pausable Dollar", "PAUSE");
         token.mint(alice, AMOUNT);
         address copy = _lockAndDeliver(address(token));
-        Transit memory transit = _sendBack(copy, recipient, fallbackAccount);
+        Transit memory transit = _sendBack(copy, recipient);
 
         token.pause();
         Vm.Log[] memory logs = _executeOnA(transit);
 
-        assertEq(_count(logs, address(mediatorA), TokenMediator.ClaimableRecorded.selector), 1, "one claim event");
+        assertEq(_count(logs, address(mediatorA), TokenMediator.ReleaseFailed.selector), 1, "one failure event");
         assertEq(_count(logs, address(mediatorA), TokenMediator.TokensBridged.selector), 0, "nobody was paid");
-        assertEq(_count(logs, address(mediatorA), TokenMediator.FallbackUsed.selector), 0, "the fallback was not paid");
-        assertEq(mediatorA.claimable(address(token), fallbackAccount), AMOUNT, "the fallback address can claim");
-        assertEq(mediatorA.claimable(address(token), recipient), 0, "the recipient has no claim");
+        assertEq(token.balanceOf(recipient), 0, "the recipient holds nothing");
         assertEq(token.balanceOf(address(mediatorA)), AMOUNT, "the mediator still holds the tokens");
-        assertEq(mediatorA.mediatorBalance(address(token)), AMOUNT, "the mediator still owes the tokens");
-
-        vm.prank(stranger);
-        vm.expectRevert(
-            abi.encodeWithSelector(TokenMediator.ClaimTransferFailed.selector, address(token), fallbackAccount)
-        );
-        mediatorA.claim(address(token), fallbackAccount);
-        assertEq(mediatorA.claimable(address(token), fallbackAccount), AMOUNT, "a failed claim keeps the record");
+        assertEq(mediatorA.mediatorBalance(address(token)), 0, "the record fell by the release");
+        assertEq(IERC20(copy).totalSupply(), 0, "the copies are burned");
 
         token.unpause();
-        vm.recordLogs();
-        vm.prank(stranger);
-        mediatorA.claim(address(token), fallbackAccount);
-        Vm.Log[] memory claimLogs = vm.getRecordedLogs();
-
-        assertEq(_count(claimLogs, address(mediatorA), TokenMediator.Claimed.selector), 1, "one claimed event");
-        assertEq(token.balanceOf(fallbackAccount), AMOUNT, "the fallback address is paid");
-        assertEq(token.balanceOf(stranger), 0, "the caller is not paid");
-        assertEq(token.balanceOf(recipient), 0, "the recipient is not paid");
-        assertEq(token.balanceOf(address(mediatorA)), 0, "the mediator holds nothing");
-        assertEq(mediatorA.claimable(address(token), fallbackAccount), 0, "the record is zero");
-        assertEq(mediatorA.mediatorBalance(address(token)), 0, "the mediator owes nothing");
-        vm.prank(stranger);
-        vm.expectRevert(abi.encodeWithSelector(TokenMediator.NothingToClaim.selector, address(token), fallbackAccount));
-        mediatorA.claim(address(token), fallbackAccount);
+        (bool claimed,) = address(mediatorA).call(abi.encodeWithSignature("claim(address,address)", address(token), recipient));
+        assertFalse(claimed, "the mediator has no claim function");
+        assertEq(token.balanceOf(recipient), 0, "nothing pays the recipient later");
+        assertEq(token.balanceOf(stranger), 0);
+        assertEq(token.balanceOf(address(mediatorA)), AMOUNT, "the tokens stay in the mediator");
     }
 
     /// Claim: when the pause ends before the release, the recipient is paid and nothing is claimable. Shows: the control
@@ -112,7 +91,7 @@ contract TokenMediatorPauseTest is WorldSupport {
         PausableToken token = new PausableToken("Pausable Dollar", "PAUSE");
         token.mint(alice, AMOUNT);
         address copy = _lockAndDeliver(address(token));
-        Transit memory transit = _sendBack(copy, recipient, fallbackAccount);
+        Transit memory transit = _sendBack(copy, recipient);
         token.pause();
         token.unpause();
 
@@ -120,38 +99,53 @@ contract TokenMediatorPauseTest is WorldSupport {
 
         assertEq(_count(logs, address(mediatorA), TokenMediator.TokensBridged.selector), 1, "paid once");
         assertEq(token.balanceOf(recipient), AMOUNT, "the recipient is paid");
-        assertEq(token.balanceOf(fallbackAccount), 0, "the fallback address is not paid");
-        assertEq(mediatorA.claimable(address(token), fallbackAccount), 0, "no claim");
+        assertEq(_count(logs, address(mediatorA), TokenMediator.ReleaseFailed.selector), 0, "no failure");
         assertEq(mediatorA.mediatorBalance(address(token)), 0, "the record is zero");
     }
 
-    /// Claim: a fallback address that is a contract, here Multicall3, is paid when the recipient cannot be. This is
-    /// allowed by design. The bridge is an arbitrary message bus, and contract senders, routers and fallback
-    /// addresses are normal. Shows: the token refuses the recipient, `FallbackUsed` names the recipient and Multicall3,
-    /// Multicall3 holds the amount, and no claim is recorded.
-    function test_aContractFallbackAddressIsPaidWhenTheRecipientIsRefused() public {
+    /// Claim: a recipient that is a contract, here Multicall3, is paid like any account when the token accepts it.
+    /// This is allowed by design. The bridge is an arbitrary message bus, and contract recipients and routers are
+    /// normal. Shows: Multicall3 holds the amount, and no claim is recorded.
+    function test_aContractRecipientIsPaid() public {
         DenyListToken token = new DenyListToken();
         token.mint(alice, AMOUNT);
         address copy = _lockAndDeliver(address(token));
         Multicall3 multicall = new Multicall3();
-        Transit memory transit = _sendBack(copy, recipient, address(multicall));
-        token.setDenied(recipient, true);
+        Transit memory transit = _sendBack(copy, address(multicall));
 
         Vm.Log[] memory logs = _executeOnA(transit);
 
-        assertEq(_count(logs, address(mediatorA), TokenMediator.FallbackUsed.selector), 1, "the fallback was used");
+        assertEq(_count(logs, address(mediatorA), TokenMediator.TokensBridged.selector), 1, "paid once");
         assertEq(token.balanceOf(address(multicall)), AMOUNT, "Multicall3 holds the amount");
-        assertEq(token.balanceOf(recipient), 0, "the recipient holds nothing");
-        assertEq(mediatorA.claimable(address(token), address(multicall)), 0, "no claim");
+        assertEq(_count(logs, address(mediatorA), TokenMediator.ReleaseFailed.selector), 0, "no failure");
         assertEq(mediatorA.mediatorBalance(address(token)), 0, "the record is zero");
         assertEq(token.balanceOf(address(mediatorA)), 0, "the mediator holds nothing");
     }
 
-    /// Claim: a contract sender that calls `relayTokens` is its own fallback address, and one that wants another
-    /// address calls `relayTokensWithFallback`. Shows: Multicall3 holds tokens and relays through `aggregate3`. The
-    /// first message names Multicall3 as the fallback address (the same address on the other chain). The second names
-    /// alice. Matters: the documentation tells a contract sender to name its fallback address.
-    function test_aContractSenderNamesItsFallbackWithRelayTokensWithFallback() public {
+    /// Claim: a contract recipient that the token refuses ends the release for good. Shows: `ReleaseFailed` names
+    /// Multicall3, no other account is paid, the record falls by the release, and the tokens stay in the mediator.
+    function test_aContractRecipientThatTheTokenRefusesEndsTheReleaseForGood() public {
+        DenyListToken token = new DenyListToken();
+        token.mint(alice, AMOUNT);
+        address copy = _lockAndDeliver(address(token));
+        Multicall3 multicall = new Multicall3();
+        Transit memory transit = _sendBack(copy, address(multicall));
+        token.setDenied(address(multicall), true);
+
+        Vm.Log[] memory logs = _executeOnA(transit);
+
+        assertEq(_count(logs, address(mediatorA), TokenMediator.ReleaseFailed.selector), 1, "one failure event");
+        assertEq(_count(logs, address(mediatorA), TokenMediator.TokensBridged.selector), 0, "nobody was paid");
+        assertEq(token.balanceOf(address(multicall)), 0, "Multicall3 holds nothing");
+        assertEq(token.balanceOf(address(mediatorA)), AMOUNT, "the mediator holds the amount");
+        assertEq(mediatorA.mediatorBalance(address(token)), 0, "the record fell by the release");
+    }
+
+    /// Claim: a contract sender that calls a relay function names the receiver and nothing else, and the sender adds
+    /// no address to the payload. Shows: Multicall3 holds tokens and relays through `aggregate3`, once with
+    /// `relayTokens` and once with a gas limit. Both messages carry the same payload: the receiver is bob. Matters:
+    /// the mediator never pays the sender on the other chain, so a contract sender need not exist there.
+    function test_aContractSenderAddsNoAddressToThePayload() public {
         DenyListToken token = new DenyListToken();
         Multicall3 multicall = new Multicall3();
         token.mint(address(multicall), 2 * AMOUNT);
@@ -168,7 +162,9 @@ contract TokenMediatorPauseTest is WorldSupport {
         calls[2] = Multicall3.Call3(
             address(mediatorA),
             false,
-            abi.encodeCall(TokenMediator.relayTokensWithFallback, (address(token), bob, AMOUNT, "", alice))
+            abi.encodeWithSignature(
+                "relayTokens(address,address,uint256,uint256)", address(token), bob, AMOUNT, uint256(2_500_000)
+            )
         );
         vm.chainId(CHAIN_A);
         vm.recordLogs();
@@ -184,34 +180,11 @@ contract TokenMediatorPauseTest is WorldSupport {
         assertEq(found, 2, "two messages");
         (, bytes memory first) = AmbMessageCodec.decode(abi.decode(sent[0].data, (bytes)));
         (, bytes memory second) = AmbMessageCodec.decode(abi.decode(sent[1].data, (bytes)));
-        assertEq(
-            first,
-            abi.encodeWithSelector(
-                TokenMediator.deployAndHandleBridgedTokensWithFallback.selector,
-                address(token),
-                "Deny",
-                "DENY",
-                uint8(18),
-                bob,
-                AMOUNT,
-                address(multicall)
-            ),
-            "relayTokens: the contract sender is its own fallback address"
+        bytes memory expected = abi.encodeWithSelector(
+            TokenMediator.deployAndHandleBridgedTokens.selector, address(token), "Deny", "DENY", uint8(18), bob, AMOUNT
         );
-        assertEq(
-            second,
-            abi.encodeWithSelector(
-                TokenMediator.deployAndHandleBridgedTokensWithFallback.selector,
-                address(token),
-                "Deny",
-                "DENY",
-                uint8(18),
-                bob,
-                AMOUNT,
-                alice
-            ),
-            "relayTokensWithFallback: the sender names another fallback address"
-        );
+        assertEq(first, expected, "relayTokens: the receiver is the only address");
+        assertEq(second, expected, "relayTokens with a gas limit: the same payload");
         assertEq(token.balanceOf(address(multicall)), 0, "Multicall3 sent both amounts");
         assertEq(mediatorA.mediatorBalance(address(token)), 2 * AMOUNT, "the record");
     }
