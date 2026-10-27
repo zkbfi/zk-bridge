@@ -133,6 +133,18 @@ contract TokenMediator is ReentrancyGuard {
     /// @notice The gas that the message bridge gives the call that deploys a bridged copy and releases tokens.
     uint256 public constant DEPLOY_GAS_LIMIT = 2_000_000;
 
+    /// @notice The base of the gas rule for the first message of a token. Measured with `forge test`: the
+    /// deployment of a copy with a short name costs 1,058,000 gas when each call is its own transaction
+    /// (`--isolate`) and 1,153,000 gas when the whole test is one transaction. The base adds a margin for the name of
+    /// the home chain and for a compiler change.
+    uint256 public constant DEPLOY_GAS_BASE = 1_300_000;
+    /// @notice The gas for each byte of name and symbol together in the first message of a token. The copy stores both
+    /// texts, and the factory holds them while it deploys: four writes to a new storage slot for each 32 bytes. The
+    /// measured cost is 1,142 gas for each byte with `--isolate` and 1,419 in one transaction. The rule uses 1,600.
+    /// With the base it is above `DEPLOY_GAS_LIMIT` from 437 bytes, and it reaches the maximum of the bridge at 5,437
+    /// bytes.
+    uint256 public constant DEPLOY_GAS_PER_BYTE = 1_600;
+
     /// @notice The gas that a release keeps back when it calls a native token. Each transfer attempt gets the gas
     /// that is left, less this reserve. The reserve pays for what runs after the last attempt: the return of the
     /// amount to the record, the claim record (a write to a new storage slot) and its event. Without it a token that
@@ -739,9 +751,14 @@ contract TokenMediator is ReentrancyGuard {
         metadata.decimals = TokenReader.readDecimals(token);
     }
 
-    /// @dev The default gas limit of a deploy message.
+    /// @dev The default gas limit of a deploy message: the larger of `DEPLOY_GAS_LIMIT` and the rule of
+    /// `DEPLOY_GAS_BASE` plus `DEPLOY_GAS_PER_BYTE` for each byte of name and symbol. The callback limit comes on top
+    /// when the message calls the receiver.
     function _deployGasLimitOf(Metadata memory metadata, CallMode mode) private pure returns (uint256 gasLimit) {
         gasLimit = DEPLOY_GAS_LIMIT;
+        uint256 textLength = bytes(metadata.name).length + bytes(metadata.symbol).length;
+        uint256 needed = DEPLOY_GAS_BASE + DEPLOY_GAS_PER_BYTE * textLength;
+        if (needed > gasLimit) gasLimit = needed;
         if (mode == CallMode.WithCall) gasLimit += CALLBACK_GAS_LIMIT;
     }
 
