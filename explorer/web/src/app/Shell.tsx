@@ -21,7 +21,7 @@ import { SettingsDialog } from "./SettingsDialog";
 import { SourceBadge } from "./SourceBadge";
 import { useThemeChoice } from "./theme";
 
-const FORM_DIALOGS: Readonly<Record<string, FormDialogName>> = { bridge: "bridge", wrap: "wrap", "send-message": "message", claim: "claim" };
+const FORM_DIALOGS: Readonly<Record<string, FormDialogName>> = { bridge: "bridge", wrap: "wrap", "send-message": "message" };
 
 /** The route that the address bar holds now, and a function that changes it. */
 const useHashRoute = (): readonly [Route, (next: Route) => void] => {

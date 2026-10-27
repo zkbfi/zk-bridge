@@ -161,22 +161,23 @@ describe("the summary bar", () => {
 });
 
 describe("the action area", () => {
-  it("opens the dialog of each action, and counts the claims in the label", async () => {
+  it("opens the dialog of each action", async () => {
     const open = vi.fn();
     const { chainAccess } = buildTestServices();
     const snapshots = await chainAccess.readSnapshots({ account: "0x000000000000000000000000000000000000ABC0", tokens: FIXTURE_TOKENS });
     renderPage(<ActionArea pair={FIXTURE_PAIR} snapshots={snapshots} snapshotError={null} />, { actions: { open } });
-    for (const [name, dialog] of [[/Bridge tokens/, "bridge"], [/Wrap the native coin/, "wrap"], [/Send a message/, "message"], [/Claim balances \(1\)/, "claim"]] as const) {
+    for (const [name, dialog] of [[/Bridge tokens/, "bridge"], [/Wrap the native coin/, "wrap"], [/Send a message/, "message"]] as const) {
       await userEvent.click(screen.getByRole("button", { name }));
       expect(open).toHaveBeenLastCalledWith(dialog);
     }
-    expect(open).toHaveBeenCalledTimes(4);
+    expect(open).toHaveBeenCalledTimes(3);
   });
 
-  it("shows Claim balances with no count when nothing is claimable", () => {
+  it("offers no claim action, because the mediator keeps no claims", () => {
     renderPage(<ActionArea pair={FIXTURE_PAIR} snapshots={undefined} snapshotError={null} />);
-    expect(screen.getByRole("button", { name: "Claim balances" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /Claim/ })).toBeNull();
   });
+
 });
 
 describe("the filter bar", () => {

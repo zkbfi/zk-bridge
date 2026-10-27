@@ -115,6 +115,7 @@ describe("the receiver modes without a tip", () => {
     await userEvent.type(data, "0xabcd");
     expect(data).toHaveValue("0xabcd");
     expect(screen.queryByLabelText("Fallback recipient")).toBeNull();
+    expect(screen.queryByRole("option", { name: /fallback/i })).toBeNull();
     const review = screen.getByRole("button", { name: "Review transaction" });
     await waitFor(() => expect(review).toBeEnabled());
     await userEvent.click(review);
@@ -122,21 +123,63 @@ describe("the receiver modes without a tip", () => {
     expect(steps.at(-1)!.plan.functionName).toBe("relayTokensAndCall");
   });
 
-  it("asks for a fallback recipient for a transfer with a fallback, and sends relayTokensWithFallback", async () => {
+  it("offers only a plain transfer and a transfer with a call", async () => {
+    await renderForm();
+    await chooseNoTip();
+    const options = within(screen.getByLabelText("How the receiver gets it")).getAllByRole("option").map((option) => option.getAttribute("value"));
+    expect(options).toEqual(["plain", "call"]);
+  });
+
+  it("sends the plain function when the gas limit is empty", async () => {
     const { onReview } = await renderForm();
     await userEvent.type(screen.getByLabelText(/^Amount to send/), "250");
     await chooseNoTip();
-    await userEvent.selectOptions(screen.getByLabelText("How the receiver gets it"), "fallback");
-    const fallback = screen.getByLabelText("Fallback recipient");
-    const recipient = getAddress(`0x${"12".repeat(20)}`);
-    await userEvent.click(fallback);
-    await userEvent.paste(recipient);
-    expect(fallback).toHaveValue(recipient);
+    expect(screen.getByLabelText("Gas limit")).toHaveValue("");
     const review = screen.getByRole("button", { name: "Review transaction" });
     await waitFor(() => expect(review).toBeEnabled());
     await userEvent.click(review);
     const steps = onReview.mock.calls[0]![0] as readonly WebStep[];
-    expect(steps.at(-1)!.plan.functionName).toBe("relayTokensWithFallback");
+    expect(steps.at(-1)!.plan.functionSignature).toBe("relayTokens(address,address,uint256)");
+  });
+
+  it("sends the gas limit overload of relayTokens when a gas limit is typed", async () => {
+    const { onReview } = await renderForm();
+    await userEvent.type(screen.getByLabelText(/^Amount to send/), "250");
+    await chooseNoTip();
+    await userEvent.type(screen.getByLabelText("Gas limit"), "900000");
+    const review = screen.getByRole("button", { name: "Review transaction" });
+    await waitFor(() => expect(review).toBeEnabled());
+    await userEvent.click(review);
+    const steps = onReview.mock.calls[0]![0] as readonly WebStep[];
+    expect(steps.at(-1)!.plan.functionSignature).toBe("relayTokens(address,address,uint256,uint256)");
+  });
+
+  it("sends the gas limit overload of relayTokensAndCall for a transfer with a call", async () => {
+    const { onReview } = await renderForm();
+    await userEvent.type(screen.getByLabelText(/^Amount to send/), "250");
+    await chooseNoTip();
+    await userEvent.selectOptions(screen.getByLabelText("How the receiver gets it"), "call");
+    await userEvent.type(screen.getByLabelText("Data for the receiver"), "0xabcd");
+    await userEvent.type(screen.getByLabelText("Gas limit"), "900000");
+    const review = screen.getByRole("button", { name: "Review transaction" });
+    await waitFor(() => expect(review).toBeEnabled());
+    await userEvent.click(review);
+    const steps = onReview.mock.calls[0]![0] as readonly WebStep[];
+    expect(steps.at(-1)!.plan.functionSignature).toBe("relayTokensAndCall(address,address,uint256,bytes,uint256)");
+  });
+
+  it("blocks the review and says why when the gas limit is not a whole number", async () => {
+    await renderForm();
+    await userEvent.type(screen.getByLabelText(/^Amount to send/), "250");
+    await chooseNoTip();
+    await userEvent.type(screen.getByLabelText("Gas limit"), "abc");
+    await waitFor(() => expect(screen.getByText(/gas limit must be a whole number above zero/i)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Review transaction" })).toBeDisabled();
+  });
+
+  it("hides the gas limit on the wrap form, which has no such overload", async () => {
+    await renderForm({ variant: "wrap" });
+    expect(screen.queryByLabelText("Gas limit")).toBeNull();
   });
 });
 

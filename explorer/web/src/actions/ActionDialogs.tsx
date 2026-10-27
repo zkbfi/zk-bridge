@@ -7,12 +7,11 @@ import { Modal } from "../ui/Modal";
 import { Notice } from "../ui/primitives";
 import { useWallet } from "../wallet/wallet-port";
 import { BridgeForm } from "./BridgeForm";
-import { ClaimPanel } from "./ClaimPanel";
 import { MessageForm } from "./MessageForm";
 import { TransactionDialog } from "./TransactionDialog";
 
 /** The dialogs that hold a form. */
-export type FormDialogName = "bridge" | "wrap" | "message" | "claim";
+export type FormDialogName = "bridge" | "wrap" | "message";
 
 /** Props of {@link ActionDialog}. */
 export type ActionDialogProps = {
@@ -24,7 +23,6 @@ const TITLES: Readonly<Record<FormDialogName, string>> = {
   bridge: "Bridge tokens",
   wrap: "Wrap the native coin",
   message: "Send a message",
-  claim: "Claim balances",
 };
 
 /**
@@ -79,6 +77,5 @@ type DialogBodyProps = {
 const DialogBody = ({ dialog, account, snapshots, tokens, onReview }: DialogBodyProps) => {
   const { pair } = useServices();
   if (dialog === "message") return <MessageForm pair={pair} onReview={onReview} />;
-  if (dialog === "claim") return <ClaimPanel pair={pair} snapshots={snapshots} account={account} onReview={onReview} />;
   return <BridgeForm variant={dialog === "wrap" ? "wrap" : "tokens"} pair={pair} tokens={tokens} context={{ pair, snapshots, signerAddress: account }} account={account} onReview={onReview} />;
 };

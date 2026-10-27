@@ -8,7 +8,7 @@ A runner delivers a covered transfer when the tip pays for the work. The tip is 
 
 You fix the tip when the transfer leaves. Nothing at delivery sets or changes it. The deliverer supplies no rate.
 
-The interface sends your tokens to a router on the destination chain, with `relayTokensAndCall`. The router is the receiver of that call. Your tip settings travel in the call data. When you choose "No tip", the interface involves no router at all. It sends a plain relay (`relayTokens`, or `relayTokensWithFallback`) with no fee terms, and the tokens go straight to the receiver. No router can take a fee. Anyone can still deliver the message directly on the bridge, for free, but it may take longer. The confirm dialog says that no router is involved.
+The interface sends your tokens to a router on the destination chain, with `relayTokensAndCall`. The router is the receiver of that call. Your tip settings travel in the call data. When you choose "No tip", the interface involves no router at all. It sends a plain relay (`relayTokens`) with no fee terms, and the tokens go straight to the receiver. No router can take a fee. Anyone can still deliver the message directly on the bridge, for free, but it may take longer. The confirm dialog says that no router is involved.
 
 ## Who can collect the tip
 

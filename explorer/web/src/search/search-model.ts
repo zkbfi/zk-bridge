@@ -34,7 +34,6 @@ export type ActionId =
   | { readonly name: "bridge" }
   | { readonly name: "wrap" }
   | { readonly name: "send-message" }
-  | { readonly name: "claim" }
   | { readonly name: "connect-wallet" }
   | { readonly name: "disconnect-wallet" }
   | { readonly name: "switch-chain"; readonly chainId: number }
@@ -110,10 +109,9 @@ export const actionResults = (input: { readonly pair: PairConfig; readonly walle
   });
   const chains = [input.pair.first, input.pair.second];
   return [
-    action("bridge", "Bridge tokens", "relayTokens, relayTokensAndCall or relayTokensWithFallback", ["send", "relay", "transfer", "deposit"], { name: "bridge" }),
+    action("bridge", "Bridge tokens", "relayTokens or relayTokensAndCall, with an optional gas limit", ["send", "relay", "transfer", "deposit"], { name: "bridge" }),
     action("wrap", "Wrap the native coin", "Wrap and relay through the router", ["wrap", "native", "eth", "pls", "weth", "wpls"], { name: "wrap" }),
     action("send-message", "Send a message", "Call a contract on the other chain", ["message", "call", "requireToPassMessage"], { name: "send-message" }),
-    action("claim", "Claim balances", "Claim what the mediator holds for you", ["claimable", "withdraw", "fallback"], { name: "claim" }),
     input.walletConnected
       ? action("disconnect-wallet", "Disconnect the wallet", "Forget the connected account", ["wallet", "account", "sign out", "switch account"], { name: "disconnect-wallet" })
       : action("connect-wallet", "Connect a wallet", "Use the wallet in your browser, including a hardware wallet behind it", ["wallet", "account", "metamask", "ledger", "trezor"], { name: "connect-wallet" }),
@@ -156,7 +154,7 @@ export const addressResult = (address: Address): SearchResult => ({
   id: `address:${address.toLowerCase()}`,
   kind: "address",
   title: address,
-  subtitle: "Its transfers, balances and claimable amounts",
+  subtitle: "Its transfers and balances",
   keywords: [address],
   jump: { type: "route", route: { name: "address", address } },
 });

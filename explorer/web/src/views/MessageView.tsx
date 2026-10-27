@@ -73,7 +73,7 @@ export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
           <DataRow label="Amount sent on">{formatAmountWithSymbol(detail.transfer.value, detail.transfer.sourceToken)} (after the source fee)</DataRow>
           <DataRow label="Delivered">{detail.transfer.deliveredValue === null ? "not yet" : formatAmountWithSymbol(detail.transfer.deliveredValue, detail.transfer.destinationToken)}</DataRow>
           <DataRow label="Recipient"><Mono>{detail.transfer.recipient}</Mono></DataRow>
-          <DataRow label="Fallback"><Mono>{detail.transfer.fallbackRecipient}</Mono></DataRow>
+          {detail.releaseFailed ? <DataRow label="Release">The release failed and is final. The tokens stay in the mediator.</DataRow> : null}
           <DataRow label="With callback">{detail.transfer.hasCallback ? "yes" : "no"}</DataRow>
         </Panel>
       )}

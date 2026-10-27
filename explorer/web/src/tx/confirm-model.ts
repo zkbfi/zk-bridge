@@ -105,7 +105,7 @@ const mergeMeanings = (decoded: readonly DisplayArgument[], planned: readonly Di
     return meaning === undefined || argument.meaning !== undefined ? argument : { ...argument, meaning };
   });
 
-const RELAY_FUNCTIONS: readonly string[] = ["relayTokens", "relayTokensWithFallback", "wrapAndRelayTokens"];
+const RELAY_FUNCTIONS: readonly string[] = ["relayTokens", "wrapAndRelayTokens"];
 
 const noRouterNoticeOf = (step: WebStep): string | null => {
   if (step.disclosure.delivery !== null) return null;

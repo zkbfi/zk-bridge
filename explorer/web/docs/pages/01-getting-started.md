@@ -79,7 +79,7 @@ Use this mode to learn the screens. The operator of the interface chooses the mo
 ## Where to go next
 
 - How the bridge works explains light clients, proofs and finality.
-- Bridging tokens explains the token functions, the allowance and claims.
+- Bridging tokens explains the token functions, the allowance and failed releases.
 - Sending messages explains how to call a contract on the other chain.
 - Fees explained explains the tip for delivery, which is the only fee.
 - Safety explains what you trust.

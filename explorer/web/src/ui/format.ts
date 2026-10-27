@@ -25,8 +25,7 @@ export const STATUS_LABELS: Readonly<Record<FeedStatus, string>> = {
   covered: "Covered",
   delivered: "Delivered",
   failed_call: "Failed call",
-  fallback_used: "Fallback used",
-  claimable: "Claimable",
+  release_failed: "Release failed",
 };
 
 /** What each status means, for the tooltip and the detail page. */
@@ -36,8 +35,7 @@ export const STATUS_MEANINGS: Readonly<Record<FeedStatus, string>> = {
   covered: "The destination light client stored a head at or after the send. Anyone can deliver it.",
   delivered: "The destination bridge ran the message and the call succeeded.",
   failed_call: "The destination bridge ran the message and the call reverted. This is final.",
-  fallback_used: "The recipient could not be paid, so the fallback address received the tokens.",
-  claimable: "No payee could receive the tokens. They wait for a claim.",
+  release_failed: "The mediator could not release the tokens to the recipient. This is final: the tokens stay in the mediator.",
 };
 
 /** The Chakra color palette of each status. */
@@ -47,8 +45,7 @@ export const STATUS_PALETTES: Readonly<Record<FeedStatus, string>> = {
   covered: "purple",
   delivered: "green",
   failed_call: "red",
-  fallback_used: "orange",
-  claimable: "yellow",
+  release_failed: "yellow",
 };
 
 /**

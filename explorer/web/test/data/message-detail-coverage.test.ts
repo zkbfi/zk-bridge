@@ -38,9 +38,8 @@ describe("parseMessageDetail, the optional parts", () => {
       destinationTransactionHash: null,
       deliverySucceeded: null,
       executedBy: null,
-      fallbackUsed: false,
       callbackFailed: false,
-      claimableOutstanding: false,
+      releaseFailed: false,
       transfer: null,
       data: null,
     });
@@ -65,9 +64,17 @@ describe("parseMessageDetail, the optional parts", () => {
     expect(detail).toMatchObject({ deliveredAt: 300, destinationTransactionHash: null, deliverySucceeded: null, executedBy: null });
   });
 
-  it("reads the three flags only from the value true", () => {
-    expect(parseMessageDetail({ ...base, fallbackUsed: true, callbackFailed: true, claimableOutstanding: true })).toMatchObject({ fallbackUsed: true, callbackFailed: true, claimableOutstanding: true });
-    expect(parseMessageDetail({ ...base, fallbackUsed: "true", callbackFailed: 1, claimableOutstanding: {} })).toMatchObject({ fallbackUsed: false, callbackFailed: false, claimableOutstanding: false });
+  it("reads the two flags only from the value true", () => {
+    expect(parseMessageDetail({ ...base, callbackFailed: true, releaseFailed: true })).toMatchObject({ callbackFailed: true, releaseFailed: true });
+    expect(parseMessageDetail({ ...base, callbackFailed: 1, releaseFailed: {} })).toMatchObject({ callbackFailed: false, releaseFailed: false });
+  });
+
+  it("carries no claim flag, even when an older answer sends one", () => {
+    expect(parseMessageDetail({ ...base, claimableOutstanding: true })).not.toHaveProperty("claimableOutstanding");
+  });
+
+  it("carries no fallback flag, even when an older answer sends one", () => {
+    expect(parseMessageDetail({ ...base, fallbackUsed: true })).not.toHaveProperty("fallbackUsed");
   });
 
   it("reads a kind of token and treats any other kind as a message", () => {
@@ -103,23 +110,26 @@ describe("parseMessageDetail, refusals of bad input", () => {
 
 describe("parseMessageDetail, the transfer", () => {
   const token = { address: ADDRESS, symbol: "USDC", decimals: 6, chainId: 1 };
-  const transfer = { sourceToken: token, destinationToken: { ...token, chainId: 369, symbol: "zkbUSDC" }, recipient: ADDRESS, fallbackRecipient: OTHER, value: "10", deliveredValue: "9", hasCallback: true };
+  const transfer = { sourceToken: token, destinationToken: { ...token, chainId: 369, symbol: "zkbUSDC" }, recipient: ADDRESS, value: "10", deliveredValue: "9", hasCallback: true };
 
   it("reads every field of a transfer", () => {
     expect(parseMessageDetail({ ...base, transfer }).transfer).toEqual({
       sourceToken: { address: CHECKSUM, symbol: "USDC", decimals: 6, chainId: 1 },
       destinationToken: { address: CHECKSUM, symbol: "zkbUSDC", decimals: 6, chainId: 369 },
       recipient: CHECKSUM,
-      fallbackRecipient: "0x2aAa0000000000000000000000000000000000A1",
       value: 10n,
       deliveredValue: 9n,
       hasCallback: true,
     });
   });
 
-  it("falls back to the recipient when no fallback recipient is given, and to no delivered value and no callback", () => {
-    const { fallbackRecipient: _drop, deliveredValue: _gone, hasCallback: _flag, ...rest } = transfer;
-    expect(parseMessageDetail({ ...base, transfer: rest }).transfer).toMatchObject({ fallbackRecipient: CHECKSUM, deliveredValue: null, hasCallback: false });
+  it("carries no fallback recipient, even when an older answer sends one", () => {
+    expect(parseMessageDetail({ ...base, transfer: { ...transfer, fallbackRecipient: OTHER } }).transfer).not.toHaveProperty("fallbackRecipient");
+  });
+
+  it("gives no delivered value and no callback when the answer has none", () => {
+    const { deliveredValue: _gone, hasCallback: _flag, ...rest } = transfer;
+    expect(parseMessageDetail({ ...base, transfer: rest }).transfer).toMatchObject({ deliveredValue: null, hasCallback: false });
     expect(parseMessageDetail({ ...base, transfer: { ...rest, deliveredValue: null, hasCallback: "yes" } }).transfer).toMatchObject({ deliveredValue: null, hasCallback: false });
   });
 

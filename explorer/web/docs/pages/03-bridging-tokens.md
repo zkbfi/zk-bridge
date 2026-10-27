@@ -1,6 +1,6 @@
 # Bridging tokens
 
-This page explains how to move tokens across the bridge. It covers native tokens, bridged copies, the native coin, the allowance, the fallback address and claims.
+This page explains how to move tokens across the bridge. It covers native tokens, bridged copies, the native coin, the allowance, the gas limit and failed releases.
 
 ## Native tokens and bridged copies
 
@@ -24,13 +24,13 @@ A router contract wraps the coin first. Wrapping turns the coin into a wrapped n
 
 You do this in one transaction. You send the coin to the router with its `wrapAndRelayTokens` function. You do not need an allowance for the coin.
 
-## The three relay functions
+## The relay functions
 
-The mediator has three ways to relay tokens. They differ in what happens at delivery.
+The mediator has two ways to relay tokens. They differ in what happens at delivery. Each has a form with a trailing gas limit.
 
 ### relayTokens
 
-`relayTokens` is the plain transfer. It takes the token, the receiver and the amount. A second form sends the tokens to your own address on the other chain.
+`relayTokens` is the plain transfer. It takes the token, the receiver and the amount. A second form sends the tokens to your own address on the other chain. A third form adds a gas limit after the amount.
 
 Use it when the receiver is a normal account.
 
@@ -40,11 +40,13 @@ Use it when the receiver is a normal account.
 
 Use it when the receiver is a contract that must act on the tokens. The interface also uses this function to send your tip through the delivery router. The page Fees explained covers that case.
 
-### relayTokensWithFallback
+A second form adds a gas limit after the call data.
 
-`relayTokensWithFallback` adds one value: a fallback address. The mediator pays this address when the receiver cannot take the tokens. The next sections explain this.
+### The gas limit
 
-The other two functions use a default fallback. The default is the sender, at the same address on the destination chain.
+The form has an optional field named Gas limit. Leave it empty to use the default gas for the kind of message. This plans the functions without a gas limit.
+
+Type a number to plan the forms with a trailing gas limit: `relayTokens(token, receiver, value, gasLimit)` or `relayTokensAndCall(token, receiver, value, data, gasLimit)`. The mediator uses the larger of your number and the default for the kind of message. It refuses a number above the bridge maximum with the error `GasLimitAboveBridgeMaximum`. The wrap route has no gas limit field.
 
 ## The allowance step
 
@@ -63,28 +65,15 @@ The bridge charges no fee. The only fee is the voluntary tip for delivery. The i
 
 The recipient receives the whole amount that you send, less the tip when you choose one. The feed shows the amount of the transfer.
 
-## The fallback address
+## When the receiver cannot take the tokens
 
 A delivery can fail for the receiver. For example, a token can block a receiver that is on a deny list. The bridge then follows a fixed order.
 
 1. It tries to pay the receiver.
-2. If that fails, it pays the fallback address.
-3. If that also fails, it records a claimable balance for the fallback address.
+2. If that fails, it emits the event `ReleaseFailed` and stops.
 
-The message stays delivered in all three cases. The bridge does not undo a delivery.
+The message stays delivered in both cases. The bridge does not undo a delivery.
 
-Check the default fallback before you send from a contract. The same address on the other chain may belong to someone else, or to nobody. In that case, set a fallback with `relayTokensWithFallback`.
+A failed release is final. The tokens stay in the mediator. The bridge keeps no claim record, and no function pays them out later. There is no fallback address either. The page of the message shows a Release row that says so.
 
-## Claimable balances
-
-A claimable balance holds tokens that nobody could receive. The tokens stay safe in the mediator. The feed shows the status claimable.
-
-## How to claim
-
-1. Open the claim screen and enter the token.
-2. Check the balance of the fallback address.
-3. Send the claim transaction on the destination chain.
-
-The fallback address can claim. Anyone else can also call the claim for that address. The tokens always go to the fallback address.
-
-After the claim, the status of the transfer returns to delivered. A claim charges no fee.
+Check the receiver address before you send from a contract. The same address on the other chain may belong to someone else, or to nobody. Test with a small amount first.

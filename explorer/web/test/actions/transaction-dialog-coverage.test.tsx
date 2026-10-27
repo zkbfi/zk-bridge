@@ -18,7 +18,7 @@ const usdc = FIXTURE_TOKENS[0]!;
 const stepsOf = async (input: { readonly allowance?: bigint; readonly options?: Partial<DeliveryOptions> } = {}): Promise<readonly WebStep[]> => {
   const { context, tokens } = await buildFixtureContext({ allowance: input.allowance ?? 10n ** 12n });
   const draft = computeBridgeDraft(
-    { token: `first:${usdc.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", fallback: "" },
+    { token: `first:${usdc.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", gasLimit: "" },
     { ...DEFAULT_DELIVERY_OPTIONS, mode: "none", senderPriceText: "1", ...input.options },
     { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
   );

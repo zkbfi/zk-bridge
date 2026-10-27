@@ -13,7 +13,7 @@ const receiver = getAddress(`0x${"cd".repeat(20)}`);
 const stepsOf = async (allowance: bigint, options: Partial<DeliveryOptions>): Promise<readonly WebStep[]> => {
   const { context, tokens } = await buildFixtureContext({ allowance });
   const draft = computeBridgeDraft(
-    { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", fallback: "" },
+    { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", gasLimit: "" },
     { ...DEFAULT_DELIVERY_OPTIONS, ...options },
     { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
   );

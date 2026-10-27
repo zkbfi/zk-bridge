@@ -25,7 +25,6 @@ export type DetailTransfer = {
   readonly sourceToken: DetailToken;
   readonly destinationToken: DetailToken;
   readonly recipient: Address;
-  readonly fallbackRecipient: Address;
   /** The amount that the mediator locked or burned on the source chain, in base units. */
   readonly value: bigint;
   readonly deliveredValue: bigint | null;
@@ -53,9 +52,9 @@ export type MessageDetail = {
   /** True when the destination call succeeded, false when it failed, null while undelivered. */
   readonly deliverySucceeded: boolean | null;
   readonly executedBy: Address | null;
-  readonly fallbackUsed: boolean;
   readonly callbackFailed: boolean;
-  readonly claimableOutstanding: boolean;
+  /** True when the mediator could not release the tokens to the recipient. The failure is final. */
+  readonly releaseFailed: boolean;
   readonly transfer: DetailTransfer | null;
   /** The call data of the message, when the answer carries it. */
   readonly data: Hex | null;
@@ -80,7 +79,6 @@ const transferOf = (value: unknown): DetailTransfer | null => {
     sourceToken: tokenOf(row.sourceToken, "transfer.sourceToken"),
     destinationToken: tokenOf(row.destinationToken, "transfer.destinationToken"),
     recipient: readAddress(row.recipient, "transfer.recipient"),
-    fallbackRecipient: readAddress(row.fallbackRecipient ?? row.recipient, "transfer.fallbackRecipient"),
     value: readAmount(row.value, "value"),
     deliveredValue: row.deliveredValue === null || row.deliveredValue === undefined ? null : readAmount(row.deliveredValue, "deliveredValue"),
     hasCallback: row.hasCallback === true,
@@ -120,9 +118,8 @@ export const parseMessageDetail = (value: unknown): MessageDetail => {
       delivered === null || typeof delivered.transactionHash !== "string" ? null : readHex(delivered.transactionHash, "delivered.transactionHash"),
     deliverySucceeded: delivered === null || typeof delivered.success !== "boolean" ? null : delivered.success,
     executedBy: delivered === null || typeof delivered.executedBy !== "string" ? null : readAddress(delivered.executedBy, "delivered.executedBy"),
-    fallbackUsed: item.fallbackUsed === true,
     callbackFailed: item.callbackFailed === true,
-    claimableOutstanding: item.claimableOutstanding === true,
+    releaseFailed: item.releaseFailed === true,
     transfer: transferOf(item.transfer),
     data: typeof item.data === "string" ? readHex(item.data, "data") : null,
   };

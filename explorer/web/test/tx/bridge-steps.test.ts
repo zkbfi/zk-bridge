@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_GAS_MARGIN, decodeFeeDirector, encodeFeeDirector, feeModeOf, senderPriceOfToken, settingsOf, tokenMediatorAbi, deliveryRouterAbi } from "@zk-bridge/shared";
 import { buildBridgeSteps } from "@terminal/app/actions";
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
-import { PlanInputError, planClaim, planSendMessage, planWrapAndRelay } from "@terminal/tx/plan";
+import { PlanInputError, planSendMessage, planWrapAndRelay } from "@terminal/tx/plan";
 import { planBridgeSteps, type BridgeFormValues } from "../../src/tx/bridge-steps";
 import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS, type DeliveryOptions } from "../../src/tx/bridge-draft";
 import { selectDelivery, DEFAULT_MARGIN_RATE } from "../../src/tx/delivery-selection";
@@ -19,7 +19,7 @@ const values = (overrides: Partial<BridgeFormValues> = {}): BridgeFormValues => 
   receiver,
   mode: "plain",
   data: "",
-  fallback: "",
+  gasLimit: "",
   ...overrides,
 });
 
@@ -55,7 +55,7 @@ const deliveryFor = (mode: "percentage" | "gas-multiplier" | "fixed" = "percenta
 describe("planBridgeSteps without a delivery fee: calldata equals what the terminal builds", () => {
   it("builds the same steps as the terminal for the same inputs, byte for byte", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
-    for (const form of [values(), values({ mode: "call", data: "0xabcd" }), values({ mode: "fallback", data: "0x", fallback: FIXTURE_ACCOUNT })]) {
+    for (const form of [values(), values({ mode: "call", data: "0xabcd" }), values({ gasLimit: "900000" }), values({ mode: "call", data: "0xabcd", gasLimit: "900000" })]) {
       const web = planBridgeSteps({ values: form, tokens, context, delivery: null });
       const terminal = buildBridgeSteps({ ...form }, tokens, context);
       expect(web.map((step) => step.plan.data)).toEqual(terminal.map((step) => step.plan.data));
@@ -70,10 +70,38 @@ describe("planBridgeSteps without a delivery fee: calldata equals what the termi
     expect(relay!.plan.data).toBe(encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokens", args: [usdc.address, receiver, amount] }));
     const [call] = planBridgeSteps({ values: values({ mode: "call", data: "0xabcd" }), tokens, context, delivery: null });
     expect(call!.plan.data).toBe(encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokensAndCall", args: [usdc.address, receiver, amount, "0xabcd"] }));
-    const [fallback] = planBridgeSteps({ values: values({ mode: "fallback", data: "0xabcd", fallback: FIXTURE_ACCOUNT }), tokens, context, delivery: null });
-    expect(fallback!.plan.data).toBe(
-      encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokensWithFallback", args: [usdc.address, receiver, amount, "0xabcd", FIXTURE_ACCOUNT] }),
+  });
+
+  it("plans the gas limit overload of a plain relay when a gas limit is typed", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+    const amount = parseUnits("250", 6);
+    const [relay] = planBridgeSteps({ values: values({ gasLimit: "900000" }), tokens, context, delivery: null });
+    expect(relay!.plan.functionName).toBe("relayTokens");
+    expect(relay!.plan.functionSignature).toBe("relayTokens(address,address,uint256,uint256)");
+    expect(relay!.plan.data).toBe(encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokens", args: [usdc.address, receiver, amount, 900_000n] }));
+  });
+
+  it("plans the gas limit overload of a relay with a call when a gas limit is typed", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+    const amount = parseUnits("250", 6);
+    const [relay] = planBridgeSteps({ values: values({ mode: "call", data: "0xabcd", gasLimit: " 900000 " }), tokens, context, delivery: null });
+    expect(relay!.plan.functionSignature).toBe("relayTokensAndCall(address,address,uint256,bytes,uint256)");
+    expect(relay!.plan.data).toBe(
+      encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokensAndCall", args: [usdc.address, receiver, amount, "0xabcd", 900_000n] }),
     );
+  });
+
+  it("plans the old function when the gas limit is empty or only spaces", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+    const [relay] = planBridgeSteps({ values: values({ gasLimit: "  " }), tokens, context, delivery: null });
+    expect(relay!.plan.functionSignature).toBe("relayTokens(address,address,uint256)");
+  });
+
+  it("refuses a gas limit that is not a whole number above zero, with a sentence", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+    for (const gasLimit of ["abc", "1.5", "-3", "0", "0x10"]) {
+      expect(() => planBridgeSteps({ values: values({ gasLimit }), tokens, context, delivery: null })).toThrow(/gas limit must be a whole number above zero/i);
+    }
   });
 
   it("puts an exact allowance first when the allowance is too low, and never an unlimited one", async () => {
@@ -180,10 +208,9 @@ describe("calldata parity with the terminal for a tipped relay", () => {
 });
 
 describe("other plans stay the terminal's", () => {
-  it("builds a message and a claim from the terminal planners", () => {
+  it("builds a message from the terminal planner", () => {
     const message = planSendMessage({ chain: FIXTURE_PAIR.first, target: receiver, data: "0x", gas: 100_000n });
     expect(message.functionSignature).toBe("requireToPassMessage(address,bytes,uint256)");
-    expect(() => planClaim({ chain: FIXTURE_PAIR.first, token: usdc, account: FIXTURE_ACCOUNT, claimable: 0n })).toThrow(/Nothing is claimable/);
   });
 });
 

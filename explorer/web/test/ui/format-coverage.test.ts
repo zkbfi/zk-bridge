@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { formatAmountWithSymbol, formatLag, formatSlot, lagSeverity, STATUS_LABELS, STATUS_MEANINGS, STATUS_PALETTES } from "../../src/ui/format";
 
-const STATUSES = ["sent", "waiting_for_finality", "covered", "delivered", "failed_call", "fallback_used", "claimable"] as const;
+const STATUSES = ["sent", "waiting_for_finality", "covered", "delivered", "failed_call", "release_failed"] as const;
 
 describe("formatAmountWithSymbol", () => {
   it("groups thousands and cuts, never rounds, at six fraction digits", () => {

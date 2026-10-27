@@ -47,9 +47,4 @@ describe("the action dialog with a wallet", () => {
     renderWithWallet(<ActionDialog dialog="message" onClose={() => undefined} />, { wallet: connectedWallet() });
     expect(await screen.findByRole("form", { name: "Send a message" })).toBeInTheDocument();
   });
-
-  it("shows the claim list for the claim dialog", async () => {
-    renderWithWallet(<ActionDialog dialog="claim" onClose={() => undefined} />, { wallet: connectedWallet() });
-    expect(await screen.findByRole("button", { name: "Claim USDC" })).toBeInTheDocument();
-  });
 });

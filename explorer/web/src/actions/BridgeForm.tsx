@@ -58,7 +58,7 @@ const sideOfChoice = (choice: string): ChainSide => (choice.startsWith("second:"
  */
 export const BridgeForm = ({ variant, pair, tokens, context, account, onReview }: BridgeFormProps) => {
   const choices = useMemo(() => choicesOf(variant, pair, tokens, context), [variant, pair, tokens, context]);
-  const [values, setValues] = useState<BridgeFormValues>({ token: choices[0]?.value ?? "", amount: "", receiver: account, mode: "plain", data: "", fallback: "" });
+  const [values, setValues] = useState<BridgeFormValues>({ token: choices[0]?.value ?? "", amount: "", receiver: account, mode: "plain", data: "", gasLimit: "" });
   const [options, setOptions] = useState<DeliveryOptions>(DEFAULT_DELIVERY_OPTIONS);
   const effectiveToken = choices.some((choice) => choice.value === values.token) ? values.token : (choices[0]?.value ?? "");
   const side = sideOfChoice(effectiveToken);
@@ -119,7 +119,6 @@ export const BridgeForm = ({ variant, pair, tokens, context, account, onReview }
               <SelectInput id={id} value={values.mode} onChange={(event) => setValues({ ...values, mode: event.target.value as BridgeFormValues["mode"] })}>
                 <option value="plain">Plain transfer (relayTokens)</option>
                 <option value="call">Transfer and call the receiver (relayTokensAndCall)</option>
-                <option value="fallback">Transfer with a fallback recipient (relayTokensWithFallback)</option>
               </SelectInput>
             )}
           </Field>
@@ -129,12 +128,12 @@ export const BridgeForm = ({ variant, pair, tokens, context, account, onReview }
             <Field label="Data for the receiver" hint="Hex, such as 0xabcd. Empty is allowed.">
               {(id) => <TextAreaInput id={id} spellCheck={false} value={values.data} onChange={(event) => setValues({ ...values, data: event.target.value })} />}
             </Field>
-            {values.mode === "fallback" ? (
-              <Field label="Fallback recipient" hint="Gets the tokens if the receiver cannot be paid.">
-                {(id) => <TextInput id={id} spellCheck={false} value={values.fallback} onChange={(event) => setValues({ ...values, fallback: event.target.value })} />}
-              </Field>
-            ) : null}
           </>
+        ) : null}
+        {variant === "tokens" ? (
+          <Field label="Gas limit" hint="Optional. The gas for the delivery on the other chain. Empty uses the default. The mediator uses the larger of your number and the default, and refuses a number above the bridge maximum.">
+            {(id) => <TextInput id={id} inputMode="numeric" autoComplete="off" placeholder="Default" value={values.gasLimit} onChange={(event) => setValues({ ...values, gasLimit: event.target.value })} />}
+          </Field>
         ) : null}
 
         <DeliveryFeeSection destinationNativeSymbol={destinationChain.nativeSymbol} destinationName={destinationChain.name} options={options} onChange={setOptions} draft={draft} />

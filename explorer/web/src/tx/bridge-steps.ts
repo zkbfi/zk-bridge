@@ -1,6 +1,6 @@
 /**
  * The steps of the bridge form for the web page. The plain path is the terminal's own builder (`buildBridgeSteps`), so
- * the calldata of an approval, a relay, a relay with a call and a relay with a fallback is the same as the terminal
+ * the calldata of an approval, a relay, a relay with a call, and the same two with a gas limit is the same as the terminal
  * builds for the same inputs. The tip path changes only three inputs: the receiver becomes the router of the
  * destination chain (the default delivery router, or the one that the user named), the mode becomes "call", and the
  * data becomes the encoded fee director. The page then adds the disclosure that the confirm dialog shows. The wrap route
@@ -41,9 +41,14 @@ export type BridgeFormValues = {
   readonly token: string;
   readonly amount: string;
   readonly receiver: string;
-  readonly mode: "plain" | "call" | "fallback";
+  readonly mode: "plain" | "call";
   readonly data: string;
-  readonly fallback: string;
+  /**
+   * The gas limit of the delivery, as text. Empty means no request: the mediator then uses the default for the message
+   * kind. A number plans the overload of `relayTokens` or `relayTokensAndCall` with a trailing gas limit. The mediator
+   * uses the larger of this number and the default, and refuses a number above the bridge maximum.
+   */
+  readonly gasLimit: string;
 };
 
 /** Input of {@link planBridgeSteps}. */
@@ -73,6 +78,28 @@ const explainRouterReceiver = (argument: DisplayArgument, input: { chainName: st
 };
 
 /**
+ * Reads the gas limit text of the form. Empty text gives null, which plans the function with no gas limit.
+ *
+ * @throws PlanInputError when the text is not a whole number above zero.
+ */
+const parseGasLimitText = (text: string): string | null => {
+  const trimmed = text.trim();
+  if (trimmed === "") return null;
+  if (!/^\d+$/.test(trimmed) || BigInt(trimmed) === 0n) throw new PlanInputError("The gas limit must be a whole number above zero, or empty.");
+  return trimmed;
+};
+
+/**
+ * The values that the terminal builder reads. The gas limit key is present only when the user typed one, and it never
+ * rides on the wrap route, which has no such overload.
+ */
+const terminalValuesOf = (values: BridgeFormValues, input: { gasLimit: string | null; isNative: boolean }): Record<string, string> => {
+  const { gasLimit: _text, ...rest } = values;
+  if (input.gasLimit === null || input.isNative) return rest;
+  return { ...rest, gasLimit: input.gasLimit };
+};
+
+/**
  * Plans the transactions of the bridge form: an exact allowance when needed, then the relay.
  *
  * @param input The form values, the token list, the live state and the delivery fee.
@@ -88,10 +115,11 @@ export const planBridgeSteps = (input: PlanBridgeInput): readonly WebStep[] => {
   if (!isNative && token === undefined) throw new PlanInputError("Choose a token.");
   const amount = parseAmountText(values.amount, token === null || token === undefined ? 18 : token.decimals);
   const receiver = parseAddress(values.receiver, "receiver");
+  const terminalValues = terminalValuesOf(values, { gasLimit: parseGasLimitText(values.gasLimit), isNative });
   const amountToken = token === null || token === undefined ? { symbol: `wrapped ${sourceChain.nativeSymbol}`, decimals: 18 } : { symbol: token.symbol, decimals: token.decimals };
 
   if (delivery === null) {
-    const steps = buildBridgeSteps({ ...values }, tokens, context);
+    const steps = buildBridgeSteps(terminalValues, tokens, context);
     return withDisclosure(steps, { amountToken, destinationNativeSymbol: destinationChain.nativeSymbol, destinationChainId: destinationChain.chainId, delivery: null });
   }
 
@@ -100,7 +128,7 @@ export const planBridgeSteps = (input: PlanBridgeInput): readonly WebStep[] => {
   const destinationToken = (token as TokenInfo).counterpart;
   const data = encodeDirectorFor(delivery.director, context.pair, { router: delivery.router, destination: destinationChain, destinationToken });
   const deployed = getAddress(delivery.router) === getAddress(delivery.defaultRouter);
-  const steps = buildBridgeSteps({ ...values, receiver: delivery.router, mode: "call", data }, tokens, context);
+  const steps = buildBridgeSteps({ ...terminalValues, receiver: delivery.router, mode: "call", data }, tokens, context);
   const adjusted = steps.map((step): FlowStep => ({
     ...step,
     plan:

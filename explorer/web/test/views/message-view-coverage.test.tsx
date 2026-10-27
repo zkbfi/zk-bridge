@@ -87,6 +87,24 @@ describe("the message view", () => {
     expect(screen.getByText("yes")).toBeInTheDocument();
   });
 
+  it("shows no fallback row and no claim row when the release was paid", async () => {
+    const detail = await detailOf(tokenItem.id);
+    renderDetail({ ...detail, releaseFailed: false });
+    expect(await screen.findByText("Amounts and recipient")).toBeInTheDocument();
+    expect(screen.queryByText("Fallback")).toBeNull();
+    expect(screen.queryByText("Claim")).toBeNull();
+    expect(screen.queryByText("Release")).toBeNull();
+  });
+
+  it("says that a failed release is final and that the tokens stay in the mediator", async () => {
+    const detail = await detailOf(tokenItem.id);
+    renderDetail({ ...detail, releaseFailed: true });
+    const row = (await screen.findByText("Release")).nextSibling;
+    expect(row).toHaveTextContent("The release failed and is final. The tokens stay in the mediator.");
+    expect(screen.queryByText("Claim")).toBeNull();
+    expect(screen.queryByText(/claim\(/)).toBeNull();
+  });
+
   it("names a chain that is not in the pair by its identifier", async () => {
     const detail = await detailOf(tokenItem.id);
     renderDetail({ ...detail, sourceChainId: 56 });

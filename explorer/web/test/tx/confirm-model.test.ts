@@ -13,7 +13,7 @@ const receiver = getAddress(`0x${"cd".repeat(20)}`);
 const relayStep = async (options: Partial<typeof DEFAULT_DELIVERY_OPTIONS> = {}): Promise<WebStep> => {
   const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
   const draft = computeBridgeDraft(
-    { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", fallback: "" },
+    { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", gasLimit: "" },
     { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "1", mode: "none", ...options },
     { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
   );
@@ -83,7 +83,7 @@ describe("buildConfirmView", () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
     const noBaseFeePair = { ...FIXTURE_PAIR, second: { ...FIXTURE_PAIR.second, baseFee: "none" as const } };
     const draft = computeBridgeDraft(
-      { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", fallback: "" },
+      { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", gasLimit: "" },
       { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "3000" },
       { pair: noBaseFeePair, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
     );
@@ -114,6 +114,20 @@ describe("buildConfirmView", () => {
     expect(buildConfirmView(await relayStep({ mode: "percentage" })).noRouterNotice).toBeNull();
   });
 
+  it("lists the gas limit overload of a plain relay and says that no router is involved", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+    const draft = computeBridgeDraft(
+      { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", gasLimit: "900000" },
+      { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "1", mode: "none" },
+      { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
+    );
+    if (draft.status !== "ready") throw new Error(draft.reason ?? "not ready");
+    const view = buildConfirmView(draft.steps.at(-1)!);
+    expect(view.functionSignature).toBe("relayTokens(address,address,uint256,uint256)");
+    expect(view.arguments.map((argument) => argument.name)).toEqual(["token", "receiver", "value", "gasLimit"]);
+    expect(view.noRouterNotice).toMatch(/^No router is involved/);
+  });
+
   it("shows no tip lines for a plain relay", async () => {
     const view = buildConfirmView(await relayStep({ mode: "none" }));
     expect(view.delivery).toBeNull();
@@ -130,7 +144,7 @@ describe("buildConfirmView", () => {
   it("shows the fees of the relay on the allowance step too, marked as the fees of the next transaction, and does not block it", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 0n });
     const draft = computeBridgeDraft(
-      { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", fallback: "" },
+      { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", gasLimit: "" },
       { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "1", mode: "percentage" },
       { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
     );

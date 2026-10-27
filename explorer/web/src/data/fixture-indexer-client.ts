@@ -25,9 +25,8 @@ const detailOf = (item: FeedItem, pair: PairConfig): MessageDetail => {
     destinationTransactionHash: item.destinationTransactionHash,
     deliverySucceeded: item.deliveredAt === null ? null : item.status !== "failed_call",
     executedBy: item.deliveredAt === null ? null : item.recipient,
-    fallbackUsed: item.status === "fallback_used",
     callbackFailed: false,
-    claimableOutstanding: item.status === "claimable",
+    releaseFailed: item.status === "release_failed",
     transfer:
       token === null || item.amount === null
         ? null
@@ -35,7 +34,6 @@ const detailOf = (item: FeedItem, pair: PairConfig): MessageDetail => {
             sourceToken: { symbol: token.symbol, address: token.address, decimals: token.decimals, chainId: from.chainId },
             destinationToken: { symbol: token.symbol, address: token.counterpart ?? token.address, decimals: token.decimals, chainId: to.chainId },
             recipient: item.recipient,
-            fallbackRecipient: item.recipient,
             value: item.amount,
             deliveredValue: item.deliveredAt === null ? null : item.amount,
             hasCallback: false,

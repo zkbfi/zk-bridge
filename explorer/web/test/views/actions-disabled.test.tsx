@@ -9,7 +9,8 @@ import { renderPage } from "../render";
 describe("the action area", () => {
   it("disables every action until a wallet is connected, and says why", () => {
     renderPage(<ActionArea pair={FIXTURE_PAIR} snapshots={undefined} snapshotError={null} />, { connected: false });
-    for (const name of [/Bridge tokens/, /Wrap the native coin/, /Send a message/, /Claim balances/]) expect(screen.getByRole("button", { name })).toBeDisabled();
+    for (const name of [/Bridge tokens/, /Wrap the native coin/, /Send a message/]) expect(screen.getByRole("button", { name })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /Claim/ })).toBeNull();
     expect(screen.getByText(/Connect a wallet to act/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Connect wallet" })).toBeEnabled();
   });
@@ -17,7 +18,7 @@ describe("the action area", () => {
   it("enables the actions once a wallet is connected, and opens the dialog that was asked for", async () => {
     const open = vi.fn();
     renderPage(<ActionArea pair={FIXTURE_PAIR} snapshots={undefined} snapshotError={null} />, { connected: true, actions: { open } });
-    for (const name of [/Bridge tokens/, /Wrap the native coin/, /Send a message/, /Claim balances/]) expect(screen.getByRole("button", { name })).toBeEnabled();
+    for (const name of [/Bridge tokens/, /Wrap the native coin/, /Send a message/]) expect(screen.getByRole("button", { name })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: /Send a message/ }));
     expect(open).toHaveBeenCalledWith("message");
   });
@@ -27,13 +28,13 @@ describe("the action area", () => {
     expect(screen.getByText(/Simulated wallet\. Nothing reaches a chain/)).toBeInTheDocument();
   });
 
-  it("shows balances of both chains, and the claimable amount, with no fee rate", async () => {
+  it("shows balances of both chains, with no claimable amount and no fee rate", async () => {
     const { buildFixtureContext } = await import("../helpers");
     const { context } = await buildFixtureContext();
     renderPage(<ActionArea pair={FIXTURE_PAIR} snapshots={context.snapshots ?? undefined} snapshotError={null} />);
     const ethereum = screen.getByTestId("balances-1");
     expect(within(ethereum).queryByText(/Bridge fee/)).toBeNull();
-    expect(within(ethereum).getByText(/25 USDC claimable/)).toBeInTheDocument();
+    expect(within(ethereum).queryByText(/claimable/)).toBeNull();
     expect(screen.getByTestId("balances-369")).toBeInTheDocument();
   });
 });
@@ -42,14 +43,6 @@ describe("the action dialogs", () => {
   it("asks to connect a wallet first when none is connected", async () => {
     renderPage(<ActionDialog dialog="bridge" onClose={() => undefined} />, { connected: false });
     expect(await screen.findByText(/Connect a wallet first/)).toBeInTheDocument();
-  });
-
-  it("lists the claimable balance and starts the review of a claim", async () => {
-    renderPage(<ActionDialog dialog="claim" onClose={() => undefined} />);
-    const claim = await screen.findByRole("button", { name: "Claim USDC" }, { timeout: 15_000 });
-    await userEvent.click(claim);
-    expect(await screen.findByRole("dialog", { name: "Review before you sign" })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText("claim(address,address)")).toBeInTheDocument());
   });
 
   it("disables Review in the message form until the target is an address, then reviews requireToPassMessage", async () => {

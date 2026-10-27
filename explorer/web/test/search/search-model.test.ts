@@ -20,7 +20,7 @@ import {
 
 const pages = parseDocPages({
   "/docs/pages/05-fees-explained.md": "# Fees explained\n\n## The data source line\n\ntext\n\n## Base fee time\n\ntext\n",
-  "/docs/pages/03-bridging-tokens.md": "# Bridging tokens\n\n## Claimable balances\n\ntext\n",
+  "/docs/pages/03-bridging-tokens.md": "# Bridging tokens\n\n## Failed releases\n\ntext\n",
 });
 
 const everything = [
@@ -109,9 +109,17 @@ describe("actionResults", () => {
     expect(after).toContain("action:disconnect-wallet");
   });
 
+  it("names the sending functions of the bridge action without a fallback, and offers no claim action", () => {
+    const results = actionResults({ pair: FIXTURE_PAIR, walletConnected: true });
+    const bridge = results.find((result) => result.id === "action:bridge")!;
+    expect(bridge.subtitle).toBe("relayTokens or relayTokensAndCall, with an optional gas limit");
+    expect(bridge.subtitle).not.toMatch(/allback/);
+    expect(results.map((result) => result.id)).not.toContain("action:claim");
+  });
+
   it("offers a switch to each chain of the pair, and the actions of the brief", () => {
     const ids = actionResults({ pair: FIXTURE_PAIR, walletConnected: true }).map((result) => result.id);
-    expect(ids).toEqual(expect.arrayContaining(["action:bridge", "action:wrap", "action:send-message", "action:claim", "action:settings", "action:switch-chain:1", "action:switch-chain:369", "action:theme:dark"]));
+    expect(ids).toEqual(expect.arrayContaining(["action:bridge", "action:wrap", "action:send-message", "action:settings", "action:switch-chain:1", "action:switch-chain:369", "action:theme:dark"]));
   });
 });
 

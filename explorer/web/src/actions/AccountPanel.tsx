@@ -80,7 +80,6 @@ export const AccountPanel = ({ pair, snapshots, snapshotError }: AccountPanelPro
                         <Table.Cell>{position.token.symbol}</Table.Cell>
                         <Table.Cell textAlign="end">
                           {formatAmountWithSymbol(position.balance, position.token)}
-                          {position.claimable > 0n ? <Text as="span" fontSize="xs" color="orange.fg"> ({formatAmountWithSymbol(position.claimable, position.token)} claimable)</Text> : null}
                         </Table.Cell>
                       </Table.Row>
                     ))}

@@ -1,5 +1,4 @@
 import { Box, Button, Stack, Text } from "@chakra-ui/react";
-import { claimableEntries } from "@terminal/app/actions";
 import type { ChainSnapshotResult } from "@terminal/chain/live-reads";
 import type { PairConfig } from "@terminal/model/types";
 import { AccountPanel } from "../../actions/AccountPanel";
@@ -24,7 +23,6 @@ export const ActionArea = ({ pair, snapshots, snapshotError }: ActionAreaProps) 
   const wallet = useWallet();
   const actions = useActions();
   const connected = wallet.status === "connected";
-  const claimable = claimableEntries(snapshots ?? null).length;
   return (
     <Stack gap="3">
       <AccountPanel pair={pair} snapshots={snapshots} snapshotError={snapshotError} />
@@ -38,9 +36,6 @@ export const ActionArea = ({ pair, snapshots, snapshotError }: ActionAreaProps) 
           </Button>
           <Button variant="outline" disabled={!connected} onClick={() => actions.open("message")}>
             Send a message
-          </Button>
-          <Button variant="outline" disabled={!connected} onClick={() => actions.open("claim")}>
-            Claim balances{claimable === 0 ? "" : ` (${claimable})`}
           </Button>
         </Stack>
         {connected ? null : (

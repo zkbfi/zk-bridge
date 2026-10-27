@@ -15,7 +15,7 @@ const usdc = FIXTURE_TOKENS[0]!;
 const stepsOf = async (input: { readonly allowance: bigint; readonly delivery: boolean }): Promise<readonly WebStep[]> => {
   const { context, tokens } = await buildFixtureContext({ allowance: input.allowance });
   const draft = computeBridgeDraft(
-    { token: `first:${usdc.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", fallback: "" },
+    { token: `first:${usdc.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", gasLimit: "" },
     { ...DEFAULT_DELIVERY_OPTIONS, mode: input.delivery ? "percentage" : "none", senderPriceText: "1" },
     { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
   );
@@ -26,7 +26,7 @@ const stepsOf = async (input: { readonly allowance: bigint; readonly delivery: b
 const gasStepsOf = async (pair: typeof FIXTURE_PAIR): Promise<readonly WebStep[]> => {
   const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
   const draft = computeBridgeDraft(
-    { token: `first:${usdc.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", fallback: "" },
+    { token: `first:${usdc.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", gasLimit: "" },
     { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "3000" },
     { pair, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
   );

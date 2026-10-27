@@ -86,14 +86,10 @@ The destination bridge ran the message, and the call succeeded. For a token tran
 
 The destination bridge ran the message, but the call to the target reverted. This outcome is final. The bridge does not retry and does not refund. The page Sending messages explains why.
 
-### Fallback used
+### Release failed
 
-A token release failed for the recipient. The fallback address received the tokens instead. The page Bridging tokens explains the fallback address.
-
-### Claimable
-
-No payee could receive the tokens. They wait for a claim. After the claim, the status returns to delivered. The page Bridging tokens explains how to claim.
+The mediator could not release the tokens to the recipient. This outcome is final: the tokens stay in the mediator, and nothing pays them out later. The page Bridging tokens explains failed releases.
 
 ## In flight
 
-A transfer is in flight when its status is sent, waiting for finality or covered. The other statuses are end states, except claimable, which waits for your action.
+A transfer is in flight when its status is sent, waiting for finality or covered. The other statuses are end states, and all of them are final.

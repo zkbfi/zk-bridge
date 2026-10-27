@@ -22,8 +22,7 @@ describe("the fixture indexer client", () => {
       destinationChainId: FIXTURE_PAIR.second.chainId,
       deliverySucceeded: true,
       executedBy: item.recipient,
-      fallbackUsed: false,
-      claimableOutstanding: false,
+      releaseFailed: false,
       coveredByHeadSlot: 14_100_000,
       coveredAt: item.sentAt + 700,
       deliveredAt: item.deliveredAt,
@@ -56,10 +55,9 @@ describe("the fixture indexer client", () => {
     expect(detail.coveredByHeadSlot).toBeNull();
   });
 
-  it("marks a failed call as delivered with a failed result, a fallback row, and a claimable row", async () => {
+  it("marks a failed call as delivered with a failed result, and a failed release row", async () => {
     expect((await client.message(itemWith((candidate) => candidate.status === "failed_call").id))!.deliverySucceeded).toBe(false);
-    expect((await client.message(itemWith((candidate) => candidate.status === "fallback_used").id))!.fallbackUsed).toBe(true);
-    expect((await client.message(itemWith((candidate) => candidate.status === "claimable").id))!.claimableOutstanding).toBe(true);
+    expect((await client.message(itemWith((candidate) => candidate.status === "release_failed").id))!.releaseFailed).toBe(true);
   });
 
   it("gives no transfer for a plain message", async () => {

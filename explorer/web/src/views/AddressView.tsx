@@ -1,6 +1,5 @@
 import { Box, Heading, Stack, Text } from "@chakra-ui/react";
 import type { Address } from "viem";
-import { claimableEntries } from "@terminal/app/actions";
 import { useFeed, useSnapshots } from "../app/queries";
 import { useServices } from "../app/services";
 import { formatAmountWithSymbol, formatUnits } from "../ui/format";
@@ -8,8 +7,7 @@ import { Mono, Notice, Panel } from "../ui/primitives";
 import { FeedTable } from "./pair/FeedTable";
 
 /**
- * The page of one address: its transfers and messages as sender or recipient, its balances on both chains, and what it
- * can claim.
+ * The page of one address: its transfers and messages as sender or recipient, and its balances on both chains.
  *
  * @param props The address.
  */
@@ -17,7 +15,6 @@ export const AddressView = ({ address }: { readonly address: Address }) => {
   const { pair } = useServices();
   const feed = useFeed(pair.id, { address }, 50);
   const snapshots = useSnapshots(address, pair.id);
-  const claimable = claimableEntries(snapshots.data ?? null);
   return (
     <Stack gap="3">
       <Box>
@@ -49,19 +46,6 @@ export const AddressView = ({ address }: { readonly address: Address }) => {
               ))}
             </Box>
           ),
-        )}
-      </Panel>
-      <Panel title="Claimable">
-        {claimable.length === 0 ? (
-          <Text fontSize="sm" color="fg.muted">
-            Nothing is claimable for this address.
-          </Text>
-        ) : (
-          claimable.map((entry) => (
-            <Text key={`${entry.side}-${entry.position.token.address}`} fontSize="sm">
-              {formatAmountWithSymbol(entry.position.claimable, entry.position.token)} on {entry.side === "first" ? pair.first.name : pair.second.name}
-            </Text>
-          ))
         )}
       </Panel>
       <Panel title="Transfers and messages">

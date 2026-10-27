@@ -22,7 +22,7 @@ describe("the feed and its filter bar", () => {
     expect(chains).toHaveLength(2);
     expect(new Set(chains.map((chain) => chain.textContent)).size).toBe(2);
     expect(first.querySelectorAll("time").length).toBeGreaterThanOrEqual(1);
-    expect(within(first).getByText(/^(Sent|Waiting for finality|Covered|Delivered|Failed call|Fallback used|Claimable)$/)).toBeInTheDocument();
+    expect(within(first).getByText(/^(Sent|Waiting for finality|Covered|Delivered|Failed call|Release failed)$/)).toBeInTheDocument();
   });
 
   it("keeps the filter bar visible with a label on every control", async () => {

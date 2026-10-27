@@ -10,7 +10,7 @@ const usdc = FIXTURE_TOKENS[0]!;
 const weth = FIXTURE_TOKENS[2]!;
 const receiver = getAddress(`0x${"cd".repeat(20)}`);
 const deliveryRouter = getAddress(FIXTURE_PAIR.second.contracts.deliveryRouter!);
-const values = (overrides: Partial<BridgeFormValues> = {}): BridgeFormValues => ({ token: `first:${usdc.address}`, amount: "100", receiver, mode: "plain", data: "", fallback: "", ...overrides });
+const values = (overrides: Partial<BridgeFormValues> = {}): BridgeFormValues => ({ token: `first:${usdc.address}`, amount: "100", receiver, mode: "plain", data: "", gasLimit: "", ...overrides });
 /** The percentage mode: these tests read the percentage rules. The default mode is the gas based mode. */
 const PERCENT: DeliveryOptions = { ...DEFAULT_DELIVERY_OPTIONS, mode: "percentage" };
 const options = (overrides: Partial<DeliveryOptions> = {}): DeliveryOptions => ({ ...PERCENT, ...overrides });
@@ -105,13 +105,13 @@ describe("No tip", () => {
 });
 
 describe("No tip means no router at all", () => {
-  it("builds calldata that names no router and holds no fee director, for a plain relay and for a relay with a fallback", async () => {
-    const forms = [values(), values({ mode: "fallback", data: "0x", fallback: receiver })];
+  it("builds calldata that names no router and holds no fee director, for a plain relay, a relay with a call, and a relay with a gas limit", async () => {
+    const forms = [values(), values({ mode: "call", data: "0xabcd" }), values({ gasLimit: "900000" })];
     for (const form of forms) {
       const draft = computeBridgeDraft(form, options({ mode: "none" }), await data());
       const relay = draft.steps.at(-1)!.plan;
       expect(draft.delivery).toBeNull();
-      expect(["relayTokens", "relayTokensWithFallback"]).toContain(relay.functionName);
+      expect(["relayTokens", "relayTokensAndCall"]).toContain(relay.functionName);
       expect(relay.data.toLowerCase()).not.toContain(deliveryRouter.slice(2).toLowerCase());
       expect(relay.data).not.toContain(encodeFeeDirector(defaultTip(receiver), { router: deliveryRouter, protectedAddresses: [], destinationToken: usdc.counterpart, destinationWrappedNative: FIXTURE_PAIR.second.contracts.wrappedNative }).slice(2));
       const decoded = decodeFunctionData({ abi: tokenMediatorAbi, data: relay.data });

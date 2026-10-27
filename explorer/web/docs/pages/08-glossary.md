@@ -18,10 +18,6 @@ The part of a proof-of-stake chain that tracks validators and finality. The ligh
 
 A token that the bridge mints on one chain to stand for a native token of the other chain. Its name is the name of the native token, then " from " and the home chain, for example Wrapped Ether from Ethereum. Its symbol has the prefix "zkb", for example zkbWETH. The bridge burns the copy when the tokens go back home.
 
-## Claimable
-
-A status of a transfer. No payee could receive the tokens, so they wait in the mediator. The fallback address, or anyone for it, can claim them.
-
 ## Covered
 
 A status of a transfer. The destination light client stored a head at or after the block of your send. Anyone can now deliver it.
@@ -33,10 +29,6 @@ The starting trusted header of a light client. The deployer chooses it when the 
 ## Executor
 
 The account that calls the delivery function on the destination chain. Anyone can be an executor. The target of a message is the contract that the bridge calls.
-
-## Fallback recipient
-
-The address that gets the tokens when the receiver cannot take them. The default is the sender, at the same address on the other chain.
 
 ## Delivery router
 
@@ -60,7 +52,7 @@ A contract that follows another chain. It stores finalized headers. It accepts a
 
 ## Mediator
 
-The token mediator. It is the contract that locks native tokens, mints and burns bridged copies and holds claimable balances.
+The token mediator. It is the contract that locks native tokens, mints and burns bridged copies and and keeps the tokens of a failed release.
 
 ## Message
 
@@ -77,6 +69,10 @@ Evidence that a statement is true. The bridge uses two kinds. A zero-knowledge p
 ## Relay
 
 To send tokens or a message across the bridge. The functions of the mediator that do this have the word relay in their names.
+
+## Release failed
+
+A status of a transfer. The mediator could not release the tokens to the recipient. The failure is final, and the tokens stay in the mediator.
 
 ## Runner
 
