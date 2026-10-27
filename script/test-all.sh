@@ -37,7 +37,7 @@ steps=(
   "contracts|.|script/coverage-check.sh"
   "light-client|light-client|cargo test --workspace"
   "prover|prover|cargo test"
-  "explorer|explorer|pnpm -r --filter '!@zk-bridge/terminal' --if-present run test"
+  "explorer|explorer|pnpm -r --filter '!@zk-bridge/explorer-terminal' --if-present run test"
   "terminal|explorer/terminal|bun test"
 )
 
