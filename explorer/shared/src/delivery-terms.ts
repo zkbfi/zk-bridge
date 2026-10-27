@@ -12,7 +12,14 @@ import { RATE_SCALE } from "./format.js";
  * A gas based tip is computed from the gas that the deliverer's transaction makes available (`startingGas` at router entry
  * minus `gasleft()` in the callback, plus a fixed overhead). The deliverer chooses the gas limit of the transaction. The
  * bridge forwards only the message gas limit, so gas that the deliverer holds back above it counts. A sender must expect
- * the tip to reach `limit`, and `limit` is the price ceiling.
+ * the tip to reach `limit`, and `limit` is the price ceiling. The tip counts the call after the delivery. When a call is
+ * requested, the router adds `gasLeft - overhead - CALL_GAS_RESERVE` to the measured gas, so with a call the tip reaches
+ * up to what the deliverer made available.
+ *
+ * The data of `onTokenBridged` is the 128 byte director (four words), then optionally a 20 byte target address, then the
+ * call data (all remaining bytes, which may be empty). The legacy form is 20 bytes and cannot carry a call. Data of 129 to
+ * 147 bytes makes the router deliver and make no call, because a tail shorter than a target is ignored. This module
+ * refuses to build such data.
  *
  * The test `test/delivery-terms.test.ts` checks the constants, the encoding and the fee against vectors that the compiled
  * router printed (`vectors/GenerateDeliveryFeeVectors.s.sol`), so the two sides cannot drift.
@@ -51,10 +58,25 @@ export const KNOWN_SETTING_BITS = FIXED_FEE | UNWRAP | EXCLUDE_PRIORITY | MULTIP
 /** The largest value of a `uint256`. */
 export const UINT256_MAXIMUM = 2n ** 256n - 1n;
 
+/** Gas that the router keeps back from a call after a delivery. Same as `DeliveryRouter.CALL_GAS_RESERVE`. */
+export const CALL_GAS_RESERVE = 10_000n;
+
 /** The bytes of the legacy form: one address. */
 export const LEGACY_RECEIVER_BYTES = 20;
 /** The size of an encoded director: four words. */
 export const FEE_DIRECTOR_BYTES = 128;
+/** The bytes of the target address that follows a director. */
+export const DELIVERY_CALL_TARGET_BYTES = 20;
+/** Where the call data starts: the director plus the target. Data shorter than this makes no call. */
+export const DELIVERY_CALL_OFFSET_BYTES = FEE_DIRECTOR_BYTES + DELIVERY_CALL_TARGET_BYTES;
+
+/** The call that the router makes after a delivery: from the router, with no native value. */
+export interface DeliveryCall {
+  /** The contract that the router calls. */
+  readonly target: Address;
+  /** The call data. It may be empty (`0x`). */
+  readonly data: Hex;
+}
 
 /** The `FeeDirector` struct of `DeliveryRouter.sol`. */
 export interface FeeDirector {
@@ -252,18 +274,33 @@ export const assertValidFeeTerms = (input: FeeTermsInput): void => {
   if (!isAddress(router, { strict: false })) throw new FeeTermsError("The router is not an address.");
   if (!/^0x([0-9a-fA-F]{2})*$/.test(data)) throw new FeeTermsError("The call data to a delivery router must be hex with an even number of digits.");
   const length = bytesOf(data);
-  if (length !== LEGACY_RECEIVER_BYTES && length !== FEE_DIRECTOR_BYTES) {
+  if (length !== LEGACY_RECEIVER_BYTES && length < FEE_DIRECTOR_BYTES) {
     throw new FeeTermsError(
       `The call data to a delivery router must be the ${FEE_DIRECTOR_BYTES} byte fee terms, not ${length} bytes. The router hands other data to its failed delivery address.`,
     );
   }
+  if (length > FEE_DIRECTOR_BYTES && length < DELIVERY_CALL_OFFSET_BYTES) {
+    throw new FeeTermsError(
+      `The call data has ${length} bytes, which is more than the ${FEE_DIRECTOR_BYTES} byte fee terms and less than ${DELIVERY_CALL_OFFSET_BYTES} bytes. A call needs a ${DELIVERY_CALL_TARGET_BYTES} byte target after the fee terms, so the router would make no call. Add the target or remove the extra bytes.`,
+    );
+  }
   if (length === LEGACY_RECEIVER_BYTES) assertLegacyToken(input);
-  if (length === FEE_DIRECTOR_BYTES) assertSettings(settingsOfData(data), input);
+  if (length >= FEE_DIRECTOR_BYTES) assertSettings(settingsOfData(data), input);
   const recipient = recipientOf(data, length);
   if (sameAddress(recipient, ZERO_ADDRESS)) throw new FeeTermsError("The recipient of the fee terms is the zero address. The router would hand the value to its failed delivery address.");
   if (sameAddress(recipient, router)) throw new FeeTermsError("The recipient of the fee terms is the router itself. The router would hand the value to its failed delivery address.");
   const clash = input.protectedAddresses.find((protectedAddress) => sameAddress(protectedAddress.address, recipient));
   if (clash !== undefined) throw new FeeTermsError(`The recipient of the fee terms is ${clash.label}. Tokens sent there are lost to you. Name your own account.`);
+  assertCallTarget(input);
+};
+
+const assertCallTarget = (input: FeeTermsInput): void => {
+  const call = decodeDeliveryCall(input.data);
+  if (call === null) return;
+  if (sameAddress(call.target, ZERO_ADDRESS)) throw new FeeTermsError("The target of the call is the zero address. The router would call nothing useful. Name a contract.");
+  if (sameAddress(call.target, input.router)) throw new FeeTermsError("The target of the call is the router itself. Name another contract.");
+  const clash = input.protectedAddresses.find((protectedAddress) => sameAddress(protectedAddress.address, call.target));
+  if (clash !== undefined) throw new FeeTermsError(`The target of the call is ${clash.label}. The router must not call it. Name another contract.`);
 };
 
 const assertLegacyToken = (input: FeeTermsInput): void => {
@@ -288,48 +325,69 @@ const assertSettings = (settings: bigint, input: FeeTermsInput): void => {
  * This is the callback data of `relayTokensAndCall`. It runs the guard, so no caller can skip it.
  *
  * @param director The director.
+ * With a call, the four words are followed by the 20 byte target and the call data, as `abi.encodePacked(abi.encode(director),
+ * target, callData)` does.
+ *
+ * @param director The director.
  * @param context The router that receives the relay, the token, and the addresses that a recipient must not be.
+ * @param call The call that the router makes after the delivery. Omit it for a delivery only.
  * @throws FeeTermsError when the router would not honour the terms.
  */
-export const encodeFeeDirector = (director: FeeDirector, context: FeeTermsContext): Hex => {
-  const data = encodeAbiParameters(DIRECTOR_PARAMETERS, [director.recipient, director.settings, director.limit, director.multiplier]);
+export const encodeFeeDirector = (director: FeeDirector, context: FeeTermsContext, call?: DeliveryCall): Hex => {
+  const words = encodeAbiParameters(DIRECTOR_PARAMETERS, [director.recipient, director.settings, director.limit, director.multiplier]);
+  const data: Hex = call === undefined ? words : `${words}${call.target.slice(2).toLowerCase()}${call.data.slice(2).toLowerCase()}`;
   assertValidFeeTerms({ ...context, data });
   return data;
 };
 
 /**
- * Decodes `abi.decode(data, (FeeDirector))`.
+ * Decodes `abi.decode(data, (FeeDirector))`. The router reads the first 128 bytes and ignores the rest, and so does this.
  *
- * @param data Exactly 128 bytes.
- * @throws When the data is not 128 bytes, or when the address word has bits above 160.
+ * @param data At least 128 bytes.
+ * @throws When the data is shorter than 128 bytes, or when the address word has bits above 160.
  */
 export const decodeFeeDirector = (data: Hex): FeeDirector => {
   const bytes = bytesOf(data);
-  if (bytes !== FEE_DIRECTOR_BYTES) throw new RangeError(`a fee director is ${FEE_DIRECTOR_BYTES} bytes, not ${bytes}`);
+  if (bytes < FEE_DIRECTOR_BYTES) throw new RangeError(`a fee director is at least ${FEE_DIRECTOR_BYTES} bytes, not ${bytes}`);
   if (hasDirtyRecipientWord(data)) throw new RangeError("the recipient word of a fee director has bits above 160");
-  const [recipient, settings, limit, multiplier] = decodeAbiParameters(DIRECTOR_PARAMETERS, data);
+  const [recipient, settings, limit, multiplier] = decodeAbiParameters(DIRECTOR_PARAMETERS, data.slice(0, 2 + FEE_DIRECTOR_BYTES * 2) as Hex);
   return { recipient, settings, limit, multiplier };
+};
+
+/**
+ * Reads the call after the director, as the router does: data of 148 bytes or more names a target (20 bytes after the
+ * director) and the call data (all bytes after the target, possibly empty). Shorter data makes no call.
+ *
+ * @param data The callback data of a transfer.
+ * @returns The call, or null when the router makes none.
+ */
+export const decodeDeliveryCall = (data: Hex): DeliveryCall | null => {
+  if (bytesOf(data) < DELIVERY_CALL_OFFSET_BYTES) return null;
+  const targetStart = 2 + FEE_DIRECTOR_BYTES * 2;
+  const callStart = 2 + DELIVERY_CALL_OFFSET_BYTES * 2;
+  return { target: `0x${data.slice(targetStart, callStart)}` as Address, data: `0x${data.slice(callStart)}` };
 };
 
 /** What the router reads from the data of `onTokenBridged`, as the router decides it. */
 export type DeliveryTerms =
   | { readonly kind: "legacy"; readonly receiver: Address }
-  | { readonly kind: "director"; readonly director: FeeDirector }
+  | { readonly kind: "director"; readonly director: FeeDirector; readonly call: DeliveryCall | null }
   | { readonly kind: "unknown"; readonly bytes: number };
 
 /**
- * Reads the callback data as the router does: 20 bytes are the legacy receiver (no tip), exactly 128 bytes are a
- * director, and anything else has no known shape (the router hands the whole value to its failed delivery address).
- * A director whose address word has bits above 160 also has no known shape here.
+ * Reads the callback data as the router does: 20 bytes are the legacy receiver (no tip), 128 bytes or more are a
+ * director (with a call when the data has 148 bytes or more, and no call for 129 to 147 bytes), and anything else has
+ * no known shape (the router hands the whole value to its failed delivery address). A director whose address word has
+ * bits above 160 also has no known shape here.
  *
  * @param data The callback data of a transfer.
  */
 export const readDeliveryTerms = (data: Hex): DeliveryTerms => {
   const bytes = bytesOf(data);
   if (bytes === LEGACY_RECEIVER_BYTES) return { kind: "legacy", receiver: data.toLowerCase() as Address };
-  if (bytes !== FEE_DIRECTOR_BYTES) return { kind: "unknown", bytes };
+  if (bytes < FEE_DIRECTOR_BYTES) return { kind: "unknown", bytes };
   try {
-    return { kind: "director", director: decodeFeeDirector(data) };
+    return { kind: "director", director: decodeFeeDirector(data), call: decodeDeliveryCall(data) };
   } catch {
     return { kind: "unknown", bytes };
   }

@@ -33,6 +33,19 @@ export const deliveryRouterAbi = [
   },
   {
     "type": "function",
+    "name": "CALL_GAS_RESERVE",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "DELIVERY_SLOT",
     "inputs": [],
     "outputs": [
@@ -163,43 +176,6 @@ export const deliveryRouterAbi = [
         "name": "",
         "type": "address",
         "internalType": "contract ITokenMediator"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "claim",
-    "inputs": [
-      {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "claimable",
-    "inputs": [
-      {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "account",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -489,25 +465,6 @@ export const deliveryRouterAbi = [
   },
   {
     "type": "function",
-    "name": "totalClaimable",
-    "inputs": [
-      {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "wNative",
     "inputs": [],
     "outputs": [
@@ -559,16 +516,22 @@ export const deliveryRouterAbi = [
   },
   {
     "type": "event",
-    "name": "Claimed",
+    "name": "CallFailed",
     "inputs": [
       {
-        "name": "token",
+        "name": "target",
         "type": "address",
         "indexed": true,
         "internalType": "address"
       },
       {
-        "name": "amount",
+        "name": "recipient",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "gasGiven",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
@@ -603,6 +566,25 @@ export const deliveryRouterAbi = [
         "type": "uint8",
         "indexed": false,
         "internalType": "enum DeliveryRouter.Reason"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "HandOffRefused",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       }
     ],
     "anonymous": false
@@ -671,17 +653,6 @@ export const deliveryRouterAbi = [
   },
   {
     "type": "error",
-    "name": "NothingToClaim",
-    "inputs": [
-      {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      }
-    ]
-  },
-  {
-    "type": "error",
     "name": "NothingToSweep",
     "inputs": [
       {
@@ -695,17 +666,6 @@ export const deliveryRouterAbi = [
     "type": "error",
     "name": "ReentrancyGuardReentrantCall",
     "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "SafeERC20FailedOperation",
-    "inputs": [
-      {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      }
-    ]
   },
   {
     "type": "error",

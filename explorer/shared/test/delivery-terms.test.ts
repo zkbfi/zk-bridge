@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
+import { getAddress } from "viem";
 import { describe, expect, it } from "vitest";
 import {
   assertValidFeeTerms,
+  CALL_GAS_RESERVE,
+  DELIVERY_CALL_OFFSET_BYTES,
+  DELIVERY_CALL_TARGET_BYTES,
+  decodeDeliveryCall,
   decodeFeeDirector,
   encodeFeeDirector,
   EXCLUDE_PRIORITY,
@@ -24,6 +29,7 @@ import {
   settingsOf,
   TOKEN_GAS_OVERHEAD,
   UNWRAP,
+  type DeliveryCall,
   type FeeDirector,
   type FeeTermsContext,
   type FeeTermsInput,
@@ -62,6 +68,16 @@ describe("the constants of the compiled DeliveryRouter", () => {
   it("has the same gas overheads as the contract", () => {
     expect(TOKEN_GAS_OVERHEAD).toBe(BigInt(constants.TOKEN_GAS_OVERHEAD!));
     expect(NATIVE_GAS_OVERHEAD).toBe(BigInt(constants.NATIVE_GAS_OVERHEAD!));
+  });
+
+  it("has the same call gas reserve as the contract", () => {
+    expect(constants.CALL_GAS_RESERVE).toBe("10000");
+    expect(CALL_GAS_RESERVE).toBe(BigInt(constants.CALL_GAS_RESERVE!));
+  });
+
+  it("puts the call data after the director and the 20 byte target", () => {
+    expect(DELIVERY_CALL_TARGET_BYTES).toBe(20);
+    expect(DELIVERY_CALL_OFFSET_BYTES).toBe(148);
   });
 
   it("reads exactly the bits that the contract defines", () => {
@@ -112,12 +128,28 @@ describe("reading the data as the router does", () => {
     expect(readDeliveryTerms(person.toUpperCase().replace("0X", "0x") as `0x${string}`)).toEqual({ kind: "legacy", receiver: person });
   });
   it("reads 128 bytes as a director", () => {
-    expect(readDeliveryTerms(directorData(person))).toEqual({ kind: "director", director: { recipient: expect.any(String), settings: 8n, limit: 0n, multiplier: 5n } });
+    expect(readDeliveryTerms(directorData(person))).toEqual({ kind: "director", director: { recipient: getAddress(person), settings: 8n, limit: 0n, multiplier: 5n }, call: null });
   });
-  it("finds no known shape in any other length or in a dirty recipient word", () => {
+  it("finds no known shape in a length below 128 that is not 20, or in a dirty recipient word", () => {
     expect(readDeliveryTerms("0x1234")).toEqual({ kind: "unknown", bytes: 2 });
-    expect(readDeliveryTerms(`0x${"00".repeat(129)}`)).toEqual({ kind: "unknown", bytes: 129 });
+    expect(readDeliveryTerms(`0x${"00".repeat(127)}`)).toEqual({ kind: "unknown", bytes: 127 });
     expect(readDeliveryTerms(`0x${"ff".repeat(12)}${person.slice(2)}${"0".repeat(192)}`)).toEqual({ kind: "unknown", bytes: 128 });
+    expect(readDeliveryTerms(`0x${"ff".repeat(12)}${person.slice(2)}${"0".repeat(192)}${"11".repeat(40)}`)).toEqual({ kind: "unknown", bytes: 168 });
+  });
+  // Changed: 129 bytes used to be unknown. The router now reads a director from 128 bytes up, so 129 bytes is a director with no call.
+  it("reads 128, 129 and 147 bytes as a director with no call, and 148 and 200 bytes as a call", () => {
+    const director128 = directorData(person);
+    const expected = { recipient: getAddress(person), settings: 8n, limit: 0n, multiplier: 5n };
+    const target = "ab".repeat(20);
+    expect(readDeliveryTerms(director128)).toEqual({ kind: "director", director: expected, call: null });
+    expect(readDeliveryTerms(`${director128}ff`)).toEqual({ kind: "director", director: expected, call: null });
+    expect(readDeliveryTerms(`${director128}${"ff".repeat(19)}`)).toEqual({ kind: "director", director: expected, call: null });
+    expect(readDeliveryTerms(`${director128}${target}`)).toEqual({ kind: "director", director: expected, call: { target: `0x${target}`, data: "0x" } });
+    expect(readDeliveryTerms(`${director128}${target}${"cd".repeat(52)}`)).toEqual({
+      kind: "director",
+      director: expected,
+      call: { target: `0x${target}`, data: `0x${"cd".repeat(52)}` },
+    });
   });
   it("refuses to decode a dirty recipient word", () => {
     expect(() => decodeFeeDirector(`0x${"ff".repeat(12)}${person.slice(2)}${"0".repeat(192)}`)).toThrow(RangeError);
@@ -196,14 +228,55 @@ describe("against vectors printed by the compiled DeliveryRouter", () => {
   });
 });
 
+describe("decodeDeliveryCall", () => {
+  const target = "0x1234567890abcdef1234567890abcdef12345678";
+  it("returns null below 148 bytes", () => {
+    expect(decodeDeliveryCall(directorData(person))).toBeNull();
+    expect(decodeDeliveryCall(`${directorData(person)}${target.slice(2, 40)}`)).toBeNull();
+    expect(decodeDeliveryCall("0x")).toBeNull();
+  });
+  it("reads the target and the call data exactly", () => {
+    expect(decodeDeliveryCall(`${directorData(person)}${target.slice(2)}`)).toEqual({ target, data: "0x" });
+    expect(decodeDeliveryCall(`${directorData(person)}${target.slice(2)}a9059cbb`)).toEqual({ target, data: "0xa9059cbb" });
+  });
+});
+
+type CallVector = { recipient: `0x${string}`; settings: string; limit: string; multiplier: string; target: `0x${string}`; callData: `0x${string}`; encoded: `0x${string}` };
+
+const callVectors = readFileSync(new URL("./fixtures/delivery-call-vectors.jsonl", import.meta.url), "utf8")
+  .split("\n")
+  .filter((line) => line.length > 0)
+  .map((line) => JSON.parse(line) as CallVector);
+
+describe("against call vectors printed by the compiled generator", () => {
+  it("has a vector for each call data length of 0, 1, 4, 36 and 200 bytes", () => {
+    expect(callVectors.map((vector) => (vector.callData.length - 2) / 2)).toEqual([0, 1, 4, 36, 200]);
+  });
+
+  it("encodes a director with a call as abi.encodePacked does, and decodes it back", () => {
+    for (const vector of callVectors) {
+      const vectorDirector: FeeDirector = { recipient: vector.recipient, settings: BigInt(vector.settings), limit: BigInt(vector.limit), multiplier: BigInt(vector.multiplier) };
+      const call: DeliveryCall = { target: vector.target, data: vector.callData };
+      expect(encodeFeeDirector(vectorDirector, context, call), JSON.stringify(vector)).toBe(vector.encoded.toLowerCase());
+      expect(decodeDeliveryCall(vector.encoded)).toEqual({ target: vector.target.toLowerCase(), data: vector.callData });
+      expect(readDeliveryTerms(vector.encoded)).toEqual({
+        kind: "director",
+        director: vectorDirector,
+        call: { target: vector.target.toLowerCase(), data: vector.callData },
+      });
+    }
+  });
+});
+
 describe("the encoding", () => {
   it("is four words with no offset", () => {
     const encoded = encodeFeeDirector({ recipient, settings: 8n, limit: 0n, multiplier: 5n }, context);
     expect((encoded.length - 2) / 2).toBe(128);
   });
 
-  it("refuses data of another length", () => {
+  it("refuses data below 128 bytes, and reads the first 128 bytes of longer data", () => {
     expect(() => decodeFeeDirector("0x1234")).toThrow(RangeError);
+    expect(decodeFeeDirector(`${directorData(person)}${"ab".repeat(30)}`)).toEqual({ recipient: getAddress(person), settings: 8n, limit: 0n, multiplier: 5n });
   });
 });
 
@@ -241,6 +314,12 @@ describe("assertValidFeeTerms accepts", () => {
     expect(() => assertValidFeeTerms(input(directorData(person)))).not.toThrow();
   });
 
+  it("a call to a plain target, with and without call data", () => {
+    const target = "ab".repeat(20);
+    expect(() => assertValidFeeTerms(input(`${directorData(person)}${target}`))).not.toThrow();
+    expect(() => assertValidFeeTerms(input(`${directorData(person)}${target}a9059cbb`))).not.toThrow();
+  });
+
   it("the legacy receiver for the wrapped native token, in any letter case", () => {
     expect(() => assertValidFeeTerms(input(person, { destinationToken: wrappedNative.toUpperCase().replace("0X", "0x") as `0x${string}` }))).not.toThrow();
   });
@@ -268,7 +347,21 @@ describe("assertValidFeeTerms refuses what the router would send to its reward a
     refuses("0x", /not 0 bytes/);
     refuses("0x1234", /not 2 bytes/);
     refuses(`0x${"00".repeat(64)}`, /not 64 bytes/);
-    refuses(`${directorData(person)}00`, /not 129 bytes/);
+  });
+  it("129 to 147 bytes, and says that the target needs 20 bytes", () => {
+    refuses(`${directorData(person)}00`, /129 bytes.*20 byte target/);
+    refuses(`${directorData(person)}${"00".repeat(19)}`, /147 bytes.*20 byte target/);
+  });
+  it("a call to the zero address, the router, a mediator, a bridge or a delivery router", () => {
+    const calling = (target: string) => `${directorData(person)}${target.slice(2).toLowerCase()}a9059cbb` as const;
+    refuses(calling("0x0000000000000000000000000000000000000000"), /target of the call is the zero address/);
+    refuses(calling(router.toUpperCase().replace("0X", "0x")), /target of the call is the router itself/);
+    refuses(calling(chains[0]!.mediator), /target of the call is the mediator of ethereum/);
+    refuses(calling(chains[1]!.bridge), /target of the call is the bridge of pulsechain/);
+    refuses(calling(otherRouter), /target of the call is the delivery router of pulsechain/);
+  });
+  it("a call on the legacy form, which has no room for a target", () => {
+    refuses(`0x${person.slice(2)}${"ab".repeat(20)}a9059cbb`, /not 44 bytes/, { destinationToken: wrappedNative });
   });
   it("data that is not hex", () => refuses("0xzz", /hex/));
   it("a recipient word with bits above 160", () => refuses(`0x${"f".repeat(24)}${person.slice(2)}${"0".repeat(192)}`, /bits above 160/));
@@ -287,6 +380,14 @@ describe("assertValidFeeTerms refuses what the router would send to its reward a
 });
 
 describe("the encoder cannot be bypassed", () => {
+  it("refuses a call that the guard refuses", () => {
+    const zero = "0x0000000000000000000000000000000000000000";
+    expect(() => encodeFeeDirector(director(person), context, { target: zero, data: "0x" })).toThrow(/target of the call is the zero address/);
+    expect(() => encodeFeeDirector(director(person), context, { target: router, data: "0x" })).toThrow(/router itself/);
+    expect(() => encodeFeeDirector(director(person), context, { target: chains[0]!.mediator as `0x${string}`, data: "0x" })).toThrow(/mediator of ethereum/);
+    expect(() => encodeFeeDirector(director(person), context, { target: "0xabababababababababababababababababababab", data: "0xabc" })).toThrow(/hex/);
+  });
+
   it("refuses a director that the guard refuses", () => {
     expect(() => encodeFeeDirector(director("0x0000000000000000000000000000000000000000"), context)).toThrow(/zero address/);
     expect(() => encodeFeeDirector(director(router), context)).toThrow(/router itself/);

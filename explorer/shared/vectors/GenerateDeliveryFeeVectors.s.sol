@@ -26,11 +26,14 @@ contract DeliveryFeeProbe {
 
 /// @title GenerateDeliveryFeeVectors
 /// @notice Prints test vectors of the delivery router: the constants of the router (the name and the value of every
-/// settings flag and gas overhead), the encoding of a `FeeDirector` and the answer of `feeInfo`, one JSON object per
+/// settings flag and gas overhead, and the call gas reserve), the encoding of a `FeeDirector`, the encoding of a
+/// director followed by a call target and call data (`CALLVECTOR`), and the answer of `feeInfo`, one JSON object per
 /// line. Run from the repository root:
 ///   forge script explorer/shared/vectors/GenerateDeliveryFeeVectors.s.sol --tc GenerateDeliveryFeeVectors --root . > /tmp/vectors.log 2>&1
 ///   grep '^  VECTOR ' /tmp/vectors.log | sed 's/^  VECTOR //' > explorer/shared/test/fixtures/delivery-fee-vectors.jsonl
+///   grep '^  CALLVECTOR ' /tmp/vectors.log | sed 's/^  CALLVECTOR //' > explorer/shared/test/fixtures/delivery-call-vectors.jsonl
 ///   grep '^  CONSTANTS ' /tmp/vectors.log | sed 's/^  CONSTANTS //' > explorer/shared/test/fixtures/delivery-router-constants.json
+/// (Add `--skip <test contract>` flags to the `forge script` command when a test file does not compile.)
 /// The test in explorer/shared/test/delivery-terms.test.ts reads the saved lines, so the TypeScript copy and the router
 /// cannot drift. A line with `"reverts":true` is a case where the router reverts on an overflow.
 contract GenerateDeliveryFeeVectors is Script {
@@ -43,6 +46,7 @@ contract GenerateDeliveryFeeVectors is Script {
         probe = new DeliveryFeeProbe(new DeliveryRouter(ITokenMediator(address(0xB1D6E)), IWETH(WRAPPED_NATIVE), address(0xA11CE), address(0xB0B)));
 
         _printConstants(probe.router());
+        _printCallVectors();
         // Every combination of the four flag bits, with the values around the edges.
         uint256[8] memory values = [uint256(0), 1, 999, 1 ether, 1_000 ether, 10 ** 30, type(uint128).max, type(uint256).max];
         uint256[4] memory limits = [uint256(0), 1 gwei, 5 ether, type(uint256).max];
@@ -100,9 +104,40 @@ contract GenerateDeliveryFeeVectors is Script {
                 "\",\"MULTIPLIER_OF_TOTAL\":\"", vm.toString(router.MULTIPLIER_OF_TOTAL()),
                 "\",\"TOKEN_GAS_OVERHEAD\":\"", vm.toString(router.TOKEN_GAS_OVERHEAD()),
                 "\",\"NATIVE_GAS_OVERHEAD\":\"", vm.toString(router.NATIVE_GAS_OVERHEAD()),
+                "\",\"CALL_GAS_RESERVE\":\"", vm.toString(router.CALL_GAS_RESERVE()),
                 "\"}"
             )
         );
+    }
+
+    /// @dev A director followed by a target and call data of 0, 1, 4, 36 and 200 bytes, with fixed values.
+    function _printCallVectors() private {
+        address target = address(0xc0De00000000000000000000000000000000feEd);
+        bytes[5] memory callDatas = [bytes(""), hex"ab", hex"a9059cbb", _patterned(36), _patterned(200)];
+        for (uint256 i = 0; i < callDatas.length; i++) {
+            DeliveryRouter.FeeDirector memory director =
+                DeliveryRouter.FeeDirector(address(uint160(0xA00 + i)), i % 2 == 0 ? 8 : 1, 1_000 + i, 0.01 ether + i);
+            console2.log(
+                string.concat(
+                    "CALLVECTOR {\"recipient\":\"", vm.toString(director.recipient),
+                    "\",\"settings\":\"", vm.toString(director.settings),
+                    "\",\"limit\":\"", vm.toString(director.limit),
+                    "\",\"multiplier\":\"", vm.toString(director.multiplier),
+                    "\",\"target\":\"", vm.toString(target),
+                    "\",\"callData\":\"", vm.toString(callDatas[i]),
+                    "\",\"encoded\":\"", vm.toString(abi.encodePacked(abi.encode(director), target, callDatas[i])),
+                    "\"}"
+                )
+            );
+        }
+    }
+
+    /// @dev `length` bytes with the values 1, 2, 3, ... modulo 251, so no two neighbours are equal.
+    function _patterned(uint256 length) private pure returns (bytes memory result) {
+        result = new bytes(length);
+        for (uint256 i = 0; i < length; i++) {
+            result[i] = bytes1(uint8((i % 251) + 1));
+        }
     }
 
     struct Case {
