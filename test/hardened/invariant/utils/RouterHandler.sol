@@ -74,9 +74,15 @@ contract RouterHandler is RouterWorld {
     }
 
     uint256 internal constant MAXIMUM_AMOUNT = 1_000 ether;
+    /// @dev The fixed overhead that a gas based tip adds to the measured gas, at its largest (the token payout).
     uint256 internal constant GAS_OVERHEAD_BOUND = 100_000;
+    /// @dev The gas that the caller of a router supplies. The router measures from the entry of `executeMessage`, so it
+    /// can measure no more than this, and the handler bounds a gas based tip by it. It exceeds the largest gas limit of a
+    /// message (2,750,000), so the bridge always gets what it asks for.
+    uint256 internal constant SUPPLIED_GAS = 5_000_000;
     uint256 internal constant BATCH_SIZE = 4;
     bytes32 internal constant COMPLETED_TOPIC = keccak256("AffirmationCompleted(address,address,bytes32,bool)");
+    bytes32 internal constant TRANSFER_TOPIC = keccak256("Transfer(address,address,uint256)");
 
     Message[] internal _messages;
     uint256[] internal _pending;
@@ -116,6 +122,11 @@ contract RouterHandler is RouterWorld {
     uint256 public routerClaimsPaid;
     uint256 public routerClaimsRefused;
     uint256 public legacyTokenPayouts;
+    /// @notice The deliveries whose transfers to the payee the handler counted: a token payout by a delivery router.
+    uint256 public payeeTransferChecks;
+    /// @notice The single deliveries whose payee received exactly one transfer and whose reward address received one
+    /// transfer if it was paid, and none otherwise.
+    uint256 public exactTransferChecks;
 
     constructor() RouterWorld() {
         lastRate[0] = mediatorA.currentFeeRate();
@@ -633,9 +644,7 @@ contract RouterHandler is RouterWorld {
 
         vm.recordLogs();
         vm.getRecordedLogs();
-        uint256 gasStart = gasleft();
         _execute(items, path, destination);
-        uint256 gasUsed = gasStart - gasleft();
         Vm.Log[] memory logs = vm.getRecordedLogs();
 
         _readLogs(logs, destination);
@@ -647,9 +656,10 @@ contract RouterHandler is RouterWorld {
         for (uint256 u = 0; u < UNIVERSE; u++) {
             if (expectedValue[u] == 0) continue;
             _checkMoney(u, before[u], expectedValue[u], expectedFee[u]);
-            _checkTips(u, before[u], items, rate, gasUsed);
+            _checkTips(u, before[u], items, rate);
         }
-        if (items.length == 1) _checkSingle(items[0], before[items[0].universe], rate, gasUsed);
+        _checkTransferCounts(items, logs);
+        if (items.length == 1) _checkSingle(items[0], before[items[0].universe], rate);
         for (uint256 i = 0; i < items.length; i++) {
             _finish(items[i]);
         }
@@ -668,7 +678,7 @@ contract RouterHandler is RouterWorld {
             Multicall3.Call3 memory call = _routerCall(items[0], bridge);
             address caller = _callerFor(items[0].messageId);
             vm.prank(caller, caller);
-            (bool ok,) = call.target.call(call.callData);
+            (bool ok,) = call.target.call{gas: SUPPLIED_GAS}(call.callData);
             if (!ok) _violate("a router refused a caller");
             return;
         }
@@ -679,7 +689,7 @@ contract RouterHandler is RouterWorld {
         }
         address batcher = _callerFor(items[0].messageId);
         vm.prank(batcher, batcher);
-        Multicall3.Result[] memory results = multicall.aggregate3(calls);
+        Multicall3.Result[] memory results = multicall.aggregate3{gas: SUPPLIED_GAS}(calls);
         for (uint256 i = 0; i < results.length; i++) {
             if (!results[i].success) _violate("a router refused a caller in a batch");
         }
@@ -777,13 +787,13 @@ contract RouterHandler is RouterWorld {
 
     /// @dev A reward address gains only from a message that a router executed when the message names that router, and
     /// never more than the cap that the terms of the message allow.
-    function _checkTips(uint256 u, Probe memory before, Item[] memory items, uint256 rate, uint256 gasUsed) private {
+    function _checkTips(uint256 u, Probe memory before, Item[] memory items, uint256 rate) private {
         for (uint256 j = 0; j < 3; j++) {
             uint256 gained = holding(u, rewards[j]) - before.rewardHeld[j];
             uint256 allowed;
             for (uint256 i = 0; i < items.length; i++) {
                 if (items[i].universe != u) continue;
-                allowed += _tipCap(items[i], j, rate, gasUsed);
+                allowed += _tipCap(items[i], j, rate);
             }
             if (gained > allowed) _violate("a reward address gained more than the terms allow");
             if (gained > 0) tipsPaid++;
@@ -796,17 +806,17 @@ contract RouterHandler is RouterWorld {
 
     /// @dev The most that reward address `j` may gain from one item: zero unless the item names a router with reward `j`
     /// and the same router executes it. The cap follows the terms of the sender: the fixed fee, the share of the value, or
-    /// the smaller of the limit and the gas bound; and never more than the value after the protocol fee.
-    function _tipCap(Item memory item, uint256 j, uint256 rate, uint256 gasUsed) private view returns (uint256) {
+    /// the smaller of the limit and the gas bound (the supplied gas plus the overhead, since the router measures from its entry); and never more than the value after the protocol fee.
+    function _tipCap(Item memory item, uint256 j, uint256 rate) private view returns (uint256) {
         if (item.executor == address(0) || item.executor != item.reading.recipient) return 0;
         if (item.executor != address(deliveryRouterAt(chainOfToken(item.universe), j))) return 0;
         if (item.reading.callData.length != 128) return 0;
         DeliveryRouter.FeeDirector memory director = abi.decode(item.reading.callData, (DeliveryRouter.FeeDirector));
         uint256 net = item.reading.value - FeeSchedule.feeOn(item.reading.value, rate);
-        return _directorCap(director, net, gasUsed);
+        return _directorCap(director, net);
     }
 
-    function _directorCap(DeliveryRouter.FeeDirector memory director, uint256 net, uint256 gasUsed)
+    function _directorCap(DeliveryRouter.FeeDirector memory director, uint256 net)
         private
         view
         returns (uint256 cap)
@@ -816,17 +826,71 @@ contract RouterHandler is RouterWorld {
             cap = net * director.multiplier / 1 ether;
             return cap < net ? cap : net;
         }
-        uint256 multiplier = director.multiplier > type(uint96).max ? type(uint96).max : director.multiplier;
         uint256 price = director.settings & 4 != 0 ? block.basefee : tx.gasprice;
-        cap = (gasUsed + GAS_OVERHEAD_BOUND) * multiplier * price / 1 ether;
+        cap = (SUPPLIED_GAS + GAS_OVERHEAD_BOUND) * director.multiplier * price / 1 ether;
         if (cap > director.limit) cap = director.limit;
         if (cap > net) cap = net;
+    }
+
+    /// @dev The transfers of a token payout: the payee receives exactly one transfer and a reward address at most one, as
+    /// the router pays in the callback with no second transfer. Counts the `Transfer` events of the token in the logs.
+    /// Applies to a delivery router with terms and a token payout (a native payout is a coin call, not a transfer).
+    /// For a batch it bounds the payee by the number of items that name it. For one message it is exact, unless the
+    /// payee is the failed delivery address, whose push the token may refuse and record instead.
+    function _checkTransferCounts(Item[] memory items, Vm.Log[] memory logs) private {
+        for (uint256 i = 0; i < items.length; i++) {
+            if (!_isTokenPayoutByARouter(items[i])) continue;
+            payeeTransferChecks++;
+            address token = tokenAt(items[i].universe);
+            uint256 sharing;
+            uint256 rewardsOfTheToken;
+            for (uint256 k = 0; k < items.length; k++) {
+                bool sameToken = items[k].universe == items[i].universe;
+                if (sameToken && items[k].payee == items[i].payee && _isTokenPayoutByARouter(items[k])) sharing++;
+            }
+            for (uint256 j = 0; j < rewards.length; j++) {
+                rewardsOfTheToken += _transfersTo(logs, token, rewards[j]);
+            }
+            uint256 received = _transfersTo(logs, token, items[i].payee);
+            if (received > sharing) _violate("a payee received more than one transfer for one delivery");
+            if (rewardsOfTheToken > items.length) _violate("a reward address received more than one transfer for one delivery");
+            if (items.length == 1) _checkExactTransfers(items[0], received, rewardsOfTheToken);
+        }
+    }
+
+    /// @dev One message: the payee received one transfer when it received value, and the reward address one transfer
+    /// when it was paid.
+    function _checkExactTransfers(Item memory item, uint256 received, uint256 rewardTransfers) private {
+        uint256 got = standing(item.universe, item.payee) - item.payeeBefore;
+        if (item.payee != failedSink) {
+            if (got > 0 && received != 1) _violate("the payee did not receive exactly one transfer");
+            if (got == 0 && received != 0) _violate("the payee received a transfer of nothing");
+        }
+        exactTransferChecks++;
+        if (rewardTransfers > 1) _violate("a reward address received more than one transfer");
+    }
+
+    /// @dev A message with terms to a delivery router, paid in the token and not in the coin.
+    function _isTokenPayoutByARouter(Item memory item) private view returns (bool) {
+        if (item.reading.callData.length != 128) return false;
+        if (!_isDeliveryRouter(item.reading.recipient, chainOfToken(item.universe))) return false;
+        DeliveryRouter.FeeDirector memory director = abi.decode(item.reading.callData, (DeliveryRouter.FeeDirector));
+        return !(director.settings & 2 != 0 && isWrappedNativeOfItsChain(item.universe));
+    }
+
+    /// @dev The number of `Transfer` events of `token` in the logs whose payee is `to`.
+    function _transfersTo(Vm.Log[] memory logs, address token, address to) private pure returns (uint256 count) {
+        for (uint256 i = 0; i < logs.length; i++) {
+            bool isTransferTo = logs[i].emitter == token && logs[i].topics.length == 3
+                && logs[i].topics[0] == TRANSFER_TOPIC && address(uint160(uint256(logs[i].topics[2]))) == to;
+            if (isTransferTo) count++;
+        }
     }
 
     /// @dev The exact checks of one message. A message that its own router executes pays exactly the fixed fee or the
     /// share, unless the reward address refuses the coin. The payee receives the rest. A message that no router
     /// attributes pays no tip, and its payee gets the whole value after the protocol fee.
-    function _checkSingle(Item memory item, Probe memory before, uint256 rate, uint256 gasUsed) private {
+    function _checkSingle(Item memory item, Probe memory before, uint256 rate) private {
         uint256 net = item.reading.value - FeeSchedule.feeOn(item.reading.value, rate);
         uint256 destination = chainOfToken(item.universe);
         uint256 tip;
@@ -843,7 +907,7 @@ contract RouterHandler is RouterWorld {
             if (invalid && !attributed && tip != 0) _violate("a direct delivery paid a tip");
             if (invalid && attributed && tip != 0) tippedInvalidTerms++;
             if (attributed && !invalid) routedDeliveries++;
-            if (attributed) _checkAttributed(item, net, tip, gasUsed);
+            if (attributed) _checkAttributed(item, net, tip);
         } else if (tip != 0) {
             _violate("a message with no fee terms paid a tip");
         }
@@ -852,13 +916,13 @@ contract RouterHandler is RouterWorld {
         if (paysPayee && got != net - tip) _violate("the payee did not receive the value less the tip");
     }
 
-    function _checkAttributed(Item memory item, uint256 net, uint256 tip, uint256 gasUsed) private {
+    function _checkAttributed(Item memory item, uint256 net, uint256 tip) private {
         DeliveryRouter.FeeDirector memory director = abi.decode(item.reading.callData, (DeliveryRouter.FeeDirector));
         uint256 rewardIndex = _rewardIndexOf(item);
         bool payoutNative = director.settings & 2 != 0 && isWrappedNativeOfItsChain(item.universe);
         bool rewardAccepts = !payoutNative || rewardIndex == 0;
         if (payoutNative) nativePayouts++;
-        uint256 cap = _directorCap(director, net, gasUsed);
+        uint256 cap = _directorCap(director, net);
         if (!rewardAccepts && tip != 0) _violate("a reward address that refuses the coin was paid");
         if (tip > cap) _violate("the tip passed the cap");
         if (rewardAccepts && director.settings & 9 != 0 && tip != cap) {

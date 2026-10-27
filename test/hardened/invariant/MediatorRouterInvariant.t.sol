@@ -99,7 +99,8 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
     /// Claim: a message executes at most once, nothing fails, and the handler broke no rule. Shows: the count of
     /// executions of every message is at most one, no delivery call failed, no message identifier repeated, and the
     /// handler recorded no violation: every delivery split its value exactly into recipient, tip, hand-off and protocol fee, no tip
-    /// passed the terms, no caller received a token, and the fee rate never rose. Matters: the
+    /// passed the terms, no caller received a token, in every token payout by a router the payee received exactly one transfer
+    /// and a reward address at most one, and the fee rate never rose. Matters: the
     /// bridge marks a message delivered whether or not the call succeeded, so a failed call loses tokens.
     function invariant_noViolationAndNoRepeatedExecution() public view {
         for (uint256 i = 0; i < handler.messageCount(); i++) {
@@ -109,7 +110,8 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         assertEq(handler.violations(), 0, handler.firstViolation());
     }
 
-    /// Claim: a delivery router holds exactly what it recorded, no coin, and no run stays open. Shows: after every action,
+    /// Claim: a delivery router holds exactly what it recorded, no coin, and no run stays open. The router pays its
+    /// payee and its reward address inside the callback, so nothing waits in it between two actions. Shows: after every action,
     /// each of the six delivery routers holds, in each of the ten tokens, a balance that equals the sum of its claimable
     /// records (only the failed delivery address can have one, and the balance equals its own `totalClaimable`), exactly; it holds none of the coin; and its delivery slot is at
     /// most 1 (not running). The two wrapped native routers hold nothing. Matters: the routers have no owner and no way
@@ -241,6 +243,8 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         assertGt(handler.routerDeliveries(), 0, "router deliveries");
         assertGt(handler.routedDeliveries(), 0, "routed deliveries");
         assertGt(handler.tipsPaid(), 0, "a tip was paid");
+        assertGt(handler.payeeTransferChecks(), 0, "the transfers to a payee were counted");
+        assertGt(handler.exactTransferChecks(), 0, "one transfer to the payee and at most one to the reward address");
 
         // A batch of four through Multicall3.
         for (uint256 i = 0; i < 4; i++) {
