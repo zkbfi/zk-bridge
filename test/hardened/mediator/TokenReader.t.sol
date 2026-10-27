@@ -119,12 +119,26 @@ contract TokenReaderTest is Test {
         assertEq(reader.decimals(token), 0, "one byte is not a word");
     }
 
-    /// Claim: a value above 255 is no decimals. Shows: 255 is read as 255 and 256 as zero. Matters: a cast would turn
-    /// 256 into 0 by accident and 300 into 44.
+    /// Claim: a value above 255 is refused, and 255 is read. Shows: 255 is read as 255, and 256 and 300 revert with
+    /// the token and the value. Matters: a cast would turn 256 into 0 and 300 into 44, and a silent 0 would give the
+    /// copy the wrong metadata for good. The decimals are metadata only, so a token that cannot state them in a byte
+    /// is not relayed for the first time.
     function test_decimals_refusesAValueThatDoesNotFitInAByte() public {
         vm.mockCall(token, abi.encodeWithSelector(DECIMALS), abi.encode(uint256(255)));
         assertEq(reader.decimals(token), 255);
-        vm.mockCall(token, abi.encodeWithSelector(DECIMALS), abi.encode(uint256(300)));
-        assertEq(reader.decimals(token), 0);
+        vm.mockCall(token, abi.encodeWithSelector(DECIMALS), abi.encode(uint256(256)));
+        vm.expectRevert(abi.encodeWithSelector(TokenReader.DecimalsOutOfRange.selector, token, uint256(256)));
+        reader.decimals(token);
+        vm.mockCall(token, abi.encodeWithSelector(DECIMALS), abi.encode(type(uint256).max));
+        vm.expectRevert(abi.encodeWithSelector(TokenReader.DecimalsOutOfRange.selector, token, type(uint256).max));
+        reader.decimals(token);
+    }
+
+    /// Claim: the upper case selector is checked by the same rule. Shows: `DECIMALS()` that returns 300 reverts.
+    function test_decimals_refusesAValueOfTheUpperCaseSelectorThatDoesNotFit() public {
+        vm.mockCallRevert(token, abi.encodeWithSelector(DECIMALS), "");
+        vm.mockCall(token, abi.encodeWithSelector(DECIMALS_UPPER), abi.encode(uint256(300)));
+        vm.expectRevert(abi.encodeWithSelector(TokenReader.DecimalsOutOfRange.selector, token, uint256(300)));
+        reader.decimals(token);
     }
 }
