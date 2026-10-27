@@ -15,7 +15,7 @@ User decisions (2026-10-25): the explorer lives in this repository under `explor
 
 ## Pairs
 
-A pair is two chains joined one to one: on each chain a light client of the other, a gate, a `MessageBridge`, a `TokenFactory`, a `TokenMediator`, a `WETHOmnibridgeRouter` and optionally a `DeliveryRouter`. The pair registry in `explorer/shared` lists pairs by name with each side's chain identifier, RPC and beacon endpoints (from configuration, never committed with keys) and contract addresses (from a deployment file). The default pair is Ethereum and PulseChain (`eth-pls`). A second known pair joins Sepolia and PulseChain testnet v4 (`sepolia-pls943`, chains 11155111 and 943).
+A pair is two chains joined one to one: on each chain a light client of the other, a gate, a `MessageBridge`, a `TokenFactory`, a `TokenMediator` and optionally a `DeliveryRouter`. The `DeliveryRouter` also wraps the native coin and sends it. The pair registry in `explorer/shared` lists pairs by name with each side's chain identifier, RPC and beacon endpoints (from configuration, never committed with keys) and contract addresses (from a deployment file). The default pair is Ethereum and PulseChain (`eth-pls`). A second known pair joins Sepolia and PulseChain testnet v4 (`sepolia-pls943`, chains 11155111 and 943).
 
 ## What the indexer stores
 

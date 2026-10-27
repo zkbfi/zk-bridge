@@ -44,7 +44,7 @@ curl -s 'localhost:42069/api/feed?status=sent,covered&limit=20'
 | Variable | Meaning | Default |
 |---|---|---|
 | `EXPLORER_PAIR` | Pair name. Known: `eth-pls` (chain 1 and chain 369), `sepolia-pls943` (chain 11155111 and chain 943). | `eth-pls` |
-| `EXPLORER_DEPLOYMENT_FILE` | Deployment JSON: one section per chain with `chain_id`, `bridge`, `mediator`, `token_factory`, `native_router`, `wrapped_native`, `gate`, `light_client`, `start_block`, and optional `delivery_router` and `fork_registry`. A section matches a side by `chain_id`. `rpc_url` in the file is a fallback. | `../deployments/<pair>.json` |
+| `EXPLORER_DEPLOYMENT_FILE` | Deployment JSON: one section per chain with `chain_id`, `bridge`, `mediator`, `token_factory`, `wrapped_native`, `gate`, `light_client`, `start_block`, and optional `delivery_router` and `fork_registry`. A section matches a side by `chain_id`. `rpc_url` in the file is a fallback. | `../deployments/<pair>.json` |
 | `EXPLORER_RPC_URL_<chainId>` | Execution endpoint. Comes from the environment because URLs can carry keys. | the `rpc_url` of the file |
 | `EXPLORER_BEACON_URL_<chainId>` | Beacon node endpoint of that chain. Optional. Used for the finalized slot in `/api/heads`. | none |
 | `EXPLORER_FINALITY_SECONDS_<chainId>` | Seconds before a send counts as `waiting_for_finality`. | 768 (chains 369 and 943: 640) |
@@ -89,7 +89,7 @@ In flight means `sent`, `waiting_for_finality` or `covered`.
 
 ### Endpoints
 
-`GET /api/pair` returns `{ name, sides: [{ name, chainId, startBlock, finalitySeconds, contracts }] }`. `contracts` holds `bridge`, `mediator`, `tokenFactory`, `nativeRouter`, `wrappedNative`, `gate`, `lightClient`, `deliveryRouter`, `forkRegistry` (the last two can be null).
+`GET /api/pair` returns `{ name, sides: [{ name, chainId, startBlock, finalitySeconds, contracts }] }`. `contracts` holds `bridge`, `mediator`, `tokenFactory`, `wrappedNative`, `gate`, `lightClient`, `deliveryRouter`, `forkRegistry` (the last two can be null).
 
 `GET /api/summary` is the top bar and the footer in one call. Query: `now` replaces the clock (tests).
 
