@@ -21,11 +21,11 @@ A pair is two chains joined one to one: on each chain a light client of the othe
 
 From both chains of each pair:
 - Messages: `UserRequestForAffirmation` (sent), `AffirmationCompleted` (delivered, with status), decoded AMB fields (sender, executor, gas, data), transaction hash, block and timestamp on each side.
-- Token transfers: `TokensBridgingInitiated`, `TokensBridged`, `NewTokenRegistered`, fallback and claimable events; joined to their message by message identifier.
+- Token transfers: `TokensBridgingInitiated`, `TokensBridged`, `NewTokenRegistered`, `ReleaseFailed` and callback failure events; joined to their message by message identifier.
 - Light clients: each head update (slot, header root, execution block, transaction, gas used, poster), committee changes.
 - Gate and registry: confirmations, seals, observed versions.
 - Escrow and supply: per native token, the mediator balance on its home chain and the bridged token supply on the other chain (from mint and burn events), and accrued and collected fees.
-- Status of each transfer or message, derived: sent, waiting for finality, covered by a stored head, delivered, failed call, fallback used, claimable.
+- Status of each transfer or message, derived: sent, waiting for finality, covered by a stored head, delivered, failed call, release failed (final).
 
 The indexer tracks only what lands on chain. It stores no proofs and accepts no off-chain records (user decision, 2026-10-25). Proof-related data comes from chain events: each light client head update with its transaction, gas used and poster.
 
@@ -98,7 +98,7 @@ Code: `explorer/shared/src/rpc` (the RPC source), `explorer/shared/src/fallback.
 |  balances on both chains              | FEED (right): transfers and messages,  |
 |  bridge tokens (relay, relay and call)|  newest first, with timestamps on both |
 |  send a message                       |  sides and status                      |
-|  claim claimable balances             |                                        |
+|                                       |                                        |
 |  post an update / execute a message   |                                        |
 +---------------------------------------+----------------------------------------+
 | LIGHT CLIENT HEADS (footer): per chain stored head slot, finalized slot, lag,   |

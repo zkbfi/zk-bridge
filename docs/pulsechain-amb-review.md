@@ -211,7 +211,7 @@ The PulseChain AMB limits size by its validators and its gas. I found nothing ab
 
 ### 3.9 Receivers that refuse tokens (handled)
 
-For tokens, our mediator never reverts on a refusing recipient. It tries the recipient, then the fallback, then records a claim (`TokenMediator.sol:891-907`, `:928-942`). That is stronger than both PulseChain mediators, which revert. The gap is only in the coin send of the routers (3.1).
+For tokens, our mediator never reverts on a refusing recipient. It tries the recipient once. When that fails, it emits `ReleaseFailed` and keeps the tokens, and the release is final (decided 2026-10-27; the line numbers of the older text no longer apply). That is stronger than both PulseChain mediators, which revert. The gap is only in the coin send of the routers (3.1).
 
 ## 4. Every bridge deployment involving PulseChain that gib.show knows
 
