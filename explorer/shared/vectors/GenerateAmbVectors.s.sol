@@ -93,12 +93,11 @@ contract GenerateAmbVectors is Script {
     function _mediator() private {
         address token = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
         address recipient = 0x90F79bf6EB2c4f870365E785982E1f101E93b906;
-        address fallbackRecipient = 0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65;
         _payload("handleNativeTokens", abi.encodeWithSelector(TokenMediator.handleNativeTokens.selector, token, recipient, 5 ether));
-        _payload("handleBridgedTokensWithFallback", abi.encodeWithSelector(TokenMediator.handleBridgedTokensWithFallback.selector, token, recipient, 123, fallbackRecipient));
-        _payload("handleNativeTokensAndCallWithFallback", abi.encodeWithSelector(TokenMediator.handleNativeTokensAndCallWithFallback.selector, token, recipient, 99, hex"c0ffee", fallbackRecipient));
+        _payload("handleBridgedTokens", abi.encodeWithSelector(TokenMediator.handleBridgedTokens.selector, token, recipient, 123));
+        _payload("handleNativeTokensAndCall", abi.encodeWithSelector(TokenMediator.handleNativeTokensAndCall.selector, token, recipient, 99, hex"c0ffee"));
         _payload("deployAndHandleBridgedTokens", abi.encodeWithSelector(TokenMediator.deployAndHandleBridgedTokens.selector, token, "Tether USD", "USDT", uint8(6), recipient, 1_000_000));
-        _payload("deployAndHandleBridgedTokensAndCallWithFallback", abi.encodeWithSelector(TokenMediator.deployAndHandleBridgedTokensAndCallWithFallback.selector, token, "Wrapped Ether", "WETH", uint8(18), recipient, 7, hex"aabb", fallbackRecipient));
+        _payload("deployAndHandleBridgedTokensAndCall", abi.encodeWithSelector(TokenMediator.deployAndHandleBridgedTokensAndCall.selector, token, "Wrapped Ether", "WETH", uint8(18), recipient, 7, hex"aabb"));
     }
 
     function _payload(string memory handler, bytes memory data) private {

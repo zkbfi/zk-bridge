@@ -98,7 +98,6 @@ describe("feedItemView", () => {
     destinationToken: token,
     sender: addressOf("11"),
     recipient: addressOf("22"),
-    fallbackRecipient: addressOf("33"),
     value: 42n,
     deliveredValue: null,
     paidTo: null,
@@ -120,9 +119,8 @@ describe("feedItemView", () => {
       covered: null,
       delivered: null,
       transfer: null,
-      fallbackUsed: false,
       callbackFailed: false,
-      claimableOutstanding: false,
+      releaseFailed: false,
     });
   });
 
@@ -166,6 +164,12 @@ describe("feedItemView", () => {
       handler: "handleBridgedTokens",
       sourceIsNative: true,
     });
+  });
+
+  it("names no fallback: the item has no fallbackUsed and the transfer has no fallbackRecipient", () => {
+    const view = feedItemView(sent, transfer, index);
+    expect(view).not.toHaveProperty("fallbackUsed");
+    expect(view.transfer).not.toHaveProperty("fallbackRecipient");
   });
 });
 

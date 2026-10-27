@@ -59,9 +59,7 @@ contract SyntheticMediator {
     event TokensBridgingInitiated(address indexed token, address indexed sender, uint256 value, bytes32 indexed messageId);
     event TokensBridged(address indexed token, address indexed recipient, uint256 value, bytes32 indexed messageId);
     event NewTokenRegistered(address indexed nativeToken, address indexed bridgedToken);
-    event FallbackUsed(address indexed token, address indexed recipient, address indexed fallbackRecipient, bytes32 messageId);
-    event ClaimableRecorded(address indexed token, address indexed account, uint256 value, bytes32 indexed messageId);
-    event Claimed(address indexed token, address indexed account, uint256 value);
+    event ReleaseFailed(address indexed token, address indexed recipient, uint256 value, bytes32 indexed messageId);
     event CallbackFailed(address indexed token, address indexed recipient, bytes32 indexed messageId);
 
     mapping(address => uint256) public mediatorBalance;
@@ -87,16 +85,8 @@ contract SyntheticMediator {
         emit NewTokenRegistered(nativeToken, copy);
     }
 
-    function fallbackUsed(address token, address recipient, address fallbackRecipient, bytes32 messageId) external {
-        emit FallbackUsed(token, recipient, fallbackRecipient, messageId);
-    }
-
-    function claimableRecorded(address token, address account, uint256 value, bytes32 messageId) external {
-        emit ClaimableRecorded(token, account, value, messageId);
-    }
-
-    function claimed(address token, address account, uint256 value) external {
-        emit Claimed(token, account, value);
+    function releaseFailed(address token, address recipient, uint256 value, bytes32 messageId) external {
+        emit ReleaseFailed(token, recipient, value, messageId);
     }
 
     function callbackFailed(address token, address recipient, bytes32 messageId) external {

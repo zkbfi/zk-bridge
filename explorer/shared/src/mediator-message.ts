@@ -17,8 +17,6 @@ export type MediatorMessage = {
   readonly deploysCopy: boolean;
   readonly recipient: Address;
   readonly value: bigint;
-  /** The fallback address. Equal to the recipient when the message has none. */
-  readonly fallbackRecipient: Address;
   /** The callback data, or null for a plain release. */
   readonly callbackData: Hex | null;
   /** Name, symbol and decimals, for a deploying message only. */
@@ -45,15 +43,13 @@ export const decodeMediatorMessage = (data: Hex): MediatorMessage | null => {
   // The decoder took the name from this ABI, so the item exists. A handler has named inputs and so has arguments.
   const item = tokenMediatorAbi.find((entry) => entry.type === "function" && entry.name === handler) as FunctionItem;
   const named = namedArguments(item, decoded.args as readonly unknown[]);
-  const recipient = asAddress(named.recipient);
   return {
     handler,
     token: asAddress(named.token),
     releasesNativeToken: handler.startsWith("handleNative"),
     deploysCopy: handler.startsWith("deployAndHandle"),
-    recipient,
+    recipient: asAddress(named.recipient),
     value: named.value as bigint,
-    fallbackRecipient: named.fallbackRecipient === undefined ? recipient : asAddress(named.fallbackRecipient),
     callbackData: handler.includes("AndCall") ? (named.data as Hex) : null,
     metadata: handler.startsWith("deployAndHandle")
       ? { name: named.name as string, symbol: named.symbol as string, decimals: Number(named.decimals) }

@@ -1,17 +1,16 @@
 import { db } from "ponder:api";
 import {
   bridgedSupply,
-  claimables,
-  claimEvents,
   escrow,
   gateEvents,
   headUpdates,
   messages,
   registryObservations,
+  releaseEvents,
   tokens,
   transfers,
 } from "ponder:schema";
-import { and, desc, eq, notInArray, sql, sum, gt, lt } from "ponder";
+import { and, desc, eq, notInArray, sql, sum, lt } from "ponder";
 import type { Hono } from "hono";
 import {
   amountOf,
@@ -25,12 +24,11 @@ import {
   numberOf,
   supplyView,
   tokenListItemView,
-  tokenView,
 } from "@zk-bridge/shared";
 import { pair } from "../../lib/pair";
 import { loadGates, loadHeads } from "../heads";
 
-const PAID_STATUSES = ["delivered", "fallback_used"];
+const PAID_STATUSES = ["delivered"];
 
 const limitOf = (text: string | undefined, fallback: number): number => {
   const value = Number(text ?? fallback);
@@ -38,7 +36,7 @@ const limitOf = (text: string | undefined, fallback: number): number => {
 };
 
 /**
- * Registers the state routes: pair, heads, head updates, costs, gate, registry, tokens, audit, claimables.
+ * Registers the state routes: pair, heads, head updates, costs, gate, registry, tokens, audit, 
  *
  * @param app The Hono application.
  */
@@ -159,7 +157,7 @@ export const registerStateRoutes = (app: Hono): void => {
     return c.json({ escrow: escrows.map((row) => escrowView(row, index)), bridgedSupply: supplies.map((row) => supplyView(row, index)) });
   });
 
-  app.get("/api/claimables", async (c) => {
+  app.get("/api/release-events", async (c) => {
     const addressText = c.req.query("address");
     let account: string | null = null;
     try {
@@ -167,27 +165,18 @@ export const registerStateRoutes = (app: Hono): void => {
     } catch {
       return c.json({ error: `invalid address: ${addressText}` }, 400);
     }
-    const index = indexTokens(await db.select().from(tokens));
-    const rows = await db
+    const events = await db
       .select()
-      .from(claimables)
-      .where(and(gt(claimables.outstanding, 0n), account === null ? undefined : eq(claimables.account, account as `0x${string}`)));
-    const events = await db.select().from(claimEvents).orderBy(desc(claimEvents.timestamp)).limit(limitOf(c.req.query("limit"), 50));
+      .from(releaseEvents)
+      .where(account === null ? undefined : eq(releaseEvents.account, account as `0x${string}`))
+      .orderBy(desc(releaseEvents.timestamp))
+      .limit(limitOf(c.req.query("limit"), 50));
     return c.json({
-      outstanding: rows.map((row) => ({
-        chainId: row.chainId,
-        token: tokenView(row.chainId, row.token, index),
-        account: row.account,
-        outstanding: amountOf(row.outstanding),
-        recordedTotal: amountOf(row.recordedTotal),
-        claimedTotal: amountOf(row.claimedTotal),
-      })),
       events: events.map((row) => ({
         chainId: row.chainId,
         kind: row.kind,
         token: row.token,
         account: row.account,
-        fallbackRecipient: row.fallbackRecipient,
         value: amountOf(row.value),
         messageId: row.messageId,
         transactionHash: row.transactionHash,

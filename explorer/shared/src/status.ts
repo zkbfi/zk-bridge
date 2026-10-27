@@ -7,8 +7,9 @@
  *   Anyone can now prove and deliver the message.
  * - `delivered`: the destination bridge executed the message and the call succeeded.
  * - `failed_call`: the destination bridge executed the message and the call to the target reverted. Final.
- * - `fallback_used`: a token release failed for the recipient and the fallback address received the tokens.
- * - `claimable`: no payee could receive the tokens. They wait for `claim`.
+ * - `release_failed`: the destination bridge executed the message, but the recipient could not take the tokens
+ *   (blocked recipient, paused token, reverting token, flow limiter refusal). The mediator emitted `ReleaseFailed`.
+ *   Final: the mediator keeps no claim record, and the tokens stay in the mediator.
  */
 export const MESSAGE_STATUSES = [
   "sent",
@@ -16,8 +17,7 @@ export const MESSAGE_STATUSES = [
   "covered",
   "delivered",
   "failed_call",
-  "fallback_used",
-  "claimable",
+  "release_failed",
 ] as const;
 
 /** One status value. */
@@ -29,10 +29,8 @@ export type DeliveryOutcome = "none" | "succeeded" | "failed";
 /** The facts that decide a status. */
 export type StatusFacts = {
   readonly delivery: DeliveryOutcome;
-  /** The fallback address received a token release. */
-  readonly fallbackUsed: boolean;
-  /** A release was recorded for `claim` and `claim` has not paid it yet. */
-  readonly claimableOutstanding: boolean;
+  /** The mediator emitted `ReleaseFailed`: the recipient could not take the release. Final. */
+  readonly releaseFailed: boolean;
   /** Some stored head on the destination covers the source block. */
   readonly coveredByHead: boolean;
   /** The timestamp of the source block, in seconds. */
@@ -58,8 +56,7 @@ export const deriveStatus = (facts: StatusFacts): MessageStatus => {
 };
 
 const deliveredStatus = (facts: StatusFacts): MessageStatus => {
-  if (facts.claimableOutstanding) return "claimable";
-  if (facts.fallbackUsed) return "fallback_used";
+  if (facts.releaseFailed) return "release_failed";
   return "delivered";
 };
 

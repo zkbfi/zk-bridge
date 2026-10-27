@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { deriveStatus, isCovered, isInFlight, defaultFinalitySeconds, secondsPerSlot, type StatusFacts } from "../src/status.js";
+import { MESSAGE_STATUSES, deriveStatus, isCovered, isInFlight, defaultFinalitySeconds, secondsPerSlot, type StatusFacts } from "../src/status.js";
 
 const base: StatusFacts = {
   delivery: "none",
-  fallbackUsed: false,
-  claimableOutstanding: false,
+  releaseFailed: false,
   coveredByHead: false,
   sentTimestamp: 1000n,
   latestSourceTimestamp: 1000n,
@@ -29,17 +28,17 @@ describe("deriveStatus", () => {
     expect(deriveStatus(facts({ delivery: "succeeded", coveredByHead: false }))).toBe("delivered");
   });
   it("is failed_call when the target reverted, and the failure is final", () => {
-    expect(deriveStatus(facts({ delivery: "failed", fallbackUsed: true }))).toBe("failed_call");
+    expect(deriveStatus(facts({ delivery: "failed", releaseFailed: true }))).toBe("failed_call");
   });
-  it("is fallback_used when the fallback address got the tokens", () => {
-    expect(deriveStatus(facts({ delivery: "succeeded", fallbackUsed: true }))).toBe("fallback_used");
+  it("has no fallback_used status: the mediator pays only the recipient", () => {
+    expect(MESSAGE_STATUSES).not.toContain("fallback_used");
   });
-  it("is claimable while a release waits for claim, and drops back to delivered after the claim", () => {
-    expect(deriveStatus(facts({ delivery: "succeeded", claimableOutstanding: true }))).toBe("claimable");
-    expect(deriveStatus(facts({ delivery: "succeeded", claimableOutstanding: false }))).toBe("delivered");
+  it("is release_failed when the recipient could not take the release, and the failure is final", () => {
+    expect(deriveStatus(facts({ delivery: "succeeded", releaseFailed: true }))).toBe("release_failed");
+    expect(deriveStatus(facts({ delivery: "succeeded", releaseFailed: false }))).toBe("delivered");
   });
-  it("claimable beats fallback_used: the fallback was tried first and refused", () => {
-    expect(deriveStatus(facts({ delivery: "succeeded", claimableOutstanding: true, fallbackUsed: false }))).toBe("claimable");
+  it("has no claimable status: the mediator keeps no claim records", () => {
+    expect(MESSAGE_STATUSES).not.toContain("claimable");
   });
 });
 

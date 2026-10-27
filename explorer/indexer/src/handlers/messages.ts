@@ -33,7 +33,6 @@ ponder.on("MessageBridge:UserRequestForAffirmation", async ({ event, context }) 
     destinationChainId: decoded.destinationChainId,
     patch: {
       recipient: transfer.recipient,
-      fallbackRecipient: transfer.fallbackRecipient,
       value: transfer.value,
       handler: transfer.handler,
       deploysCopy: transfer.deploysCopy,

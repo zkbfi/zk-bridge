@@ -9,7 +9,7 @@ export type FeedFilters = {
   readonly statuses: readonly MessageStatus[];
   /** A token address on either side of a transfer. */
   readonly token: Address | null;
-  /** An account that is the sender, executor, recipient, fallback or payee. */
+  /** An account that is the sender, executor, recipient or payee. */
   readonly address: Address | null;
   /** The send time range in seconds, inclusive. */
   readonly from: bigint | null;

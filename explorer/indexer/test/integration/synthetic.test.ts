@@ -12,7 +12,7 @@ import { startAnvil, startIndexer, startPostgres, waitFor, type RunningIndexer, 
  *
  * Two Anvil chains hold test doubles (`test/contracts/Synthetic.sol`) that emit the same events as the real
  * contracts, at the call of the test. The real Ponder indexer follows both chains and the test reads the rows through
- * the HTTP API. This covers delivery, failed calls, fallback, claimable balances and claims, fees, light client heads,
+ * the HTTP API. This covers delivery, failed calls, failed releases, fees, light client heads,
  * the gate, the registry, escrow against supply.
  * The real contracts cover the sent side in `real-stack.test.ts`.
  */
@@ -108,7 +108,6 @@ describe("the indexer follows synthetic chains", () => {
 
   const sender = () => chainA.accounts[0] as Address;
   const recipient = () => chainA.accounts[1] as Address;
-  const fallbackAccount = () => chainA.accounts[2] as Address;
   const poster = () => chainA.accounts[3] as Address;
 
   /** Sends a message on chain A (source) or chain B and returns its identifier and the block of the send. */
@@ -135,20 +134,14 @@ describe("the indexer follows synthetic chains", () => {
   };
 
   /** Sends tokens from A: the mediator locks, the bridge sends the deploying or the plain handler call. */
-  const forwardTransfer = async (name: string, value: bigint, options: { fallback?: Address; deploy?: boolean } = {}) => {
+  const forwardTransfer = async (name: string, value: bigint, options: { deploy?: boolean } = {}) => {
     const data = options.deploy
       ? encodeFunctionData({
           abi: tokenMediatorAbi,
           functionName: "deployAndHandleBridgedTokens",
           args: [tokenA, "Alpha", "ALP", 6, recipient(), value],
         })
-      : options.fallback === undefined
-        ? encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleBridgedTokens", args: [tokenA, recipient(), value] })
-        : encodeFunctionData({
-            abi: tokenMediatorAbi,
-            functionName: "handleBridgedTokensWithFallback",
-            args: [tokenA, recipient(), value, options.fallback],
-          });
+      : encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleBridgedTokens", args: [tokenA, recipient(), value] });
     const { id, blockNumber } = await sendMessage({ from: "A", executor: mediatorB, data, gasLimit: 2_000_000 });
     await chainA.send(mediatorA, "SyntheticMediator", "initiated", [tokenA, sender(), value, id]);
     ids[name] = id;
@@ -288,47 +281,40 @@ describe("the indexer follows synthetic chains", () => {
     await waitForAudit(tokenA, { escrow: 600_000n, bridgedSupply: 600_000n, pendingForward: 0n, pendingBackward: 0n });
   });
 
-  it("reports fallback_used when the fallback address got the tokens", async () => {
+  it("reports release_failed for a release that the recipient could not take, and keeps it final", async () => {
     await chainA.send(mediatorA, "SyntheticMediator", "setBalance", [tokenA, 700_000n]);
-    const id = await forwardTransfer("fallback", 100_000n, { fallback: fallbackAccount() });
-    await chainB.send(copyB, "SyntheticToken", "mint", [fallbackAccount(), 100_000n]);
-    await chainB.send(mediatorB, "SyntheticMediator", "fallbackUsed", [copyB, recipient(), fallbackAccount(), id]);
-    await chainB.send(mediatorB, "SyntheticMediator", "bridged", [copyB, fallbackAccount(), 100_000n, id]);
+    const id = await forwardTransfer("stuck", 100_000n);
+    await chainB.send(mediatorB, "SyntheticMediator", "releaseFailed", [copyB, recipient(), 100_000n, id]);
     await chainB.send(bridgeB, "SyntheticBridge", "complete", [mediatorA, mediatorB, id, true]);
-    const item = await waitForStatus(id, "fallback_used");
-    expect(item.transfer?.paidTo).toBe(fallbackAccount().toLowerCase());
-    expect(item.transfer?.recipient).toBe(recipient().toLowerCase());
+    const stuck = await waitForStatus(id, "release_failed");
+    expect(stuck.transfer?.recipient).toBe(recipient().toLowerCase());
+    expect(stuck.transfer?.paidTo).toBeNull();
+    expect(stuck).toMatchObject({ releaseFailed: true });
+    expect(stuck).not.toHaveProperty("claimableOutstanding");
+    expect(stuck).not.toHaveProperty("fallbackUsed");
   });
 
-  it("reports claimable until the claim, then delivered, and lists the outstanding claim by checksummed address", async () => {
-    await chainA.send(mediatorA, "SyntheticMediator", "setBalance", [tokenA, 750_000n]);
-    const id = await forwardTransfer("claimable", 50_000n);
-    await chainB.send(mediatorB, "SyntheticMediator", "claimableRecorded", [copyB, recipient(), 50_000n, id]);
-    await chainB.send(bridgeB, "SyntheticBridge", "complete", [mediatorA, mediatorB, id, true]);
-    await waitForStatus(id, "claimable");
-    const outstanding = await api<{ outstanding: { account: string; outstanding: string }[] }>(`/api/claimables?address=${getAddress(recipient())}`);
-    expect(outstanding.body.outstanding).toEqual([expect.objectContaining({ account: recipient().toLowerCase(), outstanding: "50000" })]);
-
-    await chainB.send(copyB, "SyntheticToken", "mint", [recipient(), 50_000n]);
-    await chainB.send(mediatorB, "SyntheticMediator", "claimed", [copyB, recipient(), 50_000n]);
-    await waitForStatus(id, "delivered");
-    const after = await api<{ outstanding: unknown[] }>(`/api/claimables?address=${recipient()}`);
-    expect(after.body.outstanding).toEqual([]);
+  it("lists the failed release by checksummed address and serves no claim route", async () => {
+    const events = await api<{ events: { kind: string; account: string; value: string; messageId: string }[] }>(`/api/release-events?address=${getAddress(recipient())}`);
+    expect(events.body.events).toEqual([expect.objectContaining({ kind: "release_failed", account: recipient().toLowerCase(), value: "100000", messageId: ids.stuck })]);
+    expect((await fetch(`${indexer.apiUrl}/api/claimables`)).status).toBe(404);
   });
 
-  it("keeps escrow and supply in step after fallback and claim, and flags a mismatch when they part", async () => {
-    await waitForAudit(tokenA, { escrow: 750_000n, bridgedSupply: 750_000n, pendingForward: 0n, pendingBackward: 0n });
-    // The mock mediator now reports 1000 tokens less than the copy supply needs. Any mediator event refreshes the escrow.
-    await chainA.send(mediatorA, "SyntheticMediator", "setBalance", [tokenA, 749_000n]);
-    await chainA.send(mediatorA, "SyntheticMediator", "claimed", [tokenA, sender(), 0n]);
+  it("keeps escrow and supply in step with the failed release pending, and flags a mismatch when they part", async () => {
+    // The failed release is final: the tokens stay locked, so the escrow is the supply plus the pending 100000.
+    await waitForAudit(tokenA, { escrow: 700_000n, bridgedSupply: 600_000n, pendingForward: 100_000n, pendingBackward: 0n });
+    // The mock mediator now reports 1000 tokens less than the copy supply needs. Any mediator event on the token refreshes the escrow.
+    const refreshId = keccak256(toHex("escrow-refresh"));
+    await chainA.send(mediatorA, "SyntheticMediator", "setBalance", [tokenA, 699_000n]);
+    await chainA.send(mediatorA, "SyntheticMediator", "bridged", [tokenA, sender(), 0n, refreshId]);
     const flagged = await waitFor("a mismatch", async () => {
       const row = (await api<Audit & { tokens: { difference: string }[] }>("/api/audit")).body.tokens[0];
       return row?.mismatch === true ? row : undefined;
     });
-    expect(flagged).toMatchObject({ escrow: "749000", expectedEscrow: "750000", difference: "-1000" });
-    await chainA.send(mediatorA, "SyntheticMediator", "setBalance", [tokenA, 750_000n]);
-    await chainA.send(mediatorA, "SyntheticMediator", "claimed", [tokenA, sender(), 0n]);
-    await waitForAudit(tokenA, { escrow: 750_000n, bridgedSupply: 750_000n, pendingForward: 0n, pendingBackward: 0n });
+    expect(flagged).toMatchObject({ escrow: "699000", expectedEscrow: "700000", difference: "-1000" });
+    await chainA.send(mediatorA, "SyntheticMediator", "setBalance", [tokenA, 700_000n]);
+    await chainA.send(mediatorA, "SyntheticMediator", "bridged", [tokenA, sender(), 0n, refreshId]);
+    await waitForAudit(tokenA, { escrow: 700_000n, bridgedSupply: 600_000n, pendingForward: 100_000n, pendingBackward: 0n });
   });
 
   it("reports failed_call for an arbitrary message whose target reverted", async () => {
@@ -354,15 +340,15 @@ describe("the indexer follows synthetic chains", () => {
   });
 
   it("filters the feed by status, kind, token, address and direction, and pages with a cursor", async () => {
-    const delivered = await api<Feed>("/api/feed?status=delivered,fallback_used&limit=200");
-    expect(delivered.body.items.every((item) => ["delivered", "fallback_used"].includes(item.status))).toBe(true);
+    const delivered = await api<Feed>("/api/feed?status=delivered&limit=200");
+    expect(delivered.body.items.every((item) => item.status === "delivered")).toBe(true);
     const messagesOnly = await api<Feed>("/api/feed?kind=message");
     expect(messagesOnly.body.items.map((item) => item.messageId).sort()).toEqual([ids.failed, ids.waiting].sort());
     const byToken = await api<Feed>(`/api/feed?token=${getAddress(tokenA)}`);
-    expect(byToken.body.items.map((item) => item.messageId).sort()).toEqual([ids.m1, ids.fallback, ids.claimable, ids.back].sort());
+    expect(byToken.body.items.map((item) => item.messageId).sort()).toEqual([ids.m1, ids.stuck, ids.back].sort());
     expect(byToken.body.items.every((item) => item.kind === "token")).toBe(true);
-    const byAddress = await api<Feed>(`/api/feed?address=${getAddress(fallbackAccount())}&kind=token`);
-    expect(byAddress.body.items.map((item) => item.messageId)).toEqual([ids.fallback]);
+    const byAddress = await api<Feed>(`/api/feed?address=${getAddress(recipient())}&kind=token`);
+    expect(byAddress.body.items.map((item) => item.messageId)).toContain(ids.stuck);
     const backward = await api<Feed>("/api/feed?direction=369>1");
     expect(backward.body.items.map((item) => item.messageId)).toEqual([ids.back]);
     const none = await api<Feed>("/api/feed?direction=369-1&status=sent");

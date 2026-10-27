@@ -8,9 +8,9 @@ const EXPECTED_STATUS: Readonly<Record<MessageName, string>> = {
   returned: "delivered",
   plain: "delivered",
   failed: "failed_call",
-  fallback: "fallback_used",
-  claimable: "claimable",
-  claimed: "delivered",
+  paid: "delivered",
+  stuck: "release_failed",
+  callbackFailed: "delivered",
   covered: "covered",
   young: "sent",
   waiting: "waiting_for_finality",
@@ -59,19 +59,14 @@ describe("the feed from the chains", () => {
     });
   });
 
-  it("pays the fallback address in a fallback delivery and keeps the recipient the sender named", async () => {
-    const harness = createRpcHarness();
-    const feed = await harness.body("/api/feed?limit=50");
-    const item = feed.items.find((entry: { messageId: string }) => entry.messageId === harness.scenario.ids.fallback);
-    expect(item).toMatchObject({ fallbackUsed: true, transfer: { recipient: harness.scenario.accounts.recipient, fallbackRecipient: harness.scenario.accounts.fallback, paidTo: harness.scenario.accounts.fallback } });
-  });
-
-  it("keeps a claimed release as delivered and an unclaimed one as claimable", async () => {
+  it("shows a release that the recipient could not take as release_failed, final, with no claim and no fallback fields", async () => {
     const harness = createRpcHarness();
     const feed = await harness.body("/api/feed?limit=50");
     const byName = (name: MessageName) => feed.items.find((entry: { messageId: string }) => entry.messageId === harness.scenario.ids[name]);
-    expect(byName("claimable")).toMatchObject({ status: "claimable", claimableOutstanding: true });
-    expect(byName("claimed")).toMatchObject({ status: "delivered", claimableOutstanding: false, callbackFailed: true });
+    expect(byName("stuck")).toMatchObject({ status: "release_failed", releaseFailed: true, transfer: { recipient: harness.scenario.accounts.recipient, paidTo: null } });
+    expect(byName("callbackFailed")).toMatchObject({ status: "delivered", releaseFailed: false, callbackFailed: true });
+    for (const name of ["claimableOutstanding", "fallbackUsed"]) expect(byName("stuck")).not.toHaveProperty(name);
+    expect(byName("stuck").transfer).not.toHaveProperty("fallbackRecipient");
   });
 
   it("lists sends of the same second with the larger identifier first", async () => {
@@ -115,8 +110,8 @@ describe("the filters of the feed", () => {
     expect((await harness.body("/api/feed?direction=369>1")).items.map((item: { messageId: string }) => item.messageId)).toEqual([ids.backward, ids.returned]);
     const messages = await harness.body("/api/feed?kind=message");
     expect(messages.items.map((item: { messageId: string }) => item.messageId).sort()).toEqual([ids.plain, ids.failed, ids.waiting].sort());
-    const failed = await harness.body("/api/feed?status=failed_call,claimable");
-    expect(failed.items.map((item: { status: string }) => item.status).sort()).toEqual(["claimable", "failed_call"]);
+    const failed = await harness.body("/api/feed?status=failed_call,release_failed");
+    expect(failed.items.map((item: { status: string }) => item.status).sort()).toEqual(["failed_call", "release_failed"]);
   });
 
   it("filters by token on either side of the transfer", async () => {
@@ -130,10 +125,10 @@ describe("the filters of the feed", () => {
     expect(byNative.items.every((item: { transfer: unknown }) => item.transfer !== null)).toBe(true);
   });
 
-  it("filters by an account that is the sender, the recipient, the fallback address or the payee", async () => {
+  it("filters by an account that is the sender, the recipient or the payee", async () => {
     const harness = createRpcHarness();
-    const { fallback, recipientBack, executor } = harness.scenario.accounts;
-    expect((await harness.body(`/api/feed?address=${fallback}`)).items.map((item: { messageId: string }) => item.messageId)).toEqual([harness.scenario.ids.fallback]);
+    const { callbackRecipient, recipientBack, executor } = harness.scenario.accounts;
+    expect((await harness.body(`/api/feed?address=${callbackRecipient}`)).items.map((item: { messageId: string }) => item.messageId)).toEqual([harness.scenario.ids.callbackFailed]);
     expect((await harness.body(`/api/feed?address=${recipientBack}`)).items.map((item: { messageId: string }) => item.messageId).sort()).toEqual([harness.scenario.ids.returned, harness.scenario.ids.backward].sort());
     expect((await harness.body(`/api/feed?address=${executor}`)).items).toHaveLength(3);
     expect((await harness.body(`/api/feed?address=${executor.toUpperCase().replace("0X", "0x")}`)).items).toHaveLength(3);

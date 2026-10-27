@@ -440,6 +440,29 @@ export const deliveryRouterAbi = [
   },
   {
     "type": "function",
+    "name": "relayTokensAndCall",
+    "inputs": [
+      {
+        "name": "receiver",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "data",
+        "type": "bytes",
+        "internalType": "bytes"
+      },
+      {
+        "name": "gasLimit",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
     "name": "rewardAddress",
     "inputs": [],
     "outputs": [
@@ -500,6 +523,24 @@ export const deliveryRouterAbi = [
     "type": "function",
     "name": "wrapAndRelayTokens",
     "inputs": [],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "wrapAndRelayTokens",
+    "inputs": [
+      {
+        "name": "receiver",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "gasLimit",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
     "outputs": [],
     "stateMutability": "payable"
   },

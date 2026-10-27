@@ -47,7 +47,7 @@ describe("a send that no delivery has registered yet", () => {
       destinationToken: null,
       recipient: "0x84ea74d481ee0a5332c457a4d796187f6ba67feb",
       value: "100000000000000000000",
-      handler: "deployAndHandleBridgedTokensAndCallWithFallback",
+      handler: "deployAndHandleBridgedTokensAndCall",
       deploysCopy: true,
       sourceIsNative: true,
     },

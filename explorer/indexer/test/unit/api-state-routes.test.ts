@@ -3,8 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { describePair } from "@zk-bridge/shared";
 import {
   bridgedSupply,
-  claimEvents,
-  claimables,
+  releaseEvents,
   escrow,
   gateEvents,
   headUpdates,
@@ -321,56 +320,56 @@ describe("GET /api/escrow", () => {
   });
 });
 
-describe("GET /api/claimables", () => {
-  const claimable = { chainId: 369, token: copyToken, account: addressOf("55"), outstanding: 10n, recordedTotal: 30n, claimedTotal: 20n };
+describe("GET /api/release-events", () => {
   const event = {
     id: "e1",
     chainId: 369,
-    kind: "claimed",
+    kind: "release_failed",
     token: copyToken,
     account: addressOf("55"),
-    fallbackRecipient: null,
     value: 10n,
-    messageId: null,
+    messageId: hashOf("ab"),
     transactionHash: hashOf("aa"),
     blockNumber: 9n,
     timestamp: 90n,
   };
 
-  it("shows every outstanding balance and the recent events when no address is named", async () => {
-    serve(new Map<unknown, unknown[]>([[tokens, tokenRows], [claimables, [claimable]], [claimEvents, [event]]]));
-    const { status, body } = await get("/api/claimables");
+  it("shows the recent failed releases and callback failures when no address is named", async () => {
+    serve(new Map<unknown, unknown[]>([[tokens, tokenRows], [releaseEvents, [event]]]));
+    const { status, body } = await get("/api/release-events");
     expect(status).toBe(200);
-    expect(body.outstanding).toEqual([
-      { chainId: 369, token: expect.objectContaining({ address: copyToken }), account: addressOf("55"), outstanding: "10", recordedTotal: "30", claimedTotal: "20" },
-    ]);
-    expect(body.events).toEqual([
-      {
-        chainId: 369,
-        kind: "claimed",
-        token: copyToken,
-        account: addressOf("55"),
-        fallbackRecipient: null,
-        value: "10",
-        messageId: null,
-        transactionHash: hashOf("aa"),
-        timestamp: 90,
-      },
-    ]);
-    expect(calls.find((call) => call.table === claimables)?.whereValues).toEqual([0n]);
+    expect(body).toEqual({
+      events: [
+        {
+          chainId: 369,
+          kind: "release_failed",
+          token: copyToken,
+          account: addressOf("55"),
+          value: "10",
+          messageId: hashOf("ab"),
+          transactionHash: hashOf("aa"),
+          timestamp: 90,
+        },
+      ],
+    });
+    expect(calls.find((call) => call.table === releaseEvents)?.whereValues).toEqual([]);
   });
 
   it("sends the address of the request to the query in lowercase", async () => {
-    await get("/api/claimables?address=0x70997970C51812dc3A010C7d01b50e0d17dc79C8&limit=4");
-    const query = calls.find((call) => call.table === claimables);
-    expect(query?.whereValues).toEqual([0n, "0x70997970c51812dc3a010c7d01b50e0d17dc79c8"]);
-    expect(calls.find((call) => call.table === claimEvents)?.limit).toBe(4);
+    await get("/api/release-events?address=0x70997970C51812dc3A010C7d01b50e0d17dc79C8&limit=4");
+    const query = calls.find((call) => call.table === releaseEvents);
+    expect(query?.whereValues).toEqual(["0x70997970c51812dc3a010c7d01b50e0d17dc79c8"]);
+    expect(query?.limit).toBe(4);
   });
 
   it("refuses an address that is not an address, and runs no query", async () => {
-    const { status, body } = await get("/api/claimables?address=nope");
+    const { status, body } = await get("/api/release-events?address=nope");
     expect(status).toBe(400);
     expect(body).toEqual({ error: "invalid address: nope" });
     expect(calls).toEqual([]);
+  });
+
+  it("no longer serves the claimables route, because the mediator keeps no claim records", async () => {
+    expect((await app.request("/api/claimables")).status).toBe(404);
   });
 });

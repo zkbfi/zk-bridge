@@ -10,7 +10,7 @@ import {
   messageNonce,
 } from "../src/amb.js";
 import { decodeMediatorMessage } from "../src/mediator-message.js";
-import { encodeFunctionData, type Address, type Hex } from "viem";
+import { encodeFunctionData, parseAbi, type Address, type Hex } from "viem";
 import { tokenMediatorAbi } from "../src/abis/index.js";
 
 type MessageVector = {
@@ -103,24 +103,34 @@ describe("AMB message codec against vectors from AmbMessageCodec.sol", () => {
 describe("mediator payloads against vectors from TokenMediator.sol selectors", () => {
   const byHandler = (name: string) => (mediatorVectors.find((vector) => vector.handler === name) as MediatorVector).data;
 
-  it("decodes a plain native release with the recipient as fallback", () => {
+  it("decodes a plain native release", () => {
     const decoded = decodeMediatorMessage(byHandler("handleNativeTokens"));
     expect(decoded?.releasesNativeToken).toBe(true);
     expect(decoded?.value).toBe(5n * 10n ** 18n);
     expect(decoded?.recipient).toBe("0x90f79bf6eb2c4f870365e785982e1f101e93b906");
-    expect(decoded?.fallbackRecipient).toBe(decoded?.recipient);
+    expect(decoded).not.toHaveProperty("fallbackRecipient");
     expect(decoded?.callbackData).toBeNull();
   });
 
-  it("decodes a bridged release with an explicit fallback", () => {
-    const decoded = decodeMediatorMessage(byHandler("handleBridgedTokensWithFallback"));
+  it("decodes a bridged release, which names one recipient and no other payee", () => {
+    const decoded = decodeMediatorMessage(byHandler("handleBridgedTokens"));
     expect(decoded?.releasesNativeToken).toBe(false);
     expect(decoded?.value).toBe(123n);
-    expect(decoded?.fallbackRecipient).toBe("0x15d34aaf54267db7d7c367839aaf71a00a2c6a65");
+    expect(decoded).not.toHaveProperty("fallbackRecipient");
+  });
+
+  it("no longer decodes the retired WithFallback shapes, because the mediator has no fallback recipient", () => {
+    const retired = parseAbi(["function handleBridgedTokensWithFallback(address token, address recipient, uint256 value, address fallbackRecipient)"]);
+    const data = encodeFunctionData({
+      abi: retired,
+      functionName: "handleBridgedTokensWithFallback",
+      args: ["0x90f79bf6eb2c4f870365e785982e1f101e93b906", "0x90f79bf6eb2c4f870365e785982e1f101e93b906", 1n, "0x15d34aaf54267db7d7c367839aaf71a00a2c6a65"],
+    });
+    expect(decodeMediatorMessage(data)).toBeNull();
   });
 
   it("decodes callback data", () => {
-    const decoded = decodeMediatorMessage(byHandler("handleNativeTokensAndCallWithFallback"));
+    const decoded = decodeMediatorMessage(byHandler("handleNativeTokensAndCall"));
     expect(decoded?.callbackData).toBe("0xc0ffee");
     expect(decoded?.value).toBe(99n);
   });
@@ -129,7 +139,7 @@ describe("mediator payloads against vectors from TokenMediator.sol selectors", (
     const decoded = decodeMediatorMessage(byHandler("deployAndHandleBridgedTokens"));
     expect(decoded?.deploysCopy).toBe(true);
     expect(decoded?.metadata).toEqual({ name: "Tether USD", symbol: "USDT", decimals: 6 });
-    const withCall = decodeMediatorMessage(byHandler("deployAndHandleBridgedTokensAndCallWithFallback"));
+    const withCall = decodeMediatorMessage(byHandler("deployAndHandleBridgedTokensAndCall"));
     expect(withCall?.metadata).toEqual({ name: "Wrapped Ether", symbol: "WETH", decimals: 18 });
     expect(withCall?.callbackData).toBe("0xaabb");
     expect(withCall?.value).toBe(7n);

@@ -82,8 +82,7 @@ Conventions:
 | `covered` | The destination light client stored a head whose execution block is at or after the source block. Anyone can deliver it. |
 | `delivered` | The destination bridge executed it and the call succeeded. |
 | `failed_call` | Executed and the call reverted. Final. |
-| `fallback_used` | The fallback address received a token release. |
-| `claimable` | The release waits for `claim`. It returns to `delivered` after the claim. |
+| `release_failed` | The destination bridge executed the message, but the recipient could not take the tokens. The mediator emitted `ReleaseFailed`. Final: the mediator keeps no claim record, and the tokens stay in the mediator. |
 
 In flight means `sent`, `waiting_for_finality` or `covered`.
 
@@ -119,7 +118,7 @@ In flight means `sent`, `waiting_for_finality` or `covered`.
 | `kind` | `token` or `message`. |
 | `status` | One status or a comma list. |
 | `token` | A token address on either side of a transfer. |
-| `address` | Sender, executor, recipient, fallback or payee. Any letter case. |
+| `address` | Sender, executor, recipient or payee. Any letter case. |
 | `from`, `to` | Send time range in Unix seconds, inclusive. |
 | `limit` | 1 to 200. Default 50. |
 | `cursor` | The `nextCursor` of the previous page. |
@@ -134,10 +133,10 @@ An item:
   "sent": { "transactionHash": "0x..", "blockNumber": 12, "timestamp": 1789999000 },
   "covered": { "headSlot": 100, "timestamp": 1789999100 },
   "delivered": { "transactionHash": "0x..", "blockNumber": 40, "timestamp": 1789999200, "success": true, "executedBy": "0x.." },
-  "fallbackUsed": false, "callbackFailed": false, "claimableOutstanding": false,
+  "callbackFailed": false, "releaseFailed": false,
   "transfer": {
     "sourceToken": { "...": "token object" }, "destinationToken": { "...": "token object" },
-    "sender": "0x..", "recipient": "0x..", "fallbackRecipient": "0x..", "paidTo": "0x..",
+    "sender": "0x..", "recipient": "0x..", "paidTo": "0x..",
     "value": "1000000", "deliveredValue": "1000000",
     "handler": "deployAndHandleBridgedTokens", "deploysCopy": true, "hasCallback": false, "sourceIsNative": true
   }
@@ -188,10 +187,10 @@ When a kind has no samples, `isDefault` is true and `defaultGas` is a configured
                "pendingForward": "0", "pendingBackward": "0", "expectedEscrow": "750000", "difference": "0", "mismatch": false }] }
 ```
 
-The rule: `escrow = bridgedSupply + pendingForward + pendingBackward`. `pendingForward` is the value locked on the home chain and not yet paid on the other chain. `pendingBackward` is the value burned on the other chain and not yet paid on the home chain. A transfer is paid when its status is `delivered` or `fallback_used`. `claimable` and `failed_call` count as pending, because the tokens are held or owed. `difference` is `escrow - expectedEscrow`: negative means the copy is under-backed. The mediator charges no fee, so the escrow must equal the sum exactly. The two sides are read at different blocks. Check a `mismatch` twice before you raise an alarm.
+The rule: `escrow = bridgedSupply + pendingForward + pendingBackward`. `pendingForward` is the value locked on the home chain and not yet paid on the other chain. `pendingBackward` is the value burned on the other chain and not yet paid on the home chain. A transfer is paid when its status is `delivered`. `release_failed` and `failed_call` count as pending, because the mediator holds the tokens for good. `difference` is `escrow - expectedEscrow`: negative means the copy is under-backed. The mediator charges no fee, so the escrow must equal the sum exactly. The two sides are read at different blocks. Check a `mismatch` twice before you raise an alarm.
 
 
-`GET /api/claimables?address=&limit=` returns `{ outstanding: [{ chainId, token, account, outstanding, recordedTotal, claimedTotal }], events: [{ chainId, kind, token, account, fallbackRecipient, value, messageId, transactionHash, timestamp }] }`. `kind` is `fallback_used`, `claimable_recorded`, `claimed` or `callback_failed`.
+`GET /api/release-events?address=&limit=` returns `{ events: [{ chainId, kind, token, account, value, messageId, transactionHash, timestamp }] }`. `kind` is `release_failed` or `callback_failed`. `account` is the recipient. The address filter matches `account`.
 
 Ponder also serves `GET /health`, `/ready`, `/status`, `/metrics`, GraphQL at `/graphql`, and Structured Query Language over HTTP at `/sql/*` for `@ponder/client`.
 
@@ -201,13 +200,12 @@ Ponder writes the tables into the schema that `--schema` names (default for `pon
 
 | Table | Key | Content |
 |---|---|---|
-| `messages` | `message_id` | One row per message: ids, chains, `direction`, `kind`, `status`, sender, executor, gas, data, send and delivery facts, `covered_by_head_slot`, `fallback_used`, `claimable_outstanding`. |
-| `transfers` | `message_id` | Token view of a `token` message: tokens, sender, recipient, fallback, `value`, `delivered_value`, `paid_to`, `source_is_native`. |
+| `messages` | `message_id` | One row per message: ids, chains, `direction`, `kind`, `status`, sender, executor, gas, data, send and delivery facts, `covered_by_head_slot`, `release_failed`. |
+| `transfers` | `message_id` | Token view of a `token` message: tokens, sender, recipient, `value`, `delivered_value`, `paid_to`, `source_is_native`. |
 | `tokens` | `chain_id, address` | Metadata, `is_bridged_copy`, home chain and home token. |
 | `escrow` | `chain_id, token` | `balance` of a native token. |
 | `bridged_supply` | `chain_id, token` | `minted`, `burned`, `supply` of a copy. |
-| `claimables` | `chain_id, token, account` | `outstanding`, `recorded_total`, `claimed_total`. |
-| `claim_events` | `id` | Fallback, claimable, claim and callback events. |
+| `release_events` | `id` | Failed-release and callback-failure events of the token mediator. |
 | `head_updates` | `chain_id, slot` | Every head update: header root, execution block, transaction, `gas_used`, `effective_gas_price`, `cost_wei`, `poster`. |
 | `light_client_heads` | `chain_id` | Newest head per chain. |
 | `chain_tips` | `chain_id` | Newest indexed block and time per chain, and its `base_fee_per_gas` (null when absent). |

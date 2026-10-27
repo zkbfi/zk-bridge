@@ -54,19 +54,16 @@ describe("mergeMessage", () => {
     expect(row.sentTimestamp).toBeNull();
   });
 
-  it("reports a reverted call as failed_call and never as fallback_used", () => {
-    const row = merge(merge(null, send, 1_000n), { ...delivery, deliveredSuccess: false, fallbackUsed: true });
+  it("reports a reverted call as failed_call even when a failed release is recorded", () => {
+    const row = merge(merge(null, send, 1_000n), { ...delivery, deliveredSuccess: false, releaseFailed: true });
     expect(row.status).toBe("failed_call");
   });
 
-  it("walks a release through fallback, claimable and claimed", () => {
+  it("turns a delivered release into release_failed, and nothing brings it back", () => {
     const delivered = merge(merge(null, send, 1_000n), delivery);
-    const fallback = merge(delivered, { fallbackUsed: true });
-    expect(fallback.status).toBe("fallback_used");
-    const claimable = merge(delivered, { claimableOutstanding: true, claimableAccount: "0x2222222222222222222222222222222222222222" });
-    expect(claimable.status).toBe("claimable");
-    const claimed = merge(claimable, { claimableOutstanding: false, claimedTimestamp: 3_000n });
-    expect(claimed.status).toBe("delivered");
+    const failed = merge(delivered, { releaseFailed: true });
+    expect(failed.status).toBe("release_failed");
+    expect(merge(failed, { callbackFailed: true }).status).toBe("release_failed");
   });
 
   it("lets a patch clear a value with null", () => {

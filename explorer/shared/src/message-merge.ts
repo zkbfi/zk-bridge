@@ -33,12 +33,9 @@ export type MessageRow = {
   /** The slot of the first stored head that covered this message, or null. */
   readonly coveredByHeadSlot: bigint | null;
   readonly coveredAtTimestamp: bigint | null;
-  readonly fallbackUsed: boolean;
   readonly callbackFailed: boolean;
-  readonly claimableOutstanding: boolean;
-  readonly claimableToken: Hex | null;
-  readonly claimableAccount: Hex | null;
-  readonly claimedTimestamp: bigint | null;
+  /** True when the mediator emitted `ReleaseFailed` for this message. */
+  readonly releaseFailed: boolean;
 };
 
 /** The inputs of `mergeMessage`. */
@@ -85,12 +82,8 @@ const emptyRow = (messageId: MessageRow["messageId"], sourceChainId: number, des
   executedBy: null,
   coveredByHeadSlot: null,
   coveredAtTimestamp: null,
-  fallbackUsed: false,
   callbackFailed: false,
-  claimableOutstanding: false,
-  claimableToken: null,
-  claimableAccount: null,
-  claimedTimestamp: null,
+  releaseFailed: false,
 });
 
 const deliveryOf = (row: MessageRow): DeliveryOutcome => {
@@ -110,8 +103,7 @@ export const statusOfRow = (row: MessageRow, latestSourceTimestamp: bigint | nul
   const latest = latestSourceTimestamp !== null && latestSourceTimestamp > sentTimestamp ? latestSourceTimestamp : sentTimestamp;
   return deriveStatus({
     delivery: deliveryOf(row),
-    fallbackUsed: row.fallbackUsed,
-    claimableOutstanding: row.claimableOutstanding,
+    releaseFailed: row.releaseFailed,
     coveredByHead: row.coveredByHeadSlot !== null,
     sentTimestamp,
     latestSourceTimestamp: latest,
@@ -159,7 +151,6 @@ export const mergeTransfer = (input: MergeTransferInput): TransferRow => {
     destinationToken: null,
     sender: null,
     recipient: null,
-    fallbackRecipient: null,
     value: null,
     deliveredValue: null,
     paidTo: null,

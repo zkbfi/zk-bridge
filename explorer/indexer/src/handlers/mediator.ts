@@ -1,6 +1,5 @@
-import { and, eq } from "ponder";
 import { ponder } from "ponder:registry";
-import { bridgedSupply, claimEvents, claimables, messages, tokens } from "ponder:schema";
+import { bridgedSupply, releaseEvents, tokens } from "ponder:schema";
 import { otherSide } from "@zk-bridge/shared";
 import { refreshEscrow } from "../lib/escrow";
 import { writeMessage } from "../lib/message-store";
@@ -85,114 +84,26 @@ ponder.on("TokenMediator:NewTokenRegistered", async ({ event, context }) => {
   });
 });
 
-/** The recipient refused a release and the fallback address received it. */
-ponder.on("TokenMediator:FallbackUsed", async ({ event, context }) => {
-  const sourceChainId = otherSide(pair, context.chain.id).chainId;
-  await writeMessage({
-    database: context.db,
-    messageId: event.args.messageId,
-    sourceChainId,
-    destinationChainId: context.chain.id,
-    patch: { fallbackUsed: true },
-  });
-  await context.db.insert(claimEvents).values({
-    id: event.id,
-    chainId: context.chain.id,
-    kind: "fallback_used",
-    token: event.args.token,
-    account: event.args.recipient,
-    fallbackRecipient: event.args.fallbackRecipient,
-    value: null,
-    messageId: event.args.messageId,
-    transactionHash: event.transaction.hash,
-    blockNumber: event.block.number,
-    timestamp: event.block.timestamp,
-  });
-});
-
-/** A release could not be paid and waits for `claim`. */
-ponder.on("TokenMediator:ClaimableRecorded", async ({ event, context }) => {
+/** A release the recipient cannot take is final. The mediator keeps no claim record, so the indexer keeps none. */
+ponder.on("TokenMediator:ReleaseFailed", async ({ event, context }) => {
   const chainId = context.chain.id;
-  const { token, account, value, messageId } = event.args;
+  const { token, recipient, value, messageId } = event.args;
   await writeMessage({
     database: context.db,
     messageId,
     sourceChainId: otherSide(pair, chainId).chainId,
     destinationChainId: chainId,
-    patch: { claimableOutstanding: true, claimableToken: token, claimableAccount: account },
+    patch: { releaseFailed: true },
   });
-  const key = { chainId, token, account };
-  const existing = await context.db.find(claimables, key);
-  const recordedTotal = (existing?.recordedTotal ?? 0n) + value;
-  const claimedTotal = existing?.claimedTotal ?? 0n;
-  const row = { ...key, outstanding: (existing?.outstanding ?? 0n) + value, recordedTotal, claimedTotal };
-  await context.db.insert(claimables).values(row).onConflictDoUpdate(row);
-  await context.db.insert(claimEvents).values({
+  await context.db.insert(releaseEvents).values({
     id: event.id,
     chainId,
-    kind: "claimable_recorded",
+    kind: "release_failed",
     token,
-    account,
-    fallbackRecipient: null,
+    account: recipient,
     value,
     messageId,
     transactionHash: event.transaction.hash,
-    blockNumber: event.block.number,
-    timestamp: event.block.timestamp,
-  });
-});
-
-/** `claim` paid an account everything it was owed in a token. */
-ponder.on("TokenMediator:Claimed", async ({ event, context }) => {
-  const chainId = context.chain.id;
-  const { token, account, value } = event.args;
-  const key = { chainId, token, account };
-  const existing = await context.db.find(claimables, key);
-  const row = {
-    ...key,
-    outstanding: 0n,
-    recordedTotal: existing?.recordedTotal ?? value,
-    claimedTotal: (existing?.claimedTotal ?? 0n) + value,
-  };
-  await context.db.insert(claimables).values(row).onConflictDoUpdate(row);
-  const waiting = await context.db.sql
-    .select({ messageId: messages.messageId })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.destinationChainId, chainId),
-        eq(messages.claimableToken, token),
-        eq(messages.claimableAccount, account),
-        eq(messages.claimableOutstanding, true),
-      ),
-    );
-  for (const message of waiting) {
-    await writeMessage({
-      database: context.db,
-      messageId: message.messageId,
-      sourceChainId: otherSide(pair, chainId).chainId,
-      destinationChainId: chainId,
-      patch: { claimableOutstanding: false, claimedTimestamp: event.block.timestamp },
-    });
-  }
-  await context.db.insert(claimEvents).values({
-    id: event.id,
-    chainId,
-    kind: "claimed",
-    token,
-    account,
-    fallbackRecipient: null,
-    value,
-    messageId: null,
-    transactionHash: event.transaction.hash,
-    blockNumber: event.block.number,
-    timestamp: event.block.timestamp,
-  });
-  await refreshEscrow({
-    database: context.db,
-    client: context.client,
-    chainId,
-    token,
     blockNumber: event.block.number,
     timestamp: event.block.timestamp,
   });
@@ -208,13 +119,12 @@ ponder.on("TokenMediator:CallbackFailed", async ({ event, context }) => {
     destinationChainId: chainId,
     patch: { callbackFailed: true },
   });
-  await context.db.insert(claimEvents).values({
+  await context.db.insert(releaseEvents).values({
     id: event.id,
     chainId,
     kind: "callback_failed",
     token: event.args.token,
     account: event.args.recipient,
-    fallbackRecipient: null,
     value: null,
     messageId: event.args.messageId,
     transactionHash: event.transaction.hash,

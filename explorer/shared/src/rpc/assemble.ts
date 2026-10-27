@@ -152,7 +152,6 @@ export const assemble = (input: AssembleInput): Assembled => {
       refer(transfer.releasesNativeToken ? decoded.destinationChainId : chainId, transfer.token);
       writeTransfer(decoded.messageFacts.messageId, chainId, decoded.destinationChainId, {
         recipient: transfer.recipient,
-        fallbackRecipient: transfer.fallbackRecipient,
         value: transfer.value,
         handler: transfer.handler,
         deploysCopy: transfer.deploysCopy,
@@ -201,23 +200,8 @@ export const assemble = (input: AssembleInput): Assembled => {
       registrations.set(tokenKey(chainId, copy), { transactionHash: log.transactionHash, blockNumber: log.blockNumber, timestamp: timestamp() });
       return;
     }
-    if (log.eventName === "FallbackUsed") return writeMessage(hexOf(log, "messageId"), other, chainId, { fallbackUsed: true });
     if (log.eventName === "CallbackFailed") return writeMessage(hexOf(log, "messageId"), other, chainId, { callbackFailed: true });
-    if (log.eventName === "ClaimableRecorded") {
-      return writeMessage(hexOf(log, "messageId"), other, chainId, {
-        claimableOutstanding: true,
-        claimableToken: addressOf(log, "token"),
-        claimableAccount: addressOf(log, "account"),
-      });
-    }
-    if (log.eventName === "Claimed") {
-      const token = addressOf(log, "token");
-      const account = addressOf(log, "account");
-      for (const row of [...messages.values()]) {
-        const waiting = row.destinationChainId === chainId && row.claimableToken === token && row.claimableAccount === account && row.claimableOutstanding;
-        if (waiting) writeMessage(row.messageId, other, chainId, { claimableOutstanding: false });
-      }
-    }
+    if (log.eventName === "ReleaseFailed") return writeMessage(hexOf(log, "messageId"), other, chainId, { releaseFailed: true });
   };
 
   for (const side of pair.sides) for (const log of input.logs.get(side.chainId) as readonly ChainLog[]) apply(side.chainId, log);

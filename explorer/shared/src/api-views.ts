@@ -47,12 +47,11 @@ export type TransferRow = {
   readonly destinationToken: Hex | null;
   readonly sender: Hex | null;
   readonly recipient: Hex | null;
-  readonly fallbackRecipient: Hex | null;
   /** The amount that was locked or burned, Base units of the source token. */
   readonly value: bigint | null;
   /** The amount that the delivery paid, from `TokensBridged`. Null until a payment. */
   readonly deliveredValue: bigint | null;
-  /** The account that received the tokens. The fallback address when the recipient refused. */
+  /** The account that received the tokens. Null until a payment. It is always the recipient. */
   readonly paidTo: Hex | null;
   readonly handler: string | null;
   readonly deploysCopy: boolean;
@@ -218,9 +217,8 @@ export const feedItemView = (message: MessageRow, transfer: TransferRow | null, 
           success: message.deliveredSuccess,
           executedBy: message.executedBy,
         },
-  fallbackUsed: message.fallbackUsed,
   callbackFailed: message.callbackFailed,
-  claimableOutstanding: message.claimableOutstanding,
+  releaseFailed: message.releaseFailed,
   transfer:
     transfer === null
       ? null
@@ -229,7 +227,6 @@ export const feedItemView = (message: MessageRow, transfer: TransferRow | null, 
           destinationToken: tokenView(transfer.destinationChainId, transfer.destinationToken, index),
           sender: transfer.sender,
           recipient: transfer.recipient,
-          fallbackRecipient: transfer.fallbackRecipient,
           paidTo: transfer.paidTo,
           value: amountOf(transfer.value),
           deliveredValue: amountOf(transfer.deliveredValue),

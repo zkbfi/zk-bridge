@@ -1,10 +1,9 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   bridgedSupply,
-  claimEvents,
-  claimables,
   escrow,
   messages,
+  releaseEvents,
   tokens,
   transfers,
 } from "../../ponder.schema";
@@ -112,102 +111,39 @@ describe("TokenMediator:NewTokenRegistered", () => {
   });
 });
 
-describe("TokenMediator:FallbackUsed", () => {
-  it("marks the message and stores one event row with the fallback address", async () => {
+describe("the mediator has no fallback recipient and no claim records", () => {
+  it.each(["FallbackUsed", "ClaimableRecorded", "Claimed"])("registers no handler for the deleted %s event", async (eventName) => {
+    const { context } = createContext(369);
+    await expect(callHandler(`TokenMediator:${eventName}`, { event: createEvent({ messageId }, { id: "e1" }), context })).rejects.toThrow(/no handler/);
+  });
+});
+
+describe("TokenMediator:ReleaseFailed", () => {
+  const name = "TokenMediator:ReleaseFailed";
+
+  it("marks the message release-failed, which is final, and stores one event row for the recipient", async () => {
     const { database, context } = createContext(369);
-    const id = "event-1";
-    await callHandler("TokenMediator:FallbackUsed", {
-      event: createEvent({ messageId, token, recipient: account, fallbackRecipient: other }, { id }),
-      context,
-    });
-    expect(database.row(messages, { messageId })).toMatchObject({ sourceChainId: 1, destinationChainId: 369, fallbackUsed: true });
-    expect(database.row(claimEvents, { id })).toEqual({
-      id,
+    await callHandler(name, { event: createEvent({ token, recipient: account, value: 10n, messageId }, { id: "e1" }), context });
+    expect(database.row(messages, { messageId })).toMatchObject({ sourceChainId: 1, destinationChainId: 369, releaseFailed: true });
+    expect(database.row(releaseEvents, { id: "e1" })).toEqual({
+      id: "e1",
       chainId: 369,
-      kind: "fallback_used",
+      kind: "release_failed",
       token,
       account,
-      fallbackRecipient: other,
-      value: null,
+      value: 10n,
       messageId,
       transactionHash: hashOf("aa"),
       blockNumber: 100n,
       timestamp: 1_000n,
     });
   });
-});
 
-describe("TokenMediator:ClaimableRecorded", () => {
-  const name = "TokenMediator:ClaimableRecorded";
-
-  it("marks the message claimable and opens a claimable balance", async () => {
+  it("turns a delivered message into release_failed", async () => {
     const { database, context } = createContext(369);
-    await callHandler(name, { event: createEvent({ token, account, value: 10n, messageId }, { id: "e1" }), context });
-    expect(database.row(messages, { messageId })).toMatchObject({
-      claimableOutstanding: true,
-      claimableToken: token,
-      claimableAccount: account,
-    });
-    expect(database.row(claimables, { chainId: 369, token, account })).toEqual({
-      chainId: 369,
-      token,
-      account,
-      outstanding: 10n,
-      recordedTotal: 10n,
-      claimedTotal: 0n,
-    });
-    expect(database.row(claimEvents, { id: "e1" })).toMatchObject({ kind: "claimable_recorded", value: 10n, fallbackRecipient: null, messageId });
-  });
-
-  it("adds a second release to the outstanding and the recorded totals and keeps the claimed total", async () => {
-    const { database, context } = createContext(369);
-    database.seed(claimables, { chainId: 369, token, account, outstanding: 5n, recordedTotal: 20n, claimedTotal: 15n });
-    await callHandler(name, { event: createEvent({ token, account, value: 10n, messageId }, { id: "e2" }), context });
-    expect(database.row(claimables, { chainId: 369, token, account })).toMatchObject({ outstanding: 15n, recordedTotal: 30n, claimedTotal: 15n });
-  });
-});
-
-describe("TokenMediator:Claimed", () => {
-  const name = "TokenMediator:Claimed";
-
-  it("zeroes the balance, adds the claim to the claimed total and keeps the recorded total", async () => {
-    const { database, context } = createContext(369, answers());
-    database.seed(claimables, { chainId: 369, token, account, outstanding: 10n, recordedTotal: 30n, claimedTotal: 5n });
-    database.queueSqlRows([]);
-    await callHandler(name, { event: createEvent({ token, account, value: 10n }, { id: "e1" }), context });
-    expect(database.row(claimables, { chainId: 369, token, account })).toEqual({
-      chainId: 369,
-      token,
-      account,
-      outstanding: 0n,
-      recordedTotal: 30n,
-      claimedTotal: 15n,
-    });
-    expect(database.row(claimEvents, { id: "e1" })).toMatchObject({ kind: "claimed", value: 10n, messageId: null });
-    expect(database.row(escrow, { chainId: 369, token })).toEqual(escrowRow(369, token));
-  });
-
-  it("uses the claimed value as the recorded total when no record exists", async () => {
-    const { database, context } = createContext(369, answers());
-    database.queueSqlRows([]);
-    await callHandler(name, { event: createEvent({ token, account, value: 10n }, { id: "e1" }), context });
-    expect(database.row(claimables, { chainId: 369, token, account })).toMatchObject({ outstanding: 0n, recordedTotal: 10n, claimedTotal: 10n });
-  });
-
-  it("clears the claimable flag of each waiting message and stamps the claim time", async () => {
-    const { database, context } = createContext(369, answers());
-    database.seed(messages, {
-      ...sentMessageRow(messageId, 5n),
-      deliveredSuccess: true,
-      deliveredTimestamp: 1_100n,
-      claimableOutstanding: true,
-      claimableToken: token,
-      claimableAccount: account,
-      status: "claimable",
-    });
-    database.queueSqlRows([{ messageId }]);
-    await callHandler(name, { event: createEvent({ token, account, value: 10n }, { id: "e1" }), context });
-    expect(database.row(messages, { messageId })).toMatchObject({ claimableOutstanding: false, claimedTimestamp: 1_000n, status: "delivered" });
+    database.seed(messages, { ...sentMessageRow(messageId, 5n), deliveredSuccess: true, deliveredTimestamp: 1_100n, status: "delivered" });
+    await callHandler(name, { event: createEvent({ token, recipient: account, value: 10n, messageId }, { id: "e1" }), context });
+    expect(database.row(messages, { messageId })).toMatchObject({ releaseFailed: true, status: "release_failed" });
   });
 });
 
@@ -216,7 +152,7 @@ describe("TokenMediator:CallbackFailed", () => {
     const { database, context } = createContext(369);
     await callHandler("TokenMediator:CallbackFailed", { event: createEvent({ messageId, token, recipient: account }, { id: "e1" }), context });
     expect(database.row(messages, { messageId })).toMatchObject({ callbackFailed: true, sourceChainId: 1 });
-    expect(database.row(claimEvents, { id: "e1" })).toMatchObject({ kind: "callback_failed", account, value: null, fallbackRecipient: null, messageId });
+    expect(database.row(releaseEvents, { id: "e1" })).toMatchObject({ kind: "callback_failed", account, value: null, messageId });
   });
 });
 

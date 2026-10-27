@@ -22,7 +22,6 @@ describe("writeTransfer", () => {
         destinationToken: null,
         sender: null,
         recipient: null,
-        fallbackRecipient: null,
         value: 5n,
         deliveredValue: null,
         paidTo: null,

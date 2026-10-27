@@ -14,9 +14,7 @@ export const MEDIATOR_EVENTS = [
   "TokensBridgingInitiated",
   "TokensBridged",
   "NewTokenRegistered",
-  "FallbackUsed",
-  "ClaimableRecorded",
-  "Claimed",
+  "ReleaseFailed",
   "CallbackFailed",
 ] as const;
 

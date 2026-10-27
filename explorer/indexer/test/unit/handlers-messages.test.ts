@@ -54,7 +54,6 @@ describe("MessageBridge:UserRequestForAffirmation", () => {
       sourceChainId: 1,
       destinationChainId: 369,
       recipient,
-      fallbackRecipient: recipient,
       value: 42n,
       handler: "handleBridgedTokens",
       deploysCopy: false,

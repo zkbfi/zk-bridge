@@ -223,7 +223,7 @@ describe("the audit", () => {
         bridgedToken: expect.objectContaining({ chainId: 369, address: harness.scenario.tokens.copy }),
         escrow: "1710",
         bridgedSupply: "1150",
-        // The send that a head covers (250), the claimable release (200) and the young send (50).
+        // The send that a head covers (250), the release that failed (200) and the young send (50).
         pendingForward: "500",
         // The copy that was sent back and is not delivered yet.
         pendingBackward: "60",

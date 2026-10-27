@@ -38,12 +38,9 @@ export const messages = onchainTable(
     /** The slot of the first stored head that covered this message, or null. */
     coveredByHeadSlot: t.bigint(),
     coveredAtTimestamp: t.bigint(),
-    fallbackUsed: t.boolean().notNull().default(false),
     callbackFailed: t.boolean().notNull().default(false),
-    claimableOutstanding: t.boolean().notNull().default(false),
-    claimableToken: t.hex(),
-    claimableAccount: t.hex(),
-    claimedTimestamp: t.bigint(),
+    /** True when the mediator emitted `ReleaseFailed`: the recipient could not take the release. Final. */
+    releaseFailed: t.boolean().notNull().default(false),
   }),
   (table) => ({
     statusIndex: index().on(table.status),
@@ -67,12 +64,11 @@ export const transfers = onchainTable(
     /** The account that started the transfer on the source chain. */
     sender: t.hex(),
     recipient: t.hex(),
-    fallbackRecipient: t.hex(),
     /** The amount that was locked or burned, Base units of the source token. */
     value: t.bigint(),
     /** The amount that the delivery paid, from `TokensBridged`. Null until a payment. */
     deliveredValue: t.bigint(),
-    /** The account that received the tokens. The fallback address when the recipient refused. */
+    /** The account that received the tokens. Null until a payment. It is always the recipient. */
     paidTo: t.hex(),
     handler: t.text(),
     deploysCopy: t.boolean().notNull().default(false),
@@ -140,30 +136,18 @@ export const bridgedSupply = onchainTable(
   (table) => ({ pk: primaryKey({ columns: [table.chainId, table.token] }) }),
 );
 
-/** Amounts that a release recorded for `claim`. `outstanding` is zero after the claim. */
-export const claimables = onchainTable(
-  "claimables",
-  (t) => ({
-    chainId: t.integer().notNull(),
-    token: t.hex().notNull(),
-    account: t.hex().notNull(),
-    outstanding: t.bigint().notNull(),
-    recordedTotal: t.bigint().notNull(),
-    claimedTotal: t.bigint().notNull(),
-  }),
-  (table) => ({ pk: primaryKey({ columns: [table.chainId, table.token, table.account] }) }),
-);
-
-/** Fallback, claimable and claim events, one row each. `kind` is `fallback_used`, `claimable_recorded`, `claimed` or `callback_failed`. */
-export const claimEvents = onchainTable(
-  "claim_events",
+/**
+ * Failed-release and callback-failure events of the token mediator, one row each. `kind` is `release_failed` or
+ * `callback_failed`. `account` is the recipient. A failed release is final: the mediator keeps no claim record.
+ */
+export const releaseEvents = onchainTable(
+  "release_events",
   (t) => ({
     id: t.text().primaryKey(),
     chainId: t.integer().notNull(),
     kind: t.text().notNull(),
     token: t.hex().notNull(),
     account: t.hex(),
-    fallbackRecipient: t.hex(),
     value: t.bigint(),
     messageId: t.hex(),
     transactionHash: t.hex().notNull(),

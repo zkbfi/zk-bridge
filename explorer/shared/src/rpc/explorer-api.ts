@@ -271,7 +271,7 @@ export const createRpcExplorerApi = (options: RpcExplorerApiOptions): RpcExplore
     if (statuses.length > 0 && !statuses.includes(message.status as never)) return false;
     if (token !== null && transfer?.sourceToken !== token && transfer?.destinationToken !== token) return false;
     if (address !== null) {
-      const accounts = [message.sender, message.executor, transfer?.sender, transfer?.recipient, transfer?.fallbackRecipient, transfer?.paidTo];
+      const accounts = [message.sender, message.executor, transfer?.sender, transfer?.recipient, transfer?.paidTo];
       if (!accounts.includes(address)) return false;
     }
     if (from !== null && sent < from) return false;
@@ -383,7 +383,7 @@ export const createRpcExplorerApi = (options: RpcExplorerApiOptions): RpcExplore
       const index = indexTokens([...snapshot.assembled.tokens.values()]);
       const natives = [...snapshot.assembled.tokens.values()].filter((token) => !token.isBridgedCopy);
       const rows = joinedRows(snapshot);
-      const unpaid = rows.filter(({ message, transfer }) => transfer !== null && !["delivered", "fallback_used"].includes(message.status)).map(({ transfer }) => transfer as TransferRow);
+      const unpaid = rows.filter(({ message, transfer }) => transfer !== null && message.status !== "delivered").map(({ transfer }) => transfer as TransferRow);
       const pending = (input: { nativeSide: boolean; chainId: number; token: Address }): bigint =>
         unpaid
           .filter((transfer) =>

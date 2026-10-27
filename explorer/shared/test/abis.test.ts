@@ -23,12 +23,15 @@ describe("generated ABIs hold the events that the indexer reads", () => {
         "TokensBridgingInitiated",
         "TokensBridged",
         "NewTokenRegistered",
-        "FallbackUsed",
-        "ClaimableRecorded",
-        "Claimed",
+        "ReleaseFailed",
         "CallbackFailed",
       ]),
     );
+  });
+  it("TokenMediator has no fallback and no claim event", () => {
+    expect(eventNames(tokenMediatorAbi)).not.toContain("FallbackUsed");
+    expect(eventNames(tokenMediatorAbi)).not.toContain("ClaimableRecorded");
+    expect(eventNames(tokenMediatorAbi)).not.toContain("Claimed");
   });
   it("BeaconLightClient, BeaconForkGate and ForkRegistry", () => {
     expect(eventNames(beaconLightClientAbi)).toContain("HeadUpdated");

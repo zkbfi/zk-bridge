@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createRpcExplorerApi, tokenListItemView, indexTokens, type TokenRow } from "@zk-bridge/shared";
 import { createFakeChain } from "../../../shared/test/support/fake-chain";
 import { buildScenario, type Scenario, type ScenarioEvent } from "../../../shared/test/support/scenario";
-import { chainTips, claimEvents, messages, tokens, transfers } from "../../ponder.schema";
+import { chainTips, releaseEvents, messages, tokens, transfers } from "../../ponder.schema";
 import { registerFeedRoutes } from "../../src/api/routes/feed";
 import { pair } from "../../src/lib/pair";
 import { respondWith } from "./support/fake-api";
@@ -65,9 +65,6 @@ const queueSqlAnswer = (database: ReturnType<typeof createFakeDatabase>, event: 
     const executionBlock = scenario.view(event.chainId, { address: pair.sides.find((side) => side.chainId === event.chainId)!.contracts.lightClient, functionName: "executionBlockNumber", args: [event.args.executionBlockHash] } as never) as bigint;
     database.queueSqlRows(rows.filter((row) => row.destinationChainId === event.chainId && row.coveredByHeadSlot === null && row.sentBlockNumber !== null && row.sentBlockNumber <= executionBlock).map((row) => ({ messageId: row.messageId, sourceChainId: row.sourceChainId })));
   }
-  if (event.eventName === "Claimed") {
-    database.queueSqlRows(rows.filter((row) => row.destinationChainId === event.chainId && row.claimableToken === event.args.token && row.claimableAccount === event.args.account && row.claimableOutstanding === true).map((row) => ({ messageId: row.messageId })));
-  }
 };
 
 /** The `GET /api/feed` and `GET /api/messages/:id` answers of the indexer, from its own routes over the fake database. */
@@ -111,9 +108,9 @@ describe("one history, two data sources", () => {
     const statusOf = (id: string) => feed.items.find((item: { messageId: string }) => item.messageId === id).status;
     expect(statusOf(scenario.ids.delivered)).toBe("delivered");
     expect(statusOf(scenario.ids.failed)).toBe("failed_call");
-    expect(statusOf(scenario.ids.fallback)).toBe("fallback_used");
-    expect(statusOf(scenario.ids.claimable)).toBe("claimable");
-    expect(statusOf(scenario.ids.claimed)).toBe("delivered");
+    expect(statusOf(scenario.ids.paid)).toBe("delivered");
+    expect(statusOf(scenario.ids.stuck)).toBe("release_failed");
+    expect(statusOf(scenario.ids.callbackFailed)).toBe("delivered");
     expect(statusOf(scenario.ids.covered)).toBe("covered");
     expect(statusOf(scenario.ids.waiting)).toBe("waiting_for_finality");
     expect(statusOf(scenario.ids.young)).toBe("sent");
@@ -122,7 +119,7 @@ describe("one history, two data sources", () => {
   it("gives the same detail for one message, with its call data", async () => {
     const database = await indexHistory();
     const call = indexerApi(database);
-    for (const id of [scenario.ids.delivered, scenario.ids.plain, scenario.ids.claimed]) {
+    for (const id of [scenario.ids.delivered, scenario.ids.plain, scenario.ids.stuck, scenario.ids.callbackFailed]) {
       const indexer = await call(`/api/messages/${id}`);
       const { coverage, ...rpc } = (await rpcApi().get(`/api/messages/${id}`)).body as Record<string, unknown>;
       expect(coverage).toMatchObject({ source: "rpc" });
@@ -140,8 +137,8 @@ describe("one history, two data sources", () => {
     expect(byKey(rpc)).toEqual(indexer);
   });
 
-  it("records the claim events that the history holds, so the history is the one that the handlers saw", async () => {
+  it("records the release events that the history holds, so the history is the one that the handlers saw", async () => {
     const database = await indexHistory();
-    expect(database.rows(claimEvents).map((row) => row.kind).sort()).toEqual(["callback_failed", "claimable_recorded", "claimable_recorded", "claimed", "fallback_used"]);
+    expect(database.rows(releaseEvents).map((row) => row.kind).sort()).toEqual(["callback_failed", "release_failed"]);
   });
 });

@@ -26,8 +26,8 @@ export type AuditResult = AuditInput & {
  *
  * The invariant: the mediator record of a native token equals the supply of its bridged copy, plus the amounts that
  * are locked and not yet minted, plus the amounts that are burned and not yet released. A transfer counts as pending
- * until the delivery paid the recipient or the fallback address. A failed call or a claimable release stays pending,
- * because the tokens are still held or still owed.
+ * until the delivery paid the recipient. A failed call or a failed release stays pending,
+ * because the tokens are still held by the mediator.
  *
  * @param input The balances and the pending amounts of one token.
  */

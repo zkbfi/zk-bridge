@@ -18,16 +18,16 @@ import type { ChainReceipt, ViewCall } from "../../src/rpc/chain-reader.js";
  * - `returned`: the copy sent back from chain 369 and delivered on chain 1.
  * - `plain`: an arbitrary message sent and delivered.
  * - `failed`: an arbitrary message whose call reverted (`failed_call`).
- * - `fallback`: a token delivery that paid the fallback address (`fallback_used`).
- * - `claimable`: a token delivery that waits for `claim` (`claimable`).
- * - `claimed`: a token delivery recorded for `claim` and then claimed (`delivered`).
+ * - `paid`: a token delivery that paid the recipient (`delivered`).
+ * - `stuck`: a token delivery that the recipient could not take. The mediator emitted `ReleaseFailed` and the release is final (`release_failed`).
+ * - `callbackFailed`: a token delivery that paid the recipient, whose `onTokenBridged` callback failed (`delivered`).
  * - `covered`: a token send that a stored head covers and that is not delivered (`covered`).
  * - `young`: a token send that is younger than the finality window (`sent`).
  * - `waiting`: an arbitrary send older than the finality window with no cover (`waiting_for_finality`).
  * - `backward`: the copy sent back from chain 369, younger than the finality window and not delivered (`sent`).
  *
  * The audit adds up: the escrow of the native token is 1650, the supply of the copy is 1150, and the transfers that are
- * not paid yet hold 560: forward `covered` 250, `claimable` 200 and `young` 50, and backward 60. The escrow is 1710.
+ * not paid yet hold 560: forward `covered` 250, `stuck` 200 and `young` 50, and backward 60. The escrow is 1710.
  *
  * `plain` and `waiting` are sent in the same block, to test the order of equal send times.
  */
@@ -57,7 +57,7 @@ export type Scenario = {
   /** The latest block of each chain. */
   readonly head: Readonly<Record<number, bigint>>;
   readonly ids: Readonly<Record<MessageName, Hex>>;
-  readonly accounts: Readonly<Record<"sender" | "recipient" | "recipientBack" | "fallback" | "executor" | "claimer", Address>>;
+  readonly accounts: Readonly<Record<"sender" | "recipient" | "recipientBack" | "executor" | "callbackRecipient", Address>>;
   readonly tokens: { readonly native: Address; readonly copy: Address };
   /** The timestamp of a block. */
   timestampOf(chainId: number, blockNumber: bigint): bigint;
@@ -68,7 +68,7 @@ export type Scenario = {
 };
 
 /** The names of the messages. */
-export type MessageName = "delivered" | "returned" | "plain" | "failed" | "fallback" | "claimable" | "claimed" | "covered" | "young" | "waiting" | "backward";
+export type MessageName = "delivered" | "returned" | "plain" | "failed" | "paid" | "stuck" | "callbackFailed" | "covered" | "young" | "waiting" | "backward";
 
 const BASE_TIME = 1_700_000_000n;
 const SECONDS_PER_BLOCK = 12n;
@@ -99,9 +99,8 @@ export const buildScenario = (
     sender: byte("11", 20),
     recipient: byte("22", 20),
     recipientBack: byte("23", 20),
-    fallback: byte("24", 20),
     executor: byte("33", 20),
-    claimer: byte("44", 20),
+    callbackRecipient: byte("44", 20),
   } as const;
   const native = byte("aa", 20);
   const copy = byte("bb", 20);
@@ -116,9 +115,9 @@ export const buildScenario = (
     delivered: nextId(first),
     plain: nextId(first),
     failed: nextId(first),
-    fallback: nextId(first),
-    claimable: nextId(first),
-    claimed: nextId(first),
+    paid: nextId(first),
+    stuck: nextId(first),
+    callbackFailed: nextId(first),
     covered: nextId(first),
     young: nextId(first),
     waiting: nextId(first),
@@ -150,7 +149,7 @@ export const buildScenario = (
     from: typeof first,
     to: typeof first,
     messageId: Hex,
-    call: { functionName: "handleBridgedTokens" | "handleNativeTokens" | "handleBridgedTokensWithFallback"; token: Address; recipient: Address; value: bigint; fallbackRecipient?: Address },
+    call: { functionName: "handleBridgedTokens" | "handleNativeTokens"; token: Address; recipient: Address; value: bigint },
   ) =>
     send(
       from,
@@ -160,7 +159,7 @@ export const buildScenario = (
       encodeFunctionData({
         abi: tokenMediatorAbi,
         functionName: call.functionName,
-        args: call.functionName === "handleBridgedTokensWithFallback" ? [call.token, call.recipient, call.value, call.fallbackRecipient as Address] : [call.token, call.recipient, call.value],
+        args: [call.token, call.recipient, call.value],
       } as never),
     );
   const delivered = (messageId: Hex, status: boolean, executor: Address) => ({ sender: accounts.sender, executor, messageId, status });
@@ -191,16 +190,16 @@ export const buildScenario = (
     add("bridge", "UserRequestForAffirmation", send(first, second, ids.failed, accounts.executor, "0xdead"));
   });
   transaction(first.chainId, 165, (add) => {
-    add("bridge", "UserRequestForAffirmation", tokenSend(first, second, ids.fallback, { functionName: "handleBridgedTokensWithFallback", token: native, recipient: accounts.recipient, value: 300n, fallbackRecipient: accounts.fallback }));
-    add("mediator", "TokensBridgingInitiated", { token: native, sender: accounts.sender, value: 300n, messageId: ids.fallback });
+    add("bridge", "UserRequestForAffirmation", tokenSend(first, second, ids.paid, { functionName: "handleBridgedTokens", token: native, recipient: accounts.recipient, value: 300n }));
+    add("mediator", "TokensBridgingInitiated", { token: native, sender: accounts.sender, value: 300n, messageId: ids.paid });
   });
   transaction(first.chainId, 170, (add) => {
-    add("bridge", "UserRequestForAffirmation", tokenSend(first, second, ids.claimable, { functionName: "handleBridgedTokens", token: native, recipient: accounts.recipient, value: 200n }));
-    add("mediator", "TokensBridgingInitiated", { token: native, sender: accounts.sender, value: 200n, messageId: ids.claimable });
+    add("bridge", "UserRequestForAffirmation", tokenSend(first, second, ids.stuck, { functionName: "handleBridgedTokens", token: native, recipient: accounts.recipient, value: 200n }));
+    add("mediator", "TokensBridgingInitiated", { token: native, sender: accounts.sender, value: 200n, messageId: ids.stuck });
   });
   transaction(first.chainId, 175, (add) => {
-    add("bridge", "UserRequestForAffirmation", tokenSend(first, second, ids.claimed, { functionName: "handleBridgedTokens", token: native, recipient: accounts.claimer, value: 100n }));
-    add("mediator", "TokensBridgingInitiated", { token: native, sender: accounts.sender, value: 100n, messageId: ids.claimed });
+    add("bridge", "UserRequestForAffirmation", tokenSend(first, second, ids.callbackFailed, { functionName: "handleBridgedTokens", token: native, recipient: accounts.callbackRecipient, value: 100n }));
+    add("mediator", "TokensBridgingInitiated", { token: native, sender: accounts.sender, value: 100n, messageId: ids.callbackFailed });
   });
   transaction(first.chainId, 295, (add) => {
     add("bridge", "UserRequestForAffirmation", tokenSend(first, second, ids.young, { functionName: "handleBridgedTokens", token: native, recipient: accounts.recipient, value: 50n }));
@@ -231,21 +230,17 @@ export const buildScenario = (
     add("bridge", "AffirmationCompleted", delivered(ids.plain, true, accounts.executor));
   });
   transaction(second.chainId, 230, (add) => {
-    add("mediator", "FallbackUsed", { token: copy, recipient: accounts.recipient, fallbackRecipient: accounts.fallback, messageId: ids.fallback });
-    add("mediator", "TokensBridged", { token: copy, recipient: accounts.fallback, value: 300n, messageId: ids.fallback });
-    add("bridge", "AffirmationCompleted", delivered(ids.fallback, true, second.contracts.mediator));
+    add("mediator", "TokensBridged", { token: copy, recipient: accounts.recipient, value: 300n, messageId: ids.paid });
+    add("bridge", "AffirmationCompleted", delivered(ids.paid, true, second.contracts.mediator));
   });
   transaction(second.chainId, 240, (add) => {
-    add("mediator", "ClaimableRecorded", { token: copy, account: accounts.recipient, value: 200n, messageId: ids.claimable });
-    add("bridge", "AffirmationCompleted", delivered(ids.claimable, true, second.contracts.mediator));
+    add("mediator", "ReleaseFailed", { token: copy, recipient: accounts.recipient, value: 200n, messageId: ids.stuck });
+    add("bridge", "AffirmationCompleted", delivered(ids.stuck, true, second.contracts.mediator));
   });
   transaction(second.chainId, 250, (add) => {
-    add("mediator", "ClaimableRecorded", { token: copy, account: accounts.claimer, value: 100n, messageId: ids.claimed });
-    add("mediator", "CallbackFailed", { token: copy, recipient: accounts.claimer, messageId: ids.claimed });
-    add("bridge", "AffirmationCompleted", delivered(ids.claimed, true, second.contracts.mediator));
-  });
-  transaction(second.chainId, 260, (add) => {
-    add("mediator", "Claimed", { token: copy, account: accounts.claimer, value: 100n });
+    add("mediator", "TokensBridged", { token: copy, recipient: accounts.callbackRecipient, value: 100n, messageId: ids.callbackFailed });
+    add("mediator", "CallbackFailed", { token: copy, recipient: accounts.callbackRecipient, messageId: ids.callbackFailed });
+    add("bridge", "AffirmationCompleted", delivered(ids.callbackFailed, true, second.contracts.mediator));
   });
   transaction(second.chainId, 290, (add) => {
     add("bridge", "UserRequestForAffirmation", tokenSend(second, first, ids.backward, { functionName: "handleNativeTokens", token: native, recipient: accounts.recipientBack, value: 60n }));

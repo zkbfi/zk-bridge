@@ -23,7 +23,6 @@ const conditionsOf = (filters: FeedFilters) => {
           eq(messages.executor, address),
           eq(transfers.sender, address),
           eq(transfers.recipient, address),
-          eq(transfers.fallbackRecipient, address),
           eq(transfers.paidTo, address),
         ),
     from === null ? undefined : gte(messages.sentTimestamp, from),
