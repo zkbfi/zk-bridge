@@ -259,3 +259,38 @@ contract SlotProbeToken is ERC20 {
         super._update(from, to, value);
     }
 }
+
+/// @notice A token that calls a chosen target once, right after it pays a chosen account, as a token with a receive hook
+/// does (ERC-777 `tokensReceived`). The call runs after the tokens moved. It records the result and does not bubble up a
+/// failure.
+contract MedReentryToken is ERC20 {
+    address public hookedAccount;
+    address public target;
+    bytes public data;
+
+    uint256 public hooksRun;
+    bool public hookOk;
+    bytes public hookReturned;
+
+    constructor() ERC20("Reentry", "RNT") {}
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+
+    /// @notice Arms the hook for the next payment to `hookedAccount`.
+    function arm(address hookedAccount_, address target_, bytes calldata data_) external {
+        hookedAccount = hookedAccount_;
+        target = target_;
+        data = data_;
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        super._update(from, to, value);
+        address callee = target;
+        if (callee == address(0) || to != hookedAccount) return;
+        target = address(0);
+        (hookOk, hookReturned) = callee.call(data);
+        hooksRun++;
+    }
+}

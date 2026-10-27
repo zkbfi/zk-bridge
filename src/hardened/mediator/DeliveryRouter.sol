@@ -37,9 +37,11 @@ import {IWETH} from "./IWETH.sol";
 /// - The gas based tip is measured as in `gibsfinance/omnibridge`: the callback reads `startingGas - gasleft()`, where
 ///   `startingGas` is stored at the entry of `executeMessage`, adds the fixed overhead that covers the rest of the
 ///   run, caps the tip at the smaller of `limit` and the value, and pays one transfer to the reward address and one to
-///   the recipient. The residual is that a caller can choose a costlier proof route or supply more gas, which raises
-///   the measured figure. The sender's `limit` bounds the tip and the tip goes to the fixed reward address, so a
-///   stranger gains nothing.
+///   the recipient. The measure is the gas that the transaction of the deliverer makes available, not the gas that the
+///   message needs. The deliverer chooses the gas limit of that transaction. The bridge forwards only the message gas
+///   limit, so the gas that the deliverer holds back above it counts as well. A deliverer can also choose a costlier
+///   proof route. So a sender must expect the tip to reach `limit`: `limit` is the price ceiling, and it is the only
+///   bound on a gas based tip. The tip goes to the fixed reward address, so a stranger gains nothing from it.
 /// - `EXCLUDE_PRIORITY` prices gas at `block.basefee`. On a chain that reports a base fee of 0 (BSC) the gas based tip
 ///   is then zero. The interfaces refuse `EXCLUDE_PRIORITY` for a chain that is configured as having no base fee.
 /// - The slot uses regular storage (the compiler target has no transient storage), so it is set and cleared with the
@@ -61,6 +63,10 @@ import {IWETH} from "./IWETH.sol";
 ///   would refuse. No tip can be computed, so the router hands off the whole value.
 /// - The data is a 20 byte legacy receiver, and the token is not the wrapped native token. The router pays the token to
 ///   that receiver, with no fee, and hands off the value when the token refuses the receiver.
+/// A recipient payout hook can make the bridge deliver another message while a delivery runs, so the mediator calls
+/// `onTokenBridged` again. The router detects that with the state of its reentrancy guard and does not revert. It hands
+/// the whole value of that nested callback off with the reason `Reentered`, after the tip when the terms decode and a
+/// router delivery runs, as the token and with no unwrap. `claim` keeps the guard and refuses a reentrant call.
 /// The router never burns. When the push to `failedDeliveryAddress` fails too (a token that blocks it), the router keeps
 /// a record in `claimable` for that address, and anyone may call `claim` to pay it. `totalClaimable(token)` is the sum
 /// of the records of a token, and the router never pays a delivery from that part of its balance. So the balance of the
@@ -75,7 +81,8 @@ contract DeliveryRouter is ReentrancyGuard {
     /// token to the native coin. Bit 2 (`EXCLUDE_PRIORITY`): price gas at the base fee only, with no priority fee. Bit 3
     /// (`MULTIPLIER_OF_TOTAL`): the tip is `value * multiplier / 1e18`. With bit 0 and bit 3 clear, the tip is the gas
     /// based fee. Bit 0 wins over bit 3.
-    /// @param limit The fixed tip, or the cap on the gas based tip.
+    /// @param limit The fixed tip, or the price ceiling of the gas based tip. A gas based tip is computed from the gas
+    /// that the transaction of the deliverer makes available, which the deliverer chooses, so expect it to reach `limit`.
     /// @param multiplier Scaled by 1e18: the share of the value, or the factor on the gas cost.
     struct FeeDirector {
         address recipient;
@@ -138,7 +145,8 @@ contract DeliveryRouter is ReentrancyGuard {
     /// @dev Why the router handed off an amount.
     enum Reason {
         PayoutRefused,
-        InvalidTerms
+        InvalidTerms,
+        Reentered
     }
 
     /// @notice Emitted on every hand-off to `failedDeliveryAddress`. `recipient` is the account that the terms named,
@@ -198,30 +206,15 @@ contract DeliveryRouter is ReentrancyGuard {
     /// @param token The token that the mediator released to the router.
     /// @param value The amount that the mediator reports.
     /// @param data An encoded `FeeDirector`, or the 20 byte address of a native coin receiver.
-    function onTokenBridged(address token, uint256 value, bytes memory data) external nonReentrant {
+    /// @dev A call that arrives while another callback runs (a recipient payout hook made the bridge deliver another
+    /// message) does not revert: the router hands the value off with the reason `Reentered`.
+    function onTokenBridged(address token, uint256 value, bytes memory data) external {
         if (msg.sender != address(bridge)) revert NotMediator(msg.sender);
-        value = _freeBalance(token, value);
-
-        if (data.length == 20) {
-            _payLegacy(token, address(bytes20(data)), value);
+        if (_reentrancyGuardEntered()) {
+            _handOffReentered(token, _freeBalance(token, value), data);
             return;
         }
-        if (data.length < DIRECTOR_LENGTH || _hasDirtyRecipientWord(data)) {
-            _handOff(token, address(0), value, Reason.InvalidTerms);
-            return;
-        }
-        FeeDirector memory director = abi.decode(data, (FeeDirector));
-        Payout payout = director.settings & UNWRAP != 0 && token == address(wNative) ? Payout.Native : Payout.Token;
-        if (payout == Payout.Native) wNative.withdraw(value);
-
-        uint256 startingGas = _startingGas();
-        uint256 toRecipient = startingGas > NOT_RUNNING ? _takeFee(token, payout, value, director, startingGas) : value;
-        if (toRecipient == 0) return;
-        if (payout == Payout.Native) {
-            _payNative(director.recipient, toRecipient);
-            return;
-        }
-        _payToken(token, director.recipient, toRecipient);
+        _deliver(token, _freeBalance(token, value), data);
     }
 
     /// @notice Pays the record of `failedDeliveryAddress` in a token. Anyone may call it, and it pays that address only.
@@ -267,6 +260,48 @@ contract DeliveryRouter is ReentrancyGuard {
         if (msg.sender != address(wNative)) revert NotWrappedTokenSender(msg.sender);
     }
 
+    /// @dev The delivery of one callback. The guard is held while it runs, so a payout hook that makes the mediator call
+    /// back takes the hand-off path of `onTokenBridged`.
+    function _deliver(address token, uint256 value, bytes memory data) private nonReentrant {
+        if (data.length == 20) {
+            _payLegacy(token, address(bytes20(data)), value);
+            return;
+        }
+        if (!_hasKnownShape(data)) {
+            _handOff(token, address(0), value, Reason.InvalidTerms);
+            return;
+        }
+        FeeDirector memory director = abi.decode(data, (FeeDirector));
+        Payout payout = director.settings & UNWRAP != 0 && token == address(wNative) ? Payout.Native : Payout.Token;
+        if (payout == Payout.Native) wNative.withdraw(value);
+
+        uint256 startingGas = _startingGas();
+        uint256 toRecipient = startingGas > NOT_RUNNING ? _takeFee(token, payout, value, director, startingGas) : value;
+        if (toRecipient == 0) return;
+        if (payout == Payout.Native) {
+            _payNative(director.recipient, toRecipient);
+            return;
+        }
+        _payToken(token, director.recipient, toRecipient);
+    }
+
+    /// @dev The hand-off of a callback that arrives while another callback runs. The router pays nobody then: it takes
+    /// the tip when the terms decode and a router delivery runs, and hands the rest off, as the token and with no unwrap.
+    function _handOffReentered(address token, uint256 value, bytes memory data) private {
+        if (data.length == 20) {
+            _handOff(token, address(bytes20(data)), value, Reason.Reentered);
+            return;
+        }
+        if (!_hasKnownShape(data)) {
+            _handOff(token, address(0), value, Reason.Reentered);
+            return;
+        }
+        FeeDirector memory director = abi.decode(data, (FeeDirector));
+        uint256 startingGas = _startingGas();
+        uint256 rest = startingGas > NOT_RUNNING ? _takeFee(token, Payout.Token, value, director, startingGas) : value;
+        _handOff(token, director.recipient, rest, Reason.Reentered);
+    }
+
     /// @dev Takes the tip in the callback and pays it to the reward address. A tip that the reward address refuses
     /// stays with the recipient.
     /// @return toRecipient What the recipient receives.
@@ -296,6 +331,12 @@ contract DeliveryRouter is ReentrancyGuard {
         assembly {
             sstore(slot, value)
         }
+    }
+
+    /// @dev True when `abi.decode` reads the data as a `FeeDirector` without a revert: four words, and a recipient word
+    /// with no bits above 160.
+    function _hasKnownShape(bytes memory data) private pure returns (bool) {
+        return data.length >= DIRECTOR_LENGTH && !_hasDirtyRecipientWord(data);
     }
 
     /// @dev True when the first word of the data has bits above 160. `abi.decode` reverts on such a word, and the callback
