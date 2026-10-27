@@ -11,7 +11,7 @@ import {
   suggestPercentage,
   weiToTokenUnitsCeiling,
 } from "../src/delivery-fee.js";
-import { feeModeOf, MULTIPLIER_OF_TOTAL, FIXED_FEE, UNWRAP, EXCLUDE_PRIORITY, expectedFee } from "../src/delivery-terms.js";
+import { feeModeOf, MULTIPLIER_OF_TOTAL, FIXED_FEE, UNWRAP, EXCLUDE_PRIORITY, expectedFee, NATIVE_GAS_OVERHEAD } from "../src/delivery-terms.js";
 
 const recipient = "0x00000000000000000000000000000000000000aa" as const;
 const wei = 10n ** 18n;
@@ -124,9 +124,9 @@ describe("suggestGasMultiplier", () => {
     expect(atCeiling.fee).toBe(director.limit);
   });
 
-  it("uses the smaller overhead and the unwrap flag for a native payout", () => {
+  it("uses the native overhead and the unwrap flag for a native payout", () => {
     const director = suggestGasMultiplier({ ...input, payout: "native" });
-    expect(director.limit).toBe(((400_000n + 50_000n) * 12n * 20n) / 10n);
+    expect(director.limit).toBe(((400_000n + NATIVE_GAS_OVERHEAD) * 12n * 20n) / 10n);
     expect(director.settings).toBe(UNWRAP);
   });
 

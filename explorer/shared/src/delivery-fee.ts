@@ -256,7 +256,7 @@ export interface SuggestGasMultiplierInput {
   readonly priorityFeeCeilingWei?: bigint;
   /** Default: `transaction`. `base-fee-only` sets the base fee flag. */
   readonly gasPrice?: GasPriceBasis;
-  /** Default: `token`. `native` sets the unwrap flag and uses the smaller overhead. */
+  /** Default: `token`. `native` sets the unwrap flag and uses the native overhead. */
   readonly payout?: PayoutKind;
 }
 

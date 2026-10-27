@@ -299,7 +299,7 @@ describe("the fee modes", () => {
     const input = { value: 10n ** 30n, gasUsed: 0n, baseFeeWei: 7n, priorityFeeWei: 3n };
     expect(expectedFee({ ...base, settings: 0n }, input).fee).toBe(100_000n * 10n);
     expect(expectedFee({ ...base, settings: EXCLUDE_PRIORITY }, input).fee).toBe(100_000n * 7n);
-    expect(expectedFee({ ...base, settings: 0n }, { ...input, payout: "native" }).fee).toBe(50_000n * 10n);
+    expect(expectedFee({ ...base, settings: 0n }, { ...input, payout: "native" }).fee).toBe(NATIVE_GAS_OVERHEAD * 10n);
   });
 
   it("reports the maximum: the limit for gas, the amount for the others", () => {
