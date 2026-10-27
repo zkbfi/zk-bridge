@@ -22,8 +22,8 @@
     "wrappedNative": "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9",
     "deployDeliveryRouter": "true",
     "deliveryRouter": {
-      "rewardAddress": "0x24E6cc8b82D086762Ef58fa1FF3f4d0702892718",
-      "failedDeliveryAddress": "0x24E6cc8b82D086762Ef58fa1FF3f4d0702892718"
+      "rewardAddress": "0x20700C2C0d969bfd69007e2fB2c3DbDcCFC2Bf0f",
+      "failedDeliveryAddress": "0x41A3bf06d129270AB01053E147227c058B3DAfa1"
     },
     "lightClient": {
       "programVKey": "0x002a566f7e3d1e6996f7ffa35668291bfc7bce325ed34fe55ef41a2be3fd15cf",
@@ -74,8 +74,8 @@
     "wrappedNative": "0x70499adEBB11Efd915E3b69E700c331778628707",
     "deployDeliveryRouter": "true",
     "deliveryRouter": {
-      "rewardAddress": "0x24E6cc8b82D086762Ef58fa1FF3f4d0702892718",
-      "failedDeliveryAddress": "0x24E6cc8b82D086762Ef58fa1FF3f4d0702892718"
+      "rewardAddress": "0x20700C2C0d969bfd69007e2fB2c3DbDcCFC2Bf0f",
+      "failedDeliveryAddress": "0x41A3bf06d129270AB01053E147227c058B3DAfa1"
     },
     "lightClient": {
       "programVKey": "0x002a566f7e3d1e6996f7ffa35668291bfc7bce325ed34fe55ef41a2be3fd15cf",
