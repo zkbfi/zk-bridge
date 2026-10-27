@@ -54,7 +54,7 @@ import {IWETH} from "./IWETH.sol";
 /// reverts there. Instead it hands off what it cannot deliver to the immutable `failedDeliveryAddress`, and emits
 /// `DeliveryFailed`. The tip still goes to the reward address first, whenever the delivery path takes a tip.
 /// - The token refuses the payout to a valid recipient (a blocklist, a revert), the coin and the wrapped token are both
-///   refused, or the refund of a gas based fee fails: the router hands off the amount that it could not deliver.
+///   refused: the router hands off the amount that it could not deliver.
 /// - The terms decode but name the zero address or the router itself as the recipient. The router takes the tip by the
 ///   terms, as for any delivery, and hands off the rest.
 /// - The data has no known shape: shorter than a director, or a recipient word with bits above 160, which `abi.decode`

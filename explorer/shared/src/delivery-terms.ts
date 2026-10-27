@@ -45,8 +45,6 @@ export const KNOWN_SETTING_BITS = FIXED_FEE | UNWRAP | EXCLUDE_PRIORITY | MULTIP
 
 /** The largest value of a `uint256`. */
 export const UINT256_MAXIMUM = 2n ** 256n - 1n;
-/** The router keeps the multiplier of a waiting gas based fee in 96 bits and clamps a larger one. */
-export const UINT96_MAXIMUM = 2n ** 96n - 1n;
 
 /** The bytes of the legacy form: one address. */
 export const LEGACY_RECEIVER_BYTES = 20;
@@ -151,6 +149,9 @@ export interface ProtectedAddress {
   readonly address: Address;
 }
 
+/** Whether a chain reports a base fee in `block.basefee`. */
+export type BaseFeeSupport = "reported" | "none";
+
 /** What the guard needs to know about the router and its deployment. */
 export interface FeeTermsContext {
   /** The router that receives the relay. */
@@ -161,6 +162,11 @@ export interface FeeTermsContext {
   readonly destinationToken: Address | null;
   /** The wrapped native token of the destination chain. Null when the deployment names none. */
   readonly destinationWrappedNative: Address | null;
+  /**
+   * Whether the destination chain reports a base fee. `none` for a chain whose `block.basefee` is 0 (BSC): there
+   * `EXCLUDE_PRIORITY` gives a gas tip of zero. Default: `reported`.
+   */
+  readonly destinationBaseFee?: BaseFeeSupport;
 }
 
 /** The data of a relay to a router, with the facts that the legacy form and the unwrap flag depend on. */
@@ -258,6 +264,9 @@ const assertLegacyToken = (input: FeeTermsInput): void => {
 const assertSettings = (settings: bigint, input: FeeTermsInput): void => {
   if ((settings & ~KNOWN_SETTING_BITS) !== 0n) {
     throw new FeeTermsError("The settings of the fee terms set bits that the router does not read. Clear them.");
+  }
+  if ((settings & EXCLUDE_PRIORITY) !== 0n && input.destinationBaseFee === "none") {
+    throw new FeeTermsError("The fee terms price gas at the base fee only, but this chain reports no base fee. The gas tip would be zero. Clear that flag.");
   }
   if ((settings & UNWRAP) !== 0n && !isWrappedNativeToken(input)) {
     throw new FeeTermsError("The fee terms ask to unwrap, but unwrapping works only for the wrapped native token. The router would pay the plain token. Clear the unwrap flag.");
@@ -388,8 +397,7 @@ const rawFee = (director: FeeDirector, input: ExpectedFeeInput): bigint => {
  * The tip that the router takes, as `DeliveryRouter.feeInfo` computes it. Fixed: `limit`. Share: `value * multiplier / 1e18`.
  * Gas based: `(gasUsed + overhead) * multiplier * gasPrice / 1e18`, capped by `limit`. The tip never passes the value.
  *
- * `feeInfo` reads the multiplier in full. When it settles a gas based fee, the router clamps the multiplier to 96 bits.
- * `suggestGasMultiplier` refuses a larger multiplier, so the two agree for every director that this package builds.
+ * The router measures the gas in the callback, as `gibsfinance/omnibridge` does, so `gasUsed` is the gas that it reads there.
  *
  * @param director The fee terms.
  * @param input The value, the gas and the prices.

@@ -325,6 +325,13 @@ describe("the unwrap flag and the settings bits", () => {
     expect(() => encodeFeeDirector(director(person, UNWRAP), wrappedContext)).not.toThrow();
   });
 
+  it("refuses the base fee only flag for a chain that reports no base fee", () => {
+    refuses(directorData(person, EXCLUDE_PRIORITY), /reports no base fee/, { destinationBaseFee: "none" });
+    expect(() => assertValidFeeTerms(input(directorData(person, EXCLUDE_PRIORITY), { destinationBaseFee: "reported" }))).not.toThrow();
+    expect(() => assertValidFeeTerms(input(directorData(person, EXCLUDE_PRIORITY)))).not.toThrow();
+    expect(() => assertValidFeeTerms(input(directorData(person, FIXED_FEE), { destinationBaseFee: "none" }))).not.toThrow();
+  });
+
   it("refuses bits that the router does not read, and accepts every combination of the four that it reads", () => {
     refuses(directorData(person, 16n), /bits that the router does not read/);
     for (let settings = 0n; settings < 16n; settings += 1n) {

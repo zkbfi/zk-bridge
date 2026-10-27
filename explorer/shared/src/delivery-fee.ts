@@ -3,7 +3,6 @@ import {
   ceilingDivide,
   gasOverheadOf,
   settingsOf,
-  UINT96_MAXIMUM,
   type FeeDirector,
   type GasPriceBasis,
   type PayoutKind,
@@ -269,14 +268,12 @@ export interface SuggestGasMultiplierInput {
  *
  * @param senderPrice The sender's price of one wei, in base units of the token.
  * @param margin The factor on the gas cost, scaled by 1e18.
- * @throws When the price or the margin is not above zero, or the result does not fit in 96 bits (the router clamps it).
+ * @throws When the price or the margin is not above zero.
  */
 export const gasMultiplierOf = (senderPrice: SenderPrice, margin: bigint): bigint => {
   if (senderPrice.numerator <= 0n || senderPrice.denominator <= 0n) throw new RangeError("the price of the native coin must be above zero");
   if (margin <= 0n) throw new RangeError("the margin must be above zero");
-  const multiplier = divideRoundingUp(senderPrice.numerator * margin, senderPrice.denominator);
-  if (multiplier > UINT96_MAXIMUM) throw new RangeError("the multiplier must fit in 96 bits");
-  return multiplier;
+  return divideRoundingUp(senderPrice.numerator * margin, senderPrice.denominator);
 };
 
 /**
@@ -286,7 +283,7 @@ export const gasMultiplierOf = (senderPrice: SenderPrice, margin: bigint): bigin
  * more than the limit.
  *
  * @param input The sender's price, the margin, the ceiling and the gas.
- * @throws When the price or the margin is not above zero, the multiplier does not fit in 96 bits, or an input is out of range.
+ * @throws When the price or the margin is not above zero, or an input is out of range.
  */
 export const suggestGasMultiplier = (input: SuggestGasMultiplierInput): FeeDirector => {
   const payout = input.payout ?? "token";

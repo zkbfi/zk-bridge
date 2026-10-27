@@ -137,12 +137,13 @@ describe("suggestGasMultiplier", () => {
     expect(baseOnly.settings).toBe(EXCLUDE_PRIORITY);
   });
 
-  it("gives a limit of zero at a ceiling of zero, and refuses a zero price, a zero margin or an oversized multiplier", () => {
+  it("gives a limit of zero at a ceiling of zero, and refuses a zero price, or a zero margin", () => {
     expect(suggestGasMultiplier({ ...input, baseFeeCeilingWei: 0n }).limit).toBe(0n);
     expect(() => suggestGasMultiplier({ ...input, senderPrice: { numerator: 0n, denominator: 1n } })).toThrow(RangeError);
     expect(() => suggestGasMultiplier({ ...input, senderPrice: { numerator: 1n, denominator: 0n } })).toThrow(RangeError);
     expect(() => suggestGasMultiplier({ ...input, margin: 0n })).toThrow(RangeError);
-    expect(() => suggestGasMultiplier({ ...input, senderPrice: { numerator: 2n ** 96n, denominator: 1n }, margin: wei })).toThrow(RangeError);
+    // The router reads the multiplier in full, so a large one is not refused.
+    expect(suggestGasMultiplier({ ...input, senderPrice: { numerator: 2n ** 96n, denominator: 1n }, margin: wei }).multiplier).toBe(2n ** 96n * wei);
   });
 
   it("works for a token that is not the native coin: the price turns wei into token units", () => {
