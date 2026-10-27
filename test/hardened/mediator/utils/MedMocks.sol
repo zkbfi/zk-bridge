@@ -6,6 +6,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {IFlowLimiter} from "../../../../src/hardened/IFlowLimiter.sol";
 import {TokenMediator} from "../../../../src/hardened/mediator/TokenMediator.sol";
+import {DenyListToken} from "./MediatorSupport.sol";
 
 /// @notice A token that moves more than it was asked to move: `transferFrom` credits the receiver one unit extra.
 /// The mediator must refuse it, because the record would count tokens that nobody sent.
@@ -292,5 +293,30 @@ contract MedReentryToken is ERC20 {
         target = address(0);
         (hookOk, hookReturned) = callee.call(data);
         hooksRun++;
+    }
+}
+
+/// @notice A deny list token with a receive hook: right after it pays a chosen account, it calls a chosen target once, as
+/// a token with a receive hook does. The call runs after the tokens moved. It records nothing about a failure.
+contract MedHookedDenyListToken is DenyListToken {
+    address public hookedAccount;
+    address public target;
+    bytes public data;
+    uint256 public hooksRun;
+
+    /// @notice Arms the hook for the next payment to `hookedAccount_`. A zero target disarms it.
+    function arm(address hookedAccount_, address target_, bytes calldata data_) external {
+        hookedAccount = hookedAccount_;
+        target = target_;
+        data = data_;
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        super._update(from, to, value);
+        address callee = target;
+        if (callee == address(0) || to != hookedAccount) return;
+        target = address(0);
+        hooksRun++;
+        callee.call(data);
     }
 }

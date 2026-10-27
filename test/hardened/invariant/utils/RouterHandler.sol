@@ -116,6 +116,10 @@ contract RouterHandler is RouterWorld {
     uint256 public routerClaimsPaid;
     uint256 public routerClaimsRefused;
     uint256 public legacyTokenPayouts;
+    /// @notice The hand-offs of a reentrant callback that the logs showed.
+    uint256 public reenteredHandOffs;
+    /// @notice The reentering deliveries in which the payout hook of the recipient executed a second message.
+    uint256 public reentriesRun;
     /// @notice The deliveries whose transfers to the payee the handler counted: a token payout by a delivery router.
     uint256 public payeeTransferChecks;
     /// @notice The single deliveries whose payee received exactly one transfer and whose reward address received one
@@ -298,6 +302,28 @@ contract RouterHandler is RouterWorld {
         denyToken.setDenied(account, !denyToken.denied(account));
     }
 
+    /// @notice A recipient whose payout hook makes the bridge deliver a second message to the same router while the
+    /// first delivery runs. The handler sends its own two messages of the deny list token from chain B to a router on
+    /// chain A: the first names the reentering recipient, the second names an actor, in the terms, as a legacy receiver,
+    /// or as data of no known shape. It arms the token, delivers the first message directly or through the router, and
+    /// checks that the second message executed inside the first, that the router handed it off as `Reentered`, that its
+    /// named receiver gained nothing, and that the value split exactly.
+    function deliverReentrant(uint8 routerSeed, uint96 amountSeed, uint8 shapeSeed, uint8 pathSeed, uint8 priceSeed)
+        external
+    {
+        address sender = actors[routerSeed % actors.length];
+        if (denyToken.denied(sender)) return;
+        DeliveryRouter router = deliveryRouterAt(0, (routerSeed >> 2) % ROUTERS_PER_CHAIN);
+        uint256 outerAmount = bound(amountSeed, 1e6, MAXIMUM_AMOUNT);
+        uint256 nestedAmount = bound(uint256(amountSeed) >> 20, 1e6, MAXIMUM_AMOUNT);
+        if (!_stockCopies(sender, outerAmount + nestedAmount)) return;
+
+        address nestedReceiver = actors[(shapeSeed >> 4) % actors.length];
+        uint256 outerId = _sendBack(sender, router, _reentryTerms(reenterer, shapeSeed, outerAmount), outerAmount);
+        uint256 nestedId = _sendBack(sender, router, _nestedData(nestedReceiver, shapeSeed, nestedAmount), nestedAmount);
+        _runReentrant(Reentry(router, outerId, nestedId, nestedReceiver, shapeSeed, pathSeed, priceSeed));
+    }
+
     /// @notice Lets the receiver that refuses callbacks refuse or accept for a while.
     function toggleRefusal() external {
         refusingReceiver.setRefuse(!refusingReceiver.refuse());
@@ -326,6 +352,136 @@ contract RouterHandler is RouterWorld {
             }
         }
         return DeliveryRouter(payable(address(0)));
+    }
+
+    // ------------------------------------------------------------------------------------------- reentry, internal
+
+    /// @dev Gives the sender bridged copies of the deny list token on chain B: it relays `amount` from chain A and the
+    /// message is delivered directly. Returns false when the send reverted.
+    function _stockCopies(address sender, uint256 amount) private returns (bool) {
+        _mintPlain(address(denyToken), sender, amount);
+        vm.prank(sender);
+        denyToken.approve(address(mediatorA), amount);
+        vm.prank(sender);
+        try mediatorA.relayTokens(address(denyToken), sender, amount) {}
+        catch {
+            return _refused("a relay that stocks the copies reverted");
+        }
+        _deliverDirect(_recordSend(0));
+        return true;
+    }
+
+    /// @dev Sends copies from chain B to `router` on chain A with `data`, and records the message.
+    function _sendBack(address sender, DeliveryRouter router, bytes memory data, uint256 amount)
+        private
+        returns (uint256)
+    {
+        address copy = copies[4];
+        vm.prank(sender);
+        IERC20Transfer(copy).approve(address(mediatorB), amount);
+        vm.prank(sender);
+        try mediatorB.relayTokensWithFallback(copy, address(router), amount, data, sender) {}
+        catch {
+            _violate("a relay of the reentry test reverted");
+        }
+        return _recordSend(1);
+    }
+
+    /// @dev Terms for the first message: a fixed fee, a share, a gas based fee at the transaction price or at the base fee,
+    /// each with a tip of at most a tenth of the value, so a payout to the recipient always follows.
+    function _reentryTerms(address receiver, uint8 shapeSeed, uint256 amount) private pure returns (bytes memory) {
+        uint256 shape = shapeSeed % 4;
+        uint256 settings = shape == 0 ? 1 : shape == 1 ? 8 : shape == 2 ? 0 : 4;
+        uint256 multiplier = shape == 1 ? 0.1 ether : 1 ether;
+        return abi.encode(DeliveryRouter.FeeDirector(receiver, settings, amount / 10, multiplier));
+    }
+
+    /// @dev The data of the second message: terms (shape 0 and 1 of `shapeSeed >> 2`), the legacy receiver, or no known shape.
+    function _nestedData(address receiver, uint8 shapeSeed, uint256 amount) private pure returns (bytes memory) {
+        uint256 form = (shapeSeed >> 2) % 3;
+        if (form == 1) return abi.encodePacked(receiver);
+        if (form == 2) return new bytes(7);
+        return _reentryTerms(receiver, shapeSeed >> 1, amount / 2);
+    }
+
+    /// @dev What one reentering delivery runs: the router, the two messages, who the second names, and the seeds.
+    struct Reentry {
+        DeliveryRouter router;
+        uint256 outerId;
+        uint256 nestedId;
+        address nestedReceiver;
+        uint8 shapeSeed;
+        uint8 pathSeed;
+        uint8 priceSeed;
+    }
+
+    /// @dev Arms the hook, executes the first message, and checks the outcome. The hook runs when the router pays the
+    /// reentering recipient, which is inside the callback of the first message.
+    function _runReentrant(Reentry memory run) private {
+        Item memory outer = _itemFor(run.outerId);
+        Item memory nested = _itemFor(run.nestedId);
+        Probe memory before = _probe(4);
+        uint256 receiverBefore = standing(4, run.nestedReceiver);
+        uint256 handOffsBefore = reenteredHandOffs;
+        uint256 hooksBefore = denyToken.hooksRun();
+        _arm(run.nestedId);
+        vm.txGasPrice(1 + uint256(run.priceSeed) * 1 gwei);
+        vm.fee(uint256(run.priceSeed) * 1 gwei / 2);
+
+        vm.recordLogs();
+        vm.getRecordedLogs();
+        _executeOuter(run.router, run.outerId, run.pathSeed);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        denyToken.arm(address(0), address(0), "");
+
+        _readLogs(logs, 0);
+        _checkReentry(outer, nested, before, hooksBefore, handOffsBefore);
+        bool namesReceiver = (run.shapeSeed >> 2) % 3 != 2;
+        if (namesReceiver && standing(4, run.nestedReceiver) != receiverBefore) {
+            _violate("the receiver of a reentrant message gained");
+        }
+        _finish(outer);
+        if (executions[_messages[run.nestedId].bridgeMessageId] == 1) _finish(nested);
+    }
+
+    function _arm(uint256 nestedId) private {
+        MessageBridge.MessageProof memory proof = ambA.proofOf(ambB, _messages[nestedId].index);
+        denyToken.arm(reenterer, address(ambA), abi.encodeCall(ambA.executeMessage, (proof)));
+    }
+
+    function _executeOuter(DeliveryRouter router, uint256 outerId, uint8 pathSeed) private {
+        Message storage message = _messages[outerId];
+        if (pathSeed % 2 == 0) {
+            directDeliveries++;
+            ambA.deliver(ambB, message.index);
+            return;
+        }
+        routerDeliveries++;
+        address caller = _callerFor(outerId);
+        vm.prank(caller, caller);
+        (bool ok,) = address(router).call{gas: SUPPLIED_GAS}(
+            abi.encodeCall(router.executeMessage, (ambA.proofOf(ambB, message.index)))
+        );
+        if (!ok) _violate("a router refused a caller in the reentry test");
+    }
+
+    /// @dev The first message executed once. The second executed exactly when the hook ran, with one hand-off of the reason
+    /// `Reentered`, and the value of both split exactly.
+    function _checkReentry(
+        Item memory outer,
+        Item memory nested,
+        Probe memory before,
+        uint256 hooksBefore,
+        uint256 handOffsBefore
+    ) private {
+        bool hookRan = denyToken.hooksRun() > hooksBefore;
+        bool nestedRan = executions[_messages[nested.messageId].bridgeMessageId] == 1;
+        if (executions[_messages[outer.messageId].bridgeMessageId] != 1) _violate("the first message did not execute once");
+        if (hookRan != nestedRan) _violate("the hook and the second execution disagree");
+        if (nestedRan) reentriesRun++;
+        if (nestedRan && reenteredHandOffs != handOffsBefore + 1) _violate("a reentrant callback was not handed off once");
+        if (!nestedRan && reenteredHandOffs != handOffsBefore) _violate("a hand-off of a reentry without a reentry");
+        _checkMoney(4, before, outer.reading.value + (nestedRan ? nested.reading.value : 0));
     }
 
     // ------------------------------------------------------------------------------------------ sending, internal
@@ -678,6 +834,7 @@ contract RouterHandler is RouterWorld {
                 DeliveryRouter.Reason cause = abi.decode(_dataAfterAmount(logs[i].data), (DeliveryRouter.Reason));
                 if (cause == DeliveryRouter.Reason.PayoutRefused) payoutsRefused++;
                 if (cause == DeliveryRouter.Reason.InvalidTerms) termsForfeited++;
+                if (cause == DeliveryRouter.Reason.Reentered) reenteredHandOffs++;
             }
             if (logs[i].emitter != address(mediatorOf(destination))) continue;
             bytes32 topic = logs[i].topics[0];

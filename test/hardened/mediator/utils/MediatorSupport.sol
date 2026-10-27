@@ -177,7 +177,7 @@ contract DenyListToken is ERC20 {
         denied[account] = isDenied;
     }
 
-    function _update(address from, address to, uint256 value) internal override {
+    function _update(address from, address to, uint256 value) internal virtual override {
         if (denied[to]) revert TransferRefused(to);
         super._update(from, to, value);
     }

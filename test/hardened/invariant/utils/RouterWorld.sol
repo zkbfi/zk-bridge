@@ -13,12 +13,12 @@ import {Multicall3} from "../../../../src/hardened/vendor/multicall3/Multicall3.
 import {
     MediatorFixture,
     MockAMB,
-    DenyListToken,
     CoinRefuser,
     GasBurner,
     ContractWallet,
     RecordingReceiver
 } from "../../mediator/utils/MediatorSupport.sol";
+import {MedHookedDenyListToken} from "../../mediator/utils/MedMocks.sol";
 
 /// @title RouterWorld
 /// @notice The two chains of the invariant suite: two mediators, each joined to a mock bridge, and on
@@ -61,7 +61,10 @@ abstract contract RouterWorld is MediatorFixture {
     DeliveryRouter[6] internal deliveryRouters;
     WETHOmnibridgeRouter[2] internal wethRouters;
     Multicall3 internal multicall;
-    DenyListToken internal denyToken;
+    MedHookedDenyListToken internal denyToken;
+    /// @dev The recipient whose payout hook makes the bridge deliver another message. It is a holder, and no message names
+    /// it except the ones of `deliverReentrant`.
+    address internal reenterer = makeAddr("reentering recipient");
     RecordingReceiver internal refusingReceiver;
 
     address[] internal natives;
@@ -224,7 +227,7 @@ abstract contract RouterWorld is MediatorFixture {
     function _deployTokens() private {
         wrapped[0] = new MockWrappedNative();
         wrapped[1] = new MockWrappedNative();
-        denyToken = new DenyListToken();
+        denyToken = new MedHookedDenyListToken();
         _addNative(address(new MockERC20("Plain A", "PLA")), 0);
         _addNative(address(wrapped[0]), 0);
         _addNative(address(new MockERC20("Plain B", "PLB")), 1);
@@ -272,6 +275,7 @@ abstract contract RouterWorld is MediatorFixture {
         for (uint256 i = 0; i < callers.length; i++) {
             holders.push(callers[i]);
         }
+        holders.push(reenterer);
         holders.push(stranger);
         holders.push(attacker);
         holders.push(failedSink);

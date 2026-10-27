@@ -27,7 +27,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         targetContract(address(handler));
         // One outside sender. A sender that is a holder would receive coin from the test runner and break the sum of the coin.
         targetSender(makeAddr("fuzzer"));
-        bytes4[] memory selectors = new bytes4[](17);
+        bytes4[] memory selectors = new bytes4[](19);
         selectors[0] = RouterHandler.relay.selector;
         selectors[1] = RouterHandler.relay.selector;
         selectors[2] = RouterHandler.relay.selector;
@@ -45,6 +45,8 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         selectors[14] = RouterHandler.deliver.selector;
         selectors[15] = RouterHandler.claimFromRouter.selector;
         selectors[16] = RouterHandler.claimFromRouter.selector;
+        selectors[17] = RouterHandler.deliverReentrant.selector;
+        selectors[18] = RouterHandler.deliverReentrant.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
     }
 
@@ -277,6 +279,11 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         // The legacy form with a token that cannot unwrap pays the token to the receiver.
         handler.relay(4, 1, 4, 2, 9e18 + 1, 5, 0);
         assertGt(handler.legacyTokenPayouts(), 0, "the legacy form paid a token");
+        // A recipient whose payout hook delivers a second message to the same router: the router hands it off.
+        handler.deliverReentrant(0, 5e18, 0, 1, 30);
+        handler.deliverReentrant(1, 5e18, 4, 0, 30);
+        assertGt(handler.reentriesRun(), 0, "a payout hook delivered a second message");
+        assertGt(handler.reenteredHandOffs(), 0, "a reentrant callback was handed off");
         // The claims: refused while the token refuses the account, paid after.
         handler.claimFromRouter(4);
         assertGt(handler.routerClaimsRefused(), 0, "a claim was refused while the token refused");
