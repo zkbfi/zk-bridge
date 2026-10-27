@@ -80,23 +80,38 @@ contract TokenMediatorDeployGasTest is WorldSupport {
         assertEq(mediatorA.mediatorBalance(address(token)), 2 * AMOUNT, "the record on chain A");
     }
 
+    function _lengths() internal pure returns (uint256[2][5] memory) {
+        return [[uint256(3), 3], [uint256(600), 3], [uint256(700), 3], [uint256(3), 1_000], [uint256(400), 400]];
+    }
+
     /// Claim: the limit is the default of 2,000,000 for a short name, and it grows with the name and the symbol
     /// together. Shows: lengths of 3 and 3, 600 and 3 (still below the default, so 2,000,000), 700 and 3, 3 and 1,000,
     /// and 400 and 400 give the exact rule. Matters: the symbol is stored too, so it counts the same as the name.
     function test_theDefaultLimitGrowsWithTheNameAndTheSymbol() public {
-        uint256[2][5] memory lengths =
-            [[uint256(3), 3], [uint256(600), 3], [uint256(700), 3], [uint256(3), 1_000], [uint256(400), 400]];
+        uint256[2][5] memory lengths = _lengths();
         for (uint256 i = 0; i < lengths.length; i++) {
             MockERC20 token = _tokenWith(lengths[i][0], lengths[i][1]);
-            Vm.Log[] memory recorded = _relay(token);
             assertEq(
-                _gasLimitOfMessage(recorded), _expectedLimit(lengths[i][0], lengths[i][1]), "the limit of the message"
+                _gasLimitOfMessage(_relay(token)),
+                _expectedLimit(lengths[i][0], lengths[i][1]),
+                "the limit of the message"
             );
-            Transit memory transit = _deliverToB(recorded);
-            assertTrue(bridgeB.messageCallStatus(transit.messageId), "every length deploys");
         }
         assertEq(_expectedLimit(3, 3), 2_000_000, "short names keep the default");
         assertGt(_expectedLimit(700, 3), 2_000_000, "long names get more");
+    }
+
+    /// Claim: a copy deploys at every one of those lengths with the limit of the rule, on the real bridge. Shows: the
+    /// call status of the bridge is true for each. Matters: the margin of the rule is a margin of gas, so this test
+    /// needs the optimized bytecode. `forge coverage` compiles without the optimizer and its instrumentation adds gas,
+    /// so `script/coverage-check.sh` runs this test in its second step, as it does for the other gas budget tests.
+    function test_gasOfEveryLengthDeploysWithinTheRule() public {
+        uint256[2][5] memory lengths = _lengths();
+        for (uint256 i = 0; i < lengths.length; i++) {
+            MockERC20 token = _tokenWith(lengths[i][0], lengths[i][1]);
+            Transit memory transit = _deliverToB(_relay(token));
+            assertTrue(bridgeB.messageCallStatus(transit.messageId), "every length deploys");
+        }
     }
 
     /// Claim: a first message with a call adds the callback limit to the deploy limit that follows the length. Shows:

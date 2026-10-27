@@ -8,7 +8,7 @@
 #          files otherwise.
 #
 # One gate, not two: this script runs every test of the default profile. Most run
-# under coverage. The twelve optimizer tests below run in a second step with
+# under coverage. The thirteen optimizer tests below run in a second step with
 # `forge test` and the real optimizer. So `forge test` followed by this
 # script runs the suite twice for nothing. Run only this script, or only
 # `forge test` while you iterate. The deep fuzz profile is not part of it: use
@@ -20,7 +20,7 @@
 #   script   - deploy scripts are not contract code.
 #   mocks    - src/mocks and src/revision-2/mocks are test support.
 #
-# Test exclusions: `forge coverage` compiles without the optimizer. Twelve
+# Test exclusions: `forge coverage` compiles without the optimizer. Thirteen
 # tests depend on optimized bytecode (gas budgets, the contract size limit,
 # the canary that depends on gas cost, and the verifier code hash). They
 # fail under coverage and pass under `forge test`. They are not weakened.
@@ -31,7 +31,7 @@ cd "$(dirname "$0")/.."
 
 lcov_path="${1:-$(mktemp -d)/lcov.info}"
 
-optimizer_dependent_tests='(test_HB02_gas_confirmWithProof|test_HB02_gas_sendInAConfirmedEpoch|test_HB02_gas_sendInDetectionModeWithColdCanaries|test_HB02_canary_blsPrecompileFiresOnlyOnTheKnownOutput|test_gasOfRelayAndDelivery|test_R2_10_hardenedContractsFitTheSizeLimit|test_gas_openDeposits|test_gas_sendAfterOpeningCostsNoColdRead|test_gas_executeMessage_failedCall|test_gas_executeMessage_historicalPath|test_gas_executeMessage_recentPath|test_codeHashIsTheDocumentedVerifierCodeHash)'
+optimizer_dependent_tests='(test_HB02_gas_confirmWithProof|test_HB02_gas_sendInAConfirmedEpoch|test_HB02_gas_sendInDetectionModeWithColdCanaries|test_HB02_canary_blsPrecompileFiresOnlyOnTheKnownOutput|test_gasOfRelayAndDelivery|test_R2_10_hardenedContractsFitTheSizeLimit|test_gas_openDeposits|test_gas_sendAfterOpeningCostsNoColdRead|test_gas_executeMessage_failedCall|test_gas_executeMessage_historicalPath|test_gas_executeMessage_recentPath|test_codeHashIsTheDocumentedVerifierCodeHash|test_gasOfEveryLengthDeploysWithinTheRule)'
 
 forge coverage \
   --report lcov \
@@ -39,7 +39,7 @@ forge coverage \
   --no-match-coverage 'vendor|test|script|mocks' \
   --no-match-test "$optimizer_dependent_tests"
 
-# The twelve optimizer tests, with the optimizer on, as `forge test` runs them.
+# The thirteen optimizer tests, with the optimizer on, as `forge test` runs them.
 forge test --match-test "$optimizer_dependent_tests"
 
 awk '
