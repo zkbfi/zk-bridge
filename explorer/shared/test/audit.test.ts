@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { auditToken } from "../src/audit.js";
 
-const base = { homeChainId: 1, token: "0xabc", escrow: 0n, accruedFees: 0n, bridgedSupply: 0n, pendingForward: 0n, pendingBackward: 0n };
+const base = { homeChainId: 1, token: "0xabc", escrow: 0n, bridgedSupply: 0n, pendingForward: 0n, pendingBackward: 0n };
 
 describe("auditToken", () => {
   it("balances when the escrow equals the supply", () => {
@@ -30,8 +30,10 @@ describe("auditToken", () => {
     expect(result.difference).toBe(10n);
   });
 
-  it("does not mix accrued fees into the escrow check", () => {
-    expect(auditToken({ ...base, escrow: 100n, bridgedSupply: 100n, accruedFees: 7n }).mismatch).toBe(false);
+  it("has no fee term: extra escrow is a mismatch, whatever its source", () => {
+    const result = auditToken({ ...base, escrow: 107n, bridgedSupply: 100n });
+    expect(result.mismatch).toBe(true);
+    expect(result.difference).toBe(7n);
   });
 
   it("is exact beyond 2^53", () => {

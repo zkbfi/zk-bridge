@@ -48,7 +48,7 @@ export type TransferRow = {
   readonly sender: Hex | null;
   readonly recipient: Hex | null;
   readonly fallbackRecipient: Hex | null;
-  /** The amount that was locked or burned, after the bridge fee. Base units of the source token. */
+  /** The amount that was locked or burned, Base units of the source token. */
   readonly value: bigint | null;
   /** The amount that the delivery paid, from `TokensBridged`. Null until a payment. */
   readonly deliveredValue: bigint | null;
@@ -62,12 +62,11 @@ export type TransferRow = {
   readonly sentTimestamp: bigint | null;
 };
 
-/** The mediator balance of a native token on its home chain, and its accrued fees. */
+/** The mediator balance of a native token on its home chain. */
 export type EscrowRow = {
   readonly chainId: number;
   readonly token: Hex;
   readonly balance: bigint;
-  readonly accruedFees: bigint;
   readonly updatedBlockNumber: bigint;
   readonly updatedTimestamp: bigint;
 };
@@ -83,15 +82,6 @@ export type SupplyRow = {
   readonly supply: bigint;
   readonly updatedBlockNumber: bigint;
   readonly updatedTimestamp: bigint;
-};
-
-/** Fee totals per chain and token. */
-export type FeeBalanceRow = {
-  readonly chainId: number;
-  readonly token: Hex;
-  readonly charged: bigint;
-  readonly collected: bigint;
-  readonly accrued: bigint;
 };
 
 /** One light client head update. */
@@ -255,7 +245,6 @@ export const escrowView = (row: EscrowRow, index: TokenIndex) => ({
   chainId: row.chainId,
   token: tokenView(row.chainId, row.token, index),
   balance: amountOf(row.balance),
-  accruedFees: amountOf(row.accruedFees),
   updatedBlockNumber: numberOf(row.updatedBlockNumber),
   updatedTimestamp: numberOf(row.updatedTimestamp),
 });
@@ -271,15 +260,6 @@ export const supplyView = (row: SupplyRow, index: TokenIndex) => ({
   supply: amountOf(row.supply),
   updatedBlockNumber: numberOf(row.updatedBlockNumber),
   updatedTimestamp: numberOf(row.updatedTimestamp),
-});
-
-/** A fee balance row as `GET /api/fees` shows it. */
-export const feeBalanceView = (row: FeeBalanceRow, index: TokenIndex) => ({
-  chainId: row.chainId,
-  token: tokenView(row.chainId, row.token, index),
-  charged: amountOf(row.charged),
-  collected: amountOf(row.collected),
-  accrued: amountOf(row.accrued),
 });
 
 /** One item of `GET /api/head-updates`. */
@@ -425,13 +405,6 @@ export const volumeView = (group: VolumeGroup, index: TokenIndex) => ({
   transfers: group.count,
 });
 
-/** One item of the `feesAccrued` list of `GET /api/summary`. */
-export const feeAccruedView = (row: FeeBalanceRow, index: TokenIndex) => ({
-  chainId: row.chainId,
-  token: tokenView(row.chainId, row.token, index),
-  accrued: amountOf(row.accrued),
-});
-
 /** What one item of `GET /api/audit` needs. */
 export type AuditViewInput = {
   readonly audit: AuditResult;
@@ -447,7 +420,6 @@ export const auditItemView = (input: AuditViewInput, index: TokenIndex) => {
     token: tokenView(input.homeChainId, audit.token, index),
     bridgedToken: copy === null ? null : tokenView(copy.chainId, copy.token, index),
     escrow: amountOf(audit.escrow),
-    accruedFees: amountOf(audit.accruedFees),
     bridgedSupply: amountOf(audit.bridgedSupply),
     pendingForward: amountOf(audit.pendingForward),
     pendingBackward: amountOf(audit.pendingBackward),

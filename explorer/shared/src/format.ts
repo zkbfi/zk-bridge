@@ -58,14 +58,6 @@ export const formatRate = (rate: bigint, options: FormatAmountOptions = {}): str
   formatTokenAmount(rate * 100n, 18, options);
 
 /**
- * Applies a 1e18 scaled rate to an amount, rounding down as the mediator does for fees.
- *
- * @param value The amount in base units.
- * @param rate The rate, scaled by 1e18.
- */
-export const applyRate = (value: bigint, rate: bigint): bigint => (value * rate) / RATE_SCALE;
-
-/**
  * Formats a count of seconds as a short age such as `3m 05s`.
  *
  * @param seconds The count of seconds. Negative values show as zero.

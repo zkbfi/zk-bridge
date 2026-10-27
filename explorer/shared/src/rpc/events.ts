@@ -18,8 +18,6 @@ export const MEDIATOR_EVENTS = [
   "ClaimableRecorded",
   "Claimed",
   "CallbackFailed",
-  "FeeCharged",
-  "FeesCollected",
 ] as const;
 
 /** The events of the gate that the source reads. */

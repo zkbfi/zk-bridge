@@ -4,8 +4,6 @@ export type AuditInput = {
   readonly token: string;
   /** `mediatorBalance(token)` on the home chain. */
   readonly escrow: bigint;
-  /** Fees charged and not yet collected. They are held apart from `escrow`. */
-  readonly accruedFees: bigint;
   /** The supply of the bridged copy on the other chain, from mints minus burns. Zero when no copy exists. */
   readonly bridgedSupply: bigint;
   /** Locked on the home chain, with the mint not yet done: transfers from home that are not delivered or paid. */

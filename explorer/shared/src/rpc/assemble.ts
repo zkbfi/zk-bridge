@@ -55,8 +55,8 @@ export type Needs = {
 const hexOf = (log: ChainLog, name: string): Hex => log.args[name] as Hex;
 const addressOf = (log: ChainLog, name: string): Address => log.args[name] as Address;
 
-/** The events that name a token on their own chain: the transfer events and the fee events. */
-const FEE_OR_TRANSFER = new Set(["TokensBridgingInitiated", "TokensBridged", "FeeCharged", "FeesCollected"]);
+/** The events that name a token on their own chain: the transfer events. */
+const TRANSFER_EVENTS = new Set(["TokensBridgingInitiated", "TokensBridged"]);
 
 /** The events whose block timestamp the assembly needs. */
 const TIMESTAMPED = new Set(["UserRequestForAffirmation", "AffirmationCompleted", "TokensBridgingInitiated", "NewTokenRegistered", "HeadUpdated", "ForkConfirmed"]);
@@ -89,7 +89,7 @@ export const collectNeeds = (pair: Pair, logs: ReadonlyMap<number, readonly Chai
     const wantToken = (id: number, address: Address): void => void tokens.set(tokenKey(id, address), { chainId: id, address });
     for (const log of chainLogs) {
       if (TIMESTAMPED.has(log.eventName)) timestampBlocks.set(`${chainId}:${log.blockNumber}`, { chainId, blockNumber: log.blockNumber });
-      if (FEE_OR_TRANSFER.has(log.eventName)) wantToken(chainId, addressOf(log, "token"));
+      if (TRANSFER_EVENTS.has(log.eventName)) wantToken(chainId, addressOf(log, "token"));
       if (log.eventName === "NewTokenRegistered") wantToken(chainId, addressOf(log, "bridgedToken"));
       if (log.eventName === "HeadUpdated") headHashes.set(`${chainId}:${hexOf(log, "executionBlockHash")}`, { chainId, hash: hexOf(log, "executionBlockHash") });
       if (log.eventName !== "UserRequestForAffirmation") continue;
@@ -201,7 +201,6 @@ export const assemble = (input: AssembleInput): Assembled => {
       registrations.set(tokenKey(chainId, copy), { transactionHash: log.transactionHash, blockNumber: log.blockNumber, timestamp: timestamp() });
       return;
     }
-    if (log.eventName === "FeeCharged" || log.eventName === "FeesCollected") return refer(chainId, addressOf(log, "token"));
     if (log.eventName === "FallbackUsed") return writeMessage(hexOf(log, "messageId"), other, chainId, { fallbackUsed: true });
     if (log.eventName === "CallbackFailed") return writeMessage(hexOf(log, "messageId"), other, chainId, { callbackFailed: true });
     if (log.eventName === "ClaimableRecorded") {

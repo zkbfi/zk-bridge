@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   auditItemView,
   auditToken,
-  feeAccruedView,
-  feeBalanceView,
   gateView,
   headUpdateView,
   headView,
@@ -66,15 +64,6 @@ describe("tokenListItemView", () => {
   it("keeps a token that was never registered with null registration facts", () => {
     const bare = { ...tokenRow, registeredTransactionHash: null, registeredBlockNumber: null, registeredTimestamp: null };
     expect(tokenListItemView(bare, indexTokens([bare]))).toMatchObject({ registeredBlockNumber: null, registeredTimestamp: null });
-  });
-});
-
-describe("feeBalanceView and feeAccruedView", () => {
-  const row = { chainId: 1, token: native, charged: 100n, collected: 30n, accrued: 70n };
-
-  it("show every amount as a decimal string", () => {
-    expect(feeBalanceView(row, index)).toEqual({ chainId: 1, token: tokenView(1, native, index), charged: "100", collected: "30", accrued: "70" });
-    expect(feeAccruedView(row, index)).toEqual({ chainId: 1, token: tokenView(1, native, index), accrued: "70" });
   });
 });
 
@@ -234,14 +223,13 @@ describe("volumeView", () => {
 });
 
 describe("auditItemView", () => {
-  const audit = auditToken({ homeChainId: 1, token: native, escrow: 100n, accruedFees: 4n, bridgedSupply: 60n, pendingForward: 30n, pendingBackward: 5n });
+  const audit = auditToken({ homeChainId: 1, token: native, escrow: 100n, bridgedSupply: 60n, pendingForward: 30n, pendingBackward: 5n });
 
   it("shows the audit with the bridged copy", () => {
     expect(auditItemView({ audit, homeChainId: 1, copy: { chainId: 369, token: copy } }, index)).toEqual({
       token: tokenView(1, native, index),
       bridgedToken: tokenView(369, copy, index),
       escrow: "100",
-      accruedFees: "4",
       bridgedSupply: "60",
       pendingForward: "30",
       pendingBackward: "5",

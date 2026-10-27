@@ -110,31 +110,19 @@ export const readGate = async (reader: ChainReader, side: PairSide): Promise<Gat
 export type MediatorReading = {
   /** `mediatorBalance(token)`: the tokens locked for holders of the bridged copy. */
   readonly escrow: bigint;
-  /** `accruedFees(token)`: fees charged and not yet collected. */
-  readonly accruedFees: bigint;
 };
 
 /**
- * Reads the escrow balance and the accrued fees of a token from the mediator of its chain.
+ * Reads the escrow balance of a token from the mediator of its chain.
  *
  * @param reader Reads the chain.
  * @param side That chain.
  * @param token The token.
  */
 export const readMediatorBalances = async (reader: ChainReader, side: PairSide, token: Address): Promise<MediatorReading> => {
-  const escrow = reader.readContract({ abi: tokenMediatorAbi, address: side.contracts.mediator, functionName: "mediatorBalance", args: [token] }) as Promise<bigint>;
-  return { escrow: await escrow, accruedFees: await readAccruedFees(reader, side, token) };
+  const escrow = (await reader.readContract({ abi: tokenMediatorAbi, address: side.contracts.mediator, functionName: "mediatorBalance", args: [token] })) as bigint;
+  return { escrow };
 };
-
-/**
- * Reads the fees that the mediator holds for a token.
- *
- * @param reader Reads the chain.
- * @param side That chain.
- * @param token The token.
- */
-export const readAccruedFees = async (reader: ChainReader, side: PairSide, token: Address): Promise<bigint> =>
-  (await reader.readContract({ abi: tokenMediatorAbi, address: side.contracts.mediator, functionName: "accruedFees", args: [token] })) as bigint;
 
 /** The bridged copy of a native token on the other chain, checked in both directions. */
 export type CopyReading = { readonly token: Address; readonly supply: bigint };
@@ -156,19 +144,4 @@ export const readBridgedCopy = async (otherReader: ChainReader, otherSide: PairS
   if (named.toLowerCase() !== native.toLowerCase()) return null;
   const supply = (await otherReader.readContract({ abi: bridgedTokenAbi, address: predicted, functionName: "totalSupply" })) as bigint;
   return { token: predicted, supply };
-};
-
-/** The fee terms of a mediator. */
-export type FeeTermsReading = { readonly rate: bigint; readonly recipient: Address };
-
-/**
- * Reads the fee rate that applies now and the fee recipient of the mediator of a chain.
- *
- * @param reader Reads the chain.
- * @param side That chain.
- */
-export const readFeeTerms = async (reader: ChainReader, side: PairSide): Promise<FeeTermsReading> => {
-  const call = (functionName: string) => reader.readContract({ abi: tokenMediatorAbi, address: side.contracts.mediator, functionName });
-  const [rate, recipient] = await Promise.all([call("currentFeeRate") as Promise<bigint>, call("feeRecipient") as Promise<string>]);
-  return { rate, recipient: recipient.toLowerCase() as Address };
 };

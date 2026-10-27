@@ -172,12 +172,11 @@ describe("feedItemView", () => {
 describe("escrowView and supplyView", () => {
   it("show the amounts as strings and the token with its facts", () => {
     expect(
-      escrowView({ chainId: 369, token, balance: 500n, accruedFees: 7n, updatedBlockNumber: 9n, updatedTimestamp: 90n }, index),
+      escrowView({ chainId: 369, token, balance: 500n, updatedBlockNumber: 9n, updatedTimestamp: 90n }, index),
     ).toEqual({
       chainId: 369,
       token: tokenView(369, token, index),
       balance: "500",
-      accruedFees: "7",
       updatedBlockNumber: 9,
       updatedTimestamp: 90,
     });

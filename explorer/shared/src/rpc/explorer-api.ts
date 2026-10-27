@@ -3,8 +3,6 @@ import { messageBridgeAbi } from "../abis/index.js";
 import {
   amountOf,
   auditItemView,
-  feeAccruedView,
-  feeBalanceView,
   feedItemView,
   gateView,
   headUpdateView,
@@ -16,7 +14,6 @@ import {
   tokenListItemView,
   tokenView,
   volumeView,
-  type FeeBalanceRow,
   type GateStateRow,
   type HeadUpdateRow,
   type TransferRow,
@@ -32,10 +29,8 @@ import type { ChainBlock, ChainLog } from "./chain-reader.js";
 import { mapWithLimit } from "./concurrency.js";
 import { createRpcExplorer, type RpcExplorer, type RpcExplorerOptions, type Snapshot } from "./explorer-state.js";
 import {
-  readAccruedFees,
   readBridgedCopy,
   readExecutionBlockNumber,
-  readFeeTerms,
   readFinalizedSlot,
   readGate,
   readMediatorBalances,
@@ -47,8 +42,6 @@ export const RPC_PARTIAL_FIGURES = [
   "tokens",
   "inFlight",
   "volume24h",
-  "feesAccrued",
-  "collectedFees",
   "audit",
   "lightClientUpdates",
   "gateConfirmation",
@@ -341,25 +334,6 @@ export const createRpcExplorerApi = (options: RpcExplorerApiOptions): RpcExplore
       return { status: 200, body: { ...detail, data: row.data, coverage: coverageOf(snapshot, partialUnlessComplete(snapshot, ["feed"])) } };
     });
 
-  /** The fee readings of every token that the scan names, and the totals of the collected fees in the scan. */
-  const feeRows = async (snapshot: Snapshot): Promise<FeeBalanceRow[]> => {
-    const collected = new Map<string, bigint>();
-    for (const { side, log } of entriesOf(snapshot, "FeesCollected")) {
-      const key = `${side.chainId}:${log.args.token as string}`;
-      collected.set(key, (collected.get(key) ?? 0n) + (log.args.amount as bigint));
-    }
-    const withFees = feeTokenKeys(snapshot);
-    const candidates = [...snapshot.assembled.tokens.values()].filter((token) => !token.isBridgedCopy || withFees.has(`${token.chainId}:${token.address}`));
-    return mapWithLimit(candidates, explorer.concurrency, async (token) => {
-      const accruedFees = await readAccruedFees(explorer.readerOf(token.chainId), sideOf(pair, token.chainId), token.address);
-      const collectedTotal = collected.get(`${token.chainId}:${token.address}`) ?? 0n;
-      return { chainId: token.chainId, token: token.address, charged: collectedTotal + accruedFees, collected: collectedTotal, accrued: accruedFees };
-    });
-  };
-
-  const feeTokenKeys = (snapshot: Snapshot): ReadonlySet<string> =>
-    new Set(entriesOf(snapshot, "FeeCharged", "FeesCollected").map(({ side, log }) => `${side.chainId}:${log.args.token as string}`));
-
   const summary = async (nowOverride: number | null): Promise<unknown> =>
     withSnapshot(async (snapshot) => {
       const now = nowOverride ?? nowSeconds();
@@ -378,10 +352,9 @@ export const createRpcExplorerApi = (options: RpcExplorerApiOptions): RpcExplore
         const group = volumes.get(key) ?? { chainId: transfer.sourceChainId, token: transfer.sourceToken, total: 0n, count: 0 };
         volumes.set(key, { ...group, total: group.total + (transfer.value as bigint), count: group.count + 1 });
       }
-      const [heads, gates, fees, lastUpdates] = await Promise.all([
+      const [heads, gates, lastUpdates] = await Promise.all([
         headViews(snapshot),
         gateViews(snapshot),
-        feeRows(snapshot),
         Promise.all(pair.sides.map(async (side) => lastHeadUpdateView(side.chainId, (await headUpdatesOf(snapshot, side.chainId, 1, null))[0]))),
       ]);
       const volumeComplete = pair.sides.every((side) => {
@@ -389,7 +362,7 @@ export const createRpcExplorerApi = (options: RpcExplorerApiOptions): RpcExplore
         return oldest === null || (oldest !== undefined && oldest <= BigInt(now - SECONDS_PER_DAY));
       });
       const partial: PartialFigure[] = [
-        ...partialUnlessComplete(snapshot, ["inFlight", "feesAccrued", "lightClientUpdates"]),
+        ...partialUnlessComplete(snapshot, ["inFlight", "lightClientUpdates"]),
         ...(volumeComplete ? [] : (["volume24h"] as const)),
         ...(gates.derived ? (["gateConfirmation"] as const) : []),
       ];
@@ -400,7 +373,6 @@ export const createRpcExplorerApi = (options: RpcExplorerApiOptions): RpcExplore
         gates: gates.views,
         inFlight: inFlightView([...inFlightGroups.values()], IN_FLIGHT_STATUSES),
         volume24h: [...volumes.values()].map((group) => volumeView({ ...group, total: group.total.toString() }, index)),
-        feesAccrued: fees.filter((row) => row.accrued > 0n).map((row) => feeAccruedView(row, index)),
         lastHeadUpdates: lastUpdates,
         coverage: coverageOf(snapshot, partial),
       };
@@ -431,7 +403,6 @@ export const createRpcExplorerApi = (options: RpcExplorerApiOptions): RpcExplore
           homeChainId: home.chainId,
           token: token.address,
           escrow: balances.escrow,
-          accruedFees: balances.accruedFees,
           bridgedSupply: copy?.supply ?? 0n,
           pendingForward: pending({ nativeSide: true, chainId: home.chainId, token: token.address }),
           pendingBackward: pending({ nativeSide: false, chainId: home.chainId, token: token.address }),
@@ -441,38 +412,8 @@ export const createRpcExplorerApi = (options: RpcExplorerApiOptions): RpcExplore
       return {
         generatedNote: "the escrow and the supply are read at different blocks; recheck a mismatch once",
         tokens,
-        coverage: coverageOf(snapshot, partialUnlessComplete(snapshot, ["audit", "collectedFees"])),
+        coverage: coverageOf(snapshot, partialUnlessComplete(snapshot, ["audit"])),
       };
-    });
-
-  const fees = async (limit: number): Promise<unknown> =>
-    withSnapshot(async (snapshot) => {
-      const index = indexTokens([...snapshot.assembled.tokens.values()]);
-      const balances = await feeRows(snapshot);
-      const terms = await Promise.all(
-        pair.sides.map(async (side) => {
-          const reading = await readFeeTerms(explorer.readerOf(side.chainId), side);
-          return { chainId: side.chainId, rate: amountOf(reading.rate), rateScale: "the rate is in the units that TokenMediator.FEE_DENOMINATOR defines", recipient: reading.recipient };
-        }),
-      );
-      const feeLogs = entriesOf(snapshot, "FeeCharged", "FeesCollected")
-        .sort((left, right) => compare(right.log.blockNumber, left.log.blockNumber))
-        .slice(0, limit);
-      const events = await mapWithLimit(feeLogs, explorer.concurrency, async ({ side, log }) => {
-        const collectedEvent = log.eventName === "FeesCollected";
-        return {
-          chainId: side.chainId,
-          kind: collectedEvent ? "collected" : (log.args.direction as number) === 0 ? "charged_outgoing" : "charged_incoming",
-          token: tokenView(side.chainId, log.args.token as string, index),
-          amount: amountOf((collectedEvent ? log.args.amount : log.args.fee) as bigint),
-          recipient: collectedEvent ? (log.args.feeRecipient as string) : null,
-          rate: null,
-          transactionHash: log.transactionHash,
-          blockNumber: numberOf(log.blockNumber),
-          timestamp: numberOf(await explorer.blockTimestamp(side.chainId, log.blockNumber)),
-        };
-      });
-      return { balances: balances.map((row) => feeBalanceView(row, index)), terms, events, coverage: coverageOf(snapshot, partialUnlessComplete(snapshot, ["collectedFees"])) };
     });
 
   const deliveryCostAnswer = async (chainId: number): Promise<unknown> =>
@@ -516,7 +457,6 @@ export const createRpcExplorerApi = (options: RpcExplorerApiOptions): RpcExplore
       );
     }
     if (pathname === "/api/audit") return answer(await audit());
-    if (pathname === "/api/fees") return answer(await fees(limitOf(searchParams.get("limit"), 50)));
     if (pathname === "/api/head-updates") {
       const chainText = searchParams.get("chainId");
       const beforeText = searchParams.get("before");

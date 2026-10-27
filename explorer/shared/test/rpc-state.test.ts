@@ -92,12 +92,6 @@ describe("the summary", () => {
     expect(rows.map((row: { token: unknown; volume: string }) => [row.token === null ? null : "token", row.volume]).sort()).toEqual([[null, "400"], ["token", "60"]]);
   });
 
-  it("shows the fees that the mediators hold for each token", async () => {
-    const harness = createRpcHarness();
-    const summary = await harness.body("/api/summary");
-    expect(summary.feesAccrued.map((row: { chainId: number; accrued: string }) => [row.chainId, row.accrued]).sort()).toEqual([[1, "4"], [369, "2"]]);
-  });
-
   it("shows the newest light client update of each side with its gas, its cost and its poster", async () => {
     const harness = createRpcHarness();
     const summary = await harness.body("/api/summary");
@@ -151,7 +145,7 @@ describe("the summary", () => {
     expect(complete.coverage.partial).toEqual([]);
     const short = await createRpcHarness({ api: { blockSpan: 40, maxWindowsPerRequest: 1 } }).body("/api/summary");
     expect(short.coverage.complete).toBe(false);
-    expect(short.coverage.partial).toEqual(expect.arrayContaining(["inFlight", "feesAccrued", "lightClientUpdates", "volume24h"]));
+    expect(short.coverage.partial).toEqual(expect.arrayContaining(["inFlight", "lightClientUpdates", "volume24h"]));
   });
 
   it("does not mark the volume as partial when the scan reaches back 24 hours, even if the history is not complete", async () => {
@@ -221,14 +215,13 @@ describe("the audit", () => {
     return { harness, audit: await harness.body("/api/audit") };
   };
 
-  it("reads the escrow, the fees and the supply from the contracts and adds the transfers that are not paid", async () => {
+  it("reads the escrow and the supply from the contracts and adds the transfers that are not paid", async () => {
     const { harness, audit } = await auditOf();
     expect(audit.tokens).toEqual([
       {
         token: expect.objectContaining({ chainId: 1, address: harness.scenario.tokens.native }),
         bridgedToken: expect.objectContaining({ chainId: 369, address: harness.scenario.tokens.copy }),
         escrow: "1710",
-        accruedFees: "4",
         bridgedSupply: "1150",
         // The send that a head covers (250), the claimable release (200) and the young send (50).
         pendingForward: "500",
@@ -258,45 +251,12 @@ describe("the audit", () => {
 
   it("marks the audit as partial when the history is short, because older transfers may still be pending", async () => {
     const { audit } = await auditOf({ api: { blockSpan: 40, maxWindowsPerRequest: 1 } });
-    expect(audit.coverage.partial).toEqual(["audit", "collectedFees"]);
+    expect(audit.coverage.partial).toEqual(["audit"]);
   });
 
   it("fails when a contract read fails, instead of showing a number that was not read", async () => {
     const harness = createRpcHarness({ first: { failView: (call) => (call.functionName === "mediatorBalance" ? new Error("rpc down") : undefined) } });
     await expect(harness.api.get("/api/audit")).rejects.toThrow("rpc down");
-  });
-});
-
-describe("the fees", () => {
-  it("lists the fee balances, the terms and the newest fee events", async () => {
-    const harness = createRpcHarness();
-    const fees = await harness.body("/api/fees");
-    expect(fees.balances.map((row: { chainId: number; accrued: string; collected: string; charged: string }) => [row.chainId, row.accrued, row.collected, row.charged]).sort()).toEqual([
-      // The 5 that was collected is in the history; the 4 that is held now is on chain.
-      [1, "4", "5", "9"],
-      [369, "2", "0", "2"],
-    ]);
-    expect(fees.terms).toEqual([
-      expect.objectContaining({ chainId: 1, rate: "1000000000000000", recipient: `0x${"f5".repeat(20)}` }),
-      expect.objectContaining({ chainId: 369, rate: "1000000000000000" }),
-    ]);
-    expect(fees.events.map((event: { kind: string; amount: string }) => [event.kind, event.amount]).sort()).toEqual([
-      ["charged_incoming", "1"],
-      ["charged_incoming", "2"],
-      ["charged_outgoing", "3"],
-      ["collected", "5"],
-    ]);
-    expect(fees.events.find((event: { kind: string }) => event.kind === "collected")).toMatchObject({ recipient: `0x${"f5".repeat(20)}` });
-    expect(fees.coverage.partial).toEqual([]);
-  });
-
-  it("counts a collection in the scanned history and limits the list of events", async () => {
-    const harness = createRpcHarness();
-    const limited = await harness.body("/api/fees?limit=1");
-    expect(limited.events).toHaveLength(1);
-    expect(limited.events[0].timestamp).toEqual(expect.any(Number));
-    const short = await createRpcHarness({ api: { blockSpan: 40, maxWindowsPerRequest: 1 } }).body("/api/fees");
-    expect(short.coverage.partial).toEqual(["collectedFees"]);
   });
 });
 

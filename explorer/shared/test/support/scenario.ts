@@ -169,7 +169,6 @@ export const buildScenario = (
   transaction(first.chainId, 100, (add) => {
     add("bridge", "UserRequestForAffirmation", tokenSend(first, second, ids.delivered, { functionName: "handleBridgedTokens", token: native, recipient: accounts.recipient, value: 1_000n }));
     add("mediator", "TokensBridgingInitiated", { token: native, sender: accounts.sender, value: 1_000n, messageId: ids.delivered });
-    add("mediator", "FeeCharged", { token: native, fee: 3n, direction: 0 });
   });
   transaction(first.chainId, 103, (add) => {
     add("bridge", "UserRequestForAffirmation", tokenSend(first, second, ids.covered, { functionName: "handleBridgedTokens", token: native, recipient: accounts.recipient, value: 250n }));
@@ -184,7 +183,6 @@ export const buildScenario = (
   transaction(first.chainId, 220, (add) => {
     add("bridge", "AffirmationCompleted", delivered(ids.returned, true, first.contracts.mediator));
     add("mediator", "TokensBridged", { token: native, recipient: accounts.recipientBack, value: 400n, messageId: ids.returned });
-    add("mediator", "FeeCharged", { token: native, fee: 1n, direction: 1 });
   });
   transaction(first.chainId, 216, (add) => {
     add("lightClient", "HeadUpdated", { slot: 340n, headerRoot: byte("d2", 32), executionBlockHash: executionHashes.second });
@@ -213,7 +211,6 @@ export const buildScenario = (
   transaction(second.chainId, 205, (add) => {
     add("mediator", "NewTokenRegistered", { nativeToken: native, bridgedToken: copy });
     add("mediator", "TokensBridged", { token: copy, recipient: accounts.recipient, value: 1_000n, messageId: ids.delivered });
-    add("mediator", "FeeCharged", { token: copy, fee: 2n, direction: 1 });
     add("bridge", "AffirmationCompleted", delivered(ids.delivered, true, second.contracts.mediator));
   });
   transaction(second.chainId, 210, (add) => {
@@ -249,9 +246,6 @@ export const buildScenario = (
   });
   transaction(second.chainId, 260, (add) => {
     add("mediator", "Claimed", { token: copy, account: accounts.claimer, value: 100n });
-  });
-  transaction(first.chainId, 270, (add) => {
-    add("mediator", "FeesCollected", { token: native, feeRecipient: byte("f5", 20), amount: 5n });
   });
   transaction(second.chainId, 290, (add) => {
     add("bridge", "UserRequestForAffirmation", tokenSend(second, first, ids.backward, { functionName: "handleNativeTokens", token: native, recipient: accounts.recipientBack, value: 60n }));
@@ -310,9 +304,6 @@ export const buildScenario = (
       if (name === "nativeTokenAddress") return token === copy ? native : "0x0000000000000000000000000000000000000000";
       if (name === "bridgedTokenAddress") return copy;
       if (name === "mediatorBalance") return token === native ? 1_710n : 0n;
-      if (name === "accruedFees") return token === native ? 4n : token === copy ? 2n : 0n;
-      if (name === "currentFeeRate") return 1_000_000_000_000_000n;
-      if (name === "feeRecipient") return byte("f5", 20);
     }
     if (address === native || address === copy) {
       if (name === "name") return address === native ? "Tether" : "Tether from Ethereum";

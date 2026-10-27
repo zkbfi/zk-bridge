@@ -7,7 +7,6 @@ export * from "./pairs.js";
 export * from "./status.js";
 export * from "./events.js";
 export * from "./proof-message.js";
-export * from "./fee-schedule.js";
 export * from "./delivery-fee.js";
 export * from "./delivery-terms.js";
 export * from "./delivery-cost-report.js";

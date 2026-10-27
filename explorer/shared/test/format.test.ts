@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RATE_SCALE, applyRate, formatDuration, formatRate, formatTokenAmount, parseTokenAmount } from "../src/format.js";
+import { RATE_SCALE, formatDuration, formatRate, formatTokenAmount, parseTokenAmount } from "../src/format.js";
 
 describe("formatTokenAmount", () => {
   it("formats without floating point error beyond 2^53", () => {
@@ -43,10 +43,6 @@ describe("rates scaled by 1e18", () => {
   it("shows 1e18 as 100 percent", () => {
     expect(formatRate(RATE_SCALE)).toBe("100");
     expect(formatRate(RATE_SCALE / 1000n)).toBe("0.1");
-  });
-  it("rounds a fee down like the mediator", () => {
-    expect(applyRate(999n, RATE_SCALE / 1000n)).toBe(0n);
-    expect(applyRate(1_000_000n, RATE_SCALE / 1000n)).toBe(1000n);
   });
 });
 
