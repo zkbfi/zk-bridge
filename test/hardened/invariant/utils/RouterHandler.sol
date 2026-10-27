@@ -6,7 +6,6 @@ import {IAMB} from "../../../../src/hardened/IAMB.sol";
 import {MessageBridge} from "../../../../src/hardened/MessageBridge.sol";
 import {DeliveryRouter} from "../../../../src/hardened/mediator/DeliveryRouter.sol";
 import {TokenMediator} from "../../../../src/hardened/mediator/TokenMediator.sol";
-import {WETHOmnibridgeRouter} from "../../../../src/hardened/mediator/WETHOmnibridgeRouter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Multicall3} from "../../../../src/hardened/vendor/multicall3/Multicall3.sol";
 import {MockAMB} from "../../mediator/utils/MediatorSupport.sol";
@@ -29,7 +28,7 @@ struct Probe {
 /// @param reading What the message delivers.
 /// @param universe The token of the universe that the delivery pays.
 /// @param payee The account that should end with the value after the tip: the recipient of the terms for a
-/// delivery router, the receiver in the data for the legacy form and the wrapped router, and the recipient otherwise.
+/// delivery router, the receiver in the data for the legacy form, and the recipient otherwise.
 /// @param payeeBefore What the payee holds before, in the sense of `held`.
 struct Item {
     uint256 messageId;
@@ -43,7 +42,7 @@ struct Item {
 /// @notice Drives the two chains of `RouterWorld` with random sequences and checks every delivery against the rules that
 /// the contracts state.
 /// @dev What it does. Senders relay native tokens and bridged copies both ways, through the plain forms, the forms with a
-/// fallback, the forms with a call, a delivery router, the wrapped native router, and the wrap and relay form. Messages
+/// fallback, the forms with a call, a delivery router, and the wrap and relay form of a delivery router. Messages
 /// wait in a list and arrive in random order, by three paths: directly, through `executeMessage` of a router from
 /// an outside caller (caller and origin the same), and in a batch through Multicall3 from an outside caller. Accounts wrap and unwrap the
 /// coin, accounts are denied and allowed, claims are paid, and strangers send tokens to a mediator.
@@ -107,7 +106,6 @@ contract RouterHandler is RouterWorld {
     uint256 public callbacksFailed;
     uint256 public claimsPaid;
     uint256 public attacksRefused;
-    uint256 public wethRouterDeliveries;
     uint256 public outOfOrderDeliveries;
     uint256 public failedDeliveries;
     uint256 public payoutsRefused;
@@ -334,11 +332,10 @@ contract RouterHandler is RouterWorld {
     function attack(uint8 kindSeed, uint8 routerSeed) external {
         uint256 chain = routerSeed % 2;
         DeliveryRouter router = deliveryRouterAt(chain, (routerSeed >> 1) % ROUTERS_PER_CHAIN);
-        uint256 kind = kindSeed % 3;
+        uint256 kind = kindSeed % 2;
         uint256 executedBefore = _executionTotal();
         if (kind == 0) _attackCallback(address(router));
         if (kind == 1) _attackCoinEntry(address(router));
-        if (kind == 2) _attackCallback(address(wethRouters[chain]));
         if (_executionTotal() != executedBefore) _violate("an attack executed a message");
     }
 
@@ -487,11 +484,9 @@ contract RouterHandler is RouterWorld {
     // ------------------------------------------------------------------------------------------ sending, internal
 
     function _routeFor(Plan memory plan, uint8 routeSeed) private view returns (uint256) {
-        uint256 route = routeSeed % 7;
+        uint256 route = routeSeed % 6;
         bool isWrappedNative = plan.index == 1 || plan.index == 3;
-        bool returningWrapped = isWrappedNative && plan.source != homes[plan.index];
-        if (route == 5 && !returningWrapped) return route % 3;
-        if (route == 6 && !(isWrappedNative && plan.source == homes[plan.index])) return route % 3;
+        if (route == WRAP_ROUTE && !(isWrappedNative && plan.source == homes[plan.index])) return route % 3;
         return route;
     }
 
@@ -522,10 +517,13 @@ contract RouterHandler is RouterWorld {
         coinDealt += amount;
     }
 
-    /// @dev Sends by one of the seven routes. Returns false when the send reverted. A revert is a violation: every send
+    /// @dev The route that wraps the coin and relays it by a delivery router of the source chain.
+    uint256 private constant WRAP_ROUTE = 5;
+
+    /// @dev Sends by one of the six routes. Returns false when the send reverted. A revert is a violation: every send
     /// that the handler makes is valid.
     function _send(Plan memory plan) private returns (bool) {
-        if (plan.route == 6) return _wrapAndRelay(plan);
+        if (plan.route == WRAP_ROUTE) return _wrapAndRelay(plan);
         TokenMediator mediator = mediatorOf(plan.source);
         address token = tokenAt(plan.universe);
         address receiver = recipients[uint8(plan.detail) % RECIPIENT_COUNT];
@@ -536,7 +534,6 @@ contract RouterHandler is RouterWorld {
         address target = receiver;
         bytes memory data = _dataFor(plan, receiver);
         if (plan.route == 3 || plan.route == 4) target = address(_routerOf(plan));
-        if (plan.route == 5) target = address(wethRouters[1 - plan.source]);
         vm.prank(plan.sender);
         if (plan.route == 0) {
             try mediator.relayTokens(token, receiver, plan.amount) {
@@ -557,12 +554,11 @@ contract RouterHandler is RouterWorld {
     }
 
     /// @dev The data of the relay: empty for the plain routes, a call for route 2, the terms for route 3, and the
-    /// receiver of the coin for routes 4 and 5.
+    /// receiver of the coin for route 4.
     function _dataFor(Plan memory plan, address receiver) private view returns (bytes memory) {
         if (plan.route == 2) return abi.encodePacked("call", plan.detail);
         if (plan.route == 3) return _termsData(plan, receiver);
         if (plan.route == 4) return abi.encodePacked(_invalidOr(plan, receiver));
-        if (plan.route == 5) return abi.encodePacked(receiver);
         return "";
     }
 
@@ -591,7 +587,7 @@ contract RouterHandler is RouterWorld {
         address receiver = recipients[uint8(plan.detail) % RECIPIENT_COUNT];
         uint256 form = uint8(plan.detail >> 24) % 3;
         _dealCoin(plan.sender, plan.amount);
-        WETHOmnibridgeRouter router = wethRouters[plan.source];
+        DeliveryRouter router = deliveryRouterAt(plan.source, uint8(plan.detail >> 16) % ROUTERS_PER_CHAIN);
         vm.prank(plan.sender);
         if (form == 0) {
             try router.wrapAndRelayTokens{value: plan.amount}() {
@@ -610,7 +606,7 @@ contract RouterHandler is RouterWorld {
         try router.relayTokensAndCall{value: plan.amount}(receiver, abi.encodePacked(receiver)) {
             return true;
         } catch {
-            return _refused("relayTokensAndCall of the wrapped router reverted");
+            return _refused("relayTokensAndCall of the delivery router reverted");
         }
     }
 
@@ -709,9 +705,6 @@ contract RouterHandler is RouterWorld {
     function _payeeOf(MessageReading.Reading memory reading, uint256 universe) private view returns (address) {
         uint256 chain = chainOfToken(universe);
         if (!reading.hasCall) return reading.recipient;
-        if (reading.recipient == address(wethRouters[chain])) {
-            return reading.callData.length == 20 ? address(bytes20(reading.callData)) : reading.recipient;
-        }
         if (!_isDeliveryRouter(reading.recipient, chain)) return reading.recipient;
         // Invalid terms, a payout that the token refuses and data of no known shape all go to the failed delivery
         // address.
@@ -1009,7 +1002,6 @@ contract RouterHandler is RouterWorld {
             tip += holding(item.universe, rewards[j]) - before.rewardHeld[j];
         }
         uint256 got = standing(item.universe, item.payee) - item.payeeBefore;
-        if (item.reading.recipient == address(wethRouters[destination])) wethRouterDeliveries++;
         bool legacyToRouter =
             item.reading.callData.length == 20 && _isDeliveryRouter(item.reading.recipient, destination);
         if (legacyToRouter && !isWrappedNativeOfItsChain(item.universe)) legacyTokenPayouts++;

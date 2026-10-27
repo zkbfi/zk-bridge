@@ -9,8 +9,9 @@ import {ITokenMediator} from "./ITokenMediator.sol";
 import {IWETH} from "./IWETH.sol";
 
 /// @title DeliveryRouter
-/// @notice An optional helper that delivers a bridged message and pays a tip for it, with no change to the message
-/// bridge or the mediator. It is the router pattern of `gibsfinance/omnibridge`
+/// @notice The one router of the bridge, on both chains. On the source chain it wraps the native coin and sends it
+/// (`wrapAndRelayTokens`, `relayTokensAndCall`). On the destination chain it delivers a bridged message, pays a tip for
+/// it, and unwraps the wrapped native token. It needs no change to the message bridge or the mediator. It is the router pattern of `gibsfinance/omnibridge`
 /// (`contracts/helpers/TokenOmnibridgeBase.sol`), and it reads the same `FeeDirector`.
 /// @dev Flow. 1: a sender relays tokens with `relayTokensAndCall` to this router on the destination chain, with an
 /// encoded `FeeDirector` as data. 2: anyone calls `executeMessage`. The router stores the starting gas in one slot
@@ -19,6 +20,14 @@ import {IWETH} from "./IWETH.sol";
 /// immutable `rewardAddress`, and pays the rest to the recipient. When the slot is not set, because someone executed
 /// the message on the bridge directly, the recipient gets everything and the router takes no tip. A data field of 20
 /// bytes is the legacy form: the address that receives the unwrapped native coin, with no tip.
+///
+/// Source side. `wrapAndRelayTokens` and `relayTokensAndCall` follow `WETHOmnibridgeRouter` of OmniBridge
+/// (`contracts/helpers/WETHOmnibridgeRouter.sol`) without its owner, its `claimTokens` and its destination role. They
+/// wrap the coin and relay the wrapped token with `relayTokensWithFallback`. The fallback address on the other chain is
+/// the caller, not the router, because the router may not exist there. A receiver that is the zero address or this
+/// router is refused. The router sends nothing that it holds: the wrap and the relay run in one call. There is no second
+/// router for the unwrap: the `UNWRAP` flag and the 20 byte legacy data of `onTokenBridged` do it, as in
+/// `gibsfinance/omnibridge`, so the bridge needs one contract on each chain.
 ///
 /// Divergences from `gibsfinance/omnibridge`.
 /// - There is no owner, no `claimTokens` and no validator filter. Any account may call `executeMessage`. The tip
@@ -63,6 +72,10 @@ import {IWETH} from "./IWETH.sol";
 ///   would refuse. No tip can be computed, so the router hands off the whole value.
 /// - The data is a 20 byte legacy receiver, and the token is not the wrapped native token. The router pays the token to
 ///   that receiver, with no fee, and hands off the value when the token refuses the receiver.
+/// A plain relay is the one thing that the router cannot see: the mediator pays the router with no callback when a sender
+/// names the router as the receiver with `relayTokens`, or when a callback fails. The router then holds tokens with no
+/// record. Anyone may call `sweep` to hand the balance above `totalClaimable` off to `failedDeliveryAddress`. The sweep
+/// never reads a record as free balance, so it never takes a claim.
 /// A recipient payout hook can make the bridge deliver another message while a delivery runs, so the mediator calls
 /// `onTokenBridged` again. The router detects that with the state of its reentrancy guard and does not revert. It hands
 /// the whole value of that nested callback off with the reason `Reentered`, after the tip when the terms decode and a
@@ -129,6 +142,12 @@ contract DeliveryRouter is ReentrancyGuard {
     /// @dev The length of an encoded `FeeDirector`: four words.
     uint256 private constant DIRECTOR_LENGTH = 128;
 
+    /// @notice The receiver of a relay is the zero address or this router.
+    error InvalidReceiver(address receiver);
+    /// @notice A relay with a call needs data, because the mediator calls only when there is data.
+    error EmptyData();
+    /// @notice The router holds none of the token above what its records owe.
+    error NothingToSweep(address token);
     /// @notice The reward address of the constructor is the zero address.
     error ZeroRewardAddress();
     /// @notice The caller of `onTokenBridged` is not the mediator.
@@ -152,6 +171,9 @@ contract DeliveryRouter is ReentrancyGuard {
     /// @notice Emitted on every hand-off to `failedDeliveryAddress`. `recipient` is the account that the terms named,
     /// or the zero address when the data has no known shape. When the push fails, the amount is recorded as well.
     event DeliveryFailed(address indexed token, address indexed recipient, uint256 amount, Reason reason);
+    /// @notice Emitted when `sweep` hands the unowned balance of a token off to `failedDeliveryAddress`. When the push
+    /// fails, the amount is recorded as well.
+    event Swept(address indexed token, uint256 amount);
     /// @notice Emitted when `claim` pays the record of the failed delivery address.
     event Claimed(address indexed token, uint256 amount);
 
@@ -187,6 +209,25 @@ contract DeliveryRouter is ReentrancyGuard {
         wNative = wNative_;
         rewardAddress = rewardAddress_;
         failedDeliveryAddress = failedDeliveryAddress_;
+        wNative_.approve(address(bridge_), type(uint256).max);
+    }
+
+    /// @notice Wraps the coin and relays it to the caller on the other chain.
+    function wrapAndRelayTokens() external payable {
+        _wrapAndRelay(msg.sender, "");
+    }
+
+    /// @notice Wraps the coin and relays it to `receiver` on the other chain.
+    function wrapAndRelayTokens(address receiver) external payable {
+        _wrapAndRelay(receiver, "");
+    }
+
+    /// @notice Wraps the coin, relays it to `receiver` and calls `onTokenBridged` on it with `data`. Name a
+    /// `DeliveryRouter` on the other chain as the receiver, with its terms as data, to pay a tip or to get the native
+    /// coin back there.
+    function relayTokensAndCall(address receiver, bytes calldata data) external payable {
+        if (data.length == 0) revert EmptyData();
+        _wrapAndRelay(receiver, data);
     }
 
     /// @notice Executes a message on the message bridge, and takes the tip of any tokens that it delivers to this
@@ -230,6 +271,17 @@ contract DeliveryRouter is ReentrancyGuard {
         emit Claimed(token, amount);
     }
 
+    /// @notice Hands the balance of a token above what the records owe off to `failedDeliveryAddress`. Anyone may call
+    /// it. It recovers tokens that reached the router with no callback and no record: a plain relay to the router, or a
+    /// callback that failed. It reverts when there is nothing above the records, so the records are never touched.
+    /// @param token The token.
+    function sweep(address token) external nonReentrant {
+        uint256 amount = _freeBalance(token, type(uint256).max);
+        if (amount == 0) revert NothingToSweep(token);
+        emit Swept(token, amount);
+        _pushOrRecord(token, amount);
+    }
+
     /// @notice The fee and the amount for the recipient that the router computes.
     /// @param token The token that the mediator released.
     /// @param value The released amount.
@@ -258,6 +310,12 @@ contract DeliveryRouter is ReentrancyGuard {
     /// @notice Accepts the native coin from the wrapped token only, when it unwraps.
     receive() external payable {
         if (msg.sender != address(wNative)) revert NotWrappedTokenSender(msg.sender);
+    }
+
+    function _wrapAndRelay(address receiver, bytes memory data) private {
+        if (receiver == address(0) || receiver == address(this)) revert InvalidReceiver(receiver);
+        wNative.deposit{value: msg.value}();
+        bridge.relayTokensWithFallback(address(wNative), receiver, msg.value, data, msg.sender);
     }
 
     /// @dev The delivery of one callback. The guard is held while it runs, so a payout hook that makes the mediator call
@@ -435,11 +493,16 @@ contract DeliveryRouter is ReentrancyGuard {
         return free < value ? free : value;
     }
 
-    /// @dev Pushes an amount that the router could not deliver to `failedDeliveryAddress`. When the token refuses that
-    /// push, the router records the amount for the address, so the tokens stay owed and never burn.
+    /// @dev Hands an amount that the router could not deliver off to `failedDeliveryAddress`.
     function _handOff(address token, address recipient, uint256 amount, Reason reason) private {
         if (amount == 0) return;
         emit DeliveryFailed(token, recipient, amount, reason);
+        _pushOrRecord(token, amount);
+    }
+
+    /// @dev Pushes an amount to `failedDeliveryAddress`. When the token refuses that push, the router records the
+    /// amount for the address, so the tokens stay owed and never burn.
+    function _pushOrRecord(address token, uint256 amount) private {
         if (IERC20(token).trySafeTransfer(failedDeliveryAddress, amount)) return;
         claimable[token][failedDeliveryAddress] += amount;
         totalClaimable[token] += amount;

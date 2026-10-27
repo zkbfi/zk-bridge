@@ -8,7 +8,6 @@ import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
 import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
 import {TokenMediator} from "../../src/hardened/mediator/TokenMediator.sol";
 import {TokenFactory} from "../../src/hardened/mediator/TokenFactory.sol";
-import {WETHOmnibridgeRouter} from "../../src/hardened/mediator/WETHOmnibridgeRouter.sol";
 import {DeliveryRouter} from "../../src/hardened/mediator/DeliveryRouter.sol";
 import {ITokenMediator} from "../../src/hardened/mediator/ITokenMediator.sol";
 import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
@@ -36,13 +35,12 @@ import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 /// | deposit gate            | n + 1               | n + 3                 | always                             |
 /// | message bridge          | n + 2               | n + 4                 | always                             |
 /// | token mediator          | n + 3               | n + 5                 | always                             |
-/// | [native coin router]    | n + 4               | n + 6                 | `wrappedNative` is not zero        |
-/// | [delivery router]            | next free offset    | next free offset      | `deployDeliveryRouter` is `true`        |
+/// | [delivery router]       | n + 4               | n + 6                 | `deployDeliveryRouter` is `true`   |
 ///
 /// The mediator creates its token factory inside its constructor. The factory is the first contract of the mediator,
-/// so it sits at `computeCreateAddress(mediator, 1)` and takes no deployer nonce. A chain without a wrapped native
-/// token gets no native coin router, and the delivery router (which needs that token) is then refused. The delivery router takes
-/// the next free offset, so the plan has no gap. The delivery router also needs `deliveryRouter.rewardAddress` (the one address that
+/// so it sits at `computeCreateAddress(mediator, 1)` and takes no deployer nonce. The delivery router is the one router
+/// of a chain: it wraps and sends the native coin, and it delivers, tips and unwraps. A chain without a wrapped native
+/// token gets no delivery router, and the configuration that asks for one is refused. The delivery router also needs `deliveryRouter.rewardAddress` (the one address that
 /// receives the tips) and `deliveryRouter.failedDeliveryAddress` (the address that receives what the router cannot
 /// deliver; it may equal the reward address). Anyone may call the router, so it has no runner. The deployment reads
 /// both addresses back from the router and refuses a mismatch.
@@ -135,7 +133,6 @@ contract DeployBridge is Script {
         address bridge;
         address mediator;
         address factory;
-        address wrappedRouter;
         address deliveryRouter;
     }
 
@@ -250,7 +247,6 @@ contract DeployBridge is Script {
         line = _appendFlag(line, flag, "bridge", deployed.bridge);
         line = _appendFlag(line, flag, "mediator", deployed.mediator);
         line = _appendFlag(line, flag, "token_factory", deployed.factory);
-        line = _appendFlag(line, flag, "native_router", deployed.wrappedRouter);
         line = _appendFlag(line, flag, "wrapped_native", chain.wrappedNative);
         line = _appendFlag(line, flag, "delivery_router", deployed.deliveryRouter);
         line = _appendFlag(line, flag, "fork_registry", deployed.registry);
@@ -288,7 +284,7 @@ contract DeployBridge is Script {
         plan.chainB = _predictChain(config.deployer, config.chainB);
     }
 
-    /// @notice Prints the plan. A chain without a native coin router gets a loud warning.
+    /// @notice Prints the plan. A chain without a wrapped native token gets a loud warning.
     /// @param config The validated configuration.
     /// @param plan The predicted addresses.
     function logPlan(BridgeConfig memory config, Plan memory plan) public pure {
@@ -371,9 +367,6 @@ contract DeployBridge is Script {
         deployed.bridge = _deployBridge(deployment, deployed.lightClient, deployed.gate);
         deployed.mediator = _deployMediator(deployment, deployed.bridge);
         deployed.factory = address(TokenMediator(deployed.mediator).tokenFactory());
-        if (chain.wrappedNative != address(0)) {
-            deployed.wrappedRouter = _deployWrappedRouter(deployed.mediator, chain.wrappedNative);
-        }
         if (chain.deliveryRouter == RouterChoice.Deploy) {
             deployed.deliveryRouter = _deployDeliveryRouter(deployed.mediator, chain.wrappedNative, chain.deliveryRouterRewardAddress, chain.deliveryRouterFailedDeliveryAddress);
         }
@@ -393,7 +386,6 @@ contract DeployBridge is Script {
         _requireAsPredicted("bridge", plan.bridge, deployed.bridge);
         _requireAsPredicted("mediator", plan.mediator, deployed.mediator);
         _requireAsPredicted("factory", plan.factory, deployed.factory);
-        _requireAsPredicted("wrappedRouter", plan.wrappedRouter, deployed.wrappedRouter);
         _requireAsPredicted("deliveryRouter", plan.deliveryRouter, deployed.deliveryRouter);
         _requireVerifierPin(deployment.chain);
         _verifyLightClient(deployment.chain, deployed.lightClient);
@@ -460,7 +452,6 @@ contract DeployBridge is Script {
         plan.bridge = vm.computeCreateAddress(deployer, nonce++);
         plan.mediator = vm.computeCreateAddress(deployer, nonce++);
         plan.factory = vm.computeCreateAddress(plan.mediator, 1);
-        if (chain.wrappedNative != address(0)) plan.wrappedRouter = vm.computeCreateAddress(deployer, nonce++);
         if (chain.deliveryRouter == RouterChoice.Deploy) plan.deliveryRouter = vm.computeCreateAddress(deployer, nonce);
     }
 
@@ -479,10 +470,9 @@ contract DeployBridge is Script {
         console2.log("  message bridge", plan.bridge);
         console2.log("  token mediator", plan.mediator);
         console2.log("  token factory", plan.factory);
-        console2.log("  native coin router", plan.wrappedRouter);
         console2.log("  delivery router", plan.deliveryRouter);
         if (chain.wrappedNative != address(0)) return;
-        console2.log("  WARNING: no wrapped native token is configured. This chain gets no native coin router.");
+        console2.log("  WARNING: no wrapped native token is configured. This chain cannot get a delivery router.");
     }
 
     function _requireAsPredicted(string memory name, address predicted, address actual) private pure {
@@ -593,10 +583,6 @@ contract DeployBridge is Script {
                 })
             )
         );
-    }
-
-    function _deployWrappedRouter(address mediator, address wrappedNative) private returns (address) {
-        return address(new WETHOmnibridgeRouter(ITokenMediator(mediator), IWETH(wrappedNative)));
     }
 
     function _deployDeliveryRouter(
@@ -711,11 +697,6 @@ contract DeployBridge is Script {
 
     /// @dev A router that the chain does not get has the zero address, and the prediction check has compared that.
     function _verifyRouters(ChainConfig memory chain, ChainAddresses memory deployed) private view {
-        if (deployed.wrappedRouter != address(0)) {
-            WETHOmnibridgeRouter router = WETHOmnibridgeRouter(payable(deployed.wrappedRouter));
-            if (address(router.bridge()) != deployed.mediator) revert DeploymentMismatch("wrappedRouter.mediator");
-            if (address(router.WETH()) != chain.wrappedNative) revert DeploymentMismatch("wrappedRouter.wrappedNative");
-        }
         if (deployed.deliveryRouter != address(0)) {
             DeliveryRouter router = DeliveryRouter(payable(deployed.deliveryRouter));
             if (address(router.bridge()) != deployed.mediator) revert DeploymentMismatch("deliveryRouter.mediator");

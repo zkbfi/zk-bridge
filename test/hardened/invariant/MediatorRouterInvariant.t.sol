@@ -104,7 +104,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
     /// payee and its reward address inside the callback, so nothing waits in it between two actions. Shows: after every action,
     /// each of the six delivery routers holds, in each of the ten tokens, a balance that equals the sum of its claimable
     /// records (only the failed delivery address can have one, and the balance equals its own `totalClaimable`), exactly; it holds none of the coin; and its delivery slot is at
-    /// most 1 (not running). The two wrapped native routers hold nothing. Matters: the routers have no owner and no way
+    /// most 1 (not running). Matters: the routers have no owner and no way
     /// to recover a token. A balance with no record behind it would be lost for good, and a record with no balance
     /// behind it would take from another claimant.
     function invariant_aRouterHoldsExactlyWhatItRecordedAndNoRunStaysOpen() public view {
@@ -120,7 +120,6 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
                 assertEq(address(router).balance, 0, "a router holds the coin");
                 assertLe(uint256(vm.load(address(router), router.DELIVERY_SLOT())), 1, "the delivery slot is open");
             }
-            _assertEmpty(address(handler.wethRouterAt(chain)));
         }
     }
 
@@ -229,15 +228,14 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         assertGt(handler.directDeliveries(), 0, "direct deliveries");
 
         // The wrapped native token goes to B by the wrap form and comes back to A through the delivery router and unwrap.
-        handler.relay(1, 0, 6, 2, 4e18, 1, 1);
+        handler.relay(1, 0, 5, 2, 4e18, 1, 1);
         handler.deliver(0, 0, 0, 0);
         handler.relay(1, 1, 3, 2, 1e18, (1 << 32) | 5 | (1 << 8), 1);
         handler.deliver(0, 1, 0x55, 30 gwei);
-        handler.relay(1, 0, 6, 2, 4e18, 1, 1);
+        handler.relay(1, 0, 5, 2, 4e18, 1, 1);
         handler.deliver(0, 0, 0, 0);
-        handler.relay(1, 1, 5, 2, 1e18, 2, 1);
+        handler.relay(1, 1, 4, 2, 1e18, 2, 1);
         handler.deliver(0, 1, 0x55, 30 gwei);
-        assertGt(handler.wethRouterDeliveries(), 0, "the wrapped router was reached");
 
         // A recipient that the token refuses. Actor 2 holds copies of the deny list token. Actors 0 and 1 are denied.
         // The first release names a denied receiver and a fallback that is allowed (the fallback is paid). The second

@@ -6,7 +6,6 @@ import {MockERC20} from "../../../../src/mocks/MockERC20.sol";
 import {MockWrappedNative} from "../../../../src/mocks/MockWrappedNative.sol";
 import {TokenMediator} from "../../../../src/hardened/mediator/TokenMediator.sol";
 import {DeliveryRouter} from "../../../../src/hardened/mediator/DeliveryRouter.sol";
-import {WETHOmnibridgeRouter} from "../../../../src/hardened/mediator/WETHOmnibridgeRouter.sol";
 import {ITokenMediator} from "../../../../src/hardened/mediator/ITokenMediator.sol";
 import {IWETH} from "../../../../src/hardened/mediator/IWETH.sol";
 import {Multicall3} from "../../../../src/hardened/vendor/multicall3/Multicall3.sol";
@@ -22,7 +21,7 @@ import {MedHookedDenyListToken} from "../../mediator/utils/MedMocks.sol";
 
 /// @title RouterWorld
 /// @notice The two chains of the invariant suite: two mediators, each joined to a mock bridge, and on
-/// each chain a wrapped native token, three delivery routers, one wrapped native router and one Multicall3. It holds the
+/// each chain a wrapped native token, three delivery routers and one Multicall3. It holds the
 /// lists that the handler and the invariants both read: the native tokens, the bridged copies, and every account that can
 /// hold a token. The two chains live in one test chain, as in `MediatorFixture`.
 /// @dev Chain 0 is chain A (identifier 1) and chain 1 is chain B (identifier 369). Five native tokens exist. Tokens 0 and
@@ -59,7 +58,6 @@ abstract contract RouterWorld is MediatorFixture {
 
     MockWrappedNative[2] internal wrapped;
     DeliveryRouter[6] internal deliveryRouters;
-    WETHOmnibridgeRouter[2] internal wethRouters;
     Multicall3 internal multicall;
     MedHookedDenyListToken internal denyToken;
     /// @dev The recipient whose payout hook makes the bridge deliver another message. It is a holder, and no message names
@@ -131,10 +129,6 @@ abstract contract RouterWorld is MediatorFixture {
 
     function deliveryRouterAt(uint256 chain, uint256 index) public view returns (DeliveryRouter) {
         return deliveryRouters[chain * ROUTERS_PER_CHAIN + index];
-    }
-
-    function wethRouterAt(uint256 chain) external view returns (WETHOmnibridgeRouter) {
-        return wethRouters[chain];
     }
 
     function wrappedAt(uint256 chain) external view returns (MockWrappedNative) {
@@ -249,8 +243,6 @@ abstract contract RouterWorld is MediatorFixture {
                     ITokenMediator(address(mediatorOf(chain))), IWETH(address(wrapped[chain])), rewards[k], failedSink
                 );
             }
-            wethRouters[chain] =
-                new WETHOmnibridgeRouter(ITokenMediator(address(mediatorOf(chain))), IWETH(address(wrapped[chain])));
         }
     }
 
@@ -282,8 +274,6 @@ abstract contract RouterWorld is MediatorFixture {
         for (uint256 i = 0; i < deliveryRouters.length; i++) {
             holders.push(address(deliveryRouters[i]));
         }
-        holders.push(address(wethRouters[0]));
-        holders.push(address(wethRouters[1]));
     }
 
     /// @dev The address where the copy of each native token will be, from the factory of the other chain. The copy has no

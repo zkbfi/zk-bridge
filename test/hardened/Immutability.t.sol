@@ -213,14 +213,13 @@ contract ImmutabilityTest is Test {
     /// Claim: no ownership or upgrade function names exist in every ABI. Shows: none of the usual names appear.
     /// Matters: a second line of defense in case the first test is weakened by a future mutability change.
     function test_H04_noOwnershipOrUpgradeNamesInAbi() public view {
-        string[8] memory artifacts = [
+        string[7] memory artifacts = [
             "out/BeaconLightClient.sol/BeaconLightClient.json",
             "out/MessageBridge.sol/MessageBridge.json",
             "out/BeaconForkGate.sol/BeaconForkGate.json",
             "out/TokenMediator.sol/TokenMediator.json",
             "out/BridgedToken.sol/BridgedToken.json",
             "out/TokenFactory.sol/TokenFactory.json",
-            "out/WETHOmnibridgeRouter.sol/WETHOmnibridgeRouter.json",
             "out/DeliveryRouter.sol/DeliveryRouter.json"
         ];
         string[9] memory banned = [
