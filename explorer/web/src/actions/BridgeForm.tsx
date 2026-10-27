@@ -34,7 +34,7 @@ const snapshotOf = (context: BridgeContext, side: ChainSide): ChainSnapshot | nu
 const choicesOf = (variant: BridgeFormProps["variant"], pair: PairConfig, tokens: readonly TokenInfo[], context: BridgeContext): readonly TokenChoice[] => {
   if (variant === "wrap") {
     return ([pair.first, pair.second] as const).flatMap((chain): TokenChoice[] => {
-      if (chain.contracts.wrappedNativeRouter === null) return [];
+      if (chain.contracts.deliveryRouter === null) return [];
       const balance = snapshotOf(context, chain.side)?.nativeBalance;
       const suffix = balance === undefined ? "" : `, you hold ${formatUnits(balance, 18, { maximumFractionDigits: 6 })}`;
       return [{ value: `${chain.side}:native`, side: chain.side, label: `Wrap ${chain.nativeSymbol} on ${chain.name}${suffix}` }];

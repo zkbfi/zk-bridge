@@ -1,6 +1,6 @@
 import { decodeFunctionData, encodeFunctionData, erc20Abi, getAddress, parseUnits } from "viem";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_GAS_MARGIN, decodeFeeDirector, encodeFeeDirector, feeModeOf, senderPriceOfToken, settingsOf, tokenMediatorAbi, wETHOmnibridgeRouterAbi } from "@zk-bridge/shared";
+import { DEFAULT_GAS_MARGIN, decodeFeeDirector, encodeFeeDirector, feeModeOf, senderPriceOfToken, settingsOf, tokenMediatorAbi, deliveryRouterAbi } from "@zk-bridge/shared";
 import { buildBridgeSteps } from "@terminal/app/actions";
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import { PlanInputError, planClaim, planSendMessage, planWrapAndRelay } from "@terminal/tx/plan";
@@ -92,7 +92,7 @@ describe("planBridgeSteps without a delivery fee: calldata equals what the termi
     const expected = planWrapAndRelay({ chain: FIXTURE_PAIR.first, receiver, value: parseUnits("1.5", 18) });
     expect(step!.plan.data).toBe(expected.data);
     expect(step!.plan.value).toBe(parseUnits("1.5", 18));
-    expect(step!.plan.data).toBe(encodeFunctionData({ abi: wETHOmnibridgeRouterAbi, functionName: "wrapAndRelayTokens", args: [receiver] }));
+    expect(step!.plan.data).toBe(encodeFunctionData({ abi: deliveryRouterAbi, functionName: "wrapAndRelayTokens", args: [receiver] }));
   });
 
   it("refuses an amount above the balance, with a sentence", async () => {

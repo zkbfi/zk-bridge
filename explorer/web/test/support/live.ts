@@ -25,7 +25,6 @@ const section = (chainId: number, byte: string, extra: Record<string, unknown> =
   bridge: `0x${byte.repeat(20)}`,
   mediator: `0x${byte.repeat(20)}`,
   token_factory: `0x${byte.repeat(20)}`,
-  native_router: `0x${byte.repeat(20)}`,
   wrapped_native: `0x${byte.repeat(20)}`,
   gate: `0x${byte.repeat(20)}`,
   light_client: `0x${byte.repeat(20)}`,

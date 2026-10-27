@@ -138,7 +138,8 @@ describe("when no tip can travel", () => {
 
   it("sends a plain relay toward a chain with no delivery router, and says why", async () => {
     const wpls = FIXTURE_TOKENS.find((token) => token.symbol === "WPLS")!;
-    const draft = computeBridgeDraft(values({ token: `second:${wpls.address}`, amount: "1" }), PERCENT, await data());
+    const withoutRouter = { ...FIXTURE_PAIR, first: { ...FIXTURE_PAIR.first, contracts: { ...FIXTURE_PAIR.first.contracts, deliveryRouter: null } } };
+    const draft = computeBridgeDraft(values({ token: `second:${wpls.address}`, amount: "1" }), PERCENT, { ...(await data()), pair: withoutRouter });
     expect(draft.status).toBe("ready");
     expect(draft.tip).toMatchObject({ kind: "unavailable", reason: expect.stringMatching(/no delivery router for Ethereum.*plain relay, with no tip/) });
     expect(draft.steps.at(-1)!.plan.functionName).toBe("relayTokens");

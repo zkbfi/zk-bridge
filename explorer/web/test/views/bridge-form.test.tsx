@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { getAddress } from "viem";
 import { describe, expect, it, vi } from "vitest";
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
-import type { TokenInfo } from "@terminal/model/types";
+import type { PairConfig, TokenInfo } from "@terminal/model/types";
 import { GAS_MODE_HELP } from "@zk-bridge/shared";
 import { BridgeForm } from "../../src/actions/BridgeForm";
 import type { WebStep } from "../../src/tx/bridge-steps";
@@ -19,10 +19,10 @@ const WRAPPED_TOKENS: readonly TokenInfo[] = [
   { address: FIXTURE_PAIR.second.contracts.wrappedNative!, symbol: "WPLS", decimals: 18, side: "second", counterpart: weth.address },
 ];
 
-const renderForm = async (options: RenderPageOptions & { readonly tokens?: readonly TokenInfo[]; readonly variant?: "tokens" | "wrap"; readonly onReview?: (steps: readonly WebStep[]) => void } = {}) => {
+const renderForm = async (options: RenderPageOptions & { readonly tokens?: readonly TokenInfo[]; readonly variant?: "tokens" | "wrap"; readonly pair?: PairConfig; readonly onReview?: (steps: readonly WebStep[]) => void } = {}) => {
   const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
   const onReview = options.onReview ?? vi.fn();
-  renderPage(<BridgeForm variant={options.variant ?? "tokens"} pair={FIXTURE_PAIR} tokens={options.tokens ?? tokens} context={context} account={FIXTURE_ACCOUNT} onReview={onReview} />, options);
+  renderPage(<BridgeForm variant={options.variant ?? "tokens"} pair={options.pair ?? FIXTURE_PAIR} tokens={options.tokens ?? tokens} context={context} account={FIXTURE_ACCOUNT} onReview={onReview} />, options);
   return { onReview };
 };
 
@@ -217,7 +217,7 @@ describe("the bridge form: the tip before any signature", () => {
   });
 
   it("sends a plain relay toward a chain with no delivery router, and says so", async () => {
-    await renderForm();
+    await renderForm({ pair: { ...FIXTURE_PAIR, first: { ...FIXTURE_PAIR.first, contracts: { ...FIXTURE_PAIR.first.contracts, deliveryRouter: null } } } });
     await userEvent.selectOptions(screen.getByLabelText("Token"), `second:${FIXTURE_TOKENS[4]!.address}`);
     expect(screen.getByText(/no delivery router for Ethereum.*plain relay, with no tip/)).toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: /No tip/ })).toBeNull();

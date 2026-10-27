@@ -198,8 +198,8 @@ describe("the labels of the token choices", () => {
     expect(texts[1]).toBe("Wrap PLS on PulseChain");
   });
 
-  it("offers only the chain that has a wrapped native router in the wrap variant", async () => {
-    const pair: PairConfig = { ...FIXTURE_PAIR, first: { ...FIXTURE_PAIR.first, contracts: { ...FIXTURE_PAIR.first.contracts, wrappedNativeRouter: null } } };
+  it("offers only the chain that has a delivery router in the wrap variant", async () => {
+    const pair: PairConfig = { ...FIXTURE_PAIR, first: { ...FIXTURE_PAIR.first, contracts: { ...FIXTURE_PAIR.first.contracts, deliveryRouter: null } } };
     await renderForm({ variant: "wrap", pair });
     expect(optionTexts("Coin to wrap")).toEqual([expect.stringMatching(/^Wrap PLS on PulseChain/)]);
   });
