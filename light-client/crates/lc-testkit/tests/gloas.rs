@@ -167,7 +167,7 @@ fn a_wrong_execution_header_rlp_is_refused() {
     header.execution.block_hash = keccak256(&short);
     header.execution_branch = state.latest_block_hash_branch();
     header.execution_header_rlp = short;
-    assert!(matches!(lc_core::update::verify_finalized_execution(&SEPOLIA, &header), Err(Error::HeaderDecode(_))));
+    assert!(matches!(lc_core::update::verify_finalized_execution(&header), Err(Error::HeaderDecode(_))));
 }
 
 /// Claim: the branch must lead from `latest_block_hash` to the STATE root. A flipped entry, a shorter and a longer branch,
@@ -225,7 +225,7 @@ fn the_attested_execution_data_of_a_gloas_update_is_not_read() {
     let baseline = fold(&scenario, &scenario.update).unwrap();
     let mut update = scenario.update.clone();
     update.attested_header.execution.block_hash = B256::repeat_byte(0x99);
-    update.attested_header.execution_branch = vec![B256::repeat_byte(0x98); 3];
+    update.attested_header.execution_branch = vec![B256::repeat_byte(0x98); 11];
     update.attested_header.execution_header_rlp = vec![1, 2, 3];
     assert_eq!(fold(&scenario, &update), Ok(baseline));
 
@@ -234,21 +234,25 @@ fn the_attested_execution_data_of_a_gloas_update_is_not_read() {
     assert_eq!(fold(&scenario, &garbled), Err(Error::InvalidExecutionBranch("finalized")));
 }
 
-/// Claim: the header shape follows the fork of the attested header. A Gloas-typed update with a full finalized header, and
-/// a Fulu update with a compact finalized header, are refused with `HeaderFormMismatch`.
+/// Claim: the form byte names the header shape, and the evidence must fit it. A compact header forced to the full form on a
+/// Gloas update, and a Fulu full header forced to the compact form, are refused with `InvalidExecutionBranch`.
+/// Why it is safe: the full form checks index 25 with exactly 4 entries, and the Gloas branch has 11. On a true Gloas body
+/// index 25 lies below the `active_fields` chunk (node 3), a leaf that is no hash, so no full header verifies there. The
+/// compact form needs a branch of 8, 9 or 11 entries, and the Fulu payload branch has 4.
 #[test]
-fn the_header_shape_must_match_the_fork() {
+fn the_header_form_byte_must_fit_the_evidence() {
     let scenario = gloas_scenario();
     let fulu = build_update(&SEPOLIA, fulu_recipe());
     let mut full_in_gloas = scenario.update.clone();
     full_in_gloas.finalized_header.form = HeaderForm::Full;
-    assert_eq!(fold(&scenario, &full_in_gloas), Err(Error::HeaderFormMismatch("finalized")));
+    full_in_gloas.finalized_header.execution.logs_bloom = vec![0; 256];
+    assert_eq!(fold(&scenario, &full_in_gloas), Err(Error::InvalidExecutionBranch("finalized")));
 
     let mut compact_in_fulu = fulu.update.clone();
     compact_in_fulu.finalized_header.form = HeaderForm::Compact;
     assert_eq!(
         verify_light_client_fold_with_fork_versions(&fulu.store, &[step(&compact_in_fulu, fulu.spec)], fulu.spec),
-        Err(Error::HeaderFormMismatch("finalized"))
+        Err(Error::InvalidExecutionBranch("finalized"))
     );
 }
 
@@ -288,7 +292,7 @@ fn a_gloas_typed_update_with_a_pre_gloas_finalized_header_reads_the_number_from_
 fn the_compact_finalized_header_builder_names_the_block_number() {
     for slot in [GLOAS_FIRST_SLOT + 5_000, GLOAS_FIRST_SLOT - 5_000] {
         let header = synthetic_compact_finalized_header(&SEPOLIA, slot, 12_345_678);
-        let verified = lc_core::update::verify_finalized_execution(&SEPOLIA, &header).expect("verifies");
+        let verified = lc_core::update::verify_finalized_execution(&header).expect("verifies");
         assert_eq!(verified.block_number, 12_345_678);
         assert_eq!(verified.block_hash, keccak256(&header.execution_header_rlp));
     }

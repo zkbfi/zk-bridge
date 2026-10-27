@@ -22,7 +22,7 @@
 //! across the Gloas fork.
 //!
 //! Layout of the guest input: chain selector (1 byte), the store, then a list of 1 to 64 steps. Each step is a fork
-//! version (4 bytes) followed by one update. A fold applies the steps in order (`update::verify_fold_with_layout`).
+//! version (4 bytes) followed by one update. A fold applies the steps in order (`update::verify_fold`).
 //! The decoder refuses a count above 64. A count of 0 decodes, and the fold then refuses it.
 
 use crate::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN, PULSECHAIN_TESTNET_V4, SEPOLIA};

@@ -736,7 +736,6 @@ impl StateView {
 /// `Error::Beacon` when the state is not the post-state of the header, is not a Gloas state, or when the RLP is not the
 /// header of `latest_block_hash`. `Error::VerificationRefused` when the result fails the check of `lc-core`.
 pub fn anchor_gloas_header(
-    chain: ChainKind,
     header: &BeaconBlockHeader,
     state: &StateView,
     execution_header_rlp: Vec<u8>,
@@ -768,7 +767,7 @@ pub fn anchor_gloas_header(
             .field_branch(lc_core::ssz_state_gloas::GLOAS_FIELD_LATEST_BLOCK_HASH),
         execution_header_rlp,
     );
-    lc_core::update::verify_finalized_execution(chain.spec(), &anchored)
+    lc_core::update::verify_finalized_execution(&anchored)
         .map_err(|error| Error::VerificationRefused(error.to_string()))?;
     Ok(anchored)
 }

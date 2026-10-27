@@ -27,11 +27,6 @@ pub enum Error {
         /// The fork that is not supported.
         fork: ForkName,
     },
-    /// The execution payload header fields do not match the fork of the header slot.
-    ExecutionHeaderForkMismatch {
-        /// The fork at the beacon header slot.
-        fork: ForkName,
-    },
     /// The update does not move the finalized head forward, or finalizes the genesis slot.
     NotFinalizedProgress(&'static str),
     /// The signature period or the new head period lies outside the allowed window.
@@ -108,9 +103,12 @@ pub enum Error {
     /// `execution_payload.block_hash` position. A message proof from a Gloas source reads the fixed index of the bid
     /// `parent_block_hash` instead (`layout::message_block_hash_gindex_for_fork`).
     GloasPayloadNotFinalized,
-    /// The header shape does not fit the update: a Gloas-typed update (attested slot in a Gloas epoch) needs the compact
-    /// shape for every header, and an earlier update needs the full shape.
-    HeaderFormMismatch(&'static str),
+    /// The finality branch of an update has a length that names no layout. Only 6 (plain depth 5), 7 (plain depth 6)
+    /// and 9 (Gloas progressive) are accepted. The length is the depth, so it also decides the layout.
+    UnsupportedStateBranchLength {
+        /// The number of entries in the finality branch.
+        length: usize,
+    },
     /// The execution branch of the named header is invalid. Full and pre-Gloas compact header: the branch does not lead to
     /// the body root. Gloas compact header: the branch does not lead from `latest_block_hash` to the state root.
     InvalidExecutionBranch(&'static str),
@@ -215,9 +213,6 @@ impl fmt::Display for Error {
                 formatter,
                 "a Gloas block body has no execution payload block hash position (a message source reads the bid parent block hash)"
             ),
-            Self::ExecutionHeaderForkMismatch { fork } => {
-                write!(formatter, "execution payload header fields do not match fork {fork:?}")
-            }
             Self::NotFinalizedProgress(reason) => {
                 write!(formatter, "update does not advance the finalized head: {reason}")
             }
@@ -274,8 +269,8 @@ impl fmt::Display for Error {
             Self::ZeroExecutionBlockHash(which) => {
                 write!(formatter, "the {which} header names a zero execution block hash")
             }
-            Self::HeaderFormMismatch(which) => {
-                write!(formatter, "the {which} header has the wrong shape for the fork of the attested header")
+            Self::UnsupportedStateBranchLength { length } => {
+                write!(formatter, "a finality branch of {length} entries names no layout; only 6, 7 and 9 are accepted")
             }
             Self::InvalidPublicKey { index } => write!(formatter, "public key {index} is not a valid point"),
             Self::InvalidSignatureEncoding => write!(formatter, "signature is not a valid point"),

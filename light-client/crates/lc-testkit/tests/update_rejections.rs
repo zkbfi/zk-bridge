@@ -6,12 +6,11 @@
 
 use alloy_primitives::B256;
 use lc_core::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN};
-use lc_core::layout::{state_layout_for_fork, StateLayout, CAPELLA_DENEB_STATE_LAYOUT, ELECTRA_STATE_LAYOUT};
 use lc_core::types::{compute_signing_root, sync_committee_domain};
 use lc_core::types::{LightClientStore, LightClientUpdate};
 use lc_core::update::{
     advance_light_client_store, table_fork_version, verify_light_client_update,
-    verify_light_client_update_with_fork_version, verify_with_layout,
+    verify_light_client_update_with_fork_version,
 };
 use lc_core::Error;
 use lc_testkit::json::{bootstrap, light_client_update, load_response, store_from_bootstrap};
@@ -178,28 +177,25 @@ fn synthetic_every_branch_entry_matters() {
     }
 }
 
-fn capella_selector(_: lc_core::chain::ForkName) -> lc_core::Result<StateLayout> {
-    Ok(CAPELLA_DENEB_STATE_LAYOUT)
-}
-
-fn electra_selector(_: lc_core::chain::ForkName) -> lc_core::Result<StateLayout> {
-    Ok(ELECTRA_STATE_LAYOUT)
-}
-
-/// Claim: the wrong fork's generalized indices are refused in both directions: Capella indices on an Electra-layout update
-/// and Electra indices on a Capella-layout update. The default selector (the per-fork table) accepts both.
+/// Claim: a finality branch that claims the other plain layout is refused, in both directions. A branch cut by one entry
+/// (PulseChain, true depth 5, length 6 becomes 5) and a branch padded with a leading zero (length 6 becomes 7, which
+/// names the Electra layout) both fail, and so does the Electra branch (length 7) cut to 6.
+/// Why it is safe: the length IS the layout. A padded length 7 on a true depth 5 state asks for index 169, which lands on
+/// the node below `eth1_deposit_index` (a basic leaf), so the honest branch cannot reach the state root. A cut length 6 on
+/// a true depth 6 state asks for index 105, which lands on a padding zero chunk. Control: the unchanged update verifies.
 #[test]
-fn synthetic_wrong_forks_generalized_index_is_refused() {
-    let capella = build_update(&PULSECHAIN, pulsechain_recipe());
-    let electra = build_update(&ETHEREUM_MAINNET, ethereum_recipe());
-    let run = |scenario: &UpdateScenario, selector| {
-        let version = table_fork_version(scenario.spec, scenario.update.signature_slot);
-        verify_with_layout(&scenario.store, &scenario.update, scenario.spec, selector, version)
-            .map(|(output, _)| output)
-    };
-    assert!(run(&capella, state_layout_for_fork).is_ok() && run(&electra, state_layout_for_fork).is_ok(), "control");
-    assert_eq!(run(&electra, capella_selector), Err(Error::InvalidFinalityBranch));
-    assert_eq!(run(&capella, electra_selector), Err(Error::InvalidFinalityBranch));
+fn synthetic_wrong_layout_claim_by_branch_length_is_refused() {
+    for scenario in scenarios() {
+        assert!(verify(&scenario, &scenario.update).is_ok(), "control");
+        let honest = scenario.update.finality_branch.clone();
+        let claimed_other = match honest.len() {
+            6 => std::iter::once(B256::ZERO).chain(honest.iter().copied()).collect::<Vec<_>>(),
+            _ => honest[1..].to_vec(),
+        };
+        let mut update = scenario.update.clone();
+        update.finality_branch = claimed_other;
+        assert_eq!(verify(&scenario, &update), Err(Error::InvalidFinalityBranch), "{}", scenario.spec.name);
+    }
 }
 
 /// Claim: a header that is attested but not finalized is refused. The update names the attested header as the finalized one;
@@ -333,19 +329,19 @@ fn real_ethereum() -> (LightClientStore, LightClientUpdate) {
 }
 
 /// Claim: the attacks of this file also fail on REAL updates from both chains: a flipped signature bit, 341 participants,
-/// every branch corrupted, the wrong fork's index, and an attested header presented as finalized. Control: the untouched
+/// every branch corrupted, the other layout's branch length, and an attested header presented as finalized. Control: the untouched
 /// real update verifies.
 #[test]
 fn real_updates_reject_every_attack() {
-    let cases: Vec<(&str, LightClientStore, LightClientUpdate, &ChainSpec, StateLayout)> = {
+    let cases: Vec<(&str, LightClientStore, LightClientUpdate, &ChainSpec)> = {
         let (eth_store, eth_update) = real_ethereum();
         let (pls_store, pls_update) = real_update_and_store();
         vec![
-            ("ethereum", eth_store, eth_update, &ETHEREUM_MAINNET, CAPELLA_DENEB_STATE_LAYOUT),
-            ("pulsechain", pls_store, pls_update, &PULSECHAIN, ELECTRA_STATE_LAYOUT),
+            ("ethereum", eth_store, eth_update, &ETHEREUM_MAINNET),
+            ("pulsechain", pls_store, pls_update, &PULSECHAIN),
         ]
     };
-    for (name, store, update, spec, wrong_layout) in cases {
+    for (name, store, update, spec) in cases {
         let run = |update: &LightClientUpdate| verify_light_client_update(&store, update, spec);
         assert!(run(&update).is_ok(), "{name}: control");
 
@@ -391,14 +387,12 @@ fn real_updates_reject_every_attack() {
             assert_eq!(run(&tampered), Err(Error::InvalidNextSyncCommitteeBranch), "{name}: next committee branch");
         }
 
-        let selector: lc_core::update::StateLayoutSelector =
-            if wrong_layout == CAPELLA_DENEB_STATE_LAYOUT { capella_selector } else { electra_selector };
-        let version = table_fork_version(spec, update.signature_slot);
-        assert_eq!(
-            verify_with_layout(&store, &update, spec, selector, version).map(|(output, _)| output),
-            Err(Error::InvalidFinalityBranch),
-            "{name}: wrong fork's index"
-        );
+        let mut tampered = update.clone();
+        tampered.finality_branch = match update.finality_branch.len() {
+            6 => std::iter::once(B256::ZERO).chain(update.finality_branch.iter().copied()).collect(),
+            _ => update.finality_branch[1..].to_vec(),
+        };
+        assert_eq!(run(&tampered), Err(Error::InvalidFinalityBranch), "{name}: the other plain layout's length");
 
         let mut tampered = update.clone();
         tampered.finalized_header = tampered.attested_header.clone();

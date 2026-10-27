@@ -10,7 +10,7 @@
 
 use crate::chain::{ChainSpec, DOMAIN_SYNC_COMMITTEE, SYNC_COMMITTEE_SIZE};
 use crate::error::{Error, Result};
-use crate::layout::{execution_header_form_for_fork, ExecutionHeaderForm};
+use crate::layout::ExecutionHeaderForm;
 use crate::profile::tracked;
 use crate::ssz::{byte_list_root, byte_vector_root, hash_pair, merkleize, u64_chunk};
 use alloy_primitives::{Address, FixedBytes, B256, U256};
@@ -124,8 +124,8 @@ impl ExecutionPayloadHeader {
     /// The SSZ hash tree root for the given header form.
     ///
     /// # Errors
-    /// `ExecutionHeaderForkMismatch` is not raised here: use [`Self::hash_tree_root_for_slot`] for the fork check.
-    /// This function returns `HeaderDecode` when the sizes of `logs_bloom` or `extra_data` are wrong.
+    /// `HeaderDecode` when the sizes of `logs_bloom` or `extra_data` are wrong, or when the blob gas fields do not
+    /// match `form`. [`Self::hash_tree_root_in_named_form`] takes the form from the header itself.
     pub fn hash_tree_root(&self, form: ExecutionHeaderForm) -> Result<B256> {
         Ok(merkleize(&self.field_roots(form)?))
     }
@@ -172,13 +172,22 @@ impl ExecutionPayloadHeader {
         Ok(fields)
     }
 
-    /// The hash tree root, with the header form chosen by the fork at `beacon_slot`.
+    /// The field list that the header names: Deneb (17 fields) when the blob gas fields are present, Capella (15 fields)
+    /// when they are absent. The prover names it in the input (the blob flag of the wire format), and no fork table
+    /// decides it. The two roots cannot collide: that would need a `uint64` or padding leaf to equal a hash.
+    pub fn named_form(&self) -> ExecutionHeaderForm {
+        match self.blob_gas {
+            Some(_) => ExecutionHeaderForm::Deneb,
+            None => ExecutionHeaderForm::Capella,
+        }
+    }
+
+    /// The hash tree root in the form that [`Self::named_form`] names.
     ///
     /// # Errors
-    /// `UnsupportedFork` before Capella, `HeaderDecode` when the blob gas fields do not match the fork.
-    pub fn hash_tree_root_for_slot(&self, spec: &ChainSpec, beacon_slot: u64) -> Result<B256> {
-        let form = execution_header_form_for_fork(spec.fork_at_slot(beacon_slot))?;
-        self.hash_tree_root(form)
+    /// `HeaderDecode` when the size of `logs_bloom` or `extra_data` is wrong.
+    pub fn hash_tree_root_in_named_form(&self) -> Result<B256> {
+        self.hash_tree_root(self.named_form())
     }
 }
 

@@ -6,7 +6,7 @@
 //! a signed input, not a table lookup. A version outside the fork table is therefore accepted, and that is the purpose.
 //!
 //! Rules:
-//! - The fold steps (zero to 64) follow every rule of [`crate::update::verify_fold_with_layout`], with the fork
+//! - The fold steps (zero to 64) follow every rule of [`crate::update::verify_fold`], with the fork
 //!   versions the steps carry.
 //! - The signing committee is the current committee of the final store. It is the next committee of the final store only
 //!   when the fold crossed into a new period and proved that next committee itself. A next-period signature without a
@@ -24,9 +24,8 @@
 use crate::abi::ForkObservation;
 use crate::chain::{ChainSpec, MIN_PARTICIPANTS};
 use crate::error::{Error, Result};
-use crate::layout::state_layout_for_fork;
 use crate::types::{BeaconBlockHeader, LightClientStore, SyncAggregate};
-use crate::update::{verify_fold_with_layout, verify_sync_aggregate, FoldStep, MAX_FOLD_UPDATES};
+use crate::update::{verify_fold, verify_sync_aggregate, FoldStep, MAX_FOLD_UPDATES};
 use alloy_primitives::{FixedBytes, B256};
 
 /// The signed claim of an observation: a sync aggregate over a header root, under a fork version the prover names.
@@ -119,6 +118,6 @@ fn fold_if_any(store: &LightClientStore, steps: &[FoldStep], spec: &ChainSpec) -
     if steps.is_empty() {
         return Ok((store.clone(), B256::ZERO));
     }
-    let (output, final_store) = verify_fold_with_layout(store, steps, spec, state_layout_for_fork)?;
+    let (output, final_store) = verify_fold(store, steps, spec)?;
     Ok((final_store, output.nextSyncCommitteeHash))
 }

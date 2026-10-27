@@ -5,7 +5,13 @@
 //! - at least 342 of 512 members sign (the specification only asks for one in `validate`, and asks for two thirds in
 //!   `process_light_client_update`; the bridge always needs two thirds);
 //! - the update must carry a finalized header and the head must strictly advance;
-//! - the signature binds to the chain through the genesis validators root and the fork version;
+//! - the signature binds to the chain through the genesis validators root and the fork version. The fork version is a
+//!   private input of each step. The committee signs a domain that contains it, so a wrong version gives no valid
+//!   signature;
+//! - the evidence chooses the layout, not the fork table: the finality branch length names the state layout, the form
+//!   byte names the header form, the blob flag names the payload field list, and the compact branch length names the
+//!   execution anchor. Every branch check is exact, with no leading zeros. See "Change: the layout comes from the
+//!   evidence" in `docs/hardened-build-contract.md`;
 //! - the signing committee is always public: the stored current committee (`previousSyncCommitteeHash`), or the
 //!   committee named by `syncCommitteeHash` when the finalized header crosses into the next period. An update signed in
 //!   the next period but finalized in the stored period is refused (`SignatureInNextPeriodWithoutCrossing`);
@@ -16,7 +22,7 @@
 //!   private starting next committee, so a contract can refuse an invented one.
 //!
 //! The contract rules behind this are in `docs/hardened-build-contract.md`, section "Change: historical ancestry and
-//! folded updates". A fold ([`verify_fold_with_layout`]) applies 1 to 64 updates in order and carries the store from
+//! folded updates". A fold ([`verify_fold`]) applies 1 to 64 updates in order and carries the store from
 //! step to step. Its output describes the whole fold: `previous*` and `startNextSyncCommitteeHash` the initial store,
 //! `new*`, `executionBlock*` and `syncCommitteeHash` the final store, and `nextSyncCommitteeHash` the final next committee
 //! only if a step of the fold proved it.
@@ -29,15 +35,15 @@
 use crate::abi::LightClientOutput;
 use crate::bls::verify_aggregate_by_subtraction;
 use crate::chain::DOMAIN_SYNC_COMMITTEE;
-use crate::chain::{ChainSpec, ForkName, GENESIS_SLOT, MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZE};
+use crate::chain::{ChainSpec, GENESIS_SLOT, MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZE};
 use crate::error::{Error, Result};
 use crate::execution::{decode_execution_anchor_fields, execution_block_hash};
 use crate::layout::{
-    compact_block_hash_gindex_for_fork, execution_header_form_for_fork, state_layout_for_fork, StateLayout,
-    EXECUTION_PAYLOAD_GINDEX, LATEST_BLOCK_HASH_GINDEX_GLOAS,
+    compact_anchor_for_branch_length, state_layout_for_fork, state_layout_for_finality_branch_length,
+    CompactAnchorRoot, EXECUTION_PAYLOAD_GINDEX,
 };
 use crate::profile::tracked;
-use crate::ssz::is_valid_normalized_merkle_branch;
+use crate::ssz::{is_valid_exact_branch, is_valid_normalized_merkle_branch};
 use crate::types::{
     compute_domain, compute_signing_root, HeaderForm, LightClientHeader, LightClientStore, LightClientUpdate,
     SyncAggregate, SyncCommittee,
@@ -57,12 +63,12 @@ pub struct FoldStep {
     pub fork_version: [u8; 4],
 }
 
-/// Chooses the beacon state layout for the fork of the attested header. Tests replace it to model the "wrong fork" attack.
-pub type StateLayoutSelector = fn(crate::chain::ForkName) -> Result<StateLayout>;
-
-/// [`is_valid_normalized_merkle_branch`] under the profile label `merkle_branch`.
+/// [`is_valid_exact_branch`] under the profile label `merkle_branch`.
+///
+/// The branch must have exactly `floorlog2(gindex)` entries. No leading zero is stripped and none is accepted: the
+/// length of a branch is the depth of its node, and the layout rules depend on that.
 fn branch_is_valid(leaf: &B256, branch: &[B256], gindex: u64, root: &B256) -> bool {
-    tracked("merkle_branch", || is_valid_normalized_merkle_branch(leaf, branch, gindex, root))
+    tracked("merkle_branch", || is_valid_exact_branch(leaf, branch, gindex, root))
 }
 
 /// The execution block of a finalized header, after every check.
@@ -77,43 +83,43 @@ pub struct VerifiedExecution {
 
 /// Checks the execution branch of one light-client header (`is_valid_light_client_header`, Capella and later).
 ///
-/// Full form: the payload header is hashed and the branch is checked at generalized index 25 (`EXECUTION_PAYLOAD_GINDEX`)
-/// against the body root. A full header in a Gloas epoch is refused, because Gloas has no payload header.
+/// The evidence chooses the shape. The fork table decides nothing here.
 ///
-/// Compact form, header slot before Gloas: `execution_block_hash` is the leaf and the branch leads to the body root at
-/// 812 (Deneb to Fulu) or 412 (Capella). A zero hash is refused.
+/// Full form: the payload header is hashed in the field list that it names (Capella 15 fields, Deneb 17, see
+/// `ExecutionPayloadHeader::named_form`) and the branch must have 4 entries, index 25 (`EXECUTION_PAYLOAD_GINDEX`),
+/// against the body root. On a Gloas body index 25 lies below the `active_fields` chunk, a leaf that is no hash, so a full
+/// header cannot verify there.
 ///
-/// Compact form, header slot in Gloas: the leaf is `execution_block_hash` and the branch leads to the STATE root of the
-/// header at [`LATEST_BLOCK_HASH_GINDEX_GLOAS`] (2947). So the hash is `state.latest_block_hash` of the post-state of the
-/// header. The bid in the body is never read. Consensus writes `latest_block_hash` only for a payload that a block of the
-/// chain confirmed (`apply_parent_execution_payload` in `specs/gloas/beacon-chain.md`), so for a FINALIZED header it names
-/// an execution block in finalized history. It is the newest confirmed payload before the slot of the header, not the
-/// payload of the slot itself.
+/// Compact form: `execution_block_hash` is the leaf. A zero hash is refused. The branch length names the anchor
+/// ([`compact_anchor_for_branch_length`]): 8 is index 412 and 9 is index 812, both under the body root, 11 is
+/// `latest_block_hash` at 2947 under the STATE root of the header. In the last case the hash is
+/// `state.latest_block_hash` of the post-state of the header. The bid in the body is never read. Consensus writes
+/// `latest_block_hash` only for a payload that a block of the chain confirmed (`apply_parent_execution_payload` in
+/// `specs/gloas/beacon-chain.md`), so for a FINALIZED header it names an execution block in finalized history. It is the
+/// newest confirmed payload before the slot of the header, not the payload of the slot itself. Any other length is
+/// refused.
 ///
 /// # Errors
-/// `UnsupportedFork`, `HeaderDecode` for a malformed header, `ZeroExecutionBlockHash(which)`,
-/// `InvalidExecutionBranch(which)` for a bad branch.
-pub fn verify_execution_branch(spec: &ChainSpec, header: &LightClientHeader, which: &'static str) -> Result<()> {
-    let fork = spec.fork_at_slot(header.beacon.slot);
+/// `HeaderDecode` for a malformed payload header, `ZeroExecutionBlockHash(which)`, `InvalidExecutionBranch(which)` for a
+/// bad branch or a length that names no anchor.
+pub fn verify_execution_branch(header: &LightClientHeader, which: &'static str) -> Result<()> {
     let (leaf, gindex, root) = match header.form {
-        HeaderForm::Full => {
-            execution_header_form_for_fork(fork)?;
-            (
-                header.execution.hash_tree_root_for_slot(spec, header.beacon.slot)?,
-                EXECUTION_PAYLOAD_GINDEX,
-                &header.beacon.body_root,
-            )
-        }
+        HeaderForm::Full => (
+            header.execution.hash_tree_root_in_named_form()?,
+            EXECUTION_PAYLOAD_GINDEX,
+            &header.beacon.body_root,
+        ),
         HeaderForm::Compact => {
             if header.execution_block_hash() == B256::ZERO {
                 return Err(Error::ZeroExecutionBlockHash(which));
             }
-            match fork >= ForkName::Gloas {
-                true => (header.execution_block_hash(), LATEST_BLOCK_HASH_GINDEX_GLOAS, &header.beacon.state_root),
-                false => {
-                    (header.execution_block_hash(), compact_block_hash_gindex_for_fork(fork)?, &header.beacon.body_root)
-                }
-            }
+            let anchor = compact_anchor_for_branch_length(header.execution_branch.len())
+                .ok_or(Error::InvalidExecutionBranch(which))?;
+            let root = match anchor.root {
+                CompactAnchorRoot::Body => &header.beacon.body_root,
+                CompactAnchorRoot::State => &header.beacon.state_root,
+            };
+            (header.execution_block_hash(), anchor.gindex, root)
         }
     };
     if branch_is_valid(&leaf, &header.execution_branch, gindex, root) {
@@ -132,8 +138,8 @@ pub fn verify_execution_branch(spec: &ChainSpec, header: &LightClientHeader, whi
 /// # Errors
 /// The errors of [`verify_execution_branch`], `ExecutionHeaderHashMismatch`, and `HeaderDecode` for an RLP that does not
 /// decode.
-pub fn verify_finalized_execution(spec: &ChainSpec, header: &LightClientHeader) -> Result<VerifiedExecution> {
-    verify_execution_branch(spec, header, "finalized")?;
+pub fn verify_finalized_execution(header: &LightClientHeader) -> Result<VerifiedExecution> {
+    verify_execution_branch(header, "finalized")?;
     match header.form {
         HeaderForm::Full => Ok(VerifiedExecution {
             block_hash: header.execution_block_hash(),
@@ -151,35 +157,20 @@ pub fn verify_finalized_execution(spec: &ChainSpec, header: &LightClientHeader) 
 }
 
 /// Checks the execution part of the ATTESTED header. Its execution data does not reach the output: the committee signs the
-/// beacon header, and the output reads the finalized header only. So a Gloas compact attested header is not checked at all
-/// (its node-served branch leads to the bid in the body, which the verifier never reads). Every other header gets the
-/// branch check of the specification.
+/// beacon header, and the output reads the finalized header only. So a compact attested header with a state anchored
+/// branch (11 entries, the Gloas shape) is not checked at all: its node-served branch leads to the bid in the body, which
+/// the verifier never reads. Every other header gets the branch check of the specification.
 ///
 /// # Errors
 /// The errors of [`verify_execution_branch`].
-fn verify_attested_execution(spec: &ChainSpec, header: &LightClientHeader) -> Result<()> {
-    let compact_in_gloas =
-        header.form == HeaderForm::Compact && spec.fork_at_slot(header.beacon.slot) >= ForkName::Gloas;
-    if compact_in_gloas {
+fn verify_attested_execution(header: &LightClientHeader) -> Result<()> {
+    let state_anchored = header.form == HeaderForm::Compact
+        && compact_anchor_for_branch_length(header.execution_branch.len())
+            .is_some_and(|anchor| anchor.root == CompactAnchorRoot::State);
+    if state_anchored {
         return Ok(());
     }
-    verify_execution_branch(spec, header, "attested")
-}
-
-/// Requires the header shape that the fork of the attested header dictates: compact for every header of a Gloas-typed
-/// update, full for every header of an earlier one.
-fn require_header_form(spec: &ChainSpec, update: &LightClientUpdate) -> Result<()> {
-    let wanted = match spec.fork_at_slot(update.attested_header.beacon.slot) >= ForkName::Gloas {
-        true => HeaderForm::Compact,
-        false => HeaderForm::Full,
-    };
-    if update.attested_header.form != wanted {
-        return Err(Error::HeaderFormMismatch("attested"));
-    }
-    if update.finalized_header.form != wanted {
-        return Err(Error::HeaderFormMismatch("finalized"));
-    }
-    Ok(())
+    verify_execution_branch(header, "attested")
 }
 
 /// Verifies a sync aggregate over `signed_root` (a beacon block root) with an explicit fork version.
@@ -215,11 +206,15 @@ pub fn verify_sync_aggregate(
 }
 
 /// The fork version from the fork table of `spec`, for the slot before `signature_slot`.
+///
+/// The programs never call this. It serves the code that BUILDS an input (the prover, the tests): the prover may read the
+/// fork schedule from a beacon node to fill the fork version of a step, and the proof checks it through the signature.
 pub fn table_fork_version(spec: &ChainSpec, signature_slot: u64) -> [u8; 4] {
     spec.fork_version_at(spec.epoch_at_slot(signature_slot.saturating_sub(1)))
 }
 
-/// Verifies an update against the store and returns the public output. The fork version comes from the table in `spec`.
+/// Verifies an update against the store and returns the public output. The fork version comes from the table in `spec`
+/// (a convenience for tests and tools; the programs take the version as an input).
 ///
 /// # Errors
 /// An [`Error`] naming the first failed rule.
@@ -232,7 +227,6 @@ pub fn verify_light_client_update(
 }
 
 /// Verifies an update with the fork version supplied by the caller (a private input of the guest program).
-/// The per-fork table still selects the generalized indices.
 ///
 /// # Errors
 /// An [`Error`] naming the first failed rule. A wrong version gives `SignatureVerificationFailed`.
@@ -242,7 +236,7 @@ pub fn verify_light_client_update_with_fork_version(
     spec: &ChainSpec,
     fork_version: [u8; 4],
 ) -> Result<LightClientOutput> {
-    verify_with_layout(store, update, spec, state_layout_for_fork, fork_version).map(|(output, _)| output)
+    verify_step(store, update, spec, fork_version).map(|(output, _)| output)
 }
 
 /// Like [`verify_light_client_update`], and also returns the store after the update.
@@ -254,18 +248,22 @@ pub fn advance_light_client_store(
     update: &LightClientUpdate,
     spec: &ChainSpec,
 ) -> Result<(LightClientOutput, LightClientStore)> {
-    verify_with_layout(store, update, spec, state_layout_for_fork, table_fork_version(spec, update.signature_slot))
+    verify_step(store, update, spec, table_fork_version(spec, update.signature_slot))
 }
 
-/// Same as [`advance_light_client_store`] with a caller supplied layout selector and fork version. Used by the wrong-fork tests.
+/// Verifies one update with the fork version supplied by the caller, and returns the output and the store after the update.
+/// This is one step of a fold ([`verify_fold`]).
+///
+/// The evidence chooses the layouts: the length of the finality branch names the state layout
+/// ([`state_layout_for_finality_branch_length`]), and the next committee branch must have the depth of that layout. A
+/// branch of another length, or a mix of lengths in one step, is refused.
 ///
 /// # Errors
 /// An [`Error`] naming the first failed rule.
-pub fn verify_with_layout(
+pub fn verify_step(
     store: &LightClientStore,
     update: &LightClientUpdate,
     spec: &ChainSpec,
-    select_layout: StateLayoutSelector,
     fork_version: [u8; 4],
 ) -> Result<(LightClientOutput, LightClientStore)> {
     let attested = &update.attested_header;
@@ -291,10 +289,9 @@ pub fn verify_with_layout(
         return Err(Error::NotFinalizedProgress("the finalized slot is not after the stored head"));
     }
 
-    // Both headers must be valid light-client headers of a supported fork, in the shape the attested fork dictates.
-    require_header_form(spec, update)?;
-    verify_attested_execution(spec, attested)?;
-    let finalized_execution = verify_finalized_execution(spec, finalized)?;
+    // Both headers must be valid light-client headers, in the shape their form byte names.
+    verify_attested_execution(attested)?;
+    let finalized_execution = verify_finalized_execution(finalized)?;
 
     // Periods: store period sp, finalized period np, attested period ap, signature period sig.
     let store_period = spec.period_at_slot(store.header_slot);
@@ -318,8 +315,8 @@ pub fn verify_with_layout(
         return Err(Error::NextSyncCommitteeUnknown);
     }
 
-    // State proofs from the attested state root. The layout follows the fork of the attested slot.
-    let layout = select_layout(spec.fork_at_slot(attested.beacon.slot))?;
+    // State proofs from the attested state root. The layout follows the length of the finality branch.
+    let layout = state_layout_for_finality_branch_length(update.finality_branch.len())?;
     let finalized_root = finalized.beacon.hash_tree_root();
     if !branch_is_valid(
         &finalized_root,
@@ -426,7 +423,7 @@ pub fn verify_with_layout(
 }
 
 /// Applies 1 to 64 updates in order, carrying the store from step to step, and returns one output for the whole fold
-/// with the store after the last step. Every step keeps every rule of [`verify_with_layout`], including "a next-period
+/// with the store after the last step. The steps may use different layouts: the branch lengths of each step decide. Every step keeps every rule of [`verify_step`], including "a next-period
 /// signature needs a crossing" and "a crossing needs a known next committee". When the initial store has no next
 /// committee, the first crossing must come after a step that proves it.
 ///
@@ -437,11 +434,10 @@ pub fn verify_with_layout(
 ///
 /// # Errors
 /// `FoldLengthOutOfRange` for an empty list or more than [`MAX_FOLD_UPDATES`]. Otherwise the first failed rule of a step.
-pub fn verify_fold_with_layout(
+pub fn verify_fold(
     store: &LightClientStore,
     steps: &[FoldStep],
     spec: &ChainSpec,
-    select_layout: StateLayoutSelector,
 ) -> Result<(LightClientOutput, LightClientStore)> {
     if steps.is_empty() || steps.len() > MAX_FOLD_UPDATES {
         return Err(Error::FoldLengthOutOfRange { count: steps.len() });
@@ -452,7 +448,7 @@ pub fn verify_fold_with_layout(
     let mut last_output = None;
     for step in steps {
         let store_period = spec.period_at_slot(current.header_slot);
-        let (output, advanced) = verify_with_layout(&current, &step.update, spec, select_layout, step.fork_version)?;
+        let (output, advanced) = verify_step(&current, &step.update, spec, step.fork_version)?;
         let crossed = spec.period_at_slot(output.newHeadSlot) != store_period;
         // A step that proves the next committee sets it. A crossing without a proof empties it. Otherwise it stays.
         if output.nextSyncCommitteeHash != B256::ZERO {
@@ -483,10 +479,10 @@ pub fn verify_fold_with_layout(
     Ok((output, current))
 }
 
-/// A fold with the fork version of each step from the table in `spec`, and the per-fork layouts.
+/// A fold with the fork version of each step from the table in `spec` (a convenience for tests and tools).
 ///
 /// # Errors
-/// See [`verify_fold_with_layout`].
+/// See [`verify_fold`].
 pub fn verify_light_client_fold(
     store: &LightClientStore,
     updates: &[LightClientUpdate],
@@ -499,19 +495,19 @@ pub fn verify_light_client_fold(
             fork_version: table_fork_version(spec, update.signature_slot),
         })
         .collect();
-    verify_fold_with_layout(store, &steps, spec, state_layout_for_fork)
+    verify_fold(store, &steps, spec)
 }
 
 /// A fold with the fork version of each step supplied by the caller (private inputs of the guest program).
 ///
 /// # Errors
-/// See [`verify_fold_with_layout`].
+/// See [`verify_fold`].
 pub fn verify_light_client_fold_with_fork_versions(
     store: &LightClientStore,
     steps: &[FoldStep],
     spec: &ChainSpec,
 ) -> Result<LightClientOutput> {
-    verify_fold_with_layout(store, steps, spec, state_layout_for_fork).map(|(output, _)| output)
+    verify_fold(store, steps, spec).map(|(output, _)| output)
 }
 
 /// Verifies the bootstrap of a store: the committee branch of the header state root.

@@ -125,18 +125,18 @@ fn the_real_anchor_gives_the_real_block_number() {
     let update = real_update();
     let state = real_state();
     let header = anchored_finalized_header(&update, &state);
-    let proven = verify_finalized_execution(&SEPOLIA, &header).expect("the real anchor verifies");
+    let proven = verify_finalized_execution(&header).expect("the real anchor verifies");
     assert_eq!(proven.block_hash, keccak256(real_header_rlp()));
     assert_eq!(proven.block_number, decode_execution_anchor_fields(&real_header_rlp()).unwrap().number);
 
     let mut flipped = header.clone();
     flipped.execution_branch[3].0[1] ^= 1;
-    assert_eq!(verify_finalized_execution(&SEPOLIA, &flipped), Err(Error::InvalidExecutionBranch("finalized")));
+    assert_eq!(verify_finalized_execution(&flipped), Err(Error::InvalidExecutionBranch("finalized")));
 
     let mut changed = header.clone();
     let last = changed.execution_header_rlp.len() - 1;
     changed.execution_header_rlp[last] ^= 1;
-    assert_eq!(verify_finalized_execution(&SEPOLIA, &changed), Err(Error::ExecutionHeaderHashMismatch));
+    assert_eq!(verify_finalized_execution(&changed), Err(Error::ExecutionHeaderHashMismatch));
 
     // The RLP of the parent block: a real header, but not the one the state names.
     let mut parent = header.clone();
@@ -144,12 +144,12 @@ fn the_real_anchor_gives_the_real_block_number() {
     parent.execution_header_rlp = hex::decode(wrapper["parent_raw_header"].as_str().unwrap()).unwrap();
     assert_ne!(parent.execution_header_rlp, real_header_rlp());
     assert!(decode_execution_anchor_fields(&parent.execution_header_rlp).is_ok(), "a real header that decodes");
-    assert_eq!(verify_finalized_execution(&SEPOLIA, &parent), Err(Error::ExecutionHeaderHashMismatch));
+    assert_eq!(verify_finalized_execution(&parent), Err(Error::ExecutionHeaderHashMismatch));
 
     // The bid hash is not the anchor: the same branch with the bid `block_hash` of the finalized block gives no match.
     let mut bid = header.clone();
     bid.execution.block_hash = B256::repeat_byte(0x24);
-    assert_eq!(verify_finalized_execution(&SEPOLIA, &bid), Err(Error::InvalidExecutionBranch("finalized")));
+    assert_eq!(verify_finalized_execution(&bid), Err(Error::InvalidExecutionBranch("finalized")));
 }
 
 /// Claim: a REAL Gloas fold verifies end to end. The store holds the real current committee of the finalized state. The

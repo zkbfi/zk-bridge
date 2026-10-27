@@ -338,7 +338,7 @@ impl HttpBeaconSource {
                 .ok_or_else(|| Error::Beacon("the finalized state is not a Gloas state".into()))?;
             let rlp = headers.raw_header(hash)?;
             update.finalized_header =
-                anchor_gloas_header(self.chain, &finalized.beacon, &state, rlp)?;
+                anchor_gloas_header(&finalized.beacon, &state, rlp)?;
         }
         Ok(())
     }

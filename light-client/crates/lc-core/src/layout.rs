@@ -73,30 +73,45 @@ pub const BODY_DEPTHS: core::ops::RangeInclusive<u32> = 4..=5;
 /// The tree depths of `ExecutionPayload` that a block hash position may have: 16 or 32 leaves.
 pub const PAYLOAD_DEPTHS: core::ops::RangeInclusive<u32> = 4..=5;
 
+/// The layout of a plain `BeaconState` tree of `depth`, computed from the field indices and not copied.
+///
+/// A plain container pads its fields to `2^depth` leaves, so field `n` has the index `2^depth + n`. Source of the field
+/// indices: `finalized_checkpoint` 20, `current_sync_committee` 22, `next_sync_committee` 23, `block_roots` 5 and
+/// `historical_summaries` 27 (`specs/phase0/beacon-chain.md`, `specs/altair/beacon-chain.md` and
+/// `specs/capella/beacon-chain.md`). `root` is field 1 of `Checkpoint`, so the finalized root is `(2^depth + 20) * 2 + 1`.
+/// Depth 5 gives 105, 54, 55 and depth 6 gives 169, 86, 87, the constants of the light-client specifications.
+pub const fn plain_state_layout(depth: u32) -> StateLayout {
+    let first_field = 1u64 << depth;
+    StateLayout {
+        finalized_root_gindex: (first_field + STATE_FIELD_FINALIZED_CHECKPOINT) * 2 + 1,
+        current_sync_committee_gindex: first_field + STATE_FIELD_CURRENT_SYNC_COMMITTEE,
+        next_sync_committee_gindex: first_field + STATE_FIELD_NEXT_SYNC_COMMITTEE,
+        block_roots_gindex: first_field + BLOCK_ROOTS_FIELD_INDEX,
+        historical_summaries_gindex: first_field + HISTORICAL_SUMMARIES_FIELD_INDEX,
+    }
+}
+
+/// Position of `finalized_checkpoint` among the `BeaconState` fields in every plain layout.
+const STATE_FIELD_FINALIZED_CHECKPOINT: u64 = 20;
+
+/// Position of `current_sync_committee` among the `BeaconState` fields in every plain layout.
+const STATE_FIELD_CURRENT_SYNC_COMMITTEE: u64 = 22;
+
+/// Position of `next_sync_committee` among the `BeaconState` fields in every plain layout.
+const STATE_FIELD_NEXT_SYNC_COMMITTEE: u64 = 23;
+
 /// Layout of the Capella and Deneb `BeaconState` (28 fields, tree depth 5).
 ///
 /// Source: `specs/altair/light-client/sync-protocol.md` "Constants": 105, 54, 55.
 /// `block_roots` is field 5, so its index is 32 + 5 = 37 (the field order is in `specs/phase0/beacon-chain.md`,
 /// container `BeaconState`).
-pub const CAPELLA_DENEB_STATE_LAYOUT: StateLayout = StateLayout {
-    finalized_root_gindex: 105,
-    current_sync_committee_gindex: 54,
-    next_sync_committee_gindex: 55,
-    block_roots_gindex: 37,
-    historical_summaries_gindex: 32 + HISTORICAL_SUMMARIES_FIELD_INDEX,
-};
+pub const CAPELLA_DENEB_STATE_LAYOUT: StateLayout = plain_state_layout(5);
 
 /// Layout of the Electra and Fulu `BeaconState` (more than 32 fields, tree depth 6).
 ///
 /// Source: `specs/electra/light-client/sync-protocol.md` "Constants": 169, 86, 87.
 /// `block_roots` is field 5, so its index is 64 + 5 = 69.
-pub const ELECTRA_STATE_LAYOUT: StateLayout = StateLayout {
-    finalized_root_gindex: 169,
-    current_sync_committee_gindex: 86,
-    next_sync_committee_gindex: 87,
-    block_roots_gindex: 69,
-    historical_summaries_gindex: 64 + HISTORICAL_SUMMARIES_FIELD_INDEX,
-};
+pub const ELECTRA_STATE_LAYOUT: StateLayout = plain_state_layout(6);
 
 /// `EXECUTION_PAYLOAD_GINDEX`: `get_generalized_index(BeaconBlockBody, "execution_payload")` = 25.
 ///
@@ -417,22 +432,59 @@ pub fn is_gloas_block_hash_position(gindex: u64) -> bool {
     gindex == BLOCK_HASH_GINDEX_GLOAS
 }
 
-/// The generalized index that proves the execution block hash of a light-client header in the COMPACT form
-/// (`execution_block_hash` plus `execution_branch`) when the header slot is BEFORE Gloas: Deneb to Fulu 812, Capella 412.
+/// Which root a compact header branch leads to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompactAnchorRoot {
+    /// The body root of the beacon header: Capella to Fulu.
+    Body,
+    /// The state root of the beacon header: Gloas, where `state.latest_block_hash` is the anchor.
+    State,
+}
+
+/// Where the branch of a compact header leads: a generalized index and the root it must reach.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompactAnchor {
+    /// The generalized index of the execution block hash.
+    pub gindex: u64,
+    /// The root of the beacon header that the branch must reach.
+    pub root: CompactAnchorRoot,
+}
+
+/// The branch lengths of the state proofs that the programs accept, and the layout of each.
 ///
-/// A compact header can sit before the fork, because every header of a Gloas-typed update has the compact shape
-/// (`specs/gloas/light-client/sync-protocol.md`, "Modified `is_valid_light_client_header`"). A compact header of a Gloas
-/// slot is anchored in the state, not in the body: see [`LATEST_BLOCK_HASH_GINDEX_GLOAS`].
+/// The length of the finality branch is the depth of the generalized index, so it names the layout. Length 6 is a plain
+/// state of depth 5 (indices 105, 54, 55), length 7 a plain state of depth 6 (169, 86, 87), length 9 the Gloas progressive
+/// state (735, 2945, 2946). Every other length is refused, depth 7 (length 8) included: on a chain that is truly depth 7
+/// a wrong claim would land on fields that no specification defines yet (see "Change: the layout comes from the
+/// evidence" in `docs/hardened-build-contract.md`).
+pub const ALLOWED_FINALITY_BRANCH_LENGTHS: [usize; 3] = [6, 7, 9];
+
+/// The state layout that a finality branch of `length` entries names.
 ///
 /// # Errors
-/// `UnsupportedFork` before Capella. The specification accepts a zero hash with an empty branch there, but the bridge
-/// needs a non-zero execution block hash, so it refuses these headers. `GloasPayloadNotFinalized` for Gloas.
-pub fn compact_block_hash_gindex_for_fork(fork: ForkName) -> Result<u64> {
-    match fork {
-        ForkName::Gloas => Err(Error::GloasPayloadNotFinalized),
-        ForkName::Deneb | ForkName::Electra | ForkName::Fulu => Ok(BLOCK_HASH_GINDEX_DENEB),
-        ForkName::Capella => Ok(BLOCK_HASH_GINDEX_CAPELLA),
-        ForkName::Phase0 | ForkName::Altair | ForkName::Bellatrix => Err(Error::UnsupportedFork { fork }),
+/// `UnsupportedStateBranchLength` for every length other than 6, 7 and 9.
+pub fn state_layout_for_finality_branch_length(length: usize) -> Result<StateLayout> {
+    match length {
+        6 => Ok(CAPELLA_DENEB_STATE_LAYOUT),
+        7 => Ok(ELECTRA_STATE_LAYOUT),
+        9 => Ok(GLOAS_STATE_LAYOUT),
+        _ => Err(Error::UnsupportedStateBranchLength { length }),
+    }
+}
+
+/// The anchor that a compact header branch of `length` entries names, or `None` for a length that no layout has.
+///
+/// Length 8 is index 412 (Capella payload, depth 4) under the body root, length 9 is 812 (Deneb and later payload, depth
+/// 5) under the body root, and length 11 is 2947 (`latest_block_hash`) under the STATE root. The body of every layout
+/// has depth 4, so 41, 668 and 1324 have no length here. The keccak check of the header RLP in
+/// `update::verify_finalized_execution` is mandatory: it is the only guard for 2947 on a Capella or Deneb state, and for
+/// 412 on a Deneb payload.
+pub fn compact_anchor_for_branch_length(length: usize) -> Option<CompactAnchor> {
+    match length {
+        8 => Some(CompactAnchor { gindex: BLOCK_HASH_GINDEX_CAPELLA, root: CompactAnchorRoot::Body }),
+        9 => Some(CompactAnchor { gindex: BLOCK_HASH_GINDEX_DENEB, root: CompactAnchorRoot::Body }),
+        11 => Some(CompactAnchor { gindex: LATEST_BLOCK_HASH_GINDEX_GLOAS, root: CompactAnchorRoot::State }),
+        _ => None,
     }
 }
 
@@ -756,22 +808,6 @@ mod tests {
         assert!(is_gloas_block_roots_position(352) && !is_gloas_block_roots_position(353));
         assert!(is_gloas_historical_summaries_position(2950) && !is_gloas_historical_summaries_position(2949));
         assert!(is_gloas_block_hash_position(2856) && !is_gloas_block_hash_position(2857));
-    }
-
-    /// Claim: the compact header index follows the fork of the header slot: 412, 812 (Deneb, Electra, Fulu); before
-    /// Capella it is refused, and Gloas has no body index (its header is anchored in the state).
-    #[test]
-    fn compact_block_hash_index_follows_the_fork() {
-        assert_eq!(compact_block_hash_gindex_for_fork(ForkName::Capella), Ok(412));
-        for fork in [ForkName::Deneb, ForkName::Electra, ForkName::Fulu] {
-            assert_eq!(compact_block_hash_gindex_for_fork(fork), Ok(812));
-        }
-        assert_eq!(compact_block_hash_gindex_for_fork(ForkName::Gloas), Err(Error::GloasPayloadNotFinalized));
-        assert_eq!(block_hash_gindex_for_fork(ForkName::Gloas), Err(Error::GloasPayloadNotFinalized));
-        assert_eq!(
-            compact_block_hash_gindex_for_fork(ForkName::Bellatrix),
-            Err(Error::UnsupportedFork { fork: ForkName::Bellatrix })
-        );
     }
 
     /// Claim: the `fork` field of the Gloas state is chunk 3, and `fork.current_version` is node 169, which the gate checks
