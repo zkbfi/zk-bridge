@@ -21,7 +21,7 @@ A pair is two chains joined one to one: on each chain a light client of the othe
 
 From both chains of each pair:
 - Messages: `UserRequestForAffirmation` (sent), `AffirmationCompleted` (delivered, with status), decoded AMB fields (sender, executor, gas, data), transaction hash, block and timestamp on each side.
-- Token transfers: `TokensBridgingInitiated`, `TokensBridged`, `NewTokenRegistered`, fallback and claimable events, `FeeCharged`, fee collections; joined to their message by message identifier.
+- Token transfers: `TokensBridgingInitiated`, `TokensBridged`, `NewTokenRegistered`, fallback and claimable events; joined to their message by message identifier.
 - Light clients: each head update (slot, header root, execution block, transaction, gas used, poster), committee changes.
 - Gate and registry: confirmations, seals, observed versions.
 - Escrow and supply: per native token, the mediator balance on its home chain and the bridged token supply on the other chain (from mint and burn events), and accrued and collected fees.
@@ -125,7 +125,7 @@ The signer never leaves the dashboard process. Every transaction is shown in ful
 
 ## Numbers
 
-Amounts are integers in each token's base units; rates are 18-decimal (1e18 = 100%). The fee follows a fixed declining schedule with no admin (see the fee schedule in `docs/hardened-build-contract.md`): a fee event is `charged_outgoing`, `charged_incoming` or `collected`, and the fee panel shows the current rate that the mediator reports. `explorer/shared` has `feeRateAt`, a copy of the contract math that is tested against vectors from the contract. The display formats them with the token's decimals; the stored values are never rounded.
+Amounts are integers in each token's base units; rates are 18-decimal (1e18 = 100%). The display formats them with the token's decimals; the stored values are never rounded. The bridge charges no fee. The only fee is the voluntary delivery tip of the `DeliveryRouter`.
 
 ## Dependencies
 

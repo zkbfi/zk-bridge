@@ -123,18 +123,15 @@ Work on a copy. Foundry reads a file only from a folder that `foundry.toml` allo
 mkdir -p .deploy
 jq --arg deployer "$DEPLOYER" --arg va "$VERIFIER_A" --arg vb "$VERIFIER_B" \
    --arg na "$NONCE_A" --arg nb "$NONCE_B" \
-   --arg runner '<runner address>' --arg reward '<reward address, not the runner>' \
-   --arg feeRecipient '<fee recipient on chain 943>' \
+   --arg reward '<reward address>' \
    '.deployer=$deployer
     | .chainA.verifier=$va | .chainB.verifier=$vb
     | .chainA.deployerNonce=$na | .chainB.deployerNonce=$nb
-    | .chainA.deliveryRouter.runner=$runner | .chainB.deliveryRouter.runner=$runner
-    | .chainA.deliveryRouter.rewardAddress=$reward | .chainB.deliveryRouter.rewardAddress=$reward
-    | .chainB.fee.recipient=$feeRecipient' \
+    | .chainA.deliveryRouter.rewardAddress=$reward | .chainB.deliveryRouter.rewardAddress=$reward' \
    script/testnet/bridge.config.testnet.json > .deploy/bridge.config.json
 ```
 
-The runner key pays gas and signs deliveries. The reward address receives the fees. The runner bot refuses the same address for both roles. Keep them apart.
+The runner key pays gas and signs deliveries. The reward address receives the tips. Anyone may deliver through the router, and the tip always goes to the reward address.
 
 Fetch each checkpoint at one finalized root of the same chain. Use all four values of a checkpoint from one bootstrap.
 

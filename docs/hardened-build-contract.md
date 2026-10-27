@@ -7,7 +7,7 @@ This document fixes the names, paths, and interfaces for two pieces of work that
 
 Read `docs/red-team.md` first. It lists holes H-01 to H-23 against revision 1.
 
-**Status (2026-10-24).** The single contract `BridgeVault` is retired and deleted. Two layers replace it: `MessageBridge` (proof, lock, send and execute of messages) and `TokenMediator` (tokens, fee schedule, flow limiter hook). The section "Message layer and token mediator" is built, and its last part ("As built") lists where the build differs from the design. Sections that describe the vault below stay as the record of the rules. Each carries a note that says where the rule lives now.
+**Status (2026-10-24).** The single contract `BridgeVault` is retired and deleted. Two layers replace it: `MessageBridge` (proof, lock, send and execute of messages) and `TokenMediator` (tokens, flow limiter hook). The section "Message layer and token mediator" is built, and its last part ("As built") lists where the build differs from the design. Sections that describe the vault below stay as the record of the rules. Each carries a note that says where the rule lives now.
 
 ## Scope decisions (made by the user)
 
@@ -561,32 +561,9 @@ A PulseChain consensus fork almost always arrives with an execution fork, and th
   - A probe that consumes all forwarded gas still costs at most the bound.
 - **Decision (2026-10-22): probe on every deposit.** The code review asked whether the canaries could run less often, for example once per block or only in `confirm` and `seal`. They stay on every deposit. The probes exist to catch the first deposit after a fork; probing less often would admit the deposits made in that gap, which are the ones that lock. The cost is about 9,800 gas on a cold deposit before the switch, and nothing after it.
 
-## Fee schedule (user decision, 2026-10-25) (built)
+## Protocol fee (removed, user decision 2026-10-26)
 
-**Decision, 2026-10-25.** There is no admin and no fee authority. Fees are collected on PulseChain, in both directions, under one fixed schedule that falls with time. Ethereum charges no fee. This replaces the fee switch of 2026-10-21 (a fee authority, `setFee`, `nullifyFee`, an immutable ceiling, the 1% constant `MAX_FEE_CEILING` and the sender limit `maxFeeRate`). All of those are removed from `TokenMediator`. The 1% is gone as a contract constant. The only built-in bound is that the start rate cannot exceed `FEE_DENOMINATOR`.
-
-**The schedule.** Five immutable values set it, all by the constructor of `TokenMediator`: `feeStartRate`, `feeStepRate`, `feeFloorRate`, `feeStepPeriod` (seconds) and `feeStartTime` (the timestamp of the deployment block). A rate is scaled by `FEE_DENOMINATOR = 1e18`, where 1e18 is 100% and a basis point is 1e14.
-
-`rate(t) = max(feeStartRate - feeStepRate * floor((t - feeStartTime) / feeStepPeriod), feeFloorRate)`
-
-The rate is `feeStartRate` at or before the start time, and when the step is zero. The math lives in the pure library `src/hardened/mediator/FeeSchedule.sol` (`rateAt` and `feeOn`). The mediator builds the struct from its immutables in one private view helper, and the views and both charge points call the library. It does not overflow and does not underflow for any timestamp: the step count is compared with the number of steps that reach the floor before it is multiplied. `explorer/shared/src/fee-schedule.ts` has the same function in `bigint`, and its test reads vectors that the Solidity library printed (`explorer/shared/vectors/GenerateFeeScheduleVectors.s.sol` writes `test/fixtures/fee-schedule-vectors.jsonl`), so the two cannot drift.
-
-**Deployment values.** PulseChain: start 1e15 (10 basis points), step 1e14 (1 basis point), floor 5e14 (5 basis points), period 31,536,000 seconds (365 days). So the fee is 0.10% in year one, 0.09% in year two, 0.08%, 0.07%, 0.06%, and 0.05% from year six on. Ethereum: all zero and a zero recipient (a start rate of zero means no fee). The example configuration `script/hardened/bridge.config.example.json` holds these values. The 1% is the choice of this deployment at most, never a constant of the contract.
-
-**Constructor checks.** `feeStartRate <= FEE_DENOMINATOR` (`FeeStartRateTooHigh`), `feeFloorRate <= feeStartRate` (`FeeFloorAboveStart`), `feeStepPeriod > 0` when `feeStepRate > 0` (`ZeroFeeStepPeriod`), and a non-zero `feeRecipient` when `feeStartRate > 0` (`ZeroFeeRecipient`).
-
-**Two charge points, one rate.** The same schedule applies on the same mediator to a relay (outgoing) and to a delivery (incoming):
-- **Outgoing.** `relayTokens` and the other relay functions take the fee from the measured received amount, rounded down, before the flow limiter and before the lock or the burn. The message carries the net amount.
-- **Incoming.** A `handle*` or `deployAndHandle*` delivery takes the fee from the delivered value, rounded down, once, before any payee is tried. A native token leaves `mediatorBalance` and stays in the mediator as `accruedFees[token]`; `mediatorBalance` drops by the whole value, so it still equals the supply of the copy on the other chain. A bridged copy mints the fee to the mediator itself as `accruedFees[copy]`, so the supply of the copy still equals `mediatorBalance` of the native token. The fee is never above the value. A release that goes to the fallback address or to `claimable` has paid its fee already: the claim takes no second fee. The flow limiter, `TokensBridged` and the callback see the net amount.
-- **Events.** `FeeCharged(token, fee, direction)` carries `FeeDirection.Outgoing` (0) or `FeeDirection.Incoming` (1). The OmniBridge events are unchanged.
-
-**No protection for the sender is needed.** The rate only falls, so the rate that a sender reads before the relay is the highest rate that the relay or the delivery can meet. The message payloads are the original OmniBridge payloads and the original fallback payloads; they carry no maximum. There is no `maxFeeRate` overload.
-
-**Views and collection.** `currentFeeRate()` and `feeRateAt(timestamp)`. `feeRecipient` is immutable and cannot change. `collectFees(token)` (anyone may call it) sends `accruedFees[token]` to it and zeroes the record first. A recipient that a token refuses blocks `collectFees` only.
-
-**Tests.** `test/hardened/mediator/FeeSchedule.t.sol` tests the library directly: the deployment values just before and after each year boundary, the floor, year 1000, the largest `uint64` and `uint256` timestamps, a zero step, a zero start, a start equal to the floor, a floor that whole steps do not reach (start 10, step 3, floor 2 gives 10, 7, 4, 2), and a fuzz test against a step by step reference. `TokenMediatorFeeSchedule.t.sol` tests the mediator: the schedule at each boundary, the constructor refusals, a zero fee mediator, incoming charges on a bridged mint and on a native release with exact amounts, a round trip that charges both directions on PulseChain and none on Ethereum, the fee once on the fallback and claimable paths, the net amount at the flow limiter, rounding down, and the absence of any admin function. `Immutability.t.sol` lists the state-changing functions of `TokenMediator`: none of them sets a fee or a recipient. The invariant test moves time and checks every fee against the current rate. Two mutations were checked to fail the suite: removing the floor-above-start refusal, and removing the floor clamp.
-
-**Gas.** Runtime size of `TokenMediator`: 18,080 bytes (17,899 before this change), under the limit of 24,576. The gas test (`test_gasOfRelayAndDelivery`, fee off, so it shows the cost of reading the schedule) gives, before and after: first relay of a token 130,175 and 128,495; a later relay 43,420 and 43,740; a bridged copy relay 86,200 and 84,519; a native release 44,878 and 45,811; a bridged mint in short form 15,613 and 16,546. With the fee on, a delivery adds one `accruedFees` write, and a bridged mint adds a mint to the mediator as well.
+The `TokenMediator` takes no fee. The fee schedule of 2026-10-25 is deleted: the library `FeeSchedule.sol`, the six fee immutables, `currentFeeRate`, `feeRateAt`, `FeeCharged`, `accruedFees` and fee collection, and the `fee` block of the deploy configuration. A relay locks or burns exactly the value that it takes in, and a delivery pays out exactly the value that the message carries, so `mediatorBalance` moves by that value alone. The only fee in the system is the voluntary delivery tip of `DeliveryRouter`, which a sender writes into the callback data of a transfer. Gas of the mediator paths fell by about 750 to 980 gas.
 
 ## Destination token binding (code review finding)
 
@@ -898,7 +875,7 @@ The user asked for the same interfaces as OmniBridge wherever possible, one to o
 | `fixFailedMessage`, `requestFailedMessageFix`, `messageFixed`, `event FailedMessageFixed` | Not included: delivery is final, there are no refunds. |
 | Owner functions: `setCustomTokenAddressPair`, `fixMediatorBalance`, `claimTokens`, `claimTokensFromTokenContract`, limit setters, gas limit setters, interest functions | Not included: no admin. The limit views (`dailyLimit`, `maxPerTx`, `withinLimit` and the rest) are left out; the empty flow limiter hook covers limits. |
 | — | New: `claim(address _token, address _recipient)` and `claimable(address, address)` for a failed release (open decision). |
-| — | New: the fee schedule (`currentFeeRate`, `feeRateAt`, `collectFees`) and `detachFlowLimiter`. There is no fee admin. |
+| — | New: `detachFlowLimiter`. There is no fee and no fee admin. |
 
 #### Bridged token: `IBurnableMintableERC677Token`
 
@@ -1045,8 +1022,7 @@ The build follows the design. This list holds every place where it differs from 
 **Mediator**
 - `TokenMediator` creates its `TokenFactory` in its own constructor. The factory sits at the first `CREATE` address of the mediator. The deploy script predicts it and reads it back. It does not deploy a factory of its own.
 - A copy takes the name `<native name> from <home chain name>` (for example `Wrapped Ether from Ethereum`) and the symbol prefix `zkb` with no separator (`zkbWETH`) (decision 2026-10-26). The home chain name is the `remoteChainName` constructor term of the mediator. The mediator passes it to its factory, which stores it once (`TokenFactory.homeChainName()`), with no setter. The deploy configuration holds it per chain. The salt of the copy is `keccak256(homeChainId, homeToken)`.
-- A failed release goes to the recipient, then to the fallback address, then to `claimable[token][fallback]`. The record of a native token includes the claimable amounts, so the balance of the mediator covers `mediatorBalance + accruedFees`.
-- The incoming fee (decision 2026-10-25) leaves `mediatorBalance` at the delivery and joins `accruedFees`; a bridged copy mints it to the mediator. See the section "Fee schedule".
+- A failed release goes to the recipient, then to the fallback address, then to `claimable[token][fallback]`. The record of a native token includes the claimable amounts, so the balance of the mediator covers `mediatorBalance` plus the claimable amounts.
 - A defect that the invariant tests found: `_tryRelease` wrote a stale copy of the record back after a refused transfer. A hostile token could relay tokens from inside `transfer` and then refuse, and the write erased the nested lock. The function now writes to storage after the call. `test_aTokenThatRelaysDuringAReleaseAndThenRefusesKeepsTheNestedLock` covers it.
 
 **Deploy script and tools**
