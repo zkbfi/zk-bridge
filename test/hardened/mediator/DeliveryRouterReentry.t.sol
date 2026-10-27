@@ -102,7 +102,6 @@ contract DeliveryRouterReentryTest is MediatorFixture {
         assertEq(token.balanceOf(failedDelivery), 48 ether, "the nested value");
         assertEq(token.balanceOf(otherRecipient), 0);
         assertEq(token.balanceOf(address(router)), 0, "nothing stays in the router");
-        assertEq(router.totalClaimable(address(token)), 0, "and no record is owed");
     }
 
     /// Claim: a reentrant callback with data of no known shape hands the whole value off, as any such callback does.

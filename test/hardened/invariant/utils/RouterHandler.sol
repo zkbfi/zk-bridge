@@ -45,7 +45,7 @@ struct Item {
 /// call, a delivery router, and the wrap and relay form of a delivery router. Messages
 /// wait in a list and arrive in random order, by three paths: directly, through `executeMessage` of a router from
 /// an outside caller (caller and origin the same), and in a batch through Multicall3 from an outside caller. Accounts wrap and unwrap the
-/// coin, accounts are denied and allowed, claims are paid, and strangers send tokens to a mediator.
+/// coin, accounts are denied and allowed, routers are swept, and strangers send tokens to a mediator or to a router.
 /// An attacker tries the callback entry and the coin entry of the routers.
 ///
 /// What it claims. The mock bridge reads no proof, so the handler never delivers a message twice itself. It counts the
@@ -90,6 +90,9 @@ contract RouterHandler is RouterWorld {
     mapping(address token => uint256) public donated;
     /// @notice For each token, the value of releases that failed. It stays in the mediator, owed to nobody.
     mapping(address token => uint256) public stuckOf;
+    /// @notice What each router must hold of each token, by the handler's own count: the amounts of the `HandOffRefused`
+    /// logs, plus the stray amounts that the handler sent to the router, less what a sweep paid out.
+    mapping(address router => mapping(address token => uint256)) public expectedInRouter;
     uint256 public coinDealt;
 
     uint256 public violations;
@@ -111,8 +114,12 @@ contract RouterHandler is RouterWorld {
     uint256 public payoutsRefused;
     uint256 public termsForfeited;
     uint256 public tippedInvalidTerms;
-    uint256 public routerClaimsPaid;
-    uint256 public routerClaimsRefused;
+    /// @notice The sweeps of a router that paid the failed delivery address.
+    uint256 public sweepsPaid;
+    /// @notice The sweeps that the token refused: the tokens stayed and the router emitted `HandOffRefused`.
+    uint256 public sweepsRefused;
+    /// @notice The sweeps of an empty router, which must revert.
+    uint256 public sweepsEmpty;
     uint256 public legacyTokenPayouts;
     /// @notice The hand-offs of a reentrant callback that the logs showed.
     uint256 public reenteredHandOffs;
@@ -249,30 +256,30 @@ contract RouterHandler is RouterWorld {
 
     // ---------------------------------------------------------------------------------------- other actions
 
-    /// @notice Pays a record of a delivery router. Anyone may call the router, and it pays its failed delivery address only.
-    /// The seed chooses where the search starts. A token that refuses the address may refuse the claim, and the record
-    /// must then stay. Any other claim must pay the whole record to that address, and clear it.
-    function claimFromRouter(uint8 universeSeed) external {
-        for (uint256 step = 0; step < UNIVERSE; step++) {
-            uint256 universe = (universeSeed + step) % UNIVERSE;
-            address token = tokenAt(universe);
-            DeliveryRouter router = _routerWithRecord(universe);
-            if (address(router) == address(0)) continue;
-            uint256 recorded = router.claimable(token, failedSink);
-            uint256 before = balanceOrZero(token, failedSink);
-            bool refusedByToken = universe == 4 && denyToken.denied(failedSink);
-            try router.claim(token) {
-                if (refusedByToken) _violate("a router paid an account that the token refuses");
-                if (balanceOrZero(token, failedSink) - before != recorded) _violate("a claim did not pay the record");
-                if (router.claimable(token, failedSink) != 0) _violate("a paid record remains");
-                routerClaimsPaid++;
-            } catch {
-                if (!refusedByToken) _violate("a claim on a token that refuses nobody reverted");
-                if (router.claimable(token, failedSink) != recorded) _violate("a refused claim changed the record");
-                routerClaimsRefused++;
-            }
+    /// @notice Sweeps a token of a router. Anyone may call it. The seeds choose the token and where the search starts for
+    /// a router that holds some of it. The handler states the outcome before it calls. An empty router must revert. A
+    /// token that refuses the failed delivery address must leave the tokens and emit `HandOffRefused` and no `Swept`. Any
+    /// other token must pay the whole balance to that address, with one `Swept` event.
+    function sweepRouter(uint8 universeSeed, uint8 routerSeed) external {
+        uint256 universe = universeSeed % UNIVERSE;
+        address token = tokenAt(universe);
+        if (token.code.length == 0) return;
+        DeliveryRouter router = _routerHolding(universe, routerSeed);
+        uint256 balance = balanceOrZero(token, address(router));
+        uint256 sinkBefore = balanceOrZero(token, failedSink);
+        bool refusedByToken = token == address(denyToken) && denyToken.denied(failedSink);
+
+        vm.recordLogs();
+        vm.getRecordedLogs();
+        vm.prank(stranger, stranger);
+        try router.sweep(token) {
+            _checkSweepOutcome(router, token, balance, sinkBefore, refusedByToken);
+        } catch {
+            if (balance != 0) _violate("a sweep of a router that holds tokens reverted");
+            if (balance == 0) sweepsEmpty++;
             return;
         }
+        if (balance == 0) _violate("a sweep of an empty router did not revert");
     }
 
     /// @notice Denies or allows an account on the deny list token: a recipient, or the failed delivery address.
@@ -304,6 +311,29 @@ contract RouterHandler is RouterWorld {
         _runReentrant(Reentry(router, outerId, nestedId, nestedReceiver, shapeSeed, pathSeed, priceSeed));
     }
 
+    /// @notice A stranger sends tokens of the universe to a delivery router by plain transfer, as a plain relay or a
+    /// mistake would. The router has no callback for it, so only `sweep` can move it.
+    function strayToRouter(uint8 universeSeed, uint8 actorSeed, uint8 routerSeed, uint96 amountSeed) external {
+        uint256 universe = universeSeed % UNIVERSE;
+        if (isWrappedNativeOfItsChain(universe)) return;
+        address token = tokenAt(universe);
+        address giver = actors[actorSeed % actors.length];
+        if (universe == DENY_TOKEN_UNIVERSE && denyToken.denied(giver)) return;
+        DeliveryRouter router = deliveryRouterAt(chainOfToken(universe), routerSeed % ROUTERS_PER_CHAIN);
+        uint256 amount;
+        if (universe < NATIVE_COUNT) {
+            amount = bound(amountSeed, 1, MAXIMUM_AMOUNT);
+            _mintPlain(token, giver, amount);
+        } else {
+            uint256 held = balanceOrZero(token, giver);
+            if (held == 0) return;
+            amount = bound(amountSeed, 1, held);
+        }
+        vm.prank(giver);
+        IERC20Transfer(token).transfer(address(router), amount);
+        expectedInRouter[address(router)][token] += amount;
+    }
+
     /// @notice Lets the receiver that refuses callbacks refuse or accept for a while.
     function toggleRefusal() external {
         refusingReceiver.setRefuse(!refusingReceiver.refuse());
@@ -323,14 +353,51 @@ contract RouterHandler is RouterWorld {
 
     // ---------------------------------------------------------------------------------------------- modifier
 
-    function _routerWithRecord(uint256 universe) private view returns (DeliveryRouter) {
+    /// @dev The first router of the chain of the token, from the seed, that holds some of the token, or the router that
+    /// the seed names when none does.
+    function _routerHolding(uint256 universe, uint8 routerSeed) private view returns (DeliveryRouter) {
         uint256 chain = chainOfToken(universe);
-        for (uint256 k = 0; k < ROUTERS_PER_CHAIN; k++) {
-            if (deliveryRouterAt(chain, k).claimable(tokenAt(universe), failedSink) != 0) {
-                return deliveryRouterAt(chain, k);
+        for (uint256 step = 0; step < ROUTERS_PER_CHAIN; step++) {
+            DeliveryRouter candidate = deliveryRouterAt(chain, (routerSeed + step) % ROUTERS_PER_CHAIN);
+            if (balanceOrZero(tokenAt(universe), address(candidate)) != 0) return candidate;
+        }
+        return deliveryRouterAt(chain, routerSeed % ROUTERS_PER_CHAIN);
+    }
+
+    /// @dev The checks after a sweep that did not revert, against the state that the handler recorded before it.
+    function _checkSweepOutcome(
+        DeliveryRouter router,
+        address token,
+        uint256 balance,
+        uint256 sinkBefore,
+        bool refusedByToken
+    ) private {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 swept;
+        uint256 refused;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].emitter != address(router)) continue;
+            bool sameToken = logs[i].topics[1] == bytes32(uint256(uint160(token)));
+            if (!sameToken) continue;
+            if (logs[i].topics[0] == DeliveryRouter.Swept.selector && abi.decode(logs[i].data, (uint256)) == balance) swept++;
+            if (logs[i].topics[0] == DeliveryRouter.HandOffRefused.selector && abi.decode(logs[i].data, (uint256)) == balance) {
+                refused++;
             }
         }
-        return DeliveryRouter(payable(address(0)));
+        uint256 sinkAfter = balanceOrZero(token, failedSink);
+        if (balance == 0) return;
+        if (refusedByToken) {
+            sweepsRefused++;
+            if (balanceOrZero(token, address(router)) != balance) _violate("a refused sweep moved tokens");
+            if (sinkAfter != sinkBefore) _violate("a refused sweep paid the failed delivery address");
+            if (swept != 0 || refused != 1) _violate("a refused sweep emitted the wrong events");
+            return;
+        }
+        sweepsPaid++;
+        expectedInRouter[address(router)][token] = 0;
+        if (balanceOrZero(token, address(router)) != 0) _violate("a sweep left tokens in the router");
+        if (sinkAfter - sinkBefore != balance) _violate("a sweep did not pay the whole balance");
+        if (swept != 1 || refused != 0) _violate("a paid sweep emitted the wrong events");
     }
 
     // ------------------------------------------------------------------------------------------- reentry, internal
@@ -810,6 +877,9 @@ contract RouterHandler is RouterWorld {
                 if (cause == DeliveryRouter.Reason.InvalidTerms) termsForfeited++;
                 if (cause == DeliveryRouter.Reason.Reentered) reenteredHandOffs++;
             }
+            if (logs[i].topics[0] == DeliveryRouter.HandOffRefused.selector && _isDeliveryRouter(logs[i].emitter, destination)) {
+                _recordRefusal(logs[i]);
+            }
             if (logs[i].emitter != address(mediatorOf(destination))) continue;
             bytes32 topic = logs[i].topics[0];
             if (topic == TokenMediator.ReleaseFailed.selector) {
@@ -818,6 +888,15 @@ contract RouterHandler is RouterWorld {
             }
             if (topic == TokenMediator.CallbackFailed.selector) callbacksFailed++;
         }
+    }
+
+    /// @dev Counts a hand-off that the token refused as held by the router. Only the deny list token refuses the failed
+    /// delivery address, and only while that address is denied, so any other refusal is a violation.
+    function _recordRefusal(Vm.Log memory log) private {
+        address token = address(uint160(uint256(log.topics[1])));
+        bool tokenRefuses = token == address(denyToken) && denyToken.denied(failedSink);
+        if (!tokenRefuses) _violate("a router reported a refusal by a token that accepts the failed delivery address");
+        expectedInRouter[log.emitter][token] += abi.decode(log.data, (uint256));
     }
 
     /// @dev The data of a `DeliveryFailed` log is the amount and then the cause. Returns the cause word alone.

@@ -171,40 +171,29 @@ abstract contract RouterWorld is MediatorFixture {
         return amount;
     }
 
-    /// @notice What the holders hold of a token of the universe, in the sense of `holding`.
+    /// @notice What the delivery routers of the chain of a token of the universe hold of it. A router keeps no record:
+    /// what it holds is a hand-off that the token refused, or a stray amount.
+    function heldByRouters(uint256 universeIndex) public view returns (uint256 total) {
+        uint256 chain = chainOfToken(universeIndex);
+        for (uint256 k = 0; k < ROUTERS_PER_CHAIN; k++) {
+            total += balanceOrZero(tokenAt(universeIndex), address(deliveryRouterAt(chain, k)));
+        }
+    }
+
+    /// @notice What the holders hold of a token of the universe, in the sense of `holding`. The routers are holders, so
+    /// a refused hand-off that stays in a router counts: a delivery splits its value between the holders and the failed
+    /// releases, with nothing left over.
     function heldByHolders(uint256 universeIndex) public view returns (uint256 total) {
         for (uint256 i = 0; i < holders.length; i++) {
             total += holding(universeIndex, holders[i]);
         }
     }
 
-    /// @notice What `router` has recorded in a token of the universe (only its failed delivery address can have a record,
-    /// and that address is a holder), and the total that it states.
-    /// @return sum The sum of `claimable` over the holders.
-    /// @return stated `totalClaimable` of the router.
-    function routerClaimableOfHolders(DeliveryRouter router, uint256 universeIndex)
-        public
-        view
-        returns (uint256 sum, uint256 stated)
-    {
-        address token = tokenAt(universeIndex);
-        for (uint256 i = 0; i < holders.length; i++) {
-            sum += router.claimable(token, holders[i]);
-        }
-        stated = router.totalClaimable(token);
-    }
-
-    /// @notice What the delivery routers of the chain of a token of the universe have recorded for one account.
-    function routerClaimableFor(uint256 universeIndex, address account) public view returns (uint256 total) {
-        uint256 chain = chainOfToken(universeIndex);
-        for (uint256 k = 0; k < ROUTERS_PER_CHAIN; k++) {
-            total += deliveryRouterAt(chain, k).claimable(tokenAt(universeIndex), account);
-        }
-    }
-
-    /// @notice What `account` has of a token of the universe: what it holds, and what a delivery router recorded for it.
+    /// @notice What `account` has of a token of the universe: what it holds, and for the failed delivery address what
+    /// the routers hold, because a router that cannot hand a value off to that address keeps it for that address.
     function standing(uint256 universeIndex, address account) public view returns (uint256) {
-        return holding(universeIndex, account) + routerClaimableFor(universeIndex, account);
+        uint256 ownedByRouters = account == failedSink ? heldByRouters(universeIndex) : 0;
+        return holding(universeIndex, account) + ownedByRouters;
     }
 
     // ------------------------------------------------------------------------------------------------ deployment

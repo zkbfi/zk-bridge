@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {Vm} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol";
@@ -12,11 +13,11 @@ import {MedCutToken, MedDenyListWrappedNative, MedToggleReceiver} from "./utils/
 
 /// @notice The router never keeps a delivery that it cannot pay, and never burns it. It takes the tip first when the
 /// delivery path takes a tip, then hands the rest off to the failed delivery address and emits `DeliveryFailed`. Only
-/// when a token refuses that address too does the router keep a record for it, which anyone may claim. These tests
-/// cover each hand-off: a token that refuses the recipient, terms that decode but name nobody who can receive, data of
+/// when a token refuses that address too do the tokens stay in the router, with `HandOffRefused` and no record, and
+/// anyone may later move them with `sweep`. These tests cover each hand-off: a token that refuses the recipient, terms that decode but name nobody who can receive, data of
 /// no known shape, a legacy receiver, the native coin, and a gas based tip with a refused rest. Tokens flow from chain B
 /// back to the router on chain A.
-contract DeliveryRouterClaimsTest is MediatorFixture {
+contract DeliveryRouterHandOffTest is MediatorFixture {
     MedDenyListWrappedNative internal weth;
     DenyListToken internal token;
     DeliveryRouter internal router;
@@ -26,7 +27,8 @@ contract DeliveryRouterClaimsTest is MediatorFixture {
     address internal copy;
 
     event DeliveryFailed(address indexed token, address indexed recipient, uint256 amount, DeliveryRouter.Reason reason);
-    event Claimed(address indexed token, uint256 amount);
+    event HandOffRefused(address indexed token, uint256 amount);
+    event Swept(address indexed token, uint256 amount);
 
     function setUp() public override {
         super.setUp();
@@ -95,11 +97,25 @@ contract DeliveryRouterClaimsTest is MediatorFixture {
         emit DeliveryFailed(handedToken, named, amount, reason);
     }
 
+    /// @dev The logs that the router emitted, in order, from the recorded logs.
+    function _routerLogs() internal view returns (Vm.Log[] memory routerLogs) {
+        Vm.Log[] memory all = vm.getRecordedLogs();
+        uint256 count;
+        for (uint256 i = 0; i < all.length; i++) {
+            if (all[i].emitter == address(router)) count++;
+        }
+        routerLogs = new Vm.Log[](count);
+        uint256 next;
+        for (uint256 i = 0; i < all.length; i++) {
+            if (all[i].emitter != address(router)) continue;
+            routerLogs[next++] = all[i];
+        }
+    }
+
     /// @dev The router holds nothing of a token, and no coin.
     function _assertRouterEmpty(address heldToken) internal view {
         assertEq(IERC20(heldToken).balanceOf(address(router)), 0, "the router holds none of the token");
         assertEq(address(router).balance, 0, "the router holds no coin");
-        assertEq(router.totalClaimable(heldToken), 0, "nothing is recorded");
     }
 
     // ------------------------------------------------------------------------------------------------ a token refuses the recipient
@@ -145,53 +161,65 @@ contract DeliveryRouterClaimsTest is MediatorFixture {
 
     // ------------------------------------------------------------------------------------------------ the push fails too
 
-    /// Claim: a token that blocks the failed delivery address as well leaves a record, never a burn. Shows: the
-    /// tip is paid, the amount is recorded for the failed delivery address only, the router holds exactly that, and the
-    /// event is still emitted. Matters: the tokens must stay owed to someone.
-    function test_aHandOffThatTheTokenRefusesIsRecordedForTheFailedDeliveryAddress() public {
+    /// Claim: a token that blocks the failed delivery address as well leaves the tokens in the router, never a burn.
+    /// Shows: the tip is paid, `DeliveryFailed` then `HandOffRefused` are emitted with exact arguments, the router holds
+    /// exactly the refused amount, and no other account holds any of it. Matters: the router keeps no record, so the
+    /// balance of the router is the only trace, and the event must say how much.
+    function test_aHandOffThatTheTokenRefusesStaysInTheRouterAndEmitsHandOffRefused() public {
         token.setDenied(recipient, true);
         token.setDenied(failedDelivery, true);
         uint256 index = _sendCopy(abi.encode(_share(recipient, 1, 5 ether, 0)), 100 ether);
 
-        _expectHandOff(address(token), recipient, 95 ether, DeliveryRouter.Reason.PayoutRefused);
+        vm.recordLogs();
         _run(index);
+        Vm.Log[] memory logs = _routerLogs();
 
-        assertEq(token.balanceOf(reward), 5 ether, "the tip");
-        assertEq(router.claimable(address(token), failedDelivery), 95 ether, "the record");
-        assertEq(router.claimable(address(token), recipient), 0, "the recipient has no record");
-        assertEq(router.totalClaimable(address(token)), 95 ether);
-        assertEq(token.balanceOf(address(router)), 95 ether, "the balance equals the record");
+        assertEq(logs.length, 2, "exactly two router events");
+        assertEq(logs[0].topics[0], DeliveryFailed.selector, "the hand-off comes first");
+        assertEq(logs[0].topics[1], bytes32(uint256(uint160(address(token)))));
+        assertEq(logs[0].topics[2], bytes32(uint256(uint160(recipient))));
+        assertEq(logs[0].data, abi.encode(95 ether, DeliveryRouter.Reason.PayoutRefused));
+        assertEq(logs[1].topics[0], HandOffRefused.selector, "the refusal comes second");
+        assertEq(logs[1].topics[1], bytes32(uint256(uint160(address(token)))));
+        assertEq(logs[1].data, abi.encode(95 ether));
+
+        assertEq(token.balanceOf(reward), 5 ether, "the tip is still paid");
+        assertEq(token.balanceOf(recipient), 0);
+        assertEq(token.balanceOf(failedDelivery), 0, "the refused address got nothing");
+        assertEq(token.balanceOf(address(router)), 95 ether, "the tokens stay in the router");
+        assertEq(address(router).balance, 0, "the router holds no coin");
     }
 
-    /// Claim: the claim waits for the token, pays only the failed delivery address, and pays once. Shows: the first
-    /// call reverts and the record stays; once the token allows the address, anyone can pay it, and the caller gets
-    /// nothing. A second call has nothing to pay.
-    function test_aClaimWaitsForTheTokenAndPaysOnlyTheFailedDeliveryAddress() public {
+    /// Claim: tokens that a refused hand-off left in the router move by `sweep` once the token allows the failed
+    /// delivery address, and only to that address. Shows: a sweep before the change leaves the tokens and reverts
+    /// nothing; after the change anyone can sweep, the address gets all 95, the caller gets nothing, and a second sweep
+    /// finds nothing. Matters: the tokens are never lost while the refusal lasts.
+    function test_aRefusedHandOffMovesBySweepOnceTheTokenAllowsTheAddress() public {
         token.setDenied(recipient, true);
         token.setDenied(failedDelivery, true);
         _run(_sendCopy(abi.encode(_share(recipient, 1, 5 ether, 0)), 100 ether));
 
-        vm.expectRevert();
-        router.claim(address(token));
-        assertEq(router.claimable(address(token), failedDelivery), 95 ether, "the record stays");
+        router.sweep(address(token));
+        assertEq(token.balanceOf(address(router)), 95 ether, "the refusing token keeps the tokens in place");
 
         token.setDenied(failedDelivery, false);
         vm.expectEmit(true, false, false, true, address(router));
-        emit Claimed(address(token), 95 ether);
+        emit Swept(address(token), 95 ether);
         vm.prank(bob);
-        router.claim(address(token));
+        router.sweep(address(token));
 
         assertEq(token.balanceOf(failedDelivery), 95 ether, "paid to the address, not the caller");
         assertEq(token.balanceOf(bob), 0);
         _assertRouterEmpty(address(token));
-        vm.expectRevert(abi.encodeWithSelector(DeliveryRouter.NothingToClaim.selector, address(token)));
-        router.claim(address(token));
+        vm.expectRevert(abi.encodeWithSelector(DeliveryRouter.NothingToSweep.selector, address(token)));
+        router.sweep(address(token));
     }
 
-    /// Claim: a delivery is never paid out of a record. Shows: with 40 recorded for the failed delivery address, a later
-    /// delivery of 100 of a token that takes a cut arrives as 90, pays 90 to its recipient, and leaves the 40 alone.
-    /// Matters: the balance of the router includes the record, and a payout from the whole balance would take from it.
-    function test_aDeliveryIsNeverPaidFromTheRecord() public {
+    /// Claim: a delivery is never paid from tokens that an earlier refusal left in the router. Shows: with 40 of the
+    /// deny list token stuck, a later delivery of 100 of a token that takes a cut arrives as 90, pays 90 to its
+    /// recipient, and leaves the 40 alone. Matters: the balance of the router includes the stuck tokens, and a payout
+    /// from the whole balance of the same token would take from them.
+    function test_aDeliveryIsNeverPaidFromStuckTokensOfAnotherToken() public {
         MedCutToken cutToken = new MedCutToken();
         cutToken.mint(alice, 1_000 ether);
         vm.startPrank(alice);
@@ -204,7 +232,7 @@ contract DeliveryRouterClaimsTest is MediatorFixture {
         token.setDenied(bob, true);
         token.setDenied(failedDelivery, true);
         _run(_sendCopy(abi.encode(_share(bob, 0, 0, 0)), 40 ether));
-        assertEq(router.totalClaimable(address(token)), 40 ether);
+        assertEq(token.balanceOf(address(router)), 40 ether);
 
         cutToken.setCut(address(mediatorA), 1_000);
         vm.startPrank(alice);
@@ -214,7 +242,21 @@ contract DeliveryRouterClaimsTest is MediatorFixture {
         _run(_lastIndexB());
         assertEq(cutToken.balanceOf(recipient), 90 ether);
         assertEq(cutToken.balanceOf(address(router)), 0);
-        assertEq(token.balanceOf(address(router)), 40 ether, "the record of another token is untouched");
+        assertEq(token.balanceOf(address(router)), 40 ether, "the stuck tokens of another token are untouched");
+    }
+
+    /// Claim: a delivery of the same token is paid from the value that the mediator reports, not from the stuck balance.
+    /// Shows: with 40 stuck, a delivery of 100 to a recipient that the token accepts pays exactly 100, and the 40 stay.
+    /// Matters: the router holds stuck tokens beside live ones, and only the reported value belongs to the delivery.
+    function test_aDeliveryOfTheSameTokenLeavesStuckTokensAlone() public {
+        token.setDenied(bob, true);
+        token.setDenied(failedDelivery, true);
+        _run(_sendCopy(abi.encode(_share(bob, 0, 0, 0)), 40 ether));
+        assertEq(token.balanceOf(address(router)), 40 ether);
+
+        _run(_sendCopy(abi.encode(_share(recipient, 0, 0, 0)), 100 ether));
+        assertEq(token.balanceOf(recipient), 100 ether, "the delivery is paid in full");
+        assertEq(token.balanceOf(address(router)), 40 ether, "the stuck tokens stay");
     }
 
     /// Claim: the failed delivery address may equal the reward address. Shows: the tip and the hand-off both reach it.
@@ -352,19 +394,23 @@ contract DeliveryRouterClaimsTest is MediatorFixture {
         _assertRouterEmpty(address(weth));
     }
 
-    /// Claim: a wrapped token that blocks the failed delivery address too leaves a record in the wrapped token. Shows:
-    /// the record, the claim that pays the wrapped token once the block lifts, and no coin in the router.
-    function test_aWrappedTokenThatBlocksTheFailedDeliveryAddressLeavesARecord() public {
+    /// Claim: a wrapped token that blocks the failed delivery address too leaves the wrapped token in the router.
+    /// Shows: the hand-off event and the refusal event carry the wrapped token and 5, the router holds 5 of the wrapped
+    /// token and no coin, and `sweep` pays it once the block lifts.
+    function test_aWrappedTokenThatBlocksTheFailedDeliveryAddressStaysInTheRouter() public {
         MedToggleReceiver receiver = new MedToggleReceiver();
         weth.setDenied(address(receiver), true);
         weth.setDenied(failedDelivery, true);
-        _run(_sendWrapped(abi.encode(_share(address(receiver), 2, 0, 0)), 5 ether));
-        assertEq(router.claimable(address(weth), failedDelivery), 5 ether);
+        uint256 index = _sendWrapped(abi.encode(_share(address(receiver), 2, 0, 0)), 5 ether);
+        _expectHandOff(address(weth), address(receiver), 5 ether, DeliveryRouter.Reason.PayoutRefused);
+        vm.expectEmit(true, false, false, true, address(router));
+        emit HandOffRefused(address(weth), 5 ether);
+        _run(index);
         assertEq(weth.balanceOf(address(router)), 5 ether);
         assertEq(address(router).balance, 0);
 
         weth.setDenied(failedDelivery, false);
-        router.claim(address(weth));
+        router.sweep(address(weth));
         assertEq(weth.balanceOf(failedDelivery), 5 ether);
         _assertRouterEmpty(address(weth));
     }

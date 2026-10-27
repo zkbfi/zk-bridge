@@ -199,9 +199,29 @@ contract DeliveryRouterWrapTest is MediatorFixture {
         assertEq(ambA.sentCount(), 0);
     }
 
-    /// Claim: the router approves the mediator once for the wrapped token, so a wrap and send needs no approval step.
-    function test_theRouterApprovesTheMediatorForTheWrappedTokenAtConstruction() public view {
-        assertEq(weth.allowance(address(routerA), address(mediatorA)), type(uint256).max);
+    /// Claim: the router holds no standing approval, so the allowance of the router to the mediator is zero before and
+    /// after each wrap entry point. Shows: the allowance reads zero at the start, and zero after each of the five entry
+    /// points, whose wrapped token the mediator took in full (the mediator holds the sum). Matters: a standing approval
+    /// would let a faulty mediator take any wrapped token that the router ever holds.
+    function test_theAllowanceToTheMediatorIsZeroBeforeAndAfterEveryWrapEntry() public {
+        RecordingReceiver receiver = new RecordingReceiver();
+        assertEq(weth.allowance(address(routerA), address(mediatorA)), 0, "zero before any wrap");
+
+        vm.startPrank(alice);
+        routerA.wrapAndRelayTokens{value: 1 ether}();
+        assertEq(weth.allowance(address(routerA), address(mediatorA)), 0, "after wrapAndRelayTokens()");
+        routerA.wrapAndRelayTokens{value: 2 ether}(bob);
+        assertEq(weth.allowance(address(routerA), address(mediatorA)), 0, "after wrapAndRelayTokens(receiver)");
+        routerA.wrapAndRelayTokens{value: 3 ether}(bob, 3_000_000);
+        assertEq(weth.allowance(address(routerA), address(mediatorA)), 0, "after wrapAndRelayTokens(receiver, gas)");
+        routerA.relayTokensAndCall{value: 4 ether}(address(receiver), hex"7777");
+        assertEq(weth.allowance(address(routerA), address(mediatorA)), 0, "after relayTokensAndCall(receiver, data)");
+        routerA.relayTokensAndCall{value: 5 ether}(address(receiver), hex"7777", 5_000_000);
+        assertEq(weth.allowance(address(routerA), address(mediatorA)), 0, "after relayTokensAndCall with gas");
+        vm.stopPrank();
+
+        assertEq(weth.balanceOf(address(mediatorA)), 15 ether, "the mediator took all of the wrapped token");
+        assertEq(weth.balanceOf(address(routerA)), 0, "the router holds none");
     }
 
     function test_theImmutablesAreTheMediatorAndTheWrappedToken() public view {

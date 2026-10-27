@@ -39,7 +39,7 @@ export const MULTIPLIER_OF_TOTAL = 8n;
 /** Gas that the router adds to the measured gas of a token payout. Same as `DeliveryRouter.TOKEN_GAS_OVERHEAD`. */
 export const TOKEN_GAS_OVERHEAD = 100_000n;
 /** Gas that the router adds to the measured gas of a native coin payout. Same as `DeliveryRouter.NATIVE_GAS_OVERHEAD`. */
-export const NATIVE_GAS_OVERHEAD = 50_000n;
+export const NATIVE_GAS_OVERHEAD = 100_000n;
 
 /** The name of each settings flag, as the contract names it. */
 export type SettingFlagName = "FIXED_FEE" | "UNWRAP" | "EXCLUDE_PRIORITY" | "MULTIPLIER_OF_TOTAL";

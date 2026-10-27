@@ -333,7 +333,8 @@ contract DeliveryRouterTest is MediatorFixture {
         (fee,) = router.feeInfo(address(tokenB), 1_000 ether, 400_000, _director(0, 1 gwei, 1 ether));
         assertEq(fee, 1 gwei, "capped");
         (fee,) = router.feeInfo(address(weth), 1_000 ether, 400_000, _director(router.UNWRAP(), 100 ether, 1 ether));
-        assertEq(fee, (400_000 + 50_000) * 10 gwei, "the native overhead is smaller");
+        assertEq(fee, (400_000 + router.NATIVE_GAS_OVERHEAD()) * 10 gwei, "gas used plus the native overhead");
+        assertEq(router.NATIVE_GAS_OVERHEAD(), 100_000, "measured: 50,000 was too low when both payees are new accounts");
     }
 
     function test_theFeeNeverExceedsTheValue() public {

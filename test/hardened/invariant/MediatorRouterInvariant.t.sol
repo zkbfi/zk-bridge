@@ -43,8 +43,8 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         selectors[12] = RouterHandler.donate.selector;
         selectors[13] = RouterHandler.toggleRefusal.selector;
         selectors[14] = RouterHandler.deliver.selector;
-        selectors[15] = RouterHandler.claimFromRouter.selector;
-        selectors[16] = RouterHandler.claimFromRouter.selector;
+        selectors[15] = RouterHandler.sweepRouter.selector;
+        selectors[16] = RouterHandler.strayToRouter.selector;
         selectors[17] = RouterHandler.deliverReentrant.selector;
         selectors[18] = RouterHandler.deliverReentrant.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
@@ -103,22 +103,25 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         assertEq(handler.violations(), 0, handler.firstViolation());
     }
 
-    /// Claim: a delivery router holds exactly what it recorded, no coin, and no run stays open. The router pays its
-    /// payee and its reward address inside the callback, so nothing waits in it between two actions. Shows: after every action,
-    /// each of the six delivery routers holds, in each of the ten tokens, a balance that equals the sum of its claimable
-    /// records (only the failed delivery address can have one, and the balance equals its own `totalClaimable`), exactly; it holds none of the coin; and its delivery slot is at
-    /// most 1 (not running). Matters: the routers have no owner and no way
-    /// to recover a token. A balance with no record behind it would be lost for good, and a record with no balance
-    /// behind it would take from another claimant.
-    function invariant_aRouterHoldsExactlyWhatItRecordedAndNoRunStaysOpen() public view {
+    /// Claim: a delivery router holds exactly what the handler counts as refused or stray, no coin, and no run stays
+    /// open. The router pays its payee and its reward address inside the callback, so nothing waits in it between two
+    /// actions. Shows: after every action, each of the six delivery routers holds, in each of the ten tokens, a balance
+    /// that equals the amounts of the `HandOffRefused` logs plus the stray amounts that the handler sent, less what
+    /// sweeps paid out, exactly; it holds none of the coin; and its delivery slot is at most 1 (not running). Matters:
+    /// the router keeps no record, so its balance is the only trace of a refused hand-off. A balance above that count is
+    /// tokens that no path explains, and a balance below it is tokens that the router lost.
+    function invariant_aRouterHoldsExactlyWhatWasRefusedOrStrayAndNoRunStaysOpen() public view {
         for (uint256 chain = 0; chain < 2; chain++) {
             for (uint256 k = 0; k < 3; k++) {
                 DeliveryRouter router = handler.deliveryRouterAt(chain, k);
                 for (uint256 u = 0; u < 10; u++) {
-                    (uint256 sum, uint256 stated) = handler.routerClaimableOfHolders(router, u);
-                    uint256 balance = handler.balanceOrZero(handler.tokenAt(u), address(router));
-                    assertEq(balance, sum, "a router balance differs from the sum of its claimable balances");
-                    assertEq(stated, sum, "totalClaimable differs from the sum of the claimable balances");
+                    if (handler.chainOfToken(u) != chain) continue;
+                    address token = handler.tokenAt(u);
+                    assertEq(
+                        handler.balanceOrZero(token, address(router)),
+                        handler.expectedInRouter(address(router), token),
+                        "a router balance differs from its refused and stray tokens"
+                    );
                 }
                 assertEq(address(router).balance, 0, "a router holds the coin");
                 assertLe(uint256(vm.load(address(router), router.DELIVERY_SLOT())), 1, "the delivery slot is open");
@@ -260,11 +263,11 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         // the receiver (1 the router, 2 the zero address) and bits 144.. choose data of no known shape (1).
         handler.toggleDeny(0);
         // A payout that the token refuses, after a tip that a router executes. The failed delivery address is denied
-        // too (accounts are the recipients, then the failed delivery address at index 9), so the push fails and a record stays.
+        // too (accounts are the recipients, then the failed delivery address at index 9), so the push fails and the tokens stay in the router.
         handler.toggleDeny(9);
         handler.relay(4, 1, 3, 2, 9e18 + 1, (1 << 32) | (1 << 40), 1);
         handler.deliver(handler.pendingCount() - 1, 1, 0x55, 30 gwei);
-        assertGt(handler.payoutsRefused(), 0, "a payout was refused and recorded");
+        assertGt(handler.payoutsRefused(), 0, "a payout was refused");
         // Terms that name the router, terms that name nobody, data of no known shape, a legacy receiver that is the router.
         handler.relay(4, 1, 3, 2, 9e18 + 1, uint256(1) << 136, 0);
         handler.relay(4, 1, 3, 2, 9e18 + 1, uint256(2) << 136, 0);
@@ -283,12 +286,16 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
         handler.deliverReentrant(1, 5e18, 4, 0, 30);
         assertGt(handler.reentriesRun(), 0, "a payout hook delivered a second message");
         assertGt(handler.reenteredHandOffs(), 0, "a reentrant callback was handed off");
-        // The claims: refused while the token refuses the account, paid after.
-        handler.claimFromRouter(4);
-        assertGt(handler.routerClaimsRefused(), 0, "a claim was refused while the token refused");
+        // The sweeps: refused while the token refuses the address, paid after, empty reverts.
+        handler.sweepRouter(4, 0);
+        assertGt(handler.sweepsRefused(), 0, "a sweep was refused while the token refused");
         handler.toggleDeny(9);
-        handler.claimFromRouter(4);
-        assertGt(handler.routerClaimsPaid(), 0, "a claim was paid");
+        handler.sweepRouter(4, 0);
+        assertGt(handler.sweepsPaid(), 0, "a sweep was paid");
+        handler.sweepRouter(4, 0);
+        assertGt(handler.sweepsEmpty(), 0, "a sweep of an empty router reverted");
+        handler.strayToRouter(4, 0, 0, 3e18);
+        handler.sweepRouter(4, 0);
 
         // Strangers and attacks.
         handler.donate(0, 0, 1 ether);
