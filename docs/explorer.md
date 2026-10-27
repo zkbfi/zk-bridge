@@ -163,7 +163,7 @@ The three modes:
 
 | Mode | Settings | The tip | Label |
 |---|---|---|---|
-| Percentage | `MULTIPLIER_OF_TOTAL` (8) | `value * multiplier / 1e18`. The default is multiplier 1e15 (0.1 percent) | exact |
+| Percentage | `MULTIPLIER_OF_TOTAL` (8) | `value * multiplier / 1e18`. Selectable, not the default. Multiplier 1e15 is 0.1 percent | exact |
 | Fixed | `FIXED_FEE` (1) | `limit` | exact |
 | Gas based (label "Gas, to limit") | none, or `EXCLUDE_PRIORITY` (4) for the default | `(gas used + overhead) * multiplier * gas price / 1e18`, never above `limit` | estimate, at most the limit |
 
