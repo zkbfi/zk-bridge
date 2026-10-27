@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {Vm} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol";
@@ -70,6 +71,34 @@ contract DeliveryRouterTest is MediatorFixture {
         vm.prank(alice);
         mediatorB.relayTokensAndCall(address(tokenB), address(router), value, abi.encode(director));
         return _lastIndexB();
+    }
+
+    /// @dev The measure in the callback starts before the call to the bridge, so it also counts the entry of
+    /// `executeMessage` and the bridge work before the forward. This margin covers both in the bounds below.
+    uint256 internal constant ENTRY_MARGIN = 30_000;
+
+    function _gasLimitOfAReleaseWithACall() internal view returns (uint256) {
+        return mediatorB.RELEASE_GAS_LIMIT() + mediatorB.CALLBACK_GAS_LIMIT();
+    }
+
+    /// @dev Sends a token message with `director`, and runs it through the router with exactly `gasSupplied`. It returns
+    /// the tip of the reward address, the amount of the recipient and the gas limit that the message carries, then restores the state. So every run starts
+    /// from the same state, and two runs differ only in their inputs.
+    function _runAtGas(DeliveryRouter.FeeDirector memory director, uint256 value, uint256 gasSupplied)
+        internal
+        returns (uint256 tip, uint256 toRecipient, uint256 forwardedGasLimit)
+    {
+        uint256 snapshot = vm.snapshotState();
+        uint256 rewardBefore = _copyB().balanceOf(reward);
+        uint256 recipientBefore = _copyB().balanceOf(recipient);
+        uint256 index = _sendTokenB(director, value);
+        forwardedGasLimit = ambB.messageAt(index).gasLimit;
+        MessageBridge.MessageProof memory proof = ambA.proofOf(ambB, index);
+        vm.prank(executor, executor);
+        router.executeMessage{gas: gasSupplied}(proof);
+        tip = _copyB().balanceOf(reward) - rewardBefore;
+        toRecipient = _copyB().balanceOf(recipient) - recipientBefore;
+        vm.revertToState(snapshot);
     }
 
     /// @dev An account with no special role delivers the message through the router.
@@ -184,82 +213,95 @@ contract DeliveryRouterTest is MediatorFixture {
         assertEq(_copyB().balanceOf(reward), 1 ether);
     }
 
+    /// Claim: the gas based tip is the measured gas plus the token overhead, times the multiplier and the gas price.
+    /// Shows: with the caller supplying exactly 3,500,000 gas, the tip is a whole number of gas prices, the measured gas
+    /// is at most the supplied gas and at least the supplied gas less the gas that the bridge forwards, and 500,000 more
+    /// supplied gas adds exactly 500,000 times the gas price. The recipient gets the rest. Matters: the figure is exact,
+    /// not a bound.
     function test_aGasBasedFeeUsesTheGasPriceAndTheMultiplier() public {
         vm.txGasPrice(10 gwei);
-        uint256 index = _sendTokenB(_director(0, 100 ether, 1 ether), 1_000 ether);
-        _runThroughRouter(index);
+        DeliveryRouter.FeeDirector memory director = _director(0, 100 ether, 1 ether);
+        (uint256 tip, uint256 toRecipient, uint256 forwarded) = _runAtGas(director, 1_000 ether, 3_500_000);
 
-        uint256 fee = _copyB().balanceOf(reward);
-        // The fee is (gas used + 100,000 overhead) times the gas price, with the multiplier at one.
-        assertGt(fee, 100_000 * 10 gwei, "at least the overhead");
-        assertLt(fee, (100_000 + 1_000_000) * 10 gwei, "less than a million gas for the run");
-        assertEq(fee % 10 gwei, 0, "the unit is the gas price");
-        assertEq(_copyB().balanceOf(recipient), 1_000 ether - fee, "the rest of the cap went back to the recipient");
-        assertEq(_copyB().balanceOf(address(router)), 0, "nothing stays in the router");
+        assertEq(tip % 10 gwei, 0, "the unit is the gas price");
+        uint256 measuredGas = tip / 10 gwei - router.TOKEN_GAS_OVERHEAD();
+        assertLe(measuredGas, 3_500_000, "the callback cannot measure more than the caller supplied");
+        assertGe(measuredGas, 3_500_000 - forwarded - ENTRY_MARGIN, "the supplied gas less the forwarded gas");
+        assertEq(toRecipient, 1_000 ether - tip, "the recipient gets the rest");
+
+        (uint256 largerTip,,) = _runAtGas(director, 1_000 ether, 4_000_000);
+        assertEq(largerTip - tip, 500_000 * 10 gwei, "each supplied gas unit adds one gas price");
     }
 
-    function test_extraGasFromTheExecutorDoesNotRaiseAGasBasedFee() public {
+    /// Claim: a caller can raise a gas based tip by the gas that it supplies, up to the limit of the sender. Shows: the
+    /// same delivery with a small and with a large gas amount gives two different tips, both at most the limit, and
+    /// a third run with a very large amount ends at the limit. The bridge forwards only the gas limit of the message,
+    /// so `startingGas - gasleft()` in the callback also counts the gas that the caller supplied above that. Matters:
+    /// this is the residual of the design, and it is bounded. The limit of the sender caps the tip, and the tip goes to
+    /// the fixed reward address, so a stranger who raises it gains nothing.
+    function test_aCallerCanRaiseAGasBasedTipByTheGasItSuppliesUpToTheLimit() public {
         vm.txGasPrice(10 gwei);
-        uint256 indexOne = _sendTokenB(_director(0, 100 ether, 1 ether), 1_000 ether);
-        _runThroughRouter(indexOne);
-        uint256 plainFee = _copyB().balanceOf(reward);
+        uint256 limit = 0.1 ether;
+        DeliveryRouter.FeeDirector memory director = _director(0, limit, 1 ether);
 
-        // The mock bridge, like the real one, forwards exactly the gas limit of the message and holds the rest back.
-        uint256 indexTwo = _sendTokenB(_director(0, 100 ether, 1 ether), 1_000 ether);
-        MessageBridge.MessageProof memory proofTwo = ambA.proofOf(ambB, indexTwo);
-        vm.prank(executor, executor);
-        router.executeMessage{gas: 50_000_000}(proofTwo);
-        uint256 greedyFee = _copyB().balanceOf(reward) - plainFee;
+        (uint256 smallTip,,) = _runAtGas(director, 1_000 ether, 3_500_000);
+        (uint256 largeTip,,) = _runAtGas(director, 1_000 ether, 8_000_000);
+        (uint256 hugeTip, uint256 hugeToRecipient,) = _runAtGas(director, 1_000 ether, 50_000_000);
 
-        assertGt(greedyFee, 0);
-        assertLt(greedyFee, plainFee * 12 / 10, "supplying 50 million gas buys no extra fee");
+        emit log_named_uint("tip with 3,500,000 gas supplied", smallTip);
+        emit log_named_uint("tip with 8,000,000 gas supplied", largeTip);
+        assertGt(largeTip, smallTip, "more supplied gas raises the tip");
+        assertLe(largeTip, limit, "the limit of the sender bounds it");
+        assertEq(hugeTip, limit, "a very large amount of gas ends at the limit");
+        assertEq(hugeToRecipient, 1_000 ether - limit, "the recipient keeps the rest");
     }
 
     function test_theMultiplierScalesAGasBasedFee() public {
         vm.txGasPrice(10 gwei);
-        // A first run warms the storage of the router, so the two measured runs cost nearly the same.
-        _runThroughRouter(_sendTokenB(_director(0, 100 ether, 1 ether), 1_000 ether));
-        uint256 warmFee = _copyB().balanceOf(reward);
-        uint256 indexOne = _sendTokenB(_director(0, 100 ether, 1 ether), 1_000 ether);
-        _runThroughRouter(indexOne);
-        uint256 feeOne = _copyB().balanceOf(reward) - warmFee;
-
-        uint256 indexTwo = _sendTokenB(_director(0, 100 ether, 2 ether), 1_000 ether);
-        _runThroughRouter(indexTwo);
-        uint256 feeTwo = _copyB().balanceOf(reward) - warmFee - feeOne;
-
-        // The two runs use nearly the same gas, so doubling the multiplier nearly doubles the fee.
-        assertGt(feeTwo, feeOne * 19 / 10);
-        assertLt(feeTwo, feeOne * 21 / 10);
+        (uint256 feeOne,,) = _runAtGas(_director(0, 100 ether, 1 ether), 1_000 ether, 3_500_000);
+        (uint256 feeTwo,,) = _runAtGas(_director(0, 100 ether, 2 ether), 1_000 ether, 3_500_000);
+        assertEq(feeTwo, feeOne * 2, "the same gas, so doubling the multiplier doubles the tip");
     }
 
     function test_aGasBasedFeeIsCappedByTheLimit() public {
         vm.txGasPrice(10 gwei);
-        uint256 index = _sendTokenB(_director(0, 12_345, 1 ether), 1_000 ether);
-        _runThroughRouter(index);
-        assertEq(_copyB().balanceOf(reward), 12_345, "capped");
-        assertEq(_copyB().balanceOf(recipient), 1_000 ether - 12_345);
+        (uint256 tip, uint256 toRecipient,) = _runAtGas(_director(0, 12_345, 1 ether), 1_000 ether, 3_500_000);
+        assertEq(tip, 12_345, "capped");
+        assertEq(toRecipient, 1_000 ether - 12_345);
+    }
+
+    /// Claim: a gas based tip never exceeds the smaller of the limit and the value. Shows: with a limit far above a
+    /// value of 1,000 units and a large gas amount, the tip is the whole value and the recipient gets nothing.
+    function test_aGasBasedTipNeverExceedsTheValue() public {
+        vm.txGasPrice(10 gwei);
+        (uint256 tip, uint256 toRecipient,) = _runAtGas(_director(0, 100 ether, 1 ether), 1_000, 8_000_000);
+        assertEq(tip, 1_000, "the value binds");
+        assertEq(toRecipient, 0);
     }
 
     function test_theExcludePriorityFlagPricesGasAtTheBaseFee() public {
         vm.txGasPrice(50 gwei);
         vm.fee(7 gwei);
-        uint256 index = _sendTokenB(_director(router.EXCLUDE_PRIORITY(), 100 ether, 1 ether), 1_000 ether);
-        _runThroughRouter(index);
-        uint256 fee = _copyB().balanceOf(reward);
-        assertEq(fee % 7 gwei, 0, "priced at the base fee");
-        assertGt(fee, 100_000 * 7 gwei);
-        assertLt(fee, (100_000 + 1_000_000) * 7 gwei);
+        (uint256 tip,, uint256 forwarded) =
+            _runAtGas(_director(router.EXCLUDE_PRIORITY(), 100 ether, 1 ether), 1_000 ether, 3_500_000);
+        assertEq(tip % 7 gwei, 0, "priced at the base fee");
+        uint256 measuredGas = tip / 7 gwei - router.TOKEN_GAS_OVERHEAD();
+        assertLe(measuredGas, 3_500_000);
+        assertGe(measuredGas, 3_500_000 - forwarded - ENTRY_MARGIN);
     }
 
-    function test_aGasBasedFeeInTheNativeCoinIsSettledInTheCoin() public {
+    function test_aGasBasedFeeInTheNativeCoinIsPaidInTheCoin() public {
         vm.txGasPrice(10 gwei);
         uint256 index = _sendWrappedBack(_director(router.UNWRAP(), 1 ether, 1 ether), 5 ether, "");
         uint256 recipientBefore = recipient.balance;
-        _runThroughRouter(index);
+        MessageBridge.MessageProof memory proof = ambA.proofOf(ambB, index);
+        vm.prank(executor, executor);
+        router.executeMessage{gas: 1_500_000}(proof);
         uint256 fee = reward.balance;
-        assertGt(fee, 50_000 * 10 gwei);
-        assertLe(fee, 1 ether);
+        assertEq(fee % 10 gwei, 0, "the unit is the gas price");
+        uint256 measuredGas = fee / 10 gwei - router.NATIVE_GAS_OVERHEAD();
+        assertLe(measuredGas, 1_500_000);
+        assertGe(measuredGas, 1_500_000 - _gasLimitOfAReleaseWithACall() - ENTRY_MARGIN);
         assertEq(recipient.balance - recipientBefore, 5 ether - fee);
         assertEq(address(router).balance, 0);
         assertEq(weth.totalSupply(), 0);
@@ -359,7 +401,7 @@ contract DeliveryRouterTest is MediatorFixture {
     }
 
     /// Claim: a second delivery cannot start while one runs. Shows: with the slot set to a starting gas, `executeMessage`
-    /// reverts with `DeliveryInProgress`. Matters: a nested run would mix the two settlements.
+    /// reverts with `DeliveryInProgress`. Matters: a nested run would overwrite the starting gas of the first.
     function test_aDeliveryWhileAnotherDeliveryRunsIsRefused() public {
         vm.store(address(router), router.DELIVERY_SLOT(), bytes32(uint256(5)));
         vm.expectRevert(DeliveryRouter.DeliveryInProgress.selector);
@@ -499,27 +541,54 @@ contract DeliveryRouterTest is MediatorFixture {
 
     // ------------------------------------------------------------------------------------------------ a reward address the token refuses
 
-    function test_aRewardAddressThatTheTokenRefusesCannotBlockTheRecipient() public {
-        DenyListToken token = new DenyListToken();
+    /// @dev A deny list token that has crossed to chain B, with its copy approved, and the reward address denied.
+    /// Returns the copy.
+    function _denyListCopyThatRefusesTheRewardAddress() internal returns (DenyListToken token, address copy) {
+        token = new DenyListToken();
         token.mint(alice, 100 ether);
         vm.startPrank(alice);
         token.approve(address(mediatorA), type(uint256).max);
         mediatorA.relayTokens(address(token), alice, 100 ether);
         vm.stopPrank();
         _deliverAtoB(_lastIndexA());
-        address copy = _copyOf(address(token));
+        copy = _copyOf(address(token));
         token.setDenied(reward, true);
-
-        vm.startPrank(alice);
+        vm.prank(alice);
         IERC20(copy).approve(address(mediatorB), type(uint256).max);
-        mediatorB.relayTokensAndCall(
-            copy, address(router), 50 ether, abi.encode(_director(router.FIXED_FEE(), 5 ether, 0))
-        );
-        vm.stopPrank();
+    }
+
+    function test_aRewardAddressThatTheTokenRefusesCannotBlockTheRecipient() public {
+        (DenyListToken token, address copy) = _denyListCopyThatRefusesTheRewardAddress();
+        bytes memory data = abi.encode(_director(router.FIXED_FEE(), 5 ether, 0));
+        vm.prank(alice);
+        mediatorB.relayTokensAndCall(copy, address(router), 50 ether, data);
         _runThroughRouter(_lastIndexB());
 
         assertEq(token.balanceOf(recipient), 50 ether, "the tip that the reward address could not take goes to the recipient");
         assertEq(token.balanceOf(reward), 0);
+        assertEq(token.balanceOf(address(router)), 0);
+    }
+
+    /// Claim: a gas based tip that the reward address refuses stays with the recipient. Shows: the token refuses the
+    /// reward address, the recipient gets the whole value in one transfer, and the router pays the reward address
+    /// nothing. Matters: the refusal of the reward address never costs the recipient.
+    function test_aGasBasedTipThatTheRewardAddressRefusesStaysWithTheRecipient() public {
+        vm.txGasPrice(10 gwei);
+        (DenyListToken token, address copy) = _denyListCopyThatRefusesTheRewardAddress();
+        vm.prank(alice);
+        mediatorB.relayTokensAndCall(
+            copy, address(router), 50 ether, abi.encode(_director(0, 10 ether, 1 ether))
+        );
+        MessageBridge.MessageProof memory proof = ambA.proofOf(ambB, _lastIndexB());
+        vm.recordLogs();
+        vm.prank(executor, executor);
+        router.executeMessage{gas: 3_500_000}(proof);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        assertEq(token.balanceOf(recipient), 50 ether, "the whole value");
+        assertEq(token.balanceOf(reward), 0);
+        assertEq(_transfersTo(logs, address(token), recipient), 1, "one transfer to the recipient");
+        assertEq(_transfersTo(logs, address(token), reward), 0, "none to the reward address");
         assertEq(token.balanceOf(address(router)), 0);
     }
 
@@ -551,17 +620,81 @@ contract DeliveryRouterTest is MediatorFixture {
         assertEq(token.balanceOf(address(router)), 0, "the router keeps nothing");
     }
 
-    /// Claim: a gas based fee with a cap of zero takes no fee and holds nothing back. Shows: the recipient gets the whole
-    /// value, the reward address gets nothing, and the delivery slot returns to the idle value. Matters: a cap of zero
-    /// means that the sender pays no tip, and the router must not hold a settlement that it cannot pay.
+    /// Claim: a gas based fee with a limit of zero takes no tip. Shows: the recipient gets the whole value, the reward
+    /// address gets nothing, and the delivery slot returns to the idle value. Matters: a limit of zero means that the
+    /// sender pays no tip.
     function test_aGasBasedFeeWithACapOfZeroTakesNoFee() public {
         vm.txGasPrice(10 gwei);
-        uint256 index = _sendTokenB(_director(0, 0, 1 ether), 100 ether);
-        _runThroughRouter(index);
-        assertEq(_copyB().balanceOf(reward), 0, "no fee");
-        assertEq(_copyB().balanceOf(recipient), 100 ether, "the whole value");
-        assertEq(_copyB().balanceOf(address(router)), 0);
-        assertEq(uint256(vm.load(address(router), router.DELIVERY_SLOT())), 1, "back to the idle value");
+        (uint256 tip, uint256 toRecipient,) = _runAtGas(_director(0, 0, 1 ether), 100 ether, 5_000_000);
+        assertEq(tip, 0, "no fee");
+        assertEq(toRecipient, 100 ether, "the whole value");
+    }
+
+    // ------------------------------------------------------------------------------------------------ one transfer each
+
+    bytes32 internal constant TRANSFER_TOPIC = keccak256("Transfer(address,address,uint256)");
+
+    /// @dev The number of `Transfer` events of `token` whose payee is `to`.
+    function _transfersTo(Vm.Log[] memory logs, address token, address to) internal pure returns (uint256 count) {
+        for (uint256 i = 0; i < logs.length; i++) {
+            bool isTransferTo = logs[i].emitter == token && logs[i].topics.length == 3
+                && logs[i].topics[0] == TRANSFER_TOPIC && address(uint160(uint256(logs[i].topics[2]))) == to;
+            if (isTransferTo) count++;
+        }
+    }
+
+    /// Claim: in a token payout the recipient gets exactly one transfer and the reward address at most one. Shows: for
+    /// a fixed tip, a percent tip and a gas based tip, one `Transfer` event names the recipient and one names the
+    /// reward address. A tip of zero (a gas based limit of zero) gives the reward address none. Matters: the router
+    /// pays as `gibsfinance/omnibridge` does, with no second transfer for a refund.
+    function test_theRecipientGetsOneTokenTransferAndTheRewardAddressAtMostOne() public {
+        vm.txGasPrice(10 gwei);
+        DeliveryRouter.FeeDirector[4] memory directors = [
+            _director(router.FIXED_FEE(), 3 ether, 0),
+            _director(router.MULTIPLIER_OF_TOTAL(), 0, 0.02 ether),
+            _director(0, 100 ether, 1 ether),
+            _director(0, 0, 1 ether)
+        ];
+        for (uint256 i = 0; i < directors.length; i++) {
+            uint256 rewardBefore = _copyB().balanceOf(reward);
+            MessageBridge.MessageProof memory proof = ambA.proofOf(ambB, _sendTokenB(directors[i], 100 ether));
+            vm.recordLogs();
+            vm.prank(executor, executor);
+            router.executeMessage{gas: 3_500_000}(proof);
+            Vm.Log[] memory logs = vm.getRecordedLogs();
+
+            uint256 tip = _copyB().balanceOf(reward) - rewardBefore;
+            assertEq(_transfersTo(logs, address(_copyB()), recipient), 1, "one transfer to the recipient");
+            assertEq(_transfersTo(logs, address(_copyB()), reward), tip == 0 ? 0 : 1, "at most one to the reward address");
+        }
+    }
+
+    /// @dev Runs a native payout of `director` and expects exactly one coin call to the recipient and one to the
+    /// reward address.
+    function _assertOneCoinCallEach(DeliveryRouter.FeeDirector memory director) internal {
+        uint256 index = _sendWrappedBack(director, 5 ether, "");
+        MessageBridge.MessageProof memory proof = ambA.proofOf(ambB, index);
+        vm.expectCall(recipient, "", 1);
+        vm.expectCall(reward, "", 1);
+        vm.prank(executor, executor);
+        router.executeMessage{gas: 3_000_000}(proof);
+        assertGt(reward.balance, 0, "a tip was paid");
+        assertGt(recipient.balance, 0, "the recipient was paid");
+        assertEq(reward.balance + recipient.balance, 5 ether, "the coin is all paid out");
+    }
+
+    /// Claim: in a native payout the recipient gets one coin call and the reward address one, for each tip kind.
+    function test_aFixedTipInTheCoinIsOneCallToEach() public {
+        _assertOneCoinCallEach(_director(router.FIXED_FEE() | router.UNWRAP(), 0.4 ether, 0));
+    }
+
+    function test_aPercentTipInTheCoinIsOneCallToEach() public {
+        _assertOneCoinCallEach(_director(router.MULTIPLIER_OF_TOTAL() | router.UNWRAP(), 0, 0.1 ether));
+    }
+
+    function test_aGasBasedTipInTheCoinIsOneCallToEach() public {
+        vm.txGasPrice(10 gwei);
+        _assertOneCoinCallEach(_director(router.UNWRAP(), 1 ether, 1 ether));
     }
 
     // ------------------------------------------------------------------------------------------------ access

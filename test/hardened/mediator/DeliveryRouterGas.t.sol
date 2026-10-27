@@ -10,7 +10,7 @@ import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol"
 import {MediatorFixture, MockWrappedNative} from "./utils/MediatorSupport.sol";
 
 /// @notice Measures the gas of a whole delivery through the delivery router: the bridge execution, the mediator release,
-/// the callback of the router, and the settlement of the fee. The explorer uses the figure as the default delivery gas
+/// and the callback of the router, which pays the tip and the recipient. The explorer uses the figure as the default delivery gas
 /// when the indexer has no delivery samples (`EXPLORER_DEFAULT_DELIVERY_GAS`, documented in `docs/explorer.md`).
 /// The delivery goes through the mock bridge, which reads no proof. So the figure leaves out the cost of the proof check
 /// of the real bridge (`MessageBridgeGas.t.sol`: about 290,000 gas on the recent path). A transaction adds 21,000 gas
@@ -73,6 +73,8 @@ contract DeliveryRouterGasTest is MediatorFixture {
             EXPLORER_DEFAULT_DELIVERY_GAS,
             "the default of the explorer stays above a real delivery"
         );
-        assertGt(gasBased, fixedFee, "settlement after the call costs more than a fee paid in the callback");
+        assertLt(gasBased, 150_000, "a delivery stays below 150,000 gas of call gas");
+        assertGe(gasBased, fixedFee, "measuring the gas costs a little more than a fixed tip");
+        assertLt(gasBased - fixedFee, 5_000, "the gas based tip is paid in the callback, so it costs about the same as a fixed tip");
     }
 }

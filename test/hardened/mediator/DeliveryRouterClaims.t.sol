@@ -14,7 +14,7 @@ import {MedCutToken, MedDenyListWrappedNative, MedToggleReceiver} from "./utils/
 /// delivery path takes a tip, then hands the rest off to the failed delivery address and emits `DeliveryFailed`. Only
 /// when a token refuses that address too does the router keep a record for it, which anyone may claim. These tests
 /// cover each hand-off: a token that refuses the recipient, terms that decode but name nobody who can receive, data of
-/// no known shape, a legacy receiver, the native coin, and a refused refund of a gas based fee. Tokens flow from chain B
+/// no known shape, a legacy receiver, the native coin, and a gas based tip with a refused rest. Tokens flow from chain B
 /// back to the router on chain A.
 contract DeliveryRouterClaimsTest is MediatorFixture {
     MedDenyListWrappedNative internal weth;
@@ -130,9 +130,9 @@ contract DeliveryRouterClaimsTest is MediatorFixture {
         _assertRouterEmpty(address(token));
     }
 
-    /// Claim: a refused refund of a gas based fee is handed off. Shows: the reward address gets the fee, and the
-    /// failed delivery address gets the rest: the part paid in the callback and the held cap less the fee.
-    function test_aGasBasedRefundThatTheTokenRefusesIsHandedOff() public {
+    /// Claim: a gas based tip is paid in the callback, and a recipient that the token refuses gets nothing. Shows: the
+    /// reward address gets the tip, and the failed delivery address gets the rest of the value.
+    function test_aGasBasedTipIsPaidAndTheRestIsHandedOffWhenTheTokenRefusesTheRecipient() public {
         vm.txGasPrice(10 gwei);
         token.setDenied(recipient, true);
         _run(_sendCopy(abi.encode(_share(recipient, 0, 50 ether, 1 ether)), 100 ether));
@@ -254,10 +254,10 @@ contract DeliveryRouterClaimsTest is MediatorFixture {
         _assertRouterEmpty(address(token));
     }
 
-    /// Claim: invalid terms respect the cap of a gas based fee. Shows: the fee is below the cap of 3 and the rest,
-    /// the held cap less the fee included, is handed off. Matters: the settlement runs after the callback and sends the
-    /// refund to the recipient of the terms.
-    function test_invalidTermsWithAGasBasedFeeSettleAndHandTheRestOff() public {
+    /// Claim: invalid terms respect the cap of a gas based fee. Shows: the tip is at most the cap of 3 and the rest of
+    /// the value is handed off. Matters: the router takes the tip in the callback, as for any delivery, and never pays an
+    /// invalid recipient.
+    function test_invalidTermsWithAGasBasedFeeTakeTheTipAndHandTheRestOff() public {
         vm.txGasPrice(10 gwei);
         _run(_sendCopy(abi.encode(_share(address(0), 0, 3 ether, 1 ether)), 100 ether));
         uint256 fee = token.balanceOf(reward);
@@ -379,9 +379,10 @@ contract DeliveryRouterClaimsTest is MediatorFixture {
         _assertRouterEmpty(address(weth));
     }
 
-    /// Claim: a native refund of a gas based fee that nobody can receive is handed off. Shows: the held cap less the
-    /// fee reaches the failed delivery address as the wrapped token. Matters: the settlement uses the same native path.
-    function test_aNativeGasBasedRefundThatNobodyCanReceiveIsHandedOff() public {
+    /// Claim: the rest of a native gas based delivery that nobody can receive is handed off. Shows: the value less the
+    /// tip reaches the failed delivery address as the wrapped token. Matters: the tip and the recipient use the same
+    /// native path.
+    function test_aNativeGasBasedDeliveryThatNobodyCanReceiveIsHandedOffAfterTheTip() public {
         vm.txGasPrice(10 gwei);
         MedToggleReceiver receiver = new MedToggleReceiver();
         weth.setDenied(address(receiver), true);

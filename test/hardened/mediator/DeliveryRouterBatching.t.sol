@@ -242,10 +242,12 @@ contract DeliveryRouterBatchingTest is WorldSupport {
         assertEq(results.length, 0);
     }
 
-    /// Claim: a gas based fee settles inside each call. Shows: two messages with a gas based fee, run in one list; each
-    /// pays a fee below its cap, and the reward address and the recipients hold all the value. Matters: the gas of one
-    /// call must not leak into the fee of another, and the one settlement slot is free again for the next call.
-    function test_batch_aGasBasedFeeSettlesInsideEachCall() public {
+    /// Claim: a gas based tip is paid in the callback of each call. Shows: two messages with a gas based tip, run in one
+    /// list with 6,000,000 gas supplied for the whole list; the reward address holds a tip that is above the fixed
+    /// overhead of the two calls and below twice the tip that the supplied gas allows, under the cap, and the reward address
+    /// and the recipient hold all the value. Matters: each call measures its own gas, so the gas of one call does not
+    /// leak into the tip of another, and the router is idle again after the list.
+    function test_batch_aGasBasedTipIsPaidInTheCallbackOfEachCall() public {
         vm.txGasPrice(1 gwei);
         DeliveryRouter.FeeDirector memory director = DeliveryRouter.FeeDirector(recipient, 0, 1 ether, 1 ether);
         Transit[] memory transits = new Transit[](2);
@@ -256,13 +258,18 @@ contract DeliveryRouterBatchingTest is WorldSupport {
             mediatorA.relayTokensAndCall(address(nativeToken), address(router), VALUE, abi.encode(director));
             transits[i] = _proveForB(vm.getRecordedLogs());
         }
-        Multicall3.Result[] memory results = _aggregateAs(batcher, _two(_deliverCall(transits[0]), _deliverCall(transits[1])));
+        Multicall3.Call3[] memory calls = _two(_deliverCall(transits[0]), _deliverCall(transits[1]));
+        vm.chainId(CHAIN_B);
+        vm.prank(batcher, batcher);
+        Multicall3.Result[] memory results = multicall.aggregate3{gas: 6_000_000}(calls);
 
         assertTrue(results[0].success);
         assertTrue(results[1].success);
         uint256 paid = _balance(reward);
-        assertGt(paid, 0, "both calls paid a fee");
-        assertLt(paid, 2 ether, "both fees are below the cap");
+        uint256 overhead = router.TOKEN_GAS_OVERHEAD();
+        assertGt(paid, 2 * overhead * 1 gwei, "both calls paid more than the fixed overhead");
+        assertLt(paid, 2 * (6_000_000 + overhead) * 1 gwei, "each call measures at most the supplied gas");
+        assertLt(paid, 2 ether, "both tips are below the cap");
         assertEq(paid + _balance(recipient), 2 * VALUE, "the reward address and the recipient hold all the value");
         _assertIdle();
     }

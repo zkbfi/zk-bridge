@@ -292,7 +292,7 @@ contract BridgeWorldTest is WorldSupport {
     /// Claim: a delivery through the delivery router pays a tip to the reward address, and plain execution pays none. All
     /// of it runs through the real bridge and the real mediator. Shows: with a fixed fee the reward address holds the tip
     /// in the bridged copy and the recipient holds the rest. With a gas based fee the reward address is paid from the measured gas:
-    /// positive, below the cap, and bounded by the fee of the gas that the whole call used. A small cap binds. Plain
+    /// positive, below the cap, and bounded by the fee of the gas that the caller supplied (4,000,000, set with an explicit gas amount). A small cap binds. Plain
     /// `executeMessage` of the same kind of message pays no fee. Matters: the router relies on the callback order and on
     /// the gas rule of the bridge. Only the real bridge forwards exactly the gas of the message.
     function test_deliveryRouterPaysTheRewardAddressThroughTheRealBridge() public {
@@ -394,18 +394,24 @@ contract BridgeWorldTest is WorldSupport {
 
         vm.chainId(CHAIN_B);
         uint256 heldBefore = BridgedToken(copy).balanceOf(router.rewardAddress());
-        uint256 outerGas = _gasOfRouterRun(router, transit);
+        // The caller supplies an exact amount. The real bridge forwards only the gas limit of the message, so the router
+        // measures the supplied gas less what the bridge held back, plus the work in between.
+        uint256 supplied = 4_000_000;
+        vm.prank(bob, bob);
+        router.executeMessage{gas: supplied}(transit.proof);
 
         uint256 paid = BridgedToken(copy).balanceOf(router.rewardAddress()) - heldBefore;
         assertGt(paid, 0, "the reward address is paid");
         assertLt(paid, cap, "the fee is measured, not the cap");
         assertEq(paid + BridgedToken(copy).balanceOf(recipient), value, "the recipient and the reward address hold the value");
-        // The router measures inside the call and before its own payouts, so its figure is below the outer gas by the
-        // gas of the payouts (the transfers to the reward address and the recipient), and never above it.
-        (uint256 upper,) = router.feeInfo(copy, value, outerGas, director);
-        (uint256 lower,) = router.feeInfo(copy, value, outerGas - 100_000, director);
-        assertLe(paid, upper, "the fee does not exceed the fee of the outer gas");
-        assertGe(paid, lower, "the fee follows the gas that the call used");
+        // The measure is at most the supplied gas, and at least the supplied gas less the gas limit of the message and
+        // a margin for the entry. The tip is the fee of that measure, in whole gas prices.
+        uint256 gasLimitOfTheMessage = mediatorA.DEPLOY_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT();
+        (uint256 upper,) = router.feeInfo(copy, value, supplied, director);
+        (uint256 lower,) = router.feeInfo(copy, value, supplied - gasLimitOfTheMessage - 30_000, director);
+        assertEq(paid % 1 gwei, 0, "the unit is the gas price");
+        assertLe(paid, upper, "the tip does not exceed the fee of the supplied gas");
+        assertGe(paid, lower, "the tip follows the gas that the call measured");
 
         _cappedFee(router, copy);
     }
