@@ -194,7 +194,11 @@ pub fn public_values(output: &LightClientOutput) -> Vec<u8> {
 
 /// The input bytes that an SP1 guest reads (used by the `sp1` backend).
 ///
-/// Calls `lc_core::wire::encode_guest_input` with the fork version of each step from the fork table.
+/// Calls `lc_core::wire::encode_guest_input` with the fork version of each step from the fork schedule of the chain.
+///
+/// The schedule is read only to BUILD the input. The program takes the version as a private input and trusts nothing
+/// about it: the committee signs a domain that contains the version, so a wrong value fails the signature check. The
+/// program reads no fork table, so a fork that keeps an accepted layout needs no new program.
 pub fn guest_input_bytes(input: &UpdateInput) -> Vec<u8> {
     let spec = input.chain.spec();
     let steps = input
