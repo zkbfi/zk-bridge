@@ -3,7 +3,7 @@
  * A data source (see `../data/data-source.ts`) maps its own records to these types.
  */
 import type { Address, Hex } from 'viem'
-import type { PartialFigure } from '@zk-bridge/shared'
+import type { BaseFeeSupport, PartialFigure } from '@zk-bridge/shared'
 
 export type { PartialFigure }
 
@@ -59,6 +59,8 @@ export interface ChainConfig {
   readonly name: string
   /** The symbol of the native coin, for example `ETH` or `PLS`. */
   readonly nativeSymbol: string
+  /** `none` for a chain whose `block.basefee` is 0 (BSC): the tip guard then refuses the base fee only flag. Default: `reported`. */
+  readonly baseFee?: BaseFeeSupport
   /** The name of the environment variable that holds the RPC URL of this chain. */
   readonly rpcEnvironmentVariable: string
   /** The RPC URL that the deployment file names (`rpc_url`), the weakest source of the RPC URL. Absent when it names none. */

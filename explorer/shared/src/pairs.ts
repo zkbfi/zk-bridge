@@ -1,7 +1,6 @@
 import { z } from "zod";
 import type { Address } from "viem";
 import { normalizeAddress } from "./address.js";
-import type { BaseFeeSupport } from "./delivery-terms.js";
 import { defaultFinalitySeconds } from "./status.js";
 
 /** The contract addresses of one side of a pair, lowercase. */
@@ -30,8 +29,6 @@ export type PairSide = {
   readonly beaconUrl: string | null;
   /** The first block to index: the block before the deployment. */
   readonly startBlock: number;
-  /** Optional. `none` for a chain whose `block.basefee` is 0 (BSC). The tip guard then refuses `EXCLUDE_PRIORITY`. Default: `reported`. */
-  readonly baseFee?: BaseFeeSupport;
   /** Seconds after which a send counts as waiting for finality. */
   readonly finalitySeconds: number;
   readonly contracts: SideContracts;

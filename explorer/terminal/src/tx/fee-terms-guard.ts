@@ -36,6 +36,7 @@ export const feeTermsContextOf = (pair: PairConfig, target: RouterTarget): FeeTe
   protectedAddresses: protectedAddressesOf(protectedChainsOf(pair)),
   destinationToken: target.destinationToken,
   destinationWrappedNative: target.destination.contracts.wrappedNative,
+  destinationBaseFee: target.destination.baseFee,
 })
 
 /** True when the receiver is a default delivery router, on either chain. */

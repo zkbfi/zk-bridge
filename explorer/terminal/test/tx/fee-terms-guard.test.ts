@@ -140,6 +140,14 @@ describe('the helpers', () => {
     expect(context.destinationWrappedNative).toBe(FIXTURE_PAIR.second.contracts.wrappedNative)
   })
 
+  test('the context carries the base fee support of the destination chain, and the guard refuses the base fee only flag for none', () => {
+    const noBaseFee = { ...FIXTURE_PAIR, second: { ...FIXTURE_PAIR.second, baseFee: 'none' as const } }
+    expect(feeTermsContextOf(noBaseFee, { ...target, destination: noBaseFee.second }).destinationBaseFee).toBe('none')
+    const gasBased = { ...director(person), settings: settingsOf({ mode: 'gas', gasPrice: 'base-fee-only' }) }
+    expect(() => encodeDirectorFor(gasBased, noBaseFee, { ...target, destination: noBaseFee.second })).toThrow(/no base fee/)
+    expect(() => encodeDirectorFor(gasBased, FIXTURE_PAIR, target)).not.toThrow()
+  })
+
   test('encodeDirectorFor refuses the unwrap flag for a token that is not the wrapped native token', () => {
     const unwrapping = { ...director(person), settings: settingsOf({ mode: 'share', payout: 'native' }) }
     expect(() => encodeDirectorFor(unwrapping, FIXTURE_PAIR, target)).toThrow(/unwrap/)
