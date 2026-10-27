@@ -27,10 +27,10 @@ The repository never installs the SP1 toolchain with `sp1up` or a `curl | bash` 
 
 | Program | ELF SHA-256 | Program key |
 |---|---|---|
-| Light client | `d7633e82ff6ca4a6b99db4148d888bcd4f353e05bdb3729db8b18513f7c89bbf` | `0x002a566f7e3d1e6996f7ffa35668291bfc7bce325ed34fe55ef41a2be3fd15cf` |
-| Fork observation | `5a2535fa97ba17f64c8de4d3c14fa2dff57f3f6279e41113ae75c194132a91bf` | `0x00c2a9c5a7b0826c85a59ca0dbeccae5309093072e40d26548b9b0c4183d3f39` |
+| Light client | `acb0948cf9e5f0e6290616b6c3fad500dade96d5160c8622aec6ce11ac167989` | `0x001e477914cbaea2b4b6470e68aecc0d6523a587105bd62ae9e095cbbcacaf71` |
+| Fork observation | `b18a356ad5894a9360846c23ebf3c936d6e617ea89f754a59428c96b67ee3a4a` | `0x00c9e04ffbf75e12edabe0461dd30a2e69ab1100bd52f13d35e1d33b11944cb1` |
 
-The two programs changed on 2026-10-26 (testnet chain selectors and Gloas support, commit 7fc5afa). Two Docker builds on the [private] gave identical hashes and keys. An earlier change, on 2026-10-23: the signature check takes the signer key from the committee aggregate key minus the keys of the absent members, and it ends in one final exponentiation. The keys above are the new ones. Any key deployed before that date belongs to the earlier programs.
+The two programs changed on 2026-10-27: the layout comes from the evidence (the finality branch length, the form byte, the payload flag and the compact branch length) and the programs read no fork table. The public values keep their 352 and 224 bytes. Two Docker builds gave identical hashes and keys. Before that, the two programs changed on 2026-10-26 (testnet chain selectors and Gloas support, commit 7fc5afa). Two Docker builds on the [private] gave identical hashes and keys. An earlier change, on 2026-10-23: the signature check takes the signer key from the committee aggregate key minus the keys of the absent members, and it ends in one final exponentiation. The keys above are the new ones. Any key deployed before that date belongs to the earlier programs.
 The values come from the Docker build and live in `light-client/program-keys.json`. To check them, run `light-client/scripts/program-keys.sh`. It exits with a non-zero code when a value differs.
 A native build (`cargo prove build` without `--docker`) gives different ELF hashes and keys, because the output depends on the build machine. Deploy only the Docker keys.
 These keys are the values for `programVKey` (light client) and `observationProgramVKey` (fork observation) in the deploy configuration.

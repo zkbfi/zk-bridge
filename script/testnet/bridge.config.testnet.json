@@ -3,7 +3,7 @@
     "Pair: chain A is Sepolia (11155111), chain B is PulseChain testnet v4 (943). Built from script/hardened/bridge.config.example.json on 2026-10-26.",
     "Values for genesis, clock and fork data were read from the beacon endpoints of one.valve.city (genesis, config/spec, config/fork_schedule: all HTTP 200).",
     "Checkpoint fields (initialSlot, initialHeaderRoot, initialSyncCommitteeHash, initialNextSyncCommitteeHash of all three checkpoints) are still placeholders. Print them with `zk-bridge-prover checkpoint` at one finalized root of the same chain (all four from the same root). Public keyless beacon endpoints: https://lodestar-sepolia.chainsafe.io (Sepolia) and https://rpc-testnet-pulsechain.g4mm4.io/beacon-api (chain 943; it has no light_client routes, the command then uses the finalized debug state).",
-    "Program keys: rebuilt on 2026-10-26 with testnet chain selectors and Gloas (light-client/program-keys.json, docs/sp1-version-policy.md). Two Docker builds gave identical keys. These values replace the old keys of every chain.",
+    "Program keys: rebuilt on 2026-10-27 so that the programs take every layout from the evidence and read no fork table (light-client/program-keys.json, docs/sp1-version-policy.md). Two Docker builds gave identical keys. These values replace the old keys of every chain.",
     "Gloas: Sepolia is on fork version 0x90000076 (Gloas) from epoch 353024. The gate lists it with stateDepth 255 (the marker of a progressive state: the version leaf sits at index 169), and the seal depths add 255 so that the next fork can seal the gate. The bridge on chain B gets gloasForkEpoch 353024 in chainB.lightClient: a message proof from a source block at or after that slot is refused by the body-layout guard. The light client follows the Gloas head through state.latest_block_hash. See docs/testnet-run.md.",
     "943 wrapped native token: 0x70499adEBB11Efd915E3b69E700c331778628707 (WPLS, Wrapped Pulse, 18 decimals). Checked on 2026-10-26 with eth_getCode (deposit and withdraw selectors present), symbol(), name(), decimals() and totalSupply() equal to the contract balance. The address was not found in a project document: confirm it once more before you rely on it for value.",
     "Multicall3 0xcA11bde05977b3631167028862bE2a173976CA11 has code on both chains (eth_getCode, 2026-10-26): same runtime code, 3808 bytes.",
@@ -26,7 +26,7 @@
       "failedDeliveryAddress": "0x41A3bf06d129270AB01053E147227c058B3DAfa1"
     },
     "lightClient": {
-      "programVKey": "0x002a566f7e3d1e6996f7ffa35668291bfc7bce325ed34fe55ef41a2be3fd15cf",
+      "programVKey": "0x001e477914cbaea2b4b6470e68aecc0d6523a587105bd62ae9e095cbbcacaf71",
       "genesisValidatorsRoot": "0xd81664ba97279a6fa0832041b4aee6009172b4750a99467ff670a9faf3a34e64",
       "slotsPerPeriod": "8192",
       "genesisTime": "1681356369",
@@ -78,7 +78,7 @@
       "failedDeliveryAddress": "0x41A3bf06d129270AB01053E147227c058B3DAfa1"
     },
     "lightClient": {
-      "programVKey": "0x002a566f7e3d1e6996f7ffa35668291bfc7bce325ed34fe55ef41a2be3fd15cf",
+      "programVKey": "0x001e477914cbaea2b4b6470e68aecc0d6523a587105bd62ae9e095cbbcacaf71",
       "genesisValidatorsRoot": "0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078",
       "slotsPerPeriod": "8192",
       "genesisTime": "1655733600",
@@ -110,8 +110,8 @@
       ]
     },
     "observation": {
-      "lightClientProgramVKey": "0x002a566f7e3d1e6996f7ffa35668291bfc7bce325ed34fe55ef41a2be3fd15cf",
-      "observationProgramVKey": "0x00c2a9c5a7b0826c85a59ca0dbeccae5309093072e40d26548b9b0c4183d3f39",
+      "lightClientProgramVKey": "0x001e477914cbaea2b4b6470e68aecc0d6523a587105bd62ae9e095cbbcacaf71",
+      "observationProgramVKey": "0x00c9e04ffbf75e12edabe0461dd30a2e69ab1100bd52f13d35e1d33b11944cb1",
       "genesisValidatorsRoot": "0xd81664ba97279a6fa0832041b4aee6009172b4750a99467ff670a9faf3a34e64",
       "slotsPerPeriod": "8192",
       "genesisTime": "1681356369",
