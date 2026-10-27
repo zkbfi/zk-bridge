@@ -2,11 +2,12 @@
  * What the confirm dialog shows before the wallet opens. The call is decoded from the calldata itself, not taken from
  * the plan, and the two must agree. When they do not, the dialog blocks the signature.
  */
-import { decodeFeeDirector, feeModeOf, GAS_MODE_HELP, settingFlagsOf, TIP_MODE_NAMES, type FeeDirector, type FeeMode } from "@zk-bridge/shared";
+import { decodeDeliveryCall, decodeFeeDirector, feeModeOf, GAS_MODE_HELP, settingFlagsOf, TIP_MODE_NAMES, type FeeDirector, type FeeMode } from "@zk-bridge/shared";
 import { formatUnits, formatRateAsPercent } from "@terminal/format/amounts";
 import type { RouterAddressesReading } from "@terminal/chain/live-reads";
 import { decodeKnownCall } from "@terminal/tx/decode";
 import type { DisplayArgument } from "@terminal/tx/plan";
+import type { DeliveryCall } from "@zk-bridge/shared";
 import { decodeFunctionData, getAddress, isAddress, type AbiFunction, type Address, type Hex } from "viem";
 import type { WebStep } from "./bridge-steps";
 import { NO_ROUTER_NOTICE, TIP_NOTES, routerWarningOf } from "./tip-copy";
@@ -55,6 +56,10 @@ export type DeliveryView = {
   readonly baseFee: string;
   /** The decoded terms of the director in the call data. */
   readonly directorLines: readonly ConfirmLine[];
+  /** The call that the router makes after the delivery: its target and its call data. Empty when the data holds no call. */
+  readonly callLines: readonly ConfirmLine[];
+  /** A sentence about the gas of the call and the gas based tip, or null when the data holds no call. */
+  readonly callNote: string | null;
 };
 
 /** The whole dialog for one transaction. */
@@ -99,6 +104,24 @@ const directorLinesOf = (director: FeeDirector, token: { readonly symbol: string
   ];
 };
 
+/** The sentence that goes with a call: a gas based tip counts the gas of the call. */
+export const CALL_TIP_NOTE = "A gas based tip counts the gas of the call, so expect the tip to reach its limit.";
+
+/** The target and the call data of the call that is in the bytes. The router sends no native value with it. */
+const callLinesOf = (call: DeliveryCall | null): readonly ConfirmLine[] => {
+  if (call === null) return [];
+  return [
+    { label: "Call target", text: getAddress(call.target) },
+    { label: "Call data", text: call.data === "0x" ? "empty" : call.data },
+  ];
+};
+
+/** The call in the bytes of the step, read the way the router reads it. Null when the bytes hold none. */
+const callInBytesOf = (step: WebStep): DeliveryCall | null => {
+  const data = rawDataArgument(step.plan.data);
+  return data === null ? null : decodeDeliveryCall(data);
+};
+
 const mergeMeanings = (decoded: readonly DisplayArgument[], planned: readonly DisplayArgument[]): readonly DisplayArgument[] =>
   decoded.map((argument) => {
     const meaning = planned.find((candidate) => candidate.name === argument.name)?.meaning;
@@ -137,6 +160,7 @@ const deliveryViewOf = (step: WebStep, routerAddresses: RouterAddressesReading |
   if (delivery === null) return null;
   const { description, suggestions, token } = delivery;
   const native = step.disclosure.destinationNativeSymbol ?? step.plan.chain.nativeSymbol;
+  const callInBytes = callInBytesOf(step);
   return {
     appliesTo: APPLIES_TO[step.disclosure.feesApplyTo],
     certaintyLabel: description.certaintyLabel,
@@ -158,6 +182,8 @@ const deliveryViewOf = (step: WebStep, routerAddresses: RouterAddressesReading |
     dataSource: `${suggestions.dataSource.description}, ${suggestions.dataSource.gas} gas`,
     baseFee: suggestions.dataSource.baseFeeDescription,
     directorLines: directorLinesOf(delivery.director, token),
+    callLines: callLinesOf(callInBytes),
+    callNote: callInBytes === null ? null : CALL_TIP_NOTE,
   };
 };
 
@@ -231,8 +257,17 @@ const directorMismatch = (step: WebStep, shown: FeeDirector): string | null => {
       found.settings === shown.settings &&
       found.limit === shown.limit &&
       found.multiplier === shown.multiplier;
-    return same ? null : "The fee director in the call data differs from the one that was shown. Nothing was sent.";
+    if (!same) return "The fee director in the call data differs from the one that was shown. Nothing was sent.";
   } catch {
     return "The fee director in the call data cannot be read.";
   }
+  return callMismatch(decodeDeliveryCall(data), step.disclosure.deliveryCall ?? null);
+};
+
+/** The call that the router would make must be the call that the user saw: the same target and the same call data, or none. */
+const callMismatch = (found: DeliveryCall | null, shown: DeliveryCall | null): string | null => {
+  if (found === null && shown === null) return null;
+  if (found === null || shown === null) return "The call after the delivery in the call data differs from the one that was shown. Nothing was sent.";
+  const same = found.target.toLowerCase() === shown.target.toLowerCase() && found.data.toLowerCase() === shown.data.toLowerCase();
+  return same ? null : "The call after the delivery in the call data differs from the one that was shown. Nothing was sent.";
 };

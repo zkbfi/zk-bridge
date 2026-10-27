@@ -58,7 +58,7 @@ const sideOfChoice = (choice: string): ChainSide => (choice.startsWith("second:"
  */
 export const BridgeForm = ({ variant, pair, tokens, context, account, onReview }: BridgeFormProps) => {
   const choices = useMemo(() => choicesOf(variant, pair, tokens, context), [variant, pair, tokens, context]);
-  const [values, setValues] = useState<BridgeFormValues>({ token: choices[0]?.value ?? "", amount: "", receiver: account, mode: "plain", data: "", gasLimit: "" });
+  const [values, setValues] = useState<BridgeFormValues>({ token: choices[0]?.value ?? "", amount: "", receiver: account, mode: "plain", data: "", gasLimit: "", callTarget: "", callData: "" });
   const [options, setOptions] = useState<DeliveryOptions>(DEFAULT_DELIVERY_OPTIONS);
   const effectiveToken = choices.some((choice) => choice.value === values.token) ? values.token : (choices[0]?.value ?? "");
   const side = sideOfChoice(effectiveToken);
@@ -134,6 +134,16 @@ export const BridgeForm = ({ variant, pair, tokens, context, account, onReview }
           <Field label="Gas limit" hint="Optional. The gas for the delivery on the other chain. Empty uses the default. The mediator uses the larger of your number and the default, and refuses a number above the bridge maximum.">
             {(id) => <TextInput id={id} inputMode="numeric" autoComplete="off" placeholder="Default" value={values.gasLimit} onChange={(event) => setValues({ ...values, gasLimit: event.target.value })} />}
           </Field>
+        ) : null}
+        {variant === "tokens" ? (
+          <>
+            <Field label="Call target" hint="Optional. A contract that the delivery router calls after it pays the recipient. It works with a tip. Empty makes no call.">
+              {(id) => <TextInput id={id} spellCheck={false} autoComplete="off" placeholder="0x…" value={values.callTarget ?? ""} onChange={(event) => setValues({ ...values, callTarget: event.target.value })} />}
+            </Field>
+            <Field label="Call data" hint="Optional. Hex, such as 0xabcd, for the call target. The call sends no native coin. Empty calls the target with no data.">
+              {(id) => <TextAreaInput id={id} spellCheck={false} value={values.callData ?? ""} onChange={(event) => setValues({ ...values, callData: event.target.value })} />}
+            </Field>
+          </>
         ) : null}
 
         <DeliveryFeeSection destinationNativeSymbol={destinationChain.nativeSymbol} destinationName={destinationChain.name} options={options} onChange={setOptions} draft={draft} />

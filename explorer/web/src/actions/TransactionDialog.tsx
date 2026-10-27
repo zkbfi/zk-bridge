@@ -134,6 +134,14 @@ const Review = ({ view, prepared, position }: ReviewProps) => {
           </Box>
           {view.delivery.costLines.length === 0 ? null : <LineList title="Cost lines" lines={view.delivery.costLines} />}
           <LineList title="Tip terms in the call data" lines={view.delivery.directorLines} />
+          {view.delivery.callLines.length === 0 ? null : (
+            <Box data-testid="confirm-delivery-call">
+              <LineList title="Call after the delivery" lines={view.delivery.callLines} />
+              <Text fontSize="sm" color="fg.muted" data-testid="confirm-call-note">
+                {view.delivery.callNote}
+              </Text>
+            </Box>
+          )}
           <Text fontSize="xs" color="fg.muted" marginTop="2">
             Data: {view.delivery.dataSource}. {view.delivery.baseFee}.
           </Text>

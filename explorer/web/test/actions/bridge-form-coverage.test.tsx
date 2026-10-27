@@ -276,3 +276,34 @@ describe("a change of the token list under the form", () => {
     expect(screen.getByRole("button", { name: "Review transaction" })).toBeDisabled();
   });
 });
+
+describe("the call fields", () => {
+  it("renders both fields empty and shows no complaint", async () => {
+    await renderForm();
+    expect(screen.getByLabelText("Call target")).toHaveValue("");
+    expect(screen.getByLabelText("Call data")).toHaveValue("");
+    expect(screen.queryByText(/needs a call target/)).toBeNull();
+  });
+
+  it("says why when call data has no target, and keeps the review disabled", async () => {
+    await renderForm();
+    await userEvent.type(screen.getByLabelText(/^Amount to send/), "250");
+    await userEvent.click(screen.getByRole("radio", { name: /No tip: deliver directly, no router/ }));
+    await userEvent.type(screen.getByLabelText("Call data"), "0xabcd");
+    expect(await screen.findByText("The call data needs a call target. Enter the target contract, or clear the call data.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Review transaction" })).toBeDisabled();
+  });
+
+  it("says that a call needs a tip when the user chose no tip", async () => {
+    await renderForm();
+    await userEvent.type(screen.getByLabelText(/^Amount to send/), "250");
+    await userEvent.click(screen.getByRole("radio", { name: /No tip: deliver directly, no router/ }));
+    await userEvent.type(screen.getByLabelText("Call target"), `0x${"77".repeat(20)}`);
+    expect(await screen.findByText(/A call after the delivery needs a tip/)).toBeVisible();
+  });
+
+  it("offers no call fields on the wrap form", async () => {
+    await renderForm({ variant: "wrap" });
+    expect(screen.queryByLabelText("Call target")).toBeNull();
+  });
+});

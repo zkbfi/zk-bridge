@@ -6,7 +6,8 @@
  * data becomes the encoded fee director. The page then adds the disclosure that the confirm dialog shows. The wrap route
  * carries no call data, so it never carries a tip.
  */
-import { getAddress, type Address } from "viem";
+import { getAddress, isAddress, type Address, type Hex } from "viem";
+import type { DeliveryCall } from "@zk-bridge/shared";
 import { buildBridgeSteps, NATIVE_CHOICE, type BridgeContext } from "@terminal/app/actions";
 import { parseUnits, AmountParseError } from "@terminal/format/amounts";
 import type { ChainSide, TokenInfo } from "@terminal/model/types";
@@ -19,6 +20,11 @@ import type { DeliverySelection } from "./delivery-selection";
 export type StepDisclosure = {
   /** Whether the tip below is paid by this transaction, or by the relay that follows an allowance. */
   readonly feesApplyTo: "this-transaction" | "next-transaction";
+  /**
+   * The call that the router makes after the delivery, as the user saw it. Absent or null means no call. The confirm
+   * dialog compares it with the call in the bytes, so data built in another way is refused.
+   */
+  readonly deliveryCall?: DeliveryCall | null;
   /** The native coin of the destination chain, which prices the cost lines of a delivery fee. Null for a step that is not a relay. */
   readonly destinationNativeSymbol: string | null;
   /** The chain that delivers the message, where the router lives. Null for a step that is not a relay. */
@@ -49,6 +55,13 @@ export type BridgeFormValues = {
    * uses the larger of this number and the default, and refuses a number above the bridge maximum.
    */
   readonly gasLimit: string;
+  /**
+   * The contract that the delivery router calls after it pays the recipient, as text. Absent or empty means no call. It
+   * counts only for a tipped relay to a delivery router.
+   */
+  readonly callTarget?: string;
+  /** The call data for {@link BridgeFormValues.callTarget}, as hex text. Absent or empty means empty call data. */
+  readonly callData?: string;
 };
 
 /** Input of {@link planBridgeSteps}. */
@@ -90,11 +103,32 @@ const parseGasLimitText = (text: string): string | null => {
 };
 
 /**
+ * Reads the call fields of the form. Empty target and empty data give null: no call.
+ *
+ * @throws PlanInputError when the data has no target, when the target is not an address, or when the data is not hex
+ * with an even number of digits.
+ */
+export const parseDeliveryCallText = (values: Pick<BridgeFormValues, "callTarget" | "callData">): DeliveryCall | null => {
+  const target = (values.callTarget ?? "").trim();
+  const data = (values.callData ?? "").trim();
+  if (target === "" && data === "") return null;
+  if (target === "") throw new PlanInputError("The call data needs a call target. Enter the target contract, or clear the call data.");
+  if (!/^0x[0-9a-fA-F]{40}$/.test(target) || !isAddress(target, { strict: false })) {
+    throw new PlanInputError("The call target must be an address that starts with 0x and has 40 hexadecimal digits.");
+  }
+  if (data !== "" && !/^0x([0-9a-fA-F]{2})*$/.test(data)) {
+    throw new PlanInputError("The call data must be hex that starts with 0x and has an even number of digits, such as 0xabcd.");
+  }
+  return { target: getAddress(target), data: data === "" ? "0x" : (data.toLowerCase() as Hex) };
+};
+
+/**
  * The values that the terminal builder reads. The gas limit key is present only when the user typed one, and it never
- * rides on the wrap route, which has no such overload.
+ * rides on the wrap route, which has no such overload. The call fields never go to the terminal builder: the call rides
+ * inside the encoded data of a tip.
  */
 const terminalValuesOf = (values: BridgeFormValues, input: { gasLimit: string | null; isNative: boolean }): Record<string, string> => {
-  const { gasLimit: _text, ...rest } = values;
+  const { gasLimit: _text, callTarget: _target, callData: _data, ...rest } = values;
   if (input.gasLimit === null || input.isNative) return rest;
   return { ...rest, gasLimit: input.gasLimit };
 };
@@ -115,10 +149,12 @@ export const planBridgeSteps = (input: PlanBridgeInput): readonly WebStep[] => {
   if (!isNative && token === undefined) throw new PlanInputError("Choose a token.");
   const amount = parseAmountText(values.amount, token === null || token === undefined ? 18 : token.decimals);
   const receiver = parseAddress(values.receiver, "receiver");
+  const call = parseDeliveryCallText(values);
   const terminalValues = terminalValuesOf(values, { gasLimit: parseGasLimitText(values.gasLimit), isNative });
   const amountToken = token === null || token === undefined ? { symbol: `wrapped ${sourceChain.nativeSymbol}`, decimals: 18 } : { symbol: token.symbol, decimals: token.decimals };
 
   if (delivery === null) {
+    if (call !== null) throw new PlanInputError("A call after the delivery needs a tip, because only the delivery router makes it. Choose a tip, or clear the call fields.");
     const steps = buildBridgeSteps(terminalValues, tokens, context);
     return withDisclosure(steps, { amountToken, destinationNativeSymbol: destinationChain.nativeSymbol, destinationChainId: destinationChain.chainId, delivery: null });
   }
@@ -126,7 +162,8 @@ export const planBridgeSteps = (input: PlanBridgeInput): readonly WebStep[] => {
   if (isNative) throw new PlanInputError("The wrap route carries no call data, so it cannot carry a tip.");
   // The wrap route threw above, so a token is chosen here. Its counterpart is the token that the router receives.
   const destinationToken = (token as TokenInfo).counterpart;
-  const data = encodeDirectorFor(delivery.director, context.pair, { router: delivery.router, destination: destinationChain, destinationToken });
+  // The guard of the router runs on the whole data, and it refuses a zero, router, mediator or bridge target.
+  const data = encodeDirectorFor(delivery.director, context.pair, { router: delivery.router, destination: destinationChain, destinationToken }, call ?? undefined);
   const deployed = getAddress(delivery.router) === getAddress(delivery.defaultRouter);
   const steps = buildBridgeSteps({ ...terminalValues, receiver: delivery.router, mode: "call", data }, tokens, context);
   const adjusted = steps.map((step): FlowStep => ({
@@ -136,7 +173,7 @@ export const planBridgeSteps = (input: PlanBridgeInput): readonly WebStep[] => {
         ? { ...step.plan, arguments: step.plan.arguments.map((argument) => explainRouterReceiver(argument, { chainName: destinationChain.name, recipient: receiver, deployed })) }
         : step.plan,
   }));
-  return withDisclosure(adjusted, { amountToken, destinationNativeSymbol: destinationChain.nativeSymbol, destinationChainId: destinationChain.chainId, delivery });
+  return withDisclosure(adjusted, { amountToken, destinationNativeSymbol: destinationChain.nativeSymbol, destinationChainId: destinationChain.chainId, delivery, deliveryCall: call });
 };
 
 /**
