@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { buildFixtureFeed, FIXTURE_NOW, FIXTURE_PAIR } from '../../src/data/fixtures'
 import type { FeedItem } from '../../src/model/types'
 import { detailLines } from '../../src/ui/presenters'
+import { statusColor, theme } from '../../src/ui/theme'
 import { lineText } from '../../src/ui/rich-text'
 
 const tokenItem = buildFixtureFeed(FIXTURE_NOW).find((item) => item.kind === 'token' && item.token !== null && item.amount !== null)!
@@ -24,6 +25,12 @@ describe('the detail lines of a feed item', () => {
     expect(valueOf(lines, 'Executor')).toBe(tokenItem.recipient)
     expect(valueOf(lines, 'Kind')).toBe('message')
     for (const label of ['Recipient', 'Token', 'Amount']) expect(valueOf(lines, label)).toBeUndefined()
+  })
+
+  test('a release that failed is shown as final failure, in red', () => {
+    const failed: FeedItem = { ...tokenItem, status: 'release_failed' }
+    expect(valueOf(textOf(failed), 'Status')).toBe('Release failed (final)')
+    expect(statusColor('release_failed')).toBe(theme.bad)
   })
 
   test('an item that has not arrived says so and shows a dash for the target transaction', () => {

@@ -108,7 +108,7 @@ describe('confirm before send: bridge tokens', () => {
     expect(app.frame()).not.toContain('Step 1 of')
   })
 
-  test('the fallback mode shows the five-argument call and no mediator fee', async () => {
+  test('a gas limit shows the four-argument call and no mediator fee', async () => {
     const chainAccess = createFixtureChainAccess(FIXTURE_PAIR, { allowance: 10n ** 30n })
     app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess })
     await openAction(app, 1)
@@ -117,13 +117,12 @@ describe('confirm before send: bridge tokens', () => {
     await app.press('TAB') // receiver
     await app.press('TAB') // tip for delivery
     await app.press('ARROW_RIGHT') // no tip: a plain relay
-    await app.press('ARROW_UP') // mode, which shows once the tip is off
-    await app.press('ARROW_RIGHT') // call
-    await app.press('ARROW_RIGHT') // fallback
+    await app.press('TAB') // gas limit
+    await app.type('300000')
     await app.press('RETURN')
     await app.settle(80)
     const frame = app.frame()
-    expect(frame).toContain('relayTokensWithFallback(address,address,uint256,bytes,address)')
+    expect(frame).toContain('relayTokens(address,address,uint256,uint256)')
     expect(frame).not.toContain('maxFeeRate')
     expect(frame).not.toContain('Fee rate')
     expect(frame).not.toContain('Bridge fee')
@@ -188,17 +187,6 @@ describe('other actions', () => {
     expect(chainAccess.sentTransactions).toHaveLength(0)
   })
 
-  test('claim lists the claimable balance and reviews claim(token, account)', async () => {
-    const chainAccess = createFixtureChainAccess(FIXTURE_PAIR)
-    app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess })
-    await openAction(app, 3)
-    expect(app.frame()).toContain('25 USDC on Ethereum')
-    await app.press('RETURN')
-    await app.settle(80)
-    expect(app.frame()).toContain('claim(address,address)')
-    expect(chainAccess.sentTransactions).toHaveLength(0)
-  })
-
   test('post update reads a handoff file, checks it against the deployment, and reviews update(bytes,bytes)', async () => {
     const word = (digit: string): Hex => `0x${digit.repeat(64)}`
     const values = encodeAbiParameters(lightClientOutputParameters, [word('a'), word('b'), 100n, word('c'), word('d'), word('e'), 200n, word('f'), 5n, word('9'), word('8')])
@@ -221,7 +209,7 @@ describe('other actions', () => {
     })
     const chainAccess = createFixtureChainAccess(FIXTURE_PAIR)
     app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess, files: { 'handoff.json': handoff } })
-    await openAction(app, 4)
+    await openAction(app, 3)
     await app.type('handoff.json')
     await app.press('RETURN')
     await app.settle(80)
@@ -233,7 +221,7 @@ describe('other actions', () => {
 
   test('a handoff for another light client is refused on the form', async () => {
     app = await renderApp({ width: 120, height: 40, initialSigner: signer(), files: { 'bad.json': '{"schemaVersion":1,"destination":{"chainId":369,"lightClient":"0x0000000000000000000000000000000000009999"}}' } })
-    await openAction(app, 4)
+    await openAction(app, 3)
     await app.type('bad.json')
     await app.press('RETURN')
     await app.settle(60)
@@ -265,7 +253,7 @@ describe('other actions', () => {
     })
     const chainAccess = createFixtureChainAccess(FIXTURE_PAIR)
     app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess, files: { 'evidence.json': evidence } })
-    await openAction(app, 5)
+    await openAction(app, 4)
     await app.type('evidence.json')
     await app.press('RETURN')
     await app.settle(80)

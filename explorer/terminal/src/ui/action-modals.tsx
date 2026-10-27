@@ -1,10 +1,10 @@
 /**
- * The forms of the action area: bridge tokens, send a message, claim, post an update and execute a message.
+ * The forms of the action area: bridge tokens, send a message, post an update and execute a message.
  * Each form builds the steps of a transaction flow and hands them to the review screen. None sends anything itself.
  */
 import { useState } from 'react'
 import { GAS_MODE_HELP, GAS_MODE_SHORT_LABEL, type DeliveryCostReport } from '@zk-bridge/shared'
-import { bridgeSourceOf, buildBridgeSteps, deliveryRouterOf, buildClaimSteps, buildMessageSteps, claimableEntries, nativeChoiceValue, tokenChoiceValue } from '../app/actions'
+import { bridgeSourceOf, buildBridgeSteps, deliveryRouterOf, buildMessageSteps, nativeChoiceValue, tokenChoiceValue } from '../app/actions'
 import {
   CUSTOM_KINDS,
   DELIVERY_FIELD,
@@ -26,13 +26,12 @@ import { useServices } from '../app/services'
 import { useSession } from '../app/session'
 import type { FlowStep } from '../flow/transaction-flow'
 import { OperatorFileError, planLightClientUpdate, planMessageExecution } from '../tx/operator'
-import { PlanInputError, amountMeaning } from '../tx/plan'
+import { PlanInputError } from '../tx/plan'
 import type { FieldSpec } from './form'
 import { deliveryPanelLines } from './delivery-fee-lines'
 import { FormView, useForm } from './form-view'
-import { useKeyLayer } from './key-router'
 import { ModalFrame } from './modals'
-import { RichLine, RichLines, colored, muted, plain } from './rich-text'
+import { RichLine, RichLines, colored, muted } from './rich-text'
 import { theme } from './theme'
 import { usePolling } from './use-polling'
 
@@ -73,7 +72,7 @@ const FEE_MODE_CHOICES = [
 
 const CUSTOM_KIND_LABELS: Readonly<Record<(typeof CUSTOM_KINDS)[number], string>> = { fixed: 'Fixed amount', share: 'Share of the value', gas: 'Gas based' }
 
-/** The form that bridges tokens: relayTokens, relayTokensAndCall or relayTokensWithFallback, with an optional delivery fee. */
+/** The form that bridges tokens: relayTokens or relayTokensAndCall, with an optional gas limit and an optional delivery fee. */
 export function BridgeModal(props: ActionModalProps) {
   const { pair, dataSource, tokenValuationsWei, chainAccess } = useServices()
   const session = useSession()
@@ -110,13 +109,11 @@ export function BridgeModal(props: ActionModalProps) {
       choices: [
         { value: 'plain', label: 'relayTokens' },
         { value: 'call', label: 'relayTokensAndCall' },
-        { value: 'fallback', label: 'relayTokensWithFallback' },
       ],
       visibleWhen: (values) => !deliveryActive(values),
-      hint: 'Call also calls onTokenBridged on the receiver. Fallback names an address for a failed payment.',
+      hint: 'Call also calls onTokenBridged on the receiver.',
     },
     { kind: 'text', name: 'data', label: 'Call data', placeholder: '0x… (empty for none)', visibleWhen: (values) => !deliveryActive(values) && values.mode !== 'plain', hint: 'Hex bytes for onTokenBridged.' },
-    { kind: 'text', name: 'fallback', label: 'Fallback recipient', initial: signer?.address ?? '', visibleWhen: (values) => !deliveryActive(values) && values.mode === 'fallback', hint: 'Paid when the receiver cannot be paid.' },
     {
       kind: 'choice',
       name: DELIVERY_FIELD.delivery,
@@ -154,6 +151,7 @@ export function BridgeModal(props: ActionModalProps) {
     },
     { kind: 'text', name: DELIVERY_FIELD.router, label: 'Router (advanced)', placeholder: 'blank is the default delivery router', visibleWhen: whenActive(), hint: 'The last step before delivery, chosen in the extra data. Blank targets the default delivery router on the other chain. Anyone can deliver through it. The tip always goes to the reward address of the router, so a copied delivery gains the copier nothing.' },
     { kind: 'text', name: DELIVERY_FIELD.recipient, label: 'Fee recipient', placeholder: 'blank is the receiver above', visibleWhen: whenActive(), hint: 'Receives the tokens after the fee. Blank means the receiver above.' },
+    { kind: 'text', name: 'gasLimit', label: 'Gas limit (optional)', placeholder: 'blank uses the default', hint: 'Gas for the release on the other chain. The mediator uses the larger of this and its default, and refuses a value above the bridge maximum.' },
   ]
   /** Asks the router for its reward address and its failed delivery address, then builds the review. The read never throws; a failed read becomes a line on the review. */
   const submitBridge = async (values: Values): Promise<void> => {
@@ -186,7 +184,7 @@ export function BridgeModal(props: ActionModalProps) {
   const panel = deliveryPanelLines(panelInputOf({ resolved, report, state: stateFor(values, report.data) }))
   const note = resolved.kind === 'unavailable' && (bridgeSourceOf(values, session.tokens, pair).kind === 'token' || paysForDelivery(values)) ? resolved.reason : null
   return (
-    <ModalFrame title="Bridge tokens" width={96} height={wantedChainId === null ? 17 : 45}>
+    <ModalFrame title="Bridge tokens" width={96} height={wantedChainId === null ? 18 : 46}>
       <FormView form={form} width={92} />
       {wantedChainId === null ? null : <RichLines lines={panel} />}
       <RichLine line={[colored(error ?? ' ', theme.bad)]} />
@@ -227,44 +225,6 @@ export function MessageModal(props: ActionModalProps) {
       <FormView form={form} width={86} />
       <RichLine line={[colored(error ?? ' ', theme.bad)]} />
       <RichLine line={[muted('Enter reviews the transaction. Esc cancels.')]} />
-    </ModalFrame>
-  )
-}
-
-/** The list of claimable balances. Enter claims the selected one. */
-export function ClaimModal(props: ActionModalProps) {
-  const { pair } = useServices()
-  const session = useSession()
-  const entries = claimableEntries(session.snapshots)
-  const [index, setIndex] = useState(0)
-  const [error, setError] = useState<string | null>(null)
-  useKeyLayer('modal', (key) => {
-    if (key.name === 'escape') props.onClose()
-    else if (key.name === 'up') setIndex(Math.max(0, index - 1))
-    else if (key.name === 'down') setIndex(Math.min(entries.length - 1, index + 1))
-    else if ((key.name === 'return' || key.name === 'enter') && entries[index] !== undefined && session.signer !== null) {
-      try {
-        props.onReview('Claim', buildClaimSteps(entries[index], pair, session.signer.address))
-      } catch (caught) {
-        setError(messageOf(caught))
-      }
-    }
-    return true
-  })
-  const chainName = (side: 'first' | 'second') => (side === 'first' ? pair.first.name : pair.second.name)
-  return (
-    <ModalFrame title="Claim balances" width={80} height={12}>
-      {session.signer === null ? <text fg={theme.warn}>Connect a signer first.</text> : null}
-      {session.signer !== null && entries.length === 0 ? <text fg={theme.muted}>Nothing is claimable for this account.</text> : null}
-      {entries.map((entry, row) => (
-        <RichLine
-          key={`${entry.side}${entry.position.token.address}`}
-          line={[colored(`${row === index ? '> ' : '  '}${amountMeaning(entry.position.claimable, entry.position.token)} on ${chainName(entry.side)}`, row === index ? theme.accent : theme.text)]}
-        />
-      ))}
-      <box flexGrow={1} />
-      <RichLine line={[colored(error ?? ' ', theme.bad)]} />
-      <RichLine line={[plain('Enter reviews the claim. Esc cancels.')]} />
     </ModalFrame>
   )
 }

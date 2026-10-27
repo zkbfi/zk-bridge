@@ -29,8 +29,12 @@ export const STATUS_LABELS: Readonly<Record<FeedStatus, string>> = {
   covered: 'covered',
   delivered: 'delivered',
   failed_call: 'failed',
-  fallback_used: 'fallback',
-  claimable: 'claimable',
+  release_failed: 'rel-fail',
+}
+
+/** The full words of a status for the detail modal. A failed release is final, and the detail says so. */
+export function statusText(status: FeedStatus): string {
+  return status === 'release_failed' ? 'Release failed (final)' : status
 }
 
 /** Formats a slot number with thousands separators. */
@@ -208,7 +212,7 @@ export function detailLines(item: FeedItem, pair: PairConfig): readonly Line[] {
     row('Message', item.id),
     row('Kind', item.kind),
     row('Route', `${from.name} to ${to.name}`),
-    [muted('Status'.padEnd(14)), colored(item.status, statusColor(item.status))],
+    [muted('Status'.padEnd(14)), colored(statusText(item.status), statusColor(item.status))],
     row('Sender', item.sender),
     row(item.kind === 'token' ? 'Recipient' : 'Executor', item.recipient),
     ...(item.token === null || item.amount === null

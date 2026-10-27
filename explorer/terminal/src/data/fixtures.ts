@@ -98,8 +98,7 @@ const STATUS_CYCLE: readonly FeedStatus[] = [
   'delivered',
   'delivered',
   'failed_call',
-  'fallback_used',
-  'claimable',
+  'release_failed',
 ]
 
 /** Builds the sample feed relative to a clock. */

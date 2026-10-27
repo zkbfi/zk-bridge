@@ -100,6 +100,11 @@ describe('text helpers', () => {
 })
 
 describe('presenters', () => {
+  test('the status list holds release_failed and no claim status', () => {
+    expect(FEED_STATUSES).toContain('release_failed' as never)
+    expect(FEED_STATUSES as readonly string[]).not.toContain('claimable')
+  })
+
   test('every status has a label that fits its column of nine', () => {
     for (const status of FEED_STATUSES) expect(STATUS_LABELS[status].length).toBeLessThanOrEqual(9)
   })

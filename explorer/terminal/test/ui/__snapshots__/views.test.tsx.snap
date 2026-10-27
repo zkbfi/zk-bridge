@@ -2,7 +2,7 @@
 
 exports[`view snapshots pair view, wide 120x40 1`] = `
 "┌─1 Global  [2 Pair]  3 Audit  4 Prover and costs  5 Connections  6 Prover setup───────────────────────────────────────┐
-│eth-pls  Ethereum <> PulseChain   in flight 12   24h 29 transfers, 147.81 USDC                                        │
+│eth-pls  Ethereum <> PulseChain   in flight 12   24h 29 transfers, 144.93 USDC                                        │
 │gate Ethereum open PulseChain warn                                                                                    │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌─Account and actions────────────────────────┐┌─Filters────────────────────────────────────────────────────────────────┐
@@ -14,25 +14,25 @@ exports[`view snapshots pair view, wide 120x40 1`] = `
 │> Account and signer                        ││11:29:24 -        ETH>PLS tok        24.97 USDC waiting   0x0000…ABC0   │
 │  Bridge tokens                             ││11:07:06 -        PLS>ETH tok     39.61 zkbWETH covered   0x0000…ABC0   │
 │  Send a message                            ││10:42:56 11:03:52 PLS>ETH tok        25.29 WPLS delivered 0x0000…ABC0   │
-│  Claim balances                            ││10:15:50 10:46:50 PLS>ETH msg    call 0x000…BC0 delivered 0x0000…ABC0   │
-│  Operator: post update                     ││09:49:08 10:15:48 ETH>PLS tok        16.89 USDC delivered 0x0000…ABC0   │
-│  Operator: execute message                 ││09:30:26 09:55:50 ETH>PLS tok        29.29 WETH delivered 0x0000…ABC0   │
+│  Operator: post update                     ││10:15:50 10:46:50 PLS>ETH msg    call 0x000…BC0 delivered 0x0000…ABC0   │
+│  Operator: execute message                 ││09:49:08 10:15:48 ETH>PLS tok        16.89 USDC delivered 0x0000…ABC0   │
+│                                            ││09:30:26 09:55:50 ETH>PLS tok        29.29 WETH delivered 0x0000…ABC0   │
 │                                            ││09:09:12 09:32:44 PLS>ETH tok     45.69 zkbUSDC failed    0x0000…ABC0   │
-│                                            ││08:35:42 09:08:06 ETH>PLS tok        20.73 WETH fallback  0x0000…ABC0   │
-│                                            ││08:19:40 08:50:20 ETH>PLS msg    call 0x000…BC0 claimable 0x0000…ABC0   │
-│                                            ││07:54:58 -        ETH>PLS tok     21.93 zkbWPLS sent      0x0000…ABC0   │
-│                                            ││07:27:44 -        ETH>PLS tok        27.13 USDC waiting   0x0000…ABC0   │
-│                                            ││07:05:50 -        PLS>ETH tok        23.37 WPLS covered   0x0000…ABC0   │
+│                                            ││08:35:42 09:08:06 ETH>PLS tok        20.73 WETH rel-fail  0x0000…ABC0   │
+│                                            ││08:19:40 -        ETH>PLS msg    call 0x000…BC0 sent      0x0000…ABC0   │
+│                                            ││07:47:30 -        ETH>PLS tok        17.93 WETH waiting   0x0000…ABC0   │
+│                                            ││07:22:48 -        ETH>PLS tok     42.65 zkbWPLS covered   0x0000…ABC0   │
+│                                            ││07:02:54 07:34:38 ETH>PLS tok        14.81 WETH delivered 0x0000…ABC0   │
 │                                            ││06:40:27 07:12:35 PLS>ETH tok     41.05 zkbUSDC delivered 0x0000…ABC0   │
 │                                            ││06:11:54 06:41:46 ETH>PLS msg    call 0x000…BC0 delivered 0x0000…ABC0   │
 │                                            ││05:49:44 06:14:20 PLS>ETH tok        46.01 WPLS delivered 0x0000…ABC0   │
-│                                            ││05:27:02 05:54:58 PLS>ETH tok        14.01 WPLS delivered 0x0000…abC1   │
-│                                            ││05:07:24 05:30:40 ETH>PLS tok         9.37 WETH failed    0x0000…ABC0   │
-│                                            ││04:38:26 05:02:30 PLS>ETH tok        32.33 WPLS fallback  0x0000…ABC0   │
-│                                            ││04:19:20 04:47:16 ETH>PLS msg    call 0x000…BC0 claimable 0x0000…ABC0   │
-│                                            ││03:48:22 -        ETH>PLS tok     18.09 zkbWPLS sent      0x0000…ABC0   │
-│                                            ││03:24:12 -        ETH>PLS tok     24.09 zkbWPLS waiting   0x0000…ABC0   │
-│                                            ││02:59:30 -        ETH>PLS tok        44.57 WETH covered   0x0000…ABC0   │
+│                                            ││05:27:02 05:54:58 PLS>ETH tok        14.01 WPLS failed    0x0000…abC1   │
+│                                            ││05:07:24 05:30:40 ETH>PLS tok         9.37 WETH rel-fail  0x0000…ABC0   │
+│                                            ││04:38:26 -        PLS>ETH tok        32.33 WPLS sent      0x0000…ABC0   │
+│                                            ││04:14:24 -        ETH>PLS msg    call 0x000…BC0 waiting   0x0000…ABC0   │
+│                                            ││03:45:34 -        ETH>PLS tok     40.09 zkbWPLS covered   0x0000…ABC0   │
+│                                            ││03:29:16 03:52:08 PLS>ETH tok        48.09 WPLS delivered 0x0000…ABC0   │
+│                                            ││02:58:10 03:27:46 ETH>PLS tok      7.45 zkbWPLS delivered 0x0000…ABC0   │
 │                                            ││02:38:00 03:00:08 ETH>PLS tok     29.53 zkbWPLS delivered 0x0000…ABC0   │
 │                                            ││02:13:26 02:42:10 PLS>ETH msg    call 0x000…BC0 delivered 0x0000…ABC0   │
 └────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────┘
@@ -266,7 +266,7 @@ Tab area  1-5 views  ? help  q quit                                   FIXTURE: n
 
 exports[`view snapshots help overlay, wide 120x40 1`] = `
 "┌─1 Global  [2 Pair]  3 Audit  4 Prover and costs  5 Connections  6 Prover setup───────────────────────────────────────┐
-│eth-pls  Ethereum <> PulseChain   in flight 12   24h 29 transfers, 147.81 USDC                                        │
+│eth-pls  Ethereum <> PulseChain   in flight 12   24h 29 transfers, 144.93 USDC                                        │
 │gate Ethereum open PulseChain warn                                                                                    │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌─Account and actions────────────────────────┐┌─Filters────────────────────────────────────────────────────────────────┐
@@ -278,25 +278,25 @@ exports[`view snapshots help overlay, wide 120x40 1`] = `
 │> Account and sig╔═Help═════════════════════════════════════════════════════════════════════════════╗   0x0000…ABC0   │
 │  Bridge tokens  ║1 2 3 4 5         Global, pair, audit, prover and costs, connections views        ║   0x0000…ABC0   │
 │  Send a message ║Tab / Shift+Tab   Pair view: next or previous area (actions, filters, feed)       ║ed 0x0000…ABC0   │
-│  Claim balances ║Up Down (j k)     Move in the action menu, the feed or the pair list              ║ed 0x0000…ABC0   │
-│  Operator: post ║Enter             Open the action, the pair, or the details of the feed row       ║ed 0x0000…ABC0   │
-│  Operator: execu║Left Right        Filters: choose a field. Up Down change its value               ║ed 0x0000…ABC0   │
+│  Operator: post ║Up Down (j k)     Move in the action menu, the feed or the pair list              ║ed 0x0000…ABC0   │
+│  Operator: execu║Enter             Open the action, the pair, or the details of the feed row       ║ed 0x0000…ABC0   │
+│                 ║Left Right        Filters: choose a field. Up Down change its value               ║ed 0x0000…ABC0   │
 │                 ║Enter on Addr     Filters: type an address. x clears every filter                 ║   0x0000…ABC0   │
-│                 ║PageUp PageDown   Feed: move by a page                                            ║k  0x0000…ABC0   │
-│                 ║y / n             Review: sign and send, or cancel (nothing is sent before y)     ║le 0x0000…ABC0   │
+│                 ║PageUp PageDown   Feed: move by a page                                            ║l  0x0000…ABC0   │
+│                 ║y / n             Review: sign and send, or cancel (nothing is sent before y)     ║   0x0000…ABC0   │
 │                 ║d  s  r           Review: raw calldata, skip a step, retry after an error         ║   0x0000…ABC0   │
 │                 ║Pay for delivery  Bridge form: Left Right chooses Yes. The fee fields and the live║   0x0000…ABC0   │
-│                 ║Docs              User docs: explorer/web/docs/pages (fees: 05-fees-explained.md) ║   0x0000…ABC0   │
+│                 ║Docs              User docs: explorer/web/docs/pages (fees: 05-fees-explained.md) ║ed 0x0000…ABC0   │
 │                 ║Esc               Close a dialog or this help                                     ║ed 0x0000…ABC0   │
 │                 ║?                 Show or hide this help                                          ║ed 0x0000…ABC0   │
 │                 ║q  Ctrl+C         Quit                                                            ║ed 0x0000…ABC0   │
-│                 ║6                 Prover setup (operator only, stores configuration)              ║ed 0x0000…abC1   │
+│                 ║6                 Prover setup (operator only, stores configuration)              ║   0x0000…abC1   │
+│                 ║                                                                                  ║l  0x0000…ABC0   │
 │                 ║                                                                                  ║   0x0000…ABC0   │
-│                 ║                                                                                  ║k  0x0000…ABC0   │
-│                 ║Press any key to close.                                                           ║le 0x0000…ABC0   │
+│                 ║Press any key to close.                                                           ║   0x0000…ABC0   │
 │                 ╚══════════════════════════════════════════════════════════════════════════════════╝   0x0000…ABC0   │
-│                                            ││03:24:12 -        ETH>PLS tok     24.09 zkbWPLS waiting   0x0000…ABC0   │
-│                                            ││02:59:30 -        ETH>PLS tok        44.57 WETH covered   0x0000…ABC0   │
+│                                            ││03:29:16 03:52:08 PLS>ETH tok        48.09 WPLS delivered 0x0000…ABC0   │
+│                                            ││02:58:10 03:27:46 ETH>PLS tok      7.45 zkbWPLS delivered 0x0000…ABC0   │
 │                                            ││02:38:00 03:00:08 ETH>PLS tok     29.53 zkbWPLS delivered 0x0000…ABC0   │
 │                                            ││02:13:26 02:42:10 PLS>ETH msg    call 0x000…BC0 delivered 0x0000…ABC0   │
 └────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────┘
@@ -310,7 +310,7 @@ Tab area  1-5 views  ? help  q quit  Enter open  Up/Down move         FIXTURE: n
 
 exports[`view snapshots pair view, compact 80x24 1`] = `
 "┌─1 Global  [2 Pair]  3 Audit  4 Prover  5 Conn  6 Setup───────────────────────┐
-│eth-pls  Ethereum <> PulseChain   in flight 12   24h 29 transfers, 147.81 USDC│
+│eth-pls  Ethereum <> PulseChain   in flight 12   24h 29 transfers, 144.93 USDC│
 │gate ETH open PLS warn                                                        │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌─Account and actions───────────┐┌─Filters─────────────────────────────────────┐
@@ -322,9 +322,9 @@ exports[`view snapshots pair view, compact 80x24 1`] = `
 │> Account and signer           ││11:54:30 -        P>E ….13 zkbWETH sent      │
 │  Bridge tokens                ││11:29:24 -        E>P   24.97 USDC waiting   │
 │  Send a message               ││11:07:06 -        P>E ….61 zkbWETH covered   │
-│  Claim balances               ││10:42:56 11:03:52 P>E   25.29 WPLS delivered │
-│  Operator: post update        ││10:15:50 10:46:50 P>E  msg 0x00…C0 delivered │
-│  Operator: execute message    ││09:49:08 10:15:48 E>P   16.89 USDC delivered │
+│  Operator: post update        ││10:42:56 11:03:52 P>E   25.29 WPLS delivered │
+│  Operator: execute message    ││10:15:50 10:46:50 P>E  msg 0x00…C0 delivered │
+│                               ││09:49:08 10:15:48 E>P   16.89 USDC delivered │
 │                               ││09:30:26 09:55:50 E>P   29.29 WETH delivered │
 │                               ││09:09:12 09:32:44 P>E ….69 zkbUSDC failed    │
 └───────────────────────────────┘└─────────────────────────────────────────────┘
@@ -478,7 +478,7 @@ Tab area  1-5 views  ? help … FIXTURE: no transaction reaches a chain  fixture
 
 exports[`view snapshots help overlay, compact 80x24 1`] = `
 "┌─1 Global  [2 Pair]  3 Audit  4 Prover  5 Conn  6 Setup───────────────────────┐
-│eth-pls  Ethereum <> PulseChain   in flight 12   24h 29 transfers, 147.81 USDC│
+│eth-pls  Ethereum <> PulseChain   in flight 12   24h 29 transfers, 144.93 USDC│
 │╔═Help═══════════════════════════════════════════════════════════════════════╗│
 └║1 2 3 4 5         Global, pair, audit, prover and costs, connections views  ║┘
 ┌║Tab / Shift+Tab   Pair view: next or previous area (actions, filters, feed) ║┐

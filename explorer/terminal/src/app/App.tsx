@@ -3,7 +3,7 @@
  */
 import { useReducer } from 'react'
 import { useKeyLayer, KeyRouterProvider } from '../ui/key-router'
-import { type ActionModalProps, BridgeModal, ClaimModal, ExecuteModal, MessageModal, UpdateModal } from '../ui/action-modals'
+import { type ActionModalProps, BridgeModal, ExecuteModal, MessageModal, UpdateModal } from '../ui/action-modals'
 import { AddressFilterModal, DetailModal, HelpOverlay, ReviewModal } from '../ui/modals'
 import { ConnectionsView } from '../ui/connections-view'
 import { SetupView } from '../ui/setup-view'
@@ -85,7 +85,6 @@ function CurrentModal(props: { readonly state: AppState; readonly dispatch: Disp
   if (modal.kind === 'signer') return <SignerModal onClose={close} />
   if (modal.kind === 'bridge') return <BridgeModal {...actionProps} />
   if (modal.kind === 'message') return <MessageModal {...actionProps} />
-  if (modal.kind === 'claim') return <ClaimModal {...actionProps} />
   if (modal.kind === 'update') return <UpdateModal {...actionProps} />
   if (modal.kind === 'execute') return <ExecuteModal {...actionProps} />
   if (modal.kind === 'address-filter') {

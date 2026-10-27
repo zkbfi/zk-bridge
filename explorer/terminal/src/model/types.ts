@@ -19,7 +19,7 @@ export type FeedKind = 'token' | 'message'
 /**
  * The derived status of a transfer or message, in the order that it normally advances. The names are the ones the
  * indexer stores (`MessageStatus` in `explorer/shared`).
- * `failed_call`, `fallback_used` and `claimable` are the end states of a delivery that did not pay the recipient.
+ * `failed_call` and `release_failed` are the end states of a delivery that did not pay the recipient. Both are final. After `release_failed` the mediator keeps no claim record, and the tokens stay in the mediator.
  */
 export type FeedStatus =
   | 'sent'
@@ -27,8 +27,7 @@ export type FeedStatus =
   | 'covered'
   | 'delivered'
   | 'failed_call'
-  | 'fallback_used'
-  | 'claimable'
+  | 'release_failed'
 
 /** Every status, in display order. */
 export const FEED_STATUSES = [
@@ -37,8 +36,7 @@ export const FEED_STATUSES = [
   'covered',
   'delivered',
   'failed_call',
-  'fallback_used',
-  'claimable',
+  'release_failed',
 ] as const satisfies readonly FeedStatus[]
 
 /** A token on one chain. */

@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test'
 import { erc20Abi, type Address } from 'viem'
 import { readChainSnapshot, readRouterAddresses, type ReadClient } from '../../src/chain/live-reads'
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from '../../src/data/fixtures'
-import { tokenMediatorAbi } from '../../src/tx/abis'
 
 const account: Address = '0x00000000000000000000000000000000000000a9'
 const chain = FIXTURE_PAIR.first
@@ -38,8 +37,8 @@ function recordingClient(answer: (call: Call) => unknown, balance: bigint | Erro
 }
 
 describe('readChainSnapshot', () => {
-  test('reads the balance and the three amounts of each token of its own chain, from the right contracts', async () => {
-    const answers: Record<string, bigint> = { balanceOf: 11n, allowance: 22n, claimable: 33n }
+  test('reads the balance and the two amounts of each token of its own chain, from the right contracts', async () => {
+    const answers: Record<string, bigint> = { balanceOf: 11n, allowance: 22n }
     const client = recordingClient((call) => answers[call.functionName], 777n)
     const result = await readChainSnapshot(client, { chain, account, tokens: FIXTURE_TOKENS })
     expect(result).toEqual({
@@ -48,9 +47,9 @@ describe('readChainSnapshot', () => {
         chain,
         nativeBalance: 777n,
         positions: [
-          { token: usdcFirst, balance: 11n, allowance: 22n, claimable: 33n },
-          { token: wethFirst, balance: 11n, allowance: 22n, claimable: 33n },
-          { token: firstSideTokens[2]!, balance: 11n, allowance: 22n, claimable: 33n },
+          { token: usdcFirst, balance: 11n, allowance: 22n },
+          { token: wethFirst, balance: 11n, allowance: 22n },
+          { token: firstSideTokens[2]!, balance: 11n, allowance: 22n },
         ],
       },
     })
@@ -60,8 +59,8 @@ describe('readChainSnapshot', () => {
     expect(client.calls.some((call) => call.functionName === 'currentFeeRate')).toBe(false)
     expect(client.calls).toContainEqual({ address: usdcFirst.address, functionName: 'balanceOf', args: [account] })
     expect(client.calls).toContainEqual({ address: usdcFirst.address, functionName: 'allowance', args: [account, mediator] })
-    expect(client.calls).toContainEqual({ address: mediator, functionName: 'claimable', args: [usdcFirst.address, account] })
-    expect(client.calls).toHaveLength(3 * 3)
+    expect(client.calls.some((call) => call.functionName === 'claimable')).toBe(false)
+    expect(client.calls).toHaveLength(3 * 2)
   })
 
   test('sends each read with the abi of its contract, so a wrong abi cannot pass', async () => {
@@ -76,7 +75,7 @@ describe('readChainSnapshot', () => {
       },
     }
     await readChainSnapshot(client, { chain, account, tokens: [usdcFirst] })
-    expect(abis).toEqual([erc20Abi, erc20Abi, tokenMediatorAbi])
+    expect(abis).toEqual([erc20Abi, erc20Abi])
   })
 
   test('a chain with no token still reads the balance', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from '../../src/data/fixtures'
-import { planClaim } from '../../src/tx/plan'
+import { planApproval } from '../../src/tx/plan'
 import { applyFormKey, createFormState, type FieldSpec, type FormKey } from '../../src/ui/form'
 import { reviewLines, wrapHexLines } from '../../src/ui/review-lines'
 import { lineText } from '../../src/ui/rich-text'
@@ -20,7 +20,7 @@ describe('wrapHexLines', () => {
 
 describe('the full calldata view of the review', () => {
   const usdc = FIXTURE_TOKENS[0]!
-  const plan = planClaim({ chain: FIXTURE_PAIR.first, token: usdc, account: FIXTURE_ACCOUNT, claimable: 25n })
+  const plan = planApproval({ chain: FIXTURE_PAIR.first, token: usdc, spender: FIXTURE_PAIR.first.contracts.tokenMediator, spenderLabel: 'TokenMediator', amount: 25n })
   const prepared = {
     plan,
     from: FIXTURE_ACCOUNT,

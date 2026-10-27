@@ -51,7 +51,7 @@ describe('a hand written relay to a delivery router', () => {
       await expect(stepsFor({ receiver: router, mode: 'call', data })).rejects.toThrow(PlanInputError)
     }
     await expect(stepsFor({ receiver: router, mode: 'plain' })).rejects.toThrow(/128 byte/)
-    await expect(stepsFor({ receiver: router, mode: 'fallback', data: '', fallback: person })).rejects.toThrow(/128 byte/)
+    await expect(stepsFor({ receiver: router, mode: 'plain', gas: '300000' })).rejects.toThrow(/128 byte/)
   })
 
   test('is refused in the 20 byte legacy shape for a token that is not the wrapped native token', async () => {

@@ -1,10 +1,10 @@
 /**
- * Live reads from the chains: balances, allowances, and claimable amounts. They use the RPC endpoints,
+ * Live reads from the chains: balances and allowances. They use the RPC endpoints,
  * not the indexer, because a value that a transaction depends on must be current.
  */
 import { erc20Abi, isAddress, getAddress, zeroAddress, type Abi, type Address } from 'viem'
 import type { ChainConfig, TokenInfo } from '../model/types'
-import { deliveryRouterAbi, tokenMediatorAbi } from '../tx/abis'
+import { deliveryRouterAbi } from '../tx/abis'
 
 /** The part of a viem public client that the reads need. */
 export interface ReadClient {
@@ -23,8 +23,6 @@ export interface TokenPosition {
   readonly balance: bigint
   /** The allowance the account gave the token mediator. */
   readonly allowance: bigint
-  /** The amount the mediator holds for the account to claim. */
-  readonly claimable: bigint
 }
 
 /** The live state of one chain for the connected account. */
@@ -69,12 +67,11 @@ async function readPosition(
 ): Promise<TokenPosition> {
   const { chain, account, token } = input
   const mediator = chain.contracts.tokenMediator
-  const [balance, allowance, claimable] = await Promise.all([
+  const [balance, allowance] = await Promise.all([
     readBigint(client, { address: token.address, abi: erc20Abi, functionName: 'balanceOf', args: [account] }),
     readBigint(client, { address: token.address, abi: erc20Abi, functionName: 'allowance', args: [account, mediator] }),
-    readBigint(client, { address: mediator, abi: tokenMediatorAbi, functionName: 'claimable', args: [token.address, account] }),
   ])
-  return { token, balance, allowance, claimable }
+  return { token, balance, allowance }
 }
 
 async function readBigint(

@@ -63,15 +63,8 @@ export class PlanInputError extends Error {
   override readonly name = 'PlanInputError'
 }
 
-/** How a token relay delivers and what it does when the recipient cannot be paid. */
-export type RelayMode =
-  | { readonly kind: 'plain' }
-  | { readonly kind: 'call'; readonly data: Hex }
-  | {
-      readonly kind: 'fallback'
-      readonly data: Hex
-      readonly fallbackRecipient: Address
-    }
+/** How a token relay delivers: a plain release, or a release that also calls the receiver. */
+export type RelayMode = { readonly kind: 'plain' } | { readonly kind: 'call'; readonly data: Hex }
 
 /** Input of {@link planApproval}. */
 export interface ApprovalInput {
@@ -102,6 +95,10 @@ export function planApproval(input: ApprovalInput): PlannedTransaction {
   }
 }
 
+/** The note under a plan that sets a gas limit. */
+const GAS_LIMIT_NOTE =
+  'The mediator uses the larger of this gas limit and its default for the kind of message. It refuses a gas limit above the bridge maximum.'
+
 /** Input of {@link planRelay}. */
 export interface RelayInput {
   readonly chain: ChainConfig
@@ -111,6 +108,12 @@ export interface RelayInput {
   readonly amount: bigint
   readonly mode: RelayMode
   /**
+   * The gas limit that the request asks for on the other chain. When it is set, the plan uses the overload with a
+   * trailing gas limit. The mediator uses the larger of this value and its default, and refuses a value above the
+   * bridge maximum. When it is absent, the plan uses the function without a gas limit.
+   */
+  readonly gasLimit?: bigint
+  /**
    * The delivery fee. The mode must be `call` with the encoded director as data, and the receiver must be the fee
    * router. The plan refuses any other combination, so a review never shows a fee that the data does not hold.
    */
@@ -118,16 +121,17 @@ export interface RelayInput {
 }
 
 /**
- * Plans `relayTokens`, `relayTokensAndCall` or `relayTokensWithFallback` on the token mediator.
+ * Plans `relayTokens` or `relayTokensAndCall` on the token mediator, with a trailing gas limit when the input has one.
  *
  * The mediator takes no fee: the other chain receives the whole amount.
  *
- * @throws PlanInputError for a zero amount or a zero receiver.
+ * @throws PlanInputError for a zero amount, a zero receiver or a gas limit of zero.
  */
 export function planRelay(input: RelayInput): PlannedTransaction {
   const { chain, token, receiver, amount, mode } = input
   if (amount <= 0n) throw new PlanInputError('The amount must be above zero.')
   requireAddress(receiver, 'receiver')
+  if (input.gasLimit !== undefined && input.gasLimit <= 0n) throw new PlanInputError('The gas limit must be above zero.')
   if (input.deliveryFee !== undefined) requireDeliveryFeeMatch(input.deliveryFee, receiver, mode)
   const common = { chain, to: chain.contracts.tokenMediator, contractLabel: 'TokenMediator', value: 0n }
   const tokenArgument = { name: 'token', type: 'address', value: getAddress(token.address), meaning: token.symbol }
@@ -139,63 +143,46 @@ export function planRelay(input: RelayInput): PlannedTransaction {
     meaning: amountMeaning(amount, token),
   }
 
+  const gasLimitArguments: readonly DisplayArgument[] =
+    input.gasLimit === undefined ? [] : [{ name: 'gasLimit', type: 'uint256', value: input.gasLimit.toString() }]
+  const gasLimitNotes = input.gasLimit === undefined ? [] : [GAS_LIMIT_NOTE]
+
   if (mode.kind === 'plain') {
+    const baseArguments = [token.address, receiver, amount] as const
+    const { gasLimit } = input
     return {
       ...common,
       title: `Relay ${token.symbol} to the other chain`,
-      functionSignature: 'relayTokens(address,address,uint256)',
+      functionSignature: gasLimit === undefined ? 'relayTokens(address,address,uint256)' : 'relayTokens(address,address,uint256,uint256)',
       functionName: 'relayTokens',
-      data: encodeFunctionData({
-        abi: tokenMediatorAbi,
-        functionName: 'relayTokens',
-        args: [token.address, receiver, amount],
-      }),
-      arguments: [tokenArgument, receiverArgument, amountArgument],
-      notes: ['If the receiver cannot be paid there, the release goes to the sender at the same address.'],
+      data:
+        gasLimit === undefined
+          ? encodeFunctionData({ abi: tokenMediatorAbi, functionName: 'relayTokens', args: baseArguments })
+          : encodeFunctionData({ abi: tokenMediatorAbi, functionName: 'relayTokens', args: [...baseArguments, gasLimit] }),
+      arguments: [tokenArgument, receiverArgument, amountArgument, ...gasLimitArguments],
+      notes: ['If the receiver cannot take the release there, the release is final: the tokens stay in the mediator and nobody can claim them. Check the receiver first.', ...gasLimitNotes],
     }
   }
 
-  if (mode.kind === 'call') {
-    return {
-      ...common,
-      title: `Relay ${token.symbol} and call the receiver`,
-      functionSignature: 'relayTokensAndCall(address,address,uint256,bytes)',
-      functionName: 'relayTokensAndCall',
-      data: encodeFunctionData({
-        abi: tokenMediatorAbi,
-        functionName: 'relayTokensAndCall',
-        args: [token.address, receiver, amount, mode.data],
-      }),
-      arguments: [tokenArgument, receiverArgument, amountArgument, bytesArgument('data', mode.data)],
-      notes: [...(input.deliveryFee === undefined ? [] : deliveryFeeNotes(input.deliveryFee)), 'The receiver gets a call to onTokenBridged with this data, even when the data is empty.'],
-      ...(input.deliveryFee === undefined ? {} : { deliveryFee: input.deliveryFee }),
-    }
-  }
-
-  const fallbackArgument = {
-    name: 'fallbackRecipient',
-    type: 'address',
-    value: getAddress(mode.fallbackRecipient),
-  }
-  const baseArguments = [
-    tokenArgument,
-    receiverArgument,
-    amountArgument,
-    bytesArgument('data', mode.data),
-    fallbackArgument,
-  ]
+  const callArguments = [token.address, receiver, amount, mode.data] as const
+  const { gasLimit } = input
   return {
     ...common,
-    title: `Relay ${token.symbol} with a fallback recipient`,
-    functionSignature: 'relayTokensWithFallback(address,address,uint256,bytes,address)',
-    functionName: 'relayTokensWithFallback',
-    data: encodeFunctionData({
-      abi: tokenMediatorAbi,
-      functionName: 'relayTokensWithFallback',
-      args: [token.address, receiver, amount, mode.data, mode.fallbackRecipient],
-    }),
-    arguments: baseArguments,
-    notes: [],
+    title: `Relay ${token.symbol} and call the receiver`,
+    functionSignature:
+      gasLimit === undefined ? 'relayTokensAndCall(address,address,uint256,bytes)' : 'relayTokensAndCall(address,address,uint256,bytes,uint256)',
+    functionName: 'relayTokensAndCall',
+    data:
+      gasLimit === undefined
+        ? encodeFunctionData({ abi: tokenMediatorAbi, functionName: 'relayTokensAndCall', args: callArguments })
+        : encodeFunctionData({ abi: tokenMediatorAbi, functionName: 'relayTokensAndCall', args: [...callArguments, gasLimit] }),
+    arguments: [tokenArgument, receiverArgument, amountArgument, bytesArgument('data', mode.data), ...gasLimitArguments],
+    notes: [
+      ...(input.deliveryFee === undefined ? [] : deliveryFeeNotes(input.deliveryFee)),
+      'The receiver gets a call to onTokenBridged with this data, even when the data is empty.',
+      ...gasLimitNotes,
+    ],
+    ...(input.deliveryFee === undefined ? {} : { deliveryFee: input.deliveryFee }),
   }
 }
 
@@ -257,36 +244,6 @@ export function planSendMessage(input: SendMessageInput): PlannedTransaction {
       { name: 'gas', type: 'uint256', value: gas.toString() },
     ],
     notes: ['The target contract on the other chain receives this call from the bridge. Delivery happens once.'],
-  }
-}
-
-/** Input of {@link planClaim}. */
-export interface ClaimInput {
-  readonly chain: ChainConfig
-  readonly token: TokenInfo
-  readonly account: Address
-  /** The claimable balance, in base units, as read from the chain. */
-  readonly claimable: bigint
-}
-
-/** Plans `claim(token, account)` on the token mediator. Anyone may call it, and it pays only `account`. */
-export function planClaim(input: ClaimInput): PlannedTransaction {
-  const { chain, token, account, claimable } = input
-  if (claimable <= 0n) throw new PlanInputError(`Nothing is claimable in ${token.symbol} for this account.`)
-  return {
-    title: `Claim ${token.symbol}`,
-    chain,
-    to: chain.contracts.tokenMediator,
-    contractLabel: 'TokenMediator',
-    functionSignature: 'claim(address,address)',
-    functionName: 'claim',
-    data: encodeFunctionData({ abi: tokenMediatorAbi, functionName: 'claim', args: [token.address, account] }),
-    value: 0n,
-    arguments: [
-      { name: 'token', type: 'address', value: getAddress(token.address), meaning: token.symbol },
-      { name: 'account', type: 'address', value: getAddress(account) },
-    ],
-    notes: [`The mediator pays ${amountMeaning(claimable, token)} to the account.`],
   }
 }
 

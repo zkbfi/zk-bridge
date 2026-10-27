@@ -42,7 +42,6 @@ export const ACTIONS = [
   { id: 'signer', label: 'Account and signer' },
   { id: 'bridge', label: 'Bridge tokens' },
   { id: 'message', label: 'Send a message' },
-  { id: 'claim', label: 'Claim balances' },
   { id: 'update', label: 'Operator: post update' },
   { id: 'execute', label: 'Operator: execute message' },
 ] as const

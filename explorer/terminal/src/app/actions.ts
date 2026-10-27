@@ -15,7 +15,6 @@ import {
   parseAddress,
   parseHexBytes,
   planApproval,
-  planClaim,
   planRelay,
   planSendMessage,
   planWrapAndRelay,
@@ -54,7 +53,7 @@ export function nativeChoiceValue(side: ChainSide): string {
 /**
  * Builds the steps for the bridge form: an exact-amount approval when the allowance is too low, then the relay.
  *
- * @param values The form values: token, amount, receiver, mode, data, fallback, maxFeePercent.
+ * @param values The form values: token, amount, receiver, mode, data, gas limit, maxFeePercent.
  */
 export function buildBridgeSteps(values: Readonly<Record<string, string>>, tokens: readonly TokenInfo[], context: BridgeContext): readonly FlowStep[] {
   const source = bridgeSourceOf(values, tokens, context.pair)
@@ -74,10 +73,12 @@ export function buildBridgeSteps(values: Readonly<Record<string, string>>, token
   const amount = parseAmount(values.amount ?? '', token.decimals)
   const position = positionOf(snapshot, token)
   if (amount > position.balance) throw new PlanInputError(`The amount is more than your ${token.symbol} balance.`)
+  const gasLimit = gasLimitOf(values)
   const relay = planRelay({
     chain,
     token,
     amount,
+    ...(gasLimit === undefined ? {} : { gasLimit }),
     ...(deliveryWanted(values, { source, tokens, context })
       ? deliveryRelayOf(values, { source, tokens, context })
       : directRelayOf(values, { source, receiver, pair: context.pair })),
@@ -213,8 +214,15 @@ function relayModeOf(values: Readonly<Record<string, string>>): RelayMode {
   if (mode === 'plain') return { kind: 'plain' }
   const data = parseHexBytes(values.data ?? '')
   if (mode === 'call') return { kind: 'call', data }
-  const fallbackRecipient = parseAddress(values.fallback ?? '', 'fallback recipient')
-  return { kind: 'fallback', data, fallbackRecipient }
+  throw new PlanInputError(`The mode "${mode}" is not known.`)
+}
+
+/** The optional gas limit of the bridge form: undefined when the field is empty, else a positive whole number. */
+function gasLimitOf(values: Readonly<Record<string, string>>): bigint | undefined {
+  const text = (values.gasLimit ?? '').trim()
+  if (text === '') return undefined
+  if (!/^\d+$/.test(text)) throw new PlanInputError('The gas limit must be a whole number.')
+  return BigInt(text)
 }
 
 /** Builds the single step of the send-a-message form. */
@@ -229,29 +237,6 @@ export function buildMessageSteps(values: Readonly<Record<string, string>>, pair
     gas: BigInt(gasText),
   })
   return [{ plan, skippable: false }]
-}
-
-/** A claimable balance found in the snapshots. */
-export interface ClaimableEntry {
-  readonly side: ChainSide
-  readonly position: TokenPosition
-}
-
-/** Lists every non-zero claimable balance on both chains. */
-export function claimableEntries(snapshots: readonly ChainSnapshotResult[] | null): readonly ClaimableEntry[] {
-  return (snapshots ?? []).flatMap((result) =>
-    result.status === 'error'
-      ? []
-      : result.snapshot.positions
-          .filter((position) => position.claimable > 0n)
-          .map((position) => ({ side: result.snapshot.chain.side, position })),
-  )
-}
-
-/** Builds the single step that claims one entry for the signer. */
-export function buildClaimSteps(entry: ClaimableEntry, pair: PairConfig, account: Address): readonly FlowStep[] {
-  const chain = entry.side === 'first' ? pair.first : pair.second
-  return [{ plan: planClaim({ chain, token: entry.position.token, account, claimable: entry.position.claimable }), skippable: false }]
 }
 
 function snapshotOf(snapshots: readonly ChainSnapshotResult[] | null, side: ChainSide): ChainSnapshot {

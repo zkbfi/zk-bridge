@@ -5,7 +5,6 @@ import {
   parseAddress,
   parseHexBytes,
   planApproval,
-  planClaim,
   planRelay,
   planSendMessage,
   planWrapAndRelay,
@@ -13,21 +12,20 @@ import {
 import { decodeKnownCall } from '../../src/tx/decode'
 
 // The expected calldata below was produced by Foundry `cast calldata`, an independent encoder, for these inputs:
-// token 0x...1001 (USDC, 6 decimals), receiver 0x...0abc, fallback 0x...0abd, 2.5 tokens (2500000 base units).
+// token 0x...1001 (USDC, 6 decimals), receiver 0x...0abc, 2.5 tokens (2500000 base units), gas limit 300000.
 const usdc = FIXTURE_TOKENS[0]!
 const chain = FIXTURE_PAIR.first
 const receiver = '0x0000000000000000000000000000000000000abc'
-const fallbackRecipient = '0x0000000000000000000000000000000000000abd'
 const AMOUNT = 2_500_000n
 
 const EXPECTED = {
   relay:
     '0xad58bdd100000000000000000000000000000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000abc00000000000000000000000000000000000000000000000000000000002625a0',
   call: '0xd740548100000000000000000000000000000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000abc00000000000000000000000000000000000000000000000000000000002625a000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000004deadbeef00000000000000000000000000000000000000000000000000000000',
-  fallbackFive:
-    '0xddbf52bc00000000000000000000000000000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000abc00000000000000000000000000000000000000000000000000000000002625a000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000abd0000000000000000000000000000000000000000000000000000000000000000',
-  claim:
-    '0x21c0b34200000000000000000000000000000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000abc',
+  relayWithGasLimit:
+    '0xba4636d600000000000000000000000000000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000abc00000000000000000000000000000000000000000000000000000000002625a000000000000000000000000000000000000000000000000000000000000493e0',
+  callWithGasLimit:
+    '0x9223413400000000000000000000000000000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000abc00000000000000000000000000000000000000000000000000000000002625a000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000493e00000000000000000000000000000000000000000000000000000000000000004deadbeef00000000000000000000000000000000000000000000000000000000',
   pass: '0xdc8601b30000000000000000000000000000000000000000000000000000000000000abc00000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000030d4000000000000000000000000000000000000000000000000000000000000000021234000000000000000000000000000000000000000000000000000000000000',
   wrap: '0xf52cbf0e0000000000000000000000000000000000000000000000000000000000000abc',
   approve:
@@ -55,22 +53,41 @@ describe('planRelay', () => {
     expect(plan.functionName).toBe('relayTokensAndCall')
   })
 
-  test('fallback uses the five-argument form', () => {
-    const plan = planRelay({
-      chain,
-      token: usdc,
-      receiver,
-      amount: AMOUNT,
-      mode: { kind: 'fallback', data: '0x', fallbackRecipient },
-    })
-    expect(plan.data).toBe(EXPECTED.fallbackFive as `0x${string}`)
-    expect(plan.arguments.map((argument) => argument.name)).not.toContain('maxFeeRate')
+  test('a plain relay with a gas limit plans the four-argument overload', () => {
+    const plan = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit: 300_000n })
+    expect(plan.data).toBe(EXPECTED.relayWithGasLimit as `0x${string}`)
+    expect(plan.functionSignature).toBe('relayTokens(address,address,uint256,uint256)')
+    expect(plan.arguments.map((argument) => argument.name)).toEqual(['token', 'receiver', 'value', 'gasLimit'])
+    expect(plan.arguments.find((argument) => argument.name === 'gasLimit')?.value).toBe('300000')
+  })
+
+  test('a call relay with a gas limit plans the five-argument overload', () => {
+    const plan = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'call', data: '0xdeadbeef' }, gasLimit: 300_000n })
+    expect(plan.data).toBe(EXPECTED.callWithGasLimit as `0x${string}`)
+    expect(plan.functionSignature).toBe('relayTokensAndCall(address,address,uint256,bytes,uint256)')
+    expect(plan.arguments.map((argument) => argument.name)).toEqual(['token', 'receiver', 'value', 'data', 'gasLimit'])
+  })
+
+  test('without a gas limit the plan keeps the old function', () => {
+    const plain = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' } })
+    const call = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'call', data: '0xdeadbeef' } })
+    expect(plain.data).toBe(EXPECTED.relay as `0x${string}`)
+    expect(call.data).toBe(EXPECTED.call as `0x${string}`)
+  })
+
+  test('refuses a gas limit of zero', () => {
+    expect(() => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit: 0n })).toThrow(PlanInputError)
+  })
+
+  test('the gas limit plan decodes back to its arguments', () => {
+    const plan = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit: 300_000n })
+    expect(decodeKnownCall(plan.data)?.arguments.map((argument) => argument.value).at(-1)).toBe('300000')
   })
 
   test('the mediator takes no fee: the plan names the whole amount and carries no fee note', () => {
     const plan = planRelay({ chain, token: usdc, receiver, amount: 1_999_999n, mode: { kind: 'plain' } })
     expect(plan.arguments.find((argument) => argument.name === 'value')?.value).toBe('1999999')
-    expect(plan.notes).toEqual(['If the receiver cannot be paid there, the release goes to the sender at the same address.'])
+    expect(plan.notes).toEqual(['If the receiver cannot take the release there, the release is final: the tokens stay in the mediator and nobody can claim them. Check the receiver first.'])
     expect(plan).not.toHaveProperty('charge')
   })
 
@@ -103,13 +120,6 @@ describe('other plans', () => {
     const plan = planSendMessage({ chain, target: receiver, data: '0x1234', gas: 200_000n })
     expect(plan.data).toBe(EXPECTED.pass as `0x${string}`)
     expect(plan.to).toBe(chain.contracts.messageBridge)
-  })
-
-  test('claim refuses an empty claimable balance and encodes claim(token, account)', () => {
-    expect(() => planClaim({ chain, token: usdc, account: receiver, claimable: 0n })).toThrow(PlanInputError)
-    const plan = planClaim({ chain, token: usdc, account: receiver, claimable: 25_000_000n })
-    expect(plan.data).toBe(EXPECTED.claim as `0x${string}`)
-    expect(plan.notes[0]).toContain('25 USDC')
   })
 
   test('wrap and relay sends the coin as the call value to the delivery router', () => {

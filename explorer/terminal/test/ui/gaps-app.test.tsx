@@ -47,8 +47,13 @@ function chainAccessFailingEstimates(failingCalls: readonly number[]): ChainAcce
   }
 }
 
-async function openClaimReview(target: App) {
-  await openAction(target, 3)
+/** Opens the review of a message to the other chain: a one-step review that needs no balance. */
+async function openMessageReview(target: App) {
+  await openAction(target, 2)
+  await target.press('TAB')
+  await target.type('0x0000000000000000000000000000000000000abc')
+  await target.press('TAB')
+  await target.type('0x1234')
   await target.press('RETURN')
   await target.settle(80)
 }
@@ -56,21 +61,21 @@ async function openClaimReview(target: App) {
 describe('keys of the review modal', () => {
   test('d switches the calldata between the digest and every byte, and back', async () => {
     app = await renderApp({ width: 120, height: 40, initialSigner: signer() })
-    await openClaimReview(app)
-    expect(app.frame()).toContain('68 bytes, keccak256 0x')
+    await openMessageReview(app)
+    expect(app.frame()).toMatch(/\d+ bytes, keccak256 0x/)
     await app.press('d')
-    expect(app.frame()).toContain('Calldata (68 bytes)')
+    expect(app.frame()).toMatch(/Calldata \(\d+ bytes\)/)
     expect(app.frame()).not.toContain('keccak256')
     await app.press('d')
-    expect(app.frame()).toContain('68 bytes, keccak256 0x')
+    expect(app.frame()).toMatch(/\d+ bytes, keccak256 0x/)
   })
 
   test('s does nothing on a step that is required: the review stays and nothing is sent', async () => {
     const chainAccess = createFixtureChainAccess(FIXTURE_PAIR)
     app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess })
-    await openClaimReview(app)
+    await openMessageReview(app)
     await app.press('s')
-    expect(app.frame()).toContain('claim(address,address)')
+    expect(app.frame()).toContain('requireToPassMessage(address,bytes,uint256)')
     expect(app.frame()).toContain('y sign and send')
     expect(chainAccess.sentTransactions).toHaveLength(0)
   })
@@ -78,22 +83,22 @@ describe('keys of the review modal', () => {
   test('a failed estimate shows the error, and r prepares the same step again', async () => {
     const chainAccess = chainAccessFailingEstimates([1])
     app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess })
-    await openClaimReview(app)
+    await openMessageReview(app)
     expect(app.frame()).toContain('node refused the estimate')
     expect(app.frame()).toContain('r retry')
     expect(chainAccess.estimateCalls()).toBe(1)
     await app.press('r')
     await app.settle(80)
     expect(chainAccess.estimateCalls()).toBe(2)
-    expect(app.frame()).toContain('claim(address,address)')
+    expect(app.frame()).toContain('requireToPassMessage(address,bytes,uint256)')
     expect(app.frame()).not.toContain('node refused the estimate')
   })
 
   test('s cannot skip a required step after an error, and Esc closes the error', async () => {
     const chainAccess = chainAccessFailingEstimates([1])
     app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess })
-    await openClaimReview(app)
-    await app.press('s') // the claim step is required, so the error stays
+    await openMessageReview(app)
+    await app.press('s') // the message step is required, so the error stays
     expect(app.frame()).toContain('node refused the estimate')
     await app.press('ESCAPE')
     expect(app.frame()).not.toContain('node refused the estimate')
@@ -102,7 +107,7 @@ describe('keys of the review modal', () => {
   test('Enter closes a finished sequence', async () => {
     const chainAccess = createFixtureChainAccess(FIXTURE_PAIR)
     app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess })
-    await openClaimReview(app)
+    await openMessageReview(app)
     await app.press('y')
     await app.settle(200)
     expect(chainAccess.sentTransactions).toHaveLength(1)
@@ -113,32 +118,9 @@ describe('keys of the review modal', () => {
 
   test('Enter does not close a review that waits for a decision', async () => {
     app = await renderApp({ width: 120, height: 40, initialSigner: signer() })
-    await openClaimReview(app)
+    await openMessageReview(app)
     await app.press('RETURN')
     expect(app.frame()).toContain('y sign and send')
-  })
-})
-
-describe('the claim list', () => {
-  test('a plan that cannot be built shows its message and keeps the list open', async () => {
-    const base = createFixtureChainAccess(FIXTURE_PAIR)
-    const broken: ChainAccess = {
-      ...base,
-      readSnapshots: async (input) => {
-        const results = await base.readSnapshots(input)
-        return results.map((result): ChainSnapshotResult =>
-          result.status === 'ok'
-            ? { ...result, snapshot: { ...result.snapshot, positions: result.snapshot.positions.map((position) => ({ ...position, token: { ...position.token, address: '0xnot-an-address' as never } })) } }
-            : result,
-        )
-      },
-    }
-    app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess: broken })
-    await openAction(app, 3)
-    await app.press('RETURN')
-    await app.settle(60)
-    expect(app.frame()).toContain('Claim balances')
-    expect(app.frame()).toMatch(/Address "0xnot-an-address" is invalid/)
   })
 })
 
@@ -333,7 +315,7 @@ describe('the review modal without a signer', () => {
       <ServicesProvider services={app.services}>
         <KeyRouterProvider>
           <SessionProvider pairId={app.services.defaultPairId} initialSigner={null}>
-            <ReviewModal title="Claim" steps={[]} onClose={() => closed.push('closed')} />
+            <ReviewModal title="Review" steps={[]} onClose={() => closed.push('closed')} />
           </SessionProvider>
         </KeyRouterProvider>
       </ServicesProvider>,

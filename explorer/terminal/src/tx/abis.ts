@@ -7,14 +7,13 @@
  */
 import { parseAbi } from 'viem'
 
-/** The token mediator: relays, claims and the views that the dashboard reads. */
+/** The token mediator: relays and the views that the dashboard reads. */
 export const tokenMediatorAbi = parseAbi([
   'function relayTokens(address token, address receiver, uint256 value)',
   'function relayTokens(address token, uint256 value)',
+  'function relayTokens(address token, address receiver, uint256 value, uint256 gasLimit)',
   'function relayTokensAndCall(address token, address receiver, uint256 value, bytes data)',
-  'function relayTokensWithFallback(address token, address receiver, uint256 value, bytes data, address fallbackRecipient)',
-  'function claim(address token, address account)',
-  'function claimable(address token, address account) view returns (uint256)',
+  'function relayTokensAndCall(address token, address receiver, uint256 value, bytes data, uint256 gasLimit)',
   'function mediatorBalance(address token) view returns (uint256)',
   'function bridgedTokenAddress(address nativeToken) view returns (address)',
   'function nativeTokenAddress(address bridgedToken) view returns (address)',

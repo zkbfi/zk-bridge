@@ -64,7 +64,7 @@ rate, and the account that delivers supplies no rate.
 - The field is offered for a token transfer when the deployment file names a delivery router (`delivery_router`) for the
   destination chain. When it does not, the form hides the field and sends a plain relay, and the note under the form
   says why. The wrap and relay route carries no call data, so it never carries a tip.
-- `Yes` always sends `relayTokensAndCall`. The `Mode`, `Call data` and `Fallback recipient` fields disappear, because the
+- `Yes` always sends `relayTokensAndCall`. The `Mode` and `Call data` fields disappear, because the
   call data now holds the tip terms. The tokens go to the `Fee recipient` after the tip (blank means the `Receiver`
   field).
 - `Router (advanced)` chooses the router in the extra data: the receiver of the relay. Blank means the delivery router of

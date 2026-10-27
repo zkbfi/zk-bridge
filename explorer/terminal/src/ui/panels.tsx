@@ -222,7 +222,6 @@ function balanceLines(input: {
     const native = `${formatUnits(snapshot.nativeBalance, 18, { maximumFractionDigits: 4, groupThousands: true })} ${chain.nativeSymbol}`
     const tokens = snapshot.positions.map((position) => ({
       text: formatAmountWithSymbol(position.balance, position.token.decimals, position.token.symbol),
-      claimable: position.claimable,
       symbol: position.token.symbol,
     }))
     if (layout.mode === 'compact') {
@@ -234,7 +233,6 @@ function balanceLines(input: {
         (token): Line => [
           muted('   '),
           plain(token.text),
-          ...(token.claimable > 0n ? [colored(`  +claimable`, theme.warn)] : []),
         ],
       ),
     ]
