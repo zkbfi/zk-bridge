@@ -54,7 +54,7 @@ The PulseChain explorer also lists other `HomeAMB` and `ForeignAMB` contracts (`
 | Home mediator | PulseChain | `0x4fD0aaa7506f3d9cB8274bdB946Ec42A1b8751Ef` | `0xe64b29DEB76616FF5a39E48EA33352Dff62a72E4` (`HomeOmnibridge`) | 2023-05-15 09:03 UTC |
 | Foreign mediator | Ethereum | `0x1715a3E4A142d8b698131108995174F37aEBA10D` | `0xB7DF1E00ae030e966E635ede273625240546B873` (`ForeignOmnibridge`) | 2023-05-15 09:04 UTC |
 | Token factory | Ethereum | `0x98bf93ebf5c380C0e6Ae8e192A7e2AE08edAcc02` | — | 2023-05-15 |
-| ETH router (`WETHOmnibridgeRouter`) | Ethereum | `0x8AC4ae65b3656e26dC4e0e69108B392283350f55` | — | 2023-05-15 |
+| ETH router (`WETHOmnibridgeRouter` of the PulseChain deployment, not ours) | Ethereum | `0x8AC4ae65b3656e26dC4e0e69108B392283350f55` | — | 2023-05-15 |
 
 - `cast call 0x4fD0…51Ef 'bridgeContract()(address)' --rpc-url $PLS` returns `0x6ef79F…8b2b`. The other side is `0x1715…A10D`.
 - `cast call 0x1715…A10D 'bridgeContract()(address)' --rpc-url $ETH` returns `0xd0764F…636c`. `requestGasLimit()` returns 2,000,000. `tokenFactory()` returns `0x98bf…cc02`.
@@ -162,24 +162,18 @@ I found no incident report, forum thread or announcement about the second pair, 
 
 ## 3. Lessons for our bridge
 
-### 3.1 A receiver can burn the gas of an unwrap and strand the wrapped token (change needed)
+### 3.1 A receiver can burn the gas of an unwrap and strand the wrapped token (handled)
 
-The PulseChain router sends with a 2,300 gas stipend and falls back to a forced send. Our routers send with all the gas left:
+The PulseChain router sends with a 2,300 gas stipend and falls back to a forced send. This review first found that our routers sent with all the gas left. That was a defect, and the current design fixes it.
 
-- `src/hardened/mediator/WETHOmnibridgeRouter.sol:73`: `(bool sent,) = receiver.call{value: value}("");`. On failure, lines 75 and 76 wrap again and transfer.
-- `src/hardened/mediator/DeliveryRouter.sol:293` (`_tryPay`) and `:299` (`_payNative`) do the same.
-
-The failure chain:
+The failure chain, as it stood in the first design:
 
 1. A release with a call gets `RELEASE_GAS_LIMIT + CALLBACK_GAS_LIMIT` = 1,000,000 gas (`TokenMediator.sol:141-143`, `:784`).
 2. `TokenMediator._callback` (`TokenMediator.sol:946-952`) calls `onTokenBridged` with all its gas left. A failure only emits `CallbackFailed`, and the tokens stay with the router.
-3. The router calls the receiver with 63/64 of its gas. A receiver that burns all of it leaves the router about 1/64. With roughly 800,000 gas at that point, that is about 12,000 gas.
-4. `WETH.deposit` plus `safeTransfer` cost more than that. So `onTokenBridged` reverts, the `withdraw` reverts with it, and the wrapped token stays in the router.
-5. Our routers have no owner and no `claimTokens` (by design, `WETHOmnibridgeRouter.sol:8-18`). The tokens are lost for good. The message is final (`MessageBridge.sol:290-297`).
+3. The router called the receiver with 63/64 of its gas. A receiver that burned all of it left the router about 1/64, about 12,000 gas (my estimate, not a measurement).
+4. `WETH.deposit` plus `safeTransfer` cost more than that, so the wrapped token stayed in a router with no owner and no `claimTokens`. The message is final (`MessageBridge.sol:290-297`).
 
-The gas numbers in steps 3 and 4 are my estimate, not a measurement. A receiver that refuses cheaply (a plain revert) is handled correctly today. Only a receiver that burns gas breaks the fallback.
-
-Change: cap the gas of the coin send, for example `receiver.call{value: value, gas: NATIVE_SEND_GAS}("")` with a constant sized for a smart wallet (for example 50,000), and keep the wrap fallback. Do the same in `DeliveryRouter._tryPay` and `_payNative`. As an alternative, copy the OmniBridge pattern: `send`, then a `Sacrifice` contract that self-destructs to the receiver. Under the Ethereum Cancun rules (EIP-6780), self-destruct in the creating transaction still moves the balance. I did not confirm which rule set PulseChain runs. Add a test with a receiver that loops until out of gas, and assert that the receiver ends with the wrapped token and that the router holds nothing.
+The fix is in `DeliveryRouter`. It sends the coin with `gas: NATIVE_SEND_GAS` (50,000) in `_tryPay` and `_trySendNative`. A receiver cannot burn more than that, so the fallback (wrap again and send the wrapped token) always has gas. When the receiver refuses both, `_handOff` records a claim for the recipient. Each chain has one router, `DeliveryRouter`. The separate `WETHOmnibridgeRouter` of the first design is deleted.
 
 ### 3.2 The callback must see the net value (handled)
 
@@ -197,7 +191,7 @@ Actions:
 
 ### 3.4 One router per chain, bound to one mediator (handled, with a note)
 
-PulseChain binds its WPLS router to the WPLS mediator only (`bridge()` is `0x0e18…`), and the ETH router to the general mediator. Our `WETHOmnibridgeRouter` binds to the one mediator in its constructor (`WETHOmnibridgeRouter.sol:40-44`), and `DeployBridge.s.sol` deploys one router per chain that has a wrapped native token (`docs/hardened-build-contract.md:757`). If we ever add a second mediator, it needs its own router. Clients must not reuse the router address across mediators.
+PulseChain binds its WPLS router to the WPLS mediator only (`bridge()` is `0x0e18…`), and the ETH router to the general mediator. Our `DeliveryRouter` binds to the one mediator in its constructor, and `DeployBridge.s.sol` deploys one `DeliveryRouter` per chain that has a wrapped native token (see the deploy steps in `docs/hardened-build-contract.md`). If we ever add a second mediator, it needs its own router. Clients must not reuse the router address across mediators.
 
 ### 3.5 Native value never rides in a message (handled)
 
