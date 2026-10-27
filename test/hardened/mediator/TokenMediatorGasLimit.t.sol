@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
+import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol";
 import {MediatorFixture, MockAMB, RecordingReceiver} from "./utils/MediatorSupport.sol";
 
 /// @notice The gas limit that a sender chooses for a message. OmniBridge sets the gas limit of each selector and token
@@ -20,9 +21,9 @@ contract TokenMediatorGasLimitTest is MediatorFixture {
     function _options(address to, bytes memory data, address fallbackRecipient, uint256 gasLimit)
         internal
         pure
-        returns (TokenMediator.RelayOptions memory)
+        returns (ITokenMediator.RelayOptions memory)
     {
-        return TokenMediator.RelayOptions(to, data, fallbackRecipient, gasLimit);
+        return ITokenMediator.RelayOptions(to, data, fallbackRecipient, gasLimit);
     }
 
     /// @dev A first message and a trip back, so that the native side sends the short form from now on.

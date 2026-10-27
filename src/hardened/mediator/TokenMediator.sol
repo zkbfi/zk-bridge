@@ -6,6 +6,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IFlowLimiter} from "../IFlowLimiter.sol";
 import {IAMB} from "../IAMB.sol";
+import {ITokenMediator} from "./ITokenMediator.sol";
 import {IBurnableMintableERC677Token} from "./IBurnableMintableERC677Token.sol";
 import {IERC20Receiver} from "./IERC20Receiver.sol";
 import {TokenFactory} from "./TokenFactory.sol";
@@ -77,21 +78,6 @@ contract TokenMediator is ReentrancyGuard {
     enum Side {
         Native,
         Bridged
-    }
-
-    /// @notice What a sender chooses for one relay, in `relayTokensWithOptions`.
-    /// @param receiver The account that receives the tokens on the other chain.
-    /// @param data The data of the call to `onTokenBridged` on the receiver. Empty data means no call. The mediator
-    /// never reads the data: a router that reads a fee schedule from it owns its meaning.
-    /// @param fallbackRecipient The account that receives the tokens when the receiver cannot. It cannot be zero.
-    /// @param gasLimit The gas that the call on the other chain gets, or zero for the default of the message. The
-    /// mediator uses the larger of this value and the default, and refuses a value above the maximum of the message
-    /// bridge.
-    struct RelayOptions {
-        address receiver;
-        bytes data;
-        address fallbackRecipient;
-        uint256 gasLimit;
     }
 
     /// @dev What the sender asks for in one relay. `requestedGasLimit` is zero when the sender asks for the default.
@@ -319,8 +305,8 @@ contract TokenMediator is ReentrancyGuard {
     /// maximum of the message bridge reverts with `GasLimitAboveBridgeMaximum`.
     /// @param token The token to relay.
     /// @param value The amount to pull from the caller.
-    /// @param options The receiver, the data, the fallback address and the gas limit. See `RelayOptions`.
-    function relayTokensWithOptions(address token, uint256 value, RelayOptions calldata options) external nonReentrant {
+    /// @param options The receiver, the data, the fallback address and the gas limit. See `ITokenMediator.RelayOptions`.
+    function relayTokensWithOptions(address token, uint256 value, ITokenMediator.RelayOptions calldata options) external nonReentrant {
         _pullAndBridge(
             Relay(
                 token,

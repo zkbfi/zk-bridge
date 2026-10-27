@@ -5,6 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {BridgedToken} from "../../../src/hardened/mediator/BridgedToken.sol";
 import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
+import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol";
 import {WorldSupport} from "../utils/WorldSupport.sol";
 import {DenyListToken} from "./utils/MediatorSupport.sol";
 import {GasBurningToken, InvalidOpcodeToken} from "./utils/HostileTokens.sol";
@@ -42,7 +43,7 @@ contract TokenMediatorHostileGasTest is WorldSupport {
         BridgedToken(copy).approve(address(mediatorB), type(uint256).max);
         vm.recordLogs();
         mediatorB.relayTokensWithOptions(
-            copy, AMOUNT, TokenMediator.RelayOptions(recipient, "", fallbackAccount, gasLimit)
+            copy, AMOUNT, ITokenMediator.RelayOptions(recipient, "", fallbackAccount, gasLimit)
         );
         vm.stopPrank();
         Transit memory transit = _proveForA(vm.getRecordedLogs());
