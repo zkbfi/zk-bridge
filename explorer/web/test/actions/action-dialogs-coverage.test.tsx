@@ -27,7 +27,7 @@ describe("the action dialog with a wallet", () => {
       wallet: connectedWallet(),
       services: { dataSource: { ...base.dataSource, listTokens: () => new Promise(() => undefined) } },
     });
-    expect(await screen.findByText("Loading your balances and the fee rates…")).toBeInTheDocument();
+    expect(await screen.findByText("Loading your balances…")).toBeInTheDocument();
     expect(screen.queryByRole("form")).toBeNull();
   });
 

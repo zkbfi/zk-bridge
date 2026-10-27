@@ -52,7 +52,6 @@ describe("the claim panel", () => {
     expect(steps[0]!.plan.chain.chainId).toBe(FIXTURE_PAIR.second.chainId);
     expect(steps[0]!.plan.functionName).toBe("claim");
     expect(steps[0]!.disclosure.delivery).toBeNull();
-    expect(steps[0]!.disclosure.bridgeFees).toBeNull();
   });
 
   it("reviews the claim of the first chain on the first chain", async () => {

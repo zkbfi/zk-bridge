@@ -1,7 +1,7 @@
 import { Box, Button, Flex, Table, Text } from "@chakra-ui/react";
 import type { ChainSnapshotResult } from "@terminal/chain/live-reads";
 import type { PairConfig } from "@terminal/model/types";
-import { formatAmountWithSymbol, formatRateAsPercent, formatUnits } from "../ui/format";
+import { formatAmountWithSymbol, formatUnits } from "../ui/format";
 import { Mono, Notice, Panel } from "../ui/primitives";
 import { useWallet } from "../wallet/wallet-port";
 
@@ -13,7 +13,7 @@ export type AccountPanelProps = {
 };
 
 /**
- * The connected account, the balances on both chains of the pair, and the bridge fee rate of each chain.
+ * The connected account, the balances on both chains of the pair.
  *
  * @param props The pair and the live balances.
  */
@@ -68,9 +68,6 @@ export const AccountPanel = ({ pair, snapshots, snapshotError }: AccountPanelPro
               <Box key={result.snapshot.chain.chainId} marginTop="2" data-testid={`balances-${result.snapshot.chain.chainId}`}>
                 <Text fontWeight="medium" fontSize="sm">
                   {result.snapshot.chain.name}
-                </Text>
-                <Text fontSize="xs" color="fg.muted">
-                  Bridge fee now: {formatRateAsPercent(result.snapshot.feeRate)}
                 </Text>
                 <Table.Root size="sm" aria-label={`Balances on ${result.snapshot.chain.name}`}>
                   <Table.Body>

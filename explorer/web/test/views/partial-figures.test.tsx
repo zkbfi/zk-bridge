@@ -31,22 +31,9 @@ describe("the summary bar with partial figures", () => {
     const list = await renderSummary({ partial: ["inFlight", "volume24h"] });
     const inFlight = within(list).getByText("In flight").nextElementSibling;
     const volume = within(list).getByText("Volume, 24 hours").nextElementSibling;
-    const fees = within(list).getByText("Fees accrued").nextElementSibling;
     expect(inFlight?.textContent).toMatch(/^at least \d+$/);
     expect(volume?.textContent).toMatch(/^at least \d+ transfers/);
-    expect(fees?.textContent).not.toContain("at least");
-  });
-
-  it("marks the fees when the fees are the partial figure, and shows the note once", async () => {
-    const list = await renderSummary({ partial: ["feesAccrued"] });
-    expect(within(list).getByText("Fees accrued").nextElementSibling?.textContent).toMatch(/^at least /);
-    expect(screen.getAllByText(NOTE)).toHaveLength(1);
-  });
-
-  it("shows no mark before none when no fee was seen, but still shows the note", async () => {
-    const list = await renderSummary({ partial: ["feesAccrued"], feesAccrued: [] });
-    expect(within(list).getByText("Fees accrued").nextElementSibling?.textContent).toBe("none");
-    expect(screen.getByText(NOTE)).toBeInTheDocument();
+    expect(within(list).queryByText("Fees accrued")).toBeNull();
   });
 
   it("shows no note for a partial figure that the bar does not show", async () => {

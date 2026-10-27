@@ -231,6 +231,5 @@ describe("a change of the token list under the form", () => {
     render(<BridgeForm variant="tokens" pair={FIXTURE_PAIR} tokens={[]} context={context} account={FIXTURE_ACCOUNT} onReview={() => undefined} />, { wrapper: walletWrapper({ wallet: connectedWallet() }) });
     expect(within(screen.getByLabelText("Token")).queryAllByRole("option")).toHaveLength(0);
     expect(screen.getByRole("button", { name: "Review transaction" })).toBeDisabled();
-    expect(screen.getByText("The bridge fee shows here once you enter an amount.")).toBeInTheDocument();
   });
 });

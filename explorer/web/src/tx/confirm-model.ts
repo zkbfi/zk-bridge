@@ -15,13 +15,6 @@ import { confirmableAbis } from "./web-abis";
 /** One labelled line of the dialog. */
 export type ConfirmLine = { readonly label: string; readonly text: string };
 
-/** The bridge fee lines. */
-export type BridgeFeeView = {
-  /** A sentence that says which transaction pays the fees. */
-  readonly appliesTo: string;
-  readonly lines: readonly ConfirmLine[];
-};
-
 const APPLIES_TO = {
   "this-transaction": "paid by this transaction",
   "next-transaction": "paid by the relay that follows this allowance",
@@ -69,7 +62,6 @@ export type ConfirmView = {
   /** The arguments, decoded from the calldata. */
   readonly arguments: readonly DisplayArgument[];
   readonly valueText: string;
-  readonly bridgeFees: BridgeFeeView | null;
   readonly delivery: DeliveryView | null;
   /** For a relay with no tip: a sentence that says that no router is involved. Null otherwise. */
   readonly noRouterNotice: string | null;
@@ -103,19 +95,6 @@ const mergeMeanings = (decoded: readonly DisplayArgument[], planned: readonly Di
     const meaning = planned.find((candidate) => candidate.name === argument.name)?.meaning;
     return meaning === undefined || argument.meaning !== undefined ? argument : { ...argument, meaning };
   });
-
-const bridgeViewOf = (step: WebStep): BridgeFeeView | null => {
-  const { bridgeFees, amountToken } = step.disclosure;
-  if (bridgeFees === null || amountToken === null) return null;
-  return {
-    appliesTo: APPLIES_TO[step.disclosure.feesApplyTo],
-    lines: [
-      { label: "Bridge fee on the source chain", text: `${formatRateAsPercent(bridgeFees.sourceRate)} = ${withSymbol(bridgeFees.sourceFee, amountToken)} (exact)` },
-      { label: "Bridge fee on delivery", text: `${formatRateAsPercent(bridgeFees.destinationRate)}: at most ${withSymbol(bridgeFees.destinationFeeAtMost, amountToken)}. The rate only falls.` },
-      { label: "Arrives", text: `at least ${withSymbol(bridgeFees.arrivesAtLeast, amountToken)}, before any delivery fee` },
-    ],
-  };
-};
 
 const RELAY_FUNCTIONS: readonly string[] = ["relayTokens", "relayTokensWithFallback", "wrapAndRelayTokens"];
 
@@ -189,7 +168,6 @@ export const buildConfirmView = (step: WebStep, routerAddresses?: RouterAddresse
     functionSignature: plan.functionSignature,
     arguments: decoded === null ? [] : mergeMeanings(decoded.arguments, plan.arguments),
     valueText: `${formatUnits(plan.value, 18)} ${plan.chain.nativeSymbol}`,
-    bridgeFees: bridgeViewOf(step),
     delivery: deliveryViewOf(step, routerAddresses),
     noRouterNotice: noRouterNoticeOf(step),
     notes: plan.notes,

@@ -29,9 +29,9 @@ export type DeliverySelectionInput = {
   readonly mode: DeliveryMode;
   /** Who receives the tokens after the tip. */
   readonly recipient: Address;
-  /** What the delivery router receives at the rates of now: the amount less both bridge fees. */
+  /** What the delivery router receives: the whole amount, because the mediator takes no fee. */
   readonly transferValue: bigint;
-  /** What the delivery router receives at most: the amount less the source fee. Used for the maximum. */
+  /** What the delivery router receives at most. Used for the maximum. It equals `transferValue`, because the mediator takes no fee. */
   readonly transferValueAtMost: bigint;
   /** The token that the tip is paid in. */
   readonly token: { readonly symbol: string; readonly decimals: number };

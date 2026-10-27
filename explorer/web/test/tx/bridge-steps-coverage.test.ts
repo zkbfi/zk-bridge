@@ -26,15 +26,15 @@ describe("planBridgeSteps: input that cannot work", () => {
   it("asks the user to wait when no snapshot has loaded", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
     expect(() => planBridgeSteps({ values: values(), tokens, context: { ...context, snapshots: null }, delivery: null })).toThrow(
-      "The balances and the fee rate of both chains must load before you can bridge.",
+      "The balances of that chain are not loaded. Check the RPC URL and wait for them.",
     );
   });
 
-  it("asks the user to wait when the snapshot of one chain failed", async () => {
+  it("asks the user to wait when the snapshot of the source chain failed", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
-    const [first] = context.snapshots!;
-    const failed = { status: "error" as const, chain: FIXTURE_PAIR.second, message: "endpoint down" };
-    expect(() => planBridgeSteps({ values: values(), tokens, context: { ...context, snapshots: [first!, failed] }, delivery: null })).toThrow(PlanInputError);
+    const [, second] = context.snapshots!;
+    const failed = { status: "error" as const, chain: FIXTURE_PAIR.first, message: "endpoint down" };
+    expect(() => planBridgeSteps({ values: values(), tokens, context: { ...context, snapshots: [failed, second!] }, delivery: null })).toThrow(PlanInputError);
   });
 
   it("asks for a token when the choice names a token that the list does not hold", async () => {

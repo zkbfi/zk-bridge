@@ -20,7 +20,7 @@ const VERDICT_WORDS: Readonly<Record<AuditVerdict, string>> = { matches: "Matche
 
 /**
  * The audit view: for each native token, the escrow that the home mediator holds against the supply of its copy on the
- * other chain, with the fees. A difference that is not zero is flagged in words.
+ * other chain. A difference that is not zero is flagged in words.
  */
 export const AuditView = () => {
   const { pair } = useServices();
@@ -33,7 +33,7 @@ export const AuditView = () => {
         Audit
       </Heading>
       <Text color="fg.muted" marginBottom="3">
-        Escrow on the home chain against the bridged supply on the other chain, and the fees. The two numbers must match, less what is in flight.
+        Escrow on the home chain against the bridged supply on the other chain. The two numbers must match, less what is in flight.
       </Text>
       {audit.error === null ? null : <Notice tone="error">The audit did not load: {audit.error.message}</Notice>}
       {rows === undefined ? <Text color="fg.muted">Loading…</Text> : null}
@@ -60,8 +60,6 @@ export const AuditView = () => {
                   <Table.ColumnHeader scope="col" textAlign="end">Bridged supply</Table.ColumnHeader>
                   <Table.ColumnHeader scope="col" textAlign="end">In flight</Table.ColumnHeader>
                   <Table.ColumnHeader scope="col" textAlign="end">Difference</Table.ColumnHeader>
-                  <Table.ColumnHeader scope="col" textAlign="end">Fees accrued</Table.ColumnHeader>
-                  <Table.ColumnHeader scope="col" textAlign="end">Fees collected</Table.ColumnHeader>
                   <Table.ColumnHeader scope="col">Result</Table.ColumnHeader>
                 </Table.Row>
               </Table.Header>
@@ -77,8 +75,6 @@ export const AuditView = () => {
                       <Table.Cell textAlign="end">{cell(row.bridgedSupply, decimals)}</Table.Cell>
                       <Table.Cell textAlign="end">{cell(row.inFlight, decimals)}</Table.Cell>
                       <Table.Cell textAlign="end">{DIFFERENCE_TEXT[verdict](difference, decimals)}</Table.Cell>
-                      <Table.Cell textAlign="end">{cell(row.accruedFees, decimals)}</Table.Cell>
-                      <Table.Cell textAlign="end">{cell(row.collectedFees, decimals)}</Table.Cell>
                       <Table.Cell color={VERDICT_COLORS[verdict]} fontWeight="medium">
                         {VERDICT_WORDS[verdict]}
                       </Table.Cell>

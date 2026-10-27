@@ -60,7 +60,7 @@ A contract that follows another chain. It stores finalized headers. It accepts a
 
 ## Mediator
 
-The token mediator. It is the contract that locks native tokens, mints and burns bridged copies, charges the bridge fee and holds claimable balances.
+The token mediator. It is the contract that locks native tokens, mints and burns bridged copies and holds claimable balances.
 
 ## Message
 
@@ -92,7 +92,7 @@ A group of 512 validators of the source chain. Its members sign the headers they
 
 ## Tip for delivery
 
-A voluntary amount that you offer for the delivery of your transfer. The interface sets it by default at 0.1 percent of the transfer. It is separate from the bridge fee. The delivery router pays it to its reward address. A direct delivery on the bridge, without the router, pays no tip.
+A voluntary amount that you offer for the delivery of your transfer. The interface sets it by default at 0.1 percent of the transfer. The bridge itself charges no fee, so the tip is the only fee. The delivery router pays it to its reward address. A direct delivery on the bridge, without the router, pays no tip.
 
 ## Wrapped native token
 

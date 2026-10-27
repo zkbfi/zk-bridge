@@ -59,11 +59,9 @@ The interface shows both transactions in full before your wallet asks you to sig
 
 ## Fees overview
 
-The bridge charges a fee on PulseChain only. Ethereum charges no fee. The fee falls over time and has no administrator. The page Fees explained has the schedule.
+The bridge charges no fee. The only fee is the voluntary tip for delivery. The interface adds this tip by default, at 0.1 percent of the transfer. The delivery router pays it to its reward address, as payment for the delivery. You can edit the tip or remove it. The wrap route carries no tip. The page Fees explained covers the tip.
 
-The interface also adds a tip for delivery by default, at 0.1 percent of the transfer. This tip is separate from the bridge fee. The delivery router pays it to its reward address, as payment for the delivery. You can edit the tip or remove it. The wrap route carries no tip.
-
-The recipient receives the amount after the bridge fee. The feed shows this net amount.
+The recipient receives the whole amount that you send, less the tip when you choose one. The feed shows the amount of the transfer.
 
 ## The fallback address
 
@@ -89,4 +87,4 @@ A claimable balance holds tokens that nobody could receive. The tokens stay safe
 
 The fallback address can claim. Anyone else can also call the claim for that address. The tokens always go to the fallback address.
 
-After the claim, the status of the transfer returns to delivered. A claim does not charge a second bridge fee, because the delivery paid the fee already.
+After the claim, the status of the transfer returns to delivered. A claim charges no fee.

@@ -58,7 +58,7 @@ export const useTokens = (pairId: string) => {
   return useQuery({ queryKey: ["tokens", pairId], queryFn: () => dataSource.listTokens(pairId), refetchInterval: 60_000 });
 };
 
-/** The balances, allowances, claimable amounts and fee rates of an account on both chains. Needs the tokens. */
+/** The balances, allowances, and claimable amounts of an account on both chains. Needs the tokens. */
 export const useSnapshots = (account: Address | null, pairId: string) => {
   const { chainAccess } = useServices();
   const tokens = useTokens(pairId);

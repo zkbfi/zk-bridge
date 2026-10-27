@@ -22,25 +22,12 @@ const stepsOf = async (allowance: bigint, options: Partial<DeliveryOptions>): Pr
 };
 
 describe("buildConfirmView: the parts of a step", () => {
-  it("shows no bridge fees and no router notice for an allowance step of a plain transfer", async () => {
+  it("shows no router notice for an allowance step of a plain transfer", async () => {
     const [approval] = await stepsOf(0n, { mode: "none" });
     const view = buildConfirmView(approval!);
     expect(view.functionSignature).toBe("approve(address,uint256)");
     expect(view.noRouterNotice).toBeNull();
     expect(view.delivery).toBeNull();
-  });
-
-  it("shows no bridge fee lines when the disclosure holds no fees", async () => {
-    const [relay] = await stepsOf(10n ** 12n, { mode: "none" });
-    const withoutFees: WebStep = { ...relay!, disclosure: { ...relay!.disclosure, bridgeFees: null } };
-    expect(buildConfirmView(withoutFees).bridgeFees).toBeNull();
-  });
-
-  it("shows no bridge fee lines when the disclosure holds fees but no token to write them in", async () => {
-    const [relay] = await stepsOf(10n ** 12n, { mode: "none" });
-    expect(relay!.disclosure.bridgeFees).not.toBeNull();
-    const withoutToken: WebStep = { ...relay!, disclosure: { ...relay!.disclosure, amountToken: null } };
-    expect(buildConfirmView(withoutToken).bridgeFees).toBeNull();
   });
 
   it("writes the cost lines in the coin of the chain of the step when the disclosure names no destination coin", async () => {

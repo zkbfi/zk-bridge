@@ -26,7 +26,7 @@ export type DetailTransfer = {
   readonly destinationToken: DetailToken;
   readonly recipient: Address;
   readonly fallbackRecipient: Address;
-  /** The amount after the bridge fee of the source chain, in base units. */
+  /** The amount that the mediator locked or burned on the source chain, in base units. */
   readonly value: bigint;
   readonly deliveredValue: bigint | null;
   readonly hasCallback: boolean;

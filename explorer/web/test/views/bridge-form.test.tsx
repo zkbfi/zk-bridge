@@ -27,7 +27,7 @@ const renderForm = async (options: RenderPageOptions & { readonly tokens?: reado
 
 const typeAmount = (text: string) => userEvent.type(screen.getByLabelText(/^Amount to send/), text);
 
-describe("the bridge form: fees before any signature", () => {
+describe("the bridge form: the tip before any signature", () => {
   it("disables Review until the transaction can be built, and says why", async () => {
     await renderForm();
     const review = screen.getByRole("button", { name: "Review transaction" });
@@ -41,14 +41,12 @@ describe("the bridge form: fees before any signature", () => {
     await waitFor(() => expect(review).toBeEnabled());
   });
 
-  it("shows the exact bridge fee as soon as the amount is valid", async () => {
+  it("shows no bridge fee, because the mediator takes none", async () => {
     await renderForm();
     await typeAmount("250");
-    const fee = await screen.findByTestId("bridge-fee");
-    expect(fee).toHaveTextContent("Bridge fee (exact)");
-    expect(fee).toHaveTextContent("On Ethereum: 0.1% = 0.25 USDC.");
-    expect(fee).toHaveTextContent("at most 0.24975 USDC");
-    expect(fee).toHaveTextContent("The rate only falls.");
+    await screen.findByTestId("delivery-quote");
+    expect(screen.queryByTestId("bridge-fee")).toBeNull();
+    expect(screen.queryByText(/Bridge fee/)).toBeNull();
   });
 
   it("turns the tip on by default at 0.1 percent, with no click, and shows what it costs", async () => {
@@ -57,8 +55,8 @@ describe("the bridge form: fees before any signature", () => {
     expect(screen.getByRole("radio", { name: /Percentage of the amount/ })).toBeChecked();
     expect(screen.getByLabelText("Percentage of the amount")).toHaveValue("0.1");
     const quote = await screen.findByTestId("delivery-quote");
-    expect(within(quote).getByTestId("delivery-summary")).toHaveTextContent("0.2495 zkbUSDC (exact)");
-    expect(within(quote).getByTestId("tip-maximum")).toHaveTextContent("The tip can take at most 0.24975 zkbUSDC.");
+    expect(within(quote).getByTestId("delivery-summary")).toHaveTextContent("0.25 zkbUSDC (exact)");
+    expect(within(quote).getByTestId("tip-maximum")).toHaveTextContent("The tip can take at most 0.25 zkbUSDC.");
     await waitFor(() => expect(screen.getByRole("button", { name: "Review transaction" })).toBeEnabled());
   });
 
@@ -101,7 +99,7 @@ describe("the bridge form: fees before any signature", () => {
     const percentage = screen.getByLabelText("Percentage of the amount");
     await userEvent.clear(percentage);
     await userEvent.type(percentage, "0.5");
-    await waitFor(() => expect(screen.getByTestId("delivery-summary")).toHaveTextContent("1.247501 zkbUSDC (exact)"));
+    await waitFor(() => expect(screen.getByTestId("delivery-summary")).toHaveTextContent("1.25 zkbUSDC (exact)"));
   });
 
   it("labels the price field as the user's own, and fills it from the valuation of a wrapped native token", async () => {
@@ -228,6 +226,7 @@ describe("the bridge form: fees before any signature", () => {
     const options = within(screen.getByLabelText("Coin to wrap")).getAllByRole("option").map((option) => option.textContent);
     expect(options).toEqual([expect.stringMatching(/^Wrap ETH on Ethereum/), expect.stringMatching(/^Wrap PLS on PulseChain/)]);
     await typeAmount("1");
-    expect(await screen.findByTestId("bridge-fee")).toHaveTextContent("0.001 wrapped ETH");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Review transaction" })).toBeEnabled());
+    expect(screen.queryByTestId("bridge-fee")).toBeNull();
   });
 });

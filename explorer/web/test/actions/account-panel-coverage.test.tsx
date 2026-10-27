@@ -64,7 +64,7 @@ describe("the balances in the account panel", () => {
     panel(connectedWallet(), [{ status: "error", chain: FIXTURE_PAIR.first, message: "no endpoint for Ethereum" }, ok]);
     expect(screen.getByText("Ethereum: no endpoint for Ethereum")).toBeInTheDocument();
     expect(screen.queryByTestId("balances-1")).toBeNull();
-    expect(within(screen.getByTestId("balances-369")).getByText("Bridge fee now: 0.1%")).toBeInTheDocument();
+    expect(within(screen.getByTestId("balances-369")).getByText("PLS")).toBeInTheDocument();
   });
 
   it("shows no balances while the wallet is not connected, even when snapshots exist", async () => {

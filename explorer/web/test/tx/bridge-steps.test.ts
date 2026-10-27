@@ -31,8 +31,8 @@ const deliveryFor = (mode: "percentage" | "gas-multiplier" | "fixed" = "percenta
     {
       mode,
       recipient: receiver,
-      transferValue: 249_000_000n,
-      transferValueAtMost: 249_750_000n,
+      transferValue: 250_000_000n,
+      transferValueAtMost: 250_000_000n,
       token: { symbol: "zkbUSDC", decimals: 6 },
       tokenValueInWei: 10n ** 18n,
       senderPrice: mode === "gas-multiplier" ? { numerator: 3_000n * 10n ** 6n, denominator: 10n ** 18n } : WRAPPED_PRICE,
@@ -80,8 +80,7 @@ describe("planBridgeSteps without a delivery fee: calldata equals what the termi
     const steps = planBridgeSteps({ values: values(), tokens, context, delivery: null });
     expect(steps).toHaveLength(2);
     expect(steps[0]!.plan.data).toBe(encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [FIXTURE_PAIR.first.contracts.tokenMediator, parseUnits("250", 6)] }));
-    // The allowance shows the fees of the relay that follows, so the user sees the whole cost before the first signature.
-    expect(steps[0]!.disclosure.bridgeFees).not.toBeNull();
+    // The allowance names the relay that follows, so the user sees what the tip belongs to before the first signature.
     expect(steps[0]!.disclosure.feesApplyTo).toBe("next-transaction");
     expect(steps[1]!.disclosure.feesApplyTo).toBe("this-transaction");
   });

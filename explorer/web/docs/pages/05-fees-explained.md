@@ -1,54 +1,6 @@
 # Fees explained
 
-You can pay two kinds of fee. The bridge fee goes to the fee recipient and follows a fixed schedule. The tip for delivery is voluntary and pays for the delivery. This page explains both.
-
-## The bridge fee
-
-The bridge fee falls with time. It has no administrator. No person can change the rate after deployment.
-
-The fee is charged on PulseChain only. Ethereum charges no fee.
-
-PulseChain charges the fee in both directions. It takes the fee when you send tokens from PulseChain. It also takes the fee when tokens arrive on PulseChain. So each one-way transfer pays the fee once. A round trip pays it twice.
-
-## The schedule on PulseChain
-
-The rate starts at 0.10 percent in the first year. It falls by 0.01 percentage point each year. It stops at 0.05 percent from year six on. Each year lasts 365 days.
-
-| Year | Rate |
-|---|---|
-| 1 | 0.10% |
-| 2 | 0.09% |
-| 3 | 0.08% |
-| 4 | 0.07% |
-| 5 | 0.06% |
-| 6 and later | 0.05% |
-
-The count starts at the timestamp of the block that deployed the token mediator. Rates are fixed at deployment in the contract.
-
-## An example
-
-You bridge 1,000 USDC while the rate is 0.10 percent. The fee is 1 USDC. The recipient gets 999 USDC.
-
-| Rate | Fee on 1,000 USDC |
-|---|---|
-| 0.10% | 1.00 USDC |
-| 0.09% | 0.90 USDC |
-| 0.08% | 0.80 USDC |
-| 0.07% | 0.70 USDC |
-| 0.06% | 0.60 USDC |
-| 0.05% | 0.50 USDC |
-
-The contract rounds the fee down to the smallest unit of the token. The fee never exceeds the amount.
-
-## The rate you read is the highest you can meet
-
-The rate only falls. It never rises. So the rate you read before you send is the highest rate that your transfer can meet.
-
-A transfer from Ethereum to PulseChain pays the rate at delivery. This rate can be lower than the rate you read, never higher. For this reason, the bridge needs no maximum fee in your message.
-
-## Who gets the bridge fee
-
-The fee stays in the mediator as an accrued balance. The fee recipient is set at deployment and cannot change. Anyone can call the collection function, and it sends the balance to the recipient. The fee has no authority over your funds.
+The bridge charges no fee. The only fee is the voluntary tip for delivery. The tip pays for the delivery of your transfer. This page explains it.
 
 ## The tip for delivery
 

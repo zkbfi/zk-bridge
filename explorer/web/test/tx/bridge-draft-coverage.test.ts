@@ -41,17 +41,16 @@ describe("computeBridgeDraft: the token and the amount", () => {
     const loading = { ...loaded, context: { ...loaded.context, snapshots: null } };
     const draft = computeBridgeDraft(values(), DEFAULT_DELIVERY_OPTIONS, loading);
     expect(draft.status).toBe("incomplete");
-    expect(draft.reason).toBe("The balances and fee rates of both chains are loading. Check the RPC URLs if this stays.");
-    expect(draft.bridgeFees).toBeNull();
+    expect(draft.reason).toBe("The balances of the source chain are loading. Check the RPC URLs if this stays.");
   });
 
-  it("says that the balances load when the snapshot of the other chain failed", async () => {
+  it("says that the balances load when the snapshot of the source chain failed", async () => {
     const loaded = await data();
     const [first, second] = loaded.context.snapshots!;
-    const failed = { status: "error" as const, chain: FIXTURE_PAIR.second, message: "endpoint down" };
+    const failed = { status: "error" as const, chain: FIXTURE_PAIR.first, message: "endpoint down" };
     expect(first!.status).toBe("ok");
     expect(second!.status).toBe("ok");
-    const draft = computeBridgeDraft(values(), DEFAULT_DELIVERY_OPTIONS, { ...loaded, context: { ...loaded.context, snapshots: [first!, failed] } });
+    const draft = computeBridgeDraft(values(), DEFAULT_DELIVERY_OPTIONS, { ...loaded, context: { ...loaded.context, snapshots: [failed, second!] } });
     expect(draft.status).toBe("incomplete");
     expect(draft.reason).toMatch(/are loading/);
   });
@@ -107,7 +106,6 @@ describe("computeBridgeDraft: the tip inputs", () => {
     expect(draft.status).toBe("blocked");
     expect(draft.reason).toMatch(/more than your USDC balance/);
     expect(draft.delivery).toBeNull();
-    expect(draft.bridgeFees).not.toBeNull();
   });
 });
 

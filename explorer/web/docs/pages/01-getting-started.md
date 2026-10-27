@@ -38,7 +38,7 @@ Follow these steps in order.
 2. Open the pair `eth-pls`.
 3. Choose Bridge tokens.
 4. Choose the token and enter the amount. The chain that holds the token is the source chain.
-5. Read the fee. The page Fees explained tells you how to read it.
+5. Read the tip for delivery. The page Fees explained tells you how to read it.
 6. Press Review. If the bridge needs an allowance, the interface shows it first. It lets the bridge pull your tokens.
 7. Send each transaction to your wallet. The interface shows the whole transaction before your wallet asks you to sign.
 8. Watch the status of the transfer in the feed.
@@ -81,6 +81,6 @@ Use this mode to learn the screens. The operator of the interface chooses the mo
 - How the bridge works explains light clients, proofs and finality.
 - Bridging tokens explains the token functions, the allowance and claims.
 - Sending messages explains how to call a contract on the other chain.
-- Fees explained explains the bridge fee and the tip for delivery.
+- Fees explained explains the tip for delivery, which is the only fee.
 - Safety explains what you trust.
 - Glossary defines every term.

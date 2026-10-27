@@ -32,7 +32,7 @@ Each light client starts from one checkpoint. This is a trusted header that the 
 
 The contracts have no administrator. They have no upgrade keys, no pause and no timelock. The code is immutable after deployment.
 
-The fee has no authority. The schedule is fixed, and the fee recipient cannot change. No person can raise the fee or move escrowed tokens.
+The mediator charges no fee. No person can take a fee or move escrowed tokens.
 
 The bridge uses no validators. A runner or a deliverer holds no trusted role for the transfer: anyone can deliver it, and the contracts check everything that they send. The delivery router has no list of allowed runners. It pays every tip to one reward address that it fixes at deployment. A copied delivery gains the copier nothing.
 

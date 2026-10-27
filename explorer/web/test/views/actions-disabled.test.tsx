@@ -27,12 +27,12 @@ describe("the action area", () => {
     expect(screen.getByText(/Simulated wallet\. Nothing reaches a chain/)).toBeInTheDocument();
   });
 
-  it("shows balances and the fee rate of both chains, and the claimable amount", async () => {
+  it("shows balances of both chains, and the claimable amount, with no fee rate", async () => {
     const { buildFixtureContext } = await import("../helpers");
     const { context } = await buildFixtureContext();
     renderPage(<ActionArea pair={FIXTURE_PAIR} snapshots={context.snapshots ?? undefined} snapshotError={null} />);
     const ethereum = screen.getByTestId("balances-1");
-    expect(within(ethereum).getByText("Bridge fee now: 0.1%")).toBeInTheDocument();
+    expect(within(ethereum).queryByText(/Bridge fee/)).toBeNull();
     expect(within(ethereum).getByText(/25 USDC claimable/)).toBeInTheDocument();
     expect(screen.getByTestId("balances-369")).toBeInTheDocument();
   });

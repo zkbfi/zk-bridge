@@ -1,4 +1,4 @@
-import { Box, Button, Flex, Stack, Text } from "@chakra-ui/react";
+import { Button, Flex, Stack, Text } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
 import type { Address } from "viem";
 import type { BridgeContext } from "@terminal/app/actions";
@@ -7,7 +7,7 @@ import type { ChainSide, PairConfig, TokenInfo } from "@terminal/model/types";
 import { useDeliveryCost, usePriorityFee } from "../app/queries";
 import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS, tipStatusOf, type DeliveryOptions } from "../tx/bridge-draft";
 import type { BridgeFormValues, WebStep } from "../tx/bridge-steps";
-import { formatAmountWithSymbol, formatRateAsPercent, formatUnits } from "../ui/format";
+import { formatAmountWithSymbol, formatUnits } from "../ui/format";
 import { Field, Notice, SelectInput, TextAreaInput, TextInput } from "../ui/primitives";
 import { DeliveryFeeSection } from "./DeliveryFeeSection";
 
@@ -51,8 +51,8 @@ const choicesOf = (variant: BridgeFormProps["variant"], pair: PairConfig, tokens
 const sideOfChoice = (choice: string): ChainSide => (choice.startsWith("second:") ? "second" : "first");
 
 /**
- * The form of "Bridge tokens" and "Wrap the native coin". It shows the exact bridge fee as soon as the amount is
- * valid, and the tip for delivery, which is on by default. Review is disabled until the transaction can be built.
+ * The form of "Bridge tokens" and "Wrap the native coin". It shows the tip for delivery, which is on by default.
+ * Review is disabled until the transaction can be built.
  *
  * @param props The pair, the tokens, the live state and the review handler.
  */
@@ -137,8 +137,6 @@ export const BridgeForm = ({ variant, pair, tokens, context, account, onReview }
           </>
         ) : null}
 
-        <BridgeFeeLines draft={draft} sourceName={sourceChain.name} destinationName={destinationChain.name} />
-
         <DeliveryFeeSection destinationNativeSymbol={destinationChain.nativeSymbol} destinationName={destinationChain.name} options={options} onChange={setOptions} draft={draft} />
         {report.error === null || !tipOn ? null : <Notice tone="error">The delivery cost did not load: {report.error.message}</Notice>}
 
@@ -152,36 +150,5 @@ export const BridgeForm = ({ variant, pair, tokens, context, account, onReview }
         </Flex>
       </Stack>
     </form>
-  );
-};
-
-type BridgeFeeLinesProps = {
-  readonly draft: ReturnType<typeof computeBridgeDraft>;
-  readonly sourceName: string;
-  readonly destinationName: string;
-};
-
-const BridgeFeeLines = ({ draft, sourceName, destinationName }: BridgeFeeLinesProps) => {
-  const { bridgeFees, amountToken } = draft;
-  if (bridgeFees === null || amountToken === null) {
-    return (
-      <Text fontSize="sm" color="fg.muted">
-        The bridge fee shows here once you enter an amount.
-      </Text>
-    );
-  }
-  return (
-    <Box borderWidth="1px" borderColor="border" borderRadius="md" padding="3" data-testid="bridge-fee">
-      <Text fontWeight="medium" fontSize="sm">
-        Bridge fee (exact)
-      </Text>
-      <Text fontSize="sm">
-        On {sourceName}: {formatRateAsPercent(bridgeFees.sourceRate)} = {formatAmountWithSymbol(bridgeFees.sourceFee, amountToken)}.
-      </Text>
-      <Text fontSize="sm">
-        On {destinationName} at delivery: {formatRateAsPercent(bridgeFees.destinationRate)}, at most {formatAmountWithSymbol(bridgeFees.destinationFeeAtMost, amountToken)}. The rate only falls.
-      </Text>
-      <Text fontSize="sm">At least {formatAmountWithSymbol(bridgeFees.arrivesAtLeast, amountToken)} arrives, before any delivery fee.</Text>
-    </Box>
   );
 };

@@ -14,7 +14,7 @@ export type MessageFormProps = {
 
 type Values = { readonly chain: "first" | "second"; readonly target: string; readonly data: string; readonly gas: string };
 
-const NO_DISCLOSURE = { feesApplyTo: "this-transaction", amountToken: null, destinationNativeSymbol: null, destinationChainId: null, bridgeFees: null, delivery: null } as const;
+const NO_DISCLOSURE = { feesApplyTo: "this-transaction", amountToken: null, destinationNativeSymbol: null, destinationChainId: null, delivery: null } as const;
 
 type Planned = { readonly steps: readonly WebStep[]; readonly problem: string | null };
 

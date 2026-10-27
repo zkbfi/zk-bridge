@@ -52,7 +52,7 @@ export const ActionDialog = ({ dialog, onClose }: ActionDialogProps) => {
         </Box>
       );
     }
-    if (snapshots.data === undefined || tokens.data === undefined) return <Text color="fg.muted">Loading your balances and the fee rates…</Text>;
+    if (snapshots.data === undefined || tokens.data === undefined) return <Text color="fg.muted">Loading your balances…</Text>;
     return <DialogBody dialog={dialog} account={account} snapshots={snapshots.data} tokens={tokens.data} onReview={setReview} />;
   };
 

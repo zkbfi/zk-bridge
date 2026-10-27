@@ -126,9 +126,9 @@ describe("the confirm dialog review of a tip", () => {
 });
 
 describe("the review of a step with no bridge fee", () => {
-  it("shows no bridge fee lines for a message, which pays no fee to the token bridge", async () => {
+  it("shows no tip and no fee for a message", async () => {
     const [flowStep] = buildMessageSteps({ chain: "first", target: `0x${"cd".repeat(20)}`, data: "", gas: "200000" }, FIXTURE_PAIR);
-    const step: WebStep = { plan: flowStep!.plan, disclosure: { feesApplyTo: "this-transaction", amountToken: null, destinationNativeSymbol: null, destinationChainId: null, bridgeFees: null, delivery: null } };
+    const step: WebStep = { plan: flowStep!.plan, disclosure: { feesApplyTo: "this-transaction", amountToken: null, destinationNativeSymbol: null, destinationChainId: null, delivery: null } };
     renderWithWallet(<TransactionDialog steps={[step]} onClose={() => undefined} />, { wallet: connectedWallet() });
     const review = await screen.findByTestId("confirm-review");
     expect(within(review).getByText("requireToPassMessage(address,bytes,uint256)")).toBeInTheDocument();

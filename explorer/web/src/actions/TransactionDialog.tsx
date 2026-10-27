@@ -73,8 +73,6 @@ const Review = ({ view, prepared, position }: ReviewProps) => {
         ))}
       </Box>
 
-      {view.bridgeFees === null ? null : <LineList title={`Bridge fee (${view.bridgeFees.appliesTo})`} lines={view.bridgeFees.lines} />}
-
       {view.noRouterNotice === null ? null : (
         <Box marginTop="3" data-testid="confirm-no-router">
           <Notice tone="info">{view.noRouterNotice}</Notice>

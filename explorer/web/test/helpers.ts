@@ -60,17 +60,15 @@ import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fi
 export type FixtureContextOptions = {
   /** The allowance that the account gave the mediator. Default: zero, so a relay needs an approval first. */
   readonly allowance?: bigint;
-  /** The fee rate of both mediators, scaled by 1e18. Default: 0.1 percent. */
-  readonly feeRate?: bigint;
 };
 
 /**
- * The live state of the fixture pair for the fixture account: balances, allowances and fee rates of both chains.
+ * The live state of the fixture pair for the fixture account: balances and allowances of both chains.
  *
  * @param options The numbers of the fixture chains.
  */
 export const buildFixtureContext = async (options: FixtureContextOptions = {}): Promise<{ readonly context: BridgeContext; readonly tokens: typeof FIXTURE_TOKENS }> => {
-  const access = createFixtureChainAccess(FIXTURE_PAIR, { ...(options.allowance === undefined ? {} : { allowance: options.allowance }), ...(options.feeRate === undefined ? {} : { feeRate: options.feeRate }) });
+  const access = createFixtureChainAccess(FIXTURE_PAIR, { ...(options.allowance === undefined ? {} : { allowance: options.allowance }), });
   const snapshots = await access.readSnapshots({ account: FIXTURE_ACCOUNT, tokens: FIXTURE_TOKENS });
   return { context: { pair: FIXTURE_PAIR, snapshots, signerAddress: FIXTURE_ACCOUNT }, tokens: FIXTURE_TOKENS };
 };

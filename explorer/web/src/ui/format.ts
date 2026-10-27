@@ -7,7 +7,7 @@ import { formatDuration as formatDurationText } from "@terminal/format/text";
 import type { FeedStatus } from "@terminal/model/types";
 
 export { formatAge, formatClock, formatDuration, formatTimestamp, shortenHex } from "@terminal/format/text";
-export { formatRateAsPercent, formatUnits, parseUnits } from "@terminal/format/amounts";
+export { formatUnits, parseUnits } from "@terminal/format/amounts";
 
 /**
  * Formats an amount for a table: grouped thousands and at most six fraction digits, cut, with the symbol.

@@ -21,7 +21,7 @@ const relayStep = async (options: Partial<typeof DEFAULT_DELIVERY_OPTIONS> = {})
 };
 
 describe("buildConfirmView", () => {
-  it("shows chain, contract, function, decoded arguments, value and the bridge fees for a plain relay", async () => {
+  it("shows chain, contract, function, decoded arguments, value and no bridge fee for a plain relay", async () => {
     const view = buildConfirmView(await relayStep());
     expect(view.chainText).toBe("Ethereum (chain 1)");
     expect(view.contractText).toContain("TokenMediator");
@@ -31,8 +31,7 @@ describe("buildConfirmView", () => {
     expect(view.arguments.find((argument) => argument.name === "value")?.value).toBe("250000000");
     expect(view.arguments.find((argument) => argument.name === "value")?.meaning).toBe("250 USDC");
     expect(view.valueText).toBe("0 ETH");
-    expect(view.bridgeFees?.lines.map((line) => line.label)).toEqual(["Bridge fee on the source chain", "Bridge fee on delivery", "Arrives"]);
-    expect(view.bridgeFees?.lines[0]?.text).toBe("0.1% = 0.25 USDC (exact)");
+    expect(view).not.toHaveProperty("bridgeFees");
     expect(view.delivery).toBeNull();
     expect(view.blockedReason).toBeNull();
   });
@@ -59,9 +58,9 @@ describe("buildConfirmView", () => {
     expect(delivery.routerText).toBe(getAddress(FIXTURE_PAIR.second.contracts.deliveryRouter!));
     expect(delivery.routerWarning).toBeNull();
     expect(delivery.tipMode).toBe("percentage of the transfer");
-    // The router receives 250 less 0.1 percent at each end: 249.50025. The tip is 0.1 percent of that, cut to the unit.
-    expect(delivery.tipNow).toBe("0.2495 zkbUSDC (exact)");
-    expect(delivery.tipMaximum).toBe("The tip can take at most 0.24975 zkbUSDC. Everything else goes to the recipient.");
+    // The mediator takes no fee, so the router receives all 250. The tip is 0.1 percent of that.
+    expect(delivery.tipNow).toBe("0.25 zkbUSDC (exact)");
+    expect(delivery.tipMaximum).toBe("The tip can take at most 0.25 zkbUSDC. Everything else goes to the recipient.");
     expect(delivery.tipNotes.join(" ")).toMatch(/Anyone can deliver through the delivery router.*reward address.*copied delivery gains the copier nothing/);
     expect(delivery.tipNotes.join(" ")).toMatch(/anyone calls the bridge directly to deliver, without the router, no tip is paid.*recipient then gets the whole amount/);
   });
@@ -111,10 +110,9 @@ describe("buildConfirmView", () => {
     if (draft.status !== "ready") throw new Error(draft.reason ?? "not ready");
     const approval = buildConfirmView(draft.steps[0]!);
     expect(approval.functionSignature).toBe("approve(address,uint256)");
-    expect(approval.bridgeFees?.appliesTo).toBe("paid by the relay that follows this allowance");
     expect(approval.delivery?.tipMaximum).toMatch(/The tip can take at most/);
     expect(approval.blockedReason).toBeNull();
-    expect(buildConfirmView(draft.steps[1]!).bridgeFees?.appliesTo).toBe("paid by this transaction");
+    expect(buildConfirmView(draft.steps[1]!).delivery?.appliesTo).toBe("paid by this transaction");
   });
 
   it("reads the arguments from the calldata, so the dialog cannot show what the wallet will not receive", async () => {

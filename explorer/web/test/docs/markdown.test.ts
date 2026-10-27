@@ -49,11 +49,12 @@ describe("the documentation pages", () => {
     }
   });
 
-  it("explains exact versus estimate and the fee schedule where a reader looks for them", () => {
+  it("explains exact versus estimate and the data source of the tip, and names no bridge fee schedule", () => {
     const fees = findDocPage("fees-explained")!;
     const headings = fees.headings.map((heading) => heading.text.toLowerCase()).join("|");
     expect(headings).toContain("exact and estimate");
-    expect(headings).toContain("schedule");
+    expect(headings).not.toContain("schedule");
+    expect(headings).not.toContain("bridge fee");
     expect(headings).toContain("data source");
   });
 

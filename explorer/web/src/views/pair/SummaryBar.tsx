@@ -57,8 +57,7 @@ export const SummaryBar = ({ pair, summary, error, now }: SummaryBarProps) => {
   const volume = summary.volume24h.byToken.map((entry) => formatAmountWithSymbol(entry.amount, entry.token)).join(" · ");
   const partial = summary.partial ?? [];
   const atLeast = (figure: PartialFigure): string => (partial.includes(figure) ? "at least " : "");
-  const anyPartial = (["volume24h", "inFlight", "feesAccrued"] as const).some((figure) => partial.includes(figure));
-  const fees = summary.feesAccrued.map((entry) => formatAmountWithSymbol(entry.amount, entry.token)).join(" · ");
+  const anyPartial = (["volume24h", "inFlight"] as const).some((figure) => partial.includes(figure));
   return (
     <Box>
       {error === null ? null : <Notice tone="warning">The last refresh failed ({error}). The numbers below are the last good ones.</Notice>}
@@ -73,9 +72,6 @@ export const SummaryBar = ({ pair, summary, error, now }: SummaryBarProps) => {
         <Stat term="Volume, 24 hours">
           {atLeast("volume24h")}
           {summary.volume24h.transferCount} transfers{volume === "" ? "" : `, ${volume}`}
-        </Stat>
-        <Stat term="Fees accrued">
-          {fees === "" ? "none" : `${atLeast("feesAccrued")}${fees}`}
         </Stat>
         {(["first", "second"] as const).map((side) => {
           const chain = side === "first" ? pair.first : pair.second;

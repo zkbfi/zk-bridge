@@ -41,10 +41,9 @@ describe("computeBridgeDraft", () => {
     expect(draft).toMatchObject({ status: "incomplete", reason: "Enter an amount." });
   });
 
-  it("shows the exact bridge fee as soon as the amount is valid, before the receiver is typed", async () => {
+  it("asks for the receiver once the amount is valid", async () => {
     const draft = computeBridgeDraft(values({ receiver: "" }), DEFAULT_DELIVERY_OPTIONS, await data());
-    expect(draft.status).toBe("incomplete");
-    expect(draft.bridgeFees?.sourceFee).toBe(100_000n);
+    expect(draft).toMatchObject({ status: "incomplete", reason: "Enter the receiver." });
   });
 
   it("blocks an amount with too many fraction digits and an amount above the balance", async () => {

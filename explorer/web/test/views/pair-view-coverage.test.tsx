@@ -21,7 +21,6 @@ const summaryOf = (overrides: Partial<PairSummary> = {}): PairSummary => ({
   gates: { first: "open", second: "warn" },
   inFlight: 3,
   volume24h: { transferCount: 2, byToken: [{ token: FIXTURE_TOKENS[0]!, amount: 5_000_000n }] },
-  feesAccrued: [{ token: FIXTURE_TOKENS[0]!, amount: 1_250_000n }],
   ...overrides,
 });
 
@@ -126,20 +125,19 @@ describe("the summary bar", () => {
     expect(list).toHaveTextContent("Paireth-pls: Ethereum and PulseChain");
     expect(list).toHaveTextContent("In flight3");
     expect(list).toHaveTextContent("Volume, 24 hours2 transfers, 5 USDC");
-    expect(list).toHaveTextContent("Fees accrued1.25 USDC");
+    expect(list).not.toHaveTextContent("Fees accrued");
     expect(list).toHaveTextContent("Gate on Ethereumopen");
     expect(list).toHaveTextContent("Gate on PulseChainnot enforcing yet");
     expect(list).toHaveTextContent("Last light client update14m ago");
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("says none for no fees, no volume and no update, and names every gate word", () => {
-    const empty = summaryOf({ heads: [], volume24h: { transferCount: 0, byToken: [] }, feesAccrued: [] });
+  it("says none for no update, shows zero volume, and names every gate word", () => {
+    const empty = summaryOf({ heads: [], volume24h: { transferCount: 0, byToken: [] } });
     const first = renderPage(<SummaryBar pair={FIXTURE_PAIR} summary={{ ...empty, gates: { first: "stop", second: "sealed" } }} error={null} now={FIXTURE_NOW} />);
     const list = () => screen.getByLabelText("Summary");
     expect(list()).toHaveTextContent("Volume, 24 hours0 transfers");
     expect(list()).not.toHaveTextContent("0 transfers,");
-    expect(list()).toHaveTextContent("Fees accruednone");
     expect(list()).toHaveTextContent("Last light client updatenone seen");
     expect(list()).toHaveTextContent("Gate on Ethereumsends closed");
     expect(list()).toHaveTextContent("Gate on PulseChainsealed");

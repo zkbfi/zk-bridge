@@ -23,7 +23,7 @@ const stepsOf = async (input: { readonly allowance: bigint; readonly delivery: b
 };
 
 describe("the confirm dialog", () => {
-  it("shows chain, contract, function, decoded arguments, value and fees before the wallet opens", async () => {
+  it("shows chain, contract, function, decoded arguments, value and tip before the wallet opens", async () => {
     const onSend = vi.fn();
     renderPage(<TransactionDialog steps={await stepsOf({ allowance: 10n ** 12n, delivery: true })} onClose={() => undefined} />, { onSend });
     const review = await screen.findByTestId("confirm-review");
@@ -33,7 +33,7 @@ describe("the confirm dialog", () => {
     expect(within(review).getByText("Value sent").nextSibling).toHaveTextContent("0 ETH");
     expect(within(review).getByText("value")).toBeInTheDocument();
     expect(within(review).getByText("250000000")).toBeInTheDocument();
-    expect(within(review).getByText(/Bridge fee on the source chain/)).toBeInTheDocument();
+    expect(within(review).queryByText(/Bridge fee/)).toBeNull();
     const delivery = within(review).getByTestId("confirm-delivery");
     expect(delivery).toHaveTextContent(/Tip for delivery \(paid by this transaction\)/);
     expect(within(delivery).getByText(getAddress(FIXTURE_PAIR.second.contracts.deliveryRouter!))).toBeInTheDocument();

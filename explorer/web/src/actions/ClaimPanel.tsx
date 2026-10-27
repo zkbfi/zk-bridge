@@ -14,7 +14,7 @@ export type ClaimPanelProps = {
   readonly onReview: (steps: readonly WebStep[]) => void;
 };
 
-const NO_DISCLOSURE = { feesApplyTo: "this-transaction", amountToken: null, destinationNativeSymbol: null, destinationChainId: null, bridgeFees: null, delivery: null } as const;
+const NO_DISCLOSURE = { feesApplyTo: "this-transaction", amountToken: null, destinationNativeSymbol: null, destinationChainId: null, delivery: null } as const;
 
 /**
  * The claimable balances of the account on both chains, one button each. The mediator pays only the account, whoever
