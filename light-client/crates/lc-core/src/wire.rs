@@ -21,6 +21,12 @@
 //! were. The decoder reads both. In the extended format every header carries its own form byte, so one fold can run
 //! across the Gloas fork.
 //!
+//! The evidence in the input chooses every layout; no fork table is read. The prover names, in the input, the form byte of each
+//! header (full or compact), the payload field list (the blob flag of a full header: `1` names the 17 field Deneb list, `0`
+//! the 15 field Capella list) and the fork version of each step. The branch lengths name the state layout and the
+//! compact anchor. Nothing the prover names is trusted without the checks of `update`: a wrong form, flag, length or
+//! version gives a branch or signature failure. The bytes of the format did not change.
+//!
 //! Layout of the guest input: chain selector (1 byte), the store, then a list of 1 to 64 steps. Each step is a fork
 //! version (4 bytes) followed by one update. A fold applies the steps in order (`update::verify_fold`).
 //! The decoder refuses a count above 64. A count of 0 decodes, and the fold then refuses it.

@@ -810,6 +810,85 @@ mod tests {
         assert!(is_gloas_block_hash_position(2856) && !is_gloas_block_hash_position(2857));
     }
 
+    /// Claim: the plain layouts are computed from the depth and equal the constants of the light-client specifications,
+    /// written here as literals: depth 5 gives 105, 54, 55 and depth 6 gives 169, 86, 87. Depth 7 gives 297, 150, 151 (the
+    /// layout that the program refuses).
+    /// Why it matters: the program derives the indices from the depth, so a wrong formula would move every proof.
+    #[test]
+    fn plain_layouts_come_from_the_depth() {
+        let depth_five = plain_state_layout(5);
+        assert_eq!(
+            (
+                depth_five.finalized_root_gindex,
+                depth_five.current_sync_committee_gindex,
+                depth_five.next_sync_committee_gindex
+            ),
+            (105, 54, 55)
+        );
+        let depth_six = plain_state_layout(6);
+        assert_eq!(
+            (
+                depth_six.finalized_root_gindex,
+                depth_six.current_sync_committee_gindex,
+                depth_six.next_sync_committee_gindex
+            ),
+            (169, 86, 87)
+        );
+        let depth_seven = plain_state_layout(7);
+        assert_eq!(
+            (
+                depth_seven.finalized_root_gindex,
+                depth_seven.current_sync_committee_gindex,
+                depth_seven.next_sync_committee_gindex
+            ),
+            (297, 150, 151)
+        );
+        assert_eq!(CAPELLA_DENEB_STATE_LAYOUT, depth_five);
+        assert_eq!(ELECTRA_STATE_LAYOUT, depth_six);
+    }
+
+    /// Claim: the finality branch length names the layout: 6, 7 and 9 give the Capella, Electra and Gloas layouts, and every
+    /// other length from 0 to 12 is refused, depth 7 (length 8) included.
+    /// Why it is safe: each allowed length is the depth of the finality index of exactly one layout, so no length names two.
+    #[test]
+    fn the_finality_branch_length_names_the_layout() {
+        assert_eq!(state_layout_for_finality_branch_length(6), Ok(CAPELLA_DENEB_STATE_LAYOUT));
+        assert_eq!(state_layout_for_finality_branch_length(7), Ok(ELECTRA_STATE_LAYOUT));
+        assert_eq!(state_layout_for_finality_branch_length(9), Ok(GLOAS_STATE_LAYOUT));
+        assert_eq!(ALLOWED_FINALITY_BRANCH_LENGTHS, [6, 7, 9]);
+        for length in (0..=12).filter(|length| ![6, 7, 9].contains(length)) {
+            assert_eq!(
+                state_layout_for_finality_branch_length(length),
+                Err(Error::UnsupportedStateBranchLength { length })
+            );
+        }
+        for length in ALLOWED_FINALITY_BRANCH_LENGTHS {
+            let layout = state_layout_for_finality_branch_length(length).unwrap();
+            assert_eq!(gindex_depth(layout.finalized_root_gindex) as usize, length);
+        }
+    }
+
+    /// Claim: a compact branch of 8, 9 or 11 entries names index 412, 812 or 2947, under the body root for the first two and
+    /// the state root for the last. Every other length from 0 to 16 names nothing.
+    #[test]
+    fn the_compact_branch_length_names_the_anchor() {
+        assert_eq!(
+            compact_anchor_for_branch_length(8),
+            Some(CompactAnchor { gindex: 412, root: CompactAnchorRoot::Body })
+        );
+        assert_eq!(
+            compact_anchor_for_branch_length(9),
+            Some(CompactAnchor { gindex: 812, root: CompactAnchorRoot::Body })
+        );
+        assert_eq!(
+            compact_anchor_for_branch_length(11),
+            Some(CompactAnchor { gindex: 2947, root: CompactAnchorRoot::State })
+        );
+        for length in (0..=16).filter(|length| ![8, 9, 11].contains(length)) {
+            assert_eq!(compact_anchor_for_branch_length(length), None, "length {length}");
+        }
+    }
+
     /// Claim: the `fork` field of the Gloas state is chunk 3, and `fork.current_version` is node 169, which the gate checks
     /// with a progressive rule. The depth rule `(2^depth + 3) * 4 + 1` gives 141 at depth 5, 269 at depth 6 and 525 at
     /// depth 7: none of them is 169.
