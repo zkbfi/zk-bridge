@@ -336,10 +336,7 @@ fn real_updates_reject_every_attack() {
     let cases: Vec<(&str, LightClientStore, LightClientUpdate, &ChainSpec)> = {
         let (eth_store, eth_update) = real_ethereum();
         let (pls_store, pls_update) = real_update_and_store();
-        vec![
-            ("ethereum", eth_store, eth_update, &ETHEREUM_MAINNET),
-            ("pulsechain", pls_store, pls_update, &PULSECHAIN),
-        ]
+        vec![("ethereum", eth_store, eth_update, &ETHEREUM_MAINNET), ("pulsechain", pls_store, pls_update, &PULSECHAIN)]
     };
     for (name, store, update, spec) in cases {
         let run = |update: &LightClientUpdate| verify_light_client_update(&store, update, spec);

@@ -39,7 +39,7 @@ use crate::chain::{ChainSpec, GENESIS_SLOT, MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZ
 use crate::error::{Error, Result};
 use crate::execution::{decode_execution_anchor_fields, execution_block_hash};
 use crate::layout::{
-    compact_anchor_for_branch_length, state_layout_for_fork, state_layout_for_finality_branch_length,
+    compact_anchor_for_branch_length, state_layout_for_finality_branch_length, state_layout_for_fork,
     CompactAnchorRoot, EXECUTION_PAYLOAD_GINDEX,
 };
 use crate::profile::tracked;
@@ -104,11 +104,9 @@ pub struct VerifiedExecution {
 /// bad branch or a length that names no anchor.
 pub fn verify_execution_branch(header: &LightClientHeader, which: &'static str) -> Result<()> {
     let (leaf, gindex, root) = match header.form {
-        HeaderForm::Full => (
-            header.execution.hash_tree_root_in_named_form()?,
-            EXECUTION_PAYLOAD_GINDEX,
-            &header.beacon.body_root,
-        ),
+        HeaderForm::Full => {
+            (header.execution.hash_tree_root_in_named_form()?, EXECUTION_PAYLOAD_GINDEX, &header.beacon.body_root)
+        }
         HeaderForm::Compact => {
             if header.execution_block_hash() == B256::ZERO {
                 return Err(Error::ZeroExecutionBlockHash(which));
