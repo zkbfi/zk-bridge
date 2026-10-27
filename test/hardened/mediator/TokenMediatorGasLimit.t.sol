@@ -224,8 +224,8 @@ contract HeavyReceiver {
     uint256 public finished;
 
     function onTokenBridged(address, uint256, bytes calldata) external {
-        uint256 target = gasleft() - 1_200_000;
-        while (gasleft() > target) {}
+        uint256 start = gasleft();
+        while (start - gasleft() < 1_200_000) {}
         finished++;
     }
 }

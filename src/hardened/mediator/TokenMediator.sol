@@ -133,6 +133,14 @@ contract TokenMediator is ReentrancyGuard {
     /// @notice The gas that the message bridge gives the call that deploys a bridged copy and releases tokens.
     uint256 public constant DEPLOY_GAS_LIMIT = 2_000_000;
 
+    /// @notice The gas that a release keeps back when it calls a native token. Each transfer attempt gets the gas
+    /// that is left, less this reserve. The reserve pays for what runs after the last attempt: the return of the
+    /// amount to the record, the claim record (a write to a new storage slot) and its event. Without it a token that
+    /// burns all its gas leaves only 1/64 of the gas, the handler cannot write the claim and it reverts. The bridge
+    /// marks the message as delivered even then, so the tokens would be lost. The figure comes from the gas report of
+    /// `TokenMediatorHostileGas` and has a margin: see `docs/hardened-build-contract.md`.
+    uint256 public constant TRANSFER_GAS_RESERVE = 60_000;
+
     /// @notice The text between the name of a native token and the name of its home chain, in the name of a bridged
     /// copy. The copy of `Wrapped Ether` from Ethereum is `Wrapped Ether from Ethereum`.
     string public constant NAME_CONNECTOR = " from ";
@@ -877,10 +885,33 @@ contract TokenMediator is ReentrancyGuard {
         }
         uint240 amount = uint240(value);
         _native[token].balance -= amount;
-        if (IERC20(token).trySafeTransfer(to, value)) return true;
+        if (_transferWithinReserve(IERC20(token), to, value)) return true;
         // Read the record again: a token that calls back during the transfer can lock more tokens before it refuses.
         _native[token].balance += amount;
         return false;
+    }
+
+    /// @dev A transfer that cannot take the gas that the handler needs afterwards. The call gets the gas that is left,
+    /// less `TRANSFER_GAS_RESERVE`, and fails when the token needs more. It reads the answer as `SafeERC20` does: the
+    /// token must return true, or return nothing and have code. It reads 32 bytes of the answer at most, so a token
+    /// cannot spend the reserve on a large answer. It returns false, with no call, when the gas left is not above the
+    /// reserve.
+    function _transferWithinReserve(IERC20 token, address to, uint256 value) private returns (bool success) {
+        uint256 available = gasleft();
+        if (available <= TRANSFER_GAS_RESERVE) return false;
+        uint256 gasCap = available - TRANSFER_GAS_RESERVE;
+        bytes4 selector = IERC20.transfer.selector;
+        assembly ("memory-safe") {
+            let freePointer := mload(0x40)
+            mstore(0x00, selector)
+            mstore(0x04, and(to, shr(96, not(0))))
+            mstore(0x24, value)
+            success := call(gasCap, token, 0, 0x00, 0x44, 0x00, 0x20)
+            if iszero(and(success, eq(mload(0x00), 1))) {
+                success := and(success, and(iszero(returndatasize()), gt(extcodesize(token), 0)))
+            }
+            mstore(0x40, freePointer)
+        }
     }
 
     /// @dev Calls `onTokenBridged` on the account that received the tokens, as OmniBridge does: only a contract is
