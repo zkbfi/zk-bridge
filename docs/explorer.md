@@ -143,7 +143,7 @@ Secrets are entered masked and never shown again (only the last four characters)
 
 A sender can tip a runner to deliver a transfer. The sender fixes the tip when the transfer leaves. Nothing at delivery sets or changes the rate, and the runner supplies no rate.
 
-The user interfaces turn the tip on by default at 0.1 percent of the transfer (the percentage mode, multiplier 1e15). The sender can edit the tip or remove it. With the tip removed, the interface sends a plain `relayTokens`.
+The user interfaces turn the tip on by default in the gas based mode at the base fee (`EXCLUDE_PRIORITY`), with a margin of 100 percent: the multiplier is the token units per wei of the destination native coin (the sender's price) times 2 times 1e18, rounded up. The limit is the tip at a ceiling base fee (twice the base fee now), and the interfaces show it as the ceiling. Where the destination chain has no base fee (`baseFee: none`, for example BNB Smart Chain), the default reads the whole gas price instead, with the same margin, and the form says why. Where the sender has no token price, the form cannot compute the multiplier. It asks for a price and says so. A fixed tip needs the same price, so there is no fixed fallback. Percentage and fixed amount stay selectable. The sender can edit the tip or remove it. With the tip removed, the interface sends a plain `relayTokens`.
 
 **The router is chosen in the extra data.** The sender relays the tokens with `relayTokensAndCall`. The receiver of that call is the router, and the call data is a `FeeDirector`: the recipient, the settings flags, a limit and a multiplier. The default router is the `DeliveryRouter` of the destination chain from the deployment file. An advanced field lets the sender name another router. The review screen marks a router that is not the one of the deployment.
 
@@ -165,9 +165,11 @@ The three modes:
 |---|---|---|---|
 | Percentage | `MULTIPLIER_OF_TOTAL` (8) | `value * multiplier / 1e18`. The default is multiplier 1e15 (0.1 percent) | exact |
 | Fixed | `FIXED_FEE` (1) | `limit` | exact |
-| Gas multiplier | none | `(gas used + overhead) * multiplier * gas price / 1e18`, never above `limit` | estimate, at most the limit |
+| Gas based (label "Gas, to limit") | none, or `EXCLUDE_PRIORITY` (4) for the default | `(gas used + overhead) * multiplier * gas price / 1e18`, never above `limit` | estimate, at most the limit |
 
 **The gas multiplier works for any token.** The router computes the gas based tip and the limit in base units of the token. The sender folds a price into the multiplier when the transfer leaves: `multiplier = (token units per wei of the destination native coin) * margin * 1e18`. The price is the sender's own. The interface labels the field as theirs and fills it from the token valuation as a starting point. The shared function `suggestGasMultiplier` takes the price as an exact ratio of two integers (`SenderPrice`), rounds the multiplier up, and refuses a multiplier that does not fit in 96 bits. `senderPriceOfToken` turns a token valuation into that ratio.
+
+**What the gas based tip measures.** The mode label in the interfaces is "up to the limit; the deliverer's gas choice decides" (a short label in the terminal, the full text in the help line). The router computes the tip from the gas that the deliverer's transaction makes available: `startingGas` at router entry minus `gasleft()` in the callback, plus a fixed overhead. The deliverer chooses the gas limit of that transaction. The bridge forwards only the message gas limit, so gas that the deliverer holds back above it counts. A sender must expect the tip to reach `limit`, and `limit` is the price ceiling. The test `test_aCallerCanRaiseAGasBasedTipByTheGasItSuppliesUpToTheLimit` documents this.
 
 The limit of a gas multiplier suggestion is the tip at a ceiling base fee, in base units of the transferred token. A spike in the base fee cannot take more. `expectedFee` mirrors `DeliveryRouter.feeInfo`. The test `explorer/shared/test/delivery-terms.test.ts` checks it, and the encoding of the director, against vectors that the compiled router printed (`explorer/shared/vectors/GenerateDeliveryFeeVectors.s.sol`).
 
