@@ -320,9 +320,61 @@ For Merkle-Patricia proofs and RLP decoding, prefer vendoring an audited impleme
   The evidence then only picks the depth.
 - **A range never covers a slot of another position.** Each row holds the lowest and highest slot at which its position was validated. A new validation grows a range of the same position only when the grown range overlaps no range of another position. Otherwise it starts a new range. A validation at a slot that another position's range already covers reverts with `LayoutRangeConflict`. So ranges of different positions never overlap, and a lookup has at most one answer. An anchor in a gap has no layout, and its withdrawal reverts with `LayoutNotValidated` until anyone validates a position there. The rule keeps a position that was validated, replaced, and validated again from covering the slots of its replacement.
 - **The light-client program takes the fork version as an input.** The committee signs the domain that contains it, so a wrong version yields no valid signature.
-- **Merkle positions in the program move only when a container crosses a power-of-two field count.** The beacon state crossed 32 fields at Electra (37); Fulu has 38; the next crossing is at 65. When that happens, a new route (light client, program and vault pair) is deployed beside the old one. The old route keeps paying out what it can still prove.
+- **The program takes its layout from the evidence, so a fork that keeps one of the accepted layouts needs no new program** (superseded 2026-10-27, see "Change: the layout comes from the evidence"). The program accepts three layouts: plain depth 5 (finality branch of 6 entries), plain depth 6 (7 entries) and the Gloas progressive form (9 entries). It refuses every other length, depth 7 included. A new route (light client, program and vault pair) is needed only when a fork leaves these three: a plain state of 65 or more fields, or a new progressive form. The old route keeps paying out what it can still prove.
+  Earlier text (superseded): "Merkle positions in the program move only when a container crosses a power-of-two field count. The beacon state crossed 32 fields at Electra (37); Fulu has 38; the next crossing is at 65." Gloas is progressive, so its positions no longer move with the field count.
 - **Deposit cutoff.** Each vault takes an immutable `depositCutoffTimestamp` (zero disables it). After it, `deposit` reverts, so nobody deposits into a route whose counterpart may no longer prove. Set it at deployment only when a breaking fork is already scheduled.
 - **Future work, not built:** a liveness gate that proves the counterpart light client's recent head through a storage proof of the other chain, so deposits stop automatically when the other direction stalls.
+
+## Change: the layout comes from the evidence, not from the fork table (user decision, 2026-10-27)
+
+Goal: Ethereum's Gloas activation, and PulseChain's adoption of Deneb or Electra, need no new program. Neither guest program chooses anything from the compiled fork table (`ChainSpec.fork_schedule`) that the evidence can decide. This replaces the fork-table rules of "Decision: source-chain forks" and the table-based parts of the light-client program above.
+
+### Rule: state proofs follow the length of the finality branch
+
+| Finality branch length | Layout | Finality, current committee, next committee |
+|---|---|---|
+| 6 | plain, depth 5 | 105, 54, 55 |
+| 7 | plain, depth 6 | 169, 86, 87 |
+| 9 | Gloas progressive | 735, 2945, 2946 |
+
+- Every other length is refused (`UnsupportedStateBranchLength`), depth 7 (finality length 8, committee length 7) included. On a chain that is truly depth 7, a wrong claim would land on a field that no specification defines yet.
+- The next committee branch of the same step must have the depth of that layout (5, 6 or 11). Mixed lengths in one step are refused. Different steps of one fold may use different layouts.
+- Branch checks are exact. The branch has exactly `floorlog2(gindex)` entries. A leading zero hash is neither stripped nor accepted. The length is the depth.
+- The plain indices are computed from the depth: `2^d + field` and `(2^d + 20) * 2 + 1`.
+
+### Rule: execution proofs follow the form byte, the payload form and the branch length
+
+- The body has depth 4 in every layout. The positions are 25 (full header), 412 (Capella payload, depth 4) and 812 (Deneb and later payload, depth 5). The positions 41, 668 and 1324 are refused.
+- The header form (full or compact) comes from the form byte of the wire format. It is not chosen by the fork of the slot.
+- The payload field list (Capella with 15 fields, Deneb with 17) is named by the prover in the input (the blob flag of the payload header). The two root forms cannot collide: that would need a `uint64` or padding leaf to equal a hash.
+- The Gloas compact anchor (`state.latest_block_hash`, index 2947, 11 entries, under the STATE root) is chosen by the branch length: 8 is 412, 9 is 812 (both under the body root), 11 is 2947. The keccak check of the header RLP against the proven block hash stays mandatory. It is the only guard for 2947 on a Capella or Deneb state, and for 412 on a Deneb payload.
+- The attested header of an update is not read for execution data when it is compact with a state anchored branch (11 entries). Every other attested header gets the branch check.
+
+### Rule: the signing fork version is an input of every step
+
+- It is a private input, one per fold step and one for the observation (the fork observation program already took it). The committee signs a domain that contains the version, so two thirds of a bound committee signing under version V shows that the chain ran V. A wrong version gives no valid signature.
+- The existing rules stay: the store binding, a signature slot after the attested slot, and a next-period signature needs a crossing.
+- The prover may still read the fork schedule from a beacon node, but only to build inputs (`table_fork_version`). Nothing it supplies is trusted without the proof checks.
+- `ChainSpec` keeps `fork_schedule` for code that does not run in a program: the ancestry and era helpers, the message proof builders and the input builders. No program path reads it.
+
+### Why every allowed pair is safe
+
+A claimed layout is tested against a true layout. Every allowed pair lands on a basic leaf, padding, a hash-only node or a fixed-shape container, where no honest branch reaches a chosen header root:
+
+- True depth 5: 169 lands below `eth1_deposit_index`; 86 is the data root of the `validators` list (the aggregate key chunk cannot match); 87 is the `validators` length; 735 lands in `randao_mixes`; 2945 and 2946 land in `slashings`.
+- True depth 6: 105 lands on a padding zero chunk; 54 and 55 land on zero-hash level 1; 735 lands below the `historical_summaries` length; 2945 and 2946 land below field 28 (`deposit_requests_start_index`).
+- True Gloas: 105, 54 and 55 land below the `active_fields` chunk (node 3); 169 is `fork.current_version`; 86 and 87 are the children of `latest_block_header`.
+- Execution: 812 on Capella lands below `block_number`; 412 on Deneb is caught only by keccak; 2947 on Capella or Deneb is caught only by keccak; 2947 on Electra or Fulu lands below a `uint64`; 412, 812 and 25 on Gloas land below `active_fields`.
+
+### Public values and keys
+
+The public values keep their layout: 352 bytes for the light-client program and 224 bytes for the observation. Both verification keys change (`BeaconLightClient.programVKey` and `ForkRegistry.observationProgramVKey`). The keys are in `light-client/program-keys.json` and are pinned in `script/testnet/bridge.config.testnet.json` and `docs/sp1-version-policy.md`.
+
+### Consequences to know
+
+- A chain that moves to a plain state of 65 or more fields (depth 7) stops the bridge: honest updates have a finality branch of 8 entries, which the program refuses. This is the safe failure. A new route is then deployed.
+- On a true depth 7 state, a branch of 7 entries still reads field 41 at index 169. The guard is that no specification defines a proposer-writable field there, and that honest depth 7 updates are refused. A test of a synthetic 70 field state shows a permissive selector accepting a forged header root at field 41, and the real rule refusing the honest update.
+- `BeaconForkGate` keeps the seal depths 5, 6, 7 and the marker 255. A seal stops sends at a fork that the program cannot read, so depth 7 stays sealable.
 
 ## Change: historical ancestry and folded updates (2026-10-20)
 
@@ -411,7 +463,7 @@ The Ethereum vault refuses a deposit unless the chain's current fork version is 
 Immutable configuration, checked against the chain spec by the deploy script:
 - `beaconRoots`: `0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02` (EIP-4788);
 - `genesisTime`, `secondsPerSlot` (12), `slotsPerEpoch` (32);
-- `supportedVersions`: a list of `(bytes4 version, uint8 stateDepth)` pairs. It must equal the light-client program's fork table, and a test compares the two. Expected values: Capella `0x03000000` depth 5; Deneb `0x04000000` depth 5; Electra `0x05000000` depth 6; Fulu `0x06000000` depth 6. Take each depth from `ethereum/consensus-specs` and cite it.
+- `supportedVersions`: a list of `(bytes4 version, uint8 stateDepth)` pairs. The depths must lie in the set of layouts that the light-client program accepts (5 and 6, and the marker 255 for Gloas), and a test compares the two sets. The program has no fork table. Expected values: Capella `0x03000000` depth 5; Deneb `0x04000000` depth 5; Electra `0x05000000` depth 6; Fulu `0x06000000` depth 6. Take each depth from `ethereum/consensus-specs` and cite it.
 - `sealDepths`: the depths allowed for a seal proof, namely 5, 6 and 7. Depth 7 covers a future fork that crosses 64 state fields. The value 255 (`PROGRESSIVE_STATE_DEPTH`) also stands for a progressive state (see below).
 - Gloas. The Gloas `BeaconState` is a progressive container, so the version leaf is at the fixed index 169 (7 siblings), not at the depth formula. A supported version with `stateDepth` 255 uses that index. A seal proof of 7 siblings is also tried at 169 when 255 is in `sealDepths`. Config values 0 and 32 to 254 stay refused.
 
@@ -468,7 +520,7 @@ Anyone may also call `confirm(evidence)` directly. It runs the same checks witho
   - It admits deposits when the code returns zero, short or garbage data.
   - It switches to enforcing for good once the mock returns a root, and then the same deposit needs evidence.
   - A seal in detection mode first requires a working probe.
-- A test that `supportedVersions` equals the light-client program's fork table.
+- A test that the state depths of `supportedVersions` equal the layouts that the light-client program accepts (`program` in `gindices.json`: finality branch lengths 6, 7 and 9, so plain depths 5 and 6 and the progressive marker), and that each fork keeps its own depth and version. The seal depths stay wider (5, 6, 7): a seal stops sends at a fork that the program cannot read.
 - The harness runs chain A (Ethereum) on a fork with EIP-4788 (Cancun or later). Chain B (PulseChain) stays on Shanghai, so its gate stays in detection mode. A second harness case runs chain B on Cancun to show detection, enforcement and the seal on a real beacon-root contract.
 
 ### Interface cutover (HB-02 window 2)
