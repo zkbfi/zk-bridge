@@ -4,6 +4,7 @@ import { getAddress } from "viem";
 import { describe, expect, it, vi } from "vitest";
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import { GAS_MODE_HELP } from "@zk-bridge/shared";
+import { CALL_TIP_NOTE } from "../../src/tx/confirm-model";
 import { TransactionDialog } from "../../src/actions/TransactionDialog";
 import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS } from "../../src/tx/bridge-draft";
 import type { WebStep } from "../../src/tx/bridge-steps";
@@ -33,6 +34,30 @@ const gasStepsOf = async (pair: typeof FIXTURE_PAIR): Promise<readonly WebStep[]
   if (draft.status !== "ready") throw new Error(draft.reason ?? "not ready");
   return draft.steps;
 };
+
+const callTarget = getAddress(`0x${"ab".repeat(20)}`);
+
+const callStepsOf = async (): Promise<readonly WebStep[]> => {
+  const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+  const draft = computeBridgeDraft(
+    { token: `first:${usdc.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", gasLimit: "", callTarget, callData: "0xABCD" },
+    { ...DEFAULT_DELIVERY_OPTIONS, mode: "percentage", senderPriceText: "1" },
+    { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
+  );
+  if (draft.status !== "ready") throw new Error(draft.reason ?? "not ready");
+  return draft.steps;
+};
+
+describe("the confirm dialog: the call after the delivery", () => {
+  it("lists the call target and the call data of a tipped relay, with the note about gas based tips", async () => {
+    renderPage(<TransactionDialog steps={await callStepsOf()} onClose={() => undefined} />, {});
+    const call = await screen.findByTestId("confirm-delivery-call");
+    expect(within(call).getByText("Call after the delivery")).toBeInTheDocument();
+    expect(within(call).getByText("Call target").nextSibling).toHaveTextContent(callTarget);
+    expect(within(call).getByText("Call data").nextSibling).toHaveTextContent("0xabcd");
+    expect(within(call).getByTestId("confirm-call-note")).toHaveTextContent(CALL_TIP_NOTE);
+  });
+});
 
 describe("the confirm dialog: the default gas based tip", () => {
   it("shows the limit as the price ceiling and what the gas based mode means, with no notice on a chain that reports a base fee", async () => {
