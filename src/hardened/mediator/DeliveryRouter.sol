@@ -34,14 +34,14 @@ import {IWETH} from "./IWETH.sol";
 /// - The router never reads `tx.origin` or `msg.sender` of `executeMessage`, so a generic Multicall3 contract
 ///   (`aggregate3` with `allowFailure`) can batch many deliveries, and the block proof, in one transaction. The router
 ///   knows nothing about batching. A failed call never reverts the others.
-/// - The gas based fee is settled after the bridge call returns. In `gibsfinance/omnibridge` the callback measures
-///   `startGas - gasleft()` itself. That works there because the bridge forwards all its gas. This bridge forwards
-///   exactly the gas limit of the message, so the callback runs in a frame that started with less gas than the
-///   router, and the difference would include the gas that the caller supplied and the bridge held back. A caller
-///   could then raise the tip to the cap at no cost. So for a gas based fee the router pays the recipient the value
-///   less the cap, keeps the cap (`Settlement`), and `executeMessage` computes the tip from the gas used by the whole
-///   call, pays the reward address, and sends the rest of the cap to the recipient. Fixed and percent fees need no
-///   gas and are paid in the callback.
+/// - The gas based tip is measured as in `gibsfinance/omnibridge`: the callback reads `startingGas - gasleft()`, where
+///   `startingGas` is stored at the entry of `executeMessage`, adds the fixed overhead that covers the rest of the
+///   run, caps the tip at the smaller of `limit` and the value, and pays one transfer to the reward address and one to
+///   the recipient. The residual is that a caller can choose a costlier proof route or supply more gas, which raises
+///   the measured figure. The sender's `limit` bounds the tip and the tip goes to the fixed reward address, so a
+///   stranger gains nothing.
+/// - `EXCLUDE_PRIORITY` prices gas at `block.basefee`. On a chain that reports a base fee of 0 (BSC) the gas based tip
+///   is then zero. The interfaces refuse `EXCLUDE_PRIORITY` for a chain that is configured as having no base fee.
 /// - The slot uses regular storage (the compiler target has no transient storage), so it is set and cleared with the
 ///   value 1, which keeps the slot non-zero after the first use. It holds the starting gas and no address.
 /// - There is no `EIP1559_ENABLED` switch. The router reads `block.basefee`.
@@ -94,17 +94,6 @@ contract DeliveryRouter is ReentrancyGuard {
     enum GasPrice {
         Transaction,
         BaseFee
-    }
-
-    /// @dev A gas based fee that waits for the end of the call. `held` is the cap, which is the most that the fee can
-    /// be. Zero means nothing waits.
-    struct Settlement {
-        address token;
-        Payout payout;
-        GasPrice gasPrice;
-        address recipient;
-        uint96 multiplier;
-        uint256 held;
     }
 
     /// @notice The value of `settings` bit 0: the tip is `limit`.
@@ -173,8 +162,6 @@ contract DeliveryRouter is ReentrancyGuard {
     /// @notice The sum of `claimable` over the accounts, for each token.
     mapping(address token => uint256) public totalClaimable;
 
-    Settlement private _settlement;
-
     /// @param bridge_ The mediator on this chain.
     /// @param wNative_ The wrapped native token of this chain.
     /// @param rewardAddress_ The address that receives the tips. It cannot be the zero address.
@@ -201,9 +188,9 @@ contract DeliveryRouter is ReentrancyGuard {
     function executeMessage(MessageBridge.MessageProof calldata proof) external {
         if (_startingGas() > NOT_RUNNING) revert DeliveryInProgress();
 
-        uint256 startingGas = _begin();
+        _storeStartingGas(uint256(uint96(gasleft())));
         MessageBridge(address(bridge.bridgeContract())).executeMessage(proof);
-        _finish(startingGas);
+        _storeStartingGas(NOT_RUNNING);
     }
 
     /// @notice The callback of the mediator. It splits the tokens between the reward address and the recipient, and
@@ -227,7 +214,8 @@ contract DeliveryRouter is ReentrancyGuard {
         Payout payout = director.settings & UNWRAP != 0 && token == address(wNative) ? Payout.Native : Payout.Token;
         if (payout == Payout.Native) wNative.withdraw(value);
 
-        uint256 toRecipient = _startingGas() > NOT_RUNNING ? _takeFee(token, payout, value, director) : value;
+        uint256 startingGas = _startingGas();
+        uint256 toRecipient = startingGas > NOT_RUNNING ? _takeFee(token, payout, value, director, startingGas) : value;
         if (toRecipient == 0) return;
         if (payout == Payout.Native) {
             _payNative(director.recipient, toRecipient);
@@ -279,61 +267,21 @@ contract DeliveryRouter is ReentrancyGuard {
         if (msg.sender != address(wNative)) revert NotWrappedTokenSender(msg.sender);
     }
 
-    /// @dev Takes the fee in the callback when it needs no gas figure. For a gas based fee it sets the cap aside and
-    /// leaves the settlement to the end of `executeMessage`.
-    /// @return toRecipient What the recipient receives now.
-    function _takeFee(address token, Payout payout, uint256 value, FeeDirector memory director)
-        private
-        returns (uint256 toRecipient)
-    {
-        if (!_isGasBased(director.settings)) {
-            uint256 fee = _fee(value, 0, director, 0);
-            if (fee == 0 || !_tryPay(token, payout, rewardAddress, fee)) return value;
-            return value - fee;
-        }
-        uint256 held = director.limit > value ? value : director.limit;
-        // One settlement waits at a time. A second message in the same run pays no fee.
-        if (held == 0 || _settlement.held != 0) return value;
-        _settlement = Settlement({
-            token: token,
-            payout: payout,
-            gasPrice: director.settings & EXCLUDE_PRIORITY != 0 ? GasPrice.BaseFee : GasPrice.Transaction,
-            recipient: director.recipient,
-            multiplier: director.multiplier > type(uint96).max ? type(uint96).max : uint96(director.multiplier),
-            held: held
-        });
-        return value - held;
-    }
-
-    /// @dev Pays the reward address the gas based fee, and sends the rest of the held cap to the recipient.
-    function _settle(Settlement memory waiting, uint256 gasUsed) private {
-        uint256 overhead = waiting.payout == Payout.Native ? NATIVE_GAS_OVERHEAD : TOKEN_GAS_OVERHEAD;
-        uint256 fee = (gasUsed + overhead) * waiting.multiplier * _gasPrice(waiting.gasPrice) / 1 ether;
-        if (fee > waiting.held) fee = waiting.held;
-        if (fee > 0 && !_tryPay(waiting.token, waiting.payout, rewardAddress, fee)) fee = 0;
-        uint256 refund = waiting.held - fee;
-        if (refund == 0) return;
-        if (waiting.payout == Payout.Native) {
-            _payNative(waiting.recipient, refund);
-            return;
-        }
-        _payToken(waiting.token, waiting.recipient, refund);
-    }
-
-    /// @dev Stores the starting gas, which marks a router delivery. Returns it.
-    function _begin() private returns (uint256 startingGas) {
-        startingGas = uint256(uint96(gasleft()));
-        _storeStartingGas(startingGas);
-    }
-
-    /// @dev Settles a gas based fee that waits, and clears the slot. `startingGas` is the value that `_begin` returned.
-    function _finish(uint256 startingGas) private {
-        Settlement memory waiting = _settlement;
-        if (waiting.held != 0) {
-            delete _settlement;
-            _settle(waiting, startingGas - gasleft());
-        }
-        _storeStartingGas(NOT_RUNNING);
+    /// @dev Takes the tip in the callback and pays it to the reward address. A tip that the reward address refuses
+    /// stays with the recipient.
+    /// @return toRecipient What the recipient receives.
+    function _takeFee(
+        address token,
+        Payout payout,
+        uint256 value,
+        FeeDirector memory director,
+        uint256 startingGas
+    ) private returns (uint256 toRecipient) {
+        uint256 fee = _fee(
+            value, startingGas - gasleft(), director, payout == Payout.Native ? NATIVE_GAS_OVERHEAD : TOKEN_GAS_OVERHEAD
+        );
+        if (fee == 0 || !_tryPay(token, payout, rewardAddress, fee)) return value;
+        return value - fee;
     }
 
     function _startingGas() private view returns (uint256 stored) {
@@ -358,10 +306,6 @@ contract DeliveryRouter is ReentrancyGuard {
             firstWord := mload(add(data, 32))
         }
         return firstWord >> 160 != 0;
-    }
-
-    function _isGasBased(uint256 settings) private pure returns (bool) {
-        return settings & (FIXED_FEE | MULTIPLIER_OF_TOTAL) == 0;
     }
 
     /// @dev The fee, never above the value. Fixed: `limit`. Share: `value * multiplier / 1e18`. Otherwise gas based:
