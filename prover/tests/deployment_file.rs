@@ -12,11 +12,10 @@ use zk_bridge_prover::deployment::SECTION_KEYS;
 use zk_bridge_prover::error::Result;
 
 /// The fields of `deploymentChainSchema`: required addresses, optional addresses, numbers and the optional string.
-const REQUIRED_ADDRESSES: [&str; 7] = [
+const REQUIRED_ADDRESSES: [&str; 6] = [
     "bridge",
     "mediator",
     "token_factory",
-    "native_router",
     "wrapped_native",
     "gate",
     "light_client",
@@ -150,7 +149,7 @@ fn a_file_from_flags_passes_the_explorer_rules() {
     check_like_the_explorer(&file, 11155111);
     check_like_the_explorer(&file, 943);
     assert_eq!(file["chain_a"]["bridge"], address(0x10));
-    assert_eq!(file["chain_b"]["light_client"], address(0x46));
+    assert_eq!(file["chain_b"]["light_client"], address(0x45));
     assert_eq!(file["chain_b"]["start_block"], 0x40 * 100);
     for section in ["chain_a", "chain_b"] {
         assert!(
@@ -237,7 +236,7 @@ fn wrong_values_are_refused_and_no_file_appears() {
         ),
         (
             with("native_router=0x0000000000000000000000000000000000000000"),
-            "both zero",
+            "unknown key `native_router`",
         ),
     ];
     for (a, expected) in cases {
@@ -253,7 +252,7 @@ fn wrong_values_are_refused_and_no_file_appears() {
     }
 }
 
-/// Claim: a chain without a wrapped native token may give both native fields as zero, and the file still passes the explorer
+/// Claim: a chain without a wrapped native token may give the wrapped native token as zero, and the file still passes the explorer
 /// rules, which need the fields to be present. An RPC URL without path or query is written when the user gives it.
 #[test]
 fn a_chain_without_wrapped_native_and_a_plain_rpc_url_are_accepted() {
@@ -261,7 +260,6 @@ fn a_chain_without_wrapped_native_and_a_plain_rpc_url_are_accepted() {
     let output = scratch.path("deployment.json");
     let zero = address(0);
     let mut a = pairs(11155111, 0x10);
-    a.push(format!("native_router={zero}"));
     a.push(format!("wrapped_native={zero}"));
     a.push("rpc_url=https://node.example".into());
     a.push(format!("delivery_router={zero}"));
@@ -272,7 +270,8 @@ fn a_chain_without_wrapped_native_and_a_plain_rpc_url_are_accepted() {
     );
     let file = read(&output);
     check_like_the_explorer(&file, 11155111);
-    assert_eq!(file["chain_a"]["native_router"], zero);
+    assert_eq!(file["chain_a"]["wrapped_native"], zero);
+    assert!(file["chain_a"].get("native_router").is_none());
     assert_eq!(file["chain_a"]["rpc_url"], "https://node.example");
     assert!(
         file["chain_a"].get("delivery_router").is_none(),
@@ -336,9 +335,14 @@ fn deployment(chain: u64, blocks: [&str; 3], with_observed_light_client: bool) -
             vec!["0x3b02ff1e626ed7a8fd6ec5299e2c54e1421b626b"],
         ),
         transaction(
-            "WETHOmnibridgeRouter",
+            "DeliveryRouter",
             "0xa513e6e4b8f2a923d98304ec87f64353c4d5c853",
-            json!([mediator, "0x5FbDB2315678afecb367f032d93F642f64180aa3"]),
+            json!([
+                mediator,
+                "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+                "0x01",
+                "0x02"
+            ]),
             vec![],
         ),
     ]);
@@ -350,7 +354,7 @@ fn deployment(chain: u64, blocks: [&str; 3], with_observed_light_client: bool) -
 }
 
 /// Claim: the names come from the `contractName` fields. The factory is the first contract of the mediator, the wrapped
-/// token is the second argument of the router, the start block is the block before the first transaction, and the first
+/// token is the second argument of the `DeliveryRouter`, the start block is the block before the first transaction, and the first
 /// `BeaconLightClient` is the light client when a second one (the own-chain light client) follows. A flag overrides the file.
 /// Why it matters: the explorer indexes from `start_block`, and a wrong contract address indexes the wrong events.
 #[test]
@@ -385,9 +389,10 @@ fn a_broadcast_file_gives_the_addresses_by_contract_name() {
         "0x3b02ff1e626ed7a8fd6ec5299e2c54e1421b626b"
     );
     assert_eq!(
-        a["native_router"],
+        a["delivery_router"],
         "0xa513e6e4b8f2a923d98304ec87f64353c4d5c853"
     );
+    assert!(a.get("native_router").is_none());
     assert_eq!(
         a["wrapped_native"],
         "0x5fbdb2315678afecb367f032d93f642f64180aa3"
@@ -409,8 +414,6 @@ fn a_broadcast_file_gives_the_addresses_by_contract_name() {
         "the flag adds it"
     );
     assert_eq!(b["start_block"], 19);
-    assert!(a.get("delivery_router").is_none());
-
     // A chain identifier in the flags picks the deployment of that chain, whatever the order of the file.
     let swapped = scratch.path("swapped.json");
     let mut again = arguments(

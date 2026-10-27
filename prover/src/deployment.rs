@@ -16,13 +16,12 @@ use std::path::Path;
 use std::str::FromStr;
 
 /// The keys that a chain section holds, in the order of the file. A test compares them with the TypeScript schema.
-pub const SECTION_KEYS: [&str; 12] = [
+pub const SECTION_KEYS: [&str; 11] = [
     "chain_id",
     "rpc_url",
     "bridge",
     "mediator",
     "token_factory",
-    "native_router",
     "wrapped_native",
     "gate",
     "light_client",
@@ -47,9 +46,7 @@ pub struct SectionDraft {
     pub mediator: Option<Address>,
     /// The `TokenFactory`, which the mediator creates.
     pub token_factory: Option<Address>,
-    /// The `WETHOmnibridgeRouter`.
-    pub native_router: Option<Address>,
-    /// The wrapped native token of the router.
+    /// The wrapped native token of the `DeliveryRouter`.
     pub wrapped_native: Option<Address>,
     /// The `BeaconForkGate`.
     pub gate: Option<Address>,
@@ -76,9 +73,7 @@ pub struct ChainSection {
     pub mediator: Address,
     /// The `TokenFactory`. It is not zero.
     pub token_factory: Address,
-    /// The router of the native coin. Zero, together with `wrapped_native`, on a chain that has none.
-    pub native_router: Address,
-    /// The wrapped native token. Zero, together with `native_router`, on a chain that has none.
+    /// The wrapped native token. Zero on a chain that has none.
     pub wrapped_native: Address,
     /// The `BeaconForkGate`. It is not zero.
     pub gate: Address,
@@ -153,7 +148,6 @@ impl SectionDraft {
                 "bridge" => self.bridge = Some(address()?),
                 "mediator" => self.mediator = Some(address()?),
                 "token_factory" => self.token_factory = Some(address()?),
-                "native_router" => self.native_router = Some(address()?),
                 "wrapped_native" => self.wrapped_native = Some(address()?),
                 "gate" => self.gate = Some(address()?),
                 "light_client" => self.light_client = Some(address()?),
@@ -185,15 +179,9 @@ impl SectionDraft {
             }
             Ok(address)
         };
-        let native_router = self.native_router.ok_or_else(|| missing("native_router"))?;
         let wrapped_native = self
             .wrapped_native
             .ok_or_else(|| missing("wrapped_native"))?;
-        if (native_router == Address::ZERO) != (wrapped_native == Address::ZERO) {
-            return Err(usage(format!(
-                "{section}: native_router and wrapped_native are both zero (a chain without a wrapped native token) or both set"
-            )));
-        }
         let chain_id = self.chain_id.ok_or_else(|| missing("chain_id"))?;
         if chain_id == 0 {
             return Err(usage(format!("{section}: chain_id is zero")));
@@ -204,7 +192,6 @@ impl SectionDraft {
             bridge: required(self.bridge, "bridge")?,
             mediator: required(self.mediator, "mediator")?,
             token_factory: required(self.token_factory, "token_factory")?,
-            native_router,
             wrapped_native,
             gate: required(self.gate, "gate")?,
             light_client: required(self.light_client, "light_client")?,
@@ -266,7 +253,7 @@ fn draft_of_deployment(deployment: &Value) -> Result<SectionDraft> {
     // The mediator creates its factory in its constructor, as its first contract: the address follows from the
     // mediator address and the creation nonce 1.
     let token_factory = mediator.map(|address| address.create(1));
-    let router = named("WETHOmnibridgeRouter");
+    let router = named("DeliveryRouter");
     let wrapped_native = match router.as_slice() {
         [only] => only["arguments"][1]
             .as_str()
@@ -286,7 +273,6 @@ fn draft_of_deployment(deployment: &Value) -> Result<SectionDraft> {
         bridge: single("MessageBridge")?,
         mediator,
         token_factory,
-        native_router: single("WETHOmnibridgeRouter")?,
         wrapped_native,
         gate: single("BeaconForkGate")?,
         light_client,
@@ -338,7 +324,6 @@ fn section_from(
         bridge: flags.bridge.or(base.bridge),
         mediator: flags.mediator.or(base.mediator),
         token_factory: flags.token_factory.or(base.token_factory),
-        native_router: flags.native_router.or(base.native_router),
         wrapped_native: flags.wrapped_native.or(base.wrapped_native),
         gate: flags.gate.or(base.gate),
         light_client: flags.light_client.or(base.light_client),
@@ -388,7 +373,6 @@ impl ChainSection {
             ("bridge", self.bridge),
             ("mediator", self.mediator),
             ("token_factory", self.token_factory),
-            ("native_router", self.native_router),
             ("wrapped_native", self.wrapped_native),
             ("gate", self.gate),
             ("light_client", self.light_client),

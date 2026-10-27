@@ -113,7 +113,7 @@ pub struct DeploymentFileArguments {
     #[arg(long)]
     pub broadcast: Vec<PathBuf>,
     /// A `key=value` pair for the section `chain_a`. Repeat it. Keys: chain_id, rpc_url, bridge, mediator, token_factory,
-    /// native_router, wrapped_native, gate, light_client, delivery_router, fork_registry, start_block.
+    /// wrapped_native, gate, light_client, delivery_router, fork_registry, start_block.
     #[arg(long)]
     pub chain_a: Vec<String>,
     /// A `key=value` pair for the section `chain_b`. The keys are those of `--chain-a`.

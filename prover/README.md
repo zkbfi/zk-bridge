@@ -273,10 +273,10 @@ zk-bridge-prover deployment-file --output deployment.json \
 zk-bridge-prover deployment-file --output deployment.json --chain-a chain_id=11155111 --chain-a bridge=0x... --chain-b chain_id=943 ...
 ```
 
-- The sections are `chain_a` and `chain_b`. Each has `chain_id`, `bridge`, `mediator`, `token_factory`, `native_router`, `wrapped_native`, `gate`, `light_client`, `start_block`, and `delivery_router` and `fork_registry` when the chain has them.
-- A broadcast file gives the names from its `contractName` fields. The factory is the first contract of the mediator. The wrapped native token is the second argument of the router. `start_block` is the block before the first deployment transaction. The first `BeaconLightClient` is the light client. A name that occurs twice stops the command.
+- The sections are `chain_a` and `chain_b`. Each has `chain_id`, `bridge`, `mediator`, `token_factory`, `wrapped_native`, `gate`, `light_client`, `start_block`, and `delivery_router` and `fork_registry` when the chain has them.
+- A broadcast file gives the names from its `contractName` fields. The factory is the first contract of the mediator. The wrapped native token is the second argument of the `DeliveryRouter`. `start_block` is the block before the first deployment transaction. The first `BeaconLightClient` is the light client. A name that occurs twice stops the command.
 - A `--chain-a key=value` pair overrides the file. A pair with `chain_id` picks the deployment of that chain from the files. Without it, the section takes the deployment at its position.
-- Every address has 20 bytes and the `0x` prefix. The required addresses are not zero. `native_router` and `wrapped_native` are both zero for a chain without a wrapped native token.
+- Every address has 20 bytes and the `0x` prefix. The required addresses are not zero. `wrapped_native` is zero for a chain without a wrapped native token.
 - The file has no `rpc_url` unless you pass one. The command refuses a URL with a path, a query or user information, because those parts hold keys. Set `EXPLORER_RPC_URL_<chain id>` for the explorer instead.
 - The file has mode 0600. The command refuses to replace a file unless you pass `--force`.
 
