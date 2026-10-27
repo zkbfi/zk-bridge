@@ -38,7 +38,11 @@ import {TokenReader} from "./TokenReader.sol";
 /// that reverts loses the tokens for good. So a handler does not revert on a token or a limiter that refuses a
 /// payee. It tries the recipient, then the fallback address of the message, and then records the amount in
 /// `claimable[token][fallback]` for `claim`. A flow limiter that refuses a release records the amount for the
-/// recipient, and `claim` asks the limiter again.
+/// recipient, and `claim` asks the limiter again. A transfer attempt gets the gas that is left, less
+/// `TRANSFER_GAS_RESERVE`, so a token that burns all its gas still leaves enough for the claim record.
+///
+/// Gas. The sender chooses the gas limit of a message: the larger of the request and the default of the message kind.
+/// The default of a first message grows with the length of the name and the symbol of the token.
 ///
 /// Divergences from OmniBridge. The handlers also check `messageSourceChainId`. `deploy` takes the native token.
 /// Tokens are not registered by an owner. There are no limits, no failed message fix and no claim of stray tokens.
