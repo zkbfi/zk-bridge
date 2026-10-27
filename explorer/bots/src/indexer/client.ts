@@ -19,7 +19,15 @@ export const feedItemSchema = z
     gasLimit: z.number().int().nonnegative(),
     sent: z.object({ transactionHash: hexSchema, blockNumber: z.number().int(), timestamp: z.number().int() }).passthrough().nullable(),
     transfer: z
-      .object({ sourceToken: tokenSchema, destinationToken: tokenSchema, recipient: addressSchema, value: z.string().regex(/^\d+$/) })
+      .object({
+        sourceToken: tokenSchema,
+        // Null until the delivery registers the token: the indexer cannot name a copy that no message has created yet.
+        destinationToken: tokenSchema.nullable(),
+        recipient: addressSchema,
+        value: z.string().regex(/^\d+$/),
+        // True when the send locks a native token. The copy on the other chain is then the destination token.
+        sourceIsNative: z.boolean().nullable().optional(),
+      })
       .passthrough()
       .nullable(),
   })

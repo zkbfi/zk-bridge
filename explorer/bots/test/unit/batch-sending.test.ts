@@ -83,6 +83,7 @@ function setup(options: { deliveryRouter?: DeliveryDependencies["deliveryRouter"
     multicall: options.multicall === undefined ? MULTICALL : options.multicall,
     rewardAddress: options.rewardAddress === undefined ? REWARD_ADDRESS : options.rewardAddress,
     wrappedNative: WRAPPED_NATIVE,
+    tokenFactory: null,
     settings: {
       minimumMarginWei: 0n,
       deliverWithoutOffer: false,

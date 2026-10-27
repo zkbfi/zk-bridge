@@ -1,5 +1,5 @@
 import { encodeFunctionData, type Hex } from "viem";
-import { messageBridgeAbi } from "@zk-bridge/shared";
+import { messageBridgeAbi, tokenFactoryAbi } from "@zk-bridge/shared";
 import { describe, expect, it } from "vitest";
 import type { FeedItem } from "../../src/indexer/client.ts";
 import { prepareItem, type DeliveryDependencies } from "../../src/runner/delivery.ts";
@@ -19,6 +19,8 @@ interface SetupOptions {
   readonly maximumPrerequisiteRounds?: number;
   /** The index of the message in the source transaction: null when the source reader finds none. */
   readonly logIndex?: number | null;
+  /** The token factory of the destination chain. Default: unknown. */
+  readonly tokenFactory?: `0x${string}` | null;
 }
 
 /** One item with a fee offer that pays twice its cost, on a fake chain, with a ledger over an in-memory budget. */
@@ -39,6 +41,7 @@ function setup(options: SetupOptions = {}) {
     multicall: MULTICALL,
     rewardAddress: REWARD_ADDRESS,
     wrappedNative: WRAPPED_NATIVE,
+    tokenFactory: options.tokenFactory ?? null,
     settings: {
       minimumMarginWei: 0n,
       deliverWithoutOffer: options.deliverWithoutOffer ?? false,
@@ -247,5 +250,84 @@ describe("the delivery of an item that has no fee offer", () => {
       prerequisiteCostWei: CALL_COST_WEI,
     });
     expect(w.budget.current.prerequisiteLosses).toEqual([{ atMilliseconds: NOW, wei: CALL_COST_WEI.toString() }]);
+  });
+});
+
+describe("the destination token of a first transfer", () => {
+  const FACTORY = address(0x66);
+  const SOURCE_TOKEN = address(0x55);
+  /** The feed item of a send that locks a native token: no copy exists yet, so the indexer names no destination token. */
+  const firstTransfer = (overrides: { sourceIsNative?: boolean | null } = {}): FeedItem => {
+    const listed = feedItem({ id: 1 });
+    return { ...listed, transfer: { ...listed.transfer!, destinationToken: null, sourceIsNative: overrides.sourceIsNative === undefined ? true : overrides.sourceIsNative } };
+  };
+
+  it("asks the token factory of the destination chain for the copy and prices the tip in it", async () => {
+    // The factory predicts the copy. The fee check needs it: the router quotes the tip in the destination token.
+    const w = setup({ item: firstTransfer(), tokenFactory: FACTORY });
+    w.chain.predictedCopy = WRAPPED_NATIVE;
+    const preparation = await w.prepare();
+    if (preparation.kind !== "ready") throw new Error("the item was expected to be ready for a batch");
+    expect(preparation.ready.item.transfer?.destinationToken).toEqual({ chainId: 369, address: WRAPPED_NATIVE, symbol: "zkbSRC", decimals: 18 });
+    const asked = w.chain.log.find((entry) => entry.kind === "call" && entry.request.to === FACTORY);
+    expect(asked?.request.data).toBe(encodeFunctionData({ abi: tokenFactoryAbi, functionName: "predictAddress", args: [1n, SOURCE_TOKEN] }));
+  });
+
+  it("gives the copy the decimals of the token that it copies", async () => {
+    const listed = firstTransfer();
+    const w = setup({ item: { ...listed, transfer: { ...listed.transfer!, sourceToken: { ...listed.transfer!.sourceToken, decimals: 6 } } }, tokenFactory: FACTORY });
+    w.chain.predictedCopy = WRAPPED_NATIVE;
+    const preparation = await w.prepare();
+    if (preparation.kind !== "ready") throw new Error("the item was expected to be ready for a batch");
+    expect(preparation.ready.item.transfer?.destinationToken?.decimals).toBe(6);
+  });
+
+  it("cannot price the tip when the deployment names no token factory", async () => {
+    const w = setup({ item: firstTransfer() });
+    expect(await outcomeOf(w.prepare)).toEqual({ status: "skipped", messageId: word(1), reason: "no-price-for-fee-token" });
+    expect(w.chain.log.filter((entry) => entry.kind === "call")).toEqual([]);
+  });
+
+  it("does not ask the factory about a send that burns a copy, because the indexer names its native token", async () => {
+    const w = setup({ item: firstTransfer({ sourceIsNative: false }), tokenFactory: FACTORY });
+    expect(await outcomeOf(w.prepare)).toEqual({ status: "skipped", messageId: word(1), reason: "no-price-for-fee-token" });
+    expect(w.chain.log.filter((entry) => entry.kind === "call")).toEqual([]);
+  });
+
+  it("does not guess when the indexer says nothing about the source token", async () => {
+    const w = setup({ item: firstTransfer({ sourceIsNative: null }), tokenFactory: FACTORY });
+    expect(await outcomeOf(w.prepare)).toEqual({ status: "skipped", messageId: word(1), reason: "no-price-for-fee-token" });
+  });
+});
+
+describe("alternative layout calls", () => {
+  // The prover lists every call that could add the row until a row covers the slot. The call at the older stored header
+  // adds a row that may not cover the source slot, and then it stays on the list. The live prover did exactly that.
+  const first = { ...layoutCall, data: "0xaaaa0001" as Hex };
+  const second = { ...layoutCall, data: "0xbbbb0002" as Hex };
+
+  it("sends the second alternative after the first one left the slot uncovered, and does not send the first again", async () => {
+    const w = setup({ maximumPrerequisiteRounds: 4 });
+    w.chain.feeTokens = CALL_COST_WEI * 5n;
+    const sentData = () => w.chain.log.filter((entry) => entry.kind === "send").map((entry) => entry.request.data);
+    // The slot is covered only after both calls are mined.
+    w.prover.evidence = async () => evidenceFor({ prerequisites: sentData().length >= 2 ? [] : [first, second] });
+    const preparation = await w.prepare();
+    expect(preparation).toMatchObject({ kind: "ready", ready: { prerequisiteCostWei: CALL_COST_WEI * 2n } });
+    expect(sentData()).toEqual(["0xaaaa0001", "0xbbbb0002"]);
+  });
+
+  it("stops with a loss when every listed call was sent and the list stays", async () => {
+    const w = setup({ maximumPrerequisiteRounds: 4 });
+    w.chain.feeTokens = CALL_COST_WEI * 5n;
+    w.prover.evidence = async () => evidenceFor({ prerequisites: [first, second] });
+    expect(await outcomeOf(w.prepare)).toEqual({
+      status: "skipped",
+      messageId: word(1),
+      reason: "prerequisites-not-satisfied",
+      detail: "2 calls remain and each was sent already",
+      prerequisiteCostWei: CALL_COST_WEI * 2n,
+    });
+    expect(w.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(2);
   });
 });

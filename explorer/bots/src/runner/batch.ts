@@ -378,7 +378,7 @@ function readReceipt(dependencies: DeliveryDependencies, readies: readonly Ready
   readies
     .filter((ready) => executed.has(ready.messageId))
     .forEach((ready, order) => {
-      const token = ready.item.transfer?.destinationToken.address as Address | undefined;
+      const token = ready.item.transfer?.destinationToken?.address as Address | undefined;
       const segment = segments[order];
       if (token !== undefined && segment !== undefined) tokensByMessage.set(ready.messageId, tokensReceived(segment, token, reward));
     });

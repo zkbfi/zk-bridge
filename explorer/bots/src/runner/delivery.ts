@@ -1,5 +1,5 @@
 import { decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeFunctionData, erc20Abi, type Address, type ContractFunctionArgs, type Hex } from "viem";
-import { deliveryRouterAbi, messageBridgeAbi, type PayoutKind, type ProofDirection } from "@zk-bridge/shared";
+import { deliveryRouterAbi, messageBridgeAbi, tokenFactoryAbi, type PayoutKind, type ProofDirection } from "@zk-bridge/shared";
 import { sendTerms, worstCaseCostWei, type FeeQuote, type ReceiptLog, type TransactionPort } from "../chain/transactions.ts";
 import type { FeedItem, IndexerClient } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
@@ -46,6 +46,8 @@ export interface DeliveryDependencies {
   /** The address that receives the tips, read from the router at start up. It serves the accounting and the log. Not null whenever `deliveryRouter` is not null. */
   readonly rewardAddress: Address | null;
   readonly wrappedNative: Address;
+  /** The token factory of the destination chain. It names the copy that a first transfer of a native token deploys. Null when unknown. */
+  readonly tokenFactory: Address | null;
   readonly settings: DeliverySettings;
   readonly logger: Logger;
 }
@@ -136,6 +138,26 @@ export function singleCallData(proof: MessageProof): Hex {
   return encodeFunctionData({ abi: deliveryRouterAbi, functionName: "executeMessage", args: [proof] });
 }
 
+/**
+ * Names the destination token of a transfer that locks a native token and has none yet. The indexer learns the copy only
+ * when a delivery registers it, so before the first transfer of a token its feed shows null. The runner needs the token to
+ * price the tip, so it asks the token factory of the destination chain for the address that the copy gets (the factory
+ * predicts it, and the copy has the decimals of its home token). A transfer that burns a copy has its native token named
+ * already, and an item with no factory known stays as it is: the fee check then skips it with a reason.
+ */
+export async function withDestinationToken(dependencies: DeliveryDependencies, item: FeedItem): Promise<FeedItem> {
+  const { transfer } = item;
+  if (transfer === null || transfer.destinationToken !== null) return item;
+  if (dependencies.tokenFactory === null || transfer.sourceIsNative !== true) return item;
+  const answer = await dependencies.chain.call({
+    to: dependencies.tokenFactory,
+    data: encodeFunctionData({ abi: tokenFactoryAbi, functionName: "predictAddress", args: [BigInt(item.direction.sourceChainId), transfer.sourceToken.address as Address] }),
+  });
+  const address = decodeFunctionResult({ abi: tokenFactoryAbi, functionName: "predictAddress", data: answer });
+  const destinationToken = { chainId: item.direction.destinationChainId, address, symbol: `zkb${transfer.sourceToken.symbol}`, decimals: transfer.sourceToken.decimals };
+  return { ...item, transfer: { ...transfer, destinationToken } };
+}
+
 /** The fee that the router would pay to its reward address for this gas, measured in wei. `payout` tells how the router pays it. */
 export async function quoteFee(
   dependencies: DeliveryDependencies,
@@ -144,7 +166,7 @@ export async function quoteFee(
   gasUnits: bigint,
 ): Promise<{ readonly ok: true; readonly feeWei: bigint; readonly feeTokens: bigint; readonly payout: PayoutKind } | { readonly ok: false; readonly reason: "no-price-for-fee-token" }> {
   const token = item.transfer?.destinationToken;
-  if (token === undefined) return { ok: false, reason: "no-price-for-fee-token" };
+  if (token === undefined || token === null) return { ok: false, reason: "no-price-for-fee-token" };
   const { director } = offer;
   const data = encodeFunctionData({
     abi: deliveryRouterAbi,
@@ -252,9 +274,14 @@ async function satisfyPrerequisites(
   let evidence = first;
   let costWei = 0n;
   const unsent = [...approved];
+  const sent: Prerequisite[] = [];
   for (let round = 0; round < dependencies.settings.maximumPrerequisiteRounds; round += 1) {
-    const next: Prerequisite | undefined = evidence.prerequisites[0];
-    if (next === undefined) return { ok: true, evidence, costWei };
+    if (evidence.prerequisites.length === 0) return { ok: true, evidence, costWei };
+    // The calls of one function are alternatives, and the prover lists every one that could add the row until a row covers
+    // the slot. A call that was sent and did not cover it stays on the list, so the next call to send is the first listed
+    // one that has not been sent. A list of sent calls only means that none of them was enough.
+    const next: Prerequisite | undefined = evidence.prerequisites.find((candidate) => !sent.some((done) => sameCall(done, candidate)));
+    if (next === undefined) return { ok: false, costWei, outcome: skip(request.messageId, "prerequisites-not-satisfied", { detail: `${evidence.prerequisites.length} calls remain and each was sent already` }) };
     const call = { to: next.to as Address, data: next.data as Hex };
     const approvedIndex = unsent.findIndex((entry) => sameCall(entry, call));
     const approval = unsent[approvedIndex];
@@ -272,6 +299,7 @@ async function satisfyPrerequisites(
     const callCostWei = receipt.gasUsed * receipt.effectiveGasPrice;
     await ledger.settle(reserved.reservation, callCostWei);
     costWei += callCostWei;
+    sent.push(next);
     if (!receipt.success) return { ok: false, costWei, outcome: skip(request.messageId, "prerequisite-failed", { detail: `${next.function} in ${receipt.hash}` }) };
     dependencies.logger.info("prerequisite_sent", { messageId: request.messageId, function: next.function, transactionHash: receipt.hash, gasUsed: receipt.gasUsed });
     evidence = await dependencies.prover.evidence({ direction: dependencies.direction, transactionHash: request.transactionHash, logIndex: request.logIndex });
@@ -365,7 +393,8 @@ export type Preparation = { readonly kind: "outcome"; readonly outcome: Delivery
  * straight to the bridge here, with its own simulation. Wei spent on layout calls is lost when the item is then not
  * delivered: the skip carries the amount and the runner does not retry the item soon.
  */
-export async function prepareItem(dependencies: DeliveryDependencies, item: FeedItem, ledger: PrerequisiteLedger): Promise<Preparation> {
+export async function prepareItem(dependencies: DeliveryDependencies, listed: FeedItem, ledger: PrerequisiteLedger): Promise<Preparation> {
+  const item = await withDestinationToken(dependencies, listed);
   const messageId = item.messageId as Hex;
   const { settings, chain } = dependencies;
   const done = (outcome: DeliveryOutcome): Preparation => ({ kind: "outcome", outcome });

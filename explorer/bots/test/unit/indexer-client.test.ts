@@ -37,6 +37,32 @@ describe("listFeed", () => {
   });
 });
 
+describe("a send that no delivery has registered yet", () => {
+  // The shape that the live indexer answered for the first transfer of a native token (captured in the end-to-end run).
+  // The copy does not exist before the delivery, so the indexer names no destination token.
+  const firstTransfer = {
+    ...feedItem({ id: 4 }),
+    transfer: {
+      sourceToken: { chainId: 1, address: "0x9fe46736679d2d9a65f0992f2272de9f3c7fa6e0", symbol: "TKNA", name: "Token A", decimals: 18, metadataRead: true, isBridgedCopy: false, homeChainId: 1 },
+      destinationToken: null,
+      recipient: "0x84ea74d481ee0a5332c457a4d796187f6ba67feb",
+      value: "100000000000000000000",
+      handler: "deployAndHandleBridgedTokensAndCallWithFallback",
+      deploysCopy: true,
+      sourceIsNative: true,
+    },
+  };
+
+  it("accepts a feed page whose transfer has no destination token, and keeps that fact", async () => {
+    // A strict schema rejected the whole page here, so the runner delivered nothing while such a send waited.
+    const client = createIndexerClient({ baseUrl: "http://x", fetch: async () => jsonResponse({ items: [feedItem({ id: 5 }), firstTransfer], nextCursor: null }) });
+    const page = await client.listFeed({ sourceChainId: 1, destinationChainId: 369, statuses: ["covered"], limit: 10 });
+    expect(page.items).toHaveLength(2);
+    expect(page.items[1]?.transfer?.destinationToken).toBeNull();
+    expect(page.items[1]?.transfer?.sourceIsNative).toBe(true);
+  });
+});
+
 describe("getMessage", () => {
   it("returns the item with the call data of its message", async () => {
     const fetch = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) => jsonResponse({ ...feedItem(), data: "0xdeadbeef" }));

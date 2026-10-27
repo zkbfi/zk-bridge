@@ -138,6 +138,7 @@ function world(options: WorldOptions = {}) {
     multicall: MULTICALL,
     rewardAddress: REWARD_ADDRESS,
     wrappedNative: WRAPPED_NATIVE,
+    tokenFactory: null,
     settings: {
       minimumMarginWei: options.margin ?? 0n,
       deliverWithoutOffer: options.deliverWithoutOffer ?? false,
