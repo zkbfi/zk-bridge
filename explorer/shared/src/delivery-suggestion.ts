@@ -10,7 +10,7 @@ import {
   type DeliveryCostBreakdown,
   type SenderPrice,
 } from "./delivery-fee.js";
-import { expectedFee, feeModeOf, maximumFee, type FeeDirector, type FeeMode, type PayoutKind } from "./delivery-terms.js";
+import { expectedFee, feeModeOf, maximumFee, type BaseFeeSupport, type FeeDirector, type FeeMode, type GasPriceBasis, type PayoutKind } from "./delivery-terms.js";
 import { formatRate, formatTokenAmount, RATE_SCALE } from "./format.js";
 
 /**
@@ -99,7 +99,7 @@ const formulaOf = (director: FeeDirector): string => {
   const mode = feeModeOf(director.settings);
   if (mode === "fixed") return "a fixed amount";
   if (mode === "share") return `${formatRate(director.multiplier)} percent of the transfer`;
-  return `the gas used times the gas price, at ${formatTokenAmount(director.multiplier, 18)} token units for each wei (your price and margin), never above the limit`;
+  return `the gas that the deliverer's transaction makes available times the gas price, at ${formatTokenAmount(director.multiplier, 18)} token units for each wei (your price and margin), never above the limit. Expect the tip to reach the limit`;
 };
 
 const breakdownOf = (cost: DeliveryCostBreakdown | null, feeWei: bigint, note: string): readonly CostLine[] => {
@@ -196,8 +196,13 @@ export interface BuildFeeSuggestionsInput {
   readonly priorityFeeWei: bigint;
   /** The profit on top of the cost, scaled by 1e18. Default: 10 percent. */
   readonly marginRate?: bigint;
-  /** The factor on the gas cost for the gas multiplier mode, scaled by 1e18. Default: 1.2. */
+  /** The factor on the gas cost for the gas multiplier mode, scaled by 1e18. Default: {@link DEFAULT_GAS_MARGIN}, 2 (a margin of 100 percent). */
   readonly gasMargin?: bigint;
+  /**
+   * Which gas price the gas based tip reads. Default: `base-fee-only`. Use {@link gasPriceBasisFor} to follow a chain that
+   * reports no base fee: there the router reads the whole gas price.
+   */
+  readonly gasPrice?: GasPriceBasis;
   /**
    * The sender's own price of one wei of the destination native coin, in base units of the token. The gas multiplier mode
    * folds it into the multiplier at send time, so it works for any token. Default: the valuation of the token.
@@ -219,7 +224,18 @@ export interface FeeSuggestions {
 }
 
 const DEFAULT_MARGIN_RATE = RATE_SCALE / 10n;
-const DEFAULT_GAS_MARGIN = (RATE_SCALE * 12n) / 10n;
+
+/** The default factor on the gas cost of the gas based tip: 2, which is a margin of 100 percent, scaled by 1e18. */
+export const DEFAULT_GAS_MARGIN = RATE_SCALE * 2n;
+
+/**
+ * The gas price basis that the default gas based tip uses on a destination chain. A chain that reports a base fee gets
+ * `base-fee-only` (the router flag `EXCLUDE_PRIORITY`). A chain with no base fee (`block.basefee` is 0) gets
+ * `transaction`, the whole gas price, because the base fee flag would make the tip zero.
+ *
+ * @param support Whether the destination chain reports a base fee. Default: `reported`.
+ */
+export const gasPriceBasisFor = (support: BaseFeeSupport | undefined): GasPriceBasis => (support === "none" ? "transaction" : "base-fee-only");
 
 const tryOption = (mode: FeeMode, build: () => FeeDirector, describe: (director: FeeDirector) => FeeDescription): FeeOption => {
   try {
@@ -234,7 +250,9 @@ const tryOption = (mode: FeeMode, build: () => FeeDirector, describe: (director:
 /**
  * Builds the three suggestions of the "Pay for delivery" form from the report of the indexer. The percentage and the
  * fixed fee cover the gas cost plus the proof cost plus the margin, and are exact. The gas multiplier covers the gas
- * only, follows the base fee up to the ceiling, and is an estimate with a maximum. It works for any token: the sender's
+ * only, follows the base fee up to the ceiling, and is an estimate with a maximum. The router measures the gas that
+ * the deliverer's transaction makes available, and the deliverer chooses the gas limit of that transaction, so the
+ * sender should expect a gas based tip to reach the limit: the limit is the price ceiling. It works for any token: the sender's
  * price of the native coin is folded into the multiplier. When the indexer records more
  * deliveries, the gas figure and the suggestions follow with no code change.
  *
@@ -279,6 +297,7 @@ export const buildFeeSuggestions = (input: BuildFeeSuggestionsInput): FeeSuggest
           baseFeeCeilingWei: input.baseFeeCeilingWei ?? dataSource.baseFeeWei * 2n,
           priorityFeeCeilingWei: input.priorityFeeWei,
           deliveryGas: dataSource.gas,
+          gasPrice: input.gasPrice ?? "base-fee-only",
           ...(input.payout === undefined ? {} : { payout: input.payout }),
         });
       },

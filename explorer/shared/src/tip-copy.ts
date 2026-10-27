@@ -8,7 +8,7 @@ import type { FeeMode } from "./delivery-terms.js";
 export const TIP_MODE_NAMES: Readonly<Record<FeeMode, string>> = {
   share: "percentage of the transfer",
   fixed: "fixed amount",
-  gas: "gas multiplier",
+  gas: "gas based, up to the limit",
 };
 
 /** How the words name the router that the tip terms are written for. */
@@ -25,3 +25,14 @@ export const routerInWords = (router: string, defaultRouter: string): string => 
   const address = getAddress(router);
   return address === getAddress(defaultRouter) ? `${address} (${DELIVERY_ROUTER_NAME})` : `${address} (not ${DELIVERY_ROUTER_NAME})`;
 };
+
+/** The short name of the gas based mode, for a label column of 14 characters. */
+export const GAS_MODE_SHORT_LABEL = "Gas, to limit";
+
+/**
+ * What the gas based mode means, for the help line. The router computes the tip from the gas that the deliverer's
+ * transaction makes available. The deliverer chooses the gas limit of that transaction, and the bridge forwards only the
+ * message gas limit, so gas held back above it counts. The sender should expect the tip to reach the limit.
+ */
+export const GAS_MODE_HELP =
+  "Up to the limit; the deliverer's gas choice decides. The tip follows the gas that the deliverer's transaction makes available, so expect it to reach the limit. The limit is the price ceiling.";

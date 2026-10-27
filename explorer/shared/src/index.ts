@@ -11,6 +11,7 @@ export * from "./delivery-fee.js";
 export * from "./delivery-terms.js";
 export * from "./delivery-cost-report.js";
 export * from "./delivery-suggestion.js";
+export * from "./default-tip.js";
 export * from "./multicall3.js";
 export * from "./tip-copy.js";
 export * from "./message-merge.js";

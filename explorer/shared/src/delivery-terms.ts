@@ -9,6 +9,11 @@ import { RATE_SCALE } from "./format.js";
  * (`contracts/helpers/TokenOmnibridgeBase.sol`). The terminal, the web page and the bots import from here and never read
  * or write a settings bit, a word of the data or a fee formula themselves.
  *
+ * A gas based tip is computed from the gas that the deliverer's transaction makes available (`startingGas` at router entry
+ * minus `gasleft()` in the callback, plus a fixed overhead). The deliverer chooses the gas limit of the transaction. The
+ * bridge forwards only the message gas limit, so gas that the deliverer holds back above it counts. A sender must expect
+ * the tip to reach `limit`, and `limit` is the price ceiling.
+ *
  * The test `test/delivery-terms.test.ts` checks the constants, the encoding and the fee against vectors that the compiled
  * router printed (`vectors/GenerateDeliveryFeeVectors.s.sol`), so the two sides cannot drift.
  *
@@ -57,7 +62,12 @@ export interface FeeDirector {
   readonly recipient: Address;
   /** Flag bits: see {@link SETTING_FLAG_VALUES}. */
   readonly settings: bigint;
-  /** The fixed tip, or the cap on the gas based tip. In base units of the transferred token. */
+  /**
+   * The fixed tip, or the price ceiling of the gas based tip, in base units of the transferred token. A gas based tip is
+   * computed from the gas that the deliverer's transaction makes available. The deliverer chooses the gas limit of that
+   * transaction, and the bridge forwards only the message gas limit, so gas held back above it counts. Expect the tip to
+   * reach `limit`.
+   */
   readonly limit: bigint;
   /** Scaled by 1e18: the share of the value, or the factor on the gas cost. */
   readonly multiplier: bigint;

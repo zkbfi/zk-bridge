@@ -280,7 +280,8 @@ export const gasMultiplierOf = (senderPrice: SenderPrice, margin: bigint): bigin
  * Suggests a gas based fee with a cap. The multiplier carries the sender's price (see {@link gasMultiplierOf}), so the
  * fee is in token units for any token. The limit is the fee at the ceiling base fee, in base units of the token and
  * rounded up. The router takes the lesser of its gas based fee and the limit, so a spike in the base fee cannot take
- * more than the limit.
+ * more than the limit. The router measures the gas that the deliverer's transaction makes available, and the deliverer
+ * chooses the gas limit of that transaction, so expect the tip to reach the limit: the limit is the price ceiling.
  *
  * @param input The sender's price, the margin, the ceiling and the gas.
  * @throws When the price or the margin is not above zero, or an input is out of range.
