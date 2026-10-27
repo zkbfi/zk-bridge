@@ -131,7 +131,7 @@ describe('the helpers', () => {
   })
 
   test('the context lists a router, a mediator and a bridge for each chain that has them', () => {
-    expect(feeTermsContextOf(FIXTURE_PAIR, target).protectedAddresses).toHaveLength(5)
+    expect(feeTermsContextOf(FIXTURE_PAIR, target).protectedAddresses).toHaveLength(6)
   })
 
   test('the context names the token and the wrapped native token of the destination chain', () => {

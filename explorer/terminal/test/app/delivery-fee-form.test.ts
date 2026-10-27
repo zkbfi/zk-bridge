@@ -89,7 +89,8 @@ describe('resolveDeliveryTarget', () => {
   test('says so and offers nothing when the deployment names no delivery router for the destination', () => {
     const wpls = FIXTURE_TOKENS[4]! // on PulseChain, so the destination is Ethereum, which has no delivery router
     const values = { ...baseValues, token: `second:${wpls.address}` }
-    const result = resolveDeliveryTarget({ source: bridgeSourceOf(values, FIXTURE_TOKENS, FIXTURE_PAIR), pair: FIXTURE_PAIR, tokens: FIXTURE_TOKENS, valuations: {} })
+    const pair = { ...FIXTURE_PAIR, first: { ...FIXTURE_PAIR.first, contracts: { ...FIXTURE_PAIR.first.contracts, deliveryRouter: null } } }
+    const result = resolveDeliveryTarget({ source: bridgeSourceOf(values, FIXTURE_TOKENS, pair), pair, tokens: FIXTURE_TOKENS, valuations: {} })
     expect(result).toEqual({ kind: 'unavailable', reason: 'The deployment names no delivery router for Ethereum, so a delivery fee is not offered.' })
   })
 

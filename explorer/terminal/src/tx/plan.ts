@@ -8,7 +8,7 @@ import { encodeFunctionData, erc20Abi, getAddress, isAddress, isHex, type Addres
 import { formatUnits } from '../format/amounts'
 import type { ChainConfig, TokenInfo } from '../model/types'
 import type { RouterAddressesReading } from '../chain/live-reads'
-import { messageBridgeAbi, tokenMediatorAbi, wrappedNativeRouterAbi } from './abis'
+import { deliveryRouterAbi, messageBridgeAbi, tokenMediatorAbi } from './abis'
 
 /** One line of the argument list of a transaction, as the confirmation screen shows it. */
 export interface DisplayArgument {
@@ -207,21 +207,21 @@ export interface WrapAndRelayInput {
   readonly value: bigint
 }
 
-/** Plans `wrapAndRelayTokens(receiver)` on the wrapped-native router. The coin travels as the call value. */
+/** Plans `wrapAndRelayTokens(receiver)` on the delivery router. The coin travels as the call value. */
 export function planWrapAndRelay(input: WrapAndRelayInput): PlannedTransaction {
   const { chain, receiver, value } = input
-  const router = chain.contracts.wrappedNativeRouter
-  if (router === null) throw new PlanInputError(`${chain.name} has no wrapped-native router in this deployment.`)
+  const router = chain.contracts.deliveryRouter
+  if (router === null) throw new PlanInputError(`${chain.name} has no delivery router in this deployment.`)
   if (value <= 0n) throw new PlanInputError('The amount must be above zero.')
   requireAddress(receiver, 'receiver')
   return {
     title: `Wrap ${chain.nativeSymbol} and relay it to the other chain`,
     chain,
     to: router,
-    contractLabel: 'WETHOmnibridgeRouter',
+    contractLabel: 'DeliveryRouter',
     functionSignature: 'wrapAndRelayTokens(address)',
     functionName: 'wrapAndRelayTokens',
-    data: encodeFunctionData({ abi: wrappedNativeRouterAbi, functionName: 'wrapAndRelayTokens', args: [receiver] }),
+    data: encodeFunctionData({ abi: deliveryRouterAbi, functionName: 'wrapAndRelayTokens', args: [receiver] }),
     value,
     arguments: [{ name: 'receiver', type: 'address', value: getAddress(receiver) }],
     notes: [`The transaction sends ${value.toString()} wei of ${chain.nativeSymbol}. The router wraps it, then relays it.`],

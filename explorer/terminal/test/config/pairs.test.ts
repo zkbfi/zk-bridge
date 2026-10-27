@@ -26,7 +26,6 @@ describe('the sepolia-pls943 pair', () => {
       bridge: address,
       mediator: address,
       token_factory: address,
-      native_router: address,
       wrapped_native: address,
       gate: address,
       light_client: address,

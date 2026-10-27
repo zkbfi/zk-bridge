@@ -139,7 +139,6 @@ describe('pair configuration', () => {
     bridge: `0x${tag}1`.padEnd(42, '0'),
     mediator: `0x${tag}2`.padEnd(42, '0'),
     light_client: `0x${tag}3`.padEnd(42, '0'),
-    native_router: `0x${tag}4`.padEnd(42, '0'),
     wrapped_native: `0x${tag}5`.padEnd(42, '0'),
     gate: `0x${tag}6`.padEnd(42, '0'),
   })

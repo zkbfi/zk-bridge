@@ -154,12 +154,13 @@ describe('the tip field of the bridge form', () => {
   })
 
   test('is not offered when the deployment has no delivery router for the destination, and the form says why', async () => {
-    const screen = await openOnTipField({ tokenValuationsWei: priced })
-    // Back to the token field, then to zkbUSDC on PulseChain: its destination is Ethereum, which has no delivery router.
+    const screen = await openOnTipField({ tokenValuationsWei: priced, pair: { ...FIXTURE_PAIR, first: { ...FIXTURE_PAIR.first, contracts: { ...FIXTURE_PAIR.first.contracts, deliveryRouter: null } } } })
+    // Back to the token field, then to a token of PulseChain: its destination is Ethereum, which has no delivery router here.
+    // Ethereum offers no wrap choice without a delivery router, so one choice fewer comes before the PulseChain tokens.
     for (let step = 0; step < 3; step += 1) await screen.press('ARROW_UP') // receiver, amount, token
-    for (let step = 0; step < 4; step += 1) await screen.press('ARROW_RIGHT')
+    for (let step = 0; step < 3; step += 1) await screen.press('ARROW_RIGHT')
     const frame = screen.frame()
-    expect(frame).toContain('zkbUSDC on PulseChain')
+    expect(frame).toContain('on PulseChain')
     expect(frame).not.toContain('Tip for delivery')
     expect(frame).toContain('The deployment names no delivery router for Ethereum')
   })

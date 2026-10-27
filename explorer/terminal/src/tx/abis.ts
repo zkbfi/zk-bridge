@@ -20,12 +20,6 @@ export const tokenMediatorAbi = parseAbi([
   'function nativeTokenAddress(address bridgedToken) view returns (address)',
 ])
 
-/** The router that wraps the native coin and relays it. */
-export const wrappedNativeRouterAbi = parseAbi([
-  'function wrapAndRelayTokens() payable',
-  'function wrapAndRelayTokens(address receiver) payable',
-])
-
 /** The shared structures of the message bridge. */
 const messageBridgeStructures = [
   'struct BeaconBlockHeader { uint64 slot; uint64 proposerIndex; bytes32 parentRoot; bytes32 stateRoot; bytes32 bodyRoot; }',
@@ -46,13 +40,17 @@ export const messageBridgeAbi = parseAbi([
   'function maxGasPerTx() pure returns (uint256)',
 ])
 
-/** The delivery router: the delivery entry point, the address that receives the tips, the address that receives what it cannot deliver, and the base fee view. */
+/** The delivery router: the delivery entry point, the wrap and send calls, the sweep, the address that receives the tips, the address that receives what it cannot deliver, and the base fee view. */
 export const deliveryRouterAbi = parseAbi([
   ...messageBridgeStructures,
   'function executeMessage(MessageProof proof)',
   'function rewardAddress() view returns (address)',
   'function failedDeliveryAddress() view returns (address)',
   'function baseFee(bool excludePriority) view returns (uint256)',
+  'function wrapAndRelayTokens() payable',
+  'function wrapAndRelayTokens(address receiver) payable',
+  'function relayTokensAndCall(address receiver, bytes data) payable',
+  'function sweep(address token)',
 ])
 
 /** The light client: post an update and read the stored head. */
@@ -64,7 +62,6 @@ export const beaconLightClientAbi = parseAbi([
 /** Every ABI that the dashboard can decode a transaction with. */
 export const knownAbis = [
   tokenMediatorAbi,
-  wrappedNativeRouterAbi,
   messageBridgeAbi,
   beaconLightClientAbi,
 ] as const

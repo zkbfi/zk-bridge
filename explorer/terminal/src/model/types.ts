@@ -70,8 +70,7 @@ export interface ChainConfig {
     readonly tokenMediator: Address
     /** The light client of the other chain, deployed on this chain. */
     readonly lightClient: Address
-    readonly wrappedNativeRouter: Address | null
-    /** The wrapped native token (WETH or WPLS) that the router wraps into. */
+    /** The wrapped native token (WETH or WPLS) that the delivery router wraps into. */
     readonly wrappedNative: Address | null
     readonly gate: Address | null
     readonly deliveryRouter: Address | null

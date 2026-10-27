@@ -112,12 +112,13 @@ describe('other plans', () => {
     expect(plan.notes[0]).toContain('25 USDC')
   })
 
-  test('wrap and relay sends the coin as the call value to the router', () => {
+  test('wrap and relay sends the coin as the call value to the delivery router', () => {
     const plan = planWrapAndRelay({ chain, receiver, value: 10n ** 18n })
     expect(plan.data).toBe(EXPECTED.wrap as `0x${string}`)
     expect(plan.value).toBe(10n ** 18n)
-    expect(plan.to).toBe(chain.contracts.wrappedNativeRouter!)
-    expect(() => planWrapAndRelay({ chain: { ...chain, contracts: { ...chain.contracts, wrappedNativeRouter: null } }, receiver, value: 1n })).toThrow(PlanInputError)
+    expect(plan.to).toBe(chain.contracts.deliveryRouter!)
+    expect(plan.contractLabel).toBe('DeliveryRouter')
+    expect(() => planWrapAndRelay({ chain: { ...chain, contracts: { ...chain.contracts, deliveryRouter: null } }, receiver, value: 1n })).toThrow(PlanInputError)
   })
 })
 

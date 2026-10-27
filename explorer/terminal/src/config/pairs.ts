@@ -79,7 +79,6 @@ function buildChain(side: ChainSide, definition: ChainDefinition, deployment: un
       messageBridge: requiredAddress(section, 'bridge', definition.chainId),
       tokenMediator: requiredAddress(section, 'mediator', definition.chainId),
       lightClient: requiredAddress(section, 'light_client', definition.chainId),
-      wrappedNativeRouter: optionalAddress(section, 'native_router'),
       wrappedNative: optionalAddress(section, 'wrapped_native'),
       gate: optionalAddress(section, 'gate'),
       deliveryRouter: optionalAddress(section, 'delivery_router'),

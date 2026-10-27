@@ -150,7 +150,7 @@ describe('relay that pays for delivery', () => {
     await expect(stepsFor({}, { deliveryCost: null })).rejects.toThrow('The delivery cost is not loaded yet')
     // A chain with no delivery router in the deployment, and the wrap route, carry no tip. The relay is the plain one.
     const wpls = FIXTURE_TOKENS[4]!
-    const withoutRouter = await relayOf({ token: `second:${wpls.address}` })
+    const withoutRouter = await relayOf({ token: `second:${wpls.address}` }, { pair: { ...FIXTURE_PAIR, first: { ...FIXTURE_PAIR.first, contracts: { ...FIXTURE_PAIR.first.contracts, deliveryRouter: null } } } })
     expect(withoutRouter.deliveryFee).toBeUndefined()
     expect(withoutRouter.functionName).toBe('relayTokens')
     const wrap = await relayOf({ token: 'first:native', amount: '0.01' })

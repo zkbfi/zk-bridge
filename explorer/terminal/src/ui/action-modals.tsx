@@ -92,7 +92,7 @@ export function BridgeModal(props: ActionModalProps) {
   const tokenChoices = [
     ...(['first', 'second'] as const).flatMap((side) => {
       const chain = side === 'first' ? pair.first : pair.second
-      const router = chain.contracts.wrappedNativeRouter === null ? [] : [{ value: nativeChoiceValue(side), label: `${chain.nativeSymbol} on ${chain.name} (wrap)` }]
+      const router = chain.contracts.deliveryRouter === null ? [] : [{ value: nativeChoiceValue(side), label: `${chain.nativeSymbol} on ${chain.name} (wrap)` }]
       const own = session.tokens.filter((token) => token.side === side).map((token) => ({ value: tokenChoiceValue(token), label: `${token.symbol} on ${chain.name}` }))
       return [...own, ...router]
     }),

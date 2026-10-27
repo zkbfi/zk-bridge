@@ -6,7 +6,6 @@ import {
   deliveryRouterAbi,
   messageBridgeAbi,
   tokenMediatorAbi,
-  wrappedNativeRouterAbi,
 } from '../../src/tx/abis'
 
 // These tests tie the small ABI fragments of the terminal to the real contracts. A fragment that names a function
@@ -47,7 +46,6 @@ function expectEveryFunctionIn(fragment: Abi, reference: Abi): void {
 
 const cases: ReadonlyArray<{ fragment: Abi; contract: string; sharedName: string }> = [
   { fragment: tokenMediatorAbi, contract: 'TokenMediator', sharedName: 'tokenMediatorAbi' },
-  { fragment: wrappedNativeRouterAbi, contract: 'WETHOmnibridgeRouter', sharedName: 'wETHOmnibridgeRouterAbi' },
   { fragment: deliveryRouterAbi, contract: 'DeliveryRouter', sharedName: 'deliveryRouterAbi' },
   { fragment: messageBridgeAbi, contract: 'MessageBridge', sharedName: 'messageBridgeAbi' },
   { fragment: beaconLightClientAbi, contract: 'BeaconLightClient', sharedName: 'beaconLightClientAbi' },
