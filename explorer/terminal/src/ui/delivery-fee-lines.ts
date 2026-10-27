@@ -3,7 +3,7 @@
  * function is pure and returns lines, so a test reads the text without a terminal. The amounts and the labels
  * (`exact`, `estimate, at most X`) come from `@zk-bridge/shared`.
  */
-import { TIP_MODE_NAMES, feeModeOf, routerInWords, settingFlagsOf, type FeeDirector, type FeeOption, type SettingFlagName } from '@zk-bridge/shared'
+import { GAS_MODE_HELP, GAS_MODE_SHORT_LABEL, TIP_MODE_NAMES, feeModeOf, routerInWords, settingFlagsOf, type FeeDirector, type FeeMode, type FeeOption, type SettingFlagName } from '@zk-bridge/shared'
 import { getAddress } from 'viem'
 import type { RouterAddressesReading } from '../chain/live-reads'
 import type { DeliveryFeeState, DeliveryTarget } from '../app/delivery-fee-form'
@@ -74,8 +74,16 @@ export function limitInWords(director: FeeDirector, token: { readonly symbol: st
   const mode = feeModeOf(director.settings)
   const amount = `${formatUnits(director.limit, token.decimals)} ${token.symbol}`
   if (mode === 'fixed') return `${amount} (the fee)`
-  if (mode === 'gas') return `${amount} (the most the fee can be)`
+  if (mode === 'gas') return `${amount} (price ceiling: the most the tip can be)`
   return 'not used'
+}
+
+/**
+ * The name of a tip mode for the lines. The gas mode shows the short label, which fits the label column. The help line
+ * (`GAS_MODE_HELP`) carries the long text.
+ */
+export function tipModeLabel(mode: FeeMode): string {
+  return mode === 'gas' ? GAS_MODE_SHORT_LABEL : TIP_MODE_NAMES[mode]
 }
 
 function suggestionLine(name: string, option: FeeOption): Line {
@@ -120,6 +128,7 @@ export function deliveryPanelLines(input: DeliveryPanelInput): readonly Line[] {
     ...(model.proofCostMissing ? [[colored('The proof cost is not included: no native coin price is configured.', theme.warn)] as Line] : []),
     ...suggestionLines(model.suggestions),
     ...chosenLines(model.chosen, target),
+    ...(model.notice === null ? [] : [[colored(model.notice, theme.warn)] as Line]),
   ]
 }
 
@@ -136,7 +145,13 @@ type DeliveryFeeStateReady = Extract<DeliveryFeeState, { kind: 'ready' }>['model
 function chosenLines(chosen: DeliveryFeeStateReady['chosen'], target: DeliveryTarget): readonly Line[] {
   if (chosen.kind === 'invalid') return [[muted('Your tip'.padEnd(LABEL_WIDTH)), colored(chosen.reason, theme.bad)]]
   const maximum = `${formatUnits(chosen.description.maximumUnits, target.token.decimals)} ${target.token.symbol}`
-  return [[muted('Your tip'.padEnd(LABEL_WIDTH)), strong(chosen.description.summary, theme.good)], row('At most', maximum)]
+  const limit = chosen.mode === 'gas' ? [row('Limit', limitInWords(chosen.director, target.token))] : []
+  return [
+    row('Tip mode', tipModeLabel(chosen.description.mode)),
+    [muted('Your tip'.padEnd(LABEL_WIDTH)), strong(chosen.description.summary, theme.good)],
+    ...limit,
+    row('At most', maximum),
+  ]
 }
 
 /**
@@ -150,7 +165,8 @@ export function deliveryFeeReviewLines(deliveryFee: DeliveryFeeReview): readonly
   return [
     [strong('Tip for delivery', theme.accent)],
     reviewRow('Router', routerInWords(deliveryFee.router, deliveryFee.defaultRouter)),
-    reviewRow('Tip mode', TIP_MODE_NAMES[description.mode]),
+    reviewRow('Tip mode', tipModeLabel(description.mode)),
+    ...(description.mode === 'gas' ? [[muted(GAS_MODE_HELP)] as Line] : []),
     reviewRow('Recipient', getAddress(director.recipient)),
     ...routerAddressLines(deliveryFee.routerAddresses),
     reviewRow('Flags', feeFlagsInWords(director.settings)),

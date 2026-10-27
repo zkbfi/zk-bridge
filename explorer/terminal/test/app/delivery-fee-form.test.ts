@@ -264,7 +264,7 @@ describe('refillDeliveryFee', () => {
 
   test('choosing the gas multiplier fills the margin, the ceiling and the price of the valuation as the sender price', () => {
     const next = refillDeliveryFee({ ...baseValues, delivery: 'yes', feeMode: 'percentage' }, { ...baseValues, delivery: 'yes', feeMode: 'gas' }, context)
-    expect(next.feeMultiplier).toBe('1.2')
+    expect(next.feeMultiplier).toBe('2')
     expect(next.feeSenderPrice).toBe('2500') // one zkbUSDC is worth 4e14 wei, so one coin is worth 2,500
     expect(next.feeCeilingGwei).toBe('14')
   })

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { encodeAbiParameters, encodeFunctionData, type Hex } from 'viem'
 import { createFixtureChainAccess } from '../../src/chain/fixture-chain-access'
-import { FIXTURE_PAIR } from '../../src/data/fixtures'
+import { FIXTURE_PAIR, FIXTURE_TOKENS } from '../../src/data/fixtures'
 import { signerFromPrivateKeyText } from '../../src/signing/key-sources'
 import { messageBridgeAbi } from '../../src/tx/abis'
 import { lightClientOutputParameters } from '../tx/light-client-output'
@@ -16,6 +16,9 @@ afterEach(() => {
 })
 
 const signer = () => signerFromPrivateKeyText(TEST_KEY)
+
+/** The default tip is gas based and needs a price: one zkbUSDC is worth 4e14 wei. */
+const tokenValuationsWei = { [FIXTURE_TOKENS[1]!.address.toLowerCase()]: 400_000_000_000_000n }
 
 async function openAction(target: App, downs: number) {
   for (let step = 0; step < downs; step += 1) await target.press('ARROW_DOWN')
@@ -32,7 +35,7 @@ describe('confirm before send: bridge tokens', () => {
 
   test('shows the whole transaction and sends nothing until y; n cancels without sending', async () => {
     const chainAccess = createFixtureChainAccess(FIXTURE_PAIR)
-    app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess })
+    app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess, tokenValuationsWei })
     await openAction(app, 1)
     await app.press('TAB')
     await app.type('1')
@@ -48,6 +51,18 @@ describe('confirm before send: bridge tokens', () => {
     await app.press('n')
     expect(app.frame()).not.toContain('Step 1 of 2')
     expect(chainAccess.sentTransactions).toHaveLength(0)
+  })
+
+  test('with no price for the default gas tip, Enter shows the reason and opens no review', async () => {
+    const chainAccess = createFixtureChainAccess(FIXTURE_PAIR)
+    app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess })
+    await openAction(app, 1)
+    await app.press('TAB')
+    await app.type('1')
+    await app.press('RETURN')
+    await app.settle(80)
+    expect(app.frame()).toContain('enter your price of the native coin in this token')
+    expect(app.frame()).not.toContain('Step 1 of')
   })
 
   test('y signs and sends the approval, then shows the relay for its own confirmation', async () => {
@@ -131,7 +146,7 @@ describe('confirm before send: bridge tokens', () => {
   test('a failed gas estimate shows the reason and sends nothing', async () => {
     const chainAccess = createFixtureChainAccess(FIXTURE_PAIR, { allowance: 10n ** 30n })
     const failing = { ...chainAccess, flowClient: () => ({ ...chainAccess.flowClient(1), estimateGas: async () => { throw new Error('execution reverted: FeeAboveLimit') } }) }
-    app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess: failing })
+    app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess: failing, tokenValuationsWei })
     await openAction(app, 1)
     await app.press('TAB')
     await app.type('1')
@@ -143,7 +158,7 @@ describe('confirm before send: bridge tokens', () => {
 
   test('the review fits an 80 by 24 terminal and scrolls', async () => {
     const chainAccess = createFixtureChainAccess(FIXTURE_PAIR, { allowance: 10n ** 30n })
-    app = await renderApp({ width: 80, height: 24, initialSigner: signer(), chainAccess })
+    app = await renderApp({ width: 80, height: 24, initialSigner: signer(), chainAccess, tokenValuationsWei })
     await openAction(app, 1)
     await app.press('TAB')
     await app.type('1')

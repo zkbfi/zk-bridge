@@ -66,12 +66,18 @@ describe('a custom fee', () => {
   })
 
   test('a gas based fee keeps the limit and the multiplier, and the basis sets the flag', () => {
-    const transaction = chosenOf({ ...customValues, feeCustomKind: 'gas', feeCustomMultiplier: '1.2', feeCustomLimit: '3' })
+    const transaction = chosenOf({ ...customValues, feeCustomKind: 'gas', feeCustomMultiplier: '1.2', feeCustomLimit: '3', feeCustomBasis: 'transaction' })
     if (transaction.kind !== 'ready') throw new Error(`chosen is ${transaction.kind}`)
     expect(transaction.director).toEqual({ recipient: getAddress(receiver), settings: 0n, limit: 3_000_000n, multiplier: 12n * 10n ** 17n })
     const baseOnly = chosenOf({ ...customValues, feeCustomKind: 'gas', feeCustomMultiplier: '1.2', feeCustomBasis: 'base-fee-only' })
     if (baseOnly.kind !== 'ready') throw new Error(`chosen is ${baseOnly.kind}`)
     expect(baseOnly.director.settings).toBe(settingsOf({ mode: 'gas', gasPrice: 'base-fee-only' }))
+  })
+
+  test('a gas based fee with no basis chosen reads the base fee only, because the destination chain reports a base fee', () => {
+    const chosen = chosenOf({ ...customValues, feeCustomKind: 'gas', feeCustomMultiplier: '1.2' })
+    if (chosen.kind !== 'ready') throw new Error(`chosen is ${chosen.kind}`)
+    expect(chosen.director.settings).toBe(settingsOf({ mode: 'gas', gasPrice: 'base-fee-only' }))
   })
 
   test('a gas based fee needs a multiplier above zero', () => {

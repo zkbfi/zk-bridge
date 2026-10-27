@@ -3,11 +3,12 @@
  * Each form builds the steps of a transaction flow and hands them to the review screen. None sends anything itself.
  */
 import { useState } from 'react'
-import type { DeliveryCostReport } from '@zk-bridge/shared'
+import { GAS_MODE_HELP, GAS_MODE_SHORT_LABEL, type DeliveryCostReport } from '@zk-bridge/shared'
 import { bridgeSourceOf, buildBridgeSteps, deliveryRouterOf, buildClaimSteps, buildMessageSteps, claimableEntries, nativeChoiceValue, tokenChoiceValue } from '../app/actions'
 import {
   CUSTOM_KINDS,
   DELIVERY_FIELD,
+  DEFAULT_GAS_MULTIPLIER_TEXT,
   DEFAULT_MARGIN_PERCENT,
   DEFAULT_TIP_PERCENT_TEXT,
   DEFAULT_PRIORITY_GWEI,
@@ -64,9 +65,9 @@ function useSubmitError() {
 const DELIVERY_COST_INTERVAL_MILLISECONDS = 15_000
 
 const FEE_MODE_CHOICES = [
+  { value: 'gas', label: GAS_MODE_SHORT_LABEL },
   { value: 'percentage', label: 'Percentage of the transfer' },
   { value: 'fixed', label: 'Fixed amount' },
-  { value: 'gas', label: 'Gas multiplier' },
   { value: 'custom', label: 'Custom terms' },
 ] as const
 
@@ -122,18 +123,18 @@ export function BridgeModal(props: ActionModalProps) {
       label: 'Tip for delivery',
       initial: 'yes',
       choices: [
-        { value: 'yes', label: 'Yes, 0.1% by default' },
+        { value: 'yes', label: 'Yes, gas based by default' },
         { value: 'no', label: 'No tip' },
       ],
       visibleWhen: offersDelivery,
       hint: 'Yes adds a tip for delivery on the other chain. The router pays it to its reward address. Anyone may deliver, and a copied delivery gains the copier nothing. You fix the tip now; nothing at delivery changes it. It uses relayTokensAndCall to the router, and the Mode field is not used. No sends a plain relay.',
     },
-    { kind: 'choice', name: DELIVERY_FIELD.mode, label: 'Tip mode', choices: FEE_MODE_CHOICES, visibleWhen: whenActive(), hint: 'Choosing a mode fills the numbers with the suggestion. Edit them from there.' },
+    { kind: 'choice', name: DELIVERY_FIELD.mode, label: 'Tip mode', initial: 'gas', choices: FEE_MODE_CHOICES, visibleWhen: whenActive(), hint: `Gas mode: ${GAS_MODE_HELP} Choosing a mode fills the numbers. Edit them from there.` },
     { kind: 'text', name: DELIVERY_FIELD.percent, label: 'Percentage', initial: DEFAULT_TIP_PERCENT_TEXT, placeholder: 'blank means 0.1', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'percentage'), hint: 'A percent of the transfer, for example 0.1. The router takes this share for its reward address and the recipient gets the rest.' },
     { kind: 'text', name: DELIVERY_FIELD.fixed, label: 'Fixed amount', placeholder: 'blank uses the suggestion', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'fixed'), hint: 'An amount of the token that the reward address is paid in, in whole tokens.' },
-    { kind: 'text', name: DELIVERY_FIELD.multiplier, label: 'Gas multiplier', placeholder: 'blank means 1.2', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'gas'), hint: 'A decimal such as 1.2: the router takes the gas cost times this for its reward address, never above the limit.' },
+    { kind: 'text', name: DELIVERY_FIELD.multiplier, label: 'Gas multiplier', initial: DEFAULT_GAS_MULTIPLIER_TEXT, placeholder: 'blank means 2', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'gas'), hint: 'A factor on the gas cost. 2 is a margin of 100 percent. The tip never passes the limit.' },
     { kind: 'text', name: DELIVERY_FIELD.senderPrice, label: 'Your coin price', placeholder: 'tokens for one native coin', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'gas'), hint: 'Your own price: how many whole tokens one whole native coin of the other chain is worth. Nothing at delivery reads it. It is folded into the multiplier now.' },
-    { kind: 'text', name: DELIVERY_FIELD.ceiling, label: 'Base fee ceiling', placeholder: 'blank means twice the base fee now', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'gas'), hint: 'In gwei. A base fee above this cannot raise the most that the router can take.' },
+    { kind: 'text', name: DELIVERY_FIELD.ceiling, label: 'Base fee ceiling', placeholder: 'blank means twice the base fee now', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'gas'), hint: 'In gwei. The limit is the tip at this base fee: the price ceiling. A base fee above it cannot raise the tip.' },
     { kind: 'choice', name: DELIVERY_FIELD.customKind, label: 'Custom kind', choices: CUSTOM_KINDS.map((kind) => ({ value: kind, label: CUSTOM_KIND_LABELS[kind] })), visibleWhen: whenActive((values) => feeFormModeOf(values) === 'custom'), hint: 'Left or Right chooses how the router reads the numbers.' },
     { kind: 'text', name: DELIVERY_FIELD.customLimit, label: 'Limit', placeholder: '0', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'custom'), hint: 'Whole tokens. The fixed fee, or the cap of a gas based fee.' },
     { kind: 'text', name: DELIVERY_FIELD.customMultiplier, label: 'Multiplier', placeholder: '0', visibleWhen: whenActive((values) => feeFormModeOf(values) === 'custom'), hint: 'A decimal. A share: 0.005 is 0.5 percent. A gas based fee: the factor on the gas price.' },
@@ -185,7 +186,7 @@ export function BridgeModal(props: ActionModalProps) {
   const panel = deliveryPanelLines(panelInputOf({ resolved, report, state: stateFor(values, report.data) }))
   const note = resolved.kind === 'unavailable' && (bridgeSourceOf(values, session.tokens, pair).kind === 'token' || paysForDelivery(values)) ? resolved.reason : null
   return (
-    <ModalFrame title="Bridge tokens" width={96} height={wantedChainId === null ? 17 : 41}>
+    <ModalFrame title="Bridge tokens" width={96} height={wantedChainId === null ? 17 : 45}>
       <FormView form={form} width={92} />
       {wantedChainId === null ? null : <RichLines lines={panel} />}
       <RichLine line={[colored(error ?? ' ', theme.bad)]} />

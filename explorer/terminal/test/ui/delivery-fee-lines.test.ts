@@ -35,7 +35,8 @@ describe('the live panel of the bridge form', () => {
         'Cost            gas 0.00168 PLS + proof 0.000008 PLS + margin -0.00164804 PLS',
         'Percentage      4.642 zkbUSDC (exact)  (4.6466466466466467 percent of the transfer)',
         'Fixed           4.642 zkbUSDC (exact)  (a fixed amount)',
-        'Gas multiplier  about 7.44 zkbUSDC now (estimate, at most 13.95 zkbUSDC)  (the gas used times the gas price, at 0.000000003 token units for each wei (your price and margin), never above the limit)',
+        "Gas multiplier  about 10.85 zkbUSDC now (estimate, at most 21.7 zkbUSDC)  (the gas that the deliverer's transaction makes available times the gas price, at 0.000000005 token units for each wei (your price and margin), never above the limit. Expect the tip to reach the limit)",
+        'Tip mode        percentage of the transfer',
         'Your tip        0.0999 zkbUSDC (exact)',
         'At most         0.0999 zkbUSDC',
       ].join('\n'),
@@ -96,6 +97,6 @@ describe('words for the terms of a director', () => {
     expect(feeFlagsInWords(settingsOf({ mode: 'gas', gasPrice: 'base-fee-only' }))).toBe('gas priced at the base fee only')
     expect(multiplierInWords({ ...director, settings: 0n, multiplier: 3_600_000_000n })).toBe('0.0000000036 token units for each wei of gas cost (your price and margin are folded in)')
     expect(multiplierInWords({ ...director, settings: settingsOf({ mode: 'share' }), multiplier: 5n * 10n ** 15n })).toBe('0.5% of the transfer')
-    expect(limitInWords({ ...director, settings: 0n, multiplier: 1n }, { symbol: 'USDC', decimals: 6 })).toBe('2.5 USDC (the most the fee can be)')
+    expect(limitInWords({ ...director, settings: 0n, multiplier: 1n }, { symbol: 'USDC', decimals: 6 })).toBe('2.5 USDC (price ceiling: the most the tip can be)')
   })
 })

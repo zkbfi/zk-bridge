@@ -55,9 +55,11 @@ In RPC mode some figures are partial. The summary bar marks them with `>=` and a
 
 User documentation lives in `explorer/web/docs/pages` (see `05-fees-explained.md`).
 
-The bridge form has a choice field `Tip for delivery`. It is `Yes` by default, at 0.1 percent of the transfer (the
-percentage mode, multiplier 1e15). You can edit the tip or choose `No tip`. You fix the tip now: nothing at delivery
-sets or changes the rate, and the account that delivers supplies no rate.
+The bridge form has a choice field `Tip for delivery`. It is `Yes` by default, in the gas based mode at the base fee
+(label `Gas, to limit`). The margin is 100 percent: the multiplier is your price of one wei of the destination coin, in
+base units of the token, times 2 times 1e18, rounded up. The limit is the tip at the ceiling base fee, which is twice the
+base fee now. You can edit the tip or choose `No tip`. You fix the tip now: nothing at delivery sets or changes the
+rate, and the account that delivers supplies no rate.
 
 - The field is offered for a token transfer when the deployment file names a delivery router (`delivery_router`) for the
   destination chain. When it does not, the form hides the field and sends a plain relay, and the note under the form
@@ -68,22 +70,32 @@ sets or changes the rate, and the account that delivers supplies no rate.
 - `Router (advanced)` chooses the router in the extra data: the receiver of the relay. Blank means the delivery router of
   the deployment on the destination chain. The confirmation screen shows the router and marks one that is not the router
   of the deployment.
-- `Tip mode` is `Percentage`, `Fixed amount`, `Gas multiplier` or `Custom terms`. The percentage starts at `0.1`.
-  Choosing the fixed mode, or changing the margin, the priority fee, the amount or the token, fills the fixed amount
-  with the suggestion. Editing a number keeps your number. A blank percentage means the default tip.
-- Percentage: a percent text such as `0.1`. Fixed: a token amount. Gas multiplier: a decimal such as `1.2` for the
-  margin, the base fee ceiling in gwei, and `Your coin price`: your own price of one whole native coin of the other
-  chain, in whole tokens. The form folds your price into the multiplier now, so the gas multiplier works for any
-  token. It fills the field from the token valuation as a starting point. Custom: the kind, the limit, the multiplier
+- `Tip mode` is `Gas, to limit` (the default), `Percentage`, `Fixed amount` or `Custom terms`. The percentage starts at
+  `0.1` when you choose it. Choosing the fixed mode, or changing the margin, the priority fee, the amount or the token,
+  fills the fixed amount with the suggestion. Editing a number keeps your number. A blank percentage means 0.1 percent.
+- The gas based mode follows the gas that the deliverer's transaction makes available. The deliverer chooses the gas
+  limit of that transaction, and the bridge forwards only the message gas limit, so gas held back above it counts. Expect
+  the tip to reach the limit. The limit is the price ceiling, and the help line says `Up to the limit; the deliverer's
+  gas choice decides`. The panel and the confirmation screen show the limit as the price ceiling.
+- Gas based mode fields: a decimal factor such as `2` for the margin (2 is 100 percent), the base fee ceiling in gwei,
+  and `Your coin price`: your own price of one whole native coin of the other chain, in whole tokens. The form folds
+  your price into the multiplier now, so the mode works for any token. It fills the fields when you enter the form, or
+  choose the mode or the token, with the margin of 2, twice the base fee now, and the price from the token valuation.
+  A number that you typed stays when you change the amount.
+- Where the destination chain reports no base fee (the `baseFee` field of the chain configuration is `none`, for example BSC), the default
+  reads the whole gas price, with the same margin, and the panel says why. Without your price and without a token
+  valuation the tip cannot be computed. The panel then asks you to enter your price. There is no fixed fallback, because
+  a fixed tip needs the same price to turn a cost into tokens.
+- Percentage: a percent text such as `0.1`. Fixed: a token amount. Custom: the kind, the limit, the multiplier
   and the gas price basis, as the router reads them. `Margin percent` and `Priority fee gwei` feed the suggestions.
   `Pay the reward address in` appears only when the token on the destination chain is the wrapped native token.
 - The panel under the form shows the router, the gas of a delivery with its data source (`measured from 40 recent
   deliveries, p90` or `default, no deliveries measured yet`), the base fee with its block and time, the cost split into
-  gas, proof and margin, and the three suggestions. A percentage or a fixed tip is `exact`. A gas multiplier is
+  gas, proof and margin, and the three suggestions. A percentage or a fixed tip is `exact`. A gas based tip is
   `estimate, at most X`. When the report holds no native coin price, the panel says that the proof cost is not included.
 - The percentage and the fixed suggestions turn the cost into tokens, so they need the value of the token. Set
   `EXPLORER_TOKEN_VALUATIONS_WEI`. Without a value the panel says `no value of the token is configured`, and the
-  default tip still stands. The gas multiplier then asks for your coin price.
+  gas based default needs your coin price too: the panel asks for it.
 - The panel reads `GET /api/delivery-cost?chainId=<id>` from the indexer, and `EXPLORER_DATA=fixture` serves a built-in
   report. The confirmation screen shows the router, the tip mode, the recipient, the address that receives the tip, the address that receives the tokens when delivery fails, the flags, the limit, the multiplier in
   words, the tip now with its label (`exact`, or `estimate, at most X`), the most that the tip can be, and the data

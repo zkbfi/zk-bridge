@@ -11,8 +11,10 @@ import {
   DEFAULT_TIP_PERCENTAGE_MULTIPLIER,
   buildFeeSuggestions,
   defaultTip,
+  defaultTipChoiceOf,
   describeFee,
   feeModeOf,
+  gasPriceBasisFor,
   gasPriceBasisOf,
   type DeliveryCostBreakdown,
   type DeliveryCostReport,
@@ -54,7 +56,7 @@ export const DELIVERY_FIELD = {
   senderPrice: 'feeSenderPrice',
 } as const
 
-/** How the fee is chosen: a percentage, a fixed amount, a gas multiplier with the sender's price, or raw terms. */
+/** How the fee is chosen: a gas based tip with a limit (the default), a percentage, a fixed amount, or raw terms. */
 export type FeeFormMode = 'percentage' | 'fixed' | 'gas' | 'custom'
 
 /** The default tip, in percent: 0.1 percent of the transfer. The sender fixes it ahead of time. Same as `defaultTip`. */
@@ -64,8 +66,8 @@ export const DEFAULT_TIP_PERCENT_TEXT = formatUnits(DEFAULT_TIP_PERCENTAGE_MULTI
 export const DEFAULT_MARGIN_PERCENT = '10'
 /** The default priority fee that the sender expects the delivery to pay, in gwei. The user edits it. */
 export const DEFAULT_PRIORITY_GWEI = '1'
-/** The margin on the gas cost that a blank field of the gas multiplier mode means. Same as the suggestion of `@zk-bridge/shared`. */
-export const DEFAULT_GAS_MULTIPLIER_TEXT = '1.2'
+/** The factor on the gas cost that a blank field of the gas mode means: 2, a margin of 100 percent. Same as `DEFAULT_GAS_MARGIN` of `@zk-bridge/shared`. */
+export const DEFAULT_GAS_MULTIPLIER_TEXT = '2'
 
 /** The value of one whole native coin of the chain, in wei. */
 const WEI_PER_WHOLE_COIN = 10n ** 18n
@@ -145,6 +147,11 @@ export interface DeliveryFeeModel {
   /** The three suggestions. A suggestion that needs a price that nobody gave says so. */
   readonly suggestions: FeeSuggestions
   readonly chosen: ChosenFee
+  /**
+   * What the form tells the user about the default tip: the chain has no base fee, or the price is missing. Null when
+   * there is nothing to say, and always null outside the gas mode.
+   */
+  readonly notice: string | null
 }
 
 /** The state of the panel after the inputs are read. */
@@ -165,7 +172,7 @@ export interface DeliveryFeeInput {
 /** The mode that the form values choose. */
 export function feeFormModeOf(values: Values): FeeFormMode {
   const mode = values[DELIVERY_FIELD.mode]
-  return mode === 'fixed' || mode === 'gas' || mode === 'custom' ? mode : 'percentage'
+  return mode === 'fixed' || mode === 'percentage' || mode === 'custom' ? mode : 'gas'
 }
 
 /** True when the user chose to pay for delivery. */
@@ -244,6 +251,7 @@ export function buildDeliveryFeeModel(input: DeliveryFeeInput): DeliveryFeeState
       report,
       priorityFeeWei: priority.value,
       marginRate: margin.value,
+      gasPrice: gasPriceBasisFor(target.chain.baseFee),
       ...(gasInputs.ok ? gasInputs.value : {}),
     }),
   )
@@ -260,7 +268,21 @@ export function buildDeliveryFeeModel(input: DeliveryFeeInput): DeliveryFeeState
       cost: target.valueInWei === null ? null : built.value.cost,
     })
   const chosen = chooseFee({ values, target, recipient: recipient.value, payout, suggestions, gasInputs, describe })
-  return { kind: 'ready', model: { router: router.value, dataSource: built.value.dataSource, cost: built.value.cost, proofCostMissing: built.value.proofCostMissing, suggestions, chosen } }
+  const notice = noticeOf({ values, target, gasInputs })
+  return { kind: 'ready', model: { router: router.value, dataSource: built.value.dataSource, cost: built.value.cost, proofCostMissing: built.value.proofCostMissing, suggestions, chosen, notice } }
+}
+
+/** The notice of the default tip for the gas mode, from the shared choice. Other modes need none. */
+function noticeOf(input: { readonly values: Values; readonly target: DeliveryTarget; readonly gasInputs: Parsed<GasInputs> }): string | null {
+  if (feeFormModeOf(input.values) !== 'gas') return null
+  const typedPrice = input.gasInputs.ok ? (input.gasInputs.value.senderPrice ?? null) : null
+  return defaultTipChoiceOf({
+    senderPrice: typedPrice,
+    tokenValueInWei: input.target.valueInWei,
+    tokenDecimals: input.target.token.decimals,
+    destinationBaseFee: input.target.chain.baseFee ?? 'reported',
+    chainName: input.target.chain.name,
+  }).notice
 }
 
 /** The token of a target as the shared description wants it. A missing price becomes one wei: only the cost lines use it, and they are empty then. */
@@ -355,18 +377,19 @@ function directorOf(mode: FeeFormMode, input: ChooseInput): Parsed<FeeDirector> 
     if (!input.gasInputs.ok) return { ok: false, reason: input.gasInputs.reason }
     return suggestedDirector(input.suggestions.gasMultiplier)
   }
-  return customDirector(values, { recipient, payout, decimals: target.token.decimals })
+  return customDirector(values, { recipient, payout, decimals: target.token.decimals, defaultBasis: gasPriceBasisFor(target.chain.baseFee) })
 }
 
 /** The kinds of a custom fee, in the order of the form. */
 export const CUSTOM_KINDS = ['fixed', 'share', 'gas'] as const
 
-function customDirector(values: Values, input: { recipient: Address; payout: PayoutKind; decimals: number }): Parsed<FeeDirector> {
+function customDirector(values: Values, input: { recipient: Address; payout: PayoutKind; decimals: number; defaultBasis: GasPriceBasis }): Parsed<FeeDirector> {
   return attempt(() => {
     const kind = values[DELIVERY_FIELD.customKind] ?? 'fixed'
     const limit = parseNumber('limit', valueOf(values, DELIVERY_FIELD.customLimit) || '0', input.decimals)
     const multiplier = parseNumber('multiplier', valueOf(values, DELIVERY_FIELD.customMultiplier) || '0', 18)
-    const basis: GasPriceBasis = values[DELIVERY_FIELD.customBasis] === 'base-fee-only' ? 'base-fee-only' : 'transaction'
+    const chosenBasis = values[DELIVERY_FIELD.customBasis]
+    const basis: GasPriceBasis = chosenBasis === 'base-fee-only' || chosenBasis === 'transaction' ? chosenBasis : input.defaultBasis
     if (kind === 'fixed') return { recipient: input.recipient, settings: settingsOf({ mode: 'fixed', payout: input.payout }), limit, multiplier: 0n }
     if (kind === 'share') {
       if (multiplier > RATE_SCALE) throw new PlanInputError('The multiplier of a share is above 1, which is above 100 percent.')
@@ -387,9 +410,9 @@ export function senderPriceText(target: DeliveryTarget): string {
 }
 
 /**
- * The numbers that the chosen mode puts into the editable fields. The percentage starts at the default tip of 0.1
- * percent. The fixed amount starts at the suggestion. The gas multiplier starts at the margin, the ceiling and the price
- * of the valuation. The cost based suggestions stay on the panel for the user to read.
+ * The numbers that the chosen mode puts into the editable fields. The gas mode, the default, starts at the margin of
+ * 100 percent, the ceiling of twice the base fee now and the price of the valuation. The percentage starts at the tip of
+ * 0.1 percent. The fixed amount starts at the suggestion. The cost based suggestions stay on the panel for the user to read.
  */
 export function suggestedFields(mode: FeeFormMode, state: DeliveryFeeState, target: DeliveryTarget): Values {
   if (mode === 'custom') return {}
@@ -456,9 +479,20 @@ export function refillDeliveryFee(previous: Values, next: Values, context: Refil
   const built = context.stateFor(next)
   if (built === null) return next
   const fields = suggestedFields(mode, built.state, built.target)
-  // A gas multiplier and its ceiling are inputs, not outputs: refill them only when the user just chose the mode.
-  const keepGasInputs = mode === 'gas' && previous[DELIVERY_FIELD.mode] === next[DELIVERY_FIELD.mode]
-  return keepGasInputs ? next : { ...next, ...fields }
+  if (mode !== 'gas') return { ...next, ...fields }
+  return { ...next, ...gasFieldsToFill(previous, next, fields) }
+}
+
+/** The fields whose change means that the user chose a gas tip afresh: the multiplier, the ceiling and the price start over. */
+const GAS_CHOICE_TRIGGERS: readonly string[] = [DELIVERY_FIELD.delivery, DELIVERY_FIELD.mode, 'token']
+
+/**
+ * A gas multiplier, its ceiling and the price are inputs, not outputs. They start over when the user chooses the mode,
+ * enters the form or changes the token. After any other edit, only a blank one is filled, so a typed number stays.
+ */
+function gasFieldsToFill(previous: Values, next: Values, fields: Values): Values {
+  if (GAS_CHOICE_TRIGGERS.some((name) => previous[name] !== next[name])) return fields
+  return Object.fromEntries(Object.entries(fields).filter(([name]) => valueOf(next, name) === ''))
 }
 
 function customStart(previous: Values, context: RefillContext): Values {

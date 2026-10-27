@@ -230,6 +230,9 @@ describe('Ledger on the simulated device, end to end', () => {
     await app.press('RETURN')
     await app.press('TAB')
     await app.type('1')
+    await app.press('TAB') // receiver
+    await app.press('TAB') // tip for delivery
+    await app.press('ARROW_RIGHT') // no tip: a plain relay
     await app.press('RETURN')
     await app.settle(100)
     transport.behavior = 'reject'

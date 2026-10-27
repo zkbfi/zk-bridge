@@ -185,9 +185,10 @@ describe('relay that pays for delivery', () => {
     const [, , , data] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as [string, string, bigint, `0x${string}`]
     const director = decodeFeeDirector(data)
     expect(director.multiplier).toBe(3_600n)
-    expect(director.settings).toBe(0n)
-    // The limit is the fee in token units at the ceiling: (210,000 + 100,000) gas * 3,600 * (10 gwei ceiling + 1 gwei priority fee) / 1e18, rounded up.
-    expect(director.limit).toBe((310_000n * 3_600n * 11n * 10n ** 9n + 10n ** 18n - 1n) / 10n ** 18n)
+    // The destination chain reports a base fee, so the gas mode reads the base fee only and the priority fee adds nothing.
+    expect(director.settings).toBe(settingsOf({ mode: 'gas', gasPrice: 'base-fee-only' }))
+    // The limit is the fee in token units at the ceiling: (210,000 + 100,000) gas * 3,600 * 10 gwei ceiling / 1e18, rounded up.
+    expect(director.limit).toBe((310_000n * 3_600n * 10n * 10n ** 9n + 10n ** 18n - 1n) / 10n ** 18n)
     expect(plan.deliveryFee?.description.certainty).toBe('estimate')
   })
 

@@ -37,12 +37,14 @@ async function openOnTipField(options: { pair?: typeof FIXTURE_PAIR; token?: 'ne
 }
 
 describe('the tip field of the bridge form', () => {
-  test('is on by default at 0.1 percent, with the fee fields, the router field and the live panel shown', async () => {
+  test('is on by default in the gas mode, with the ceiling, the router field and the live panel shown', async () => {
     const screen = await openOnTipField({ tokenValuationsWei: priced })
     const frame = screen.frame()
-    for (const shown of ['Tip for delivery', 'Yes, 0.1% by default', 'Tip mode', 'Percentage of the transfer', 'Percentage', '0.1', 'Router (advanced)', 'Fee recipient', 'Margin percent', 'Priority fee gwei', 'Delivery cost on PulseChain', 'Router          0x', '(the default delivery router)', 'measured from 40 recent deliveries, p90', 'Base fee', 'at block 21000000', 'Your tip        0.1 zkbUSDC (exact)']) {
+    for (const shown of ['Tip for delivery', 'Yes, gas based by default', 'Tip mode', 'Gas, to limit', 'Gas multiplier', 'Base fee ceiling', 'Router (advanced)', 'Fee recipient', 'Margin percent', 'Priority fee gwei', 'Delivery cost on PulseChain', 'Router          0x', '(the default delivery router)', 'measured from 40 recent deliveries, p90', 'Base fee', 'at block 21000000', 'Limit           ', '(price ceiling: the most the tip can be)']) {
       expect(frame).toContain(shown)
     }
+    expect(frame).toMatch(/Gas multiplier {2,}2 /)
+    expect(frame).toMatch(/Your tip {8}about [\d.]+ zkbUSDC now/)
     // The Mode field (relayTokens) is gone: the call data holds the tip terms.
     expect(frame).not.toMatch(/Mode {2,}relayTokens/)
   })
@@ -60,6 +62,7 @@ describe('the tip field of the bridge form', () => {
   test('choosing the fixed mode fills the fixed amount with the suggestion, and editing it rebuilds the tip', async () => {
     const screen = await openOnTipField({ tokenValuationsWei: priced })
     await screen.press('TAB') // tip mode
+    await screen.press('ARROW_RIGHT') // percentage
     await screen.press('ARROW_RIGHT') // fixed
     expect(screen.frame()).toMatch(/Fixed amount {2,}4\.642/)
     await screen.press('TAB') // the fixed amount
@@ -70,12 +73,8 @@ describe('the tip field of the bridge form', () => {
     expect(frame).toContain('Your tip        4.649 zkbUSDC (exact)')
   })
 
-  test('the gas multiplier works for any token, with the price of the sender labelled as theirs', async () => {
+  test('the gas mode works for any token, with the price of the sender labelled as theirs', async () => {
     const screen = await openOnTipField({ tokenValuationsWei: priced })
-    await screen.press('TAB') // tip mode
-    await screen.press('ARROW_RIGHT') // fixed
-    await screen.press('ARROW_RIGHT') // gas
-    await screen.settle(50)
     const frame = screen.frame()
     expect(frame).toContain('Your coin price')
     expect(frame).toMatch(/Your coin price {2,}2500/)
@@ -86,20 +85,26 @@ describe('the tip field of the bridge form', () => {
   test('on the wrapped native token the gas multiplier offers the native payout', async () => {
     const pair = { ...FIXTURE_PAIR, second: { ...FIXTURE_PAIR.second, contracts: { ...FIXTURE_PAIR.second.contracts, wrappedNative: FIXTURE_TOKENS[3]!.address } } }
     const screen = await openOnTipField({ pair, token: 'next' })
-    await screen.press('TAB') // tip mode
-    await screen.press('ARROW_RIGHT') // fixed
-    await screen.press('ARROW_RIGHT') // gas
-    await screen.settle(50)
     const frame = screen.frame()
     expect(frame).toContain('WETH on Ethereum')
     expect(frame).toContain('Pay the reward address in')
     expect(frame).toMatch(/estimate, at most [\d.]+ zkbWETH/)
   })
 
-  test('says that no value is known when the destination token has none, and the default tip stays', async () => {
+  test('says that no value is known when the destination token has none, and asks for a price', async () => {
     const screen = await openOnTipField()
     const frame = screen.frame()
     expect(frame).toContain('unavailable: no value of the token is configured')
+    expect(frame).toContain('Enter your price of the native coin in this token.')
+    expect(frame).toContain('Your tip        enter your price of the native coin in this token')
+  })
+
+  test('percentage stays selectable and shows the tip of 0.1 percent', async () => {
+    const screen = await openOnTipField({ tokenValuationsWei: priced })
+    await screen.press('TAB') // tip mode
+    await screen.press('ARROW_RIGHT') // percentage
+    const frame = screen.frame()
+    expect(frame).toMatch(/Percentage {2,}0\.1/)
     expect(frame).toContain('Your tip        0.1 zkbUSDC (exact)')
   })
 
@@ -109,7 +114,7 @@ describe('the tip field of the bridge form', () => {
     await screen.press('RETURN')
     await screen.settle(120)
     const frame = screen.frame()
-    for (const shown of ['relayTokensAndCall(address,address,uint256,bytes)', 'Tip for delivery', 'Router', '(the default delivery router)', 'Tip mode', 'percentage of the transfer', 'Tip goes to', 'On failure']) {
+    for (const shown of ['relayTokensAndCall(address,address,uint256,bytes)', 'Tip for delivery', 'Router', '(the default delivery router)', 'Tip mode', 'Gas, to limit', 'price ceiling', 'Tip goes to', 'On failure']) {
       expect(frame).toContain(shown)
     }
     expect(chainAccess.sentTransactions).toHaveLength(0)
