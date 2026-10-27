@@ -75,13 +75,12 @@ contract ImmutabilityTest is Test {
     /// Claim: the token mediator has no owner, upgrade path, pause, or setter for the bridge, the remote mediator or the
     /// factory. Shows: the ABI lists exactly these state-changing functions: the relay functions (`relayTokens`,
     /// `relayTokensAndCall`, `relayTokensWithFallback`), the ERC-677 entry `onTokenTransfer`, the twelve handlers
-    /// that only the message bridge may call for the remote mediator, `claim`, `collectFees` and
-    /// `detachFlowLimiter`. No function sets or changes the fee: the schedule and the recipient are immutable, and
-    /// `collectFees` pays the recipient only. Only the flow limiter can call `detachFlowLimiter`, and no function sets
-    /// or replaces a limiter. Matters: H-04 (no
-    /// key can redirect the mediator or reach the tokens that it holds).
-    function test_H04_tokenMediator_onlyRelayHandlerAndFeeFunctionsChangeState() public view {
-        string[] memory allowed = new string[](19);
+    /// that only the message bridge may call for the remote mediator, `claim` and
+    /// `detachFlowLimiter`. The mediator has no fee and no function that pays an account that a release does not
+    /// name. Only the flow limiter can call `detachFlowLimiter`, and no function sets or replaces a limiter. Matters:
+    /// H-04 (no key can redirect the mediator or reach the tokens that it holds).
+    function test_H04_tokenMediator_onlyRelayHandlerAndClaimFunctionsChangeState() public view {
+        string[] memory allowed = new string[](18);
         allowed[0] = "relayTokens";
         allowed[1] = "relayTokensAndCall";
         allowed[2] = "relayTokensWithFallback";
@@ -99,8 +98,7 @@ contract ImmutabilityTest is Test {
         allowed[14] = "deployAndHandleBridgedTokensWithFallback";
         allowed[15] = "deployAndHandleBridgedTokensAndCallWithFallback";
         allowed[16] = "claim";
-        allowed[17] = "collectFees";
-        allowed[18] = "detachFlowLimiter";
+        allowed[17] = "detachFlowLimiter";
         _assertSameNames(_mutatingFunctions("out/TokenMediator.sol/TokenMediator.json"), allowed);
     }
 
