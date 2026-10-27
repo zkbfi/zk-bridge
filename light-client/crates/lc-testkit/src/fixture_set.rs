@@ -13,7 +13,8 @@ use lc_core::abi::{executeMessageCall, MessageProof};
 use lc_core::ancestry::{ancestry_path_for_slots, historical_leaf_gindex, AncestryPath};
 use lc_core::chain::{ChainSpec, ForkName, ETHEREUM_MAINNET, FAR_FUTURE_EPOCH, PULSECHAIN, SEPOLIA};
 use lc_core::layout::{
-    block_hash_gindex_for_fork, state_layout_for_fork, BLOCK_ROOTS_VECTOR_DEPTH, EXECUTION_PAYLOAD_GINDEX,
+    block_hash_gindex_for_fork, state_layout_for_finality_branch_length, state_layout_for_fork,
+    ALLOWED_FINALITY_BRANCH_LENGTHS, BLOCK_ROOTS_VECTOR_DEPTH, EXECUTION_PAYLOAD_GINDEX, GLOAS_STATE_LAYOUT,
     HISTORICAL_SUMMARIES_LIST_DEPTH, SLOTS_PER_HISTORICAL_ROOT,
 };
 use lc_core::message::{verify_message, MessageContext, VerifiedMessage};
@@ -84,6 +85,35 @@ fn gloas_json() -> Value {
     })
 }
 
+/// The state layouts that the light-client program accepts, derived from `ALLOWED_FINALITY_BRANCH_LENGTHS`: the plain
+/// depths (a finality branch of `depth + 1` entries) and the one progressive length. `BeaconForkGate` configures the same
+/// set in `supportedVersions`, and a Solidity test compares the two.
+fn program_json() -> Value {
+    let mut plain_depths = Vec::new();
+    let mut progressive_lengths = Vec::new();
+    for length in ALLOWED_FINALITY_BRANCH_LENGTHS {
+        let layout = state_layout_for_finality_branch_length(length).expect("an allowed length names a layout");
+        match layout == GLOAS_STATE_LAYOUT {
+            true => progressive_lengths.push(length),
+            false => {
+                let depth = gindex_depth(layout.current_sync_committee_gindex);
+                assert_eq!(
+                    depth as usize + 1,
+                    length,
+                    "a plain finality branch has one entry more than the state depth"
+                );
+                plain_depths.push(depth);
+            }
+        }
+    }
+    json!({
+        "source": "lc_core::layout::ALLOWED_FINALITY_BRANCH_LENGTHS. The finality branch length names the layout; every other length is refused, depth 7 (length 8) included.",
+        "finalityBranchLengths": ALLOWED_FINALITY_BRANCH_LENGTHS,
+        "plainStateDepths": plain_depths,
+        "progressiveFinalityBranchLengths": progressive_lengths,
+    })
+}
+
 /// `tests/fixtures/gindices.json`: every generalized index the bridge and the light client need, per fork, with sources.
 pub fn gindices_json() -> Value {
     let fork_entry = |fork: ForkName| {
@@ -126,6 +156,7 @@ pub fn gindices_json() -> Value {
         "historicalSummariesListDepth": HISTORICAL_SUMMARIES_LIST_DEPTH,
         "slotsPerHistoricalRoot": SLOTS_PER_HISTORICAL_ROOT.to_string(),
         "gloas": gloas_json(),
+        "program": program_json(),
         "forks": {
             "capella": fork_entry(ForkName::Capella),
             "deneb": fork_entry(ForkName::Deneb),

@@ -47,6 +47,7 @@ Generalized indices per fork, computed from `ethereum/consensus-specs`. Keys:
 | `forks.<fork>.blockHashBranchLength` | Exact length of `blockHashBranch` (8 or 9). |
 | `forks.<fork>.finalizedRootGindex`, `currentSyncCommitteeGindex`, `nextSyncCommitteeGindex`, `executionPayloadGindex` | Light-client indices (for the SP1 program and for reference). |
 | `gloas.*` | The Gloas positions, derived from the field lists by `lc-core`: `forkVersionGindex` 169, `blockRootsFieldGindex` 352, `historicalSummariesFieldGindex` 2950, `latestBlockHashGindex` 2947, with branch lengths. |
+| `program.*` | The state layouts that the light-client program accepts, derived from `ALLOWED_FINALITY_BRANCH_LENGTHS` in `lc-core`: `finalityBranchLengths` (6, 7, 9), `plainStateDepths` (5, 6) and `progressiveFinalityBranchLengths` (9). The Solidity test of the gate compares its state depths with this set. |
 | `chains.<chain>.forkSchedule` | Rows `(activationEpoch, blockRootsGindexBase, blockHashGindex, historicalSummariesGindex)` for the bridge constructor. Only forks with a supported layout appear. All numbers are decimal strings. |
 
 The bridge picks the block roots row and the `historical_summaries` index by the epoch of the ANCHOR header slot, and the block hash

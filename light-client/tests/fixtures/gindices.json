@@ -139,6 +139,21 @@
     "historicalAncestryBranchLength is the exact length of the historical ancestry branch: 44 in the Capella and Deneb layouts, 45 in the Electra and Fulu layouts.",
     "capellaEra = floor(capellaForkSlot / 8192): Ethereum 758 (Capella slot 6209536), PulseChain 0 (Capella epoch 3, slot 96). It is an immutable bridge argument."
   ],
+  "program": {
+    "finalityBranchLengths": [
+      6,
+      7,
+      9
+    ],
+    "plainStateDepths": [
+      5,
+      6
+    ],
+    "progressiveFinalityBranchLengths": [
+      9
+    ],
+    "source": "lc_core::layout::ALLOWED_FINALITY_BRANCH_LENGTHS. The finality branch length names the layout; every other length is refused, depth 7 (length 8) included."
+  },
   "slotsPerHistoricalRoot": "8192",
   "source": "ethereum/consensus-specs master, fetched 2026-10-20. BeaconState.block_roots: specs/phase0/beacon-chain.md (field 5). BeaconState sync committee and finality indices: specs/altair/light-client/sync-protocol.md and specs/electra/light-client/sync-protocol.md. execution_payload: specs/capella/light-client/sync-protocol.md (25). ExecutionPayload field lists: specs/capella/beacon-chain.md (15 fields) and specs/deneb/beacon-chain.md (17 fields, unchanged in Electra and Fulu). BeaconState.historical_summaries: container BeaconState in specs/capella/beacon-chain.md (28 fields, historical_summaries is field 27, new in Capella; HistoricalSummary and HistoricalSummaries.LIMIT = HISTORICAL_ROOTS_LIMIT = 2^24 in the same file); specs/deneb, specs/electra and specs/fulu beacon-chain.md only append fields after it (Electra 37, Fulu 38), so it stays field 27. process_historical_summaries_update (specs/capella/beacon-chain.md) appends one summary per era."
 }

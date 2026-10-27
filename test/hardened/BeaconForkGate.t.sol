@@ -950,17 +950,23 @@ contract BeaconForkGateTest is GateSupport {
         gate.confirm(_evidence(block.timestamp, header, ELECTRA, tree.currentBranch));
     }
 
-    // ================================================================ the fork table of the light-client program
+    // ================================================================ the layouts of the light-client program
 
-    /// Claim: `supportedVersions` equals the fork table of the light-client program, from its fixtures: the forks
-    /// of `chains.<chain>.forkSchedule` in order, their versions from the chain specification and their state
-    /// depths from `forks.<name>.currentSyncCommitteeGindex` (gindex 54 is depth 5, 86 is depth 6). Shows: the
-    /// Ethereum gate matches Capella, Deneb, Electra, Fulu and the PulseChain gate matches Capella. Forks before
-    /// Capella are not listed: their blocks have no execution payload, so the route never supports them. Gloas is
-    /// not listed: its layout is unknown to the program (no fixture), so sends stop at that fork until the route is
-    /// redeployed. Matters: a version in the gate that the program cannot read would let sends pass that
-    /// can never be delivered; a missing one would stop sends in a supported fork.
-    function test_HB02_forkTable_gateEqualsTheLightClientProgramTable() public {
+    /// Claim: the state depths of `supportedVersions` equal the set of layouts that the light-client program accepts.
+    /// The program has no fork table: the length of the finality branch names the layout, and only the lengths in
+    /// `program.finalityBranchLengths` of the fixture (6, 7 and 9) are accepted. A plain state of depth d has a finality
+    /// branch of d + 1 entries, so the plain depths are 5 and 6 (`program.plainStateDepths`), and the progressive Gloas
+    /// state has its own length (`program.progressiveFinalityBranchLengths`, the marker 255 in the gate). Shows: every
+    /// depth that the Ethereum and PulseChain gates configure is in the program's set, the Ethereum gate uses every plain
+    /// depth of the program (so the two sets are equal), and each fork keeps its own depth from
+    /// `forks.<name>.currentSyncCommitteeGindex` (gindex 54 is depth 5, 86 is depth 6) with its version from the chain
+    /// specification. Forks before Capella are not listed: their blocks have no execution payload. Gloas is not listed
+    /// in these two gates: no fixture lists it for them, so sends stop at that fork until the route is redeployed with
+    /// the marker (the Gloas gate test covers the marker). The seal depths are wider on purpose: a seal exists to STOP
+    /// sends at a fork that the program cannot read, so depth 7 stays sealable although the program refuses it.
+    /// Matters: a depth in the gate that the program cannot read would let sends pass that can never be delivered; a
+    /// program depth missing from the gate would stop sends in a layout that the program supports.
+    function test_HB02_forkTable_gateDepthsEqualTheLightClientProgramAllowedSet() public {
         string memory gindices = vm.readFile("light-client/tests/fixtures/gindices.json");
         _assertGateEqualsFixtures(gate, gindices, "ethereum", "light-client/tests/fixtures/ethereum/chain_spec.json");
 
@@ -975,6 +981,51 @@ contract BeaconForkGateTest is GateSupport {
             address(0)
         );
         _assertGateEqualsFixtures(pulse, gindices, "pulsechain", "light-client/tests/fixtures/pulsechain/chain_spec.json");
+
+        uint256[] memory programDepths = vm.parseJsonUintArray(gindices, ".program.plainStateDepths");
+        assertEq(programDepths.length, 2, "the program accepts two plain depths");
+        assertEq(programDepths[0], 5);
+        assertEq(programDepths[1], 6);
+        uint256[] memory lengths = vm.parseJsonUintArray(gindices, ".program.finalityBranchLengths");
+        assertEq(lengths.length, 3, "the program accepts three finality branch lengths");
+        assertEq(lengths[2], 9, "the progressive layout is the last one");
+        for (uint256 i = 0; i < programDepths.length; i++) {
+            assertEq(lengths[i], programDepths[i] + 1, "a plain finality branch has one entry more than the depth");
+        }
+        _assertDepthsAreInTheProgramSet(gate, programDepths);
+        _assertDepthsAreInTheProgramSet(pulse, programDepths);
+        for (uint256 i = 0; i < programDepths.length; i++) {
+            assertTrue(_gateUses(gate, programDepths[i]), "the Ethereum gate uses every plain depth of the program");
+            assertTrue(_sealAllows(gate, programDepths[i]), "a program depth is sealable");
+        }
+        assertTrue(_sealAllows(gate, 7), "depth 7 stays sealable so that a fork the program refuses can stop sends");
+    }
+
+    function _assertDepthsAreInTheProgramSet(BeaconForkGate subject, uint256[] memory programDepths) internal view {
+        BeaconForkGate.SupportedVersion[] memory configured = subject.supportedVersions();
+        for (uint256 i = 0; i < configured.length; i++) {
+            bool inTheSet;
+            for (uint256 j = 0; j < programDepths.length; j++) {
+                if (configured[i].stateDepth == programDepths[j]) inTheSet = true;
+            }
+            assertTrue(inTheSet, "a configured state depth is accepted by the program");
+        }
+    }
+
+    function _gateUses(BeaconForkGate subject, uint256 depth) internal view returns (bool) {
+        BeaconForkGate.SupportedVersion[] memory configured = subject.supportedVersions();
+        for (uint256 i = 0; i < configured.length; i++) {
+            if (configured[i].stateDepth == depth) return true;
+        }
+        return false;
+    }
+
+    function _sealAllows(BeaconForkGate subject, uint256 depth) internal view returns (bool) {
+        uint8[] memory depths = subject.sealDepths();
+        for (uint256 i = 0; i < depths.length; i++) {
+            if (depths[i] == depth) return true;
+        }
+        return false;
     }
 
     function _assertGateEqualsFixtures(
