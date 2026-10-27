@@ -321,7 +321,7 @@ export EXPLORER_BEACON_URL_943="https://one.valve.city/beacon/$VALVE_KEY/943"
 (cd explorer && pnpm --filter @zk-bridge/bots run start runner --config "$RUN_DIR/bots.json")
 ```
 
-Add `--once` to run one pass and exit. The runner refuses to start when the router whitelist, the reward address or the Multicall3 address is wrong.
+Add `--once` to run one pass and exit. The runner refuses to start when it cannot read the reward address of the router, or when the Multicall3 address is wrong.
 
 ## Step 11: send one transfer and measure the delivery gas
 
@@ -338,7 +338,7 @@ Compare the numbers with the values in `docs/bots.md`.
 
 | Item | Expected gas |
 |---|---|
-| One delivery through `executeMessageWithRunner` | about 417,000 |
+| One delivery through `executeMessage` | about 417,000 |
 | The `update` call with the real verifier | about 337,000 |
 | The Groth16 verifier call alone | about 226,000 |
 | Multicall3 overhead for each call | about 17,000 |
