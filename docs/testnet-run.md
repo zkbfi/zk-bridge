@@ -179,7 +179,7 @@ BRIDGE_CONFIG=.deploy/bridge.config.json forge script script/hardened/DeployBrid
 | `BeaconForkGate` | 1,813,282 | 12,549,961 |
 | `MessageBridge` | 5,006,027 | 35,838,770 |
 | `TokenMediator` (largest) | 5,693,201 | 40,484,761 |
-| `WETHOmnibridgeRouter` | 574,658 | 3,871,406 |
+| `WETHOmnibridgeRouter` (deleted; historical measurement) | 574,658 | 3,871,406 |
 | `DeliveryRouter` | 1,396,348 | 9,824,883 |
 | Sum | 15,400,851 | 108,694,551 |
 

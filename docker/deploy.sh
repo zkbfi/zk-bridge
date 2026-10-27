@@ -151,25 +151,23 @@ BRIDGE_CONFIG="$config" forge script script/hardened/DeployBridge.s.sol --tc Dep
   || { cat "$STATE_DIR/forge-script.log" >&2; fail "the deploy script failed"; }
 
 # Both chains have no fork registry (chain A enforces, chain B only detects), so the script deploys in this order: the
-# light client at the nonce, then the gate, the message bridge, the token mediator and the native coin router. The
-# mediator creates the token factory as its first contract, so the factory takes no nonce of the deployer.
+# light client at the nonce, then the gate, the message bridge and the token mediator. The local configuration deploys no
+# delivery router. The mediator creates the token factory as its first contract, so the factory takes no nonce of the deployer.
 LIGHT_CLIENT_A="$(compute_address "$DEPLOYER" "$NONCE_A")"
 GATE_A="$(compute_address "$DEPLOYER" $((NONCE_A + 1)))"
 BRIDGE_A="$(compute_address "$DEPLOYER" $((NONCE_A + 2)))"
 MEDIATOR_A="$(compute_address "$DEPLOYER" $((NONCE_A + 3)))"
-ROUTER_A="$(compute_address "$DEPLOYER" $((NONCE_A + 4)))"
 FACTORY_A="$(compute_address "$MEDIATOR_A" 1)"
 LIGHT_CLIENT_B="$(compute_address "$DEPLOYER" "$NONCE_B")"
 GATE_B="$(compute_address "$DEPLOYER" $((NONCE_B + 1)))"
 BRIDGE_B="$(compute_address "$DEPLOYER" $((NONCE_B + 2)))"
 MEDIATOR_B="$(compute_address "$DEPLOYER" $((NONCE_B + 3)))"
-ROUTER_B="$(compute_address "$DEPLOYER" $((NONCE_B + 4)))"
 FACTORY_B="$(compute_address "$MEDIATOR_B" 1)"
 # A name is a hypothesis: read each relationship back from the chain. Each bridge names the bridge and the light client
 # of the OTHER chain, and starts locked: it refuses sends until a stateful server opens it with `openDeposits`. Each
-# mediator names its bridge and its twin on the other chain. Each router names its mediator and its wrapped native token.
-for contract in "$BRIDGE_A $RPC_A" "$MEDIATOR_A $RPC_A" "$ROUTER_A $RPC_A" "$FACTORY_A $RPC_A" \
-  "$BRIDGE_B $RPC_B" "$MEDIATOR_B $RPC_B" "$ROUTER_B $RPC_B" "$FACTORY_B $RPC_B"; do
+# mediator names its bridge and its twin on the other chain.
+for contract in "$BRIDGE_A $RPC_A" "$MEDIATOR_A $RPC_A" "$FACTORY_A $RPC_A" \
+  "$BRIDGE_B $RPC_B" "$MEDIATOR_B $RPC_B" "$FACTORY_B $RPC_B"; do
   read -r address rpc <<< "$contract"
   has_code "$address" "$rpc" || fail "no contract at $address on $rpc"
 done
@@ -193,23 +191,19 @@ expect "$MEDIATOR_B" "$RPC_B" "$BRIDGE_B" 'bridgeContract()(address)'
 expect "$MEDIATOR_B" "$RPC_B" "$MEDIATOR_A" 'mediatorContractOnOtherSide()(address)'
 expect "$MEDIATOR_B" "$RPC_B" 1 'remoteChainId()(uint256)'
 expect "$MEDIATOR_B" "$RPC_B" "$FACTORY_B" 'tokenFactory()(address)'
-expect "$ROUTER_A" "$RPC_A" "$MEDIATOR_A" 'bridge()(address)'
-expect "$ROUTER_A" "$RPC_A" "$WRAPPED_NATIVE_A" 'WETH()(address)'
-expect "$ROUTER_B" "$RPC_B" "$MEDIATOR_B" 'bridge()(address)'
-expect "$ROUTER_B" "$RPC_B" "$WRAPPED_NATIVE_B" 'WETH()(address)'
-log "chain A: bridge $BRIDGE_A, mediator $MEDIATOR_A, native router $ROUTER_A (gate $GATE_A, light client $LIGHT_CLIENT_A)"
-log "chain B: bridge $BRIDGE_B, mediator $MEDIATOR_B, native router $ROUTER_B (gate $GATE_B, light client $LIGHT_CLIENT_B)"
+log "chain A: bridge $BRIDGE_A, mediator $MEDIATOR_A (gate $GATE_A, light client $LIGHT_CLIENT_A)"
+log "chain B: bridge $BRIDGE_B, mediator $MEDIATOR_B (gate $GATE_B, light client $LIGHT_CLIENT_B)"
 
 # Step 6: the record for the other services.
-chain_json() { # name rpc chain_id token wrapped_native bridge mediator token_factory native_router gate light_client start_block
-  printf '    "name": "%s",\n    "rpc_url": "%s",\n    "chain_id": %s,\n    "token": "%s",\n    "wrapped_native": "%s",\n    "bridge": "%s",\n    "mediator": "%s",\n    "token_factory": "%s",\n    "native_router": "%s",\n    "gate": "%s",\n    "light_client": "%s",\n    "start_block": %s,\n    "gate_genesis_time": %s\n' \
-    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12}" "$GATE_GENESIS_TIME"
+chain_json() { # name rpc chain_id token wrapped_native bridge mediator token_factory gate light_client start_block
+  printf '    "name": "%s",\n    "rpc_url": "%s",\n    "chain_id": %s,\n    "token": "%s",\n    "wrapped_native": "%s",\n    "bridge": "%s",\n    "mediator": "%s",\n    "token_factory": "%s",\n    "gate": "%s",\n    "light_client": "%s",\n    "start_block": %s,\n    "gate_genesis_time": %s\n' \
+    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "$GATE_GENESIS_TIME"
 }
 {
   printf '{\n  "chain_a": {\n'
-  chain_json chain-a "$RPC_A" 1 "$TOKEN_A" "$WRAPPED_NATIVE_A" "$BRIDGE_A" "$MEDIATOR_A" "$FACTORY_A" "$ROUTER_A" "$GATE_A" "$LIGHT_CLIENT_A" "$start_block_a"
+  chain_json chain-a "$RPC_A" 1 "$TOKEN_A" "$WRAPPED_NATIVE_A" "$BRIDGE_A" "$MEDIATOR_A" "$FACTORY_A" "$GATE_A" "$LIGHT_CLIENT_A" "$start_block_a"
   printf '  },\n  "chain_b": {\n'
-  chain_json chain-b "$RPC_B" 369 "$TOKEN_B" "$WRAPPED_NATIVE_B" "$BRIDGE_B" "$MEDIATOR_B" "$FACTORY_B" "$ROUTER_B" "$GATE_B" "$LIGHT_CLIENT_B" "$start_block_b"
+  chain_json chain-b "$RPC_B" 369 "$TOKEN_B" "$WRAPPED_NATIVE_B" "$BRIDGE_B" "$MEDIATOR_B" "$FACTORY_B" "$GATE_B" "$LIGHT_CLIENT_B" "$start_block_b"
   printf '  }\n}\n'
 } > "$STATE_DIR/deployment.json.partial"
 

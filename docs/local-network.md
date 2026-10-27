@@ -25,7 +25,7 @@ docker compose -f docker/compose.yaml up -d chain-a chain-b
 docker compose -f docker/compose.yaml run --rm deploy
 ```
 
-The deploy job takes about 30 seconds. It writes its result to the volume `bridge-state`: `deployment.json` holds, for each chain, the keys `token`, `wrapped_native`, `bridge`, `mediator`, `token_factory`, `native_router`, `gate`, `light_client`, `start_block` and `gate_genesis_time`, and the chain identifier. `start_block` is the block where the light client was deployed.
+The deploy job takes about 30 seconds. It writes its result to the volume `bridge-state`: `deployment.json` holds, for each chain, the keys `token`, `wrapped_native`, `bridge`, `mediator`, `token_factory`, `gate`, `light_client`, `start_block` and `gate_genesis_time`, and the chain identifier. `start_block` is the block where the light client was deployed.
 
 ```
 docker compose -f docker/compose.yaml run --rm --entrypoint cat deploy /state/deployment.json
@@ -48,7 +48,6 @@ cast call <bridge address> 'depositsOpen()(bool)' --rpc-url http://127.0.0.1:285
 cast call <mediator address> 'mediatorContractOnOtherSide()(address)' --rpc-url http://127.0.0.1:28546
 cast call <bridge address> 'remoteBridge()(address)' --rpc-url http://127.0.0.1:28546
 cast call <mediator address> 'tokenFactory()(address)' --rpc-url http://127.0.0.1:28546
-cast call <native router address> 'WETH()(address)' --rpc-url http://127.0.0.1:28546
 cast call <light client address> 'head()(uint64)' --rpc-url http://127.0.0.1:28546
 ```
 
