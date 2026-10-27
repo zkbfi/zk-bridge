@@ -25,6 +25,12 @@ name = "prove-worker"
 path = "src/bin/prove_worker.rs"
 required-features = ["sp1-cuda"]
 
+# A beacon chain with real sync committee signatures over local Anvil chains, for the end-to-end run. Development only.
+[[bin]]
+name = "signed-beacon"
+path = "src/bin/signed_beacon.rs"
+required-features = ["signed-beacon"]
+
 # Builds a live update and runs the guest in the SP1 executor, with no proof. See the header of examples/live_update.rs.
 [[example]]
 name = "live_update"
