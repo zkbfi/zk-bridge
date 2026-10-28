@@ -68,6 +68,7 @@ export function createFixtureChainAccess(
               token,
               balance: BigInt(1_000 * (index + 1)) * 10n ** BigInt(token.decimals),
               allowance: settings.allowance,
+              relayGas: { kind: 'acknowledged' },
             })),
         },
       }))

@@ -11,8 +11,8 @@ const chainAccessOf = (readSnapshots: () => Promise<readonly ChainSnapshotResult
 const secondChainUsdc = FIXTURE_TOKENS[1]!;
 
 const snapshotsWith = (): readonly ChainSnapshotResult[] => [
-  { status: "ok", snapshot: { chain: FIXTURE_PAIR.first, nativeBalance: 0n, positions: [{ token: FIXTURE_TOKENS[0]!, balance: 0n, allowance: 0n }] } },
-  { status: "ok", snapshot: { chain: FIXTURE_PAIR.second, nativeBalance: 5n * 10n ** 18n, positions: [{ token: secondChainUsdc, balance: 1_500_000n, allowance: 0n }] } },
+  { status: "ok", snapshot: { chain: FIXTURE_PAIR.first, nativeBalance: 0n, positions: [{ token: FIXTURE_TOKENS[0]!, balance: 0n, allowance: 0n, relayGas: { kind: "acknowledged" } }] } },
+  { status: "ok", snapshot: { chain: FIXTURE_PAIR.second, nativeBalance: 5n * 10n ** 18n, positions: [{ token: secondChainUsdc, balance: 1_500_000n, allowance: 0n, relayGas: { kind: "acknowledged" } }] } },
 ];
 
 describe("the address view", () => {

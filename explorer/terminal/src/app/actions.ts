@@ -2,7 +2,7 @@
  * Turns what the user typed in an action form into the steps of a transaction flow. Pure: it reads the form values
  * and the live snapshots, and throws {@link PlanInputError} with a message that tells the user what to fix.
  */
-import type { DeliveryCall, DeliveryCostReport } from '@zk-bridge/shared'
+import type { DeliveryCall, DeliveryCostReport, RelayGasFacts } from '@zk-bridge/shared'
 import type { Address } from 'viem'
 import { parseUnits, AmountParseError } from '../format/amounts'
 import type { ChainSnapshot, ChainSnapshotResult, RouterAddressesReading, TokenPosition } from '../chain/live-reads'
@@ -79,6 +79,7 @@ export function buildBridgeSteps(values: Readonly<Record<string, string>>, token
     token,
     amount,
     ...(gasLimit === undefined ? {} : { gasLimit }),
+    relayGas: position.relayGas,
     ...(deliveryWanted(values, { source, tokens, context })
       ? deliveryRelayOf(values, { source, tokens, context })
       : directRelayOf(values, { source, receiver, pair: context.pair })),
@@ -238,6 +239,19 @@ function gasLimitOf(values: Readonly<Record<string, string>>): bigint | undefine
   if (text === '') return undefined
   if (!/^\d+$/.test(text)) throw new PlanInputError('The gas limit must be a whole number.')
   return BigInt(text)
+}
+
+/**
+ * What the mediator says about the token that the form chose, which sets the minimum of the gas limit. The native coin
+ * route and a token with no loaded position give a release, the lowest minimum.
+ */
+export function relayGasFactsOf(values: Readonly<Record<string, string>>, tokens: readonly TokenInfo[], context: BridgeContext): RelayGasFacts {
+  const source = bridgeSourceOf(values, tokens, context.pair)
+  if (source.kind !== 'token') return { kind: 'acknowledged' }
+  const loaded = (context.snapshots ?? []).find((result) => result.status === 'ok' && result.snapshot.chain.side === source.side)
+  if (loaded === undefined || loaded.status !== 'ok') return { kind: 'acknowledged' }
+  const position = loaded.snapshot.positions.find((candidate) => candidate.token.address === source.token.address)
+  return position === undefined ? { kind: 'acknowledged' } : position.relayGas
 }
 
 /** Builds the single step of the send-a-message form. */

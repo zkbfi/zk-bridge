@@ -3,7 +3,7 @@
  * {@link PlannedTransaction}. Nothing here reads a chain, signs, or sends, and nothing imports the terminal library,
  * so the later web interface can reuse this file as it is.
  */
-import { checkRequestedGasLimit, decodeDeliveryCall, decodeFeeDirector, type DeliveryCall, type FeeDataSource, type FeeDescription, type FeeDirector } from '@zk-bridge/shared'
+import { checkRequestedGasLimit, messageKindOfRelay, decodeDeliveryCall, decodeFeeDirector, type DeliveryCall, type FeeDataSource, type FeeDescription, type FeeDirector, type RelayGasFacts } from '@zk-bridge/shared'
 import { encodeFunctionData, erc20Abi, getAddress, isAddress, isHex, type Address, type Hex } from 'viem'
 import { formatUnits } from '../format/amounts'
 import type { ChainConfig, TokenInfo } from '../model/types'
@@ -102,14 +102,15 @@ const GAS_LIMIT_NOTE =
   'The gas limit must be at least the default for this kind of message and at most the bridge maximum. Leave it empty for the default.'
 
 /**
- * Refuses a gas limit that the mediator would refuse. The plan cannot know whether the copy of the token exists on the
- * other chain, so it checks the lowest minimum, the one of a release. A first relay needs more (the deploy rule), and
- * the mediator refuses a low request there with `GasLimitBelowMinimum`.
+ * Refuses a gas limit that the mediator would refuse. The kind of the message comes from the facts that the mediator
+ * gave for the token: a copy, or a native token with a proof, sends a release; a native token with no proof sends a
+ * deploy, whose minimum grows with the name and the symbol.
  *
- * @throws PlanInputError when the gas limit is below the minimum of a release or above the bridge maximum.
+ * @throws PlanInputError when the gas limit is below the minimum of its kind or above the bridge maximum.
  */
-const requireGasLimitInRange = (gasLimit: bigint, mode: RelayMode): void => {
-  const check = checkRequestedGasLimit({ kind: { kind: 'token-release', withCall: mode.kind === 'call' }, requested: gasLimit })
+export const requireGasLimitInRange = (gasLimit: bigint, options: { withCall: boolean; relayGas: RelayGasFacts }): void => {
+  const kind = messageKindOfRelay(options.relayGas, { withCall: options.withCall })
+  const check = checkRequestedGasLimit({ kind, requested: gasLimit })
   if (check.ok) return
   const side = check.reason === 'below-minimum' ? `at least ${check.minimum}, the default for this kind of message` : `at most ${check.maximum}, the bridge maximum`
   throw new PlanInputError(`The gas limit must be ${side}. Leave it empty for the default.`)
@@ -130,6 +131,11 @@ export interface RelayInput {
    */
   readonly gasLimit?: bigint
   /**
+   * What the mediator says about the token, which sets the minimum of the gas limit. Absent means a release, the lowest
+   * minimum.
+   */
+  readonly relayGas?: RelayGasFacts
+  /**
    * The delivery fee. The mode must be `call` with the encoded director as data, and the receiver must be the fee
    * router. The plan refuses any other combination, so a review never shows a fee that the data does not hold.
    */
@@ -149,7 +155,7 @@ export function planRelay(input: RelayInput): PlannedTransaction {
   if (amount <= 0n) throw new PlanInputError('The amount must be above zero.')
   requireAddress(receiver, 'receiver')
   if (input.gasLimit !== undefined && input.gasLimit <= 0n) throw new PlanInputError('The gas limit must be above zero.')
-  if (input.gasLimit !== undefined) requireGasLimitInRange(input.gasLimit, mode)
+  if (input.gasLimit !== undefined) requireGasLimitInRange(input.gasLimit, { withCall: mode.kind === 'call', relayGas: input.relayGas ?? { kind: 'acknowledged' } })
   if (input.deliveryFee !== undefined) requireDeliveryFeeMatch(input.deliveryFee, receiver, mode)
   const common = { chain, to: chain.contracts.tokenMediator, contractLabel: 'TokenMediator', value: 0n }
   const tokenArgument = { name: 'token', type: 'address', value: getAddress(token.address), meaning: token.symbol }

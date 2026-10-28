@@ -1,7 +1,7 @@
 import { decodeFunctionData, encodeFunctionData, erc20Abi, getAddress, parseUnits } from "viem";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_GAS_MARGIN, decodeFeeDirector, encodeFeeDirector, feeModeOf, senderPriceOfToken, settingsOf, tokenMediatorAbi, deliveryRouterAbi } from "@zk-bridge/shared";
-import { buildBridgeSteps } from "@terminal/app/actions";
+import { type RelayGasFacts, DEFAULT_GAS_MARGIN, decodeFeeDirector, encodeFeeDirector, feeModeOf, senderPriceOfToken, settingsOf, tokenMediatorAbi, deliveryRouterAbi } from "@zk-bridge/shared";
+import { buildBridgeSteps, type BridgeContext } from "@terminal/app/actions";
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import { PlanInputError, planSendMessage, planWrapAndRelay } from "@terminal/tx/plan";
 import { planBridgeSteps, type BridgeFormValues } from "../../src/tx/bridge-steps";
@@ -21,6 +21,14 @@ const values = (overrides: Partial<BridgeFormValues> = {}): BridgeFormValues => 
   data: "",
   gasLimit: "",
   ...overrides,
+});
+
+/** The same context, with the facts of the mediator about every token position replaced. */
+const withRelayGas = (context: BridgeContext, relayGas: RelayGasFacts): BridgeContext => ({
+  ...context,
+  snapshots: (context.snapshots ?? []).map((result) =>
+    result.status === "ok" ? { ...result, snapshot: { ...result.snapshot, positions: result.snapshot.positions.map((position) => ({ ...position, relayGas })) } } : result,
+  ),
 });
 
 const ROUTERS = { router: deliveryRouter, defaultRouter: deliveryRouter } as const;
@@ -115,6 +123,31 @@ describe("planBridgeSteps without a delivery fee: calldata equals what the termi
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
     expect(() => planBridgeSteps({ values: values({ mode: "call", data: "0xabcd", gasLimit: "999999" }), tokens, context, delivery: null })).toThrow(/at least 1000000/);
     expect(() => planBridgeSteps({ values: values({ gasLimit: "10000001" }), tokens, context, delivery: null })).toThrow(/at most 10000000/);
+  });
+
+  it("a native token with no proof yet is refused between the release minimum and the deploy minimum, and passes after the proof", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+    const unproven = withRelayGas(context, { kind: "unacknowledged", nameAndSymbolBytes: 8 });
+    expect(() => planBridgeSteps({ values: values({ gasLimit: "300000" }), tokens, context: unproven, delivery: null })).toThrow(/at least 2000000/);
+    const [relay] = planBridgeSteps({ values: values({ gasLimit: "2000000" }), tokens, context: unproven, delivery: null });
+    expect(relay!.plan.arguments.at(-1)?.value).toBe("2000000");
+    const proven = withRelayGas(context, { kind: "acknowledged" });
+    expect(planBridgeSteps({ values: values({ gasLimit: "300000" }), tokens, context: proven, delivery: null })).toHaveLength(1);
+  });
+
+  it("a bridged copy uses the release minimum", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+    const copy = withRelayGas(context, { kind: "copy" });
+    expect(() => planBridgeSteps({ values: values({ gasLimit: "249999" }), tokens, context: copy, delivery: null })).toThrow(/at least 250000/);
+    expect(planBridgeSteps({ values: values({ gasLimit: "250000" }), tokens, context: copy, delivery: null })).toHaveLength(1);
+  });
+
+  it("a name and symbol of 500 bytes give the deploy minimum of 2100000, with the callback added for a call", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+    const long = withRelayGas(context, { kind: "unacknowledged", nameAndSymbolBytes: 500 });
+    expect(() => planBridgeSteps({ values: values({ gasLimit: "2000000" }), tokens, context: long, delivery: null })).toThrow(/at least 2100000/);
+    expect(planBridgeSteps({ values: values({ gasLimit: "2100000" }), tokens, context: long, delivery: null })).toHaveLength(1);
+    expect(() => planBridgeSteps({ values: values({ mode: "call", data: "0xabcd", gasLimit: "2100000" }), tokens, context: long, delivery: null })).toThrow(/at least 2850000/);
   });
 
   it("puts an exact allowance first when the allowance is too low, and never an unlimited one", async () => {

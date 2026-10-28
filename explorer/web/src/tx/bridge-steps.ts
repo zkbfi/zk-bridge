@@ -7,12 +7,12 @@
  * carries no call data, so it never carries a tip.
  */
 import { getAddress, isAddress, type Address, type Hex } from "viem";
-import { checkRequestedGasLimit, type DeliveryCall } from "@zk-bridge/shared";
-import { buildBridgeSteps, NATIVE_CHOICE, type BridgeContext } from "@terminal/app/actions";
+import type { DeliveryCall, RelayGasFacts } from "@zk-bridge/shared";
+import { buildBridgeSteps, NATIVE_CHOICE, relayGasFactsOf, type BridgeContext } from "@terminal/app/actions";
 import { parseUnits, AmountParseError } from "@terminal/format/amounts";
 import type { ChainSide, TokenInfo } from "@terminal/model/types";
 import { encodeDirectorFor } from "@terminal/tx/fee-terms-guard";
-import { PlanInputError, parseAddress, type DisplayArgument, type PlannedTransaction } from "@terminal/tx/plan";
+import { PlanInputError, parseAddress, requireGasLimitInRange, type DisplayArgument, type PlannedTransaction } from "@terminal/tx/plan";
 import type { FlowStep } from "@terminal/flow/transaction-flow";
 import type { DeliverySelection } from "./delivery-selection";
 
@@ -52,8 +52,8 @@ export type BridgeFormValues = {
   /**
    * The gas limit of the delivery, as text. Empty means no request: the mediator then uses the default for the message
    * kind. A number plans the overload of `relayTokens` or `relayTokensAndCall` with a trailing gas limit. The number
-   * must be at least the default of a release (the form cannot see whether the copy exists, so it checks the lowest
-   * minimum) and at most the bridge maximum.
+   * must be at least the default of the kind of message (release or deploy, read from the mediator) and at most the
+   * bridge maximum.
    */
   readonly gasLimit: string;
   /**
@@ -94,17 +94,16 @@ const explainRouterReceiver = (argument: DisplayArgument, input: { chainName: st
 /**
  * Reads the gas limit text of the form. Empty text gives null, which plans the function with no gas limit.
  *
- * @throws PlanInputError when the text is not a whole number above zero, is below the minimum of a release (which
- * grows by the callback gas for a relay with a call), or is above the bridge maximum.
+ * @throws PlanInputError when the text is not a whole number above zero, is below the minimum of its kind of message
+ * (release, or deploy for a native token with no proof yet, plus the callback gas for a relay with a call), or is above
+ * the bridge maximum.
  */
-const parseGasLimitText = (text: string, kind: { withCall: boolean }): string | null => {
+const parseGasLimitText = (text: string, options: { withCall: boolean; relayGas: RelayGasFacts }): string | null => {
   const trimmed = text.trim();
   if (trimmed === "") return null;
   if (!/^\d+$/.test(trimmed) || BigInt(trimmed) === 0n) throw new PlanInputError("The gas limit must be a whole number above zero, or empty.");
-  const check = checkRequestedGasLimit({ kind: { kind: "token-release", withCall: kind.withCall }, requested: BigInt(trimmed) });
-  if (check.ok) return trimmed;
-  const bound = check.reason === "below-minimum" ? `at least ${check.minimum}, the default for this kind of message` : `at most ${check.maximum}, the bridge maximum`;
-  throw new PlanInputError(`The gas limit must be ${bound}. Leave it empty for the default.`);
+  requireGasLimitInRange(BigInt(trimmed), options);
+  return trimmed;
 };
 
 /**
@@ -155,7 +154,7 @@ export const planBridgeSteps = (input: PlanBridgeInput): readonly WebStep[] => {
   const amount = parseAmountText(values.amount, token === null || token === undefined ? 18 : token.decimals);
   const receiver = parseAddress(values.receiver, "receiver");
   const call = parseDeliveryCallText(values);
-  const terminalValues = terminalValuesOf(values, { gasLimit: parseGasLimitText(values.gasLimit, { withCall: values.mode === "call" || delivery !== null }), isNative });
+  const terminalValues = terminalValuesOf(values, { gasLimit: parseGasLimitText(values.gasLimit, { withCall: values.mode === "call" || delivery !== null, relayGas: relayGasFactsOf(values, tokens, context) }), isNative });
   const amountToken = token === null || token === undefined ? { symbol: `wrapped ${sourceChain.nativeSymbol}`, decimals: 18 } : { symbol: token.symbol, decimals: token.decimals };
 
   if (delivery === null) {

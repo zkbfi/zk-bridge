@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import type { RelayGasFacts } from '@zk-bridge/shared'
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from '../../src/data/fixtures'
 import {
   PlanInputError,
@@ -94,6 +95,15 @@ describe('planRelay', () => {
     expect(above).toThrow(/at most 10000000/)
     const atMaximum = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit: 10_000_000n })
     expect(atMaximum.arguments.find((argument) => argument.name === 'gasLimit')?.value).toBe('10000000')
+  })
+
+  test('plan names the deploy minimum for a native token with no proof, and uses the name and symbol length', () => {
+    const relay = (relayGas: RelayGasFacts, gasLimit: bigint) => () => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit, relayGas })
+    expect(relay({ kind: 'unacknowledged', nameAndSymbolBytes: 8 }, 300_000n)).toThrow(/at least 2000000/)
+    expect(relay({ kind: 'unacknowledged', nameAndSymbolBytes: 500 }, 2_000_000n)).toThrow(/at least 2100000/)
+    expect(relay({ kind: 'unacknowledged', nameAndSymbolBytes: 500 }, 2_100_000n)).not.toThrow()
+    expect(relay({ kind: 'acknowledged' }, 300_000n)).not.toThrow()
+    expect(relay({ kind: 'copy' }, 249_999n)).toThrow(/at least 250000/)
   })
 
   test('the gas limit plan decodes back to its arguments', () => {
