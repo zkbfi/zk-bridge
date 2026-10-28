@@ -6,6 +6,9 @@ source "$(dirname "$0")/env.sh"
 e2e_enter_root
 [ -f "$E2E_STATE_DIR/deployment.json" ] || e2e_fail "$E2E_STATE_DIR has no deployment. Run e2e/deploy.sh."
 : "${E2E_INDEXER_PORT:=42069}"
+if lsof -nP -t -iTCP:"$E2E_INDEXER_PORT" -sTCP:LISTEN > /dev/null 2>&1; then
+  e2e_fail "port $E2E_INDEXER_PORT is in use. Run e2e/stop.sh, or set E2E_INDEXER_PORT to a free port."
+fi
 export EXPLORER_PAIR=eth-pls
 export EXPLORER_DEPLOYMENT_FILE="$E2E_STATE_DIR/deployment.json"
 export EXPLORER_RPC_URL_1="$E2E_RPC_A"

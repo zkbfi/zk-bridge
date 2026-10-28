@@ -10,9 +10,6 @@ import { record } from "../results.ts";
 /** The fork version that the evidence claims. The gate proves the claim but holds no list of versions, so any value works. */
 const CLAIMED_VERSION: Hex = "0x03000000";
 
-/** The getter of the genesis validators root of the gate. The shared ABI file does not list it. */
-const genesisValidatorsRootAbi = [{ type: "function", name: "genesisValidatorsRoot", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "bytes32" }] }] as const;
-
 /** Reads the epoch that the gate confirmed last, or null when it confirmed none. */
 export const confirmedEpoch = async (context: Context, side: Side): Promise<bigint | null> => {
   const chain = chainOf(context, side);
@@ -37,7 +34,7 @@ export const confirmGate = async (context: Context, side: Side, stage: string): 
     read<bigint>("genesisTime"),
     read<bigint>("secondsPerSlot"),
     read<bigint>("slotsPerEpoch"),
-    chain.publicClient.readContract({ address: chain.deployment.gate, abi: genesisValidatorsRootAbi, functionName: "genesisValidatorsRoot" }) as Promise<Hex>,
+    read<Hex>("genesisValidatorsRoot"),
   ]);
   const version = CLAIMED_VERSION;
   for (let attempt = 1; attempt <= 5; attempt += 1) {

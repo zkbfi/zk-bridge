@@ -25,7 +25,25 @@ stop_one() {
 }
 
 # The order is the reverse of the start: the indexer and the bots first, then the beacon node and the chains.
-for name in indexer bots publisher runner beacon anvil-b anvil-a; do
+for name in indexer beacon anvil-b anvil-a; do
   [ ! -f "$E2E_PID_DIR/$name.pid" ] || stop_one "$E2E_PID_DIR/$name.pid"
 done
+
+# Stops what still listens on a port of the run and answers as an e2e service. The state directory may be gone or may belong
+# to another run, so the pid files are not enough. A process is stopped only when its command line matches the service.
+# Arguments: port, pattern of the command line.
+stop_listener() {
+  local port="$1" pattern="$2" pid command
+  for pid in $(lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2> /dev/null || true); do
+    command="$(ps -o command= -p "$pid" 2> /dev/null || true)"
+    case "$command" in
+      *$pattern*) kill "$pid" 2> /dev/null && e2e_log "stopped the $pattern listener on port $port (pid $pid)" ;;
+      *) e2e_log "port $port is held by another program (pid $pid); left alone" ;;
+    esac
+  done
+}
+stop_listener "${E2E_INDEXER_PORT:-42069}" ponder
+stop_listener "$E2E_BEACON_PORT" signed-beacon
+stop_listener "$E2E_RPC_A_PORT" anvil
+stop_listener "$E2E_RPC_B_PORT" anvil
 e2e_log "everything is stopped"

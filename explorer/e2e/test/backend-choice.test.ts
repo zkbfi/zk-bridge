@@ -17,4 +17,14 @@ describe("backendOf", () => {
   test("treats an empty key as no key", () => {
     expect(backendOf({ RUNPOD_API_KEY: "" })).toBe("oracle");
   });
+
+  test("accepts an E2E_BACKEND that agrees with the key", () => {
+    expect(backendOf({ E2E_BACKEND: "oracle" })).toBe("oracle");
+    expect(backendOf({ E2E_BACKEND: "remote", RUNPOD_API_KEY: "rpa_x", E2E_RUNPOD_URL: "https://example.invalid" })).toBe("remote");
+  });
+
+  test("refuses an E2E_BACKEND that disagrees with the key", () => {
+    expect(() => backendOf({ E2E_BACKEND: "remote" })).toThrow(/E2E_BACKEND/);
+    expect(() => backendOf({ E2E_BACKEND: "oracle", RUNPOD_API_KEY: "rpa_x", E2E_RUNPOD_URL: "https://example.invalid" })).toThrow(/E2E_BACKEND/);
+  });
 });

@@ -18,9 +18,11 @@
 # `remote` only when RUNPOD_API_KEY is set, and then E2E_RUNPOD_URL must name the endpoint. No file holds an endpoint address.
 if [ -n "${RUNPOD_API_KEY:-}" ]; then
   : "${E2E_BACKEND:=remote}"
+  [ "$E2E_BACKEND" = remote ] || { printf 'e2e: RUNPOD_API_KEY is set but E2E_BACKEND is %s. Unset one of them.\n' "$E2E_BACKEND" >&2; exit 1; }
   [ -n "${E2E_RUNPOD_URL:-}" ] || { printf 'e2e: RUNPOD_API_KEY is set, so E2E_RUNPOD_URL must name the RunPod endpoint\n' >&2; exit 1; }
 else
   : "${E2E_BACKEND:=oracle}"
+  [ "$E2E_BACKEND" = oracle ] || { printf 'e2e: E2E_BACKEND is %s but RUNPOD_API_KEY is not set.\n' "$E2E_BACKEND" >&2; exit 1; }
 fi
 : "${E2E_PROVER:=prover/target/release/zk-bridge-prover}"
 : "${E2E_SIGNED_BEACON:=prover/target/release/signed-beacon}"

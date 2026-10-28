@@ -11,6 +11,9 @@ source "$(dirname "$0")/env.sh"
 e2e_enter_root
 case "${RUNPOD_API_KEY:-rpa_}" in rpa_*) ;; *) e2e_fail "RUNPOD_API_KEY does not look like a RunPod key" ;; esac
 
+# Whatever happens, stop the chains, the beacon node and the indexer at exit, so a failed stage leaves nothing behind.
+E2E_ROOT="$PWD"
+trap '"$E2E_ROOT/e2e/stop.sh" || true' EXIT
 e2e/stop.sh || true
 rm -rf "$E2E_STATE_DIR" .deploy explorer/indexer/.ponder
 e2e/start.sh

@@ -76,14 +76,17 @@ export interface RunRecord {
  * oracle prover. The endpoint of the remote prover has no default: it must come from `E2E_RUNPOD_URL`.
  *
  * @param environment The environment variables to read.
- * @throws Error when a key is set but `E2E_RUNPOD_URL` is not.
+ * @throws Error when a key is set but `E2E_RUNPOD_URL` is not, or when `E2E_BACKEND` disagrees with the key.
  */
 export const backendOf = (environment: Readonly<Record<string, string | undefined>>): "oracle" | "remote" => {
   const apiKey = environment.RUNPOD_API_KEY;
-  if (apiKey === undefined || apiKey === "") return "oracle";
+  const chosen = apiKey === undefined || apiKey === "" ? "oracle" : "remote";
+  const stated = environment.E2E_BACKEND;
+  if (stated !== undefined && stated !== "" && stated !== chosen) throw new Error(`E2E_BACKEND is ${stated}, but the RunPod key says ${chosen}. Unset one of them.`);
+  if (chosen === "oracle") return chosen;
   const endpoint = environment.E2E_RUNPOD_URL;
   if (endpoint === undefined || endpoint === "") throw new Error("RUNPOD_API_KEY is set, so E2E_RUNPOD_URL must name the RunPod endpoint");
-  return "remote";
+  return chosen;
 };
 
 /** The two clients and the facts of one chain. */

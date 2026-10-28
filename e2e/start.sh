@@ -13,6 +13,9 @@ mkdir -p "$E2E_LOG_DIR" "$E2E_PID_DIR"
 # block every `slot_seconds / E2E_TIME_SCALE` real seconds. Arguments: name, port, chain identifier, hardfork, seconds per slot.
 start_chain() {
   local name="$1" port="$2" chain_id="$3" hardfork="$4" slot_seconds="$5" rpc="http://127.0.0.1:$2"
+  if cast chain-id --rpc-url "$rpc" > /dev/null 2>&1; then
+    e2e_fail "a chain already answers at $rpc and this run did not start it. Run e2e/stop.sh first."
+  fi
   e2e_spawn "anvil-$name" anvil --host 127.0.0.1 --port "$port" --chain-id "$chain_id" --hardfork "$hardfork" \
     --no-mining --slots-in-an-epoch 1 --mnemonic "$E2E_MNEMONIC"
   local tries=0
