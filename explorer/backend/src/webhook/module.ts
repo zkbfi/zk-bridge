@@ -59,7 +59,6 @@ export const REAL_SOURCE: WebhookSource = {
 };
 
 type Resolved = {
-  readonly bearer: string;
   readonly publisher: ProofPublisher;
   readonly assess: (input: { payload: Hex; direction: ProofDirection }) => ReturnType<typeof assessProofPayload>;
 };
@@ -122,7 +121,7 @@ function build(context: BackendModuleContext, source: WebhookSource): Resolved {
       lightClient: { read: () => readLightClient(direction) },
     });
   ensureProofTable(context.storage);
-  return { bearer, publisher, assess };
+  return { publisher, assess };
 }
 
 /** The settings of the module, or the reason that they cannot be built. The result is kept after the first success. */
@@ -164,9 +163,11 @@ export function register(app: Hono, context: BackendModuleContext): void {
   app.post(
     "/webhook/jobs/:jobId",
     async (request, next) => {
+      // The token is checked first and from the environment alone: a caller without it causes no file read.
+      const expected = stateOf(context).source.environment[context.config.webhookBearerVariable] ?? "";
+      if (!bearerMatches(request.req.header("authorization"), expected)) return request.json({ error: "unauthorized" }, 401);
       const current = resolve(context);
       if (!current.ok) return request.json({ error: current.reason }, 503);
-      if (!bearerMatches(request.req.header("authorization"), current.resolved.bearer)) return request.json({ error: "unauthorized" }, 401);
       return next();
     },
     bodyLimit({ maxSize: MAXIMUM_BODY_BYTES, onError: (request) => request.json({ error: "the request body is too large" }, 413) }),

@@ -11,7 +11,7 @@ import { PROGRAM_KEY, publicValuesFor, word } from "../../shared/test/support/pr
 import { MAXIMUM_BODY_BYTES } from "../src/requests/module.ts";
 import { getJob, insertJob, updateJob } from "../src/requests/jobs.ts";
 import { MSGBOARD_VARIABLE, REAL_SOURCE, TICK_INTERVAL_MILLISECONDS, configureWebhook, settled, start, type WebhookSource } from "../src/webhook/module.ts";
-import { createProofPublisher } from "../src/webhook/publish.ts";
+import { MAXIMUM_POST_ATTEMPTS, POST_FAILED_REASON, RETRY_BASE_MILLISECONDS, RETRY_CEILING_MILLISECONDS, createProofPublisher, retryDelayMilliseconds } from "../src/webhook/publish.ts";
 import { bearerMatches, ensureProofTable } from "../src/webhook/receive.ts";
 import { MODULES } from "../src/main.ts";
 import { SECRETS, controllableProver, makeBackend, memoryLogger } from "./support.ts";
@@ -115,7 +115,10 @@ async function send(fixture: Fixture, jobId: string, body: unknown, headers: Rec
   });
 }
 
-const storedCount = (fixture: Fixture) => (fixture.storage.database.prepare("SELECT count(*) AS total FROM webhook_proofs").get() as { total: number }).total;
+const storedCount = (fixture: Fixture) => {
+  ensureProofTable(fixture.storage);
+  return (fixture.storage.database.prepare("SELECT count(*) AS total FROM webhook_proofs").get() as { total: number }).total;
+};
 const storedRow = (fixture: Fixture) => fixture.storage.database.prepare("SELECT * FROM webhook_proofs").get() as Record<string, unknown>;
 
 afterEach(() => {
@@ -165,6 +168,23 @@ describe("the body", () => {
     const jobId = createProvingJob(fixture);
     expect((await send(fixture, jobId, body)).status).toBe(400);
     expect(getJob(fixture.storage, jobId)?.status).toBe("proving");
+  });
+});
+
+describe("a replay", () => {
+  it("answers stored and keeps the stored proof when the prover sends again after the head moved", async () => {
+    const fixture = setup();
+    fixture.state.boardFailure = new Error("down");
+    const jobId = createProvingJob(fixture);
+    expect((await send(fixture, jobId, proofPackage())).status).toBe(202);
+    await settled(fixture.context);
+    expect(storedCount(fixture)).toBe(1);
+    fixture.state.head = { ...HEAD, headSlot: 200n };
+    const replay = await send(fixture, jobId, proofPackage());
+    expect(replay.status).toBe(202);
+    expect(await replay.json()).toEqual({ status: "stored" });
+    expect(getJob(fixture.storage, jobId)?.status).toBe("proving");
+    expect(storedCount(fixture)).toBe(1);
   });
 });
 
@@ -284,6 +304,7 @@ describe("the publisher", () => {
     expect(getJob(fixture.storage, jobId)?.status).toBe("proving");
     expect(storedRow(fixture)).toMatchObject({ posted_at: null, attempts: 1, last_error: "TypeError" });
     fixture.state.boardFailure = null;
+    fixture.clock.advance(RETRY_BASE_MILLISECONDS);
     const stop = await start(fixture.context);
     await stop();
     expect(getJob(fixture.storage, jobId)?.status).toBe("published");
@@ -314,6 +335,24 @@ describe("the publisher", () => {
     expect(fixture.posts).toHaveLength(0);
     expect(storedCount(fixture)).toBe(0);
     expect(getJob(fixture.storage, jobId)?.status).toBe("failed");
+  });
+
+  it("drops the proof of an ended job when asked to publish it directly", async () => {
+    const fixture = setup();
+    ensureProofTable(fixture.storage);
+    const jobId = createProvingJob(fixture);
+    fixture.storage.database.prepare("INSERT INTO webhook_proofs (job_id, direction, payload, start_slot, new_slot, stored_at) VALUES (?, 'first-to-second', '0x00', '1', '2', 0)").run(jobId);
+    updateJob(fixture.storage, jobId, { status: "failed", error: "late" }, 5, ["proving"]);
+    const publisher = createProofPublisher({
+      storage: fixture.storage,
+      board: { post: async () => { throw new Error("must not post"); } },
+      categoryFor: () => word(0x01),
+      heads: { headSlot: async () => 0n },
+      now: fixture.clock.now,
+      logger: fixture.context.logger,
+    });
+    await publisher.publish(jobId);
+    expect(storedCount(fixture)).toBe(0);
   });
 
   it("keeps the post when the job ends during it, and does not bring the job back", async () => {
@@ -363,6 +402,50 @@ describe("the publisher", () => {
       logger: fixture.context.logger,
     });
     await expect(publisher.publish("nothing")).resolves.toBeUndefined();
+  });
+
+  it("waits longer after each failed post, up to a ceiling, and posts again when the wait is over", async () => {
+    expect([1, 2, 3].map(retryDelayMilliseconds)).toEqual([RETRY_BASE_MILLISECONDS, RETRY_BASE_MILLISECONDS * 2, RETRY_BASE_MILLISECONDS * 4]);
+    expect(retryDelayMilliseconds(MAXIMUM_POST_ATTEMPTS)).toBe(RETRY_CEILING_MILLISECONDS);
+    const fixture = setup();
+    fixture.state.boardFailure = new Error("down");
+    const jobId = createProvingJob(fixture);
+    await send(fixture, jobId, proofPackage());
+    await settled(fixture.context);
+    expect(storedRow(fixture).attempts).toBe(1);
+    await (await start(fixture.context))();
+    expect(storedRow(fixture).attempts).toBe(1);
+    fixture.clock.advance(RETRY_BASE_MILLISECONDS - 1);
+    await (await start(fixture.context))();
+    expect(storedRow(fixture).attempts).toBe(1);
+    fixture.clock.advance(1);
+    await (await start(fixture.context))();
+    expect(storedRow(fixture).attempts).toBe(2);
+    fixture.clock.advance(RETRY_BASE_MILLISECONDS * 2 - 1);
+    await (await start(fixture.context))();
+    expect(storedRow(fixture).attempts).toBe(2);
+    fixture.clock.advance(1);
+    fixture.state.boardFailure = null;
+    await (await start(fixture.context))();
+    expect(getJob(fixture.storage, jobId)?.status).toBe("published");
+  });
+
+  it("fails the job with a fixed reason after the maximum number of attempts", async () => {
+    const fixture = setup();
+    fixture.state.boardFailure = new TypeError("board at http://board.invalid refused");
+    const jobId = createProvingJob(fixture);
+    await send(fixture, jobId, proofPackage());
+    await settled(fixture.context);
+    for (let attempt = 1; attempt < MAXIMUM_POST_ATTEMPTS; attempt += 1) {
+      expect(getJob(fixture.storage, jobId)?.status).toBe("proving");
+      fixture.clock.advance(RETRY_CEILING_MILLISECONDS);
+      await (await start(fixture.context))();
+    }
+    const job = getJob(fixture.storage, jobId);
+    expect(job).toMatchObject({ status: "failed", error: POST_FAILED_REASON });
+    expect(job?.error).not.toContain("board.invalid");
+    expect(storedCount(fixture)).toBe(0);
+    expect(fixture.posts).toHaveLength(0);
   });
 
   it("holds no wallet: the context offers none", () => {
@@ -458,7 +541,6 @@ describe("settings and health", () => {
   });
 
   it.each([
-    ["the bearer variable", { ...SETTINGS, BACKEND_WEBHOOK_BEARER: "" }],
     ["the msgboard variable", { ...SETTINGS, [MSGBOARD_VARIABLE]: undefined }],
     ["the rpc variable of a chain", { ...SETTINGS, EXPLORER_RPC_URL_369: undefined }],
   ])("answers 503 and reports degraded when %s is missing, and shows no value", async (_name, environment) => {
@@ -471,6 +553,23 @@ describe("settings and health", () => {
     expect(report.modules.webhook).toEqual({ state: "degraded", detail: "the webhook settings cannot be used" });
     expect(JSON.stringify(report)).not.toContain(TOKEN);
     expect(fixture.log.lines.join("\n")).not.toContain(TOKEN);
+  });
+
+  it.each([[{ ...SETTINGS, BACKEND_WEBHOOK_BEARER: "" }], [{ ...SETTINGS, BACKEND_WEBHOOK_BEARER: undefined }]])("answers 401 when the bearer variable is not set", async (environment) => {
+    const fixture = setup({ source: { environment } });
+    const jobId = createProvingJob(fixture);
+    expect((await send(fixture, jobId, proofPackage(), { authorization: "Bearer " })).status).toBe(401);
+    expect((await send(fixture, jobId, proofPackage())).status).toBe(401);
+  });
+
+  it("a caller without a valid token causes no deployment read and no log line", async () => {
+    let reads = 0;
+    const fixture = setup({ source: { environment: { ...SETTINGS, EXPLORER_RPC_URL_369: undefined }, readDeployment: () => (reads += 1, DEPLOYMENT) } });
+    const readsAtStart = reads;
+    const linesAtStart = fixture.log.lines.length;
+    for (let call = 0; call < 3; call += 1) expect((await send(fixture, "job-1", proofPackage(), { authorization: "Bearer wrong" })).status).toBe(401);
+    expect(reads).toBe(readsAtStart);
+    expect(fixture.log.lines).toHaveLength(linesAtStart);
   });
 
   it("never logs the bearer token", async () => {

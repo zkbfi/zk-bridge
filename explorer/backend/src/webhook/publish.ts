@@ -11,6 +11,27 @@ export interface HeadReader {
   headSlot(direction: ProofDirection): Promise<bigint>;
 }
 
+/** The wait after the first failed post, in milliseconds. Each further failure doubles it. */
+export const RETRY_BASE_MILLISECONDS = 15_000;
+
+/** The longest wait between two posts of one proof, in milliseconds. */
+export const RETRY_CEILING_MILLISECONDS = 900_000;
+
+/** After this many failed posts the job fails. */
+export const MAXIMUM_POST_ATTEMPTS = 10;
+
+/** The reason of a job that the board never accepted. A fixed phrase: a board error can name an endpoint. */
+export const POST_FAILED_REASON = "the proof could not be posted to the board";
+
+/**
+ * The wait before the next post, after `attempts` failed posts.
+ *
+ * @param attempts The number of failed posts, at least 1.
+ */
+export function retryDelayMilliseconds(attempts: number): number {
+  return Math.min(RETRY_BASE_MILLISECONDS * 2 ** (attempts - 1), RETRY_CEILING_MILLISECONDS);
+}
+
 /** Input of {@link createProofPublisher}. */
 export interface ProofPublisherInput {
   readonly storage: Storage;
@@ -32,7 +53,7 @@ export interface ProofPublisher {
   settled(): Promise<void>;
 }
 
-type StoredProof = { job_id: string; direction: ProofDirection; payload: Hex; start_slot: string; new_slot: string; attempts: number };
+type StoredProof = { job_id: string; direction: ProofDirection; payload: Hex; start_slot: string; new_slot: string; attempts: number; last_attempt_at: number | null };
 
 /** A fixed phrase for the stored error: the text of a board error can name an endpoint. */
 function errorKind(error: unknown): string {
@@ -66,8 +87,15 @@ export function createProofPublisher(input: ProofPublisherInput): ProofPublisher
       });
       logger.info("webhook_proof_posted", { jobId: stored.job_id, messageHash: posted.messageHash, grindMilliseconds: posted.grindMilliseconds });
     } catch (error) {
-      storage.database.prepare("UPDATE webhook_proofs SET attempts = attempts + 1, last_error = ? WHERE job_id = ?").run(errorKind(error), stored.job_id);
-      logger.warn("webhook_post_failed", { jobId: stored.job_id, error });
+      const attempts = stored.attempts + 1;
+      storage.database
+        .prepare("UPDATE webhook_proofs SET attempts = ?, last_attempt_at = ?, last_error = ? WHERE job_id = ?")
+        .run(attempts, input.now(), errorKind(error), stored.job_id);
+      logger.warn("webhook_post_failed", { jobId: stored.job_id, attempts, error });
+      if (attempts < MAXIMUM_POST_ATTEMPTS) return;
+      updateJob(storage, stored.job_id, { status: "failed", error: POST_FAILED_REASON }, input.now(), ["proving"]);
+      storage.database.prepare("DELETE FROM webhook_proofs WHERE job_id = ?").run(stored.job_id);
+      logger.warn("webhook_proof_given_up", { jobId: stored.job_id, attempts });
     }
   }
 
@@ -98,7 +126,10 @@ export function createProofPublisher(input: ProofPublisherInput): ProofPublisher
   return {
     publish,
     async tick() {
-      for (const stored of unposted()) await publish(stored.job_id);
+      storage.database.prepare("DELETE FROM webhook_proofs WHERE posted_at IS NULL AND job_id IN (SELECT id FROM jobs WHERE status != 'proving')").run();
+      const current = input.now();
+      const due = unposted().filter((row) => row.last_attempt_at === null || current >= row.last_attempt_at + retryDelayMilliseconds(row.attempts));
+      for (const stored of due) await publish(stored.job_id);
       await confirmPublished();
     },
     async settled() {

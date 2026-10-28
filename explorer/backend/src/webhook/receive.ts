@@ -19,6 +19,7 @@ export function ensureProofTable(storage: Storage): void {
       posted_at INTEGER,
       message_hash TEXT,
       attempts INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at INTEGER,
       last_error TEXT
     )
   `);
@@ -83,6 +84,9 @@ export async function receiveProofPackage(input: ReceiveInput): Promise<ReceiveO
   const job = getJob(input.storage, input.jobId);
   if (job === null) return { kind: "unknown-job" };
   if (job.status !== "proving") return { kind: "not-proving", status: job.status };
+  // A replay (the prover sends again after the light client moved) must not fail a job that holds a good proof.
+  const held = input.storage.database.prepare("SELECT 1 AS held FROM webhook_proofs WHERE job_id = ?").get(job.id);
+  if (held !== undefined) return { kind: "stored" };
   const parsed = proofPackageSchema.safeParse(input.body);
   if (!parsed.success) return { kind: "malformed" };
   const proofPackage = parsed.data;
