@@ -1,5 +1,5 @@
 import type { Hex } from "viem";
-import { encodeProofMessage, type ProofDirection } from "@zk-bridge/shared";
+import { ORACLE_PROOF_MESSAGE_VERSION, PROOF_MESSAGE_VERSION, encodeProofMessage, type ProofDirection } from "@zk-bridge/shared";
 import type { LightClientReader } from "../chain/light-client.ts";
 import type { Logger } from "../logging/logger.ts";
 import type { BoardPublisher } from "@zk-bridge/shared/msgboard";
@@ -27,6 +27,8 @@ export interface PublisherDependencies {
   readonly upToDateWaitSeconds: number;
   readonly now: () => number;
   readonly logger: Logger;
+  /** Post proofs in the oracle form (version 2). Only the oracle backend sets it, for local testing. Default: strict. */
+  readonly acceptOracleProof?: boolean;
 }
 
 /** What a step did. Tests and the log read it. */
@@ -207,8 +209,9 @@ async function usableAgainstHead(
     return { ok: false, reason: "start-differs-from-head" };
   }
   try {
+    const oracle = dependencies.acceptOracleProof === true;
     const payload = encodeProofMessage({
-      version: 1,
+      version: oracle ? ORACLE_PROOF_MESSAGE_VERSION : PROOF_MESSAGE_VERSION,
       pair: dependencies.pairName,
       direction: dependencies.direction,
       programKey: proofPackage.programKey as Hex,
@@ -218,7 +221,7 @@ async function usableAgainstHead(
       newRoot: proofPackage.newHeadRoot as Hex,
       publicValues: proofPackage.publicValues as Hex,
       proof: proofPackage.proof as Hex,
-    });
+    }, { acceptOracleProof: oracle });
     return { ok: true, payload };
   } catch (error) {
     return { ok: false, reason: (error as Error).message };

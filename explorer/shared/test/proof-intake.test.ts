@@ -1,6 +1,7 @@
 import { keccak256 } from "viem";
 import { describe, expect, it } from "vitest";
 import { assessProofPayload, payloadKey } from "../src/prover/proof-intake.js";
+import { encodeProofMessage } from "../src/proof-message.js";
 import { PROGRAM_KEY, fakeLightClient, fakeProver, proofMessage, proofPayload, word } from "./support/prover-builders.js";
 
 const assess = (options: { payload?: ReturnType<typeof proofPayload>; pairName?: string; lightClient?: ReturnType<typeof fakeLightClient>; prover?: ReturnType<typeof fakeProver> } = {}) =>
@@ -85,6 +86,36 @@ describe("the assessment of a proof payload", () => {
   it("refuses a proof that fails verification, and gives the message of the error", async () => {
     const prover = fakeProver({ verify: () => { throw new Error("bad proof"); } });
     expect(await assess({ prover })).toEqual({ accept: false, reason: "proof-does-not-verify", detail: "bad proof" });
+  });
+
+  describe("the oracle form", () => {
+    const oraclePayload = () => encodeProofMessage({ ...proofMessage(), version: 2, proof: `0x${"cd".repeat(65)}` }, { acceptOracleProof: true });
+    const withOption = (acceptOracleProof?: boolean) => (prover: ReturnType<typeof fakeProver>) =>
+      assessProofPayload({ payload: oraclePayload(), pairName: "eth-pls", direction: "first-to-second", lightClient: fakeLightClient(), prover, ...(acceptOracleProof === undefined ? {} : { acceptOracleProof }) });
+
+    it.each([["unset", undefined], ["false", false]])("refuses it when the option is %s, and never calls the prover", async (_name, option) => {
+      const prover = fakeProver();
+      expect(await withOption(option)(prover)).toEqual({ accept: false, reason: "oracle-proof-not-accepted" });
+      expect(prover.verifications).toBe(0);
+    });
+
+    it("accepts it only with the option true, and skips the local Groth16 check, which cannot judge it", async () => {
+      const prover = fakeProver({ verify: () => { throw new Error("must not run"); } });
+      const result = await withOption(true)(prover);
+      expect(result).toMatchObject({ accept: true });
+      expect(prover.verifications).toBe(0);
+    });
+
+    it("still applies the checks of the chain state to an oracle proof", async () => {
+      const result = await assessProofPayload({ payload: oraclePayload(), pairName: "eth-pls", direction: "first-to-second", lightClient: fakeLightClient({ headSlot: 120n }), prover: fakeProver(), acceptOracleProof: true });
+      expect(result).toEqual({ accept: false, reason: "start-slot-differs-from-head" });
+    });
+
+    it("does not change a Groth16 proof: the option on or off, it is verified", async () => {
+      const prover = fakeProver();
+      expect((await assess({ prover })).accept).toBe(true);
+      expect(prover.verifications).toBe(1);
+    });
   });
 
   it("names the key of a payload by its hash, so that a republished payload has one key", () => {

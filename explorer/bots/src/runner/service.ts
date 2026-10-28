@@ -209,6 +209,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       maximumDeliveriesPerSweep: runnerConfig.maximumDeliveriesPerSweep,
       prerequisiteLossRefusalMilliseconds: runnerConfig.prerequisiteLossRefusalSeconds * 1000,
       logger: directionLogger,
+      acceptOracleProof: runnerConfig.acceptOracleProof,
     });
     const category = proofCategory(pair.name, direction);
     // `handleProofPayload` sweeps after it accepts a proof: the update goes with the first batch, or alone when none follows.

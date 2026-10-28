@@ -37,6 +37,8 @@ export interface RunnerDependencies {
   /** How long an item is not tried again after layout calls were paid for it and the delivery did not follow. */
   readonly prerequisiteLossRefusalMilliseconds: number;
   readonly logger: Logger;
+  /** Accept oracle proofs (version 2). Set it only when the destination verifier is the oracle stand-in. Default: strict. */
+  readonly acceptOracleProof?: boolean;
 }
 
 /** What the runner did with one message of the board. */
@@ -108,6 +110,7 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
       direction: dependencies.direction,
       lightClient: dependencies.lightClient,
       prover: dependencies.delivery.prover,
+      acceptOracleProof: dependencies.acceptOracleProof === true,
     });
     if (!assessment.accept) {
       logger.debug("proof_refused", { reason: assessment.reason, detail: assessment.detail });

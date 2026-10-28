@@ -132,6 +132,11 @@ export const runnerSchema = z
     maximumLossPercent: z.number().int().min(0).max(100).default(20),
     /** Deliver items that have no fee offer, for the gas cost alone. Off by default. */
     deliverWithoutOffer: z.boolean().default(false),
+    /**
+     * Take proofs in the oracle form (message version 2). Set it only when the light client of the destination chain
+     * uses the oracle stand-in as its verifier, for local testing. Never set it on a live deployment. Default off.
+     */
+    acceptOracleProof: z.boolean().default(false),
     /** The delivery router on the destination chain. Default: the `delivery_router` of the deployment file. */
     deliveryRouter: addressSchema.optional(),
     /**

@@ -45,13 +45,14 @@ proving policy. The **bot configuration** adds what only a bot needs. A sample i
 | `publisher.prover.binary`, `.timeoutSeconds` | The `zk-bridge-prover` binary. |
 | `publisher.apiKeyVariable` | The variable that the prover reads the RunPod key from. Default `RUNPOD_API_KEY`. |
 | `publisher.remote` | `{ "mode": "load-balancing" }`. The only mode today. |
-| `publisher.backend` | `remote` (default) or `oracle`. The `oracle` backend is for local testing only. The prover signs with a test key, and only a local chain accepts that signature. Never set it on a live deployment. Only the tests and the end-to-end run set it. |
+| `publisher.backend` | `remote` (default) or `oracle`. The `oracle` backend is for local testing only. The prover signs with a test key, and only a local chain accepts that signature. Never set it on a live deployment. Only the tests and the end-to-end run set it. With it, the publisher posts the oracle form of the proof message (version 2). |
 | `publisher.oracleKeyVariable` | The variable that holds the test key of the `oracle` backend. Default `ORACLE_KEY`. With `oracle`, the setup file needs no remote prover endpoint and no RunPod key. |
 | `publisher.pollSeconds`, `.republishSeconds`, `.retryBackoffSeconds` | 30, 600 and 120. |
 | `publisher.indexerUrl` | Required when the policy proves when a transfer waits. |
 | `runner.signer` | `private-key`, `keystore`, `mnemonic`, `ledger` or `trezor`, as in the dashboard. |
 | `runner.indexerUrl` | The indexer. |
 | `runner.maximumLossPercent` | A whole number from 0 to 100. A delivery is a loss only when its fee is below its cost. A delivery at break-even (fee equal to cost, including a zero cost with a zero fee) always delivers, even at a limit of 0. Below the cost, the runner leaves out a delivery whose loss is this share of its cost or more. The cost includes the share of the light client update that the delivery carries. A left-out message stays deliverable by anyone. Default 20. A configuration that still names `minimumMarginWei` is refused. |
+| `runner.acceptOracleProof` | Take proofs in the oracle form (message version 2, a 65 byte proof). For local testing only: set it only when the destination light client uses the oracle stand-in as its verifier. Never on a live deployment. Default off. |
 | `runner.deliverWithoutOffer` | Deliver items with no fee offer, for the gas cost alone. Default off. |
 | `runner.deliveryRouter` | Default: `delivery_router` of the deployment file. At start the runner reads `DeliveryRouter.rewardAddress()` from it and logs the value. The runner uses that address only for its accounting and its display. The router decides where each tip goes, so the configuration names no reward address. When the read fails, the runner stops with an error that names the router and the chain. |
 | `runner.multicall3` | The Multicall3 contract that batches the deliveries. Default `0xcA11bde05977b3631167028862bE2a173976CA11`, the canonical address. At start the runner refuses to run when the address holds no code. |

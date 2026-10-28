@@ -1,6 +1,9 @@
 import { encodeAbiParameters, keccak256, stringToBytes, type Hex } from "viem";
 import { describe, expect, it, vi } from "vitest";
 import {
+  ORACLE_PROOF_BYTES,
+  ORACLE_PROOF_MESSAGE_BYTES,
+  ORACLE_PROOF_MESSAGE_VERSION,
   PROOF_BYTES,
   PROOF_MESSAGE_BYTES,
   PUBLIC_VALUES_BYTES,
@@ -218,5 +221,53 @@ describe("refusals of the encoder and the decoder", () => {
     expect(() => isolated("0x01")).toThrow(new TypeError("a bug, not a bad message"));
     vi.doUnmock("viem");
     vi.resetModules();
+  });
+});
+
+describe("the oracle form of the proof message, for local testing only", () => {
+  const oracle = (): ProofMessage => sample({ version: ORACLE_PROOF_MESSAGE_VERSION, proof: `0x${"cd".repeat(ORACLE_PROOF_BYTES)}` });
+
+  it("leaves a Groth16 message byte for byte as it was: version 1, 823 bytes, 356 byte proof", () => {
+    const encoded = encodeProofMessage(sample());
+    expect(encoded.slice(0, 4)).toBe("0x01");
+    expect((encoded.length - 2) / 2).toBe(PROOF_MESSAGE_BYTES);
+    expect(encodeProofMessage(sample(), { acceptOracleProof: true })).toBe(encoded);
+    expect(decodeProofMessage(encoded, { acceptOracleProof: true })).toEqual(sample());
+  });
+
+  it("encodes and decodes only with the option set to true, and is 532 bytes", () => {
+    const encoded = encodeProofMessage(oracle(), { acceptOracleProof: true });
+    expect((encoded.length - 2) / 2).toBe(ORACLE_PROOF_MESSAGE_BYTES);
+    expect(ORACLE_PROOF_MESSAGE_BYTES).toBe(532);
+    expect(decodeProofMessage(encoded, { acceptOracleProof: true })).toEqual(oracle());
+  });
+
+  it.each([
+    ["unset", undefined],
+    ["an empty options object", {}],
+    ["false", { acceptOracleProof: false }],
+    ["a value that is not the literal true", { acceptOracleProof: "yes" as unknown as boolean }],
+  ])("refuses an oracle message when the option is %s, in the decoder and the encoder", (_name, options) => {
+    const encoded = encodeProofMessage(oracle(), { acceptOracleProof: true });
+    expect(() => decodeProofMessage(encoded, options)).toThrow(expect.objectContaining({ reason: "wrong-version" }));
+    expect(tryDecodeProofMessage(encoded, options)).toMatchObject({ ok: false, reason: "wrong-version" });
+    expect(() => encodeProofMessage(oracle(), options)).toThrow(expect.objectContaining({ reason: "wrong-version" }));
+  });
+
+  it("refuses a 65 byte proof in a Groth16 message, and a 356 byte proof in an oracle message", () => {
+    expect(() => encodeProofMessage(sample({ proof: `0x${"cd".repeat(ORACLE_PROOF_BYTES)}` }), { acceptOracleProof: true })).toThrow(expect.objectContaining({ reason: "wrong-field-size" }));
+    expect(() => encodeProofMessage(sample({ version: ORACLE_PROOF_MESSAGE_VERSION }), { acceptOracleProof: true })).toThrow(expect.objectContaining({ reason: "wrong-field-size" }));
+  });
+
+  it("refuses an oracle message of the wrong length even with the option", () => {
+    const encoded = encodeProofMessage(oracle(), { acceptOracleProof: true });
+    expect(tryDecodeProofMessage(`${encoded}00`, { acceptOracleProof: true })).toMatchObject({ reason: "trailing-bytes" });
+    expect(tryDecodeProofMessage(encoded.slice(0, -2) as Hex, { acceptOracleProof: true })).toMatchObject({ reason: "truncated" });
+  });
+
+  it("refuses a version that no form has", () => {
+    const encoded = encodeProofMessage(sample());
+    expect(tryDecodeProofMessage(`0x03${encoded.slice(4)}`, { acceptOracleProof: true })).toMatchObject({ reason: "wrong-version" });
+    expect(() => encodeProofMessage({ ...sample(), version: 3 as never }, { acceptOracleProof: true })).toThrow(expect.objectContaining({ reason: "wrong-version" }));
   });
 });

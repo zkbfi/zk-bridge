@@ -23,6 +23,11 @@ import { PAIR_DEFINITIONS } from "./pairs.js";
  * The total is 823 bytes. msgboard raises the difficulty of a message by 10,000 for each byte, so the layout holds
  * nothing that a reader can derive. The slots and roots in the header repeat fields of the public values. They stay
  * so that a reader can filter a message before it decodes the public values, and the decoder checks that both agree.
+ *
+ * The oracle form. Version 2 has the same layout with a proof of 65 bytes (one signature of the test oracle), 532 bytes
+ * in all. It exists for local testing only. Every reader and writer refuses version 2 unless the caller sets the option
+ * `acceptOracleProof`, so a real deployment keeps the strict version 1 rule: a proof of 356 bytes. The bytes of a
+ * version 1 message do not change.
  */
 
 /** The version byte of the layout above. */
@@ -31,8 +36,28 @@ export const PROOF_MESSAGE_VERSION = 1;
 export const PUBLIC_VALUES_BYTES = 352;
 /** The size of the proof: the four byte selector and the Groth16 proof, as the verifier contract reads it. */
 export const PROOF_BYTES = 356;
-/** The size of one encoded proof message. */
-export const PROOF_MESSAGE_BYTES = 3 + 32 + 8 + 32 + 8 + 32 + PUBLIC_VALUES_BYTES + PROOF_BYTES;
+/** The version byte of the oracle form, which is for local testing only. */
+export const ORACLE_PROOF_MESSAGE_VERSION = 2;
+/** The size of the proof of the oracle form: one signature of 65 bytes. */
+export const ORACLE_PROOF_BYTES = 65;
+const HEADER_AND_VALUES_BYTES = 3 + 32 + 8 + 32 + 8 + 32 + PUBLIC_VALUES_BYTES;
+/** The size of one encoded proof message of version 1. */
+export const PROOF_MESSAGE_BYTES = HEADER_AND_VALUES_BYTES + PROOF_BYTES;
+/** The size of one encoded proof message of the oracle form. */
+export const ORACLE_PROOF_MESSAGE_BYTES = HEADER_AND_VALUES_BYTES + ORACLE_PROOF_BYTES;
+
+/**
+ * Options of the encoder and the decoder. The default is strict: only the Groth16 form passes.
+ */
+export type ProofMessageOptions = {
+  /** Allow the oracle form (version 2). Set it only where the oracle backend or the oracle verifier is configured. */
+  readonly acceptOracleProof?: boolean;
+};
+
+const FORMS = {
+  [PROOF_MESSAGE_VERSION]: { proofBytes: PROOF_BYTES, totalBytes: PROOF_MESSAGE_BYTES },
+  [ORACLE_PROOF_MESSAGE_VERSION]: { proofBytes: ORACLE_PROOF_BYTES, totalBytes: ORACLE_PROOF_MESSAGE_BYTES },
+} as const;
 
 /**
  * The code of each pair in a message. A code never changes meaning, so the list only grows. Zero is never a pair.
@@ -47,7 +72,8 @@ export const PROOF_DIRECTIONS = ["first-to-second", "second-to-first"] as const 
 
 /** One decoded proof message. Slots are unsigned 64 bit numbers, so they are `bigint`. */
 export type ProofMessage = {
-  readonly version: typeof PROOF_MESSAGE_VERSION;
+  /** 1 is the Groth16 form. 2 is the oracle form, for local testing only. */
+  readonly version: typeof PROOF_MESSAGE_VERSION | typeof ORACLE_PROOF_MESSAGE_VERSION;
   /** The pair name, such as `eth-pls`. */
   readonly pair: string;
   readonly direction: ProofDirection;
@@ -59,7 +85,7 @@ export type ProofMessage = {
   readonly newRoot: Hex;
   /** The 352 bytes of public values, as hex. */
   readonly publicValues: Hex;
-  /** The 356 bytes of proof, as hex. */
+  /** The proof as hex: 356 bytes in version 1, 65 bytes in version 2. */
   readonly proof: Hex;
 };
 
@@ -193,24 +219,29 @@ const assertConsistent = (message: ProofMessage): void => {
  * Encodes a proof message. The encoder refuses a message that its own decoder would refuse.
  *
  * @param message The fields of the message.
- * @returns The 823 bytes as hex.
+ * @param options `acceptOracleProof` allows version 2. Without it, version 2 is refused.
+ * @returns The 823 bytes as hex (532 bytes in the oracle form).
  * @throws ProofMessageError for an unknown pair, a field of the wrong size or a header that disagrees with the public values.
  */
-export const encodeProofMessage = (message: ProofMessage): Hex => {
+export const encodeProofMessage = (message: ProofMessage, options: ProofMessageOptions = {}): Hex => {
+  const form = FORMS[message.version];
+  if (form === undefined || (message.version === ORACLE_PROOF_MESSAGE_VERSION && options.acceptOracleProof !== true)) {
+    throw new ProofMessageError("wrong-version", `version ${message.version}`);
+  }
   const direction = PROOF_DIRECTIONS.indexOf(message.direction);
   if (direction < 0) throw new ProofMessageError("unknown-direction", `direction "${message.direction}"`);
   const parts = [
-    Uint8Array.of(PROOF_MESSAGE_VERSION, pairCode(message.pair), direction),
+    Uint8Array.of(message.version, pairCode(message.pair), direction),
     sizedHex(message.programKey, 32, "program key"),
     slotBytes(message.startSlot, "start slot"),
     sizedHex(message.startRoot, 32, "start root"),
     slotBytes(message.newSlot, "new slot"),
     sizedHex(message.newRoot, 32, "new root"),
     sizedHex(message.publicValues, PUBLIC_VALUES_BYTES, "public values"),
-    sizedHex(message.proof, PROOF_BYTES, "proof"),
+    sizedHex(message.proof, form.proofBytes, "proof"),
   ];
   assertConsistent(message);
-  const bytes = new Uint8Array(PROOF_MESSAGE_BYTES);
+  const bytes = new Uint8Array(form.totalBytes);
   parts.reduce((offset, part) => {
     bytes.set(part, offset);
     return offset + part.length;
@@ -222,18 +253,27 @@ export const encodeProofMessage = (message: ProofMessage): Hex => {
  * Decodes a proof message.
  *
  * @param payload The message data as hex.
+ * @param options `acceptOracleProof` allows version 2. Without it, version 2 has the reason `wrong-version`.
  * @throws ProofMessageError with the reason that the type `ProofMessageFailure` lists.
  */
-export const decodeProofMessage = (payload: Hex): ProofMessage => {
+export const decodeProofMessage = (payload: Hex, options: ProofMessageOptions = {}): ProofMessage => {
   if (!isHex(payload)) throw new ProofMessageError("not-hex", "the payload is not hex");
   const bytes = hexToBytes(payload);
   if (bytes.length < 1) throw new ProofMessageError("truncated", "the payload is empty");
-  if (bytes[0] !== PROOF_MESSAGE_VERSION) throw new ProofMessageError("wrong-version", `version ${bytes[0]}`);
-  if (bytes.length < PROOF_MESSAGE_BYTES) {
-    throw new ProofMessageError("truncated", `${bytes.length} bytes, expected ${PROOF_MESSAGE_BYTES}`);
+  const version = bytes[0];
+  // The oracle form passes only when the caller says so with a literal true. Every other value refuses it.
+  if (version === ORACLE_PROOF_MESSAGE_VERSION && options.acceptOracleProof !== true) {
+    throw new ProofMessageError("wrong-version", `version ${version} (the oracle form) is not accepted here`);
   }
-  if (bytes.length > PROOF_MESSAGE_BYTES) {
-    throw new ProofMessageError("trailing-bytes", `${bytes.length} bytes, expected ${PROOF_MESSAGE_BYTES}`);
+  if (version !== PROOF_MESSAGE_VERSION && version !== ORACLE_PROOF_MESSAGE_VERSION) {
+    throw new ProofMessageError("wrong-version", `version ${version}`);
+  }
+  const form = FORMS[version];
+  if (bytes.length < form.totalBytes) {
+    throw new ProofMessageError("truncated", `${bytes.length} bytes, expected ${form.totalBytes}`);
+  }
+  if (bytes.length > form.totalBytes) {
+    throw new ProofMessageError("trailing-bytes", `${bytes.length} bytes, expected ${form.totalBytes}`);
   }
   const pair = Object.entries(PROOF_PAIR_CODES).find(([, code]) => code === bytes[1])?.[0];
   if (pair === undefined) throw new ProofMessageError("unknown-pair", `pair code ${bytes[1]}`);
@@ -241,7 +281,7 @@ export const decodeProofMessage = (payload: Hex): ProofMessage => {
   if (direction === undefined) throw new ProofMessageError("unknown-direction", `direction code ${bytes[2]}`);
   const slice = (start: number, size: number): Hex => bytesToHex(bytes.subarray(start, start + size));
   const message: ProofMessage = {
-    version: PROOF_MESSAGE_VERSION,
+    version,
     pair,
     direction,
     programKey: slice(3, 32),
@@ -250,7 +290,7 @@ export const decodeProofMessage = (payload: Hex): ProofMessage => {
     newSlot: BigInt(slice(75, 8)),
     newRoot: slice(83, 32),
     publicValues: slice(115, PUBLIC_VALUES_BYTES),
-    proof: slice(115 + PUBLIC_VALUES_BYTES, PROOF_BYTES),
+    proof: slice(115 + PUBLIC_VALUES_BYTES, form.proofBytes),
   };
   assertConsistent(message);
   return message;
@@ -260,10 +300,11 @@ export const decodeProofMessage = (payload: Hex): ProofMessage => {
  * Decodes a proof message without throwing, for a reader that ignores what it cannot use.
  *
  * @param payload The message data as hex.
+ * @param options The same options as {@link decodeProofMessage}. The default is strict.
  */
-export const tryDecodeProofMessage = (payload: Hex): ProofMessageResult => {
+export const tryDecodeProofMessage = (payload: Hex, options: ProofMessageOptions = {}): ProofMessageResult => {
   try {
-    return { ok: true, message: decodeProofMessage(payload) };
+    return { ok: true, message: decodeProofMessage(payload, options) };
   } catch (error) {
     if (!(error instanceof ProofMessageError)) throw error;
     return { ok: false, reason: error.reason, detail: error.message };

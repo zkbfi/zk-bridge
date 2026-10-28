@@ -1,5 +1,5 @@
 import { keccak256, type Hex } from "viem";
-import { tryDecodeProofMessage, type ProofDirection, type ProofMessage } from "../proof-message.js";
+import { ORACLE_PROOF_MESSAGE_VERSION, tryDecodeProofMessage, type ProofDirection, type ProofMessage } from "../proof-message.js";
 import type { ProverBinary } from "./prover-binary.js";
 
 /** What the proof check needs to know about the light client on the destination chain. */
@@ -17,6 +17,7 @@ export interface LightClientReader {
 /** Why a proof message is not used. */
 export type ProofRefusal =
   | "undecodable"
+  | "oracle-proof-not-accepted"
   | "wrong-pair"
   | "wrong-direction"
   | "light-client-unreadable"
@@ -38,6 +39,12 @@ export interface AssessInput {
   readonly direction: ProofDirection;
   readonly lightClient: LightClientReader;
   readonly prover: ProverBinary;
+  /**
+   * Accept the oracle form of the proof message (version 2). Set it only where the destination verifier is the oracle
+   * stand-in, for local testing. The default is strict. The local Groth16 check does not apply to an oracle proof,
+   * so it is skipped for that form and the chain stays the check.
+   */
+  readonly acceptOracleProof?: boolean;
 }
 
 /**
@@ -53,9 +60,12 @@ export interface AssessInput {
  * The chain stays the final check: `update` verifies the proof again.
  */
 export async function assessProofPayload(input: AssessInput): Promise<ProofAssessment> {
-  const decoded = tryDecodeProofMessage(input.payload);
+  const decoded = tryDecodeProofMessage(input.payload, { acceptOracleProof: true });
   if (!decoded.ok) return { accept: false, reason: "undecodable", detail: decoded.reason };
   const message = decoded.message;
+  // The intake reads the oracle form so that it can name the refusal, and then makes its own decision. The decoder
+  // refuses the form too when its option is off, so no single check is the only gate.
+  if (message.version === ORACLE_PROOF_MESSAGE_VERSION && input.acceptOracleProof !== true) return { accept: false, reason: "oracle-proof-not-accepted" };
   if (message.pair !== input.pairName) return { accept: false, reason: "wrong-pair" };
   if (message.direction !== input.direction) return { accept: false, reason: "wrong-direction" };
   let state;
@@ -68,6 +78,7 @@ export async function assessProofPayload(input: AssessInput): Promise<ProofAsses
   if (state.headSlot >= message.newSlot) return { accept: false, reason: "already-stored" };
   if (message.startSlot !== state.headSlot) return { accept: false, reason: "start-slot-differs-from-head" };
   if (message.startRoot.toLowerCase() !== state.headRoot.toLowerCase()) return { accept: false, reason: "start-root-differs-from-head" };
+  if (message.version === ORACLE_PROOF_MESSAGE_VERSION) return { accept: true, message };
   try {
     await input.prover.verify({ programKey: message.programKey, publicValues: message.publicValues, proof: message.proof });
   } catch (error) {

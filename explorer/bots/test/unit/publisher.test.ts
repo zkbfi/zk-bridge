@@ -55,7 +55,7 @@ afterEach(async () => {
 });
 
 /** The package that the prover prints for an update from `startSlot` to `newSlot`. */
-function packageJson(startSlot: bigint, newSlot: bigint): string {
+function packageJson(startSlot: bigint, newSlot: bigint, proof?: Hex): string {
   const message = proofMessage({ startSlot, newSlot });
   return JSON.stringify({
     schemaVersion: 1,
@@ -67,7 +67,7 @@ function packageJson(startSlot: bigint, newSlot: bigint): string {
     newHeadRoot: message.newRoot,
     latestFinalizedSlot: Number(newSlot),
     publicValues: message.publicValues,
-    proof: message.proof,
+    proof: proof ?? message.proof,
     updateCalldata: "0x",
     backend: "remote",
     destination: { chainId: 369, lightClient: pair.sides[1].contracts.lightClient },
@@ -101,7 +101,7 @@ function setup(options: { name?: string; policy?: { proveWhenTransferWaits: bool
   const lightClient = fakeLightClient();
   const { logger, lines } = memoryLogger([RUNPOD_KEY]);
   let clock = NOW;
-  const build = (): PublisherDependencies => ({
+  const build = (extra: Partial<PublisherDependencies> = {}): PublisherDependencies => ({
     pairName: "eth-pls",
     direction: "first-to-second",
     category: proofCategory("eth-pls", "first-to-second"),
@@ -128,6 +128,7 @@ function setup(options: { name?: string; policy?: { proveWhenTransferWaits: bool
     upToDateWaitSeconds: 120,
     now: () => clock,
     logger,
+    ...extra,
   });
   return { build, setScenario, runs, posts, board, lightClient, lines, advance: (seconds: number) => (clock += seconds * 1000), statePath };
 }
@@ -219,6 +220,20 @@ describe("publisher decisions", () => {
     s.setScenario({ exitCode: 0, stdout: packageJson(96n, 164n) });
     expect(await runPublisherStep(s.build())).toEqual({ action: "stale-proof" });
     expect(s.posts).toEqual([]);
+  });
+
+  it("posts the oracle form only when it is set to, and refuses a 65 byte proof otherwise", async () => {
+    const oracleProof = `0x${"cd".repeat(65)}` as Hex;
+    const strict = setup({ name: "strict" });
+    strict.setScenario({ exitCode: 0, stdout: packageJson(100n, 164n, oracleProof) });
+    expect(await runPublisherStep(strict.build())).toEqual({ action: "stale-proof" });
+    expect(strict.posts).toEqual([]);
+
+    const oracle = setup({ name: "oracle" });
+    oracle.setScenario({ exitCode: 0, stdout: packageJson(100n, 164n, oracleProof) });
+    expect(await runPublisherStep(oracle.build({ acceptOracleProof: true }))).toMatchObject({ action: "published" });
+    expect(decodeProofMessage(oracle.posts[0]?.payload as Hex, { acceptOracleProof: true })).toMatchObject({ version: 2, proof: oracleProof });
+    expect(() => decodeProofMessage(oracle.posts[0]?.payload as Hex)).toThrow();
   });
 
   it("survives a restart: it proves nothing twice and republishes from the saved proof", async () => {

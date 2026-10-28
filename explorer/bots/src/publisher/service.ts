@@ -141,6 +141,7 @@ export async function startPublisher(input: StartPublisherInput): Promise<void> 
       republishSeconds: publisher.republishSeconds,
       retryBackoffSeconds: publisher.retryBackoffSeconds,
       upToDateWaitSeconds: UP_TO_DATE_WAIT_SECONDS,
+      acceptOracleProof: publisher.backend === "oracle",
       now: overrides.now ?? Date.now,
       logger: directionLogger,
     };
