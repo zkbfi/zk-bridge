@@ -7,8 +7,8 @@
 //!
 //! Two answers of the beacon node give this. `/eth/v1/config/fork_schedule` lists the version and the first epoch of
 //! each scheduled fork, but not the name. `/eth/v1/config/spec` lists the name, the version and the epoch of each fork,
-//! and it also lists forks that are not scheduled (epoch `2^64 - 1`, and for PulseChain a placeholder version). The
-//! prover joins the two answers by version, and it requires that the epochs agree. If they disagree, it stops. It never
+//! and it also lists forks that are not scheduled (epoch `2^64 - 1`, with a placeholder version on some nodes). The
+//! prover ignores those rows entirely (see `spec_forks`). It joins the two answers by version, and it requires that the epochs agree. If they disagree, it stops. It never
 //! falls back to the table that is compiled into `lc-core`: a silent fallback would bring the table back into the
 //! decision, and a wrong table would then pass for a right one.
 //!
@@ -76,7 +76,7 @@ pub struct ForkSchedule {
     slots_per_epoch: u64,
 }
 
-/// A fork as the chain specification lists it, scheduled or not.
+/// A scheduled fork as the chain specification lists it.
 struct SpecFork {
     fork: ActiveFork,
     version: [u8; 4],
@@ -122,20 +122,29 @@ fn schedule_rows(answer: &Value) -> Result<Vec<ScheduleRow>> {
     let mut rows = Vec::new();
     for entry in entries {
         let epoch = parse_epoch(&entry["epoch"], FORK_SCHEDULE_PATH, "epoch")?;
+        if epoch == FAR_FUTURE_EPOCH {
+            continue;
+        }
         let version = parse_version(
             &entry["current_version"],
             FORK_SCHEDULE_PATH,
             "current_version",
         )?;
-        if epoch != FAR_FUTURE_EPOCH {
-            rows.push(ScheduleRow { version, epoch });
-        }
+        rows.push(ScheduleRow { version, epoch });
     }
     Ok(rows)
 }
 
-/// Every fork that the specification lists: Phase0 from `GENESIS_FORK_VERSION`, then each `<NAME>_FORK_VERSION` with its
-/// `<NAME>_FORK_EPOCH`.
+/// Every SCHEDULED fork that the specification lists: Phase0 from `GENESIS_FORK_VERSION`, then each `<NAME>_FORK_EPOCH`
+/// with its `<NAME>_FORK_VERSION`.
+///
+/// A real node publishes placeholder rows, so the rules are:
+///
+/// - A row whose epoch is the far future epoch (`2^64 - 1`) is ignored entirely, before any other check. Its version may
+///   be a placeholder, may repeat the version of another row, or may be missing. Its name does not matter either.
+/// - An epoch key at a real epoch needs its version key. If the version is missing, the answer is malformed, and the
+///   error names the epoch key. This holds for a feature key that the prover does not know, such as `EIP7594_FORK_EPOCH`.
+/// - A scheduled prefix that the prover does not know becomes [`ActiveFork::Unknown`].
 fn spec_forks(answer: &Value) -> Result<Vec<SpecFork>> {
     let data: &Map<String, Value> = answer["data"]
         .as_object()
@@ -152,18 +161,17 @@ fn spec_forks(answer: &Value) -> Result<Vec<SpecFork>> {
         let Some(prefix) = key.strip_suffix("_FORK_EPOCH") else {
             continue;
         };
-        let version_key = format!("{prefix}_FORK_VERSION");
         let epoch = parse_epoch(epoch_value, CHAIN_SPEC_PATH, key)?;
-        let Some(version_value) = data.get(&version_key) else {
-            // A fork that is not scheduled may come without a version. A scheduled fork without one is a broken answer.
-            if epoch == FAR_FUTURE_EPOCH {
-                continue;
-            }
-            return Err(malformed(
+        if epoch == FAR_FUTURE_EPOCH {
+            continue;
+        }
+        let version_key = format!("{prefix}_FORK_VERSION");
+        let version_value = data.get(&version_key).ok_or_else(|| {
+            malformed(
                 CHAIN_SPEC_PATH,
-                &format!("{version_key} is missing"),
-            ));
-        };
+                &format!("{key} is a real epoch ({epoch}) but {version_key} is missing"),
+            )
+        })?;
         let fork = KNOWN_FORKS
             .iter()
             .find(|(known_prefix, _)| known_prefix == &prefix)
@@ -239,6 +247,7 @@ impl ForkSchedule {
     /// # Errors
     /// `Error::Malformed` for a body of the wrong shape. `Error::ForkScheduleMismatch` when the two answers disagree: a
     /// scheduled fork of one answer is missing from the other, the epochs differ, or two scheduled forks share a version.
+    /// A row at the far future epoch is never scheduled, so it takes no part in any of these checks.
     pub fn from_answers(
         fork_schedule: &Value,
         chain_spec: &Value,
@@ -246,10 +255,7 @@ impl ForkSchedule {
     ) -> Result<Self> {
         let rows = schedule_rows(fork_schedule)?;
         let all_forks = spec_forks(chain_spec)?;
-        let scheduled: Vec<&SpecFork> = all_forks
-            .iter()
-            .filter(|fork| fork.epoch != FAR_FUTURE_EPOCH)
-            .collect();
+        let scheduled: Vec<&SpecFork> = all_forks.iter().collect();
         require_distinct_versions(&scheduled, &rows)?;
         let mut forks = rows
             .iter()
@@ -664,5 +670,243 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Reads a recorded chain specification answer from `tests/fixtures/specs`.
+    fn recorded_specification(file: &str) -> Value {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/specs")
+            .join(file);
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    /// A fork schedule answer from `(version, epoch)` pairs.
+    fn schedule_of(rows: &[(&str, u64)]) -> Value {
+        let data: Vec<Value> = rows
+            .iter()
+            .map(|(version, epoch)| {
+                json!({ "previous_version": "0x00000000", "current_version": version, "epoch": epoch.to_string() })
+            })
+            .collect();
+        json!({ "data": data })
+    }
+
+    /// The scheduled rows of the real Sepolia file.
+    const SEPOLIA_ROWS: [(&str, u64); 8] = [
+        ("0x90000069", 0),
+        ("0x90000070", 50),
+        ("0x90000071", 100),
+        ("0x90000072", 56_832),
+        ("0x90000073", 132_608),
+        ("0x90000074", 222_464),
+        ("0x90000075", 272_640),
+        ("0x90000076", 353_024),
+    ];
+
+    /// The scheduled rows of the real PulseChain testnet file.
+    const PULSECHAIN_TESTNET_ROWS: [(&str, u64); 4] = [
+        ("0x00000943", 0),
+        ("0x00000944", 1),
+        ("0x00000945", 2),
+        ("0x00000946", 4_200),
+    ];
+
+    /// The scheduled rows of the real mainnet files.
+    const MAINNET_ROWS: [(&str, u64); 7] = [
+        ("0x00000000", 0),
+        ("0x01000000", 74_240),
+        ("0x02000000", 144_896),
+        ("0x03000000", 194_048),
+        ("0x04000000", 269_568),
+        ("0x05000000", 364_032),
+        ("0x06000000", 411_392),
+    ];
+
+    fn join(schedule: &Value, specification: &Value) -> Result<ForkSchedule> {
+        ForkSchedule::from_answers(schedule, specification, SLOTS_PER_EPOCH)
+    }
+
+    /// Claim: the real PulseChain testnet answer parses. Its Deneb row (epoch `2^64 - 1`, version `0xffffffff`) takes no
+    /// part, and Capella is active at epoch 5000.
+    /// Why it matters: a real node publishes the placeholder row. A prover that stopped on it could not run on that chain.
+    #[test]
+    fn the_real_pulsechain_testnet_answer_joins() {
+        let specification = recorded_specification("pulsechain-testnet-v4.json");
+        let schedule = join(&schedule_of(&PULSECHAIN_TESTNET_ROWS), &specification).unwrap();
+        assert_eq!(schedule.forks().len(), 4);
+        let active = schedule.fork_at_epoch(5_000);
+        assert_eq!(active.fork, ActiveFork::Known(ForkName::Capella));
+        assert_eq!(active.version, [0, 0, 0x09, 0x46]);
+        assert!(schedule
+            .forks()
+            .iter()
+            .all(|fork| fork.version != [0xff; 4]));
+    }
+
+    /// Claim: the real Sepolia answer parses, with and without a far-future Heze row in the schedule. Gloas is active at
+    /// epoch 353024 and Fulu at epoch 353023.
+    /// Why it matters: Heze is listed with a real looking version and a far future epoch. It must not become a fork.
+    #[test]
+    fn the_real_sepolia_answer_joins() {
+        let specification = recorded_specification("sepolia.json");
+        let schedule = join(&schedule_of(&SEPOLIA_ROWS), &specification).unwrap();
+        assert_eq!(schedule.forks().len(), 8);
+        assert_eq!(
+            schedule.fork_at_epoch(353_024).fork,
+            ActiveFork::Known(ForkName::Gloas)
+        );
+        assert_eq!(
+            schedule.fork_at_epoch(353_023).fork,
+            ActiveFork::Known(ForkName::Fulu)
+        );
+        let mut with_heze = SEPOLIA_ROWS.to_vec();
+        with_heze.push(("0x08000000", FAR_FUTURE_EPOCH));
+        assert_eq!(
+            join(&schedule_of(&with_heze), &specification).unwrap(),
+            schedule
+        );
+    }
+
+    /// Claim: both real mainnet answers parse and give the same schedule, with Fulu active at epoch 411392 and Gloas and
+    /// Heze not scheduled.
+    /// Why it matters: two clients write different key sets. Both must give the same fork rows.
+    #[test]
+    fn the_real_mainnet_answers_join() {
+        for file in [
+            "ethereum-mainnet-lodestar.json",
+            "ethereum-mainnet-publicnode.json",
+        ] {
+            let schedule = join(&schedule_of(&MAINNET_ROWS), &recorded_specification(file))
+                .unwrap_or_else(|error| panic!("{file}: {error}"));
+            assert_eq!(schedule.forks().len(), 7, "{file}");
+            assert_eq!(
+                schedule.fork_at_epoch(411_392).fork,
+                ActiveFork::Known(ForkName::Fulu),
+                "{file}"
+            );
+            assert_eq!(
+                schedule.fork_at_epoch(u64::MAX - 1).fork,
+                ActiveFork::Known(ForkName::Fulu),
+                "{file}"
+            );
+        }
+    }
+
+    /// A tiny specification: genesis, Altair at epoch 10, plus the `extra` keys.
+    fn small_specification(extra: &[(&str, &str)]) -> Value {
+        let mut data = json!({
+            "GENESIS_FORK_VERSION": "0x00000001",
+            "ALTAIR_FORK_VERSION": "0x00000002",
+            "ALTAIR_FORK_EPOCH": "10",
+        });
+        for (key, value) in extra {
+            data[*key] = json!(value);
+        }
+        json!({ "data": data })
+    }
+
+    const FAR_FUTURE_TEXT: &str = "18446744073709551615";
+
+    fn small_schedule() -> Value {
+        schedule_of(&[("0x00000001", 0), ("0x00000002", 10)])
+    }
+
+    /// Claim: a row at the far future epoch is ignored entirely. Its version may repeat the version of a scheduled fork, it
+    /// may be the placeholder `0xffffffff`, and it may be no valid version at all.
+    /// Why it matters: real nodes publish such rows. The rule must apply before the duplicate check and before the version
+    /// is read, or a placeholder would stop the prover.
+    #[test]
+    fn a_far_future_row_is_ignored_before_every_other_check() {
+        for version in ["0x00000002", "0x00000001", "0xffffffff", "not a version"] {
+            let specification = small_specification(&[
+                ("DENEB_FORK_VERSION", version),
+                ("DENEB_FORK_EPOCH", FAR_FUTURE_TEXT),
+            ]);
+            let schedule = join(&small_schedule(), &specification)
+                .unwrap_or_else(|error| panic!("version {version}: {error}"));
+            assert_eq!(schedule.forks().len(), 2, "version {version}");
+        }
+    }
+
+    /// Claim: an epoch key with no version key is ignored when its epoch is the far future epoch, and is an error that
+    /// names the key when the epoch is real.
+    /// Why it matters: a scheduled fork without a version cannot be joined. A placeholder without a version is harmless.
+    #[test]
+    fn an_epoch_without_a_version_is_ignored_only_when_far_future() {
+        let ignored = small_specification(&[("DENEB_FORK_EPOCH", FAR_FUTURE_TEXT)]);
+        assert_eq!(join(&small_schedule(), &ignored).unwrap().forks().len(), 2);
+        let broken = small_specification(&[("DENEB_FORK_EPOCH", "20")]);
+        let error = join(&small_schedule(), &broken).unwrap_err();
+        assert!(
+            matches!(&error, Error::Malformed(text)
+                if text.contains("DENEB_FORK_EPOCH") && text.contains("DENEB_FORK_VERSION")),
+            "{error}"
+        );
+    }
+
+    /// Claim: two SCHEDULED forks that share a version stay an error, even when a far-future row also shares it.
+    /// Why it matters: the far-future rule must not hide a real duplicate between rows that matter.
+    #[test]
+    fn a_duplicate_version_among_scheduled_rows_stays_an_error() {
+        let specification = small_specification(&[
+            ("BELLATRIX_FORK_VERSION", "0x00000002"),
+            ("BELLATRIX_FORK_EPOCH", "20"),
+            ("DENEB_FORK_VERSION", "0x00000002"),
+            ("DENEB_FORK_EPOCH", FAR_FUTURE_TEXT),
+        ]);
+        let error = join(&small_schedule(), &specification).unwrap_err();
+        assert_eq!(
+            error,
+            Error::ForkScheduleMismatch {
+                fork: "Altair and Bellatrix (one version)".into(),
+                schedule_epoch: 10,
+                spec_epoch: 20,
+            }
+        );
+    }
+
+    /// Claim: an unknown extra key is ignored when it is set to the far future epoch, and is an error that names the key
+    /// when it is set to a real epoch without a version.
+    /// Why it matters: nodes add feature epochs such as `EIP7594_FORK_EPOCH`. A feature that is off must not stop the
+    /// prover, and a feature that is on without a version is a fork the prover cannot sign for.
+    #[test]
+    fn an_unknown_feature_epoch_is_ignored_only_when_far_future() {
+        let off = small_specification(&[("EIP7594_FORK_EPOCH", FAR_FUTURE_TEXT)]);
+        assert_eq!(join(&small_schedule(), &off).unwrap().forks().len(), 2);
+        let on = small_specification(&[("EIP7594_FORK_EPOCH", "30")]);
+        let error = join(&small_schedule(), &on).unwrap_err();
+        assert!(
+            matches!(&error, Error::Malformed(text) if text.contains("EIP7594_FORK_EPOCH")),
+            "{error}"
+        );
+    }
+
+    /// Claim: the join with the fork schedule answer still requires equal epochs for scheduled rows, on a real file.
+    /// A schedule that moves Gloas by one epoch, or gives a row for the far-future Heze version, is refused or ignored
+    /// as the rules say.
+    /// Why it matters: ignoring far-future rows must not weaken the epoch check for the rows that count.
+    #[test]
+    fn scheduled_rows_still_need_equal_epochs_on_a_real_file() {
+        let specification = recorded_specification("sepolia.json");
+        let mut moved = SEPOLIA_ROWS.to_vec();
+        moved[7] = ("0x90000076", 353_025);
+        assert_eq!(
+            join(&schedule_of(&moved), &specification).unwrap_err(),
+            Error::ForkScheduleMismatch {
+                fork: "Gloas".into(),
+                schedule_epoch: 353_025,
+                spec_epoch: 353_024,
+            }
+        );
+        let mut heze_scheduled = SEPOLIA_ROWS.to_vec();
+        heze_scheduled.push(("0x08000000", 400_000));
+        assert_eq!(
+            join(&schedule_of(&heze_scheduled), &specification).unwrap_err(),
+            Error::ForkScheduleMismatch {
+                fork: "the fork with version 0x08000000".into(),
+                schedule_epoch: 400_000,
+                spec_epoch: FAR_FUTURE_EPOCH,
+            }
+        );
     }
 }

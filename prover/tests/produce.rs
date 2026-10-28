@@ -460,21 +460,16 @@ impl zk_bridge_prover::rpc::HttpGet for PrunedStates {
     }
 }
 
-/// A store that holds the same entries as another, but flips one bit of the first entry of every branch it gives back.
-struct FlippingStore(
-    Arc<dyn zk_bridge_prover::beacon::branch_store::GenesisValidatorsRootBranchStore>,
-);
-
-impl zk_bridge_prover::beacon::branch_store::GenesisValidatorsRootBranchStore for FlippingStore {
-    fn get(&self, state_root: &B256) -> Option<Vec<B256>> {
-        let mut branch = self.0.get(state_root)?;
-        branch[0].0[0] ^= 0x01;
-        Some(branch)
-    }
-
-    fn put(&self, state_root: B256, branch: Vec<B256>) -> zk_bridge_prover::error::Result<()> {
-        self.0.put(state_root, branch)
-    }
+/// Flips one bit of the first entry of the stored branch for `state_root`.
+fn corrupt_entry(
+    store: &dyn zk_bridge_prover::beacon::branch_store::GenesisValidatorsRootBranchStore,
+    state_root: B256,
+) {
+    let mut branch = store.get(&state_root).expect("the store holds the entry");
+    branch[0].0[0] ^= 0x01;
+    store
+        .put(state_root, branch)
+        .expect("the store keeps the entry");
 }
 
 /// Claim: a catch-up uses the stored branch of `genesis_validators_root` when the node no longer serves the attested state.
@@ -515,39 +510,152 @@ fn catch_up_uses_the_stored_genesis_validators_root_branch_when_the_old_state_is
     );
 }
 
-/// Claim: a corrupt stored branch is refused before proving. The plan builds, because the prover does not trust the store
-/// and does not recheck it, and the native run of the program then refuses it with the exact error. `produce` returns that
-/// refusal and calls no backend.
-/// Why it matters: the store is untrusted public data. A wrong entry can only stall a catch-up, never cause a false head.
+/// Claim: a corrupt stored branch of `genesis_validators_root` is dropped and rebuilt from the attested state when the node
+/// still serves the state. The plan then verifies natively with the same output as a plan from a clean store, and the
+/// store holds the good entry again.
+/// Why it matters: the store is untrusted public data, and a damaged entry used to stall a catch-up for good, because the
+/// store came first and nothing rebuilt it. The prover now checks the entry and falls back to the state.
 #[test]
-fn a_corrupt_stored_genesis_validators_root_branch_is_refused_before_proving() {
-    use zk_bridge_prover::beacon::branch_store::MemoryBranchStore;
-    use zk_bridge_prover::beacon::http::HttpBeaconSource;
+fn a_corrupt_stored_branch_falls_back_to_the_state_and_the_update_verifies() {
+    use zk_bridge_prover::beacon::branch_store::{
+        GenesisValidatorsRootBranchStore, MemoryBranchStore,
+    };
     use zk_bridge_prover::light_client::verify_update_natively;
     let (chain, checkpoint) = lagging_chain();
     let honest = Arc::new(MemoryBranchStore::new());
-    chain
+    let clean_plan = chain
         .source()
         .with_branch_store(honest.clone())
         .plan_update(&head_at(&checkpoint))
-        .expect("plan with fresh states");
+        .expect("plan with fresh states")
+        .expect("a fold is due");
+    let expected = verify_update_natively(&clean_plan.input).expect("the clean fold verifies");
+    let state_root = clean_plan.input.steps[0]
+        .update
+        .attested_header
+        .beacon
+        .state_root;
+    let good_branch = honest
+        .get(&state_root)
+        .expect("the first run stored the branch");
 
-    let corrupt = HttpBeaconSource::new(
+    corrupt_entry(honest.as_ref(), state_root);
+    assert_ne!(honest.get(&state_root), Some(good_branch.clone()));
+    let plan = chain
+        .source()
+        .with_branch_store(honest.clone())
+        .plan_update(&head_at(&checkpoint))
+        .expect("the plan falls back to the state")
+        .expect("a fold is due");
+    assert_eq!(verify_update_natively(&plan.input).unwrap(), expected);
+    assert_eq!(honest.get(&state_root), Some(good_branch));
+}
+
+/// Claim: a corrupt stored branch with the attested state gone stops the plan with a clear error that names the state root,
+/// and the prover drops the entry. The plan does not build, so no proof starts.
+/// Why it matters: before this check the plan built and the program refused it only after the proof run began. A catch-up
+/// must say what is wrong. It must also never turn a bad entry into a false head.
+#[test]
+fn a_corrupt_stored_branch_with_the_state_gone_gives_a_clear_error() {
+    use zk_bridge_prover::beacon::branch_store::{
+        GenesisValidatorsRootBranchStore, MemoryBranchStore,
+    };
+    use zk_bridge_prover::beacon::http::HttpBeaconSource;
+    let (chain, checkpoint) = lagging_chain();
+    let honest = Arc::new(MemoryBranchStore::new());
+    let clean_plan = chain
+        .source()
+        .with_branch_store(honest.clone())
+        .plan_update(&head_at(&checkpoint))
+        .expect("plan with fresh states")
+        .expect("a fold is due");
+    let state_root = clean_plan.input.steps[0]
+        .update
+        .attested_header
+        .beacon
+        .state_root;
+    corrupt_entry(honest.as_ref(), state_root);
+
+    let pruned = HttpBeaconSource::new(
         chain.kind,
         PrunedStates::keeping_head_of(&chain, &checkpoint),
     )
-    .with_branch_store(Arc::new(FlippingStore(honest)));
-    let plan = corrupt
+    .with_branch_store(honest.clone());
+    let error = pruned.plan_update(&head_at(&checkpoint)).unwrap_err();
+    assert!(
+        matches!(&error, Error::Beacon(text)
+            if text.contains(&format!("{state_root:#x}")) && text.contains("failed its check")),
+        "{error}"
+    );
+    assert_eq!(honest.get(&state_root), None);
+}
+
+/// Claim: a file cut short by a crash counts as corrupt. A cut inside a line does not parse, so the store gives nothing. A
+/// cut at the end of a line parses but is short, so the check drops it. In both cases the plan falls back to the state,
+/// verifies, and the store file is whole again.
+/// Why it matters: this is the failure that the atomic write prevents, and the check must still handle a file that an
+/// older run or another tool left short.
+#[test]
+fn a_truncated_branch_file_is_treated_as_corrupt_and_rebuilt() {
+    use zk_bridge_prover::beacon::branch_store::{
+        DirectoryBranchStore, GenesisValidatorsRootBranchStore,
+    };
+    use zk_bridge_prover::light_client::verify_update_natively;
+    let (chain, checkpoint) = lagging_chain();
+    let directory = std::env::temp_dir().join(format!(
+        "zk-bridge-produce-truncated-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&directory);
+    let store = Arc::new(DirectoryBranchStore::new(&directory));
+    let clean_plan = chain
+        .source()
+        .with_branch_store(store.clone())
         .plan_update(&head_at(&checkpoint))
-        .expect("the plan builds")
+        .expect("plan with fresh states")
         .expect("a fold is due");
+    let expected = verify_update_natively(&clean_plan.input).expect("the clean fold verifies");
+    let state_root = clean_plan.input.steps[0]
+        .update
+        .attested_header
+        .beacon
+        .state_root;
+    let good_branch = store
+        .get(&state_root)
+        .expect("the first run stored the branch");
+    let path = directory.join(format!("{state_root:#x}.branch"));
+    let whole = std::fs::read_to_string(&path).unwrap();
+    let line_length = "0x".len() + 64 + 1;
+    let cuts = [whole.len() - 10, whole.len() - line_length, 0];
+    for cut in cuts {
+        std::fs::write(&path, &whole[..cut]).unwrap();
+        let plan = chain
+            .source()
+            .with_branch_store(store.clone())
+            .plan_update(&head_at(&checkpoint))
+            .unwrap_or_else(|error| panic!("cut at {cut}: {error}"))
+            .expect("a fold is due");
+        assert_eq!(verify_update_natively(&plan.input).unwrap(), expected);
+        assert_eq!(store.get(&state_root), Some(good_branch.clone()));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), whole);
+    }
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Claim: the program still refuses a plan whose branch is wrong, with the exact error. A plan with a wrong branch is built here by hand, because the prover no longer lets a wrong stored
+/// entry reach the plan.
+/// Why it matters: the check of the prover is a convenience. The program is the guard. It must keep refusing a wrong branch.
+#[test]
+fn the_program_still_refuses_a_wrong_branch_in_a_plan() {
+    use zk_bridge_prover::light_client::verify_update_natively;
+    let (chain, checkpoint) = lagging_chain();
+    let mut plan = chain
+        .source()
+        .plan_update(&head_at(&checkpoint))
+        .expect("plan with fresh states")
+        .expect("a fold is due");
+    plan.input.steps[0].update.genesis_validators_root_branch[0].0[0] ^= 0x01;
     let refused =
         Error::VerificationRefused(lc_core::Error::InvalidGenesisValidatorsRootBranch.to_string());
     assert_eq!(verify_update_natively(&plan.input).unwrap_err(), refused);
-
-    let prover = OracleProver::new(oracle_signer());
-    assert_eq!(
-        produce(&corrupt, &prover, &request(head_at(&checkpoint))).unwrap_err(),
-        refused
-    );
 }

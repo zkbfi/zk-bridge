@@ -6,15 +6,48 @@
 //! states). So the prover keeps each branch here, keyed by the state root, and a later catch-up reads it back when the
 //! node no longer has the state.
 //!
-//! The store is not trusted. A branch is public data. If an entry is wrong, the light-client program refuses the update
-//! (`InvalidGenesisValidatorsRootBranch`), and the native run of the prover refuses it before any proof starts. A wrong entry can
-//! stall a catch-up. It cannot cause a false head.
+//! The store is not trusted. A branch is public data. The prover checks each stored entry natively against the attested
+//! state root (see [`stored_branch_proves_genesis_validators_root`]) before it uses the entry. An entry that fails the
+//! check is dropped, and the prover builds the branch again from the state. If the node no longer serves the state, the
+//! prover stops with a clear error that names the state root. As a last guard, the light-client program refuses a wrong
+//! branch (`InvalidGenesisValidatorsRootBranch`). A wrong entry can stall a catch-up. It cannot cause a false head.
 
 use crate::error::{Error, Result};
 use alloy_primitives::{hex, B256};
+use lc_core::chain::ChainSpec;
+use lc_core::layout::state_layout_for_finality_branch_length;
+use lc_core::ssz::is_valid_exact_branch;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+
+/// Counts the temporary files of this process, so two writes never share a temporary name.
+static TEMPORARY_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Tells whether `branch` proves the `genesis_validators_root` of `spec` under `state_root`.
+///
+/// The check is the one the light-client program runs: the layout comes from the length of the finality branch of the
+/// update (`finality_branch_length`), the position is the generalized index of `genesis_validators_root` in that layout,
+/// and the leaf is `spec.genesis_validators_root`. The branch needs exactly the depth of that position.
+///
+/// # Errors
+/// `Error::Malformed` when `finality_branch_length` names no layout.
+pub fn stored_branch_proves_genesis_validators_root(
+    spec: &ChainSpec,
+    finality_branch_length: usize,
+    branch: &[B256],
+    state_root: &B256,
+) -> Result<bool> {
+    let layout = state_layout_for_finality_branch_length(finality_branch_length)
+        .map_err(|error| Error::Malformed(format!("the finality branch: {error}")))?;
+    Ok(is_valid_exact_branch(
+        &spec.genesis_validators_root,
+        branch,
+        layout.genesis_validators_root_gindex,
+        state_root,
+    ))
+}
 
 /// Keeps the branch of `genesis_validators_root` for each attested state root.
 pub trait GenesisValidatorsRootBranchStore: Send + Sync {
@@ -26,6 +59,12 @@ pub trait GenesisValidatorsRootBranchStore: Send + Sync {
     /// # Errors
     /// `Error::Config` when the store cannot write.
     fn put(&self, state_root: B256, branch: Vec<B256>) -> Result<()>;
+
+    /// Drops the entry for `state_root`. It does nothing when the store holds none.
+    ///
+    /// # Errors
+    /// `Error::Config` when the store cannot remove the entry.
+    fn remove(&self, state_root: &B256) -> Result<()>;
 }
 
 /// A store in memory. It lives as long as the process.
@@ -66,10 +105,16 @@ impl GenesisValidatorsRootBranchStore for MemoryBranchStore {
             .insert(state_root, branch);
         Ok(())
     }
+
+    fn remove(&self, state_root: &B256) -> Result<()> {
+        self.branches.lock().expect("lock").remove(state_root);
+        Ok(())
+    }
 }
 
 /// A store in a directory: one file per state root, named by the root, holding the entries as hex lines. It survives
-/// between runs, which a catch-up after weeks needs.
+/// between runs, which a catch-up after weeks needs. A write goes to a temporary file in the same directory, and a
+/// rename then puts it in place, so a crash never leaves a short entry under the real name.
 pub struct DirectoryBranchStore {
     directory: PathBuf,
 }
@@ -85,10 +130,28 @@ impl DirectoryBranchStore {
     fn path_of(&self, state_root: &B256) -> PathBuf {
         self.directory.join(format!("{state_root:#x}.branch"))
     }
+
+    /// A name for a temporary file next to the entry of `state_root`. It ends in `.tmp`, so `get` never reads it.
+    fn temporary_path_of(&self, state_root: &B256) -> PathBuf {
+        let count = TEMPORARY_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        self.directory.join(format!(
+            "{state_root:#x}.branch.{}.{count}.tmp",
+            std::process::id()
+        ))
+    }
+
+    /// Writes `text` to `temporary` and flushes it to disk. The caller renames the file.
+    fn write_durably(temporary: &std::path::Path, text: &str) -> std::io::Result<()> {
+        use std::io::Write as _;
+        let mut file = std::fs::File::create(temporary)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()
+    }
 }
 
 impl GenesisValidatorsRootBranchStore for DirectoryBranchStore {
     /// A file that cannot be read or does not parse counts as no entry, so the prover then asks the node for the state.
+    /// A file that parses but is short or wrong is the business of the caller, who checks the branch.
     fn get(&self, state_root: &B256) -> Option<Vec<B256>> {
         let text = std::fs::read_to_string(self.path_of(state_root)).ok()?;
         text.lines()
@@ -108,7 +171,22 @@ impl GenesisValidatorsRootBranchStore for DirectoryBranchStore {
             .iter()
             .map(|entry| format!("0x{}\n", hex::encode(entry)))
             .collect();
-        std::fs::write(self.path_of(&state_root), text).map_err(describe)
+        let temporary = self.temporary_path_of(&state_root);
+        let written = Self::write_durably(&temporary, &text)
+            .and_then(|()| std::fs::rename(&temporary, self.path_of(&state_root)));
+        if written.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        written.map_err(describe)
+    }
+
+    fn remove(&self, state_root: &B256) -> Result<()> {
+        match std::fs::remove_file(self.path_of(state_root)) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(Error::Config(
+                format!("the branch store {}: {error}", self.directory.display()),
+            )),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -159,5 +237,78 @@ mod tests {
         std::fs::write(store.path_of(&root), "0xnot-hex\n").unwrap();
         assert_eq!(store.get(&root), None);
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// Claim: a put leaves no temporary file behind, and a second put replaces the entry whole.
+    /// Why it matters: the write goes to a temporary file first. A leftover file would show that the rename step did not
+    /// run, and a short file under the real name would show that the write was not atomic.
+    #[test]
+    fn a_put_leaves_only_the_finished_entry() {
+        let directory = std::env::temp_dir().join(format!(
+            "zk-bridge-branch-store-atomic-{}",
+            std::process::id()
+        ));
+        let store = DirectoryBranchStore::new(&directory);
+        let root = B256::repeat_byte(0xdd);
+        store.put(root, branch()).unwrap();
+        store.put(root, vec![B256::repeat_byte(7)]).unwrap();
+        let names: Vec<String> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec![format!("{root:#x}.branch")]);
+        assert_eq!(store.get(&root), Some(vec![B256::repeat_byte(7)]));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// Claim: a remove drops the entry in both stores, and a remove of a missing entry is not an error.
+    /// Why it matters: the prover drops an entry that fails the check. If the drop failed on a missing file, one
+    /// repeated drop would stop a catch-up.
+    #[test]
+    fn a_remove_drops_the_entry_and_forgives_a_missing_one() {
+        let directory = std::env::temp_dir().join(format!(
+            "zk-bridge-branch-store-remove-{}",
+            std::process::id()
+        ));
+        let stores: [Box<dyn GenesisValidatorsRootBranchStore>; 2] = [
+            Box::new(MemoryBranchStore::new()),
+            Box::new(DirectoryBranchStore::new(&directory)),
+        ];
+        for store in stores {
+            let root = B256::repeat_byte(0xee);
+            store.remove(&root).unwrap();
+            store.put(root, branch()).unwrap();
+            store.remove(&root).unwrap();
+            assert_eq!(store.get(&root), None);
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// Claim: the check accepts a branch built over the genesis validators root of the chain at the position of the
+    /// layout, and refuses a flipped entry, a short branch, a wrong state root, and a finality length that names no layout.
+    /// Why it matters: this check decides whether a stored entry is used. It must fail for each way an entry goes bad.
+    #[test]
+    fn the_check_accepts_only_the_real_branch_at_the_layout_position() {
+        use lc_core::ssz::branch_for_leaf;
+        let spec = crate::light_client::ChainKind::Sepolia.spec();
+        // A plain state of 32 leaves: the finality branch has 6 entries, and genesis_validators_root is leaf 1.
+        let mut leaves = vec![B256::ZERO; 32];
+        leaves[1] = spec.genesis_validators_root;
+        let (root, branch) = branch_for_leaf(&leaves, 1);
+        assert!(stored_branch_proves_genesis_validators_root(spec, 6, &branch, &root).unwrap());
+        let mut flipped = branch.clone();
+        flipped[0].0[0] ^= 1;
+        assert!(!stored_branch_proves_genesis_validators_root(spec, 6, &flipped, &root).unwrap());
+        assert!(
+            !stored_branch_proves_genesis_validators_root(spec, 6, &branch[..4], &root).unwrap()
+        );
+        assert!(!stored_branch_proves_genesis_validators_root(
+            spec,
+            6,
+            &branch,
+            &B256::repeat_byte(1)
+        )
+        .unwrap());
+        assert!(stored_branch_proves_genesis_validators_root(spec, 3, &branch, &root).is_err());
     }
 }

@@ -48,7 +48,10 @@
 //! from the fork that the chain schedule has at the slot of the state. The block parser reads the Capella block layout
 //! only, so the assembled update path needs a Capella chain. Ethereum uses the light-client endpoints for the update.
 
-use super::branch_store::{GenesisValidatorsRootBranchStore, MemoryBranchStore};
+use super::branch_store::{
+    stored_branch_proves_genesis_validators_root, GenesisValidatorsRootBranchStore,
+    MemoryBranchStore,
+};
 use super::{HashEvidence, HistoricalEvidence, RootsEvidence, SourceBlock, StoredHead, UpdatePlan};
 use crate::chain::checked_raw_header;
 use crate::error::{Error, Result};
@@ -62,6 +65,7 @@ use crate::light_client::{
     HeaderRepair, LightClientStore, LightClientUpdate, StateView, SyncAggregate, UpdateInput,
     SLOTS_PER_HISTORICAL_ROOT,
 };
+use crate::logging::Logger;
 use crate::rpc::{HttpGet, JsonRpc};
 use alloy_primitives::B256;
 use lc_core::chain::ForkName;
@@ -328,6 +332,16 @@ pub struct HttpBeaconSource {
     era_cache: Mutex<Vec<(u64, Arc<Vec<B256>>)>>,
 }
 
+/// What the branch store held for a state root, after the check.
+enum StoredBranch {
+    /// The store held no entry.
+    Absent,
+    /// The store held an entry and it proves `genesis_validators_root` under the state root.
+    Verified(Vec<B256>),
+    /// The store held an entry that failed the check. The prover dropped it.
+    Dropped,
+}
+
 impl HttpBeaconSource {
     /// A source over an HTTP client.
     pub fn new(chain: ChainKind, client: Box<dyn HttpGet>) -> Self {
@@ -437,15 +451,69 @@ impl HttpBeaconSource {
         Ok(())
     }
 
-    /// The branch of `genesis_validators_root` under `state_root`. The store comes first, because the node may have
-    /// pruned the state. If the store has none, the state gives it and the store keeps it.
+    /// The branch of `genesis_validators_root` under `state_root`, for an update whose finality branch has
+    /// `finality_branch_length` entries (that length names the layout of the state).
+    ///
+    /// The store comes first, because the node may have pruned the state. The prover checks a stored entry natively
+    /// against `state_root` before it uses the entry. An entry that fails the check is dropped, with a warning that names
+    /// the state root, and the branch comes from the state instead. If the store has none, the state gives it as well, and
+    /// the store keeps it.
     ///
     /// # Errors
-    /// `Error::Beacon` naming the state when the store has none and the node no longer serves the state.
-    fn genesis_validators_root_branch_under(&self, state_root: B256) -> Result<Vec<B256>> {
-        if let Some(stored) = self.branch_store.get(&state_root) {
-            return Ok(stored);
+    /// `Error::Beacon` naming the state when the node no longer serves the state and the store has no entry that passes
+    /// the check. The text says when the store held an entry that failed. `Error::Malformed` when the finality branch
+    /// length names no layout. `Error::Config` when the store cannot drop or keep an entry.
+    fn genesis_validators_root_branch_under(
+        &self,
+        state_root: B256,
+        finality_branch_length: usize,
+    ) -> Result<Vec<B256>> {
+        match self.checked_stored_branch(state_root, finality_branch_length)? {
+            StoredBranch::Verified(branch) => Ok(branch),
+            StoredBranch::Absent => self.branch_from_state(state_root),
+            StoredBranch::Dropped => self.branch_from_state(state_root).map_err(|error| {
+                Error::Beacon(format!(
+                    "the stored branch of genesis_validators_root under state root {state_root:#x} failed its check and \
+                     was dropped, and the branch cannot be built again: {error}"
+                ))
+            }),
         }
+    }
+
+    /// Reads the entry for `state_root` and checks it. A failed entry leaves the store.
+    fn checked_stored_branch(
+        &self,
+        state_root: B256,
+        finality_branch_length: usize,
+    ) -> Result<StoredBranch> {
+        let Some(stored) = self.branch_store.get(&state_root) else {
+            return Ok(StoredBranch::Absent);
+        };
+        let proves = stored_branch_proves_genesis_validators_root(
+            self.chain.spec(),
+            finality_branch_length,
+            &stored,
+            &state_root,
+        )?;
+        if proves {
+            return Ok(StoredBranch::Verified(stored));
+        }
+        Logger::standard().warn(
+            "stored_branch_dropped",
+            &[
+                ("state_root", format!("{state_root:#x}")),
+                (
+                    "reason",
+                    "the branch does not prove genesis_validators_root".to_string(),
+                ),
+            ],
+        );
+        self.branch_store.remove(&state_root)?;
+        Ok(StoredBranch::Dropped)
+    }
+
+    /// Builds the branch from the state of `state_root` and keeps it in the store.
+    fn branch_from_state(&self, state_root: B256) -> Result<Vec<B256>> {
         let branch = self.state_for(state_root)?.genesis_validators_root_branch();
         self.branch_store.put(state_root, branch.clone())?;
         Ok(branch)
@@ -454,7 +522,8 @@ impl HttpBeaconSource {
     /// Gives every update the branch of `genesis_validators_root` under the state root of its attested header. An update
     /// that already carries one (the assembled update) is kept and its branch is stored.
     ///
-    /// The branch is public data. The store is not trusted: a wrong entry makes the native run refuse the fold.
+    /// The branch is public data. The store is not trusted: the prover checks a stored entry before it uses it (see
+    /// [`Self::genesis_validators_root_branch_under`]).
     fn attach_genesis_validators_root_branches(
         &self,
         updates: Vec<LightClientUpdate>,
@@ -468,7 +537,10 @@ impl HttpBeaconSource {
                         .put(state_root, update.genesis_validators_root_branch.clone())?;
                     return Ok(update);
                 }
-                let branch = self.genesis_validators_root_branch_under(state_root)?;
+                let branch = self.genesis_validators_root_branch_under(
+                    state_root,
+                    update.finality_branch.len(),
+                )?;
                 Ok(update.with_genesis_validators_root_branch(branch))
             })
             .collect()
@@ -1244,11 +1316,14 @@ mod tests {
     /// Claim: the plan for a REAL Sepolia Gloas head carries a finalized header anchored in its real state, with the real
     /// execution header RLP. The native check of the program ACCEPTS the update, and reports the block that
     /// `state.latest_block_hash` names, with a non-zero number from the RLP. The prover reads the real branch of
-    /// `genesis_validators_root` from its store. One flipped entry in the stored branch gives exactly
-    /// `InvalidGenesisValidatorsRootBranch`.
+    /// `genesis_validators_root` from its store. Two controls follow. First, one flipped entry in the branch of the plan
+    /// gives exactly `InvalidGenesisValidatorsRootBranch` from the program. Second, one flipped entry in the STORED branch,
+    /// with the attested state unavailable (the fixtures hold the finalized state only), stops the plan with the clear
+    /// error that names the state root, and the prover drops the entry.
     /// Why it matters: this is what the prover sends to the guest on Sepolia. The accept shows that the finality, committee,
-    /// root branch and signature checks all pass on real data. The control shows that the accept depends on the stored
-    /// branch, and that a bad entry stalls the update instead of giving a false head.
+    /// root branch and signature checks all pass on real data. The first control shows that the accept depends on the
+    /// branch. The second shows that the prover checks the stored entry itself, so a bad entry stalls the update with a
+    /// clear message instead of a refusal at the cost of a proof run, and never gives a false head.
     #[test]
     fn a_gloas_plan_anchors_the_finalized_header_in_the_real_state() {
         let (source, stored, hash, _) = real_gloas_source_with_store(true);
@@ -1266,21 +1341,34 @@ mod tests {
         assert_eq!(output.executionBlockHash, hash);
         assert_ne!(output.executionBlockNumber, 0);
 
-        // Control: the same source with one flipped entry in the stored branch is refused at the root branch check.
-        let (corrupt_source, corrupt_stored, _, corrupt_branches) =
-            real_gloas_source_with_store(true);
-        let attested_state_root = plan.input.steps[0].update.attested_header.beacon.state_root;
-        corrupt_branches.corrupt(&attested_state_root);
-        let corrupt_plan = corrupt_source
-            .plan_update(&corrupt_stored)
-            .unwrap()
-            .expect("a plan");
+        // Control one: the program refuses a plan whose branch has one flipped entry, with the exact error.
+        let mut tampered = plan.input.clone();
+        tampered.steps[0].update.genesis_validators_root_branch[0].0[0] ^= 0x01;
         assert_eq!(
-            verify_update_natively(&corrupt_plan.input).unwrap_err(),
+            verify_update_natively(&tampered).unwrap_err(),
             Error::VerificationRefused(
                 lc_core::Error::InvalidGenesisValidatorsRootBranch.to_string()
             )
         );
+
+        // Control two: a corrupt stored entry and no attested state. The prover checks the entry, drops it, cannot build
+        // the branch again, and says so.
+        let (corrupt_source, corrupt_stored, _, corrupt_branches) =
+            real_gloas_source_with_store(true);
+        let attested_state_root = plan.input.steps[0].update.attested_header.beacon.state_root;
+        corrupt_branches.corrupt(&attested_state_root);
+        let Err(error) = corrupt_source.plan_update(&corrupt_stored) else {
+            panic!("the plan must fail");
+        };
+        let text = error.to_string();
+        assert!(
+            matches!(&error, Error::Beacon(_))
+                && text.contains(&format!("{attested_state_root:#x}"))
+                && text.contains("failed its check")
+                && text.contains("cannot be built again"),
+            "{text}"
+        );
+        assert_eq!(corrupt_branches.get(&attested_state_root), None);
     }
 
     /// Claim: without an execution source the plan for a Gloas head stops with a clear configuration error that names
