@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Gate: every page that may be published holds nothing private.
-# Scans the docs, the web documentation pages and the readmes. Prints file and line for each
+# Scans the docs, the web documentation pages, the readmes, progress.txt and script/. Prints file and line for each
 # match and exits 1. A match is one of: an email address, a home directory path, the name of a
 # private machine or account, a RunPod endpoint identifier, a key-shaped string, a key inside a
 # valve.city address, or a one-time identifier that the owner listed.
@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 # Planning notes in docs/superpowers describe these patterns, so they are not scanned.
-scanned_paths=(docs explorer/web/docs/pages README.md 'explorer/*/README.md' ':!docs/superpowers')
+scanned_paths=(docs explorer/web/docs/pages README.md 'explorer/*/README.md' progress.txt script ':!docs/superpowers' ':!script/check-docs-public.sh')
 
 patterns=(
   # email address
@@ -19,7 +19,9 @@ patterns=(
   '/home/[A-Za-z]'
   # private machine and account names
   '\b[private]\b'
-  'hexpayday'
+  '[private]'
+  '/Users/'
+  'HexPay\.Day'
   '[private]'
   # RunPod endpoint identifier before the proxy domain
   '[a-z0-9]{10,}\.api\.runpod\.ai'

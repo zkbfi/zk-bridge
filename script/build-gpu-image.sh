@@ -10,7 +10,7 @@
 #
 # Options:
 #   --tag   image name and tag (default: zk-bridge-prover-gpu-worker:local, never pushed)
-#   --host  ssh host of the build host (default: [private], or the variable BUILD_HOST)
+#   --host  ssh host of the build host (required: this option or the variable BUILD_HOST)
 #   --push  push the tag after the build and print the registry digest
 #   --no-cache  ignore the layer cache (a cold build). The cache mounts of cargo stay, so for a fully cold build empty
 #           them first with `docker builder prune` on the host.
@@ -23,7 +23,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-host="${BUILD_HOST:-[private]}"
+host="${BUILD_HOST:-}"
 build_directory="${BUILD_DIR:-zk-bridge-build/gpu-image}"
 tag="zk-bridge-prover-gpu-worker:local"
 push_requested="no"
@@ -41,6 +41,10 @@ while [ $# -gt 0 ]; do
 done
 if [ "${push_requested}" = "yes" ] && [ "${tag_given}" = "no" ]; then
   echo "--push needs --tag with the full registry name, for example ghcr.io/<owner>/zk-bridge-prover-gpu-worker:v6" >&2
+  exit 2
+fi
+if [ -z "${host}" ]; then
+  echo "set the variable BUILD_HOST (or pass --host) to the ssh host of the build host" >&2
   exit 2
 fi
 for elf in light-client fork-observation; do

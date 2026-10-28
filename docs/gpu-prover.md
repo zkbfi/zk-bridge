@@ -119,7 +119,7 @@ Do not build on the 2 GB local virtual machine. The build needs about 8 GB of me
 
 ### Build on the build host with the cache
 
-Use `script/build-gpu-image.sh`. It builds in one persistent directory on the build host (`~/zk-bridge-build/gpu-image` on the build host; set the host with `BUILD_HOST`), so the BuildKit cache stays between builds.
+Use `script/build-gpu-image.sh`. It builds in one persistent directory on the build host (`~/zk-bridge-build/gpu-image` on the build host; you must set the host with the variable `BUILD_HOST` or the option `--host`; the script has no default and stops with a message when both are missing), so the BuildKit cache stays between builds.
 
 ```
 script/build-gpu-image.sh --tag zk-bridge-prover-gpu-worker:local          # build only, never pushes
