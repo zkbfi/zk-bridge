@@ -50,13 +50,15 @@ export const writeBotConfiguration = async (context: Context, indexerUrl: string
   const file = paths(context);
   mkdirSync(file.state, { recursive: true });
   const envReference = (variable: string) => ({ source: "environment", variable });
+  // The publisher follows the backend of the run. The oracle needs no endpoint and no RunPod key.
+  const remote = context.backend === "remote";
   writeFileSync(
     file.setup,
     JSON.stringify(
       {
         schemaVersion: 1,
-        endpointUrl: Bun.env.E2E_RUNPOD_URL ?? "",
-        runpodApiKey: envReference("RUNPOD_API_KEY"),
+        endpointUrl: remote ? (Bun.env.E2E_RUNPOD_URL ?? "") : "",
+        runpodApiKey: remote ? envReference("RUNPOD_API_KEY") : null,
         chains: { "1": { rpc: envReference("E2E_RPC_A"), beacon: envReference("E2E_BEACON_A") }, "369": { rpc: envReference("E2E_RPC_B"), beacon: envReference("E2E_BEACON_B") } },
         msgboardUrl: envReference("E2E_MSGBOARD_URL"),
         pair: "eth-pls",
@@ -80,7 +82,7 @@ export const writeBotConfiguration = async (context: Context, indexerUrl: string
         secretStore: { kind: "none" },
         logLevel: "info",
         maximumMessageBytes: 8192,
-        publisher: { prover, apiKeyVariable: "RUNPOD_API_KEY", remote: { mode: "load-balancing" }, pollSeconds: 5, republishSeconds: 600, retryBackoffSeconds: 20, indexerUrl },
+        publisher: { prover, backend: context.backend, oracleKeyVariable: "ORACLE_KEY", apiKeyVariable: "RUNPOD_API_KEY", remote: { mode: "load-balancing" }, pollSeconds: 5, republishSeconds: 600, retryBackoffSeconds: 20, indexerUrl },
         runner: {
           prover: { ...prover, timeoutSeconds: 600 },
           indexerUrl,
