@@ -25,6 +25,9 @@
       ],
       "@zk-bridge/shared/config": [
         "../shared/src/config/index.ts"
+      ],
+      "@zk-bridge/shared/prover": [
+        "../shared/src/prover/index.ts"
       ]
     }
   },

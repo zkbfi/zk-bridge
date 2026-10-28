@@ -5,6 +5,7 @@
 import { testRender } from '@opentui/react/test-utils'
 import { act } from 'react'
 import { App } from '../../src/app/App'
+import type { ProveDependencies } from '../../src/ui/prove-view'
 import type { AppServices, ProverSetupServices, SigningServices } from '../../src/app/services'
 import { createFixtureChainAccess } from '../../src/chain/fixture-chain-access'
 import type { ChainAccess } from '../../src/chain/chain-access'
@@ -61,6 +62,8 @@ export interface HarnessOptions {
   /** The live connection runtime. Default: none, as in fixture mode. */
   readonly connection?: ConnectionRuntime | null
   readonly tokenValuationsWei?: Readonly<Record<string, bigint>>
+  /** Replaces what local proving asks of the machine. */
+  readonly proveDependencies?: ProveDependencies
 }
 
 const noStartupSecrets = { privateKey: undefined, mnemonic: undefined, mnemonicPassphrase: undefined }
@@ -120,7 +123,7 @@ export async function renderApp(options: HarnessOptions) {
     defaultPairId: (options.pair ?? FIXTURE_PAIR).id,
     tokenValuationsWei: options.tokenValuationsWei ?? {},
   }
-  const setup = await testRender(<App services={services} initialSigner={options.initialSigner ?? null} />, {
+  const setup = await testRender(<App services={services} initialSigner={options.initialSigner ?? null} proveDependencies={options.proveDependencies} />, {
     width: options.width,
     height: options.height,
   })
