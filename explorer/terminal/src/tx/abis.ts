@@ -1,9 +1,9 @@
 /**
  * The contract functions that the dashboard calls or reads, as small human-readable ABI fragments.
  *
- * The full generated ABIs live in `explorer/shared`. These fragments hold only what the terminal needs, so the
- * terminal builds without the shared package. `test/tx/abis.test.ts` checks every fragment against the shared ABIs
- * and the Foundry build output, so a contract change that breaks a selector fails a test.
+ * The full generated ABIs live in `explorer/shared`. The delivery router ABI is re-exported from there whole. The other
+ * ABIs are small fragments with only what the terminal needs. `test/tx/abis.test.ts` checks every fragment against the
+ * shared ABIs and the Foundry build output, so a contract change that breaks a selector fails a test.
  */
 import { parseAbi } from 'viem'
 
@@ -39,18 +39,12 @@ export const messageBridgeAbi = parseAbi([
   'function maxGasPerTx() pure returns (uint256)',
 ])
 
-/** The delivery router: the delivery entry point, the wrap and send calls, the sweep, the address that receives the tips, the address that receives what it cannot deliver, and the base fee view. */
-export const deliveryRouterAbi = parseAbi([
-  ...messageBridgeStructures,
-  'function executeMessage(MessageProof proof)',
-  'function rewardAddress() view returns (address)',
-  'function failedDeliveryAddress() view returns (address)',
-  'function baseFee(bool excludePriority) view returns (uint256)',
-  'function wrapAndRelayTokens() payable',
-  'function wrapAndRelayTokens(address receiver) payable',
-  'function relayTokensAndCall(address receiver, bytes data) payable',
-  'function sweep(address token)',
-])
+/**
+ * The delivery router, exactly as the compiled contract describes it: its functions, its events (`DeliveryFailed`,
+ * `Swept`, `HandOffRefused` and `CallFailed`) and its errors. It comes from the generated ABI in `explorer/shared`, so
+ * a change of the Solidity interface reaches the terminal when that ABI is generated again, and no second copy can drift.
+ */
+export { deliveryRouterAbi } from '@zk-bridge/shared'
 
 /** The light client: post an update and read the stored head. */
 export const beaconLightClientAbi = parseAbi([

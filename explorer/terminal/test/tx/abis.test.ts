@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
-import { toFunctionSelector, type Abi, type AbiFunction } from 'viem'
+import { toEventSelector, toFunctionSelector, type Abi, type AbiEvent, type AbiFunction } from 'viem'
 import {
   beaconLightClientAbi,
   deliveryRouterAbi,
@@ -44,6 +44,10 @@ function expectEveryFunctionIn(fragment: Abi, reference: Abi): void {
   }
 }
 
+function eventsOf(abi: Abi): AbiEvent[] {
+  return abi.filter((item): item is AbiEvent => item.type === 'event')
+}
+
 const cases: ReadonlyArray<{ fragment: Abi; contract: string; sharedName: string }> = [
   { fragment: tokenMediatorAbi, contract: 'TokenMediator', sharedName: 'tokenMediatorAbi' },
   { fragment: deliveryRouterAbi, contract: 'DeliveryRouter', sharedName: 'deliveryRouterAbi' },
@@ -71,6 +75,30 @@ describe('ABI fragments against the contracts', () => {
       expectEveryFunctionIn(fragment, reference)
     })
   }
+
+  test('the delivery router ABI carries every event the router emits, with the topics of the Solidity declarations', () => {
+    const selectors = new Map(eventsOf(deliveryRouterAbi).map((item) => [item.name, toEventSelector(item)]))
+    // The signatures are written out from DeliveryRouter.sol. The enum Reason is a uint8 on the wire.
+    const declared = {
+      DeliveryFailed: 'DeliveryFailed(address,address,uint256,uint8)',
+      Swept: 'Swept(address,uint256)',
+      HandOffRefused: 'HandOffRefused(address,uint256)',
+      CallFailed: 'CallFailed(address,address,uint256)',
+    } as const
+    expect([...selectors.keys()].sort()).toEqual(Object.keys(declared).sort())
+    for (const [name, signature] of Object.entries(declared)) {
+      expect(selectors.get(name), `${name} topic`).toBe(toEventSelector(signature))
+    }
+  })
+
+  test('the delivery router ABI has the same events as the Foundry build output', () => {
+    const reference = foundryAbi('DeliveryRouter')
+    if (reference === null) {
+      console.warn('SKIPPED: out/DeliveryRouter.sol is not built. Run forge build.')
+      return
+    }
+    expect(eventsOf(deliveryRouterAbi).map((item) => toEventSelector(item)).sort()).toEqual(eventsOf(reference).map((item) => toEventSelector(item)).sort())
+  })
 
   test('the test can fail: a made-up function is not found in the real ABI', () => {
     const reference = foundryAbi('TokenMediator')
