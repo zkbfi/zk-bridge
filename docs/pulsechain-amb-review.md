@@ -232,7 +232,7 @@ The collector config holds mediator addresses only. It has no message bridge or 
 
 ### 4.2 The four mediators and their message bridges (from chain state)
 
-Reads use the keyed valve.city endpoint for chains 369 and 1, except where marked. The 1Password session timed out partway through, so I made the owner reads marked "public" with read-only public RPCs: `https://rpc.pulsechain.com`, `https://eth.blockscout.com/api/eth-rpc` and `https://ethereum-rpc.publicnode.com`. The valve.city endpoint returns "Unsupported chain" for 56, so BNB Chain reads use `https://bsc-dataseed.bnbchain.org`.
+Reads use the keyed valve.city endpoint for chains 369 and 1, except where marked. The password manager session timed out partway through, so I made the owner reads marked "public" with read-only public RPCs: `https://rpc.pulsechain.com`, `https://eth.blockscout.com/api/eth-rpc` and `https://ethereum-rpc.publicnode.com`. The valve.city endpoint returns "Unsupported chain" for 56, so BNB Chain reads use `https://bsc-dataseed.bnbchain.org`.
 
 All six proxies are OmniBridge `EternalStorageProxy` contracts, not EIP-1967 proxies. `cast storage <proxy> 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a9b6ceaff7c84b4c41` returns zero on each mediator I checked: `0x4fD0…`, `0x0e18…`, `0xf1DF…` (public), `0x1715…` (public) and `0xb400…`. The implementation comes from the `implementation()` getter.
 

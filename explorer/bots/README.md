@@ -51,7 +51,7 @@ proving policy. The **bot configuration** adds what only a bot needs. A sample i
 | `publisher.indexerUrl` | Required when the policy proves when a transfer waits. |
 | `runner.signer` | `private-key`, `keystore`, `mnemonic`, `ledger` or `trezor`, as in the dashboard. |
 | `runner.indexerUrl` | The indexer. |
-| `runner.maximumLossPercent` | A whole number from 0 to 100. The runner leaves out a delivery whose loss is this share of its cost or more. The cost includes the share of the light client update that the delivery carries. A left-out message stays deliverable by anyone. Default 20. A configuration that still names `minimumMarginWei` is refused. |
+| `runner.maximumLossPercent` | A whole number from 0 to 100. A delivery is a loss only when its fee is below its cost. A delivery at break-even (fee equal to cost, including a zero cost with a zero fee) always delivers, even at a limit of 0. Below the cost, the runner leaves out a delivery whose loss is this share of its cost or more. The cost includes the share of the light client update that the delivery carries. A left-out message stays deliverable by anyone. Default 20. A configuration that still names `minimumMarginWei` is refused. |
 | `runner.deliverWithoutOffer` | Deliver items with no fee offer, for the gas cost alone. Default off. |
 | `runner.deliveryRouter` | Default: `delivery_router` of the deployment file. At start the runner reads `DeliveryRouter.rewardAddress()` from it and logs the value. The runner uses that address only for its accounting and its display. The router decides where each tip goes, so the configuration names no reward address. When the read fails, the runner stops with an error that names the router and the chain. |
 | `runner.multicall3` | The Multicall3 contract that batches the deliveries. Default `0xcA11bde05977b3631167028862bE2a173976CA11`, the canonical address. At start the runner refuses to run when the address holds no code. |
@@ -121,7 +121,7 @@ For each direction:
      delivery must supply for that limit (`requiredDeliveryGas`: the limit, one sixty-third of it, one unit and 100000 of
      overhead) plus `proofCheckGas`.
    - Gas cost = gas × (base fee + priority fee). Deliver only when the loss is under the limit: (cost − fee) × 100 is less
-     than `maximumLossPercent` × cost. A fee at or above the cost always delivers. A loss of exactly the limit is left out, so a limit of 0
+     than `maximumLossPercent` × cost. A fee at or above the cost always delivers, so a zero cost with a zero fee delivers. A fee below the cost is a loss. A loss of exactly the limit is left out, so a limit of 0
      delivers at break-even and not below. Otherwise skip with `loss-at-or-above-limit`. The first check uses the assumed gas and needs no evidence. The
      second check uses the gas of the simulation.
    - Build the evidence with `zk-bridge-prover evidence`. The log index inside the receipt comes from the source receipt.

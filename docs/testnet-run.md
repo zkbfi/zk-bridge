@@ -28,7 +28,7 @@ Sources: `specs/gloas/beacon-chain.md` (`BeaconState`, `BeaconBlockBody`, `Execu
 - **Prover.** It hashes the Gloas state, reads `debug_getRawHeader` from `source.rpc_url`, and attaches both. See `prover/README.md`.
 - **Message source.** A message in execution block X is proven by a beacon block B after the block of X, an ancestor of the stored head, whose bid `parent_block_hash` (index 2856) equals `keccak256(RLP of X)`. Receipts and transactions roots come from that RLP. `process_execution_payload_bid` asserts `bid.parent_block_hash == state.latest_block_hash`, and `latest_block_hash` is written only from a confirmed parent payload, so X is a payload that the canonical chain accepted (a block on an empty parent names an older accepted payload, also canonical). The bid `block_hash` is never accepted. The contract applies this rule from the slot `gloasForkSlot` on; the layout path stays closed to Gloas. The prover builds this evidence: it scans the canonical blocks after the slot of X (up to 64) for the first one whose bid names X, hashes that Gloas block body (`lc-core` `ssz_block_gloas`), reads the header RLP with `debug_getRawHeader`, and checks `gloasForkSlot` of the destination bridge. The `evidence` command needs `source.rpc_url` with that method.
 
-### What the [private] rebuild must regenerate
+### What the build host rebuild must regenerate
 
 1. The two program ELFs (`light-client.elf`, `fork-observation.elf`) with `light-client/scripts/program-keys.sh --write`, because `lc-core` and the wire format changed. Copy them to `light-client/elf/`.
 2. `light-client/program-keys.json`, and the keys in `script/testnet/bridge.config.testnet.json` and in the mainnet configuration (`lightClientProgramVKey`, `programVKey`, `observationProgramVKey`). The verifier code hash does not change.
@@ -64,7 +64,7 @@ With `ENDPOINTS=public`, the light-client routes of chain 943 print `INFO` and d
 Keep every secret in an environment variable. Never write a key into a file in the repository.
 
 ```sh
-export VALVE_KEY=$(op read 'op://valve/valve city unlimited key v3/password')
+export VALVE_KEY=$(op read 'op://<vault>/<item for your valve.city key>/<field>')
 export RUNPOD_API_KEY=$(op read '<reference of your RunPod key>')
 export FOUNDRY_RPC_ENDPOINTS="{sepolia=\"https://one.valve.city/rpc/$VALVE_KEY/evm/11155111\",pulsechain_testnet_v4=\"https://one.valve.city/rpc/$VALVE_KEY/evm/943\"}"
 export KEYSTORE_NAME='<name of your Foundry keystore account>'
@@ -211,7 +211,7 @@ The prover configuration holds the beacon address with the key in it. Write it t
 cat > "$RUN_DIR/prover.toml" <<EOF
 [prover]
 backend = "remote"
-remote_url = "https://43nsvfb8svkosr.api.runpod.ai"
+remote_url = "https://<your-endpoint-identifier>.api.runpod.ai"
 remote_api_key_env = "RUNPOD_API_KEY"
 
 [handoff]
@@ -254,7 +254,7 @@ The key `chain` accepts `ethereum`, `pulsechain`, `sepolia` and `pulsechain-test
 First check that the endpoint answers. It can answer 204 while a worker starts, then 200. Write down the time between the two.
 
 ```sh
-printf 'url = "https://43nsvfb8svkosr.api.runpod.ai/ping"\nsilent\nwrite-out = "%%{http_code}\\n"\noutput = "/dev/null"\nheader = "Authorization: Bearer %s"\n' "$RUNPOD_API_KEY" | curl -K -
+printf 'url = "https://<your-endpoint-identifier>.api.runpod.ai/ping"\nsilent\nwrite-out = "%%{http_code}\\n"\noutput = "/dev/null"\nheader = "Authorization: Bearer %s"\n' "$RUNPOD_API_KEY" | curl -K -
 ```
 
 Make one proof for each direction. The command exits with 0 when it made a proof, and with 3 when there is nothing to prove.

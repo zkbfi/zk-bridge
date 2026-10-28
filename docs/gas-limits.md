@@ -18,7 +18,7 @@ I read each file and ran the test named in the "Evidence" column on 2026-10-28.
 | Layer | Today | Rule holds? | Evidence | Fixed by |
 |---|---|---|---|---|
 | Source bridge `MessageBridge._send` | Refuses gas below `MIN_GAS_PER_CALL` (100) or above `MAX_GAS_PER_TX` (10,000,000) with `GasOutOfRange`. | Yes | `src/hardened/MessageBridge.sol` line 243 | none |
-| Mediator `TokenMediator._chooseGasLimit` | Takes the larger of the request and the default of the kind. Defaults: `RELEASE_GAS_LIMIT` 250,000; plus `CALLBACK_GAS_LIMIT` 750,000 with a call; deploy is `max(2,000,000, 1,300,000 + 1,600 x name and symbol bytes)`. Refuses above `maxGasPerTx()` with `GasLimitAboveBridgeMaximum`. | Yes since Task 11. A request above zero and below the default is refused with `GasLimitBelowMinimum`; zero gives the default. (Before Task 11 a low request was raised without a refusal.) | `TokenMediatorGasLimit.t.sol` `test_aRequestBelowTheDefaultIsRefused` | Task 11 |
+| Mediator `TokenMediator._chooseGasLimit` | A request of zero gives the default of the kind. A request above zero and below the default is refused. Defaults: `RELEASE_GAS_LIMIT` 250,000; plus `CALLBACK_GAS_LIMIT` 750,000 with a call; deploy is `max(2,000,000, 1,300,000 + 1,600 x name and symbol bytes)`. Refuses above `maxGasPerTx()` with `GasLimitAboveBridgeMaximum`. | Yes since Task 11. A request above zero and below the default is refused with `GasLimitBelowMinimum`; zero gives the default. (Before Task 11 a low request was raised without a refusal.) | `TokenMediatorGasLimit.t.sol` `test_aRequestBelowTheDefaultIsRefused` | Task 11 |
 | Delivery `MessageBridge._callTarget` | Requires `gasleft() >= gasLimit + gasLimit/63 + 1 + 100,000` and calls with exactly `gasLimit`. | Yes | `src/hardened/MessageBridge.sol` lines 371 to 395 | none |
 | Router `DeliveryRouter._callTarget` | The user call gets `gasleft() - CALL_GAS_RESERVE` (10,000), inside the mediator frame that the bridge capped at the message limit. | Yes, but only by that cap | Test 3 below passes today | Task 8 keeps the test as a guard |
 | Router tip measure | `startingGas - gasleft()` plus the call allowance. It measures the gas the deliverer made available. | Not a limit question | none | no change |
@@ -38,8 +38,8 @@ back as their first step.
 ### 1. `test/hardened/mediator/TokenMediatorGasLimit.t.sol::test_aRequestBelowTheDefaultIsRefused`
 
 For a token whose copy exists (release kind), `relayTokens(token, receiver, 1 ether, 249_999)` must revert with
-`GasLimitBelowMinimum(249_999, 250_000)`. The scratch copy declared that error locally, because the contract does not
-have it yet. Task 8 adds `error GasLimitBelowMinimum(uint256 requested, uint256 minimum)` to the mediator.
+`GasLimitBelowMinimum(249_999, 250_000)`. The scratch copy declared that error locally, because the contract did not
+have it then. Task 8 added `error GasLimitBelowMinimum(uint256 requested, uint256 minimum)` to the mediator.
 
 ```
 [FAIL: next call did not revert as expected] test_aRequestBelowTheDefaultIsRefused() (gas: 2306735)
@@ -112,7 +112,7 @@ The mediator now refuses a token request above zero and below the default of its
 `GasLimitBelowMinimum(gasLimit, minimum)`. Zero gives the default. The router needed no change: the guard test
 `test_theUserCallNeverGetsMoreThanTheMessageGasLimit` passes, and the user call stays inside the call of the mediator.
 The terminal plan and the dapp form refuse a value below the minimum of a release (they cannot see whether the copy
-exists, so they check the lowest minimum) or above the bridge maximum. The mediator still refuses a low first relay.
+exists, so they check the lowest minimum) or above the bridge maximum. The mediator still refuses a low first relay. A plain message sent straight through the bridge has no default: the bridge needs a limit of at least `MIN_GAS_PER_CALL` (100) and refuses a lower one with `GasOutOfRange`.
 
 ### Mutation results
 

@@ -212,7 +212,7 @@ A token transfer gets the gas left minus `TRANSFER_GAS_RESERVE` (60,000) and at 
 
 ### D4a. A message never carries a gas limit below the default of its kind or above the bridge maximum
 
-A token relay with a gas limit of zero sends the default of its kind (release 250,000; plus the callback 750,000 with a call; a deploy follows the length of the name and the symbol). A request above zero and below the default reverts with `GasLimitBelowMinimum`. A request above `maxGasPerTx()` reverts with `GasLimitAboveBridgeMaximum`. The user call of the router runs inside the call of the mediator, so it never gets more than the message limit.
+A token relay with a gas limit of zero sends the default of its kind (release 250,000; plus the callback 750,000 with a call; a deploy follows the length of the name and the symbol). A request above zero and below the default reverts with `GasLimitBelowMinimum`. A request above `maxGasPerTx()` reverts with `GasLimitAboveBridgeMaximum`. A plain message sent straight through the bridge has no default and needs a limit of at least 100 (`MIN_GAS_PER_CALL`); a lower one reverts with `GasOutOfRange`. The user call of the router runs inside the call of the mediator, so it never gets more than the message limit.
 
 | Enforced | Tests |
 |---|---|

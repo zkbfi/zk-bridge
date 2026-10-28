@@ -117,9 +117,9 @@ Replace `<registry>`, `<account>` and `<tag>` with your own. Use an exact tag fo
 
 Do not build on the 2 GB local virtual machine. The build needs about 8 GB of memory. It needs no GPU and no CUDA toolkit.
 
-### Build on the [private] with the cache
+### Build on the build host with the cache
 
-Use `script/build-gpu-image.sh`. It builds in one persistent directory on the build host (`~/zk-bridge-build/gpu-image` on the [private], host name `[private]`), so the BuildKit cache stays between builds.
+Use `script/build-gpu-image.sh`. It builds in one persistent directory on the build host (`~/zk-bridge-build/gpu-image` on the build host; set the host with `BUILD_HOST`), so the BuildKit cache stays between builds.
 
 ```
 script/build-gpu-image.sh --tag zk-bridge-prover-gpu-worker:local          # build only, never pushes
@@ -139,7 +139,7 @@ Run the same command by hand after a manual `light-client/scripts/program-keys.s
 
 The layers of the `build-gpu-worker` stage go from slowest to fastest changing: toolchain and packages, the light-client crates and the manifests, a dependency-only build from stub sources (one cache mount each for the cargo registry, the git dependencies and the target directory), then `prover/src`. The final stage puts the GPU server download, the 6 GB circuit files, the worker binary and the ELFs in that order. A change in `prover/src` now rebuilds one crate and writes two small layers. The checksums, the `VERIFIER_HASH` check, the ELF check and every pinned version are unchanged.
 
-Measured on the [private] (32 cores) on 2026-10-26, target `prover-gpu-worker`, same sources and ELFs:
+Measured on the build host (32 cores) on 2026-10-26, target `prover-gpu-worker`, same sources and ELFs:
 
 | Step | Before | After |
 |---|---|---|
@@ -149,7 +149,7 @@ Measured on the [private] (32 cores) on 2026-10-26, target `prover-gpu-worker`, 
 
 The two images have the same ELF hashes, the same `prove-worker` binary hash (`414e4998...`), the same GPU server hash, the same `groth16_vk.bin` hash (`4388a21c...`, the `VERIFIER_HASH`), the same file ownership and modes, and the same environment, user, entry point and labels. The cold build does not get faster: it compiles the same crates. The gain is in every build after the first. Before the change, the circuit files sat after the worker binary, so every source change rewrote the 6 GB layer.
 
-`light-client/scripts/program-keys.sh` also skips its Docker build now, when the hash of the guest sources matches `light-client/program-keys.source-hash`. Use `--force` to build anyway. On the [private] the full check took 165 s and the skip took under 1 s.
+`light-client/scripts/program-keys.sh` also skips its Docker build now, when the hash of the guest sources matches `light-client/program-keys.source-hash`. Use `--force` to build anyway. On the build host the full check took 165 s and the skip took under 1 s.
 
 What the image holds:
 
@@ -290,12 +290,12 @@ Every proof was 356 bytes and its public values equalled the native `lc-core` ru
 
 | Item | Value |
 |---|---|
-| Image | `ghcr.io/[private]/zk-bridge-prover-gpu-worker:v4` |
+| Image | `<registry>/<account>/zk-bridge-prover-gpu-worker:v4` |
 | Digest | `sha256:d9f491f92e66c9bf7e8a3355da0083fd244138aa38e106bbd8e982818c401ea4` |
-| Built from | commit `10976fb`, on the [private], target `prover-gpu-worker`, platform linux/amd64 |
+| Built from | commit `10976fb`, on the build host, target `prover-gpu-worker`, platform linux/amd64 |
 | Light client program key | `0x002a566f7e3d1e6996f7ffa35668291bfc7bce325ed34fe55ef41a2be3fd15cf` |
 | Fork observation program key | `0x00c2a9c5a7b0826c85a59ca0dbeccae5309093072e40d26548b9b0c4183d3f39` |
-| Endpoint | `43nsvfb8svkosr` runs v4 (release 5). Only the image changed. |
+| Endpoint | The endpoint runs v4 (release 5). Only the image changed. |
 
 The program keys in this image are old. The guest programs changed on 2026-10-27, and `light-client/program-keys.json` holds new keys. The v4 image must not prove for the current bridge. Rebuild the worker image with `script/build-gpu-image.sh` before you use it, and check the keys inside the new image against `light-client/program-keys.json`.
 
@@ -349,15 +349,15 @@ Chain 943 serves a correct state only for the newest finalized header. The `prov
 
 | Item | Value |
 |---|---|
-| Image | `ghcr.io/[private]/zk-bridge-prover-gpu-worker:v5` |
+| Image | `<registry>/<account>/zk-bridge-prover-gpu-worker:v5` |
 | Digest | `sha256:f93ccd70ac081d4c6084f1377fb7df11f5fac3284bfc26fca1c573089779abfc` |
-| Built from | commit `a618ecb`, on the [private], in a fresh folder, target `prover-gpu-worker`, platform linux/amd64 |
+| Built from | commit `a618ecb`, on the build host, in a fresh folder, target `prover-gpu-worker`, platform linux/amd64 |
 | Light client program key | `0x002a566f7e3d1e6996f7ffa35668291bfc7bce325ed34fe55ef41a2be3fd15cf` (unchanged from v4) |
 | Fork observation program key | `0x00c2a9c5a7b0826c85a59ca0dbeccae5309093072e40d26548b9b0c4183d3f39` (unchanged from v4) |
-| Endpoint | `43nsvfb8svkosr` runs v5. Only the image changed. The pool is still `ADA_24`. |
+| Endpoint | The endpoint runs v5. Only the image changed. The pool is still `ADA_24`. |
 
 The program keys in this image are old. The guest programs changed on 2026-10-27, and `light-client/program-keys.json` holds new keys. The v5 worker image must not prove for the current bridge. Rebuild the worker image with `script/build-gpu-image.sh` before you use it, and check the keys inside the new image against `light-client/program-keys.json`.
 
 Checks inside the image: `light-client.elf` hashes to `d7633e82...9bbf` and `fork-observation.elf` to `5a2535fa...91bf`, both equal to `light-client/program-keys.json`. The file `groth16_vk.bin` hashes to `4388a21c687fdd5f218d7e3d13190cac4c5355818d3605fd5fb811df468ee696`, which is `VERIFIER_HASH`. v5 holds the worker health fix (`/ping` answers 503 after a failed proof). A first proof on v5 is not measured yet.
 
-The push of the 6 GB circuit layer takes about 35 minutes over the Wi-Fi of the [private] (3 MB/s). The first two pushes ended with "use of closed network connection". The third, after a fresh login, completed. Log in again before each retry.
+The push of the 6 GB circuit layer takes about 35 minutes over the Wi-Fi of the build host (3 MB/s). The first two pushes ended with "use of closed network connection". The third, after a fresh login, completed. Log in again before each retry.
