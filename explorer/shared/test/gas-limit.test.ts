@@ -78,8 +78,9 @@ describe("the gas rule", () => {
     ] as const;
     for (const name of names) {
       const match = new RegExp(`constant ${name} = ([0-9_]+);`).exec(text);
-      expect(match, name).not.toBeNull();
-      expect(gas[name], name).toBe(BigInt((match as RegExpExecArray)[1].replaceAll("_", "")));
+      const digits = match?.[1];
+      if (digits === undefined) throw new Error(`${name} is not declared as a constant in the Solidity source`);
+      expect(gas[name], name).toBe(BigInt(digits.replaceAll("_", "")));
     }
   });
 });
