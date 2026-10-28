@@ -4,6 +4,12 @@ import type { Job } from "./jobs.ts";
 export type RateLimits = {
   /** How many requests one caller may make in one minute. */
   readonly requestsPerCallerPerMinute: number;
+  /** How many requests all callers without a known address share in one minute. */
+  readonly requestsPerUnknownCallerPerMinute: number;
+  /** How many requests all callers together may make in one minute. */
+  readonly globalRequestsPerMinute: number;
+  /** The hours that a request row stays in the database. */
+  readonly requestRetentionHours: number;
   /** The seconds between the start of two jobs for one direction. */
   readonly secondsBetweenJobsPerDirection: number;
   /** The seconds after a failed job before the next request may start a new job. */
@@ -13,6 +19,9 @@ export type RateLimits = {
 /** The limits that the example configuration shows. */
 export const DEFAULT_RATE_LIMITS: RateLimits = {
   requestsPerCallerPerMinute: 10,
+  requestsPerUnknownCallerPerMinute: 2,
+  globalRequestsPerMinute: 120,
+  requestRetentionHours: 24,
   secondsBetweenJobsPerDirection: 120,
   secondsBeforeRetryAfterFailure: 60,
 };
@@ -28,14 +37,15 @@ function secondsUntil(readyAt: number, now: number): number {
 }
 
 /**
- * How long one caller must wait.
+ * How long a group of requests must wait. It serves the single caller, the shared unknown caller and all callers.
  *
- * @param recent The requests of the caller inside the window, and the time of the oldest one.
- * @returns Seconds to wait, or 0 when the caller may go on.
+ * @param recent The requests of the group inside the window, and the time of the oldest one.
+ * @param limit The most requests the group may make in the window.
+ * @returns Seconds to wait, or 0 when the group may go on.
  */
-export function callerWaitSeconds(input: { recent: { count: number; oldest: number | null }; now: number; limits: RateLimits }): number {
-  const { recent, now, limits } = input;
-  if (recent.count < limits.requestsPerCallerPerMinute || recent.oldest === null) return 0;
+export function windowWaitSeconds(input: { recent: { count: number; oldest: number | null }; now: number; limit: number }): number {
+  const { recent, now, limit } = input;
+  if (recent.count < limit || recent.oldest === null) return 0;
   return secondsUntil(recent.oldest + CALLER_WINDOW_MILLISECONDS, now);
 }
 

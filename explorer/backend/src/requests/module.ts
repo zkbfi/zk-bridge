@@ -1,9 +1,17 @@
 import type { Context, Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import { PROOF_DIRECTIONS, type ProofDirection } from "@zk-bridge/shared";
 import type { BackendModuleContext } from "../module.ts";
+import { UNKNOWN_CALLER, callerKey } from "./caller.ts";
 import { findActiveJob, findLatestJob, getJob, getRequest, type Job } from "./jobs.ts";
 import { createRequestService, type RequestService } from "./service.ts";
+
+/** The largest request body in bytes. A real body is under 300 bytes. */
+export const MAXIMUM_BODY_BYTES = 4096;
+
+/** How often the module deletes old request rows, in milliseconds. */
+export const PRUNE_INTERVAL_MILLISECONDS = 3_600_000;
 
 const requestBodySchema = z
   .object({
@@ -16,7 +24,11 @@ const requestBodySchema = z
       .transform((value) => value as `0x${string}`)
       .optional(),
   })
-  .strict();
+  .strict()
+  .refine((body) => body.reason !== "message" || body.messageId !== undefined, {
+    message: "a request with the reason message needs a messageId",
+    path: ["messageId"],
+  });
 
 const services = new WeakMap<BackendModuleContext, RequestService>();
 
@@ -38,11 +50,20 @@ function serviceFor(context: BackendModuleContext): RequestService {
 
 type SocketBindings = { incoming?: { socket?: { remoteAddress?: string } } };
 
-/** The key that the rate limits count: the first forwarded address when trusted, else the socket address. */
-function callerOf(request: Context, trustForwardedHeader: boolean): string {
-  const forwarded = request.req.header("x-forwarded-for")?.split(",")[0]?.trim();
-  if (trustForwardedHeader && forwarded !== undefined && forwarded !== "") return forwarded;
-  return (request.env as SocketBindings | undefined)?.incoming?.socket?.remoteAddress ?? "unknown";
+/**
+ * The key that the rate limits count. With the forwarded header trusted, it is the entry `trustedProxyHops` places from
+ * the right: the entries to its right came from your own proxies, and the entries to its left can be forged by the
+ * client. A header with fewer entries falls back to the socket address. With no address at all the key is the shared
+ * unknown bucket, which has a low limit.
+ */
+function callerOf(request: Context, config: { trustForwardedHeader: boolean; trustedProxyHops: number }): string {
+  const entries = (request.req.header("x-forwarded-for") ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "");
+  const forwarded = config.trustForwardedHeader ? entries[entries.length - config.trustedProxyHops] : undefined;
+  const address = forwarded ?? (request.env as SocketBindings | undefined)?.incoming?.socket?.remoteAddress;
+  return address === undefined ? UNKNOWN_CALLER : callerKey(address);
 }
 
 function describeJob(job: Job) {
@@ -62,17 +83,21 @@ function describeJob(job: Job) {
 export function register(app: Hono, context: BackendModuleContext): void {
   const service = serviceFor(context);
 
-  app.post("/requests", async (request) => {
-    const body = requestBodySchema.safeParse(await request.req.json().catch(() => null));
-    if (!body.success) return request.json({ error: "the request body is not valid" }, 400);
-    if (body.data.pair !== context.config.pair) return request.json({ error: `this backend serves the pair ${context.config.pair}` }, 400);
-    const result = service.submit({ ...body.data, caller: callerOf(request, context.config.trustForwardedHeader) });
-    if ("refused" in result) {
-      request.header("Retry-After", String(result.retryAfterSeconds));
-      return request.json({ error: "rate-limited", retryAfterSeconds: result.retryAfterSeconds }, 429);
-    }
-    return request.json(result, 202);
-  });
+  app.post(
+    "/requests",
+    bodyLimit({ maxSize: MAXIMUM_BODY_BYTES, onError: (request) => request.json({ error: "the request body is too large" }, 413) }),
+    async (request) => {
+      const body = requestBodySchema.safeParse(await request.req.json().catch(() => null));
+      if (!body.success) return request.json({ error: "the request body is not valid" }, 400);
+      if (body.data.pair !== context.config.pair) return request.json({ error: `this backend serves the pair ${context.config.pair}` }, 400);
+      const result = service.submit({ ...body.data, caller: callerOf(request, context.config) });
+      if ("refused" in result) {
+        request.header("Retry-After", String(result.retryAfterSeconds));
+        return request.json({ error: "rate-limited", retryAfterSeconds: result.retryAfterSeconds }, 429);
+      }
+      return request.json(result, 202);
+    },
+  );
 
   app.get("/requests/:id", (request) => {
     const stored = getRequest(context.storage, request.req.param("id"));
@@ -89,9 +114,18 @@ export function register(app: Hono, context: BackendModuleContext): void {
   });
 }
 
-/** Resumes the jobs that a restart left behind. Resolves with the function that waits for the running jobs. */
+/**
+ * Prunes old request rows, resumes the jobs that a restart left behind, and prunes again every hour.
+ * Resolves with the function that stops the timer and waits for the running jobs.
+ */
 export async function start(context: BackendModuleContext): Promise<() => Promise<void>> {
   const service = serviceFor(context);
+  service.prune();
   service.recover();
-  return () => service.settled();
+  const timer = setInterval(() => service.prune(), PRUNE_INTERVAL_MILLISECONDS);
+  timer.unref();
+  return async () => {
+    clearInterval(timer);
+    await service.settled();
+  };
 }

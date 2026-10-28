@@ -3,10 +3,11 @@ import type { Hex } from "viem";
 import type { ProofDirection } from "@zk-bridge/shared";
 import { CommandTimeoutError, ProverCommandError, type ProverBinary } from "@zk-bridge/shared/prover";
 import type { Logger } from "../logger.ts";
+import { UNKNOWN_CALLER } from "./caller.ts";
 import type { Storage } from "../storage.ts";
 import {
   CALLER_WINDOW_MILLISECONDS,
-  callerWaitSeconds,
+  windowWaitSeconds,
   directionWaitSeconds,
   type RateLimits,
 } from "./rate-limit.ts";
@@ -16,7 +17,9 @@ import {
   insertJob,
   insertRequest,
   listActiveJobs,
-  oldestRequestSince,
+  pruneRequests,
+  recentRequestsOfAll,
+  recentRequestsOfCaller,
   updateJob,
   type RequestReason,
 } from "./jobs.ts";
@@ -42,8 +45,13 @@ export interface RequestService {
    * job and runs it in the background. The call is synchronous, so two requests never both create a job.
    */
   submit(request: ProofRequest): SubmitResult;
-  /** Fails the proving jobs that outlived the prover limit, then runs the jobs that a restart left behind. */
+  /**
+   * Fails the proving jobs that outlived the prover limit, then runs the jobs that a restart left behind and that have
+   * no proof yet. A job whose proof already arrived waits for the webhook or for the timeout.
+   */
   recover(): void;
+  /** Deletes the request rows older than the retention window. Returns how many rows went. */
+  prune(): number;
   /** Resolves when no job runs in the background. A test awaits it. */
   settled(): Promise<void>;
 }
@@ -77,19 +85,20 @@ export function createRequestService(input: RequestServiceInput): RequestService
   const running = new Set<Promise<void>>();
 
   async function runJob(jobId: string, direction: ProofDirection): Promise<void> {
-    updateJob(storage, jobId, { status: "proving" }, now());
+    // Only a job that is queued, or proving without a proof after a restart, reaches here.
+    updateJob(storage, jobId, { status: "proving" }, now(), ["queued", "proving"]);
     try {
       const outcome = await input.proverForJob(jobId).prove({ direction });
       if (outcome.kind === "up-to-date") {
-        updateJob(storage, jobId, { status: "on-chain" }, now());
+        updateJob(storage, jobId, { status: "on-chain" }, now(), ["proving"]);
         return;
       }
       // The prover already handed the proof to the webhook. The webhook module moves the job on from here.
       const { startHeadSlot, newHeadSlot } = outcome.proofPackage;
-      updateJob(storage, jobId, { status: "proving", startSlot: String(startHeadSlot), newSlot: String(newHeadSlot) }, now());
+      updateJob(storage, jobId, { status: "proving", startSlot: String(startHeadSlot), newSlot: String(newHeadSlot) }, now(), ["proving"]);
     } catch (error) {
       logger.warn("job_failed", { jobId, direction, error });
-      updateJob(storage, jobId, { status: "failed", error: describeFailure(error) }, now());
+      updateJob(storage, jobId, { status: "failed", error: describeFailure(error) }, now(), ["proving"]);
     }
   }
 
@@ -104,7 +113,7 @@ export function createRequestService(input: RequestServiceInput): RequestService
       const deadline = job.updatedAt + input.proverTimeoutMilliseconds;
       if (job.status !== "proving" || current <= deadline) continue;
       // The job failed at its deadline, so the retry wait counts from there and not from the late check.
-      updateJob(storage, job.id, { status: "failed", error: "the prover ran longer than its limit" }, deadline);
+      updateJob(storage, job.id, { status: "failed", error: "the prover ran longer than its limit" }, deadline, ["proving"]);
     }
   }
 
@@ -113,11 +122,12 @@ export function createRequestService(input: RequestServiceInput): RequestService
       failLostJobs();
       const current = now();
       const { result, startedJobId } = storage.transaction((): { result: SubmitResult; startedJobId: string | null } => {
-        const callerWait = callerWaitSeconds({
-          recent: oldestRequestSince(storage, request.caller, current - CALLER_WINDOW_MILLISECONDS),
-          now: current,
-          limits,
-        });
+        const since = current - CALLER_WINDOW_MILLISECONDS;
+        const callerLimit = request.caller === UNKNOWN_CALLER ? limits.requestsPerUnknownCallerPerMinute : limits.requestsPerCallerPerMinute;
+        const callerWait = Math.max(
+          windowWaitSeconds({ recent: recentRequestsOfCaller(storage, request.caller, since), now: current, limit: callerLimit }),
+          windowWaitSeconds({ recent: recentRequestsOfAll(storage, since), now: current, limit: limits.globalRequestsPerMinute }),
+        );
         if (callerWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: callerWait }, startedJobId: null };
         const active = findActiveJob(storage, request.direction);
         const requestId = randomUUID();
@@ -136,7 +146,12 @@ export function createRequestService(input: RequestServiceInput): RequestService
     },
     recover() {
       failLostJobs();
-      for (const job of listActiveJobs(storage)) start(job.id, job.direction);
+      for (const job of listActiveJobs(storage)) {
+        if (job.startSlot === null) start(job.id, job.direction);
+      }
+    },
+    prune() {
+      return pruneRequests(storage, now() - limits.requestRetentionHours * 3_600_000);
     },
     async settled() {
       while (running.size > 0) await Promise.all([...running]);

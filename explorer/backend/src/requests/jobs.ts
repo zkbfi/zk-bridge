@@ -115,15 +115,20 @@ export type JobChange = {
   readonly error?: string | null;
 };
 
-/** Moves a job to a new status. A field left out keeps its value. */
-export function updateJob(storage: Storage, id: string, change: JobChange, now: number): void {
-  storage.database
+/**
+ * Moves a job to a new status, but only while it still has one of the `expected` statuses. A late writer, such as a
+ * prover that ends after its job timed out, therefore cannot bring a finished job back. A field left out keeps its value.
+ *
+ * @returns True when the job changed.
+ */
+export function updateJob(storage: Storage, id: string, change: JobChange, now: number, expected: readonly JobStatus[]): boolean {
+  const result = storage.database
     .prepare(
       `UPDATE jobs SET status = ?, updated_at = ?,
          start_slot = CASE WHEN ? THEN ? ELSE start_slot END,
          new_slot = CASE WHEN ? THEN ? ELSE new_slot END,
          error = CASE WHEN ? THEN ? ELSE error END
-       WHERE id = ?`,
+       WHERE id = ? AND status IN (${expected.map((status) => `'${status}'`).join(", ")})`,
     )
     .run(
       change.status,
@@ -136,6 +141,7 @@ export function updateJob(storage: Storage, id: string, change: JobChange, now: 
       change.error ?? null,
       id,
     );
+  return Number(result.changes) > 0;
 }
 
 /** Stores one request. */
@@ -155,10 +161,23 @@ export function getRequest(storage: Storage, id: string): StoredRequest | null {
   return { id: row.id, jobId: row.job_id, pair: row.pair, direction: row.direction, reason: row.reason, messageId: row.message_id, createdAt: row.created_at };
 }
 
-/** The time of the oldest request that the caller made since `since`, or null when it made none. */
-export function oldestRequestSince(storage: Storage, caller: string, since: number): { count: number; oldest: number | null } {
+/** How many requests the caller made since `since`, and the time of the oldest one. */
+export function recentRequestsOfCaller(storage: Storage, caller: string, since: number): { count: number; oldest: number | null } {
   const row = storage.database
     .prepare("SELECT count(*) AS total, min(created_at) AS oldest FROM requests WHERE caller = ? AND created_at > ?")
     .get(caller, since) as { total: number; oldest: number | null };
   return { count: row.total, oldest: row.oldest };
+}
+
+/** How many requests all callers made since `since`, and the time of the oldest one. */
+export function recentRequestsOfAll(storage: Storage, since: number): { count: number; oldest: number | null } {
+  const row = storage.database
+    .prepare("SELECT count(*) AS total, min(created_at) AS oldest FROM requests WHERE created_at > ?")
+    .get(since) as { total: number; oldest: number | null };
+  return { count: row.total, oldest: row.oldest };
+}
+
+/** Deletes the request rows made before `before`. Jobs stay. Returns how many rows went. */
+export function pruneRequests(storage: Storage, before: number): number {
+  return Number(storage.database.prepare("DELETE FROM requests WHERE created_at < ?").run(before).changes);
 }

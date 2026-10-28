@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { serve } from "@hono/node-server";
+import { redactError } from "@zk-bridge/shared/config";
 import { loadPair, type Pair } from "@zk-bridge/shared";
 import { executeCommand, type CommandExecutor } from "@zk-bridge/shared/prover";
 import { createApp } from "./app.ts";
@@ -120,6 +121,12 @@ export interface MainOverrides {
   readonly write?: (line: string) => void;
 }
 
+function valuesToHide(config: BackendConfig, environment: Readonly<Record<string, string | undefined>>): string[] {
+  const named = [config.runpodApiKeyVariable, config.webhookBearerVariable];
+  const endpoints = Object.keys(environment).filter((name) => name.startsWith("EXPLORER_"));
+  return [...named, ...endpoints].map((name) => environment[name]).filter((value): value is string => value !== undefined && value !== "");
+}
+
 function signalFromProcess(): AbortSignal {
   const controller = new AbortController();
   process.once("SIGINT", () => controller.abort());
@@ -134,9 +141,12 @@ function signalFromProcess(): AbortSignal {
  */
 export async function main(argv: readonly string[], environment: Readonly<Record<string, string | undefined>>, overrides: MainOverrides = {}): Promise<number> {
   const write = overrides.write ?? ((line: string) => process.stderr.write(`${line}\n`));
+  // Values that an error message must never show: the named variables and every endpoint (an endpoint can carry a key).
+  let knownValues: string[] = [];
   try {
     const parsed = parseArguments(argv);
     const config = parseBackendConfig(await readFile(parsed.configPath, "utf8"));
+    knownValues = valuesToHide(config, environment);
     const deployment: unknown = JSON.parse(await readFile(config.deploymentFile, "utf8"));
     const pair = loadPair({ pairName: config.pair, environment, deployment });
     const running = await startBackend({ config, pair, enabled: parsed.modules ?? config.modules, environment, executor: overrides.executor, write: overrides.write });
@@ -145,7 +155,7 @@ export async function main(argv: readonly string[], environment: Readonly<Record
     await running.stop();
     return 0;
   } catch (error) {
-    write(`zk-bridge-backend: ${(error as Error).message}`);
+    write(`zk-bridge-backend: ${redactError(error, knownValues)}`);
     return 1;
   }
 }

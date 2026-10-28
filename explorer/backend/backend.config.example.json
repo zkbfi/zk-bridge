@@ -5,6 +5,7 @@
   "databasePath": "/var/lib/zk-bridge-backend/backend.sqlite",
   "listen": { "host": "127.0.0.1", "port": 8787 },
   "trustForwardedHeader": false,
+  "trustedProxyHops": 1,
   "modules": ["requests", "webhook", "msgboard-indexer", "archive"],
   "publicUrl": "https://backend.example.org",
   "prover": { "binary": "/usr/local/bin/zk-bridge-prover", "timeoutSeconds": 1800 },
@@ -13,6 +14,9 @@
   "webhookBearerVariable": "BACKEND_WEBHOOK_BEARER",
   "limits": {
     "requestsPerCallerPerMinute": 10,
+    "requestsPerUnknownCallerPerMinute": 2,
+    "globalRequestsPerMinute": 120,
+    "requestRetentionHours": 24,
     "secondsBetweenJobsPerDirection": 120,
     "secondsBeforeRetryAfterFailure": 60
   },

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CommandTimeoutError, ProverCommandError } from "@zk-bridge/shared/prover";
 import { makeBackend, makeConfig, makeProofPackage, postFrom, controllableProver } from "./support.ts";
 
@@ -138,26 +138,61 @@ describe("rate limits", () => {
     expect((await post(backend, "10.0.0.2")).status).toBe(202);
   });
 
-  it("takes the caller from the first X-Forwarded-For entry only when trusted", async () => {
-    const trusting = makeBackend({ config: makeConfig({ trustForwardedHeader: true, limits: { requestsPerCallerPerMinute: 1 } }) });
-    const send = (backend: typeof trusting, forwarded: string, socket: string) => {
-      const { init } = postFrom(socket);
-      return backend.app.request("/requests", { ...init, headers: { ...init.headers, "x-forwarded-for": forwarded } }, { incoming: { socket: { remoteAddress: socket } } });
-    };
-    expect((await send(trusting, "1.1.1.1, 9.9.9.9", "10.0.0.1")).status).toBe(202);
-    expect((await send(trusting, "1.1.1.1", "10.0.0.2")).status).toBe(429);
-    expect((await send(trusting, "2.2.2.2", "10.0.0.1")).status).toBe(202);
+  const forwardedPost = (backend: ReturnType<typeof makeBackend>, forwarded: string, socket: string, overrides: Record<string, unknown> = {}) => {
+    const { init } = postFrom(socket, overrides);
+    return backend.app.request("/requests", { ...init, headers: { ...init.headers, "x-forwarded-for": forwarded } }, { incoming: { socket: { remoteAddress: socket } } });
+  };
 
-    const ignoring = makeBackend({ config: makeConfig({ limits: { requestsPerCallerPerMinute: 1 } }) });
-    expect((await send(ignoring, "1.1.1.1", "10.0.0.1")).status).toBe(202);
-    expect((await send(ignoring, "2.2.2.2", "10.0.0.1")).status).toBe(429);
+  it("a forged prefix in X-Forwarded-For does not change the key: the entry one hop from the right counts", async () => {
+    const backend = makeBackend({ config: makeConfig({ trustForwardedHeader: true, limits: { requestsPerCallerPerMinute: 1 } }) });
+    expect((await forwardedPost(backend, "6.6.6.1, 203.0.113.9", "10.0.0.1")).status).toBe(202);
+    // The client writes a fresh forged first entry each time; the proxy still appends the true address last.
+    expect((await forwardedPost(backend, "6.6.6.2, 203.0.113.9", "10.0.0.1")).status).toBe(429);
+    expect((await forwardedPost(backend, "6.6.6.3, 6.6.6.4, 203.0.113.9", "10.0.0.1")).status).toBe(429);
+    expect((await forwardedPost(backend, "6.6.6.3, 203.0.113.10", "10.0.0.1")).status).toBe(202);
   });
 
-  it("counts a caller without a socket address as unknown", async () => {
+  it("counts the number of proxy hops from the right", async () => {
+    const backend = makeBackend({ config: makeConfig({ trustForwardedHeader: true, trustedProxyHops: 2, limits: { requestsPerCallerPerMinute: 1 } }) });
+    expect((await forwardedPost(backend, "9.9.9.1, 203.0.113.9, 172.16.0.1", "10.0.0.1")).status).toBe(202);
+    expect((await forwardedPost(backend, "9.9.9.2, 203.0.113.9, 172.16.0.2", "10.0.0.1")).status).toBe(429);
+  });
+
+  it("falls back to the socket address when the header has fewer entries than the hops, or is empty, or the header is not trusted", async () => {
+    const hops = makeBackend({ config: makeConfig({ trustForwardedHeader: true, trustedProxyHops: 2, limits: { requestsPerCallerPerMinute: 1 } }) });
+    expect((await forwardedPost(hops, "1.1.1.1", "10.0.0.1")).status).toBe(202);
+    expect((await forwardedPost(hops, "2.2.2.2", "10.0.0.1")).status).toBe(429);
+    expect((await forwardedPost(hops, " , ", "10.0.0.1")).status).toBe(429);
+    const ignoring = makeBackend({ config: makeConfig({ limits: { requestsPerCallerPerMinute: 1 } }) });
+    expect((await forwardedPost(ignoring, "1.1.1.1", "10.0.0.1")).status).toBe(202);
+    expect((await forwardedPost(ignoring, "2.2.2.2", "10.0.0.1")).status).toBe(429);
+  });
+
+  it("keys an IPv6 caller by its /64 prefix", async () => {
     const backend = makeBackend({ config: makeConfig({ limits: { requestsPerCallerPerMinute: 1 } }) });
+    expect((await post(backend, "2001:db8:1:2:aaaa:bbbb:cccc:dddd")).status).toBe(202);
+    expect((await post(backend, "2001:db8:1:2:1111:2222:3333:4444")).status).toBe(429);
+    expect((await post(backend, "2001:db8:1:3::1")).status).toBe(202);
+  });
+
+  it("all callers without a socket address share one bucket with a low limit", async () => {
+    const backend = makeBackend({ config: makeConfig({ limits: { requestsPerUnknownCallerPerMinute: 2 } }) });
     const { init } = postFrom("x");
     expect((await backend.app.request("/requests", init)).status).toBe(202);
+    expect((await backend.app.request("/requests", init)).status).toBe(202);
     expect((await backend.app.request("/requests", init)).status).toBe(429);
+    // A caller with an address is not in that bucket.
+    expect((await post(backend, "10.0.0.1")).status).toBe(202);
+  });
+
+  it("a global cap limits new requests per minute across all callers", async () => {
+    const backend = makeBackend({ config: makeConfig({ limits: { globalRequestsPerMinute: 3 } }) });
+    for (const caller of ["10.0.0.1", "10.0.0.2", "10.0.0.3"]) expect((await post(backend, caller)).status).toBe(202);
+    const refused = await post(backend, "10.0.0.4");
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get("Retry-After")).toBe("60");
+    backend.clock.advance(61_000);
+    expect((await post(backend, "10.0.0.4")).status).toBe(202);
   });
 });
 
@@ -171,6 +206,27 @@ describe("routes", () => {
     const other = await backend.app.request("/requests", { method: "POST", body: requestBodyWith({ pair: "sepolia-pls943" }) }, env);
     expect(other.status).toBe(400);
     expect(countJobs(backend.storage)).toBe(0);
+  });
+
+  it("answers 413 for a body over 4 KiB, with and without a declared length", async () => {
+    const backend = makeBackend();
+    const { env } = postFrom("a");
+    const big = JSON.stringify({ pair: "eth-pls", direction: "first-to-second", reason: "user", padding: "x".repeat(5000) });
+    const declared = await backend.app.request("/requests", { method: "POST", headers: { "content-length": String(big.length) }, body: big }, env);
+    expect(declared.status).toBe(413);
+    const streamed = await backend.app.request(
+      "/requests",
+      { method: "POST", body: new ReadableStream({ start: (controller) => { controller.enqueue(new TextEncoder().encode(big)); controller.close(); } }), duplex: "half" } as RequestInit,
+      env,
+    );
+    expect(streamed.status).toBe(413);
+    expect(countJobs(backend.storage)).toBe(0);
+  });
+
+  it("a request with the reason message needs a messageId", async () => {
+    const backend = makeBackend();
+    expect((await post(backend, "10.0.0.1", { reason: "message" })).status).toBe(400);
+    expect((await post(backend, "10.0.0.1", { reason: "message", messageId: `0x${"ab".repeat(32)}` })).status).toBe(202);
   });
 
   it("stores the message identifier and the reason of a request", async () => {
@@ -236,3 +292,71 @@ describe("restart", () => {
 function requestBodyWith(overrides: Record<string, unknown>): string {
   return JSON.stringify({ pair: "eth-pls", direction: "first-to-second", reason: "user", ...overrides });
 }
+
+describe("late finish, recovery and pruning", () => {
+  it("a prove that finishes after the timeout cannot bring the failed job back or throw on the unique index", async () => {
+    const backend = makeBackend();
+    const { jobId } = (await (await post(backend, "10.0.0.1")).json()) as { jobId: string };
+    backend.clock.advance(1_801_000);
+    expect((await post(backend, "10.0.0.2")).status).toBe(429); // this request fails the lost job
+    backend.clock.advance(60_000);
+    const next = (await (await post(backend, "10.0.0.2")).json()) as { jobId: string };
+    expect(next.jobId).not.toBe(jobId);
+    // Both provers finish now: the old one late, the new one in time.
+    backend.prover.settleAll({ kind: "proof", proofPackage: makeProofPackage(1, 2) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const rows = backend.storage.database.prepare("SELECT id, status, new_slot FROM jobs ORDER BY created_at").all() as Array<{ id: string; status: string; new_slot: string | null }>;
+    expect(rows[0]).toMatchObject({ id: jobId, status: "failed", new_slot: null });
+    expect(rows[1]).toMatchObject({ id: next.jobId, status: "proving", new_slot: "2" });
+  });
+
+  it("a late failure or up-to-date answer does not overwrite a failed job", async () => {
+    const backend = makeBackend();
+    const { jobId } = (await (await post(backend, "10.0.0.1")).json()) as { jobId: string };
+    backend.clock.advance(1_801_000);
+    await post(backend, "10.0.0.2");
+    backend.prover.settleAll({ kind: "up-to-date" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const row = backend.storage.database.prepare("SELECT status FROM jobs WHERE id = ?").get(jobId) as { status: string };
+    expect(row.status).toBe("failed");
+  });
+
+  it("a restart does not run the prover again for a proving job whose proof already arrived", async () => {
+    const first = makeBackend();
+    const now = first.clock.now();
+    const insert = first.storage.database.prepare("INSERT INTO jobs (id, direction, status, created_at, updated_at, start_slot, new_slot) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    insert.run("with-proof", "first-to-second", "proving", now - 1000, now - 1000, "5", "9");
+    insert.run("no-proof", "second-to-first", "proving", now - 1000, now - 1000, null, null);
+    const second = makeBackend({ storage: first.storage, prover: controllableProver() });
+    const stop = await (await import("../src/requests/module.ts")).start(second.context);
+    expect(second.prover.calls).toEqual([{ direction: "second-to-first" }]);
+    const row = first.storage.database.prepare("SELECT status, new_slot FROM jobs WHERE id = 'with-proof'").get() as { status: string; new_slot: string };
+    expect(row).toEqual({ status: "proving", new_slot: "9" });
+    second.prover.settleAll({ kind: "up-to-date" });
+    await stop();
+  });
+
+  it("prunes request rows older than the retention window at start and on a timer, and keeps jobs", async () => {
+    vi.useFakeTimers();
+    try {
+      const backend = makeBackend({ config: makeConfig({ limits: { requestRetentionHours: 1 } }) });
+      const { requestId, jobId } = (await (await post(backend, "10.0.0.1")).json()) as { requestId: string; jobId: string };
+      backend.clock.advance(2 * 3_600_000);
+      const stop = await (await import("../src/requests/module.ts")).start(backend.context);
+      expect((await backend.app.request(`/requests/${requestId}`)).status).toBe(404);
+      expect(backend.storage.database.prepare("SELECT count(*) AS total FROM jobs WHERE id = ?").get(jobId)).toEqual({ total: 1 });
+
+      // A row that ages past the window later goes at the next tick.
+      backend.prover.settleAll({ kind: "up-to-date" });
+      backend.clock.advance(121_000);
+      const later = (await (await post(backend, "10.0.0.1")).json()) as { requestId: string };
+      backend.clock.advance(2 * 3_600_000);
+      await vi.advanceTimersByTimeAsync(3_600_000);
+      expect((await backend.app.request(`/requests/${later.requestId}`)).status).toBe(404);
+      backend.prover.settleAll({ kind: "up-to-date" });
+      await stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -27,8 +27,14 @@ export const backendConfigSchema = z
       .object({ host: z.string().min(1).default("127.0.0.1"), port: z.number().int().min(0).max(65535).default(8787) })
       .strict()
       .default({ host: "127.0.0.1", port: 8787 }),
-    /** Read the caller from the first `X-Forwarded-For` entry. Turn it on only behind a proxy that sets the header. */
+    /**
+     * Read the caller from the `X-Forwarded-For` header. Turn it on only behind a proxy that appends the address of
+     * its client to the header. A client can write any text into the start of the header, so the backend counts
+     * `trustedProxyHops` entries from the RIGHT: the entries that your own proxies added.
+     */
     trustForwardedHeader: z.boolean().default(false),
+    /** The number of proxies of yours between the internet and the backend. The caller is the entry this many places from the right. */
+    trustedProxyHops: positiveInteger.default(1),
     /** The modules to run when the command line names none. */
     modules: z.array(z.enum(MODULE_NAMES)).min(1).default(["requests"]),
     /** The address of this service as the prover reaches it. The prover posts its proof to `<publicUrl>/webhook/jobs/<id>`. */
@@ -43,6 +49,9 @@ export const backendConfigSchema = z
     limits: z
       .object({
         requestsPerCallerPerMinute: positiveInteger.default(DEFAULT_RATE_LIMITS.requestsPerCallerPerMinute),
+        requestsPerUnknownCallerPerMinute: positiveInteger.default(DEFAULT_RATE_LIMITS.requestsPerUnknownCallerPerMinute),
+        globalRequestsPerMinute: positiveInteger.default(DEFAULT_RATE_LIMITS.globalRequestsPerMinute),
+        requestRetentionHours: positiveInteger.default(DEFAULT_RATE_LIMITS.requestRetentionHours),
         secondsBetweenJobsPerDirection: positiveInteger.default(DEFAULT_RATE_LIMITS.secondsBetweenJobsPerDirection),
         secondsBeforeRetryAfterFailure: positiveInteger.default(DEFAULT_RATE_LIMITS.secondsBeforeRetryAfterFailure),
       })
@@ -81,10 +90,14 @@ export function parseBackendConfig(text: string): BackendConfig {
   return parsed.data;
 }
 
+/** The shortest webhook bearer value that the backend accepts, in bytes. */
+export const MINIMUM_BEARER_BYTES = 32;
+
 /**
  * Reads the secrets that the configuration names from the environment.
  *
- * @throws BackendConfigError when a named variable is empty or missing.
+ * @throws BackendConfigError when a named variable is empty or missing, or when the webhook bearer value is shorter
+ *   than 32 bytes. The message names the variable and never shows a value.
  */
 export function readSecrets(config: BackendConfig, environment: Readonly<Record<string, string | undefined>>): { runpodApiKey: string; webhookBearer: string } {
   const read = (variable: string): string => {
@@ -92,5 +105,10 @@ export function readSecrets(config: BackendConfig, environment: Readonly<Record<
     if (value === undefined || value === "") throw new BackendConfigError(`set the environment variable ${variable}`);
     return value;
   };
-  return { runpodApiKey: read(config.runpodApiKeyVariable), webhookBearer: read(config.webhookBearerVariable) };
+  const runpodApiKey = read(config.runpodApiKeyVariable);
+  const webhookBearer = read(config.webhookBearerVariable);
+  if (Buffer.byteLength(webhookBearer) < MINIMUM_BEARER_BYTES) {
+    throw new BackendConfigError(`the environment variable ${config.webhookBearerVariable} must hold at least ${MINIMUM_BEARER_BYTES} bytes`);
+  }
+  return { runpodApiKey, webhookBearer };
 }

@@ -34,7 +34,7 @@ function side(name: string, chainId: number, digit: string): PairSide {
 export const PAIR: Pair = { name: "eth-pls", sides: [side("ethereum", 1, "1"), side("pulsechain", 369, "2")] };
 
 /** The secret values of the tests. Their text is easy to find in a leak check. */
-export const SECRETS = { runpodApiKey: "runpod-secret-value-1234", webhookBearer: "bearer-secret-value-5678" };
+export const SECRETS = { runpodApiKey: "runpod-secret-value-1234", webhookBearer: "bearer-value-0123456789-abcdefghijklmnop-5678" };
 
 /** A valid configuration. */
 export function makeConfig(overrides: Record<string, unknown> = {}): BackendConfig {

@@ -19,7 +19,15 @@ function workspace(): string {
 describe("configuration", () => {
   it("applies the defaults of the brief: 10 requests a minute, 120 seconds, 60 seconds, the forwarded header off", () => {
     const config = makeConfig();
-    expect(config.limits).toEqual({ requestsPerCallerPerMinute: 10, secondsBetweenJobsPerDirection: 120, secondsBeforeRetryAfterFailure: 60 });
+    expect(config.limits).toEqual({
+      requestsPerCallerPerMinute: 10,
+      requestsPerUnknownCallerPerMinute: 2,
+      globalRequestsPerMinute: 120,
+      requestRetentionHours: 24,
+      secondsBetweenJobsPerDirection: 120,
+      secondsBeforeRetryAfterFailure: 60,
+    });
+    expect(config.trustedProxyHops).toBe(1);
     expect(config.trustForwardedHeader).toBe(false);
     expect(config.modules).toEqual(["requests"]);
     expect(config.pair).toBe("eth-pls");
@@ -38,6 +46,22 @@ describe("configuration", () => {
     expect(() => parseBackendConfig(JSON.stringify({ schemaVersion: 1, extra: true }))).toThrow(/not valid/);
     expect(() => makeConfig({ runpodApiKeyVariable: "op://vault/item" })).toThrow(/environment variable/);
     expect(() => parseBackendConfig("[]")).toThrow(/\(file\)|not valid/);
+  });
+
+  it("refuses a webhook bearer value shorter than 32 bytes, names the variable, and never shows the value", () => {
+    const config = makeConfig();
+    const short = "short-value-of-31-bytes-aaaaaaa";
+    expect(Buffer.byteLength(short)).toBe(31);
+    let message = "";
+    try {
+      readSecrets(config, { ...ENVIRONMENT, BACKEND_WEBHOOK_BEARER: short });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain("BACKEND_WEBHOOK_BEARER");
+    expect(message).toContain("32 bytes");
+    expect(message).not.toContain(short);
+    expect(readSecrets(config, { ...ENVIRONMENT, BACKEND_WEBHOOK_BEARER: "a".repeat(32) }).webhookBearer).toHaveLength(32);
   });
 
   it("reads the two secrets from the environment and names the missing variable", () => {
@@ -177,6 +201,29 @@ describe("main", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it("removes a configured value from the start-up error", async () => {
+    const directory = workspace();
+    const configFile = join(directory, "backend.json");
+    writeFileSync(
+      configFile,
+      JSON.stringify({
+        schemaVersion: 1,
+        deploymentFile: join(directory, `missing-${SECRETS.webhookBearer}.json`),
+        databasePath: join(directory, "backend.sqlite"),
+        publicUrl: "https://backend.example.org",
+        prover: { binary: "/bin/zk-bridge-prover" },
+        remote: { endpoint: "https://endpoint.example.org" },
+        runpodApiKeyVariable: "RUNPOD_API_KEY",
+        webhookBearerVariable: "BACKEND_WEBHOOK_BEARER",
+      }),
+    );
+    const lines: string[] = [];
+    const environment = { ...ENVIRONMENT, EXPLORER_RPC_URL_1: "" };
+    expect(await main(["--config", configFile], environment, { write: (line) => lines.push(line) })).toBe(1);
+    expect(lines[0]).toContain("ENOENT");
+    expect(lines[0]).not.toContain(SECRETS.webhookBearer);
   });
 
   it("returns 1 and says why when the configuration is wrong", async () => {

@@ -16,6 +16,7 @@ export class BackendClientError extends Error {
 const directionSchema = z.enum(["first-to-second", "second-to-first"]);
 const statusSchema = z.enum(["queued", "proving", "published", "on-chain", "failed"]);
 const hexSchema = z.string().regex(/^0x[0-9a-fA-F]*$/);
+const hashSchema = z.string().regex(/^0x[0-9a-fA-F]{64}$/, "must be 32 bytes of 0x hex");
 
 /** One job, as the backend shows it. Times are milliseconds since 1970. */
 export const jobViewSchema = z
@@ -36,7 +37,7 @@ export type JobView = z.infer<typeof jobViewSchema>;
 
 const requestAcceptedSchema = z.object({ requestId: z.string(), jobId: z.string() }).passthrough();
 const rateLimitedSchema = z.object({ error: z.literal("rate-limited"), retryAfterSeconds: z.number() }).passthrough();
-const requestStatusSchema = jobViewSchema.and(z.object({ requestId: z.string(), reason: z.string(), messageId: z.string().nullable(), requestedAt: z.number() }));
+const requestStatusSchema = jobViewSchema.and(z.object({ requestId: z.string(), reason: z.string(), messageId: hashSchema.nullable(), requestedAt: z.number() }));
 const directionStatusSchema = z.object({ direction: directionSchema, job: jobViewSchema.nullable() }).passthrough();
 
 /** The latest valid proof of a direction, as the msgboard indexer serves it. Slots are decimal text. */
@@ -44,11 +45,11 @@ export const latestProofSchema = z
   .object({
     pair: z.string(),
     direction: directionSchema,
-    programKey: hexSchema,
+    programKey: hashSchema,
     startSlot: z.string().regex(/^\d+$/),
-    startRoot: hexSchema,
+    startRoot: hashSchema,
     newSlot: z.string().regex(/^\d+$/),
-    newRoot: hexSchema,
+    newRoot: hashSchema,
     publicValues: hexSchema,
     proof: hexSchema,
   })

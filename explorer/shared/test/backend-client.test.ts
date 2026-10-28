@@ -34,6 +34,10 @@ describe("backend client", () => {
     expect(await good.client.latestProof("first-to-second")).toMatchObject({ startSlot: "10", newSlot: "42" });
     const bad = clientAnswering({ "/proofs/latest/first-to-second": { status: 200, body: { ...proof, newSlot: 42 } } });
     await expect(bad.client.latestProof("first-to-second")).rejects.toThrow(BackendClientError);
+    for (const field of ["programKey", "startRoot", "newRoot"]) {
+      const short = clientAnswering({ "/proofs/latest/first-to-second": { status: 200, body: { ...proof, [field]: "0x1234" } } });
+      await expect(short.client.latestProof("first-to-second")).rejects.toThrow(BackendClientError);
+    }
     const missing = clientAnswering({});
     await expect(missing.client.latestProof("first-to-second")).rejects.toThrow(/status 599/);
     const none = clientAnswering({ "/proofs/latest/second-to-first": { status: 404, body: { error: "none" } } });
@@ -51,6 +55,12 @@ describe("backend client", () => {
     await expect(broken.client.requestProof(request)).rejects.toThrow(/unknown shape/);
     const refused = clientAnswering({ "/requests": { status: 400, body: {} } });
     await expect(refused.client.requestProof(request)).rejects.toThrow(/status 400/);
+  });
+
+  it("refuses a message identifier of the wrong length in a request status", async () => {
+    const status = { ...job, requestId: "r1", reason: "message", messageId: "0x12", requestedAt: 1 };
+    const { client } = clientAnswering({ "/requests/r1": { status: 200, body: status } });
+    await expect(client.requestStatus("r1")).rejects.toThrow(BackendClientError);
   });
 
   it("reads request and direction status", async () => {
