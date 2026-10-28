@@ -18,7 +18,7 @@ use lc_core::message::{
 use lc_core::receipts::{build_indexed_trie, encode_execution_header, header_hash};
 use lc_core::ssz::{branch_for_leaf, u64_chunk};
 use lc_core::ssz_state::{
-    state_slot, try_parse_signed_block, try_parse_state_for_fork, ParsedState, StateForm,
+    state_slot, try_parse_signed_block_for_fork, try_parse_state_for_fork, ParsedState, StateForm,
 };
 use lc_core::types::{
     BeaconBlockHeader, ExecutionPayloadHeader, HeaderForm, LightClientHeader, NextSyncCommittee,
@@ -927,15 +927,25 @@ impl BlockView {
     /// # Errors
     /// `Error::Malformed` when the bytes are not a supported block.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
-        let block = guarded("beacon block", || try_parse_signed_block(bytes))?
+        Self::parse_for_fork(bytes, ForkName::Capella)
+    }
+
+    /// Parses a `SignedBeaconBlock` of `fork` (Capella, Deneb, Electra or Fulu). The fork decides the body layout and the
+    /// form of the payload leaves.
+    ///
+    /// # Errors
+    /// `Error::Malformed` when the bytes are not a block of that fork, or the fork has no parser here.
+    pub fn parse_for_fork(bytes: &[u8], fork: ForkName) -> Result<Self> {
+        let form = lc_core::layout::execution_header_form_for_fork(fork)
             .map_err(|error| Error::Malformed(format!("beacon block: {error}")))?;
+        let block = guarded("beacon block", || {
+            try_parse_signed_block_for_fork(bytes, fork)
+        })?
+        .map_err(|error| Error::Malformed(format!("beacon block: {error}")))?;
         guarded("beacon block", || {
             let (_, execution_branch) =
                 branch_for_leaf(&block.body_field_roots, BODY_FIELD_EXECUTION_PAYLOAD);
-            let leaves = block
-                .payload
-                .field_roots(lc_core::layout::ExecutionHeaderForm::Capella)
-                .expect("payload leaves");
+            let leaves = block.payload.field_roots(form).expect("payload leaves");
             let (_, mut block_hash_branch) = branch_for_leaf(&leaves, PAYLOAD_FIELD_BLOCK_HASH);
             block_hash_branch.extend(&execution_branch);
             Self {
@@ -947,21 +957,23 @@ impl BlockView {
         })
     }
 
-    /// Parses a block of `chain` after a check of its fork. The slot of the block comes from its first bytes, and the chain
-    /// schedule gives the fork. Only Capella blocks go to the parser. A Gloas block is refused here: this path is the Capella block path, and a Gloas block goes through [`GloasBlockView`]. Any other fork is refused by name. The parser never reads a block of another fork as Capella.
+    /// Parses a block of `chain`. The slot of the block comes from its first bytes, and the chain schedule gives the
+    /// fork. Capella, Deneb, Electra and Fulu blocks go to the parser of their fork. A Gloas block is refused here: it
+    /// goes through [`GloasBlockView`]. Any other fork is refused by name.
     ///
     /// # Errors
-    /// `Error::Malformed` for a Gloas block, for another fork than Capella, or for bytes
-    /// that are not a block.
+    /// `Error::Malformed` for a Gloas block, for a fork before Capella, or for bytes that are not a block.
     pub fn parse_for_chain(bytes: &[u8], chain: ChainKind) -> Result<Self> {
         let slot = signed_block_slot(bytes)?;
         match chain.spec().fork_at_slot(slot) {
-            ForkName::Capella => Self::parse(bytes),
             ForkName::Gloas => Err(Error::Malformed(format!(
                 "beacon block at slot {slot} is a Gloas block: this path reads Capella blocks; a Gloas block goes through GloasBlockView"
             ))),
+            fork @ (ForkName::Capella | ForkName::Deneb | ForkName::Electra | ForkName::Fulu) => {
+                Self::parse_for_fork(bytes, fork)
+            }
             fork => Err(Error::Malformed(format!(
-                "beacon block at slot {slot} is of the fork {fork:?}; the block path reads Capella blocks only"
+                "beacon block at slot {slot} is of the fork {fork:?}; the block path reads Capella, Deneb, Electra and Fulu blocks only"
             ))),
         }
     }
@@ -1213,7 +1225,7 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
 
-    /// Claim: a block of a Gloas slot is refused with the `lc-core` refusal and a block of a non-Capella fork is refused
+    /// Claim: a block of a Gloas slot is refused with the `lc-core` refusal and a block from before Capella is refused
     /// by name, while the slot is read from the bytes. Why it matters: the parser reads the Capella layout only, so a
     /// block of another fork must never reach it. Sepolia must fail closed, never parse as Capella.
     #[test]
@@ -1229,10 +1241,10 @@ mod tests {
             .err()
             .expect("refused");
         assert!(matches!(&refusal, Error::Malformed(text) if text.contains("Gloas")));
-        let deneb = BlockView::parse_for_chain(&block_at(132_608 * 32), ChainKind::Sepolia)
+        let before_capella = BlockView::parse_for_chain(&block_at(10), ChainKind::Sepolia)
             .err()
             .expect("refused");
-        assert!(matches!(&deneb, Error::Malformed(text) if text.contains("Deneb")));
+        assert!(matches!(&before_capella, Error::Malformed(text) if text.contains("Phase0")));
         let capella =
             BlockView::parse_for_chain(&block_at(4_200 * 32), ChainKind::PulsechainTestnetV4)
                 .err()

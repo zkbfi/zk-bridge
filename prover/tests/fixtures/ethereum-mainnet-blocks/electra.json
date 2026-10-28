@@ -1,0 +1,9 @@
+{
+  "fork": "electra",
+  "slot": 12000000,
+  "source_host": "lodestar-mainnet.chainsafe.io (public node; the valve.city beacon proxy (chain 1) answers 404 for this slot)",
+  "header_root": "0xf4cf97500e5b2529d83237ad1bdde7d6ad46f88f4cc8f6567b946c7e255d3b03",
+  "body_root": "0x3fc5fd76eb552ce2a93031c2798e7b89e055a623a9fbd74c758adf7f1e39a53b",
+  "execution_block_hash": "0xd87f597a9bc0ccdfce1d18c13ed4cc3dc3eb6d5e5a5cdc2c30c4fdc5823cbf12",
+  "transaction_count": 345
+}

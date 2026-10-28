@@ -156,8 +156,11 @@ Where two documents disagree, the code wins, and in `docs/hardened-build-contrac
 - **Link.** [`docs/hardened-build-contract.md`](../hardened-build-contract.md) "Ancestry: two paths".
 
 ### 2.9 Prover cannot build message evidence from Ethereum mainnet blocks
-- **What.** The `evidence` command builds a message proof from a PulseChain (Capella) or a Gloas source block. For any other fork it stops: `message_path` (`prover/src/beacon/http.rs`) calls `block_by_id`, which calls `BlockView::parse_for_chain` (`prover/src/light_client.rs`), and that parser refuses every fork but Capella by name. Ethereum mainnet runs Fulu today (Deneb, Electra and Fulu are all refused), so no message from Ethereum mainnet can be delivered by this prover. The assembled update path and the block hash layout evidence use the same parser. Checked 2026-10-27.
-- **What is left.** Teach the block parser the Deneb, Electra and Fulu block layouts, with real mainnet fixtures. This is liveness only: the contracts check any evidence, so a wrong parser can cause a refusal, never a false message.
+- **Status.** Fixed on 2026-10-28.
+- **What was wrong.** The `evidence` command built a message proof from a PulseChain (Capella) or a Gloas source block only. `BlockView::parse_for_chain` (`prover/src/light_client.rs`) refused Deneb, Electra and Fulu by name. Ethereum mainnet runs Fulu, so no message from Ethereum mainnet could be delivered by this prover.
+- **The fix.** `try_parse_signed_block_for_fork` in `lc-core` (`light-client/crates/lc-core/src/ssz_state.rs`) reads the Deneb body (12 fields, payload header of 17 fields) and the Electra and Fulu body (13 fields, with `execution_requests`, and the Electra sizes for attestations and attester slashings). It sits behind the `json` feature: the prover enables it and the two guest programs do not, so the program keys are unchanged. `BlockView::parse_for_chain` now accepts Capella, Deneb, Electra and Fulu and still refuses Gloas with the same message.
+- **Evidence.** Real mainnet blocks, one per fork, in `prover/tests/fixtures/ethereum-mainnet-blocks/`: Deneb slot 10,000,000, Electra slot 12,000,000, Fulu slot 13,500,000. `prover/tests/mainnet_blocks.rs` checks that the parsed header root, body root and execution block hash equal the values that a beacon node reported, and that the block hash branch verifies. The fixture files record the source of each block.
+- **Limit.** This is liveness only: the contracts check any evidence, so a wrong parser could cause a refusal, never a false message.
 - **Link.** `prover/src/light_client.rs` (`BlockView::parse_for_chain`), `prover/src/beacon/http.rs` (`message_path`), `prover/src/evidence.rs`.
 
 ### 2.10 Mainnet deployment gas

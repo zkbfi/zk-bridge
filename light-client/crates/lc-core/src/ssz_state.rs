@@ -836,6 +836,210 @@ pub fn try_parse_signed_block(bytes: &[u8]) -> Result<ParsedBlock> {
     Ok(ParsedBlock { header, payload, body_field_roots: body_leaves })
 }
 
+/// Parses and hashes a `SignedBeaconBlock` of Capella, Deneb, Electra or Fulu, for bytes that a remote node served.
+///
+/// Capella goes to [`try_parse_signed_block`]. Deneb adds `blob_kzg_commitments` to the body (12 fields) and two blob gas
+/// fields to the payload (17 fields). Electra and Fulu add `execution_requests` (13 fields), and their attestations and
+/// attester slashings use the larger Electra limits. The execution payload stays body field 9 and the body tree keeps
+/// its depth of 4. The prover enables the `json` feature and the guests do not, so no guest contains this code.
+///
+/// # Errors
+/// `MalformedSsz` when the bytes break an SSZ rule. `UnsupportedFork` for a fork before Capella or after Fulu.
+#[cfg(feature = "json")]
+pub fn try_parse_signed_block_for_fork(bytes: &[u8], fork: ForkName) -> Result<ParsedBlock> {
+    use Kind::{Fixed, Variable};
+    match fork {
+        ForkName::Capella => return try_parse_signed_block(bytes),
+        ForkName::Deneb | ForkName::Electra | ForkName::Fulu => {}
+        ForkName::Phase0 | ForkName::Altair | ForkName::Bellatrix | ForkName::Gloas => {
+            return Err(Error::UnsupportedFork { fork });
+        }
+    }
+    let electra = fork >= ForkName::Electra;
+    let outer = split_container(bytes, &[Variable, Fixed(96)])?;
+    let block = split_container(outer[0], &[Fixed(8), Fixed(8), Fixed(32), Fixed(32), Variable])?;
+    let mut body_kinds = vec![
+        Fixed(96),
+        Fixed(72),
+        Fixed(32),
+        Variable,
+        Variable,
+        Variable,
+        Variable,
+        Variable,
+        Fixed(160),
+        Variable,
+        Variable,
+        Variable,
+    ];
+    if electra {
+        body_kinds.push(Variable);
+    }
+    let body = split_container(block[4], &body_kinds)?;
+
+    let payload_fields = split_container(
+        body[9],
+        &[
+            Fixed(32),
+            Fixed(20),
+            Fixed(32),
+            Fixed(32),
+            Fixed(256),
+            Fixed(32),
+            Fixed(8),
+            Fixed(8),
+            Fixed(8),
+            Fixed(8),
+            Variable,
+            Fixed(32),
+            Fixed(32),
+            Variable,
+            Variable,
+            Fixed(8),
+            Fixed(8),
+        ],
+    )?;
+    let transaction_roots: Vec<B256> = split_variable_list(payload_fields[13], 1 << 20)?
+        .iter()
+        .map(|transaction| byte_list_root(transaction, 1 << 30))
+        .collect();
+    let withdrawal_roots = fixed_list_roots(payload_fields[14], 44, 16, |item| {
+        merkleize(&[
+            u64_chunk(le_u64(&item[0..8])),
+            u64_chunk(le_u64(&item[8..16])),
+            B256::right_padding_from(&item[16..36]),
+            u64_chunk(le_u64(&item[36..44])),
+        ])
+    })?;
+    let mut payload = payload_header_from_fields(
+        &payload_fields,
+        list_root(&transaction_roots, 1 << 20),
+        list_root(&withdrawal_roots, 16),
+    );
+    payload.blob_gas =
+        Some(BlobGasFields { blob_gas_used: le_u64(payload_fields[15]), excess_blob_gas: le_u64(payload_fields[16]) });
+
+    // Limits from the mainnet preset: MAX_PROPOSER_SLASHINGS, MAX_DEPOSITS, MAX_VOLUNTARY_EXITS and
+    // MAX_BLS_TO_EXECUTION_CHANGES are 16; MAX_BLOB_COMMITMENTS_PER_BLOCK is 4096 (deneb); the attestation and slashing
+    // limits are 128 and 2 before Electra, 8 and 1 from Electra (electra beacon-chain.md).
+    let (attestation_limit, slashing_limit, index_limit) = if electra { (8, 1, 131_072) } else { (128, 2, 2048) };
+    let proposer_slashings = fixed_list_roots(body[3], 416, 16, |item| {
+        hash_pair(&signed_header_root(&item[0..208]), &signed_header_root(&item[208..416]))
+    })?;
+    let slashings: Vec<B256> = split_variable_list(body[4], slashing_limit)?
+        .iter()
+        .map(|item| attester_slashing_root(item, index_limit))
+        .collect::<Result<_>>()?;
+    let attestations: Vec<B256> = split_variable_list(body[5], attestation_limit)?
+        .iter()
+        .map(|item| if electra { electra_attestation_root(item) } else { attestation_root(item) })
+        .collect::<Result<_>>()?;
+    let deposits = fixed_list_roots(body[6], 1240, 16, deposit_root)?;
+    let exits = fixed_list_roots(body[7], 112, 16, |item| {
+        hash_pair(
+            &hash_pair(&u64_chunk(le_u64(&item[0..8])), &u64_chunk(le_u64(&item[8..16]))),
+            &byte_vector_root(&item[16..112]),
+        )
+    })?;
+    let sync_aggregate = hash_pair(&byte_vector_root(&body[8][0..64]), &byte_vector_root(&body[8][64..160]));
+    let changes = fixed_list_roots(body[10], 172, 16, |item| {
+        let message = merkleize(&[
+            u64_chunk(le_u64(&item[0..8])),
+            byte_vector_root(&item[8..56]),
+            B256::right_padding_from(&item[56..76]),
+        ]);
+        hash_pair(&message, &byte_vector_root(&item[76..172]))
+    })?;
+    let commitments = fixed_list_roots(body[11], 48, 4096, byte_vector_root)?;
+
+    let mut body_field_roots: Vec<B256> = vec![
+        byte_vector_root(body[0]),
+        eth1_data_root(body[1]),
+        chunk32(body[2]),
+        list_root(&proposer_slashings, 16),
+        list_root(&slashings, slashing_limit),
+        list_root(&attestations, attestation_limit),
+        list_root(&deposits, 16),
+        list_root(&exits, 16),
+        sync_aggregate,
+        payload.hash_tree_root(ExecutionHeaderForm::Deneb)?,
+        list_root(&changes, 16),
+        list_root(&commitments, 4096),
+    ];
+    if electra {
+        body_field_roots.push(execution_requests_root(body[12])?);
+    }
+    let header = BeaconBlockHeader {
+        slot: le_u64(block[0]),
+        proposer_index: le_u64(block[1]),
+        parent_root: chunk32(block[2]),
+        state_root: chunk32(block[3]),
+        body_root: merkleize(&body_field_roots),
+    };
+    Ok(ParsedBlock { header, payload, body_field_roots })
+}
+
+/// The root of an `IndexedAttestation`: the attesting indices (a list of at most `index_limit` entries), the data and the
+/// signature.
+#[cfg(feature = "json")]
+fn indexed_attestation_root(bytes: &[u8], index_limit: u64) -> Result<B256> {
+    let parts = split_container(bytes, &[Kind::Variable, Kind::Fixed(128), Kind::Fixed(96)])?;
+    let indices = packed_list_root_checked(parts[0], index_limit)?;
+    Ok(merkleize(&[indices, attestation_data_root(parts[1]), byte_vector_root(parts[2])]))
+}
+
+/// The root of a list of `uint64` that holds at most `limit` entries.
+#[cfg(feature = "json")]
+fn packed_list_root_checked(bytes: &[u8], limit: u64) -> Result<B256> {
+    if !bytes.len().is_multiple_of(8) || (bytes.len() / 8) as u64 > limit {
+        return malformed(format!("{} bytes are not a list of at most {limit} uint64 values", bytes.len()));
+    }
+    Ok(packed_list_root(bytes, limit * 8, (bytes.len() / 8) as u64))
+}
+
+/// The root of an `AttesterSlashing`: two indexed attestations.
+#[cfg(feature = "json")]
+fn attester_slashing_root(bytes: &[u8], index_limit: u64) -> Result<B256> {
+    let parts = split_container(bytes, &[Kind::Variable, Kind::Variable])?;
+    Ok(hash_pair(&indexed_attestation_root(parts[0], index_limit)?, &indexed_attestation_root(parts[1], index_limit)?))
+}
+
+/// The root of an Electra `Attestation`: the aggregation bits (up to 2048 members in each of 64 committees), the data,
+/// the signature and the 64 committee bits.
+#[cfg(feature = "json")]
+fn electra_attestation_root(bytes: &[u8]) -> Result<B256> {
+    let parts = split_container(bytes, &[Kind::Variable, Kind::Fixed(128), Kind::Fixed(96), Kind::Fixed(8)])?;
+    Ok(merkleize(&[
+        bitlist_root(parts[0], 2048 * 64)?,
+        attestation_data_root(parts[1]),
+        byte_vector_root(parts[2]),
+        merkleize(&pack_bytes(parts[3])),
+    ]))
+}
+
+/// The root of the Electra `ExecutionRequests`: deposit requests (at most 8192), withdrawal requests (at most 16) and
+/// consolidation requests (at most 2).
+#[cfg(feature = "json")]
+fn execution_requests_root(bytes: &[u8]) -> Result<B256> {
+    let parts = split_container(bytes, &[Kind::Variable, Kind::Variable, Kind::Variable])?;
+    let deposits = fixed_list_roots(parts[0], 192, 8192, pending_deposit_root)?; // a `DepositRequest` has the layout of a `PendingDeposit`: its last field is an index, not a slot
+    let withdrawals = fixed_list_roots(parts[1], 76, 16, |item| {
+        merkleize(&[
+            B256::right_padding_from(&item[0..20]),
+            byte_vector_root(&item[20..68]),
+            u64_chunk(le_u64(&item[68..76])),
+        ])
+    })?;
+    let consolidations = fixed_list_roots(parts[2], 116, 2, |item| {
+        merkleize(&[
+            B256::right_padding_from(&item[0..20]),
+            byte_vector_root(&item[20..68]),
+            byte_vector_root(&item[68..116]),
+        ])
+    })?;
+    Ok(merkleize(&[list_root(&deposits, 8192), list_root(&withdrawals, 16), list_root(&consolidations, 2)]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

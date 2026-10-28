@@ -1,0 +1,9 @@
+{
+  "fork": "deneb",
+  "slot": 10000000,
+  "source_host": "lodestar-mainnet.chainsafe.io (public node; the valve.city beacon proxy (chain 1) answers 404 for this slot)",
+  "header_root": "0xa201b38fb13b414eace13d8f821b85fc67d15a3c86d3687786fe03a93438cca2",
+  "body_root": "0x3a571c87812e0cbd232c3ee283224a6a762a45903b67818c55221b6174e9417b",
+  "execution_block_hash": "0x5f674747c4d27eb9dcdf465908d4fb874b9e532850e3c5cb4269a741223b6042",
+  "transaction_count": 175
+}

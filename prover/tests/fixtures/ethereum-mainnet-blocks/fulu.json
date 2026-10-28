@@ -1,0 +1,9 @@
+{
+  "fork": "fulu",
+  "slot": 13500000,
+  "source_host": "lodestar-mainnet.chainsafe.io (public node, SSZ); the valve.city beacon proxy (chain 1) returned the same header and the same block JSON apart from address letter case, but serves no SSZ",
+  "header_root": "0xbffdbb93b170a04f7117d760d73f6898c15ab826a93cfb0a1eb271dc70d92ce2",
+  "body_root": "0x6e3db6d2c419f1ec423fcfc6ade1fd54edae3d82b51338f4f09a9515b74c894e",
+  "execution_block_hash": "0xe3b6ed88c0fe8a59f594b7255346c77cc0157612cb416676c07254aae1058cba",
+  "transaction_count": 628
+}
