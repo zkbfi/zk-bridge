@@ -42,11 +42,11 @@ The bridge refuses to take a send that it cannot deliver. A gate contract on eac
 
 The gate protects against forks. A fork changes the rules of the source chain. A proof program that does not know the new rules cannot deliver sends from the fork. Tokens sent into such a route would stay locked.
 
-On Ethereum, the gate checks the fork version of the current epoch. The first sender in each epoch confirms the version with evidence. Later senders in the same epoch just send. A send fails when nobody confirmed the epoch.
+On Ethereum, the gate checks the shape of the beacon state in the current epoch. The first sender in each epoch confirms it with evidence: a proof of the fork version, and a proof of the chain's genesis validators root at the position that shape gives it. The gate keeps no list of fork names. Any version passes when its state has a shape that the proof program can read. Later senders in the same epoch just send. A send fails when nobody confirmed the epoch.
 
 On PulseChain, the chain has no beacon roots contract today. The gate runs in a detection mode. It admits sends, and it probes for the contract. It also probes for new opcodes and precompiles. When a probe fires, the gate refuses new sends. The gate switches itself to enforcing mode when the beacon roots contract appears. No key does this.
 
-Anyone can seal a gate with proof of an unsupported fork version. A sealed gate refuses all later sends. Withdrawals of delivered messages still work.
+Anyone can seal a gate with proof that the state has a shape outside the allowed set. A new fork name alone does not seal it. A sealed gate refuses all later sends. Withdrawals of delivered messages still work.
 
 ## Fork handling in plain words
 
