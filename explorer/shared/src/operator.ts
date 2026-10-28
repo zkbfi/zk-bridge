@@ -8,19 +8,17 @@
  */
 import {
   decodeFunctionData,
-  encodeAbiParameters,
   encodeFunctionData,
   getAddress,
-  keccak256,
   toFunctionSelector,
   toFunctionSignature,
   type Abi,
   type AbiFunction,
-  type AbiParameter,
   type Address,
   type Hex,
 } from "viem";
 import { beaconLightClientAbi, messageBridgeAbi } from "./abis/index.js";
+import { describeBytes, displayArguments, type DisplayedArgument } from "./call-display.js";
 import { decodeLightClientOutput, type LightClientOutput, type ProofMessage } from "./proof-message.js";
 
 /** A chain that an operator action may target, with the two contracts that the actions call. */
@@ -31,15 +29,8 @@ export type OperatorChain = {
   readonly messageBridge: Address;
 };
 
-/** One line of the argument list of a call, as a confirmation screen shows it. */
-export type OperatorArgument = {
-  readonly name: string;
-  readonly type: string;
-  /** The exact value: a checksummed address, a decimal integer, or hex. Long values are cut and carry a digest. */
-  readonly value: string;
-  /** A reading of the value for a person, such as the byte count. Absent when there is none. */
-  readonly meaning?: string;
-};
+/** One line of the argument list of a call. */
+export type OperatorArgument = DisplayedArgument;
 
 /** A call that the operator may send. It has no nonce, gas or value: the wallet adds them. */
 export type OperatorCall = {
@@ -76,17 +67,21 @@ export type EvidenceSummary = {
 
 /** A prover file is malformed, or it disagrees with its own calldata or with the chain list. */
 export class OperatorFileError extends Error {
-  override readonly name = "OperatorFileError";
+  override readonly name: string = "OperatorFileError";
+}
+
+/** A file names a chain that is not in the chain list. `chainId` is the chain that the file names. */
+export class OperatorChainError extends OperatorFileError {
+  override readonly name = "OperatorChainError";
+  constructor(readonly chainId: number) {
+    super(`The file names chain ${chainId}, which is not a chain that this tool is set up for.`);
+  }
 }
 
 type JsonObject = Record<string, unknown>;
 
 const HANDOFF_SCHEMA_VERSION = 1;
 const EVIDENCE_SCHEMA_VERSION = 2;
-/** An array of more items than this is summarized by its length and the digest of its encoding. */
-const MAXIMUM_ARRAY_ITEMS_SHOWN = 4;
-/** A byte string longer than this is summarized by its length and its digest. */
-const MAXIMUM_BYTES_SHOWN = 66;
 
 /**
  * Builds the calldata of `update(proof, publicValues)`. Tests and fixtures use it to write handoff files.
@@ -339,57 +334,19 @@ const decodeBridgeCall = (
     return {
       functionName: item.name,
       functionSignature: toFunctionSignature(item),
-      arguments: item.inputs.flatMap((parameter, index) =>
-        displayValue(parameter, (decoded.args as readonly unknown[])[index], `${parameter.name}`),
-      ),
+      arguments: displayArguments(item.inputs, decoded.args as readonly unknown[]),
     };
   } catch {
     return null;
   }
 };
 
-const displayValue = (parameter: AbiParameter, value: unknown, name: string): OperatorArgument[] => {
-  if (parameter.type === "tuple") return displayTuple(parameter, value, name);
-  if (parameter.type.endsWith("]")) return [displayArray(parameter, value, name)];
-  return [{ name, type: parameter.type, ...displayScalar(parameter.type, value) }];
-};
-
-const displayTuple = (parameter: AbiParameter, value: unknown, name: string): OperatorArgument[] => {
-  const components = (parameter as AbiParameter & { components: readonly AbiParameter[] }).components;
-  const record = value as Record<string, unknown>;
-  return components.flatMap((component) =>
-    displayValue(component, record[component.name as string], `${name}.${component.name}`),
-  );
-};
-
-const displayArray = (parameter: AbiParameter, value: unknown, name: string): OperatorArgument => {
-  const items = value as readonly unknown[];
-  const summary = { name, type: parameter.type, meaning: `${items.length} items` };
-  if (items.length === 0) return { ...summary, value: "[]" };
-  if (items.length <= MAXIMUM_ARRAY_ITEMS_SHOWN && parameter.type === "bytes32[]") {
-    return { ...summary, value: items.map(String).join(", ") };
-  }
-  const digest = keccak256(encodeAbiParameters([parameter], [value]));
-  return { ...summary, value: `keccak256 of the encoding ${digest}` };
-};
-
-const displayScalar = (type: string, value: unknown): { value: string; meaning?: string } => {
-  if (type === "bytes") return shortBytes(value as Hex);
-  return { value: String(value) };
-};
-
-const shortBytes = (value: Hex): { value: string; meaning: string } => {
-  const length = (value.length - 2) / 2;
-  if (value.length <= MAXIMUM_BYTES_SHOWN) return { value, meaning: `${length} bytes` };
-  return { value: `${value.slice(0, 34)}… keccak256 ${keccak256(value)}`, meaning: `${length} bytes` };
-};
-
-const bytesArgumentOf = (name: string, value: Hex): OperatorArgument => ({ name, type: "bytes", ...shortBytes(value) });
+const bytesArgumentOf = (name: string, value: Hex): OperatorArgument => ({ name, type: "bytes", ...describeBytes(value) });
 
 const chainOf = (chains: readonly OperatorChain[], chainId: number): OperatorChain => {
   const chain = chains.find((candidate) => candidate.chainId === chainId);
   if (chain === undefined) {
-    throw new OperatorFileError(`The file names chain ${chainId}, which is not a chain that this tool is set up for.`);
+    throw new OperatorChainError(chainId);
   }
   return chain;
 };

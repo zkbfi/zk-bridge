@@ -5,6 +5,7 @@
  * pair, and turns each {@link OperatorCall} it returns into a {@link PlannedTransaction} for the confirmation screen.
  */
 import {
+  OperatorChainError,
   OperatorFileError,
   encodeUpdateCalldata,
   planMessageExecution as planSharedMessageExecution,
@@ -34,15 +35,25 @@ export interface ExecutionSequence {
 
 /** Reads a prover handoff and plans the light client update on a chain of the pair. */
 export function planLightClientUpdate(text: string, pair: PairConfig): PlannedTransaction {
-  return plannedTransactionOf(planUpdateFromHandoff(text, operatorChainsOf(pair)), pair)
+  return plannedTransactionOf(withPairName(pair, () => planUpdateFromHandoff(text, operatorChainsOf(pair))), pair)
 }
 
 /** Reads evidence from `zk-bridge-prover evidence` and plans the transactions that deliver the message. */
 export function planMessageExecution(text: string, pair: PairConfig): ExecutionSequence {
-  const { summary, steps } = planSharedMessageExecution(text, operatorChainsOf(pair))
+  const { summary, steps } = withPairName(pair, () => planSharedMessageExecution(text, operatorChainsOf(pair)))
   return {
     summary,
     steps: steps.map((step) => ({ role: step.role, reason: step.reason, plan: plannedTransactionOf(step.call, pair) })),
+  }
+}
+
+/** Runs a plan, and names the pair in the error for a chain that the pair does not have. */
+function withPairName<Result>(pair: PairConfig, plan: () => Result): Result {
+  try {
+    return plan()
+  } catch (error) {
+    if (!(error instanceof OperatorChainError)) throw error
+    throw new OperatorFileError(`The file names chain ${error.chainId}, which is not a chain of the pair ${pair.id}.`)
   }
 }
 

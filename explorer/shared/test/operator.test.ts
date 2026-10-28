@@ -353,3 +353,16 @@ describe("calldata that decodes but is not the expected call", () => {
     expect(() => planMessageExecution(evidence({ prerequisites: [broken] }), chains)).toThrow(/known message bridge call/);
   });
 });
+
+describe("a chain that is not in the list", () => {
+  it("is refused with the chain id the file names", () => {
+    try {
+      planUpdateFromHandoff(handoff({ destination: { chainId: 56, lightClient } }), chains);
+    } catch (error) {
+      expect(error).toBeInstanceOf(OperatorFileError);
+      expect(error).toMatchObject({ name: "OperatorChainError", chainId: 56 });
+      return;
+    }
+    throw new Error("the file was accepted");
+  });
+});

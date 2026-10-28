@@ -67,8 +67,10 @@ describe('planLightClientUpdate (adapter)', () => {
     expect(plan.data).toBe(JSON.parse(handoff()).updateCalldata)
   })
 
-  test('refuses a chain that is not in the pair with the error class the screens catch', () => {
-    expect(() => planLightClientUpdate(handoff({ destination: { chainId: 56, lightClient } }), FIXTURE_PAIR)).toThrow(OperatorFileError)
+  test('refuses a chain that is not in the pair, and names the pair', () => {
+    const attempt = () => planLightClientUpdate(handoff({ destination: { chainId: 56, lightClient } }), FIXTURE_PAIR)
+    expect(attempt).toThrow(OperatorFileError)
+    expect(attempt).toThrow('The file names chain 56, which is not a chain of the pair eth-pls.')
   })
 })
 
@@ -153,5 +155,10 @@ describe('planMessageExecution (adapter)', () => {
 
   test('refuses a delivered message with the error class the screens catch', () => {
     expect(() => planMessageExecution(evidence({ alreadyDelivered: true, deliveryStatus: 'succeeded' }), FIXTURE_PAIR)).toThrow(OperatorFileError)
+  })
+
+  test('names the pair for a chain that is not in the pair of an evidence file too', () => {
+    const text = evidence({ destination: { chainId: 56, bridge, lightClient } })
+    expect(() => planMessageExecution(text, FIXTURE_PAIR)).toThrow('not a chain of the pair eth-pls')
   })
 })
