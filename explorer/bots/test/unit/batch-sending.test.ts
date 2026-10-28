@@ -28,6 +28,8 @@ import {
   transferLog,
   word,
   type FakeChain,
+  TEST_PROOF_CHECK_GAS,
+  FEED_REQUIRED_GAS,
 } from "../support/builders.ts";
 
 const AGGREGATE3 = toFunctionSelector(multicall3Abi.find((entry) => entry.type === "function" && entry.name === "aggregate3") as never);
@@ -85,10 +87,10 @@ function setup(options: { deliveryRouter?: DeliveryDependencies["deliveryRouter"
     wrappedNative: WRAPPED_NATIVE,
     tokenFactory: null,
     settings: {
-      minimumMarginWei: 0n,
+      maximumLossPercent: 20,
       deliverWithoutOffer: false,
       tokenValuationsWei: {},
-      executionGasFallback: ITEM_GAS,
+      proofCheckGas: TEST_PROOF_CHECK_GAS,
       maximumPrerequisiteRounds: 3,
       prerequisiteGasFallback: ITEM_GAS,
       maximumPrerequisiteSpendPerSweepWei: 10n ** 18n,
@@ -111,6 +113,7 @@ function readyItem(id: number, options: { prerequisiteCostWei?: bigint } = {}): 
     messageId: word(id),
     offer: { kind: "offer", director: { recipient: REWARD_ADDRESS, settings: 1n, limit: 10n, multiplier: 0n }, value: 1000n, call: null },
     proof: decoded.args[0],
+    requiredGas: FEED_REQUIRED_GAS,
     assumedGas: ITEM_GAS,
     prerequisiteCostWei: options.prerequisiteCostWei ?? 0n,
   };

@@ -5,7 +5,7 @@ import type { FeedItem } from "../../src/indexer/client.ts";
 import { prepareItem, type DeliveryDependencies } from "../../src/runner/delivery.ts";
 import { createPrerequisiteLedger } from "../../src/runner/prerequisite-ledger.ts";
 import type { PrerequisiteBudgetState } from "../../src/runner/state.ts";
-import { BRIDGE, MULTICALL, REWARD_ADDRESS, WRAPPED_NATIVE, address, emptyExecuteMessage, evidenceFor, fakeChain, fakeIndexer, fakeProver, feeOfferData, feedItem, memoryLogger, word } from "../support/builders.ts";
+import { BRIDGE, MULTICALL, REWARD_ADDRESS, WRAPPED_NATIVE, address, emptyExecuteMessage, evidenceFor, fakeChain, fakeIndexer, fakeProver, feeOfferData, feedItem, memoryLogger, word, TEST_PROOF_CHECK_GAS, FEED_REQUIRED_GAS } from "../support/builders.ts";
 
 const NOW = 1_000_000;
 /** Base fee 10 wei and 300,000 gas of the fake chain: one call costs 3,000,000 wei. */
@@ -43,10 +43,10 @@ function setup(options: SetupOptions = {}) {
     wrappedNative: WRAPPED_NATIVE,
     tokenFactory: options.tokenFactory ?? null,
     settings: {
-      minimumMarginWei: 0n,
+      maximumLossPercent: 20,
       deliverWithoutOffer: options.deliverWithoutOffer ?? false,
       tokenValuationsWei: {},
-      executionGasFallback: 300_000n,
+      proofCheckGas: TEST_PROOF_CHECK_GAS,
       maximumPrerequisiteRounds: options.maximumPrerequisiteRounds ?? 3,
       prerequisiteGasFallback: 300_000n,
       maximumPrerequisiteSpendPerSweepWei: 10n ** 18n,
@@ -161,7 +161,7 @@ describe("the layout calls of an item", () => {
     const w = setup({ maximumPrerequisiteRounds: 1 });
     w.listLayoutCallOnce();
     const preparation = await w.prepare();
-    expect(preparation).toMatchObject({ kind: "ready", ready: { messageId: word(1), assumedGas: 300_000n, prerequisiteCostWei: CALL_COST_WEI } });
+    expect(preparation).toMatchObject({ kind: "ready", ready: { messageId: word(1), requiredGas: FEED_REQUIRED_GAS, assumedGas: 300_000n, prerequisiteCostWei: CALL_COST_WEI } });
     expect(w.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(1);
   });
 

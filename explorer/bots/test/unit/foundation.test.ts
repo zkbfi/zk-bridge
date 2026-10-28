@@ -74,7 +74,8 @@ describe("the bot configuration", () => {
     expect(config.publisher?.apiKeyVariable).toBe("RUNPOD_API_KEY");
     expect(config.publisher?.remote).toEqual({ mode: "load-balancing" });
     expect(config.runner?.signer).toEqual({ kind: "private-key", key: { source: "environment", variable: "RUNNER_PRIVATE_KEY" } });
-    expect(config.runner?.minimumMarginWei).toBe("0");
+    expect(config.runner?.maximumLossPercent).toBe(20);
+    expect(config.runner?.proofCheckGas).toBe(400_000);
     expect(config.runner?.deliverWithoutOffer).toBe(false);
     expect(config.runner?.prerequisiteGasFallback).toBe(300_000);
     expect(config.runner?.prerequisiteLossRefusalSeconds).toBe(1800);
@@ -93,6 +94,24 @@ describe("the bot configuration", () => {
       rewardAddress: "0x1111111111111111111111111111111111111111",
     };
     expect(() => parseBotConfig({ ...minimal, runner })).toThrow(/rewardAddress/);
+  });
+
+  it("refuses minimumMarginWei and names maximumLossPercent", () => {
+    const runner = (extra: Record<string, unknown>) => ({
+      prover: { binary: "p" },
+      indexerUrl: "http://127.0.0.1:1",
+      signer: { kind: "private-key", key: "env:RUNNER_PRIVATE_KEY" },
+      maximumPrerequisiteSpendPerSweepWei: "5000",
+      maximumPrerequisiteSpendPerDayWei: "20000",
+      maximumUnrecoveredPrerequisiteLossWei: "10000",
+      ...extra,
+    });
+    expect(() => parseBotConfig({ ...minimal, runner: runner({ minimumMarginWei: "0" }) })).toThrow(/config\.runner\.minimumMarginWei.*runner\.maximumLossPercent/);
+    expect(() => parseBotConfig({ ...minimal, runner: runner({ executionGasFallback: 900_000 }) })).toThrow(/config\.runner\.executionGasFallback.*runner\.proofCheckGas/);
+    expect(() => parseBotConfig({ ...minimal, runner: runner({ maximumLossPercent: 101 }) })).toThrow(/config\.runner\.maximumLossPercent/);
+    expect(parseBotConfig({ ...minimal, runner: runner({ maximumLossPercent: 0 }) }).runner?.maximumLossPercent).toBe(0);
+    expect(() => parseBotConfig({ ...minimal, runner: "text" })).toThrow();
+    expect(() => parseBotConfig("text")).toThrow();
   });
 
   it("checks the batch limits", () => {
@@ -219,7 +238,7 @@ describe("the outcome file", () => {
     const directory = await scratchDirectory();
     const path = join(directory, "outcomes.jsonl");
     const sink = createFileOutcomeSink({ path, now: () => new Date(0), knownSecrets: () => [RUNPOD_KEY] });
-    await sink.record({ kind: "delivery", pair: "eth-pls", direction: "first-to-second", status: "skipped", reason: "fee-below-cost-plus-margin", feeWei: 5n, detail: `key ${RUNPOD_KEY}` });
+    await sink.record({ kind: "delivery", pair: "eth-pls", direction: "first-to-second", status: "skipped", reason: "loss-at-or-above-limit", feeWei: 5n, detail: `key ${RUNPOD_KEY}` });
     await sink.record({ kind: "update", pair: "eth-pls", direction: "first-to-second", status: "posted", gasUsed: 123n });
     const lines = (await readFile(path, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
     expect(lines[0]).toMatchObject({ time: "1970-01-01T00:00:00.000Z", status: "skipped", feeWei: "5" });

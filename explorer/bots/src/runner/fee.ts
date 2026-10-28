@@ -1,6 +1,5 @@
 import type { Address, Hex } from "viem";
 import { CALL_GAS_RESERVE, decodeMediatorMessage, gasOverheadOf, payoutOf, readDeliveryTerms, tokenUnitsToWeiFloor, type DeliveryCall, type FeeDirector, type PayoutKind } from "@zk-bridge/shared";
-import type { FeeQuote } from "../chain/transactions.ts";
 
 /** The director is the shared one: it matches `DeliveryRouter.sol` and the vectors of the router (`@zk-bridge/shared`). */
 export type { FeeDirector };
@@ -136,23 +135,29 @@ export function valueFeeInWei(input: ValueFeeInput): FeeValue {
 
 /** Input of {@link decideDelivery}. */
 export interface DeliveryDecisionInput {
+  /** What the tip is worth in wei. */
   readonly feeWei: bigint;
-  readonly gasUnits: bigint;
-  readonly quote: FeeQuote;
-  readonly minimumMarginWei: bigint;
+  /** What the delivery costs in wei, with its share of the light client update. */
+  readonly costWei: bigint;
+  /** The share of the cost that the runner accepts to lose, from 0 to 100. A loss at this share is already too much. */
+  readonly maximumLossPercent: number;
 }
 
-/** The comparison of the fee with the cost. */
+/**
+ * The comparison of the tip with the cost. `lossWei` is the cost less the tip. It is negative when the tip is above the
+ * cost.
+ */
 export type DeliveryDecision =
-  | { readonly deliver: true; readonly costWei: bigint; readonly profitWei: bigint }
-  | { readonly deliver: false; readonly costWei: bigint; readonly shortfallWei: bigint };
+  | { readonly deliver: true; readonly costWei: bigint; readonly lossWei: bigint }
+  | { readonly deliver: false; readonly costWei: bigint; readonly lossWei: bigint };
 
 /**
- * Delivers only when the fee covers the gas cost at the current base fee plus the priority fee, and the margin.
+ * Delivers when the loss stays under the share of the cost that the setting allows: `(cost - fee) * 100` is less than
+ * `maximumLossPercent * cost`. A loss of exactly that share is left out, so a setting of 0 asks for a tip above the cost.
  */
 export function decideDelivery(input: DeliveryDecisionInput): DeliveryDecision {
-  const costWei = input.gasUnits * (input.quote.baseFee + input.quote.priorityFee);
-  const required = costWei + input.minimumMarginWei;
-  if (input.feeWei >= required) return { deliver: true, costWei, profitWei: input.feeWei - costWei };
-  return { deliver: false, costWei, shortfallWei: required - input.feeWei };
+  const { costWei, feeWei } = input;
+  const lossWei = costWei - feeWei;
+  const deliver = lossWei * 100n < BigInt(input.maximumLossPercent) * costWei;
+  return { deliver, costWei, lossWei };
 }

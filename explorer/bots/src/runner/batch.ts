@@ -9,7 +9,7 @@ import {
   type BatchedCallResult,
   type ProofMessage,
 } from "@zk-bridge/shared";
-import { sendTerms, worstCaseCostWei, type CallRequest, type FeeQuote, type ReceiptSummary, type SendTerms, type TransactionPort } from "../chain/transactions.ts";
+import { sendTerms, worstCaseCostWei, type CallRequest, type ReceiptSummary, type SendTerms, type TransactionPort } from "../chain/transactions.ts";
 import type { FeedItem } from "../indexer/client.ts";
 import {
   judgeOffer,
@@ -54,8 +54,6 @@ export type UpdateDropReason =
   | "head-already-advanced"
   /** The light client would revert the update. It is not offered again. */
   | "update-failed"
-  /** The tips cover the deliveries and not the update as well. The batch is not sent. The runner may post the update alone. */
-  | "update-unpaid"
   /** No transaction left, so the update is still pending. */
   | "no-batch";
 
@@ -190,6 +188,23 @@ function droppedAll(readies: readonly ReadyDelivery[], reason: string): Evaluati
   return { kind: "dropped", droppedUpdate: null, dropped: readies.map((ready) => ({ ready, outcome: skip(ready.messageId, "simulation-reverted", { detail: reason }) })) };
 }
 
+/**
+ * Drops an item that is sent alone with more gas than the batch maximum, after the node refused to run the batch. A
+ * batch of Multicall3 lets each call fail, so the node refuses the whole call only when it cannot run it at all, and for
+ * an item of this size that is the block gas limit.
+ */
+function droppedOversize(ready: ReadyDelivery, maximumBatchGas: bigint, reason: string): Evaluation {
+  const detail = `the delivery needs ${ready.requiredGas} gas, above maximumBatchGas ${maximumBatchGas}, and the node refused to run it alone: ${reason}`;
+  return { kind: "dropped", droppedUpdate: null, dropped: [{ ready, outcome: skip(ready.messageId, "message-gas-above-batch-maximum", { detail }) }] };
+}
+
+/** Drops every item with the reason of a failed simulation. A lone item above the batch maximum gets its own reason. */
+function droppedBySimulation(readies: readonly ReadyDelivery[], maximumBatchGas: bigint, reason: string): Evaluation {
+  const [only] = readies;
+  if (readies.length === 1 && only !== undefined && only.requiredGas > maximumBatchGas) return droppedOversize(only, maximumBatchGas, reason);
+  return droppedAll(readies, reason);
+}
+
 function reasonOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -202,12 +217,12 @@ function reasonOf(error: unknown): string {
  * 2. Measure the gas of each remaining item at the single entry of the router, and the gas of the update at the light
  *    client. The gas estimate of the batch itself cannot serve: the batch never reverts, because Multicall3 allows each
  *    call to fail, so an estimate settles on a gas amount at which most calls fail.
- * 3. Judge the fee of each item at its own gas against its own share of the cost plus the margin. Each judgement
- *    stands alone, so all items that do not pay leave the batch together.
- * 4. Require that the surplus of the tips (fee less cost less margin, summed over the items) covers the cost of the
- *    update plus the margin. When it does not, nothing is sent: the update is the price of the batch.
- * 5. Read the results again under the gas limit that the transaction would use, so that a limit which is too short
- *    shows as failed calls.
+ * 3. Split the gas of the update among the items by their gas, so that each item carries its share of the update in its
+ *    cost. Judge the fee of each item against that cost. Each judgement stands alone, so all items that lose too much
+ *    leave the batch together. The next round splits the update among the items that stay.
+ * 4. Read the results again under the gas limit that the transaction would use, so that a limit which is too short
+ *    shows as failed calls. That limit is never below the gas that the bridge requires for the messages, and no setting
+ *    cuts it.
  *
  * A round that dropped something tells the caller to simulate what is left again.
  */
@@ -217,7 +232,7 @@ async function evaluateBatch(dependencies: DeliveryDependencies, readies: readon
   const call = batchCall(dependencies, readies, update);
   const shape = { count: readies.length, hasUpdate: update !== null };
   const simulation = await chain.simulate(call);
-  if (!simulation.ok) return droppedAll(readies, simulation.reason);
+  if (!simulation.ok) return droppedBySimulation(readies, settings.maximumBatchGas, simulation.reason);
   const first = await readResults(chain, call, shape).catch((error: unknown) => reasonOf(error));
   if (typeof first === "string") return droppedAll(readies, first);
   const droppedUpdate = updateDropOf(update, first.update);
@@ -238,8 +253,14 @@ async function evaluateBatch(dependencies: DeliveryDependencies, readies: readon
   if (unmeasurable.length > 0) return { kind: "dropped", dropped: unmeasurable, droppedUpdate: null };
 
   const quote = await chain.feeQuote();
+  const updateGas = update === null ? 0n : await gasOfUpdate(chain, update);
+  const itemGasTotal = itemGas.reduce((sum, gas) => sum + gas, 0n);
   const judgements = await Promise.all(
-    readies.map((ready, index) => judgeOffer(dependencies, { item: ready.item, offer: ready.offer, feeGasUnits: itemGas[index] as bigint, costGasUnits: itemGas[index] as bigint, quote, messageId: ready.messageId })),
+    readies.map((ready, index) => {
+      const gas = itemGas[index] as bigint;
+      const costGasUnits = gas + shareOf(updateGas, gas, itemGasTotal);
+      return judgeOffer(dependencies, { item: ready.item, offer: ready.offer, feeGasUnits: gas, costGasUnits, quote, messageId: ready.messageId });
+    }),
   );
   const unpaid: Dropped[] = [];
   const feeWei: bigint[] = [];
@@ -250,16 +271,14 @@ async function evaluateBatch(dependencies: DeliveryDependencies, readies: readon
   }
   if (unpaid.length > 0) return { kind: "dropped", dropped: unpaid, droppedUpdate: null };
 
-  const updateGas = update === null ? 0n : await gasOfUpdate(chain, update);
-  const unpaidUpdate = unpaidUpdateOf({ dependencies, readies, feeWei, itemGas, updateGas, quote });
-  if (unpaidUpdate !== null) return unpaidUpdate;
-
-  const needed = itemGas.reduce((sum, gas) => sum + gas, updateGas);
+  const needed = itemGasTotal + updateGas;
   const buffered = sendTerms(quote, simulation.gas > needed ? simulation.gas : needed);
-  // The limit never passes the setting. A limit that is too short for the last item shows in the next read as a skip.
-  const terms = buffered.gas > settings.maximumBatchGas ? { ...buffered, gas: settings.maximumBatchGas } : buffered;
+  // The gas limit is never below what the bridge requires for each message, and no setting cuts it. A message above the
+  // batch maximum is sent alone with the gas it needs, never with less.
+  const required = readies.reduce((sum, ready) => sum + ready.requiredGas, updateGas);
+  const terms = buffered.gas >= required ? buffered : { ...buffered, gas: required };
   const limited = await readResults(chain, { ...call, gas: terms.gas }, shape).catch((error: unknown) => reasonOf(error));
-  if (typeof limited === "string") return droppedAll(readies, limited);
+  if (typeof limited === "string") return droppedBySimulation(readies, settings.maximumBatchGas, limited);
   const updateAtLimit = updateDropOf(update, limited.update);
   if (updateAtLimit !== null) return { kind: "dropped", dropped: [], droppedUpdate: updateAtLimit };
   const refusedAtLimit = refusedItems(readies, limited.items);
@@ -273,41 +292,6 @@ async function gasOfUpdate(chain: TransactionPort, update: UpdateOffer): Promise
   const data = encodeFunctionData({ abi: beaconLightClientAbi, functionName: "update", args: [update.message.proof, update.message.publicValues] });
   const simulation = await chain.simulate({ to: update.lightClient, data });
   return simulation.ok ? simulation.gas : UPDATE_GAS_FALLBACK;
-}
-
-/**
- * Checks that the tips of the batch pay for the update as well. Every item already passed alone, so each has a surplus
- * of fee over cost and margin. The surplus of all items together must cover the cost of the update and the margin. When it
- * does not, no item is better off to leave (an item only adds surplus), so the whole batch is skipped and the update is
- * not part of it. Returns null when the batch pays.
- */
-function unpaidUpdateOf(input: {
-  readonly dependencies: DeliveryDependencies;
-  readonly readies: readonly ReadyDelivery[];
-  readonly feeWei: readonly bigint[];
-  readonly itemGas: readonly bigint[];
-  readonly updateGas: bigint;
-  readonly quote: FeeQuote;
-}): Evaluation | null {
-  if (input.updateGas === 0n) return null;
-  const { minimumMarginWei } = input.dependencies.settings;
-  const price = input.quote.baseFee + input.quote.priorityFee;
-  const surplus = input.readies.reduce((sum, _ready, index) => sum + (input.feeWei[index] as bigint) - (input.itemGas[index] as bigint) * price - minimumMarginWei, 0n);
-  const updateCost = input.updateGas * price;
-  if (surplus >= updateCost + minimumMarginWei) return null;
-  const detail = `the tips pay the deliveries and leave ${surplus} wei, and the update costs ${updateCost} wei with a margin of ${minimumMarginWei}`;
-  return {
-    kind: "dropped",
-    droppedUpdate: { reason: "update-unpaid", detail },
-    dropped: input.readies.map((ready, index) => ({
-      ready,
-      outcome: skip(ready.messageId, "fee-below-cost-plus-margin", {
-        feeWei: input.feeWei[index] as bigint,
-        costWei: (input.itemGas[index] as bigint) * price,
-        detail: `the batch carries a light client update. ${detail}`,
-      }),
-    })),
-  };
 }
 
 /** The share of `total` that belongs to an item of `weight` out of `weights`. It rounds down. */
@@ -484,7 +468,7 @@ export interface SendBatchInput {
  *
  * The update call goes first inside the transaction, to the light client, and the item calls follow, to the delivery router.
  * A stale or wrong update never reverts the batch. The simulation finds out first: an update that the light client would refuse leaves
- * the batch, and so does a batch whose tips do not pay for the update as well.
+ * the batch. Each item carries its share of the update in its cost, and an item that would lose too much leaves the batch.
  *
  * Nothing leaves without a simulation of exactly this batch in which the update (if any) is applied, every item
  * executes and every item pays. After a round that drops items, the smaller batch is simulated again, at most

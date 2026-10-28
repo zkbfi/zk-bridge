@@ -68,16 +68,31 @@ describe("valuing the fee in wei", () => {
 });
 
 describe("the delivery decision", () => {
-  const quote = { baseFee: 7n, priorityFee: 3n };
+  const cost = 1_000n;
+  const decide = (feeWei: bigint, maximumLossPercent = 20) => decideDelivery({ feeWei, costWei: cost, maximumLossPercent });
 
-  it("delivers when the fee equals cost plus margin, and not one wei below", () => {
-    expect(decideDelivery({ feeWei: 1_050n, gasUnits: 100n, quote, minimumMarginWei: 50n })).toEqual({ deliver: true, costWei: 1_000n, profitWei: 50n });
-    expect(decideDelivery({ feeWei: 1_049n, gasUnits: 100n, quote, minimumMarginWei: 50n })).toEqual({ deliver: false, costWei: 1_000n, shortfallWei: 1n });
+  it("delivers a fee of 801 wei against a cost of 1,000 wei, and leaves out a fee of exactly 800 wei (a loss of 20 percent)", () => {
+    expect(decide(801n)).toEqual({ deliver: true, costWei: 1_000n, lossWei: 199n });
+    expect(decide(800n)).toEqual({ deliver: false, costWei: 1_000n, lossWei: 200n });
   });
 
-  it("prices gas at the base fee plus the priority fee", () => {
-    const decision = decideDelivery({ feeWei: 0n, gasUnits: 1n, quote: { baseFee: 100n, priorityFee: 0n }, minimumMarginWei: 0n });
-    expect(decision.costWei).toBe(100n);
+  it("leaves out a delivery with no tip at all", () => {
+    expect(decide(0n)).toEqual({ deliver: false, costWei: 1_000n, lossWei: 1_000n });
+  });
+
+  it("delivers a tip above the cost, and reports a negative loss", () => {
+    expect(decide(1_200n)).toEqual({ deliver: true, costWei: 1_000n, lossWei: -200n });
+  });
+
+  it("asks for a tip above the cost when the allowed loss is 0 percent, because a loss of exactly the limit is left out", () => {
+    expect(decide(1_001n, 0).deliver).toBe(true);
+    expect(decide(1_000n, 0).deliver).toBe(false);
+    expect(decide(999n, 0).deliver).toBe(false);
+  });
+
+  it("delivers anything when the allowed loss is 100 percent, except a tip of nothing", () => {
+    expect(decide(1n, 100).deliver).toBe(true);
+    expect(decide(0n, 100).deliver).toBe(false);
   });
 });
 

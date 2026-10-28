@@ -27,6 +27,8 @@ import {
   proofMessage,
   proofPayload,
   word,
+  TEST_PROOF_CHECK_GAS,
+  FEED_REQUIRED_GAS,
 } from "../support/builders.ts";
 
 /** One call costs 300,000 gas at a base fee of 10 wei. */
@@ -83,10 +85,10 @@ function world(options: WorldOptions = {}) {
     wrappedNative: WRAPPED_NATIVE,
     tokenFactory: null,
     settings: {
-      minimumMarginWei: 0n,
+      maximumLossPercent: 20,
       deliverWithoutOffer: false,
       tokenValuationsWei: {},
-      executionGasFallback: 300_000n,
+      proofCheckGas: TEST_PROOF_CHECK_GAS,
       maximumPrerequisiteRounds: 3,
       prerequisiteGasFallback: 300_000n,
       maximumPrerequisiteSpendPerSweepWei: 10n ** 18n,
@@ -223,18 +225,17 @@ describe("the sweep", () => {
     expect(reads).toBe(2);
   });
 
-  it("offers the update to the first batch only when that batch declines it as unpaid, and the next batch goes without it", async () => {
+  it("offers the update to every batch in turn, and posts it alone when no batch can carry its share", async () => {
     const w = world({ ids: [1, 2], maximumBatchSize: 1 });
-    // Each item pays 100,000 wei above its cost. The update costs 3,000,000 wei, so a batch of one item cannot carry it.
+    // Each item pays 100,000 wei above its cost. A batch of one item carries the whole update (3,000,000 wei), so the loss is over 20 percent.
     w.chain.feeTokens = COST + 100_000n;
     const handling = await w.runner.handleProofPayload(proofPayload({ startSlot: 100n, newSlot: 164n }));
-    // Item 2 is the oldest and goes first: its batch declines the update. Item 1 then goes without an offer of the update.
     expect(w.outcomes.records.filter((record) => record.kind === "delivery").map((record) => [record.messageId, record.status, record.reason])).toEqual([
-      [word(2), "skipped", "fee-below-cost-plus-margin"],
-      [word(1), "delivered", undefined],
+      [word(2), "skipped", "loss-at-or-above-limit"],
+      [word(1), "skipped", "loss-at-or-above-limit"],
     ]);
-    // The read of the proof check and one read for the offer of the first batch: the second batch asks for none.
-    expect(w.lightClient.reads).toBe(2);
+    // The read of the proof check and one read for the offer of each batch.
+    expect(w.lightClient.reads).toBe(3);
     expect(sendsTo(w, LIGHT_CLIENT).map((entry) => entry.request.data)).toEqual([updateCall(164n)]);
     expect(handling).toEqual({ handled: "update-posted", transactionHash: word(0xee) });
   });

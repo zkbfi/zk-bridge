@@ -6,6 +6,7 @@ import {
   deliveryRouterAbi,
   encodeFeeDirector,
   messageBridgeAbi,
+  requiredDeliveryGas,
   tokenFactoryAbi,
   tokenMediatorAbi,
   type DeliveryCall,
@@ -64,8 +65,17 @@ export function feeOfferData(options: { director: FeeDirector; value: bigint; re
   });
 }
 
-/** A covered token item as the indexer lists it. */
-export function feedItem(options: { id?: number; token?: Address; decimals?: number; sourceHash?: Hex } = {}): FeedItem {
+/** The gas limit of a feed item in the tests, unless a test names another. */
+export const FEED_GAS_LIMIT = 100_000;
+/** The gas that a delivery of a default feed item must supply, from the rule of the bridge. */
+export const FEED_REQUIRED_GAS = requiredDeliveryGas(BigInt(FEED_GAS_LIMIT));
+/** The assumed gas of a default feed item in the tests: the required gas plus the proof check gas of the test settings. */
+export const FEED_ASSUMED_GAS = 300_000n;
+/** The proof check gas of the test settings. It makes the assumed gas of a default feed item {@link FEED_ASSUMED_GAS}. */
+export const TEST_PROOF_CHECK_GAS = FEED_ASSUMED_GAS - FEED_REQUIRED_GAS;
+
+/** A covered token item as the indexer lists it. A null `gasLimit` is a row that the indexer saw first from the destination side. */
+export function feedItem(options: { id?: number; token?: Address; decimals?: number; sourceHash?: Hex; gasLimit?: number | null } = {}): FeedItem {
   const id = options.id ?? 1;
   return {
     messageId: word(id),
@@ -74,7 +84,7 @@ export function feedItem(options: { id?: number; token?: Address; decimals?: num
     direction: { sourceChainId: 1, destinationChainId: 369 },
     sender: address(0x01),
     executor: address(0x02),
-    gasLimit: 2_000_000,
+    gasLimit: options.gasLimit === undefined ? FEED_GAS_LIMIT : options.gasLimit,
     sent: { transactionHash: options.sourceHash ?? word(0xa0 + id), blockNumber: 10, timestamp: 1_790_000_000 },
     transfer: {
       sourceToken: { chainId: 1, address: address(0x55), symbol: "SRC", decimals: options.decimals ?? 18 },

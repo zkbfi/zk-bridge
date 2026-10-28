@@ -59,10 +59,10 @@ async function requireMulticall3(input: { readonly client: Pick<PublicClient, "g
 /** The delivery settings that the runner section of the configuration sets, with the wei texts read as numbers. */
 export function deliverySettingsOf(runnerConfig: RunnerConfig): DeliverySettings {
   return {
-    minimumMarginWei: BigInt(runnerConfig.minimumMarginWei),
+    maximumLossPercent: runnerConfig.maximumLossPercent,
     deliverWithoutOffer: runnerConfig.deliverWithoutOffer,
     tokenValuationsWei: valuations(runnerConfig.tokenValuationsWei),
-    executionGasFallback: BigInt(runnerConfig.executionGasFallback),
+    proofCheckGas: BigInt(runnerConfig.proofCheckGas),
     maximumPrerequisiteRounds: runnerConfig.maximumPrerequisiteRounds,
     prerequisiteGasFallback: BigInt(runnerConfig.prerequisiteGasFallback),
     maximumPrerequisiteSpendPerSweepWei: BigInt(runnerConfig.maximumPrerequisiteSpendPerSweepWei),

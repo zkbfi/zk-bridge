@@ -1,5 +1,5 @@
 import { decodeFunctionData, keccak256, toFunctionSelector, type Hex } from "viem";
-import { beaconLightClientAbi, deliveryRouterAbi, messageBridgeAbi, multicall3Abi } from "@zk-bridge/shared";
+import { beaconLightClientAbi, deliveryRouterAbi, messageBridgeAbi, multicall3Abi, requiredDeliveryGas } from "@zk-bridge/shared";
 import { describe, expect, it } from "vitest";
 import type { Simulation } from "../../src/chain/transactions.ts";
 import type { FeedItem } from "../../src/indexer/client.ts";
@@ -41,6 +41,8 @@ import {
   proofPayload,
   transferLog,
   word,
+  TEST_PROOF_CHECK_GAS,
+  FEED_REQUIRED_GAS,
 } from "../support/builders.ts";
 
 const selectorOf = (name: string) => toFunctionSelector(deliveryRouterAbi.find((entry) => entry.type === "function" && entry.name === name) as never);
@@ -96,10 +98,11 @@ function ledgerFor(w: { state: ReturnType<typeof memoryState>; delivery: { setti
 interface WorldOptions {
   items?: FeedItem[];
   data?: Record<string, Hex>;
-  margin?: bigint;
+  maximumLossPercent?: number;
   deliverWithoutOffer?: boolean;
   valuations?: Record<string, bigint>;
-  executionGasFallback?: bigint;
+  /** The gas a default item is assumed to need before a simulation. Default 300,000. */
+  assumedGas?: bigint;
   maximumDeliveriesPerSweep?: number;
   prerequisiteGasFallback?: bigint;
   maximumPrerequisiteSpendPerSweepWei?: bigint;
@@ -140,10 +143,10 @@ function world(options: WorldOptions = {}) {
     wrappedNative: WRAPPED_NATIVE,
     tokenFactory: null,
     settings: {
-      minimumMarginWei: options.margin ?? 0n,
+      maximumLossPercent: options.maximumLossPercent ?? 20,
       deliverWithoutOffer: options.deliverWithoutOffer ?? false,
       tokenValuationsWei: options.valuations ?? {},
-      executionGasFallback: options.executionGasFallback ?? 300_000n,
+      proofCheckGas: options.assumedGas === undefined ? TEST_PROOF_CHECK_GAS : options.assumedGas - FEED_REQUIRED_GAS,
       maximumPrerequisiteRounds: 3,
       prerequisiteGasFallback: options.prerequisiteGasFallback ?? 300_000n,
       maximumPrerequisiteSpendPerSweepWei: options.maximumPrerequisiteSpendPerSweepWei ?? 10n ** 18n,
@@ -246,7 +249,7 @@ describe("delivery decisions", () => {
       asked.length = 0;
       const data = { [word(OFFER_ID)]: feeOfferData({ director: fixedFee(10n), value: 1000n, token: WRAPPED_NATIVE, ...(call === undefined ? {} : { call }) }) };
       // The first check uses the fallback gas. The planned gas adds the send buffer of 30 percent: at 900,000 it leaves 270,000 for the call.
-      const w = world({ items: [offerItem()], data, executionGasFallback: 900_000n });
+      const w = world({ items: [offerItem()], data, assumedGas: 900_000n });
       w.chain.feeTokensOf = ({ gasUsed }) => {
         asked.push(gasUsed);
         return 10n ** 18n;
@@ -281,29 +284,44 @@ describe("delivery decisions", () => {
     expect(w.outcomes.records[0]).toMatchObject({ kind: "delivery", status: "delivered", path: "delivery-router", feeExpectedWei: COST + 1n });
   });
 
-  it("delivers at the exact boundary: fee equals cost plus margin", async () => {
-    const w = world({ items: [offerItem()], data: offerData(), margin: 500n });
-    w.chain.feeTokens = COST + 500n;
+  it("delivers when the loss is just under the limit: a fee of 80 percent of the cost plus one wei", async () => {
+    const w = world({ items: [offerItem()], data: offerData(), maximumLossPercent: 20 });
+    w.chain.feeTokens = (COST * 80n) / 100n + 1n;
     expect((await w.runner.sweep()).delivered).toBe(1);
   });
 
-  it("skips when the fee is one wei short of cost plus margin, and builds no evidence", async () => {
-    const w = world({ items: [offerItem()], data: offerData(), margin: 500n });
-    w.chain.feeTokens = COST + 499n;
+  it("a left-out item stays deliverable: the runner sends nothing for it and logs loss-at-or-above-limit", async () => {
+    const w = world({ items: [offerItem()], data: offerData(), maximumLossPercent: 20 });
+    // A loss of exactly 20 percent is already too much.
+    w.chain.feeTokens = (COST * 80n) / 100n;
     const summary = await w.runner.sweep();
     expect(summary).toMatchObject({ delivered: 0, skipped: 1 });
-    expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "fee-below-cost-plus-margin", feeWei: COST + 499n, costWei: COST });
+    expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "loss-at-or-above-limit", feeWei: (COST * 80n) / 100n, costWei: COST });
     expect((w.prover as { evidenceRuns: number }).evidenceRuns).toBe(0);
     expect(w.chain.log.some((entry) => entry.kind === "send")).toBe(false);
+    // The item is not marked as final, so the next sweep looks at it again.
+    expect(w.state.current.finished).toEqual({});
+  });
+
+  it("a feed item with a null gasLimit is skipped with gas-limit-unknown, and nothing is guessed or sent", async () => {
+    const w = world({ items: [feedItem({ id: OFFER_ID, token: WRAPPED_NATIVE, gasLimit: null })], data: offerData() });
+    w.chain.feeTokens = COST * 10n;
+    const summary = await w.runner.sweep();
+    expect(summary).toMatchObject({ delivered: 0, skipped: 1 });
+    expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "gas-limit-unknown" });
+    expect((w.prover as { evidenceRuns: number }).evidenceRuns).toBe(0);
+    expect(w.chain.log).toEqual([]);
+    // The indexer may learn the limit later, so the item is not final and not made to wait.
+    expect(w.state.current.finished).toEqual({});
   });
 
   it("checks the fee again at the simulated gas, and skips when the real cost is higher than the assumed cost", async () => {
-    const w = world({ items: [offerItem()], data: offerData(), executionGasFallback: 100_000n });
+    const w = world({ items: [offerItem()], data: offerData(), assumedGas: 100_000n });
     w.chain.feeTokens = 2_000_000n; // pays for 100,000 gas at 10 wei, not for 300,000
     w.chain.gas = 300_000n;
     const summary = await w.runner.sweep();
     expect(summary).toMatchObject({ delivered: 0, skipped: 1 });
-    expect(w.outcomes.records[0]).toMatchObject({ reason: "fee-below-cost-plus-margin", costWei: COST });
+    expect(w.outcomes.records[0]).toMatchObject({ reason: "loss-at-or-above-limit", costWei: COST });
     expect((w.prover as { evidenceRuns: number }).evidenceRuns).toBe(1);
     expect(w.chain.log.some((entry) => entry.kind === "send")).toBe(false);
   });
@@ -467,7 +485,7 @@ describe("delivery decisions", () => {
       listLayoutOnce(w, [layoutCall]);
       const summary = await w.runner.sweep();
       expect(summary).toMatchObject({ delivered: 0, skipped: 1 });
-      expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "fee-below-cost-plus-margin", costWei: 2n * COST });
+      expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "loss-at-or-above-limit", costWei: 2n * COST });
       expect(w.outcomes.records[0]).not.toHaveProperty("prerequisiteCostWei");
       expect(w.chain.log.some((entry) => entry.kind === "send")).toBe(false);
     });
@@ -479,7 +497,7 @@ describe("delivery decisions", () => {
       w.chain.simulateOverride = (request) => (request.data === secondLayoutCall.data ? { ok: false, reason: "RowMissing" } : undefined);
       listLayoutOnce(w, [layoutCall, secondLayoutCall]);
       await w.runner.sweep();
-      expect(w.outcomes.records[0]).toMatchObject({ reason: "fee-below-cost-plus-margin", costWei: 16_000_000n });
+      expect(w.outcomes.records[0]).toMatchObject({ reason: "loss-at-or-above-limit", costWei: 16_000_000n });
       expect(w.chain.log.some((entry) => entry.kind === "send")).toBe(false);
     });
 
@@ -521,7 +539,7 @@ describe("delivery decisions", () => {
       const counter = listLayoutOnce(w, [layoutCall]);
       w.chain.simulateOverride = executionGasSimulatedAt(10_000_000n);
       await w.runner.sweep();
-      expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "fee-below-cost-plus-margin", prerequisiteCostWei: COST });
+      expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "loss-at-or-above-limit", prerequisiteCostWei: COST });
       const loss = w.events().find((event) => event.event === "prerequisite_loss");
       expect(loss).toMatchObject({ messageId: word(1), lossWei: COST.toString() });
       const builds = counter.builds;
@@ -803,8 +821,8 @@ describe("batch delivery", () => {
 
   it("leaves an item out of the batch when its fee does not pay at the simulated gas, though it passed the first check", async () => {
     const w = batchWorld([1, 2, 3]);
-    // The fee is fixed at 5,000,000 wei. It passes the first check at the assumed 300,000 gas (3,000,000 wei).
-    w.chain.feeTokens = 5_000_000n;
+    // The fee is fixed at 4,000,000 wei. It passes the first check at the assumed 300,000 gas (3,000,000 wei).
+    w.chain.feeTokens = 4_000_000n;
     // Item 2 turns out to need 600,000 gas, and 620,000 with the overhead of Multicall3: 6,200,000 wei.
     w.chain.simulateOverride = (request) => {
       if (!request.data.startsWith(EXECUTE_SINGLE)) return undefined;
@@ -814,7 +832,7 @@ describe("batch delivery", () => {
     };
     expect(await w.runner.sweep()).toMatchObject({ delivered: 2, skipped: 1 });
     expect(sentSlots(w)).toEqual([[3, 1]]);
-    expect(w.outcomes.records.find((record) => record.messageId === word(2))).toMatchObject({ status: "skipped", reason: "fee-below-cost-plus-margin", feeWei: 5_000_000n, costWei: 6_200_000n });
+    expect(w.outcomes.records.find((record) => record.messageId === word(2))).toMatchObject({ status: "skipped", reason: "loss-at-or-above-limit", feeWei: 4_000_000n, costWei: 6_200_000n });
     // The item that did not pay is not final: the next sweep looks at it again.
     expect(w.state.current.finished[word(2)]).toBeUndefined();
   });
@@ -825,13 +843,72 @@ describe("batch delivery", () => {
     expect(sentSlots(w)).toEqual([[5, 4], [3, 2], [1]]);
   });
 
-  it("splits a sweep into several batches by maximumBatchGas, and never gives a transaction a gas limit above it", async () => {
+  it("splits a sweep into several batches by maximumBatchGas, and the sum of assumed gas in a batch never passes it", async () => {
     // Two items assume 600,000 gas, three would assume 900,000.
     const w = batchWorld([1, 2, 3], { maximumBatchGas: 650_000n });
     expect(await w.runner.sweep()).toMatchObject({ delivered: 3 });
     expect(sentSlots(w)).toEqual([[3, 2], [1]]);
-    // Two items would get 780,000 with the buffer. The setting caps it at 650,000. One item gets 390,000 of its own.
-    expect(w.chain.sentTerms.map((terms) => terms.gas)).toEqual([650_000n, 390_000n]);
+    // The limit of a transaction is its simulated gas with the buffer. No setting cuts it.
+    expect(w.chain.sentTerms.map((terms) => terms.gas)).toEqual([780_000n, 390_000n]);
+  });
+
+  describe("the gas limit of the transaction follows the gas limit of the message", () => {
+    const BIG_FEE = 10n ** 12n;
+    /** A batch world whose items carry the given message gas limits, oldest first by id. */
+    function gasWorld(gasLimits: readonly number[], options: WorldOptions = {}) {
+      const items = gasLimits.map((gasLimit, index) => feedItem({ id: index + 1, token: WRAPPED_NATIVE, gasLimit }));
+      const data = Object.fromEntries(items.map((item) => [item.messageId, feeOfferData({ director: fixedFee(10n), value: 1000n, token: WRAPPED_NATIVE })]));
+      const w = world({ items, data, ...options });
+      w.chain.feeTokens = BIG_FEE;
+      w.prover.evidence = async (request: { transactionHash: Hex }) => evidenceFor({ executeData: emptyExecuteMessage(BigInt(Number.parseInt(request.transactionHash.slice(2, 4), 16) - 0xa0)) });
+      return w;
+    }
+
+    it("the transaction gas limit is at least the sum of required delivery gas of its items", async () => {
+      const w = gasWorld([1_000_000, 2_000_000]);
+      expect(await w.runner.sweep()).toMatchObject({ delivered: 2 });
+      expect(sentSlots(w)).toHaveLength(1);
+      const required = requiredDeliveryGas(1_000_000n) + requiredDeliveryGas(2_000_000n);
+      // The simulated gas of each item is 280,000, so the buffered limit alone would be far below the need of the bridge.
+      expect(w.chain.sentTerms[0]?.gas).toBe(required);
+    });
+
+    it("packs by the message limit, not by one assumed number: a large message leaves room for fewer companions", async () => {
+      const w = gasWorld([1_000_000, 1_000_000, 4_000_000]);
+      expect(await w.runner.sweep()).toMatchObject({ delivered: 3 });
+      // 4,000,000 and 1,000,000 assume about 5.7 million together. A third item would pass 6,000,000.
+      expect(sentSlots(w)).toEqual([[3, 2], [1]]);
+    });
+
+    it("sends a message above the batch maximum alone, with exactly the gas it needs and never truncated", async () => {
+      const w = gasWorld([100_000, 7_000_000, 100_000]);
+      expect(await w.runner.sweep()).toMatchObject({ delivered: 3 });
+      // The two small items share a batch. The large one follows in a transaction of its own.
+      expect(sentSlots(w)).toEqual([[3, 1], [2]]);
+      expect(w.chain.sentTerms[1]?.gas).toBe(requiredDeliveryGas(7_000_000n));
+      expect(w.chain.sentTerms[1]?.gas).toBeGreaterThan(6_000_000n);
+    });
+
+    it("skips a message above the batch maximum with message-gas-above-batch-maximum when the node refuses to run it", async () => {
+      const w = gasWorld([7_000_000]);
+      w.chain.simulateOverride = (request) => (request.data.startsWith(EXECUTE_BATCH) ? { ok: false, reason: "intrinsic gas too high" } : undefined);
+      expect(await w.runner.sweep()).toMatchObject({ delivered: 0, skipped: 1 });
+      expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "message-gas-above-batch-maximum" });
+      expect(String(w.outcomes.records[0]?.detail)).toContain("intrinsic gas too high");
+      expect(w.chain.log.some((entry) => entry.kind === "send")).toBe(false);
+    });
+
+    it("skips a message above the batch maximum when the node refuses the read at its gas limit", async () => {
+      const w = gasWorld([7_000_000]);
+      const original = w.chain.call.bind(w.chain);
+      // Only the read under the gas limit of the transaction names a gas limit.
+      w.chain.call = async (request) => {
+        if (request.gas !== undefined) throw new Error("gas limit above the block limit");
+        return original(request);
+      };
+      await w.runner.sweep();
+      expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "message-gas-above-batch-maximum" });
+    });
   });
 
   it("sends nothing and skips every item when the simulation of the batch reverts", async () => {
@@ -982,14 +1059,14 @@ describe("batch delivery", () => {
       expect(w.outcomes.records.filter((record) => record.status === "delivered")).toHaveLength(1);
     });
 
-    it("does not send a batch whose tips cover the deliveries but not the update as well, and posts the update alone", async () => {
+    it("leaves out items whose share of the update makes the loss too high, and posts the update alone", async () => {
       const w = batchWorld([1, 2]);
-      // Each item pays 100,000 wei above its cost of 3,000,000. The update costs 300,000 gas, 3,000,000 wei.
+      // Each item pays 100,000 wei above its cost of 3,000,000. With half of the update (1,500,000) the cost is 4,500,000.
       w.chain.feeTokens = COST + 100_000n;
       const handling = await w.runner.handleProofPayload(proofPayload());
       expect(batchSends(w)).toHaveLength(0);
-      expect(w.outcomes.records.filter((record) => record.status === "skipped" && record.reason === "fee-below-cost-plus-margin")).toHaveLength(2);
-      expect(String(w.outcomes.records[0]?.detail)).toContain("light client update");
+      expect(w.outcomes.records.filter((record) => record.status === "skipped" && record.reason === "loss-at-or-above-limit")).toHaveLength(2);
+      expect(w.outcomes.records[0]).toMatchObject({ costWei: 4_500_000n });
       // The runner still posts the update, as it did before batches existed.
       expect(w.chain.log.filter(isUpdateSend)).toHaveLength(1);
       expect(handling).toMatchObject({ handled: "update-posted" });
@@ -998,28 +1075,38 @@ describe("batch delivery", () => {
       expect(decodedBatch(batchSends(w)[0]?.request.data as Hex).updateProof).toBe("0x");
     });
 
-    it("sends the batch when the surplus of the tips equals the cost of the update", async () => {
+    it("sends the batch with the update when the loss with the share of the update stays under 20 percent, and not at exactly 20", async () => {
       const w = batchWorld([1, 2]);
-      // Two surpluses of 1,500,000 are 3,000,000: exactly the cost of the update.
-      w.chain.feeTokens = COST + 1_500_000n;
+      // Cost with the share of the update: 4,500,000. A fee of 3,600,000 loses exactly 20 percent.
+      w.chain.feeTokens = 3_600_001n;
       await w.runner.handleProofPayload(proofPayload());
       expect(batchSends(w)).toHaveLength(1);
       expect(decodedBatch(batchSends(w)[0]?.request.data as Hex).updateProof).toBe(PROOF);
-      // One wei less, and the batch with the update is not sent.
-      const short = batchWorld([1, 2]);
-      short.chain.feeTokens = COST + 1_500_000n;
-      short.chain.updateGas = 300_001n;
-      await short.runner.handleProofPayload(proofPayload());
-      expect(batchSends(short).filter((entry) => decodedBatch(entry.request.data).updateProof !== "0x")).toHaveLength(0);
+      const exact = batchWorld([1, 2]);
+      exact.chain.feeTokens = 3_600_000n;
+      await exact.runner.handleProofPayload(proofPayload());
+      expect(batchSends(exact).filter((entry) => decodedBatch(entry.request.data).updateProof !== "0x")).toHaveLength(0);
     });
 
-    it("counts the update margin: the surplus must also cover the minimum margin once", async () => {
-      const w = batchWorld([1, 2], { margin: 500n });
-      // The two items pay cost plus margin exactly, plus 1,500,000 each. The surplus after the margins is 3,000,000.
-      w.chain.feeTokens = COST + 500n + 1_500_000n;
+    it("each item's cost includes its share of the update, split by gas", async () => {
+      const w = batchWorld([1, 2]);
+      w.chain.feeTokens = 4_100_000n;
+      w.chain.updateGas = 400_000n;
+      // Item 1 needs 80,000 gas (100,000 with the overhead of Multicall3). Item 2 needs 280,000 (300,000).
+      w.chain.simulateOverride = (request) => {
+        if (!request.data.startsWith(EXECUTE_SINGLE)) return undefined;
+        const decoded = decodeFunctionData({ abi: deliveryRouterAbi, data: request.data });
+        const slot = decoded.functionName === "executeMessage" ? Number(decoded.args[0].anchorHeader.slot) : 0;
+        return { ok: true, gas: slot === 1 ? 80_000n : 280_000n };
+      };
       await w.runner.handleProofPayload(proofPayload());
-      // 3,000,000 does not cover the update of 3,000,000 and a margin of 500.
-      expect(batchSends(w).filter((entry) => decodedBatch(entry.request.data).updateProof !== "0x")).toHaveLength(0);
+      // The update takes 400,000 gas, split 1 to 3. Item 1 carries 100,000 and item 2 carries 300,000, so its cost is
+      // 600,000 gas, 6,000,000 wei, and its loss is over 20 percent. An even split would give it 500,000 gas.
+      expect(w.outcomes.records.find((record) => record.messageId === word(2))).toMatchObject({ status: "skipped", reason: "loss-at-or-above-limit", costWei: 6_000_000n });
+      // Item 1 alone then carries the whole update: 500,000 gas, 5,000,000 wei, a loss of 18 percent.
+      expect(w.outcomes.records.find((record) => record.messageId === word(1))).toMatchObject({ status: "delivered" });
+      expect(sentSlots(w)).toEqual([[1]]);
+      expect(decodedBatch(batchSends(w)[0]?.request.data as Hex).updateProof).toBe(PROOF);
     });
 
     it("counts the share of the update as a loss when the mined batch did not apply it", async () => {

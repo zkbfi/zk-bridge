@@ -347,11 +347,11 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
         wrappedNative: stack.wrappedNative,
         tokenFactory: null,
         settings: {
-          minimumMarginWei: 0n,
+          maximumLossPercent: 20,
           deliverWithoutOffer: false,
           // One whole fee token is worth one whole native coin.
           tokenValuationsWei: overrides.tokenValuationsWei ?? { [stack.token.toLowerCase()]: 10n ** 18n },
-          executionGasFallback: 400_000n,
+          proofCheckGas: 400_000n,
           maximumPrerequisiteRounds: 2,
           prerequisiteGasFallback: 300_000n,
           maximumPrerequisiteSpendPerSweepWei: 10n ** 24n,
@@ -413,7 +413,7 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
     const nonce = await stack.chain.publicClient.getTransactionCount({ address: signer.address });
 
     expect(await runner.sweep()).toMatchObject({ delivered: 0, skipped: 1 });
-    expect(outcomes.records[0]).toMatchObject({ status: "skipped", reason: "fee-below-cost-plus-margin" });
+    expect(outcomes.records[0]).toMatchObject({ status: "skipped", reason: "loss-at-or-above-limit" });
     expect((prover as { evidenceRuns: number }).evidenceRuns).toBe(0);
     expect(await stack.chain.publicClient.getTransactionCount({ address: signer.address })).toBe(nonce);
   });

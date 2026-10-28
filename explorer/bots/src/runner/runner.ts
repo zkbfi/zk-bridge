@@ -77,7 +77,7 @@ const PAGE_SIZE = 100;
  * Skip reasons that the next sweep can settle at once: they compare numbers that change with each block, or (anchor not
  * stored) wait for a light client update that may land any moment.
  */
-const CHEAP_REASONS: ReadonlySet<string> = new Set(["no-fee-offer", "fee-below-cost-plus-margin", "no-price-for-fee-token", "anchor-not-stored"]);
+const CHEAP_REASONS: ReadonlySet<string> = new Set(["no-fee-offer", "loss-at-or-above-limit", "gas-limit-unknown", "no-price-for-fee-token", "anchor-not-stored"]);
 
 /** Builds the runner. It keeps in memory only caches that a restart may lose; the state file keeps what must last. */
 export function createRunner(dependencies: RunnerDependencies): Runner {
@@ -167,22 +167,21 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     return { message, lightClient: dependencies.lightClientAddress };
   }
 
-  /** Learns what became of the update that a batch carried. Returns true when the update was declined as unpaid, so that no later batch offers it. */
-  async function settleUpdateFate(offer: UpdateOffer | null, fate: UpdateFate): Promise<boolean> {
-    if (offer === null || fate.kind === "not-offered") return false;
+  /** Learns what became of the update that a batch carried. */
+  async function settleUpdateFate(offer: UpdateOffer | null, fate: UpdateFate): Promise<void> {
+    if (offer === null || fate.kind === "not-offered") return;
     if (fate.kind === "mined") {
       const ending: UpdateEnding = fate.applied
         ? { kind: "posted", transactionHash: fate.transactionHash, gasUsed: fate.gasUsed, gasCostWei: fate.gasCostWei }
         : { kind: "skipped", reason: "update-failed", detail: `the light client reports no head update in ${fate.transactionHash}: another account may have posted first` };
       await finishUpdate(offer.message, ending);
-      return false;
+      return;
     }
     if (fate.reason === "head-already-advanced" || fate.reason === "update-failed") {
       await finishUpdate(offer.message, { kind: "skipped", reason: fate.reason, detail: fate.detail });
-      return false;
+      return;
     }
     logger.info("update_waits", { reason: fate.reason, detail: fate.detail, newSlot: offer.message.newSlot });
-    return fate.reason === "update-unpaid";
   }
 
   async function listCovered(finished: ReadonlySet<string>): Promise<readonly FeedItem[]> {
@@ -270,7 +269,7 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
    * Sends one batch. A send that throws may have broadcast the transaction, so every item of the batch counts as failed
    * and waits. The delivery reservation stays charged in the ledger. The layout calls of the items are a loss.
    */
-  async function deliverBatch(batch: readonly Pending[], ledger: PrerequisiteLedger, summary: SweepCounts, update: UpdateOffer | null): Promise<boolean> {
+  async function deliverBatch(batch: readonly Pending[], ledger: PrerequisiteLedger, summary: SweepCounts, update: UpdateOffer | null): Promise<void> {
     let report;
     try {
       report = await queue.run(() => sendBatch(dependencies.delivery, ledger, { readies: batch.map((pending) => pending.ready), update }));
@@ -282,12 +281,12 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
         const wait = pending.spentOnPrerequisites ? dependencies.prerequisiteLossRefusalMilliseconds : RETRY_AFTER_MILLISECONDS;
         retryAfter.set(pending.item.messageId, dependencies.now() + wait);
       }
-      return false;
+      return;
     }
     for (const [index, pending] of batch.entries()) {
       await settleOutcome(pending.item, report.outcomes[index] as DeliveryOutcome, summary, { spentOnPrerequisites: pending.spentOnPrerequisites });
     }
-    return settleUpdateFate(update, report.update);
+    await settleUpdateFate(update, report.update);
   }
 
   /**
@@ -335,14 +334,13 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
       if ((outcome.status === "delivered" || outcome.status === "failed") && !spentOnPrerequisites) attempts += 1;
       await settleOutcome(item, outcome, summary, { spentOnPrerequisites });
     }
-    const batches = planBatches(
+    const plan = planBatches(
       waiting.map((pending) => ({ ...pending, assumedGas: pending.ready.assumedGas })),
       { maximumBatchSize: settings.maximumBatchSize, maximumBatchGas: settings.maximumBatchGas },
     );
-    let updateDeclined = false;
-    for (const batch of batches) {
-      const update = updateDeclined ? null : await offerUpdate();
-      if (await deliverBatch(batch, ledger, summary, update)) updateDeclined = true;
+    // An item above the batch maximum goes alone in a transaction of its own, after the batches.
+    for (const batch of [...plan.batches, ...plan.oversize.map((pending) => [pending])]) {
+      await deliverBatch(batch, ledger, summary, await offerUpdate());
     }
     // No batch took the update, so it goes alone, as it did before batches existed.
     if (pendingUpdate !== null) await postUpdateAlone(pendingUpdate);

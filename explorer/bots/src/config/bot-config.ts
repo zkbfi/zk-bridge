@@ -124,8 +124,12 @@ export const runnerSchema = z
     indexerUrl: z.string().url(),
     signer: signerSchema,
     pollSeconds: positiveSeconds.default(30),
-    /** The runner delivers only when the fee covers the gas cost plus this many wei. */
-    minimumMarginWei: weiSchema.default("0"),
+    /**
+     * The share of its cost that the runner accepts to lose on one delivery, as a whole number from 0 to 100. The cost
+     * includes the share of the light client update that the delivery carries. The runner leaves out a delivery whose loss
+     * is this share or more. A left-out message stays deliverable by anyone.
+     */
+    maximumLossPercent: z.number().int().min(0).max(100).default(20),
     /** Deliver items that have no fee offer, for the gas cost alone. Off by default. */
     deliverWithoutOffer: z.boolean().default(false),
     /** The delivery router on the destination chain. Default: the `delivery_router` of the deployment file. */
@@ -141,8 +145,12 @@ export const runnerSchema = z
      * needs no entry. A fee in any other token needs one, or the runner skips the item.
      */
     tokenValuationsWei: z.record(addressSchema, weiSchema).default({}),
-    /** Gas for the execution when the runner cannot estimate it before the layout calls are mined. */
-    executionGasFallback: z.number().int().positive().default(900_000),
+    /**
+     * The gas that the light client proof check takes inside a delivery, on top of the gas limit of the message. The
+     * runner adds it to the gas that a delivery must supply, before a simulation exists. The default covers the 290,655
+     * gas that the bridge test measures, plus the entry of the router.
+     */
+    proofCheckGas: z.number().int().positive().default(400_000),
     /** The priority fee in wei. Default: what the node suggests. */
     priorityFeeWei: weiSchema.optional(),
     /** The most items that one sweep delivers. */
@@ -150,8 +158,8 @@ export const runnerSchema = z
     /** The most items that one batch transaction delivers through the delivery router. */
     maximumBatchSize: z.number().int().positive().default(5),
     /**
-     * The most gas that one batch may use. The sum of the gas assumed for the items of a batch stays within it, and it is
-     * the upper bound of the gas limit of the batch transaction.
+     * The most gas that the items of one batch may assume together. A message whose own gas is above it is sent alone
+     * in a transaction with the gas it needs, and is never cut.
      */
     maximumBatchGas: z.number().int().positive().default(6_000_000),
     /** The most layout calls that one delivery sends before it gives up. */
@@ -213,12 +221,25 @@ export class BotConfigError extends Error {
   override readonly name = "BotConfigError";
 }
 
+/** The runner settings that were removed, with the setting that replaces each. */
+const REMOVED_RUNNER_SETTINGS = { minimumMarginWei: "maximumLossPercent", executionGasFallback: "proofCheckGas" } as const;
+
+/** The first removed runner setting that the value still names, or null. */
+function removedRunnerSettingIn(value: unknown): { readonly name: string; readonly replacement: string } | null {
+  const runner = typeof value === "object" && value !== null && "runner" in value ? value.runner : null;
+  if (typeof runner !== "object" || runner === null) return null;
+  const found = Object.entries(REMOVED_RUNNER_SETTINGS).find(([name]) => name in runner);
+  return found === undefined ? null : { name: found[0], replacement: found[1] };
+}
+
 /**
  * Checks a parsed JSON value and returns it as a {@link BotConfig}.
  *
  * @throws BotConfigError with the path of the first invalid field.
  */
 export function parseBotConfig(value: unknown): BotConfig {
+  const removed = removedRunnerSettingIn(value);
+  if (removed !== null) throw new BotConfigError(`config.runner.${removed.name}: this setting was removed. Use runner.${removed.replacement}.`);
   const result = botConfigSchema.safeParse(value);
   if (result.success) return result.data;
   // A failed parse holds at least one issue.

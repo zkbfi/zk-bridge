@@ -16,7 +16,8 @@ export const feedItemSchema = z
     direction: z.object({ sourceChainId: z.number().int(), destinationChainId: z.number().int() }).passthrough(),
     sender: addressSchema,
     executor: addressSchema,
-    gasLimit: z.number().int().nonnegative(),
+    // Null when the indexer first saw the row from the destination side and holds no gas limit for it.
+    gasLimit: z.number().int().nonnegative().nullable(),
     sent: z.object({ transactionHash: hexSchema, blockNumber: z.number().int(), timestamp: z.number().int() }).passthrough().nullable(),
     transfer: z
       .object({

@@ -125,10 +125,10 @@ describe("deliverySettingsOf", () => {
       schemaVersion: 1,
       stateDirectory: "/s",
       ...runnerSection("http://127.0.0.1:1", {
-        minimumMarginWei: "7",
+        maximumLossPercent: 7,
         deliverWithoutOffer: true,
         tokenValuationsWei: { [`0x${"AB".repeat(20)}`]: "1000" },
-        executionGasFallback: 11,
+        proofCheckGas: 11,
         maximumPrerequisiteRounds: 2,
         prerequisiteGasFallback: 13,
         maximumBatchSize: 3,
@@ -136,10 +136,10 @@ describe("deliverySettingsOf", () => {
       }),
     }).runner!;
     expect(deliverySettingsOf(parsed)).toEqual({
-      minimumMarginWei: 7n,
+      maximumLossPercent: 7,
       deliverWithoutOffer: true,
       tokenValuationsWei: { [`0x${"ab".repeat(20)}`]: 1000n },
-      executionGasFallback: 11n,
+      proofCheckGas: 11n,
       maximumPrerequisiteRounds: 2,
       prerequisiteGasFallback: 13n,
       maximumPrerequisiteSpendPerSweepWei: 5000n,

@@ -1,5 +1,5 @@
 import { decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeFunctionData, erc20Abi, type Address, type ContractFunctionArgs, type Hex } from "viem";
-import { deliveryRouterAbi, messageBridgeAbi, tokenFactoryAbi, type PayoutKind, type ProofDirection } from "@zk-bridge/shared";
+import { deliveryRouterAbi, messageBridgeAbi, requiredDeliveryGas, tokenFactoryAbi, type PayoutKind, type ProofDirection } from "@zk-bridge/shared";
 import { sendTerms, worstCaseCostWei, type FeeQuote, type ReceiptLog, type TransactionPort } from "../chain/transactions.ts";
 import type { FeedItem, IndexerClient } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
@@ -10,12 +10,13 @@ import type { SourceReader } from "./source-reader.ts";
 
 /** The settings of a delivery that come from the bot configuration. */
 export interface DeliverySettings {
-  readonly minimumMarginWei: bigint;
+  /** The share of its cost that the runner accepts to lose on one delivery, from 0 to 100. A loss at this share or above leaves the item out. */
+  readonly maximumLossPercent: number;
   readonly deliverWithoutOffer: boolean;
   /** The value of one whole token in wei, by lowercase address. */
   readonly tokenValuationsWei: Readonly<Record<string, bigint>>;
-  /** The gas the runner assumes for an execution before it can simulate one. */
-  readonly executionGasFallback: bigint;
+  /** The gas that the light client proof check takes inside a delivery, and that the gas limit of the message does not cover. */
+  readonly proofCheckGas: bigint;
   readonly maximumPrerequisiteRounds: number;
   /** The gas the runner assumes for a layout call that it cannot simulate before the call before it is mined. */
   readonly prerequisiteGasFallback: bigint;
@@ -55,7 +56,9 @@ export interface DeliveryDependencies {
 export type SkipReason =
   | "no-fee-offer"
   | "no-price-for-fee-token"
-  | "fee-below-cost-plus-margin"
+  | "loss-at-or-above-limit"
+  | "gas-limit-unknown"
+  | "message-gas-above-batch-maximum"
   | "source-log-not-found"
   | "already-delivered"
   | "evidence-failed"
@@ -323,9 +326,22 @@ export async function recordLoss(dependencies: DeliveryDependencies, ledger: Pre
   return { ...outcome, prerequisiteCostWei: spentWei };
 }
 
-/** The gas the runner assumes before it can simulate: the layout calls and one execution. */
-function guessGas(settings: DeliverySettings): bigint {
-  return settings.executionGasFallback;
+/** The gas that a delivery of one item needs, read from the gas limit of its message. */
+export interface GasNeed {
+  /** The gas that the bridge requires a delivery to supply for the message. */
+  readonly requiredGas: bigint;
+  /** The required gas plus the proof check. The planner sums it, and the first fee check prices it. */
+  readonly assumedGas: bigint;
+}
+
+/**
+ * The gas that a delivery needs for an item, or a skip when the indexer has no gas limit for the message. A message
+ * that the indexer saw first on the destination side carries no limit, and the runner never guesses one.
+ */
+export function gasNeedOf(settings: DeliverySettings, item: FeedItem): GasNeed | Skip {
+  if (item.gasLimit === null) return skip(item.messageId as Hex, "gas-limit-unknown", { detail: "the indexer has no gas limit for this message" });
+  const requiredGas = requiredDeliveryGas(BigInt(item.gasLimit));
+  return { requiredGas, assumedGas: requiredGas + settings.proofCheckGas };
 }
 
 /** The result of {@link approvePrerequisiteSpend}: the approved calls, a skip, or nothing to approve. */
@@ -340,9 +356,9 @@ type Approval = { readonly kind: "skip"; readonly outcome: Skip } | { readonly k
 async function approvePrerequisiteSpend(
   dependencies: DeliveryDependencies,
   ledger: PrerequisiteLedger,
-  context: { readonly item: FeedItem; readonly offer: FeeOffer; readonly evidence: EvidencePackage; readonly messageId: Hex },
+  context: { readonly item: FeedItem; readonly offer: FeeOffer; readonly evidence: EvidencePackage; readonly messageId: Hex; readonly assumedGas: bigint },
 ): Promise<Approval> {
-  const { item, offer, evidence, messageId } = context;
+  const { item, offer, evidence, messageId, assumedGas } = context;
   const { settings, chain } = dependencies;
   if (evidence.prerequisites.length === 0) return { kind: "approved", approved: [] };
   const estimate = await estimatePrerequisites(dependencies, messageId, evidence);
@@ -355,8 +371,8 @@ async function approvePrerequisiteSpend(
   const judgement = await judgeOffer(dependencies, {
     item,
     offer,
-    feeGasUnits: guessGas(settings),
-    costGasUnits: estimate.gasUnits + guessGas(settings),
+    feeGasUnits: assumedGas,
+    costGasUnits: estimate.gasUnits + assumedGas,
     quote,
     messageId,
   });
@@ -370,7 +386,9 @@ export interface ReadyDelivery {
   readonly offer: Extract<FeeOffer, { kind: "offer" }>;
   /** The proof tuple that the evidence carries, after the layout calls. */
   readonly proof: MessageProof;
-  /** The gas the runner assumes for the item before a simulation: `executionGasFallback`. The batch planner sums it. */
+  /** The gas that the bridge requires a delivery to supply for the message, from its gas limit. The transaction limit is at least the sum of these. */
+  readonly requiredGas: bigint;
+  /** The required gas plus the proof check, before a simulation. The batch planner sums it. */
   readonly assumedGas: bigint;
   /** What the layout calls for this item cost. Zero when it needed none. */
   readonly prerequisiteCostWei: bigint;
@@ -383,11 +401,12 @@ export type Preparation = { readonly kind: "outcome"; readonly outcome: Delivery
  * Does the per-item work of a delivery, up to and including the layout calls.
  *
  * 1. Read the call data of the message from the indexer and look for a fee offer to the delivery router.
- * 2. Price the offer at the assumed gas, and skip when the fee does not cover cost and margin. This check needs no
+ * 1b. Read the gas limit of the message from the feed item and skip when the indexer has none. The assumed gas is the
+ *    gas that a delivery must supply for that limit, plus the proof check.
+ * 2. Price the offer at the assumed gas, and skip when the loss reaches the limit. This check needs no
  *    evidence, so an item that does not pay costs no proving time.
  * 3. Build the evidence (`zk-bridge-prover evidence`). Skip when the message is delivered already.
- * 4. Estimate the gas of every layout call. Require that the fee covers the layout calls and the execution together, plus
- *    the margin, and that the worst case of the layout calls fits the budgets. Skip before any layout call leaves.
+ * 4. Estimate the gas of every layout call. Require that the loss on the layout calls and the execution together stays under the limit, and that the worst case of the layout calls fits the budgets. Skip before any layout call leaves.
  *    The calls and the gas of this estimate are the approved set.
  * 5. Send the layout calls that the evidence lists, each after a simulation, each inside the approved set, and each
  *    after the ledger reserved its worst case.
@@ -402,6 +421,9 @@ export async function prepareItem(dependencies: DeliveryDependencies, listed: Fe
   const messageId = item.messageId as Hex;
   const { settings, chain } = dependencies;
   const done = (outcome: DeliveryOutcome): Preparation => ({ kind: "outcome", outcome });
+  const need = gasNeedOf(settings, item);
+  if ("status" in need) return done(need);
+  const { requiredGas, assumedGas } = need;
   const message = await dependencies.indexer.getMessage(item.messageId);
   const offer = readFeeOffer({ messageData: message.data as Hex, deliveryRouter: dependencies.deliveryRouter });
   if (offer.kind === "none" && !settings.deliverWithoutOffer) return done(skip(messageId, "no-fee-offer", { detail: offer.reason }));
@@ -409,7 +431,7 @@ export async function prepareItem(dependencies: DeliveryDependencies, listed: Fe
   const quote = await chain.feeQuote();
   const early =
     offer.kind === "offer"
-      ? await judgeOffer(dependencies, { item, offer, feeGasUnits: guessGas(settings), costGasUnits: guessGas(settings), quote, messageId })
+      ? await judgeOffer(dependencies, { item, offer, feeGasUnits: assumedGas, costGasUnits: assumedGas, quote, messageId })
       : null;
   if (early !== null && early.kind === "skip") return done(early.outcome);
 
@@ -426,7 +448,7 @@ export async function prepareItem(dependencies: DeliveryDependencies, listed: Fe
   }
   if (evidence.alreadyDelivered) return done(skip(messageId, "already-delivered", { detail: evidence.deliveryStatus }));
 
-  const approval = await approvePrerequisiteSpend(dependencies, ledger, { item, offer, evidence, messageId });
+  const approval = await approvePrerequisiteSpend(dependencies, ledger, { item, offer, evidence, messageId, assumedGas });
   if (approval.kind === "skip") return done(approval.outcome);
 
   const prepared = await satisfyPrerequisites(dependencies, ledger, { messageId, transactionHash: sourceTransaction, logIndex }, evidence, approval.approved);
@@ -435,7 +457,7 @@ export async function prepareItem(dependencies: DeliveryDependencies, listed: Fe
   if (offer.kind === "none") return done(await deliverDirect(dependencies, ledger, { item, messageId, evidence: prepared.evidence, prerequisiteCostWei: prepared.costWei }));
   return {
     kind: "ready",
-    ready: { item, messageId, offer, proof: proofOf(prepared.evidence), assumedGas: guessGas(settings), prerequisiteCostWei: prepared.costWei },
+    ready: { item, messageId, offer, proof: proofOf(prepared.evidence), requiredGas, assumedGas, prerequisiteCostWei: prepared.costWei },
   };
 }
 
@@ -490,19 +512,20 @@ export interface JudgeOfferInput {
   readonly messageId: Hex;
 }
 
-/** Prices the offer at the fee gas and compares it with the cost of the cost gas. */
+/** Prices the offer at the fee gas and compares it with the cost of the cost gas. The item is left out when the loss reaches the limit. */
 export async function judgeOffer(dependencies: DeliveryDependencies, input: JudgeOfferInput): Promise<Judgement> {
   const { item, offer, feeGasUnits, costGasUnits, quote, messageId } = input;
   const priced = await quoteFee(dependencies, item, offer, feeGasUnits, sendTerms(quote, feeGasUnits).gas);
   if (!priced.ok) return { kind: "skip", outcome: skip(messageId, priced.reason) };
-  const decision = decideDelivery({ feeWei: priced.feeWei, gasUnits: costGasUnits, quote, minimumMarginWei: dependencies.settings.minimumMarginWei });
+  const costWei = costGasUnits * (quote.baseFee + quote.priorityFee);
+  const decision = decideDelivery({ feeWei: priced.feeWei, costWei, maximumLossPercent: dependencies.settings.maximumLossPercent });
   if (decision.deliver) return { kind: "pay", feeWei: priced.feeWei };
   return {
     kind: "skip",
-    outcome: skip(messageId, "fee-below-cost-plus-margin", {
+    outcome: skip(messageId, "loss-at-or-above-limit", {
       feeWei: priced.feeWei,
       costWei: decision.costWei,
-      detail: `short by ${decision.shortfallWei} wei at ${costGasUnits} gas, tip paid as ${priced.payout}`,
+      detail: `loses ${decision.lossWei} wei of ${decision.costWei} at ${costGasUnits} gas, the limit is ${dependencies.settings.maximumLossPercent} percent, tip paid as ${priced.payout}`,
     }),
   };
 }

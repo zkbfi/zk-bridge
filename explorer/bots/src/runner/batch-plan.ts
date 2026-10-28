@@ -6,16 +6,29 @@ export interface BatchLimits {
   readonly maximumBatchGas: bigint;
 }
 
+/** The result of {@link planBatches}. */
+export interface BatchPlan<Item> {
+  /** The batches, oldest items first. The assumed gas of each batch adds up to at most `maximumBatchGas`. */
+  readonly batches: Item[][];
+  /** The items whose own assumed gas is above `maximumBatchGas`. No batch holds them: the caller sends each one alone. */
+  readonly oversize: Item[];
+}
+
 /**
  * Splits items into as few batches as the limits allow, and keeps their order. The first item that would break a limit
  * starts the next batch, so the oldest items always go in the first batch. An item whose own assumed gas is above the
- * gas limit still gets a batch of its own: the simulation decides then, and nothing splits it further.
+ * gas limit never goes in a batch: it is returned apart, because no batch can hold it without passing the limit.
  */
-export function planBatches<Item extends { readonly assumedGas: bigint }>(items: readonly Item[], limits: BatchLimits): Item[][] {
+export function planBatches<Item extends { readonly assumedGas: bigint }>(items: readonly Item[], limits: BatchLimits): BatchPlan<Item> {
   const batches: Item[][] = [];
+  const oversize: Item[] = [];
   let current: Item[] = [];
   let currentGas = 0n;
   for (const item of items) {
+    if (item.assumedGas > limits.maximumBatchGas) {
+      oversize.push(item);
+      continue;
+    }
     const fits = current.length < limits.maximumBatchSize && currentGas + item.assumedGas <= limits.maximumBatchGas;
     if (!fits && current.length > 0) {
       batches.push(current);
@@ -26,5 +39,5 @@ export function planBatches<Item extends { readonly assumedGas: bigint }>(items:
     currentGas += item.assumedGas;
   }
   if (current.length > 0) batches.push(current);
-  return batches;
+  return { batches, oversize };
 }
