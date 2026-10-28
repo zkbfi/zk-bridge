@@ -26,7 +26,7 @@ const firstSegmentOf = (pathname: string): string => {
  * Tells whether other sites can share the browser origin of this page.
  * A path-style gateway puts `ipfs` or `ipns` in the first path segment. The check ignores empty segments (a gateway can
  * merge slashes), decodes the segment, and ignores case. It fails closed: a segment that cannot be decoded, or that
- * still holds a percent sign after decoding, counts as shared. The host name does not change the answer: a
+ * still holds a percent sign, a slash or a backslash after decoding, counts as shared. The host name does not change the answer: a
  * subdomain-style gateway, a normal domain and localhost all serve the page from the root path.
  *
  * @param location The location of the page.
@@ -34,6 +34,6 @@ const firstSegmentOf = (pathname: string): string => {
  */
 export const originIsShared = (location: OriginLocation): boolean => {
   const segment = firstSegmentOf(location.pathname);
-  if (segment.includes("%")) return true;
+  if (/[%/\\]/.test(segment)) return true;
   return GATEWAY_SEGMENTS.includes(segment.toLowerCase());
 };

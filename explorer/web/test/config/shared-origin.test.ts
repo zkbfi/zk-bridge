@@ -40,4 +40,10 @@ describe("originIsShared", () => {
     expect(originIsShared({ pathname: "//", hostname: "localhost" })).toBe(false);
     expect(originIsShared({ pathname: "//app/ipfs", hostname: "example.org" })).toBe(false);
   });
+
+  it("treats an encoded slash or backslash in the first segment as shared", () => {
+    for (const pathname of ["/ipfs%2Fx/", "/IPNS%2fy/", "/ipfs%5Cx/"]) {
+      expect(originIsShared({ pathname, hostname: "example.org" }), pathname).toBe(true);
+    }
+  });
 });
