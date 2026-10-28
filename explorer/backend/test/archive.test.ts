@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ProverCommandError, type ProverBinary } from "@zk-bridge/shared/prover";
 import { runArchiveCycle, health, start } from "../src/archive/module.ts";
-import { directionOf, REBUILD_AFTER_MILLISECONDS, RETRY_DELAY_MILLISECONDS } from "../src/archive/build.ts";
+import { directionOf, RETRY_DELAY_MILLISECONDS } from "../src/archive/build.ts";
 import { MODULES } from "../src/main.ts";
 import { createApp } from "../src/app.ts";
 import { makeBackend, makeConfig } from "./support.ts";
@@ -155,14 +155,14 @@ describe("evidence archive", () => {
     expect((await backend.app.request(`/evidence/${id("a")}`)).status).toBe(200);
   });
 
-  it("rebuilds old evidence at the newest head and keeps the old copy when the rebuild fails", async () => {
-    const evidence = vi.fn<ProverBinary["evidence"]>().mockResolvedValueOnce(evidenceFor(id("a")) as never).mockRejectedValue(new Error("down"));
+  it("builds evidence once and never again, however old it gets", async () => {
+    const evidence = vi.fn<ProverBinary["evidence"]>().mockResolvedValue(evidenceFor(id("a")) as never);
     const backend = setup(evidence);
     vi.stubGlobal("fetch", fakeIndexer({ work: [item("a")], statuses: {} }));
     await runArchiveCycle(backend.context);
-    backend.clock.advance(REBUILD_AFTER_MILLISECONDS);
+    backend.clock.advance(400 * 86_400_000);
     await runArchiveCycle(backend.context);
-    expect(evidence).toHaveBeenCalledTimes(2);
+    expect(evidence).toHaveBeenCalledTimes(1);
     expect((await backend.app.request(`/evidence/${id("a")}`)).status).toBe(200);
   });
 

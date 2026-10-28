@@ -7,12 +7,6 @@ import { FINISHED_STATUSES, type IndexerClient, type WorkItem } from "./work-lis
 /** How long the archive waits before it retries a failed build on the same head, in milliseconds. */
 export const RETRY_DELAY_MILLISECONDS = 600_000;
 
-/**
- * How old stored evidence gets before the archive builds it again at the newest head, in milliseconds. The light client
- * keeps every stored header, so evidence stays valid; the rebuild only protects against a header that stops being accepted.
- */
-export const REBUILD_AFTER_MILLISECONDS = 86_400_000;
-
 const ARCHIVE_TABLES = `
 CREATE TABLE IF NOT EXISTS archive_entries (
   message_id TEXT PRIMARY KEY,
@@ -123,11 +117,17 @@ export function createArchiveService(input: ArchiveServiceInput): ArchiveService
     }
   }
 
+  /**
+   * Evidence is built once. The light client never deletes or overwrites a stored header (`BeaconLightClient.sol`), and
+   * `MessageBridge.sol` (lines 311-312) only checks that the anchor is stored and then checks the ancestry branch built
+   * with the evidence. So evidence built against any stored head stays valid, and a built entry is never built again.
+   * A failed build retries when its delay is over or when the indexer reports a newer covering head.
+   */
   function shouldBuild(entry: EntryRow): boolean {
-    if (entry.built_at === null && entry.retry_at === null) return true;
+    if (entry.built_at !== null) return false;
+    if (entry.last_error === null) return true;
     const newerHead = entry.failed_on_head_slot !== null && BigInt(entry.covered_by_head_slot) > BigInt(entry.failed_on_head_slot);
-    if (entry.last_error !== null) return newerHead || input.now() >= (entry.retry_at ?? 0);
-    return input.now() - (entry.built_at as number) >= REBUILD_AFTER_MILLISECONDS;
+    return newerHead || input.now() >= (entry.retry_at ?? 0);
   }
 
   function recordFailure(entry: EntryRow, error: unknown): void {
