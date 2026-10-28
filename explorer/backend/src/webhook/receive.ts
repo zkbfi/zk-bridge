@@ -23,6 +23,9 @@ export function ensureProofTable(storage: Storage): void {
       last_error TEXT
     )
   `);
+  // A table made by an earlier version lacks the column of the last attempt.
+  const columns = storage.database.prepare("PRAGMA table_info(webhook_proofs)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "last_attempt_at")) storage.database.exec("ALTER TABLE webhook_proofs ADD COLUMN last_attempt_at INTEGER");
 }
 
 /**

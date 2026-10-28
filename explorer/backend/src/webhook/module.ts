@@ -66,6 +66,7 @@ type Resolved = {
 type ModuleState = {
   source: WebhookSource;
   resolved: Resolved | null;
+  loggedReason: string | null;
   ticking: Promise<void> | null;
 };
 
@@ -74,7 +75,7 @@ const states = new WeakMap<BackendModuleContext, ModuleState>();
 function stateOf(context: BackendModuleContext): ModuleState {
   const known = states.get(context);
   if (known !== undefined) return known;
-  const created: ModuleState = { source: REAL_SOURCE, resolved: null, ticking: null };
+  const created: ModuleState = { source: REAL_SOURCE, resolved: null, loggedReason: null, ticking: null };
   states.set(context, created);
   return created;
 }
@@ -87,6 +88,7 @@ export function configureWebhook(context: BackendModuleContext, source: Partial<
   const state = stateOf(context);
   state.source = { ...state.source, ...source };
   state.resolved = null;
+  state.loggedReason = null;
 }
 
 /** The side that holds the light client which a proof of this direction updates. */
@@ -94,11 +96,24 @@ function destinationOf(pair: Pair, direction: ProofDirection) {
   return direction === "first-to-second" ? pair.sides[1] : pair.sides[0];
 }
 
+/** A setting is missing. The message names the variable and never a value. */
+class MissingVariableError extends Error {
+  override readonly name = "MissingVariableError";
+  constructor(readonly variable: string) {
+    super(`set the environment variable ${variable}`);
+  }
+}
+
+/** The answer of the route when the bearer variable is not set. */
+export const NOT_CONFIGURED_TEXT = "the webhook is not configured";
+
+const UNUSABLE_TEXT = "the webhook settings cannot be used";
+
 function build(context: BackendModuleContext, source: WebhookSource): Resolved {
   const bearer = source.environment[context.config.webhookBearerVariable];
-  if (bearer === undefined || bearer === "") throw new Error(`set the environment variable ${context.config.webhookBearerVariable}`);
+  if (bearer === undefined || bearer === "") throw new MissingVariableError(context.config.webhookBearerVariable);
   const boardUrl = source.environment[MSGBOARD_VARIABLE];
-  if (boardUrl === undefined || boardUrl === "") throw new Error(`set the environment variable ${MSGBOARD_VARIABLE}`);
+  if (boardUrl === undefined || boardUrl === "") throw new MissingVariableError(MSGBOARD_VARIABLE);
   const pair = loadPair({ pairName: context.config.pair, environment: source.environment, deployment: source.readDeployment(context.config.deploymentFile) });
   const readLightClient = (direction: ProofDirection): Promise<LightClientHead> => {
     const destination = destinationOf(pair, direction);
@@ -124,17 +139,23 @@ function build(context: BackendModuleContext, source: WebhookSource): Resolved {
   return { publisher, assess };
 }
 
-/** The settings of the module, or the reason that they cannot be built. The result is kept after the first success. */
+/**
+ * The settings of the module, or the reason that they cannot be built. A success is kept. A failure is tried again at
+ * the next call, because a file may be fixed, but it is logged once for each distinct reason.
+ */
 function resolve(context: BackendModuleContext): { ok: true; resolved: Resolved } | { ok: false; reason: string } {
   const state = stateOf(context);
   if (state.resolved !== null) return { ok: true, resolved: state.resolved };
   try {
     state.resolved = build(context, state.source);
+    state.loggedReason = null;
     return { ok: true, resolved: state.resolved };
   } catch (error) {
     // The message names a variable or a file problem and never a value.
-    context.logger.warn("webhook_unusable", { error });
-    return { ok: false, reason: "the webhook settings cannot be used" };
+    const reason = error instanceof MissingVariableError ? error.message : UNUSABLE_TEXT;
+    if (state.loggedReason !== reason) context.logger.warn("webhook_unusable", { error, reason });
+    state.loggedReason = reason;
+    return { ok: false, reason };
   }
 }
 
@@ -164,7 +185,8 @@ export function register(app: Hono, context: BackendModuleContext): void {
     "/webhook/jobs/:jobId",
     async (request, next) => {
       // The token is checked first and from the environment alone: a caller without it causes no file read.
-      const expected = stateOf(context).source.environment[context.config.webhookBearerVariable] ?? "";
+      const expected = stateOf(context).source.environment[context.config.webhookBearerVariable];
+      if (expected === undefined || expected === "") return request.json({ error: NOT_CONFIGURED_TEXT }, 503);
       if (!bearerMatches(request.req.header("authorization"), expected)) return request.json({ error: "unauthorized" }, 401);
       const current = resolve(context);
       if (!current.ok) return request.json({ error: current.reason }, 503);

@@ -10,7 +10,7 @@ import type { LightClientHead, ProverBinary } from "@zk-bridge/shared/prover";
 import { PROGRAM_KEY, publicValuesFor, word } from "../../shared/test/support/prover-builders.ts";
 import { MAXIMUM_BODY_BYTES } from "../src/requests/module.ts";
 import { getJob, insertJob, updateJob } from "../src/requests/jobs.ts";
-import { MSGBOARD_VARIABLE, REAL_SOURCE, TICK_INTERVAL_MILLISECONDS, configureWebhook, settled, start, type WebhookSource } from "../src/webhook/module.ts";
+import { MSGBOARD_VARIABLE, NOT_CONFIGURED_TEXT, REAL_SOURCE, TICK_INTERVAL_MILLISECONDS, configureWebhook, settled, start, type WebhookSource } from "../src/webhook/module.ts";
 import { MAXIMUM_POST_ATTEMPTS, POST_FAILED_REASON, RETRY_BASE_MILLISECONDS, RETRY_CEILING_MILLISECONDS, createProofPublisher, retryDelayMilliseconds } from "../src/webhook/publish.ts";
 import { bearerMatches, ensureProofTable } from "../src/webhook/receive.ts";
 import { MODULES } from "../src/main.ts";
@@ -541,25 +541,60 @@ describe("settings and health", () => {
   });
 
   it.each([
-    ["the msgboard variable", { ...SETTINGS, [MSGBOARD_VARIABLE]: undefined }],
-    ["the rpc variable of a chain", { ...SETTINGS, EXPLORER_RPC_URL_369: undefined }],
-  ])("answers 503 and reports degraded when %s is missing, and shows no value", async (_name, environment) => {
+    ["the msgboard variable", { ...SETTINGS, [MSGBOARD_VARIABLE]: undefined }, `set the environment variable ${MSGBOARD_VARIABLE}`],
+    ["the rpc variable of a chain", { ...SETTINGS, EXPLORER_RPC_URL_369: undefined }, "the webhook settings cannot be used"],
+  ])("answers 503 and reports degraded when %s is missing, and shows no value", async (_name, environment, reason) => {
     const fixture = setup({ source: { environment } });
     const jobId = createProvingJob(fixture);
     const answer = await send(fixture, jobId, proofPackage());
     expect(answer.status).toBe(503);
-    expect(await answer.json()).toEqual({ error: "the webhook settings cannot be used" });
+    expect(await answer.json()).toEqual({ error: reason });
     const report = (await (await fixture.app.request("/health")).json()) as { modules: Record<string, unknown> };
-    expect(report.modules.webhook).toEqual({ state: "degraded", detail: "the webhook settings cannot be used" });
+    expect(report.modules.webhook).toEqual({ state: "degraded", detail: reason });
     expect(JSON.stringify(report)).not.toContain(TOKEN);
     expect(fixture.log.lines.join("\n")).not.toContain(TOKEN);
   });
 
-  it.each([[{ ...SETTINGS, BACKEND_WEBHOOK_BEARER: "" }], [{ ...SETTINGS, BACKEND_WEBHOOK_BEARER: undefined }]])("answers 401 when the bearer variable is not set", async (environment) => {
-    const fixture = setup({ source: { environment } });
-    const jobId = createProvingJob(fixture);
-    expect((await send(fixture, jobId, proofPackage(), { authorization: "Bearer " })).status).toBe(401);
-    expect((await send(fixture, jobId, proofPackage())).status).toBe(401);
+  it.each([[{ ...SETTINGS, BACKEND_WEBHOOK_BEARER: "" }], [{ ...SETTINGS, BACKEND_WEBHOOK_BEARER: undefined }]])(
+    "answers 503 with a fixed body when the bearer variable is not set, and health names the variable",
+    async (environment) => {
+      const fixture = setup({ source: { environment } });
+      const jobId = createProvingJob(fixture);
+      for (const headers of [{ authorization: "Bearer " }, { authorization: "Bearer anything" }, {}]) {
+        const answer = await send(fixture, jobId, proofPackage(), headers);
+        expect(answer.status).toBe(503);
+        expect(await answer.json()).toEqual({ error: NOT_CONFIGURED_TEXT });
+      }
+      const report = (await (await fixture.app.request("/health")).json()) as { modules: Record<string, unknown> };
+      expect(report.modules.webhook).toEqual({ state: "degraded", detail: "set the environment variable BACKEND_WEBHOOK_BEARER" });
+    },
+  );
+
+  it("logs a settings failure once for each distinct reason, not on every tick", async () => {
+    const fixture = setup({ source: { environment: { ...SETTINGS, [MSGBOARD_VARIABLE]: undefined } } });
+    // The registration logged once, against the real environment, before the test replaced it.
+    const before = fixture.log.lines.filter((line) => line.includes("webhook_unusable")).length;
+    const unusable = () => fixture.log.lines.filter((line) => line.includes("webhook_unusable")).length - before;
+    for (let round = 0; round < 3; round += 1) await (await start(fixture.context))();
+    await fixture.app.request("/health");
+    expect(unusable()).toBe(1);
+    configureWebhook(fixture.context, { environment: { ...SETTINGS, EXPLORER_RPC_URL_369: undefined } });
+    for (let round = 0; round < 3; round += 1) await (await start(fixture.context))();
+    expect(unusable()).toBe(2);
+    configureWebhook(fixture.context, { environment: SETTINGS });
+    await (await start(fixture.context))();
+    configureWebhook(fixture.context, { environment: { ...SETTINGS, EXPLORER_RPC_URL_369: undefined } });
+    await (await start(fixture.context))();
+    expect(unusable()).toBe(3);
+  });
+
+  it("adds the column of the last attempt to a table from an earlier version", () => {
+    const fixture = setup();
+    fixture.storage.database.exec(`CREATE TABLE webhook_proofs (job_id TEXT PRIMARY KEY, direction TEXT NOT NULL, payload TEXT NOT NULL, start_slot TEXT NOT NULL, new_slot TEXT NOT NULL, stored_at INTEGER NOT NULL, posted_at INTEGER, message_hash TEXT, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT)`);
+    ensureProofTable(fixture.storage);
+    ensureProofTable(fixture.storage);
+    const names = (fixture.storage.database.prepare("PRAGMA table_info(webhook_proofs)").all() as Array<{ name: string }>).map((column) => column.name);
+    expect(names.filter((name) => name === "last_attempt_at")).toHaveLength(1);
   });
 
   it("a caller without a valid token causes no deployment read and no log line", async () => {
