@@ -63,6 +63,8 @@ export interface ChainConfig {
   readonly rpcEnvironmentVariable: string
   /** The RPC URL that the deployment file names (`rpc_url`), the weakest source of the RPC URL. Absent when it names none. */
   readonly registryRpcUrl?: string
+  /** The first block to scan, from `start_block` of the deployment file. Absent when the file names none. */
+  readonly startBlock?: number
   readonly contracts: {
     readonly messageBridge: Address
     readonly tokenMediator: Address

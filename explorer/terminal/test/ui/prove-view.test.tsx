@@ -3,10 +3,11 @@ import { testRender } from '@opentui/react/test-utils'
 import { act } from 'react'
 import type { CommandExecutor } from '@zk-bridge/shared/prover'
 import { emptyProverSetup, type ProverSetup } from '@zk-bridge/shared/config'
+import { FIXTURE_PAIR } from '../../src/data/fixtures'
 import { ServicesProvider } from '../../src/app/services'
 import type { FlowStep } from '../../src/flow/transaction-flow'
 import { KeyRouterProvider } from '../../src/ui/key-router'
-import { ProveModal, readinessLines, startBlockVariable, type ProveDependencies } from '../../src/ui/prove-view'
+import { ProveModal, messageOf, readinessLines, type ProveDependencies } from '../../src/ui/prove-view'
 import { proofPackageText } from '../support/proof-package'
 import { memoryStore, renderApp } from './harness'
 
@@ -34,15 +35,16 @@ async function filledStore() {
   return store
 }
 
-const environment = { PATH: '/usr/bin', [startBlockVariable(1)]: '100', [startBlockVariable(369)]: '200' }
+const environment = { PATH: '/usr/bin' }
+const pairWithStartBlocks = { ...FIXTURE_PAIR, first: { ...FIXTURE_PAIR.first, startBlock: 100 }, second: { ...FIXTURE_PAIR.second, startBlock: 200 } }
 
 function dependencies(changes: Partial<ProveDependencies> & { executor: CommandExecutor }): ProveDependencies {
   return { executablePath: '/opt/zk/zk-bridge-terminal', exists: () => true, totalMemoryBytes: 64 * GIBIBYTE, ...changes }
 }
 
 /** Renders the modal alone, with the services of a fixture app. */
-async function renderModal(options: { readonly deps: ProveDependencies; readonly savedSetup?: ProverSetup; readonly environment?: Record<string, string> }) {
-  app = await renderApp({ width: 120, height: 40, store: await filledStore(), savedSetup: options.savedSetup ?? savedSetup, environment: options.environment ?? environment })
+async function renderModal(options: { readonly deps: ProveDependencies; readonly savedSetup?: ProverSetup; readonly environment?: Record<string, string>; readonly pair?: typeof FIXTURE_PAIR }) {
+  app = await renderApp({ width: 120, height: 40, store: await filledStore(), savedSetup: options.savedSetup ?? savedSetup, environment: options.environment ?? environment, pair: options.pair ?? pairWithStartBlocks })
   const reviews: Array<readonly FlowStep[]> = []
   const closed: string[] = []
   const setup = await testRender(
@@ -106,7 +108,7 @@ describe('the local proving dialog', () => {
   test('a finished proof shows its stages and hands the update to the review', async () => {
     const view = await renderModal({ deps: dependencies({ executor: success, totalMemoryBytes: 32 * GIBIBYTE }) })
     try {
-      expect(view.frame()).toContain('can be slow')
+      expect(view.frame()).toContain('This run will likely fail.')
       await view.press('1')
       await view.until('The proof is ready')
       const frame = view.frame()
@@ -164,12 +166,12 @@ describe('the local proving dialog', () => {
     }
   })
 
-  test('says that a start block is missing', async () => {
-    const view = await renderModal({ deps: dependencies({ executor: success }), environment: { PATH: '/usr/bin' } })
+  test('says that a start block is missing from the deployment file', async () => {
+    const view = await renderModal({ deps: dependencies({ executor: success }), pair: FIXTURE_PAIR })
     try {
       await view.press('1')
-      await view.until('is not set')
-      expect(view.frame()).toContain('start block of Ethereum is not set')
+      await view.until('start_block')
+      expect(view.frame()).toContain('no start_block for Ethereum')
     } finally {
       view.setup.renderer.destroy()
     }
@@ -195,6 +197,30 @@ describe('the running clock', () => {
   })
 })
 
+describe('messages shown to the user', () => {
+  test('a failure whose standard error carries a keyed URL is shown without the key', async () => {
+    const leaking: CommandExecutor = async () => ({
+      code: 1,
+      stdout: '',
+      stderr: 'error: request to https://one.valve.city/rpc/vk_secret123456/evm/1 failed\n',
+    })
+    const view = await renderModal({ deps: dependencies({ executor: leaking }) })
+    try {
+      await view.press('1')
+      await view.until('request to')
+      expect(view.frame()).toContain('[redacted]')
+      expect(view.frame()).not.toContain('vk_secret123456')
+    } finally {
+      view.setup.renderer.destroy()
+    }
+  })
+
+  test('messageOf removes a known secret and handles a value that is not an Error', () => {
+    expect(messageOf('see https://one.valve.city/rpc/vk_abcdef123456/evm/1')).not.toContain('vk_abcdef123456')
+    expect(messageOf(new Error('url is https://node.example/zzzz'), ['https://node.example/zzzz'])).toBe('url is [redacted]')
+  })
+})
+
 describe('readinessLines', () => {
   test('is quiet when the files are present and the memory is enough', () => {
     expect(readinessLines({ bundle: { prover: 'a', lightClientElf: 'b', observationElf: 'c' }, machine: { blockers: [], warnings: [] } })).toHaveLength(1)
@@ -211,7 +237,7 @@ describe('the app', () => {
   })
 
   test('a finished proof leaves the dialog and opens the review of the update', async () => {
-    app = await renderApp({ width: 120, height: 40, store: await filledStore(), savedSetup, environment, proveDependencies: dependencies({ executor: success }) })
+    app = await renderApp({ width: 120, height: 40, store: await filledStore(), savedSetup, environment, pair: pairWithStartBlocks, proveDependencies: dependencies({ executor: success }) })
     await app.press('p')
     await app.press('1')
     for (let attempt = 0; attempt < 100 && !app.frame().includes('The proof is ready'); attempt += 1) await app.settle(50)

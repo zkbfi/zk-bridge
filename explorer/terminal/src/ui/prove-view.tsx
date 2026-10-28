@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from 'react'
 import { existsSync } from 'node:fs'
-import { resolveSecretReference, type SecretReference } from '@zk-bridge/shared/config'
+import { redactSecrets, resolveSecretReference, type SecretReference } from '@zk-bridge/shared/config'
 import { executeCommand, type CommandExecutor } from '@zk-bridge/shared/prover'
 import { useServices } from '../app/services'
 import type { FlowStep } from '../flow/transaction-flow'
@@ -31,22 +31,24 @@ type Phase =
   | { readonly kind: 'finished'; readonly message: string; readonly steps: readonly ProgressStep[]; readonly review: readonly FlowStep[] | null }
   | { readonly kind: 'failed'; readonly message: string }
 
-/** The variable that names the first block of a chain, for the prover scan. It is not a secret. */
-export function startBlockVariable(chainId: number): string {
-  return `ZK_BRIDGE_START_BLOCK_${chainId}`
-}
-
 const LINE_WIDTH = 90
 
-/** Breaks a text into lines that fit the dialog. The dialog cuts a longer line. */
+/** Breaks a text into lines that fit the dialog, at spaces where it can. The dialog cuts a longer line. */
 export function wrapped(text: string): readonly string[] {
   const lines: string[] = []
-  for (let start = 0; start < text.length; start += LINE_WIDTH) lines.push(text.slice(start, start + LINE_WIDTH))
-  return lines
+  let rest = text
+  while (rest.length > LINE_WIDTH) {
+    const space = rest.lastIndexOf(' ', LINE_WIDTH)
+    const cut = space > 0 ? space : LINE_WIDTH
+    lines.push(rest.slice(0, cut))
+    rest = rest.slice(cut).trimStart()
+  }
+  return [...lines, rest]
 }
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+/** The text of an error for the screen, with every key, token and keyed URL path removed. */
+export function messageOf(error: unknown, knownSecrets: readonly string[] = []): string {
+  return redactSecrets(error instanceof Error ? error.message : String(error), knownSecrets)
 }
 
 /** What the dialog shows before a run. */
@@ -94,25 +96,26 @@ export function ProveModal(props: {
 
   const run = async (direction: 'first-to-second' | 'second-to-first', files: BundledProver) => {
     setPhase({ kind: 'running', startedAt: now() })
+    const seen: string[] = []
     try {
       const setup = await proverSetup.load()
       const store = await proverSetup.openSecretStore({ password: null })
       const resolve = (reference: SecretReference | null, what: string): Promise<string> =>
-        reference === null ? Promise.reject(new Error(`${what} is not set. Open Prover setup (key 6).`)) : resolveSecretReference(reference, { store, environment: proverSetup.environment, run: proverSetup.run })
+        reference === null ? Promise.reject(new Error(`${what} is not set. Open Prover setup (key 6).`)) : resolveSecretReference(reference, { store, environment: proverSetup.environment, run: proverSetup.run }).then((value) => {
+          seen.push(value)
+          return value
+        })
       const rpcUrls: Record<number, string> = {}
       const beaconUrls: Record<number, string> = {}
-      const startBlocks: Record<number, number> = {}
       for (const chain of [pair.first, pair.second]) {
         const endpoints = setup.chains[String(chain.chainId)]
         rpcUrls[chain.chainId] = await resolve(endpoints?.rpc ?? null, `The RPC URL of ${chain.name}`)
         beaconUrls[chain.chainId] = await resolve(endpoints?.beacon ?? null, `The beacon URL of ${chain.name}`)
-        const block = Number(proverSetup.environment[startBlockVariable(chain.chainId)])
-        if (Number.isSafeInteger(block)) startBlocks[chain.chainId] = block
       }
       const result = await proveLocally({
         bundle: files,
         pair,
-        proverPair: toProverPair(pair, { rpcUrls, beaconUrls, startBlocks }),
+        proverPair: toProverPair(pair, { rpcUrls, beaconUrls }),
         direction,
         executor: dependencies.executor,
         baseEnvironment: { PATH: proverSetup.environment.PATH ?? '' },
@@ -124,7 +127,7 @@ export function ProveModal(props: {
       }
       setPhase({ kind: 'finished', message: 'The proof is ready. Press Enter to review the update transaction.', steps: result.steps, review: [{ plan: result.update, skippable: false }] })
     } catch (error) {
-      setPhase({ kind: 'failed', message: messageOf(error) })
+      setPhase({ kind: 'failed', message: messageOf(error, seen) })
     }
   }
 

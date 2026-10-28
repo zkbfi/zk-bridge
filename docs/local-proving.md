@@ -11,24 +11,24 @@ way when you will not trust a remote service, or when no remote prover is availa
 
 | Need | Value | Where it comes from |
 |---|---|---|
-| Memory | At least 16 GiB. Plan for more. | The SP1 hardware page: the last step takes about 14 GiB. |
+| Memory | About 56 GiB. A run on less is likely to fail because memory runs out. | Measured: a real proof peaks at 48 to 56 GiB (`docs/end-to-end-real-proofs.md`). |
 | Processor | 16 cores or more are advised. | The same page. More cores make the proof faster. |
 | Disk | 10 GiB free. | The same page. |
 | Docker | Not needed with a prover built with `sp1-native-gnark`. Needed with a prover built with `sp1` alone. | See "Docker" below. |
 | Go | Needed only to build the prover from source. | The Groth16 step is Go code that the build compiles. |
 
 The terminal checks the memory before it starts. Under 16 GiB it refuses and says so. From 16 GiB to 56 GiB it warns
-and starts when you choose a direction.
+that the run will likely fail, and still starts when you choose a direction. From 56 GiB it shows no warning.
 
 ### How much memory, in practice
 
-The 16 GiB figure is a floor from the vendor page, not a promise. I measured real proofs on a server with 32 threads
-(`docs/end-to-end-real-proofs.md`). One proof of one update took 284 to 322 seconds and peaked between 48 and 56 GiB.
-The same page records the first proof in a process only. The prover keeps memory after a proof, so the terminal runs
-one proof for each process.
+I measured real proofs on a server with 32 threads (`docs/end-to-end-real-proofs.md`). One proof of one update took 284
+to 322 seconds and peaked between 48 and 56 GiB. The prover keeps memory after a proof, so the terminal runs one proof
+for each process.
 
-I have not run a full proof on a computer with 16 GiB. I expect it to be much slower than on the server, or to stop
-when memory runs out. Treat 16 GiB as the least that can work, and 64 GiB as comfortable.
+The vendor page names 16 GiB as the floor, because the last step takes about 14 GiB. That is the least the terminal
+accepts. It is not enough for a whole proof. I have not run a full proof on a computer with less than 56 GiB. A run on
+32 GiB is likely to fail when memory runs out. Use a computer with 64 GiB, or use the remote prover.
 
 ### How long
 
@@ -95,9 +95,9 @@ before you run it.
 The terminal reads the chain addresses from the secret store, as the Prover setup view does (key `6`). Set these:
 
 - the RPC URL and the beacon URL of each chain, in Prover setup;
-- one environment variable for each chain with the first block of its deployment:
-  `ZK_BRIDGE_START_BLOCK_1=<block>` and `ZK_BRIDGE_START_BLOCK_369=<block>`. The prover scans from there. A value that
-  is too low makes the scan slow. A value that is higher than the deployment loses events.
+- the first block of each deployment: the terminal reads `start_block` from the deployment file of the pair, as the
+  prover configuration does. The prover scans from there. A deployment file with no `start_block` for a chain stops the
+  run with "The deployment file names no start_block for <chain>."
 
 Nothing secret goes into a file you write. The terminal reads the URLs at the moment of the run. It puts them in a
 private configuration file (mode 0600) that it deletes when the prover ends.
@@ -118,9 +118,9 @@ If the light client already holds the newest final header, the dialog says so an
 |---|---|
 | One or more of the three files | "Missing next to the terminal program:" and the file names. You cannot start. |
 | Memory under 16 GiB | "A local proof needs at least 16 GiB." You cannot start. |
-| Memory from 16 GiB to 56 GiB | A warning. You can start. |
+| Memory from 16 GiB to 56 GiB | A warning that the run will likely fail. You can still start. |
 | An RPC URL or beacon URL | "The beacon URL of Ethereum is not set. Open Prover setup (key 6)." |
-| A start block | "The start block of Ethereum is not set." |
+| A start block in the deployment file | "The deployment file names no start_block for Ethereum." |
 | Docker, with a prover built with `sp1` alone | The prover fails. The dialog shows the end of its output, which says `docker info` failed. Use a prover built with `sp1-native-gnark`. |
 | Memory runs out during the proof | The prover ends with an error. The dialog shows the end of its output. |
 

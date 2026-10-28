@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { executeCommand } from '@zk-bridge/shared/prover'
 import { FIXTURE_PAIR } from '../../src/data/fixtures'
-import { ProverInputError, checkMachine, locateBundledProver, proveLocally, toProverPair } from '../../src/prove/local-prover'
+import { EXPECTED_PEAK_MEMORY_BYTES, ProverInputError, checkMachine, locateBundledProver, proveLocally, toProverPair } from '../../src/prove/local-prover'
 import { proofPackageText } from '../support/proof-package'
 
 const everything = () => true
@@ -23,25 +23,37 @@ describe('locateBundledProver', () => {
 })
 
 describe('checkMachine', () => {
-  test('refuses under 16 GiB, warns under the size of a large server, and is quiet above it', () => {
-    expect(checkMachine({ totalMemoryBytes: 15.9 * 1024 ** 3 }).blockers[0]).toContain('at least 16 GiB')
-    expect(checkMachine({ totalMemoryBytes: 16 * 1024 ** 3 }).blockers).toEqual([])
-    const warned = checkMachine({ totalMemoryBytes: 32 * 1024 ** 3 })
-    expect(warned.blockers).toEqual([])
-    expect(warned.warnings[0]).toContain('32 GiB')
-    expect(checkMachine({ totalMemoryBytes: 64 * 1024 ** 3 })).toEqual({ blockers: [], warnings: [] })
+  const gibibytes = (count: number) => count * 1024 ** 3
+
+  test('at 15 GiB it refuses to start', () => {
+    const report = checkMachine({ totalMemoryBytes: gibibytes(15) })
+    expect(report.blockers[0]).toContain('at least 16 GiB')
+  })
+
+  test('at 32 GiB it starts but warns that the run will likely fail, because a real proof peaks at 48 to 56 GiB', () => {
+    const report = checkMachine({ totalMemoryBytes: gibibytes(32) })
+    expect(report.blockers).toEqual([])
+    expect(report.warnings[0]).toContain('32 GiB')
+    expect(report.warnings[0]).toContain('48 to 56 GiB')
+    expect(report.warnings[0]).toContain('likely fail')
+  })
+
+  test('at 64 GiB it proceeds with no warning, and exactly 16 GiB is not refused', () => {
+    expect(checkMachine({ totalMemoryBytes: gibibytes(64) })).toEqual({ blockers: [], warnings: [] })
+    expect(checkMachine({ totalMemoryBytes: gibibytes(16) }).blockers).toEqual([])
+    expect(EXPECTED_PEAK_MEMORY_BYTES).toBe(gibibytes(56))
   })
 })
 
 const endpoints = {
   rpcUrls: { 1: 'https://rpc.example/one', 369: 'https://rpc.example/pls' },
   beaconUrls: { 1: 'https://beacon.example/one', 369: 'https://beacon.example/pls' },
-  startBlocks: { 1: 100, 369: 200 },
 }
+const withStartBlocks = { ...FIXTURE_PAIR, first: { ...FIXTURE_PAIR.first, startBlock: 100 }, second: { ...FIXTURE_PAIR.second, startBlock: 200 } }
 
 describe('toProverPair', () => {
   test('keeps the bridge and the light client of each chain and names the sides after the chains', () => {
-    const pair = toProverPair(FIXTURE_PAIR, endpoints)
+    const pair = toProverPair(withStartBlocks, endpoints)
     expect(pair.sides.map((side) => side.name)).toEqual(['ethereum', 'pulsechain'])
     expect(pair.sides[1]!.contracts.lightClient).toBe(FIXTURE_PAIR.second.contracts.lightClient)
     expect(pair.sides[1]!.contracts.bridge).toBe(FIXTURE_PAIR.second.contracts.messageBridge)
@@ -49,8 +61,8 @@ describe('toProverPair', () => {
   })
 
   test('says which endpoint is missing', () => {
-    expect(() => toProverPair(FIXTURE_PAIR, { ...endpoints, beaconUrls: { 1: 'https://b' } })).toThrow(ProverInputError)
-    expect(() => toProverPair(FIXTURE_PAIR, { ...endpoints, startBlocks: {} })).toThrow(/start block of Ethereum/)
+    expect(() => toProverPair(withStartBlocks, { ...endpoints, beaconUrls: { 1: 'https://b' } })).toThrow(ProverInputError)
+    expect(() => toProverPair(FIXTURE_PAIR, endpoints)).toThrow(/no start_block for Ethereum/)
   })
 })
 
@@ -80,7 +92,7 @@ describe('proveLocally', () => {
       stdout: proofPackageText(),
       stderrLines: ['ts=1000 level=info event=prove_started route=ethereum_to_pulsechain', 'ts=1300 level=info event=proof_started program=light-client'],
     })
-    const result = await proveLocally({ ...base, bundle, pair: FIXTURE_PAIR, proverPair: toProverPair(FIXTURE_PAIR, endpoints), direction: 'first-to-second' })
+    const result = await proveLocally({ ...base, bundle, pair: FIXTURE_PAIR, proverPair: toProverPair(withStartBlocks, endpoints), direction: 'first-to-second' })
     if (result.kind !== 'proof') throw new Error('expected a proof')
     expect(result.update.to).toBe(FIXTURE_PAIR.second.contracts.lightClient)
     expect(result.update.functionSignature).toBe('update(bytes,bytes)')
@@ -94,14 +106,14 @@ describe('proveLocally', () => {
 
   test('exit code 3 means the light client is up to date', async () => {
     const { bundle } = workshop({ exitCode: 3, stderrLines: ['ts=5 level=info event=up_to_date head_slot=9'] })
-    const result = await proveLocally({ ...base, bundle, pair: FIXTURE_PAIR, proverPair: toProverPair(FIXTURE_PAIR, endpoints), direction: 'first-to-second' })
+    const result = await proveLocally({ ...base, bundle, pair: FIXTURE_PAIR, proverPair: toProverPair(withStartBlocks, endpoints), direction: 'first-to-second' })
     expect(result.kind).toBe('up-to-date')
   })
 
   test('a failing prover raises an error that holds the end of its standard error', async () => {
     const { bundle } = workshop({ exitCode: 1, stderrLines: ['ts=5 level=error event=out_of_memory'] })
     await expect(
-      proveLocally({ ...base, bundle, pair: FIXTURE_PAIR, proverPair: toProverPair(FIXTURE_PAIR, endpoints), direction: 'first-to-second' }),
+      proveLocally({ ...base, bundle, pair: FIXTURE_PAIR, proverPair: toProverPair(withStartBlocks, endpoints), direction: 'first-to-second' }),
     ).rejects.toThrow(/out_of_memory/)
   })
 })

@@ -75,6 +75,7 @@ function buildChain(side: ChainSide, definition: ChainDefinition, deployment: un
     nativeSymbol: definition.nativeSymbol,
     rpcEnvironmentVariable: rpcVariableName(definition.chainId),
     ...registryRpcUrlOf(section),
+    ...startBlockOf(section),
     contracts: {
       messageBridge: requiredAddress(section, 'bridge', definition.chainId),
       tokenMediator: requiredAddress(section, 'mediator', definition.chainId),
@@ -84,6 +85,13 @@ function buildChain(side: ChainSide, definition: ChainDefinition, deployment: un
       deliveryRouter: optionalAddress(section, 'delivery_router'),
     },
   }
+}
+
+/** The `start_block` of a deployment section, as a one-field object, only when it is a non-negative whole number. */
+function startBlockOf(section: Record<string, unknown>): { readonly startBlock?: number } {
+  const value = section.start_block
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) return {}
+  return { startBlock: value }
 }
 
 /** The `rpc_url` of a deployment section, as a one-field object, only when it is a non-empty http or https URL. */

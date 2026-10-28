@@ -51,14 +51,18 @@ export function locateBundledProver(input: { readonly executablePath: string; re
   }
 }
 
-/** The least memory that a Groth16 proof needs on this computer: 16 GiB. The wrap step alone takes about 14 GiB. */
+/**
+ * The least memory below which the terminal refuses to start: 16 GiB. The vendor page names it as the floor, and the last
+ * Groth16 step alone takes about 14 GiB. A run this small is not expected to finish.
+ */
 export const MINIMUM_MEMORY_BYTES = 16 * 1024 ** 3
 
 /**
- * The memory that one real proof used on a server with 32 threads (56 GiB, `docs/end-to-end-real-proofs.md`). A computer
- * with less memory may still finish, slowly, if it swaps; the screen tells the user so.
+ * The memory that a real CPU proof needs: 56 GiB. Measured on a server with 32 threads: 48 to 56 GiB at the peak, 296
+ * seconds for one update (`docs/end-to-end-real-proofs.md`, runs 1 and 2). Below this the terminal warns that the run is
+ * likely to fail from running out of memory.
  */
-export const COMFORTABLE_MEMORY_BYTES = 56 * 1024 ** 3
+export const EXPECTED_PEAK_MEMORY_BYTES = 56 * 1024 ** 3
 
 /** What the machine check found. */
 export interface MachineReport {
@@ -81,8 +85,8 @@ export function checkMachine(input: { readonly totalMemoryBytes?: number } = {})
   if (total < MINIMUM_MEMORY_BYTES) {
     return { blockers: [`This computer has ${gibibytes} GiB of memory. A local proof needs at least 16 GiB.`], warnings: [] }
   }
-  if (total < COMFORTABLE_MEMORY_BYTES) {
-    return { blockers: [], warnings: [`This computer has ${gibibytes} GiB of memory. A real proof used up to 56 GiB, so this run can be slow.`] }
+  if (total < EXPECTED_PEAK_MEMORY_BYTES) {
+    return { blockers: [], warnings: [`${gibibytes} GiB of memory. A real proof peaks at 48 to 56 GiB. This run will likely fail.`] }
   }
   return { blockers: [], warnings: [] }
 }
@@ -91,8 +95,6 @@ export function checkMachine(input: { readonly totalMemoryBytes?: number } = {})
 export interface ProverEndpoints {
   readonly rpcUrls: Readonly<Record<number, string>>
   readonly beaconUrls: Readonly<Record<number, string>>
-  /** The block of the deployment of each chain. The prover starts its scan there. */
-  readonly startBlocks: Readonly<Record<number, number>>
 }
 
 /** An endpoint or a start block is missing for a chain. */
@@ -105,10 +107,10 @@ const UNUSED_ADDRESS = '0x0000000000000000000000000000000000000000'
 function sideOf(chain: ChainConfig, endpoints: ProverEndpoints): PairSide {
   const rpcUrl = endpoints.rpcUrls[chain.chainId]
   const beaconUrl = endpoints.beaconUrls[chain.chainId]
-  const startBlock = endpoints.startBlocks[chain.chainId]
+  const startBlock = chain.startBlock
   if (rpcUrl === undefined) throw new ProverInputError(`The RPC URL of ${chain.name} is not set.`)
   if (beaconUrl === undefined) throw new ProverInputError(`The beacon URL of ${chain.name} is not set.`)
-  if (startBlock === undefined) throw new ProverInputError(`The start block of ${chain.name} is not set.`)
+  if (startBlock === undefined) throw new ProverInputError(`The deployment file names no start_block for ${chain.name}.`)
   // The prover reads only the bridge and the light client of a side. The other contract fields are not used by it, so
   // they hold the zero address and are never sent anywhere.
   return {
