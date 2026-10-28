@@ -35,12 +35,20 @@ export type GasLimitCheck =
 const callbackGasOf = (withCall: boolean): bigint => (withCall ? CALLBACK_GAS_LIMIT : 0n);
 
 const deployGasOf = (nameAndSymbolBytes: number): bigint => {
+  if (!Number.isInteger(nameAndSymbolBytes) || nameAndSymbolBytes < 0) {
+    throw new RangeError(`nameAndSymbolBytes must be a non-negative whole number, got ${nameAndSymbolBytes}`);
+  }
   const needed = DEPLOY_GAS_BASE + DEPLOY_GAS_PER_BYTE * BigInt(nameAndSymbolBytes);
   return needed > DEPLOY_GAS_LIMIT ? needed : DEPLOY_GAS_LIMIT;
 };
 
 /**
- * The least gas limit that a message of this kind may carry. It is also the default that a request of zero receives.
+ * The least gas limit that a message of this kind may carry. For a token kind it is also the default that a request
+ * of zero receives. For a plain message, 100 is the floor of the message bridge and not a default: the bridge refuses
+ * zero.
+ *
+ * This module states the rule that the contract will enforce. Today the mediator raises a low token request to the
+ * default instead of refusing it, until Task 11 adds `GasLimitBelowMinimum`.
  * @param kind The kind of the message, with the facts that change its minimum.
  */
 export function minimumGasLimitOf(kind: MessageKind): bigint {
@@ -50,13 +58,14 @@ export function minimumGasLimitOf(kind: MessageKind): bigint {
 }
 
 /**
- * Checks a requested gas limit against the rule. A request of zero means the default, which is the minimum.
+ * Checks a requested gas limit against the rule. For a token kind, zero means the default, which is the minimum. For a
+ * plain message, zero is below the minimum, because the message bridge refuses it.
  * @param input The kind of the message and the gas limit that the sender asks for.
  */
 export function checkRequestedGasLimit(input: { kind: MessageKind; requested: bigint }): GasLimitCheck {
   const minimum = minimumGasLimitOf(input.kind);
   const maximum = MAX_GAS_PER_TX;
-  if (input.requested === 0n) return { ok: true, gasLimit: minimum };
+  if (input.requested === 0n && input.kind.kind !== "plain-message") return { ok: true, gasLimit: minimum };
   if (input.requested < minimum) return { ok: false, reason: "below-minimum", minimum, maximum };
   if (input.requested > maximum) return { ok: false, reason: "above-maximum", minimum, maximum };
   return { ok: true, gasLimit: input.requested };

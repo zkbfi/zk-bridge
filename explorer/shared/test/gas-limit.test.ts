@@ -30,6 +30,22 @@ describe("the gas rule", () => {
     });
   });
 
+  it("zero is below the minimum for a plain message, because the bridge refuses it", () => {
+    const kind = { kind: "plain-message" } as const;
+    const refusal = { ok: false, reason: "below-minimum", minimum: 100n, maximum: 10_000_000n };
+    expect(gas.checkRequestedGasLimit({ kind, requested: 0n })).toEqual(refusal);
+    expect(gas.checkRequestedGasLimit({ kind, requested: 99n })).toEqual(refusal);
+    expect(gas.checkRequestedGasLimit({ kind, requested: 100n })).toEqual({ ok: true, gasLimit: 100n });
+  });
+
+  it("refuses a name and symbol length that is not a non-negative whole number", () => {
+    for (const nameAndSymbolBytes of [-1, 1.5, Number.NaN]) {
+      expect(() => gas.minimumGasLimitOf({ kind: "token-deploy", withCall: false, nameAndSymbolBytes })).toThrow(
+        /non-negative whole number/,
+      );
+    }
+  });
+
   it("a request at or above the minimum passes unchanged", () => {
     const kind = { kind: "token-release", withCall: false } as const;
     expect(gas.checkRequestedGasLimit({ kind, requested: 250_000n })).toEqual({ ok: true, gasLimit: 250_000n });
