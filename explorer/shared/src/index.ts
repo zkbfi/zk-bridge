@@ -30,3 +30,4 @@ export * from "./rpc/explorer-api.js";
 export * from "./rpc/explorer-state.js";
 export * from "./fallback.js";
 export * from "./connection.js";
+export * from "./gas-limit.js";
