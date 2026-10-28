@@ -24,6 +24,8 @@ else
   : "${E2E_BACKEND:=oracle}"
   [ "$E2E_BACKEND" = oracle ] || { printf 'e2e: E2E_BACKEND is %s but RUNPOD_API_KEY is not set.\n' "$E2E_BACKEND" >&2; exit 1; }
 fi
+# The TypeScript driver reads this same variable (backendOf), so bash and TypeScript cannot choose differently.
+export E2E_BACKEND
 : "${E2E_PROVER:=prover/target/release/zk-bridge-prover}"
 : "${E2E_SIGNED_BEACON:=prover/target/release/signed-beacon}"
 

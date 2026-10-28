@@ -29,21 +29,36 @@ for name in indexer beacon anvil-b anvil-a; do
   [ ! -f "$E2E_PID_DIR/$name.pid" ] || stop_one "$E2E_PID_DIR/$name.pid"
 done
 
-# Stops what still listens on a port of the run and answers as an e2e service. The state directory may be gone or may belong
-# to another run, so the pid files are not enough. A process is stopped only when its command line matches the service.
-# Arguments: port, pattern of the command line.
+# Stops what still listens on a port of the run, when the process is provably this run's. The state directory may be gone or
+# may belong to another run, so the pid files are not enough. A process is stopped only when its whole command line carries
+# every marker that start.sh and indexer.sh give it. A program of another project on the same port stays alone, and the log
+# says so. After the termination signal the port gets 10 seconds to free up; then a process this run owns is killed.
+# Arguments: port, then one or more markers that the command line must contain.
 stop_listener() {
-  local port="$1" pattern="$2" pid command
+  local port="$1" pid command marker owned tries
+  shift
   for pid in $(lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2> /dev/null || true); do
     command="$(ps -o command= -p "$pid" 2> /dev/null || true)"
-    case "$command" in
-      *$pattern*) kill "$pid" 2> /dev/null && e2e_log "stopped the $pattern listener on port $port (pid $pid)" ;;
-      *) e2e_log "port $port is held by another program (pid $pid); left alone" ;;
-    esac
+    owned=yes
+    for marker in "$@"; do
+      case "$command" in *"$marker"*) ;; *) owned=no ;; esac
+    done
+    if [ "$owned" = no ]; then
+      e2e_log "port $port is held by a program that is not part of this run (pid $pid). Left alone."
+      continue
+    fi
+    kill "$pid" 2> /dev/null || true
+    tries=0
+    while kill -0 "$pid" 2> /dev/null && [ "$tries" -lt 10 ]; do
+      tries=$((tries + 1))
+      sleep 1
+    done
+    kill -0 "$pid" 2> /dev/null && kill -9 "$pid" 2> /dev/null || true
+    e2e_log "stopped the listener on port $port (pid $pid)"
   done
 }
-stop_listener "${E2E_INDEXER_PORT:-42069}" ponder
-stop_listener "$E2E_BEACON_PORT" signed-beacon
-stop_listener "$E2E_RPC_A_PORT" anvil
-stop_listener "$E2E_RPC_B_PORT" anvil
+stop_listener "${E2E_INDEXER_PORT:-42069}" "ponder.js start --port ${E2E_INDEXER_PORT:-42069} --schema e2e" "$PWD/explorer/indexer/node_modules"
+stop_listener "$E2E_BEACON_PORT" "signed-beacon serve --listen 127.0.0.1:$E2E_BEACON_PORT" "--chain a,ethereum,$E2E_RPC_A" "--chain b,pulsechain,$E2E_RPC_B"
+stop_listener "$E2E_RPC_A_PORT" "anvil --host 127.0.0.1 --port $E2E_RPC_A_PORT --chain-id 1 " "--slots-in-an-epoch 1 --mnemonic $E2E_MNEMONIC"
+stop_listener "$E2E_RPC_B_PORT" "anvil --host 127.0.0.1 --port $E2E_RPC_B_PORT --chain-id 369 " "--slots-in-an-epoch 1 --mnemonic $E2E_MNEMONIC"
 e2e_log "everything is stopped"
