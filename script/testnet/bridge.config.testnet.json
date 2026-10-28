@@ -26,7 +26,7 @@
       "failedDeliveryAddress": "0x41A3bf06d129270AB01053E147227c058B3DAfa1"
     },
     "lightClient": {
-      "programVKey": "0x001e477914cbaea2b4b6470e68aecc0d6523a587105bd62ae9e095cbbcacaf71",
+      "programVKey": "0x000854b9b72ab6bfca191c95cb131971a17a458c2faebdd216d9dbe874eb4730",
       "genesisValidatorsRoot": "0xd81664ba97279a6fa0832041b4aee6009172b4750a99467ff670a9faf3a34e64",
       "slotsPerPeriod": "8192",
       "genesisTime": "1681356369",
@@ -63,7 +63,7 @@
       "failedDeliveryAddress": "0x41A3bf06d129270AB01053E147227c058B3DAfa1"
     },
     "lightClient": {
-      "programVKey": "0x001e477914cbaea2b4b6470e68aecc0d6523a587105bd62ae9e095cbbcacaf71",
+      "programVKey": "0x000854b9b72ab6bfca191c95cb131971a17a458c2faebdd216d9dbe874eb4730",
       "genesisValidatorsRoot": "0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078",
       "slotsPerPeriod": "8192",
       "genesisTime": "1655733600",
@@ -85,8 +85,8 @@
       "genesisValidatorsRoot": "0xd81664ba97279a6fa0832041b4aee6009172b4750a99467ff670a9faf3a34e64"
     },
     "observation": {
-      "lightClientProgramVKey": "0x001e477914cbaea2b4b6470e68aecc0d6523a587105bd62ae9e095cbbcacaf71",
-      "observationProgramVKey": "0x00c9e04ffbf75e12edabe0461dd30a2e69ab1100bd52f13d35e1d33b11944cb1",
+      "lightClientProgramVKey": "0x000854b9b72ab6bfca191c95cb131971a17a458c2faebdd216d9dbe874eb4730",
+      "observationProgramVKey": "0x00cc01bed0a69f5f40b56834cb19c6507238301ebb816806c90fd038ba42edf0",
       "genesisValidatorsRoot": "0xd81664ba97279a6fa0832041b4aee6009172b4750a99467ff670a9faf3a34e64",
       "slotsPerPeriod": "8192",
       "genesisTime": "1681356369",
