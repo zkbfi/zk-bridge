@@ -268,7 +268,10 @@ contract MediatorHandler is Test {
         IERC20(token).approve(address(mediator), amount);
         if (receiverSeed % 2 == 0) mediator.relayTokens(token, _actor(receiverSeed), amount);
         if (receiverSeed % 2 == 1) {
-            mediator.relayTokens(token, _actor(receiverSeed), amount, uint256(receiverSeed) * 1_000);
+            // The request is the deploy default and a little more, so that no request is below the default of its kind.
+            mediator.relayTokens(
+                token, _actor(receiverSeed), amount, mediator.DEPLOY_GAS_LIMIT() + uint256(receiverSeed) * 1_000
+            );
         }
         vm.stopPrank();
         _recordSent(bridge, _movedIn(mediator, token, before));

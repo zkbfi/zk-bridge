@@ -131,7 +131,7 @@ export const BridgeForm = ({ variant, pair, tokens, context, account, onReview }
           </>
         ) : null}
         {variant === "tokens" ? (
-          <Field label="Gas limit" hint="Optional. The gas for the delivery on the other chain. Empty uses the default. The mediator uses the larger of your number and the default, and refuses a number above the bridge maximum.">
+          <Field label="Gas limit" hint="Optional. The gas for the delivery on the other chain. Empty uses the default. The number must be at least the default for this kind of message and at most the bridge maximum.">
             {(id) => <TextInput id={id} inputMode="numeric" autoComplete="off" placeholder="Default" value={values.gasLimit} onChange={(event) => setValues({ ...values, gasLimit: event.target.value })} />}
           </Field>
         ) : null}

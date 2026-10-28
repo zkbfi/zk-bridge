@@ -210,6 +210,14 @@ A token transfer gets the gas left minus `TRANSFER_GAS_RESERVE` (60,000) and at 
 |---|---|
 | `TokenMediator.sol` (`TRANSFER_GAS_RESERVE` at line 149, release path) | `mediator/TokenMediatorInvariant.t.sol` `invariant_noDeliveryFails`; `mediator/TokenMediatorHostileGas.t.sol` `test_aTokenThatBurnsAllItsGasEndsWithAFailedRelease`, `test_aTokenThatRevertsOnEveryTransferEndsWithAFailedRelease`, `test_aBlockedRecipientEndsWithAFailedRelease`, `test_theSameTokenIsPaidWhenTheSenderAsksForMoreGas`; `mediator/TokenMediatorDeployGas.t.sol` `test_gasOfEveryLengthDeploysWithinTheRule`; `DeployBridge.t.sol` `test_deployedBridgeLetsThroughTheGasThatTheMediatorNeeds` |
 
+### D4a. A message never carries a gas limit below the default of its kind or above the bridge maximum
+
+A token relay with a gas limit of zero sends the default of its kind (release 250,000; plus the callback 750,000 with a call; a deploy follows the length of the name and the symbol). A request above zero and below the default reverts with `GasLimitBelowMinimum`. A request above `maxGasPerTx()` reverts with `GasLimitAboveBridgeMaximum`. The user call of the router runs inside the call of the mediator, so it never gets more than the message limit.
+
+| Enforced | Tests |
+|---|---|
+| `TokenMediator.sol` `_chooseGasLimit` | `mediator/TokenMediatorGasLimit.t.sol` `test_aRequestBelowTheDefaultIsRefused`, `test_aRequestOfZeroGivesTheDefault`, `test_aRequestAtTheDefaultIsAccepted`, `test_aDeployRequestBelowTheNameRuleIsRefused`, `test_aRequestAboveTheBridgeMaximumIsRefused`; `mediator/TokenMediatorFuzz.t.sol` `testFuzz_everySentLimitIsAtLeastTheKindMinimumAndAtMostTheMaximum`; `mediator/DeliveryRouterCall.t.sol` `test_theUserCallNeverGetsMoreThanTheMessageGasLimit` |
+
 ### D5. A copy lives at the address the factory rule predicts, one copy per (home chain, native token)
 
 | Enforced | Tests |

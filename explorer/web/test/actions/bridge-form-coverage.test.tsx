@@ -160,7 +160,7 @@ describe("the receiver modes without a tip", () => {
     await chooseNoTip();
     await userEvent.selectOptions(screen.getByLabelText("How the receiver gets it"), "call");
     await userEvent.type(screen.getByLabelText("Data for the receiver"), "0xabcd");
-    await userEvent.type(screen.getByLabelText("Gas limit"), "900000");
+    await userEvent.type(screen.getByLabelText("Gas limit"), "1100000");
     const review = screen.getByRole("button", { name: "Review transaction" });
     await waitFor(() => expect(review).toBeEnabled());
     await userEvent.click(review);

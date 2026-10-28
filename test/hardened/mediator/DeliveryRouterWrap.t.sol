@@ -57,18 +57,22 @@ contract DeliveryRouterWrapTest is MediatorFixture {
     }
 
     /// Claim: the wrap and send with a gas limit passes the limit to the mediator, which applies its rule. Shows: a
-    /// request above the default is the gas limit of the message, a request below it gives the default, a request
+    /// request above the default is the gas limit of the message, a request of zero gives the default, a request above zero and below it is refused, a request
     /// above the bridge maximum reverts with the mediator error and the caller keeps the coin, and the payload is
     /// the same as without a limit. Matters: a router user needs the gas option of the mediator.
     function test_wrapAndRelayTokensWithAGasLimitFollowsTheMediatorRule() public {
         vm.startPrank(alice);
         routerA.wrapAndRelayTokens{value: 1 ether}(bob);
         routerA.wrapAndRelayTokens{value: 1 ether}(bob, 3_000_000);
+        routerA.wrapAndRelayTokens{value: 1 ether}(bob, 0);
+        vm.expectRevert(
+            abi.encodeWithSelector(TokenMediator.GasLimitBelowMinimum.selector, 1, mediatorA.DEPLOY_GAS_LIMIT())
+        );
         routerA.wrapAndRelayTokens{value: 1 ether}(bob, 1);
         vm.stopPrank();
         assertEq(ambA.messageAt(0).gasLimit, mediatorA.DEPLOY_GAS_LIMIT(), "the default");
         assertEq(ambA.messageAt(1).gasLimit, 3_000_000, "the request is above the default");
-        assertEq(ambA.messageAt(2).gasLimit, mediatorA.DEPLOY_GAS_LIMIT(), "the request is below the default");
+        assertEq(ambA.messageAt(2).gasLimit, mediatorA.DEPLOY_GAS_LIMIT(), "a request of zero gives the default");
         assertEq(ambA.messageAt(1).data, ambA.messageAt(0).data, "the payload does not change");
 
         uint256 maximum = ambA.maxGasPerTx();
@@ -81,21 +85,21 @@ contract DeliveryRouterWrapTest is MediatorFixture {
 
     /// Claim: the wrap and call with a gas limit passes the limit and the data to the mediator. Shows: the message is
     /// `deployAndHandleBridgedTokensAndCall` with the data, the gas limit is the request when it is above the default,
-    /// and the receiver sees the data. A request below the default gives the default. Empty data is still refused.
+    /// and the receiver sees the data. A request of zero gives the default, and one below it is refused. Empty data is still refused.
     function test_relayTokensAndCallWithAGasLimitFollowsTheMediatorRule() public {
         RecordingReceiver receiver = new RecordingReceiver();
         uint256 callDefault = mediatorA.DEPLOY_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT();
         vm.startPrank(alice);
         routerA.relayTokensAndCall{value: 1 ether}(address(receiver), hex"7777", 5_000_000);
+        routerA.relayTokensAndCall{value: 1 ether}(address(receiver), hex"7777", 0);
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.GasLimitBelowMinimum.selector, 1, callDefault));
         routerA.relayTokensAndCall{value: 1 ether}(address(receiver), hex"7777", 1);
         vm.expectRevert(DeliveryRouter.EmptyData.selector);
         routerA.relayTokensAndCall{value: 1 ether}(address(receiver), "", 5_000_000);
         vm.stopPrank();
         assertEq(ambA.messageAt(0).gasLimit, 5_000_000, "the request is above the default");
-        assertEq(ambA.messageAt(1).gasLimit, callDefault, "the request is below the default");
-        assertEq(
-            _selectorOf(ambA.messageAt(0).data), TokenMediator.deployAndHandleBridgedTokensAndCall.selector
-        );
+        assertEq(ambA.messageAt(1).gasLimit, callDefault, "a request of zero gives the default");
+        assertEq(_selectorOf(ambA.messageAt(0).data), TokenMediator.deployAndHandleBridgedTokensAndCall.selector);
         _deliverAtoB(0);
         assertEq(receiver.lastData(), hex"7777");
         assertEq(receiver.lastValue(), 1 ether);

@@ -25,7 +25,7 @@ const EXPECTED = {
   relayWithGasLimit:
     '0xba4636d600000000000000000000000000000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000abc00000000000000000000000000000000000000000000000000000000002625a000000000000000000000000000000000000000000000000000000000000493e0',
   callWithGasLimit:
-    '0x9223413400000000000000000000000000000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000abc00000000000000000000000000000000000000000000000000000000002625a000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000493e00000000000000000000000000000000000000000000000000000000000000004deadbeef00000000000000000000000000000000000000000000000000000000',
+    '0x9223413400000000000000000000000000000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000abc00000000000000000000000000000000000000000000000000000000002625a000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000f42400000000000000000000000000000000000000000000000000000000000000004deadbeef00000000000000000000000000000000000000000000000000000000',
   pass: '0xdc8601b30000000000000000000000000000000000000000000000000000000000000abc00000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000030d4000000000000000000000000000000000000000000000000000000000000000021234000000000000000000000000000000000000000000000000000000000000',
   wrap: '0xf52cbf0e0000000000000000000000000000000000000000000000000000000000000abc',
   approve:
@@ -62,7 +62,7 @@ describe('planRelay', () => {
   })
 
   test('a call relay with a gas limit plans the five-argument overload', () => {
-    const plan = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'call', data: '0xdeadbeef' }, gasLimit: 300_000n })
+    const plan = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'call', data: '0xdeadbeef' }, gasLimit: 1_000_000n })
     expect(plan.data).toBe(EXPECTED.callWithGasLimit as `0x${string}`)
     expect(plan.functionSignature).toBe('relayTokensAndCall(address,address,uint256,bytes,uint256)')
     expect(plan.arguments.map((argument) => argument.name)).toEqual(['token', 'receiver', 'value', 'data', 'gasLimit'])
@@ -77,6 +77,23 @@ describe('planRelay', () => {
 
   test('refuses a gas limit of zero', () => {
     expect(() => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit: 0n })).toThrow(PlanInputError)
+  })
+
+  test('plan refuses a gas limit below the default of the kind', () => {
+    const plainBelow = () => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit: 249_999n })
+    const callBelow = () => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'call', data: '0xdeadbeef' }, gasLimit: 999_999n })
+    expect(plainBelow).toThrow(PlanInputError)
+    expect(plainBelow).toThrow(/at least 250000/)
+    expect(callBelow).toThrow(/at least 1000000/)
+    const atDefault = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit: 250_000n })
+    expect(atDefault.arguments.find((argument) => argument.name === 'gasLimit')?.value).toBe('250000')
+  })
+
+  test('plan refuses a gas limit above the bridge maximum', () => {
+    const above = () => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit: 10_000_001n })
+    expect(above).toThrow(/at most 10000000/)
+    const atMaximum = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit: 10_000_000n })
+    expect(atMaximum.arguments.find((argument) => argument.name === 'gasLimit')?.value).toBe('10000000')
   })
 
   test('the gas limit plan decodes back to its arguments', () => {

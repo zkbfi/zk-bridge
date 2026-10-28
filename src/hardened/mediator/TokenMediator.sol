@@ -49,7 +49,7 @@ import {TokenReader} from "./TokenReader.sol";
 /// attempt gets the gas that is left, less `TRANSFER_GAS_RESERVE`, so a token that burns all its gas still leaves
 /// enough for the event.
 ///
-/// Gas. The sender chooses the gas limit of a message: the larger of the request and the default of the message kind.
+/// Gas. The sender chooses the gas limit of a message: zero gives the default of the message kind, and a value below that default is refused.
 /// The default of a first message grows with the length of the name and the symbol of the token.
 ///
 /// Divergences from OmniBridge. The handlers also check `messageSourceChainId`. `deploy` takes the native token.
@@ -165,6 +165,9 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
     error ZeroValue(string name);
     /// @notice The largest message of the mediator asks for more gas than the message bridge allows in one call.
     error GasLimitAboveBridgeMaximum(uint256 gasLimit, uint256 maximum);
+    /// @notice The sender asked for a gas limit above zero and below the default of the message kind. The handler on the
+    /// other chain could run out of gas, so the message is never sent.
+    error GasLimitBelowMinimum(uint256 gasLimit, uint256 minimum);
     /// @notice Only the flow limiter may detach itself. After a detach nobody can.
     error NotFlowLimiter(address caller);
     /// @notice The receiver on the other chain is the zero address, or the mediator on the other chain.
@@ -265,10 +268,11 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
 
     /// @notice Relays tokens of the caller to `receiver`, with a gas limit that the caller chooses. New: OmniBridge has
     /// no such function, because its owner sets the gas limits.
-    /// @dev The gas limit of the message is the larger of `gasLimit` and the default of the message. The default of the
-    /// first message of a token also grows with the length of its name and symbol. A value above the maximum of the
-    /// message bridge reverts with `GasLimitAboveBridgeMaximum`.
-    /// @param gasLimit The gas that the call on the other chain gets, at least.
+    /// @dev A `gasLimit` of zero gives the default of the message kind, and that default is also the minimum. The
+    /// default of the first message of a token grows with the length of its name and symbol. A value above zero and
+    /// below the default reverts with `GasLimitBelowMinimum`. A value above the maximum of the message bridge reverts
+    /// with `GasLimitAboveBridgeMaximum`. Otherwise the message carries exactly `gasLimit`.
+    /// @param gasLimit The gas that the call on the other chain gets, or zero for the default.
     function relayTokens(address token, address receiver, uint256 value, uint256 gasLimit) external nonReentrant {
         _pullAndBridge(Relay(token, receiver, "", CallMode.Plain, gasLimit), value);
     }
@@ -289,7 +293,7 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
 
     /// @notice Relays tokens and calls `receiver`, with a gas limit that the caller chooses. The rule of the gas limit
     /// is the one of `relayTokens` with a gas limit.
-    /// @param gasLimit The gas that the call on the other chain gets, at least.
+    /// @param gasLimit The gas that the call on the other chain gets, or zero for the default.
     function relayTokensAndCall(address token, address receiver, uint256 value, bytes calldata data, uint256 gasLimit)
         external
         nonReentrant
@@ -566,11 +570,13 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
         if (mode == CallMode.WithCall) gasLimit += CALLBACK_GAS_LIMIT;
     }
 
-    /// @dev The gas limit of a message: the larger of the request of the sender and the default of the message. A
-    /// value above the maximum of the message bridge reverts with the mediator error, and not with the error of the
-    /// bridge that does not name the rule.
+    /// @dev The gas limit of a message. A request of zero gives the default of the message kind. A request below the
+    /// default reverts with `GasLimitBelowMinimum`, because a handler that gets less gas than its own work needs fails
+    /// for good. A value above the maximum of the message bridge reverts with the mediator error, and not with the
+    /// error of the bridge that does not name the rule.
     function _chooseGasLimit(uint256 requested, uint256 defaultGasLimit) private view returns (uint256 gasLimit) {
-        gasLimit = requested > defaultGasLimit ? requested : defaultGasLimit;
+        if (requested != 0 && requested < defaultGasLimit) revert GasLimitBelowMinimum(requested, defaultGasLimit);
+        gasLimit = requested == 0 ? defaultGasLimit : requested;
         uint256 bridgeMaximum = bridgeContract.maxGasPerTx();
         if (gasLimit > bridgeMaximum) revert GasLimitAboveBridgeMaximum(gasLimit, bridgeMaximum);
     }

@@ -83,38 +83,97 @@ contract TokenMediatorGasLimitTest is MediatorFixture {
         assertEq(_lastGasLimitA(), 4_000_000, "deploy");
     }
 
-    /// Claim: a request below the default cannot lower the gas limit. Shows: zero and one and one less than the default
-    /// all give the default, for a release, a release with a call and a deploy. Matters: a sender must not be able to
-    /// starve the handler of the gas that its own work needs.
-    function test_aRequestBelowTheDefaultGivesTheDefault() public {
+    /// Claim: a request of zero gives the default of the message kind. Shows: a deploy, a deploy with a call, a
+    /// release and a release with a call each send their own default. Matters: zero is the way to say "use the
+    /// default", and the rule that refuses a low request must never refuse it.
+    function test_aRequestOfZeroGivesTheDefault() public {
         vm.startPrank(alice);
         mediatorA.relayTokens(address(tokenA), bob, 1 ether, 0);
-        assertEq(_lastGasLimitA(), mediatorA.DEPLOY_GAS_LIMIT(), "deploy, zero");
-        mediatorA.relayTokens(address(tokenA), bob, 1 ether, 1);
-        assertEq(_lastGasLimitA(), mediatorA.DEPLOY_GAS_LIMIT(), "deploy, one");
-        mediatorA.relayTokensAndCall(
-            address(tokenA), bob, 1 ether, hex"01", mediatorA.DEPLOY_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT() - 1
-        );
-        assertEq(
-            _lastGasLimitA(), mediatorA.DEPLOY_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT(), "deploy and call, one less"
-        );
+        assertEq(_lastGasLimitA(), mediatorA.DEPLOY_GAS_LIMIT(), "deploy");
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, hex"01", 0);
+        assertEq(_lastGasLimitA(), mediatorA.DEPLOY_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT(), "deploy and call");
         vm.stopPrank();
 
         _teachTheNativeSideThatTheCopyExists();
         vm.startPrank(alice);
-        mediatorA.relayTokens(address(tokenA), bob, 1 ether, mediatorA.RELEASE_GAS_LIMIT() - 1);
-        assertEq(_lastGasLimitA(), mediatorA.RELEASE_GAS_LIMIT(), "release, one less");
-        mediatorA.relayTokens(address(tokenA), bob, 1 ether, mediatorA.RELEASE_GAS_LIMIT());
-        assertEq(_lastGasLimitA(), mediatorA.RELEASE_GAS_LIMIT(), "release, equal");
-        mediatorA.relayTokensAndCall(
-            address(tokenA), bob, 1 ether, hex"01", mediatorA.RELEASE_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT() - 1
-        );
-        assertEq(
-            _lastGasLimitA(),
-            mediatorA.RELEASE_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT(),
-            "release and call, one less"
-        );
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether, 0);
+        assertEq(_lastGasLimitA(), mediatorA.RELEASE_GAS_LIMIT(), "release");
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, hex"01", 0);
+        assertEq(_lastGasLimitA(), mediatorA.RELEASE_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT(), "release and call");
         vm.stopPrank();
+    }
+
+    /// Claim: a request at the default is accepted and sent unchanged. Shows: a release with a request of 250,000
+    /// sends 250,000, and a release with a call sends 1,000,000 for a request of 1,000,000. Matters: the minimum is
+    /// inclusive, so the exact default is a valid choice.
+    function test_aRequestAtTheDefaultIsAccepted() public {
+        _teachTheNativeSideThatTheCopyExists();
+        vm.startPrank(alice);
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether, 250_000);
+        assertEq(_lastGasLimitA(), 250_000, "release");
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, hex"01", 1_000_000);
+        assertEq(_lastGasLimitA(), 1_000_000, "release and call");
+        vm.stopPrank();
+    }
+
+    /// Claim: a request above zero and below the default is refused, and nothing moves. Shows: for a release, a
+    /// release with a call, a deploy and a deploy with a call, one gas less than the default, and a request of one,
+    /// revert with `GasLimitBelowMinimum(request, default)`. Matters: a handler that gets less gas than its own work
+    /// needs fails for good, so such a message is never sent.
+    function test_aRequestBelowTheDefaultIsRefused() public {
+        uint256 deployDefault = mediatorA.DEPLOY_GAS_LIMIT();
+        uint256 callbackGas = mediatorA.CALLBACK_GAS_LIMIT();
+        uint256 balanceBefore = tokenA.balanceOf(alice);
+        vm.startPrank(alice);
+        _expectBelow(1, deployDefault);
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether, 1);
+        _expectBelow(deployDefault - 1, deployDefault);
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether, deployDefault - 1);
+        _expectBelow(deployDefault + callbackGas - 1, deployDefault + callbackGas);
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, hex"01", deployDefault + callbackGas - 1);
+        vm.stopPrank();
+        assertEq(tokenA.balanceOf(alice), balanceBefore, "nothing moved");
+        assertEq(ambA.sentCount(), 0, "nothing sent");
+
+        _teachTheNativeSideThatTheCopyExists();
+        uint256 releaseDefault = mediatorA.RELEASE_GAS_LIMIT();
+        vm.startPrank(alice);
+        _expectBelow(249_999, releaseDefault);
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether, 249_999);
+        _expectBelow(releaseDefault + callbackGas - 1, releaseDefault + callbackGas);
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, hex"01", releaseDefault + callbackGas - 1);
+        vm.stopPrank();
+    }
+
+    /// Claim: the minimum of a deploy grows with the name and the symbol, and the request is measured against it.
+    /// Shows: a name and a symbol of 500 bytes together give a default of 2,100,000, so a request of 2,000,000 (the
+    /// base default) is refused with `GasLimitBelowMinimum(2000000, 2100000)`, and 2,100,000 is accepted. Matters: a
+    /// fixed minimum would let a long name through with too little gas to deploy the copy.
+    function test_aDeployRequestBelowTheNameRuleIsRefused() public {
+        MockERC20 longNamed = new MockERC20(_text(250), _text(250));
+        longNamed.mint(alice, 5 ether);
+        vm.startPrank(alice);
+        longNamed.approve(address(mediatorA), type(uint256).max);
+        _expectBelow(2_000_000, 2_100_000);
+        mediatorA.relayTokens(address(longNamed), bob, 1 ether, 2_000_000);
+        mediatorA.relayTokens(address(longNamed), bob, 1 ether, 2_100_000);
+        vm.stopPrank();
+        assertEq(_lastGasLimitA(), 2_100_000, "the rule is the minimum");
+    }
+
+    function _expectBelow(uint256 request, uint256 minimum) internal {
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.GasLimitBelowMinimum.selector, request, minimum));
+    }
+
+    function _text(uint256 length) internal pure returns (string memory) {
+        return string(_filled(length));
+    }
+
+    function _filled(uint256 length) internal pure returns (bytes memory text) {
+        text = new bytes(length);
+        for (uint256 i = 0; i < length; i++) {
+            text[i] = "a";
+        }
     }
 
     /// Claim: a request above the maximum of the bridge is refused with the existing error, and the maximum itself is
@@ -165,7 +224,7 @@ contract TokenMediatorGasLimitTest is MediatorFixture {
         _teachTheNativeSideThatTheCopyExists();
         bytes memory opaque = abi.encodePacked(hex"deadbeef", uint256(7), bytes32(type(uint256).max), hex"00");
         vm.prank(alice);
-        mediatorA.relayTokensAndCall(address(tokenA), address(receiver), 5 ether, opaque, 600_000);
+        mediatorA.relayTokensAndCall(address(tokenA), address(receiver), 5 ether, opaque, 1_000_000);
         uint256 index = _lastIndexA();
         MockAMB.Sent memory message = ambA.messageAt(index);
         assertEq(
@@ -175,7 +234,7 @@ contract TokenMediatorGasLimitTest is MediatorFixture {
             ),
             "the payload"
         );
-        assertEq(message.gasLimit, 1_000_000, "the default of a release with a call is above the request");
+        assertEq(message.gasLimit, 1_000_000, "the request is the default of a release with a call");
 
         (bool ok,) = _deliverAtoB(index);
         assertTrue(ok, "delivered");

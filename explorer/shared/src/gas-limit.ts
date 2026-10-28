@@ -47,8 +47,8 @@ const deployGasOf = (nameAndSymbolBytes: number): bigint => {
  * of zero receives. For a plain message, 100 is the floor of the message bridge and not a default: the bridge refuses
  * zero.
  *
- * This module states the rule that the contract will enforce. Today the mediator raises a low token request to the
- * default instead of refusing it, until Task 11 adds `GasLimitBelowMinimum`.
+ * The mediator enforces the same rule: a token request above zero and below the default reverts with
+ * `GasLimitBelowMinimum`.
  * @param kind The kind of the message, with the facts that change its minimum.
  */
 export function minimumGasLimitOf(kind: MessageKind): bigint {

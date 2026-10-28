@@ -65,4 +65,30 @@ contract TokenMediatorFuzzTest is MediatorFixture {
         assertEq(mediatorA.mediatorBalance(address(taxed)), held, "the record equals the held balance");
         assertEq(_firstMessage().value, held, "the message names what arrived");
     }
+
+    /// Claim: every limit that a relay sends is at least the minimum of its kind and at most the bridge maximum, and a
+    /// relay that cannot meet that rule reverts. Shows: for any request, either the relay reverts with
+    /// `GasLimitBelowMinimum` or `GasLimitAboveBridgeMaximum`, or the message carries a limit inside the range, equal
+    /// to the request when the request is above zero. Matters: this is the one rule of the gas limit, and no value of
+    /// the request may slip past it.
+    function testFuzz_everySentLimitIsAtLeastTheKindMinimumAndAtMostTheMaximum(uint256 request) public {
+        uint256 minimum = mediatorA.DEPLOY_GAS_LIMIT();
+        uint256 maximum = ambA.maxGasPerTx();
+        vm.prank(alice);
+        if (request != 0 && request < minimum) {
+            vm.expectRevert(abi.encodeWithSelector(TokenMediator.GasLimitBelowMinimum.selector, request, minimum));
+        }
+        if (request > maximum) {
+            vm.expectRevert(abi.encodeWithSelector(TokenMediator.GasLimitAboveBridgeMaximum.selector, request, maximum));
+        }
+        mediatorA.relayTokens(address(tokenA), bob, 1 ether, request);
+        if (request != 0 && request < minimum || request > maximum) {
+            assertEq(ambA.sentCount(), 0, "a refused relay sends nothing");
+            return;
+        }
+        uint256 sent = ambA.messageAt(0).gasLimit;
+        assertGe(sent, minimum, "at least the minimum of the kind");
+        assertLe(sent, maximum, "at most the bridge maximum");
+        assertEq(sent, request == 0 ? minimum : request, "zero gives the default and a request is used as it is");
+    }
 }

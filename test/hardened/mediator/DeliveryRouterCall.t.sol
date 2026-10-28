@@ -147,8 +147,7 @@ contract DeliveryRouterCallTest is MediatorFixture {
     /// @dev Calls `onTokenBridged` on the harness router with exactly `gasSupplied`. The router gets the tokens first.
     function _harnessDeliver(bytes memory data, uint256 value, uint256 gasSupplied) internal returns (bool succeeded) {
         harnessToken.mint(address(harnessRouter), value);
-        bytes memory payload =
-            abi.encodeCall(DeliveryRouter.onTokenBridged, (address(harnessToken), value, data));
+        bytes memory payload = abi.encodeCall(DeliveryRouter.onTokenBridged, (address(harnessToken), value, data));
         (succeeded,) = address(harnessRouter).call{gas: gasSupplied}(payload);
     }
 
@@ -195,7 +194,8 @@ contract DeliveryRouterCallTest is MediatorFixture {
     /// the bytes, the sender or the value breaks every integration that relies on the call.
     function test_aCallReachesTheTargetWithTheExactBytesFromTheRouterWithNoCoin() public {
         bytes memory callData = hex"deadbeef00112233445566778899";
-        Vm.Log[] memory logs = _run(_withCall(_director(router.FIXED_FEE(), 3 ether, 0), address(recorder), callData), 100 ether);
+        Vm.Log[] memory logs =
+            _run(_withCall(_director(router.FIXED_FEE(), 3 ether, 0), address(recorder), callData), 100 ether);
 
         assertNotEq(address(recorder), recipient, "the target is not the recipient");
         assertEq(recorder.calls(), 1, "one call");
@@ -270,6 +270,27 @@ contract DeliveryRouterCallTest is MediatorFixture {
         assertLe(failures[0].gasGiven, 500_000 - 10_000, "the reserve is held back");
     }
 
+    /// Claim: the user call never gets more gas than the message limit, however much gas the deliverer supplies.
+    /// Shows: a message with a limit of 1,000,000 executed with 9,000,000 gas lets the target see less than 1,000,000
+    /// at its first instruction. Matters: the bound holds because the bridge calls the mediator with exactly the
+    /// message limit and the user call runs inside that call. This test fails if a change ever gives the user call
+    /// the gas of the deliverer instead.
+    function test_theUserCallNeverGetsMoreThanTheMessageGasLimit() public {
+        uint256 messageGasLimit = 1_000_000;
+        bytes memory data = _withCall(_director(router.FIXED_FEE(), 3 ether, 0), address(recorder), hex"01");
+        address copy = _copyOf(address(tokenA));
+        vm.prank(alice);
+        mediatorB.relayTokensAndCall(copy, address(router), 100 ether, data, messageGasLimit);
+        uint256 index = _lastIndexB();
+        assertEq(ambB.messageAt(index).gasLimit, messageGasLimit, "the message carries the limit");
+
+        vm.prank(executor, executor);
+        router.executeMessage{gas: 9_000_000}(ambA.proofOf(ambB, index));
+
+        assertEq(recorder.calls(), 1, "the call ran");
+        assertLt(recorder.gasAtEntry(), messageGasLimit, "the target sees less than the message limit");
+    }
+
     // ------------------------------------------------------------------------------------------------ 3. burner
 
     /// Claim: a target that burns all its gas cannot stop the router. Shows: with a message gas limit of 5,000,000 and
@@ -306,13 +327,12 @@ contract DeliveryRouterCallTest is MediatorFixture {
     /// target caught them all. Matters: each entry point is a way to move or duplicate funds in the middle of a delivery.
     function test_aTargetThatCallsBackIntoTheRouterFailsOnEveryEntryPoint() public {
         ReentryTarget target = new ReentryTarget(router, address(tokenA), ReentryTarget.Mode.Catch);
-        Vm.Log[] memory logs = _run(_withCall(_director(router.FIXED_FEE(), 3 ether, 0), address(target), hex"01"), 100 ether);
+        Vm.Log[] memory logs =
+            _run(_withCall(_director(router.FIXED_FEE(), 3 ether, 0), address(target), hex"01"), 100 ether);
 
         assertEq(target.entries(), 1);
         assertEq(target.executeMessageFailure(), abi.encodeWithSelector(DeliveryRouter.DeliveryInProgress.selector));
-        assertEq(
-            target.sweepFailure(), abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector)
-        );
+        assertEq(target.sweepFailure(), abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector));
         assertEq(
             target.onTokenBridgedFailure(), abi.encodeWithSelector(DeliveryRouter.NotMediator.selector, address(target))
         );
@@ -327,7 +347,8 @@ contract DeliveryRouterCallTest is MediatorFixture {
     /// must not revert the delivery of an honest recipient.
     function test_aTargetThatDoesNotCatchTheReentryFailureCausesCallFailed() public {
         ReentryTarget target = new ReentryTarget(router, address(tokenA), ReentryTarget.Mode.Uncaught);
-        Vm.Log[] memory logs = _run(_withCall(_director(router.FIXED_FEE(), 3 ether, 0), address(target), hex"01"), 100 ether);
+        Vm.Log[] memory logs =
+            _run(_withCall(_director(router.FIXED_FEE(), 3 ether, 0), address(target), hex"01"), 100 ether);
 
         FailedCall[] memory failures = _failedCalls(logs);
         assertEq(failures.length, 1);
@@ -483,7 +504,8 @@ contract DeliveryRouterCallTest is MediatorFixture {
     /// with `InvalidTerms`, the zero address and 97 tokens; the recorder is not called; no `CallFailed`. Matters: the
     /// terms are invalid, so nothing the sender asked for after the payment may run.
     function test_aZeroRecipientHandsOffAndSkipsTheCall() public {
-        DeliveryRouter.FeeDirector memory director = DeliveryRouter.FeeDirector(address(0), router.FIXED_FEE(), 3 ether, 0);
+        DeliveryRouter.FeeDirector memory director =
+            DeliveryRouter.FeeDirector(address(0), router.FIXED_FEE(), 3 ether, 0);
         uint256 index = _sendBack(tokenA, _withCall(director, address(recorder), hex"01"), 100 ether);
 
         vm.recordLogs();
@@ -526,9 +548,8 @@ contract DeliveryRouterCallTest is MediatorFixture {
     function test_anUnwrappedPaymentIsFollowedByTheCall() public {
         _enterChainBWithWrapped(50 ether);
         bytes memory callData = hex"aabbccdd";
-        bytes memory data = _withCall(
-            _director(router.FIXED_FEE() | router.UNWRAP(), 0.4 ether, 0), address(recorder), callData
-        );
+        bytes memory data =
+            _withCall(_director(router.FIXED_FEE() | router.UNWRAP(), 0.4 ether, 0), address(recorder), callData);
         uint256 index = _sendBack(IERC20(address(weth)), data, 5 ether);
         vm.recordLogs();
         _execute(index);
@@ -607,7 +628,8 @@ contract DeliveryRouterCallTest is MediatorFixture {
         DeliveryRouter.FeeDirector memory director = _director(0, 100 ether, 1 ether);
         CallBurner burner = new CallBurner();
 
-        (uint256 tipQuiet,) = _harnessTip(_withCall(director, address(recorder), hex"01"), 100 ether, 600_000, startingGas);
+        (uint256 tipQuiet,) =
+            _harnessTip(_withCall(director, address(recorder), hex"01"), 100 ether, 600_000, startingGas);
         (uint256 tipBurning, uint256 paidBurning) =
             _harnessTip(_withCall(director, address(burner), hex"01"), 100 ether, 600_000, startingGas);
 
@@ -657,7 +679,8 @@ contract DeliveryRouterCallTest is MediatorFixture {
     /// Claim: a target with no call data makes a call with empty data. Shows: 148 bytes of data make one call, and the
     /// recorder sees empty call data from the router. Matters: the call data may be empty, and the call still runs.
     function test_aTargetWithNoCallDataMakesACallWithEmptyData() public {
-        Vm.Log[] memory logs = _run(_withCall(_director(router.FIXED_FEE(), 1 ether, 0), address(recorder), ""), 10 ether);
+        Vm.Log[] memory logs =
+            _run(_withCall(_director(router.FIXED_FEE(), 1 ether, 0), address(recorder), ""), 10 ether);
 
         assertEq(_failedCalls(logs).length, 0);
         assertEq(recorder.calls(), 1);
@@ -683,8 +706,9 @@ contract DeliveryRouterCallTest is MediatorFixture {
     /// the router. Matters: the bridge stays permissionless, and the call does not need the router to start it.
     function test_aDirectDeliveryTakesNoTipAndStillMakesTheCall() public {
         bytes memory callData = hex"0102030405";
-        uint256 index =
-            _sendBack(tokenA, _withCall(_director(router.FIXED_FEE(), 3 ether, 0), address(recorder), callData), 100 ether);
+        uint256 index = _sendBack(
+            tokenA, _withCall(_director(router.FIXED_FEE(), 3 ether, 0), address(recorder), callData), 100 ether
+        );
         vm.recordLogs();
         _deliverBtoA(index);
 

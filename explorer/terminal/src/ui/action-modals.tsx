@@ -153,7 +153,7 @@ export function BridgeModal(props: ActionModalProps) {
     { kind: 'text', name: DELIVERY_FIELD.callTarget, label: 'Call target (optional)', placeholder: 'blank makes no call', visibleWhen: whenActive(), hint: 'A contract that the router calls once, after it pays the recipient. The call comes from the router and sends no native coin. A gas based tip counts the gas of the call.' },
     { kind: 'text', name: DELIVERY_FIELD.callData, label: 'Call data (optional)', placeholder: '0x… (empty for none)', visibleWhen: whenActive(), hint: 'Hex bytes for the call. It needs a call target. A target with no call data makes a call with empty data.' },
     { kind: 'text', name: DELIVERY_FIELD.recipient, label: 'Fee recipient', placeholder: 'blank is the receiver above', visibleWhen: whenActive(), hint: 'Receives the tokens after the fee. Blank means the receiver above.' },
-    { kind: 'text', name: 'gasLimit', label: 'Gas limit (optional)', placeholder: 'blank uses the default', hint: 'Gas for the release on the other chain. The mediator uses the larger of this and its default, and refuses a value above the bridge maximum.' },
+    { kind: 'text', name: 'gasLimit', label: 'Gas limit (optional)', placeholder: 'blank uses the default', hint: 'Gas for the release on the other chain. It must be at least the default for this kind of message and at most the bridge maximum.' },
   ]
   /** Asks the router for its reward address and its failed delivery address, then builds the review. The read never throws; a failed read becomes a line on the review. */
   const submitBridge = async (values: Values): Promise<void> => {

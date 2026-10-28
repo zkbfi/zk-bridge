@@ -55,7 +55,7 @@ const deliveryFor = (mode: "percentage" | "gas-multiplier" | "fixed" = "percenta
 describe("planBridgeSteps without a delivery fee: calldata equals what the terminal builds", () => {
   it("builds the same steps as the terminal for the same inputs, byte for byte", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
-    for (const form of [values(), values({ mode: "call", data: "0xabcd" }), values({ gasLimit: "900000" }), values({ mode: "call", data: "0xabcd", gasLimit: "900000" })]) {
+    for (const form of [values(), values({ mode: "call", data: "0xabcd" }), values({ gasLimit: "900000" }), values({ mode: "call", data: "0xabcd", gasLimit: "1100000" })]) {
       const web = planBridgeSteps({ values: form, tokens, context, delivery: null });
       const terminal = buildBridgeSteps({ ...form }, tokens, context);
       expect(web.map((step) => step.plan.data)).toEqual(terminal.map((step) => step.plan.data));
@@ -84,10 +84,10 @@ describe("planBridgeSteps without a delivery fee: calldata equals what the termi
   it("plans the gas limit overload of a relay with a call when a gas limit is typed", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
     const amount = parseUnits("250", 6);
-    const [relay] = planBridgeSteps({ values: values({ mode: "call", data: "0xabcd", gasLimit: " 900000 " }), tokens, context, delivery: null });
+    const [relay] = planBridgeSteps({ values: values({ mode: "call", data: "0xabcd", gasLimit: " 1100000 " }), tokens, context, delivery: null });
     expect(relay!.plan.functionSignature).toBe("relayTokensAndCall(address,address,uint256,bytes,uint256)");
     expect(relay!.plan.data).toBe(
-      encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokensAndCall", args: [usdc.address, receiver, amount, "0xabcd", 900_000n] }),
+      encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokensAndCall", args: [usdc.address, receiver, amount, "0xabcd", 1_100_000n] }),
     );
   });
 
@@ -102,6 +102,19 @@ describe("planBridgeSteps without a delivery fee: calldata equals what the termi
     for (const gasLimit of ["abc", "1.5", "-3", "0", "0x10"]) {
       expect(() => planBridgeSteps({ values: values({ gasLimit }), tokens, context, delivery: null })).toThrow(/gas limit must be a whole number above zero/i);
     }
+  });
+
+  it("the bridge form refuses 249999 for a plain release", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+    expect(() => planBridgeSteps({ values: values({ gasLimit: "249999" }), tokens, context, delivery: null })).toThrow(/at least 250000/);
+    const [relay] = planBridgeSteps({ values: values({ gasLimit: "250000" }), tokens, context, delivery: null });
+    expect(relay!.plan.arguments.at(-1)?.value).toBe("250000");
+  });
+
+  it("the bridge form refuses a call below 1000000 and a limit above the bridge maximum", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+    expect(() => planBridgeSteps({ values: values({ mode: "call", data: "0xabcd", gasLimit: "999999" }), tokens, context, delivery: null })).toThrow(/at least 1000000/);
+    expect(() => planBridgeSteps({ values: values({ gasLimit: "10000001" }), tokens, context, delivery: null })).toThrow(/at most 10000000/);
   });
 
   it("puts an exact allowance first when the allowance is too low, and never an unlimited one", async () => {

@@ -23,8 +23,8 @@ import {IWETH} from "./IWETH.sol";
 /// Source side. `wrapAndRelayTokens` and `relayTokensAndCall` follow `WETHOmnibridgeRouter` of OmniBridge
 /// (`contracts/helpers/WETHOmnibridgeRouter.sol`) without its owner, its `claimTokens` and its destination role. They
 /// wrap the coin and relay the wrapped token with `relayTokens` or `relayTokensAndCall` of the mediator. The mediator
-/// pays the receiver only, and a release that the receiver cannot take is final. This router has no fallback option. The entry points with a gas limit pass it to the mediator, which uses the larger of the request
-/// and its default. A receiver that is the zero address or this
+/// pays the receiver only, and a release that the receiver cannot take is final. This router has no fallback option. The entry points with a gas limit pass it to the mediator, which refuses a request above zero and below the default
+/// of the message kind. A receiver that is the zero address or this
 /// router is refused. The router sends nothing that it holds: the wrap and the relay run in one call. There is no second
 /// router for the unwrap: the `UNWRAP` flag and the 20 byte legacy data of `onTokenBridged` do it, so the bridge needs one contract on each chain. The router holds no standing approval: each
 /// wrap approves the mediator for exactly the amount that it wraps, and the mediator takes all of it in the same call, so
@@ -241,7 +241,7 @@ contract DeliveryRouter is ReentrancyGuard {
     }
 
     /// @notice Wraps the coin and relays it to `receiver` on the other chain, with a gas limit that the caller chooses.
-    /// @param gasLimit The gas that the call on the other chain gets, at least. The mediator applies its rule.
+    /// @param gasLimit The gas that the call on the other chain gets, or zero for the default. The mediator applies its rule.
     function wrapAndRelayTokens(address receiver, uint256 gasLimit) external payable {
         _wrapAndRelay(receiver, "", gasLimit);
     }
@@ -256,7 +256,7 @@ contract DeliveryRouter is ReentrancyGuard {
 
     /// @notice Wraps the coin, relays it to `receiver` and calls it with `data`, with a gas limit that the caller
     /// chooses. See `relayTokensAndCall` without a gas limit.
-    /// @param gasLimit The gas that the call on the other chain gets, at least. The mediator applies its rule.
+    /// @param gasLimit The gas that the call on the other chain gets, or zero for the default. The mediator applies its rule.
     function relayTokensAndCall(address receiver, bytes calldata data, uint256 gasLimit) external payable {
         if (data.length == 0) revert EmptyData();
         _wrapAndRelay(receiver, data, gasLimit);
