@@ -23,13 +23,16 @@ roots that the node reports. `pulsechain/light_client_update.json` also holds `s
 (state field 1, 5 entries) and the branch of `fork.current_version` (7 entries) of the same attested state. A beacon node does not
 serve them, and the update parser leaves the branch of `genesis_validators_root` empty, so the tool reads both from the state.
 
-`ethereum/state_proofs.json` and `sepolia/state_proofs.json` are NOT on file yet. Each would map the root of an attested state to the
-branch of `genesis_validators_root` under it. Only the attested state of the PulseChain update is on file; the Sepolia state on file is
-the finalized state, and no Ethereum state is on file, so no branch can be computed offline. Fetch the attested states
+`sepolia/state_proofs.json` maps the root of each attested state of the two Sepolia Gloas updates (slots 11441024 and 11441280) to
+the branch of `genesis_validators_root` under it (5 entries, node 40). It was derived on 2026-10-27 from the attested states served by
+https://lodestar-sepolia.chainsafe.io; the derived roots equal the attested state roots of the updates.
+
+`ethereum/state_proofs.json` is NOT on file yet. No public mainnet beacon node tried on 2026-10-27 serves old debug states
+(lodestar-mainnet answers 403, publicnode 501, ethstaker 500). Fetch the attested states
 (`GET /eth/v2/debug/beacon/states/<state_root>`, SSZ, from a node that keeps them) and run
 `cargo run -p lc-testkit --bin derive-attested-state-proofs -- <ethereum|sepolia> <output-file> <fetched-on> <state.ssz>...`.
-The ignored tests `ethereum_state_proofs_are_on_file`, `sepolia_attested_state_proofs_are_on_file` and `every_golden_case_is_computed`
-fail until the files exist. The real Ethereum and Sepolia tests run a reduced check until then (see `lc_testkit::real_proofs`).
+The ignored tests `ethereum_state_proofs_are_on_file` and `every_golden_case_is_computed` fail until the Ethereum file
+exists. The real Ethereum tests run a reduced check until then (see `lc_testkit::real_proofs`).
 
 ## Real Sepolia Gloas head (`sepolia/gloas_head_*`, `sepolia/gloas_fork_version.json`)
 

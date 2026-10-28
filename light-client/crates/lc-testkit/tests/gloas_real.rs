@@ -155,10 +155,9 @@ fn the_real_anchor_gives_the_real_block_number() {
 }
 
 /// Claim: the branch of `genesis_validators_root` for the real Sepolia head update is on file.
-/// Why it matters: until it is, `a_real_gloas_fold_gives_a_real_execution_block` runs its reduced part. This test is the open
-/// item. It fails until `sepolia/state_proofs.json` holds the branch of the attested state at slot 11441280.
+/// Why it matters: without it, `a_real_gloas_fold_gives_a_real_execution_block` would fall back to its reduced part and the
+/// real Sepolia fold would no longer run end to end.
 #[test]
-#[ignore = "needs sepolia/state_proofs.json: fetch the attested state and run derive-attested-state-proofs"]
 fn sepolia_attested_state_proofs_are_on_file() {
     assert!(has_branch(&with_known_branch(real_update())));
 }
