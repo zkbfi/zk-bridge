@@ -85,6 +85,13 @@ describe("selectDelivery", () => {
     expect(selection.description.certainty).toBe("estimate");
   });
 
+  it("builds a valid delivery for a fixed amount of 0, the way to tip nothing", () => {
+    const selection = available({ mode: "fixed", fixedAmount: 0n, tokenValueInWei: null, senderPrice: null });
+    expect(selection.director.limit).toBe(0n);
+    expect(selection.description.nowUnits).toBe(0n);
+    expect(selection.description.certaintyLabel).toBe("exact");
+  });
+
   it("asks for the price of the sender when a gas multiplier has none", () => {
     const selection = selectDelivery(input({ mode: "gas-multiplier", tokenValueInWei: null, senderPrice: null, token: { symbol: "zkbUSDC", decimals: 6 } }), ROUTERS);
     expect(selection).toEqual({ kind: "unavailable", reason: expect.stringContaining("Enter your price of the native coin") });

@@ -149,6 +149,13 @@ describe('buildDeliveryFeeModel', () => {
     expect(typed.chosen.description.summary).toBe('1.5 zkbUSDC (exact)')
   })
 
+  test('a fixed amount of 0 builds a valid tip of nothing, with no price needed', () => {
+    const zero = readyModel(stateFor({ ...baseValues, feeMode: 'fixed', feeFixed: '0' }, {}))
+    if (zero.chosen.kind !== 'ready') throw new Error('a fixed amount of 0 is allowed')
+    expect(zero.chosen.director.limit).toBe(0n)
+    expect(zero.chosen.description.summary).toBe('0 zkbUSDC (exact)')
+  })
+
   test('a transfer too small to pay for its delivery makes the suggestion unavailable with the reason', () => {
     const { suggestions } = readyModel(stateFor({ ...baseValues, amount: '0.01' }))
     expect(suggestions?.percentage).toEqual({ kind: 'unavailable', mode: 'share', reason: 'the transfer is too small to pay for its delivery' })

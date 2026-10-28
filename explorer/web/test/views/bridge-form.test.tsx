@@ -135,7 +135,7 @@ describe("the bridge form: the tip before any signature", () => {
     await userEvent.clear(screen.getByLabelText("Gas multiplier"));
     await userEvent.type(screen.getByLabelText("Gas multiplier"), "0.1");
     expect(screen.getByLabelText("Gas multiplier")).toHaveValue("0.1");
-    expect(range).toHaveTextContent(/voluntary|any tip from zero up/i);
+    expect(range).toHaveTextContent(/lowest tip is just above zero/i);
   });
 
   it("says in the fee section that a tip is voluntary and buys no promise, and never names proving", async () => {

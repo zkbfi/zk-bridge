@@ -43,6 +43,12 @@ describe("the wording rules about tips", () => {
     for (const text of texts) expect(text).not.toMatch(/proof|prover|proving|graphics|gpu/i);
   });
 
+  it("says plainly that the gas mode cannot tip zero, and how to tip zero", () => {
+    expect(tipCopy.TIP_RANGE_HELP).toContain("lowest tip is just above zero");
+    expect(tipCopy.TIP_RANGE_HELP).toContain("No tip or a fixed amount of 0");
+    expect(tipCopy.TIP_RANGE_HELP).not.toContain("any tip from zero up");
+  });
+
   it("says that a tip is voluntary, goes to the reward address, and buys no promise", () => {
     expect(tipCopy.TIP_NATURE).toContain("reward address");
     expect(tipCopy.TIP_NATURE).toContain("voluntary");

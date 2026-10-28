@@ -4,7 +4,7 @@ The bridge charges no fee. The only extra is the tip for delivery. A tip goes to
 
 ## The tip for delivery
 
-Anyone can deliver a covered transfer. A runner may prefer a transfer with a tip that covers its cost, but no tip is a promise, and nothing makes a delivery wait for a tip. The tip is the one thing that you set. The interface turns the tip on by default. The default is the gas based mode at the base fee, and it equals the measured gas cost of a delivery. Its limit is the price ceiling, at twice the base fee now. The deliverer's gas choice decides how much of the limit the tip takes, so expect the tip to reach the limit. You can edit the tip, change its mode to percentage or fixed, or remove it with the choice "No tip".
+Anyone can deliver a covered transfer. A tip is never a promise, and nothing makes a delivery wait for a tip. The tip is the one thing that you set. The interface turns the tip on by default. The default is the gas based mode at the base fee, and it equals the measured gas cost of a delivery. Its limit is the price ceiling, at twice the base fee now. The deliverer's gas choice decides how much of the limit the tip takes, so expect the tip to reach the limit. You can edit the tip, change its mode to percentage or fixed, or remove it with the choice "No tip".
 
 When you add a call (a Call target and Call data on the bridge form), the tip counts the gas that the call may use. A gas based tip then moves toward its limit. The page Bridging tokens explains the call.
 
@@ -47,9 +47,9 @@ The interface suggests a low range of tips. It is a range, not a price. Each end
 - Suggested: the cost.
 - High: one and a half times the cost.
 
-The range is low on purpose, so that the bridge is cheap next to other bridges. Choose one end with one click, or type your own number. You may set any tip from zero up. A tip below the cost is allowed. Another interface may suggest another range.
+The range is low on purpose, so that the bridge is cheap next to other bridges. Choose one end with one click, or type your own number. In the gas mode the lowest tip is just above zero. For a tip of zero, choose No tip or a fixed amount of 0. A tip below the cost is allowed. Another interface may suggest another range.
 
-A tip below the cost has one effect: a runner that wants its cost back may choose another delivery first. The delivery still works, and anyone can still make it.
+A tip below the cost is allowed and never makes a delivery fail. Anyone can still make the delivery.
 
 ## The modes
 
@@ -106,7 +106,7 @@ The form shows two lines when it knows your coin price. Every line is an estimat
 - Gas cost: the delivery gas, times the base fee plus the priority fee.
 - Margin: the tip minus the gas cost. A margin below zero means that the tip is below the cost. That is allowed.
 
-The suggestion for the fixed amount uses a margin of 10 percent by default. The gas based default is the cost itself, so its margin is zero. A runner that requires a margin above zero may choose another delivery first.
+The suggestion for the fixed amount uses a margin of 10 percent by default. The gas based default is the cost itself, so its margin is zero. A runner sets its own rule about margins.
 
 The cost counts the gas of the delivery only. A tip is not a payment for any other work.
 

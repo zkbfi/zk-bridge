@@ -17,7 +17,7 @@ export const TIP_NATURE =
 
 /** The words about the suggested range of tips. */
 export const TIP_RANGE_HELP =
-  "The suggested tips are a low range: half, one and a half times, and the measured gas cost of a delivery at the base fee. You may set any tip from zero up. A tip below the cost is allowed.";
+  "The suggested tips are a low range: half, one and a half times, and the measured gas cost of a delivery at the base fee. In the gas mode the lowest tip is just above zero. For a tip of zero, choose No tip or a fixed amount of 0. A tip below the cost is allowed.";
 
 /** The names of the three suggested tips, in order from low to high. */
 export const TIP_RANGE_NAMES = { low: "Low", default: "Suggested", high: "High" } as const;

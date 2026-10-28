@@ -58,8 +58,8 @@ User documentation lives in `explorer/web/docs/pages` (see `05-fees-explained.md
 The bridge form has a choice field `Tip for delivery`. It is `Yes` by default, in the gas based mode at the base fee
 (label `Gas, to limit`). The tip equals the measured gas cost at the base fee: the multiplier is your price of one wei of the destination coin, in
 base units of the token, times 1 times 1e18, rounded up. The panel shows a low range of half, one and one and a half
-times that cost. A tip goes to the reward address of the router, it is voluntary, and it buys no promise. You may set any
-tip from zero up. The limit is the tip at the ceiling base fee, which is twice the
+times that cost. A tip goes to the reward address of the router, it is voluntary, and it buys no promise. The gas mode's lowest tip is just above zero; for zero, choose
+`No tip` or a fixed amount of 0. The limit is the tip at the ceiling base fee, which is twice the
 base fee now. You can edit the tip or choose `No tip`. You fix the tip now: nothing at delivery sets or changes the
 rate, and the account that delivers supplies no rate.
 

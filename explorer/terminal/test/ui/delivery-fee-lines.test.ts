@@ -34,7 +34,7 @@ describe('the live panel of the bridge form', () => {
         'Base fee        7 gwei at block 21000000 (2026-10-25T11:59:48.000Z)',
         'Cost            gas 0.00168 PLS + margin -0.00164004 PLS',
         'Tip range       low 2.7125 zkbUSDC, suggested 5.425 zkbUSDC, high 8.1375 zkbUSDC',
-        'The suggested tips are a low range: half, one and a half times, and the measured gas cost of a delivery at the base fee. You may set any tip from zero up. A tip below the cost is allowed.',
+        'The suggested tips are a low range: half, one and a half times, and the measured gas cost of a delivery at the base fee. In the gas mode the lowest tip is just above zero. For a tip of zero, choose No tip or a fixed amount of 0. A tip below the cost is allowed.',
         'A tip goes to the reward address of the delivery router. It is voluntary and it buys no promise. A low tip, or no tip, never makes a delivery fail.',
         'Percentage      4.62 zkbUSDC (exact)  (4.6246246246246247 percent of the transfer)',
         'Fixed           4.62 zkbUSDC (exact)  (a fixed amount)',

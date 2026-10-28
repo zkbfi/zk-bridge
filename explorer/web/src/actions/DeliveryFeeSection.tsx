@@ -135,7 +135,7 @@ const ModeFields = ({ options, onChange }: Pick<TipFieldsProps, "options" | "onC
   return (
     <>
       <Box flex="1 1 8rem">
-        <Field label="Gas multiplier" hint="1 is the cost itself. 0.5 is half of it and 1.5 is one and a half. A tip below the cost is allowed.">
+        <Field label="Gas multiplier" hint="1 is the cost itself. 0.5 is half of it and 1.5 is one and a half. A tip below the cost is allowed. The lowest tip here is just above zero; for zero, choose No tip or a fixed amount of 0.">
           {(id) => <TextInput id={id} inputMode="decimal" value={options.gasMultiplierText} onChange={(event) => onChange({ ...options, gasMultiplierText: event.target.value })} />}
         </Field>
       </Box>
