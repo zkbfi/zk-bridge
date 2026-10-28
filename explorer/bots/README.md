@@ -45,6 +45,8 @@ proving policy. The **bot configuration** adds what only a bot needs. A sample i
 | `publisher.prover.binary`, `.timeoutSeconds` | The `zk-bridge-prover` binary. |
 | `publisher.apiKeyVariable` | The variable that the prover reads the RunPod key from. Default `RUNPOD_API_KEY`. |
 | `publisher.remote` | `{ "mode": "load-balancing" }`. The only mode today. |
+| `publisher.backend` | `remote` (default) or `oracle`. The `oracle` backend is for local testing only. The prover signs with a test key, and only a local chain accepts that signature. Never set it on a live deployment. Only the tests and the end-to-end run set it. |
+| `publisher.oracleKeyVariable` | The variable that holds the test key of the `oracle` backend. Default `ORACLE_KEY`. With `oracle`, the setup file needs no remote prover endpoint and no RunPod key. |
 | `publisher.pollSeconds`, `.republishSeconds`, `.retryBackoffSeconds` | 30, 600 and 120. |
 | `publisher.indexerUrl` | Required when the policy proves when a transfer waits. |
 | `runner.signer` | `private-key`, `keystore`, `mnemonic`, `ledger` or `trezor`, as in the dashboard. |

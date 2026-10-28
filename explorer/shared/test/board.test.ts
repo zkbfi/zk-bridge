@@ -4,10 +4,10 @@ import { fromRLP } from "@msgboard/sdk";
 import { keccak256, stringToBytes, type Hex } from "viem";
 import { WebSocketServer, type WebSocket } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
-import { MessageTooLargeError, createBoardFeed, createBoardPublisher, toHttpUrl, toWebSocketUrl } from "../../src/msgboard/board.ts";
-import { grindInWorker } from "../../src/msgboard/grind.ts";
-import { memoryLogger, word } from "../support/builders.ts";
-import { startFakeBoard } from "../support/fake-board.ts";
+import { MessageTooLargeError, createBoardFeed, createBoardPublisher, toHttpUrl, toWebSocketUrl } from "../src/msgboard/board.js";
+import { grindInWorker } from "../src/msgboard/grind.js";
+import { memoryLogger, word } from "./support/prover-builders.js";
+import { startFakeBoard } from "./support/fake-board.js";
 
 const closers: Array<() => Promise<void> | void> = [];
 afterEach(async () => {

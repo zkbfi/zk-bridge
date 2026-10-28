@@ -9,7 +9,7 @@ import { planBatches } from "./batch-plan.ts";
 import { isFinal, prepareItem, type DeliveryDependencies, type DeliveryOutcome, type Preparation, type ReadyDelivery } from "./delivery.ts";
 import { createPrerequisiteLedger, type BudgetStore, type PrerequisiteLedger } from "./prerequisite-ledger.ts";
 import type { OutcomeSink } from "./outcomes.ts";
-import { assessProofPayload, payloadKey, type ProofRefusal } from "./proof-intake.ts";
+import { assessProofPayload, payloadKey, type ProofRefusal } from "@zk-bridge/shared/prover";
 import { createSerialQueue, type SerialQueue } from "./serial-queue.ts";
 import type { PrerequisiteBudgetState, RunnerState } from "./state.ts";
 import { postUpdate } from "./update.ts";

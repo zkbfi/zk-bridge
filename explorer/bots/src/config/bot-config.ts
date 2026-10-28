@@ -95,6 +95,17 @@ export const publisherSchema = z
       .regex(/^[A-Z][A-Z0-9_]*$/, "must be the NAME of an environment variable in capitals")
       .default("RUNPOD_API_KEY"),
     remote: remoteModeSchema.default({ mode: "load-balancing" }),
+    /**
+     * The proving backend. `remote` is the real one and the default. `oracle` is for local testing only: the prover
+     * signs with a test key, and only a local chain accepts that signature. Set it in tests and in the end-to-end run,
+     * never on a live deployment.
+     */
+    backend: z.enum(["remote", "oracle"]).default("remote"),
+    /** The name of the environment variable that holds the test key of the `oracle` backend. */
+    oracleKeyVariable: z
+      .string()
+      .regex(/^[A-Z][A-Z0-9_]*$/, "must be the NAME of an environment variable in capitals")
+      .default("ORACLE_KEY"),
     /** The seconds between two looks at the chain. */
     pollSeconds: positiveSeconds.default(30),
     /** The seconds after which the latest useful proof is posted again. Messages last about 120 blocks. */

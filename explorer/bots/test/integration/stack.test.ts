@@ -14,14 +14,14 @@ import { startPublisher } from "../../src/publisher/service.ts";
 import { createSerialQueue } from "../../src/runner/serial-queue.ts";
 import { createRunner } from "../../src/runner/runner.ts";
 import { startRunner } from "../../src/runner/service.ts";
-import type { ProverBinary } from "../../src/prover/prover-binary.ts";
+import type { ProverBinary } from "@zk-bridge/shared/prover";
 import { INITIAL_RUNNER_STATE, type RunnerState } from "../../src/runner/state.ts";
 import type { StateStore } from "../../src/runtime/state-file.ts";
 import { ANVIL_MNEMONIC, ACCOUNT, account, buildOracleUpdate, compileStackContracts, startStack, type Stack } from "./support/stack.ts";
 import { waitFor } from "../../../indexer/test/integration/support/processes";
 import { createMnemonicSource } from "../../../terminal/src/signing/mnemonic.ts";
 import { evidenceFor, emptyExecuteMessage, fakeIndexer, fakeProver, feeOfferData, feedItem, memoryLogger, memoryOutcomes } from "../support/builders.ts";
-import { startFakeBoard, type FakeBoard } from "../support/fake-board.ts";
+import { startFakeBoard, type FakeBoard } from "../../../shared/test/support/fake-board.ts";
 import { startFakeIndexer, type FakeIndexer } from "../support/fake-indexer.ts";
 import type { SyntheticArtifacts } from "../../../indexer/test/integration/support/chains";
 

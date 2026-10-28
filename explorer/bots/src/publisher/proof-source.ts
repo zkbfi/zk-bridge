@@ -1,5 +1,5 @@
 import type { ProofDirection } from "@zk-bridge/shared";
-import type { ProveOutcome, ProverBinary } from "../prover/prover-binary.ts";
+import type { ProveOutcome, ProverBinary } from "@zk-bridge/shared/prover";
 
 /**
  * Makes the proof of the next light client update for one direction. The publisher knows only this interface.

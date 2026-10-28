@@ -1,7 +1,18 @@
 import { keccak256, type Hex } from "viem";
-import { tryDecodeProofMessage, type ProofDirection, type ProofMessage } from "@zk-bridge/shared";
-import type { LightClientReader } from "../chain/light-client.ts";
-import type { ProverBinary } from "../prover/prover-binary.ts";
+import { tryDecodeProofMessage, type ProofDirection, type ProofMessage } from "../proof-message.js";
+import type { ProverBinary } from "./prover-binary.js";
+
+/** What the proof check needs to know about the light client on the destination chain. */
+export interface LightClientHead {
+  readonly headSlot: bigint;
+  readonly headRoot: Hex;
+  readonly programKey: Hex;
+}
+
+/** Reads the light client on the destination chain. */
+export interface LightClientReader {
+  read(): Promise<LightClientHead>;
+}
 
 /** Why a proof message is not used. */
 export type ProofRefusal =

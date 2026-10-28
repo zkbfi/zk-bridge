@@ -1,7 +1,7 @@
 import { keccak256 } from "viem";
 import { describe, expect, it } from "vitest";
-import { assessProofPayload, payloadKey } from "../../src/runner/proof-intake.ts";
-import { PROGRAM_KEY, fakeLightClient, fakeProver, proofMessage, proofPayload, word } from "../support/builders.ts";
+import { assessProofPayload, payloadKey } from "../src/prover/proof-intake.js";
+import { PROGRAM_KEY, fakeLightClient, fakeProver, proofMessage, proofPayload, word } from "./support/prover-builders.js";
 
 const assess = (options: { payload?: ReturnType<typeof proofPayload>; pairName?: string; lightClient?: ReturnType<typeof fakeLightClient>; prover?: ReturnType<typeof fakeProver> } = {}) =>
   assessProofPayload({
@@ -58,6 +58,33 @@ describe("the assessment of a proof payload", () => {
       throw "the verifier crashed";
     };
     expect(await assess({ prover })).toEqual({ accept: false, reason: "proof-does-not-verify", detail: "the verifier crashed" });
+  });
+
+  it("refuses a payload that does not decode", async () => {
+    const result = await assess({ payload: "0x1234" });
+    expect(result).toMatchObject({ accept: false, reason: "undecodable" });
+  });
+
+  it("refuses a proof for the other direction", async () => {
+    expect(await assess({ payload: proofPayload({ direction: "second-to-first" }) })).toEqual({ accept: false, reason: "wrong-direction" });
+  });
+
+  it("refuses a proof for another program key, whatever the letter case", async () => {
+    expect(await assess({ lightClient: fakeLightClient({ programKey: word(0x43) }) })).toEqual({ accept: false, reason: "program-key-mismatch" });
+    expect((await assess({ lightClient: fakeLightClient({ programKey: PROGRAM_KEY.toUpperCase().replace("0X", "0x") as typeof PROGRAM_KEY }) })).accept).toBe(true);
+  });
+
+  it("refuses a proof that ends at or before the stored head", async () => {
+    expect(await assess({ lightClient: fakeLightClient({ headSlot: 164n }) })).toEqual({ accept: false, reason: "already-stored" });
+  });
+
+  it("refuses a proof that starts at another slot than the stored head", async () => {
+    expect(await assess({ lightClient: fakeLightClient({ headSlot: 120n }) })).toEqual({ accept: false, reason: "start-slot-differs-from-head" });
+  });
+
+  it("refuses a proof that fails verification, and gives the message of the error", async () => {
+    const prover = fakeProver({ verify: () => { throw new Error("bad proof"); } });
+    expect(await assess({ prover })).toEqual({ accept: false, reason: "proof-does-not-verify", detail: "bad proof" });
   });
 
   it("names the key of a payload by its hash, so that a republished payload has one key", () => {

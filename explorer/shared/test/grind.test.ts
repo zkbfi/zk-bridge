@@ -14,7 +14,7 @@ class FakeWorker extends EventEmitter {
 }
 vi.mock("node:worker_threads", () => ({ Worker: FakeWorker }));
 
-const { GrindError, grindInWorker } = await import("../../src/msgboard/grind.ts");
+const { GrindError, grindInWorker } = await import("../src/msgboard/grind.js");
 
 const input = { boardUrl: "https://node.example/rpc/secret", category: "0xaa", payload: "0xbb", timeoutMilliseconds: 5_000 } as const;
 

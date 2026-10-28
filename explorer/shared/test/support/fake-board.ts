@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { fromRLP } from "@msgboard/sdk";
 import { keccak256, numberToHex, type Hex } from "viem";
 import { WebSocketServer, type WebSocket } from "ws";
-import { word } from "./builders.ts";
+import { word } from "./prover-builders.js";
 
 /** One message as the fake board stores it. */
 export interface StoredMessage {

@@ -1,12 +1,13 @@
+import { readFileSync } from "node:fs";
 import type { PublicClient } from "viem";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { proofCategory } from "@zk-bridge/shared";
 import { BotConfigError } from "../../src/config/bot-config.ts";
-import { grindInWorker } from "../../src/msgboard/grind.ts";
-import type { CommandExecutor, CommandSpec } from "../../src/prover/execute-command.ts";
+import { grindInWorker } from "@zk-bridge/shared/msgboard";
+import type { CommandExecutor, CommandSpec } from "@zk-bridge/shared/prover";
 import { startPublisher, UP_TO_DATE_WAIT_SECONDS, type PublisherOverrides } from "../../src/publisher/service.ts";
 import { PROGRAM_KEY, feedItem, word } from "../support/builders.ts";
-import { startFakeBoard, type FakeBoard } from "../support/fake-board.ts";
+import { startFakeBoard, type FakeBoard } from "../../../shared/test/support/fake-board.ts";
 import { startFakeIndexer, type FakeIndexer } from "../support/fake-indexer.ts";
 import { createServiceWorld, proofPackageJson, type ServiceWorld, type ServiceWorldOptions } from "../support/service-world.ts";
 
@@ -86,6 +87,56 @@ describe("startPublisher refuses an incomplete setup", () => {
   it("requires the indexer when the policy proves for a waiting transfer", async () => {
     const created = await world({ config: publisherConfig, setup: readySetup("x", { policy: { proveWhenTransferWaits: true, intervalSeconds: 0 } }), environment: environmentFor("http://127.0.0.1:1") });
     await expect(start(created, {})).rejects.toThrow("The policy proves when a transfer waits, so publisher.indexerUrl is required.");
+  });
+});
+
+describe("startPublisher with the oracle backend, which is for local testing only", () => {
+  const oracleConfig = { publisher: { ...publisherConfig.publisher, backend: "oracle" } };
+  // Made-up test key with the right shape. It is not a live key.
+  const ORACLE_KEY = `0x${"11".repeat(32)}`;
+
+  it("proves with the oracle, needs no remote endpoint and no RunPod key, and hands the test key over in the environment only", async () => {
+    const node = await board();
+    const created = await world({
+      config: oracleConfig,
+      setup: readySetup(node.url, { endpointUrl: "", runpodApiKey: null }),
+      environment: { BOARD_URL: node.url, PATH: "/custom/bin", ORACLE_KEY },
+    });
+    const configTexts: string[] = [];
+    const specs: CommandSpec[] = [];
+    const executor: CommandExecutor = async (spec) => {
+      specs.push(spec);
+      configTexts.push(readFileSync(spec.args[1]!, "utf8"));
+      return { code: 3, stdout: "", stderr: "" };
+    };
+    await start(created, { executor, publicClient: () => lightClientClient });
+    expect(configTexts[0]).toContain('backend = "oracle"');
+    expect(configTexts[0]).toContain('oracle_key_env = "ORACLE_KEY"');
+    expect(configTexts[0]).not.toContain("remote_url");
+    expect(configTexts[0]).not.toContain(ORACLE_KEY);
+    expect(specs[0]!.environment).toEqual({ PATH: "/custom/bin", ORACLE_KEY });
+    expect(specs[0]!.args.join(" ")).not.toContain(ORACLE_KEY);
+    expect(created.logLines.join("\n")).not.toContain(ORACLE_KEY);
+  });
+
+  it("refuses to start when the variable of the test key is not set", async () => {
+    const node = await board();
+    const created = await world({ config: oracleConfig, setup: readySetup(node.url), environment: { BOARD_URL: node.url } });
+    await expect(start(created, { publicClient: () => lightClientClient })).rejects.toThrow();
+  });
+
+  it("is never the default: without the setting, the publisher uses the remote backend and the oracle variable stays unused", async () => {
+    const node = await board();
+    const created = await world({ config: publisherConfig, setup: readySetup(node.url), environment: { ...environmentFor(node.url), ORACLE_KEY } });
+    expect(created.context.config.publisher?.backend).toBe("remote");
+    const texts: string[] = [];
+    const executor: CommandExecutor = async (spec) => {
+      texts.push(readFileSync(spec.args[1]!, "utf8"));
+      return { code: 3, stdout: "", stderr: "" };
+    };
+    await start(created, { executor, publicClient: () => lightClientClient });
+    expect(texts[0]).toContain('backend = "remote"');
+    expect(texts[0]).not.toContain("oracle");
   });
 });
 

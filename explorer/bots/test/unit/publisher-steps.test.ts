@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { proofCategory } from "@zk-bridge/shared";
 import type { Hex } from "viem";
-import type { ProveOutcome } from "../../src/prover/prover-binary.ts";
+import type { ProveOutcome } from "@zk-bridge/shared/prover";
 import { decideProving } from "../../src/publisher/decisions.ts";
 import { runPublisherStep, type PublisherDependencies } from "../../src/publisher/publisher.ts";
 import { INITIAL_PUBLISHER_STATE, type PublisherState } from "../../src/publisher/state.ts";

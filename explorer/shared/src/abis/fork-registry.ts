@@ -65,6 +65,11 @@ export const forkRegistryAbi = [
         "internalType": "bytes4"
       },
       {
+        "name": "shape",
+        "type": "uint8",
+        "internalType": "uint8"
+      },
+      {
         "name": "slot",
         "type": "uint64",
         "internalType": "uint64"
@@ -131,6 +136,25 @@ export const forkRegistryAbi = [
   },
   {
     "type": "function",
+    "name": "shapeOf",
+    "inputs": [
+      {
+        "name": "version",
+        "type": "bytes4",
+        "internalType": "bytes4"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "shape",
+        "type": "uint8",
+        "internalType": "uint8"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "verifier",
     "inputs": [],
     "outputs": [
@@ -151,6 +175,12 @@ export const forkRegistryAbi = [
         "type": "bytes4",
         "indexed": true,
         "internalType": "bytes4"
+      },
+      {
+        "name": "shape",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "uint8"
       },
       {
         "name": "slot",

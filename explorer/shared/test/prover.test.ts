@@ -3,15 +3,15 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { decodeLightClientOutput, encodeProofMessage, loadPair, type Pair } from "@zk-bridge/shared";
+import { decodeLightClientOutput, encodeProofMessage, loadPair, type Pair } from "../src/index.js";
 import type { Hex } from "viem";
-import { executeCommand } from "../../src/prover/execute-command.ts";
-import { ProverCommandError, createProverBinary } from "../../src/prover/prover-binary.ts";
-import { describeRoute, renderProverConfig } from "../../src/prover/prover-config.ts";
-import { assessProofPayload } from "../../src/runner/proof-intake.ts";
-import { fakeLightClient, memoryLogger } from "../support/builders.ts";
+import { executeCommand } from "../src/prover/execute-command.js";
+import { ProverCommandError, createProverBinary } from "../src/prover/prover-binary.js";
+import { describeRoute, renderProverConfig } from "../src/prover/prover-config.js";
+import { assessProofPayload } from "../src/prover/proof-intake.js";
+import { fakeLightClient, memoryLogger } from "./support/prover-builders.js";
 
-const REPOSITORY = new URL("../../../../", import.meta.url).pathname;
+const REPOSITORY = new URL("../../../", import.meta.url).pathname;
 const REAL_BINARY = join(REPOSITORY, "prover/target/release/zk-bridge-prover");
 const FIXTURE = join(REPOSITORY, "test/hardened/fixtures/sp1-proof-ethereum-update.json");
 

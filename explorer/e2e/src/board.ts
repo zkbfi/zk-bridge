@@ -6,7 +6,7 @@
  * Usage: `bun run src/board.ts <file>`. It writes its URL to the file and runs until it is stopped.
  */
 import { writeFileSync } from "node:fs";
-import { startFakeBoard } from "../../bots/test/support/fake-board";
+import { startFakeBoard } from "../../shared/test/support/fake-board";
 
 const [file] = process.argv.slice(2);
 if (file === undefined) {

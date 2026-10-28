@@ -3,11 +3,11 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadPair, type Pair } from "@zk-bridge/shared";
-import type { CommandExecutor, CommandSpec } from "../../src/prover/execute-command.ts";
-import { EXIT_UP_TO_DATE, ProverCommandError, ProverOutputError, createProverBinary } from "../../src/prover/prover-binary.ts";
-import { describeRoute, renderProverConfig } from "../../src/prover/prover-config.ts";
-import { evidenceFor, memoryLogger, word } from "../support/builders.ts";
+import { loadPair, type Pair } from "../src/index.js";
+import type { CommandExecutor, CommandSpec } from "../src/prover/execute-command.js";
+import { EXIT_UP_TO_DATE, ProverCommandError, ProverOutputError, createProverBinary } from "../src/prover/prover-binary.js";
+import { describeRoute, renderProverConfig } from "../src/prover/prover-config.js";
+import { evidenceFor, memoryLogger, word } from "./support/prover-builders.js";
 
 function section(chainId: number, seed: number) {
   const make = (offset: number) => `0x${(seed + offset).toString(16).padStart(2, "0").repeat(20)}`;
@@ -50,7 +50,7 @@ interface Seen {
   readonly configPath: string | null;
 }
 
-async function setup(answer: { code: number; stdout?: string; stderr?: string }, extra: { backend?: typeof remote | null; secret?: boolean; defaultDirectory?: boolean } = {}) {
+async function setup(answer: { code: number; stdout?: string; stderr?: string }, extra: { backend?: typeof remote | null; secret?: boolean; defaultDirectory?: boolean; handoff?: { webhookUrl: string; bearerVariable: string } } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "prover-binary-"));
   scratch.push(directory);
   const seen: Seen[] = [];
@@ -73,6 +73,7 @@ async function setup(answer: { code: number; stdout?: string; stderr?: string },
     backend: extra.backend === undefined ? remote : extra.backend,
     proverSecret: extra.secret === true ? { variable: "RUNPOD_API_KEY", value: "rpa_TESTONLY1234567890abcdefghijkl" } : null,
     baseEnvironment: { PATH: "/usr/bin" },
+    ...(extra.handoff === undefined ? {} : { handoff: extra.handoff }),
     ...(extra.defaultDirectory === true ? {} : { temporaryDirectory: join(directory, "nested") }),
     logger,
   });
@@ -206,6 +207,41 @@ describe("verify", () => {
   ])("rejects %s, even though the exit code is 0", async (_name, body) => {
     const { binary } = await setup({ code: 0, stdout: JSON.stringify(body) });
     await expect(binary.verify(request)).rejects.toThrow(new ProverOutputError("verify printed an unexpected answer"));
+  });
+});
+
+describe("the prover configuration of the sp1 backend and the webhook", () => {
+  const route = describeRoute(pair, "first-to-second");
+
+  it("renderProverConfig writes the sp1 backend with both program file paths", () => {
+    const text = renderProverConfig(route, { kind: "sp1", lightClientElfPath: "/opt/programs/light-client", observationElfPath: "/opt/programs/observation" });
+    expect(text).toContain('backend = "sp1"');
+    expect(text).toContain('sp1_elf_path = "/opt/programs/light-client"');
+    expect(text).toContain('sp1_observation_elf_path = "/opt/programs/observation"');
+    expect(text).not.toContain("remote_url");
+  });
+
+  it("refuses a program path that would break out of its quotes", () => {
+    expect(() => renderProverConfig(route, { kind: "sp1", lightClientElfPath: 'a"b', observationElfPath: "/b" })).toThrow("light client program path holds a character");
+  });
+
+  it("renderProverConfig writes the webhook target and the bearer variable name, never a token", () => {
+    const text = renderProverConfig(route, remote, { webhookUrl: "https://publisher.example.org/proofs", bearerVariable: "PROOF_HANDOFF_TOKEN" });
+    expect(text).toContain('targets = ["stdout", "webhook"]');
+    expect(text).toContain('webhook_url = "https://publisher.example.org/proofs"');
+    expect(text).toContain('webhook_bearer_env = "PROOF_HANDOFF_TOKEN"');
+  });
+
+  it("writes only the standard output target when no handoff is given", () => {
+    const text = renderProverConfig(route, remote);
+    expect(text).toContain('targets = ["stdout"]');
+    expect(text).not.toContain("webhook");
+  });
+
+  it("passes the handoff of the wrapper into the file of a prove run", async () => {
+    const { binary, seen } = await setup({ code: 3 }, { handoff: { webhookUrl: "https://publisher.example.org/proofs", bearerVariable: "PROOF_HANDOFF_TOKEN" } });
+    await binary.prove({ direction: "first-to-second" });
+    expect(seen[0]!.configText).toContain('webhook_bearer_env = "PROOF_HANDOFF_TOKEN"');
   });
 });
 

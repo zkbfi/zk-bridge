@@ -30,26 +30,9 @@ export const beaconForkGateAbi = [
         "internalType": "uint64"
       },
       {
-        "name": "supportedVersions_",
-        "type": "tuple[]",
-        "internalType": "struct BeaconForkGate.SupportedVersion[]",
-        "components": [
-          {
-            "name": "version",
-            "type": "bytes4",
-            "internalType": "bytes4"
-          },
-          {
-            "name": "stateDepth",
-            "type": "uint8",
-            "internalType": "uint8"
-          }
-        ]
-      },
-      {
-        "name": "sealDepths_",
-        "type": "uint8[]",
-        "internalType": "uint8[]"
+        "name": "genesisValidatorsRoot_",
+        "type": "bytes32",
+        "internalType": "bytes32"
       },
       {
         "name": "forkRegistry_",
@@ -68,32 +51,6 @@ export const beaconForkGateAbi = [
         "name": "",
         "type": "address",
         "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "MAX_STATE_DEPTH",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint8",
-        "internalType": "uint8"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "MAX_SUPPORTED_VERSIONS",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -139,19 +96,6 @@ export const beaconForkGateAbi = [
   },
   {
     "type": "function",
-    "name": "PROGRESSIVE_STATE_DEPTH",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint8",
-        "internalType": "uint8"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "admit",
     "inputs": [
       {
@@ -162,6 +106,19 @@ export const beaconForkGateAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "allowedShapes",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint8[]",
+        "internalType": "uint8[]"
+      }
+    ],
+    "stateMutability": "pure"
   },
   {
     "type": "function",
@@ -274,6 +231,19 @@ export const beaconForkGateAbi = [
   },
   {
     "type": "function",
+    "name": "genesisValidatorsRoot",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "isSealed",
     "inputs": [],
     "outputs": [
@@ -326,19 +296,6 @@ export const beaconForkGateAbi = [
   },
   {
     "type": "function",
-    "name": "sealDepths",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "depths",
-        "type": "uint8[]",
-        "internalType": "uint8[]"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "secondsPerSlot",
     "inputs": [],
     "outputs": [
@@ -359,31 +316,6 @@ export const beaconForkGateAbi = [
         "name": "",
         "type": "uint64",
         "internalType": "uint64"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "supportedVersions",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "versions",
-        "type": "tuple[]",
-        "internalType": "struct BeaconForkGate.SupportedVersion[]",
-        "components": [
-          {
-            "name": "version",
-            "type": "bytes4",
-            "internalType": "bytes4"
-          },
-          {
-            "name": "stateDepth",
-            "type": "uint8",
-            "internalType": "uint8"
-          }
-        ]
       }
     ],
     "stateMutability": "view"
@@ -495,17 +427,6 @@ export const beaconForkGateAbi = [
   },
   {
     "type": "error",
-    "name": "DuplicateSupportedVersion",
-    "inputs": [
-      {
-        "name": "version",
-        "type": "bytes4",
-        "internalType": "bytes4"
-      }
-    ]
-  },
-  {
-    "type": "error",
     "name": "ForkNotConfirmed",
     "inputs": [
       {
@@ -554,6 +475,11 @@ export const beaconForkGateAbi = [
   },
   {
     "type": "error",
+    "name": "GenesisValidatorsRootBranchInvalid",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "HeaderNotInCurrentEpoch",
     "inputs": [
       {
@@ -586,8 +512,29 @@ export const beaconForkGateAbi = [
   },
   {
     "type": "error",
-    "name": "NoUnsupportedObservation",
+    "name": "NoDisallowedObservedShape",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ObservedShapeNotAllowed",
+    "inputs": [
+      {
+        "name": "version",
+        "type": "bytes4",
+        "internalType": "bytes4"
+      },
+      {
+        "name": "shape",
+        "type": "uint8",
+        "internalType": "uint8"
+      },
+      {
+        "name": "slot",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ]
   },
   {
     "type": "error",
@@ -623,10 +570,10 @@ export const beaconForkGateAbi = [
   },
   {
     "type": "error",
-    "name": "StateDepthOutOfRange",
+    "name": "ShapeIsAllowed",
     "inputs": [
       {
-        "name": "depth",
+        "name": "shape",
         "type": "uint8",
         "internalType": "uint8"
       }
@@ -634,50 +581,12 @@ export const beaconForkGateAbi = [
   },
   {
     "type": "error",
-    "name": "TooManySupportedVersions",
+    "name": "ShapeNotAllowed",
     "inputs": [
       {
-        "name": "count",
+        "name": "depth",
         "type": "uint256",
         "internalType": "uint256"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "UnsupportedObservedVersion",
-    "inputs": [
-      {
-        "name": "version",
-        "type": "bytes4",
-        "internalType": "bytes4"
-      },
-      {
-        "name": "slot",
-        "type": "uint64",
-        "internalType": "uint64"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "UnsupportedVersion",
-    "inputs": [
-      {
-        "name": "version",
-        "type": "bytes4",
-        "internalType": "bytes4"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "VersionIsSupported",
-    "inputs": [
-      {
-        "name": "version",
-        "type": "bytes4",
-        "internalType": "bytes4"
       }
     ]
   },

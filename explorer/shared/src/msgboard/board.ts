@@ -1,7 +1,7 @@
 import { createClient, http, hexToBytes, type Hex } from "viem";
 import { MsgBoardWsClient } from "@msgboard/sdk/ws";
-import type { Logger } from "../logging/logger.ts";
-import type { GrindFunction } from "./grind.ts";
+import type { LogSink } from "../log-sink.js";
+import type { GrindFunction } from "./grind.js";
 
 /** One message as the runner sees it. */
 export interface BoardMessage {
@@ -51,7 +51,7 @@ export interface BoardPublisherInput {
   readonly maximumMessageBytes: number;
   readonly grind: GrindFunction;
   readonly grindTimeoutMilliseconds: number;
-  readonly logger: Logger;
+  readonly logger: LogSink;
 }
 
 /** The scheme of the socket that matches an endpoint: `https` becomes `wss`, `http` becomes `ws`. */
@@ -98,7 +98,7 @@ export function createBoardPublisher(input: BoardPublisherInput): BoardPublisher
 export interface BoardFeedInput {
   readonly boardUrl: string;
   readonly reconnectDelayMilliseconds: number;
-  readonly logger: Logger;
+  readonly logger: LogSink;
 }
 
 /**

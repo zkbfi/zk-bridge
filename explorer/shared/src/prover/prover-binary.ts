@@ -2,17 +2,18 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hex } from "viem";
-import type { Pair, ProofDirection } from "@zk-bridge/shared";
-import type { Logger } from "../logging/logger.ts";
-import type { CommandExecutor } from "./execute-command.ts";
+import type { Pair } from "../pairs.js";
+import type { ProofDirection } from "../proof-message.js";
+import type { LogSink } from "../log-sink.js";
+import type { CommandExecutor } from "./execute-command.js";
 import {
   evidencePackageSchema,
   proofPackageSchema,
   verifyResultSchema,
   type EvidencePackage,
   type ProofPackage,
-} from "./packages.ts";
-import { describeRoute, renderProverConfig, type BackendSection } from "./prover-config.ts";
+} from "./packages.js";
+import { describeRoute, renderProverConfig, type BackendSection, type HandoffSection } from "./prover-config.js";
 
 /** The exit code of `prove` when the starting head already is the newest final header. */
 export const EXIT_UP_TO_DATE = 3;
@@ -75,12 +76,14 @@ export interface ProverBinaryInput {
   readonly timeoutMilliseconds: number;
   /** The `prove` backend. Null for a runner, which never proves. */
   readonly backend: BackendSection | null;
+  /** Also send each proof package to a webhook. The bearer token travels in `baseEnvironment`, never in the file. */
+  readonly handoff?: HandoffSection;
   /** The variable and value that the prover reads its proving key from. Passed in the child environment only. */
   readonly proverSecret: { readonly variable: string; readonly value: string } | null;
   /** The variables that the child needs to find its libraries, such as `PATH`. */
   readonly baseEnvironment: Readonly<Record<string, string>>;
   readonly temporaryDirectory?: string;
-  readonly logger: Logger;
+  readonly logger: LogSink;
 }
 
 const STDERR_TAIL = 1500;
@@ -117,7 +120,7 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary {
     const directory = await mkdtemp(join(parent, "zk-bridge-bot-"));
     try {
       const path = join(directory, "prover.toml");
-      await writeFile(path, renderProverConfig(route, backend), { mode: 0o600 });
+      await writeFile(path, renderProverConfig(route, backend, input.handoff), { mode: 0o600 });
       return await use(path, route.name);
     } finally {
       await rm(directory, { recursive: true, force: true });

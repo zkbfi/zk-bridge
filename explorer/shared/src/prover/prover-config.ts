@@ -1,21 +1,39 @@
-import type { Pair, PairSide, ProofDirection } from "@zk-bridge/shared";
-import type { RemoteMode } from "../config/bot-config.ts";
+import type { Pair, PairSide } from "../pairs.js";
+import type { ProofDirection } from "../proof-message.js";
 
 /** The proving backend section of the prover configuration file. */
 export type BackendSection =
   | {
       /** The remote graphics processor backend. Today the load balancing endpoint is the only mode. */
       readonly kind: "remote";
-      readonly mode: RemoteMode;
+      readonly mode: { readonly mode: "load-balancing" };
       readonly endpoint: string;
       /** The NAME of the variable that carries the key. The key itself never enters the file. */
       readonly apiKeyVariable: string;
     }
   | {
-      /** The development backend. Only a local chain accepts its proofs. Tests use it. */
+      /**
+       * The development backend. Only a local chain accepts its proofs. It is for local testing only: no setting
+       * chooses it unless a test or the end-to-end run asks for it by name.
+       */
       readonly kind: "oracle";
       readonly keyVariable: string;
+    }
+  | {
+      /** The production backend that proves on the local processor, from two compiled program files. */
+      readonly kind: "sp1";
+      readonly lightClientElfPath: string;
+      readonly observationElfPath: string;
     };
+
+/**
+ * Where the prover also sends each finished package, besides standard output. The bearer token itself never enters the
+ * file: `bearerVariable` is the NAME of the variable that holds it.
+ */
+export interface HandoffSection {
+  readonly webhookUrl: string;
+  readonly bearerVariable: string;
+}
 
 /** One direction of a pair, as the prover configuration file describes a route. */
 export interface RouteDescription {
@@ -51,12 +69,28 @@ function quoted(value: string, field: string): string {
 }
 
 function backendLines(backend: BackendSection): readonly string[] {
+  if (backend.kind === "sp1") {
+    return [
+      'backend = "sp1"',
+      `sp1_elf_path = ${quoted(backend.lightClientElfPath, "light client program path")}`,
+      `sp1_observation_elf_path = ${quoted(backend.observationElfPath, "observation program path")}`,
+    ];
+  }
   if (backend.kind === "oracle") return ['backend = "oracle"', `oracle_key_env = ${quoted(backend.keyVariable, "oracle key variable")}`];
   // The only mode today is the load balancing endpoint. A queue mode adds its keys here.
   return [
     'backend = "remote"',
     `remote_url = ${quoted(backend.endpoint, "remote endpoint")}`,
     `remote_api_key_env = ${quoted(backend.apiKeyVariable, "remote key variable")}`,
+  ];
+}
+
+function handoffLines(handoff: HandoffSection | undefined): readonly string[] {
+  if (handoff === undefined) return ['targets = ["stdout"]'];
+  return [
+    'targets = ["stdout", "webhook"]',
+    `webhook_url = ${quoted(handoff.webhookUrl, "webhook url")}`,
+    `webhook_bearer_env = ${quoted(handoff.bearerVariable, "webhook bearer variable")}`,
   ];
 }
 
@@ -67,9 +101,10 @@ function backendLines(backend: BackendSection): readonly string[] {
  *
  * @param route The route and its two sides.
  * @param backend The backend for a `prove` run, or null for the commands that need none.
+ * @param handoff Also send each package to a webhook. Used only with a backend.
  * @throws Error when a value holds a quote, a backslash or a line break.
  */
-export function renderProverConfig(route: RouteDescription, backend: BackendSection | null): string {
+export function renderProverConfig(route: RouteDescription, backend: BackendSection | null, handoff?: HandoffSection): string {
   const { source, destination } = route;
   const chainKind = (PROVER_CHAIN_KINDS as Readonly<Record<number, string>>)[source.chainId];
   if (chainKind === undefined) {
@@ -77,7 +112,7 @@ export function renderProverConfig(route: RouteDescription, backend: BackendSect
   }
   if (source.beaconUrl === null) throw new Error(`the ${source.name} side has no beacon endpoint`);
   const lines: string[] = [];
-  if (backend !== null) lines.push("[prover]", ...backendLines(backend), "", "[handoff]", 'targets = ["stdout"]', "");
+  if (backend !== null) lines.push("[prover]", ...backendLines(backend), "", "[handoff]", ...handoffLines(handoff), "");
   lines.push(
     `[routes.${route.name}.source]`,
     `chain_id = ${source.chainId}`,

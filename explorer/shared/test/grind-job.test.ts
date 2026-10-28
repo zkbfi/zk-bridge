@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { runGrindJob, type GrindBoard } from "../../src/msgboard/grind-job.mjs";
+import { runGrindJob, type GrindBoard } from "../src/msgboard/grind-job.mjs";
 
 const job = { category: "0xcategory", payload: "0xpayload" };
 

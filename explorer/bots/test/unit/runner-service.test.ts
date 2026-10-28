@@ -6,11 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { proofCategory } from "@zk-bridge/shared";
 import { signerFromPrivateKeyText } from "../../../terminal/src/signing/key-sources.ts";
 import { BotConfigError, parseBotConfig } from "../../src/config/bot-config.ts";
-import type { BoardFeed, BoardMessage } from "../../src/msgboard/board.ts";
+import type { BoardFeed, BoardMessage } from "@zk-bridge/shared/msgboard";
 import { LockHeldError } from "../../src/runtime/lock-file.ts";
 import { deliverySettingsOf, startRunner, type RunnerOverrides } from "../../src/runner/service.ts";
 import { PROGRAM_KEY, fakeProver, proofPayload, word } from "../support/builders.ts";
-import { startFakeBoard, type FakeBoard } from "../support/fake-board.ts";
+import { startFakeBoard, type FakeBoard } from "../../../shared/test/support/fake-board.ts";
 import { startFakeIndexer, type FakeIndexer } from "../support/fake-indexer.ts";
 import { createServiceWorld, type ServiceWorld, type ServiceWorldOptions } from "../support/service-world.ts";
 

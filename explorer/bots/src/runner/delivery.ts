@@ -3,8 +3,7 @@ import { deliveryRouterAbi, messageBridgeAbi, tokenFactoryAbi, type PayoutKind, 
 import { sendTerms, worstCaseCostWei, type FeeQuote, type ReceiptLog, type TransactionPort } from "../chain/transactions.ts";
 import type { FeedItem, IndexerClient } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
-import type { EvidencePackage, Prerequisite } from "../prover/packages.ts";
-import type { ProverBinary } from "../prover/prover-binary.ts";
+import type { EvidencePackage, Prerequisite, ProverBinary } from "@zk-bridge/shared/prover";
 import type { PrerequisiteLedger } from "./prerequisite-ledger.ts";
 import { decideDelivery, feeGasUnitsOf, payoutOfOffer, readFeeOffer, valueFeeInWei, type FeeOffer } from "./fee.ts";
 import type { SourceReader } from "./source-reader.ts";
