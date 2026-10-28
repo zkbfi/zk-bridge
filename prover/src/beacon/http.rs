@@ -1175,6 +1175,15 @@ mod tests {
     /// root and lies 1000 slots earlier, so the store (the current committee) comes from the real state. Returns the
     /// source, the head, and the hash of the execution header.
     fn real_gloas_source(with_headers: bool) -> (HttpBeaconSource, StoredHead, B256) {
+        let (source, stored, hash, _) = real_gloas_source_with_store(with_headers);
+        (source, stored, hash)
+    }
+
+    /// Like [`real_gloas_source`], and also returns the memory store that holds the real branch of
+    /// `genesis_validators_root`, so a test can corrupt the stored entry.
+    fn real_gloas_source_with_store(
+        with_headers: bool,
+    ) -> (HttpBeaconSource, StoredHead, B256, Arc<MemoryBranchStore>) {
         let update: serde_json::Value = serde_json::from_slice(
             &std::fs::read(sepolia_fixtures().join("gloas_head_finality_update.json")).unwrap(),
         )
@@ -1205,22 +1214,22 @@ mod tests {
             (format!("/eth/v2/debug/beacon/states/{state_root}"), state),
         ]);
         let hash = lc_core::execution::execution_block_hash(&rlp);
-        // The fixtures hold the finalized state only. The attested state of the real update is not on file, so its branch of
-        // `genesis_validators_root` cannot be computed. The store gets a placeholder of the right length (5 entries for a
-        // Gloas state). The placeholder is wrong, so the program refuses the fold at that check, after the finality and
-        // committee branches. The tests below rely on that.
+        // The fixtures hold the finalized state only, so the prover cannot compute the branch of `genesis_validators_root`
+        // under the attested state. The fixture file `sepolia/state_proofs.json` holds the real branch for that root. The
+        // store gets it, as the prover keeps it in production, and the plan reads it from there.
         let attested_state_root: B256 = update["response"]["data"]["attested_header"]["beacon"]
             ["state_root"]
             .as_str()
             .unwrap()
             .parse()
             .unwrap();
+        let real_branch =
+            lc_testkit::real_proofs::known_genesis_validators_root_branch(&attested_state_root)
+                .expect("the fixture holds the real branch for the attested state root");
         let branches = Arc::new(MemoryBranchStore::new());
-        branches
-            .put(attested_state_root, vec![B256::ZERO; 5])
-            .unwrap();
+        branches.put(attested_state_root, real_branch).unwrap();
         let mut source =
-            source_over_node(ChainKind::Sepolia, Node(pages)).with_branch_store(branches);
+            source_over_node(ChainKind::Sepolia, Node(pages)).with_branch_store(branches.clone());
         if with_headers {
             source = source.with_execution_headers(Box::new(OneHeader { hash, rlp }));
         }
@@ -1229,16 +1238,20 @@ mod tests {
             root: head_root,
             next_committee_hash: B256::ZERO,
         };
-        (source, stored, hash)
+        (source, stored, hash, branches)
     }
 
     /// Claim: the plan for a REAL Sepolia Gloas head carries a finalized header anchored in its real state, with the real
-    /// execution header RLP, and the check of the program on that header passes and reports the block that
-    /// `state.latest_block_hash` names, with its number from the RLP. Why it matters: this is what the prover sends to the
-    /// guest on Sepolia.
+    /// execution header RLP. The native check of the program ACCEPTS the update, and reports the block that
+    /// `state.latest_block_hash` names, with a non-zero number from the RLP. The prover reads the real branch of
+    /// `genesis_validators_root` from its store. One flipped entry in the stored branch gives exactly
+    /// `InvalidGenesisValidatorsRootBranch`.
+    /// Why it matters: this is what the prover sends to the guest on Sepolia. The accept shows that the finality, committee,
+    /// root branch and signature checks all pass on real data. The control shows that the accept depends on the stored
+    /// branch, and that a bad entry stalls the update instead of giving a false head.
     #[test]
     fn a_gloas_plan_anchors_the_finalized_header_in_the_real_state() {
-        let (source, stored, hash) = real_gloas_source(true);
+        let (source, stored, hash, _) = real_gloas_source_with_store(true);
         let plan = source.plan_update(&stored).unwrap().expect("a plan");
         let finalized = &plan.input.steps[0].update.finalized_header;
         assert_eq!(finalized.execution_block_hash(), hash);
@@ -1248,10 +1261,22 @@ mod tests {
             .expect("the anchored header passes the check of the program");
         assert_eq!(anchored.block_hash, hash);
         assert_ne!(anchored.block_number, 0);
-        // The real attested state is not on file, so the branch of `genesis_validators_root` is a placeholder. The program
-        // runs the finality and committee checks before that branch, so this exact refusal shows that they passed.
+        let output = verify_update_natively(&plan.input)
+            .expect("the program accepts the update with the real branch");
+        assert_eq!(output.executionBlockHash, hash);
+        assert_ne!(output.executionBlockNumber, 0);
+
+        // Control: the same source with one flipped entry in the stored branch is refused at the root branch check.
+        let (corrupt_source, corrupt_stored, _, corrupt_branches) =
+            real_gloas_source_with_store(true);
+        let attested_state_root = plan.input.steps[0].update.attested_header.beacon.state_root;
+        corrupt_branches.corrupt(&attested_state_root);
+        let corrupt_plan = corrupt_source
+            .plan_update(&corrupt_stored)
+            .unwrap()
+            .expect("a plan");
         assert_eq!(
-            verify_update_natively(&plan.input).unwrap_err(),
+            verify_update_natively(&corrupt_plan.input).unwrap_err(),
             Error::VerificationRefused(
                 lc_core::Error::InvalidGenesisValidatorsRootBranch.to_string()
             )
