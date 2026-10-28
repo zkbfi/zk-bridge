@@ -265,6 +265,13 @@ describe("the oracle form of the proof message, for local testing only", () => {
     expect(tryDecodeProofMessage(encoded.slice(0, -2) as Hex, { acceptOracleProof: true })).toMatchObject({ reason: "truncated" });
   });
 
+  it("refuses a 532 byte payload whose version byte says 1, with or without the option", () => {
+    const encoded = encodeProofMessage(oracle(), { acceptOracleProof: true });
+    const disguised = `0x01${encoded.slice(4)}` as Hex;
+    expect(tryDecodeProofMessage(disguised)).toMatchObject({ ok: false, reason: "truncated" });
+    expect(tryDecodeProofMessage(disguised, { acceptOracleProof: true })).toMatchObject({ ok: false, reason: "truncated" });
+  });
+
   it("refuses a version that no form has", () => {
     const encoded = encodeProofMessage(sample());
     expect(tryDecodeProofMessage(`0x03${encoded.slice(4)}`, { acceptOracleProof: true })).toMatchObject({ reason: "wrong-version" });

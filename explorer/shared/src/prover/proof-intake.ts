@@ -47,6 +47,11 @@ export interface AssessInput {
   readonly acceptOracleProof?: boolean;
 }
 
+/** True when the first byte of the payload is the version of the oracle form. */
+function isOracleVersion(payload: Hex): boolean {
+  return payload.toLowerCase().startsWith(`0x0${ORACLE_PROOF_MESSAGE_VERSION}`);
+}
+
 /**
  * Decides whether a message from the board is a proof that this runner can post now. The checks run from the cheapest
  * to the most costly, and the proof check runs last, because it spawns a process:
@@ -60,12 +65,20 @@ export interface AssessInput {
  * The chain stays the final check: `update` verifies the proof again.
  */
 export async function assessProofPayload(input: AssessInput): Promise<ProofAssessment> {
-  const decoded = tryDecodeProofMessage(input.payload, { acceptOracleProof: true });
-  if (!decoded.ok) return { accept: false, reason: "undecodable", detail: decoded.reason };
+  const acceptOracleProof = input.acceptOracleProof === true;
+  const decoded = tryDecodeProofMessage(input.payload, { acceptOracleProof });
+  if (!decoded.ok) {
+    // Name the refusal of the oracle form, so an operator can tell it from a broken payload.
+    if (decoded.reason === "wrong-version" && isOracleVersion(input.payload)) return { accept: false, reason: "oracle-proof-not-accepted" };
+    return { accept: false, reason: "undecodable", detail: decoded.reason };
+  }
   const message = decoded.message;
-  // The intake reads the oracle form so that it can name the refusal, and then makes its own decision. The decoder
-  // refuses the form too when its option is off, so no single check is the only gate.
-  if (message.version === ORACLE_PROOF_MESSAGE_VERSION && input.acceptOracleProof !== true) return { accept: false, reason: "oracle-proof-not-accepted" };
+  // A second gate behind the decoder, which already refuses the oracle form when the option is off. The decoder
+  // makes this line unreachable today; it stays so that a change of the decoder cannot open the gate alone.
+  /* v8 ignore next 3 */
+  if (message.version === ORACLE_PROOF_MESSAGE_VERSION && !acceptOracleProof) {
+    return { accept: false, reason: "oracle-proof-not-accepted" };
+  }
   if (message.pair !== input.pairName) return { accept: false, reason: "wrong-pair" };
   if (message.direction !== input.direction) return { accept: false, reason: "wrong-direction" };
   let state;

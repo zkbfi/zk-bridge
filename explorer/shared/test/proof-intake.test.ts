@@ -99,6 +99,12 @@ describe("the assessment of a proof payload", () => {
       expect(prover.verifications).toBe(0);
     });
 
+    it("refuses it when the option is a value that is not the literal true, such as the text yes", async () => {
+      const prover = fakeProver();
+      const result = await assessProofPayload({ payload: oraclePayload(), pairName: "eth-pls", direction: "first-to-second", lightClient: fakeLightClient(), prover, acceptOracleProof: "yes" as unknown as boolean });
+      expect(result).toEqual({ accept: false, reason: "oracle-proof-not-accepted" });
+    });
+
     it("accepts it only with the option true, and skips the local Groth16 check, which cannot judge it", async () => {
       const prover = fakeProver({ verify: () => { throw new Error("must not run"); } });
       const result = await withOption(true)(prover);
