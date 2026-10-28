@@ -42,6 +42,19 @@ Use it when the receiver is a contract that must act on the tokens. The interfac
 
 A second form adds a gas limit after the call data.
 
+### The call after the delivery
+
+The form has two optional fields for a call: Call target and Call data. They work with the delivery router and with a tip.
+
+- **Call target.** The address of a contract on the destination chain. After the router pays the recipient, the router calls this contract. Leave the field empty for no call.
+- **Call data.** The bytes that the router sends to the call target, in hex, such as `0xabcd`. Empty data is allowed. The router then calls the target with no data.
+
+The call comes from the router, not from you or from the recipient. It sends no native coin. It runs only after the payment succeeded.
+
+The call gets all the gas that is left, less 10,000 gas that the router keeps to finish. A call that fails does not undo the delivery. The recipient keeps the tokens, and the router emits the event `CallFailed`.
+
+The call has a cost. The tip counts the gas that the call may use. A gas based tip is higher when you add a call, and it can reach its limit. The page Fees explained covers the tip.
+
 ### The gas limit
 
 The form has an optional field named Gas limit. Leave it empty to use the default gas for the kind of message. This plans the functions without a gas limit.

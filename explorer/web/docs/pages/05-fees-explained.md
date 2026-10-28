@@ -6,6 +6,8 @@ The bridge charges no fee. The only fee is the voluntary tip for delivery. The t
 
 A runner delivers a covered transfer when the tip pays for the work. The tip is the one thing that you set. The interface turns the tip on by default. The default is the gas based mode at the base fee, with a margin of 100 percent. Its limit is the price ceiling, at twice the base fee now. The deliverer's gas choice decides how much of the limit the tip takes, so expect the tip to reach the limit. You can edit the tip, change its mode to percentage or fixed, or remove it with the choice "No tip".
 
+When you add a call (a Call target and Call data on the bridge form), the tip counts the gas that the call may use. A gas based tip then moves toward its limit. The page Bridging tokens explains the call.
+
 You fix the tip when the transfer leaves. Nothing at delivery sets or changes it. The deliverer supplies no rate.
 
 The interface sends your tokens to a router on the destination chain, with `relayTokensAndCall`. The router is the receiver of that call. Your tip settings travel in the call data. When you choose "No tip", the interface involves no router at all. It sends a plain relay (`relayTokens`) with no fee terms, and the tokens go straight to the receiver. No router can take a fee. Anyone can still deliver the message directly on the bridge, for free, but it may take longer. The confirm dialog says that no router is involved.
