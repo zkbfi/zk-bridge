@@ -84,10 +84,14 @@ describe("the delivery decision", () => {
     expect(decide(1_200n)).toEqual({ deliver: true, costWei: 1_000n, lossWei: -200n });
   });
 
-  it("asks for a tip above the cost when the allowed loss is 0 percent, because a loss of exactly the limit is left out", () => {
+  it("asks for a tip that covers the cost when the allowed loss is 0 percent: break-even delivers, one wei below does not", () => {
     expect(decide(1_001n, 0).deliver).toBe(true);
-    expect(decide(1_000n, 0).deliver).toBe(false);
+    expect(decide(1_000n, 0)).toEqual({ deliver: true, costWei: 1_000n, lossWei: 0n });
     expect(decide(999n, 0).deliver).toBe(false);
+  });
+
+  it("treats a tip of nothing on a cost above zero as a full loss, whatever the limit below 100 percent", () => {
+    expect(decide(0n, 99).deliver).toBe(false);
   });
 
   it("delivers anything when the allowed loss is 100 percent, except a tip of nothing", () => {

@@ -305,7 +305,7 @@ The pair `sepolia-pls943` is in `explorer/shared/src/pairs.ts`. Set `"pair": "se
 - `publisher.prover.binary` and `runner.prover.binary`: the path in `$PROVER`.
 - `runner.signer`: a reference to the runner key, for example `op://<vault>/<item>/<field>`. Never put the key itself in the file.
 - `runner.rewardAddress`: the reward address of step 4.
-- `runner.minimumMarginWei`: `0` for the first run, so a fee that only covers the cost still delivers.
+- `runner.maximumLossPercent`: `0` for the first run, so a fee that only covers the cost still delivers.
 
 Set the endpoint variables, then start both bots in two terminals.
 

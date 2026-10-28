@@ -152,12 +152,13 @@ export type DeliveryDecision =
   | { readonly deliver: false; readonly costWei: bigint; readonly lossWei: bigint };
 
 /**
- * Delivers when the loss stays under the share of the cost that the setting allows: `(cost - fee) * 100` is less than
- * `maximumLossPercent * cost`. A loss of exactly that share is left out, so a setting of 0 asks for a tip above the cost.
+ * Delivers when there is no loss (the tip is at or above the cost), and otherwise when the loss stays under the share of
+ * the cost that the setting allows: `(cost - fee) * 100` is less than `maximumLossPercent * cost`. A loss of exactly that
+ * share is left out. A tip of nothing on a cost above zero is a full loss.
  */
 export function decideDelivery(input: DeliveryDecisionInput): DeliveryDecision {
   const { costWei, feeWei } = input;
   const lossWei = costWei - feeWei;
-  const deliver = lossWei * 100n < BigInt(input.maximumLossPercent) * costWei;
+  const deliver = lossWei <= 0n || lossWei * 100n < BigInt(input.maximumLossPercent) * costWei;
   return { deliver, costWei, lossWei };
 }

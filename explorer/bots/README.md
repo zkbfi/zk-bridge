@@ -121,8 +121,8 @@ For each direction:
      delivery must supply for that limit (`requiredDeliveryGas`: the limit, one sixty-third of it, one unit and 100000 of
      overhead) plus `proofCheckGas`.
    - Gas cost = gas × (base fee + priority fee). Deliver only when the loss is under the limit: (cost − fee) × 100 is less
-     than `maximumLossPercent` × cost. A loss of exactly the limit is left out, so a limit of 0 asks for a tip above the
-     cost. Otherwise skip with `loss-at-or-above-limit`. The first check uses the assumed gas and needs no evidence. The
+     than `maximumLossPercent` × cost. A fee at or above the cost always delivers. A loss of exactly the limit is left out, so a limit of 0
+     delivers at break-even and not below. Otherwise skip with `loss-at-or-above-limit`. The first check uses the assumed gas and needs no evidence. The
      second check uses the gas of the simulation.
    - Build the evidence with `zk-bridge-prover evidence`. The log index inside the receipt comes from the source receipt.
      Skip when the bridge shows the message as delivered.

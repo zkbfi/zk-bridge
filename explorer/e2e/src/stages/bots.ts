@@ -86,7 +86,7 @@ export const writeBotConfiguration = async (context: Context, indexerUrl: string
           indexerUrl,
           signer: { kind: "private-key", key: "env:E2E_RUNNER_KEY" },
           pollSeconds: 5,
-          minimumMarginWei: "0",
+          maximumLossPercent: 0,
           deliverWithoutOffer: false,
           multicall3: context.run.multicall3,
           tokenValuationsWei: valuations,
