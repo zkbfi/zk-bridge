@@ -1,8 +1,8 @@
 import { Box, Button, Flex, Heading, Table, Text } from "@chakra-ui/react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { isAddress } from "viem";
-import { MESSAGE_STATUSES, parseHistoryCursor, type HistoryEvent, type HistoryFilters } from "@zk-bridge/shared";
+import { DEFAULT_MAXIMUM_BLOCKS, MESSAGE_STATUSES, parseHistoryCursor, picksMessagesOnly, type HistoryEvent, type HistoryFilters } from "@zk-bridge/shared";
 import { formatRoute } from "../app/route";
 import { useServices } from "../app/services";
 import { loadSharedPair } from "../config/environment";
@@ -15,11 +15,14 @@ import {
   EMPTY_HISTORY_FILTERS,
   EVENT_KIND_LABELS,
   formatHistoryQuery,
-  leavesOutHeadUpdates,
   readHistory,
   secondsOfDate,
   type HistoryDependencies,
+  type ScanRequest,
 } from "./history-model";
+
+/** A scan of the chains stays fresh this long. After that, a poll reads the chains again. */
+const SCAN_FRESH_MILLISECONDS = 60_000;
 
 /** Props of {@link HistoryView}. */
 export type HistoryViewProps = {
@@ -73,10 +76,21 @@ export const HistoryView = ({ filters, onChange, dependencies }: HistoryViewProp
   const { pair, configuration, connection } = useServices();
   const [addressText, setAddressText] = useState(filters.address ?? "");
   const [tokenText, setTokenText] = useState(filters.token ?? "");
-  const reads = useMemo(() => dependencies ?? defaultHistoryDependencies(() => loadSharedPair(configuration)), [dependencies, configuration]);
+  const queryClient = useQueryClient();
+  const [maximumBlocks, setMaximumBlocks] = useState(DEFAULT_MAXIMUM_BLOCKS);
+  // The scan of the chains is kept under a key that holds no filter and no page, so a filter or a page never reads the
+  // chains again.
+  const reads = useMemo(
+    () => ({
+      ...(dependencies ?? defaultHistoryDependencies(() => loadSharedPair(configuration))),
+      scanOf: (request: ScanRequest) =>
+        queryClient.fetchQuery({ queryKey: ["history-scan", request.key], queryFn: () => request.load(request.signal), staleTime: SCAN_FRESH_MILLISECONDS }),
+    }),
+    [dependencies, configuration, queryClient],
+  );
   const query = useQuery({
-    queryKey: ["history", formatHistoryQuery(filters)],
-    queryFn: () => readHistory({ connection: (connection as NonNullable<typeof connection>).connection(), filters, dependencies: reads }),
+    queryKey: ["history", formatHistoryQuery(filters), String(maximumBlocks)],
+    queryFn: ({ signal }) => readHistory({ connection: (connection as NonNullable<typeof connection>).connection(), filters, dependencies: reads, maximumBlocks, signal }),
     enabled: connection !== null,
     refetchInterval: filters.cursor === null ? 15_000 : false,
     placeholderData: (previous) => previous,
@@ -218,7 +232,7 @@ export const HistoryView = ({ filters, onChange, dependencies }: HistoryViewProp
         </Flex>
       </form>
 
-      {leavesOutHeadUpdates(filters) ? (
+      {picksMessagesOnly(filters) ? (
         <Notice tone="info">
           Head updates are not listed while a filter on message kind, status, token or address is on, because a head update belongs to no message. Head updates are not missing.
         </Notice>
@@ -231,6 +245,15 @@ export const HistoryView = ({ filters, onChange, dependencies }: HistoryViewProp
           {reading.unappliedFilters.length === 0 ? "" : ` The chains cannot apply these filters, so they are off: ${reading.unappliedFilters.join(", ")}.`}
         </Notice>
       ) : null}
+
+      {reading === undefined || reading.readBack.length === 0 ? null : (
+        <Notice tone="info">
+          {reading.readBack.map((entry) => `Read back to block ${entry.block} on ${chainNameOf(pair, entry.chainId)}.`).join(" ")} Older events are not listed.{" "}
+          <Button size="xs" variant="outline" onClick={() => setMaximumBlocks(maximumBlocks + DEFAULT_MAXIMUM_BLOCKS)}>
+            Read further back
+          </Button>
+        </Notice>
+      )}
 
       <Panel title="Events">
         {connection !== null && reading === undefined && query.error === null ? <Text color="fg.muted" fontSize="sm">Loading…</Text> : null}

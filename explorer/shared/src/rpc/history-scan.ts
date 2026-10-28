@@ -24,10 +24,34 @@ export type HistoryScanInput = {
    * means the whole history since the deployment.
    */
   readonly fromBlock: bigint;
+  /**
+   * The most blocks to read on each chain, counted back from its latest block. The scan stops at the first window
+   * that reaches this count. Default {@link DEFAULT_MAXIMUM_BLOCKS}.
+   */
+  readonly maximumBlocks?: bigint;
+  /** When it aborts, the scan stops before its next request and throws the reason of the signal. */
+  readonly signal?: AbortSignal;
+};
+
+/** The default for {@link HistoryScanInput.maximumBlocks}. */
+export const DEFAULT_MAXIMUM_BLOCKS = 200_000n;
+
+/** How far back the scan read on one chain. */
+export type ChainCoverage = {
+  readonly chainId: number;
+  /** The lowest block that the scan read. */
+  readonly scannedFromBlock: bigint;
+  /** True when the scan reached the start of the history, so nothing older exists to read. */
+  readonly reachedStart: boolean;
 };
 
 /** The history that the chains give directly. It is always partial: see {@link scanHistory}. */
-export type HistoryScan = { readonly items: HistoryEvent[]; readonly partial: true };
+export type HistoryScan = {
+  readonly items: HistoryEvent[];
+  readonly partial: true;
+  /** How far back each chain was read, so a page can say where its history starts. */
+  readonly coverage: readonly ChainCoverage[];
+};
 
 const readerOf = (input: HistoryScanInput, side: PairSide): ChainReader => {
   const reader = input.readers.get(side.chainId);
@@ -35,9 +59,10 @@ const readerOf = (input: HistoryScanInput, side: PairSide): ChainReader => {
   return reader;
 };
 
-/** Reads every log of the sources of one side, from the start block to the latest block. */
+/** Reads the logs of one side from the latest block back, until the start block or the block limit. */
 const logsOfSide = async (input: HistoryScanInput, side: PairSide) => {
   const startBlock = BigInt(side.startBlock) > input.fromBlock ? BigInt(side.startBlock) : input.fromBlock;
+  const maximumBlocks = input.maximumBlocks ?? DEFAULT_MAXIMUM_BLOCKS;
   const scan = createChainScan({
     reader: readerOf(input, side),
     sources: logSourcesOf(side),
@@ -47,10 +72,14 @@ const logsOfSide = async (input: HistoryScanInput, side: PairSide) => {
     reorgDepth: 0n,
     headMaxAgeMilliseconds: 0,
     now: Date.now,
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
   await scan.refresh();
-  while (await scan.extendOlder());
-  return { scan, logs: scan.logs() };
+  const latest = (await scan.head()).number;
+  const blocksRead = (): bigint => latest - (scan.scannedFromBlock() as bigint) + 1n;
+  while (blocksRead() < maximumBlocks && (await scan.extendOlder()));
+  const coverage: ChainCoverage = { chainId: side.chainId, scannedFromBlock: scan.scannedFromBlock() as bigint, reachedStart: scan.reachedStart() };
+  return { scan, logs: scan.logs(), coverage };
 };
 
 /**
@@ -61,7 +90,8 @@ const logsOfSide = async (input: HistoryScanInput, side: PairSide) => {
  * - A send has a status only when its delivery is in the scanned blocks. Without it the status is null, which means
  *   unknown. The scan does not judge finality or coverage.
  * - It does not read the token or the sender of a message, so a filter on kind, token or address cannot apply.
- * - The blocks below `fromBlock` and below the deployment are not read.
+ * - The blocks below `fromBlock`, below the deployment and beyond `maximumBlocks` are not read. `coverage` says where
+ *   each chain stopped.
  *
  * @param input The pair, one reader for each chain, and the first block.
  * @throws When a chain has no reader or a node fails.
@@ -92,5 +122,5 @@ export const scanHistory = async (input: HistoryScanInput): Promise<HistoryScan>
   };
 
   const items = (await Promise.all(scans.map(eventsOfSide))).flat().sort(compareHistoryEvents);
-  return { items, partial: true };
+  return { items, partial: true, coverage: scans.map(({ coverage }) => coverage) };
 };

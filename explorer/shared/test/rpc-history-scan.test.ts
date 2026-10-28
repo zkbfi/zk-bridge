@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { compareHistoryEvents, scanHistory, type ChainReader } from "../src/index.js";
+import type { LogRequest } from "../src/index.js";
 import { createFakeChain } from "./support/fake-chain.js";
 import { buildScenario, FIRST_CHAIN, SECOND_CHAIN } from "./support/scenario.js";
 import { testPair } from "./support/fixtures.js";
@@ -70,5 +71,62 @@ describe("scanHistory", () => {
     const { pair, readers } = setup();
     readers.delete(SECOND_CHAIN);
     await expect(scanHistory({ pair, readers, fromBlock: 0n })).rejects.toThrow("No RPC reader is set for chain 369.");
+  });
+
+  it("reports how far back each chain was read", async () => {
+    const { pair, readers } = setup();
+    const { coverage } = await scanHistory({ pair, readers, fromBlock: 0n });
+    expect(coverage.map((entry) => entry.chainId)).toEqual([FIRST_CHAIN, SECOND_CHAIN]);
+    for (const entry of coverage) {
+      expect(entry.reachedStart).toBe(true);
+      expect(entry.scannedFromBlock).toBe(BigInt(pair.sides.find((side) => side.chainId === entry.chainId)!.startBlock));
+    }
+  });
+
+  describe("on a long chain", () => {
+    const longChain = () => {
+      const requests: LogRequest[] = [];
+      const reader: ChainReader = {
+        getChainId: async () => 1,
+        getBlock: async (selector) => ({ number: "tag" in selector ? 100_000n : selector.blockNumber, timestamp: 1_000n, baseFeePerGas: null }),
+        getLogs: async (request) => {
+          requests.push(request);
+          return [];
+        },
+        readContract: async () => undefined,
+        getTransactionReceipt: async () => {
+          throw new Error("not used");
+        },
+      };
+      return { requests, readers: new Map<number, ChainReader>([[FIRST_CHAIN, reader], [SECOND_CHAIN, reader]]) };
+    };
+
+    it("stops at the first window that reaches the block limit and says where it stopped", async () => {
+      const { pair } = setup();
+      const { readers } = longChain();
+      const result = await scanHistory({ pair, readers, fromBlock: 0n, maximumBlocks: 25_000n });
+      for (const entry of result.coverage) expect(entry).toEqual({ chainId: entry.chainId, scannedFromBlock: 70_001n, reachedStart: false });
+    });
+
+    it("stops issuing requests once the signal aborts", async () => {
+      const { pair } = setup();
+      const { readers, requests } = longChain();
+      const controller = new AbortController();
+      const stopAfterTwoWindows = new Map<number, ChainReader>(
+        [...readers].map(([chainId, reader]) => [
+          chainId,
+          { ...reader, getLogs: async (request: LogRequest) => {
+            const logs = await reader.getLogs(request);
+            if (requests.length >= 8) controller.abort(new Error("page left"));
+            return logs;
+          } },
+        ]),
+      );
+      await expect(scanHistory({ pair, readers: stopAfterTwoWindows, fromBlock: 0n, maximumBlocks: 1_000_000n, signal: controller.signal })).rejects.toThrow("page left");
+      const issued = requests.length;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(requests.length).toBe(issued);
+      expect(issued).toBeLessThan(40);
+    });
   });
 });

@@ -239,3 +239,40 @@ describe("block timestamps", () => {
     expect(await scanner.blockTimestamp(78n)).toBe(780n);
   });
 });
+
+describe("cancellation", () => {
+  it("throws the reason and issues no request when the signal is already aborted", async () => {
+    const chain = fakeReader({ head: 500n, logs: () => [] });
+    const controller = new AbortController();
+    controller.abort(new Error("page left"));
+    const scanner = make(chain.reader, { signal: controller.signal });
+    await expect(scanner.refresh()).rejects.toThrow("page left");
+    await expect(scanner.extendOlder()).rejects.toThrow("page left");
+    expect(chain.requests).toEqual([]);
+  });
+
+  it("stops between windows: an abort after the first window ends the walk back", async () => {
+    const chain = fakeReader({ head: 500n, logs: () => [] });
+    const controller = new AbortController();
+    const scanner = make(chain.reader, { signal: controller.signal });
+    await scanner.refresh();
+    const issued = chain.requests.length;
+    controller.abort(new Error("filters changed"));
+    await expect(scanner.extendOlder()).rejects.toThrow("filters changed");
+    expect(chain.requests).toHaveLength(issued);
+  });
+
+  it("stops before the second half of a split window", async () => {
+    const controller = new AbortController();
+    const chain = fakeReader({
+      head: 500n,
+      logs: () => [],
+      failWith: (request) => {
+        if (request.toBlock - request.fromBlock < 50n) return undefined;
+        controller.abort(new Error("page left"));
+        return new Error("query returned more than 10000 results");
+      },
+    });
+    await expect(make(chain.reader, { signal: controller.signal }).refresh()).rejects.toThrow("page left");
+  });
+});

@@ -20,6 +20,8 @@ export type ChainScanInput = {
   readonly headMaxAgeMilliseconds: number;
   /** The clock in milliseconds. */
   readonly now: () => number;
+  /** When it aborts, the scan stops before its next request and throws the reason of the signal. */
+  readonly signal?: AbortSignal;
 };
 
 /** The log history of one chain, read in bounded windows, newest first. */
@@ -65,6 +67,7 @@ export const createChainScan = (input: ChainScanInput): ChainScan => {
   const timestamps = new Map<bigint, Promise<bigint>>();
 
   const fetchRange = async (from: bigint, to: bigint): Promise<ChainLog[]> => {
+    input.signal?.throwIfAborted();
     try {
       const parts = await Promise.all(
         input.sources.map((source) => input.reader.getLogs({ address: source.address, events: source.events, fromBlock: from, toBlock: to })),
@@ -96,6 +99,7 @@ export const createChainScan = (input: ChainScanInput): ChainScan => {
   const reachedStart = (): boolean => scannedFrom !== null && scannedFrom <= input.startBlock;
 
   const extendOlder = async (): Promise<boolean> => {
+    input.signal?.throwIfAborted();
     if (scannedFrom === null || reachedStart()) return false;
     const to = scannedFrom - 1n;
     const lowest = to - input.blockSpan + 1n;
@@ -122,6 +126,7 @@ export const createChainScan = (input: ChainScanInput): ChainScan => {
   return {
     head,
     async refresh() {
+      input.signal?.throwIfAborted();
       const tip = await head();
       if (scannedTo === null || scannedFrom === null) {
         scannedTo = tip.number;

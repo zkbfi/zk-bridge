@@ -7,9 +7,12 @@ import {
   createHttpChainReader,
   encodeHistoryCursor,
   fetchJsonResponse,
+  DEFAULT_MAXIMUM_BLOCKS,
   historyEventKey,
+  messageOnlyFilterNames,
   parseHistoryEvents,
   parseHistoryQuery,
+  picksMessagesOnly,
   scanHistory,
   type ChainReader,
   type ExplorerConnection,
@@ -18,6 +21,7 @@ import {
   type HistoryEventKind,
   type HistoryFilters,
   type HistoryPage,
+  type HistoryScan,
   type HttpChainReaderInput,
   type JsonFetcher,
   type Pair,
@@ -74,31 +78,6 @@ export const formatHistoryQuery = (filters: HistoryFilters): string => {
   return params.toString();
 };
 
-/**
- * True when a filter can match only messages, so the indexer leaves head updates out. The indexer applies the same
- * rule in `GET /api/history`.
- *
- * @param filters The filters.
- */
-export const leavesOutHeadUpdates = (filters: HistoryFilters): boolean =>
-  filters.kind !== null || filters.statuses.length > 0 || filters.token !== null || filters.address !== null;
-
-/** The filters that the chains alone cannot apply, because the scan does not read the token or the sender. */
-const FILTERS_THE_CHAINS_CANNOT_APPLY = [
-  { name: "message kind", isSet: (filters: HistoryFilters) => filters.kind !== null },
-  { name: "status", isSet: (filters: HistoryFilters) => filters.statuses.length > 0 },
-  { name: "token", isSet: (filters: HistoryFilters) => filters.token !== null },
-  { name: "address", isSet: (filters: HistoryFilters) => filters.address !== null },
-] as const;
-
-/**
- * The names of the filters that are on and that a history read from the chains cannot apply.
- *
- * @param filters The filters.
- */
-export const filtersTheChainsCannotApply = (filters: HistoryFilters): readonly string[] =>
-  FILTERS_THE_CHAINS_CANNOT_APPLY.filter((filter) => filter.isSet(filters)).map((filter) => filter.name);
-
 /** The chain of the pair that is not this one. */
 const otherChainOf = (pair: Pair, chainId: number): number => (pair.sides.find((side) => side.chainId !== chainId) as Pair["sides"][number]).chainId;
 
@@ -111,6 +90,8 @@ const matchesDirection = (pair: Pair, event: HistoryEvent, direction: NonNullabl
 };
 
 const keepsEvent = (pair: Pair, filters: HistoryFilters, event: HistoryEvent): boolean => {
+  // A head update belongs to no message, so a message filter leaves it out, as the indexer does.
+  if (event.kind === "head-update" && picksMessagesOnly(filters)) return false;
   if (filters.chain !== null && event.chainId !== filters.chain) return false;
   if (filters.eventKind !== null && event.kind !== filters.eventKind) return false;
   if (filters.from !== null && event.timestamp < filters.from) return false;
@@ -135,7 +116,8 @@ const eventAtCursor = (cursor: HistoryCursor): HistoryEvent => {
 
 /**
  * Cuts a page out of events that the chains gave. It applies the filters that the chains can apply (chain, event kind,
- * direction and time), skips what the cursor has passed, and sets the next cursor as the indexer does.
+ * direction and time) and leaves head updates out under a message filter, as the indexer does. It skips what the cursor
+ * has passed and sets the next cursor as the indexer does.
  *
  * @param pair The pair.
  * @param events Every event, newest first.
@@ -156,7 +138,24 @@ export type HistoryDependencies = {
   readonly createReader: (input: HttpChainReaderInput) => ChainReader;
   /** The pair with the contract addresses, or null when the page has none. */
   readonly loadPair: () => Promise<Pair | null>;
+  /**
+   * Gives the scan of the chains for a key, and keeps it, so a new page or a new filter does not read the chains again.
+   * The default reads on every call.
+   */
+  readonly scanOf: (request: ScanRequest) => Promise<HistoryScan>;
 };
+
+/** A request for the scan of the chains. */
+export type ScanRequest = {
+  /** What the scan depends on: the pair, the endpoints and the block limit. Never the filters or the page. */
+  readonly key: string;
+  /** Reads the chains. It stops when the signal aborts. */
+  readonly load: (signal: AbortSignal | undefined) => Promise<HistoryScan>;
+  readonly signal: AbortSignal | undefined;
+};
+
+/** A scan source that keeps nothing: every call reads the chains. */
+export const unkeptScan = (request: ScanRequest): Promise<HistoryScan> => request.load(request.signal);
 
 /** The part of a live connection that the read uses. */
 export type HistoryConnection = Pick<ExplorerConnection, "baseUrl" | "run" | "resolved">;
@@ -168,28 +167,48 @@ export type HistoryReading = {
   readonly source: "indexer" | "rpc";
   /** The filters that are on and that this source did not apply. */
   readonly unappliedFilters: readonly string[];
+  /** The chains that the scan did not read to the start of their history, with the lowest block each read. */
+  readonly readBack: readonly { readonly chainId: number; readonly block: bigint }[];
 };
 
-const readFromIndexer = async (connection: HistoryConnection, filters: HistoryFilters, fetchJson: JsonFetcher): Promise<HistoryReading> => {
+const readFromIndexer = async (connection: HistoryConnection, filters: HistoryFilters, fetchJson: JsonFetcher, signal: AbortSignal | undefined): Promise<HistoryReading> => {
   const path = "/api/history";
+  signal?.throwIfAborted();
   const response = await fetchJson(`${connection.baseUrl}${path}?${formatHistoryQuery(filters)}`);
+  signal?.throwIfAborted();
   if (response.status !== 200) throw new Error(`The indexer answered ${response.status} for ${path}.`);
   const page = parseHistoryEvents(response.body);
   if (page === null) throw new Error(`The indexer gave an answer for ${path} that is not a page of the history.`);
-  return { page, source: "indexer", unappliedFilters: [] };
+  return { page, source: "indexer", unappliedFilters: [], readBack: [] };
 };
 
-const readFromChains = async (connection: HistoryConnection, filters: HistoryFilters, dependencies: HistoryDependencies): Promise<HistoryReading> => {
+/** What a read of the history needs besides the connection. */
+type ReadOptions = { readonly maximumBlocks: bigint; readonly signal: AbortSignal | undefined };
+
+const readFromChains = async (connection: HistoryConnection, filters: HistoryFilters, dependencies: HistoryDependencies, options: ReadOptions): Promise<HistoryReading> => {
   const pair = await dependencies.loadPair();
   if (pair === null) throw new Error("The page has no deployment file, so it cannot read the chains.");
-  const readers = new Map<number, ChainReader>();
+  const urls = new Map<number, string>();
   for (const side of pair.sides) {
     const url = connection.resolved.rpcUrls[side.chainId]?.value;
     if (url === undefined) throw new Error(`No endpoint is set for ${side.name}.`);
-    readers.set(side.chainId, dependencies.createReader({ chainId: side.chainId, name: side.name, url }));
+    urls.set(side.chainId, url);
   }
-  const scanned = await scanHistory({ pair, readers, fromBlock: 0n });
-  return { page: pageOfScannedEvents(pair, scanned.items, filters), source: "rpc", unappliedFilters: filtersTheChainsCannotApply(filters) };
+  const key = [pair.name, ...pair.sides.map((side) => `${side.chainId}@${urls.get(side.chainId)}`), options.maximumBlocks].join("|");
+  const scanned = await dependencies.scanOf({
+    key,
+    signal: options.signal,
+    load: (signal) => {
+      const readers = new Map<number, ChainReader>(pair.sides.map((side) => [side.chainId, dependencies.createReader({ chainId: side.chainId, name: side.name, url: urls.get(side.chainId) as string })]));
+      return scanHistory({ pair, readers, fromBlock: 0n, maximumBlocks: options.maximumBlocks, ...(signal === undefined ? {} : { signal }) });
+    },
+  });
+  return {
+    page: pageOfScannedEvents(pair, scanned.items, filters),
+    source: "rpc",
+    unappliedFilters: messageOnlyFilterNames(filters),
+    readBack: scanned.coverage.filter((entry) => !entry.reachedStart).map((entry) => ({ chainId: entry.chainId, block: entry.scannedFromBlock })),
+  };
 };
 
 /**
@@ -201,23 +220,30 @@ export const defaultHistoryDependencies = (loadPair: HistoryDependencies["loadPa
   fetchJson: fetchJsonResponse,
   createReader: createHttpChainReader,
   loadPair,
+  scanOf: unkeptScan,
 });
 
 /**
  * Reads one page of the history. The indexer answers while the connection trusts it. Otherwise the chains answer, and
  * the page is marked partial.
  *
- * @param input The connection, the filters and the dependencies.
+ * @param input The connection, the filters, the dependencies, the block limit and the signal.
  */
 export const readHistory = (input: {
   readonly connection: HistoryConnection;
   readonly filters: HistoryFilters;
   readonly dependencies: HistoryDependencies;
-}): Promise<HistoryReading> =>
-  input.connection.run({
-    viaIndexer: () => readFromIndexer(input.connection, input.filters, input.dependencies.fetchJson),
-    viaRpc: () => readFromChains(input.connection, input.filters, input.dependencies),
+  /** The most blocks to read on each chain when the chains answer. Default: the default of the scan. */
+  readonly maximumBlocks?: bigint;
+  /** Stops the read when it aborts, for example when the reader leaves the page. */
+  readonly signal?: AbortSignal;
+}): Promise<HistoryReading> => {
+  const options: ReadOptions = { maximumBlocks: input.maximumBlocks ?? DEFAULT_MAXIMUM_BLOCKS, signal: input.signal };
+  return input.connection.run({
+    viaIndexer: () => readFromIndexer(input.connection, input.filters, input.dependencies.fetchJson, input.signal),
+    viaRpc: () => readFromChains(input.connection, input.filters, input.dependencies, options),
   });
+};
 
 /** The words for each kind of event. */
 export const EVENT_KIND_LABELS: Readonly<Record<HistoryEventKind, string>> = {

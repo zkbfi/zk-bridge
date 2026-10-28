@@ -4,6 +4,8 @@ import {
   encodeHistoryCursor,
   historyEventKey,
   historyEventView,
+  messageOnlyFilterNames,
+  picksMessagesOnly,
   parseHistoryEvents,
   parseHistoryQuery,
   type HistoryEvent,
@@ -140,5 +142,32 @@ describe("head updates that share a timestamp", () => {
     const text = encodeHistoryCursor({ timestamp: 1_000n, kind: "head-update", key: historyEventKey(headAt(369, 10n)) });
     expect(text).toBe("1000:head-update:369-10");
     expect(query(`cursor=${text}`)).toMatchObject({ ok: true });
+  });
+});
+
+describe("the filters that pick messages only", () => {
+  const filtersOf = (text: string) => {
+    const result = query(text);
+    if (!result.ok) throw new Error(result.problem);
+    return result.filters;
+  };
+  const token = `0x${"11".repeat(20)}`;
+
+  it.each([["kind=token", "message kind"], ["status=sent", "status"], [`token=${token}`, "token"], [`address=${token}`, "address"]])(
+    "%s leaves head updates out and is named %s",
+    (text, name) => {
+      expect(picksMessagesOnly(filtersOf(text))).toBe(true);
+      expect(messageOnlyFilterNames(filtersOf(text))).toEqual([name]);
+    },
+  );
+
+  it("keeps head updates for direction, chain, event kind and time", () => {
+    const filters = filtersOf("direction=1>369&chain=369&eventKind=head-update&from=1&to=9&limit=5");
+    expect(picksMessagesOnly(filters)).toBe(false);
+    expect(messageOnlyFilterNames(filters)).toEqual([]);
+  });
+
+  it("names every message filter that is on, in a fixed order", () => {
+    expect(messageOnlyFilterNames(filtersOf(`kind=message&status=sent&token=${token}&address=${token}`))).toEqual(["message kind", "status", "token", "address"]);
   });
 });

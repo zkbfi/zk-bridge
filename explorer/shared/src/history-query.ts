@@ -50,6 +50,33 @@ export type HistoryPage = {
   readonly partial: boolean;
 };
 
+/**
+ * The filters that can match only messages. One table holds them: a head update belongs to no message, so a filter in
+ * the table leaves head updates out, and a history read from the chains cannot apply the filter, because the scan does
+ * not read the token or the sender of a message.
+ */
+const MESSAGE_ONLY_FILTERS = [
+  { name: "message kind", isSet: (filters: HistoryFilters) => filters.kind !== null },
+  { name: "status", isSet: (filters: HistoryFilters) => filters.statuses.length > 0 },
+  { name: "token", isSet: (filters: HistoryFilters) => filters.token !== null },
+  { name: "address", isSet: (filters: HistoryFilters) => filters.address !== null },
+] as const;
+
+/**
+ * The names of the message-only filters that are on.
+ *
+ * @param filters The filters.
+ */
+export const messageOnlyFilterNames = (filters: HistoryFilters): readonly string[] =>
+  MESSAGE_ONLY_FILTERS.filter((filter) => filter.isSet(filters)).map((filter) => filter.name);
+
+/**
+ * True when a filter can match only messages, so head updates are left out of the history.
+ *
+ * @param filters The filters.
+ */
+export const picksMessagesOnly = (filters: HistoryFilters): boolean => MESSAGE_ONLY_FILTERS.some((filter) => filter.isSet(filters));
+
 const isEventKind = (text: string): text is HistoryEventKind => (HISTORY_EVENT_KINDS as readonly string[]).includes(text);
 
 /**

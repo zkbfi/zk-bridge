@@ -4,12 +4,11 @@ import {
   dateOfSeconds,
   defaultHistoryDependencies,
   EMPTY_HISTORY_FILTERS,
-  filtersTheChainsCannotApply,
   formatHistoryQuery,
   historyFiltersFromQuery,
-  leavesOutHeadUpdates,
   pageOfScannedEvents,
   readHistory,
+  unkeptScan,
   secondsOfDate,
   type HistoryConnection,
   type HistoryDependencies,
@@ -51,26 +50,6 @@ describe("the query text of the filters", () => {
 
   it("opens with no filter when the query is one the indexer would refuse", () => {
     expect(historyFiltersFromQuery("limit=0")).toEqual(EMPTY_HISTORY_FILTERS);
-  });
-});
-
-describe("the head updates and the filters", () => {
-  it.each([{ kind: "token" as const }, { statuses: ["sent" as const] }, { token: `0x${"11".repeat(20)}` as const }, { address: `0x${"22".repeat(20)}` as const }])(
-    "knows that %j leaves head updates out, as the indexer does",
-    (overrides) => {
-      expect(leavesOutHeadUpdates(withFilters(overrides))).toBe(true);
-    },
-  );
-
-  it("keeps head updates for the direction, chain, event and time filters", () => {
-    const filters = withFilters({ chain: 1, eventKind: "sent", direction: { sourceChainId: 1, destinationChainId: 369 }, from: 1n, to: 2n });
-    expect(leavesOutHeadUpdates(filters)).toBe(false);
-    expect(filtersTheChainsCannotApply(filters)).toEqual([]);
-  });
-
-  it("names each filter that the chains cannot apply", () => {
-    const filters = withFilters({ kind: "token", statuses: ["sent"], token: `0x${"11".repeat(20)}`, address: `0x${"22".repeat(20)}` });
-    expect(filtersTheChainsCannotApply(filters)).toEqual(["message kind", "status", "token", "address"]);
   });
 });
 
@@ -119,6 +98,14 @@ describe("a page cut from the events of the chains", () => {
     expect(page.items).toEqual([heads[1]]);
   });
 
+  it("leaves head updates out under a message filter, as the indexer does, and keeps them otherwise", () => {
+    expect(pageOfScannedEvents(pair, all, withFilters({ statuses: ["delivered"] })).items).toEqual([sendOnFirst, deliveryOnSecond, sendOnSecond, deliveryOnFirst]);
+    for (const overrides of [{ kind: "token" as const }, { token: `0x${"11".repeat(20)}` as const }, { address: `0x${"22".repeat(20)}` as const }]) {
+      expect(pageOfScannedEvents(pair, all, withFilters(overrides)).items).not.toContain(head);
+    }
+    expect(pageOfScannedEvents(pair, all, withFilters({ chain: 369 })).items).toContain(head);
+  });
+
   it("gives an empty page and no cursor when nothing is left", () => {
     expect(pageOfScannedEvents(pair, [], EMPTY_HISTORY_FILTERS)).toEqual({ items: [], nextCursor: null, partial: true });
   });
@@ -152,6 +139,7 @@ describe("readHistory", () => {
     fetchJson,
     createReader: () => ({}) as ChainReader,
     loadPair: async () => pair,
+    scanOf: unkeptScan,
     ...overrides,
   });
 
@@ -163,7 +151,7 @@ describe("readHistory", () => {
     };
     const reading = await readHistory({ connection: connectionWith({}), filters: withFilters({ chain: 369 }), dependencies: dependencies(fetchJson) });
     expect(urls).toEqual(["https://indexer.example.org/api/history?chain=369"]);
-    expect(reading).toEqual({ page: { items: [], nextCursor: null, partial: false }, source: "indexer", unappliedFilters: [] });
+    expect(reading).toEqual({ page: { items: [], nextCursor: null, partial: false }, source: "indexer", unappliedFilters: [], readBack: [] });
   });
 
   it("refuses an answer that is not 200 and an answer that is not a page", async () => {
@@ -181,11 +169,84 @@ describe("readHistory", () => {
     await expect(noUrl).rejects.toThrow("No endpoint is set for pulsechain.");
   });
 
+  it("stops before the request and after it when the signal aborts", async () => {
+    const early = new AbortController();
+    early.abort(new Error("page left"));
+    const fetchJson: JsonFetcher = async () => ({ status: 200, body: { items: [], nextCursor: null, partial: false } });
+    await expect(readHistory({ connection: connectionWith({}), filters: EMPTY_HISTORY_FILTERS, dependencies: dependencies(fetchJson), signal: early.signal })).rejects.toThrow("page left");
+    const late = new AbortController();
+    const abortsDuring: JsonFetcher = async () => {
+      late.abort(new Error("filters changed"));
+      return { status: 200, body: { items: [], nextCursor: null, partial: false } };
+    };
+    await expect(readHistory({ connection: connectionWith({}), filters: EMPTY_HISTORY_FILTERS, dependencies: dependencies(abortsDuring), signal: late.signal })).rejects.toThrow("filters changed");
+  });
+
+  const endpoints = { 1: { value: "https://one.example.org", source: "user" as const }, 369: { value: "https://two.example.org", source: "user" as const } };
+
+  it("asks for the scan under a key that holds the pair, the endpoints and the block limit, and no filter", async () => {
+    const keys: string[] = [];
+    const scan = { items: [], partial: true as const, coverage: [{ chainId: 1, scannedFromBlock: 500n, reachedStart: false }, { chainId: 369, scannedFromBlock: 100n, reachedStart: true }] };
+    const scanOf: HistoryDependencies["scanOf"] = async (request) => {
+      keys.push(request.key);
+      return scan;
+    };
+    const read = (filters: HistoryFilters, maximumBlocks?: bigint) =>
+      readHistory({ connection: rpcConnection(endpoints), filters, dependencies: dependencies(async () => ({ status: 200, body: null }), { scanOf }), ...(maximumBlocks === undefined ? {} : { maximumBlocks }) });
+    const first = await read(EMPTY_HISTORY_FILTERS);
+    await read(withFilters({ chain: 1, limit: 5, cursor: { timestamp: 1n, kind: "sent", key: hash("01") } }));
+    await read(EMPTY_HISTORY_FILTERS, 7n);
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(keys[0]).toContain("https://one.example.org");
+    expect(first.readBack).toEqual([{ chainId: 1, block: 500n }]);
+  });
+
+  it("gives the scan the readers of the endpoints and the signal that it was given", async () => {
+    const controller = new AbortController();
+    const made: string[] = [];
+    const reader = {
+      getChainId: async () => 1,
+      getBlock: async () => {
+        throw new Error("stop here");
+      },
+    } as unknown as ChainReader;
+    const reading = readHistory({
+      connection: rpcConnection(endpoints),
+      filters: EMPTY_HISTORY_FILTERS,
+      signal: controller.signal,
+      dependencies: dependencies(async () => ({ status: 200, body: null }), {
+        createReader: (input) => {
+          made.push(`${input.chainId} ${input.url}`);
+          return reader;
+        },
+      }),
+    });
+    await expect(reading).rejects.toThrow("stop here");
+    expect(made).toEqual(["1 https://one.example.org", "369 https://two.example.org"]);
+  });
+
+  it("scans without a signal when the caller gives none", async () => {
+    const reader = {
+      getChainId: async () => 1,
+      getBlock: async () => {
+        throw new Error("stop here");
+      },
+    } as unknown as ChainReader;
+    const reading = readHistory({
+      connection: rpcConnection(endpoints),
+      filters: EMPTY_HISTORY_FILTERS,
+      dependencies: dependencies(async () => ({ status: 200, body: null }), { createReader: () => reader }),
+    });
+    await expect(reading).rejects.toThrow("stop here");
+  });
+
   it("builds the dependencies of a live page from the platform", () => {
     const loadPair = async () => null;
     const live = defaultHistoryDependencies(loadPair);
     expect(live.loadPair).toBe(loadPair);
     expect(typeof live.fetchJson).toBe("function");
     expect(typeof live.createReader).toBe("function");
+    expect(live.scanOf).toBe(unkeptScan);
   });
 });

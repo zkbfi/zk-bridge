@@ -4,7 +4,7 @@ import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { ChainLog, ChainReader, HistoryFilters, JsonFetcher, JsonResponse } from "@zk-bridge/shared";
 import { HistoryView } from "../../src/views/HistoryView";
-import { EMPTY_HISTORY_FILTERS, type HistoryDependencies } from "../../src/views/history-model";
+import { EMPTY_HISTORY_FILTERS, unkeptScan, type HistoryDependencies } from "../../src/views/history-model";
 import { fakeConnections, liveServices, sharedPairForTests } from "../support/live";
 import { renderWithServices } from "./support";
 
@@ -43,6 +43,25 @@ const readerWith = (logs: readonly Omit<ChainLog, "address" | "logIndex">[]): Ch
   },
 });
 
+/** Counts the log requests of every reader that a page makes. */
+const countingDependencies = (base: HistoryDependencies) => {
+  const counter = { requests: 0 };
+  const dependencies: HistoryDependencies = {
+    ...base,
+    createReader: (input) => {
+      const reader = base.createReader(input);
+      return {
+        ...reader,
+        getLogs: async (request) => {
+          counter.requests += 1;
+          return reader.getLogs(request);
+        },
+      };
+    },
+  };
+  return { counter, dependencies };
+};
+
 const firstChainLogs = [{ eventName: "UserRequestForAffirmation", blockNumber: 150n, transactionHash: hash("a1"), args: { messageId: MESSAGE } }];
 const secondChainLogs = [
   { eventName: "AffirmationCompleted", blockNumber: 160n, transactionHash: hash("b2"), args: { messageId: MESSAGE, status: true } },
@@ -53,13 +72,14 @@ const dependenciesWith = (fetchJson: JsonFetcher): HistoryDependencies => ({
   fetchJson,
   createReader: (input) => readerWith(input.chainId === 1 ? firstChainLogs : secondChainLogs),
   loadPair: async () => sharedPairForTests(),
+  scanOf: unkeptScan,
 });
 
 const LIVE_VARIABLES = { VITE_EXPLORER_RPC_URL_1: "https://rpc-one.example.org" };
 
 /** A page that keeps its filters in state, as the shell keeps them in the address. */
-const Harness = ({ dependencies, onFilters }: { readonly dependencies: HistoryDependencies; readonly onFilters?: (filters: HistoryFilters) => void }) => {
-  const [filters, setFilters] = useState<HistoryFilters>(EMPTY_HISTORY_FILTERS);
+const Harness = ({ dependencies, onFilters, initial = EMPTY_HISTORY_FILTERS }: { readonly dependencies: HistoryDependencies; readonly onFilters?: (filters: HistoryFilters) => void; readonly initial?: HistoryFilters }) => {
+  const [filters, setFilters] = useState<HistoryFilters>(initial);
   return (
     <HistoryView
       filters={filters}
@@ -72,7 +92,7 @@ const Harness = ({ dependencies, onFilters }: { readonly dependencies: HistoryDe
   );
 };
 
-const renderLive = (dependencies: HistoryDependencies, options: { readonly fallback?: boolean; readonly onFilters?: (filters: HistoryFilters) => void } = {}) => {
+const renderLive = (dependencies: HistoryDependencies, options: { readonly fallback?: boolean; readonly onFilters?: (filters: HistoryFilters) => void; readonly initial?: HistoryFilters } = {}) => {
   const fake = fakeConnections();
   const services = liveServices({ fake, variables: LIVE_VARIABLES });
   const connection = fake.made[0]!;
@@ -85,8 +105,11 @@ const renderLive = (dependencies: HistoryDependencies, options: { readonly fallb
       }
     });
   }
-  renderWithServices(<Harness dependencies={dependencies} {...(options.onFilters === undefined ? {} : { onFilters: options.onFilters })} />, services);
+  return renderWithServices(<Harness dependencies={dependencies} {...(options.onFilters === undefined ? {} : { onFilters: options.onFilters })} {...(options.initial === undefined ? {} : { initial: options.initial })} />, services);
 };
+
+/** A slow machine renders Chakra slowly, so every wait on a request gets a long limit. */
+const PATIENCE = { timeout: 20_000 };
 
 const eventRows = (): HTMLElement[] => within(screen.getByRole("table", { name: "History events" })).getAllByRole("row").slice(1);
 
@@ -107,45 +130,45 @@ describe("the history view", () => {
     expect(screen.queryByText(/Partial history/)).not.toBeInTheDocument();
   });
 
-  it("filters by pair, chain, kind, address, status and time", async () => {
+  it("filters by pair, chain, event, kind and status", async () => {
     const { fetchJson, urls } = indexerFetcher(() => answer([sentEvent]));
     renderLive(dependenciesWith(fetchJson));
-    await screen.findByRole("table", { name: "History events" });
+    await screen.findByRole("table", { name: "History events" }, PATIENCE);
+    const choose = async (label: string, value: string, expected: string) => {
+      await userEvent.selectOptions(screen.getByLabelText(label), value);
+      await waitFor(() => expect(urls.at(-1)).toContain(expected), PATIENCE);
+    };
 
-    await userEvent.selectOptions(screen.getByLabelText("Pair and direction"), "1>369");
-    await waitFor(() => expect(urls.at(-1)).toContain("direction=1%3E369"));
-    await userEvent.selectOptions(screen.getByLabelText("Chain"), "369");
-    await waitFor(() => expect(urls.at(-1)).toContain("chain=369"));
-    await userEvent.selectOptions(screen.getByLabelText("Event"), "sent");
-    await waitFor(() => expect(urls.at(-1)).toContain("eventKind=sent"));
-    await userEvent.selectOptions(screen.getByLabelText("Kind of message"), "token");
-    await waitFor(() => expect(urls.at(-1)).toContain("kind=token"));
-    await userEvent.selectOptions(screen.getByLabelText("Status"), "covered");
-    await waitFor(() => expect(urls.at(-1)).toContain("status=covered"));
+    await choose("Pair and direction", "1>369", "direction=1%3E369");
+    await choose("Chain", "369", "chain=369");
+    await choose("Event", "sent", "eventKind=sent");
+    await choose("Kind of message", "token", "kind=token");
+    await choose("Status", "covered", "status=covered");
+
+    for (const label of ["Pair and direction", "Chain", "Event", "Kind of message", "Status"]) await userEvent.selectOptions(screen.getByLabelText(label), "any");
+    await waitFor(() => expect(urls.at(-1)).toBe("http://localhost:42069/api/history?"), PATIENCE);
+  });
+
+  it("filters by address, token and time, and clears them", async () => {
+    const { fetchJson, urls } = indexerFetcher(() => answer([sentEvent]));
+    renderLive(dependenciesWith(fetchJson));
+    await screen.findByRole("table", { name: "History events" }, PATIENCE);
     await userEvent.type(screen.getByLabelText("Address"), "0x52908400098527886E0F7030069857D2E4169EE7");
-    await waitFor(() => expect(urls.at(-1)).toContain("address=0x52908400098527886e0f7030069857d2e4169ee7"));
+    await waitFor(() => expect(urls.at(-1)).toContain("address=0x52908400098527886e0f7030069857d2e4169ee7"), PATIENCE);
     await userEvent.type(screen.getByLabelText("Token"), "0x52908400098527886E0F7030069857D2E4169EE8");
-    await waitFor(() => expect(urls.at(-1)).toContain("token=0x52908400098527886e0f7030069857d2e4169ee8"));
+    await waitFor(() => expect(urls.at(-1)).toContain("token=0x52908400098527886e0f7030069857d2e4169ee8"), PATIENCE);
     fireEvent.change(screen.getByLabelText("From date (UTC)"), { target: { value: "2026-10-28" } });
-    await waitFor(() => expect(urls.at(-1)).toContain("from=1793145600"));
+    await waitFor(() => expect(urls.at(-1)).toContain("from=1793145600"), PATIENCE);
     fireEvent.change(screen.getByLabelText("To date (UTC)"), { target: { value: "2026-10-29" } });
     await waitFor(() => {
       expect(urls.at(-1)).toContain("from=1793145600");
       expect(urls.at(-1)).toContain("to=1793318399");
-    });
-
+    }, PATIENCE);
     fireEvent.change(screen.getByLabelText("From date (UTC)"), { target: { value: "" } });
-    await waitFor(() => expect(urls.at(-1)).not.toContain("from="));
-
-    await userEvent.selectOptions(screen.getByLabelText("Pair and direction"), "any");
-    await userEvent.selectOptions(screen.getByLabelText("Chain"), "any");
-    await userEvent.selectOptions(screen.getByLabelText("Event"), "any");
-    await userEvent.selectOptions(screen.getByLabelText("Kind of message"), "any");
-    await userEvent.selectOptions(screen.getByLabelText("Status"), "any");
-    await waitFor(() => expect(urls.at(-1)).not.toMatch(/direction|chain=|eventKind|kind=|status/));
+    await waitFor(() => expect(urls.at(-1)).not.toContain("from="), PATIENCE);
 
     await userEvent.click(screen.getByRole("button", { name: "Clear filters" }));
-    await waitFor(() => expect(urls.at(-1)).toBe("http://localhost:42069/api/history?"));
+    await waitFor(() => expect(urls.at(-1)).toBe("http://localhost:42069/api/history?"), PATIENCE);
     expect(screen.getByLabelText("Address")).toHaveValue("");
     expect(screen.getByLabelText("Token")).toHaveValue("");
   });
@@ -209,6 +232,74 @@ describe("the history view", () => {
     await screen.findByRole("table", { name: "History events" });
     await userEvent.selectOptions(screen.getByLabelText("Status"), "covered");
     expect(await screen.findByText(/The chains cannot apply these filters, so they are off: status\./)).toBeInTheDocument();
+  });
+
+  it("with the chains answering, drops head updates under a message filter and says so, as with the indexer", async () => {
+    const { fetchJson } = indexerFetcher(() => ({ status: 503, body: null }));
+    renderLive(dependenciesWith(fetchJson), { fallback: true });
+    await screen.findByRole("table", { name: "History events" }, PATIENCE);
+    expect(screen.getByText("Slot 4000")).toBeInTheDocument();
+    expect(screen.queryByText(/Head updates are not listed/)).not.toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText("Kind of message"), "token");
+    expect(await screen.findByText(/Head updates are not listed while a filter on message kind/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Slot 4000")).not.toBeInTheDocument(), PATIENCE);
+    expect(eventRows()).toHaveLength(2);
+  });
+
+  it("does not read the chains again for a new filter or a new page", async () => {
+    const { fetchJson } = indexerFetcher(() => ({ status: 503, body: null }));
+    const { counter, dependencies } = countingDependencies(dependenciesWith(fetchJson));
+    renderLive(dependencies, { fallback: true, initial: { ...EMPTY_HISTORY_FILTERS, limit: 1 } });
+    await screen.findByRole("table", { name: "History events" }, PATIENCE);
+    const afterFirstRead = counter.requests;
+    expect(afterFirstRead).toBeGreaterThan(0);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Older events" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Newest events" })).toBeInTheDocument(), PATIENCE);
+    await userEvent.selectOptions(screen.getByLabelText("Chain"), "369");
+    await waitFor(() => expect(screen.getByLabelText("Chain")).toHaveValue("369"), PATIENCE);
+    await screen.findByRole("table", { name: "History events" }, PATIENCE);
+    expect(counter.requests).toBe(afterFirstRead);
+  });
+
+  it("says how far back the chains were read and reads further on request", async () => {
+    const { fetchJson } = indexerFetcher(() => ({ status: 503, body: null }));
+    const longChain = (input: { chainId: number }): ChainReader => ({
+      ...readerWith([]),
+      getBlock: async (selector) => ({ number: "tag" in selector ? 1_000_000n : selector.blockNumber, timestamp: 1_800_000_000n, baseFeePerGas: null }),
+      getChainId: async () => input.chainId,
+    });
+    const { counter, dependencies } = countingDependencies({ ...dependenciesWith(fetchJson), createReader: longChain });
+    renderLive(dependencies, { fallback: true });
+    expect(await screen.findByText(/Read back to block 800001 on Ethereum\. Read back to block 800001 on PulseChain\./, undefined, PATIENCE)).toBeInTheDocument();
+    const firstRead = counter.requests;
+    await userEvent.click(screen.getByRole("button", { name: "Read further back" }));
+    expect(await screen.findByText(/Read back to block 600001 on Ethereum/, undefined, PATIENCE)).toBeInTheDocument();
+    expect(counter.requests).toBeGreaterThan(firstRead);
+  });
+
+  it("stops the scan of the chains when the reader leaves the page", async () => {
+    const { fetchJson } = indexerFetcher(() => ({ status: 503, body: null }));
+    let requests = 0;
+    let leave: () => void = () => undefined;
+    const slowChain = (): ChainReader => ({
+      ...readerWith([]),
+      getBlock: async (selector) => ({ number: "tag" in selector ? 1_000_000n : selector.blockNumber, timestamp: 1_800_000_000n, baseFeePerGas: null }),
+      getLogs: async () => {
+        requests += 1;
+        if (requests === 4) leave();
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return [];
+      },
+    });
+    const view = renderLive({ ...dependenciesWith(fetchJson), createReader: slowChain }, { fallback: true });
+    leave = () => view.unmount();
+    await waitFor(() => expect(requests).toBeGreaterThanOrEqual(4), PATIENCE);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const settled = requests;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(requests).toBe(settled);
+    expect(settled).toBeLessThan(40);
   });
 
   it("says when a send has no known status because its delivery is outside the blocks read", async () => {

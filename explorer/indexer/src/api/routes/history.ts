@@ -9,6 +9,7 @@ import {
   historyEventKey,
   historyEventView,
   parseHistoryQuery,
+  picksMessagesOnly,
   type HistoryEvent,
   type HistoryEventKind,
   type HistoryFilters,
@@ -44,10 +45,6 @@ const timeRangeOf = (filters: HistoryFilters, timestamp: Parameters<typeof lt>[0
   filters.from === null ? undefined : gte(timestamp, filters.from),
   filters.to === null ? undefined : lte(timestamp, filters.to),
 ];
-
-/** True when a filter can only match messages, so a head update never matches. */
-const picksMessagesOnly = (filters: HistoryFilters): boolean =>
-  filters.kind !== null || filters.statuses.length > 0 || filters.token !== null || filters.address !== null;
 
 const wantsKind = (filters: HistoryFilters, kind: HistoryEventKind): boolean =>
   filters.eventKind === null || filters.eventKind === kind;
