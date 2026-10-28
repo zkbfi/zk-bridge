@@ -35,3 +35,4 @@ export * from "./history-query.js";
 export * from "./gas-limit.js";
 export * from "./operator.js";
 export * from "./call-display.js";
+export * from "./tip-coverage.js";
