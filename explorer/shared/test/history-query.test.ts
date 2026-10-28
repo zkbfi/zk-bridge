@@ -103,3 +103,42 @@ describe("parseHistoryEvents", () => {
     expect(parseHistoryEvents({ items: [{ ...historyEventView(sent), timestamp: "1000" }] })).toBeNull();
   });
 });
+
+describe("head updates that share a timestamp", () => {
+  const headAt = (chainId: number, slot: bigint): HistoryEvent => ({ ...head, chainId, slot });
+
+  /** Pages through the events with a limit of one, as the cursor does: each page starts after the last event. */
+  const pagesOf = (events: HistoryEvent[]): HistoryEvent[] => {
+    const sorted = [...events].sort(compareHistoryEvents);
+    const seen: HistoryEvent[] = [];
+    let last: HistoryEvent | null = null;
+    for (;;) {
+      const previous: HistoryEvent | null = last;
+      const next: HistoryEvent | undefined = sorted.find((event) => previous === null || compareHistoryEvents(previous, event) < 0);
+      if (next === undefined) return seen;
+      seen.push(next);
+      last = next;
+    }
+  };
+
+  it("sorts slot 10 before slot 9, as the database does", () => {
+    const sorted = [headAt(369, 9n), headAt(369, 10n)].sort(compareHistoryEvents);
+    expect(sorted.map((event) => event.slot)).toEqual([10n, 9n]);
+  });
+
+  it("returns each of slots 9 and 10 exactly once when paging with a limit of one", () => {
+    expect(pagesOf([headAt(369, 9n), headAt(369, 10n)]).map((event) => event.slot)).toEqual([10n, 9n]);
+  });
+
+  it("sorts chain 369 before chain 1 and returns each exactly once when paging with a limit of one", () => {
+    const events = [headAt(1, 5n), headAt(369, 5n)];
+    expect([...events].sort(compareHistoryEvents).map((event) => event.chainId)).toEqual([369, 1]);
+    expect(pagesOf(events).map((event) => event.chainId)).toEqual([369, 1]);
+  });
+
+  it("keeps the cursor text for such an event parseable", () => {
+    const text = encodeHistoryCursor({ timestamp: 1_000n, kind: "head-update", key: historyEventKey(headAt(369, 10n)) });
+    expect(text).toBe("1000:head-update:369-10");
+    expect(query(`cursor=${text}`)).toMatchObject({ ok: true });
+  });
+});

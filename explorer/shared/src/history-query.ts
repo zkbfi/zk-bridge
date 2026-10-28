@@ -80,7 +80,26 @@ export const parseHistoryCursor = (text: string): HistoryCursor | null => {
 };
 
 /**
- * Orders two events newest first. Time decides, then the kind name, then the key, both in descending order.
+ * Compares two keys of the same kind in descending order. Head updates compare by chain, then by slot, as numbers:
+ * the database sorts them that way, and "369-9" would sort after "369-10" as text. Messages compare by identifier,
+ * which is fixed-width hex.
+ */
+const compareKeys = (left: HistoryEvent, right: HistoryEvent): number => {
+  if (left.kind === "head-update") {
+    // A head update always has a slot, and two events of one kind are both head updates or both messages.
+    const [leftSlot, rightSlot] = [left.slot as bigint, right.slot as bigint];
+    if (left.chainId !== right.chainId) return right.chainId - left.chainId;
+    if (leftSlot === rightSlot) return 0;
+    return leftSlot > rightSlot ? -1 : 1;
+  }
+  const [leftId, rightId] = [left.messageId as string, right.messageId as string];
+  if (leftId === rightId) return 0;
+  return leftId > rightId ? -1 : 1;
+};
+
+/**
+ * Orders two events newest first. Time decides, then the kind name, then the key, both in descending order. This is
+ * the order of the SQL in the indexer, so a cursor taken from the last event of a page splits the list exactly.
  *
  * @param left The first event.
  * @param right The second event.
@@ -88,10 +107,7 @@ export const parseHistoryCursor = (text: string): HistoryCursor | null => {
 export const compareHistoryEvents = (left: HistoryEvent, right: HistoryEvent): number => {
   if (left.timestamp !== right.timestamp) return left.timestamp > right.timestamp ? -1 : 1;
   if (left.kind !== right.kind) return left.kind > right.kind ? -1 : 1;
-  const leftKey = historyEventKey(left);
-  const rightKey = historyEventKey(right);
-  if (leftKey === rightKey) return 0;
-  return leftKey > rightKey ? -1 : 1;
+  return compareKeys(left, right);
 };
 
 /**
