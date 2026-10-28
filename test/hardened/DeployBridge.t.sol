@@ -37,14 +37,6 @@ contract DeployBridgeTest is Test {
     uint256 internal constant NONCE_B = 20;
     address internal constant BEACON_ROOTS = 0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02;
 
-    /// @dev The fork table of Ethereum: Capella, Deneb, Electra and Fulu.
-    string internal constant ETHEREUM_VERSIONS = '[{"version":"0x03000000","stateDepth":"5"},'
-        '{"version":"0x04000000","stateDepth":"5"},{"version":"0x05000000","stateDepth":"6"},'
-        '{"version":"0x06000000","stateDepth":"6"}]';
-    /// @dev The fork table of PulseChain: only Capella (it never scheduled Deneb).
-    string internal constant PULSECHAIN_VERSIONS = '[{"version":"0x0000036c","stateDepth":"5"}]';
-    string internal constant SEAL_DEPTHS = '["5","6","7"]';
-
     function setUp() public {
         script = new DeployBridge();
         verifier = new OracleSP1Verifier(makeAddr("oracle"));
@@ -70,39 +62,72 @@ contract DeployBridgeTest is Test {
         returns (string memory)
     {
         string memory head = string.concat(
-            '{"remoteChainName":"', chainId == 1 ? "PulseChain" : "Ethereum", '","rpcAlias":"chain-', vm.toString(chainId),
-            '","chainId":"', vm.toString(chainId), '","verifier":"', verifierText
+            '{"remoteChainName":"',
+            chainId == 1 ? "PulseChain" : "Ethereum",
+            '","rpcAlias":"chain-',
+            vm.toString(chainId),
+            '","chainId":"',
+            vm.toString(chainId),
+            '","verifier":"',
+            verifierText
         );
         head = string.concat(
-            head, '","verifierCodeHash":"', _hexString(address(verifier).codehash),
-            '","depositCutoffTimestamp":"0","deployerNonce":"', vm.toString(nonce), '",'
+            head,
+            '","verifierCodeHash":"',
+            _hexString(address(verifier).codehash),
+            '","depositCutoffTimestamp":"0","deployerNonce":"',
+            vm.toString(nonce),
+            '",'
         );
         head = string.concat(
-            head, '"flowLimiter":"', vm.toString(chainId == 1 ? configuredFlowLimiter : address(0)), '",',
-            '"wrappedNative":"', vm.toString(chainId == 1 ? address(wrappedNativeOnA) : address(wrappedNativeOnB)),
-            '","deployDeliveryRouter":"', chainId == 1 ? "true" : "false", '",', _deliveryRouterJson(chainId)
+            head,
+            '"flowLimiter":"',
+            vm.toString(chainId == 1 ? configuredFlowLimiter : address(0)),
+            '",',
+            '"wrappedNative":"',
+            vm.toString(chainId == 1 ? address(wrappedNativeOnA) : address(wrappedNativeOnB)),
+            '","deployDeliveryRouter":"',
+            chainId == 1 ? "true" : "false",
+            '",',
+            _deliveryRouterJson(chainId)
         );
         string memory client = string.concat(
-            '"lightClient":{"programVKey":"', _hexString(keccak256("light client program")),
+            '"lightClient":{"programVKey":"',
+            _hexString(keccak256("light client program")),
             chainId == 1 ? _pulsechainClock() : _ethereumClock(),
-            '","genesisValidatorsRoot":"', _hexString(keccak256(abi.encode("genesis", chainId))),
-            '","slotsPerPeriod":"8192",', chainId == 1 ? _pulsechainCapella() : _ethereumCapella()
+            '","genesisValidatorsRoot":"',
+            _hexString(keccak256(abi.encode("genesis", chainId))),
+            '","slotsPerPeriod":"8192",',
+            chainId == 1 ? _pulsechainCapella() : _ethereumCapella()
         );
         string memory checkpoint = string.concat(
-            '"initialSlot":"', slot, '","initialHeaderRoot":"', _hexString(keccak256("header")),
-            '","initialSyncCommitteeHash":"', _hexString(keccak256("committee")),
-            '","initialNextSyncCommitteeHash":"', _hexString(keccak256("next committee")), '"},'
+            '"initialSlot":"',
+            slot,
+            '","initialHeaderRoot":"',
+            _hexString(keccak256("header")),
+            '","initialSyncCommitteeHash":"',
+            _hexString(keccak256("committee")),
+            '","initialNextSyncCommitteeHash":"',
+            _hexString(keccak256("next committee")),
+            '"},'
         );
         return string.concat(
-            head, client, checkpoint, chainId == 1 ? _ethereumGate() : string.concat(_pulsechainGate(), _observationJson(slot)), "}"
+            head,
+            client,
+            checkpoint,
+            chainId == 1 ? _ethereumGate() : string.concat(_pulsechainGate(), _observationJson(slot)),
+            "}"
         );
     }
 
     function _deliveryRouterJson(uint64 chainId) internal view returns (string memory) {
         if (chainId != 1) return "";
         return string.concat(
-            '"deliveryRouter":{"rewardAddress":"', vm.toString(feeReward),
-            '","failedDeliveryAddress":"', vm.toString(feeFailedDelivery), '"},'
+            '"deliveryRouter":{"rewardAddress":"',
+            vm.toString(feeReward),
+            '","failedDeliveryAddress":"',
+            vm.toString(feeFailedDelivery),
+            '"},'
         );
     }
 
@@ -110,13 +135,21 @@ contract DeployBridgeTest is Test {
     /// length are those that the light client of chain 1 tracks (the PulseChain beacon chain).
     function _observationJson(string memory slot) internal pure returns (string memory) {
         return string.concat(
-            ',"observation":{"genesisTime":"1683785555","secondsPerSlot":"10","lightClientProgramVKey":"', _hexString(keccak256("light client program")),
-            '","observationProgramVKey":"', _hexString(keccak256("fork observation program")),
-            '","genesisValidatorsRoot":"', _hexString(keccak256(abi.encode("genesis", uint64(1)))),
-            '","slotsPerPeriod":"8192","initialSlot":"', slot,
-            '","initialHeaderRoot":"', _hexString(keccak256("own header")),
-            '","initialSyncCommitteeHash":"', _hexString(keccak256("own committee")),
-            '","initialNextSyncCommitteeHash":"', _hexString(keccak256("own next committee")), '"}'
+            ',"observation":{"genesisTime":"1683785555","secondsPerSlot":"10","lightClientProgramVKey":"',
+            _hexString(keccak256("light client program")),
+            '","observationProgramVKey":"',
+            _hexString(keccak256("fork observation program")),
+            '","genesisValidatorsRoot":"',
+            _hexString(keccak256(abi.encode("genesis", uint64(1)))),
+            '","slotsPerPeriod":"8192","initialSlot":"',
+            slot,
+            '","initialHeaderRoot":"',
+            _hexString(keccak256("own header")),
+            '","initialSyncCommitteeHash":"',
+            _hexString(keccak256("own committee")),
+            '","initialNextSyncCommitteeHash":"',
+            _hexString(keccak256("own next committee")),
+            '"}'
         );
     }
 
@@ -138,25 +171,42 @@ contract DeployBridgeTest is Test {
         return '"slotsPerEpoch":"32","capellaForkEpoch":"3","capellaEra":"0",';
     }
 
+    /// @dev The genesis validators root of the light client of `chainId` (the beacon chain that it tracks).
+    function _lightClientRoot(uint64 chainId) internal pure returns (bytes32) {
+        return keccak256(abi.encode("genesis", chainId));
+    }
+
+    /// @dev The gate of chain 1 follows the Ethereum beacon chain, which the light client of chain 369 tracks. The gate
+    /// holds no list of fork versions: only its timing and its genesis validators root.
     function _ethereumGate() internal pure returns (string memory) {
         return string.concat(
             '"gate":{"mode":"Enforcing","genesisTime":"1606824023","secondsPerSlot":"12","slotsPerEpoch":"32",',
-            '"supportedVersions":', ETHEREUM_VERSIONS, ',"sealDepths":', SEAL_DEPTHS, "}"
+            '"genesisValidatorsRoot":"',
+            vm.toString(_lightClientRoot(369)),
+            '"}'
         );
     }
 
+    /// @dev The gate of chain 369 follows the PulseChain beacon chain, which the light client of chain 1 tracks.
     function _pulsechainGate() internal pure returns (string memory) {
         return string.concat(
             '"gate":{"mode":"DetectBeaconRootsAndRegistry","genesisTime":"1683785555","secondsPerSlot":"10","slotsPerEpoch":"32",',
-            '"supportedVersions":', PULSECHAIN_VERSIONS, ',"sealDepths":', SEAL_DEPTHS, "}"
+            '"genesisValidatorsRoot":"',
+            vm.toString(_lightClientRoot(1)),
+            '"}'
         );
     }
 
     function _configJson(string memory deployerText, string memory slot) internal view returns (string memory) {
         string memory verifierText = vm.toString(address(verifier));
         return string.concat(
-            '{"deployer":"', deployerText, '","chainA":', _chainJson(1, NONCE_A, verifierText, slot),
-            ',"chainB":', _chainJson(369, NONCE_B, verifierText, slot), "}"
+            '{"deployer":"',
+            deployerText,
+            '","chainA":',
+            _chainJson(1, NONCE_A, verifierText, slot),
+            ',"chainB":',
+            _chainJson(369, NONCE_B, verifierText, slot),
+            "}"
         );
     }
 
@@ -199,8 +249,14 @@ contract DeployBridgeTest is Test {
         assertEq(uint8(config.chainB.deliveryRouter), uint8(DeployBridge.RouterChoice.Skip));
         assertEq(config.chainA.deliveryRouterRewardAddress, feeReward, "the reward address of the delivery router");
         assertEq(config.chainA.deliveryRouterFailedDeliveryAddress, feeFailedDelivery, "the failed delivery address");
-        assertEq(config.chainB.deliveryRouterFailedDeliveryAddress, address(0), "chain B has no delivery router and so none");
-        assertEq(config.chainB.deliveryRouterRewardAddress, address(0), "chain B has no delivery router and so no reward address");
+        assertEq(
+            config.chainB.deliveryRouterFailedDeliveryAddress, address(0), "chain B has no delivery router and so none"
+        );
+        assertEq(
+            config.chainB.deliveryRouterRewardAddress,
+            address(0),
+            "chain B has no delivery router and so no reward address"
+        );
 
         // The light client of chain A tracks PulseChain; the light client of chain B tracks Ethereum.
         assertEq(config.chainA.lightClient.capellaForkEpoch, 3);
@@ -215,15 +271,11 @@ contract DeployBridgeTest is Test {
         assertEq(config.chainA.gate.genesisTime, 1_606_824_023);
         assertEq(config.chainA.gate.secondsPerSlot, 12);
         assertEq(config.chainA.gate.slotsPerEpoch, 32);
-        assertEq(config.chainA.gate.supportedVersions.length, 4);
-        assertEq(config.chainA.gate.supportedVersions[0].version, bytes4(0x03000000));
-        assertEq(config.chainA.gate.supportedVersions[0].stateDepth, 5);
-        assertEq(config.chainA.gate.supportedVersions[2].version, bytes4(0x05000000));
-        assertEq(config.chainA.gate.supportedVersions[2].stateDepth, 6);
-        assertEq(config.chainA.gate.supportedVersions[3].version, bytes4(0x06000000));
-        assertEq(config.chainA.gate.sealDepths.length, 3);
-        assertEq(config.chainA.gate.sealDepths[0], 5);
-        assertEq(config.chainA.gate.sealDepths[2], 7);
+        assertEq(
+            config.chainA.gate.genesisValidatorsRoot,
+            _lightClientRoot(369),
+            "the Ethereum gate follows what chain B tracks"
+        );
 
         assertEq(uint8(config.chainB.gate.mode), uint8(BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry));
         assertEq(config.chainB.observation.genesisValidatorsRoot, config.chainA.lightClient.genesisValidatorsRoot);
@@ -234,16 +286,19 @@ contract DeployBridgeTest is Test {
         assertEq(config.chainA.observation.observationProgramVKey, bytes32(0), "Ethereum has no registry");
         assertEq(config.chainB.gate.genesisTime, 1_683_785_555);
         assertEq(config.chainB.gate.secondsPerSlot, 10);
-        assertEq(config.chainB.gate.supportedVersions.length, 1);
-        assertEq(config.chainB.gate.supportedVersions[0].version, bytes4(0x0000036c));
-        assertEq(config.chainB.gate.supportedVersions[0].stateDepth, 5);
+        assertEq(
+            config.chainB.gate.genesisValidatorsRoot,
+            _lightClientRoot(1),
+            "the PulseChain gate follows what chain A tracks"
+        );
         assertEq(script.BEACON_ROOTS(), BEACON_ROOTS, "the script uses the address of EIP-4788");
     }
 
     /// Claim: the optional key `gloasForkEpoch` of a light client becomes the Gloas fork slot of its bridge:
     /// epoch 353024 with 32 slots per epoch is slot 11296768. Matters: the bridge refuses body-layout proofs from that slot on.
     function test_parseConfig_readsTheGloasForkEpoch() public view {
-        string memory json = vm.replace(_validJson(), '"capellaEra":"758",', '"capellaEra":"758","gloasForkEpoch":"353024",');
+        string memory json =
+            vm.replace(_validJson(), '"capellaEra":"758",', '"capellaEra":"758","gloasForkEpoch":"353024",');
         DeployBridge.BridgeConfig memory config = script.parseConfig(json);
         assertEq(config.chainB.lightClient.gloasForkSlot, 353_024 * 32);
         assertEq(config.chainA.lightClient.gloasForkSlot, type(uint64).max);
@@ -267,16 +322,37 @@ contract DeployBridgeTest is Test {
         string memory json = vm.readFile("script/hardened/bridge.config.example.json");
         string[2] memory chains = [".chainA", ".chainB"];
         string[24] memory keys = [
-            ".remoteChainName", ".rpcAlias", ".chainId", ".verifier", ".verifierCodeHash", ".depositCutoffTimestamp", ".deployerNonce",
-            ".flowLimiter", ".wrappedNative", ".deployDeliveryRouter", ".deliveryRouter.rewardAddress", ".deliveryRouter.failedDeliveryAddress", ".lightClient.programVKey", ".lightClient.genesisValidatorsRoot", ".lightClient.slotsPerPeriod",
-            ".lightClient.genesisTime", ".lightClient.secondsPerSlot", ".lightClient.slotsPerEpoch", ".lightClient.capellaForkEpoch", ".lightClient.capellaEra",
-            ".lightClient.initialSlot", ".lightClient.initialHeaderRoot", ".lightClient.initialSyncCommitteeHash",
+            ".remoteChainName",
+            ".rpcAlias",
+            ".chainId",
+            ".verifier",
+            ".verifierCodeHash",
+            ".depositCutoffTimestamp",
+            ".deployerNonce",
+            ".flowLimiter",
+            ".wrappedNative",
+            ".deployDeliveryRouter",
+            ".deliveryRouter.rewardAddress",
+            ".deliveryRouter.failedDeliveryAddress",
+            ".lightClient.programVKey",
+            ".lightClient.genesisValidatorsRoot",
+            ".lightClient.slotsPerPeriod",
+            ".lightClient.genesisTime",
+            ".lightClient.secondsPerSlot",
+            ".lightClient.slotsPerEpoch",
+            ".lightClient.capellaForkEpoch",
+            ".lightClient.capellaEra",
+            ".lightClient.initialSlot",
+            ".lightClient.initialHeaderRoot",
+            ".lightClient.initialSyncCommitteeHash",
             ".lightClient.initialNextSyncCommitteeHash"
         ];
-        string[9] memory gateKeys = [
-            ".gate.mode", ".gate.genesisTime", ".gate.secondsPerSlot", ".gate.slotsPerEpoch",
-            ".gate.supportedVersions[0].version", ".gate.supportedVersions[0].stateDepth", ".gate.sealDepths[0]",
-            ".gate.sealDepths[1]", ".gate.sealDepths[2]"
+        string[5] memory gateKeys = [
+            ".gate.mode",
+            ".gate.genesisTime",
+            ".gate.secondsPerSlot",
+            ".gate.slotsPerEpoch",
+            ".gate.genesisValidatorsRoot"
         ];
         for (uint256 c = 0; c < chains.length; c++) {
             for (uint256 k = 0; k < keys.length; k++) {
@@ -288,10 +364,24 @@ contract DeployBridgeTest is Test {
             }
             string memory removed = string.concat(chains[c], ".lightClient.slotsPerHistoricalRoot");
             assertFalse(vm.keyExistsJson(json, removed), "the removed key is still in the example");
+            assertFalse(
+                vm.keyExistsJson(json, string.concat(chains[c], ".gate.supportedVersions")), "the version list is gone"
+            );
+            assertFalse(
+                vm.keyExistsJson(json, string.concat(chains[c], ".gate.sealDepths")), "the seal depth list is gone"
+            );
         }
         string[10] memory observationKeys = [
-            ".lightClientProgramVKey", ".observationProgramVKey", ".genesisValidatorsRoot", ".slotsPerPeriod",
-            ".genesisTime", ".secondsPerSlot", ".initialSlot", ".initialHeaderRoot", ".initialSyncCommitteeHash", ".initialNextSyncCommitteeHash"
+            ".lightClientProgramVKey",
+            ".observationProgramVKey",
+            ".genesisValidatorsRoot",
+            ".slotsPerPeriod",
+            ".genesisTime",
+            ".secondsPerSlot",
+            ".initialSlot",
+            ".initialHeaderRoot",
+            ".initialSyncCommitteeHash",
+            ".initialNextSyncCommitteeHash"
         ];
         for (uint256 k = 0; k < observationKeys.length; k++) {
             string memory path = string.concat(".chainB.observation", observationKeys[k]);
@@ -303,6 +393,11 @@ contract DeployBridgeTest is Test {
         assertFalse(vm.keyExistsJson(json, ".chainB.fee"), "the mediator charges no fee, so chain B has no fee key");
     }
 
+    /// @dev The text of the first gate in the configuration, up to its genesis validators root. It occurs in both gates.
+    function _gateRootText() internal pure returns (string memory) {
+        return string.concat('"slotsPerEpoch":"32","genesisValidatorsRoot":"', vm.toString(_lightClientRoot(369)), '"');
+    }
+
     /// Claim: a placeholder in any field is refused with the name of the field. Shows: ten fields in turn, three of
     /// them new gate and Capella fields. Matters: H-17.
     function test_R2_08_parseConfig_refusesPlaceholders() public {
@@ -312,7 +407,9 @@ contract DeployBridgeTest is Test {
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".deployer"));
         script.parseConfig(_configJson(placeholder, "819264"));
 
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.lightClient.initialSlot"));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.lightClient.initialSlot")
+        );
         script.parseConfig(_configJson(vm.toString(deployer), placeholder));
 
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.verifier"));
@@ -325,31 +422,38 @@ contract DeployBridgeTest is Test {
         script.parseConfig(vm.replace(json, "chain-1", placeholder));
 
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.deployerNonce"));
-        script.parseConfig(vm.replace(json, string.concat('"deployerNonce":"', vm.toString(NONCE_A), '"'), '"deployerNonce":"REPLACE_ME"'));
+        script.parseConfig(
+            vm.replace(
+                json, string.concat('"deployerNonce":"', vm.toString(NONCE_A), '"'), '"deployerNonce":"REPLACE_ME"'
+            )
+        );
 
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.depositCutoffTimestamp"));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.depositCutoffTimestamp")
+        );
         script.parseConfig(vm.replace(json, '"depositCutoffTimestamp":"0"', '"depositCutoffTimestamp":"REPLACE_ME"'));
 
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.lightClient.capellaForkEpoch"));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.lightClient.capellaForkEpoch")
+        );
         script.parseConfig(vm.replace(json, '"capellaForkEpoch":"3"', '"capellaForkEpoch":"REPLACE_ME"'));
 
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.gate.mode"));
         script.parseConfig(vm.replace(json, '"mode":"Enforcing"', '"mode":"REPLACE_ME"'));
 
         vm.expectRevert(
-            abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.gate.supportedVersions[0].version")
+            abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.gate.genesisValidatorsRoot")
         );
-        script.parseConfig(vm.replace(json, '"version":"0x03000000"', '"version":"REPLACE_ME"'));
-
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.gate.sealDepths[0]"));
-        script.parseConfig(vm.replace(json, '"sealDepths":["5","6","7"]', '"sealDepths":["REPLACE_ME","6","7"]'));
+        script.parseConfig(
+            vm.replace(json, _gateRootText(), '"slotsPerEpoch":"32","genesisValidatorsRoot":"REPLACE_ME"')
+        );
 
         script.parseConfig(json); // the real values pass
     }
 
     /// Claim: zero values are refused with the name of the field. Shows: a zero deployer, a zero verifier, a zero chain
     /// identifier, a zero checkpoint header root, a zero committee, zero slots per period, and
-    /// the zero gate settings (genesis time, seconds per slot, slots per epoch, fork version, state depth, seal depth).
+    /// the zero gate settings (genesis time, seconds per slot, slots per epoch, genesis validators root).
     /// A zero deposit cutoff is valid (no cutoff). Matters: a zero value is an unset value (H-17).
     function test_R2_08_parseConfig_refusesZeroValues() public {
         string memory json = _validJson();
@@ -368,16 +472,28 @@ contract DeployBridgeTest is Test {
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.chainId"));
         script.parseConfig(vm.replace(json, '"chainId":"1"', '"chainId":"0"'));
 
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.lightClient.initialHeaderRoot"));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.lightClient.initialHeaderRoot")
+        );
         script.parseConfig(vm.replace(json, vm.toString(keccak256("header")), zeroWord));
 
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.lightClient.initialSyncCommitteeHash"));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployBridge.ZeroConfigValue.selector, ".chainA.lightClient.initialSyncCommitteeHash"
+            )
+        );
         script.parseConfig(vm.replace(json, vm.toString(keccak256("committee")), zeroWord));
 
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.lightClient.initialNextSyncCommitteeHash"));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployBridge.ZeroConfigValue.selector, ".chainA.lightClient.initialNextSyncCommitteeHash"
+            )
+        );
         script.parseConfig(vm.replace(json, vm.toString(keccak256("next committee")), zeroWord));
 
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.lightClient.slotsPerPeriod"));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.lightClient.slotsPerPeriod")
+        );
         script.parseConfig(vm.replace(json, '"slotsPerPeriod":"8192"', '"slotsPerPeriod":"0"'));
 
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.gate.genesisTime"));
@@ -387,16 +503,22 @@ contract DeployBridgeTest is Test {
         script.parseConfig(vm.replace(json, '"secondsPerSlot":"12"', '"secondsPerSlot":"0"'));
 
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.gate.slotsPerEpoch"));
-        script.parseConfig(vm.replace(json, '"mode":"Enforcing","genesisTime":"1606824023","secondsPerSlot":"12","slotsPerEpoch":"32"', '"mode":"Enforcing","genesisTime":"1606824023","secondsPerSlot":"12","slotsPerEpoch":"0"'));
+        script.parseConfig(
+            vm.replace(
+                json,
+                '"mode":"Enforcing","genesisTime":"1606824023","secondsPerSlot":"12","slotsPerEpoch":"32"',
+                '"mode":"Enforcing","genesisTime":"1606824023","secondsPerSlot":"12","slotsPerEpoch":"0"'
+            )
+        );
 
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.gate.supportedVersions[0].version"));
-        script.parseConfig(vm.replace(json, '"version":"0x03000000"', '"version":"0x00000000"'));
-
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.gate.supportedVersions[1].stateDepth"));
-        script.parseConfig(vm.replace(json, '{"version":"0x04000000","stateDepth":"5"}', '{"version":"0x04000000","stateDepth":"0"}'));
-
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.gate.sealDepths[1]"));
-        script.parseConfig(vm.replace(json, '"sealDepths":["5","6","7"]', '"sealDepths":["5","0","7"]'));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.gate.genesisValidatorsRoot")
+        );
+        script.parseConfig(
+            vm.replace(
+                json, _gateRootText(), string.concat('"slotsPerEpoch":"32","genesisValidatorsRoot":"', zeroWord, '"')
+            )
+        );
 
         script.parseConfig(json); // the real values pass, and a zero cutoff is valid in them
     }
@@ -419,16 +541,28 @@ contract DeployBridgeTest is Test {
         string memory json = _validJson();
         script.parseConfig(json); // honest: Ethereum 194048 * 32 / 8192 = 758, PulseChain 3 * 32 / 8192 = 0
 
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.CapellaEraMismatch.selector, uint64(1), uint64(1), uint64(0)));
-        script.parseConfig(vm.replace(json, '"capellaForkEpoch":"3","capellaEra":"0"', '"capellaForkEpoch":"3","capellaEra":"1"'));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.CapellaEraMismatch.selector, uint64(1), uint64(1), uint64(0))
+        );
+        script.parseConfig(
+            vm.replace(json, '"capellaForkEpoch":"3","capellaEra":"0"', '"capellaForkEpoch":"3","capellaEra":"1"')
+        );
 
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.CapellaEraMismatch.selector, uint64(369), uint64(757), uint64(758)));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.CapellaEraMismatch.selector, uint64(369), uint64(757), uint64(758))
+        );
         script.parseConfig(vm.replace(json, '"capellaEra":"758"', '"capellaEra":"757"'));
 
         // Epoch 256 starts era 1 (256 * 32 = 8192). Epoch 255 still belongs to era 0.
-        script.parseConfig(vm.replace(json, '"capellaForkEpoch":"3","capellaEra":"0"', '"capellaForkEpoch":"256","capellaEra":"1"'));
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.CapellaEraMismatch.selector, uint64(1), uint64(1), uint64(0)));
-        script.parseConfig(vm.replace(json, '"capellaForkEpoch":"3","capellaEra":"0"', '"capellaForkEpoch":"255","capellaEra":"1"'));
+        script.parseConfig(
+            vm.replace(json, '"capellaForkEpoch":"3","capellaEra":"0"', '"capellaForkEpoch":"256","capellaEra":"1"')
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.CapellaEraMismatch.selector, uint64(1), uint64(1), uint64(0))
+        );
+        script.parseConfig(
+            vm.replace(json, '"capellaForkEpoch":"3","capellaEra":"0"', '"capellaForkEpoch":"255","capellaEra":"1"')
+        );
     }
 
     /// Claim: the gate mode must be one of the two names, spelled exactly. Shows: a lower case name and an unknown name
@@ -449,40 +583,42 @@ contract DeployBridgeTest is Test {
         script.parseConfig(json); // honest
     }
 
-    /// Claim: a fork version must be four bytes. Shows: three bytes and five bytes revert with the key and the length;
-    /// four bytes pass. Matters: HB-02 (`bytes4` would cut a long value or pad a short one, and the gate would then
-    /// support a version that nobody configured).
-    function test_HB02_parseConfig_refusesForkVersionOfWrongLength() public {
+    /// Claim: the gate must follow the beacon chain that the light client of the OTHER chain tracks, and the own-chain
+    /// observation settings of a registry gate must agree. Shows: a gate root that differs from the root of the light
+    /// client of the other chain gives `GateRootMismatch`, for Ethereum and for PulseChain; a PulseChain gate root that
+    /// differs from its own observation root gives the second `GateRootMismatch`. Control: the honest configuration
+    /// parses. Matters: the gate holds the genesis validators root as the leaf of its shape proof. A root of the wrong
+    /// chain would make every proof fail, or let the gate judge a state of a chain that the route does not follow.
+    function test_HB02_parseConfig_gateRootMustMatchTheChainItFollows() public {
         string memory json = _validJson();
         script.parseConfig(json); // honest
+        string memory otherRoot = vm.toString(keccak256("another chain"));
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                DeployBridge.ForkVersionLengthInvalid.selector, ".chainA.gate.supportedVersions[0].version", uint256(3)
+                DeployBridge.GateRootMismatch.selector,
+                "gate.genesisValidatorsRoot differs from the light client of the other chain"
             )
         );
-        script.parseConfig(vm.replace(json, '"version":"0x03000000"', '"version":"0x030000"'));
+        script.parseConfig(
+            vm.replace(
+                json, _gateRootText(), string.concat('"slotsPerEpoch":"32","genesisValidatorsRoot":"', otherRoot, '"')
+            )
+        );
 
+        string memory pulsechainRoot =
+            string.concat('"slotsPerEpoch":"32","genesisValidatorsRoot":"', vm.toString(_lightClientRoot(1)), '"');
         vm.expectRevert(
             abi.encodeWithSelector(
-                DeployBridge.ForkVersionLengthInvalid.selector, ".chainB.gate.supportedVersions[0].version", uint256(5)
+                DeployBridge.GateRootMismatch.selector,
+                "gate.genesisValidatorsRoot differs from the light client of the other chain"
             )
         );
-        script.parseConfig(vm.replace(json, '"version":"0x0000036c"', '"version":"0x0000036c00"'));
-    }
-
-    /// Claim: a gate needs at least one supported version and one seal depth. Shows: an empty list of each reverts with
-    /// the key; the honest lists pass. Matters: HB-02 (the gate constructor refuses empty lists, and the script should
-    /// refuse them before it spends gas on the first contract).
-    function test_HB02_parseConfig_refusesEmptyGateLists() public {
-        string memory json = _validJson();
-        script.parseConfig(json); // honest
-
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.EmptyConfigList.selector, ".chainA.gate.supportedVersions"));
-        script.parseConfig(vm.replace(json, ETHEREUM_VERSIONS, "[]"));
-
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.EmptyConfigList.selector, ".chainA.gate.sealDepths"));
-        script.parseConfig(vm.replace(json, '"sealDepths":["5","6","7"]', '"sealDepths":[]'));
+        script.parseConfig(
+            vm.replace(
+                json, pulsechainRoot, string.concat('"slotsPerEpoch":"32","genesisValidatorsRoot":"', otherRoot, '"')
+            )
+        );
     }
 
     /// Claim: the values in the test configuration agree with the chain specifications shipped for the light-client
@@ -505,11 +641,10 @@ contract DeployBridgeTest is Test {
         assertEq(config.chainB.lightClient.capellaEra, ethereumCapellaEpoch * ethereumSlotsPerEpoch / 8192);
         assertEq(config.chainA.gate.slotsPerEpoch, ethereumSlotsPerEpoch);
         assertEq(config.chainA.gate.secondsPerSlot, _specNumber(ethereumSpec, "SECONDS_PER_SLOT"));
-        assertEq(config.chainA.gate.genesisTime, vm.parseUint(vm.parseJsonString(ethereumGenesis, ".response.data.genesis_time")));
-        assertEq(config.chainA.gate.supportedVersions[0].version, _specVersion(ethereumSpec, "CAPELLA_FORK_VERSION"));
-        assertEq(config.chainA.gate.supportedVersions[1].version, _specVersion(ethereumSpec, "DENEB_FORK_VERSION"));
-        assertEq(config.chainA.gate.supportedVersions[2].version, _specVersion(ethereumSpec, "ELECTRA_FORK_VERSION"));
-        assertEq(config.chainA.gate.supportedVersions[3].version, _specVersion(ethereumSpec, "FULU_FORK_VERSION"));
+        assertEq(
+            config.chainA.gate.genesisTime,
+            vm.parseUint(vm.parseJsonString(ethereumGenesis, ".response.data.genesis_time"))
+        );
 
         uint256 pulsechainCapellaEpoch = _specNumber(pulsechainSpec, "CAPELLA_FORK_EPOCH");
         uint256 pulsechainSlotsPerEpoch = _specNumber(pulsechainSpec, "SLOTS_PER_EPOCH");
@@ -518,9 +653,10 @@ contract DeployBridgeTest is Test {
         assertEq(config.chainA.lightClient.capellaEra, pulsechainCapellaEpoch * pulsechainSlotsPerEpoch / 8192);
         assertEq(config.chainB.gate.slotsPerEpoch, pulsechainSlotsPerEpoch);
         assertEq(config.chainB.gate.secondsPerSlot, _specNumber(pulsechainSpec, "SECONDS_PER_SLOT"));
-        assertEq(config.chainB.gate.genesisTime, vm.parseUint(vm.parseJsonString(pulsechainGenesis, ".response.data.genesis_time")));
-        assertEq(config.chainB.gate.supportedVersions.length, 1, "PulseChain never scheduled Deneb");
-        assertEq(config.chainB.gate.supportedVersions[0].version, _specVersion(pulsechainSpec, "CAPELLA_FORK_VERSION"));
+        assertEq(
+            config.chainB.gate.genesisTime,
+            vm.parseUint(vm.parseJsonString(pulsechainGenesis, ".response.data.genesis_time"))
+        );
 
         // The anchor of the test: the two eras the documentation names.
         assertEq(config.chainB.lightClient.capellaEra, 758);
@@ -557,10 +693,10 @@ contract DeployBridgeTest is Test {
         deployedB = script.deployChain(deploymentB);
     }
 
-    function _assertSameAddresses(DeployBridge.ChainAddresses memory predicted, DeployBridge.ChainAddresses memory actual)
-        internal
-        pure
-    {
+    function _assertSameAddresses(
+        DeployBridge.ChainAddresses memory predicted,
+        DeployBridge.ChainAddresses memory actual
+    ) internal pure {
         assertEq(actual.lightClient, predicted.lightClient, "light client");
         assertEq(actual.observedLightClient, predicted.observedLightClient, "own-chain light client");
         assertEq(actual.registry, predicted.registry, "registry");
@@ -626,18 +762,29 @@ contract DeployBridgeTest is Test {
         string memory lineB = script.deploymentFlags("--chain-b", config.chainB, plan.chainB);
         string memory expectedB = string.concat(
             "--chain-b chain_id=369",
-            " --chain-b light_client=", vm.toString(plan.chainB.lightClient),
-            " --chain-b gate=", vm.toString(plan.chainB.gate),
-            " --chain-b bridge=", vm.toString(plan.chainB.bridge),
-            " --chain-b mediator=", vm.toString(plan.chainB.mediator),
-            " --chain-b token_factory=", vm.toString(plan.chainB.factory),
-            " --chain-b wrapped_native=", vm.toString(config.chainB.wrappedNative),
-            " --chain-b delivery_router=", vm.toString(address(0)),
-            " --chain-b fork_registry=", vm.toString(plan.chainB.registry)
+            " --chain-b light_client=",
+            vm.toString(plan.chainB.lightClient),
+            " --chain-b gate=",
+            vm.toString(plan.chainB.gate),
+            " --chain-b bridge=",
+            vm.toString(plan.chainB.bridge),
+            " --chain-b mediator=",
+            vm.toString(plan.chainB.mediator),
+            " --chain-b token_factory=",
+            vm.toString(plan.chainB.factory),
+            " --chain-b wrapped_native=",
+            vm.toString(config.chainB.wrappedNative),
+            " --chain-b delivery_router=",
+            vm.toString(address(0)),
+            " --chain-b fork_registry=",
+            vm.toString(plan.chainB.registry)
         );
         assertEq(lineB, expectedB);
         string memory lineA = script.deploymentFlags("--chain-a", config.chainA, plan.chainA);
-        assertEq(vm.contains(lineA, string.concat("--chain-a delivery_router=", vm.toString(plan.chainA.deliveryRouter))), true);
+        assertEq(
+            vm.contains(lineA, string.concat("--chain-a delivery_router=", vm.toString(plan.chainA.deliveryRouter))),
+            true
+        );
         assertEq(vm.contains(lineA, string.concat("--chain-a fork_registry=", vm.toString(address(0)))), true);
     }
 
@@ -680,8 +827,12 @@ contract DeployBridgeTest is Test {
         TokenMediator mediatorB = TokenMediator(deployedB.mediator);
         assertTrue(deployedA.mediator != deployedB.mediator, "control: the two mediators differ");
         assertGt(deployedB.mediator.code.length, 0, "the mediator of chain B exists");
-        assertEq(mediatorA.mediatorContractOnOtherSide(), deployedB.mediator, "mediator A points at the real mediator B");
-        assertEq(mediatorB.mediatorContractOnOtherSide(), deployedA.mediator, "mediator B points at the real mediator A");
+        assertEq(
+            mediatorA.mediatorContractOnOtherSide(), deployedB.mediator, "mediator A points at the real mediator B"
+        );
+        assertEq(
+            mediatorB.mediatorContractOnOtherSide(), deployedA.mediator, "mediator B points at the real mediator A"
+        );
         assertEq(address(mediatorA.bridgeContract()), deployedA.bridge);
         assertEq(address(mediatorB.bridgeContract()), deployedB.bridge);
         assertEq(mediatorA.remoteChainId(), 369);
@@ -700,8 +851,16 @@ contract DeployBridgeTest is Test {
         assertGt(deployedB.bridge.code.length, 0, "the bridge of chain B exists");
         assertEq(bridgeA.remoteBridge(), deployedB.bridge, "bridge A points at the real bridge B");
         assertEq(bridgeB.remoteBridge(), deployedA.bridge, "bridge B points at the real bridge A");
-        assertEq(bridgeA.remoteLightClient(), deployedB.lightClient, "bridge A opens on the state of the light client of chain B");
-        assertEq(bridgeB.remoteLightClient(), deployedA.lightClient, "bridge B opens on the state of the light client of chain A");
+        assertEq(
+            bridgeA.remoteLightClient(),
+            deployedB.lightClient,
+            "bridge A opens on the state of the light client of chain B"
+        );
+        assertEq(
+            bridgeB.remoteLightClient(),
+            deployedA.lightClient,
+            "bridge B opens on the state of the light client of chain A"
+        );
         assertEq(address(bridgeA.lightClient()), deployedA.lightClient);
         assertEq(address(bridgeB.lightClient()), deployedB.lightClient);
         assertEq(address(bridgeA.depositGate()), deployedA.gate, "bridge A uses the gate of chain A");
@@ -725,7 +884,8 @@ contract DeployBridgeTest is Test {
         assertEq(MessageBridge(deployedA.bridge).sendCutoffTimestamp(), 0);
         assertEq(MessageBridge(deployedB.bridge).sendCutoffTimestamp(), 0);
 
-        string memory json = vm.replace(_validJson(), '"depositCutoffTimestamp":"0"', '"depositCutoffTimestamp":"1900000000"');
+        string memory json =
+            vm.replace(_validJson(), '"depositCutoffTimestamp":"0"', '"depositCutoffTimestamp":"1900000000"');
         DeployBridge.BridgeConfig memory config = script.parseConfig(json);
         assertEq(config.chainA.depositCutoffTimestamp, 1_900_000_000, "control: the setting reaches the configuration");
     }
@@ -758,7 +918,9 @@ contract DeployBridgeTest is Test {
         assertEq(address(DeliveryRouter(payable(deployedA.deliveryRouter)).bridge()), deployedA.mediator);
         assertEq(address(DeliveryRouter(payable(deployedA.deliveryRouter)).wNative()), address(wrappedNativeOnA));
         assertEq(
-            DeliveryRouter(payable(deployedA.deliveryRouter)).rewardAddress(), feeReward, "the reward address is the configured one"
+            DeliveryRouter(payable(deployedA.deliveryRouter)).rewardAddress(),
+            feeReward,
+            "the reward address is the configured one"
         );
         assertEq(
             DeliveryRouter(payable(deployedA.deliveryRouter)).failedDeliveryAddress(),
@@ -777,7 +939,11 @@ contract DeployBridgeTest is Test {
         DeployBridge.BridgeConfig memory config = script.parseConfig(json);
         DeployBridge.Plan memory plan = script.predictAddresses(config);
         assertEq(plan.chainB.deliveryRouter, address(0));
-        assertEq(plan.chainB.mediator, vm.computeCreateAddress(deployer, NONCE_B + 5), "the offsets before the router do not move");
+        assertEq(
+            plan.chainB.mediator,
+            vm.computeCreateAddress(deployer, NONCE_B + 5),
+            "the offsets before the router do not move"
+        );
 
         (, DeployBridge.ChainDeployment memory deploymentB) = _deployments(config, plan);
         _etchBeaconRoots();
@@ -818,7 +984,11 @@ contract DeployBridgeTest is Test {
             script.parseConfig(vm.replace(json, '"deployDeliveryRouter":"true"', '"deployDeliveryRouter":"false"'));
         assertEq(uint8(config.chainA.deliveryRouter), uint8(DeployBridge.RouterChoice.Skip));
         config = script.parseConfig(vm.replace(json, '"deployDeliveryRouter":"true",', ""));
-        assertEq(uint8(config.chainA.deliveryRouter), uint8(DeployBridge.RouterChoice.Skip), "an absent key means no delivery router");
+        assertEq(
+            uint8(config.chainA.deliveryRouter),
+            uint8(DeployBridge.RouterChoice.Skip),
+            "an absent key means no delivery router"
+        );
 
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.wrappedNative"));
         script.parseConfig(vm.replace(json, vm.toString(address(wrappedNativeOnA)), "REPLACE_WITH_WRAPPED_NATIVE"));
@@ -836,15 +1006,23 @@ contract DeployBridgeTest is Test {
         vm.expectRevert();
         script.parseConfig(vm.replace(json, rewardText, ""));
 
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.deliveryRouter.rewardAddress"));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.deliveryRouter.rewardAddress")
+        );
         script.parseConfig(vm.replace(json, vm.toString(feeReward), "REPLACE_WITH_THE_REWARD_ADDRESS"));
 
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.deliveryRouter.rewardAddress"));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.deliveryRouter.rewardAddress")
+        );
         script.parseConfig(vm.replace(json, vm.toString(feeReward), vm.toString(address(0))));
 
         string memory skipped = vm.replace(json, '"deployDeliveryRouter":"true"', '"deployDeliveryRouter":"false"');
         skipped = vm.replace(skipped, vm.toString(feeReward), "REPLACE_WITH_THE_REWARD_ADDRESS");
-        assertEq(script.parseConfig(skipped).chainA.deliveryRouterRewardAddress, address(0), "no delivery router, no reward read");
+        assertEq(
+            script.parseConfig(skipped).chainA.deliveryRouterRewardAddress,
+            address(0),
+            "no delivery router, no reward read"
+        );
     }
 
     /// Claim: a delivery router that the configuration deploys needs a real failed delivery address. Shows: a missing key, a
@@ -858,12 +1036,16 @@ contract DeployBridgeTest is Test {
         script.parseConfig(vm.replace(json, text, ""));
 
         vm.expectRevert(
-            abi.encodeWithSelector(DeployBridge.PlaceholderValue.selector, ".chainA.deliveryRouter.failedDeliveryAddress")
+            abi.encodeWithSelector(
+                DeployBridge.PlaceholderValue.selector, ".chainA.deliveryRouter.failedDeliveryAddress"
+            )
         );
         script.parseConfig(vm.replace(json, vm.toString(feeFailedDelivery), "REPLACE_WITH_THE_FAILED_DELIVERY_ADDRESS"));
 
         vm.expectRevert(
-            abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.deliveryRouter.failedDeliveryAddress")
+            abi.encodeWithSelector(
+                DeployBridge.ZeroConfigValue.selector, ".chainA.deliveryRouter.failedDeliveryAddress"
+            )
         );
         script.parseConfig(vm.replace(json, vm.toString(feeFailedDelivery), vm.toString(address(0))));
     }
@@ -968,19 +1150,25 @@ contract DeployBridgeTest is Test {
         vm.chainId(1);
 
         vm.setNonce(deployer, uint64(NONCE_A - 1));
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeployerNonceMismatch.selector, uint64(1), NONCE_A, NONCE_A - 1));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.DeployerNonceMismatch.selector, uint64(1), NONCE_A, NONCE_A - 1)
+        );
         script.assertChainEnvironment(config.chainA, deployer);
 
         vm.setNonce(deployer, uint64(NONCE_A));
         script.assertChainEnvironment(config.chainA, deployer); // honest path
 
         vm.setNonce(deployer, uint64(NONCE_A + 1));
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeployerNonceMismatch.selector, uint64(1), NONCE_A, NONCE_A + 1));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.DeployerNonceMismatch.selector, uint64(1), NONCE_A, NONCE_A + 1)
+        );
         script.assertChainEnvironment(config.chainA, deployer);
 
         vm.chainId(369);
         vm.setNonce(deployer, uint64(NONCE_B + 2));
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeployerNonceMismatch.selector, uint64(369), NONCE_B, NONCE_B + 2));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.DeployerNonceMismatch.selector, uint64(369), NONCE_B, NONCE_B + 2)
+        );
         script.assertChainEnvironment(config.chainB, deployer);
     }
 
@@ -994,7 +1182,9 @@ contract DeployBridgeTest is Test {
         _etchBeaconRoots();
         vm.chainId(1);
         vm.setNonce(deployer, uint64(NONCE_A - 1));
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeployerNonceMismatch.selector, uint64(1), NONCE_A, NONCE_A - 1));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.DeployerNonceMismatch.selector, uint64(1), NONCE_A, NONCE_A - 1)
+        );
         script.deployChain(deploymentA);
         assertEq(vm.getNonce(deployer), NONCE_A - 1);
         assertEq(plan.chainA.lightClient.code.length, 0);
@@ -1031,7 +1221,9 @@ contract DeployBridgeTest is Test {
         bytes32 otherHash = keccak256("the code of another verifier");
         config.chainA.verifierCodeHash = otherHash;
         vm.expectRevert(
-            abi.encodeWithSelector(DeployBridge.VerifierCodeHashMismatch.selector, uint64(1), address(verifier), otherHash, realHash)
+            abi.encodeWithSelector(
+                DeployBridge.VerifierCodeHashMismatch.selector, uint64(1), address(verifier), otherHash, realHash
+            )
         );
         script.assertChainEnvironment(config.chainA, deployer);
 
@@ -1040,7 +1232,9 @@ contract DeployBridgeTest is Test {
         vm.etch(impostor, hex"600160005260206000f3");
         config.chainA.verifier = impostor;
         vm.expectRevert(
-            abi.encodeWithSelector(DeployBridge.VerifierCodeHashMismatch.selector, uint64(1), impostor, realHash, impostor.codehash)
+            abi.encodeWithSelector(
+                DeployBridge.VerifierCodeHashMismatch.selector, uint64(1), impostor, realHash, impostor.codehash
+            )
         );
         script.assertChainEnvironment(config.chainA, deployer);
     }
@@ -1084,9 +1278,10 @@ contract DeployBridgeTest is Test {
         );
     }
 
+    /// @dev Deploys a gate from the settings of the script.
     function _newGateFrom(DeployBridge.GateConfig memory g) internal returns (BeaconForkGate) {
         return new BeaconForkGate(
-            BEACON_ROOTS, g.mode, g.genesisTime, g.secondsPerSlot, g.slotsPerEpoch, g.supportedVersions, g.sealDepths, address(0)
+            BEACON_ROOTS, g.mode, g.genesisTime, g.secondsPerSlot, g.slotsPerEpoch, g.genesisValidatorsRoot, address(0)
         );
     }
 
@@ -1099,7 +1294,12 @@ contract DeployBridgeTest is Test {
         uint64 capellaEra
     ) internal returns (MessageBridge) {
         return new MessageBridge(
-            deployed.lightClient, 1, 369, remoteBridge, MessageBridge.BridgeTerms(cutoff, remoteLightClient, type(uint64).max), capellaEra,
+            deployed.lightClient,
+            1,
+            369,
+            remoteBridge,
+            MessageBridge.BridgeTerms(cutoff, remoteLightClient, type(uint64).max),
+            capellaEra,
             deployed.gate
         );
     }
@@ -1181,15 +1381,16 @@ contract DeployBridgeTest is Test {
             DeployBridge.ChainAddresses memory moved = _copy(deployed);
             address predicted = _slot(moved, i);
             _setSlot(moved, i, address(this));
-            vm.expectRevert(abi.encodeWithSelector(DeployBridge.AddressNotAsPredicted.selector, names[i], predicted, address(this)));
+            vm.expectRevert(
+                abi.encodeWithSelector(DeployBridge.AddressNotAsPredicted.selector, names[i], predicted, address(this))
+            );
             script.verifyDeployment(d, moved);
         }
     }
 
     function _copy(DeployBridge.ChainAddresses memory a) internal pure returns (DeployBridge.ChainAddresses memory) {
         return DeployBridge.ChainAddresses(
-            a.lightClient, a.observedLightClient, a.registry, a.gate, a.bridge, a.mediator, a.factory,
-            a.deliveryRouter
+            a.lightClient, a.observedLightClient, a.registry, a.gate, a.bridge, a.mediator, a.factory, a.deliveryRouter
         );
     }
 
@@ -1218,7 +1419,9 @@ contract DeployBridgeTest is Test {
         TokenMediator.MediatorTerms memory terms = _mediatorTerms(d, deployed.bridge);
         terms.remoteMediator = makeAddr("not the predicted mediator B");
         _swapMediator(d, deployed, new TokenMediator(terms));
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "mediator.mediatorContractOnOtherSide"));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "mediator.mediatorContractOnOtherSide")
+        );
         script.verifyDeployment(d, deployed);
 
         (d, deployed) = _honestChainA();
@@ -1240,7 +1443,9 @@ contract DeployBridgeTest is Test {
         TokenMediator other = new TokenMediator(_mediatorTerms(d, deployed.bridge));
         deployed.factory = address(other.tokenFactory());
         vm.expectRevert(
-            abi.encodeWithSelector(DeployBridge.AddressNotAsPredicted.selector, "factory", d.plan.factory, deployed.factory)
+            abi.encodeWithSelector(
+                DeployBridge.AddressNotAsPredicted.selector, "factory", d.plan.factory, deployed.factory
+            )
         );
         script.verifyDeployment(d, deployed);
     }
@@ -1255,7 +1460,9 @@ contract DeployBridgeTest is Test {
         uint64 era = d.chain.lightClient.capellaEra;
 
         _swapBridge(
-            d, deployed, _newBridgeA(deployed, d.remoteBridge, makeAddr("not the predicted light client of chain B"), 0, era)
+            d,
+            deployed,
+            _newBridgeA(deployed, d.remoteBridge, makeAddr("not the predicted light client of chain B"), 0, era)
         );
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "bridge.remoteLightClient"));
         script.verifyDeployment(d, deployed);
@@ -1267,7 +1474,9 @@ contract DeployBridgeTest is Test {
         vm.store(address(startsOpen), bytes32(uint256(0)), word | bytes32(uint256(1) << 64));
         assertTrue(startsOpen.depositsOpen(), "control: the flag is set");
         _swapBridge(d, deployed, startsOpen);
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "bridge.depositsOpen must start false"));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "bridge.depositsOpen must start false")
+        );
         script.verifyDeployment(d, deployed);
     }
 
@@ -1275,12 +1484,17 @@ contract DeployBridgeTest is Test {
     /// with cutoff 12345 fails with the field name; the bridge with the configured cutoff passes. Matters: R2-08.
     function test_R2_08_postDeployAssertionsCatchWrongCutoffAndPassWhenRight() public {
         (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
-        _swapBridge(d, deployed, _newBridgeA(deployed, d.remoteBridge, d.remoteLightClient, 12_345, d.chain.lightClient.capellaEra));
+        _swapBridge(
+            d,
+            deployed,
+            _newBridgeA(deployed, d.remoteBridge, d.remoteLightClient, 12_345, d.chain.lightClient.capellaEra)
+        );
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "bridge.sendCutoffTimestamp"));
         script.verifyDeployment(d, deployed);
 
         // A configured cutoff reaches the bridge: deploy again with a cutoff and read it back.
-        string memory json = vm.replace(_validJson(), '"depositCutoffTimestamp":"0"', '"depositCutoffTimestamp":"1900000000"');
+        string memory json =
+            vm.replace(_validJson(), '"depositCutoffTimestamp":"0"', '"depositCutoffTimestamp":"1900000000"');
         json = vm.replace(json, string.concat('"deployerNonce":"', vm.toString(NONCE_A), '"'), '"deployerNonce":"50"');
         DeployBridge.BridgeConfig memory config = script.parseConfig(json);
         (d,) = _deployments(config, script.predictAddresses(config));
@@ -1314,7 +1528,9 @@ contract DeployBridgeTest is Test {
         BeaconLightClient wrong = _newClient(d.chain, keccak256("another chain"));
         d.plan.lightClient = address(wrong);
         deployed.lightClient = address(wrong);
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "lightClient.genesisValidatorsRoot"));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "lightClient.genesisValidatorsRoot")
+        );
         script.verifyDeployment(d, deployed);
     }
 
@@ -1338,17 +1554,18 @@ contract DeployBridgeTest is Test {
         assertTrue(address(otherGate) != deployed.gate, "the second gate is a different contract");
         DeployBridge.ChainAddresses memory viaOtherGate = _copy(deployed);
         viaOtherGate.gate = address(otherGate);
-        MessageBridge wired = _newBridgeA(viaOtherGate, d.remoteBridge, d.remoteLightClient, 0, d.chain.lightClient.capellaEra);
+        MessageBridge wired =
+            _newBridgeA(viaOtherGate, d.remoteBridge, d.remoteLightClient, 0, d.chain.lightClient.capellaEra);
         _swapBridge(d, deployed, wired);
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "bridge.depositGate"));
         script.verifyDeployment(d, deployed);
     }
 
     /// Claim: the post-deploy check reads every gate setting back. Shows: for each setting in turn (mode, genesis
-    /// time, seconds per slot, slots per epoch, the length of the version table, one version, one state depth, the seal
-    /// depths) a gate that differs in only that setting fails with the field name; the honest gate passes at the end.
-    /// Matters: HB-02 (a wrong version table either supports a fork that the light client cannot prove, or rejects a
-    /// fork it can, and a wrong seal depth lets a stranger seal the gate or blocks the seal).
+    /// time, seconds per slot, slots per epoch, genesis validators root) a gate that differs in only that setting fails
+    /// with the field name; the honest gate passes at the end, and its allowed shapes equal the rule of `ForkShape`.
+    /// Matters: HB-02 (a gate with the root of another chain judges a state that the route does not follow, and a
+    /// wrong clock confirms the wrong epoch). The allowed shapes are not a setting: they are fixed in code.
     function test_HB02_postDeployAssertionsCatchEveryWrongGateSetting() public {
         (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
         address honestGate = deployed.gate;
@@ -1370,31 +1587,8 @@ contract DeployBridgeTest is Test {
         _expectGateMismatch(d, deployed, tampered, "gate.slotsPerEpoch");
 
         tampered = script.parseConfig(_validJson()).chainA.gate;
-        BeaconForkGate.SupportedVersion[] memory shorter = new BeaconForkGate.SupportedVersion[](3);
-        for (uint256 i = 0; i < 3; i++) {
-            shorter[i] = tampered.supportedVersions[i];
-        }
-        tampered.supportedVersions = shorter;
-        _expectGateMismatch(d, deployed, tampered, "gate.supportedVersions");
-
-        tampered = script.parseConfig(_validJson()).chainA.gate;
-        tampered.supportedVersions[3].version = bytes4(0x07000000);
-        _expectGateMismatch(d, deployed, tampered, "gate.supportedVersions.version");
-
-        tampered = script.parseConfig(_validJson()).chainA.gate;
-        tampered.supportedVersions[2].stateDepth = 5;
-        _expectGateMismatch(d, deployed, tampered, "gate.supportedVersions.stateDepth");
-
-        tampered = script.parseConfig(_validJson()).chainA.gate;
-        uint8[] memory fewerDepths = new uint8[](2);
-        fewerDepths[0] = 5;
-        fewerDepths[1] = 6;
-        tampered.sealDepths = fewerDepths;
-        _expectGateMismatch(d, deployed, tampered, "gate.sealDepths");
-
-        tampered = script.parseConfig(_validJson()).chainA.gate;
-        tampered.sealDepths[2] = 8;
-        _expectGateMismatch(d, deployed, tampered, "gate.sealDepths");
+        tampered.genesisValidatorsRoot = keccak256("another chain");
+        _expectGateMismatch(d, deployed, tampered, "gate.genesisValidatorsRoot");
 
         // Honest control: the configured gate passes, with the bridge wired to it.
         d.plan.gate = honestGate;
@@ -1426,10 +1620,13 @@ contract DeployBridgeTest is Test {
         address honestBridge = deployed.bridge;
         // Storage slots 6, 7 and 8 hold the three layout arrays (see `forge inspect MessageBridge storageLayout`).
         for (uint256 slot = 6; slot <= 8; slot++) {
-            MessageBridge fresh = _newBridgeA(deployed, d.remoteBridge, d.remoteLightClient, 0, d.chain.lightClient.capellaEra);
+            MessageBridge fresh =
+                _newBridgeA(deployed, d.remoteBridge, d.remoteLightClient, 0, d.chain.lightClient.capellaEra);
             vm.store(address(fresh), bytes32(slot), bytes32(uint256(1)));
             _swapBridge(d, deployed, fresh);
-            vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "bridge.layouts must start empty"));
+            vm.expectRevert(
+                abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "bridge.layouts must start empty")
+            );
             script.verifyDeployment(d, deployed);
         }
         d.plan.bridge = honestBridge;
@@ -1456,21 +1653,25 @@ contract DeployBridgeTest is Test {
 
         deployed.deliveryRouter = address(new DeliveryRouter(mediator, otherToken, feeReward, feeFailedDelivery));
         d.plan.deliveryRouter = deployed.deliveryRouter;
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "deliveryRouter.wrappedNative"));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "deliveryRouter.wrappedNative")
+        );
         script.verifyDeployment(d, deployed);
 
-        deployed.deliveryRouter = address(
-            new DeliveryRouter(mediator, honestToken, makeAddr("another reward address"), feeFailedDelivery)
-        );
+        deployed.deliveryRouter =
+            address(new DeliveryRouter(mediator, honestToken, makeAddr("another reward address"), feeFailedDelivery));
         d.plan.deliveryRouter = deployed.deliveryRouter;
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "deliveryRouter.rewardAddress"));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "deliveryRouter.rewardAddress")
+        );
         script.verifyDeployment(d, deployed);
 
-        deployed.deliveryRouter = address(
-            new DeliveryRouter(mediator, honestToken, feeReward, makeAddr("another failed delivery address"))
-        );
+        deployed.deliveryRouter =
+            address(new DeliveryRouter(mediator, honestToken, feeReward, makeAddr("another failed delivery address")));
         d.plan.deliveryRouter = deployed.deliveryRouter;
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "deliveryRouter.failedDeliveryAddress"));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "deliveryRouter.failedDeliveryAddress")
+        );
         script.verifyDeployment(d, deployed);
         d.plan.deliveryRouter = honestFee;
         deployed.deliveryRouter = honestFee;
@@ -1488,7 +1689,11 @@ contract DeployBridgeTest is Test {
         vm.etch(address(verifier), hex"600160005260206000f3");
         vm.expectRevert(
             abi.encodeWithSelector(
-                DeployBridge.VerifierCodeHashMismatch.selector, uint64(1), address(verifier), pinned, address(verifier).codehash
+                DeployBridge.VerifierCodeHashMismatch.selector,
+                uint64(1),
+                address(verifier),
+                pinned,
+                address(verifier).codehash
             )
         );
         script.verifyDeployment(d, deployed);
@@ -1512,38 +1717,60 @@ contract DeployBridgeTest is Test {
     function test_G04_parseConfig_checksTheLightClientClockAgainstTheOtherChain() public {
         string memory json = _validJson();
         string memory key = _hexString(keccak256("light client program"));
-        string memory chainAClient = string.concat('"lightClient":{"programVKey":"', key, '","genesisTime":"1683785555",');
+        string memory chainAClient =
+            string.concat('"lightClient":{"programVKey":"', key, '","genesisTime":"1683785555",');
 
         vm.expectRevert(
             abi.encodeWithSelector(
                 DeployBridge.ClockMismatch.selector, "lightClient.genesisTime differs from the gate of the other chain"
             )
         );
-        script.parseConfig(vm.replace(json, chainAClient, string.concat('"lightClient":{"programVKey":"', key, '","genesisTime":"1683785556",')));
+        script.parseConfig(
+            vm.replace(
+                json,
+                chainAClient,
+                string.concat('"lightClient":{"programVKey":"', key, '","genesisTime":"1683785556",')
+            )
+        );
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                DeployBridge.ClockMismatch.selector, "lightClient.secondsPerSlot differs from the gate of the other chain"
+                DeployBridge.ClockMismatch.selector,
+                "lightClient.secondsPerSlot differs from the gate of the other chain"
             )
         );
-        script.parseConfig(vm.replace(json, '"secondsPerSlot":"10","genesisValidatorsRoot"', '"secondsPerSlot":"11","genesisValidatorsRoot"'));
+        script.parseConfig(
+            vm.replace(
+                json, '"secondsPerSlot":"10","genesisValidatorsRoot"', '"secondsPerSlot":"11","genesisValidatorsRoot"'
+            )
+        );
 
         vm.expectRevert(
             abi.encodeWithSelector(
                 DeployBridge.ObservationMismatch.selector, "genesisTime differs from the other chain's light client"
             )
         );
-        script.parseConfig(vm.replace(json, '"observation":{"genesisTime":"1683785555"', '"observation":{"genesisTime":"1683785556"'));
+        script.parseConfig(
+            vm.replace(json, '"observation":{"genesisTime":"1683785555"', '"observation":{"genesisTime":"1683785556"')
+        );
 
         vm.expectRevert(
             abi.encodeWithSelector(
                 DeployBridge.ObservationMismatch.selector, "secondsPerSlot differs from the other chain's light client"
             )
         );
-        script.parseConfig(vm.replace(json, '"secondsPerSlot":"10","lightClientProgramVKey"', '"secondsPerSlot":"11","lightClientProgramVKey"'));
+        script.parseConfig(
+            vm.replace(
+                json, '"secondsPerSlot":"10","lightClientProgramVKey"', '"secondsPerSlot":"11","lightClientProgramVKey"'
+            )
+        );
 
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.lightClient.genesisTime"));
-        script.parseConfig(vm.replace(json, chainAClient, string.concat('"lightClient":{"programVKey":"', key, '","genesisTime":"0",')));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.ZeroConfigValue.selector, ".chainA.lightClient.genesisTime")
+        );
+        script.parseConfig(
+            vm.replace(json, chainAClient, string.concat('"lightClient":{"programVKey":"', key, '","genesisTime":"0",'))
+        );
     }
 
     /// Claim: the registry settings are checked against the other chain, not only read. Shows: a genesis validators
@@ -1558,17 +1785,26 @@ contract DeployBridgeTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                DeployBridge.ObservationMismatch.selector, "genesisValidatorsRoot differs from the other chain's light client"
+                DeployBridge.ObservationMismatch.selector,
+                "genesisValidatorsRoot differs from the other chain's light client"
             )
         );
-        script.parseConfig(vm.replace(json, string.concat('"genesisValidatorsRoot":"', honestRoot, '","slotsPerPeriod":"8192","initialSlot"'), string.concat('"genesisValidatorsRoot":"', otherRoot, '","slotsPerPeriod":"8192","initialSlot"')));
+        script.parseConfig(
+            vm.replace(
+                json,
+                string.concat('"genesisValidatorsRoot":"', honestRoot, '","slotsPerPeriod":"8192","initialSlot"'),
+                string.concat('"genesisValidatorsRoot":"', otherRoot, '","slotsPerPeriod":"8192","initialSlot"')
+            )
+        );
 
         vm.expectRevert(
             abi.encodeWithSelector(
                 DeployBridge.ObservationMismatch.selector, "slotsPerPeriod differs from the other chain's light client"
             )
         );
-        script.parseConfig(vm.replace(json, '"slotsPerPeriod":"8192","initialSlot"', '"slotsPerPeriod":"4096","initialSlot"'));
+        script.parseConfig(
+            vm.replace(json, '"slotsPerPeriod":"8192","initialSlot"', '"slotsPerPeriod":"4096","initialSlot"')
+        );
 
         string memory sameKey = _hexString(keccak256("light client program"));
         vm.expectRevert(
@@ -1603,24 +1839,50 @@ contract DeployBridgeTest is Test {
 
         DeployBridge.ChainDeployment memory wrong = _deploymentB(config, plan);
         wrong.chain.observation.observationProgramVKey = keccak256("another key");
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "registry.observationProgramVKey"));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "registry.observationProgramVKey")
+        );
         script.verifyRegistry(wrong, gateB);
 
         wrong = _deploymentB(config, plan);
         wrong.plan.registry = makeAddr("elsewhere");
         vm.expectRevert(
-            abi.encodeWithSelector(DeployBridge.AddressNotAsPredicted.selector, "forkRegistry", wrong.plan.registry, plan.chainB.registry)
+            abi.encodeWithSelector(
+                DeployBridge.AddressNotAsPredicted.selector, "forkRegistry", wrong.plan.registry, plan.chainB.registry
+            )
         );
         script.verifyRegistry(wrong, gateB);
 
         wrong = _deploymentB(config, plan);
         wrong.chain.observation.genesisValidatorsRoot = keccak256("another chain");
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "observed.genesisValidatorsRoot"));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "observed.genesisValidatorsRoot")
+        );
         script.verifyRegistry(wrong, gateB);
+
+        BeaconForkGate foreignGate = new BeaconForkGate(
+            BEACON_ROOTS,
+            BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry,
+            1_683_785_555,
+            10,
+            32,
+            keccak256("another chain"),
+            plan.chainB.registry
+        );
+        DeployBridge.ChainDeployment memory forForeignGate = _deploymentB(config, plan);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployBridge.DeploymentMismatch.selector,
+                "gate.genesisValidatorsRoot differs from the observed light client"
+            )
+        );
+        script.verifyRegistry(forForeignGate, address(foreignGate));
 
         wrong = _deploymentB(config, plan);
         wrong.chain.gate.mode = BeaconForkGate.GateMode.Enforcing;
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "gate.forkRegistry must be empty"));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "gate.forkRegistry must be empty")
+        );
         script.verifyRegistry(wrong, gateB);
     }
 }

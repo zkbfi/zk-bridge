@@ -126,9 +126,11 @@ contract BeaconForkGateGasTest is GateSupport {
         assertLt(used - plain, 3_700);
     }
 
-    /// Claim: the `confirm` call of the first sender of an epoch costs 30,000 to 40,000 gas by the design estimate.
-    /// Shows: the numbers for a depth 6 state (Electra) and a depth 5 state (Deneb). Matters: this is what the first
-    /// sender of each epoch pays on top of the send. The send after it costs the confirmed epoch number.
+    /// Claim: the `confirm` call of the first sender of an epoch costs 40,000 to 47,000 gas. Shows: the numbers for a
+    /// depth 6 state and a depth 5 state. Each includes the second branch, the one of `genesis_validators_root`, which
+    /// adds about 8,000 gas (five or six more SHA-256 steps and the longer calldata) to the 34,700 gas of the version
+    /// branch alone. Matters: this is what the first sender of each epoch pays on top of the send. The send after it
+    /// costs the confirmed epoch number.
     function test_HB02_gas_confirmWithProof() public {
         _etchMock();
         BeaconForkGate gateSix = _newGate(BeaconForkGate.GateMode.Enforcing);
@@ -139,8 +141,8 @@ contract BeaconForkGateGasTest is GateSupport {
         uint256 usedFive = _measuredConfirm(gateFive, five);
         emit log_named_uint("confirm with proof, depth 6", usedSix);
         emit log_named_uint("confirm with proof, depth 5", usedFive);
-        assertLt(usedSix, 37_000);
-        assertLt(usedFive, 35_000);
+        assertLt(usedSix, 47_000);
+        assertLt(usedFive, 45_000);
         assertGt(usedFive, 20_000, "a proof costs far more than a read");
     }
 }

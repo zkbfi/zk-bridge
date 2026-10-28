@@ -9,7 +9,8 @@ import {GateBeaconRootsMock, GateGenuineBeaconRoots} from "./GateMocks.sol";
 
 /// @title GateSupport
 /// @notice Builders for the fork gate tests: a model of the beacon roots contract, real sparse state trees, headers,
-/// evidence, and time helpers. The generalized index of the version leaf is computed here by hand, not by the gate.
+/// evidence, and time helpers. The generalized indices of the version leaf and of the genesis validators root leaf are
+/// computed here by hand, not by the gate.
 abstract contract GateSupport is WithdrawalScenes {
     /// @dev Ethereum timing, the same as `_newGate`.
     uint64 internal constant ETHEREUM_GENESIS = 1_606_824_023;
@@ -21,20 +22,37 @@ abstract contract GateSupport is WithdrawalScenes {
     bytes4 internal constant DENEB = 0x04000000;
     bytes4 internal constant ELECTRA = 0x05000000;
     bytes4 internal constant FULU = 0x06000000;
-    /// @dev Not in the Ethereum table: the version after Fulu in the light-client program (excluded there too).
+    /// @dev A version that no list has ever held. The gate keeps no list of names, so it is an ordinary version.
     bytes4 internal constant UNKNOWN_FORK = 0x07000000;
     bytes4 internal constant ALTAIR = 0x01000000;
 
-    /// @notice A real sparse state tree and the two branches that the tests need.
-    /// @param depth The depth of the state tree.
+    /// @dev The marker of the progressive state, the same value as `ForkShape.PROGRESSIVE`.
+    uint8 internal constant PROGRESSIVE_SHAPE = 255;
+    /// @dev A plain depth outside the allowed set. A valid proof at this depth seals the gate.
+    uint256 internal constant DISALLOWED_DEPTH = 8;
+    /// @dev The generalized index of `fork.current_version` in the progressive state, written by hand.
+    uint256 internal constant HAND_PROGRESSIVE_VERSION_GINDEX = 169;
+    /// @dev The generalized index of `genesis_validators_root` in the progressive state, written by hand.
+    uint256 internal constant HAND_PROGRESSIVE_GENESIS_GINDEX = 40;
+
+    /// @notice A real sparse state tree and the branches that the tests need.
+    /// @param depth The depth of the state tree. Zero for the progressive tree.
     /// @param stateRoot The root.
-    /// @param currentBranch The branch of `Fork.current_version` (length depth + 2).
-    /// @param previousBranch The branch of `Fork.previous_version` (length depth + 2).
+    /// @param currentBranch The branch of `Fork.current_version` (length depth + 2, or 7 for the progressive tree).
+    /// @param previousBranch The branch of `Fork.previous_version` (same length).
+    /// @param genesisValidatorsRootBranch The branch of `genesis_validators_root`, state field 1 (length depth, or 5 for
+    /// the progressive tree). Its leaf is `GENESIS_ROOT_A`, the root that the gates of the tests follow.
     struct StateTree {
         uint256 depth;
         bytes32 stateRoot;
         bytes32[] currentBranch;
         bytes32[] previousBranch;
+        bytes32[] genesisValidatorsRootBranch;
+    }
+
+    /// @notice The revert data of an error with no arguments.
+    function _err(bytes4 selector) internal pure returns (bytes memory) {
+        return abi.encodeWithSelector(selector);
     }
 
     // ---------------------------------------------------------------- time
@@ -75,29 +93,12 @@ abstract contract GateSupport is WithdrawalScenes {
 
     // ---------------------------------------------------------------- gates
 
-    function _gateWith(
-        BeaconForkGate.GateMode mode,
-        BeaconForkGate.SupportedVersion[] memory versions,
-        uint8[] memory depths
-    ) internal returns (BeaconForkGate) {
-        return new BeaconForkGate(BEACON_ROOTS, mode, ETHEREUM_GENESIS, 12, 32, versions, depths, address(0));
-    }
-
-    function _oneVersion(bytes4 version, uint8 depth) internal pure returns (BeaconForkGate.SupportedVersion[] memory out) {
-        out = new BeaconForkGate.SupportedVersion[](1);
-        out[0] = BeaconForkGate.SupportedVersion(version, depth);
-    }
-
-    function _depths(uint8 a, uint8 b, uint8 c) internal pure returns (uint8[] memory out) {
-        out = new uint8[](3);
-        out[0] = a;
-        out[1] = b;
-        out[2] = c;
-    }
-
-    function _depths(uint8 a) internal pure returns (uint8[] memory out) {
-        out = new uint8[](1);
-        out[0] = a;
+    /// @notice A gate with Ethereum timing that follows the beacon chain with `genesisValidatorsRoot`, in the given mode.
+    function _gateFollowing(BeaconForkGate.GateMode mode, bytes32 genesisValidatorsRoot)
+        internal
+        returns (BeaconForkGate)
+    {
+        return new BeaconForkGate(BEACON_ROOTS, mode, ETHEREUM_GENESIS, 12, 32, genesisValidatorsRoot, address(0));
     }
 
     // ---------------------------------------------------------------- state trees
@@ -109,15 +110,25 @@ abstract contract GateSupport is WithdrawalScenes {
         return ((2 ** depth + 3) * 4) + forkField;
     }
 
-    /// @notice Builds a real sparse state tree of `depth` that holds `currentVersion` as `Fork.current_version`
-    /// and `previousVersion` as `Fork.previous_version`, plus other leaves so that the siblings are not all zero.
+    /// @notice Builds a real sparse state tree of `depth` that holds `currentVersion` as `Fork.current_version`,
+    /// `previousVersion` as `Fork.previous_version` and `GENESIS_ROOT_A` as `genesis_validators_root`, plus other leaves
+    /// so that the siblings are not all zero.
     function _stateTree(uint256 depth, bytes4 currentVersion, bytes4 previousVersion)
         internal
         pure
         returns (StateTree memory tree)
     {
-        uint256[] memory gindices = new uint256[](5);
-        bytes32[] memory leaves = new bytes32[](5);
+        return _stateTreeWithGenesis(depth, currentVersion, previousVersion, GENESIS_ROOT_A);
+    }
+
+    /// @notice As `_stateTree`, with a chosen value in the `genesis_validators_root` leaf.
+    function _stateTreeWithGenesis(uint256 depth, bytes4 currentVersion, bytes4 previousVersion, bytes32 genesisRoot)
+        internal
+        pure
+        returns (StateTree memory tree)
+    {
+        uint256[] memory gindices = new uint256[](6);
+        bytes32[] memory leaves = new bytes32[](6);
         gindices[0] = _handGindex(depth, 1);
         leaves[0] = bytes32(currentVersion);
         gindices[1] = _handGindex(depth, 0);
@@ -129,49 +140,91 @@ abstract contract GateSupport is WithdrawalScenes {
         leaves[3] = keccak256("state field 2");
         gindices[4] = (2 ** depth) + 4;
         leaves[4] = keccak256("state field 4");
+        gindices[5] = _handGenesisGindex(depth);
+        leaves[5] = genesisRoot;
         (bytes32 root, bytes32[][] memory branches) = _gateSparseTree(gindices, leaves);
         tree.depth = depth;
         tree.stateRoot = root;
         tree.currentBranch = branches[0];
         tree.previousBranch = branches[1];
+        tree.genesisValidatorsRootBranch = branches[5];
     }
 
-    /// @notice The root and the branches of a sparse tree: given leaves, zero elsewhere. Every index has the same depth.
+    /// @notice The generalized index of `genesis_validators_root` (state field 1) in a plain tree of `depth`, by hand.
+    function _handGenesisGindex(uint256 depth) internal pure returns (uint256) {
+        return (2 ** depth) + 1;
+    }
+
+    /// @notice Builds a real sparse progressive state tree: the version leaf at 169 (7 siblings) and the genesis
+    /// validators root leaf at node 40 (5 siblings). The previous version sits next to the current one at 168.
+    function _progressiveTree(bytes4 currentVersion, bytes4 previousVersion)
+        internal
+        pure
+        returns (StateTree memory tree)
+    {
+        return _progressiveTreeWithGenesis(currentVersion, previousVersion, GENESIS_ROOT_A);
+    }
+
+    /// @notice As `_progressiveTree`, with a chosen value in the `genesis_validators_root` leaf.
+    function _progressiveTreeWithGenesis(bytes4 currentVersion, bytes4 previousVersion, bytes32 genesisRoot)
+        internal
+        pure
+        returns (StateTree memory tree)
+    {
+        uint256[] memory gindices = new uint256[](4);
+        bytes32[] memory leaves = new bytes32[](4);
+        gindices[0] = HAND_PROGRESSIVE_VERSION_GINDEX;
+        leaves[0] = bytes32(currentVersion);
+        gindices[1] = HAND_PROGRESSIVE_VERSION_GINDEX - 1;
+        leaves[1] = bytes32(previousVersion);
+        gindices[2] = HAND_PROGRESSIVE_VERSION_GINDEX + 1;
+        leaves[2] = keccak256("fork epoch");
+        gindices[3] = HAND_PROGRESSIVE_GENESIS_GINDEX;
+        leaves[3] = genesisRoot;
+        (bytes32 root, bytes32[][] memory branches) = _gateSparseTree(gindices, leaves);
+        tree.stateRoot = root;
+        tree.currentBranch = branches[0];
+        tree.previousBranch = branches[1];
+        tree.genesisValidatorsRootBranch = branches[3];
+    }
+
+    /// @notice The root and the branches of a sparse tree: the given leaves, and an empty (zero) value under every node
+    /// that has no leaf below it. The leaves may have different depths, but none may lie below another.
     function _gateSparseTree(uint256[] memory gindices, bytes32[] memory leaves)
         internal
         pure
         returns (bytes32 root, bytes32[][] memory branches)
     {
-        uint256 depth = SSZ.depthOf(gindices[0]);
-        uint256 count = gindices.length;
-        branches = new bytes32[][](count);
-        uint256[] memory index = new uint256[](count);
-        bytes32[] memory value = new bytes32[](count);
-        bytes32 zero = bytes32(0);
-        for (uint256 k = 0; k < count; k++) {
-            branches[k] = new bytes32[](depth);
-            index[k] = gindices[k];
-            value[k] = leaves[k];
-        }
-        for (uint256 level = 0; level < depth; level++) {
-            bytes32[] memory next = new bytes32[](count);
-            for (uint256 k = 0; k < count; k++) {
-                bytes32 sibling = zero;
-                for (uint256 j = 0; j < count; j++) {
-                    if (index[j] == (index[k] ^ 1)) sibling = value[j];
-                }
-                branches[k][level] = sibling;
-                next[k] = index[k] & 1 == 1
-                    ? sha256(abi.encodePacked(sibling, value[k]))
-                    : sha256(abi.encodePacked(value[k], sibling));
+        root = _sparseNode(1, gindices, leaves);
+        branches = new bytes32[][](gindices.length);
+        for (uint256 k = 0; k < gindices.length; k++) {
+            uint256 node = gindices[k];
+            branches[k] = new bytes32[](SSZ.depthOf(node));
+            for (uint256 level = 0; node > 1; level++) {
+                branches[k][level] = _sparseNode(node ^ 1, gindices, leaves);
+                node >>= 1;
             }
-            for (uint256 k = 0; k < count; k++) {
-                index[k] >>= 1;
-                value[k] = next[k];
-            }
-            zero = sha256(abi.encodePacked(zero, zero));
         }
-        root = value[0];
+    }
+
+    /// @dev The value of one node of the sparse tree: a leaf, zero when no leaf lies below, else the hash of the children.
+    function _sparseNode(uint256 node, uint256[] memory gindices, bytes32[] memory leaves)
+        private
+        pure
+        returns (bytes32)
+    {
+        uint256 nodeDepth = SSZ.depthOf(node);
+        bool leafBelow;
+        for (uint256 k = 0; k < gindices.length; k++) {
+            if (gindices[k] == node) return leaves[k];
+            uint256 leafDepth = SSZ.depthOf(gindices[k]);
+            if (leafDepth > nodeDepth && (gindices[k] >> (leafDepth - nodeDepth)) == node) leafBelow = true;
+        }
+        if (!leafBelow) return bytes32(0);
+        return
+            sha256(
+                abi.encodePacked(_sparseNode(node * 2, gindices, leaves), _sparseNode(node * 2 + 1, gindices, leaves))
+            );
     }
 
     /// @notice A copy of `branch` cut or extended to `length` (the extension uses fixed filler hashes).
@@ -199,24 +252,56 @@ abstract contract GateSupport is WithdrawalScenes {
         return uint64(epoch * 32 + offset);
     }
 
-    function _evidence(uint256 timestamp, BeaconBlockHeader memory header, bytes4 version, bytes32[] memory branch)
+    /// @notice The evidence of a version branch and a genesis validators root branch under `header`.
+    function _evidence(
+        uint256 timestamp,
+        BeaconBlockHeader memory header,
+        bytes4 version,
+        bytes32[] memory branch,
+        bytes32[] memory genesisValidatorsRootBranch
+    ) internal pure returns (bytes memory) {
+        return abi.encode(BeaconForkGate.ForkEvidence(timestamp, header, version, branch, genesisValidatorsRootBranch));
+    }
+
+    /// @notice The evidence that the current-version branch and the genesis branch of `tree` give, with `version` claimed.
+    function _evidenceOf(uint256 timestamp, BeaconBlockHeader memory header, bytes4 version, StateTree memory tree)
         internal
         pure
         returns (bytes memory)
     {
-        return abi.encode(BeaconForkGate.ForkEvidence(timestamp, header, version, branch));
+        return _evidence(timestamp, header, version, tree.currentBranch, tree.genesisValidatorsRootBranch);
     }
 
     /// @notice Honest evidence: a state of `depth` whose current version is `version`, a header at `slot` that holds
-    /// it, and the header root planted in the model under `timestamp`.
+    /// it, and the header root planted in the model under `timestamp`. The state holds `GENESIS_ROOT_A`.
     function _honestEvidence(uint256 timestamp, uint64 slot, uint256 depth, bytes4 version)
         internal
         returns (bytes memory)
     {
-        StateTree memory tree = _stateTree(depth, version, 0x02000000);
+        return _plantedEvidence(timestamp, slot, _stateTree(depth, version, 0x02000000), version);
+    }
+
+    /// @notice Honest evidence for the progressive state (the shape from Gloas on).
+    function _honestProgressiveEvidence(uint256 timestamp, uint64 slot, bytes4 version)
+        internal
+        returns (bytes memory)
+    {
+        return _plantedEvidence(timestamp, slot, _progressiveTree(version, 0x02000000), version);
+    }
+
+    /// @notice Plants the header root of `tree` at `slot` under `timestamp` and returns the evidence for `version`.
+    function _plantedEvidence(uint256 timestamp, uint64 slot, StateTree memory tree, bytes4 version)
+        internal
+        returns (bytes memory)
+    {
         BeaconBlockHeader memory header = _header(slot, tree.stateRoot);
         _plant(timestamp, SSZ.hashTreeRootMemory(header));
-        return _evidence(timestamp, header, version, tree.currentBranch);
+        return _evidenceOf(timestamp, header, version, tree);
+    }
+
+    /// @notice Evidence that seals: a valid proof of `version` at a plain depth outside the allowed set.
+    function _sealEvidence(uint256 timestamp, uint64 slot, bytes4 version) internal returns (bytes memory) {
+        return _honestEvidence(timestamp, slot, DISALLOWED_DEPTH, version);
     }
 
     // ---------------------------------------------------------------- bridge with a gate

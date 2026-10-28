@@ -3,22 +3,33 @@ pragma solidity ^0.8.24;
 
 import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
 import {BeaconBlockHeader, SSZ} from "../../src/hardened/SSZ.sol";
+import {ForkShape} from "../../src/hardened/ForkShape.sol";
 import {GateSupport} from "./utils/GateSupport.sol";
 
-/// @notice `BeaconForkGate` for a Gloas route. The Gloas `BeaconState` is a progressive container, so the version leaf sits
-/// at the fixed index 169 (7 siblings) and not at `((2**depth + 3) * 4) + 1`. The gate marks such a layout with
-/// `PROGRESSIVE_STATE_DEPTH` (255), in a supported version and in the seal depths. The evidence of most tests is REAL: the
-/// finalized header of a Sepolia beacon node, the root of its real state (3.6 MB of SSZ, hashed by `lc-core`) and the branch
-/// of its `fork.current_version` (0x90000076, Gloas; the previous version is 0x90000075, Fulu).
+/// @notice `BeaconForkGate` on a Gloas state. The Gloas `BeaconState` is a progressive container, so the version leaf sits
+/// at the fixed index 169 (7 siblings) and the genesis validators root leaf at node 40 (5 siblings). The gate holds no
+/// Gloas name: it tries each allowed shape at its own positions. The evidence of most tests is REAL: the finalized header
+/// of a Sepolia beacon node, the root of its real state (3.6 MB of SSZ, hashed by `lc-core`), the branch of its
+/// `fork.current_version` (0x90000076, Gloas; the previous version is 0x90000075, Fulu) and the branch of its
+/// `genesis_validators_root` (the file `test/hardened/fixtures/gloas_genesis_validators_root.json`).
 contract GloasGateTest is GateSupport {
+    /// @dev The previous fork version of the real Sepolia state.
     bytes4 internal constant SEPOLIA_FULU = 0x90000075;
+    /// @dev The current fork version of the real Sepolia state.
     bytes4 internal constant SEPOLIA_GLOAS = 0x90000076;
-    uint8 internal constant PROGRESSIVE = 255;
+    /// @dev The real version branch and header.
     string internal constant FIXTURE = "light-client/tests/fixtures/sepolia/gloas_fork_version.json";
+    /// @dev The real genesis validators root branch over the same state.
+    string internal constant GENESIS_FIXTURE = "test/hardened/fixtures/gloas_genesis_validators_root.json";
+    /// @dev The genesis data that the Sepolia node reports.
+    string internal constant SEPOLIA_GENESIS = "light-client/tests/fixtures/sepolia/genesis.json";
 
+    /// @dev The real header with its two branches.
     struct Real {
         BeaconBlockHeader header;
         bytes32[] branch;
+        bytes32[] genesisBranch;
+        bytes32 genesisValidatorsRoot;
     }
 
     function setUp() public override {
@@ -26,6 +37,7 @@ contract GloasGateTest is GateSupport {
         _etchMock();
     }
 
+    /// @dev Reads the real fixtures and checks that they belong together.
     function _real() internal view returns (Real memory out) {
         string memory json = vm.readFile(FIXTURE);
         out.header = BeaconBlockHeader({
@@ -37,180 +49,187 @@ contract GloasGateTest is GateSupport {
         });
         out.branch = vm.parseJsonBytes32Array(json, ".response.branch");
         assertEq(out.branch.length, 7);
-        assertEq(vm.parseJsonBytes32(json, ".response.state_root"), out.header.stateRoot, "the state is the header state");
-    }
+        assertEq(
+            vm.parseJsonBytes32(json, ".response.state_root"), out.header.stateRoot, "the state is the header state"
+        );
 
-    /// @dev Warps into the epoch of the real header, plants its root for the current time, and returns the evidence.
-    function _evidenceFor(Real memory real, bytes4 version, bytes32[] memory branch) internal returns (bytes memory) {
-        _warpIntoEpoch(real.header.slot / 32, 0);
-        _plant(block.timestamp, SSZ.hashTreeRootMemory(real.header));
-        return _evidence(block.timestamp, real.header, version, branch);
-    }
-
-    function _versions(bytes4 a, uint8 depthA, bytes4 b, uint8 depthB)
-        internal
-        pure
-        returns (BeaconForkGate.SupportedVersion[] memory out)
-    {
-        out = new BeaconForkGate.SupportedVersion[](2);
-        out[0] = BeaconForkGate.SupportedVersion(a, depthA);
-        out[1] = BeaconForkGate.SupportedVersion(b, depthB);
-    }
-
-    function _gloasGate() internal returns (BeaconForkGate) {
-        return _gateWith(
-            BeaconForkGate.GateMode.Enforcing,
-            _versions(SEPOLIA_FULU, 6, SEPOLIA_GLOAS, PROGRESSIVE),
-            _depths(5, 6, 7, PROGRESSIVE)
+        string memory genesisJson = vm.readFile(GENESIS_FIXTURE);
+        out.genesisBranch = vm.parseJsonBytes32Array(genesisJson, ".branch");
+        assertEq(out.genesisBranch.length, 5);
+        assertEq(
+            vm.parseJsonBytes32(genesisJson, ".stateRoot"), out.header.stateRoot, "the branch is over the same state"
+        );
+        out.genesisValidatorsRoot = vm.parseJsonBytes32(genesisJson, ".genesisValidatorsRoot");
+        string memory chainJson = vm.readFile(SEPOLIA_GENESIS);
+        assertEq(
+            out.genesisValidatorsRoot,
+            vm.parseJsonBytes32(chainJson, ".response.data.genesis_validators_root"),
+            "the leaf is the genesis validators root that the Sepolia node reports"
         );
     }
 
-    function _depths(uint8 a, uint8 b) internal pure returns (uint8[] memory out) {
-        out = new uint8[](2);
-        out[0] = a;
-        out[1] = b;
+    /// @dev Warps into the epoch of the real header, plants its root for the current time, and returns the evidence.
+    function _evidenceFor(Real memory real, bytes4 version, bytes32[] memory branch, bytes32[] memory genesisBranch)
+        internal
+        returns (bytes memory)
+    {
+        _warpIntoEpoch(real.header.slot / 32, 0);
+        _plant(block.timestamp, SSZ.hashTreeRootMemory(real.header));
+        return _evidence(block.timestamp, real.header, version, branch, genesisBranch);
     }
 
-    function _depths(uint8 a, uint8 b, uint8 c, uint8 d) internal pure returns (uint8[] memory out) {
-        out = new uint8[](4);
-        out[0] = a;
-        out[1] = b;
-        out[2] = c;
-        out[3] = d;
+    /// @dev A gate that follows the Sepolia beacon chain. It holds no version name.
+    function _gloasGate(Real memory real) internal returns (BeaconForkGate) {
+        return _gateFollowing(BeaconForkGate.GateMode.Enforcing, real.genesisValidatorsRoot);
     }
 
-    /// Claim: the real Gloas evidence confirms the epoch on a gate whose Gloas entry is progressive, and the event names
-    /// the epoch and the version. Control: the same evidence is refused when the route lists Gloas with the plain depth 5
-    /// (the branch length fits, the index 141 does not) and with depth 6 (the branch length does not fit). Matters: the
-    /// gate takes the position from its configuration, never from the caller.
+    /// Claim: the real Gloas evidence confirms the epoch on a gate with no Gloas name, and the event names the epoch and
+    /// the version. Shows: the version branch (7 entries) verifies at 169 and not at 141, the genesis validators root
+    /// branch (5 entries) verifies at node 40 against the same real state root, and `confirm` emits `ForkConfirmed`.
+    /// Control: the same version branch with a branch of another length is refused (see the exactness test). Matters:
+    /// index 141 on a true Gloas state lands in a different field, so only the progressive position can prove the
+    /// version. The seven-entry ambiguity (plain depth 5 and Gloas) is settled on real data, with no name in the
+    /// configuration.
     function test_realGloasEvidenceConfirms() public {
         Real memory real = _real();
-        bytes memory evidence = _evidenceFor(real, SEPOLIA_GLOAS, real.branch);
-        BeaconForkGate gate = _gloasGate();
+        assertTrue(
+            SSZ.isValidBranchMemory(bytes32(SEPOLIA_GLOAS), real.branch, 169, real.header.stateRoot),
+            "the real version branch verifies at 169"
+        );
+        assertFalse(
+            SSZ.isValidBranchMemory(bytes32(SEPOLIA_GLOAS), real.branch, 141, real.header.stateRoot),
+            "the same branch fails at the plain depth 5 position"
+        );
+        assertTrue(
+            SSZ.isValidBranchMemory(real.genesisValidatorsRoot, real.genesisBranch, 40, real.header.stateRoot),
+            "the real genesis validators root branch verifies at node 40"
+        );
+        bytes memory evidence = _evidenceFor(real, SEPOLIA_GLOAS, real.branch, real.genesisBranch);
+        BeaconForkGate gate = _gloasGate(real);
         vm.expectEmit(true, false, false, true, address(gate));
         emit BeaconForkGate.ForkConfirmed(real.header.slot / 32, SEPOLIA_GLOAS);
         gate.confirm(evidence);
         (uint64 epoch, bool exists) = gate.confirmedEpoch();
         assertTrue(exists);
         assertEq(epoch, real.header.slot / 32);
-
-        BeaconForkGate plainFive = _gateWith(
-            BeaconForkGate.GateMode.Enforcing, _oneVersion(SEPOLIA_GLOAS, 5), _depths(5, 6, 7, PROGRESSIVE)
-        );
-        vm.expectRevert(BeaconForkGate.ForkProofInvalid.selector);
-        plainFive.confirm(evidence);
-        BeaconForkGate plainSix = _gateWith(
-            BeaconForkGate.GateMode.Enforcing, _oneVersion(SEPOLIA_GLOAS, 6), _depths(5, 6, 7, PROGRESSIVE)
-        );
-        vm.expectRevert(abi.encodeWithSelector(SSZ.BranchLengthMismatch.selector, 8, 7));
-        plainSix.confirm(evidence);
     }
 
-    /// Claim: the progressive proof proves the CURRENT version only. A claim of the previous version with the real branch,
-    /// a flipped entry of the branch, and a branch of another length are refused. Control: the honest evidence passes.
+    /// Claim: the real Gloas proof proves the CURRENT version only, with the exact branch. Shows: a claim of the previous
+    /// version with the real branch, a flipped entry of the branch, and a branch cut to 6 entries or extended to 8 or 9
+    /// entries are refused: `ForkProofInvalid` for the first two and for lengths 8 and 9 (a plain depth 6 or 7 position
+    /// that the state does not hold), `ShapeNotAllowed(4)` for 6 entries and `ShapeNotAllowed(8)` for 10 entries.
+    /// Control: the honest evidence passes. Matters: the length of the branch names the shape, and the hash decides.
     function test_realGloasEvidenceIsExact() public {
         Real memory real = _real();
-        BeaconForkGate gate = _gateWith(
-            BeaconForkGate.GateMode.Enforcing,
-            _versions(SEPOLIA_FULU, PROGRESSIVE, SEPOLIA_GLOAS, PROGRESSIVE),
-            _depths(5, 6, 7, PROGRESSIVE)
-        );
-        bytes memory previous = _evidenceFor(real, SEPOLIA_FULU, real.branch);
+        BeaconForkGate gate = _gloasGate(real);
+        bytes memory previous = _evidenceFor(real, SEPOLIA_FULU, real.branch, real.genesisBranch);
         vm.expectRevert(BeaconForkGate.ForkProofInvalid.selector);
         gate.confirm(previous);
 
         bytes32[] memory flipped = _resize(real.branch, 7);
         flipped[3] = bytes32(uint256(flipped[3]) ^ 1);
-        bytes memory flippedEvidence = _evidenceFor(real, SEPOLIA_GLOAS, flipped);
+        bytes memory flippedEvidence = _evidenceFor(real, SEPOLIA_GLOAS, flipped, real.genesisBranch);
         vm.expectRevert(BeaconForkGate.ForkProofInvalid.selector);
         gate.confirm(flippedEvidence);
 
-        bytes memory longer = _evidenceFor(real, SEPOLIA_GLOAS, _resize(real.branch, 8));
-        vm.expectRevert(abi.encodeWithSelector(SSZ.BranchLengthMismatch.selector, 7, 8));
-        gate.confirm(longer);
+        uint256[2] memory refusedByTheHash = [uint256(8), 9];
+        for (uint256 i = 0; i < refusedByTheHash.length; i++) {
+            bytes memory longer =
+                _evidenceFor(real, SEPOLIA_GLOAS, _resize(real.branch, refusedByTheHash[i]), real.genesisBranch);
+            vm.expectRevert(BeaconForkGate.ForkProofInvalid.selector);
+            gate.confirm(longer);
+        }
+        uint256[2] memory refusedByTheShape = [uint256(6), 10];
+        uint256[2] memory shapeDepth = [uint256(4), 8];
+        for (uint256 i = 0; i < refusedByTheShape.length; i++) {
+            bytes memory odd =
+                _evidenceFor(real, SEPOLIA_GLOAS, _resize(real.branch, refusedByTheShape[i]), real.genesisBranch);
+            vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.ShapeNotAllowed.selector, shapeDepth[i]));
+            gate.confirm(odd);
+        }
 
-        gate.confirm(_evidenceFor(real, SEPOLIA_GLOAS, real.branch));
+        gate.confirm(_evidenceFor(real, SEPOLIA_GLOAS, real.branch, real.genesisBranch));
     }
 
-    /// Claim: a seal needs the progressive marker in the seal depths to accept a branch of a progressive state. Shows: the
-    /// real Gloas evidence seals a gate that does not list Gloas and lists 255; with the seal depths 5, 6 and 7
-    /// the plain index is tried and fails with `ForkProofInvalid`; with only 6 and 7 it reverts `SealDepthNotAllowed(5)`. A gate that lists Gloas as supported
-    /// refuses to seal on it. Matters: after Gloas the next fork is progressive too, and the gate must be able to seal on it.
-    function test_progressiveSeal() public {
+    /// Claim: the real Gloas evidence must also bring the real genesis validators root branch. Shows: with the version
+    /// branch honest, a genesis branch cut to 4 entries, extended to 6, and flipped in one entry each give
+    /// `GenesisValidatorsRootBranchInvalid`, and a gate that follows another chain gives the same error for the honest
+    /// branch. Control: the honest pair confirms. Matters: the genesis validators root pins the gate to the right
+    /// chain and to the shape that the version proved.
+    function test_realGloasEvidenceNeedsTheRealGenesisBranch() public {
         Real memory real = _real();
-        bytes memory evidence = _evidenceFor(real, SEPOLIA_GLOAS, real.branch);
+        bytes32[] memory flipped = _resize(real.genesisBranch, 5);
+        flipped[2] = bytes32(uint256(flipped[2]) ^ 1);
+        bytes32[][3] memory wrong = [_resize(real.genesisBranch, 4), _resize(real.genesisBranch, 6), flipped];
+        for (uint256 i = 0; i < wrong.length; i++) {
+            BeaconForkGate gate = _gloasGate(real);
+            bytes memory evidence = _evidenceFor(real, SEPOLIA_GLOAS, real.branch, wrong[i]);
+            vm.expectRevert(BeaconForkGate.GenesisValidatorsRootBranchInvalid.selector);
+            gate.confirm(evidence);
+        }
+        BeaconForkGate foreign = _gateFollowing(BeaconForkGate.GateMode.Enforcing, GENESIS_ROOT_B);
+        bytes memory honest = _evidenceFor(real, SEPOLIA_GLOAS, real.branch, real.genesisBranch);
+        vm.expectRevert(BeaconForkGate.GenesisValidatorsRootBranchInvalid.selector);
+        foreign.confirm(honest);
 
-        BeaconForkGate fulu = _gateWith(BeaconForkGate.GateMode.Enforcing, _oneVersion(SEPOLIA_FULU, 6), _depths(5, 6, 7, PROGRESSIVE));
-        vm.expectEmit(false, false, false, true, address(fulu));
-        emit BeaconForkGate.GateSealedByFork(SEPOLIA_GLOAS, real.header.slot);
-        fulu.seal(evidence);
-        assertTrue(fulu.isSealed());
-
-        BeaconForkGate plainOnly = _gateWith(BeaconForkGate.GateMode.Enforcing, _oneVersion(SEPOLIA_FULU, 6), _depths(5, 6, 7));
-        vm.expectRevert(BeaconForkGate.ForkProofInvalid.selector);
-        plainOnly.seal(evidence);
-
-        BeaconForkGate sixSeven = _gateWith(BeaconForkGate.GateMode.Enforcing, _oneVersion(SEPOLIA_FULU, 6), _depths(6, 7));
-        vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.SealDepthNotAllowed.selector, 5));
-        sixSeven.seal(evidence);
-
-        BeaconForkGate progressiveOnly =
-            _gateWith(BeaconForkGate.GateMode.Enforcing, _oneVersion(SEPOLIA_FULU, 6), _depths(PROGRESSIVE));
-        progressiveOnly.seal(evidence);
-        assertTrue(progressiveOnly.isSealed());
-
-        BeaconForkGate supported = _gloasGate();
-        vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.VersionIsSupported.selector, SEPOLIA_GLOAS));
-        supported.seal(evidence);
+        _gloasGate(real).confirm(honest);
     }
 
-    /// Claim: a seal with the progressive marker refuses a forged branch, and a gate that allows only the marker still
-    /// refuses a plain depth 5 proof (the index 169 does not fit it). A gate with both marker and depth 5 seals on a plain
-    /// depth 5 proof. Matters: trying the progressive index too opens no new proof of an unsupported version.
-    function test_progressiveSealRefusesForgedAndPlainProofs() public {
+    /// Claim: a valid Gloas proof never seals, because the progressive shape is allowed, and a forged plain depth 5
+    /// branch at 169 does not seal either. Shows: `seal` with the real evidence reverts `ShapeIsAllowed(255)` and
+    /// `isSealed` stays false. A forged branch (the two inner entries of a `Fork` container, then the five siblings of
+    /// field 10 of a true depth 5 state) reverts `ForkProofInvalid`. Control: the honest plain depth 5 evidence is the
+    /// allowed shape 5, so it is `ShapeIsAllowed(5)`. Matters: on a true depth 5 state, node 42 at depth 5 is state field
+    /// 10, and a node below it is not a field of the tree. Passing would need a SHA-256 preimage. After Gloas the next
+    /// fork is progressive too, and its shape is judged the same way.
+    function test_progressiveSealRefusesTheAllowedShapeAndForgedProofs() public {
         Real memory real = _real();
-        bytes32[] memory forged = _resize(real.branch, 7);
-        forged[6] = bytes32(uint256(forged[6]) ^ 1);
-        bytes memory forgedEvidence = _evidenceFor(real, SEPOLIA_GLOAS, forged);
-        BeaconForkGate gate = _gateWith(BeaconForkGate.GateMode.Enforcing, _oneVersion(SEPOLIA_FULU, 6), _depths(5, PROGRESSIVE));
+        bytes memory evidence = _evidenceFor(real, SEPOLIA_GLOAS, real.branch, real.genesisBranch);
+        BeaconForkGate gate = _gloasGate(real); // deployed at the epoch of the real header, so the header is not too old
+        vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.ShapeIsAllowed.selector, PROGRESSIVE_SHAPE));
+        gate.seal(evidence);
+        assertFalse(gate.isSealed());
+
+        assertEq(SSZ.depthOf(169 >> 2), 5, "the parent of the Fork container leaf at 169 is node 42, at depth 5");
+        bytes32[] memory forged = _forgedBelowAPlainField();
+        bytes memory forgedEvidence = _evidenceFor(real, SEPOLIA_GLOAS, forged, real.genesisBranch);
         vm.expectRevert(BeaconForkGate.ForkProofInvalid.selector);
         gate.seal(forgedEvidence);
+        assertFalse(gate.isSealed());
 
-        BeaconForkGate onlyMarker =
-            _gateWith(BeaconForkGate.GateMode.Enforcing, _oneVersion(SEPOLIA_FULU, 6), _depths(PROGRESSIVE));
-        bytes memory plainFive = _honestEvidence(block.timestamp + 12, uint64(real.header.slot + 1), 5, UNKNOWN_FORK);
-        vm.expectRevert(BeaconForkGate.ForkProofInvalid.selector);
-        onlyMarker.seal(plainFive);
-
-        gate.seal(plainFive);
-        assertTrue(gate.isSealed(), "depth 5 and the marker: the plain proof seals");
+        StateTree memory plainFive = _stateTreeWithGenesis(5, UNKNOWN_FORK, ALTAIR, real.genesisValidatorsRoot);
+        BeaconBlockHeader memory header = _header(real.header.slot + 1, plainFive.stateRoot);
+        _plant(block.timestamp + 12, SSZ.hashTreeRootMemory(header));
+        vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.ShapeIsAllowed.selector, uint8(5)));
+        gate.seal(_evidenceOf(block.timestamp + 12, header, UNKNOWN_FORK, plainFive));
     }
 
-    /// Claim: the configuration accepts the marker 255 and still refuses 0 and every other value above 31, for a version and
-    /// for a seal depth. The getters return the marker, last in the seal depths. Matters: the sentinel opens one value.
-    function test_configurationAcceptsOnlyTheMarkerAbove31() public {
-        uint8[3] memory refused = [uint8(0), 32, 254];
-        for (uint256 i = 0; i < refused.length; i++) {
-            vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.StateDepthOutOfRange.selector, refused[i]));
-            _gateWith(BeaconForkGate.GateMode.Enforcing, _oneVersion(SEPOLIA_GLOAS, refused[i]), _depths(5));
-            vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.StateDepthOutOfRange.selector, refused[i]));
-            _gateWith(BeaconForkGate.GateMode.Enforcing, _oneVersion(SEPOLIA_GLOAS, 5), _depths(refused[i]));
+    /// @dev Seven entries that claim to lead from a version leaf at 169 to the root of a true depth 5 state: two entries
+    /// inside the `Fork` container, then the five siblings of state field 10.
+    function _forgedBelowAPlainField() internal pure returns (bytes32[] memory forged) {
+        uint256[] memory gindices = new uint256[](2);
+        bytes32[] memory leaves = new bytes32[](2);
+        gindices[0] = 32 + 10;
+        leaves[0] = keccak256("field 10");
+        gindices[1] = 32 + 11;
+        leaves[1] = keccak256("field 11");
+        (, bytes32[][] memory branches) = _gateSparseTree(gindices, leaves);
+        forged = new bytes32[](7);
+        forged[0] = keccak256("inside the Fork container 0");
+        forged[1] = keccak256("inside the Fork container 1");
+        for (uint256 i = 0; i < 5; i++) {
+            forged[2 + i] = branches[0][i];
         }
-        BeaconForkGate gate = _gloasGate();
-        assertEq(gate.PROGRESSIVE_STATE_DEPTH(), PROGRESSIVE);
-        BeaconForkGate.SupportedVersion[] memory back = gate.supportedVersions();
-        assertEq(back[0].stateDepth, 6);
-        assertEq(back[1].stateDepth, PROGRESSIVE);
-        assertEq(back[1].version, SEPOLIA_GLOAS);
-        uint8[] memory depths = gate.sealDepths();
-        assertEq(depths.length, 4);
-        assertEq(depths[3], PROGRESSIVE);
     }
 
-    /// Claim: the fixture of `lc-core` names the position 169 with 7 siblings, the same numbers as the gate.
+    /// Claim: the fixture of `lc-core` names the position 169 with 7 siblings, the same numbers as the gate. Matters: the
+    /// Rust program and the Solidity gate read the version of the state at one shared position.
     function test_fixtureNamesThePosition() public view {
         string memory gindices = vm.readFile("light-client/tests/fixtures/gindices.json");
-        assertEq(vm.parseJsonUint(gindices, ".gloas.forkVersionGindex"), 169);
-        assertEq(vm.parseJsonUint(gindices, ".gloas.forkVersionBranchLength"), 7);
+        assertEq(vm.parseJsonUint(gindices, ".gloas.forkVersionGindex"), ForkShape.versionGindex(PROGRESSIVE_SHAPE));
+        assertEq(
+            vm.parseJsonUint(gindices, ".gloas.forkVersionBranchLength"),
+            ForkShape.versionBranchLength(PROGRESSIVE_SHAPE)
+        );
     }
 }

@@ -36,7 +36,7 @@ abstract contract HardenedFixture is HardenedProofs {
         lightClientForA = _newLightClient(GENESIS_ROOT_B, COMMITTEE_101);
         lightClientForB = _newLightClient(GENESIS_ROOT_A, COMMITTEE_101);
         gateA = _newGate(BeaconForkGate.GateMode.DetectBeaconRoots);
-        gateB = _newGate(BeaconForkGate.GateMode.DetectBeaconRoots);
+        gateB = _newGate(BeaconForkGate.GateMode.DetectBeaconRoots, GENESIS_ROOT_B);
     }
 
     /// @notice A fresh light client at the standard checkpoint for the given chain.
@@ -55,17 +55,13 @@ abstract contract HardenedFixture is HardenedProofs {
         );
     }
 
-    /// @notice A gate with the Ethereum mainnet fork table and timing, in the given mode.
+    /// @notice A gate with Ethereum timing in the given mode. It follows the beacon chain of chain A (`GENESIS_ROOT_A`).
     function _newGate(BeaconForkGate.GateMode mode) internal returns (BeaconForkGate) {
-        BeaconForkGate.SupportedVersion[] memory versions = new BeaconForkGate.SupportedVersion[](4);
-        versions[0] = BeaconForkGate.SupportedVersion(0x03000000, 5);
-        versions[1] = BeaconForkGate.SupportedVersion(0x04000000, 5);
-        versions[2] = BeaconForkGate.SupportedVersion(0x05000000, 6);
-        versions[3] = BeaconForkGate.SupportedVersion(0x06000000, 6);
-        uint8[] memory sealDepths = new uint8[](3);
-        sealDepths[0] = 5;
-        sealDepths[1] = 6;
-        sealDepths[2] = 7;
-        return new BeaconForkGate(BEACON_ROOTS, mode, 1_606_824_023, 12, 32, versions, sealDepths, address(0));
+        return _newGate(mode, GENESIS_ROOT_A);
+    }
+
+    /// @notice A gate with Ethereum timing in the given mode that follows the beacon chain with `genesisValidatorsRoot`.
+    function _newGate(BeaconForkGate.GateMode mode, bytes32 genesisValidatorsRoot) internal returns (BeaconForkGate) {
+        return new BeaconForkGate(BEACON_ROOTS, mode, 1_606_824_023, 12, 32, genesisValidatorsRoot, address(0));
     }
 }

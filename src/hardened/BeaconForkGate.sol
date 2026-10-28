@@ -495,6 +495,7 @@ contract BeaconForkGate is IDepositGate {
         return root;
     }
 
+    /// @dev The epoch of the current block. Reverts before the genesis time.
     function _currentEpoch() private view returns (uint256) {
         if (block.timestamp < genesisTime) revert BeforeGenesis(block.timestamp, genesisTime);
         return (block.timestamp - genesisTime) / secondsPerSlot / slotsPerEpoch;
@@ -519,7 +520,9 @@ contract BeaconForkGate is IDepositGate {
     function _requireAllowedShapeProven(ForkEvidence memory proof) private view {
         (ForkShape.Verdict verdict,) = _judge(proof);
         if (verdict == ForkShape.Verdict.Allowed) return;
-        if (verdict == ForkShape.Verdict.GenesisValidatorsRootProofInvalid) revert GenesisValidatorsRootBranchInvalid();
+        if (verdict == ForkShape.Verdict.GenesisValidatorsRootProofInvalid) {
+            revert GenesisValidatorsRootBranchInvalid();
+        }
         if (verdict == ForkShape.Verdict.VersionProofInvalid) revert ForkProofInvalid();
         revert ShapeNotAllowed(ForkShape.depthOfVersionBranch(proof.branch.length));
     }
@@ -530,15 +533,24 @@ contract BeaconForkGate is IDepositGate {
         if (depth < ForkShape.MIN_SEAL_DEPTH || depth > ForkShape.MAX_SEAL_DEPTH) revert SealDepthNotAllowed(depth);
         (ForkShape.Verdict verdict, uint8 shape) = _judge(proof);
         if (verdict == ForkShape.Verdict.Allowed) revert ShapeIsAllowed(shape);
-        if (verdict == ForkShape.Verdict.GenesisValidatorsRootProofInvalid) revert GenesisValidatorsRootBranchInvalid();
+        if (verdict == ForkShape.Verdict.GenesisValidatorsRootProofInvalid) {
+            revert GenesisValidatorsRootBranchInvalid();
+        }
         if (verdict == ForkShape.Verdict.VersionProofInvalid) revert ForkProofInvalid();
         if (!ForkShape.provesPlainVersion(proof.header.stateRoot, proof.version, proof.branch, depth)) {
             revert ForkProofInvalid();
         }
     }
 
+    /// @dev Judges the evidence with the shape rule, against the genesis validators root that this gate holds.
     function _judge(ForkEvidence memory proof) private view returns (ForkShape.Verdict, uint8) {
-        return ForkShape.judge(proof.header.stateRoot, proof.version, proof.branch, proof.genesisValidatorsRootBranch, genesisValidatorsRoot);
+        return ForkShape.judge(
+            proof.header.stateRoot,
+            proof.version,
+            proof.branch,
+            proof.genesisValidatorsRootBranch,
+            genesisValidatorsRoot
+        );
     }
 
     /// @dev The header must be the block whose root the beacon roots contract holds for the timestamp.

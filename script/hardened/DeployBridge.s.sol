@@ -275,10 +275,10 @@ contract DeployBridge is Script {
         if (config.chainA.chainId == config.chainB.chainId) revert SameChainIdentifier(config.chainA.chainId);
         _requireLightClientClockMatchesOtherGate(config.chainA, config.chainB);
         _requireLightClientClockMatchesOtherGate(config.chainB, config.chainA);
-        _requireGateRootMatchesOtherLightClient(config.chainA, config.chainB);
-        _requireGateRootMatchesOtherLightClient(config.chainB, config.chainA);
         _requireObservationMatchesOtherChain(config.chainA, config.chainB);
         _requireObservationMatchesOtherChain(config.chainB, config.chainA);
+        _requireGateRootMatchesOtherLightClient(config.chainA, config.chainB);
+        _requireGateRootMatchesOtherLightClient(config.chainB, config.chainA);
     }
 
     /// @notice Predicts every address from the deployer nonces. Nothing deploys here.
@@ -372,7 +372,12 @@ contract DeployBridge is Script {
         deployed.mediator = _deployMediator(deployment, deployed.bridge);
         deployed.factory = address(TokenMediator(deployed.mediator).tokenFactory());
         if (chain.deliveryRouter == RouterChoice.Deploy) {
-            deployed.deliveryRouter = _deployDeliveryRouter(deployed.mediator, chain.wrappedNative, chain.deliveryRouterRewardAddress, chain.deliveryRouterFailedDeliveryAddress);
+            deployed.deliveryRouter = _deployDeliveryRouter(
+                deployed.mediator,
+                chain.wrappedNative,
+                chain.deliveryRouterRewardAddress,
+                chain.deliveryRouterFailedDeliveryAddress
+            );
         }
         vm.stopBroadcast();
 
@@ -434,7 +439,9 @@ contract DeployBridge is Script {
         if (observed.genesisTime() != own.genesisTime) revert DeploymentMismatch("observed.genesisTime");
         if (observed.secondsPerSlot() != own.secondsPerSlot) revert DeploymentMismatch("observed.secondsPerSlot");
         if (observed.head() != own.initialSlot) revert DeploymentMismatch("observed.head");
-        if (observed.headers(own.initialSlot) != own.initialHeaderRoot) revert DeploymentMismatch("observed.headerRoot");
+        if (observed.headers(own.initialSlot) != own.initialHeaderRoot) {
+            revert DeploymentMismatch("observed.headerRoot");
+        }
         uint64 period = observed.periodOf(own.initialSlot);
         if (observed.syncCommittees(period) != own.initialSyncCommitteeHash) {
             revert DeploymentMismatch("observed.syncCommittee");
@@ -448,7 +455,11 @@ contract DeployBridge is Script {
 
     /// @dev Follows the table in the contract comment. The factory takes no deployer nonce: the mediator creates it.
     /// A router that the chain does not get stays zero and takes no nonce.
-    function _predictChain(address deployer, ChainConfig memory chain) private pure returns (ChainAddresses memory plan) {
+    function _predictChain(address deployer, ChainConfig memory chain)
+        private
+        pure
+        returns (ChainAddresses memory plan)
+    {
         uint256 nonce = chain.deployerNonce;
         plan.lightClient = vm.computeCreateAddress(deployer, nonce++);
         if (_hasRegistry(chain)) {
@@ -459,7 +470,9 @@ contract DeployBridge is Script {
         plan.bridge = vm.computeCreateAddress(deployer, nonce++);
         plan.mediator = vm.computeCreateAddress(deployer, nonce++);
         plan.factory = vm.computeCreateAddress(plan.mediator, 1);
-        if (chain.deliveryRouter == RouterChoice.Deploy) plan.deliveryRouter = vm.computeCreateAddress(deployer, nonce);
+        if (chain.deliveryRouter == RouterChoice.Deploy) {
+            plan.deliveryRouter = vm.computeCreateAddress(deployer, nonce);
+        }
     }
 
     /// @dev A chain whose gate runs in `DetectBeaconRootsAndRegistry` mode gets an own-chain light client and a registry.
@@ -490,7 +503,9 @@ contract DeployBridge is Script {
     function _requireVerifierPin(ChainConfig memory chain) private view {
         if (chain.verifier.code.length == 0) revert VerifierHasNoCode(chain.chainId, chain.verifier);
         if (chain.verifier.codehash != chain.verifierCodeHash) {
-            revert VerifierCodeHashMismatch(chain.chainId, chain.verifier, chain.verifierCodeHash, chain.verifier.codehash);
+            revert VerifierCodeHashMismatch(
+                chain.chainId, chain.verifier, chain.verifierCodeHash, chain.verifier.codehash
+            );
         }
     }
 
@@ -573,7 +588,9 @@ contract DeployBridge is Script {
     function _readGloasForkSlot(string memory json, string memory client) private view returns (uint64) {
         string memory key = string.concat(client, ".gloasForkEpoch");
         if (!vm.keyExistsJson(json, key)) return type(uint64).max;
-        return uint64(_readNonZeroUint(json, key)) * uint64(_readNonZeroUint(json, string.concat(client, ".slotsPerEpoch")));
+        return
+            uint64(_readNonZeroUint(json, key))
+                * uint64(_readNonZeroUint(json, string.concat(client, ".slotsPerEpoch")));
     }
 
     function _deployMediator(ChainDeployment memory deployment, address bridge) private returns (address) {
@@ -605,12 +622,18 @@ contract DeployBridge is Script {
     function _verifyLightClient(ChainConfig memory chain, address lightClient) private view {
         BeaconLightClient client = BeaconLightClient(lightClient);
         if (address(client.verifier()) != chain.verifier) revert DeploymentMismatch("lightClient.verifier");
-        if (client.programVKey() != chain.lightClient.programVKey) revert DeploymentMismatch("lightClient.programVKey");
+        if (client.programVKey() != chain.lightClient.programVKey) {
+            revert DeploymentMismatch("lightClient.programVKey");
+        }
         if (client.genesisValidatorsRoot() != chain.lightClient.genesisValidatorsRoot) {
             revert DeploymentMismatch("lightClient.genesisValidatorsRoot");
         }
-        if (client.slotsPerPeriod() != chain.lightClient.slotsPerPeriod) revert DeploymentMismatch("lightClient.slotsPerPeriod");
-        if (client.genesisTime() != chain.lightClient.genesisTime) revert DeploymentMismatch("lightClient.genesisTime");
+        if (client.slotsPerPeriod() != chain.lightClient.slotsPerPeriod) {
+            revert DeploymentMismatch("lightClient.slotsPerPeriod");
+        }
+        if (client.genesisTime() != chain.lightClient.genesisTime) {
+            revert DeploymentMismatch("lightClient.genesisTime");
+        }
         if (client.secondsPerSlot() != chain.lightClient.secondsPerSlot) {
             revert DeploymentMismatch("lightClient.secondsPerSlot");
         }
@@ -665,7 +688,9 @@ contract DeployBridge is Script {
             revert DeploymentMismatch("bridge.sendCutoffTimestamp");
         }
         if (bridge.capellaEra() != chain.lightClient.capellaEra) revert DeploymentMismatch("bridge.capellaEra");
-        if (bridge.gloasForkSlot() != chain.lightClient.gloasForkSlot) revert DeploymentMismatch("bridge.gloasForkSlot");
+        if (bridge.gloasForkSlot() != chain.lightClient.gloasForkSlot) {
+            revert DeploymentMismatch("bridge.gloasForkSlot");
+        }
         if (address(bridge.depositGate()) != deployed.gate) revert DeploymentMismatch("bridge.depositGate");
         if (
             bridge.stateLayouts().length != 0 || bridge.bodyLayouts().length != 0
@@ -678,7 +703,9 @@ contract DeployBridge is Script {
     function _verifyMediator(ChainDeployment memory deployment, ChainAddresses memory deployed) private view {
         ChainConfig memory chain = deployment.chain;
         TokenMediator mediator = TokenMediator(deployed.mediator);
-        if (address(mediator.bridgeContract()) != deployed.bridge) revert DeploymentMismatch("mediator.bridgeContract");
+        if (address(mediator.bridgeContract()) != deployed.bridge) {
+            revert DeploymentMismatch("mediator.bridgeContract");
+        }
         if (mediator.mediatorContractOnOtherSide() != deployment.remoteMediator) {
             revert DeploymentMismatch("mediator.mediatorContractOnOtherSide");
         }
@@ -699,7 +726,9 @@ contract DeployBridge is Script {
         if (deployed.deliveryRouter != address(0)) {
             DeliveryRouter router = DeliveryRouter(payable(deployed.deliveryRouter));
             if (address(router.bridge()) != deployed.mediator) revert DeploymentMismatch("deliveryRouter.mediator");
-            if (address(router.wNative()) != chain.wrappedNative) revert DeploymentMismatch("deliveryRouter.wrappedNative");
+            if (address(router.wNative()) != chain.wrappedNative) {
+                revert DeploymentMismatch("deliveryRouter.wrappedNative");
+            }
             if (router.rewardAddress() != chain.deliveryRouterRewardAddress) {
                 revert DeploymentMismatch("deliveryRouter.rewardAddress");
             }
@@ -730,7 +759,8 @@ contract DeployBridge is Script {
             revert DeliveryRouterNeedsWrappedNative(chain.chainId);
         }
         if (chain.deliveryRouter == RouterChoice.Deploy) {
-            chain.deliveryRouterRewardAddress = _readAddress(json, string.concat(prefix, ".deliveryRouter.rewardAddress"));
+            chain.deliveryRouterRewardAddress =
+                _readAddress(json, string.concat(prefix, ".deliveryRouter.rewardAddress"));
             chain.deliveryRouterFailedDeliveryAddress =
                 _readAddress(json, string.concat(prefix, ".deliveryRouter.failedDeliveryAddress"));
         }
@@ -746,8 +776,10 @@ contract DeployBridge is Script {
         chain.lightClient.gloasForkSlot = _readGloasForkSlot(json, client);
         chain.lightClient.initialSlot = uint64(_readNonZeroUint(json, string.concat(client, ".initialSlot")));
         chain.lightClient.initialHeaderRoot = _readBytes32(json, string.concat(client, ".initialHeaderRoot"));
-        chain.lightClient.initialSyncCommitteeHash = _readBytes32(json, string.concat(client, ".initialSyncCommitteeHash"));
-        chain.lightClient.initialNextSyncCommitteeHash = _readBytes32(json, string.concat(client, ".initialNextSyncCommitteeHash"));
+        chain.lightClient.initialSyncCommitteeHash =
+            _readBytes32(json, string.concat(client, ".initialSyncCommitteeHash"));
+        chain.lightClient.initialNextSyncCommitteeHash =
+            _readBytes32(json, string.concat(client, ".initialNextSyncCommitteeHash"));
         _requireCapellaEra(chain);
         chain.gate = _readGate(json, string.concat(prefix, ".gate"));
         if (chain.gate.mode == BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry) {

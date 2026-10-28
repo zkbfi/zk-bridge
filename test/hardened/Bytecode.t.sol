@@ -64,25 +64,23 @@ contract BytecodeTest is MessageScenes {
 
     function _mediatorContracts()
         internal
-        returns (
-            TokenMediator mediator,
-            TokenFactory factory,
-            address copy,
-            DeliveryRouter deliveryRouter
-        )
+        returns (TokenMediator mediator, TokenFactory factory, address copy, DeliveryRouter deliveryRouter)
     {
         mediator = new TokenMediator(_mediatorTerms());
         factory = mediator.tokenFactory();
         vm.prank(address(mediator));
         copy = factory.deploy("Copy", "CPY", 18, CHAIN_A, makeAddr("native token"));
         IWETH wrapped = IWETH(address(new MockWrappedNative()));
-        deliveryRouter = new DeliveryRouter(ITokenMediator(address(mediator)), wrapped, makeAddr("reward address"), makeAddr("failed delivery address"));
+        deliveryRouter = new DeliveryRouter(
+            ITokenMediator(address(mediator)), wrapped, makeAddr("reward address"), makeAddr("failed delivery address")
+        );
     }
 
     /// @dev The runtime code of every contract that runs on both chains, with the names that the logs print. The fork
     /// gate in enforcing mode and the fork registry are scanned in other tests, with the probe.
     function _deployedContracts() internal returns (string[8] memory names, bytes[8] memory codes) {
-        (TokenMediator mediator, TokenFactory factory, address copy, DeliveryRouter deliveryRouter) = _mediatorContracts();
+        (TokenMediator mediator, TokenFactory factory, address copy, DeliveryRouter deliveryRouter) =
+            _mediatorContracts();
         names = [
             "BeaconLightClient",
             "MessageBridge (source)",
@@ -181,8 +179,7 @@ contract BytecodeTest is MessageScenes {
             1_606_824_023,
             12,
             32,
-            _versions(),
-            _sealDepths(),
+            GENESIS_ROOT_A,
             address(registry)
         );
         bytes[5] memory scanned = [
@@ -208,16 +205,6 @@ contract BytecodeTest is MessageScenes {
         assertEq(_countOpcode(probeCode, TLOAD), 0, "the probe holds no TLOAD");
         // Control: the probe differs from the gate only by what it holds. The scan helper sees a second opcode.
         assertEq(_countOpcode(abi.encodePacked(probeCode, hex"5d"), TSTORE), 2, "control: an extra opcode is counted");
-    }
-
-    function _versions() internal pure returns (BeaconForkGate.SupportedVersion[] memory versions) {
-        versions = new BeaconForkGate.SupportedVersion[](1);
-        versions[0] = BeaconForkGate.SupportedVersion(0x05000000, 6);
-    }
-
-    function _sealDepths() internal pure returns (uint8[] memory depths) {
-        depths = new uint8[](1);
-        depths[0] = 6;
     }
 
     /// Claim: the scanner finds the two new canary opcodes. Shows: BLOBBASEFEE (0x4a) and CLZ (0x1e) count once as

@@ -1,0 +1,13 @@
+{
+  "source": "Derived from light-client/tests/fixtures/sepolia/gloas_head_state.ssz with lc-core (progressive_container_branch for state field 1). The leaf is genesis_validators_root of Sepolia. Regenerate by hashing the same state again.",
+  "genesisValidatorsRoot": "0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078",
+  "stateRoot": "0x5533de6fc2f9dc44c8948e257f6ae187dbf77c4a747ea5cd41819daf3fe86707",
+  "gindex": 40,
+  "branch": [
+    "0x4094ae0000000000000000000000000000000000000000000000000000000000",
+    "0xb321a134516f35ab13aa4d243242f55d9766d03ca7594bc36a866e87c9078540",
+    "0x157771f157ea78f2e212411cd734b3f68e2e5d9c69518b23cbb7c9dec982c48d",
+    "0x607db06200000000000000000000000000000000000000000000000000000000",
+    "0xffffffffff3f0000000000000000000000000000000000000000000000000000"
+  ]
+}

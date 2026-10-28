@@ -132,9 +132,10 @@ contract BridgeWorldTest is WorldSupport {
     /// the creation code of the token, not from the mediator.
     function _independentCopyAddress(address token) internal view returns (address) {
         bytes32 salt = keccak256(abi.encode(uint256(CHAIN_A), token));
-        return vm.computeCreate2Address(
-            salt, keccak256(type(BridgedToken).creationCode), address(mediatorB.tokenFactory())
-        );
+        return
+            vm.computeCreate2Address(
+                salt, keccak256(type(BridgedToken).creationCode), address(mediatorB.tokenFactory())
+            );
     }
 
     function _selectorOfData(bytes memory data) internal pure returns (bytes4 selector) {
@@ -158,7 +159,9 @@ contract BridgeWorldTest is WorldSupport {
         // Step 1 and 2: send on A, execute on B (the first message, so it deploys the copy).
         (Vm.Log[] memory sentOnA, uint256 sendGasOnA) = _relayFromA(alice, receiverOnB, AMOUNT);
         (, bytes memory firstData) = _messageOf(sentOnA, bridgeA);
-        assertEq(_selectorOfData(firstData), mediatorB.deployAndHandleBridgedTokens.selector, "the first message deploys");
+        assertEq(
+            _selectorOfData(firstData), mediatorB.deployAndHandleBridgedTokens.selector, "the first message deploys"
+        );
         assertFalse(mediatorA.isBridgedTokenDeployAcknowledged(address(nativeToken)), "no return trip yet");
 
         Transit memory toB = _deliverToB(sentOnA);
@@ -223,7 +226,9 @@ contract BridgeWorldTest is WorldSupport {
         // the messages of bridge B, so the log is refused before its destination is read.
         (MessageBridge.MessageProof memory forA,) =
             _proveMessage(bridgeA, lightClientForA, GENESIS_ROOT_B, toB.source, toB.logIndex);
-        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.WrongEmitter.selector, address(bridgeB), address(bridgeA)));
+        vm.expectRevert(
+            abi.encodeWithSelector(BeaconProofVerifier.WrongEmitter.selector, address(bridgeB), address(bridgeA))
+        );
         bridgeA.executeMessage(forA);
     }
 
@@ -253,7 +258,9 @@ contract BridgeWorldTest is WorldSupport {
         assertEq(receiver.seenSender(), address(application), "the sender is the application, not the account");
         assertEq(receiver.seenSourceChain(), bytes32(uint256(CHAIN_A)), "the source chain is 1");
         assertEq(receiver.seenMessageId(), id, "the identifier");
-        assertEq(receiver.seenTransactionHash(), _transactionHashOf(transit.source), "the hash of the source transaction");
+        assertEq(
+            receiver.seenTransactionHash(), _transactionHashOf(transit.source), "the hash of the source transaction"
+        );
         assertEq(receiver.seenCaller(), address(bridgeB), "the caller is bridge B");
 
         assertEq(bridgeB.messageSender(), address(0), "outside the call: no sender");
@@ -297,7 +304,10 @@ contract BridgeWorldTest is WorldSupport {
     function test_deliveryRouterPaysTheRewardAddressThroughTheRealBridge() public {
         MockWrappedNative wrapped = new MockWrappedNative();
         DeliveryRouter router = new DeliveryRouter(
-            ITokenMediator(address(mediatorB)), IWETH(address(wrapped)), makeAddr("fee reward address"), makeAddr("fee failed delivery address")
+            ITokenMediator(address(mediatorB)),
+            IWETH(address(wrapped)),
+            makeAddr("fee reward address"),
+            makeAddr("fee failed delivery address")
         );
         // The first message of a token deploys its copy and costs more. Do it plainly, so the fee tests measure a
         // delivery of the common kind.
@@ -333,7 +343,11 @@ contract BridgeWorldTest is WorldSupport {
         vm.chainId(CHAIN_B);
         _gasOfRouterRun(router, transit);
         assertTrue(bridgeB.messageCallStatus(transit.messageId), "the message executed through the router");
-        assertEq(BridgedToken(copy).balanceOf(router.rewardAddress()) - rewardBefore, tip, "the reward address holds exactly 0.1%");
+        assertEq(
+            BridgedToken(copy).balanceOf(router.rewardAddress()) - rewardBefore,
+            tip,
+            "the reward address holds exactly 0.1%"
+        );
         assertEq(BridgedToken(copy).balanceOf(viaRouter), value - tip, "the recipient holds the rest");
         assertEq(BridgedToken(copy).balanceOf(address(router)), 0, "the router keeps nothing");
 
@@ -343,7 +357,11 @@ contract BridgeWorldTest is WorldSupport {
         transit = _deliverToB(recorded);
         assertTrue(bridgeB.messageCallStatus(transit.messageId), "the message executed on the bridge directly");
         assertEq(BridgedToken(copy).balanceOf(viaDirect), value, "a direct delivery pays no tip");
-        assertEq(BridgedToken(copy).balanceOf(router.rewardAddress()) - rewardBefore, tip, "the reward address earned nothing more");
+        assertEq(
+            BridgedToken(copy).balanceOf(router.rewardAddress()) - rewardBefore,
+            tip,
+            "the reward address earned nothing more"
+        );
         assertEq(BridgedToken(copy).balanceOf(address(router)), 0, "the router keeps nothing");
     }
 
@@ -359,9 +377,8 @@ contract BridgeWorldTest is WorldSupport {
         address recipient = makeAddr("recipient, fixed fee");
         uint256 value = 100 ether;
         uint256 fee = 3 ether;
-        Vm.Log[] memory recorded = _relayAndCallFromA(
-            alice, address(router), value, _directorData(recipient, router.FIXED_FEE(), fee, 0)
-        );
+        Vm.Log[] memory recorded =
+            _relayAndCallFromA(alice, address(router), value, _directorData(recipient, router.FIXED_FEE(), fee, 0));
         Transit memory transit = _proveForB(recorded);
 
         vm.chainId(CHAIN_B);
@@ -402,7 +419,9 @@ contract BridgeWorldTest is WorldSupport {
         uint256 paid = BridgedToken(copy).balanceOf(router.rewardAddress()) - heldBefore;
         assertGt(paid, 0, "the reward address is paid");
         assertLt(paid, cap, "the fee is measured, not the cap");
-        assertEq(paid + BridgedToken(copy).balanceOf(recipient), value, "the recipient and the reward address hold the value");
+        assertEq(
+            paid + BridgedToken(copy).balanceOf(recipient), value, "the recipient and the reward address hold the value"
+        );
         // The measure is at most the supplied gas, and at least the supplied gas less the gas limit of the message and
         // a margin for the entry. The tip is the fee of that measure, in whole gas prices.
         uint256 gasLimitOfTheMessage = mediatorA.DEPLOY_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT();
@@ -419,9 +438,8 @@ contract BridgeWorldTest is WorldSupport {
     function _cappedFee(DeliveryRouter router, address copy) internal {
         uint256 value = 100 ether;
         address cappedRecipient = makeAddr("recipient, capped fee");
-        Vm.Log[] memory recorded = _relayAndCallFromA(
-            alice, address(router), value, _directorData(cappedRecipient, 0, 1000, 1 ether)
-        );
+        Vm.Log[] memory recorded =
+            _relayAndCallFromA(alice, address(router), value, _directorData(cappedRecipient, 0, 1000, 1 ether));
         Transit memory transit = _proveForB(recorded);
         vm.chainId(CHAIN_B);
         uint256 heldBefore = BridgedToken(copy).balanceOf(router.rewardAddress());
@@ -434,9 +452,8 @@ contract BridgeWorldTest is WorldSupport {
     function _directDeliveryNoFee(DeliveryRouter router, address copy) internal {
         address recipient = makeAddr("recipient, direct delivery of a fixed tip");
         uint256 value = 100 ether;
-        Vm.Log[] memory recorded = _relayAndCallFromA(
-            alice, address(router), value, _directorData(recipient, router.FIXED_FEE(), 3 ether, 0)
-        );
+        Vm.Log[] memory recorded =
+            _relayAndCallFromA(alice, address(router), value, _directorData(recipient, router.FIXED_FEE(), 3 ether, 0));
         Transit memory transit = _deliverToB(recorded);
 
         assertTrue(bridgeB.messageCallStatus(transit.messageId), "the message executed");
@@ -453,7 +470,7 @@ contract BridgeWorldTest is WorldSupport {
     function test_gatePatternOnAnEnforcingGate() public {
         _warpIntoEpoch(EPOCH_E, 3);
         _etchMock();
-        BeaconForkGate gate = _gateWith(BeaconForkGate.GateMode.Enforcing, _oneVersion(ELECTRA, 6), _depths(6));
+        BeaconForkGate gate = _newGate(BeaconForkGate.GateMode.Enforcing);
         _deployWorld(address(gate), address(gateB));
         WorldReceiver receiver = new WorldReceiver(bridgeB);
         bytes memory data = abi.encodeCall(WorldReceiver.record, ());
@@ -477,23 +494,25 @@ contract BridgeWorldTest is WorldSupport {
         gate.confirm(evidenceE);
         vm.prank(first);
         bytes32 firstId = bridgeA.requireToPassMessage(address(receiver), data, 300_000);
-        assertEq(firstId, AmbMessageCodec.messageIdPrefix(CHAIN_A, address(bridgeA)), "the nonce was not spent: it is zero");
+        assertEq(
+            firstId, AmbMessageCodec.messageIdPrefix(CHAIN_A, address(bridgeA)), "the nonce was not spent: it is zero"
+        );
 
         // (iii) A second sender in the same epoch sends with no confirm.
         vm.recordLogs();
         vm.prank(second);
         bytes32 secondId = bridgeA.requireToPassMessage(address(receiver), data, 300_000);
         Vm.Log[] memory recordedSecond = vm.getRecordedLogs();
-        assertEq(secondId, AmbMessageCodec.messageIdPrefix(CHAIN_A, address(bridgeA)) | bytes32(uint256(1)), "nonce one");
+        assertEq(
+            secondId, AmbMessageCodec.messageIdPrefix(CHAIN_A, address(bridgeA)) | bytes32(uint256(1)), "nonce one"
+        );
 
         // (iv) The next epoch refuses a send, and the evidence of the old epoch does not help.
         _warpIntoEpoch(EPOCH_E + 1, 3);
         vm.prank(second);
         vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.ForkNotConfirmed.selector, EPOCH_E + 1));
         bridgeA.requireToPassMessage(address(receiver), data, 300_000);
-        vm.expectRevert(
-            abi.encodeWithSelector(BeaconForkGate.HeaderNotInCurrentEpoch.selector, EPOCH_E, EPOCH_E + 1)
-        );
+        vm.expectRevert(abi.encodeWithSelector(BeaconForkGate.HeaderNotInCurrentEpoch.selector, EPOCH_E, EPOCH_E + 1));
         gate.confirm(evidenceE);
 
         bytes memory evidenceNext = _honestEvidence(block.timestamp, _slotIn(EPOCH_E + 1, 2), 6, ELECTRA);
@@ -521,7 +540,7 @@ contract BridgeWorldTest is WorldSupport {
     function test_multicallConfirmsAndSendsAsTheMulticall() public {
         _warpIntoEpoch(EPOCH_E, 3);
         _etchMock();
-        BeaconForkGate gate = _gateWith(BeaconForkGate.GateMode.Enforcing, _oneVersion(ELECTRA, 6), _depths(6));
+        BeaconForkGate gate = _newGate(BeaconForkGate.GateMode.Enforcing);
         _deployWorld(address(gate), address(gateB));
         WorldReceiver receiver = new WorldReceiver(bridgeB);
         WorldMulticall multicall = new WorldMulticall();
