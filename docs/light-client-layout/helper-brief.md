@@ -9,7 +9,7 @@ chooses (see `light-client/crates/lc-core/src/update.rs`, `layout.rs`, `types.rs
 - State layout from the FINALITY branch length (`layout::state_layout_for_finality_branch_length`): length 6 is plain depth 5
   (indices 105 finality, 54 current committee, 55 next committee), length 7 is plain depth 6 (169, 86, 87), length 9 is the
   Gloas progressive form (735, 2945, 2946). Every other length is refused with `Error::UnsupportedStateBranchLength`, depth 7
-  (finality length 8, committee length 7) included. The next-committee branch in the same step must have the depth of the
+  (finality length 8, committee length 7) included. (Superseded: `decisions.md` D1 accepts plain depth 7, with finality length 8 and committee length 7.) The next-committee branch in the same step must have the depth of the
   chosen layout (5, 6 or 11), else `InvalidNextSyncCommitteeBranch`. Branch checks are EXACT (`ssz::is_valid_exact_branch`):
   no leading zero is stripped or accepted.
 - Header form from the form byte (`HeaderForm::Full` or `Compact`, the `form` field of `LightClientHeader`). The payload
@@ -23,7 +23,7 @@ chooses (see `light-client/crates/lc-core/src/update.rs`, `layout.rs`, `types.rs
   only guard for 2947 on a Capella or Deneb state and for 412 on a Deneb payload.
 - The fork version is an input per fold step (`FoldStep { update, fork_version }`). `update::table_fork_version(spec, slot)`
   is a convenience for tests and tools: it returns the version of the epoch of `signature_slot - 1`.
-- Public values: 352 bytes (`LightClientOutput`, 11 words) and 224 bytes (`ForkObservation`, 7 words). Unchanged.
+- Public values: 352 bytes (`LightClientOutput`, 11 words) and 224 bytes (`ForkObservation`, 7 words). Unchanged. (Superseded: `decisions.md` D2 adds the `shape` word. The observation is 256 bytes, 8 words.)
 
 Entry points: `update::verify_step`, `verify_fold`, `verify_light_client_update`, `advance_light_client_store`,
 `verify_light_client_fold_with_fork_versions`, `verify_execution_branch(header, which)`,

@@ -133,6 +133,8 @@ Sources: [LightClient.sol](https://github.com/succinctlabs/telepathy-contracts/b
 
 ## What we already do, with the file and line
 
+Note: `BridgeVault.sol` is retired. `MessageBridge.sol` and `BeaconProofVerifier.sol` replaced it. Rows that cite `BridgeVault.sol` describe the retired vault. Each such row names the current function after it. Other line numbers are those of 2026-10-21 and may have moved.
+
 | Defense | Where other projects stand | Our code |
 |---|---|---|
 | Only finalized headers enter the light client | SP1 Helios, Telepathy: same | Finality branch in `light-client/crates/lc-core/src/update.rs` lines 212 to 218. The contract stores only the proven finalized header (`src/hardened/BeaconLightClient.sol` lines 145 to 149) |
@@ -143,14 +145,14 @@ Sources: [LightClient.sol](https://github.com/succinctlabs/telepathy-contracts/b
 | Chain identity in the output | Missing in RISC Zero Helios (zkSecurity medium) and not checked in SP1 Helios | Genesis validators root in the output, checked at `BeaconLightClient.sol` line 183. The signing domain also uses it |
 | The update starts from the stored head | OpenZeppelin finding 17 in SP1 Helios | `BeaconLightClient.sol` lines 187 to 191 |
 | Head only moves forward | All | `BeaconLightClient.sol` line 208 |
-| No zero value counts as stored | Nomad | `BridgeVault.sol` line 568 refuses a zero stored root; `BeaconLightClient.sol` lines 209, 210 and 226 refuse zero roots and committees |
-| Merkle proof shape fixed | BNB Bridge | `SSZ.sol` line 59 refuses any branch whose length differs from the depth of the computed position. The vault computes every position itself (`BridgeVault.sol` lines 590 to 633) and accepts only fixed field positions (HB-03, HB-04) |
+| No zero value counts as stored | Nomad | `BridgeVault.sol` line 568 (retired vault) refused a zero stored root. Now `BeaconProofVerifier._requireStoredHeader` reverts `AnchorNotStored` when the stored root is zero or differs; `BeaconLightClient.sol` lines 209, 210 and 226 refuse zero roots and committees |
+| Merkle proof shape fixed | BNB Bridge | `SSZ.sol` line 59 refuses any branch whose length differs from the depth of the computed position. The retired vault computed every position itself (`BridgeVault.sol` lines 590 to 633). Now the layout tables of `BeaconProofVerifier` (`addBlockRootsLayout`, `addBlockHashLayout`, `addHistoricalSummariesLayout`) accept only fixed field positions (HB-03, HB-04) |
 | Verification key pinned and immutable | SP1 Helios guardian can change it; Polyhedra owner can change the updater | `programVKey` immutable (`BeaconLightClient.sol` line 76). The fork registry refuses the light-client key (`ForkRegistry.sol` line 87) |
 | A specific verifier, not the ownable gateway | Most integrators use the gateway | `BeaconLightClient.sol` lines 71 to 74 |
 | Proof malleability cannot replay | Groth16 proofs are malleable ([ethresear.ch](https://ethresear.ch/t/transaction-malleability-attack-of-groth16-proof/15881)) | No contract keys anything on proof bytes. Light-client replay fails on `previousHeadSlot == head` and `newHeadSlot > head` (lines 187 and 208). Withdrawal replay fails on `claimed[nonce]` (`BridgeVault.sol` lines 406 to 408) |
 | Fake deposit: other emitter, other event, failed transaction | All message bridges check the emitter | Emitter, topic and status at `BridgeVault.sol` lines 700, 705 and 685 |
-| Cross-chain and cross-vault withdrawal replay | Telepathy checks destination chain and version | Nonce binds the source chain, source vault and counter (`BridgeVault.sol` line 380). Withdrawal requires target chain and destination vault (lines 402 and 403) |
-| Reorganization | All use finality | Finalized anchors only (`BridgeVault.sol` line 561) |
+| Cross-chain and cross-vault withdrawal replay | Telepathy checks destination chain and version | In the retired vault, the nonce bound the source chain, source vault and counter (`BridgeVault.sol` line 380), and a withdrawal required the target chain and destination vault (lines 402 and 403). Now a message names a destination chain, and the target trusts its own bridge address (HB-06); `MessageBridge.executeMessage` checks the emitter and the chain |
+| Reorganization | All use finality | Finalized anchors only (`BridgeVault.sol` line 561 in the retired vault; now `BeaconProofVerifier._requireStoredHeader`, `AnchorNotStored`) |
 | Committee size and genesis root per chain | Helios per network | `ChainSpec` per chain in `chain.rs` |
 
 ## Gap list
@@ -187,7 +189,7 @@ Severity is for our bridge, holding the PulseChain measurements above in mind. "
 
 **They have:** nothing public, but FoomCash and Veil Cash lost about 2.26 million dollars to a Groth16 verifier whose gamma equalled delta.
 
-**We have:** `script/hardened/DeployBridge.s.sol` line 323 refuses a verifier with no code. It does not check which code. PulseChain has no SP1 verifier today, so we deploy our own from Succinct's sources (`docs/hardened-build-contract.md`, "Facts measured").
+**Fixed (`3823f57`, 2026-10-21):** `script/hardened/DeployBridge.s.sol` now pins `verifierCodeHash` per chain and reverts with `VerifierCodeHashMismatch` when the verifier code differs. The test `test_codeHashIsTheDocumentedVerifierCodeHash` in `test/hardened/SP1VerifierGroth16.t.sol` checks the documented hash, and the same file holds the accepting and tamper tests for a real proof. The text below is the gap as first found: the script refused a verifier with no code, but did not check which code. PulseChain has no SP1 verifier today, so we deploy our own from Succinct's sources (`docs/hardened-build-contract.md`, "Facts measured").
 
 **Recommendation:** in the deploy script, require the verifier's code hash to equal the hash of the audited release build, and require its `VERIFIER_HASH()` to equal the value for that release. Add a test that a real proof from the pinned SP1 version passes and a proof with one flipped bit fails. Publish the program build command with a pinned toolchain, so anyone can rebuild `programVKey` from the source and compare.
 
@@ -195,7 +197,7 @@ Severity is for our bridge, holding the PulseChain measurements above in mind. "
 
 **They have:** Telepathy reverts when the attested slot is after the slot that `block.timestamp` implies. Helios checks `expected_current_slot >= signature_slot`.
 
-**We have:** no wall-clock check in `BeaconLightClient.update`. A forged head far in the future would also block every honest update, because the head only moves forward (line 208). That bricks the route, and it writes a forged committee for that far period.
+**Fixed (`77517a7`, 2026-10-21):** `BeaconLightClient.update` now has immutable `genesisTime` and `secondsPerSlot`, and reverts with `HeadInFuture` when the new head is later than the current slot (rule 2a, `BeaconClock.slotAt`; see "Clock bound on the head" in `docs/hardened-build-contract.md`). The text below is the gap as first found: there was no wall-clock check in `BeaconLightClient.update`. A forged head far in the future would also block every honest update, because the head only moves forward. That bricks the route, and it writes a forged committee for that far period.
 
 **Recommendation:** add immutable `genesisTime` and `secondsPerSlot` to the light client, and require `newHeadSlot <= (block.timestamp - genesisTime) / secondsPerSlot`. Cost: two immutables and a few hundred gas. It does not stop a forgery at a current slot, so it is a cheap bound, not a fix.
 
@@ -244,13 +246,13 @@ Polyhedra proves the full validator set instead of the sync committee. On PulseC
 I looked for any path that lets a scammer fake a deposit or replay a withdrawal across chains. I found none in the code beyond G-01 to G-04.
 
 - **A forged header** needs the committee (G-01) or a proof system bug (G-02, G-03).
-- **A log from another contract** fails the emitter check (`BridgeVault.sol` line 700).
-- **A failed or reverted deposit** fails the status check (line 685).
+- **A log from another contract** fails the emitter check (`BridgeVault.sol` line 700 in the retired vault; now `BeaconProofVerifier._requireEmitter`, called from `MessageBridge`, `WrongEmitter`).
+- **A failed or reverted deposit** fails the status check (line 685 of the retired vault; now `ReceiptFailed` in `BeaconProofVerifier`).
 - **A proposer-written leaf** (graffiti, `eth1_data_votes`) fails the fixed positions (HB-03, HB-04).
 - **A reorganized block** cannot be an anchor, because only finalized headers are stored.
-- **A replay on another chain or vault** fails the target chain, destination vault and per-vault `claimed` checks (lines 402 to 408).
+- **A replay on another chain or vault** fails the destination chain check and the delivered-message check (lines 402 to 408 of the retired vault described the older target chain, destination vault and per-vault `claimed` checks).
 - **A replay of a light-client proof** fails the start-state and monotonic checks.
-- **A copy of Ethereum state on PulseChain** (the fork copied every pre-2023 contract) cannot hold our vaults, because we deploy them after the fork from a nonce-checked deployer. Copied tokens at the same address are the H-03 case, which the explicit token pairs cover.
+- **A copy of Ethereum state on PulseChain** (the fork copied every pre-2023 contract) cannot hold our contracts, because we deploy them after the fork from a nonce-checked deployer. Copied tokens at the same address are the H-03 case. There are no explicit token pairs now: a bridged copy lives at a `CREATE2` address that `TokenFactory` computes from the home chain and the native token, so a copy at the same address on another chain is not the bridged token.
 
 ## Open questions I could not answer
 

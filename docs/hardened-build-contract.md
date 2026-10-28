@@ -337,7 +337,7 @@ Goal: Ethereum's Gloas activation, and PulseChain's adoption of Deneb or Electra
 | 7 | plain, depth 6 | 169, 86, 87 |
 | 9 | Gloas progressive | 735, 2945, 2946 |
 
-- Every other length is refused (`UnsupportedStateBranchLength`), depth 7 (finality length 8, committee length 7) included. On a chain that is truly depth 7, a wrong claim would land on a field that no specification defines yet.
+- Every other length is refused (`UnsupportedStateBranchLength`), depth 7 (finality length 8, committee length 7) included (superseded: see 'Fork gate by shape (2026-10-27)'). On a chain that is truly depth 7, a wrong claim would land on a field that no specification defines yet.
 - The next committee branch of the same step must have the depth of that layout (5, 6 or 11). Mixed lengths in one step are refused. Different steps of one fold may use different layouts.
 - Branch checks are exact. The branch has exactly `floorlog2(gindex)` entries. A leading zero hash is neither stripped nor accepted. The length is the depth.
 - The plain indices are computed from the depth: `2^d + field` and `(2^d + 20) * 2 + 1`.
@@ -368,13 +368,13 @@ A claimed layout is tested against a true layout. Every allowed pair lands on a 
 
 ### Public values and keys
 
-The public values keep their layout: 352 bytes for the light-client program and 224 bytes for the observation. Both verification keys change (`BeaconLightClient.programVKey` and `ForkRegistry.observationProgramVKey`). The keys are in `light-client/program-keys.json` and are pinned in `script/testnet/bridge.config.testnet.json` and `docs/sp1-version-policy.md`.
+The public values keep their layout: 352 bytes for the light-client program and 256 bytes for the observation (it was 224 bytes before the shape word was added; see 'Fork gate by shape (2026-10-27)'). Both verification keys change (`BeaconLightClient.programVKey` and `ForkRegistry.observationProgramVKey`). The keys are in `light-client/program-keys.json` and are pinned in `script/testnet/bridge.config.testnet.json` and `docs/sp1-version-policy.md`.
 
 ### Consequences to know
 
-- A chain that moves to a plain state of 65 or more fields (depth 7) stops the bridge: honest updates have a finality branch of 8 entries, which the program refuses. This is the safe failure. A new route is then deployed.
-- On a true depth 7 state, a branch of 7 entries still reads field 41 at index 169. The guard is that no specification defines a proposer-writable field there, and that honest depth 7 updates are refused. A test of a synthetic 70 field state shows a permissive selector accepting a forged header root at field 41, and the real rule refusing the honest update.
-- `BeaconForkGate` keeps the seal depths 5, 6, 7 and the marker 255. A seal stops sends at a fork that the program cannot read, so depth 7 stays sealable.
+- A chain that moves to a plain state of 65 or more fields (depth 7) stops the bridge: honest updates have a finality branch of 8 entries, which the program refuses. This is the safe failure. A new route is then deployed. (superseded: see 'Fork gate by shape (2026-10-27)') Depth 7 is accepted now.
+- On a true depth 7 state, a branch of 7 entries still reads field 41 at index 169. The guard is that no specification defines a proposer-writable field there, and that honest depth 7 updates are refused (superseded: see 'Fork gate by shape (2026-10-27)'). A test of a synthetic 70 field state shows a permissive selector accepting a forged header root at field 41, and the real rule refusing the honest update.
+- `BeaconForkGate` keeps the seal depths 5, 6, 7 and the marker 255. A seal stops sends at a fork that the program cannot read, so depth 7 stays sealable (superseded: see 'Fork gate by shape (2026-10-27)'). A seal now needs plain depth 8 to 31.
 
 ## Change: historical ancestry and folded updates (2026-10-20)
 
@@ -668,7 +668,7 @@ On PulseChain, the fork registry checks freshness and the start of an observatio
 
 ## Flow limiter hook (user decision, 2026-10-21) (built)
 
-Moved to `TokenMediator` on 2026-10-24. The mediator calls `checkDeposit` on a relay and `checkWithdrawal` on a release (the nonce argument is the message identifier). A refused release is recorded in `claimable` instead of reverting, because delivery of a message is final. `detachFlowLimiter` stays. No limiter is attached by default.
+Moved to `TokenMediator` on 2026-10-24. The mediator calls `checkDeposit` on a relay and `checkWithdrawal` on a release (the nonce argument is the message identifier). A refused release is recorded in `claimable` instead of reverting, because delivery of a message is final (superseded: there are no `claimable` balances now. A refused release emits `ReleaseFailed` and the mediator keeps the tokens. See the no-claims decision of 2026-10-27). `detachFlowLimiter` stays. No limiter is attached by default.
 
 The user asked for a hook for flow limits that can be nullified, with the rules held by an immutable contract. The user will supply the limit rules later. This section defines only the hook.
 
@@ -790,7 +790,7 @@ The contracts need no administrator, and the repository has no relayer. A statef
 4. **Announce.** Tell users only after both bridges report open. A send before that reverts with `DepositsNotOpen()` and spends nothing but gas. This covers token relays too, because the mediator sends through the bridge.
 5. **Keep the light clients current.** Run step 2 on a schedule for each route. The own-chain light client of a chain with a registry gate is a route too: its source beacon chain and its destination chain are the same chain. A message needs a stored header after its slot.
 6. **Confirm the gate.** On a chain whose gate is enforcing, the first sender of each epoch calls `BeaconForkGate.confirm(evidence)` before the send (see "Gate evidence: confirm, then send"). A keeper may confirm too. The server builds the evidence for its own sends.
-7. **Deliver the messages.** For each `UserRequestForAffirmation` log on a source bridge (a token relay emits one, and so does any message from an application), run `evidence --tx <hash> --log-index <n>`. Send each call of `prerequisites` in order, and read the layout views again after each call. Then send `execute` to the destination bridge. Skip the message when `alreadyDelivered` is true. Delivery is final: a failed call to the target is not retried by the bridge. For a message that names a `DeliveryRouter` as the receiver of tokens, send the proof to `DeliveryRouter.executeMessage(proof)` instead. To send many in one transaction, put the block proof (`update` at the light client) and one such call for each message in a Multicall3 `aggregate3` with `allowFailure` set on each call,, so the router can pay the fee to the reward address; the `execute.data` of the evidence holds the proof as the argument of `executeMessage`.
+7. **Deliver the messages.** For each `UserRequestForAffirmation` log on a source bridge (a token relay emits one, and so does any message from an application), run `evidence --tx <hash> --log-index <n>`. Send each call of `prerequisites` in order, and read the layout views again after each call. Then send `execute` to the destination bridge. Skip the message when `alreadyDelivered` is true. Delivery is final: a failed call to the target is not retried by the bridge. For a message that names a `DeliveryRouter` as the receiver of tokens, send the proof to `DeliveryRouter.executeMessage(proof)` instead. To send many in one transaction, put the block proof (`update` at the light client) and one such call for each message in a Multicall3 `aggregate3` with `allowFailure` set on each call, so the router can pay the fee to the reward address; the `execute.data` of the evidence holds the proof as the argument of `executeMessage`.
 8. **A release that the recipient cannot take is final.** The mediator tries the recipient once and emits `ReleaseFailed(token, recipient, value, messageId)` when the token or the flow limiter refuses. There is no claim and no retry. The tokens stay in the mediator, owed to nobody.
 
 ## Message layer and token mediator (user decisions 2026-10-24) (built)
@@ -868,7 +868,7 @@ It is a target of the message bridge on each chain, and it trusts only the media
 - Native and bridged tokens. A token is native on the chain where it exists. Bridging a native token locks it in the mediator and mints a bridged copy on the other chain. Bridging a bridged copy back burns it and unlocks the native token. Neither side needs pre-loaded funds.
 - No registration. The bridged copy's address is `CREATE2(factory, salt = keccak256(homeChainId, homeToken))`. The first message for a token carries name, symbol and decimals; the destination deploys the copy on first use. This replaces the token pair tables and the `destinationToken` check: the destination address is computed, not looked up.
 - Accounting per native token, as OmniBridge's `mediatorBalance`: the mediator counts the amount it actually received (balance before and after), not `balanceOf`. Fee-on-transfer tokens bridge the received amount. Stray transfers to the mediator are never paid out. Rebasing tokens are refused (or documented as unsupported).
-- Native coins: ETH and PLS are wrapped on deposit (WETH, WPLS) and unwrapped on delivery.
+- Native coins: ETH and PLS are wrapped on deposit (WETH, WPLS) and unwrapped on delivery. The mediator does not do this itself: `DeliveryRouter` wraps and unwraps the native coin.
 - Bridge and call: `relayTokensAndCall(token, recipient, amount, data, gasLimit, feeContract)` delivers the tokens and then calls the recipient with `data`.
 - The optional fee switch and the empty flow limiter hook move here from the vault.
 - A failed transfer on delivery (decided 2026-10-27): if releasing a native token to the recipient fails (a blacklist, a pause, a token that burns its gas, a token that reverts, a refusal of the flow limiter), the mediator emits `ReleaseFailed(token, recipient, value, messageId)` and stops. The handler never reverts, so the message stays delivered. The release is final: there is no claim, no retry and no payee but the recipient. The record `mediatorBalance` falls by the value, because the other chain burned the copies, and the tokens stay in the mediator as a surplus that nobody owns.
@@ -884,7 +884,7 @@ A minimal ERC-20 with `mint` and `burn` callable only by the mediator, plus `per
 ### Tests (to write with the build)
 
 - Message bridge: delivery of a valid message; replay refused; wrong emitter, wrong chain, tampered proof refused (the existing vault reject tests, moved); delivery is final when the target reverts; the gas guard refuses an executor that sends too little gas, and a target that runs out of its own `gasLimit` is a final failure; the context is set during the call and cleared after; the fee contract is called once, and a reverting, gas-burning or missing fee contract changes nothing; independent messages can execute in any order.
-- Token mediator: native lock and bridged mint; burn and unlock back; the first message deploys the bridged copy at the computed address with the right metadata; a second token gets a second copy; fee-on-transfer accounting; stray transfers are not paid out; native coin wrap and unwrap; bridge and call; a blacklisted recipient gets a claimable balance; only the remote mediator through the bridge can trigger a release.
+- Token mediator: native lock and bridged mint; burn and unlock back; the first message deploys the bridged copy at the computed address with the right metadata; a second token gets a second copy; fee-on-transfer accounting; stray transfers are not paid out; native coin wrap and unwrap; bridge and call; a blacklisted recipient gets a `ReleaseFailed` event and the mediator keeps the tokens (superseded: an earlier design gave a `claimable` balance); only the remote mediator through the bridge can trigger a release.
 - End to end on two Anvil chains with the proof producer: a token round trip and an arbitrary message, both directions.
 
 ### OmniBridge interface compatibility (user decision, 2026-10-24)

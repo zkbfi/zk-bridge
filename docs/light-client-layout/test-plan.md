@@ -1,6 +1,6 @@
 # Light client layout: threat narrative and test plan
 
-Status: plan only. Nothing here is built yet. It covers the implemented design (commits `fa2f759..4526f7d`) and the five planned changes. Two of the changes wait on a user decision, marked (D).
+Status: built (2026-10-27). The design and the five changes are in the tree. The "New" and "Change" marks below describe the plan as it was written. It covers the implemented design (commits `fa2f759..4526f7d`) and the five planned changes. Two of the changes wait on a user decision, marked (D).
 
 | Item | Change | Decision |
 |---|---|---|

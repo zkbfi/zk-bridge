@@ -8,7 +8,7 @@ Goal: Ethereum's Gloas activation and PulseChain's adoption of Deneb or Electra 
 - Length 9: the Gloas progressive form. Indices 735, 2945, 2946. Keep the field-list derivation in layout.rs:186 and :281.
 - Any other length is refused.
 - The next committee branch in the same step must have the length of that layout (5, 6 or 11). Mixed lengths in one step are refused. Steps in a fold may use different layouts.
-- Do not allow depth 7 (finality length 8). On a chain that is truly depth 7, wrong claims land on fields no spec defines yet.
+- Do not allow depth 7 (finality length 8). On a chain that is truly depth 7, wrong claims land on fields no spec defines yet. (Superseded: `decisions.md` D1 accepts plain depth 7, with finality length 8 and committee length 7.)
 - Branch checks become exact. `branch_is_valid` (update.rs:64-66) must never strip or accept leading zeros. The length is the depth.
 - Compute the indices from the depth: `2^d + field` and `(2^d + 20)*2 + 1`.
 
@@ -26,7 +26,7 @@ Goal: Ethereum's Gloas activation and PulseChain's adoption of Deneb or Electra 
 - After this change, `ChainSpec` keeps only facts that do not change at a fork: the genesis validators root, slot timing, and so on. Remove whatever has no remaining user.
 
 ## 4. Public values
-- No change: 352 bytes for the light client and 224 for the observation.
+- No change: 352 bytes for the light client and 224 for the observation. (Superseded: `decisions.md` D2 adds a `shape` word. The observation is 256 bytes now.)
 - Both verification keys change (BeaconLightClient.programVKey and ForkRegistry.observationProgramVKey).
 
 ## Soundness table, from the analysis

@@ -48,5 +48,9 @@ The contract `ISP1Verifier` in this directory has the same function `verifyProof
 ## Tests
 
 `test/hardened/SP1VerifierGroth16.t.sol` checks the constants above and shows that this verifier refuses a wrong selector, a wrong key root,
-a bad exit code and a garbage proof. The release ships no proof for circuit `v6.1.0`, so no accepting test exists for this verifier yet.
+a bad exit code and a garbage proof. The release ships no proof for circuit `v6.1.0`, but we have our own. The accepting tests for this verifier are
+`test_ownProofIsAcceptedByTheVendoredVerifier` and `test_ownProofIsAcceptedThroughTheBridgeInterface`. They use a real proof
+of our light client program on an Ethereum update. Tampered public values, tampered proof bytes and a changed key are refused
+(`test_ownProofWithTamperedPublicValuesIsRefused`, `test_ownProofWithTamperedProofBytesIsRefused`,
+`test_ownProofUnderAnotherKeyOrWithChangedHeaderIsRefused`).
 The file `test/hardened/vendor-sp1-contracts-v6.0.0/README.md` explains the proof of circuit `v6.0.0` that the same test file uses.

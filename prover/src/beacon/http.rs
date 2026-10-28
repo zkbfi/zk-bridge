@@ -42,7 +42,8 @@
 //! that execution block. So after a fold is chosen, [`HttpBeaconSource::plan_update`] reads the state of each Gloas
 //! finalized header (hashed in full and compared with the state root), asks an [`ExecutionHeaders`] source for the
 //! raw header of `latest_block_hash`, and attaches both through `anchor_gloas_header`. Without an execution source the
-//! run stops with an error that names `source.rpc_url`. A message proof from a Gloas source block is refused.
+//! run stops with an error that names `source.rpc_url`. A message proof from a Gloas source block is built through `gloas_message_path`
+//! (the first later block whose bid names the source block as `parent_block_hash`), not refused.
 //!
 //! Limits: the SSZ parser in `lc-core` reads states of the Capella, Deneb, Electra, Fulu and Gloas layouts. It picks the layout
 //! from the fork that the chain schedule has at the slot of the state. The block parser reads the Capella block layout

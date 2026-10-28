@@ -155,10 +155,10 @@ Where two documents disagree, the code wins, and in `docs/hardened-build-contrac
 - **What is left.** A real Ethereum fixture for the historical path.
 - **Link.** [`docs/hardened-build-contract.md`](../hardened-build-contract.md) "Ancestry: two paths".
 
-### 2.9 Prover block parser coverage
-- **What.** The prover's block parser reads Capella blocks; Gloas blocks go through a separate path; other forks are refused by name (`prover/src/light_client.rs`, `BlockView::parse_for_chain`). A comment in `prover/src/beacon/http.rs` says a message proof from a Gloas source block is refused, while `light-client/guests/README.md` says the prover builds that evidence.
-- **What is left.** Confirm which source forks the `evidence` command supports today, in particular Ethereum mainnet blocks. This is liveness only: the contract checks any evidence.
-- **Link.** `prover/src/light_client.rs`, `prover/src/beacon/http.rs`.
+### 2.9 Prover cannot build message evidence from Ethereum mainnet blocks
+- **What.** The `evidence` command builds a message proof from a PulseChain (Capella) or a Gloas source block. For any other fork it stops: `message_path` (`prover/src/beacon/http.rs`) calls `block_by_id`, which calls `BlockView::parse_for_chain` (`prover/src/light_client.rs`), and that parser refuses every fork but Capella by name. Ethereum mainnet runs Fulu today (Deneb, Electra and Fulu are all refused), so no message from Ethereum mainnet can be delivered by this prover. The assembled update path and the block hash layout evidence use the same parser. Checked 2026-10-27.
+- **What is left.** Teach the block parser the Deneb, Electra and Fulu block layouts, with real mainnet fixtures. This is liveness only: the contracts check any evidence, so a wrong parser can cause a refusal, never a false message.
+- **Link.** `prover/src/light_client.rs` (`BlockView::parse_for_chain`), `prover/src/beacon/http.rs` (`message_path`), `prover/src/evidence.rs`.
 
 ### 2.10 Mainnet deployment gas
 - **What.** On Sepolia after its gas repricing, the deployment cost about 108.7 million gas per chain (TokenMediator 40.5 million, MessageBridge 35.8 million). A per-transaction gas cap on Ethereum mainnet could block the two largest deployments.

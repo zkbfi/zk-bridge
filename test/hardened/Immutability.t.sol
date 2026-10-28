@@ -23,9 +23,10 @@ contract ImmutabilityTest is Test {
     }
 
     function _mutatingFunctions(string memory artifact) internal view returns (string[] memory) {
-        return _names(
-            artifact, '$.abi[?(@.type=="function" && @.stateMutability!="view" && @.stateMutability!="pure")].name'
-        );
+        return
+            _names(
+                artifact, '$.abi[?(@.type=="function" && @.stateMutability!="view" && @.stateMutability!="pure")].name'
+            );
     }
 
     function _assertOnly(string[] memory names, string[] memory allowed) internal pure {
@@ -79,7 +80,7 @@ contract ImmutabilityTest is Test {
     /// `detachFlowLimiter`. The mediator has no claim function: a failed release is final. The mediator has no fee and no function that pays an account that a release does not
     /// name. Only the flow limiter can call `detachFlowLimiter`, and no function sets or replaces a limiter. Matters:
     /// H-04 (no key can redirect the mediator or reach the tokens that it holds).
-    function test_H04_tokenMediator_onlyRelayHandlerAndClaimFunctionsChangeState() public view {
+    function test_H04_tokenMediator_onlyRelayAndHandlerFunctionsChangeState() public view {
         string[] memory allowed = new string[](10);
         allowed[0] = "relayTokens";
         allowed[1] = "relayTokensAndCall";
@@ -192,8 +193,10 @@ contract ImmutabilityTest is Test {
     /// `bytes proof` and `bytes publicValues`, and no input name mentions a period. Matters: R2-14 (periods come only from
     /// `periodOf(slot)`, so a caller cannot name the period whose committee is replaced).
     function test_R2_14_updateTakesNoPeriodParameter() public view {
-        string[] memory inputNames = _names("out/BeaconLightClient.sol/BeaconLightClient.json", '$.abi[?(@.name=="update")].inputs[*].name');
-        string[] memory inputTypes = _names("out/BeaconLightClient.sol/BeaconLightClient.json", '$.abi[?(@.name=="update")].inputs[*].type');
+        string[] memory inputNames =
+            _names("out/BeaconLightClient.sol/BeaconLightClient.json", '$.abi[?(@.name=="update")].inputs[*].name');
+        string[] memory inputTypes =
+            _names("out/BeaconLightClient.sol/BeaconLightClient.json", '$.abi[?(@.name=="update")].inputs[*].type');
         assertEq(inputNames.length, 2);
         assertEq(inputTypes.length, 2);
         assertEq(inputNames[0], "proof");
@@ -215,8 +218,15 @@ contract ImmutabilityTest is Test {
             "out/DeliveryRouter.sol/DeliveryRouter.json"
         ];
         string[9] memory banned = [
-            "owner", "transferOwnership", "renounceOwnership", "upgradeTo", "upgradeToAndCall", "setVerifier",
-            "setProgramVKey", "setLightClient", "pause"
+            "owner",
+            "transferOwnership",
+            "renounceOwnership",
+            "upgradeTo",
+            "upgradeToAndCall",
+            "setVerifier",
+            "setProgramVKey",
+            "setLightClient",
+            "pause"
         ];
         for (uint256 i = 0; i < artifacts.length; i++) {
             string[] memory names = _names(artifacts[i], '$.abi[?(@.type=="function")].name');

@@ -15,7 +15,7 @@ This policy answers gap G-02 in `docs/zk-bridge-comparison.md`. The light client
 
 The repository never installs the SP1 toolchain with `sp1up` or a `curl | bash` installer. The Rust crate `sp1-sdk` is a dependency of the prover, pinned to one exact version (the npm package of the same name does not exist and must never be installed). The production prover backend is `Sp1Prover`; `docs/server-prover.md` explains how to run it.
 
-## Pinned toolchain and program keys (2026-10-21)
+## Pinned toolchain (2026-10-21) and program keys (2026-10-27)
 
 | Item | Value |
 |---|---|
@@ -97,7 +97,7 @@ The contracts cannot be patched. The response is the same as for an unsupported 
 
 1. The operator stops proving on the affected route, and the stateful servers report the route as stopped.
 2. Deploy a new route with a fixed release, and move the interface to it.
-3. The old route still holds locked tokens in its mediator. Deliveries on the old route stay possible only while its proofs stay honest. That is why the flow limiter hook exists: a limiter can cap what a forged proof drains while people move.
+3. The old route still holds locked tokens in its mediator. Deliveries on the old route stay possible only while its proofs stay honest. The flow limiter hook exists for this: a limiter could cap what a forged proof drains while people move. But no limiter is attached. By user decision (2026-10-22), the bridge has no flow limits, so nothing caps the drain on an old route. The only response is steps 1 and 2, and the tokens in the old mediator stay at risk.
 
 ## Not adopted
 

@@ -297,6 +297,8 @@ Every proof was 356 bytes and its public values equalled the native `lc-core` ru
 | Fork observation program key | `0x00c2a9c5a7b0826c85a59ca0dbeccae5309093072e40d26548b9b0c4183d3f39` |
 | Endpoint | `43nsvfb8svkosr` runs v4 (release 5). Only the image changed. |
 
+The program keys in this image are old. The guest programs changed on 2026-10-27, and `light-client/program-keys.json` holds new keys. The v4 image must not prove for the current bridge. Rebuild the worker image with `script/build-gpu-image.sh` before you use it, and check the keys inside the new image against `light-client/program-keys.json`.
+
 The image holds the rebuilt ELFs (testnet chain selectors and Gloas). The ELF hashes in the image equal `light-client/program-keys.json`. The file `groth16_vk.bin` in the image hashes to `VERIFIER_HASH`, and the build checks this. The first proof on v4 is not measured yet.
 
 ## First live runs on v4 (2026-10-26)
@@ -353,6 +355,8 @@ Chain 943 serves a correct state only for the newest finalized header. The `prov
 | Light client program key | `0x002a566f7e3d1e6996f7ffa35668291bfc7bce325ed34fe55ef41a2be3fd15cf` (unchanged from v4) |
 | Fork observation program key | `0x00c2a9c5a7b0826c85a59ca0dbeccae5309093072e40d26548b9b0c4183d3f39` (unchanged from v4) |
 | Endpoint | `43nsvfb8svkosr` runs v5. Only the image changed. The pool is still `ADA_24`. |
+
+The program keys in this image are old. The guest programs changed on 2026-10-27, and `light-client/program-keys.json` holds new keys. The v5 worker image must not prove for the current bridge. Rebuild the worker image with `script/build-gpu-image.sh` before you use it, and check the keys inside the new image against `light-client/program-keys.json`.
 
 Checks inside the image: `light-client.elf` hashes to `d7633e82...9bbf` and `fork-observation.elf` to `5a2535fa...91bf`, both equal to `light-client/program-keys.json`. The file `groth16_vk.bin` hashes to `4388a21c687fdd5f218d7e3d13190cac4c5355818d3605fd5fb811df468ee696`, which is `VERIFIER_HASH`. v5 holds the worker health fix (`/ping` answers 503 after a failed proof). A first proof on v5 is not measured yet.
 
