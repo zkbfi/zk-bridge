@@ -15,13 +15,17 @@ import { createRpcExplorerApi, type RpcExplorerApi, type RpcExplorerApiOptions }
 export type JsonResponse = { readonly status: number; readonly body: unknown };
 
 /** Fetches a URL and parses the JSON of the answer. A test passes a fake. */
-export type JsonFetcher = (url: string) => Promise<JsonResponse>;
+export type JsonFetcher = (url: string, signal?: AbortSignal) => Promise<JsonResponse>;
 
 const FETCH_TIMEOUT_MILLISECONDS = 10_000;
 
-/** The fetcher that uses `fetch`, with a time limit. An answer that is not JSON has the body null. */
-export const fetchJsonResponse: JsonFetcher = async (url) => {
-  const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MILLISECONDS) });
+/**
+ * The fetcher that uses `fetch`, with a time limit. An answer that is not JSON has the body null. A signal from the
+ * caller cancels the request as well.
+ */
+export const fetchJsonResponse: JsonFetcher = async (url, signal) => {
+  const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MILLISECONDS);
+  const response = await fetch(url, { signal: signal === undefined ? timeout : AbortSignal.any([timeout, signal]) });
   const body: unknown = await response.json().catch(() => null);
   return { status: response.status, body };
 };

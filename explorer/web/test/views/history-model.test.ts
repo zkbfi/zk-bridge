@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ChainReader, HistoryEvent, HistoryFilters, JsonFetcher } from "@zk-bridge/shared";
+import { createFallbackController, type ChainReader, type HistoryEvent, type HistoryFilters, type HistoryScan, type JsonFetcher } from "@zk-bridge/shared";
 import {
   dateOfSeconds,
   defaultHistoryDependencies,
@@ -8,6 +8,7 @@ import {
   historyFiltersFromQuery,
   pageOfScannedEvents,
   readHistory,
+  shareScans,
   unkeptScan,
   secondsOfDate,
   type HistoryConnection,
@@ -248,5 +249,147 @@ describe("readHistory", () => {
     expect(typeof live.fetchJson).toBe("function");
     expect(typeof live.createReader).toBe("function");
     expect(live.scanOf).toBe(unkeptScan);
+  });
+});
+
+describe("an abort during the indexer read", () => {
+  const urls = { 1: { value: "https://one.example.org", source: "user" as const }, 369: { value: "https://two.example.org", source: "user" as const } };
+
+  it("gives the signal to the fetch, leaves the connection status alone and starts no scan of the chains", async () => {
+    const controller = createFallbackController({ indexerConfigured: true, probe: async () => ({ ok: true }) });
+    const connection: HistoryConnection = {
+      baseUrl: "https://indexer.example.org",
+      resolved: { indexerUrl: null, backendUrl: null, msgboardIndexerUrl: null, archiveUrl: null, msgboardUrl: null, rpcUrls: urls },
+      run: (operations) => controller.run(operations),
+    };
+    const leaving = new AbortController();
+    const seenSignals: (AbortSignal | undefined)[] = [];
+    const fetchJson: JsonFetcher = async (_url, signal) => {
+      seenSignals.push(signal);
+      leaving.abort(new Error("page left"));
+      return signal?.aborted === true ? Promise.reject(signal.reason) : { status: 200, body: null };
+    };
+    let scans = 0;
+    const scanOf: HistoryDependencies["scanOf"] = async () => {
+      scans += 1;
+      throw new Error("must not scan");
+    };
+    const read = readHistory({
+      connection,
+      filters: EMPTY_HISTORY_FILTERS,
+      signal: leaving.signal,
+      dependencies: { fetchJson, createReader: () => ({}) as ChainReader, loadPair: async () => pair, scanOf },
+    });
+    await expect(read).rejects.toThrow("page left");
+    expect(seenSignals).toEqual([leaving.signal]);
+    expect(controller.status().kind).toBe("indexer");
+    expect(scans).toBe(0);
+  });
+});
+
+describe("shareScans", () => {
+  const scan: HistoryScan = { items: [], partial: true, coverage: [] };
+
+  /** A keeper that runs `load` once per key and keeps the promise, as a cache of running reads does. */
+  const keeper = () => {
+    const kept = new Map<string, Promise<HistoryScan>>();
+    let loads = 0;
+    return {
+      loads: () => loads,
+      keep: (key: string, load: () => Promise<HistoryScan>) => {
+        const known = kept.get(key);
+        if (known !== undefined) return known;
+        loads += 1;
+        const started = load();
+        kept.set(key, started);
+        return started;
+      },
+    };
+  };
+
+  /** A scan that waits for the test and stops when its own signal aborts. */
+  const gatedLoad = () => {
+    const seen: { signal: AbortSignal | undefined } = { signal: undefined };
+    let open: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    const load = (signal: AbortSignal | undefined): Promise<HistoryScan> => {
+      seen.signal = signal;
+      return new Promise((resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        void gate.then(() => resolve(scan));
+      });
+    };
+    return { load, seen, open: () => open() };
+  };
+
+  it("lets a new read join a running scan after the first read left, and gives it the result", async () => {
+    const { keep, loads } = keeper();
+    const scanOf = shareScans(keep);
+    const { load, seen, open } = gatedLoad();
+    const first = new AbortController();
+    const firstRead = scanOf({ key: "k", load, signal: first.signal });
+    const firstOutcome = expect(firstRead).rejects.toThrow("filters changed");
+    const second = new AbortController();
+    const secondRead = scanOf({ key: "k", load, signal: second.signal });
+    first.abort(new Error("filters changed"));
+    await firstOutcome;
+    expect(seen.signal?.aborted).toBe(false);
+    open();
+    await expect(secondRead).resolves.toBe(scan);
+    expect(loads()).toBe(1);
+  });
+
+  it("aborts the scan when the last read that wants it leaves", async () => {
+    const { keep } = keeper();
+    const scanOf = shareScans(keep);
+    const { load, seen } = gatedLoad();
+    const only = new AbortController();
+    const read = scanOf({ key: "k", load, signal: only.signal });
+    const outcome = expect(read).rejects.toThrow("page left");
+    only.abort(new Error("page left"));
+    await outcome;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(seen.signal?.aborted).toBe(true);
+    expect(seen.signal?.reason).toEqual(new Error("page left"));
+  });
+
+  it("keeps the scan when a new read joins within the grace time after the last one left", async () => {
+    const { keep } = keeper();
+    const scanOf = shareScans(keep);
+    const { load, seen, open } = gatedLoad();
+    const first = new AbortController();
+    const outcome = expect(scanOf({ key: "k", load, signal: first.signal })).rejects.toThrow("filters changed");
+    first.abort(new Error("filters changed"));
+    await outcome;
+    const joining = scanOf({ key: "k", load, signal: undefined });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(seen.signal?.aborted).toBe(false);
+    open();
+    await expect(joining).resolves.toBe(scan);
+  });
+
+  it("rejects at once for a read whose signal has already aborted", async () => {
+    const { keep } = keeper();
+    const scanOf = shareScans(keep);
+    const { load } = gatedLoad();
+    const gone = new AbortController();
+    gone.abort(new Error("already gone"));
+    await expect(scanOf({ key: "k", load, signal: gone.signal })).rejects.toThrow("already gone");
+  });
+
+  it("passes the failure of the scan to the read that waits, and the next read starts a new scan", async () => {
+    const scanOf = shareScans((_key, load) => load());
+    const broken = (): Promise<HistoryScan> => Promise.reject(new Error("node down"));
+    await expect(scanOf({ key: "k", load: broken, signal: undefined })).rejects.toThrow("node down");
+    const { load, open } = gatedLoad();
+    open();
+    await expect(scanOf({ key: "k", load, signal: undefined })).resolves.toBe(scan);
+  });
+
+  it("does not need a signal from the read", async () => {
+    const { keep } = keeper();
+    const { load, open } = gatedLoad();
+    open();
+    await expect(shareScans(keep)({ key: "k", load, signal: undefined })).resolves.toBe(scan);
   });
 });

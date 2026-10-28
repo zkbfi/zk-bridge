@@ -278,6 +278,36 @@ describe("the history view", () => {
     expect(counter.requests).toBeGreaterThan(firstRead);
   });
 
+  it("keeps a running scan alive when a filter changes, and the new read gets its result", async () => {
+    const { fetchJson } = indexerFetcher(() => ({ status: 503, body: null }));
+    let open: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    let requests = 0;
+    const gatedChain = (input: { chainId: number }): ChainReader => {
+      const inner = readerWith(input.chainId === 1 ? firstChainLogs : secondChainLogs);
+      return {
+        ...inner,
+        getLogs: async (request) => {
+          requests += 1;
+          await gate;
+          return inner.getLogs(request);
+        },
+      };
+    };
+    renderLive({ ...dependenciesWith(fetchJson), createReader: gatedChain }, { fallback: true });
+    await waitFor(() => expect(requests).toBeGreaterThan(0), PATIENCE);
+    // The first read is still waiting for the chains. Edit a filter: a new read starts and joins the scan.
+    await userEvent.selectOptions(screen.getByLabelText("Chain"), "369");
+    await waitFor(() => expect(screen.getByLabelText("Chain")).toHaveValue("369"), PATIENCE);
+    const requestsAtEdit = requests;
+    open();
+    await screen.findByRole("table", { name: "History events" }, PATIENCE);
+    expect(screen.queryByText(/The history did not load/)).not.toBeInTheDocument();
+    // Only events on chain 369 remain: the delivery and the head update.
+    expect(eventRows()).toHaveLength(2);
+    expect(requests).toBe(requestsAtEdit);
+  });
+
   it("stops the scan of the chains when the reader leaves the page", async () => {
     const { fetchJson } = indexerFetcher(() => ({ status: 503, body: null }));
     let requests = 0;
@@ -288,7 +318,7 @@ describe("the history view", () => {
       getLogs: async () => {
         requests += 1;
         if (requests === 4) leave();
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await new Promise((resolve) => setTimeout(resolve, 50));
         return [];
       },
     });
@@ -299,7 +329,7 @@ describe("the history view", () => {
     const settled = requests;
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(requests).toBe(settled);
-    expect(settled).toBeLessThan(40);
+    expect(settled).toBeLessThan(80);
   });
 
   it("says when a send has no known status because its delivery is outside the blocks read", async () => {

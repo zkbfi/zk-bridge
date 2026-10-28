@@ -154,6 +154,67 @@ export type ScanRequest = {
   readonly signal: AbortSignal | undefined;
 };
 
+/**
+ * How long a scan that nobody wants waits before it stops. A new filter ends the old read just before the new read
+ * starts, and the new read must find the scan still running.
+ */
+const SCAN_GRACE_MILLISECONDS = 100;
+
+const abortUnlessJoined = (entry: { readonly controller: AbortController; wanted: number }, reason: unknown): void => {
+  setTimeout(() => {
+    if (entry.wanted === 0) entry.controller.abort(reason);
+  }, SCAN_GRACE_MILLISECONDS);
+};
+
+/**
+ * Makes a scan source that shares one running scan between the reads that want it. A scan runs under its own signal,
+ * not under the signal of the read that started it, so a read that leaves (a new filter, a new page) does not kill a
+ * scan that another read waits for. The scan aborts when no read has wanted it for a short while. A read that leaves
+ * stops waiting at once.
+ *
+ * @param keep Gives the scan for a key and keeps its result. It must run `load` once for a key that is already running.
+ */
+export const shareScans = (keep: (key: string, load: () => Promise<HistoryScan>) => Promise<HistoryScan>): HistoryDependencies["scanOf"] => {
+  const running = new Map<string, { readonly controller: AbortController; readonly scan: Promise<HistoryScan>; wanted: number }>();
+  return (request) => {
+    let entry = running.get(request.key);
+    if (entry === undefined) {
+      const controller = new AbortController();
+      const scan = keep(request.key, () => request.load(controller.signal));
+      entry = { controller, scan, wanted: 0 };
+      const started = entry;
+      const forget = (): void => {
+        if (running.get(request.key) === started) running.delete(request.key);
+      };
+      scan.then(forget, forget);
+      running.set(request.key, entry);
+    }
+    const joined = entry;
+    joined.wanted += 1;
+    return new Promise<HistoryScan>((resolve, reject) => {
+      let settled = false;
+      const leave = (): void => {
+        if (settled) return;
+        settled = true;
+        joined.wanted -= 1;
+        if (joined.wanted === 0) abortUnlessJoined(joined, request.signal?.reason);
+        reject(request.signal?.reason);
+      };
+      if (request.signal?.aborted === true) return leave();
+      request.signal?.addEventListener("abort", leave, { once: true });
+      const finish = (settle: () => void): void => {
+        settled = true;
+        request.signal?.removeEventListener("abort", leave);
+        settle();
+      };
+      joined.scan.then(
+        (scan) => (settled ? undefined : finish(() => resolve(scan))),
+        (error: unknown) => (settled ? undefined : finish(() => reject(error))),
+      );
+    });
+  };
+};
+
 /** A scan source that keeps nothing: every call reads the chains. */
 export const unkeptScan = (request: ScanRequest): Promise<HistoryScan> => request.load(request.signal);
 
@@ -174,7 +235,7 @@ export type HistoryReading = {
 const readFromIndexer = async (connection: HistoryConnection, filters: HistoryFilters, fetchJson: JsonFetcher, signal: AbortSignal | undefined): Promise<HistoryReading> => {
   const path = "/api/history";
   signal?.throwIfAborted();
-  const response = await fetchJson(`${connection.baseUrl}${path}?${formatHistoryQuery(filters)}`);
+  const response = await fetchJson(`${connection.baseUrl}${path}?${formatHistoryQuery(filters)}`, signal);
   signal?.throwIfAborted();
   if (response.status !== 200) throw new Error(`The indexer answered ${response.status} for ${path}.`);
   const page = parseHistoryEvents(response.body);
@@ -242,6 +303,7 @@ export const readHistory = (input: {
   return input.connection.run({
     viaIndexer: () => readFromIndexer(input.connection, input.filters, input.dependencies.fetchJson, input.signal),
     viaRpc: () => readFromChains(input.connection, input.filters, input.dependencies, options),
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
 };
 

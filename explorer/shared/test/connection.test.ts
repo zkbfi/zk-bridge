@@ -240,4 +240,18 @@ describe("fetchJsonResponse", () => {
     expect(await fetchJsonResponse("http://x.test/json")).toEqual({ status: 200, body: { a: 1 } });
     expect(await fetchJsonResponse("http://x.test/page")).toEqual({ status: 502, body: null });
   });
+
+  it("cancels the request when the signal of the caller aborts", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true })),
+      ),
+    );
+    const leaving = new AbortController();
+    const read = fetchJsonResponse("http://x.test/slow", leaving.signal);
+    leaving.abort(new Error("page left"));
+    await expect(read).rejects.toThrow("page left");
+  });
 });

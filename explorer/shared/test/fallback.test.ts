@@ -90,6 +90,33 @@ describe("createFallbackController", () => {
     expect(seen.map((status) => status.label)).toEqual(["RPC fallback: indexer unreachable"]);
   });
 
+  it("ends quietly when the caller leaves during an indexer read: the status stays and the RPC source does not run", async () => {
+    const { controller } = setup();
+    const seen: SourceStatus[] = [];
+    controller.subscribe((status) => seen.push(status));
+    const leaving = new AbortController();
+    const viaRpc = vi.fn(async () => "rpc");
+    const read = controller.run({
+      viaIndexer: async () => {
+        leaving.abort(new Error("page left"));
+        throw leaving.signal.reason;
+      },
+      viaRpc,
+      signal: leaving.signal,
+    });
+    await expect(read).rejects.toThrow("page left");
+    expect(controller.status().kind).toBe("indexer");
+    expect(seen).toEqual([]);
+    expect(viaRpc).not.toHaveBeenCalled();
+  });
+
+  it("still falls back for a failure when the caller has not left", async () => {
+    const { controller } = setup();
+    const result = await controller.run({ viaIndexer: async () => Promise.reject(new TypeError("fetch failed")), viaRpc: async () => "rpc", signal: new AbortController().signal });
+    expect(result).toBe("rpc");
+    expect(controller.status().kind).toBe("rpc");
+  });
+
   it("falls back when the indexer answers with an error", async () => {
     const { controller } = setup();
     await controller.run({ viaIndexer: async () => Promise.reject(new Error("The indexer answered 500 for /api/feed.")), viaRpc: async () => "rpc" });

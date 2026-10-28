@@ -18,7 +18,7 @@ import {
   readHistory,
   secondsOfDate,
   type HistoryDependencies,
-  type ScanRequest,
+  shareScans,
 } from "./history-model";
 
 /** A scan of the chains stays fresh this long. After that, a poll reads the chains again. */
@@ -83,8 +83,7 @@ export const HistoryView = ({ filters, onChange, dependencies }: HistoryViewProp
   const reads = useMemo(
     () => ({
       ...(dependencies ?? defaultHistoryDependencies(() => loadSharedPair(configuration))),
-      scanOf: (request: ScanRequest) =>
-        queryClient.fetchQuery({ queryKey: ["history-scan", request.key], queryFn: () => request.load(request.signal), staleTime: SCAN_FRESH_MILLISECONDS }),
+      scanOf: shareScans((key, load) => queryClient.fetchQuery({ queryKey: ["history-scan", key], queryFn: load, staleTime: SCAN_FRESH_MILLISECONDS })),
     }),
     [dependencies, configuration, queryClient],
   );

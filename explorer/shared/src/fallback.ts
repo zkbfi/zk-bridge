@@ -43,7 +43,15 @@ export interface FallbackController {
    * Runs one read. With a healthy indexer it runs `viaIndexer`. When that fails, or when the RPC source is in use, it
    * runs `viaRpc`. A failure of `viaRpc` is not caught.
    */
-  run<value>(operations: { readonly viaIndexer: () => Promise<value>; readonly viaRpc: () => Promise<value> }): Promise<value>;
+  run<value>(operations: {
+    readonly viaIndexer: () => Promise<value>;
+    readonly viaRpc: () => Promise<value>;
+    /**
+     * The signal of the caller. When it has aborted, a failure of `viaIndexer` is the caller leaving, not a fault of the
+     * indexer: the error goes up, the status stays and `viaRpc` does not run.
+     */
+    readonly signal?: AbortSignal;
+  }): Promise<value>;
   status(): SourceStatus;
   /** Calls the listener each time the status changes. Returns the function that removes the listener. */
   subscribe(listener: (status: SourceStatus) => void): () => void;
@@ -123,6 +131,7 @@ export const createFallbackController = (options: FallbackOptions): FallbackCont
       try {
         return await operations.viaIndexer();
       } catch (error) {
+        if (operations.signal?.aborted === true) throw error;
         change(rpcStatus(describeError(error)));
         return operations.viaRpc();
       }
