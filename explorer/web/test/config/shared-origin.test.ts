@@ -23,4 +23,21 @@ describe("originIsShared", () => {
   it("an empty path is an own origin", () => {
     expect(originIsShared({ pathname: "", hostname: "example.org" })).toBe(false);
   });
+
+  it("cannot be bypassed with extra slashes, encoding or case", () => {
+    for (const pathname of ["//ipfs/x/", "///ipns/y", "/%69pfs/x/", "/%69%70%6e%73/y", "/IPFS/x/", "/IpNs/y"]) {
+      expect(originIsShared({ pathname, hostname: "example.org" }), pathname).toBe(true);
+    }
+  });
+
+  it("fails closed on a segment that cannot be read", () => {
+    expect(originIsShared({ pathname: "/%/x", hostname: "example.org" })).toBe(true);
+    expect(originIsShared({ pathname: "/%E0%A4%A/x", hostname: "example.org" })).toBe(true);
+    expect(originIsShared({ pathname: "/%2569pfs/x", hostname: "example.org" })).toBe(true);
+  });
+
+  it("keeps the own origins false with extra slashes", () => {
+    expect(originIsShared({ pathname: "//", hostname: "localhost" })).toBe(false);
+    expect(originIsShared({ pathname: "//app/ipfs", hostname: "example.org" })).toBe(false);
+  });
 });
