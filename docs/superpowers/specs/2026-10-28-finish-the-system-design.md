@@ -79,6 +79,24 @@ docs, users move to it, and tips stop reaching the team. The docs must be comple
 
 ## The parts
 
+### 0. Gas limits, one rule end to end
+
+The owner's requirement: every message carries its gas limit in its own data, with a minimum and a maximum, so every
+layer agrees and nothing interlocks downstream. Today the mediator uses the larger of the sender's limit and the
+default for the message kind and refuses a limit above the bridge maximum (`GasLimitAboveBridgeMaximum`); the router's
+user call takes the gas left less a reserve. The builder first traces the gas of one message through every layer: the
+sender's limit at the source, the bridge's check at delivery, the mediator callback, the router's tip measure and user
+call, the bots' bundle packing, and the dapp's estimate and graphs. Then the builder makes one rule hold everywhere:
+
+- the limit is read from the message, never guessed;
+- a limit below the minimum for its kind or above the maximum is refused at the source, so a message that cannot be
+  delivered is never sent;
+- a delivery supplies at least the message's limit, and a bundle never packs more than fits;
+- the router's user call is bounded by the message's own limit.
+
+Any contract change this needs is a real change inside the audit scope: it gets tests, the mutation checks and a
+review, like the earlier contract work.
+
 ### 1. Backend (new package `explorer/backend`, TypeScript, Node.js)
 
 One open-source service with four modules. Each can run alone. My call: one package, so a successor deploys one thing.
@@ -208,10 +226,13 @@ the bots, then:
   release public key built into the dapp and the terminal tool, and from content addresses published in more than one
   place. One release key. A new key is announced in a manifest signed by the old key. A compromised key is handled by
   a successor forking the release repository under a new key; the docs say so plainly.
-- **RunPod limit.** The plan first times a real fold on the GPU worker. Queue mode is added only if a fold runs past
-  the 5.5 minute limit of the load-balancing endpoint.
-- **No Apple developer account.** A downloaded program needs no signature to run. Integrity comes from the SHA-256 of
-  each download inside the signed manifest. The docs explain the one-time macOS approval and the `curl` install.
+- **RunPod limit.** Already measured (`docs/gpu-prover.md`): about 30 s for a warm proof and 50 to 193 s for the first
+  proof on a worker; a whole request took about 172 s on Sepolia and 288 s on PulseChain testnet. That is under the
+  5.5 minute limit, so no queue mode. A long fold of many handoffs is not timed on the GPU yet; the end-to-end test
+  records it.
+- **No Apple developer account for now** (on the owner's to-do list). A downloaded program needs no signature to run.
+  Integrity comes from the SHA-256 of each download inside the signed manifest. The docs lead with building the terminal
+  program from source, or using the dapp, and explain the one-time macOS approval for a downloaded copy.
 - **Build machines.** Bun builds the terminal program for all four platforms from one machine. The Rust prover is built
   natively: macOS arm64 on the development Mac, Linux x64 on the build host. macOS x64 and Linux arm64 get
   build-from-source steps until a machine exists for them.
@@ -219,6 +240,12 @@ the bots, then:
   `src/hardened/mediator/DeliveryRouter.sol` and its tests and the name of the tip data format. They are reworded to
   describe the behavior on its own terms. Contract changes are comments only; the bytecode metadata hash changes, so the
   plan reruns the full suite and the gas checks.
+- **The end-to-end folders.** The untracked `e2e/` and `explorer/e2e/` are adopted: reviewed, finished and committed
+  as part of this work.
+- **What the release key protects.** It signs `version.json`, which names the official content addresses and download
+  hashes. A stolen key could point the landing page and update checks at a malicious build. It cannot touch the
+  contracts or funds. Defenses: reproducible builds that anyone can check against the source, and users switching to a
+  successor's key.
 - **Docs review.** Before the docs site ships, a pass over every published file removes secrets, personal data, home
   paths, private host names and anything else sensitive, and checks the red-team and containment notes for wording that
   could harm a third party.
