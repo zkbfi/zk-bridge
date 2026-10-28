@@ -5,7 +5,7 @@
  *
  * The browser keeps these values in clear text. An RPC URL can hold an API key. The settings page says so.
  */
-import { EMPTY_CONNECTION_SETTINGS, parseConnectionUrl, type ConnectionSettings } from "@zk-bridge/shared";
+import { EMPTY_CONNECTION_SETTINGS, ENDPOINT_KEYS, normalizeEndpoint, parseConnectionUrl, type ConnectionSettings } from "@zk-bridge/shared";
 
 /** The part of `Storage` that the connection settings use. */
 export type ConnectionStorage = Pick<Storage, "getItem" | "setItem">;
@@ -22,6 +22,13 @@ const validUrl = (value: unknown, purpose: "rpc" | "indexer"): string | null => 
   if (typeof value !== "string") return null;
   const parsed = parseConnectionUrl(value, purpose);
   return parsed.ok ? parsed.url : null;
+};
+
+/** A stored endpoint is checked as for an https page, and its warning does not matter: the user saw it at save time. */
+const validEndpoint = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const normalized = normalizeEndpoint({ text: value, pageProtocol: "http:" });
+  return normalized.ok ? normalized.url : null;
 };
 
 const rpcUrlsOf = (value: unknown): Record<number, string> => {
@@ -47,7 +54,13 @@ export const loadUserConnections = (storage: ConnectionStorage | null): Connecti
   try {
     const parsed: unknown = JSON.parse(storage.getItem(CONNECTION_STORAGE_KEY) ?? "null");
     if (!isRecord(parsed)) return EMPTY_CONNECTION_SETTINGS;
-    return { indexerUrl: validUrl(parsed.indexerUrl, "indexer"), rpcUrls: rpcUrlsOf(parsed.rpcUrls) };
+    const endpoints = Object.fromEntries(
+      ENDPOINT_KEYS.flatMap((key): [string, string][] => {
+        const valid = validEndpoint(parsed[key]);
+        return valid === null ? [] : [[key, valid]];
+      }),
+    );
+    return { ...endpoints, indexerUrl: validUrl(parsed.indexerUrl, "indexer"), rpcUrls: rpcUrlsOf(parsed.rpcUrls) };
   } catch {
     return EMPTY_CONNECTION_SETTINGS;
   }

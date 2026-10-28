@@ -2,34 +2,48 @@ import { Box, Button, Flex, Heading, Stack, Text } from "@chakra-ui/react";
 import { useState, useSyncExternalStore } from "react";
 import { describeSetting, type ConnectionRuntime } from "@terminal/data/connection-runtime";
 import type { PairConfig } from "@terminal/model/types";
-import { parseConnectionUrl, redactConnectionText, type ConnectionSettings, type ResolvedConnection, type ResolvedSetting } from "@zk-bridge/shared";
+import { normalizeEndpoint, parseConnectionUrl, redactConnectionText, type EndpointKey, type ConnectionSettings, type ResolvedConnection, type ResolvedSetting } from "@zk-bridge/shared";
 import { useServices } from "../app/services";
 import { saveUserConnections, type ConnectionStorage } from "../config/connection-storage";
 import { browserStorage } from "../search/recent-items";
 import { Field, Notice, Panel, TextInput } from "../ui/primitives";
 
-/** One URL that the page can set: the indexer, or the RPC URL of one chain. */
+/** One URL that the page can set: the indexer, the RPC URL of one chain, or one of the other endpoints. */
 export type ConnectionTarget =
   | { readonly kind: "indexer"; readonly label: string }
+  | { readonly kind: "endpoint"; readonly label: string; readonly key: EndpointKey }
   | { readonly kind: "rpc"; readonly label: string; readonly chainId: number };
 
+/** The endpoints beside the indexer, in the order of the page. */
+const ENDPOINT_TARGETS: readonly ConnectionTarget[] = [
+  { kind: "endpoint", label: "Backend URL", key: "backendUrl" },
+  { kind: "endpoint", label: "Msgboard indexer URL", key: "msgboardIndexerUrl" },
+  { kind: "endpoint", label: "Archive URL", key: "archiveUrl" },
+  { kind: "endpoint", label: "Msgboard node URL", key: "msgboardUrl" },
+];
+
 /**
- * The targets of a pair, in the order of the page: the indexer, then each chain.
+ * The targets of a pair, in the order of the page: the indexer, then each chain, then the other endpoints.
  *
  * @param pair The pair.
  */
 export const connectionTargets = (pair: PairConfig): readonly ConnectionTarget[] => [
   { kind: "indexer", label: "Indexer URL" },
   ...[pair.first, pair.second].map((chain): ConnectionTarget => ({ kind: "rpc", label: `${chain.name} RPC URL`, chainId: chain.chainId })),
+  ...ENDPOINT_TARGETS,
 ];
 
 /** The setting in force for a target. */
-export const settingOf = (resolved: ResolvedConnection, target: ConnectionTarget): ResolvedSetting | null =>
-  target.kind === "indexer" ? resolved.indexerUrl : (resolved.rpcUrls[target.chainId] ?? null);
+export const settingOf = (resolved: ResolvedConnection, target: ConnectionTarget): ResolvedSetting | null => {
+  if (target.kind === "endpoint") return resolved[target.key];
+  return target.kind === "indexer" ? resolved.indexerUrl : (resolved.rpcUrls[target.chainId] ?? null);
+};
 
 /** The URL that the user set for a target, or null. */
-export const userUrlOf = (user: ConnectionSettings, target: ConnectionTarget): string | null =>
-  target.kind === "indexer" ? user.indexerUrl : (user.rpcUrls[target.chainId] ?? null);
+export const userUrlOf = (user: ConnectionSettings, target: ConnectionTarget): string | null => {
+  if (target.kind === "endpoint") return user[target.key] ?? null;
+  return target.kind === "indexer" ? user.indexerUrl : (user.rpcUrls[target.chainId] ?? null);
+};
 
 /**
  * The user settings with one URL set. Other entries stay.
@@ -38,8 +52,10 @@ export const userUrlOf = (user: ConnectionSettings, target: ConnectionTarget): s
  * @param target The target.
  * @param url The new URL, already checked.
  */
-export const withUserUrl = (user: ConnectionSettings, target: ConnectionTarget, url: string): ConnectionSettings =>
-  target.kind === "indexer" ? { ...user, indexerUrl: url } : { ...user, rpcUrls: { ...user.rpcUrls, [target.chainId]: url } };
+export const withUserUrl = (user: ConnectionSettings, target: ConnectionTarget, url: string): ConnectionSettings => {
+  if (target.kind === "endpoint") return { ...user, [target.key]: url };
+  return target.kind === "indexer" ? { ...user, indexerUrl: url } : { ...user, rpcUrls: { ...user.rpcUrls, [target.chainId]: url } };
+};
 
 /**
  * The user settings with one entry removed. Other entries stay.
@@ -47,12 +63,14 @@ export const withUserUrl = (user: ConnectionSettings, target: ConnectionTarget, 
  * @param user The settings now.
  * @param target The target.
  */
-export const withoutUserUrl = (user: ConnectionSettings, target: ConnectionTarget): ConnectionSettings =>
-  target.kind === "indexer"
+export const withoutUserUrl = (user: ConnectionSettings, target: ConnectionTarget): ConnectionSettings => {
+  if (target.kind === "endpoint") return { ...user, [target.key]: null };
+  return target.kind === "indexer"
     ? { ...user, indexerUrl: null }
     : { ...user, rpcUrls: Object.fromEntries(Object.entries(user.rpcUrls).filter(([chainId]) => Number(chainId) !== target.chainId)) };
+};
 
-type Message = { readonly tone: "info" | "error"; readonly text: string };
+type Message = { readonly tone: "info" | "error" | "warning"; readonly text: string };
 
 type RowProps = {
   readonly runtime: ConnectionRuntime;
@@ -66,13 +84,13 @@ const ConnectionRow = ({ runtime, target, resolved, onChange }: RowProps) => {
   const [typed, setTyped] = useState("");
   const [message, setMessage] = useState<Message | null>(null);
   const [busy, setBusy] = useState(false);
-  const purpose = target.kind === "indexer" ? "indexer" : "rpc";
+  const purpose = target.kind === "rpc" ? "rpc" : "indexer";
   const userUrl = userUrlOf(runtime.user(), target);
 
   /** Every text that reaches the screen loses the typed URL and every URL in force. */
   const show = (tone: Message["tone"], text: string): void => setMessage({ tone, text: runtime.redact(redactConnectionText(text, [typed])) });
 
-  const testUrl = (url: string) => (target.kind === "indexer" ? runtime.testIndexer(url) : runtime.testRpcUrl(target.chainId, url));
+  const testUrl = (url: string) => (target.kind === "rpc" ? runtime.testRpcUrl(target.chainId, url) : runtime.testIndexer(url));
 
   const runBusy = async <value,>(work: () => Promise<value>): Promise<value> => {
     setBusy(true);
@@ -88,7 +106,18 @@ const ConnectionRow = ({ runtime, target, resolved, onChange }: RowProps) => {
     show(outcome.ok === "pass" ? "info" : "error", outcome.message);
   };
 
+  /** An endpoint keeps its path prefix, loses one trailing slash and warns about plain http on a secure page. */
+  const onSaveEndpoint = (key: EndpointKey): void => {
+    const normalized = normalizeEndpoint({ text: typed, pageProtocol: window.location.protocol === "https:" ? "https:" : "http:" });
+    if (!normalized.ok) return show("error", normalized.reason);
+    onChange(withUserUrl(runtime.user(), { kind: "endpoint", label: target.label, key }, normalized.url));
+    setTyped("");
+    if (normalized.warning === null) return setMessage({ tone: "info", text: "Saved. The page uses this URL now." });
+    setMessage({ tone: "warning", text: INSECURE_ENDPOINT_WARNING });
+  };
+
   const onSave = async (): Promise<void> => {
+    if (target.kind === "endpoint") return onSaveEndpoint(target.key);
     const parsed = parseConnectionUrl(typed, purpose);
     if (!parsed.ok) return show("error", parsed.message);
     if (target.kind === "rpc") {
@@ -118,9 +147,11 @@ const ConnectionRow = ({ runtime, target, resolved, onChange }: RowProps) => {
           )}
         </Field>
         <Flex gap="2" flexWrap="wrap">
-          <Button size="sm" variant="outline" disabled={busy || typed.trim() === ""} onClick={() => void onTest()}>
-            Test
-          </Button>
+          {target.kind === "endpoint" ? null : (
+            <Button size="sm" variant="outline" disabled={busy || typed.trim() === ""} onClick={() => void onTest()}>
+              Test
+            </Button>
+          )}
           <Button size="sm" disabled={busy || typed.trim() === ""} onClick={() => void onSave()}>
             Save
           </Button>
@@ -133,6 +164,10 @@ const ConnectionRow = ({ runtime, target, resolved, onChange }: RowProps) => {
     </Panel>
   );
 };
+
+/** What a viewer must know when an endpoint uses plain http and the page uses https. */
+export const INSECURE_ENDPOINT_WARNING =
+  "Saved, but this page uses https and the URL uses plain http. The browser blocks the request, so the endpoint will not answer. Use an https URL.";
 
 /** What a viewer must know about where the browser keeps these URLs. */
 export const STORAGE_WARNING =

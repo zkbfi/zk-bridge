@@ -3,6 +3,7 @@ import {
   DEFAULT_INDEXER_URL,
   describeSource,
   maskUrl,
+  normalizeEndpoint,
   parseConnectionUrl,
   redactConnectionText,
   resolveConnection,
@@ -52,7 +53,7 @@ describe("resolveConnection", () => {
 
   it("gives null for a setting that no source has", () => {
     const resolved = resolveConnection({ chainIds: [1], user: {}, environment: {}, registry: {} });
-    expect(resolved).toEqual({ indexerUrl: null, rpcUrls: { 1: null } });
+    expect(resolved).toEqual({ indexerUrl: null, rpcUrls: { 1: null }, backendUrl: null, msgboardIndexerUrl: null, archiveUrl: null, msgboardUrl: null });
   });
 });
 
@@ -135,5 +136,57 @@ describe("urlSecrets and redactConnectionText", () => {
 
   it("removes a key that only the pattern rules know, when no URL is given", () => {
     expect(redactConnectionText(`GET /v2/${KEY} failed`, [])).not.toContain(KEY);
+  });
+});
+
+describe("the endpoints beside the indexer", () => {
+  const layers = { chainIds: [1], registry: {} } as const;
+  const endpointCases = [
+    ["backendUrl", "https://user.example/b", "https://env.example/b", "https://default.example/b"],
+    ["msgboardIndexerUrl", "https://user.example/m", "https://env.example/m", "https://default.example/m"],
+    ["archiveUrl", "https://user.example/a", "https://env.example/a", "https://default.example/a"],
+    ["msgboardUrl", "https://user.example/n", "https://env.example/n", "https://default.example/n"],
+  ] as const;
+
+  for (const [key, user, environment, fallback] of endpointCases) {
+    it(`resolves ${key} from the user, then the environment, then the default`, () => {
+      const resolve = (userLayer: object, environmentLayer: object) =>
+        resolveConnection({ ...layers, user: userLayer, environment: environmentLayer, registry: { [key]: fallback } })[key];
+      expect(resolve({ [key]: user }, { [key]: environment })).toEqual({ value: user, source: "user" });
+      expect(resolve({ [key]: "  " }, { [key]: environment })).toEqual({ value: environment, source: "environment" });
+      expect(resolve({}, {})).toEqual({ value: fallback, source: "default" });
+      expect(resolveConnection({ ...layers, user: {}, environment: {}, registry: {} })[key]).toBeNull();
+    });
+  }
+});
+
+describe("normalizeEndpoint", () => {
+  const normalize = (text: string, pageProtocol: "https:" | "http:" = "https:") => normalizeEndpoint({ text, pageProtocol });
+
+  it("drops one trailing slash and keeps a path prefix", () => {
+    expect(normalize("https://x.example/api/")).toEqual({ ok: true, url: "https://x.example/api", warning: null });
+    expect(normalize("  https://x.example/a/b  ")).toEqual({ ok: true, url: "https://x.example/a/b", warning: null });
+    expect(normalize("https://x.example/")).toEqual({ ok: true, url: "https://x.example", warning: null });
+  });
+
+  it("warns for http on an https page, and only then", () => {
+    expect(normalize("http://x.example/api", "https:")).toEqual({ ok: true, url: "http://x.example/api", warning: "insecure-on-secure-page" });
+    expect(normalize("http://x.example/api", "http:")).toMatchObject({ ok: true, warning: null });
+    expect(normalize("https://x.example", "https:")).toMatchObject({ ok: true, warning: null });
+  });
+
+  it("refuses a URL with credentials, and never repeats the secret", () => {
+    const refused = normalize("https://user:FAKEKEY1234567890@x.example");
+    expect(refused).toMatchObject({ ok: false, reason: expect.stringMatching(/user name or a password/) });
+    expect(JSON.stringify(refused)).not.toContain("FAKEKEY1234567890");
+    expect(normalize("https://user@x.example").ok).toBe(false);
+  });
+
+  it("refuses text that is not a plain http or https URL", () => {
+    expect(normalize("ftp://x.example")).toMatchObject({ ok: false, reason: "The URL must start with http:// or https://." });
+    expect(normalize("nonsense")).toMatchObject({ ok: false, reason: expect.stringMatching(/not a URL/) });
+    expect(normalize("https://x.example/a b")).toMatchObject({ ok: false, reason: expect.stringMatching(/space/) });
+    expect(normalize("https://x.example/?key=1")).toMatchObject({ ok: false, reason: expect.stringMatching(/query/) });
+    expect(normalize("https://x.example/#top")).toMatchObject({ ok: false, reason: expect.stringMatching(/fragment/) });
   });
 });

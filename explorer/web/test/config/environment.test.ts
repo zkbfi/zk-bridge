@@ -25,6 +25,20 @@ describe("readConfiguration", () => {
     expect(readConfiguration({ VITE_EXPLORER_DEPLOYMENT_URL: "https://example.org/d.json" }).indexerUrl).toBeNull();
   });
 
+  it("reads the four endpoints, drops one trailing slash, and leaves each unset when its variable is missing", () => {
+    const configuration = readConfiguration({
+      VITE_EXPLORER_DEPLOYMENT_URL: "https://example.org/d.json",
+      VITE_EXPLORER_BACKEND_URL: "https://backend.example.org/api/",
+      VITE_EXPLORER_MSGBOARD_INDEXER_URL: "https://mb-indexer.example.org",
+      VITE_EXPLORER_ARCHIVE_URL: "https://archive.example.org/v1/",
+      VITE_EXPLORER_MSGBOARD_URL: "  ",
+    });
+    expect(configuration.backendUrl).toBe("https://backend.example.org/api");
+    expect(configuration.msgboardIndexerUrl).toBe("https://mb-indexer.example.org");
+    expect(configuration.archiveUrl).toBe("https://archive.example.org/v1");
+    expect(configuration.msgboardUrl).toBeNull();
+  });
+
   it("refuses a live page with no deployment file, so the page never guesses addresses", () => {
     expect(() => readConfiguration({})).toThrow(ConfigurationError);
   });

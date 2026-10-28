@@ -26,5 +26,7 @@ export default defineConfig({
   plugins: [react(), refuseSecretsPlugin()],
   resolve: { alias: { "@terminal": terminalSource, "@zk-bridge/shared": sharedSource } },
   server: { fs: { allow: [explorerRoot] } },
+  // Relative asset paths, so the build loads from any path prefix, such as an IPFS gateway path.
+  base: "./",
   build: { target: "es2022", sourcemap: false },
 });

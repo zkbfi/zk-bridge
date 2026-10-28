@@ -10,7 +10,16 @@ import { maskSecret, redactSecrets } from "./redaction.js";
 export type ConnectionSettings = {
   readonly indexerUrl: string | null;
   readonly rpcUrls: Readonly<Record<number, string>>;
-};
+} & Partial<Readonly<Record<EndpointKey, string | null>>>;
+
+/**
+ * The endpoints beside the indexer and the RPC URLs: the backend, the msgboard indexer, the archive and the msgboard
+ * node. Each one is configured, never discovered. A client ships a default and the user can change it.
+ */
+export const ENDPOINT_KEYS = ["backendUrl", "msgboardIndexerUrl", "archiveUrl", "msgboardUrl"] as const;
+
+/** The name of one of the endpoints in {@link ENDPOINT_KEYS}. */
+export type EndpointKey = (typeof ENDPOINT_KEYS)[number];
 
 /** The address of the indexer when nothing sets another. */
 export const DEFAULT_INDEXER_URL = "http://localhost:42069";
@@ -31,13 +40,13 @@ export type ResolvedSetting = { readonly value: string; readonly source: Setting
 export type ConnectionLayer = {
   readonly indexerUrl?: string | null | undefined;
   readonly rpcUrls?: Readonly<Record<number, string | null | undefined>> | undefined;
-};
+} & Partial<Readonly<Record<EndpointKey, string | null | undefined>>>;
 
 /** The settings in force. */
 export type ResolvedConnection = {
   readonly indexerUrl: ResolvedSetting | null;
   readonly rpcUrls: Readonly<Record<number, ResolvedSetting | null>>;
-};
+} & Readonly<Record<EndpointKey, ResolvedSetting | null>>;
 
 /** The inputs of {@link resolveConnection}. */
 export type ResolveConnectionInput = {
@@ -75,7 +84,11 @@ export const resolveConnection = (input: ResolveConnectionInput): ResolvedConnec
     ["environment", input.environment],
     ["default", input.registry],
   ] as const;
+  const endpoints = Object.fromEntries(
+    ENDPOINT_KEYS.map((key) => [key, firstSetting(layers.map(([source, layer]) => [source, layer[key]] as const))]),
+  ) as Record<EndpointKey, ResolvedSetting | null>;
   return {
+    ...endpoints,
     indexerUrl: firstSetting(layers.map(([source, layer]) => [source, layer.indexerUrl] as const)),
     rpcUrls: Object.fromEntries(
       input.chainIds.map((chainId) => [chainId, firstSetting(layers.map(([source, layer]) => [source, layer.rpcUrls?.[chainId]] as const))]),
@@ -163,4 +176,34 @@ export const maskUrl = (url: string): string => {
   }
   const rest = `${parsed.pathname.replace(/^\/+/, "")}${parsed.search}`;
   return rest === "" ? parsed.origin : `${parsed.origin}/${maskSecret(rest)}`;
+};
+
+/** The result of reading an endpoint that the user typed. */
+export type NormalizedEndpoint =
+  | { readonly ok: true; readonly url: string; readonly warning: "insecure-on-secure-page" | null }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * Reads an endpoint that the user typed. The URL must use http or https. It must hold no user name, password, query or
+ * fragment. One trailing slash goes away, and a path prefix stays, so `https://x.example/api/` becomes
+ * `https://x.example/api`. A plain http URL on an https page passes with a warning, because the browser blocks it.
+ * The reason never repeats the text, because the text can hold a secret.
+ *
+ * @param input What the user typed and the protocol of the page that shows the setting.
+ */
+export const normalizeEndpoint = (input: { readonly text: string; readonly pageProtocol: "https:" | "http:" }): NormalizedEndpoint => {
+  const trimmed = input.text.trim();
+  if (/[\s"'\\]/.test(trimmed)) return { ok: false, reason: "The URL must not hold a space, a quote or a backslash." };
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return { ok: false, reason: "The text is not a URL. Start it with http:// or https://." };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return { ok: false, reason: "The URL must start with http:// or https://." };
+  if (parsed.username !== "" || parsed.password !== "") return { ok: false, reason: "The URL must not hold a user name or a password." };
+  if (parsed.search !== "" || parsed.hash !== "") return { ok: false, reason: "The URL must not hold a query or a fragment." };
+  const url = `${parsed.origin}${parsed.pathname.replace(/\/$/, "")}`;
+  const insecure = input.pageProtocol === "https:" && parsed.protocol === "http:";
+  return { ok: true, url, warning: insecure ? "insecure-on-secure-page" : null };
 };

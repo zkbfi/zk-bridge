@@ -75,7 +75,14 @@ export const createServices = (configuration: WebConfiguration, pair: PairConfig
   const connection = createConnectionRuntime({
     pair,
     sharedPair: live.sharedPair,
-    environment: { indexerUrl: configuration.indexerUrl, rpcUrls: configuration.rpcUrls },
+    environment: {
+      indexerUrl: configuration.indexerUrl,
+      backendUrl: configuration.backendUrl,
+      msgboardIndexerUrl: configuration.msgboardIndexerUrl,
+      archiveUrl: configuration.archiveUrl,
+      msgboardUrl: configuration.msgboardUrl,
+      rpcUrls: configuration.rpcUrls,
+    },
     user: loadUserConnections(live.storage ?? null),
     ...(live.createConnection === undefined ? {} : { createConnection: live.createConnection }),
     ...(live.connectionOptions === undefined ? {} : { connectionOptions: live.connectionOptions }),

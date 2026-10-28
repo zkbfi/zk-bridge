@@ -12,6 +12,14 @@ export type WebConfiguration = {
   readonly dataMode: DataMode;
   /** The base URL of the indexer, without a trailing slash. Null when the variable is unset: the registry default then applies. */
   readonly indexerUrl: string | null;
+  /** The base URL of the backend, without a trailing slash, or null. */
+  readonly backendUrl: string | null;
+  /** The base URL of the msgboard indexer, without a trailing slash, or null. */
+  readonly msgboardIndexerUrl: string | null;
+  /** The base URL of the archive, without a trailing slash, or null. */
+  readonly archiveUrl: string | null;
+  /** The base URL of the msgboard node, without a trailing slash, or null. */
+  readonly msgboardUrl: string | null;
   readonly pairName: string;
   /** Public RPC endpoint by chain identifier. */
   readonly rpcUrls: Readonly<Record<number, string>>;
@@ -27,6 +35,10 @@ export type WebConfiguration = {
 export const VARIABLES = {
   data: "VITE_EXPLORER_DATA",
   indexerUrl: "VITE_EXPLORER_INDEXER_URL",
+  backendUrl: "VITE_EXPLORER_BACKEND_URL",
+  msgboardIndexerUrl: "VITE_EXPLORER_MSGBOARD_INDEXER_URL",
+  archiveUrl: "VITE_EXPLORER_ARCHIVE_URL",
+  msgboardUrl: "VITE_EXPLORER_MSGBOARD_URL",
   pair: "VITE_EXPLORER_PAIR",
   rpcPrefix: "VITE_EXPLORER_RPC_URL_",
   deploymentUrl: "VITE_EXPLORER_DEPLOYMENT_URL",
@@ -35,6 +47,8 @@ export const VARIABLES = {
 } as const;
 
 const present = (value: string | undefined): string | null => (value === undefined || value.trim() === "" ? null : value.trim());
+
+const baseUrlOf = (value: string | undefined): string | null => present(value)?.replace(/\/$/, "") ?? null;
 
 const rpcUrlsOf = (environment: Readonly<Record<string, string | undefined>>): Record<number, string> =>
   Object.fromEntries(
@@ -62,7 +76,11 @@ export const readConfiguration = (environment: Readonly<Record<string, string | 
   }
   const configuration: WebConfiguration = {
     dataMode: mode,
-    indexerUrl: present(environment[VARIABLES.indexerUrl])?.replace(/\/$/, "") ?? null,
+    indexerUrl: baseUrlOf(environment[VARIABLES.indexerUrl]),
+    backendUrl: baseUrlOf(environment[VARIABLES.backendUrl]),
+    msgboardIndexerUrl: baseUrlOf(environment[VARIABLES.msgboardIndexerUrl]),
+    archiveUrl: baseUrlOf(environment[VARIABLES.archiveUrl]),
+    msgboardUrl: baseUrlOf(environment[VARIABLES.msgboardUrl]),
     pairName: present(environment[VARIABLES.pair]) ?? DEFAULT_PAIR_ID,
     rpcUrls: rpcUrlsOf(environment),
     deploymentJson: present(environment[VARIABLES.deploymentJson]),

@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ConnectionsView, STORAGE_WARNING, connectionTargets, withUserUrl, withoutUserUrl } from "../../src/views/ConnectionsView";
+import { ConnectionsView, INSECURE_ENDPOINT_WARNING, STORAGE_WARNING, connectionTargets, withUserUrl, withoutUserUrl } from "../../src/views/ConnectionsView";
 import { CONNECTION_STORAGE_KEY, loadUserConnections } from "../../src/config/connection-storage";
 import { disconnectedWallet, walletWrapper } from "../app/support";
 import { renderPage } from "../render";
@@ -37,6 +37,68 @@ const typeInto = async (regionName: string, text: string) => {
 };
 
 const attributeValues = (): string[] => Array.from(document.body.querySelectorAll("*")).flatMap((element) => Array.from(element.attributes).map((attribute) => attribute.value));
+
+describe("the endpoint settings of a live page", () => {
+  const ENDPOINTS = [
+    ["Backend URL", "backendUrl", "VITE_EXPLORER_BACKEND_URL"],
+    ["Msgboard indexer URL", "msgboardIndexerUrl", "VITE_EXPLORER_MSGBOARD_INDEXER_URL"],
+    ["Archive URL", "archiveUrl", "VITE_EXPLORER_ARCHIVE_URL"],
+    ["Msgboard node URL", "msgboardUrl", "VITE_EXPLORER_MSGBOARD_URL"],
+  ] as const;
+
+  it("saves and clears each new endpoint, with the environment value returning after a clear", async () => {
+    const { services } = renderLive({ variables: { VITE_EXPLORER_BACKEND_URL: "https://env.example.org/backend" } });
+    for (const [label, key] of ENDPOINTS) {
+      await typeInto(label, `https://mine.example.org/${key}/`);
+      await userEvent.click(region(label).getByRole("button", { name: "Save" }));
+      expect(await region(label).findByText("Saved. The page uses this URL now.")).toBeInTheDocument();
+      expect(services.connection?.resolved()[key]).toEqual({ value: `https://mine.example.org/${key}`, source: "user" });
+      expect(loadUserConnections(window.localStorage)[key]).toBe(`https://mine.example.org/${key}`);
+    }
+    for (const [label, key] of ENDPOINTS) {
+      await userEvent.click(region(label).getByRole("button", { name: "Forget my setting" }));
+      expect(loadUserConnections(window.localStorage)[key]).toBeUndefined();
+    }
+    expect(services.connection?.resolved().backendUrl).toEqual({ value: "https://env.example.org/backend", source: "environment" });
+    expect(services.connection?.resolved().archiveUrl).toBeNull();
+    expect(region("Backend URL").getByText(/env\.example\.org/)).toHaveTextContent("(from the environment)");
+    expect(region("Archive URL").getByText("not set")).toBeInTheDocument();
+  });
+
+  it("keeps a path prefix, drops the trailing slash, and warns that the browser blocks plain http on an https page", async () => {
+    vi.stubGlobal("location", { ...window.location, protocol: "https:" });
+    const { services } = renderLive();
+    await typeInto("Backend URL", "http://backend.example.org/api/v2/");
+    await userEvent.click(region("Backend URL").getByRole("button", { name: "Save" }));
+    expect(await region("Backend URL").findByText(INSECURE_ENDPOINT_WARNING)).toBeInTheDocument();
+    expect(INSECURE_ENDPOINT_WARNING).toMatch(/browser blocks/);
+    expect(services.connection?.user().backendUrl).toBe("http://backend.example.org/api/v2");
+  });
+
+  it("does not warn about plain http on a page that itself uses http", async () => {
+    vi.stubGlobal("location", { ...window.location, protocol: "http:" });
+    renderLive();
+    await typeInto("Backend URL", "http://backend.example.org");
+    await userEvent.click(region("Backend URL").getByRole("button", { name: "Save" }));
+    expect(await region("Backend URL").findByText("Saved. The page uses this URL now.")).toBeInTheDocument();
+    expect(screen.queryByText(INSECURE_ENDPOINT_WARNING)).toBeNull();
+  });
+
+  it("refuses an endpoint with credentials, saves nothing, and keeps the secret off the screen", async () => {
+    const { services } = renderLive();
+    await typeInto("Archive URL", `https://user:${SECRET}@archive.example.org`);
+    await userEvent.click(region("Archive URL").getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The URL must not hold a user name or a password.");
+    expect(document.body.textContent).not.toContain(SECRET);
+    expect(services.connection?.user().archiveUrl).toBeUndefined();
+    expect(window.localStorage.getItem(CONNECTION_STORAGE_KEY)).toBeNull();
+  });
+
+  it("has no Test button for an endpoint, because the page does not know a route to ask", () => {
+    renderLive();
+    expect(region("Backend URL").queryByRole("button", { name: "Test" })).toBeNull();
+  });
+});
 
 describe("the connections page of a live page", () => {
   it("shows each URL in force in masked form with its source, for the indexer and for each chain", () => {
@@ -275,8 +337,8 @@ describe("the pure rules of the page", () => {
   const user = { indexerUrl: "https://i.example.org", rpcUrls: { 1: "https://a.example.org", 369: "https://b.example.org" } };
   const [indexer, first] = connectionTargets(FIXTURE_PAIR);
 
-  it("lists the indexer first and then each chain by name", () => {
-    expect(connectionTargets(FIXTURE_PAIR).map((target) => target.label)).toEqual(["Indexer URL", "Ethereum RPC URL", "PulseChain RPC URL"]);
+  it("lists the indexer first, then each chain, then the other endpoints", () => {
+    expect(connectionTargets(FIXTURE_PAIR).map((target) => target.label)).toEqual(["Indexer URL", "Ethereum RPC URL", "PulseChain RPC URL", "Backend URL", "Msgboard indexer URL", "Archive URL", "Msgboard node URL"]);
   });
 
   it("sets and removes one entry and keeps the others", () => {

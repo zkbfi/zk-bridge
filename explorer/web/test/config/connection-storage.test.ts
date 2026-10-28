@@ -51,6 +51,21 @@ describe("loadUserConnections", () => {
     expect(loadUserConnections(memoryStorage(stored))).toEqual({ indexerUrl: null, rpcUrls: { 369: "https://pls.example.org" } });
   });
 
+  it("keeps each valid stored endpoint in its normal form and drops the others", () => {
+    const stored = JSON.stringify({
+      backendUrl: "https://backend.example.org/api/",
+      msgboardIndexerUrl: "https://user:FAKEKEY1234567890@mb.example.org",
+      archiveUrl: 5,
+      msgboardUrl: "http://node.example.org",
+    });
+    expect(loadUserConnections(memoryStorage(stored))).toEqual({
+      indexerUrl: null,
+      rpcUrls: {},
+      backendUrl: "https://backend.example.org/api",
+      msgboardUrl: "http://node.example.org",
+    });
+  });
+
   it("drops an indexer URL that is not text and an RPC map that is not a record", () => {
     expect(loadUserConnections(memoryStorage(JSON.stringify({ indexerUrl: 7, rpcUrls: "x" })))).toEqual(EMPTY_CONNECTION_SETTINGS);
   });
