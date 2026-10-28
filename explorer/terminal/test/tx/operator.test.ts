@@ -56,50 +56,19 @@ function handoff(changes: Record<string, unknown> = {}, values: Hex = publicValu
   })
 }
 
-describe('planLightClientUpdate', () => {
-  test('plans the update call to the configured light client of the destination', () => {
+describe('planLightClientUpdate (adapter)', () => {
+  test('maps the shared call to a transaction at the light client of the chain', () => {
     const plan = planLightClientUpdate(handoff(), FIXTURE_PAIR)
     expect(plan.to).toBe(lightClient)
-    expect(plan.chain.chainId).toBe(369)
-    expect(plan.functionSignature).toBe('update(bytes,bytes)')
+    expect(plan.chain).toBe(FIXTURE_PAIR.second)
+    expect(plan.contractLabel).toBe('BeaconLightClient (PulseChain)')
+    expect(plan.functionName).toBe('update')
     expect(plan.value).toBe(0n)
-    expect(plan.arguments.find((argument) => argument.name === 'publicValues.newHeadSlot')?.value).toBe(String(NEW_SLOT))
-    expect(plan.notes[0]).toContain(`from slot ${START_SLOT} to slot ${NEW_SLOT}`)
+    expect(plan.data).toBe(JSON.parse(handoff()).updateCalldata)
   })
 
-  test('the calldata sent is the calldata in the file, byte for byte', () => {
-    const text = handoff()
-    expect(planLightClientUpdate(text, FIXTURE_PAIR).data).toBe(JSON.parse(text).updateCalldata)
-  })
-
-  test('refuses a destination that is not the configured light client', () => {
-    const other = '0x0000000000000000000000000000000000009999'
-    expect(() => planLightClientUpdate(handoff({ destination: { chainId: 369, lightClient: other } }), FIXTURE_PAIR)).toThrow(OperatorFileError)
-  })
-
-  test('refuses a destination chain that is not in the pair, and a file with no destination', () => {
+  test('refuses a chain that is not in the pair with the error class the screens catch', () => {
     expect(() => planLightClientUpdate(handoff({ destination: { chainId: 56, lightClient } }), FIXTURE_PAIR)).toThrow(OperatorFileError)
-    expect(() => planLightClientUpdate(handoff({ destination: undefined }), FIXTURE_PAIR)).toThrow(OperatorFileError)
-  })
-
-  test('refuses a file whose slots differ from its own public values', () => {
-    expect(() => planLightClientUpdate(handoff({ newHeadSlot: NEW_SLOT + 1 }), FIXTURE_PAIR)).toThrow(/newHeadSlot/)
-    expect(() => planLightClientUpdate(handoff({ startHeadSlot: START_SLOT - 1 }), FIXTURE_PAIR)).toThrow(/previousHeadSlot/)
-    expect(() => planLightClientUpdate(handoff({ newHeadRoot: word('0') }), FIXTURE_PAIR)).toThrow(/newHeaderRoot/)
-  })
-
-  test('refuses calldata that does not carry the proof and public values of the file', () => {
-    const swapped = encodeUpdateCalldata(`0x${'34'.repeat(260)}`, publicValues())
-    expect(() => planLightClientUpdate(handoff({ updateCalldata: swapped }), FIXTURE_PAIR)).toThrow(/proof/)
-    expect(() => planLightClientUpdate(handoff({ updateCalldata: '0x12345678' }), FIXTURE_PAIR)).toThrow(/update\(bytes,bytes\)/)
-  })
-
-  test('refuses public values of the wrong length, a wrong schema version, and text that is not JSON', () => {
-    const short: Hex = '0x1234'
-    const proof: Hex = `0x${'12'.repeat(260)}`
-    expect(() => planLightClientUpdate(handoff({ publicValues: short, updateCalldata: encodeUpdateCalldata(proof, short) }, short), FIXTURE_PAIR)).toThrow(/352/)
-    expect(() => planLightClientUpdate(handoff({ schemaVersion: 2 }), FIXTURE_PAIR)).toThrow(/schemaVersion/)
-    expect(() => planLightClientUpdate('not json', FIXTURE_PAIR)).toThrow(/JSON/)
   })
 })
 
@@ -162,97 +131,27 @@ function evidence(changes: Record<string, unknown> = {}): string {
   })
 }
 
-describe('planMessageExecution', () => {
-  test('puts the prerequisites first and the execution last, all against the configured bridge', () => {
+describe('planMessageExecution (adapter)', () => {
+  test('maps every step to a transaction on the chain, labelled with the bridge', () => {
     const { steps, summary } = planMessageExecution(evidence(), FIXTURE_PAIR)
     expect(steps.map((step) => step.role)).toEqual(['prerequisite', 'execute'])
-    expect(steps.every((step) => step.plan.to === bridge && step.plan.chain.chainId === 369)).toBe(true)
-    expect(steps[0]?.reason).toContain('no validated block hash row')
+    expect(steps.every((step) => step.plan.to === bridge && step.plan.chain === FIXTURE_PAIR.second)).toBe(true)
+    expect(steps[1]?.plan.contractLabel).toBe('MessageBridge (PulseChain)')
+    expect(steps[1]?.plan.functionName).toBe('executeMessage')
     expect(summary.messageId).toBe(word('c'))
-    expect(summary.sourceSlot).toBe(14_099_000n)
-    expect(summary.anchorSlot).toBe(14_100_000n)
   })
 
-  test('shows the decoded proof of the execution, not just the bytes', () => {
-    const { steps } = planMessageExecution(evidence(), FIXTURE_PAIR)
-    const names = steps[1]?.plan.arguments.map((argument) => argument.name) ?? []
-    expect(names).toContain('proof.anchorHeader.slot')
-    expect(names).toContain('proof.sourceHeader.slot')
-    expect(names).toContain('proof.logIndex')
-    expect(steps[1]?.plan.arguments.find((argument) => argument.name === 'proof.receiptIndex')?.value).toBe('3')
+  test('maps a message on the first chain to that chain', () => {
+    const first = FIXTURE_PAIR.first
+    const text = evidence({
+      destination: { chainId: 1, bridge: first.contracts.messageBridge, lightClient: first.contracts.lightClient },
+      execute: { to: first.contracts.messageBridge, data: executeCall(1n) },
+      prerequisites: [],
+    })
+    expect(planMessageExecution(text, FIXTURE_PAIR).steps[0]?.plan.chain).toBe(first)
   })
 
-  test('refuses a message that is already delivered', () => {
-    for (const changes of [
-      { alreadyDelivered: true, deliveryStatus: 'succeeded' },
-      { alreadyDelivered: false, deliveryStatus: 'failed' },
-    ]) {
-      expect(() => planMessageExecution(evidence(changes), FIXTURE_PAIR)).toThrow(/already delivered/)
-    }
-  })
-
-  test('refuses an execution that targets another contract than the configured bridge', () => {
-    const other = '0x0000000000000000000000000000000000009999'
-    expect(() => planMessageExecution(evidence({ execute: { to: other, data: executeCall(1n) } }), FIXTURE_PAIR)).toThrow(OperatorFileError)
-    expect(() => planMessageExecution(evidence({ destination: { chainId: 369, bridge: other, lightClient } }), FIXTURE_PAIR)).toThrow(OperatorFileError)
-  })
-
-  test('refuses an execution whose proof names another log than the file says', () => {
-    expect(() => planMessageExecution(evidence({ logIndex: 2 }), FIXTURE_PAIR)).toThrow(/logIndex/)
-  })
-
-  test('refuses calldata that is not executeMessage, and a prerequisite that is not a bridge call', () => {
-    expect(() => planMessageExecution(evidence({ execute: { to: bridge, data: prerequisiteCall() } }), FIXTURE_PAIR)).toThrow(/executeMessage/)
-    const unknown = { function: 'addBlockHashLayout', reason: 'x', to: bridge, data: '0x12345678' }
-    expect(() => planMessageExecution(evidence({ prerequisites: [unknown] }), FIXTURE_PAIR)).toThrow(/known message bridge call/)
-  })
-
-  test('refuses a prerequisite whose named function differs from its calldata', () => {
-    const mislabeled = { function: 'addBlockRootsLayout', reason: 'x', to: bridge, data: prerequisiteCall() }
-    expect(() => planMessageExecution(evidence({ prerequisites: [mislabeled] }), FIXTURE_PAIR)).toThrow(/differs/)
-  })
-
-  test('an empty prerequisite list leaves only the execution', () => {
-    expect(planMessageExecution(evidence({ prerequisites: [] }), FIXTURE_PAIR).steps).toHaveLength(1)
-  })
-})
-
-describe('the fields of an evidence file are checked one by one', () => {
-  const messageFor = (changes: Record<string, unknown>): string => {
-    try {
-      planMessageExecution(evidence(changes), FIXTURE_PAIR)
-    } catch (error) {
-      if (error instanceof OperatorFileError) return error.message
-      throw error
-    }
-    throw new Error('the file was accepted')
-  }
-
-  test('a list of prerequisites that is not an array is refused with its path', () => {
-    expect(messageFor({ prerequisites: { function: 'addBlockHashLayout' } })).toBe('evidence.prerequisites must be an array.')
-  })
-
-  test('a text field that holds another type is refused with its path', () => {
-    expect(messageFor({ deliveryStatus: 5 })).toBe('evidence.deliveryStatus must be a string.')
-  })
-
-  test('a number field must be a whole number of zero or more', () => {
-    const expected = 'evidence.logIndex must be a non-negative integer.'
-    expect(messageFor({ logIndex: -1 })).toBe(expected)
-    expect(messageFor({ logIndex: 1.5 })).toBe(expected)
-    expect(messageFor({ logIndex: '1' })).toBe(expected)
-  })
-
-  test('a hex field must start with 0x and hold whole bytes', () => {
-    const expected = 'evidence.execute.data must be 0x hex with whole bytes.'
-    expect(messageFor({ execute: { to: bridge, data: '0x123' } })).toBe(expected)
-    expect(messageFor({ execute: { to: bridge, data: '0xzz' } })).toBe(expected)
-    expect(messageFor({ execute: { to: bridge, data: 'abcd' } })).toBe(expected)
-  })
-
-  test('an address field must be forty hex digits', () => {
-    const expected = 'evidence.destination.bridge must be an address.'
-    expect(messageFor({ destination: { chainId: 369, bridge: '0x1234', lightClient } })).toBe(expected)
-    expect(messageFor({ destination: { chainId: 369, bridge: 'nope', lightClient } })).toBe(expected)
+  test('refuses a delivered message with the error class the screens catch', () => {
+    expect(() => planMessageExecution(evidence({ alreadyDelivered: true, deliveryStatus: 'succeeded' }), FIXTURE_PAIR)).toThrow(OperatorFileError)
   })
 })
