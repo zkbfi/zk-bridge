@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import type { Pair } from "@zk-bridge/shared";
 import type { ProverBinary } from "@zk-bridge/shared/prover";
 import type { BackendConfig, ModuleName } from "./config.ts";
 import type { ModuleHealth } from "./health.ts";
@@ -9,6 +10,8 @@ import type { Storage } from "./storage.ts";
 export type BackendModuleContext = {
   readonly storage: Storage;
   readonly config: BackendConfig;
+  /** The pair, from the deployment file and the endpoints of the configuration. No module reads the environment for them. */
+  readonly pair: Pair;
   /** A prover wrapper without a proving backend: it runs `verify` and `evidence`. */
   readonly prover: ProverBinary;
   /** The prover wrapper for one proving job, with the webhook of that job. Used by the request service. */

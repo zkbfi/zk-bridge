@@ -1,7 +1,4 @@
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { decodeFunctionData, encodeFunctionResult, type Hex } from "viem";
 import { beaconLightClientAbi, decodeProofMessage, proofCategory, type ProofDirection } from "@zk-bridge/shared";
@@ -10,36 +7,19 @@ import type { LightClientHead, ProverBinary } from "@zk-bridge/shared/prover";
 import { PROGRAM_KEY, publicValuesFor, word } from "../../shared/test/support/prover-builders.ts";
 import { MAXIMUM_BODY_BYTES } from "../src/requests/module.ts";
 import { getJob, insertJob, updateJob } from "../src/requests/jobs.ts";
-import { MSGBOARD_VARIABLE, NOT_CONFIGURED_TEXT, REAL_SOURCE, TICK_INTERVAL_MILLISECONDS, configureWebhook, settled, start, type WebhookSource } from "../src/webhook/module.ts";
+import { NOT_CONFIGURED_TEXT, REAL_SOURCE, TICK_INTERVAL_MILLISECONDS, configureWebhook, settled, start, type WebhookSource } from "../src/webhook/module.ts";
 import { MAXIMUM_POST_ATTEMPTS, POST_FAILED_REASON, RETRY_BASE_MILLISECONDS, RETRY_CEILING_MILLISECONDS, createProofPublisher, retryDelayMilliseconds } from "../src/webhook/publish.ts";
 import { bearerMatches, ensureProofTable } from "../src/webhook/receive.ts";
 import { MODULES } from "../src/main.ts";
-import { SECRETS, controllableProver, makeBackend, memoryLogger } from "./support.ts";
+import { SECRETS, controllableProver, makeBackend, makeConfig, memoryLogger } from "./support.ts";
 
 const TOKEN = SECRETS.webhookBearer;
 const START_ROOT = word(0x21);
 const NEW_ROOT = word(0x22);
 const HEAD: LightClientHead = { headSlot: 100n, headRoot: START_ROOT, programKey: PROGRAM_KEY };
 
-const deploymentSection = (chainId: number, digit: string) => ({
-  chain_id: chainId,
-  bridge: `0x${digit.repeat(40)}`,
-  mediator: `0x${digit.repeat(40)}`,
-  token_factory: `0x${digit.repeat(40)}`,
-  wrapped_native: `0x${digit.repeat(40)}`,
-  gate: `0x${digit.repeat(40)}`,
-  light_client: `0x${digit.repeat(40)}`,
-  start_block: 1,
-});
-const DEPLOYMENT = { chain_a: deploymentSection(1, "a"), chain_b: deploymentSection(369, "b") };
-const SETTINGS = {
-  BACKEND_WEBHOOK_BEARER: TOKEN,
-  [MSGBOARD_VARIABLE]: "http://board.invalid",
-  EXPLORER_RPC_URL_1: "http://rpc-1.invalid",
-  EXPLORER_RPC_URL_369: "http://rpc-369.invalid",
-  EXPLORER_BEACON_URL_1: "http://beacon-1.invalid",
-  EXPLORER_BEACON_URL_369: "http://beacon-369.invalid",
-};
+const SETTINGS = { BACKEND_WEBHOOK_BEARER: TOKEN };
+const BOARD_URL = "http://board.invalid";
 
 /** A package in the shape that the prover hands off, with the real byte sizes. */
 function proofPackage(overrides: Record<string, unknown> = {}) {
@@ -64,7 +44,7 @@ function proofPackage(overrides: Record<string, unknown> = {}) {
 
 type Fixture = ReturnType<typeof setup>;
 
-function setup(options: { head?: LightClientHead; source?: Partial<WebhookSource>; verify?: ProverBinary["verify"] } = {}) {
+function setup(options: { head?: LightClientHead; source?: Partial<WebhookSource>; verify?: ProverBinary["verify"]; config?: Record<string, unknown> } = {}) {
   const posts: Array<{ category: Hex; payload: Hex }> = [];
   const state = { boardFailure: null as Error | null, head: options.head ?? HEAD, headFailure: null as Error | null, beforePost: null as (() => void) | null, gate: null as Promise<void> | null };
   const reads: Array<{ rpcUrl: string; lightClient: Hex }> = [];
@@ -86,10 +66,9 @@ function setup(options: { head?: LightClientHead; source?: Partial<WebhookSource
       verify: options.verify ?? (async (input) => void verifications.push(input)),
     } satisfies ProverBinary,
   };
-  const backend = makeBackend({ prover, enabled: ["requests", "webhook"] });
+  const backend = makeBackend({ prover, enabled: ["requests", "webhook"], config: makeConfig({ msgboardUrl: BOARD_URL, ...options.config }) });
   configureWebhook(backend.context, {
     environment: SETTINGS,
-    readDeployment: () => DEPLOYMENT,
     makeBoard: () => board,
     async readLightClient(input) {
       reads.push(input);
@@ -265,10 +244,10 @@ describe("the check", () => {
   it("reads the light client of the destination chain of the direction", async () => {
     const forward = setup();
     await send(forward, createProvingJob(forward, "first-to-second"), proofPackage());
-    expect(forward.reads[0]).toEqual({ rpcUrl: "http://rpc-369.invalid", lightClient: `0x${"b".repeat(40)}` });
+    expect(forward.reads[0]).toEqual({ rpcUrl: "http://rpc-369.invalid", lightClient: `0x${"2".repeat(40)}` });
     const backward = setup();
     await send(backward, createProvingJob(backward, "second-to-first"), proofPackage());
-    expect(backward.reads[0]).toEqual({ rpcUrl: "http://rpc-1.invalid", lightClient: `0x${"a".repeat(40)}` });
+    expect(backward.reads[0]).toEqual({ rpcUrl: "http://rpc-1.invalid", lightClient: `0x${"1".repeat(40)}` });
   });
 });
 
@@ -450,7 +429,7 @@ describe("the publisher", () => {
 
   it("holds no wallet: the context offers none", () => {
     const fixture = setup();
-    expect(Object.keys(fixture.context).sort()).toEqual(["config", "logger", "now", "prover", "proverForJob", "storage"]);
+    expect(Object.keys(fixture.context).sort()).toEqual(["config", "logger", "now", "pair", "prover", "proverForJob", "storage"]);
   });
 });
 
@@ -540,11 +519,9 @@ describe("settings and health", () => {
     expect(report.modules.webhook).toEqual({ state: "running" });
   });
 
-  it.each([
-    ["the msgboard variable", { ...SETTINGS, [MSGBOARD_VARIABLE]: undefined }, `set the environment variable ${MSGBOARD_VARIABLE}`],
-    ["the rpc variable of a chain", { ...SETTINGS, EXPLORER_RPC_URL_369: undefined }, "the webhook settings cannot be used"],
-  ])("answers 503 and reports degraded when %s is missing, and shows no value", async (_name, environment, reason) => {
-    const fixture = setup({ source: { environment } });
+  it("answers 503 and reports degraded when msgboardUrl is missing from the configuration, and shows no value", async () => {
+    const reason = "set msgboardUrl in the configuration file";
+    const fixture = setup({ config: { msgboardUrl: undefined } });
     const jobId = createProvingJob(fixture);
     const answer = await send(fixture, jobId, proofPackage());
     expect(answer.status).toBe(503);
@@ -571,21 +548,30 @@ describe("settings and health", () => {
   );
 
   it("logs a settings failure once for each distinct reason, not on every tick", async () => {
-    const fixture = setup({ source: { environment: { ...SETTINGS, [MSGBOARD_VARIABLE]: undefined } } });
-    // The registration logged once, against the real environment, before the test replaced it.
-    const before = fixture.log.lines.filter((line) => line.includes("webhook_unusable")).length;
-    const unusable = () => fixture.log.lines.filter((line) => line.includes("webhook_unusable")).length - before;
+    const fixture = setup({ source: { environment: {} } });
+    const board: BoardPublisher = { post: async () => ({ messageHash: word(0x99), grindMilliseconds: 1 }) };
+    const unusable = () => fixture.log.lines.filter((line) => line.includes("webhook_unusable")).length;
+    // Reason one: the bearer variable is not set. The first start logs it; more ticks do not.
+    await (await start(fixture.context))();
+    const first = unusable();
     for (let round = 0; round < 3; round += 1) await (await start(fixture.context))();
     await fixture.app.request("/health");
-    expect(unusable()).toBe(1);
-    configureWebhook(fixture.context, { environment: { ...SETTINGS, EXPLORER_RPC_URL_369: undefined } });
+    expect(unusable()).toBe(first);
+    // Reason two: the settings cannot be built for another cause.
+    configureWebhook(fixture.context, {
+      environment: SETTINGS,
+      makeBoard: () => {
+        throw new Error("no board");
+      },
+    });
     for (let round = 0; round < 3; round += 1) await (await start(fixture.context))();
-    expect(unusable()).toBe(2);
-    configureWebhook(fixture.context, { environment: SETTINGS });
+    expect(unusable()).toBe(first + 1);
+    // A success resets the memory, so the same reason logs again.
+    configureWebhook(fixture.context, { environment: SETTINGS, makeBoard: () => board });
     await (await start(fixture.context))();
-    configureWebhook(fixture.context, { environment: { ...SETTINGS, EXPLORER_RPC_URL_369: undefined } });
+    configureWebhook(fixture.context, { environment: {} });
     await (await start(fixture.context))();
-    expect(unusable()).toBe(3);
+    expect(unusable()).toBe(first + 2);
   });
 
   it("adds the column of the last attempt to a table from an earlier version", () => {
@@ -597,13 +583,12 @@ describe("settings and health", () => {
     expect(names.filter((name) => name === "last_attempt_at")).toHaveLength(1);
   });
 
-  it("a caller without a valid token causes no deployment read and no log line", async () => {
-    let reads = 0;
-    const fixture = setup({ source: { environment: { ...SETTINGS, EXPLORER_RPC_URL_369: undefined }, readDeployment: () => (reads += 1, DEPLOYMENT) } });
-    const readsAtStart = reads;
+  it("a caller without a valid token causes no light client read and no log line", async () => {
+    const fixture = setup();
+    const readsAtStart = fixture.reads.length;
     const linesAtStart = fixture.log.lines.length;
     for (let call = 0; call < 3; call += 1) expect((await send(fixture, "job-1", proofPackage(), { authorization: "Bearer wrong" })).status).toBe(401);
-    expect(reads).toBe(readsAtStart);
+    expect(fixture.reads.length).toBe(readsAtStart);
     expect(fixture.log.lines).toHaveLength(linesAtStart);
   });
 
@@ -620,19 +605,37 @@ describe("settings and health", () => {
   });
 });
 
+describe("the oracle setting", () => {
+  const oracleProof = `0x${"ab".repeat(65)}`;
+
+  it("stores an oracle proof as version 2 when acceptOracleProof is on", async () => {
+    const fixture = setup({ config: { acceptOracleProof: true } });
+    const jobId = createProvingJob(fixture);
+    const answer = await send(fixture, jobId, proofPackage({ proof: oracleProof }));
+    await settled(fixture.context);
+    expect(answer.status).toBe(202);
+    const payload = storedRow(fixture).payload as Hex;
+    expect(decodeProofMessage(payload, { acceptOracleProof: true }).version).toBe(2);
+    expect(fixture.verifications).toHaveLength(0);
+  });
+
+  it("refuses an oracle proof by default, and keeps the strict form for a full proof when it is on", async () => {
+    const strict = setup();
+    expect((await send(strict, createProvingJob(strict), proofPackage({ proof: oracleProof }))).status).toBe(422);
+    const lenient = setup({ config: { acceptOracleProof: true } });
+    const answer = await send(lenient, createProvingJob(lenient), proofPackage());
+    await settled(lenient.context);
+    expect(answer.status).toBe(202);
+    expect(decodeProofMessage(storedRow(lenient).payload as Hex).version).toBe(1);
+  });
+});
+
 describe("the real outside world", () => {
   let server: Server | null = null;
   afterEach(async () => {
     const open = server;
     server = null;
     if (open !== null) await new Promise<void>((resolve) => open.close(() => resolve()));
-  });
-
-  it("reads the deployment file from disk", () => {
-    const directory = mkdtempSync(join(tmpdir(), "webhook-"));
-    const path = join(directory, "deployment.json");
-    writeFileSync(path, JSON.stringify(DEPLOYMENT));
-    expect(REAL_SOURCE.readDeployment(path)).toEqual(DEPLOYMENT);
   });
 
   it("builds a board publisher without opening a connection", () => {

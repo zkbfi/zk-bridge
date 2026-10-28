@@ -3,10 +3,10 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { serve } from "@hono/node-server";
 import { redactError } from "@zk-bridge/shared/config";
-import { loadPair, type Pair } from "@zk-bridge/shared";
+import type { Pair } from "@zk-bridge/shared";
 import { executeCommand, type CommandExecutor } from "@zk-bridge/shared/prover";
 import { createApp } from "./app.ts";
-import { BackendConfigError, MODULE_NAMES, parseBackendConfig, readSecrets, type BackendConfig, type ModuleName } from "./config.ts";
+import { BackendConfigError, MODULE_NAMES, endpointSecrets, loadBackendPair, parseBackendConfig, readSecrets, type BackendConfig, type ModuleName } from "./config.ts";
 import { createLogger, type Logger } from "./logger.ts";
 import type { BackendModuleContext, ModuleTable } from "./module.ts";
 import * as archive from "./archive/module.ts";
@@ -23,6 +23,13 @@ export const MODULES: ModuleTable = {
   "msgboard-indexer": msgboardIndexer,
   archive,
 };
+
+/** The prover reads the source chain of each direction from a beacon endpoint, so a request run needs both. */
+function requireBeaconUrls(config: BackendConfig, pair: Pair): void {
+  for (const side of pair.sides) {
+    if (side.beaconUrl === null) throw new BackendConfigError(`beaconUrls needs an entry for chain ${side.chainId} when the requests module runs`);
+  }
+}
 
 /** What a running backend offers its caller. */
 export interface RunningBackend {
@@ -55,8 +62,10 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
   const logger: Logger = createLogger({
     write: input.write ?? ((line) => process.stderr.write(`${line}\n`)),
     now,
-    knownSecrets: () => [secrets.runpodApiKey, secrets.webhookBearer],
+    // The endpoints can carry keys, so every secret part of each one is removed from every line.
+    knownSecrets: () => [secrets.runpodApiKey, secrets.webhookBearer, ...endpointSecrets(config, input.pair)],
   });
+  if (input.enabled.includes("requests")) requireBeaconUrls(config, input.pair);
   mkdirSync(dirname(config.databasePath), { recursive: true });
   const storage = openStorage(config.databasePath);
   const provers = createProverFactories({
@@ -67,7 +76,7 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     path: input.environment.PATH ?? "/usr/bin:/bin",
     logger,
   });
-  const context: BackendModuleContext = { storage, config, prover: provers.utilityProver, proverForJob: provers.proverForJob, now, logger };
+  const context: BackendModuleContext = { storage, config, pair: input.pair, prover: provers.utilityProver, proverForJob: provers.proverForJob, now, logger };
   const app = createApp({ context, modules: MODULES, enabled: input.enabled });
   const stoppers = await Promise.all(input.enabled.map((name) => MODULES[name].start(context)));
   const server = await new Promise<ReturnType<typeof serve> & { port: number }>((resolve) => {
@@ -122,9 +131,8 @@ export interface MainOverrides {
 }
 
 function valuesToHide(config: BackendConfig, environment: Readonly<Record<string, string | undefined>>): string[] {
-  const named = [config.runpodApiKeyVariable, config.webhookBearerVariable];
-  const endpoints = Object.keys(environment).filter((name) => name.startsWith("EXPLORER_"));
-  return [...named, ...endpoints].map((name) => environment[name]).filter((value): value is string => value !== undefined && value !== "");
+  const named = [config.runpodApiKeyVariable, config.webhookBearerVariable].map((name) => environment[name] ?? "");
+  return [...named, ...endpointSecrets(config, null)].filter((value) => value !== "");
 }
 
 function signalFromProcess(): AbortSignal {
@@ -148,7 +156,7 @@ export async function main(argv: readonly string[], environment: Readonly<Record
     const config = parseBackendConfig(await readFile(parsed.configPath, "utf8"));
     knownValues = valuesToHide(config, environment);
     const deployment: unknown = JSON.parse(await readFile(config.deploymentFile, "utf8"));
-    const pair = loadPair({ pairName: config.pair, environment, deployment });
+    const pair = loadBackendPair(config, deployment);
     const running = await startBackend({ config, pair, enabled: parsed.modules ?? config.modules, environment, executor: overrides.executor, write: overrides.write });
     const stopSignal = overrides.stopSignal ?? signalFromProcess();
     await new Promise<void>((resolve) => (stopSignal.aborted ? resolve() : stopSignal.addEventListener("abort", () => resolve(), { once: true })));

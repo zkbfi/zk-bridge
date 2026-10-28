@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BackendConfigError, parseBackendConfig, readSecrets } from "../src/config.ts";
+import { BackendConfigError, endpointSecrets, endpointValues, loadBackendPair, parseBackendConfig, readSecrets } from "../src/config.ts";
 import { main, parseArguments, startBackend } from "../src/main.ts";
 import { PAIR, SECRETS, makeConfig } from "./support.ts";
 
@@ -74,6 +74,126 @@ describe("configuration", () => {
     expect(readSecrets(config, ENVIRONMENT)).toEqual(SECRETS);
     expect(() => readSecrets(config, { ...ENVIRONMENT, RUNPOD_API_KEY: undefined })).toThrow("set the environment variable RUNPOD_API_KEY");
     expect(() => readSecrets(config, { ...ENVIRONMENT, BACKEND_WEBHOOK_BEARER: "" })).toThrow("set the environment variable BACKEND_WEBHOOK_BEARER");
+  });
+});
+
+const section = (chainId: number, digit: string) => {
+  const address = `0x${digit.repeat(40)}`;
+  return { chain_id: chainId, bridge: address, mediator: address, token_factory: address, wrapped_native: address, gate: address, light_client: address, start_block: 1 };
+};
+const DEPLOYMENT = { chain_a: section(1, "1"), chain_b: section(369, "2") };
+const KEYED_RPC = "http://rpc-1.invalid/rpc/SECRETKEY123/evm/1";
+const KEYED_BOARD = "wss://board.invalid/KEYBOARD456";
+
+describe("endpoints in the configuration", () => {
+  const endpoints = {
+    rpcUrls: { "1": "http://rpc-1.invalid", "369": "http://rpc-369.invalid" },
+    beaconUrls: { "1": "http://beacon-1.invalid" },
+  };
+
+  it("builds the pair from the deployment file and the configuration, with no environment variable", () => {
+    vi.stubEnv("EXPLORER_RPC_URL_1", "http://wrong.invalid");
+    try {
+      const pair = loadBackendPair(makeConfig(endpoints), DEPLOYMENT);
+      expect(pair.sides.map((side) => side.rpcUrl)).toEqual(["http://rpc-1.invalid", "http://rpc-369.invalid"]);
+      expect(pair.sides.map((side) => side.beaconUrl)).toEqual(["http://beacon-1.invalid", null]);
+      expect(pair.sides[1].contracts.lightClient).toBe(`0x${"2".repeat(40)}`);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("names the missing chain, or the unknown pair", () => {
+    expect(() => loadBackendPair(makeConfig({ rpcUrls: { "1": "http://rpc-1.invalid" } }), DEPLOYMENT)).toThrow("rpcUrls needs an entry for chain 369");
+    expect(() => loadBackendPair(makeConfig({ ...endpoints, pair: "nowhere" }), DEPLOYMENT)).toThrow('unknown pair "nowhere"');
+  });
+
+  it("refuses an address that is not a URL, and a msgboard address with the wrong scheme", () => {
+    expect(() => makeConfig({ rpcUrls: { "1": "not a url" } })).toThrow(BackendConfigError);
+    expect(() => makeConfig({ rpcUrls: { one: "http://rpc.invalid" } })).toThrow(BackendConfigError);
+    expect(() => makeConfig({ msgboardUrl: "ftp://board.invalid" })).toThrow(/ws, wss, http or https/);
+    expect(makeConfig({ msgboardUrl: "wss://board.invalid" }).msgboardUrl).toBe("wss://board.invalid");
+  });
+
+  it("lists every address that can carry a key", () => {
+    const config = makeConfig({ ...endpoints, msgboardUrl: KEYED_BOARD, indexerUrl: "http://indexer.invalid" });
+    const values = endpointValues(config, PAIR);
+    expect(values).toEqual(expect.arrayContaining([KEYED_BOARD, "http://rpc-1.invalid", "http://beacon-1.invalid", "https://endpoint.example.org", "http://indexer.invalid", PAIR.sides[0].rpcUrl]));
+    expect(endpointValues(makeConfig(), null)).toEqual(["https://endpoint.example.org"]);
+    const withoutBeacon = { ...PAIR, sides: [{ ...PAIR.sides[0], beaconUrl: null }, PAIR.sides[1]] } as typeof PAIR;
+    expect(endpointValues(makeConfig(), withoutBeacon)).not.toContain("");
+  });
+
+  it("lists the secret parts of each address, a long path segment alone, and no plain word", () => {
+    const secrets = endpointSecrets(makeConfig({ rpcUrls: { "1": KEYED_RPC }, msgboardUrl: KEYED_BOARD }), null);
+    expect(secrets).toEqual(expect.arrayContaining([KEYED_RPC, "rpc/SECRETKEY123/evm/1", "SECRETKEY123", KEYED_BOARD, "KEYBOARD456"]));
+    expect(secrets).not.toContain("rpc");
+    expect(secrets).not.toContain("evm");
+  });
+});
+
+describe("secrets in the log", () => {
+  const configFor = (directory: string) =>
+    makeConfig({
+      databasePath: join(directory, "backend.sqlite"),
+      listen: { host: "127.0.0.1", port: 0 },
+      rpcUrls: { "1": KEYED_RPC, "369": "http://rpc-369.invalid" },
+      beaconUrls: { "1": "http://beacon-1.invalid", "369": "http://beacon-369.invalid" },
+      msgboardUrl: KEYED_BOARD,
+    });
+
+  it("a keyed endpoint inside an error is removed from the log line", async () => {
+    const lines: string[] = [];
+    const executor = async () => {
+      throw new Error(`cannot reach ${KEYED_RPC} or ${KEYED_BOARD}; the key is SECRETKEY123 and KEYBOARD456`);
+    };
+    const running = await startBackend({ config: configFor(workspace()), pair: PAIR, enabled: ["requests"], environment: ENVIRONMENT, executor, write: (line) => lines.push(line) });
+    try {
+      const answer = await fetch(`http://127.0.0.1:${running.port}/requests`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pair: "eth-pls", direction: "first-to-second", reason: "user" }),
+      });
+      expect(answer.status).toBe(202);
+      await vi.waitFor(() => expect(lines.some((line) => line.includes("job_failed"))).toBe(true));
+    } finally {
+      await running.stop();
+    }
+    const text = lines.join("\n");
+    expect(text).toContain("cannot reach");
+    expect(text).not.toContain("SECRETKEY123");
+    expect(text).not.toContain("KEYBOARD456");
+    expect(text).not.toContain(SECRETS.webhookBearer);
+  });
+
+  it("the requests module needs a beacon endpoint for both chains", async () => {
+    const lonely = { ...PAIR, sides: [PAIR.sides[0], { ...PAIR.sides[1], beaconUrl: null }] } as typeof PAIR;
+    await expect(startBackend({ config: configFor(workspace()), pair: lonely, enabled: ["requests"], environment: ENVIRONMENT, write: () => {} })).rejects.toThrow("beaconUrls needs an entry for chain 369");
+  });
+
+  it("main hides a configured endpoint in a start-up error and survives an unset secret variable", async () => {
+    const directory = workspace();
+    const configFile = join(directory, "backend.json");
+    writeFileSync(
+      configFile,
+      JSON.stringify({
+        schemaVersion: 1,
+        deploymentFile: join(directory, "deployment.json"),
+        databasePath: join(directory, "backend.sqlite"),
+        publicUrl: "https://backend.example.org",
+        prover: { binary: "/bin/zk-bridge-prover" },
+        remote: { endpoint: "https://endpoint.example.org" },
+        runpodApiKeyVariable: "RUNPOD_API_KEY",
+        webhookBearerVariable: "BACKEND_WEBHOOK_BEARER",
+        msgboardUrl: KEYED_BOARD,
+      }),
+    );
+    writeFileSync(join(directory, "deployment.json"), JSON.stringify(DEPLOYMENT));
+    const lines: string[] = [];
+    // Neither secret variable is set, and the pair has no rpcUrls: the run stops early with a plain message.
+    expect(await main(["--config", configFile], { PATH: "/usr/bin" }, { write: (line) => lines.push(line) })).toBe(1);
+    expect(lines[0]).toContain("rpcUrls needs an entry for chain 1");
+    expect(lines[0]).not.toContain("KEYBOARD456");
   });
 });
 
@@ -154,9 +274,11 @@ describe("main", () => {
         remote: { endpoint: "https://endpoint.example.org" },
         runpodApiKeyVariable: "RUNPOD_API_KEY",
         webhookBearerVariable: "BACKEND_WEBHOOK_BEARER",
+        rpcUrls: { "1": "http://rpc-1.invalid", "369": "http://rpc-369.invalid" },
+        beaconUrls: { "1": "http://beacon-1.invalid", "369": "http://beacon-369.invalid" },
       }),
     );
-    const environment = { ...ENVIRONMENT, EXPLORER_RPC_URL_1: "http://rpc-1.invalid", EXPLORER_RPC_URL_369: "http://rpc-369.invalid" };
+    const environment = ENVIRONMENT;
     const early = new AbortController();
     early.abort();
     expect(await main(["--config", configFile], environment, { stopSignal: early.signal, write: () => {} })).toBe(0);
@@ -185,9 +307,11 @@ describe("main", () => {
         remote: { endpoint: "https://endpoint.example.org" },
         runpodApiKeyVariable: "RUNPOD_API_KEY",
         webhookBearerVariable: "BACKEND_WEBHOOK_BEARER",
+        rpcUrls: { "1": "http://rpc-1.invalid", "369": "http://rpc-369.invalid" },
+        beaconUrls: { "1": "http://beacon-1.invalid", "369": "http://beacon-369.invalid" },
       }),
     );
-    const environment = { ...ENVIRONMENT, EXPLORER_RPC_URL_1: "http://rpc-1.invalid", EXPLORER_RPC_URL_369: "http://rpc-369.invalid" };
+    const environment = ENVIRONMENT;
     const finished = main(["--config", configFile], environment, { write: () => {} });
     await new Promise((resolve) => setTimeout(resolve, 200));
     process.emit("SIGTERM");

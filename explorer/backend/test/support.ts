@@ -124,6 +124,7 @@ export function makeBackend(
   const context: BackendModuleContext = {
     storage,
     config: options.config ?? makeConfig(),
+    pair: PAIR,
     prover: prover.binary,
     proverForJob: () => prover.binary,
     now: clock.now,

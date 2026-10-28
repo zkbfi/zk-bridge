@@ -5,16 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeAbiParameters, type Hex } from "viem";
 import { encodeProofMessage, proofCategory, type ProofDirection, type ProofMessage } from "@zk-bridge/shared";
 import type { BoardFeed, BoardMessage } from "@zk-bridge/shared/msgboard";
-import type { LightClientHead } from "@zk-bridge/shared/prover";
+import { createLightClientReader, type LightClientHead } from "@zk-bridge/shared/prover";
 import { createApp } from "../src/app.ts";
 import { BackendConfigError } from "../src/config.ts";
 import type { BackendModuleContext } from "../src/module.ts";
 import { MODULES } from "../src/main.ts";
 import { cacheLightClientReader, chooseLatest, createRecentSet, loadStoredProof, saveStoredProof, type StoredProof, type TimedHead, type TimedLightClientReader } from "../src/msgboard-indexer/latest-proof.ts";
 import {
-  MSGBOARD_URL_VARIABLE,
   buildDependencies,
-  createLightClientReader,
   health,
   register,
   start,
@@ -127,7 +125,7 @@ function makeRig(options: { storage?: Storage; verify?: () => Promise<void>; hea
     verifyCalls.push(1);
     return verify();
   };
-  const context: BackendModuleContext = { storage, config: makeConfig(), prover, proverForJob: () => prover, now: clock.now, logger: log.logger };
+  const context: BackendModuleContext = { storage, config: makeConfig({ msgboardUrl: "https://board.invalid", acceptOracleProof: options.acceptOracleProof ?? false }), pair: PAIR, prover, proverForJob: () => prover, now: clock.now, logger: log.logger };
   const app = createApp({ context, modules: MODULES, enabled: ["msgboard-indexer"] });
   const heads = { "first-to-second": movableHead(options.headSlot ?? 100n, clock.now), "second-to-first": movableHead(options.headSlot ?? 100n, clock.now) };
   const board = fakeBoard();
@@ -534,57 +532,42 @@ describe("the msgboard indexer", () => {
 });
 
 describe("the real parts", () => {
-  const directories: string[] = [];
-  afterEach(() => {
-    directories.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true }));
-    vi.unstubAllEnvs();
-  });
+  const contextWith = (config: Record<string, unknown> = {}): BackendModuleContext => ({ ...makeRig().context, config: makeConfig({ msgboardUrl: "https://board.invalid", ...config }) });
 
-  const section = (chainId: number, digit: string) => ({
-    chain_id: chainId,
-    bridge: `0x${digit.repeat(40)}`,
-    mediator: `0x${digit.repeat(40)}`,
-    token_factory: `0x${digit.repeat(40)}`,
-    wrapped_native: `0x${digit.repeat(40)}`,
-    gate: `0x${digit.repeat(40)}`,
-    light_client: `0x${digit.repeat(40)}`,
-    start_block: 1,
-  });
-
-  function contextWithDeployment(): BackendModuleContext {
-    const directory = mkdtempSync(join(tmpdir(), "msgboard-indexer-"));
-    directories.push(directory);
-    const deploymentFile = join(directory, "deployment.json");
-    writeFileSync(deploymentFile, JSON.stringify({ chain_a: section(1, "1"), chain_b: section(369, "2") }));
-    return { ...makeRig().context, config: makeConfig({ deploymentFile }) };
-  }
-
-  const variables = { [MSGBOARD_URL_VARIABLE]: "https://board.invalid", EXPLORER_RPC_URL_1: "http://rpc-1.invalid", EXPLORER_RPC_URL_369: "http://rpc-369.invalid" };
-
-  it("builds the pair, one light client reader per direction and the board feed", async () => {
-    const dependencies = await buildDependencies(contextWithDeployment(), variables);
-    expect(dependencies.pair.name).toBe("eth-pls");
+  it("builds one light client reader per direction and the board feed from the context alone", () => {
+    created.boardUrls.length = 0;
+    const dependencies = buildDependencies(contextWith());
+    expect(dependencies.pair).toBe(PAIR);
     expect(Object.keys(dependencies.lightClients)).toEqual(["first-to-second", "second-to-first"]);
     expect(created.boardUrls).toEqual(["https://board.invalid"]);
   });
 
   it.each([
     [undefined, false],
-    ["false", false],
-    ["true", true],
-  ])("reads the oracle setting %j as %j", async (value, expected) => {
-    const dependencies = await buildDependencies(contextWithDeployment(), { ...variables, EXPLORER_ACCEPT_ORACLE_PROOFS: value });
-    expect(dependencies.acceptOracleProof).toBe(expected);
+    [false, false],
+    [true, true],
+  ])("takes the oracle setting %j from the configuration as %j", (value, expected) => {
+    expect(buildDependencies(contextWith({ acceptOracleProof: value })).acceptOracleProof).toBe(expected);
   });
 
-  it.each([[undefined], [""]])("refuses to start without a msgboard address (%j)", async (value) => {
-    await expect(buildDependencies(contextWithDeployment(), { ...variables, [MSGBOARD_URL_VARIABLE]: value })).rejects.toThrow(BackendConfigError);
-    await expect(buildDependencies(contextWithDeployment(), { ...variables, [MSGBOARD_URL_VARIABLE]: value })).rejects.toThrow(MSGBOARD_URL_VARIABLE);
+  it("ignores the process settings that earlier versions read", () => {
+    vi.stubEnv("EXPLORER_MSGBOARD_URL", "https://other.invalid");
+    vi.stubEnv("EXPLORER_ACCEPT_ORACLE_PROOFS", "true");
+    created.boardUrls.length = 0;
+    expect(buildDependencies(contextWith()).acceptOracleProof).toBe(false);
+    expect(created.boardUrls).toEqual(["https://board.invalid"]);
+    vi.unstubAllEnvs();
   });
 
-  it("starts and stops from the process variables", async () => {
-    for (const [name, value] of Object.entries(variables)) vi.stubEnv(name, value);
-    const context = contextWithDeployment();
+  it("refuses to start without msgboardUrl in the configuration", async () => {
+    const context = contextWith({ msgboardUrl: undefined });
+    expect(() => buildDependencies(context)).toThrow(BackendConfigError);
+    expect(() => buildDependencies(context)).toThrow("msgboardUrl");
+    await expect(start(context)).rejects.toThrow("msgboardUrl");
+  });
+
+  it("starts and stops from the configuration", async () => {
+    const context = contextWith();
     const stop = await start(context);
     expect(health(context)).toEqual({ state: "running" });
     await stop();

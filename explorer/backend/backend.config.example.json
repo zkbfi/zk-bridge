@@ -12,6 +12,16 @@
   "remote": { "endpoint": "https://example.api.runpod.ai" },
   "runpodApiKeyVariable": "RUNPOD_API_KEY",
   "webhookBearerVariable": "BACKEND_WEBHOOK_BEARER",
+  "rpcUrls": {
+    "1": "https://ethereum-rpc.example.org",
+    "369": "https://pulsechain-rpc.example.org"
+  },
+  "beaconUrls": {
+    "1": "https://ethereum-beacon.example.org",
+    "369": "https://pulsechain-beacon.example.org"
+  },
+  "msgboardUrl": "wss://msgboard.example.org",
+  "acceptOracleProof": false,
   "limits": {
     "requestsPerCallerPerMinute": 10,
     "requestsPerUnknownCallerPerMinute": 2,

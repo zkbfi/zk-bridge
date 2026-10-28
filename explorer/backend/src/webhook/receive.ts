@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { Hex } from "viem";
-import { encodeProofMessage, type ProofDirection } from "@zk-bridge/shared";
+import { ORACLE_PROOF_BYTES, ORACLE_PROOF_MESSAGE_VERSION, PROOF_MESSAGE_VERSION, encodeProofMessage, type ProofDirection } from "@zk-bridge/shared";
 import { proofPackageSchema, type ProofAssessment } from "@zk-bridge/shared/prover";
 import type { Logger } from "../logger.ts";
 import { getJob, updateJob } from "../requests/jobs.ts";
@@ -63,6 +63,8 @@ export interface ReceiveInput {
   readonly assess: (input: { payload: Hex; direction: ProofDirection }) => Promise<ProofAssessment>;
   readonly now: () => number;
   readonly logger: Logger;
+  /** Accept the short oracle proof of the free test prover. Local testing only. Default false. */
+  readonly acceptOracleProof?: boolean;
 }
 
 /** A reason for a failed job that is safe to show: a fixed phrase, never the text of an error. */
@@ -95,8 +97,10 @@ export async function receiveProofPackage(input: ReceiveInput): Promise<ReceiveO
   const proofPackage = parsed.data;
   let payload: Hex;
   try {
+    // The oracle form carries a proof of 65 bytes. Only a backend set for local testing builds it.
+    const isOracleProof = input.acceptOracleProof === true && (proofPackage.proof.length - 2) / 2 === ORACLE_PROOF_BYTES;
     payload = encodeProofMessage({
-      version: 1,
+      version: isOracleProof ? ORACLE_PROOF_MESSAGE_VERSION : PROOF_MESSAGE_VERSION,
       pair: input.pairName,
       direction: job.direction,
       programKey: proofPackage.programKey as Hex,
@@ -106,7 +110,7 @@ export async function receiveProofPackage(input: ReceiveInput): Promise<ReceiveO
       newRoot: proofPackage.newHeadRoot as Hex,
       publicValues: proofPackage.publicValues as Hex,
       proof: proofPackage.proof as Hex,
-    });
+    }, { acceptOracleProof: input.acceptOracleProof });
   } catch {
     return failJob(input, "the package does not fit the proof message");
   }

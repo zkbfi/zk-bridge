@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PAIR_DEFINITIONS, beaconVariableName, loadPair, rpcVariableName, urlSecrets, type Pair } from "@zk-bridge/shared";
 import { DEFAULT_RATE_LIMITS } from "./requests/rate-limit.ts";
 
 /** The modules that the backend can run, in the order that the example file lists them. */
@@ -57,6 +58,20 @@ export const backendConfigSchema = z
       })
       .strict()
       .default(DEFAULT_RATE_LIMITS),
+    /**
+     * The execution endpoint of each chain of the pair, by chain identifier. An endpoint can carry a key, so keep the
+     * file private (mode 0600); the logger removes these values from every line.
+     */
+    rpcUrls: z.record(z.string().regex(/^\d+$/), z.url()).default({}),
+    /** The beacon endpoint of each chain of the pair, by chain identifier. The prover reads the source chain from it. */
+    beaconUrls: z.record(z.string().regex(/^\d+$/), z.url()).default({}),
+    /** The msgboard node (`ws://`, `wss://`, `http://` or `https://`). Needed by the webhook and the msgboard indexer. It can carry a key. */
+    msgboardUrl: z.string().regex(/^(wss?|https?):\/\/\S+$/, "must be a ws, wss, http or https address").optional(),
+    /**
+     * Accept the short oracle proofs of the free test prover. For local testing only: a real deployment keeps it off,
+     * and then only full Groth16 proofs pass. It applies to the webhook and the msgboard indexer.
+     */
+    acceptOracleProof: z.boolean().default(false),
     /** The chain indexer, for the archive module. */
     indexerUrl: z.url().optional(),
   })
@@ -115,4 +130,49 @@ export function readSecrets(config: BackendConfig, environment: Readonly<Record<
     throw new BackendConfigError(`the environment variable ${config.webhookBearerVariable} must hold at least ${MINIMUM_BEARER_BYTES} bytes`);
   }
   return { runpodApiKey, webhookBearer };
+}
+
+/**
+ * Builds the pair from the deployment file and the endpoints of the configuration file. No environment variable is read.
+ *
+ * @param config The configuration.
+ * @param deployment The parsed deployment file.
+ * @throws BackendConfigError when a chain of the pair has no entry in `rpcUrls`, or the pair is unknown.
+ */
+export function loadBackendPair(config: BackendConfig, deployment: unknown): Pair {
+  const definition = PAIR_DEFINITIONS.find((candidate) => candidate.name === config.pair);
+  if (definition === undefined) throw new BackendConfigError(`unknown pair "${config.pair}"`);
+  const environment: Record<string, string> = {};
+  for (const { chainId } of definition.sides) {
+    const rpcUrl = config.rpcUrls[String(chainId)];
+    if (rpcUrl === undefined) throw new BackendConfigError(`rpcUrls needs an entry for chain ${chainId}`);
+    environment[rpcVariableName(chainId)] = rpcUrl;
+    const beaconUrl = config.beaconUrls[String(chainId)];
+    if (beaconUrl !== undefined) environment[beaconVariableName(chainId)] = beaconUrl;
+  }
+  return loadPair({ pairName: config.pair, environment, deployment });
+}
+
+/**
+ * Every address in the configuration that can carry a key, with the deployment file endpoints of the pair when known.
+ * The logger removes these, and the secret parts of each, from every line.
+ */
+export function endpointValues(config: BackendConfig, pair: Pair | null): string[] {
+  const fromPair = (pair?.sides ?? []).flatMap((side) => [side.rpcUrl, side.beaconUrl ?? ""]);
+  return [...Object.values(config.rpcUrls), ...Object.values(config.beaconUrls), config.msgboardUrl ?? "", config.remote.endpoint, config.indexerUrl ?? "", ...fromPair].filter((value) => value !== "");
+}
+
+/** The shortest path segment that counts as a key. Shorter segments, such as `rpc` or `evm`, are plain words. */
+const MINIMUM_KEY_SEGMENT = 8;
+
+/**
+ * Every secret part of every address in the configuration: each whole address, its user name, password, path and query,
+ * and each long path segment on its own (a key in a path often shows up alone in an error text).
+ */
+export function endpointSecrets(config: BackendConfig, pair: Pair | null): string[] {
+  const pieces = endpointValues(config, pair).flatMap((url) => {
+    const segments = urlSecrets(url).flatMap((piece) => piece.split(/[/?&=]/));
+    return [...urlSecrets(url), ...segments.filter((segment) => segment.length >= MINIMUM_KEY_SEGMENT)];
+  });
+  return [...new Set(pieces)];
 }

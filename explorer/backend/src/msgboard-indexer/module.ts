@@ -1,31 +1,19 @@
-import { readFile } from "node:fs/promises";
 import type { Hono } from "hono";
-import { createPublicClient, http, type Address, type PublicClient } from "viem";
+import { createPublicClient, http } from "viem";
 import {
   PROOF_DIRECTIONS,
   PROOF_MESSAGE_BYTES,
-  beaconLightClientAbi,
-  loadPair,
   proofCategory,
   tryDecodeProofMessage,
   type Pair,
   type ProofDirection,
 } from "@zk-bridge/shared";
 import { createBoardFeed, type BoardFeed, type BoardMessage, type BoardSubscription } from "@zk-bridge/shared/msgboard";
-import { assessProofPayload, payloadKey, type LightClientReader } from "@zk-bridge/shared/prover";
+import { assessProofPayload, createLightClientReader, payloadKey } from "@zk-bridge/shared/prover";
 import { BackendConfigError } from "../config.ts";
 import type { ModuleHealth } from "../health.ts";
 import type { BackendModuleContext } from "../module.ts";
 import { cacheLightClientReader, chooseLatest, createRecentSet, deleteStoredProof, loadStoredProof, saveStoredProof, type TimedLightClientReader } from "./latest-proof.ts";
-
-/** The variable that holds the address of the msgboard node. It can carry a key, so the backend never logs it. */
-export const MSGBOARD_URL_VARIABLE = "EXPLORER_MSGBOARD_URL";
-
-/**
- * The variable that turns on the free test prover's short oracle proofs. Set it to `true` for local testing only. Any
- * other value, or none, keeps the strict rule: only full Groth16 proofs pass.
- */
-export const ACCEPT_ORACLE_PROOFS_VARIABLE = "EXPLORER_ACCEPT_ORACLE_PROOFS";
 
 /** How often the module reads the recent messages of the board, in milliseconds. A socket drop loses nothing longer than this. */
 export const POLL_MILLISECONDS = 30_000;
@@ -74,36 +62,15 @@ function stateFor(context: BackendModuleContext): IndexerState {
 }
 
 /**
- * Reads the head, the header root of the head and the program key of a `BeaconLightClient`.
+ * Builds the real parts from the context: the pair, the msgboard address and the oracle setting all come from the
+ * configuration. No process setting is read.
  *
- * @param client A client of the destination chain.
- * @param address The light client address.
+ * @throws BackendConfigError when `msgboardUrl` is not set.
  */
-export function createLightClientReader(client: Pick<PublicClient, "readContract">, address: Address): LightClientReader {
-  return {
-    async read() {
-      const [headSlot, programKey] = await Promise.all([
-        client.readContract({ address, abi: beaconLightClientAbi, functionName: "head" }),
-        client.readContract({ address, abi: beaconLightClientAbi, functionName: "programVKey" }),
-      ]);
-      const headRoot = await client.readContract({ address, abi: beaconLightClientAbi, functionName: "headers", args: [headSlot] });
-      return { headSlot: BigInt(headSlot), headRoot, programKey };
-    },
-  };
-}
-
-/**
- * Builds the real parts from the deployment file and the process variables.
- *
- * @param context The module context.
- * @param variables The variables that hold the msgboard address and the chain addresses.
- * @throws BackendConfigError when the msgboard address is not set.
- */
-export async function buildDependencies(context: BackendModuleContext, variables: Readonly<Record<string, string | undefined>>): Promise<IndexerDependencies> {
-  const boardUrl = variables[MSGBOARD_URL_VARIABLE];
-  if (boardUrl === undefined || boardUrl === "") throw new BackendConfigError(`set the environment variable ${MSGBOARD_URL_VARIABLE} to the msgboard node`);
-  const deployment: unknown = JSON.parse(await readFile(context.config.deploymentFile, "utf8"));
-  const pair = loadPair({ pairName: context.config.pair, environment: variables, deployment });
+export function buildDependencies(context: BackendModuleContext): IndexerDependencies {
+  const boardUrl = context.config.msgboardUrl;
+  if (boardUrl === undefined) throw new BackendConfigError("set msgboardUrl in the configuration file");
+  const { pair } = context;
   const readerFor = (destination: Pair["sides"][number]): TimedLightClientReader =>
     cacheLightClientReader(createLightClientReader(createPublicClient({ transport: http(destination.rpcUrl) }), destination.contracts.lightClient), context.now);
   return {
@@ -111,7 +78,7 @@ export async function buildDependencies(context: BackendModuleContext, variables
     feed: createBoardFeed({ boardUrl, reconnectDelayMilliseconds: RECONNECT_MILLISECONDS, logger: context.logger }),
     lightClients: { "first-to-second": readerFor(pair.sides[1]), "second-to-first": readerFor(pair.sides[0]) },
     pollMilliseconds: POLL_MILLISECONDS,
-    acceptOracleProof: variables[ACCEPT_ORACLE_PROOFS_VARIABLE] === "true",
+    acceptOracleProof: context.config.acceptOracleProof,
   };
 }
 
@@ -164,10 +131,10 @@ export function register(app: Hono, context: BackendModuleContext): void {
 /**
  * Starts the indexer with the real parts.
  *
- * @throws BackendConfigError when the msgboard address is not set.
+ * @throws BackendConfigError when `msgboardUrl` is not set.
  */
 export async function start(context: BackendModuleContext): Promise<() => Promise<void>> {
-  return startIndexer(context, await buildDependencies(context, process.env));
+  return startIndexer(context, buildDependencies(context));
 }
 
 /**

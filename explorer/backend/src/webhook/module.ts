@@ -1,10 +1,9 @@
-import { readFileSync } from "node:fs";
 import type { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { createPublicClient, http, type Hex } from "viem";
-import { beaconLightClientAbi, loadPair, proofCategory, type Pair, type ProofDirection } from "@zk-bridge/shared";
+import { proofCategory, type Pair, type ProofDirection } from "@zk-bridge/shared";
 import { createBoardPublisher, grindInWorker, type BoardPublisher } from "@zk-bridge/shared/msgboard";
-import { assessProofPayload, type LightClientHead } from "@zk-bridge/shared/prover";
+import { assessProofPayload, createLightClientReader, type LightClientHead } from "@zk-bridge/shared/prover";
 import type { ModuleHealth } from "../health.ts";
 import type { Logger } from "../logger.ts";
 import type { BackendModuleContext } from "../module.ts";
@@ -15,9 +14,6 @@ import { bearerMatches, ensureProofTable, receiveProofPackage, type ReceiveOutco
 /** How often the publisher retries stored proofs and checks published jobs, in milliseconds. */
 export const TICK_INTERVAL_MILLISECONDS = 15_000;
 
-/** The name of the environment variable that holds the address of the msgboard node. The address can carry a key. */
-export const MSGBOARD_VARIABLE = "EXPLORER_MSGBOARD_URL";
-
 /** The largest message the board accepts, in bytes. The node default is 8 KiB. */
 const MAXIMUM_BOARD_MESSAGE_BYTES = 8192;
 
@@ -26,9 +22,8 @@ const GRIND_TIMEOUT_MILLISECONDS = 300_000;
 
 /** The outside world that the module touches. A test replaces the parts it needs. */
 export interface WebhookSource {
+  /** Where the bearer token is read. The configuration names the variable; the token is never in a file. */
   readonly environment: Readonly<Record<string, string | undefined>>;
-  /** Reads and parses the deployment file. */
-  readonly readDeployment: (path: string) => unknown;
   /** Builds the board side of msgboard. */
   readonly makeBoard: (boardUrl: string, logger: Logger) => BoardPublisher;
   /** Reads the head, the root of the head and the program key of a light client. */
@@ -38,7 +33,6 @@ export interface WebhookSource {
 /** The real outside world. */
 export const REAL_SOURCE: WebhookSource = {
   environment: process.env,
-  readDeployment: (path) => JSON.parse(readFileSync(path, "utf8")) as unknown,
   makeBoard: (boardUrl, logger) =>
     createBoardPublisher({
       boardUrl,
@@ -47,15 +41,7 @@ export const REAL_SOURCE: WebhookSource = {
       grindTimeoutMilliseconds: GRIND_TIMEOUT_MILLISECONDS,
       logger,
     }),
-  async readLightClient({ rpcUrl, lightClient }) {
-    const client = createPublicClient({ transport: http(rpcUrl) });
-    const [headSlot, programKey] = await Promise.all([
-      client.readContract({ address: lightClient, abi: beaconLightClientAbi, functionName: "head" }),
-      client.readContract({ address: lightClient, abi: beaconLightClientAbi, functionName: "programVKey" }),
-    ]);
-    const headRoot = await client.readContract({ address: lightClient, abi: beaconLightClientAbi, functionName: "headers", args: [headSlot] });
-    return { headSlot: BigInt(headSlot), headRoot, programKey };
-  },
+  readLightClient: ({ rpcUrl, lightClient }) => createLightClientReader(createPublicClient({ transport: http(rpcUrl) }), lightClient).read(),
 };
 
 type Resolved = {
@@ -96,12 +82,9 @@ function destinationOf(pair: Pair, direction: ProofDirection) {
   return direction === "first-to-second" ? pair.sides[1] : pair.sides[0];
 }
 
-/** A setting is missing. The message names the variable and never a value. */
-class MissingVariableError extends Error {
-  override readonly name = "MissingVariableError";
-  constructor(readonly variable: string) {
-    super(`set the environment variable ${variable}`);
-  }
+/** A setting is missing. The message names the variable or the configuration field, and never a value. */
+class MissingSettingError extends Error {
+  override readonly name = "MissingSettingError";
 }
 
 /** The answer of the route when the bearer variable is not set. */
@@ -111,10 +94,10 @@ const UNUSABLE_TEXT = "the webhook settings cannot be used";
 
 function build(context: BackendModuleContext, source: WebhookSource): Resolved {
   const bearer = source.environment[context.config.webhookBearerVariable];
-  if (bearer === undefined || bearer === "") throw new MissingVariableError(context.config.webhookBearerVariable);
-  const boardUrl = source.environment[MSGBOARD_VARIABLE];
-  if (boardUrl === undefined || boardUrl === "") throw new MissingVariableError(MSGBOARD_VARIABLE);
-  const pair = loadPair({ pairName: context.config.pair, environment: source.environment, deployment: source.readDeployment(context.config.deploymentFile) });
+  if (bearer === undefined || bearer === "") throw new MissingSettingError(`set the environment variable ${context.config.webhookBearerVariable}`);
+  const boardUrl = context.config.msgboardUrl;
+  if (boardUrl === undefined) throw new MissingSettingError("set msgboardUrl in the configuration file");
+  const { pair } = context;
   const readLightClient = (direction: ProofDirection): Promise<LightClientHead> => {
     const destination = destinationOf(pair, direction);
     return source.readLightClient({ rpcUrl: destination.rpcUrl, lightClient: destination.contracts.lightClient });
@@ -134,6 +117,7 @@ function build(context: BackendModuleContext, source: WebhookSource): Resolved {
       direction,
       prover: context.prover,
       lightClient: { read: () => readLightClient(direction) },
+      acceptOracleProof: context.config.acceptOracleProof,
     });
   ensureProofTable(context.storage);
   return { publisher, assess };
@@ -152,7 +136,7 @@ function resolve(context: BackendModuleContext): { ok: true; resolved: Resolved 
     return { ok: true, resolved: state.resolved };
   } catch (error) {
     // The message names a variable or a file problem and never a value.
-    const reason = error instanceof MissingVariableError ? error.message : UNUSABLE_TEXT;
+    const reason = error instanceof MissingSettingError ? error.message : UNUSABLE_TEXT;
     if (state.loggedReason !== reason) context.logger.warn("webhook_unusable", { error, reason });
     state.loggedReason = reason;
     return { ok: false, reason };
@@ -204,6 +188,7 @@ export function register(app: Hono, context: BackendModuleContext): void {
         assess: resolved.assess,
         now: context.now,
         logger: context.logger,
+        acceptOracleProof: context.config.acceptOracleProof,
       });
       if (outcome.kind === "stored") void resolved.publisher.publish(jobId);
       return request.json(describeOutcome(outcome), STATUS_OF_OUTCOME[outcome.kind]);
