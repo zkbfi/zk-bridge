@@ -107,7 +107,7 @@ Today the only guard against both is that no defined field sits there. Item 1 cl
 
 **Residual.** None, but a test gap exists. No test sends a committee branch that is valid at another layout's position against the same state root. Today's tests only send cut, padded or flipped branches. Those fail on the hash check whether or not the rule exists. Test S-7 closes the gap.
 
-### T4. the genesis validators root branch (item 1, D)
+### T4. The genesis validators root branch (item 1, D)
 
 **What it adds.** Each fold step also proves `genesis_validators_root` (state field 1) at the claimed layout:
 
@@ -445,7 +445,7 @@ Real fixtures are under `light-client/tests/fixtures/`. The scratch verification
 | E-4 | Exists | `update_rejections.rs:187` `synthetic_wrong_layout_claim_by_branch_length_is_refused` | `build_update` | 6 zero-padded to 7, and 7 cut to 6, give `InvalidFinalityBranch`. | Synthetic twin of E-1. | M-1 |
 | E-5 | **New** (D1) | `layout_state_depth.rs` `a_zero_padded_genesis_validators_root_branch_is_refused` | `StateBuilder(Capella)` | A genesis validators root branch of 5 entries padded to 6 gives `InvalidGenesisValidatorsRootBranch`. The control (5 entries) returns `Ok`. | The genesis validators root branch is exact like every other branch. | M-1 (if the genesis validators root branch check uses the normalized function) |
 
-## B.3 the genesis validators root branch (T4, item 1, D)
+## B.3 The genesis validators root branch (T4, item 1, D)
 
 Each test below runs through `verify_step` and also through the fold of the fork observation program (`observation::verify_fork_observation` with one step), unless it says otherwise. A helper `for_each_program(step, assertion)` keeps this DRY.
 
