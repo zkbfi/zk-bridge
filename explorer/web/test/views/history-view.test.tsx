@@ -1,0 +1,269 @@
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { useState } from "react";
+import { describe, expect, it, vi } from "vitest";
+import type { ChainLog, ChainReader, HistoryFilters, JsonFetcher, JsonResponse } from "@zk-bridge/shared";
+import { HistoryView } from "../../src/views/HistoryView";
+import { EMPTY_HISTORY_FILTERS, type HistoryDependencies } from "../../src/views/history-model";
+import { fakeConnections, liveServices, sharedPairForTests } from "../support/live";
+import { renderWithServices } from "./support";
+
+const hash = (byte: string): `0x${string}` => `0x${byte.repeat(32)}`;
+const MESSAGE = hash("ab");
+
+const sentEvent = { kind: "sent", chainId: 1, timestamp: 1_800_000_100, transactionHash: hash("a1"), messageId: MESSAGE, slot: null, status: "covered" };
+const deliveredEvent = { kind: "delivered", chainId: 369, timestamp: 1_800_000_200, transactionHash: hash("b2"), messageId: MESSAGE, slot: null, status: "delivered" };
+const headEvent = { kind: "head-update", chainId: 369, timestamp: 1_800_000_300, transactionHash: hash("c3"), messageId: null, slot: 4_000, status: null };
+
+const answer = (items: unknown[], nextCursor: string | null = null): JsonResponse => ({ status: 200, body: { items, nextCursor, partial: false } });
+
+/** Records every URL and answers with the page of the test. */
+const indexerFetcher = (respond: (url: string) => JsonResponse) => {
+  const urls: string[] = [];
+  const fetchJson: JsonFetcher = async (url) => {
+    urls.push(url);
+    return respond(url);
+  };
+  return { urls, fetchJson };
+};
+
+/** A chain that holds the given logs, at head 200 with one second per block. */
+const readerWith = (logs: readonly Omit<ChainLog, "address" | "logIndex">[]): ChainReader => ({
+  getChainId: async () => 1,
+  getBlock: async (selector) => ("tag" in selector ? { number: 200n, timestamp: 2_000n, baseFeePerGas: null } : { number: selector.blockNumber, timestamp: 1_800_000_000n + selector.blockNumber, baseFeePerGas: null }),
+  getLogs: async (request) => {
+    const names = new Set(request.events.map((event) => event.name));
+    return logs
+      .filter((log) => names.has(log.eventName) && log.blockNumber >= request.fromBlock && log.blockNumber <= request.toBlock)
+      .map((log, logIndex) => ({ ...log, address: request.address, logIndex }));
+  },
+  readContract: async () => undefined,
+  getTransactionReceipt: async () => {
+    throw new Error("not used");
+  },
+});
+
+const firstChainLogs = [{ eventName: "UserRequestForAffirmation", blockNumber: 150n, transactionHash: hash("a1"), args: { messageId: MESSAGE } }];
+const secondChainLogs = [
+  { eventName: "AffirmationCompleted", blockNumber: 160n, transactionHash: hash("b2"), args: { messageId: MESSAGE, status: true } },
+  { eventName: "HeadUpdated", blockNumber: 170n, transactionHash: hash("c3"), args: { slot: 4_000n } },
+];
+
+const dependenciesWith = (fetchJson: JsonFetcher): HistoryDependencies => ({
+  fetchJson,
+  createReader: (input) => readerWith(input.chainId === 1 ? firstChainLogs : secondChainLogs),
+  loadPair: async () => sharedPairForTests(),
+});
+
+const LIVE_VARIABLES = { VITE_EXPLORER_RPC_URL_1: "https://rpc-one.example.org" };
+
+/** A page that keeps its filters in state, as the shell keeps them in the address. */
+const Harness = ({ dependencies, onFilters }: { readonly dependencies: HistoryDependencies; readonly onFilters?: (filters: HistoryFilters) => void }) => {
+  const [filters, setFilters] = useState<HistoryFilters>(EMPTY_HISTORY_FILTERS);
+  return (
+    <HistoryView
+      filters={filters}
+      dependencies={dependencies}
+      onChange={(next) => {
+        onFilters?.(next);
+        setFilters(next);
+      }}
+    />
+  );
+};
+
+const renderLive = (dependencies: HistoryDependencies, options: { readonly fallback?: boolean; readonly onFilters?: (filters: HistoryFilters) => void } = {}) => {
+  const fake = fakeConnections();
+  const services = liveServices({ fake, variables: LIVE_VARIABLES });
+  const connection = fake.made[0]!;
+  if (options.fallback === true) {
+    connection.run = vi.fn(async (operations) => {
+      try {
+        return await operations.viaIndexer();
+      } catch {
+        return operations.viaRpc();
+      }
+    });
+  }
+  renderWithServices(<Harness dependencies={dependencies} {...(options.onFilters === undefined ? {} : { onFilters: options.onFilters })} />, services);
+};
+
+const eventRows = (): HTMLElement[] => within(screen.getByRole("table", { name: "History events" })).getAllByRole("row").slice(1);
+
+describe("the history view", () => {
+  it("lists events with links to the message page", async () => {
+    const { fetchJson, urls } = indexerFetcher(() => answer([headEvent, deliveredEvent, sentEvent]));
+    renderLive(dependenciesWith(fetchJson));
+    await screen.findByRole("table", { name: "History events" });
+    expect(eventRows()).toHaveLength(3);
+    const links = screen.getAllByRole("link", { name: /^Open message/ });
+    expect(links).toHaveLength(2);
+    for (const link of links) expect(link).toHaveAttribute("href", `#/message/${MESSAGE}`);
+    expect(within(eventRows()[0]!).getByText("Slot 4000")).toBeInTheDocument();
+    const delivery = within(eventRows()[1]!).getAllByRole("cell");
+    expect(delivery.map((cell) => cell.textContent).slice(1, 3)).toEqual(["Delivered", "PulseChain"]);
+    expect(delivery[4]).toHaveTextContent("Delivered");
+    expect(urls[0]).toBe("http://localhost:42069/api/history?");
+    expect(screen.queryByText(/Partial history/)).not.toBeInTheDocument();
+  });
+
+  it("filters by pair, chain, kind, address, status and time", async () => {
+    const { fetchJson, urls } = indexerFetcher(() => answer([sentEvent]));
+    renderLive(dependenciesWith(fetchJson));
+    await screen.findByRole("table", { name: "History events" });
+
+    await userEvent.selectOptions(screen.getByLabelText("Pair and direction"), "1>369");
+    await waitFor(() => expect(urls.at(-1)).toContain("direction=1%3E369"));
+    await userEvent.selectOptions(screen.getByLabelText("Chain"), "369");
+    await waitFor(() => expect(urls.at(-1)).toContain("chain=369"));
+    await userEvent.selectOptions(screen.getByLabelText("Event"), "sent");
+    await waitFor(() => expect(urls.at(-1)).toContain("eventKind=sent"));
+    await userEvent.selectOptions(screen.getByLabelText("Kind of message"), "token");
+    await waitFor(() => expect(urls.at(-1)).toContain("kind=token"));
+    await userEvent.selectOptions(screen.getByLabelText("Status"), "covered");
+    await waitFor(() => expect(urls.at(-1)).toContain("status=covered"));
+    await userEvent.type(screen.getByLabelText("Address"), "0x52908400098527886E0F7030069857D2E4169EE7");
+    await waitFor(() => expect(urls.at(-1)).toContain("address=0x52908400098527886e0f7030069857d2e4169ee7"));
+    await userEvent.type(screen.getByLabelText("Token"), "0x52908400098527886E0F7030069857D2E4169EE8");
+    await waitFor(() => expect(urls.at(-1)).toContain("token=0x52908400098527886e0f7030069857d2e4169ee8"));
+    fireEvent.change(screen.getByLabelText("From date (UTC)"), { target: { value: "2026-10-28" } });
+    await waitFor(() => expect(urls.at(-1)).toContain("from=1793145600"));
+    fireEvent.change(screen.getByLabelText("To date (UTC)"), { target: { value: "2026-10-29" } });
+    await waitFor(() => {
+      expect(urls.at(-1)).toContain("from=1793145600");
+      expect(urls.at(-1)).toContain("to=1793318399");
+    });
+
+    fireEvent.change(screen.getByLabelText("From date (UTC)"), { target: { value: "" } });
+    await waitFor(() => expect(urls.at(-1)).not.toContain("from="));
+
+    await userEvent.selectOptions(screen.getByLabelText("Pair and direction"), "any");
+    await userEvent.selectOptions(screen.getByLabelText("Chain"), "any");
+    await userEvent.selectOptions(screen.getByLabelText("Event"), "any");
+    await userEvent.selectOptions(screen.getByLabelText("Kind of message"), "any");
+    await userEvent.selectOptions(screen.getByLabelText("Status"), "any");
+    await waitFor(() => expect(urls.at(-1)).not.toMatch(/direction|chain=|eventKind|kind=|status/));
+
+    await userEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    await waitFor(() => expect(urls.at(-1)).toBe("http://localhost:42069/api/history?"));
+    expect(screen.getByLabelText("Address")).toHaveValue("");
+    expect(screen.getByLabelText("Token")).toHaveValue("");
+  });
+
+  it("keeps the filters unchanged while an address or a token is still being typed", async () => {
+    const { fetchJson } = indexerFetcher(() => answer([sentEvent]));
+    const seen: HistoryFilters[] = [];
+    renderLive(dependenciesWith(fetchJson), { onFilters: (filters) => seen.push(filters) });
+    await screen.findByRole("table", { name: "History events" });
+    await userEvent.type(screen.getByLabelText("Address"), "0x12");
+    await userEvent.type(screen.getByLabelText("Token"), "0x34");
+    expect(seen).toEqual([]);
+    expect(screen.getAllByText("This is not an address yet. The list is not filtered by it.")).toHaveLength(2);
+    await userEvent.clear(screen.getByLabelText("Address"));
+    await userEvent.clear(screen.getByLabelText("Token"));
+    expect(seen).toHaveLength(2);
+  });
+
+  it("asks for the next page with nextCursor, and goes back to the newest events", async () => {
+    const cursor = `1800000100:sent:${MESSAGE}`;
+    const { fetchJson, urls } = indexerFetcher((url) => (url.includes("cursor=") ? answer([sentEvent]) : answer([deliveredEvent], cursor)));
+    renderLive(dependenciesWith(fetchJson));
+    await screen.findByRole("table", { name: "History events" });
+    expect(screen.queryByRole("button", { name: "Newest events" })).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Older events" }));
+    await waitFor(() => expect(urls.at(-1)).toContain(`cursor=${encodeURIComponent(cursor)}`));
+    await screen.findByRole("button", { name: "Newest events" });
+    expect(screen.queryByRole("button", { name: "Older events" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Newest events" }));
+    await waitFor(() => expect(urls.at(-1)).not.toContain("cursor="));
+  });
+
+  it("says plainly that head updates are left out while a filter on messages is on", async () => {
+    const { fetchJson } = indexerFetcher(() => answer([sentEvent]));
+    renderLive(dependenciesWith(fetchJson));
+    await screen.findByRole("table", { name: "History events" });
+    expect(screen.queryByText(/Head updates are not listed/)).not.toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText("Status"), "covered");
+    expect(await screen.findByText(/Head updates are not listed while a filter on message kind, status, token or address is on/)).toBeInTheDocument();
+    expect(screen.getByText(/Head updates are not missing/)).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText("Status"), "any");
+    await userEvent.selectOptions(screen.getByLabelText("Chain"), "369");
+    await waitFor(() => expect(screen.queryByText(/Head updates are not listed/)).not.toBeInTheDocument());
+  });
+
+  it("with the indexer down the view shows RPC events and the words Partial history", async () => {
+    const { fetchJson } = indexerFetcher(() => ({ status: 503, body: null }));
+    renderLive(dependenciesWith(fetchJson), { fallback: true });
+    expect(await screen.findByText(/Partial history/)).toBeInTheDocument();
+    await screen.findByRole("table", { name: "History events" });
+    const rows = eventRows();
+    expect(rows).toHaveLength(3);
+    expect(within(rows[0]!).getByText("Slot 4000")).toBeInTheDocument();
+    // The delivery was found, so the send carries its outcome. Without the indexer the page does not guess more.
+    expect(within(rows[2]!).getAllByRole("cell")[4]).toHaveTextContent("Delivered");
+  });
+
+  it("names the filters that the chains cannot apply when it falls back", async () => {
+    const { fetchJson } = indexerFetcher(() => ({ status: 503, body: null }));
+    renderLive(dependenciesWith(fetchJson), { fallback: true });
+    await screen.findByRole("table", { name: "History events" });
+    await userEvent.selectOptions(screen.getByLabelText("Status"), "covered");
+    expect(await screen.findByText(/The chains cannot apply these filters, so they are off: status\./)).toBeInTheDocument();
+  });
+
+  it("says when a send has no known status because its delivery is outside the blocks read", async () => {
+    const { fetchJson } = indexerFetcher(() => ({ status: 503, body: null }));
+    const dependencies: HistoryDependencies = { ...dependenciesWith(fetchJson), createReader: (input) => readerWith(input.chainId === 1 ? firstChainLogs : []) };
+    renderLive(dependencies, { fallback: true });
+    await screen.findByRole("table", { name: "History events" });
+    expect(within(eventRows()[0]!).getByText("Not read from the chains")).toBeInTheDocument();
+  });
+
+  it("shows the problem when neither the indexer nor the chains answer", async () => {
+    const { fetchJson } = indexerFetcher(() => ({ status: 503, body: null }));
+    const dependencies: HistoryDependencies = { ...dependenciesWith(fetchJson), loadPair: async () => null };
+    renderLive(dependencies, { fallback: true });
+    expect(await screen.findByText(/The history did not load: The page has no deployment file/)).toBeInTheDocument();
+    expect(screen.queryByRole("table", { name: "History events" })).not.toBeInTheDocument();
+  });
+
+  it("does not send the form, so pressing Enter keeps the page", async () => {
+    const { fetchJson } = indexerFetcher(() => answer([sentEvent]));
+    renderLive(dependenciesWith(fetchJson));
+    await screen.findByRole("table", { name: "History events" });
+    expect(fireEvent.submit(screen.getByRole("search", { name: "History filters" }))).toBe(false);
+  });
+
+  it("reads the deployment file of the page for the chains when it has no other source of the pair", async () => {
+    const fetchStub = vi.fn(async () => new Response("this is not json", { status: 503 }));
+    vi.stubGlobal("fetch", fetchStub);
+    try {
+      const fake = fakeConnections();
+      const services = liveServices({ fake, variables: LIVE_VARIABLES });
+      fake.made[0]!.run = vi.fn(async (operations) => {
+        try {
+          return await operations.viaIndexer();
+        } catch {
+          return operations.viaRpc();
+        }
+      });
+      renderWithServices(<HistoryView filters={EMPTY_HISTORY_FILTERS} onChange={() => undefined} />, services);
+      expect(await screen.findByText(/The history did not load:/)).toBeInTheDocument();
+      expect(fetchStub).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("says when no event matches", async () => {
+    const { fetchJson } = indexerFetcher(() => answer([]));
+    renderLive(dependenciesWith(fetchJson));
+    expect(await screen.findByText("No events match these filters.")).toBeInTheDocument();
+  });
+
+  it("on a sample page, says that the sample data has no history", () => {
+    renderWithServices(<HistoryView filters={EMPTY_HISTORY_FILTERS} onChange={() => undefined} />);
+    expect(screen.getByText(/the sample data has no history/)).toBeInTheDocument();
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+  });
+});

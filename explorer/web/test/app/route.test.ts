@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { EMPTY_HISTORY_FILTERS } from "../../src/views/history-model";
 import { formatRoute, HOME_ROUTE, parseRoute, routeTitle, type Route } from "../../src/app/route";
 
 const ADDRESS = "0x52908400098527886E0F7030069857D2E4169EE7";
@@ -11,6 +12,20 @@ const routes: readonly Route[] = [
   { name: "audit" },
   { name: "prover" },
   { name: "settings" },
+  { name: "history", filters: EMPTY_HISTORY_FILTERS },
+  { name: "history", filters: { ...EMPTY_HISTORY_FILTERS, chain: 369, eventKind: "sent" } },
+  {
+    name: "history",
+    filters: {
+      ...EMPTY_HISTORY_FILTERS,
+      direction: { sourceChainId: 1, destinationChainId: 369 },
+      statuses: ["covered", "delivered"],
+      from: 5n,
+      to: 9n,
+      limit: 20,
+      cursor: { timestamp: 7n, kind: "sent", key: `0x${"ab".repeat(32)}` },
+    },
+  },
   { name: "docs", slug: null, heading: null },
   { name: "docs", slug: "fees-explained", heading: null },
   { name: "docs", slug: "fees-explained", heading: "the-data-source-line" },
@@ -19,8 +34,19 @@ const routes: readonly Route[] = [
 ];
 
 describe("route", () => {
-  it.each(routes)("survives a round trip through the hash: %j", (route) => {
+  it.each(routes.map((route) => [formatRoute(route), route] as const))("survives a round trip through the hash: %s", (_hash, route) => {
     expect(parseRoute(formatRoute(route))).toEqual(route);
+  });
+
+  it("#/history?chain=369&eventKind=sent round-trips", () => {
+    const route = parseRoute("#/history?chain=369&eventKind=sent");
+    expect(route).toEqual({ name: "history", filters: { ...EMPTY_HISTORY_FILTERS, chain: 369, eventKind: "sent" } });
+    expect(formatRoute(route)).toBe("#/history?chain=369&eventKind=sent");
+  });
+
+  it("opens the history with no filter for an empty or a refused query", () => {
+    expect(formatRoute(parseRoute("#/history"))).toBe("#/history");
+    expect(parseRoute("#/history?chain=eth")).toEqual({ name: "history", filters: EMPTY_HISTORY_FILTERS });
   });
 
   it("falls back to the global view for an empty or unknown hash", () => {
@@ -40,5 +66,6 @@ describe("route", () => {
   it("gives the settings route its own hash and title, so a link opens the connections page", () => {
     expect(formatRoute({ name: "settings" })).toBe("#/settings");
     expect(routeTitle({ name: "settings" })).toBe("Connections");
+    expect(routeTitle({ name: "history", filters: EMPTY_HISTORY_FILTERS })).toBe("History");
   });
 });

@@ -18,6 +18,18 @@ const searchFor = async (text: string) => {
   return input;
 };
 
+describe("the shell: the history page", () => {
+  it("opens the history from the top bar and keeps the filters in the address", async () => {
+    renderPage(<Shell />, { connected: false });
+    await userEvent.click(screen.getByRole("link", { name: "History" }));
+    expect(await screen.findByRole("heading", { name: "History" })).toBeInTheDocument();
+    expect(window.location.hash).toBe("#/history");
+    await userEvent.selectOptions(screen.getByLabelText("Chain"), "369");
+    await waitFor(() => expect(window.location.hash).toBe("#/history?chain=369"));
+    expect(screen.getByLabelText("Chain")).toHaveValue("369");
+  });
+});
+
 describe("the shell: one search field instead of a menu", () => {
   it("has a search button in the top bar and no navigation menu", async () => {
     renderPage(<Shell />, { connected: false });

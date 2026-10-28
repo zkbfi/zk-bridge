@@ -9,6 +9,8 @@ import { AddressView } from "../views/AddressView";
 import { AuditView } from "../views/AuditView";
 import { DocsView } from "../views/DocsView";
 import { GlobalView } from "../views/GlobalView";
+import { HistoryView } from "../views/HistoryView";
+import { EMPTY_HISTORY_FILTERS } from "../views/history-model";
 import { MessageView } from "../views/MessageView";
 import { PairView } from "../views/pair/PairView";
 import { ProverView } from "../views/ProverView";
@@ -57,12 +59,13 @@ const usePaletteShortcuts = (open: () => void): void => {
   }, [open]);
 };
 
-const renderRoute = (route: Route) => {
+const renderRoute = (route: Route, navigate: (next: Route) => void) => {
   if (route.name === "global") return <GlobalView />;
   if (route.name === "pair") return <PairView key={`${route.pairId}-${route.token ?? "all"}`} pairId={route.pairId} initialToken={route.token} />;
   if (route.name === "audit") return <AuditView />;
   if (route.name === "prover") return <ProverView />;
   if (route.name === "settings") return <ConnectionsView />;
+  if (route.name === "history") return <HistoryView filters={route.filters} onChange={(filters) => navigate({ name: "history", filters })} />;
   if (route.name === "docs") return <DocsView slug={route.slug} heading={route.heading} />;
   if (route.name === "address") return <AddressView address={route.address} />;
   return <MessageView messageId={route.messageId} />;
@@ -137,6 +140,11 @@ export const Shell = () => {
               Ctrl K
             </Text>
           </Button>
+          <a href={formatRoute({ name: "history", filters: EMPTY_HISTORY_FILTERS })}>
+            <Text as="span" fontSize="sm" whiteSpace="nowrap">
+              History
+            </Text>
+          </a>
           <SourceBadge />
           <Text fontSize="sm" color="fg.muted" whiteSpace="nowrap" display={{ base: "none", sm: "block" }}>
             {shortAccount(wallet.status === "connected" ? wallet.account : null)}
@@ -152,7 +160,7 @@ export const Shell = () => {
               </Button>
             </Flex>
           )}
-          <Box marginTop="3">{renderRoute(route)}</Box>
+          <Box marginTop="3">{renderRoute(route, navigate)}</Box>
         </Box>
         {paletteOpen ? <CommandPalette recent={recent} walletConnected={wallet.status === "connected"} onSelect={select} onClose={() => setPaletteOpen(false)} /> : null}
         {dialog === null ? null : <ActionDialog dialog={dialog} onClose={() => setDialog(null)} />}

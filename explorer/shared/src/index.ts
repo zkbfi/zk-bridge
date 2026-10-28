@@ -28,6 +28,7 @@ export * from "./token-facts.js";
 export * from "./rpc/chain-reader.js";
 export * from "./rpc/explorer-api.js";
 export * from "./rpc/explorer-state.js";
+export * from "./rpc/history-scan.js";
 export * from "./fallback.js";
 export * from "./connection.js";
 export * from "./history-query.js";

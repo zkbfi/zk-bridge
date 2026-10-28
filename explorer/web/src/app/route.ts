@@ -2,7 +2,9 @@
  * The address of a page. The page keeps its place in the URL hash, so a link opens the same view and the back button
  * works. Parsing and formatting are pure and tested together: every route survives a round trip.
  */
+import type { HistoryFilters } from "@zk-bridge/shared";
 import { getAddress, isAddress, type Address, type Hex } from "viem";
+import { formatHistoryQuery, historyFiltersFromQuery } from "../views/history-model";
 
 /** The place that the page shows. */
 export type Route =
@@ -11,6 +13,7 @@ export type Route =
   | { readonly name: "audit" }
   | { readonly name: "prover" }
   | { readonly name: "settings" }
+  | { readonly name: "history"; readonly filters: HistoryFilters }
   | { readonly name: "docs"; readonly slug: string | null; readonly heading: string | null }
   | { readonly name: "address"; readonly address: Address }
   | { readonly name: "message"; readonly messageId: Hex };
@@ -38,10 +41,17 @@ export const parseRoute = (hash: string): Route => {
   if (head === "audit") return { name: "audit" };
   if (head === "prover") return { name: "prover" };
   if (head === "settings") return { name: "settings" };
+  if (head === "history") return { name: "history", filters: historyFiltersFromQuery(query) };
   if (head === "docs") return { name: "docs", slug: first ?? null, heading: second ?? null };
   if (head === "address" && first !== undefined && isAddress(first, { strict: false })) return { name: "address", address: getAddress(first) };
   if (head === "message" && first !== undefined && MESSAGE_IDENTIFIER.test(first)) return { name: "message", messageId: first.toLowerCase() as Hex };
   return HOME_ROUTE;
+};
+
+/** The `?query` of the history filters, or nothing when no filter is on. */
+const historySuffix = (filters: HistoryFilters): string => {
+  const query = formatHistoryQuery(filters);
+  return query === "" ? "" : `?${query}`;
 };
 
 /**
@@ -54,6 +64,7 @@ export const formatRoute = (route: Route): string => {
   if (route.name === "audit") return "#/audit";
   if (route.name === "prover") return "#/prover";
   if (route.name === "settings") return "#/settings";
+  if (route.name === "history") return `#/history${historySuffix(route.filters)}`;
   if (route.name === "address") return `#/address/${route.address}`;
   if (route.name === "message") return `#/message/${route.messageId}`;
   if (route.name === "pair") return `#/pair/${encodeURIComponent(route.pairId)}${route.token === null ? "" : `?token=${route.token}`}`;
@@ -70,6 +81,7 @@ export const routeTitle = (route: Route): string => {
     audit: "Audit",
     prover: "Prover and costs",
     settings: "Connections",
+    history: "History",
     docs: "Docs",
     address: "Address",
     message: "Transfer or message",
