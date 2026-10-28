@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { escapeHtml, findMalformedGateway, loadLandingState, renderLanding } from "../src/page.ts";
+import { escapeHtml, findMalformedGateway, gatewayLinkList, loadLandingState, renderLanding } from "../src/page.ts";
 import type { LandingConfig, LandingState } from "../src/page.ts";
 import { makeSigner, sampleManifest } from "./helpers.ts";
 
 const gateways = ["https://one.example/ipfs/", "https://two.example/ipfs/", "https://three.example/ipfs/"];
 
-function verified(manifest = sampleManifest, sequenceNote: string | null = null): LandingState {
-  return { kind: "verified", title: "T", manifest, gateways, downloadBaseUrl: "./downloads", sequenceNote };
+function verified(manifest = sampleManifest, sequenceNote: string | null = null, gatewayList: readonly string[] = gateways): LandingState {
+  return { kind: "verified", title: "T", manifest, gateways: gatewayList, downloadBaseUrl: "./downloads", sequenceNote };
 }
 
 test("a failed signature shows the warning and no link", () => {
@@ -121,4 +121,29 @@ test("a malformed gateway shows the failure warning and no link", async () => {
 test("a gateway with another protocol is refused", () => {
   assert.equal(findMalformedGateway(["https://ok.example/ipfs/", "javascript:alert(1)"]), "javascript:alert(1)");
   assert.equal(findMalformedGateway(gateways), null);
+});
+
+test("gateway links prefer subdomain style", () => {
+  const cid = sampleManifest.releases[0].cid;
+  const mixed = ["https://path.example/ipfs/", "https://{cid}.ipfs.sub.example/", "https://other.example/ipfs/"];
+  const links = gatewayLinkList(cid, mixed);
+  assert.deepEqual(links, [
+    { address: `https://${cid}.ipfs.sub.example/`, label: "ipfs.sub.example", sharedOrigin: false },
+    { address: `https://path.example/ipfs/${cid}`, label: "path.example", sharedOrigin: true },
+    { address: `https://other.example/ipfs/${cid}`, label: "other.example", sharedOrigin: true },
+  ]);
+  const html = renderLanding(verified(sampleManifest, null, mixed));
+  assert.ok(html.indexOf(`https://${cid}.ipfs.sub.example/`) < html.indexOf(`https://path.example/ipfs/${cid}`));
+  assert.equal((html.match(/shared origin/g) ?? []).length, 2 * 2);
+});
+
+test("a content address that cannot be a host label gets no subdomain link", () => {
+  const links = gatewayLinkList("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG", ["https://{cid}.ipfs.sub.example/", "https://path.example/ipfs/"]);
+  assert.deepEqual(links.map((link) => link.label), ["path.example"]);
+  assert.deepEqual(gatewayLinkList(`b${"a".repeat(63)}`, ["https://{cid}.ipfs.sub.example/"]), []);
+});
+
+test("a subdomain template passes the gateway check and a bad one does not", () => {
+  assert.equal(findMalformedGateway(["https://{cid}.ipfs.sub.example/"]), null);
+  assert.equal(findMalformedGateway(["ftp://{cid}.ipfs.sub.example/"]), "ftp://{cid}.ipfs.sub.example/");
 });

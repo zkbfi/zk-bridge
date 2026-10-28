@@ -4,6 +4,8 @@
   "signatureUrl": "./version.json.sig",
   "downloadBaseUrl": "./downloads",
   "gateways": [
+    "https://{cid}.ipfs.dweb.link/",
+    "https://{cid}.ipfs.w3s.link/",
     "https://ipfs.io/ipfs/",
     "https://dweb.link/ipfs/",
     "https://w3s.link/ipfs/",

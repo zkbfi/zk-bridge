@@ -4,7 +4,8 @@ import { describeSetting, type ConnectionRuntime } from "@terminal/data/connecti
 import type { PairConfig } from "@terminal/model/types";
 import { normalizeEndpoint, parseConnectionUrl, redactConnectionText, type EndpointKey, type ConnectionSettings, type ResolvedConnection, type ResolvedSetting } from "@zk-bridge/shared";
 import { useServices } from "../app/services";
-import { saveUserConnections, type ConnectionStorage } from "../config/connection-storage";
+import { saveUserConnections, type ConnectionStorage, type SaveReason } from "../config/connection-storage";
+import { originIsShared } from "../config/shared-origin";
 import { browserStorage } from "../search/recent-items";
 import { Field, Notice, Panel, TextInput } from "../ui/primitives";
 
@@ -173,6 +174,20 @@ export const INSECURE_ENDPOINT_WARNING =
 export const STORAGE_WARNING =
   "The browser keeps these URLs in its local storage in clear text. Anyone who can use this browser profile can read them. Use a URL with an API key only if you can replace that key.";
 
+/** What a viewer must know when other sites share the origin of this page, as on a path-style IPFS gateway. */
+export const SHARED_ORIGIN_NOTICE =
+  "This page runs on a path-style gateway, so other sites on the same gateway share its browser storage and could change what it keeps. For that reason the page keeps your settings for this visit only and writes nothing. A gateway with a subdomain for each release, such as https://<content address>.ipfs.<gateway host>/, gives this page its own storage.";
+
+/** What a viewer must know when a URL looks like it holds a key and the page did not write it. */
+export const KEY_LIKE_NOTICE =
+  "A URL that looks like it holds a key was not written to the browser storage, because the storage is clear text. The page uses it until the page closes.";
+
+/** The notice for a save that did not keep everything, or null when nothing needs saying. The shared-origin notice is always on show. */
+const saveNotice = (reason: SaveReason): string | null => {
+  if (reason === "stored" || reason === "shared-origin") return null;
+  return reason === "key-like-url" ? KEY_LIKE_NOTICE : "The browser did not keep your setting. It works only until the page closes.";
+};
+
 /** Props of {@link ConnectionsView}. */
 export type ConnectionsViewProps = {
   /** Replaces the browser storage. Tests use it. */
@@ -182,11 +197,12 @@ export type ConnectionsViewProps = {
 const LiveConnections = ({ runtime, pair, storage }: { readonly runtime: ConnectionRuntime; readonly pair: PairConfig; readonly storage: ConnectionStorage | null }) => {
   const resolved = useSyncExternalStore(runtime.subscribe, runtime.resolved);
   const label = useSyncExternalStore(runtime.subscribe, () => runtime.redact(runtime.source().label));
-  const [storageFailed, setStorageFailed] = useState(false);
+  const [saveReason, setSaveReason] = useState<SaveReason>("stored");
+  const shared = originIsShared(window.location);
   const [checking, setChecking] = useState(false);
 
   const onChange = (next: ConnectionSettings): void => {
-    setStorageFailed(!saveUserConnections(storage, next).saved);
+    setSaveReason(saveUserConnections(storage, next).reason);
     runtime.apply(next);
   };
 
@@ -202,7 +218,8 @@ const LiveConnections = ({ runtime, pair, storage }: { readonly runtime: Connect
   return (
     <Stack gap="3">
       <Notice tone="warning">{STORAGE_WARNING}</Notice>
-      {storageFailed ? <Notice tone="warning">The browser did not keep your setting. It works only until the page closes.</Notice> : null}
+      {shared ? <Notice tone="warning">{SHARED_ORIGIN_NOTICE}</Notice> : null}
+      {saveNotice(saveReason) === null ? null : <Notice tone="warning">{saveNotice(saveReason)}</Notice>}
       <Flex gap="3" alignItems="center" flexWrap="wrap">
         <Text role="status">Using: {label}</Text>
         <Button size="sm" variant="outline" disabled={checking} onClick={() => void checkNow()}>

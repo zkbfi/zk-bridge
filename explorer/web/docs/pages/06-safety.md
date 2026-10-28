@@ -74,6 +74,16 @@ Delivery is final. A failed call is not retried. The bridge has no refund functi
 
 The scan is a guard against mistakes. It prefers a false alarm to a leaked key.
 
+## Shared origin on IPFS gateways
+
+A path-style gateway has addresses like `https://gateway.example/ipfs/<content address>/`. Every site on that gateway shares one browser origin. Another site there could read or change what this app keeps in its local storage. It could point you at a false indexer or node, and then you would see false chain state.
+
+On such a gateway the app keeps your endpoint settings in memory for that visit only. It writes nothing to local storage, and the Connections page tells you so. Your settings are gone when you close the page.
+
+A subdomain-style gateway, such as `https://<content address>.ipfs.<gateway host>/`, gives each release its own origin. Prefer it. The release page lists those links first.
+
+On any address, the app never writes a URL that looks like it holds a key. It uses that URL until you close the page.
+
 ## What you can do
 
 - Start with a small transfer.

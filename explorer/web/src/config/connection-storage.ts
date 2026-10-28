@@ -4,8 +4,14 @@
  * A failed read gives no settings. A failed write returns a result, so the page can warn.
  *
  * The browser keeps these values in clear text. An RPC URL can hold an API key. The settings page says so.
+ *
+ * Two cases keep the settings out of the storage. On a shared origin (a path-style IPFS gateway) other sites can read
+ * and change the storage, so the settings live in memory for the visit only. On any origin, a URL with a key-like
+ * segment is never written, because the storage is clear text.
  */
 import { EMPTY_CONNECTION_SETTINGS, ENDPOINT_KEYS, normalizeEndpoint, parseConnectionUrl, type ConnectionSettings } from "@zk-bridge/shared";
+import { findSecretLikeValues } from "./secret-scan";
+import { originIsShared, type OriginLocation } from "./shared-origin";
 
 /** The part of `Storage` that the connection settings use. */
 export type ConnectionStorage = Pick<Storage, "getItem" | "setItem">;
@@ -13,8 +19,16 @@ export type ConnectionStorage = Pick<Storage, "getItem" | "setItem">;
 /** The key of the settings. */
 export const CONNECTION_STORAGE_KEY = "zk-bridge-explorer.connections";
 
-/** The result of a save. A failed save means that the setting lasts only until the page closes. */
-export type SaveResult = { readonly saved: boolean };
+/**
+ * Why a save kept everything, or not.
+ * `stored`: the browser kept every setting. `no-storage`: the browser refused. `shared-origin`: the page runs on a
+ * path-style gateway, so nothing is written. `key-like-url`: the browser kept the other settings but not a URL that
+ * looks like it holds a key.
+ */
+export type SaveReason = "stored" | "no-storage" | "shared-origin" | "key-like-url";
+
+/** The result of a save. A save that is not `saved` means that a setting lasts only until the page closes. */
+export type SaveResult = { readonly saved: boolean; readonly reason: SaveReason };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -43,14 +57,35 @@ const rpcUrlsOf = (value: unknown): Record<number, string> => {
   );
 };
 
+/** Uses the same scan as the build and the start of the page: one rule for what looks like a key. */
+const keyLike = (url: string): boolean => findSecretLikeValues({ url }).length > 0;
+
+const clearIfKeyLike = (url: string | null | undefined): string | null => (url === null || url === undefined || keyLike(url) ? null : url);
+
+const urlsOf = (settings: ConnectionSettings): readonly string[] => [
+  ...ENDPOINT_KEYS.flatMap((key) => settings[key] ?? []),
+  ...(settings.indexerUrl === null ? [] : [settings.indexerUrl]),
+  ...Object.values(settings.rpcUrls),
+];
+
+/** The settings without the URLs that look like they hold a key. */
+const withoutKeyLikeUrls = (settings: ConnectionSettings): ConnectionSettings => ({
+  ...settings,
+  ...Object.fromEntries(ENDPOINT_KEYS.filter((key) => settings[key] !== undefined).map((key) => [key, clearIfKeyLike(settings[key])])),
+  indexerUrl: clearIfKeyLike(settings.indexerUrl),
+  rpcUrls: Object.fromEntries(Object.entries(settings.rpcUrls).filter(([, url]) => !keyLike(url))),
+});
+
 /**
  * Reads the settings. A missing storage, a throwing storage, broken JSON and a wrong shape all give no settings.
- * A stored URL that does not pass `parseConnectionUrl` is dropped.
+ * A stored URL that does not pass `parseConnectionUrl` is dropped. A shared origin reads nothing, because another
+ * site on the same gateway could have written the value.
  *
  * @param storage The storage, or null when there is none.
+ * @param location The location of the page. It defaults to the location of the window.
  */
-export const loadUserConnections = (storage: ConnectionStorage | null): ConnectionSettings => {
-  if (storage === null) return EMPTY_CONNECTION_SETTINGS;
+export const loadUserConnections = (storage: ConnectionStorage | null, location: OriginLocation = window.location): ConnectionSettings => {
+  if (storage === null || originIsShared(location)) return EMPTY_CONNECTION_SETTINGS;
   try {
     const parsed: unknown = JSON.parse(storage.getItem(CONNECTION_STORAGE_KEY) ?? "null");
     if (!isRecord(parsed)) return EMPTY_CONNECTION_SETTINGS;
@@ -68,17 +103,21 @@ export const loadUserConnections = (storage: ConnectionStorage | null): Connecti
 
 /**
  * Writes the settings. Settings with no URL still write, as an empty record, so a forgotten URL stays forgotten.
+ * A shared origin writes nothing. A URL that looks like it holds a key is left out of the write on any origin.
  *
  * @param storage The storage, or null when there is none.
  * @param settings The settings to keep.
- * @returns Whether the browser kept them.
+ * @param location The location of the page. It defaults to the location of the window.
+ * @returns Whether the browser kept them, and if not, why.
  */
-export const saveUserConnections = (storage: ConnectionStorage | null, settings: ConnectionSettings): SaveResult => {
-  if (storage === null) return { saved: false };
+export const saveUserConnections = (storage: ConnectionStorage | null, settings: ConnectionSettings, location: OriginLocation = window.location): SaveResult => {
+  if (originIsShared(location)) return { saved: false, reason: "shared-origin" };
+  if (storage === null) return { saved: false, reason: "no-storage" };
+  const kept = withoutKeyLikeUrls(settings);
   try {
-    storage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(settings));
-    return { saved: true };
+    storage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(kept));
   } catch {
-    return { saved: false };
+    return { saved: false, reason: "no-storage" };
   }
+  return urlsOf(kept).length === urlsOf(settings).length ? { saved: true, reason: "stored" } : { saved: false, reason: "key-like-url" };
 };

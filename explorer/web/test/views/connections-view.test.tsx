@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ConnectionsView, INSECURE_ENDPOINT_WARNING, STORAGE_WARNING, connectionTargets, withUserUrl, withoutUserUrl } from "../../src/views/ConnectionsView";
+import { ConnectionsView, INSECURE_ENDPOINT_WARNING, KEY_LIKE_NOTICE, SHARED_ORIGIN_NOTICE, STORAGE_WARNING, connectionTargets, withUserUrl, withoutUserUrl } from "../../src/views/ConnectionsView";
 import { CONNECTION_STORAGE_KEY, loadUserConnections } from "../../src/config/connection-storage";
 import { disconnectedWallet, walletWrapper } from "../app/support";
 import { renderPage } from "../render";
@@ -12,7 +12,10 @@ const SECRET = "FAKEKEY1234567890";
 const SECRET_URL = `https://rpc.example.org/v2/${SECRET}`;
 
 beforeEach(() => window.localStorage.clear());
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  window.history.pushState({}, "", "/");
+});
 
 /** Makes `fetch` answer the RPC call with a chain identifier. */
 const stubChain = (chainId: number) => {
@@ -346,5 +349,36 @@ describe("the pure rules of the page", () => {
     expect(withUserUrl(user, indexer!, "https://d.example.org").indexerUrl).toBe("https://d.example.org");
     expect(withoutUserUrl(user, first!).rpcUrls).toEqual({ 369: "https://b.example.org" });
     expect(withoutUserUrl(user, indexer!)).toEqual({ ...user, indexerUrl: null });
+  });
+});
+
+describe("a shared origin and a key-like URL", () => {
+  it("the connections view explains the shared origin", async () => {
+    window.history.pushState({}, "", "/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi/");
+    const { services } = renderLive();
+    expect(screen.getByText(SHARED_ORIGIN_NOTICE)).toBeInTheDocument();
+    expect(SHARED_ORIGIN_NOTICE).toMatch(/for this visit only/);
+    expect(SHARED_ORIGIN_NOTICE).toMatch(/other sites on the same gateway share/);
+    expect(SHARED_ORIGIN_NOTICE).toMatch(/subdomain/);
+    await typeInto("Backend URL", "https://mine.example.org/api");
+    await userEvent.click(region("Backend URL").getByRole("button", { name: "Save" }));
+    await region("Backend URL").findByText("Saved. The page uses this URL now.");
+    expect(window.localStorage.getItem(CONNECTION_STORAGE_KEY)).toBeNull();
+    expect(services.connection?.resolved().backendUrl).toEqual({ value: "https://mine.example.org/api", source: "user" });
+  });
+
+  it("shows no shared-origin notice on an own origin", () => {
+    renderLive();
+    expect(screen.queryByText(SHARED_ORIGIN_NOTICE)).toBeNull();
+  });
+
+  it("says why a key-like endpoint is not kept, and still uses it", async () => {
+    const keyLikeUrl = "https://backend.example.org/3f9a7c1d5e8b2a4f6c0d9e1b7a3c5f8d";
+    const { services } = renderLive();
+    await typeInto("Backend URL", keyLikeUrl);
+    await userEvent.click(region("Backend URL").getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(KEY_LIKE_NOTICE)).toBeInTheDocument();
+    expect(window.localStorage.getItem(CONNECTION_STORAGE_KEY) ?? "").not.toContain("3f9a7c1d5e8b2a4f6c0d9e1b7a3c5f8d");
+    expect(services.connection?.resolved().backendUrl?.source).toBe("user");
   });
 });

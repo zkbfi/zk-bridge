@@ -33,10 +33,50 @@ export function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ESCAPES[character] ?? character);
 }
 
+/** The marker in a subdomain-style gateway, such as `https://{cid}.ipfs.dweb.link/`. */
+export const CID_PLACEHOLDER = "{cid}";
+
+/** The longest label that a host name allows. A longer content address cannot be a subdomain. */
+const MAXIMUM_LABEL_LENGTH = 63;
+
+/** A content address that can be a subdomain: version 1, base32, lower case. */
+const SUBDOMAIN_SAFE_CID = /^b[a-z2-7]+$/;
+
+/** One gateway link: where it goes, what it is called, and whether other sites share its browser origin. */
+export type GatewayLink = { address: string; label: string; sharedOrigin: boolean };
+
+/** Whether a configured gateway is a subdomain-style template. */
+function isSubdomainGateway(gateway: string): boolean {
+  return gateway.includes(CID_PLACEHOLDER);
+}
+
+/** Gives the gateway address a parser can read: the placeholder becomes a plain host label. */
+function parseableGateway(gateway: string): string {
+  return gateway.replace(CID_PLACEHOLDER, "cid");
+}
+
+function gatewayLink(cid: string, gateway: string): GatewayLink | null {
+  if (!isSubdomainGateway(gateway)) {
+    return { address: `${gateway}${cid}`, label: new URL(gateway).host, sharedOrigin: true };
+  }
+  if (!SUBDOMAIN_SAFE_CID.test(cid) || cid.length > MAXIMUM_LABEL_LENGTH) return null;
+  return { address: gateway.replace(CID_PLACEHOLDER, cid), label: new URL(parseableGateway(gateway)).host.replace(/^cid\./, ""), sharedOrigin: false };
+}
+
+/**
+ * Lists the links to one release. Subdomain-style gateways come first, because each release then has its own browser
+ * origin. Path-style gateways follow, marked as shared. A subdomain-style gateway is left out when the content address
+ * cannot be a host label.
+ */
+export function gatewayLinkList(cid: string, gateways: readonly string[]): GatewayLink[] {
+  const links = gateways.flatMap((gateway) => gatewayLink(cid, gateway) ?? []);
+  return [...links.filter((link) => !link.sharedOrigin), ...links.filter((link) => link.sharedOrigin)];
+}
+
 function gatewayLinks(cid: string, gateways: readonly string[]): string {
-  const items = gateways.map((gateway) => {
-    const address = `${gateway}${cid}`;
-    return `<li><a href="${escapeHtml(address)}" rel="noopener">${escapeHtml(new URL(gateway).host)}</a></li>`;
+  const items = gatewayLinkList(cid, gateways).map((link) => {
+    const note = link.sharedOrigin ? " (shared origin: other sites on this gateway share the browser storage of the app)" : "";
+    return `<li><a href="${escapeHtml(link.address)}" rel="noopener">${escapeHtml(link.label)}</a>${escapeHtml(note)}</li>`;
   });
   return `<ul>${items.join("")}</ul>`;
 }
@@ -105,7 +145,7 @@ function describeSequence(check: ReturnType<typeof rememberSequence>): string | 
 export function findMalformedGateway(gateways: readonly string[]): string | null {
   const isWebAddress = (gateway: string): boolean => {
     try {
-      return ["https:", "http:"].includes(new URL(gateway).protocol);
+      return ["https:", "http:"].includes(new URL(parseableGateway(gateway)).protocol);
     } catch {
       return false;
     }
