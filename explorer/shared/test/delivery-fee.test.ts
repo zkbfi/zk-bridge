@@ -4,7 +4,6 @@ import {
   deliveryCostBreakdown,
   deliveryCostWei,
   gasMultiplierOf,
-  proofCostWei,
   senderPriceOfToken,
   suggestFixed,
   suggestGasMultiplier,
@@ -18,26 +17,12 @@ const wei = 10n ** 18n;
 const price = { tokenValueInWei: wei, tokenDecimals: 18 };
 
 describe("the cost of a delivery", () => {
-  it("multiplies gas by the gas price and keeps the proof share as its own line", () => {
-    const breakdown = deliveryCostBreakdown({ deliveryGas: 500_000n, baseFeeWei: 7n, priorityFeeWei: 3n, updateShareGas: 1_000n, proofCostWei: 77n });
-    expect(breakdown).toEqual({ gasCostWei: 501_000n * 10n, proofCostWei: 77n, totalWei: 5_010_077n });
+  it("multiplies gas by the gas price, with no proof share", () => {
+    const breakdown = deliveryCostBreakdown({ deliveryGas: 500_000n, baseFeeWei: 7n, priorityFeeWei: 3n, updateShareGas: 1_000n });
+    expect(breakdown).toEqual({ gasCostWei: 501_000n * 10n, totalWei: 5_010_000n });
     expect(deliveryCostWei({ deliveryGas: 1n, baseFeeWei: 1n, priorityFeeWei: 0n })).toBe(1n);
   });
 
-  it("converts the dollar cost of a proof to wei with exact math, rounded up", () => {
-    // 0.02 dollars at 2,000 dollars a coin is 0.00001 coin.
-    expect(proofCostWei({ proofCostUsd: "0.02", nativeCoinPriceUsd: "2000" })).toBe(10n ** 13n);
-    // Split over three deliveries, the share rounds up so the runner is never short.
-    expect(proofCostWei({ proofCostUsd: "0.02", nativeCoinPriceUsd: "2000", deliveriesPerProof: 3 })).toBe(3_333_333_333_334n);
-    // A coin worth a hundred-thousandth of a dollar: no floating point error at this scale.
-    expect(proofCostWei({ proofCostUsd: "0.02", nativeCoinPriceUsd: "0.00001" })).toBe(2_000n * wei);
-  });
-
-  it("refuses a missing price or a bad split", () => {
-    expect(() => proofCostWei({ proofCostUsd: "0.02", nativeCoinPriceUsd: "0" })).toThrow(RangeError);
-    expect(() => proofCostWei({ proofCostUsd: "0.02", nativeCoinPriceUsd: "1", deliveriesPerProof: 0 })).toThrow(RangeError);
-    expect(() => proofCostWei({ proofCostUsd: "abc", nativeCoinPriceUsd: "1" })).toThrow();
-  });
 
   it("refuses a negative input", () => {
     expect(() => deliveryCostWei({ deliveryGas: -1n, baseFeeWei: 1n, priorityFeeWei: 0n })).toThrow(RangeError);

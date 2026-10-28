@@ -1,7 +1,6 @@
 import { getAbiItem, toEventSelector, type Address, type Hex } from "viem";
 import { messageBridgeAbi } from "./abis/index.js";
 import type { DeliveryCostReport, DeliveryKind, DeliveryKindReport } from "./delivery-cost-report.js";
-import { proofCostWei } from "./delivery-fee.js";
 import type { DeliveryCostSettings } from "./delivery-cost-settings.js";
 
 /** The topic of the `AffirmationCompleted` event of the bridge, taken from the interface. */
@@ -125,28 +124,12 @@ const kindReport = (samples: readonly bigint[], defaultGas: bigint): DeliveryKin
  */
 export const buildDeliveryCostReport = (input: BuildReportInput): DeliveryCostReport => {
   const { settings, baseFee } = input;
-  const nativeCoinPriceUsd = settings.nativeCoinPriceUsdByChain[input.chainId] ?? null;
-  const wei =
-    nativeCoinPriceUsd === null
-      ? null
-      : proofCostWei({
-          proofCostUsd: settings.proofCostUsd,
-          nativeCoinPriceUsd,
-          deliveriesPerProof: settings.deliveriesPerProof,
-        }).toString();
   return {
     chainId: input.chainId,
     baseFee: {
       wei: baseFee?.baseFeePerGas?.toString() ?? null,
       blockNumber: baseFee === null ? null : Number(baseFee.blockNumber),
       timestamp: baseFee === null ? null : Number(baseFee.timestamp),
-    },
-    proofCost: {
-      usd: settings.proofCostUsd,
-      nativeCoinPriceUsd,
-      deliveriesPerProof: settings.deliveriesPerProof,
-      wei,
-      isEstimate: true,
     },
     kinds: {
       token_callback: kindReport(input.samples.token_callback, settings.defaultGas),

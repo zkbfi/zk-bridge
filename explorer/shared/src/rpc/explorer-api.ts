@@ -126,7 +126,7 @@ export const createRpcExplorerApi = (options: RpcExplorerApiOptions): RpcExplore
   const { pair } = options;
   const redact = options.redact ?? ((text: string) => text);
   const nowSeconds = options.nowSeconds ?? (() => Math.floor(Date.now() / 1000));
-  const deliveryCost = options.deliveryCost ?? parseDeliveryCostSettings({}, pair.sides.map((side) => side.chainId));
+  const deliveryCost = options.deliveryCost ?? parseDeliveryCostSettings({});
   const lookupHints = new Map<Hex, { readonly chainId: number; readonly blockNumber: bigint }>();
 
   const coverageOf = (snapshot: Snapshot, partial: readonly PartialFigure[]): RpcCoverage => ({

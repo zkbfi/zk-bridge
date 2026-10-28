@@ -287,7 +287,7 @@ describe("light client updates", () => {
 describe("delivery cost", () => {
   it("uses the settings that the caller gives for the default gas", async () => {
     const { parseDeliveryCostSettings } = await import("../src/index.js");
-    const harness = createRpcHarness({ api: { deliveryCost: parseDeliveryCostSettings({ EXPLORER_DEFAULT_DELIVERY_GAS: "123456" }, [1, 369]) } });
+    const harness = createRpcHarness({ api: { deliveryCost: parseDeliveryCostSettings({ EXPLORER_DEFAULT_DELIVERY_GAS: "123456" }) } });
     expect((await harness.body("/api/delivery-cost?chainId=1")).kinds.token.defaultGas).toBe("123456");
   });
 

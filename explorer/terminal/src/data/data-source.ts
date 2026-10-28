@@ -42,7 +42,7 @@ export interface DataSource {
   /** The tokens that the bridge has seen, on both chains. */
   listTokens(pairId: string): Promise<readonly TokenInfo[]>
   /**
-   * What a delivery costs on one chain: the gas of recent deliveries, the base fee now and the proof cost. The
+   * What a delivery costs on one chain: the gas of recent deliveries, and the base fee now. The
    * "Pay for delivery" form reads it to suggest a fee.
    */
   getDeliveryCost(chainId: number): Promise<DeliveryCostReport>

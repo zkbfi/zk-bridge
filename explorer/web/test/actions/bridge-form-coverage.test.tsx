@@ -54,10 +54,10 @@ describe("the tip fields of each mode", () => {
     await userEvent.type(screen.getByLabelText(/^Amount to send/), "250");
     await userEvent.click(screen.getByRole("radio", { name: /Gas based, up to the limit/ }));
     const multiplier = screen.getByLabelText("Gas multiplier");
-    expect(multiplier).toHaveValue("2");
+    expect(multiplier).toHaveValue("1");
     await userEvent.clear(multiplier);
-    await userEvent.type(multiplier, "1.5");
-    expect(multiplier).toHaveValue("1.5");
+    await userEvent.type(multiplier, "0.7");
+    expect(multiplier).toHaveValue("0.7");
   });
 
   it("edits the price of the coin, and the field keeps what the user typed", async () => {

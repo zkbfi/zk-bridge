@@ -51,9 +51,6 @@ curl -s 'localhost:42069/api/feed?status=sent,covered&limit=20'
 | `EXPLORER_TIP_INTERVAL_BLOCKS` | Blocks between two clock updates. | 5 |
 | `EXPLORER_DELIVERY_SAMPLE_LIMIT` | How many of the newest recorded deliveries of each kind feed `/api/delivery-cost`. | 200 |
 | `EXPLORER_DEFAULT_DELIVERY_GAS` | Gas that `/api/delivery-cost` gives for a kind with no samples. The default is the Foundry measured sum: the delivery router delivery call with the gas based fee (about 197807 gas, `test/hardened/mediator/DeliveryRouterGas.t.sol`), plus the bridge proof check (290655 gas, `test/hardened/MessageBridgeGas.t.sol`), plus 21000 gas of transaction base. That sum is 509462. The default rounds it up to 550000 for calldata. | 550000 |
-| `EXPLORER_PROOF_COST_USD` | The cost of one proof, in US dollars, as a decimal text. | 0.02 |
-| `EXPLORER_DELIVERIES_PER_PROOF` | How many deliveries one proof covers. | 1 |
-| `EXPLORER_NATIVE_COIN_PRICE_USD_<chainId>` | The price of the native coin of that chain in US dollars, as a decimal text. Without it, `proofCost.wei` is null. | none |
 | `DATABASE_URL` | Postgres connection string. Without it, Ponder uses its embedded PGlite database in `.ponder/pglite`. | PGlite |
 | `PORT` / `--port` | HTTP port. | 42069 |
 
@@ -163,7 +160,6 @@ An item:
 {
   "chainId": 369,
   "baseFee": { "wei": "2000000000", "blockNumber": 25000000, "timestamp": 1760000000 },
-  "proofCost": { "usd": "0.02", "nativeCoinPriceUsd": "0.00005", "deliveriesPerProof": 1, "wei": "400000000000000000000", "isEstimate": true },
   "kinds": {
     "token_callback": { "sampleCount": 0, "averageGas": null, "p90Gas": null, "defaultGas": "550000", "isDefault": true },
     "token": { "sampleCount": 12, "averageGas": "301220", "p90Gas": "310004", "defaultGas": "550000", "isDefault": false },

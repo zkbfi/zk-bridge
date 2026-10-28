@@ -57,12 +57,12 @@ describe("the bridge form: the tip before any signature", () => {
     expect(screen.queryByText(/Bridge fee/)).toBeNull();
   });
 
-  it("turns the tip on by default as the gas based tip with a margin of 100 percent, and shows the limit as the price ceiling", async () => {
+  it("turns the tip on by default as the gas based tip equal to the measured cost, and shows the limit as the price ceiling", async () => {
     await renderForm();
     await typeAmount("250");
     await typePrice();
     expect(screen.getByRole("radio", { name: /Gas based, up to the limit/ })).toBeChecked();
-    expect(screen.getByLabelText("Gas multiplier")).toHaveValue("2");
+    expect(screen.getByLabelText("Gas multiplier")).toHaveValue("1");
     expect(screen.getByLabelText("Ceiling base fee (gwei)")).toHaveValue("");
     expect(screen.getByTestId("gas-mode-help")).toHaveTextContent(GAS_MODE_HELP);
     const quote = await screen.findByTestId("delivery-quote");
@@ -100,8 +100,9 @@ describe("the bridge form: the tip before any signature", () => {
     await userEvent.type(screen.getByLabelText(/^Your coin price \(zkbUSDC for one PLS\)/), "3000");
     const quote = await screen.findByTestId("delivery-quote");
     const table = await within(quote).findByRole("table", { name: "Cost breakdown of the delivery" });
-    for (const line of ["Gas cost", "Proof cost", "Margin"]) expect(within(table).getByText(new RegExp(line))).toBeInTheDocument();
-    expect(within(table).getAllByText(/PLS on PulseChain$/).length).toBe(3);
+    for (const line of ["Gas cost", "Margin"]) expect(within(table).getByText(new RegExp(line))).toBeInTheDocument();
+    expect(within(table).queryByText(/Proof cost/)).toBeNull();
+    expect(within(table).getAllByText(/PLS on PulseChain$/).length).toBe(2);
     expect(screen.getByTestId("delivery-data-source")).toHaveTextContent("measured from 40 recent deliveries, p90");
     expect(screen.getByTestId("delivery-data-source")).toHaveTextContent(/base fee 7 gwei at block 21000000/);
   });
@@ -113,11 +114,38 @@ describe("the bridge form: the tip before any signature", () => {
     expect(await screen.findByTestId("delivery-data-source")).toHaveTextContent("default, no deliveries measured yet");
   });
 
-  it("warns that the proof cost is left out when the indexer has no coin price", async () => {
-    await renderForm({ report: { proofCostWei: null } });
+  it("the fee section shows the range as low, suggested and high, editable", async () => {
+    await renderForm();
     await typeAmount("250");
     await typePrice();
-    expect(await screen.findByText(/no price of the native coin, so the proof cost is left out/)).toBeInTheDocument();
+    const range = await screen.findByTestId("tip-range");
+    const low = within(range).getByTestId("tip-range-low");
+    const suggested = within(range).getByTestId("tip-range-default");
+    const high = within(range).getByTestId("tip-range-high");
+    expect(low).toHaveTextContent(/^Low: /);
+    expect(suggested).toHaveTextContent(/^Suggested: /);
+    expect(high).toHaveTextContent(/^High: /);
+    expect(suggested).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(low);
+    expect(screen.getByLabelText("Gas multiplier")).toHaveValue("0.5");
+    expect(low).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(high);
+    expect(screen.getByLabelText("Gas multiplier")).toHaveValue("1.5");
+    // The user can type any multiplier by hand, below the cost included.
+    await userEvent.clear(screen.getByLabelText("Gas multiplier"));
+    await userEvent.type(screen.getByLabelText("Gas multiplier"), "0.1");
+    expect(screen.getByLabelText("Gas multiplier")).toHaveValue("0.1");
+    expect(range).toHaveTextContent(/voluntary|any tip from zero up/i);
+  });
+
+  it("says in the fee section that a tip is voluntary and buys no promise, and never names proving", async () => {
+    await renderForm();
+    await typeAmount("250");
+    await typePrice();
+    const section = await screen.findByTestId("delivery-quote");
+    const fieldset = section.closest("fieldset");
+    expect(fieldset).toHaveTextContent(/voluntary and it buys no promise/);
+    expect(fieldset?.textContent ?? "").not.toMatch(/proof|prover|proving/i);
   });
 
   it("edits the percentage, and the tip follows", async () => {

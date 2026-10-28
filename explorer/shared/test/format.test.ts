@@ -30,6 +30,9 @@ describe("parseTokenAmount", () => {
     expect(parseTokenAmount("1.5", 6)).toBe(1_500_000n);
     expect(formatTokenAmount(parseTokenAmount("0.000000000000000001", 18), 18)).toBe("0.000000000000000001");
   });
+  it("reads a whole number with no fraction", () => {
+    expect(parseTokenAmount("2", 6)).toBe(2_000_000n);
+  });
   it("refuses more fraction digits than the token has", () => {
     expect(() => parseTokenAmount("1.1234567", 6)).toThrow(/fraction digits/);
   });

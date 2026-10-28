@@ -8,4 +8,3 @@ process.env.EXPLORER_DEPLOYMENT_FILE = fileURLToPath(new URL("./deployment-with-
 process.env.EXPLORER_RPC_URL_1 = "http://127.0.0.1:1";
 process.env.EXPLORER_RPC_URL_369 = "http://127.0.0.1:369";
 process.env.EXPLORER_BEACON_URL_1 = "http://127.0.0.1:5052";
-process.env.EXPLORER_NATIVE_COIN_PRICE_USD_369 = "0.00005";

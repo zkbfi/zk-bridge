@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { parseDeliveryCostReport, type DeliveryCostReport } from "../src/delivery-cost-report.js";
-import { buildFeeSuggestions, DEFAULT_GAS_MARGIN, describeDataSource, describeFee, gasPriceBasisFor } from "../src/delivery-suggestion.js";
+import { buildFeeSuggestions, DEFAULT_GAS_MARGIN, describeDataSource, describeFee, gasPriceBasisFor, SUGGESTED_TIP_RANGE, suggestedTipRange, tipVersusCost } from "../src/delivery-suggestion.js";
+import { minimumGasLimitOf, requiredDeliveryGas } from "../src/gas-limit.js";
+import { expectedFee, TOKEN_GAS_OVERHEAD } from "../src/delivery-terms.js";
 import { EXCLUDE_PRIORITY, FIXED_FEE, UNWRAP } from "../src/delivery-terms.js";
 
 const recipient = "0x00000000000000000000000000000000000000aa" as const;
@@ -20,7 +22,6 @@ const report = (overrides: Partial<DeliveryCostReport> = {}): DeliveryCostReport
   parseDeliveryCostReport({
     chainId: 369,
     baseFee: { wei: "10000000000", blockNumber: 12, timestamp: 1_790_000_000 },
-    proofCost: { usd: "0.02", nativeCoinPriceUsd: "0.00002", deliveriesPerProof: 1, wei: (10n ** 21n).toString(), isEstimate: true },
     kinds: {
       token_callback: kind({ sampleCount: 40, averageGas: "480000", p90Gas: "520000", isDefault: false }),
       token: kind(),
@@ -68,28 +69,21 @@ describe("the suggestions", () => {
     expect(suggestions.fixed.description.certaintyLabel).toBe("exact");
     const gas = suggestions.gasMultiplier.description;
     expect(gas.certainty).toBe("estimate");
-    expect(gas.certaintyLabel).toBe("estimate, at most 0.0248 WPLS");
+    expect(gas.certaintyLabel).toBe("estimate, at most 0.0124 WPLS");
     expect(gas.amountText.startsWith("about ")).toBe(true);
     expect(gas.nowUnits).toBeLessThanOrEqual(gas.maximumUnits);
   });
 
-  it("lists the gas cost, the proof cost and the margin as separate lines, all estimates", () => {
+  it("lists the gas cost and the margin as separate lines, all estimates, with no proof line", () => {
     const suggestions = buildFeeSuggestions({ ...base, report: report() });
     if (suggestions.percentage.kind !== "available") throw new Error("available");
     const lines = suggestions.percentage.description.breakdown;
-    expect(lines.map((line) => line.id)).toEqual(["gas", "proof", "margin"]);
+    expect(lines.map((line) => line.id)).toEqual(["gas", "margin"]);
     expect(lines.every((line) => line.certainty === "estimate")).toBe(true);
     expect(lines[0]?.amountWei).toBe(520_000n * 10_000_000_000n);
-    expect(lines[1]?.amountWei).toBe(10n ** 21n);
     // The fee covers the cost, so the margin is not negative.
-    expect(lines[2]?.amountWei).toBeGreaterThanOrEqual(0n);
-  });
-
-  it("leaves the proof cost out and says so when no native coin price is configured", () => {
-    const noPrice = report({ proofCost: { usd: "0.02", nativeCoinPriceUsd: null, deliveriesPerProof: 1, wei: null, isEstimate: true } });
-    const suggestions = buildFeeSuggestions({ ...base, report: noPrice });
-    expect(suggestions.proofCostMissing).toBe(true);
-    expect(suggestions.cost.proofCostWei).toBe(0n);
+    expect(lines[1]?.amountWei).toBeGreaterThanOrEqual(0n);
+    expect(suggestions.cost.totalWei).toBe(suggestions.cost.gasCostWei);
   });
 
   it("explains an unavailable suggestion instead of throwing", () => {
@@ -106,19 +100,19 @@ describe("a gas based fee and the unit of the token", () => {
   it("is available for a token that is not the native coin, priced in token units from the sender's price", () => {
     const suggestions = buildFeeSuggestions({ ...base, transferValue: 10n ** 16n, token: stable, report: report() });
     if (suggestions.gasMultiplier.kind !== "available") throw new Error("available");
-    // One USDC unit is worth 5e14 / 1e6 = 5e8 wei, so one wei is 1 / 5e8 units. The default margin is 100 percent, a factor of 2.
-    expect(suggestions.gasMultiplier.director.multiplier).toBe((2n * 10n ** 18n) / (5n * 10n ** 8n));
+    // One USDC unit is worth 5e14 / 1e6 = 5e8 wei, so one wei is 1 / 5e8 units. The default margin is 1, the measured cost itself.
+    expect(suggestions.gasMultiplier.director.multiplier).toBe((10n ** 18n) / (5n * 10n ** 8n));
     expect(suggestions.gasMultiplier.description.certainty).toBe("estimate");
     expect(suggestions.gasMultiplier.description.certaintyLabel).toMatch(/^estimate, at most [\d.]+ USDC$/);
     expect(suggestions.percentage.kind).toBe("available");
   });
 
   it("uses the price that the sender gives instead of the valuation of the token", () => {
-    // The sender says one wei is worth 1 / 10^9 unit, so the multiplier is 2e18 / 1e9 = 2e9.
+    // The sender says one wei is worth 1 / 10^9 unit, so the multiplier is 1e18 / 1e9 = 1e9.
     const senderPrice = { numerator: 1n, denominator: 10n ** 9n };
     const suggestions = buildFeeSuggestions({ ...base, transferValue: 10n ** 16n, token: stable, report: report(), senderPrice });
     if (suggestions.gasMultiplier.kind !== "available") throw new Error("available");
-    expect(suggestions.gasMultiplier.director.multiplier).toBe(2_000_000_000n);
+    expect(suggestions.gasMultiplier.director.multiplier).toBe(1_000_000_000n);
   });
 });
 
@@ -176,6 +170,10 @@ describe("the payout kind", () => {
 });
 
 describe("an error that is not a range error", () => {
+  it("is not hidden as an unavailable tip range either", () => {
+    expect(() => suggestedTipRange({ ...base, senderPrice: {} as never, report: report() })).toThrow(TypeError);
+  });
+
   it("is not hidden as an unavailable suggestion, because it is a bug and not a bad input", () => {
     expect(() => buildFeeSuggestions({ ...base, senderPrice: {} as never, report: report() })).toThrow(TypeError);
   });
@@ -199,7 +197,82 @@ describe("the gas price basis of the default gas based tip", () => {
     expect(none.gasMultiplier.director.limit).toBeGreaterThan(reported.gasMultiplier.director.limit);
   });
 
-  it("has a default margin of 100 percent", () => {
-    expect(DEFAULT_GAS_MARGIN).toBe(2n * 10n ** 18n);
+  it("has a default margin of 1: the tip equals the cost", () => {
+    expect(DEFAULT_GAS_MARGIN).toBe(10n ** 18n);
+  });
+});
+
+describe("the suggested tip range", () => {
+  const rangeInput = { ...base, report: report() };
+
+  it("the default tip equals the measured gas cost at the base fee, with no proof share", () => {
+    const range = suggestedTipRange(rangeInput);
+    const source = describeDataSource(report(), "token_callback");
+    const { fee } = expectedFee(range.default, { value: base.transferValue, gasUsed: source.gas, baseFeeWei: source.baseFeeWei, priorityFeeWei: 0n, payout: "token" });
+    // The router adds its own overhead to the measured gas. The tip is exactly that gas at the base fee, with no further share.
+    expect(fee).toBe((source.gas + TOKEN_GAS_OVERHEAD) * source.baseFeeWei);
+  });
+
+  it("the range is half to one and a half times the cost", () => {
+    expect(SUGGESTED_TIP_RANGE).toEqual({ low: 5n * 10n ** 17n, high: 15n * 10n ** 17n });
+    const range = suggestedTipRange(rangeInput);
+    expect(range.low.multiplier * 2n).toBe(range.default.multiplier);
+    expect(range.high.multiplier * 2n).toBe(range.default.multiplier * 3n);
+  });
+
+  it("follows a change of the margin of the middle of the range, not the ends", () => {
+    const range = suggestedTipRange({ ...rangeInput, gasMargin: 2n * 10n ** 18n });
+    expect(range.default.multiplier).toBe(2n * suggestedTipRange(rangeInput).default.multiplier);
+    expect(range.low.multiplier).toBe(suggestedTipRange(rangeInput).low.multiplier);
+  });
+
+  it("is part of the suggestions, and is unavailable with a reason when the price is bad", () => {
+    const suggestions = buildFeeSuggestions(rangeInput);
+    if (suggestions.tipRange.kind !== "available") throw new Error("available");
+    expect(suggestions.tipRange.default.director).toEqual(suggestedTipRange(rangeInput).default);
+    expect(suggestions.tipRange.default.description.mode).toBe("gas");
+    const bad = buildFeeSuggestions({ ...rangeInput, senderPrice: { numerator: 0n, denominator: 1n } });
+    expect(bad.tipRange.kind).toBe("unavailable");
+    // A margin of zero spoils only the middle of the range, and the whole range says so.
+    const spoiled = buildFeeSuggestions({ ...rangeInput, gasMargin: 0n });
+    expect(spoiled.tipRange).toEqual({ kind: "unavailable", reason: "the margin must be above zero" });
+  });
+
+  it("prices a kind with no measure at the gas that a delivery must supply, when that is more than the configured default", () => {
+    const source = describeDataSource(report(), "token_callback");
+    expect(source.kind).toBe("measured");
+    const unmeasured = describeDataSource(report({ kinds: { token_callback: kind(), token: kind(), message: kind() } }), "token_callback");
+    expect(unmeasured.gas).toBe(requiredDeliveryGas(minimumGasLimitOf({ kind: "token-release", withCall: true })));
+    expect(describeDataSource(report(), "message").gas).toBe(550_000n);
+  });
+});
+
+describe("a tip against the cost", () => {
+  it("refuses a negative tip or cost", () => {
+    expect(() => tipVersusCost({ tipWei: -1n, costWei: 0n })).toThrow(RangeError);
+    expect(() => tipVersusCost({ tipWei: 0n, costWei: -1n })).toThrow(RangeError);
+  });
+
+  it("a tip of zero is allowed and described as below cost", () => {
+    const zero = tipVersusCost({ tipWei: 0n, costWei: 100n });
+    expect(zero.position).toBe("below-cost");
+    expect(zero.shortfallWei).toBe(100n);
+    expect(zero.words).toContain("below the cost");
+    expect(zero.words).toContain("still works");
+  });
+
+  it("tells a covering tip and a tip above cost apart", () => {
+    expect(tipVersusCost({ tipWei: 100n, costWei: 100n }).position).toBe("covers-cost");
+    expect(tipVersusCost({ tipWei: 101n, costWei: 100n }).position).toBe("above-cost");
+    expect(tipVersusCost({ tipWei: 101n, costWei: 100n }).shortfallWei).toBe(0n);
+  });
+
+  it("describes a zero fixed tip with a negative margin line", () => {
+    const description = describeFee(
+      { recipient, settings: FIXED_FEE, limit: 0n, multiplier: 0n },
+      { transferValue: 1_000n, token, gasUsed: 100n, baseFeeWei: 1n, priorityFeeWei: 0n, cost: { gasCostWei: 100n, totalWei: 100n } },
+    );
+    expect(description.nowUnits).toBe(0n);
+    expect(description.breakdown.find((line) => line.id === "margin")?.amountWei).toBe(-100n);
   });
 });

@@ -7,10 +7,7 @@ import { buildDeliveryCostReport, classifyDelivery, parseDeliveryCostSettings, t
 import { pair } from "../../lib/pair";
 
 /** The settings are read once. A malformed variable stops the process at start. */
-const settings = parseDeliveryCostSettings(
-  env,
-  pair.sides.map((side) => side.chainId),
-);
+const settings = parseDeliveryCostSettings(env);
 
 /**
  * The SQL condition of each kind. `classifyDelivery` states the same rules, and the route checks every row against it.
@@ -48,7 +45,7 @@ const newestSamples = async (chainId: number, kind: DeliveryKind): Promise<bigin
 
 /**
  * Registers `GET /api/delivery-cost?chainId=`. The answer is the report of `@zk-bridge/shared`: measured gas by kind of
- * delivery, the latest base fee and the configured proof cost.
+ * delivery, the latest base fee. It holds no proof cost: a tip does not pay for proving.
  *
  * @param app The Hono application.
  */

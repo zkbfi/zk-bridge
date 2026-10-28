@@ -68,7 +68,7 @@ describe('the default tip of the form', () => {
     expect(feeFormModeOf({})).toBe('gas')
     expect(feeFormModeOf({ feeMode: 'gibberish' })).toBe('gas')
     for (const mode of ['percentage', 'fixed', 'custom'] as const) expect(feeFormModeOf({ feeMode: mode })).toBe(mode)
-    expect(DEFAULT_GAS_MULTIPLIER_TEXT).toBe('2')
+    expect(DEFAULT_GAS_MULTIPLIER_TEXT).toBe('1')
   })
 
   test('a chain that reports a base fee gets the gas mode with the base fee flag and no notice', () => {
@@ -84,24 +84,24 @@ describe('the default tip of the form', () => {
     expect(modelOf(defaultValues, { pair: noBaseFeePair }).notice).toBe('Binary Smart Chain reports no base fee, so the tip reads the whole gas price.')
   })
 
-  test('the multiplier is the price of one wei in base units, times 2, times 1e18, rounded up', () => {
+  test('the multiplier is the price of one wei in base units, times 1, times 1e18, rounded up', () => {
     const { multiplier } = directorOf(defaultValues)
-    expect(multiplier).toBe(ceilingDivide(10n ** 6n * 2n * 10n ** 18n, TOKEN_VALUE_IN_WEI))
-    expect(DEFAULT_GAS_MARGIN).toBe(2n * 10n ** 18n)
+    expect(multiplier).toBe(ceilingDivide(10n ** 6n * 10n ** 18n, TOKEN_VALUE_IN_WEI))
+    expect(DEFAULT_GAS_MARGIN).toBe(10n ** 18n)
   })
 
   test('a price that does not divide evenly rounds the multiplier up, never down', () => {
     const odd = { [zkUsdc.address.toLowerCase()]: 300_000_000_000_001n }
     const { multiplier } = directorOf(defaultValues, { valuations: odd })
-    expect(multiplier).toBe(ceilingDivide(10n ** 6n * 2n * 10n ** 18n, 300_000_000_000_001n))
-    expect(multiplier * 300_000_000_000_001n).toBeGreaterThan(10n ** 6n * 2n * 10n ** 18n)
+    expect(multiplier).toBe(ceilingDivide(10n ** 6n * 10n ** 18n, 300_000_000_000_001n))
+    expect(multiplier * 300_000_000_000_001n).toBeGreaterThan(10n ** 6n * 10n ** 18n)
   })
 
   test('the price that the sender types replaces the valuation', () => {
     // 2500 whole tokens for one coin: 2,500e6 base units for 1e18 wei.
     const typed = { ...defaultValues, feeSenderPrice: '2500' }
     for (const valuations of [priced, {}]) {
-      expect(directorOf(typed, { valuations }).multiplier).toBe(ceilingDivide(2_500n * 10n ** 6n * 2n * 10n ** 18n, 10n ** 18n))
+      expect(directorOf(typed, { valuations }).multiplier).toBe(ceilingDivide(2_500n * 10n ** 6n * 10n ** 18n, 10n ** 18n))
     }
   })
 
@@ -169,7 +169,7 @@ describe('refilling the gas fields', () => {
 
   test('entering the form with the default mode fills the multiplier, the ceiling and the price', () => {
     const next = refillDeliveryFee({ ...entered, delivery: 'no' }, entered, context)
-    expect(next.feeMultiplier).toBe('2')
+    expect(next.feeMultiplier).toBe('1')
     expect(next.feeCeilingGwei).toBe('14')
     expect(next.feeSenderPrice).toBe('2500')
   })
@@ -185,7 +185,7 @@ describe('refilling the gas fields', () => {
   test('changing the token starts the gas numbers over', () => {
     const typed = { ...entered, feeMultiplier: '3', feeCeilingGwei: '20', feeSenderPrice: '1' }
     const next = refillDeliveryFee(typed, { ...typed, token: `second:${zkUsdc.address}` }, { stateFor: () => stateOf(typed) })
-    expect(next.feeMultiplier).toBe('2')
+    expect(next.feeMultiplier).toBe('1')
     expect(next.feeCeilingGwei).toBe('14')
   })
 })
@@ -208,7 +208,7 @@ describe('the words of the gas mode', () => {
     const text = panelText(defaultValues)
     expect(text).toContain(`Tip mode        ${GAS_MODE_SHORT_LABEL}`)
     expect(text).toMatch(/Limit {11}[\d.]+ zkbUSDC \(price ceiling: the most the tip can be\)/)
-    expect(text).toContain('proof ')
+    expect(text).not.toContain('proof')
   })
 
   test('the panel shows the notice for a chain with no base fee and for a missing price', () => {

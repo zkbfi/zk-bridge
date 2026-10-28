@@ -32,10 +32,13 @@ describe('the live panel of the bridge form', () => {
         'Router          0x0000000000000000000000000000000000000Aa2 (the default delivery router)',
         'Gas             210000 gas, measured from 40 recent deliveries, p90',
         'Base fee        7 gwei at block 21000000 (2026-10-25T11:59:48.000Z)',
-        'Cost            gas 0.00168 PLS + proof 0.000008 PLS + margin -0.00164804 PLS',
-        'Percentage      4.642 zkbUSDC (exact)  (4.6466466466466467 percent of the transfer)',
-        'Fixed           4.642 zkbUSDC (exact)  (a fixed amount)',
-        "Gas multiplier  about 10.85 zkbUSDC now (estimate, at most 21.7 zkbUSDC)  (the gas that the deliverer's transaction makes available times the gas price, at 0.000000005 token units for each wei (your price and margin), never above the limit. Expect the tip to reach the limit)",
+        'Cost            gas 0.00168 PLS + margin -0.00164004 PLS',
+        'Tip range       low 2.7125 zkbUSDC, suggested 5.425 zkbUSDC, high 8.1375 zkbUSDC',
+        'The suggested tips are a low range: half, one and a half times, and the measured gas cost of a delivery at the base fee. You may set any tip from zero up. A tip below the cost is allowed.',
+        'A tip goes to the reward address of the delivery router. It is voluntary and it buys no promise. A low tip, or no tip, never makes a delivery fail.',
+        'Percentage      4.62 zkbUSDC (exact)  (4.6246246246246247 percent of the transfer)',
+        'Fixed           4.62 zkbUSDC (exact)  (a fixed amount)',
+        "Gas multiplier  about 5.425 zkbUSDC now (estimate, at most 10.85 zkbUSDC)  (the gas that the deliverer's transaction makes available times the gas price, at 0.0000000025 token units for each wei (your price and margin), never above the limit. Expect the tip to reach the limit)",
         'Tip mode        percentage of the transfer',
         'Your tip        0.0999 zkbUSDC (exact)',
         'At most         0.0999 zkbUSDC',
@@ -45,14 +48,19 @@ describe('the live panel of the bridge form', () => {
 
   test('a default data source says that no deliveries are measured', () => {
     const empty = { ...report, kinds: { ...report.kinds, token_callback: { sampleCount: 0, averageGas: null, p90Gas: null, defaultGas: '300000', isDefault: true } } }
-    expect(panel({ report: empty })).toContain('Gas             300000 gas, default, no deliveries measured yet')
+    expect(panel({ report: empty })).toContain('Gas             1115874 gas, default, no deliveries measured yet')
   })
 
-  test('says that the proof cost is not included when no native coin price is configured', () => {
-    const unpriced = { ...report, proofCost: { ...report.proofCost, nativeCoinPriceUsd: null, wei: null } }
-    const text = panel({ report: unpriced })
-    expect(text).toContain('The proof cost is not included: no native coin price is configured.')
-    expect(text).not.toContain('proof 0')
+  test('shows the tip range as low, suggested and high, and the words about a tip', () => {
+    const text = panel()
+    expect(text).toMatch(/Tip range\s+low [\d.]+ zkbUSDC, suggested [\d.]+ zkbUSDC, high [\d.]+ zkbUSDC/)
+    expect(text).toContain('voluntary')
+    expect(text).toContain('buys no promise')
+  })
+
+  test('has no proof line and no tip text about proving', () => {
+    const text = panel()
+    expect(text).not.toMatch(/proof|prover|proving/i)
   })
 
   test('with no price of the token the cost based suggestions say so, and the default tip still stands', () => {

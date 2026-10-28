@@ -42,7 +42,7 @@ describe("buildConfirmView", () => {
     const view = buildConfirmView(step);
     expect(view.delivery?.certaintyLabel).toBe("exact");
     expect(view.delivery?.tipMaximum).toMatch(/^The tip can take at most [\d.]+ zkbUSDC\./);
-    expect(view.delivery?.costLines.map((line) => line.label)).toEqual(["Gas cost", "Proof cost", "Margin"]);
+    expect(view.delivery?.costLines.map((line) => line.label)).toEqual(["Gas cost", "Margin"]);
     // The delivery runs on PulseChain, so its cost is in PLS, not in the ETH of the chain that the transfer leaves.
     for (const line of view.delivery?.costLines ?? []) expect(line.text).toMatch(/ PLS \(estimate: /);
     expect(view.delivery?.dataSource).toContain("measured from 40 recent deliveries, p90");

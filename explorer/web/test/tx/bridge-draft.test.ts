@@ -150,7 +150,7 @@ describe("the price field", () => {
   it("defaults from the valuation: one wrapped native token is worth one coin, so the price is 1", async () => {
     const draft = computeBridgeDraft(values({ token: `first:${weth.address}`, amount: "2" }), PERCENT, await wrappedData());
     expect(draft.defaultSenderPriceText).toBe("1");
-    expect(draft.delivery?.description.breakdown.map((line) => line.id)).toEqual(["gas", "proof", "margin"]);
+    expect(draft.delivery?.description.breakdown.map((line) => line.id)).toEqual(["gas", "margin"]);
   });
 
   it("defaults from a configured valuation of another token", async () => {
@@ -243,8 +243,8 @@ describe("the notice of the default tip", () => {
     expect(draft.delivery?.director.settings).toBe(0n);
   });
 
-  it("defaults to the gas based mode at the base fee, with a margin of 100 percent and no ceiling typed", async () => {
-    expect(DEFAULT_DELIVERY_OPTIONS).toMatchObject({ mode: "gas-multiplier", gasMultiplierText: "2", ceilingGweiText: "" });
+  it("defaults to the gas based mode at the base fee, equal to the measured cost and with no ceiling typed", async () => {
+    expect(DEFAULT_DELIVERY_OPTIONS).toMatchObject({ mode: "gas-multiplier", gasMultiplierText: "1", ceilingGweiText: "" });
     const draft = computeBridgeDraft(values(), options({ mode: "gas-multiplier", senderPriceText: "3000" }), await data());
     expect(draft.delivery?.director.settings).toBe(4n);
   });

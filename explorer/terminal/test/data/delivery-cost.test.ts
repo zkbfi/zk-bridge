@@ -43,6 +43,6 @@ describe('fixture data source: delivery cost', () => {
   test('the base fee block is 12 seconds before the pinned clock', async () => {
     const report = await createFixtureDataSource({ now: () => FIXTURE_NOW }).getDeliveryCost(1)
     expect(report.baseFee.timestamp).toBe(FIXTURE_NOW - 12)
-    expect(report.proofCost.wei).toBe('8000000000000')
+    expect('proofCost' in report).toBe(false)
   })
 })

@@ -7,7 +7,7 @@ import {
   type GasPriceBasis,
   type PayoutKind,
 } from "./delivery-terms.js";
-import { parseTokenAmount, RATE_SCALE } from "./format.js";
+import { RATE_SCALE } from "./format.js";
 
 /**
  * Voluntary delivery tips: the suggestions. A sender who wants a delivery writes a `FeeDirector` in the callback data of
@@ -63,35 +63,6 @@ export const tokenUnitsToWeiFloor = (units: bigint, price: TokenPrice): bigint =
   return (units * price.tokenValueInWei) / 10n ** BigInt(price.tokenDecimals);
 };
 
-/** The default cost of one warm proof in US dollars: the measured cost of one proof on the remote graphics processor. */
-export const DEFAULT_PROOF_COST_USD = "0.02";
-
-/** Input of {@link proofCostWei}. */
-export interface ProofCostInput {
-  /** The cost of one proof in US dollars, as a decimal text such as `0.02`. */
-  readonly proofCostUsd: string;
-  /** The price of one whole native coin of the destination chain in US dollars, as a decimal text. Must be above zero. */
-  readonly nativeCoinPriceUsd: string;
-  /** How many deliveries one proof covers. Default: 1. */
-  readonly deliveriesPerProof?: number;
-}
-
-/**
- * The share of a proof that one delivery pays, in wei of the native coin, rounded up. The conversion uses scaled bigint
- * math with 18 decimals. It never uses floating point.
- *
- * @param input The dollar cost, the coin price and the deliveries per proof.
- * @throws When a decimal text is malformed, the price is zero, or the deliveries per proof is not a positive integer.
- */
-export const proofCostWei = (input: ProofCostInput): bigint => {
-  const deliveries = input.deliveriesPerProof ?? 1;
-  if (!Number.isInteger(deliveries) || deliveries < 1) throw new RangeError("deliveries per proof must be a positive integer");
-  const proofUsd = parseTokenAmount(input.proofCostUsd, 18);
-  const priceUsd = parseTokenAmount(input.nativeCoinPriceUsd, 18);
-  if (priceUsd === 0n) throw new RangeError("the price of the native coin must be above zero");
-  return divideRoundingUp(proofUsd * 10n ** 18n, priceUsd * BigInt(deliveries));
-};
-
 /** Input of {@link deliveryCostBreakdown}. */
 export interface DeliveryCostInput {
   /** The gas of the delivery transaction. */
@@ -102,40 +73,35 @@ export interface DeliveryCostInput {
   readonly priorityFeeWei: bigint;
   /** Gas of a light client update that the runner spreads over the transfers that it covers. Default: none. */
   readonly updateShareGas?: bigint;
-  /** The share of the proof cost that this delivery pays, in wei (see {@link proofCostWei}). Default: none. */
-  readonly proofCostWei?: bigint;
 }
 
 /** The line items of the cost of a delivery. */
 export interface DeliveryCostBreakdown {
   /** `(deliveryGas + updateShareGas) * (baseFee + priorityFee)`. */
   readonly gasCostWei: bigint;
-  /** The share of the proof cost. An estimate: it comes from configured prices. */
-  readonly proofCostWei: bigint;
   readonly totalWei: bigint;
 }
 
 /**
- * The cost of a delivery for the runner, as separate line items.
+ * The cost of a delivery for the runner: the gas at the prices now. A pure function of the gas and the two fees, so the
+ * delivery cost line against the base fee comes from calling it at each base fee.
  *
- * @param input The gas, the prices and the proof share.
+ * @param input The gas and the prices.
  */
 export const deliveryCostBreakdown = (input: DeliveryCostInput): DeliveryCostBreakdown => {
   const updateShareGas = input.updateShareGas ?? 0n;
-  const proofCost = input.proofCostWei ?? 0n;
   requireNonNegative("deliveryGas", input.deliveryGas);
   requireNonNegative("updateShareGas", updateShareGas);
   requireNonNegative("baseFeeWei", input.baseFeeWei);
   requireNonNegative("priorityFeeWei", input.priorityFeeWei);
-  requireNonNegative("proofCostWei", proofCost);
   const gasCostWei = (input.deliveryGas + updateShareGas) * (input.baseFeeWei + input.priorityFeeWei);
-  return { gasCostWei, proofCostWei: proofCost, totalWei: gasCostWei + proofCost };
+  return { gasCostWei, totalWei: gasCostWei };
 };
 
 /**
- * The wei that a delivery costs the runner: gas at the current prices, plus the proof share.
+ * The wei that a delivery costs the runner: gas at the current prices.
  *
- * @param input The gas, the prices and the proof share.
+ * @param input The gas and the prices.
  */
 export const deliveryCostWei = (input: DeliveryCostInput): bigint => deliveryCostBreakdown(input).totalWei;
 

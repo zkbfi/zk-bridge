@@ -1,6 +1,6 @@
 import { Box, Flex, Table, Text, chakra } from "@chakra-ui/react";
 import { getAddress, isAddress } from "viem";
-import { GAS_MODE_HELP } from "@zk-bridge/shared";
+import { DEFAULT_GAS_MARGIN, GAS_MODE_HELP, SUGGESTED_TIP_RANGE, TIP_RANGE_HELP, TIP_RANGE_NAMES, type TipRangeOption } from "@zk-bridge/shared";
 import { GAS_MODE_LABEL, TIP_NOTES, routerWarningOf } from "../tx/tip-copy";
 import { formatUnits } from "../ui/format";
 import type { BridgeDraft, DeliveryOptions, TipChoice, TipStatus } from "../tx/bridge-draft";
@@ -24,8 +24,9 @@ const MODES: readonly { readonly value: TipChoice; readonly label: string; reado
 ];
 
 /**
- * The "Tip for delivery" part of the bridge form. The tip is on by default as a gas based tip at the base fee, with a margin
- * of 100 percent and a limit that is the price ceiling. The user can edit it, change the mode, or remove it. The panel shows what the user pays: the amount, whether it is exact or an
+ * The "Tip for delivery" part of the bridge form. The tip is on by default as a gas based tip at the base fee, equal to the
+ * measured cost, with a limit that is the price ceiling. The panel shows a low range (low, suggested and high) that the
+ * user can pick from or edit. The user can edit it, change the mode, or remove it. The panel shows what the user pays: the amount, whether it is exact or an
  * estimate, the most that the tip can take, the cost lines and the data behind them. When no tip can travel, the
  * panel says why and the page sends a plain relay.
  *
@@ -60,7 +61,7 @@ const TipPanel = ({ tip, draft, options, onChange, destinationNativeSymbol, dest
   return (
     <>
       <Text fontSize="sm" color="fg.muted">
-        A tip pays for the delivery of your transfer on {destinationName}. The router sends it to its reward address. It is on by default as a gas based tip: the limit is the most it can take, and the deliverer's gas choice decides how much of the limit it takes. You fix the terms now. Nothing at delivery changes them.
+        A tip is for the delivery of your transfer on {destinationName}. The router sends it to its reward address. It is voluntary and it buys no promise. It is on by default as a gas based tip: the limit is the most it can take, and the deliverer's gas choice decides how much of the limit it takes. You fix the terms now. Nothing at delivery changes them.
       </Text>
       <TipNotes />
       <Box role="radiogroup" aria-label="How to tip for delivery" marginTop="2">
@@ -134,7 +135,7 @@ const ModeFields = ({ options, onChange }: Pick<TipFieldsProps, "options" | "onC
   return (
     <>
       <Box flex="1 1 8rem">
-        <Field label="Gas multiplier" hint="2 is a margin of 100 percent. 1.2 is a margin of 20 percent.">
+        <Field label="Gas multiplier" hint="1 is the cost itself. 0.5 is half of it and 1.5 is one and a half. A tip below the cost is allowed.">
           {(id) => <TextInput id={id} inputMode="decimal" value={options.gasMultiplierText} onChange={(event) => onChange({ ...options, gasMultiplierText: event.target.value })} />}
         </Field>
       </Box>
@@ -204,12 +205,65 @@ const TipFields = ({ tip, draft, options, onChange, destinationNativeSymbol, des
           </Box>
         )}
       </chakra.details>
-      <DeliveryQuote draft={draft} destinationNativeSymbol={destinationNativeSymbol} destinationName={destinationName} />
+      <DeliveryQuote draft={draft} options={options} onChange={onChange} destinationNativeSymbol={destinationNativeSymbol} destinationName={destinationName} />
     </Box>
   );
 };
 
-const DeliveryQuote = ({ draft, destinationNativeSymbol, destinationName }: { readonly draft: BridgeDraft; readonly destinationNativeSymbol: string; readonly destinationName: string }) => {
+const RANGE_ENDS = [
+  { id: "low", name: TIP_RANGE_NAMES.low, factor: SUGGESTED_TIP_RANGE.low },
+  { id: "default", name: TIP_RANGE_NAMES.default, factor: null },
+  { id: "high", name: TIP_RANGE_NAMES.high, factor: SUGGESTED_TIP_RANGE.high },
+] as const;
+
+/** Props of {@link TipRange}. */
+export type TipRangeProps = {
+  readonly range: TipRangeOption;
+  readonly token: { readonly symbol: string; readonly decimals: number };
+  readonly options: DeliveryOptions;
+  readonly onChange: (next: DeliveryOptions) => void;
+};
+
+/**
+ * The suggested range as three choices: low, suggested and high. Each shows its tip in the token. A choice fills the gas
+ * multiplier, which the user may then edit by hand to any value.
+ */
+export const TipRange = ({ range, token, options, onChange }: TipRangeProps) => {
+  if (range.kind === "unavailable") return null;
+  return (
+    <Box marginTop="2" data-testid="tip-range">
+      <Text fontSize="sm" fontWeight="medium">
+        Suggested range
+      </Text>
+      <Flex gap="2" flexWrap="wrap" marginTop="1" role="group" aria-label="Suggested tips">
+        {RANGE_ENDS.map((end) => {
+          const factorText = formatUnits(end.factor ?? DEFAULT_GAS_MARGIN, 18);
+          return (
+            <chakra.button
+              key={end.id}
+              type="button"
+              data-testid={`tip-range-${end.id}`}
+              aria-pressed={options.mode === "gas-multiplier" && options.gasMultiplierText === factorText}
+              onClick={() => onChange({ ...options, mode: "gas-multiplier", gasMultiplierText: factorText })}
+              borderWidth="1px"
+              borderRadius="md"
+              paddingX="3"
+              paddingY="1"
+              fontSize="sm"
+            >
+              {end.name}: {formatUnits(range[end.id].description.nowUnits, token.decimals)} {token.symbol}
+            </chakra.button>
+          );
+        })}
+      </Flex>
+      <Text fontSize="xs" color="fg.muted" marginTop="1">
+        {TIP_RANGE_HELP}
+      </Text>
+    </Box>
+  );
+};
+
+const DeliveryQuote = ({ draft, options, onChange, destinationNativeSymbol, destinationName }: { readonly draft: BridgeDraft; readonly options: DeliveryOptions; readonly onChange: (next: DeliveryOptions) => void; readonly destinationNativeSymbol: string; readonly destinationName: string }) => {
   const { delivery, deliveryProblem } = draft;
   if (delivery === null) {
     return <Box marginTop="3">{deliveryProblem === null || deliveryProblem === draft.tipNotice ? <Text fontSize="sm" color="fg.muted">Enter an amount and a receiver to see the tip.</Text> : <Notice tone="warning">{deliveryProblem}</Notice>}</Box>;
@@ -224,6 +278,7 @@ const DeliveryQuote = ({ draft, destinationNativeSymbol, destinationName }: { re
       <Text fontSize="sm" color="fg.muted">
         How it is computed: {description.formula}.
       </Text>
+      <TipRange range={suggestions.tipRange} token={token} options={options} onChange={onChange} />
       <Text fontSize="sm" fontWeight="medium" marginTop="1" data-testid="tip-maximum">
         {description.mode === "gas"
           ? `The limit is ${formatUnits(delivery.maximumTip, token.decimals)} ${token.symbol}. It is the price ceiling. Expect the tip to reach it.`
@@ -262,7 +317,6 @@ const DeliveryQuote = ({ draft, destinationNativeSymbol, destinationName }: { re
           </Table.Body>
         </Table.Root>
       )}
-      {suggestions.proofCostMissing ? <Notice tone="warning">The indexer has no price of the native coin, so the proof cost is left out of the cost.</Notice> : null}
       <Text fontSize="xs" color="fg.muted" marginTop="2" data-testid="delivery-data-source">
         Data: {suggestions.dataSource.description} ({suggestions.dataSource.gas.toString()} gas). {suggestions.dataSource.baseFeeDescription}.
       </Text>

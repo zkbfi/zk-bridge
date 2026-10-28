@@ -8,6 +8,7 @@
  * interface say the same thing.
  */
 import {
+  DEFAULT_GAS_MARGIN,
   DEFAULT_TIP_PERCENTAGE_MULTIPLIER,
   buildFeeSuggestions,
   defaultTip,
@@ -68,8 +69,8 @@ export const DEFAULT_TIP_PERCENT_TEXT = formatUnits(DEFAULT_TIP_PERCENTAGE_MULTI
 export const DEFAULT_MARGIN_PERCENT = '10'
 /** The default priority fee that the sender expects the delivery to pay, in gwei. The user edits it. */
 export const DEFAULT_PRIORITY_GWEI = '1'
-/** The factor on the gas cost that a blank field of the gas mode means: 2, a margin of 100 percent. Same as `DEFAULT_GAS_MARGIN` of `@zk-bridge/shared`. */
-export const DEFAULT_GAS_MULTIPLIER_TEXT = '2'
+/** The factor on the gas cost that a blank field of the gas mode means: 1, the measured cost itself. Same as `DEFAULT_GAS_MARGIN` of `@zk-bridge/shared`. */
+export const DEFAULT_GAS_MULTIPLIER_TEXT = formatUnits(DEFAULT_GAS_MARGIN, 18)
 
 /** The value of one whole native coin of the chain, in wei. */
 const WEI_PER_WHOLE_COIN = 10n ** 18n
@@ -144,8 +145,6 @@ export interface DeliveryFeeModel {
   readonly router: Address
   readonly dataSource: FeeDataSource
   readonly cost: DeliveryCostBreakdown
-  /** True when the report has no native coin price, so the cost leaves out the proof. */
-  readonly proofCostMissing: boolean
   /** The three suggestions. A suggestion that needs a price that nobody gave says so. */
   readonly suggestions: FeeSuggestions
   readonly chosen: ChosenFee
@@ -271,7 +270,7 @@ export function buildDeliveryFeeModel(input: DeliveryFeeInput): DeliveryFeeState
     })
   const chosen = chooseFee({ values, target, recipient: recipient.value, payout, suggestions, gasInputs, describe })
   const notice = noticeOf({ values, target, gasInputs })
-  return { kind: 'ready', model: { router: router.value, dataSource: built.value.dataSource, cost: built.value.cost, proofCostMissing: built.value.proofCostMissing, suggestions, chosen, notice } }
+  return { kind: 'ready', model: { router: router.value, dataSource: built.value.dataSource, cost: built.value.cost, suggestions, chosen, notice } }
 }
 
 /** The notice of the default tip for the gas mode, from the shared choice. Other modes need none. */
@@ -329,6 +328,7 @@ function withoutMissingPrices(suggestions: FeeSuggestions, known: { readonly val
     percentage: missing('share', NO_PRICE_REASON),
     fixed: missing('fixed', NO_PRICE_REASON),
     gasMultiplier: known.senderPriceGiven ? suggestions.gasMultiplier : missing('gas', NO_SENDER_PRICE_REASON),
+    tipRange: known.senderPriceGiven ? suggestions.tipRange : { kind: 'unavailable', reason: NO_SENDER_PRICE_REASON },
   }
 }
 
@@ -412,8 +412,8 @@ export function senderPriceText(target: DeliveryTarget): string {
 }
 
 /**
- * The numbers that the chosen mode puts into the editable fields. The gas mode, the default, starts at the margin of
- * 100 percent, the ceiling of twice the base fee now and the price of the valuation. The percentage starts at the tip of
+ * The numbers that the chosen mode puts into the editable fields. The gas mode, the default, starts at the factor of 1 (the
+ * measured cost), the ceiling of twice the base fee now and the price of the valuation. The percentage starts at the tip of
  * 0.1 percent. The fixed amount starts at the suggestion. The cost based suggestions stay on the panel for the user to read.
  */
 export function suggestedFields(mode: FeeFormMode, state: DeliveryFeeState, target: DeliveryTarget): Values {

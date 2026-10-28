@@ -186,8 +186,7 @@ export interface FixtureDataSourceInput {
 
 /**
  * The sample delivery cost report of one chain. The delivery with a callback is measured (40 deliveries, p90). The
- * other two kinds are defaults, so the sample mode shows both kinds of data source line. The base fee is 7 gwei and
- * the native coin costs 2500 dollars, so one delivery pays 8000000000000 wei of a 0.02 dollar proof.
+ * other two kinds are defaults, so the sample mode shows both kinds of data source line. The base fee is 7 gwei.
  *
  * @param chainId The chain that the report is for.
  * @param now The clock in unix seconds. The base fee block is 12 seconds old.
@@ -196,7 +195,6 @@ export function buildFixtureDeliveryCost(chainId: number, now: number): Delivery
   return {
     chainId,
     baseFee: { wei: '7000000000', blockNumber: 21_000_000, timestamp: now - 12 },
-    proofCost: { usd: '0.02', nativeCoinPriceUsd: '2500', deliveriesPerProof: 1, wei: '8000000000000', isEstimate: true },
     kinds: {
       token_callback: { sampleCount: 40, averageGas: '185000', p90Gas: '210000', defaultGas: '300000', isDefault: false },
       token: { sampleCount: 0, averageGas: null, p90Gas: null, defaultGas: '250000', isDefault: true },

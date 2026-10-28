@@ -54,7 +54,11 @@ describe("GET /api/delivery-cost", () => {
     expect(report.chainId).toBe(369);
     expect(report.baseFee).toEqual({ wei: null, blockNumber: null, timestamp: null });
     expect(report.kinds.token).toMatchObject({ sampleCount: 0, isDefault: true, defaultGas: "550000" });
-    expect(report.proofCost.nativeCoinPriceUsd).toBe("0.00005");
+  });
+
+  it("the delivery cost report has no proofCost field", async () => {
+    const { body } = await get("/api/delivery-cost?chainId=369");
+    expect(Object.keys(body).sort()).toEqual(["baseFee", "chainId", "kinds"]);
   });
 
   it("measures each kind from its own samples and reads the base fee from the newest tip", async () => {

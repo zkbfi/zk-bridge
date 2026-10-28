@@ -43,7 +43,7 @@ describe('the tip field of the bridge form', () => {
     for (const shown of ['Tip for delivery', 'Yes, gas based by default', 'Tip mode', 'Gas, to limit', 'Gas multiplier', 'Base fee ceiling', 'Router (advanced)', 'Fee recipient', 'Margin percent', 'Priority fee gwei', 'Delivery cost on PulseChain', 'Router          0x', '(the default delivery router)', 'measured from 40 recent deliveries, p90', 'Base fee', 'at block 21000000', 'Limit           ', '(price ceiling: the most the tip can be)']) {
       expect(frame).toContain(shown)
     }
-    expect(frame).toMatch(/Gas multiplier {2,}2 /)
+    expect(frame).toMatch(/Gas multiplier {2,}1 /)
     expect(frame).toMatch(/Your tip {8}about [\d.]+ zkbUSDC now/)
     // The Mode field (relayTokens) is gone: the call data holds the tip terms.
     expect(frame).not.toMatch(/Mode {2,}relayTokens/)
@@ -64,13 +64,13 @@ describe('the tip field of the bridge form', () => {
     await screen.press('TAB') // tip mode
     await screen.press('ARROW_RIGHT') // percentage
     await screen.press('ARROW_RIGHT') // fixed
-    expect(screen.frame()).toMatch(/Fixed amount {2,}4\.642/)
+    expect(screen.frame()).toMatch(/Fixed amount {2,}4\.62/)
     await screen.press('TAB') // the fixed amount
     await screen.press('BACKSPACE')
     await screen.type('9')
     const frame = screen.frame()
-    expect(frame).toMatch(/Fixed amount {2,}4\.649/)
-    expect(frame).toContain('Your tip        4.649 zkbUSDC (exact)')
+    expect(frame).toMatch(/Fixed amount {2,}4\.69/)
+    expect(frame).toContain('Your tip        4.69 zkbUSDC (exact)')
   })
 
   test('the gas mode works for any token, with the price of the sender labelled as theirs', async () => {

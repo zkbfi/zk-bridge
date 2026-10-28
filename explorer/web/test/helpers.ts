@@ -10,8 +10,6 @@ export type DeliveryReportOptions = {
   readonly sampleCount?: number;
   /** The base fee in wei per gas. Default: 7 gwei. */
   readonly baseFeeWei?: bigint;
-  /** The proof share in wei. Null means the indexer has no coin price. Default: 8 trillion wei. */
-  readonly proofCostWei?: bigint | null;
   /** The measured p90 gas of the callback kind. Default: 210000. */
   readonly p90Gas?: bigint;
   /** The default gas of the callback kind. Default: 300000. */
@@ -27,17 +25,9 @@ export type DeliveryReportOptions = {
 export const buildDeliveryReport = (chainId: number, options: DeliveryReportOptions = {}): DeliveryCostReport => {
   const sampleCount = options.sampleCount ?? 40;
   const measured = sampleCount > 0;
-  const proofCostWei = options.proofCostWei === undefined ? 8_000_000_000_000n : options.proofCostWei;
   return parseDeliveryCostReport({
     chainId,
     baseFee: { wei: (options.baseFeeWei ?? 7_000_000_000n).toString(), blockNumber: 21_000_000, timestamp: FIXTURE_NOW - 12 },
-    proofCost: {
-      usd: "0.02",
-      nativeCoinPriceUsd: proofCostWei === null ? null : "2500",
-      deliveriesPerProof: 1,
-      wei: proofCostWei === null ? null : proofCostWei.toString(),
-      isEstimate: true,
-    },
     kinds: {
       token_callback: {
         sampleCount,

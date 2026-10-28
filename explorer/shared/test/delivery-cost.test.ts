@@ -15,7 +15,7 @@ import { parseDeliveryCostSettings } from "../src/delivery-cost-settings.js";
 const bridge = "0x00000000000000000000000000000000000000b1" as const;
 const other = "0x00000000000000000000000000000000000000c2" as const;
 const completed: ReceiptLog = { address: bridge, topics: [AFFIRMATION_COMPLETED_SELECTOR] };
-const settings = parseDeliveryCostSettings({}, [369]);
+const settings = parseDeliveryCostSettings({});
 const range = (count: number): bigint[] => Array.from({ length: count }, (_, index) => BigInt(index + 1));
 const emptySamples = { token_callback: [], token: [], message: [] };
 
@@ -104,7 +104,7 @@ describe("buildDeliveryCostReport", () => {
     expect(report.kinds.token.averageGas).toBeNull();
     expect(report.kinds.token.p90Gas).toBeNull();
     expect(report.baseFee).toEqual({ wei: null, blockNumber: null, timestamp: null });
-    expect(report.proofCost.wei).toBeNull();
+    expect("proofCost" in report).toBe(false);
     expect(parseDeliveryCostReport(report)).toEqual(report);
   });
 
@@ -120,16 +120,14 @@ describe("buildDeliveryCostReport", () => {
     expect(report.kinds.message.p90Gas).toBe(big.toString());
   });
 
-  it("carries the latest base fee and the proof cost in wei when a coin price is set", () => {
-    const priced = parseDeliveryCostSettings({ EXPLORER_NATIVE_COIN_PRICE_USD_369: "0.00005" }, [369]);
+  it("carries the latest base fee", () => {
     const report = buildDeliveryCostReport({
       chainId: 369,
       samples: emptySamples,
       baseFee: { blockNumber: 100n, timestamp: 1_700_000_000n, baseFeePerGas: 12_345n },
-      settings: priced,
+      settings,
     });
     expect(report.baseFee).toEqual({ wei: "12345", blockNumber: 100, timestamp: 1_700_000_000 });
-    expect(report.proofCost).toMatchObject({ usd: "0.02", nativeCoinPriceUsd: "0.00005", wei: (400n * 10n ** 18n).toString(), isEstimate: true });
     expect(parseDeliveryCostReport(report)).toEqual(report);
   });
 

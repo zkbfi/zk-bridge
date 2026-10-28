@@ -2,7 +2,7 @@
  * The words about the tip that the fee panel and the confirm dialog share, so that the two always say the same thing.
  */
 import { getAddress } from "viem";
-import { DELIVERY_ROUTER_NAME, TIP_MODE_NAMES } from "@zk-bridge/shared";
+import { DELIVERY_ROUTER_NAME, TIP_MODE_NAMES, TIP_NATURE } from "@zk-bridge/shared";
 import type { DeliveryRouters } from "./delivery-selection";
 
 /** What the confirm dialog says about a relay that carries no tip: no router, no fee terms, only a direct delivery. */
@@ -15,6 +15,7 @@ export const NO_ROUTER_NOTICE =
  * does not use the router, so it pays no tip and the recipient gets the whole amount.
  */
 export const TIP_NOTES: readonly string[] = [
+  TIP_NATURE,
   "Anyone can deliver through the delivery router. The router pays the tip to its reward address, which it fixes when it is deployed. A copied delivery gains the copier nothing.",
   "When the router cannot deliver the tokens to the recipient, it hands them to its failed delivery address. The router pays the tip first.",
   "When anyone calls the bridge directly to deliver, without the router, no tip is paid. The recipient then gets the whole amount.",

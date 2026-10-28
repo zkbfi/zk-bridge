@@ -56,8 +56,10 @@ In RPC mode some figures are partial. The summary bar marks them with `>=` and a
 User documentation lives in `explorer/web/docs/pages` (see `05-fees-explained.md`).
 
 The bridge form has a choice field `Tip for delivery`. It is `Yes` by default, in the gas based mode at the base fee
-(label `Gas, to limit`). The margin is 100 percent: the multiplier is your price of one wei of the destination coin, in
-base units of the token, times 2 times 1e18, rounded up. The limit is the tip at the ceiling base fee, which is twice the
+(label `Gas, to limit`). The tip equals the measured gas cost at the base fee: the multiplier is your price of one wei of the destination coin, in
+base units of the token, times 1 times 1e18, rounded up. The panel shows a low range of half, one and one and a half
+times that cost. A tip goes to the reward address of the router, it is voluntary, and it buys no promise. You may set any
+tip from zero up. The limit is the tip at the ceiling base fee, which is twice the
 base fee now. You can edit the tip or choose `No tip`. You fix the tip now: nothing at delivery sets or changes the
 rate, and the account that delivers supplies no rate.
 
@@ -77,10 +79,10 @@ rate, and the account that delivers supplies no rate.
   limit of that transaction, and the bridge forwards only the message gas limit, so gas held back above it counts. Expect
   the tip to reach the limit. The limit is the price ceiling, and the help line says `Up to the limit; the deliverer's
   gas choice decides`. The panel and the confirmation screen show the limit as the price ceiling.
-- Gas based mode fields: a decimal factor such as `2` for the margin (2 is 100 percent), the base fee ceiling in gwei,
+- Gas based mode fields: a decimal factor such as `1` on the cost (1 is the cost itself, 0.5 half of it), the base fee ceiling in gwei,
   and `Your coin price`: your own price of one whole native coin of the other chain, in whole tokens. The form folds
   your price into the multiplier now, so the mode works for any token. It fills the fields when you enter the form, or
-  choose the mode or the token, with the margin of 2, twice the base fee now, and the price from the token valuation.
+  choose the mode or the token, with the factor of 1, twice the base fee now, and the price from the token valuation.
   A number that you typed stays when you change the amount.
 - Where the destination chain reports no base fee (the `baseFee` field of the chain configuration is `none`, for example BSC), the default
   reads the whole gas price, with the same margin, and the panel says why. Without your price and without a token
@@ -91,8 +93,8 @@ rate, and the account that delivers supplies no rate.
   `Pay the reward address in` appears only when the token on the destination chain is the wrapped native token.
 - The panel under the form shows the router, the gas of a delivery with its data source (`measured from 40 recent
   deliveries, p90` or `default, no deliveries measured yet`), the base fee with its block and time, the cost split into
-  gas, proof and margin, and the three suggestions. A percentage or a fixed tip is `exact`. A gas based tip is
-  `estimate, at most X`. When the report holds no native coin price, the panel says that the proof cost is not included.
+  gas and margin, the tip range (low, suggested and high), and the three suggestions. A percentage or a fixed tip is `exact`. A gas based tip is
+  `estimate, at most X`.
 - The percentage and the fixed suggestions turn the cost into tokens, so they need the value of the token. Set
   `EXPLORER_TOKEN_VALUATIONS_WEI`. Without a value the panel says `no value of the token is configured`, and the
   gas based default needs your coin price too: the panel asks for it.

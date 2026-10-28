@@ -11,6 +11,17 @@ export const TIP_MODE_NAMES: Readonly<Record<FeeMode, string>> = {
   gas: "gas based, up to the limit",
 };
 
+/** What a tip is, in one sentence. Every page and the terminal show it beside the tip. */
+export const TIP_NATURE =
+  "A tip goes to the reward address of the delivery router. It is voluntary and it buys no promise. A low tip, or no tip, never makes a delivery fail.";
+
+/** The words about the suggested range of tips. */
+export const TIP_RANGE_HELP =
+  "The suggested tips are a low range: half, one and a half times, and the measured gas cost of a delivery at the base fee. You may set any tip from zero up. A tip below the cost is allowed.";
+
+/** The names of the three suggested tips, in order from low to high. */
+export const TIP_RANGE_NAMES = { low: "Low", default: "Suggested", high: "High" } as const;
+
 /** How the words name the router that the tip terms are written for. */
 export const DELIVERY_ROUTER_NAME = "the default delivery router";
 

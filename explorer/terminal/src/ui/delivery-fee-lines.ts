@@ -3,7 +3,7 @@
  * function is pure and returns lines, so a test reads the text without a terminal. The amounts and the labels
  * (`exact`, `estimate, at most X`) come from `@zk-bridge/shared`.
  */
-import { GAS_MODE_HELP, GAS_MODE_SHORT_LABEL, TIP_MODE_NAMES, feeModeOf, routerInWords, settingFlagsOf, type FeeDirector, type FeeMode, type FeeOption, type SettingFlagName } from '@zk-bridge/shared'
+import { GAS_MODE_HELP, GAS_MODE_SHORT_LABEL, TIP_MODE_NAMES, TIP_NATURE, TIP_RANGE_HELP, feeModeOf, routerInWords, settingFlagsOf, type FeeDirector, type FeeMode, type FeeOption, type SettingFlagName, type TipRangeOption } from '@zk-bridge/shared'
 import { getAddress } from 'viem'
 import type { RouterAddressesReading } from '../chain/live-reads'
 import type { DeliveryFeeState, DeliveryTarget } from '../app/delivery-fee-form'
@@ -92,6 +92,15 @@ function suggestionLine(name: string, option: FeeOption): Line {
   return [muted(label), plain(option.description.summary), muted(`  (${option.description.formula})`)]
 }
 
+/** The suggested range as one line: the low, the suggested and the high tip, in the token. */
+function tipRangeLine(range: TipRangeOption, token: DeliveryTarget['token']): Line {
+  const label = 'Tip range'.padEnd(LABEL_WIDTH)
+  if (range.kind === 'unavailable') return [muted(label), colored(`unavailable: ${range.reason}`, theme.warn)]
+  const amount = (units: bigint) => `${formatUnits(units, token.decimals)} ${token.symbol}`
+  const { low, default: suggested, high } = range
+  return [muted(label), plain(`low ${amount(low.description.nowUnits)}, suggested ${amount(suggested.description.nowUnits)}, high ${amount(high.description.nowUnits)}`)]
+}
+
 /**
  * The lines of the live panel under the bridge form.
  *
@@ -116,7 +125,6 @@ export function deliveryPanelLines(input: DeliveryPanelInput): readonly Line[] {
   const margin = model.chosen.kind === 'ready' ? model.chosen.description.breakdown.find((line) => line.id === 'margin') : undefined
   const costParts = [
     `gas ${wei(model.cost.gasCostWei)}`,
-    ...(model.proofCostMissing ? [] : [`proof ${wei(model.cost.proofCostWei)}`]),
     ...(margin === undefined ? [] : [`margin ${wei(margin.amountWei)}`]),
   ]
   return [
@@ -125,7 +133,9 @@ export function deliveryPanelLines(input: DeliveryPanelInput): readonly Line[] {
     row('Gas', `${model.dataSource.gas} gas, ${model.dataSource.description}`),
     row('Base fee', model.dataSource.baseFeeDescription.replace(/^base fee /, '')),
     row('Cost', costParts.join(' + ')),
-    ...(model.proofCostMissing ? [[colored('The proof cost is not included: no native coin price is configured.', theme.warn)] as Line] : []),
+    tipRangeLine(model.suggestions.tipRange, target.token),
+    [muted(TIP_RANGE_HELP)],
+    [muted(TIP_NATURE)],
     ...suggestionLines(model.suggestions),
     ...chosenLines(model.chosen, target),
     ...(model.notice === null ? [] : [[colored(model.notice, theme.warn)] as Line]),

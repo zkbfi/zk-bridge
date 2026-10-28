@@ -1,10 +1,10 @@
 # Fees explained
 
-The bridge charges no fee. The only fee is the voluntary tip for delivery. The tip pays for the delivery of your transfer. This page explains it.
+The bridge charges no fee. The only extra is the tip for delivery. A tip goes to the reward address of the delivery router. It is voluntary, and it buys no promise. A low tip, or no tip, never makes a delivery fail. This page explains it.
 
 ## The tip for delivery
 
-A runner delivers a covered transfer when the tip pays for the work. The tip is the one thing that you set. The interface turns the tip on by default. The default is the gas based mode at the base fee, with a margin of 100 percent. Its limit is the price ceiling, at twice the base fee now. The deliverer's gas choice decides how much of the limit the tip takes, so expect the tip to reach the limit. You can edit the tip, change its mode to percentage or fixed, or remove it with the choice "No tip".
+Anyone can deliver a covered transfer. A runner may prefer a transfer with a tip that covers its cost, but no tip is a promise, and nothing makes a delivery wait for a tip. The tip is the one thing that you set. The interface turns the tip on by default. The default is the gas based mode at the base fee, and it equals the measured gas cost of a delivery. Its limit is the price ceiling, at twice the base fee now. The deliverer's gas choice decides how much of the limit the tip takes, so expect the tip to reach the limit. You can edit the tip, change its mode to percentage or fixed, or remove it with the choice "No tip".
 
 When you add a call (a Call target and Call data on the bridge form), the tip counts the gas that the call may use. A gas based tip then moves toward its limit. The page Bridging tokens explains the call.
 
@@ -39,6 +39,18 @@ Two cases cannot carry a tip. In both cases the interface sends a plain relay an
 
 The form has an advanced field named "Router". It starts with the default delivery router on the destination chain. You can name another router. The confirm dialog shows the router address. It marks a router that is not the default delivery router. The tip settings are written for the delivery router. Another router can read them in a different way. Use it only if you trust it.
 
+## The suggested range
+
+The interface suggests a low range of tips. It is a range, not a price. Each end is a multiple of the measured gas cost of a delivery at the base fee.
+
+- Low: half of the cost.
+- Suggested: the cost.
+- High: one and a half times the cost.
+
+The range is low on purpose, so that the bridge is cheap next to other bridges. Choose one end with one click, or type your own number. You may set any tip from zero up. A tip below the cost is allowed. Another interface may suggest another range.
+
+A tip below the cost has one effect: a runner that wants its cost back may choose another delivery first. The delivery still works, and anyone can still make it.
+
 ## The modes
 
 The router knows three tip modes. Each one sets the tip in a different way.
@@ -70,11 +82,10 @@ The amount is an estimate. The label reads "estimate, at most X". X is the limit
 The default has these terms:
 
 - The gas price is the base fee only. The router flag `EXCLUDE_PRIORITY` sets it.
-- The margin is 100 percent. The multiplier is 2. The page turns it into token units with your coin price: the multiplier is your price of one wei, times 2, times 1e18, rounded up.
-- The limit is the tip at the ceiling base fee. The ceiling is twice the base fee now. The delivery gas comes from the indexer (the 90th percentile of recent deliveries), or from the default of 550000 gas.
-- The proof cost stays in the cost breakdown.
+- The tip equals the measured gas cost. The multiplier is 1. The page turns it into token units with your coin price: the multiplier is your price of one wei, times 1, times 1e18, rounded up.
+- The limit is the tip at the ceiling base fee. The ceiling is twice the base fee now. The delivery gas comes from the indexer (the 90th percentile of recent deliveries), or, with no measure, from the larger of 550000 gas and the gas that a delivery must supply for the least gas limit of its kind.
 
-Some chains report no base fee. On such a chain the base fee flag would make the tip zero. The default then reads the whole gas price, with the same margin, and the form says why.
+Some chains report no base fee. On such a chain the base fee flag would make the tip zero. The default then reads the whole gas price, with the same multiplier, and the form says why.
 
 If you have typed no coin price and the page knows no value of the token, the page cannot compute the gas based tip. It shows a notice that asks you to enter your price. There is no fixed fallback: a fixed amount needs the same price to turn a cost into tokens. The percentage and fixed modes stay available.
 
@@ -90,22 +101,21 @@ The most that the tip can take is shown before you sign. Check this number. It i
 
 ## The cost breakdown
 
-The form shows three lines when it knows your coin price. Every line is an estimate.
+The form shows two lines when it knows your coin price. Every line is an estimate.
 
 - Gas cost: the delivery gas, times the base fee plus the priority fee.
-- Proof cost: a share of the cost of one proof.
-- Margin: the tip minus the other two lines. This is what the reward address keeps after the cost.
+- Margin: the tip minus the gas cost. A margin below zero means that the tip is below the cost. That is allowed.
 
-The suggestion for the fixed amount uses a margin of 10 percent by default. The gas based default uses a margin of 100 percent on the gas cost. A margin of zero covers the cost and nothing more. A runner that requires a margin above zero skips such a tip.
+The suggestion for the fixed amount uses a margin of 10 percent by default. The gas based default is the cost itself, so its margin is zero. A runner that requires a margin above zero may choose another delivery first.
 
-The proof cost comes from a price in US dollars set by the operator. The default is 0.02, the measured cost of one warm proof. The indexer converts it with a configured price of the native coin. If no price is set, the form leaves the proof cost out and says so.
+The cost counts the gas of the delivery only. A tip is not a payment for any other work.
 
 ## The data source line
 
 Each suggestion shows where its gas figure comes from. You see one of two lines.
 
 - "measured from N recent deliveries, p90": the indexer measured N real deliveries. It uses the 90th percentile of their gas.
-- "default, no deliveries measured yet": no delivery is measured. The indexer uses a configured default of 550000 gas.
+- "default, no deliveries measured yet": no delivery is measured. The page uses the larger of the configured default of 550000 gas and the gas that a delivery must supply for the least gas limit of its kind.
 
 The default is a computed figure, not a measurement. The figures improve by themselves as the indexer records more deliveries.
 

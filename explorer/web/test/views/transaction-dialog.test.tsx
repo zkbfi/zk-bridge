@@ -98,7 +98,7 @@ describe("the confirm dialog", () => {
     expect(within(delivery).getByTestId("confirm-tip-notes")).toHaveTextContent(/Anyone can deliver through the delivery router.*recipient then gets the whole amount/);
     expect(within(delivery).queryByTestId("confirm-router-warning")).toBeNull();
     expect(within(delivery).getByText("Gas cost")).toBeInTheDocument();
-    expect(within(delivery).getByText("Proof cost")).toBeInTheDocument();
+    expect(within(delivery).queryByText("Proof cost")).toBeNull();
     expect(within(delivery).getByText("Margin")).toBeInTheDocument();
     expect(within(delivery).getByText(/measured from 40 recent deliveries, p90/)).toBeInTheDocument();
     expect(within(review).getByText("Network fee")).toBeInTheDocument();

@@ -12,6 +12,7 @@ import {
 } from "./delivery-fee.js";
 import { expectedFee, feeModeOf, maximumFee, type BaseFeeSupport, type FeeDirector, type FeeMode, type GasPriceBasis, type PayoutKind } from "./delivery-terms.js";
 import { formatRate, formatTokenAmount, RATE_SCALE } from "./format.js";
+import { minimumGasLimitOf, requiredDeliveryGas, type MessageKind } from "./gas-limit.js";
 
 /**
  * What the sender is about to pay, stated so that nobody mistakes an estimate for a promise. The terminal dashboard and
@@ -43,11 +44,11 @@ export interface FeeDataSource {
 
 /** One line of the cost breakdown, in wei. */
 export interface CostLine {
-  readonly id: "gas" | "proof" | "margin";
+  readonly id: "gas" | "margin";
   readonly label: string;
   /** Signed: a margin below zero is a shortfall. */
   readonly amountWei: bigint;
-  /** Every line is an estimate: it uses the base fee now, a configured proof price, and the token price. */
+  /** Every line is an estimate: it uses the base fee now and the token price. */
   readonly certainty: "estimate";
   readonly note: string;
 }
@@ -106,7 +107,6 @@ const breakdownOf = (cost: DeliveryCostBreakdown | null, feeWei: bigint, note: s
   if (cost === null) return [];
   return [
     { id: "gas", label: "Gas cost", amountWei: cost.gasCostWei, certainty: "estimate", note: "the delivery gas at the base fee and priority fee now" },
-    { id: "proof", label: "Proof cost", amountWei: cost.proofCostWei, certainty: "estimate", note: "a share of one proof, from configured prices" },
     { id: "margin", label: "Margin", amountWei: feeWei - cost.totalWei, certainty: "estimate", note },
   ];
 };
@@ -147,6 +147,22 @@ export const describeFee = (director: FeeDirector, input: DescribeFeeInput): Fee
   };
 };
 
+const MESSAGE_KIND_OF_DELIVERY: Readonly<Record<DeliveryKind, MessageKind>> = {
+  token_callback: { kind: "token-release", withCall: true },
+  token: { kind: "token-release", withCall: false },
+  message: { kind: "plain-message" },
+};
+
+/**
+ * The gas of a kind that nobody has measured: the larger of the configured default and the gas that a delivery must
+ * supply for the least gas limit of the kind. A tip below that gas would price the delivery under what it must carry.
+ */
+const unmeasuredGasOf = (defaultGas: string, kind: DeliveryKind): bigint => {
+  const required = requiredDeliveryGas(minimumGasLimitOf(MESSAGE_KIND_OF_DELIVERY[kind]));
+  const configured = BigInt(defaultGas);
+  return configured > required ? configured : required;
+};
+
 /**
  * Tells the data behind a suggestion.
  *
@@ -159,7 +175,7 @@ export const describeDataSource = (report: DeliveryCostReport, kind: DeliveryKin
   if (report.baseFee.wei === null) throw new RangeError("the indexer has seen no block on the destination chain yet, so there is no base fee");
   const baseFeeWei = BigInt(report.baseFee.wei);
   const measured = !entry.isDefault && entry.p90Gas !== null;
-  const gas = BigInt(measured ? (entry.p90Gas as string) : entry.defaultGas);
+  const gas = measured ? BigInt(entry.p90Gas as string) : unmeasuredGasOf(entry.defaultGas, kind);
   const when = report.baseFee.timestamp === null ? "" : ` (${new Date(report.baseFee.timestamp * 1000).toISOString()})`;
   const block = report.baseFee.blockNumber === null ? "" : ` at block ${report.baseFee.blockNumber}`;
   return {
@@ -196,7 +212,7 @@ export interface BuildFeeSuggestionsInput {
   readonly priorityFeeWei: bigint;
   /** The profit on top of the cost, scaled by 1e18. Default: 10 percent. */
   readonly marginRate?: bigint;
-  /** The factor on the gas cost for the gas multiplier mode, scaled by 1e18. Default: {@link DEFAULT_GAS_MARGIN}, 2 (a margin of 100 percent). */
+  /** The factor on the gas cost of the middle of the tip range, scaled by 1e18. Default: {@link DEFAULT_GAS_MARGIN}, 1 (the cost itself). */
   readonly gasMargin?: bigint;
   /**
    * Which gas price the gas based tip reads. Default: `base-fee-only`. Use {@link gasPriceBasisFor} to follow a chain that
@@ -216,17 +232,34 @@ export interface BuildFeeSuggestionsInput {
 export interface FeeSuggestions {
   readonly dataSource: FeeDataSource;
   readonly cost: DeliveryCostBreakdown;
-  /** True when the report has no native coin price, so the proof cost is left out of the cost. */
-  readonly proofCostMissing: boolean;
   readonly percentage: FeeOption;
   readonly fixed: FeeOption;
   readonly gasMultiplier: FeeOption;
+  /** The low, suggested and high tip, or the reason that none can be computed. */
+  readonly tipRange: TipRangeOption;
 }
+
+/** The low, suggested and high tip of the gas based mode, each with its description. */
+export type TipRangeOption =
+  | {
+      readonly kind: "available";
+      readonly low: Extract<FeeOption, { kind: "available" }>;
+      readonly default: Extract<FeeOption, { kind: "available" }>;
+      readonly high: Extract<FeeOption, { kind: "available" }>;
+    }
+  | { readonly kind: "unavailable"; readonly reason: string };
 
 const DEFAULT_MARGIN_RATE = RATE_SCALE / 10n;
 
-/** The default factor on the gas cost of the gas based tip: 2, which is a margin of 100 percent, scaled by 1e18. */
-export const DEFAULT_GAS_MARGIN = RATE_SCALE * 2n;
+/** The default factor on the gas cost of the gas based tip: 1, so the tip equals the measured cost, scaled by 1e18. */
+export const DEFAULT_GAS_MARGIN = RATE_SCALE;
+
+/**
+ * The ends of the suggested tip range, as factors on the measured delivery gas cost at the base fee, scaled by 1e18:
+ * one half to one and a half. The range is low on purpose. A user may set any tip from zero up, and any frontend may set
+ * its own range.
+ */
+export const SUGGESTED_TIP_RANGE = { low: RATE_SCALE / 2n, high: (RATE_SCALE * 3n) / 2n } as const;
 
 /**
  * The gas price basis that the default gas based tip uses on a destination chain. A chain that reports a base fee gets
@@ -237,36 +270,112 @@ export const DEFAULT_GAS_MARGIN = RATE_SCALE * 2n;
  */
 export const gasPriceBasisFor = (support: BaseFeeSupport | undefined): GasPriceBasis => (support === "none" ? "transaction" : "base-fee-only");
 
-const tryOption = (mode: FeeMode, build: () => FeeDirector, describe: (director: FeeDirector) => FeeDescription): FeeOption => {
+const attempt = <Value>(build: () => Value): { readonly value: Value } | { readonly reason: string } => {
   try {
-    const director = build();
-    return { kind: "available", mode, director, description: describe(director) };
+    return { value: build() };
   } catch (error) {
     if (!(error instanceof RangeError)) throw error;
-    return { kind: "unavailable", mode, reason: error.message };
+    return { reason: error.message };
   }
 };
 
+const tryOption = (mode: FeeMode, build: () => FeeDirector, describe: (director: FeeDirector) => FeeDescription): FeeOption => {
+  const result = attempt(build);
+  if ("reason" in result) return { kind: "unavailable", mode, reason: result.reason };
+  return { kind: "available", mode, director: result.value, description: describe(result.value) };
+};
+
+const gasTipOf = (input: BuildFeeSuggestionsInput, dataSource: FeeDataSource, margin: bigint): FeeDirector => {
+  const price = { tokenValueInWei: input.token.valueInWei, tokenDecimals: input.token.decimals };
+  return suggestGasMultiplier({
+    recipient: input.recipient,
+    senderPrice: input.senderPrice ?? senderPriceOfToken(price),
+    margin,
+    baseFeeCeilingWei: input.baseFeeCeilingWei ?? dataSource.baseFeeWei * 2n,
+    priorityFeeCeilingWei: input.priorityFeeWei,
+    deliveryGas: dataSource.gas,
+    gasPrice: input.gasPrice ?? "base-fee-only",
+    ...(input.payout === undefined ? {} : { payout: input.payout }),
+  });
+};
+
 /**
- * Builds the three suggestions of the "Pay for delivery" form from the report of the indexer. The percentage and the
- * fixed fee cover the gas cost plus the proof cost plus the margin, and are exact. The gas multiplier covers the gas
- * only, follows the base fee up to the ceiling, and is an estimate with a maximum. The router measures the gas that
- * the deliverer's transaction makes available, and the deliverer chooses the gas limit of that transaction, so the
- * sender should expect a gas based tip to reach the limit: the limit is the price ceiling. It works for any token: the sender's
- * price of the native coin is folded into the multiplier. When the indexer records more
- * deliveries, the gas figure and the suggestions follow with no code change.
+ * The suggested tip range of the gas based mode: a low, a suggested and a high tip. The suggested tip is the measured
+ * delivery gas cost at the base fee, times the margin (default {@link DEFAULT_GAS_MARGIN}, 1). The low and high tips are
+ * half and one and a half times that cost ({@link SUGGESTED_TIP_RANGE}). The range holds no share of the cost of proving,
+ * because a tip does not pay for proving. A tip below the cost is fine: the user may set any tip from zero up, and a low
+ * tip never makes a delivery fail.
+ *
+ * @param input The transfer, the token, the report and the prices.
+ * @throws When the report has no base fee yet, or the price of the token is not above zero.
+ */
+export const suggestedTipRange = (input: BuildFeeSuggestionsInput): { low: FeeDirector; default: FeeDirector; high: FeeDirector } => {
+  const dataSource = describeDataSource(input.report, input.kind ?? "token_callback");
+  return {
+    low: gasTipOf(input, dataSource, SUGGESTED_TIP_RANGE.low),
+    default: gasTipOf(input, dataSource, input.gasMargin ?? DEFAULT_GAS_MARGIN),
+    high: gasTipOf(input, dataSource, SUGGESTED_TIP_RANGE.high),
+  };
+};
+
+/** How a tip stands against the cost of the delivery. */
+export type TipPosition = "below-cost" | "covers-cost" | "above-cost";
+
+/** A tip set against the cost, with words for the user. */
+export interface TipVersusCost {
+  readonly position: TipPosition;
+  /** The wei by which the tip falls short of the cost. Zero when the tip covers the cost. */
+  readonly shortfallWei: bigint;
+  /** A plain sentence for the user. */
+  readonly words: string;
+}
+
+/**
+ * Sets a tip against the cost of a delivery. A tip of zero is allowed and reads as below cost. The words say that a
+ * low tip never makes a delivery fail. They promise nothing in return for a larger tip. This function is pure, so the two
+ * line graphs of the dapp (the delivery cost and the tip against the base fee) call it at each base fee to find where the
+ * tip stops covering the cost.
+ *
+ * @param input The tip and the cost, both in wei of the destination native coin.
+ */
+export const tipVersusCost = (input: { readonly tipWei: bigint; readonly costWei: bigint }): TipVersusCost => {
+  if (input.tipWei < 0n || input.costWei < 0n) throw new RangeError("the tip and the cost must not be negative");
+  if (input.tipWei < input.costWei) {
+    return {
+      position: "below-cost",
+      shortfallWei: input.costWei - input.tipWei,
+      words: "This tip is below the cost of the delivery. The delivery still works. Whoever delivers it pays the difference and may choose to wait for a higher tip elsewhere.",
+    };
+  }
+  if (input.tipWei === input.costWei) return { position: "covers-cost", shortfallWei: 0n, words: "This tip equals the cost of the delivery." };
+  return { position: "above-cost", shortfallWei: 0n, words: "This tip is above the cost of the delivery." };
+};
+
+const tryTipRange = (build: () => { low: FeeDirector; default: FeeDirector; high: FeeDirector }, describe: (director: FeeDirector) => FeeDescription): TipRangeOption => {
+  const result = attempt(build);
+  if ("reason" in result) return { kind: "unavailable", reason: result.reason };
+  const optionOf = (director: FeeDirector) => ({ kind: "available", mode: "gas", director, description: describe(director) }) as const;
+  return { kind: "available", low: optionOf(result.value.low), default: optionOf(result.value.default), high: optionOf(result.value.high) };
+};
+
+/**
+ * Builds the suggestions of the "Pay for delivery" form from the report of the indexer. The percentage and the fixed fee
+ * cover the gas cost plus a margin, and are exact. The gas multiplier is the middle of the tip range: the measured gas
+ * cost at the base fee. It follows the base fee up to the ceiling, and is an estimate with a maximum. The router measures
+ * the gas that the deliverer's transaction makes available, and the deliverer chooses the gas limit of that transaction, so
+ * the sender should expect a gas based tip to reach the limit: the limit is the price ceiling. It works for any token: the
+ * sender's price of the native coin is folded into the multiplier. When the indexer records more deliveries, the gas
+ * figure and the suggestions follow with no code change.
  *
  * @param input The transfer, the token, the report and the prices.
  * @throws When the report has no base fee yet.
  */
 export const buildFeeSuggestions = (input: BuildFeeSuggestionsInput): FeeSuggestions => {
   const dataSource = describeDataSource(input.report, input.kind ?? "token_callback");
-  const proofWei = input.report.proofCost.wei === null ? 0n : BigInt(input.report.proofCost.wei);
   const cost = deliveryCostBreakdown({
     deliveryGas: dataSource.gas,
     baseFeeWei: dataSource.baseFeeWei,
     priorityFeeWei: input.priorityFeeWei,
-    proofCostWei: proofWei,
   });
   const price = { tokenValueInWei: input.token.valueInWei, tokenDecimals: input.token.decimals };
   const shared = { recipient: input.recipient, transferValue: input.transferValue, ...price, ...(input.payout === undefined ? {} : { payout: input.payout }) };
@@ -281,27 +390,14 @@ export const buildFeeSuggestions = (input: BuildFeeSuggestionsInput): FeeSuggest
       priorityFeeWei: input.priorityFeeWei,
       cost,
     });
+  const gasMultiplier = tryOption("gas", () => gasTipOf(input, dataSource, input.gasMargin ?? DEFAULT_GAS_MARGIN), describe);
+  const tipRange = tryTipRange(() => suggestedTipRange(input), describe);
   return {
     dataSource,
     cost,
-    proofCostMissing: input.report.proofCost.wei === null,
     percentage: tryOption("share", () => suggestPercentage({ ...shared, costWei: cost.totalWei, marginRate }), describe),
     fixed: tryOption("fixed", () => suggestFixed({ ...shared, costWei: cost.totalWei, marginRate }), describe),
-    gasMultiplier: tryOption(
-      "gas",
-      () => {
-        return suggestGasMultiplier({
-          recipient: input.recipient,
-          senderPrice: input.senderPrice ?? senderPriceOfToken(price),
-          margin: input.gasMargin ?? DEFAULT_GAS_MARGIN,
-          baseFeeCeilingWei: input.baseFeeCeilingWei ?? dataSource.baseFeeWei * 2n,
-          priorityFeeCeilingWei: input.priorityFeeWei,
-          deliveryGas: dataSource.gas,
-          gasPrice: input.gasPrice ?? "base-fee-only",
-          ...(input.payout === undefined ? {} : { payout: input.payout }),
-        });
-      },
-      describe,
-    ),
+    gasMultiplier,
+    tipRange,
   };
 };

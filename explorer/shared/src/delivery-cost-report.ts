@@ -38,17 +38,6 @@ export const deliveryCostReportSchema = z.object({
     /** The timestamp of that block, in seconds. */
     timestamp: z.number().int().nullable(),
   }),
-  proofCost: z.object({
-    /** The configured cost of one proof in US dollars, as a decimal text. */
-    usd: z.string(),
-    /** The configured price of the native coin in US dollars. Null when no price is configured. */
-    nativeCoinPriceUsd: z.string().nullable(),
-    deliveriesPerProof: z.number().int().positive(),
-    /** The share of the proof that one delivery pays, in wei. Null when no price is configured. */
-    wei: amountText.nullable(),
-    /** Always true: the figure comes from configured prices, not from a measure. */
-    isEstimate: z.literal(true),
-  }),
   kinds: z.object({ token_callback: kindReport, token: kindReport, message: kindReport }),
 });
 

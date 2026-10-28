@@ -28,7 +28,7 @@ export type DeliveryOptions = {
   readonly fixedText: string;
   /** The margin in percent that the fixed suggestion adds. */
   readonly marginPercentText: string;
-  /** The factor on the gas cost for the gas based mode, as typed (`2`, a margin of 100 percent). */
+  /** The factor on the gas cost for the gas based mode, as typed (`1`, the measured cost itself). */
   readonly gasMultiplierText: string;
   /** The ceiling base fee in gwei, as typed. Empty takes twice the base fee now. */
   readonly ceilingGweiText: string;
@@ -293,11 +293,11 @@ export const computeBridgeDraft = (values: BridgeFormValues, options: DeliveryOp
   }
 };
 
-/** The default factor on the gas cost, as text: `2`, a margin of 100 percent. It comes from `@zk-bridge/shared`. */
+/** The default factor on the gas cost, as text: `1`, the measured cost itself. It comes from `@zk-bridge/shared`. */
 export const DEFAULT_GAS_MARGIN_TEXT = formatUnits(DEFAULT_GAS_MARGIN, 18);
 
 /**
- * The tip options before the user touches them: the gas based tip at the base fee, with a margin of 100 percent. Its
+ * The tip options before the user touches them: the gas based tip at the base fee, equal to the measured cost. Its
  * limit is the price ceiling, twice the base fee now, and the deliverer's gas choice decides how much of it the tip takes.
  */
 export const DEFAULT_DELIVERY_OPTIONS: DeliveryOptions = {

@@ -56,7 +56,7 @@ describe("selectDelivery", () => {
   });
 
   it("shows the cost lines of a percentage tip once a price is known", () => {
-    expect(available().description.breakdown.map((line) => line.id)).toEqual(["gas", "proof", "margin"]);
+    expect(available().description.breakdown.map((line) => line.id)).toEqual(["gas", "margin"]);
   });
 
   it("takes the percentage that the user typed, and refuses one above 100 percent", () => {
@@ -116,10 +116,16 @@ describe("selectDelivery", () => {
     expect(after.maximumTip).toBeGreaterThan(before.maximumTip);
   });
 
-  it("flags a report with no coin price, so the form can say that the proof cost is left out", () => {
-    const selection = available({ report: buildDeliveryReport(369, { proofCostWei: null }) });
-    expect(selection.suggestions.proofCostMissing).toBe(true);
-    expect(selection.suggestions.cost.proofCostWei).toBe(0n);
+  it("counts the gas alone in the cost, with no share of the cost of proving", () => {
+    const selection = available();
+    expect(selection.suggestions.cost.totalWei).toBe(selection.suggestions.cost.gasCostWei);
+  });
+
+  it("offers the range as low, suggested and high, each half a step apart in the multiplier", () => {
+    const { tipRange } = available().suggestions;
+    if (tipRange.kind !== "available") throw new Error("available");
+    expect(tipRange.low.director.multiplier * 2n).toBe(tipRange.default.director.multiplier);
+    expect(tipRange.high.director.multiplier * 2n).toBe(tipRange.default.director.multiplier * 3n);
   });
 
   it("says when the suggested fixed amount cannot be built because the transfer is too small", () => {
@@ -173,10 +179,10 @@ describe("selectDelivery: the default gas based tip", () => {
     expect(selection).toEqual({ kind: "unavailable", reason: expect.stringContaining("Enter your price of the native coin in this token") });
   });
 
-  it("sets the multiplier to the price times 2e18, rounded up, for a margin of 100 percent", () => {
+  it("sets the multiplier to the price times 1e18, rounded up: the tip equals the measured cost", () => {
     const price = { numerator: 3_001n * 10n ** 6n + 1n, denominator: 10n ** 18n };
     const selection = gas({ token: { symbol: "zkbUSDC", decimals: 6 }, tokenValueInWei: 10n ** 18n / 3_000n, senderPrice: price });
-    const expected = (price.numerator * 2n * 10n ** 18n + price.denominator - 1n) / price.denominator;
+    const expected = (price.numerator * 10n ** 18n + price.denominator - 1n) / price.denominator;
     expect(selection.director.multiplier).toBe(expected);
   });
 
@@ -198,8 +204,8 @@ describe("selectDelivery: the default gas based tip", () => {
     expect(selection.director.limit).toBeLessThanOrEqual(selection.description.nowUnits * 2n + 1n);
   });
 
-  it("keeps the proof cost in the cost breakdown", () => {
-    expect(gas().description.breakdown.map((line) => line.id)).toContain("proof");
+  it("has no proof line in the cost breakdown", () => {
+    expect(gas().description.breakdown.map((line) => line.id)).not.toContain("proof");
   });
 
   it("encodes the default director as the abi encoding of the recipient, the settings, the limit and the multiplier", () => {

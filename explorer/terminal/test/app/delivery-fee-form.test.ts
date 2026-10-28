@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { getAddress } from 'viem'
-import { settingsOf, decodeFeeDirector, encodeFeeDirector, feeModeOf, requestedPayoutOf } from '@zk-bridge/shared'
+import { minimumGasLimitOf, requiredDeliveryGas, settingsOf, decodeFeeDirector, encodeFeeDirector, feeModeOf, requestedPayoutOf } from '@zk-bridge/shared'
 import { bridgeSourceOf } from '../../src/app/actions'
 import {
   buildDeliveryFeeModel,
@@ -120,27 +120,19 @@ describe('buildDeliveryFeeModel', () => {
     expect(suggestions.gasMultiplier.description.certaintyLabel).toMatch(/^estimate, at most [\d.]+ zkbWETH$/)
   })
 
-  test('the measured delivery gas of the callback kind is the p90, and the proof cost is a separate line', () => {
+  test('the measured delivery gas of the callback kind is the p90, and the cost is the gas alone', () => {
     const model = readyModel(stateFor(baseValues))
     expect(model.dataSource.description).toBe('measured from 40 recent deliveries, p90')
     expect(model.dataSource.gas).toBe(210_000n)
     expect(model.cost.gasCostWei).toBe(210_000n * (7_000_000_000n + 1_000_000_000n))
-    expect(model.cost.proofCostWei).toBe(8_000_000_000_000n)
-    expect(model.proofCostMissing).toBe(false)
+    expect(model.cost.totalWei).toBe(model.cost.gasCostWei)
   })
 
-  test('a report with no samples uses the default gas and says so', () => {
+  test('a report with no samples uses the gas that a delivery must supply, when that is above the default, and says so', () => {
     const empty = { ...report, kinds: { ...report.kinds, token_callback: { sampleCount: 0, averageGas: null, p90Gas: null, defaultGas: '300000', isDefault: true } } }
     const model = readyModel(stateFor(baseValues, price, empty))
     expect(model.dataSource.description).toBe('default, no deliveries measured yet')
-    expect(model.dataSource.gas).toBe(300_000n)
-  })
-
-  test('with no native coin price the proof cost is left out and the model says so', () => {
-    const unpriced = { ...report, proofCost: { ...report.proofCost, nativeCoinPriceUsd: null, wei: null } }
-    const model = readyModel(stateFor(baseValues, price, unpriced))
-    expect(model.proofCostMissing).toBe(true)
-    expect(model.cost.proofCostWei).toBe(0n)
+    expect(model.dataSource.gas).toBe(requiredDeliveryGas(minimumGasLimitOf({ kind: 'token-release', withCall: true })))
   })
 
   test('with no token price the cost based suggestions are off, the default tip stays, and typed numbers still work', () => {
@@ -265,7 +257,7 @@ describe('refillDeliveryFee', () => {
 
   test('choosing the gas multiplier fills the margin, the ceiling and the price of the valuation as the sender price', () => {
     const next = refillDeliveryFee({ ...baseValues, delivery: 'yes', feeMode: 'percentage' }, { ...baseValues, delivery: 'yes', feeMode: 'gas' }, context)
-    expect(next.feeMultiplier).toBe('2')
+    expect(next.feeMultiplier).toBe('1')
     expect(next.feeSenderPrice).toBe('2500') // one zkbUSDC is worth 4e14 wei, so one coin is worth 2,500
     expect(next.feeCeilingGwei).toBe('14')
   })
@@ -278,7 +270,7 @@ describe('refillDeliveryFee', () => {
   test('changing the margin refills the fixed amount', () => {
     const before = { ...baseValues, delivery: 'yes', feeMode: 'fixed', feeFixed: '1' }
     const next = refillDeliveryFee(before, { ...before, feeMargin: '50' }, context)
-    expect(next.feeFixed).toBe('6.33') // the cost is 4.22 zkbUSDC, plus 50 percent
+    expect(next.feeFixed).toBe('6.3') // the cost is 4.2 zkbUSDC, plus 50 percent
   })
 
   test('does nothing when the user pays nothing', () => {
