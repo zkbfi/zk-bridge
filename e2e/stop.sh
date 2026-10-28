@@ -61,4 +61,9 @@ stop_listener "${E2E_INDEXER_PORT:-42069}" "ponder.js start --port ${E2E_INDEXER
 stop_listener "$E2E_BEACON_PORT" "signed-beacon serve --listen 127.0.0.1:$E2E_BEACON_PORT" "--chain a,ethereum,$E2E_RPC_A" "--chain b,pulsechain,$E2E_RPC_B"
 stop_listener "$E2E_RPC_A_PORT" "anvil --host 127.0.0.1 --port $E2E_RPC_A_PORT --chain-id 1 " "--slots-in-an-epoch 1 --mnemonic $E2E_MNEMONIC"
 stop_listener "$E2E_RPC_B_PORT" "anvil --host 127.0.0.1 --port $E2E_RPC_B_PORT --chain-id 369 " "--slots-in-an-epoch 1 --mnemonic $E2E_MNEMONIC"
+# The driver and the programs it starts (the bots and the message board) carry the absolute path of this repository in their
+# command lines, which no other project has.
+for pattern in "$PWD/explorer/bots/bin/zk-bridge-bot.mjs" "$PWD/explorer/e2e/src/board.ts"; do
+  pkill -f -- "$pattern" 2> /dev/null && e2e_log "stopped the programs that match $pattern" || true
+done
 e2e_log "everything is stopped"

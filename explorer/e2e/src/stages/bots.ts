@@ -5,13 +5,12 @@
  */
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { decodeErrorResult, decodeEventLog, encodeFunctionData, type Address, type Hex, type TransactionReceipt } from "viem";
-import { beaconLightClientAbi, deliveryRouterAbi, messageBridgeAbi, type BatchedCall } from "@zk-bridge/shared";
+import { decodeErrorResult, decodeEventLog, encodeFunctionData, formatUnits, type Address, type Hex, type TransactionReceipt } from "viem";
+import { beaconLightClientAbi, deliveryRouterAbi, MAX_GAS_PER_TX, messageBridgeAbi, requiredDeliveryGas, tipVersusCost, type BatchedCall } from "@zk-bridge/shared";
 import { ANVIL_MNEMONIC, accountOf, chainOf, sendFrom, type Context } from "../context.ts";
 import { execute, readyEvidence, sendBatch, type MessageRecord } from "../delivery.ts";
 import { record } from "../results.ts";
-import { balanceChange } from "../tokens.ts";
-import { copyOf, nativeTokens, valuationsWei } from "../tokens.ts";
+import { balanceAt, copyOf, nativeTokens, valuationsWei } from "../tokens.ts";
 import { loadMessages, saveMessage } from "../messages.ts";
 import { sideOf } from "../terminal.ts";
 import { relayWithGate, startServices } from "./transfers.ts";
@@ -24,7 +23,8 @@ const WHOLE = 10n ** 18n;
 
 /** The messages of the bot run: three for the runner and three for the batch of the copier. */
 const BOT_CASES = [
-  { name: "bot-default-tip", fee: { delivery: "yes" }, recipient: "recipient", group: "runner" },
+  // The tip of this one is set at run time from the cost of a delivery (see `coveringTipOf`), so it always covers the cost.
+  { name: "bot-default-tip", fee: { delivery: "yes", feeMode: "fixed" }, recipient: "recipient", group: "runner" },
   { name: "bot-percent-tip", fee: { delivery: "yes", feeMode: "percentage", feePercent: "0.1" }, recipient: "recipientTwo", group: "runner" },
   { name: "bot-fixed-tip", fee: { delivery: "yes", feeMode: "fixed", feeFixed: "0.5" }, recipient: "recipientThree", group: "runner" },
   // The tip of one base unit is worth less than the gas of a delivery, so the runner skips these and the copier delivers them.
@@ -36,6 +36,30 @@ const BOT_CASES = [
 const AMOUNT = 100n * WHOLE;
 
 const runnerKey = (): Hex => `0x${Buffer.from(mnemonicToAccount(ANVIL_MNEMONIC, { addressIndex: 2 }).getHdKey().privateKey!).toString("hex")}`;
+
+/** The value of one whole token in wei: every token of the run is worth 0.001 coin (see `valuationsWei`). */
+const TOKEN_VALUE_WEI = 10n ** 15n;
+/** The tip is this many times the worst delivery cost, so a small move of the gas price cannot put it below cost. */
+const TIP_MARGIN = 4n;
+
+/**
+ * A fixed tip, in whole tokens, that covers the cost of the most expensive delivery. The cost is the gas that a delivery
+ * must have for the largest message gas limit (`requiredDeliveryGas`) at the gas price of the destination chain. The shared
+ * `tipVersusCost` confirms that the tip is not below cost, so the runner delivers at its loss limit of zero.
+ *
+ * @param gasPrice The gas price of the destination chain, in wei.
+ * @throws Error when the tip still reads as below cost.
+ */
+export const coveringTipFor = (gasPrice: bigint): string => {
+  const costWei = requiredDeliveryGas(MAX_GAS_PER_TX) * gasPrice;
+  const tipUnits = (costWei * TIP_MARGIN * WHOLE) / TOKEN_VALUE_WEI + 1n;
+  const valuedWei = (tipUnits * TOKEN_VALUE_WEI) / WHOLE;
+  if (tipVersusCost({ tipWei: valuedWei, costWei }).position === "below-cost") throw new Error(`the computed tip ${valuedWei} is below the cost ${costWei}`);
+  return formatUnits(tipUnits, 18);
+};
+
+/** The covering tip at the current gas price of the destination chain. */
+export const coveringTipOf = async (context: Context): Promise<string> => coveringTipFor(await chainOf(context, "b").publicClient.getGasPrice());
 
 /** The file paths of the bot run. */
 const paths = (context: Context) => ({
@@ -121,6 +145,7 @@ const botEnvironment = (context: Context, boardUrl: string): Record<string, stri
 /** Sends the messages of the bot run through the terminal. The gate is confirmed first. */
 const sendBotMessages = async (context: Context): Promise<void> => {
   const services = await startServices(context, Bun.env.E2E_INDEXER_URL ?? "http://127.0.0.1:42069");
+  const coveringTip = await coveringTipOf(context);
   const { terminalTokens } = await import("../tokens.ts");
   for (const item of BOT_CASES) {
     const tokens = (await terminalTokens(context)).filter((token) => token.side === "first" || token.symbol.startsWith("zkb"));
@@ -134,7 +159,7 @@ const sendBotMessages = async (context: Context): Promise<void> => {
     const relay = await relayWithGate(context, services, {
       from: "a",
       role: "senderOne",
-      values: { token: `${sideOf("a")}:${tokenA.address}`, amount: "100", receiver: accountOf(item.recipient).address, ...item.fee },
+      values: { token: `${sideOf("a")}:${tokenA.address}`, amount: "100", receiver: accountOf(item.recipient).address, ...item.fee, ...(item.name === "bot-default-tip" ? { feeFixed: coveringTip } : {}) },
       tokens: live,
       label: item.name,
     });
@@ -185,17 +210,14 @@ const runBotsWithProcesses = async (context: Context, options: { readonly resume
   const destination = chainOf(context, "b");
   const failures: string[] = [];
 
-  // 1. The messages, and the update that covers them. The newer proof for the batch comes from the publisher.
+  // 1. The messages. No update covers them yet: the publisher proves one and the runner must apply it itself.
   if (!options.resume) await sendBotMessages(context);
   const wanted = new Set<string>(BOT_CASES.map((item) => item.name));
   const messages = loadMessages(context).filter((message) => wanted.has(message.name));
   const { waitForFinality } = await import("./transfers.ts");
-  if (!options.resume) {
-    await waitForFinality(context, "a", messages);
-    await postUpdate(context, "a", "bots");
-  }
-  const coveringHead = (await chainOf(context, "b").publicClient.readContract({ address: destination.deployment.light_client, abi: beaconLightClientAbi, functionName: "head" })) as bigint;
-  record(context, { stage: "bots", name: "covering-update", ok: true, data: { head: coveringHead.toString() } });
+  if (!options.resume) await waitForFinality(context, "a", messages);
+  const startingHead = (await chainOf(context, "b").publicClient.readContract({ address: destination.deployment.light_client, abi: beaconLightClientAbi, functionName: "head" })) as bigint;
+  record(context, { stage: "bots", name: "starting-head", ok: true, data: { head: startingHead.toString() } });
 
   // 2. The board, the configuration and the runner. The indexer must list the messages as covered.
   await writeBotConfiguration(context, indexerUrl);
@@ -203,13 +225,9 @@ const runBotsWithProcesses = async (context: Context, options: { readonly resume
   started.push(board);
   const boardUrl = await waitUntil("the board URL", () => (existsSync(file.boardUrl) ? readFileSync(file.boardUrl, "utf8") : undefined), 30_000);
   const environment = botEnvironment(context, boardUrl);
-  await waitUntil("the indexer to list the bot messages as covered", async () => {
-    const answer = (await (await fetch(`${indexerUrl}/api/feed?direction=1-369&status=covered&limit=50`)).json()) as { items: { messageId: Hex }[] };
-    return messages.filter((message) => message.name.startsWith("bot-")).every((message) => answer.items.some((item) => item.messageId === message.messageId)) ? true : undefined;
-  }, 180_000);
   const botCommand = (role: string, extra: string[] = []) => ["node", join(context.repositoryRoot, "explorer/bots/bin/zk-bridge-bot.mjs"), role, "--config", file.config, ...extra];
   // 3. The publisher proves the newest update (a real proof on RunPod) and posts it on the board. The runner starts after the
-  // post: it reads the proof from the board at its first pass, so the next batch carries the update first.
+  // post: it reads the proof from the board and must send the update itself.
   const publisherStarted = Date.now();
   const publisher = await spawnBackground(context, "publisher", botCommand("publisher", ["--once"]), environment, join(context.repositoryRoot, "explorer/bots"));
   started.push(publisher);
@@ -218,51 +236,49 @@ const runBotsWithProcesses = async (context: Context, options: { readonly resume
   const runner = await spawnBackground(context, "runner", botCommand("runner"), environment, join(context.repositoryRoot, "explorer/bots"));
   started.push(runner);
 
-  // 4. The batch of the runner: find the aggregate3 transaction on the destination chain.
-  const batch = await waitUntil(
-    "the runner to send its batch",
+  // 4. The outcomes of the runner. The runner may split its work into batches as its packing decides, so the stage checks
+  // outcomes: one head update from the runner, every tipped message delivered, no untipped message delivered.
+  const tipped = messages.filter((message) => message.name.startsWith("bot-"));
+  const untipped = messages.filter((message) => message.name.startsWith("copier-"));
+  const firstBlock = await destination.publicClient.getBlockNumber();
+  await waitUntil(
+    "the runner to deliver every tipped message",
     async () => {
-      const head = await destination.publicClient.getBlockNumber();
-      for (let number = head; number > 0n && number > head - 60n; number -= 1n) {
-        const block = await destination.publicClient.getBlock({ blockNumber: number, includeTransactions: true });
-        const hit = block.transactions.find((transaction) => transaction.to?.toLowerCase() === context.run.multicall3.toLowerCase() && transaction.from.toLowerCase() === accountOf("runner").address.toLowerCase());
-        if (hit !== undefined) return hit;
-      }
-      return undefined;
+      const found = await runnerBatches(context, firstBlock);
+      return found.deliveries >= tipped.length ? found : undefined;
     },
-    240_000,
+    300_000,
   );
   await stopBackground(runner);
   await stopBackground(board);
-  const receipt = await destination.publicClient.getTransactionReceipt({ hash: batch.hash });
-  const reading = readBatchReceipt(receipt, { lightClient: destination.deployment.light_client, bridge: destination.deployment.bridge });
-  const first = await firstCallSelector(batch.input);
-  const reward = accountOf("reward").address;
+  const settled = await runnerBatches(context, firstBlock);
+  const skips = skippedByRunner(context);
   const copy = await copyOf(context, nativeTokens(context).find((token) => token.key === "tokenA")!);
-  const rewardChange = await balanceChange(context, "b", copy, reward, receipt.blockNumber);
-  const recipientChanges: Record<string, string> = {};
+  const lastBlock = settled.lastBlock;
+  const rewardAddress = accountOf("reward").address;
+  const rewardChange = (await balanceAt(context, "b", copy, rewardAddress, lastBlock)) - (await balanceAt(context, "b", copy, rewardAddress, firstBlock));
+  let recipientTotal = 0n;
   for (const item of BOT_CASES.filter((candidate) => candidate.group === "runner")) {
-    recipientChanges[item.name] = (await balanceChange(context, "b", copy, accountOf(item.recipient).address, receipt.blockNumber)).toString();
+    const address = accountOf(item.recipient).address;
+    recipientTotal += (await balanceAt(context, "b", copy, address, lastBlock)) - (await balanceAt(context, "b", copy, address, firstBlock));
   }
-  const delivered = reading.deliveries;
-  const expectedTotal = AMOUNT * BigInt(delivered);
-  const recipientTotal = Object.values(recipientChanges).reduce((total, value) => total + BigInt(value), 0n);
-  if (reading.headUpdates !== 1) failures.push(`the batch applied ${reading.headUpdates} head updates, expected 1`);
-  if (first !== "update") failures.push(`the first call of the batch is ${first}, expected update`);
-  if (delivered < 3) failures.push(`the batch delivered ${delivered} messages, expected 3`);
+  if (settled.headUpdates !== 1) failures.push(`the runner applied ${settled.headUpdates} head updates, expected exactly 1`);
+  if (settled.deliveries !== tipped.length) failures.push(`the runner delivered ${settled.deliveries} messages, expected the ${tipped.length} tipped ones and no others`);
+  for (const message of untipped) {
+    if (skips.get(message.messageId) !== "loss-at-or-above-limit") failures.push(`${message.name} was not skipped with loss-at-or-above-limit (${skips.get(message.messageId) ?? "no skip logged"})`);
+  }
   if (rewardChange <= 0n) failures.push("no tip reached the reward address");
+  const expectedTotal = AMOUNT * BigInt(tipped.length);
   if (rewardChange + recipientTotal !== expectedTotal) failures.push(`tip ${rewardChange} plus recipients ${recipientTotal} is not ${expectedTotal}`);
   record(context, {
     stage: "bots",
-    name: "runner-batch",
+    name: "runner-outcomes",
     ok: failures.length === 0,
     data: {
-      transaction: batch.hash,
-      sender: batch.from,
-      firstCall: first,
-      headUpdates: reading.headUpdates,
-      deliveries: delivered,
-      gasUsed: receipt.gasUsed.toString(),
+      batches: settled.batches,
+      headUpdates: settled.headUpdates,
+      deliveries: settled.deliveries,
+      skippedUntipped: untipped.filter((message) => skips.get(message.messageId) === "loss-at-or-above-limit").length,
       tipsToReward: rewardChange.toString(),
       recipientsTotal: recipientTotal.toString(),
       problems: failures.join("; ") || null,
@@ -296,6 +312,51 @@ const firstCallSelector = async (input: Hex): Promise<string> => {
   } catch {
     return decodeFunctionData({ abi: deliveryRouterAbi, data: first.callData }).functionName;
   }
+};
+
+/** What the runner did on the destination chain since a block. */
+interface RunnerWork {
+  readonly batches: number;
+  readonly headUpdates: number;
+  readonly deliveries: number;
+  readonly lastBlock: bigint;
+}
+
+/** Adds up the head updates and deliveries of every Multicall3 batch that the runner account sent since `fromBlock`. */
+const runnerBatches = async (context: Context, fromBlock: bigint): Promise<RunnerWork> => {
+  const destination = chainOf(context, "b");
+  const head = await destination.publicClient.getBlockNumber();
+  let batches = 0;
+  let headUpdates = 0;
+  let deliveries = 0;
+  let lastBlock = fromBlock;
+  for (let number = fromBlock + 1n; number <= head; number += 1n) {
+    const block = await destination.publicClient.getBlock({ blockNumber: number, includeTransactions: true });
+    for (const transaction of block.transactions) {
+      if (transaction.to?.toLowerCase() !== context.run.multicall3.toLowerCase()) continue;
+      if (transaction.from.toLowerCase() !== accountOf("runner").address.toLowerCase()) continue;
+      const receipt = await destination.publicClient.getTransactionReceipt({ hash: transaction.hash });
+      const reading = readBatchReceipt(receipt, { lightClient: destination.deployment.light_client, bridge: destination.deployment.bridge });
+      batches += 1;
+      headUpdates += reading.headUpdates;
+      deliveries += reading.deliveries;
+      lastBlock = number;
+    }
+  }
+  return { batches, headUpdates, deliveries, lastBlock };
+};
+
+/** The last skip reason that the runner logged for each message, read from the log of the runner. */
+const skippedByRunner = (context: Context): Map<string, string> => {
+  const reasons = new Map<string, string>();
+  const logFile = join(context.stateDirectory, "logs", "runner.log");
+  if (!existsSync(logFile)) return reasons;
+  for (const line of readFileSync(logFile, "utf8").split("\n")) {
+    if (!line.includes('"delivery_skipped"')) continue;
+    const entry = JSON.parse(line) as { messageId: Hex; reason: string };
+    reasons.set(entry.messageId, entry.reason);
+  }
+  return reasons;
 };
 
 /**
