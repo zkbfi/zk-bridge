@@ -5,10 +5,14 @@
 //! A proof only shows that the ELF ran. It does not show that the ELF is the program we meant, so this agreement is
 //! the evidence that matters.
 //!
-//! The tests need the two ELFs. Build them natively (the executor does not care about the build machine):
-//! `cargo prove build --locked` in `light-client/guests/light-client` and in `light-client/guests/fork-observation`.
-//! `SP1_LIGHT_CLIENT_ELF` and `SP1_FORK_OBSERVATION_ELF` name other files. Without an ELF a test prints a message and
-//! passes, unless `SP1_REQUIRE_ELFS` is set, which turns the missing file into a failure.
+//! The tests need the two ELFs. By default they read `light-client/elf/light-client.elf` and
+//! `light-client/elf/fork-observation.elf`. Build both in Docker with `ELF_OUTPUT_DIR=elf light-client/scripts/program-keys.sh`.
+//! That script also writes `elf_sha256` and `program_key` into `light-client/program-keys.json`, and the server image
+//! uses the same files. A native build in `light-client/guests/<guest>/target` can be older than the Docker build, so the
+//! tests never read it unless `SP1_LIGHT_CLIENT_ELF` or `SP1_FORK_OBSERVATION_ELF` name that file.
+//! The test `the_default_elfs_match_the_pinned_hashes` fails when a default ELF differs from the pinned hash.
+//! Without an ELF a test prints a message and passes, unless `SP1_REQUIRE_ELFS` is set, which turns the missing file into
+//! a failure.
 //!
 //! Run the tests one at a time: `cargo test --features sp1 --test sp1_execute -- --test-threads=1`. Each run of the
 //! executor uses a lot of memory, and a parallel run was killed on a 16 GB laptop. The whole file takes about 4.5 minutes.
@@ -38,21 +42,28 @@ use zk_bridge_prover::prover::{
     Sp1Prover,
 };
 
-fn guest_elf_path(guest: &str, variable: &str) -> PathBuf {
-    if let Ok(path) = std::env::var(variable) {
-        return PathBuf::from(path);
-    }
+/// The path of the default ELF of one guest: `light-client/elf/<guest>.elf`, the output of
+/// `light-client/scripts/program-keys.sh` with `ELF_OUTPUT_DIR=elf`.
+fn default_elf_path(guest: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../light-client/guests")
-        .join(guest)
-        .join("target/elf-compilation/riscv64im-succinct-zkvm-elf/release")
-        .join(format!("{guest}-guest"))
+        .join("../light-client/elf")
+        .join(format!("{guest}.elf"))
 }
 
+/// The path of the ELF of one guest: the file that the environment variable names, or the default ELF.
+fn guest_elf_path(guest: &str, variable: &str) -> PathBuf {
+    match std::env::var(variable) {
+        Ok(path) => PathBuf::from(path),
+        Err(_) => default_elf_path(guest),
+    }
+}
+
+/// The path of the light-client ELF.
 fn light_client_elf_path() -> PathBuf {
     guest_elf_path("light-client", "SP1_LIGHT_CLIENT_ELF")
 }
 
+/// The path of the fork-observation ELF.
 fn fork_observation_elf_path() -> PathBuf {
     guest_elf_path("fork-observation", "SP1_FORK_OBSERVATION_ELF")
 }
@@ -76,6 +87,43 @@ fn elf_bytes(path: &PathBuf) -> Option<Vec<u8>> {
     }
 }
 
+/// Claim: the SHA-256 of each default ELF equals `elf_sha256` in `light-client/program-keys.json`.
+/// Why it matters: the pinned hash and program key describe the Docker build. An older ELF in the default place would
+/// run an old program and still pass every agreement test, so a stale ELF must fail here, loudly.
+/// Control: the hash of one flipped byte differs from the pinned hash, so the comparison can fail.
+#[test]
+fn the_default_elfs_match_the_pinned_hashes() {
+    let pinned: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../light-client/program-keys.json"),
+        )
+        .expect("program-keys.json is readable"),
+    )
+    .expect("program-keys.json is JSON");
+    for guest in ["light-client", "fork-observation"] {
+        let Some(bytes) = elf_bytes(&default_elf_path(guest)) else {
+            continue;
+        };
+        let expected = pinned[guest]["elf_sha256"]
+            .as_str()
+            .unwrap_or_else(|| panic!("program-keys.json has no elf_sha256 for {guest}"));
+        let actual = format!("{:#x}", lc_core::ssz::sha256(&bytes));
+        assert_eq!(
+            actual,
+            format!("0x{expected}"),
+            "the default {guest} ELF is not the pinned build; rebuild it with light-client/scripts/program-keys.sh"
+        );
+        let mut changed = bytes;
+        changed[0] ^= 0x01;
+        assert_ne!(
+            format!("{:#x}", lc_core::ssz::sha256(&changed)),
+            format!("0x{expected}"),
+            "control: one flipped byte changes the hash"
+        );
+    }
+}
+
+/// Maps a chain spec to its chain kind.
 fn chain_kind(spec: &ChainSpec) -> ChainKind {
     if spec.name == "pulsechain" {
         ChainKind::Pulsechain
@@ -137,12 +185,33 @@ fn assert_light_client_agrees(label: &str, elf: &[u8], input: &UpdateInput) {
     eprintln!("{label}: {} instructions", run.instruction_count);
 }
 
+/// Claim: on the real Ethereum mainnet update, the light-client ELF and `lc-core` both refuse with exactly
+/// `InvalidGenesisValidatorsRootBranch`, and the ELF commits no public values.
+/// Why it matters: no public node serves the old attested state, so the branch of `genesis_validators_root` for this
+/// update is not on file (see `light-client/tests/fixtures/README.md`). The program must refuse it, and the ELF must
+/// refuse for the same reason as the native check. The accepting agreement runs on real PulseChain data and on the real
+/// Sepolia Gloas fold.
 #[test]
 fn light_client_guest_agrees_with_lc_core_on_real_ethereum_data() {
     let Some(elf) = elf_bytes(&light_client_elf_path()) else {
         return;
     };
-    assert_light_client_agrees("real ethereum update", &elf, &real_ethereum_input());
+    let input = real_ethereum_input();
+    assert_eq!(
+        lc_core::update::verify_light_client_fold_with_fork_versions(
+            &input.store,
+            &input.steps,
+            input.chain.spec()
+        ),
+        Err(lc_core::Error::InvalidGenesisValidatorsRootBranch),
+        "lc-core refuses the update for the missing branch"
+    );
+    let run = execute_program(&elf, &guest_input_bytes(&input)).expect("executor runs");
+    assert_ne!(run.exit_code, 0, "the guest refuses the update");
+    assert!(
+        run.public_values.is_empty(),
+        "a refused input commits nothing"
+    );
 }
 
 #[test]
@@ -253,15 +322,16 @@ fn profile_the_signature_check_on_a_fork_observation() {
     );
 }
 
-/// Claim: the executor refuses a real update that the guest must reject (a wrong fork version in the signing domain),
-/// and `lc-core` refuses the same input. The control, with the right version, is accepted.
+/// Claim: the executor refuses a real PulseChain update that the guest must reject (a wrong fork version in the signing
+/// domain), and `lc-core` refuses the same input. The control, with the right version, is accepted. The test uses
+/// PulseChain data because that update has its branch of `genesis_validators_root` on file, so the right version passes.
 /// Why it matters: a rejecting guest is what makes a false update unprovable.
 #[test]
 fn light_client_guest_rejects_a_wrong_fork_version() {
     let Some(elf) = elf_bytes(&light_client_elf_path()) else {
         return;
     };
-    let input = real_ethereum_input();
+    let input = real_pulsechain_input();
     let spec = input.chain.spec();
     let update = input.steps[0].update.clone();
     let right_version = table_fork_version(spec, update.signature_slot);
@@ -380,6 +450,7 @@ fn load_prover() -> Option<Sp1Prover> {
     )
 }
 
+/// The statement uses the real PulseChain update, which verifies, so the refusal comes from the key and not from the input.
 /// Claim: the loaded prover accepts the program key of its own ELF, refuses any other key at startup
 /// (`require_program_key`), and refuses to prove under a wrong key before it starts the (slow) proof.
 /// Also: the two programs have different keys, so a proof of one cannot pass for the other.
@@ -406,7 +477,7 @@ fn the_loaded_prover_refuses_a_key_the_contract_does_not_store() {
         .require_program_key(ProgramKind::ForkObservation, light_client_key)
         .is_err());
 
-    let statement = ProofStatement::Verified(real_ethereum_input());
+    let statement = ProofStatement::Verified(real_pulsechain_input());
     let error = prover.prove(observation_key, &statement).unwrap_err();
     assert!(matches!(error, Error::Config(_)), "got {error}");
 }
