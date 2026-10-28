@@ -129,7 +129,7 @@ function makeRig(options: { storage?: Storage; verify?: () => Promise<void>; hea
   const app = createApp({ context, modules: MODULES, enabled: ["msgboard-indexer"] });
   const heads = { "first-to-second": movableHead(options.headSlot ?? 100n), "second-to-first": movableHead(options.headSlot ?? 100n) };
   const board = fakeBoard();
-  const dependencies: IndexerDependencies = { pair: PAIR, feed: board.feed, lightClients: heads, pollMilliseconds: 1_000 };
+  const dependencies: IndexerDependencies = { pair: PAIR, feed: board.feed, lightClients: heads, pollMilliseconds: 1_000, acceptOracleProofs: false };
   return { storage, clock, log, context, app, heads, board, dependencies, verifyCalls };
 }
 
@@ -483,6 +483,15 @@ describe("the real parts", () => {
     expect(dependencies.pair.name).toBe("eth-pls");
     expect(Object.keys(dependencies.lightClients)).toEqual(["first-to-second", "second-to-first"]);
     expect(created.boardUrls).toEqual(["https://board.invalid"]);
+  });
+
+  it.each([
+    [undefined, false],
+    ["false", false],
+    ["true", true],
+  ])("reads the oracle setting %j as %j", async (value, expected) => {
+    const dependencies = await buildDependencies(contextWithDeployment(), { ...variables, EXPLORER_ACCEPT_ORACLE_PROOFS: value });
+    expect(dependencies.acceptOracleProofs).toBe(expected);
   });
 
   it.each([[undefined], [""]])("refuses to start without a msgboard address (%j)", async (value) => {

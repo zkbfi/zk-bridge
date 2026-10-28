@@ -20,6 +20,12 @@ import { cacheLightClientReader, chooseLatest, deleteStoredProof, loadStoredProo
 /** The variable that holds the address of the msgboard node. It can carry a key, so the backend never logs it. */
 export const MSGBOARD_URL_VARIABLE = "EXPLORER_MSGBOARD_URL";
 
+/**
+ * The variable that turns on the free test prover's short oracle proofs. Set it to `true` for local testing only. Any
+ * other value, or none, keeps the strict rule: only full Groth16 proofs pass.
+ */
+export const ACCEPT_ORACLE_PROOFS_VARIABLE = "EXPLORER_ACCEPT_ORACLE_PROOFS";
+
 /** How often the module reads the recent messages of the board, in milliseconds. A socket drop loses nothing longer than this. */
 export const POLL_MILLISECONDS = 30_000;
 
@@ -36,6 +42,8 @@ export type IndexerDependencies = {
   /** One reader per direction: the light client on the destination chain of that direction. */
   readonly lightClients: Readonly<Record<ProofDirection, LightClientReader>>;
   readonly pollMilliseconds: number;
+  /** Accept the oracle proofs of the free test prover. Local testing only. Default false. */
+  readonly acceptOracleProofs: boolean;
 };
 
 type IndexerState = {
@@ -91,6 +99,7 @@ export async function buildDependencies(context: BackendModuleContext, variables
     feed: createBoardFeed({ boardUrl, reconnectDelayMilliseconds: RECONNECT_MILLISECONDS, logger: context.logger }),
     lightClients: { "first-to-second": readerFor(pair.sides[1]), "second-to-first": readerFor(pair.sides[0]) },
     pollMilliseconds: POLL_MILLISECONDS,
+    acceptOracleProofs: variables[ACCEPT_ORACLE_PROOFS_VARIABLE] === "true",
   };
 }
 
@@ -155,13 +164,17 @@ export async function startIndexer(context: BackendModuleContext, dependencies: 
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
+  // PLACEHOLDER NAME: the shared proof check is gaining an option for oracle proofs. Rename this key to match it
+  // once it is committed (see the Task 19 report). Until then the shared check ignores the key and stays strict.
+  const oracleOption = { acceptOracleProofs: dependencies.acceptOracleProofs };
+
   const ingest = async (direction: ProofDirection, message: BoardMessage): Promise<void> => {
     const key = payloadKey(message.data);
     if (seen.has(key)) return;
     if (seen.size >= SEEN_LIMIT) seen.clear();
     seen.add(key);
     const reader = dependencies.lightClients[direction];
-    const assessment = await assessProofPayload({ payload: message.data, pairName: dependencies.pair.name, direction, lightClient: reader, prover: context.prover });
+    const assessment = await assessProofPayload({ payload: message.data, pairName: dependencies.pair.name, direction, lightClient: reader, prover: context.prover, ...oracleOption });
     if (!assessment.accept) {
       // A refusal for an unreadable chain may pass later, so the message gets another look.
       if (assessment.reason === "light-client-unreadable") seen.delete(key);
