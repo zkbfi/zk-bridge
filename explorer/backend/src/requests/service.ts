@@ -85,8 +85,9 @@ export function createRequestService(input: RequestServiceInput): RequestService
   const running = new Set<Promise<void>>();
 
   async function runJob(jobId: string, direction: ProofDirection): Promise<void> {
-    // Only a job that is queued, or proving without a proof after a restart, reaches here.
-    updateJob(storage, jobId, { status: "proving" }, now(), ["queued", "proving"]);
+    // A job that is no longer queued (or proving without a proof after a restart) must not start the prover.
+    const claimed = updateJob(storage, jobId, { status: "proving" }, now(), ["queued", "proving"]);
+    if (!claimed) return;
     try {
       const outcome = await input.proverForJob(jobId).prove({ direction });
       if (outcome.kind === "up-to-date") {

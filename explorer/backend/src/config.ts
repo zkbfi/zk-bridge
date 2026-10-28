@@ -60,7 +60,11 @@ export const backendConfigSchema = z
     /** The chain indexer, for the archive module. */
     indexerUrl: z.url().optional(),
   })
-  .strict();
+  .strict()
+  .refine((config) => config.limits.requestRetentionHours * 3600 >= config.prover.timeoutSeconds, {
+    message: "limits.requestRetentionHours must not be shorter than prover.timeoutSeconds, or a waiting caller loses its request",
+    path: ["limits", "requestRetentionHours"],
+  });
 
 /** The parsed backend configuration. */
 export type BackendConfig = z.infer<typeof backendConfigSchema>;

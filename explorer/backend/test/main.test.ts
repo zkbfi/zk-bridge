@@ -33,6 +33,11 @@ describe("configuration", () => {
     expect(config.pair).toBe("eth-pls");
   });
 
+  it("refuses a retention window shorter than the prover timeout", () => {
+    expect(() => makeConfig({ prover: { binary: "/bin/p", timeoutSeconds: 7200 }, limits: { requestRetentionHours: 1 } })).toThrow(/requestRetentionHours/);
+    expect(makeConfig({ prover: { binary: "/bin/p", timeoutSeconds: 3600 }, limits: { requestRetentionHours: 1 } }).limits.requestRetentionHours).toBe(1);
+  });
+
   it("the example file is valid and holds only variable names", () => {
     const text = readFileSync(new URL("../backend.config.example.json", import.meta.url), "utf8");
     const config = parseBackendConfig(text);

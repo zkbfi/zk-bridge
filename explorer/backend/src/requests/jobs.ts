@@ -177,7 +177,13 @@ export function recentRequestsOfAll(storage: Storage, since: number): { count: n
   return { count: row.total, oldest: row.oldest };
 }
 
-/** Deletes the request rows made before `before`. Jobs stay. Returns how many rows went. */
+/**
+ * Deletes the request rows made before `before`, except the rows of a job that is still queued or proving: a caller
+ * still waits on those. Jobs stay. Returns how many rows went.
+ */
 export function pruneRequests(storage: Storage, before: number): number {
-  return Number(storage.database.prepare("DELETE FROM requests WHERE created_at < ?").run(before).changes);
+  const result = storage.database
+    .prepare(`DELETE FROM requests WHERE created_at < ? AND job_id NOT IN (SELECT id FROM jobs WHERE status IN (${ACTIVE_LIST}))`)
+    .run(before);
+  return Number(result.changes);
 }

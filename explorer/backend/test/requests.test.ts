@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { CommandTimeoutError, ProverCommandError } from "@zk-bridge/shared/prover";
-import { makeBackend, makeConfig, makeProofPackage, postFrom, controllableProver } from "./support.ts";
+import { DEFAULT_RATE_LIMITS } from "../src/requests/rate-limit.ts";
+import { createRequestService } from "../src/requests/service.ts";
+import { openStorage } from "../src/storage.ts";
+import { makeBackend, makeClock, memoryLogger, makeConfig, makeProofPackage, postFrom, controllableProver } from "./support.ts";
 
 const countJobs = (storage: ReturnType<typeof makeBackend>["storage"]) =>
   (storage.database.prepare("SELECT count(*) AS total FROM jobs").get() as { total: number }).total;
@@ -341,22 +344,54 @@ describe("late finish, recovery and pruning", () => {
     try {
       const backend = makeBackend({ config: makeConfig({ limits: { requestRetentionHours: 1 } }) });
       const { requestId, jobId } = (await (await post(backend, "10.0.0.1")).json()) as { requestId: string; jobId: string };
+      backend.prover.settleAll({ kind: "up-to-date" });
+      await vi.advanceTimersByTimeAsync(0);
       backend.clock.advance(2 * 3_600_000);
       const stop = await (await import("../src/requests/module.ts")).start(backend.context);
       expect((await backend.app.request(`/requests/${requestId}`)).status).toBe(404);
       expect(backend.storage.database.prepare("SELECT count(*) AS total FROM jobs WHERE id = ?").get(jobId)).toEqual({ total: 1 });
 
       // A row that ages past the window later goes at the next tick.
-      backend.prover.settleAll({ kind: "up-to-date" });
       backend.clock.advance(121_000);
       const later = (await (await post(backend, "10.0.0.1")).json()) as { requestId: string };
       backend.clock.advance(2 * 3_600_000);
       await vi.advanceTimersByTimeAsync(3_600_000);
-      expect((await backend.app.request(`/requests/${later.requestId}`)).status).toBe(404);
+      // Its job is still proving, so the row stays.
+      expect((await backend.app.request(`/requests/${later.requestId}`)).status).toBe(200);
       backend.prover.settleAll({ kind: "up-to-date" });
+      await vi.advanceTimersByTimeAsync(3_600_000);
+      expect((await backend.app.request(`/requests/${later.requestId}`)).status).toBe(404);
       await stop();
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("claiming a job", () => {
+  it("does not call the prover when the job is no longer queued", async () => {
+    const storage = openStorage(":memory:");
+    const clock = makeClock();
+    const log = memoryLogger();
+    const prover = controllableProver();
+    let calls = 0;
+    const service = createRequestService({
+      storage,
+      proverForJob: () => prover.binary,
+      // The third reading of the clock is the claim. A competing writer fails the job just before it.
+      now: () => {
+        calls += 1;
+        if (calls === 3) storage.database.exec("UPDATE jobs SET status = 'failed'");
+        return clock.now();
+      },
+      limits: DEFAULT_RATE_LIMITS,
+      proverTimeoutMilliseconds: 1_800_000,
+      logger: log.logger,
+    });
+    const answer = service.submit({ pair: "eth-pls", direction: "first-to-second", reason: "user", caller: "a" });
+    expect("jobId" in answer).toBe(true);
+    await service.settled();
+    expect(prover.calls).toEqual([]);
+    expect(storage.database.prepare("SELECT status FROM jobs").get()).toEqual({ status: "failed" });
   });
 });
