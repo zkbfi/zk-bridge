@@ -11,6 +11,7 @@
 //! equal the header `body_root`. The tool stops with a message when a root differs.
 
 use alloy_primitives::hex;
+use lc_core::gate::fork_version_branch;
 use lc_core::ssz::{branch_for_leaf, u64_chunk};
 use lc_core::types::ExecutionPayloadHeader;
 use lc_testkit::derive_support::{header_json, hex_list, read_block, read_json, write_fixture, CheckedBlock};
@@ -19,6 +20,7 @@ use lc_testkit::ssz_state::parse_state;
 use serde_json::{json, Value};
 use std::path::Path;
 
+const FIELD_GENESIS_VALIDATORS_ROOT: usize = 1;
 const FIELD_BLOCK_ROOTS: usize = 5;
 const FIELD_FINALIZED_CHECKPOINT: usize = 20;
 const FIELD_CURRENT_SYNC_COMMITTEE: usize = 22;
@@ -93,6 +95,10 @@ fn main() {
     finality_branch.extend(branch_for_leaf(&state.field_roots, FIELD_FINALIZED_CHECKPOINT).1);
     let next_branch = branch_for_leaf(&state.field_roots, FIELD_NEXT_SYNC_COMMITTEE).1;
     let current_branch = branch_for_leaf(&state.field_roots, FIELD_CURRENT_SYNC_COMMITTEE).1;
+    // The branches of the shape proofs: `genesis_validators_root` (field 1) and `fork.current_version`, both under the
+    // attested state root. A beacon node does not serve them, so the tool reads them from the state.
+    let genesis_validators_root_branch = branch_for_leaf(&state.field_roots, FIELD_GENESIS_VALIDATORS_ROOT).1;
+    let current_version_branch = fork_version_branch(&state.field_roots, &state.fork);
 
     // The child block carries the sync aggregate that signs the attested header.
     let child = read_json(&work.join("child_block.json"));
@@ -124,7 +130,19 @@ fn main() {
         "derived from {beacon}: SSZ state {:#x} (GET /eth/v2/debug/beacon/states/<root>), SSZ blocks (GET /eth/v2/beacon/blocks/<root>), block {} (GET /eth/v2/beacon/blocks/<slot>)",
         attested_header.state_root, signature_slot
     );
-    write_fixture(out, "light_client_update.json", &source, fetched_on, json!({ "update": update, "store": store }));
+    let state_proofs = json!({
+        "genesis_validators_root": format!("{:#x}", state.field_roots[FIELD_GENESIS_VALIDATORS_ROOT]),
+        "genesis_validators_root_branch": hex_list(&genesis_validators_root_branch),
+        "current_version": format!("0x{}", hex::encode(state.fork.current_version)),
+        "current_version_branch": hex_list(&current_version_branch),
+    });
+    write_fixture(
+        out,
+        "light_client_update.json",
+        &source,
+        fetched_on,
+        json!({ "update": update, "store": store, "state_proofs": state_proofs }),
+    );
 
     // Beacon paths for message proofs: anchor = attested header; source candidates = finalized block and the ancestor.
     let path_entry = |name: &str, block: &CheckedBlock| {

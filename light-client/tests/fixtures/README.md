@@ -19,7 +19,17 @@ fetched 2026-10-26. The `source_url` names the endpoint path; the host was not r
 `crates/lc-testkit/tests/testnets.rs` compares every constant of the chain with them.
 Files named `derived`: `pulsechain/light_client_update.json` and `pulsechain/beacon_paths.json` carry a `source_url`
 that lists the real endpoints the tool read; every branch in them was computed from a real beacon state and checked against the
-roots that the node reports.
+roots that the node reports. `pulsechain/light_client_update.json` also holds `state_proofs`: the branch of `genesis_validators_root`
+(state field 1, 5 entries) and the branch of `fork.current_version` (7 entries) of the same attested state. A beacon node does not
+serve them, and the update parser leaves the branch of `genesis_validators_root` empty, so the tool reads both from the state.
+
+`ethereum/state_proofs.json` and `sepolia/state_proofs.json` are NOT on file yet. Each would map the root of an attested state to the
+branch of `genesis_validators_root` under it. Only the attested state of the PulseChain update is on file; the Sepolia state on file is
+the finalized state, and no Ethereum state is on file, so no branch can be computed offline. Fetch the attested states
+(`GET /eth/v2/debug/beacon/states/<state_root>`, SSZ, from a node that keeps them) and run
+`cargo run -p lc-testkit --bin derive-attested-state-proofs -- <ethereum|sepolia> <output-file> <fetched-on> <state.ssz>...`.
+The ignored tests `ethereum_state_proofs_are_on_file`, `sepolia_attested_state_proofs_are_on_file` and `every_golden_case_is_computed`
+fail until the files exist. The real Ethereum and Sepolia tests run a reduced check until then (see `lc_testkit::real_proofs`).
 
 ## Real Sepolia Gloas head (`sepolia/gloas_head_*`, `sepolia/gloas_fork_version.json`)
 
@@ -143,13 +153,13 @@ and the Rust test `fork_observation_fixtures_are_current` fails when they are st
 | Key | Meaning |
 |---|---|
 | `name`, `description`, `chain` | Same as the file stem, what the case shows, and the source chain. |
-| `publicValues` | Hex of `abi.encode(ForkObservation)`: 7 words, 224 bytes (`genesisValidatorsRoot`, `previousHeaderRoot`, `previousHeadSlot`, `previousSyncCommitteeHash`, `startNextSyncCommitteeHash`, `observedVersion`, `observedAttestedSlot`). The `bytes4` version is left-aligned in its word. `null` for `no-proof-exists` cases. |
-| `observedVersion`, `observedAttestedSlot` | The two last fields, decoded (accept cases only). |
+| `publicValues` | Hex of `abi.encode(ForkObservation)`: 8 words, 256 bytes (`genesisValidatorsRoot`, `previousHeaderRoot`, `previousHeadSlot`, `previousSyncCommitteeHash`, `startNextSyncCommitteeHash`, `observedVersion`, `observedAttestedSlot`, `shape`). `shape` is a `uint8`: 5, 6 or 7 for a plain state of that depth, 255 for the progressive Gloas state. The `bytes4` version is left-aligned in its word. `null` for `no-proof-exists` cases. |
+| `observedVersion`, `observedAttestedSlot`, `observedShape` | Three of the fields, decoded (accept cases only). |
 | `versionInProgramTable` | Whether the fork table of the Rust program holds the version (accept cases only). |
 | `startStore` | The start store of the proof: `headerRoot`, `headSlot` (decimal string), `currentSyncCommitteeHash`, `nextSyncCommitteeHash` (zero when the store has none). Equals the first five fields of the public values. |
 | `lightClient` | What the observed chain's light client holds in this case: `headSlot`, `headerRoot` (for that slot), `currentSyncCommitteeHash`, `nextSyncCommitteeHash` (zero for none). An accept case has them equal to `startStore`; a reject case changes one. |
 | `expected.result` | `accept`, `reject` (the registry reverts), or `no-proof-exists` (the Rust program refuses, so no proof and no public values exist). |
-| `expected.reason` | For `reject`: `StartMismatch` (a start field differs from `lightClient`), `NotFresh` (`observedAttestedSlot <= lightClient.headSlot`), `WrongLength` (public values are not 224 bytes). For `no-proof-exists`: the Rust error name. |
+| `expected.reason` | For `reject`: `StartMismatch` (a start field differs from `lightClient`), `NotFresh` (`observedAttestedSlot <= lightClient.headSlot`), `WrongLength` (public values are not 256 bytes). For `no-proof-exists`: the Rust error name. |
 
 The accept cases use a proof-less oracle verifier on the Solidity side, so the proof bytes are not part of the fixture.
 `observedAttestedSlot` is the slot of the attested header. The signature authenticates it, because the signed root is the hash of that header. The unsigned signature slot is not in the output.

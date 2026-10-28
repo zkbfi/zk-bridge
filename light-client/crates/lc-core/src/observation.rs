@@ -226,7 +226,7 @@ mod tests {
             sync_aggregate: SyncAggregate { sync_committee_bits: [0; 64], sync_committee_signature: [0; 96] },
             fork_version: VERSION,
             current_version_branch: [fork_branch, outer_version_branch].concat(),
-            genesis_validators_root_branch: genesis_validators_root_branch,
+            genesis_validators_root_branch,
         }
     }
 

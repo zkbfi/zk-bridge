@@ -7,7 +7,7 @@ Do not install the toolchain with `sp1up` or a `curl | bash` installer. Do not i
 | Program | Source | Status |
 |---|---|---|
 | Light client | `light-client/src/main.rs` | Wrapper only. The body is `lc_core::wire::run_light_client_guest`, tested natively. |
-| Fork observation | `fork-observation/src/main.rs` | Wrapper only. The body is `lc_core::wire::run_fork_observation_guest`, tested natively. Own verification key. Output: `ForkObservation`, 7 words, 224 bytes. |
+| Fork observation | `fork-observation/src/main.rs` | Wrapper only. The body is `lc_core::wire::run_fork_observation_guest`, tested natively. Own verification key. Output: `ForkObservation`, 8 words, 256 bytes (the last word is the shape of the attested state). |
 | Message | none | Removed by the user decision: the bridge verifies messages directly, with no proof. |
 
 ## What the guest does

@@ -2,6 +2,12 @@
 //!
 //! Every test here uses REAL data from `tests/fixtures/ethereum/` (fetched 2026-10-20, source URLs inside each file).
 //! The data is from the Fulu fork, so it exercises the Electra layout (branch lengths 7, 6, 6 and 4).
+//!
+//! A beacon node does not serve the branch of `genesis_validators_root`, and no Ethereum state is on file (see
+//! `lc_testkit::real_proofs`). Each end-to-end test therefore has two parts. With the branch on file, it runs the whole
+//! check. Without it, it checks everything that does not need the branch: the real signature, the real branches that the
+//! update carries, and the point where the program stops. `ethereum_state_proofs_are_on_file` stays ignored until someone
+//! fetches the attested states and runs `derive-attested-state-proofs`.
 
 use alloy_primitives::B256;
 use lc_core::abi::LightClientOutput;
@@ -9,13 +15,29 @@ use lc_core::chain::ETHEREUM_MAINNET;
 use lc_core::layout::{state_layout_for_fork, ELECTRA_STATE_LAYOUT};
 use lc_core::ssz::is_valid_normalized_merkle_branch;
 use lc_core::types::LightClientStore;
+use lc_core::types::LightClientUpdate;
 use lc_core::update::{
-    advance_light_client_store, verify_current_sync_committee_branch, verify_light_client_update, verify_sync_aggregate,
+    advance_light_client_store, table_fork_version, verify_current_sync_committee_branch, verify_light_client_update,
+    verify_sync_aggregate,
 };
 use lc_testkit::json::{bootstrap, hex_b256, light_client_update, load_response, store_from_bootstrap, Bootstrap};
+use lc_testkit::real_proofs::{assert_stops_at_the_missing_branch, has_branch, with_known_branch};
 
 fn finality_update() -> lc_core::types::LightClientUpdate {
-    light_client_update(&load_response("ethereum/finality_update.json")["data"])
+    with_known_branch(light_client_update(&load_response("ethereum/finality_update.json")["data"]))
+}
+
+/// The real signature of `update` under the real fork version, checked against `committee`. It needs no branch of
+/// `genesis_validators_root`.
+fn assert_real_signature(committee: &lc_core::types::SyncCommittee, update: &LightClientUpdate) {
+    verify_sync_aggregate(
+        &ETHEREUM_MAINNET,
+        committee,
+        &update.sync_aggregate,
+        &update.attested_header.beacon.hash_tree_root(),
+        table_fork_version(&ETHEREUM_MAINNET, update.signature_slot),
+    )
+    .expect("the real committee signed the real attested header");
 }
 
 fn same_period_bootstrap() -> Bootstrap {
@@ -27,8 +49,20 @@ fn two_period_updates() -> Vec<lc_core::types::LightClientUpdate> {
         .as_array()
         .expect("array of updates")
         .iter()
-        .map(|entry| light_client_update(&entry["data"]))
+        .map(|entry| with_known_branch(light_client_update(&entry["data"])))
         .collect()
+}
+
+/// Claim: the branch of `genesis_validators_root` for the real Ethereum updates is on file.
+/// Why it matters: until it is, the end-to-end tests of this file run their reduced part (see the module comment). This test
+/// is the open item. It fails until `ethereum/state_proofs.json` holds the branch of every attested state that the tests use.
+#[test]
+#[ignore = "needs ethereum/state_proofs.json: fetch the attested states and run derive-attested-state-proofs"]
+fn ethereum_state_proofs_are_on_file() {
+    assert!(has_branch(&finality_update()), "the finality update");
+    for (position, update) in two_period_updates().iter().enumerate() {
+        assert!(has_branch(update), "the two period update {position}");
+    }
 }
 
 /// Claim: the Ethereum constants equal what the live beacon API returned (fork versions, fork epochs, timing, genesis
@@ -88,6 +122,16 @@ fn real_bootstrap_committee_branch_verifies() {
 fn real_ethereum_finality_update_verifies_end_to_end() {
     let update = finality_update();
     let store = store_from_bootstrap(&same_period_bootstrap(), None);
+    if !has_branch(&update) {
+        assert_real_signature(&store.current_sync_committee, &update);
+        assert_stops_at_the_missing_branch(
+            &store,
+            &update,
+            &ETHEREUM_MAINNET,
+            table_fork_version(&ETHEREUM_MAINNET, update.signature_slot),
+        );
+        return;
+    }
     let output = verify_light_client_update(&store, &update, &ETHEREUM_MAINNET).expect("real update verifies");
 
     assert_eq!(output.genesisValidatorsRoot, ETHEREUM_MAINNET.genesis_validators_root);
@@ -164,6 +208,11 @@ fn real_updates_cross_a_period_boundary_and_chain() {
         Err(lc_core::Error::NextSyncCommitteeUnknown),
         "control: without the next committee the same update must fail"
     );
+    if !has_branch(second) {
+        assert_real_signature(&store.next_sync_committee.clone().expect("the next committee"), second);
+        assert_stops_at_the_missing_branch(&store, second, spec, table_fork_version(spec, second.signature_slot));
+        return;
+    }
     let (output, store_after) = advance_light_client_store(&store, second, spec).expect("period crossing verifies");
     assert_eq!(spec.period_at_slot(output.newHeadSlot), spec.period_at_slot(output.previousHeadSlot) + 1);
     assert_eq!(output.syncCommitteeHash, store.next_sync_committee.as_ref().unwrap().hash_tree_root().unwrap());
@@ -197,6 +246,21 @@ fn real_fold_of_a_crossing_and_a_finality_update() {
     let crossing = &updates[1];
     let latest = finality_update();
 
+    let without_next = store_from_bootstrap(&bootstrap, None);
+    assert_eq!(
+        lc_core::update::verify_light_client_fold(&without_next, &[crossing.clone(), latest.clone()], spec),
+        Err(lc_core::Error::NextSyncCommitteeUnknown),
+        "control: no next committee, no crossing"
+    );
+    if !has_branch(crossing) || !has_branch(&latest) {
+        assert_eq!(
+            lc_core::update::verify_light_client_fold(&store, &[crossing.clone(), latest], spec),
+            Err(lc_core::Error::InvalidGenesisValidatorsRootBranch),
+            "without the branch the fold stops at its first step"
+        );
+        return;
+    }
+
     let (first_output, store_after_first) = advance_light_client_store(&store, crossing, spec).expect("crossing");
     let (second_output, store_after_second) =
         advance_light_client_store(&store_after_first, &latest, spec).expect("finality update");
@@ -220,13 +284,6 @@ fn real_fold_of_a_crossing_and_a_finality_update() {
         fold.nextSyncCommitteeHash, proven_by_crossing,
         "proved earlier in this fold, still the final next committee"
     );
-
-    let without_next = store_from_bootstrap(&bootstrap, None);
-    assert_eq!(
-        lc_core::update::verify_light_client_fold(&without_next, &[crossing.clone(), latest], spec),
-        Err(lc_core::Error::NextSyncCommitteeUnknown),
-        "control: no next committee, no crossing"
-    );
 }
 
 /// Claim: the real update does not verify against a store whose head is not before the finalized header.
@@ -242,27 +299,46 @@ fn real_update_is_refused_when_the_head_does_not_advance() {
     ));
 }
 
-/// Claim: a real update verifies with the correct fork version supplied as an input, and fails with any other version.
+/// Claim: the real signature verifies under the correct fork version and under no other. With the branch of
+/// `genesis_validators_root` on file the whole update does the same.
 /// Why it matters: the guest takes the version as input. The committee signed the domain that contains the version,
 /// so a wrong version cannot produce a valid signature. The test tries the whole Ethereum table, PulseChain's
-/// versions and a few arbitrary values: exactly one version (the real one) passes.
+/// versions and a few arbitrary values: exactly one version (the real one) passes. The signature check does not depend on
+/// the branch, so it runs on the aggregate directly.
 #[test]
 fn real_update_verifies_only_with_the_correct_fork_version() {
     let update = finality_update();
     let store = store_from_bootstrap(&same_period_bootstrap(), None);
     let correct = lc_core::update::table_fork_version(&ETHEREUM_MAINNET, update.signature_slot);
     assert_eq!(correct, [6, 0, 0, 0], "the live update is signed under the Fulu version");
-    let with_version = |version: [u8; 4]| {
-        lc_core::update::verify_light_client_update_with_fork_version(&store, &update, &ETHEREUM_MAINNET, version)
+    let attested_root = update.attested_header.beacon.hash_tree_root();
+    let signature_under = |version: [u8; 4]| {
+        verify_sync_aggregate(
+            &ETHEREUM_MAINNET,
+            &store.current_sync_committee,
+            &update.sync_aggregate,
+            &attested_root,
+            version,
+        )
     };
-    assert_eq!(with_version(correct), verify_light_client_update(&store, &update, &ETHEREUM_MAINNET));
-    assert!(with_version(correct).is_ok());
+    assert_eq!(signature_under(correct), Ok(()), "control");
 
     let mut wrong: Vec<[u8; 4]> = ETHEREUM_MAINNET.fork_schedule.iter().map(|entry| entry.fork_version).collect();
     wrong.extend(lc_core::chain::PULSECHAIN.fork_schedule.iter().map(|entry| entry.fork_version));
     wrong.extend([[0xff; 4], [6, 0, 0, 1], [0, 0, 0, 6]]);
     wrong.retain(|version| *version != correct);
     for version in wrong {
-        assert_eq!(with_version(version), Err(lc_core::Error::SignatureVerificationFailed), "version {version:?}");
+        assert_eq!(signature_under(version), Err(lc_core::Error::SignatureVerificationFailed), "version {version:?}");
     }
+
+    let with_version = |version: [u8; 4]| {
+        lc_core::update::verify_light_client_update_with_fork_version(&store, &update, &ETHEREUM_MAINNET, version)
+    };
+    if !has_branch(&update) {
+        assert_stops_at_the_missing_branch(&store, &update, &ETHEREUM_MAINNET, correct);
+        return;
+    }
+    assert_eq!(with_version(correct), verify_light_client_update(&store, &update, &ETHEREUM_MAINNET));
+    assert!(with_version(correct).is_ok());
+    assert_eq!(with_version([6, 0, 0, 1]), Err(lc_core::Error::SignatureVerificationFailed));
 }

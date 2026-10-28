@@ -17,7 +17,8 @@ use lc_core::layout::{state_layout_for_finality_branch_length, ELECTRA_STATE_LAY
 use lc_core::observation::verify_fork_observation;
 use lc_core::types::{HeaderForm, LightClientStore, LightClientUpdate};
 use lc_core::update::{
-    table_fork_version, verify_fold, verify_light_client_update_with_fork_version, verify_step, FoldStep,
+    table_fork_version, verify_fold, verify_light_client_update_with_fork_version, verify_step, verify_sync_aggregate,
+    FoldStep,
 };
 use lc_core::wire::{
     decode_guest_input, encode_guest_input, encode_observation_input, run_fork_observation_guest,
@@ -29,7 +30,10 @@ use lc_testkit::fork_observation_scenarios::{
 };
 use lc_testkit::json::{bootstrap, fixtures_dir, light_client_update, load_response, store_from_bootstrap};
 use lc_testkit::pulsechain::real_update_and_store;
-use lc_testkit::synthetic::{build_gloas_update, build_update, committee_for, UpdateRecipe};
+use lc_testkit::real_proofs::{assert_stops_at_the_missing_branch, has_branch, with_known_branch};
+use lc_testkit::synthetic::{
+    build_gloas_update, build_update, committee_for, fork_start_slot, fulu_to_gloas_fold, MixedFold, UpdateRecipe,
+};
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Shared helpers
@@ -57,6 +61,10 @@ fn wrong_versions(real: [u8; 4], foreign: [u8; 4]) -> Vec<[u8; 4]> {
 }
 
 /// Asserts that `real` verifies the update and every version of `wrong` is refused with `SignatureVerificationFailed`.
+///
+/// An update with a branch of `genesis_validators_root` runs through the whole program. A real update without one (the
+/// Ethereum update, see `lc_testkit::real_proofs`) runs the real aggregate under each version, which is the same signature
+/// check, and the program is pinned to stop at the missing branch.
 fn assert_only_the_real_version_verifies(
     spec: &ChainSpec,
     store: &LightClientStore,
@@ -65,22 +73,23 @@ fn assert_only_the_real_version_verifies(
     wrong: &[[u8; 4]],
 ) {
     assert!(!wrong.is_empty());
-    assert!(
-        verify_light_client_update_with_fork_version(store, update, spec, real).is_ok(),
-        "control: the real version {real:?} verifies"
-    );
+    let verdict = |version: [u8; 4]| match has_branch(update) {
+        true => verify_light_client_update_with_fork_version(store, update, spec, version).map(|_| ()),
+        false => verify_sync_aggregate(
+            spec,
+            &store.current_sync_committee,
+            &update.sync_aggregate,
+            &update.attested_header.beacon.hash_tree_root(),
+            version,
+        ),
+    };
+    assert_eq!(verdict(real), Ok(()), "control: the real version {real:?} verifies");
     for version in wrong {
-        assert_eq!(
-            verify_light_client_update_with_fork_version(store, update, spec, *version),
-            Err(Error::SignatureVerificationFailed),
-            "version {version:?}"
-        );
+        assert_eq!(verdict(*version), Err(Error::SignatureVerificationFailed), "version {version:?}");
     }
-}
-
-/// A fold step whose version is the one of the table at the signature slot.
-fn table_step(spec: &ChainSpec, update: &LightClientUpdate) -> FoldStep {
-    FoldStep { update: update.clone(), fork_version: table_fork_version(spec, update.signature_slot) }
+    if !has_branch(update) {
+        assert_stops_at_the_missing_branch(store, update, spec, real);
+    }
 }
 
 /// The wire selector of a chain of the tests.
@@ -105,7 +114,8 @@ fn selector(spec: &ChainSpec) -> ChainSelector {
 /// prover that names another version changes the signing root, and the real signature does not verify under it.
 #[test]
 fn real_updates_verify_only_under_the_real_fork_version() {
-    let ethereum_update = light_client_update(&load_response("ethereum/finality_update.json")["data"]);
+    let ethereum_update =
+        with_known_branch(light_client_update(&load_response("ethereum/finality_update.json")["data"]));
     let ethereum_store =
         store_from_bootstrap(&bootstrap(&load_response("ethereum/bootstrap_same_period.json")["data"]), None);
     let (pulsechain_store, pulsechain_update) = real_update_and_store();
@@ -152,12 +162,6 @@ static SEPOLIA_SHIFTED_FORKS: [ForkEntry; 8] = [
 ];
 static SEPOLIA_SHIFTED: ChainSpec =
     ChainSpec { name: "sepolia-shifted-forks", fork_schedule: &SEPOLIA_SHIFTED_FORKS, ..SEPOLIA };
-
-/// The first slot of the epoch where `fork` starts on `spec`.
-fn fork_start_slot(spec: &ChainSpec, fork: ForkName) -> u64 {
-    let entry = spec.fork_schedule.iter().find(|entry| entry.fork_name == fork).expect("fork in the schedule");
-    entry.epoch * spec.slots_per_epoch
-}
 
 /// The version before and after the fork that starts at `fork_slot`: the versions of the epochs on either side.
 fn versions_around(spec: &ChainSpec, fork_slot: u64) -> (/* old */ [u8; 4], /* new */ [u8; 4]) {
@@ -283,48 +287,6 @@ fn the_version_rule_holds_on_the_real_schedules_at_a_period_start() {
 // ---------------------------------------------------------------------------------------------------------------------
 // 3 and 5. A fold from Fulu to Gloas
 // ---------------------------------------------------------------------------------------------------------------------
-
-/// The Fulu to Gloas fold on Sepolia: the store, the two steps, and the period of the first step.
-struct MixedFold {
-    store: LightClientStore,
-    steps: Vec<FoldStep>,
-}
-
-/// Step 1 is a Fulu update (full headers, finality branch 7, committee branch 6) in period 1378 that proves the committee
-/// of period 1379. Step 2 is a Gloas update (compact headers, finality branch 9, committee branch 11) that crosses into
-/// period 1379, the first period of Gloas, and is signed by the committee that step 1 proved. The store is the store of
-/// step 1: step 2 is built against the store that step 1 leaves (the committees line up because both builders take the
-/// committee of a period from the same cache), and only its update is used.
-fn fulu_to_gloas_fold() -> MixedFold {
-    let spec = &SEPOLIA;
-    let gloas_start = fork_start_slot(spec, ForkName::Gloas);
-    let fulu_period_start = gloas_start - 8192;
-    let fulu = build_update(
-        spec,
-        UpdateRecipe {
-            store_slot: fulu_period_start + 400,
-            finalized_slot: fulu_period_start + 1000,
-            attested_slot: fulu_period_start + 1070,
-            signature_slot: fulu_period_start + 1071,
-            participants: 342,
-            include_next_committee: true,
-            store_knows_next_committee: false,
-        },
-    );
-    let gloas = build_gloas_update(
-        spec,
-        UpdateRecipe {
-            store_slot: fulu.update.finalized_header.beacon.slot,
-            finalized_slot: gloas_start + 64,
-            attested_slot: gloas_start + 130,
-            signature_slot: gloas_start + 131,
-            participants: 342,
-            include_next_committee: true,
-            store_knows_next_committee: false,
-        },
-    );
-    MixedFold { steps: vec![table_step(spec, &fulu.update), table_step(spec, &gloas.update)], store: fulu.store }
-}
 
 /// Claim: a fold from Fulu to Gloas verifies although the finality branch changes from 7 entries to 9 between steps. Each
 /// step alone has its layout: step 1 the Electra layout (finality branch 7, next committee branch 6, full headers), step 2
@@ -470,22 +432,22 @@ fn observation_error(
 
 /// The error of an altered finality branch, by the true length and the edit. Length 6 padded gives 7 and length 7 cut gives
 /// 6: both name the OTHER plain layout (index 169 on a depth 5 state, index 105 on a depth 6 state), the branch check
-/// lands on another node, and the check fails: `InvalidFinalityBranch`. Length 6 cut gives 5 and length 7 padded gives 8:
-/// no layout has those lengths, so `UnsupportedStateBranchLength`, and no node is read at all.
+/// lands on another node, and the check fails: `InvalidFinalityBranch`. Length 7 padded gives 8, which names plain depth 7
+/// (index 297): the finality check comes first in `verify_step` and fails there, also `InvalidFinalityBranch`. Length 6 cut
+/// gives 5, which no layout has, so `UnsupportedStateBranchLength`, and no node is read at all.
 fn expected_finality_error(true_length: usize, edit: BranchEdit) -> Error {
     match (true_length, edit) {
-        (6, BranchEdit::Pad) | (7, BranchEdit::Cut) => Error::InvalidFinalityBranch,
+        (6, BranchEdit::Pad) | (7, BranchEdit::Cut) | (7, BranchEdit::Pad) => Error::InvalidFinalityBranch,
         (6, BranchEdit::Cut) => Error::UnsupportedStateBranchLength { length: 5 },
-        (7, BranchEdit::Pad) => Error::UnsupportedStateBranchLength { length: 8 },
         other => panic!("no case for {other:?}"),
     }
 }
 
-/// Claim: in the fold behind `*_accept_after_folding_a_stale_store.json`, the honest case is accepted and its 224 byte
+/// Claim: in the fold behind `*_accept_after_folding_a_stale_store.json`, the honest case is accepted and its 256 byte
 /// public values equal the `publicValues` of the fixture on disk. Then, for EVERY step in turn, a finality branch with a
 /// zero entry in front, and a finality branch with its first entry cut, are refused: `InvalidFinalityBranch` when the
-/// new length names the other plain layout (6 padded to 7, 7 cut to 6) and `UnsupportedStateBranchLength` when it names
-/// none (7 padded to 8, 6 cut to 5). The library and the guest (wire format) agree.
+/// new length names a layout (6 padded to 7, 7 cut to 6, 7 padded to 8) and `UnsupportedStateBranchLength` when it names
+/// none (6 cut to 5). The library and the guest (wire format) agree.
 /// Why it is safe: the length of a branch is its depth, checked exactly, and it chooses the layout. A length that names no
 /// layout is refused. A length that names the other plain layout makes the branch check read another node (169 on a true
 /// depth 5 state lands below `eth1_deposit_index`, a uint64 leaf, and 105 on a true depth 6 state is a padding chunk), so
@@ -496,7 +458,7 @@ fn altered_finality_branches_in_the_observation_fold_are_refused() {
         let (stale, steps, observation) = stale_case(spec, period);
         let honest = verify_fork_observation(&stale.store, &steps, &observation, spec).expect("control: accepted");
         let public_values = honest.abi_encode();
-        assert_eq!(public_values.len(), 224);
+        assert_eq!(public_values.len(), 256);
 
         let fixture_name = format!(
             "{}_accept_after_folding_a_stale_store.json",

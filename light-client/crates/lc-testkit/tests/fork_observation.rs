@@ -19,8 +19,9 @@ use lc_core::wire::{
 };
 use lc_core::Error;
 use lc_testkit::fork_observation_scenarios::{
-    chains, committee_hash, fold_steps, fork_observation_fixtures, observation_signed_by, one_step_scenario,
-    stale_three_period_scenario, version_outside_table, PeriodStart,
+    chains, committee_hash, fold_steps, fork_observation_fixtures, honest_shape, observation_over_state,
+    observation_signed_by, observed_state, one_step_scenario, stale_three_period_scenario, version_outside_table,
+    PeriodStart,
 };
 use lc_testkit::json::fixtures_dir;
 use lc_testkit::synthetic::committee_for;
@@ -209,8 +210,10 @@ fn observation_two_periods_past_the_final_head_is_rejected() {
     }
 }
 
-/// Claim: the other chain's genesis validators root is refused. The signature is made for the home chain; the program
-/// runs with the foreign root. Control: the home root accepts it.
+/// Claim: the other chain's genesis validators root is refused, at two places. The program runs with the foreign root
+/// while the state holds the home root: the shape proof fails first, `InvalidForkShapeProof`. A state built for the foreign
+/// chain (it holds the foreign root, so the shape proof passes) that the home committee signed under the home domain fails
+/// the signature: `SignatureVerificationFailed`. Control: the home root accepts the home observation.
 /// Why it matters: a PulseChain observation must not be replayable from Ethereum signatures, and the reverse.
 #[test]
 fn observation_under_the_other_chains_genesis_validators_root_is_rejected() {
@@ -218,39 +221,63 @@ fn observation_under_the_other_chains_genesis_validators_root_is_rejected() {
         let other = if spec.name == "pulsechain" { &ETHEREUM_MAINNET } else { &PULSECHAIN };
         let foreign = ChainSpec { genesis_validators_root: other.genesis_validators_root, ..*spec };
         let scenario = one_step_scenario(spec, period);
-        let observation = observation_signed_by(
+        let signer = scenario.committee_for_signature();
+        let observation = observation_signed_by(spec, &signer, [0, 0, 3, 0x6d], 400, scenario.attested_slot());
+        assert!(verify_fork_observation(&scenario.store, &[], &observation, spec).is_ok(), "control");
+        assert_eq!(
+            verify_fork_observation(&scenario.store, &[], &observation, &foreign),
+            Err(Error::InvalidForkShapeProof)
+        );
+
+        let foreign_state = observed_state(&foreign, honest_shape(spec), [0, 0, 3, 0x6d]);
+        let replay = observation_over_state(
             spec,
-            &scenario.committee_for_signature(),
+            foreign_state,
+            &signer,
+            [0, 0, 3, 0x6d],
             [0, 0, 3, 0x6d],
             400,
             scenario.attested_slot(),
         );
-        assert!(verify_fork_observation(&scenario.store, &[], &observation, spec).is_ok(), "control");
         assert_eq!(
-            verify_fork_observation(&scenario.store, &[], &observation, &foreign),
-            Err(Error::SignatureVerificationFailed)
+            verify_fork_observation(&scenario.store, &[], &replay, &foreign),
+            Err(Error::SignatureVerificationFailed),
+            "the shape proof passes under the foreign root, and the home signature does not"
         );
     }
 }
 
-/// Claim: the version in the observation is not a free label. Naming a version other than the one the committee
-/// signed under fails the signature check.
-/// Why it matters: the proof is only as good as the binding between the output version and the signed domain.
+/// Claim: the version in the observation is not a free label. Naming a version other than the one the state holds fails the
+/// shape proof (`InvalidForkShapeProof`). A state that holds the named version, with a signature made under another version,
+/// fails the signature check (`SignatureVerificationFailed`).
+/// Why it matters: the proof is only as good as the binding between the output version, the state and the signed domain.
 #[test]
 fn observation_naming_a_version_the_committee_did_not_sign_is_rejected() {
     for (spec, period) in chains() {
         let scenario = one_step_scenario(spec, period);
-        let mut observation = observation_signed_by(
-            spec,
-            &scenario.committee_for_signature(),
-            [0, 0, 3, 0x6d],
-            400,
-            scenario.attested_slot(),
-        );
+        let signer = scenario.committee_for_signature();
+        let slot = scenario.attested_slot();
+        let mut observation = observation_signed_by(spec, &signer, [0, 0, 3, 0x6d], 400, slot);
         assert!(verify_fork_observation(&scenario.store, &[], &observation, spec).is_ok(), "control");
         observation.fork_version = [0, 0, 3, 0x6e];
         assert_eq!(
             verify_fork_observation(&scenario.store, &[], &observation, spec),
+            Err(Error::InvalidForkShapeProof),
+            "the state holds 0x6d, not the named 0x6e"
+        );
+
+        let state_holding_named_version = observed_state(spec, honest_shape(spec), [0, 0, 3, 0x6e]);
+        let signed_under_another = observation_over_state(
+            spec,
+            state_holding_named_version,
+            &signer,
+            [0, 0, 3, 0x6d],
+            [0, 0, 3, 0x6e],
+            400,
+            slot,
+        );
+        assert_eq!(
+            verify_fork_observation(&scenario.store, &[], &signed_under_another, spec),
             Err(Error::SignatureVerificationFailed)
         );
     }
@@ -302,7 +329,7 @@ fn observation_fold_steps_keep_every_update_rule() {
     }
 }
 
-/// Claim: an observation output cannot be read as a `LightClientOutput`, and the reverse. The lengths differ: 224
+/// Claim: an observation output cannot be read as a `LightClientOutput`, and the reverse. The lengths differ: 256
 /// versus 352 bytes. A contract that requires the exact length refuses both.
 /// Why it matters: the two programs have different keys, and the lengths are a second wall between their outputs.
 #[test]
@@ -321,12 +348,12 @@ fn observation_output_and_light_client_output_have_different_lengths() {
         let updated = lc_core::update::verify_light_client_update(&scenario.store, &scenario.update, spec)
             .expect("update")
             .abi_encode();
-        assert_eq!((observed.len(), updated.len()), (224, 352));
-        assert!(LightClientOutput::abi_decode(&observed).is_err(), "224 bytes are not a LightClientOutput");
-        assert_eq!(ForkObservation::abi_decode(&observed).map(|value| value.abi_encode().len()), Ok(224));
+        assert_eq!((observed.len(), updated.len()), (256, 352));
+        assert!(LightClientOutput::abi_decode(&observed).is_err(), "256 bytes are not a LightClientOutput");
+        assert_eq!(ForkObservation::abi_decode(&observed).map(|value| value.abi_encode().len()), Ok(256));
         // The reverse: ABI decoding of a static struct tolerates trailing bytes, so the exact length is the wall.
         let lenient_read = ForkObservation::abi_decode(&updated);
-        assert!(lenient_read.is_err() || updated.len() != 224, "the 352 byte value is not 224 bytes long");
+        assert!(lenient_read.is_err() || updated.len() != 256, "the 352 byte value is not 256 bytes long");
         assert_ne!(observed.len(), updated.len());
     }
 }
@@ -381,7 +408,7 @@ fn observation_attested_slot_equal_to_the_head_is_rejected() {
     }
 }
 
-/// Claim: the wire format round-trips, the guest entry point returns 224 bytes that decode to the same value, and the
+/// Claim: the wire format round-trips, the guest entry point returns 256 bytes that decode to the same value, and the
 /// decoder refuses more than 64 steps, trailing bytes and a truncated input. Zero steps decode.
 #[test]
 fn observation_guest_entry_point_and_wire_format() {
@@ -395,7 +422,7 @@ fn observation_guest_entry_point_and_wire_format() {
         let bytes = encode_observation_input(&input);
         assert_eq!(decode_observation_input(&bytes), Ok(input.clone()));
         let public_values = run_fork_observation_guest(&bytes).expect("guest");
-        assert_eq!(public_values.len(), 224);
+        assert_eq!(public_values.len(), 256);
         let expected = verify_fork_observation(&input.store, &input.steps, &input.observation, spec).expect("direct");
         assert_eq!(ForkObservation::abi_decode(&public_values), Ok(expected));
 
@@ -428,8 +455,17 @@ fn observation_decoder_limits_steps_to_64() {
         observation,
     };
     let mut bytes = encode_observation_input(&input);
-    // The step count sits after the chain byte (1) and the store.
-    let store_length = bytes.len() - 1 - 4 - (112 + 8 + 64 + 96 + 4);
+    // The step count sits after the chain byte (1) and the store. The observation follows the step count: header, signature
+    // slot, bits, signature, version, then the two branches (a count of 4 bytes and 32 bytes per node).
+    let branch_bytes = |branch: &[B256]| 4 + 32 * branch.len();
+    let observation_length = 112
+        + 8
+        + 64
+        + 96
+        + 4
+        + branch_bytes(&input.observation.current_version_branch)
+        + branch_bytes(&input.observation.genesis_validators_root_branch);
+    let store_length = bytes.len() - 1 - 4 - observation_length;
     let count_offset = 1 + store_length;
     assert_eq!(&bytes[count_offset..count_offset + 4], &0u32.to_le_bytes(), "found the count");
     bytes[count_offset..count_offset + 4].copy_from_slice(&65u32.to_le_bytes());
@@ -437,25 +473,34 @@ fn observation_decoder_limits_steps_to_64() {
 }
 
 /// Claim: a REAL PulseChain sync aggregate, taken from the real update fixture, verifies through
-/// `verify_fork_observation` under PulseChain's real current version `0x0000036c`, and fails under `0x0000036d`.
-/// Why it matters: the program proves the real chain's version, with real keys, and rejects a nearby version.
+/// `verify_fork_observation` under PulseChain's real current version `0x0000036c`, with the real branches of the real
+/// attested state, and the output reports shape 5. Under `0x0000036d` the shape proof fails first, and with the shape proof
+/// of the real version kept, the signature fails.
+/// Why it matters: the program proves the real chain's version and shape, with real keys and a real state, and rejects a
+/// nearby version.
 #[test]
 fn real_pulsechain_aggregate_proves_version_0x0000036c_and_not_0x0000036d() {
     let (store, update) = lc_testkit::pulsechain::real_update_and_store();
+    let proofs = lc_testkit::pulsechain::real_state_proofs();
     let real_version = [0, 0, 0x03, 0x6c];
+    assert_eq!(proofs.current_version, real_version, "the real state holds the version that the committee signed");
     let observation = |version| Observation {
         attested_header: update.attested_header.beacon,
         signature_slot: update.signature_slot,
         sync_aggregate: update.sync_aggregate.clone(),
         fork_version: version,
+        current_version_branch: proofs.current_version_branch.clone(),
+        genesis_validators_root_branch: proofs.genesis_validators_root_branch.clone(),
     };
     let output = verify_fork_observation(&store, &[], &observation(real_version), &PULSECHAIN).expect("real signature");
     assert_eq!(output.observedVersion.0, real_version);
+    assert_eq!(output.shape, 5, "the real PulseChain state is a plain state of depth 5");
     assert_eq!(output.observedAttestedSlot, update.attested_header.beacon.slot);
     assert_eq!(output.previousSyncCommitteeHash, store.current_sync_committee.hash_tree_root().unwrap());
     assert_eq!(
         verify_fork_observation(&store, &[], &observation([0, 0, 0x03, 0x6d]), &PULSECHAIN),
-        Err(Error::SignatureVerificationFailed)
+        Err(Error::InvalidForkShapeProof),
+        "the real state does not hold version 0x0000036d"
     );
     // Control for the domain: the real signing root is the one the program checks.
     let domain = compute_domain(DOMAIN_SYNC_COMMITTEE, real_version, &PULSECHAIN.genesis_validators_root);
@@ -463,7 +508,7 @@ fn real_pulsechain_aggregate_proves_version_0x0000036c_and_not_0x0000036d() {
 }
 
 /// Claim: the fixture files on disk equal what the generator builds, byte for byte, and every accept fixture's public
-/// values are 224 bytes that decode to the version the fixture names.
+/// values are 256 bytes that decode to the version the fixture names.
 /// Why it matters: the Solidity tests trust these files. A stale file would test the wrong bytes.
 #[test]
 fn fork_observation_fixtures_are_current() {
@@ -480,7 +525,7 @@ fn fork_observation_fixtures_are_current() {
             continue;
         }
         let bytes = alloy_primitives::hex::decode(value["publicValues"].as_str().expect("hex")).expect("hex");
-        assert_eq!(bytes.len(), 224);
+        assert_eq!(bytes.len(), 256);
         let decoded = ForkObservation::abi_decode(&bytes).expect("decode");
         assert_eq!(format!("0x{}", alloy_primitives::hex::encode(decoded.observedVersion.0)), value["observedVersion"]);
     }

@@ -1,6 +1,26 @@
 {
   "fetched_on": "2026-10-20",
   "response": {
+    "state_proofs": {
+      "current_version": "0x0000036c",
+      "current_version_branch": [
+        "0x0000036b00000000000000000000000000000000000000000000000000000000",
+        "0xe7b4bb67551dde9589c1553dfda37a942a18caf184f9cc1629d25cf5c60be416",
+        "0xfcf3a50000000000000000000000000000000000000000000000000000000000",
+        "0x43412dba32d7ab2887a202437405dca56c6792924fa0318c7cd6225e6e74f1d2",
+        "0xe5ae47f7b538ddcb307539eb9d4cd200fb3dac4f5548ad8d1d006d9837be9f83",
+        "0x44ec3ca54afcdc9e6fc2eae9ec870f2d238c83ed8a207f3cbb3cb11ad4c7d303",
+        "0x2378a4dcb53a1b05b83964e0e09cfd6863a2537114a59c38043bf9949fbf48f5"
+      ],
+      "genesis_validators_root": "0x3357ba0018a2582aeabe4ae847aa17d50a3a99aaeb66293c01f80a83aecd0c90",
+      "genesis_validators_root_branch": [
+        "0x53875c6400000000000000000000000000000000000000000000000000000000",
+        "0xf7aa7899c620bdf35c58ae4e1daab39ca660de65083955a34ff8b7f9aa599a07",
+        "0xe5ae47f7b538ddcb307539eb9d4cd200fb3dac4f5548ad8d1d006d9837be9f83",
+        "0x44ec3ca54afcdc9e6fc2eae9ec870f2d238c83ed8a207f3cbb3cb11ad4c7d303",
+        "0x2378a4dcb53a1b05b83964e0e09cfd6863a2537114a59c38043bf9949fbf48f5"
+      ]
+    },
     "store": {
       "current_sync_committee": {
         "aggregate_pubkey": "0xa8da54c0862b13b0a9b73752c0cf99bf020a70f6a7c75a4e15633008d972bd2bed7abecd121821127a0107464e27699f",

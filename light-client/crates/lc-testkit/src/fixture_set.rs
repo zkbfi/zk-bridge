@@ -86,8 +86,8 @@ fn gloas_json() -> Value {
 }
 
 /// The state layouts that the light-client program accepts, derived from `ALLOWED_FINALITY_BRANCH_LENGTHS`: the plain
-/// depths (a finality branch of `depth + 1` entries) and the one progressive length. `BeaconForkGate` configures the same
-/// set in `supportedVersions`, and a Solidity test compares the two.
+/// depths (a finality branch of `depth + 1` entries) and the one progressive length. The Solidity tests compare their
+/// allowed shapes with this set.
 fn program_json() -> Value {
     let mut plain_depths = Vec::new();
     let mut progressive_lengths = Vec::new();
@@ -107,7 +107,7 @@ fn program_json() -> Value {
         }
     }
     json!({
-        "source": "lc_core::layout::ALLOWED_FINALITY_BRANCH_LENGTHS. The finality branch length names the layout; every other length is refused, depth 7 (length 8) included.",
+        "source": "lc_core::layout::ALLOWED_FINALITY_BRANCH_LENGTHS. The finality branch length names the layout; every other length is refused. Plain depth 7 (length 8) is allowed because the genesis validators root branch proves the shape.",
         "finalityBranchLengths": ALLOWED_FINALITY_BRANCH_LENGTHS,
         "plainStateDepths": plain_depths,
         "progressiveFinalityBranchLengths": progressive_lengths,

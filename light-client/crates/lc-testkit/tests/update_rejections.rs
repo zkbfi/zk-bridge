@@ -5,18 +5,22 @@
 //! Every attack test has a control: the same scenario without the attack passes.
 
 use alloy_primitives::B256;
-use lc_core::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN};
+use lc_core::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN, SEPOLIA};
+use lc_core::ssz::is_valid_exact_branch;
 use lc_core::types::{compute_signing_root, sync_committee_domain};
 use lc_core::types::{LightClientStore, LightClientUpdate};
 use lc_core::update::{
     advance_light_client_store, table_fork_version, verify_light_client_update,
-    verify_light_client_update_with_fork_version,
+    verify_light_client_update_with_fork_version, verify_sync_aggregate,
 };
 use lc_core::Error;
 use lc_testkit::json::{bootstrap, light_client_update, load_response, store_from_bootstrap};
 use lc_testkit::pulsechain::real_update_and_store;
+use lc_testkit::real_proofs::{assert_stops_at_the_missing_branch, has_branch, with_known_branch};
 use lc_testkit::synthetic::{
-    build_update, make_committee, sign_with_first_members, TestCommittee, UpdateRecipe, UpdateScenario,
+    build_gloas_update, build_update, build_update_over_tree_with_finalized_state, committee_for, make_committee,
+    sign_with_first_members, synthetic_compact_header, CraftedPlacement, CraftedStateTree, TestCommittee, UpdateRecipe,
+    UpdateScenario, SEPOLIA_GLOAS_RECIPE,
 };
 
 fn flip(node: &mut B256) {
@@ -108,6 +112,13 @@ fn synthetic_signature_and_participation_tampering() {
 
 /// Claim: cross-chain replay fails in all three ways. The other chain's fork version, the other chain's genesis validators
 /// root, and both together are refused on synthetic updates (H-01 and R2-09).
+/// - The fork version is bound by the signature: `SignatureVerificationFailed`.
+/// - The genesis validators root is bound twice. The state holds the root of the home chain in field 1, so a program that
+///   runs with the foreign root fails the branch of `genesis_validators_root` first: `InvalidGenesisValidatorsRootBranch`.
+///   The signature binds the same root, and the aggregate check alone (no state) shows that: `SignatureVerificationFailed`.
+///
+/// Why it matters: a signature made for one chain must not move to the other chain, and a state of one chain must not
+/// pass as the state of the other.
 #[test]
 fn synthetic_other_chains_domain_is_refused() {
     let pairs: [(&UpdateScenario, &ChainSpec); 2] = [
@@ -126,10 +137,29 @@ fn synthetic_other_chains_domain_is_refused() {
         let foreign_root = ChainSpec { genesis_validators_root: other.genesis_validators_root, ..*scenario.spec };
         assert_eq!(
             with(&foreign_root, own_version),
-            Err(Error::SignatureVerificationFailed),
-            "other genesis validators root"
+            Err(Error::InvalidGenesisValidatorsRootBranch),
+            "other genesis validators root: the state holds the home root"
         );
-        assert_eq!(with(&foreign_root, other_version), Err(Error::SignatureVerificationFailed), "both");
+        assert_eq!(
+            with(&foreign_root, other_version),
+            Err(Error::InvalidGenesisValidatorsRootBranch),
+            "both: the state check runs before the signature check"
+        );
+
+        // The signature alone binds the root too.
+        let attested_root = scenario.update.attested_header.beacon.hash_tree_root();
+        let signature_under = |spec: &ChainSpec, version: [u8; 4]| {
+            verify_sync_aggregate(
+                spec,
+                &scenario.store.current_sync_committee,
+                &scenario.update.sync_aggregate,
+                &attested_root,
+                version,
+            )
+        };
+        assert_eq!(signature_under(scenario.spec, own_version), Ok(()), "control");
+        assert_eq!(signature_under(&foreign_root, own_version), Err(Error::SignatureVerificationFailed));
+        assert_eq!(signature_under(&foreign_root, other_version), Err(Error::SignatureVerificationFailed));
     }
 }
 
@@ -323,14 +353,16 @@ fn synthetic_malformed_committee_is_refused() {
 // ---- real data ----
 
 fn real_ethereum() -> (LightClientStore, LightClientUpdate) {
-    let update = light_client_update(&load_response("ethereum/finality_update.json")["data"]);
+    let update = with_known_branch(light_client_update(&load_response("ethereum/finality_update.json")["data"]));
     let store = store_from_bootstrap(&bootstrap(&load_response("ethereum/bootstrap_same_period.json")["data"]), None);
     (store, update)
 }
 
 /// Claim: the attacks of this file also fail on REAL updates from both chains: a flipped signature bit, 341 participants,
 /// every branch corrupted, the other layout's branch length, and an attested header presented as finalized. Control: the untouched
-/// real update verifies.
+/// real update verifies. The real Ethereum update has no branch of `genesis_validators_root` on file (see
+/// `lc_testkit::real_proofs`): its control and its signature check then run on the aggregate and on the point where the
+/// program stops. Every other attack stops before the genesis validators root branch and runs in full.
 #[test]
 fn real_updates_reject_every_attack() {
     let cases: Vec<(&str, LightClientStore, LightClientUpdate, &ChainSpec)> = {
@@ -340,12 +372,32 @@ fn real_updates_reject_every_attack() {
     };
     for (name, store, update, spec) in cases {
         let run = |update: &LightClientUpdate| verify_light_client_update(&store, update, spec);
-        assert!(run(&update).is_ok(), "{name}: control");
+        let version = table_fork_version(spec, update.signature_slot);
+        let signature_result = |update: &LightClientUpdate| match has_branch(update) {
+            true => run(update).map(|_| ()),
+            false => verify_sync_aggregate(
+                spec,
+                &store.current_sync_committee,
+                &update.sync_aggregate,
+                &update.attested_header.beacon.hash_tree_root(),
+                version,
+            ),
+        };
+        match has_branch(&update) {
+            true => assert!(run(&update).is_ok(), "{name}: control"),
+            false => {
+                assert_eq!(signature_result(&update), Ok(()), "{name}: control, the real signature");
+                assert_stops_at_the_missing_branch(&store, &update, spec, version);
+            }
+        }
 
         let mut tampered = update.clone();
         tampered.sync_aggregate.sync_committee_signature[95] ^= 0x01;
         assert!(
-            matches!(run(&tampered), Err(Error::InvalidSignatureEncoding | Error::SignatureVerificationFailed)),
+            matches!(
+                signature_result(&tampered),
+                Err(Error::InvalidSignatureEncoding | Error::SignatureVerificationFailed)
+            ),
             "{name}: signature bit"
         );
 
@@ -419,14 +471,23 @@ fn real_updates_run_through_the_guest_entry_point() {
             GuestInput { chain, store: store.clone(), steps: vec![FoldStep { update: update.clone(), fork_version }] };
         let bytes = encode_guest_input(&input);
         assert_eq!(decode_guest_input(&bytes), Ok(input.clone()), "roundtrip");
+        let truncated_and_trailing = |bytes: &Vec<u8>| {
+            assert!(run_light_client_guest(&bytes[..bytes.len() - 1]).is_err(), "truncated");
+            let mut trailing = bytes.clone();
+            trailing.push(0);
+            assert!(run_light_client_guest(&trailing).is_err(), "trailing byte");
+        };
+        if !has_branch(&update) {
+            // No branch of genesis_validators_root on file: the guest stops there, and the format checks still run.
+            assert_eq!(run_light_client_guest(&bytes), Err(Error::InvalidGenesisValidatorsRootBranch));
+            truncated_and_trailing(&bytes);
+            continue;
+        }
         let expected = verify_light_client_update(&store, &update, spec).unwrap().abi_encode();
         assert_eq!(expected.len(), 352);
         assert_eq!(run_light_client_guest(&bytes), Ok(expected));
 
-        assert!(run_light_client_guest(&bytes[..bytes.len() - 1]).is_err(), "truncated");
-        let mut trailing = bytes.clone();
-        trailing.push(0);
-        assert!(run_light_client_guest(&trailing).is_err(), "trailing byte");
+        truncated_and_trailing(&bytes);
         let mut wrong_version = input.clone();
         wrong_version.steps[0].fork_version[0] ^= 0x01;
         assert_eq!(
@@ -513,5 +574,170 @@ fn synthetic_next_committee_hash_is_zero_unless_this_update_proves_it() {
         assert!(unproven.store.next_sync_committee.is_some());
         let output = verify(&unproven, &unproven.update).expect("update without next committee verifies");
         assert_eq!(output.nextSyncCommitteeHash, B256::ZERO);
+    }
+}
+
+// ---- the attested header (gap 2) ----
+
+/// The scenario with its attested header replaced by a COMPACT header over the same slot and state root, signed again by the
+/// committee of the signature period. The execution branch of the compact header has 8 entries on a Capella body (PulseChain)
+/// and 9 entries on a Deneb or later body (Ethereum).
+fn with_compact_attested_header(mut scenario: UpdateScenario) -> UpdateScenario {
+    let attested = scenario.update.attested_header.clone();
+    scenario.update.attested_header = synthetic_compact_header(
+        scenario.spec,
+        attested.beacon.slot,
+        attested.beacon.state_root,
+        attested.execution_block_hash(),
+    );
+    let signer = committee_for(scenario.spec, scenario.spec.period_at_slot(scenario.update.signature_slot));
+    resign(&mut scenario, &signer);
+    scenario
+}
+
+/// Claim: a compact attested header of 8 or 9 entries is checked. One flipped entry, at any position, gives exactly
+/// `InvalidExecutionBranch("attested")` through the whole step. Control: the unflipped header verifies. PulseChain gives
+/// 8 entries (Capella payload, index 412) and Ethereum gives 9 (Deneb or later payload, index 812).
+/// Why it matters: the state-anchored skip covers only the branch of 11 entries. No other test sends a compact attested
+/// header of 8 or 9 entries through a step, so a skip that grew to every compact header would pass unseen.
+#[test]
+fn a_compact_attested_header_of_eight_or_nine_entries_is_checked() {
+    for (spec, recipe, length) in
+        [(&PULSECHAIN, pulsechain_recipe(), 8usize), (&ETHEREUM_MAINNET, ethereum_recipe(), 9)]
+    {
+        let scenario = with_compact_attested_header(build_update(spec, recipe));
+        assert_eq!(scenario.update.attested_header.execution_branch.len(), length, "{}", spec.name);
+        assert!(verify(&scenario, &scenario.update).is_ok(), "{}: control", spec.name);
+        for position in 0..length {
+            let mut update = scenario.update.clone();
+            flip(&mut update.attested_header.execution_branch[position]);
+            assert_eq!(
+                verify(&scenario, &update),
+                Err(Error::InvalidExecutionBranch("attested")),
+                "{} entry {position}",
+                spec.name
+            );
+        }
+    }
+}
+
+/// Claim: a compact attested header with a zero block hash is refused with `ZeroExecutionBlockHash("attested")` when its
+/// branch has 8 or 9 entries. The same zero hash with the 11 entry state-anchored branch of a Gloas update is accepted: that
+/// is the documented skip, because the execution data of the attested header never reaches the output. Control: the honest
+/// headers verify.
+/// Why it matters: this pins the edge of the skip. The zero-hash rule applies to every header that the program reads, and
+/// not to the one header form that it never reads.
+#[test]
+fn a_compact_attested_header_with_a_zero_hash_is_refused_unless_state_anchored() {
+    for (spec, recipe) in [(&PULSECHAIN, pulsechain_recipe()), (&ETHEREUM_MAINNET, ethereum_recipe())] {
+        let scenario = with_compact_attested_header(build_update(spec, recipe));
+        let mut update = scenario.update.clone();
+        update.attested_header.execution.block_hash = B256::ZERO;
+        assert_eq!(verify(&scenario, &update), Err(Error::ZeroExecutionBlockHash("attested")), "{}", spec.name);
+    }
+    let gloas = build_gloas_update(&SEPOLIA, SEPOLIA_GLOAS_RECIPE);
+    let run = |update: &LightClientUpdate| verify_light_client_update(&gloas.store, update, gloas.spec).map(|_| ());
+    assert_eq!(gloas.update.attested_header.execution_branch.len(), 11);
+    assert_eq!(run(&gloas.update), Ok(()), "control");
+    let mut zero_hash = gloas.update.clone();
+    zero_hash.attested_header.execution.block_hash = B256::ZERO;
+    assert_eq!(run(&zero_hash), Ok(()), "the state-anchored attested header is not read: a deliberate skip");
+}
+
+/// Claim: a compact attested header whose branch has a length that names no anchor (0, 1, 7, 10, 12 and 64 entries) is
+/// refused with exactly `InvalidExecutionBranch("attested")`. Length 11 is the one skipped length and 8 and 9 are the
+/// checked ones. Control: the honest 8 or 9 entry header verifies.
+/// Why it matters: the skip must not grow to "any length that is not 8 or 9". Only the length that names the state anchor
+/// is exempt.
+#[test]
+fn a_compact_attested_header_of_a_length_that_names_no_anchor_is_refused() {
+    for (spec, recipe) in [(&PULSECHAIN, pulsechain_recipe()), (&ETHEREUM_MAINNET, ethereum_recipe())] {
+        let scenario = with_compact_attested_header(build_update(spec, recipe));
+        assert!(verify(&scenario, &scenario.update).is_ok(), "{}: control", spec.name);
+        let honest = scenario.update.attested_header.execution_branch.clone();
+        for length in [0usize, 1, 7, 10, 12, 64] {
+            let mut update = scenario.update.clone();
+            update.attested_header.execution_branch = honest.iter().copied().cycle().take(length).collect();
+            assert_eq!(
+                verify(&scenario, &update),
+                Err(Error::InvalidExecutionBranch("attested")),
+                "{} length {length}",
+                spec.name
+            );
+        }
+    }
+}
+
+/// Claim: the state proofs bind the ATTESTED state root and not the finalized one. The finalized header commits to a crafted
+/// state that holds the next committee at 55 and the root of the chain at 33. The attested state holds the finality leaf
+/// and neither of those. The update carries the branches of the FINALIZED state. They are real branches, they verify
+/// against the finalized state root, and the program refuses them: `InvalidNextSyncCommitteeBranch` for the next committee,
+/// and, for an update without a next committee, `InvalidGenesisValidatorsRootBranch` for the root. Control: the branches of
+/// the attested state verify.
+/// Why it matters: no other test moves the root that the state proofs bind. A program that checked them against the
+/// finalized state root would accept a state the committee never signed.
+#[test]
+fn state_proofs_bind_the_attested_state_root_not_the_finalized_one() {
+    let spec = &PULSECHAIN;
+    let placement = CraftedPlacement { finality: 105, next_committee: 55, genesis_validators_root: 33 };
+    let next_committee_root = committee_for(spec, spec.period_at_slot(pulsechain_recipe().attested_slot) + 1)
+        .committee
+        .hash_tree_root()
+        .expect("committee root");
+    let finalized_tree = CraftedStateTree::new().place(55, next_committee_root).place(33, spec.genesis_validators_root);
+    let finalized_state_root = finalized_tree.root();
+    let build = |recipe: UpdateRecipe, attested_holds_proofs: bool| {
+        build_update_over_tree_with_finalized_state(spec, recipe, finalized_state_root, placement, |facts| {
+            let tree = CraftedStateTree::new().with_honest_values(spec, facts, placement);
+            match attested_holds_proofs {
+                true => tree,
+                false => tree.without(55).without(33),
+            }
+        })
+    };
+
+    // The branches of the finalized state are real branches of that state.
+    assert!(is_valid_exact_branch(&next_committee_root, &finalized_tree.branch(55), 55, &finalized_state_root));
+    assert!(is_valid_exact_branch(
+        &spec.genesis_validators_root,
+        &finalized_tree.branch(33),
+        33,
+        &finalized_state_root
+    ));
+
+    let with_next = build(pulsechain_recipe(), false);
+    let mut next_attack = with_next.update.clone();
+    next_attack.next_sync_committee.as_mut().expect("a next committee").branch = finalized_tree.branch(55);
+    next_attack.genesis_validators_root_branch = finalized_tree.branch(33);
+    assert_eq!(
+        verify_light_client_update(&with_next.store, &next_attack, spec),
+        Err(Error::InvalidNextSyncCommitteeBranch)
+    );
+
+    let recipe = UpdateRecipe { include_next_committee: false, ..pulsechain_recipe() };
+    let without_next = build(recipe, false);
+    let mut root_attack = without_next.update.clone();
+    root_attack.genesis_validators_root_branch = finalized_tree.branch(33);
+    assert_eq!(
+        verify_light_client_update(&without_next.store, &root_attack, spec),
+        Err(Error::InvalidGenesisValidatorsRootBranch)
+    );
+
+    let control = build(pulsechain_recipe(), true);
+    assert!(verify_light_client_update(&control.store, &control.update, spec).is_ok(), "control");
+}
+
+/// Claim: a changed attested state root breaks the state proofs first. Replacing `attested_header.beacon.state_root` of a
+/// valid update gives exactly `InvalidFinalityBranch`, although the signature would fail too (the header root changed).
+/// Control: the untouched update verifies.
+/// Why it matters: this pins the order of the checks and the root they use. The state proofs run before the signature
+/// check, against the attested state root.
+#[test]
+fn a_changed_attested_state_root_breaks_the_state_proofs_first() {
+    for scenario in scenarios() {
+        assert!(verify(&scenario, &scenario.update).is_ok(), "control");
+        let mut update = scenario.update.clone();
+        update.attested_header.beacon.state_root = B256::repeat_byte(0x42);
+        assert_eq!(verify(&scenario, &update), Err(Error::InvalidFinalityBranch), "{}", scenario.spec.name);
     }
 }

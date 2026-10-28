@@ -20,10 +20,12 @@ use lc_core::ssz::{is_valid_exact_branch, is_valid_normalized_merkle_branch};
 use lc_core::ssz_state::{state_slot, try_parse_state_for_fork, ParsedState};
 use lc_core::types::{LightClientHeader, LightClientStore, LightClientUpdate};
 use lc_core::update::{
-    table_fork_version, verify_finalized_execution, verify_light_client_fold_with_fork_versions, FoldStep,
+    table_fork_version, verify_finalized_execution, verify_light_client_fold_with_fork_versions, verify_sync_aggregate,
+    FoldStep,
 };
 use lc_core::Error;
 use lc_testkit::json::{fixtures_dir, load_fixture, load_response};
+use lc_testkit::real_proofs::{has_branch, with_known_branch};
 
 fn real_state() -> ParsedState {
     let bytes = std::fs::read(fixtures_dir().join("sepolia/gloas_head_state.ssz")).expect("the state fixture");
@@ -152,13 +154,27 @@ fn the_real_anchor_gives_the_real_block_number() {
     assert_eq!(verify_finalized_execution(&bid), Err(Error::InvalidExecutionBranch("finalized")));
 }
 
+/// Claim: the branch of `genesis_validators_root` for the real Sepolia head update is on file.
+/// Why it matters: until it is, `a_real_gloas_fold_gives_a_real_execution_block` runs its reduced part. This test is the open
+/// item. It fails until `sepolia/state_proofs.json` holds the branch of the attested state at slot 11441280.
+#[test]
+#[ignore = "needs sepolia/state_proofs.json: fetch the attested state and run derive-attested-state-proofs"]
+fn sepolia_attested_state_proofs_are_on_file() {
+    assert!(has_branch(&with_known_branch(real_update())));
+}
+
 /// Claim: a REAL Gloas fold verifies end to end. The store holds the real current committee of the finalized state. The
 /// update is the real finality update, with its finalized header anchored in the real state. The aggregate signature is
 /// real (BLS). The output has the real execution block hash and number, and no zero. The control: one flipped
 /// participation bit that is set (a signer removed) breaks the signature, so the signature check ran on real data.
+///
+/// The branch of `genesis_validators_root` lies under the ATTESTED state, and only the finalized state is on file (see
+/// `lc_testkit::real_proofs`). Without that branch the test checks what does not need it: the real signature and the
+/// removed signer on the aggregate, the real execution block of the anchor, and the point where the fold stops. With the
+/// branch on file it runs the whole fold.
 #[test]
 fn a_real_gloas_fold_gives_a_real_execution_block() {
-    let mut update = real_update();
+    let mut update = with_known_branch(real_update());
     let state = real_state();
     update.finalized_header = anchored_finalized_header(&update, &state);
     let store_slot = update.finalized_header.beacon.slot - 1_000;
@@ -173,28 +189,52 @@ fn a_real_gloas_fold_gives_a_real_execution_block() {
         update: update.clone(),
         fork_version: table_fork_version(&SEPOLIA, update.signature_slot),
     };
-    let output = verify_light_client_fold_with_fork_versions(&store, &[step(&update)], &SEPOLIA).expect("a real fold");
-    assert_eq!(output.executionBlockHash, keccak256(real_header_rlp()));
-    assert_ne!(output.executionBlockNumber, 0);
-    assert_eq!(output.executionBlockNumber, decode_execution_anchor_fields(&real_header_rlp()).unwrap().number);
-    assert_eq!(output.newHeaderRoot, update.finalized_header.beacon.hash_tree_root());
-    assert_eq!(output.newHeadSlot, update.finalized_header.beacon.slot);
-
     let mut unsigned = update.clone();
     let set_bit = (0..512).find(|index| unsigned.sync_aggregate.is_set(*index)).unwrap();
     unsigned.sync_aggregate.sync_committee_bits[set_bit / 8] &= !(1 << (set_bit % 8));
-    assert_eq!(
-        verify_light_client_fold_with_fork_versions(&store, &[step(&unsigned)], &SEPOLIA),
-        Err(Error::SignatureVerificationFailed)
-    );
 
-    // The finality branch (index 735) and the committee branch are real too, in the Gloas layout.
+    // The finality branch (index 735) is real, in the Gloas layout.
     assert!(is_valid_normalized_merkle_branch(
         &update.finalized_header.beacon.hash_tree_root(),
         &update.finality_branch,
         FINALIZED_ROOT_GINDEX_GLOAS,
         &update.attested_header.beacon.state_root,
     ));
+
+    if !has_branch(&update) {
+        // The signature check does not need the branch: run it on the aggregate.
+        let signature_under_the_table_version = |candidate: &LightClientUpdate| {
+            verify_sync_aggregate(
+                &SEPOLIA,
+                &store.current_sync_committee,
+                &candidate.sync_aggregate,
+                &candidate.attested_header.beacon.hash_tree_root(),
+                table_fork_version(&SEPOLIA, candidate.signature_slot),
+            )
+        };
+        assert_eq!(signature_under_the_table_version(&update), Ok(()), "the real aggregate verifies");
+        assert_eq!(signature_under_the_table_version(&unsigned), Err(Error::SignatureVerificationFailed));
+        let proven = verify_finalized_execution(&update.finalized_header).expect("the real anchor");
+        assert_eq!(proven.block_hash, keccak256(real_header_rlp()));
+        assert_eq!(proven.block_number, decode_execution_anchor_fields(&real_header_rlp()).unwrap().number);
+        assert_ne!(proven.block_number, 0);
+        assert_eq!(
+            verify_light_client_fold_with_fork_versions(&store, &[step(&update)], &SEPOLIA),
+            Err(Error::InvalidGenesisValidatorsRootBranch),
+            "every earlier check passes, and the fold stops at the missing branch"
+        );
+        return;
+    }
+    let output = verify_light_client_fold_with_fork_versions(&store, &[step(&update)], &SEPOLIA).expect("a real fold");
+    assert_eq!(output.executionBlockHash, keccak256(real_header_rlp()));
+    assert_ne!(output.executionBlockNumber, 0);
+    assert_eq!(output.executionBlockNumber, decode_execution_anchor_fields(&real_header_rlp()).unwrap().number);
+    assert_eq!(output.newHeaderRoot, update.finalized_header.beacon.hash_tree_root());
+    assert_eq!(output.newHeadSlot, update.finalized_header.beacon.slot);
+    assert_eq!(
+        verify_light_client_fold_with_fork_versions(&store, &[step(&unsigned)], &SEPOLIA),
+        Err(Error::SignatureVerificationFailed)
+    );
 }
 
 /// Claim: the recent ancestry branch of a real Gloas state leads from `block_roots[slot % 8192]` to the state root at

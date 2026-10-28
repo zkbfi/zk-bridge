@@ -1,6 +1,6 @@
 //! SP1 guest: verifies an optional fold of up to 64 light-client updates, then one fork observation (a sync aggregate
 //! over a header root under a fork version that the prover names), and commits the ABI-encoded `ForkObservation`
-//! (224 bytes).
+//! (256 bytes: eight words, the last is the shape of the attested state).
 //!
 //! It is a separate program with its own verification key, so a `ForkObservation` proof can never pass as a
 //! `LightClientOutput` proof, and the reverse. The body is `lc_core::wire::run_fork_observation_guest`, which native

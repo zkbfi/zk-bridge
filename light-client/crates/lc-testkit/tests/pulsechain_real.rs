@@ -137,13 +137,27 @@ fn real_pulsechain_update_verifies_only_with_the_correct_fork_version() {
 }
 
 /// Claim: cross-chain replay fails. The same real PulseChain update, checked as if the chain had Ethereum's genesis
-/// validators root, is refused. This is the H-01 / R2-09 defense on real data.
+/// validators root, is refused twice over. The real state holds the PulseChain root in field 1, so the branch of
+/// `genesis_validators_root` fails first: `InvalidGenesisValidatorsRootBranch`. The real signature binds the same root, and
+/// the aggregate check alone shows it: `SignatureVerificationFailed`. This is the H-01 / R2-09 defense on real data.
+/// Control: the update verifies under its own root.
 #[test]
 fn real_pulsechain_update_does_not_verify_under_ethereums_genesis_validators_root() {
     let (store, update) = real_update_and_store();
     let foreign = ChainSpec { genesis_validators_root: ETHEREUM_MAINNET.genesis_validators_root, ..PULSECHAIN };
     assert!(verify_light_client_update(&store, &update, &PULSECHAIN).is_ok(), "control");
-    assert_eq!(verify_light_client_update(&store, &update, &foreign), Err(Error::SignatureVerificationFailed));
+    assert_eq!(verify_light_client_update(&store, &update, &foreign), Err(Error::InvalidGenesisValidatorsRootBranch));
+    let signature_under = |spec: &ChainSpec| {
+        lc_core::update::verify_sync_aggregate(
+            spec,
+            &store.current_sync_committee,
+            &update.sync_aggregate,
+            &update.attested_header.beacon.hash_tree_root(),
+            [0, 0, 0x03, 0x6c],
+        )
+    };
+    assert_eq!(signature_under(&PULSECHAIN), Ok(()), "control: the real signature");
+    assert_eq!(signature_under(&foreign), Err(Error::SignatureVerificationFailed));
 }
 
 fn context(anchor_root: B256, bridge: Address) -> MessageContext {

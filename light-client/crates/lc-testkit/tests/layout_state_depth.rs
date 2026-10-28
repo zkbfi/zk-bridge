@@ -10,7 +10,7 @@
 //! - Part B: synthetic plain states of depth 5 and depth 6 against the other allowed layouts.
 //! - Part C: real honest data, cut or padded to the wrong length.
 //! - Part D: the length rules as unit tests, and mixed lengths in one step.
-//! - Part E: the control with a state of 70 fields (depth 7).
+//! - Part E: states of 70 fields (depth 7), and crafted trees that hold two layouts at once.
 //!
 //! Every attack test has a control: the honest case passes.
 
@@ -22,8 +22,8 @@ use lc_core::layout::{
     HISTORICAL_SUMMARIES_FIELD_INDEX,
 };
 use lc_core::ssz::{
-    active_fields_chunk, branch_for_leaf, gindex_depth, hash_pair, is_valid_exact_branch,
-    is_valid_normalized_merkle_branch, merkleize, sha256, u64_chunk, zero_hash,
+    active_fields_chunk, gindex_depth, hash_pair, is_valid_exact_branch, is_valid_normalized_merkle_branch, sha256,
+    u64_chunk, zero_hash,
 };
 use lc_core::ssz_state::{state_slot, try_parse_state_for_fork, ParsedState};
 use lc_core::types::{LightClientHeader, LightClientStore, LightClientUpdate, NextSyncCommittee};
@@ -33,7 +33,12 @@ use lc_testkit::json::{
     bootstrap, fixtures_dir, light_client_update, load_fixture, load_response, store_from_bootstrap,
 };
 use lc_testkit::pulsechain::real_update_and_store;
-use lc_testkit::synthetic::{build_update, committee_for, StateBuilder, UpdateRecipe, UpdateScenario};
+use lc_testkit::real_proofs::{assert_stops_at_the_missing_branch, has_branch, with_known_branch};
+use lc_testkit::synthetic::{
+    build_update, build_update_on, build_update_over_tree, committee_for, CraftedPlacement, CraftedStateTree,
+    StateBuilder, UpdateRecipe, UpdateScenario,
+};
+use lc_testkit::tree_model::{honest_looking_branch, progressive_state_tree, walk, Tree};
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Shared helpers
@@ -412,101 +417,6 @@ fn check_wrong_depth_claims(
 // Part A: the real Sepolia Gloas state against claimed plain layouts
 // ---------------------------------------------------------------------------------------------------------------------
 
-/// A Merkle tree with a known shape. A leaf is a chunk that has no known structure below it: the `active_fields` chunk, a
-/// padding chunk, or the root of a field.
-enum Tree {
-    /// A leaf with its value.
-    Leaf(B256),
-    /// A node with a left child and a right child.
-    Pair(Box<Tree>, Box<Tree>),
-}
-
-impl Tree {
-    /// The value of the node.
-    fn root(&self) -> B256 {
-        match self {
-            Self::Leaf(value) => *value,
-            Self::Pair(left, right) => hash_pair(&left.root(), &right.root()),
-        }
-    }
-}
-
-/// A balanced tree over `nodes`, whose count is a power of two.
-fn balanced(mut nodes: Vec<Tree>) -> Tree {
-    assert!(nodes.len().is_power_of_two(), "a balanced tree needs a power of two nodes");
-    while nodes.len() > 1 {
-        let mut parents = Vec::with_capacity(nodes.len() / 2);
-        let mut children = nodes.into_iter();
-        while let (Some(left), Some(right)) = (children.next(), children.next()) {
-            parents.push(Tree::Pair(Box::new(left), Box::new(right)));
-        }
-        nodes = parents;
-    }
-    nodes.pop().expect("one node is left")
-}
-
-/// The progressive tree of `chunks` (`eip-7916`): a subtree of `leaves` chunks on the left, the rest (with four times the
-/// leaves) on the right, and the zero chunk for an empty rest.
-fn progressive_tree(chunks: &[B256], leaves: usize) -> Tree {
-    if chunks.is_empty() {
-        return Tree::Leaf(B256::ZERO);
-    }
-    let take = chunks.len().min(leaves);
-    let mut nodes: Vec<Tree> = chunks[..take].iter().map(|chunk| Tree::Leaf(*chunk)).collect();
-    nodes.resize_with(leaves, || Tree::Leaf(B256::ZERO));
-    Tree::Pair(Box::new(balanced(nodes)), Box::new(progressive_tree(&chunks[take..], leaves * 4)))
-}
-
-/// The tree of a progressive state: the progressive tree on the left (node 2) and the `active_fields` chunk on the right
-/// (node 3). The fields are the leaves.
-fn gloas_state_tree(state: &ParsedState) -> Tree {
-    Tree::Pair(
-        Box::new(progressive_tree(&state.field_roots, 1)),
-        Box::new(Tree::Leaf(active_fields_chunk(state.field_roots.len()))),
-    )
-}
-
-/// The result of a walk of a generalized index through a tree.
-struct Walk {
-    /// The generalized index of the leaf at which the walk stopped.
-    leaf_gindex: u64,
-    /// The value of that leaf.
-    leaf_value: B256,
-    /// How many levels the claimed index lies below that leaf. Zero when the walk ended on the node itself.
-    levels_below: u32,
-    /// The siblings along the path while a node existed, from the top down.
-    real_siblings: Vec<B256>,
-}
-
-/// Walks `gindex` from the root of `tree`, and stops at the first leaf.
-fn walk(tree: &Tree, gindex: u64) -> Walk {
-    let depth = gindex_depth(gindex);
-    let mut node = tree;
-    let mut position = 1u64;
-    let mut real_siblings = Vec::new();
-    for level in 0..depth {
-        let Tree::Pair(left, right) = node else {
-            return Walk { leaf_gindex: position, leaf_value: node.root(), levels_below: depth - level, real_siblings };
-        };
-        let went_right = (gindex >> (depth - 1 - level)) & 1 == 1;
-        let (next, sibling) = if went_right { (right, left) } else { (left, right) };
-        real_siblings.push(sibling.root());
-        position = position * 2 + u64::from(went_right);
-        node = next;
-    }
-    Walk { leaf_gindex: position, leaf_value: node.root(), levels_below: 0, real_siblings }
-}
-
-/// The best honest-looking branch: the real siblings while a node exists, then filler below the leaf where the walk
-/// stopped. The order is bottom up, as the verifier reads it.
-fn honest_looking_branch(walk: &Walk) -> Vec<B256> {
-    let fillers = (0..u64::from(walk.levels_below)).map(|index| filler("below-the-leaf", index));
-    let mut top_down = walk.real_siblings.clone();
-    top_down.extend(fillers);
-    top_down.reverse();
-    top_down
-}
-
 /// The real Sepolia Gloas state (progressive form, 46 fields).
 fn real_gloas_state() -> ParsedState {
     let bytes = std::fs::read(fixtures_dir().join("sepolia/gloas_head_state.ssz")).expect("the state fixture");
@@ -601,7 +511,7 @@ fn assert_gloas_claim_refused(state: &ParsedState, tree: &Tree, claim: &GloasCla
 #[test]
 fn real_gloas_state_model_matches_the_root_and_honest_branches_verify() {
     let state = real_gloas_state();
-    let tree = gloas_state_tree(&state);
+    let tree = progressive_state_tree(&state.field_roots);
     assert_eq!(tree.root(), state.root(), "the tree model hashes to the real state root");
     let Tree::Pair(progressive, active) = &tree else { panic!("the state is a pair") };
     assert_eq!(progressive.root(), lc_core::ssz::merkleize_progressive(&state.field_roots), "node 2");
@@ -641,7 +551,7 @@ fn real_gloas_state_model_matches_the_root_and_honest_branches_verify() {
 #[test]
 fn real_gloas_state_plain_depth_five_claims_land_on_the_active_fields_chunk() {
     let state = real_gloas_state();
-    let tree = gloas_state_tree(&state);
+    let tree = progressive_state_tree(&state.field_roots);
     let claims = [(LayoutIndex::Finality, 105), (LayoutIndex::CurrentCommittee, 54), (LayoutIndex::NextCommittee, 55)];
     for (which, gindex) in claims {
         assert_gloas_claim_refused(
@@ -663,7 +573,7 @@ fn real_gloas_state_plain_depth_five_claims_land_on_the_active_fields_chunk() {
 fn real_gloas_state_plain_depth_six_claims_land_on_the_fork_version_and_the_block_header_children() {
     use lc_core::gate::{progressive_fork_version_branch, version_leaf};
     let state = real_gloas_state();
-    let tree = gloas_state_tree(&state);
+    let tree = progressive_state_tree(&state.field_roots);
 
     let version = path_gindex(&[(&BEACON_STATE_GLOAS, "fork"), (&FORK, "current_version")]).expect("a path");
     assert_eq!(version, 169);
@@ -743,6 +653,7 @@ fn plain_landing_walker_finds_the_honest_fields() {
 /// - 169 lands two levels below `eth1_deposit_index`, a uint64 leaf.
 /// - 86 lands on the data root of the `validators` list and 87 on its length (the length is a uint64 chunk).
 /// - 735 lands four levels inside `randao_mixes`. 2945 and 2946 land six levels inside `slashings`.
+///
 /// Why it is safe: the attacker needs a header root or a committee root that equals one of these values.
 #[test]
 fn synthetic_true_depth_five_state_refuses_the_claimed_electra_and_gloas_layouts() {
@@ -765,6 +676,7 @@ fn synthetic_true_depth_five_state_refuses_the_claimed_electra_and_gloas_layouts
 /// - 54 and 55 land on the nodes above leaves 44 and 45, and 46 and 47: padding only, the zero hash of level 1.
 /// - 735 lands three levels below the root of `historical_summaries`, on the right side: below the list length.
 /// - 2945 and 2946 land five levels below field 28, `deposit_requests_start_index`, a uint64 leaf.
+///
 /// Why it is safe: a zero chunk, a zero hash and a uint64 leaf are not values that a header root or a committee root takes.
 #[test]
 fn synthetic_true_depth_six_state_refuses_the_claimed_capella_and_gloas_layouts() {
@@ -803,9 +715,10 @@ fn synthetic_true_depth_six_state_refuses_the_claimed_capella_and_gloas_layouts(
 // Part C: honest data cut or padded to the wrong length
 // ---------------------------------------------------------------------------------------------------------------------
 
-/// The real Ethereum finality update and the store of its bootstrap.
+/// The real Ethereum finality update and the store of its bootstrap. The update carries the branch of
+/// `genesis_validators_root` only when `ethereum/state_proofs.json` holds it (see `lc_testkit::real_proofs`).
 fn real_ethereum() -> (LightClientStore, LightClientUpdate) {
-    let update = light_client_update(&load_response("ethereum/finality_update.json")["data"]);
+    let update = with_known_branch(light_client_update(&load_response("ethereum/finality_update.json")["data"]));
     let store = store_from_bootstrap(&bootstrap(&load_response("ethereum/bootstrap_same_period.json")["data"]), None);
     (store, update)
 }
@@ -813,7 +726,7 @@ fn real_ethereum() -> (LightClientStore, LightClientUpdate) {
 /// The real Sepolia Gloas head update with its finalized header anchored in the real state (see `tests/gloas_real.rs`), and
 /// the store that holds the real current committee.
 fn real_gloas_with_store() -> (LightClientStore, LightClientUpdate) {
-    let mut update = real_gloas_head_update();
+    let mut update = with_known_branch(real_gloas_head_update());
     let state = real_gloas_state();
     let wrapper = load_fixture("sepolia/gloas_head_execution_header.json");
     let rlp = alloy_primitives::hex::decode(wrapper["raw_header"].as_str().expect("raw header")).expect("hex");
@@ -864,24 +777,32 @@ fn real_pulsechain_zero_padded_finality_branch_is_refused() {
     );
 }
 
-/// Claim: the real Ethereum finality update (Fulu, finality branch of 7 entries) with its leading entry cut (length 6) fails
-/// with `InvalidFinalityBranch`, and padded with a leading zero to length 8 fails with `UnsupportedStateBranchLength {
-/// length: 8 }`. The control: the honest update verifies, and the old rule accepted the zero-padded branch at 169.
+/// Claim: the real Ethereum finality update (Fulu, finality branch of 7 entries) with its leading entry cut (length 6) and
+/// with a leading zero added (length 8) fails with `InvalidFinalityBranch`. The control: the honest update passes the
+/// finality check (and verifies in full when the branch of `genesis_validators_root` is on file), and the old rule accepted the
+/// zero-padded branch at 169.
 /// Why it matters: a branch of 6 entries asks for index 105, which on a true depth 6 state is the padding zero chunk at
-/// leaf 41. A branch of 8 entries names depth 7, which no layout has.
+/// leaf 41. A branch of 8 entries names plain depth 7 (index 297) since the genesis validators root branch protects that
+/// layout. The finality check comes first in `verify_step`, and the padded branch fails there: index 297 on a true depth 6
+/// state lands two levels below `eth1_deposit_index`, a uint64 leaf, so no honest entry makes it verify (the test computes
+/// that landing). The failure rests on the evidence and not on the length.
 #[test]
 fn real_ethereum_cut_and_padded_finality_branches_are_refused() {
     let (store, update) = real_ethereum();
-    assert!(
-        verify_light_client_update(&store, &update, &ETHEREUM_MAINNET).is_ok(),
-        "control: the real update verifies"
-    );
+    let version = table_fork_version(&ETHEREUM_MAINNET, update.signature_slot);
+    let run = |candidate: &LightClientUpdate| {
+        verify_light_client_update_with_fork_version(&store, candidate, &ETHEREUM_MAINNET, version)
+    };
+    match has_branch(&update) {
+        true => assert!(run(&update).is_ok(), "control: the real update verifies"),
+        false => assert_stops_at_the_missing_branch(&store, &update, &ETHEREUM_MAINNET, version),
+    }
     assert_eq!(update.finality_branch.len(), 7);
     assert_old_rule_accepted_and_exact_rule_refuses(&update, 169);
 
     let cut = with_finality_branch(&update, update.finality_branch[1..].to_vec());
     assert_eq!(cut.finality_branch.len(), 6);
-    assert_eq!(verify_light_client_update(&store, &cut, &ETHEREUM_MAINNET), Err(Error::InvalidFinalityBranch));
+    assert_eq!(run(&cut), Err(Error::InvalidFinalityBranch));
     assert_eq!(
         plain_landing(105, 6, &plain_state_fields(ForkName::Fulu)),
         PlainLanding::Padding { levels_below: 0 },
@@ -890,19 +811,29 @@ fn real_ethereum_cut_and_padded_finality_branches_are_refused() {
 
     let padded = with_finality_branch(&update, zero_padded(&update.finality_branch));
     assert_eq!(padded.finality_branch.len(), 8);
+    assert_eq!(run(&padded), Err(Error::InvalidFinalityBranch));
+    let leaf = update.finalized_header.beacon.hash_tree_root();
+    let root = &update.attested_header.beacon.state_root;
+    assert!(
+        !is_valid_exact_branch(&leaf, &padded.finality_branch, 297, root),
+        "the padded branch does not verify at the depth 7 index"
+    );
     assert_eq!(
-        verify_light_client_update(&store, &padded, &ETHEREUM_MAINNET),
-        Err(Error::UnsupportedStateBranchLength { length: 8 })
+        plain_landing(297, 6, &plain_state_fields(ForkName::Fulu)),
+        PlainLanding::Field { name: "eth1_deposit_index", levels_below: 2 },
+        "index 297 on a depth 6 state lands below a uint64 leaf"
     );
 }
 
 /// Claim: the real Sepolia Gloas update (finality branch of 9 entries, anchored in the real state) with a leading zero
-/// (length 10) or with its leading entry cut (length 8) fails with `UnsupportedStateBranchLength`. At the branch level,
+/// (length 10) fails with `UnsupportedStateBranchLength`, and with its leading entry cut (length 8, which names plain
+/// depth 7) fails with `InvalidFinalityBranch`, because the finality check comes first. At the branch level,
 /// for the two real Gloas updates (`gloas_head_finality_update.json` and `gloas_finality_update.json`), the honest branch
 /// verifies at 735, and the cut and the padded branch do not. The control: the honest update verifies.
-/// Why it matters: lengths 8 and 10 name no layout, so the program stops before it tests any index. The exact check also
-/// refuses both branches at 735, so the refusal does not rest on the length rule alone. The old rule accepted the
-/// zero-padded branch at 735.
+/// Why it matters: length 10 names no layout, so the program stops before it tests any index. Length 8 names plain depth 7
+/// and fails on the evidence: index 297 on the real progressive state lands below `active_fields`, and the branch is not the
+/// honest branch of anything. The exact check also refuses both branches at 735, so the refusal does not rest on the length
+/// rule alone. The old rule accepted the zero-padded branch at 735.
 #[test]
 fn real_sepolia_gloas_cut_and_padded_finality_branches_are_refused() {
     let (store, update) = real_gloas_with_store();
@@ -910,7 +841,10 @@ fn real_sepolia_gloas_cut_and_padded_finality_branches_are_refused() {
     let run = |candidate: &LightClientUpdate| {
         verify_light_client_update_with_fork_version(&store, candidate, &SEPOLIA, fork_version)
     };
-    assert!(run(&update).is_ok(), "control: the real Gloas update verifies");
+    match has_branch(&update) {
+        true => assert!(run(&update).is_ok(), "control: the real Gloas update verifies"),
+        false => assert_stops_at_the_missing_branch(&store, &update, &SEPOLIA, fork_version),
+    }
     assert_eq!(update.finality_branch.len(), 9);
 
     let padded = with_finality_branch(&update, zero_padded(&update.finality_branch));
@@ -918,7 +852,7 @@ fn real_sepolia_gloas_cut_and_padded_finality_branches_are_refused() {
     assert_eq!(run(&padded), Err(Error::UnsupportedStateBranchLength { length: 10 }));
     let cut = with_finality_branch(&update, update.finality_branch[1..].to_vec());
     assert_eq!(cut.finality_branch.len(), 8);
-    assert_eq!(run(&cut), Err(Error::UnsupportedStateBranchLength { length: 8 }));
+    assert_eq!(run(&cut), Err(Error::InvalidFinalityBranch));
 
     let second = light_client_update(&load_response("sepolia/gloas_finality_update.json")["data"]);
     for (name, real) in [("head update", update), ("second update", second)] {
@@ -938,28 +872,33 @@ fn real_sepolia_gloas_cut_and_padded_finality_branches_are_refused() {
 // Part D: the length rules
 // ---------------------------------------------------------------------------------------------------------------------
 
-/// Claim: the finality branch lengths 6, 7 and 9 name the layouts whose indices equal the constants of the specifications:
-/// 105, 54, 55 (Altair and Capella), 169, 86, 87 (Electra) and 735, 2945, 2946 (Gloas), written here as literals.
+/// Claim: the finality branch lengths 6, 7, 8 and 9 name the layouts whose indices equal the constants of the
+/// specifications: 105, 54, 55 (Altair and Capella), 169, 86, 87 (Electra), 297, 150, 151 (depth 7) and 735, 2945, 2946
+/// (Gloas), written here as literals. The genesis validators root positions are 33, 65, 129 and 40.
 /// Why it matters: these literals come from the specifications, not from this crate. A typo in `plain_state_layout` or in
 /// the Gloas field list shows here.
 #[test]
 fn finality_branch_lengths_name_the_layouts_of_the_specifications() {
-    let expected = [(6, 105, 54, 55), (7, 169, 86, 87), (9, 735, 2945, 2946)];
-    for (length, finality, current, next) in expected {
+    let expected = [(6, 105, 54, 55, 33), (7, 169, 86, 87, 65), (8, 297, 150, 151, 129), (9, 735, 2945, 2946, 40)];
+    for (length, finality, current, next, genesis_validators_root) in expected {
         let layout = state_layout_for_finality_branch_length(length).expect("an allowed length");
         assert_eq!(layout.finalized_root_gindex, finality, "finality index for length {length}");
         assert_eq!(layout.current_sync_committee_gindex, current, "current committee index for length {length}");
         assert_eq!(layout.next_sync_committee_gindex, next, "next committee index for length {length}");
+        assert_eq!(
+            layout.genesis_validators_root_gindex, genesis_validators_root,
+            "genesis validators root index for length {length}"
+        );
         assert_eq!(gindex_depth(finality) as usize, length, "the length of the finality branch is the depth");
     }
 }
 
-/// Claim: every length from 0 to 12 other than 6, 7 and 9, and also 64 and `usize::MAX`, is refused with
+/// Claim: every length from 0 to 12 other than 6, 7, 8 and 9, and also 64 and `usize::MAX`, is refused with
 /// `UnsupportedStateBranchLength { length }`.
 /// Why it matters: the program must stop on a length that names no layout, and must not guess the nearest one.
 #[test]
 fn every_other_finality_branch_length_is_refused() {
-    let lengths = (0..=12usize).chain([64, usize::MAX]).filter(|length| ![6, 7, 9].contains(length));
+    let lengths = (0..=12usize).chain([64, usize::MAX]).filter(|length| ![6, 7, 8, 9].contains(length));
     for length in lengths {
         assert_eq!(
             state_layout_for_finality_branch_length(length),
@@ -969,25 +908,27 @@ fn every_other_finality_branch_length_is_refused() {
     }
 }
 
-/// Claim: length 8 is refused, though it is the length of a depth 7 state (finality branch of 8 entries, index 297, and
-/// committee branch of 7 entries, indices 150 and 151). The program never reads a depth 7 layout.
-/// Why it matters: on a chain that is truly depth 7 (65 or more fields) a wrong claim would land on fields that no
-/// specification defines yet (for example field 41). Refusing depth 7 means that such a chain stops the bridge, and a
-/// later program version names the layout once a specification exists. Part E shows what depth 7 would allow.
+/// Claim: length 8 names plain depth 7: finality 297 (a branch of 8 entries), committees 150 and 151 (branches of 7
+/// entries) and genesis validators root 129 (a branch of 7 entries).
+/// Why it matters: a chain with 65 or more state fields has this layout. The genesis validators root branch, and not the
+/// length map, protects it: on a chain that is truly of another depth, the branch at 129 lands on a node that cannot hold
+/// the root (see the wide state tests below).
 #[test]
-fn finality_branch_length_eight_is_refused_because_it_is_depth_seven() {
+fn finality_branch_length_eight_names_plain_depth_seven() {
     let depth_seven = plain_state_layout(7);
     assert_eq!(depth_seven.finalized_root_gindex, 297);
     assert_eq!(gindex_depth(depth_seven.finalized_root_gindex), 8, "finality branch of 8 entries");
     assert_eq!((depth_seven.current_sync_committee_gindex, depth_seven.next_sync_committee_gindex), (150, 151));
     assert_eq!(gindex_depth(depth_seven.next_sync_committee_gindex), 7, "committee branch of 7 entries");
-    assert_eq!(state_layout_for_finality_branch_length(8), Err(Error::UnsupportedStateBranchLength { length: 8 }));
+    assert_eq!(depth_seven.genesis_validators_root_gindex, 129);
+    assert_eq!(gindex_depth(depth_seven.genesis_validators_root_gindex), 7, "genesis validators root branch of 7");
+    assert_eq!(state_layout_for_finality_branch_length(8), Ok(depth_seven));
 }
 
-/// Claim: the allowed finality branch lengths are exactly 6, 7 and 9.
+/// Claim: the allowed finality branch lengths are exactly 6, 7, 8 and 9.
 #[test]
-fn allowed_finality_branch_lengths_are_six_seven_and_nine() {
-    assert_eq!(ALLOWED_FINALITY_BRANCH_LENGTHS, [6, 7, 9]);
+fn allowed_finality_branch_lengths_are_six_to_nine() {
+    assert_eq!(ALLOWED_FINALITY_BRANCH_LENGTHS, [6, 7, 8, 9]);
     for length in ALLOWED_FINALITY_BRANCH_LENGTHS {
         assert!(state_layout_for_finality_branch_length(length).is_ok(), "length {length}");
     }
@@ -1025,108 +966,269 @@ fn mixed_branch_lengths_in_one_step_are_refused() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Part E: the 65 field control
+// Part E: wide states (depth 7) and crafted trees
 // ---------------------------------------------------------------------------------------------------------------------
 
 /// The number of fields of the wide state: 70, so the tree has 128 leaves (depth 7).
 const WIDE_STATE_FIELDS: usize = 70;
 
-/// A plain state of 70 fields with an honest finalized checkpoint at field 20 and a forged header root at field 41.
-struct WideState {
-    /// The 70 field roots.
-    leaves: Vec<B256>,
-    /// The root of the state.
-    root: B256,
-    /// The epoch of the honest checkpoint.
-    epoch: u64,
-    /// The honest finalized header root (the `root` of the checkpoint).
-    honest_header_root: B256,
-    /// The forged header root: it sits at field 41, which is the node at generalized index 128 + 41 = 169.
-    forged_header_root: B256,
+/// The value of node `gindex` in a plain tree of `depth` over `leaves`, padded with zero chunks.
+fn plain_tree_node(leaves: &[B256], depth: u32, gindex: u64) -> B256 {
+    if gindex_depth(gindex) == depth {
+        let position = (gindex - (1u64 << depth)) as usize;
+        return leaves.get(position).copied().unwrap_or(B256::ZERO);
+    }
+    hash_pair(&plain_tree_node(leaves, depth, gindex * 2), &plain_tree_node(leaves, depth, gindex * 2 + 1))
 }
 
-impl WideState {
-    /// Builds the state.
-    fn new() -> Self {
-        let epoch = 400_000;
-        let honest_header_root = filler("honest-header", 0);
-        let forged_header_root = filler("forged-header", 0);
-        let mut leaves: Vec<B256> = (0..WIDE_STATE_FIELDS as u64).map(|index| filler("wide-field", index)).collect();
-        leaves[20] = hash_pair(&u64_chunk(epoch), &honest_header_root);
-        leaves[41] = forged_header_root;
-        let root = merkleize(&leaves);
-        Self { leaves, root, epoch, honest_header_root, forged_header_root }
+/// The branch of node `gindex` in a plain tree of `depth` over `leaves`, bottom to top.
+fn plain_tree_branch(leaves: &[B256], depth: u32, gindex: u64) -> Vec<B256> {
+    let mut branch = Vec::new();
+    let mut current = gindex;
+    while current > 1 {
+        branch.push(plain_tree_node(leaves, depth, current ^ 1));
+        current >>= 1;
     }
-
-    /// The honest finality branch: the epoch chunk, then the 7 siblings of field 20. 8 entries.
-    fn honest_finality_branch(&self) -> Vec<B256> {
-        [vec![u64_chunk(self.epoch)], branch_for_leaf(&self.leaves, 20).1].concat()
-    }
-
-    /// The branch of field 41 to the root. 7 entries.
-    fn forged_branch(&self) -> Vec<B256> {
-        branch_for_leaf(&self.leaves, 41).1
-    }
+    branch
 }
 
-/// A selector that allows any depth: a finality branch of `length` entries between 6 and 8 names the plain layout of depth
-/// `length - 1`.
-fn permissive_layout(length: usize) -> Option<StateLayout> {
-    (6..=8).contains(&length).then(|| plain_state_layout(length as u32 - 1))
+/// The recipe of the update over the wide state: Ethereum chain, no next committee (the forgery has none).
+fn wide_recipe() -> UpdateRecipe {
+    UpdateRecipe { include_next_committee: false, ..ethereum_recipe() }
 }
 
-/// Claim: a selector that allows depth 7 accepts a forged length 7 branch on a state of 70 fields, and the real rule
-/// refuses the honest depth 7 update. The permissive selector reads the 7 entries of field 41 at index 169 and accepts the
-/// forged header root. The real rule gives `UnsupportedStateBranchLength { length: 8 }` for the honest update (8 entries,
-/// index 297), and the permissive selector accepts that honest update at 297.
-///
-/// What this shows, and what it does not: the control shows why the program must not read depth 7 on its own. Without a
-/// specification of field 41 a state of that depth is not under the rules that the soundness table covers: field 41 and
-/// the index 169 of the Electra layout name the same node. It does not show that the forgery is impossible. With the REAL
-/// rule, a length 7 branch on a TRUE depth 7 state still verifies at 169 (the last assertion), because 169 is then field
-/// 41. The guard is therefore that no specification defines field 41 yet, and that honest depth 7 updates are refused. When
-/// a chain has such a state, the bridge stops. It does not accept a wrong claim silently, and a later program version has
-/// to name the layout from a specification.
+/// Claim: a forged claim of the Electra layout on a TRUE depth 7 state fails the branch of `genesis_validators_root`, and the
+/// honest depth 7 update verifies. The state has 70 fields. The attacker puts a forged finalized header root at field 41,
+/// which is the node at index 169, and sends a 7 entry finality branch for it. The branch checks out at 169 (the control
+/// that the attack gets past the finality check). Then the program asks for `genesis_validators_root` at 65, the position
+/// for a depth 6 state, and node 65 of the true tree is the hash of `slot` and `fork` (fields 2 and 3), not the root of the
+/// chain. The best branch the attacker has is the branch of node 65 itself, and the test shows that it is a real branch with
+/// the wrong leaf.
+/// Honest control: the same wide state with its real 8 entry finality branch and 7 entry branch of `genesis_validators_root`
+/// verifies, and the output holds the honest header root.
+/// Why it matters: this is the attack that justifies allowing depth 7. The length map does not stop it, and no
+/// specification defines field 41 yet. The branch of `genesis_validators_root` does, because no claimed position other than
+/// the true one holds the root.
 #[test]
-fn wide_state_control_permissive_selector_accepts_a_forgery_and_the_real_rule_stops_the_bridge() {
-    let state = WideState::new();
-    assert_eq!(state.leaves.len(), WIDE_STATE_FIELDS);
+fn wide_state_forgery_at_field_41_fails_the_genesis_validators_root_and_the_honest_depth_seven_update_verifies() {
+    let spec = &ETHEREUM_MAINNET;
+    let recipe = wide_recipe();
+
+    // Probe: the honest update gives the finalized header that the recipe builds.
+    let probe = build_update_on(spec, recipe, StateBuilder::with_field_count(WIDE_STATE_FIELDS));
+    let honest_header = probe.update.finalized_header.clone();
+    let forged_header = LightClientHeader {
+        beacon: lc_core::types::BeaconBlockHeader {
+            proposer_index: honest_header.beacon.proposer_index + 1,
+            ..honest_header.beacon
+        },
+        ..honest_header.clone()
+    };
+    assert_ne!(forged_header.beacon.hash_tree_root(), honest_header.beacon.hash_tree_root());
+
+    // The state that holds the forged root at field 41.
+    let mut wide = StateBuilder::with_field_count(WIDE_STATE_FIELDS);
+    wide.set_field_root(41, forged_header.beacon.hash_tree_root());
+    let scenario = build_update_on(spec, recipe, wide);
+    let state = &scenario.attested_state;
+    let root = state.root();
     assert_eq!(gindex_depth(128 + 41), 7, "field 41 of a depth 7 tree is a node at depth 7");
     assert_eq!(128 + 41, 169);
     assert!(plain_state_fields(ForkName::Fulu).len() <= 41, "no specification defines a field 41 (Fulu has 38 fields)");
 
-    // The permissive selector reads the forged branch at index 169, and accepts the forgery.
-    let forged_branch = state.forged_branch();
+    // Honest control: the 8 entry update verifies and reports the honest header.
+    let honest_output = verify(&scenario, &scenario.update).expect("control: the honest depth 7 update verifies");
+    assert_eq!(scenario.update.finality_branch.len(), 8);
+    assert_eq!(scenario.update.genesis_validators_root_branch.len(), 7);
+    assert_eq!(honest_output.newHeaderRoot, honest_header.beacon.hash_tree_root());
+
+    // The forgery: a 7 entry finality branch from field 41 that verifies at 169.
+    let forged_branch = state.branch_for_field(41);
     assert_eq!(forged_branch.len(), 7);
-    let permissive = permissive_layout(forged_branch.len()).expect("length 7 is allowed by the permissive selector");
-    assert_eq!(permissive.finalized_root_gindex, 169);
     assert!(
-        is_valid_exact_branch(&state.forged_header_root, &forged_branch, permissive.finalized_root_gindex, &state.root),
-        "the permissive selector accepts the forged header root at 169"
+        is_valid_exact_branch(&forged_header.beacon.hash_tree_root(), &forged_branch, 169, &root),
+        "the forged finality branch verifies at 169: the attack gets past the finality check"
     );
 
-    // The honest depth 7 update: 8 entries and index 297. The permissive selector accepts it, the real rule refuses it.
-    let honest_branch = state.honest_finality_branch();
-    assert_eq!(honest_branch.len(), 8);
-    let wide = permissive_layout(honest_branch.len()).expect("length 8 is allowed by the permissive selector");
-    assert_eq!(wide.finalized_root_gindex, 297);
-    assert!(
-        is_valid_exact_branch(&state.honest_header_root, &honest_branch, wide.finalized_root_gindex, &state.root),
-        "control: the honest depth 7 branch verifies at 297"
-    );
-    assert_eq!(
-        state_layout_for_finality_branch_length(honest_branch.len()),
-        Err(Error::UnsupportedStateBranchLength { length: 8 }),
-        "the real rule refuses the honest depth 7 update"
-    );
+    // Node 65 of the true tree is the hash of fields 2 and 3, and the attacker's best branch is its real branch.
+    let leaves: Vec<B256> = (0..WIDE_STATE_FIELDS).map(|index| state.field_root(index)).collect();
+    let node_65 = plain_tree_node(&leaves, 7, 65);
+    assert_eq!(node_65, hash_pair(&leaves[2], &leaves[3]), "65 is the node over slot (field 2) and fork (field 3)");
+    assert_ne!(node_65, spec.genesis_validators_root);
+    let branch_65 = plain_tree_branch(&leaves, 7, 65);
+    assert_eq!(branch_65.len(), 6);
+    assert!(is_valid_exact_branch(&node_65, &branch_65, 65, &root), "a real branch of node 65, with its own leaf");
+    assert!(!is_valid_exact_branch(&spec.genesis_validators_root, &branch_65, 65, &root));
 
-    // The caveat: with the real rule, a length 7 forgery on a TRUE depth 7 state still verifies at 169.
-    let real_rule = state_layout_for_finality_branch_length(forged_branch.len()).expect("length 7");
-    assert_eq!(real_rule.finalized_root_gindex, 169);
+    let forged = LightClientUpdate {
+        finalized_header: forged_header,
+        finality_branch: forged_branch,
+        genesis_validators_root_branch: branch_65,
+        ..scenario.update.clone()
+    };
+    assert_eq!(verify(&scenario, &forged), Err(Error::InvalidGenesisValidatorsRootBranch));
+    for branch in attacker_branches(&scenario.update.genesis_validators_root_branch, 6) {
+        let with_other_branch = LightClientUpdate { genesis_validators_root_branch: branch, ..forged.clone() };
+        assert_eq!(verify(&scenario, &with_other_branch), Err(Error::InvalidGenesisValidatorsRootBranch));
+    }
+}
+
+/// The placement of the honest values of a plain state of depth 7: finality 297, next committee 151, genesis validators root
+/// 129.
+fn depth_seven_placement() -> CraftedPlacement {
+    let layout = plain_state_layout(7);
+    CraftedPlacement {
+        finality: layout.finalized_root_gindex,
+        next_committee: layout.next_sync_committee_gindex,
+        genesis_validators_root: layout.genesis_validators_root_gindex,
+    }
+}
+
+/// Claim: a Gloas claim (finality 735, next committee 2946, genesis validators root 40) on a TRUE depth 7 state fails with
+/// `InvalidGenesisValidatorsRootBranch`, even when the attacker fills the state so that the finality branch and the next
+/// committee branch both verify. The test computes the landing nodes: 735 lies two levels below field 55 and 2946 four
+/// levels below field 56 of the depth 7 tree, and index 40 is the node above fields 32 to 35. None of these fields exists in
+/// any specification, so the attacker could fill them. Index 40 holds none of the root.
+/// Control: the same tree with the honest depth 7 placement (297, 151, 129) verifies.
+/// Why it matters: the soundness table of the design lists no Gloas claim on a true depth 7 state. The branch of
+/// `genesis_validators_root` closes that gap.
+#[test]
+fn gloas_claims_on_a_true_depth_seven_state_fail_the_genesis_validators_root() {
+    let spec = &ETHEREUM_MAINNET;
+    let recipe = ethereum_recipe();
+    let gloas_claim = CraftedPlacement { finality: 735, next_committee: 2946, genesis_validators_root: 40 };
+
+    // The landing nodes of the claim in a depth 7 tree, by arithmetic on the index.
+    assert_eq!(735 >> 2, 128 + 55, "735 lies below field 55");
+    assert_eq!(gindex_depth(735) - 7, 2, "two levels below it");
+    assert_eq!(2946 >> 4, 128 + 56, "2946 lies below field 56");
+    assert_eq!(gindex_depth(2946) - 7, 4, "four levels below it");
+    assert_eq!(gindex_depth(40), 5, "40 is a node at depth 5");
+    assert_eq!(40 << 2, 128 + 32, "its first leaf is field 32, and its last is field 35");
+
+    let honest_values = |facts: &lc_testkit::synthetic::StateFacts, placement: CraftedPlacement| {
+        CraftedStateTree::new().with_honest_values(spec, facts, placement)
+    };
+    // The attacker fills the state for the Gloas claim at 735 and 2946. The state is a depth 7 state, so the root of the
+    // chain sits at 129 and index 40 holds no root.
+    let attack = build_update_over_tree(spec, recipe, gloas_claim, |facts| {
+        honest_values(facts, gloas_claim).without(40).place(129, spec.genesis_validators_root)
+    });
+    assert_eq!(attack.update.finality_branch.len(), 9);
+    assert_eq!(attack.update.genesis_validators_root_branch.len(), 5);
+    let root = attack.tree.root();
+    let finalized_root = attack.update.finalized_header.beacon.hash_tree_root();
+    assert!(is_valid_exact_branch(&finalized_root, &attack.update.finality_branch, 735, &root), "finality passes");
+    assert_ne!(attack.tree.node(40), spec.genesis_validators_root, "index 40 holds no root of the chain");
+    let result = verify_light_client_update(&attack.store, &attack.update, spec);
+    assert_eq!(result, Err(Error::InvalidGenesisValidatorsRootBranch));
+
+    // Control: the honest depth 7 placement over the same recipe.
+    let honest = build_update_over_tree(spec, recipe, depth_seven_placement(), |facts| {
+        honest_values(facts, depth_seven_placement())
+    });
+    assert_eq!(honest.update.finality_branch.len(), 8);
+    assert!(verify_light_client_update(&honest.store, &honest.update, spec).is_ok(), "control");
+}
+
+/// Claim: an honest next committee branch at another depth than the finality branch is refused in one step with exactly
+/// `InvalidNextSyncCommitteeBranch`. Case 1: finality at 169 (7 entries) and a committee branch of 5 entries that is valid at
+/// 55. Case 2: finality at 105 (6 entries) and a committee branch of 6 entries that is valid at 87. The tree holds both
+/// nodes under one root (it is a crafted tree: no real state satisfies two layouts at once). Each control moves the
+/// committee to the depth of the finality branch and returns `Ok`.
+/// Why it matters: every other mixed-length test damages the branch, and fails with or without the rule. These branches are
+/// honest at their own index. Only the rule "the committee branch has the depth of the layout that the finality branch
+/// names" stops them.
+#[test]
+fn an_honest_committee_branch_at_another_depth_is_refused_in_one_step() {
+    let spec = &PULSECHAIN;
+    let recipe = pulsechain_recipe();
+    // (finality, committee honest at its own depth, committee at the depth of the finality layout, genesis validators root)
+    let cases = [(169u64, 55u64, 87u64, 65u64), (105, 87, 55, 33)];
+    for (finality, mixed, matching, genesis_validators_root) in cases {
+        let build = |next_committee| {
+            let placement = CraftedPlacement { finality, next_committee, genesis_validators_root };
+            build_update_over_tree(spec, recipe, placement, |facts| {
+                CraftedStateTree::new().with_honest_values(spec, facts, placement)
+            })
+        };
+        let attack = build(mixed);
+        let next = attack.update.next_sync_committee.as_ref().expect("a next committee");
+        let committee_root = next.committee.hash_tree_root().expect("committee root");
+        assert!(
+            is_valid_exact_branch(&committee_root, &next.branch, mixed, &attack.tree.root()),
+            "the committee branch is honest at {mixed}"
+        );
+        assert_ne!(
+            next.branch.len(),
+            gindex_depth(matching) as usize,
+            "but it has the wrong depth for finality {finality}"
+        );
+        assert_eq!(
+            verify_light_client_update(&attack.store, &attack.update, spec),
+            Err(Error::InvalidNextSyncCommitteeBranch),
+            "finality {finality}, committee at {mixed}"
+        );
+
+        let control = build(matching);
+        assert!(
+            verify_light_client_update(&control.store, &control.update, spec).is_ok(),
+            "control: finality {finality}, committee at {matching}"
+        );
+    }
+}
+
+/// Claim: a Gloas finality branch (735, 9 entries) with a plain committee branch is refused with exactly
+/// `InvalidNextSyncCommitteeBranch`, for a committee honest at 87 (6 entries) and one honest at 55 (5 entries). The genesis
+/// validators root sits at 40 in the tree. The control puts the committee at 2946 (11 entries) and returns `Ok`.
+/// Why it matters: the progressive layout and the plain layouts must not mix in one step. Gloas and plain depth 5 share the
+/// length 5 of the branch of `genesis_validators_root`, and the committee branch is where a mix would show.
+#[test]
+fn a_gloas_finality_branch_with_a_plain_committee_branch_is_refused() {
+    let spec = &ETHEREUM_MAINNET;
+    let recipe = ethereum_recipe();
+    let build = |next_committee| {
+        let placement = CraftedPlacement { finality: 735, next_committee, genesis_validators_root: 40 };
+        build_update_over_tree(spec, recipe, placement, |facts| {
+            CraftedStateTree::new().with_honest_values(spec, facts, placement)
+        })
+    };
+    for mixed in [87u64, 55] {
+        let attack = build(mixed);
+        assert_eq!(attack.update.finality_branch.len(), 9);
+        assert_eq!(
+            verify_light_client_update(&attack.store, &attack.update, spec),
+            Err(Error::InvalidNextSyncCommitteeBranch),
+            "committee honest at {mixed}"
+        );
+    }
+    let control = build(2946);
+    assert_eq!(control.update.next_sync_committee.as_ref().expect("a committee").branch.len(), 11);
+    assert!(verify_light_client_update(&control.store, &control.update, spec).is_ok(), "control");
+}
+
+/// Claim: a branch of `genesis_validators_root` with a zero entry in front (5 entries padded to 6) or with its first entry
+/// cut (5 cut to 4) is refused with exactly `InvalidGenesisValidatorsRootBranch`, on a depth 5 state. The control (the
+/// honest 5 entries) verifies, and the old normalizing rule accepts the padded branch at 33.
+/// Why it matters: the branch is exact, like every other branch. A padded branch would claim a deeper layout than the
+/// finality branch named.
+#[test]
+fn a_zero_padded_genesis_validators_root_branch_is_refused() {
+    let scenario = build_update(&PULSECHAIN, pulsechain_recipe());
+    assert!(verify(&scenario, &scenario.update).is_ok(), "control");
+    let honest = scenario.update.genesis_validators_root_branch.clone();
+    assert_eq!(honest.len(), 5);
+
+    let padded = [zero_entries(1), honest.clone()].concat();
+    let root = &scenario.update.attested_header.beacon.state_root;
     assert!(
-        is_valid_exact_branch(&state.forged_header_root, &forged_branch, real_rule.finalized_root_gindex, &state.root),
-        "caveat: on a true depth 7 state the real rule still verifies the length 7 forgery at 169"
+        is_valid_normalized_merkle_branch(&PULSECHAIN.genesis_validators_root, &padded, 33, root),
+        "the old rule stripped the zero"
     );
-    // The honest 8 entry branch does not verify at 169: the honest header cannot take the place of the forgery.
-    assert!(!is_valid_exact_branch(&state.honest_header_root, &honest_branch, 169, &state.root));
+    assert!(!is_valid_exact_branch(&PULSECHAIN.genesis_validators_root, &padded, 33, root));
+    let cut = honest[1..].to_vec();
+    for branch in [padded, cut] {
+        let altered = LightClientUpdate { genesis_validators_root_branch: branch, ..scenario.update.clone() };
+        assert_eq!(verify(&scenario, &altered), Err(Error::InvalidGenesisValidatorsRootBranch));
+    }
 }

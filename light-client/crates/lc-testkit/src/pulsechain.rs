@@ -8,10 +8,38 @@ use alloy_primitives::{Bytes, B256, U256};
 use lc_core::abi::MessageProof;
 use lc_core::types::{LightClientStore, LightClientUpdate};
 
-/// The real update and the store that precedes it.
+/// The branches of the real attested state that a beacon node does not serve. The derive tool reads them from the state.
+pub struct RealStateProofs {
+    /// The branch of `genesis_validators_root` (state field 1): 5 entries.
+    pub genesis_validators_root_branch: Vec<B256>,
+    /// The version in the `fork` of the state, `0x0000036c`.
+    pub current_version: [u8; 4],
+    /// The branch of `fork.current_version`: 7 entries.
+    pub current_version_branch: Vec<B256>,
+}
+
+/// The state proofs of the real attested state, from `pulsechain/light_client_update.json`.
+pub fn real_state_proofs() -> RealStateProofs {
+    let response = load_response("pulsechain/light_client_update.json");
+    let proofs = &response["state_proofs"];
+    assert_eq!(
+        hex_b256(&proofs["genesis_validators_root"]),
+        lc_core::chain::PULSECHAIN.genesis_validators_root,
+        "the state holds the genesis validators root of the chain specification"
+    );
+    let version = alloy_primitives::hex::decode(proofs["current_version"].as_str().expect("version")).expect("hex");
+    RealStateProofs {
+        genesis_validators_root_branch: branch(&proofs["genesis_validators_root_branch"]),
+        current_version: version.try_into().expect("four bytes"),
+        current_version_branch: branch(&proofs["current_version_branch"]),
+    }
+}
+
+/// The real update, with its genesis validators root branch, and the store that precedes it.
 pub fn real_update_and_store() -> (LightClientStore, LightClientUpdate) {
     let response = load_response("pulsechain/light_client_update.json");
-    let update = light_client_update(&response["update"]);
+    let update = light_client_update(&response["update"])
+        .with_genesis_validators_root_branch(real_state_proofs().genesis_validators_root_branch);
     let store_json = &response["store"];
     let store = LightClientStore {
         header_root: hex_b256(&store_json["header_root"]),

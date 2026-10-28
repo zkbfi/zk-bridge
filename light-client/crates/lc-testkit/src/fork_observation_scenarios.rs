@@ -5,7 +5,10 @@ use crate::synthetic::{build_update, committee_for, sign_with_first_members, Tes
 use alloy_primitives::B256;
 use alloy_sol_types::SolValue;
 use lc_core::chain::{ChainSpec, DOMAIN_SYNC_COMMITTEE, ETHEREUM_MAINNET, PULSECHAIN};
+use lc_core::layout::{SHAPE_PLAIN_DEPTH_FIVE, SHAPE_PLAIN_DEPTH_SEVEN, SHAPE_PLAIN_DEPTH_SIX, SHAPE_PROGRESSIVE};
+use lc_core::observation::fork_version_leaf;
 use lc_core::observation::{verify_fork_observation, Observation};
+use lc_core::ssz::{branch_for_leaf, progressive_container_branch, sha256};
 use lc_core::types::{compute_domain, compute_signing_root, BeaconBlockHeader, LightClientStore, LightClientUpdate};
 use lc_core::update::{table_fork_version, verify_light_client_update, FoldStep};
 use serde_json::{json, Value};
@@ -143,19 +146,86 @@ pub fn fold_steps(spec: &ChainSpec, updates: &[LightClientUpdate]) -> Vec<FoldSt
         .collect()
 }
 
-/// The synthetic header at `slot` that the observations sign.
-pub fn observed_header(slot: u64) -> BeaconBlockHeader {
+/// The synthetic header at `slot` that the observations sign, over the state root `state_root`.
+pub fn observed_header(slot: u64, state_root: B256) -> BeaconBlockHeader {
     BeaconBlockHeader {
         slot,
         proposer_index: 7,
         parent_root: B256::repeat_byte(0x5a),
-        state_root: B256::repeat_byte(0x5b),
+        state_root,
         body_root: B256::repeat_byte(0x5c),
     }
 }
 
-/// An observation that the first `count` members of `signer` sign under `version`. The attested header is at
-/// `attested_slot` and the aggregate rides in the block of the next slot.
+/// Field index of `genesis_validators_root` in a `BeaconState`. It is written here, not imported, so a mistake in
+/// `lc_core::layout` is not copied into the builder.
+const STATE_FIELD_GENESIS_VALIDATORS_ROOT: usize = 1;
+/// Field index of `fork` in a `BeaconState`.
+const STATE_FIELD_FORK: usize = 3;
+/// Position of `current_version` among the three fields of `Fork`.
+const FORK_FIELD_CURRENT_VERSION: usize = 1;
+
+/// The shape of the attested state of an honest observation on `spec`: plain depth 5 on PulseChain (Capella state), plain
+/// depth 6 on Ethereum (Electra and Fulu state).
+pub fn honest_shape(spec: &ChainSpec) -> u8 {
+    if spec.name == "pulsechain" {
+        SHAPE_PLAIN_DEPTH_FIVE
+    } else {
+        SHAPE_PLAIN_DEPTH_SIX
+    }
+}
+
+/// How many leaves the state tree of `shape` has: 28, 37 and 70 fields for plain depths 5, 6 and 7, and 46 chunks for
+/// the progressive Gloas state.
+///
+/// # Panics
+/// Panics for a value that is no shape.
+pub fn state_field_count_for_shape(shape: u8) -> usize {
+    match shape {
+        SHAPE_PLAIN_DEPTH_FIVE => 28,
+        SHAPE_PLAIN_DEPTH_SIX => 37,
+        SHAPE_PLAIN_DEPTH_SEVEN => 70,
+        SHAPE_PROGRESSIVE => 46,
+        other => panic!("{other} is no state shape"),
+    }
+}
+
+/// A state of an honest observation: its root and the two branches that the observation carries.
+#[derive(Clone, Debug)]
+pub struct ObservedState {
+    /// The state root. The attested header carries it.
+    pub root: B256,
+    /// The branch of `fork.current_version` (the leaf is the version, left-aligned): 7, 8 or 9 entries.
+    pub current_version_branch: Vec<B256>,
+    /// The branch of `genesis_validators_root`: 5, 6, 7 or 5 entries.
+    pub genesis_validators_root_branch: Vec<B256>,
+}
+
+/// Builds the state of `shape` that holds `spec.genesis_validators_root` in field 1 and a `Fork` with `version` as its
+/// current version in field 3. Every other field is a distinct filler hash.
+///
+/// # Panics
+/// Panics for a value that is no state shape.
+pub fn observed_state(spec: &ChainSpec, shape: u8, version: [u8; 4]) -> ObservedState {
+    let mut leaves: Vec<B256> = (0..state_field_count_for_shape(shape))
+        .map(|index| sha256(format!("observed-state-field/{index}").as_bytes()))
+        .collect();
+    leaves[STATE_FIELD_GENESIS_VALIDATORS_ROOT] = spec.genesis_validators_root;
+    let fork_leaves = [sha256(b"previous-version"), fork_version_leaf(version), sha256(b"fork-epoch")];
+    let (fork_root, fork_branch) = branch_for_leaf(&fork_leaves, FORK_FIELD_CURRENT_VERSION);
+    leaves[STATE_FIELD_FORK] = fork_root;
+    let branch_in_state = |index: usize| match shape {
+        SHAPE_PROGRESSIVE => progressive_container_branch(&leaves, index),
+        _ => branch_for_leaf(&leaves, index),
+    };
+    let (root, state_branch) = branch_in_state(STATE_FIELD_FORK);
+    let (_, genesis_validators_root_branch) = branch_in_state(STATE_FIELD_GENESIS_VALIDATORS_ROOT);
+    ObservedState { root, current_version_branch: [fork_branch, state_branch].concat(), genesis_validators_root_branch }
+}
+
+/// An observation that the first `count` members of `signer` sign under `version`, over an attested state of the honest
+/// shape of `spec` ([`honest_shape`]). The attested header is at `attested_slot` and the aggregate rides in the block of
+/// the next slot.
 pub fn observation_signed_by(
     spec: &ChainSpec,
     signer: &TestCommittee,
@@ -163,14 +233,45 @@ pub fn observation_signed_by(
     count: usize,
     attested_slot: u64,
 ) -> Observation {
-    let domain = compute_domain(DOMAIN_SYNC_COMMITTEE, version, &spec.genesis_validators_root);
-    let attested_header = observed_header(attested_slot);
+    observation_on_shape(spec, honest_shape(spec), signer, version, count, attested_slot)
+}
+
+/// Like [`observation_signed_by`], over an attested state of the given `shape` (5, 6, 7 or 255).
+pub fn observation_on_shape(
+    spec: &ChainSpec,
+    shape: u8,
+    signer: &TestCommittee,
+    version: [u8; 4],
+    count: usize,
+    attested_slot: u64,
+) -> Observation {
+    let state = observed_state(spec, shape, version);
+    observation_over_state(spec, state, signer, version, version, count, attested_slot)
+}
+
+/// An observation over a state chosen by the caller. The first `count` members of `signer` sign the attested header under
+/// `signed_version`, and the observation names `named_version`. An honest observation has both equal, and a state that holds
+/// that version. A test sets them apart to build an attack: a state that holds another version than the one signed, or a
+/// name that differs from the signature.
+pub fn observation_over_state(
+    spec: &ChainSpec,
+    state: ObservedState,
+    signer: &TestCommittee,
+    signed_version: [u8; 4],
+    named_version: [u8; 4],
+    count: usize,
+    attested_slot: u64,
+) -> Observation {
+    let domain = compute_domain(DOMAIN_SYNC_COMMITTEE, signed_version, &spec.genesis_validators_root);
+    let attested_header = observed_header(attested_slot, state.root);
     let signing_root = compute_signing_root(&attested_header.hash_tree_root(), &domain);
     Observation {
         attested_header,
         signature_slot: attested_slot + 1,
         sync_aggregate: sign_with_first_members(signer, count, &signing_root),
-        fork_version: version,
+        fork_version: named_version,
+        current_version_branch: state.current_version_branch,
+        genesis_validators_root_branch: state.genesis_validators_root_branch,
     }
 }
 
@@ -215,6 +316,7 @@ fn accept_case(
         "publicValues": format!("0x{}", alloy_primitives::hex::encode(output.abi_encode())),
         "observedVersion": format!("0x{}", alloy_primitives::hex::encode(output.observedVersion.0)),
         "observedAttestedSlot": output.observedAttestedSlot.to_string(),
+        "observedShape": output.shape,
         "versionInProgramTable": spec.fork_schedule.iter().any(|entry| entry.fork_version == observation.fork_version),
         "startStore": start,
         "lightClient": {
@@ -335,7 +437,7 @@ pub fn fork_observation_fixtures() -> Vec<(String, Value)> {
         cases.push(contract_reject_case(
             &base,
             &format!("{chain}_reject_light_client_output_as_public_values"),
-            "The public values are a LightClientOutput (352 bytes). An observation is exactly 224 bytes.",
+            "The public values are a LightClientOutput (352 bytes). An observation is exactly 256 bytes.",
             "WrongLength",
             move |case| {
                 case["publicValues"] = json!(format!("0x{}", alloy_primitives::hex::encode(&updated)));

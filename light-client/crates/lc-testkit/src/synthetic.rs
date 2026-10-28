@@ -26,6 +26,7 @@ use lc_core::types::{
     ExecutionPayloadHeader, LightClientHeader, LightClientStore, LightClientUpdate, NextSyncCommittee, SyncAggregate,
     SyncCommittee,
 };
+use lc_core::update::{table_fork_version, FoldStep};
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -38,6 +39,8 @@ const STATE_FIELD_HISTORICAL_SUMMARIES: usize = 27;
 const HISTORICAL_LIST_DEPTH: u32 = 24;
 /// Slots per era, written here on purpose instead of imported (the builder does not share constants with the code under test).
 const SLOTS_PER_ERA: u64 = 8192;
+/// Field index of `genesis_validators_root` in every `BeaconState`, plain and progressive.
+const STATE_FIELD_GENESIS_VALIDATORS_ROOT: usize = 1;
 /// Field index of `finalized_checkpoint`.
 const STATE_FIELD_FINALIZED_CHECKPOINT: usize = 20;
 /// Field index of `current_sync_committee`.
@@ -161,6 +164,51 @@ impl StateBuilder {
         Self { progressive: fork >= ForkName::Gloas, leaves, block_roots, summaries: Vec::new(), eras: HashMap::new() }
     }
 
+    /// A plain state of `fields` fields with filler values. It models a chain whose state has grown past the width of
+    /// every fork of today (for example 70 fields, a tree of depth 7), with honest branches for the fields that the
+    /// light client reads. The fields below 28 keep the positions of the consensus specifications.
+    ///
+    /// # Panics
+    /// Panics when `fields` is below 28, because the light client reads field 27 (`historical_summaries`).
+    pub fn with_field_count(fields: usize) -> Self {
+        assert!(fields >= 28, "a plain state needs at least the 28 fields of Capella");
+        let leaves = (0..fields as u64).map(|index| filler("state-field", index)).collect();
+        let block_roots = (0..8192u64).map(|index| filler("block-root", index)).collect();
+        Self { progressive: false, leaves, block_roots, summaries: Vec::new(), eras: HashMap::new() }
+    }
+
+    /// Sets `genesis_validators_root` (field 1).
+    pub fn set_genesis_validators_root(&mut self, root: B256) {
+        self.leaves[STATE_FIELD_GENESIS_VALIDATORS_ROOT] = root;
+    }
+
+    /// Sets the root of field `index`, whatever the field is. A test uses it to put a chosen value in a field that the
+    /// light client does not read, such as a field that no specification defines yet.
+    ///
+    /// # Panics
+    /// Panics when `index` is outside the fields of the state.
+    pub fn set_field_root(&mut self, index: usize, root: B256) {
+        self.leaves[index] = root;
+    }
+
+    /// The root of field `index`.
+    ///
+    /// # Panics
+    /// Panics when `index` is outside the fields of the state.
+    pub fn field_root(&self, index: usize) -> B256 {
+        self.field_leaves()[index]
+    }
+
+    /// The roots of all fields, in field order.
+    pub fn field_roots(&self) -> Vec<B256> {
+        self.field_leaves()
+    }
+
+    /// The branch from field `index` to the state root, for the shape of this state.
+    pub fn branch_for_field(&self, index: usize) -> Vec<B256> {
+        self.field_branch(index)
+    }
+
     /// Sets `finalized_checkpoint` to `Checkpoint { epoch, root }`.
     pub fn set_finalized_checkpoint(&mut self, epoch: u64, root: B256) {
         self.leaves[STATE_FIELD_FINALIZED_CHECKPOINT] = hash_pair(&u64_chunk(epoch), &root);
@@ -250,6 +298,12 @@ impl StateBuilder {
     /// Branch for `next_sync_committee`.
     pub fn next_committee_branch(&self) -> Vec<B256> {
         self.field_branch(STATE_FIELD_NEXT_SYNC_COMMITTEE)
+    }
+
+    /// Branch for `genesis_validators_root` (field 1): 5, 6 or 7 entries for a plain state of depth 5, 6 or 7, and 5
+    /// entries for the progressive state.
+    pub fn genesis_validators_root_branch(&self) -> Vec<B256> {
+        self.field_branch(STATE_FIELD_GENESIS_VALIDATORS_ROOT)
     }
 
     /// Branch for `block_roots[slot % 8192]`: the vector branch, then the field branch.
@@ -347,6 +401,39 @@ pub struct UpdateRecipe {
     pub store_knows_next_committee: bool,
 }
 
+/// The recipe of the synthetic PulseChain update used across the layout tests (Capella state, true depth 5).
+pub const PULSECHAIN_RECIPE: UpdateRecipe = UpdateRecipe {
+    store_slot: 10_871_000,
+    finalized_slot: 10_872_000,
+    attested_slot: 10_872_070,
+    signature_slot: 10_872_071,
+    participants: 400,
+    include_next_committee: true,
+    store_knows_next_committee: false,
+};
+
+/// The recipe of the synthetic Ethereum update used across the layout tests (Fulu slot, state of depth 6).
+pub const ETHEREUM_RECIPE: UpdateRecipe = UpdateRecipe {
+    store_slot: 15_475_000,
+    finalized_slot: 15_476_000,
+    attested_slot: 15_476_070,
+    signature_slot: 15_476_071,
+    participants: 400,
+    include_next_committee: true,
+    store_knows_next_committee: false,
+};
+
+/// The recipe of a synthetic Gloas update on Sepolia: all slots inside the first Gloas period.
+pub const SEPOLIA_GLOAS_RECIPE: UpdateRecipe = UpdateRecipe {
+    store_slot: 353_024 * 32 + 1_000,
+    finalized_slot: 353_024 * 32 + 2_000,
+    attested_slot: 353_024 * 32 + 2_070,
+    signature_slot: 353_024 * 32 + 2_071,
+    participants: 342,
+    include_next_committee: true,
+    store_knows_next_committee: false,
+};
+
 /// A store and an update that verify together (unless the test breaks them).
 pub struct UpdateScenario {
     /// The chain.
@@ -359,8 +446,40 @@ pub struct UpdateScenario {
     pub attested_state: StateBuilder,
 }
 
-/// Builds a scenario. Committees are deterministic per chain and period.
-pub fn build_update(spec: &'static ChainSpec, recipe: UpdateRecipe) -> UpdateScenario {
+/// The facts that a state must commit to for an update to verify: the finalized header and the committees. A builder of a
+/// state receives them and puts them in its tree.
+#[derive(Clone, Debug)]
+pub struct StateFacts {
+    /// The root of the finalized header: the leaf of the finality branch.
+    pub finalized_root: B256,
+    /// The epoch of the finalized checkpoint: the sibling of the finality leaf.
+    pub finalized_epoch: u64,
+    /// The committee of the period of the attested slot.
+    pub current_committee: SyncCommittee,
+    /// The committee of the period after it.
+    pub next_committee: SyncCommittee,
+}
+
+/// A state root and the three branches of an update that lead to it.
+#[derive(Clone, Debug)]
+pub struct StateProofs {
+    /// The state root. The attested header carries it.
+    pub root: B256,
+    /// The finality branch.
+    pub finality_branch: Vec<B256>,
+    /// The next committee branch.
+    pub next_committee_branch: Vec<B256>,
+    /// The branch of `genesis_validators_root`.
+    pub genesis_validators_root_branch: Vec<B256>,
+}
+
+/// A signed update and its store, with the state proofs chosen by the caller.
+fn assemble_update(
+    spec: &'static ChainSpec,
+    recipe: UpdateRecipe,
+    finalized_state_root: B256,
+    prove_state: impl FnOnce(&StateFacts) -> StateProofs,
+) -> (LightClientStore, LightClientUpdate) {
     let store_period = spec.period_at_slot(recipe.store_slot);
     let attested_period = spec.period_at_slot(recipe.attested_slot);
     let signature_period = spec.period_at_slot(recipe.signature_slot);
@@ -372,20 +491,17 @@ pub fn build_update(spec: &'static ChainSpec, recipe: UpdateRecipe) -> UpdateSce
         filler("exec-block-hash", recipe.finalized_slot),
         filler("receipts", recipe.finalized_slot),
     );
-    let finalized_header = synthetic_light_client_header(
-        spec,
-        recipe.finalized_slot,
-        filler("finalized-state-root", recipe.finalized_slot),
-        finalized_exec,
-    );
+    let finalized_header =
+        synthetic_light_client_header(spec, recipe.finalized_slot, finalized_state_root, finalized_exec);
 
-    let attested_fork = spec.fork_at_slot(recipe.attested_slot);
-    let mut state = StateBuilder::new(attested_fork);
-    state.set_finalized_checkpoint(spec.epoch_at_slot(recipe.finalized_slot), finalized_header.beacon.hash_tree_root());
     let attested_current = committee_for(spec, attested_period);
     let attested_next = committee_for(spec, attested_period + 1);
-    state.set_current_committee(&attested_current.committee);
-    state.set_next_committee(&attested_next.committee);
+    let proofs = prove_state(&StateFacts {
+        finalized_root: finalized_header.beacon.hash_tree_root(),
+        finalized_epoch: spec.epoch_at_slot(recipe.finalized_slot),
+        current_committee: attested_current.committee.clone(),
+        next_committee: attested_next.committee.clone(),
+    });
 
     let attested_exec = synthetic_payload_header(
         spec,
@@ -394,7 +510,7 @@ pub fn build_update(spec: &'static ChainSpec, recipe: UpdateRecipe) -> UpdateSce
         filler("exec-block-hash", recipe.attested_slot),
         filler("receipts", recipe.attested_slot),
     );
-    let attested_header = synthetic_light_client_header(spec, recipe.attested_slot, state.root(), attested_exec);
+    let attested_header = synthetic_light_client_header(spec, recipe.attested_slot, proofs.root, attested_exec);
 
     let signing_committee = committee_for(spec, signature_period);
     let domain = sync_committee_domain(spec, recipe.signature_slot);
@@ -403,15 +519,16 @@ pub fn build_update(spec: &'static ChainSpec, recipe: UpdateRecipe) -> UpdateSce
 
     let next_sync_committee = recipe.include_next_committee.then(|| NextSyncCommittee {
         committee: attested_next.committee.clone(),
-        branch: state.next_committee_branch(),
+        branch: proofs.next_committee_branch.clone(),
     });
     let update = LightClientUpdate {
         attested_header,
         next_sync_committee,
-        finalized_header: finalized_header.clone(),
-        finality_branch: state.finality_branch(spec.epoch_at_slot(recipe.finalized_slot)),
+        finalized_header,
+        finality_branch: proofs.finality_branch,
         sync_aggregate,
         signature_slot: recipe.signature_slot,
+        genesis_validators_root_branch: proofs.genesis_validators_root_branch,
     };
 
     let store = LightClientStore {
@@ -422,7 +539,182 @@ pub fn build_update(spec: &'static ChainSpec, recipe: UpdateRecipe) -> UpdateSce
             .store_knows_next_committee
             .then(|| committee_for(spec, store_period + 1).committee.clone()),
     };
+    (store, update)
+}
+
+/// Builds a scenario. Committees are deterministic per chain and period. The state has the shape of the fork at the
+/// attested slot, and holds the genesis validators root of `spec` in field 1, so every branch is honest.
+pub fn build_update(spec: &'static ChainSpec, recipe: UpdateRecipe) -> UpdateScenario {
+    build_update_on(spec, recipe, StateBuilder::new(spec.fork_at_slot(recipe.attested_slot)))
+}
+
+/// Like [`build_update`], over a state chosen by the caller instead of the one the fork table names. A test uses it for a
+/// state that no fork of today has (a wide state), or to place other values in the state before the update is signed.
+/// The builder fills the finalized checkpoint, both committees and the genesis validators root of `spec`.
+pub fn build_update_on(spec: &'static ChainSpec, recipe: UpdateRecipe, mut state: StateBuilder) -> UpdateScenario {
+    let (store, update) = assemble_update(spec, recipe, default_finalized_state_root(recipe), |facts| {
+        state.set_finalized_checkpoint(facts.finalized_epoch, facts.finalized_root);
+        state.set_current_committee(&facts.current_committee);
+        state.set_next_committee(&facts.next_committee);
+        state.set_genesis_validators_root(spec.genesis_validators_root);
+        StateProofs {
+            root: state.root(),
+            finality_branch: state.finality_branch(facts.finalized_epoch),
+            next_committee_branch: state.next_committee_branch(),
+            genesis_validators_root_branch: state.genesis_validators_root_branch(),
+        }
+    });
     UpdateScenario { spec, store, update, attested_state: state }
+}
+
+/// The state root that the finalized header of a synthetic update carries: a filler hash. No proof leads to it.
+pub fn default_finalized_state_root(recipe: UpdateRecipe) -> B256 {
+    filler("finalized-state-root", recipe.finalized_slot)
+}
+
+/// The generalized indices at which a crafted tree holds the three values that an update proves.
+#[derive(Clone, Copy, Debug)]
+pub struct CraftedPlacement {
+    /// The finalized root (the right child of the checkpoint node, so the epoch chunk sits at `finality ^ 1`).
+    pub finality: u64,
+    /// The next sync committee root.
+    pub next_committee: u64,
+    /// The genesis validators root.
+    pub genesis_validators_root: u64,
+}
+
+/// A tree with chosen values at chosen generalized indices under one root.
+///
+/// Every node on the path from a chosen node to the root is the hash of its two children. Every other node is a distinct
+/// filler hash that nobody can open. No real state satisfies two layouts at once, but a crafted tree can: it holds the
+/// finality leaf at depth 6 and the committee leaf at depth 5, for example, because the two paths share only the root.
+/// This models an attacker who picks the whole tree, the strongest case that the layout rules face.
+#[derive(Clone, Debug, Default)]
+pub struct CraftedStateTree {
+    placed: std::collections::BTreeMap<u64, B256>,
+}
+
+impl CraftedStateTree {
+    /// An empty tree: filler everywhere.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Places `value` at `gindex`. A later placement at the same index replaces the earlier one.
+    pub fn place(mut self, gindex: u64, value: B256) -> Self {
+        self.placed.insert(gindex, value);
+        self
+    }
+
+    /// Removes the value placed at `gindex`, so the node becomes filler (or the hash of its placed children).
+    pub fn without(mut self, gindex: u64) -> Self {
+        self.placed.remove(&gindex);
+        self
+    }
+
+    /// Places the honest values of an update at the indices of `placement`: the finalized root and its epoch chunk, the
+    /// next committee root, and the genesis validators root of `spec`.
+    pub fn with_honest_values(self, spec: &ChainSpec, facts: &StateFacts, placement: CraftedPlacement) -> Self {
+        let next_committee_root = facts.next_committee.hash_tree_root().expect("committee root");
+        self.place(placement.finality ^ 1, u64_chunk(facts.finalized_epoch))
+            .place(placement.finality, facts.finalized_root)
+            .place(placement.next_committee, next_committee_root)
+            .place(placement.genesis_validators_root, spec.genesis_validators_root)
+    }
+
+    /// Whether node `ancestor` lies on the path from node `descendant` to the root, or is the node itself.
+    fn is_ancestor_or_self(ancestor: u64, descendant: u64) -> bool {
+        let ancestor_depth = ancestor.ilog2();
+        let descendant_depth = descendant.ilog2();
+        descendant_depth >= ancestor_depth && descendant >> (descendant_depth - ancestor_depth) == ancestor
+    }
+
+    /// The value of node `gindex`.
+    ///
+    /// # Panics
+    /// Panics when a placed node lies below another placed node, because then the tree would give the lower node two values.
+    pub fn node(&self, gindex: u64) -> B256 {
+        let below = self.placed.keys().any(|other| *other != gindex && Self::is_ancestor_or_self(gindex, *other));
+        if let Some(value) = self.placed.get(&gindex) {
+            assert!(!below, "placed node {gindex} has a placed node below it");
+            return *value;
+        }
+        if below {
+            return hash_pair(&self.node(gindex * 2), &self.node(gindex * 2 + 1));
+        }
+        filler("crafted-node", gindex)
+    }
+
+    /// The root of the tree.
+    pub fn root(&self) -> B256 {
+        self.node(1)
+    }
+
+    /// The branch of node `gindex` to the root, bottom to top: `ilog2(gindex)` entries.
+    pub fn branch(&self, gindex: u64) -> Vec<B256> {
+        let mut branch = Vec::new();
+        let mut current = gindex;
+        while current > 1 {
+            branch.push(self.node(current ^ 1));
+            current >>= 1;
+        }
+        branch
+    }
+}
+
+/// A scenario over a crafted tree.
+pub struct CraftedUpdateScenario {
+    /// The chain.
+    pub spec: &'static ChainSpec,
+    /// The store before the update.
+    pub store: LightClientStore,
+    /// The update. Its three state branches are the branches of the tree at the placement.
+    pub update: LightClientUpdate,
+    /// The attested state, as a tree.
+    pub tree: CraftedStateTree,
+}
+
+/// Builds an update whose attested state is a crafted tree. `make_tree` receives the facts and returns the tree (most
+/// callers start from [`CraftedStateTree::with_honest_values`]). The three branches of the update are the branches of that
+/// tree at `placement`, so a placement that does not match the tree gives a branch that does not verify.
+pub fn build_update_over_tree(
+    spec: &'static ChainSpec,
+    recipe: UpdateRecipe,
+    placement: CraftedPlacement,
+    make_tree: impl FnOnce(&StateFacts) -> CraftedStateTree,
+) -> CraftedUpdateScenario {
+    build_update_over_tree_with_finalized_state(
+        spec,
+        recipe,
+        default_finalized_state_root(recipe),
+        placement,
+        make_tree,
+    )
+}
+
+/// Like [`build_update_over_tree`], and the finalized header carries `finalized_state_root` as its state root. A test uses it
+/// to make the finalized header commit to a state of its own (a second crafted tree), so that a proof which leads to the
+/// finalized state root is a real proof of that state, and only the choice of root can refuse it.
+pub fn build_update_over_tree_with_finalized_state(
+    spec: &'static ChainSpec,
+    recipe: UpdateRecipe,
+    finalized_state_root: B256,
+    placement: CraftedPlacement,
+    make_tree: impl FnOnce(&StateFacts) -> CraftedStateTree,
+) -> CraftedUpdateScenario {
+    let mut kept_tree = None;
+    let (store, update) = assemble_update(spec, recipe, finalized_state_root, |facts| {
+        let tree = make_tree(facts);
+        let proofs = StateProofs {
+            root: tree.root(),
+            finality_branch: tree.branch(placement.finality),
+            next_committee_branch: tree.branch(placement.next_committee),
+            genesis_validators_root_branch: tree.branch(placement.genesis_validators_root),
+        };
+        kept_tree = Some(tree);
+        proofs
+    });
+    CraftedUpdateScenario { spec, store, update, tree: kept_tree.expect("the tree is made once") }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -520,6 +812,16 @@ impl Default for GloasStateBuilder {
 }
 
 impl GloasStateBuilder {
+    /// Sets `genesis_validators_root` (field 1).
+    pub fn set_genesis_validators_root(&mut self, root: B256) {
+        self.chunks[STATE_FIELD_GENESIS_VALIDATORS_ROOT] = root;
+    }
+
+    /// The 46 field roots of the state.
+    pub fn field_roots(&self) -> &[B256] {
+        &self.chunks
+    }
+
     /// Sets `finalized_checkpoint` (field 20) to `Checkpoint { epoch, root }`.
     pub fn set_finalized_checkpoint(&mut self, epoch: u64, root: B256) {
         self.chunks[STATE_FIELD_FINALIZED_CHECKPOINT] = hash_pair(&u64_chunk(epoch), &root);
@@ -565,6 +867,11 @@ impl GloasStateBuilder {
     /// Branch for `next_sync_committee`. 11 entries.
     pub fn next_committee_branch(&self) -> Vec<B256> {
         progressive_container_branch(&self.chunks, STATE_FIELD_NEXT_SYNC_COMMITTEE).1
+    }
+
+    /// Branch for `genesis_validators_root` (field 1). 5 entries, to the generalized index 40.
+    pub fn genesis_validators_root_branch(&self) -> Vec<B256> {
+        progressive_container_branch(&self.chunks, STATE_FIELD_GENESIS_VALIDATORS_ROOT).1
     }
 }
 
@@ -654,6 +961,7 @@ pub fn build_gloas_update(spec: &'static ChainSpec, recipe: UpdateRecipe) -> Glo
     let attested_next = committee_for(spec, attested_period + 1);
     state.set_current_committee(&attested_current.committee);
     state.set_next_committee(&attested_next.committee);
+    state.set_genesis_validators_root(spec.genesis_validators_root);
     let attested_header = synthetic_compact_header(
         spec,
         recipe.attested_slot,
@@ -676,6 +984,7 @@ pub fn build_gloas_update(spec: &'static ChainSpec, recipe: UpdateRecipe) -> Glo
         finality_branch: state.finality_branch(spec.epoch_at_slot(recipe.finalized_slot)),
         sync_aggregate,
         signature_slot: recipe.signature_slot,
+        genesis_validators_root_branch: state.genesis_validators_root_branch(),
     };
     let store = LightClientStore {
         header_root: filler("store-header-root", recipe.store_slot),
@@ -686,6 +995,63 @@ pub fn build_gloas_update(spec: &'static ChainSpec, recipe: UpdateRecipe) -> Glo
             .then(|| committee_for(spec, store_period + 1).committee.clone()),
     };
     GloasUpdateScenario { spec, store, update, attested_state: state, finalized_block_number }
+}
+
+/// The first slot of the epoch where `fork` starts on `spec`.
+///
+/// # Panics
+/// Panics when the schedule of `spec` has no entry for `fork`.
+pub fn fork_start_slot(spec: &ChainSpec, fork: ForkName) -> u64 {
+    let entry = spec.fork_schedule.iter().find(|entry| entry.fork_name == fork).expect("fork in the schedule");
+    entry.epoch * spec.slots_per_epoch
+}
+
+/// The Fulu to Gloas fold on Sepolia: the store and the two steps.
+pub struct MixedFold {
+    /// The store of step 1.
+    pub store: LightClientStore,
+    /// Step 1 (Fulu) and step 2 (Gloas), each with the table fork version of its signature slot.
+    pub steps: Vec<FoldStep>,
+}
+
+/// Step 1 is a Fulu update (full headers, finality branch 7, committee branch 6) in period 1378 that proves the committee
+/// of period 1379. Step 2 is a Gloas update (compact headers, finality branch 9, committee branch 11) that crosses into
+/// period 1379, the first period of Gloas, and is signed by the committee that step 1 proved. The store is the store of
+/// step 1: step 2 is built against the store that step 1 leaves (the committees line up because both builders take the
+/// committee of a period from the same cache), and only its update is used.
+pub fn fulu_to_gloas_fold() -> MixedFold {
+    let spec = &lc_core::chain::SEPOLIA;
+    let gloas_start = fork_start_slot(spec, ForkName::Gloas);
+    let fulu_period_start = gloas_start - 8192;
+    let fulu = build_update(
+        spec,
+        UpdateRecipe {
+            store_slot: fulu_period_start + 400,
+            finalized_slot: fulu_period_start + 1000,
+            attested_slot: fulu_period_start + 1070,
+            signature_slot: fulu_period_start + 1071,
+            participants: 342,
+            include_next_committee: true,
+            store_knows_next_committee: false,
+        },
+    );
+    let gloas = build_gloas_update(
+        spec,
+        UpdateRecipe {
+            store_slot: fulu.update.finalized_header.beacon.slot,
+            finalized_slot: gloas_start + 64,
+            attested_slot: gloas_start + 130,
+            signature_slot: gloas_start + 131,
+            participants: 342,
+            include_next_committee: true,
+            store_knows_next_committee: false,
+        },
+    );
+    let step = |update: &LightClientUpdate| FoldStep {
+        update: update.clone(),
+        fork_version: table_fork_version(spec, update.signature_slot),
+    };
+    MixedFold { steps: vec![step(&fulu.update), step(&gloas.update)], store: fulu.store }
 }
 
 /// A chain of updates that walks across sync committee periods, as the updates of a lagging light client are.

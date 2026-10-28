@@ -234,6 +234,28 @@ fn the_attested_execution_data_of_a_gloas_update_is_not_read() {
     assert_eq!(fold(&scenario, &garbled), Err(Error::InvalidExecutionBranch("finalized")));
 }
 
+/// Claim: the execution data of the attested header never reaches the output. Two updates that differ only in the execution
+/// block hash, branch and RLP of the attested header (the beacon header, and so the signature, is the same) give byte-equal
+/// outputs.
+/// Why it matters: this is the assumption that makes the state-anchored skip safe. If any byte of the attested execution
+/// data reached the output, the unchecked branch would let a prover choose it.
+#[test]
+fn the_attested_execution_data_never_reaches_the_output() {
+    use alloy_sol_types::SolValue;
+    let scenario = gloas_scenario();
+    let output_of = |update: &LightClientUpdate| fold(&scenario, update).expect("verifies").abi_encode();
+    let mut first = scenario.update.clone();
+    first.attested_header.execution.block_hash = B256::repeat_byte(0x11);
+    first.attested_header.execution_branch = vec![B256::repeat_byte(0x12); 11];
+    let mut second = scenario.update.clone();
+    second.attested_header.execution.block_hash = B256::repeat_byte(0x21);
+    second.attested_header.execution_branch = vec![B256::repeat_byte(0x22); 11];
+    second.attested_header.execution_header_rlp = vec![9, 9, 9];
+    assert_ne!(first.attested_header.execution, second.attested_header.execution);
+    assert_eq!(output_of(&first), output_of(&second));
+    assert_eq!(output_of(&first), output_of(&scenario.update), "and equal to the honest output");
+}
+
 /// Claim: the form byte names the header shape, and the evidence must fit it. A compact header forced to the full form on a
 /// Gloas update, and a Fulu full header forced to the compact form, are refused with `InvalidExecutionBranch`.
 /// Why it is safe: the full form checks index 25 with exactly 4 entries, and the Gloas branch has 11. On a true Gloas body
@@ -329,7 +351,7 @@ fn the_json_parser_keeps_one_form_per_update() {
     let scenario = gloas_scenario();
     let fulu = build_update(&SEPOLIA, fulu_recipe());
     let parsed = light_client_update(&light_client_update_json(&scenario.update));
-    let mut expected = scenario.update.clone();
+    let mut expected = scenario.update.clone().with_genesis_validators_root_branch(Vec::new());
     expected.attested_header.execution_header_rlp.clear();
     expected.finalized_header.execution_header_rlp.clear();
     assert_eq!(parsed, expected);
