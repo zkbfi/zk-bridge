@@ -5,7 +5,7 @@
 # (see prover/src/beacon/http.rs). It prints one OK or FAIL line for each route, with the HTTP status.
 # It exits with code 1 when any route fails, and with code 2 when the setup is wrong.
 #
-# Usage:  VALVE_KEY=$(op read 'op://valve/valve city unlimited key v3/password') script/testnet/preflight.sh
+# Usage:  VALVE_KEY=$(op read 'op://<vault>/<item>/<field>') script/testnet/preflight.sh
 #         ENDPOINTS=public script/testnet/preflight.sh
 #
 # ENDPOINTS selects the servers (default: valve):
@@ -183,7 +183,7 @@ check_chain() {
 main() {
   case "$ENDPOINTS" in valve | public) ;; *) echo "ENDPOINTS must be valve or public" >&2; return 2 ;; esac
   if [ "$ENDPOINTS" = "valve" ] && [ -z "${VALVE_KEY:-}" ]; then
-    echo "VALVE_KEY is not set. Run: VALVE_KEY=\$(op read 'op://valve/valve city unlimited key v3/password') $0" >&2
+    echo "VALVE_KEY is not set. Run: VALVE_KEY=\$(op read 'op://<vault>/<item>/<field>') $0" >&2
     return 2
   fi
   command -v jq >/dev/null && command -v curl >/dev/null || { echo "jq and curl are required" >&2; return 2; }
