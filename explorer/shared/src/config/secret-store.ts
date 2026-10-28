@@ -237,9 +237,15 @@ export async function chooseSecretStore(input: ChooseStoreInput): Promise<Secret
   return input.fallback()
 }
 
+/** The exit code of a command that could not start. */
+const COMMAND_NOT_FOUND_CODE = 127
+
 async function commandWorks(run: CommandRunner, command: string, args: readonly string[]): Promise<boolean> {
   try {
     const result = await run(command, args)
+    // Code 127 means the command could not start (`spawnRunner` reports a missing program that way, with the
+    // reason on standard error), so it is absent whatever it printed.
+    if (result.code === COMMAND_NOT_FOUND_CODE) return false
     // `security help` exits non-zero on some versions, so a runnable command is enough.
     return result.code === 0 || result.stderr.length > 0 || result.stdout.length > 0
   } catch {

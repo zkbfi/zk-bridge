@@ -25,10 +25,13 @@ The script writes `zk-bridge-terminal-<os>-<architecture>` for each target and p
 `ok <file>` or `skipped <target>: <reason>`. The script exits with code 1 when a target other than Windows fails.
 Windows is tried, and a failure there is a skip.
 
+`bun run build:standalone` in `explorer/terminal` runs the same script and writes into `explorer/terminal/dist`, which
+git ignores. Add target names after it to build fewer targets: `bun run build:standalone bun-darwin-arm64`.
+
 The targets are `bun-darwin-arm64`, `bun-darwin-x64`, `bun-linux-x64`, `bun-linux-arm64` and `bun-windows-x64`.
 Bun builds all of them from one machine. The script downloads the OpenTUI native library of each platform with
-`npm pack`. It checks each download against the integrity hash that `explorer/terminal/bun.lock` pins, and stops using
-the download if the hash differs. The build needs network access for this step.
+`npm pack`. It checks each download against the integrity hash that `explorer/terminal/bun.lock` pins.
+A hash that differs stops the build with exit code 1. With no network, the script warns and builds with the packages that are installed, so only your own platform is likely to work.
 
 Run `zk-bridge-terminal --version` to see `zk-bridge-terminal <version> <commit>`. A copy that runs from source shows
 `source` in place of the commit. Run `zk-bridge-terminal --help` for the short usage text. Any other argument prints the
@@ -57,17 +60,17 @@ secret store columns come from a probe program built with the same Bun options, 
 |---|---|---|---|---|---|
 | macOS arm64 | yes | yes (native) | no | module loads; no device tried | yes: Keychain, through `security` |
 | macOS x64 | yes | yes (under Rosetta) | no | module loads; no device tried | yes: Keychain, through `security` |
-| Linux arm64 | yes | yes (Debian 12, arm64 virtual machine) | no | no | see the note below |
-| Linux x64 | yes | not tested | not tested | not tested | not tested |
+| Linux arm64 | yes | yes (Debian 12 container, arm64) | no | no | see the note below |
+| Linux x64 | yes | not tested | not tested | expected to fail, as on arm64 | not tested |
 | Windows x64 | yes | not tested | not tested | not tested | no store; the encrypted file only |
 
 Notes on the table:
 
-- **Ledger over USB does not work in any compiled program that I could test.** The `node-hid` library looks for its
+- **Ledger over USB does not work in the macOS and Linux arm64 files I ran.** The `node-hid` library looks for its
   native files beside its own source, and a compiled program has no such folder. The error is "Could not find module
   root". The same code works when you run from source. Use a copy built from source, or the dapp, for a Ledger.
-- **Trezor** loads on macOS. It fails on Linux arm64 with "No native build was found", because the `usb` library
-  has the same problem. No Trezor device was connected for this check, so I did not test a signature.
+- **Trezor** loads on macOS. It fails in the Linux binary I ran (arm64) with "No native build was found", because the
+  `usb` library has the same problem. The Linux x64 file uses the same library, so expect the same failure there. No Trezor device was connected for this check, so I did not test a signature.
 - **Secret store.** The program does not link a native library for it. It runs the operating system commands
   `security` on macOS and `secret-tool` on Linux, so it works where those commands work. Windows has no such
   command in the code, and uses the encrypted file. On Linux the check that decides whether `secret-tool` exists

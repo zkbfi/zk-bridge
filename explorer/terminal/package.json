@@ -6,7 +6,7 @@
   "description": "OpenTUI dashboard for the zk-bridge explorer",
   "scripts": {
     "start": "bun run src/main.tsx",
-    "build:standalone": "../../script/build-terminal.sh",
+    "build:standalone": "../../script/build-terminal.sh dist",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

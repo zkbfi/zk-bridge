@@ -246,6 +246,20 @@ describe("chooseSecretStore", () => {
     expect(await chooseSecretStore({ platform: "darwin", run: runnerReturning(result(127)), fallback })).toBe(fallbackStore);
   });
 
+  it("falls back when the command is missing, even though the runner puts the reason on standard error", async () => {
+    const missing = runnerReturning(result(127, "", "spawn secret-tool ENOENT"));
+    expect(await chooseSecretStore({ platform: "linux", run: missing, fallback })).toBe(fallbackStore);
+    expect(await chooseSecretStore({ platform: "darwin", run: missing, fallback })).toBe(fallbackStore);
+  });
+
+  it("falls back when the command fails and prints nothing", async () => {
+    expect(await chooseSecretStore({ platform: "linux", run: runnerReturning(result(1)), fallback })).toBe(fallbackStore);
+  });
+
+  it("keeps a command that fails with a message, because it did start", async () => {
+    expect((await chooseSecretStore({ platform: "linux", run: runnerReturning(result(1, "", "no daemon")), fallback })).kind).toBe("secret-service");
+  });
+
   it("falls back when the runner throws", async () => {
     const run = vi.fn<CommandRunner>(async () => {
       throw new Error("spawn failed");

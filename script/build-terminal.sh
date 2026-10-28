@@ -26,10 +26,16 @@ else
   targets=(bun-darwin-arm64 bun-darwin-x64 bun-linux-x64 bun-linux-arm64 bun-windows-x64)
 fi
 
+terminal_directory="$repository_root/explorer/terminal"
+
 # OpenTUI ships its native library in one package per platform, and only the package for this machine is
 # installed. A compiled program needs the package of its target, so this fetches the ones that are missing, checks
 # each against the integrity hash that explorer/terminal/bun.lock pins, and points the build at them.
-opentui_version="0.5.12"
+opentui_version="$(sed -n 's/^ *"@opentui\/core": *"\([^"]*\)".*/\1/p' "$terminal_directory/package.json")"
+if [ -z "$opentui_version" ]; then
+  echo "cannot read the @opentui/core version from explorer/terminal/package.json" >&2
+  exit 1
+fi
 opentui_platforms=(darwin-arm64 darwin-x64 linux-x64 linux-x64-musl linux-arm64 linux-arm64-musl win32-x64)
 
 # Prints the pinned integrity hash of one platform package, or nothing when the lock file does not pin it.
@@ -38,7 +44,8 @@ pinned_integrity() {
 }
 
 # Downloads and unpacks every platform package into $1/modules/@opentui and writes $1/tsconfig.json.
-# Returns 1, with a message on standard error, when a download fails or does not match its pinned hash.
+# Returns 1 when a download fails or no hash is pinned (the caller may carry on without the packages).
+# Returns 2 when a download does not match its pinned hash. That is a supply-chain signal, and the caller must stop.
 prepare_platform_packages() {
   local scratch="$1" platform tarball expected actual
   for platform in "${opentui_platforms[@]}"; do
@@ -55,7 +62,7 @@ prepare_platform_packages() {
     actual="sha512-$(openssl dgst -sha512 -binary "$tarball" | openssl base64 -A)"
     if [ "$actual" != "$expected" ]; then
       echo "@opentui/core-$platform does not match the hash in bun.lock" >&2
-      return 1
+      return 2
     fi
     mkdir -p "$scratch/modules/@opentui/core-$platform"
     tar xzf "$tarball" -C "$scratch/modules/@opentui/core-$platform" --strip-components=1
@@ -77,7 +84,6 @@ JSON
 }
 
 commit="${BUILD_COMMIT:-$(git -C "$repository_root" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
-terminal_directory="$repository_root/explorer/terminal"
 native_failed=0
 
 cd "$terminal_directory" || exit 1
@@ -85,8 +91,13 @@ cd "$terminal_directory" || exit 1
 scratch_directory="$(mktemp -d)"
 trap 'rm -rf "$scratch_directory"' EXIT
 tsconfig_arguments=()
-if prepare_platform_packages "$scratch_directory"; then
+prepare_platform_packages "$scratch_directory"
+prepare_status=$?
+if [ "$prepare_status" -eq 0 ]; then
   tsconfig_arguments=(--tsconfig-override="$scratch_directory/tsconfig.json")
+elif [ "$prepare_status" -eq 2 ]; then
+  echo "stopping: a downloaded package does not match explorer/terminal/bun.lock" >&2
+  exit 1
 else
   echo "warning: building with the platform packages that are installed; other targets may fail" >&2
 fi
