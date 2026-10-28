@@ -56,7 +56,7 @@ With `ENDPOINTS=public`, the light-client routes of chain 943 print `INFO` and d
 
 ## Checks done on 2026-10-26
 
-- Chain 943, `eth_getCode` at `0x70499adEBB11Efd915E3b69E700c331778628707`: 4,119 hex characters of code with the selectors `deposit()` (`d0e30db0`) and `withdraw(uint256)` (`2e1a7d4d`). `symbol()` is `WPLS`, `name()` is `Wrapped Pulse`, `decimals()` is 18, and `totalSupply()` equals the balance of the contract. That is the behaviour of a canonical wrapped native token. I did not find the address in a document of the PulseChain or gibsfinance projects, so check it once more against the PulseX testnet documentation before you rely on it for value.
+- Chain 943, `eth_getCode` at `0x70499adEBB11Efd915E3b69E700c331778628707`: 4,119 hex characters of code with the selectors `deposit()` (`d0e30db0`) and `withdraw(uint256)` (`2e1a7d4d`). `symbol()` is `WPLS`, `name()` is `Wrapped Pulse`, `decimals()` is 18, and `totalSupply()` equals the balance of the contract. That is the behaviour of a canonical wrapped native token. I did not find the address in a document of the PulseChain projects, so check it once more against the PulseX testnet documentation before you rely on it for value.
 - Sepolia, the configured wrapped native token `0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9`: code with the same two selectors, symbol `WETH`, 18 decimals.
 
 ## Step 0: set up the shell

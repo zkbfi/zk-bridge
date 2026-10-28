@@ -5,8 +5,7 @@ import { RATE_SCALE } from "./format.js";
 /**
  * The terms of a delivery: everything that the TypeScript side knows about the data of a relay to a `DeliveryRouter`.
  * This module is the one place that encodes, decodes, validates and prices those terms. It mirrors
- * `src/hardened/mediator/DeliveryRouter.sol` and, through it, the `FeeDirector` of `gibsfinance/omnibridge`
- * (`contracts/helpers/TokenOmnibridgeBase.sol`). The terminal, the web page and the bots import from here and never read
+ * `src/hardened/mediator/DeliveryRouter.sol` and, through it, the `FeeDirector` that carries the delivery terms. The terminal, the web page and the bots import from here and never read
  * or write a settings bit, a word of the data or a fee formula themselves.
  *
  * A gas based tip is computed from the gas that the deliverer's transaction makes available (`startingGas` at router entry
@@ -465,7 +464,7 @@ const rawFee = (director: FeeDirector, input: ExpectedFeeInput): bigint => {
  * The tip that the router takes, as `DeliveryRouter.feeInfo` computes it. Fixed: `limit`. Share: `value * multiplier / 1e18`.
  * Gas based: `(gasUsed + overhead) * multiplier * gasPrice / 1e18`, capped by `limit`. The tip never passes the value.
  *
- * The router measures the gas in the callback, as `gibsfinance/omnibridge` does, so `gasUsed` is the gas that it reads there.
+ * The router measures the gas in the callback, so `gasUsed` is the gas that it reads there.
  *
  * @param director The fee terms.
  * @param input The value, the gas and the prices.

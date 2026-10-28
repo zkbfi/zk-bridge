@@ -11,8 +11,7 @@ import {IWETH} from "./IWETH.sol";
 /// @title DeliveryRouter
 /// @notice The one router of the bridge, on both chains. On the source chain it wraps the native coin and sends it
 /// (`wrapAndRelayTokens`, `relayTokensAndCall`). On the destination chain it delivers a bridged message, pays a tip for
-/// it, and unwraps the wrapped native token. It needs no change to the message bridge or the mediator. It is the router pattern of `gibsfinance/omnibridge`
-/// (`contracts/helpers/TokenOmnibridgeBase.sol`), and it reads the same `FeeDirector`.
+/// it, and unwraps the wrapped native token. It needs no change to the message bridge or the mediator. The sender states the delivery terms in a `FeeDirector`.
 /// @dev Flow. 1: a sender relays tokens with `relayTokensAndCall` to this router on the destination chain, with an
 /// encoded `FeeDirector` as data. 2: anyone calls `executeMessage`. The router stores the starting gas in one slot
 /// (`DELIVERY_SLOT`), which marks a router delivery, and executes the message on the bridge. 3: the mediator releases
@@ -27,26 +26,25 @@ import {IWETH} from "./IWETH.sol";
 /// pays the receiver only, and a release that the receiver cannot take is final. This router has no fallback option. The entry points with a gas limit pass it to the mediator, which uses the larger of the request
 /// and its default. A receiver that is the zero address or this
 /// router is refused. The router sends nothing that it holds: the wrap and the relay run in one call. There is no second
-/// router for the unwrap: the `UNWRAP` flag and the 20 byte legacy data of `onTokenBridged` do it, as in
-/// `gibsfinance/omnibridge`, so the bridge needs one contract on each chain. The router holds no standing approval: each
+/// router for the unwrap: the `UNWRAP` flag and the 20 byte legacy data of `onTokenBridged` do it, so the bridge needs one contract on each chain. The router holds no standing approval: each
 /// wrap approves the mediator for exactly the amount that it wraps, and the mediator takes all of it in the same call, so
 /// the allowance ends at zero.
 ///
-/// Divergences from `gibsfinance/omnibridge`.
+/// Design choices.
 /// - There is no owner, no `claimTokens` and no validator filter. Any account may call `executeMessage`. The tip
 ///   always goes to the immutable `rewardAddress`, and the caller names nothing, so a copy of a delivery gains the
 ///   copier nothing: a block builder or a searcher who front-runs a delivery pays the gas and the reward address still
 ///   gets the tip. The bridge stays permissionless. Anyone may call `MessageBridge.executeMessage` directly. The
 ///   router then sees no starting gas, takes no tip, and the recipient gets everything, so the user loses nothing.
-/// - The tip does not go to the account that calls. In `gibsfinance/omnibridge` the caller names the `runner` that
-///   receives the fee. Here the tip goes to `rewardAddress`, which has no setter and no owner.
+/// - The tip does not go to the account that calls, and the caller names no one to receive it. The tip goes to
+///   `rewardAddress`, which has no setter and no owner.
 /// - The reward address is an account that can refuse the tip, so its payment never blocks the payment of the
 ///   recipient: when it cannot receive its tip, the recipient gets the tip as well. A native coin that the recipient
 ///   cannot receive is paid as the wrapped token.
 /// - The router never reads `tx.origin` or `msg.sender` of `executeMessage`, so a generic Multicall3 contract
 ///   (`aggregate3` with `allowFailure`) can batch many deliveries, and the block proof, in one transaction. The router
 ///   knows nothing about batching. A failed call never reverts the others.
-/// - The gas based tip is measured as in `gibsfinance/omnibridge`: the callback reads `startingGas - gasleft()`, where
+/// - The gas based tip is measured in the callback, which reads `startingGas - gasleft()`, where
 ///   `startingGas` is stored at the entry of `executeMessage`, adds the fixed overhead that covers the rest of the
 ///   run, caps the tip at the smaller of `limit` and the value, and pays one transfer to the reward address and one to
 ///   the recipient. The measure is the gas that the transaction of the deliverer makes available, not the gas that the
@@ -59,9 +57,9 @@ import {IWETH} from "./IWETH.sol";
 /// - The slot uses regular storage (the compiler target has no transient storage), so it is set and cleared with the
 ///   value 1, which keeps the slot non-zero after the first use. It holds the starting gas and no address.
 /// - There is no `EIP1559_ENABLED` switch. The router reads `block.basefee`.
-/// - An unwrap flag on a token that is not the wrapped native token is ignored, as in `gibsfinance/omnibridge`: the
+/// - An unwrap flag on a token that is not the wrapped native token is ignored: the
 ///   recipient gets the token. The 20 byte legacy form pays the token to the receiver for any token that is not the
-///   wrapped native token, where `gibsfinance/omnibridge` reverts.
+///   wrapped native token, and it never reverts for that reason.
 ///
 /// Nothing is owed and nothing is recorded. The mediator calls `onTokenBridged` after it paid the router, and it keeps no
 /// hold on a failed call: the tokens stay with the router. So a revert in the callback would strand them, and the router
@@ -103,8 +101,8 @@ import {IWETH} from "./IWETH.sol";
 contract DeliveryRouter is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    /// @notice What the sender of the tokens asks for. The layout and the bits are those of `FeeDirector` in
-    /// `gibsfinance/omnibridge`.
+    /// @notice What the sender of the tokens asks for. The data is four words: the recipient, the settings
+    /// flag bits, the limit and the multiplier.
     /// @param recipient Who receives the tokens after the tip.
     /// @param settings Flag bits. Bit 0 (`FIXED_FEE`): the tip is `limit`. Bit 1 (`UNWRAP`): unwrap the wrapped native
     /// token to the native coin. Bit 2 (`EXCLUDE_PRIORITY`): price gas at the base fee only, with no priority fee. Bit 3
@@ -223,12 +221,7 @@ contract DeliveryRouter is ReentrancyGuard {
     /// @param rewardAddress_ The address that receives the tips. It cannot be the zero address.
     /// @param failedDeliveryAddress_ The address that receives what the router cannot deliver. It cannot be the zero
     /// address. It may equal `rewardAddress_`.
-    constructor(
-        ITokenMediator bridge_,
-        IWETH wNative_,
-        address rewardAddress_,
-        address failedDeliveryAddress_
-    ) {
+    constructor(ITokenMediator bridge_, IWETH wNative_, address rewardAddress_, address failedDeliveryAddress_) {
         if (rewardAddress_ == address(0)) revert ZeroRewardAddress();
         if (failedDeliveryAddress_ == address(0)) revert ZeroFailedDeliveryAddress();
         bridge = bridge_;
@@ -328,7 +321,7 @@ contract DeliveryRouter is ReentrancyGuard {
     }
 
     /// @notice The gas price that a gas based tip uses: the base fee when `excludePriority` is set, else the gas price of
-    /// the transaction. Same name and meaning as `baseFee` in `gibsfinance/omnibridge`.
+    /// the transaction.
     /// @param excludePriority True for the base fee only.
     function baseFee(bool excludePriority) external view returns (uint256) {
         return _gasPrice(excludePriority ? GasPrice.BaseFee : GasPrice.Transaction);

@@ -34,7 +34,7 @@ docs, users move to it, and tips stop reaching the team. The docs must be comple
 
 ## Anti-goals (failure even if it works)
 
-- Any reference to gibs.finance, or any tooling shared with it.
+- Any reference to the outside project that the router once followed, or any tooling shared with it.
 - A secret in a browser page or in a static build.
 - Wording that ties tips to paying for proving, or that promises a service for a tip. A tip goes to the router's reward
   address, it is voluntary, and it buys no promise.
@@ -68,13 +68,13 @@ docs, users move to it, and tips stop reaching the team. The docs must be comple
 - The suggested tip is a low range, so the bridge is clearly cheap next to other bridges. Any frontend may set its own.
 - A successor deploys their own delivery router with their own reward address, and users choose it at send time. Tips
   reach an address; nothing ties them to funding the GPU.
-- Releases use a signed `version.json` manifest. Built from scratch, decoupled from gibs.finance.
+- Releases use a signed `version.json` manifest. Built from scratch, decoupled from that outside project.
 - Finish the existing code. Do not start over.
 - Tips may be below cost. A low tip never makes a delivery fail. The bots compute each delivery's expected loss before
   they send a bundle and leave out any delivery that would lose 20 percent or more of its cost (a setting). The dapp
   shows the user, before they send, two line graphs: the delivery cost and their tip, both against the base fee, with
   plain words on where the tip stops covering the cost.
-- The router may be copied; no license credit is needed. Every reference to gibs.finance goes, contracts included.
+- The router may be copied; no license credit is needed. Every reference to that outside project goes, contracts included.
 - Every doc in `docs/` may be public, after a review that removes anything sensitive.
 
 ## The parts
@@ -236,7 +236,7 @@ the bots, then:
 - **Build machines.** Bun builds the terminal program for all four platforms from one machine. The Rust prover is built
   natively: macOS arm64 on the development Mac, Linux x64 on the build host. macOS x64 and Linux arm64 get
   build-from-source steps until a machine exists for them.
-- **gibs.finance references.** About 35 lines in 8 tracked files mention it, including comments in
+- **Outside project references.** About 35 lines in 8 tracked files name it, including comments in
   `src/hardened/mediator/DeliveryRouter.sol` and its tests and the name of the tip data format. They are reworded to
   describe the behavior on its own terms. Contract changes are comments only; the bytecode metadata hash changes, so the
   plan reruns the full suite and the gas checks.

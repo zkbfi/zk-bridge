@@ -105,8 +105,8 @@ Where two documents disagree, the code wins, and in `docs/hardened-build-contrac
 
 ### 1.20 Delivery router: tips, hand-offs and the user call
 - **What.** (a) A deliverer can raise a gas-based tip up to the sender's `limit` by supplying more gas; the tip always goes to the immutable `rewardAddress`, so its owner benefits. (b) Value the router cannot deliver goes to `failedDeliveryAddress`; if that token also refuses that address, the tokens stay in the router (`HandOffRefused`) until a later `sweep` succeeds. (c) The user call after a delivery runs from the router and can move stray router tokens, never delivered value. (d) A reentrant callback is handed off whole after its tip (`DeliveryFailed(Reentered)`).
-- **Why accepted.** User decisions (2026-10-26 and 2026-10-27), following `gibsfinance/omnibridge`. Tips are voluntary and set by the sender. The router is optional.
-- **Link.** [`docs/hardened-build-contract.md`](../hardened-build-contract.md) "Fees: the router pattern", "The call after a delivery".
+- **Why accepted.** User decisions (2026-10-26 and 2026-10-27). Tips are voluntary and set by the sender. The router is optional.
+- **Link.** [`docs/hardened-build-contract.md`](../hardened-build-contract.md) "Fees: a router that delivers a message and pays a tip from it", "The call after a delivery".
 
 ### 1.21 The verifier code hash differs from Succinct's deployed copy
 - **What.** Our build of the vendored verifier has code hash `0xe5878a94...e84b`. Succinct's deployed verifier for the same circuit has `0xcceb864c...04dd`. The cause was not found.
@@ -254,7 +254,7 @@ These were found in the third-party proposal (`spec/`). The column "Hardened des
 | 2026-10-21 | Registry freshness read a light client nobody updated | Addressed: the own-chain light client is a route the operator updates (1.15) | same, "Own-chain light client freshness" |
 | 2026-10-21 | Duplicated SSZ calldata and memory code | Kept: removing it costs about 1,500 gas per delivery | `progress.txt` |
 | 2026-10-25 | A hostile token could erase a nested lock in the mediator record | Fixed: write after the call; `test_aTokenThatRelaysDuringAReleaseAndThenRefusesKeepsTheNestedLock` | same, "As built", "Mediator" |
-| 2026-10-26 | The delivery router could strand tokens (refused payout, router as recipient, odd data) | Fixed: hand-off to `failedDeliveryAddress`, no revert in the callback | same, "Fees: the router pattern" |
+| 2026-10-26 | The delivery router could strand tokens (refused payout, router as recipient, odd data) | Fixed: hand-off to `failedDeliveryAddress`, no revert in the callback | same, "Fees: a router that delivers a message and pays a tip from it" |
 | 2026-10-27 | OmniBridge gap audit: a token needing more than the release gas, a very long name, the native router stranding coins | Fixed: sender-set gas limit, deploy gas grows with name length, native router removed, decimals above 255 refused | same, "As built", "Mediator" |
 | 2026-10-27 | Branch review: the observation could not report a disallowed shape, so the PulseChain gate could never seal on a real proof (medium) | Fixed (`34b37c5`): the observation proves plain depths 8 to 31 | [decisions.md](../light-client-layout/decisions.md) "D2 addendum" |
 | 2026-10-27 | Branch review: the prover trusted stored genesis validators root branches (low) | Fixed (`a43339d`): checked, dropped and rebuilt when bad | `progress.txt` |

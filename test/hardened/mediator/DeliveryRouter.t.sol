@@ -49,7 +49,8 @@ contract DeliveryRouterTest is MediatorFixture {
     }
 
     function _routerFor(address rewardAccount) internal returns (DeliveryRouter) {
-        return new DeliveryRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), rewardAccount, failedDelivery);
+        return
+            new DeliveryRouter(ITokenMediator(address(mediatorA)), IWETH(address(weth)), rewardAccount, failedDelivery);
     }
 
     /// @dev A new router whose reward address is `account`. Call it before the message is sent: the sender names the
@@ -334,7 +335,9 @@ contract DeliveryRouterTest is MediatorFixture {
         assertEq(fee, 1 gwei, "capped");
         (fee,) = router.feeInfo(address(weth), 1_000 ether, 400_000, _director(router.UNWRAP(), 100 ether, 1 ether));
         assertEq(fee, (400_000 + router.NATIVE_GAS_OVERHEAD()) * 10 gwei, "gas used plus the native overhead");
-        assertEq(router.NATIVE_GAS_OVERHEAD(), 100_000, "measured: 50,000 was too low when both payees are new accounts");
+        assertEq(
+            router.NATIVE_GAS_OVERHEAD(), 100_000, "measured: 50,000 was too low when both payees are new accounts"
+        );
     }
 
     function test_theFeeNeverExceedsTheValue() public {
@@ -351,7 +354,11 @@ contract DeliveryRouterTest is MediatorFixture {
         ambA.executeMessage(ambA.proofOf(ambB, index));
         assertEq(_copyB().balanceOf(recipient), 100 ether, "everything goes to the recipient");
         assertEq(_copyB().balanceOf(reward), 0);
-        assertLe(uint256(vm.load(address(router), router.DELIVERY_SLOT())), 1, "the slot stays at rest (0 before the first use)");
+        assertLe(
+            uint256(vm.load(address(router), router.DELIVERY_SLOT())),
+            1,
+            "the slot stays at rest (0 before the first use)"
+        );
     }
 
     /// Claim: the slot marks a router delivery, and only that. Shows: the slot reads 1 before a router delivery, holds
@@ -368,7 +375,9 @@ contract DeliveryRouterTest is MediatorFixture {
         _deliverAtoB(_lastIndexA());
         address copy = _copyOf(address(probe));
 
-        assertLe(uint256(vm.load(address(router), router.DELIVERY_SLOT())), 1, "at rest before (0 before the first use)");
+        assertLe(
+            uint256(vm.load(address(router), router.DELIVERY_SLOT())), 1, "at rest before (0 before the first use)"
+        );
         bytes memory data = abi.encode(_director(router.FIXED_FEE(), 1 ether, 0));
         vm.startPrank(alice);
         IERC20(copy).approve(address(mediatorB), type(uint256).max);
@@ -415,7 +424,8 @@ contract DeliveryRouterTest is MediatorFixture {
         assertEq(router.DELIVERY_SLOT(), keccak256(abi.encode("deliveryrouter.delivery")), "the slot of the router");
     }
 
-    /// Claim: the four flag constants carry the names of gibsfinance and the bits of the `FeeDirector`.
+    /// Claim: the four flag constants carry the names `FIXED_FEE`, `UNWRAP`, `EXCLUDE_PRIORITY` and
+    /// `MULTIPLIER_OF_TOTAL` and the bit values 1, 2, 4 and 8 of the `FeeDirector` settings.
     function test_theFlagConstantsHaveTheirNamesAndBits() public view {
         assertEq(router.FIXED_FEE(), 1);
         assertEq(router.UNWRAP(), 2);
@@ -565,7 +575,9 @@ contract DeliveryRouterTest is MediatorFixture {
         mediatorB.relayTokensAndCall(copy, address(router), 50 ether, data);
         _runThroughRouter(_lastIndexB());
 
-        assertEq(token.balanceOf(recipient), 50 ether, "the tip that the reward address could not take goes to the recipient");
+        assertEq(
+            token.balanceOf(recipient), 50 ether, "the tip that the reward address could not take goes to the recipient"
+        );
         assertEq(token.balanceOf(reward), 0);
         assertEq(token.balanceOf(address(router)), 0);
     }
@@ -577,9 +589,7 @@ contract DeliveryRouterTest is MediatorFixture {
         vm.txGasPrice(10 gwei);
         (DenyListToken token, address copy) = _denyListCopyThatRefusesTheRewardAddress();
         vm.prank(alice);
-        mediatorB.relayTokensAndCall(
-            copy, address(router), 50 ether, abi.encode(_director(0, 10 ether, 1 ether))
-        );
+        mediatorB.relayTokensAndCall(copy, address(router), 50 ether, abi.encode(_director(0, 10 ether, 1 ether)));
         MessageBridge.MessageProof memory proof = ambA.proofOf(ambB, _lastIndexB());
         vm.recordLogs();
         vm.prank(executor, executor);
@@ -647,7 +657,7 @@ contract DeliveryRouterTest is MediatorFixture {
     /// Claim: in a token payout the recipient gets exactly one transfer and the reward address at most one. Shows: for
     /// a fixed tip, a percent tip and a gas based tip, one `Transfer` event names the recipient and one names the
     /// reward address. A tip of zero (a gas based limit of zero) gives the reward address none. Matters: the router
-    /// pays as `gibsfinance/omnibridge` does, with no second transfer for a refund.
+    /// pays with no second transfer for a refund.
     function test_theRecipientGetsOneTokenTransferAndTheRewardAddressAtMostOne() public {
         vm.txGasPrice(10 gwei);
         DeliveryRouter.FeeDirector[4] memory directors = [
@@ -666,7 +676,9 @@ contract DeliveryRouterTest is MediatorFixture {
 
             uint256 tip = _copyB().balanceOf(reward) - rewardBefore;
             assertEq(_transfersTo(logs, address(_copyB()), recipient), 1, "one transfer to the recipient");
-            assertEq(_transfersTo(logs, address(_copyB()), reward), tip == 0 ? 0 : 1, "at most one to the reward address");
+            assertEq(
+                _transfersTo(logs, address(_copyB()), reward), tip == 0 ? 0 : 1, "at most one to the reward address"
+            );
         }
     }
 
@@ -712,7 +724,6 @@ contract DeliveryRouterTest is MediatorFixture {
             vm.prank(others[i], others[i]);
             router.executeMessage(proof);
             assertEq(_copyB().balanceOf(reward), (i + 1) * 3 ether, "the tip goes to the reward address");
-
         }
     }
 

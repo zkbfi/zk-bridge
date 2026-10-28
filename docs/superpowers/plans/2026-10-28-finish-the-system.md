@@ -278,17 +278,17 @@ Spec section 0. The off-chain mirror of the contract rule, used by bots, web and
 
 ---
 
-### Task 9: Remove every gibs.finance reference (phase 2)
+### Task 9: Remove every reference to a named outside project (phase 2)
 
-Spec anti-goals and "Calls I made: gibs.finance references". Content only. Reword each line to describe the behavior on its own terms; do not swap in another project's name. Contract changes are comments only; the struct name `FeeDirector` and every identifier stay.
+Spec anti-goals and "Calls I made: outside project references". Content only. Reword each line to describe the behavior on its own terms; do not swap in another project's name. Contract changes are comments only; the struct name `FeeDirector` and every identifier stay.
 
-**Files:** find them with `git grep -n -i gibs -- . ':!progress.txt'`. Today: `src/hardened/mediator/DeliveryRouter.sol`, `test/hardened/mediator/DeliveryRouter.t.sol`, `explorer/shared/src/delivery-terms.ts`, `docs/hardened-build-contract.md`, `docs/audit/known-issues.md`, `docs/bots.md`, `docs/pulsechain-amb-review.md`, `docs/testnet-run.md`, plus the spec and this plan, whose mentions go last.
+**Files:** find them with `script/check-forbidden-names.sh`. Today: `src/hardened/mediator/DeliveryRouter.sol`, `test/hardened/mediator/DeliveryRouter.t.sol`, `explorer/shared/src/delivery-terms.ts`, `docs/hardened-build-contract.md`, `docs/audit/known-issues.md`, `docs/bots.md`, `docs/pulsechain-amb-review.md`, `docs/testnet-run.md`, plus the spec and this plan, whose mentions go last.
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Write the gate** `script/check-forbidden-names.sh`: exits 1 and prints file and line when `git grep -i -n gibs -- . ':!progress.txt'` finds anything.
+- [ ] **Step 1: Write the gate** `script/check-forbidden-names.sh`: exits 1 and prints file and line when a tracked file names the removed project (`progress.txt` excluded).
 - [ ] **Step 2: Run it.** Expected: FAIL with about 35 lines.
-- [ ] **Step 3: Reword every line.** Example: "the router pattern of `gibsfinance/omnibridge`" becomes "a router that delivers a bridged message and pays a tip from it". Rename the test claim at `DeliveryRouter.t.sol:418` to describe the flag bits.
+- [ ] **Step 3: Reword every line.** Example: "the router pattern of the outside project" becomes "a router that delivers a bridged message and pays a tip from it". Rename the test claim at `DeliveryRouter.t.sol:418` to describe the flag bits.
 - [ ] **Step 4: Run the gate.** `script/check-forbidden-names.sh` — Expected: exit 0, no output.
 - [ ] **Step 5: Run the full contract gate, because the metadata hash changed.** `forge test && script/coverage-check.sh` — Expected: every test passes; 100 percent lines, branches and functions; the thirteen optimizer tests pass.
 - [ ] **Step 6: Run.** `pnpm --filter @zk-bridge/shared test` — Expected: PASS.

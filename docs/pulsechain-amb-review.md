@@ -217,7 +217,7 @@ For tokens, our mediator never reverts on a refusing recipient. It tries the rec
 
 ### 4.1 The gib.show configuration
 
-The gib.show collectors are in `gibsfinance/assets`. The file `packages/server/src/collect/collectables.ts` (read with `gh api repos/gibsfinance/assets/contents/...`) configures an `OmnibridgeCollector` with four entries. The collector names each list provider `<providerPrefix>-bridge`, with a `testnet-<prefix>-` prefix for testnets.
+The gib.show collectors are in the public repository `assets` of the gib.show service. The file `packages/server/src/collect/collectables.ts` (read with `gh api`) configures an `OmnibridgeCollector` with four entries. The collector names each list provider `<providerPrefix>-bridge`, with a `testnet-<prefix>-` prefix for testnets.
 
 | gib.show provider | Type | Home (PulseChain) mediator | Foreign mediator |
 |---|---|---|---|
