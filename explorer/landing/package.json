@@ -1,0 +1,14 @@
+{
+  "name": "zk-bridge-landing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Static release page. It checks a signed manifest in the browser. It has no dependencies.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test",
+    "build": "node scripts/build.ts"
+  }
+}

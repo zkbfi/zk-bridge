@@ -1,0 +1,13 @@
+{
+  "title": "Bridge releases",
+  "manifestUrl": "./version.json",
+  "signatureUrl": "./version.json.sig",
+  "downloadBaseUrl": "./downloads",
+  "gateways": [
+    "https://ipfs.io/ipfs/",
+    "https://dweb.link/ipfs/",
+    "https://w3s.link/ipfs/",
+    "https://gateway.pinata.cloud/ipfs/"
+  ],
+  "publicKeys": []
+}
