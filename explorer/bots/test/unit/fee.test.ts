@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideDelivery, payoutOfOffer, readFeeOffer, valueFeeInWei } from "../../src/runner/fee.ts";
+import { callGasAllowance, decideDelivery, feeGasUnitsOf, payoutOfOffer, readFeeOffer, valueFeeInWei } from "../../src/runner/fee.ts";
 import { DELIVERY_ROUTER, OTHER_TOKEN, WRAPPED_NATIVE, address, feeOfferData } from "../support/builders.ts";
 import { encodeFunctionData } from "viem";
 import { tokenMediatorAbi } from "@zk-bridge/shared";
@@ -9,7 +9,7 @@ const director = { recipient: address(0x12), settings: 8n, limit: 0n, multiplier
 describe("reading the fee offer", () => {
   it("reads the FeeDirector from the callback data of a message to the delivery router", () => {
     const offer = readFeeOffer({ messageData: feeOfferData({ director, value: 5000n }), deliveryRouter: DELIVERY_ROUTER });
-    expect(offer).toEqual({ kind: "offer", director, value: 5000n });
+    expect(offer).toEqual({ kind: "offer", director, value: 5000n, call: null });
   });
 
   it("compares the router address without regard to letter case", () => {
@@ -78,5 +78,41 @@ describe("the delivery decision", () => {
   it("prices gas at the base fee plus the priority fee", () => {
     const decision = decideDelivery({ feeWei: 0n, gasUnits: 1n, quote: { baseFee: 100n, priorityFee: 0n }, minimumMarginWei: 0n });
     expect(decision.costWei).toBe(100n);
+  });
+});
+
+describe("the call gas in the fee estimate", () => {
+  const call = { target: address(0x21), data: "0xabcdef01" } as const;
+
+  it("reads the call of the offer, and null when the data carries none", () => {
+    const withCall = readFeeOffer({ messageData: feeOfferData({ director, value: 1n, call }), deliveryRouter: DELIVERY_ROUTER });
+    expect(withCall).toMatchObject({ kind: "offer", call });
+    const without = readFeeOffer({ messageData: feeOfferData({ director, value: 1n }), deliveryRouter: DELIVERY_ROUTER });
+    expect(without).toMatchObject({ kind: "offer", call: null });
+  });
+
+  it("gives the call the gas left, less the payout overhead and the reserve of 10,000", () => {
+    expect(callGasAllowance({ gasLeft: 500_000n, payout: "token" })).toBe(500_000n - 100_000n - 10_000n);
+    expect(callGasAllowance({ gasLeft: 500_000n, payout: "native" })).toBe(500_000n - 100_000n - 10_000n);
+  });
+
+  it("gives the call nothing when the gas left does not pass the held gas", () => {
+    expect(callGasAllowance({ gasLeft: 110_000n, payout: "token" })).toBe(0n);
+    expect(callGasAllowance({ gasLeft: 110_001n, payout: "token" })).toBe(1n);
+  });
+
+  it("counts only the execution when the offer has no call", () => {
+    expect(feeGasUnitsOf({ call: null, executionGas: 300_000n, plannedGas: 900_000n, payout: "token" })).toBe(300_000n);
+  });
+
+  it("adds the allowance of the call, so the count reaches the planned gas less the held gas", () => {
+    const counted = feeGasUnitsOf({ call, executionGas: 300_000n, plannedGas: 900_000n, payout: "token" });
+    expect(counted).toBe(900_000n - 100_000n - 10_000n);
+    expect(counted).toBeGreaterThan(300_000n);
+  });
+
+  it("never counts less than the execution when the plan leaves no gas for the call", () => {
+    expect(feeGasUnitsOf({ call, executionGas: 300_000n, plannedGas: 350_000n, payout: "token" })).toBe(300_000n);
+    expect(feeGasUnitsOf({ call, executionGas: 300_000n, plannedGas: 200_000n, payout: "token" })).toBe(300_000n);
   });
 });

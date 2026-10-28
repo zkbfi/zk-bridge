@@ -6,7 +6,7 @@ import type { Logger } from "../logging/logger.ts";
 import type { EvidencePackage, Prerequisite } from "../prover/packages.ts";
 import type { ProverBinary } from "../prover/prover-binary.ts";
 import type { PrerequisiteLedger } from "./prerequisite-ledger.ts";
-import { decideDelivery, payoutOfOffer, readFeeOffer, valueFeeInWei, type FeeOffer } from "./fee.ts";
+import { decideDelivery, feeGasUnitsOf, payoutOfOffer, readFeeOffer, valueFeeInWei, type FeeOffer } from "./fee.ts";
 import type { SourceReader } from "./source-reader.ts";
 
 /** The settings of a delivery that come from the bot configuration. */
@@ -158,20 +158,26 @@ export async function withDestinationToken(dependencies: DeliveryDependencies, i
   return { ...item, transfer: { ...transfer, destinationToken } };
 }
 
-/** The fee that the router would pay to its reward address for this gas, measured in wei. `payout` tells how the router pays it. */
+/**
+ * The fee that the router would pay to its reward address for this gas, measured in wei. `payout` tells how the router pays it.
+ * When the offer carries a user call, the router counts the gas of the call too (see {@link feeGasUnitsOf}): `plannedGas` is
+ * the gas limit that the runner plans to send, which bounds that gas.
+ */
 export async function quoteFee(
   dependencies: DeliveryDependencies,
   item: FeedItem,
   offer: Extract<FeeOffer, { kind: "offer" }>,
   gasUnits: bigint,
+  plannedGas: bigint,
 ): Promise<{ readonly ok: true; readonly feeWei: bigint; readonly feeTokens: bigint; readonly payout: PayoutKind } | { readonly ok: false; readonly reason: "no-price-for-fee-token" }> {
   const token = item.transfer?.destinationToken;
   if (token === undefined || token === null) return { ok: false, reason: "no-price-for-fee-token" };
   const { director } = offer;
+  const payout = payoutOfOffer({ director, token: token.address as Address, wrappedNative: dependencies.wrappedNative });
   const data = encodeFunctionData({
     abi: deliveryRouterAbi,
     functionName: "feeInfo",
-    args: [token.address as Address, offer.value, gasUnits, director],
+    args: [token.address as Address, offer.value, feeGasUnitsOf({ call: offer.call, executionGas: gasUnits, plannedGas, payout }), director],
   });
   const answer = await dependencies.chain.call({ to: dependencies.deliveryRouter as Address, data });
   const [feeTokens] = decodeFunctionResult({ abi: deliveryRouterAbi, functionName: "feeInfo", data: answer });
@@ -183,7 +189,6 @@ export async function quoteFee(
     wrappedNative: dependencies.wrappedNative,
     valuationsWei: dependencies.settings.tokenValuationsWei,
   });
-  const payout = payoutOfOffer({ director, token: token.address as Address, wrappedNative: dependencies.wrappedNative });
   return value.ok ? { ok: true, feeWei: value.wei, feeTokens, payout } : value;
 }
 
@@ -489,7 +494,7 @@ export interface JudgeOfferInput {
 /** Prices the offer at the fee gas and compares it with the cost of the cost gas. */
 export async function judgeOffer(dependencies: DeliveryDependencies, input: JudgeOfferInput): Promise<Judgement> {
   const { item, offer, feeGasUnits, costGasUnits, quote, messageId } = input;
-  const priced = await quoteFee(dependencies, item, offer, feeGasUnits);
+  const priced = await quoteFee(dependencies, item, offer, feeGasUnits, sendTerms(quote, feeGasUnits).gas);
   if (!priced.ok) return { kind: "skip", outcome: skip(messageId, priced.reason) };
   const decision = decideDelivery({ feeWei: priced.feeWei, gasUnits: costGasUnits, quote, minimumMarginWei: dependencies.settings.minimumMarginWei });
   if (decision.deliver) return { kind: "pay", feeWei: priced.feeWei };

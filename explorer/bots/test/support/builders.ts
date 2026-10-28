@@ -8,6 +8,7 @@ import {
   messageBridgeAbi,
   tokenFactoryAbi,
   tokenMediatorAbi,
+  type DeliveryCall,
   type ProofDirection,
   type ProofMessage,
 } from "@zk-bridge/shared";
@@ -101,10 +102,10 @@ export function fakeLightClient(initial: Partial<LightClientState> = {}): LightC
 }
 
 /** The call data of a message that relays tokens to a delivery router with a director. */
-export function feeOfferData(options: { director: FeeDirector; value: bigint; recipient?: Address; token?: Address }): Hex {
+export function feeOfferData(options: { director: FeeDirector; value: bigint; recipient?: Address; token?: Address; call?: DeliveryCall }): Hex {
   // The words do not depend on the token. The context names the wrapped native token twice so that the guard of the
   // shared module accepts every setting: a test may offer a message that the terminal would refuse to build.
-  const callback = encodeFeeDirector(options.director, { router: DELIVERY_ROUTER, protectedAddresses: [], destinationToken: WRAPPED_NATIVE, destinationWrappedNative: WRAPPED_NATIVE });
+  const callback = encodeFeeDirector(options.director, { router: DELIVERY_ROUTER, protectedAddresses: [], destinationToken: WRAPPED_NATIVE, destinationWrappedNative: WRAPPED_NATIVE }, options.call);
   return encodeFunctionData({
     abi: tokenMediatorAbi,
     functionName: "handleBridgedTokensAndCall",

@@ -109,7 +109,7 @@ function readyItem(id: number, options: { prerequisiteCostWei?: bigint } = {}): 
   return {
     item: feedItem({ id, token: WRAPPED_NATIVE }),
     messageId: word(id),
-    offer: { kind: "offer", director: { recipient: REWARD_ADDRESS, settings: 1n, limit: 10n, multiplier: 0n }, value: 1000n },
+    offer: { kind: "offer", director: { recipient: REWARD_ADDRESS, settings: 1n, limit: 10n, multiplier: 0n }, value: 1000n, call: null },
     proof: decoded.args[0],
     assumedGas: ITEM_GAS,
     prerequisiteCostWei: options.prerequisiteCostWei ?? 0n,

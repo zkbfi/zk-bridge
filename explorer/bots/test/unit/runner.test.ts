@@ -240,6 +240,27 @@ describe("delivery decisions", () => {
   const offerData = (token = WRAPPED_NATIVE) => ({ [word(OFFER_ID)]: feeOfferData({ director: fixedFee(10n), value: 1000n, token }) });
   const COST = 3_000_000n;
 
+  it("asks the router for the fee at the execution gas plus the gas of the user call, and at the execution gas without a call", async () => {
+    const asked: bigint[] = [];
+    const ask = async (call?: { target: `0x${string}`; data: `0x${string}` }) => {
+      asked.length = 0;
+      const data = { [word(OFFER_ID)]: feeOfferData({ director: fixedFee(10n), value: 1000n, token: WRAPPED_NATIVE, ...(call === undefined ? {} : { call }) }) };
+      // The first check uses the fallback gas. The planned gas adds the send buffer of 30 percent: at 900,000 it leaves 270,000 for the call.
+      const w = world({ items: [offerItem()], data, executionGasFallback: 900_000n });
+      w.chain.feeTokensOf = ({ gasUsed }) => {
+        asked.push(gasUsed);
+        return 10n ** 18n;
+      };
+      await w.runner.sweep();
+      return asked[0] as bigint;
+    };
+    const withoutCall = await ask();
+    const withCall = await ask({ target: address(0x21), data: "0xabcdef01" });
+    expect(withCall).toBeGreaterThan(withoutCall);
+    // The allowance is the planned gas less the execution gas, less the overhead of 100,000 and the reserve of 10,000.
+    expect(withCall - withoutCall).toBe(270_000n - 110_000n);
+  });
+
   it("delivers when the fee covers the cost, through the delivery router, with the proof only", async () => {
     const w = world({ items: [offerItem()], data: offerData() });
     w.chain.feeTokens = COST + 1n;
