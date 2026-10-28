@@ -4,13 +4,13 @@ Status: plan only. Nothing here is built yet. It covers the implemented design (
 
 | Item | Change | Decision |
 |---|---|---|
-| 1 | The layout witness: each fold step also proves `genesis_validators_root` (state field 1) at the claimed layout. Plain depth 7 joins the allowed set. | (D) |
+| 1 | the genesis validators root branch: each fold step also proves `genesis_validators_root` (state field 1) at the claimed layout. Plain depth 7 joins the allowed set. | (D) |
 | 2 | The prover reads the fork schedule and the chain specification from the beacon node at run time. | none |
 | 3 | The prover repairs the transition update: it strips the padding of a pre-Gloas finalized header and attaches the encoded execution header. | none |
 | 4 | The fork gate judges the shape of the state proof, not the version name. | (D) |
 | 5 | Two test gaps from the review: "one layout per step" with an honest branch at another depth, and the attested header checks. | none |
 
-Paths are relative to the repository root. "Exists" means the test is in the tree today, with `file:line`. "New" means someone must write it. "Change" means an existing test must change when its item lands. New error names (for example `InvalidLayoutWitness`) are proposals. The implementer may pick others, but each test must still assert one exact variant.
+Paths are relative to the repository root. "Exists" means the test is in the tree today, with `file:line`. "New" means someone must write it. "Change" means an existing test must change when its item lands. New error names (for example `InvalidGenesisValidatorsRootBranch`) are proposals. The implementer may pick others, but each test must still assert one exact variant.
 
 ---
 
@@ -107,11 +107,11 @@ Today the only guard against both is that no defined field sits there. Item 1 cl
 
 **Residual.** None, but a test gap exists. No test sends a committee branch that is valid at another layout's position against the same state root. Today's tests only send cut, padded or flipped branches. Those fail on the hash check whether or not the rule exists. Test S-7 closes the gap.
 
-### T4. The layout witness (item 1, D)
+### T4. the genesis validators root branch (item 1, D)
 
 **What it adds.** Each fold step also proves `genesis_validators_root` (state field 1) at the claimed layout:
 
-| Layout | Witness position | Witness length | Finality length | Next committee length |
+| Layout | Genesis validators root position | Genesis validators root branch length | Finality length | Next committee length |
 |---|---|---|---|---|
 | plain depth 5 | 33 | 5 | 6 | 5 |
 | plain depth 6 | 65 | 6 | 7 | 6 |
@@ -120,32 +120,32 @@ Today the only guard against both is that no defined field sits there. Item 1 cl
 
 The leaf comes from `ChainSpec`, never from the input.
 
-**Why it pins the layout.** `genesis_validators_root` is the root of a list. So its right child is the list length: a number padded with 24 zero bytes. The scratch script `verify/scripts/witness.py` walks every wrong position through every true layout:
+**Why it pins the layout.** `genesis_validators_root` is the root of a list. So its right child is the list length: a number padded with 24 zero bytes. The scratch script `verify/scripts/genesis_validators_root.py` (a scratch script, not in the repository) walks every wrong position through every true layout:
 
-- On a deeper true layout, a plain witness lands below `genesis_time`, a number. Every plain witness lands there on a true Gloas state.
+- On a deeper true layout, a plain genesis validators root branch lands below `genesis_time`, a number. Every plain genesis validators root branch lands there on a true Gloas state.
 - On a shallower true layout, it lands on an internal node whose right child is a hash. For example, 33 on a true depth 6 state is the node over `slot` and `fork`. Equality with the root needs that hash to end in 24 zero bytes.
-- The Gloas witness 40 lands on `eth1_data` on a true depth 5 state. It lands above fields 16 and 17 on a true depth 6 state, and above fields 32 to 35 on a true depth 7 state.
+- The Gloas genesis validators root 40 lands on `eth1_data` on a true depth 5 state. It lands above fields 16 and 17 on a true depth 6 state, and above fields 32 to 35 on a true depth 7 state.
 - One case differs. Above fields 16 and 17, the right child is `justification_bits`, a small padded value and not a hash. So that case rests on the left child instead: the root of `current_epoch_participation` would have to equal the data root of the genesis validator list, which is a collision.
 
 None of these can equal the known root under S2. The scratch run on real data confirms the honest cases. On the real PulseChain depth 5 state, node 33 equals the known root and 65, 129 and 257 lie below `genesis_time`. On the real Sepolia Gloas state, node 40 equals the known root.
 
-**What it allows.** With the layout pinned, depth 7 becomes safe to accept. A depth 7 claim passes only on a true depth 7 state. The T1 residuals at field 41 and below fields 55 and 56 then fail on the witness.
+**What it allows.** With the layout pinned, depth 7 becomes safe to accept. A depth 7 claim passes only on a true depth 7 state. The T1 residuals at field 41 and below fields 55 and 56 then fail on the genesis validators root branch.
 
-**Attacks on the witness itself:**
+**Attacks on the genesis validators root branch itself:**
 
 - *Leaf from the input.* Suppose the program took the leaf from the prover. The attacker could then prove the node at 33 on a true depth 6 state, which is the hash of `slot` and `fork`. Defense: the leaf is `ChainSpec.genesis_validators_root` (S5).
-- *Witness at another layout's position.* Defense: the position comes from the finality branch's layout, like the committee position. The witness length alone cannot decide: plain depth 5 and Gloas both have length 5.
-- *Witness against the wrong root.* Defense: the witness is checked against `attested.beacon.state_root`, the same root as the finality branch.
+- *The genesis validators root branch at another layout's position.* Defense: the position comes from the finality branch's layout, like the committee position. The genesis validators root branch length alone cannot decide: plain depth 5 and Gloas both have length 5.
+- *The genesis validators root branch against the wrong root.* Defense: the genesis validators root branch is checked against `attested.beacon.state_root`, the same root as the finality branch.
 - *Skipped in some paths.* It must run in every fold step of both programs. That includes steps without a next committee, and the fold steps of the fork observation program.
 
 **Assumptions.** S2 and S5. For depth 7, also S6: fields 20, 22 and 23 must still be `finalized_checkpoint` and the two committees.
 
 **Residual.**
 
-- A future depth 7 fork that moves fields 20, 22 or 23 breaks S6. The witness pins only the depth, not the meaning of each field.
-- Plain depth 8 has a finality length of 9, the same as Gloas. The length map cannot name it, so it stays refused. That is a stall, not a false head: the Gloas witness 40 lands above fields 64 to 71 of a depth 8 state.
+- A future depth 7 fork that moves fields 20, 22 or 23 breaks S6. The genesis validators root branch pins only the depth, not the meaning of each field.
+- Plain depth 8 has a finality length of 9, the same as Gloas. The length map cannot name it, so it stays refused. That is a stall, not a false head: the Gloas genesis validators root 40 lands above fields 64 to 71 of a depth 8 state.
 - The wire format changes and both program keys change. The contracts are immutable, so every deployed route needs a new deployment.
-- The prover needs the attested state to build the witness (T24).
+- The prover needs the attested state to build the genesis validators root branch (T24).
 
 **If D1 is declined.** T1's residuals stay, and depth 7 stays a stall. The test at `layout_state_depth.rs:1091` stays as it is. I recommend adopting D1, because it is the only defense here that does not rest on "no one has defined that field yet".
 
@@ -155,9 +155,9 @@ None of these can equal the known root under S2. The scratch run on real data co
 
 **A fork crosses 64 fields (depth 7).**
 - Without D1: honest updates have 8-entry finality branches, which are refused. The bridge stalls safely. A new route is needed. The residual of T1 applies.
-- With D1: the update is accepted when the witness passes. The residual of T4 applies.
+- With D1: the update is accepted when the genesis validators root branch passes. The residual of T4 applies.
 
-**A fork crosses 128 fields (depth 8).** Refused in both cases, so the bridge stalls. With D1 the refusal is also pinned by the witness.
+**A fork crosses 128 fields (depth 8).** Refused in both cases, so the bridge stalls. With D1 the refusal is also pinned by the genesis validators root branch.
 
 ### T6. Gloas activation (fork, stall)
 
@@ -233,7 +233,7 @@ None of these can equal the known root under S2. The scratch run on real data co
 - No allowed claim lands on a proposer-writable leaf.
 - The Gloas anchor is `state.latest_block_hash`, not the bid.
 - The attested bid branch is ignored (T9).
-- The `eth1_data` landing of witness 40 on a depth 5 state needs a hash preimage, even though proposers vote that field.
+- The `eth1_data` landing of genesis validators root 40 on a depth 5 state needs a hash preimage, even though proposers vote that field.
 
 **Assumptions.** S2 and S6.
 
@@ -308,7 +308,7 @@ The exact rule reads length 11 as the state anchor 2947 and refuses it. The scra
 **Attack surface.** A future plain fork keeps the depth but moves `finalized_checkpoint` (field 20) or a committee field (22 or 23). A proposer-writable field could then sit at 20.
 
 **Defense.**
-- The witness pins only field 1 and the depth, so it does not help here.
+- The genesis validators root branch pins only field 1 and the depth, so it does not help here.
 - With a version-name gate, the unknown version stops sends.
 - With D4, the gate sees an allowed shape and does not stop sends.
 
@@ -350,7 +350,7 @@ Today confirmation keys on the version name. The depth comes from the configured
 
 **Residual.**
 - *The seven-entry ambiguity.* Plain depth 5 and the Gloas form both have 7 entries. The gate must try each allowed shape at its own position. Both cross landings are safe.
-- *Field 41 on depth 7.* If D1 is declined but D4 is adopted, a 7-entry proof at 169 on a true depth 7 chain could confirm the gate. That happens if field 41 ever holds a version-like value. Sends would then go on into a route that cannot deliver them. **I recommend the gate also checks the `genesis_validators_root` witness at the claimed shape (the item 1 idea),** to pin the shape the same way.
+- *Field 41 on depth 7.* If D1 is declined but D4 is adopted, a 7-entry proof at 169 on a true depth 7 chain could confirm the gate. That happens if field 41 ever holds a version-like value. Sends would then go on into a route that cannot deliver them. **I recommend the gate also checks the `genesis_validators_root` branch at the claimed shape (the item 1 idea),** to pin the shape the same way.
 - *Seal shapes outside the meaningful range.* Depths 1 to 4 land above fields or on hashes, so a false seal there is infeasible. Still, the seal rule should accept only depths above the allowed set, and a test should pin that.
 - *The registry mode carries no shape.* The PulseChain registry path gets only a version name (`ForkRegistry.sol`, 224-byte output). D4 cannot apply there. **The D4 decision must say what the registry mode does.** It could keep names, admit all, or drop the registry seal.
 - *A new progressive form.* The gate has no position for it, so it cannot seal it. Confirmations fail on every allowed shape, so sends still stop each epoch. That is a stall of sends, not a loss.
@@ -376,9 +376,9 @@ Today confirmation keys on the version name. The depth comes from the configured
 
 ### T23. Catch-up without old states (fork or operations, stall)
 
-**Attack surface.** The witness needs the siblings of field 1 in the attested state. Those change every slot, so the prover needs each attested state. A long catch-up needs states from weeks ago, and normal nodes prune them. The PulseChain node also served stale old states (see "Builders" in `docs/hardened-build-contract.md`).
+**Attack surface.** The genesis validators root branch needs the siblings of field 1 in the attested state. Those change every slot, so the prover needs each attested state. A long catch-up needs states from weeks ago, and normal nodes prune them. The PulseChain node also served stale old states (see "Builders" in `docs/hardened-build-contract.md`).
 
-**Defense (item 1).** The prover computes the witness while the state is fresh and stores it with the update for catch-up.
+**Defense (item 1).** The prover computes the genesis validators root branch while the state is fresh and stores it with the update for catch-up.
 
 **Assumptions.** S8.
 
@@ -414,7 +414,7 @@ Real fixtures are under `light-client/tests/fixtures/`. The scratch verification
 | `CraftedStateTree` (new, `synthetic.rs`) | Places chosen leaves at chosen positions under one root and fills the rest with distinct filler. Returns the root and exact branches. It models "a root that satisfies two layouts at once", which no real state does. | S-7, S-8, W-5, W-6, L-7 |
 | `StateBuilder::with_field_count(fields)` or `WideStateBuilder` (new) | A plain state of any width (for example 70 fields, depth 7) with honest branches, including field 1. Today the leaves are private (`synthetic.rs:158`). | W-2, W-9, S-10 |
 | `UpdateRecipe.state_shape` (new field) or `build_update_on(state, recipe)` | Signs an update over a given state instead of `spec.fork_at_slot` (`synthetic.rs:363`). | W-2, S-7, S-10 |
-| `witness_branch()` on `StateBuilder`, `GloasStateBuilder` and the wide builder | The honest branch of field 1 at 33, 65, 129 or 40. | every W test |
+| `genesis_validators_root_branch()` on `StateBuilder`, `GloasStateBuilder` and the wide builder | The honest branch of field 1 at 33, 65, 129 or 40. | every W test |
 | `served_gloas_form(full_header)` (move from `verify/lc/crates/lc-core/tests/transition.rs`) | Builds the specification's padded form of a pre-Gloas header. | P3 tests |
 
 ## B.1 State layout by finality length (T1, T5)
@@ -424,15 +424,15 @@ Real fixtures are under `light-client/tests/fixtures/`. The scratch verification
 | S-1 | Exists | `lc-core/src/layout.rs:854` `the_finality_branch_length_names_the_layout` | none | 6, 7, 9 give the three layouts. Every other length in 0..=12 gives `UnsupportedStateBranchLength { length }`. The depth of each finality position equals its length. | The length is the only selector, and it must name one layout. | M-2, M-4, M-5 |
 | S-1' | Change (D1) | same | none | Adds 8 giving `plain_state_layout(7)` (297, 150, 151). `ALLOWED_FINALITY_BRANCH_LENGTHS == [6, 7, 8, 9]`. Every other length in 0..=12 is refused. | D1 adds exactly one layout. | M-2 (inverse: 8 still refused), M-5 |
 | S-2 | Exists | `lc-testkit/tests/layout_state_depth.rs:961` `every_other_finality_branch_length_is_refused` | none | 0..=12 except allowed, 64 and `usize::MAX` give `UnsupportedStateBranchLength { length }`. | Large and odd lengths must not wrap into a layout. | M-5 |
-| S-3 | Exists, change (D1) | `layout_state_depth.rs:978` `finality_branch_length_eight_is_refused_because_it_is_depth_seven` | `plain_state_layout(7)` | Today: length 8 gives `UnsupportedStateBranchLength { length: 8 }`. Under D1: rename to `finality_branch_length_eight_names_plain_depth_seven`, and assert the layout (297, 150, 151) plus witness 129. | It pins the meaning of 8 either way. | M-2 |
+| S-3 | Exists, change (D1) | `layout_state_depth.rs:978` `finality_branch_length_eight_is_refused_because_it_is_depth_seven` | `plain_state_layout(7)` | Today: length 8 gives `UnsupportedStateBranchLength { length: 8 }`. Under D1: rename to `finality_branch_length_eight_names_plain_depth_seven`, and assert the layout (297, 150, 151) plus genesis validators root 129. | It pins the meaning of 8 either way. | M-2 |
 | S-4 | Exists | `layout_state_depth.rs:748` `synthetic_true_depth_five_state_refuses_the_claimed_electra_and_gloas_layouts` | `StateBuilder(Capella)`, `build_update` | Claims 169, 86, 87, 735, 2945, 2946 give `InvalidFinalityBranch` or `InvalidNextSyncCommitteeBranch`. | Each wrong pair on a true depth 5 state. | M-1, M-4 |
 | S-5 | Exists | `layout_state_depth.rs:770` `synthetic_true_depth_six_state_refuses_the_claimed_capella_and_gloas_layouts` | `StateBuilder(Electra)` | Claims 105, 54, 55, 735, 2945, 2946 refused, with the same two variants. | Each wrong pair on a true depth 6 state. | M-1, M-4 |
 | S-6 | Exists | `layout_state_depth.rs:642` and `:663` (real Gloas plain-5 and plain-6 claims) | `sepolia/gloas_head_state.ssz` | Plain claims land on node 3 (`active_fields`) or on `fork` and `latest_block_header` children. The branches do not verify. The control verifies at 169. | Real data, with the landing node computed. | M-4 |
 | S-7 | **New** (gap 1) | `layout_state_depth.rs` `an_honest_committee_branch_at_another_depth_is_refused_in_one_step` | `CraftedStateTree` with finalized root at 169 (depth 6) and committee root at 55 (depth 5) under one root. Signed by `build_update_on`. Control: the same tree with the committee at 87. | Finality length 7 plus a committee branch of length 5 that is valid at 55 gives exactly `InvalidNextSyncCommitteeBranch`. The control returns `Ok`. A second case swaps the depths: finality at 105 with length 6, committee valid at 87 with length 6. Also `InvalidNextSyncCommitteeBranch`. | Only this test fails when the committee position is taken from its own length. Every existing mixed test uses damaged branches, which fail with or without the rule (checked: `layout_state_depth.rs:1002` uses `attacker_branches` at `:102`). | **M-3** |
 | S-8 | **New** (gap 1, Gloas) | `layout_state_depth.rs` `a_gloas_finality_branch_with_a_plain_committee_branch_is_refused` | `CraftedStateTree`: finality at 735, committee at 87 (length 6) and at 55 (length 5). | `InvalidNextSyncCommitteeBranch` for both. The control (committee at 2946, length 11) returns `Ok`. | The progressive and plain layouts must not mix. | M-3 |
 | S-9 | Exists | `layout_state_depth.rs:1002` `mixed_branch_lengths_in_one_step_are_refused` | `build_update` | Damaged lengths give `InvalidNextSyncCommitteeBranch`. | Keep it. It covers lengths that name no layout. | M-1 |
-| S-10 | Exists, change (D1) | `layout_state_depth.rs:1091` `wide_state_control_permissive_selector_accepts_a_forgery_and_the_real_rule_stops_the_bridge` | local 70-field tree | Today: the permissive selector accepts the forgery at field 41, and the real rule gives `UnsupportedStateBranchLength { length: 8 }`. Under D1, rename to `wide_state_forgery_at_field_41_fails_the_witness_and_the_honest_depth_seven_update_verifies`. Assert three things. (a) The forged 7-entry claim gives `InvalidLayoutWitness`, because witness 65 lands above fields 2..3 (`slot`, `fork`) of the depth 7 tree, and the test computes that node. (b) The honest 8-entry update returns `Ok`. (c) The output's `newHeaderRoot` is the honest root. | This is the attack that justifies D1. The test must show that the witness, and not the length map, stops it. | M-2, M-6, **M-13** |
-| S-11 | **New** (D1) | `layout_state_depth.rs` `gloas_claims_on_a_true_depth_seven_state_fail_the_witness` | wide builder, 70 fields | A 9-entry claim on a true depth 7 tree (735 lands below field 55, 2946 below field 56) gives `InvalidLayoutWitness`, because 40 lands above fields 32..35. Assert the landing nodes. | It closes the residual that the design table did not list. | M-13 |
+| S-10 | Exists, change (D1) | `layout_state_depth.rs:1091` `wide_state_control_permissive_selector_accepts_a_forgery_and_the_real_rule_stops_the_bridge` | local 70-field tree | Today: the permissive selector accepts the forgery at field 41, and the real rule gives `UnsupportedStateBranchLength { length: 8 }`. Under D1, rename to `wide_state_forgery_at_field_41_fails_the_genesis_validators_root_and_the_honest_depth_seven_update_verifies`. Assert three things. (a) The forged 7-entry claim gives `InvalidGenesisValidatorsRootBranch`, because genesis validators root 65 lands above fields 2..3 (`slot`, `fork`) of the depth 7 tree, and the test computes that node. (b) The honest 8-entry update returns `Ok`. (c) The output's `newHeaderRoot` is the honest root. | This is the attack that justifies D1. The test must show that the genesis validators root branch, and not the length map, stops it. | M-2, M-6, **M-13** |
+| S-11 | **New** (D1) | `layout_state_depth.rs` `gloas_claims_on_a_true_depth_seven_state_fail_the_genesis_validators_root` | wide builder, 70 fields | A 9-entry claim on a true depth 7 tree (735 lands below field 55, 2946 below field 56) gives `InvalidGenesisValidatorsRootBranch`, because 40 lands above fields 32..35. Assert the landing nodes. | It closes the residual that the design table did not list. | M-13 |
 | S-12 | Exists | `layout_real_accepts.rs:142` `real_updates_name_their_layout_by_branch_length_and_verify_exactly` | real Ethereum, PulseChain and Sepolia Gloas updates | Each real update names its layout and verifies exactly against `attested.state_root`. | The honest control on real data. | M-1, M-4, M-7 |
 
 ## B.2 Exact branches (T2)
@@ -440,31 +440,31 @@ Real fixtures are under `light-client/tests/fixtures/`. The scratch verification
 | ID | Status | File and name | Fixture | Exact assertion | Why | Mutation |
 |---|---|---|---|---|---|---|
 | E-1 | Exists | `layout_state_depth.rs:853` `real_pulsechain_zero_padded_finality_branch_is_refused` | `pulsechain/light_client_update.json` | A 6-entry branch padded to 7 gives `InvalidFinalityBranch`. The old normalized rule accepted it. | The exact attack of T2 on real data. | **M-1** |
-| E-2 | Exists | `layout_state_depth.rs:873` real Ethereum cut and padded | `ethereum/finality_update.json` | Cut to 6 gives `InvalidFinalityBranch`. Padded to 8 gives `UnsupportedStateBranchLength { 8 }`. Under D1, padded to 8 gives `InvalidLayoutWitness` or `InvalidFinalityBranch`. Pin the one the implementation reaches first and comment the order. | Under D1, length 8 now names a layout, so the padded branch must fail on evidence, not on length. | M-1 |
+| E-2 | Exists | `layout_state_depth.rs:873` real Ethereum cut and padded | `ethereum/finality_update.json` | Cut to 6 gives `InvalidFinalityBranch`. Padded to 8 gives `UnsupportedStateBranchLength { 8 }`. Under D1, padded to 8 gives `InvalidGenesisValidatorsRootBranch` or `InvalidFinalityBranch`. Pin the one the implementation reaches first and comment the order. | Under D1, length 8 now names a layout, so the padded branch must fail on evidence, not on length. | M-1 |
 | E-3 | Exists | `layout_state_depth.rs:907` real Gloas cut and padded | `sepolia/gloas_*` | Lengths 10 and 8 give `UnsupportedStateBranchLength`, and under D1 length 8 behaves as in E-2. Cut and padded branches fail at 735. | Same as E-2. | M-1 |
 | E-4 | Exists | `update_rejections.rs:187` `synthetic_wrong_layout_claim_by_branch_length_is_refused` | `build_update` | 6 zero-padded to 7, and 7 cut to 6, give `InvalidFinalityBranch`. | Synthetic twin of E-1. | M-1 |
-| E-5 | **New** (D1) | `layout_state_depth.rs` `a_zero_padded_witness_is_refused` | `StateBuilder(Capella)` | A witness of 5 entries padded to 6 gives `InvalidLayoutWitness`. The control (5 entries) returns `Ok`. | The witness is exact like every other branch. | M-1 (if the witness check uses the normalized function) |
+| E-5 | **New** (D1) | `layout_state_depth.rs` `a_zero_padded_genesis_validators_root_branch_is_refused` | `StateBuilder(Capella)` | A genesis validators root branch of 5 entries padded to 6 gives `InvalidGenesisValidatorsRootBranch`. The control (5 entries) returns `Ok`. | The genesis validators root branch is exact like every other branch. | M-1 (if the genesis validators root branch check uses the normalized function) |
 
-## B.3 The layout witness (T4, item 1, D)
+## B.3 the genesis validators root branch (T4, item 1, D)
 
 Each test below runs through `verify_step` and also through the fold of the fork observation program (`observation::verify_fork_observation` with one step), unless it says otherwise. A helper `for_each_program(step, assertion)` keeps this DRY.
 
 | ID | Status | File and name | Fixture or builder | Exact assertion | Why | Mutation |
 |---|---|---|---|---|---|---|
-| W-1 | New | `lc-testkit/tests/layout_witness.rs` `honest_witnesses_verify_on_every_layout` | `StateBuilder(Capella)`, `StateBuilder(Electra)`, `GloasStateBuilder`, wide builder (70 fields) | Each honest update with its witness returns `Ok` with the expected output. Witness lengths are 5, 6, 7, 5 and positions are 33, 65, 129, 40. | The control for every W test, one per layout. | M-6, M-8 |
-| W-2 | New | `layout_witness.rs` `the_real_witnesses_verify_against_the_real_states` | `sepolia/gloas_head_state.ssz` (node 40), plus a real plain state (see B.9) | The real branch of field 1 verifies exactly at 40 (Gloas) and 33 (PulseChain). The leaf equals `SEPOLIA.genesis_validators_root` and `PULSECHAIN.genesis_validators_root`. | Real data agrees with the position table. The scratch run already shows this. | M-6 |
-| W-3 | New | `layout_witness.rs` `every_wrong_witness_position_lands_on_a_node_that_cannot_equal_the_root` | all four builders, plus a depth 8 wide tree for the landing walk | For each (claimed, true) pair of {5, 6, 7, Gloas} × {5, 6, 7, 8, Gloas} with claimed ≠ true, the test walks the claimed position through the true tree. It asserts the landing kind exactly as `verify/scripts/witness.py` prints it. Examples: 65 on depth 5 lies below `genesis_time`, 33 on depth 6 is the node over `slot` and `fork`, 40 on depth 5 is `eth1_data`. It also asserts that the node value differs from the known root. | It pins the reason for safety, not only the refusal. | M-6 |
-| W-4 | New | `layout_witness.rs` `a_wrong_layout_claim_fails_on_the_witness` | `CraftedStateTree` with honest finality and committee at depth 5 positions under a root whose node 33 is not the known root | `InvalidLayoutWitness`. Control: node 33 set to the known root returns `Ok`. | It isolates the witness from the other two branches. If the witness check were removed, only this test would see it. | **M-8** |
-| W-5 | New | `layout_witness.rs` `the_witness_leaf_comes_from_the_chain_specification` | true depth 6 state (`StateBuilder(Electra)`) and a crafted tree with honest finality and committee at 105 and 55 | The prover supplies a "witness" whose leaf is node 33 of the tree (the hash over `slot` and `fork`) with a valid branch. The result is `InvalidLayoutWitness`. | If the program read the leaf from the input, this attack would pass. Only this test catches that. | **M-9** |
-| W-6 | New | `layout_witness.rs` `the_witness_position_follows_the_finality_layout_not_the_witness_length` | `CraftedStateTree`: Gloas finality (735), committee (2946), and field 1 at node 33 (length 5) instead of 40 | `InvalidLayoutWitness`. The reverse case also fails: depth 5 finality with the witness at 40. | Plain depth 5 and Gloas share witness length 5. The length must not choose the position. | **M-10** |
-| W-7 | New | `layout_witness.rs` `the_witness_is_checked_against_the_attested_state_root` | `build_update` where the finalized header's state contains field 1 at 33, but the attested witness is a branch of the finalized state | `InvalidLayoutWitness`. Control: the attested witness returns `Ok`. | The witness must bind the same tree as the finality branch. | **M-11** |
-| W-8 | New | `layout_witness.rs` `a_step_without_a_next_committee_still_needs_the_witness` | `build_update` with `include_next_committee: false` | An empty or damaged witness gives `InvalidLayoutWitness`. | The witness must not hide inside the committee branch block. | **M-12** |
-| W-9 | New | `layout_witness.rs` `every_step_of_a_mixed_fold_checks_its_own_witness` | fold from Fulu (depth 6) to Gloas, `layout_fork_version.rs:338` builders | Swapping the two steps' witnesses gives `InvalidLayoutWitness` at the first step. A fold where only the last step is damaged also gives `InvalidLayoutWitness`. | Steps of one fold have different layouts. Each needs its own witness. | M-12, M-14 |
-| W-10 | New | `layout_witness.rs` `the_observation_fold_checks_the_witness` | `fork_observation_scenarios::stale_three_period_scenario` | A damaged witness in a fold step gives `InvalidLayoutWitness`. The observation itself has no state proof, so nothing else changes. | Item 1 applies to both programs. | **M-14** |
-| W-11 | New | `lc-testkit/tests/update_json.rs` or `wire` tests `the_wire_format_carries_the_witness` | real and synthetic inputs | The witness survives an encode and decode round trip. A truncated witness, an over-long count and trailing bytes all give a decode error. `run_light_client_guest` still returns 352 bytes and `run_fork_observation_guest` 224 bytes. | The format change must not open a parse gap. | M-15 |
-| W-12 | Exists, stays green | `layout_real_accepts.rs:118` `real_data_keeps_the_public_values_byte_for_byte` | `golden_public_values.txt` | The hex equals the golden values. | The witness must never reach the output. | **M-16** |
+| W-1 | New | `lc-testkit/tests/layout_genesis_validators_root.rs` `honest_genesis_validators_root_branches_verify_on_every_layout` | `StateBuilder(Capella)`, `StateBuilder(Electra)`, `GloasStateBuilder`, wide builder (70 fields) | Each honest update with its genesis validators root branch returns `Ok` with the expected output. Genesis validators root branch lengths are 5, 6, 7, 5 and positions are 33, 65, 129, 40. | The control for every W test, one per layout. | M-6, M-8 |
+| W-2 | New | `layout_genesis_validators_root.rs` `the_real_genesis_validators_root_branches_verify_against_the_real_states` | `sepolia/gloas_head_state.ssz` (node 40), plus a real plain state (see B.9) | The real branch of field 1 verifies exactly at 40 (Gloas) and 33 (PulseChain). The leaf equals `SEPOLIA.genesis_validators_root` and `PULSECHAIN.genesis_validators_root`. | Real data agrees with the position table. The scratch run already shows this. | M-6 |
+| W-3 | New | `layout_genesis_validators_root.rs` `every_wrong_genesis_validators_root_position_lands_on_a_node_that_cannot_equal_the_root` | all four builders, plus a depth 8 wide tree for the landing walk | For each (claimed, true) pair of {5, 6, 7, Gloas} × {5, 6, 7, 8, Gloas} with claimed ≠ true, the test walks the claimed position through the true tree. It asserts the landing kind exactly as the scratch script prints it. Examples: 65 on depth 5 lies below `genesis_time`, 33 on depth 6 is the node over `slot` and `fork`, 40 on depth 5 is `eth1_data`. It also asserts that the node value differs from the known root. | It pins the reason for safety, not only the refusal. | M-6 |
+| W-4 | New | `layout_genesis_validators_root.rs` `a_wrong_layout_claim_fails_on_the_genesis_validators_root` | `CraftedStateTree` with honest finality and committee at depth 5 positions under a root whose node 33 is not the known root | `InvalidGenesisValidatorsRootBranch`. Control: node 33 set to the known root returns `Ok`. | It isolates the genesis validators root branch from the other two branches. If the genesis validators root branch check were removed, only this test would see it. | **M-8** |
+| W-5 | New | `layout_genesis_validators_root.rs` `the_genesis_validators_root_leaf_comes_from_the_chain_specification` | true depth 6 state (`StateBuilder(Electra)`) and a crafted tree with honest finality and committee at 105 and 55 | The prover supplies a genesis validators root branch whose leaf is node 33 of the tree (the hash over `slot` and `fork`) with a valid branch. The result is `InvalidGenesisValidatorsRootBranch`. | If the program read the leaf from the input, this attack would pass. Only this test catches that. | **M-9** |
+| W-6 | New | `layout_genesis_validators_root.rs` `the_genesis_validators_root_position_follows_the_finality_layout_not_the_branch_length` | `CraftedStateTree`: Gloas finality (735), committee (2946), and field 1 at node 33 (length 5) instead of 40 | `InvalidGenesisValidatorsRootBranch`. The reverse case also fails: depth 5 finality with the genesis validators root branch at 40. | Plain depth 5 and Gloas share genesis validators root branch length 5. The length must not choose the position. | **M-10** |
+| W-7 | New | `layout_genesis_validators_root.rs` `the_genesis_validators_root_is_checked_against_the_attested_state_root` | `build_update` where the finalized header's state contains field 1 at 33, but the genesis validators root branch is a branch of the finalized state | `InvalidGenesisValidatorsRootBranch`. Control: the attested branch returns `Ok`. | The genesis validators root branch must bind the same tree as the finality branch. | **M-11** |
+| W-8 | New | `layout_genesis_validators_root.rs` `a_step_without_a_next_committee_still_needs_the_genesis_validators_root` | `build_update` with `include_next_committee: false` | An empty or damaged genesis validators root branch gives `InvalidGenesisValidatorsRootBranch`. | The genesis validators root branch must not hide inside the committee branch block. | **M-12** |
+| W-9 | New | `layout_genesis_validators_root.rs` `every_step_of_a_mixed_fold_checks_its_own_genesis_validators_root` | fold from Fulu (depth 6) to Gloas, `layout_fork_version.rs:338` builders | Swapping the two steps' genesis validators root branches gives `InvalidGenesisValidatorsRootBranch` at the first step. A fold where only the last step is damaged also gives `InvalidGenesisValidatorsRootBranch`. | Steps of one fold have different layouts. Each needs its own genesis validators root branch. | M-12, M-14 |
+| W-10 | New | `layout_genesis_validators_root.rs` `the_observation_fold_checks_the_genesis_validators_root` | `fork_observation_scenarios::stale_three_period_scenario` | A damaged genesis validators root branch in a fold step gives `InvalidGenesisValidatorsRootBranch`. The observation itself has no state proof, so nothing else changes. | Item 1 applies to both programs. | **M-14** |
+| W-11 | New | `lc-testkit/tests/update_json.rs` or `wire` tests `the_wire_format_carries_the_genesis_validators_root_branch` | real and synthetic inputs | The genesis validators root branch survives an encode and decode round trip. A truncated genesis validators root branch, an over-long count and trailing bytes all give a decode error. `run_light_client_guest` still returns 352 bytes and `run_fork_observation_guest` 224 bytes. | The format change must not open a parse gap. | M-15 |
+| W-12 | Exists, stays green | `layout_real_accepts.rs:118` `real_data_keeps_the_public_values_byte_for_byte` | `golden_public_values.txt` | The hex equals the golden values. | The genesis validators root branch must never reach the output. | **M-16** |
 | W-13 | Exists, rerun | `light-client/scripts/test-program-keys.sh` | `light-client/program-keys.json` and `program-keys.source-hash` | The rebuilt keys equal the pinned keys. | Both keys change. The pins must move with the source. | M-17 |
-| W-14 | Exists, regenerate | `fork_observation.rs:469` `fork_observation_fixtures_are_current` | `fork-observation/*.json` | The files are byte-equal to the generator after the witness is added. | The Solidity tests read these. | M-15 |
+| W-14 | Exists, regenerate | `fork_observation.rs:469` `fork_observation_fixtures_are_current` | `fork-observation/*.json` | The files are byte-equal to the generator after the genesis validators root branch is added. | The Solidity tests read these. | M-15 |
 
 ## B.4 Execution anchors and the attested header (T7, T8, T9, gap 2)
 
@@ -483,7 +483,7 @@ Each test below runs through `verify_step` and also through the fold of the fork
 | L-4 | **New** | same file `a_compact_attested_header_of_a_length_that_names_no_anchor_is_refused` | lengths 0, 7, 10, 12 | `InvalidExecutionBranch("attested")`. | A skip must not grow to "any length that is not 8 or 9". | M-22 |
 | L-5 | Exists | `gloas.rs:223` `the_attested_execution_data_of_a_gloas_update_is_not_read` | `build_gloas_update` | A garbled 11-entry attested branch returns `Ok(baseline)`. A garbled finalized branch gives `InvalidExecutionBranch("finalized")`. | The skip must never reach the finalized header. | **M-23** |
 | L-6 | **New** | `gloas.rs` `the_attested_execution_data_never_reaches_the_output` | `build_gloas_update` with two different attested block hashes | The two outputs are byte-equal. | This is the assumption that makes the skip safe. | M-23 |
-| L-7 | **New** (gap 2) | `update_rejections.rs` `state_proofs_bind_the_attested_state_root_not_the_finalized_one` | `CraftedStateTree` as the finalized header's state, holding the next committee at 55 and field 1 at 33. The attested state lacks both. | `InvalidNextSyncCommitteeBranch` (and, under D1, `InvalidLayoutWitness` for the witness variant). The control (proofs in the attested state) returns `Ok`. | Today no test moves the root that state proofs bind. | **M-24** |
+| L-7 | **New** (gap 2) | `update_rejections.rs` `state_proofs_bind_the_attested_state_root_not_the_finalized_one` | `CraftedStateTree` as the finalized header's state, holding the next committee at 55 and field 1 at 33. The attested state lacks both. | `InvalidNextSyncCommitteeBranch` (and, under D1, `InvalidGenesisValidatorsRootBranch` for the genesis validators root branch variant). The control (proofs in the attested state) returns `Ok`. | Today no test moves the root that state proofs bind. | **M-24** |
 | L-8 | **New** | `update_rejections.rs` `a_changed_attested_state_root_breaks_the_state_proofs_first` | `build_update`, then replace `attested_header.beacon.state_root` | `InvalidFinalityBranch`. The signature would also fail, but the state check comes first. | It pins the order of checks and the root they use. | M-24 |
 
 ## B.5 The signing fork version (T10, T14, T16)
@@ -536,13 +536,13 @@ No prover test reads them yet.
 
 The two duplicate `debug_getRawHeader` implementations report a hash mismatch differently: `http.rs:269-287` gives `Error::Beacon` and `prover/src/chain.rs:251-265` gives `Error::Malformed`. Per Rule 7, pick one (I suggest `Beacon`, the newer path), share it, and flag the other for cleanup. P3-6 and P3-7 then assert the one variant.
 
-## B.8 Prover: the witness branch and stored branches (item 1, T23)
+## B.8 Prover: the genesis validators root branch and stored branches (item 1, T23)
 
 | ID | Status | Name | Fixture | Exact assertion | Why | Mutation |
 |---|---|---|---|---|---|---|
-| P1-1 | New | `the_prover_builds_the_witness_from_the_attested_state` | `sepolia/gloas_head_state.ssz` through `StateView` (`light_client.rs:632`), plus the PulseChain assembled update (`http.rs:1328`) | The witness equals `ParsedState::field_branch(1)` (`lc-core/src/ssz_state.rs:371`). The update verifies natively. | The prover and the program agree on the position. | M-6, M-10 |
-| P1-2 | New | `catch_up_uses_the_stored_witness_when_the_old_state_is_gone` | catch-up tests at `http.rs:1806-1955`, with a `Node` that answers 404 for old states | Catch-up succeeds from the stored branches. Without them it gives `Error::Beacon` naming the missing state. | It covers T23. | **M-38** |
-| P1-3 | New | `a_corrupt_stored_witness_is_refused_before_proving` | P1-2 with one flipped entry | `VerificationRefused(InvalidLayoutWitness)`. | The store is not trusted. | M-38 |
+| P1-1 | New | `the_prover_builds_the_genesis_validators_root_branch_from_the_attested_state` | `sepolia/gloas_head_state.ssz` through `StateView` (`light_client.rs:632`), plus the PulseChain assembled update (`http.rs:1328`) | The genesis validators root branch equals `ParsedState::field_branch(1)` (`lc-core/src/ssz_state.rs:371`). The update verifies natively. | The prover and the program agree on the position. | M-6, M-10 |
+| P1-2 | New | `catch_up_uses_the_stored_genesis_validators_root_branch_when_the_old_state_is_gone` | catch-up tests at `http.rs:1806-1955`, with a `Node` that answers 404 for old states | Catch-up succeeds from the stored branches. Without them it gives `Error::Beacon` naming the missing state. | It covers T23. | **M-38** |
+| P1-3 | New | `a_corrupt_stored_genesis_validators_root_branch_is_refused_before_proving` | P1-2 with one flipped entry | `VerificationRefused(InvalidGenesisValidatorsRootBranch)`. | The store is not trusted. | M-38 |
 
 ## B.9 Fixtures to add from the verification work
 
@@ -575,7 +575,7 @@ These are Foundry tests. "Name" marks a test that keys on a version name today.
 | G-9 | Exists, keep | `:456` `previousVersionProofNeitherConfirmsNorSeals` | `ForkProofInvalid` on both calls. Change the trailing seal to a depth 8 proof. | The `previous_version` leaf sits next to `current_version`. | M-43 |
 | G-10 | Exists, keep | `:649`, `:666`, `:693` seal age rules | The same `SealEvidenceTooOld` assertions, with depth 8 evidence instead of `UNKNOWN_FORK`. | Old evidence must not seal. | M-44 |
 | G-11 | Change | `:969` `forkTable_gateDepthsEqualTheLightClientProgramAllowedSet` | The gate's allowed shapes equal the program's set from `gindices.json` key `program`: {5, 6, Gloas}, plus 7 under D1. The seal shapes are exactly the depths above that set, up to 31. | It covers T21. | **M-45** |
-| G-12 | New (recommended) | `confirmRequiresTheGenesisRootWitnessAtTheClaimedShape` | Only if the gate adopts the witness. A 7-entry proof at 169 on a synthetic true depth 7 tree whose field 41 holds a version-like leaf gives the proposed `ShapeWitnessInvalid`. The control is a real Gloas proof plus witness 40. | It closes the field 41 residual of T20. | M-46 |
+| G-12 | New (recommended) | `confirmRequiresTheGenesisValidatorsRootAtTheClaimedShape` | Only if the gate adopts the genesis validators root branch. A 7-entry proof at 169 on a synthetic true depth 7 tree whose field 41 holds a version-like leaf gives the proposed `GenesisValidatorsRootBranchInvalid`. The control is a real Gloas proof plus genesis validators root 40. | It closes the field 41 residual of T20. | M-46 |
 | G-13 | Decide | `test/hardened/ForkRegistry.t.sol:415`, `:442`, `:459` registry gate | Assert whichever registry rule the D4 decision picks. | The registry has no shape (T20). | — |
 | G-14 | Change | `BeaconForkGate.t.sol:161`, `:107`, `test/hardened/DeployBridge.t.sol:213-228` | The configuration holds shapes, not names. The duplicate-name test becomes a duplicate-shape test. | The constructor follows the new model. | M-45 |
 | G-15 | Exists, rerun | `test/hardened/Immutability.t.sol:172` | Still only `admit`, `confirm` and `seal`, with no owner. | D4 must not add an admin. | M-47 |
@@ -604,17 +604,17 @@ Apply each mutation alone on a scratch branch. Run `cd light-client && cargo tes
 | M-3 | In `verify_step`, check the next committee at `plain_state_layout(next.branch.len())` instead of `layout`. | **S-7 and S-8 red.** S-9 stays green. That is expected, and it is why S-7 exists. |
 | M-4 | Swap `GLOAS_STATE_LAYOUT` finality 735 for 734. | S-6, S-12, `gloas_real.rs:160`, `layout_fork_version.rs:338` red. |
 | M-5 | Map length 9 to `plain_state_layout(8)` instead of Gloas. | S-1, S-12, all real Gloas tests red. |
-| M-6 (D1) | Witness position for Gloas set to 33 instead of 40. | W-1, W-2, W-3, P1-1 red. |
+| M-6 (D1) | Genesis validators root position for Gloas set to 33 instead of 40. | W-1, W-2, W-3, P1-1 red. |
 | M-7 | Check the finality branch against `finalized.beacon.state_root`. | S-12, L-8, every honest accept red. |
-| M-8 (D1) | Remove the witness check from `verify_step`. | W-4, W-6, W-7, W-8, W-9, S-10(a), S-11 red. |
-| M-9 (D1) | Take the witness leaf from the input instead of `ChainSpec`. | **W-5 red.** |
-| M-10 (D1) | Choose the witness position from the witness length (length 5 means 33). | W-1 (Gloas case), W-2, W-6 red. |
-| M-11 (D1) | Check the witness against `finalized.beacon.state_root`. | W-7 and honest accepts red. |
-| M-12 (D1) | Check the witness only when `next_sync_committee` is present. | **W-8 red**, and W-9 if one of its steps lacks a committee. |
-| M-13 (D1) | Accept the witness when the claimed layout is depth 7 without checking it. | S-10(a), S-11 red. |
-| M-14 (D1) | The observation fold skips the witness (a separate fold helper in `observation.rs`). | **W-10 red.** |
-| M-15 (D1) | The decoder reads the witness with no count limit, or does not refuse trailing witness bytes. | W-11 red, and W-14 if the fixtures change. |
-| M-16 (D1) | Put a witness-derived word into `LightClientOutput`. | W-12 red (golden bytes), plus the 352-byte length checks in `fold.rs` and `update_rejections.rs:407`. |
+| M-8 (D1) | Remove the genesis validators root branch check from `verify_step`. | W-4, W-6, W-7, W-8, W-9, S-10(a), S-11 red. |
+| M-9 (D1) | Take the genesis validators root leaf from the input instead of `ChainSpec`. | **W-5 red.** |
+| M-10 (D1) | Choose the genesis validators root position from the genesis validators root branch length (length 5 means 33). | W-1 (Gloas case), W-2, W-6 red. |
+| M-11 (D1) | Check the genesis validators root branch against `finalized.beacon.state_root`. | W-7 and honest accepts red. |
+| M-12 (D1) | Check the genesis validators root branch only when `next_sync_committee` is present. | **W-8 red**, and W-9 if one of its steps lacks a committee. |
+| M-13 (D1) | Accept the genesis validators root branch when the claimed layout is depth 7 without checking it. | S-10(a), S-11 red. |
+| M-14 (D1) | The observation fold skips the genesis validators root branch (a separate fold helper in `observation.rs`). | **W-10 red.** |
+| M-15 (D1) | The decoder reads the genesis validators root branch with no count limit, or does not refuse trailing genesis validators root branch bytes. | W-11 red, and W-14 if the fixtures change. |
+| M-16 (D1) | Put a genesis-validators-root-derived word into `LightClientOutput`. | W-12 red (golden bytes), plus the 352-byte length checks in `fold.rs` and `update_rejections.rs:407`. |
 | M-17 | Change the guest source without rebuilding the keys. | W-13 red. |
 | M-18 | Map compact length 10 to 812. | X-1, `layout.rs:874` red. |
 | M-19 | Remove the keccak check (`update.rs:148`). | **X-2, X-3, X-7**, `gloas.rs:142` red. |
@@ -622,7 +622,7 @@ Apply each mutation alone on a scratch branch. Run `cd light-client && cargo tes
 | M-21 | Delete the call `verify_attested_execution(attested)?`. | L-1 red. |
 | M-22 | Widen the skip to every compact attested header. | **L-2, L-3, L-4 red.** |
 | M-23 | Apply the state-anchored skip to the finalized header as well. | L-5, `gloas.rs:178` red. |
-| M-24 | Check the next committee (and the witness) against `finalized.beacon.state_root`. | **L-7 red.** |
+| M-24 | Check the next committee (and the genesis validators root branch) against `finalized.beacon.state_root`. | **L-7 red.** |
 | M-25 | `verify_step` ignores `fork_version` and calls `table_fork_version`. | V-3 red (the swapped version now verifies), and `update_rejections.rs:407`. |
 | M-26 | `table_fork_version` uses `signature_slot` instead of `signature_slot - 1`. | V-2, **V-4** red. |
 | M-27 | The prover joins the schedule and specification by epoch only, not by version. | P2-1, P2-7 red. |
@@ -644,12 +644,12 @@ Apply each mutation alone on a scratch branch. Run `cd light-client && cargo tes
 | M-43 | Verify the leaf at `(2^d + 3) * 4` (`previous_version`). | G-9 red. |
 | M-44 | Drop `SealEvidenceTooOld`. | G-10 red. |
 | M-45 | Allow a gate shape that the program refuses (for example 7 without D1). | **G-11** red. |
-| M-46 (D4 + witness) | The gate skips the shape witness. | G-12 red. |
+| M-46 (D4 + genesis validators root branch) | The gate skips the genesis validators root branch. | G-12 red. |
 | M-47 | Add any owner-only setter to the gate. | G-15 red. |
 
 ## Open points for the user
 
 1. **D1.** I recommend it. It is the only defense against wrong layouts that does not rest on "no specification defines that field". It also closes a residual the design table did not list: Gloas claims on a true depth 7 or 8 state land below undefined fields 55, 56, 111 and 112.
-2. **D4.** If adopted, decide what the registry mode on PulseChain does. It carries no shape. Also consider adding the `genesis_validators_root` witness to the gate, because a 7-entry proof at 169 lands on undefined field 41 of a true depth 7 state. Note that D4 gives up the version-name tripwire for forks that reorder fields at the same depth (T18).
+2. **D4.** If adopted, decide what the registry mode on PulseChain does. It carries no shape. Also consider adding the `genesis_validators_root` branch to the gate, because a 7-entry proof at 169 lands on undefined field 41 of a true depth 7 state. Note that D4 gives up the version-name tripwire for forks that reorder fields at the same depth (T18).
 3. The prover has two `debug_getRawHeader` paths with different error variants. Pick one before writing P3-6 and P3-7.
 4. Fixtures: one real plain depth 5 state as a committed fixture for W-2, and the `verify/data/` files for V-4 and the P3 tests.

@@ -7,7 +7,7 @@
 //!
 //! PulseChain has no EIP-4788, so the program also proves the SHAPE of the attested state. Two branches lead to the
 //! attested header's `state_root`: one for `fork.current_version` (leaf: the observed version, left-aligned in a 32 byte
-//! chunk) and one for `genesis_validators_root` (the layout witness, leaf: the chain's own root). The version branch length
+//! chunk) and one for `genesis_validators_root` (the genesis validators root branch, leaf: the chain's own root). The version branch length
 //! gives the candidate shapes ([`crate::layout::observed_shape_candidates`]). The first candidate for which both branches
 //! verify wins, and the output reports it as `shape` (5, 6, 7 or 255 for the progressive form).
 //!
@@ -51,9 +51,9 @@ pub struct Observation {
     /// The branch of `fork.current_version` to `attested_header.state_root`. Its leaf is `fork_version`, left-aligned in a
     /// 32 byte chunk. It has 7, 8 or 9 entries.
     pub current_version_branch: Vec<B256>,
-    /// The layout witness: the branch of `genesis_validators_root` to `attested_header.state_root`, at the witness position
+    /// the genesis validators root branch: the branch of `genesis_validators_root` to `attested_header.state_root`, at the genesis validators root position
     /// of the same shape. It has 5, 6, 7 or 5 entries.
-    pub layout_witness_branch: Vec<B256>,
+    pub genesis_validators_root_branch: Vec<B256>,
 }
 
 /// The leaf of the version branch: the four bytes of the version, then 28 zero bytes (an SSZ `Bytes4` chunk).
@@ -65,7 +65,7 @@ pub fn fork_version_leaf(fork_version: [u8; 4]) -> B256 {
 
 /// Proves the shape of the attested state and returns it (5, 6, 7 or 255).
 ///
-/// The version branch length picks the candidates. A candidate wins when both the version branch and the witness branch
+/// The version branch length picks the candidates. A candidate wins when both the version branch and the genesis validators root branch
 /// verify at its positions, under `attested_header.state_root`. The branches are exact, so each branch length must also
 /// match the candidate.
 ///
@@ -84,8 +84,8 @@ pub fn prove_observed_shape(observation: &Observation, spec: &ChainSpec) -> Resu
                 state_root,
             ) && is_valid_exact_branch(
                 &spec.genesis_validators_root,
-                &observation.layout_witness_branch,
-                candidate.witness_gindex,
+                &observation.genesis_validators_root_branch,
+                candidate.genesis_validators_root_gindex,
                 state_root,
             )
         })
@@ -213,7 +213,7 @@ mod tests {
         let (fork_root, fork_branch) = branch_for_leaf(&fork_leaves, 1);
         leaves[3] = fork_root;
         let (root, outer_version_branch) = state_branch(tree, &leaves, 3);
-        let (_, witness_branch) = state_branch(tree, &leaves, 1);
+        let (_, genesis_validators_root_branch) = state_branch(tree, &leaves, 1);
         Observation {
             attested_header: BeaconBlockHeader {
                 slot: 100,
@@ -226,11 +226,11 @@ mod tests {
             sync_aggregate: SyncAggregate { sync_committee_bits: [0; 64], sync_committee_signature: [0; 96] },
             fork_version: VERSION,
             current_version_branch: [fork_branch, outer_version_branch].concat(),
-            layout_witness_branch: witness_branch,
+            genesis_validators_root_branch: genesis_validators_root_branch,
         }
     }
 
-    /// Claim: the four shapes prove and report 5, 6, 7 and 255, with version branches of 7, 8, 9 and 7 entries and witness
+    /// Claim: the four shapes prove and report 5, 6, 7 and 255, with version branches of 7, 8, 9 and 7 entries and genesis validators root
     /// branches of 5, 6, 7 and 5 entries.
     /// Why it matters: the shape is a public value that the gate judges. A swapped number would pass a seal for a good shape.
     #[test]
@@ -241,10 +241,10 @@ mod tests {
             (Tree::Plain { fields: 70 }, SHAPE_PLAIN_DEPTH_SEVEN, 9, 7),
             (Tree::Progressive, SHAPE_PROGRESSIVE, 7, 5),
         ];
-        for (tree, shape, version_length, witness_length) in cases {
+        for (tree, shape, version_length, genesis_validators_root_length) in cases {
             let observation = honest_observation(tree, ETHEREUM_MAINNET.genesis_validators_root);
             assert_eq!(observation.current_version_branch.len(), version_length);
-            assert_eq!(observation.layout_witness_branch.len(), witness_length);
+            assert_eq!(observation.genesis_validators_root_branch.len(), genesis_validators_root_length);
             assert_eq!(prove_observed_shape(&observation, &ETHEREUM_MAINNET), Ok(shape));
         }
     }
@@ -270,34 +270,40 @@ mod tests {
         assert_eq!(prove_observed_shape(&progressive, &PULSECHAIN), Ok(SHAPE_PROGRESSIVE));
     }
 
-    /// Claim: both branches must verify under ONE candidate. The version branch of a progressive state with the witness of
+    /// Claim: both branches must verify under ONE candidate. The version branch of a progressive state with the genesis validators root branch of
     /// a plain depth 5 state (same lengths 7 and 5, other positions) gives `InvalidForkShapeProof`, and so does the reverse.
     /// Why it matters: if each branch picked its own shape, a prover could prove the version in one shape and the root in
     /// another.
     #[test]
-    fn the_version_and_the_witness_must_agree_on_one_shape() {
+    fn the_version_and_the_genesis_validators_root_must_agree_on_one_shape() {
         let root = ETHEREUM_MAINNET.genesis_validators_root;
         let plain = honest_observation(Tree::Plain { fields: 28 }, root);
         let progressive = honest_observation(Tree::Progressive, root);
-        let progressive_version_plain_witness = Observation {
+        let progressive_version_plain_genesis_validators_root = Observation {
             current_version_branch: progressive.current_version_branch.clone(),
-            layout_witness_branch: plain.layout_witness_branch.clone(),
+            genesis_validators_root_branch: plain.genesis_validators_root_branch.clone(),
             ..progressive.clone()
         };
-        assert_eq!(prove_observed_shape(&progressive_version_plain_witness, &ETHEREUM_MAINNET), Err(Error::InvalidForkShapeProof));
-        let plain_version_progressive_witness = Observation {
+        assert_eq!(
+            prove_observed_shape(&progressive_version_plain_genesis_validators_root, &ETHEREUM_MAINNET),
+            Err(Error::InvalidForkShapeProof)
+        );
+        let plain_version_progressive_genesis_validators_root = Observation {
             current_version_branch: plain.current_version_branch.clone(),
-            layout_witness_branch: progressive.layout_witness_branch.clone(),
+            genesis_validators_root_branch: progressive.genesis_validators_root_branch.clone(),
             ..plain.clone()
         };
-        assert_eq!(prove_observed_shape(&plain_version_progressive_witness, &ETHEREUM_MAINNET), Err(Error::InvalidForkShapeProof));
+        assert_eq!(
+            prove_observed_shape(&plain_version_progressive_genesis_validators_root, &ETHEREUM_MAINNET),
+            Err(Error::InvalidForkShapeProof)
+        );
     }
 
-    /// Claim: the witness leaf is the chain's own genesis validators root. A state built for another chain gives
+    /// Claim: the genesis validators root leaf is the chain's own genesis validators root. A state built for another chain gives
     /// `InvalidForkShapeProof`, and the control (the same state with the right root) proves.
-    /// Why it matters: the witness must tie the shape to the real state of this chain, not to any tree.
+    /// Why it matters: the genesis validators root branch must tie the shape to the real state of this chain, not to any tree.
     #[test]
-    fn the_witness_leaf_is_the_root_of_the_chain() {
+    fn the_genesis_validators_root_leaf_is_the_root_of_the_chain() {
         let foreign = honest_observation(Tree::Plain { fields: 37 }, B256::repeat_byte(0x77));
         assert_eq!(prove_observed_shape(&foreign, &ETHEREUM_MAINNET), Err(Error::InvalidForkShapeProof));
         let own = honest_observation(Tree::Plain { fields: 37 }, ETHEREUM_MAINNET.genesis_validators_root);
@@ -325,18 +331,25 @@ mod tests {
         for length in [0usize, 1, 6, 10, 11, 64] {
             let branch = honest.current_version_branch.iter().copied().cycle().take(length).collect();
             let observation = Observation { current_version_branch: branch, ..honest.clone() };
-            assert_eq!(prove_observed_shape(&observation, &ETHEREUM_MAINNET), Err(Error::InvalidForkShapeProof), "length {length}");
+            assert_eq!(
+                prove_observed_shape(&observation, &ETHEREUM_MAINNET),
+                Err(Error::InvalidForkShapeProof),
+                "length {length}"
+            );
         }
         let padded = [vec![B256::ZERO], honest.current_version_branch.clone()].concat();
         let padded_observation = Observation { current_version_branch: padded, ..honest.clone() };
         assert_eq!(prove_observed_shape(&padded_observation, &ETHEREUM_MAINNET), Err(Error::InvalidForkShapeProof));
         let cut = Observation { current_version_branch: honest.current_version_branch[1..].to_vec(), ..honest.clone() };
         assert_eq!(prove_observed_shape(&cut, &ETHEREUM_MAINNET), Err(Error::InvalidForkShapeProof));
-        let padded_witness = Observation {
-            layout_witness_branch: [vec![B256::ZERO], honest.layout_witness_branch.clone()].concat(),
+        let padded_genesis_validators_root_branch = Observation {
+            genesis_validators_root_branch: [vec![B256::ZERO], honest.genesis_validators_root_branch.clone()].concat(),
             ..honest.clone()
         };
-        assert_eq!(prove_observed_shape(&padded_witness, &ETHEREUM_MAINNET), Err(Error::InvalidForkShapeProof));
+        assert_eq!(
+            prove_observed_shape(&padded_genesis_validators_root_branch, &ETHEREUM_MAINNET),
+            Err(Error::InvalidForkShapeProof)
+        );
     }
 
     /// Claim: a plain state of depth 8 (129 fields) gives a version branch of 10 entries, which no shape has, so it is

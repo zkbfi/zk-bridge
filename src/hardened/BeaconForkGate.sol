@@ -9,7 +9,7 @@ import {ForkShape} from "./ForkShape.sol";
 
 /// @title BeaconForkGate
 /// @notice Refuses a deposit unless the chain's state has a shape that the route can read (hole HB-02, window 1).
-/// The rule is the same on both chains: accept any fork version whose state proof has an allowed shape, with the witness
+/// The rule is the same on both chains: accept any fork version whose state proof has an allowed shape, with the genesis validators root branch
 /// proving `genesis_validators_root` at that shape under the same state root. Seal only on a shape outside the allowed
 /// set. The shape judging lives in `ForkShape`, one library for the EIP-4788 path and for the registry path. The gate
 /// holds no list of fork version names.
@@ -73,14 +73,14 @@ contract BeaconForkGate is IDepositGate {
     /// @param header A beacon block header whose root the beacon roots contract returns for `timestamp`.
     /// @param version The claimed `Fork.current_version` of the state of that header. The gate does not judge its name.
     /// @param branch The branch from the version leaf to `header.stateRoot`, deepest first.
-    /// @param witnessBranch The branch from `genesis_validators_root` (field 1 of the state) to `header.stateRoot`,
-    /// deepest first. It pins the shape. A seal proof of a shape outside the allowed set needs no witness.
+    /// @param genesisValidatorsRootBranch The branch from `genesis_validators_root` (field 1 of the state) to `header.stateRoot`,
+    /// deepest first. It pins the shape. A seal proof of a shape outside the allowed set needs no genesis validators root branch.
     struct ForkEvidence {
         uint256 timestamp;
         BeaconBlockHeader header;
         bytes4 version;
         bytes32[] branch;
-        bytes32[] witnessBranch;
+        bytes32[] genesisValidatorsRootBranch;
     }
 
     /// @dev One storage slot: the gate reads it once for the cheapest deposit.
@@ -155,9 +155,9 @@ contract BeaconForkGate is IDepositGate {
     error ShapeNotAllowed(uint256 depth);
     /// @notice A seal needs a shape outside the allowed set, and the proof shows an allowed one.
     error ShapeIsAllowed(uint8 shape);
-    /// @notice The version branch is valid for an allowed shape, but the witness branch of `genesis_validators_root`
+    /// @notice The version branch is valid for an allowed shape, but the genesis validators root branch of `genesis_validators_root`
     /// is not valid at that shape under the same state root.
-    error ShapeWitnessInvalid();
+    error GenesisValidatorsRootBranchInvalid();
     /// @notice The branch of a seal proof implies a tree depth below `ForkShape.MIN_SEAL_DEPTH` or above
     /// `ForkShape.MAX_SEAL_DEPTH`.
     error SealDepthNotAllowed(uint256 depth);
@@ -198,7 +198,7 @@ contract BeaconForkGate is IDepositGate {
     /// @notice The one probe contract for the four opcode canaries (`TSTORE`, `MCOPY`, `BLOBBASEFEE`, `CLZ`). The
     /// first byte of the calldata picks the opcode.
     address public immutable opcodeProbe;
-    /// @notice The `genesis_validators_root` of the beacon chain that the route follows. The witness leaf must equal it.
+    /// @notice The `genesis_validators_root` of the beacon chain that the route follows. The genesis validators root leaf must equal it.
     bytes32 public immutable genesisValidatorsRoot;
     /// @notice The genesis time of the beacon chain of this chain, in seconds.
     uint64 public immutable genesisTime;
@@ -293,7 +293,7 @@ contract BeaconForkGate is IDepositGate {
     /// the beacon roots ring buffer still holds could seal the gate. In detection mode it first needs a working probe.
     /// Withdrawals are not affected.
     /// @param evidence An `abi.encode` of a `ForkEvidence`. The version branch length must imply a depth from
-    /// `ForkShape.MIN_SEAL_DEPTH` to `ForkShape.MAX_SEAL_DEPTH`. The witness branch is not read for a disallowed depth.
+    /// `ForkShape.MIN_SEAL_DEPTH` to `ForkShape.MAX_SEAL_DEPTH`. The genesis validators root branch is not read for a disallowed depth.
     /// In registry mode, empty evidence seals from the registry instead: it succeeds when the registry shows a shape
     /// outside the allowed set.
     function seal(bytes calldata evidence) external {
@@ -519,7 +519,7 @@ contract BeaconForkGate is IDepositGate {
     function _requireAllowedShapeProven(ForkEvidence memory proof) private view {
         (ForkShape.Verdict verdict,) = _judge(proof);
         if (verdict == ForkShape.Verdict.Allowed) return;
-        if (verdict == ForkShape.Verdict.WitnessProofInvalid) revert ShapeWitnessInvalid();
+        if (verdict == ForkShape.Verdict.GenesisValidatorsRootProofInvalid) revert GenesisValidatorsRootBranchInvalid();
         if (verdict == ForkShape.Verdict.VersionProofInvalid) revert ForkProofInvalid();
         revert ShapeNotAllowed(ForkShape.depthOfVersionBranch(proof.branch.length));
     }
@@ -530,7 +530,7 @@ contract BeaconForkGate is IDepositGate {
         if (depth < ForkShape.MIN_SEAL_DEPTH || depth > ForkShape.MAX_SEAL_DEPTH) revert SealDepthNotAllowed(depth);
         (ForkShape.Verdict verdict, uint8 shape) = _judge(proof);
         if (verdict == ForkShape.Verdict.Allowed) revert ShapeIsAllowed(shape);
-        if (verdict == ForkShape.Verdict.WitnessProofInvalid) revert ShapeWitnessInvalid();
+        if (verdict == ForkShape.Verdict.GenesisValidatorsRootProofInvalid) revert GenesisValidatorsRootBranchInvalid();
         if (verdict == ForkShape.Verdict.VersionProofInvalid) revert ForkProofInvalid();
         if (!ForkShape.provesPlainVersion(proof.header.stateRoot, proof.version, proof.branch, depth)) {
             revert ForkProofInvalid();
@@ -538,7 +538,7 @@ contract BeaconForkGate is IDepositGate {
     }
 
     function _judge(ForkEvidence memory proof) private view returns (ForkShape.Verdict, uint8) {
-        return ForkShape.judge(proof.header.stateRoot, proof.version, proof.branch, proof.witnessBranch, genesisValidatorsRoot);
+        return ForkShape.judge(proof.header.stateRoot, proof.version, proof.branch, proof.genesisValidatorsRootBranch, genesisValidatorsRoot);
     }
 
     /// @dev The header must be the block whose root the beacon roots contract holds for the timestamp.

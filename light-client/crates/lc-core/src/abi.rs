@@ -171,7 +171,10 @@ mod tests {
         assert_eq!(expected.len(), 256);
         assert_eq!(ForkObservation::abi_decode(&expected).expect("decode"), output);
         let plain = ForkObservation { shape: 6, ..output };
-        assert_eq!(plain.abi_encode()[7 * 32..], hex!("0000000000000000000000000000000000000000000000000000000000000006"));
+        assert_eq!(
+            plain.abi_encode()[7 * 32..],
+            hex!("0000000000000000000000000000000000000000000000000000000000000006")
+        );
     }
 
     /// Claim: decoding the encoded bytes gives back the same struct, so the layout is symmetric.

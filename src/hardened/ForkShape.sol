@@ -14,7 +14,7 @@ import {SSZ} from "./SSZ.sol";
 /// The evidence of one shape has two branches under the same state root:
 ///  - The version branch proves `fork.current_version`. In a plain tree of depth d the leaf sits at
 ///    `((2**d + 3) * 4) + 1` and the branch has d + 2 entries. In the progressive form it sits at 169 with 7 entries.
-///  - The witness branch proves `genesis_validators_root` (field 1) at its position for that shape: `2**d + 1` with d
+///  - The genesis validators root branch proves `genesis_validators_root` (field 1) at its position for that shape: `2**d + 1` with d
 ///    entries, or node 40 with 5 entries. The leaf is the value that the gate holds as an immutable.
 /// A version branch of 7 entries fits both plain depth 5 and the progressive form. `judge` tries each and takes the
 /// first for which both branches verify.
@@ -34,15 +34,15 @@ library ForkShape {
     /// @dev The generalized index of `fork.current_version` in the progressive state: node 42 times 4, plus 1.
     uint256 private constant PROGRESSIVE_VERSION_GINDEX = 169;
     /// @dev The generalized index of `genesis_validators_root` (chunk 1) in the progressive state.
-    uint256 private constant PROGRESSIVE_WITNESS_GINDEX = 40;
+    uint256 private constant PROGRESSIVE_GENESIS_VALIDATORS_ROOT_GINDEX = 40;
     /// @dev Branch length of the version leaf in the progressive state: 5 state levels and the `Fork` container.
     uint256 private constant PROGRESSIVE_VERSION_LENGTH = 7;
-    /// @dev Branch length of the witness leaf in the progressive state.
-    uint256 private constant PROGRESSIVE_WITNESS_LENGTH = 5;
+    /// @dev Branch length of the genesis validators root leaf in the progressive state.
+    uint256 private constant PROGRESSIVE_GENESIS_VALIDATORS_ROOT_LENGTH = 5;
     /// @dev The position of `fork` among the `BeaconState` fields.
     uint256 private constant FORK_FIELD_INDEX = 3;
     /// @dev The position of `genesis_validators_root` among the `BeaconState` fields.
-    uint256 private constant WITNESS_FIELD_INDEX = 1;
+    uint256 private constant GENESIS_VALIDATORS_ROOT_FIELD_INDEX = 1;
 
     /// @notice The result of judging evidence.
     enum Verdict {
@@ -50,8 +50,8 @@ library ForkShape {
         Allowed,
         /// @dev No candidate shape has a valid version branch.
         VersionProofInvalid,
-        /// @dev The version branch is valid for a candidate shape, but its witness branch is not.
-        WitnessProofInvalid,
+        /// @dev The version branch is valid for a candidate shape, but its genesis validators root branch is not.
+        GenesisValidatorsRootProofInvalid,
         /// @dev The version branch length fits no allowed shape.
         ShapeNotAllowed
     }
@@ -87,9 +87,9 @@ library ForkShape {
     }
 
     /// @notice The generalized index of `genesis_validators_root` for an allowed shape.
-    function witnessGindex(uint8 shape) internal pure returns (uint256) {
-        if (shape == PROGRESSIVE) return PROGRESSIVE_WITNESS_GINDEX;
-        return (uint256(1) << shape) + WITNESS_FIELD_INDEX;
+    function genesisValidatorsRootGindex(uint8 shape) internal pure returns (uint256) {
+        if (shape == PROGRESSIVE) return PROGRESSIVE_GENESIS_VALIDATORS_ROOT_GINDEX;
+        return (uint256(1) << shape) + GENESIS_VALIDATORS_ROOT_FIELD_INDEX;
     }
 
     /// @notice The number of entries in the version branch of an allowed shape.
@@ -98,9 +98,9 @@ library ForkShape {
         return uint256(shape) + FORK_DEPTH;
     }
 
-    /// @notice The number of entries in the witness branch of an allowed shape.
-    function witnessBranchLength(uint8 shape) internal pure returns (uint256) {
-        if (shape == PROGRESSIVE) return PROGRESSIVE_WITNESS_LENGTH;
+    /// @notice The number of entries in the genesis validators root branch of an allowed shape.
+    function genesisValidatorsRootBranchLength(uint8 shape) internal pure returns (uint256) {
+        if (shape == PROGRESSIVE) return PROGRESSIVE_GENESIS_VALIDATORS_ROOT_LENGTH;
         return shape;
     }
 
@@ -114,15 +114,15 @@ library ForkShape {
     /// @param stateRoot The state root of the header that the beacon roots contract vouches for.
     /// @param version The claimed `fork.current_version`.
     /// @param versionBranch The branch of the version leaf, deepest first.
-    /// @param witnessBranch The branch of `genesis_validators_root`, deepest first.
-    /// @param genesisValidatorsRoot The value that the witness leaf must hold.
+    /// @param genesisValidatorsRootBranch The branch of `genesis_validators_root`, deepest first.
+    /// @param genesisValidatorsRoot The value that the genesis validators root leaf must hold.
     /// @return verdict The result.
     /// @return shape The shape that was proven. Zero unless the verdict is `Allowed`.
     function judge(
         bytes32 stateRoot,
         bytes4 version,
         bytes32[] memory versionBranch,
-        bytes32[] memory witnessBranch,
+        bytes32[] memory genesisValidatorsRootBranch,
         bytes32 genesisValidatorsRoot
     ) internal pure returns (Verdict verdict, uint8 shape) {
         uint8[] memory shapes = allowedShapes();
@@ -134,10 +134,10 @@ library ForkShape {
             anyCandidate = true;
             if (!SSZ.isValidBranchMemory(bytes32(version), versionBranch, versionGindex(candidate), stateRoot)) continue;
             versionProven = true;
-            if (_witnessHolds(candidate, witnessBranch, genesisValidatorsRoot, stateRoot)) return (Verdict.Allowed, candidate);
+            if (_genesisValidatorsRootHolds(candidate, genesisValidatorsRootBranch, genesisValidatorsRoot, stateRoot)) return (Verdict.Allowed, candidate);
         }
         if (!anyCandidate) return (Verdict.ShapeNotAllowed, 0);
-        if (versionProven) return (Verdict.WitnessProofInvalid, 0);
+        if (versionProven) return (Verdict.GenesisValidatorsRootProofInvalid, 0);
         return (Verdict.VersionProofInvalid, 0);
     }
 
@@ -155,13 +155,13 @@ library ForkShape {
         return SSZ.isValidBranchMemory(bytes32(version), versionBranch, plainVersionGindex(depth), stateRoot);
     }
 
-    /// @dev Whether the witness branch has the length of the shape and proves the genesis validators root.
-    function _witnessHolds(uint8 shape, bytes32[] memory witnessBranch, bytes32 genesisValidatorsRoot, bytes32 stateRoot)
+    /// @dev Whether the genesis validators root branch has the length of the shape and proves the genesis validators root.
+    function _genesisValidatorsRootHolds(uint8 shape, bytes32[] memory genesisValidatorsRootBranch, bytes32 genesisValidatorsRoot, bytes32 stateRoot)
         private
         pure
         returns (bool)
     {
-        if (witnessBranch.length != witnessBranchLength(shape)) return false;
-        return SSZ.isValidBranchMemory(genesisValidatorsRoot, witnessBranch, witnessGindex(shape), stateRoot);
+        if (genesisValidatorsRootBranch.length != genesisValidatorsRootBranchLength(shape)) return false;
+        return SSZ.isValidBranchMemory(genesisValidatorsRoot, genesisValidatorsRootBranch, genesisValidatorsRootGindex(shape), stateRoot);
     }
 }

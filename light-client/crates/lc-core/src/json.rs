@@ -125,8 +125,8 @@ pub fn light_client_update(data: &Value) -> LightClientUpdate {
         finality_branch: branch(&data["finality_branch"]),
         sync_aggregate: sync_aggregate(&data["sync_aggregate"]),
         signature_slot: decimal_u64(&data["signature_slot"]),
-        // A beacon node does not serve the layout witness. The prover sets it (`with_layout_witness_branch`).
-        layout_witness_branch: Vec::new(),
+        // A beacon node does not serve the genesis validators root branch. The prover sets it (`with_genesis_validators_root_branch`).
+        genesis_validators_root_branch: Vec::new(),
     }
 }
 

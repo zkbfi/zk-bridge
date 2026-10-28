@@ -25,11 +25,11 @@
 //! header (full or compact), the payload field list (the blob flag of a full header: `1` names the 17 field Deneb list, `0`
 //! the 15 field Capella list) and the fork version of each step. The branch lengths name the state layout and the
 //! compact anchor. Nothing the prover names is trusted without the checks of `update`: a wrong form, flag, length or
-//! version gives a branch or signature failure. The layout witness of each step (`LightClientUpdate::layout_witness_branch`)
+//! version gives a branch or signature failure. the genesis validators root branch of each step (`LightClientUpdate::genesis_validators_root_branch`)
 //! sits after the fork version of the step and is limited to 7 entries.
 //!
 //! Layout of the guest input: chain selector (1 byte), the store, then a list of 1 to 64 steps. Each step is a fork
-//! version (4 bytes), the layout witness branch of the step (a count of at most 7, then the nodes) and one update. A fold applies the steps in order (`update::verify_fold`).
+//! version (4 bytes), the genesis validators root branch branch of the step (a count of at most 7, then the nodes) and one update. A fold applies the steps in order (`update::verify_fold`).
 //! The decoder refuses a count above 64. A count of 0 decodes, and the fold then refuses it.
 
 use crate::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN, PULSECHAIN_TESTNET_V4, SEPOLIA};
@@ -110,8 +110,8 @@ const HEADER_FORM_FULL: u8 = 0;
 /// Form byte of a compact header (Gloas).
 const HEADER_FORM_COMPACT: u8 = 1;
 
-/// The most entries of a layout witness branch: the deepest layout is plain depth 7.
-const MAX_LAYOUT_WITNESS_BRANCH: usize = 7;
+/// The most entries of a genesis validators root branch: the deepest layout is plain depth 7.
+const MAX_GENESIS_VALIDATORS_ROOT_BRANCH: usize = 7;
 
 /// The most entries of a fork version branch of an observation: plain depth 7 plus the two levels of `Fork`.
 const MAX_CURRENT_VERSION_BRANCH: usize = 9;
@@ -242,7 +242,7 @@ impl Writer {
         self.u32(steps.len());
         for step in steps {
             self.fixed(&step.fork_version);
-            self.branch(&step.update.layout_witness_branch);
+            self.branch(&step.update.genesis_validators_root_branch);
             self.update(&step.update);
         }
     }
@@ -380,8 +380,8 @@ impl<'a> Reader<'a> {
             _ => Err(wire_error("unknown header form")),
         }
     }
-    /// An update whose layout witness is the one the caller already read (it precedes the update on the wire).
-    fn update(&mut self, layout_witness_branch: Vec<B256>) -> Result<LightClientUpdate> {
+    /// An update whose genesis validators root branch is the one the caller already read (it precedes the update on the wire).
+    fn update(&mut self, genesis_validators_root_branch: Vec<B256>) -> Result<LightClientUpdate> {
         let attested_header = self.header()?;
         let next_sync_committee = if self.flag()? {
             Some(NextSyncCommittee { committee: self.committee()?, branch: self.branch()? })
@@ -399,7 +399,7 @@ impl<'a> Reader<'a> {
             finality_branch,
             sync_aggregate,
             signature_slot,
-            layout_witness_branch,
+            genesis_validators_root_branch,
         })
     }
     fn aggregate(&mut self) -> Result<SyncAggregate> {
@@ -424,8 +424,8 @@ impl<'a> Reader<'a> {
         (0..count)
             .map(|_| {
                 let fork_version: [u8; 4] = self.take(4)?.try_into().expect("4 bytes");
-                let layout_witness_branch = self.branch_up_to(MAX_LAYOUT_WITNESS_BRANCH)?;
-                Ok(FoldStep { update: self.update(layout_witness_branch)?, fork_version })
+                let genesis_validators_root_branch = self.branch_up_to(MAX_GENESIS_VALIDATORS_ROOT_BRANCH)?;
+                Ok(FoldStep { update: self.update(genesis_validators_root_branch)?, fork_version })
             })
             .collect()
     }
@@ -478,7 +478,7 @@ pub struct ObservationGuestInput {
 /// Encodes the fork-observation guest input: chain selector, store, a list of 0 to 64 steps (the same encoding as
 /// the light-client guest), then the observation: attested beacon header (112 bytes: slot, proposer index, parent, state and body roots), signature slot (`u64`),
 /// participation bits (64 bytes), signature (96 bytes), fork version (4 bytes), the fork version branch (a count of at most 9,
-/// then the nodes) and the layout witness branch (a count of at most 7, then the nodes).
+/// then the nodes) and the genesis validators root branch branch (a count of at most 7, then the nodes).
 pub fn encode_observation_input(input: &ObservationGuestInput) -> Vec<u8> {
     let mut writer = Writer(Vec::new(), uses_compact_headers(&input.steps));
     writer.chain(input.chain);
@@ -489,7 +489,7 @@ pub fn encode_observation_input(input: &ObservationGuestInput) -> Vec<u8> {
     writer.aggregate(&input.observation.sync_aggregate);
     writer.fixed(&input.observation.fork_version);
     writer.branch(&input.observation.current_version_branch);
-    writer.branch(&input.observation.layout_witness_branch);
+    writer.branch(&input.observation.genesis_validators_root_branch);
     writer.0
 }
 
@@ -507,7 +507,7 @@ pub fn decode_observation_input(bytes: &[u8]) -> Result<ObservationGuestInput> {
     let sync_aggregate = reader.aggregate()?;
     let fork_version: [u8; 4] = reader.take(4)?.try_into().expect("4 bytes");
     let current_version_branch = reader.branch_up_to(MAX_CURRENT_VERSION_BRANCH)?;
-    let layout_witness_branch = reader.branch_up_to(MAX_LAYOUT_WITNESS_BRANCH)?;
+    let genesis_validators_root_branch = reader.branch_up_to(MAX_GENESIS_VALIDATORS_ROOT_BRANCH)?;
     reader.finish()?;
     let observation = Observation {
         attested_header,
@@ -515,7 +515,7 @@ pub fn decode_observation_input(bytes: &[u8]) -> Result<ObservationGuestInput> {
         sync_aggregate,
         fork_version,
         current_version_branch,
-        layout_witness_branch,
+        genesis_validators_root_branch,
     };
     Ok(ObservationGuestInput { chain, store, steps, observation })
 }

@@ -92,7 +92,7 @@ contract DeployBridge is Script {
 
     /// @notice The settings of the deposit gate on a chain. They describe the beacon chain of THIS chain. The gate holds
     /// no list of fork versions: it judges the shape of the state with `ForkShape`, the same rule on every chain.
-    /// `genesisValidatorsRoot` is the witness leaf of the gate. The script checks it against the light client of the
+    /// `genesisValidatorsRoot` is the genesis validators root leaf of the gate. The script checks it against the light client of the
     /// other chain, which tracks this beacon chain, and against the own-chain light client of a registry gate.
     struct GateConfig {
         BeaconForkGate.GateMode mode;

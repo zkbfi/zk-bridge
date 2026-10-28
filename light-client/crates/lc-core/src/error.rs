@@ -42,11 +42,11 @@ pub enum Error {
     InvalidFinalityBranch,
     /// The next sync committee branch does not lead to the attested state root.
     InvalidNextSyncCommitteeBranch,
-    /// The layout witness does not prove `genesis_validators_root` at the position that the finality branch length names,
+    /// the genesis validators root branch does not prove `genesis_validators_root` at the position that the finality branch length names,
     /// under the attested state root. The claimed layout is not the layout of the state.
-    InvalidLayoutWitness,
+    InvalidGenesisValidatorsRootBranch,
     /// The fork observation proved no allowed state shape: the version branch has a length that no shape has, or no shape
-    /// candidate has both a valid version branch and a valid layout witness under the attested state root.
+    /// candidate has both a valid version branch and a valid genesis validators root branch under the attested state root.
     InvalidForkShapeProof,
     /// The current sync committee branch does not lead to the state root of the bootstrap header.
     InvalidCurrentSyncCommitteeBranch,
@@ -233,8 +233,8 @@ impl fmt::Display for Error {
             Self::InvalidNextSyncCommitteeBranch => {
                 write!(formatter, "next sync committee branch does not match the attested state root")
             }
-            Self::InvalidLayoutWitness => {
-                write!(formatter, "layout witness does not prove the genesis validators root in the attested state")
+            Self::InvalidGenesisValidatorsRootBranch => {
+                write!(formatter, "genesis validators root branch does not prove the genesis validators root in the attested state")
             }
             Self::InvalidForkShapeProof => {
                 write!(formatter, "no allowed state shape proves the observed fork version and the genesis validators root")

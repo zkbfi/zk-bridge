@@ -29,13 +29,13 @@ pub struct StateLayout {
     pub block_roots_gindex: u64,
     /// `get_generalized_index(BeaconState, "historical_summaries")`. Field 27 in Capella through Fulu.
     pub historical_summaries_gindex: u64,
-    /// `get_generalized_index(BeaconState, "genesis_validators_root")`: the layout witness. Field 1 in every layout.
+    /// `get_generalized_index(BeaconState, "genesis_validators_root")`: the genesis validators root branch. Field 1 in every layout.
     ///
     /// A plain state of depth `d` puts it at `2^d + 1` (33, 65, 129 for `d` = 5, 6, 7). The Gloas progressive state puts
     /// it at node 40. The program checks a branch of this field against the attested state root, with the chain's own
     /// `genesis_validators_root` as the leaf. A state of another shape cannot match, because a node at this position is
     /// then a different field, padding, or a hash that is not that root (see `docs/hardened-build-contract.md`).
-    pub witness_gindex: u64,
+    pub genesis_validators_root_gindex: u64,
 }
 
 /// `SLOTS_PER_HISTORICAL_ROOT`: the length of `BeaconState.block_roots`.
@@ -95,7 +95,7 @@ pub const fn plain_state_layout(depth: u32) -> StateLayout {
         next_sync_committee_gindex: first_field + STATE_FIELD_NEXT_SYNC_COMMITTEE,
         block_roots_gindex: first_field + BLOCK_ROOTS_FIELD_INDEX,
         historical_summaries_gindex: first_field + HISTORICAL_SUMMARIES_FIELD_INDEX,
-        witness_gindex: first_field + STATE_FIELD_GENESIS_VALIDATORS_ROOT,
+        genesis_validators_root_gindex: first_field + STATE_FIELD_GENESIS_VALIDATORS_ROOT,
     }
 }
 
@@ -401,7 +401,7 @@ pub const HISTORICAL_SUMMARIES_GINDEX_GLOAS: u64 = 2950;
 /// `get_generalized_index(BeaconState, "genesis_validators_root")` in Gloas = 40. Derived from the field list, not copied:
 /// chunk 1 is the first leaf of the 4 leaf subtree at node 20 (leaves 40 to 43), so the node is 40 and the branch has 5
 /// entries (two inside the subtree, then the rest nodes up to the progressive root and `active_fields`).
-pub const WITNESS_GINDEX_GLOAS: u64 = 40;
+pub const GENESIS_VALIDATORS_ROOT_GINDEX_GLOAS: u64 = 40;
 
 /// `get_generalized_index(BeaconState, "fork", "current_version")` in Gloas = 169. `fork` is chunk 3, the second leaf of the
 /// 4 leaf subtree at node 10 under the rest node 5: node 42. `Fork` has three fields, so it is a plain container of depth 2,
@@ -442,7 +442,7 @@ pub const GLOAS_STATE_LAYOUT: StateLayout = StateLayout {
     next_sync_committee_gindex: NEXT_SYNC_COMMITTEE_GINDEX_GLOAS,
     block_roots_gindex: BLOCK_ROOTS_GINDEX_GLOAS,
     historical_summaries_gindex: HISTORICAL_SUMMARIES_GINDEX_GLOAS,
-    witness_gindex: WITNESS_GINDEX_GLOAS,
+    genesis_validators_root_gindex: GENESIS_VALIDATORS_ROOT_GINDEX_GLOAS,
 };
 
 /// Whether `gindex` is the position of `block_roots` in the Gloas `BeaconState` (352). A progressive container fixes the
@@ -489,11 +489,11 @@ pub struct CompactAnchor {
 /// state of depth 5 (indices 105, 54, 55), length 7 a plain state of depth 6 (169, 86, 87), length 8 a plain state of
 /// depth 7 (297, 150, 151), length 9 the Gloas progressive state (735, 2945, 2946). Every other length is refused.
 ///
-/// Depth 7 is allowed because the layout witness ([`StateLayout::witness_gindex`]) proves the claimed shape: on a chain
-/// that is truly of another depth, the witness lands on a node that cannot hold the genesis validators root.
+/// Depth 7 is allowed because the genesis validators root branch ([`StateLayout::genesis_validators_root_gindex`]) proves the claimed shape: on a chain
+/// that is truly of another depth, the genesis validators root branch lands on a node that cannot hold the genesis validators root.
 pub const ALLOWED_FINALITY_BRANCH_LENGTHS: [usize; 4] = [6, 7, 8, 9];
 
-/// The layout of a plain `BeaconState` of depth 7 (more than 64 fields): finality 297, committees 150 and 151, witness 129.
+/// The layout of a plain `BeaconState` of depth 7 (more than 64 fields): finality 297, committees 150 and 151, genesis validators root 129.
 pub const DEPTH_SEVEN_STATE_LAYOUT: StateLayout = plain_state_layout(7);
 
 /// The state layout that a finality branch of `length` entries names.
@@ -529,15 +529,15 @@ pub struct ObservedShape {
     pub shape: u8,
     /// Where `fork.current_version` sits: 141, 269, 525 for plain depths 5, 6, 7 and 169 for the progressive form.
     pub current_version_gindex: u64,
-    /// Where `genesis_validators_root` sits: 33, 65, 129 and 40 (the layout witness).
-    pub witness_gindex: u64,
+    /// Where `genesis_validators_root` sits: 33, 65, 129 and 40 (the genesis validators root branch).
+    pub genesis_validators_root_gindex: u64,
 }
 
 const fn plain_observed_shape(depth: u32) -> ObservedShape {
     ObservedShape {
         shape: depth as u8,
         current_version_gindex: plain_current_version_gindex(depth),
-        witness_gindex: plain_state_layout(depth).witness_gindex,
+        genesis_validators_root_gindex: plain_state_layout(depth).genesis_validators_root_gindex,
     }
 }
 
@@ -550,18 +550,18 @@ pub const OBSERVED_SHAPE_PLAIN_DEPTH_SIX: ObservedShape = plain_observed_shape(6
 /// The plain depth 7 shape.
 pub const OBSERVED_SHAPE_PLAIN_DEPTH_SEVEN: ObservedShape = plain_observed_shape(7);
 
-/// The Gloas progressive shape: `fork.current_version` at 169 and the witness at 40.
+/// The Gloas progressive shape: `fork.current_version` at 169 and the genesis validators root branch at 40.
 pub const OBSERVED_SHAPE_PROGRESSIVE: ObservedShape = ObservedShape {
     shape: SHAPE_PROGRESSIVE,
     current_version_gindex: FORK_VERSION_GINDEX_GLOAS,
-    witness_gindex: WITNESS_GINDEX_GLOAS,
+    genesis_validators_root_gindex: GENESIS_VALIDATORS_ROOT_GINDEX_GLOAS,
 };
 
 /// The shapes that a version branch of `length` entries may claim, in the order the program tries them.
 ///
 /// The version branch has `depth + 2` entries in a plain state, so length 7 is plain depth 5 or the progressive form
 /// (both reach depth 7), length 8 is plain depth 6 and length 9 is plain depth 7. The program takes the first candidate
-/// for which BOTH the version branch and the witness branch verify. Any other length has no candidate.
+/// for which BOTH the version branch and the genesis validators root branch verify. Any other length has no candidate.
 pub fn observed_shape_candidates(length: usize) -> &'static [ObservedShape] {
     match length {
         7 => &[OBSERVED_SHAPE_PLAIN_DEPTH_FIVE, OBSERVED_SHAPE_PROGRESSIVE],
@@ -949,7 +949,7 @@ mod tests {
     /// Claim: the finality branch length names the layout: 6, 7, 8 and 9 give plain depth 5, plain depth 6, plain depth 7
     /// and the Gloas layout, and every other length from 0 to 12 is refused.
     /// Why it is safe: each allowed length is the depth of the finality index of exactly one layout, so no length names two.
-    /// Length 8 is allowed only because the layout witness proves the shape of the state.
+    /// Length 8 is allowed only because the genesis validators root branch proves the shape of the state.
     #[test]
     fn the_finality_branch_length_names_the_layout() {
         assert_eq!(state_layout_for_finality_branch_length(6), Ok(CAPELLA_DENEB_STATE_LAYOUT));
@@ -976,42 +976,56 @@ mod tests {
         }
     }
 
-    /// Claim: the witness position is field 1 of the state: 33, 65 and 129 for plain depths 5, 6 and 7 (written here as
+    /// Claim: the genesis validators root position is field 1 of the state: 33, 65 and 129 for plain depths 5, 6 and 7 (written here as
     /// literals), and node 40 for Gloas, which DERIVES from the field list. The branch lengths are 5, 6, 7 and 5.
-    /// Why it matters: the witness is the only evidence that ties a claimed layout to the real tree. A wrong position
+    /// Why it matters: the genesis validators root branch is the only evidence that ties a claimed layout to the real tree. A wrong position
     /// would make the honest branch fail, or accept a branch of another field.
     #[test]
-    fn the_witness_position_is_field_one_of_each_layout() {
-        assert_eq!(CAPELLA_DENEB_STATE_LAYOUT.witness_gindex, 33);
-        assert_eq!(ELECTRA_STATE_LAYOUT.witness_gindex, 65);
-        assert_eq!(DEPTH_SEVEN_STATE_LAYOUT.witness_gindex, 129);
-        assert_eq!(GLOAS_STATE_LAYOUT.witness_gindex, 40);
+    fn the_genesis_validators_root_position_is_field_one_of_each_layout() {
+        assert_eq!(CAPELLA_DENEB_STATE_LAYOUT.genesis_validators_root_gindex, 33);
+        assert_eq!(ELECTRA_STATE_LAYOUT.genesis_validators_root_gindex, 65);
+        assert_eq!(DEPTH_SEVEN_STATE_LAYOUT.genesis_validators_root_gindex, 129);
+        assert_eq!(GLOAS_STATE_LAYOUT.genesis_validators_root_gindex, 40);
         assert_eq!(BEACON_STATE_GLOAS.field_position("genesis_validators_root"), Some(1));
-        assert_eq!(path_gindex(&[(&BEACON_STATE_GLOAS, "genesis_validators_root")]), Some(WITNESS_GINDEX_GLOAS));
-        for (finality_length, witness_length) in [(6usize, 5u32), (7, 6), (8, 7), (9, 5)] {
+        assert_eq!(
+            path_gindex(&[(&BEACON_STATE_GLOAS, "genesis_validators_root")]),
+            Some(GENESIS_VALIDATORS_ROOT_GINDEX_GLOAS)
+        );
+        for (finality_length, genesis_validators_root_length) in [(6usize, 5u32), (7, 6), (8, 7), (9, 5)] {
             let layout = state_layout_for_finality_branch_length(finality_length).unwrap();
-            assert_eq!(gindex_depth(layout.witness_gindex), witness_length, "finality length {finality_length}");
+            assert_eq!(
+                gindex_depth(layout.genesis_validators_root_gindex),
+                genesis_validators_root_length,
+                "finality length {finality_length}"
+            );
         }
     }
 
-    /// Claim: no two allowed layouts share a witness position, and the witness position of each layout differs from every
+    /// Claim: no two allowed layouts share a genesis validators root position, and the genesis validators root position of each layout differs from every
     /// finality and committee position of every layout.
-    /// Why it matters: plain depth 5 and Gloas share the witness length 5. Only the position, chosen by the finality
+    /// Why it matters: plain depth 5 and Gloas share the genesis validators root branch length 5. Only the position, chosen by the finality
     /// length, tells them apart.
     #[test]
-    fn witness_positions_are_distinct() {
-        let layouts: Vec<StateLayout> =
-            ALLOWED_FINALITY_BRANCH_LENGTHS.iter().map(|length| state_layout_for_finality_branch_length(*length).unwrap()).collect();
-        let witnesses: Vec<u64> = layouts.iter().map(|layout| layout.witness_gindex).collect();
-        for (index, witness) in witnesses.iter().enumerate() {
-            assert!(!witnesses[index + 1..].contains(witness), "{witness} repeats");
+    fn genesis_validators_root_positions_are_distinct() {
+        let layouts: Vec<StateLayout> = ALLOWED_FINALITY_BRANCH_LENGTHS
+            .iter()
+            .map(|length| state_layout_for_finality_branch_length(*length).unwrap())
+            .collect();
+        let genesis_validators_root_positions: Vec<u64> =
+            layouts.iter().map(|layout| layout.genesis_validators_root_gindex).collect();
+        for (index, position) in genesis_validators_root_positions.iter().enumerate() {
+            assert!(!genesis_validators_root_positions[index + 1..].contains(position), "{position} repeats");
             for layout in &layouts {
-                assert_ne!(*witness, layout.finalized_root_gindex);
-                assert_ne!(*witness, layout.current_sync_committee_gindex);
-                assert_ne!(*witness, layout.next_sync_committee_gindex);
+                assert_ne!(*position, layout.finalized_root_gindex);
+                assert_ne!(*position, layout.current_sync_committee_gindex);
+                assert_ne!(*position, layout.next_sync_committee_gindex);
             }
         }
-        assert_eq!(gindex_depth(witnesses[0]), gindex_depth(witnesses[3]), "plain 5 and Gloas share a witness length");
+        assert_eq!(
+            gindex_depth(genesis_validators_root_positions[0]),
+            gindex_depth(genesis_validators_root_positions[3]),
+            "plain 5 and Gloas share a genesis validators root branch length"
+        );
     }
 
     /// Claim: a compact branch of 8, 9 or 11 entries names index 412, 812 or 2947, under the body root for the first two and
@@ -1067,9 +1081,9 @@ mod tests {
 
     /// Claim: a version branch of 7 entries has two candidates, tried in this order: plain depth 5, then progressive. A
     /// branch of 8 entries has plain depth 6 only, and 9 entries plain depth 7 only. Every other length has none.
-    /// The shape values are 5, 6, 7 and 255, and the witness position of each candidate is 33, 65, 129 and 40.
+    /// The shape values are 5, 6, 7 and 255, and the genesis validators root position of each candidate is 33, 65, 129 and 40.
     /// Why it matters: length 7 is ambiguous (plain depth 5 and Gloas both reach depth 7), so the program must try both
-    /// and accept the first for which the version AND the witness verify.
+    /// and accept the first for which the version AND the genesis validators root branch verify.
     #[test]
     fn the_version_branch_length_names_the_shape_candidates() {
         assert_eq!(observed_shape_candidates(7), &[OBSERVED_SHAPE_PLAIN_DEPTH_FIVE, OBSERVED_SHAPE_PROGRESSIVE]);
@@ -1078,11 +1092,16 @@ mod tests {
         for length in (0..=16).chain([64, usize::MAX]).filter(|length| ![7, 8, 9].contains(length)) {
             assert!(observed_shape_candidates(length).is_empty(), "length {length}");
         }
-        assert_eq!((SHAPE_PLAIN_DEPTH_FIVE, SHAPE_PLAIN_DEPTH_SIX, SHAPE_PLAIN_DEPTH_SEVEN, SHAPE_PROGRESSIVE), (5, 6, 7, 255));
+        assert_eq!(
+            (SHAPE_PLAIN_DEPTH_FIVE, SHAPE_PLAIN_DEPTH_SIX, SHAPE_PLAIN_DEPTH_SEVEN, SHAPE_PROGRESSIVE),
+            (5, 6, 7, 255)
+        );
         let rows: Vec<(u8, u64, u64)> = [7usize, 8, 9]
             .iter()
             .flat_map(|length| observed_shape_candidates(*length))
-            .map(|candidate| (candidate.shape, candidate.current_version_gindex, candidate.witness_gindex))
+            .map(|candidate| {
+                (candidate.shape, candidate.current_version_gindex, candidate.genesis_validators_root_gindex)
+            })
             .collect();
         assert_eq!(rows, vec![(5, 141, 33), (255, 169, 40), (6, 269, 65), (7, 525, 129)]);
         for length in [7usize, 8, 9] {
