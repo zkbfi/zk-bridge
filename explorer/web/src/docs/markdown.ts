@@ -1,6 +1,6 @@
 /**
  * A small Markdown reader for the documentation pages. It reads only what the pages use: headings, paragraphs, bulleted
- * and numbered lists, tables, block quotes, code blocks, and inline bold, italic and code. It builds a tree of data, not
+ * and numbered lists, tables, block quotes, code blocks, and inline bold, italic, code and links. It builds a tree of data, not
  * HTML, so the page renders it as React elements and nothing is ever injected as markup.
  */
 
@@ -9,7 +9,8 @@ export type Inline =
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "bold"; readonly children: readonly Inline[] }
   | { readonly kind: "italic"; readonly children: readonly Inline[] }
-  | { readonly kind: "code"; readonly text: string };
+  | { readonly kind: "code"; readonly text: string }
+  | { readonly kind: "link"; readonly href: string; readonly children: readonly Inline[] };
 
 /** One block of a page. */
 export type Block =
@@ -32,7 +33,27 @@ export const slugify = (text: string): string =>
     .replace(/^-+|-+$/g, "");
 
 // Bold holds plain text and whole italic spans, so that "**a *b***" reads as bold around "a" and an italic "b".
-const INLINE_PATTERN = /(\*\*(?:[^*]|\*[^*\s][^*]*\*)+\*\*|`[^`]+`|\*[^*\s][^*]*\*|_[^_\s][^_]*_)/;
+// A link is "[text](address)". The address holds no space and no closing bracket.
+const INLINE_PATTERN = /(\[[^\]]+\]\([^)\s]+\)|\*\*(?:[^*]|\*[^*\s][^*]*\*)+\*\*|`[^`]+`|\*[^*\s][^*]*\*|_[^_\s][^_]*_)/;
+
+/** The text of a capture group that the pattern always fills. */
+const captured = (match: RegExpExecArray, group: number): string => match[group] as string;
+
+const LINK = /^\[([^\]]+)\]\(([^)\s]+)\)$/;
+const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+
+/**
+ * Tells whether an address may become a link. Only an https address, an anchor in the same page and a relative path
+ * qualify. Any other scheme (`javascript:`, `http:`, `data:`, `mailto:`), a rooted path and a path that starts with a
+ * backslash stay text.
+ *
+ * @param href The address between the brackets.
+ */
+export const isLinkableAddress = (href: string): boolean => {
+  if (/^https:\/\/\S/i.test(href)) return true;
+  if (HAS_SCHEME.test(href)) return false;
+  return !/^[\\/]/.test(href);
+};
 
 /**
  * Reads the inline marks of one line of text.
@@ -44,6 +65,8 @@ export const parseInline = (text: string): readonly Inline[] =>
     .split(INLINE_PATTERN)
     .filter((part) => part !== "")
     .map((part): Inline => {
+      const link = LINK.exec(part);
+      if (link !== null && isLinkableAddress(captured(link, 2))) return { kind: "link", href: captured(link, 2), children: parseInline(captured(link, 1)) };
       if (part.startsWith("**") && part.endsWith("**") && part.length > 4) return { kind: "bold", children: parseInline(part.slice(2, -2)) };
       if (part.startsWith("`") && part.endsWith("`") && part.length > 2) return { kind: "code", text: part.slice(1, -1) };
       if ((part.startsWith("*") && part.endsWith("*")) || (part.startsWith("_") && part.endsWith("_"))) {
@@ -60,9 +83,6 @@ const cellsOf = (line: string): readonly (readonly Inline[])[] =>
 const BULLET = /^\s*[-*]\s+(.*)$/;
 const NUMBERED = /^\s*\d+\.\s+(.*)$/;
 const HEADING = /^(#{1,4})\s+(.*)$/;
-
-/** The text of a capture group that the pattern always fills. */
-const captured = (match: RegExpExecArray, group: number): string => match[group] as string;
 
 /**
  * Reads a page into blocks.

@@ -44,3 +44,19 @@ describe("MarkdownView", () => {
     expect(container.textContent).toContain("<img src=x onerror=alert(1)>");
   });
 });
+
+describe("MarkdownView links", () => {
+  it("renders a link as an anchor with its address, and opens an https address safely", () => {
+    show("[inside](#part) and [outside](https://example.org/x)");
+    expect(screen.getByRole("link", { name: "inside" })).toHaveAttribute("href", "#part");
+    expect(screen.getByRole("link", { name: "inside" })).not.toHaveAttribute("target");
+    expect(screen.getByRole("link", { name: "outside" })).toHaveAttribute("href", "https://example.org/x");
+    expect(screen.getByRole("link", { name: "outside" })).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  it("renders a javascript: link as plain text", () => {
+    const { container } = show("[x](javascript:alert(1))");
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(container.textContent).toContain("javascript:alert(1");
+  });
+});

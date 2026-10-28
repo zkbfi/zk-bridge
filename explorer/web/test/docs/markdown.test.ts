@@ -76,3 +76,35 @@ describe("the documentation pages", () => {
     expect(() => parseDocPages({ "/x/01-a.md": "no heading" })).toThrow(/no title/);
   });
 });
+
+describe("links", () => {
+  const linkTo = (source: string) => parseInline(source).find((item) => item.kind === "link");
+
+  it("a relative .md link becomes a link", () => {
+    expect(linkTo("see [the guide](../guide.md#top) now")).toEqual({ kind: "link", href: "../guide.md#top", children: [{ kind: "text", text: "the guide" }] });
+  });
+
+  it("an anchor and an https address become links, and the text may hold marks", () => {
+    expect(linkTo("[x](#part)")).toMatchObject({ href: "#part" });
+    expect(linkTo("[**bold** `c`](https://example.org/a_b_c)")).toEqual({
+      kind: "link",
+      href: "https://example.org/a_b_c",
+      children: [{ kind: "bold", children: [{ kind: "text", text: "bold" }] }, { kind: "text", text: " " }, { kind: "code", text: "c" }],
+    });
+  });
+
+  it("a javascript: link stays text", () => {
+    expect(parseInline("[x](javascript:alert(1))").some((item) => item.kind === "link")).toBe(false);
+    expect(parseInline("[x](javascript:alert(1))").map((item) => (item.kind === "text" ? item.text : "")).join("")).toContain("[x](javascript:alert(1");
+  });
+
+  it("an http:, data:, mailto: or rooted address stays text", () => {
+    for (const href of ["http://example.org", "data:text/html,x", "mailto:a@b.c", "/etc/passwd", "//example.org", "JaVaScRiPt:1", "vbscript:1"]) {
+      expect(parseInline(`[x](${href})`).some((item) => item.kind === "link")).toBe(false);
+    }
+  });
+
+  it("an empty address stays text", () => {
+    expect(parseInline("[x]()").some((item) => item.kind === "link")).toBe(false);
+  });
+});

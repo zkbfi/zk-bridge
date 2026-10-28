@@ -7,6 +7,15 @@ const renderInline = (items: readonly Inline[], keyPrefix: string): ReactNode =>
     const key = `${keyPrefix}-${index}`;
     if (item.kind === "text") return item.text;
     if (item.kind === "code") return <Code key={key}>{item.text}</Code>;
+    if (item.kind === "link") {
+      // An https address leaves the page, so it opens without handing over the page or its address.
+      const leavesPage = item.href.startsWith("https:");
+      return (
+        <a key={key} href={item.href} rel={leavesPage ? "noopener noreferrer" : undefined}>
+          <Text as="span" textDecoration="underline">{renderInline(item.children, key)}</Text>
+        </a>
+      );
+    }
     if (item.kind === "bold") return <strong key={key}>{renderInline(item.children, key)}</strong>;
     return <em key={key}>{renderInline(item.children, key)}</em>;
   });
