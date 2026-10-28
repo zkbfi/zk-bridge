@@ -197,7 +197,10 @@ describe('runUrlTest', () => {
     const { runtime } = buildRuntime()
     expect(await runUrlTest({ runtime, row: rowOf('test:rpc:369'), http: heads })).toEqual({ ok: 'fail', message: 'No RPC URL is set for chain 369.' })
     runtime.apply({ indexerUrl: null, rpcUrls: {} })
-    const bare = { ...runtime, resolved: () => ({ indexerUrl: null, rpcUrls: {} }) }
+    const bare: ConnectionRuntime = {
+      ...runtime,
+      resolved: () => ({ ...runtime.resolved(), indexerUrl: null, rpcUrls: {} }),
+    }
     expect(await runUrlTest({ runtime: bare, row: rowOf('test:indexer'), http: heads })).toEqual({ ok: 'fail', message: 'No indexer URL is set.' })
   })
 
