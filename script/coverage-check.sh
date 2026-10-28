@@ -31,6 +31,10 @@ cd "$(dirname "$0")/.."
 
 lcov_path="${1:-$(mktemp -d)/lcov.info}"
 
+# Some tests read the compiled contract files in out/ (for example the interface checks in Immutability.t.sol).
+# `forge coverage` does not write them, so build first. Without this a fresh clone fails those tests.
+forge build
+
 optimizer_dependent_tests='(test_HB02_gas_confirmWithProof|test_HB02_gas_sendInAConfirmedEpoch|test_HB02_gas_sendInDetectionModeWithColdCanaries|test_HB02_canary_blsPrecompileFiresOnlyOnTheKnownOutput|test_gasOfRelayAndDelivery|test_R2_10_hardenedContractsFitTheSizeLimit|test_gas_openDeposits|test_gas_sendAfterOpeningCostsNoColdRead|test_gas_executeMessage_failedCall|test_gas_executeMessage_historicalPath|test_gas_executeMessage_recentPath|test_codeHashIsTheDocumentedVerifierCodeHash|test_gasOfEveryLengthDeploysWithinTheRule)'
 
 forge coverage \
