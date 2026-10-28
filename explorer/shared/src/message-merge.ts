@@ -23,6 +23,8 @@ export type MessageRow = {
   readonly sentTransactionHash: Hex | null;
   readonly sentBlockNumber: bigint | null;
   readonly sentTimestamp: bigint | null;
+  /** The position of the `UserRequestForAffirmation` log in its block, or null before the send is seen. */
+  readonly sentLogIndex: number | null;
   readonly deliveredTransactionHash: Hex | null;
   readonly deliveredBlockNumber: bigint | null;
   readonly deliveredTimestamp: bigint | null;
@@ -75,6 +77,7 @@ const emptyRow = (messageId: MessageRow["messageId"], sourceChainId: number, des
   sentTransactionHash: null,
   sentBlockNumber: null,
   sentTimestamp: null,
+  sentLogIndex: null,
   deliveredTransactionHash: null,
   deliveredBlockNumber: null,
   deliveredTimestamp: null,

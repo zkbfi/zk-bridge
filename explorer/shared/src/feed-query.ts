@@ -38,13 +38,25 @@ export const DEFAULT_FEED_LIMIT = 50;
  */
 export const encodeCursor = (cursor: FeedCursor): string => `${cursor.sentTimestamp}:${cursor.messageId}`;
 
-const parseCursor = (text: string): FeedCursor | null => {
+/**
+ * Parses a cursor of the form `<sentTimestamp>:<messageId>`.
+ *
+ * @param text The cursor text.
+ * @returns The cursor, or null when the text is not a cursor.
+ */
+export const parseCursor = (text: string): FeedCursor | null => {
   const match = /^(\d+):(0x[0-9a-f]{64})$/.exec(text);
   if (match === null) return null;
   return { sentTimestamp: BigInt(match[1] as string), messageId: match[2] as Hex };
 };
 
-const parseDirection = (text: string): FeedFilters["direction"] | undefined => {
+/**
+ * Parses a direction of the form `<source>><destination>` or `<source>-<destination>`.
+ *
+ * @param text The direction text.
+ * @returns The direction, or undefined when the text is not a direction.
+ */
+export const parseDirection = (text: string): FeedFilters["direction"] | undefined => {
   const match = /^(\d+)[>-](\d+)$/.exec(text);
   if (match === null) return undefined;
   return { sourceChainId: Number(match[1]), destinationChainId: Number(match[2]) };

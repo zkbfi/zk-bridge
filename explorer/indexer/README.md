@@ -129,7 +129,7 @@ An item:
 {
   "messageId": "0x..", "kind": "token", "status": "delivered",
   "direction": { "sourceChainId": 1, "destinationChainId": 369, "label": "1>369" },
-  "sender": "0x..", "executor": "0x..", "gasLimit": 2000000,
+  "sender": "0x..", "executor": "0x..", "gasLimit": 2000000, "sentLogIndex": 4,
   "sent": { "transactionHash": "0x..", "blockNumber": 12, "timestamp": 1789999000 },
   "covered": { "headSlot": 100, "timestamp": 1789999100 },
   "delivered": { "transactionHash": "0x..", "blockNumber": 40, "timestamp": 1789999200, "success": true, "executedBy": "0x.." },
@@ -144,6 +144,12 @@ An item:
 ```
 
 `sent`, `covered`, `delivered` and `transfer` are null when they do not apply. `executor` is the message target. For a token message it is the mediator on the destination chain. `transfer.value` is the amount that the mediator locked or burned. `sentTimestamp` and `deliveredTimestamp` are times on different chains.
+
+`sentLogIndex` is the position of the send log in its block. It is null until the indexer sees the send.
+
+`GET /api/undelivered?direction=1>369&after=<cursor>&limit=` is the work list of the evidence archive. It returns `{ items, nextCursor }`, oldest send first, for messages in status `covered` only. Each item holds `messageId`, `sourceChainId`, `destinationChainId`, `sentTransactionHash`, `sentLogIndex`, `gasLimit` and `coveredByHeadSlot` (a decimal string). `limit` runs from 1 to 500 (default 100). `after` is the `nextCursor` of the previous page. `nextCursor` is null on the last page.
+
+`GET /api/history` returns `{ items, nextCursor, partial: false }`, newest event first. An event is a send, a delivery or a stored head of the light client: `{ kind: "sent" | "delivered" | "head-update", chainId, timestamp, transactionHash, messageId, slot, status }`. It takes the filters of the feed, plus `chain` (events that happened on that chain) and `eventKind`. A time range applies to the time of the event. A head update belongs to no message, so a filter on kind, status, token or address leaves head updates out. The cursor is `<timestamp>:<kind>:<key>`.
 
 `GET /api/messages/:messageId` returns one item as above, plus `data` (the call data as hex).
 

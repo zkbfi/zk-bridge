@@ -28,6 +28,8 @@ export const messages = onchainTable(
     sentTransactionHash: t.hex(),
     sentBlockNumber: t.bigint(),
     sentTimestamp: t.bigint(),
+    /** The position of the `UserRequestForAffirmation` log in its block. The evidence of the message needs it. */
+    sentLogIndex: t.integer(),
     deliveredTransactionHash: t.hex(),
     deliveredBlockNumber: t.bigint(),
     deliveredTimestamp: t.bigint(),

@@ -50,7 +50,8 @@ const indexHistory = async () => {
         id: `event-${counter}`,
         block: { number: event.blockNumber, timestamp: scenario.timestampOf(event.chainId, event.blockNumber), baseFeePerGas: null },
         transaction: { hash: event.transactionHash, from: event.from },
-        log: { address: pair.sides.find((side) => side.chainId === event.chainId)!.contracts.mediator },
+        // The fake chain of the RPC side numbers the logs by their place in the scenario; the same number goes here.
+        log: { address: pair.sides.find((side) => side.chainId === event.chainId)!.contracts.mediator, logIndex: scenario.events.indexOf(event) },
       }),
       context,
     });

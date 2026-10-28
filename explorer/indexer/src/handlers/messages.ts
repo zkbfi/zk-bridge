@@ -22,6 +22,7 @@ ponder.on("MessageBridge:UserRequestForAffirmation", async ({ event, context }) 
       sentTransactionHash: event.transaction.hash,
       sentBlockNumber: event.block.number,
       sentTimestamp: event.block.timestamp,
+      sentLogIndex: event.log.logIndex,
     },
   });
   const transfer = decoded.transfer;

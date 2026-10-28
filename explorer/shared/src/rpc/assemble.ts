@@ -146,6 +146,7 @@ export const assemble = (input: AssembleInput): Assembled => {
         sentTransactionHash: log.transactionHash,
         sentBlockNumber: log.blockNumber,
         sentTimestamp: timestamp(),
+        sentLogIndex: log.logIndex,
       });
       const transfer = decoded.transfer;
       if (transfer === null) return;

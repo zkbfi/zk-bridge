@@ -195,6 +195,7 @@ export const feedItemView = (message: MessageRow, transfer: TransferRow | null, 
   sender: message.sender,
   executor: message.executor,
   gasLimit: message.gasLimit,
+  sentLogIndex: message.sentLogIndex,
   sent:
     message.sentTimestamp === null
       ? null

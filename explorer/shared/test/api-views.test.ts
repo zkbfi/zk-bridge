@@ -108,6 +108,11 @@ describe("feedItemView", () => {
     sentTimestamp: 1_000n,
   };
 
+  it("shows the log index of the send, so the evidence of the message can find its log", () => {
+    expect(feedItemView({ ...sent, sentLogIndex: 9 }, null, index).sentLogIndex).toBe(9);
+    expect(feedItemView({ ...sent, sentLogIndex: null }, null, index).sentLogIndex).toBeNull();
+  });
+
   it("shows a send with no cover, no delivery and no transfer as nulls", () => {
     const view = feedItemView({ ...sent, sentTransactionHash: hashOf("cd") }, null, index);
     expect(view).toMatchObject({

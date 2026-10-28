@@ -5,11 +5,18 @@ import type { Hono } from "hono";
 import type { Hex } from "viem";
 import { encodeCursor, feedItemView, indexTokens, parseFeedQuery, type FeedFilters } from "@zk-bridge/shared";
 
-/** Builds the SQL conditions for the feed filters. */
-const conditionsOf = (filters: FeedFilters) => {
-  const { direction, kind, statuses, token, address, from, to, cursor } = filters;
+/** The filters that pick messages and their transfers, shared by the feed and the history. */
+type MessageFilters = Pick<FeedFilters, "direction" | "kind" | "statuses" | "token" | "address">;
+
+/**
+ * Builds the SQL conditions that pick messages by direction, kind, status, token and account. The query must join
+ * `transfers` to `messages`.
+ *
+ * @param filters The parsed filters.
+ */
+export const messageConditionsOf = (filters: MessageFilters) => {
+  const { direction, kind, statuses, token, address } = filters;
   return [
-    isNotNull(messages.sentTimestamp),
     direction === null
       ? undefined
       : and(eq(messages.sourceChainId, direction.sourceChainId), eq(messages.destinationChainId, direction.destinationChainId)),
@@ -25,6 +32,15 @@ const conditionsOf = (filters: FeedFilters) => {
           eq(transfers.recipient, address),
           eq(transfers.paidTo, address),
         ),
+  ];
+};
+
+/** Builds the SQL conditions for the feed filters. */
+const conditionsOf = (filters: FeedFilters) => {
+  const { from, to, cursor } = filters;
+  return [
+    isNotNull(messages.sentTimestamp),
+    ...messageConditionsOf(filters),
     from === null ? undefined : gte(messages.sentTimestamp, from),
     to === null ? undefined : lte(messages.sentTimestamp, to),
     cursor === null

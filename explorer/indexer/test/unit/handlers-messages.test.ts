@@ -65,6 +65,14 @@ describe("MessageBridge:UserRequestForAffirmation", () => {
     });
   });
 
+  it("stores the log index of the UserRequestForAffirmation log", async () => {
+    const { database, context } = createContext(1);
+    const encodedData = send(MEDIATOR_ON_PULSECHAIN, handlerCall("handleBridgedTokens"));
+    const event = createEvent({ messageId, encodedData }, { log: { address: addressOf("c0"), logIndex: 7 } });
+    await callHandler(name, { event, context });
+    expect(database.row(messages, { messageId })?.sentLogIndex).toBe(7);
+  });
+
   it("names the token as the destination token when the destination releases a native token", async () => {
     const { database, context } = createContext(1);
     const encodedData = send(MEDIATOR_ON_PULSECHAIN, handlerCall("handleNativeTokens"));
