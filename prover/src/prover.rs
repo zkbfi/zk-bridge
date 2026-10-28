@@ -532,7 +532,7 @@ mod tests {
         UpdateInput {
             chain,
             store: built.store,
-            updates: vec![built.update],
+            steps: crate::light_client::steps_with_table_versions(chain, vec![built.update]),
         }
     }
 

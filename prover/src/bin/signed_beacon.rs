@@ -6,10 +6,10 @@
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
 use zk_bridge_prover::light_client::ChainKind;
+use zk_bridge_prover::local_network::signed_beacon::checkpoint::read_checkpoint;
 use zk_bridge_prover::local_network::signed_beacon::node::{
     default_first_slot, serve, BeaconNode, Mount, NodeSettings, RpcBlockFeed,
 };
-use zk_bridge_prover::local_network::signed_beacon::checkpoint::read_checkpoint;
 use zk_bridge_prover::rpc::{HttpClient, HttpRpc};
 
 /// Serves a signed beacon chain over local execution chains.
@@ -58,10 +58,13 @@ struct ServeArguments {
 fn mount_of(text: &str, finality_slots: u64, participants: usize) -> Result<Mount, String> {
     let parts: Vec<&str> = text.split(',').collect();
     let [prefix, kind, rpc_url, rest @ ..] = parts.as_slice() else {
-        return Err(format!("--chain {text}: use PREFIX,KIND,RPC_URL[,FIRST_SLOT]"));
+        return Err(format!(
+            "--chain {text}: use PREFIX,KIND,RPC_URL[,FIRST_SLOT]"
+        ));
     };
-    let kind = ChainKind::from_name(kind)
-        .ok_or_else(|| format!("unknown chain {kind}: use ethereum, pulsechain, sepolia or pulsechain-testnet-v4"))?;
+    let kind = ChainKind::from_name(kind).ok_or_else(|| {
+        format!("unknown chain {kind}: use ethereum, pulsechain, sepolia or pulsechain-testnet-v4")
+    })?;
     let first_slot = match rest {
         [] => default_first_slot(kind),
         [slot] => slot
@@ -120,7 +123,8 @@ mod tests {
     /// A chain argument with three parts mounts the chain under its prefix at the default first slot of the kind.
     #[test]
     fn a_chain_argument_mounts_the_chain_under_its_prefix() {
-        let mount = mount_of("a,ethereum,http://127.0.0.1:1", 2, 400).expect("a valid chain argument");
+        let mount =
+            mount_of("a,ethereum,http://127.0.0.1:1", 2, 400).expect("a valid chain argument");
         assert_eq!(mount.prefix, "a");
     }
 
@@ -128,14 +132,21 @@ mod tests {
     #[test]
     fn a_first_slot_that_is_no_number_is_refused() {
         assert!(mount_of("a,ethereum,http://127.0.0.1:1,64", 2, 400).is_ok());
-        let error = mount_of("a,ethereum,http://127.0.0.1:1,soon", 2, 400).err().expect("a refusal");
-        assert!(error.contains("a,ethereum,http://127.0.0.1:1,soon"), "{error}");
+        let error = mount_of("a,ethereum,http://127.0.0.1:1,soon", 2, 400)
+            .err()
+            .expect("a refusal");
+        assert!(
+            error.contains("a,ethereum,http://127.0.0.1:1,soon"),
+            "{error}"
+        );
     }
 
     /// A name that is no chain kind is refused, and the message lists the four known names.
     #[test]
     fn an_unknown_chain_kind_is_refused_with_the_known_names() {
-        let error = mount_of("a,dogecoin,http://127.0.0.1:1", 2, 400).err().expect("a refusal");
+        let error = mount_of("a,dogecoin,http://127.0.0.1:1", 2, 400)
+            .err()
+            .expect("a refusal");
         assert!(error.contains("pulsechain-testnet-v4"), "{error}");
     }
 

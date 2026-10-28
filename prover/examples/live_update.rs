@@ -141,7 +141,7 @@ fn run(arguments: &[String]) -> Result<serde_json::Value> {
         .map_err(|error| Error::Malformed(format!("public values: {error}")))?;
     Ok(serde_json::json!({
         "chain": chain.name(),
-        "updates": plan.input.updates.len(),
+        "updates": plan.input.steps.len(),
         "latestFinalizedSlot": plan.latest_finalized_slot,
         "exitCode": run.exit_code,
         "instructions": run.instruction_count,

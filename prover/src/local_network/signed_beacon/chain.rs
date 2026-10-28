@@ -24,6 +24,8 @@
 //! fields that change replaced. The served state bytes (`state_bytes`) are checked against that root in the tests.
 
 use crate::error::{Error, Result};
+#[cfg(test)]
+use crate::light_client::steps_with_table_versions;
 use crate::light_client::{BlockView, ChainKind};
 use alloy_primitives::B256;
 use lc_core::chain::{ChainSpec, ForkName, MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZE};
@@ -43,6 +45,10 @@ use std::collections::HashMap;
 /// The length of the `block_roots` ring, in slots.
 const RING_SLOTS: u64 = 8192;
 /// The field index of `slot` in a Capella `BeaconState`.
+const FIELD_GENESIS_VALIDATORS_ROOT: usize = 1;
+/// The byte range of `genesis_validators_root` in the SSZ bytes of a state: it follows `genesis_time` (8 bytes).
+const GENESIS_VALIDATORS_ROOT_BYTES: std::ops::Range<usize> = 8..40;
+/// Field index of `slot` in the state.
 const FIELD_SLOT: usize = 2;
 /// The field index of `fork`.
 const FIELD_FORK: usize = 3;
@@ -54,6 +60,12 @@ const FIELD_FINALIZED_CHECKPOINT: usize = 20;
 const FIELD_CURRENT_SYNC_COMMITTEE: usize = 22;
 /// The field index of `next_sync_committee`.
 const FIELD_NEXT_SYNC_COMMITTEE: usize = 23;
+
+/// The SSZ bytes of a state with `genesis_validators_root` set. The builder of `lc-testkit` leaves the field at zero.
+fn with_genesis_validators_root(mut bytes: Vec<u8>, root: B256) -> Vec<u8> {
+    bytes[GENESIS_VALIDATORS_ROOT_BYTES].copy_from_slice(root.as_slice());
+    bytes
+}
 
 /// The settings of a synthetic chain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,6 +188,7 @@ impl SyntheticBeaconChain {
             committee.committee.clone(),
         )
         .to_ssz();
+        let empty_state = with_genesis_validators_root(empty_state, spec.genesis_validators_root);
         let template = try_parse_state_form(&empty_state, StateForm::Capella)
             .map_err(malformed)?
             .field_roots;
@@ -390,7 +403,31 @@ impl SyntheticBeaconChain {
         state.fork_data = fork_data_at(spec, slot);
         state.block_roots = self.block_roots_at(slot);
         state.finalized_checkpoint = self.finalized_checkpoint_at(slot);
-        Ok(state.to_ssz())
+        Ok(with_genesis_validators_root(
+            state.to_ssz(),
+            spec.genesis_validators_root,
+        ))
+    }
+
+    /// The branch of `genesis_validators_root` under the state of `slot`. A beacon node does not serve it, so the served
+    /// updates lack it. The prover computes it from the state, and a test of this module uses this method to do the same.
+    ///
+    /// # Errors
+    /// `Error::Beacon` when the chain holds no block at `slot`.
+    pub fn genesis_validators_root_branch_at(&self, slot: u64) -> Result<Vec<B256>> {
+        Ok(branch_for_leaf(&self.state_fields(slot)?, FIELD_GENESIS_VALIDATORS_ROOT).1)
+    }
+
+    /// The update with the branch of `genesis_validators_root` under the state of its attested header.
+    ///
+    /// # Panics
+    /// Panics when the chain holds no block at the attested slot.
+    #[cfg(test)]
+    fn complete(&self, update: LightClientUpdate) -> LightClientUpdate {
+        let branch = self
+            .genesis_validators_root_branch_at(update.attested_header.beacon.slot)
+            .expect("the attested block is on the chain");
+        update.with_genesis_validators_root_branch(branch)
     }
 
     /// The update that the block at `signature_slot` makes possible: the block before it is attested, and the aggregate of
@@ -432,6 +469,8 @@ impl SyntheticBeaconChain {
             finality_branch,
             sync_aggregate: signature.aggregate.clone(),
             signature_slot,
+            // A beacon node does not serve this branch. The prover computes it from the attested state.
+            genesis_validators_root_branch: Vec::new(),
         })
     }
 
@@ -654,7 +693,7 @@ mod tests {
             let output = verify_update_natively(&UpdateInput {
                 chain: kind,
                 store,
-                updates: vec![update],
+                steps: steps_with_table_versions(kind, vec![chain.complete(update)]),
             })
             .unwrap_or_else(|error| panic!("{kind:?}: {error}"));
             assert_eq!(output.newHeadSlot, tip - 1 - FINALITY_SLOTS, "{kind:?}");
@@ -689,7 +728,7 @@ mod tests {
             verify_update_natively(&UpdateInput {
                 chain: kind,
                 store,
-                updates: vec![update],
+                steps: steps_with_table_versions(kind, vec![chain.complete(update)]),
             })
         };
         assert!(run(chain.finality_update().unwrap(), store.clone()).is_ok());
@@ -744,7 +783,10 @@ mod tests {
             let fold = verify_update_natively(&UpdateInput {
                 chain: kind,
                 store: store.clone(),
-                updates: vec![handoff, finality.clone()],
+                steps: steps_with_table_versions(
+                    kind,
+                    vec![chain.complete(handoff), chain.complete(finality.clone())],
+                ),
             })
             .unwrap_or_else(|error| panic!("{kind:?}: {error}"));
             assert_eq!(fold.newHeadSlot, head);
@@ -755,7 +797,7 @@ mod tests {
             let single = verify_update_natively(&UpdateInput {
                 chain: kind,
                 store,
-                updates: vec![finality],
+                steps: steps_with_table_versions(kind, vec![chain.complete(finality)]),
             })
             .unwrap_or_else(|error| panic!("{kind:?}: {error}"));
             assert_eq!(single.newHeadSlot, head);

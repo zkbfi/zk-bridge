@@ -4,6 +4,7 @@
 //! header of the source chain. What the beacon part of a message proof looks like. What evidence the destination bridge
 //! needs for its layout rows.
 
+pub mod branch_store;
 pub mod http;
 
 use crate::light_client::{BeaconHeader, UpdateInput};

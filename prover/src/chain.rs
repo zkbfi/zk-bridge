@@ -252,17 +252,7 @@ impl ChainClient {
         let answer = self
             .rpc
             .call("debug_getRawHeader", json!([format!("{hash:#x}")]))?;
-        let text = answer.as_str().ok_or_else(|| {
-            Error::Malformed("debug_getRawHeader: the result is not a string".into())
-        })?;
-        let bytes = alloy_primitives::hex::decode(text)
-            .map_err(|error| Error::Malformed(format!("debug_getRawHeader: {error}")))?;
-        if alloy_primitives::keccak256(&bytes) != hash {
-            return Err(Error::Malformed(format!(
-                "the execution node answered a header that does not hash to {hash:#x}"
-            )));
-        }
-        Ok(bytes)
+        checked_raw_header(&answer, hash)
     }
 
     /// The `eth_getProof` answer for one account and some storage keys at block `block_number`.
@@ -286,6 +276,28 @@ impl ChainClient {
     pub fn latest_block_number(&self) -> Result<u64> {
         parse_quantity(&self.rpc.call("eth_blockNumber", json!([]))?)
     }
+}
+
+/// The bytes of a `debug_getRawHeader` answer, checked against the hash that was asked for.
+///
+/// Both paths that read a raw header use this one function, so a header that does not hash to the requested hash gives the
+/// same error everywhere: `Error::Malformed`. The error name does not say "beacon", because the node that lied is an
+/// execution node.
+///
+/// # Errors
+/// `Error::Malformed` when the answer is not a hex text, or when its keccak256 is not `hash`.
+pub fn checked_raw_header(answer: &Value, hash: B256) -> Result<Vec<u8>> {
+    let text = answer
+        .as_str()
+        .ok_or_else(|| Error::Malformed("debug_getRawHeader: the result is not a string".into()))?;
+    let bytes = alloy_primitives::hex::decode(text)
+        .map_err(|error| Error::Malformed(format!("debug_getRawHeader: {error}")))?;
+    if alloy_primitives::keccak256(&bytes) != hash {
+        return Err(Error::Malformed(format!(
+            "the execution node answered a header that does not hash to {hash:#x}"
+        )));
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]

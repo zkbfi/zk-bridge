@@ -48,20 +48,24 @@
 //! from the fork that the chain schedule has at the slot of the state. The block parser reads the Capella block layout
 //! only, so the assembled update path needs a Capella chain. Ethereum uses the light-client endpoints for the update.
 
+use super::branch_store::{GenesisValidatorsRootBranchStore, MemoryBranchStore};
 use super::{HashEvidence, HistoricalEvidence, RootsEvidence, SourceBlock, StoredHead, UpdatePlan};
+use crate::chain::checked_raw_header;
 use crate::error::{Error, Result};
+use crate::fork_schedule::{ForkSchedule, CHAIN_SPEC_PATH, FORK_SCHEDULE_PATH};
 use crate::light_client::{
     ancestry_path, anchor_gloas_header, assemble_update, beacon_header_from_json,
     block_hash_gindex, block_roots_gindex, committee_hash, describe_header, era_block_roots,
-    era_of, header_root, historical_summaries_gindex, store_at, store_from_bootstrap_json,
-    sync_aggregate_from_json, update_from_json, AncestryPath, BeaconHeader, BeaconPath, BlockView,
-    ChainKind, GloasBlockView, LightClientStore, LightClientUpdate, StateView, SyncAggregate,
-    UpdateInput, SLOTS_PER_HISTORICAL_ROOT,
+    era_of, header_root, historical_summaries_gindex, plan_header_repair, rebuild_execution_header,
+    store_at, store_from_bootstrap_json, strip_transition_padding, sync_aggregate_from_json,
+    update_from_json, AncestryPath, BeaconHeader, BeaconPath, BlockView, ChainKind, GloasBlockView,
+    HeaderRepair, LightClientStore, LightClientUpdate, StateView, SyncAggregate, UpdateInput,
+    SLOTS_PER_HISTORICAL_ROOT,
 };
 use crate::rpc::{HttpGet, JsonRpc};
-use alloy_primitives::{hex, keccak256, B256};
+use alloy_primitives::B256;
 use lc_core::chain::ForkName;
-use lc_core::update::MAX_FOLD_UPDATES;
+use lc_core::update::{FoldStep, MAX_FOLD_UPDATES};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -266,23 +270,49 @@ impl RpcExecutionHeaders {
     }
 }
 
-impl ExecutionHeaders for RpcExecutionHeaders {
-    fn raw_header(&self, hash: B256) -> Result<Vec<u8>> {
+impl RpcExecutionHeaders {
+    /// The header from `debug_getRawHeader`, checked against `hash`.
+    fn raw_from_method(&self, hash: B256) -> Result<Vec<u8>> {
         let answer = self.rpc.call(
             "debug_getRawHeader",
             serde_json::json!([format!("{hash:#x}")]),
         )?;
-        let text = answer.as_str().ok_or_else(|| {
-            Error::Malformed("debug_getRawHeader: the result is not a string".into())
-        })?;
-        let bytes = hex::decode(text)
-            .map_err(|error| Error::Malformed(format!("debug_getRawHeader: {error}")))?;
-        if keccak256(&bytes) != hash {
-            return Err(Error::Beacon(format!(
-                "the execution node answered a header that does not hash to {hash:#x}"
+        checked_raw_header(&answer, hash)
+    }
+
+    /// The header rebuilt from `eth_getBlockByHash`. The rebuilt encoding must hash to the block hash that the node
+    /// reports, and that hash must be the one asked for. A header with a field that the rebuilder does not know (a Gloas
+    /// header) fails the first check, and the call then stops with an error and does not guess.
+    fn rebuilt_from_block(&self, hash: B256) -> Result<Vec<u8>> {
+        let block = self.rpc.call(
+            "eth_getBlockByHash",
+            serde_json::json!([format!("{hash:#x}"), false]),
+        )?;
+        if block.is_null() {
+            return Err(Error::Malformed(format!(
+                "the execution node does not know the block {hash:#x}"
             )));
         }
-        Ok(bytes)
+        let rebuilt = rebuild_execution_header(&block)?;
+        if rebuilt.block_hash != hash {
+            return Err(Error::Malformed(format!(
+                "the execution node answered block {:#x}, not {hash:#x}",
+                rebuilt.block_hash
+            )));
+        }
+        Ok(rebuilt.header_rlp.to_vec())
+    }
+}
+
+impl ExecutionHeaders for RpcExecutionHeaders {
+    /// Asks `debug_getRawHeader` first. When the node answers with an error object (for example "method not found"), the
+    /// header is rebuilt from `eth_getBlockByHash`. A wrong answer is not an error object, and it never takes the fallback:
+    /// a node that sent a header of another block stops the call.
+    fn raw_header(&self, hash: B256) -> Result<Vec<u8>> {
+        match self.raw_from_method(hash) {
+            Err(Error::Rpc { .. }) => self.rebuilt_from_block(hash),
+            result => result,
+        }
     }
 }
 
@@ -291,6 +321,8 @@ pub struct HttpBeaconSource {
     chain: ChainKind,
     client: Box<dyn HttpGet>,
     execution_headers: Option<Box<dyn ExecutionHeaders>>,
+    branch_store: Arc<dyn GenesisValidatorsRootBranchStore>,
+    schedule: Mutex<Option<Arc<ForkSchedule>>>,
     genesis_time: Mutex<Option<u64>>,
     state_cache: Mutex<Vec<(B256, Arc<StateView>)>>,
     era_cache: Mutex<Vec<(u64, Arc<Vec<B256>>)>>,
@@ -303,6 +335,8 @@ impl HttpBeaconSource {
             chain,
             client,
             execution_headers: None,
+            branch_store: Arc::new(MemoryBranchStore::new()),
+            schedule: Mutex::new(None),
             genesis_time: Mutex::new(None),
             state_cache: Mutex::new(Vec::new()),
             era_cache: Mutex::new(Vec::new()),
@@ -315,32 +349,129 @@ impl HttpBeaconSource {
         self
     }
 
-    /// Attaches the execution anchor to every Gloas finalized header of `updates` (see the module documentation, "Gloas").
+    /// The same source with a store for the branches of `genesis_validators_root`. The default store lives in memory and
+    /// ends with the process. A directory store (see [`super::branch_store::DirectoryBranchStore`]) lets a later run catch
+    /// up after the node has pruned the old states.
+    pub fn with_branch_store(mut self, store: Arc<dyn GenesisValidatorsRootBranchStore>) -> Self {
+        self.branch_store = store;
+        self
+    }
+
+    /// The fork schedule of the beacon node, read once. It joins `/eth/v1/config/fork_schedule` and
+    /// `/eth/v1/config/spec` (see [`crate::fork_schedule`]). There is no fallback to the table of `lc-core`.
     ///
     /// # Errors
-    /// `Error::Config` when a header needs the anchor and the source has no execution source. The errors of
-    /// `anchor_gloas_header` and of the reads.
-    fn anchor_gloas_updates(&self, updates: &mut [LightClientUpdate]) -> Result<()> {
+    /// `Error::Beacon` naming the path when the node does not serve one of the two answers. `Error::Malformed` and
+    /// `Error::ForkScheduleMismatch` from the join.
+    pub fn fork_schedule(&self) -> Result<Arc<ForkSchedule>> {
+        if let Some(cached) = self.schedule.lock().expect("lock").as_ref() {
+            return Ok(cached.clone());
+        }
+        let schedule_answer = Self::require(
+            self.get_json(FORK_SCHEDULE_PATH)?,
+            &format!("the answer {FORK_SCHEDULE_PATH}"),
+        )?;
+        let specification = Self::require(
+            self.get_json(CHAIN_SPEC_PATH)?,
+            &format!("the answer {CHAIN_SPEC_PATH}"),
+        )?;
+        let schedule = Arc::new(ForkSchedule::from_answers(
+            &schedule_answer,
+            &specification,
+            self.chain.spec().slots_per_epoch,
+        )?);
+        *self.schedule.lock().expect("lock") = Some(schedule.clone());
+        Ok(schedule)
+    }
+
+    /// The execution header source, or the error that tells the operator to set `source.rpc_url`.
+    fn require_execution_headers(&self, reason: &str) -> Result<&dyn ExecutionHeaders> {
+        self.execution_headers.as_deref().ok_or_else(|| {
+            Error::Config(format!(
+                "{reason} needs the execution header of a block: set source.rpc_url (or --source-rpc-url)"
+            ))
+        })
+    }
+
+    /// Repairs the finalized header of every update, as the fork of its slot requires (see
+    /// [`crate::light_client::plan_header_repair`]):
+    ///
+    /// - A Gloas header gets the anchor through its state and the raw header of `state.latest_block_hash`.
+    /// - A header from before Gloas, served padded inside a Gloas update, loses its padding and gets the raw header of its
+    ///   execution block.
+    /// - A header in the form of its fork is left alone.
+    ///
+    /// Only the finalized header changes. The attested header stays as served: the program does not read its execution data.
+    ///
+    /// # Errors
+    /// `Error::Config` when a repair needs an execution source and the source has none. `Error::UnknownActiveFork` and
+    /// `Error::HeaderFormMismatch` from the plan. The errors of `anchor_gloas_header`, `strip_transition_padding` and the
+    /// reads.
+    fn repair_finalized_headers(
+        &self,
+        schedule: &ForkSchedule,
+        updates: &mut [LightClientUpdate],
+    ) -> Result<()> {
         for update in updates {
             let finalized = &update.finalized_header;
-            if self.chain.spec().fork_at_slot(finalized.beacon.slot) < ForkName::Gloas {
-                continue;
+            let fork = schedule.fork_at_slot(finalized.beacon.slot)?;
+            match plan_header_repair(finalized, fork)? {
+                HeaderRepair::Untouched => {}
+                HeaderRepair::GloasAnchor => {
+                    let headers = self.require_execution_headers("a Gloas finalized header")?;
+                    let state = self.state_for(finalized.beacon.state_root)?;
+                    let hash = state.latest_block_hash().ok_or_else(|| {
+                        Error::Beacon("the finalized state is not a Gloas state".into())
+                    })?;
+                    let rlp = headers.raw_header(hash)?;
+                    update.finalized_header = anchor_gloas_header(&finalized.beacon, &state, rlp)?;
+                }
+                HeaderRepair::StripPadding { keep } => {
+                    let headers =
+                        self.require_execution_headers("a padded pre-Gloas finalized header")?;
+                    let rlp = headers.raw_header(finalized.execution_block_hash())?;
+                    update.finalized_header = strip_transition_padding(finalized, keep, rlp)?;
+                }
             }
-            let headers = self.execution_headers.as_ref().ok_or_else(|| {
-                Error::Config(
-                    "a Gloas finalized header needs the execution header of state.latest_block_hash: set source.rpc_url (or --source-rpc-url)"
-                        .into(),
-                )
-            })?;
-            let state = self.state_for(finalized.beacon.state_root)?;
-            let hash = state
-                .latest_block_hash()
-                .ok_or_else(|| Error::Beacon("the finalized state is not a Gloas state".into()))?;
-            let rlp = headers.raw_header(hash)?;
-            update.finalized_header =
-                anchor_gloas_header(&finalized.beacon, &state, rlp)?;
         }
         Ok(())
+    }
+
+    /// The branch of `genesis_validators_root` under `state_root`. The store comes first, because the node may have
+    /// pruned the state. If the store has none, the state gives it and the store keeps it.
+    ///
+    /// # Errors
+    /// `Error::Beacon` naming the state when the store has none and the node no longer serves the state.
+    fn genesis_validators_root_branch_under(&self, state_root: B256) -> Result<Vec<B256>> {
+        if let Some(stored) = self.branch_store.get(&state_root) {
+            return Ok(stored);
+        }
+        let branch = self.state_for(state_root)?.genesis_validators_root_branch();
+        self.branch_store.put(state_root, branch.clone())?;
+        Ok(branch)
+    }
+
+    /// Gives every update the branch of `genesis_validators_root` under the state root of its attested header. An update
+    /// that already carries one (the assembled update) is kept and its branch is stored.
+    ///
+    /// The branch is public data. The store is not trusted: a wrong entry makes the native run refuse the fold.
+    fn attach_genesis_validators_root_branches(
+        &self,
+        updates: Vec<LightClientUpdate>,
+    ) -> Result<Vec<LightClientUpdate>> {
+        updates
+            .into_iter()
+            .map(|update| {
+                let state_root = update.attested_header.beacon.state_root;
+                if !update.genesis_validators_root_branch.is_empty() {
+                    self.branch_store
+                        .put(state_root, update.genesis_validators_root_branch.clone())?;
+                    return Ok(update);
+                }
+                let branch = self.genesis_validators_root_branch_under(state_root)?;
+                Ok(update.with_genesis_validators_root_branch(branch))
+            })
+            .collect()
     }
 
     /// GET and parse JSON. `None` when the node says 404 or 501 (the endpoint is not served or the object is unknown).
@@ -423,7 +554,10 @@ impl HttpBeaconSource {
             self.get_ssz(&format!("/eth/v2/debug/beacon/states/{state_root:#x}"))?,
             &format!("state {state_root:#x}"),
         )?;
-        let state = Arc::new(StateView::parse(&bytes, self.chain)?);
+        let fork = self
+            .fork_schedule()?
+            .fork_at_slot(StateView::slot_of_bytes(&bytes)?)?;
+        let state = Arc::new(StateView::parse_with_fork(&bytes, fork)?);
         if state.root() != state_root {
             return Err(Error::Beacon(format!(
                 "the state hashes to {:#x}, not {state_root:#x} (the node preset may differ from the mainnet preset)",
@@ -630,7 +764,9 @@ impl HttpBeaconSource {
     }
 
     /// The fold that moves the light client from `head` as far toward `latest` as one proof can: the handoff updates of
-    /// the periods in between, then `latest` (see the module documentation, "Catching up").
+    /// the periods in between, then `latest` (see the module documentation, "Catching up"). The updates are complete:
+    /// each carries its branch of `genesis_validators_root`, and each finalized header is in the form that the program
+    /// reads. Each step carries the fork version from the fork schedule of the node.
     fn catch_up(
         &self,
         head: &BeaconHeader,
@@ -640,12 +776,22 @@ impl HttpBeaconSource {
         let periods = handoff_periods(self.chain, head.slot, &latest);
         let handoffs =
             fetch_period_updates(self.client.as_ref(), self.chain, periods.start, periods.end)?;
-        let updates = assemble_fold(self.chain, head.slot, &handoffs, latest)?;
+        let folded = assemble_fold(self.chain, head.slot, &handoffs, latest)?;
+        let schedule = self.fork_schedule()?;
+        let mut updates = self.attach_genesis_validators_root_branches(folded)?;
+        self.repair_finalized_headers(&schedule, &mut updates)?;
         let store = self.store_at_head(head, next_committee_hash)?;
+        let steps = updates
+            .into_iter()
+            .map(|update| FoldStep {
+                fork_version: schedule.signing_version(update.signature_slot),
+                update,
+            })
+            .collect();
         Ok(UpdateInput {
             chain: self.chain,
             store,
-            updates,
+            steps,
         })
     }
 
@@ -732,8 +878,7 @@ impl HttpBeaconSource {
         if latest_finalized_slot <= header.slot {
             return Ok(None);
         }
-        let mut input = self.catch_up(&header, head.next_committee_hash, latest)?;
-        self.anchor_gloas_updates(&mut input.updates)?;
+        let input = self.catch_up(&header, head.next_committee_hash, latest)?;
         Ok(Some(UpdatePlan {
             input,
             latest_finalized_slot,
@@ -934,14 +1079,16 @@ impl HttpBeaconSource {
 mod tests {
     use super::*;
     use crate::beacon::SourceBlock;
+    use crate::light_client::steps_with_table_versions;
     use crate::light_client::verify_update_natively;
     use crate::prover::ProofStatement;
     use crate::rpc::HttpResponse;
+    use alloy_primitives::{hex, keccak256};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
     /// An in-memory beacon node: a map from path to body. An unknown path answers 404.
-    struct Node(HashMap<String, Vec<u8>>);
+    pub(super) struct Node(pub(super) HashMap<String, Vec<u8>>);
 
     impl HttpGet for Node {
         fn get(&self, path_and_query: &str, _accept: &str) -> Result<HttpResponse> {
@@ -958,15 +1105,49 @@ mod tests {
         }
     }
 
+    /// A node that answers the two configuration paths like a node that follows the table compiled into `lc-core` for
+    /// `chain`, and gives every other path to `inner`.
+    struct WithTableConfiguration {
+        chain: ChainKind,
+        inner: Box<dyn HttpGet>,
+    }
+
+    impl HttpGet for WithTableConfiguration {
+        fn get(&self, path_and_query: &str, accept: &str) -> Result<HttpResponse> {
+            let (schedule, specification) =
+                crate::fork_schedule::answers_from_table(self.chain.spec());
+            let answer = match path_and_query {
+                FORK_SCHEDULE_PATH => schedule,
+                CHAIN_SPEC_PATH => specification,
+                _ => return self.inner.get(path_and_query, accept),
+            };
+            Ok(HttpResponse {
+                status: 200,
+                body: answer.to_string().into_bytes(),
+            })
+        }
+    }
+
+    /// A source over `node` whose configuration answers follow the compiled table of `chain`.
+    pub(super) fn source_over_node(
+        chain: ChainKind,
+        node: impl HttpGet + 'static,
+    ) -> HttpBeaconSource {
+        HttpBeaconSource::new(
+            chain,
+            Box::new(WithTableConfiguration {
+                chain,
+                inner: Box::new(node),
+            }),
+        )
+    }
+
     fn light_client_fixtures() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../light-client/tests/fixtures/pulsechain")
     }
 
     fn pulsechain_source(pages: Vec<(String, Vec<u8>)>) -> HttpBeaconSource {
-        HttpBeaconSource::new(
-            ChainKind::Pulsechain,
-            Box::new(Node(pages.into_iter().collect())),
-        )
+        source_over_node(ChainKind::Pulsechain, Node(pages.into_iter().collect()))
     }
 
     /// Serves the raw header of one hash and refuses every other.
@@ -985,7 +1166,7 @@ mod tests {
         }
     }
 
-    fn sepolia_fixtures() -> PathBuf {
+    pub(super) fn sepolia_fixtures() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../light-client/tests/fixtures/sepolia")
     }
 
@@ -1024,7 +1205,22 @@ mod tests {
             (format!("/eth/v2/debug/beacon/states/{state_root}"), state),
         ]);
         let hash = lc_core::execution::execution_block_hash(&rlp);
-        let mut source = HttpBeaconSource::new(ChainKind::Sepolia, Box::new(Node(pages)));
+        // The fixtures hold the finalized state only. The attested state of the real update is not on file, so its branch of
+        // `genesis_validators_root` cannot be computed. The store gets a placeholder of the right length (5 entries for a
+        // Gloas state). The placeholder is wrong, so the program refuses the fold at that check, after the finality and
+        // committee branches. The tests below rely on that.
+        let attested_state_root: B256 = update["response"]["data"]["attested_header"]["beacon"]
+            ["state_root"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let branches = Arc::new(MemoryBranchStore::new());
+        branches
+            .put(attested_state_root, vec![B256::ZERO; 5])
+            .unwrap();
+        let mut source =
+            source_over_node(ChainKind::Sepolia, Node(pages)).with_branch_store(branches);
         if with_headers {
             source = source.with_execution_headers(Box::new(OneHeader { hash, rlp }));
         }
@@ -1037,20 +1233,29 @@ mod tests {
     }
 
     /// Claim: the plan for a REAL Sepolia Gloas head carries a finalized header anchored in its real state, with the real
-    /// execution header RLP. The program accepts the plan natively (real BLS signature) and reports the block that
+    /// execution header RLP, and the check of the program on that header passes and reports the block that
     /// `state.latest_block_hash` names, with its number from the RLP. Why it matters: this is what the prover sends to the
     /// guest on Sepolia.
     #[test]
     fn a_gloas_plan_anchors_the_finalized_header_in_the_real_state() {
         let (source, stored, hash) = real_gloas_source(true);
         let plan = source.plan_update(&stored).unwrap().expect("a plan");
-        let finalized = &plan.input.updates[0].finalized_header;
+        let finalized = &plan.input.steps[0].update.finalized_header;
         assert_eq!(finalized.execution_block_hash(), hash);
         assert_eq!(finalized.execution_branch.len(), 11);
         assert!(!finalized.execution_header_rlp.is_empty());
-        let output = verify_update_natively(&plan.input).expect("the real Gloas fold verifies");
-        assert_eq!(output.executionBlockHash, hash);
-        assert_ne!(output.executionBlockNumber, 0);
+        let anchored = lc_core::update::verify_finalized_execution(finalized)
+            .expect("the anchored header passes the check of the program");
+        assert_eq!(anchored.block_hash, hash);
+        assert_ne!(anchored.block_number, 0);
+        // The real attested state is not on file, so the branch of `genesis_validators_root` is a placeholder. The program
+        // runs the finality and committee checks before that branch, so this exact refusal shows that they passed.
+        assert_eq!(
+            verify_update_natively(&plan.input).unwrap_err(),
+            Error::VerificationRefused(
+                lc_core::Error::InvalidGenesisValidatorsRootBranch.to_string()
+            )
+        );
     }
 
     /// Claim: without an execution source the plan for a Gloas head stops with a clear configuration error that names
@@ -1161,7 +1366,7 @@ mod tests {
             format!("/eth/v2/beacon/blocks/{}", x_slot + 1 + skipped as u64),
             read("gloas_head_block.ssz"),
         );
-        let source = HttpBeaconSource::new(ChainKind::Sepolia, Box::new(Node(pages)));
+        let source = source_over_node(ChainKind::Sepolia, Node(pages));
         let number = block_fixture["response"]["block_number"].as_u64().unwrap();
         let stored = StoredHead {
             slot: anchor.slot,
@@ -1379,7 +1584,7 @@ mod tests {
         let output = verify_update_natively(&UpdateInput {
             chain: ChainKind::Pulsechain,
             store,
-            updates: vec![update],
+            steps: steps_with_table_versions(ChainKind::Pulsechain, vec![update]),
         })
         .expect("the assembled update must verify natively");
         assert_eq!(output.previousHeadSlot, previous_header.slot);
@@ -1390,7 +1595,6 @@ mod tests {
 
     use crate::light_client::test_support::synthetic_state;
     use crate::light_client::ForkData;
-    use alloy_primitives::keccak256;
     use lc_core::ancestry::{ancestry_leaf_gindex, historical_leaf_gindex};
     use lc_core::ssz::is_valid_exact_branch;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1464,7 +1668,7 @@ mod tests {
             requests: requests.clone(),
         };
         (
-            HttpBeaconSource::new(ChainKind::Pulsechain, Box::new(node)),
+            source_over_node(ChainKind::Pulsechain, node),
             requests,
             answers,
         )
@@ -1822,7 +2026,7 @@ mod tests {
         let alone = UpdateInput {
             chain: ChainKind::Pulsechain,
             store: first.store.clone(),
-            updates: vec![latest],
+            steps: steps_with_table_versions(ChainKind::Pulsechain, vec![latest]),
         };
         let refused = verify_update_natively(&alone).unwrap_err();
         assert!(
@@ -1833,7 +2037,7 @@ mod tests {
         let input = UpdateInput {
             chain: ChainKind::Pulsechain,
             store: first.store.clone(),
-            updates: fold,
+            steps: steps_with_table_versions(ChainKind::Pulsechain, fold),
         };
         let output = verify_update_natively(&input).expect("the fold verifies natively");
         assert_eq!(output.previousHeadSlot, first.store.header_slot);
@@ -2067,11 +2271,7 @@ mod tests {
         };
         let path = format!("/eth/v2/debug/beacon/states/{:#x}", head.state_root);
         let node = Node([(path, bytes)].into_iter().collect());
-        (
-            HttpBeaconSource::new(ChainKind::Ethereum, Box::new(node)),
-            head,
-            state,
-        )
+        (source_over_node(ChainKind::Ethereum, node), head, state)
     }
 
     const FORKS_WITH_STATES: [ForkName; 4] = [
@@ -2173,7 +2373,7 @@ mod tests {
                 status,
                 pages: HashMap::from([(path.clone(), bytes.clone())]),
             };
-            let source = HttpBeaconSource::new(ChainKind::Ethereum, Box::new(node));
+            let source = source_over_node(ChainKind::Ethereum, node);
             let store = source
                 .store_at_head(&head, B256::ZERO)
                 .unwrap_or_else(|error| panic!("status {status}: {error}"));
@@ -2183,7 +2383,7 @@ mod tests {
             status: 503,
             pages: HashMap::from([(path, bytes)]),
         };
-        let refused = HttpBeaconSource::new(ChainKind::Ethereum, Box::new(node));
+        let refused = source_over_node(ChainKind::Ethereum, node);
         assert!(matches!(
             refused.store_at_head(&head, B256::ZERO),
             Err(Error::Beacon(message)) if message.contains("status 503")
@@ -2249,7 +2449,7 @@ mod tests {
         .to_ssz();
         let path = format!("/eth/v2/debug/beacon/states/{:#x}", other.state_root);
         let node = Node([(path, bytes)].into_iter().collect());
-        let liar = HttpBeaconSource::new(ChainKind::Ethereum, Box::new(node));
+        let liar = source_over_node(ChainKind::Ethereum, node);
         assert!(matches!(
             liar.store_at_head(&other, next_hash),
             Err(Error::Beacon(message)) if message.contains("hashes to")
@@ -2258,5 +2458,595 @@ mod tests {
             source.store_at_head(&head, next_hash).is_ok(),
             "the control must pass"
         );
+    }
+}
+
+#[cfg(test)]
+mod header_repair_tests {
+    //! Tests of the repair of the finalized header (item 3), of the fork schedule over HTTP (item 2) and of the branch of
+    //! `genesis_validators_root` (item 1). They use synthetic Sepolia updates from `lc-testkit`, because no served
+    //! transition update is on file.
+
+    use super::tests::{sepolia_fixtures, source_over_node, Node};
+    use super::*;
+    use crate::light_client::PADDED_EXECUTION_BRANCH_LENGTH;
+    use alloy_primitives::{hex, keccak256};
+    use lc_core::chain::{ChainSpec, ForkEntry, SEPOLIA};
+    use lc_core::types::{HeaderForm, LightClientHeader};
+    use lc_testkit::synthetic::{
+        build_gloas_update, synthetic_compact_finalized_header, GloasUpdateScenario, UpdateRecipe,
+    };
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A Sepolia slot in the last Fulu epoch but one, and so before the Gloas fork (slot 11296768).
+    const FULU_SLOT: u64 = 11_296_700;
+    /// A Sepolia slot in the Capella era (epochs 56832 to 132607).
+    const CAPELLA_SLOT: u64 = 2_000_000;
+
+    /// A source over a Sepolia node that serves only the two configuration answers, with a counting execution source.
+    fn repair_source(headers: Vec<Vec<u8>>) -> (HttpBeaconSource, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let by_hash = headers
+            .into_iter()
+            .map(|rlp| (keccak256(&rlp), rlp))
+            .collect();
+        let source = source_over_node(ChainKind::Sepolia, Node(HashMap::new()))
+            .with_execution_headers(Box::new(CountingHeaders {
+                by_hash,
+                calls: calls.clone(),
+            }));
+        (source, calls)
+    }
+
+    /// An execution source that gives the header of a known hash and counts every call.
+    struct CountingHeaders {
+        by_hash: HashMap<B256, Vec<u8>>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ExecutionHeaders for CountingHeaders {
+        fn raw_header(&self, hash: B256) -> Result<Vec<u8>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.by_hash
+                .get(&hash)
+                .cloned()
+                .ok_or_else(|| Error::Malformed(format!("no header for {hash:#x}")))
+        }
+    }
+
+    /// The form that a node serves for a header from before Gloas inside a Gloas update (`upgrade_lc_header_to_gloas`):
+    /// the original branch padded at the front with zeros up to 11 entries, and no encoded execution header.
+    fn served_padded_form(header: &LightClientHeader) -> LightClientHeader {
+        let missing = PADDED_EXECUTION_BRANCH_LENGTH - header.execution_branch.len();
+        let branch = [vec![B256::ZERO; missing], header.execution_branch.clone()].concat();
+        LightClientHeader::compact(
+            header.beacon,
+            header.execution_block_hash(),
+            branch,
+            Vec::new(),
+        )
+    }
+
+    /// An update whose finalized header is the given one, over a state that commits to the finalized beacon header root of
+    /// the scenario. Only the branch, the encoding and the form of the header change, and none of them is part of the beacon
+    /// header root, so the finality branch still holds.
+    fn update_with_finalized(
+        scenario: &GloasUpdateScenario,
+        finalized: LightClientHeader,
+    ) -> LightClientUpdate {
+        LightClientUpdate {
+            finalized_header: finalized,
+            ..scenario.update.clone()
+        }
+    }
+
+    fn schedule_of(source: &HttpBeaconSource) -> Arc<crate::fork_schedule::ForkSchedule> {
+        source.fork_schedule().expect("the compiled table joins")
+    }
+
+    /// A Gloas-typed scenario on Sepolia whose finalized header is from before Gloas. The attested header is in the first
+    /// Gloas epoch. (On Sepolia the fork falls on a period boundary, so such an update is not usable by any store; the tests
+    /// below that need a usable fold use the split chain.)
+    fn sepolia_transition_scenario() -> GloasUpdateScenario {
+        build_gloas_update(
+            &SEPOLIA,
+            UpdateRecipe {
+                store_slot: FULU_SLOT - 100,
+                finalized_slot: FULU_SLOT,
+                attested_slot: 11_296_800,
+                signature_slot: 11_296_801,
+                participants: 400,
+                include_next_committee: false,
+                store_knows_next_committee: false,
+            },
+        )
+    }
+
+    /// Claim: a Fulu header served padded (11 entries, 2 leading zeros) is repaired to the 9 entries of the original branch
+    /// (4 body entries and 5 payload entries) with the encoded header attached, and the check of the program then reports
+    /// the same block as the unpadded header does.
+    /// Why it matters: the program reads a length of 11 as the state anchor (index 2947), so the padded form is refused. The
+    /// repair is what makes a transition update usable. The data is synthetic, because no served transition update is on
+    /// file. The index of the block hash in a Deneb to Fulu payload header is 812, which is a branch of 9 entries.
+    #[test]
+    fn the_specification_padded_header_is_stripped_to_the_deneb_anchor() {
+        let original = synthetic_compact_finalized_header(&SEPOLIA, FULU_SLOT, 12_345_678);
+        assert_eq!(
+            original.execution_branch.len(),
+            9,
+            "the Fulu original has 9 entries"
+        );
+        let padded = served_padded_form(&original);
+        assert_eq!(padded.execution_branch.len(), 11);
+        assert_eq!(&padded.execution_branch[..2], &[B256::ZERO; 2]);
+        assert_eq!(
+            lc_core::update::verify_finalized_execution(&padded).unwrap_err(),
+            lc_core::Error::InvalidExecutionBranch("finalized"),
+            "control: the program refuses the padded form"
+        );
+        let (source, calls) = repair_source(vec![original.execution_header_rlp.clone()]);
+        let scenario = sepolia_transition_scenario();
+        let mut updates = [update_with_finalized(&scenario, padded)];
+        source
+            .repair_finalized_headers(&schedule_of(&source), &mut updates)
+            .unwrap();
+        let repaired = &updates[0].finalized_header;
+        assert_eq!(repaired.execution_branch, original.execution_branch);
+        assert_eq!(repaired.execution_header_rlp, original.execution_header_rlp);
+        assert_eq!(
+            lc_core::update::verify_finalized_execution(repaired).unwrap(),
+            lc_core::update::verify_finalized_execution(&original).unwrap()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Claim: a Capella header served padded (3 leading zeros) is repaired to 8 entries. Keeping 9 entries instead gives
+    /// the exact refusal of the native check, `InvalidExecutionBranch("finalized")`.
+    /// Why it matters: the number of entries to keep follows the fork name of the header slot. The Capella payload header has
+    /// 15 fields, so its block hash is at index 412 (depth 4 in the payload, 8 entries). A prover that always kept 9 entries
+    /// would break every transition update from a Capella chain.
+    #[test]
+    fn a_capella_padded_header_is_stripped_to_eight() {
+        let original = synthetic_compact_finalized_header(&SEPOLIA, CAPELLA_SLOT, 777);
+        assert_eq!(original.execution_branch.len(), 8);
+        let padded = served_padded_form(&original);
+        assert_eq!(&padded.execution_branch[..3], &[B256::ZERO; 3]);
+        let (source, _) = repair_source(vec![original.execution_header_rlp.clone()]);
+        let scenario = sepolia_transition_scenario();
+        let mut updates = [update_with_finalized(&scenario, padded.clone())];
+        source
+            .repair_finalized_headers(&schedule_of(&source), &mut updates)
+            .unwrap();
+        assert_eq!(updates[0].finalized_header.execution_branch.len(), 8);
+        lc_core::update::verify_finalized_execution(&updates[0].finalized_header).unwrap();
+        assert_eq!(
+            strip_transition_padding(&padded, 9, original.execution_header_rlp.clone())
+                .unwrap_err(),
+            Error::VerificationRefused(
+                lc_core::Error::InvalidExecutionBranch("finalized").to_string()
+            )
+        );
+    }
+
+    /// Claim: a padding entry that is not zero (entry 0 or entry 1 of the Fulu padding), and a padded branch of 10 or 12
+    /// entries, stop the prover with `HeaderFormMismatch` before any call to the execution source.
+    /// Why it matters: the prover must not strip real data, and the rule is exactly 11 entries. A shorter or longer branch is
+    /// not the form that the specification writes. The exact program check would also refuse a wrong branch, but the prover
+    /// must stop first and spend no call on a header that cannot work.
+    #[test]
+    fn a_non_zero_padding_entry_or_another_length_stops_the_prover() {
+        let original = synthetic_compact_finalized_header(&SEPOLIA, FULU_SLOT, 5);
+        let padded = served_padded_form(&original);
+        let mut cases = Vec::new();
+        for index in [0, 1] {
+            let mut branch = padded.execution_branch.clone();
+            branch[index] = B256::repeat_byte(1);
+            cases.push(branch);
+        }
+        cases.push([vec![B256::ZERO; 1], padded.execution_branch.clone()].concat());
+        cases.push(padded.execution_branch[1..].to_vec());
+        let (source, calls) = repair_source(vec![original.execution_header_rlp.clone()]);
+        let scenario = sepolia_transition_scenario();
+        for branch in cases {
+            let length = branch.len();
+            let header = LightClientHeader::compact(
+                padded.beacon,
+                padded.execution_block_hash(),
+                branch,
+                Vec::new(),
+            );
+            let mut updates = [update_with_finalized(&scenario, header)];
+            let error = source
+                .repair_finalized_headers(&schedule_of(&source), &mut updates)
+                .unwrap_err();
+            assert_eq!(
+                error,
+                Error::HeaderFormMismatch {
+                    slot: FULU_SLOT,
+                    fork: ForkName::Fulu,
+                    form: HeaderForm::Compact,
+                    branch_length: length,
+                }
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "no call for the encoding");
+    }
+
+    /// Claim: a Gloas finalized header is never stripped, even when its first branch entry is zero in a copy. The program
+    /// then refuses that copy. The strip is chosen by the fork name of the slot, not by the zeros.
+    /// Why it matters: the 11 entry branch of a Gloas header is the real state anchor (index 2947). A prover that stripped
+    /// leading zeros would damage a real branch whose first sibling is a zero hash.
+    #[test]
+    fn a_gloas_header_is_never_stripped() {
+        let scenario = build_gloas_update(
+            &SEPOLIA,
+            UpdateRecipe {
+                store_slot: 11_296_770,
+                finalized_slot: 11_296_800,
+                attested_slot: 11_296_900,
+                signature_slot: 11_296_901,
+                participants: 400,
+                include_next_committee: false,
+                store_knows_next_committee: false,
+            },
+        );
+        let genuine = scenario.update.finalized_header.clone();
+        assert_eq!(genuine.execution_branch.len(), 11);
+        let hash = genuine.execution_block_hash();
+        let rlp = genuine.execution_header_rlp.clone();
+        let mut zeroed = genuine.clone();
+        zeroed.execution_branch[0] = B256::ZERO;
+        // The Gloas path needs the state of the finalized header, which the synthetic scenario does not serve. The plan
+        // alone decides here: both copies are `GloasAnchor` and neither is a strip.
+        for header in [&genuine, &zeroed] {
+            assert_eq!(
+                plan_header_repair(header, ForkName::Gloas).unwrap(),
+                HeaderRepair::GloasAnchor
+            );
+        }
+        // The control that the zero matters to the program: the zeroed copy fails the check.
+        assert_eq!(hash, zeroed.execution_block_hash());
+        assert_eq!(
+            lc_core::update::verify_finalized_execution(&zeroed).unwrap_err(),
+            lc_core::Error::InvalidExecutionBranch("finalized")
+        );
+        lc_core::update::verify_finalized_execution(&genuine).unwrap();
+        assert_eq!(
+            genuine.execution_header_rlp, rlp,
+            "nothing touched the original"
+        );
+    }
+
+    /// A Sepolia-like chain whose Gloas fork falls in the middle of a sync committee period, so that a transition update can
+    /// be applied by a store. On real Sepolia the fork falls on the first slot of period 1379, which no store can use.
+    static SPLIT_FORKS: [ForkEntry; 8] = [
+        ForkEntry {
+            epoch: 0,
+            fork_version: [0x90, 0, 0, 0x69],
+            fork_name: ForkName::Phase0,
+        },
+        ForkEntry {
+            epoch: 50,
+            fork_version: [0x90, 0, 0, 0x70],
+            fork_name: ForkName::Altair,
+        },
+        ForkEntry {
+            epoch: 100,
+            fork_version: [0x90, 0, 0, 0x71],
+            fork_name: ForkName::Bellatrix,
+        },
+        ForkEntry {
+            epoch: 56_832,
+            fork_version: [0x90, 0, 0, 0x72],
+            fork_name: ForkName::Capella,
+        },
+        ForkEntry {
+            epoch: 132_608,
+            fork_version: [0x90, 0, 0, 0x73],
+            fork_name: ForkName::Deneb,
+        },
+        ForkEntry {
+            epoch: 222_464,
+            fork_version: [0x90, 0, 0, 0x74],
+            fork_name: ForkName::Electra,
+        },
+        ForkEntry {
+            epoch: 272_640,
+            fork_version: [0x90, 0, 0, 0x75],
+            fork_name: ForkName::Fulu,
+        },
+        ForkEntry {
+            epoch: 353_040,
+            fork_version: [0x90, 0, 0, 0x76],
+            fork_name: ForkName::Gloas,
+        },
+    ];
+    static SPLIT_SPEC: ChainSpec = ChainSpec {
+        name: "sepolia-split",
+        fork_schedule: &SPLIT_FORKS,
+        ..SEPOLIA
+    };
+
+    /// Claim: a transition fold on a chain whose Gloas fork is mid period verifies end to end. A store in the last Fulu
+    /// epochs folds an update whose attested header is in the first Gloas epoch and whose finalized header is a Fulu header,
+    /// served padded. The repair makes it pass; without the repair the program refuses it.
+    /// Why it matters: this is the whole repair in one run, with a real BLS signature of the synthetic committee and the
+    /// signing version from the fork schedule of the node. The fork schedule here is the split chain, not the table of Sepolia.
+    #[test]
+    fn a_transition_fold_from_fulu_to_gloas_verifies_end_to_end() {
+        let scenario = build_gloas_update(
+            &SPLIT_SPEC,
+            UpdateRecipe {
+                store_slot: 11_297_000,
+                finalized_slot: 11_297_200,
+                attested_slot: 11_297_300,
+                signature_slot: 11_297_301,
+                participants: 400,
+                include_next_committee: false,
+                store_knows_next_committee: false,
+            },
+        );
+        let original = scenario.update.finalized_header.clone();
+        assert_eq!(
+            original.execution_branch.len(),
+            9,
+            "a Fulu header before the repair"
+        );
+        let padded = served_padded_form(&original);
+        let (schedule_answer, specification) =
+            crate::fork_schedule::answers_from_table(&SPLIT_SPEC);
+        let schedule = crate::fork_schedule::ForkSchedule::from_answers(
+            &schedule_answer,
+            &specification,
+            SPLIT_SPEC.slots_per_epoch,
+        )
+        .unwrap();
+        let (source, _) = repair_source(vec![original.execution_header_rlp.clone()]);
+        let fold = |update: LightClientUpdate| {
+            lc_core::update::verify_light_client_fold_with_fork_versions(
+                &scenario.store,
+                &[lc_core::update::FoldStep {
+                    fork_version: schedule.signing_version(update.signature_slot),
+                    update,
+                }],
+                &SPLIT_SPEC,
+            )
+        };
+        assert_eq!(
+            fold(update_with_finalized(&scenario, padded.clone())).unwrap_err(),
+            lc_core::Error::InvalidExecutionBranch("finalized"),
+            "control: the served form is refused"
+        );
+        let mut updates = [update_with_finalized(&scenario, padded)];
+        source
+            .repair_finalized_headers(&schedule, &mut updates)
+            .unwrap();
+        let [repaired] = updates;
+        let output = fold(repaired).expect("the repaired transition fold verifies");
+        assert_eq!(output.executionBlockHash, original.execution_block_hash());
+        assert_eq!(output.newHeadSlot, 11_297_200);
+    }
+
+    /// Claim: the attested header of a transition update stays as served. Only the finalized header is repaired.
+    /// Why it matters: the program does not read the execution data of the attested header, and a repair there would be
+    /// work with no use and a new place for a mistake.
+    #[test]
+    fn the_attested_header_of_a_transition_update_is_left_alone() {
+        let scenario = sepolia_transition_scenario();
+        let original = synthetic_compact_finalized_header(&SEPOLIA, FULU_SLOT, 99);
+        let padded_attested = served_padded_form(&original);
+        let (source, _) = repair_source(vec![original.execution_header_rlp.clone()]);
+        let mut updates = [LightClientUpdate {
+            attested_header: padded_attested.clone(),
+            finalized_header: served_padded_form(&original),
+            ..scenario.update.clone()
+        }];
+        source
+            .repair_finalized_headers(&schedule_of(&source), &mut updates)
+            .unwrap();
+        assert_eq!(updates[0].attested_header, padded_attested);
+        assert_eq!(updates[0].attested_header.execution_branch.len(), 11);
+        assert_eq!(updates[0].finalized_header.execution_branch.len(), 9);
+    }
+
+    /// A scripted execution node: `debug_getRawHeader` answers with `raw` (or an error object), and `eth_getBlockByHash`
+    /// answers with `block`.
+    struct ScriptedExecutionNode {
+        raw: std::result::Result<serde_json::Value, ()>,
+        block: serde_json::Value,
+    }
+
+    impl JsonRpc for ScriptedExecutionNode {
+        fn call(&self, method: &str, _params: serde_json::Value) -> Result<serde_json::Value> {
+            match method {
+                "debug_getRawHeader" => self.raw.clone().map_err(|()| Error::Rpc {
+                    code: -32601,
+                    message: "the method debug_getRawHeader does not exist".into(),
+                    data: None,
+                }),
+                "eth_getBlockByHash" => Ok(self.block.clone()),
+                other => panic!("unexpected call {other}"),
+            }
+        }
+    }
+
+    /// A real execution block of the fixtures: its JSON, and the encoding that the rebuilder makes of it.
+    fn fixture_block() -> (serde_json::Value, B256, Vec<u8>) {
+        let path = sepolia_fixtures().join("../ethereum/execution_block.json");
+        let wrapper: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let block = wrapper["response"].clone();
+        let rebuilt = rebuild_execution_header(&block).expect("the fixture block rebuilds");
+        (block, rebuilt.block_hash, rebuilt.header_rlp.to_vec())
+    }
+
+    /// Claim: the raw header answer is checked by keccak. A node that answers the encoding of another block gives
+    /// `Error::Malformed`, and does not take the fallback. A node that answers the right encoding is believed.
+    /// Why it matters: this is the only guard in the prover against a lying execution node on the update path. The program
+    /// would refuse such a header later, but at the cost of a proof run, so only this test sees a missing check in the prover.
+    /// The error is `Malformed` on every path that reads a raw header (see `checked_raw_header`).
+    #[test]
+    fn the_raw_header_answer_is_checked_by_keccak() {
+        let (block, hash, rlp) = fixture_block();
+        let honest = RpcExecutionHeaders::new(Box::new(ScriptedExecutionNode {
+            raw: Ok(serde_json::json!(format!("0x{}", hex::encode(&rlp)))),
+            block: block.clone(),
+        }));
+        assert_eq!(honest.raw_header(hash).unwrap(), rlp);
+        let mut other = rlp.clone();
+        *other.last_mut().unwrap() ^= 1;
+        let liar = RpcExecutionHeaders::new(Box::new(ScriptedExecutionNode {
+            raw: Ok(serde_json::json!(format!("0x{}", hex::encode(&other)))),
+            block,
+        }));
+        let error = liar.raw_header(hash).unwrap_err();
+        assert!(
+            matches!(&error, Error::Malformed(text) if text.contains("does not hash to")),
+            "{error}"
+        );
+    }
+
+    /// Claim: when `debug_getRawHeader` answers with an error object ("method not found"), the encoding is rebuilt from
+    /// `eth_getBlockByHash`, hashes to the block hash and is returned. A block answer with one changed field gives
+    /// `Error::Malformed` (the rebuilt encoding does not hash to the reported hash).
+    /// Why it matters: many execution nodes do not serve the debug method. Without the fallback the update path would stop
+    /// on them, although the opening path already works there.
+    #[test]
+    fn the_rebuild_fallback_is_used_when_the_raw_header_call_fails() {
+        let (block, hash, rlp) = fixture_block();
+        let rebuilt = RpcExecutionHeaders::new(Box::new(ScriptedExecutionNode {
+            raw: Err(()),
+            block: block.clone(),
+        }));
+        assert_eq!(rebuilt.raw_header(hash).unwrap(), rlp);
+        let mut changed = block;
+        changed["gasUsed"] = serde_json::json!("0x1234567");
+        let tampered = RpcExecutionHeaders::new(Box::new(ScriptedExecutionNode {
+            raw: Err(()),
+            block: changed,
+        }));
+        assert!(matches!(
+            tampered.raw_header(hash),
+            Err(Error::Malformed(_))
+        ));
+    }
+
+    /// Claim: the repair of a finalized header follows the fork name of its slot, and the form of the answer must agree with
+    /// it. A real Gloas answer (compact, 11 entries) under the Gloas name needs the anchor. A real Fulu answer (full form)
+    /// under the Fulu name needs nothing. A full answer under the Gloas name, and a compact answer without padding under the
+    /// Fulu name, give `HeaderFormMismatch`.
+    /// Why it matters: a repair that looked at the form alone would anchor a header through the wrong state, or strip a
+    /// header that is not padded. The fork name is the authority, and the form is the cross check.
+    #[test]
+    fn the_gloas_anchor_follows_the_fork_name_and_the_answer_form_must_agree() {
+        let read = |path: std::path::PathBuf| -> LightClientUpdate {
+            let wrapper: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            update_from_json(&wrapper["response"]["data"]).unwrap()
+        };
+        let gloas = read(sepolia_fixtures().join("gloas_head_finality_update.json"));
+        let fulu = read(sepolia_fixtures().join("../ethereum/finality_update.json"));
+        assert_eq!(gloas.finalized_header.form, HeaderForm::Compact);
+        assert_eq!(fulu.finalized_header.form, HeaderForm::Full);
+        assert_eq!(
+            plan_header_repair(&gloas.finalized_header, ForkName::Gloas).unwrap(),
+            HeaderRepair::GloasAnchor
+        );
+        assert_eq!(
+            plan_header_repair(&fulu.finalized_header, ForkName::Fulu).unwrap(),
+            HeaderRepair::Untouched
+        );
+        assert_eq!(
+            plan_header_repair(&fulu.finalized_header, ForkName::Gloas).unwrap_err(),
+            Error::HeaderFormMismatch {
+                slot: fulu.finalized_header.beacon.slot,
+                fork: ForkName::Gloas,
+                form: HeaderForm::Full,
+                branch_length: fulu.finalized_header.execution_branch.len(),
+            }
+        );
+        let unpadded = synthetic_compact_finalized_header(&SEPOLIA, FULU_SLOT, 4);
+        assert_eq!(
+            plan_header_repair(&unpadded, ForkName::Fulu).unwrap_err(),
+            Error::HeaderFormMismatch {
+                slot: FULU_SLOT,
+                fork: ForkName::Fulu,
+                form: HeaderForm::Compact,
+                branch_length: 9,
+            }
+        );
+    }
+
+    /// Claim: a node without the two configuration answers stops the prover with `Error::Beacon` that names the missing
+    /// path. There is no fallback to the compiled table.
+    /// Why it matters: a silent fallback would bring the fork table back into the decision, and a wrong table would pass for
+    /// a right one.
+    #[test]
+    fn missing_config_endpoints_stop_the_prover() {
+        let silent = HttpBeaconSource::new(ChainKind::Sepolia, Box::new(Node(HashMap::new())));
+        assert!(matches!(
+            silent.fork_schedule(),
+            Err(Error::Beacon(text)) if text.contains(FORK_SCHEDULE_PATH)
+        ));
+        let (schedule, _) = crate::fork_schedule::answers_from_table(&SEPOLIA);
+        let half = HttpBeaconSource::new(
+            ChainKind::Sepolia,
+            Box::new(Node(HashMap::from([(
+                FORK_SCHEDULE_PATH.to_string(),
+                schedule.to_string().into_bytes(),
+            )]))),
+        );
+        assert!(matches!(
+            half.fork_schedule(),
+            Err(Error::Beacon(text)) if text.contains(CHAIN_SPEC_PATH)
+        ));
+        assert!(source_over_node(ChainKind::Sepolia, Node(HashMap::new()))
+            .fork_schedule()
+            .is_ok());
+    }
+
+    /// Claim: the branch of `genesis_validators_root` that the prover builds from a REAL Gloas state (the Sepolia head state
+    /// of the fixtures) has 5 entries and proves the genesis validators root of Sepolia at generalized index 40.
+    /// Why it matters: the prover and the program must agree on the position. A wrong position would make every update
+    /// fail the check of the program. The PulseChain half of the claim (the assembled update verifies natively) is the test
+    /// `assembled_update_from_real_pulsechain_data_verifies`.
+    #[test]
+    fn the_prover_builds_the_genesis_validators_root_branch_from_the_attested_state() {
+        let bytes = std::fs::read(sepolia_fixtures().join("gloas_head_state.ssz")).unwrap();
+        let state = StateView::parse(&bytes, ChainKind::Sepolia).unwrap();
+        let branch = state.genesis_validators_root_branch();
+        assert_eq!(branch.len(), 5);
+        assert!(lc_core::ssz::is_valid_exact_branch(
+            &SEPOLIA.genesis_validators_root,
+            &branch,
+            40,
+            &state.root()
+        ));
+        let wrong_leaf = B256::repeat_byte(7);
+        assert!(!lc_core::ssz::is_valid_exact_branch(
+            &wrong_leaf,
+            &branch,
+            40,
+            &state.root()
+        ));
+        assert!(!lc_core::ssz::is_valid_exact_branch(
+            &SEPOLIA.genesis_validators_root,
+            &branch,
+            33,
+            &state.root()
+        ));
+    }
+
+    /// Claim: over HTTP, the version of a PulseChain step comes from Capella and never from the placeholder of the unscheduled
+    /// Deneb fork.
+    /// Why it matters: the placeholder version is `0xffffffff`. If it ever reached a step, the signature check would fail.
+    #[test]
+    fn the_version_of_a_pulsechain_step_is_capella_not_the_placeholder() {
+        let source = source_over_node(ChainKind::Pulsechain, Node(HashMap::new()));
+        let schedule = source.fork_schedule().unwrap();
+        let slot = 50_000_000;
+        assert_eq!(schedule.signing_version(slot), [0, 0, 0x03, 0x6c]);
+        assert_ne!(schedule.signing_version(slot), [0xff; 4]);
     }
 }

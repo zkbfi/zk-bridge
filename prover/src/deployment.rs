@@ -195,7 +195,9 @@ impl SectionDraft {
             wrapped_native,
             gate: required(self.gate, "gate")?,
             light_client: required(self.light_client, "light_client")?,
-            delivery_router: self.delivery_router.filter(|address| *address != Address::ZERO),
+            delivery_router: self
+                .delivery_router
+                .filter(|address| *address != Address::ZERO),
             fork_registry: self
                 .fork_registry
                 .filter(|address| *address != Address::ZERO),

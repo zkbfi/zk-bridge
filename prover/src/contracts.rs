@@ -122,6 +122,37 @@ sol! {
     }
 }
 
+sol! {
+    /// The `ForkRegistry` surface the crate reads, and `observe`, which it only encodes. The registry records the fork
+    /// versions that a sync committee signed under, and the shape of the attested state that carried each version.
+    interface ForkRegistryContract {
+        function observe(bytes calldata proof, bytes calldata publicValues) external;
+        function latestObserved() external view returns (bytes4 version, uint8 shape, uint64 slot);
+        function latestObservedVersion() external view returns (bytes4);
+        function firstSeenSlot(bytes4 version) external view returns (uint64);
+        function shapeOf(bytes4 version) external view returns (uint8);
+        function lightClient() external view returns (address);
+        function observationProgramVKey() external view returns (bytes32);
+
+        event ForkObserved(bytes4 indexed version, uint8 shape, uint64 slot);
+    }
+}
+
+/// The length of the public values of the fork observation program: eight words (`ForkObservation`), the last one the
+/// `uint8 shape`. The registry refuses any other length.
+pub const FORK_OBSERVATION_PUBLIC_VALUES_LENGTH: usize = 256;
+
+/// The calldata of `ForkRegistry.observe`.
+pub fn observe_calldata(proof: &[u8], public_values: &[u8]) -> Bytes {
+    Bytes::from(
+        ForkRegistryContract::observeCall {
+            proof: proof.to_vec().into(),
+            publicValues: public_values.to_vec().into(),
+        }
+        .abi_encode(),
+    )
+}
+
 /// The calldata of `BeaconLightClient.update`.
 pub fn update_calldata(proof: &[u8], public_values: &[u8]) -> Bytes {
     Bytes::from(
@@ -153,6 +184,89 @@ mod tests {
         let decoded = LightClientContract::updateCall::abi_decode(&calldata).unwrap();
         assert_eq!(decoded.proof.as_ref(), &[1, 2, 3]);
         assert_eq!(decoded.publicValues.as_ref(), &[4, 5]);
+    }
+
+    /// Claim: `observe` and the views of `ForkRegistry` have the selectors of the contract signatures, and `latestObserved`
+    /// returns the shape as its second value.
+    /// Why it matters: the registry gained the `shape` word with the new observation output. A binding that kept the old
+    /// two-value return would decode a wrong slot.
+    #[test]
+    fn fork_registry_calls_match_the_contract_signatures() {
+        for (selector, signature) in [
+            (
+                ForkRegistryContract::observeCall::SELECTOR,
+                "observe(bytes,bytes)",
+            ),
+            (
+                ForkRegistryContract::latestObservedCall::SELECTOR,
+                "latestObserved()",
+            ),
+            (
+                ForkRegistryContract::latestObservedVersionCall::SELECTOR,
+                "latestObservedVersion()",
+            ),
+            (
+                ForkRegistryContract::firstSeenSlotCall::SELECTOR,
+                "firstSeenSlot(bytes4)",
+            ),
+            (
+                ForkRegistryContract::shapeOfCall::SELECTOR,
+                "shapeOf(bytes4)",
+            ),
+            (
+                ForkRegistryContract::lightClientCall::SELECTOR,
+                "lightClient()",
+            ),
+            (
+                ForkRegistryContract::observationProgramVKeyCall::SELECTOR,
+                "observationProgramVKey()",
+            ),
+        ] {
+            assert_eq!(&selector[..], &keccak256(signature)[..4], "{signature}");
+        }
+        let returned = ForkRegistryContract::latestObservedCall::abi_decode_returns(&{
+            let mut word = [0u8; 96];
+            word[..4].copy_from_slice(&[0, 0, 3, 0x6d]);
+            word[63] = 255;
+            word[95] = 7;
+            word
+        })
+        .unwrap();
+        assert_eq!((returned.shape, returned.slot), (255, 7));
+        assert_eq!(
+            <ForkRegistryContract::ForkObserved as alloy_sol_types::SolEvent>::SIGNATURE,
+            "ForkObserved(bytes4,uint8,uint64)"
+        );
+    }
+
+    /// Claim: the output of the fork observation program, encoded by `lc-core`, has the length that the registry demands
+    /// (256 bytes), and `observe_calldata` carries the proof and the public values unchanged.
+    /// Why it matters: the output grew from 224 to 256 bytes when the program began to prove the shape. A prover that
+    /// still expected 224 would reject a good proof, and the registry rejects any other length.
+    #[test]
+    fn the_observation_output_is_the_length_the_registry_demands() {
+        use alloy_sol_types::SolValue;
+        let output = lc_core::abi::ForkObservation {
+            genesisValidatorsRoot: B256::repeat_byte(1),
+            previousHeaderRoot: B256::repeat_byte(2),
+            previousHeadSlot: 3,
+            previousSyncCommitteeHash: B256::repeat_byte(4),
+            startNextSyncCommitteeHash: B256::ZERO,
+            observedVersion: [0, 0, 3, 0x6d].into(),
+            observedAttestedSlot: 9,
+            shape: 6,
+        };
+        assert_eq!(
+            output.abi_encode().len(),
+            FORK_OBSERVATION_PUBLIC_VALUES_LENGTH
+        );
+        let calldata = observe_calldata(&[1], &output.abi_encode());
+        let decoded = ForkRegistryContract::observeCall::abi_decode(&calldata).unwrap();
+        assert_eq!(decoded.proof.as_ref(), &[1]);
+        assert_eq!(
+            decoded.publicValues.as_ref(),
+            output.abi_encode().as_slice()
+        );
     }
 
     /// Claim: the three layout calls have the selectors of their contract signatures.

@@ -21,7 +21,8 @@ use lc_core::ssz_state::{
     state_slot, try_parse_signed_block, try_parse_state_for_fork, ParsedState, StateForm,
 };
 use lc_core::types::{
-    BeaconBlockHeader, ExecutionPayloadHeader, LightClientHeader, NextSyncCommittee, SyncCommittee,
+    BeaconBlockHeader, ExecutionPayloadHeader, HeaderForm, LightClientHeader, NextSyncCommittee,
+    SyncCommittee,
 };
 use lc_core::update::FoldStep;
 use lc_core::wire::{encode_guest_input, ChainSelector, GuestInput};
@@ -139,28 +140,49 @@ fn guarded<T>(what: &str, work: impl FnOnce() -> T) -> Result<T> {
 
 // ------------------------------------------------------------------ light-client updates
 
-/// Everything the light-client program reads: a store and a list of 1 to 64 updates.
+/// Everything the light-client program reads: a store and a list of 1 to 64 fold steps.
 #[derive(Clone, Debug)]
 pub struct UpdateInput {
     /// The chain of the beacon data.
     pub chain: ChainKind,
     /// The store before the first update (a private input of the program).
     pub store: LightClientStore,
-    /// The updates, applied in order.
-    pub updates: Vec<LightClientUpdate>,
+    /// The steps, applied in order. Each step is an update and the fork version that its committee signed under.
+    pub steps: Vec<FoldStep>,
+}
+
+/// Steps whose fork versions come from the table that is compiled into `lc-core`.
+///
+/// This is only for synthetic chains and fixtures, where the compiled table is the truth. The beacon source never calls
+/// it: it takes the versions from the fork schedule of the node (see [`crate::fork_schedule`]).
+pub fn steps_with_table_versions(
+    chain: ChainKind,
+    updates: Vec<LightClientUpdate>,
+) -> Vec<FoldStep> {
+    updates
+        .into_iter()
+        .map(|update| FoldStep {
+            fork_version: lc_core::update::table_fork_version(chain.spec(), update.signature_slot),
+            update,
+        })
+        .collect()
 }
 
 /// Runs the light-client program natively and returns its public output.
 ///
-/// Calls `lc_core::update::verify_light_client_fold`. It checks, for each update, the participation threshold, the
-/// aggregate signature, the committee, the finality branch and the execution branch.
+/// Calls `lc_core::update::verify_light_client_fold_with_fork_versions` with the fork version of each step. It checks, for
+/// each update, the participation threshold, the aggregate signature, the committee, the finality branch, the branch of
+/// the genesis validators root and the execution branch.
 ///
 /// # Errors
 /// `Error::VerificationRefused` with the rule that failed.
 pub fn verify_update_natively(input: &UpdateInput) -> Result<LightClientOutput> {
-    lc_core::update::verify_light_client_fold(&input.store, &input.updates, input.chain.spec())
-        .map(|(output, _)| output)
-        .map_err(|error| Error::VerificationRefused(error.to_string()))
+    lc_core::update::verify_light_client_fold_with_fork_versions(
+        &input.store,
+        &input.steps,
+        input.chain.spec(),
+    )
+    .map_err(|error| Error::VerificationRefused(error.to_string()))
 }
 
 /// Runs the light-client program natively on its guest input bytes and returns its public values.
@@ -194,25 +216,16 @@ pub fn public_values(output: &LightClientOutput) -> Vec<u8> {
 
 /// The input bytes that an SP1 guest reads (used by the `sp1` backend).
 ///
-/// Calls `lc_core::wire::encode_guest_input` with the fork version of each step from the fork schedule of the chain.
+/// Calls `lc_core::wire::encode_guest_input`. The fork version of each step is part of the step.
 ///
-/// The schedule is read only to BUILD the input. The program takes the version as a private input and trusts nothing
-/// about it: the committee signs a domain that contains the version, so a wrong value fails the signature check. The
-/// program reads no fork table, so a fork that keeps an accepted layout needs no new program.
+/// The version was read from the fork schedule of the beacon node to BUILD the step. The program takes it as a private
+/// input and trusts nothing about it: the committee signs a domain that contains the version, so a wrong value fails the
+/// signature check. The program reads no fork table, so a fork that keeps an accepted layout needs no new program.
 pub fn guest_input_bytes(input: &UpdateInput) -> Vec<u8> {
-    let spec = input.chain.spec();
-    let steps = input
-        .updates
-        .iter()
-        .map(|update| FoldStep {
-            update: update.clone(),
-            fork_version: lc_core::update::table_fork_version(spec, update.signature_slot),
-        })
-        .collect();
     encode_guest_input(&GuestInput {
         chain: input.chain.selector(),
         store: input.store.clone(),
-        steps,
+        steps: input.steps.clone(),
     })
 }
 
@@ -598,6 +611,8 @@ pub fn block_hash_gindex(chain: ChainKind, slot: u64) -> Result<u64> {
 const STATE_FIELD_FINALIZED_CHECKPOINT: usize = 20;
 const STATE_FIELD_CURRENT_SYNC_COMMITTEE: usize = 22;
 const STATE_FIELD_NEXT_SYNC_COMMITTEE: usize = 23;
+/// The position of `genesis_validators_root` among the fields of `BeaconState`, in every layout.
+const STATE_FIELD_GENESIS_VALIDATORS_ROOT: usize = 1;
 const BODY_FIELD_EXECUTION_PAYLOAD: usize = 9;
 const PAYLOAD_FIELD_BLOCK_HASH: usize = 12;
 /// The field counts of the layouts that the parser supports: Capella and Deneb (28), Electra (37), Fulu (38), Gloas (46).
@@ -627,9 +642,25 @@ impl StateView {
     /// # Errors
     /// `Error::Malformed` when the bytes are not a state of that fork, or when the fork has no parser.
     pub fn parse(bytes: &[u8], chain: ChainKind) -> Result<Self> {
+        let slot = Self::slot_of_bytes(bytes)?;
+        Self::parse_with_fork(bytes, chain.spec().fork_at_slot(slot))
+    }
+
+    /// The slot of an SSZ state, from its first fields.
+    ///
+    /// # Errors
+    /// `Error::Malformed` when the bytes end before the slot.
+    pub fn slot_of_bytes(bytes: &[u8]) -> Result<u64> {
+        state_slot(bytes).map_err(|error| Error::Malformed(format!("beacon state: {error}")))
+    }
+
+    /// Parses and hashes a state of the named fork. The beacon source calls this with the fork from the fork schedule of the
+    /// node, so a delayed or moved fork needs no change to the compiled table.
+    ///
+    /// # Errors
+    /// `Error::Malformed` when the bytes are not a state of that fork, or when the fork has no parser.
+    pub fn parse_with_fork(bytes: &[u8], fork: ForkName) -> Result<Self> {
         let malformed = |error: lc_core::Error| Error::Malformed(format!("beacon state: {error}"));
-        let slot = state_slot(bytes).map_err(malformed)?;
-        let fork = chain.spec().fork_at_slot(slot);
         let state =
             // The parser returns errors for malformed input; `guarded` stays as a second line of defence.
             guarded("beacon state", || try_parse_state_for_fork(bytes, fork))?
@@ -716,6 +747,13 @@ impl StateView {
         self.state.field_branch(STATE_FIELD_NEXT_SYNC_COMMITTEE)
     }
 
+    /// Branch for `genesis_validators_root`, the field at position 1 of the state: 5, 6 or 7 entries for a plain state of
+    /// 32, 64 or 128 leaves, and 5 entries for the Gloas progressive state. The update carries it, because the program
+    /// checks the layout that the finality branch names against it (generalized index 33, 65, 129 or 40).
+    pub fn genesis_validators_root_branch(&self) -> Vec<B256> {
+        self.state.field_branch(STATE_FIELD_GENESIS_VALIDATORS_ROOT)
+    }
+
     /// Branch for `current_sync_committee`.
     pub fn current_committee_branch(&self) -> Vec<B256> {
         self.state.field_branch(STATE_FIELD_CURRENT_SYNC_COMMITTEE)
@@ -774,6 +812,101 @@ pub fn anchor_gloas_header(
     lc_core::update::verify_finalized_execution(&anchored)
         .map_err(|error| Error::VerificationRefused(error.to_string()))?;
     Ok(anchored)
+}
+
+/// The length of the execution branch that a Gloas-typed object gives to every header, also to a header from before the
+/// Gloas fork. `upgrade_lc_header_to_gloas` pads the old branch at the front with zeros up to this length.
+pub const PADDED_EXECUTION_BRANCH_LENGTH: usize = 11;
+
+/// What a finalized header of an update needs before the program can read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeaderRepair {
+    /// The header is in the form of its fork and needs nothing.
+    Untouched,
+    /// A Gloas header in the compact form. It needs the anchor through the state (see [`anchor_gloas_header`]).
+    GloasAnchor,
+    /// A header from before Gloas, served padded inside a Gloas update. The padding goes, and the entries that remain are
+    /// the original branch of this length. The encoded execution header is attached.
+    StripPadding {
+        /// How many entries the original branch has: 8 for Capella, 9 for Deneb to Fulu.
+        keep: usize,
+    },
+}
+
+/// The number of entries of the original compact execution branch of a fork before Gloas, or `None` for a fork that has
+/// no execution payload. The branch runs from the execution block hash to the body root.
+///
+/// Capella: the payload header has 15 fields, so the block hash is at index 412 and the branch has 8 entries. Deneb,
+/// Electra and Fulu: the payload header has 17 fields, the index is 812, and the branch has 9 entries.
+fn original_branch_length(fork: ForkName) -> Option<usize> {
+    match fork {
+        ForkName::Capella => Some(8),
+        ForkName::Deneb | ForkName::Electra | ForkName::Fulu => Some(9),
+        _ => None,
+    }
+}
+
+/// Decides what the finalized header of an update needs, from the form that the node served and the fork of the slot of
+/// the header. The fork name chooses. The zeros of the padding never choose.
+///
+/// - Gloas fork and compact form: [`HeaderRepair::GloasAnchor`].
+/// - Pre-Gloas fork and full form: [`HeaderRepair::Untouched`].
+/// - Pre-Gloas fork and compact form: the branch must have exactly 11 entries and the leading entries must be zero. Then
+///   [`HeaderRepair::StripPadding`].
+///
+/// # Errors
+/// `Error::HeaderFormMismatch` for a Gloas header in the full form, for a pre-Gloas header in the compact form with a
+/// branch of another length than 11 (it has no padding to strip), for a non-zero padding entry, and for a fork that has
+/// no execution payload.
+pub fn plan_header_repair(header: &LightClientHeader, fork: ForkName) -> Result<HeaderRepair> {
+    let mismatch = || Error::HeaderFormMismatch {
+        slot: header.beacon.slot,
+        fork,
+        form: header.form,
+        branch_length: header.execution_branch.len(),
+    };
+    let before_gloas = fork < ForkName::Gloas;
+    match (before_gloas, header.form) {
+        (false, HeaderForm::Compact) => return Ok(HeaderRepair::GloasAnchor),
+        (false, HeaderForm::Full) => return Err(mismatch()),
+        (true, HeaderForm::Full) => return Ok(HeaderRepair::Untouched),
+        (true, HeaderForm::Compact) => {}
+    }
+    let keep = original_branch_length(fork).ok_or_else(mismatch)?;
+    if header.execution_branch.len() != PADDED_EXECUTION_BRANCH_LENGTH {
+        return Err(mismatch());
+    }
+    let padding = &header.execution_branch[..PADDED_EXECUTION_BRANCH_LENGTH - keep];
+    if padding.iter().any(|entry| *entry != B256::ZERO) {
+        return Err(mismatch());
+    }
+    Ok(HeaderRepair::StripPadding { keep })
+}
+
+/// The finalized header of a transition update, repaired: the padding of the branch removed, `keep` entries left, and the
+/// encoded execution header attached.
+///
+/// The function repeats the check of the program (`verify_finalized_execution`), so a wrong keep count or a wrong encoding
+/// stops the prover and not the proof run. The caller has checked that the encoding hashes to the block hash that the
+/// header names.
+///
+/// # Errors
+/// `Error::VerificationRefused` when the repaired header fails the check of `lc-core`.
+pub fn strip_transition_padding(
+    header: &LightClientHeader,
+    keep: usize,
+    execution_header_rlp: Vec<u8>,
+) -> Result<LightClientHeader> {
+    let start = header.execution_branch.len().saturating_sub(keep);
+    let repaired = LightClientHeader::compact(
+        header.beacon,
+        header.execution_block_hash(),
+        header.execution_branch[start..].to_vec(),
+        execution_header_rlp,
+    );
+    lc_core::update::verify_finalized_execution(&repaired)
+        .map_err(|error| Error::VerificationRefused(error.to_string()))?;
+    Ok(repaired)
 }
 
 /// A beacon block read from SSZ bytes, with the execution branches.
@@ -889,6 +1022,7 @@ pub fn assemble_update(
         finality_branch: state.finality_branch(),
         sync_aggregate,
         signature_slot,
+        genesis_validators_root_branch: state.genesis_validators_root_branch(),
     }
 }
 

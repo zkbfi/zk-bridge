@@ -8,6 +8,7 @@
 //! starting head already is the newest final header and there is nothing to prove, and 1 for an error. `evidence` returns
 //! 0 or 1.
 
+use crate::beacon::branch_store::DirectoryBranchStore;
 use crate::beacon::http::{HttpBeaconSource, RpcExecutionHeaders};
 use crate::beacon::StoredHead;
 use crate::chain::ChainClient;
@@ -237,6 +238,7 @@ struct ProvePlan {
     route_name: String,
     beacon_url: String,
     source_rpc_url: Option<String>,
+    branch_store_dir: Option<String>,
     chain: ChainKind,
     destination: Option<DestinationConfig>,
     starting_point: StartingPoint,
@@ -252,29 +254,32 @@ fn parse_hash(text: &str, flag: &str) -> Result<B256> {
 /// `Error::Usage` for flags that do not fit together or a route that cannot be chosen. `Error::Config` when an explicit
 /// head has no program key.
 fn plan_prove(config: &Config, arguments: &ProveArguments) -> Result<ProvePlan> {
-    let (route_name, source_url, source_rpc_url, chain, destination) = match &arguments.beacon_url {
-        Some(url) => {
-            let name = arguments.chain.as_deref().unwrap_or_default();
-            let chain = parse_chain(name)?;
-            (
-                EXPLICIT_HEAD_ROUTE.to_string(),
-                url.clone(),
-                arguments.source_rpc_url.clone(),
-                chain,
-                None,
-            )
-        }
-        None => {
-            let (name, route) = config.route(arguments.route.as_deref())?;
-            (
-                name.to_string(),
-                route.source.beacon_url.clone(),
-                route.source.rpc_url.clone(),
-                route.source.chain_kind()?,
-                Some(route.destination.clone()),
-            )
-        }
-    };
+    let (route_name, source_url, source_rpc_url, branch_store_dir, chain, destination) =
+        match &arguments.beacon_url {
+            Some(url) => {
+                let name = arguments.chain.as_deref().unwrap_or_default();
+                let chain = parse_chain(name)?;
+                (
+                    EXPLICIT_HEAD_ROUTE.to_string(),
+                    url.clone(),
+                    arguments.source_rpc_url.clone(),
+                    None,
+                    chain,
+                    None,
+                )
+            }
+            None => {
+                let (name, route) = config.route(arguments.route.as_deref())?;
+                (
+                    name.to_string(),
+                    route.source.beacon_url.clone(),
+                    route.source.rpc_url.clone(),
+                    route.source.branch_store_dir.clone(),
+                    route.source.chain_kind()?,
+                    Some(route.destination.clone()),
+                )
+            }
+        };
     let starting_point = match (arguments.head_slot, &arguments.head_root) {
         (Some(slot), Some(root)) => StartingPoint::Explicit {
             head: StoredHead {
@@ -305,6 +310,7 @@ fn plan_prove(config: &Config, arguments: &ProveArguments) -> Result<ProvePlan> 
         route_name,
         beacon_url: source_url,
         source_rpc_url,
+        branch_store_dir,
         chain,
         destination,
         starting_point,
@@ -376,6 +382,16 @@ fn with_execution_headers(source: HttpBeaconSource, rpc_url: Option<&str>) -> Ht
         Some(url) => source.with_execution_headers(Box::new(RpcExecutionHeaders::new(Box::new(
             HttpRpc::new(url),
         )))),
+        None => source,
+    }
+}
+
+/// Gives the source a store in a directory for the branches of `genesis_validators_root`, when the configuration names one.
+fn with_branch_store(source: HttpBeaconSource, directory: Option<&str>) -> HttpBeaconSource {
+    match directory {
+        Some(path) => {
+            source.with_branch_store(std::sync::Arc::new(DirectoryBranchStore::new(path)))
+        }
         None => source,
     }
 }
@@ -479,9 +495,12 @@ fn run_prove(
             ("start_head_slot", start.head.slot.to_string()),
         ],
     );
-    let source = with_execution_headers(
-        beacon_source(plan.chain, &plan.beacon_url),
-        plan.source_rpc_url.as_deref(),
+    let source = with_branch_store(
+        with_execution_headers(
+            beacon_source(plan.chain, &plan.beacon_url),
+            plan.source_rpc_url.as_deref(),
+        ),
+        plan.branch_store_dir.as_deref(),
     );
     match produce(&source, prover.as_ref(), &request)? {
         Production::UpToDate { head_slot } => {

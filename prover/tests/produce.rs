@@ -416,3 +416,138 @@ fn a_route_reads_the_light_client_and_names_the_destination() {
     assert!(error.contains("the light client stores"), "{error}");
     assert!(out.is_empty());
 }
+
+/// A beacon node whose old states are gone: it answers 404 for every state except the one of the head of the light client,
+/// like a node that pruned the states of the attested headers of the updates. Every other path goes to the real node.
+struct PrunedStates {
+    node: Arc<zk_bridge_prover::local_network::signed_beacon::node::BeaconNode>,
+    kept_state_path: String,
+}
+
+impl PrunedStates {
+    /// A pruned view of `chain` that still serves the state of the header at the slot of `checkpoint`.
+    fn keeping_head_of(chain: &Chain, checkpoint: &Checkpoint) -> Box<Self> {
+        let answer = chain.node.answer(
+            &format!("/eth/v1/beacon/headers/{}", checkpoint.slot),
+            "application/json",
+        );
+        let header: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
+        let state_root = header["data"]["header"]["message"]["state_root"]
+            .as_str()
+            .unwrap();
+        Box::new(Self {
+            node: chain.node.clone(),
+            kept_state_path: format!("/eth/v2/debug/beacon/states/{state_root}"),
+        })
+    }
+}
+
+impl zk_bridge_prover::rpc::HttpGet for PrunedStates {
+    fn get(
+        &self,
+        path_and_query: &str,
+        accept: &str,
+    ) -> zk_bridge_prover::error::Result<zk_bridge_prover::rpc::HttpResponse> {
+        if path_and_query.contains("/eth/v2/debug/beacon/states/")
+            && path_and_query != self.kept_state_path
+        {
+            return Ok(zk_bridge_prover::rpc::HttpResponse {
+                status: 404,
+                body: b"{}".to_vec(),
+            });
+        }
+        self.node.get(path_and_query, accept)
+    }
+}
+
+/// A store that holds the same entries as another, but flips one bit of the first entry of every branch it gives back.
+struct FlippingStore(
+    Arc<dyn zk_bridge_prover::beacon::branch_store::GenesisValidatorsRootBranchStore>,
+);
+
+impl zk_bridge_prover::beacon::branch_store::GenesisValidatorsRootBranchStore for FlippingStore {
+    fn get(&self, state_root: &B256) -> Option<Vec<B256>> {
+        let mut branch = self.0.get(state_root)?;
+        branch[0].0[0] ^= 0x01;
+        Some(branch)
+    }
+
+    fn put(&self, state_root: B256, branch: Vec<B256>) -> zk_bridge_prover::error::Result<()> {
+        self.0.put(state_root, branch)
+    }
+}
+
+/// Claim: a catch-up uses the stored branch of `genesis_validators_root` when the node no longer serves the attested state.
+/// A first run, while the state is fresh, computes the branch and stores it. A second source with the same store and a node
+/// that answers 404 for every state then plans the same fold, and the program accepts it. A second source with an empty
+/// store stops with `Error::Beacon` that names the missing state.
+/// Why it matters: this is T23. The branch needs the siblings of field 1 in the attested state, and a node prunes old states.
+/// Without the store a stale light client could not catch up on a normal node. The store is the only reason the control
+/// (an empty store) fails, so a catch-up that refetched the state would pass the first case only against a full node.
+#[test]
+fn catch_up_uses_the_stored_genesis_validators_root_branch_when_the_old_state_is_gone() {
+    use zk_bridge_prover::beacon::branch_store::MemoryBranchStore;
+    use zk_bridge_prover::beacon::http::HttpBeaconSource;
+    use zk_bridge_prover::light_client::verify_update_natively;
+    let (chain, checkpoint) = lagging_chain();
+    let store = Arc::new(MemoryBranchStore::new());
+    let fresh = chain.source().with_branch_store(store.clone());
+    let plan = fresh
+        .plan_update(&head_at(&checkpoint))
+        .expect("plan with fresh states")
+        .expect("a fold is due");
+    let expected = verify_update_natively(&plan.input).expect("the fresh fold verifies");
+
+    let pruned_node = || PrunedStates::keeping_head_of(&chain, &checkpoint);
+    let pruned = HttpBeaconSource::new(chain.kind, pruned_node()).with_branch_store(store);
+    let replay = pruned
+        .plan_update(&head_at(&checkpoint))
+        .expect("plan from the stored branches")
+        .expect("a fold is due");
+    assert_eq!(verify_update_natively(&replay.input).unwrap(), expected);
+
+    let empty = HttpBeaconSource::new(chain.kind, pruned_node())
+        .with_branch_store(Arc::new(MemoryBranchStore::new()));
+    let error = empty.plan_update(&head_at(&checkpoint)).unwrap_err();
+    assert!(
+        matches!(&error, Error::Beacon(text) if text.contains("state 0x")),
+        "{error}"
+    );
+}
+
+/// Claim: a corrupt stored branch is refused before proving. The plan builds, because the prover does not trust the store
+/// and does not recheck it, and the native run of the program then refuses it with the exact error. `produce` returns that
+/// refusal and calls no backend.
+/// Why it matters: the store is untrusted public data. A wrong entry can only stall a catch-up, never cause a false head.
+#[test]
+fn a_corrupt_stored_genesis_validators_root_branch_is_refused_before_proving() {
+    use zk_bridge_prover::beacon::branch_store::MemoryBranchStore;
+    use zk_bridge_prover::beacon::http::HttpBeaconSource;
+    use zk_bridge_prover::light_client::verify_update_natively;
+    let (chain, checkpoint) = lagging_chain();
+    let honest = Arc::new(MemoryBranchStore::new());
+    chain
+        .source()
+        .with_branch_store(honest.clone())
+        .plan_update(&head_at(&checkpoint))
+        .expect("plan with fresh states");
+
+    let corrupt = HttpBeaconSource::new(
+        chain.kind,
+        PrunedStates::keeping_head_of(&chain, &checkpoint),
+    )
+    .with_branch_store(Arc::new(FlippingStore(honest)));
+    let plan = corrupt
+        .plan_update(&head_at(&checkpoint))
+        .expect("the plan builds")
+        .expect("a fold is due");
+    let refused =
+        Error::VerificationRefused(lc_core::Error::InvalidGenesisValidatorsRootBranch.to_string());
+    assert_eq!(verify_update_natively(&plan.input).unwrap_err(), refused);
+
+    let prover = OracleProver::new(oracle_signer());
+    assert_eq!(
+        produce(&corrupt, &prover, &request(head_at(&checkpoint))).unwrap_err(),
+        refused
+    );
+}

@@ -16,6 +16,7 @@
 //! - [`prover`]: the proving backends. Only light-client updates (and fork observations, for a worker) are proven.
 //! - [`remote`]: the backend that sends a proof job to a GPU worker and checks the answer.
 //! - [`worker`]: the HTTP server that such a worker runs (`docs/gpu-prover.md`).
+//! - [`fork_schedule`]: the fork schedule and chain specification that the prover reads from the beacon node at run time.
 //! - [`beacon`]: the beacon node source for updates and for the beacon part of a message proof.
 //! - `local_network` (feature `signed-beacon`): a beacon chain over local blocks with real signatures, for tests.
 //! - [`cli`]: the commands `prove` and `evidence`.
@@ -29,6 +30,7 @@ pub mod contracts;
 pub mod deployment;
 pub mod error;
 pub mod evidence;
+pub mod fork_schedule;
 pub mod handoff;
 pub mod light_client;
 #[cfg(feature = "signed-beacon")]

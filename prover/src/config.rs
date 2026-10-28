@@ -216,6 +216,11 @@ pub struct SourceConfig {
     /// The `MessageBridge` on the source chain. The `evidence` command needs it.
     #[serde(default)]
     pub bridge: Option<String>,
+    /// A directory where the `prove` command keeps the branch of `genesis_validators_root` of each attested state, as public
+    /// data. A later run that must catch up after the beacon node pruned the old states reads the branches back. Without it,
+    /// the branches live in memory for one run only. The only file the `prove` command writes is in this directory.
+    #[serde(default)]
+    pub branch_store_dir: Option<String>,
 }
 
 /// The destination side of a route: the chain with the light client that the proofs update.

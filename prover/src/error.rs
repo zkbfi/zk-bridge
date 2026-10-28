@@ -1,6 +1,8 @@
 //! One error type for the whole crate.
 
 use alloy_primitives::{hex, Bytes};
+use lc_core::chain::ForkName;
+use lc_core::types::HeaderForm;
 use std::fmt;
 
 /// A failure anywhere in the crate.
@@ -35,6 +37,39 @@ pub enum Error {
     Handoff(String),
     /// An input of a command line subcommand is wrong.
     Usage(String),
+    /// The fork schedule and the chain specification of the beacon node disagree about one fork. The prover does not
+    /// guess which answer is right.
+    ///
+    /// `fork` names the fork, or the version when the specification has no fork with it. An epoch of `u64::MAX` means
+    /// that the answer does not list the fork.
+    ForkScheduleMismatch {
+        /// The fork, or the version, that the two answers disagree about.
+        fork: String,
+        /// The epoch that the fork schedule gives.
+        schedule_epoch: u64,
+        /// The epoch that the chain specification gives.
+        spec_epoch: u64,
+    },
+    /// The fork that is active at an epoch is not one the prover knows (for example a fork newer than Gloas). The prover
+    /// cannot choose an anchor for it, so it stops.
+    UnknownActiveFork {
+        /// The version of the active fork.
+        version: [u8; 4],
+        /// The first epoch of the active fork.
+        epoch: u64,
+    },
+    /// The form of a light-client header that the beacon node served does not match the fork of its slot, or the padding
+    /// of a pre-Gloas header inside a Gloas update is not the padding that the specification writes.
+    HeaderFormMismatch {
+        /// The slot of the header.
+        slot: u64,
+        /// The fork of that slot.
+        fork: ForkName,
+        /// The form that the node served.
+        form: HeaderForm,
+        /// The length of the execution branch that the node served.
+        branch_length: usize,
+    },
 }
 
 /// The result type of the crate.
@@ -67,6 +102,28 @@ impl fmt::Display for Error {
             Self::Prover(reason) => write!(formatter, "prover: {reason}"),
             Self::Handoff(reason) => write!(formatter, "handoff: {reason}"),
             Self::Usage(reason) => write!(formatter, "usage: {reason}"),
+            Self::ForkScheduleMismatch {
+                fork,
+                schedule_epoch,
+                spec_epoch,
+            } => write!(
+                formatter,
+                "the fork schedule and the chain specification of the beacon node disagree about {fork}: the schedule says epoch {schedule_epoch}, the specification says epoch {spec_epoch}"
+            ),
+            Self::UnknownActiveFork { version, epoch } => write!(
+                formatter,
+                "the active fork with version 0x{} from epoch {epoch} is not known to this prover; update the prover",
+                hex::encode(version)
+            ),
+            Self::HeaderFormMismatch {
+                slot,
+                fork,
+                form,
+                branch_length,
+            } => write!(
+                formatter,
+                "the {form:?} header at slot {slot} ({fork:?}) has an execution branch of {branch_length} entries that does not fit the form that the fork needs"
+            ),
         }
     }
 }

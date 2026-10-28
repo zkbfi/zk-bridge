@@ -30,8 +30,8 @@ use lc_testkit::pulsechain::real_update_and_store;
 use std::path::PathBuf;
 use zk_bridge_prover::error::Error;
 use zk_bridge_prover::light_client::{
-    guest_input_bytes, public_values, verify_observation_natively, verify_update_natively,
-    ChainKind, UpdateInput,
+    guest_input_bytes, public_values, steps_with_table_versions, verify_observation_natively,
+    verify_update_natively, ChainKind, UpdateInput,
 };
 use zk_bridge_prover::prover::{
     execute_program, require_matching_key, ProgramKind, ProofStatement, Prover, Sp1ProgramPaths,
@@ -102,7 +102,7 @@ fn real_ethereum_input() -> UpdateInput {
     UpdateInput {
         chain: ChainKind::Ethereum,
         store,
-        updates: vec![update],
+        steps: steps_with_table_versions(ChainKind::Ethereum, vec![update]),
     }
 }
 
@@ -111,7 +111,7 @@ fn real_pulsechain_input() -> UpdateInput {
     UpdateInput {
         chain: ChainKind::Pulsechain,
         store,
-        updates: vec![update],
+        steps: steps_with_table_versions(ChainKind::Pulsechain, vec![update]),
     }
 }
 
@@ -120,7 +120,7 @@ fn synthetic_fold_input(spec: &'static ChainSpec, period: u64) -> UpdateInput {
     UpdateInput {
         chain: chain_kind(spec),
         store: scenario.store,
-        updates: scenario.updates,
+        steps: steps_with_table_versions(chain_kind(spec), scenario.updates),
     }
 }
 
@@ -161,7 +161,7 @@ fn light_client_guest_agrees_with_lc_core_on_a_fold() {
     };
     for (spec, period) in chains() {
         let input = synthetic_fold_input(spec, period);
-        assert_eq!(input.updates.len(), 3, "the fold has three steps");
+        assert_eq!(input.steps.len(), 3, "the fold has three steps");
         assert_light_client_agrees(&format!("fold on {}", spec.name), &elf, &input);
     }
 }
@@ -263,7 +263,7 @@ fn light_client_guest_rejects_a_wrong_fork_version() {
     };
     let input = real_ethereum_input();
     let spec = input.chain.spec();
-    let update = input.updates[0].clone();
+    let update = input.steps[0].update.clone();
     let right_version = table_fork_version(spec, update.signature_slot);
     let guest_input = |fork_version: [u8; 4]| {
         encode_guest_input(&GuestInput {
@@ -310,7 +310,7 @@ fn observation_input(spec: &'static ChainSpec, period: u64, count: usize) -> Vec
     })
 }
 
-/// Claim: the fork observation ELF commits exactly the 224 bytes that `lc-core` computes natively, after it folds three
+/// Claim: the fork observation ELF commits exactly the 256 bytes that `lc-core` computes natively, after it folds three
 /// updates and verifies the observation, on both chain layouts. The fixtures hold no committee data, so the input
 /// comes from the synthetic builders of `lc-testkit`.
 #[test]
@@ -321,7 +321,7 @@ fn fork_observation_guest_agrees_with_lc_core() {
     for (spec, period) in chains() {
         let bytes = observation_input(spec, period, 400);
         let expected = verify_observation_natively(&bytes).expect("native run accepts");
-        assert_eq!(expected.len(), 224);
+        assert_eq!(expected.len(), 256);
         let run = execute_program(&elf, &bytes).expect("executor runs");
         assert_eq!(run.exit_code, 0, "{}: the guest accepts", spec.name);
         assert_eq!(run.public_values, expected, "{}: public values", spec.name);

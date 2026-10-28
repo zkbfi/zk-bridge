@@ -18,8 +18,8 @@
 
 use super::chain::SyntheticBeaconChain;
 use crate::error::{Error, Result};
+use crate::fork_schedule::answers_from_table;
 use alloy_primitives::B256;
-use lc_core::chain::FAR_FUTURE_EPOCH;
 use lc_testkit::json::{beacon_header_json, light_client_update_json};
 use serde_json::{json, Value};
 
@@ -86,6 +86,7 @@ fn route(chain: &SyntheticBeaconChain, path: &str, query: &str, accept: &str) ->
     match segments.as_slice() {
         ["eth", "v1", "beacon", "genesis"] => Ok(genesis(chain)),
         ["eth", "v1", "config", "fork_schedule"] => Ok(fork_schedule(chain)),
+        ["eth", "v1", "config", "spec"] => Ok(chain_specification(chain)),
         ["eth", "v1", "beacon", "headers", id] => Ok(header(chain, id)),
         ["eth", "v1", "beacon", "blocks", id, "root"] => Ok(block_root(chain, id)),
         ["eth", "v2", "beacon", "blocks", id] => Ok(block(chain, id, accept)),
@@ -122,21 +123,14 @@ fn genesis(chain: &SyntheticBeaconChain) -> Answer {
     }}))
 }
 
+/// `/eth/v1/config/fork_schedule`: the scheduled forks of the chain specification.
 fn fork_schedule(chain: &SyntheticBeaconChain) -> Answer {
-    let schedule = chain.settings().kind.spec().fork_schedule;
-    let entries: Vec<Value> = schedule
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            let previous = schedule[index.saturating_sub(1)];
-            json!({
-                "previous_version": format!("0x{}", alloy_primitives::hex::encode(previous.fork_version)),
-                "current_version": format!("0x{}", alloy_primitives::hex::encode(entry.fork_version)),
-                "epoch": if entry.epoch == FAR_FUTURE_EPOCH { FAR_FUTURE_EPOCH.to_string() } else { entry.epoch.to_string() },
-            })
-        })
-        .collect();
-    Answer::json(&json!({ "data": entries }))
+    Answer::json(&answers_from_table(chain.settings().kind.spec()).0)
+}
+
+/// `/eth/v1/config/spec`: the name, version and epoch of each fork. The prover joins it with the fork schedule.
+fn chain_specification(chain: &SyntheticBeaconChain) -> Answer {
+    Answer::json(&answers_from_table(chain.settings().kind.spec()).1)
 }
 
 fn header(chain: &SyntheticBeaconChain, id: &str) -> Answer {
@@ -275,7 +269,14 @@ mod tests {
             );
             let schedule = json_of(&answer(&chain, "/eth/v1/config/fork_schedule", JSON));
             let entries = schedule["data"].as_array().unwrap();
-            assert_eq!(entries.len(), kind.spec().fork_schedule.len());
+            // Like a real node, the schedule lists the scheduled forks only. A fork at the far future epoch is left out.
+            let scheduled = kind
+                .spec()
+                .fork_schedule
+                .iter()
+                .filter(|entry| entry.epoch != lc_core::chain::FAR_FUTURE_EPOCH)
+                .count();
+            assert_eq!(entries.len(), scheduled);
             assert_eq!(
                 entries[3]["current_version"],
                 format!(
@@ -287,6 +288,44 @@ mod tests {
             assert_eq!(
                 head["data"]["header"]["message"]["slot"],
                 (first_slot + 4).to_string()
+            );
+        }
+    }
+
+    /// Claim: `/eth/v1/config/spec` answers with the `*_FORK_VERSION` and `*_FORK_EPOCH` keys of the synthetic chain, and
+    /// the prover joins it with the fork schedule of the same chain into the table of the chain specification.
+    /// Why it matters: the prover reads the fork schedule from the node, and the local network is the node of the end to end
+    /// tests. If it served no specification, those tests would not exercise the new code, or would not run at all.
+    #[test]
+    fn the_synthetic_beacon_api_serves_the_specification() {
+        for kind in [ChainKind::Ethereum, ChainKind::Pulsechain] {
+            let chain = chain_of(settings(kind, first_slot_of(kind)), 5);
+            let specification = json_of(&answer(&chain, "/eth/v1/config/spec", JSON));
+            let schedule = json_of(&answer(&chain, "/eth/v1/config/fork_schedule", JSON));
+            let data = &specification["data"];
+            for entry in kind.spec().fork_schedule.iter().skip(1) {
+                let prefix = format!("{:?}", entry.fork_name).to_uppercase();
+                assert_eq!(
+                    data[format!("{prefix}_FORK_EPOCH")],
+                    entry.epoch.to_string(),
+                    "{kind:?} {prefix}"
+                );
+                assert_eq!(
+                    data[format!("{prefix}_FORK_VERSION")],
+                    format!("0x{}", alloy_primitives::hex::encode(entry.fork_version)),
+                    "{kind:?} {prefix}"
+                );
+            }
+            let joined = crate::fork_schedule::ForkSchedule::from_answers(
+                &schedule,
+                &specification,
+                kind.spec().slots_per_epoch,
+            )
+            .expect("the two answers of one chain agree");
+            assert_eq!(
+                joined.signing_version(first_slot_of(kind) + 4),
+                kind.spec()
+                    .fork_version_at(kind.spec().epoch_at_slot(first_slot_of(kind) + 3))
             );
         }
     }
