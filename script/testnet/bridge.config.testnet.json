@@ -44,22 +44,7 @@
       "genesisTime": "1655733600",
       "secondsPerSlot": "12",
       "slotsPerEpoch": "32",
-      "supportedVersions": [
-        {
-          "version": "0x90000075",
-          "stateDepth": "6"
-        },
-        {
-          "version": "0x90000076",
-          "stateDepth": "255"
-        }
-      ],
-      "sealDepths": [
-        "5",
-        "6",
-        "7",
-        "255"
-      ]
+      "genesisValidatorsRoot": "0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078"
     }
   },
   "chainB": {
@@ -97,17 +82,7 @@
       "genesisTime": "1681356369",
       "secondsPerSlot": "10",
       "slotsPerEpoch": "32",
-      "supportedVersions": [
-        {
-          "version": "0x00000946",
-          "stateDepth": "5"
-        }
-      ],
-      "sealDepths": [
-        "5",
-        "6",
-        "7"
-      ]
+      "genesisValidatorsRoot": "0xd81664ba97279a6fa0832041b4aee6009172b4750a99467ff670a9faf3a34e64"
     },
     "observation": {
       "lightClientProgramVKey": "0x001e477914cbaea2b4b6470e68aecc0d6523a587105bd62ae9e095cbbcacaf71",

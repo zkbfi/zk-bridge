@@ -12,6 +12,8 @@
 //!   byte names the header form, the blob flag names the payload field list, and the compact branch length names the
 //!   execution anchor. Every branch check is exact, with no leading zeros. See "Change: the layout comes from the
 //!   evidence" in `docs/hardened-build-contract.md`;
+//! - the layout witness proves that the evidence named the right layout: a branch of `genesis_validators_root` (state
+//!   field 1) at the witness position of that layout, under the attested state root. The leaf is the chain's own root.
 //! - the signing committee is always public: the stored current committee (`previousSyncCommitteeHash`), or the
 //!   committee named by `syncCommitteeHash` when the finalized header crosses into the next period. An update signed in
 //!   the next period but finalized in the stored period is refused (`SignatureInNextPeriodWithoutCrossing`);
@@ -254,7 +256,9 @@ pub fn advance_light_client_store(
 ///
 /// The evidence chooses the layouts: the length of the finality branch names the state layout
 /// ([`state_layout_for_finality_branch_length`]), and the next committee branch must have the depth of that layout. A
-/// branch of another length, or a mix of lengths in one step, is refused.
+/// branch of another length, or a mix of lengths in one step, is refused. The checks of the state run in this order: the
+/// finality branch, the next committee branch, then the layout witness (`InvalidLayoutWitness`). The witness is checked
+/// even when the update has no next committee.
 ///
 /// # Errors
 /// An [`Error`] naming the first failed rule.
@@ -325,17 +329,37 @@ pub fn verify_step(
         return Err(Error::InvalidFinalityBranch);
     }
 
-    let mut proven_next_hash = None;
-    if let Some(next) = &update.next_sync_committee {
-        let committee_root = next.committee.hash_tree_root()?;
-        if !branch_is_valid(
-            &committee_root,
-            &next.branch,
-            layout.next_sync_committee_gindex,
-            &attested.beacon.state_root,
-        ) {
-            return Err(Error::InvalidNextSyncCommitteeBranch);
+    // The next committee branch, when the update proves one. It must have the depth of the layout above.
+    let next_committee_root = match &update.next_sync_committee {
+        None => None,
+        Some(next) => {
+            let committee_root = next.committee.hash_tree_root()?;
+            if !branch_is_valid(
+                &committee_root,
+                &next.branch,
+                layout.next_sync_committee_gindex,
+                &attested.beacon.state_root,
+            ) {
+                return Err(Error::InvalidNextSyncCommitteeBranch);
+            }
+            Some(committee_root)
         }
+    };
+
+    // The layout witness: the genesis validators root of the chain at field 1 of the layout that the finality length
+    // named. The leaf comes from the chain specification, never from the input. It is checked even when the update carries
+    // no next committee, and after the finality and next committee branches (so those errors win).
+    if !branch_is_valid(
+        &spec.genesis_validators_root,
+        &update.layout_witness_branch,
+        layout.witness_gindex,
+        &attested.beacon.state_root,
+    ) {
+        return Err(Error::InvalidLayoutWitness);
+    }
+
+    let mut proven_next_hash = None;
+    if let (Some(next), Some(committee_root)) = (&update.next_sync_committee, next_committee_root) {
         if attested_period == store_period {
             if let Some(known) = &store.next_sync_committee {
                 if known != &next.committee {

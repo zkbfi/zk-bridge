@@ -300,6 +300,21 @@ pub struct LightClientUpdate {
     pub sync_aggregate: SyncAggregate,
     /// The slot of the block that carries the aggregate.
     pub signature_slot: u64,
+    /// The layout witness: the branch of `genesis_validators_root` (state field 1) to the ATTESTED header's `state_root`.
+    ///
+    /// A beacon node does not serve it, so the JSON parser leaves it empty and the prover fills it in with
+    /// [`LightClientUpdate::with_layout_witness_branch`]. Every step of a fold carries its own, because the steps may use
+    /// different layouts. The branch has 5, 6, 7 or 5 entries for the layouts that finality lengths 6, 7, 8 and 9 name.
+    /// The leaf is never part of the input: the program takes it from the chain specification.
+    pub layout_witness_branch: Vec<B256>,
+}
+
+impl LightClientUpdate {
+    /// The same update with `layout_witness_branch` set. The beacon API has no field for the witness, so the prover calls
+    /// this after it reads the attested state.
+    pub fn with_layout_witness_branch(self, layout_witness_branch: Vec<B256>) -> Self {
+        Self { layout_witness_branch, ..self }
+    }
 }
 
 /// What the program trusts about the chain before an update.

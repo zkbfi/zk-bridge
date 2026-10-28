@@ -17,8 +17,10 @@ interface IObservedLightClient {
 /// @title ForkRegistry
 /// @notice Records the fork versions that a sync committee of the observed chain signed under (hole HB-02 on
 /// PulseChain). A sync committee signs under the real current fork version of its chain, so a proof that two thirds of
-/// a bound committee signed under version V shows that the chain runs V at that slot. The proof needs no knowledge of
-/// the state layout of V. The registry has no owner and no way to remove an entry.
+/// a bound committee signed under version V shows that the chain runs V at that slot. The observation program also
+/// proves the shape of the attested state (a plain depth 5, 6 or 7, or the progressive form), and the registry stores
+/// that shape next to the version. The deposit gate applies the rule of `ForkShape` to it: the same rule that it applies
+/// to EIP-4788 evidence on Ethereum. The registry judges nothing itself. It has no owner and no way to remove an entry.
 /// @dev The observation program has its own verification key, different from the light client program. A proof of one
 /// program therefore never passes the other contract. The start fields are checked against the light client exactly as
 /// the light client checks its own updates (rule 1). The observation never moves the head of the light client.
@@ -32,16 +34,18 @@ contract ForkRegistry is IForkRegistry {
         bytes32 startNextSyncCommitteeHash;
         bytes4 observedVersion;
         uint64 observedAttestedSlot;
+        uint8 shape;
     }
 
     /// @dev One storage slot.
     struct Latest {
         bytes4 version;
+        uint8 shape;
         uint64 slot;
     }
 
-    /// @notice The size of the encoded observation: seven static words.
-    uint256 public constant PUBLIC_VALUES_LENGTH = 224;
+    /// @notice The size of the encoded observation: eight static words.
+    uint256 public constant PUBLIC_VALUES_LENGTH = 256;
 
     /// @notice A constructor argument is zero.
     error ZeroValue(string name);
@@ -63,7 +67,7 @@ contract ForkRegistry is IForkRegistry {
     error ObservationNotFresh(uint64 head, uint64 observedAttestedSlot);
 
     /// @notice Emitted for every accepted observation.
-    event ForkObserved(bytes4 indexed version, uint64 slot);
+    event ForkObserved(bytes4 indexed version, uint8 shape, uint64 slot);
 
     /// @notice The light client of the observed chain, deployed on this chain.
     IObservedLightClient public immutable lightClient;
@@ -74,6 +78,9 @@ contract ForkRegistry is IForkRegistry {
 
     /// @notice The lowest attested slot seen for a version, or zero when never seen.
     mapping(bytes4 version => uint64 slot) public firstSeenSlot;
+    /// @notice The shape proven in the newest observation (highest attested slot) of a version, or zero when never seen.
+    mapping(bytes4 version => uint8 shape) public shapeOf;
+    mapping(bytes4 version => uint64 slot) private _shapeSlot;
     Latest private _latest;
 
     /// @param lightClient_ The light client of the observed chain on this chain.
@@ -105,8 +112,13 @@ contract ForkRegistry is IForkRegistry {
         uint64 slot = observation.observedAttestedSlot;
         uint64 first = firstSeenSlot[version];
         if (first == 0 || slot < first) firstSeenSlot[version] = slot;
-        if (slot > _latest.slot) _latest = Latest({version: version, slot: slot});
-        emit ForkObserved(version, slot);
+        uint8 shape = observation.shape;
+        if (slot > _shapeSlot[version]) {
+            _shapeSlot[version] = slot;
+            shapeOf[version] = shape;
+        }
+        if (slot > _latest.slot) _latest = Latest({version: version, shape: shape, slot: slot});
+        emit ForkObserved(version, shape, slot);
     }
 
     /// @notice The version seen under the highest attested slot, or zero when nothing was observed.
@@ -115,9 +127,9 @@ contract ForkRegistry is IForkRegistry {
     }
 
     /// @inheritdoc IForkRegistry
-    function latestObserved() external view override returns (bytes4 version, uint64 slot) {
+    function latestObserved() external view override returns (bytes4 version, uint8 shape, uint64 slot) {
         Latest memory latest = _latest;
-        return (latest.version, latest.slot);
+        return (latest.version, latest.shape, latest.slot);
     }
 
     /// @dev Freshness (the attested slot is strictly past the head), then light-client rule 1 for the five start fields.

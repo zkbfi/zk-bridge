@@ -27,8 +27,10 @@ sol! {
         bytes32 nextSyncCommitteeHash;
     }
 
-    /// Public values of the fork-observation program: 7 words, 224 bytes. The first five fields bind the starting store
-    /// exactly like `LightClientOutput`. `observedVersion` is a `bytes4`, so it is left-aligned in its word.
+    /// Public values of the fork-observation program: 8 words, 256 bytes. The first five fields bind the starting store
+    /// exactly like `LightClientOutput`. `observedVersion` is a `bytes4`, so it is left-aligned in its word. `shape` is the
+    /// state shape that the program proved for the attested state: 5, 6 or 7 for a plain state of that depth, 255 for the
+    /// Gloas progressive state (see `layout::SHAPE_PROGRESSIVE`). It is a `uint8`, right-aligned in its word.
     #[derive(Debug, PartialEq, Eq)]
     struct ForkObservation {
         bytes32 genesisValidatorsRoot;
@@ -38,6 +40,7 @@ sol! {
         bytes32 startNextSyncCommitteeHash;
         bytes4 observedVersion;
         uint64 observedAttestedSlot;
+        uint8 shape;
     }
 
     /// A beacon block header, as the bridge receives it in calldata.
@@ -136,10 +139,11 @@ mod tests {
     }
 
     /// Claim: the encoding of `ForkObservation` equals the bytes of
-    /// `cast abi-encode "f((bytes32,bytes32,uint64,bytes32,bytes32,bytes4,uint64))" ...` (Foundry `cast`, 2026-10-21).
-    /// It has 7 words of 32 bytes: 224 bytes. The `bytes4` version `0x0000036d` is LEFT-aligned in its word, as Solidity
-    /// `abi.encode` of a `bytes4` does, and not right-aligned like an integer.
-    /// Why it matters: the contract decodes these exact bytes, and 224 differs from the 352 of `LightClientOutput`.
+    /// `cast abi-encode "f((bytes32,bytes32,uint64,bytes32,bytes32,bytes4,uint64,uint8))" ...` (Foundry `cast`, 2026-10-21,
+    /// with the `uint8` word added 2026-10-27 by hand: a `uint8` is a right-aligned word like every integer).
+    /// It has 8 words of 32 bytes: 256 bytes. The `bytes4` version `0x0000036d` is LEFT-aligned in its word, as Solidity
+    /// `abi.encode` of a `bytes4` does, and not right-aligned like an integer. The shape 255 (progressive) is the last word.
+    /// Why it matters: the contract decodes these exact bytes, and 256 differs from the 352 of `LightClientOutput`.
     #[test]
     fn fork_observation_encoding_matches_cast() {
         let output = ForkObservation {
@@ -150,6 +154,7 @@ mod tests {
             startNextSyncCommitteeHash: B256::repeat_byte(0x88),
             observedVersion: alloy_primitives::FixedBytes::from([0, 0, 0x03, 0x6d]),
             observedAttestedSlot: 200,
+            shape: 255,
         };
         let expected = hex!(
             "1111111111111111111111111111111111111111111111111111111111111111"
@@ -159,11 +164,14 @@ mod tests {
             "8888888888888888888888888888888888888888888888888888888888888888"
             "0000036d00000000000000000000000000000000000000000000000000000000"
             "00000000000000000000000000000000000000000000000000000000000000c8"
+            "00000000000000000000000000000000000000000000000000000000000000ff"
         );
         assert_eq!(output.abi_encode(), expected.to_vec());
-        assert_eq!(expected.len(), 7 * 32);
-        assert_eq!(expected.len(), 224);
+        assert_eq!(expected.len(), 8 * 32);
+        assert_eq!(expected.len(), 256);
         assert_eq!(ForkObservation::abi_decode(&expected).expect("decode"), output);
+        let plain = ForkObservation { shape: 6, ..output };
+        assert_eq!(plain.abi_encode()[7 * 32..], hex!("0000000000000000000000000000000000000000000000000000000000000006"));
     }
 
     /// Claim: decoding the encoded bytes gives back the same struct, so the layout is symmetric.

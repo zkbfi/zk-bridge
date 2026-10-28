@@ -5,34 +5,45 @@ import {IDepositGate} from "./IDepositGate.sol";
 import {IForkRegistry} from "./IForkRegistry.sol";
 import {BeaconClock} from "./BeaconClock.sol";
 import {BeaconBlockHeader, SSZ} from "./SSZ.sol";
+import {ForkShape} from "./ForkShape.sol";
 
 /// @title BeaconForkGate
-/// @notice Refuses a deposit unless the chain's current fork version is one the route supports (hole HB-02, window 1).
-/// The gate reads the chain's own recent beacon block roots through EIP-4788 and requires a proof that
-/// `state.fork.current_version` is a supported version, in the current epoch. A fork version changes only at an epoch
-/// boundary, so a proof from the current epoch covers the block that the deposit lands in. After a fork that the route
-/// does not know, no such proof exists and deposits revert with the tokens still in the wallet of the user.
-/// @dev Two modes, chosen at deployment from an enum. `Enforcing` (Ethereum) applies the rules from the first call.
-/// `DetectBeaconRoots` (PulseChain, which has no EIP-4788 today) probes the beacon roots contract on each call and
-/// admits every deposit while the contract is absent. The first call that sees a root switches the gate to enforcing
-/// for good. There is no owner and no key: only the protocol writes roots, through the system address, so the probe
-/// cannot be spoofed. A replay of the keyless deployment of the genuine code on a chain without EIP-4788 leaves its
-/// storage empty, so every read reverts and the gate stays in detection mode.
+/// @notice Refuses a deposit unless the chain's state has a shape that the route can read (hole HB-02, window 1).
+/// The rule is the same on both chains: accept any fork version whose state proof has an allowed shape, with the witness
+/// proving `genesis_validators_root` at that shape under the same state root. Seal only on a shape outside the allowed
+/// set. The shape judging lives in `ForkShape`, one library for the EIP-4788 path and for the registry path. The gate
+/// holds no list of fork version names.
+/// @dev Two paths bring the evidence. On Ethereum the gate reads the chain's own recent beacon block roots through
+/// EIP-4788 and requires a proof of `state.fork.current_version` and a proof of `genesis_validators_root`, both under
+/// the state root of a header of the current epoch. A fork version changes only at an epoch boundary, so a proof from the
+/// current epoch covers the block that the deposit lands in. PulseChain has no EIP-4788, so its evidence is the fork
+/// observation registry: the observation program proves the shape, and the registry stores it next to each version.
+/// After a state of a shape that the route cannot read, no accepted proof exists and deposits revert with the tokens
+/// still in the wallet of the user.
 ///
-/// The generalized index of the version leaf is computed here from the configured depth, never taken from the caller.
-/// If the caller could choose it, a proof of `Fork.previous_version` would pass for the current version.
+/// Trade-off, on both chains: judging the shape gives up the check that would catch a fork that reorders fields at the
+/// same depth. Such a fork passes the gate. The light client then fails closed.
 ///
-/// Gloas makes `BeaconState` a progressive container, and then the position of `fork.current_version` is not
-/// `(2**depth + 3) * 4 + 1` for any depth. It is the fixed number 169: `fork` is chunk 3 of the progressive tree (node 42)
-/// and `current_version` is field 1 of the three field `Fork` container (node 42 * 4 + 1). The state depth of a supported
-/// version carries the marker `PROGRESSIVE_STATE_DEPTH` for such a state. A progressive layout fixes its early
-/// positions for good, so the marker also covers the forks after Gloas, and a seal proof may use it too.
+/// Three modes, chosen at deployment from an enum. `Enforcing` (Ethereum) applies the rules from the first call.
+/// `DetectBeaconRoots` probes the beacon roots contract on each call and admits every deposit while the contract is
+/// absent. The first call that sees a root switches the gate to enforcing for good. There is no owner and no key: only
+/// the protocol writes roots, through the system address, so the probe cannot be spoofed. A replay of the keyless
+/// deployment of the genuine code on a chain without EIP-4788 leaves its storage empty, so every read reverts and the
+/// gate stays in detection mode.
 ///
-/// A third mode, `DetectBeaconRootsAndRegistry` (PulseChain), adds two things to detection. First, execution canaries:
-/// one tiny probe contract that runs one new opcode per call (`TSTORE`, `MCOPY`, `BLOBBASEFEE`, `CLZ`, chosen by the
-/// first byte of the calldata), and a call to the first BLS12-381 precompile. A PulseChain consensus fork almost always arrives with an execution fork, and the first canary
-/// that works switches the gate to enforcing for good. Second, a fork observation registry: while its latest observed
-/// version is not supported, every deposit is refused, and `seal()` with empty evidence closes the gate for good.
+/// The generalized indices are computed in `ForkShape` from the shape, never taken from the caller. If the caller could
+/// choose them, a proof of `Fork.previous_version` would pass for the current version.
+///
+/// The gate holds `genesisValidatorsRoot` as an immutable. The deploy script checks it against the chain that the route
+/// follows.
+///
+/// `DetectBeaconRootsAndRegistry` (PulseChain) adds two things to detection. First, execution
+/// canaries: one tiny probe contract that runs one new opcode per call (`TSTORE`, `MCOPY`, `BLOBBASEFEE`, `CLZ`, chosen
+/// by the first byte of the calldata), and a call to the first BLS12-381 precompile. A PulseChain consensus fork almost
+/// always arrives with an execution fork, and the first canary that works switches the gate to enforcing for good.
+/// Second, a fork observation registry: while its latest observed shape is not allowed, every deposit is refused, and
+/// `seal()` with empty evidence closes the gate for good. The canaries and the EIP-4788 probe decide when the gate starts
+/// to enforce. They do not decide what it accepts.
 ///
 /// The runtime code of the gate avoids `MCOPY`, `TSTORE` and `TLOAD`, because PulseChain rejects them. The probe holds
 /// those opcodes on purpose, as a separate contract that the constructor deploys from raw bytes.
@@ -57,25 +68,19 @@ contract BeaconForkGate is IDepositGate {
         Bls12381Precompile
     }
 
-    /// @notice A supported fork version and the layout of the `BeaconState` tree in that fork.
-    /// @param version The value of `Fork.current_version`.
-    /// @param stateDepth The depth of the `BeaconState` tree: 5 up to 32 fields, 6 up to 64 fields. The value
-    /// `PROGRESSIVE_STATE_DEPTH` marks a progressive state (Gloas on) instead. It is no depth: its position is fixed.
-    struct SupportedVersion {
-        bytes4 version;
-        uint8 stateDepth;
-    }
-
     /// @notice The proof that the chain is in a given fork version.
     /// @param timestamp The timestamp key of the beacon roots contract. It holds the parent beacon block root.
     /// @param header A beacon block header whose root the beacon roots contract returns for `timestamp`.
-    /// @param version The claimed `Fork.current_version` of the state of that header.
+    /// @param version The claimed `Fork.current_version` of the state of that header. The gate does not judge its name.
     /// @param branch The branch from the version leaf to `header.stateRoot`, deepest first.
+    /// @param witnessBranch The branch from `genesis_validators_root` (field 1 of the state) to `header.stateRoot`,
+    /// deepest first. It pins the shape. A seal proof of a shape outside the allowed set needs no witness.
     struct ForkEvidence {
         uint256 timestamp;
         BeaconBlockHeader header;
         bytes4 version;
         bytes32[] branch;
+        bytes32[] witnessBranch;
     }
 
     /// @dev One storage slot: the gate reads it once for the cheapest deposit.
@@ -86,25 +91,6 @@ contract BeaconForkGate is IDepositGate {
         bool enforcing;
         uint64 highestConfirmedSlot;
     }
-
-    /// @notice The most supported versions a gate holds. They are packed into one immutable word, 5 bytes each.
-    uint256 public constant MAX_SUPPORTED_VERSIONS = 6;
-    /// @notice The largest state depth the gate accepts in its configuration.
-    uint8 public constant MAX_STATE_DEPTH = 31;
-    /// @notice The marker of a progressive `BeaconState` (Gloas on) in the `stateDepth` of a supported version and in the
-    /// seal depths. The position of the version leaf is then the fixed index 169, and the branch has 7 entries.
-    uint8 public constant PROGRESSIVE_STATE_DEPTH = 255;
-    /// @dev `get_generalized_index(BeaconState, "fork", "current_version")` in the progressive Gloas state: chunk 3 of the
-    /// progressive tree is node 42, and field 1 of `Fork` is 42 * 4 + 1.
-    uint256 private constant PROGRESSIVE_VERSION_GINDEX = 169;
-    /// @dev The siblings of chunk 3 inside the progressive state: the chunk next to it, the subtree of chunks 1 to 4, the
-    /// rest of the tree, the first chunk, and the `active_fields` chunk. A seal proof of such a state has this many plus
-    /// `FORK_DEPTH` entries.
-    uint256 private constant PROGRESSIVE_STATE_BRANCH = 5;
-    /// @dev The depth of the `Fork` container (three fields).
-    uint256 private constant FORK_DEPTH = 2;
-    /// @dev The position of `fork` among the `BeaconState` fields.
-    uint256 private constant FORK_FIELD_INDEX = 3;
 
     /// @notice The gas forwarded to each call of the opcode probe. The costliest path (`TSTORE`, which costs 100 gas by
     /// itself) needs 167, measured, and the others need 97 to 126. The cap leaves room for a later repricing of a
@@ -152,12 +138,6 @@ contract BeaconForkGate is IDepositGate {
 
     /// @notice A constructor argument is zero or empty.
     error ZeroValue(string name);
-    /// @notice The configuration lists more than `MAX_SUPPORTED_VERSIONS` versions.
-    error TooManySupportedVersions(uint256 count);
-    /// @notice A supported version appears twice.
-    error DuplicateSupportedVersion(bytes4 version);
-    /// @notice A state depth is zero or above `MAX_STATE_DEPTH`, and is not `PROGRESSIVE_STATE_DEPTH`.
-    error StateDepthOutOfRange(uint8 depth);
     /// @notice The gate is sealed. No deposit passes, and the seal never clears.
     error GateSealed();
     /// @notice The epoch has no confirmation and the deposit brought no evidence.
@@ -170,11 +150,16 @@ contract BeaconForkGate is IDepositGate {
     error HeaderRootMismatch(bytes32 expected, bytes32 actual);
     /// @notice The header is not from the current epoch.
     error HeaderNotInCurrentEpoch(uint256 headerEpoch, uint256 currentEpoch);
-    /// @notice The version is not one the route supports.
-    error UnsupportedVersion(bytes4 version);
-    /// @notice A seal needs a version the route does not support, and this one is supported.
-    error VersionIsSupported(bytes4 version);
-    /// @notice The branch of a seal proof implies a state depth that the gate does not allow.
+    /// @notice The version branch has a length that fits no allowed shape. `depth` is the tree depth that the length
+    /// implies.
+    error ShapeNotAllowed(uint256 depth);
+    /// @notice A seal needs a shape outside the allowed set, and the proof shows an allowed one.
+    error ShapeIsAllowed(uint8 shape);
+    /// @notice The version branch is valid for an allowed shape, but the witness branch of `genesis_validators_root`
+    /// is not valid at that shape under the same state root.
+    error ShapeWitnessInvalid();
+    /// @notice The branch of a seal proof implies a tree depth below `ForkShape.MIN_SEAL_DEPTH` or above
+    /// `ForkShape.MAX_SEAL_DEPTH`.
     error SealDepthNotAllowed(uint256 depth);
     /// @notice The branch does not lead from the version to the state root.
     error ForkProofInvalid();
@@ -184,10 +169,11 @@ contract BeaconForkGate is IDepositGate {
     error ForkRegistryHasNoCode(address forkRegistry);
     /// @notice The opcode probe contract did not deploy.
     error ProbeDeploymentFailed();
-    /// @notice The fork registry shows an observed fork version that the route does not support.
-    error UnsupportedObservedVersion(bytes4 version, uint64 slot);
-    /// @notice `seal` with empty evidence needs an unsupported observed version in the registry, and there is none.
-    error NoUnsupportedObservation();
+    /// @notice The fork registry shows an observed state shape that the route does not allow.
+    error ObservedShapeNotAllowed(bytes4 version, uint8 shape, uint64 slot);
+    /// @notice `seal` with empty evidence needs an observed shape outside the allowed set in the registry, and there is
+    /// none.
+    error NoDisallowedObservedShape();
     /// @notice The block time is before the genesis time of the chain.
     error BeforeGenesis(uint256 timestamp, uint64 genesisTime);
     /// @notice A seal proof is older than the newest evidence that the gate trusts.
@@ -195,11 +181,12 @@ contract BeaconForkGate is IDepositGate {
 
     /// @notice Emitted once, when detection mode first reads a beacon root and the gate becomes enforcing.
     event BeaconRootsDetected();
-    /// @notice Emitted when a proof confirms a supported fork version for an epoch.
+    /// @notice Emitted when a proof of an allowed shape confirms the fork version for an epoch.
     event ForkConfirmed(uint256 indexed epoch, bytes4 version);
     /// @notice Emitted once, when an execution canary first works and the gate becomes enforcing.
     event ExecutionCanaryFired(Canary canary);
-    /// @notice Emitted when a proof of an unsupported version seals the gate for good.
+    /// @notice Emitted when a proof of a shape outside the allowed set seals the gate for good. The registry path
+    /// reports the observed version and slot.
     event GateSealedByFork(bytes4 version, uint64 slot);
 
     /// @notice The beacon roots contract (EIP-4788): 0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02.
@@ -211,6 +198,8 @@ contract BeaconForkGate is IDepositGate {
     /// @notice The one probe contract for the four opcode canaries (`TSTORE`, `MCOPY`, `BLOBBASEFEE`, `CLZ`). The
     /// first byte of the calldata picks the opcode.
     address public immutable opcodeProbe;
+    /// @notice The `genesis_validators_root` of the beacon chain that the route follows. The witness leaf must equal it.
+    bytes32 public immutable genesisValidatorsRoot;
     /// @notice The genesis time of the beacon chain of this chain, in seconds.
     uint64 public immutable genesisTime;
     /// @notice Seconds per slot (12 on Ethereum, 10 on PulseChain).
@@ -221,23 +210,15 @@ contract BeaconForkGate is IDepositGate {
     /// from an earlier slot is refused.
     uint64 public immutable deploymentSlot;
 
-    /// @dev The supported versions, 5 bytes each: the version, then the depth. Entry `i` sits at byte `5 * i`.
-    bytes32 private immutable _packedVersions;
-    uint256 private immutable _versionCount;
-    /// @dev Bit `d` is set when depth `d` is allowed for a seal proof.
-    uint256 private immutable _sealDepthMask;
-
     GateState private _state;
 
     /// @param beaconRoots_ The EIP-4788 contract address.
-    /// @param mode_ `Enforcing` or `DetectBeaconRoots`.
+    /// @param mode_ `Enforcing`, `DetectBeaconRoots` or `DetectBeaconRootsAndRegistry`.
     /// @param genesisTime_ Genesis time of the beacon chain.
     /// @param secondsPerSlot_ Seconds per slot.
     /// @param slotsPerEpoch_ Slots per epoch.
-    /// @param supportedVersions_ The `(version, state depth)` pairs. They must equal the fork table of the route's
-    /// light-client program.
-    /// @param sealDepths_ The state depths allowed in a seal proof: 5, 6 and 7. Depth 7 covers a future fork that
-    /// crosses 64 state fields.
+    /// @param genesisValidatorsRoot_ The `genesis_validators_root` of the beacon chain that the route follows. The
+    /// deploy script checks it against the chain.
     /// @param forkRegistry_ The fork observation registry. It must hold code in `DetectBeaconRootsAndRegistry` mode
     /// and must be zero in every other mode.
     constructor(
@@ -246,19 +227,14 @@ contract BeaconForkGate is IDepositGate {
         uint64 genesisTime_,
         uint64 secondsPerSlot_,
         uint64 slotsPerEpoch_,
-        SupportedVersion[] memory supportedVersions_,
-        uint8[] memory sealDepths_,
+        bytes32 genesisValidatorsRoot_,
         address forkRegistry_
     ) {
         if (beaconRoots_ == address(0)) revert ZeroValue("beaconRoots");
         if (genesisTime_ == 0) revert ZeroValue("genesisTime");
         if (secondsPerSlot_ == 0) revert ZeroValue("secondsPerSlot");
         if (slotsPerEpoch_ == 0) revert ZeroValue("slotsPerEpoch");
-        if (supportedVersions_.length == 0) revert ZeroValue("supportedVersions");
-        if (supportedVersions_.length > MAX_SUPPORTED_VERSIONS) {
-            revert TooManySupportedVersions(supportedVersions_.length);
-        }
-        if (sealDepths_.length == 0) revert ZeroValue("sealDepths");
+        if (genesisValidatorsRoot_ == bytes32(0)) revert ZeroValue("genesisValidatorsRoot");
         if ((mode_ == GateMode.DetectBeaconRootsAndRegistry) != (forkRegistry_ != address(0))) {
             revert ForkRegistryMismatch(mode_, forkRegistry_);
         }
@@ -269,10 +245,8 @@ contract BeaconForkGate is IDepositGate {
         genesisTime = genesisTime_;
         secondsPerSlot = secondsPerSlot_;
         slotsPerEpoch = slotsPerEpoch_;
+        genesisValidatorsRoot = genesisValidatorsRoot_;
         deploymentSlot = BeaconClock.slotAt(block.timestamp, genesisTime_, secondsPerSlot_);
-        _packedVersions = _pack(supportedVersions_);
-        _versionCount = supportedVersions_.length;
-        _sealDepthMask = _maskOf(sealDepths_);
         forkRegistry = IForkRegistry(forkRegistry_);
         opcodeProbe = _deployProbe(PROBE_RUNTIME);
 
@@ -288,7 +262,7 @@ contract BeaconForkGate is IDepositGate {
     function admit(bytes calldata evidence) external override {
         GateState memory state = _state;
         if (state.isSealed) revert GateSealed();
-        _requireObservedVersionSupported();
+        _requireObservedShapeAllowed();
         if (!state.enforcing) {
             if (!_detectAndEnter()) return;
             state.enforcing = true;
@@ -299,27 +273,29 @@ contract BeaconForkGate is IDepositGate {
         _confirm(abi.decode(evidence, (ForkEvidence)), epoch);
     }
 
-    /// @notice Confirms the supported fork version for the current epoch with no deposit. Anyone may call it, for
+    /// @notice Confirms an allowed state shape for the current epoch with no deposit. Anyone may call it, for
     /// example a keeper. It runs the same checks as `admit`. A confirmed epoch makes the call do nothing.
     /// In detection mode it first needs a working probe.
     /// @param evidence An `abi.encode` of a `ForkEvidence`.
     function confirm(bytes calldata evidence) external {
         if (_state.isSealed) revert GateSealed();
-        _requireObservedVersionSupported();
+        _requireObservedShapeAllowed();
         GateState memory state = _wake();
         uint256 epoch = _currentEpoch();
         if (state.hasConfirmedEpoch && state.confirmedEpoch == epoch) return;
         _confirm(abi.decode(evidence, (ForkEvidence)), epoch);
     }
 
-    /// @notice Seals the gate for good, given a proof of a fork version the route does not support. There is no epoch
-    /// rule, but the header must not be older than the deployment slot or the newest header that a confirmation
-    /// accepted (`SealEvidenceTooOld`). Fork versions only move forward, so an unknown version at or after a slot
-    /// where a supported version was live cannot be a stale one. Without this rule, an old header that the beacon
-    /// roots ring buffer still holds could seal the gate. In detection mode it first needs a working probe.
+    /// @notice Seals the gate for good, given a valid version branch at a depth outside the allowed set of shapes. There
+    /// is no epoch rule, but the header must not be older than the deployment slot or the newest header that a
+    /// confirmation accepted (`SealEvidenceTooOld`). Fork versions only move forward, so a shape outside the allowed set
+    /// at or after a slot where an allowed shape was live cannot be a stale one. Without this rule, an old header that
+    /// the beacon roots ring buffer still holds could seal the gate. In detection mode it first needs a working probe.
     /// Withdrawals are not affected.
-    /// @param evidence An `abi.encode` of a `ForkEvidence`. The branch length must imply a depth in `sealDepths`.
-    /// In registry mode, empty evidence seals from the registry instead: it succeeds when the registry shows an unsupported version.
+    /// @param evidence An `abi.encode` of a `ForkEvidence`. The version branch length must imply a depth from
+    /// `ForkShape.MIN_SEAL_DEPTH` to `ForkShape.MAX_SEAL_DEPTH`. The witness branch is not read for a disallowed depth.
+    /// In registry mode, empty evidence seals from the registry instead: it succeeds when the registry shows a shape
+    /// outside the allowed set.
     function seal(bytes calldata evidence) external {
         if (_state.isSealed) revert GateSealed();
         if (evidence.length == 0 && address(forkRegistry) != address(0)) {
@@ -328,21 +304,11 @@ contract BeaconForkGate is IDepositGate {
         }
         _wake();
         ForkEvidence memory proof = abi.decode(evidence, (ForkEvidence));
-        (bool supported,) = _lookup(proof.version);
-        if (supported) revert VersionIsSupported(proof.version);
 
         _requireBeaconHeader(proof);
         uint64 minimumSlot = _state.highestConfirmedSlot > deploymentSlot ? _state.highestConfirmedSlot : deploymentSlot;
         if (proof.header.slot < minimumSlot) revert SealEvidenceTooOld(proof.header.slot, minimumSlot);
-        if (proof.branch.length < FORK_DEPTH + 1) revert SealDepthNotAllowed(0);
-        uint256 depth = proof.branch.length - FORK_DEPTH;
-        bool plainAllowed = depth <= MAX_STATE_DEPTH && (_sealDepthMask >> depth) & 1 == 1;
-        bool progressiveAllowed =
-            depth == PROGRESSIVE_STATE_BRANCH && (_sealDepthMask >> PROGRESSIVE_STATE_DEPTH) & 1 == 1;
-        if (!plainAllowed && !progressiveAllowed) revert SealDepthNotAllowed(depth);
-        bool proven = (plainAllowed && _isVersionLeaf(proof, _versionGindex(depth)))
-            || (progressiveAllowed && _isVersionLeaf(proof, PROGRESSIVE_VERSION_GINDEX));
-        if (!proven) revert ForkProofInvalid();
+        _requireDisallowedShapeProven(proof);
 
         _state.isSealed = true;
         emit GateSealedByFork(proof.version, proof.header.slot);
@@ -371,29 +337,9 @@ contract BeaconForkGate is IDepositGate {
         return _currentEpoch();
     }
 
-    /// @notice The supported `(version, state depth)` pairs, in configuration order.
-    function supportedVersions() external view returns (SupportedVersion[] memory versions) {
-        uint256 count = _versionCount;
-        bytes32 packed = _packedVersions;
-        versions = new SupportedVersion[](count);
-        for (uint256 i = 0; i < count; i++) {
-            versions[i] = _unpack(packed, i);
-        }
-    }
-
-    /// @notice The state depths allowed in a seal proof, in ascending order. `PROGRESSIVE_STATE_DEPTH` comes last when the
-    /// gate allows a progressive state.
-    function sealDepths() external view returns (uint8[] memory depths) {
-        uint256 mask = _sealDepthMask;
-        uint256 count;
-        for (uint256 depth = 0; depth <= PROGRESSIVE_STATE_DEPTH; depth++) {
-            if ((mask >> depth) & 1 == 1) count++;
-        }
-        depths = new uint8[](count);
-        uint256 next;
-        for (uint256 depth = 0; depth <= PROGRESSIVE_STATE_DEPTH; depth++) {
-            if ((mask >> depth) & 1 == 1) depths[next++] = uint8(depth);
-        }
+    /// @notice The allowed state shapes: plain depths and `ForkShape.PROGRESSIVE`. The set is the same on both chains.
+    function allowedShapes() external pure returns (uint8[] memory) {
+        return ForkShape.allowedShapes();
     }
 
     // ------------------------------------------------------------------ internals
@@ -486,22 +432,20 @@ contract BeaconForkGate is IDepositGate {
         return ok && size == 0x80 && same;
     }
 
-    /// @dev Registry mode: refuses while the latest observed version is set and not supported.
-    function _requireObservedVersionSupported() private view {
+    /// @dev Registry mode: refuses while the latest observed shape is set and not allowed.
+    function _requireObservedShapeAllowed() private view {
         IForkRegistry registry = forkRegistry;
         if (address(registry) == address(0)) return;
-        (bytes4 version, uint64 slot) = registry.latestObserved();
+        (bytes4 version, uint8 shape, uint64 slot) = registry.latestObserved();
         if (slot == 0) return;
-        (bool supported,) = _lookup(version);
-        if (!supported) revert UnsupportedObservedVersion(version, slot);
+        if (!ForkShape.isAllowed(shape)) revert ObservedShapeNotAllowed(version, shape, slot);
     }
 
-    /// @dev Seals from the registry, with no proof: the registry already holds a proven unsupported version.
+    /// @dev Seals from the registry, with no proof: the registry already holds a proven shape outside the allowed set.
     function _sealFromRegistry() private {
-        (bytes4 version, uint64 slot) = forkRegistry.latestObserved();
-        if (slot == 0) revert NoUnsupportedObservation();
-        (bool supported,) = _lookup(version);
-        if (supported) revert NoUnsupportedObservation();
+        (bytes4 version, uint8 shape, uint64 slot) = forkRegistry.latestObserved();
+        if (slot == 0) revert NoDisallowedObservedShape();
+        if (ForkShape.isAllowed(shape)) revert NoDisallowedObservedShape();
         _state.isSealed = true;
         emit GateSealedByFork(version, slot);
     }
@@ -561,9 +505,7 @@ contract BeaconForkGate is IDepositGate {
         _requireBeaconHeader(proof);
         uint256 headerEpoch = proof.header.slot / slotsPerEpoch;
         if (headerEpoch != epoch) revert HeaderNotInCurrentEpoch(headerEpoch, epoch);
-        (bool supported, uint8 depth) = _lookup(proof.version);
-        if (!supported) revert UnsupportedVersion(proof.version);
-        _requireVersionLeaf(proof, depth);
+        _requireAllowedShapeProven(proof);
 
         GateState memory state = _state;
         state.confirmedEpoch = uint64(epoch);
@@ -573,75 +515,37 @@ contract BeaconForkGate is IDepositGate {
         emit ForkConfirmed(epoch, proof.version);
     }
 
+    /// @dev Judges the evidence with `ForkShape` and reverts unless the shape is allowed and both branches verify.
+    function _requireAllowedShapeProven(ForkEvidence memory proof) private view {
+        (ForkShape.Verdict verdict,) = _judge(proof);
+        if (verdict == ForkShape.Verdict.Allowed) return;
+        if (verdict == ForkShape.Verdict.WitnessProofInvalid) revert ShapeWitnessInvalid();
+        if (verdict == ForkShape.Verdict.VersionProofInvalid) revert ForkProofInvalid();
+        revert ShapeNotAllowed(ForkShape.depthOfVersionBranch(proof.branch.length));
+    }
+
+    /// @dev A seal needs a valid version branch at a depth outside the allowed set, inside the seal bounds.
+    function _requireDisallowedShapeProven(ForkEvidence memory proof) private view {
+        uint256 depth = ForkShape.depthOfVersionBranch(proof.branch.length);
+        if (depth < ForkShape.MIN_SEAL_DEPTH || depth > ForkShape.MAX_SEAL_DEPTH) revert SealDepthNotAllowed(depth);
+        (ForkShape.Verdict verdict, uint8 shape) = _judge(proof);
+        if (verdict == ForkShape.Verdict.Allowed) revert ShapeIsAllowed(shape);
+        if (verdict == ForkShape.Verdict.WitnessProofInvalid) revert ShapeWitnessInvalid();
+        if (verdict == ForkShape.Verdict.VersionProofInvalid) revert ForkProofInvalid();
+        if (!ForkShape.provesPlainVersion(proof.header.stateRoot, proof.version, proof.branch, depth)) {
+            revert ForkProofInvalid();
+        }
+    }
+
+    function _judge(ForkEvidence memory proof) private view returns (ForkShape.Verdict, uint8) {
+        return ForkShape.judge(proof.header.stateRoot, proof.version, proof.branch, proof.witnessBranch, genesisValidatorsRoot);
+    }
+
     /// @dev The header must be the block whose root the beacon roots contract holds for the timestamp.
     function _requireBeaconHeader(ForkEvidence memory proof) private view {
         bytes32 root = _beaconRootAt(proof.timestamp);
         if (root == bytes32(0)) revert BeaconRootUnavailable(proof.timestamp);
         bytes32 headerRoot = SSZ.hashTreeRootMemory(proof.header);
         if (headerRoot != root) revert HeaderRootMismatch(root, headerRoot);
-    }
-
-    /// @dev The version, right-padded to 32 bytes, must be the leaf at `BeaconState.fork.current_version`. The index is
-    /// computed here: see `_versionGindex`.
-    function _requireVersionLeaf(ForkEvidence memory proof, uint256 stateDepth) private pure {
-        if (!_isVersionLeaf(proof, _versionGindex(stateDepth))) revert ForkProofInvalid();
-    }
-
-    /// @dev Whether the branch leads from the padded version to the state root at `gindex`. A branch of another length
-    /// reverts in `SSZ`.
-    function _isVersionLeaf(ForkEvidence memory proof, uint256 gindex) private pure returns (bool) {
-        return SSZ.isValidBranchMemory(bytes32(proof.version), proof.branch, gindex, proof.header.stateRoot);
-    }
-
-    /// @dev The index of the version leaf for a state layout. A plain tree of `stateDepth` puts `fork` at field 3, then
-    /// `current_version` at field 1 of the three field `Fork` container: `((2**depth + 3) * 4) + 1`. The progressive marker
-    /// gives the fixed index 169.
-    function _versionGindex(uint256 stateDepth) private pure returns (uint256) {
-        if (stateDepth == PROGRESSIVE_STATE_DEPTH) return PROGRESSIVE_VERSION_GINDEX;
-        return (((uint256(1) << stateDepth) + FORK_FIELD_INDEX) * 4) + 1;
-    }
-
-    /// @dev A layout value of the configuration: a depth from 1 to `MAX_STATE_DEPTH`, or the progressive marker.
-    function _requireLayout(uint8 layout) private pure {
-        if (layout == 0 || (layout > MAX_STATE_DEPTH && layout != PROGRESSIVE_STATE_DEPTH)) {
-            revert StateDepthOutOfRange(layout);
-        }
-    }
-
-    function _lookup(bytes4 version) private view returns (bool found, uint8 depth) {
-        uint256 count = _versionCount;
-        bytes32 packed = _packedVersions;
-        for (uint256 i = 0; i < count; i++) {
-            SupportedVersion memory entry = _unpack(packed, i);
-            if (entry.version == version) return (true, entry.stateDepth);
-        }
-        return (false, 0);
-    }
-
-    function _pack(SupportedVersion[] memory versions) private pure returns (bytes32 packed) {
-        uint256 word;
-        for (uint256 i = 0; i < versions.length; i++) {
-            SupportedVersion memory entry = versions[i];
-            _requireLayout(entry.stateDepth);
-            for (uint256 j = 0; j < i; j++) {
-                if (versions[j].version == entry.version) revert DuplicateSupportedVersion(entry.version);
-            }
-            uint256 entryBits = (uint256(uint32(entry.version)) << 8) | entry.stateDepth;
-            word |= entryBits << (256 - 40 * (i + 1));
-        }
-        return bytes32(word);
-    }
-
-    function _unpack(bytes32 packed, uint256 index) private pure returns (SupportedVersion memory entry) {
-        uint256 entryBits = (uint256(packed) >> (256 - 40 * (index + 1))) & 0xFFFFFFFFFF;
-        entry.version = bytes4(uint32(entryBits >> 8));
-        entry.stateDepth = uint8(entryBits);
-    }
-
-    function _maskOf(uint8[] memory depths) private pure returns (uint256 mask) {
-        for (uint256 i = 0; i < depths.length; i++) {
-            _requireLayout(depths[i]);
-            mask |= uint256(1) << depths[i];
-        }
     }
 }

@@ -29,6 +29,13 @@ pub struct StateLayout {
     pub block_roots_gindex: u64,
     /// `get_generalized_index(BeaconState, "historical_summaries")`. Field 27 in Capella through Fulu.
     pub historical_summaries_gindex: u64,
+    /// `get_generalized_index(BeaconState, "genesis_validators_root")`: the layout witness. Field 1 in every layout.
+    ///
+    /// A plain state of depth `d` puts it at `2^d + 1` (33, 65, 129 for `d` = 5, 6, 7). The Gloas progressive state puts
+    /// it at node 40. The program checks a branch of this field against the attested state root, with the chain's own
+    /// `genesis_validators_root` as the leaf. A state of another shape cannot match, because a node at this position is
+    /// then a different field, padding, or a hash that is not that root (see `docs/hardened-build-contract.md`).
+    pub witness_gindex: u64,
 }
 
 /// `SLOTS_PER_HISTORICAL_ROOT`: the length of `BeaconState.block_roots`.
@@ -88,7 +95,27 @@ pub const fn plain_state_layout(depth: u32) -> StateLayout {
         next_sync_committee_gindex: first_field + STATE_FIELD_NEXT_SYNC_COMMITTEE,
         block_roots_gindex: first_field + BLOCK_ROOTS_FIELD_INDEX,
         historical_summaries_gindex: first_field + HISTORICAL_SUMMARIES_FIELD_INDEX,
+        witness_gindex: first_field + STATE_FIELD_GENESIS_VALIDATORS_ROOT,
     }
+}
+
+/// Position of `genesis_validators_root` among the `BeaconState` fields in every fork, plain and progressive.
+pub const STATE_FIELD_GENESIS_VALIDATORS_ROOT: u64 = 1;
+
+/// Position of `fork` among the `BeaconState` fields in every fork, plain and progressive.
+pub const STATE_FIELD_FORK: u64 = 3;
+
+/// Position of `current_version` among the `Fork` fields (`previous_version`, `current_version`, `epoch`).
+pub const FORK_FIELD_CURRENT_VERSION: u64 = 1;
+
+/// `Fork` is a plain container of three fields, so its tree has four leaves: depth 2.
+const FORK_TREE_DEPTH: u32 = 2;
+
+/// The generalized index of `fork.current_version` in a plain `BeaconState` of `depth`: `((2^depth + 3) * 4) + 1`.
+///
+/// Depth 5 gives 141, depth 6 gives 269 and depth 7 gives 525. The branch has `depth + 2` entries.
+pub const fn plain_current_version_gindex(depth: u32) -> u64 {
+    (((1u64 << depth) + STATE_FIELD_FORK) << FORK_TREE_DEPTH) + FORK_FIELD_CURRENT_VERSION
 }
 
 /// Position of `finalized_checkpoint` among the `BeaconState` fields in every plain layout.
@@ -371,6 +398,11 @@ pub const BLOCK_ROOTS_GINDEX_GLOAS: u64 = 352;
 /// `HISTORICAL_ROOTS_LIMIT` = 2^24 (not in the Gloas lists of modified types; the upgrade copies it).
 pub const HISTORICAL_SUMMARIES_GINDEX_GLOAS: u64 = 2950;
 
+/// `get_generalized_index(BeaconState, "genesis_validators_root")` in Gloas = 40. Derived from the field list, not copied:
+/// chunk 1 is the first leaf of the 4 leaf subtree at node 20 (leaves 40 to 43), so the node is 40 and the branch has 5
+/// entries (two inside the subtree, then the rest nodes up to the progressive root and `active_fields`).
+pub const WITNESS_GINDEX_GLOAS: u64 = 40;
+
 /// `get_generalized_index(BeaconState, "fork", "current_version")` in Gloas = 169. `fork` is chunk 3, the second leaf of the
 /// 4 leaf subtree at node 10 under the rest node 5: node 42. `Fork` has three fields, so it is a plain container of depth 2,
 /// and `current_version` (field 1) is node 42 * 4 + 1. The branch has 7 entries. `BeaconForkGate` checks it for a route whose
@@ -410,6 +442,7 @@ pub const GLOAS_STATE_LAYOUT: StateLayout = StateLayout {
     next_sync_committee_gindex: NEXT_SYNC_COMMITTEE_GINDEX_GLOAS,
     block_roots_gindex: BLOCK_ROOTS_GINDEX_GLOAS,
     historical_summaries_gindex: HISTORICAL_SUMMARIES_GINDEX_GLOAS,
+    witness_gindex: WITNESS_GINDEX_GLOAS,
 };
 
 /// Whether `gindex` is the position of `block_roots` in the Gloas `BeaconState` (352). A progressive container fixes the
@@ -453,22 +486,88 @@ pub struct CompactAnchor {
 /// The branch lengths of the state proofs that the programs accept, and the layout of each.
 ///
 /// The length of the finality branch is the depth of the generalized index, so it names the layout. Length 6 is a plain
-/// state of depth 5 (indices 105, 54, 55), length 7 a plain state of depth 6 (169, 86, 87), length 9 the Gloas progressive
-/// state (735, 2945, 2946). Every other length is refused, depth 7 (length 8) included: on a chain that is truly depth 7
-/// a wrong claim would land on fields that no specification defines yet (see "Change: the layout comes from the
-/// evidence" in `docs/hardened-build-contract.md`).
-pub const ALLOWED_FINALITY_BRANCH_LENGTHS: [usize; 3] = [6, 7, 9];
+/// state of depth 5 (indices 105, 54, 55), length 7 a plain state of depth 6 (169, 86, 87), length 8 a plain state of
+/// depth 7 (297, 150, 151), length 9 the Gloas progressive state (735, 2945, 2946). Every other length is refused.
+///
+/// Depth 7 is allowed because the layout witness ([`StateLayout::witness_gindex`]) proves the claimed shape: on a chain
+/// that is truly of another depth, the witness lands on a node that cannot hold the genesis validators root.
+pub const ALLOWED_FINALITY_BRANCH_LENGTHS: [usize; 4] = [6, 7, 8, 9];
+
+/// The layout of a plain `BeaconState` of depth 7 (more than 64 fields): finality 297, committees 150 and 151, witness 129.
+pub const DEPTH_SEVEN_STATE_LAYOUT: StateLayout = plain_state_layout(7);
 
 /// The state layout that a finality branch of `length` entries names.
 ///
 /// # Errors
-/// `UnsupportedStateBranchLength` for every length other than 6, 7 and 9.
+/// `UnsupportedStateBranchLength` for every length other than 6, 7, 8 and 9.
 pub fn state_layout_for_finality_branch_length(length: usize) -> Result<StateLayout> {
     match length {
         6 => Ok(CAPELLA_DENEB_STATE_LAYOUT),
         7 => Ok(ELECTRA_STATE_LAYOUT),
+        8 => Ok(DEPTH_SEVEN_STATE_LAYOUT),
         9 => Ok(GLOAS_STATE_LAYOUT),
         _ => Err(Error::UnsupportedStateBranchLength { length }),
+    }
+}
+
+/// The shape value that the fork observation reports for a plain `BeaconState` of depth 5.
+pub const SHAPE_PLAIN_DEPTH_FIVE: u8 = 5;
+
+/// The shape value for a plain `BeaconState` of depth 6.
+pub const SHAPE_PLAIN_DEPTH_SIX: u8 = 6;
+
+/// The shape value for a plain `BeaconState` of depth 7.
+pub const SHAPE_PLAIN_DEPTH_SEVEN: u8 = 7;
+
+/// The shape value for the Gloas progressive `BeaconState`. It is 255 and not a depth, so no plain depth can collide with it.
+pub const SHAPE_PROGRESSIVE: u8 = 255;
+
+/// One state shape that a fork observation may prove: its reported value, and the two positions that the proofs use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ObservedShape {
+    /// The value in the output: 5, 6, 7 or 255 ([`SHAPE_PROGRESSIVE`]).
+    pub shape: u8,
+    /// Where `fork.current_version` sits: 141, 269, 525 for plain depths 5, 6, 7 and 169 for the progressive form.
+    pub current_version_gindex: u64,
+    /// Where `genesis_validators_root` sits: 33, 65, 129 and 40 (the layout witness).
+    pub witness_gindex: u64,
+}
+
+const fn plain_observed_shape(depth: u32) -> ObservedShape {
+    ObservedShape {
+        shape: depth as u8,
+        current_version_gindex: plain_current_version_gindex(depth),
+        witness_gindex: plain_state_layout(depth).witness_gindex,
+    }
+}
+
+/// The plain depth 5 shape.
+pub const OBSERVED_SHAPE_PLAIN_DEPTH_FIVE: ObservedShape = plain_observed_shape(5);
+
+/// The plain depth 6 shape.
+pub const OBSERVED_SHAPE_PLAIN_DEPTH_SIX: ObservedShape = plain_observed_shape(6);
+
+/// The plain depth 7 shape.
+pub const OBSERVED_SHAPE_PLAIN_DEPTH_SEVEN: ObservedShape = plain_observed_shape(7);
+
+/// The Gloas progressive shape: `fork.current_version` at 169 and the witness at 40.
+pub const OBSERVED_SHAPE_PROGRESSIVE: ObservedShape = ObservedShape {
+    shape: SHAPE_PROGRESSIVE,
+    current_version_gindex: FORK_VERSION_GINDEX_GLOAS,
+    witness_gindex: WITNESS_GINDEX_GLOAS,
+};
+
+/// The shapes that a version branch of `length` entries may claim, in the order the program tries them.
+///
+/// The version branch has `depth + 2` entries in a plain state, so length 7 is plain depth 5 or the progressive form
+/// (both reach depth 7), length 8 is plain depth 6 and length 9 is plain depth 7. The program takes the first candidate
+/// for which BOTH the version branch and the witness branch verify. Any other length has no candidate.
+pub fn observed_shape_candidates(length: usize) -> &'static [ObservedShape] {
+    match length {
+        7 => &[OBSERVED_SHAPE_PLAIN_DEPTH_FIVE, OBSERVED_SHAPE_PROGRESSIVE],
+        8 => &[OBSERVED_SHAPE_PLAIN_DEPTH_SIX],
+        9 => &[OBSERVED_SHAPE_PLAIN_DEPTH_SEVEN],
+        _ => &[],
     }
 }
 
@@ -812,7 +911,7 @@ mod tests {
 
     /// Claim: the plain layouts are computed from the depth and equal the constants of the light-client specifications,
     /// written here as literals: depth 5 gives 105, 54, 55 and depth 6 gives 169, 86, 87. Depth 7 gives 297, 150, 151 (the
-    /// layout that the program refuses).
+    /// layout that length 8 names).
     /// Why it matters: the program derives the indices from the depth, so a wrong formula would move every proof.
     #[test]
     fn plain_layouts_come_from_the_depth() {
@@ -847,16 +946,25 @@ mod tests {
         assert_eq!(ELECTRA_STATE_LAYOUT, depth_six);
     }
 
-    /// Claim: the finality branch length names the layout: 6, 7 and 9 give the Capella, Electra and Gloas layouts, and every
-    /// other length from 0 to 12 is refused, depth 7 (length 8) included.
+    /// Claim: the finality branch length names the layout: 6, 7, 8 and 9 give plain depth 5, plain depth 6, plain depth 7
+    /// and the Gloas layout, and every other length from 0 to 12 is refused.
     /// Why it is safe: each allowed length is the depth of the finality index of exactly one layout, so no length names two.
+    /// Length 8 is allowed only because the layout witness proves the shape of the state.
     #[test]
     fn the_finality_branch_length_names_the_layout() {
         assert_eq!(state_layout_for_finality_branch_length(6), Ok(CAPELLA_DENEB_STATE_LAYOUT));
         assert_eq!(state_layout_for_finality_branch_length(7), Ok(ELECTRA_STATE_LAYOUT));
+        assert_eq!(state_layout_for_finality_branch_length(8), Ok(plain_state_layout(7)));
+        assert_eq!(state_layout_for_finality_branch_length(8), Ok(DEPTH_SEVEN_STATE_LAYOUT));
         assert_eq!(state_layout_for_finality_branch_length(9), Ok(GLOAS_STATE_LAYOUT));
-        assert_eq!(ALLOWED_FINALITY_BRANCH_LENGTHS, [6, 7, 9]);
-        for length in (0..=12).filter(|length| ![6, 7, 9].contains(length)) {
+        assert_eq!(ALLOWED_FINALITY_BRANCH_LENGTHS, [6, 7, 8, 9]);
+        for length in (0..=12).filter(|length| ![6, 7, 8, 9].contains(length)) {
+            assert_eq!(
+                state_layout_for_finality_branch_length(length),
+                Err(Error::UnsupportedStateBranchLength { length })
+            );
+        }
+        for length in [64, 1024, usize::MAX] {
             assert_eq!(
                 state_layout_for_finality_branch_length(length),
                 Err(Error::UnsupportedStateBranchLength { length })
@@ -866,6 +974,44 @@ mod tests {
             let layout = state_layout_for_finality_branch_length(length).unwrap();
             assert_eq!(gindex_depth(layout.finalized_root_gindex) as usize, length);
         }
+    }
+
+    /// Claim: the witness position is field 1 of the state: 33, 65 and 129 for plain depths 5, 6 and 7 (written here as
+    /// literals), and node 40 for Gloas, which DERIVES from the field list. The branch lengths are 5, 6, 7 and 5.
+    /// Why it matters: the witness is the only evidence that ties a claimed layout to the real tree. A wrong position
+    /// would make the honest branch fail, or accept a branch of another field.
+    #[test]
+    fn the_witness_position_is_field_one_of_each_layout() {
+        assert_eq!(CAPELLA_DENEB_STATE_LAYOUT.witness_gindex, 33);
+        assert_eq!(ELECTRA_STATE_LAYOUT.witness_gindex, 65);
+        assert_eq!(DEPTH_SEVEN_STATE_LAYOUT.witness_gindex, 129);
+        assert_eq!(GLOAS_STATE_LAYOUT.witness_gindex, 40);
+        assert_eq!(BEACON_STATE_GLOAS.field_position("genesis_validators_root"), Some(1));
+        assert_eq!(path_gindex(&[(&BEACON_STATE_GLOAS, "genesis_validators_root")]), Some(WITNESS_GINDEX_GLOAS));
+        for (finality_length, witness_length) in [(6usize, 5u32), (7, 6), (8, 7), (9, 5)] {
+            let layout = state_layout_for_finality_branch_length(finality_length).unwrap();
+            assert_eq!(gindex_depth(layout.witness_gindex), witness_length, "finality length {finality_length}");
+        }
+    }
+
+    /// Claim: no two allowed layouts share a witness position, and the witness position of each layout differs from every
+    /// finality and committee position of every layout.
+    /// Why it matters: plain depth 5 and Gloas share the witness length 5. Only the position, chosen by the finality
+    /// length, tells them apart.
+    #[test]
+    fn witness_positions_are_distinct() {
+        let layouts: Vec<StateLayout> =
+            ALLOWED_FINALITY_BRANCH_LENGTHS.iter().map(|length| state_layout_for_finality_branch_length(*length).unwrap()).collect();
+        let witnesses: Vec<u64> = layouts.iter().map(|layout| layout.witness_gindex).collect();
+        for (index, witness) in witnesses.iter().enumerate() {
+            assert!(!witnesses[index + 1..].contains(witness), "{witness} repeats");
+            for layout in &layouts {
+                assert_ne!(*witness, layout.finalized_root_gindex);
+                assert_ne!(*witness, layout.current_sync_committee_gindex);
+                assert_ne!(*witness, layout.next_sync_committee_gindex);
+            }
+        }
+        assert_eq!(gindex_depth(witnesses[0]), gindex_depth(witnesses[3]), "plain 5 and Gloas share a witness length");
     }
 
     /// Claim: a compact branch of 8, 9 or 11 entries names index 412, 812 or 2947, under the body root for the first two and
@@ -900,6 +1046,49 @@ mod tests {
         assert_eq!(gindex_depth(FORK_VERSION_GINDEX_GLOAS), 7);
         for depth in 5..=7u32 {
             assert_ne!(((1u64 << depth) + 3) * 4 + 1, 169);
+        }
+    }
+
+    /// Claim: `fork.current_version` sits at `((2^depth + 3) * 4) + 1` in a plain state: 141, 269 and 525, with branch
+    /// lengths 7, 8 and 9. In the Gloas progressive state it sits at 169 (length 7), derived from the field list.
+    /// Why it matters: the fork observation proves the version at one of these positions. The shape follows from where the
+    /// branch verifies.
+    #[test]
+    fn the_version_position_follows_the_depth() {
+        assert_eq!(plain_current_version_gindex(5), 141);
+        assert_eq!(plain_current_version_gindex(6), 269);
+        assert_eq!(plain_current_version_gindex(7), 525);
+        assert_eq!(gindex_depth(141), 7);
+        assert_eq!(gindex_depth(269), 8);
+        assert_eq!(gindex_depth(525), 9);
+        assert_eq!(OBSERVED_SHAPE_PROGRESSIVE.current_version_gindex, 169);
+        assert_eq!(gindex_depth(169), 7);
+    }
+
+    /// Claim: a version branch of 7 entries has two candidates, tried in this order: plain depth 5, then progressive. A
+    /// branch of 8 entries has plain depth 6 only, and 9 entries plain depth 7 only. Every other length has none.
+    /// The shape values are 5, 6, 7 and 255, and the witness position of each candidate is 33, 65, 129 and 40.
+    /// Why it matters: length 7 is ambiguous (plain depth 5 and Gloas both reach depth 7), so the program must try both
+    /// and accept the first for which the version AND the witness verify.
+    #[test]
+    fn the_version_branch_length_names_the_shape_candidates() {
+        assert_eq!(observed_shape_candidates(7), &[OBSERVED_SHAPE_PLAIN_DEPTH_FIVE, OBSERVED_SHAPE_PROGRESSIVE]);
+        assert_eq!(observed_shape_candidates(8), &[OBSERVED_SHAPE_PLAIN_DEPTH_SIX]);
+        assert_eq!(observed_shape_candidates(9), &[OBSERVED_SHAPE_PLAIN_DEPTH_SEVEN]);
+        for length in (0..=16).chain([64, usize::MAX]).filter(|length| ![7, 8, 9].contains(length)) {
+            assert!(observed_shape_candidates(length).is_empty(), "length {length}");
+        }
+        assert_eq!((SHAPE_PLAIN_DEPTH_FIVE, SHAPE_PLAIN_DEPTH_SIX, SHAPE_PLAIN_DEPTH_SEVEN, SHAPE_PROGRESSIVE), (5, 6, 7, 255));
+        let rows: Vec<(u8, u64, u64)> = [7usize, 8, 9]
+            .iter()
+            .flat_map(|length| observed_shape_candidates(*length))
+            .map(|candidate| (candidate.shape, candidate.current_version_gindex, candidate.witness_gindex))
+            .collect();
+        assert_eq!(rows, vec![(5, 141, 33), (255, 169, 40), (6, 269, 65), (7, 525, 129)]);
+        for length in [7usize, 8, 9] {
+            for candidate in observed_shape_candidates(length) {
+                assert_eq!(gindex_depth(candidate.current_version_gindex) as usize, length);
+            }
         }
     }
 }

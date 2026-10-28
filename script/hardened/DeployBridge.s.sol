@@ -5,6 +5,7 @@ import {Script, console2} from "forge-std/Script.sol";
 import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
 import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
 import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
+import {ForkShape} from "../../src/hardened/ForkShape.sol";
 import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
 import {TokenMediator} from "../../src/hardened/mediator/TokenMediator.sol";
 import {TokenFactory} from "../../src/hardened/mediator/TokenFactory.sol";
@@ -89,14 +90,16 @@ contract DeployBridge is Script {
         bytes32 initialNextSyncCommitteeHash;
     }
 
-    /// @notice The settings of the deposit gate on a chain. They describe the beacon chain of THIS chain.
+    /// @notice The settings of the deposit gate on a chain. They describe the beacon chain of THIS chain. The gate holds
+    /// no list of fork versions: it judges the shape of the state with `ForkShape`, the same rule on every chain.
+    /// `genesisValidatorsRoot` is the witness leaf of the gate. The script checks it against the light client of the
+    /// other chain, which tracks this beacon chain, and against the own-chain light client of a registry gate.
     struct GateConfig {
         BeaconForkGate.GateMode mode;
         uint64 genesisTime;
         uint64 secondsPerSlot;
         uint64 slotsPerEpoch;
-        BeaconForkGate.SupportedVersion[] supportedVersions;
-        uint8[] sealDepths;
+        bytes32 genesisValidatorsRoot;
     }
 
     /// @notice The checkpoint and the program of the light client on a chain. They describe the OTHER chain's beacon chain.
@@ -183,10 +186,9 @@ contract DeployBridge is Script {
     error ClockMismatch(string field);
     /// @notice The gate mode is not one of the three names.
     error UnknownGateMode(string mode);
-    /// @notice A list in the configuration is empty.
-    error EmptyConfigList(string key);
-    /// @notice A fork version in the configuration is not four bytes long.
-    error ForkVersionLengthInvalid(string key, uint256 length);
+    /// @notice The `genesis_validators_root` of a gate differs from the one that the light client of the other chain (or
+    /// the own-chain light client of a registry gate) holds for the same beacon chain.
+    error GateRootMismatch(string field);
     /// @notice The configured Capella era differs from the era of the Capella fork epoch.
     error CapellaEraMismatch(uint64 chainId, uint64 configured, uint64 derived);
     /// @notice A gate in `Enforcing` mode needs the beacon roots contract, and it holds no code on its chain.
@@ -273,6 +275,8 @@ contract DeployBridge is Script {
         if (config.chainA.chainId == config.chainB.chainId) revert SameChainIdentifier(config.chainA.chainId);
         _requireLightClientClockMatchesOtherGate(config.chainA, config.chainB);
         _requireLightClientClockMatchesOtherGate(config.chainB, config.chainA);
+        _requireGateRootMatchesOtherLightClient(config.chainA, config.chainB);
+        _requireGateRootMatchesOtherLightClient(config.chainB, config.chainA);
         _requireObservationMatchesOtherChain(config.chainA, config.chainB);
         _requireObservationMatchesOtherChain(config.chainB, config.chainA);
     }
@@ -423,6 +427,9 @@ contract DeployBridge is Script {
         if (observed.genesisValidatorsRoot() != own.genesisValidatorsRoot) {
             revert DeploymentMismatch("observed.genesisValidatorsRoot");
         }
+        if (observed.genesisValidatorsRoot() != BeaconForkGate(gate).genesisValidatorsRoot()) {
+            revert DeploymentMismatch("gate.genesisValidatorsRoot differs from the observed light client");
+        }
         if (observed.slotsPerPeriod() != own.slotsPerPeriod) revert DeploymentMismatch("observed.slotsPerPeriod");
         if (observed.genesisTime() != own.genesisTime) revert DeploymentMismatch("observed.genesisTime");
         if (observed.secondsPerSlot() != own.secondsPerSlot) revert DeploymentMismatch("observed.secondsPerSlot");
@@ -534,8 +541,7 @@ contract DeployBridge is Script {
                 gate.genesisTime,
                 gate.secondsPerSlot,
                 gate.slotsPerEpoch,
-                gate.supportedVersions,
-                gate.sealDepths,
+                gate.genesisValidatorsRoot,
                 registry
             )
         );
@@ -633,21 +639,14 @@ contract DeployBridge is Script {
         if (deployed.secondsPerSlot() != expected.secondsPerSlot) revert DeploymentMismatch("gate.secondsPerSlot");
         if (deployed.slotsPerEpoch() != expected.slotsPerEpoch) revert DeploymentMismatch("gate.slotsPerEpoch");
 
-        BeaconForkGate.SupportedVersion[] memory versions = deployed.supportedVersions();
-        if (versions.length != expected.supportedVersions.length) revert DeploymentMismatch("gate.supportedVersions");
-        for (uint256 i = 0; i < versions.length; i++) {
-            if (versions[i].version != expected.supportedVersions[i].version) {
-                revert DeploymentMismatch("gate.supportedVersions.version");
-            }
-            if (versions[i].stateDepth != expected.supportedVersions[i].stateDepth) {
-                revert DeploymentMismatch("gate.supportedVersions.stateDepth");
-            }
+        if (deployed.genesisValidatorsRoot() != expected.genesisValidatorsRoot) {
+            revert DeploymentMismatch("gate.genesisValidatorsRoot");
         }
-
-        uint8[] memory depths = deployed.sealDepths();
-        if (depths.length != expected.sealDepths.length) revert DeploymentMismatch("gate.sealDepths");
-        for (uint256 i = 0; i < depths.length; i++) {
-            if (depths[i] != expected.sealDepths[i]) revert DeploymentMismatch("gate.sealDepths");
+        uint8[] memory shapes = deployed.allowedShapes();
+        uint8[] memory rule = ForkShape.allowedShapes();
+        if (shapes.length != rule.length) revert DeploymentMismatch("gate.allowedShapes");
+        for (uint256 i = 0; i < shapes.length; i++) {
+            if (shapes[i] != rule[i]) revert DeploymentMismatch("gate.allowedShapes");
         }
     }
 
@@ -808,6 +807,19 @@ contract DeployBridge is Script {
         }
     }
 
+    /// @dev The gate of a chain follows the beacon chain of THIS chain, and the light client of the OTHER chain tracks
+    /// that same beacon chain. So the gate root must equal the root of that light client. A registry gate also needs
+    /// the root of its own observation settings to match. The relationship is asserted, not assumed.
+    function _requireGateRootMatchesOtherLightClient(ChainConfig memory chain, ChainConfig memory other) private pure {
+        if (chain.gate.genesisValidatorsRoot != other.lightClient.genesisValidatorsRoot) {
+            revert GateRootMismatch("gate.genesisValidatorsRoot differs from the light client of the other chain");
+        }
+        if (chain.gate.mode != BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry) return;
+        if (chain.gate.genesisValidatorsRoot != chain.observation.genesisValidatorsRoot) {
+            revert GateRootMismatch("gate.genesisValidatorsRoot differs from the own-chain observation settings");
+        }
+    }
+
     /// @dev The era of the Capella fork slot is `capellaForkEpoch * slotsPerEpoch / SLOTS_PER_ERA`, rounded down.
     function _requireCapellaEra(ChainConfig memory chain) private pure {
         uint256 forkSlot = uint256(chain.lightClient.capellaForkEpoch) * chain.lightClient.slotsPerEpoch;
@@ -823,25 +835,7 @@ contract DeployBridge is Script {
         gate.secondsPerSlot = uint64(_readNonZeroUint(json, string.concat(prefix, ".secondsPerSlot")));
         gate.slotsPerEpoch = uint64(_readNonZeroUint(json, string.concat(prefix, ".slotsPerEpoch")));
 
-        string memory versionsKey = string.concat(prefix, ".supportedVersions");
-        uint256 versionCount = _arrayLength(json, versionsKey);
-        if (versionCount == 0) revert EmptyConfigList(versionsKey);
-        gate.supportedVersions = new BeaconForkGate.SupportedVersion[](versionCount);
-        for (uint256 i = 0; i < versionCount; i++) {
-            string memory entry = string.concat(versionsKey, "[", vm.toString(i), "]");
-            gate.supportedVersions[i] = BeaconForkGate.SupportedVersion({
-                version: _readForkVersion(json, string.concat(entry, ".version")),
-                stateDepth: uint8(_readNonZeroUint(json, string.concat(entry, ".stateDepth")))
-            });
-        }
-
-        string memory depthsKey = string.concat(prefix, ".sealDepths");
-        uint256 depthCount = _arrayLength(json, depthsKey);
-        if (depthCount == 0) revert EmptyConfigList(depthsKey);
-        gate.sealDepths = new uint8[](depthCount);
-        for (uint256 i = 0; i < depthCount; i++) {
-            gate.sealDepths[i] = uint8(_readNonZeroUint(json, string.concat(depthsKey, "[", vm.toString(i), "]")));
-        }
+        gate.genesisValidatorsRoot = _readBytes32(json, string.concat(prefix, ".genesisValidatorsRoot"));
     }
 
     function _readGateMode(string memory text) private pure returns (BeaconForkGate.GateMode) {
@@ -851,21 +845,6 @@ contract DeployBridge is Script {
             return BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry;
         }
         revert UnknownGateMode(text);
-    }
-
-    function _readForkVersion(string memory json, string memory key) private pure returns (bytes4) {
-        bytes memory raw = vm.parseBytes(_readText(json, key));
-        if (raw.length != 4) revert ForkVersionLengthInvalid(key, raw.length);
-        bytes4 version = bytes4(raw);
-        if (version == bytes4(0)) revert ZeroConfigValue(key);
-        return version;
-    }
-
-    /// @dev The number of elements of a JSON array: the first index that does not exist.
-    function _arrayLength(string memory json, string memory path) private view returns (uint256 count) {
-        while (vm.keyExistsJson(json, string.concat(path, "[", vm.toString(count), "]"))) {
-            count++;
-        }
     }
 
     function _readText(string memory json, string memory key) private pure returns (string memory text) {

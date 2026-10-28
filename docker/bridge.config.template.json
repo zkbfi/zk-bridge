@@ -34,8 +34,7 @@
       "genesisTime": "@@GATE_GENESIS_TIME@@",
       "secondsPerSlot": "12",
       "slotsPerEpoch": "32",
-      "supportedVersions": [{ "version": "0x0000036c", "stateDepth": "5" }],
-      "sealDepths": ["5", "6", "7"]
+      "genesisValidatorsRoot": "@@GENESIS_ROOT_A@@"
     }
   },
   "chainB": {
@@ -72,8 +71,7 @@
       "genesisTime": "@@GATE_GENESIS_TIME@@",
       "secondsPerSlot": "12",
       "slotsPerEpoch": "32",
-      "supportedVersions": [{ "version": "0x0000036c", "stateDepth": "5" }],
-      "sealDepths": ["5", "6", "7"]
+      "genesisValidatorsRoot": "@@GENESIS_ROOT_B@@"
     }
   }
 }

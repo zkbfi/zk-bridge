@@ -34,13 +34,7 @@
       "genesisTime": "REPLACE_WITH_GENESIS_TIME_OF_CHAIN_A_BEACON_CHAIN",
       "secondsPerSlot": "REPLACE_WITH_SECONDS_PER_SLOT_OF_CHAIN_A",
       "slotsPerEpoch": "REPLACE_WITH_SLOTS_PER_EPOCH_OF_CHAIN_A",
-      "supportedVersions": [
-        {
-          "version": "REPLACE_WITH_FORK_VERSION_OF_CHAIN_A_AS_4_BYTE_HEX",
-          "stateDepth": "REPLACE_WITH_BEACON_STATE_DEPTH_OF_THAT_FORK"
-        }
-      ],
-      "sealDepths": ["REPLACE_WITH_SEAL_DEPTH_5", "REPLACE_WITH_SEAL_DEPTH_6", "REPLACE_WITH_SEAL_DEPTH_7"]
+      "genesisValidatorsRoot": "REPLACE_WITH_GENESIS_VALIDATORS_ROOT_OF_CHAIN_A"
     }
   },
   "chainB": {
@@ -77,13 +71,7 @@
       "genesisTime": "REPLACE_WITH_GENESIS_TIME_OF_CHAIN_B_BEACON_CHAIN",
       "secondsPerSlot": "REPLACE_WITH_SECONDS_PER_SLOT_OF_CHAIN_B",
       "slotsPerEpoch": "REPLACE_WITH_SLOTS_PER_EPOCH_OF_CHAIN_B",
-      "supportedVersions": [
-        {
-          "version": "REPLACE_WITH_FORK_VERSION_OF_CHAIN_B_AS_4_BYTE_HEX",
-          "stateDepth": "REPLACE_WITH_BEACON_STATE_DEPTH_OF_THAT_FORK"
-        }
-      ],
-      "sealDepths": ["REPLACE_WITH_SEAL_DEPTH_5", "REPLACE_WITH_SEAL_DEPTH_6", "REPLACE_WITH_SEAL_DEPTH_7"]
+      "genesisValidatorsRoot": "REPLACE_WITH_GENESIS_VALIDATORS_ROOT_OF_CHAIN_B"
     },
     "observation": {
       "lightClientProgramVKey": "REPLACE_WITH_LIGHT_CLIENT_PROGRAM_VKEY",
