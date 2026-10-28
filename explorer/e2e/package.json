@@ -1,0 +1,19 @@
+{
+  "name": "@zk-bridge/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The driver of the end-to-end run on two Anvil chains with real proofs (docs/end-to-end-real-proofs.md).",
+  "scripts": {
+    "run": "bun run src/main.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "viem": "2.56.9"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "typescript": "5.9.3"
+  }
+}

@@ -203,6 +203,19 @@ importers:
         specifier: 8.21.3
         version: 8.21.3
 
+  e2e:
+    dependencies:
+      viem:
+        specifier: 2.56.9
+        version: 2.56.9(typescript@5.9.3)(zod@4.6.5)
+    devDependencies:
+      '@types/bun':
+        specifier: 1.4.2
+        version: 1.4.2
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
   indexer:
     dependencies:
       '@zk-bridge/shared':
