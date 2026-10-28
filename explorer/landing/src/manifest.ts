@@ -121,10 +121,16 @@ export function parseManifest(text: string): ReleaseManifest {
   };
 }
 
+function compareKeys(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
 function sortKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (typeof value !== "object" || value === null) return value;
-  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => compareKeys(a, b));
   return Object.fromEntries(entries.map(([key, entry]) => [key, sortKeys(entry)]));
 }
 

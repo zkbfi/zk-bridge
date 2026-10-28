@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { escapeHtml, loadLandingState, renderLanding } from "../src/page.ts";
+import { escapeHtml, findMalformedGateway, loadLandingState, renderLanding } from "../src/page.ts";
 import type { LandingConfig, LandingState } from "../src/page.ts";
-import { canonicalManifestBytes } from "../src/manifest.ts";
 import { makeSigner, sampleManifest } from "./helpers.ts";
 
 const gateways = ["https://one.example/ipfs/", "https://two.example/ipfs/", "https://three.example/ipfs/"];
@@ -20,8 +19,8 @@ test("a failed signature shows the warning and no link", () => {
 test("a good manifest shows the dapp and docs CIDs with at least three gateway links each, and every download with its SHA-256", () => {
   const html = renderLanding(verified());
   for (const release of sampleManifest.releases) {
-    const links = html.split(`${release.cid}"`).length - 1;
-    assert.ok(links >= 3, `${release.name} has ${links} links`);
+    const links = html.match(new RegExp(`<a href="[^"]*${release.cid}"`, "g")) ?? [];
+    assert.ok(links.length >= 3, `${release.name} has ${links.length} links`);
     assert.ok(html.includes(release.cid));
   }
   for (const download of sampleManifest.downloads) {
@@ -76,19 +75,50 @@ test("loadLandingState notes a browser that cannot remember", async () => {
   assert.equal(state.kind === "verified" && state.sequenceNote !== null, true);
 });
 
-test("loadLandingState fails on a wrong key, a lower sequence, a missing file and a bad manifest", async () => {
-  const { publicKey, manifestBytes, signature } = await makeSigner();
+test("loadLandingState fails on a signature by a wrong key", async () => {
+  const { manifestBytes, signature } = await makeSigner();
   const other = await makeSigner();
-  const files = { m: manifestBytes, s: signature };
-  assert.equal((await withFetch(files, () => loadLandingState(configFor([other.publicKey]), null))).kind, "failed");
-  const lower = await withFetch(files, () => loadLandingState(configFor([publicKey]), storageWith("99")));
-  assert.equal(lower.kind === "failed" && lower.reason.includes("99"), true);
-  assert.equal((await withFetch({}, () => loadLandingState(configFor([publicKey]), null))).kind, "failed");
+  const state = await withFetch({ m: manifestBytes, s: signature }, () => loadLandingState(configFor([other.publicKey]), null));
+  assert.deepEqual(state, { kind: "failed", title: "T", reason: "The signature does not match any built-in release key." });
+});
+
+test("loadLandingState fails on a lower sequence and names the remembered one", async () => {
+  const { publicKey, manifestBytes, signature } = await makeSigner();
+  const state = await withFetch({ m: manifestBytes, s: signature }, () => loadLandingState(configFor([publicKey]), storageWith("99")));
+  assert.deepEqual(state, {
+    kind: "failed",
+    title: "T",
+    reason: "This list is older (number 5) than one this browser saw before (number 99).",
+  });
+});
+
+test("loadLandingState fails when a file cannot be fetched", async () => {
+  const { publicKey } = await makeSigner();
+  const state = await withFetch({}, () => loadLandingState(configFor([publicKey]), null));
+  assert.deepEqual(state, { kind: "failed", title: "T", reason: "could not fetch m (status 404)" });
+});
+
+test("loadLandingState fails on a signed manifest with an unsupported schema", async () => {
   const bad = { ...sampleManifest, schema: 2 } as unknown as typeof sampleManifest;
-  const badSigner = await makeSigner(bad);
-  const badState = await withFetch({ m: badSigner.manifestBytes, s: badSigner.signature }, () =>
-    loadLandingState(configFor([badSigner.publicKey]), null),
+  const signer = await makeSigner(bad);
+  const state = await withFetch({ m: signer.manifestBytes, s: signer.signature }, () =>
+    loadLandingState(configFor([signer.publicKey]), null),
   );
-  assert.equal(badState.kind, "failed");
-  assert.ok(canonicalManifestBytes(sampleManifest).length > 0);
+  assert.deepEqual(state, { kind: "failed", title: "T", reason: "the manifest schema is not supported" });
+});
+
+test("a malformed gateway shows the failure warning and no link", async () => {
+  const { publicKey, manifestBytes, signature } = await makeSigner();
+  const config = { ...configFor([publicKey]), gateways: [...gateways, "not a web address"] };
+  const state = await withFetch({ m: manifestBytes, s: signature }, () => loadLandingState(config, null));
+  assert.equal(state.kind, "failed");
+  const html = renderLanding(state);
+  assert.ok(html.includes("Warning"));
+  assert.ok(html.includes("not a web address"));
+  assert.ok(!html.includes("<a "));
+});
+
+test("a gateway with another protocol is refused", () => {
+  assert.equal(findMalformedGateway(["https://ok.example/ipfs/", "javascript:alert(1)"]), "javascript:alert(1)");
+  assert.equal(findMalformedGateway(gateways), null);
 });

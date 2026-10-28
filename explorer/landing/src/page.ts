@@ -101,12 +101,26 @@ function describeSequence(check: ReturnType<typeof rememberSequence>): string | 
     : null;
 }
 
+/** Returns the first gateway that is not a web address, or null when all are good. */
+export function findMalformedGateway(gateways: readonly string[]): string | null {
+  const isWebAddress = (gateway: string): boolean => {
+    try {
+      return ["https:", "http:"].includes(new URL(gateway).protocol);
+    } catch {
+      return false;
+    }
+  };
+  return gateways.find((gateway) => !isWebAddress(gateway)) ?? null;
+}
+
 /** Fetches the manifest and signature, checks them, and returns the state to show. */
 export async function loadLandingState(
   config: LandingConfig,
   storage: Pick<Storage, "getItem" | "setItem"> | null,
 ): Promise<LandingState> {
   const failed = (reason: string): LandingState => ({ kind: "failed", title: config.title, reason });
+  const malformed = findMalformedGateway(config.gateways);
+  if (malformed !== null) return failed(`The page settings hold a gateway that is not a web address: ${malformed}`);
   try {
     const [manifestBytes, signature] = await Promise.all([fetchBytes(config.manifestUrl), fetchBytes(config.signatureUrl)]);
     const valid = await verifyManifestSignature({ manifestBytes, signature, publicKeys: config.publicKeys });
