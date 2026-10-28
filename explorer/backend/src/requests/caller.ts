@@ -64,7 +64,8 @@ function bareAddress(text: string): string {
  */
 export function callerKey(text: string): string {
   const address = bareAddress(text);
-  if (ipv4Octets(address) !== null) return address;
+  const octets = ipv4Octets(address);
+  if (octets !== null) return octets.join(".");
   const groups = ipv6Groups(address);
   if (groups === null) return UNKNOWN_CALLER;
   const [first, second, third, fourth, fifth, sixth, seventh, eighth] = groups as [number, number, number, number, number, number, number, number];

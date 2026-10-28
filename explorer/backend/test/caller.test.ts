@@ -8,6 +8,13 @@ describe("callerKey", () => {
     expect(callerKey(" 1.2.3.4 ")).toBe("1.2.3.4");
   });
 
+  it("gives one key to every written form of one IPv4 address, and refuses an octet above 255", () => {
+    for (const text of ["1.2.3.4", "01.2.3.4", "001.002.003.004", "[::ffff:1.2.3.4]:80", "01.2.3.4:99"]) {
+      expect(callerKey(text)).toBe("1.2.3.4");
+    }
+    expect(callerKey("1.2.3.256")).toBe(UNKNOWN_CALLER);
+  });
+
   it("treats an IPv4 address inside IPv6 as IPv4, in the dotted and in the hex form", () => {
     expect(callerKey("::ffff:203.0.113.9")).toBe("203.0.113.9");
     expect(callerKey("::ffff:102:304")).toBe("1.2.3.4");
