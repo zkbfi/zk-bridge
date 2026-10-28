@@ -33,7 +33,7 @@ use lc_core::wire::{
 use lc_core::Error;
 use lc_testkit::fork_observation_scenarios::{
     fold_steps, honest_shape, observation_over_state, observation_signed_by, observed_state,
-    stale_three_period_scenario,
+    stale_three_period_scenario, ObservedState,
 };
 use lc_testkit::json::fixtures_dir;
 use lc_testkit::pulsechain::real_update_and_store;
@@ -662,8 +662,9 @@ fn the_wire_format_carries_the_genesis_validators_root_branch() {
     assert_eq!(decode_guest_input(&encode_guest_input(&at_the_limit)), Ok(at_the_limit), "7 entries decode");
 }
 
-/// Claim: the observation input carries both branches. It round-trips, a version branch of 10 entries (limit 9) and a branch
-/// of `genesis_validators_root` of 8 entries (limit 7) are refused, a truncated input and trailing bytes are refused, and the
+/// Claim: the observation input carries both branches. It round-trips, a version branch of 34 entries (limit 33) and a branch
+/// of `genesis_validators_root` of 32 entries (limit 31) are refused. The limits are wide because the observation proves plain depths up to 31.
+/// A fold step keeps its limit of 7, as the test above shows, a truncated input and trailing bytes are refused, and the
 /// guest entry point returns 256 bytes that decode to a `ForkObservation` with the shape word.
 /// Why it matters: same as for the update. The output grew by one word, and the input by two branches.
 #[test]
@@ -696,11 +697,11 @@ fn the_observation_wire_format_carries_both_branches() {
     assert!(decode_observation_input(&trailing).is_err(), "trailing byte");
 
     let mut long_version = input.clone();
-    long_version.observation.current_version_branch = vec![B256::repeat_byte(2); 10];
-    assert!(decode_observation_input(&encode_observation_input(&long_version)).is_err(), "version branch of 10");
+    long_version.observation.current_version_branch = vec![B256::repeat_byte(2); 34];
+    assert!(decode_observation_input(&encode_observation_input(&long_version)).is_err(), "version branch of 34");
     let mut long_root = input.clone();
-    long_root.observation.genesis_validators_root_branch = vec![B256::repeat_byte(2); 8];
-    assert!(decode_observation_input(&encode_observation_input(&long_root)).is_err(), "root branch of 8");
+    long_root.observation.genesis_validators_root_branch = vec![B256::repeat_byte(2); 32];
+    assert!(decode_observation_input(&encode_observation_input(&long_root)).is_err(), "root branch of 32");
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -708,8 +709,9 @@ fn the_observation_wire_format_carries_both_branches() {
 // ---------------------------------------------------------------------------------------------------------------------
 
 /// Claim: the fork observation accepts an honest state of each shape (plain depth 5, 6, 7 and the progressive form) and
-/// reports 5, 6, 7 and 255 in the `shape` word. A plain depth 8 state is refused with `InvalidForkShapeProof`, and so is a
-/// state that holds a root other than the root of the chain in field 1. Control: the honest observations.
+/// reports 5, 6, 7 and 255 in the `shape` word. A plain depth 8 state is proven too, and reports 8: the light client refuses it,
+/// and the observation lets the gate see it. A state that holds a root other than the root of the chain in field 1 is refused
+/// with `InvalidForkShapeProof`. Control: the honest observations.
 /// Why it matters: PulseChain has no beacon roots contract, so the observation proves the shape itself. The gate judges the `shape` word.
 #[test]
 fn the_fork_observation_reports_the_shape_of_its_state() {
@@ -725,7 +727,7 @@ fn the_fork_observation_reports_the_shape_of_its_state() {
         assert_eq!(output.shape, shape);
     }
 
-    // A depth 8 state has a version branch of 10 entries, which no shape has.
+    // A depth 8 state has a version branch of 10 entries: the shape 8.
     let mut wide = observed_state(spec, 7, version);
     let deep = {
         let mut leaves: Vec<B256> =
@@ -746,6 +748,12 @@ fn the_fork_observation_reports_the_shape_of_its_state() {
     wide.current_version_branch = [fork_branch, state_branch].concat();
     wide.genesis_validators_root_branch = lc_core::ssz::branch_for_leaf(&leaves, 1).1;
     assert_eq!(wide.current_version_branch.len(), 10);
+    let foreign = ObservedState {
+        genesis_validators_root_branch: observed_state(spec, 5, version).genesis_validators_root_branch,
+        ..wide.clone()
+    };
     let observation = observation_over_state(spec, wide, &signer, version, version, 400, slot);
-    assert_eq!(verify_fork_observation(&scenario.store, &[], &observation, spec), Err(Error::InvalidForkShapeProof));
+    assert_eq!(verify_fork_observation(&scenario.store, &[], &observation, spec).map(|output| output.shape), Ok(8));
+    let refused = observation_over_state(spec, foreign, &signer, version, version, 400, slot);
+    assert_eq!(verify_fork_observation(&scenario.store, &[], &refused, spec), Err(Error::InvalidForkShapeProof));
 }

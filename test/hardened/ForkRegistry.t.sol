@@ -377,15 +377,19 @@ contract ForkRegistryTest is GateSupport {
     // ================================================================ fixtures of the program
 
     /// Claim: the registry agrees with the program fixtures in `light-client/tests/fixtures/fork-observation`. Shows:
-    /// for both chains, the three accepted observations are recorded by the registry when it starts from the light
+    /// for both chains, the four accepted observations are recorded by the registry when it starts from the light
     /// client state in the fixture (version outside the table included), and the eight rejected ones revert with the
     /// error that matches their reason (`StartMismatch` by the field that differs, `NotFresh`, `WrongLength`).
     /// Matters: the program and the contract are written separately; this test ties the byte layout and the rules of
     /// both to the same files, so a drift in either one fails here.
     function test_HB02_registry_agreesWithTheProgramFixtures() public {
         string[2] memory chains = ["ethereum", "pulsechain"];
-        string[3] memory accepted =
-            ["accept_version_in_the_table", "accept_version_outside_the_table", "accept_after_folding_a_stale_store"];
+        string[4] memory accepted = [
+            "accept_version_in_the_table",
+            "accept_version_outside_the_table",
+            "accept_after_folding_a_stale_store",
+            "accept_plain_depth_eight_after_folding_a_stale_store"
+        ];
         string[5] memory rejected = [
             "reject_not_fresh",
             "reject_start_committee_differs",
@@ -506,6 +510,59 @@ contract ForkRegistryTest is GateSupport {
         registryGate.admit("");
         vm.expectRevert(BeaconForkGate.GateSealed.selector);
         registryGate.seal("");
+    }
+
+    // ================================================================ a real depth 8 observation reaches the gate
+
+    /// Claim: the 256 byte output of a REAL depth 8 observation (the program fixture, not a mock value) makes the gate in
+    /// registry mode refuse deposits and lets anyone seal it with empty evidence. Shows: the fixture holds shape 8 and
+    /// the observed version in its last words; before the observation a send passes (control); after it the registry
+    /// shows shape 8 under that version, `ObservedShapeNotAllowed(version, 8, slot)` refuses the send, and `seal("")`
+    /// emits `GateSealedByFork` and closes the gate. Matters: the program used to refuse depth 8 with no proof, so the
+    /// registry could never record a disallowed shape and the gate never reacted. This test fails again if the program
+    /// stops proving the shape, because the fixture then would not exist.
+    function test_HB02_registryGate_aRealDepthEightObservationRefusesDepositsAndSeals() public {
+        string memory json = vm.readFile(
+            "light-client/tests/fixtures/fork-observation/pulsechain_accept_plain_depth_eight_after_folding_a_stale_store.json"
+        );
+        bytes memory values = vm.parseJsonBytes(json, ".publicValues");
+        assertEq(values.length, 256, "the output of the program");
+        assertEq(uint256(_wordAt(values, 7)), 8, "the program proved shape 8");
+        BeaconLightClient client = new BeaconLightClient(
+            address(verifier),
+            LIGHT_CLIENT_VKEY,
+            bytes32(_firstWord(values)),
+            SLOTS_PER_PERIOD,
+            LIGHT_CLIENT_GENESIS_TIME,
+            LIGHT_CLIENT_SECONDS_PER_SLOT,
+            uint64(vm.parseJsonUint(json, ".lightClient.headSlot")),
+            vm.parseJsonBytes32(json, ".lightClient.headerRoot"),
+            vm.parseJsonBytes32(json, ".lightClient.currentSyncCommitteeHash"),
+            vm.parseJsonBytes32(json, ".lightClient.nextSyncCommitteeHash")
+        );
+        ForkRegistry fixtureRegistry = new ForkRegistry(address(client), address(verifier), OBSERVATION_VKEY);
+        BeaconForkGate gate = _registryGate(address(fixtureRegistry));
+        MessageBridge sender = _bridgeWithGate(address(gate));
+        _send(sender, alice);
+
+        fixtureRegistry.observe(_prove(OBSERVATION_VKEY, values), values);
+        bytes4 version = bytes4(vm.parseJsonBytes(json, ".observedVersion"));
+        uint64 slot = uint64(vm.parseJsonUint(json, ".observedAttestedSlot"));
+        (bytes4 latestVersion, uint8 latestShape, uint64 latestSlot) = fixtureRegistry.latestObserved();
+        assertEq(latestVersion, version);
+        assertEq(latestShape, 8);
+        assertEq(latestSlot, slot);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(BeaconForkGate.ObservedShapeNotAllowed.selector, version, uint8(8), slot)
+        );
+        _send(sender, alice);
+
+        vm.expectEmit(address(gate));
+        emit GateSealedByFork(version, slot);
+        vm.prank(attacker);
+        gate.seal("");
+        assertTrue(gate.isSealed());
     }
 
     /// Claim: an allowed observed shape changes nothing, whatever the version is called. Shows: with every allowed shape

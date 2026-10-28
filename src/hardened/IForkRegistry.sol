@@ -7,7 +7,8 @@ interface IForkRegistry {
     /// @notice The fork version seen under the highest attested slot, the shape of the attested state that carried it,
     /// and that slot.
     /// @return version The version. It is meaningful only when `slot` is not zero.
-    /// @return shape The proven shape of the state: a plain depth (5, 6 or 7), or 255 for the progressive form.
+    /// @return shape The proven shape of the state: a plain depth (5, 6 or 7 allowed, 8 to 31 disallowed), or 255 for
+    /// the progressive form. A disallowed depth is what lets the gate refuse deposits and seal.
     /// Meaningful only when `slot` is not zero.
     /// @return slot The highest observed attested slot, or zero when nothing was observed.
     function latestObserved() external view returns (bytes4 version, uint8 shape, uint64 slot);

@@ -1130,3 +1130,17 @@ The build follows the design. This list holds every place where it differs from 
 - `test/hardened/mediator/TokenMediatorGaps.t.sol`, `TokenMediatorInvariant.t.sol`, `TokenMediatorFuzz.t.sol`: token behaviour, the limiter and fee rules, and the solvency invariants of the mediator.
 
 **Gas of the stack** (`forge test`, one transaction per test, without the base cost and the calldata; `--isolate` figures in brackets): a token round trip costs 2,065,511 gas in four steps (2,146,744): send on chain A 155,589; execute on chain B with the deployment of the copy 1,423,690; send on chain B 90,499; execute on chain A 395,733. A later relay of the same token costs 410,423 to execute on chain B in the short form. An arbitrary message costs 37,405 to send and 484,919 to execute, 522,324 in all (588,844).
+
+## Fork gate by shape (2026-10-27) (built)
+
+This section supersedes the gate notes in the 2026-10-20 sections above ("seal depths 5, 6, 7 and the marker 255",
+`supportedVersions`). The full design is in `docs/light-client-layout/`.
+
+- The gate keeps no list of version names. It accepts any fork version whose state proof has an allowed shape (plain depth
+  5, 6 or 7, or the Gloas progressive form) when the branch of `genesis_validators_root` (state field 1) also holds at
+  that shape under the same state root. `ForkShape.sol` holds the one rule for both chains.
+- A seal needs a valid proof of a plain depth from 8 to 31. A proof at an allowed shape never seals.
+- On PulseChain the fork observation program proves the shape the same way and outputs it (256 bytes, eighth word
+  `shape`). It can now report plain depths 8 to 31, so the registry can record a disallowed shape: the gate then refuses
+  deposits, and `seal()` with empty evidence succeeds.
+- The light-client program accepts depth 7 too, because the genesis validators root branch pins the depth.

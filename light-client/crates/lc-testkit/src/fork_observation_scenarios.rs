@@ -5,10 +5,11 @@ use crate::synthetic::{build_update, committee_for, sign_with_first_members, Tes
 use alloy_primitives::B256;
 use alloy_sol_types::SolValue;
 use lc_core::chain::{ChainSpec, DOMAIN_SYNC_COMMITTEE, ETHEREUM_MAINNET, PULSECHAIN};
+use lc_core::layout::{FIRST_DISALLOWED_DEPTH, MAX_SEAL_DEPTH};
 use lc_core::layout::{SHAPE_PLAIN_DEPTH_FIVE, SHAPE_PLAIN_DEPTH_SEVEN, SHAPE_PLAIN_DEPTH_SIX, SHAPE_PROGRESSIVE};
 use lc_core::observation::fork_version_leaf;
 use lc_core::observation::{verify_fork_observation, Observation};
-use lc_core::ssz::{branch_for_leaf, progressive_container_branch, sha256};
+use lc_core::ssz::{branch_for_leaf, branch_for_leaf_with_limit, progressive_container_branch, sha256};
 use lc_core::types::{compute_domain, compute_signing_root, BeaconBlockHeader, LightClientStore, LightClientUpdate};
 use lc_core::update::{table_fork_version, verify_light_client_update, FoldStep};
 use serde_json::{json, Value};
@@ -175,8 +176,8 @@ pub fn honest_shape(spec: &ChainSpec) -> u8 {
     }
 }
 
-/// How many leaves the state tree of `shape` has: 28, 37 and 70 fields for plain depths 5, 6 and 7, and 46 chunks for
-/// the progressive Gloas state.
+/// How many leaves the state tree of `shape` has: 28, 37 and 70 fields for plain depths 5, 6 and 7, 46 chunks for
+/// the progressive Gloas state, and 130 fields for every disallowed plain depth (8 to 31; more than 128 fields need depth 8).
 ///
 /// # Panics
 /// Panics for a value that is no shape.
@@ -186,7 +187,26 @@ pub fn state_field_count_for_shape(shape: u8) -> usize {
         SHAPE_PLAIN_DEPTH_SIX => 37,
         SHAPE_PLAIN_DEPTH_SEVEN => 70,
         SHAPE_PROGRESSIVE => 46,
+        deeper if is_disallowed_plain_depth(deeper) => DISALLOWED_DEPTH_FIELD_COUNT,
         other => panic!("{other} is no state shape"),
+    }
+}
+
+/// The field count of a state of a disallowed plain depth. It is above 128, so a depth 8 tree is the smallest that holds it.
+const DISALLOWED_DEPTH_FIELD_COUNT: usize = 130;
+
+/// Whether `shape` is a plain depth from 8 to 31: a depth that the light client refuses and the observation proves.
+pub fn is_disallowed_plain_depth(shape: u8) -> bool {
+    (FIRST_DISALLOWED_DEPTH..=MAX_SEAL_DEPTH).contains(&u32::from(shape))
+}
+
+/// The branch of leaf `index` of the state tree of `shape`: progressive, plain of depth 5 to 7 (padded to a power of two),
+/// or plain of a disallowed depth (a zero padded tree of `2^shape` leaves).
+fn state_branch(shape: u8, leaves: &[B256], index: usize) -> (B256, Vec<B256>) {
+    match shape {
+        SHAPE_PROGRESSIVE => progressive_container_branch(leaves, index),
+        deeper if is_disallowed_plain_depth(deeper) => branch_for_leaf_with_limit(leaves, index, u32::from(deeper)),
+        _ => branch_for_leaf(leaves, index),
     }
 }
 
@@ -195,9 +215,9 @@ pub fn state_field_count_for_shape(shape: u8) -> usize {
 pub struct ObservedState {
     /// The state root. The attested header carries it.
     pub root: B256,
-    /// The branch of `fork.current_version` (the leaf is the version, left-aligned): 7, 8 or 9 entries.
+    /// The branch of `fork.current_version` (the leaf is the version, left-aligned): 7 to 33 entries.
     pub current_version_branch: Vec<B256>,
-    /// The branch of `genesis_validators_root`: 5, 6, 7 or 5 entries.
+    /// The branch of `genesis_validators_root`: 5, 6, 7 or 5 entries, or 8 to 31 for a disallowed plain depth.
     pub genesis_validators_root_branch: Vec<B256>,
 }
 
@@ -214,10 +234,7 @@ pub fn observed_state(spec: &ChainSpec, shape: u8, version: [u8; 4]) -> Observed
     let fork_leaves = [sha256(b"previous-version"), fork_version_leaf(version), sha256(b"fork-epoch")];
     let (fork_root, fork_branch) = branch_for_leaf(&fork_leaves, FORK_FIELD_CURRENT_VERSION);
     leaves[STATE_FIELD_FORK] = fork_root;
-    let branch_in_state = |index: usize| match shape {
-        SHAPE_PROGRESSIVE => progressive_container_branch(&leaves, index),
-        _ => branch_for_leaf(&leaves, index),
-    };
+    let branch_in_state = |index: usize| state_branch(shape, &leaves, index);
     let (root, state_branch) = branch_in_state(STATE_FIELD_FORK);
     let (_, genesis_validators_root_branch) = branch_in_state(STATE_FIELD_GENESIS_VALIDATORS_ROOT);
     ObservedState { root, current_version_branch: [fork_branch, state_branch].concat(), genesis_validators_root_branch }
@@ -236,7 +253,7 @@ pub fn observation_signed_by(
     observation_on_shape(spec, honest_shape(spec), signer, version, count, attested_slot)
 }
 
-/// Like [`observation_signed_by`], over an attested state of the given `shape` (5, 6, 7 or 255).
+/// Like [`observation_signed_by`], over an attested state of the given `shape` (5, 6, 7, 255, or a plain depth from 8 to 31).
 pub fn observation_on_shape(
     spec: &ChainSpec,
     shape: u8,
@@ -392,6 +409,22 @@ pub fn fork_observation_fixtures() -> Vec<(String, Value)> {
             spec,
             &stale.store,
             &stale_observation,
+            &fold_steps(spec, &stale.updates),
+        ));
+        let deeper_observation = observation_on_shape(
+            spec,
+            FIRST_DISALLOWED_DEPTH as u8,
+            &stale.final_committee(),
+            unknown,
+            400,
+            stale_slot,
+        );
+        cases.push(accept_case(
+            &format!("{chain}_accept_plain_depth_eight_after_folding_a_stale_store"),
+            "The attested state is a plain tree of depth 8 (more than 128 fields), a shape the light client refuses. Every fold step is before the fork, in a layout the light client accepts. The observation proves the shape 8 and the output reports it.",
+            spec,
+            &stale.store,
+            &deeper_observation,
             &fold_steps(spec, &stale.updates),
         ));
 

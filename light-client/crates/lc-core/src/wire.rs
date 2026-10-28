@@ -34,6 +34,7 @@
 
 use crate::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN, PULSECHAIN_TESTNET_V4, SEPOLIA};
 use crate::error::{Error, Result};
+use crate::layout::MAX_SEAL_DEPTH;
 use crate::observation::{verify_fork_observation, Observation};
 use crate::types::{
     BeaconBlockHeader, BlobGasFields, BlsPublicKey, ExecutionPayloadHeader, HeaderForm, LightClientHeader,
@@ -113,8 +114,13 @@ const HEADER_FORM_COMPACT: u8 = 1;
 /// The most entries of a genesis validators root branch: the deepest layout is plain depth 7.
 const MAX_GENESIS_VALIDATORS_ROOT_BRANCH: usize = 7;
 
-/// The most entries of a fork version branch of an observation: plain depth 7 plus the two levels of `Fork`.
-const MAX_CURRENT_VERSION_BRANCH: usize = 9;
+/// The most entries of a fork version branch of an observation: the deepest seal depth plus the two levels of `Fork`. The
+/// observation proves plain depths beyond the light client layouts so that the gate can refuse them. The fold steps keep
+/// [`MAX_GENESIS_VALIDATORS_ROOT_BRANCH`], because the light client itself refuses those depths.
+const MAX_CURRENT_VERSION_BRANCH: usize = MAX_SEAL_DEPTH as usize + 2;
+
+/// The most entries of the genesis validators root branch of an observation: the deepest seal depth.
+const MAX_OBSERVED_GENESIS_VALIDATORS_ROOT_BRANCH: usize = MAX_SEAL_DEPTH as usize;
 
 /// The most bytes of an execution header RLP in a compact header. A header is about 600 bytes today (23 items, a 256 byte
 /// bloom, a 32 byte extra data), and the limit leaves room for later forks.
@@ -477,8 +483,8 @@ pub struct ObservationGuestInput {
 
 /// Encodes the fork-observation guest input: chain selector, store, a list of 0 to 64 steps (the same encoding as
 /// the light-client guest), then the observation: attested beacon header (112 bytes: slot, proposer index, parent, state and body roots), signature slot (`u64`),
-/// participation bits (64 bytes), signature (96 bytes), fork version (4 bytes), the fork version branch (a count of at most 9,
-/// then the nodes) and the genesis validators root branch branch (a count of at most 7, then the nodes).
+/// participation bits (64 bytes), signature (96 bytes), fork version (4 bytes), the fork version branch (a count of at most 33,
+/// then the nodes) and the genesis validators root branch (a count of at most 31, then the nodes).
 pub fn encode_observation_input(input: &ObservationGuestInput) -> Vec<u8> {
     let mut writer = Writer(Vec::new(), uses_compact_headers(&input.steps));
     writer.chain(input.chain);
@@ -507,7 +513,7 @@ pub fn decode_observation_input(bytes: &[u8]) -> Result<ObservationGuestInput> {
     let sync_aggregate = reader.aggregate()?;
     let fork_version: [u8; 4] = reader.take(4)?.try_into().expect("4 bytes");
     let current_version_branch = reader.branch_up_to(MAX_CURRENT_VERSION_BRANCH)?;
-    let genesis_validators_root_branch = reader.branch_up_to(MAX_GENESIS_VALIDATORS_ROOT_BRANCH)?;
+    let genesis_validators_root_branch = reader.branch_up_to(MAX_OBSERVED_GENESIS_VALIDATORS_ROOT_BRANCH)?;
     reader.finish()?;
     let observation = Observation {
         attested_header,

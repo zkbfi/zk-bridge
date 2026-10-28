@@ -18,7 +18,8 @@ interface IObservedLightClient {
 /// @notice Records the fork versions that a sync committee of the observed chain signed under (hole HB-02 on
 /// PulseChain). A sync committee signs under the real current fork version of its chain, so a proof that two thirds of
 /// a bound committee signed under version V shows that the chain runs V at that slot. The observation program also
-/// proves the shape of the attested state (a plain depth 5, 6 or 7, or the progressive form), and the registry stores
+/// proves the shape of the attested state (a plain depth 5, 6 or 7, the progressive form, or a plain depth from 8 to 31 that
+/// the light client refuses), and the registry stores
 /// that shape next to the version. The deposit gate applies the rule of `ForkShape` to it: the same rule that it applies
 /// to EIP-4788 evidence on Ethereum. The registry judges nothing itself. It has no owner and no way to remove an entry.
 /// @dev The observation program has its own verification key, different from the light client program. A proof of one

@@ -35,6 +35,28 @@ PulseChain has no EIP-4788, so the fork observation program proves the shape of 
   to 256 bytes (plus 32). The lc-core abi, the guest, wire (input encoding), ForkRegistry and fixtures all follow.
 - The observation's fold steps carry their own genesis validators root branches (D1).
 
+### D2 addendum: the observation also proves the disallowed plain depths 8 to 31
+The first form of D2 could output only an allowed shape. A version branch of any other length had no candidate and failed
+with `InvalidForkShapeProof`. So the registry could never record a disallowed shape, `_requireObservedShapeAllowed` never
+refused, and `seal("")` never fired on a real proof. A consensus-only fork of PulseChain to plain depth 8 (more than 128
+state fields) would have left the gate taking deposits that the light client can never deliver.
+- The observation now proves a plain depth d from 8 to 31, the same bounds as `ForkShape.MIN_SEAL_DEPTH` and
+  `MAX_SEAL_DEPTH` (a Rust test reads the Solidity source and asserts the equality).
+  Version leaf at `(2^d + 3) * 4 + 1` (branch length d + 2, so 10 to 33). Genesis validators root at `2^d + 1` (branch length d,
+  so 8 to 31), with the leaf taken from `ChainSpec`. The output shape word is d.
+- The allowed shapes do not change: 5, 6, 7 and 255. Plain depth 5 is still tried before the progressive form for a version
+  branch of 7 entries. The output stays at 256 bytes, and the fixtures of the allowed shapes keep their bytes.
+- Wire limits: the version branch of the observation allows 33 entries and its genesis validators root branch allows 31. The fold
+  steps keep their limit of 7, because the light client itself still refuses depth 8.
+- The fold steps of an observation still use the light client layouts. That is correct: the store reaches the fork and
+  stops. The committee that the store already knows signs the observation of the new header. The fixture
+  `*_accept_plain_depth_eight_after_folding_a_stale_store` shows this.
+- Safety: a deeper claim on a true state of an allowed shape lands on a node that cannot hold the version leaf or the root of
+  the chain, or below a leaf. The test `no_deeper_candidate_confirms_a_state_of_an_allowed_shape` walks every claim from depth 8 to
+  31 through the true trees of depth 5, 6, 7 and the Gloas state.
+- Solidity: `test_HB02_registryGate_aRealDepthEightObservationRefusesDepositsAndSeals` feeds the real output through the
+  registry. The gate refuses deposits and `seal("")` succeeds.
+
 ## D3. Gate on both chains: one rule (see the coordinator message pasted in the Solidity brief)
 Accept any fork version whose state proof has an allowed shape (plain 5, 6, 7 or progressive) with the genesis validators root branch proving
 genesis_validators_root at that shape under the same state root. Seal only on a shape outside the allowed set (a proof of

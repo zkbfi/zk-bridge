@@ -1,0 +1,25 @@
+{
+  "chain": "pulsechain",
+  "description": "The attested state is a plain tree of depth 8 (more than 128 fields), a shape the light client refuses. Every fold step is before the fork, in a layout the light client accepts. The observation proves the shape 8 and the output reports it.",
+  "expected": {
+    "result": "accept"
+  },
+  "lightClient": {
+    "currentSyncCommitteeHash": "0xaec026d13396e96b13d87ddd8d3f095f395a499029591ae06d5c6761010b10c3",
+    "headSlot": "10862992",
+    "headerRoot": "0x8c5d86422ebf46808154100269523cfbcb639f1bc0323364e96406010fd05a79",
+    "nextSyncCommitteeHash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "name": "pulsechain_accept_plain_depth_eight_after_folding_a_stale_store",
+  "observedAttestedSlot": "10879140",
+  "observedShape": 8,
+  "observedVersion": "0x0000036d",
+  "publicValues": "0x3357ba0018a2582aeabe4ae847aa17d50a3a99aaeb66293c01f80a83aecd0c908c5d86422ebf46808154100269523cfbcb639f1bc0323364e96406010fd05a790000000000000000000000000000000000000000000000000000000000a5c190aec026d13396e96b13d87ddd8d3f095f395a499029591ae06d5c6761010b10c300000000000000000000000000000000000000000000000000000000000000000000036d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a600a40000000000000000000000000000000000000000000000000000000000000008",
+  "startStore": {
+    "currentSyncCommitteeHash": "0xaec026d13396e96b13d87ddd8d3f095f395a499029591ae06d5c6761010b10c3",
+    "headSlot": "10862992",
+    "headerRoot": "0x8c5d86422ebf46808154100269523cfbcb639f1bc0323364e96406010fd05a79",
+    "nextSyncCommitteeHash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "versionInProgramTable": false
+}

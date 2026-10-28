@@ -49,10 +49,10 @@ pub struct Observation {
     /// The fork version of the signing domain. The signature proves it.
     pub fork_version: [u8; 4],
     /// The branch of `fork.current_version` to `attested_header.state_root`. Its leaf is `fork_version`, left-aligned in a
-    /// 32 byte chunk. It has 7, 8 or 9 entries.
+    /// 32 byte chunk. It has 7 to 33 entries (plain depth 5 to 31, or the progressive form).
     pub current_version_branch: Vec<B256>,
     /// the genesis validators root branch: the branch of `genesis_validators_root` to `attested_header.state_root`, at the genesis validators root position
-    /// of the same shape. It has 5, 6, 7 or 5 entries.
+    /// of the same shape. It has 5, 6, 7 or 5 entries for the allowed shapes, and 8 to 31 entries for a disallowed plain depth.
     pub genesis_validators_root_branch: Vec<B256>,
 }
 
@@ -63,7 +63,7 @@ pub fn fork_version_leaf(fork_version: [u8; 4]) -> B256 {
     B256::from(chunk)
 }
 
-/// Proves the shape of the attested state and returns it (5, 6, 7 or 255).
+/// Proves the shape of the attested state and returns it: 5, 6, 7, 255, or a disallowed plain depth from 8 to 31.
 ///
 /// The version branch length picks the candidates. A candidate wins when both the version branch and the genesis validators root branch
 /// verify at its positions, under `attested_header.state_root`. The branches are exact, so each branch length must also
@@ -180,15 +180,22 @@ fn fold_if_any(store: &LightClientStore, steps: &[FoldStep], spec: &ChainSpec) -
 mod tests {
     use super::*;
     use crate::chain::{ETHEREUM_MAINNET, PULSECHAIN};
+    use crate::layout::{FIRST_DISALLOWED_DEPTH, MAX_SEAL_DEPTH, MIN_SEAL_DEPTH};
     use crate::layout::{SHAPE_PLAIN_DEPTH_FIVE, SHAPE_PLAIN_DEPTH_SEVEN, SHAPE_PLAIN_DEPTH_SIX, SHAPE_PROGRESSIVE};
-    use crate::ssz::{branch_for_leaf, progressive_container_branch, sha256};
+    use crate::ssz::{branch_for_leaf, branch_for_leaf_with_limit, progressive_container_branch, sha256};
 
     const VERSION: [u8; 4] = [0x90, 0x00, 0x00, 0x75];
 
     /// Which tree the test builds: a plain state of `fields` fields, or the progressive state of 46 chunks.
     #[derive(Clone, Copy)]
     enum Tree {
-        Plain { fields: usize },
+        Plain {
+            fields: usize,
+        },
+        /// A plain state of a depth the light client refuses (8 to 32), with 130 fields in a tree of `2^depth` leaves.
+        Deep {
+            depth: u32,
+        },
         Progressive,
     }
 
@@ -196,6 +203,7 @@ mod tests {
     fn state_branch(tree: Tree, leaves: &[B256], index: usize) -> (B256, Vec<B256>) {
         match tree {
             Tree::Plain { .. } => branch_for_leaf(leaves, index),
+            Tree::Deep { depth } => branch_for_leaf_with_limit(leaves, index, depth),
             Tree::Progressive => progressive_container_branch(leaves, index),
         }
     }
@@ -205,6 +213,7 @@ mod tests {
     fn honest_observation(tree: Tree, genesis_validators_root: B256) -> Observation {
         let count = match tree {
             Tree::Plain { fields } => fields,
+            Tree::Deep { .. } => 130,
             Tree::Progressive => 46,
         };
         let mut leaves: Vec<B256> = (0..count).map(|index| sha256(format!("field/{index}").as_bytes())).collect();
@@ -321,14 +330,14 @@ mod tests {
         assert_eq!(prove_observed_shape(&other, &ETHEREUM_MAINNET), Err(Error::InvalidForkShapeProof));
     }
 
-    /// Claim: a version branch of a length that no shape has (0 to 6, 10, 11, 64) gives `InvalidForkShapeProof`, and so
+    /// Claim: a version branch of a length that no shape has (0 to 6, 34, 35, 64) gives `InvalidForkShapeProof`, and so
     /// does a zero-padded or cut branch of an honest observation.
     /// Why it matters: the branches are exact. A leading zero changes the length, and the length names the candidates.
     #[test]
     fn version_branches_of_other_lengths_are_refused() {
         let honest = honest_observation(Tree::Plain { fields: 37 }, ETHEREUM_MAINNET.genesis_validators_root);
         assert_eq!(honest.current_version_branch.len(), 8);
-        for length in [0usize, 1, 6, 10, 11, 64] {
+        for length in [0usize, 1, 6, 34, 35, 64] {
             let branch = honest.current_version_branch.iter().copied().cycle().take(length).collect();
             let observation = Observation { current_version_branch: branch, ..honest.clone() };
             assert_eq!(
@@ -352,13 +361,75 @@ mod tests {
         );
     }
 
-    /// Claim: a plain state of depth 8 (129 fields) gives a version branch of 10 entries, which no shape has, so it is
-    /// refused.
-    /// Why it matters: a depth outside the allowed set must not prove a shape. The gate seals on that evidence.
+    /// Claim: a plain state of depth 8 (129 fields) and of depth 9 (257 fields) prove and report shape 8 and 9, with version
+    /// branches of 10 and 11 entries and genesis validators root branches of 8 and 9 entries. Depth 31, the deepest seal
+    /// depth, proves too.
+    /// Why it matters: the light client refuses these depths, so the registry must be able to record them. Otherwise a
+    /// consensus-only fork to a deeper state leaves the gate open to deposits that nobody can deliver.
     #[test]
-    fn a_depth_eight_state_proves_no_shape() {
-        let observation = honest_observation(Tree::Plain { fields: 129 }, ETHEREUM_MAINNET.genesis_validators_root);
-        assert_eq!(observation.current_version_branch.len(), 10);
-        assert_eq!(prove_observed_shape(&observation, &ETHEREUM_MAINNET), Err(Error::InvalidForkShapeProof));
+    fn a_disallowed_plain_depth_proves_and_reports_its_depth() {
+        let real_fields = [(Tree::Plain { fields: 129 }, 8u8), (Tree::Plain { fields: 257 }, 9)];
+        let sparse_depths =
+            [(Tree::Deep { depth: 8 }, 8u8), (Tree::Deep { depth: 20 }, 20), (Tree::Deep { depth: 31 }, 31)];
+        for (tree, depth) in real_fields.into_iter().chain(sparse_depths) {
+            let observation = honest_observation(tree, ETHEREUM_MAINNET.genesis_validators_root);
+            assert_eq!(observation.current_version_branch.len(), usize::from(depth) + 2);
+            assert_eq!(observation.genesis_validators_root_branch.len(), usize::from(depth));
+            assert_eq!(prove_observed_shape(&observation, &ETHEREUM_MAINNET), Ok(depth), "depth {depth}");
+        }
+    }
+
+    /// Claim: a claim of depth 32 is refused with `InvalidForkShapeProof`, although both branches are honest for a tree of
+    /// depth 32. The control is the same construction at depth 31, which proves.
+    /// Why it matters: the bound is the seal bound of the gate. A shape past it must not appear in a public value.
+    #[test]
+    fn a_depth_thirty_two_claim_is_refused() {
+        let control = honest_observation(Tree::Deep { depth: MAX_SEAL_DEPTH }, PULSECHAIN.genesis_validators_root);
+        assert_eq!(prove_observed_shape(&control, &PULSECHAIN), Ok(31));
+        let too_deep = honest_observation(Tree::Deep { depth: MAX_SEAL_DEPTH + 1 }, PULSECHAIN.genesis_validators_root);
+        assert_eq!(too_deep.current_version_branch.len(), 34);
+        assert_eq!(prove_observed_shape(&too_deep, &PULSECHAIN), Err(Error::InvalidForkShapeProof));
+    }
+
+    /// Claim: a deeper shape needs a genesis validators root branch that proves the root of the chain at the position of the
+    /// SAME depth. A foreign root, a branch of another field, and a branch one level too short or too long each give
+    /// `InvalidForkShapeProof`. The control is the honest depth 8 observation.
+    /// Why it matters: without this branch any tree with a version-like leaf would pass for a deeper shape, and a
+    /// stranger could seal the gate with it.
+    #[test]
+    fn a_deeper_shape_with_a_wrong_genesis_validators_root_branch_is_refused() {
+        let root = PULSECHAIN.genesis_validators_root;
+        let honest = honest_observation(Tree::Deep { depth: 8 }, root);
+        assert_eq!(prove_observed_shape(&honest, &PULSECHAIN), Ok(8));
+        let foreign = honest_observation(Tree::Deep { depth: 8 }, B256::repeat_byte(0x77));
+        assert_eq!(prove_observed_shape(&foreign, &PULSECHAIN), Err(Error::InvalidForkShapeProof));
+        let leaves: Vec<B256> = (0..130).map(|index| sha256(format!("field/{index}").as_bytes())).collect();
+        let (_, other_field_branch) = branch_for_leaf_with_limit(&leaves, 2, 8);
+        let other_field = Observation { genesis_validators_root_branch: other_field_branch, ..honest.clone() };
+        assert_eq!(prove_observed_shape(&other_field, &PULSECHAIN), Err(Error::InvalidForkShapeProof));
+        let too_short = honest.genesis_validators_root_branch[1..].to_vec();
+        let too_long = [honest.genesis_validators_root_branch.clone(), vec![B256::ZERO]].concat();
+        for branch in [too_short, too_long] {
+            let wrong_length = Observation { genesis_validators_root_branch: branch, ..honest.clone() };
+            assert_eq!(prove_observed_shape(&wrong_length, &PULSECHAIN), Err(Error::InvalidForkShapeProof));
+        }
+    }
+
+    /// Claim: the depth bounds equal the seal bounds that `ForkShape.sol` declares, and the first disallowed depth is one past the
+    /// deepest layout of the light client. The test reads the Solidity source.
+    /// Why it matters: if the two bounds drift apart, the program could prove a depth that the gate ignores, or the gate
+    /// could look for a depth that the program can never prove.
+    #[test]
+    fn the_depth_bounds_equal_the_solidity_seal_bounds() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../src/hardened/ForkShape.sol");
+        let source = std::fs::read_to_string(path).expect("ForkShape.sol");
+        let constant = |name: &str| -> u32 {
+            let line = source.lines().find(|line| line.contains(&format!("{name} = "))).expect("the constant");
+            let value = line.split('=').nth(1).expect("a value").trim().trim_end_matches(';');
+            value.parse().expect("a number")
+        };
+        assert_eq!(constant("MIN_SEAL_DEPTH"), MIN_SEAL_DEPTH);
+        assert_eq!(constant("MAX_SEAL_DEPTH"), MAX_SEAL_DEPTH);
+        assert_eq!(FIRST_DISALLOWED_DEPTH, *crate::layout::STATE_DEPTHS.end() + 1);
     }
 }

@@ -525,9 +525,10 @@ pub const SHAPE_PROGRESSIVE: u8 = 255;
 /// One state shape that a fork observation may prove: its reported value, and the two positions that the proofs use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ObservedShape {
-    /// The value in the output: 5, 6, 7 or 255 ([`SHAPE_PROGRESSIVE`]).
+    /// The value in the output: a plain depth (5 to 7 allowed, 8 to 31 disallowed) or 255 ([`SHAPE_PROGRESSIVE`]).
     pub shape: u8,
-    /// Where `fork.current_version` sits: 141, 269, 525 for plain depths 5, 6, 7 and 169 for the progressive form.
+    /// Where `fork.current_version` sits: 141, 269, 525 for plain depths 5, 6, 7, `(2^d + 3) * 4 + 1` for deeper plain
+    /// depths, and 169 for the progressive form.
     pub current_version_gindex: u64,
     /// Where `genesis_validators_root` sits: 33, 65, 129 and 40 (the genesis validators root branch).
     pub genesis_validators_root_gindex: u64,
@@ -557,17 +558,57 @@ pub const OBSERVED_SHAPE_PROGRESSIVE: ObservedShape = ObservedShape {
     genesis_validators_root_gindex: GENESIS_VALIDATORS_ROOT_GINDEX_GLOAS,
 };
 
+/// The shallowest plain depth for which a seal proof is looked at. It equals `ForkShape.MIN_SEAL_DEPTH` in Solidity.
+pub const MIN_SEAL_DEPTH: u32 = 5;
+
+/// The deepest plain depth for which a seal proof is looked at. It equals `ForkShape.MAX_SEAL_DEPTH` in Solidity.
+pub const MAX_SEAL_DEPTH: u32 = 31;
+
+/// The shallowest plain depth that the light client refuses and the observation still proves: one past the deepest
+/// allowed layout. A state of this depth has more than 128 fields.
+pub const FIRST_DISALLOWED_DEPTH: u32 = 8;
+
+/// How many disallowed plain depths the observation proves: [`FIRST_DISALLOWED_DEPTH`] to [`MAX_SEAL_DEPTH`].
+const DISALLOWED_DEPTH_COUNT: usize = (MAX_SEAL_DEPTH - FIRST_DISALLOWED_DEPTH + 1) as usize;
+
+/// The plain shapes of depth 8 to 31, in depth order. The light client refuses all of them. The observation proves them
+/// so that the registry can record the shape and the gate can refuse deposits and seal.
+const DISALLOWED_OBSERVED_SHAPES: [ObservedShape; DISALLOWED_DEPTH_COUNT] = disallowed_observed_shapes();
+
+/// Builds [`DISALLOWED_OBSERVED_SHAPES`].
+const fn disallowed_observed_shapes() -> [ObservedShape; DISALLOWED_DEPTH_COUNT] {
+    let mut shapes = [plain_observed_shape(FIRST_DISALLOWED_DEPTH); DISALLOWED_DEPTH_COUNT];
+    let mut index = 0;
+    while index < DISALLOWED_DEPTH_COUNT {
+        shapes[index] = plain_observed_shape(FIRST_DISALLOWED_DEPTH + index as u32);
+        index += 1;
+    }
+    shapes
+}
+
 /// The shapes that a version branch of `length` entries may claim, in the order the program tries them.
 ///
 /// The version branch has `depth + 2` entries in a plain state, so length 7 is plain depth 5 or the progressive form
-/// (both reach depth 7), length 8 is plain depth 6 and length 9 is plain depth 7. The program takes the first candidate
-/// for which BOTH the version branch and the genesis validators root branch verify. Any other length has no candidate.
+/// (both reach depth 7), length 8 is plain depth 6 and length 9 is plain depth 7. Lengths 10 to 33 name the plain depths
+/// 8 to 31, which are not allowed: the observation proves them so that the gate can refuse them. The program takes the
+/// first candidate for which BOTH the version branch and the genesis validators root branch verify. Any other length has
+/// no candidate.
 pub fn observed_shape_candidates(length: usize) -> &'static [ObservedShape] {
     match length {
         7 => &[OBSERVED_SHAPE_PLAIN_DEPTH_FIVE, OBSERVED_SHAPE_PROGRESSIVE],
         8 => &[OBSERVED_SHAPE_PLAIN_DEPTH_SIX],
         9 => &[OBSERVED_SHAPE_PLAIN_DEPTH_SEVEN],
-        _ => &[],
+        _ => disallowed_candidate_for_length(length),
+    }
+}
+
+/// The one disallowed plain shape that a version branch of `length` entries names, or an empty slice.
+fn disallowed_candidate_for_length(length: usize) -> &'static [ObservedShape] {
+    let first_length = FIRST_DISALLOWED_DEPTH as usize + FORK_TREE_DEPTH as usize;
+    let Some(index) = length.checked_sub(first_length) else { return &[] };
+    match DISALLOWED_OBSERVED_SHAPES.get(index..=index) {
+        Some(shape) => shape,
+        None => &[],
     }
 }
 
@@ -1089,7 +1130,7 @@ mod tests {
         assert_eq!(observed_shape_candidates(7), &[OBSERVED_SHAPE_PLAIN_DEPTH_FIVE, OBSERVED_SHAPE_PROGRESSIVE]);
         assert_eq!(observed_shape_candidates(8), &[OBSERVED_SHAPE_PLAIN_DEPTH_SIX]);
         assert_eq!(observed_shape_candidates(9), &[OBSERVED_SHAPE_PLAIN_DEPTH_SEVEN]);
-        for length in (0..=16).chain([64, usize::MAX]).filter(|length| ![7, 8, 9].contains(length)) {
+        for length in (0..=40).chain([64, usize::MAX]).filter(|length| !(7..=33).contains(length)) {
             assert!(observed_shape_candidates(length).is_empty(), "length {length}");
         }
         assert_eq!(
@@ -1109,5 +1150,27 @@ mod tests {
                 assert_eq!(gindex_depth(candidate.current_version_gindex) as usize, length);
             }
         }
+    }
+
+    /// Claim: a version branch of 10 to 33 entries names exactly one candidate, the plain depth `length - 2` (8 to 31). Its
+    /// version position is `(2^d + 3) * 4 + 1`, its genesis validators root position is `2^d + 1`, and its reported shape is `d`.
+    /// Lengths 34 and above name none. The depth bounds are the seal bounds of the Solidity library, and depth 8 is one
+    /// past the deepest layout that the light client accepts.
+    /// Why it matters: the registry can only record a shape that the program can prove. A missing depth would hide a fork.
+    #[test]
+    fn lengths_ten_to_thirty_three_name_the_disallowed_plain_depths() {
+        assert_eq!(FIRST_DISALLOWED_DEPTH, STATE_DEPTHS.end() + 1);
+        for length in 10..=33usize {
+            let depth = length as u32 - 2;
+            let candidates = observed_shape_candidates(length);
+            assert_eq!(candidates.len(), 1, "length {length}");
+            assert_eq!(candidates[0].shape as u32, depth);
+            assert_eq!(candidates[0].current_version_gindex, ((1u64 << depth) + 3) * 4 + 1);
+            assert_eq!(candidates[0].genesis_validators_root_gindex, (1u64 << depth) + 1);
+            assert_eq!(gindex_depth(candidates[0].current_version_gindex) as usize, length);
+            assert_eq!(gindex_depth(candidates[0].genesis_validators_root_gindex), depth);
+        }
+        assert!(observed_shape_candidates(34).is_empty());
+        assert!(observed_shape_candidates(10).iter().all(|candidate| ![5, 6, 7, 255].contains(&candidate.shape)));
     }
 }
