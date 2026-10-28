@@ -11,6 +11,10 @@ This repository holds two things. The first is a red team of the proposed Ethere
 - The oracle backend runs on Anvil and stands in for the SP1 verifier. It proves nothing about a real chain.
 - A real deployment needs a stateful server that posts the updates, opens the bridges and delivers the messages, an audit, and the open items listed below.
 
+## Audit
+
+Auditors start at [`docs/audit/README.md`](docs/audit/README.md). It gives the scope with priority tiers, the trust assumptions, the claimed properties, the pinned toolchains and the commands to build and test. [`docs/audit/known-issues.md`](docs/audit/known-issues.md) lists accepted risks and open items, and [`docs/audit/invariants.md`](docs/audit/invariants.md) maps each invariant to its code and tests.
+
 ## How the hardened bridge works
 
 The bridge moves messages and tokens between two chains. A message sent on the source chain is delivered to a contract on the destination chain. A token relay is a message to the token mediator on the other side.
