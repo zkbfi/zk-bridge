@@ -72,7 +72,6 @@ describe("health and stub modules", () => {
   it.each([
     ["/webhook/jobs/abc", "POST"],
     ["/proofs/latest/first-to-second", "GET"],
-    ["/evidence/0x00", "GET"],
   ])("a stub module answers 503: %s", async (path, method) => {
     const backend = makeBackend({ enabled: ALL });
     const answer = await backend.app.request(path, { method });

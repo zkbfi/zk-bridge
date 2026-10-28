@@ -100,7 +100,7 @@ describe("startBackend", () => {
     try {
       const answer = await fetch(`http://127.0.0.1:${running.port}/health`);
       const report = (await answer.json()) as { modules: Record<string, { state: string }> };
-      expect(report.modules).toEqual({ requests: { state: "running" }, archive: { state: "not built" } });
+      expect(report.modules).toEqual({ requests: { state: "running" }, archive: { state: "degraded", detail: "indexerUrl is not set" } });
       const unseen = await fetch(`http://127.0.0.1:${running.port}/webhook/jobs/x`, { method: "POST" });
       expect(unseen.status).toBe(404);
     } finally {
