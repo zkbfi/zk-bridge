@@ -3,6 +3,7 @@ import type { Hono } from "hono";
 import { createPublicClient, http, type Address, type PublicClient } from "viem";
 import {
   PROOF_DIRECTIONS,
+  PROOF_MESSAGE_BYTES,
   beaconLightClientAbi,
   loadPair,
   proofCategory,
@@ -15,7 +16,7 @@ import { assessProofPayload, payloadKey, type LightClientReader } from "@zk-brid
 import { BackendConfigError } from "../config.ts";
 import type { ModuleHealth } from "../health.ts";
 import type { BackendModuleContext } from "../module.ts";
-import { cacheLightClientReader, chooseLatest, deleteStoredProof, loadStoredProof, saveStoredProof } from "./latest-proof.ts";
+import { cacheLightClientReader, chooseLatest, createRecentSet, deleteStoredProof, loadStoredProof, saveStoredProof, type TimedLightClientReader } from "./latest-proof.ts";
 
 /** The variable that holds the address of the msgboard node. It can carry a key, so the backend never logs it. */
 export const MSGBOARD_URL_VARIABLE = "EXPLORER_MSGBOARD_URL";
@@ -32,22 +33,33 @@ export const POLL_MILLISECONDS = 30_000;
 /** How long the board socket waits before it connects again, in milliseconds. */
 export const RECONNECT_MILLISECONDS = 2_000;
 
-/** How many message keys the module remembers, so that it looks at a republished message once. */
-const SEEN_LIMIT = 512;
+/** How many message keys the module remembers, so that it looks at a republished message once. The oldest key goes first. */
+export const SEEN_LIMIT = 512;
+
+/** The most messages that wait for a check. A message that arrives when the queue is full is dropped and counted. */
+export const MAXIMUM_QUEUED_MESSAGES = 64;
+
+/** The longest payload the module queues, in characters: `0x` and two characters for each byte of the longest form. */
+const MAXIMUM_PAYLOAD_CHARACTERS = 2 + PROOF_MESSAGE_BYTES * 2;
+
+/** Refusals that pass when the head moves, so the message gets another look. */
+const REFUSALS_THAT_CAN_PASS = new Set(["light-client-unreadable", "start-slot-differs-from-head", "start-root-differs-from-head"]);
 
 /** What the indexer needs from the outside world. A test passes fakes. */
 export type IndexerDependencies = {
   readonly pair: Pair;
   readonly feed: BoardFeed;
   /** One reader per direction: the light client on the destination chain of that direction. */
-  readonly lightClients: Readonly<Record<ProofDirection, LightClientReader>>;
+  readonly lightClients: Readonly<Record<ProofDirection, TimedLightClientReader>>;
   readonly pollMilliseconds: number;
   /** Accept the oracle proofs of the free test prover. Local testing only. Default false. */
-  readonly acceptOracleProofs: boolean;
+  readonly acceptOracleProof: boolean;
 };
 
 type IndexerState = {
-  lightClients: Readonly<Record<ProofDirection, LightClientReader>> | null;
+  lightClients: Readonly<Record<ProofDirection, TimedLightClientReader>> | null;
+  acceptOracleProof: boolean;
+  droppedMessages: number;
   health: ModuleHealth;
 };
 
@@ -56,7 +68,7 @@ const states = new WeakMap<BackendModuleContext, IndexerState>();
 function stateFor(context: BackendModuleContext): IndexerState {
   const known = states.get(context);
   if (known !== undefined) return known;
-  const created: IndexerState = { lightClients: null, health: { state: "degraded", detail: "not started" } };
+  const created: IndexerState = { lightClients: null, acceptOracleProof: false, droppedMessages: 0, health: { state: "degraded", detail: "not started" } };
   states.set(context, created);
   return created;
 }
@@ -92,31 +104,40 @@ export async function buildDependencies(context: BackendModuleContext, variables
   if (boardUrl === undefined || boardUrl === "") throw new BackendConfigError(`set the environment variable ${MSGBOARD_URL_VARIABLE} to the msgboard node`);
   const deployment: unknown = JSON.parse(await readFile(context.config.deploymentFile, "utf8"));
   const pair = loadPair({ pairName: context.config.pair, environment: variables, deployment });
-  const readerFor = (destination: Pair["sides"][number]): LightClientReader =>
+  const readerFor = (destination: Pair["sides"][number]): TimedLightClientReader =>
     cacheLightClientReader(createLightClientReader(createPublicClient({ transport: http(destination.rpcUrl) }), destination.contracts.lightClient), context.now);
   return {
     pair,
     feed: createBoardFeed({ boardUrl, reconnectDelayMilliseconds: RECONNECT_MILLISECONDS, logger: context.logger }),
     lightClients: { "first-to-second": readerFor(pair.sides[1]), "second-to-first": readerFor(pair.sides[0]) },
     pollMilliseconds: POLL_MILLISECONDS,
-    acceptOracleProofs: variables[ACCEPT_ORACLE_PROOFS_VARIABLE] === "true",
+    acceptOracleProof: variables[ACCEPT_ORACLE_PROOFS_VARIABLE] === "true",
   };
 }
 
 /**
  * Adds `GET /proofs/latest/:direction`. The route reads the kept proof from the `proofs` table and checks it against
  * the head of the light client on every call, so it never serves a proof that the chain would refuse.
+ *
+ * - 200: the proof. `headCheckedAt` is the clock time (milliseconds since 1970) of the head read that the check used.
+ *   That read is at most three seconds old, but the head can move after it. A client must read the head again before it
+ *   posts the proof. The contract refuses a proof that does not start at its head.
+ * - 404: nothing usable is kept (none, or the head moved past the start of the kept proof), or the direction is unknown.
+ * - 503: the module cannot tell. Either the indexer is not running ("the msgboard indexer is not running") or the light
+ *   client cannot be read ("the light client cannot be read"). Try again later; a 503 does not mean "no proof".
  */
 export function register(app: Hono, context: BackendModuleContext): void {
   const state = stateFor(context);
   app.get("/proofs/latest/:direction", async (request) => {
     const direction = request.req.param("direction") as ProofDirection;
     if (!PROOF_DIRECTIONS.includes(direction)) return request.json({ error: "unknown direction" }, 404);
+    const reader = state.lightClients?.[direction];
+    if (reader === undefined) return request.json({ error: "the msgboard indexer is not running" }, 503);
     const stored = loadStoredProof(context.storage, direction);
     if (stored === null) return request.json({ error: "no usable proof" }, 404);
-    const head = await state.lightClients?.[direction].read().catch(() => null);
-    if (head === null || head === undefined) return request.json({ error: "the light client cannot be read" }, 503);
-    const decoded = tryDecodeProofMessage(stored.payload);
+    const head = await reader.read().catch(() => null);
+    if (head === null) return request.json({ error: "the light client cannot be read" }, 503);
+    const decoded = tryDecodeProofMessage(stored.payload, { acceptOracleProof: state.acceptOracleProof });
     if (!decoded.ok || decoded.message.startSlot !== head.headSlot || decoded.message.startRoot.toLowerCase() !== head.headRoot.toLowerCase()) {
       // The head only moves forward, so a proof that does not start at it now never will.
       deleteStoredProof(context.storage, direction);
@@ -130,6 +151,7 @@ export function register(app: Hono, context: BackendModuleContext): void {
       newSlot: message.newSlot.toString(),
       payload: stored.payload,
       receivedAt: stored.receivedAt,
+      headCheckedAt: head.checkedAt,
       programKey: message.programKey,
       startRoot: message.startRoot,
       newRoot: message.newRoot,
@@ -158,32 +180,30 @@ export async function start(context: BackendModuleContext): Promise<() => Promis
 export async function startIndexer(context: BackendModuleContext, dependencies: IndexerDependencies): Promise<() => Promise<void>> {
   const state = stateFor(context);
   state.lightClients = dependencies.lightClients;
-  const seen = new Set<string>();
+  state.acceptOracleProof = dependencies.acceptOracleProof;
+  state.droppedMessages = 0;
+  const seen = createRecentSet(SEEN_LIMIT);
   const subscriptions = new Map<ProofDirection, BoardSubscription>();
   let queue: Promise<void> = Promise.resolve();
+  let queued = 0;
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-
-  // PLACEHOLDER NAME: the shared proof check is gaining an option for oracle proofs. Rename this key to match it
-  // once it is committed (see the Task 19 report). Until then the shared check ignores the key and stays strict.
-  const oracleOption = { acceptOracleProofs: dependencies.acceptOracleProofs };
 
   const ingest = async (direction: ProofDirection, message: BoardMessage): Promise<void> => {
     const key = payloadKey(message.data);
     if (seen.has(key)) return;
-    if (seen.size >= SEEN_LIMIT) seen.clear();
     seen.add(key);
     const reader = dependencies.lightClients[direction];
-    const assessment = await assessProofPayload({ payload: message.data, pairName: dependencies.pair.name, direction, lightClient: reader, prover: context.prover, ...oracleOption });
+    const assessment = await assessProofPayload({ payload: message.data, pairName: dependencies.pair.name, direction, lightClient: reader, prover: context.prover, acceptOracleProof: dependencies.acceptOracleProof });
     if (!assessment.accept) {
-      // A refusal for an unreadable chain may pass later, so the message gets another look.
-      if (assessment.reason === "light-client-unreadable") seen.delete(key);
+      // A refusal that depends on the head (the head read may be old) may pass later, so the message gets another look.
+      if (REFUSALS_THAT_CAN_PASS.has(assessment.reason)) seen.delete(key);
       context.logger.debug("proof_refused", { direction, reason: assessment.reason });
       return;
     }
     const head = await reader.read();
     const current = loadStoredProof(context.storage, direction);
-    const chosen = chooseLatest(current, assessment.message, head, context.now());
+    const chosen = chooseLatest(current, assessment.message, head, context.now(), { acceptOracleProof: dependencies.acceptOracleProof });
     if (chosen === current) return;
     // The head moved while the proof was checked: nothing kept starts at it any more.
     if (chosen === null) return deleteStoredProof(context.storage, direction);
@@ -191,9 +211,20 @@ export async function startIndexer(context: BackendModuleContext, dependencies: 
     context.logger.info("proof_kept", { direction, startSlot: chosen.startSlot, newSlot: chosen.newSlot });
   };
 
-  // One message at a time: each step reads the kept proof and writes it back.
+  // One message at a time: each step reads the kept proof and writes it back. The queue has a limit, and a payload over
+  // the longest form is never queued, so a flood of junk on the board cannot grow memory or force work.
   const enqueue = (direction: ProofDirection, message: BoardMessage): Promise<void> => {
-    queue = queue.then(() => ingest(direction, message)).catch((error: unknown) => context.logger.warn("proof_ingest_failed", { direction, error }));
+    if (message.data.length > MAXIMUM_PAYLOAD_CHARACTERS) return queue;
+    if (queued >= MAXIMUM_QUEUED_MESSAGES) {
+      state.droppedMessages += 1;
+      context.logger.warn("proof_queue_full", { direction, dropped: state.droppedMessages });
+      return queue;
+    }
+    queued += 1;
+    queue = queue
+      .then(() => ingest(direction, message))
+      .catch((error: unknown) => context.logger.warn("proof_ingest_failed", { direction, error }))
+      .finally(() => void (queued -= 1));
     return queue;
   };
 

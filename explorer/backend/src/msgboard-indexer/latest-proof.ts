@@ -3,8 +3,19 @@ import type { LightClientHead, LightClientReader } from "@zk-bridge/shared/prove
 import type { Hex } from "viem";
 import type { Storage } from "../storage.ts";
 
-/** How long the module trusts one read of the light client, in milliseconds. */
-export const LIGHT_CLIENT_CACHE_MILLISECONDS = 12_000;
+/**
+ * How long the module trusts one read of the light client, in milliseconds. The route serves a proof only against a head
+ * that is at most this old, so a served proof is never older than a few seconds relative to the head read.
+ */
+export const LIGHT_CLIENT_CACHE_MILLISECONDS = 3_000;
+
+/** A head with the clock time of the read that produced it. */
+export type TimedHead = LightClientHead & { readonly checkedAt: number };
+
+/** A light client reader whose answer says when the chain was read. */
+export interface TimedLightClientReader extends LightClientReader {
+  read(): Promise<TimedHead>;
+}
 
 /** The head of the light client that a proof must start from. */
 export type StoredHead = LightClientHead;
@@ -30,10 +41,11 @@ export type StoredProof = {
  * @param candidate A proof message that already passed the proof check.
  * @param head The head of the light client now.
  * @param receivedAt When the candidate arrived, in milliseconds since 1970.
+ * @param options `acceptOracleProof` lets an oracle proof (local testing only) be stored.
  * @returns `current` itself when it stays, the candidate as a stored proof when it wins, or null when neither starts at
  *   the head. Callers compare the result with `current` by identity to learn whether anything changed.
  */
-export function chooseLatest(current: StoredProof | null, candidate: ProofMessage, head: StoredHead, receivedAt: number): StoredProof | null {
+export function chooseLatest(current: StoredProof | null, candidate: ProofMessage, head: StoredHead, receivedAt: number, options: { readonly acceptOracleProof?: boolean } = {}): StoredProof | null {
   const currentUsable = current !== null && current.startSlot === head.headSlot ? current : null;
   const candidateUsable = candidate.startSlot === head.headSlot && candidate.newSlot > head.headSlot;
   if (!candidateUsable) return currentUsable;
@@ -43,26 +55,62 @@ export function chooseLatest(current: StoredProof | null, candidate: ProofMessag
     direction: candidate.direction,
     startSlot: candidate.startSlot,
     newSlot: candidate.newSlot,
-    payload: encodeProofMessage(candidate),
+    payload: encodeProofMessage(candidate, { acceptOracleProof: options.acceptOracleProof }),
     receivedAt,
   };
 }
 
 /**
- * Wraps a light client reader so that one read serves every caller for a short time. A failed read is not kept.
+ * Wraps a light client reader so that one read serves every caller for a short time, and so that each answer says when
+ * the chain was read. A failed read is not kept.
  *
  * @param reader The reader to wrap.
  * @param now The clock, in milliseconds.
  * @param lifetimeMilliseconds How long one read stays valid.
  */
-export function cacheLightClientReader(reader: LightClientReader, now: () => number, lifetimeMilliseconds = LIGHT_CLIENT_CACHE_MILLISECONDS): LightClientReader {
-  let kept: { readonly head: LightClientHead; readonly readAt: number } | null = null;
+export function cacheLightClientReader(reader: LightClientReader, now: () => number, lifetimeMilliseconds = LIGHT_CLIENT_CACHE_MILLISECONDS): TimedLightClientReader {
+  let kept: TimedHead | null = null;
   return {
     async read() {
-      if (kept !== null && now() - kept.readAt < lifetimeMilliseconds) return kept.head;
-      const head = await reader.read();
-      kept = { head, readAt: now() };
-      return head;
+      if (kept !== null && now() - kept.checkedAt < lifetimeMilliseconds) return kept;
+      const checkedAt = now();
+      kept = { ...(await reader.read()), checkedAt };
+      return kept;
+    },
+  };
+}
+
+/** A set of keys that forgets the key used longest ago when it is full. */
+export interface RecentSet {
+  /** True if the key is in the set. A hit counts as a use. */
+  has(key: string): boolean;
+  /** Adds the key as the newest. May forget the oldest key. */
+  add(key: string): void;
+  /** Removes the key. */
+  delete(key: string): void;
+}
+
+/**
+ * Builds a least-recently-used set.
+ *
+ * @param limit The most keys the set holds.
+ */
+export function createRecentSet(limit: number): RecentSet {
+  const keys = new Map<string, true>();
+  return {
+    has(key) {
+      if (!keys.has(key)) return false;
+      keys.delete(key);
+      keys.set(key, true);
+      return true;
+    },
+    add(key) {
+      keys.delete(key);
+      keys.set(key, true);
+      if (keys.size > limit) keys.delete(keys.keys().next().value as string);
+    },
+    delete(key) {
+      keys.delete(key);
     },
   };
 }

@@ -5,12 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeAbiParameters, type Hex } from "viem";
 import { encodeProofMessage, proofCategory, type ProofDirection, type ProofMessage } from "@zk-bridge/shared";
 import type { BoardFeed, BoardMessage } from "@zk-bridge/shared/msgboard";
-import type { LightClientHead, LightClientReader } from "@zk-bridge/shared/prover";
+import type { LightClientHead } from "@zk-bridge/shared/prover";
 import { createApp } from "../src/app.ts";
 import { BackendConfigError } from "../src/config.ts";
 import type { BackendModuleContext } from "../src/module.ts";
 import { MODULES } from "../src/main.ts";
-import { cacheLightClientReader, chooseLatest, loadStoredProof, saveStoredProof, type StoredProof } from "../src/msgboard-indexer/latest-proof.ts";
+import { cacheLightClientReader, chooseLatest, createRecentSet, loadStoredProof, saveStoredProof, type StoredProof, type TimedHead, type TimedLightClientReader } from "../src/msgboard-indexer/latest-proof.ts";
 import {
   MSGBOARD_URL_VARIABLE,
   buildDependencies,
@@ -60,16 +60,18 @@ function proofMessage(startSlot: bigint, newSlot: bigint, overrides: Partial<Pro
   };
 }
 
+const oraclePayload = (startSlot: bigint, newSlot: bigint): Hex => encodeProofMessage(proofMessage(startSlot, newSlot, { version: 2, proof: `0x${"ab".repeat(65)}` }), { acceptOracleProof: true });
 const payloadOf = (startSlot: bigint, newSlot: bigint, overrides: Partial<ProofMessage> = {}): Hex => encodeProofMessage(proofMessage(startSlot, newSlot, overrides));
 const headAt = (slot: bigint): LightClientHead => ({ headSlot: slot, headRoot: rootOf(slot), programKey: PROGRAM_KEY });
+const timedHeadAt = (slot: bigint, checkedAt = 0): TimedHead => ({ ...headAt(slot), checkedAt });
 
 /** A light client reader whose head the test moves. */
-function movableHead(slot: bigint) {
+function movableHead(slot: bigint, now: () => number) {
   let current = headAt(slot);
-  const reader: LightClientReader & { move(to: bigint): void; failNext(): void } = {
+  const reader: TimedLightClientReader & { move(to: bigint): void; failNext(): void } = {
     async read() {
       if (failing) throw new Error("rpc down");
-      return current;
+      return { ...current, checkedAt: now() };
     },
     move(to) {
       current = headAt(to);
@@ -114,7 +116,7 @@ function fakeBoard() {
 
 type Rig = ReturnType<typeof makeRig>;
 
-function makeRig(options: { storage?: Storage; verify?: () => Promise<void>; headSlot?: bigint } = {}) {
+function makeRig(options: { storage?: Storage; verify?: () => Promise<void>; headSlot?: bigint; acceptOracleProof?: boolean } = {}) {
   const storage = options.storage ?? openStorage(":memory:");
   const clock = makeClock();
   const log = memoryLogger();
@@ -127,9 +129,9 @@ function makeRig(options: { storage?: Storage; verify?: () => Promise<void>; hea
   };
   const context: BackendModuleContext = { storage, config: makeConfig(), prover, proverForJob: () => prover, now: clock.now, logger: log.logger };
   const app = createApp({ context, modules: MODULES, enabled: ["msgboard-indexer"] });
-  const heads = { "first-to-second": movableHead(options.headSlot ?? 100n), "second-to-first": movableHead(options.headSlot ?? 100n) };
+  const heads = { "first-to-second": movableHead(options.headSlot ?? 100n, clock.now), "second-to-first": movableHead(options.headSlot ?? 100n, clock.now) };
   const board = fakeBoard();
-  const dependencies: IndexerDependencies = { pair: PAIR, feed: board.feed, lightClients: heads, pollMilliseconds: 1_000, acceptOracleProofs: false };
+  const dependencies: IndexerDependencies = { pair: PAIR, feed: board.feed, lightClients: heads, pollMilliseconds: 1_000, acceptOracleProof: options.acceptOracleProof ?? false };
   return { storage, clock, log, context, app, heads, board, dependencies, verifyCalls };
 }
 
@@ -185,7 +187,7 @@ describe("chooseLatest", () => {
 });
 
 describe("cacheLightClientReader", () => {
-  it("reads the chain once in 12 seconds, again after that, and does not keep a failure", async () => {
+  it("reads the chain once in 3 seconds, again after that, says when it read, and does not keep a failure", async () => {
     const clock = makeClock();
     let reads = 0;
     let failing = true;
@@ -202,11 +204,14 @@ describe("cacheLightClientReader", () => {
     await expect(reader.read()).rejects.toThrow("down");
     failing = false;
     const first = await reader.read();
-    clock.advance(11_999);
+    expect(first.checkedAt).toBe(clock.now());
+    clock.advance(2_999);
     expect(await reader.read()).toBe(first);
     expect(reads).toBe(2);
     clock.advance(1);
-    expect((await reader.read()).headSlot).toBe(3n);
+    const second = await reader.read();
+    expect(second.headSlot).toBe(3n);
+    expect(second.checkedAt).toBe(clock.now());
   });
 });
 
@@ -235,6 +240,7 @@ describe("the msgboard indexer", () => {
     expect(answer.status).toBe(200);
     expect(answer.body).toMatchObject({ pair: "eth-pls", direction: "first-to-second", startSlot: "100", newSlot: "160", receivedAt: rig.clock.now() });
     expect(answer.body.payload).toBe(payloadOf(100n, 160n));
+    expect(answer.body.headCheckedAt).toBe(rig.clock.now());
     expect(answer.body).toMatchObject({ programKey: PROGRAM_KEY, startRoot: rootOf(100n), newRoot: rootOf(160n) });
     expect(await latest(rig, "second-to-first")).toMatchObject({ status: 404, body: { error: "no usable proof" } });
   });
@@ -245,6 +251,83 @@ describe("the msgboard indexer", () => {
     rig.board.deliver("second-to-first", payloadOf(100n, 125n, { direction: "second-to-first" }));
     await settle();
     expect((await latest(rig, "second-to-first")).body).toMatchObject({ direction: "second-to-first", newSlot: "125" });
+  });
+
+  it("keeps and serves an oracle proof when the setting is on", async () => {
+    const rig = makeRig({ acceptOracleProof: true });
+    rig.board.board.recentMessages = [rig.board.message("first-to-second", oraclePayload(100n, 130n))];
+    await run(rig);
+    expect(rig.verifyCalls.length).toBe(0);
+    const answer = await latest(rig);
+    expect(answer.status).toBe(200);
+    expect(answer.body).toMatchObject({ newSlot: "130", payload: oraclePayload(100n, 130n), headCheckedAt: rig.clock.now() });
+    expect((answer.body.proof as string).length).toBe(2 + 65 * 2);
+  });
+
+  it("refuses an oracle proof at intake when the setting is off", async () => {
+    const rig = makeRig({ acceptOracleProof: false });
+    rig.board.board.recentMessages = [rig.board.message("first-to-second", oraclePayload(100n, 130n))];
+    await run(rig);
+    expect(loadStoredProof(rig.storage, "first-to-second")).toBeNull();
+    expect(rig.log.lines.some((line) => line.includes("oracle-proof-not-accepted"))).toBe(true);
+  });
+
+  it("does not serve a stored oracle proof when the setting is off", async () => {
+    const rig = makeRig({ acceptOracleProof: false });
+    await run(rig);
+    saveStoredProof(rig.storage, { pair: "eth-pls", direction: "first-to-second", startSlot: 100n, newSlot: 130n, payload: oraclePayload(100n, 130n), receivedAt: 1 });
+    expect((await latest(rig)).status).toBe(404);
+  });
+
+  it("gives a message another look after it was refused because it starts away from an old head", async () => {
+    vi.useFakeTimers();
+    const rig = makeRig();
+    rig.board.board.recentMessages = [rig.board.message("first-to-second", payloadOf(130n, 160n))];
+    await run(rig);
+    expect(rig.log.lines.some((line) => line.includes("start-slot-differs-from-head"))).toBe(true);
+    expect(loadStoredProof(rig.storage, "first-to-second")).toBeNull();
+    rig.heads["first-to-second"].move(130n);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(loadStoredProof(rig.storage, "first-to-second")?.newSlot).toBe(160n);
+  });
+
+  it("gives a message another look after it was refused because its start root differs from an old head", async () => {
+    vi.useFakeTimers();
+    const rig = makeRig();
+    const reader = rig.heads["first-to-second"];
+    const spy = vi.spyOn(reader, "read").mockResolvedValue({ ...timedHeadAt(100n), headRoot: word("77") });
+    rig.board.board.recentMessages = [rig.board.message("first-to-second", payloadOf(100n, 130n))];
+    await run(rig);
+    expect(rig.log.lines.some((line) => line.includes("start-root-differs-from-head"))).toBe(true);
+    spy.mockRestore();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(loadStoredProof(rig.storage, "first-to-second")?.newSlot).toBe(130n);
+  });
+
+  it("drops messages when the queue is full, counts them and goes on", async () => {
+    const rig = makeRig();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const slow = makeRig({ verify: () => gate });
+    await startIndexer(slow.context, slow.dependencies).then((stop) => stops.push(stop));
+    for (let index = 0; index < 70; index += 1) slow.board.deliver("first-to-second", payloadOf(100n, 101n + BigInt(index)));
+    expect(slow.log.lines.filter((line) => line.includes("proof_queue_full")).length).toBe(6);
+    release();
+    await settle();
+    await settle();
+    expect(slow.verifyCalls.length).toBe(64);
+    expect(loadStoredProof(slow.storage, "first-to-second")?.newSlot).toBe(164n);
+    expect(rig.verifyCalls.length).toBe(0);
+  });
+
+  it("never queues a payload longer than the longest proof message", async () => {
+    const rig = makeRig();
+    await run(rig);
+    rig.board.deliver("first-to-second", `0x${"ab".repeat(2_000)}`);
+    rig.board.deliver("first-to-second", "0x1234");
+    await settle();
+    const refusals = rig.log.lines.filter((line) => line.includes("proof_refused"));
+    expect(refusals.length).toBe(1);
   });
 
   it("refuses a proof that fails the check", async () => {
@@ -317,7 +400,7 @@ describe("the msgboard indexer", () => {
     await run(rig);
     rig.heads["first-to-second"].move(100n);
     const reader = rig.dependencies.lightClients["first-to-second"];
-    vi.spyOn(reader, "read").mockResolvedValue({ ...headAt(100n), headRoot: word("77") });
+    vi.spyOn(reader, "read").mockResolvedValue({ ...timedHeadAt(100n), headRoot: word("77") });
     expect((await latest(rig)).status).toBe(404);
   });
 
@@ -326,14 +409,14 @@ describe("the msgboard indexer", () => {
     rig.board.board.recentMessages = [rig.board.message("first-to-second", payloadOf(100n, 130n))];
     await run(rig);
     rig.heads["first-to-second"].failNext();
-    expect(await latest(rig)).toMatchObject({ status: 503 });
+    expect(await latest(rig)).toMatchObject({ status: 503, body: { error: "the light client cannot be read" } });
     expect(loadStoredProof(rig.storage, "first-to-second")).not.toBeNull();
   });
 
   it("answers 503 before the indexer starts, and 404 for an unknown direction", async () => {
     const rig = makeRig();
     saveStoredProof(rig.storage, { pair: "eth-pls", direction: "first-to-second", startSlot: 100n, newSlot: 130n, payload: payloadOf(100n, 130n), receivedAt: 1 });
-    expect((await latest(rig)).status).toBe(503);
+    expect(await latest(rig)).toMatchObject({ status: 503, body: { error: "the msgboard indexer is not running" } });
     const unknown = await rig.app.request("/proofs/latest/sideways");
     expect(unknown.status).toBe(404);
     expect(await unknown.json()).toEqual({ error: "unknown direction" });
@@ -351,8 +434,8 @@ describe("the msgboard indexer", () => {
     const rig = makeRig();
     saveStoredProof(rig.storage, { pair: "eth-pls", direction: "first-to-second", startSlot: 100n, newSlot: 120n, payload: payloadOf(100n, 120n), receivedAt: 1 });
     const reader = rig.heads["first-to-second"];
-    const reads = [headAt(100n), headAt(120n)];
-    vi.spyOn(reader, "read").mockImplementation(async () => reads.shift() ?? headAt(120n));
+    const reads = [timedHeadAt(100n), timedHeadAt(120n)];
+    vi.spyOn(reader, "read").mockImplementation(async () => reads.shift() ?? timedHeadAt(120n));
     rig.board.board.recentMessages = [rig.board.message("first-to-second", payloadOf(100n, 130n))];
     await run(rig);
     expect(loadStoredProof(rig.storage, "first-to-second")).toBeNull();
@@ -491,7 +574,7 @@ describe("the real parts", () => {
     ["true", true],
   ])("reads the oracle setting %j as %j", async (value, expected) => {
     const dependencies = await buildDependencies(contextWithDeployment(), { ...variables, EXPLORER_ACCEPT_ORACLE_PROOFS: value });
-    expect(dependencies.acceptOracleProofs).toBe(expected);
+    expect(dependencies.acceptOracleProof).toBe(expected);
   });
 
   it.each([[undefined], [""]])("refuses to start without a msgboard address (%j)", async (value) => {
@@ -522,5 +605,30 @@ describe("the real parts", () => {
     );
     expect(await reader.read()).toEqual({ headSlot: 77n, headRoot: rootOf(77n), programKey: PROGRAM_KEY });
     expect(calls).toContain("headers(77)");
+  });
+});
+
+describe("createRecentSet", () => {
+  it("forgets the key used longest ago when it is full", () => {
+    const set = createRecentSet(2);
+    set.add("a");
+    set.add("b");
+    expect(set.has("a")).toBe(true);
+    set.add("c");
+    expect(set.has("b")).toBe(false);
+    expect(set.has("a")).toBe(true);
+    expect(set.has("c")).toBe(true);
+  });
+
+  it("deletes a key, and adding a known key makes it the newest", () => {
+    const set = createRecentSet(2);
+    set.add("a");
+    set.add("b");
+    set.add("a");
+    set.add("c");
+    expect(set.has("b")).toBe(false);
+    set.delete("a");
+    expect(set.has("a")).toBe(false);
+    expect(set.has("zz")).toBe(false);
   });
 });
