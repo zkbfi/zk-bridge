@@ -50,7 +50,7 @@ describe("health and stub modules", () => {
       lastJobs: Record<string, { status: string } | null>;
     };
     expect(report.status).toBe("ok");
-    expect(report.modules).toEqual({ requests: { state: "running" }, webhook: { state: "not built" } });
+    expect(report.modules).toEqual({ requests: { state: "running" }, webhook: { state: "degraded", detail: "the webhook settings cannot be used" } });
     expect(report.queue.length).toBe(0);
     expect(report.lastJobs["first-to-second"]?.status).toBe("proving");
     expect(report.lastJobs["second-to-first"]).toBeNull();
@@ -59,7 +59,7 @@ describe("health and stub modules", () => {
   it("reports every stub module as not built", async () => {
     const backend = makeBackend({ enabled: ALL });
     const report = (await (await backend.app.request("/health")).json()) as { modules: Record<string, { state: string }> };
-    expect(Object.values(report.modules).map((module) => module.state)).toEqual(["running", "not built", "not built", "not built"]);
+    expect(Object.values(report.modules).map((module) => module.state)).toEqual(["running", "degraded", "not built", "not built"]);
   });
 
   it("counts jobs that wait for the prover in the queue", async () => {
@@ -70,7 +70,6 @@ describe("health and stub modules", () => {
   });
 
   it.each([
-    ["/webhook/jobs/abc", "POST"],
     ["/proofs/latest/first-to-second", "GET"],
   ])("a stub module answers 503: %s", async (path, method) => {
     const backend = makeBackend({ enabled: ALL });
@@ -81,7 +80,7 @@ describe("health and stub modules", () => {
 
   it("a stub starts and stops without work", async () => {
     const backend = makeBackend();
-    for (const name of ["webhook", "msgboard-indexer", "archive"] as const) {
+    for (const name of ["msgboard-indexer", "archive"] as const) {
       const stop = await MODULES[name].start(backend.context);
       await expect(stop()).resolves.toBeUndefined();
     }
