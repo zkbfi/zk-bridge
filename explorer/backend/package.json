@@ -1,0 +1,33 @@
+{
+  "name": "@zk-bridge/backend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The backend of the zk-bridge: proof requests, storage and health, with the webhook, msgboard and archive modules.",
+  "bin": {
+    "zk-bridge-backend": "./bin/zk-bridge-backend.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node bin/zk-bridge-backend.mjs",
+    "test": "vitest run --coverage",
+    "test:unit": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "1.19.5",
+    "@zk-bridge/shared": "workspace:*",
+    "hono": "4.13.9",
+    "tsx": "4.23.15",
+    "viem": "2.56.9",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.6",
+    "@vitest/coverage-v8": "4.1.11",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}

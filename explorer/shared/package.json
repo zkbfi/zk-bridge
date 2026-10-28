@@ -10,6 +10,7 @@
     "./config": "./src/config/index.ts",
     "./msgboard": "./src/msgboard/index.ts",
     "./prover": "./src/prover/index.ts",
+    "./backend-client": "./src/backend-client.ts",
     "./msgboard-http": "./src/msgboard/board-http.ts"
   },
   "scripts": {

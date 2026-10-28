@@ -1,0 +1,145 @@
+import { randomUUID } from "node:crypto";
+import type { Hex } from "viem";
+import type { ProofDirection } from "@zk-bridge/shared";
+import { CommandTimeoutError, ProverCommandError, type ProverBinary } from "@zk-bridge/shared/prover";
+import type { Logger } from "../logger.ts";
+import type { Storage } from "../storage.ts";
+import {
+  CALLER_WINDOW_MILLISECONDS,
+  callerWaitSeconds,
+  directionWaitSeconds,
+  type RateLimits,
+} from "./rate-limit.ts";
+import {
+  findActiveJob,
+  findLatestJob,
+  insertJob,
+  insertRequest,
+  listActiveJobs,
+  oldestRequestSince,
+  updateJob,
+  type RequestReason,
+} from "./jobs.ts";
+
+/** One request to prove. `caller` is the key that the rate limits count. */
+export type ProofRequest = {
+  readonly pair: string;
+  readonly direction: ProofDirection;
+  readonly reason: RequestReason;
+  readonly messageId?: Hex;
+  readonly caller: string;
+};
+
+/** The answer of {@link RequestService.submit}. */
+export type SubmitResult =
+  | { readonly requestId: string; readonly jobId: string }
+  | { readonly refused: "rate-limited"; readonly retryAfterSeconds: number };
+
+/** The request service. */
+export interface RequestService {
+  /**
+   * Records a request. A request for a direction that has an active job joins that job. Any other request starts a new
+   * job and runs it in the background. The call is synchronous, so two requests never both create a job.
+   */
+  submit(request: ProofRequest): SubmitResult;
+  /** Fails the proving jobs that outlived the prover limit, then runs the jobs that a restart left behind. */
+  recover(): void;
+  /** Resolves when no job runs in the background. A test awaits it. */
+  settled(): Promise<void>;
+}
+
+/** Input of {@link createRequestService}. */
+export interface RequestServiceInput {
+  readonly storage: Storage;
+  /**
+   * The prover for one job. It must hand its proof to the webhook of that job (`/webhook/jobs/<id>`), so each job has
+   * its own wrapper. Every wrapper proves from the on-chain head: the request names a direction and nothing else.
+   */
+  readonly proverForJob: (jobId: string) => ProverBinary;
+  /** Milliseconds since 1970. */
+  readonly now: () => number;
+  readonly limits: RateLimits;
+  /** A proving job older than this many milliseconds counts as lost. Use the prover limit. */
+  readonly proverTimeoutMilliseconds: number;
+  readonly logger: Logger;
+}
+
+/** A reason for a failed job that is safe to show: it holds no path, no endpoint and no prover output. */
+function describeFailure(error: unknown): string {
+  if (error instanceof ProverCommandError) return `the prover stopped with exit code ${error.exitCode}`;
+  if (error instanceof CommandTimeoutError) return "the prover ran longer than its limit";
+  return "the prover could not make a proof";
+}
+
+/** Builds the request service over the storage. */
+export function createRequestService(input: RequestServiceInput): RequestService {
+  const { storage, now, limits, logger } = input;
+  const running = new Set<Promise<void>>();
+
+  async function runJob(jobId: string, direction: ProofDirection): Promise<void> {
+    updateJob(storage, jobId, { status: "proving" }, now());
+    try {
+      const outcome = await input.proverForJob(jobId).prove({ direction });
+      if (outcome.kind === "up-to-date") {
+        updateJob(storage, jobId, { status: "on-chain" }, now());
+        return;
+      }
+      // The prover already handed the proof to the webhook. The webhook module moves the job on from here.
+      const { startHeadSlot, newHeadSlot } = outcome.proofPackage;
+      updateJob(storage, jobId, { status: "proving", startSlot: String(startHeadSlot), newSlot: String(newHeadSlot) }, now());
+    } catch (error) {
+      logger.warn("job_failed", { jobId, direction, error });
+      updateJob(storage, jobId, { status: "failed", error: describeFailure(error) }, now());
+    }
+  }
+
+  function start(jobId: string, direction: ProofDirection): void {
+    const task = runJob(jobId, direction).finally(() => running.delete(task));
+    running.add(task);
+  }
+
+  function failLostJobs(): void {
+    const current = now();
+    for (const job of listActiveJobs(storage)) {
+      const deadline = job.updatedAt + input.proverTimeoutMilliseconds;
+      if (job.status !== "proving" || current <= deadline) continue;
+      // The job failed at its deadline, so the retry wait counts from there and not from the late check.
+      updateJob(storage, job.id, { status: "failed", error: "the prover ran longer than its limit" }, deadline);
+    }
+  }
+
+  return {
+    submit(request) {
+      failLostJobs();
+      const current = now();
+      const { result, startedJobId } = storage.transaction((): { result: SubmitResult; startedJobId: string | null } => {
+        const callerWait = callerWaitSeconds({
+          recent: oldestRequestSince(storage, request.caller, current - CALLER_WINDOW_MILLISECONDS),
+          now: current,
+          limits,
+        });
+        if (callerWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: callerWait }, startedJobId: null };
+        const active = findActiveJob(storage, request.direction);
+        const requestId = randomUUID();
+        if (active !== null) {
+          insertRequest(storage, { ...request, id: requestId, jobId: active.id, messageId: request.messageId ?? null, now: current });
+          return { result: { requestId, jobId: active.id }, startedJobId: null };
+        }
+        const directionWait = directionWaitSeconds({ latest: findLatestJob(storage, request.direction), now: current, limits });
+        if (directionWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: directionWait }, startedJobId: null };
+        const job = insertJob(storage, { id: randomUUID(), direction: request.direction, now: current });
+        insertRequest(storage, { ...request, id: requestId, jobId: job.id, messageId: request.messageId ?? null, now: current });
+        return { result: { requestId, jobId: job.id }, startedJobId: job.id };
+      });
+      if (startedJobId !== null) start(startedJobId, request.direction);
+      return result;
+    },
+    recover() {
+      failLostJobs();
+      for (const job of listActiveJobs(storage)) start(job.id, job.direction);
+    },
+    async settled() {
+      while (running.size > 0) await Promise.all([...running]);
+    },
+  };
+}

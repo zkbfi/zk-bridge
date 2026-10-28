@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "pair": "eth-pls",
+  "deploymentFile": "/path/to/deployment.json",
+  "databasePath": "/var/lib/zk-bridge-backend/backend.sqlite",
+  "listen": { "host": "127.0.0.1", "port": 8787 },
+  "trustForwardedHeader": false,
+  "modules": ["requests", "webhook", "msgboard-indexer", "archive"],
+  "publicUrl": "https://backend.example.org",
+  "prover": { "binary": "/usr/local/bin/zk-bridge-prover", "timeoutSeconds": 1800 },
+  "remote": { "endpoint": "https://example.api.runpod.ai" },
+  "runpodApiKeyVariable": "RUNPOD_API_KEY",
+  "webhookBearerVariable": "BACKEND_WEBHOOK_BEARER",
+  "limits": {
+    "requestsPerCallerPerMinute": 10,
+    "secondsBetweenJobsPerDirection": 120,
+    "secondsBeforeRetryAfterFailure": 60
+  },
+  "indexerUrl": "http://127.0.0.1:42069"
+}
