@@ -30,26 +30,38 @@ export const graphDirectorOf = (delivery: DeliverySelection): FeeDirector => {
   return { ...delivery.director, settings: settingsOf({ mode: "fixed" }), limit: delivery.description.nowUnits, multiplier: 0n };
 };
 
+/** What the graphs can show: the coverage, or the reason that they cannot be drawn and what to do. */
+export type GraphReadiness = { readonly kind: "ready"; readonly coverage: TipCoverage } | { readonly kind: "blocked"; readonly message: string };
+
+/** The words when no coin price is known, so the cost cannot be set against the tip. */
+export const NEEDS_PRICE_MESSAGE = "Enter your coin price to see how the cost and your tip compare.";
+
+/** The words when the base fee or the delivery gas is zero. */
+export const NEEDS_DATA_MESSAGE = "The base fee or the delivery gas is zero, so the cost and your tip cannot be compared yet. The graphs appear when the indexer reports both.";
+
 /**
- * Finds the coverage of a tip that the form can send. The priority fee follows from the cost now, which is the delivery gas
- * times the base fee plus the priority fee.
+ * Finds the coverage of a tip that the form can send, or says why the graphs cannot be drawn. Without a coin price the
+ * cost has no value in the token, and a zero base fee or zero gas leaves no axis to draw.
  *
  * @param delivery The tip that the form can send.
  * @param points How many points to compute.
  */
-export const coverageOfDelivery = (delivery: DeliverySelection, points: number = CHART_POINT_COUNT): TipCoverage => {
+export const graphReadinessOf = (delivery: DeliverySelection, points: number = CHART_POINT_COUNT): GraphReadiness => {
   const gas = delivery.suggestions.dataSource.gas;
   const baseFeeWei = delivery.suggestions.dataSource.baseFeeWei;
-  return tipCoverage({
+  if (delivery.description.breakdown.length === 0) return { kind: "blocked", message: NEEDS_PRICE_MESSAGE };
+  if (gas <= 0n || baseFeeWei <= 0n) return { kind: "blocked", message: NEEDS_DATA_MESSAGE };
+  const coverage = tipCoverage({
     director: graphDirectorOf(delivery),
     deliveryGas: gas,
-    priorityFeeWei: delivery.suggestions.cost.totalWei / gas - baseFeeWei,
+    priorityFeeWei: delivery.priorityFeeWei,
     baseFeeNowWei: baseFeeWei,
     transferValue: UNCLAMPED_VALUE,
     price: { tokenValueInWei: delivery.token.valueInWei, tokenDecimals: delivery.token.decimals },
     points,
     payout: requestedPayoutOf(delivery.director.settings),
   });
+  return { kind: "ready", coverage };
 };
 
 /** One step of a 1, 2, 5 series that is at least `raw`. */

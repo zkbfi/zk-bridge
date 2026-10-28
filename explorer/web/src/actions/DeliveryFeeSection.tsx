@@ -280,7 +280,7 @@ const DeliveryQuote = ({ draft, options, onChange, destinationNativeSymbol, dest
         How it is computed: {description.formula}.
       </Text>
       <TipRange range={suggestions.tipRange} token={token} options={options} onChange={onChange} />
-      {description.breakdown.length === 0 ? null : <TipCostCharts delivery={delivery} nativeSymbol={destinationNativeSymbol} chainName={destinationName} />}
+      <TipCostCharts delivery={delivery} nativeSymbol={destinationNativeSymbol} chainName={destinationName} />
       <Text fontSize="sm" fontWeight="medium" marginTop="1" data-testid="tip-maximum">
         {description.mode === "gas"
           ? `The limit is ${formatUnits(delivery.maximumTip, token.decimals)} ${token.symbol}. It is the price ceiling. Expect the tip to reach it.`

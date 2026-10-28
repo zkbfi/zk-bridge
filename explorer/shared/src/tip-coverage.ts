@@ -1,6 +1,7 @@
 import { deliveryCostWei, tokenUnitsToWeiFloor, type TokenPrice } from "./delivery-fee.js";
 import { expectedFee, maximumFee, type FeeDirector, type PayoutKind } from "./delivery-terms.js";
 import { formatTokenAmount } from "./format.js";
+import { TIP_VOLUNTARY } from "./tip-copy.js";
 
 /** How far the base fee axis reaches, as a multiple of the base fee now. */
 export const BASE_FEE_AXIS_FACTOR = 4n;
@@ -118,7 +119,7 @@ const peakOf = (input: { readonly axisEnd: bigint; readonly covers: (baseFeeWei:
 
 const gweiText = (wei: bigint): string => formatTokenAmount(wei, 9, { fractionDigits: 1 });
 
-const LOSS_WORDS = "a deliverer loses money on it, and the message may wait. Anyone can still deliver it.";
+const LOSS_WORDS = `a deliverer loses money on it, and the message may wait. Anyone can still deliver it. ${TIP_VOLUNTARY}`;
 
 /**
  * Plain words for the user on where the tip stops covering the delivery cost. It promises nothing in return for a tip.
@@ -132,7 +133,7 @@ export const coverageSentence = (result: TipCoverage, chainName: string): string
     return `Your tip stays under the delivery cost at every base fee on ${chainName} up to ${gweiText(axisEnd)} gwei. At any of them, ${LOSS_WORDS}`;
   }
   if (result.coveredEverywhere) {
-    return `Your tip covers the delivery cost at every base fee on ${chainName} up to ${gweiText(axisEnd)} gwei, which is the end of the graph.`;
+    return `Your tip covers the delivery cost at every base fee on ${chainName} up to ${gweiText(axisEnd)} gwei, which is the end of the graph. ${TIP_VOLUNTARY}`;
   }
   if (result.coveredFromBaseFeeWei > 0n) {
     return `Your tip covers the delivery cost only while the base fee on ${chainName} stays between ${gweiText(result.coveredFromBaseFeeWei)} and ${gweiText(result.coveredUpToBaseFeeWei)} gwei. Outside that, ${LOSS_WORDS}`;

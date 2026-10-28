@@ -77,6 +77,8 @@ export type DeliverySelection = DeliveryRouters & {
   readonly maximumTip: bigint;
   readonly token: FeeToken;
   readonly baseFeeCeilingWei: bigint | null;
+  /** The priority fee that the deliverer pays, in wei per gas. The graphs of the cost use it. */
+  readonly priorityFeeWei: bigint;
   /** The gas price that a gas based tip reads: the base fee only, or the whole gas price on a chain with no base fee. */
   readonly gasPrice: GasPriceBasis;
   /** A sentence about the gas based default for the user, or null. Only the gas based mode carries one. */
@@ -165,6 +167,7 @@ export const selectDelivery = (input: DeliverySelectionInput, routers: DeliveryR
       maximumTip: maximumFee(director, input.transferValueAtMost),
       token,
       baseFeeCeilingWei: input.baseFeeCeilingWei,
+      priorityFeeWei: input.priorityFeeWei,
       gasPrice: choice.gasPrice,
       notice,
       ...routers,

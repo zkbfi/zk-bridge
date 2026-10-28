@@ -1,8 +1,8 @@
 import { Box, Table, Text, chakra } from "@chakra-ui/react";
 import { useMemo, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { coverageSentence } from "@zk-bridge/shared";
+import { TIP_NATURE, coverageSentence, type TipCoverage } from "@zk-bridge/shared";
 import type { DeliverySelection } from "../tx/delivery-selection";
-import { CHART_FRAME, buildChartModel, coverageOfDelivery, formatNumber, type ChartModel } from "./tip-cost-chart-model";
+import { CHART_FRAME, buildChartModel, graphReadinessOf, formatNumber, type ChartModel } from "./tip-cost-chart-model";
 
 /** The colors of the graphs. Both sets were checked with the palette validator against their own surface. */
 const PALETTE_CSS = {
@@ -179,8 +179,7 @@ export type TipCostChartsProps = {
  *
  * @param props The tip, the native coin and the chain.
  */
-export const TipCostCharts = ({ delivery, nativeSymbol, chainName }: TipCostChartsProps) => {
-  const coverage = useMemo(() => coverageOfDelivery(delivery), [delivery]);
+const ReadyCharts = ({ coverage, nativeSymbol, chainName }: ReadyProps) => {
   const model = useMemo(() => buildChartModel(coverage), [coverage]);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const activePoint = activeIndex === null ? null : (model.points[activeIndex] as Point); // The index comes from the model.
@@ -192,6 +191,9 @@ export const TipCostCharts = ({ delivery, nativeSymbol, chainName }: TipCostChar
       </Text>
       <Text fontSize="sm" color="var(--viz-ink-secondary)" data-testid="tip-cost-sentence">
         {coverageSentence(coverage, chainName)}
+      </Text>
+      <Text fontSize="xs" color="var(--viz-ink-secondary)" data-testid="tip-cost-nature">
+        {TIP_NATURE}
       </Text>
       <Chart series="cost" {...shared} />
       <Chart series="tip" {...shared} />
@@ -212,4 +214,23 @@ export const TipCostCharts = ({ delivery, nativeSymbol, chainName }: TipCostChar
       <TableView model={model} nativeSymbol={nativeSymbol} />
     </Box>
   );
+};
+
+type ReadyProps = { readonly coverage: TipCoverage; readonly nativeSymbol: string; readonly chainName: string };
+
+/**
+ * Shows the graphs, or a short message in their place when they cannot be drawn, so the form never goes blank.
+ *
+ * @param props The tip, the native coin and the chain.
+ */
+export const TipCostCharts = ({ delivery, nativeSymbol, chainName }: TipCostChartsProps) => {
+  const readiness = useMemo(() => graphReadinessOf(delivery), [delivery]);
+  if (readiness.kind === "blocked") {
+    return (
+      <Text fontSize="sm" color="fg.muted" marginTop="3" data-testid="tip-cost-blocked">
+        {readiness.message}
+      </Text>
+    );
+  }
+  return <ReadyCharts coverage={readiness.coverage} nativeSymbol={nativeSymbol} chainName={chainName} />;
 };

@@ -1,6 +1,6 @@
 import { fireEvent, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { buildChartModel, coverageOfDelivery, formatNumber, graphDirectorOf, niceTicks } from "../../src/actions/tip-cost-chart-model";
+import { buildChartModel, formatNumber, graphDirectorOf, graphReadinessOf, niceTicks, NEEDS_DATA_MESSAGE, NEEDS_PRICE_MESSAGE, type GraphReadiness } from "../../src/actions/tip-cost-chart-model";
 import { TipCostCharts } from "../../src/actions/TipCostCharts";
 import { selectDelivery, type DeliveryMode, type DeliverySelection } from "../../src/tx/delivery-selection";
 import { DEFAULT_MARGIN_RATE } from "../../src/tx/delivery-selection";
@@ -13,7 +13,7 @@ const router = "0x00000000000000000000000000000000000000bb" as const;
 const WEI_PER_COIN = 10n ** 18n;
 
 /** A token worth one coin each, with 18 decimals, so a token unit is a wei. */
-const selectionOf = (mode: DeliveryMode, overrides: { gasMargin?: bigint; baseFeeCeilingWei?: bigint | null; percentageRate?: bigint } = {}): DeliverySelection => {
+const selectionOf = (mode: DeliveryMode, overrides: { gasMargin?: bigint; baseFeeCeilingWei?: bigint | null; percentageRate?: bigint; priced?: boolean; baseFeeWei?: bigint } = {}): DeliverySelection => {
   const result = selectDelivery(
     {
       mode,
@@ -21,11 +21,11 @@ const selectionOf = (mode: DeliveryMode, overrides: { gasMargin?: bigint; baseFe
       transferValue: 10n ** 21n,
       transferValueAtMost: 10n ** 21n,
       token: { symbol: "WPLS", decimals: 18 },
-      tokenValueInWei: WEI_PER_COIN,
-      senderPrice: { numerator: 10n ** 18n, denominator: WEI_PER_COIN },
+      tokenValueInWei: overrides.priced === false ? null : WEI_PER_COIN,
+      senderPrice: overrides.priced === false ? null : { numerator: 10n ** 18n, denominator: WEI_PER_COIN },
       payout: "token",
       destinationName: "PulseChain",
-      report: buildDeliveryReport(369),
+      report: buildDeliveryReport(369, overrides.baseFeeWei === undefined ? {} : { baseFeeWei: overrides.baseFeeWei }),
       priorityFeeWei: 10n ** 9n,
       percentageRate: overrides.percentageRate ?? RATE_SCALE / 1000n,
       fixedAmount: null,
@@ -37,6 +37,12 @@ const selectionOf = (mode: DeliveryMode, overrides: { gasMargin?: bigint; baseFe
   );
   if (result.kind !== "available") throw new Error(result.reason);
   return result;
+};
+
+const coverageOfDelivery = (delivery: DeliverySelection) => {
+  const readiness: GraphReadiness = graphReadinessOf(delivery);
+  if (readiness.kind !== "ready") throw new Error(readiness.message);
+  return readiness.coverage;
 };
 
 const renderCharts = (delivery: DeliverySelection) => renderPage(<TipCostCharts delivery={delivery} nativeSymbol="PLS" chainName="PulseChain" />);
@@ -146,6 +152,38 @@ describe("the cost and tip graphs", () => {
     const delivery = selectionOf("gas-multiplier", { gasMargin: RATE_SCALE * 1000n, baseFeeCeilingWei: 10n ** 12n });
     const model = buildChartModel(coverageOfDelivery(delivery));
     expect(model.yTicks[model.yTicks.length - 1]!.value).toBeLessThanOrEqual(Number(model.points[40]!.costWei) / 1e18 * 4);
+  });
+});
+
+describe("when the graphs cannot be drawn", () => {
+  it("says why and what to do when no coin price is known, in place of the graphs", () => {
+    renderCharts(selectionOf("percentage", { priced: false }));
+    expect(screen.getByTestId("tip-cost-blocked")).toHaveTextContent(NEEDS_PRICE_MESSAGE);
+    expect(screen.queryByTestId("chart-cost")).toBeNull();
+  });
+
+  it("does not throw on a base fee of zero, and says so", () => {
+    renderCharts(selectionOf("gas-multiplier", { baseFeeWei: 0n }));
+    expect(screen.getByTestId("tip-cost-blocked")).toHaveTextContent(NEEDS_DATA_MESSAGE);
+  });
+
+  it("does not throw on zero delivery gas, and says so", () => {
+    const delivery = selectionOf("gas-multiplier");
+    const zeroGas = { ...delivery, suggestions: { ...delivery.suggestions, dataSource: { ...delivery.suggestions.dataSource, gas: 0n } } };
+    renderCharts(zeroGas);
+    expect(screen.getByTestId("tip-cost-blocked")).toHaveTextContent(NEEDS_DATA_MESSAGE);
+  });
+
+  it("takes the priority fee from the selection, not from the cost", () => {
+    const delivery = selectionOf("gas-multiplier");
+    const higher = { ...delivery, priorityFeeWei: delivery.priorityFeeWei * 3n };
+    expect(coverageOfDelivery(higher).points[0]!.costWei).toBe(delivery.suggestions.dataSource.gas * higher.priorityFeeWei);
+  });
+
+  it("says that the tip goes to the reward address of the router and promises nothing", () => {
+    renderCharts(selectionOf("gas-multiplier"));
+    expect(screen.getByTestId("tip-cost-nature")).toHaveTextContent("reward address of the delivery router");
+    expect(screen.getByTestId("tip-cost-sentence")).toHaveTextContent("A tip is voluntary and promises nothing.");
   });
 });
 

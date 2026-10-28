@@ -45,7 +45,7 @@ describe("tip coverage", () => {
     expect(result.coveredUpToBaseFeeWei).toBe(24n * GWEI);
     expect(result.coveredEverywhere).toBe(false);
     expect(coverageSentence(result, "PulseChain")).toBe(
-      "Your tip covers the delivery cost while the base fee on PulseChain stays under 24 gwei. Above that, a deliverer loses money on it, and the message may wait. Anyone can still deliver it.",
+      "Your tip covers the delivery cost while the base fee on PulseChain stays under 24 gwei. Above that, a deliverer loses money on it, and the message may wait. Anyone can still deliver it. A tip is voluntary and promises nothing.",
     );
   });
 
@@ -79,7 +79,7 @@ describe("tip coverage", () => {
     const result = tipCoverage(input(fixedDirector(deliveryGas * 100n * GWEI)));
     expect(result.coveredEverywhere).toBe(true);
     expect(result.coveredUpToBaseFeeWei).toBe(40n * GWEI);
-    expect(coverageSentence(result, "PulseChain")).toBe("Your tip covers the delivery cost at every base fee on PulseChain up to 40 gwei, which is the end of the graph.");
+    expect(coverageSentence(result, "PulseChain")).toBe("Your tip covers the delivery cost at every base fee on PulseChain up to 40 gwei, which is the end of the graph. A tip is voluntary and promises nothing.");
   });
 
   it("turns token units into wei with the price of the token", () => {

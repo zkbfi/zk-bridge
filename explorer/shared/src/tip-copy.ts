@@ -15,6 +15,9 @@ export const TIP_MODE_NAMES: Readonly<Record<FeeMode, string>> = {
 export const TIP_NATURE =
   "A tip goes to the reward address of the delivery router. It is voluntary and it buys no promise. A low tip, or no tip, never makes a delivery fail.";
 
+/** The short form of {@link TIP_NATURE}, for the end of a sentence about cost. */
+export const TIP_VOLUNTARY = "A tip is voluntary and promises nothing.";
+
 /** The words about the suggested range of tips. */
 export const TIP_RANGE_HELP =
   "The suggested tips are a low range: half, one and a half times, and the measured gas cost of a delivery at the base fee. In the gas mode the lowest tip is just above zero. For a tip of zero, choose No tip or a fixed amount of 0. A tip below the cost is allowed.";
