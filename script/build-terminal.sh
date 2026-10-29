@@ -67,7 +67,8 @@ prepare_platform_packages() {
     mkdir -p "$scratch/modules/@opentui/core-$platform"
     tar xzf "$tarball" -C "$scratch/modules/@opentui/core-$platform" --strip-components=1
   done
-  # A tsconfig override replaces the project one, so it extends it and repeats the paths of the shared package.
+  # A tsconfig override replaces the project one, so it extends it and repeats the paths of the shared package
+  # (every alias of explorer/terminal/tsconfig.json; explorer/terminal/test/build-script.test.ts checks that).
   # Each path names index.bun.js, the file that embeds the native library; a bare directory would pick index.js.
   cat >"$scratch/tsconfig.json" <<JSON
 {
@@ -76,6 +77,9 @@ prepare_platform_packages() {
     "paths": {
       "@zk-bridge/shared": ["$repository_root/explorer/shared/src/index.ts"],
       "@zk-bridge/shared/config": ["$repository_root/explorer/shared/src/config/index.ts"],
+      "@zk-bridge/shared/prover": ["$repository_root/explorer/shared/src/prover/index.ts"],
+      "@zk-bridge/shared/backend-client": ["$repository_root/explorer/shared/src/backend-client.ts"],
+      "@zk-bridge/shared/msgboard-http": ["$repository_root/explorer/shared/src/msgboard/board-http.ts"],
       "@opentui/core-*": ["$scratch/modules/@opentui/core-*/index.bun.js"]
     }
   }
