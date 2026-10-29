@@ -197,6 +197,8 @@ Type=notify
 User=zkb_ipfs
 Group=zkb_ipfs
 Environment=IPFS_PATH=$IPFS_PATH
+# Refuse to start without an API token: every local user can reach 127.0.0.1:5001.
+ExecStartPre=/usr/bin/jq -e ".API.Authorizations | length > 0" $IPFS_PATH/config
 ExecStart=/usr/local/bin/ipfs daemon --migrate=false
 Restart=on-failure
 RestartSec=10
@@ -234,7 +236,7 @@ UMask=0077
 WantedBy=multi-user.target
 EOF
 # Reads the API token on standard input, so it never shows in a process list, and lets only that bearer token call
-# the API. Without a token the API answers anyone on 127.0.0.1.
+# the API. Without a token the API would answer anyone on 127.0.0.1, so the unit does not start without one.
 cat > /usr/local/sbin/zkb-ipfs-api-token <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -248,7 +250,12 @@ echo "the IPFS API now takes only the new token"
 EOF
 chmod 0750 /usr/local/sbin/zkb-ipfs-api-token
 systemctl daemon-reload
-systemctl enable --now zk-bridge-ipfs.service
-systemctl restart zk-bridge-ipfs.service
+systemctl enable zk-bridge-ipfs.service
+if jq -e '.API.Authorizations | length > 0' "$IPFS_PATH/config" >/dev/null; then
+  systemctl restart zk-bridge-ipfs.service
+else
+  systemctl stop zk-bridge-ipfs.service
+  log "ipfs: no API token yet, so the node stays stopped. Set one: op read op://zkb.fi/kubo/credential | ssh zkbfi-app zkb-ipfs-api-token"
+fi
 
 log "done: node $(node --version), $(RUSTUP_HOME=$RUSTUP_HOME "$CARGO_HOME/bin/rustc" --version), $(psql --version)"
