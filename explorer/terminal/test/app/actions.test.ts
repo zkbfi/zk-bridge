@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { buildBridgeSteps, deliveryRouterOf, type BridgeContext } from '../../src/app/actions'
+import { buildBridgeSteps, deliveryRouterOf, relayGasFactsOf, type BridgeContext } from '../../src/app/actions'
 import type { ChainSnapshotResult } from '../../src/chain/live-reads'
 import { createFixtureChainAccess } from '../../src/chain/fixture-chain-access'
 import { FIXTURE_ACCOUNT, FIXTURE_NOW, FIXTURE_PAIR, FIXTURE_TOKENS, buildFixtureDeliveryCost } from '../../src/data/fixtures'
@@ -65,5 +65,72 @@ describe('deliveryRouterOf', () => {
     expect(() => buildBridgeSteps(tipValues, FIXTURE_TOKENS, { ...context, tokenValuationsWei: { [zkUsdc.address.toLowerCase()]: 400_000_000_000_000n } })).toThrow(
       PlanInputError,
     )
+  })
+})
+
+describe('relayGasFactsOf', () => {
+  const acknowledged = { kind: 'acknowledged' } as const
+  const unacknowledged = { kind: 'unacknowledged', nameAndSymbolBytes: 8 } as const
+  const copy = { kind: 'copy' } as const
+
+  /** Sets the relay gas of the position of one token on every loaded snapshot of one side. */
+  function withRelayGas(snapshots: readonly ChainSnapshotResult[], side: 'first' | 'second', token: string, relayGas: (typeof unacknowledged) | (typeof copy)) {
+    return snapshots.map((result) =>
+      result.status === 'ok' && result.snapshot.chain.side === side
+        ? {
+            ...result,
+            snapshot: {
+              ...result.snapshot,
+              positions: result.snapshot.positions.map((position) => (position.token.address === token ? { ...position, relayGas } : position)),
+            },
+          }
+        : result,
+    )
+  }
+
+  test('the native coin route is a release, the lowest minimum, because it moves no token the mediator must name', async () => {
+    const context = await contextOf()
+    expect(relayGasFactsOf({ token: 'first:native' }, FIXTURE_TOKENS, context)).toEqual(acknowledged)
+  })
+
+  test('a token with no loaded snapshot for its side is a release, so the form never invents a higher minimum', async () => {
+    const loaded = (await contextOf()).snapshots!
+    const onlySecond = loaded.filter((result) => result.status === 'ok' && result.snapshot.chain.side === 'second')
+    const context = await contextOf({ snapshots: onlySecond })
+    expect(relayGasFactsOf(values, FIXTURE_TOKENS, context)).toEqual(acknowledged)
+    expect(relayGasFactsOf(values, FIXTURE_TOKENS, await contextOf({ snapshots: null }))).toEqual(acknowledged)
+  })
+
+  test('a snapshot with a status other than ok is a release, because a failed read carries no facts to trust', async () => {
+    const loaded = (await contextOf()).snapshots!
+    const marked = withRelayGas(loaded, 'first', usdc.address, copy)
+    const second = marked.filter((result) => result.status === 'ok' && result.snapshot.chain.side === 'second')
+    const failed: ChainSnapshotResult = { status: 'error', chain: FIXTURE_PAIR.first, message: 'down' }
+    const context = await contextOf({ snapshots: [failed, ...second] })
+    expect(relayGasFactsOf(values, FIXTURE_TOKENS, context)).toEqual(acknowledged)
+  })
+
+  test('a loaded snapshot without a position for the token is a release, because nothing was read for that token', async () => {
+    const loaded = (await contextOf()).snapshots!
+    const withoutPositions = loaded.map((result) => (result.status === 'ok' ? { ...result, snapshot: { ...result.snapshot, positions: [] } } : result))
+    const context = await contextOf({ snapshots: withoutPositions })
+    expect(relayGasFactsOf(values, FIXTURE_TOKENS, context)).toEqual(acknowledged)
+  })
+
+  test('a loaded position gives its own relay gas, so the minimum of the gas limit follows what the mediator said', async () => {
+    const loaded = (await contextOf()).snapshots!
+    const unnamed = await contextOf({ snapshots: withRelayGas(loaded, 'first', usdc.address, unacknowledged) })
+    expect(relayGasFactsOf(values, FIXTURE_TOKENS, unnamed)).toEqual(unacknowledged)
+    const copied = await contextOf({ snapshots: withRelayGas(loaded, 'first', usdc.address, copy) })
+    expect(relayGasFactsOf(values, FIXTURE_TOKENS, copied)).toEqual(copy)
+  })
+
+  test('the snapshot of the other side is not used, because the same facts on the wrong chain would set the wrong minimum', async () => {
+    const loaded = (await contextOf()).snapshots!
+    const otherSideOnly = withRelayGas(loaded, 'second', zkUsdc.address, copy)
+    const context = await contextOf({ snapshots: otherSideOnly })
+    expect(relayGasFactsOf(values, FIXTURE_TOKENS, context)).toEqual(acknowledged)
+    const own = withRelayGas(otherSideOnly, 'first', usdc.address, unacknowledged)
+    expect(relayGasFactsOf(values, FIXTURE_TOKENS, await contextOf({ snapshots: own }))).toEqual(unacknowledged)
   })
 })
