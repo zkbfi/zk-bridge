@@ -23,13 +23,24 @@ server with NVMe disks becomes the better choice only when we run our own chain 
 
 | Server | Runs | Size | Provider |
 |---|---|---|---|
-| App server | backend (modules `requests`, `webhook`, `msgboard-indexer`, `archive`), explorer indexer (Ponder), Postgres, publisher bot, runner bot | Hetzner Cloud CX33: 4 shared vCPU, 8 GB memory, 80 GB disk | Hetzner Cloud, in an account of zkb.fi only |
+| App server | backend (modules `requests`, `webhook`, `msgboard-indexer`, `archive`), explorer indexer (Ponder), Postgres, publisher bot, runner bot | Hetzner Cloud CAX21 (ARM64): 4 shared vCPU, 8 GB memory, 80 GB disk | Hetzner Cloud, in an account of zkb.fi only |
 | Prover | the prover worker image | one graphics processor per job | RunPod serverless |
 | Landing page | static page | none | Cloudflare Pages |
 | Dapp and docs | static sites | none | IPFS, pinned at Filebase |
 
 ### App server
 
+- Built 2026-10-29: `zkbfi-app`, CAX21 in Falkenstein (`fsn1`), Ubuntu 24.04, project `zkb-fi`. The CX33 (x86) was sold
+  out in every EU location, so the server is ARM64. The prover binary that the archive module starts is the default
+  build (no `sp1` features) and must be built for `aarch64-unknown-linux-gnu`. The `sp1` features run only in the
+  RunPod worker image.
+- Hetzner firewall `zkbfi-app`: inbound TCP 22, 80 and 443 and ICMP from anywhere; everything else is closed. SSH takes
+  keys only (`PasswordAuthentication no`). The Hetzner key `zkbfi-operator` is the 1Password key `DigitalOcean (zkb.fi)`.
+  The 1Password agent offers many keys, so connect with `IdentitiesOnly yes` and that key's public file, or sshd stops
+  after too many failed keys.
+- `deploy/app-server/provision.sh` prepares the server and can run again: Node.js 24, Rust 1.93.0 in `/opt/rust`, one
+  system user per service (`zkb_backend`, `zkb_indexer`, `zkb_bots`), Postgres on the local socket only with peer login
+  for the indexer, and Caddy as the TLS proxy. It installs no service of ours and no secret.
 - The explorer indexer is the largest part. It used up to 817 MB on two test chains with a few dozen messages, and it
   grows with the history of the real chains.
 - In the measured run the indexer kept its database inside its own process (PGlite). On the server it uses Postgres, so
@@ -82,6 +93,7 @@ All secrets live in the 1Password vault `zkb.fi` and reach a server only as envi
 | Endpoint keys of the providers | app server |
 | Filebase keys | the release machine only |
 | Release signing key | the release machine only, read at the moment of use |
+| Hetzner API token: item `hetzner`, field `api-token` (project `zkb-fi`, read and write) | the operator's machine, through `op run` |
 | SSH key `DigitalOcean (zkb.fi)` (also for the Hetzner server; rename it in the 1Password app, the CLI cannot edit SSH keys) | the operator's machine, through the 1Password SSH agent |
 
 ## Measurements
