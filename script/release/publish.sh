@@ -6,7 +6,11 @@
 #
 # Environment (all required):
 #   RELEASE_REMOTE           git URL of the release repository that holds version.json and its signature
-#   RELEASE_PIN_PROVIDER     the pinning adapter (explorer/release/src/pin.ts); the only one is "filebase"
+#   RELEASE_PIN_PROVIDER     the pinning adapter (explorer/release/src/pin.ts): "kubo" or "filebase"
+# For "kubo", the IPFS node on the app server, reached through an SSH tunnel (docs/release.md):
+#   KUBO_API_URL             the node's RPC address, for example http://127.0.0.1:5001. No credentials in it.
+#   KUBO_API_AUTH            optional: the Authorization header value the node accepts. Never printed.
+# For "filebase":
 #   FILEBASE_ACCESS_KEY, FILEBASE_SECRET_KEY, FILEBASE_BUCKET
 #                            the Filebase credentials and IPFS bucket, read by the adapter and never printed
 # Optional:

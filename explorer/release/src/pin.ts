@@ -6,6 +6,8 @@
  * bucket through the S3 endpoint `https://s3.filebase.com` (region us-east-1) with the metadata `import=car`, that is
  * the header `x-amz-meta-import: car`, is imported as a CAR. The CID comes back in the header `x-amz-meta-cid`, on the
  * upload answer or on a HEAD of the object.
+ *
+ * kubo: the RPC API of a self-hosted IPFS node. See kuboAdapter.
  */
 import { createHash, createHmac } from "node:crypto";
 
@@ -134,8 +136,123 @@ function filebaseAdapter(environment: Record<string, string | undefined>): PinAd
   };
 }
 
+/** How long the import of one archive may take. A site archive is a few megabytes. */
+const KUBO_IMPORT_TIMEOUT_MILLISECONDS = 300_000;
+/** How long the pin list may take. */
+const KUBO_LIST_TIMEOUT_MILLISECONDS = 30_000;
+
+/** One line of the answer of `dag/import`: a root, or the statistics (off here, but tolerated). */
+type KuboImportLine = { Root?: { Cid?: { "/"?: unknown }; PinErrorMsg?: unknown } };
+
+/** Parses the NDJSON answer of `dag/import` into its roots, or null when a line is not the known shape. */
+function kuboRoots(text: string): { cid: string; pinError: string }[] | null {
+  const roots: { cid: string; pinError: string }[] = [];
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    let parsed: KuboImportLine;
+    try {
+      parsed = JSON.parse(line) as KuboImportLine;
+    } catch {
+      return null;
+    }
+    if (parsed.Root === undefined) continue;
+    const cid = parsed.Root.Cid?.["/"];
+    const pinError = parsed.Root.PinErrorMsg ?? "";
+    if (typeof cid !== "string" || typeof pinError !== "string") return null;
+    roots.push({ cid, pinError });
+  }
+  return roots;
+}
+
+/**
+ * kubo (checked against docs.ipfs.tech/reference/kubo/rpc, 2026-10-29): the RPC API takes only POST. `dag/import` with
+ * `pin-roots=true` imports a CAR sent as the multipart field `file` and pins its root; it answers one JSON line per
+ * root, `{"Root":{"Cid":{"/":"…"},"PinErrorMsg":""}}`. `pin/ls` with `type=recursive` answers
+ * `{"Keys":{"<cid>":{"Type":"recursive"}}}`, or an error when the CID is not pinned. The API has no login of its own:
+ * keep it on 127.0.0.1 and reach it through an SSH tunnel. KUBO_API_AUTH, when set, is the Authorization header value
+ * that `API.Authorizations` of the node accepts.
+ */
+function kuboAdapter(environment: Record<string, string | undefined>): PinAdapter {
+  if (!environment.KUBO_API_URL) throw new PinError("the kubo adapter needs KUBO_API_URL");
+  let url: URL;
+  try {
+    url = new URL(environment.KUBO_API_URL);
+  } catch {
+    throw new PinError("KUBO_API_URL must be an http or https URL");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") throw new PinError("KUBO_API_URL must be an http or https URL");
+  if (url.username !== "" || url.password !== "") {
+    throw new PinError("KUBO_API_URL must not carry credentials; put the Authorization header value in KUBO_API_AUTH");
+  }
+  const endpoint = url.href.replace(/\/+$/, "");
+  const headers: Record<string, string> = environment.KUBO_API_AUTH ? { authorization: environment.KUBO_API_AUTH } : {};
+
+  /** POSTs one RPC call. Every failure names the call and the address, never the credentials. */
+  async function call(path: string, what: string, body: FormData | null, timeout: number): Promise<string> {
+    let answer: Response;
+    try {
+      answer = await fetch(`${endpoint}${path}`, { method: "POST", headers, body, signal: AbortSignal.timeout(timeout) });
+    } catch {
+      throw new PinError(`could not reach the kubo API at ${endpoint} for ${what} (is the SSH tunnel open?)`);
+    }
+    const text = await answer.text();
+    if (!answer.ok) {
+      let message = "";
+      try {
+        const parsed = JSON.parse(text) as { Message?: unknown };
+        if (typeof parsed.Message === "string") message = `: ${parsed.Message.slice(0, 200)}`;
+      } catch {
+        // A proxy page or plain text: the status says enough.
+      }
+      throw new PinError(`kubo answered ${answer.status} to ${what}${message}`);
+    }
+    return text;
+  }
+
+  return {
+    name: "kubo",
+    endpoint,
+    async pin({ objectKey, carBytes, expectedCid }) {
+      const form = new FormData();
+      form.append("file", new Blob([carBytes as BlobPart], { type: "application/vnd.ipld.car" }), objectKey.split("/").pop());
+      const imported = await call(
+        "/api/v0/dag/import?pin-roots=true&stats=false",
+        `the import of ${objectKey}`,
+        form,
+        KUBO_IMPORT_TIMEOUT_MILLISECONDS,
+      );
+      const roots = kuboRoots(imported);
+      if (roots === null) throw new PinError(`kubo answered the import of ${objectKey} in an unknown shape`);
+      if (roots.length !== 1) throw new PinError(`kubo reported ${roots.length} roots for ${objectKey}, expected exactly one`);
+      const [root] = roots as [{ cid: string; pinError: string }];
+      if (root.cid !== expectedCid) throw new PinError(`kubo imported ${root.cid} for ${objectKey}, but the archive is ${expectedCid}`);
+      if (root.pinError !== "") throw new PinError(`kubo could not pin ${objectKey}: ${root.pinError.slice(0, 200)}`);
+
+      const listed = await call(
+        `/api/v0/pin/ls?${new URLSearchParams({ arg: expectedCid, type: "recursive" })}`,
+        `the pin list of ${objectKey}`,
+        null,
+        KUBO_LIST_TIMEOUT_MILLISECONDS,
+      );
+      let keys: unknown;
+      try {
+        keys = (JSON.parse(listed) as { Keys?: unknown }).Keys;
+      } catch {
+        keys = undefined;
+      }
+      if (typeof keys !== "object" || keys === null) throw new PinError(`kubo answered the pin list of ${objectKey} in an unknown shape`);
+      const entry = (keys as Record<string, { Type?: unknown } | undefined>)[expectedCid];
+      if (entry?.Type !== "recursive") {
+        throw new PinError(`kubo holds no recursive pin of ${expectedCid} after the import of ${objectKey}`);
+      }
+      return root.cid;
+    },
+  };
+}
+
 const ADAPTERS: Record<string, (environment: Record<string, string | undefined>) => PinAdapter> = {
   filebase: filebaseAdapter,
+  kubo: kuboAdapter,
 };
 
 /**

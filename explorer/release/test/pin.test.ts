@@ -129,3 +129,154 @@ describe("the Filebase adapter", () => {
     expect(adapter.endpoint).toBe("https://s3.filebase.com");
   });
 });
+
+const kuboAuth = "Bearer kubo-token-456";
+
+/** A local stand-in for the kubo RPC API. `answer` gets the path without the query and the parsed query. */
+async function fakeKubo(
+  answer: (path: string, query: URLSearchParams, response: ServerResponse) => void,
+): Promise<{ endpoint: string; seen: Seen[] }> {
+  return fakeS3((seen, response) => {
+    const url = new URL(seen.url, "http://kubo");
+    answer(url.pathname, url.searchParams, response);
+  });
+}
+
+/** The answers of a kubo node that imports and pins `root`, with `pinError` as the pin result of the import. */
+function healthyKubo(root: string, pinError = "") {
+  return (path: string, query: URLSearchParams, response: ServerResponse) => {
+    if (path === "/api/v0/dag/import") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(`${JSON.stringify({ Root: { Cid: { "/": root }, PinErrorMsg: pinError } })}\n`);
+    } else if (path === "/api/v0/pin/ls" && query.get("arg") === root) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ Keys: { [root]: { Type: "recursive" } } }));
+    } else {
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end(JSON.stringify({ Message: `not pinned: ${query.get("arg")}`, Code: 0, Type: "error" }));
+    }
+  };
+}
+
+const kuboInput = { objectKey: "1.0.0/dapp.car", carBytes: car, expectedCid: cid };
+
+describe("the kubo adapter", () => {
+  it("needs KUBO_API_URL, an http(s) URL without credentials in it", () => {
+    expect(() => pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo" })).toThrow("the kubo adapter needs KUBO_API_URL");
+    for (const url of ["not a url", "ftp://127.0.0.1:5001", "unix:/run/kubo.sock"]) {
+      expect(() => pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo", KUBO_API_URL: url })).toThrow(
+        "KUBO_API_URL must be an http or https URL",
+      );
+    }
+    let message = "";
+    try {
+      pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo", KUBO_API_URL: "http://user:hunter2@127.0.0.1:5001" });
+    } catch (error) {
+      expect(error).toBeInstanceOf(PinError);
+      message = (error as Error).message;
+    }
+    expect(message).toBe("KUBO_API_URL must not carry credentials; put the Authorization header value in KUBO_API_AUTH");
+    expect(message).not.toContain("hunter2");
+  });
+
+  it("imports the archive with its root pinned, then confirms the recursive pin", async () => {
+    const kubo = await fakeKubo(healthyKubo(cid));
+    const adapter = pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo", KUBO_API_URL: `${kubo.endpoint}/` })!;
+    expect(adapter.name).toBe("kubo");
+    expect(adapter.endpoint).toBe(kubo.endpoint);
+    await expect(adapter.pin(kuboInput)).resolves.toBe(cid);
+    const [imported, listed] = kubo.seen;
+    expect(imported!.method).toBe("POST");
+    expect(imported!.url).toBe("/api/v0/dag/import?pin-roots=true&stats=false");
+    expect(imported!.headers["content-type"]).toMatch(/^multipart\/form-data; boundary=/);
+    expect(imported!.body.includes(Buffer.from('name="file"'))).toBe(true);
+    expect(imported!.body.includes(Buffer.from(car))).toBe(true);
+    expect(imported!.headers.authorization).toBeUndefined();
+    expect(listed!.method).toBe("POST");
+    expect(listed!.url).toBe(`/api/v0/pin/ls?arg=${cid}&type=recursive`);
+  });
+
+  it("sends KUBO_API_AUTH as the Authorization header of every call", async () => {
+    const kubo = await fakeKubo(healthyKubo(cid));
+    const adapter = pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo", KUBO_API_URL: kubo.endpoint, KUBO_API_AUTH: kuboAuth })!;
+    await adapter.pin(kuboInput);
+    expect(kubo.seen.map((entry) => entry.headers.authorization)).toEqual([kuboAuth, kuboAuth]);
+  });
+
+  it("fails when the node imports another root, more than one root, or none", async () => {
+    let roots: string[] = ["bafkreiother"];
+    const kubo = await fakeKubo((_path, _query, response) => {
+      response.writeHead(200);
+      response.end(roots.map((root) => `${JSON.stringify({ Root: { Cid: { "/": root }, PinErrorMsg: "" } })}\n`).join(""));
+    });
+    const adapter = pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo", KUBO_API_URL: kubo.endpoint })!;
+    await expect(adapter.pin(kuboInput)).rejects.toThrow(`kubo imported bafkreiother for 1.0.0/dapp.car, but the archive is ${cid}`);
+    roots = [cid, "bafkreiother"];
+    await expect(adapter.pin(kuboInput)).rejects.toThrow("kubo reported 2 roots for 1.0.0/dapp.car, expected exactly one");
+    roots = [];
+    await expect(adapter.pin(kuboInput)).rejects.toThrow("kubo reported 0 roots for 1.0.0/dapp.car, expected exactly one");
+  });
+
+  it("fails when the node could not pin the root", async () => {
+    const kubo = await fakeKubo(healthyKubo(cid, "blockstore full"));
+    const adapter = pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo", KUBO_API_URL: kubo.endpoint })!;
+    await expect(adapter.pin(kuboInput)).rejects.toThrow("kubo could not pin 1.0.0/dapp.car: blockstore full");
+  });
+
+  it("fails when the pin list does not hold the root as a recursive pin", async () => {
+    let listing: unknown = { Keys: {} };
+    const kubo = await fakeKubo((path, _query, response) => {
+      response.writeHead(200);
+      if (path === "/api/v0/dag/import") response.end(JSON.stringify({ Root: { Cid: { "/": cid }, PinErrorMsg: "" } }));
+      else response.end(typeof listing === "string" ? listing : JSON.stringify(listing));
+    });
+    const adapter = pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo", KUBO_API_URL: kubo.endpoint })!;
+    await expect(adapter.pin(kuboInput)).rejects.toThrow(`kubo holds no recursive pin of ${cid} after the import of 1.0.0/dapp.car`);
+    listing = { Keys: { [cid]: { Type: "direct" } } };
+    await expect(adapter.pin(kuboInput)).rejects.toThrow(`kubo holds no recursive pin of ${cid}`);
+    listing = { Keys: "nope" };
+    await expect(adapter.pin(kuboInput)).rejects.toThrow("kubo answered the pin list of 1.0.0/dapp.car in an unknown shape");
+    listing = "<html>bad gateway</html>";
+    await expect(adapter.pin(kuboInput)).rejects.toThrow("kubo answered the pin list of 1.0.0/dapp.car in an unknown shape");
+  });
+
+  it("fails on an error status, with the node's message but never the credentials", async () => {
+    let status = 500;
+    const kubo = await fakeKubo((_path, _query, response) => {
+      response.writeHead(status, { "content-type": "application/json" });
+      response.end(status === 500 ? JSON.stringify({ Message: "file argument 'file' is required", Code: 1, Type: "error" }) : "Forbidden");
+    });
+    const adapter = pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo", KUBO_API_URL: kubo.endpoint, KUBO_API_AUTH: kuboAuth })!;
+    const failure = (await adapter.pin(kuboInput).catch((error: unknown) => error)) as Error;
+    expect(failure).toBeInstanceOf(PinError);
+    expect(failure.message).toBe("kubo answered 500 to the import of 1.0.0/dapp.car: file argument 'file' is required");
+    status = 403;
+    const refused = (await adapter.pin(kuboInput).catch((error: unknown) => error)) as Error;
+    expect(refused.message).toBe("kubo answered 403 to the import of 1.0.0/dapp.car");
+    for (const message of [failure.message, refused.message]) expect(message).not.toContain("kubo-token-456");
+  });
+
+  it("fails on an answer that is not the import NDJSON", async () => {
+    let body = "this is not json\n";
+    const kubo = await fakeKubo((_path, _query, response) => {
+      response.writeHead(200);
+      response.end(body);
+    });
+    const adapter = pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo", KUBO_API_URL: kubo.endpoint })!;
+    await expect(adapter.pin(kuboInput)).rejects.toThrow("kubo answered the import of 1.0.0/dapp.car in an unknown shape");
+    body = `${JSON.stringify({ Root: { Cid: "flat" } })}\n`;
+    await expect(adapter.pin(kuboInput)).rejects.toThrow("kubo answered the import of 1.0.0/dapp.car in an unknown shape");
+    body = `${JSON.stringify({ Stats: { BlockCount: 3 } })}\n\n`;
+    await expect(adapter.pin(kuboInput)).rejects.toThrow("kubo reported 0 roots for 1.0.0/dapp.car, expected exactly one");
+  });
+
+  it("fails clearly when the node cannot be reached, naming the address without the credentials", async () => {
+    const kubo = await fakeKubo(healthyKubo(cid));
+    servers.splice(0).forEach((server) => server.close());
+    const adapter = pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo", KUBO_API_URL: kubo.endpoint, KUBO_API_AUTH: kuboAuth })!;
+    const failure = (await adapter.pin(kuboInput).catch((error: unknown) => error)) as Error;
+    expect(failure).toBeInstanceOf(PinError);
+    expect(failure.message).toBe(`could not reach the kubo API at ${kubo.endpoint} for the import of 1.0.0/dapp.car (is the SSH tunnel open?)`);
+    expect(failure.message).not.toContain("kubo-token-456");
+  });
+});
