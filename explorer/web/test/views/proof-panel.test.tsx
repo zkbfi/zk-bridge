@@ -10,7 +10,7 @@ import { messageBridgeAbi } from "@terminal/tx/abis";
 import { buildFixtureFeed, FIXTURE_NOW } from "@terminal/data/fixtures";
 import { createFixtureIndexerClient } from "../../src/data/fixture-indexer-client";
 import type { MessageDetail } from "../../src/data/message-detail";
-import { messageStage, NO_ENDPOINTS, planProofUpdate, planDelivery, readEvidence, readLatestProof, requestProofAvailability, type PanelEndpoints, type PanelTransport } from "../../src/views/proof-panel-model";
+import { chosenDeliverySteps, messageStage, NO_ENDPOINTS, planProofUpdate, planDelivery, readEvidence, readLatestProof, requestProofAvailability, type DeliveryStep, type PanelEndpoints, type PanelTransport } from "../../src/views/proof-panel-model";
 import { MessageView } from "../../src/views/MessageView";
 import { renderWithServices } from "./support";
 
@@ -564,5 +564,25 @@ describe("the plans", () => {
 
   it("asks for a backend before it allows a proof request", () => {
     expect(requestProofAvailability({ stage: "waiting-for-finality", backendSet: false, walletConnected: true, proof: null, delivery: null })).toEqual({ enabled: false, reason: "Set the Backend URL in Connections to ask for a proof." });
+  });
+});
+
+describe("chosenDeliverySteps", () => {
+  const row = (data: Hex, role: "prerequisite" | "execute" = "prerequisite") => ({ step: { plan: { data } }, role, reason: null }) as unknown as DeliveryStep;
+  const a = row("0xaa");
+  const b = row("0xbb");
+  const run = row("0xee", "execute");
+
+  it("leaves out the rows that the user cleared, by their calldata", () => {
+    expect(chosenDeliverySteps([a, b, run], ["0xaa"]).map((step) => step.plan.data)).toEqual(["0xbb", "0xee"]);
+  });
+
+  it("keeps a needed row when the list changes under a cleared one", () => {
+    // The user cleared row a. The next read of the evidence drops a and puts b first: b must still run.
+    expect(chosenDeliverySteps([b, run], ["0xaa"]).map((step) => step.plan.data)).toEqual(["0xbb", "0xee"]);
+  });
+
+  it("always keeps the execution", () => {
+    expect(chosenDeliverySteps([a, run], ["0xaa", "0xee"]).map((step) => step.plan.data)).toEqual(["0xee"]);
   });
 });

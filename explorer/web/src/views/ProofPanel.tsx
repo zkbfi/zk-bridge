@@ -15,6 +15,7 @@ import {
   REQUEST_STATUS_TEXT,
   STAGES,
   backendClientOf,
+  chosenDeliverySteps,
   deliverAvailability,
   directionOf,
   messageStage,
@@ -85,7 +86,7 @@ export const ProofPanel = ({ detail }: { readonly detail: MessageDetail }) => {
   const [requestState, setRequestState] = useState<RequestState>({ kind: "idle" });
   const [postState, setPostState] = useState<PostState>({ kind: "idle" });
   const [reviewSteps, setReviewSteps] = useState<readonly WebStep[] | null>(null);
-  const [skipped, setSkipped] = useState<readonly number[]>([]);
+  const [skipped, setSkipped] = useState<readonly string[]>([]);
 
   const requestId = requestState.kind === "accepted" ? requestState.requestId : null;
   const requestStatus = useQuery({
@@ -133,9 +134,9 @@ export const ProofPanel = ({ detail }: { readonly detail: MessageDetail }) => {
 
   const deliveryRows = deliveryPlan?.kind === "ready" ? deliveryPlan.steps : [];
   const deliver = (): void => {
-    setReviewSteps(deliveryRows.filter((_, index) => !skipped.includes(index)).map((row) => row.step));
+    setReviewSteps(chosenDeliverySteps(deliveryRows, skipped));
   };
-  const toggleSkip = (index: number): void => setSkipped((current) => (current.includes(index) ? current.filter((entry) => entry !== index) : [...current, index]));
+  const toggleSkip = (data: string): void => setSkipped((current) => (current.includes(data) ? current.filter((entry) => entry !== data) : [...current, data]));
 
   return (
     <Panel title="Proof and delivery">
@@ -216,9 +217,9 @@ export const ProofPanel = ({ detail }: { readonly detail: MessageDetail }) => {
           </Text>
           {deliveryRows.length > 1 ? (
             <Stack gap="1" marginY="2" data-testid="delivery-steps">
-              {deliveryRows.map((row, index) => (
-                <label key={row.step.plan.title}>
-                  <input type="checkbox" checked={!skipped.includes(index)} disabled={row.role === "execute"} onChange={() => toggleSkip(index)} /> {row.step.plan.title}
+              {deliveryRows.map((row) => (
+                <label key={row.step.plan.data}>
+                  <input type="checkbox" checked={!skipped.includes(row.step.plan.data)} disabled={row.role === "execute"} onChange={() => toggleSkip(row.step.plan.data)} /> {row.step.plan.title}
                   {row.reason === null ? "" : ` (${row.reason})`}
                 </label>
               ))}

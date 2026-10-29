@@ -242,6 +242,16 @@ export type DeliveryPlan =
 /** One step of a delivery. A prerequisite may be skipped, because the chain may already hold the row. */
 export type DeliveryStep = { readonly step: WebStep; readonly role: "prerequisite" | "execute"; readonly reason: string | null };
 
+/**
+ * The steps to review: every row but the ones the user cleared, and always the execution. A cleared row is known by its
+ * calldata, not by its place, because the evidence is read again while the user looks and its list can change.
+ *
+ * @param rows The rows of the delivery plan.
+ * @param cleared The calldata of the rows that the user cleared.
+ */
+export const chosenDeliverySteps = (rows: readonly DeliveryStep[], cleared: readonly string[]): readonly WebStep[] =>
+  rows.filter((row) => row.role === "execute" || !cleared.includes(row.step.plan.data)).map((row) => row.step);
+
 /** The message that the user views. The evidence must be for this message. */
 export type ExpectedMessage = {
   readonly messageId: string;
