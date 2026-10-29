@@ -57,6 +57,17 @@ describe("backend client", () => {
     await expect(refused.client.requestProof(request)).rejects.toThrow(/status 400/);
   });
 
+  it("requestProof returns 'nothing to prove' and 'cannot check' as values", async () => {
+    const request = { pair: "eth-pls", direction: "first-to-second", reason: "user" } as const;
+    const nothing = clientAnswering({ "/requests": { status: 409, body: { error: "nothing-to-prove" } } });
+    expect(await nothing.client.requestProof(request)).toEqual({ refused: "nothing-to-prove" });
+    const unknown = clientAnswering({ "/requests": { status: 503, body: { error: "cannot-check", retryAfterSeconds: 30 } } });
+    expect(await unknown.client.requestProof(request)).toEqual({ refused: "cannot-check", retryAfterSeconds: 30 });
+    // Another 409 or 503, such as a proxy page, is an error.
+    await expect(clientAnswering({ "/requests": { status: 503, body: { error: "down" } } }).client.requestProof(request)).rejects.toThrow(/unknown shape/);
+    await expect(clientAnswering({ "/requests": { status: 409, body: {} } }).client.requestProof(request)).rejects.toThrow(/unknown shape/);
+  });
+
   it("refuses a message identifier of the wrong length in a request status", async () => {
     const status = { ...job, requestId: "r1", reason: "message", messageId: "0x12", requestedAt: 1 };
     const { client } = clientAnswering({ "/requests/r1": { status: 200, body: status } });

@@ -38,6 +38,8 @@ type RequestState =
   | { readonly kind: "sending" }
   | { readonly kind: "accepted"; readonly requestId: string }
   | { readonly kind: "rate-limited"; readonly retryAfterSeconds: number }
+  | { readonly kind: "nothing-to-prove" }
+  | { readonly kind: "cannot-check"; readonly retryAfterSeconds: number }
   | { readonly kind: "failed" };
 
 /** What the post button did. */
@@ -105,7 +107,9 @@ export const ProofPanel = ({ detail }: { readonly detail: MessageDetail }) => {
     setRequestState({ kind: "sending" });
     try {
       const answer = await (client as NonNullable<typeof client>).requestProof({ pair: pair.id, direction, reason: "message", messageId: detail.id as Hex });
-      setRequestState("refused" in answer ? { kind: "rate-limited", retryAfterSeconds: answer.retryAfterSeconds } : { kind: "accepted", requestId: answer.requestId });
+      if (!("refused" in answer)) setRequestState({ kind: "accepted", requestId: answer.requestId });
+      else if (answer.refused === "nothing-to-prove") setRequestState({ kind: "nothing-to-prove" });
+      else setRequestState({ kind: answer.refused, retryAfterSeconds: answer.retryAfterSeconds });
     } catch {
       setRequestState({ kind: "failed" });
     }
@@ -196,6 +200,12 @@ export const ProofPanel = ({ detail }: { readonly detail: MessageDetail }) => {
         {requestState.kind === "sending" ? <Text fontSize="sm">Sending the request…</Text> : null}
         {requestState.kind === "failed" ? <Notice tone="error">The backend did not accept the request. Try again later.</Notice> : null}
         {requestState.kind === "rate-limited" ? <Notice tone="warning">The backend limits requests. Try again in {requestState.retryAfterSeconds} seconds.</Notice> : null}
+        {requestState.kind === "nothing-to-prove" ? (
+          <Notice tone="info">The backend sees no message waiting for a proof, so it starts no proving run. Its chain indexer may not have seen this message as final yet.</Notice>
+        ) : null}
+        {requestState.kind === "cannot-check" ? (
+          <Notice tone="warning">The backend could not check whether a proof is needed. Try again in {requestState.retryAfterSeconds} seconds.</Notice>
+        ) : null}
         {requestState.kind === "accepted" ? (
           <Box data-testid="request-status">
             <DataRow label="Request"><Mono>{requestState.requestId}</Mono></DataRow>

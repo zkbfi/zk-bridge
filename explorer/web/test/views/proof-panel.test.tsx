@@ -215,6 +215,20 @@ describe("the proof panel", () => {
     expect(await screen.findByText("The status of the request did not load.")).toBeInTheDocument();
   });
 
+  it("says when the backend sees nothing to prove, or cannot check its chain indexer", async () => {
+    const user = userEvent.setup();
+    const nothing = fakeTransport({ get: async () => ({ status: 404, body: null }), post: async () => ({ status: 409, body: { error: "nothing-to-prove" } }) });
+    const first = await renderPanel({ changes: { status: "waiting_for_finality" }, endpoints: endpoints({ backendUrl: BACKEND }), transport: nothing.transport });
+    await user.click(await screen.findByRole("button", { name: "Request a proof" }));
+    expect(await screen.findByText(/The backend sees no message waiting for a proof/)).toBeInTheDocument();
+    first.unmount();
+
+    const unknown = fakeTransport({ get: async () => ({ status: 404, body: null }), post: async () => ({ status: 503, body: { error: "cannot-check", retryAfterSeconds: 30 } }) });
+    await renderPanel({ changes: { status: "waiting_for_finality" }, endpoints: endpoints({ backendUrl: BACKEND }), transport: unknown.transport });
+    await user.click(await screen.findByRole("button", { name: "Request a proof" }));
+    expect(await screen.findByText(/could not check whether a proof is needed\. Try again in 30 seconds/)).toBeInTheDocument();
+  });
+
   it("shows a failed request with its reason", async () => {
     const user = userEvent.setup();
     const { transport } = fakeTransport({

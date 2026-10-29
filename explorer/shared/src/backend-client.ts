@@ -37,6 +37,8 @@ export type JobView = z.infer<typeof jobViewSchema>;
 
 const requestAcceptedSchema = z.object({ requestId: z.string(), jobId: z.string() }).passthrough();
 const rateLimitedSchema = z.object({ error: z.literal("rate-limited"), retryAfterSeconds: z.number() }).passthrough();
+const nothingToProveSchema = z.object({ error: z.literal("nothing-to-prove") }).passthrough();
+const cannotCheckSchema = z.object({ error: z.literal("cannot-check"), retryAfterSeconds: z.number() }).passthrough();
 const requestStatusSchema = jobViewSchema.and(z.object({ requestId: z.string(), reason: z.string(), messageId: hashSchema.nullable(), requestedAt: z.number() }));
 const directionStatusSchema = z.object({ direction: directionSchema, job: jobViewSchema.nullable() }).passthrough();
 
@@ -74,10 +76,19 @@ export type BackendHealth = z.infer<typeof healthSchema>;
 /** The proof request. */
 export type ProofRequestInput = { pair: string; direction: ProofDirection; reason: "message" | "keep-alive" | "user"; messageId?: Hex };
 
-/** The answer to a proof request. */
+/**
+ * The answer to a proof request. The backend starts a job only when the chain indexer shows that the chains need a
+ * proof, so a request can be refused without fault:
+ *
+ * - `rate-limited`: a limit refused it. Ask again after `retryAfterSeconds`.
+ * - `nothing-to-prove`: no message waits for a head and the head is fresh. Asking again changes nothing for now.
+ * - `cannot-check`: the backend could not ask its chain indexer. Ask again after `retryAfterSeconds`.
+ */
 export type ProofRequestAnswer =
   | { readonly requestId: string; readonly jobId: string }
-  | { readonly refused: "rate-limited"; readonly retryAfterSeconds: number };
+  | { readonly refused: "rate-limited"; readonly retryAfterSeconds: number }
+  | { readonly refused: "nothing-to-prove" }
+  | { readonly refused: "cannot-check"; readonly retryAfterSeconds: number };
 
 function parseAnswer<Schema extends z.ZodType>(schema: Schema, response: JsonResponse, what: string): z.infer<Schema> {
   const parsed = schema.safeParse(response.body);
@@ -102,12 +113,20 @@ export function createBackendClient(input: { baseUrl: string; fetchJson: JsonFet
   const get = (path: string) => input.fetchJson(`${base}${path}`);
 
   return {
-    /** Asks for a proof. A refusal for rate limits comes back as a value, not as an error. */
+    /** Asks for a proof. A refusal (see {@link ProofRequestAnswer}) comes back as a value, not as an error. */
     async requestProof(request: ProofRequestInput): Promise<ProofRequestAnswer> {
       const response = await input.postJson(`${base}/requests`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request) });
       if (response.status === 429) {
         const limited = parseAnswer(rateLimitedSchema, response, "a proof request");
         return { refused: "rate-limited", retryAfterSeconds: limited.retryAfterSeconds };
+      }
+      if (response.status === 409) {
+        parseAnswer(nothingToProveSchema, response, "a proof request");
+        return { refused: "nothing-to-prove" };
+      }
+      if (response.status === 503) {
+        const unknown = parseAnswer(cannotCheckSchema, response, "a proof request");
+        return { refused: "cannot-check", retryAfterSeconds: unknown.retryAfterSeconds };
       }
       if (response.status !== 202) refuseStatus(response, "a proof request");
       return parseAnswer(requestAcceptedSchema, response, "a proof request");

@@ -26,7 +26,7 @@ export const withoutIndexer: ProofNeedReader = async () => {
   throw new Error("indexerUrl is not set");
 };
 
-const feedSchema =z.object({ items: z.array(z.unknown()) });
+const feedSchema = z.object({ items: z.array(z.unknown()) });
 
 const headsSchema = z.object({
   heads: z.array(

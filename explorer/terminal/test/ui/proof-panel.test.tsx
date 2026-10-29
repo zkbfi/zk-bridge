@@ -247,6 +247,26 @@ describe('asking the backend for a proof', () => {
     expect(await view.until('wait 30 seconds')).toContain('The backend asks you to wait 30 seconds.')
   })
 
+  test('a backend that sees nothing to prove says so', async () => {
+    const { transport } = fakeTransport({
+      get: async () => ({ status: 200, body: { direction: 'first-to-second', job: null } }),
+      post: async () => ({ status: 409, body: { error: 'nothing-to-prove' } }),
+    })
+    const view = await openPanel({ set: ['backendUrl'], transport })
+    await view.press('1')
+    expect(await view.until('No proof is needed')).toContain('No proof is needed now: no message waits and the light client head is fresh.')
+  })
+
+  test('a backend that cannot check its chain indexer shows how long to wait', async () => {
+    const { transport } = fakeTransport({
+      get: async () => ({ status: 200, body: { direction: 'first-to-second', job: null } }),
+      post: async () => ({ status: 503, body: { error: 'cannot-check', retryAfterSeconds: 30 } }),
+    })
+    const view = await openPanel({ set: ['backendUrl'], transport })
+    await view.press('1')
+    expect(await view.until('could not check')).toContain('The backend could not check whether a proof is needed. Try again in 30 seconds.')
+  })
+
   test('a backend that fails shows a sentence with no URL', async () => {
     const { transport } = fakeTransport({
       get: async () => ({ status: 200, body: { direction: 'first-to-second', job: null } }),

@@ -5,6 +5,7 @@
  */
 import { useState } from 'react'
 import { PROOF_DIRECTIONS, proofStartProblem, type ProofDirection, type ResolvedConnection } from '@zk-bridge/shared'
+import type { ProofRequestAnswer } from '@zk-bridge/shared/backend-client'
 import { useServices } from '../app/services'
 import {
   backendClientOf,
@@ -76,6 +77,13 @@ type RequestState =
   | { readonly kind: 'refused'; readonly note: string }
   | { readonly kind: 'accepted'; readonly requestId: string; readonly direction: ProofDirection }
 
+/** The sentence for a request that the backend refused. */
+function refusalNote(answer: Extract<ProofRequestAnswer, { readonly refused: string }>): string {
+  if (answer.refused === 'nothing-to-prove') return 'No proof is needed now: no message waits and the light client head is fresh.'
+  if (answer.refused === 'cannot-check') return `The backend could not check whether a proof is needed. Try again in ${answer.retryAfterSeconds} seconds.`
+  return `The backend asks you to wait ${answer.retryAfterSeconds} seconds.`
+}
+
 type Phase = 'main' | 'evidence'
 
 /** The modal of the proof panel. */
@@ -122,9 +130,7 @@ export function ProofModal(props: {
     setRequest({ kind: 'asking' })
     client
       .requestProof({ pair: pair.id, direction, reason: 'user' })
-      .then((answer) =>
-        setRequest('refused' in answer ? { kind: 'refused', note: `The backend asks you to wait ${answer.retryAfterSeconds} seconds.` } : { kind: 'accepted', requestId: answer.requestId, direction }),
-      )
+      .then((answer) => setRequest('refused' in answer ? { kind: 'refused', note: refusalNote(answer) } : { kind: 'accepted', requestId: answer.requestId, direction }))
       .catch((error: unknown) => setRequest({ kind: 'refused', note: redact(error instanceof Error ? error.message : String(error)) }))
   }
 
