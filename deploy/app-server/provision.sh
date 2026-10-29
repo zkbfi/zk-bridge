@@ -172,6 +172,9 @@ if [ "$(/usr/local/bin/ipfs version --number 2>/dev/null || true)" != "${KUBO_VE
   rm -rf "$work"
 fi
 ipfs_as() { runuser -u zkb_ipfs -- env IPFS_PATH="$IPFS_PATH" /usr/local/bin/ipfs "$@"; }
+# A running node takes config commands through its API, which wants the token. Edit the stopped node; it starts
+# again below once it has a token.
+systemctl stop zk-bridge-ipfs.service 2>/dev/null || true
 # The server profile turns off local network discovery, which a public host must not do.
 [ -f "$IPFS_PATH/config" ] || ipfs_as init --profile server >/dev/null
 ipfs_as config Addresses.API /ip4/127.0.0.1/tcp/5001
@@ -181,6 +184,9 @@ ipfs_as config Datastore.StorageMax 20GB
 ipfs_as config Swarm.ResourceMgr.MaxMemory 1GB
 # Announce only what is pinned here: the release archives.
 ipfs_as config Provide.Strategy pinned
+# Secure WebSockets with a libp2p.direct certificate: browsers (inbrowser.link, Safari) need them to fetch from us.
+# Set explicitly, the node asks for the certificate at once instead of after an hour.
+ipfs_as config --json AutoTLS.Enabled true
 # The unit is written here and not by deploy.sh: the node holds the pins and does not change with a release.
 cat > /etc/systemd/system/zk-bridge-ipfs.service <<EOF
 # The IPFS node (kubo) that pins the release archives. provision.sh writes this file. RPC API on 127.0.0.1:5001 only,
@@ -244,7 +250,8 @@ set -euo pipefail
 IFS= read -r token || [ -n "\$token" ]
 [ "\${#token}" -ge 32 ] || { echo "the token on standard input is shorter than 32 characters" >&2; exit 1; }
 config=$IPFS_PATH/config
-runuser -u zkb_ipfs -- sh -c 'umask 077; jq --rawfile t /dev/stdin '"'"'.API.Authorizations = {operator: {AuthSecret: ("bearer:" + (\$t | rtrimstr("\n"))), AllowedPaths: ["/api/v0"]}}'"'"' "\$1" > "\$1.new" && mv "\$1.new" "\$1"' sh "\$config" <<<"\$token"
+# The token reaches jq in its environment: only zkb_ipfs and root can read that, unlike the argument list.
+ZKB_IPFS_TOKEN=\$token runuser --preserve-environment -u zkb_ipfs -- sh -c 'umask 077; jq '"'"'.API.Authorizations = {operator: {AuthSecret: ("bearer:" + env.ZKB_IPFS_TOKEN), AllowedPaths: ["/api/v0"]}}'"'"' "\$1" > "\$1.new" && mv "\$1.new" "\$1"' sh "\$config"
 systemctl restart zk-bridge-ipfs.service
 echo "the IPFS API now takes only the new token"
 EOF
