@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Deploys the landing page of a verified release to Cloudflare Pages, a mirror at the zkb.fi root.
+# Deploys the landing page of a verified release to Cloudflare, a mirror at the zkb.fi root. It is a Worker with static
+# assets only (no code): new projects are no longer classic Pages projects, and wrangler 4 creates a Worker for them.
 # Only the landing page goes to Pages. The dapp and the docs are published on IPFS only.
 # The signed release on IPFS is the source of truth: the mirror is the landing archive of that release, unpacked,
 # plus version.json and its signature, so the page checks the same signed manifest wherever it is loaded.
@@ -7,7 +8,9 @@
 # Usage:   script/release/publish-pages.sh <release-directory>
 #
 # Environment:
-#   RELEASE_PAGES_LANDING    the Cloudflare Pages project name (required)
+#   RELEASE_PAGES_LANDING    the name of the Cloudflare Worker that serves the landing page (required)
+#   RELEASE_LANDING_DOMAINS  optional comma list of custom domains for it, such as zkb.fi,www.zkb.fi. Each domain must
+#                            be a zone of the same account with no other DNS record on that name.
 #   RELEASE_PUBLIC_KEYS      the trusted keys to verify against (default: explorer/landing/landing.config.json)
 #   Wrangler reads its own Cloudflare credentials (CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID); they are not read here.
 #
@@ -37,4 +40,13 @@ site="$(mktemp -d)"
 trap 'rm -rf "$site"' EXIT
 "${cli[@]}" unpack "$release/archives/landing.car" "$site" >/dev/null
 cp "$release/version.json" "$release/version.json.sig" "$site/"
-npx --yes wrangler@4 pages deploy "$site" --project-name "$RELEASE_PAGES_LANDING" --branch main
+# The configuration lives outside the site, so it is never published.
+config_dir="$(mktemp -d)"
+trap 'rm -rf "$site" "$config_dir"' EXIT
+node -e '
+const [name, site, domains] = process.argv.slice(1);
+const routes = domains.split(",").map((d) => d.trim()).filter(Boolean).map((pattern) => ({ pattern, custom_domain: true }));
+const config = { name, compatibility_date: "2026-10-01", assets: { directory: site }, ...(routes.length ? { routes } : {}) };
+process.stdout.write(JSON.stringify(config, null, 2));
+' "$RELEASE_PAGES_LANDING" "$site" "${RELEASE_LANDING_DOMAINS:-}" > "$config_dir/wrangler.json"
+npx --yes wrangler@4 deploy --config "$config_dir/wrangler.json"

@@ -160,12 +160,14 @@ Pages is a mirror. It deploys the landing archive of a verified release, unpacke
 signature, so the page checks the same signed manifest wherever it is loaded:
 
 ```sh
-RELEASE_PAGES_LANDING=<project> script/release/publish-pages.sh <release-directory>
+RELEASE_PAGES_LANDING=<worker name> RELEASE_LANDING_DOMAINS=zkb.fi,www.zkb.fi script/release/publish-pages.sh <release-directory>
 ```
 
-It refuses (exit 1) when `RELEASE_PAGES_LANDING` is not set or the release does not verify, and runs
-`npx wrangler@4 pages deploy <dir> --project-name <project> --branch main` otherwise. Wrangler reads its own Cloudflare
-credentials. If the mirror and IPFS ever disagree, IPFS and the signature win.
+It refuses (exit 1) when `RELEASE_PAGES_LANDING` is not set or the release does not verify. Otherwise it deploys a
+Cloudflare Worker with static assets only (`npx wrangler@4 deploy` with a configuration written outside the site):
+wrangler 4 creates new projects as Workers, not as classic Pages projects. `RELEASE_LANDING_DOMAINS` attaches custom
+domains; a domain must have no other DNS record on that name. Wrangler reads its own Cloudflare credentials. If the
+mirror and IPFS ever disagree, IPFS and the signature win.
 
 **Open point.** The landing page links downloads at `./downloads/`. Pages refuses files over 25 MiB and the terminal
 programs are larger, so the mirror does not carry them. Where the downloads are served from is not decided yet.
