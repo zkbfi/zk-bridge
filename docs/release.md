@@ -45,6 +45,21 @@ To check a release yourself:
 node explorer/release/src/cli.ts verify <release-directory> --public-keys explorer/landing/landing.config.json
 ```
 
+## A testnet release
+
+`script/release/testnet.env` holds the build settings of a release for the pair `sepolia-pls943`: the public indexer,
+backend and archive addresses on zkb.fi, keyless public RPC endpoints, and the contracts of the testnet deployment
+(`deploy/testnet/deployment.json`, inline). Load it before `release.sh`:
+
+```sh
+set -a; . script/release/testnet.env; set +a
+RELEASE_VERSION=0.1.0-testnet.1 <password-manager command that prints the key> | script/release/release.sh "$(mktemp -d)"
+```
+
+The dapp then shows a TESTNET banner on every page (the pair registry marks `sepolia-pls943` as a testnet). The landing
+page shows the `notice` of `explorer/landing/landing.config.json` above everything else; remove it for a mainnet
+release. The dapp sets no msgboard node: no keyless public msgboard endpoint exists yet, and the dapp works without one.
+
 ## The release key
 
 **Creating it.** Make one Ed25519 key on a machine you trust and put the private key straight into the password

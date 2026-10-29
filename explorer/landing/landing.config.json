@@ -1,9 +1,10 @@
 {
-  "title": "Bridge releases",
+  "title": "zkb.fi releases",
   "manifestUrl": "./version.json",
   "signatureUrl": "./version.json.sig",
   "downloadBaseUrl": "./downloads",
   "gateways": [
+    "https://{cid}.ipfs.inbrowser.link/",
     "https://{cid}.ipfs.dweb.link/",
     "https://{cid}.ipfs.w3s.link/",
     "https://ipfs.io/ipfs/",
@@ -17,5 +18,6 @@
       "crv": "Ed25519",
       "x": "Tj7E2LfWN3xImT_1Ajm8SHCXTyKoB6ibJSwUKBnY_nI"
     }
-  ]
+  ],
+  "notice": "TESTNET: this release runs on Sepolia and PulseChain testnet v4. Test coins only; nothing here has real value."
 }

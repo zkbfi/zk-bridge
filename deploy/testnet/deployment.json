@@ -1,0 +1,25 @@
+{
+  "chain_a": {
+    "bridge": "0xb01856abef5b971019f1d25630450cc6bcbafb21",
+    "chain_id": 11155111,
+    "delivery_router": "0x759b764d7fe6e0adc97cfd00eca886ff53f6a329",
+    "gate": "0x1782a38a37ce9fb9f53b0585b23b833847007e20",
+    "light_client": "0x64ddc23ff43ea0cd2ce9a13ef6681ee651e76e4e",
+    "mediator": "0x1dbbcc0bc25de5f6ae122fb0009b3ee4931fd958",
+    "start_block": 12020692,
+    "token_factory": "0xfbf978a1d50ea46873f0807e804c238fc1160237",
+    "wrapped_native": "0x7b79995e5f793a07bc00c21412e50ecae098e7f9"
+  },
+  "chain_b": {
+    "bridge": "0xf59dfaa7fbbb87c126a58dc67b89c510f9031fd1",
+    "chain_id": 943,
+    "delivery_router": "0x988a6160b5580895ea15a080a8d4ea763cf6538f",
+    "fork_registry": "0x0f094a965f280599b41f57a5182955f4afad063f",
+    "gate": "0x0e8586fb952f8a299e31c8b8fbe093dde8e1be93",
+    "light_client": "0x1dbbcc0bc25de5f6ae122fb0009b3ee4931fd958",
+    "mediator": "0xb4ba2fd95ba839d2d148082f4d92631b3a7444ae",
+    "start_block": 25767015,
+    "token_factory": "0x94dadbded5219d22de6a7290360f595c66eeef71",
+    "wrapped_native": "0x70499adebb11efd915e3b69e700c331778628707"
+  }
+}
