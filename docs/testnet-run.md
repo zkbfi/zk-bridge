@@ -43,6 +43,9 @@ Sources: `specs/gloas/beacon-chain.md` (`BeaconState`, `BeaconBlockBody`, `Execu
 | Sepolia 11155111 | `https://lodestar-sepolia.chainsafe.io` | none known; use the valve.city route | bootstrap, updates, finality_update: 200 |
 | Chain 943 | `https://rpc-testnet-pulsechain.g4mm4.io/beacon-api` | `https://rpc-testnet-pulsechain.g4mm4.io` | 404 (use debug states) |
 | PulseChain mainnet | `https://rpc-pulsechain.g4mm4.io/beacon-api` | | 404 |
+| Sepolia states (Checkpointz) | `https://beaconstate-sepolia.chainsafe.io` | | 404; serves only its own recent finalized state |
+
+Lodestar answers 500 for a Sepolia state that is no longer recent, so a proof from a head stored half an hour earlier failed there on 2026-10-29. Give each route source `state_cache_dir`, so the prover keeps every state it verified and starts the next proof from its own copy, and list the Checkpointz server in `state_urls` as a second source for states a few epochs old (see `prover/README.md`, "Old states").
 
 The valve.city proxy (`https://one.valve.city/beacon/$VALVE_KEY/<chainId>`) answers genesis, config and fork schedule, but 404 for light-client and debug state routes. The prover accepts a path prefix such as `/beacon-api` in `beacon_url`. It sends the User-Agent `Mozilla/5.0 (compatible; zk-bridge/1.0)`.
 

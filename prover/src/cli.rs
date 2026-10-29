@@ -10,9 +10,10 @@
 
 use crate::beacon::branch_store::DirectoryBranchStore;
 use crate::beacon::http::{HttpBeaconSource, RpcExecutionHeaders};
+use crate::beacon::state_store::DirectoryStateStore;
 use crate::beacon::StoredHead;
 use crate::chain::ChainClient;
-use crate::checkpoint::build_checkpoint;
+use crate::checkpoint::build_checkpoint_with_state_urls;
 use crate::config::{
     Config, DestinationConfig, HandoffTarget, ProverBackend, ProverConfig, RouteConfig,
 };
@@ -155,6 +156,10 @@ pub struct CheckpointArguments {
     /// The root of the finalized header to use. Default: the newest finalized header of the node.
     #[arg(long)]
     pub finalized_root: Option<String>,
+    /// Another beacon API to ask for the state of the header, when the main one does not serve it. Repeat the flag for
+    /// several; they are asked in order, after the `state_urls` of the route.
+    #[arg(long = "state-url")]
+    pub state_urls: Vec<String>,
 }
 
 /// The arguments of `verify`.
@@ -239,6 +244,9 @@ struct ProvePlan {
     beacon_url: String,
     source_rpc_url: Option<String>,
     branch_store_dir: Option<String>,
+    state_urls: Vec<String>,
+    /// The state cache directory and the chain id of the source.
+    state_cache: Option<(String, u64)>,
     chain: ChainKind,
     destination: Option<DestinationConfig>,
     starting_point: StartingPoint,
@@ -280,6 +288,20 @@ fn plan_prove(config: &Config, arguments: &ProveArguments) -> Result<ProvePlan> 
                 )
             }
         };
+    let (state_urls, state_cache) = match &arguments.beacon_url {
+        Some(_) => (Vec::new(), None),
+        None => {
+            let (_, route) = config.route(arguments.route.as_deref())?;
+            (
+                route.source.state_urls.clone(),
+                route
+                    .source
+                    .state_cache_dir
+                    .clone()
+                    .map(|directory| (directory, route.source.chain_id)),
+            )
+        }
+    };
     let starting_point = match (arguments.head_slot, &arguments.head_root) {
         (Some(slot), Some(root)) => StartingPoint::Explicit {
             head: StoredHead {
@@ -311,6 +333,8 @@ fn plan_prove(config: &Config, arguments: &ProveArguments) -> Result<ProvePlan> 
         beacon_url: source_url,
         source_rpc_url,
         branch_store_dir,
+        state_urls,
+        state_cache,
         chain,
         destination,
         starting_point,
@@ -392,6 +416,25 @@ fn with_branch_store(source: HttpBeaconSource, directory: Option<&str>) -> HttpB
         Some(path) => {
             source.with_branch_store(std::sync::Arc::new(DirectoryBranchStore::new(path)))
         }
+        None => source,
+    }
+}
+
+/// Gives the source the state URLs of the route and, when it names one, a directory for verified states.
+fn with_state_sources(
+    source: HttpBeaconSource,
+    state_urls: &[String],
+    state_cache: Option<&(String, u64)>,
+) -> HttpBeaconSource {
+    let clients: Vec<Box<dyn crate::rpc::HttpGet>> = state_urls
+        .iter()
+        .map(|url| Box::new(HttpClient::new(url)) as Box<dyn crate::rpc::HttpGet>)
+        .collect();
+    let source = source.with_state_clients(clients);
+    match state_cache {
+        Some((directory, chain_id)) => source.with_state_store(std::sync::Arc::new(
+            DirectoryStateStore::new(directory, *chain_id),
+        )),
         None => source,
     }
 }
@@ -495,12 +538,16 @@ fn run_prove(
             ("start_head_slot", start.head.slot.to_string()),
         ],
     );
-    let source = with_branch_store(
-        with_execution_headers(
-            beacon_source(plan.chain, &plan.beacon_url),
-            plan.source_rpc_url.as_deref(),
+    let source = with_state_sources(
+        with_branch_store(
+            with_execution_headers(
+                beacon_source(plan.chain, &plan.beacon_url),
+                plan.source_rpc_url.as_deref(),
+            ),
+            plan.branch_store_dir.as_deref(),
         ),
-        plan.branch_store_dir.as_deref(),
+        &plan.state_urls,
+        plan.state_cache.as_ref(),
     );
     match produce(&source, prover.as_ref(), &request)? {
         Production::UpToDate { head_slot } => {
@@ -535,7 +582,16 @@ fn run_evidence(
         route.destination.chain_id,
         &route.destination.rpc_url,
     )?;
-    let beacon = beacon_source(route.source.chain_kind()?, &route.source.beacon_url);
+    let state_cache = route
+        .source
+        .state_cache_dir
+        .clone()
+        .map(|directory| (directory, route.source.chain_id));
+    let beacon = with_state_sources(
+        beacon_source(route.source.chain_kind()?, &route.source.beacon_url),
+        &route.source.state_urls,
+        state_cache.as_ref(),
+    );
     let evidence = build_evidence(&evidence_request(
         name,
         route,
@@ -616,14 +672,19 @@ fn run_checkpoint(
     arguments: &CheckpointArguments,
     out: &mut dyn std::io::Write,
 ) -> Result<i32> {
-    let (url, chain) = match (&arguments.beacon_url, config) {
+    let (url, chain, mut state_urls) = match (&arguments.beacon_url, config) {
         (Some(url), _) => (
             url.clone(),
             parse_chain(arguments.chain.as_deref().unwrap_or_default())?,
+            Vec::new(),
         ),
         (None, Some(config)) => {
             let (_, route) = config.route(arguments.route.as_deref())?;
-            (route.source.beacon_url.clone(), route.source.chain_kind()?)
+            (
+                route.source.beacon_url.clone(),
+                route.source.chain_kind()?,
+                route.source.state_urls.clone(),
+            )
         }
         (None, None) => {
             return Err(Error::Usage(
@@ -636,8 +697,24 @@ fn run_checkpoint(
         .as_deref()
         .map(|text| parse_hash(text, "--finalized-root"))
         .transpose()?;
+    state_urls.extend(arguments.state_urls.iter().cloned());
+    if let Some(url) = state_urls
+        .iter()
+        .find(|url| !url.starts_with("http://") && !url.starts_with("https://"))
+    {
+        return Err(Error::Usage(format!(
+            "--state-url {url} must start with http:// or https://"
+        )));
+    }
     let client = HttpClient::new(&url);
-    let report = build_checkpoint(&client, chain, finalized_root)?;
+    let state_clients: Vec<HttpClient> =
+        state_urls.iter().map(|url| HttpClient::new(url)).collect();
+    let state_client_refs: Vec<&dyn crate::rpc::HttpGet> = state_clients
+        .iter()
+        .map(|client| client as &dyn crate::rpc::HttpGet)
+        .collect();
+    let report =
+        build_checkpoint_with_state_urls(&client, &state_client_refs, chain, finalized_root)?;
     write_json(out, &report.to_json())?;
     Ok(0)
 }

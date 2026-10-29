@@ -54,6 +54,7 @@ use super::branch_store::{
     stored_branch_proves_genesis_validators_root, GenesisValidatorsRootBranchStore,
     MemoryBranchStore,
 };
+use super::state_store::{StateStore, StoredState};
 use super::{HashEvidence, HistoricalEvidence, RootsEvidence, SourceBlock, StoredHead, UpdatePlan};
 use crate::chain::checked_raw_header;
 use crate::error::{Error, Result};
@@ -338,6 +339,10 @@ impl ExecutionHeaders for RpcExecutionHeaders {
 pub struct HttpBeaconSource {
     chain: ChainKind,
     client: Box<dyn HttpGet>,
+    /// More beacon APIs, asked in order for a state that `client` does not serve or serves wrong.
+    state_clients: Vec<Box<dyn HttpGet>>,
+    /// Verified states from earlier runs, asked before any node.
+    state_store: Option<Arc<dyn StateStore>>,
     execution_headers: Option<Box<dyn ExecutionHeaders>>,
     branch_store: Arc<dyn GenesisValidatorsRootBranchStore>,
     schedule: Mutex<Option<Arc<ForkSchedule>>>,
@@ -362,6 +367,8 @@ impl HttpBeaconSource {
         Self {
             chain,
             client,
+            state_clients: Vec::new(),
+            state_store: None,
             execution_headers: None,
             branch_store: Arc::new(MemoryBranchStore::new()),
             schedule: Mutex::new(None),
@@ -369,6 +376,21 @@ impl HttpBeaconSource {
             state_cache: Mutex::new(Vec::new()),
             era_cache: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The same source with more beacon APIs for states (`source.state_urls`). They are asked in order, only for
+    /// `/eth/v2/debug/beacon/states/<root>`, when the main node does not serve a state or serves one with another root.
+    /// Every state is still checked against the root its header names.
+    pub fn with_state_clients(mut self, clients: Vec<Box<dyn HttpGet>>) -> Self {
+        self.state_clients = clients;
+        self
+    }
+
+    /// The same source with a store of verified states (`source.state_cache_dir`). A state is read from it before any
+    /// node is asked, and each state fetched and verified goes into it.
+    pub fn with_state_store(mut self, store: Arc<dyn StateStore>) -> Self {
+        self.state_store = Some(store);
+        self
     }
 
     /// The same source with an execution header source. A fold with a Gloas finalized header needs it.
@@ -625,7 +647,8 @@ impl HttpBeaconSource {
             .transpose()
     }
 
-    /// The state with `state_root`, hashed in full and compared with the root. The two newest states stay cached.
+    /// The state with `state_root`, hashed in full and compared with the root. The two newest states stay cached in
+    /// memory. A state comes from the state store first, then from the node, then from each state URL in order.
     fn state_for(&self, state_root: B256) -> Result<Arc<StateView>> {
         if let Some((_, state)) = self
             .state_cache
@@ -636,22 +659,138 @@ impl HttpBeaconSource {
         {
             return Ok(state.clone());
         }
-        let bytes = Self::require(
-            self.get_ssz(&format!("/eth/v2/debug/beacon/states/{state_root:#x}"))?,
-            &format!("state {state_root:#x}"),
-        )?;
-        let fork = self
-            .fork_schedule()?
-            .fork_at_slot(StateView::slot_of_bytes(&bytes)?)?;
-        let mut state = StateView::parse_with_fork(&bytes, fork)?;
-        if state.root() != state_root {
-            state = self.repair_frozen_state(state, state_root)?;
-        }
+        let state = match self.stored_state(state_root) {
+            Some(state) => state,
+            None => self.fetch_state(state_root)?,
+        };
         let state = Arc::new(state);
         let mut cache = self.state_cache.lock().expect("lock");
         cache.insert(0, (state_root, state.clone()));
         cache.truncate(STATE_CACHE_SIZE);
         Ok(state)
+    }
+
+    /// Parses SSZ state bytes with the fork that the schedule of the node has at their slot.
+    fn parse_state(&self, bytes: &[u8]) -> Result<StateView> {
+        let fork = self
+            .fork_schedule()?
+            .fork_at_slot(StateView::slot_of_bytes(bytes)?)?;
+        StateView::parse_with_fork(bytes, fork)
+    }
+
+    /// The state from the state store, verified again. A stored state that fails is removed, and `None` sends the
+    /// caller to the nodes.
+    fn stored_state(&self, state_root: B256) -> Option<StateView> {
+        let store = self.state_store.as_ref()?;
+        let stored = store.get(&state_root)?;
+        let checked =
+            self.parse_state(&stored.bytes)
+                .and_then(|state| match stored.appended_summary {
+                    Some(entry) => state.with_appended_summary(entry),
+                    None => Ok(state),
+                });
+        match checked {
+            Ok(state) if state.root() == state_root => Some(state),
+            _ => {
+                let _ = store.remove(&state_root);
+                None
+            }
+        }
+    }
+
+    /// The state from the node, then from each state URL in order. Each answer must hash to `state_root`, after the
+    /// PulseChain repair where it applies; an answer that does not moves on to the next URL. The verified state goes
+    /// into the state store. With no state URL the error of the node comes back unchanged.
+    fn fetch_state(&self, state_root: B256) -> Result<StateView> {
+        let path = format!("/eth/v2/debug/beacon/states/{state_root:#x}");
+        let clients = std::iter::once(self.client.as_ref())
+            .chain(self.state_clients.iter().map(|client| client.as_ref()));
+        let mut failures: Vec<Error> = Vec::new();
+        for client in clients {
+            match self.state_from(client, &path, state_root) {
+                Ok(Some((state, stored))) => {
+                    self.keep_state(state_root, &state, &stored);
+                    return Ok(state);
+                }
+                Ok(None) => failures.push(Error::Beacon(format!(
+                    "the node does not have state {state_root:#x}"
+                ))),
+                Err(error) => failures.push(error),
+            }
+        }
+        if failures.len() == 1 {
+            return Err(failures.remove(0));
+        }
+        let reasons: Vec<String> = failures
+            .iter()
+            .enumerate()
+            .map(|(index, error)| {
+                let text = error.to_string();
+                let reason = if text.contains("does not have state") {
+                    "not served".to_string()
+                } else {
+                    text
+                };
+                let name = match index {
+                    0 => "beacon_url".to_string(),
+                    _ => format!("state_urls[{}]", index - 1),
+                };
+                format!("{name}: {reason}")
+            })
+            .collect();
+        Err(Error::Beacon(format!(
+            "no beacon API served state {state_root:#x}: {}",
+            reasons.join("; ")
+        )))
+    }
+
+    /// One node's answer for a state: `None` for 404 and 501, the verified state and what to store otherwise.
+    fn state_from(
+        &self,
+        client: &dyn HttpGet,
+        path: &str,
+        state_root: B256,
+    ) -> Result<Option<(StateView, StoredState)>> {
+        let response = client.get(path, SSZ)?;
+        let bytes = match response.status {
+            200 => response.body,
+            404 | 501 => return Ok(None),
+            status => return Err(Error::Beacon(format!("GET {path}: status {status}"))),
+        };
+        let state = self.parse_state(&bytes)?;
+        if state.root() == state_root {
+            return Ok(Some((
+                state,
+                StoredState {
+                    bytes,
+                    appended_summary: None,
+                },
+            )));
+        }
+        let repaired = self.repair_frozen_state(state, state_root)?;
+        let appended_summary = repaired.historical_summaries().last().copied();
+        Ok(Some((
+            repaired,
+            StoredState {
+                bytes,
+                appended_summary,
+            },
+        )))
+    }
+
+    /// Puts a verified state into the state store. A store that cannot write is logged, not fatal.
+    fn keep_state(&self, state_root: B256, state: &StateView, stored: &StoredState) {
+        if let Some(store) = &self.state_store {
+            if let Err(error) = store.put(state_root, state.slot(), stored) {
+                Logger::standard().warn(
+                    "state_store_failed",
+                    &[
+                        ("state_root", format!("{state_root:#x}")),
+                        ("error", error.to_string()),
+                    ],
+                );
+            }
+        }
     }
 
     /// A state that does not hash to `state_root`, repaired when it is a PulseChain state that the node served one
@@ -1190,6 +1329,7 @@ impl HttpBeaconSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::beacon::state_store::DirectoryStateStore;
     use crate::beacon::SourceBlock;
     use crate::light_client::steps_with_table_versions;
     use crate::light_client::verify_update_natively;
@@ -2876,6 +3016,163 @@ mod tests {
             source.store_at_head(&head, next_hash).is_ok(),
             "the control must pass"
         );
+    }
+
+    // ---------------------------------------------------------------- state fallbacks and the state store
+
+    /// A node that answers every path with one status and an empty body.
+    struct Failing(u16);
+
+    impl HttpGet for Failing {
+        fn get(&self, _path_and_query: &str, _accept: &str) -> Result<HttpResponse> {
+            Ok(HttpResponse {
+                status: self.0,
+                body: b"{}".to_vec(),
+            })
+        }
+    }
+
+    fn state_store_directory(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "zk-bridge-http-state-store-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        path
+    }
+
+    /// An Ethereum state and its root, without a node.
+    fn ethereum_state() -> (B256, Vec<u8>) {
+        let slot = ethereum_slot_in(ForkName::Capella);
+        let period = ETHEREUM_MAINNET.period_at_slot(slot);
+        let current = committee_for(&ETHEREUM_MAINNET, period).committee.clone();
+        let next = committee_for(&ETHEREUM_MAINNET, period + 1)
+            .committee
+            .clone();
+        let bytes = StateBytes::new(ForkName::Capella, slot, current, next).to_ssz();
+        (root_of(ChainKind::Ethereum, &bytes), bytes)
+    }
+
+    /// Claim: when the beacon node answers 500 for an old state, the prover reads it from the next state URL, and still
+    /// demands the root from the header. A state URL that serves a wrong state is passed over for the next one.
+    /// Why it matters: Lodestar keeps only recent states, so a proof from a head 30 minutes old failed on Sepolia.
+    #[test]
+    fn a_state_the_node_no_longer_serves_comes_from_the_next_state_url() {
+        let (root, bytes) = ethereum_state();
+        let path = format!("/eth/v2/debug/beacon/states/{root:#x}");
+        let garbage = Node([(path.clone(), vec![1, 2, 3])].into_iter().collect());
+        let (_, _, other) = head_with_state(ForkName::Deneb);
+        assert_ne!(other.root(), root);
+        let other_bytes = {
+            let slot = ethereum_slot_in(ForkName::Capella) + 1;
+            let period = ETHEREUM_MAINNET.period_at_slot(slot);
+            let current = committee_for(&ETHEREUM_MAINNET, period).committee.clone();
+            let next = committee_for(&ETHEREUM_MAINNET, period + 1)
+                .committee
+                .clone();
+            StateBytes::new(ForkName::Capella, slot, current, next).to_ssz()
+        };
+        let wrong = Node([(path.clone(), other_bytes)].into_iter().collect());
+        let right = Node([(path, bytes)].into_iter().collect());
+        let source = source_over_node(ChainKind::Ethereum, Failing(500)).with_state_clients(vec![
+            Box::new(garbage),
+            Box::new(wrong),
+            Box::new(right),
+        ]);
+        let state = source
+            .state_for(root)
+            .expect("the third state URL serves it");
+        assert_eq!(state.root(), root);
+    }
+
+    /// Claim: with no state URL a failure is reported as before; with state URLs that all fail, the error names each.
+    /// Why it matters: an operator must see which node failed and how.
+    #[test]
+    fn when_every_state_url_fails_the_error_names_each_failure() {
+        let (root, _) = ethereum_state();
+        let alone = source_over_node(ChainKind::Ethereum, Failing(500));
+        let error = alone.state_for(root).err().expect("refused").to_string();
+        assert!(error.contains("status 500"), "{error}");
+        let with_urls = source_over_node(ChainKind::Ethereum, Failing(500))
+            .with_state_clients(vec![Box::new(Failing(404)), Box::new(Failing(503))]);
+        let error = with_urls
+            .state_for(root)
+            .err()
+            .expect("refused")
+            .to_string();
+        assert!(
+            error.contains("status 500")
+                && error.contains("not served")
+                && error.contains("status 503"),
+            "{error}"
+        );
+    }
+
+    /// Claim: a state the prover verified goes to the state store, and a later source reads it from there when no node
+    /// serves it. A stored file that no longer verifies is removed and the node is asked instead.
+    /// Why it matters: the next run proves from the head this run stored, whatever the public nodes still keep.
+    #[test]
+    fn a_verified_state_is_stored_and_read_back_when_no_node_serves_it() {
+        let directory = state_store_directory("read-back");
+        let store: Arc<dyn StateStore> = Arc::new(DirectoryStateStore::new(&directory, 1));
+        let (root, bytes) = ethereum_state();
+        let path = format!("/eth/v2/debug/beacon/states/{root:#x}");
+        source_over_node(
+            ChainKind::Ethereum,
+            Node([(path.clone(), bytes.clone())].into_iter().collect()),
+        )
+        .with_state_store(store.clone())
+        .state_for(root)
+        .unwrap();
+
+        let later =
+            source_over_node(ChainKind::Ethereum, Failing(500)).with_state_store(store.clone());
+        assert_eq!(later.state_for(root).unwrap().root(), root);
+
+        store
+            .put(
+                root,
+                1,
+                &StoredState {
+                    bytes: state_with_summaries(OLD_SLOT, summaries(2)),
+                    appended_summary: None,
+                },
+            )
+            .unwrap();
+        let healed = source_over_node(
+            ChainKind::Ethereum,
+            Node([(path, bytes)].into_iter().collect()),
+        )
+        .with_state_store(store.clone());
+        assert_eq!(healed.state_for(root).unwrap().root(), root);
+        let stored = store
+            .get(&root)
+            .expect("the node's state replaced the bad file");
+        assert_eq!(root_of(ChainKind::Ethereum, &stored.bytes), root);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    /// Claim: a repaired PulseChain state is stored with its appended summary, and read back and repaired again without
+    /// any node.
+    /// Why it matters: the frozen states of PulseChain are served short forever; the store must keep the repair.
+    #[test]
+    fn a_repaired_state_is_stored_with_its_summary_and_read_back_without_a_node() {
+        let directory = state_store_directory("repaired");
+        let store: Arc<dyn StateStore> = Arc::new(DirectoryStateStore::new(&directory, 943));
+        let chain = ChainKind::PulsechainTestnetV4;
+        let old_root = root_of(chain, &state_with_summaries(OLD_SLOT, summaries(WHOLE)));
+        let short = state_with_summaries(OLD_SLOT, summaries(WHOLE - 1));
+        let (source, _, _) = frozen_state_node(chain, short, old_root, summaries(WHOLE));
+        source
+            .with_state_store(store.clone())
+            .state_for(old_root)
+            .unwrap();
+        let stored = store.get(&old_root).expect("stored");
+        assert_eq!(stored.appended_summary, summaries(WHOLE).last().copied());
+
+        let later = source_over_node(chain, Failing(500)).with_state_store(store);
+        assert_eq!(later.state_for(old_root).unwrap().root(), old_root);
+        let _ = std::fs::remove_dir_all(directory);
     }
 }
 

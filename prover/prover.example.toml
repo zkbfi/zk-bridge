@@ -42,6 +42,13 @@ beacon_url = "https://REPLACE"
 # The `evidence` command also needs the execution endpoint and the bridge of the source chain.
 rpc_url = "https://REPLACE"
 bridge = "0x0000000000000000000000000000000000000001"          # REPLACE
+# More beacon APIs, asked in order only for states (/eth/v2/debug/beacon/states/<root>) when beacon_url does not serve one or
+# serves one with another root. Every state is still checked against the root of its header.
+# state_urls = ["https://beaconstate-sepolia.chainsafe.io"]
+# A directory for the states the prover fetched and verified. A later run reads the state of its start head from here first,
+# so it does not depend on a node that still serves an old state. Keeps the 16 newest states and every state younger than
+# 3 days, files of mode 0600.
+# state_cache_dir = "/var/lib/zk-bridge-publisher/beacon-states"
 
 [routes.ethereum_to_pulsechain.destination]
 chain_id = 369

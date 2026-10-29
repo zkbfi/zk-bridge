@@ -6,6 +6,7 @@
 
 pub mod branch_store;
 pub mod http;
+pub mod state_store;
 
 use crate::light_client::{BeaconHeader, UpdateInput};
 use alloy_primitives::B256;

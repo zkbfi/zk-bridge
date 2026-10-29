@@ -10,7 +10,9 @@ use alloy_primitives::B256;
 use common::*;
 use serde_json::{json, Value};
 use std::sync::Mutex;
-use zk_bridge_prover::checkpoint::{build_checkpoint, CheckpointSource};
+use zk_bridge_prover::checkpoint::{
+    build_checkpoint, build_checkpoint_with_state_urls, CheckpointSource,
+};
 use zk_bridge_prover::error::{Error, Result};
 use zk_bridge_prover::light_client::{committee_hash, ChainKind, StateView};
 use zk_bridge_prover::rpc::{HttpGet, HttpResponse};
@@ -390,4 +392,77 @@ fn a_node_of_another_chain_is_refused() {
         error.to_string().contains("genesis validators root"),
         "{error}"
     );
+}
+
+/// A node that answers every state with one status, as Lodestar answers 500 for a state that is no longer recent.
+struct StatesAnswer<'a> {
+    node: PublicNode<'a>,
+    status: u16,
+}
+
+impl HttpGet for StatesAnswer<'_> {
+    fn get(&self, path: &str, accept: &str) -> Result<HttpResponse> {
+        if path.contains("/debug/beacon/states/") {
+            return answer(self.status, json!({"message": "state not available"}));
+        }
+        self.node.get(path, accept)
+    }
+}
+
+/// Claim: when the node serves neither the bootstrap nor the state of the checkpoint, the state comes from the next
+/// state URL, and the values equal those of a node that serves the state. A state URL that serves nothing is passed over.
+/// Why it matters: Lodestar answers 500 for a Sepolia state 30 minutes old, and Checkpointz serves it.
+#[test]
+fn a_state_the_node_no_longer_serves_comes_from_a_state_url() {
+    let kind = ChainKind::Ethereum;
+    let chain = Chain::new(kind, BLOCKS_BEFORE_CHECKPOINT);
+    let expected = build_checkpoint(
+        &public_node(
+            &chain,
+            Hide {
+                light_client: true,
+                state: false,
+            },
+        ),
+        kind,
+        None,
+    )
+    .expect("state path");
+    let without_state = StatesAnswer {
+        node: public_node(
+            &chain,
+            Hide {
+                light_client: true,
+                state: false,
+            },
+        ),
+        status: 500,
+    };
+    assert!(build_checkpoint(&without_state, kind, None).is_err());
+
+    let empty = public_node(
+        &chain,
+        Hide {
+            light_client: true,
+            state: true,
+        },
+    );
+    let archive = public_node(&chain, Hide::default());
+    let report = build_checkpoint_with_state_urls(&without_state, &[&empty, &archive], kind, None)
+        .expect("the archive serves the state");
+    assert_eq!(report.source, CheckpointSource::DebugState);
+    assert_eq!(report.initial_header_root, expected.initial_header_root);
+    assert_eq!(
+        report.initial_sync_committee_hash,
+        expected.initial_sync_committee_hash
+    );
+    assert_eq!(
+        report.initial_next_sync_committee_hash,
+        expected.initial_next_sync_committee_hash
+    );
+
+    let error = build_checkpoint_with_state_urls(&without_state, &[&empty], kind, None)
+        .expect_err("no URL serves the state")
+        .to_string();
+    assert!(error.contains("status 500"), "{error}");
 }

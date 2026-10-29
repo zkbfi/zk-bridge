@@ -221,6 +221,15 @@ pub struct SourceConfig {
     /// the branches live in memory for one run only. The only file the `prove` command writes is in this directory.
     #[serde(default)]
     pub branch_store_dir: Option<String>,
+    /// More beacon APIs of the source chain, asked in order only for states (`/eth/v2/debug/beacon/states/<root>`), when
+    /// `beacon_url` does not serve a state or serves one with another root. A public node often keeps only recent states;
+    /// an archive such as Checkpointz keeps older ones. Every state is still checked against the root of its header.
+    #[serde(default)]
+    pub state_urls: Vec<String>,
+    /// A directory where the prover keeps the states it fetched and verified, so a later run never depends on a node that
+    /// still serves an old state. It keeps the 16 newest states of each chain and every state younger than 3 days.
+    #[serde(default)]
+    pub state_cache_dir: Option<String>,
 }
 
 /// The destination side of a route: the chain with the light client that the proofs update.
@@ -589,6 +598,11 @@ fn validate_route(name: &str, route: &RouteConfig) -> Result<()> {
             "source.beacon_url must start with http:// or https://".into(),
         ));
     }
+    if source.state_urls.iter().any(|url| !is_http_url(url)) {
+        return Err(context(
+            "every source.state_urls entry must start with http:// or https://".into(),
+        ));
+    }
     if !is_http_url(&destination.rpc_url) {
         return Err(context(
             "destination.rpc_url must start with http:// or https://".into(),
@@ -847,6 +861,11 @@ light_client = \"0x2222222222222222222222222222222222222222\"
                 "chain_id = 369\nunknown_key = 1",
                 "unknown field",
             ),
+            (
+                "beacon_url = \"https://beacon.example.org\"",
+                "beacon_url = \"https://beacon.example.org\"\nstate_urls = [\"https://states.example.org\", \"states.example.net\"]",
+                "every source.state_urls entry must start with",
+            ),
         ];
         for (from, to, expected) in cases {
             let error = Config::load(&SAMPLE.replace(from, to), &no_environment)
@@ -857,6 +876,30 @@ light_client = \"0x2222222222222222222222222222222222222222\"
                 "expected `{expected}` in `{error}`"
             );
         }
+    }
+
+    /// Claim: a source may name state URLs and a state cache directory; both are optional and empty by default.
+    /// Why it matters: a proof must not depend on a node that still serves an old state.
+    #[test]
+    fn a_source_may_name_state_urls_and_a_state_cache() {
+        let plain = Config::load(SAMPLE, &no_environment).unwrap();
+        let (_, route) = plain.route(None).unwrap();
+        assert!(route.source.state_urls.is_empty());
+        assert_eq!(route.source.state_cache_dir, None);
+        let with = SAMPLE.replace(
+            "beacon_url = \"https://beacon.example.org\"",
+            "beacon_url = \"https://beacon.example.org\"\nstate_urls = [\"https://states.example.org\"]\nstate_cache_dir = \"/var/lib/states\"",
+        );
+        let loaded = Config::load(&with, &no_environment).unwrap();
+        let (_, route) = loaded.route(None).unwrap();
+        assert_eq!(
+            route.source.state_urls,
+            vec!["https://states.example.org".to_string()]
+        );
+        assert_eq!(
+            route.source.state_cache_dir.as_deref(),
+            Some("/var/lib/states")
+        );
     }
 
     /// Claim: a route whose source and destination are the same chain loads. That is the route of an own-chain light client,

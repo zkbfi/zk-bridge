@@ -167,14 +167,48 @@ fn read_header(client: &dyn HttpGet, finalized_root: Option<B256>) -> Result<(Be
     Ok((header, root))
 }
 
-/// Reads the state of the header. `None` when the node answers 404. The state root must equal `header.state_root`.
+/// Reads the state of the header from the node, then from each state URL in order. `None` when every one of them
+/// answers 404. Each state must hash to `header.state_root`, after the PulseChain repair where it applies; one that does
+/// not moves on to the next URL. With no state URL an error of the node comes back unchanged.
 fn read_state(
     client: &dyn HttpGet,
+    state_clients: &[&dyn HttpGet],
+    chain: ChainKind,
+    header: &BeaconHeader,
+) -> Result<Option<StateView>> {
+    let mut failures: Vec<Error> = Vec::new();
+    let mut unserved = 0;
+    for source in std::iter::once(client).chain(state_clients.iter().copied()) {
+        match read_state_from(client, source, chain, header) {
+            Ok(Some(state)) => return Ok(Some(state)),
+            Ok(None) => unserved += 1,
+            Err(error) => failures.push(error),
+        }
+    }
+    match failures.len() {
+        0 => Ok(None),
+        1 if unserved == 0 => Err(failures.remove(0)),
+        _ => {
+            let reasons: Vec<String> = failures.iter().map(ToString::to_string).collect();
+            Err(Error::Beacon(format!(
+                "no beacon API served the state {:#x} ({unserved} did not have it): {}",
+                header.state_root,
+                reasons.join("; ")
+            )))
+        }
+    }
+}
+
+/// Reads the state of the header from `source`. `None` for 404. A repair reads the newest finalized state through the
+/// main node `client`.
+fn read_state_from(
+    client: &dyn HttpGet,
+    source: &dyn HttpGet,
     chain: ChainKind,
     header: &BeaconHeader,
 ) -> Result<Option<StateView>> {
     let path = format!("/eth/v2/debug/beacon/states/{:#x}", header.state_root);
-    let response = get(client, &path, "application/octet-stream")?;
+    let response = get(source, &path, "application/octet-stream")?;
     match response.status {
         200 => {}
         404 => return Ok(None),
@@ -237,6 +271,7 @@ fn repair_frozen_state(
 
 fn from_bootstrap(
     client: &dyn HttpGet,
+    state_clients: &[&dyn HttpGet],
     chain: ChainKind,
     header: &BeaconHeader,
     root: B256,
@@ -251,7 +286,7 @@ fn from_bootstrap(
         ));
     }
     let current = bootstrap.verify_committee(chain)?;
-    let next = match read_state(client, chain, header)? {
+    let next = match read_state(client, state_clients, chain, header)? {
         Some(state) => {
             if committee_hash(state.current_committee())? != current {
                 return Err(Error::Beacon(
@@ -301,6 +336,20 @@ pub fn build_checkpoint(
     chain: ChainKind,
     finalized_root: Option<B256>,
 ) -> Result<CheckpointReport> {
+    build_checkpoint_with_state_urls(client, &[], chain, finalized_root)
+}
+
+/// [`build_checkpoint`] with more beacon APIs for the state of the header (`source.state_urls`, `--state-url`). They are
+/// asked in order when `client` does not serve the state or serves one with another root.
+///
+/// # Errors
+/// As [`build_checkpoint`].
+pub fn build_checkpoint_with_state_urls(
+    client: &dyn HttpGet,
+    state_clients: &[&dyn HttpGet],
+    chain: ChainKind,
+    finalized_root: Option<B256>,
+) -> Result<CheckpointReport> {
     let genesis_time = read_genesis_time(client, chain)?;
     check_spec(client, chain)?;
     let (header, root) = read_header(client, finalized_root)?;
@@ -308,9 +357,9 @@ pub fn build_checkpoint(
     let path = format!("/eth/v1/beacon/light_client/bootstrap/{root:#x}");
     let answer = get(client, &path, "application/json")?;
     let mut checkpoint = match answer.status {
-        200 => from_bootstrap(client, chain, &header, root, &answer)?,
+        200 => from_bootstrap(client, state_clients, chain, &header, root, &answer)?,
         status if bootstrap_unavailable(status) => {
-            let state = read_state(client, chain, &header)?.ok_or_else(|| {
+            let state = read_state(client, state_clients, chain, &header)?.ok_or_else(|| {
                 Error::Beacon(
                     "the node serves neither the light-client bootstrap nor the state of the header".into(),
                 )
