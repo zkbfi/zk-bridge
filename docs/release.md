@@ -20,7 +20,7 @@ page (`explorer/landing/landing.config.json`). It refuses a `sequence` lower tha
 ## Making a release
 
 ```sh
-<password-manager command that prints the key> | script/release/release.sh| script/release/release.sh "$(mktemp -d)"
+<password-manager command that prints the key> | script/release/release.sh "$(mktemp -d)"
 ```
 
 The key arrives on standard input and is read only by the signing step at the end. Every build step runs with standard
@@ -52,7 +52,7 @@ manager:
 
 ```sh
 node -e 'crypto.subtle.generateKey({name:"Ed25519"},true,["sign","verify"]).then(p=>crypto.subtle.exportKey("jwk",p.privateKey)).then(k=>process.stdout.write(JSON.stringify(k)))' \
-  | <password-manager command that stores standard input as a secret>| op document create - --title "zk-bridge release key" --file-name key.jwk --vault Release
+  | <password-manager command that stores standard input as a secret>
 ```
 
 Then put the public half (`{"kty":"OKP","crv":"Ed25519","x":"…"}`, the private key without `d`) into `publicKeys` of
