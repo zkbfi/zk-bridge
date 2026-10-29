@@ -91,7 +91,8 @@ export function buildDependencies(context: BackendModuleContext): IndexerDepende
  *   posts the proof. The contract refuses a proof that does not start at its head.
  * - 404: nothing usable is kept (none, or the head moved past the start of the kept proof), or the direction is unknown.
  * - 503: the module cannot tell. Either the indexer is not running ("the msgboard indexer is not running") or the light
- *   client cannot be read ("the light client cannot be read"). Try again later; a 503 does not mean "no proof".
+ *   client cannot be read ("the light client cannot be read"), or its read is older than the kept proof ("the light
+ *   client read is behind the kept proof"). Try again later; a 503 does not mean "no proof".
  */
 export function register(app: Hono, context: BackendModuleContext): void {
   const state = stateFor(context);
@@ -105,6 +106,8 @@ export function register(app: Hono, context: BackendModuleContext): void {
     const head = await reader.read().catch(() => null);
     if (head === null) return request.json({ error: "the light client cannot be read" }, 503);
     const decoded = tryDecodeProofMessage(stored.payload, { acceptOracleProof: state.acceptOracleProof });
+    // A head below the start of the kept proof came from a node that lags: the proof may still be good, so it stays.
+    if (decoded.ok && head.headSlot < decoded.message.startSlot) return request.json({ error: "the light client read is behind the kept proof" }, 503);
     if (!decoded.ok || decoded.message.startSlot !== head.headSlot || decoded.message.startRoot.toLowerCase() !== head.headRoot.toLowerCase()) {
       // The head only moves forward, so a proof that does not start at it now never will.
       deleteStoredProof(context.storage, direction);

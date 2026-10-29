@@ -9,7 +9,7 @@ import type { LightClientHead } from "@zk-bridge/shared/prover";
 import { createApp } from "../../src/app.ts";
 import type { BackendModuleContext } from "../../src/module.ts";
 import { MODULES } from "../../src/main.ts";
-import { loadStoredProof, type TimedLightClientReader } from "../../src/msgboard-indexer/latest-proof.ts";
+import { chooseLatest, loadStoredProof, type TimedLightClientReader } from "../../src/msgboard-indexer/latest-proof.ts";
 import { SEEN_LIMIT, startIndexer } from "../../src/msgboard-indexer/module.ts";
 import { openStorage } from "../../src/storage.ts";
 import { PAIR, controllableProver, makeClock, makeConfig, memoryLogger } from "../support.ts";
@@ -152,7 +152,7 @@ describe("GET /proofs/latest", () => {
     await stop();
   });
 
-  it("ATTACK SUCCEEDS one read of a lagging RPC node (an older head) makes a public GET delete a good proof for good", async () => {
+  it("ATTACK one read of a lagging RPC node (an older head) answers 503 and keeps the good proof (BLOCKED, was K-4)", async () => {
     const r = rig();
     r.post("first-to-second", payloadOf(100n, 200n));
     const stop = await r.run();
@@ -160,13 +160,26 @@ describe("GET /proofs/latest", () => {
     // A load-balanced RPC answers from a node one update behind.
     r.heads["first-to-second"].slot = 90n;
     r.clock.advance(5_000);
-    expect((await latest(r)).status).toBe(404);
+    expect((await latest(r)).status).toBe(503);
     r.heads["first-to-second"].slot = 100n;
     r.clock.advance(5_000);
-    // The chain head never changed, the proof is still usable, but it is gone until someone posts it again.
-    expect(loadStoredProof(r.storage, "first-to-second")).toBeNull();
+    expect(loadStoredProof(r.storage, "first-to-second")).not.toBeNull();
+    expect((await latest(r)).status).toBe(200);
+    // A head past the start of the proof still ends it.
+    r.heads["first-to-second"].slot = 150n;
+    r.clock.advance(5_000);
     expect((await latest(r)).status).toBe(404);
+    expect(loadStoredProof(r.storage, "first-to-second")).toBeNull();
     await stop();
+  });
+
+  it("ATTACK a lagging head read while a new proof is ingested keeps the good proof (BLOCKED, was K-4)", () => {
+    // The ingest step chooses with the head that it read. A lagging read must neither drop the kept proof nor let a
+    // proof that starts at the old head replace it.
+    const kept = { pair: "eth-pls", direction: "first-to-second" as const, startSlot: 100n, newSlot: 200n, payload: payloadOf(100n, 200n), receivedAt: 1 };
+    const lagging = { headSlot: 90n, headRoot: rootOf(90n), programKey: PROGRAM_KEY, checkedAt: 2 };
+    expect(chooseLatest(kept, proofMessage(90n, 300n), lagging, 3)).toBe(kept);
+    expect(chooseLatest(kept, proofMessage(100n, 300n), lagging, 3)).toBe(kept);
   });
 
   it("ATTACK a proof whose start root differs from the head root (same slot) is not served", async () => {

@@ -46,6 +46,8 @@ export type StoredProof = {
  *   the head. Callers compare the result with `current` by identity to learn whether anything changed.
  */
 export function chooseLatest(current: StoredProof | null, candidate: ProofMessage, head: StoredHead, receivedAt: number, options: { readonly acceptOracleProof?: boolean } = {}): StoredProof | null {
+  // The head only moves forward, so a read below the kept proof came from a node that lags. It decides nothing.
+  if (current !== null && head.headSlot < current.startSlot) return current;
   const currentUsable = current !== null && current.startSlot === head.headSlot ? current : null;
   const candidateUsable = candidate.startSlot === head.headSlot && candidate.newSlot > head.headSlot;
   if (!candidateUsable) return currentUsable;
