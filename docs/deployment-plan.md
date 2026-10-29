@@ -4,7 +4,9 @@
 end-to-end run (see "Measurements"). The backend's own memory is not measured yet.
 
 This page says where each part of the system runs at launch, how big each server is, and why. The release pipeline is in
-`docs/release.md`. The guide to run the whole system yourself is Task 27 of the finishing plan.
+`docs/release.md`. The guide to run the whole system yourself is Task 27 of the finishing plan. Provider choice: a cloud server, not a
+dedicated one, because snapshots, quick rebuilds, a firewall and an API matter more than price at this size. A dedicated
+server with NVMe disks becomes the better choice only when we run our own chain nodes.
 
 ## The hosting model
 
@@ -21,8 +23,7 @@ This page says where each part of the system runs at launch, how big each server
 
 | Server | Runs | Size | Provider |
 |---|---|---|---|
-| App server | backend (modules `requests`, `webhook`, `msgboard-indexer`, `archive`), explorer indexer (Ponder), Postgres | 4 GB memory, 2 vCPU, 80 GB disk | DigitalOcean |
-| Bot server | publisher bot, runner bot | 1 GB memory, 1 vCPU, 25 GB disk | DigitalOcean |
+| App server | backend (modules `requests`, `webhook`, `msgboard-indexer`, `archive`), explorer indexer (Ponder), Postgres, publisher bot, runner bot | Hetzner Cloud CX33: 4 shared vCPU, 8 GB memory, 80 GB disk | Hetzner Cloud, in an account of zkb.fi only |
 | Prover | the prover worker image | one graphics processor per job | RunPod serverless |
 | Landing page | static page | none | Cloudflare Pages |
 | Dapp and docs | static sites | none | IPFS, pinned at Filebase |
@@ -35,18 +36,19 @@ This page says where each part of the system runs at launch, how big each server
   part of that memory moves into the Postgres process. Postgres also needs memory for its cache.
 - The archive module starts the prover program (`zk-bridge-prover`) for short runs that build evidence. The program runs
   on the CPU of this server. Proofs do not.
-- With managed Postgres (a separate database service), the app server can drop to 2 GB.
 - Only the backend's port is public, behind a TLS proxy. Set `trustForwardedHeader` and `trustedProxyHops` to match that
   proxy. The indexer and Postgres listen on the private interface only.
 
-### Bot server
+### The bots on the same server
 
-- The publisher and the runner used about 230 MB together.
-- The runner holds a hot wallet key that pays gas for deliveries. It runs on its own server so that a break-in to the
-  public backend does not reach that key. The bot server needs no public port.
-- Keep only a small balance in the runner's wallet, and top it up as needed.
-- 512 MB would hold the measured 230 MB, but it leaves little room for the memory peaks of Node.js and the operating
-  system. 1 GB is the safer size.
+- The publisher and the runner used about 230 MB together. All services together peaked at about 905 MB, so 8 GB leaves
+  room for the cache of Postgres.
+- The runner holds a hot wallet key that pays gas for deliveries. The owner chose one server for launch (2026-10-28), so
+  the key sits on the same machine as the public backend. To keep that risk small:
+  - each service runs as its own system user, and only the bots' user can read the wallet key;
+  - the bots have no inbound port; only the TLS proxy in front of the backend is public;
+  - the runner's wallet holds a small balance, topped up as needed, so a break-in loses little.
+- Moving the bots to a small server of their own later needs no change to the code.
 
 ### Prover
 
@@ -76,11 +78,11 @@ All secrets live in the 1Password vault `zkb.fi` and reach a server only as envi
 |---|---|
 | RunPod key | app server (backend) |
 | Webhook bearer token | app server (backend) and the RunPod worker |
-| Runner wallet key | bot server only |
-| Endpoint keys of the providers | app server and bot server |
+| Runner wallet key | app server, readable by the bots' user only |
+| Endpoint keys of the providers | app server |
 | Filebase keys | the release machine only |
 | Release signing key | the release machine only, read at the moment of use |
-| SSH key `DigitalOcean (zkb.fi)` | the operator's machine, through the 1Password SSH agent |
+| SSH key `zkb.fi servers` | the operator's machine, through the 1Password SSH agent |
 
 ## Measurements
 
