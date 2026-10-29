@@ -149,6 +149,21 @@ RELEASE_REMOTE=<release repository> RELEASE_GIT_NAME=<name> RELEASE_GIT_EMAIL=<e
 - For each archive it POSTs the CAR to `/api/v0/dag/import?pin-roots=true` as the multipart field `file`. It fails
   unless the node reports exactly one root, that root is the CID computed here, and the pin of the root succeeded. Then
   it asks `/api/v0/pin/ls?type=recursive` and fails unless the root is pinned recursively.
+- Every version stays hosted until it is retired on purpose, so users can move off an old version at their own pace.
+  The adapter keeps each release addressable by version: it names the pin `zkbfi-<site>-<version>` (`pin/add` with
+  `name`), and files the archive in the node's MFS at `/releases/<version>/<site>` (`files/mkdir`, then
+  `files/cp /ipfs/<cid>`). It needs the object key `<version>/<site>.car`, which `publish.sh` passes. An archive filed
+  earlier at that same path is replaced; nothing else is removed and nothing is unpinned.
+- List the hosted versions through the tunnel:
+
+  ```sh
+  curl -s -X POST -H "Authorization: $KUBO_API_AUTH" 'http://127.0.0.1:5001/api/v0/pin/ls?type=recursive&names=true'
+  curl -s -X POST -H "Authorization: $KUBO_API_AUTH" 'http://127.0.0.1:5001/api/v0/files/ls?arg=/releases'
+  ```
+
+  On the server the same lists come from `ipfs pin ls --names` and `ipfs files ls /releases` (as the node's user, with
+  the API token). Retiring a version is a manual, deliberate step: unpin its three CIDs and remove `/releases/<version>`.
+  Retire a version only after the signed list has moved users to a newer one.
 
 **`filebase`: an optional second pin.** One node is one point of failure: while the app server is down, only gateway
 caches hold the sites. A second, independent pin removes that. Run the pin step again with the other adapter:

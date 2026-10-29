@@ -142,8 +142,11 @@ async function fakeKubo(
   });
 }
 
-/** The answers of a kubo node that imports and pins `root`, with `pinError` as the pin result of the import. */
-function healthyKubo(root: string, pinError = "") {
+/**
+ * The answers of a kubo node that imports and pins `root`, with `pinError` as the pin result of the import. `existing`
+ * lists the MFS paths that already exist, so `files/stat` finds them.
+ */
+function healthyKubo(root: string, pinError = "", existing: readonly string[] = []) {
   return (path: string, query: URLSearchParams, response: ServerResponse) => {
     if (path === "/api/v0/dag/import") {
       response.writeHead(200, { "content-type": "application/json" });
@@ -151,6 +154,16 @@ function healthyKubo(root: string, pinError = "") {
     } else if (path === "/api/v0/pin/ls" && query.get("arg") === root) {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ Keys: { [root]: { Type: "recursive" } } }));
+    } else if (path === "/api/v0/pin/add" && query.get("arg") === root) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ Pins: [root] }));
+    } else if (path === "/api/v0/files/mkdir" || path === "/api/v0/files/rm" || path === "/api/v0/files/cp") {
+      response.writeHead(200);
+      response.end();
+    } else if (path === "/api/v0/files/stat") {
+      const found = existing.includes(query.get("arg") ?? "");
+      response.writeHead(found ? 200 : 500, { "content-type": "application/json" });
+      response.end(JSON.stringify(found ? { Hash: "bafyold", Type: "directory" } : { Message: "file does not exist", Code: 0, Type: "error" }));
     } else {
       response.writeHead(500, { "content-type": "application/json" });
       response.end(JSON.stringify({ Message: `not pinned: ${query.get("arg")}`, Code: 0, Type: "error" }));
@@ -196,11 +209,77 @@ describe("the kubo adapter", () => {
     expect(listed!.url).toBe(`/api/v0/pin/ls?arg=${cid}&type=recursive`);
   });
 
+  it("names the pin by site and version and files the archive under /releases/<version>/, removing nothing else", async () => {
+    const kubo = await fakeKubo(healthyKubo(cid));
+    const adapter = pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo", KUBO_API_URL: kubo.endpoint })!;
+    await expect(adapter.pin(kuboInput)).resolves.toBe(cid);
+    expect(kubo.seen.map((entry) => entry.method)).toEqual(Array(6).fill("POST"));
+    expect(kubo.seen.slice(2).map((entry) => entry.url)).toEqual([
+      `/api/v0/pin/add?arg=${cid}&name=zkbfi-dapp-1.0.0`,
+      "/api/v0/files/mkdir?arg=%2Freleases%2F1.0.0&parents=true",
+      "/api/v0/files/stat?arg=%2Freleases%2F1.0.0%2Fdapp",
+      `/api/v0/files/cp?arg=%2Fipfs%2F${cid}&arg=%2Freleases%2F1.0.0%2Fdapp`,
+    ]);
+  });
+
+  it("replaces an archive already filed under the same version and site, and only that path", async () => {
+    const kubo = await fakeKubo(healthyKubo(cid, "", ["/releases/1.0.0/dapp"]));
+    const adapter = pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo", KUBO_API_URL: kubo.endpoint })!;
+    await adapter.pin(kuboInput);
+    expect(kubo.seen.slice(4).map((entry) => entry.url)).toEqual([
+      "/api/v0/files/stat?arg=%2Freleases%2F1.0.0%2Fdapp",
+      "/api/v0/files/rm?arg=%2Freleases%2F1.0.0%2Fdapp&recursive=true",
+      `/api/v0/files/cp?arg=%2Fipfs%2F${cid}&arg=%2Freleases%2F1.0.0%2Fdapp`,
+    ]);
+  });
+
+  it("needs a version prefix of plain characters and an archive named <site>.car, before it calls the node", async () => {
+    const kubo = await fakeKubo(healthyKubo(cid));
+    const adapter = pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo", KUBO_API_URL: kubo.endpoint })!;
+    for (const objectKey of ["dapp.car", "1.0.0/../x/dapp.car", "1.0.0/dapp.tar", "1 0/dapp.car"]) {
+      await expect(adapter.pin({ ...kuboInput, objectKey })).rejects.toThrow(
+        `the kubo adapter needs an object key <version>/<site>.car of plain characters, not ${objectKey}`,
+      );
+    }
+    expect(kubo.seen).toEqual([]);
+  });
+
+  it("fails when the node refuses to name the pin, or to file the archive", async () => {
+    for (const refused of ["/api/v0/pin/add", "/api/v0/files/mkdir", "/api/v0/files/stat", "/api/v0/files/cp"]) {
+      const healthy = healthyKubo(cid);
+      const kubo = await fakeKubo((path, query, response) => {
+        if (path === refused) {
+          response.writeHead(500, { "content-type": "application/json" });
+          response.end(JSON.stringify({ Message: "repo locked", Code: 0, Type: "error" }));
+        } else healthy(path, query, response);
+      });
+      const adapter = pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo", KUBO_API_URL: kubo.endpoint, KUBO_API_AUTH: kuboAuth })!;
+      const failure = (await adapter.pin(kuboInput).catch((error: unknown) => error)) as Error;
+      expect(failure).toBeInstanceOf(PinError);
+      expect(failure.message).toContain("repo locked");
+      expect(failure.message).not.toContain("kubo-token-456");
+    }
+  });
+
+  it("fails when removing an archive filed earlier under the same version and site fails", async () => {
+    const healthy = healthyKubo(cid, "", ["/releases/1.0.0/dapp"]);
+    const kubo = await fakeKubo((path, query, response) => {
+      if (path === "/api/v0/files/rm") {
+        response.writeHead(500, { "content-type": "application/json" });
+        response.end(JSON.stringify({ Message: "permission denied", Code: 0, Type: "error" }));
+      } else healthy(path, query, response);
+    });
+    const adapter = pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo", KUBO_API_URL: kubo.endpoint })!;
+    await expect(adapter.pin(kuboInput)).rejects.toThrow(
+      "kubo answered 500 to the removal of the old /releases/1.0.0/dapp: permission denied",
+    );
+  });
+
   it("sends KUBO_API_AUTH as the Authorization header of every call", async () => {
     const kubo = await fakeKubo(healthyKubo(cid));
     const adapter = pinAdapterFromEnvironment({ RELEASE_PIN_PROVIDER: "kubo", KUBO_API_URL: kubo.endpoint, KUBO_API_AUTH: kuboAuth })!;
     await adapter.pin(kuboInput);
-    expect(kubo.seen.map((entry) => entry.headers.authorization)).toEqual([kuboAuth, kuboAuth]);
+    expect(kubo.seen.map((entry) => entry.headers.authorization)).toEqual(Array(6).fill(kuboAuth));
   });
 
   it("fails when the node imports another root, more than one root, or none", async () => {

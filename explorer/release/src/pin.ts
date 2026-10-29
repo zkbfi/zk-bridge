@@ -171,6 +171,11 @@ function kuboRoots(text: string): { cid: string; pinError: string }[] | null {
  * `{"Keys":{"<cid>":{"Type":"recursive"}}}`, or an error when the CID is not pinned. The API has no login of its own:
  * keep it on 127.0.0.1 and reach it through an SSH tunnel. KUBO_API_AUTH, when set, is the Authorization header value
  * that `API.Authorizations` of the node accepts.
+ *
+ * Every release stays addressable by version, so old versions stay hosted until someone unpins them on purpose. The
+ * object key is `<version>/<site>.car`. After the checks the adapter names the pin `zkbfi-<site>-<version>`
+ * (`pin/add` with `name`) and files the archive in MFS at `/releases/<version>/<site>` (`files/mkdir`, then
+ * `files/cp /ipfs/<cid>`). An archive filed earlier at that one path is replaced; nothing else is removed or unpinned.
  */
 function kuboAdapter(environment: Record<string, string | undefined>): PinAdapter {
   if (!environment.KUBO_API_URL) throw new PinError("the kubo adapter needs KUBO_API_URL");
@@ -187,8 +192,13 @@ function kuboAdapter(environment: Record<string, string | undefined>): PinAdapte
   const endpoint = url.href.replace(/\/+$/, "");
   const headers: Record<string, string> = environment.KUBO_API_AUTH ? { authorization: environment.KUBO_API_AUTH } : {};
 
-  /** POSTs one RPC call. Every failure names the call and the address, never the credentials. */
-  async function call(path: string, what: string, body: FormData | null, timeout: number): Promise<string> {
+  /**
+   * POSTs one RPC call. Every failure names the call and the address, never the credentials. With `missingOk`, an
+   * answer that says the path does not exist resolves to null instead of failing.
+   */
+  async function call(path: string, what: string, body: FormData | null, timeout: number): Promise<string>;
+  async function call(path: string, what: string, body: FormData | null, timeout: number, missingOk: true): Promise<string | null>;
+  async function call(path: string, what: string, body: FormData | null, timeout: number, missingOk = false): Promise<string | null> {
     let answer: Response;
     try {
       answer = await fetch(`${endpoint}${path}`, { method: "POST", headers, body, signal: AbortSignal.timeout(timeout) });
@@ -204,6 +214,7 @@ function kuboAdapter(environment: Record<string, string | undefined>): PinAdapte
       } catch {
         // A proxy page or plain text: the status says enough.
       }
+      if (missingOk && message.includes("does not exist")) return null;
       throw new PinError(`kubo answered ${answer.status} to ${what}${message}`);
     }
     return text;
@@ -213,6 +224,11 @@ function kuboAdapter(environment: Record<string, string | undefined>): PinAdapte
     name: "kubo",
     endpoint,
     async pin({ objectKey, carBytes, expectedCid }) {
+      const parts = /^([0-9A-Za-z._+-]+)\/([0-9A-Za-z_-]+)\.car$/.exec(objectKey);
+      if (parts === null || /^\.+$/.test(parts[1] as string)) {
+        throw new PinError(`the kubo adapter needs an object key <version>/<site>.car of plain characters, not ${objectKey}`);
+      }
+      const [, version, site] = parts as unknown as [string, string, string];
       const form = new FormData();
       form.append("file", new Blob([carBytes as BlobPart], { type: "application/vnd.ipld.car" }), objectKey.split("/").pop());
       const imported = await call(
@@ -245,6 +261,34 @@ function kuboAdapter(environment: Record<string, string | undefined>): PinAdapte
       if (entry?.Type !== "recursive") {
         throw new PinError(`kubo holds no recursive pin of ${expectedCid} after the import of ${objectKey}`);
       }
+
+      // Keep the release addressable by version: a named pin, and a path in the /releases index.
+      const name = `zkbfi-${site}-${version}`;
+      const directory = `/releases/${version}`;
+      const target = `${directory}/${site}`;
+      const query = (pairs: Record<string, string> | string[][]) => new URLSearchParams(pairs).toString();
+      await call(`/api/v0/pin/add?${query({ arg: expectedCid, name })}`, `naming the pin ${name}`, null, KUBO_LIST_TIMEOUT_MILLISECONDS);
+      await call(
+        `/api/v0/files/mkdir?${query({ arg: directory, parents: "true" })}`,
+        `the creation of ${directory}`,
+        null,
+        KUBO_LIST_TIMEOUT_MILLISECONDS,
+      );
+      const existing = await call(`/api/v0/files/stat?${query({ arg: target })}`, `the lookup of ${target}`, null, KUBO_LIST_TIMEOUT_MILLISECONDS, true);
+      if (existing !== null) {
+        await call(
+          `/api/v0/files/rm?${query({ arg: target, recursive: "true" })}`,
+          `the removal of the old ${target}`,
+          null,
+          KUBO_LIST_TIMEOUT_MILLISECONDS,
+        );
+      }
+      await call(
+        `/api/v0/files/cp?${query([["arg", `/ipfs/${expectedCid}`], ["arg", target]])}`,
+        `filing ${objectKey} at ${target}`,
+        null,
+        KUBO_IMPORT_TIMEOUT_MILLISECONDS,
+      );
       return root.cid;
     },
   };
