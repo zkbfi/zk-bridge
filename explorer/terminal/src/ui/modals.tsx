@@ -10,7 +10,7 @@ import type { FeedItem } from '../model/types'
 import { FormView, useForm } from './form-view'
 import { useKeyLayer } from './key-router'
 import { detailLines } from './presenters'
-import { RichLine, colored, muted, plain, strong, type Line } from './rich-text'
+import { RichLine, colored, muted, plain, safeText, strong, type Line } from './rich-text'
 import { reviewLines } from './review-lines'
 import { theme } from './theme'
 
@@ -202,7 +202,7 @@ export function AddressFilterModal(props: { readonly current: string; readonly o
   return (
     <ModalFrame title="Address filter" width={80} height={8}>
       <FormView form={form} width={76} />
-      <text fg={theme.bad}>{error ?? ' '}</text>
+      <text fg={theme.bad}>{safeText(error ?? ' ')}</text>
     </ModalFrame>
   )
 }

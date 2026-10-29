@@ -15,7 +15,7 @@ import { useKeyLayer } from './key-router'
 import { computePairLayout } from './layout'
 import { ActionPanel, FeedPanel, FilterHeader, HeadsFooter, KeyBar, Panel, SummaryBar } from './panels'
 import { auditHeader, auditLine, auditVerdict, chainOf, formatSlot, updateGasHeader, updateGasLine } from './presenters'
-import { RichLine, colored, muted, plain, strong, type Line } from './rich-text'
+import { RichLine, colored, muted, plain, safeText, strong, type Line } from './rich-text'
 import { theme } from './theme'
 import { usePolling } from './use-polling'
 
@@ -162,7 +162,7 @@ export function GlobalView(props: { readonly state: AppState; readonly dispatch:
   return (
     <ViewFrame view="global" notice={state.notice}>
       <RichLine line={[muted(`${fitColumn('pair', 10)}${fitColumn('chains', 28)}${fitColumn('light client lag', 34)}${fitColumn('gates', 20)}${fitColumn('in flight', 10)}last activity`)]} />
-      {pairs.data === null ? <text fg={theme.muted}>{pairs.error ?? 'Loading the pairs…'}</text> : null}
+      {pairs.data === null ? <text fg={theme.muted}>{safeText(pairs.error ?? 'Loading the pairs…')}</text> : null}
       {list.map((health, index) => (
         <box key={health.pairId} height={1} backgroundColor={index === state.globalIndex ? theme.selectedBackground : undefined}>
           <RichLine line={pairLine(health, pair.id, now())} />
@@ -205,7 +205,7 @@ export function AuditView(props: { readonly state: AppState }) {
         ]}
       />
       <RichLine line={auditHeader(columns)} />
-      {audit.data === null ? <text fg={theme.muted}>{audit.error ?? 'Loading the audit…'}</text> : null}
+      {audit.data === null ? <text fg={theme.muted}>{safeText(audit.error ?? 'Loading the audit…')}</text> : null}
       {rows.map((row) => (
         <RichLine key={row.token.address} line={auditLine(row, columns)} />
       ))}
@@ -229,7 +229,7 @@ export function ProverView(props: { readonly state: AppState }) {
     <ViewFrame view="prover" notice={props.state.notice}>
       <RichLine line={[strong('Light client updates (on chain)')]} />
       <RichLine line={updateGasHeader()} />
-      {report.data === null ? <text fg={theme.muted}>{report.error ?? 'Loading the updates…'}</text> : null}
+      {report.data === null ? <text fg={theme.muted}>{safeText(report.error ?? 'Loading the updates…')}</text> : null}
       {updates.map((update) => (
         <RichLine key={update.transactionHash} line={updateGasLine(update, { pair, now: now() })} />
       ))}

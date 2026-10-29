@@ -12,7 +12,7 @@ import { proofStartProblem, readProvenMessage } from '@zk-bridge/shared'
 import { FIXTURE_PAIR } from '../../src/data/fixtures'
 import { planMessageExecution } from '../../src/tx/operator'
 import { messageBridgeAbi } from '../../src/tx/abis'
-import { RichLine, plain } from '../../src/ui/rich-text'
+import { RichLine, RichLines, plain, safeText } from '../../src/ui/rich-text'
 import { directionLines } from '../../src/ui/proof-panel'
 import { EVIDENCE_EXECUTE_CALL, evidence } from '../support/evidence-fixture'
 import { proofMessage } from '../support/proof-fixtures'
@@ -155,24 +155,38 @@ describe('posting a proof (fix 2caba1f)', () => {
   })
 })
 
+/** The characters that a component draws on a test screen. */
+async function frameOf(node: Parameters<typeof testRender>[0]): Promise<string> {
+  const setup = await testRender(node, { width: 120, height: 4 })
+  await act(async () => {
+    await setup.renderOnce()
+  })
+  const frame = setup.captureCharFrame()
+  setup.renderer.destroy()
+  return frame
+}
+
 describe('terminal escape injection', () => {
   const hostile = 'boom\u001b]8;;https://evil.example/\u0007click\u001b]8;;\u0007\u001b[2J‮evil'
 
-  test('ATTACK SUCCEEDS backend job error with escape sequences reaches the screen line unchanged', () => {
+  test('ATTACK backend job error with escape sequences is drawn without them: BLOCKED (was W-2)', async () => {
     const row = { direction: 'first-to-second' as const, reading: { kind: 'none' as const, notes: [] }, job: { kind: 'unknown' as const, note: hostile } }
     const lines = directionLines(FIXTURE_PAIR, row as never, 0, (text) => text)
-    expect(lines[1]!.map((segment) => segment.text).join('')).toContain('\u001b]8;;')
+    const frame = await frameOf(<RichLines lines={lines} />)
+    expect(frame).toContain('boomclickevil')
+    expect(frame.replaceAll('\n', '')).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/)
   })
 
-  test('ATTACK SUCCEEDS escape bytes survive into the OpenTUI cell buffer', async () => {
-    const setup = await testRender(<RichLine line={[plain(hostile)]} />, { width: 120, height: 2 })
-    await act(async () => {
-      await setup.renderOnce()
-    })
-    const frame = setup.captureCharFrame()
-    setup.renderer.destroy()
-    // ESC and BEL are kept as cells, so the OSC 8 link and the clear-screen sequence go to the terminal as written.
-    expect(frame).toContain('\u001b]8;;https://evil.example/\u0007')
-    expect(frame).toContain('\u001b[2J')
+  test('ATTACK escape bytes never reach the OpenTUI cell buffer: BLOCKED (was W-2)', async () => {
+    const frame = await frameOf(<RichLine line={[plain(hostile)]} />)
+    expect(frame).not.toContain('\u001b')
+    expect(frame).not.toContain('\u0007')
+    expect(frame).not.toContain('\u202e')
+    expect(frame).toContain('boomclickevil')
+  })
+
+  test('ATTACK safeText removes CSI, OSC, C1 and bidi controls and keeps the words', () => {
+    expect(safeText('a\u001b[31mb\u001b[0m\tc\nd\u009b2Je\u2066f\u0000')).toBe('ab c d2Jef')
+    expect(safeText('x\u001b]0;title\u001b\\y')).toBe('xy')
   })
 })

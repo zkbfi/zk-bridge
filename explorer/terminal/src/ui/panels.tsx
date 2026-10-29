@@ -13,7 +13,7 @@ import { ACTIONS } from '../app/app-state'
 import type { Signer } from '../signing/signer'
 import type { PairLayout } from './layout'
 import { feedHeader, feedRow, formatAmountWithSymbol, headLines, summaryLines, chainOf } from './presenters'
-import { RichLine, colored, muted, plain, strong, type Line } from './rich-text'
+import { RichLine, colored, muted, plain, safeText, strong, type Line } from './rich-text'
 import { theme } from './theme'
 
 /** A bordered box with a title. Focus changes the border color. */
@@ -136,7 +136,7 @@ export function FeedPanel(props: {
   const { items, error, selectedIndex, focused, height, pair, layout, coveredFrom } = props
   const rows = Math.max(1, height - (coveredFrom === null ? 3 : 4))
   const body = (): ReactNode => {
-    if (items === null) return <text fg={theme.muted}>{error === null ? 'Loading the feed…' : `Feed unavailable: ${error}`}</text>
+    if (items === null) return <text fg={theme.muted}>{error === null ? 'Loading the feed…' : `Feed unavailable: ${safeText(error)}`}</text>
     if (items.length === 0) return <text fg={theme.muted}>No transfers or messages match the filters.</text>
     const start = windowStart(selectedIndex, items.length, rows)
     return items.slice(start, start + rows).map((item, offset) => {
@@ -254,7 +254,7 @@ export function KeyBar(props: { readonly focus: FocusArea | null; readonly notic
   return (
     <box height={1} flexDirection="row">
       <text wrapMode="none" truncate fg={notice === null ? theme.muted : theme.warn}>
-        {fitColumn(text, Math.max(10, width - label.length - banner.length - 3))}
+        {fitColumn(safeText(text), Math.max(10, width - label.length - banner.length - 3))}
       </text>
       <text fg={theme.bad}>{banner}</text>
       <text fg={theme.muted}>{` ${label}`}</text>
