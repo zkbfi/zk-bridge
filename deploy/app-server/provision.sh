@@ -108,7 +108,7 @@ install -d -m 0750 -o root -g zkb_runner /etc/zk-bridge/runner
 
 # Before 2026-10-29 both bots shared the user zkb_bots. Remove it while it holds nothing; refuse to guess otherwise.
 if id zkb_bots >/dev/null 2>&1; then
-  if [ -n "$(ls -A /etc/zk-bridge/bots /var/lib/zk-bridge-bots 2>/dev/null)" ]; then
+  if [ -n "$(find /etc/zk-bridge/bots /var/lib/zk-bridge-bots -mindepth 1 -print -quit 2>/dev/null)" ]; then
     log "zkb_bots still has files in /etc/zk-bridge/bots or /var/lib/zk-bridge-bots: move them to publisher/ or runner/ first"
     exit 1
   fi
