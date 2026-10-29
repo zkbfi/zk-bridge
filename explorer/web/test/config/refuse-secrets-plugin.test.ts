@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { refuseSecretsPlugin } from "../refuse-secrets";
+import { refuseSecretsPlugin } from "../../src/config/refuse-secrets-plugin";
 
 const folders: string[] = [];
 const folderWith = (line: string): string => {

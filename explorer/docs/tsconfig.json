@@ -18,5 +18,5 @@
       "@web/*": ["../web/src/*"]
     }
   },
-  "include": ["src", "test", "vite.config.ts", "vitest.config.ts", "refuse-secrets.ts"]
+  "include": ["src", "test", "vite.config.ts", "vitest.config.ts"]
 }

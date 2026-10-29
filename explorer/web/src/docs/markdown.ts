@@ -40,18 +40,25 @@ const INLINE_PATTERN = /(\[[^\]]+\]\([^)\s]+\)|\*\*(?:[^*]|\*[^*\s][^*]*\*)+\*\*
 const captured = (match: RegExpExecArray, group: number): string => match[group] as string;
 
 const LINK = /^\[([^\]]+)\]\(([^)\s]+)\)$/;
-const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+// A control character (and DEL) in an address can hide a scheme from this check and still reach the browser.
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
+// A colon in the first segment of a path reads as a scheme to a browser, even when the scheme is written oddly.
+const COLON_IN_FIRST_SEGMENT = /^[^/?#]*:/;
+// An address with "&" may carry an entity-written scheme (`&#106;avascript:`); docs links never need one.
+const AMPERSAND = /&/;
 
 /**
  * Tells whether an address may become a link. Only an https address, an anchor in the same page and a relative path
- * qualify. Any other scheme (`javascript:`, `http:`, `data:`, `mailto:`), a rooted path and a path that starts with a
- * backslash stay text.
+ * qualify. Any other scheme (`javascript:`, `http:`, `data:`, `mailto:`), a colon in the first path segment, an address with "&", a rooted
+ * path, a path that starts with a backslash and any address with a control character stay text.
  *
  * @param href The address between the brackets.
  */
 export const isLinkableAddress = (href: string): boolean => {
+  if (CONTROL_CHARACTER.test(href)) return false;
+  if (AMPERSAND.test(href)) return false;
   if (/^https:\/\/\S/i.test(href)) return true;
-  if (HAS_SCHEME.test(href)) return false;
+  if (COLON_IN_FIRST_SEGMENT.test(href)) return false;
   return !/^[\\/]/.test(href);
 };
 

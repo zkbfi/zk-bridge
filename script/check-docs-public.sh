@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Gate: every page that may be published holds nothing private.
-# Scans the docs, the web documentation pages, the readmes, progress.txt and script/. The generic patterns match exact case. The private patterns ignore case.
+# Scans tracked and untracked files (the docs site builds from the working tree) in the docs, the web documentation pages, the readmes, progress.txt and script/. The generic patterns match exact case. The private patterns ignore case.
 # Prints file and line for each match and exits 1. The generic patterns below cover an email address, a home
 # directory path, a RunPod endpoint identifier, key-shaped strings and a literal key in a valve.city address.
 # Private names do not belong in this tracked file. Put them, one pattern per line, in the untracked file
@@ -48,7 +48,7 @@ report_matches() {
   local option="$1"
   local pattern="$2"
   local matches
-  matches="$(git grep -n -I ${option} -E -e "$pattern" -- "${scanned_paths[@]}" | grep -v -E 'op://(vault|item)/' || true)"
+  matches="$(git grep -n -I --untracked ${option} -E -e "$pattern" -- "${scanned_paths[@]}" | grep -v -E 'op://(vault|item)/' || true)"
   [ -z "$matches" ] && return 0
   printf '%s\n' "$matches"
   status=1

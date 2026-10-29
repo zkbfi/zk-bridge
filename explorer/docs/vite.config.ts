@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
-import { refuseSecretsPlugin } from "./refuse-secrets.ts";
+import { refuseSecretsPlugin } from "../web/src/config/refuse-secrets-plugin.ts";
 
 const webSource = fileURLToPath(new URL("../web/src", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));

@@ -107,4 +107,20 @@ describe("links", () => {
   it("an empty address stays text", () => {
     expect(parseInline("[x]()").some((item) => item.kind === "link")).toBe(false);
   });
+
+  it("an address with a control character or DEL stays text, so a hidden scheme cannot get through", () => {
+    for (const href of ["\u0001javascript:x", "java\tscript:x", "java\nscript:x", "\u001fhttps://example.org", "a\u007fb.md"]) {
+      expect(parseInline(`[x](${href})`).some((item) => item.kind === "link"), JSON.stringify(href)).toBe(false);
+    }
+  });
+
+  it("an entity-written scheme stays text: a colon in the first path segment is never a relative link", () => {
+    expect(parseInline("[x](&#106;avascript:alert(1))").some((item) => item.kind === "link")).toBe(false);
+    expect(parseInline("[x](&#x6A;avascript:x)").some((item) => item.kind === "link")).toBe(false);
+  });
+
+  it("a colon after the first path segment is still a relative link", () => {
+    expect(linkTo("[x](a/b:c.md)")).toMatchObject({ href: "a/b:c.md" });
+    expect(linkTo("[x](a.md#x:y)")).toMatchObject({ href: "a.md#x:y" });
+  });
 });
