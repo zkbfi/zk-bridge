@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { encodeAbiParameters, type Hex } from 'viem'
 import { FIXTURE_PAIR } from '../../src/data/fixtures'
 import { OperatorFileError, encodeUpdateCalldata, planLightClientUpdate, planMessageExecution, planProofMessageUpdate } from '../../src/tx/operator'
-import { evidence, executeCall, word } from '../support/evidence-fixture'
+import { EVIDENCE_EXECUTE_CALL, EVIDENCE_MESSAGE_ID, evidence, executeCall, word } from '../support/evidence-fixture'
 import { proofMessage } from '../support/proof-fixtures'
 import { lightClientOutputParameters } from './light-client-output'
 
@@ -74,17 +74,17 @@ describe('planMessageExecution (adapter)', () => {
     expect(steps.every((step) => step.plan.to === bridge && step.plan.chain === FIXTURE_PAIR.second)).toBe(true)
     expect(steps[1]?.plan.contractLabel).toBe('MessageBridge (PulseChain)')
     expect(steps[1]?.plan.functionName).toBe('executeMessage')
-    expect(summary.messageId).toBe(word('c'))
+    expect(summary.messageId).toBe(EVIDENCE_MESSAGE_ID)
   })
 
-  test('maps a message on the first chain to that chain', () => {
+  test('refuses evidence that names the first chain for a message that the proof sends to the second', () => {
     const first = FIXTURE_PAIR.first
     const text = evidence({
       destination: { chainId: 1, bridge: first.contracts.messageBridge, lightClient: first.contracts.lightClient },
-      execute: { to: first.contracts.messageBridge, data: executeCall(1n) },
+      execute: { to: first.contracts.messageBridge, data: EVIDENCE_EXECUTE_CALL },
       prerequisites: [],
     })
-    expect(planMessageExecution(text, FIXTURE_PAIR).steps[0]?.plan.chain).toBe(first)
+    expect(() => planMessageExecution(text, FIXTURE_PAIR)).toThrow(/for chain 369/)
   })
 
   test('refuses a delivered message with the error class the screens catch', () => {

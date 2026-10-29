@@ -7,6 +7,7 @@ import { messageBridgeAbi } from '../../src/tx/abis'
 import { lightClientOutputParameters } from '../tx/light-client-output'
 import { encodeUpdateCalldata } from '../../src/tx/operator'
 import { TEST_KEY, renderApp } from './harness'
+import { evidence as evidenceText } from '../support/evidence-fixture'
 
 type App = Awaited<ReturnType<typeof renderApp>>
 let app: App | null = null
@@ -229,28 +230,7 @@ describe('other actions', () => {
   })
 
   test('execute message reads evidence and offers the prerequisite as a skippable step before the execution', async () => {
-    const word = (digit: string): Hex => `0x${digit.repeat(64)}`
-    const header = { slot: 5n, proposerIndex: 1n, parentRoot: word('1'), stateRoot: word('2'), bodyRoot: word('3') }
-    const executeData = encodeFunctionData({
-      abi: messageBridgeAbi,
-      functionName: 'executeMessage',
-      args: [{ anchorHeader: header, sourceHeader: header, ancestryBranch: [], blockHashBranch: [], executionHeaderRlp: '0x01', receiptProof: [], receiptIndex: 1n, transactionProof: [], transactionIndex: 1n, logIndex: 0n }],
-    })
-    const bridge = FIXTURE_PAIR.second.contracts.messageBridge
-    const evidence = JSON.stringify({
-      schemaVersion: 2,
-      route: 'ethereum_to_pulsechain',
-      sourceTransactionHash: word('a'),
-      logIndex: 0,
-      message: { messageId: word('c'), sender: FIXTURE_PAIR.first.contracts.messageBridge, executor: bridge, gasLimit: 250000, dataType: 0, data: '0x', sourceBlockNumber: 1, sourceBlockHash: word('d'), sourceSlot: 5 },
-      destination: { chainId: 369, bridge, lightClient: FIXTURE_PAIR.second.contracts.lightClient },
-      anchor: { slot: 6, root: word('e') },
-      deliveryStatus: 'notDelivered',
-      alreadyDelivered: false,
-      execute: { to: bridge, data: executeData },
-      prerequisites: [],
-      createdAt: '2026-10-24T09:31:00Z',
-    })
+    const evidence = evidenceText({ prerequisites: [] })
     const chainAccess = createFixtureChainAccess(FIXTURE_PAIR)
     app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess, files: { 'evidence.json': evidence } })
     await openAction(app, 4)

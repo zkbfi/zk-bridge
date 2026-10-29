@@ -20,6 +20,7 @@ import {
 import { beaconLightClientAbi, messageBridgeAbi } from "./abis/index.js";
 import { describeBytes, displayArguments, type DisplayedArgument } from "./call-display.js";
 import { decodeLightClientOutput, type LightClientOutput, type ProofMessage } from "./proof-message.js";
+import { readProvenMessage, type ProvenMessage } from "./proven-message.js";
 
 /** A chain that an operator action may target, with the two contracts that the actions call. */
 export type OperatorChain = {
@@ -182,14 +183,26 @@ export const planMessageExecution = (
   const executeCall = decodeExecuteMessage(executeData);
   requireEqual(BigInt(logIndex), executeCall.logIndex, "logIndex in the executeMessage proof", "logIndex in the file");
 
+  // The identity of the message comes from the proof in the calldata, the bytes that the wallet signs. The labels of
+  // the file must agree with it, so a file cannot show one message and deliver another.
+  const proven = provenMessageOf(executeData);
+  if (proven.destinationChainId !== BigInt(chain.chainId)) {
+    throw new OperatorFileError(`The proven message is for chain ${proven.destinationChainId}, not for ${chain.name} (${chain.chainId}).`);
+  }
+  requireEqual(readHexField(message, "messageId", "evidence.message").toLowerCase(), proven.messageId, "messageId in the file", "messageId in the proof");
+  requireEqual(readHexField(file, "sourceTransactionHash", "evidence").toLowerCase(), proven.sourceTransactionHash, "sourceTransactionHash in the file", "the transaction hash in the proof");
+  requireEqual(readAddressField(message, "sender", "evidence.message"), proven.sender, "sender in the file", "sender in the proof");
+  requireEqual(readAddressField(message, "executor", "evidence.message"), proven.executor, "executor in the file", "executor in the proof");
+  requireEqual(BigInt(readSafeInteger(message, "gasLimit", "evidence.message")), proven.gasLimit, "gasLimit in the file", "gasLimit in the proof");
+
   const anchor = readObject(file.anchor, "evidence.anchor");
   const summary: EvidenceSummary = {
     route: readString(file, "route", "evidence"),
-    messageId: readHexField(message, "messageId", "evidence.message"),
-    sender: readAddressField(message, "sender", "evidence.message"),
-    executor: readAddressField(message, "executor", "evidence.message"),
-    gasLimit: BigInt(readSafeInteger(message, "gasLimit", "evidence.message")),
-    sourceTransactionHash: readHexField(file, "sourceTransactionHash", "evidence"),
+    messageId: proven.messageId,
+    sender: proven.sender,
+    executor: proven.executor,
+    gasLimit: proven.gasLimit,
+    sourceTransactionHash: proven.sourceTransactionHash,
     sourceSlot: readSlot(message, "sourceSlot", "evidence.message"),
     anchorSlot: readSlot(anchor, "slot", "evidence.anchor"),
     deliveryStatus,
@@ -308,6 +321,15 @@ const requireOutputMatches = (
   requireEqual(output.newHeadSlot, expected.newSlot, "newHeadSlot in the public values", "newHeadSlot");
   requireEqual(output.previousHeaderRoot, expected.startRoot, "previousHeaderRoot in the public values", "startHeadRoot");
   requireEqual(output.newHeaderRoot, expected.newRoot, "newHeaderRoot in the public values", "newHeadRoot");
+};
+
+const provenMessageOf = (data: Hex): ProvenMessage => {
+  try {
+    return readProvenMessage(data);
+  } catch (error) {
+    // A malformed encoding throws from viem, a refused part throws a ProvenMessageError: either way the file is bad.
+    throw new OperatorFileError(`The executeMessage proof does not prove a message: ${(error as Error).message}`);
+  }
 };
 
 const decodeExecuteMessage = (data: Hex) => {

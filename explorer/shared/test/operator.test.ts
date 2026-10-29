@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { encodeAbiParameters, encodeFunctionData, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
 import {
@@ -129,6 +131,12 @@ describe('planUpdateFromHandoff', () => {
   })
 })
 
+// A contract test vector of the light client: real executeMessage calldata and the message that it delivers.
+const vector = JSON.parse(
+  readFileSync(join(import.meta.dirname, "../../../light-client/tests/fixtures/message/electra_accept_second_message_in_same_receipt.json"), "utf8"),
+) as { calldata: Hex; expected: { message: { messageId: Hex; sourceTransactionHash: Hex } } }
+const provenId = vector.expected.message.messageId
+
 function executeCall(logIndex: bigint, rlp: Hex = '0xf90211', blockHashBranch: Hex[] = [word('6')]): Hex {
   return encodeFunctionData({
     abi: messageBridgeAbi,
@@ -162,13 +170,13 @@ function evidence(changes: Record<string, unknown> = {}): string {
   return JSON.stringify({
     schemaVersion: 2,
     route: 'ethereum_to_pulsechain',
-    sourceTransactionHash: word('a'),
-    logIndex: 1,
+    sourceTransactionHash: vector.expected.message.sourceTransactionHash,
+    logIndex: 2,
     message: {
-      messageId: word('c'),
-      sender: '0x0000000000000000000000000000000000000abc',
-      executor: '0x0000000000000000000000000000000000000abd',
-      gasLimit: 250_000,
+      messageId: provenId,
+      sender: '0x00000000000000000000000000000000000000c3',
+      executor: '0x00000000000000000000000000000000000000d4',
+      gasLimit: 300_000,
       dataType: 0,
       data: '0xabcdef',
       sourceBlockNumber: 15,
@@ -179,7 +187,7 @@ function evidence(changes: Record<string, unknown> = {}): string {
     anchor: { slot: 14_100_000, root: word('e') },
     deliveryStatus: 'notDelivered',
     alreadyDelivered: false,
-    execute: { to: bridge, data: executeCall(1n) },
+    execute: { to: bridge, data: vector.calldata },
     prerequisites: [
       { function: 'addBlockHashLayout', reason: 'no validated block hash row covers the source slot', to: bridge, data: prerequisiteCall() },
     ],
@@ -194,7 +202,7 @@ describe('planMessageExecution', () => {
     expect(steps.map((step) => step.role)).toEqual(['prerequisite', 'execute'])
     expect(steps.every((step) => step.call.to === bridge && step.call.chainId === 369)).toBe(true)
     expect(steps[0]?.reason).toContain('no validated block hash row')
-    expect(summary.messageId).toBe(word('c'))
+    expect(summary.messageId).toBe(provenId)
     expect(summary.sourceSlot).toBe(14_099_000n)
     expect(summary.anchorSlot).toBe(14_100_000n)
   })
@@ -205,7 +213,7 @@ describe('planMessageExecution', () => {
     expect(names).toContain('proof.anchorHeader.slot')
     expect(names).toContain('proof.sourceHeader.slot')
     expect(names).toContain('proof.logIndex')
-    expect(steps[1]?.call.arguments.find((argument) => argument.name === 'proof.receiptIndex')?.value).toBe('3')
+    expect(steps[1]?.call.arguments.find((argument) => argument.name === 'proof.logIndex')?.value).toBe('2')
   })
 
   it('refuses a message that is already delivered', () => {
@@ -224,7 +232,30 @@ describe('planMessageExecution', () => {
   })
 
   it('refuses an execution whose proof names another log than the file says', () => {
-    expect(() => planMessageExecution(evidence({ logIndex: 2 }), chains)).toThrow(/logIndex/)
+    expect(() => planMessageExecution(evidence({ logIndex: 1 }), chains)).toThrow(/logIndex/)
+  })
+
+  it('takes the message from the proof in the calldata, and refuses a file whose labels name another message', () => {
+    const message = JSON.parse(evidence()).message as Record<string, unknown>
+    for (const [changes, field] of [
+      [{ message: { ...message, messageId: word('c') } }, /messageId/],
+      [{ sourceTransactionHash: word('a') }, /sourceTransactionHash/],
+      [{ message: { ...message, sender: '0x0000000000000000000000000000000000000abc' } }, /sender/],
+      [{ message: { ...message, executor: '0x0000000000000000000000000000000000000abd' } }, /executor/],
+      [{ message: { ...message, gasLimit: 250_000 } }, /gasLimit/],
+    ] as const) {
+      expect(() => planMessageExecution(evidence(changes), chains)).toThrow(field)
+    }
+  })
+
+  it('refuses a proof of a message for the other chain of the pair', () => {
+    const first = chains[0] as OperatorChain
+    const elsewhere = { destination: { chainId: 1, bridge: first.messageBridge, lightClient: first.lightClient }, execute: { to: first.messageBridge, data: vector.calldata } }
+    expect(() => planMessageExecution(evidence(elsewhere), chains)).toThrow(/for chain 369, not for Ethereum/)
+  })
+
+  it('refuses an executeMessage call whose proof proves no message', () => {
+    expect(() => planMessageExecution(evidence({ logIndex: 1, execute: { to: bridge, data: executeCall(1n) } }), chains)).toThrow(/does not prove a message/)
   })
 
   it('refuses calldata that is not executeMessage, and a prerequisite that is not a bridge call', () => {
@@ -325,19 +356,13 @@ describe("the argument lists", () => {
   it("cut long bytes and summarize long arrays with a digest, and keep short ones whole", () => {
     const { steps } = planMessageExecution(evidence(), chains);
     const executeArguments = steps[1]?.call.arguments ?? [];
-    expect(executeArguments.find((argument) => argument.name === "proof.executionHeaderRlp")?.meaning).toBe("3 bytes");
-    expect(executeArguments.find((argument) => argument.name === "proof.ancestryBranch")?.value).toBe(`${word("4")}, ${word("5")}`);
-    expect(executeArguments.find((argument) => argument.name === "proof.receiptProof")?.value).toMatch(/^keccak256 of the encoding 0x/);
-    const longBytes = planMessageExecution(
-      evidence({ execute: { to: bridge, data: executeCall(1n, `0x${"ab".repeat(100)}`) } }),
-      chains,
-    );
-    expect(longBytes.steps[1]?.call.arguments.find((argument) => argument.name === "proof.executionHeaderRlp")).toMatchObject({
-      meaning: "100 bytes",
+    expect(executeArguments.find((argument) => argument.name === "proof.executionHeaderRlp")).toMatchObject({
+      meaning: "621 bytes",
       value: expect.stringContaining("keccak256"),
     });
-    const empty = planMessageExecution(evidence({ execute: { to: bridge, data: executeCall(1n, "0xf9", []) } }), chains);
-    expect(empty.steps[1]?.call.arguments.find((argument) => argument.name === "proof.blockHashBranch")?.value).toBe("[]");
+    expect(executeArguments.find((argument) => argument.name === "proof.receiptProof")?.value).toMatch(/^keccak256 of the encoding 0x/);
+    const prerequisiteArguments = steps[0]?.call.arguments ?? [];
+    expect(prerequisiteArguments.find((argument) => argument.name.endsWith("branch"))?.value).toBe(`${word("7")}, ${word("8")}`);
   });
 });
 

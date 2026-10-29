@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { encodeAbiParameters, encodeFunctionData, type Hex } from "viem";
@@ -65,24 +67,21 @@ const boardAnswer = (payloads: readonly Hex[]): Answer => {
 
 const header = (slot: bigint) => ({ slot, proposerIndex: 5n, parentRoot: word("1"), stateRoot: word("2"), bodyRoot: word("3") });
 const bridge = FIXTURE_PAIR.second.contracts.messageBridge;
+// A contract test vector of the light client: real executeMessage calldata and the message that it delivers.
+const vector = JSON.parse(
+  readFileSync(join(import.meta.dirname, "../../../../light-client/tests/fixtures/message/electra_accept_second_message_in_same_receipt.json"), "utf8"),
+) as { calldata: Hex; expected: { message: { messageId: Hex; sourceTransactionHash: Hex } } };
 const evidenceOf = (changes: Record<string, unknown> = {}): Record<string, unknown> => ({
   schemaVersion: 2,
   route: "ethereum_to_pulsechain",
-  sourceTransactionHash: word("a"),
-  logIndex: 1,
-  message: { messageId: word("c"), sender: "0x0000000000000000000000000000000000000abc", executor: "0x0000000000000000000000000000000000000abd", gasLimit: 250000, dataType: 0, data: "0xabcdef", sourceBlockNumber: 15, sourceBlockHash: word("d"), sourceSlot: 14099000 },
+  sourceTransactionHash: vector.expected.message.sourceTransactionHash,
+  logIndex: 2,
+  message: { messageId: vector.expected.message.messageId, sender: "0x00000000000000000000000000000000000000c3", executor: "0x00000000000000000000000000000000000000d4", gasLimit: 300000, dataType: 0, data: "0xabcdef", sourceBlockNumber: 15, sourceBlockHash: word("d"), sourceSlot: 14099000 },
   destination: { chainId: 369, bridge, lightClient: FIXTURE_PAIR.second.contracts.lightClient },
   anchor: { slot: 14100000, root: word("e") },
   deliveryStatus: "notDelivered",
   alreadyDelivered: false,
-  execute: {
-    to: bridge,
-    data: encodeFunctionData({
-      abi: messageBridgeAbi,
-      functionName: "executeMessage",
-      args: [{ anchorHeader: header(14100000n), sourceHeader: header(14099000n), ancestryBranch: [word("4")], blockHashBranch: [word("6")], executionHeaderRlp: "0xf90211", receiptProof: ["0x01"], receiptIndex: 3n, transactionProof: ["0x03"], transactionIndex: 3n, logIndex: 1n }],
-    }),
-  },
+  execute: { to: bridge, data: vector.calldata },
   prerequisites: [
     {
       function: "addBlockHashLayout",
@@ -100,8 +99,8 @@ const item = feed.find((candidate) => candidate.kind === "token")!;
 const detailWith = async (changes: Partial<MessageDetail>): Promise<MessageDetail> => ({
   ...(await createFixtureIndexerClient().message(item.id))!,
   // The default evidence is for this identifier and this transaction.
-  id: word("c"),
-  sourceTransactionHash: word("a"),
+  id: vector.expected.message.messageId,
+  sourceTransactionHash: vector.expected.message.sourceTransactionHash,
   sourceChainId: 1,
   destinationChainId: 369,
   ...changes,
@@ -509,27 +508,31 @@ describe("readEvidence", () => {
   });
 });
 
-const EXPECTED = { messageId: word("c"), sourceTransactionHash: word("a") };
+const EXPECTED = { messageId: vector.expected.message.messageId, sourceTransactionHash: vector.expected.message.sourceTransactionHash };
 
 describe("planDelivery against the message that the user views", () => {
   const found = (changes: Record<string, unknown> = {}) => ({ kind: "found", text: JSON.stringify(evidenceOf(changes)) }) as const;
   const otherMessage = { message: { ...(evidenceOf().message as Record<string, unknown>), messageId: word("f") } };
 
   it("refuses evidence for another message identifier and gives the reason", () => {
-    expect(planDelivery(found(otherMessage), FIXTURE_PAIR, EXPECTED)).toEqual({ kind: "unavailable", reason: "The evidence is for a different message." });
+    expect(planDelivery(found(), FIXTURE_PAIR, { ...EXPECTED, messageId: word("f") })).toEqual({ kind: "unavailable", reason: "The evidence is for a different message." });
+  });
+
+  it("refuses evidence whose labels name another message than its proof delivers", () => {
+    expect(planDelivery(found(otherMessage), FIXTURE_PAIR, { ...EXPECTED, messageId: word("f") })).toMatchObject({ kind: "unavailable", reason: expect.stringContaining("messageId in the file") });
   });
 
   it("refuses evidence with the same identifier but another source transaction", () => {
-    expect(planDelivery(found({ sourceTransactionHash: word("9") }), FIXTURE_PAIR, EXPECTED)).toEqual({ kind: "unavailable", reason: "The evidence is for a different source transaction." });
+    expect(planDelivery(found(), FIXTURE_PAIR, { ...EXPECTED, sourceTransactionHash: word("9") })).toEqual({ kind: "unavailable", reason: "The evidence is for a different source transaction." });
   });
 
   it("compares the identifier in lowercase", () => {
-    const upper = `0x${"C".repeat(64)}`;
+    const upper = `0x${EXPECTED.messageId.slice(2).toUpperCase()}`;
     expect(planDelivery(found(), FIXTURE_PAIR, { ...EXPECTED, messageId: upper }).kind).toBe("ready");
   });
 
   it("skips the transaction check when the detail has no transaction hash", () => {
-    expect(planDelivery(found({ sourceTransactionHash: word("9") }), FIXTURE_PAIR, { ...EXPECTED, sourceTransactionHash: null }).kind).toBe("ready");
+    expect(planDelivery(found(), FIXTURE_PAIR, { ...EXPECTED, sourceTransactionHash: null }).kind).toBe("ready");
   });
 
   it("stays ready for matching evidence", () => {
@@ -537,8 +540,8 @@ describe("planDelivery against the message that the user views", () => {
   });
 
   it("keeps the deliver button off in the panel when the archive sends another message", async () => {
-    const { transport } = fakeTransport({ get: async (url) => (url.includes("/evidence/") ? { status: 200, body: evidenceOf(otherMessage) } : { status: 404, body: null }) });
-    await renderPanel({ changes: { status: "covered" }, endpoints: endpoints({ archiveUrl: ARCHIVE }), transport });
+    const { transport } = fakeTransport({ get: async (url) => (url.includes("/evidence/") ? { status: 200, body: evidenceOf() } : { status: 404, body: null }) });
+    await renderPanel({ changes: { status: "covered", id: word("f") }, endpoints: endpoints({ archiveUrl: ARCHIVE }), transport });
     await waitFor(() => expect(screen.getByTestId("why-deliver-off")).toHaveTextContent("The evidence is for a different message."));
     expect(screen.getByRole("button", { name: "Deliver the message" })).toBeDisabled();
   });

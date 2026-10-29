@@ -275,11 +275,9 @@ describe('evidence from the archive', () => {
 
   test('evidence for another message than the one asked for is refused with the reason', async () => {
     const reviews: FlowStep[][] = []
-    const other = JSON.parse(sequence)
-    other.message.messageId = `0x${'f'.repeat(64)}`
-    const view = await openPanel({ set: ['archiveUrl'], transport: archive({ status: 200, body: other }).transport, reviews })
+    const view = await openPanel({ set: ['archiveUrl'], transport: archive({ status: 200, body: JSON.parse(sequence) }).transport, reviews })
     await view.press('e')
-    await view.type(EVIDENCE_MESSAGE_ID)
+    await view.type(`0x${'f'.repeat(64)}`)
     await view.press('return')
     expect(await view.until('different message')).toContain('The evidence is for a different message.')
     expect(reviews).toEqual([])
