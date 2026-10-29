@@ -12,8 +12,13 @@
 #      wallet key, in its file or in its process environment.
 #   5. Postgres for the explorer indexer: local socket only, peer login for the indexer's user.
 #   6. Caddy as the TLS proxy. Until the backend has a host name it answers 503 on port 80.
+#   7. An IPFS node (kubo) that pins the release archives. Its RPC API listens on 127.0.0.1:5001 only, and it runs no
+#      HTTP gateway. Peers reach it on port 4001 (TCP and UDP), which the cloud firewall must allow.
 #
-# It installs no service of ours and no secret. Those come with the deploy step.
+# It installs no secret, and no service of ours except the IPFS node. The others come with the deploy step. The token
+# of the IPFS API is set with zkb-ipfs-api-token, which this script installs. The token travels on standard input only:
+#
+#   op read op://zkb.fi/kubo/credential | ssh zkbfi-app zkb-ipfs-api-token
 set -euo pipefail
 
 log() { printf 'provision: %s\n' "$*" >&2; }
@@ -29,6 +34,8 @@ RUST_TOOLCHAIN=1.93.0
 RUST_HOME=/opt/rust
 SWAP_FILE=/swapfile
 SWAP_SIZE=2G
+KUBO_VERSION=v0.43.1
+IPFS_PATH=/var/lib/zk-bridge-ipfs/repo
 
 # --- 1. Base system ---------------------------------------------------------------------------------------------
 log "base system"
@@ -148,5 +155,100 @@ if ! grep -qE '^[[:space:]]*reverse_proxy' /etc/caddy/Caddyfile; then
 EOF
 fi
 systemctl reload-or-restart caddy
+
+# --- 7. IPFS node -----------------------------------------------------------------------------------------------
+log "ipfs (kubo $KUBO_VERSION)"
+ensure_user zkb_ipfs /var/lib/zk-bridge-ipfs
+install -d -m 0750 -o root -g zkb_ipfs /etc/zk-bridge/ipfs
+if [ "$(/usr/local/bin/ipfs version --number 2>/dev/null || true)" != "${KUBO_VERSION#v}" ]; then
+  arch=$(dpkg --print-architecture)
+  archive="kubo_${KUBO_VERSION}_linux-${arch}.tar.gz"
+  work=$(mktemp -d)
+  curl -fsSL -o "$work/$archive" "https://github.com/ipfs/kubo/releases/download/$KUBO_VERSION/$archive"
+  curl -fsSL -o "$work/$archive.sha512" "https://github.com/ipfs/kubo/releases/download/$KUBO_VERSION/$archive.sha512"
+  (cd "$work" && sha512sum -c "$archive.sha512" >/dev/null) || { log "kubo archive fails its checksum"; exit 1; }
+  tar -xzf "$work/$archive" -C "$work"
+  install -m 0755 "$work/kubo/ipfs" /usr/local/bin/ipfs
+  rm -rf "$work"
+fi
+ipfs_as() { runuser -u zkb_ipfs -- env IPFS_PATH="$IPFS_PATH" /usr/local/bin/ipfs "$@"; }
+# The server profile turns off local network discovery, which a public host must not do.
+[ -f "$IPFS_PATH/config" ] || ipfs_as init --profile server >/dev/null
+ipfs_as config Addresses.API /ip4/127.0.0.1/tcp/5001
+# No gateway: an open gateway serves anyone's content from this address.
+ipfs_as config --json Addresses.Gateway '[]'
+ipfs_as config Datastore.StorageMax 20GB
+ipfs_as config Swarm.ResourceMgr.MaxMemory 1GB
+# Announce only what is pinned here: the release archives.
+ipfs_as config Provide.Strategy pinned
+# The unit is written here and not by deploy.sh: the node holds the pins and does not change with a release.
+cat > /etc/systemd/system/zk-bridge-ipfs.service <<EOF
+# The IPFS node (kubo) that pins the release archives. provision.sh writes this file. RPC API on 127.0.0.1:5001 only,
+# no gateway, peers on port 4001. The API token is in $IPFS_PATH/config (zkb-ipfs-api-token).
+[Unit]
+Description=zk-bridge IPFS node (kubo)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=notify
+User=zkb_ipfs
+Group=zkb_ipfs
+Environment=IPFS_PATH=$IPFS_PATH
+ExecStart=/usr/local/bin/ipfs daemon --migrate=false
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=60
+MemoryMax=1536M
+
+# Sandbox. Writable: the repository only.
+ReadWritePaths=/var/lib/zk-bridge-ipfs
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+EOF
+# Reads the API token on standard input, so it never shows in a process list, and lets only that bearer token call
+# the API. Without a token the API answers anyone on 127.0.0.1.
+cat > /usr/local/sbin/zkb-ipfs-api-token <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+[ "\$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
+IFS= read -r token || [ -n "\$token" ]
+[ "\${#token}" -ge 32 ] || { echo "the token on standard input is shorter than 32 characters" >&2; exit 1; }
+config=$IPFS_PATH/config
+runuser -u zkb_ipfs -- sh -c 'umask 077; jq --rawfile t /dev/stdin '"'"'.API.Authorizations = {operator: {AuthSecret: ("bearer:" + (\$t | rtrimstr("\n"))), AllowedPaths: ["/api/v0"]}}'"'"' "\$1" > "\$1.new" && mv "\$1.new" "\$1"' sh "\$config" <<<"\$token"
+systemctl restart zk-bridge-ipfs.service
+echo "the IPFS API now takes only the new token"
+EOF
+chmod 0750 /usr/local/sbin/zkb-ipfs-api-token
+systemctl daemon-reload
+systemctl enable --now zk-bridge-ipfs.service
+systemctl restart zk-bridge-ipfs.service
 
 log "done: node $(node --version), $(RUSTUP_HOME=$RUSTUP_HOME "$CARGO_HOME/bin/rustc" --version), $(psql --version)"
