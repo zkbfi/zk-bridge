@@ -583,6 +583,7 @@ describe("the real parts", () => {
           if (request.functionName === "programVKey") return PROGRAM_KEY;
           return rootOf(77n);
         }) as never,
+        getBlockNumber: async () => 900n,
       },
       `0x${"3".repeat(40)}`,
     );

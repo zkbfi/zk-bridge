@@ -649,10 +649,13 @@ describe("the real outside world", () => {
       let text = "";
       request.on("data", (chunk) => (text += chunk));
       request.on("end", () => {
-        const call = JSON.parse(text) as { id: number; params: [{ data: Hex }] };
+        const call = JSON.parse(text) as { id: number; method: string; params: [{ data: Hex }, string?] };
+        response.setHeader("content-type", "application/json");
+        if (call.method === "eth_blockNumber") return response.end(JSON.stringify({ jsonrpc: "2.0", id: call.id, result: "0x10" }));
+        // Every read names the block of eth_blockNumber, so the three answers come from one state.
+        if (call.params[1] !== "0x10") return response.end(JSON.stringify({ jsonrpc: "2.0", id: call.id, error: { code: -32000, message: "unpinned read" } }));
         const { functionName } = decodeFunctionData({ abi: beaconLightClientAbi, data: call.params[0].data });
         const result = encodeFunctionResult({ abi: beaconLightClientAbi, functionName: functionName as "head", result: answers[functionName] as never });
-        response.setHeader("content-type", "application/json");
         response.end(JSON.stringify({ jsonrpc: "2.0", id: call.id, result }));
       });
     });

@@ -37,6 +37,7 @@ async function indexer(): Promise<FakeIndexer> {
 /** A client that answers the three reads of the light client reader. */
 const lightClientClient = {
   readContract: async ({ functionName }: { functionName: string }) => (functionName === "head" ? 100n : functionName === "programVKey" ? PROGRAM_KEY : word(101)),
+  getBlockNumber: async () => 900n,
 } as unknown as PublicClient;
 
 function recordingExecutor(answer: { code: number; stdout?: string }) {

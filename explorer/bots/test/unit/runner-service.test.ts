@@ -74,7 +74,7 @@ function clientWith(answers: ClientAnswers = {}) {
     return word(101);
   });
   const getCode = vi.fn(async () => ("code" in answers ? answers.code : "0x6080"));
-  return { readContract, getCode } as unknown as PublicClient & { readContract: typeof readContract; getCode: typeof getCode };
+  return { readContract, getCode, getBlockNumber: async () => 900n } as unknown as PublicClient & { readContract: typeof readContract; getCode: typeof getCode };
 }
 
 function fakeFeed(recentMessages: BoardMessage[] = []) {
