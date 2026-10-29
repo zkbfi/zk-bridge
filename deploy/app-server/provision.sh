@@ -5,7 +5,7 @@
 #   ssh zkbfi-app 'bash -s' < deploy/app-server/provision.sh
 #
 # Steps:
-#   1. Base system: time zone, swap, journal size, packages.
+#   1. Base system: time zone, swap, journal size, packages (libudev-dev: node-hid and usb build from source on ARM64).
 #   2. Node.js 24 from the NodeSource apt repository, and pnpm through corepack.
 #   3. Rust 1.93.0 (prover/rust-toolchain.toml) in /opt/rust, to build the prover for this machine (ARM64).
 #   4. One system user per service. Only the bots' user can read the bots' directories, where the wallet key goes.
@@ -49,7 +49,7 @@ systemctl restart systemd-journald
 apt-get update -q
 apt-get install -y -q --no-install-recommends \
   ca-certificates curl gnupg git jq sqlite3 \
-  build-essential pkg-config \
+  build-essential pkg-config libudev-dev \
   postgresql caddy \
   unattended-upgrades
 
