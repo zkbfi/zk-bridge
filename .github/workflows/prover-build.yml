@@ -1,0 +1,340 @@
+# The build host rebuild of docs/testnet-run.md ("What the build host rebuild must regenerate"), on GitHub-hosted runners.
+#
+#   job program-keys  rebuilds the two SP1 guest ELFs in the pinned Docker image with light-client/scripts/program-keys.sh
+#                     --write and uploads the ELFs, program-keys.json and program-keys.source-hash as the artifact
+#                     "program-keys". It commits nothing: the owner reviews the keys and commits them.
+#   job gpu-image     builds docker/Dockerfile, target prover-gpu-worker, with those ELFs, checks the ELFs and
+#                     groth16_vk.bin inside the image, and with push_image pushes it to GHCR and prints the digest.
+#
+# Trigger: gh workflow run prover-build.yml -f image_tag=v6 -f push_image=true   (see docs/gpu-prover.md)
+#
+# Pinning (docs/sp1-version-policy.md): every action is pinned by full commit SHA, each release older than 28 days.
+# sp1-cli is built from source at the commit of the tag v6.8.1. The repository never runs sp1up or a curl | bash installer.
+# The base images, the SP1 build image, the GPU server and the circuit tarball are pinned by digest or SHA-256 in
+# docker/Dockerfile and light-client/scripts/program-keys.sh. The apt packages are not pinned (build tools only).
+# The only credential is GITHUB_TOKEN, used for GHCR when push_image is true.
+name: prover build
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Exact image tag, for example v6. Never a moving tag such as latest. An existing tag is refused.
+        required: true
+        type: string
+      push_image:
+        description: Push the image to ghcr.io/zkbfi/zk-bridge-prover-gpu-worker
+        required: true
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: prover-build
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  IMAGE_NAME: ghcr.io/zkbfi/zk-bridge-prover-gpu-worker
+  IMAGE_TAG: ${{ inputs.image_tag }}
+  # sp1-cli 6.8.1: commit of the tag v6.8.1 of succinctlabs/sp1 (docs/sp1-version-policy.md, "built from source at c84ada1").
+  SP1_CLI_VERSION: 6.8.1
+  SP1_CLI_REV: c84ada1ed5911f28c4d3c9d0ed2f9e6cd7edb824
+  # Rust that compiles sp1-cli (sp1 6.8.1 declares rust-version 1.88). The same version as the repository toolchain.
+  # The guest ELFs do not depend on it: they are built inside the pinned SP1 image.
+  SP1_CLI_RUST_TOOLCHAIN: 1.93.0
+
+jobs:
+  program-keys:
+    name: program keys
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    steps:
+      - name: Check the image tag
+        run: |
+          if [[ ! "${IMAGE_TAG}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || [[ "${IMAGE_TAG}" == "latest" ]]; then
+            echo "::error::image_tag must be an exact tag such as v6 (letters, digits, dot, dash, underscore; not latest)"
+            exit 1
+          fi
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Install build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential clang libclang-dev pkg-config libssl-dev \
+            protobuf-compiler libprotobuf-dev jq
+
+      - name: Install the Rust toolchains
+        run: |
+          guest_toolchain="$(sed -n 's/^channel = "\(.*\)"$/\1/p' light-client/rust-toolchain.toml)"
+          [ -n "${guest_toolchain}" ] || { echo "::error::no channel in light-client/rust-toolchain.toml"; exit 1; }
+          rustup --version
+          rustup toolchain install "${guest_toolchain}" --profile minimal --component clippy --component rustfmt
+          rustup toolchain install "${SP1_CLI_RUST_TOOLCHAIN}" --profile minimal
+
+      - name: Build sp1-cli from source
+        run: |
+          src="${RUNNER_TEMP}/sp1"
+          git init -q "${src}"
+          git -C "${src}" fetch -q --depth 1 https://github.com/succinctlabs/sp1 "${SP1_CLI_REV}"
+          git -C "${src}" checkout -q FETCH_HEAD
+          test "$(git -C "${src}" rev-parse HEAD)" = "${SP1_CLI_REV}"
+          grep -q "^version = \"${SP1_CLI_VERSION}\"$" "${src}/Cargo.toml" || { echo "::error::sp1 source is not ${SP1_CLI_VERSION}"; exit 1; }
+          (cd "${src}" && cargo "+${SP1_CLI_RUST_TOOLCHAIN}" install --locked --path crates/cli)
+          rm -rf "${src}"
+          cargo prove --version
+
+      - name: Rebuild the program ELFs and keys
+        run: |
+          mkdir -p light-client/elf
+          ELF_OUTPUT_DIR="${GITHUB_WORKSPACE}/light-client/elf" light-client/scripts/program-keys.sh --write
+          sha256sum light-client/elf/light-client.elf light-client/elf/fork-observation.elf
+
+      - name: Write the keys to the job summary
+        run: |
+          keys=light-client/program-keys.json
+          light_client_key="$(jq -r '."light-client".program_key' "${keys}")"
+          observation_key="$(jq -r '."fork-observation".program_key' "${keys}")"
+          testnet=script/testnet/bridge.config.testnet.json
+          {
+            echo "## Program keys"
+            echo
+            echo "Built from \`${GITHUB_SHA}\` with sp1-cli ${SP1_CLI_VERSION} (\`${SP1_CLI_REV}\`)."
+            echo
+            echo "| Program | ELF SHA-256 | Program key |"
+            echo "|---|---|---|"
+            jq -r 'to_entries[] | "| `\(.key)` | `\(.value.elf_sha256)` | `\(.value.program_key)` |"' "${keys}"
+            echo
+            echo "Source hash: \`$(cat light-client/program-keys.source-hash)\`"
+            echo
+            if git diff --quiet -- "${keys}" light-client/program-keys.source-hash; then
+              echo "\`light-client/program-keys.json\` and \`program-keys.source-hash\` equal the committed files."
+            else
+              echo "**The keys differ from the committed files:**"
+              echo
+              echo '```diff'
+              git diff -- "${keys}" light-client/program-keys.source-hash
+              echo '```'
+            fi
+            echo
+            echo "### Where the keys go (this workflow commits nothing)"
+            echo
+            echo "- \`light-client/program-keys.json\` and \`light-client/program-keys.source-hash\`: the files of the artifact \`program-keys\`."
+            echo "- \`${testnet}\` and the mainnet configuration (made from \`script/hardened/bridge.config.example.json\`):"
+            echo "  \`programVKey\` and \`lightClientProgramVKey\` = \`${light_client_key}\` (light client),"
+            echo "  \`observationProgramVKey\` = \`${observation_key}\` (fork observation)."
+            echo
+            echo "Values in \`${testnet}\` now:"
+            echo
+            echo "| Field | Value | Matches the new key |"
+            echo "|---|---|---|"
+            jq -r --arg lc "${light_client_key}" --arg obs "${observation_key}" '
+              paths(scalars) as $p
+              | ($p[-1] | tostring) as $field
+              | select($field == "programVKey" or $field == "lightClientProgramVKey" or $field == "observationProgramVKey")
+              | getpath($p) as $value
+              | (if $field == "observationProgramVKey" then $obs else $lc end) as $want
+              | "| `\($p | map(tostring) | join("."))` | `\($value)` | \(if $value == $want then "yes" else "**no**" end) |"
+            ' "${testnet}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload the ELFs and keys
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: program-keys
+          # The common parent is light-client/, so the artifact holds elf/*.elf, program-keys.json, program-keys.source-hash.
+          path: |
+            light-client/elf/light-client.elf
+            light-client/elf/fork-observation.elf
+            light-client/program-keys.json
+            light-client/program-keys.source-hash
+          if-no-files-found: error
+          retention-days: 30
+
+  gpu-image:
+    name: gpu image
+    needs: program-keys
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check the image tag
+        run: |
+          if [[ ! "${IMAGE_TAG}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || [[ "${IMAGE_TAG}" == "latest" ]]; then
+            echo "::error::image_tag must be an exact tag such as v6 (letters, digits, dot, dash, underscore; not latest)"
+            exit 1
+          fi
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The image is about 20.6 GB unpacked, and the build holds the 6.2 GB circuit tarball, its 7.9 GB extract, a second
+      # copy of the extract in the final stage, the CUDA base and the Rust build: about 35 to 45 GB at peak. The root disk
+      # has about 14 GB free. Remove the preinstalled toolchains (this job needs none) and move the Docker and containerd
+      # data to the larger disk (/mnt, the temporary disk, when the runner has it). No BuildKit cache is exported: the GHA
+      # cache holds 10 GB per repository, less than one image.
+      - name: Free disk space and move the Docker data
+        run: |
+          echo "before:"; df -h / /mnt 2>/dev/null || df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache \
+            /usr/share/swift /usr/local/share/boost /usr/local/share/powershell /usr/local/share/chromium \
+            /usr/local/lib/node_modules /opt/microsoft /opt/google /opt/az /usr/lib/jvm
+          docker system prune -af --volumes >/dev/null
+          docker builder prune -af >/dev/null
+          avail_gb() { df --output=avail -BG "$1" | tail -n 1 | tr -dc '0-9'; }
+          root_gb="$(avail_gb /)"
+          mnt_gb=0
+          if mountpoint -q /mnt; then mnt_gb="$(avail_gb /mnt)"; fi
+          if [ "${mnt_gb}" -gt "${root_gb}" ]; then
+            echo "moving the Docker and containerd data to /mnt (${mnt_gb} GB free there, ${root_gb} GB on /)"
+            sudo systemctl stop docker.socket docker.service
+            sudo systemctl stop containerd.service || true
+            for directory in docker containerd; do
+              sudo rm -rf "/var/lib/${directory}"
+              sudo mkdir -p "/mnt/docker-storage/${directory}" "/var/lib/${directory}"
+              sudo mount --bind "/mnt/docker-storage/${directory}" "/var/lib/${directory}"
+            done
+            sudo systemctl start containerd.service || true
+            sudo systemctl start docker.service
+            # The Rust build needs about 8 GB of memory; add swap on the large disk when the runner has less than 14 GB.
+            if [ "$(awk '/MemTotal/ {print int($2 / 1048576)}' /proc/meminfo)" -lt 14 ]; then
+              sudo fallocate -l 16G /mnt/extra.swap && sudo chmod 600 /mnt/extra.swap
+              sudo mkswap /mnt/extra.swap >/dev/null && sudo swapon /mnt/extra.swap
+            fi
+          fi
+          docker info --format 'docker {{.ServerVersion}}, storage driver {{.Driver}}, root {{.DockerRootDir}}'
+          echo "after:"; df -h / /mnt 2>/dev/null || df -h /
+          free -g
+          build_gb="$(avail_gb /var/lib/docker)"
+          if [ "${build_gb}" -lt 45 ]; then
+            echo "::warning::only ${build_gb} GB free for Docker; the build needs about 35 to 45 GB at peak"
+          fi
+
+      - name: Download the ELFs and keys
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: program-keys
+          path: light-client
+
+      - name: Check the ELFs against program-keys.json
+        run: |
+          for guest in light-client fork-observation; do
+            expected="$(jq -r --arg g "${guest}" '.[$g].elf_sha256' light-client/program-keys.json)"
+            actual="$(sha256sum "light-client/elf/${guest}.elf" | cut -d' ' -f1)"
+            [ "${expected}" = "${actual}" ] || { echo "::error::${guest}.elf: ${actual}, program-keys.json: ${expected}"; exit 1; }
+            echo "${guest}.elf ${actual}"
+          done
+
+      - name: Log in to GHCR
+        if: inputs.push_image
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Refuse an existing tag
+        if: inputs.push_image
+        run: |
+          if docker buildx imagetools inspect "${IMAGE_NAME}:${IMAGE_TAG}" >/dev/null 2>&1; then
+            echo "::error::${IMAGE_NAME}:${IMAGE_TAG} exists already. Use a new exact tag."
+            exit 1
+          fi
+
+      - name: Build the image
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --target prover-gpu-worker \
+            --file docker/Dockerfile \
+            --tag "${IMAGE_NAME}:${IMAGE_TAG}" \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --provenance=false \
+            --sbom=false \
+            --load \
+            .
+          docker image ls "${IMAGE_NAME}"
+          df -h /var/lib/docker
+
+      - name: Check the files inside the image
+        run: |
+          circuit_version="$(sed -n 's/^ARG SP1_CIRCUIT_VERSION=//p' docker/Dockerfile)"
+          verifier_hash="$(sed -n 's/^ARG SP1_VERIFIER_HASH=//p' docker/Dockerfile)"
+          [ -n "${circuit_version}" ] && [ -n "${verifier_hash}" ] || { echo "::error::circuit pins not found in docker/Dockerfile"; exit 1; }
+          sums="$(docker run --rm --user 0:0 --entrypoint sha256sum "${IMAGE_NAME}:${IMAGE_TAG}" \
+            /elf/light-client.elf /elf/fork-observation.elf "/opt/sp1-circuits/groth16/${circuit_version}/groth16_vk.bin")"
+          echo "${sums}"
+          sum_of() { awk -v f="$1" '$2 == f {print $1}' <<<"${sums}"; }
+          for guest in light-client fork-observation; do
+            expected="$(jq -r --arg g "${guest}" '.[$g].elf_sha256' light-client/program-keys.json)"
+            [ "$(sum_of "/elf/${guest}.elf")" = "${expected}" ] || { echo "::error::${guest}.elf in the image differs from program-keys.json"; exit 1; }
+          done
+          [ "$(sum_of "/opt/sp1-circuits/groth16/${circuit_version}/groth16_vk.bin")" = "${verifier_hash}" ] \
+            || { echo "::error::groth16_vk.bin does not hash to VERIFIER_HASH ${verifier_hash}"; exit 1; }
+          {
+            echo "## GPU worker image"
+            echo
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Image | \`${IMAGE_NAME}:${IMAGE_TAG}\` |"
+            echo "| Built from | \`${GITHUB_SHA}\`, target \`prover-gpu-worker\`, linux/amd64 |"
+            echo "| Light client ELF | \`$(sum_of /elf/light-client.elf)\`, key \`$(jq -r '."light-client".program_key' light-client/program-keys.json)\` |"
+            echo "| Fork observation ELF | \`$(sum_of /elf/fork-observation.elf)\`, key \`$(jq -r '."fork-observation".program_key' light-client/program-keys.json)\` |"
+            echo "| groth16_vk.bin (${circuit_version}) | \`${verifier_hash}\` = VERIFIER_HASH |"
+            echo "| Local image id | \`$(docker image inspect --format '{{.Id}}' "${IMAGE_NAME}:${IMAGE_TAG}")\` |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Push the image
+        if: inputs.push_image
+        run: |
+          pushed="no"
+          for attempt in 1 2 3; do
+            if docker push "${IMAGE_NAME}:${IMAGE_TAG}" 2>&1 | tee "${RUNNER_TEMP}/push.log"; then
+              pushed="yes"
+              break
+            fi
+            echo "::warning::push attempt ${attempt} failed"
+            sleep 30
+          done
+          [ "${pushed}" = "yes" ] || { echo "::error::the push failed three times"; exit 1; }
+          push_digest="$(grep -Eo 'digest: sha256:[0-9a-f]{64}' "${RUNNER_TEMP}/push.log" | tail -n 1 | cut -d' ' -f2)"
+          registry_digest="$(docker buildx imagetools inspect "${IMAGE_NAME}:${IMAGE_TAG}" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "push digest: ${push_digest}"
+          echo "registry digest: ${registry_digest}"
+          if [ -n "${push_digest}" ] && [ "${push_digest}" != "${registry_digest}" ]; then
+            echo "::warning::the push printed ${push_digest}, the registry serves ${registry_digest}"
+          fi
+          {
+            echo "| Registry digest | \`${registry_digest}\` |"
+            echo
+            echo "Reference the image by digest in RunPod: \`${IMAGE_NAME}@${registry_digest}\`"
+            echo
+            echo "GHCR packages are private by default: give RunPod registry credentials, or make the package public."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Note that nothing was pushed
+        if: ${{ !inputs.push_image }}
+        run: echo "| Pushed | no (push_image was false) |" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Log out of GHCR
+        if: always() && inputs.push_image
+        run: docker logout ghcr.io || true
