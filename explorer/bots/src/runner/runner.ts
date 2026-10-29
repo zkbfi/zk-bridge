@@ -1,6 +1,5 @@
 import type { Address, Hex } from "viem";
 import type { ProofDirection, ProofMessage } from "@zk-bridge/shared";
-import type { LightClientReader } from "../chain/light-client.ts";
 import type { FeedItem } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
 import type { StateStore } from "../runtime/state-file.ts";
@@ -9,7 +8,7 @@ import { planBatches } from "./batch-plan.ts";
 import { isFinal, prepareItem, type DeliveryDependencies, type DeliveryOutcome, type Preparation, type ReadyDelivery } from "./delivery.ts";
 import { createPrerequisiteLedger, type BudgetStore, type PrerequisiteLedger } from "./prerequisite-ledger.ts";
 import type { OutcomeSink } from "./outcomes.ts";
-import { assessProofPayload, payloadKey, type ProofRefusal } from "@zk-bridge/shared/prover";
+import { assessProofPayload, payloadKey, type LightClientReader, type ProofRefusal } from "@zk-bridge/shared/prover";
 import { createSerialQueue, type SerialQueue } from "./serial-queue.ts";
 import type { PrerequisiteBudgetState, RunnerState } from "./state.ts";
 import { postUpdate } from "./update.ts";

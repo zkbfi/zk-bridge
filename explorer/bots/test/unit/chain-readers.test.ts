@@ -1,24 +1,8 @@
 import { toEventSelector, type PublicClient } from "viem";
-import { describe, expect, it, vi } from "vitest";
-import { beaconLightClientAbi, messageBridgeAbi } from "@zk-bridge/shared";
-import { createLightClientReader } from "../../src/chain/light-client.ts";
+import { describe, expect, it } from "vitest";
+import { messageBridgeAbi } from "@zk-bridge/shared";
 import { createSourceReader } from "../../src/runner/source-reader.ts";
 import { address, word } from "../support/builders.ts";
-
-describe("the light client reader", () => {
-  it("reads the head, the program key and the header root of that very head", async () => {
-    const readContract = vi.fn(async ({ functionName, args }: { functionName: string; args?: readonly unknown[] }) => {
-      if (functionName === "head") return 164n;
-      if (functionName === "programVKey") return word(0x42);
-      if (functionName === "headers") return args?.[0] === 164n ? word(0x77) : word(0x00);
-      throw new Error(`unexpected ${functionName}`);
-    });
-    const lightClient = address(0x44);
-    const state = await createLightClientReader({ readContract } as unknown as PublicClient, lightClient).read();
-    expect(state).toEqual({ headSlot: 164n, headRoot: word(0x77), programKey: word(0x42) });
-    expect(readContract).toHaveBeenCalledWith({ address: lightClient, abi: beaconLightClientAbi, functionName: "headers", args: [164n] });
-  });
-});
 
 describe("the source reader", () => {
   const bridge = address(0x33);

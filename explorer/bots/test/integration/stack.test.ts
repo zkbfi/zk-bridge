@@ -7,14 +7,13 @@ import { decodeFunctionData, encodePacked, keccak256, recoverAddress, sha256, ty
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { beaconLightClientAbi, encodeFeeDirector, encodeProofMessage, messageBridgeAbi, multicall3Abi, deliveryRouterAbi } from "@zk-bridge/shared";
 import { emptyProverSetup, saveProverSetup, type ProverSetup } from "@zk-bridge/shared/config";
-import { createLightClientReader } from "../../src/chain/light-client.ts";
 import { createTransactionPort } from "../../src/chain/transactions.ts";
 import { loadBotContext } from "../../src/runtime/context.ts";
 import { startPublisher } from "../../src/publisher/service.ts";
 import { createSerialQueue } from "../../src/runner/serial-queue.ts";
 import { createRunner } from "../../src/runner/runner.ts";
 import { startRunner } from "../../src/runner/service.ts";
-import type { ProverBinary } from "@zk-bridge/shared/prover";
+import { createLightClientReader, type ProverBinary } from "@zk-bridge/shared/prover";
 import { INITIAL_RUNNER_STATE, type RunnerState } from "../../src/runner/state.ts";
 import type { StateStore } from "../../src/runtime/state-file.ts";
 import { ANVIL_MNEMONIC, ACCOUNT, account, buildOracleUpdate, compileStackContracts, startStack, type Stack } from "./support/stack.ts";

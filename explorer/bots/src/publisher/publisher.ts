@@ -1,10 +1,9 @@
 import type { Hex } from "viem";
 import { ORACLE_PROOF_MESSAGE_VERSION, PROOF_MESSAGE_VERSION, encodeProofMessage, type ProofDirection } from "@zk-bridge/shared";
-import type { LightClientReader } from "../chain/light-client.ts";
 import type { Logger } from "../logging/logger.ts";
 import type { BoardPublisher } from "@zk-bridge/shared/msgboard";
 import type { StateFile } from "../runtime/state-file.ts";
-import type { ProofPackage } from "@zk-bridge/shared/prover";
+import type { LightClientReader, ProofPackage } from "@zk-bridge/shared/prover";
 import { classifyPending, decideProving, shouldRepublish, type ProvingPolicy } from "./decisions.ts";
 import type { ProofSource } from "./proof-source.ts";
 import type { PendingProof, PublisherState } from "./state.ts";
