@@ -82,7 +82,7 @@ All secrets live in the 1Password vault `zkb.fi` and reach a server only as envi
 | Endpoint keys of the providers | app server |
 | Filebase keys | the release machine only |
 | Release signing key | the release machine only, read at the moment of use |
-| SSH key `zkb.fi servers` | the operator's machine, through the 1Password SSH agent |
+| SSH key `DigitalOcean (zkb.fi)` (also for the Hetzner server; rename it in the 1Password app, the CLI cannot edit SSH keys) | the operator's machine, through the 1Password SSH agent |
 
 ## Measurements
 
