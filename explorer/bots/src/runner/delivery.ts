@@ -62,6 +62,7 @@ export type SkipReason =
   | "source-log-not-found"
   | "already-delivered"
   | "indexer-disagrees-with-evidence"
+  | "evidence-for-another-message"
   | "evidence-failed"
   | "fee-quote-failed"
   | "prerequisite-reverted"
@@ -463,6 +464,10 @@ export async function prepareItem(dependencies: DeliveryDependencies, listed: Fe
     evidence = await dependencies.prover.evidence({ direction: dependencies.direction, transactionHash: sourceTransaction, logIndex });
   } catch (error) {
     return done(skip(messageId, "evidence-failed", { detail: error instanceof Error ? error.message : String(error) }));
+  }
+  // A prover that answers for another message would deliver it and record it under this item.
+  if (evidence.message.messageId.toLowerCase() !== messageId.toLowerCase()) {
+    return done(skip(messageId, "evidence-for-another-message", { detail: `the evidence names ${evidence.message.messageId}` }));
   }
   if (evidence.alreadyDelivered) return done(skip(messageId, "already-delivered", { detail: evidence.deliveryStatus }));
   // The offer and the gas limit priced above come from the indexer. The prover read the message from the source chain,

@@ -102,6 +102,14 @@ describe("the preparation of an item: guards at the edge of external data", () =
     expect(w.chain.log.some((entry) => entry.kind === "send" || entry.kind === "simulate")).toBe(false);
   });
 
+  it("skips evidence that names another message than the item, and spends nothing", async () => {
+    const w = setup();
+    w.dependencies = { ...w.dependencies, prover: w.prover };
+    w.prover.evidence = async () => ({ ...evidenceFor(), message: { ...evidenceFor().message, messageId: word(2) } });
+    expect(await outcomeOf(() => prepareItem(w.dependencies, w.item, w.ledger))).toMatchObject({ status: "skipped", reason: "evidence-for-another-message" });
+    expect(w.chain.log.some((entry) => entry.kind === "send" || entry.kind === "simulate")).toBe(false);
+  });
+
   it("cannot price a tip in a token that does not answer its decimals, such as a copy that is not deployed yet", async () => {
     const w = setup({ item: feedItem({ id: 1 }) });
     w.dependencies = { ...w.dependencies, settings: { ...w.dependencies.settings, tokenValuationsWei: { [address(0x66).toLowerCase()]: 10n ** 18n } } };

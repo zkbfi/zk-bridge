@@ -205,14 +205,15 @@ describe("red team: delivery decisions of the runner", () => {
     expect(preparation).toMatchObject({ kind: "outcome", outcome: { status: "skipped", reason: "indexer-disagrees-with-evidence" } });
   });
 
-  it("ATTACK SUCCEEDS evidence for another message: the runner does not compare evidence.message.messageId with the feed item", async () => {
+  it("ATTACK evidence for another message is skipped before any gas is spent (BLOCKED, was B-2)", async () => {
     const item = feedItem({ id: 7, token: WRAPPED_NATIVE });
     const offer = feeOfferData({ director: DIRECTOR, value: 10n ** 18n, token: WRAPPED_NATIVE });
     const evidence = { ...evidenceFor(), message: { ...evidenceFor().message, data: offer, gasLimit: Number(item.gasLimit) } }; // names message word(1), not word(7)
     const deps = dependencies({ indexer: fakeIndexer([item], { [item.messageId]: offer }), prover: fakeProver({ evidence: () => evidence }) });
     const preparation = await prepareItem(deps, item, ledger());
     expect(evidence.message.messageId).not.toBe(item.messageId);
-    expect(preparation.kind).toBe("ready");
+    expect(preparation).toMatchObject({ kind: "outcome", outcome: { status: "skipped", reason: "evidence-for-another-message" } });
+    expect(deps.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(0);
   });
 
   it("ATTACK already-delivered evidence is skipped before any gas is spent", async () => {
