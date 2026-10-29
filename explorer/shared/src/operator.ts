@@ -125,6 +125,19 @@ export const planUpdateFromHandoff = (text: string, chains: readonly OperatorCha
 };
 
 /**
+ * Tells why a proof cannot be posted now, or null when the light client would take it. The contract refuses an update
+ * that does not start at its current head (`PreviousHeadSlotMismatch`), so a page reads the head again before it posts.
+ *
+ * @param proof The proof.
+ * @param headSlot The slot that the light client stores now.
+ */
+export const proofStartProblem = (proof: ProofMessage, headSlot: bigint): string | null => {
+  if (proof.newSlot <= headSlot) return `The light client already holds slot ${headSlot}. This proof reaches only slot ${proof.newSlot}.`;
+  if (proof.startSlot !== headSlot) return `The light client head is now at slot ${headSlot}, but this proof starts at slot ${proof.startSlot}. Request a new proof.`;
+  return null;
+};
+
+/**
  * Plans the light client update that a proof message carries.
  *
  * The call is built from the message, so the calldata is never read from outside. The slots and roots of the message

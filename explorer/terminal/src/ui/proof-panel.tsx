@@ -4,7 +4,7 @@
  * The panel holds no secret. It never shows an endpoint, because an endpoint can hold a key.
  */
 import { useState } from 'react'
-import { PROOF_DIRECTIONS, type ProofDirection, type ResolvedConnection } from '@zk-bridge/shared'
+import { PROOF_DIRECTIONS, proofStartProblem, type ProofDirection, type ResolvedConnection } from '@zk-bridge/shared'
 import { useServices } from '../app/services'
 import {
   backendClientOf,
@@ -128,11 +128,22 @@ export function ProofModal(props: {
       .catch((error: unknown) => setRequest({ kind: 'refused', note: redact(error instanceof Error ? error.message : String(error)) }))
   }
 
-  const post = (direction: ProofDirection) => {
+  const post = async (direction: ProofDirection) => {
     const row = rows.data?.find((candidate) => candidate.direction === direction)
     if (row === undefined || row.reading.kind !== 'found') return setNotice('There is no proof to post for this direction.')
-    // The decode of the message already checked its public values against its slots, so the planner cannot refuse it.
-    props.onReview('Post a light client update', [{ plan: planProofMessageUpdate(row.reading.message, pair), skippable: false }])
+    const message = row.reading.message
+    // The rows can be seconds old. The contract refuses an update that does not start at its head now, so read it again.
+    const destination = direction === 'first-to-second' ? 'second' : 'first'
+    const heads = await dataSource.getHeads(pair.id).catch(() => null)
+    const headSlot = heads?.find((head) => head.side === destination)?.storedHeadSlot ?? null
+    if (headSlot === null) return setNotice('The light client head cannot be read, so the proof is not posted. Try again.')
+    const problem = proofStartProblem(message, headSlot)
+    if (problem !== null) return setNotice(problem)
+    try {
+      props.onReview('Post a light client update', [{ plan: planProofMessageUpdate(message, pair), skippable: false }])
+    } catch (error) {
+      setNotice(redact(error instanceof Error ? error.message : String(error)))
+    }
   }
 
   useKeyLayer(
@@ -141,8 +152,8 @@ export function ProofModal(props: {
       if (key.name === 'escape') props.onClose()
       else if (key.sequence === '1') ask('first-to-second')
       else if (key.sequence === '2') ask('second-to-first')
-      else if (key.sequence === '3') post('first-to-second')
-      else if (key.sequence === '4') post('second-to-first')
+      else if (key.sequence === '3') void post('first-to-second')
+      else if (key.sequence === '4') void post('second-to-first')
       else if (key.name === 'e') setPhase('evidence')
       return true
     },

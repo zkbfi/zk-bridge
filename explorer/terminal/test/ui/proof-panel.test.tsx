@@ -120,6 +120,34 @@ describe('the proof panel reads the latest proof', () => {
     expect(await view.until('from the msgboard node')).toContain('slot 14000000 to 14200000, from the msgboard node')
   })
 
+  test('a proof is not posted when the head moved after the panel read it, and the reason shows', async () => {
+    const reviews: FlowStep[][] = []
+    let head = HEAD
+    const base = dataSourceWithHead(HEAD)
+    const moving: DataSource = { ...base, getHeads: async (pairId) => (await base.getHeads(pairId)).map((entry) => ({ ...entry, storedHeadSlot: head })) }
+    const { transport } = fakeTransport({ get: async () => ({ status: 200, body: { payload: payloadOf(proofMessage()) } }) })
+    const view = await openPanel({ set: ['msgboardIndexerUrl'], transport, reviews, dataSource: moving })
+    await view.until('from the msgboard indexer')
+    head = HEAD + 32n
+    await view.press('3')
+    expect(await view.until('Request a new proof')).toContain(`The light client head is now at slot ${HEAD + 32n}`)
+    expect(reviews).toEqual([])
+  })
+
+  test('a proof is not posted when the head cannot be read', async () => {
+    const reviews: FlowStep[][] = []
+    let readable = true
+    const base = dataSourceWithHead(HEAD)
+    const failing: DataSource = { ...base, getHeads: async (pairId) => (readable ? base.getHeads(pairId) : Promise.reject(new Error('rpc down'))) }
+    const { transport } = fakeTransport({ get: async () => ({ status: 200, body: { payload: payloadOf(proofMessage()) } }) })
+    const view = await openPanel({ set: ['msgboardIndexerUrl'], transport, reviews, dataSource: failing })
+    await view.until('from the msgboard indexer')
+    readable = false
+    await view.press('3')
+    expect(await view.until('cannot be read')).toContain('The light client head cannot be read')
+    expect(reviews).toEqual([])
+  })
+
   test('the job status of a direction shows, with its error when the job failed', async () => {
     const job = { jobId: 'job-9', direction: 'first-to-second', status: 'failed', createdAt: 1, updatedAt: 2, startSlot: null, newSlot: null, error: 'out of memory' }
     const { transport } = fakeTransport({ get: async (url) => (url.includes('/directions/') ? { status: 200, body: { direction: 'first-to-second', job } } : { status: 404, body: null }) })
@@ -315,7 +343,9 @@ describe('the panel inside the app', () => {
       createChainAccess: fakeChainAccesses().createChainAccess,
     })
     const realFetch = globalThis.fetch
-    globalThis.fetch = (async () => new Response(JSON.stringify({ payload: payloadOf(proofMessage()) }), { status: 200 })) as unknown as typeof fetch
+    // The fixture data source stores slot 14100000 on the second chain, so the proof starts there.
+    const fromHead = proofMessage({ startSlot: 14_100_000n, newSlot: 14_100_064n })
+    globalThis.fetch = (async () => new Response(JSON.stringify({ payload: payloadOf(fromHead) }), { status: 200 })) as unknown as typeof fetch
     try {
       hosts = await renderApp({ width: 120, height: 40, pair, connection: runtime })
       await hosts.press('r')

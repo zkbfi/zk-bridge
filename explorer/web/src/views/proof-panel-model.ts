@@ -167,19 +167,6 @@ export const readLatestProof = async (input: {
   return { kind: "none", notes: [...notes, answer.note] };
 };
 
-/**
- * Tells why a proof cannot be posted now, or null when the light client would take it. The contract refuses an update
- * that does not start at its current head (`PreviousHeadSlotMismatch`), so the page reads the head again before it posts.
- *
- * @param proof The proof.
- * @param headSlot The slot that the light client stores now.
- */
-export const proofStartProblem = (proof: ProofMessage, headSlot: bigint): string | null => {
-  if (proof.newSlot <= headSlot) return `The light client already holds slot ${headSlot}. This proof reaches only slot ${proof.newSlot}.`;
-  if (proof.startSlot !== headSlot) return `The light client head is now at slot ${headSlot}, but this proof starts at slot ${proof.startSlot}. Request a new proof.`;
-  return null;
-};
-
 /** What the archive gave for a message. `text` is the JSON of the evidence, as the planner reads it. */
 export type EvidenceReading = { readonly kind: "found"; readonly text: string } | { readonly kind: "none"; readonly note: string };
 

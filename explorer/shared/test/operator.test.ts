@@ -10,6 +10,7 @@ import {
   planMessageExecution,
   planUpdateFromHandoff,
   planUpdateFromProofMessage,
+  proofStartProblem,
   type OperatorChain,
   type ProofMessage,
 } from "../src/index.js";
@@ -389,5 +390,16 @@ describe("a chain that is not in the list", () => {
       return;
     }
     throw new Error("the file was accepted");
+  });
+});
+
+describe("proofStartProblem", () => {
+  it("is null for a proof that starts at the head and goes past it", () => {
+    expect(proofStartProblem(proofMessage(), BigInt(START_SLOT))).toBeNull();
+  });
+
+  it("names a proof that does not go past the head, and one that starts elsewhere", () => {
+    expect(proofStartProblem(proofMessage(), BigInt(NEW_SLOT))).toMatch(/already holds slot 14100000/);
+    expect(proofStartProblem(proofMessage(), BigInt(START_SLOT + 32))).toMatch(/starts at slot 14099840/);
   });
 });
