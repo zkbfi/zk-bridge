@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { BotConfigError, parseBotConfig } from "../../src/config/bot-config.ts";
+import { BotConfigError, parseBotConfig, runnerMinimumPriorityFeeWei } from "../../src/config/bot-config.ts";
 import { parseCommandLine } from "../../src/cli.ts";
 import { createLogger } from "../../src/logging/logger.ts";
 import { createSecretVault, openSecretStore } from "../../src/runtime/secrets.ts";
@@ -127,6 +127,28 @@ describe("the bot configuration", () => {
     expect(parseBotConfig({ ...minimal, runner: runner({ maximumBatchSize: 3, maximumBatchGas: 2_000_000 }) }).runner).toMatchObject({ maximumBatchSize: 3, maximumBatchGas: 2_000_000 });
     expect(() => parseBotConfig({ ...minimal, runner: runner({ maximumBatchSize: 0 }) })).toThrow(/config\.runner\.maximumBatchSize/);
     expect(() => parseBotConfig({ ...minimal, runner: runner({ maximumBatchGas: -1 }) })).toThrow(/config\.runner\.maximumBatchGas/);
+  });
+
+  it("takes a minimum priority fee by chain id over the defaults of PulseChain and its testnet", () => {
+    const runner = (extra: Record<string, unknown>) => ({
+      prover: { binary: "p" },
+      indexerUrl: "http://127.0.0.1:1",
+      signer: { kind: "private-key", key: "env:RUNNER_PRIVATE_KEY" },
+      maximumPrerequisiteSpendPerSweepWei: "5000",
+      maximumPrerequisiteSpendPerDayWei: "20000",
+      maximumUnrecoveredPrerequisiteLossWei: "10000",
+      ...extra,
+    });
+    const plain = parseBotConfig({ ...minimal, runner: runner({}) }).runner!;
+    expect(plain.minimumPriorityFeeWei).toEqual({});
+    expect(runnerMinimumPriorityFeeWei(plain, 943)).toBe(10_000_000n);
+    expect(runnerMinimumPriorityFeeWei(plain, 369)).toBe(10_000_000n);
+    expect(runnerMinimumPriorityFeeWei(plain, 11155111)).toBe(0n);
+    const set = parseBotConfig({ ...minimal, runner: runner({ minimumPriorityFeeWei: { "943": "2000000", "11155111": "1" } }) }).runner!;
+    expect(runnerMinimumPriorityFeeWei(set, 943)).toBe(2_000_000n);
+    expect(runnerMinimumPriorityFeeWei(set, 11155111)).toBe(1n);
+    expect(() => parseBotConfig({ ...minimal, runner: runner({ minimumPriorityFeeWei: { sepolia: "1" } }) })).toThrow(/config\.runner\.minimumPriorityFeeWei/);
+    expect(() => parseBotConfig({ ...minimal, runner: runner({ minimumPriorityFeeWei: { "943": "0.01" } }) })).toThrow(/config\.runner\.minimumPriorityFeeWei/);
   });
 
   it("refuses a runner without a cap on the layout spend of a sweep, because the cap bounds an attack on the runner gas", () => {

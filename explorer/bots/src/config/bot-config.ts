@@ -1,4 +1,4 @@
-import { MULTICALL3_ADDRESS } from "@zk-bridge/shared";
+import { MULTICALL3_ADDRESS, minimumPriorityFeeWei } from "@zk-bridge/shared";
 import { parseReferenceText, type SecretReference } from "@zk-bridge/shared/config";
 import { z } from "zod";
 
@@ -158,6 +158,12 @@ export const runnerSchema = z
     proofCheckGas: z.number().int().positive().default(400_000),
     /** The priority fee in wei. Default: what the node suggests. */
     priorityFeeWei: weiSchema.optional(),
+    /**
+     * The smallest priority fee in wei, by chain id. A smaller fee, fixed or suggested, is raised to it. Chains 369 and
+     * 943 default to 0.01 gwei (`DEFAULT_MINIMUM_PRIORITY_FEE_WEI` in the shared package): their validators skip a tip
+     * of 0.001 gwei or less, and such a transaction blocks every later nonce of the runner. A chain id here wins.
+     */
+    minimumPriorityFeeWei: z.record(z.string().regex(/^\d+$/, "must be a chain id"), weiSchema).default({}),
     /** The most items that one sweep delivers. */
     maximumDeliveriesPerSweep: z.number().int().positive().default(10),
     /** The most items that one batch transaction delivers through the delivery router. */
@@ -250,4 +256,12 @@ export function parseBotConfig(value: unknown): BotConfig {
   // A failed parse holds at least one issue.
   const issue = result.error.issues[0] as (typeof result.error.issues)[number];
   throw new BotConfigError(`config.${issue.path.join(".")}: ${issue.message}`);
+}
+
+/**
+ * The smallest priority fee that the runner sends on a chain: the runner's own setting for the chain, else the shared
+ * default of the chain, else zero.
+ */
+export function runnerMinimumPriorityFeeWei(runner: RunnerConfig, chainId: number): bigint {
+  return minimumPriorityFeeWei(chainId, runner.minimumPriorityFeeWei);
 }

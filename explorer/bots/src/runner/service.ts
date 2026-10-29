@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { createPublicClient, http, type Address, type PublicClient } from "viem";
 import { proofCategory, type ProofDirection } from "@zk-bridge/shared";
-import { BotConfigError, type RunnerConfig } from "../config/bot-config.ts";
+import { BotConfigError, runnerMinimumPriorityFeeWei, type RunnerConfig } from "../config/bot-config.ts";
 import { createTransactionPort, type TransactionPort } from "../chain/transactions.ts";
 import { createIndexerClient } from "../indexer/client.ts";
 import { createBoardFeed, type BoardFeed } from "@zk-bridge/shared/msgboard";
@@ -140,6 +140,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
         signer,
         chainId,
         priorityFeeWei: runnerConfig.priorityFeeWei === undefined ? undefined : BigInt(runnerConfig.priorityFeeWei),
+        minimumPriorityFeeWei: runnerMinimumPriorityFeeWei(runnerConfig, chainId),
         receiptTimeoutMilliseconds: runnerConfig.receiptTimeoutSeconds * 1000,
       }),
     };

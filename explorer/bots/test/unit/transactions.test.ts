@@ -38,13 +38,14 @@ function fakeClient(overrides: ClientOverrides = {}) {
   return client;
 }
 
-function portOver(client: ReturnType<typeof fakeClient>, extra: { priorityFeeWei?: bigint; signer?: Signer } = {}) {
+function portOver(client: ReturnType<typeof fakeClient>, extra: { priorityFeeWei?: bigint; minimumPriorityFeeWei?: bigint; signer?: Signer } = {}) {
   return createTransactionPort({
     client: client as unknown as PublicClient,
     signer: extra.signer ?? signerFromPrivateKeyText(ANVIL_KEY),
     chainId: 369,
     receiptTimeoutMilliseconds: 12_345,
     ...(extra.priorityFeeWei === undefined ? {} : { priorityFeeWei: extra.priorityFeeWei }),
+    ...(extra.minimumPriorityFeeWei === undefined ? {} : { minimumPriorityFeeWei: extra.minimumPriorityFeeWei }),
   });
 }
 
@@ -70,6 +71,31 @@ describe("the fee quote", () => {
     const client = fakeClient();
     expect(await portOver(client, { priorityFeeWei: 0n }).feeQuote()).toEqual({ baseFee: 100n, priorityFee: 0n });
     expect(client.estimateMaxPriorityFeePerGas).not.toHaveBeenCalled();
+  });
+
+  it("raises a suggested tip below the chain's minimum to the minimum, so a validator includes the transaction", async () => {
+    const client = fakeClient();
+    expect(await portOver(client, { minimumPriorityFeeWei: 10_000_000n }).feeQuote()).toEqual({ baseFee: 100n, priorityFee: 10_000_000n });
+  });
+
+  it("raises a fixed tip below the minimum as well", async () => {
+    expect(await portOver(fakeClient(), { priorityFeeWei: 1n, minimumPriorityFeeWei: 1_000_001n }).feeQuote()).toEqual({ baseFee: 100n, priorityFee: 1_000_001n });
+  });
+
+  it("keeps a tip at or above the minimum", async () => {
+    expect(await portOver(fakeClient(), { minimumPriorityFeeWei: 7n }).feeQuote()).toEqual({ baseFee: 100n, priorityFee: 7n });
+    expect(await portOver(fakeClient(), { priorityFeeWei: 2_000_000_000n, minimumPriorityFeeWei: 10_000_000n }).feeQuote()).toEqual({ baseFee: 100n, priorityFee: 2_000_000_000n });
+  });
+
+  it("sends the raised tip, with a maximum fee of twice the base fee plus the tip", async () => {
+    const client = fakeClient();
+    const port = portOver(client, { minimumPriorityFeeWei: 10_000_000n });
+    const terms = sendTerms(await port.feeQuote(), 21_000n);
+    expect(terms).toMatchObject({ maxFeePerGas: 200n + 10_000_000n, maxPriorityFeePerGas: 10_000_000n });
+    await port.send({ to: TARGET, data: DATA, ...terms });
+    const sent = parseTransaction((client.sendRawTransaction.mock.calls[0] as [{ serializedTransaction: Hex }])[0].serializedTransaction) as TransactionSerializableEIP1559;
+    expect(sent.maxPriorityFeePerGas).toBe(10_000_000n);
+    expect(sent.maxFeePerGas).toBe(10_000_200n);
   });
 
   it.each([null, undefined])("refuses a chain that reports a base fee of %s", async (baseFeePerGas) => {

@@ -2,6 +2,7 @@
  * Turns a planned transaction into an unsigned transaction with a nonce, a gas estimate and fees, and sends a signed
  * one. The chain access goes through small interfaces, so tests pass a fake and the later web interface passes its own.
  */
+import { minimumPriorityFeeWei, withMinimumPriorityFee } from '@zk-bridge/shared'
 import type { Address, Hash, Hex, TransactionReceipt, TransactionSerializableEIP1559 } from 'viem'
 import type { PlannedTransaction } from './plan'
 
@@ -35,7 +36,8 @@ export interface PreparedTransaction {
 const GAS_MARGIN_PERCENT = 20n
 
 /**
- * Estimates gas, reads the nonce and fees, and builds the unsigned transaction.
+ * Estimates gas, reads the nonce and fees, and builds the unsigned transaction. A tip below the minimum of the chain
+ * (`minimumPriorityFeeWei` of the shared package) is raised to it, and the fee cap by the same amount.
  *
  * The estimate runs against the chain, so a call that would revert fails here, before anything is signed.
  *
@@ -49,11 +51,13 @@ export async function prepareTransaction(
   from: Address,
   plan: PlannedTransaction,
 ): Promise<PreparedTransaction> {
-  const [gasEstimate, nonce, fees] = await Promise.all([
+  const [gasEstimate, nonce, suggested] = await Promise.all([
     client.estimateGas({ account: from, to: plan.to, data: plan.data, value: plan.value }),
     client.getTransactionCount({ address: from, blockTag: 'pending' }),
     client.estimateFeesPerGas(),
   ])
+  // Some chains skip a tip below a minimum (PulseChain: 0.001 gwei or less), and such a transaction never leaves the pool.
+  const fees = withMinimumPriorityFee(suggested, minimumPriorityFeeWei(plan.chain.chainId))
   const gasLimit = gasEstimate + (gasEstimate * GAS_MARGIN_PERCENT) / 100n
   const unsigned: TransactionSerializableEIP1559 = {
     type: 'eip1559',

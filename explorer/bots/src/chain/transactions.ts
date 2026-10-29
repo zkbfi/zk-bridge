@@ -98,6 +98,11 @@ export interface TransactionPortInput {
   readonly chainId: number;
   /** A fixed priority fee in wei. Default: what the node suggests. */
   readonly priorityFeeWei?: bigint;
+  /**
+   * The smallest priority fee the chain's validators include, in wei. A smaller fixed or suggested fee is raised to it.
+   * A transaction with a tip below it waits in the pool for good and holds back every later nonce. Default: 0.
+   */
+  readonly minimumPriorityFeeWei?: bigint;
   readonly receiptTimeoutMilliseconds: number;
 }
 
@@ -116,8 +121,9 @@ export function createTransactionPort(input: TransactionPortInput): TransactionP
   async function feeQuote(): Promise<FeeQuote> {
     const block = await client.getBlock({ blockTag: "latest" });
     if (block.baseFeePerGas === null || block.baseFeePerGas === undefined) throw new Error("the chain reports no base fee");
-    const priorityFee = input.priorityFeeWei ?? (await client.estimateMaxPriorityFeePerGas());
-    return { baseFee: block.baseFeePerGas, priorityFee };
+    const chosen = input.priorityFeeWei ?? (await client.estimateMaxPriorityFeePerGas());
+    const minimum = input.minimumPriorityFeeWei ?? 0n;
+    return { baseFee: block.baseFeePerGas, priorityFee: chosen < minimum ? minimum : chosen };
   }
 
   return {
