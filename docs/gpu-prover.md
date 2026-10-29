@@ -151,6 +151,27 @@ The two images have the same ELF hashes, the same `prove-worker` binary hash (`4
 
 `light-client/scripts/program-keys.sh` also skips its Docker build now, when the hash of the guest sources matches `light-client/program-keys.source-hash`. Use `--force` to build anyway. On the build host the full check took 165 s and the skip took under 1 s.
 
+### Build in GitHub Actions
+
+The workflow `.github/workflows/prover-build.yml` does the build host rebuild of `docs/testnet-run.md` on GitHub-hosted runners. It runs only when you start it:
+
+```
+gh workflow run prover-build.yml -f image_tag=v6 -f push_image=true
+gh run watch                                   # follow the run
+gh run download <run id> -n program-keys -D light-client   # fetch the ELFs and keys
+```
+
+Use a new exact tag. `v4` and `v5` exist already (see below), and the workflow refuses a tag that exists in the registry. With `push_image=false` it builds and checks the image but pushes nothing.
+
+It has two jobs:
+
+1. `program-keys` builds sp1-cli 6.8.1 from source at the commit of the tag `v6.8.1` (no `sp1up`), runs `light-client/scripts/program-keys.sh --write` with `ELF_OUTPUT_DIR=light-client/elf`, and uploads the artifact `program-keys`: `elf/light-client.elf`, `elf/fork-observation.elf`, `program-keys.json` and `program-keys.source-hash`. The job summary shows the ELF hashes, the program keys, the difference from the committed `light-client/program-keys.json`, and whether each key in `script/testnet/bridge.config.testnet.json` matches. The workflow commits nothing. Review the keys, then commit `light-client/program-keys.json`, `light-client/program-keys.source-hash` and the keys in `script/testnet/bridge.config.testnet.json` and in the mainnet configuration (`programVKey` and `lightClientProgramVKey` take the light client key, `observationProgramVKey` takes the fork observation key).
+2. `gpu-image` frees disk space on the runner (it removes the preinstalled toolchains and moves the Docker data to the larger temporary disk), downloads the artifact into `light-client/`, builds the target `prover-gpu-worker` for linux/amd64 without a cache, and checks inside the image that both ELFs match `program-keys.json` and that `groth16_vk.bin` hashes to `VERIFIER_HASH`. With `push_image=true` it logs in to GHCR with the workflow token (`GITHUB_TOKEN`, permission `packages: write`), pushes `ghcr.io/zkbfi/zk-bridge-prover-gpu-worker:<tag>` and writes the registry digest to the job summary. Reference the image by that digest in RunPod (`ghcr.io/zkbfi/zk-bridge-prover-gpu-worker@sha256:...`).
+
+GHCR packages are private by default. RunPod then needs registry credentials (a token with `read:packages`, added as container registry credentials in the RunPod console), or make the package public in the package settings on GitHub: the code is open source, so the image holds nothing secret.
+
+A hosted runner has much less disk and fewer cores than the build host, and no cache survives between runs. Expect a cold build every time (about one to two hours for both jobs). The step "Free disk space and move the Docker data" logs the free space before and after the cleanup, and warns when less than 45 GB is left for Docker.
+
 What the image holds:
 
 - The base is `nvidia/cuda:12.8.2-runtime-ubuntu24.04`, pinned by tag and digest. The tag was pushed on 2026-04-30, so it meets the age rule of 28 days before 2026-09-24.
