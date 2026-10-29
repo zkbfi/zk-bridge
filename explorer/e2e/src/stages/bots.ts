@@ -109,6 +109,8 @@ export const writeBotConfiguration = async (context: Context, indexerUrl: string
         publisher: { prover, backend: context.backend, oracleKeyVariable: "ORACLE_KEY", apiKeyVariable: "RUNPOD_API_KEY", remote: { mode: "load-balancing" }, pollSeconds: 5, republishSeconds: 600, retryBackoffSeconds: 20, indexerUrl },
         runner: {
           prover: { ...prover, timeoutSeconds: 600 },
+          // Only the oracle run accepts the 65-byte test proof. A remote run never does.
+          acceptOracleProof: !remote,
           indexerUrl,
           signer: { kind: "private-key", key: "env:E2E_RUNNER_KEY" },
           pollSeconds: 5,
@@ -322,7 +324,10 @@ interface RunnerWork {
   readonly lastBlock: bigint;
 }
 
-/** Adds up the head updates and deliveries of every Multicall3 batch that the runner account sent since `fromBlock`. */
+/**
+ * Adds up the head updates and deliveries of every transaction that the runner account sent since `fromBlock`. The runner
+ * may send the light client update on its own or inside a batch, so the receipts decide, not the shape of the call.
+ */
 const runnerBatches = async (context: Context, fromBlock: bigint): Promise<RunnerWork> => {
   const destination = chainOf(context, "b");
   const head = await destination.publicClient.getBlockNumber();
@@ -333,7 +338,6 @@ const runnerBatches = async (context: Context, fromBlock: bigint): Promise<Runne
   for (let number = fromBlock + 1n; number <= head; number += 1n) {
     const block = await destination.publicClient.getBlock({ blockNumber: number, includeTransactions: true });
     for (const transaction of block.transactions) {
-      if (transaction.to?.toLowerCase() !== context.run.multicall3.toLowerCase()) continue;
       if (transaction.from.toLowerCase() !== accountOf("runner").address.toLowerCase()) continue;
       const receipt = await destination.publicClient.getTransactionReceipt({ hash: transaction.hash });
       const reading = readBatchReceipt(receipt, { lightClient: destination.deployment.light_client, bridge: destination.deployment.bridge });

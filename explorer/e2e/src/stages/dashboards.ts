@@ -56,6 +56,10 @@ const webServices = async (context: Context, indexerUrl: string) => {
   });
   const pair = await loadPairConfig(configuration);
   const sharedPair = await loadSharedPair(configuration);
+  // The page code reads `window.location` for its default even when it has no storage (`loadUserConnections`). The driver runs
+  // under Bun, which has no window, so it gives the code the location of a plain local page, as a browser would.
+  const scope = globalThis as { window?: unknown };
+  scope.window ??= { location: { pathname: "/", hostname: "127.0.0.1" } };
   return createServices(configuration, pair, { sharedPair, storage: null });
 };
 

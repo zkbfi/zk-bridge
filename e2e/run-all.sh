@@ -13,7 +13,7 @@ case "${RUNPOD_API_KEY:-rpa_}" in rpa_*) ;; *) e2e_fail "RUNPOD_API_KEY does not
 
 # Whatever happens, stop the chains, the beacon node and the indexer at exit, so a failed stage leaves nothing behind.
 E2E_ROOT="$PWD"
-trap 'pkill -TERM -P $$ 2> /dev/null; "$E2E_ROOT/e2e/stop.sh" || true' EXIT
+trap 'pkill -TERM -P $$ 2> /dev/null || true; "$E2E_ROOT/e2e/stop.sh" || true' EXIT
 e2e/stop.sh || true
 rm -rf "$E2E_STATE_DIR" .deploy explorer/indexer/.ponder
 e2e/start.sh
