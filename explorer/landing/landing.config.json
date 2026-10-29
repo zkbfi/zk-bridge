@@ -11,5 +11,11 @@
     "https://w3s.link/ipfs/",
     "https://gateway.pinata.cloud/ipfs/"
   ],
-  "publicKeys": []
+  "publicKeys": [
+    {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "Tj7E2LfWN3xImT_1Ajm8SHCXTyKoB6ibJSwUKBnY_nI"
+    }
+  ]
 }
