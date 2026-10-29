@@ -80,6 +80,32 @@ describe("loading the context", () => {
     expect(context.pair.sides[1].stateUrls).toEqual([]);
   });
 
+  // A key of no known shape, so only the vault can keep it out of the log.
+  const STATE_KEY = "Qm7rT2xLp9WzK4ne";
+
+  it("keeps a key inside one of several state URLs out of the log, from the setup file or from the environment", async () => {
+    const setup: ProverSetup = {
+      ...emptyProverSetup(),
+      chains: {
+        "1": { rpc: null, beacon: null, stateUrls: { source: "environment", variable: "ETH_STATES" } },
+      },
+    };
+    const { configPath } = await files(setup);
+    const lines: string[] = [];
+    const context = await loadBotContext({
+      configPath,
+      environment: {
+        EXPLORER_RPC_URL_1: "http://127.0.0.1:1",
+        EXPLORER_RPC_URL_369: "http://127.0.0.1:2",
+        ETH_STATES: `https://states-a.example, https://beacon.example/${STATE_KEY}/1`,
+        EXPLORER_STATE_URLS_369: `https://other.example/${STATE_KEY}/369`,
+      },
+      write: (line) => lines.push(line),
+    });
+    context.logger.info("states", { first: context.pair.sides[0].stateUrls[1], second: context.pair.sides[1]?.stateUrls[0] });
+    expect(lines.join("\n")).not.toContain(STATE_KEY);
+  });
+
   it("falls back to the variables of the indexer when the setup file names no endpoint", async () => {
     const { configPath } = await files(emptyProverSetup());
     const context = await loadBotContext({
