@@ -39,7 +39,7 @@ server with NVMe disks becomes the better choice only when we run our own chain 
   The 1Password agent offers many keys, so connect with `IdentitiesOnly yes` and that key's public file, or sshd stops
   after too many failed keys.
 - `deploy/app-server/provision.sh` prepares the server and can run again: Node.js 24, Rust 1.93.0 in `/opt/rust`, one
-  system user per service (`zkb_backend`, `zkb_indexer`, `zkb_bots`), Postgres on the local socket only with peer login
+  system user per service (`zkb_backend`, `zkb_indexer`, `zkb_publisher`, `zkb_runner`), Postgres on the local socket only with peer login
   for the indexer, and Caddy as the TLS proxy. It installs no service of ours and no secret.
 - `deploy/app-server/deploy.sh <git-ref>` deploys one commit, as root on the server (`ssh zkbfi-app 'bash -s' -- <ref> <
   deploy/app-server/deploy.sh`). It unpacks the commit into `/opt/zk-bridge/releases/<commit>`, runs `pnpm install`,
@@ -47,8 +47,9 @@ server with NVMe disks becomes the better choice only when we run our own chain 
   four systemd units and restarts each service whose files exist. A service without its files is skipped. Each unit
   runs as its own user and may write only its directory in `/var/lib`.
 - Configuration goes into `/etc/zk-bridge/<service>/`, mode 0640, owner root, group of the service user. Templates are in
-  `deploy/app-server/config/`. Backend: `backend.json` and `backend.env`. Indexer: `indexer.env`. Bots: `bots.json`,
-  `prover-setup.json` and `bots.env`, plus `runner.env` with the wallet key, which only the runner's unit loads. The
+  `deploy/app-server/config/`. Backend: `backend.json` and `backend.env`. Indexer: `indexer.env`. Publisher and runner,
+  each in its own directory: `bots.json`, `prover-setup.json` and `bots.env`; the runner also `runner.env` with the
+  wallet key. The
   deployment file of the pair is `/etc/zk-bridge/deployment.json`, mode 0644.
 - A change to the indexer or the shared code gives the indexer a new Postgres schema, so it indexes again from the start.
   The old schema stays until someone drops it (`ponder prune`).
@@ -73,7 +74,8 @@ server with NVMe disks becomes the better choice only when we run our own chain 
   room for the cache of Postgres.
 - The runner holds a hot wallet key that pays gas for deliveries. The owner chose one server for launch (2026-10-28), so
   the key sits on the same machine as the public backend. To keep that risk small:
-  - each service runs as its own system user, and only the bots' user can read the wallet key;
+  - each service runs as its own system user, the publisher and the runner too, so only the runner's user can read the
+    wallet key, in its file or in the runner's process environment;
   - the bots have no inbound port; only the TLS proxy in front of the backend is public;
   - the runner's wallet holds a small balance, topped up as needed, so a break-in loses little.
 - Moving the bots to a small server of their own later needs no change to the code.
@@ -106,7 +108,7 @@ All secrets live in the 1Password vault `zkb.fi` and reach a server only as envi
 |---|---|
 | RunPod key | app server (backend) |
 | Webhook bearer token | app server (backend) and the RunPod worker |
-| Runner wallet key | app server, readable by the bots' user only |
+| Runner wallet key | app server, readable by the runner's user only |
 | Endpoint keys of the providers | app server |
 | Filebase keys | the release machine only |
 | Release signing key | the release machine only, read at the moment of use |

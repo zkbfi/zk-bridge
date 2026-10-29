@@ -77,13 +77,14 @@ check_unit() {
 
 check_unit backend zkb_backend /var/lib/zk-bridge-backend backend backend
 check_unit indexer zkb_indexer /var/lib/zk-bridge-indexer indexer indexer
-check_unit publisher zkb_bots /var/lib/zk-bridge-bots bots bots
-check_unit runner zkb_bots /var/lib/zk-bridge-bots bots bots
+check_unit publisher zkb_publisher /var/lib/zk-bridge-publisher publisher bots
+check_unit runner zkb_runner /var/lib/zk-bridge-runner runner bots
 
-# The wallet key: the runner loads it, the publisher cannot even see it.
-has_line zk-bridge-runner.service "EnvironmentFile=/etc/zk-bridge/bots/runner.env"
-lacks zk-bridge-publisher.service '^EnvironmentFile=.*runner\.env'
-has_line zk-bridge-publisher.service "InaccessiblePaths=-/etc/zk-bridge/bots/runner.env"
+# The wallet key: only the runner's user can read it. The publisher runs as another user, so it can read neither the
+# file nor the runner's environment in /proc.
+has_line zk-bridge-runner.service "EnvironmentFile=/etc/zk-bridge/runner/runner.env"
+lacks zk-bridge-publisher.service 'runner\.env'
+lacks zk-bridge-publisher.service 'zkb_runner'
 # The indexer reaches Postgres on the socket, with peer login, and listens on loopback only.
 has_line zk-bridge-indexer.service "Environment=DATABASE_URL=postgresql:///zkb_indexer?host=/var/run/postgresql"
 if grep -q '^ExecStart=.*--hostname 127\.0\.0\.1' "$DIR/zk-bridge-indexer.service"; then pass "indexer listens on 127.0.0.1"; else fail "indexer: ExecStart lacks --hostname 127.0.0.1"; fi
@@ -141,6 +142,14 @@ for file in $(sed -n 's/^ *[a-z]*) echo \(.*\/.*\) ;;$/\1/p' "$DIR/deploy.sh" | 
   [ "$file" = deployment.json ] && continue
   if [ -f "$DIR/config/$file.example" ]; then pass "template for required $file"; else fail "no template for required $file"; fi
 done
+
+# Root never creates or deletes inside a directory that a service user can write: a link planted there would point
+# root's install or rm at any file. Such work runs as the service user.
+if grep -nE '^[[:space:]]*(install|rm|chown|chmod|mkdir)[^#]*/var/lib/zk-bridge-' "$DIR/deploy.sh" >/dev/null; then
+  fail "deploy.sh works as root inside a service's state directory: $(grep -nE '^[[:space:]]*(install|rm|chown|chmod|mkdir)[^#]*/var/lib/zk-bridge-' "$DIR/deploy.sh" | head -1)"
+else
+  pass "deploy.sh leaves the state directories to their users"
+fi
 
 printf '%d failure(s)\n' "$FAILURES"
 [ "$FAILURES" -eq 0 ]

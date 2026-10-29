@@ -1,36 +1,35 @@
 # The proof publisher bot (explorer/bots): proves light client updates on the remote prover and posts them on
 # msgboard. It holds no wallet and opens no port. deploy.sh installs this file.
 #
-#   /etc/zk-bridge/bots/bots.json            the bot settings, shared with the runner (config/bots/bots.json.example)
-#   /etc/zk-bridge/bots/prover-setup.json    endpoints, pair and directions, as references (config/bots/prover-setup.json.example)
-#   /etc/zk-bridge/bots/bots.env             secrets of both bots: RunPod key, endpoints (config/bots/bots.env.example)
+#   /etc/zk-bridge/publisher/bots.json            the bot settings of the publisher (config/publisher/bots.json.example)
+#   /etc/zk-bridge/publisher/prover-setup.json    endpoints, pair and directions, as references (config/publisher/prover-setup.json.example)
+#   /etc/zk-bridge/publisher/bots.env             secrets: RunPod key, endpoints (config/publisher/bots.env.example)
 #   /etc/zk-bridge/deployment.json           contract addresses of the pair (written by docker/deploy.sh)
-#   /var/lib/zk-bridge-bots                  state files, the outcome log, and tmp/ for the prover's config files
+#   /var/lib/zk-bridge-publisher                  state files, the outcome log, and tmp/ for the prover's config files
 #
-# It runs as zkb_bots, as the runner does, but this unit cannot see the runner's wallet key (InaccessiblePaths).
+# It runs as its own user, not the runner's, so it can read neither the wallet key nor the runner's environment.
 [Unit]
 Description=zk-bridge proof publisher bot
 Wants=network-online.target
 After=network-online.target zk-bridge-indexer.service
-ConditionPathExists=/etc/zk-bridge/bots/bots.json
+ConditionPathExists=/etc/zk-bridge/publisher/bots.json
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
 Type=simple
-User=zkb_bots
-Group=zkb_bots
+User=zkb_publisher
+Group=zkb_publisher
 WorkingDirectory=/opt/zk-bridge/current/explorer/bots
-EnvironmentFile=/etc/zk-bridge/bots/bots.env
+EnvironmentFile=/etc/zk-bridge/publisher/bots.env
 Environment=NODE_ENV=production
-ExecStart=/usr/bin/node bin/zk-bridge-bot.mjs publisher --config /etc/zk-bridge/bots/bots.json
+ExecStart=/usr/bin/node bin/zk-bridge-bot.mjs publisher --config /etc/zk-bridge/publisher/bots.json
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=60
 
 # Sandbox. Writable: the state directory, and a private /tmp (tsx keeps its cache there).
-ReadWritePaths=/var/lib/zk-bridge-bots
-InaccessiblePaths=-/etc/zk-bridge/bots/runner.env
+ReadWritePaths=/var/lib/zk-bridge-publisher
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

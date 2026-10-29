@@ -42,8 +42,8 @@ required_files() {
   case $1 in
     backend) echo backend/backend.json backend/backend.env deployment.json ;;
     indexer) echo indexer/indexer.env deployment.json ;;
-    publisher) echo bots/bots.json bots/prover-setup.json bots/bots.env deployment.json ;;
-    runner) echo bots/bots.json bots/prover-setup.json bots/bots.env bots/runner.env deployment.json ;;
+    publisher) echo publisher/bots.json publisher/prover-setup.json publisher/bots.env deployment.json ;;
+    runner) echo runner/bots.json runner/prover-setup.json runner/bots.env runner/runner.env deployment.json ;;
   esac
 }
 
@@ -52,7 +52,8 @@ service_user() {
   case $1 in
     backend) echo zkb_backend ;;
     indexer) echo zkb_indexer ;;
-    publisher | runner) echo zkb_bots ;;
+    publisher) echo zkb_publisher ;;
+    runner) echo zkb_runner ;;
   esac
 }
 
@@ -145,9 +146,9 @@ main() {
   done
   systemctl daemon-reload
 
-  install -d -m 0700 -o zkb_indexer -g zkb_indexer /var/lib/zk-bridge-indexer/ponder /var/lib/zk-bridge-indexer/generated
-  # The Vite cache belongs to one build of the indexer.
-  rm -rf /var/lib/zk-bridge-indexer/ponder/vite
+  # The indexer's user owns its state directory and could plant links in it, so root does no file work there: the
+  # indexer's user makes its directories and clears the Vite cache, which belongs to one build of the indexer.
+  runuser -u zkb_indexer -- sh -c 'cd /var/lib/zk-bridge-indexer && mkdir -p -m 0700 ponder generated && rm -rf ponder/vite'
 
   # Configuration: readable by the service's group only. The deployment file holds no secret.
   for service in "${SERVICES[@]}"; do

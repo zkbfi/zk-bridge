@@ -8,7 +8,8 @@
 #   1. Base system: time zone, swap, journal size, packages (libudev-dev: node-hid and usb build from source on ARM64).
 #   2. Node.js 24 from the NodeSource apt repository, and pnpm through corepack.
 #   3. Rust 1.93.0 (prover/rust-toolchain.toml) in /opt/rust, to build the prover for this machine (ARM64).
-#   4. One system user per service. Only the bots' user can read the bots' directories, where the wallet key goes.
+#   4. One system user per service. The publisher and the runner are separate users, so only the runner can read the
+#      wallet key, in its file or in its process environment.
 #   5. Postgres for the explorer indexer: local socket only, peer login for the indexer's user.
 #   6. Caddy as the TLS proxy. Until the backend has a host name it answers 503 on port 80.
 #
@@ -93,7 +94,8 @@ ensure_user() {
 }
 ensure_user zkb_backend /var/lib/zk-bridge-backend
 ensure_user zkb_indexer /var/lib/zk-bridge-indexer
-ensure_user zkb_bots /var/lib/zk-bridge-bots
+ensure_user zkb_publisher /var/lib/zk-bridge-publisher
+ensure_user zkb_runner /var/lib/zk-bridge-runner
 
 # Code: owned by root, readable by the services, written only by the deploy step.
 install -d -m 0755 -o root -g root /opt/zk-bridge
@@ -101,7 +103,18 @@ install -d -m 0755 -o root -g root /opt/zk-bridge
 install -d -m 0755 -o root -g root /etc/zk-bridge
 install -d -m 0750 -o root -g zkb_backend /etc/zk-bridge/backend
 install -d -m 0750 -o root -g zkb_indexer /etc/zk-bridge/indexer
-install -d -m 0750 -o root -g zkb_bots /etc/zk-bridge/bots
+install -d -m 0750 -o root -g zkb_publisher /etc/zk-bridge/publisher
+install -d -m 0750 -o root -g zkb_runner /etc/zk-bridge/runner
+
+# Before 2026-10-29 both bots shared the user zkb_bots. Remove it while it holds nothing; refuse to guess otherwise.
+if id zkb_bots >/dev/null 2>&1; then
+  if [ -n "$(ls -A /etc/zk-bridge/bots /var/lib/zk-bridge-bots 2>/dev/null)" ]; then
+    log "zkb_bots still has files in /etc/zk-bridge/bots or /var/lib/zk-bridge-bots: move them to publisher/ or runner/ first"
+    exit 1
+  fi
+  rmdir /etc/zk-bridge/bots /var/lib/zk-bridge-bots 2>/dev/null || true
+  userdel zkb_bots
+fi
 
 # --- 5. Postgres ------------------------------------------------------------------------------------------------
 log "postgres"

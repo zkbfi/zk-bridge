@@ -1,24 +1,23 @@
 {
   "schemaVersion": 1,
-  "setupFile": "/etc/zk-bridge/bots/prover-setup.json",
+  "setupFile": "/etc/zk-bridge/runner/prover-setup.json",
   "deploymentFile": "/etc/zk-bridge/deployment.json",
-  "stateDirectory": "/var/lib/zk-bridge-bots",
-  "secretStore": { "kind": "none" },
+  "stateDirectory": "/var/lib/zk-bridge-runner",
+  "secretStore": {
+    "kind": "none"
+  },
   "logLevel": "info",
   "maximumMessageBytes": 8192,
-  "publisher": {
-    "prover": { "binary": "/opt/zk-bridge/current/bin/zk-bridge-prover", "timeoutSeconds": 1800 },
-    "apiKeyVariable": "RUNPOD_API_KEY",
-    "remote": { "mode": "load-balancing" },
-    "pollSeconds": 30,
-    "republishSeconds": 600,
-    "retryBackoffSeconds": 120,
-    "indexerUrl": "http://127.0.0.1:42069"
-  },
   "runner": {
-    "prover": { "binary": "/opt/zk-bridge/current/bin/zk-bridge-prover", "timeoutSeconds": 600 },
+    "prover": {
+      "binary": "/opt/zk-bridge/current/bin/zk-bridge-prover",
+      "timeoutSeconds": 600
+    },
     "indexerUrl": "http://127.0.0.1:42069",
-    "signer": { "kind": "private-key", "key": "env:RUNNER_PRIVATE_KEY" },
+    "signer": {
+      "kind": "private-key",
+      "key": "env:RUNNER_PRIVATE_KEY"
+    },
     "pollSeconds": 30,
     "maximumLossPercent": 20,
     "deliverWithoutOffer": false,
