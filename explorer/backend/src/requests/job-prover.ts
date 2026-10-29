@@ -37,6 +37,7 @@ export function createProverFactories(input: ProverFactoryInput): ProverFactorie
     executor: input.executor,
     timeoutMilliseconds: config.prover.timeoutSeconds * 1000,
     temporaryDirectory: join(dirname(config.databasePath), "tmp"),
+    stateCacheDirectory: join(dirname(config.databasePath), "beacon-states"),
     logger: input.logger,
   };
   const webhookBase = config.publicUrl.replace(/\/+$/, "");

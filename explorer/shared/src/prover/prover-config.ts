@@ -35,6 +35,12 @@ export interface HandoffSection {
   readonly bearerVariable: string;
 }
 
+/** Settings of the route that do not come from the pair. */
+export interface RouteOptions {
+  /** A directory where the prover keeps the beacon states it fetched and verified (`source.state_cache_dir`). */
+  readonly stateCacheDirectory?: string;
+}
+
 /** One direction of a pair, as the prover configuration file describes a route. */
 export interface RouteDescription {
   readonly name: string;
@@ -85,6 +91,15 @@ function backendLines(backend: BackendSection): readonly string[] {
   ];
 }
 
+function stateLines(stateUrls: readonly string[], cacheDirectory: string | undefined): readonly string[] {
+  const lines: string[] = [];
+  if (stateUrls.length > 0) {
+    lines.push(`state_urls = [${stateUrls.map((url) => quoted(url, "source state url")).join(", ")}]`);
+  }
+  if (cacheDirectory !== undefined) lines.push(`state_cache_dir = ${quoted(cacheDirectory, "state cache directory")}`);
+  return lines;
+}
+
 function handoffLines(handoff: HandoffSection | undefined): readonly string[] {
   if (handoff === undefined) return ['targets = ["stdout"]'];
   return [
@@ -102,9 +117,15 @@ function handoffLines(handoff: HandoffSection | undefined): readonly string[] {
  * @param route The route and its two sides.
  * @param backend The backend for a `prove` run, or null for the commands that need none.
  * @param handoff Also send each package to a webhook. Used only with a backend.
+ * @param options The state cache directory of the route, when the caller keeps one.
  * @throws Error when a value holds a quote, a backslash or a line break.
  */
-export function renderProverConfig(route: RouteDescription, backend: BackendSection | null, handoff?: HandoffSection): string {
+export function renderProverConfig(
+  route: RouteDescription,
+  backend: BackendSection | null,
+  handoff?: HandoffSection,
+  options: RouteOptions = {},
+): string {
   const { source, destination } = route;
   const chainKind = (PROVER_CHAIN_KINDS as Readonly<Record<number, string>>)[source.chainId];
   if (chainKind === undefined) {
@@ -120,6 +141,7 @@ export function renderProverConfig(route: RouteDescription, backend: BackendSect
     `beacon_url = ${quoted(source.beaconUrl, "source beacon endpoint")}`,
     `rpc_url = ${quoted(source.rpcUrl, "source rpc endpoint")}`,
     `bridge = ${quoted(source.contracts.bridge, "source bridge")}`,
+    ...stateLines(source.stateUrls ?? [], options.stateCacheDirectory),
     "",
     `[routes.${route.name}.destination]`,
     `chain_id = ${destination.chainId}`,

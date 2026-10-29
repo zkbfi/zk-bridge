@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { loadProverSetup, setupFilePath, spawnRunner, type CommandRunner, type ProverSetup } from "@zk-bridge/shared/config";
-import { PAIR_DEFINITIONS, beaconVariableName, loadPair, rpcVariableName, type Pair, type PairSide } from "@zk-bridge/shared";
+import { PAIR_DEFINITIONS, beaconVariableName, loadPair, rpcVariableName, stateUrlsVariableName, type Pair, type PairSide } from "@zk-bridge/shared";
 import { BotConfigError, parseBotConfig, type BotConfig } from "../config/bot-config.ts";
 import { createLogger, type Logger } from "../logging/logger.ts";
 import { createSecretVault, openSecretStore, type Environment, type SecretVault } from "./secrets.ts";
@@ -50,8 +50,10 @@ async function pairEnvironment(setup: ProverSetup, environment: Environment, vau
     const endpoints = setup.chains[String(chainId)];
     const rpc = await vault.resolveOptional(endpoints?.rpc);
     const beacon = await vault.resolveOptional(endpoints?.beacon);
+    const stateUrls = await vault.resolveOptional(endpoints?.stateUrls);
     if (rpc !== null) resolved[rpcVariableName(chainId)] = rpc;
     if (beacon !== null) resolved[beaconVariableName(chainId)] = beacon;
+    if (stateUrls !== null) resolved[stateUrlsVariableName(chainId)] = stateUrls;
   }
   return resolved;
 }

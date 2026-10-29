@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { PublicClient } from "viem";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { proofCategory } from "@zk-bridge/shared";
@@ -163,6 +164,18 @@ describe("startPublisher runs one step for each direction", () => {
     ]);
     expect(created.logLines.join("\n")).not.toContain(RUNPOD_KEY);
     expect(UP_TO_DATE_WAIT_SECONDS).toBe(120);
+  });
+
+  it("lets the prover keep the beacon states it verified in the state directory", async () => {
+    const node = await board();
+    const created = await world({ config: publisherConfig, setup: readySetup(node.url), environment: environmentFor(node.url) });
+    const files: string[] = [];
+    const executor: CommandExecutor = async (spec) => {
+      files.push(readFileSync(spec.args[1] as string, "utf8"));
+      return { code: 3, stdout: "", stderr: "" };
+    };
+    await start(created, { executor, publicClient: () => lightClientClient });
+    expect(files[0]).toContain(`state_cache_dir = "${join(created.directory, "state", "beacon-states")}"`);
   });
 
   it("falls back to a default PATH when the environment has none", async () => {

@@ -50,7 +50,7 @@ interface Seen {
   readonly configPath: string | null;
 }
 
-async function setup(answer: { code: number; stdout?: string; stderr?: string }, extra: { backend?: typeof remote | null; secret?: boolean; defaultDirectory?: boolean; handoff?: { webhookUrl: string; bearerVariable: string } } = {}) {
+async function setup(answer: { code: number; stdout?: string; stderr?: string }, extra: { backend?: typeof remote | null; secret?: boolean; defaultDirectory?: boolean; handoff?: { webhookUrl: string; bearerVariable: string }; stateCacheDirectory?: string } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "prover-binary-"));
   scratch.push(directory);
   const seen: Seen[] = [];
@@ -75,6 +75,7 @@ async function setup(answer: { code: number; stdout?: string; stderr?: string },
     baseEnvironment: { PATH: "/usr/bin" },
     ...(extra.handoff === undefined ? {} : { handoff: extra.handoff }),
     ...(extra.defaultDirectory === true ? {} : { temporaryDirectory: join(directory, "nested") }),
+    ...(extra.stateCacheDirectory === undefined ? {} : { stateCacheDirectory: extra.stateCacheDirectory }),
     logger,
   });
   return { binary, seen, directory, events };
@@ -95,6 +96,12 @@ describe("prove", () => {
     expect(configText).not.toContain("rpa_TESTONLY");
     expect(existsSync(configPath!)).toBe(false);
     expect(await readdir(join(directory, "nested"))).toEqual([]);
+  });
+
+  it("names the state cache directory in the file when the caller keeps one", async () => {
+    const { binary, seen } = await setup({ code: 0, stdout: JSON.stringify(proofPackage) }, { stateCacheDirectory: "/var/lib/bot/beacon-states" });
+    await binary.prove({ direction: "first-to-second" });
+    expect(seen[0]!.configText).toContain('state_cache_dir = "/var/lib/bot/beacon-states"');
   });
 
   it("keeps the secret out of the child environment when none is given", async () => {

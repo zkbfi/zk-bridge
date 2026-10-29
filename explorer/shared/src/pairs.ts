@@ -26,6 +26,11 @@ export type PairSide = {
   readonly rpcUrl: string;
   /** The beacon node endpoint, or null when none is configured. The indexer does not need it. */
   readonly beaconUrl: string | null;
+  /**
+   * More beacon APIs that the prover asks, in order, only for states, when `beaconUrl` does not serve one. Empty when
+   * none is configured.
+   */
+  readonly stateUrls?: readonly string[];
   /** The first block to index: the block before the deployment. */
   readonly startBlock: number;
   /** Seconds after which a send counts as waiting for finality. */
@@ -111,6 +116,25 @@ export const rpcVariableName = (chainId: number): string => `EXPLORER_RPC_URL_${
  * @param chainId The chain identifier.
  */
 export const beaconVariableName = (chainId: number): string => `EXPLORER_BEACON_URL_${chainId}`;
+
+/** The variable that holds the state URLs of a chain: a comma separated list of beacon API base URLs. */
+export const stateUrlsVariableName = (chainId: number): string => `EXPLORER_STATE_URLS_${chainId}`;
+
+/**
+ * Reads a comma separated list of state URLs. Blank entries are skipped.
+ *
+ * @throws When an entry is not an http or https URL. The message names the variable.
+ */
+export const parseStateUrls = (text: string | undefined, variable: string): readonly string[] => {
+  const urls = (text ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "");
+  for (const url of urls) {
+    if (!/^https?:\/\/\S+$/.test(url)) throw new Error(`${variable} must list http or https URLs, separated by commas`);
+  }
+  return urls;
+};
 /**
  * The name of the finality override variable of a chain.
  *
@@ -176,11 +200,13 @@ const buildSide = (
     throw new Error(`set ${rpcVariableName(definition.chainId)} to the RPC endpoint of chain ${definition.chainId}`);
   }
   const beaconUrl = options.environment[beaconVariableName(definition.chainId)];
+  const stateVariable = stateUrlsVariableName(definition.chainId);
   return {
     name: definition.name,
     chainId: definition.chainId,
     rpcUrl: rpcUrl ?? "",
     beaconUrl: beaconUrl === undefined || beaconUrl === "" ? null : beaconUrl,
+    stateUrls: parseStateUrls(options.environment[stateVariable], stateVariable),
     startBlock: section.start_block,
     finalitySeconds: finalityOf(options.environment, definition.chainId),
     contracts: {

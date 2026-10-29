@@ -19,6 +19,8 @@ export type ProveDirection = 'first-to-second' | 'second-to-first'
 export interface ChainEndpoints {
   readonly rpc: SecretReference | null
   readonly beacon: SecretReference | null
+  /** More beacon APIs for states only, as one comma separated value. Absent when the file names none. */
+  readonly stateUrls?: SecretReference | null
 }
 
 /** The proving policy. */
@@ -78,9 +80,11 @@ export function parseProverSetup(value: unknown): ProverSetup {
   for (const [chainId, entry] of Object.entries(asRecord(root.chains ?? {}, 'setup.chains'))) {
     if (!/^\d+$/.test(chainId)) throw new ProverSetupError(`setup.chains key "${chainId}" is not a chain identifier.`)
     const record = asRecord(entry, `setup.chains.${chainId}`)
+    const stateUrls = parseReference(record.stateUrls, `setup.chains.${chainId}.stateUrls`)
     chains[chainId] = {
       rpc: parseReference(record.rpc, `setup.chains.${chainId}.rpc`),
       beacon: parseReference(record.beacon, `setup.chains.${chainId}.beacon`),
+      ...(stateUrls === null ? {} : { stateUrls }),
     }
   }
   const policy = asRecord(root.policy, 'setup.policy')

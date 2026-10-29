@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PAIR_DEFINITIONS, beaconVariableName, loadPair, rpcVariableName, urlSecrets, type Pair } from "@zk-bridge/shared";
+import { PAIR_DEFINITIONS, beaconVariableName, loadPair, rpcVariableName, stateUrlsVariableName, urlSecrets, type Pair } from "@zk-bridge/shared";
 import { DEFAULT_RATE_LIMITS } from "./requests/rate-limit.ts";
 
 /** The modules that the backend can run, in the order that the example file lists them. */
@@ -67,6 +67,11 @@ export const backendConfigSchema = z
     rpcUrls: z.record(z.string().regex(/^\d+$/), z.url()).default({}),
     /** The beacon endpoint of each chain of the pair, by chain identifier. The prover reads the source chain from it. */
     beaconUrls: z.record(z.string().regex(/^\d+$/), z.url()).default({}),
+    /**
+     * More beacon APIs of each chain, asked in order only for states, when the beacon endpoint does not serve an old
+     * state. Optional. They can carry a key; the logger removes them like the other endpoints.
+     */
+    stateUrls: z.record(z.string().regex(/^\d+$/), z.array(z.url())).default({}),
     /** The msgboard node (`ws://`, `wss://`, `http://` or `https://`). Needed by the webhook and the msgboard indexer. It can carry a key. */
     msgboardUrl: z.string().regex(/^(wss?|https?):\/\/\S+$/, "must be a ws, wss, http or https address").optional(),
     /**
@@ -154,6 +159,8 @@ export function loadBackendPair(config: BackendConfig, deployment: unknown): Pai
     environment[rpcVariableName(chainId)] = rpcUrl;
     const beaconUrl = config.beaconUrls[String(chainId)];
     if (beaconUrl !== undefined) environment[beaconVariableName(chainId)] = beaconUrl;
+    const stateUrls = config.stateUrls[String(chainId)];
+    if (stateUrls !== undefined) environment[stateUrlsVariableName(chainId)] = stateUrls.join(",");
   }
   return loadPair({ pairName: config.pair, environment, deployment });
 }
@@ -163,8 +170,8 @@ export function loadBackendPair(config: BackendConfig, deployment: unknown): Pai
  * The logger removes these, and the secret parts of each, from every line.
  */
 export function endpointValues(config: BackendConfig, pair: Pair | null): string[] {
-  const fromPair = (pair?.sides ?? []).flatMap((side) => [side.rpcUrl, side.beaconUrl ?? ""]);
-  return [...Object.values(config.rpcUrls), ...Object.values(config.beaconUrls), config.msgboardUrl ?? "", config.remote.endpoint, config.indexerUrl ?? "", ...fromPair].filter((value) => value !== "");
+  const fromPair = (pair?.sides ?? []).flatMap((side) => [side.rpcUrl, side.beaconUrl ?? "", ...(side.stateUrls ?? [])]);
+  return [...Object.values(config.rpcUrls), ...Object.values(config.beaconUrls), ...Object.values(config.stateUrls).flat(), config.msgboardUrl ?? "", config.remote.endpoint, config.indexerUrl ?? "", ...fromPair].filter((value) => value !== "");
 }
 
 /** The shortest path segment that counts as a key. Shorter segments, such as `rpc` or `evm`, are plain words. */

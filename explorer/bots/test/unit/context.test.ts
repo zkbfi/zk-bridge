@@ -59,6 +59,27 @@ describe("loading the context", () => {
     expect(lines.join("\n")).not.toContain(VALVE_KEY);
   });
 
+  it("resolves the state URLs of a chain through their reference", async () => {
+    const setup: ProverSetup = {
+      ...emptyProverSetup(),
+      chains: {
+        "1": { rpc: null, beacon: null, stateUrls: { source: "environment", variable: "ETH_STATES" } },
+      },
+    };
+    const { configPath } = await files(setup);
+    const context = await loadBotContext({
+      configPath,
+      environment: {
+        EXPLORER_RPC_URL_1: "http://127.0.0.1:1",
+        EXPLORER_RPC_URL_369: "http://127.0.0.1:2",
+        ETH_STATES: "https://states-a.example, https://states-b.example",
+      },
+      write: () => undefined,
+    });
+    expect(context.pair.sides[0].stateUrls).toEqual(["https://states-a.example", "https://states-b.example"]);
+    expect(context.pair.sides[1].stateUrls).toEqual([]);
+  });
+
   it("falls back to the variables of the indexer when the setup file names no endpoint", async () => {
     const { configPath } = await files(emptyProverSetup());
     const context = await loadBotContext({

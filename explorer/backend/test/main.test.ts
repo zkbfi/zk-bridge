@@ -124,6 +124,16 @@ describe("endpoints in the configuration", () => {
     }
   });
 
+  it("passes the state URLs of a chain to the pair, and lists them as addresses that can carry a key", () => {
+    const keyed = "https://states-1.invalid/beacon/KEYSTATES777/1";
+    const config = makeConfig({ ...endpoints, stateUrls: { "1": [keyed] } });
+    const pair = loadBackendPair(config, DEPLOYMENT);
+    expect(pair.sides[0].stateUrls).toEqual([keyed]);
+    expect(pair.sides[1].stateUrls).toEqual([]);
+    expect(endpointValues(config, pair)).toContain(keyed);
+    expect(() => makeConfig({ stateUrls: { "1": ["not a url"] } })).toThrow(BackendConfigError);
+  });
+
   it("names the missing chain, or the unknown pair", () => {
     expect(() => loadBackendPair(makeConfig({ rpcUrls: { "1": "http://rpc-1.invalid" } }), DEPLOYMENT)).toThrow("rpcUrls needs an entry for chain 369");
     expect(() => loadBackendPair(makeConfig({ ...endpoints, pair: "nowhere" }), DEPLOYMENT)).toThrow('unknown pair "nowhere"');

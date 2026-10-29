@@ -83,6 +83,8 @@ export interface ProverBinaryInput {
   /** The variables that the child needs to find its libraries, such as `PATH`. */
   readonly baseEnvironment: Readonly<Record<string, string>>;
   readonly temporaryDirectory?: string;
+  /** A directory where the prover keeps the beacon states it verified, so a later run never needs an old state from a node. */
+  readonly stateCacheDirectory?: string;
   readonly logger: LogSink;
 }
 
@@ -120,7 +122,8 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary {
     const directory = await mkdtemp(join(parent, "zk-bridge-bot-"));
     try {
       const path = join(directory, "prover.toml");
-      await writeFile(path, renderProverConfig(route, backend, input.handoff), { mode: 0o600 });
+      const options = input.stateCacheDirectory === undefined ? {} : { stateCacheDirectory: input.stateCacheDirectory };
+      await writeFile(path, renderProverConfig(route, backend, input.handoff, options), { mode: 0o600 });
       return await use(path, route.name);
     } finally {
       await rm(directory, { recursive: true, force: true });

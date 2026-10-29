@@ -37,6 +37,7 @@ The backend reads no endpoint from the environment.
 | `remote.endpoint` | The remote proving endpoint (the load balancing endpoint of the graphics processor service). |
 | `rpcUrls` | The execution endpoint of each chain, by chain identifier. Both chains of the pair are required. |
 | `beaconUrls` | The beacon endpoint of each chain. The `requests` module needs both. |
+| `stateUrls` | Optional. More beacon APIs of each chain, by chain identifier, as a list. The prover asks them in order, only for states, when the beacon endpoint does not serve an old state. The prover also keeps every state it verified in `beacon-states/` next to `databasePath`, and reads the start state of a job from there first. |
 | `msgboardUrl` | The msgboard node. The `webhook` and `msgboard-indexer` modules need it. |
 | `indexerUrl` | The chain indexer. The `requests` module needs it and refuses to start without it. Without it the archive reports `degraded`. |
 | `acceptOracleProof` | Local testing only. See below. Default `false`. |
@@ -52,7 +53,7 @@ A secret is never in the file. The file names the environment variable, and the 
 | `RUNPOD_API_KEY` | `runpodApiKeyVariable` | The key of the remote proving service. It reaches the prover only through the environment of the child process. |
 | `BACKEND_WEBHOOK_BEARER` | `webhookBearerVariable` | The bearer value that the prover sends to the webhook. At least 32 bytes. The backend refuses to start with less. |
 
-The endpoints in `rpcUrls`, `beaconUrls`, `msgboardUrl`, `remote.endpoint` and `indexerUrl` can carry a key.
+The endpoints in `rpcUrls`, `beaconUrls`, `stateUrls`, `msgboardUrl`, `remote.endpoint` and `indexerUrl` can carry a key.
 They stay in the file, so protect the file. The logger removes every endpoint, and every long part of its path, from each log line.
 
 ## Callers and limits

@@ -113,6 +113,7 @@ export async function startPublisher(input: StartPublisherInput): Promise<void> 
     proverSecret: proving.secret,
     baseEnvironment: { PATH: context.environment.PATH ?? "/usr/bin:/bin" },
     temporaryDirectory: join(context.config.stateDirectory, "tmp"),
+    stateCacheDirectory: join(context.config.stateDirectory, "beacon-states"),
     logger,
   });
   const indexer = publisher.indexerUrl === undefined ? null : createIndexerClient({ baseUrl: publisher.indexerUrl });

@@ -48,6 +48,16 @@ describe("parseProverSetup", () => {
     });
   });
 
+  it("parses an optional reference to the state URLs of a chain, and refuses a value", () => {
+    const input = valid();
+    input.chains = { "943": { rpc: null, beacon: null, stateUrls: { source: "environment", variable: "EXPLORER_STATE_URLS_943" } }, "1": {} };
+    const parsed = parseProverSetup(input);
+    expect(parsed.chains["943"]?.stateUrls).toEqual({ source: "environment", variable: "EXPLORER_STATE_URLS_943" });
+    expect(parsed.chains["1"]?.stateUrls).toBeUndefined();
+    input.chains = { "943": { stateUrls: "https://states.example.org" } };
+    expect(() => parseProverSetup(input)).toThrow(/setup.chains.943.stateUrls/);
+  });
+
   it("treats a missing chains field as no chains", () => {
     const input = valid();
     delete input.chains;

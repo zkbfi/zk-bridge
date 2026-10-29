@@ -170,6 +170,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       proverSecret: null,
       baseEnvironment: { PATH: context.environment.PATH ?? "/usr/bin:/bin" },
       temporaryDirectory: join(context.config.stateDirectory, "tmp"),
+      stateCacheDirectory: join(context.config.stateDirectory, "beacon-states"),
       logger: directionLogger,
     });
     const deliveryRouter = (runnerConfig.deliveryRouter ?? destination.contracts.deliveryRouter) as Address | null;

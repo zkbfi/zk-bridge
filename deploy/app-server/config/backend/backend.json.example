@@ -20,6 +20,9 @@
     "1": "https://ethereum-beacon.example.org",
     "369": "https://pulsechain-beacon.example.org"
   },
+  "stateUrls": {
+    "1": ["https://ethereum-states.example.org"]
+  },
   "msgboardUrl": "wss://msgboard.example.org",
   "acceptOracleProof": false,
   "limits": {

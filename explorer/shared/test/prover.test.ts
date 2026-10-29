@@ -50,6 +50,21 @@ describe("the prover configuration file", () => {
     expect(text).toContain("light_client = ");
   });
 
+  it("names the state URLs and the state cache of the source when they are set, and nothing otherwise", () => {
+    const withStates = loadPair({
+      environment: { ...environment, EXPLORER_STATE_URLS_369: "https://states.example.org, https://archive.example.org/" },
+      deployment,
+    });
+    const text = renderProverConfig(describeRoute(withStates, "second-to-first"), null, undefined, { stateCacheDirectory: "/var/lib/bot/beacon-states" });
+    expect(text).toContain('state_urls = ["https://states.example.org", "https://archive.example.org/"]');
+    expect(text).toContain('state_cache_dir = "/var/lib/bot/beacon-states"');
+    expect(renderProverConfig(describeRoute(pair, "second-to-first"), null)).not.toMatch(/state_urls|state_cache_dir/);
+    const { stateUrls: _dropped, ...bareSide } = pair.sides[1];
+    const bare: Pair = { ...pair, sides: [pair.sides[0], bareSide] };
+    expect(renderProverConfig(describeRoute(bare, "second-to-first"), null)).not.toContain("state_urls");
+    expect(() => renderProverConfig(describeRoute(pair, "first-to-second"), null, undefined, { stateCacheDirectory: '/tmp/"x' })).toThrow(/cannot carry/);
+  });
+
   it("leaves the backend out for the commands that need none", () => {
     expect(renderProverConfig(describeRoute(pair, "first-to-second"), null)).not.toContain("[prover]");
   });

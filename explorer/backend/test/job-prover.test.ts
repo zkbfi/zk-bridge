@@ -1,3 +1,4 @@
+import { dirname, join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { CommandExecutor, CommandSpec } from "@zk-bridge/shared/prover";
@@ -41,6 +42,8 @@ describe("the prover of a job", () => {
     expect(file).toContain('webhook_bearer_env = "BACKEND_WEBHOOK_BEARER"');
     expect(file).toContain('backend = "remote"');
     expect(file).toContain('remote_api_key_env = "RUNPOD_API_KEY"');
+    // The prover keeps the states it verified next to the database, so a later job never needs an old state from a node.
+    expect(file).toContain(`state_cache_dir = "${join(dirname(makeConfig().databasePath), "beacon-states")}"`);
     // The file and the arguments hold names, never a value.
     for (const value of Object.values(SECRETS)) {
       expect(file).not.toContain(value);
