@@ -47,8 +47,6 @@ export type Pair = {
 /** The definition of a known pair, without endpoints or addresses. */
 export type PairDefinition = {
   readonly name: string;
-  /** A pair of test networks: its coins have no value. */
-  readonly testnet?: true;
   readonly sides: readonly [{ readonly name: string; readonly chainId: number }, { readonly name: string; readonly chainId: number }];
 };
 
@@ -63,17 +61,12 @@ export const PAIR_DEFINITIONS: readonly PairDefinition[] = [
   },
   {
     name: "sepolia-pls943",
-    testnet: true,
     sides: [
       { name: "sepolia", chainId: 11155111 },
       { name: "pulsechain-testnet-v4", chainId: 943 },
     ],
   },
 ];
-
-/** Whether a known pair joins test networks. An unknown name is not a testnet. */
-export const isTestnetPair = (pairName: string): boolean =>
-  PAIR_DEFINITIONS.some((definition) => definition.name === pairName && definition.testnet === true);
 
 /** The pair that runs when none is named. */
 export const DEFAULT_PAIR_NAME = "eth-pls";

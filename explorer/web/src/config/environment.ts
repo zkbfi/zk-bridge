@@ -3,6 +3,7 @@ import { loadPair, type Pair } from "@zk-bridge/shared";
 import { buildPairConfig, DEFAULT_PAIR_ID } from "@terminal/config/pairs";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { assertNoSecrets, ConfigurationError } from "./secret-scan";
+import { parseRoute } from "../app/route";
 
 /** Where the page reads its data from. `fixture` uses built-in sample data and simulated sends, with no network. */
 export type DataMode = "live" | "fixture";
@@ -21,6 +22,10 @@ export type WebConfiguration = {
   /** The base URL of the msgboard node, without a trailing slash, or null. */
   readonly msgboardUrl: string | null;
   readonly pairName: string;
+  /** The pairs that this page has a deployment for, in the order of the configuration. The page opens one of them. */
+  readonly availablePairs: readonly string[];
+  /** The deployment text of each pair, when the release lists several (`VITE_EXPLORER_DEPLOYMENTS_JSON`), else null. */
+  readonly deployments: Readonly<Record<string, string>> | null;
   /** Public RPC endpoint by chain identifier. */
   readonly rpcUrls: Readonly<Record<number, string>>;
   /** Inline deployment JSON, or null. */
@@ -43,6 +48,7 @@ export const VARIABLES = {
   rpcPrefix: "VITE_EXPLORER_RPC_URL_",
   deploymentUrl: "VITE_EXPLORER_DEPLOYMENT_URL",
   deploymentJson: "VITE_EXPLORER_DEPLOYMENT_JSON",
+  deploymentsJson: "VITE_EXPLORER_DEPLOYMENTS_JSON",
   walletConnect: "VITE_WALLETCONNECT_PROJECT_ID",
 } as const;
 
@@ -62,6 +68,28 @@ const rpcUrlsOf = (environment: Readonly<Record<string, string | undefined>>): R
   );
 
 /**
+ * Reads the map of deployments by pair name: one release can serve every pair it has a deployment for.
+ *
+ * @throws ConfigurationError when the text is not a JSON object of objects, or is empty.
+ */
+const deploymentsOf = (text: string | null): Record<string, string> | null => {
+  if (text === null) return null;
+  const refuse = (): never => {
+    throw new ConfigurationError(`${VARIABLES.deploymentsJson} must be a JSON object that maps each pair name to its deployment.`);
+  };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return refuse();
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return refuse();
+  const entries = Object.entries(parsed as Record<string, unknown>);
+  if (entries.length === 0 || entries.some(([, value]) => typeof value !== "object" || value === null || Array.isArray(value))) return refuse();
+  return Object.fromEntries(entries.map(([name, value]) => [name, JSON.stringify(value)]));
+};
+
+/**
  * Reads the configuration from the variables that Vite exposes.
  *
  * @param environment `import.meta.env`, or a test object.
@@ -74,6 +102,13 @@ export const readConfiguration = (environment: Readonly<Record<string, string | 
   if (mode !== "live" && mode !== "fixture") {
     throw new ConfigurationError(`${VARIABLES.data} must be "live" or "fixture", not "${mode}".`);
   }
+  const deployments = deploymentsOf(present(environment[VARIABLES.deploymentsJson]));
+  const namedPair = present(environment[VARIABLES.pair]);
+  const available = deployments === null ? null : Object.keys(deployments);
+  if (available !== null && namedPair !== null && !available.includes(namedPair)) {
+    throw new ConfigurationError(`${VARIABLES.pair} names ${namedPair}, but ${VARIABLES.deploymentsJson} has no deployment for it.`);
+  }
+  const pairName = namedPair ?? available?.[0] ?? DEFAULT_PAIR_ID;
   const configuration: WebConfiguration = {
     dataMode: mode,
     indexerUrl: baseUrlOf(environment[VARIABLES.indexerUrl]),
@@ -81,9 +116,11 @@ export const readConfiguration = (environment: Readonly<Record<string, string | 
     msgboardIndexerUrl: baseUrlOf(environment[VARIABLES.msgboardIndexerUrl]),
     archiveUrl: baseUrlOf(environment[VARIABLES.archiveUrl]),
     msgboardUrl: baseUrlOf(environment[VARIABLES.msgboardUrl]),
-    pairName: present(environment[VARIABLES.pair]) ?? DEFAULT_PAIR_ID,
+    pairName,
+    availablePairs: available ?? [pairName],
+    deployments,
     rpcUrls: rpcUrlsOf(environment),
-    deploymentJson: present(environment[VARIABLES.deploymentJson]),
+    deploymentJson: deployments?.[pairName] ?? present(environment[VARIABLES.deploymentJson]),
     deploymentUrl: present(environment[VARIABLES.deploymentUrl]),
     walletConnectProjectId: present(environment[VARIABLES.walletConnect]),
   };
@@ -91,6 +128,30 @@ export const readConfiguration = (environment: Readonly<Record<string, string | 
     throw new ConfigurationError(`Set ${VARIABLES.deploymentUrl} or ${VARIABLES.deploymentJson} to the deployment file, or set ${VARIABLES.data}=fixture.`);
   }
   return configuration;
+};
+
+/**
+ * Opens another pair of the release. The page builds its services for one pair, so a switch is a new page load.
+ *
+ * @param configuration The configuration.
+ * @param pairName The requested pair, or null.
+ * @returns The configuration for that pair, or the same configuration when the release has no deployment for it.
+ */
+export const selectPair = (configuration: WebConfiguration, pairName: string | null): WebConfiguration => {
+  const text = pairName === null ? undefined : configuration.deployments?.[pairName];
+  return text === undefined || pairName === null ? configuration : { ...configuration, pairName, deploymentJson: text };
+};
+
+/**
+ * The pair that the address asks for: `?pair=<name>` first, then a `#/pair/<name>` route, else null.
+ *
+ * @param location The `search` and `hash` of `window.location`.
+ */
+export const requestedPair = (location: { readonly search: string; readonly hash: string }): string | null => {
+  const fromQuery = present(new URLSearchParams(location.search).get("pair") ?? undefined);
+  if (fromQuery !== null) return fromQuery;
+  const route = parseRoute(location.hash);
+  return route.name === "pair" ? route.pairId : null;
 };
 
 /** Fetches text. A test passes a fake. */

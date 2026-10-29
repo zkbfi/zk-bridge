@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { Providers } from "./app/Providers";
 import { createServices } from "./app/services";
 import { Shell } from "./app/Shell";
-import { loadPairConfig, loadSharedPair, readConfiguration, withDeploymentText } from "./config/environment";
+import { loadPairConfig, loadSharedPair, readConfiguration, requestedPair, selectPair, withDeploymentText } from "./config/environment";
 import { browserStorage } from "./search/recent-items";
 
 const root = document.getElementById("root");
@@ -25,7 +25,7 @@ const showStartupProblem = (message: string): void => {
 };
 
 const start = async (): Promise<void> => {
-  const configuration = await withDeploymentText(readConfiguration(import.meta.env));
+  const configuration = await withDeploymentText(selectPair(readConfiguration(import.meta.env), requestedPair(window.location)));
   const pair = await loadPairConfig(configuration);
   const sharedPair = await loadSharedPair(configuration);
   const services = createServices(configuration, pair, { sharedPair, storage: browserStorage() });

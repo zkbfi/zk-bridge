@@ -43,6 +43,22 @@ export const GlobalView = () => {
           <Table.Body>
             {knownPairs.map((known) => {
               const row = health.data?.find((candidate) => candidate.pairId === known.id);
+              if (known.configured && !known.active) {
+                // The page runs on one pair, so another pair of the release opens with a fresh load.
+                return (
+                  <Table.Row key={known.id}>
+                    <Table.Cell>
+                      <a href={`?pair=${encodeURIComponent(known.id)}#/pair/${encodeURIComponent(known.id)}`}>{known.id}</a>
+                      <Text fontSize="xs" color="fg.muted">
+                        {known.label}
+                      </Text>
+                    </Table.Cell>
+                    <Table.Cell colSpan={5} color="fg.muted">
+                      Open it to see its health.
+                    </Table.Cell>
+                  </Table.Row>
+                );
+              }
               if (!known.configured || row === undefined) {
                 return (
                   <Table.Row key={known.id}>

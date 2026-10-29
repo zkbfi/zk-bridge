@@ -104,10 +104,20 @@ function downloadItem(download: DownloadEntry, baseUrl: string): string {
   ].join("");
 }
 
+/**
+ * The download address of a verified release. `{version}` in the setting becomes the version of the signed dapp
+ * release, so one setting serves every release (for example a release page per version). It stays as written when
+ * the manifest has no dapp release.
+ */
+function downloadBase(state: Extract<LandingState, { kind: "verified" }>): string {
+  const dapp = state.manifest.releases.find((release) => release.name === "dapp");
+  return dapp === undefined ? state.downloadBaseUrl : state.downloadBaseUrl.replaceAll("{version}", encodeURIComponent(dapp.version));
+}
+
 function verifiedBody(state: Extract<LandingState, { kind: "verified" }>): string {
   const sites = state.manifest.releases.filter((release) => release.name === "dapp" || release.name === "docs");
   const note = state.sequenceNote === null ? "" : `<p>${escapeHtml(state.sequenceNote)}</p>`;
-  const downloads = state.manifest.downloads.map((entry) => downloadItem(entry, state.downloadBaseUrl)).join("");
+  const downloads = state.manifest.downloads.map((entry) => downloadItem(entry, downloadBase(state))).join("");
   return [
     `<p>The signature on this release list is valid.</p>`,
     note,

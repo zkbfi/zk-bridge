@@ -2,7 +2,7 @@
   "title": "zkb.fi releases",
   "manifestUrl": "./version.json",
   "signatureUrl": "./version.json.sig",
-  "downloadBaseUrl": "https://github.com/zkbfi/releases/releases/download/v0.1.0-testnet.1",
+  "downloadBaseUrl": "https://github.com/zkbfi/releases/releases/download/v{version}",
   "gateways": [
     "https://{cid}.ipfs.inbrowser.link/",
     "https://{cid}.ipfs.dweb.link/",
@@ -18,6 +18,5 @@
       "crv": "Ed25519",
       "x": "Tj7E2LfWN3xImT_1Ajm8SHCXTyKoB6ibJSwUKBnY_nI"
     }
-  ],
-  "notice": "TESTNET: this release runs on Sepolia and PulseChain testnet v4. Test coins only; nothing here has real value."
+  ]
 }

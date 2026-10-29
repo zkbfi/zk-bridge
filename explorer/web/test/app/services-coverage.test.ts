@@ -32,8 +32,16 @@ describe("createServices for a fixture page", () => {
 
   it("lists both known pairs with their names, marking only the configured one", () => {
     expect(services.knownPairs).toEqual([
-      { id: "eth-pls", label: "Ethereum and PulseChain", configured: true },
-      { id: "sepolia-pls943", label: "Sepolia and PulseChain testnet v4", configured: false },
+      { id: "eth-pls", label: "Ethereum and PulseChain", configured: true, active: true },
+      { id: "sepolia-pls943", label: "Sepolia and PulseChain testnet v4", configured: false, active: false },
+    ]);
+  });
+
+  it("marks every pair of a release with several deployments as configured, and the open one as active", () => {
+    const configuration = { ...readConfiguration({ VITE_EXPLORER_DATA: "fixture" }), availablePairs: ["sepolia-pls943", "eth-pls"] };
+    expect(createServices(configuration, FIXTURE_PAIR).knownPairs).toEqual([
+      { id: "eth-pls", label: "Ethereum and PulseChain", configured: true, active: true },
+      { id: "sepolia-pls943", label: "Sepolia and PulseChain testnet v4", configured: true, active: false },
     ]);
   });
 });

@@ -9,8 +9,8 @@ describe("the known pairs of the services", () => {
     const { createServices } = await import("../../src/app/services");
     const services = createServices(readConfiguration({ VITE_EXPLORER_DATA: "fixture" }), FIXTURE_PAIR);
     expect(services.knownPairs).toEqual([
-      { id: "eth-pls", label: "Ethereum and PulseChain", configured: true },
-      { id: "other-pair", label: "other-pair", configured: false },
+      { id: "eth-pls", label: "Ethereum and PulseChain", configured: true, active: true },
+      { id: "other-pair", label: "other-pair", configured: false, active: false },
     ]);
   });
 });

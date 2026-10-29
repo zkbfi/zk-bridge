@@ -46,9 +46,23 @@ describe("the global view", () => {
 
   it("says that a pair is not configured when the page has no deployment file for it", () => {
     const base = buildTestServices();
-    renderWithServices(<GlobalView />, { knownPairs: [{ id: "other-pair", label: "Other", configured: false }], dataSource: { ...base.dataSource, listPairs: async () => [health({ pairId: "other-pair" })] } });
+    renderWithServices(<GlobalView />, { knownPairs: [{ id: "other-pair", label: "Other", configured: false, active: false }], dataSource: { ...base.dataSource, listPairs: async () => [health({ pairId: "other-pair" })] } });
     expect(screen.getByText("Not configured on this page. Set a deployment file for it.")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "other-pair" })).toBeNull();
+  });
+
+  it("links another pair of the release with a fresh load of the page on that pair", () => {
+    const base = buildTestServices();
+    renderWithServices(<GlobalView />, {
+      knownPairs: [
+        { id: "eth-pls", label: "Ethereum and PulseChain", configured: true, active: true },
+        { id: "sepolia-pls943", label: "Sepolia and PulseChain testnet v4", configured: true, active: false },
+      ],
+      dataSource: { ...base.dataSource, listPairs: never },
+    });
+    const link = screen.getByRole("link", { name: "sepolia-pls943" });
+    expect(link).toHaveAttribute("href", "?pair=sepolia-pls943#/pair/sepolia-pls943");
+    expect(screen.getByText("Sepolia and PulseChain testnet v4")).toBeInTheDocument();
   });
 
   it("shows the error when the health does not load", async () => {

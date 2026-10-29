@@ -22,7 +22,8 @@ export type Services = {
   readonly configuration: WebConfiguration;
   readonly pair: PairConfig;
   /** The pairs that the page knows by name, configured or not. */
-  readonly knownPairs: readonly { readonly id: string; readonly label: string; readonly configured: boolean }[];
+  /** Every pair the explorer knows. `configured`: this release has a deployment for it. `active`: the page runs on it. */
+  readonly knownPairs: readonly { readonly id: string; readonly label: string; readonly configured: boolean; readonly active: boolean }[];
   readonly dataSource: DataSource;
   readonly indexer: IndexerClient;
   readonly chainAccess: ChainAccess;
@@ -43,8 +44,13 @@ const KNOWN_PAIR_LABELS: Readonly<Record<string, string>> = {
   "sepolia-pls943": "Sepolia and PulseChain testnet v4",
 };
 
-const knownPairsOf = (pair: PairConfig): Services["knownPairs"] =>
-  knownPairIds().map((id) => ({ id, label: KNOWN_PAIR_LABELS[id] ?? id, configured: id === pair.id }));
+const knownPairsOf = (configuration: WebConfiguration, pair: PairConfig): Services["knownPairs"] =>
+  knownPairIds().map((id) => ({
+    id,
+    label: KNOWN_PAIR_LABELS[id] ?? id,
+    configured: id === pair.id || configuration.availablePairs.includes(id),
+    active: id === pair.id,
+  }));
 
 /** What a live page needs besides the configuration. A fixture page needs none of it. */
 export type LiveServicesOptions = {
@@ -80,7 +86,7 @@ const readHeadSlot = async (connection: ConnectionRuntime, pair: PairConfig, cha
  * @throws When a live page has no shared pair.
  */
 export const createServices = (configuration: WebConfiguration, pair: PairConfig, live: LiveServicesOptions = { sharedPair: null }): Services => {
-  const base = { configuration, pair, knownPairs: knownPairsOf(pair) };
+  const base = { configuration, pair, knownPairs: knownPairsOf(configuration, pair) };
   if (configuration.dataMode === "fixture") {
     return {
       ...base,

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadPairConfig, loadSharedPair, readConfiguration, withDeploymentText } from "../../src/config/environment";
+import { loadPairConfig, loadSharedPair, readConfiguration, requestedPair, selectPair, withDeploymentText } from "../../src/config/environment";
 import { ConfigurationError } from "../../src/config/secret-scan";
 
 const DEPLOYMENT = JSON.stringify({
@@ -154,5 +154,49 @@ describe("withDeploymentText", () => {
       return "{}";
     });
     expect(seen).toEqual([""]);
+  });
+});
+
+describe("a release with the deployments of several pairs", () => {
+  const TESTNET = { chain_a: section(11155111, "a1"), chain_b: section(943, "b1") };
+  const both = { "sepolia-pls943": TESTNET, "eth-pls": JSON.parse(FULL_DEPLOYMENT) };
+
+  it("offers every pair of the map, opens the first by default, and holds the text of that pair's deployment", () => {
+    const configuration = readConfiguration({ VITE_EXPLORER_DEPLOYMENTS_JSON: JSON.stringify(both) });
+    expect(configuration.availablePairs).toEqual(["sepolia-pls943", "eth-pls"]);
+    expect(configuration.pairName).toBe("sepolia-pls943");
+    expect(JSON.parse(configuration.deploymentJson ?? "")).toEqual(TESTNET);
+  });
+
+  it("opens the pair that VITE_EXPLORER_PAIR names when the map has it, and refuses a name the map lacks", () => {
+    expect(readConfiguration({ VITE_EXPLORER_DEPLOYMENTS_JSON: JSON.stringify(both), VITE_EXPLORER_PAIR: "eth-pls" }).pairName).toBe("eth-pls");
+    expect(() => readConfiguration({ VITE_EXPLORER_DEPLOYMENTS_JSON: JSON.stringify(both), VITE_EXPLORER_PAIR: "nope" })).toThrow(/VITE_EXPLORER_PAIR/);
+  });
+
+  it("refuses a map that is not JSON, not an object of deployments, or empty", () => {
+    for (const text of ["{", "[]", "{}", JSON.stringify({ "eth-pls": "text" })]) {
+      expect(() => readConfiguration({ VITE_EXPLORER_DEPLOYMENTS_JSON: text }), text).toThrow(/VITE_EXPLORER_DEPLOYMENTS_JSON/);
+    }
+  });
+
+  it("offers just the one pair of a single deployment", () => {
+    expect(readConfiguration({ VITE_EXPLORER_DEPLOYMENT_JSON: DEPLOYMENT }).availablePairs).toEqual(["eth-pls"]);
+  });
+
+  it("switches to a requested pair of the map, and keeps the configuration for an unknown or missing request", async () => {
+    const configuration = readConfiguration({ VITE_EXPLORER_DEPLOYMENTS_JSON: JSON.stringify(both) });
+    const switched = selectPair(configuration, "eth-pls");
+    expect(switched.pairName).toBe("eth-pls");
+    expect((await loadSharedPair(switched))?.sides.map((side) => side.chainId)).toEqual([1, 369]);
+    expect(selectPair(configuration, "nope")).toBe(configuration);
+    expect(selectPair(configuration, null)).toBe(configuration);
+    const single = readConfiguration({ VITE_EXPLORER_DEPLOYMENT_JSON: DEPLOYMENT });
+    expect(selectPair(single, "sepolia-pls943")).toBe(single);
+  });
+
+  it("reads the requested pair from ?pair= first, then from a #/pair/ route, else none", () => {
+    expect(requestedPair({ search: "?pair=eth-pls", hash: "#/pair/sepolia-pls943" })).toBe("eth-pls");
+    expect(requestedPair({ search: "", hash: "#/pair/sepolia-pls943?token=0x1" })).toBe("sepolia-pls943");
+    expect(requestedPair({ search: "?pair=", hash: "#/history" })).toBeNull();
   });
 });

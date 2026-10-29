@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PAIR_NAME, PAIR_DEFINITIONS, isTestnetPair, beaconVariableName, describePair, finalityVariableName, loadPair, otherSide, rpcVariableName, sideOf } from "../src/pairs.js";
+import { DEFAULT_PAIR_NAME, PAIR_DEFINITIONS, beaconVariableName, describePair, finalityVariableName, loadPair, otherSide, rpcVariableName, sideOf } from "../src/pairs.js";
 
 const section = (chainId: number, seed: string) => ({
   name: `chain-${chainId}`,
@@ -133,12 +133,6 @@ describe("the pair registry", () => {
       { name: "sepolia", chainId: 11155111 },
       { name: "pulsechain-testnet-v4", chainId: 943 },
     ]);
-  });
-
-  it("marks the testnet pair as a testnet and the mainnet pair as not", () => {
-    expect(isTestnetPair("sepolia-pls943")).toBe(true);
-    expect(isTestnetPair("eth-pls")).toBe(false);
-    expect(isTestnetPair("unknown")).toBe(false);
   });
 
   it("gives every chain identifier to one pair side only, so that a chain never belongs to two pairs by accident", () => {

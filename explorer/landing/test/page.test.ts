@@ -29,6 +29,21 @@ test("a good manifest shows the dapp and docs CIDs with at least three gateway l
   }
 });
 
+test("fills {version} in the download address from the signed dapp release, URL-encoded", () => {
+  const state = { ...verified(), downloadBaseUrl: "https://example.org/releases/download/v{version}" } as LandingState;
+  const html = renderLanding(state);
+  assert.ok(html.includes('href="https://example.org/releases/download/v1.0.0/terminal-linux-x64"'));
+  const odd = { ...sampleManifest, releases: [{ ...sampleManifest.releases[0], version: "1.0 beta/2" }, ...sampleManifest.releases.slice(1)] };
+  const oddHtml = renderLanding({ ...verified(odd), downloadBaseUrl: "https://example.org/v{version}" } as LandingState);
+  assert.ok(oddHtml.includes('href="https://example.org/v1.0%20beta%2F2/terminal-linux-x64"'));
+});
+
+test("leaves {version} as written when the manifest has no dapp release", () => {
+  const noDapp = { ...sampleManifest, releases: sampleManifest.releases.filter((release) => release.name !== "dapp") };
+  const html = renderLanding({ ...verified(noDapp), downloadBaseUrl: "https://example.org/v{version}" } as LandingState);
+  assert.ok(html.includes('href="https://example.org/v{version}/terminal-linux-x64"'));
+});
+
 test("escapes a version string holding <script>", () => {
   const hostile = { ...sampleManifest, releases: [{ ...sampleManifest.releases[0], version: "<script>x</script>" }] };
   const html = renderLanding(verified(hostile));
@@ -43,10 +58,10 @@ test("shows the loading text and the sequence note", () => {
 });
 
 test("shows the notice of the page settings in every state, escaped, above the result", () => {
-  const notice = "TESTNET <b>only</b>";
+  const notice = "Maintenance <b>tonight</b>";
   for (const state of [{ kind: "loading", title: "T" } as LandingState, { kind: "failed", title: "T", reason: "bad" } as LandingState, verified()]) {
     const html = renderLanding(state, notice);
-    assert.ok(html.includes('<p class="notice" role="note">TESTNET &lt;b&gt;only&lt;/b&gt;</p>'), state.kind);
+    assert.ok(html.includes('<p class="notice" role="note">Maintenance &lt;b&gt;tonight&lt;/b&gt;</p>'), state.kind);
     assert.ok(html.indexOf("notice") < html.indexOf(state.kind === "loading" ? "Checking" : state.kind === "failed" ? "Warning" : "signature"));
   }
   assert.ok(!renderLanding(verified()).includes('class="notice"'));

@@ -15,7 +15,6 @@ import { MessageView } from "../views/MessageView";
 import { PairView } from "../views/pair/PairView";
 import { ProverView } from "../views/ProverView";
 import { ConnectionsView } from "../views/ConnectionsView";
-import { isTestnetPair } from "@zk-bridge/shared";
 import { Notice } from "../ui/primitives";
 import { ActionsContext } from "./actions-context";
 import { parseRoute, formatRoute, routeTitle, type Route } from "./route";
@@ -153,9 +152,6 @@ export const Shell = () => {
         </Flex>
         <Box as="main" paddingX={{ base: "4", md: "6" }} paddingY="4">
           {configuration.dataMode === "fixture" ? <Notice tone="warning">Sample data. Nothing here is real and no send reaches a chain.</Notice> : null}
-          {isTestnetPair(configuration.pairName) ? (
-            <Notice tone="warning">Testnet: Sepolia and PulseChain testnet v4. Test coins only; nothing here has real value.</Notice>
-          ) : null}
           {notice === null ? null : (
             <Flex gap="2" alignItems="center" marginY="2">
               <Notice tone="error">{notice}</Notice>
