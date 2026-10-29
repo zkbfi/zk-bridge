@@ -110,9 +110,47 @@ describe("the preparation of an item: guards at the edge of external data", () =
     expect(w.chain.log.some((entry) => entry.kind === "send" || entry.kind === "simulate")).toBe(false);
   });
 
+  /** The setup with the message data of the indexer and the prover replaced. */
+  const withMessage = (w: ReturnType<typeof setup>, messageData: Hex) => {
+    const data = { [w.item.messageId]: messageData };
+    w.dependencies = { ...w.dependencies, indexer: fakeIndexer([w.item], data), prover: feedProver(w.prover, [w.item], data) };
+    return () => prepareItem(w.dependencies, w.item, w.ledger);
+  };
+  const COPY_FACTORY = address(0x67);
+  const HOME_TOKEN = address(0x55);
+  const director = { recipient: address(0x12), settings: 1n, limit: 10n, multiplier: 0n };
+
+  it("skips an item whose destination token is not the token that the message releases, and asks the chain nothing", async () => {
+    const w = setup();
+    const prepare = withMessage(w, feeOfferData({ director, value: 1000n, token: address(0x44) }));
+    expect(await outcomeOf(prepare)).toMatchObject({ status: "skipped", reason: "indexer-disagrees-with-evidence" });
+    expect(w.chain.log).toEqual([]);
+  });
+
+  it("asks the token factory for the copy that a bridged message releases", async () => {
+    const w = setup({ tokenFactory: COPY_FACTORY });
+    w.chain.predictedCopy = WRAPPED_NATIVE;
+    const prepare = withMessage(w, feeOfferData({ director, value: 1000n, token: HOME_TOKEN, handler: "bridged" }));
+    expect((await prepare()).kind).toBe("ready");
+    const asked = w.chain.log.find((entry) => entry.kind === "call" && entry.request.to === COPY_FACTORY);
+    expect(asked?.request.data).toBe(encodeFunctionData({ abi: tokenFactoryAbi, functionName: "predictAddress", args: [1n, HOME_TOKEN] }));
+  });
+
+  it("cannot price the tip of a bridged message when the deployment names no token factory", async () => {
+    const w = setup();
+    const prepare = withMessage(w, feeOfferData({ director, value: 1000n, token: HOME_TOKEN, handler: "bridged" }));
+    expect(await outcomeOf(prepare)).toEqual({ status: "skipped", messageId: word(1), reason: "no-price-for-fee-token" });
+  });
+
   it("cannot price a tip in a token that does not answer its decimals, such as a copy that is not deployed yet", async () => {
     const w = setup({ item: feedItem({ id: 1 }) });
-    w.dependencies = { ...w.dependencies, settings: { ...w.dependencies.settings, tokenValuationsWei: { [address(0x66).toLowerCase()]: 10n ** 18n } } };
+    const data = { [w.item.messageId]: feeOfferData({ director: { recipient: address(0x12), settings: 1n, limit: 10n, multiplier: 0n }, value: 1000n, token: address(0x66) }) };
+    w.dependencies = {
+      ...w.dependencies,
+      indexer: fakeIndexer([w.item], data),
+      prover: feedProver(w.prover, [w.item], data),
+      settings: { ...w.dependencies.settings, tokenValuationsWei: { [address(0x66).toLowerCase()]: 10n ** 18n } },
+    };
     w.chain.tokenDecimals = null;
     expect(await outcomeOf(() => prepareItem(w.dependencies, w.item, w.ledger))).toEqual({ status: "skipped", messageId: word(1), reason: "no-price-for-fee-token" });
   });

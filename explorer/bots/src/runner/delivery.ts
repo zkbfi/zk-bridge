@@ -1,5 +1,5 @@
 import { decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeFunctionData, erc20Abi, type Address, type ContractFunctionArgs, type Hex } from "viem";
-import { deliveryRouterAbi, messageBridgeAbi, requiredDeliveryGas, tokenFactoryAbi, type PayoutKind, type ProofDirection } from "@zk-bridge/shared";
+import { decodeMediatorMessage, deliveryRouterAbi, messageBridgeAbi, requiredDeliveryGas, tokenFactoryAbi, type PayoutKind, type ProofDirection } from "@zk-bridge/shared";
 import { sendTerms, worstCaseCostWei, type FeeQuote, type ReceiptLog, type TransactionPort } from "../chain/transactions.ts";
 import type { FeedItem, IndexerClient } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
@@ -196,6 +196,23 @@ export async function quoteFee(
     valuationsWei: dependencies.settings.tokenValuationsWei,
   });
   return value.ok ? { ok: true, feeWei: value.wei, feeTokens, payout } : value;
+}
+
+/**
+ * The token that the mediator releases to the router for a token message: the named token when it is native on the
+ * destination, else the copy that the token factory names for the token of the source chain (the mediator deploys
+ * every copy through the factory). Null when the deployment names no token factory.
+ */
+async function releasedTokenOf(dependencies: DeliveryDependencies, item: FeedItem, data: Hex): Promise<Address | null> {
+  // readFeeOffer found an offer, so the data is a mediator message.
+  const message = decodeMediatorMessage(data)!;
+  if (message.releasesNativeToken) return message.token;
+  if (dependencies.tokenFactory === null) return null;
+  const answer = await dependencies.chain.call({
+    to: dependencies.tokenFactory,
+    data: encodeFunctionData({ abi: tokenFactoryAbi, functionName: "predictAddress", args: [BigInt(item.direction.sourceChainId), message.token] }),
+  });
+  return decodeFunctionResult({ abi: tokenFactoryAbi, functionName: "predictAddress", data: answer });
 }
 
 /**
@@ -446,6 +463,17 @@ export async function prepareItem(dependencies: DeliveryDependencies, listed: Fe
   const message = await dependencies.indexer.getMessage(item.messageId);
   const offer = readFeeOffer({ messageData: message.data as Hex, deliveryRouter: dependencies.deliveryRouter });
   if (offer.kind === "none" && !settings.deliverWithoutOffer) return done(skip(messageId, "no-fee-offer", { detail: offer.reason }));
+  // The tip is priced in the destination token of the feed item. It must be the token that the message releases to
+  // the router. The message data itself is checked against the source chain once the evidence is built.
+  // An item without a destination token is left to the fee check, which cannot price it.
+  const listedToken = item.transfer?.destinationToken?.address;
+  if (offer.kind === "offer" && listedToken !== undefined) {
+    const released = await releasedTokenOf(dependencies, item, message.data as Hex);
+    if (released === null) return done(skip(messageId, "no-price-for-fee-token"));
+    if (released.toLowerCase() !== listedToken.toLowerCase()) {
+      return done(skip(messageId, "indexer-disagrees-with-evidence", { detail: `the message releases ${released}` }));
+    }
+  }
 
   const quote = await chain.feeQuote();
   const early =

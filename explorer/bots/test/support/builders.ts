@@ -53,14 +53,18 @@ export function memoryLogger(knownSecrets: readonly string[] = []): { readonly l
   return { logger, lines, events: () => lines.map((line) => JSON.parse(line) as Record<string, unknown>) };
 }
 
-/** The call data of a message that relays tokens to a delivery router with a director. */
-export function feeOfferData(options: { director: FeeDirector; value: bigint; recipient?: Address; token?: Address; call?: DeliveryCall }): Hex {
+/**
+ * The call data of a message that relays tokens to a delivery router with a director. By default the token is native on
+ * the destination, so the router receives `token` itself. A `bridged` message names a token of the source chain, and the
+ * router receives its copy.
+ */
+export function feeOfferData(options: { director: FeeDirector; value: bigint; recipient?: Address; token?: Address; call?: DeliveryCall; handler?: "native" | "bridged" }): Hex {
   // The words do not depend on the token. The context names the wrapped native token twice so that the guard of the
   // shared module accepts every setting: a test may offer a message that the terminal would refuse to build.
   const callback = encodeFeeDirector(options.director, { router: DELIVERY_ROUTER, protectedAddresses: [], destinationToken: WRAPPED_NATIVE, destinationWrappedNative: WRAPPED_NATIVE }, options.call);
   return encodeFunctionData({
     abi: tokenMediatorAbi,
-    functionName: "handleBridgedTokensAndCall",
+    functionName: options.handler === "bridged" ? "handleBridgedTokensAndCall" : "handleNativeTokensAndCall",
     args: [options.token ?? OTHER_TOKEN, options.recipient ?? DELIVERY_ROUTER, options.value, callback],
   });
 }

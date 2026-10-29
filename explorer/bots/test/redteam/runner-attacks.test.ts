@@ -205,6 +205,43 @@ describe("red team: delivery decisions of the runner", () => {
     expect(preparation).toMatchObject({ kind: "outcome", outcome: { status: "skipped", reason: "indexer-disagrees-with-evidence" } });
   });
 
+  it("ATTACK lying indexer: a valued destination token that the message does not release is skipped before pricing (BLOCKED, follow-up of B-1)", async () => {
+    // The message releases a worthless token native on the destination; the indexer names a token with a valuation.
+    const valued = address(0x66);
+    const item = feedItem({ id: 1, token: valued });
+    const data = feeOfferData({ director: DIRECTOR, value: 10n ** 18n, token: address(0x44) });
+    const evidence = { ...evidenceFor(), message: { ...evidenceFor().message, data, gasLimit: Number(item.gasLimit) } };
+    const deps = dependencies({
+      indexer: fakeIndexer([item], { [item.messageId]: data }),
+      prover: fakeProver({ evidence: () => evidence }),
+      settings: { ...dependencies().settings, tokenValuationsWei: { [valued.toLowerCase()]: 10n ** 30n } },
+    });
+    const preparation = await prepareItem(deps, item, ledger());
+    expect(preparation).toMatchObject({ kind: "outcome", outcome: { status: "skipped", reason: "indexer-disagrees-with-evidence" } });
+    expect(deps.chain.log).toEqual([]);
+  });
+
+  it("ATTACK lying indexer: a bridged message priced in another token than the copy that the factory names is skipped (BLOCKED, follow-up of B-1)", async () => {
+    const valued = address(0x66);
+    const copy = address(0x45);
+    const data = feeOfferData({ director: DIRECTOR, value: 10n ** 18n, token: address(0x55), handler: "bridged" });
+    const run = async (token: typeof valued) => {
+      const item = feedItem({ id: 1, token });
+      const evidence = { ...evidenceFor(), message: { ...evidenceFor().message, data, gasLimit: Number(item.gasLimit) } };
+      const deps = dependencies({
+        indexer: fakeIndexer([item], { [item.messageId]: data }),
+        prover: fakeProver({ evidence: () => evidence }),
+        tokenFactory: address(0xfa),
+        settings: { ...dependencies().settings, tokenValuationsWei: { [valued.toLowerCase()]: 10n ** 18n, [copy.toLowerCase()]: 10n ** 18n } },
+      });
+      deps.chain.predictedCopy = copy;
+      return prepareItem(deps, item, ledger());
+    };
+    expect(await run(valued)).toMatchObject({ kind: "outcome", outcome: { status: "skipped", reason: "indexer-disagrees-with-evidence" } });
+    // Control: the copy that the factory names is priced as usual.
+    expect((await run(copy)).kind).toBe("ready");
+  });
+
   it("ATTACK evidence for another message is skipped before any gas is spent (BLOCKED, was B-2)", async () => {
     const item = feedItem({ id: 7, token: WRAPPED_NATIVE });
     const offer = feeOfferData({ director: DIRECTOR, value: 10n ** 18n, token: WRAPPED_NATIVE });
