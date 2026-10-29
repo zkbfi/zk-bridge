@@ -1,6 +1,8 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { toFunctionSelector } from "viem";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { createServices } from "../../src/app/services";
+import { readConfiguration } from "../../src/config/environment";
 import { describeSetting } from "@terminal/data/connection-runtime";
 import { EMPTY_CONNECTION_SETTINGS } from "@zk-bridge/shared";
 import { CONNECTION_STORAGE_KEY } from "../../src/config/connection-storage";
@@ -88,5 +90,48 @@ describe("a change of settings on a live page", () => {
     expect(await services.indexer.findMessageByTransaction(hash)).toBe(found);
     services.fake.setStatus(fallbackStatus("indexer unreachable"));
     expect(runtimeOf(services).source().label).toBe("RPC fallback: indexer unreachable");
+  });
+});
+
+describe("the endpoints and the head read of the proof panel", () => {
+  it("reports the endpoints in force, and follows a change of settings", () => {
+    const services = liveServices({ variables: { VITE_EXPLORER_BACKEND_URL: "https://backend.example.org/" } });
+    expect(services.endpoints().backendUrl).toEqual({ value: "https://backend.example.org", source: "environment" });
+    expect(services.endpoints().archiveUrl).toBeNull();
+    runtimeOf(services).apply({ indexerUrl: null, rpcUrls: {}, archiveUrl: "https://archive.example.org" });
+    expect(services.endpoints().archiveUrl).toEqual({ value: "https://archive.example.org", source: "user" });
+  });
+
+  it("reads the head slot from the light client contract of the chain, over the RPC URL of that chain", async () => {
+    const calls: { url: string; to: string; data: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: { body: string }) => {
+      const request = JSON.parse(init.body) as { id: number; params: [{ to: string; data: string }] };
+      calls.push({ url, to: request.params[0].to, data: request.params[0].data });
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: `0x${(14_100_000).toString(16).padStart(64, "0")}` }));
+    });
+    try {
+      const head = await liveServices().readLightClientHead(SECOND_CHAIN);
+      expect(head).toBe(14_100_000n);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toBe("https://registry.example.org/pls");
+      expect(calls[0]?.to.toLowerCase()).toBe(FIXTURE_PAIR.second.contracts.lightClient.toLowerCase());
+      expect(calls[0]?.data).toBe(toFunctionSelector("head()"));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("refuses a chain that is not in the pair, and a chain with no RPC URL", async () => {
+    const services = liveServices();
+    await expect(services.readLightClientHead(56)).rejects.toThrow("Chain 56 is not in the pair.");
+    await expect(services.readLightClientHead(FIRST_CHAIN)).rejects.toThrow();
+  });
+});
+
+describe("the sample page", () => {
+  it("has no endpoints and reads no chain", async () => {
+    const services = createServices(readConfiguration({ VITE_EXPLORER_DATA: "fixture" }), FIXTURE_PAIR);
+    expect(services.endpoints().backendUrl).toBeNull();
+    await expect(services.readLightClientHead(1)).rejects.toThrow("The sample page reads no chain.");
   });
 });

@@ -10,11 +10,12 @@ import type { DataSource } from "@terminal/data/data-source";
 import { createFixtureDataSource, FIXTURE_NOW } from "@terminal/data/fixtures";
 import { createConnectionRuntime, type ConnectionRuntime } from "@terminal/data/connection-runtime";
 import type { PairConfig } from "@terminal/model/types";
-import type { ExplorerConnectionInput, ExplorerConnection, Pair } from "@zk-bridge/shared";
+import { beaconLightClientAbi, type ExplorerConnectionInput, type ExplorerConnection, type Pair } from "@zk-bridge/shared";
 import { loadUserConnections, type ConnectionStorage } from "../config/connection-storage";
 import type { WebConfiguration } from "../config/environment";
 import { createFixtureIndexerClient } from "../data/fixture-indexer-client";
 import { createFallbackIndexerClient, type IndexerClient } from "../data/indexer-client";
+import { NO_ENDPOINTS, realPanelTransport, type PanelEndpoints, type PanelTransport } from "../views/proof-panel-model";
 
 /** Everything that a component reads from outside React. */
 export type Services = {
@@ -27,6 +28,12 @@ export type Services = {
   readonly chainAccess: ChainAccess;
   /** The live connections with their fallback, or null on a fixture page. */
   readonly connection: ConnectionRuntime | null;
+  /** The endpoints in force now: the backend, the msgboard indexer, the archive and the msgboard node. Each one is null when unset. */
+  readonly endpoints: () => PanelEndpoints;
+  /** The network access of the proof panel. A test passes fakes. */
+  readonly transport: PanelTransport;
+  /** Reads the slot of the head that the light client on a chain stores now. It reads the chain, never the indexer. */
+  readonly readLightClientHead: (chainId: number) => Promise<bigint>;
   /** The clock in unix seconds. The fixture page pins it so that the sample data stays the same. */
   readonly now: () => number;
 };
@@ -51,6 +58,19 @@ export type LiveServicesOptions = {
   readonly createConnection?: (input: ExplorerConnectionInput) => ExplorerConnection;
 };
 
+/** The part of a viem public client that reads a contract. The flow client of a live page has it. */
+type ContractReader = {
+  readContract(parameters: { abi: typeof beaconLightClientAbi; address: `0x${string}`; functionName: "head" }): Promise<bigint>;
+};
+
+const readHeadSlot = async (connection: ConnectionRuntime, pair: PairConfig, chainId: number): Promise<bigint> => {
+  const chain = [pair.first, pair.second].find((candidate) => candidate.chainId === chainId);
+  if (chain === undefined) throw new Error(`Chain ${chainId} is not in the pair.`);
+  // The flow client of a live page is a viem public client, so it reads contracts. Its type names only what the flow needs.
+  const reader = connection.chainAccess.flowClient(chainId) as unknown as ContractReader;
+  return reader.readContract({ abi: beaconLightClientAbi, address: chain.contracts.lightClient, functionName: "head" });
+};
+
 /**
  * Builds the services for a configuration and a pair.
  *
@@ -68,6 +88,11 @@ export const createServices = (configuration: WebConfiguration, pair: PairConfig
       indexer: createFixtureIndexerClient({ pair }),
       chainAccess: createFixtureChainAccess(pair),
       connection: null,
+      endpoints: () => NO_ENDPOINTS,
+      transport: realPanelTransport,
+      readLightClientHead: async () => {
+        throw new Error("The sample page reads no chain.");
+      },
       now: () => FIXTURE_NOW,
     };
   }
@@ -93,6 +118,9 @@ export const createServices = (configuration: WebConfiguration, pair: PairConfig
     indexer: createFallbackIndexerClient(connection),
     chainAccess: connection.chainAccess,
     connection,
+    endpoints: () => connection.resolved(),
+    transport: realPanelTransport,
+    readLightClientHead: (chainId) => readHeadSlot(connection, pair, chainId),
     now: () => Math.floor(Date.now() / 1000),
   };
 };

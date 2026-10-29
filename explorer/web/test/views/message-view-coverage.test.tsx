@@ -110,4 +110,11 @@ describe("the message view", () => {
     renderDetail({ ...detail, sourceChainId: 56 });
     expect(await screen.findByRole("region", { name: "Sent on chain 56" })).toBeInTheDocument();
   });
+
+  it("shows the proof panel with the stage of the message", async () => {
+    const detail = await detailOf(tokenItem.id);
+    renderDetail({ ...detail, status: "waiting_for_finality" });
+    expect(await screen.findByRole("region", { name: "Proof and delivery" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Request a proof" })).toBeInTheDocument();
+  });
 });

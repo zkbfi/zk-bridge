@@ -5,6 +5,7 @@ import { useServices } from "../app/services";
 import { chainNameOf } from "../data/message-detail";
 import { formatAmountWithSymbol, formatTimestamp, STATUS_MEANINGS } from "../ui/format";
 import { DataRow, Mono, Notice, Panel, StatusBadge } from "../ui/primitives";
+import { ProofPanel } from "./ProofPanel";
 
 const callOutcomeText = (succeeded: boolean | null): string => {
   if (succeeded === null) return "unknown";
@@ -45,6 +46,7 @@ export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
         <DataRow label="Transaction"><Mono>{detail.sourceTransactionHash}</Mono></DataRow>
         <DataRow label="Sender"><Mono>{detail.sender}</Mono></DataRow>
       </Panel>
+      <ProofPanel detail={detail} />
       <Panel title="Covered by a stored light client head">
         {detail.coveredByHeadSlot === null ? <Text fontSize="sm" color="fg.muted">Not yet. The light client on {destination} has not stored a head that covers this send.</Text> : (
           <>

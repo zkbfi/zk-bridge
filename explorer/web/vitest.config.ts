@@ -7,6 +7,9 @@ export default defineConfig({
   resolve: {
     alias: {
       "@terminal": fileURLToPath(new URL("../terminal/src", import.meta.url)),
+      // The two subpaths come first: an alias matches by prefix, and the plain name would swallow them.
+      "@zk-bridge/shared/backend-client": fileURLToPath(new URL("../shared/src/backend-client.ts", import.meta.url)),
+      "@zk-bridge/shared/msgboard-http": fileURLToPath(new URL("../shared/src/msgboard/board-http.ts", import.meta.url)),
       "@zk-bridge/shared": fileURLToPath(new URL("../shared/src/index.ts", import.meta.url)),
     },
   },
