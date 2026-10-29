@@ -11,6 +11,10 @@ Result words: **BLOCKED** means the code refused the attack, and the test assert
 - Server text reaches the terminal with escape bytes in it (medium).
 - Any anonymous caller can make the backend start a GPU proving run every `secondsBetweenJobsPerDirection` in each direction, even when no message is waiting (medium).
 
+## Status
+
+The fix round of 2026-10-29 fixed S-1, S-2, B-1, B-2, W-2 and K-4, and bounded K-1. No finding was rated high or critical. Each finding below ends with its status. The tests of the fixed findings now assert the refusal; their names end with "(BLOCKED, was <finding>)".
+
 ## How to run
 
 | Package | Command (from the package folder) | Files |
@@ -180,6 +184,7 @@ Method notes:
 - **Scenario.** The backend archive (or a file) adds a prerequisite `requireToPassMessage(attackerTarget, data, gas)` with the reason "no validated block hash row covers the source slot". A user who clicks through the sequence sends a message whose `messageSender()` is the user. On the other chain, any contract that trusts that user as a cross-chain sender (a cross-chain account, an app with per-user authority) runs the attacker's call. The function name and arguments are shown, but the title and note say it is a layout row.
 - **Tests.** shared "ATTACK SUCCEEDS a send (requireToPassMessage) is accepted as a prerequisite and titled 'Add a layout row'"; terminal "ATTACK SUCCEEDS a prerequisite that sends a new message as the user (requireToPassMessage)"; web "ATTACK SUCCEEDS archive adds a prerequisite that sends a new message from the user's wallet".
 - **Suggested fix.** Allow only `addBlockRootsLayout`, `addBlockHashLayout` and `addHistoricalSummariesLayout` as prerequisites.
+- **Status.** Fixed in `dcf255f`. `prerequisiteStep` allows only `addBlockRootsLayout`, `addBlockHashLayout` and `addHistoricalSummariesLayout`. The shared, web and terminal tests now assert the refusal.
 
 ### S-2 Low: a prerequisite can execute another message
 
@@ -187,6 +192,7 @@ Method notes:
 - **Scenario.** The archive adds `executeMessage` of an unrelated message Y as a "layout row". The user pays its gas (up to about 10 million gas). Delivery of Y is permissionless anyway, so only gas is lost.
 - **Tests.** shared "ATTACK SUCCEEDS executeMessage of another message is accepted as a prerequisite"; terminal "ATTACK SUCCEEDS a prerequisite that executes a different message (user pays its gas)".
 - **Suggested fix.** The allow-list of S-1.
+- **Status.** Fixed in `dcf255f`, by the allow-list of S-1.
 
 ### S-3 Low: the planner accepts proofs that the contract always refuses
 
@@ -195,6 +201,7 @@ Method notes:
 - **Why not X vs Y.** The contract delivers only the log of `remoteBridge`, and the remote bridge only writes canonical messages. So the client can be wrong only towards "reverts", never towards another message.
 - **Tests.** shared "ATTACK SUCCEEDS fake emitter: …", "ATTACK SUCCEEDS fake-emitter proof passes the plan …", "ATTACK SUCCEEDS a message of an unknown version, data type or source chain is read …", "ATTACK SUCCEEDS wrong source chain passes the plan …"; terminal "ATTACK SUCCEEDS planner accepts electra_reject_…" (four real fixture vectors).
 - **Suggested fix.** Pass the remote bridge address and the remote chain identifier to `readProvenMessage` (both are in the pair list), and check the emitter, `sourceChainId`, the version prefix and the data type as `_messageOf` and `_requireAcceptableMessage` do.
+- **Status.** Open. Low: the contract refuses these proofs, so only the gas of a reverted transaction is at stake.
 
 ### S-4 Low (informational): the client parser is looser than the contract
 
@@ -202,6 +209,7 @@ Method notes:
 - **Scenario.** A hostile evidence file appends a node to an honest receipt proof. The client reads the right message, and the contract reverts. Only gas is lost. The other cases (type byte, flag nibble, non-canonical RLP, trailing event data) cannot occur on an honest trie of a real block, which the contract requires.
 - **Tests.** shared "ATTACK SUCCEEDS extra proof node after the leaf …", "ATTACK SUCCEEDS receipt type byte 0x…", "ATTACK SUCCEEDS event data with a trailing word …", "ATTACK SUCCEEDS a leaf with an unknown hex-prefix flag …", "ATTACK SUCCEEDS non-canonical status …".
 - **Suggested fix.** Require the value node to be the last proof node; allow only types 0x01 to 0x04; require flags 0 to 3; require the exact event data length. A strict RLP decoder is optional.
+- **Status.** Open. Informational: only gas is at stake, and most shapes cannot occur on an honest trie.
 
 ### S-5 Low (display): some summary fields come from the file
 
@@ -209,6 +217,7 @@ Method notes:
 - **Scenario.** A hostile archive shows another source slot, anchor slot or route than the calldata holds. The signed calldata is still the proven message, so only the display and the layout advice are wrong.
 - **Tests.** shared "ATTACK SUCCEEDS the source slot and anchor slot shown in the summary are not bound to the calldata"; terminal "ATTACK SUCCEEDS summary sourceSlot, anchorSlot and route come from the file, not the proof".
 - **Suggested fix.** Read the slots from `anchorHeader.slot` and `sourceHeader.slot` of the decoded calldata, and derive the route from the proven chains.
+- **Status.** Open. Low: display only; the signed calldata is the proven message.
 
 ### S-6 Low: redaction misses common provider key shapes
 
@@ -216,6 +225,7 @@ Method notes:
 - **Scenario.** An RPC or beacon URL with its key in the path (QuickNode `/<token>/`, Ankr `/eth/<key>`) or in a query parameter not on the list (`dkey`, `access_token`), or an `x-api-key` header, shows up in an error that is logged or returned. It is removed only if the caller passes the value as a known secret. A known secret shorter than six characters, or in its percent-encoded form, is never removed.
 - **Tests.** shared "ATTACK SUCCEEDS QuickNode path token survives …" and the five cases next to it; "ATTACK SUCCEEDS a known secret of five characters is not removed"; "ATTACK SUCCEEDS a known secret is not removed in its percent-encoded form".
 - **Suggested fix.** Every caller should pass the configured endpoint URLs (and their path and query parts) as known secrets. Also remove the percent-encoded form of each known secret. Add rules for `[?&][a-z_]*(key|token)=` and `x-api-key:`.
+- **Status.** Open. Low.
 
 ### S-7 Low: the board reader has no limit
 
@@ -223,6 +233,7 @@ Method notes:
 - **Scenario.** A hostile board answers with tens of thousands of messages and forged hashes. Each one is passed on, and each one is decoded by the reader. The decoder refuses junk cheaply, so the cost is memory and CPU in the browser or bot.
 - **Test.** shared "ATTACK SUCCEEDS a hostile board answer of 20,000 messages with a forged hash is passed on whole (no count limit, hash not checked)".
 - **Suggested fix.** Cap the count and the data size, and do not use the board's `hash` as a key without checking it.
+- **Status.** Open. Low.
 
 ### B-1 Medium: the runner trusts the indexer's fee offer and token decimals
 
@@ -230,6 +241,7 @@ Method notes:
 - **Scenario.** A compromised or third-party indexer advertises large tips on messages that carry none, or claims 0 decimals for an 18-decimal token. The runner delivers each one and pays the gas, up to `maximumDeliveriesPerSweep` per sweep, again on every sweep. The batch simulation checks only that the call succeeds, not that the tip arrives.
 - **Tests.** bots "ATTACK SUCCEEDS lying indexer: a fee offer that is not in the proven message makes the item ready to be paid for"; "ATTACK SUCCEEDS lying indexer decimals: a copy token that claims 0 decimals inflates the tip value (valuation is per whole token)".
 - **Suggested fix.** Read the offer and the gas limit from `evidence.message.data` (the prover builds it from the source chain), or require the indexer data to equal it. Read `decimals` from the token or pin it in the valuation config.
+- **Status.** Fixed in `e277299`, `c70eed6` and `01c3246`. The runner skips an item whose indexer data or gas limit differs from the message that its prover read (`indexer-disagrees-with-evidence`), reads the decimals of the fee token from the token, derives the token that the message releases to the router (the named token, or the factory copy of a source token) and skips an item that lists another, and takes the chain ids for the copy lookup from its configuration, skipping an item of another direction (`wrong-direction`). A tip in a copy that is not deployed yet can no longer be valued (`no-price-for-fee-token`).
 
 ### B-2 Low: the runner does not bind evidence to the feed item
 
@@ -237,6 +249,7 @@ Method notes:
 - **Scenario.** A buggy or misconfigured prover returns evidence for message Y when asked for X. The runner delivers Y and records it under X.
 - **Test.** bots "ATTACK SUCCEEDS evidence for another message: the runner does not compare evidence.message.messageId with the feed item".
 - **Suggested fix.** Check the calldata with `readProvenMessage` and compare its identifier with the item, as the web and the terminal now do.
+- **Status.** Fixed in `6d626e5`. The runner skips evidence whose `message.messageId` is not the item (`evidence-for-another-message`). It compares the label of its own prover, not the calldata proof.
 
 ### B-3 Low to medium: forged `AffirmationCompleted` events are trusted
 
@@ -244,6 +257,7 @@ Method notes:
 - **Scenario.** A message target that runs inside a batch emits an event with the bridge's signature naming item B, whose call failed. B is recorded as delivered and never retried by this runner. Forged `Transfer` events to the router shift the fee accounting.
 - **Test.** bots "ATTACK SUCCEEDS forged AffirmationCompleted from a target contract marks a failed item as delivered".
 - **Suggested fix.** Require `log.address` to be the destination bridge, and take release segments only from the mediator.
+- **Status.** Open. Low to medium; not in this round.
 
 ### B-4 Low: a flood of forged proofs costs prover CPU
 
@@ -251,6 +265,7 @@ Method notes:
 - **Scenario.** The head is public, so each distinct forgery that names it passes the cheap checks and spawns one `verify` process. The payload memory is per payload. No gas is lost; msgboard proof of work is the only brake.
 - **Test.** bots "ATTACK SUCCEEDS forged-proof flood: every distinct forgery that names the current head spawns one local verify".
 - **Suggested fix.** One verify in flight per head and a cap per minute; remember refusals per head.
+- **Status.** Open. Low.
 
 ### W-1 Low: the web indexer path shows a stale proof as found
 
@@ -259,6 +274,7 @@ Method notes:
 - **Test.** web "ATTACK SUCCEEDS indexer serves a stale proof …".
 - **Suggested fix.** Filter by the head read from the chain, as the board path does.
 - **Related, not tested.** The terminal's head re-read before posting (`terminal/src/ui/proof-panel.tsx`, `post`) uses `dataSource.getHeads`, which can be the indexer. A lying indexer can therefore make the terminal post a proof that reverts. The web reads the head from the chain.
+- **Status.** Open. Low: the post button still refuses the stale proof.
 
 ### W-2 Medium: escape sequences from servers reach the terminal
 
@@ -266,6 +282,7 @@ Method notes:
 - **Scenario.** A hostile backend returns a job error holding `ESC ] 8 ;; https://evil.example/ BEL` (a clickable link with any label), `ESC [2J` (clear screen), or bidi overrides. The text can paint a fake review over the real one or hide a link.
 - **Test.** terminal "ATTACK SUCCEEDS escape bytes survive into the OpenTUI cell buffer". It shows the bytes kept as cells in OpenTUI's test renderer. Whether a real terminal acts on them was not observed.
 - **Suggested fix.** Strip C0 and C1 control characters, DEL and the bidi controls (U+202A to U+202E, U+2066 to U+2069) from all server text, in `RichLine` or in one shared sanitizer. React escapes the same text on the web; no cross-site scripting was found there.
+- **Status.** Fixed in `4960a21`. `safeText` in `terminal/src/ui/rich-text.tsx` removes CSI and OSC sequences, C0 and C1 controls, DEL and bidi controls. `RichLine` and the direct error lines (feed, pairs, audit, updates, status bar, address filter) use it. The tests now render and check the cell buffer.
 
 ### K-1 Medium: anyone can make the backend spend GPU money
 
@@ -273,6 +290,7 @@ Method notes:
 - **Scenario.** Any address posts `{reason: "user"}` every 120 seconds per direction. Each run that finds a newer finalized head pays for a GPU proof: about 225 proofs per direction per day with nothing waiting. The prover was faked, so the cost is inferred, not measured.
 - **Test.** backend "ATTACK SUCCEEDS an anonymous caller starts a proving run in each direction every secondsBetweenJobsPerDirection, with no message pending".
 - **Suggested fix.** Start a remote job only for a message the chain indexer reports as covered and undelivered, or for an authenticated keep-alive; add a daily job budget per direction.
+- **Status.** Partly fixed in `f8258f1`. A new limit, `limits.jobsPerDirectionPerDay` (default 96), bounds the jobs that may pay for a proof; a job that found the chain up to date does not count. Anyone can still use up the day's budget, which then delays honest requests; tying a job to a covered, undelivered message needs the chain indexer in the request path and was not done.
 
 ### K-2 Low to medium: twelve addresses lock everyone out
 
@@ -280,6 +298,7 @@ Method notes:
 - **Scenario.** 12 IPv4 addresses (or one IPv6 /48) fill `globalRequestsPerMinute` (120). Requests that only join an active job count too.
 - **Test.** backend "ATTACK SUCCEEDS twelve IPv4 addresses fill the global limit and lock every honest caller out for a minute".
 - **Suggested fix.** Do not count joins of an active job; give keep-alive and message requests their own budget.
+- **Status.** Open. Low to medium.
 
 ### K-3 Low to medium: a slow board wastes paid proofs
 
@@ -287,6 +306,7 @@ Method notes:
 - **Scenario.** A job is failed after `prover.timeoutSeconds` (1800 s) although its proof is stored and the post is still retrying (retries take about 1.5 hours). The next tick deletes the proof and the next request pays again.
 - **Test.** backend "ATTACK SUCCEEDS a board that is slow or down for longer than prover.timeoutSeconds loses a paid GPU proof, and the next request pays for another".
 - **Suggested fix.** Skip jobs with a stored proof in `failLostJobs`, or refresh `updatedAt` on each post attempt.
+- **Status.** Open. Low to medium.
 
 ### K-4 Low to medium: a lagging RPC read deletes a good proof
 
@@ -294,6 +314,7 @@ Method notes:
 - **Scenario.** A load-balanced node one update behind answers one read, triggered by any public GET of `/proofs/latest`; the stored proof is deleted for good.
 - **Test.** backend "ATTACK SUCCEEDS one read of a lagging RPC node (an older head) makes a public GET delete a good proof for good".
 - **Suggested fix.** Delete only when the read head is higher than the proof's start slot; on a lower head answer 503 without deleting.
+- **Status.** Fixed in `6892b77`. A head read below the start of the kept proof no longer deletes it: `GET /proofs/latest` answers 503, and `chooseLatest` keeps the proof.
 
 ### K-5 Low: junk proofs keep the verifier busy
 
@@ -301,12 +322,14 @@ Method notes:
 - **Scenario.** More than 512 junk proofs that start at the head (each costs msgboard proof of work once) thrash the cache, so every 30-second poll spawns a verify for each.
 - **Tests.** backend "ATTACK SUCCEEDS more than SEEN_LIMIT junk proofs …" and its control.
 - **Suggested fix.** Keep refusals until the head moves; cap verifications per poll.
+- **Status.** Open. Low.
 
 ### K-6 Low (misconfiguration): forged X-Forwarded-For with the proxy bypassed
 
 - **Where.** `src/requests/module.ts`, `callerOf`.
 - **Test.** backend "ATTACK SUCCEEDS forged X-Forwarded-For when trustForwardedHeader is on and the backend is reached without the proxy".
 - **Suggested fix.** Refuse `trustForwardedHeader` unless `listen.host` is loopback, or check the socket address against an allowed proxy list.
+- **Status.** Open. Misconfiguration only.
 
 ### K-7 Low: IPv6 caller keys
 
@@ -314,18 +337,21 @@ Method notes:
 - **Scenario.** A /48 gives 65,536 keys (capped by the global limit). All NAT64 (`64:ff9b::/96`) and `::a.b.c.d` callers share one bucket.
 - **Tests.** backend "ATTACK SUCCEEDS one holder of an IPv6 /48 …", "ATTACK SUCCEEDS IPv4-compatible … NAT64 …".
 - **Suggested fix.** Key IPv6 by /56 or add a /48 limit; map the embedded IPv4 forms to their IPv4 address.
+- **Status.** Open. Low.
 
 ### K-8 Low: job rows are never pruned
 
 - **Where.** `src/requests/jobs.ts`, `pruneRequests` prunes requests only.
 - **Test.** backend "ATTACK SUCCEEDS job rows are never pruned …". Growth is slow (at most about 1,440 jobs a day).
 - **Suggested fix.** Prune finished jobs and posted proofs after the retention window.
+- **Status.** Open. Low.
 
 ### K-9 Low: a lying indexer deletes good evidence
 
 - **Where.** `src/archive/build.ts`, `dropFinished`.
 - **Test.** backend "ATTACK SUCCEEDS a lying chain indexer … delete good evidence".
 - **Suggested fix.** Confirm delivery on chain before deleting evidence.
+- **Status.** Open. Low; needs a compromised indexer.
 
 ## Known issues
 
