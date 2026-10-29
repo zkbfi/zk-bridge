@@ -1,0 +1,28 @@
+{
+  "name": "@zk-bridge/release",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Release pipeline: packs the sites into content-addressed archives, writes and signs version.json, and checks a release directory.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "vitest run --coverage",
+    "test:unit": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ipld/car": "5.4.7",
+    "blockstore-core": "7.0.1",
+    "ipfs-unixfs-exporter": "16.2.3",
+    "ipfs-unixfs-importer": "17.1.1",
+    "multiformats": "14.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.6",
+    "@vitest/coverage-v8": "4.1.11",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}
