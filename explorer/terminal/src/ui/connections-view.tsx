@@ -8,7 +8,6 @@
  */
 import { useTerminalDimensions } from '@opentui/react'
 import { useEffect, useMemo, useReducer, useState } from 'react'
-import { loadConnectionSettings } from '@zk-bridge/shared/config'
 import type { ConnectionRuntime } from '../data/connection-runtime'
 import { describeSetting } from '../data/connection-runtime'
 import type { TestOutcome } from '../config/connection-tests'
@@ -18,6 +17,7 @@ import {
   connectionRows,
   forgetUrlSetting,
   hasUserSettings,
+  loadUserSettings,
   runUrlTest,
   safeMessage,
   sameSettings,
@@ -75,7 +75,7 @@ function LiveConnections({ runtime }: { readonly runtime: ConnectionRuntime }) {
   // already has settings of the user keeps them: the store and the runtime agree, because every save writes both.
   useEffect(() => {
     if (store === null) return
-    loadConnectionSettings(store, chainIds)
+    loadUserSettings(store, chainIds)
       .then((loaded) => {
         if (!hasUserSettings(runtime.user()) && !sameSettings(loaded, runtime.user(), chainIds)) runtime.apply(loaded)
       })
@@ -124,7 +124,11 @@ function LiveConnections({ runtime }: { readonly runtime: ConnectionRuntime }) {
   )
 
   const resolved = runtime.resolved()
-  const settingOf = (row: ConnectionRow) => (row.id === 'indexer' ? resolved.indexerUrl : (resolved.rpcUrls[Number(row.id.split(':')[1])] ?? null))
+  const settingOf = (row: ConnectionRow) => {
+    const key = settingKeyOfRow(row)
+    if (key.kind === 'endpoint') return resolved[key.key]
+    return key.kind === 'indexer' ? resolved.indexerUrl : (resolved.rpcUrls[key.chainId] ?? null)
+  }
   const valueWidth = Math.max(10, terminal.width - 42)
   const bodyRows = Math.max(3, terminal.height - 9)
   const start = windowStart(selected, rows.length, bodyRows)
@@ -173,6 +177,12 @@ function valueSegments(row: ConnectionRow, input: { readonly text: string; reado
   return [colored(result.ok === 'pass' ? 'PASS ' : 'FAIL ', result.ok === 'pass' ? theme.good : theme.bad), plain(fitColumn(result.message, Math.max(5, width - 5)).trimEnd())]
 }
 
+function editorHint(key: ReturnType<typeof settingKeyOfRow>): string {
+  if (key.kind === 'rpc') return 'Not shown while you type. The node must report the chain id of this chain.'
+  if (key.kind === 'endpoint') return 'Not shown while you type. Start with http:// or https://. No query and no user name.'
+  return 'Not shown while you type. For example http://localhost:42069'
+}
+
 function UrlEditor(props: {
   readonly row: ConnectionRow
   readonly save: (text: string) => Promise<ActionResult>
@@ -181,16 +191,9 @@ function UrlEditor(props: {
 }) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<'yes' | 'no'>('no')
-  const isRpc = props.row.id !== 'indexer'
+  const hint = editorHint(settingKeyOfRow(props.row))
   const form = useForm({
-    specs: [
-      {
-        kind: 'secret',
-        name: 'url',
-        label: props.row.label,
-        hint: isRpc ? 'Not shown while you type. The node must report the chain id of this chain.' : 'Not shown while you type. For example http://localhost:42069',
-      },
-    ],
+    specs: [{ kind: 'secret', name: 'url', label: props.row.label, hint }],
     enabled: busy === 'yes' ? 'off' : 'on',
     onSubmit: (values) => {
       const text = values.url ?? ''

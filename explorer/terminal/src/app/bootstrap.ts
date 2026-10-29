@@ -10,6 +10,9 @@
  * - `EXPLORER_PAIR` the pair (default `eth-pls`) and `EXPLORER_DEPLOYMENT_FILE` the deployment JSON.
  * - `EXPLORER_RPC_URL_<chainId>` the RPC URL of each chain (keyed URLs: never committed). A URL that the user sets in
  *   the Connections view wins over it. The `rpc_url` of the deployment file is the default behind it.
+ * - `EXPLORER_BACKEND_URL`, `EXPLORER_MSGBOARD_INDEXER_URL`, `EXPLORER_ARCHIVE_URL` and `EXPLORER_MSGBOARD_URL` the backend, the
+ *   msgboard indexer, the archive and the msgboard node. None has a default. A URL that the user sets in the Connections
+ *   view wins over it.
  * - `EXPLORER_FINALITY_SECONDS_<chainId>` the finality time of a chain, for the RPC data source.
  * - Signers: `EXPLORER_PRIVATE_KEY`, `EXPLORER_PRIVATE_KEY_FILE`, `EXPLORER_KEYSTORE_FILE`, `EXPLORER_MNEMONIC`,
  *   `EXPLORER_MNEMONIC_FILE`, `EXPLORER_MNEMONIC_PASSPHRASE`, `EXPLORER_TREZOR_CONTACT`.
@@ -33,7 +36,7 @@ import {
   type ConnectionLayer,
   type ConnectionSettings,
 } from '@zk-bridge/shared'
-import { loadConnectionSettings } from '@zk-bridge/shared/config'
+import { loadUserSettings } from './connections-model'
 import {
   createDefaultProverSetupServices,
   createDefaultSigningServices,
@@ -105,6 +108,10 @@ function finalityEnvironment(pair: PairConfig, environment: BootstrapMachine['en
 function environmentLayer(pair: PairConfig, environment: BootstrapMachine['environment']): ConnectionLayer {
   return {
     indexerUrl: environment.EXPLORER_INDEXER_URL,
+    backendUrl: environment.EXPLORER_BACKEND_URL,
+    msgboardIndexerUrl: environment.EXPLORER_MSGBOARD_INDEXER_URL,
+    archiveUrl: environment.EXPLORER_ARCHIVE_URL,
+    msgboardUrl: environment.EXPLORER_MSGBOARD_URL,
     rpcUrls: Object.fromEntries([pair.first, pair.second].map((chain) => [chain.chainId, environment[chain.rpcEnvironmentVariable]])),
   }
 }
@@ -133,7 +140,7 @@ function createLiveConnection(input: {
 async function startupSettings(proverSetup: ProverSetupServices, pair: PairConfig): Promise<ConnectionSettings> {
   try {
     const store = await proverSetup.openSecretStore({ password: null })
-    return await loadConnectionSettings(store, [pair.first.chainId, pair.second.chainId])
+    return await loadUserSettings(store, [pair.first.chainId, pair.second.chainId])
   } catch {
     return EMPTY_CONNECTION_SETTINGS
   }

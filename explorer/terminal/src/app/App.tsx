@@ -8,6 +8,8 @@ import { AddressFilterModal, DetailModal, HelpOverlay, ReviewModal } from '../ui
 import { ConnectionsView } from '../ui/connections-view'
 import { SetupView } from '../ui/setup-view'
 import { ProveModal, type ProveDependencies } from '../ui/prove-view'
+import { ProofModal } from '../ui/proof-panel'
+import { HistoryModal } from '../ui/history-view'
 import { SignerModal } from '../ui/signer-modal'
 import { AuditView, GlobalView, PairView, ProverView } from '../ui/views'
 import { theme } from '../ui/theme'
@@ -42,7 +44,9 @@ function Shell(props: { readonly proveDependencies: ProveDependencies | undefine
   const { defaultPairId, quit } = useServices()
   const [state, dispatch] = useReducer(reduceAppState, defaultPairId, createAppState)
   const [proveOpen, setProveOpen] = useState(false)
-  const modalOpen = state.modal.kind !== 'none' || proveOpen ? 'yes' : 'no'
+  const [proofsOpen, setProofsOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const modalOpen = state.modal.kind !== 'none' || proveOpen || proofsOpen || historyOpen ? 'yes' : 'no'
 
   useKeyLayer(
     'global',
@@ -50,6 +54,8 @@ function Shell(props: { readonly proveDependencies: ProveDependencies | undefine
       if (key.name === 'q' && !key.ctrl) quit()
       else if (key.sequence === '?') dispatch({ type: 'toggle-help' })
       else if (key.name === 'p' && !key.ctrl) setProveOpen(true)
+      else if (key.name === 'r' && !key.ctrl) setProofsOpen(true)
+      else if (key.name === 't' && !key.ctrl) setHistoryOpen(true)
       else if (/^[1-9]$/.test(key.sequence) && VIEWS[Number(key.sequence) - 1] !== undefined) {
         dispatch({ type: 'show-view', view: VIEWS[Number(key.sequence) - 1]! })
       } else return false
@@ -73,6 +79,16 @@ function Shell(props: { readonly proveDependencies: ProveDependencies | undefine
           onClose={() => setProveOpen(false)}
         />
       ) : null}
+      {proofsOpen ? (
+        <ProofModal
+          onReview={(title, steps) => {
+            setProofsOpen(false)
+            dispatch({ type: 'open-modal', modal: { kind: 'review', title, steps } })
+          }}
+          onClose={() => setProofsOpen(false)}
+        />
+      ) : null}
+      {historyOpen ? <HistoryModal onClose={() => setHistoryOpen(false)} /> : null}
     </box>
   )
 }

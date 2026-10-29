@@ -10,9 +10,11 @@ import {
   encodeUpdateCalldata,
   planMessageExecution as planSharedMessageExecution,
   planUpdateFromHandoff,
+  planUpdateFromProofMessage,
   type EvidenceSummary,
   type OperatorCall,
   type OperatorChain,
+  type ProofMessage,
 } from '@zk-bridge/shared'
 import type { ChainConfig, PairConfig } from '../model/types'
 import type { PlannedTransaction } from './plan'
@@ -36,6 +38,16 @@ export interface ExecutionSequence {
 /** Reads a prover handoff and plans the light client update on a chain of the pair. */
 export function planLightClientUpdate(text: string, pair: PairConfig): PlannedTransaction {
   return plannedTransactionOf(withPairName(pair, () => planUpdateFromHandoff(text, operatorChainsOf(pair))), pair)
+}
+
+/**
+ * Plans the light client update that a proof message carries, on the chain that the direction of the message updates:
+ * the second chain for `first-to-second`, the first chain for `second-to-first`.
+ */
+export function planProofMessageUpdate(message: ProofMessage, pair: PairConfig): PlannedTransaction {
+  const chain = message.direction === 'first-to-second' ? pair.second : pair.first
+  const operatorChain = operatorChainsOf(pair).find((candidate) => candidate.chainId === chain.chainId) as OperatorChain
+  return plannedTransactionOf(planUpdateFromProofMessage(message, operatorChain), pair)
 }
 
 /** Reads evidence from `zk-bridge-prover evidence` and plans the transactions that deliver the message. */

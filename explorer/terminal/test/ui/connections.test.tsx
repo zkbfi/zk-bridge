@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { EMPTY_CONNECTION_SETTINGS, type ConnectionSettings, type HttpClient } from '@zk-bridge/shared'
 import { CONNECTION_SECRET_NAMES } from '@zk-bridge/shared/config'
 import { VIEWS, VIEW_LABELS } from '../../src/app/app-state'
+import { ENDPOINT_STORE_NAMES } from '../../src/app/connections-model'
 import { PasswordRequiredError } from '../../src/app/services'
 import { createConnectionRuntime } from '../../src/data/connection-runtime'
 import { viewTabsTitle } from '../../src/ui/views'
@@ -46,6 +47,9 @@ async function open(parts: ReturnType<typeof setUp>, extra: Partial<Parameters<t
   await app.press('5')
   return app
 }
+
+/** The rows of the four endpoints sit between the RPC URL rows and the test rows. */
+const ENDPOINT_ROWS = 4
 
 async function selectRow(target: App, index: number) {
   for (let step = 0; step < index; step += 1) await target.press('ARROW_DOWN')
@@ -156,6 +160,41 @@ describe('editing a URL', () => {
     expect(frames.neverContains(KEY)).toBe(true)
   })
 
+  test('saves an endpoint with no request, shows it masked as set by you, and forgets it with d', async () => {
+    const parts = setUp()
+    const store = memoryStore()
+    await open(parts, { store, http: async () => Promise.reject(new Error('no request expected')) })
+    await selectRow(app!, 3)
+    expect(app!.frame()).toContain('> Backend URL')
+    await app!.press('RETURN')
+    await app!.type(`https://backend.example.test/${KEY}`)
+    await app!.press('RETURN')
+    await app!.settle(60)
+    expect(store.values.get(ENDPOINT_STORE_NAMES.backendUrl)).toBe(`https://backend.example.test/${KEY}`)
+    expect(parts.runtime.resolved().backendUrl?.source).toBe('user')
+    expect(app!.frame()).toMatch(/Backend URL\s+https:\/\/backend\.example\.test\/\S+ \(set by you\)/)
+    expect(app!.frame()).not.toContain(KEY)
+    await app!.press('d')
+    await app!.settle(60)
+    expect(store.values.size).toBe(0)
+    expect(parts.runtime.resolved().backendUrl).toBeNull()
+  })
+
+  test('an endpoint with a query is refused with the hint of an endpoint and nothing is saved', async () => {
+    const parts = setUp()
+    const store = memoryStore()
+    await open(parts, { store })
+    await selectRow(app!, 4)
+    await app!.press('RETURN')
+    expect(app!.frame()).toContain('Start with http:// or https://. No query and no user name.')
+    await app!.type(`https://indexer.example.test/?key=${KEY}`)
+    await app!.press('RETURN')
+    await app!.settle(60)
+    expect(app!.frame()).toContain('must not hold a query')
+    expect(store.values.size).toBe(0)
+    expect(app!.frame()).not.toContain(KEY)
+  })
+
   test('saves an indexer URL with no chain test', async () => {
     const parts = setUp()
     const store = memoryStore()
@@ -264,7 +303,7 @@ describe('forgetting a setting', () => {
     await app!.press('d')
     await app!.settle(30)
     expect(app!.frame()).toContain('You set no value here')
-    await selectRow(app!, 3)
+    await selectRow(app!, 3 + ENDPOINT_ROWS)
     await app!.press('d')
     expect(parts.connections.created).toHaveLength(1)
   })
@@ -332,7 +371,7 @@ describe('the test rows test the URL in force now', () => {
   test('the indexer and the chain tests pass for a good URL and show PASS', async () => {
     const parts = setUp({ user: { indexerUrl: INDEXER, rpcUrls: { 1: RPC } } })
     await open(parts)
-    await selectRow(app!, 3)
+    await selectRow(app!, 3 + ENDPOINT_ROWS)
     await app!.press('RETURN')
     await app!.settle(40)
     expect(app!.frame()).toMatch(/Test: indexer\s+PASS/)
@@ -345,7 +384,7 @@ describe('the test rows test the URL in force now', () => {
   test('a chain with no URL fails with a plain sentence', async () => {
     const parts = setUp()
     await open(parts)
-    await selectRow(app!, 5)
+    await selectRow(app!, 5 + ENDPOINT_ROWS)
     await app!.press('RETURN')
     await app!.settle(40)
     expect(app!.frame()).toContain('FAIL No RPC URL is set for chain 369.')
@@ -356,7 +395,7 @@ describe('the test rows test the URL in force now', () => {
     const failing: HttpClient = async (request) => Promise.reject(new Error(`connect failed ${request.url}`))
     await open(parts, { http: failing })
     const frames = recorder(app!)
-    await selectRow(app!, 4)
+    await selectRow(app!, 4 + ENDPOINT_ROWS)
     await app!.press('RETURN')
     await app!.settle(40)
     await frames.record()
@@ -367,7 +406,7 @@ describe('the test rows test the URL in force now', () => {
   test('a saved URL clears the old results, because they tested the old URL', async () => {
     const parts = setUp()
     await open(parts, { store: memoryStore() })
-    await selectRow(app!, 5)
+    await selectRow(app!, 5 + ENDPOINT_ROWS)
     await app!.press('RETURN')
     await app!.settle(40)
     expect(app!.frame()).toContain('FAIL')
@@ -385,7 +424,7 @@ describe('the test rows test the URL in force now', () => {
   test('the check row asks the indexer now and names the source in use', async () => {
     const parts = setUp()
     await open(parts)
-    await selectRow(app!, 6)
+    await selectRow(app!, 6 + ENDPOINT_ROWS)
     await app!.press('RETURN')
     await app!.settle(40)
     expect(parts.connections.latest().checks()).toBe(1)

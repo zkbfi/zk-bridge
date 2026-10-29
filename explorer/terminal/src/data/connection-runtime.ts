@@ -56,6 +56,11 @@ export interface ConnectionRuntime {
   readonly dataSource: DataSource
   /** A chain access that forwards to the newest RPC URLs. */
   readonly chainAccess: ChainAccess
+  /**
+   * The pair with its contract addresses and start blocks, for a read that scans the chains itself (the history).
+   * The runtime sets it. A fake in a test may leave it out.
+   */
+  readonly sharedPair?: Pair
   /** The newest connection. */
   connection(): ExplorerConnection
   /** The URLs in force, with where each one comes from. */
@@ -163,6 +168,7 @@ export function createConnectionRuntime(input: ConnectionRuntimeInput): Connecti
       readRouterAddresses: (request) => chainAccess.readRouterAddresses(request),
       flowClient: (chainId) => chainAccess.flowClient(chainId),
     },
+    sharedPair,
     connection: () => connection,
     resolved: () => resolved,
     user: () => user,

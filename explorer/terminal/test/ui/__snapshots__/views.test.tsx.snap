@@ -273,29 +273,29 @@ exports[`view snapshots help overlay, wide 120x40 1`] = `
 │Account                                     ││ Dir:all  Kind:all  Status:all  Token:all  Addr:any  Time:all           │
 │ no signer connected                        │└────────────────────────────────────────────────────────────────────────┘
 │Balances                                    │┌─Feed 1/36──────────────────────────────────────────────────────────────┐
-│ connect a signer                           ││sent     arrived  dir     knd            amount status    to            │
-│Actions                                     ││11:54:30 -        PLS>ETH tok     37.13 zkbWETH sent      0x0000…ABC0   │
-│> Account and sig╔═Help═════════════════════════════════════════════════════════════════════════════╗   0x0000…ABC0   │
-│  Bridge tokens  ║1 2 3 4 5         Global, pair, audit, prover and costs, connections views        ║   0x0000…ABC0   │
-│  Send a message ║Tab / Shift+Tab   Pair view: next or previous area (actions, filters, feed)       ║ed 0x0000…ABC0   │
-│  Operator: post ║Up Down (j k)     Move in the action menu, the feed or the pair list              ║ed 0x0000…ABC0   │
-│  Operator: execu║Enter             Open the action, the pair, or the details of the feed row       ║ed 0x0000…ABC0   │
-│                 ║Left Right        Filters: choose a field. Up Down change its value               ║ed 0x0000…ABC0   │
-│                 ║Enter on Addr     Filters: type an address. x clears every filter                 ║   0x0000…ABC0   │
-│                 ║PageUp PageDown   Feed: move by a page                                            ║l  0x0000…ABC0   │
+│ connect a signer╔═Help═════════════════════════════════════════════════════════════════════════════╗   to            │
+│Actions          ║1 2 3 4 5         Global, pair, audit, prover and costs, connections views        ║   0x0000…ABC0   │
+│> Account and sig║Tab / Shift+Tab   Pair view: next or previous area (actions, filters, feed)       ║   0x0000…ABC0   │
+│  Bridge tokens  ║Up Down (j k)     Move in the action menu, the feed or the pair list              ║   0x0000…ABC0   │
+│  Send a message ║Enter             Open the action, the pair, or the details of the feed row       ║ed 0x0000…ABC0   │
+│  Operator: post ║Left Right        Filters: choose a field. Up Down change its value               ║ed 0x0000…ABC0   │
+│  Operator: execu║Enter on Addr     Filters: type an address. x clears every filter                 ║ed 0x0000…ABC0   │
+│                 ║PageUp PageDown   Feed: move by a page                                            ║ed 0x0000…ABC0   │
 │                 ║y / n             Review: sign and send, or cancel (nothing is sent before y)     ║   0x0000…ABC0   │
-│                 ║d  s  r           Review: raw calldata, skip a step, retry after an error         ║   0x0000…ABC0   │
+│                 ║d  s  r           Review: raw calldata, skip a step, retry after an error         ║l  0x0000…ABC0   │
 │                 ║Pay for delivery  Bridge form: Left Right chooses Yes. The fee fields and the live║   0x0000…ABC0   │
-│                 ║Docs              User docs: explorer/web/docs/pages (fees: 05-fees-explained.md) ║ed 0x0000…ABC0   │
+│                 ║Docs              User docs: explorer/web/docs/pages (fees: 05-fees-explained.md) ║   0x0000…ABC0   │
+│                 ║p                 Prove on this computer                                          ║   0x0000…ABC0   │
+│                 ║r                 Latest proofs, ask for a proof, evidence of a message           ║ed 0x0000…ABC0   │
+│                 ║t                 History of sends and deliveries, with filters                   ║ed 0x0000…ABC0   │
 │                 ║Esc               Close a dialog or this help                                     ║ed 0x0000…ABC0   │
 │                 ║?                 Show or hide this help                                          ║ed 0x0000…ABC0   │
-│                 ║q  Ctrl+C         Quit                                                            ║ed 0x0000…ABC0   │
-│                 ║6                 Prover setup (operator only, stores configuration)              ║   0x0000…abC1   │
-│                 ║                                                                                  ║l  0x0000…ABC0   │
+│                 ║q  Ctrl+C         Quit                                                            ║   0x0000…abC1   │
+│                 ║6                 Prover setup (operator only, stores configuration)              ║l  0x0000…ABC0   │
+│                 ║                                                                                  ║   0x0000…ABC0   │
 │                 ║                                                                                  ║   0x0000…ABC0   │
 │                 ║Press any key to close.                                                           ║   0x0000…ABC0   │
-│                 ╚══════════════════════════════════════════════════════════════════════════════════╝   0x0000…ABC0   │
-│                                            ││03:29:16 03:52:08 PLS>ETH tok        48.09 WPLS delivered 0x0000…ABC0   │
+│                 ╚══════════════════════════════════════════════════════════════════════════════════╝ed 0x0000…ABC0   │
 │                                            ││02:58:10 03:27:46 ETH>PLS tok      7.45 zkbWPLS delivered 0x0000…ABC0   │
 │                                            ││02:38:00 03:00:08 ETH>PLS tok     29.53 zkbWPLS delivered 0x0000…ABC0   │
 │                                            ││02:13:26 02:42:10 PLS>ETH msg    call 0x000…BC0 delivered 0x0000…ABC0   │
@@ -478,28 +478,28 @@ Tab area  1-5 views  ? help … FIXTURE: no transaction reaches a chain  fixture
 
 exports[`view snapshots help overlay, compact 80x24 1`] = `
 "┌─1 Global  [2 Pair]  3 Audit  4 Prover  5 Conn  6 Setup───────────────────────┐
-│eth-pls  Ethereum <> PulseChain   in flight 12   24h 29 transfers, 144.93 USDC│
 │╔═Help═══════════════════════════════════════════════════════════════════════╗│
-└║1 2 3 4 5         Global, pair, audit, prover and costs, connections views  ║┘
-┌║Tab / Shift+Tab   Pair view: next or previous area (actions, filters, feed) ║┐
-│║Up Down (j k)     Move in the action menu, the feed or the pair list        ║│
+│║1 2 3 4 5         Global, pair, audit, prover and costs, connections views  ║│
+└║Tab / Shift+Tab   Pair view: next or previous area (actions, filters, feed) ║┘
+┌║Up Down (j k)     Move in the action menu, the feed or the pair list        ║┐
 │║Enter             Open the action, the pair, or the details of the feed row ║│
-│║Left Right        Filters: choose a field. Up Down change its value         ║┘
-│║Enter on Addr     Filters: type an address. x clears every filter           ║┐
-│║PageUp PageDown   Feed: move by a page                                      ║│
+│║Left Right        Filters: choose a field. Up Down change its value         ║│
+│║Enter on Addr     Filters: type an address. x clears every filter           ║┘
+│║PageUp PageDown   Feed: move by a page                                      ║┐
 │║y / n             Review: sign and send, or cancel (nothing is sent before y║│
 │║d  s  r           Review: raw calldata, skip a step, retry after an error   ║│
 │║Pay for delivery  Bridge form: Left Right chooses Yes. The fee fields and th║│
 │║Docs              User docs: explorer/web/docs/pages (fees: 05-fees-explaine║│
+│║p                 Prove on this computer                                    ║│
+│║r                 Latest proofs, ask for a proof, evidence of a message     ║│
+│║t                 History of sends and deliveries, with filters             ║│
 │║Esc               Close a dialog or this help                               ║│
 │║?                 Show or hide this help                                    ║│
-│║q  Ctrl+C         Quit                                                      ║│
-│║6                 Prover setup (operator only, stores configuration)        ║│
-└║                                                                            ║┘
-┌║                                                                            ║┐
+└║q  Ctrl+C         Quit                                                      ║┘
+┌║6                 Prover setup (operator only, stores configuration)        ║┐
+│║                                                                            ║│
 │║Press any key to close.                                                     ║│
-│╚════════════════════════════════════════════════════════════════════════════╝│
-└──────────────────────────────────────────────────────────────────────────────┘
+└╚════════════════════════════════════════════════════════════════════════════╝┘
 Tab area  1-5 views  ? help … FIXTURE: no transaction reaches a chain  fixture  
 "
 `;

@@ -3,6 +3,7 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { buildServices, type BootstrapMachine } from '../../src/app/bootstrap'
+import { ENDPOINT_STORE_NAMES } from '../../src/app/connections-model'
 import { FIXTURE_PAIR } from '../../src/data/fixtures'
 import { PasswordRequiredError, type ProverSetupServices } from '../../src/app/services'
 import { CONNECTION_SECRET_NAMES } from '@zk-bridge/shared/config'
@@ -176,6 +177,32 @@ describe('buildServices builds the live connections', () => {
     const resolved = services.connection!.resolved()
     expect(resolved.rpcUrls[1]).toEqual({ value: USER_RPC, source: 'user' })
     expect(resolved.rpcUrls[369]).toEqual({ value: ENVIRONMENT_RPC, source: 'environment' })
+  })
+
+  test('the four endpoints come from the environment, and a saved endpoint of the user wins over it', async () => {
+    const environment = {
+      EXPLORER_BACKEND_URL: 'https://backend-env.example.test',
+      EXPLORER_MSGBOARD_INDEXER_URL: 'https://msgboard-indexer-env.example.test',
+      EXPLORER_ARCHIVE_URL: 'https://archive-env.example.test',
+      EXPLORER_MSGBOARD_URL: 'https://msgboard-env.example.test',
+    }
+    const { services } = await buildServices({ ...machineWith(environment, { [LIVE_PATH]: DEPLOYMENT }), ...NO_SYSTEM_STORE })
+    const resolved = services.connection!.resolved()
+    expect(resolved.backendUrl).toEqual({ value: environment.EXPLORER_BACKEND_URL, source: 'environment' })
+    expect(resolved.msgboardIndexerUrl?.source).toBe('environment')
+    expect(resolved.archiveUrl?.value).toBe(environment.EXPLORER_ARCHIVE_URL)
+    expect(resolved.msgboardUrl?.value).toBe(environment.EXPLORER_MSGBOARD_URL)
+
+    const proverSetup = setupWithStore({ [ENDPOINT_STORE_NAMES.backendUrl]: 'https://backend-user.example.test' })
+    const { services: saved } = await buildServices({ ...machineWith(environment, { [LIVE_PATH]: DEPLOYMENT }), proverSetup })
+    expect(saved.connection!.resolved().backendUrl).toEqual({ value: 'https://backend-user.example.test', source: 'user' })
+    expect(saved.connection!.resolved().archiveUrl?.source).toBe('environment')
+  })
+
+  test('with no endpoint set anywhere, none is invented', async () => {
+    const { services } = await buildServices({ ...machineWith({}, { [LIVE_PATH]: DEPLOYMENT }), ...NO_SYSTEM_STORE })
+    const resolved = services.connection!.resolved()
+    expect([resolved.backendUrl, resolved.msgboardIndexerUrl, resolved.archiveUrl, resolved.msgboardUrl]).toEqual([null, null, null, null])
   })
 
   test('a store that needs a password counts as locked: startup asks for nothing and has no user setting', async () => {

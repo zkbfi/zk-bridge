@@ -22,6 +22,7 @@ which is deliberately the last option everywhere.
 |---|---|
 | `EXPLORER_DATA=fixture` | Built-in sample data and simulated sends. |
 | `EXPLORER_INDEXER_URL` | Indexer API. A URL that you set in the Connections view wins over it. Default `http://localhost:42069`. |
+| `EXPLORER_BACKEND_URL`, `EXPLORER_MSGBOARD_INDEXER_URL`, `EXPLORER_ARCHIVE_URL`, `EXPLORER_MSGBOARD_URL` | The backend, the msgboard indexer, the archive and the msgboard node. None has a default: an endpoint you do not set is skipped, and the proof panel says so. A URL that you set in the Connections view wins over it. |
 | `EXPLORER_PAIR`, `EXPLORER_DEPLOYMENT_FILE` | Pair (default `eth-pls`) and the deployment JSON that `docker/deploy.sh` writes. |
 | `EXPLORER_RPC_URL_<chainId>` | RPC URL of each chain. A URL that you set in the Connections view wins over it. The `rpc_url` of the deployment file is the weaker default. Keyed URLs: keep them out of files. |
 | `EXPLORER_PRIVATE_KEY`, `EXPLORER_PRIVATE_KEY_FILE` | Signer at startup. The variable is removed from the environment when read. The file must be mode 0600. |
@@ -50,6 +51,20 @@ A change applies at once. The dashboard builds new clients and keeps its screens
 An RPC URL can hold an API key. The view shows only the host and the last four characters of the rest. The URL goes to the secret store (the Keychain on macOS, the Secret Service on Linux, or an encrypted file with a password), never to a settings file. Every log line and error message is redacted. When the store needs a password, the dashboard starts with your environment settings, and the Connections view asks for the password and then applies your stored settings.
 
 In RPC mode some figures are partial. The summary bar marks them with `>=` and a note, the audit view shows `unverified` for a row that it cannot prove, and the feed says `history since <time>`.
+
+## Proofs, evidence and history
+
+These screens read what the dapp reads. They are modal screens, opened from any view.
+
+- `r` opens the proof panel. It shows the latest proof of each direction, from the msgboard indexer first and from the
+  msgboard node when the indexer is not set, does not answer or is not built. It shows the backend job of each direction.
+  `1` and `2` ask the backend for a proof and show the status of the request as it changes. `3` and `4` open the review
+  of a light client update from the proof. `e` asks the archive for the evidence of a message and opens the execute
+  sequence.
+- `t` opens the history of sends, deliveries and head updates. `c e s d` change the chain, event, status and direction
+  filters, `x` clears them, and `n` and `p` change the page. The indexer answers while it is healthy. When the chains
+  answer, the page says it is partial and names the filters the chains could not apply.
+- The four endpoints are rows of the Connections view (key `5`). Each is configured, never discovered.
 
 ## Tip for delivery (voluntary delivery fee)
 

@@ -71,7 +71,7 @@ export const grindInWorker: GrindFunction = (input) =>
         durationMilliseconds: reply.durationMilliseconds,
       });
     });
-    worker.once("error", (error) => {
+    worker.once("error", (error: Error) => {
       finish();
       reject(new GrindError(`the grind worker crashed: ${error.message}`));
     });

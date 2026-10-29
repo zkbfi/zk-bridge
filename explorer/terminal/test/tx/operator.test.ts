@@ -1,18 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { encodeAbiParameters, encodeFunctionData, type Hex } from 'viem'
+import { encodeAbiParameters, type Hex } from 'viem'
 import { FIXTURE_PAIR } from '../../src/data/fixtures'
-import { OperatorFileError, encodeUpdateCalldata, planLightClientUpdate, planMessageExecution } from '../../src/tx/operator'
-import { messageBridgeAbi } from '../../src/tx/abis'
+import { OperatorFileError, encodeUpdateCalldata, planLightClientUpdate, planMessageExecution, planProofMessageUpdate } from '../../src/tx/operator'
+import { evidence, executeCall, word } from '../support/evidence-fixture'
+import { proofMessage } from '../support/proof-fixtures'
 import { lightClientOutputParameters } from './light-client-output'
-
-const word = (digit: string): Hex => `0x${digit.repeat(64)}`
-const header = (slot: bigint) => ({
-  slot,
-  proposerIndex: 5n,
-  parentRoot: word('1'),
-  stateRoot: word('2'),
-  bodyRoot: word('3'),
-})
 
 const START_SLOT = 14_099_840
 const NEW_SLOT = 14_100_000
@@ -74,64 +66,6 @@ describe('planLightClientUpdate (adapter)', () => {
   })
 })
 
-function executeCall(logIndex: bigint): Hex {
-  return encodeFunctionData({
-    abi: messageBridgeAbi,
-    functionName: 'executeMessage',
-    args: [
-      {
-        anchorHeader: header(14_100_000n),
-        sourceHeader: header(14_099_000n),
-        ancestryBranch: [word('4'), word('5')],
-        blockHashBranch: [word('6')],
-        executionHeaderRlp: '0xf90211',
-        receiptProof: ['0x01', '0x02'],
-        receiptIndex: 3n,
-        transactionProof: ['0x03'],
-        transactionIndex: 3n,
-        logIndex,
-      },
-    ],
-  })
-}
-
-function prerequisiteCall(): Hex {
-  return encodeFunctionData({
-    abi: messageBridgeAbi,
-    functionName: 'addBlockHashLayout',
-    args: [(2n ** 4n + 9n) * 2n ** 4n + 12n, { header: header(14_099_840n), branch: [word('7'), word('8')] }],
-  })
-}
-
-function evidence(changes: Record<string, unknown> = {}): string {
-  return JSON.stringify({
-    schemaVersion: 2,
-    route: 'ethereum_to_pulsechain',
-    sourceTransactionHash: word('a'),
-    logIndex: 1,
-    message: {
-      messageId: word('c'),
-      sender: '0x0000000000000000000000000000000000000abc',
-      executor: '0x0000000000000000000000000000000000000abd',
-      gasLimit: 250_000,
-      dataType: 0,
-      data: '0xabcdef',
-      sourceBlockNumber: 15,
-      sourceBlockHash: word('d'),
-      sourceSlot: 14_099_000,
-    },
-    destination: { chainId: 369, bridge, lightClient },
-    anchor: { slot: 14_100_000, root: word('e') },
-    deliveryStatus: 'notDelivered',
-    alreadyDelivered: false,
-    execute: { to: bridge, data: executeCall(1n) },
-    prerequisites: [
-      { function: 'addBlockHashLayout', reason: 'no validated block hash row covers the source slot', to: bridge, data: prerequisiteCall() },
-    ],
-    createdAt: '2026-10-24T09:31:00Z',
-    ...changes,
-  })
-}
 
 describe('planMessageExecution (adapter)', () => {
   test('maps every step to a transaction on the chain, labelled with the bridge', () => {
@@ -160,5 +94,26 @@ describe('planMessageExecution (adapter)', () => {
   test('names the pair for a chain that is not in the pair of an evidence file too', () => {
     const text = evidence({ destination: { chainId: 56, bridge, lightClient } })
     expect(() => planMessageExecution(text, FIXTURE_PAIR)).toThrow('not a chain of the pair eth-pls')
+  })
+})
+
+describe('planProofMessageUpdate (adapter)', () => {
+  test('a first-to-second proof updates the light client on the second chain, with the calldata built from the message', () => {
+    const message = proofMessage()
+    const plan = planProofMessageUpdate(message, FIXTURE_PAIR)
+    expect(plan.chain).toBe(FIXTURE_PAIR.second)
+    expect(plan.to).toBe(FIXTURE_PAIR.second.contracts.lightClient)
+    expect(plan.functionSignature).toBe('update(bytes,bytes)')
+    expect(plan.data).toBe(encodeUpdateCalldata(message.proof, message.publicValues))
+  })
+
+  test('a second-to-first proof updates the light client on the first chain', () => {
+    const plan = planProofMessageUpdate(proofMessage({ direction: 'second-to-first' }), FIXTURE_PAIR)
+    expect(plan.chain).toBe(FIXTURE_PAIR.first)
+    expect(plan.to).toBe(FIXTURE_PAIR.first.contracts.lightClient)
+  })
+
+  test('a message whose slots disagree with its public values is refused', () => {
+    expect(() => planProofMessageUpdate(proofMessage({ newSlot: 14_100_064n, publicValues: proofMessage().publicValues }), FIXTURE_PAIR)).toThrow(OperatorFileError)
   })
 })
