@@ -38,7 +38,7 @@ The backend reads no endpoint from the environment.
 | `rpcUrls` | The execution endpoint of each chain, by chain identifier. Both chains of the pair are required. |
 | `beaconUrls` | The beacon endpoint of each chain. The `requests` module needs both. |
 | `msgboardUrl` | The msgboard node. The `webhook` and `msgboard-indexer` modules need it. |
-| `indexerUrl` | The chain indexer. The `archive` module needs it; without it the archive reports `degraded`. |
+| `indexerUrl` | The chain indexer. The `requests` module needs it and refuses to start without it. Without it the archive reports `degraded`. |
 | `acceptOracleProof` | Local testing only. See below. Default `false`. |
 | `trustForwardedHeader`, `trustedProxyHops` | See "Callers and limits". |
 | `limits` | See "Callers and limits". |
@@ -66,6 +66,34 @@ The backend faces the open internet. It counts each caller in a window of one mi
 - `globalRequestsPerMinute` (default 120) caps all callers together.
 - `requestRetentionHours` (default 24) sets how long a request row stays in the database. It must not be shorter than `prover.timeoutSeconds`. The backend prunes at start and every hour, and it keeps the rows of a job that still runs.
 - A request body over 4 KiB gets the answer 413.
+
+## When a request starts a job
+
+A request only asks. A request for a direction that has an active job joins that job. Any other request starts a new
+job only when the chain indexer (`indexerUrl`) shows that the direction needs a proof:
+
+- a message of the direction waits for finality and no stored head covers it (status `waiting_for_finality`), or
+- the light client of the destination holds no head, or a head older than `limits.keepAliveSeconds` (default 43200,
+  12 hours). A light client that falls a whole sync committee period behind (about 27 hours on Ethereum, 23 on
+  PulseChain) can never move again, so keep the value well below that.
+
+The reason in the request (`message`, `keep-alive`, `user`) does not change this. The backend asks the indexer only after
+the caller limits, the wait of the direction and the daily budget passed, and one answer serves a direction for 15
+seconds. The answers:
+
+| Status | Body | Meaning |
+| --- | --- | --- |
+| 202 | `{ requestId, jobId }` | The request joined a job or started one. |
+| 409 | `{ error: "nothing-to-prove" }` | No message waits and the head is fresh. Asking again changes nothing until a message waits. |
+| 429 | `{ error: "rate-limited", retryAfterSeconds }` | A limit refused it. `Retry-After` says when to ask again. |
+| 503 | `{ error: "cannot-check", retryAfterSeconds }` | The indexer did not answer in 5 seconds, or answered an error or an unknown shape. The backend starts no paid job it cannot justify. |
+
+Two limits remain as a backstop when the indexer reports wrong facts:
+
+- `secondsBetweenJobsPerDirection` (default 120) between the start of two jobs of a direction, and
+  `secondsBeforeRetryAfterFailure` (default 60) after a failed job.
+- `jobsPerDirectionPerDay` (default 96) jobs that may pay for a proof, per direction, in any 24 hours. A job that found
+  the chain up to date paid nothing and does not count.
 
 ## Local testing with the oracle setting
 

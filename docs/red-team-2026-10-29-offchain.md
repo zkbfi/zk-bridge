@@ -13,7 +13,7 @@ Result words: **BLOCKED** means the code refused the attack, and the test assert
 
 ## Status
 
-The fix round of 2026-10-29 fixed S-1, S-2, B-1, B-2, W-2 and K-4, and bounded K-1. No finding was rated high or critical. Each finding below ends with its status. The tests of the fixed findings now assert the refusal; their names end with "(BLOCKED, was <finding>)".
+The fix round of 2026-10-29 fixed S-1, S-2, B-1, B-2, W-2, K-4 and K-1. No finding was rated high or critical. Each finding below ends with its status. The tests of the fixed findings now assert the refusal; their names end with "(BLOCKED, was <finding>)".
 
 ## How to run
 
@@ -104,7 +104,7 @@ Method notes:
 | 12 IPv4 addresses fill the global limit | SUCCEEDED | Every other caller gets 429 for a minute (K-2) |
 | Many callers start parallel jobs | BLOCKED | One active job per direction |
 | New job before `secondsBetweenJobsPerDirection` | BLOCKED | 429 |
-| Anonymous caller starts a proving run with nothing pending | SUCCEEDED | K-1 |
+| Anonymous caller starts a proving run with nothing pending | BLOCKED | 409, no job (K-1) |
 | Retry loop after a failed job | BLOCKED | Waits `secondsBeforeRetryAfterFailure` |
 | 1 MB request body; extra fields, wrong pair, bad message id | BLOCKED | 413, 400 |
 | Prover error with RunPod key or bearer in answers, health or logs | BLOCKED | Fixed phrases; logger redacts |
@@ -290,7 +290,7 @@ Method notes:
 - **Scenario.** Any address posts `{reason: "user"}` every 120 seconds per direction. Each run that finds a newer finalized head pays for a GPU proof: about 225 proofs per direction per day with nothing waiting. The prover was faked, so the cost is inferred, not measured.
 - **Test.** backend "ATTACK SUCCEEDS an anonymous caller starts a proving run in each direction every secondsBetweenJobsPerDirection, with no message pending".
 - **Suggested fix.** Start a remote job only for a message the chain indexer reports as covered and undelivered, or for an authenticated keep-alive; add a daily job budget per direction.
-- **Status.** Partly fixed in `f8258f1`. A new limit, `limits.jobsPerDirectionPerDay` (default 96), bounds the jobs that may pay for a proof; a job that found the chain up to date does not count. Anyone can still use up the day's budget, which then delays honest requests; tying a job to a covered, undelivered message needs the chain indexer in the request path and was not done.
+- **Status.** Fixed. A request only asks: before it starts a new job, the backend asks the chain indexer whether the direction needs a proof. It needs one when a message waits for finality and no stored head covers it, or when the destination head is missing or older than `limits.keepAliveSeconds` (default 12 hours). Otherwise the answer is 409 `nothing-to-prove`. When the indexer cannot answer, the answer is 503 `cannot-check` and no job starts. The cheap limits run before the indexer is asked, and one answer serves a direction for 15 seconds. The daily budget `limits.jobsPerDirectionPerDay` (default 96) stays as a backstop for an indexer that reports wrong facts. Tests: backend "ATTACK an anonymous caller who asks for a proving run … while no message waits starts nothing (BLOCKED, was K-1)" and "… the daily job budget still stops the spend (backstop)".
 
 ### K-2 Low to medium: twelve addresses lock everyone out
 

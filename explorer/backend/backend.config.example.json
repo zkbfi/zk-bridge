@@ -29,7 +29,8 @@
     "requestRetentionHours": 24,
     "secondsBetweenJobsPerDirection": 120,
     "secondsBeforeRetryAfterFailure": 60,
-    "jobsPerDirectionPerDay": 96
+    "jobsPerDirectionPerDay": 96,
+    "keepAliveSeconds": 43200
   },
   "indexerUrl": "http://127.0.0.1:42069"
 }
