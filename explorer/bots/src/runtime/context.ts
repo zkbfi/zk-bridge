@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { loadProverSetup, setupFilePath, spawnRunner, type CommandRunner, type ProverSetup } from "@zk-bridge/shared/config";
-import { PAIR_DEFINITIONS, beaconVariableName, loadPair, rpcVariableName, stateUrlsVariableName, urlSecrets, type Pair, type PairSide } from "@zk-bridge/shared";
+import { PAIR_DEFINITIONS, beaconVariableName, loadPair, parseStateUrls, rpcVariableName, stateUrlsVariableName, urlSecrets, type Pair, type PairSide } from "@zk-bridge/shared";
 import { BotConfigError, parseBotConfig, type BotConfig } from "../config/bot-config.ts";
 import { createLogger, type Logger } from "../logging/logger.ts";
 import { createSecretVault, openSecretStore, type Environment, type SecretVault } from "./secrets.ts";
@@ -94,8 +94,9 @@ export async function loadBotContext(input: LoadBotContextInput): Promise<BotCon
   const pair = loadPair({ pairName: setup.pair, environment, deployment });
   // A list of state URLs is one value in the vault, so a single URL from it would not match. Each URL and its key-like
   // parts count as secrets of their own, whether the list came from the setup file or from the environment.
-  for (const side of pair.sides) {
-    for (const url of side.stateUrls) for (const piece of urlSecrets(url)) vault.remember(piece);
+  for (const chainId of definitionChains) {
+    const variable = stateUrlsVariableName(chainId);
+    for (const url of parseStateUrls(environment[variable], variable)) for (const piece of urlSecrets(url)) vault.remember(piece);
   }
   return { config, setup, pair, vault, logger, environment: input.environment };
 }

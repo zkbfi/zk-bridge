@@ -102,7 +102,7 @@ describe("loading the context", () => {
       },
       write: (line) => lines.push(line),
     });
-    context.logger.info("states", { first: context.pair.sides[0].stateUrls[1], second: context.pair.sides[1]?.stateUrls[0] });
+    context.logger.info("states", { first: context.pair.sides[0].stateUrls?.[1], second: context.pair.sides[1].stateUrls?.[0] });
     expect(lines.join("\n")).not.toContain(STATE_KEY);
   });
 
