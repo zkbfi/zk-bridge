@@ -33,6 +33,7 @@ function setup(options: SetupOptions = {}) {
   const prover = fakeProver();
   const dependencies: DeliveryDependencies = {
     direction: "first-to-second",
+    sourceChainId: 1,
     chain,
     prover: feedProver(prover, [item], { [item.messageId]: options.deliverWithoutOffer === true ? "0x" : offerData }),
     indexer: fakeIndexer([item], { [item.messageId]: options.deliverWithoutOffer === true ? "0x" : offerData }),
@@ -100,6 +101,15 @@ describe("the preparation of an item: guards at the edge of external data", () =
     w.prover.evidence = async () => ({ ...evidenceFor(), message: { ...evidenceFor().message, gasLimit: Number(w.item.gasLimit) } });
     expect(await outcomeOf(() => prepareItem(w.dependencies, w.item, w.ledger))).toMatchObject({ status: "skipped", reason: "indexer-disagrees-with-evidence" });
     expect(w.chain.log.some((entry) => entry.kind === "send" || entry.kind === "simulate")).toBe(false);
+  });
+
+  it("skips an item that the indexer lists in another direction than the configured one, and asks nothing", async () => {
+    for (const direction of [{ sourceChainId: 943, destinationChainId: 369 }, { sourceChainId: 1, destinationChainId: 1 }]) {
+      const w = setup({ item: { ...feedItem({ id: 1, token: WRAPPED_NATIVE }), direction } });
+      expect(await outcomeOf(w.prepare)).toMatchObject({ status: "skipped", reason: "wrong-direction" });
+      expect(w.chain.log).toEqual([]);
+      expect(w.prover.evidenceRuns).toBe(0);
+    }
   });
 
   it("skips evidence that names another message than the item, and spends nothing", async () => {

@@ -336,6 +336,7 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
       lightClient: createLightClientReader(stack.chain.publicClient, stack.lightClient),
       delivery: {
         direction: "first-to-second",
+        sourceChainId: 1,
         chain,
         prover,
         indexer: fakeIndexer(items, offers),

@@ -35,6 +35,8 @@ export interface DeliverySettings {
 /** The parts a delivery touches. Tests pass fakes for every one. */
 export interface DeliveryDependencies {
   readonly direction: ProofDirection;
+  /** The chain that the messages leave, from the configuration. The destination is `chain.chainId`. */
+  readonly sourceChainId: number;
   readonly chain: TransactionPort;
   readonly prover: ProverBinary;
   readonly indexer: IndexerClient;
@@ -63,6 +65,7 @@ export type SkipReason =
   | "already-delivered"
   | "indexer-disagrees-with-evidence"
   | "evidence-for-another-message"
+  | "wrong-direction"
   | "evidence-failed"
   | "fee-quote-failed"
   | "prerequisite-reverted"
@@ -155,10 +158,10 @@ export async function withDestinationToken(dependencies: DeliveryDependencies, i
   if (dependencies.tokenFactory === null || transfer.sourceIsNative !== true) return item;
   const answer = await dependencies.chain.call({
     to: dependencies.tokenFactory,
-    data: encodeFunctionData({ abi: tokenFactoryAbi, functionName: "predictAddress", args: [BigInt(item.direction.sourceChainId), transfer.sourceToken.address as Address] }),
+    data: encodeFunctionData({ abi: tokenFactoryAbi, functionName: "predictAddress", args: [BigInt(dependencies.sourceChainId), transfer.sourceToken.address as Address] }),
   });
   const address = decodeFunctionResult({ abi: tokenFactoryAbi, functionName: "predictAddress", data: answer });
-  const destinationToken = { chainId: item.direction.destinationChainId, address, symbol: `zkb${transfer.sourceToken.symbol}`, decimals: transfer.sourceToken.decimals };
+  const destinationToken = { chainId: dependencies.chain.chainId, address, symbol: `zkb${transfer.sourceToken.symbol}`, decimals: transfer.sourceToken.decimals };
   return { ...item, transfer: { ...transfer, destinationToken } };
 }
 
@@ -210,7 +213,7 @@ async function releasedTokenOf(dependencies: DeliveryDependencies, item: FeedIte
   if (dependencies.tokenFactory === null) return null;
   const answer = await dependencies.chain.call({
     to: dependencies.tokenFactory,
-    data: encodeFunctionData({ abi: tokenFactoryAbi, functionName: "predictAddress", args: [BigInt(item.direction.sourceChainId), message.token] }),
+    data: encodeFunctionData({ abi: tokenFactoryAbi, functionName: "predictAddress", args: [BigInt(dependencies.sourceChainId), message.token] }),
   });
   return decodeFunctionResult({ abi: tokenFactoryAbi, functionName: "predictAddress", data: answer });
 }
@@ -453,6 +456,11 @@ export type Preparation = { readonly kind: "outcome"; readonly outcome: Delivery
  * delivered: the skip carries the amount and the runner does not retry the item soon.
  */
 export async function prepareItem(dependencies: DeliveryDependencies, listed: FeedItem, ledger: PrerequisiteLedger): Promise<Preparation> {
+  // The chains of the item come from the indexer. An item of another direction is none of this runner's business, and
+  // its chain ids must not steer the copy lookup.
+  if (listed.direction.sourceChainId !== dependencies.sourceChainId || listed.direction.destinationChainId !== dependencies.chain.chainId) {
+    return { kind: "outcome", outcome: skip(listed.messageId as Hex, "wrong-direction", { detail: `the indexer lists ${listed.direction.sourceChainId} to ${listed.direction.destinationChainId}` }) };
+  }
   const item = await withDestinationToken(dependencies, listed);
   const messageId = item.messageId as Hex;
   const { settings, chain } = dependencies;

@@ -177,6 +177,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
     const multicall = deliveryRouter === null ? null : await requireMulticall3({ client: destinationPort.client, address: runnerConfig.multicall3 as Address, chainName: destination.name });
     const delivery: DeliveryDependencies = {
       direction,
+      sourceChainId: source.chainId,
       chain: destinationPort.chain,
       prover,
       indexer,

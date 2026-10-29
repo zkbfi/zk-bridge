@@ -76,6 +76,7 @@ function world(options: WorldOptions = {}) {
   let clock = START_TIME;
   const delivery = {
     direction: "first-to-second" as const,
+    sourceChainId: 1,
     chain,
     prover: feedProver(prover, items, Object.fromEntries(items.map((item) => [item.messageId, offer]))),
     indexer,

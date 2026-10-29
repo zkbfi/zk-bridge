@@ -58,6 +58,7 @@ function dependencies(overrides: Partial<DeliveryDependencies> = {}): DeliveryDe
   chain.feeTokens = 10n ** 17n;
   return {
     direction: "first-to-second",
+    sourceChainId: 1,
     chain,
     prover: fakeProver(),
     indexer: fakeIndexer([], {}),
@@ -240,6 +241,18 @@ describe("red team: delivery decisions of the runner", () => {
     expect(await run(valued)).toMatchObject({ kind: "outcome", outcome: { status: "skipped", reason: "indexer-disagrees-with-evidence" } });
     // Control: the copy that the factory names is priced as usual.
     expect((await run(copy)).kind).toBe("ready");
+  });
+
+  it("ATTACK lying indexer: an item of another direction is skipped before any read, so it cannot steer the copy lookup (BLOCKED)", async () => {
+    // The factory names a copy by the source chain id; a lying direction would name another copy.
+    for (const direction of [{ sourceChainId: 943, destinationChainId: 369 }, { sourceChainId: 1, destinationChainId: 943 }]) {
+      const item = { ...feedItem({ id: 1, token: WRAPPED_NATIVE }), direction };
+      const data = feeOfferData({ director: DIRECTOR, value: 10n ** 18n, token: address(0x55), handler: "bridged" });
+      const deps = dependencies({ indexer: fakeIndexer([item], { [item.messageId]: data }), tokenFactory: address(0xfa) });
+      const preparation = await prepareItem(deps, item, ledger());
+      expect(preparation).toMatchObject({ kind: "outcome", outcome: { status: "skipped", reason: "wrong-direction" } });
+      expect(deps.chain.log).toEqual([]);
+    }
   });
 
   it("ATTACK evidence for another message is skipped before any gas is spent (BLOCKED, was B-2)", async () => {

@@ -77,6 +77,7 @@ function setup(options: { deliveryRouter?: DeliveryDependencies["deliveryRouter"
   const { logger, events } = memoryLogger();
   const dependencies: DeliveryDependencies = {
     direction: "first-to-second",
+    sourceChainId: 1,
     chain,
     prover: fakeProver(),
     indexer: fakeIndexer([], {}),

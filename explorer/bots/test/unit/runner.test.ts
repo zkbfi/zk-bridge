@@ -134,6 +134,7 @@ function world(options: WorldOptions = {}) {
   let clock = options.startTime ?? 1_000_000;
   const delivery = {
     direction: "first-to-second" as const,
+    sourceChainId: 1,
     chain,
     prover: feedProver(prover, items, options.data ?? {}),
     indexer,
