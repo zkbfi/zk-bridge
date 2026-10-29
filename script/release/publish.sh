@@ -7,6 +7,10 @@
 # Environment (all required):
 #   RELEASE_REMOTE           git URL of the release repository that holds version.json and its signature
 #   RELEASE_PIN_PROVIDER     the pinning adapter (explorer/release/src/pin.ts): "kubo" or "filebase"
+#   RELEASE_GIT_NAME, RELEASE_GIT_EMAIL
+#                            the author and committer of the release commit. The script never takes them from the git
+#                            configuration: its checkout is a temporary folder, where the machine's default identity
+#                            would apply. Signing still follows the configuration (see docs/release.md).
 # For "kubo", the IPFS node on the app server, reached through an SSH tunnel (docs/release.md):
 #   KUBO_API_URL             the node's RPC address, for example http://127.0.0.1:5001. No credentials in it.
 #   KUBO_API_AUTH            optional: the Authorization header value the node accepts. Never printed.
@@ -28,6 +32,13 @@ if [ -z "${RELEASE_REMOTE:-}" ] || [ -z "${RELEASE_PIN_PROVIDER:-}" ]; then
   echo "no release remote or pinning account is configured (set RELEASE_REMOTE and RELEASE_PIN_PROVIDER)" >&2
   exit 1
 fi
+
+if [ -z "${RELEASE_GIT_NAME:-}" ] || [ -z "${RELEASE_GIT_EMAIL:-}" ]; then
+  echo "no identity for the release commit (set RELEASE_GIT_NAME and RELEASE_GIT_EMAIL)" >&2
+  exit 1
+fi
+export GIT_AUTHOR_NAME="$RELEASE_GIT_NAME" GIT_AUTHOR_EMAIL="$RELEASE_GIT_EMAIL"
+export GIT_COMMITTER_NAME="$RELEASE_GIT_NAME" GIT_COMMITTER_EMAIL="$RELEASE_GIT_EMAIL"
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 release="$(cd "$1" && pwd)"

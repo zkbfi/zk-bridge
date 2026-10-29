@@ -137,10 +137,12 @@ the server only. It can pin, unpin and change the node, so it is never public. R
 
 ```sh
 ssh -N -L 5001:127.0.0.1:5001 zkbfi-app &
-RELEASE_REMOTE=<release repository> RELEASE_PIN_PROVIDER=kubo KUBO_API_URL=http://127.0.0.1:5001 \
-  script/release/publish.sh <release-directory>
+RELEASE_REMOTE=<release repository> RELEASE_GIT_NAME=<name> RELEASE_GIT_EMAIL=<email> \
+  RELEASE_PIN_PROVIDER=kubo KUBO_API_URL=http://127.0.0.1:5001 script/release/publish.sh <release-directory>
 ```
 
+- `RELEASE_GIT_NAME`, `RELEASE_GIT_EMAIL`: the author and committer of the release commit. The checkout is a temporary
+  folder, so the script never takes them from the git configuration, where the machine's default identity would apply.
 - `KUBO_API_URL`: the RPC address. It must be http or https and carry no user or password.
 - `KUBO_API_AUTH`: optional. The full `Authorization` header value, when the node sets `API.Authorizations`. Only from
   the environment; never printed.

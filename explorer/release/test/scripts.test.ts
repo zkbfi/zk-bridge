@@ -38,10 +38,23 @@ describe("publish.sh", () => {
     }
   });
 
+  it("refuses without the identity that signs the release commit, before any upload or push", async () => {
+    const release = await temporaryDirectory();
+    const base = { RELEASE_REMOTE: "file:///nowhere", RELEASE_PIN_PROVIDER: "filebase" };
+    for (const env of [base, { ...base, RELEASE_GIT_NAME: "zkbfidev" }, { ...base, RELEASE_GIT_EMAIL: "release@example.org" }]) {
+      const result = await runScript("publish.sh", [release], env);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("set RELEASE_GIT_NAME and RELEASE_GIT_EMAIL");
+      expect(result.ran).toBe(false);
+    }
+  });
+
   it("refuses a release that does not verify, before any upload or push", async () => {
     const release = await temporaryDirectory();
     const result = await runScript("publish.sh", [release], {
       RELEASE_REMOTE: "file:///nowhere",
+      RELEASE_GIT_NAME: "zkbfidev",
+      RELEASE_GIT_EMAIL: "release@example.org",
       RELEASE_PIN_PROVIDER: "filebase",
       FILEBASE_ACCESS_KEY: "a",
       FILEBASE_SECRET_KEY: "b",
