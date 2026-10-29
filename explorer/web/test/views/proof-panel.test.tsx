@@ -99,6 +99,9 @@ const feed = buildFixtureFeed(FIXTURE_NOW);
 const item = feed.find((candidate) => candidate.kind === "token")!;
 const detailWith = async (changes: Partial<MessageDetail>): Promise<MessageDetail> => ({
   ...(await createFixtureIndexerClient().message(item.id))!,
+  // The default evidence is for this identifier and this transaction.
+  id: word("c"),
+  sourceTransactionHash: word("a"),
   sourceChainId: 1,
   destinationChainId: 369,
   ...changes,
@@ -506,6 +509,41 @@ describe("readEvidence", () => {
   });
 });
 
+const EXPECTED = { messageId: word("c"), sourceTransactionHash: word("a") };
+
+describe("planDelivery against the message that the user views", () => {
+  const found = (changes: Record<string, unknown> = {}) => ({ kind: "found", text: JSON.stringify(evidenceOf(changes)) }) as const;
+  const otherMessage = { message: { ...(evidenceOf().message as Record<string, unknown>), messageId: word("f") } };
+
+  it("refuses evidence for another message identifier and gives the reason", () => {
+    expect(planDelivery(found(otherMessage), FIXTURE_PAIR, EXPECTED)).toEqual({ kind: "unavailable", reason: "The evidence is for a different message." });
+  });
+
+  it("refuses evidence with the same identifier but another source transaction", () => {
+    expect(planDelivery(found({ sourceTransactionHash: word("9") }), FIXTURE_PAIR, EXPECTED)).toEqual({ kind: "unavailable", reason: "The evidence is for a different source transaction." });
+  });
+
+  it("compares the identifier in lowercase", () => {
+    const upper = `0x${"C".repeat(64)}`;
+    expect(planDelivery(found(), FIXTURE_PAIR, { ...EXPECTED, messageId: upper }).kind).toBe("ready");
+  });
+
+  it("skips the transaction check when the detail has no transaction hash", () => {
+    expect(planDelivery(found({ sourceTransactionHash: word("9") }), FIXTURE_PAIR, { ...EXPECTED, sourceTransactionHash: null }).kind).toBe("ready");
+  });
+
+  it("stays ready for matching evidence", () => {
+    expect(planDelivery(found(), FIXTURE_PAIR, EXPECTED).kind).toBe("ready");
+  });
+
+  it("keeps the deliver button off in the panel when the archive sends another message", async () => {
+    const { transport } = fakeTransport({ get: async (url) => (url.includes("/evidence/") ? { status: 200, body: evidenceOf(otherMessage) } : { status: 404, body: null }) });
+    await renderPanel({ changes: { status: "covered" }, endpoints: endpoints({ archiveUrl: ARCHIVE }), transport });
+    await waitFor(() => expect(screen.getByTestId("why-deliver-off")).toHaveTextContent("The evidence is for a different message."));
+    expect(screen.getByRole("button", { name: "Deliver the message" })).toBeDisabled();
+  });
+});
+
 describe("the plans", () => {
   it("plans the update on the first chain for the other direction", () => {
     const message = proofMessage({ direction: "second-to-first" });
@@ -518,7 +556,7 @@ describe("the plans", () => {
   });
 
   it("turns a file that is not JSON into a reason, not a crash", () => {
-    expect(planDelivery({ kind: "found", text: "{" }, FIXTURE_PAIR)).toEqual({ kind: "unavailable", reason: "The evidence cannot be used: The file is not valid JSON." });
+    expect(planDelivery({ kind: "found", text: "{" }, FIXTURE_PAIR, EXPECTED)).toEqual({ kind: "unavailable", reason: "The evidence cannot be used: The file is not valid JSON." });
   });
 
   it("asks for a backend before it allows a proof request", () => {

@@ -255,16 +255,42 @@ export type DeliveryPlan =
 /** One step of a delivery. A prerequisite may be skipped, because the chain may already hold the row. */
 export type DeliveryStep = { readonly step: WebStep; readonly role: "prerequisite" | "execute"; readonly reason: string | null };
 
+/** The message that the user views. The evidence must be for this message. */
+export type ExpectedMessage = {
+  readonly messageId: string;
+  /** The hash of the source transaction, or null when the detail has none. */
+  readonly sourceTransactionHash: string | null;
+};
+
 /**
- * Plans the delivery from an evidence reading. The prerequisites come first, then the execution.
+ * Tells why evidence is not for the expected message, or null when it fits. A server can send evidence of another
+ * message, and the page must never deliver that message. The identifiers compare in lowercase. The transaction hashes
+ * compare only when both are known.
+ *
+ * @param summary The identifiers that the evidence carries.
+ * @param expected The message that the user views.
+ */
+const evidenceMismatch = (summary: { messageId: string; sourceTransactionHash: string }, expected: ExpectedMessage): string | null => {
+  if (summary.messageId.toLowerCase() !== expected.messageId.toLowerCase()) return "The evidence is for a different message.";
+  if (expected.sourceTransactionHash === null) return null;
+  if (summary.sourceTransactionHash.toLowerCase() !== expected.sourceTransactionHash.toLowerCase()) return "The evidence is for a different source transaction.";
+  return null;
+};
+
+/**
+ * Plans the delivery from an evidence reading. The prerequisites come first, then the execution. The plan is ready only
+ * when the evidence is for the expected message.
  *
  * @param reading What the archive gave.
  * @param pair The pair.
+ * @param expected The message that the user views.
  */
-export const planDelivery = (reading: EvidenceReading, pair: PairConfig): DeliveryPlan => {
+export const planDelivery = (reading: EvidenceReading, pair: PairConfig, expected: ExpectedMessage): DeliveryPlan => {
   if (reading.kind === "none") return { kind: "unavailable", reason: reading.note };
   try {
     const { summary, steps } = planMessageExecution(reading.text, pair);
+    const mismatch = evidenceMismatch(summary, expected);
+    if (mismatch !== null) return { kind: "unavailable", reason: mismatch };
     return {
       kind: "ready",
       sourceSlot: summary.sourceSlot,

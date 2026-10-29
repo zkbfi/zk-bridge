@@ -76,7 +76,7 @@ export const ProofPanel = ({ detail }: { readonly detail: MessageDetail }) => {
     queryFn: () => readEvidence({ endpoints, messageId: detail.id, transport: services.transport }),
     refetchInterval: POLL_MILLISECONDS,
   });
-  const deliveryPlan = useMemo(() => (evidenceReading.data === undefined ? null : planDelivery(evidenceReading.data, pair)), [evidenceReading.data, pair]);
+  const deliveryPlan = useMemo(() => (evidenceReading.data === undefined ? null : planDelivery(evidenceReading.data, pair, { messageId: detail.id, sourceTransactionHash: detail.sourceTransactionHash })), [evidenceReading.data, pair, detail.id, detail.sourceTransactionHash]);
 
   const stage = messageStage({ status: detail.status, headSlot, sourceSlot: deliveryPlan?.kind === "ready" ? deliveryPlan.sourceSlot : null });
   const proof = proofReading.data?.kind === "found" ? proofReading.data : null;
