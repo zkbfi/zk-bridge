@@ -45,20 +45,28 @@ To check a release yourself:
 node explorer/release/src/cli.ts verify <release-directory> --public-keys explorer/landing/landing.config.json
 ```
 
-## A testnet release
+## Pairs and settings of a release
 
-`script/release/testnet.env` holds the build settings of a release for the pair `sepolia-pls943`: the public indexer,
-backend and archive addresses on zkb.fi, keyless public RPC endpoints, and the contracts of the testnet deployment
-(`deploy/testnet/deployment.json`, inline). Load it before `release.sh`:
+One release serves every pair that has a deployment. Each pair has one file, `deploy/deployments/<pair>.json` (the
+file name is the pair name, such as `sepolia-pls943`); add a file to add a pair. `script/release/release.env` holds
+the build settings: the public indexer, backend and archive addresses on zkb.fi, keyless public RPC endpoints, and
+`VITE_EXPLORER_DEPLOYMENTS_JSON`, a map of every deployment file built at load time. Load it before `release.sh`:
 
 ```sh
-set -a; . script/release/testnet.env; set +a
-RELEASE_VERSION=0.1.0-testnet.1 <password-manager command that prints the key> | script/release/release.sh "$(mktemp -d)"
+set -a; . script/release/release.env; set +a
+RELEASE_VERSION=<version> <password-manager command that prints the key> | script/release/release.sh "$(mktemp -d)"
 ```
 
-The dapp then shows a TESTNET banner on every page (the pair registry marks `sepolia-pls943` as a testnet). The landing
-page shows the `notice` of `explorer/landing/landing.config.json` above everything else; remove it for a mainnet
-release. The dapp sets no msgboard node: no keyless public msgboard endpoint exists yet, and the dapp works without one.
+The dapp opens the pair that `?pair=<name>` or a `#/pair/<name>` route asks for, else `VITE_EXPLORER_PAIR` when it is
+set, else the first file. Its global view lists every pair of the release; another pair opens with a fresh page load,
+because the page builds its connections for one pair. The indexer, backend and archive addresses apply to every pair,
+so a release that adds a pair served by other services needs those settings per pair first. The dapp sets no msgboard
+node: no keyless public msgboard endpoint exists yet, and the dapp works without one.
+
+The landing page links each download at `<downloadBaseUrl>/<file>`. In `explorer/landing/landing.config.json`,
+`{version}` in `downloadBaseUrl` becomes the version of the signed dapp release, so one setting serves every release.
+The downloads are attached to the GitHub release of that version on `zkbfi/releases`; the signed SHA-256 on the page
+is what makes them safe to use, not the host.
 
 ## The release key
 
@@ -167,7 +175,6 @@ It refuses (exit 1) when `RELEASE_PAGES_LANDING` is not set or the release does 
 Cloudflare Worker with static assets only (`npx wrangler@4 deploy` with a configuration written outside the site):
 wrangler 4 creates new projects as Workers, not as classic Pages projects. `RELEASE_LANDING_DOMAINS` attaches custom
 domains; a domain must have no other DNS record on that name. Wrangler reads its own Cloudflare credentials. If the
-mirror and IPFS ever disagree, IPFS and the signature win.
-
-**Open point.** The landing page links downloads at `./downloads/`. Pages refuses files over 25 MiB and the terminal
-programs are larger, so the mirror does not carry them. Where the downloads are served from is not decided yet.
+mirror and IPFS ever disagree, IPFS and the signature win. The mirror carries no downloads: the terminal programs are
+larger than its 25 MiB file limit, and they come from the GitHub release instead (see "Pairs and settings of a
+release").
