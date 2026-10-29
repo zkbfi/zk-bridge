@@ -2,7 +2,7 @@
   "title": "zkb.fi releases",
   "manifestUrl": "./version.json",
   "signatureUrl": "./version.json.sig",
-  "downloadBaseUrl": "./downloads",
+  "downloadBaseUrl": "https://github.com/zkbfi/releases/releases/download/v0.1.0-testnet.1",
   "gateways": [
     "https://{cid}.ipfs.inbrowser.link/",
     "https://{cid}.ipfs.dweb.link/",
