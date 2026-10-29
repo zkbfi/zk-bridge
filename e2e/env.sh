@@ -5,6 +5,10 @@
 # repository root, and the scripts change to the root first.
 
 : "${E2E_STATE_DIR:=e2e/state}"
+# The indexer and the stages run from other folders, so a relative state folder is made absolute against the root.
+case "$E2E_STATE_DIR" in /*) ;; *) E2E_STATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/$E2E_STATE_DIR" ;; esac
+# The stages (explorer/e2e) read it from their environment.
+export E2E_STATE_DIR
 : "${E2E_RPC_A_PORT:=38545}"
 : "${E2E_RPC_B_PORT:=38546}"
 : "${E2E_BEACON_PORT:=39000}"
