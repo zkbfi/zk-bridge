@@ -10,11 +10,11 @@
 //!
 //! A Gloas header is read like any other: the state is hashed with the Gloas layout (progressive containers) and compared with the header.
 
-use crate::beacon::http::bootstrap_unavailable;
+use crate::beacon::http::{bootstrap_unavailable, log_repaired_state};
 use crate::error::{Error, Result};
 use crate::light_client::{
-    beacon_header_from_json, bootstrap_from_json, committee_hash, header_root, state_layout_at,
-    BeaconHeader, ChainKind, StateView,
+    beacon_header_from_json, bootstrap_from_json, committee_hash, complete_frozen_state,
+    header_root, missing_summary_index, state_layout_at, BeaconHeader, ChainKind, StateView,
 };
 use crate::rpc::{HttpGet, HttpResponse};
 use alloy_primitives::B256;
@@ -180,13 +180,9 @@ fn read_state(
         404 => return Ok(None),
         status => return Err(Error::Beacon(format!("GET {path}: status {status}"))),
     }
-    let state = StateView::parse(&response.body, chain)?;
+    let mut state = StateView::parse(&response.body, chain)?;
     if state.root() != header.state_root {
-        return Err(Error::Beacon(format!(
-            "the state of the checkpoint header hashes to {:#x}, not {:#x}",
-            state.root(),
-            header.state_root
-        )));
+        state = repair_frozen_state(client, chain, state, header.state_root)?;
     }
     if state.slot() != header.slot {
         return Err(Error::Beacon(format!(
@@ -196,6 +192,47 @@ fn read_state(
         )));
     }
     Ok(Some(state))
+}
+
+/// A state that does not hash to `state_root`, completed when it is a PulseChain state served one summary short. The
+/// missing entry comes from the newest finalized state, which must itself hash to the root its header names. Any other
+/// mismatch is an error. See `missing_summary_index`.
+fn repair_frozen_state(
+    client: &dyn HttpGet,
+    chain: ChainKind,
+    state: StateView,
+    state_root: B256,
+) -> Result<StateView> {
+    let served_root = state.root();
+    let mismatch = || {
+        Error::Beacon(format!(
+            "the state of the checkpoint header hashes to {served_root:#x}, not {state_root:#x}"
+        ))
+    };
+    let Some(index) = missing_summary_index(chain, &state) else {
+        return Err(mismatch());
+    };
+    let (finalized, _) = read_header(client, None)?;
+    if finalized.state_root == state_root {
+        return Err(mismatch());
+    }
+    let path = format!("/eth/v2/debug/beacon/states/{:#x}", finalized.state_root);
+    let response = get(client, &path, "application/octet-stream")?;
+    if response.status != 200 {
+        return Err(Error::Beacon(format!(
+            "GET {path}: status {}",
+            response.status
+        )));
+    }
+    let newest = StateView::parse(&response.body, chain)?;
+    if newest.root() != finalized.state_root {
+        return Err(mismatch());
+    }
+    let slot = state.slot();
+    let repaired =
+        complete_frozen_state(chain, state, &newest, state_root)?.ok_or_else(mismatch)?;
+    log_repaired_state(slot, index, state_root);
+    Ok(repaired)
 }
 
 fn from_bootstrap(

@@ -693,6 +693,37 @@ impl StateView {
         &self.state.next_sync_committee
     }
 
+    /// `historical_summaries` as `(block_summary_root, state_summary_root)` pairs, in list order.
+    pub fn historical_summaries(&self) -> &[(B256, B256)] {
+        &self.state.historical_summaries
+    }
+
+    /// The state with `entry` added at the end of `historical_summaries`, and that field hashed again. Used to repair a
+    /// frozen PulseChain state that the node serves one entry short (see [`missing_summary_index`]).
+    ///
+    /// # Errors
+    /// `Error::Beacon` for a Gloas state: its list is not field 27 of a plain container.
+    pub fn with_appended_summary(mut self, entry: (B256, B256)) -> Result<Self> {
+        if self.state.shape != lc_core::layout::ContainerShape::Plain {
+            return Err(Error::Beacon(
+                "only a Capella to Fulu state can have a summary appended".into(),
+            ));
+        }
+        self.state.historical_summaries.push(entry);
+        let roots: Vec<B256> = self
+            .state
+            .historical_summaries
+            .iter()
+            .map(|(block, state)| lc_core::ssz::hash_pair(block, state))
+            .collect();
+        self.state.field_roots[lc_core::layout::HISTORICAL_SUMMARIES_FIELD_INDEX as usize] =
+            lc_core::ssz::mix_in_length(
+                &lc_core::ssz::merkleize_with_limit(&roots, 1 << 24),
+                roots.len() as u64,
+            );
+        Ok(self)
+    }
+
     /// Wraps an already parsed state (tests build synthetic ones). The layout check is the one of [`StateView::parse`].
     ///
     /// # Errors
@@ -1074,6 +1105,54 @@ pub fn era_block_roots(era: u64, canonical: &BTreeMap<u64, B256>) -> Result<Vec<
 /// The era of a slot.
 pub fn era_of(slot: u64) -> u64 {
     slot / lc_core::layout::SLOTS_PER_HISTORICAL_ROOT
+}
+
+/// The index of the `historical_summaries` entry that a PulseChain node left out of `state`, or `None` when the list
+/// does not look cut.
+///
+/// Lighthouse-Pulse v2.5.1 (upstream Lighthouse v5.1.3) counts the entries of a frozen state as
+/// `(slot - capellaForkSlot) / 8192` instead of `slot / 8192 - capellaForkSlot / 8192`
+/// (`beacon_node/store/src/chunked_vector.rs`, `start_and_end_vindex`). The two agree only when the Capella fork slot is a
+/// multiple of 8192. On PulseChain it is not (slot 96 on mainnet, 134400 on testnet v4), so every state older than the
+/// newest finalized one comes back without its last entry. Ethereum networks fork on an era boundary, so the answer
+/// for them is always `None`.
+pub fn missing_summary_index(chain: ChainKind, state: &StateView) -> Option<u64> {
+    if !matches!(
+        chain,
+        ChainKind::Pulsechain | ChainKind::PulsechainTestnetV4
+    ) {
+        return None;
+    }
+    let expected = era_of(state.slot()).checked_sub(chain.spec().capella_era().ok()?)?;
+    let missing = expected.checked_sub(1)?;
+    (state.historical_summaries().len() as u64 == missing).then_some(missing)
+}
+
+/// `state` completed with the summary it is missing, taken from `newest` (a newer state of the same chain that the node
+/// serves whole), when the result hashes to `state_root`. `None` when the state does not look cut, `newest` lacks the
+/// entry, or the result still does not hash to `state_root`. Summaries are only ever appended, so the entry at an index
+/// is the same in every later state.
+///
+/// # Errors
+/// `Error::Beacon` for a Gloas state (see [`StateView::with_appended_summary`]).
+pub fn complete_frozen_state(
+    chain: ChainKind,
+    state: StateView,
+    newest: &StateView,
+    state_root: B256,
+) -> Result<Option<StateView>> {
+    let Some(index) = missing_summary_index(chain, &state) else {
+        return Ok(None);
+    };
+    let Some(entry) = usize::try_from(index)
+        .ok()
+        .and_then(|position| newest.historical_summaries().get(position))
+        .copied()
+    else {
+        return Ok(None);
+    };
+    let repaired = state.with_appended_summary(entry)?;
+    Ok((repaired.root() == state_root).then_some(repaired))
 }
 
 /// The generalized index of `BeaconState.historical_summaries` for the fork at `slot`.

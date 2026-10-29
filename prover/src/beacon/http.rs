@@ -32,8 +32,9 @@
 //! 1. It rebuilds the 8192 block roots of the source era from the canonical block roots of the node
 //!    (`/eth/v1/beacon/blocks/<slot>/root`, 404 for an empty slot). It never reads them from an old state: a node can
 //!    serve an old state one summary short, and that state does not hash to its own root.
-//! 2. It reads the anchor state, which the node must still serve whole. A node serves recent states only, so the
-//!    anchor should be the newest head that the light client stores.
+//! 2. It reads the anchor state. A PulseChain node serves an older state without its last summary; the source
+//!    completes it from the newest finalized state (see `repair_frozen_state`). A node serves recent states only, so
+//!    the anchor should be the newest head that the light client stores.
 //! 3. `lc-core` checks the rebuilt roots against the `block_summary_root` of the anchor state.
 //!
 //! # Gloas
@@ -59,12 +60,12 @@ use crate::error::{Error, Result};
 use crate::fork_schedule::{ForkSchedule, CHAIN_SPEC_PATH, FORK_SCHEDULE_PATH};
 use crate::light_client::{
     ancestry_path, anchor_gloas_header, assemble_update, beacon_header_from_json,
-    block_hash_gindex, block_roots_gindex, committee_hash, describe_header, era_block_roots,
-    era_of, header_root, historical_summaries_gindex, plan_header_repair, rebuild_execution_header,
-    store_at, store_from_bootstrap_json, strip_transition_padding, sync_aggregate_from_json,
-    update_from_json, AncestryPath, BeaconHeader, BeaconPath, BlockView, ChainKind, GloasBlockView,
-    HeaderRepair, LightClientStore, LightClientUpdate, StateView, SyncAggregate, UpdateInput,
-    SLOTS_PER_HISTORICAL_ROOT,
+    block_hash_gindex, block_roots_gindex, committee_hash, complete_frozen_state, describe_header,
+    era_block_roots, era_of, header_root, historical_summaries_gindex, missing_summary_index,
+    plan_header_repair, rebuild_execution_header, store_at, store_from_bootstrap_json,
+    strip_transition_padding, sync_aggregate_from_json, update_from_json, AncestryPath,
+    BeaconHeader, BeaconPath, BlockView, ChainKind, GloasBlockView, HeaderRepair, LightClientStore,
+    LightClientUpdate, StateView, SyncAggregate, UpdateInput, SLOTS_PER_HISTORICAL_ROOT,
 };
 use crate::logging::Logger;
 use crate::rpc::{HttpGet, JsonRpc};
@@ -114,6 +115,18 @@ fn get_json_from(client: &dyn HttpGet, path: &str) -> Result<Option<Value>> {
         404 | 501 => Ok(None),
         status => Err(Error::Beacon(format!("GET {path}: status {status}"))),
     }
+}
+
+/// Logs that a state served one summary short was completed (see `repair_frozen_state`).
+pub fn log_repaired_state(slot: u64, missing_index: u64, state_root: B256) {
+    Logger::standard().info(
+        "state_repaired",
+        &[
+            ("slot", slot.to_string()),
+            ("missing_index", missing_index.to_string()),
+            ("state_root", format!("{state_root:#x}")),
+        ],
+    );
 }
 
 /// Whether a status of the `light_client/bootstrap` route means "no bootstrap for this root", so the caller reads the state
@@ -630,17 +643,43 @@ impl HttpBeaconSource {
         let fork = self
             .fork_schedule()?
             .fork_at_slot(StateView::slot_of_bytes(&bytes)?)?;
-        let state = Arc::new(StateView::parse_with_fork(&bytes, fork)?);
+        let mut state = StateView::parse_with_fork(&bytes, fork)?;
         if state.root() != state_root {
-            return Err(Error::Beacon(format!(
-                "the state hashes to {:#x}, not {state_root:#x} (the node preset may differ from the mainnet preset)",
-                state.root()
-            )));
+            state = self.repair_frozen_state(state, state_root)?;
         }
+        let state = Arc::new(state);
         let mut cache = self.state_cache.lock().expect("lock");
         cache.insert(0, (state_root, state.clone()));
         cache.truncate(STATE_CACHE_SIZE);
         Ok(state)
+    }
+
+    /// A state that does not hash to `state_root`, repaired when it is a PulseChain state that the node served one
+    /// `historical_summaries` entry short (see [`missing_summary_index`]). The missing entry comes from the newest
+    /// finalized state, which the node still serves whole, and summaries are only ever appended, so the entry is the
+    /// same in both. The repaired state is accepted only when it then hashes to `state_root`. Any other mismatch is an
+    /// error.
+    fn repair_frozen_state(&self, state: StateView, state_root: B256) -> Result<StateView> {
+        let served_root = state.root();
+        let mismatch = || {
+            Error::Beacon(format!(
+                "the state hashes to {served_root:#x}, not {state_root:#x} (the node preset may differ from the mainnet preset)"
+            ))
+        };
+        let Some(index) = missing_summary_index(self.chain, &state) else {
+            return Err(mismatch());
+        };
+        let finalized = Self::require(self.header_by_id("finalized")?, "a finalized header")?;
+        if finalized.state_root == state_root {
+            return Err(mismatch());
+        }
+        // Through the cache: a run reads the newest finalized state anyway, so this costs no second download.
+        let newest = self.state_for(finalized.state_root)?;
+        let slot = state.slot();
+        let repaired =
+            complete_frozen_state(self.chain, state, &newest, state_root)?.ok_or_else(mismatch)?;
+        log_repaired_state(slot, index, state_root);
+        Ok(repaired)
     }
 
     /// The canonical block root of a slot, or `None` for an empty slot.
@@ -2386,6 +2425,271 @@ mod tests {
         let path = format!("/eth/v2/debug/beacon/states/{:#x}", head.state_root);
         let node = Node([(path, bytes)].into_iter().collect());
         (source_over_node(ChainKind::Ethereum, node), head, state)
+    }
+
+    // ---------------------------------------------------------------- frozen PulseChain states one summary short
+
+    use lc_core::chain::PULSECHAIN_TESTNET_V4;
+
+    /// Summary pair `index`, different for each index.
+    fn summary(index: u64) -> (B256, B256) {
+        (
+            keccak256(format!("block summary {index}")),
+            keccak256(format!("state summary {index}")),
+        )
+    }
+
+    /// A Capella state at `slot` with the summaries `0..count`, as SSZ.
+    fn state_with_summaries(slot: u64, summaries: Vec<(B256, B256)>) -> Vec<u8> {
+        let current = committee_for(&PULSECHAIN_TESTNET_V4, 1).committee.clone();
+        let next = committee_for(&PULSECHAIN_TESTNET_V4, 2).committee.clone();
+        let mut state = StateBytes::new(ForkName::Capella, slot, current, next);
+        state.historical_summaries = summaries;
+        state.to_ssz()
+    }
+
+    fn summaries(count: u64) -> Vec<(B256, B256)> {
+        (0..count).map(summary).collect()
+    }
+
+    fn root_of(chain: ChainKind, bytes: &[u8]) -> B256 {
+        StateView::parse(bytes, chain).unwrap().root()
+    }
+
+    /// The page of `/eth/v1/beacon/headers/<id>` for a header that names `state_root`.
+    fn header_page(slot: u64, state_root: B256) -> Vec<u8> {
+        serde_json::json!({"data": {"header": {"message": {
+            "slot": slot.to_string(),
+            "proposer_index": "1",
+            "parent_root": format!("{:#x}", keccak256(b"parent")),
+            "state_root": format!("{state_root:#x}"),
+            "body_root": format!("{:#x}", keccak256(b"body")),
+        }}}})
+        .to_string()
+        .into_bytes()
+    }
+
+    /// A node that counts the requests of each path.
+    struct CountingNode {
+        node: Node,
+        requests: Arc<Mutex<HashMap<String, usize>>>,
+    }
+
+    impl HttpGet for CountingNode {
+        fn get(&self, path_and_query: &str, accept: &str) -> Result<HttpResponse> {
+            *self
+                .requests
+                .lock()
+                .unwrap()
+                .entry(path_and_query.to_string())
+                .or_default() += 1;
+            self.node.get(path_and_query, accept)
+        }
+    }
+
+    /// Slot 2848 of era 1366 on PulseChain testnet v4: the slot of the real case. Capella forked in era 16, so a whole
+    /// state there holds 1366 - 16 = 1350 summaries.
+    const OLD_SLOT: u64 = 1366 * 8192 + 2848;
+    const WHOLE: u64 = 1350;
+
+    /// A testnet node that serves the state of `OLD_SLOT` as `served`, and a newer finalized state with `newest`.
+    /// Returns the source, the root that the header of the old state names, and the request counts.
+    fn frozen_state_node(
+        chain: ChainKind,
+        served: Vec<u8>,
+        old_root: B256,
+        newest: Vec<(B256, B256)>,
+    ) -> (HttpBeaconSource, Arc<Mutex<HashMap<String, usize>>>, String) {
+        let newest_bytes = state_with_summaries(OLD_SLOT + 64, newest);
+        let newest_root = root_of(chain, &newest_bytes);
+        let newest_path = format!("/eth/v2/debug/beacon/states/{newest_root:#x}");
+        let node = Node(
+            [
+                (format!("/eth/v2/debug/beacon/states/{old_root:#x}"), served),
+                (newest_path.clone(), newest_bytes),
+                (
+                    "/eth/v1/beacon/headers/finalized".to_string(),
+                    header_page(OLD_SLOT + 64, newest_root),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let requests = Arc::new(Mutex::new(HashMap::new()));
+        let source = source_over_node(
+            chain,
+            CountingNode {
+                node,
+                requests: requests.clone(),
+            },
+        );
+        (source, requests, newest_path)
+    }
+
+    /// Claim: a PulseChain state that the node serves without its last summary is completed from the newest finalized
+    /// state and accepted, because it then hashes to the root its header names. The newest state is downloaded once.
+    /// Why it matters: Lighthouse-Pulse v2.5.1 serves every frozen state that way. Without the repair a light client on
+    /// PulseChain can only prove from the newest finalized head, and stalls for good after one missed finalization.
+    #[test]
+    fn a_pulsechain_state_one_summary_short_is_completed_from_the_newest_finalized_state() {
+        let chain = ChainKind::PulsechainTestnetV4;
+        let old_root = root_of(chain, &state_with_summaries(OLD_SLOT, summaries(WHOLE)));
+        let short = state_with_summaries(OLD_SLOT, summaries(WHOLE - 1));
+        assert_ne!(
+            root_of(chain, &short),
+            old_root,
+            "the cut state must not hash to its root"
+        );
+
+        let (source, requests, newest_path) =
+            frozen_state_node(chain, short, old_root, summaries(WHOLE));
+        let state = source
+            .state_for(old_root)
+            .expect("the repaired state is accepted");
+        assert_eq!(state.root(), old_root);
+        assert_eq!(state.historical_summaries().len() as u64, WHOLE);
+
+        let newest_root: B256 = newest_path.rsplit('/').next().unwrap().parse().unwrap();
+        source.state_for(newest_root).unwrap();
+        assert_eq!(
+            requests.lock().unwrap()[&newest_path],
+            1,
+            "the newest state comes from the cache the second time"
+        );
+    }
+
+    /// Claim: the repair happens on PulseChain only. An Ethereum state one summary short is refused as before.
+    /// Why it matters: Ethereum networks fork on an era boundary, so a short list there is a different fault, and a
+    /// repair would hide it.
+    #[test]
+    fn an_ethereum_state_one_summary_short_is_refused() {
+        let chain = ChainKind::Ethereum;
+        // A Capella slot of Ethereum in era 760. Capella forked at the start of era 758, so two summaries are whole.
+        let slot = 760 * 8192 + 7;
+        let whole = 2;
+        let old_root = {
+            let current = committee_for(&ETHEREUM_MAINNET, 1).committee.clone();
+            let next = committee_for(&ETHEREUM_MAINNET, 2).committee.clone();
+            let mut state = StateBytes::new(ForkName::Capella, slot, current.clone(), next.clone());
+            state.historical_summaries = summaries(whole);
+            root_of(chain, &state.to_ssz())
+        };
+        let short = {
+            let current = committee_for(&ETHEREUM_MAINNET, 1).committee.clone();
+            let next = committee_for(&ETHEREUM_MAINNET, 2).committee.clone();
+            let mut state = StateBytes::new(ForkName::Capella, slot, current, next);
+            state.historical_summaries = summaries(whole - 1);
+            state.to_ssz()
+        };
+        let node = Node(
+            [(format!("/eth/v2/debug/beacon/states/{old_root:#x}"), short)]
+                .into_iter()
+                .collect(),
+        );
+        let error = source_over_node(chain, node)
+            .state_for(old_root)
+            .err()
+            .expect("refused");
+        assert!(error.to_string().contains("the state hashes to"), "{error}");
+    }
+
+    /// Claim: on PulseChain, every mismatch other than exactly one missing last summary is refused: two missing, a
+    /// changed field, and a newest state whose entry differs.
+    /// Why it matters: the repair trusts nothing. It adds one entry and still demands the root from the header.
+    #[test]
+    fn any_other_pulsechain_mismatch_is_refused() {
+        let chain = ChainKind::PulsechainTestnetV4;
+        let old_root = root_of(chain, &state_with_summaries(OLD_SLOT, summaries(WHOLE)));
+        let refused = |served: Vec<u8>, newest: Vec<(B256, B256)>| {
+            let (source, _, _) = frozen_state_node(chain, served, old_root, newest);
+            let error = source.state_for(old_root).err().expect("refused");
+            assert!(error.to_string().contains("the state hashes to"), "{error}");
+        };
+
+        refused(
+            state_with_summaries(OLD_SLOT, summaries(WHOLE - 2)),
+            summaries(WHOLE),
+        );
+
+        let mut tampered = summaries(WHOLE - 1);
+        tampered[3] = summary(9_999);
+        refused(state_with_summaries(OLD_SLOT, tampered), summaries(WHOLE));
+
+        let mut other_newest = summaries(WHOLE);
+        other_newest[(WHOLE - 1) as usize] = summary(9_999);
+        refused(
+            state_with_summaries(OLD_SLOT, summaries(WHOLE - 1)),
+            other_newest,
+        );
+
+        // The newest state is too short to hold the entry.
+        refused(
+            state_with_summaries(OLD_SLOT, summaries(WHOLE - 1)),
+            summaries(WHOLE - 1),
+        );
+    }
+
+    /// Claim: the missing index follows `slot / 8192 - capellaForkSlot / 8192` on both PulseChain networks, and is
+    /// `None` when the list is whole or for Ethereum.
+    #[test]
+    fn the_missing_index_follows_the_capella_era_of_the_chain() {
+        let view = |chain: ChainKind, slot: u64, count: u64| {
+            StateView::parse(&state_with_summaries(slot, summaries(count)), chain).unwrap()
+        };
+        let testnet = ChainKind::PulsechainTestnetV4;
+        assert_eq!(
+            missing_summary_index(testnet, &view(testnet, OLD_SLOT, WHOLE - 1)),
+            Some(WHOLE - 1)
+        );
+        assert_eq!(
+            missing_summary_index(testnet, &view(testnet, OLD_SLOT, WHOLE)),
+            None
+        );
+        assert_eq!(
+            missing_summary_index(testnet, &view(testnet, OLD_SLOT, WHOLE - 2)),
+            None
+        );
+        // PulseChain mainnet forked Capella at slot 96, era 0: a state in era 5 holds 5 summaries.
+        let mainnet = ChainKind::Pulsechain;
+        assert_eq!(
+            missing_summary_index(mainnet, &view(mainnet, 5 * 8192 + 7, 4)),
+            Some(4)
+        );
+        assert_eq!(
+            missing_summary_index(mainnet, &view(mainnet, 5 * 8192 + 7, 5)),
+            None
+        );
+    }
+
+    /// Claim: the real state that the node of chain 943 served after the next finalization (64 bytes short) hashes to the
+    /// root of its header once the last summary of the state served while it was the newest is appended.
+    /// Why it matters: it shows on real data that the fault is exactly the missing last entry.
+    /// The files are kept in `light-client/fetch-cache/pulsechain-testnet-v4-frozen-state` (not tracked by git). The test
+    /// skips when they are absent.
+    #[test]
+    fn the_real_short_testnet_state_hashes_to_its_root_once_completed() {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../light-client/fetch-cache/pulsechain-testnet-v4-frozen-state");
+        let read = |name: &str| std::fs::read(directory.join(name));
+        let (Ok(header), Ok(whole), Ok(short)) = (
+            read("finalized_header.json"),
+            read("state_while_newest.ssz"),
+            read("state_after_next_finalization.ssz"),
+        ) else {
+            eprintln!("SKIPPED: the real testnet states are not in light-client/fetch-cache/pulsechain-testnet-v4-frozen-state");
+            return;
+        };
+        let chain = ChainKind::PulsechainTestnetV4;
+        let header: Value = serde_json::from_slice(&header).unwrap();
+        let header = beacon_header_from_json(&header["data"]["header"]["message"]).unwrap();
+        let whole = StateView::parse(&whole, chain).unwrap();
+        let short = StateView::parse(&short, chain).unwrap();
+        assert_eq!(whole.root(), header.state_root);
+        assert_ne!(short.root(), header.state_root);
+        let index = missing_summary_index(chain, &short).expect("one entry is missing");
+        let entry = whole.historical_summaries()[index as usize];
+        let repaired = short.with_appended_summary(entry).unwrap();
+        assert_eq!(repaired.root(), header.state_root);
     }
 
     const FORKS_WITH_STATES: [ForkName; 4] = [
