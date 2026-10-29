@@ -36,6 +36,7 @@ SWAP_FILE=/swapfile
 SWAP_SIZE=2G
 KUBO_VERSION=v0.43.1
 IPFS_PATH=/var/lib/zk-bridge-ipfs/repo
+IPFS_HOST=${IPFS_HOST:-ipfs.zkb.fi}
 
 # --- 1. Base system ---------------------------------------------------------------------------------------------
 log "base system"
@@ -187,6 +188,9 @@ ipfs_as config Provide.Strategy pinned
 # Secure WebSockets with a libp2p.direct certificate: browsers (inbrowser.link, Safari) need them to fetch from us.
 # Set explicitly, the node asks for the certificate at once instead of after an hour.
 ipfs_as config --json AutoTLS.Enabled true
+# Announce the host name as well, so peers and pinning services can name the node: ipfs.zkb.fi (A and AAAA).
+ipfs_as config --json Addresses.AppendAnnounce "$(jq -cn --arg h "$IPFS_HOST" '[
+  "/dns4/\($h)/tcp/4001", "/dns4/\($h)/udp/4001/quic-v1", "/dns6/\($h)/tcp/4001", "/dns6/\($h)/udp/4001/quic-v1"]')"
 # The unit is written here and not by deploy.sh: the node holds the pins and does not change with a release.
 cat > /etc/systemd/system/zk-bridge-ipfs.service <<EOF
 # The IPFS node (kubo) that pins the release archives. provision.sh writes this file. RPC API on 127.0.0.1:5001 only,

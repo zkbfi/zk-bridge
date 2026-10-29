@@ -60,6 +60,8 @@ server with NVMe disks becomes the better choice only when we run our own chain 
   `/etc/caddy/zkb.env`, see `caddy.env.example`): `prove.zkb.fi` (requests and latest proofs), `webhook.zkb.fi` (the
   prover's callback; the backend's `publicUrl`), `archive.zkb.fi` (evidence), `indexer.zkb.fi` (the indexer's `/api/*`
   and GraphQL; `/sql`, `/metrics` and `/status` stay private). DNS-only records, so Caddy holds the certificates.
+  `ipfs.zkb.fi` names the IPFS node for peers and pinning services: port 4001 only, no HTTP and no gateway. Its secure
+  WebSocket address uses a `libp2p.direct` certificate that the node gets itself (AutoTLS), not a Caddy one.
 - Every consumer takes these addresses from configuration: the dapp from `VITE_EXPLORER_*_URL` at build time and from its
   Connections view at run time, the prover worker from the `webhookUrl` that the backend sends with each job.
 - The explorer indexer is the largest part. It used up to 817 MB on two test chains with a few dozen messages, and it
