@@ -218,7 +218,7 @@ million to the base of 2^24.
 The limit: 8 KiB (8192 bytes) per message. Sources: the node implementation of the board in `erigon-pulse`
 (`msgboard/msgboardcfg/config.go`, `MsgSizeLimit: 8 * 1024`, flag `--msgboard.msgsize.limit`), and the mock node of
 `@msgboard/hardhat` (`messageSizeLimit: 8n * 1024n`). The sdk README says only that the board has a size cap. The
-`valve-tech/reth` fork is not on this machine, so the live limit of the valve.city nodes is not verified. The publisher
+reth fork of the valve.city nodes is not on this machine, so the live limit of the valve.city nodes is not verified. The publisher
 refuses a payload over `maximumMessageBytes` before it grinds. The board also caps the total size and count of messages,
 and drops new messages when a burst fills it.
 
