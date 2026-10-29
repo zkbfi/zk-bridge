@@ -1,4 +1,4 @@
-import { redactConnectionText, type ResolvedConnection } from "./connection-settings.js";
+import { ENDPOINT_KEYS, redactConnectionText, type ResolvedConnection } from "./connection-settings.js";
 import {
   createFallbackController,
   describeFailure,
@@ -94,7 +94,9 @@ export const createExplorerConnection = (input: ExplorerConnectionInput): Explor
   const fetchJson = input.fetchJson ?? fetchJsonResponse;
   const createReader = input.createReader ?? createHttpChainReader;
   const base = resolved.indexerUrl?.value ?? null;
-  const urls = [...(base === null ? [] : [base]), ...Object.values(resolved.rpcUrls).flatMap((setting) => (setting === null ? [] : [setting.value]))];
+  // The backend, the msgboard indexer, the archive and the msgboard node can also hold a key in the URL.
+  const endpointUrls = ENDPOINT_KEYS.flatMap((key) => resolved[key]?.value ?? []);
+  const urls = [...(base === null ? [] : [base]), ...Object.values(resolved.rpcUrls).flatMap((setting) => (setting === null ? [] : [setting.value])), ...endpointUrls];
   const redact = (text: string): string => redactConnectionText(text, urls);
 
   const readers: Record<number, ChainReader | undefined> = Object.fromEntries(

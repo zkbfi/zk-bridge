@@ -161,7 +161,7 @@ export function pageOfScannedEvents(pair: Pair, events: readonly HistoryEvent[],
 }
 
 /** The part of a live connection that the read uses. */
-export type HistoryConnection = Pick<ExplorerConnection, 'baseUrl' | 'run' | 'resolved'>
+export type HistoryConnection = Pick<ExplorerConnection, 'baseUrl' | 'run' | 'resolved' | 'redact'>
 
 /**
  * Scans of the chains that are kept, so a new page or a new filter does not read the chains again. The key is the pair,
@@ -246,9 +246,27 @@ export function readHistoryPage(input: {
   readonly signal?: AbortSignal
 }): Promise<HistoryReading> {
   const { connection, pair, filters, transport, scans, signal } = input
-  return connection.run({
-    viaIndexer: () => readFromIndexer({ connection, filters, transport, signal }),
-    viaRpc: () => readFromChains({ connection, pair, filters, transport, scans, signal }),
-    ...(signal === undefined ? {} : { signal }),
-  })
+  return connection
+    .run({
+      viaIndexer: () => readFromIndexer({ connection, filters, transport, signal }),
+      viaRpc: () => readFromChains({ connection, pair, filters, transport, scans, signal }),
+      ...(signal === undefined ? {} : { signal }),
+    })
+    .catch((error: unknown) => {
+      throw redactedError(error, connection.redact)
+    })
+}
+
+/**
+ * The same error with its message redacted. A reader of the chains can put a URL with a key into an error, and the
+ * screen must never show it.
+ *
+ * @param error What was thrown.
+ * @param redact The redactor of the connection.
+ */
+function redactedError(error: unknown, redact: (text: string) => string): Error {
+  const message = redact(error instanceof Error ? error.message : String(error))
+  const clean = new Error(message)
+  if (error instanceof Error) clean.name = error.name
+  return clean
 }

@@ -52,14 +52,14 @@ export function directionLabel(pair: PairConfig, direction: ProofDirection): str
 }
 
 /** The lines of one direction: the proof, the job, and the reason that a source gave no answer. */
-export function directionLines(pair: PairConfig, row: DirectionRow, index: number): readonly Line[] {
+export function directionLines(pair: PairConfig, row: DirectionRow, index: number, redact: (text: string) => string): readonly Line[] {
   const label = directionLabel(pair, row.direction)
   const proof: Line =
     row.reading.kind === 'found'
       ? [strong(`${index + 1}  ${label}: `), plain(`slot ${row.reading.message.startSlot} to ${row.reading.message.newSlot}, from the ${row.reading.source}`)]
       : [strong(`${index + 1}  ${label}: `), colored('no proof found', theme.warn)]
-  const job: Line = [muted('     Backend job: '), plain(jobWords(row.job))]
-  const notes = row.reading.notes.map((note): Line => [muted(`     ${note}`)])
+  const job: Line = [muted('     Backend job: '), plain(redact(jobWords(row.job)))]
+  const notes = row.reading.notes.map((note): Line => [muted(`     ${redact(note)}`)])
   return [proof, job, ...notes]
 }
 
@@ -153,10 +153,10 @@ export function ProofModal(props: {
   return (
     <ModalFrame title="Proofs, requests and evidence" width={100} height={24}>
       <RichLine line={[muted('Latest proof of each direction (the msgboard indexer first, the msgboard node behind it)')]} />
-      {rows.data === null ? <RichLine line={[muted(rows.error ?? 'Reading the latest proofs…')]} /> : null}
-      {(rows.data ?? []).flatMap((row, index) => directionLines(pair, row, index)).map((line, index) => <RichLine key={index} line={line} />)}
+      {rows.data === null ? <RichLine line={[muted(rows.error === null ? 'Reading the latest proofs…' : redact(rows.error))]} /> : null}
+      {(rows.data ?? []).flatMap((row, index) => directionLines(pair, row, index, redact)).map((line, index) => <RichLine key={index} line={line} />)}
       <RichLine line={[]} />
-      <RequestLines request={request} client={client} pair={pair} refreshMilliseconds={refreshMilliseconds} />
+      <RequestLines request={request} client={client} pair={pair} refreshMilliseconds={refreshMilliseconds} redact={redact} />
       <box flexGrow={1} />
       <RichLine line={[colored(notice ?? ' ', theme.warn)]} />
       <RichLine line={[strong('1 2', theme.accent), plain(' ask the backend for a proof  '), strong('3 4', theme.accent), plain(' post the proof as an update  '), strong('e', theme.accent), plain(' evidence of a message')]} />
@@ -166,12 +166,12 @@ export function ProofModal(props: {
   )
 }
 
-function RequestLines(props: { readonly request: RequestState; readonly client: ReturnType<typeof backendClientOf>; readonly pair: PairConfig; readonly refreshMilliseconds: number }) {
-  const { request, client, pair, refreshMilliseconds } = props
+function RequestLines(props: { readonly request: RequestState; readonly client: ReturnType<typeof backendClientOf>; readonly pair: PairConfig; readonly refreshMilliseconds: number; readonly redact: (text: string) => string }) {
+  const { request, client, pair, refreshMilliseconds, redact } = props
   if (request.kind === 'none') return <RichLine line={[muted('No request made yet.')]} />
   if (request.kind === 'asking') return <RichLine line={[colored('Asking the backend…', theme.pending)]} />
   if (request.kind === 'refused') return <RichLine line={[colored(request.note, theme.bad)]} />
-  return <AcceptedRequest requestId={request.requestId} direction={request.direction} client={client} pair={pair} refreshMilliseconds={refreshMilliseconds} />
+  return <AcceptedRequest requestId={request.requestId} direction={request.direction} client={client} pair={pair} refreshMilliseconds={refreshMilliseconds} redact={redact} />
 }
 
 function AcceptedRequest(props: {
@@ -180,8 +180,9 @@ function AcceptedRequest(props: {
   readonly client: ReturnType<typeof backendClientOf>
   readonly pair: PairConfig
   readonly refreshMilliseconds: number
+  readonly redact: (text: string) => string
 }) {
-  const { requestId, direction, client, pair, refreshMilliseconds } = props
+  const { requestId, direction, client, pair, refreshMilliseconds, redact } = props
   const status = usePolling(
     async () => {
       if (client === null) throw new Error('No backend is set.')
@@ -190,14 +191,22 @@ function AcceptedRequest(props: {
     `request|${requestId}`,
     refreshMilliseconds,
   )
-  const state = status.data === null ? (status.error ?? 'waiting for the first status…') : status.data.status
-  const detail = status.data?.error ?? null
+  const state = status.data === null ? (status.error === null ? 'waiting for the first status…' : redact(status.error)) : status.data.status
+  const detail = status.data?.error == null ? null : redact(status.data.error)
   return (
     <>
       <RichLine line={[strong('Request '), plain(`${requestId.slice(0, 12)} for ${directionLabel(pair, direction)}: `), colored(state, status.data?.status === 'failed' ? theme.bad : theme.good)]} />
       {detail === null ? null : wrapped(detail).map((text, index) => <RichLine key={index} line={[colored(text, theme.bad)]} />)}
     </>
   )
+}
+
+/** The reason shown when a server sends evidence for a message other than the one asked for. */
+const EVIDENCE_FOR_OTHER_MESSAGE = 'The evidence is for a different message.'
+
+/** Tells whether the identifier in the evidence is the identifier that the user asked for. The comparison ignores case. */
+function isEvidenceForMessage(evidenceMessageId: string, requestedId: string): boolean {
+  return evidenceMessageId.toLowerCase() === requestedId.toLowerCase()
 }
 
 /** The small form that asks for a message identifier and opens the execute sequence from the archive evidence. */
@@ -217,10 +226,12 @@ function EvidenceForm(props: {
     onSubmit: (values) => {
       setBusy('yes')
       setError(null)
-      readEvidence({ endpoints: props.endpoints, messageId: values.messageId ?? '', transport: props.transport })
+      const requestedId = (values.messageId ?? '').trim()
+      readEvidence({ endpoints: props.endpoints, messageId: requestedId, transport: props.transport })
         .then((reading) => {
           if (reading.kind === 'none') throw new OperatorFileError(reading.note)
           const sequence = planMessageExecution(reading.text, pair)
+          if (!isEvidenceForMessage(sequence.summary.messageId, requestedId)) throw new OperatorFileError(EVIDENCE_FOR_OTHER_MESSAGE)
           props.onReview(`Execute message ${sequence.summary.messageId.slice(0, 12)}…`, sequence.steps.map((step) => ({ plan: step.plan, skippable: step.role === 'prerequisite' })))
         })
         .catch((caught: unknown) => {

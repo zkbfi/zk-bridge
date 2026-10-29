@@ -210,6 +210,27 @@ describe("secrets", () => {
     expect(connection.redact(text)).not.toContain(KEY);
   });
 
+  it("removes the four endpoint URLs and their keys from a text", () => {
+    const connection = createExplorerConnection({
+      pair,
+      resolved: resolveConnection({
+        chainIds: [1, 369],
+        user: {
+          indexerUrl: INDEXER,
+          backendUrl: "https://backend.example.org/BACKENDKEY99",
+          msgboardIndexerUrl: "https://mi.example.org/MSGINDEXKEY99",
+          archiveUrl: "https://archive.example.org/ARCHIVEKEY99",
+          msgboardUrl: "https://node.example.org/NODEKEY99",
+        },
+        environment: {},
+        registry: { rpcUrls: {} },
+      }),
+      fetchJson: async () => ({ status: 200, body: {} }),
+    });
+    const cleaned = connection.redact("a https://backend.example.org/BACKENDKEY99 b MSGINDEXKEY99 c ARCHIVEKEY99 d NODEKEY99");
+    for (const key of ["BACKENDKEY99", "MSGINDEXKEY99", "ARCHIVEKEY99", "NODEKEY99"]) expect(cleaned).not.toContain(key);
+  });
+
   it("removes the key from the message of an RPC failure", async () => {
     const { connection, chains } = setup({ indexer: null });
     chains[1].getLogs = async () => {

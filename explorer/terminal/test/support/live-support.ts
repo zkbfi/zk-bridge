@@ -54,7 +54,7 @@ export function fallbackStatus(message: string): SourceStatus {
 export function fakeConnections(options: { readonly checkNow?: () => Promise<void> } = {}) {
   const created: FakeConnection[] = []
   const createConnection = (input: ExplorerConnectionInput): FakeConnection => {
-    const urls = [input.resolved.indexerUrl, ...Object.values(input.resolved.rpcUrls)].flatMap((setting) => (setting === null ? [] : [setting.value]))
+    const urls = [input.resolved.indexerUrl, ...Object.values(input.resolved.rpcUrls), input.resolved.backendUrl, input.resolved.msgboardIndexerUrl, input.resolved.archiveUrl, input.resolved.msgboardUrl].flatMap((setting) => (setting === null ? [] : [setting.value]))
     const listeners = new Set<(status: SourceStatus) => void>()
     let status = INDEXER_STATUS
     let checks = 0

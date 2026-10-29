@@ -185,6 +185,20 @@ describe('asking the backend for a proof', () => {
     expect(await view.until('the prover ran out of memory')).toContain('PulseChain to Ethereum: failed')
   })
 
+  test('a failure reason that holds a keyed endpoint URL reaches the screen with the key hidden', async () => {
+    const { transport } = fakeTransport({
+      get: async (url) =>
+        url.includes('/requests/')
+          ? { status: 200, body: requestBody('failed', `could not reach ${URLS.backendUrl}/jobs`) }
+          : { status: 200, body: { direction: 'first-to-second', job: null } },
+      post: async () => ({ status: 202, body: { requestId: 'req-0123456789abcdef', jobId: 'job-1' } }),
+    })
+    const view = await openPanel({ set: ['backendUrl'], transport })
+    await view.press('2')
+    const frame = await view.until('could not reach')
+    expect(frame).not.toContain(KEY)
+  })
+
   test('a request that waits for its first status says so', async () => {
     const { transport } = fakeTransport({
       get: async (url) => (url.includes('/requests/') ? Promise.reject(new Error('slow')) : { status: 200, body: { direction: 'first-to-second', job: null } }),
@@ -257,6 +271,18 @@ describe('evidence from the archive', () => {
     await view.type(EVIDENCE_MESSAGE_ID)
     await view.press('return')
     expect(await view.until('already delivered')).toContain('The message is already delivered')
+  })
+
+  test('evidence for another message than the one asked for is refused with the reason', async () => {
+    const reviews: FlowStep[][] = []
+    const other = JSON.parse(sequence)
+    other.message.messageId = `0x${'f'.repeat(64)}`
+    const view = await openPanel({ set: ['archiveUrl'], transport: archive({ status: 200, body: other }).transport, reviews })
+    await view.press('e')
+    await view.type(EVIDENCE_MESSAGE_ID)
+    await view.press('return')
+    expect(await view.until('different message')).toContain('The evidence is for a different message.')
+    expect(reviews).toEqual([])
   })
 
   test('Escape on the form goes back to the panel', async () => {

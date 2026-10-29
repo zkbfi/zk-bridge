@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { compareHistoryEvents, type ChainReader, type HistoryEvent, type HistoryFilters, type ResolvedSetting } from '@zk-bridge/shared'
+import { compareHistoryEvents, redactConnectionText, type ChainReader, type HistoryEvent, type HistoryFilters, type ResolvedSetting } from '@zk-bridge/shared'
 import {
   HISTORY_PAGE_SIZE,
   NO_HISTORY_CHOICES,
@@ -111,6 +111,7 @@ describe('reading a page', () => {
     baseUrl: 'https://indexer.example.test',
     resolved: { indexerUrl: setting('https://indexer.example.test'), rpcUrls: rpc, backendUrl: null, msgboardIndexerUrl: null, archiveUrl: null, msgboardUrl: null },
     run: (operations) => (route === 'indexer' ? operations.viaIndexer() : operations.viaRpc()),
+    redact: (text) => redactConnectionText(text, Object.values(rpc).flatMap((entry) => (entry === null ? [] : [entry.value]))),
   })
 
   const indexerPage = { items: [{ kind: 'sent', chainId: 1, timestamp: 100, transactionHash: `0x${'1'.repeat(64)}`, messageId: `0x${'2'.repeat(64)}`, slot: null, status: 'sent' }], nextCursor: null, partial: false }
@@ -170,6 +171,16 @@ describe('reading a page', () => {
     await expect(readHistoryPage({ connection: connectionOf('rpc'), pair, filters: filters(), transport: broken, scans: failing })).rejects.toThrow()
     await new Promise((resolve) => setTimeout(resolve, 5))
     expect(failing.size).toBe(0)
+  })
+
+  test('an error of the chain scan reaches the caller with the keyed URL hidden', async () => {
+    const leaking: HistoryTransport = { ...fromChains, createReader: () => ({ ...createFakeChain(scenario, FIRST_CHAIN), getBlock: async () => { throw new Error('POST https://one.example.test/KEY1 failed') } }) as ChainReader }
+    const caught = await readHistoryPage({ connection: connectionOf('rpc'), pair, filters: filters(), transport: leaking }).then(
+      () => new Error('no error'),
+      (error: unknown) => error as Error,
+    )
+    expect(caught.message).toContain('failed')
+    expect(caught.message).not.toContain('KEY1')
   })
 
   test('a chain that is read only part way back says how far back it was read', async () => {
