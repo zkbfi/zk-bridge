@@ -20,6 +20,7 @@ import {
   fakeIndexer,
   fakeLightClient,
   fakeProver,
+  feedProver,
   feeOfferData,
   feedItem,
   memoryLogger,
@@ -76,7 +77,7 @@ function world(options: WorldOptions = {}) {
   const delivery = {
     direction: "first-to-second" as const,
     chain,
-    prover,
+    prover: feedProver(prover, items, Object.fromEntries(items.map((item) => [item.messageId, offer]))),
     indexer,
     source: { findMessageLogIndex: async () => 0 },
     deliveryRouter: DELIVERY_ROUTER,

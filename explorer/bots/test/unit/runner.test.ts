@@ -34,6 +34,7 @@ import {
   fakeIndexer,
   fakeLightClient,
   fakeProver,
+  feedProver,
   feeOfferData,
   feedItem,
   memoryLogger,
@@ -134,7 +135,7 @@ function world(options: WorldOptions = {}) {
   const delivery = {
     direction: "first-to-second" as const,
     chain,
-    prover,
+    prover: feedProver(prover, items, options.data ?? {}),
     indexer,
     source: { findMessageLogIndex: async () => 0 },
     deliveryRouter: DELIVERY_ROUTER,
@@ -362,8 +363,10 @@ describe("delivery decisions", () => {
     expect(unpriced.outcomes.records[0]).toMatchObject({ reason: "no-price-for-fee-token" });
 
     // 2,000,000 base units of a 6 decimal token are 2 tokens. At 5e15 wei a token the fee is 1e16 wei: it pays.
+    // The decimals come from the token on chain, not from the feed item.
     const priced = world({ items: [six], data, valuations: { [OTHER_TOKEN.toLowerCase()]: 5_000_000_000_000_000n } });
     priced.chain.feeTokens = 2_000_000n;
+    priced.chain.tokenDecimals = 6;
     expect((await priced.runner.sweep()).delivered).toBe(1);
     expect(priced.outcomes.records[0]).toMatchObject({ feeExpectedWei: 10_000_000_000_000_000n });
   });

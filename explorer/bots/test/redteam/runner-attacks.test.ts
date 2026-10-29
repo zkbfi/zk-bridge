@@ -7,7 +7,7 @@ import { encodeProofMessage, messageBridgeAbi, ORACLE_PROOF_MESSAGE_VERSION } fr
 import { assessProofPayload } from "@zk-bridge/shared/prover";
 import { describe, expect, it } from "vitest";
 import { sendBatch } from "../../src/runner/batch.ts";
-import { prepareItem, type DeliveryDependencies, type ReadyDelivery } from "../../src/runner/delivery.ts";
+import { prepareItem, quoteFee, type DeliveryDependencies, type ReadyDelivery } from "../../src/runner/delivery.ts";
 import { decideDelivery, valueFeeInWei } from "../../src/runner/fee.ts";
 import type { PrerequisiteLedger } from "../../src/runner/prerequisite-ledger.ts";
 import {
@@ -183,23 +183,32 @@ describe("red team: proof intake of the runner (malicious msgboard content)", ()
 });
 
 describe("red team: delivery decisions of the runner", () => {
-  it("ATTACK SUCCEEDS lying indexer: a fee offer that is not in the proven message makes the item ready to be paid for", async () => {
+  it("ATTACK lying indexer: a fee offer that is not in the proven message is skipped before any gas is spent (BLOCKED, was B-1)", async () => {
     // The indexer says message 1 relays tokens to the router with a large tip. The evidence that the prover builds from
-    // the source chain carries the real message, whose data is empty (no tip). The runner reads the offer from the
-    // indexer only and never compares it with `evidence.message.data`, so it pays gas for a delivery with no tip.
+    // the source chain carries the real message, whose data is empty (no tip).
     const item = feedItem({ id: 1, token: WRAPPED_NATIVE });
     const lie = feeOfferData({ director: DIRECTOR, value: 10n ** 18n, token: WRAPPED_NATIVE });
-    const evidence = evidenceFor(); // message.data is "0x": the true message carries no offer
+    const evidence = { ...evidenceFor(), message: { ...evidenceFor().message, gasLimit: Number(item.gasLimit) } };
     const deps = dependencies({ indexer: fakeIndexer([item], { [item.messageId]: lie }), prover: fakeProver({ evidence: () => evidence }) });
     const preparation = await prepareItem(deps, item, ledger());
     expect(evidence.message.data).toBe("0x");
-    expect(preparation.kind).toBe("ready");
+    expect(preparation).toMatchObject({ kind: "outcome", outcome: { status: "skipped", reason: "indexer-disagrees-with-evidence" } });
+    expect(deps.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(0);
+  });
+
+  it("ATTACK lying indexer: a gas limit that is not the proven one is skipped (BLOCKED, was B-1)", async () => {
+    const item = feedItem({ id: 1, token: WRAPPED_NATIVE });
+    const offer = feeOfferData({ director: DIRECTOR, value: 10n ** 18n, token: WRAPPED_NATIVE });
+    const evidence = { ...evidenceFor(), message: { ...evidenceFor().message, data: offer, gasLimit: Number(item.gasLimit) + 1 } };
+    const deps = dependencies({ indexer: fakeIndexer([item], { [item.messageId]: offer }), prover: fakeProver({ evidence: () => evidence }) });
+    const preparation = await prepareItem(deps, item, ledger());
+    expect(preparation).toMatchObject({ kind: "outcome", outcome: { status: "skipped", reason: "indexer-disagrees-with-evidence" } });
   });
 
   it("ATTACK SUCCEEDS evidence for another message: the runner does not compare evidence.message.messageId with the feed item", async () => {
     const item = feedItem({ id: 7, token: WRAPPED_NATIVE });
     const offer = feeOfferData({ director: DIRECTOR, value: 10n ** 18n, token: WRAPPED_NATIVE });
-    const evidence = evidenceFor(); // names message word(1), not word(7)
+    const evidence = { ...evidenceFor(), message: { ...evidenceFor().message, data: offer, gasLimit: Number(item.gasLimit) } }; // names message word(1), not word(7)
     const deps = dependencies({ indexer: fakeIndexer([item], { [item.messageId]: offer }), prover: fakeProver({ evidence: () => evidence }) });
     const preparation = await prepareItem(deps, item, ledger());
     expect(evidence.message.messageId).not.toBe(item.messageId);
@@ -274,12 +283,15 @@ describe("red team: tip accounting", () => {
     expect(valueFeeInWei({ ...base, valuationsWei: { [address(0x66).toLowerCase()]: -5n } }).ok).toBe(false);
   });
 
-  it("ATTACK SUCCEEDS lying indexer decimals: a copy token that claims 0 decimals inflates the tip value (valuation is per whole token)", () => {
-    // The decimals come from the indexer feed item. A lying feed (0 instead of 18) multiplies the value by 10^18.
-    const base = { fee: 1n, token: address(0x66), director: DIRECTOR, wrappedNative: WRAPPED_NATIVE, valuationsWei: { [address(0x66).toLowerCase()]: 10n ** 18n } };
-    const honest = valueFeeInWei({ ...base, decimals: 18 });
-    const lied = valueFeeInWei({ ...base, decimals: 0 });
-    expect(honest).toEqual({ ok: true, wei: 1n });
-    expect(lied).toEqual({ ok: true, wei: 10n ** 18n });
+  it("ATTACK lying indexer decimals: the runner values the tip with the decimals that the token reports on chain (BLOCKED, was B-1)", async () => {
+    // The feed item claims 0 decimals for an 18-decimal token. A lie of 0 would multiply the value by 10^18.
+    const token = address(0x66);
+    const deps = dependencies({ settings: { ...dependencies().settings, tokenValuationsWei: { [token.toLowerCase()]: 10n ** 18n } } });
+    deps.chain.feeTokens = 10n ** 17n;
+    const item = feedItem({ id: 1, token, decimals: 0 });
+    const quoted = await quoteFee(deps, item, { kind: "offer", director: DIRECTOR, value: 1000n, call: null }, 300_000n, 300_000n);
+    expect(quoted).toMatchObject({ ok: true, feeWei: 10n ** 17n });
+    // valueFeeInWei itself trusts the decimals that it is given.
+    expect(valueFeeInWei({ fee: 1n, token, director: DIRECTOR, wrappedNative: WRAPPED_NATIVE, valuationsWei: { [token.toLowerCase()]: 10n ** 18n }, decimals: 0 })).toEqual({ ok: true, wei: 10n ** 18n });
   });
 });

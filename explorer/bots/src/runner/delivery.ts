@@ -61,6 +61,7 @@ export type SkipReason =
   | "message-gas-above-batch-maximum"
   | "source-log-not-found"
   | "already-delivered"
+  | "indexer-disagrees-with-evidence"
   | "evidence-failed"
   | "fee-quote-failed"
   | "prerequisite-reverted"
@@ -183,15 +184,32 @@ export async function quoteFee(
   });
   const answer = await dependencies.chain.call({ to: dependencies.deliveryRouter as Address, data });
   const [feeTokens] = decodeFunctionResult({ abi: deliveryRouterAbi, functionName: "feeInfo", data: answer });
+  const decimals = await tokenDecimals(dependencies, token.address as Address);
+  if (decimals === null) return { ok: false, reason: "no-price-for-fee-token" };
   const value = valueFeeInWei({
     fee: feeTokens,
     token: token.address as Address,
-    decimals: token.decimals,
+    decimals,
     director,
     wrappedNative: dependencies.wrappedNative,
     valuationsWei: dependencies.settings.tokenValuationsWei,
   });
   return value.ok ? { ok: true, feeWei: value.wei, feeTokens, payout } : value;
+}
+
+/**
+ * The decimals of a fee token, read from the token on the destination chain: the indexer's word is not trusted, and a
+ * wrong value would scale the tip by a power of ten. The wrapped native token is valued per base unit and needs none.
+ * Null when the token does not answer, as a copy that is not deployed yet: the runner then cannot value the tip.
+ */
+async function tokenDecimals(dependencies: DeliveryDependencies, token: Address): Promise<number | null> {
+  if (token.toLowerCase() === dependencies.wrappedNative.toLowerCase()) return 0;
+  try {
+    const answer = await dependencies.chain.call({ to: token, data: encodeFunctionData({ abi: erc20Abi, functionName: "decimals" }) });
+    return decodeFunctionResult({ abi: erc20Abi, functionName: "decimals", data: answer });
+  } catch {
+    return null;
+  }
 }
 
 /** Sums the transfers of `token` to `account` in a list of logs. */
@@ -447,6 +465,11 @@ export async function prepareItem(dependencies: DeliveryDependencies, listed: Fe
     return done(skip(messageId, "evidence-failed", { detail: error instanceof Error ? error.message : String(error) }));
   }
   if (evidence.alreadyDelivered) return done(skip(messageId, "already-delivered", { detail: evidence.deliveryStatus }));
+  // The offer and the gas limit priced above come from the indexer. The prover read the message from the source chain,
+  // so an indexer that disagrees with it is lying or wrong, and the item is left before any gas is spent.
+  if (evidence.message.data.toLowerCase() !== message.data.toLowerCase() || evidence.message.gasLimit !== item.gasLimit) {
+    return done(skip(messageId, "indexer-disagrees-with-evidence", { detail: "the data or the gas limit of the message differs from the source chain" }));
+  }
 
   const approval = await approvePrerequisiteSpend(dependencies, ledger, { item, offer, evidence, messageId, assumedGas });
   if (approval.kind === "skip") return done(approval.outcome);

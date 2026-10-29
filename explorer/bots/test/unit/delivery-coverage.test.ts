@@ -5,7 +5,7 @@ import type { FeedItem } from "../../src/indexer/client.ts";
 import { prepareItem, type DeliveryDependencies } from "../../src/runner/delivery.ts";
 import { createPrerequisiteLedger } from "../../src/runner/prerequisite-ledger.ts";
 import type { PrerequisiteBudgetState } from "../../src/runner/state.ts";
-import { BRIDGE, MULTICALL, REWARD_ADDRESS, WRAPPED_NATIVE, address, emptyExecuteMessage, evidenceFor, fakeChain, fakeIndexer, fakeProver, feeOfferData, feedItem, memoryLogger, word, TEST_PROOF_CHECK_GAS, FEED_REQUIRED_GAS } from "../support/builders.ts";
+import { BRIDGE, MULTICALL, REWARD_ADDRESS, WRAPPED_NATIVE, address, emptyExecuteMessage, evidenceFor, fakeChain, fakeIndexer, fakeProver, feedProver, feeOfferData, feedItem, memoryLogger, word, TEST_PROOF_CHECK_GAS, FEED_REQUIRED_GAS } from "../support/builders.ts";
 
 const NOW = 1_000_000;
 /** Base fee 10 wei and 300,000 gas of the fake chain: one call costs 3,000,000 wei. */
@@ -34,7 +34,7 @@ function setup(options: SetupOptions = {}) {
   const dependencies: DeliveryDependencies = {
     direction: "first-to-second",
     chain,
-    prover,
+    prover: feedProver(prover, [item], { [item.messageId]: options.deliverWithoutOffer === true ? "0x" : offerData }),
     indexer: fakeIndexer([item], { [item.messageId]: options.deliverWithoutOffer === true ? "0x" : offerData }),
     source: { findMessageLogIndex: async () => (options.logIndex === undefined ? 0 : options.logIndex) },
     deliveryRouter: address(0x77),
@@ -92,6 +92,21 @@ describe("the preparation of an item: guards at the edge of external data", () =
     w.prover.evidence = async () => evidenceFor({ executeData: encodeFunctionData({ abi: messageBridgeAbi, functionName: "failedMessageDataHash", args: [word(1)] }) });
     await expect(w.prepare()).rejects.toThrow("the evidence calls failedMessageDataHash, not executeMessage");
     expect(w.chain.log.some((entry) => entry.kind === "send")).toBe(false);
+  });
+
+  it("skips an item whose message data in the indexer differs from the message that the prover read, and spends nothing", async () => {
+    const w = setup();
+    w.dependencies = { ...w.dependencies, prover: w.prover };
+    w.prover.evidence = async () => ({ ...evidenceFor(), message: { ...evidenceFor().message, gasLimit: Number(w.item.gasLimit) } });
+    expect(await outcomeOf(() => prepareItem(w.dependencies, w.item, w.ledger))).toMatchObject({ status: "skipped", reason: "indexer-disagrees-with-evidence" });
+    expect(w.chain.log.some((entry) => entry.kind === "send" || entry.kind === "simulate")).toBe(false);
+  });
+
+  it("cannot price a tip in a token that does not answer its decimals, such as a copy that is not deployed yet", async () => {
+    const w = setup({ item: feedItem({ id: 1 }) });
+    w.dependencies = { ...w.dependencies, settings: { ...w.dependencies.settings, tokenValuationsWei: { [address(0x66).toLowerCase()]: 10n ** 18n } } };
+    w.chain.tokenDecimals = null;
+    expect(await outcomeOf(() => prepareItem(w.dependencies, w.item, w.ledger))).toEqual({ status: "skipped", messageId: word(1), reason: "no-price-for-fee-token" });
   });
 
   it("cannot price the fee of an item that the indexer lists without a transfer, and asks the chain nothing", async () => {

@@ -112,6 +112,25 @@ export function fakeIndexer(items: readonly FeedItem[], data: Readonly<Record<st
   };
 }
 
+/**
+ * The prover as the runner meets it: the evidence names the message of the feed item that was sent in the requested
+ * transaction, with the data and the gas limit that the indexer lists for it, as the real prover reads them from the
+ * source chain. The answers still come from `prover`, so a test may set `prover.evidence` after this call.
+ */
+export function feedProver(prover: ProverBinary, items: readonly FeedItem[], data: Readonly<Record<string, Hex>>): ProverBinary {
+  return {
+    prove: (request) => prover.prove(request),
+    verify: (request) => prover.verify(request),
+    async evidence(request) {
+      const evidence = await prover.evidence(request);
+      const item = items.find((candidate) => candidate.sent?.transactionHash === request.transactionHash);
+      if (item === undefined) return evidence;
+      const message = { ...evidence.message, messageId: item.messageId, data: data[item.messageId] ?? "0x", gasLimit: item.gasLimit ?? evidence.message.gasLimit };
+      return { ...evidence, message };
+    },
+  };
+}
+
 /** The outcomes a runner wrote. */
 export function memoryOutcomes(): OutcomeSink & { records: OutcomeRecord[] } {
   const records: OutcomeRecord[] = [];
@@ -187,6 +206,8 @@ export interface FakeChain extends TransactionPort {
   feeTokens: bigint;
   /** The answer of `predictAddress` of the token factory: the address of the copy that a first transfer deploys. */
   predictedCopy: Address;
+  /** The answer of `decimals` of any token. Null: the call reverts, as at a copy that is not deployed yet. Default: 18. */
+  tokenDecimals: number | null;
   /** Replaces `feeTokens` with an answer that depends on the offered value and the gas of the question. */
   feeTokensOf: ((question: { readonly value: bigint; readonly gasUsed: bigint }) => bigint) | null;
   /** The sends that did not follow a simulation of the very same call. Must stay empty. */
@@ -253,6 +274,8 @@ function resultsOf(chain: FakeChain, shape: { readonly count: number; readonly h
 
 /** The selector of `TokenFactory.predictAddress`. */
 const PREDICT_ADDRESS = toFunctionSelector("predictAddress(uint256,address)");
+/** The selector of `decimals()` of a token. */
+const DECIMALS = toFunctionSelector("decimals()");
 
 export function fakeChain(): FakeChain {
   const log: FakeChain["log"] = [];
@@ -277,6 +300,7 @@ export function fakeChain(): FakeChain {
     simulateOverride: null,
     feeTokens: 0n,
     predictedCopy: OTHER_TOKEN,
+    tokenDecimals: 18,
     feeTokensOf: null,
     receiptSuccess: true,
     executionGas: null,
@@ -305,6 +329,10 @@ export function fakeChain(): FakeChain {
         return encodeFunctionResult({ abi: multicall3Abi, functionName: "aggregate3", result: results });
       }
       if (request.data.startsWith(PREDICT_ADDRESS)) return encodeFunctionResult({ abi: tokenFactoryAbi, functionName: "predictAddress", result: chain.predictedCopy });
+      if (request.data.startsWith(DECIMALS)) {
+        if (chain.tokenDecimals === null) throw new Error("execution reverted");
+        return encodeFunctionResult({ abi: erc20Abi, functionName: "decimals", result: chain.tokenDecimals });
+      }
       // The other read-only call a delivery makes is `feeInfo`.
       const question = decodeFunctionData({ abi: deliveryRouterAbi, data: request.data });
       if (question.functionName !== "feeInfo") throw new Error(`the fake chain does not answer ${question.functionName}`);
