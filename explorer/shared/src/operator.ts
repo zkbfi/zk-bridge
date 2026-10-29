@@ -275,6 +275,8 @@ const updateCallOf = (chain: OperatorChain, proof: Hex, publicValues: Hex, data:
   };
 };
 
+const LAYOUT_FUNCTIONS: ReadonlySet<string> = new Set(["addBlockRootsLayout", "addBlockHashLayout", "addHistoricalSummariesLayout"]);
+
 const prerequisiteStep = (entry: JsonObject, context: { chain: OperatorChain; index: number }): OperatorStep => {
   const where = `evidence.prerequisites[${context.index}]`;
   requireSameAddress(
@@ -290,6 +292,13 @@ const prerequisiteStep = (entry: JsonObject, context: { chain: OperatorChain; in
     );
   }
   requireEqual(decoded.functionName, readString(entry, "function", where), "the function in the calldata", "the function named in the file");
+  // Only the three layout functions may come before the execution. Any other bridge call, such as a send or the
+  // execution of another message, would run from the user's wallet under the title of a layout row.
+  if (!LAYOUT_FUNCTIONS.has(decoded.functionName)) {
+    throw new OperatorFileError(
+      `Prerequisite ${context.index} calls ${decoded.functionName}, which does not add a layout row.`,
+    );
+  }
   return {
     role: "prerequisite",
     reason: readString(entry, "reason", where),

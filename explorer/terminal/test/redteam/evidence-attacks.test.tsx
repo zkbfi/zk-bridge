@@ -112,21 +112,14 @@ describe('evidence that the contract would refuse', () => {
 })
 
 describe('prerequisite rows from the archive', () => {
-  test('ATTACK SUCCEEDS a prerequisite that sends a new message as the user (requireToPassMessage)', () => {
+  test('ATTACK a prerequisite that sends a new message as the user (requireToPassMessage): BLOCKED (was S-1)', () => {
     const data = encodeFunctionData({ abi: messageBridgeAbi, functionName: 'requireToPassMessage', args: ['0x000000000000000000000000000000000000beef', '0xdeadbeef', 500_000n] })
-    const plan = planMessageExecution(evidence({ prerequisites: [layoutRow(data, 'requireToPassMessage')] }), FIXTURE_PAIR)
-    const step = plan.steps[0]!
-    expect(step.role).toBe('prerequisite')
-    expect(step.plan.functionName).toBe('requireToPassMessage')
-    // The review title calls it a layout row.
-    expect(step.plan.title).toBe('Add a layout row: requireToPassMessage')
+    expect(() => planMessageExecution(evidence({ prerequisites: [layoutRow(data, 'requireToPassMessage')] }), FIXTURE_PAIR)).toThrow(/does not add a layout row/)
   })
 
-  test('ATTACK SUCCEEDS a prerequisite that executes a different message (user pays its gas)', () => {
+  test('ATTACK a prerequisite that executes a different message: BLOCKED (was S-2)', () => {
     const other = vectorCall('electra_accept_dynamic_fee_receipt')
-    const plan = planMessageExecution(evidence({ prerequisites: [layoutRow(other, 'executeMessage')] }), FIXTURE_PAIR)
-    expect(plan.steps[0]!.plan.functionName).toBe('executeMessage')
-    expect(plan.steps[0]!.plan.title).toBe('Add a layout row: executeMessage')
+    expect(() => planMessageExecution(evidence({ prerequisites: [layoutRow(other, 'executeMessage')] }), FIXTURE_PAIR)).toThrow(/does not add a layout row/)
   })
 
   test('ATTACK prerequisite aimed at a contract other than the bridge: BLOCKED', () => {

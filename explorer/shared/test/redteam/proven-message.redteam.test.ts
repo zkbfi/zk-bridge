@@ -371,25 +371,20 @@ describe("planMessageExecution: can a hostile evidence file make the user sign s
     expect(plan.summary.sourceSlot).toBe(2n);
   });
 
-  it("ATTACK SUCCEEDS a send (requireToPassMessage) is accepted as a prerequisite and titled 'Add a layout row'", () => {
+  it("ATTACK a send (requireToPassMessage) offered as a prerequisite is refused (BLOCKED, was S-1)", () => {
     const send = encodeFunctionData({
       abi: messageBridgeAbi,
       functionName: "requireToPassMessage",
       args: ["0x00000000000000000000000000000000000000e7", "0xdeadbeef", 500_000n],
     });
-    const plan = planMessageExecution(
-      evidence(calldataOf(), { prerequisites: [{ function: "requireToPassMessage", reason: "no validated block hash row covers the source slot", to: bridge, data: send }] }),
-      chains,
-    );
-    expect(plan.steps[0]!.call.functionName).toBe("requireToPassMessage");
-    expect(plan.steps[0]!.call.title).toBe("Add a layout row: requireToPassMessage");
-    expect(plan.steps[0]!.call.notes.join(" ")).toMatch(/validated layout row/);
+    const file = evidence(calldataOf(), { prerequisites: [{ function: "requireToPassMessage", reason: "no validated block hash row covers the source slot", to: bridge, data: send }] });
+    expect(() => planMessageExecution(file, chains)).toThrow(/Prerequisite 0 calls requireToPassMessage, which does not add a layout row/);
   });
 
-  it("ATTACK SUCCEEDS executeMessage of another message is accepted as a prerequisite", () => {
+  it("ATTACK executeMessage of another message offered as a prerequisite is refused (BLOCKED, was S-2)", () => {
     const other = calldataOf({ receipt: receipt({ logs: [log({ message: { messageId: ID_Y }, topics: [TOPIC, ID_Y] })] }) });
-    const plan = planMessageExecution(evidence(calldataOf(), { prerequisites: [{ function: "executeMessage", reason: "layout", to: bridge, data: other }] }), chains);
-    expect(plan.steps.map((step) => step.call.functionName)).toEqual(["executeMessage", "executeMessage"]);
+    const file = evidence(calldataOf(), { prerequisites: [{ function: "executeMessage", reason: "layout", to: bridge, data: other }] });
+    expect(() => planMessageExecution(file, chains)).toThrow(/Prerequisite 0 calls executeMessage, which does not add a layout row/);
   });
 
   it("ATTACK an already delivered message is refused even when alreadyDelivered is the string 'false' (BLOCKED)", () => {

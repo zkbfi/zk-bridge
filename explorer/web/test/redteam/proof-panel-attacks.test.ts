@@ -86,18 +86,14 @@ describe("evidence on the message page (fix 3473404)", () => {
     expect(urls).toEqual([]);
   });
 
-  it("ATTACK SUCCEEDS archive adds a prerequisite that sends a new message from the user's wallet", () => {
+  it("ATTACK archive adds a prerequisite that sends a new message from the user's wallet: BLOCKED (was S-1)", () => {
     const send = encodeFunctionData({ abi: messageBridgeAbi, functionName: "requireToPassMessage", args: ["0x000000000000000000000000000000000000beef", "0xdeadbeef", 500_000n] });
     const plan = planDelivery(
       reading(evidence({ prerequisites: [{ function: "requireToPassMessage", reason: "no validated block hash row covers the source slot", to: bridge, data: send }] })),
       FIXTURE_PAIR,
       EXPECTED,
     );
-    expect(plan.kind).toBe("ready");
-    if (plan.kind !== "ready") return;
-    expect(plan.steps[0]!.role).toBe("prerequisite");
-    expect(plan.steps[0]!.step.plan.title).toBe("Add a layout row: requireToPassMessage");
-    expect(plan.steps[0]!.step.plan.data).toBe(send);
+    expect(plan.kind).toBe("unavailable");
   });
 });
 
