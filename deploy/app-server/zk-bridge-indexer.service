@@ -1,0 +1,66 @@
+# The explorer indexer (explorer/indexer, Ponder). deploy.sh installs this file. It listens on 127.0.0.1 only; Caddy
+# passes on its public routes (Caddyfile).
+#
+#   /etc/zk-bridge/indexer/indexer.env    the endpoints, EXPLORER_RPC_URL_<chainId> and EXPLORER_BEACON_URL_<chainId>,
+#                                         and any override of the settings below (config/indexer/indexer.env.example)
+#   /etc/zk-bridge/deployment.json        contract addresses of the pair (written by docker/deploy.sh)
+#   /opt/zk-bridge/current/release.env    written by deploy.sh: DATABASE_SCHEMA, one schema per indexer build
+#   /var/lib/zk-bridge-indexer            what Ponder writes at start (see below)
+#
+# Ponder writes into its project folder at start: ponder-env.d.ts, .ponder/ (the Vite cache) and generated/
+# (schema.graphql). The release is owned by root and read-only here, so deploy.sh points those three paths at
+# /var/lib/zk-bridge-indexer with symbolic links. The data itself is in Postgres, on the local socket with peer login.
+[Unit]
+Description=zk-bridge explorer indexer (Ponder)
+Wants=network-online.target postgresql.service
+After=network-online.target postgresql.service
+ConditionPathExists=/etc/zk-bridge/indexer/indexer.env
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=zkb_indexer
+Group=zkb_indexer
+WorkingDirectory=/opt/zk-bridge/current/explorer/indexer
+Environment=NODE_ENV=production
+Environment=DATABASE_URL=postgresql:///zkb_indexer?host=/var/run/postgresql
+Environment=EXPLORER_DEPLOYMENT_FILE=/etc/zk-bridge/deployment.json
+Environment=PORT=42069
+# A later file wins: the operator's file can override anything above, the schema too.
+EnvironmentFile=/opt/zk-bridge/current/release.env
+EnvironmentFile=/etc/zk-bridge/indexer/indexer.env
+ExecStart=/opt/zk-bridge/current/explorer/indexer/node_modules/.bin/ponder start --hostname 127.0.0.1 --log-format json
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=60
+
+# Sandbox. Writable: the state directory, and a private /tmp.
+ReadWritePaths=/var/lib/zk-bridge-indexer
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# No MemoryDenyWriteExecute: the V8 JIT needs memory that is writable and executable.
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

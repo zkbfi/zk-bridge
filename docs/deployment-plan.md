@@ -41,6 +41,17 @@ server with NVMe disks becomes the better choice only when we run our own chain 
 - `deploy/app-server/provision.sh` prepares the server and can run again: Node.js 24, Rust 1.93.0 in `/opt/rust`, one
   system user per service (`zkb_backend`, `zkb_indexer`, `zkb_bots`), Postgres on the local socket only with peer login
   for the indexer, and Caddy as the TLS proxy. It installs no service of ours and no secret.
+- `deploy/app-server/deploy.sh <git-ref>` deploys one commit, as root on the server (`ssh zkbfi-app 'bash -s' -- <ref> <
+  deploy/app-server/deploy.sh`). It unpacks the commit into `/opt/zk-bridge/releases/<commit>`, runs `pnpm install`,
+  builds the prover there (`--no-default-features`, into `bin/`), points `/opt/zk-bridge/current` at it, installs the
+  four systemd units and restarts each service whose files exist. A service without its files is skipped. Each unit
+  runs as its own user and may write only its directory in `/var/lib`.
+- Configuration goes into `/etc/zk-bridge/<service>/`, mode 0640, owner root, group of the service user. Templates are in
+  `deploy/app-server/config/`. Backend: `backend.json` and `backend.env`. Indexer: `indexer.env`. Bots: `bots.json`,
+  `prover-setup.json` and `bots.env`, plus `runner.env` with the wallet key, which only the runner's unit loads. The
+  deployment file of the pair is `/etc/zk-bridge/deployment.json`, mode 0644.
+- A change to the indexer or the shared code gives the indexer a new Postgres schema, so it indexes again from the start.
+  The old schema stays until someone drops it (`ponder prune`).
 - Host names, one per function, each passing only its own routes (`deploy/app-server/Caddyfile`; the names come from
   `/etc/caddy/zkb.env`, see `caddy.env.example`): `prove.zkb.fi` (requests and latest proofs), `webhook.zkb.fi` (the
   prover's callback; the backend's `publicUrl`), `archive.zkb.fi` (evidence), `indexer.zkb.fi` (the indexer's `/api/*`
@@ -85,7 +96,7 @@ Before launch, check that each provider:
   still prove;
 - has rate limits above the read rate of the indexer and the archive;
 - keeps keys out of addresses where it can. The backend removes configured endpoint addresses from its logs, but an
-  address with a key in it still sits in the configuration file (mode 0600).
+  address with a key in it still sits in the configuration file (mode 0640, readable by the backend's user only).
 
 ## Secrets
 

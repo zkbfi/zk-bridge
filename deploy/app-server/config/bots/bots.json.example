@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "setupFile": "/etc/zk-bridge/bots/prover-setup.json",
+  "deploymentFile": "/etc/zk-bridge/deployment.json",
+  "stateDirectory": "/var/lib/zk-bridge-bots",
+  "secretStore": { "kind": "none" },
+  "logLevel": "info",
+  "maximumMessageBytes": 8192,
+  "publisher": {
+    "prover": { "binary": "/opt/zk-bridge/current/bin/zk-bridge-prover", "timeoutSeconds": 1800 },
+    "apiKeyVariable": "RUNPOD_API_KEY",
+    "remote": { "mode": "load-balancing" },
+    "pollSeconds": 30,
+    "republishSeconds": 600,
+    "retryBackoffSeconds": 120,
+    "indexerUrl": "http://127.0.0.1:42069"
+  },
+  "runner": {
+    "prover": { "binary": "/opt/zk-bridge/current/bin/zk-bridge-prover", "timeoutSeconds": 600 },
+    "indexerUrl": "http://127.0.0.1:42069",
+    "signer": { "kind": "private-key", "key": "env:RUNNER_PRIVATE_KEY" },
+    "pollSeconds": 30,
+    "maximumLossPercent": 20,
+    "deliverWithoutOffer": false,
+    "maximumBatchSize": 5,
+    "maximumBatchGas": 6000000,
+    "tokenValuationsWei": {},
+    "proofCheckGas": 400000,
+    "maximumDeliveriesPerSweep": 10,
+    "maximumPrerequisiteRounds": 4,
+    "prerequisiteGasFallback": 300000,
+    "maximumPrerequisiteSpendPerSweepWei": "50000000000000000",
+    "maximumPrerequisiteSpendPerDayWei": "200000000000000000",
+    "maximumUnrecoveredPrerequisiteLossWei": "100000000000000000",
+    "prerequisiteLossRefusalSeconds": 1800,
+    "receiptTimeoutSeconds": 300
+  }
+}

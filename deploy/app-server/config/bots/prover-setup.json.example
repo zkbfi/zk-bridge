@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "endpointUrl": "https://example.api.runpod.ai",
+  "runpodApiKey": { "source": "environment", "variable": "RUNPOD_API_KEY" },
+  "chains": {
+    "1": {
+      "rpc": { "source": "environment", "variable": "EXPLORER_RPC_URL_1" },
+      "beacon": { "source": "environment", "variable": "EXPLORER_BEACON_URL_1" }
+    },
+    "369": {
+      "rpc": { "source": "environment", "variable": "EXPLORER_RPC_URL_369" },
+      "beacon": { "source": "environment", "variable": "EXPLORER_BEACON_URL_369" }
+    }
+  },
+  "msgboardUrl": { "source": "environment", "variable": "MSGBOARD_URL" },
+  "pair": "eth-pls",
+  "directions": ["first-to-second", "second-to-first"],
+  "policy": { "proveWhenTransferWaits": true, "intervalSeconds": 3600 }
+}

@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "pair": "eth-pls",
+  "deploymentFile": "/etc/zk-bridge/deployment.json",
+  "databasePath": "/var/lib/zk-bridge-backend/backend.sqlite",
+  "listen": { "host": "127.0.0.1", "port": 8787 },
+  "trustForwardedHeader": true,
+  "trustedProxyHops": 1,
+  "modules": ["requests", "webhook", "msgboard-indexer", "archive"],
+  "publicUrl": "https://webhook.example.org",
+  "prover": { "binary": "/opt/zk-bridge/current/bin/zk-bridge-prover", "timeoutSeconds": 1800 },
+  "remote": { "endpoint": "https://example.api.runpod.ai" },
+  "runpodApiKeyVariable": "RUNPOD_API_KEY",
+  "webhookBearerVariable": "BACKEND_WEBHOOK_BEARER",
+  "rpcUrls": {
+    "1": "https://ethereum-rpc.example.org",
+    "369": "https://pulsechain-rpc.example.org"
+  },
+  "beaconUrls": {
+    "1": "https://ethereum-beacon.example.org",
+    "369": "https://pulsechain-beacon.example.org"
+  },
+  "msgboardUrl": "wss://msgboard.example.org",
+  "acceptOracleProof": false,
+  "limits": {
+    "requestsPerCallerPerMinute": 10,
+    "requestsPerUnknownCallerPerMinute": 2,
+    "globalRequestsPerMinute": 120,
+    "requestRetentionHours": 24,
+    "secondsBetweenJobsPerDirection": 120,
+    "secondsBeforeRetryAfterFailure": 60
+  },
+  "indexerUrl": "http://127.0.0.1:42069"
+}

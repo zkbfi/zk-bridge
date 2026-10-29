@@ -1,0 +1,63 @@
+# The delivery runner bot (explorer/bots): checks proof messages, posts light client updates and delivers covered
+# transfers for their fee. It holds the hot wallet key and opens no port. deploy.sh installs this file.
+#
+#   /etc/zk-bridge/bots/bots.json            the bot settings, shared with the publisher (config/bots/bots.json.example)
+#   /etc/zk-bridge/bots/prover-setup.json    endpoints, pair and directions, as references (config/bots/prover-setup.json.example)
+#   /etc/zk-bridge/bots/bots.env             secrets of both bots: RunPod key, endpoints (config/bots/bots.env.example)
+#   /etc/zk-bridge/bots/runner.env           the wallet key, RUNNER_PRIVATE_KEY (config/bots/runner.env.example)
+#   /etc/zk-bridge/deployment.json           contract addresses of the pair (written by docker/deploy.sh)
+#   /var/lib/zk-bridge-bots                  state files (spend and reservations), the outcome log, and tmp/
+#
+# The runner calls /opt/zk-bridge/current/bin/zk-bridge-prover (verify, evidence) as a child process.
+[Unit]
+Description=zk-bridge delivery runner bot
+Wants=network-online.target
+After=network-online.target zk-bridge-indexer.service
+ConditionPathExists=/etc/zk-bridge/bots/bots.json
+ConditionPathExists=/etc/zk-bridge/bots/runner.env
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=zkb_bots
+Group=zkb_bots
+WorkingDirectory=/opt/zk-bridge/current/explorer/bots
+EnvironmentFile=/etc/zk-bridge/bots/bots.env
+EnvironmentFile=/etc/zk-bridge/bots/runner.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node bin/zk-bridge-bot.mjs runner --config /etc/zk-bridge/bots/bots.json
+Restart=on-failure
+RestartSec=10
+# The runner stops after its current step, which can wait for a receipt. Give it time before SIGKILL.
+TimeoutStopSec=330
+
+# Sandbox. Writable: the state directory, and a private /tmp (tsx keeps its cache there).
+ReadWritePaths=/var/lib/zk-bridge-bots
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# No MemoryDenyWriteExecute: the V8 JIT needs memory that is writable and executable.
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

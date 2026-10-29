@@ -1,0 +1,59 @@
+# The zk-bridge backend (explorer/backend): proof requests, the prover's webhook, the latest proofs and the evidence
+# archive. deploy.sh installs this file. It listens on 127.0.0.1 only; Caddy is the public side (Caddyfile).
+#
+#   /etc/zk-bridge/backend/backend.json   settings and endpoints (config/backend/backend.json.example)
+#   /etc/zk-bridge/backend/backend.env    secrets: RUNPOD_API_KEY, BACKEND_WEBHOOK_BEARER (config/backend/backend.env.example)
+#   /etc/zk-bridge/deployment.json        contract addresses of the pair (written by docker/deploy.sh)
+#   /var/lib/zk-bridge-backend            the SQLite file, and tmp/ for the prover's config file of each run
+#
+# The requests and archive modules start /opt/zk-bridge/current/bin/zk-bridge-prover as a child process. The child
+# inherits this sandbox: it reads its config file under tmp/ and talks to the network, nothing else.
+[Unit]
+Description=zk-bridge backend
+Wants=network-online.target
+After=network-online.target zk-bridge-indexer.service
+ConditionPathExists=/etc/zk-bridge/backend/backend.json
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=zkb_backend
+Group=zkb_backend
+WorkingDirectory=/opt/zk-bridge/current/explorer/backend
+EnvironmentFile=/etc/zk-bridge/backend/backend.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node bin/zk-bridge-backend.mjs --config /etc/zk-bridge/backend/backend.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Sandbox. Writable: the state directory, and a private /tmp (tsx keeps its cache there).
+ReadWritePaths=/var/lib/zk-bridge-backend
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# No MemoryDenyWriteExecute: the V8 JIT needs memory that is writable and executable.
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
