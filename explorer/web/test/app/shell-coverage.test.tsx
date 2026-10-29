@@ -87,6 +87,18 @@ describe("the shell banner", () => {
     expect(screen.queryByText(/Sample data/)).toBeNull();
   });
 
+  it("says TESTNET on every page of a testnet pair, and nothing on the mainnet pair", () => {
+    const base = buildTestServices();
+    const { unmount } = renderWithWallet(<Shell />, {
+      wallet: disconnectedWallet(),
+      services: { configuration: { ...base.configuration, dataMode: "live", pairName: "sepolia-pls943" } },
+    });
+    expect(screen.getByText("Testnet: Sepolia and PulseChain testnet v4. Test coins only; nothing here has real value.")).toBeInTheDocument();
+    unmount();
+    renderWithWallet(<Shell />, { wallet: disconnectedWallet(), services: { configuration: { ...base.configuration, dataMode: "live", pairName: "eth-pls" } } });
+    expect(screen.queryByText(/^Testnet:/)).toBeNull();
+  });
+
   it("shows the short account of a connected wallet and No wallet otherwise", () => {
     const { unmount } = renderWithWallet(<Shell />, { wallet: connectedWallet() });
     expect(screen.getByText(`${FIXTURE_ACCOUNT.slice(0, 6)}…${FIXTURE_ACCOUNT.slice(-4)}`)).toBeInTheDocument();

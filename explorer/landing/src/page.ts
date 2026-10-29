@@ -11,6 +11,8 @@ export type LandingConfig = {
   downloadBaseUrl: string;
   gateways: string[];
   publicKeys: JsonWebKey[];
+  /** A line shown above everything else, such as which network a test release runs on. Optional. */
+  notice?: string;
 };
 
 /** What the page shows. */
@@ -124,9 +126,16 @@ function body(state: LandingState): string {
   return verifiedBody(state);
 }
 
-/** Renders the page body as HTML text. Every value from data is escaped. A failed check yields no link. */
-export function renderLanding(state: LandingState): string {
-  return `<h1>${escapeHtml(state.title)}</h1>${body(state)}`;
+function noticeLine(notice: string | null | undefined): string {
+  return notice === null || notice === undefined || notice.trim() === "" ? "" : `<p class="notice" role="note">${escapeHtml(notice)}</p>`;
+}
+
+/**
+ * Renders the page body as HTML text. Every value from data is escaped. A failed check yields no link. The notice of
+ * the page settings, when set, stands above the result in every state.
+ */
+export function renderLanding(state: LandingState, notice: string | null = null): string {
+  return `<h1>${escapeHtml(state.title)}</h1>${noticeLine(notice)}${body(state)}`;
 }
 
 async function fetchBytes(url: string): Promise<Uint8Array> {
@@ -195,6 +204,6 @@ function safeStorage(): Storage | null {
 export async function startLanding(config: LandingConfig): Promise<void> {
   const target = document.getElementById("app");
   if (target === null) return;
-  target.innerHTML = renderLanding({ kind: "loading", title: config.title });
-  target.innerHTML = renderLanding(await loadLandingState(config, safeStorage()));
+  target.innerHTML = renderLanding({ kind: "loading", title: config.title }, config.notice);
+  target.innerHTML = renderLanding(await loadLandingState(config, safeStorage()), config.notice);
 }

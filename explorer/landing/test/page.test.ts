@@ -42,6 +42,17 @@ test("shows the loading text and the sequence note", () => {
   assert.ok(renderLanding(verified(sampleManifest, "note here")).includes("note here"));
 });
 
+test("shows the notice of the page settings in every state, escaped, above the result", () => {
+  const notice = "TESTNET <b>only</b>";
+  for (const state of [{ kind: "loading", title: "T" } as LandingState, { kind: "failed", title: "T", reason: "bad" } as LandingState, verified()]) {
+    const html = renderLanding(state, notice);
+    assert.ok(html.includes('<p class="notice" role="note">TESTNET &lt;b&gt;only&lt;/b&gt;</p>'), state.kind);
+    assert.ok(html.indexOf("notice") < html.indexOf(state.kind === "loading" ? "Checking" : state.kind === "failed" ? "Warning" : "signature"));
+  }
+  assert.ok(!renderLanding(verified()).includes('class="notice"'));
+  assert.ok(!renderLanding(verified(), "  ").includes('class="notice"'));
+});
+
 async function withFetch<T>(files: Record<string, Uint8Array>, run: () => Promise<T>): Promise<T> {
   const original = globalThis.fetch;
   globalThis.fetch = (async (url: string) =>
