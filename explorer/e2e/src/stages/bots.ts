@@ -371,8 +371,11 @@ const skippedByRunner = (context: Context): Map<string, string> => {
 const copierBatch = async (context: Context, fresh: readonly MessageRecord[], delivered: MessageRecord, failures: string[]): Promise<void> => {
   const destination = chainOf(context, "b");
   const calls: BatchedCall[] = [];
+  // The stale update is the check that the light client refuses an update behind its head. Without one the check
+  // would pass without running, so a missing proof fails the stage.
   const staleProof = findStaleUpdate(context);
-  if (staleProof !== null) calls.push({ target: destination.deployment.light_client, callData: staleProof });
+  if (staleProof === null) failures.push("no stale update proof was found, so the copier batch cannot check that a stale update fails");
+  else calls.push({ target: destination.deployment.light_client, callData: staleProof });
   for (const message of fresh) {
     const evidence = await readyEvidence(context, message, "bots");
     calls.push({ target: destination.deployment.delivery_router, callData: evidence.execute.data });
@@ -388,6 +391,7 @@ const copierBatch = async (context: Context, fresh: readonly MessageRecord[], de
   const problems: string[] = [];
   if (reading.deliveries !== fresh.length) problems.push(`the batch delivered ${reading.deliveries} messages, expected ${fresh.length}`);
   if (failed !== expectedFailures) problems.push(`${failed} calls failed, expected ${expectedFailures}`);
+  if (staleProof !== null && results[0]?.success !== false) problems.push("the stale update did not fail");
   const last = results.at(-1);
   // The last call repeats a delivery. The bridge must refuse it by name, not by a bare revert.
   if (last === undefined || last.success || errorNameOf(last.returnData) !== "AlreadyDelivered") problems.push(`the repeated delivery did not fail with AlreadyDelivered (${last === undefined ? "no result" : errorNameOf(last.returnData)})`);
