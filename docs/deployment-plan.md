@@ -35,7 +35,7 @@ server with NVMe disks becomes the better choice only when we run our own chain 
   build (no `sp1` features) and must be built for `aarch64-unknown-linux-gnu`. The `sp1` features run only in the
   RunPod worker image.
 - Hetzner firewall `zkbfi-app`: inbound TCP 22, 80 and 443 and ICMP from anywhere; everything else is closed. SSH takes
-  keys only (`PasswordAuthentication no`). The Hetzner key `zkbfi-operator` is the 1Password key `DigitalOcean (zkb.fi)`.
+  keys only (`PasswordAuthentication no`). The Hetzner key `zkbfi-operator` is the 1Password key `zkbfi-app SSH key`.
   The 1Password agent offers many keys, so connect with `IdentitiesOnly yes` and that key's public file, or sshd stops
   after too many failed keys.
 - `deploy/app-server/provision.sh` prepares the server and can run again: Node.js 24, Rust 1.93.0 in `/opt/rust`, one
@@ -114,7 +114,7 @@ All secrets live in the 1Password vault `zkb.fi` and reach a server only as envi
 | Release signing key | the release machine only, read at the moment of use |
 | Hetzner API token: item `hetzner`, field `api-token` (project `zkb-fi`, read and write) | the operator's machine, through `op run` |
 | Cloudflare token for DNS: item `Cloudflare`, field `key` (DNS Edit and Zone Read, zone zkb.fi only; the wrangler login cannot change DNS) | the operator's machine, through `op run` |
-| SSH key `DigitalOcean (zkb.fi)` (also for the Hetzner server; rename it in the 1Password app, the CLI cannot edit SSH keys) | the operator's machine, through the 1Password SSH agent |
+| SSH key `zkbfi-app SSH key` | the operator's machine, through the 1Password SSH agent |
 
 ## Measurements
 
