@@ -5,7 +5,7 @@ import { createProverFactories } from "../src/requests/job-prover.ts";
 import { DEFAULT_RATE_LIMITS } from "../src/requests/rate-limit.ts";
 import { createRequestService } from "../src/requests/service.ts";
 import { openStorage } from "../src/storage.ts";
-import { PAIR, SECRETS, makeClock, makeConfig, memoryLogger } from "./support.ts";
+import { PAIR, SECRETS, makeClock, makeConfig, memoryLogger, fakeProofNeed } from "./support.ts";
 
 function recordingExecutor() {
   const runs: Array<{ spec: CommandSpec; file: string }> = [];
@@ -25,12 +25,13 @@ describe("the prover of a job", () => {
     const service = createRequestService({
       storage: openStorage(":memory:"),
       proverForJob: factories.proverForJob,
+      readProofNeed: fakeProofNeed().read,
       now: makeClock().now,
       limits: DEFAULT_RATE_LIMITS,
       proverTimeoutMilliseconds: 1_800_000,
       logger: log.logger,
     });
-    const answer = service.submit({ pair: "eth-pls", direction: "first-to-second", reason: "user", caller: "a" });
+    const answer = await service.submit({ pair: "eth-pls", direction: "first-to-second", reason: "user", caller: "a" });
     if ("refused" in answer) throw new Error("refused");
     await service.settled();
 

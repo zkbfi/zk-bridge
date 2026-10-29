@@ -3,7 +3,7 @@ import { CommandTimeoutError, ProverCommandError } from "@zk-bridge/shared/prove
 import { DEFAULT_RATE_LIMITS } from "../src/requests/rate-limit.ts";
 import { createRequestService } from "../src/requests/service.ts";
 import { openStorage } from "../src/storage.ts";
-import { makeBackend, makeClock, memoryLogger, makeConfig, makeProofPackage, postFrom, controllableProver } from "./support.ts";
+import { makeBackend, makeClock, memoryLogger, makeConfig, makeProofPackage, postFrom, controllableProver, fakeProofNeed } from "./support.ts";
 
 const countJobs = (storage: ReturnType<typeof makeBackend>["storage"]) =>
   (storage.database.prepare("SELECT count(*) AS total FROM jobs").get() as { total: number }).total;
@@ -58,6 +58,75 @@ describe("request coalescing", () => {
     const backend = makeBackend();
     await post(backend, "10.0.0.1", { direction: "second-to-first" });
     expect(backend.prover.calls).toEqual([{ direction: "second-to-first" }]);
+  });
+});
+
+describe("whether the chains need a proof", () => {
+  const countRequests = (storage: ReturnType<typeof makeBackend>["storage"]) =>
+    (storage.database.prepare("SELECT count(*) AS total FROM requests").get() as { total: number }).total;
+
+  it("starts no job and answers 409 when no message waits and the head is fresh, whatever the reason of the request", async () => {
+    const backend = makeBackend({ proofNeed: fakeProofNeed({ needed: false }) });
+    for (const reason of ["user", "keep-alive"]) {
+      const answer = await post(backend, "10.0.0.1", { reason });
+      expect(answer.status).toBe(409);
+      expect(await answer.json()).toEqual({ error: "nothing-to-prove" });
+    }
+    expect(countJobs(backend.storage)).toBe(0);
+    expect(countRequests(backend.storage)).toBe(0);
+    expect(backend.prover.calls).toEqual([]);
+  });
+
+  it("asks the indexer about the direction of the request", async () => {
+    const backend = makeBackend();
+    await post(backend, "10.0.0.1", { direction: "second-to-first" });
+    expect(backend.proofNeed.reads).toEqual([{ direction: "second-to-first", now: backend.clock.now() }]);
+  });
+
+  it("answers 503 with Retry-After when the indexer cannot answer, and logs why", async () => {
+    const backend = makeBackend({ proofNeed: fakeProofNeed(new Error("the chain indexer answered 500 for the feed")) });
+    const answer = await post(backend, "10.0.0.1");
+    expect(answer.status).toBe(503);
+    expect(answer.headers.get("Retry-After")).toBe("30");
+    expect(await answer.json()).toEqual({ error: "cannot-check", retryAfterSeconds: 30 });
+    expect(countJobs(backend.storage)).toBe(0);
+    expect(backend.log.lines.join("\n")).toContain("proof_need_unknown");
+  });
+
+  it("does not ask the indexer for a request that joins an active job, or that a rate limit refuses", async () => {
+    const backend = makeBackend({ config: makeConfig({ limits: { requestsPerCallerPerMinute: 1 } }) });
+    expect((await post(backend, "10.0.0.1")).status).toBe(202);
+    expect((await post(backend, "10.0.0.2")).status).toBe(202);
+    expect((await post(backend, "10.0.0.1")).status).toBe(429);
+    backend.prover.settleAll({ kind: "up-to-date" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((await post(backend, "10.0.0.3")).status).toBe(429);
+    expect(backend.proofNeed.reads).toHaveLength(1);
+  });
+
+  it("reuses an answer of the indexer for 15 seconds, so a burst of requests reads it once", async () => {
+    const backend = makeBackend({ proofNeed: fakeProofNeed({ needed: false }) });
+    for (let index = 0; index < 5; index += 1) expect((await post(backend, `10.0.2.${index}`)).status).toBe(409);
+    expect(backend.proofNeed.reads).toHaveLength(1);
+    backend.proofNeed.answer({ needed: true, why: "keep-alive" });
+    backend.clock.advance(15_000);
+    expect((await post(backend, "10.0.2.9")).status).toBe(202);
+    expect(backend.proofNeed.reads).toHaveLength(2);
+  });
+
+  it("does not keep a failed read: the next request asks again", async () => {
+    const backend = makeBackend({ proofNeed: fakeProofNeed(new Error("down")) });
+    expect((await post(backend, "10.0.0.1")).status).toBe(503);
+    backend.proofNeed.answer({ needed: true, why: "waiting-message" });
+    expect((await post(backend, "10.0.0.2")).status).toBe(202);
+  });
+
+  it("concurrent requests share one read and still make one job", async () => {
+    const backend = makeBackend();
+    const answers = await Promise.all(Array.from({ length: 10 }, (_, index) => post(backend, `10.0.3.${index}`)));
+    expect(answers.map((answer) => answer.status)).toEqual(Array(10).fill(202));
+    expect(backend.proofNeed.reads).toHaveLength(1);
+    expect(countJobs(backend.storage)).toBe(1);
   });
 });
 
@@ -378,17 +447,18 @@ describe("claiming a job", () => {
     const service = createRequestService({
       storage,
       proverForJob: () => prover.binary,
-      // The third reading of the clock is the claim. A competing writer fails the job just before it.
+      readProofNeed: fakeProofNeed().read,
+      // The fourth reading of the clock is the claim. A competing writer fails the job just before it.
       now: () => {
         calls += 1;
-        if (calls === 3) storage.database.exec("UPDATE jobs SET status = 'failed'");
+        if (calls === 4) storage.database.exec("UPDATE jobs SET status = 'failed'");
         return clock.now();
       },
       limits: DEFAULT_RATE_LIMITS,
       proverTimeoutMilliseconds: 1_800_000,
       logger: log.logger,
     });
-    const answer = service.submit({ pair: "eth-pls", direction: "first-to-second", reason: "user", caller: "a" });
+    const answer = await service.submit({ pair: "eth-pls", direction: "first-to-second", reason: "user", caller: "a" });
     expect("jobId" in answer).toBe(true);
     await service.settled();
     expect(prover.calls).toEqual([]);

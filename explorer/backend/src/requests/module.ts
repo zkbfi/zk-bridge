@@ -39,6 +39,7 @@ function serviceFor(context: BackendModuleContext): RequestService {
   const created = createRequestService({
     storage: context.storage,
     proverForJob: context.proverForJob,
+    readProofNeed: context.readProofNeed,
     now: context.now,
     limits: context.config.limits,
     proverTimeoutMilliseconds: context.config.prover.timeoutSeconds * 1000,
@@ -90,12 +91,12 @@ export function register(app: Hono, context: BackendModuleContext): void {
       const body = requestBodySchema.safeParse(await request.req.json().catch(() => null));
       if (!body.success) return request.json({ error: "the request body is not valid" }, 400);
       if (body.data.pair !== context.config.pair) return request.json({ error: `this backend serves the pair ${context.config.pair}` }, 400);
-      const result = service.submit({ ...body.data, caller: callerOf(request, context.config) });
-      if ("refused" in result) {
-        request.header("Retry-After", String(result.retryAfterSeconds));
-        return request.json({ error: "rate-limited", retryAfterSeconds: result.retryAfterSeconds }, 429);
-      }
-      return request.json(result, 202);
+      const result = await service.submit({ ...body.data, caller: callerOf(request, context.config) });
+      if (!("refused" in result)) return request.json(result, 202);
+      // The chains need no proof now: no message waits for a head and the head is fresh. Asking again changes nothing.
+      if (result.refused === "nothing-to-prove") return request.json({ error: "nothing-to-prove" }, 409);
+      request.header("Retry-After", String(result.retryAfterSeconds));
+      return request.json({ error: result.refused, retryAfterSeconds: result.retryAfterSeconds }, result.refused === "cannot-check" ? 503 : 429);
     },
   );
 

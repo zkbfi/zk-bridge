@@ -4,6 +4,7 @@ import type { ProverBinary } from "@zk-bridge/shared/prover";
 import type { BackendConfig, ModuleName } from "./config.ts";
 import type { ModuleHealth } from "./health.ts";
 import type { Logger } from "./logger.ts";
+import type { ProofNeedReader } from "./requests/proof-need.ts";
 import type { Storage } from "./storage.ts";
 
 /** What every module receives. */
@@ -16,6 +17,8 @@ export type BackendModuleContext = {
   readonly prover: ProverBinary;
   /** The prover wrapper for one proving job, with the webhook of that job. Used by the request service. */
   readonly proverForJob: (jobId: string) => ProverBinary;
+  /** Whether a direction needs a proof, from the chain indexer. Used by the request service before it starts a job. */
+  readonly readProofNeed: ProofNeedReader;
   /** Milliseconds since 1970. */
   readonly now: () => number;
   readonly logger: Logger;

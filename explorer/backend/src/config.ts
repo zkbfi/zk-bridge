@@ -56,6 +56,7 @@ export const backendConfigSchema = z
         secondsBetweenJobsPerDirection: positiveInteger.default(DEFAULT_RATE_LIMITS.secondsBetweenJobsPerDirection),
         secondsBeforeRetryAfterFailure: positiveInteger.default(DEFAULT_RATE_LIMITS.secondsBeforeRetryAfterFailure),
         jobsPerDirectionPerDay: positiveInteger.default(DEFAULT_RATE_LIMITS.jobsPerDirectionPerDay),
+        keepAliveSeconds: positiveInteger.default(DEFAULT_RATE_LIMITS.keepAliveSeconds),
       })
       .strict()
       .default(DEFAULT_RATE_LIMITS),
@@ -73,7 +74,10 @@ export const backendConfigSchema = z
      * and then only full Groth16 proofs pass. It applies to the webhook and the msgboard indexer.
      */
     acceptOracleProof: z.boolean().default(false),
-    /** The chain indexer, for the archive module. */
+    /**
+     * The chain indexer. The requests module asks it whether a direction needs a proof before it starts a job, and the
+     * archive module reads its work list from it. Needed when the requests module runs.
+     */
     indexerUrl: z.url().optional(),
   })
   .strict()

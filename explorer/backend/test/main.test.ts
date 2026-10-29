@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { serve } from "@hono/node-server";
+import { Hono } from "hono";
 import { BackendConfigError, endpointSecrets, endpointValues, loadBackendPair, parseBackendConfig, readSecrets } from "../src/config.ts";
 import { main, parseArguments, startBackend } from "../src/main.ts";
 import { PAIR, SECRETS, makeConfig } from "./support.ts";
@@ -9,6 +11,23 @@ import { PAIR, SECRETS, makeConfig } from "./support.ts";
 const ENVIRONMENT = { RUNPOD_API_KEY: SECRETS.runpodApiKey, BACKEND_WEBHOOK_BEARER: SECRETS.webhookBearer, PATH: "/usr/bin" };
 const directories: string[] = [];
 afterEach(() => directories.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true })));
+
+const indexers: Array<{ close: () => void }> = [];
+afterEach(() => indexers.splice(0).forEach((server) => server.close()));
+
+/** A chain indexer on a free local port where a message of every direction waits for a head. */
+async function needyIndexer(): Promise<string> {
+  const app = new Hono();
+  app.get("/api/feed", (c) => c.json({ items: [{}], nextCursor: null }));
+  app.get("/api/heads", (c) => c.json({ heads: [] }));
+  const port = await new Promise<number>((resolve) => {
+    indexers.push(serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, (address) => resolve(address.port)));
+  });
+  return `http://127.0.0.1:${port}`;
+}
+
+/** An indexer address for a backend that starts no job in the test. */
+const INDEXER_URL = "http://indexer.invalid";
 
 function workspace(): string {
   const directory = mkdtempSync(join(tmpdir(), "backend-main-"));
@@ -27,6 +46,7 @@ describe("configuration", () => {
       secondsBetweenJobsPerDirection: 120,
       secondsBeforeRetryAfterFailure: 60,
       jobsPerDirectionPerDay: 96,
+      keepAliveSeconds: 43_200,
     });
     expect(config.trustedProxyHops).toBe(1);
     expect(config.trustForwardedHeader).toBe(false);
@@ -134,13 +154,14 @@ describe("endpoints in the configuration", () => {
 });
 
 describe("secrets in the log", () => {
-  const configFor = (directory: string) =>
+  const configFor = (directory: string, indexerUrl = INDEXER_URL) =>
     makeConfig({
       databasePath: join(directory, "backend.sqlite"),
       listen: { host: "127.0.0.1", port: 0 },
       rpcUrls: { "1": KEYED_RPC, "369": "http://rpc-369.invalid" },
       beaconUrls: { "1": "http://beacon-1.invalid", "369": "http://beacon-369.invalid" },
       msgboardUrl: KEYED_BOARD,
+      indexerUrl,
     });
 
   it("a keyed endpoint inside an error is removed from the log line", async () => {
@@ -148,7 +169,7 @@ describe("secrets in the log", () => {
     const executor = async () => {
       throw new Error(`cannot reach ${KEYED_RPC} or ${KEYED_BOARD}; the key is SECRETKEY123 and KEYBOARD456`);
     };
-    const running = await startBackend({ config: configFor(workspace()), pair: PAIR, enabled: ["requests"], environment: ENVIRONMENT, executor, write: (line) => lines.push(line) });
+    const running = await startBackend({ config: configFor(workspace(), await needyIndexer()), pair: PAIR, enabled: ["requests"], environment: ENVIRONMENT, executor, write: (line) => lines.push(line) });
     try {
       const answer = await fetch(`http://127.0.0.1:${running.port}/requests`, {
         method: "POST",
@@ -170,6 +191,11 @@ describe("secrets in the log", () => {
   it("the requests module needs a beacon endpoint for both chains", async () => {
     const lonely = { ...PAIR, sides: [PAIR.sides[0], { ...PAIR.sides[1], beaconUrl: null }] } as typeof PAIR;
     await expect(startBackend({ config: configFor(workspace()), pair: lonely, enabled: ["requests"], environment: ENVIRONMENT, write: () => {} })).rejects.toThrow("beaconUrls needs an entry for chain 369");
+  });
+
+  it("the requests module needs the chain indexer", async () => {
+    const config = makeConfig({ ...configFor(workspace()), indexerUrl: undefined });
+    await expect(startBackend({ config, pair: PAIR, enabled: ["requests"], environment: ENVIRONMENT, write: () => {} })).rejects.toThrow("indexerUrl is needed when the requests module runs");
   });
 
   it("main hides a configured endpoint in a start-up error and survives an unset secret variable", async () => {
@@ -215,13 +241,14 @@ describe("command line", () => {
 describe("startBackend", () => {
   it("serves the health report over a real socket, with the chosen modules only, and stops cleanly", async () => {
     const directory = workspace();
-    const config = makeConfig({ databasePath: join(directory, "data", "backend.sqlite"), listen: { host: "127.0.0.1", port: 0 } });
+    const config = makeConfig({ databasePath: join(directory, "data", "backend.sqlite"), listen: { host: "127.0.0.1", port: 0 }, indexerUrl: INDEXER_URL });
     const lines: string[] = [];
     const running = await startBackend({ config, pair: PAIR, enabled: ["requests", "archive"], environment: ENVIRONMENT, write: (line) => lines.push(line), now: () => 0 });
     try {
       const answer = await fetch(`http://127.0.0.1:${running.port}/health`);
       const report = (await answer.json()) as { modules: Record<string, { state: string }> };
-      expect(report.modules).toEqual({ requests: { state: "running" }, archive: { state: "degraded", detail: "indexerUrl is not set" } });
+      expect(Object.keys(report.modules)).toEqual(["requests", "archive"]);
+      expect(report.modules.requests).toEqual({ state: "running" });
       const unseen = await fetch(`http://127.0.0.1:${running.port}/webhook/jobs/x`, { method: "POST" });
       expect(unseen.status).toBe(404);
     } finally {
@@ -232,9 +259,21 @@ describe("startBackend", () => {
     expect(lines.join("\n")).not.toContain(SECRETS.webhookBearer);
   });
 
-  it("writes to standard error and the real clock by default", async () => {
+  it("runs without the chain indexer when the requests module is off", async () => {
     const directory = workspace();
     const config = makeConfig({ databasePath: join(directory, "backend.sqlite"), listen: { host: "127.0.0.1", port: 0 } });
+    const running = await startBackend({ config, pair: PAIR, enabled: ["archive"], environment: ENVIRONMENT, write: () => {} });
+    try {
+      const report = (await (await fetch(`http://127.0.0.1:${running.port}/health`)).json()) as { modules: Record<string, unknown> };
+      expect(report.modules).toEqual({ archive: { state: "degraded", detail: "indexerUrl is not set" } });
+    } finally {
+      await running.stop();
+    }
+  });
+
+  it("writes to standard error and the real clock by default", async () => {
+    const directory = workspace();
+    const config = makeConfig({ databasePath: join(directory, "backend.sqlite"), listen: { host: "127.0.0.1", port: 0 }, indexerUrl: INDEXER_URL });
     const running = await startBackend({ config, pair: PAIR, enabled: ["requests"], environment: ENVIRONMENT });
     await running.stop();
   });
@@ -245,7 +284,7 @@ describe("startBackend", () => {
 
   it("falls back to a default PATH", async () => {
     const directory = workspace();
-    const config = makeConfig({ databasePath: join(directory, "backend.sqlite"), listen: { host: "127.0.0.1", port: 0 } });
+    const config = makeConfig({ databasePath: join(directory, "backend.sqlite"), listen: { host: "127.0.0.1", port: 0 }, indexerUrl: INDEXER_URL });
     const { PATH: _ignored, ...environment } = ENVIRONMENT;
     const running = await startBackend({ config, pair: PAIR, enabled: ["requests"], environment, write: () => {} });
     await running.stop();
@@ -277,6 +316,7 @@ describe("main", () => {
         webhookBearerVariable: "BACKEND_WEBHOOK_BEARER",
         rpcUrls: { "1": "http://rpc-1.invalid", "369": "http://rpc-369.invalid" },
         beaconUrls: { "1": "http://beacon-1.invalid", "369": "http://beacon-369.invalid" },
+        indexerUrl: INDEXER_URL,
       }),
     );
     const environment = ENVIRONMENT;
@@ -310,6 +350,7 @@ describe("main", () => {
         webhookBearerVariable: "BACKEND_WEBHOOK_BEARER",
         rpcUrls: { "1": "http://rpc-1.invalid", "369": "http://rpc-369.invalid" },
         beaconUrls: { "1": "http://beacon-1.invalid", "369": "http://beacon-369.invalid" },
+        indexerUrl: INDEXER_URL,
       }),
     );
     const environment = ENVIRONMENT;

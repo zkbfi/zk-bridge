@@ -6,6 +6,7 @@ import type { BackendModuleContext, ModuleTable } from "../src/module.ts";
 import { createApp } from "../src/app.ts";
 import { MODULES } from "../src/main.ts";
 import { openStorage, type Storage } from "../src/storage.ts";
+import type { ProofNeed, ProofNeedReader } from "../src/requests/proof-need.ts";
 
 const address = (digit: string): `0x${string}` => `0x${digit.repeat(40)}`;
 
@@ -113,11 +114,34 @@ export function makeClock(start = 1_000_000) {
   return { now: () => current, advance: (milliseconds: number) => (current += milliseconds) };
 }
 
+/**
+ * A chain indexer that the test steers. By default every direction needs a proof. `answer` sets the next answers;
+ * an Error makes the read fail. `reads` counts the reads.
+ */
+export function fakeProofNeed(initial: ProofNeed | Error = { needed: true, why: "waiting-message" }) {
+  let answer: ProofNeed | Error = initial;
+  const reads: Array<{ direction: string; now: number }> = [];
+  const read: ProofNeedReader = async (direction, now) => {
+    reads.push({ direction, now });
+    if (answer instanceof Error) throw answer;
+    return answer;
+  };
+  return { read, reads, answer: (next: ProofNeed | Error) => (answer = next) };
+}
+
 /** A context over an in-memory database, and the app on top of it. */
 export function makeBackend(
-  options: { config?: BackendConfig; prover?: ReturnType<typeof controllableProver>; enabled?: readonly ModuleName[]; modules?: ModuleTable; storage?: Storage } = {},
+  options: {
+    config?: BackendConfig;
+    prover?: ReturnType<typeof controllableProver>;
+    enabled?: readonly ModuleName[];
+    modules?: ModuleTable;
+    storage?: Storage;
+    proofNeed?: ReturnType<typeof fakeProofNeed>;
+  } = {},
 ) {
   const prover = options.prover ?? controllableProver();
+  const proofNeed = options.proofNeed ?? fakeProofNeed();
   const clock = makeClock();
   const log = memoryLogger();
   const storage = options.storage ?? openStorage(":memory:");
@@ -127,11 +151,12 @@ export function makeBackend(
     pair: PAIR,
     prover: prover.binary,
     proverForJob: () => prover.binary,
+    readProofNeed: proofNeed.read,
     now: clock.now,
     logger: log.logger,
   };
   const app = createApp({ context, modules: options.modules ?? MODULES, enabled: options.enabled ?? ["requests"] });
-  return { app, context, prover, clock, storage, log };
+  return { app, context, prover, clock, storage, log, proofNeed };
 }
 
 /** The body of a proof request. */

@@ -13,6 +13,7 @@ import * as archive from "./archive/module.ts";
 import * as msgboardIndexer from "./msgboard-indexer/module.ts";
 import * as requests from "./requests/module.ts";
 import { createProverFactories } from "./requests/job-prover.ts";
+import { createProofNeedReader, withoutIndexer } from "./requests/proof-need.ts";
 import { openStorage } from "./storage.ts";
 import * as webhook from "./webhook/module.ts";
 
@@ -29,6 +30,12 @@ function requireBeaconUrls(config: BackendConfig, pair: Pair): void {
   for (const side of pair.sides) {
     if (side.beaconUrl === null) throw new BackendConfigError(`beaconUrls needs an entry for chain ${side.chainId} when the requests module runs`);
   }
+}
+
+/** A request run starts only when the chain indexer shows that a direction needs a proof, so the requests module needs it. */
+function requireIndexerUrl(config: BackendConfig): string {
+  if (config.indexerUrl === undefined) throw new BackendConfigError("indexerUrl is needed when the requests module runs: the backend asks the chain indexer whether a proof is needed");
+  return config.indexerUrl;
 }
 
 /** What a running backend offers its caller. */
@@ -65,7 +72,14 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     // The endpoints can carry keys, so every secret part of each one is removed from every line.
     knownSecrets: () => [secrets.runpodApiKey, secrets.webhookBearer, ...endpointSecrets(config, input.pair)],
   });
-  if (input.enabled.includes("requests")) requireBeaconUrls(config, input.pair);
+  if (input.enabled.includes("requests")) {
+    requireBeaconUrls(config, input.pair);
+    requireIndexerUrl(config);
+  }
+  const readProofNeed =
+    config.indexerUrl === undefined
+      ? withoutIndexer
+      : createProofNeedReader({ baseUrl: config.indexerUrl, pair: input.pair, keepAliveSeconds: config.limits.keepAliveSeconds });
   mkdirSync(dirname(config.databasePath), { recursive: true });
   const storage = openStorage(config.databasePath);
   const provers = createProverFactories({
@@ -76,7 +90,7 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     path: input.environment.PATH ?? "/usr/bin:/bin",
     logger,
   });
-  const context: BackendModuleContext = { storage, config, pair: input.pair, prover: provers.utilityProver, proverForJob: provers.proverForJob, now, logger };
+  const context: BackendModuleContext = { storage, config, pair: input.pair, prover: provers.utilityProver, proverForJob: provers.proverForJob, readProofNeed, now, logger };
   const app = createApp({ context, modules: MODULES, enabled: input.enabled });
   const stoppers = await Promise.all(input.enabled.map((name) => MODULES[name].start(context)));
   const server = await new Promise<ReturnType<typeof serve> & { port: number }>((resolve) => {

@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { ProverCommandError } from "@zk-bridge/shared/prover";
 import { UNKNOWN_CALLER, callerKey } from "../../src/requests/caller.ts";
 import { start as startRequests } from "../../src/requests/module.ts";
-import { SECRETS, makeBackend, makeConfig, makeProofPackage, postFrom, requestBody } from "../support.ts";
+import { SECRETS, fakeProofNeed, makeBackend, makeConfig, makeProofPackage, postFrom, requestBody } from "../support.ts";
 
 type Backend = ReturnType<typeof makeBackend>;
 
@@ -111,7 +111,23 @@ describe("global limit and GPU spend", () => {
     expect(backend.prover.calls).toHaveLength(1);
   });
 
-  it("ATTACK an anonymous caller who starts a proving run every secondsBetweenJobsPerDirection stops at the daily job budget (BLOCKED, was K-1)", async () => {
+  it("ATTACK an anonymous caller who asks for a proving run every secondsBetweenJobsPerDirection while no message waits starts nothing (BLOCKED, was K-1)", async () => {
+    // A request only asks. The backend starts a paid run only when the chain indexer shows a waiting message or an old head.
+    const need = fakeProofNeed({ needed: false });
+    const backend = makeBackend({ proofNeed: need });
+    for (let round = 0; round < 50; round += 1) {
+      for (const direction of ["first-to-second", "second-to-first"]) {
+        expect((await post(backend, `198.51.100.${round + 1}`, {}, { direction, reason: "keep-alive" })).status).toBe(409);
+      }
+      backend.clock.advance(120_000);
+    }
+    expect(backend.prover.calls).toHaveLength(0);
+    expect((backend.storage.database.prepare("SELECT count(*) AS n FROM jobs").get() as { n: number }).n).toBe(0);
+    // The indexer is asked at most once per direction in each reuse window, however many requests arrive.
+    expect(need.reads).toHaveLength(100);
+  });
+
+  it("ATTACK when the indexer says a proof is needed every time (wrong facts), the daily job budget still stops the spend (backstop)", async () => {
     // Each run that finds a newer finalized head costs one remote GPU proof. The daily budget bounds that spend.
     const backend = makeBackend({ config: makeConfig({ limits: { jobsPerDirectionPerDay: 3 } }) });
     const answers: number[] = [];

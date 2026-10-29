@@ -15,10 +15,17 @@ export type RateLimits = {
   /** The seconds after a failed job before the next request may start a new job. */
   readonly secondsBeforeRetryAfterFailure: number;
   /**
-   * How many jobs that may pay for a proof one direction may start in one day. Any caller can ask for a job, so this
-   * bounds what the remote prover costs. A job that found the chain up to date paid nothing and does not count.
+   * How many jobs that may pay for a proof one direction may start in one day. A job starts only when the chain indexer
+   * shows a need, so this is a backstop: it bounds what the remote prover costs even when the indexer reports wrong
+   * facts. A job that found the chain up to date paid nothing and does not count.
    */
   readonly jobsPerDirectionPerDay: number;
+  /**
+   * The age of the destination head, in seconds, after which a direction needs a proof even when no message waits. A
+   * light client that falls a whole sync committee period behind (about 27 hours on Ethereum, 23 on PulseChain) can
+   * never move again, so keep it well below that.
+   */
+  readonly keepAliveSeconds: number;
 };
 
 /** The limits that the example configuration shows. */
@@ -30,6 +37,7 @@ export const DEFAULT_RATE_LIMITS: RateLimits = {
   secondsBetweenJobsPerDirection: 120,
   secondsBeforeRetryAfterFailure: 60,
   jobsPerDirectionPerDay: 96,
+  keepAliveSeconds: 43_200,
 };
 
 const MINUTE_MILLISECONDS = 60_000;

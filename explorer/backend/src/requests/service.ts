@@ -5,6 +5,7 @@ import { CommandTimeoutError, ProverCommandError, type ProverBinary } from "@zk-
 import type { Logger } from "../logger.ts";
 import { UNKNOWN_CALLER } from "./caller.ts";
 import type { Storage } from "../storage.ts";
+import type { ProofNeed, ProofNeedReader } from "./proof-need.ts";
 import {
   CALLER_WINDOW_MILLISECONDS,
   JOB_BUDGET_WINDOW_MILLISECONDS,
@@ -39,15 +40,24 @@ export type ProofRequest = {
 /** The answer of {@link RequestService.submit}. */
 export type SubmitResult =
   | { readonly requestId: string; readonly jobId: string }
-  | { readonly refused: "rate-limited"; readonly retryAfterSeconds: number };
+  | { readonly refused: "rate-limited"; readonly retryAfterSeconds: number }
+  | { readonly refused: "nothing-to-prove" }
+  | { readonly refused: "cannot-check"; readonly retryAfterSeconds: number };
+
+/** How long an answer of the chain indexer serves the next requests of its direction, in milliseconds. */
+export const PROOF_NEED_REUSE_MILLISECONDS = 15_000;
+
+/** The seconds a caller waits after the chain indexer could not answer. */
+export const CANNOT_CHECK_RETRY_SECONDS = 30;
 
 /** The request service. */
 export interface RequestService {
   /**
    * Records a request. A request for a direction that has an active job joins that job. Any other request starts a new
-   * job and runs it in the background. The call is synchronous, so two requests never both create a job.
+   * job, and runs it in the background, only when the chain indexer shows that the direction needs a proof. The job is
+   * made in one synchronous transaction that runs every check again, so two requests never both create a job.
    */
-  submit(request: ProofRequest): SubmitResult;
+  submit(request: ProofRequest): Promise<SubmitResult>;
   /**
    * Fails the proving jobs that outlived the prover limit, then runs the jobs that a restart left behind and that have
    * no proof yet. A job whose proof already arrived waits for the webhook or for the timeout.
@@ -67,6 +77,8 @@ export interface RequestServiceInput {
    * its own wrapper. Every wrapper proves from the on-chain head: the request names a direction and nothing else.
    */
   readonly proverForJob: (jobId: string) => ProverBinary;
+  /** Whether a direction needs a proof, from the chain indexer. A request alone never starts a paid proving run. */
+  readonly readProofNeed: ProofNeedReader;
   /** Milliseconds since 1970. */
   readonly now: () => number;
   readonly limits: RateLimits;
@@ -121,38 +133,80 @@ export function createRequestService(input: RequestServiceInput): RequestService
     }
   }
 
+  type Decision = { result: SubmitResult; startedJobId: string | null };
+
+  /**
+   * The checks that need no indexer, run inside a transaction: the caller and global limits, joining an active job,
+   * the wait of the direction and its daily budget. Null means that a new job may start if the chains need a proof.
+   */
+  function admit(request: ProofRequest, current: number): Decision | null {
+    const since = current - CALLER_WINDOW_MILLISECONDS;
+    const callerLimit = request.caller === UNKNOWN_CALLER ? limits.requestsPerUnknownCallerPerMinute : limits.requestsPerCallerPerMinute;
+    const callerWait = Math.max(
+      windowWaitSeconds({ recent: recentRequestsOfCaller(storage, request.caller, since), now: current, limit: callerLimit }),
+      windowWaitSeconds({ recent: recentRequestsOfAll(storage, since), now: current, limit: limits.globalRequestsPerMinute }),
+    );
+    if (callerWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: callerWait }, startedJobId: null };
+    const active = findActiveJob(storage, request.direction);
+    if (active !== null) {
+      const requestId = randomUUID();
+      insertRequest(storage, { ...request, id: requestId, jobId: active.id, messageId: request.messageId ?? null, now: current });
+      return { result: { requestId, jobId: active.id }, startedJobId: null };
+    }
+    const directionWait = directionWaitSeconds({ latest: findLatestJob(storage, request.direction), now: current, limits });
+    if (directionWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: directionWait }, startedJobId: null };
+    // A backstop behind the indexer check: it bounds what remote proofs cost even when the indexer reports wrong facts.
+    const budgetWait = jobBudgetWaitSeconds({
+      recent: recentCostlyJobs(storage, request.direction, current - JOB_BUDGET_WINDOW_MILLISECONDS),
+      now: current,
+      limit: limits.jobsPerDirectionPerDay,
+    });
+    if (budgetWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: budgetWait }, startedJobId: null };
+    return null;
+  }
+
+  // One read of the chain indexer serves every request of its direction for PROOF_NEED_REUSE_MILLISECONDS, and the
+  // requests that arrive during a read share it. A burst of requests never becomes a burst of indexer queries.
+  const needs = new Map<ProofDirection, { readonly at: number; readonly answer: Promise<ProofNeed> }>();
+
+  function proofNeed(direction: ProofDirection, current: number): Promise<ProofNeed> {
+    const known = needs.get(direction);
+    if (known !== undefined && current - known.at < PROOF_NEED_REUSE_MILLISECONDS) return known.answer;
+    const entry = { at: current, answer: input.readProofNeed(direction, current) };
+    needs.set(direction, entry);
+    // A failed read is not kept: the next request asks again. At worst this drops a newer answer, and costs one read.
+    entry.answer.catch(() => needs.delete(direction));
+    return entry.answer;
+  }
+
   return {
-    submit(request) {
+    async submit(request) {
       failLostJobs();
+      const asked = now();
+      const first = storage.transaction(() => admit(request, asked));
+      if (first !== null) return first.result;
+      let need: ProofNeed;
+      try {
+        need = await proofNeed(request.direction, asked);
+      } catch (error) {
+        logger.warn("proof_need_unknown", { direction: request.direction, error });
+        return { refused: "cannot-check", retryAfterSeconds: CANNOT_CHECK_RETRY_SECONDS };
+      }
+      if (!need.needed) return { refused: "nothing-to-prove" };
+      // Another request may have made a job while the indexer answered, so every check runs again with the insert.
       const current = now();
-      const { result, startedJobId } = storage.transaction((): { result: SubmitResult; startedJobId: string | null } => {
-        const since = current - CALLER_WINDOW_MILLISECONDS;
-        const callerLimit = request.caller === UNKNOWN_CALLER ? limits.requestsPerUnknownCallerPerMinute : limits.requestsPerCallerPerMinute;
-        const callerWait = Math.max(
-          windowWaitSeconds({ recent: recentRequestsOfCaller(storage, request.caller, since), now: current, limit: callerLimit }),
-          windowWaitSeconds({ recent: recentRequestsOfAll(storage, since), now: current, limit: limits.globalRequestsPerMinute }),
-        );
-        if (callerWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: callerWait }, startedJobId: null };
-        const active = findActiveJob(storage, request.direction);
-        const requestId = randomUUID();
-        if (active !== null) {
-          insertRequest(storage, { ...request, id: requestId, jobId: active.id, messageId: request.messageId ?? null, now: current });
-          return { result: { requestId, jobId: active.id }, startedJobId: null };
-        }
-        const directionWait = directionWaitSeconds({ latest: findLatestJob(storage, request.direction), now: current, limits });
-        if (directionWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: directionWait }, startedJobId: null };
-        // Nothing ties a request to a waiting message, so the daily budget is what bounds the cost of remote proofs.
-        const budgetWait = jobBudgetWaitSeconds({
-          recent: recentCostlyJobs(storage, request.direction, current - JOB_BUDGET_WINDOW_MILLISECONDS),
-          now: current,
-          limit: limits.jobsPerDirectionPerDay,
-        });
-        if (budgetWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: budgetWait }, startedJobId: null };
+      const { result, startedJobId } = storage.transaction((): Decision => {
+        const decided = admit(request, current);
+        if (decided !== null) return decided;
         const job = insertJob(storage, { id: randomUUID(), direction: request.direction, now: current });
+        const requestId = randomUUID();
         insertRequest(storage, { ...request, id: requestId, jobId: job.id, messageId: request.messageId ?? null, now: current });
         return { result: { requestId, jobId: job.id }, startedJobId: job.id };
       });
-      if (startedJobId !== null) start(startedJobId, request.direction);
+      if (startedJobId !== null) {
+        logger.info("job_started", { jobId: startedJobId, direction: request.direction, why: need.why });
+        start(startedJobId, request.direction);
+      }
       return result;
     },
     recover() {

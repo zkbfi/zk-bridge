@@ -20,7 +20,7 @@ import {
   type IndexerDependencies,
 } from "../src/msgboard-indexer/module.ts";
 import { openStorage, type Storage } from "../src/storage.ts";
-import { PAIR, controllableProver, makeClock, makeConfig, memoryLogger } from "./support.ts";
+import { PAIR, controllableProver, makeClock, makeConfig, memoryLogger, fakeProofNeed } from "./support.ts";
 
 const created = vi.hoisted(() => ({ boardUrls: [] as string[] }));
 vi.mock("@zk-bridge/shared/msgboard", async (importOriginal) => ({
@@ -125,7 +125,7 @@ function makeRig(options: { storage?: Storage; verify?: () => Promise<void>; hea
     verifyCalls.push(1);
     return verify();
   };
-  const context: BackendModuleContext = { storage, config: makeConfig({ msgboardUrl: "https://board.invalid", acceptOracleProof: options.acceptOracleProof ?? false }), pair: PAIR, prover, proverForJob: () => prover, now: clock.now, logger: log.logger };
+  const context: BackendModuleContext = { storage, config: makeConfig({ msgboardUrl: "https://board.invalid", acceptOracleProof: options.acceptOracleProof ?? false }), pair: PAIR, prover, proverForJob: () => prover, readProofNeed: fakeProofNeed().read, now: clock.now, logger: log.logger };
   const app = createApp({ context, modules: MODULES, enabled: ["msgboard-indexer"] });
   const heads = { "first-to-second": movableHead(options.headSlot ?? 100n, clock.now), "second-to-first": movableHead(options.headSlot ?? 100n, clock.now) };
   const board = fakeBoard();

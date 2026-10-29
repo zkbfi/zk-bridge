@@ -429,7 +429,7 @@ describe("the publisher", () => {
 
   it("holds no wallet: the context offers none", () => {
     const fixture = setup();
-    expect(Object.keys(fixture.context).sort()).toEqual(["config", "logger", "now", "pair", "prover", "proverForJob", "storage"]);
+    expect(Object.keys(fixture.context).sort()).toEqual(["config", "logger", "now", "pair", "prover", "proverForJob", "readProofNeed", "storage"]);
   });
 });
 

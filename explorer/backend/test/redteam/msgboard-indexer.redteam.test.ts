@@ -12,7 +12,7 @@ import { MODULES } from "../../src/main.ts";
 import { chooseLatest, loadStoredProof, type TimedLightClientReader } from "../../src/msgboard-indexer/latest-proof.ts";
 import { SEEN_LIMIT, startIndexer } from "../../src/msgboard-indexer/module.ts";
 import { openStorage } from "../../src/storage.ts";
-import { PAIR, controllableProver, makeClock, makeConfig, memoryLogger } from "../support.ts";
+import { PAIR, controllableProver, makeClock, makeConfig, memoryLogger, fakeProofNeed } from "../support.ts";
 
 const word = (byte: string): Hex => `0x${byte.repeat(32)}`;
 const PROGRAM_KEY = word("11");
@@ -38,7 +38,7 @@ function rig(options: { verify?: () => Promise<void> } = {}) {
     verifyCalls += 1;
     await options.verify?.();
   };
-  const context: BackendModuleContext = { storage, config: makeConfig({ msgboardUrl: "https://board.invalid" }), pair: PAIR, prover, proverForJob: () => prover, now: clock.now, logger: log.logger };
+  const context: BackendModuleContext = { storage, config: makeConfig({ msgboardUrl: "https://board.invalid" }), pair: PAIR, prover, proverForJob: () => prover, readProofNeed: fakeProofNeed().read, now: clock.now, logger: log.logger };
   const app = createApp({ context, modules: MODULES, enabled: ["msgboard-indexer"] });
   const heads: Record<ProofDirection, { slot: bigint; programKey: Hex }> = { "first-to-second": { slot: 100n, programKey: PROGRAM_KEY }, "second-to-first": { slot: 100n, programKey: PROGRAM_KEY } };
   const reader = (direction: ProofDirection): TimedLightClientReader => ({
