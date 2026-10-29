@@ -15,8 +15,11 @@ server with NVMe disks becomes the better choice only when we run our own chain 
 - Normal hosting is only for backends and landing pages.
 - The landing page is at the root of zkb.fi, on Cloudflare Pages. It checks the signed `version.json` and links to the
   IPFS copies of the dapp and the docs.
-- The IPFS archives are pinned at Filebase. The release pipeline uploads the archive files (CAR) and checks that the
-  content address (CID) that Filebase reports equals the one it computed itself.
+- The IPFS archives are pinned on our own IPFS node (kubo) on the app server. The release pipeline imports the archive
+  files (CAR) through an SSH tunnel and checks that the content address (CID) the node reports equals the one it
+  computed itself. The node's RPC API stays on 127.0.0.1; only its peer port (4001) is open.
+- One node is one point of failure. A second, independent pin (Filebase, or another service) comes later, so the sites
+  stay reachable while the app server is down. Anyone can also pin the same CIDs.
 - Graphics processor proving runs on RunPod, serverless. It costs money only while it proves.
 
 ## Servers
@@ -26,7 +29,7 @@ server with NVMe disks becomes the better choice only when we run our own chain 
 | App server | backend (modules `requests`, `webhook`, `msgboard-indexer`, `archive`), explorer indexer (Ponder), Postgres, publisher bot, runner bot | Hetzner Cloud CAX21 (ARM64): 4 shared vCPU, 8 GB memory, 80 GB disk | Hetzner Cloud, in an account of zkb.fi only |
 | Prover | the prover worker image | one graphics processor per job | RunPod serverless |
 | Landing page | static page | none | Cloudflare Pages |
-| Dapp and docs | static sites | none | IPFS, pinned at Filebase |
+| Dapp and docs | static sites | none | IPFS, pinned on the app server's kubo node; a second pin later |
 
 ### App server
 
@@ -110,7 +113,7 @@ All secrets live in the 1Password vault `zkb.fi` and reach a server only as envi
 | Webhook bearer token | app server (backend) and the RunPod worker |
 | Runner wallet key | app server, readable by the runner's user only |
 | Endpoint keys of the providers | app server |
-| Filebase keys | the release machine only |
+| Filebase keys, when the second pin is set up | the release machine only |
 | Release signing key | the release machine only, read at the moment of use |
 | Hetzner API token: item `hetzner`, field `api-token` (project `zkb-fi`, read and write) | the operator's machine, through `op run` |
 | Cloudflare token for DNS: item `Cloudflare`, field `key` (DNS Edit and Zone Read, zone zkb.fi only; the wrangler login cannot change DNS) | the operator's machine, through `op run` |

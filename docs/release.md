@@ -107,7 +107,27 @@ the landing page (or `RELEASE_PUBLIC_KEYS`), pins the three archives, and pushes
 `public-keys.json` and `SHA256SUMS` to the release remote.
 
 The pinning step is an adapter chosen by `RELEASE_PIN_PROVIDER` (`explorer/release/src/pin.ts`). Each adapter uploads
-an archive and fails unless the service reports the same CID that was computed here. The one adapter is `filebase`:
+an archive and fails unless the service reports the same CID that was computed here. There are two adapters.
+
+**`kubo`: the IPFS node on the app server.** This is the main pin. The node's RPC API listens on `127.0.0.1:5001` of
+the server only. It can pin, unpin and change the node, so it is never public. Reach it through an SSH tunnel:
+
+```sh
+ssh -N -L 5001:127.0.0.1:5001 zkbfi-app &
+RELEASE_REMOTE=<release repository> RELEASE_PIN_PROVIDER=kubo KUBO_API_URL=http://127.0.0.1:5001 \
+  script/release/publish.sh <release-directory>
+```
+
+- `KUBO_API_URL`: the RPC address. It must be http or https and carry no user or password.
+- `KUBO_API_AUTH`: optional. The full `Authorization` header value, when the node sets `API.Authorizations`. Only from
+  the environment; never printed.
+- For each archive it POSTs the CAR to `/api/v0/dag/import?pin-roots=true` as the multipart field `file`. It fails
+  unless the node reports exactly one root, that root is the CID computed here, and the pin of the root succeeded. Then
+  it asks `/api/v0/pin/ls?type=recursive` and fails unless the root is pinned recursively.
+
+**`filebase`: an optional second pin.** One node is one point of failure: while the app server is down, only gateway
+caches hold the sites. A second, independent pin removes that. Run the pin step again with the other adapter:
+`node explorer/release/src/cli.ts pin <release-directory> --prefix <version>`, with `RELEASE_PIN_PROVIDER=filebase`.
 
 - `FILEBASE_ACCESS_KEY`, `FILEBASE_SECRET_KEY`: an access key of the Filebase account. Only from the environment;
   never printed.
