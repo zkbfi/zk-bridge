@@ -41,13 +41,19 @@ server with NVMe disks becomes the better choice only when we run our own chain 
 - `deploy/app-server/provision.sh` prepares the server and can run again: Node.js 24, Rust 1.93.0 in `/opt/rust`, one
   system user per service (`zkb_backend`, `zkb_indexer`, `zkb_bots`), Postgres on the local socket only with peer login
   for the indexer, and Caddy as the TLS proxy. It installs no service of ours and no secret.
+- Host names, one per function, each passing only its own routes (`deploy/app-server/Caddyfile`; the names come from
+  `/etc/caddy/zkb.env`, see `caddy.env.example`): `prove.zkb.fi` (requests and latest proofs), `webhook.zkb.fi` (the
+  prover's callback; the backend's `publicUrl`), `archive.zkb.fi` (evidence), `indexer.zkb.fi` (the indexer's `/api/*`
+  and GraphQL; `/sql`, `/metrics` and `/status` stay private). DNS-only records, so Caddy holds the certificates.
+- Every consumer takes these addresses from configuration: the dapp from `VITE_EXPLORER_*_URL` at build time and from its
+  Connections view at run time, the prover worker from the `webhookUrl` that the backend sends with each job.
 - The explorer indexer is the largest part. It used up to 817 MB on two test chains with a few dozen messages, and it
   grows with the history of the real chains.
 - In the measured run the indexer kept its database inside its own process (PGlite). On the server it uses Postgres, so
   part of that memory moves into the Postgres process. Postgres also needs memory for its cache.
 - The archive module starts the prover program (`zk-bridge-prover`) for short runs that build evidence. The program runs
   on the CPU of this server. Proofs do not.
-- Only the backend's port is public, behind a TLS proxy. Set `trustForwardedHeader` and `trustedProxyHops` to match that
+- Only Caddy is public; the backend and the indexer listen on 127.0.0.1 behind it. Set `trustForwardedHeader` and `trustedProxyHops` to match that
   proxy. The indexer and Postgres listen on the private interface only.
 
 ### The bots on the same server
@@ -94,6 +100,7 @@ All secrets live in the 1Password vault `zkb.fi` and reach a server only as envi
 | Filebase keys | the release machine only |
 | Release signing key | the release machine only, read at the moment of use |
 | Hetzner API token: item `hetzner`, field `api-token` (project `zkb-fi`, read and write) | the operator's machine, through `op run` |
+| Cloudflare token for DNS: item `Cloudflare`, field `key` (DNS Edit and Zone Read, zone zkb.fi only; the wrangler login cannot change DNS) | the operator's machine, through `op run` |
 | SSH key `DigitalOcean (zkb.fi)` (also for the Hetzner server; rename it in the 1Password app, the CLI cannot edit SSH keys) | the operator's machine, through the 1Password SSH agent |
 
 ## Measurements
@@ -119,5 +126,3 @@ the disk of Postgres.
 - Pick the RPC and beacon providers, and check the points under "Chain access".
 - Restore `.git/info/forbidden-patterns` on the release machine, or the docs build stops (the public-docs gate fails
   closed).
-- A Cloudflare API token with the scopes "Zone DNS Edit" and "Zone Read", for zkb.fi only, for DNS changes. The wrangler
-  login cannot change DNS.

@@ -1,0 +1,58 @@
+# The TLS proxy of the app server (docs/deployment-plan.md). One host name per function. Each name passes on only the
+# routes of its function, plus the health route; every other path gets 404.
+#
+# The host names come from the environment, so an operator of another deployment sets their own names and changes
+# nothing here. On the server they are in /etc/caddy/zkb.env (see deploy/app-server/caddy.env.example), which a
+# systemd drop-in loads. Caddy gets a certificate for each name itself, so each name needs an A or AAAA record that
+# points at this server without a proxy in front: the backend trusts exactly one proxy hop (trustedProxyHops = 1).
+#
+#   prove     the dapp's proof flow: start a job, read its state, read the latest proof of a direction
+#   webhook   the prover's callback; the backend's publicUrl names this host
+#   archive   evidence for messages that are sent and not yet delivered
+#   indexer   the explorer indexer (Ponder): the read API and GraphQL. /sql, /metrics and /status stay private.
+
+{
+	email {$ZKB_ACME_EMAIL}
+}
+
+(backend) {
+	reverse_proxy 127.0.0.1:{$ZKB_BACKEND_PORT:8787}
+}
+
+(not_found) {
+	handle {
+		respond 404
+	}
+}
+
+{$ZKB_PROVE_HOST} {
+	@routes path /health /requests /requests/* /proofs/latest/*
+	handle @routes {
+		import backend
+	}
+	import not_found
+}
+
+{$ZKB_WEBHOOK_HOST} {
+	@routes path /health /webhook/jobs/*
+	handle @routes {
+		import backend
+	}
+	import not_found
+}
+
+{$ZKB_ARCHIVE_HOST} {
+	@routes path /health /evidence/*
+	handle @routes {
+		import backend
+	}
+	import not_found
+}
+
+{$ZKB_INDEXER_HOST} {
+	@routes path /health /ready /api/* /graphql /graphql/*
+	handle @routes {
+		reverse_proxy 127.0.0.1:{$ZKB_INDEXER_PORT:42069}
+	}
+	import not_found
+}
