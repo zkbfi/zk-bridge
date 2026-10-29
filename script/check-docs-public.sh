@@ -4,7 +4,9 @@
 # Prints file and line for each match and exits 1. The generic patterns below cover an email address, a home
 # directory path, a RunPod endpoint identifier, key-shaped strings and a literal key in a valve.city address.
 # Private names do not belong in this tracked file. Put them, one pattern per line, in the untracked file
-# `.git/info/forbidden-patterns`. The gate reads that file when it exists.
+# `.git/info/forbidden-patterns` (lines that start with # are comments). The gate fails closed: it exits 2 when that
+# file is missing, unless DOCS_GATE_WITHOUT_PRIVATE_PATTERNS=1 says on purpose that this checkout has none (a CI run or
+# a fresh clone), and it exits 2 when git grep fails, for example on a pattern that does not compile.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -34,23 +36,43 @@ patterns=(
 )
 
 private_patterns=()
-private_file=".git/info/forbidden-patterns"
+# --git-path finds the file in a worktree too, where .git is a file.
+private_file="$(git rev-parse --git-path info/forbidden-patterns)"
 if [ -f "$private_file" ]; then
-  while IFS= read -r line; do
-    [ -n "$line" ] && private_patterns+=("$line")
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    [ -n "$line" ] && [ "${line:0:1}" != "#" ] && private_patterns+=("$line")
   done < "$private_file"
+elif [ "${DOCS_GATE_WITHOUT_PRIVATE_PATTERNS:-}" != "1" ]; then
+  echo "check-docs-public: $private_file is missing, so private names are not checked." >&2
+  echo "Copy it from the machine that holds it, or set DOCS_GATE_WITHOUT_PRIVATE_PATTERNS=1 for a checkout without one." >&2
+  exit 2
 fi
 
 status=0
 
-# Prints the matching lines of one pattern. The first argument holds extra options for git grep.
+# Prints the matching lines of one pattern. The first argument holds extra options for git grep. A password manager
+# placeholder (op://vault/... or op://item/...) is taken out of a line before the pattern is tried again, so the
+# placeholder is allowed while anything else on its line is still reported.
 report_matches() {
   local option="$1"
   local pattern="$2"
-  local matches
-  matches="$(git grep -n -I --untracked ${option} -E -e "$pattern" -- "${scanned_paths[@]}" | grep -v -E 'op://(vault|item)/' || true)"
+  local matches code=0
+  matches="$(git grep -n -I --untracked ${option} -E -e "$pattern" -- "${scanned_paths[@]}")" || code=$?
+  if [ "$code" -gt 1 ]; then
+    echo "check-docs-public: git grep failed (exit $code) on the pattern: $pattern" >&2
+    exit 2
+  fi
   [ -z "$matches" ] && return 0
-  printf '%s\n' "$matches"
+  local kept="" line
+  while IFS= read -r line; do
+    # shellcheck disable=SC2086 # option is empty or one flag
+    if printf '%s\n' "$line" | sed -E 's#op://(vault|item)/##g' | grep -q ${option} -E -e "$pattern"; then
+      kept+="$line"$'\n'
+    fi
+  done <<< "$matches"
+  [ -z "$kept" ] && return 0
+  printf '%s' "$kept"
   status=1
 }
 
