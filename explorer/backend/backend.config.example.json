@@ -28,7 +28,8 @@
     "globalRequestsPerMinute": 120,
     "requestRetentionHours": 24,
     "secondsBetweenJobsPerDirection": 120,
-    "secondsBeforeRetryAfterFailure": 60
+    "secondsBeforeRetryAfterFailure": 60,
+    "jobsPerDirectionPerDay": 96
   },
   "indexerUrl": "http://127.0.0.1:42069"
 }

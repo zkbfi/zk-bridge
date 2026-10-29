@@ -7,6 +7,8 @@ import { UNKNOWN_CALLER } from "./caller.ts";
 import type { Storage } from "../storage.ts";
 import {
   CALLER_WINDOW_MILLISECONDS,
+  JOB_BUDGET_WINDOW_MILLISECONDS,
+  jobBudgetWaitSeconds,
   windowWaitSeconds,
   directionWaitSeconds,
   type RateLimits,
@@ -18,6 +20,7 @@ import {
   insertRequest,
   listActiveJobs,
   pruneRequests,
+  recentCostlyJobs,
   recentRequestsOfAll,
   recentRequestsOfCaller,
   updateJob,
@@ -138,6 +141,13 @@ export function createRequestService(input: RequestServiceInput): RequestService
         }
         const directionWait = directionWaitSeconds({ latest: findLatestJob(storage, request.direction), now: current, limits });
         if (directionWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: directionWait }, startedJobId: null };
+        // Nothing ties a request to a waiting message, so the daily budget is what bounds the cost of remote proofs.
+        const budgetWait = jobBudgetWaitSeconds({
+          recent: recentCostlyJobs(storage, request.direction, current - JOB_BUDGET_WINDOW_MILLISECONDS),
+          now: current,
+          limit: limits.jobsPerDirectionPerDay,
+        });
+        if (budgetWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: budgetWait }, startedJobId: null };
         const job = insertJob(storage, { id: randomUUID(), direction: request.direction, now: current });
         insertRequest(storage, { ...request, id: requestId, jobId: job.id, messageId: request.messageId ?? null, now: current });
         return { result: { requestId, jobId: job.id }, startedJobId: job.id };

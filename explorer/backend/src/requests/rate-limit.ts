@@ -14,6 +14,11 @@ export type RateLimits = {
   readonly secondsBetweenJobsPerDirection: number;
   /** The seconds after a failed job before the next request may start a new job. */
   readonly secondsBeforeRetryAfterFailure: number;
+  /**
+   * How many jobs that may pay for a proof one direction may start in one day. Any caller can ask for a job, so this
+   * bounds what the remote prover costs. A job that found the chain up to date paid nothing and does not count.
+   */
+  readonly jobsPerDirectionPerDay: number;
 };
 
 /** The limits that the example configuration shows. */
@@ -24,12 +29,28 @@ export const DEFAULT_RATE_LIMITS: RateLimits = {
   requestRetentionHours: 24,
   secondsBetweenJobsPerDirection: 120,
   secondsBeforeRetryAfterFailure: 60,
+  jobsPerDirectionPerDay: 96,
 };
 
 const MINUTE_MILLISECONDS = 60_000;
 
 /** The width of the window in which one caller is counted. */
 export const CALLER_WINDOW_MILLISECONDS = MINUTE_MILLISECONDS;
+
+/** The width of the window in which the jobs of a direction count toward the daily budget. */
+export const JOB_BUDGET_WINDOW_MILLISECONDS = 24 * 60 * MINUTE_MILLISECONDS;
+
+/**
+ * How long a direction must wait before its daily job budget has room again.
+ *
+ * @param recent The jobs of the direction that count, inside the day, and the time of the oldest one.
+ * @returns Seconds to wait, or 0 when a new job may start.
+ */
+export function jobBudgetWaitSeconds(input: { recent: { count: number; oldest: number | null }; now: number; limit: number }): number {
+  const { recent, now, limit } = input;
+  if (recent.count < limit || recent.oldest === null) return 0;
+  return secondsUntil(recent.oldest + JOB_BUDGET_WINDOW_MILLISECONDS, now);
+}
 
 /** Whole seconds until `readyAt`, never less than one. */
 function secondsUntil(readyAt: number, now: number): number {

@@ -111,12 +111,13 @@ describe("global limit and GPU spend", () => {
     expect(backend.prover.calls).toHaveLength(1);
   });
 
-  it("ATTACK SUCCEEDS an anonymous caller starts a proving run in each direction every secondsBetweenJobsPerDirection, with no message pending", async () => {
-    // Each run that finds a newer finalized head costs one remote GPU proof. Nothing ties a request to a pending message.
-    const backend = makeBackend();
+  it("ATTACK an anonymous caller who starts a proving run every secondsBetweenJobsPerDirection stops at the daily job budget (BLOCKED, was K-1)", async () => {
+    // Each run that finds a newer finalized head costs one remote GPU proof. The daily budget bounds that spend.
+    const backend = makeBackend({ config: makeConfig({ limits: { jobsPerDirectionPerDay: 3 } }) });
+    const answers: number[] = [];
     for (let round = 0; round < 5; round += 1) {
       for (const direction of ["first-to-second", "second-to-first"]) {
-        expect((await post(backend, `198.51.100.${round + 1}`, {}, { direction, reason: "user" })).status).toBe(202);
+        answers.push((await post(backend, `198.51.100.${round + 1}`, {}, { direction, reason: "user" })).status);
       }
       backend.prover.settleAll({ kind: "proved", proofPackage: makeProofPackage(100 + round, 200 + round) } as never);
       await tick();
@@ -124,7 +125,24 @@ describe("global limit and GPU spend", () => {
       backend.storage.database.prepare("UPDATE jobs SET status = 'published' WHERE status = 'proving'").run();
       backend.clock.advance(120_000);
     }
-    expect(backend.prover.calls).toHaveLength(10);
+    expect(answers).toEqual([202, 202, 202, 202, 202, 202, 429, 429, 429, 429]);
+    expect(backend.prover.calls).toHaveLength(6);
+    // The oldest run leaves the day: one more run may start, and the answer said when.
+    const refused = await post(backend, "198.51.100.50", {}, { direction: "first-to-second", reason: "user" });
+    expect(Number(refused.headers.get("retry-after"))).toBe(86_400 - 5 * 120);
+    backend.clock.advance((86_400 - 5 * 120) * 1000);
+    expect((await post(backend, "198.51.100.51", {}, { direction: "first-to-second", reason: "user" })).status).toBe(202);
+  });
+
+  it("ATTACK a run that finds the chain up to date costs no proof and does not use the daily budget", async () => {
+    const backend = makeBackend({ config: makeConfig({ limits: { jobsPerDirectionPerDay: 1 } }) });
+    for (let round = 0; round < 3; round += 1) {
+      expect((await post(backend, `198.51.100.${round + 1}`)).status).toBe(202);
+      backend.prover.settleAll({ kind: "up-to-date" } as never);
+      await tick();
+      backend.clock.advance(120_000);
+    }
+    expect(backend.prover.calls).toHaveLength(3);
   });
 
   it("ATTACK a failed job is retried only after secondsBeforeRetryAfterFailure, not in a loop", async () => {

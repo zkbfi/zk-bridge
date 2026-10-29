@@ -55,6 +55,7 @@ export const backendConfigSchema = z
         requestRetentionHours: positiveInteger.default(DEFAULT_RATE_LIMITS.requestRetentionHours),
         secondsBetweenJobsPerDirection: positiveInteger.default(DEFAULT_RATE_LIMITS.secondsBetweenJobsPerDirection),
         secondsBeforeRetryAfterFailure: positiveInteger.default(DEFAULT_RATE_LIMITS.secondsBeforeRetryAfterFailure),
+        jobsPerDirectionPerDay: positiveInteger.default(DEFAULT_RATE_LIMITS.jobsPerDirectionPerDay),
       })
       .strict()
       .default(DEFAULT_RATE_LIMITS),

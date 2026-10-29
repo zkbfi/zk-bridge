@@ -87,6 +87,17 @@ export function findLatestJob(storage: Storage, direction: ProofDirection): Job 
   return row === undefined ? null : toJob(row);
 }
 
+/**
+ * The jobs of a direction made after `since` that may have paid for a proof, and the time of the oldest. A job that
+ * found the chain up to date ended on chain without a proof and is left out.
+ */
+export function recentCostlyJobs(storage: Storage, direction: ProofDirection, since: number): { count: number; oldest: number | null } {
+  const row = storage.database
+    .prepare("SELECT count(*) AS total, min(created_at) AS oldest FROM jobs WHERE direction = ? AND created_at > ? AND NOT (status = 'on-chain' AND new_slot IS NULL)")
+    .get(direction, since) as { total: number; oldest: number | null };
+  return { count: row.total, oldest: row.oldest };
+}
+
 /** All active jobs, oldest first. */
 export function listActiveJobs(storage: Storage): readonly Job[] {
   const rows = storage.database.prepare(`SELECT * FROM jobs WHERE status IN (${ACTIVE_LIST}) ORDER BY created_at, rowid`).all() as JobRow[];

@@ -15,8 +15,8 @@ const job = (overrides: Partial<Job>): Job => ({
 });
 
 describe("rate limit arithmetic", () => {
-  it("uses 10 requests a minute, 120 seconds between jobs and 60 seconds after a failure by default", () => {
-    expect(DEFAULT_RATE_LIMITS).toEqual({ requestsPerCallerPerMinute: 10, requestsPerUnknownCallerPerMinute: 2, globalRequestsPerMinute: 120, requestRetentionHours: 24, secondsBetweenJobsPerDirection: 120, secondsBeforeRetryAfterFailure: 60 });
+  it("uses 10 requests a minute, 120 seconds between jobs and 60 seconds after a failure and 96 paid jobs a day by default", () => {
+    expect(DEFAULT_RATE_LIMITS).toEqual({ requestsPerCallerPerMinute: 10, requestsPerUnknownCallerPerMinute: 2, globalRequestsPerMinute: 120, requestRetentionHours: 24, secondsBetweenJobsPerDirection: 120, secondsBeforeRetryAfterFailure: 60, jobsPerDirectionPerDay: 96 });
   });
 
   it("lets a caller below the limit go on and makes one at the limit wait for its oldest request to leave the window", () => {
