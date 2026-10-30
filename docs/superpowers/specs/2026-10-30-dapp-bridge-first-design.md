@@ -201,6 +201,11 @@ and the time left while in flight or the age once delivered. A row links to the 
   live check, kept in this browser; the default for every chain, testnets included, is the valve.city demo key
   (owner): `https://one.valve.city/rpc/vk_demo/evm/<chainId>` (checked 2026-10-30: answers for 1, 369, 11155111, 943); the image server for token and chain icons (gib.show by default), replaceable.
   Icons the release already ships (pre-loaded at build time) don't depend on it.
+- **Every endpoint is swappable (owner: "everything needs to be swappable"):** the settings list every outside service
+  the page talks to, each with its default, a live check, and a reset: the RPC per chain (valve.city demo key), the
+  prover request endpoint (default https://prove.zkb.fi), the indexer (https://indexer.zkb.fi), the archive
+  (https://archive.zkb.fi), the msgboard endpoints the page uses, the price source once it exists, and the image server
+  (gib.show). Nothing the page calls is fixed in code without a setting.
 
 ## Open questions
 
@@ -254,3 +259,4 @@ noise from one message (a child on the keyboard) is left out.
 21. "and the vertical dots that you are showing in the delivered section, those should be connected as they are progressed through"
 22. "1) B, matched / 2) good, however the gas can on the input/output section should also have a bar graph showing different gas levels. users can choose a higher gas payment if they want (default is a percent anyway) / 3) great! be sure to add an external link icon justified to the right, to the right of the timestamp even, to link the user to the transaction / information on the blockchain / 4) you can use the valve.city demo key as a default for both chains. also supports testnets"
 23. "if you are going to write specs for these updates, be sure to capture my raw instruction too. often when you do this with the visual companion, and then you build it for real, you leave out key pieces and end up creating a shittier ui"
+24. "oh, you'll also have to point to a prover request endpoint. everything needs to be swappable"
