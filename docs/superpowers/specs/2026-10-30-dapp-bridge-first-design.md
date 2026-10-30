@@ -207,12 +207,122 @@ and the time left while in flight or the age once delivered. A row links to the 
   (https://archive.zkb.fi), the msgboard endpoints the page uses, the price source once it exists, and the image server
   (gib.show). Nothing the page calls is fixed in code without a setting.
 
+- **Token picker (owner, round 2):** a **modal** on phone and desktop (a square panel over the dimmed screen; on
+  desktop centred in the column). Close is an icon-only round button. Under the search field, **tabs, one per chain**
+  (chain icon + name + count); only one chain's list shows at a time. Each tab lists only **your** tokens: ones the
+  wallet holds, or has used or bridged with zkb.fi before. Search finds every bridgeable token on every chain. Picking a
+  token on the other chain's tab flips the direction. Omnibridge copies carry an orange "Omnibridge" flag in the list.
+  Mockup: `picker-modal.html`.
+- **Direction menu:** stays a dropdown from the From pill: routes grouped by pair (testnets under their own heading),
+  each as two chain icons with a chevron, its time and status, a check on the current one, a paused route greyed with
+  the reason. Mockup: `picker-direction.html` (right panel).
+- **Drawers vs modals:** bottom drawers (sheets) work on phones (e.g. the review sheet); on desktop a drawer becomes a
+  centred modal.
+
+- **Token picker, round 3 (owner, supersedes round 2 where they differ):** on phone it runs edge to edge (full width,
+  rising from the bottom), one layer of padding before content. No title. The close button is icon-only and sits
+  inside the search field on its right. Tabs under the search are flat text tabs (no pills): **All**, then each
+  supported chain (icon + name); the active tab has a 3-unit accent underline. Rows show the token, its chain in small
+  text, balance and USD. The selected token is shown by a lit row with an accent bar on its left edge (absolutely
+  placed): **no checkmark, nothing shifts**. No helper copy such as "anything else: search above". Terse. On desktop
+  the same content is a centred modal. Mockup: `picker-v3.html`.
+
+- **Token picker, round 4 (owner, supersedes rounds 2–3 where they differ):** the search is a full-width band edge to
+  edge, coloured like the amount band ("a burn streak like the input"), with no pill and no top border; the close
+  button is an exact square the full height of the band (52 × 52 px), flush right, the same orange as the band, set
+  apart by a full-height 3-unit dark rule on its left edge (owner picked option A). Tabs: "All" as an icon (a 2×2
+  grid of small circles), then each chain as its icon only (no names). Rows carry no
+  chain name; the subtitle is the token's unit price. The badge on a token's icon shows its origin chain. Omnibridge
+  copies get a bridge icon after the symbol (no pill), whose tooltip explains why it exists and offers an arrow link to
+  the native token. Mockup: `picker-v4.html`.
+- **Links can't silently set fund routing (security review of the first build):** only `dir`, `token` and `amount`
+  prefill the Bridge screen silently; any other field a link sets (receiver, tip settings including the relay router,
+  gas, call mode, target, data) is named in a warning on the screen and in the review sheet, which shows the full
+  receiver address, the effective router and any router warning.
+
+- **Custom tokens (owner):** the picker's search accepts a pasted address of a token neither bridge has seen. If zkb.fi
+  has never bridged it, the Bridge pill takes the overridable warning state: "First time this token is bridged · keep
+  the amount low", explained under the pill (the first transfer also creates its counterpart on the other chain).
+
+- **Price oracle: PulseX pools (owner: "i think that the pulsex exchanges serve as good oracles").** Checked on-chain
+  2026-10-30 through the valve.city RPC:
+  - PulseX v1 factory `0x1715a3E4A142d8b698131108995174F37aEBA10D` (65,484 pairs) and v2 factory
+    `0x29eA7545DEf87022BAdc76323F373EA1e707C523` (191,734 pairs); WPLS `0xA1077a294dDE1B09bB078844df40758a5D0f9a27`.
+  - USD anchor: WPLS against the Omnibridge stablecoins USDC `0x15D38573d2feeb82e7ad5187aB8c1D52810B1f07`, DAI
+    `0xefD766cCb38EaF1dfd701853BFCe31359239F305` and USDT `0x0Cb6F5a34ad42ec934882A05265A7d5F59b51A2f`. The v1 pools
+    hold about $325k, $326k and $234k on the stable side and agree within 0.2% (PLS ≈ $0.0₅562).
+  - Tokens price through their deepest WPLS pool (v1 or v2), times PLS/USD. Example: WETH from Ethereum
+    `0x02DcdD04e3F455D838cd1249292C58f3B79e3C3C` ≈ 3.99e8 WPLS ≈ $2,243, matching its thin direct USDC pool ($2,230).
+  - **Method:** PLS/USD = the depth-weighted median of the three stable pools across v1 and v2. A token's price =
+    its WPLS pool with the deepest WPLS side, if that side is worth at least a minimum (say $10k), else "—". Tokens
+    bridged by zkb.fi take their origin token's price (zkbWETH → ETH, via WETH from Ethereum on PulseX); Ethereum-side
+    tokens likewise use their PulseChain market. Testnets show no prices.
+  - **Where it runs:** in the browser, reading pool reserves through the user's RPC (swappable, batched, cached ~30 s),
+    so the IPFS site needs no price server. The price source is listed in Settings like every other endpoint.
+  - **Limits, stated in the UI tooltip:** spot reserves can be pushed around and Omnibridge copies can trade away from
+    their originals, so prices are for display only and are never used to compute amounts, tips or fees.
+
+- **Gas levels (owner):** choosing a higher level raises the gas-price ceiling the deliverer may spend (in every tip
+  mode, including the default percentage tip), so the choice always does something.
+- **High-tip warning (owner):** the Bridge pill takes the overridable warning state when the tip is a large share of
+  the amount: above 1% for transfers up to $100, a threshold that scales down to 0.1% at $1,000, and 0.1% above that.
+  Between $100 and $1,000 the threshold is 1% × 100 / amount (a log-linear slide; it works out to a tip of about $1
+  across that range). Uses the display price; without a price, the 1% threshold applies. The tip measured is the tip **before gas
+  pricing** (owner): the share-of-amount part only, not what the gas level or gas reimbursement adds on top. **Tip and delivery are coupled in the UI**
+  (owner, superseding "delivery is on top"): the user sees one fee, the money-hand item, that pays for everything; the
+  tip drawer breaks it down. The **anticipated execution cost** = the destination-chain delivery gas at the chosen gas
+  level + **$0.025 for proof generation** (owner's assumption). The "tip too low · may not be delivered" warning stays
+  until the fee is at least **2 × the anticipated cost (a 100% margin)**. The high-tip warning (1% → 0.1%) measures the
+  part of the fee above the anticipated cost, i.e. the tip before gas pricing (my reading of "this is before gas
+  pricing"; owner to confirm).
+
+- **Default fee and the automatic cap (owner):** the default fee is the larger of 0.1% of the amount and 2 × the
+  anticipated cost. What the dapp sets automatically is capped at **1% of the amount**, and that cap is **adjustable**
+  (a setting, also changeable in the review). When the cap binds, the fee stays below 2 × the cost and the low-fee
+  warning stays on. **At checkout, always warn when the cap is too large** and let the user adjust it right there in
+  the finalizing drawer (the review sheet). "Too large" (my reading, owner to confirm): the cap is above the high-tip
+  threshold for this amount (1% up to $100, sliding to 0.1% at $1,000).
+
+- **Fee-drawer motion (owner approved):** open ≈ 0.28 s (height 0.2 s ease-out via grid rows; the 3-unit accent deck
+  line draws across the top from under the tapped icon; content fades in and settles 4 px, 0.06 s delay); close 0.12 s
+  ease-in, content first; swapping redraws the line from the new icon; no overshoot or springs; reduced motion = none.
+  Mockup: `design/ui/screens/accordion-motion.html`.
+
+- **Size (owner):** the baseline is larger on phones and desktop, and grows further on large screens. Phones: 16 px
+  body text, nothing under 13 px, a 40–44 px amount, touch targets ≥ 44 px (pills 48 px, the Bridge pill 56 px). The
+  scale is fluid (clamp tokens) up to desktop, where type is visibly larger and the content column widens to about
+  520–600 px, with the bands still running edge to edge.
+
+- **Explore (owner: "explorer should help you explore every data aspect"):** mockups `design/ui/screens/explore-map.html`
+  (v1: the live ring map, numbers, light clients, feed, services) and `design/ui/screens/explore.html` (v2):
+  - The orange search band leads Explore and takes any identifier: tx hash, message ID, address, token symbol, slot,
+    block, proof number, release CID. It shows what it recognised; results are grouped by kind with the match marked.
+  - **Browse** is a single-column list: a large number on the left, the heading to its right, the subheading below
+    it, a chevron on the far right. One row per kind: transfers & messages, proofs, tokens, addresses, contracts,
+    gates & escrow, costs, releases.
+  - The live ring map, the four numbers, the light-client cards, the latest-transfers feed and the services list follow.
+  - **Every kind has its own page, and every value on a page links onward.** Proof page: what it proves, slot and
+    block, the sync committee's 512 seats as lit/unlit cells, the posting tx, verifier, proving time, gas and cost,
+    previous/next, and the transfers it proved. Token page: both addresses, escrowed vs minted, volume, gate cap, the
+    Omnibridge copy as a separate token, its transfers. Address, transaction, message, slot/block, contract, gate,
+    release and costs pages follow the same pattern.
+  - **Row rule:** status is one word (delivered, waiting, proving, mining, …) as a pill at the right, and the chevron
+    sits at the far right of the row.
+
+- **Address and transaction pages** (mockup `design/ui/screens/explore-address-tx.html`): address = identity band
+  (identicon, full address, role tags), per-chain balances and activity, totals through zkb.fi, tabs (transfers,
+  proofs posted, contracts deployed, deliveries), "Bridge to this address" and "Watch". Transaction = kind band, decoded call, gas, fee, events, raw input collapsed, and **where it sits**: the step list
+  starts with the **user's action** (the transfer that started it), and step labels are short ("Block final on
+  PulseChain", not "Block 25,767,883 final…"). Tapping a step opens a small drawer with its details; the lit line joining
+  completed steps runs on past an open drawer, unbroken (owner) (for a block:
+  number, hash, time, slot, sync committee period and signers, explorer link). No explanatory sentence about what the
+  transaction did (owner: it reads as temporary); the kind, the details and the steps say it. Routes in every list (including
+  proofs) are shown as chain icons with a chevron, not as words.
+
 ## Open questions
 
 - Where the Omnibridge token list comes from and how it stays current.
 
-- The price oracle: which sources (DEX pools on PulseChain, an ETH/USD feed on Ethereum), how bridged tokens map to
-  their originals, and where it runs (indexer or backend).
 
 ## Left to the builder
 
@@ -260,3 +370,28 @@ noise from one message (a child on the keyboard) is left out.
 22. "1) B, matched / 2) good, however the gas can on the input/output section should also have a bar graph showing different gas levels. users can choose a higher gas payment if they want (default is a percent anyway) / 3) great! be sure to add an external link icon justified to the right, to the right of the timestamp even, to link the user to the transaction / information on the blockchain / 4) you can use the valve.city demo key as a default for both chains. also supports testnets"
 23. "if you are going to write specs for these updates, be sure to capture my raw instruction too. often when you do this with the visual companion, and then you build it for real, you leave out key pieces and end up creating a shittier ui"
 24. "oh, you'll also have to point to a prover request endpoint. everything needs to be swappable"
+25. "the drawer works well on mobile in general. dropdown works for the from network for sure, and the choose a token should be a modal. make the remove button just an icon+button if it is going to exist at all. on desktop, that drawer should be a modal. and i do not like that n chains are showing at the same time. we should pull tkoens that the user has a balance of or that they have used in this system or bridged with before. i would like to see tabs below the search."
+26. "on mobile, your earlier render of the token picker on phone was better. all the way to the edge. only one layer of padding before content. remove the chain pills. just do all, and then each chain that is supported. all of the "anything else: search above. every bridgable token is found here" is stupid. be terse. remove the "choose a token" move the close button to be over/inside of the input on the right.. the checkmark denoting the selected token is dumb. it shifts content away. eggregious ui violation"
+27. "the search got worse. i think you should refactor it to also go edge to edge. maybe play around with it as a burn streak like the input. then the close button could be square and hugging the right side and there would be no rounded pill shape, no top border. remove the word ethereum and pulsechain from the chain tabs as well as the item rows. you shoud instead show the price of the token. the network badge over the token icon shows the origination. and for the omnibridge pill, lets instead just go with a bridge icon and a tooltip explaining its existance. maybe with an arrow function to find the native coin"
+28. "on the search input, good. better. fix the height. close button should be a square. the "all" text should be an icon"
+29. "and the right square should be the same color as the input. try some sort of border to differentiate it"
+30. "dark rule is fine"
+31. "we will also have to handle custom tokens as well. tokens that neither bridge has ever seen. we can add a warning to the bridge button stating that this is the first time that this token hasbeen bridged and it may be wise to keep the amount low. lets look at the activity now"
+32. "find an oracle. i think that the pulsex exchanges serve as good oracles"
+33. "raise the gas price ceiling. warn when a tip is >1% for bridges under $100. then scale it down to 0.1% as it goes to $1000"
+34. "this is before gas pricing"
+35. "delivery is on top of this"
+36. "well, no we need to couple them in the ui. think about it like this. we need to make a 100% margin on the anticipated cost to execute the bridge (assume a $0.025 cost for the proof generation) for the warning to go away"
+37. "make the default the larger of the two. cap what we are willing to set in an automated manner at 1%. make the cap adjustable. always warn users as they are checking out if their cap is too large and give them an opportunity to adjust it in the finalizing drawer."
+38. "give me an animation for when the accordion (gas/arrival/tip) expansions show/hide."
+39. "http://100.90.134.51:5200/#/bridge/eth-pls?bridge.amount=1 did not see a correlative output number it stayed at zero"
+40. "it's getting there, but you need to connect a lot of data points"
+41. "the drawer animation is fine"
+42. "it seems that your ui is quite small, especially for desktop AND mobile. the baseline should be larger. and large can be achieved on larger screens"
+43. "show me the explore screen next. what i have seen so far in the implementation is not impressive. also, your chevrons in the top nav that allow the user to get to the explorer/activity should be fixed around a fixed width text block. otherwise you end up with chevrons moving back and forth"
+44. "cool. i like it. iterate a bit more, include more data including searches of the proofs or transactions or identifers. explorer should help you explore every data aspect"
+45. "for the "transfers it proved" move the chevron to the right, shorten the status to one word: delivered, waiting, proving, mining, etc. the browse section might be able to just have a single column grid if you used a large number to the left, the header to the right, and the subheader below that then send explore v2 to the build worker"
+46. "show me the address and transaction pages"
+47. "where it sits should also have to show the input transfer/user action. also, the "block n final on pulsechain" maybe should be shortened to "block final on Pulsechain" and maybe we can give a small drawer to show information about the block like its number or its hash or other info about the committee you are using "pulsechain -> sepolia" instead of icons in the proofs sections."
+48. "you should still maintain the connection between completed steps when the drawer is opened"
+49. "this seems temporary: "Sepolia's light client now trusts PulseChain testnet v4 up to slot 11,194,368 (block 25,767,883). Messages sent from PulseChain before that block can be proven on Sepolia." strike it"

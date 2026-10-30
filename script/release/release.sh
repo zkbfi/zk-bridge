@@ -19,6 +19,9 @@
 #   RELEASE_VERSION              the release version (default 0.0.0-<short commit>)
 #   RELEASE_PREVIOUS_MANIFEST    the previous version.json, so the sequence goes up (default: none, sequence 1)
 #   RELEASE_TERMINAL_TARGETS     Bun targets for the terminal, space separated (default: all of build-terminal.sh)
+#   RELEASE_CHANNEL              stable (default) or next. next is the staging channel served at next.zkb.fi: the
+#                                landing page is built from landing.next.config.json (it trusts only the staging key),
+#                                version.json names channels.next, and the release is signed with the staging key.
 #   RELEASE_SKIP_PROVER=1        builds no prover and no guest program. version.json then lists no prover download,
 #                                and the script says so. For a test run on a machine without Docker or SP1 only.
 #   DOCS_GATE_WITHOUT_PRIVATE_PATTERNS=1 is passed through to the docs build (see script/check-docs-public.sh).
@@ -28,6 +31,12 @@ if [ "$#" -ne 1 ]; then
   echo "usage: $0 <output-directory> < release-key.jwk" >&2
   exit 2
 fi
+channel="${RELEASE_CHANNEL:-stable}"
+case "$channel" in
+  stable) landing_config=landing.config.json ;;
+  next) landing_config=landing.next.config.json ;;
+  *) echo "RELEASE_CHANNEL must be stable or next, not $channel" >&2; exit 1 ;;
+esac
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 mkdir -p "$1"
@@ -38,15 +47,16 @@ if [ -n "$(ls -A "$release")" ]; then
 fi
 cli=(node "$repository_root/explorer/release/src/cli.ts")
 
-commit="$(git -C "$repository_root" rev-parse --short HEAD)"
+# The full SHA: a promotion checks it is on origin/main (script/release/promote-checks.sh).
+commit="$(git -C "$repository_root" rev-parse HEAD)"
 published_at="$(git -C "$repository_root" log -1 --format=%cI)"
-version="${RELEASE_VERSION:-0.0.0-$commit}"
+version="${RELEASE_VERSION:-0.0.0-${commit:0:7}}"
 mkdir -p "$release/archives" "$release/downloads"
 
 echo "== sites"
 (cd "$repository_root/explorer" && pnpm --filter @zk-bridge/web build) </dev/null
 (cd "$repository_root/explorer" && pnpm --filter @zk-bridge/docs build) </dev/null
-(cd "$repository_root/explorer/landing" && node scripts/build.ts) </dev/null
+(cd "$repository_root/explorer/landing" && LANDING_CONFIG="$landing_config" node scripts/build.ts) </dev/null
 "${cli[@]}" pack "$repository_root/explorer/web/dist" "$release/archives/dapp.car" </dev/null
 "${cli[@]}" pack "$repository_root/explorer/docs/dist" "$release/archives/docs.car" </dev/null
 "${cli[@]}" pack "$repository_root/explorer/landing/dist" "$release/archives/landing.car" </dev/null
@@ -69,7 +79,7 @@ fi
 echo "== manifest"
 previous=()
 if [ -n "${RELEASE_PREVIOUS_MANIFEST:-}" ]; then previous=(--previous "$RELEASE_PREVIOUS_MANIFEST"); fi
-"${cli[@]}" manifest "$release" --version "$version" --commit "$commit" --published-at "$published_at" \
+"${cli[@]}" manifest "$release" --version "$version" --commit "$commit" --published-at "$published_at" --channel "$channel" \
   "${previous[@]+"${previous[@]}"}" </dev/null
 # The only step that reads standard input: the release key.
 "${cli[@]}" sign "$release"

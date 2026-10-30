@@ -1,0 +1,79 @@
+<style>
+  .wrap { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; }
+  .ph { width: 340px; background: #121110; color: #f0ede8; font: 12px/1.4 system-ui, sans-serif; border: 1px solid #d8d4ce; }
+  .to { background: #1c1a18; padding: 14px; }
+  .fees { display: flex; gap: 6px; font-size: 11px; color: #8d877e; position: relative; }
+  .fee { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 3px 9px 3px 5px; cursor: pointer; user-select: none; border: 0; background: transparent; color: inherit; font: inherit; transition: background-color 160ms cubic-bezier(.2,.7,.2,1), color 160ms cubic-bezier(.2,.7,.2,1); }
+  .fee svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .fee[aria-expanded="true"] { background: #2a2724; color: #f0ede8; }
+  .amt { font-size: 30px; font-weight: 600; margin-top: 8px; }
+  /* the drawer: rows animate 0fr -> 1fr, so height follows content exactly with no measuring */
+  .drawer { display: grid; grid-template-rows: 0fr; transition: grid-template-rows var(--open, 200ms) cubic-bezier(.2,.7,.2,1); }
+  .drawer.open { grid-template-rows: 1fr; }
+  .drawer > .inner { overflow: hidden; min-height: 0; }
+  .body { position: relative; margin: 10px -14px 4px; padding: 12px 14px 12px; background: #121110; border-bottom: 1px solid #2a2724; opacity: 0; transform: translateY(-4px); transition: opacity 120ms cubic-bezier(.4,0,1,1), transform 120ms cubic-bezier(.4,0,1,1); }
+  .drawer.open .body { opacity: 1; transform: none; transition: opacity 160ms cubic-bezier(.2,.7,.2,1) 60ms, transform 160ms cubic-bezier(.2,.7,.2,1) 60ms; }
+  /* the deck: a 3-unit accent line draws across the top as the drawer opens (the mark's deck) */
+  .body:before { content: ""; position: absolute; left: 0; top: 0; height: 3px; width: 100%; background: #eb6834; transform: scaleX(0); transform-origin: var(--from, 0) 50%; transition: transform 120ms cubic-bezier(.4,0,1,1); }
+  .drawer.open .body:before { transform: scaleX(1); transition: transform 220ms cubic-bezier(.2,.7,.2,1); }
+  .row { display: flex; gap: 8px; padding: 4px 0; } .row .t { margin-left: auto; color: #9a948b; }
+  .ctl { display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0 0; font: 12px system-ui, sans-serif; color: #55524d; align-items: center; }
+  .ctl button { font: inherit; border: 1.5px solid #bbb; background: #fff; border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+  .notes { max-width: 520px; font: 13px/1.55 system-ui, sans-serif; color: #55524d; }
+  .notes li { margin-bottom: 6px; }
+  @media (prefers-reduced-motion: reduce) { .drawer, .body, .body:before, .fee { transition: none !important; } }
+</style>
+
+<h2>The fee drawers, opening and closing</h2>
+<p class="subtitle">Live: tap the hand (tip), the gas can or the clock. Tapping the open one, or another one, closes or swaps it. No bounce, no overshoot; everything eases straight into place.</p>
+
+<div class="wrap">
+  <div class="ph"><div class="to">
+    <div class="fees" id="fees">
+      <button class="fee" data-k="tip" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M3 11.5h3.5v8H3z"/><path d="M6.5 12.5l3.2-2.6a2 2 0 0 1 2.4 0l1 .8h3.4a1.5 1.5 0 0 1 0 3H12"/><path d="M6.5 18.5h8.6a2 2 0 0 0 1.4-.6l4.2-4.3a1.4 1.4 0 0 0-2-2l-3.2 2.9"/><rect x="11" y="2.5" width="9" height="5.5" rx="1"/></svg>0.0012 ETH</button>
+      <button class="fee" data-k="gas" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M6 4h7l5 5v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M13 4v5h5"/><path d="M8.5 12.5l5 5M13.5 12.5l-5 5"/></svg>Normal</button>
+      <button class="fee" data-k="time" aria-expanded="false"><svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2"/><path d="M9.5 2.5h5"/></svg>~15 min</button>
+    </div>
+    <div class="drawer" id="drawer"><div class="inner"><div class="body" id="body"></div></div></div>
+    <div class="amt">1.2488</div>
+  </div></div>
+
+  <div class="notes">
+    <ul>
+      <li><b>Open, about 0.28 s in all:</b> the panel grows to its exact height in 0.2 s with a quick ease-out. The orange 3-unit line (the deck) draws across its top from under the icon you tapped, and the content fades in and drops 4 px into place, starting 0.06 s in.</li>
+      <li><b>Close, 0.12 s:</b> faster than opening, with an ease-in. Content and line go first, then the height collapses. Nothing hangs around.</li>
+      <li><b>Swap</b> (another icon while one is open): the content cross-fades and the line redraws from the new icon; the height follows the new content.</li>
+      <li>The tapped icon's pill lights at the same time, so you see what you opened.</li>
+      <li><b>Reduced motion:</b> it simply appears and disappears.</li>
+    </ul>
+    <div class="ctl">Speed: <button onclick="setSpeed(1)">1×</button><button onclick="setSpeed(4)">¼× (to study it)</button></div>
+  </div>
+</div>
+
+<script>
+  const content = {
+    tip: '<b>Fee</b><div class="row">Delivery gas<span class="t">0.0004 ETH</span></div><div class="row">Proof<span class="t">$0.025</span></div><div class="row">Tip<span class="t">0.0006 ETH</span></div>',
+    gas: '<b>Gas level</b><div class="row">Normal · 2× today\'s base fee<span class="t">ceiling</span></div><div class="row">High · 3×</div><div class="row">Highest · 5×</div>',
+    time: '<b>About 15 min</b><div class="row">Final on Ethereum<span class="t">~13 min</span></div><div class="row">Proof<span class="t">~2 min</span></div><div class="row">Delivered<span class="t">~20 s</span></div>',
+  };
+  const drawer = document.getElementById('drawer'), body = document.getElementById('body');
+  let open = null, scale = 1;
+  window.setSpeed = (s) => { scale = s; document.documentElement.style.setProperty('--open', 200 * s + 'ms'); document.querySelectorAll('.body, .drawer, .fee').forEach(e => e.style.transitionDuration = ''); document.body.style.setProperty('--k', s); restyle(); };
+  function restyle() {
+    const ss = document.getElementById('speedstyle') || Object.assign(document.head.appendChild(document.createElement('style')), { id: 'speedstyle' });
+    const s = scale;
+    ss.textContent = scale === 1 ? '' : `.drawer{transition-duration:${200*s}ms}.body{transition-duration:${120*s}ms}.drawer.open .body{transition-duration:${160*s}ms;transition-delay:${60*s}ms}.body:before{transition-duration:${120*s}ms}.drawer.open .body:before{transition-duration:${220*s}ms}.fee{transition-duration:${160*s}ms}`;
+  }
+  document.getElementById('fees').addEventListener('click', (e) => {
+    const b = e.target.closest('.fee'); if (!b) return;
+    const k = b.dataset.k;
+    document.querySelectorAll('.fee').forEach(f => f.setAttribute('aria-expanded', 'false'));
+    if (open === k) { open = null; drawer.classList.remove('open'); return; }
+    const x = b.offsetLeft + b.offsetWidth / 2 + 14;
+    body.style.setProperty('--from', x + 'px');
+    if (open) { drawer.classList.remove('open'); setTimeout(() => { body.innerHTML = content[k]; drawer.classList.add('open'); }, 120 * scale); }
+    else { body.innerHTML = content[k]; drawer.classList.add('open'); }
+    open = k; b.setAttribute('aria-expanded', 'true');
+  });
+  document.addEventListener('click', (e) => { if (!e.target.closest('.ph') && !e.target.closest('.ctl') && open) { document.querySelectorAll('.fee').forEach(f => f.setAttribute('aria-expanded', 'false')); drawer.classList.remove('open'); open = null; } });
+</script>
