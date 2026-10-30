@@ -230,3 +230,25 @@
 .zb-step-time { margin-left: auto; color: var(--zb-muted); white-space: nowrap; }
 .zb-step a { color: inherit; display: inline-flex; }
 .zb-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Close: an icon-only round button */
+.zb-close { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; border: 1.5px solid var(--zb-pill-edge); flex: none; }
+
+/* The direction menu: the current route is lit with a left accent bar that never shifts content */
+.zb-dir-menu { left: 16px; right: 16px; top: calc(100% - 4px); max-width: 448px; }
+.zb-pop [role="menuitemradio"] { position: relative; }
+.zb-pop [aria-checked="true"]::before, .zb-token-list [aria-selected="true"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--zb-accent); }
+.zb-pop [aria-disabled="true"] { color: var(--zb-muted); cursor: not-allowed; }
+
+/* The token picker (round 3): edge to edge on phones, one layer of padding, flat tabs, no title, no check mark */
+.zb-picker { padding: 14px 16px 18px; }
+.zb-picker .zb-search-field { padding: 4px 4px 4px 14px; }
+.zb-tabs { display: flex; gap: 18px; margin-top: 12px; border-bottom: 1px solid var(--zb-line); }
+.zb-tabs [role="tab"] { display: inline-flex; align-items: center; gap: 6px; padding: 8px 0; font-weight: 600; font-size: 14px; color: var(--zb-muted); border-bottom: 3px solid transparent; margin-bottom: -1px; }
+.zb-tabs [aria-selected="true"] { color: var(--zb-ink); border-bottom-color: var(--zb-accent); }
+.zb-token-list { list-style: none; margin: 6px -16px 0; padding: 0; }
+.zb-token-list [role="option"] { position: relative; display: flex; align-items: center; gap: 12px; padding: 10px 16px; cursor: pointer; }
+.zb-token-list [aria-selected="true"], .zb-token-list [data-active="true"] { background: var(--zb-raised); }
+.zb-token-name { display: flex; flex-direction: column; line-height: 1.25; }
+.zb-token-name small { color: var(--zb-muted); font-size: 12px; }
+.zb-token-balance { margin-left: auto; font-variant-numeric: tabular-nums; }

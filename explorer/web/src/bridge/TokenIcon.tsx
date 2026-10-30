@@ -11,6 +11,8 @@ export type TokenIconProps = {
   readonly symbol: string;
   readonly size?: number;
   readonly imageServer?: string;
+  /** The icon sits next to its own name, so screen readers skip it. */
+  readonly decorative?: boolean;
 };
 
 /**
@@ -19,7 +21,7 @@ export type TokenIconProps = {
  *
  * @param props The subject, the badge and the symbol.
  */
-export const TokenIcon = ({ subject, badgeChainId = null, symbol, size = 24, imageServer = loadImageServer() }: TokenIconProps) => {
+export const TokenIcon = ({ subject, badgeChainId = null, symbol, size = 24, imageServer = loadImageServer(), decorative = false }: TokenIconProps) => {
   const [failed, setFailed] = useState(false);
   const [badgeFailed, setBadgeFailed] = useState(false);
   return (
@@ -29,7 +31,7 @@ export const TokenIcon = ({ subject, badgeChainId = null, symbol, size = 24, ima
           {symbol.replace(/^zkb/i, "").slice(0, 3)}
         </span>
       ) : (
-        <img className="zb-main" src={iconUrl(subject, imageServer)} alt={symbol} onError={() => setFailed(true)} />
+        <img className="zb-main" src={iconUrl(subject, imageServer)} alt={decorative ? "" : symbol} onError={() => setFailed(true)} />
       )}
       {badgeChainId === null || badgeFailed ? null : (
         <img className="zb-badge" src={iconUrl({ chainId: badgeChainId }, imageServer)} alt="" data-badge={badgeChainId} onError={() => setBadgeFailed(true)} />

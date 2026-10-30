@@ -1,0 +1,160 @@
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { ClockIcon, GasCan, MoneyHand } from "./icons";
+import type { TransferStep } from "./bridge-model";
+
+/** A slider of the tip drawer: a value, its range, and tick marks with labels. */
+export type FeeSlider = {
+  readonly label: string;
+  readonly help: string;
+  readonly value: number;
+  readonly min: number;
+  readonly max: number;
+  readonly step: number;
+  readonly valueText: ReactNode;
+  readonly ticks: readonly { readonly at: number; readonly label: string }[];
+  readonly onChange: (value: number) => void;
+};
+
+/** Props of {@link FeeLine}. */
+export type FeeLineProps = {
+  /** The tip, already with its token icon. */
+  readonly tip: ReactNode;
+  readonly tipHelp: string;
+  /** The delivery gas, already with the destination coin's icon. */
+  readonly gas: ReactNode;
+  readonly gasHelp: string;
+  readonly gasLevel: 0 | 1 | 2 | 3;
+  readonly time: string;
+  readonly steps: readonly TransferStep[];
+  readonly sliders: readonly FeeSlider[];
+  /** A line under the sliders, such as what happens left of the break-even tick. */
+  readonly sliderNote: string | null;
+};
+
+type Open = "tip" | "time" | null;
+
+const Tip = ({ id, text }: { readonly id: string; readonly text: string }) => (
+  <span role="tooltip" id={id} className="zb-tooltip">
+    {text}
+  </span>
+);
+
+/**
+ * The fee line: three soft icons with their values, no words (owner: "instead of the words "tip" and gas, you should
+ * use icons"). Each has a tooltip. The tip and the time open a drawer between the line and the output amount: the tip's
+ * holds sliders with tick marks, the time's lists every technical step. Clicking again, clicking away or Escape closes.
+ *
+ * @param props The values, the help texts, the steps and the sliders.
+ */
+export const FeeLine = ({ tip, tipHelp, gas, gasHelp, gasLevel, time, steps, sliders, sliderNote }: FeeLineProps) => {
+  const [open, setOpen] = useState<Open>(null);
+  const [hover, setHover] = useState<"tip" | "gas" | "time" | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const ids = { tip: useId(), gas: useId(), time: useId(), drawer: useId() };
+
+  useEffect(() => {
+    if (open === null) return;
+    const away = (event: MouseEvent): void => {
+      if (root.current !== null && !root.current.contains(event.target as Node)) setOpen(null);
+    };
+    const escape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") setOpen(null);
+    };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
+
+  const item = (key: "tip" | "gas" | "time", icon: ReactNode, value: ReactNode, help: string, opens: Open) => {
+    const hoverProps = { onMouseEnter: () => setHover(key), onMouseLeave: () => setHover(null), onFocus: () => setHover(key), onBlur: () => setHover(null) };
+    const content = (
+      <>
+        {icon}
+        {value}
+        {hover === key && open === null ? <Tip id={ids[key]} text={help} /> : null}
+      </>
+    );
+    if (opens === null) {
+      return (
+        <span className="zb-fee" tabIndex={0} aria-describedby={ids[key]} data-fee={key} {...hoverProps}>
+          {content}
+        </span>
+      );
+    }
+    return (
+      <button type="button" className="zb-fee" aria-expanded={open === opens} aria-controls={ids.drawer} aria-describedby={ids[key]} data-fee={key} onClick={() => setOpen(open === opens ? null : opens)} {...hoverProps}>
+        {content}
+      </button>
+    );
+  };
+
+  return (
+    <div ref={root}>
+      <div className="zb-fees">
+        {item("tip", <MoneyHand title="Tip" />, tip, tipHelp, "tip")}
+        {item("gas", <GasCan title="Gas" level={gasLevel} />, gas, gasHelp, null)}
+        {item("time", <ClockIcon title="Time" />, time, "How long until it arrives. Tap for every step.", "time")}
+      </div>
+      {open === null ? null : (
+        <div className="zb-drawer" id={ids.drawer}>
+          {open === "time" ? (
+            <ol className="zb-steps">
+              {steps.map((step) => (
+                <li key={step.label} className="zb-step" data-state="ahead">
+                  <span className="zb-step-dot" aria-hidden="true" />
+                  <span>{step.label}</span>
+                  <span className="zb-step-time">{step.estimate}</span>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <>
+              {sliders.map((slider) => (
+                <Slider key={slider.label} slider={slider} />
+              ))}
+              {sliderNote === null ? null : <p style={{ margin: "10px 0 0", fontSize: 12, color: "var(--zb-muted)" }}>{sliderNote}</p>}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const Slider = ({ slider }: { readonly slider: FeeSlider }) => {
+  const [help, setHelp] = useState(false);
+  const helpId = useId();
+  const share = (value: number): number => ((value - slider.min) / (slider.max - slider.min)) * 100;
+  return (
+    <div className="zb-slider">
+      <div className="zb-slider-top">
+        <span>
+          {slider.label}
+          <button type="button" className="zb-q" aria-label={`About ${slider.label}`} aria-describedby={helpId} onClick={() => setHelp(!help)} onBlur={() => setHelp(false)}>
+            ?{help ? <Tip id={helpId} text={slider.help} /> : null}
+          </button>
+        </span>
+        <b>{slider.valueText}</b>
+      </div>
+      <div className="zb-range">
+        <span className="zb-range-bar" />
+        <span className="zb-range-fill" style={{ width: `${share(slider.value)}%` }} />
+        {slider.ticks.map((tick) => (
+          <span key={tick.label} className="zb-range-tick" style={{ left: `${share(tick.at)}%` }} />
+        ))}
+        <span className="zb-range-knob" style={{ left: `${share(slider.value)}%` }} />
+        <input type="range" aria-label={slider.label} min={slider.min} max={slider.max} step={slider.step} value={slider.value} onChange={(event) => slider.onChange(Number(event.target.value))} />
+      </div>
+      <div className="zb-ticks">
+        {slider.ticks.map((tick) => (
+          <span key={tick.label} style={{ left: `${share(tick.at)}%` }}>
+            {tick.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+};
