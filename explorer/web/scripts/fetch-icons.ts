@@ -1,6 +1,7 @@
 /**
  * Downloads chain (and listed token) icons from the image server once, at build time, into public/icons/, so the site
- * on IPFS never calls the image server for them. Every file is checked (src/bridge/svg-check.ts) and its SHA-256 goes
+ * on IPFS never calls the image server for them. Every SVG must pass the allowlist in src/bridge/svg-check.ts (the
+ * build fails, it never cleans and carries on), and every file's SHA-256 goes
  * in public/icons/icons.lock.json, so a rebuild is reproducible and a changed upstream image shows up in review.
  *
  *   node scripts/fetch-icons.ts            download what the lock lacks, verify what it has
@@ -35,6 +36,11 @@ for (const key of WANTED) {
   if (known !== undefined && !refresh) {
     const bytes = new Uint8Array(await readFile(join(out, known.file)));
     if (sha256(bytes) !== known.sha256) throw new Error(`${known.file} does not match its hash in icons.lock.json`);
+    // A shipped SVG is checked again on every build, so a tighter allowlist catches files already in the repository.
+    if (known.file.endsWith(".svg")) {
+      const reason = checkSvg(new TextDecoder().decode(bytes));
+      if (reason !== null) throw new Error(`${known.file}: refused, ${reason}`);
+    }
     continue;
   }
   const response = await fetch(`${server}/${key}`);
