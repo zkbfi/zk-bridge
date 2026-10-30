@@ -288,3 +288,39 @@
 .zb-sign button { border-radius: 999px !important; box-shadow: none !important; }
 .zb-sign [role="alert"], .zb-sign [data-part], .zb-sign .chakra-alert { border-radius: 0 !important; box-shadow: none !important; }
 .zb-sign { font-size: 14px; }
+
+/* Activity (owner mockup activity-v5): flat tabs with an orange count; cards for transfers in flight; day lists. */
+.zb-tabs-text [role="tab"] { font-size: 15px; }
+.zb-count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--zb-accent); color: #ffffff; font-size: 11px; font-weight: 700; }
+.zb-acard { background: var(--zb-to); padding-block: 14px; margin-top: 2px; }
+.zb-arow { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; }
+.zb-arow .zb-right { margin-left: auto; }
+.zb-small { font-size: 13px; color: var(--zb-muted); }
+.zb-left-time { color: var(--zb-accent-text); font-weight: 600; }
+.zb-route { display: inline-flex; align-items: center; gap: 4px; }
+.zb-drow { border-top: 1px solid var(--zb-line); }
+.zb-drow > .zb-arow { padding: 11px 0; }
+.zb-dopen { padding: 4px 0 14px; display: grid; gap: 12px; }
+.zb-dopen .zb-pill { justify-self: start; text-decoration: none; }
+a.zb-go { text-decoration: none; }
+a.zb-go[aria-disabled="true"] { cursor: not-allowed; }
+
+/* The pulse at real pixel size: track 4, pill 22 x 8, stops r 1.8, end dots r 5.5; solid colours. */
+.zb-apulse { position: relative; height: 14px; margin: 12px 0 8px; }
+.zb-apulse > span { position: absolute; top: 50%; transform: translate(-50%, -50%); }
+.zb-apulse-track { left: 11px !important; right: 11px; height: 4px; background: var(--zb-track-ahead); transform: translateY(-50%) !important; }
+.zb-apulse-lit { left: 11px; height: 4px; background: var(--zb-accent); transform: translateY(-50%) !important; }
+.zb-apulse-stop { width: 3.6px; height: 3.6px; border-radius: 50%; background: var(--zb-stop-ahead); }
+.zb-apulse-stop[data-passed="true"] { background: var(--zb-stop-passed); }
+.zb-apulse-pill { width: 22px; height: 8px; border-radius: 999px; background: var(--zb-accent); box-sizing: border-box; border: 2px solid var(--zb-accent); outline: 0; }
+.zb-apulse-pill::after { content: ""; position: absolute; left: 4px; right: 4px; top: 50%; height: 2px; transform: translateY(-50%); border-radius: 999px; background: var(--zb-core); }
+.zb-apulse-end { width: 11px; height: 11px; border-radius: 50%; background: var(--zb-accent); transform: translateY(-50%) !important; }
+.zb-apulse-end[data-end="destination"] { background: var(--zb-track-ahead); }
+.zb-apulse-end[data-end="destination"][data-lit="true"] { background: var(--zb-accent); }
+
+/* The sideways slide between Activity, Bridge and Explore. */
+@keyframes zb-in-left { from { transform: translateX(-24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes zb-in-right { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.zb-slide-left { animation: zb-in-left 180ms ease-out; }
+.zb-slide-right { animation: zb-in-right 180ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .zb-slide-left, .zb-slide-right { animation: none; } }

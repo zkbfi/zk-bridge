@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import { erc20ReaderFor, isFirstBridge, resolveCustomToken } from "./custom-token";
+import { addPending } from "./pending";
 import type { Address } from "viem";
 import type { TokenInfo } from "@terminal/model/types";
 import { useDeliveryCost, usePairHealth, usePriorityFee, useSnapshots, useTokens, useUsedTokens } from "../app/queries";
@@ -361,7 +362,14 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
           </div>
         </Sheet>
       ) : null}
-      {signing === null ? null : <TransactionDialog steps={signing} variant="sheet" onClose={() => setSigning(null)} />}
+      {signing === null ? null : <TransactionDialog
+          steps={signing}
+          variant="sheet"
+          onClose={() => setSigning(null)}
+          onFinished={(hash) => {
+            if (token !== null && amount !== null) addPending({ sourceTransactionHash: hash as `0x${string}`, direction: route.dir, token, amount, sentAt: Math.floor(Date.now() / 1000) });
+          }}
+        />}
     </main>
   );
 };

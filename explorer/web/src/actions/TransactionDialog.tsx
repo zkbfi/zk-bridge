@@ -1,5 +1,5 @@
 import { Box, Button, Flex, Stack, Text } from "@chakra-ui/react";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useRouterAddresses } from "../app/queries";
 import { buildConfirmView, type ConfirmLine, type ConfirmView } from "../tx/confirm-model";
 import type { WebStep } from "../tx/bridge-steps";
@@ -20,6 +20,8 @@ export type TransactionDialogProps = {
    * buttons, the transactions as a joined step list). `modal` (default): the explorer's dialog.
    */
   readonly variant?: "modal" | "sheet";
+  /** Called once with the hash of the last transaction when every step is confirmed (the bridge records it as pending). */
+  readonly onFinished?: (lastHash: string) => void;
 };
 
 const LineList = ({ title, lines }: { readonly title: string; readonly lines: readonly ConfirmLine[] }) => (
@@ -184,9 +186,14 @@ const Review = ({ view, prepared, position }: ReviewProps) => {
  *
  * @param props The planned transactions and the close handler.
  */
-export const TransactionDialog = ({ steps, onClose, variant = "modal" }: TransactionDialogProps) => {
+export const TransactionDialog = ({ steps, onClose, variant = "modal", onFinished }: TransactionDialogProps) => {
   const { state, sequence } = useTransactionSequence(steps);
   const step = state.steps[state.stepIndex];
+  const finishedHash = state.phase === "finished" ? (state.outcomes.at(-1)?.transactionHash ?? null) : null;
+  useEffect(() => {
+    if (finishedHash !== null) onFinished?.(finishedHash);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [finishedHash]);
   const delivery = step?.disclosure.delivery ?? null;
   const routerAddresses = useRouterAddresses(step?.disclosure.destinationChainId ?? null, delivery?.router ?? null, { enabled: delivery !== null });
   const view = step === undefined ? null : buildConfirmView(step, routerAddresses.data);

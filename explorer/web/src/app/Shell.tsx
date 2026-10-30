@@ -1,5 +1,5 @@
 import { Box, Button, Flex, Text } from "@chakra-ui/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActionDialog, type FormDialogName } from "../actions/ActionDialogs";
 import { CommandPalette } from "../search/CommandPalette";
 import { browserStorage, loadRecent, rememberRecent } from "../search/recent-items";
@@ -15,6 +15,7 @@ import { MessageView } from "../views/MessageView";
 import { PairView } from "../views/pair/PairView";
 import { ProverView } from "../views/ProverView";
 import { ConnectionsView } from "../views/ConnectionsView";
+import { ActivityScreen } from "../bridge/ActivityScreen";
 import { BridgeScreen } from "../bridge/BridgeScreen";
 import { Header } from "../bridge/Header";
 import { Notice } from "../ui/primitives";
@@ -99,7 +100,7 @@ const usePaletteShortcuts = (open: () => void): void => {
 const renderRoute = (route: Route, navigate: (next: Route) => void, update: (next: Route) => void) => {
   if (route.name === "home" || route.name === "global" || route.name === "explore") return <GlobalView />;
   if (route.name === "bridge") return null;
-  if (route.name === "activity") return <ActivityPlaceholder />;
+  if (route.name === "activity") return null;
   if (route.name === "pair") return <PairView key={route.pairId} route={route} onChange={update} />;
   if (route.name === "audit") return <AuditView />;
   if (route.name === "prover") return <ProverView />;
@@ -112,12 +113,6 @@ const renderRoute = (route: Route, navigate: (next: Route) => void, update: (nex
 
 const shortAccount = (account: string | null): string => (account === null ? "No wallet" : `${account.slice(0, 6)}…${account.slice(-4)}`);
 
-/** The Activity screen arrives in the next phase; until then it points at the history. */
-const ActivityPlaceholder = () => (
-  <Text color="fg.muted">
-    Your transfers will show here, in flight and delivered. Until then, see <a href={formatRoute({ name: "history", filters: EMPTY_HISTORY_FILTERS })}>History</a>.
-  </Text>
-);
 
 /**
  * The frame of the page: the top bar with the one search field, the current view, and the palette and dialogs.
@@ -146,6 +141,49 @@ export const Shell = () => {
     go({ route, overlay: dialog === null ? NO_OVERLAY : { ...NO_OVERLAY, dialog } });
   }, [go, route]);
   const { theme, setTheme } = useThemeChoice();
+  // The three screens slide sideways: Activity, Bridge, Explore. Arrow keys and a swipe move between them; the header
+  // chevrons are links; the address follows (#/activity, #/bridge/<pair>, #/explore).
+  const screenIndex = (name: Route["name"]): number => (name === "activity" ? 0 : name === "bridge" || name === "home" ? 1 : name === "explore" ? 2 : -1);
+  const screenRoute = (index: number): Route => (index === 0 ? { name: "activity" } : index === 1 ? { name: "bridge", pairId: pair.id, dir: "first-to-second" } : { name: "explore" });
+  const [previousIndex, setPreviousIndex] = useState(() => screenIndex(route.name));
+  const currentIndex = screenIndex(route.name);
+  const slideClass = previousIndex < 0 || currentIndex < 0 || previousIndex === currentIndex ? "" : currentIndex < previousIndex ? "zb-slide-left" : "zb-slide-right";
+  useEffect(() => {
+    const timer = setTimeout(() => setPreviousIndex(currentIndex), 200);
+    return () => clearTimeout(timer);
+  }, [currentIndex]);
+  const step = useCallback((delta: number): void => {
+    const at = screenIndex(route.name);
+    if (at < 0) return;
+    const next = at + delta;
+    if (next < 0 || next > 2) return;
+    navigate(screenRoute(next));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route.name, navigate, pair.id]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (overlay.dialog !== null || event.altKey || event.ctrlKey || event.metaKey) return;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (target !== null && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable || target.closest('[role="dialog"], [role="menu"], [role="slider"]') !== null)) return;
+      if (event.key === "ArrowLeft") step(-1);
+      if (event.key === "ArrowRight") step(1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [step, overlay.dialog]);
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const onTouchStart = (event: React.TouchEvent): void => {
+    const touch = event.touches[0];
+    touchStart.current = touch === undefined ? null : { x: touch.clientX, y: touch.clientY };
+  };
+  const onTouchEnd = (event: React.TouchEvent): void => {
+    const start = touchStart.current;
+    const touch = event.changedTouches[0];
+    touchStart.current = null;
+    if (start === null || touch === undefined) return;
+    const dx = touch.clientX - start.x;
+    if (Math.abs(dx) > 70 && Math.abs(dx) > 2 * Math.abs(touch.clientY - start.y)) step(dx > 0 ? -1 : 1);
+  };
   const [paletteOpen, setPaletteOpen] = useState(false);
   const dialog: FormDialogName | null = overlay.dialog === "settings" ? null : overlay.dialog;
   const settingsOpen = overlay.dialog === "settings";
@@ -189,20 +227,26 @@ export const Shell = () => {
 
   return (
     <ActionsContext.Provider value={actionsPort}>
-      <Box className="zb" minHeight="100vh">
+      <Box className="zb" minHeight="100vh" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         <Header
           page={routeTitle(route)}
           homeHref={formatRoute({ name: "bridge", pairId: pair.id, dir: "first-to-second" })}
           screenHref={(screen) => (screen === "Bridge" ? formatRoute({ name: "bridge", pairId: pair.id, dir: "first-to-second" }) : `#/${screen.toLowerCase()}`)}
           onSearch={openPalette}
         />
-        {route.name === "bridge" ? (
+        {route.name === "activity" ? (
+          <div key="activity" className={slideClass}>
+            <ActivityScreen />
+          </div>
+        ) : route.name === "bridge" ? (
+          <div key="bridge" className={slideClass}>
           <BridgeScreen
             route={route}
             onRoute={update}
             fixture={configuration.dataMode === "fixture"}
             linked={linkedForm === null ? [] : bridgeLinkedFields(linkedForm, wallet.status === "connected" ? wallet.account : null)}
           />
+          </div>
         ) : (
         <Box as="main" paddingX={{ base: "4", md: "6" }} paddingY="4">
           <Flex gap="3" alignItems="center" justifyContent="flex-end" flexWrap="wrap" marginBottom="2">
