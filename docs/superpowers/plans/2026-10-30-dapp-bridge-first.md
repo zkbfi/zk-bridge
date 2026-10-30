@@ -181,16 +181,30 @@ today's gas price); time drawer with the steps and estimates; click again or out
 
 ### Task 10: Direction menu and token picker
 
-**Files:** Create `src/bridge/DirectionMenu.tsx`, `src/bridge/TokenPicker.tsx`; Test
-`test/bridge/direction-menu.test.tsx`, `test/bridge/token-picker.test.tsx`.
+Owner (verbatim, wins over anything else here): "the drawer works well on mobile in general. dropdown works for the from
+network for sure, and the choose a token should be a modal. make the remove button just an icon+button if it is going
+to exist at all. on desktop, that drawer should be a modal. and i do not like that n chains are showing at the same
+time. we should pull tkoens that the user has a balance of or that they have used in this system or bridged with
+before. i would like to see tabs below the search." Mockups: `picker-modal.html`, `picker-direction.html`.
 
-**Interfaces:** DirectionMenu lists every direction of every pair the release has, grouped by pair, testnets under
-their own heading; choosing one sets pair + dir (a pair change reloads via the hash). TokenPicker is a sheet with a
-search field over every bridgeable token (both chains; source chain first); choosing a token on the other chain flips
-the direction.
+**Files:** Create `src/bridge/DirectionMenu.tsx`, `src/bridge/TokenPicker.tsx`, `src/bridge/token-picker-model.ts`,
+`src/bridge/Sheet.tsx`; Test `test/bridge/direction-menu.test.tsx`, `test/bridge/token-picker.test.tsx`.
 
-- [ ] Tests: keyboard navigation (arrows, Enter, Escape returns focus); search narrows by symbol and address; picking
-  a second-chain token sets dir second-to-first; no `<select>` in the DOM.
+**Interfaces:**
+- `Sheet({ title, onClose, variant: "drawer" | "modal" })`: a drawer from the bottom on phones that becomes a centred
+  modal on desktop (`drawer`), or a square modal on both (`modal`); close is an icon-only round button (no text).
+- DirectionMenu: a dropdown from the From pill. Routes grouped by pair, testnets under their own heading; each row
+  shows the two chain icons with a chevron between, the time and status; a check on the current route; paused routes
+  greyed with the reason. Choosing one sets pair + dir.
+- TokenPicker: a modal on phone and desktop. Search field, then one tab per chain (chain icon + name + count); only one
+  chain's list shows at a time. A tab lists only the user's tokens: balance > 0, or used/bridged with zkb.fi before
+  (activity history). Search finds every bridgeable token on every chain. Picking a token on the other chain's tab
+  flips the direction. Omnibridge copies carry an orange "Omnibridge" flag.
+- `pickerTokens({ tokens, balances, history, query, tab }): { tabs: {chainId, count}[]; rows: TokenRow[] }`.
+
+- [ ] Tests: the open picker shows tabs, not two chains' lists at once; without a query a tab lists only held or used
+  tokens; a query searches every chain; picking a second-chain token sets dir second-to-first; keyboard (arrows,
+  Enter, Escape returns focus); the close control has an accessible name and no visible text; no `<select>` in the DOM.
 - [ ] Commit.
 
 ### Task 11: Self-delivery balance check (Activity groundwork)
