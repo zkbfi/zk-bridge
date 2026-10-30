@@ -4,15 +4,21 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{title}}</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="./favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="icon" href="./favicon-16.png" sizes="16x16" type="image/png" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <style>
       body { font: 16px/1.5 system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
       code { word-break: break-all; }
       .warning { border: 2px solid #b00020; padding: 1rem; }
       .notice { border: 2px solid #eb6834; background: #fff4ee; padding: 0.75rem 1rem; font-weight: 600; }
       li { margin-bottom: 0.5rem; }
+      .mark { display: block; width: 4rem; height: 4rem; color: #eb6834; }
     </style>
   </head>
   <body>
+    <svg class="mark" viewBox="0 0 48 48" role="img" aria-label="zkb.fi"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="butt" stroke-linejoin="miter"><path d="M18.76 42.26 A19 19 0 0 1 24.00 5.00"/><path d="M40.20 14.07 A19 19 0 0 1 37.44 37.44"/></g><circle cx="36.83" cy="9.99" r="2.1" fill="currentColor"/><circle cx="24.00" cy="43.00" r="2.1" fill="currentColor"/><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="butt" stroke-linejoin="miter"><path d="M1 29 H42.33"/><path d="M24 11 V29"/><path d="M24 25.5 L27.39 21.41"/><path d="M24 25.5 L28 29"/><path d="M31 11 V29"/><path d="M31 21 H32 A4 4 0 0 1 32 29"/></g><polygon fill="currentColor" points="12.55,19.50 21.55,19.50 21.55,23.35 18.12,27.50 14.22,27.50 18.36,22.50 12.55,22.50"/></svg>
     <main id="app"><p>Checking the signed release list.</p></main>
     <script type="module" src="./main.js"></script>
   </body>

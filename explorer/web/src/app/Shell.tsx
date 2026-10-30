@@ -15,6 +15,7 @@ import { MessageView } from "../views/MessageView";
 import { PairView } from "../views/pair/PairView";
 import { ProverView } from "../views/ProverView";
 import { ConnectionsView } from "../views/ConnectionsView";
+import { BrandMark } from "../ui/BrandMark";
 import { Notice } from "../ui/primitives";
 import { ActionsContext } from "./actions-context";
 import { parseRoute, formatRoute, routeTitle, type Route } from "./route";
@@ -128,9 +129,14 @@ export const Shell = () => {
       <Box minHeight="100vh" backgroundColor="bg" color="fg">
         <Flex as="header" position="sticky" top="0" zIndex="sticky" gap="3" alignItems="center" paddingX={{ base: "4", md: "6" }} paddingY="2" backgroundColor="bg" borderBottomWidth="1px" borderColor="border">
           <a href="#/" aria-label="zk-bridge explorer, global view">
-            <Text as="span" fontWeight="bold" whiteSpace="nowrap">
-              zk-bridge
-            </Text>
+            <Flex as="span" gap="2" alignItems="center">
+              <Box as="span" color="#eb6834" display="inline-flex">
+                <BrandMark />
+              </Box>
+              <Text as="span" fontWeight="bold" whiteSpace="nowrap">
+                zk-bridge
+              </Text>
+            </Flex>
           </a>
           <Button flex="1" justifyContent="space-between" variant="outline" size="sm" onClick={openPalette} aria-label="Search and jump (Control K or slash)" aria-haspopup="dialog">
             <Text as="span" color="fg.muted" truncate>
