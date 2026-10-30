@@ -1,5 +1,6 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import type { Direction } from "@terminal/model/types";
+import { usePairHealth } from "../app/queries";
 import { useServices } from "../app/services";
 import { Chevron } from "./icons";
 import { TokenIcon } from "./TokenIcon";
@@ -34,6 +35,13 @@ export type DirectionMenuProps = {
  */
 export const DirectionMenu = ({ current, onPick, onClose }: DirectionMenuProps) => {
   const { knownPairs } = useServices();
+  const health = usePairHealth().data ?? [];
+  /** Why a route cannot be used now, or null: no deployment, or the gate on its source chain is closed. */
+  const blockedReason = (pairId: string, configured: boolean, from: Chain, side: "first" | "second"): string | null => {
+    if (!configured) return "not deployed yet";
+    const gate = health.find((entry) => entry.pairId === pairId)?.gates[side];
+    return gate === "stop" || gate === "sealed" ? `paused: the gate on ${from.name} is closed` : null;
+  };
   const list = useRef<HTMLDivElement>(null);
   const items = (): HTMLElement[] => [...(list.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]:not([aria-disabled="true"])') ?? [])];
 
@@ -70,7 +78,8 @@ export const DirectionMenu = ({ current, onPick, onClose }: DirectionMenuProps) 
           {(["first-to-second", "second-to-first"] as const).map((dir) => {
             const [from, to] = dir === "first-to-second" ? chains : [chains[1], chains[0]];
             const checked = pair.id === current.pairId && dir === current.dir;
-            const disabled = !pair.configured;
+            const reason = blockedReason(pair.id, pair.configured, from, dir === "first-to-second" ? "first" : "second");
+            const disabled = reason !== null;
             return (
               <button
                 key={dir}
@@ -87,7 +96,7 @@ export const DirectionMenu = ({ current, onPick, onClose }: DirectionMenuProps) 
                 <span>
                   {from.name} → {to.name}
                 </span>
-                <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--zb-muted)" }}>{disabled ? "not deployed yet" : null}</span>
+                <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--zb-muted)" }}>{reason}</span>
               </button>
             );
           })}
