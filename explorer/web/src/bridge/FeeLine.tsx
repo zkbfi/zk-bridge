@@ -181,7 +181,7 @@ export const FeeLine = ({ tip, tipHelp, breakdown, gasHelp, gasLevel, onGasLevel
               {sliders.map((slider) => (
                 <Slider key={slider.label} slider={slider} />
               ))}
-              {sliderNote === null ? null : <p style={{ margin: "10px 0 0", fontSize: 12, color: "var(--zb-muted)" }}>{sliderNote}</p>}
+              {sliderNote === null ? null : <p style={{ margin: "10px 0 0", fontSize: "var(--zb-step--1)", color: "var(--zb-muted)" }}>{sliderNote}</p>}
             </>
           )}
         </div>

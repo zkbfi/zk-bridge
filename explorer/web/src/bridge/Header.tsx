@@ -33,13 +33,37 @@ export const Header = ({ page, screenHref, homeHref, onSearch }: HeaderProps) =>
           <BrandMark size={28} />
         </a>
         <span className="zb-page-name">
-          {before === undefined ? null : (
+          {before === undefined ? (
+            <span className="zb-near" data-hidden="true" aria-hidden="true">
+              <Chevron dir="left" />
+            </span>
+          ) : (
             <a className="zb-near" href={screenHref(before)} aria-label={`Previous screen: ${before}`}>
               <Chevron dir="left" />
             </a>
           )}
-          <span data-testid="page-name">{page}</span>
-          {after === undefined ? null : (
+          {index < 0 ? (
+            <span data-testid="page-name">{page}</span>
+          ) : (
+            <span className="zb-name-stack">
+              {SCREENS.map((screen) =>
+                screen === page ? (
+                  <span key={screen} data-on="true" data-testid="page-name">
+                    {screen}
+                  </span>
+                ) : (
+                  <span key={screen} aria-hidden="true">
+                    {screen}
+                  </span>
+                ),
+              )}
+            </span>
+          )}
+          {after === undefined ? (
+            <span className="zb-near" data-hidden="true" aria-hidden="true">
+              <Chevron dir="right" />
+            </span>
+          ) : (
             <a className="zb-near" href={screenHref(after)} aria-label={`Next screen: ${after}`}>
               <Chevron dir="right" />
             </a>

@@ -216,7 +216,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     firstBridge: token !== null && !isNativeToken(token) && isFirstBridge(token, known, false),
   });
 
-  const tokenIcon = (subjectToken: TokenInfo, badge: number | null, size = 26): ReactNode => <TokenIcon subject={iconSubjectOf(subjectToken, pair)} badgeChainId={badge} symbol={subjectToken.symbol} size={size} />;
+  const tokenIcon = (subjectToken: TokenInfo, badge: number | null, size = 32): ReactNode => <TokenIcon subject={iconSubjectOf(subjectToken, pair)} badgeChainId={badge} symbol={subjectToken.symbol} size={size} />;
   const inline = (icon: ReactNode, text: string, symbol: string): ReactNode => (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
       {icon}
@@ -289,11 +289,11 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
 
   return (
     <main className="zb-bridge">
-      {fixture ? <p className="zb-col" style={{ fontSize: 12, color: "var(--zb-muted)", margin: "0 auto 6px" }}>Sample data. Nothing here reaches a chain.</p> : null}
+      {fixture ? <p className="zb-col" style={{ fontSize: "var(--zb-step--1)", color: "var(--zb-muted)", margin: "0 auto 6px" }}>Sample data. Nothing here reaches a chain.</p> : null}
       <div className="zb-col zb-row-pad" style={{ position: "relative" }}>
         <div className="zb-joined">
           <button type="button" aria-haspopup="menu" aria-expanded={menu === "direction"} onClick={() => setMenu(menu === "direction" ? null : "direction")} aria-label={`From ${source.name}. Change the route`}>
-            From <TokenIcon subject={{ chainId: source.chainId }} symbol={source.name} size={22} />
+            From <TokenIcon subject={{ chainId: source.chainId }} symbol={source.name} size={26} />
             <Chevron />
           </button>
           {account === null ? (
@@ -376,7 +376,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
         <div className="zb-col">
           {token === null ? null : (
             <FeeLine
-              tip={tipUnits === null ? (feeState === "none" ? "none" : "—") : inline(tokenIcon(token, null, 14), amountText(tipUnits, token.decimals), token.symbol)}
+              tip={tipUnits === null ? (feeState === "none" ? "none" : "—") : inline(tokenIcon(token, null, 18), amountText(tipUnits, token.decimals), token.symbol)}
               tipHelp={`One fee pays whoever delivers your transfer on ${destination.name}: their gas, the proof, and a tip on top. It is ${options.percentText}% of the amount, and at least their gas at today's price${usd(tipUnits) === "—" ? "" : ` (about ${usd(tipUnits)})`}. Tap for the breakdown.`}
               breakdown={breakdown}
               gasHelp={`Gas level: the highest gas price on ${destination.name} at which your transfer still gets delivered. Normal: up to ${GAS_LEVEL_FACTORS[1] * 2}× today's base fee; High: ${GAS_LEVEL_FACTORS[2] * 2}×; Highest: ${GAS_LEVEL_FACTORS[3] * 2}×. A higher level raises the cost the fee must cover.`}
@@ -411,7 +411,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
         <div className="zb-col">
           <div className="zb-joined">
             <span>
-              To <TokenIcon subject={{ chainId: destination.chainId }} symbol={destination.name} size={22} />
+              To <TokenIcon subject={{ chainId: destination.chainId }} symbol={destination.name} size={26} />
             </span>
             <button type="button" aria-expanded={menu === "receiver"} onClick={() => setMenu(menu === "receiver" ? null : "receiver")} aria-label="Destination address. Change it">
               <span className="zb-mono">{receiver === "" ? "your wallet" : short(receiver)}</span>
@@ -445,7 +445,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
           <div className="zb-col" style={{ paddingBottom: 18 }}>
             <div className="zb-kv"><span className="zb-k">You send</span><b>{inline(tokenIcon(token, null, 16), amountText(amount, token.decimals), token.symbol)} on {source.name}</b></div>
             <div className="zb-kv"><span className="zb-k">Arrives</span><b>{received === null ? "—" : inline(tokenIcon(token, destination.chainId, 16), amountText(received > 0n ? received : 0n, token.decimals), token.symbol)} on {destination.name}</b></div>
-            <div className="zb-kv"><span className="zb-k">Fee</span><span>{tipUnits === null ? "none" : inline(tokenIcon(token, null, 14), amountText(tipUnits, token.decimals), token.symbol)}{feeUsd === null ? null : <span title={PRICE_NOTE}> (about {usd(tipUnits)})</span>}</span></div>
+            <div className="zb-kv"><span className="zb-k">Fee</span><span>{tipUnits === null ? "none" : inline(tokenIcon(token, null, 18), amountText(tipUnits, token.decimals), token.symbol)}{feeUsd === null ? null : <span title={PRICE_NOTE}> (about {usd(tipUnits)})</span>}</span></div>
             {breakdown.map((line) => (
               <div key={line.label} className="zb-kv zb-kv-sub"><span className="zb-k">{line.label}</span><span title={PRICE_NOTE}>{line.value}</span></div>
             ))}
