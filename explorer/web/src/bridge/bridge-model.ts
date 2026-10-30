@@ -2,7 +2,8 @@
  * Pure helpers of the bridge screen: which chain is the source for a direction, which tokens it can send, the
  * counterpart a flip moves to, and how long a transfer takes.
  */
-import type { ChainConfig, ChainSide, Direction, PairConfig, TokenInfo } from "@terminal/model/types";
+import type { ChainSnapshotResult } from "@terminal/chain/live-reads";
+import type { ChainConfig, ChainSide, Direction, LightClientHead, PairConfig, TokenInfo } from "@terminal/model/types";
 import { formatUnits } from "../ui/format";
 
 /** The source and destination chains of a direction. */
@@ -17,6 +18,31 @@ export const reverse = (dir: Direction): Direction => (dir === "first-to-second"
 
 /** The direction that sends from a side. */
 export const directionFrom = (side: ChainSide): Direction => (side === "first" ? "first-to-second" : "second-to-first");
+
+/**
+ * The account's balance of a token, from the snapshots: the native balance for a chain's native coin, else its position.
+ * Null when the chain has no snapshot or the token no position.
+ */
+export const tokenBalance = (token: TokenInfo, snapshots: readonly ChainSnapshotResult[]): bigint | null => {
+  const found = snapshots.find((result) => result.status === "ok" && result.snapshot.chain.side === token.side);
+  if (found === undefined || found.status !== "ok") return null;
+  if (isNativeToken(token)) return found.snapshot.nativeBalance;
+  return found.snapshot.positions.find((position) => position.token.address === token.address)?.balance ?? null;
+};
+
+/** The gas MAX leaves for sending the native coin: the wrap-and-relay transaction with room to spare. */
+export const GAS_RESERVE_GAS = 400_000n;
+
+/**
+ * What MAX fills in: the whole balance of a token; for the native coin, the balance less {@link GAS_RESERVE_GAS} at the
+ * source chain's max fee per gas (null until that fee is read, so MAX never drains the account).
+ */
+export const maxSendable = (token: TokenInfo, balance: bigint, maxFeePerGasWei: bigint | null): bigint | null => {
+  if (!isNativeToken(token)) return balance;
+  if (maxFeePerGasWei === null) return null;
+  const left = balance - GAS_RESERVE_GAS * maxFeePerGasWei;
+  return left > 0n ? left : 0n;
+};
 
 /** The form's value for a token: `<side>:<address>`. */
 export const choiceOf = (token: TokenInfo): string => (isNativeToken(token) ? `${token.side}:native` : `${token.side}:${token.address}`);
@@ -90,7 +116,22 @@ export const transferSteps = (source: ChainConfig, destination: ChainConfig): re
 };
 
 /** The total of {@link transferSteps}, as "~15 min". */
-export const transferEstimate = (source: ChainConfig, destination: ChainConfig): string =>
+/**
+ * How far behind the light client a transfer from `sourceSide` waits for is (the destination's head of the source
+ * chain, from the indexer's heads), when it is over an hour; else null.
+ *
+ * @param heads The light-client heads of the pair.
+ * @param sourceSide The side the transfer leaves from.
+ */
+export const lightClientDelay = (heads: readonly LightClientHead[], sourceSide: ChainSide): { readonly seconds: number; readonly text: string } | null => {
+  const head = heads.find((candidate) => candidate.side !== sourceSide);
+  if (head === undefined || head.lagSlots === null) return null;
+  const seconds = Number(head.lagSlots) * head.secondsPerSlot;
+  if (seconds <= 3600) return null;
+  return { seconds, text: `light client ${Math.round(seconds / 3600)} h behind` };
+};
+
+export const transferEstimate =(source: ChainConfig, destination: ChainConfig): string =>
   minutes(transferSteps(source, destination).reduce((sum, step) => sum + step.seconds, 0));
 
 /**

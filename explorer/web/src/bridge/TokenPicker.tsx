@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { tokenBalance } from "./bridge-model";
 import type { ChainSnapshotResult } from "@terminal/chain/live-reads";
 import type { ChainSide, TokenInfo } from "@terminal/model/types";
 import { useServices } from "../app/services";
@@ -32,11 +33,7 @@ type Tab = "all" | ChainSide;
 const keyOf = (token: TokenInfo): string => `${token.side}:${token.address.toLowerCase()}`;
 
 /** The user's balance of a token, from the snapshots, or null when unknown. */
-const balanceOf = (token: TokenInfo, snapshots: readonly ChainSnapshotResult[]): bigint | null => {
-  const found = snapshots.find((result) => result.status === "ok" && result.snapshot.chain.side === token.side);
-  if (found === undefined || found.status !== "ok") return null;
-  return found.snapshot.positions.find((position) => position.token.address === token.address)?.balance ?? null;
-};
+const balanceOf = (token: TokenInfo, snapshots: readonly ChainSnapshotResult[]): bigint | null => tokenBalance(token, snapshots);
 
 /**
  * Which rows the picker shows: without a query, only the user's tokens (held now, or used or bridged with zkb.fi

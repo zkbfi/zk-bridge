@@ -6,7 +6,7 @@ import { usdText } from "./price-oracle";
 import { PRICE_NOTE, usePrices } from "./use-prices";
 import type { Address } from "viem";
 import type { TokenInfo } from "@terminal/model/types";
-import { useDeliveryCost, usePairHealth, usePriorityFee, useSnapshots, useTokens, useUsedTokens } from "../app/queries";
+import { useDeliveryCost, useHeads, useMaxFee, usePairHealth, usePriorityFee, useSnapshots, useTokens, useUsedTokens } from "../app/queries";
 import { formatRoute, type BridgeQuery, type Route, type TipQuery } from "../app/route";
 import { useServices } from "../app/services";
 import { TransactionDialog } from "../actions/TransactionDialog";
@@ -14,7 +14,7 @@ import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS, type DeliveryOptions } fr
 import type { WebStep } from "../tx/bridge-steps";
 import { parseUnits } from "../ui/format";
 import { useWallet } from "../wallet/wallet-port";
-import { isNativeToken, nativeTokensOf } from "./bridge-model";
+import { isNativeToken, lightClientDelay, maxSendable, nativeTokensOf, tokenBalance } from "./bridge-model";
 import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferEstimate, transferSteps } from "./bridge-model";
 import { DeliveryMenu, deliverySummary } from "./DeliveryMenu";
 import { anticipatedCostUsd, autoFeePercent, capTooLarge, ceilingWeiOf, GAS_LEVEL_FACTORS, gasLevelOfCeiling, highTipOf, highTipThreshold, lowFeeOf, PROOF_COST_USD, type GasLevel } from "./fee-guard";
@@ -89,6 +89,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     [pair, configuration, connection],
   );
   const snapshots = useSnapshots(account, pair.id).data;
+  const heads = useHeads(pair.id).data;
   const used = useUsedTokens(account, pair.id).data;
   const gate = usePairHealth().data?.find((entry) => entry.pairId === pair.id)?.gates[sourceSide(route.dir)];
   const form: BridgeQuery = route.form ?? {};
@@ -128,12 +129,9 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   );
 
   const snapshot = (snapshots ?? []).find((result) => result.status === "ok" && result.snapshot.chain.side === side);
-  const balance =
-    snapshot?.status === "ok" && token !== null
-      ? isNativeToken(token)
-        ? snapshot.snapshot.nativeBalance
-        : (snapshot.snapshot.positions.find((position) => position.token.address === token.address)?.balance ?? null)
-      : null;
+  const balance = token === null || snapshot === undefined ? null : tokenBalance(token, [snapshot]);
+  const maxFee = useMaxFee(source.chainId, { enabled: token !== null && isNativeToken(token) && account !== null }).data ?? null;
+  const max = balance === null || token === null ? null : maxSendable(token, balance, maxFee);
   const amount = token === null ? null : safeParse(form.amount ?? "", token.decimals);
   const prices = usePrices(tokens).data;
   const nativeUsd = prices?.get(`native:${destination.chainId}`) ?? null;
@@ -344,7 +342,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
                   <span>
                     Balance <Num text={amountText(balance, token.decimals)} />
                   </span>
-                  <button type="button" className="zb-max" onClick={() => write({ ...form, amount: amountText(balance, token.decimals) })}>
+                  <button type="button" className="zb-max" disabled={max === null} title={isNativeToken(token) ? "Leaves enough for the gas of sending it" : undefined} onClick={() => max !== null && write({ ...form, amount: amountText(max, token.decimals) })}>
                     MAX
                   </button>
                 </>
@@ -382,7 +380,10 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
               gasHelp={`Gas level: the highest gas price on ${destination.name} at which your transfer still gets delivered. Normal: up to ${GAS_LEVEL_FACTORS[1] * 2}× today's base fee; High: ${GAS_LEVEL_FACTORS[2] * 2}×; Highest: ${GAS_LEVEL_FACTORS[3] * 2}×. A higher level raises the cost the fee must cover.`}
               gasLevel={gasLevel}
               onGasLevel={setGasLevel}
-              time={transferEstimate(source, destination)}
+              time={(() => {
+                const delay = lightClientDelay(heads ?? [], side);
+                return delay === null ? transferEstimate(source, destination) : `${transferEstimate(source, destination)} + ${delay.text}`;
+              })()}
               steps={transferSteps(source, destination)}
               sliders={sliders}
               sliderNote={breakEvenPercent === null ? null : "Left of break-even a delivery bot loses money at today's gas price, so expect to deliver it yourself."}
