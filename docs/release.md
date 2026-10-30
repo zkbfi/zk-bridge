@@ -204,8 +204,8 @@ release").
 (`zkb-fi-next`), listing a release on the `next` channel. Builds are tried there, by anyone with the link, before they
 reach zkb.fi.
 
-**Two keys, on purpose.** A staging release is signed with its own Ed25519 key, the 1Password item
-`release signing key staging` in the zkb.fi vault. The staging landing page (`explorer/landing/landing.next.config.json`)
+**Two keys, on purpose.** A staging release is signed with its own Ed25519 key, kept in the password manager next to the
+production key. The staging landing page (`explorer/landing/landing.next.config.json`)
 trusts only that key; the production landing page (`landing.config.json`) trusts only the production key. So a staging
 `version.json` can never be accepted by zkb.fi, even though both are valid signatures, and a leaked staging key cannot
 publish to production. Each landing page also keeps its own sequence memory (a separate browser origin).
@@ -221,7 +221,7 @@ Make and publish a staging release:
 
 ```sh
 set -a; . script/release/release.env; set +a
-op read 'op://zkb.fi/release signing key staging/credential' | RELEASE_CHANNEL=next RELEASE_VERSION=0.1.2-next.1 \
+<password-manager command that prints the staging key> | RELEASE_CHANNEL=next RELEASE_VERSION=0.1.2-next.1 \
   RELEASE_PREVIOUS_MANIFEST=<the version.json now on next.zkb.fi> script/release/release.sh "$(mktemp -d)"
 RELEASE_CHANNEL=next RELEASE_REMOTE=<release repository> RELEASE_GIT_NAME=<name> RELEASE_GIT_EMAIL=<email> \
   RELEASE_PIN_PROVIDER=kubo KUBO_API_URL=http://127.0.0.1:5001 script/release/publish.sh <release-directory>
@@ -235,7 +235,7 @@ The archives are pinned on the kubo node under their version, as production ones
 ## Promotion: next to zkb.fi
 
 ```sh
-op read 'op://zkb.fi/release signing key/credential' | PROMOTE_PUBLISH=1 \
+<password-manager command that prints the production key> | PROMOTE_PUBLISH=1 \
   script/release/promote.sh <staging-release-directory> "$(mktemp -d)"
 ```
 
