@@ -268,10 +268,13 @@ and the time left while in flight or the age once delivered. A row links to the 
   the amount: above 1% for transfers up to $100, a threshold that scales down to 0.1% at $1,000, and 0.1% above that.
   Between $100 and $1,000 the threshold is 1% × 100 / amount (a log-linear slide; it works out to a tip of about $1
   across that range). Uses the display price; without a price, the 1% threshold applies. The tip measured is the tip **before gas
-  pricing** (owner): the share-of-amount part only, not what the gas level or gas reimbursement adds on top. **Delivery is on top of
-  the tip** (owner): the delivery cost (the destination-chain gas the deliverer spends, bounded by the gas-price ceiling)
-  is a separate amount added to the tip, shown as its own item (the gas can) and summed only in the review's total; it
-  never counts toward the high-tip warning.
+  pricing** (owner): the share-of-amount part only, not what the gas level or gas reimbursement adds on top. **Tip and delivery are coupled in the UI**
+  (owner, superseding "delivery is on top"): the user sees one fee, the money-hand item, that pays for everything; the
+  tip drawer breaks it down. The **anticipated execution cost** = the destination-chain delivery gas at the chosen gas
+  level + **$0.025 for proof generation** (owner's assumption). The "tip too low · may not be delivered" warning stays
+  until the fee is at least **2 × the anticipated cost (a 100% margin)**. The high-tip warning (1% → 0.1%) measures the
+  part of the fee above the anticipated cost, i.e. the tip before gas pricing (my reading of "this is before gas
+  pricing"; owner to confirm).
 
 ## Open questions
 
@@ -335,3 +338,4 @@ noise from one message (a child on the keyboard) is left out.
 33. "raise the gas price ceiling. warn when a tip is >1% for bridges under $100. then scale it down to 0.1% as it goes to $1000"
 34. "this is before gas pricing"
 35. "delivery is on top of this"
+36. "well, no we need to couple them in the ui. think about it like this. we need to make a 100% margin on the anticipated cost to execute the bridge (assume a $0.025 cost for the proof generation) for the warning to go away"
