@@ -207,6 +207,18 @@ and the time left while in flight or the age once delivered. A row links to the 
   (https://archive.zkb.fi), the msgboard endpoints the page uses, the price source once it exists, and the image server
   (gib.show). Nothing the page calls is fixed in code without a setting.
 
+- **Token picker (owner, round 2):** a **modal** on phone and desktop (a square panel over the dimmed screen; on
+  desktop centred in the column). Close is an icon-only round button. Under the search field, **tabs, one per chain**
+  (chain icon + name + count); only one chain's list shows at a time. Each tab lists only **your** tokens: ones the
+  wallet holds, or has used or bridged with zkb.fi before. Search finds every bridgeable token on every chain. Picking a
+  token on the other chain's tab flips the direction. Omnibridge copies carry an orange "Omnibridge" flag in the list.
+  Mockup: `picker-modal.html`.
+- **Direction menu:** stays a dropdown from the From pill: routes grouped by pair (testnets under their own heading),
+  each as two chain icons with a chevron, its time and status, a check on the current one, a paused route greyed with
+  the reason. Mockup: `picker-direction.html` (right panel).
+- **Drawers vs modals:** bottom drawers (sheets) work on phones (e.g. the review sheet); on desktop a drawer becomes a
+  centred modal.
+
 ## Open questions
 
 - Where the Omnibridge token list comes from and how it stays current.
@@ -260,3 +272,4 @@ noise from one message (a child on the keyboard) is left out.
 22. "1) B, matched / 2) good, however the gas can on the input/output section should also have a bar graph showing different gas levels. users can choose a higher gas payment if they want (default is a percent anyway) / 3) great! be sure to add an external link icon justified to the right, to the right of the timestamp even, to link the user to the transaction / information on the blockchain / 4) you can use the valve.city demo key as a default for both chains. also supports testnets"
 23. "if you are going to write specs for these updates, be sure to capture my raw instruction too. often when you do this with the visual companion, and then you build it for real, you leave out key pieces and end up creating a shittier ui"
 24. "oh, you'll also have to point to a prover request endpoint. everything needs to be swappable"
+25. "the drawer works well on mobile in general. dropdown works for the from network for sure, and the choose a token should be a modal. make the remove button just an icon+button if it is going to exist at all. on desktop, that drawer should be a modal. and i do not like that n chains are showing at the same time. we should pull tkoens that the user has a balance of or that they have used in this system or bridged with before. i would like to see tabs below the search."
