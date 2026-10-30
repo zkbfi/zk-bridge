@@ -2,6 +2,8 @@
  * The data and chain access of the page, built once from the configuration. Every component reads them through
  * `useServices`, so a test hands in fixtures and the page never reaches the network.
  */
+import { createFixtureExploreSource } from "../explore/explore-fixture";
+import { createIndexerExploreSource, type ExploreSource } from "../explore/explore-source";
 import { createContext, useContext, type ReactNode } from "react";
 import type { ChainAccess } from "@terminal/chain/chain-access";
 import { createFixtureChainAccess } from "@terminal/chain/fixture-chain-access";
@@ -27,6 +29,8 @@ export type Services = {
   readonly knownPairs: readonly { readonly id: string; readonly label: string; readonly configured: boolean; readonly active: boolean }[];
   readonly dataSource: DataSource;
   readonly indexer: IndexerClient;
+  /** What Explore reads from the indexer beyond the data source. */
+  readonly explore: ExploreSource;
   readonly chainAccess: ChainAccess;
   /** The live connections with their fallback, or null on a fixture page. */
   readonly connection: ConnectionRuntime | null;
@@ -93,6 +97,7 @@ export const createServices = (configuration: WebConfiguration, pair: PairConfig
       ...base,
       dataSource: createFixtureDataSource(),
       indexer: createFixtureIndexerClient({ pair }),
+      explore: createFixtureExploreSource(),
       chainAccess: createFixtureChainAccess(pair),
       connection: null,
       endpoints: () => NO_ENDPOINTS,
@@ -124,6 +129,7 @@ export const createServices = (configuration: WebConfiguration, pair: PairConfig
     ...base,
     dataSource: connection.dataSource,
     indexer: createFallbackIndexerClient(connection),
+    explore: createIndexerExploreSource(() => connection.resolved().indexerUrl?.value ?? null),
     chainAccess: connection.chainAccess,
     connection,
     endpoints: () => connection.resolved(),
