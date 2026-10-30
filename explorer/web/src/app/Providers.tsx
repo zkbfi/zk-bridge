@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useMemo, type ReactNode } from "react";
 import { FixtureWalletProvider } from "../wallet/fixture-wallet";
 import { WagmiWalletProvider } from "../wallet/wagmi-wallet";
+import { watchAddressOf, WatchWalletProvider } from "../wallet/watch-wallet";
 import { ServicesProvider, type Services } from "./services";
 
 /** Props of {@link Providers}. */
@@ -23,8 +24,13 @@ export const Providers = ({ services, children }: ProvidersProps) => {
     [],
   );
   const { configuration, pair } = services;
+  const watched = watchAddressOf(window.location.search, import.meta.env.DEV);
   const wallet =
-    configuration.dataMode === "fixture" ? (
+    watched !== null ? (
+      <WatchWalletProvider account={watched} chainId={pair.first.chainId}>
+        {children}
+      </WatchWalletProvider>
+    ) : configuration.dataMode === "fixture" ? (
       <FixtureWalletProvider initialChainId={pair.first.chainId}>{children}</FixtureWalletProvider>
     ) : (
       <WagmiWalletProvider pair={pair} rpcUrls={configuration.rpcUrls}>
