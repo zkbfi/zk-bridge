@@ -288,6 +288,11 @@ and the time left while in flight or the age once delivered. A row links to the 
   ease-in, content first; swapping redraws the line from the new icon; no overshoot or springs; reduced motion = none.
   Mockup: `design/ui/screens/accordion-motion.html`.
 
+- **Size (owner):** the baseline is larger on phones and desktop, and grows further on large screens. Phones: 16 px
+  body text, nothing under 13 px, a 40–44 px amount, touch targets ≥ 44 px (pills 48 px, the Bridge pill 56 px). The
+  scale is fluid (clamp tokens) up to desktop, where type is visibly larger and the content column widens to about
+  520–600 px, with the bands still running edge to edge.
+
 ## Open questions
 
 - Where the Omnibridge token list comes from and how it stays current.
@@ -356,3 +361,4 @@ noise from one message (a child on the keyboard) is left out.
 39. "http://100.90.134.51:5200/#/bridge/eth-pls?bridge.amount=1 did not see a correlative output number it stayed at zero"
 40. "it's getting there, but you need to connect a lot of data points"
 41. "the drawer animation is fine"
+42. "it seems that your ui is quite small, especially for desktop AND mobile. the baseline should be larger. and large can be achieved on larger screens"
