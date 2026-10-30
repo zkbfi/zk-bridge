@@ -319,6 +319,11 @@ and the time left while in flight or the age once delivered. A row links to the 
   transaction did (owner: it reads as temporary); the kind, the details and the steps say it. Routes in every list (including
   proofs) are shown as chain icons with a chevron, not as words.
 
+- **Icons on the orange band (owner):** any chain or token icon placed on the accent band (the From band, the search
+  band, Explore and page headers) sits on a neutral round plate, black or white, never directly on orange. The plate
+  follows the theme (ink on Ember on black and Mono, white on Ember light), with a 2 px margin around the icon; badges
+  keep their own small plate.
+
 ## Open questions
 
 - Where the Omnibridge token list comes from and how it stays current.
@@ -395,3 +400,5 @@ noise from one message (a child on the keyboard) is left out.
 47. "where it sits should also have to show the input transfer/user action. also, the "block n final on pulsechain" maybe should be shortened to "block final on Pulsechain" and maybe we can give a small drawer to show information about the block like its number or its hash or other info about the committee you are using "pulsechain -> sepolia" instead of icons in the proofs sections."
 48. "you should still maintain the connection between completed steps when the drawer is opened"
 49. "this seems temporary: "Sepolia's light client now trusts PulseChain testnet v4 up to slot 11,194,368 (block 25,767,883). Messages sent from PulseChain before that block can be proven on Sepolia." strike it"
+50. "show me the message page. what is the message page"
+51. "for chain and token icons in the burn streak, we need to have a neutral bg such as white or black"
