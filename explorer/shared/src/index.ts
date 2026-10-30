@@ -38,3 +38,4 @@ export * from "./operator.js";
 export * from "./proven-message.js";
 export * from "./call-display.js";
 export * from "./tip-coverage.js";
+export * from "./pulsex-oracle.js";

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Address } from "viem";
-import { MINIMUM_DEPTH_USD, PULSEX_FACTORIES, plsUsd, pricingAddress, STABLES, tokenUsd, WPLS, weightedMedian, type PoolReader, type Reserves } from "../../src/bridge/price-oracle";
+import { MINIMUM_DEPTH_USD, nativeUsd, poolReaderOver, PULSEX_FACTORIES, plsUsd, pricingAddress, STABLES, tokenUsd, WPLS, weightedMedian, type PoolReader, type Reserves } from "../src/pulsex-oracle.js";
 
 const [V1, V2] = PULSEX_FACTORIES as [Address, Address];
 const [USDC, DAI, USDT] = STABLES;
@@ -63,5 +63,37 @@ describe("a token's price", () => {
     expect(pricingAddress({ chainId: 369, address: "0x1111111111111111111111111111111111111111", origin: { chainId: 1, address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" } })).toBe(TOKEN);
     expect(pricingAddress({ chainId: 943, address: "0x1111111111111111111111111111111111111111" })).toBeNull();
     expect(pricingAddress({ chainId: 369, address: WPLS })).toBe(WPLS);
+  });
+});
+
+describe("the native coin's price and the pool reader over a contract caller", () => {
+  const caller = (pools: Record<string, readonly [bigint, bigint]>, failing = false) => ({
+    readContract: async (call: { address: Address; functionName: string; args?: readonly unknown[] }): Promise<unknown> => {
+      if (failing) throw new Error("reverted");
+      if (call.functionName === "getPair") {
+        const [a] = call.args as [Address, Address];
+        return call.address === V1 && pools[a] !== undefined ? `0x${a.slice(-38)}aa` : "0x0000000000000000000000000000000000000000";
+      }
+      const stable = Object.keys(pools).find((key) => `0x${key.slice(-38)}aa` === call.address)!;
+      if (call.functionName === "token0") return stable;
+      const [token, wpls] = pools[stable]!;
+      return [token, wpls, 0];
+    },
+  });
+
+  it("prices PLS from PulseX on PulseChain, at whatever block the caller reads", async () => {
+    const reader = poolReaderOver(caller({ [USDC!.address]: [3_000_000_000n, 100_000n * 10n ** 18n] }));
+    expect(await nativeUsd(reader, 369)).toEqual({ usd: expect.closeTo(0.03, 9), source: "pulsex-pls-usd" });
+  });
+
+  it("gives no price on testnets or Ethereum, and none when no pool answers", async () => {
+    const reader = poolReaderOver(caller({ [USDC!.address]: [3_000_000_000n, 100_000n * 10n ** 18n] }));
+    expect(await nativeUsd(reader, 943)).toBeNull();
+    expect(await nativeUsd(reader, 11155111)).toBeNull();
+    expect(await nativeUsd(reader, 1)).toBeNull();
+    expect(await nativeUsd(poolReaderOver(caller({})), 369)).toBeNull();
+    const broken = poolReaderOver(caller({}, true));
+    expect(await broken.pairOf(V1, USDC!.address, WPLS)).toBeNull();
+    expect(await broken.reservesOf(V1)).toBeNull();
   });
 });
