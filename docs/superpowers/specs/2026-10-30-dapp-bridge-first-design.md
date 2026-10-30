@@ -314,7 +314,8 @@ and the time left while in flight or the age once delivered. A row links to the 
   proofs posted, contracts deployed, deliveries), "Bridge to this address" and "Watch". Transaction = kind band, one
   sentence of what it did, decoded call, gas, fee, events, raw input collapsed, and **where it sits**: the step list
   starts with the **user's action** (the transfer that started it), and step labels are short ("Block final on
-  PulseChain", not "Block 25,767,883 final…"). Tapping a step opens a small drawer with its details (for a block:
+  PulseChain", not "Block 25,767,883 final…"). Tapping a step opens a small drawer with its details; the lit line joining
+  completed steps runs on past an open drawer, unbroken (owner) (for a block:
   number, hash, time, slot, sync committee period and signers, explorer link). Routes in every list (including
   proofs) are shown as chain icons with a chevron, not as words.
 
@@ -392,3 +393,4 @@ noise from one message (a child on the keyboard) is left out.
 45. "for the "transfers it proved" move the chevron to the right, shorten the status to one word: delivered, waiting, proving, mining, etc. the browse section might be able to just have a single column grid if you used a large number to the left, the header to the right, and the subheader below that then send explore v2 to the build worker"
 46. "show me the address and transaction pages"
 47. "where it sits should also have to show the input transfer/user action. also, the "block n final on pulsechain" maybe should be shortened to "block final on Pulsechain" and maybe we can give a small drawer to show information about the block like its number or its hash or other info about the committee you are using "pulsechain -> sepolia" instead of icons in the proofs sections."
+48. "you should still maintain the connection between completed steps when the drawer is opened"
