@@ -59,3 +59,26 @@
 .zb-bits { display: grid; grid-template-columns: repeat(32, 1fr); gap: 2px; padding: 10px 0 4px; }
 .zb-bits i { height: 8px; background: var(--zb-track-ahead); }
 .zb-bits i[data-on="true"] { background: var(--zb-accent); }
+
+/* The joined step list with drawers: the drawer sits inside the step, so the step's line runs through it. */
+.zb-trail-step { display: block; padding-bottom: 6px; }
+.zb-trail-step::before { bottom: -2px; }
+.zb-trail-row { display: flex; align-items: baseline; gap: 10px; width: 100%; padding: 6px 0; text-align: left; color: inherit; text-decoration: none; }
+.zb-trail-row .zb-step-dot { transform: translateY(1px); }
+.zb-trail-label { flex: 1; min-width: 0; }
+.zb-trail-row > .zb-chev, .zb-trail-row > .zb-icon, .zb-trail-gap { flex: none; width: 14px; }
+.zb-trail-drawer { margin: 2px 0 6px 20px; padding: 10px 0; }
+.zb-trail-grid { display: grid; gap: 4px; margin: 0; font-size: var(--zb-step--1); }
+.zb-trail-grid > div { display: flex; gap: 12px; }
+.zb-trail-grid dt { color: var(--zb-muted); min-width: 92px; }
+.zb-trail-grid dd { margin: 0 0 0 auto; text-align: right; min-width: 0; }
+.zb-trail-grid a { color: inherit; }
+.zb-xtag { border: 1.5px solid currentColor; border-radius: 999px; padding: 0 9px; font-size: var(--zb-step-micro); color: var(--zb-from-ink); text-decoration: none; }
+.zb-break { word-break: break-all; }
+.zb-xevent { border-top: 1px solid var(--zb-line); padding: 10px 0; }
+.zb-xraw { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 48px; border-top: 1px solid var(--zb-line); color: var(--zb-muted); }
+.zb-xrawtext { white-space: pre-wrap; word-break: break-all; font-size: var(--zb-step-micro); max-height: 240px; overflow: auto; }
+.zb-xrow-static { cursor: default; }
+.zb-xnum { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.zb-xactions { display: flex; gap: 10px; padding-top: 16px; }
+.zb-xactions .zb-pill { text-decoration: none; }

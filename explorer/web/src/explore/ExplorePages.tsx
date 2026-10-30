@@ -14,12 +14,16 @@ import { TokenIcon } from "../bridge/TokenIcon";
 import { chainNamer } from "./ExploreScreen";
 import { statusWord } from "./explore-model";
 import { RouteIcons, shortHex, XGroup, XRow } from "./parts";
+import { AddressPage, TransactionPage } from "./TxAddressPages";
+import type { Address, Hex } from "viem";
 
 const href = (page: ExplorePage): string => formatRoute({ name: "explore", page });
 
 /** One Explore page. */
 export const ExplorePageView = ({ page }: { readonly page: ExplorePage }) => {
   if (page.kind === "browse") return <BrowsePage kind={page.id} />;
+  if (page.kind === "tx" && page.chainId !== undefined) return <TransactionPage chainId={page.chainId} hash={page.id.toLowerCase() as Hex} />;
+  if (page.kind === "address") return <AddressPage address={page.id as Address} />;
   return <UnknownPage page={page} />;
 };
 
