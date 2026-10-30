@@ -361,7 +361,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
           </div>
         </Sheet>
       ) : null}
-      {signing === null ? null : <TransactionDialog steps={signing} onClose={() => setSigning(null)} />}
+      {signing === null ? null : <TransactionDialog steps={signing} variant="sheet" onClose={() => setSigning(null)} />}
     </main>
   );
 };

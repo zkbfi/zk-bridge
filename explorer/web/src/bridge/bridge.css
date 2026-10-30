@@ -283,3 +283,8 @@
 @media (max-width: 719px) { .zb-sheet-bare { top: 64px; max-height: none; display: flex; flex-direction: column; } .zb-sheet-bare .zb-picker { flex: 1; overflow: auto; } }
 
 .zb-picker-note { margin: 10px 0 0; font-size: 13px; color: var(--zb-muted); }
+
+/* The signing dialog in the bridge's language (inside the sheet): pill buttons, square notices, no shadows. */
+.zb-sign button { border-radius: 999px !important; box-shadow: none !important; }
+.zb-sign [role="alert"], .zb-sign [data-part], .zb-sign .chakra-alert { border-radius: 0 !important; box-shadow: none !important; }
+.zb-sign { font-size: 14px; }
