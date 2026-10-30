@@ -265,7 +265,7 @@ factory) and it is not an Omnibridge copy. Icon: the image server, else the neut
 
 Owner: "it's getting there, but you need to connect a lot of data points". Every value that showed "—", a constant, a
 sample number or nothing in live mode, checked against `release.env` on the dev server and the indexer's answers
-(`/api/tokens` = `[]`, `/api/feed` = no items, `/api/heads` = Sepolia's head on PulseChain v4 9504 slots behind,
+(`/api/tokens` = `[]`, `/api/feed` = no items, `/api/heads` = the light client on Sepolia 9504 slots behind PulseChain v4,
 `/api/delivery-cost` = default gas 550000 on both chains). Watched as the deployer with the dev-only `?watch=`.
 
 Bridge
@@ -273,7 +273,9 @@ Bridge
 - [x] Source balance, per chain, native and ERC-20 (user's RPC). Native read from the snapshot's native balance.
 - [x] MAX = balance less a gas reserve (400k gas × max fee per gas) for the native coin; the full balance for a token.
 - [x] Route status from the gate (paused shows on the pill; real: Sepolia → PulseChain v4 is paused).
-- [x] Light-client lag in the time item ("~16 min + light client 32 h behind") from the indexer's heads.
+- [x] Light-client lag in the time item ("~16 min + light client 32 h behind") from the indexer's heads. On v4 the
+      light client on Sepolia (PulseChain → Sepolia) is ~26 h behind; the one on PulseChain reports no lag (null), so
+      Sepolia → PulseChain shows the plain estimate.
 - [x] Fee from the delivery-cost report and the priority fee through the RPC; breakdown in the drawer (needs a price).
 - [ ] USD on the balance lines: "—" on testnets by spec. A labelled "mainnet price" is not trivial (the oracle maps
       only Ethereum-mainnet origins), so it stays "—".
