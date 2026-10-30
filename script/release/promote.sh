@@ -8,7 +8,9 @@
 #
 # Steps:
 #   1. verifies the staging release against the staging key (explorer/landing/landing.next.config.json)
-#   2. builds the landing page at the staging commit with landing.config.json and packs it
+#   2. checks the staging commit is a full SHA already on origin/main (production ships only what is on main), builds
+#      the landing page at that commit with landing.config.json, and checks it trusts exactly the operator's
+#      production keys (script/release/promote-checks.sh)
 #   3. writes the production version.json (channels.stable, sequence = production + 1) with the same dapp and docs
 #      archives, the new landing archive and the same downloads; refuses if a kept archive differs from staging
 #   4. signs it with the production key from standard input, then verifies it against landing.config.json
@@ -29,6 +31,8 @@ if [ "$#" -ne 2 ]; then
 fi
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=script/release/promote-checks.sh
+. "$repository_root/script/release/promote-checks.sh"
 staging="$(cd "$1" && pwd)"
 mkdir -p "$2"
 out="$(cd "$2" && pwd)"
@@ -45,6 +49,8 @@ const dapp = m.releases.find((r) => r.name === "dapp");
 console.log(`${m.channels.next} ${dapp.commit}`);
 ' "$staging/version.json")"
 version="${PROMOTE_VERSION:-${staging_version%%-next.*}}"
+# The commit comes from a manifest signed only by the staging key: it must be a full SHA already on origin/main.
+promote_check_commit "$repository_root" "$commit"
 
 work="$(mktemp -d)"
 cleanup() { git -C "$repository_root" worktree remove --force "$work/source" >/dev/null 2>&1 || true; rm -rf "$work"; }
@@ -53,6 +59,9 @@ trap cleanup EXIT
 echo "== landing page at $commit, production configuration"
 git -C "$repository_root" worktree add --quiet --detach "$work/source" "$commit" </dev/null
 (cd "$work/source/explorer/landing" && LANDING_CONFIG=landing.config.json LANDING_OUT="$work/landing" node scripts/build.ts) </dev/null
+# The page must trust exactly the operator's production keys, whatever the staging commit's configuration says.
+promote_check_landing_keys "$work/landing" "$repository_root/explorer/landing/landing.config.json" \
+  "$repository_root/explorer/landing/landing.next.config.json"
 "${cli[@]}" pack "$work/landing" "$work/landing.car" </dev/null
 
 previous="${RELEASE_PREVIOUS_MANIFEST:-}"

@@ -47,9 +47,10 @@ if [ -n "$(ls -A "$release")" ]; then
 fi
 cli=(node "$repository_root/explorer/release/src/cli.ts")
 
-commit="$(git -C "$repository_root" rev-parse --short HEAD)"
+# The full SHA: a promotion checks it is on origin/main (script/release/promote-checks.sh).
+commit="$(git -C "$repository_root" rev-parse HEAD)"
 published_at="$(git -C "$repository_root" log -1 --format=%cI)"
-version="${RELEASE_VERSION:-0.0.0-$commit}"
+version="${RELEASE_VERSION:-0.0.0-${commit:0:7}}"
 mkdir -p "$release/archives" "$release/downloads"
 
 echo "== sites"
