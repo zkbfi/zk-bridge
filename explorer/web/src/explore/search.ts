@@ -7,6 +7,7 @@ import type { Address } from "viem";
 import type { ChainConfig, FeedItem, PairConfig, TokenInfo } from "@terminal/model/types";
 import { formatRoute } from "../app/route";
 import { nativeTokensOf } from "../bridge/bridge-model";
+import { CONTRACT_NAMES } from "./contract-names";
 import type { ProofRow } from "./explore-source";
 
 /** What the band recognised. */
@@ -50,14 +51,6 @@ export type SearchData = {
   readonly feed: readonly FeedItem[];
 };
 
-const CONTRACT_NAMES: Record<keyof ChainConfig["contracts"], string> = {
-  messageBridge: "MessageBridge",
-  tokenMediator: "TokenMediator",
-  lightClient: "Light client",
-  wrappedNative: "Wrapped native",
-  gate: "Gate",
-  deliveryRouter: "DeliveryRouter",
-};
 
 const short = (hash: string): string => `${hash.slice(0, 10)}…${hash.slice(-4)}`;
 const chainOfSide = (pair: PairConfig, side: "first" | "second"): ChainConfig => (side === "first" ? pair.first : pair.second);

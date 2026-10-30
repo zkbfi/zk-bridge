@@ -25,7 +25,7 @@ describe("buildConfirmView", () => {
   it("shows chain, contract, function, decoded arguments, value and no bridge fee for a plain relay", async () => {
     const view = buildConfirmView(await relayStep());
     expect(view.chainText).toBe("Ethereum (chain 1)");
-    expect(view.contractText).toContain("TokenMediator");
+    expect(view.contractText).toContain("ERC-20 mediator");
     expect(view.contractText).toContain(getAddress(FIXTURE_PAIR.first.contracts.tokenMediator));
     expect(view.functionSignature).toBe("relayTokens(address,address,uint256)");
     expect(view.arguments.map((argument) => argument.name)).toEqual(["token", "receiver", "value"]);

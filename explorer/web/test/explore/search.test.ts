@@ -58,6 +58,6 @@ describe("the search over Explore's data", () => {
   it("finds contracts of the deployment by address", () => {
     const mediator = FIXTURE_PAIR.first.contracts.tokenMediator;
     const groups = searchExplore(mediator, data);
-    expect(groups.find((group) => group.title === "Contracts")!.items[0]).toMatchObject({ title: "TokenMediator", href: `#/explore/contract/${FIXTURE_PAIR.first.chainId}/${mediator}` });
+    expect(groups.find((group) => group.title === "Contracts")!.items[0]).toMatchObject({ title: "ERC-20 mediator", href: `#/explore/contract/${FIXTURE_PAIR.first.chainId}/${mediator}` });
   });
 });

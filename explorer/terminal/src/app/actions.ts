@@ -89,7 +89,7 @@ export function buildBridgeSteps(values: Readonly<Record<string, string>>, token
       ? []
       : [
           {
-            plan: planApproval({ chain, token, spender: chain.contracts.tokenMediator, spenderLabel: 'TokenMediator', amount }),
+            plan: planApproval({ chain, token, spender: chain.contracts.tokenMediator, spenderLabel: 'ERC-20 mediator', amount }),
             skippable: false,
           },
         ]

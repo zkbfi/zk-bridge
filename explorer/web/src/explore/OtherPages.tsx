@@ -20,6 +20,7 @@ import { explorerUrl, useChainReader } from "./chain-reader";
 import { chainNamer } from "./ExploreScreen";
 import { statusWord } from "./explore-model";
 import { KV, RouteIcons, shortHex, XBand, XGroup, XRow } from "./parts";
+import { CONTRACT_NAMES, type ContractKey } from "./contract-names";
 import { SLOTS_PER_PERIOD } from "./tx-model";
 
 const explore = (page: ExplorePage): string => formatRoute({ name: "explore", page });
@@ -167,8 +168,6 @@ export const SlotPage = ({ slot }: { readonly slot: bigint }) => {
   );
 };
 
-const CONTRACT_NAMES: Record<string, string> = { messageBridge: "MessageBridge", tokenMediator: "TokenMediator", lightClient: "Light client", wrappedNative: "Wrapped native", gate: "Gate", deliveryRouter: "DeliveryRouter" };
-
 /** A contract: which one of the deployment it is, its balance, and what leads on from it. */
 export const ContractPage = ({ chainId, address }: { readonly chainId: number; readonly address: Address }) => {
   const { pair } = useServices();
@@ -179,7 +178,7 @@ export const ContractPage = ({ chainId, address }: { readonly chainId: number; r
   const proofs = useProofs().filter((proof) => proof.chainId === chainId);
   return (
     <>
-      <XBand label={chain.name} big={key === undefined ? "Contract" : (CONTRACT_NAMES[key] ?? key)} sub={<><span className="zb-mono zb-break">{address}</span><External url={explorerUrl(chainId, "address", address)} label="On the chain's explorer" /></>} />
+      <XBand label={chain.name} big={key === undefined ? "Contract" : (CONTRACT_NAMES[key as ContractKey] ?? key)} sub={<><span className="zb-mono zb-break">{address}</span><External url={explorerUrl(chainId, "address", address)} label="On the chain's explorer" /></>} />
       <div className="zb-col zb-xpage">
         <KV k="Part of">{key === undefined ? "not this deployment" : "this deployment"}</KV>
         <KV k="Code">{account === undefined ? <Missing why="Read from the chain" /> : account.isContract ? "deployed" : "none (an account)"}</KV>
