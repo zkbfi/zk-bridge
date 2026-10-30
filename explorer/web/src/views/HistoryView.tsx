@@ -1,6 +1,7 @@
 import { Box, Button, Flex, Heading, Table, Text } from "@chakra-ui/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import type { Route } from "../app/route";
 import { isAddress } from "viem";
 import { DEFAULT_MAXIMUM_BLOCKS, MESSAGE_STATUSES, parseHistoryCursor, picksMessagesOnly, type HistoryEvent, type HistoryFilters } from "@zk-bridge/shared";
 import { formatRoute } from "../app/route";
@@ -29,6 +30,10 @@ export type HistoryViewProps = {
   readonly filters: HistoryFilters;
   /** Called with the new filters when the reader changes a filter or turns the page. */
   readonly onChange: (filters: HistoryFilters) => void;
+  /** How deep the chain scan reads, from the address; null for the default. */
+  readonly scanBlocks: bigint | null;
+  /** Called when the reader asks the scan to read further back. The page keeps it in the address. */
+  readonly onScanBlocks: (blocks: bigint) => void;
   /** Replaces the network reads. A test passes fakes. */
   readonly dependencies?: HistoryDependencies;
 };
@@ -72,12 +77,12 @@ const EventRow = ({ event, chainName }: { readonly event: HistoryEvent; readonly
  *
  * @param props The filters, the change handler and the optional dependencies.
  */
-export const HistoryView = ({ filters, onChange, dependencies }: HistoryViewProps) => {
+export const HistoryView = ({ filters, onChange, scanBlocks, onScanBlocks, dependencies }: HistoryViewProps) => {
   const { pair, configuration, connection } = useServices();
   const [addressText, setAddressText] = useState(filters.address ?? "");
   const [tokenText, setTokenText] = useState(filters.token ?? "");
   const queryClient = useQueryClient();
-  const [maximumBlocks, setMaximumBlocks] = useState(DEFAULT_MAXIMUM_BLOCKS);
+  const maximumBlocks = scanBlocks ?? DEFAULT_MAXIMUM_BLOCKS;
   // The scan of the chains is kept under a key that holds no filter and no page, so a filter or a page never reads the
   // chains again.
   const reads = useMemo(
@@ -248,7 +253,7 @@ export const HistoryView = ({ filters, onChange, dependencies }: HistoryViewProp
       {reading === undefined || reading.readBack.length === 0 ? null : (
         <Notice tone="info">
           {reading.readBack.map((entry) => `Read back to block ${entry.block} on ${chainNameOf(pair, entry.chainId)}.`).join(" ")} Older events are not listed.{" "}
-          <Button size="xs" variant="outline" onClick={() => setMaximumBlocks(maximumBlocks + DEFAULT_MAXIMUM_BLOCKS)}>
+          <Button size="xs" variant="outline" onClick={() => onScanBlocks(maximumBlocks + DEFAULT_MAXIMUM_BLOCKS)}>
             Read further back
           </Button>
         </Notice>
@@ -295,3 +300,30 @@ export const HistoryView = ({ filters, onChange, dependencies }: HistoryViewProp
     </Flex>
   );
 };
+
+type HistoryRoute = Extract<Route, { name: "history" }>;
+
+/** Props of {@link HistoryPage}. */
+export type HistoryPageProps = {
+  readonly route: HistoryRoute;
+  /** A filter change or a page turn: a new entry in the history of the browser. */
+  readonly onNavigate: (next: HistoryRoute) => void;
+  /** A deeper scan: the same entry, written in place. */
+  readonly onUpdate: (next: HistoryRoute) => void;
+  readonly dependencies?: HistoryDependencies;
+};
+
+/**
+ * The history view for a route: the filters and the scan depth come from the address and go back to it.
+ *
+ * @param props The route, its two change handlers and the optional dependencies.
+ */
+export const HistoryPage = ({ route, onNavigate, onUpdate, dependencies }: HistoryPageProps) => (
+  <HistoryView
+    filters={route.filters}
+    scanBlocks={route.scanBlocks ?? null}
+    onChange={(filters) => onNavigate({ ...route, filters })}
+    onScanBlocks={(scanBlocks) => onUpdate({ ...route, scanBlocks })}
+    {...(dependencies === undefined ? {} : { dependencies })}
+  />
+);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadPairConfig, loadSharedPair, readConfiguration, requestedPair, selectPair, withDeploymentText } from "../../src/config/environment";
+import { defaultPairOf, loadPairConfig, loadSharedPair, PREFERRED_PAIRS, readConfiguration, requestedPair, selectPair, withDeploymentText } from "../../src/config/environment";
 import { ConfigurationError } from "../../src/config/secret-scan";
 
 const DEPLOYMENT = JSON.stringify({
@@ -161,11 +161,25 @@ describe("a release with the deployments of several pairs", () => {
   const TESTNET = { chain_a: section(11155111, "a1"), chain_b: section(943, "b1") };
   const both = { "sepolia-pls943": TESTNET, "eth-pls": JSON.parse(FULL_DEPLOYMENT) };
 
-  it("offers every pair of the map, opens the first by default, and holds the text of that pair's deployment", () => {
+  it("offers every pair of the map, opens Ethereum and PulseChain by default once it is deployed, and holds its deployment", () => {
     const configuration = readConfiguration({ VITE_EXPLORER_DEPLOYMENTS_JSON: JSON.stringify(both) });
     expect(configuration.availablePairs).toEqual(["sepolia-pls943", "eth-pls"]);
+    expect(configuration.pairName).toBe("eth-pls");
+    expect(JSON.parse(configuration.deploymentJson ?? "")).toEqual(JSON.parse(FULL_DEPLOYMENT));
+  });
+
+  it("opens the Sepolia and PulseChain testnet pair while Ethereum and PulseChain is not deployed", () => {
+    const configuration = readConfiguration({ VITE_EXPLORER_DEPLOYMENTS_JSON: JSON.stringify({ "other-pair": TESTNET, "sepolia-pls943": TESTNET }) });
     expect(configuration.pairName).toBe("sepolia-pls943");
-    expect(JSON.parse(configuration.deploymentJson ?? "")).toEqual(TESTNET);
+  });
+
+  it("picks the default pair by preference, then the release's first pair", () => {
+    expect(defaultPairOf(["sepolia-pls943", "eth-pls"])).toBe("eth-pls");
+    expect(defaultPairOf(["sepolia-pls943"])).toBe("sepolia-pls943");
+    expect(defaultPairOf(["b-pair", "a-pair"])).toBe("b-pair");
+    expect(defaultPairOf([])).toBeNull();
+    expect(defaultPairOf(null)).toBeNull();
+    expect(PREFERRED_PAIRS).toEqual(["eth-pls", "sepolia-pls943"]);
   });
 
   it("opens the pair that VITE_EXPLORER_PAIR names when the map has it, and refuses a name the map lacks", () => {

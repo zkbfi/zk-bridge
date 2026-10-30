@@ -1,10 +1,11 @@
+import { StatefulBridgeForm } from "../support/stateful";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { getAddress } from "viem";
 import { describe, expect, it, vi } from "vitest";
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import type { PairConfig, TokenInfo } from "@terminal/model/types";
-import { BridgeForm, type BridgeFormProps } from "../../src/actions/BridgeForm";
+import { type BridgeFormProps } from "../../src/actions/BridgeForm";
 import type { WebStep } from "../../src/tx/bridge-steps";
 import { buildFixtureContext } from "../helpers";
 import { renderPage, type RenderPageOptions } from "../render";
@@ -25,7 +26,7 @@ const renderForm = async (overrides: FormOverrides = {}, options: RenderPageOpti
   const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
   const onReview = vi.fn();
   renderPage(
-    <BridgeForm variant={overrides.variant ?? "tokens"} pair={overrides.pair ?? FIXTURE_PAIR} tokens={overrides.tokens ?? tokens} context={overrides.context ?? context} account={FIXTURE_ACCOUNT} onReview={onReview} />,
+    <StatefulBridgeForm variant={overrides.variant ?? "tokens"} pair={overrides.pair ?? FIXTURE_PAIR} tokens={overrides.tokens ?? tokens} context={overrides.context ?? context} account={FIXTURE_ACCOUNT} onReview={onReview} />,
     options,
   );
   return { onReview, context, tokens };
@@ -252,7 +253,7 @@ describe("a change of the token list under the form", () => {
   const rerenderWith = async () => {
     const { context } = await buildFixtureContext({ allowance: 10n ** 12n });
     const Wrapper = walletWrapper({ wallet: connectedWallet() });
-    const form = (tokens: readonly TokenInfo[]) => <BridgeForm variant="tokens" pair={FIXTURE_PAIR} tokens={tokens} context={context} account={FIXTURE_ACCOUNT} onReview={() => undefined} />;
+    const form = (tokens: readonly TokenInfo[]) => <StatefulBridgeForm variant="tokens" pair={FIXTURE_PAIR} tokens={tokens} context={context} account={FIXTURE_ACCOUNT} onReview={() => undefined} />;
     const result = render(form([usdc, weth]), { wrapper: Wrapper });
     return { form, ...result };
   };
@@ -271,7 +272,7 @@ describe("a change of the token list under the form", () => {
 
   it("starts with no choice when the list is empty", async () => {
     const { context } = await buildFixtureContext();
-    render(<BridgeForm variant="tokens" pair={FIXTURE_PAIR} tokens={[]} context={context} account={FIXTURE_ACCOUNT} onReview={() => undefined} />, { wrapper: walletWrapper({ wallet: connectedWallet() }) });
+    render(<StatefulBridgeForm variant="tokens" pair={FIXTURE_PAIR} tokens={[]} context={context} account={FIXTURE_ACCOUNT} onReview={() => undefined} />, { wrapper: walletWrapper({ wallet: connectedWallet() }) });
     expect(within(screen.getByLabelText("Token")).queryAllByRole("option")).toHaveLength(0);
     expect(screen.getByRole("button", { name: "Review transaction" })).toBeDisabled();
   });
@@ -305,5 +306,18 @@ describe("the call fields", () => {
   it("offers no call fields on the wrap form", async () => {
     await renderForm({ variant: "wrap" });
     expect(screen.queryByLabelText("Call target")).toBeNull();
+  });
+});
+
+describe("the default direction", () => {
+  it("sends from the first chain to the second by default, even when the token list starts on the second chain", async () => {
+    const { context } = await buildFixtureContext();
+    const firstSide = FIXTURE_TOKENS.filter((token) => token.side === "first");
+    const secondSide = FIXTURE_TOKENS.filter((token) => token.side === "second");
+    render(<StatefulBridgeForm variant="tokens" pair={FIXTURE_PAIR} tokens={[...secondSide, ...firstSide]} context={context} account={FIXTURE_ACCOUNT} onReview={() => undefined} />, {
+      wrapper: walletWrapper({ wallet: connectedWallet() }),
+    });
+    expect(screen.getByLabelText("Token")).toHaveValue(`first:${firstSide[0]!.address}`);
+    expect(screen.getByLabelText(new RegExp(`^Amount to send from ${FIXTURE_PAIR.first.name}`))).toBeInTheDocument();
   });
 });

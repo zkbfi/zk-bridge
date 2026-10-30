@@ -1,8 +1,8 @@
+import { StatefulMessageForm } from "../support/stateful";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
-import { MessageForm } from "../../src/actions/MessageForm";
 import type { WebStep } from "../../src/tx/bridge-steps";
 import { renderPage } from "../render";
 
@@ -10,7 +10,7 @@ const TARGET = `0x${"cd".repeat(20)}`;
 
 const renderForm = () => {
   const onReview = vi.fn();
-  renderPage(<MessageForm pair={FIXTURE_PAIR} onReview={onReview} />);
+  renderPage(<StatefulMessageForm pair={FIXTURE_PAIR} onReview={onReview} />);
   return { onReview };
 };
 

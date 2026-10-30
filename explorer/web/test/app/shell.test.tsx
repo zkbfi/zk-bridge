@@ -5,7 +5,8 @@ import { Shell } from "../../src/app/Shell";
 import { renderPage } from "../render";
 
 beforeEach(() => {
-  window.location.hash = "";
+  // These tests start on the table of all pairs; the landing on the default pair has its own tests.
+  window.location.hash = "#/pairs";
   window.localStorage.clear();
   document.documentElement.className = "";
 });

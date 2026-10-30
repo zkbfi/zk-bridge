@@ -1,8 +1,8 @@
+import { StatefulActionDialog } from "../support/stateful";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ActionArea } from "../../src/views/pair/ActionArea";
-import { ActionDialog } from "../../src/actions/ActionDialogs";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { renderPage } from "../render";
 
@@ -41,12 +41,12 @@ describe("the action area", () => {
 
 describe("the action dialogs", () => {
   it("asks to connect a wallet first when none is connected", async () => {
-    renderPage(<ActionDialog dialog="bridge" onClose={() => undefined} />, { connected: false });
+    renderPage(<StatefulActionDialog dialog="bridge" onClose={() => undefined} />, { connected: false });
     expect(await screen.findByText(/Connect a wallet first/)).toBeInTheDocument();
   });
 
   it("disables Review in the message form until the target is an address, then reviews requireToPassMessage", async () => {
-    renderPage(<ActionDialog dialog="message" onClose={() => undefined} />);
+    renderPage(<StatefulActionDialog dialog="message" onClose={() => undefined} />);
     const review = await screen.findByRole("button", { name: "Review transaction" }, { timeout: 15_000 });
     expect(review).toBeDisabled();
     expect(review).toHaveAccessibleDescription(/Enter the target contract/);
@@ -61,7 +61,7 @@ describe("the action dialogs", () => {
   });
 
   it("keeps the form values when the user cancels the review", async () => {
-    renderPage(<ActionDialog dialog="message" onClose={() => undefined} />);
+    renderPage(<StatefulActionDialog dialog="message" onClose={() => undefined} />);
     await userEvent.click(await screen.findByLabelText(/^Target contract on/, undefined, { timeout: 15_000 }));
     await userEvent.paste(`0x${"cd".repeat(20)}`);
     await userEvent.click(screen.getByRole("button", { name: "Review transaction" }));

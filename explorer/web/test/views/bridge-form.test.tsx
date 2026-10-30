@@ -1,3 +1,4 @@
+import { StatefulBridgeForm } from "../support/stateful";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { getAddress } from "viem";
@@ -5,7 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import type { PairConfig, TokenInfo } from "@terminal/model/types";
 import { GAS_MODE_HELP } from "@zk-bridge/shared";
-import { BridgeForm } from "../../src/actions/BridgeForm";
 import type { WebStep } from "../../src/tx/bridge-steps";
 import { buildFixtureContext } from "../helpers";
 import { renderPage, type RenderPageOptions } from "../render";
@@ -22,7 +22,7 @@ const WRAPPED_TOKENS: readonly TokenInfo[] = [
 const renderForm = async (options: RenderPageOptions & { readonly tokens?: readonly TokenInfo[]; readonly variant?: "tokens" | "wrap"; readonly pair?: PairConfig; readonly onReview?: (steps: readonly WebStep[]) => void } = {}) => {
   const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
   const onReview = options.onReview ?? vi.fn();
-  renderPage(<BridgeForm variant={options.variant ?? "tokens"} pair={options.pair ?? FIXTURE_PAIR} tokens={options.tokens ?? tokens} context={context} account={FIXTURE_ACCOUNT} onReview={onReview} />, options);
+  renderPage(<StatefulBridgeForm variant={options.variant ?? "tokens"} pair={options.pair ?? FIXTURE_PAIR} tokens={options.tokens ?? tokens} context={context} account={FIXTURE_ACCOUNT} onReview={onReview} />, options);
   return { onReview };
 };
 

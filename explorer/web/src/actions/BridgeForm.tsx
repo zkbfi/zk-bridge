@@ -1,10 +1,11 @@
 import { Button, Flex, Stack, Text } from "@chakra-ui/react";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { Address } from "viem";
 import type { BridgeContext } from "@terminal/app/actions";
 import type { ChainSnapshot } from "@terminal/chain/live-reads";
 import type { ChainSide, PairConfig, TokenInfo } from "@terminal/model/types";
 import { useDeliveryCost, usePriorityFee } from "../app/queries";
+import type { BridgeQuery, TipQuery } from "../app/route";
 import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS, tipStatusOf, type DeliveryOptions } from "../tx/bridge-draft";
 import type { BridgeFormValues, WebStep } from "../tx/bridge-steps";
 import { formatAmountWithSymbol, formatUnits } from "../ui/format";
@@ -20,6 +21,10 @@ export type BridgeFormProps = {
   /** The live state of both chains for the account. */
   readonly context: BridgeContext;
   readonly account: Address;
+  /** The fields that differ from the defaults, as the address holds them. */
+  readonly query: BridgeQuery;
+  /** Called with the fields that differ from the defaults after every edit. */
+  readonly onQuery: (next: BridgeQuery) => void;
   /** Called with the planned transactions when the user presses Review. */
   readonly onReview: (steps: readonly WebStep[]) => void;
 };
@@ -50,16 +55,65 @@ const choicesOf = (variant: BridgeFormProps["variant"], pair: PairConfig, tokens
 
 const sideOfChoice = (choice: string): ChainSide => (choice.startsWith("second:") ? "second" : "first");
 
+type Values = Required<BridgeFormValues>;
+
+/** The tip settings from the address over the defaults. */
+const optionsOf = (tip: TipQuery | undefined): DeliveryOptions => (tip === undefined ? DEFAULT_DELIVERY_OPTIONS : { ...DEFAULT_DELIVERY_OPTIONS, ...tip });
+
+/** The tip settings that differ from the defaults; only they go in the address. */
+const tipQueryOf = (options: DeliveryOptions): TipQuery | undefined => {
+  const base = DEFAULT_DELIVERY_OPTIONS;
+  const tip: TipQuery = {
+    ...(options.mode === base.mode ? {} : { mode: options.mode }),
+    ...(options.percentText === base.percentText ? {} : { percentText: options.percentText }),
+    ...(options.fixedText === base.fixedText ? {} : { fixedText: options.fixedText }),
+    ...(options.marginPercentText === base.marginPercentText ? {} : { marginPercentText: options.marginPercentText }),
+    ...(options.gasMultiplierText === base.gasMultiplierText ? {} : { gasMultiplierText: options.gasMultiplierText }),
+    ...(options.ceilingGweiText === base.ceilingGweiText ? {} : { ceilingGweiText: options.ceilingGweiText }),
+    ...(options.senderPriceText === null ? {} : { senderPriceText: options.senderPriceText }),
+    ...(options.routerText === null ? {} : { routerText: options.routerText }),
+    ...(options.payoutNative ? { payoutNative: true as const } : {}),
+  };
+  return Object.keys(tip).length === 0 ? undefined : tip;
+};
+
+/** The fields that differ from the defaults (the default token, an empty form, your own account as the receiver). */
+const bridgeQueryOf = (values: Values, options: DeliveryOptions, defaults: Values): BridgeQuery => {
+  const tip = tipQueryOf(options);
+  const differs = (key: Exclude<keyof Values, "mode">): { [K in typeof key]?: string } => (values[key] === defaults[key] ? {} : { [key]: values[key] });
+  return {
+    ...differs("token"),
+    ...differs("amount"),
+    ...differs("receiver"),
+    ...(values.mode === defaults.mode ? {} : { mode: values.mode }),
+    ...differs("data"),
+    ...differs("gasLimit"),
+    ...differs("callTarget"),
+    ...differs("callData"),
+    ...(tip === undefined ? {} : { tip }),
+  };
+};
+
 /**
  * The form of "Bridge tokens" and "Wrap the native coin". It shows the tip for delivery, which is on by default.
  * Review is disabled until the transaction can be built.
  *
- * @param props The pair, the tokens, the live state and the review handler.
+ * @param props The pair, the tokens, the live state, the fields from the address and the handlers.
  */
-export const BridgeForm = ({ variant, pair, tokens, context, account, onReview }: BridgeFormProps) => {
+export const BridgeForm = ({ variant, pair, tokens, context, account, query, onQuery, onReview }: BridgeFormProps) => {
   const choices = useMemo(() => choicesOf(variant, pair, tokens, context), [variant, pair, tokens, context]);
-  const [values, setValues] = useState<Required<BridgeFormValues>>({ token: choices[0]?.value ?? "", amount: "", receiver: account, mode: "plain", data: "", gasLimit: "", callTarget: "", callData: "" });
-  const [options, setOptions] = useState<DeliveryOptions>(DEFAULT_DELIVERY_OPTIONS);
+  // The default sends from the first chain (Ethereum, or Sepolia) to the second.
+  const defaults = useMemo<Values>(
+    () => ({ token: (choices.find((choice) => choice.side === "first") ?? choices[0])?.value ?? "", amount: "", receiver: account, mode: "plain", data: "", gasLimit: "", callTarget: "", callData: "" }),
+    [choices, account],
+  );
+  const values = useMemo<Values>(() => {
+    const { tip: _tip, ...fields } = query;
+    return { ...defaults, ...fields };
+  }, [defaults, query]);
+  const options = useMemo(() => optionsOf(query.tip), [query.tip]);
+  const setValues = (next: Values): void => onQuery(bridgeQueryOf(next, options, defaults));
+  const setOptions = (next: DeliveryOptions): void => onQuery(bridgeQueryOf(values, next, defaults));
   const effectiveToken = choices.some((choice) => choice.value === values.token) ? values.token : (choices[0]?.value ?? "");
   const side = sideOfChoice(effectiveToken);
   const sourceChain = side === "first" ? pair.first : pair.second;
@@ -93,11 +147,10 @@ export const BridgeForm = ({ variant, pair, tokens, context, account, onReview }
             <SelectInput
               id={id}
               value={effectiveToken}
-              onChange={(event) => {
-                setValues({ ...values, token: event.target.value });
-                // The price and the router belong to one token and one destination chain.
-                setOptions({ ...options, senderPriceText: null, routerText: null });
-              }}
+              onChange={(event) =>
+                // One update: the price and the router belong to one token and one destination chain, so they reset too.
+                onQuery(bridgeQueryOf({ ...values, token: event.target.value }, { ...options, senderPriceText: null, routerText: null }, defaults))
+              }
             >
               {choices.map((choice) => (
                 <option key={choice.value} value={choice.value}>

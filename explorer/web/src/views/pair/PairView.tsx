@@ -1,5 +1,7 @@
 import { Box, Button, Grid, Stack, Text } from "@chakra-ui/react";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import { getAddress, isAddress } from "viem";
+import { PAIR_PAGE_SIZE, type PairViewQuery, type Route } from "../../app/route";
 import { useFeed, useHeads, useSnapshots, useSummary, useTokens } from "../../app/queries";
 import { useServices } from "../../app/services";
 import { formatTimestamp } from "../../ui/format";
@@ -7,31 +9,61 @@ import { Notice, Panel } from "../../ui/primitives";
 import { useWallet } from "../../wallet/wallet-port";
 import { ActionArea } from "./ActionArea";
 import { FeedTable } from "./FeedTable";
-import { EMPTY_FILTER, filterForToken, validateFilter, type FilterState } from "./filter-model";
+import { EMPTY_FILTER, validateFilter, type FilterState } from "./filter-model";
 import { FilterBar } from "./FilterBar";
 import { HeadsFooter } from "./HeadsFooter";
 import { SummaryBar } from "./SummaryBar";
 
+type PairRoute = Extract<Route, { name: "pair" }>;
+
 /** Props of {@link PairView}. */
 export type PairViewProps = {
-  readonly pairId: string;
-  /** A token address to filter the feed to when the view opens, or null. */
-  readonly initialToken: string | null;
+  /** The pair route: the pair, the token filter and the rest of the view (filters, rows). */
+  readonly route: PairRoute;
+  /** Called with the route after a filter or the row count changes. The page writes it to the address in place. */
+  readonly onChange: (next: PairRoute) => void;
 };
 
-const PAGE_SIZE = 50;
+/** The filter bar's state as the route holds it. */
+export const filterStateOf = (route: PairRoute): FilterState => ({
+  ...EMPTY_FILTER,
+  token: route.token ?? "all",
+  direction: route.view?.direction ?? "all",
+  kind: route.view?.kind ?? "all",
+  status: route.view?.status ?? "all",
+  address: route.view?.address ?? "",
+  range: route.view?.range ?? "all",
+});
+
+/**
+ * The route for a filter bar state and a row count. Defaults are left out, so the address stays short. A changed
+ * filter starts again at the first page.
+ */
+export const pairRouteOf = (route: PairRoute, state: FilterState, rows: number): PairRoute => {
+  const view: PairViewQuery = {
+    ...(state.direction === "all" ? {} : { direction: state.direction }),
+    ...(state.kind === "all" ? {} : { kind: state.kind }),
+    ...(state.status === "all" ? {} : { status: state.status }),
+    ...(state.address === "" ? {} : { address: state.address }),
+    ...(state.range === "all" ? {} : { range: state.range }),
+    ...(rows === PAIR_PAGE_SIZE ? {} : { rows }),
+  };
+  const token = state.token !== "all" && isAddress(state.token, { strict: false }) ? getAddress(state.token) : null;
+  return { name: "pair", pairId: route.pairId, token, ...(Object.keys(view).length === 0 ? {} : { view }) };
+};
 
 /**
  * The pair view: summary across the top, the action area on the left, the filter bar and the feed on the right, and the
  * light client heads in the footer.
  *
- * @param props The pair name and an optional starting token.
+ * @param props The pair route and the change handler.
  */
-export const PairView = ({ pairId, initialToken }: PairViewProps) => {
+export const PairView = ({ route, onChange }: PairViewProps) => {
   const { pair, now } = useServices();
   const wallet = useWallet();
-  const [filterState, setFilterState] = useState<FilterState>(initialToken === null ? EMPTY_FILTER : filterForToken(initialToken));
-  const [limit, setLimit] = useState(PAGE_SIZE);
+  const pairId = route.pairId;
+  const filterState = useMemo(() => filterStateOf(route), [route]);
+  const limit = route.view?.rows ?? PAIR_PAGE_SIZE;
   const clock = now();
   // The time range moves once a minute, so the feed query does not change on every render.
   const filterClock = Math.floor(clock / 60) * 60;
@@ -56,7 +88,7 @@ export const PairView = ({ pairId, initialToken }: PairViewProps) => {
         </Box>
         <Box overflowY={{ base: "visible", lg: "auto" }} maxHeight={{ base: "none", lg: "100%" }} borderWidth="1px" borderColor="border" borderRadius="lg" backgroundColor="bg.subtle">
           <Box position="sticky" top={{ base: "3.5rem", lg: "0" }} zIndex="sticky" backgroundColor="bg.subtle" padding="3" borderBottomWidth="1px" borderColor="border">
-            <FilterBar pair={pair} tokens={tokens.data ?? []} state={filterState} onChange={(next) => { setFilterState(next); setLimit(PAGE_SIZE); }} addressProblem={validated.addressProblem} />
+            <FilterBar pair={pair} tokens={tokens.data ?? []} state={filterState} onChange={(next) => onChange(pairRouteOf(route, next, PAIR_PAGE_SIZE))} addressProblem={validated.addressProblem} />
           </Box>
           <Box padding="3">
             {feed.error === null ? null : <Notice tone="warning">The feed did not refresh ({feed.error.message}). The rows are the last good ones.</Notice>}
@@ -67,7 +99,7 @@ export const PairView = ({ pairId, initialToken }: PairViewProps) => {
             )}
             {feed.data === undefined ? <Text color="fg.muted">Loading the feed…</Text> : <FeedTable pair={pair} items={feed.data.items} />}
             {feed.data?.hasMore === true ? (
-              <Button marginTop="2" variant="outline" size="sm" onClick={() => setLimit(limit + PAGE_SIZE)}>
+              <Button marginTop="2" variant="outline" size="sm" onClick={() => onChange(pairRouteOf(route, filterState, limit + PAIR_PAGE_SIZE))}>
                 Show older rows
               </Button>
             ) : null}

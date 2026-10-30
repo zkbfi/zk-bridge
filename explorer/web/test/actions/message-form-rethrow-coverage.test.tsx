@@ -1,9 +1,9 @@
+import { StatefulMessageForm } from "../support/stateful";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Component, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
-import { MessageForm } from "../../src/actions/MessageForm";
 import { renderPage } from "../render";
 
 vi.mock("@terminal/app/actions", async (importOriginal) => ({
@@ -28,7 +28,7 @@ describe("the message form with a planner that fails for a reason other than the
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     renderPage(
       <Catcher>
-        <MessageForm pair={FIXTURE_PAIR} onReview={() => undefined} />
+        <StatefulMessageForm pair={FIXTURE_PAIR} onReview={() => undefined} />
       </Catcher>,
     );
     await userEvent.click(screen.getByLabelText(/^Target contract on/));

@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { Providers } from "./app/Providers";
+import { loaderHoldMilliseconds, loaderStartFromTiming } from "./app/loader";
 import { createServices } from "./app/services";
 import { Shell } from "./app/Shell";
 import { loadPairConfig, loadSharedPair, readConfiguration, requestedPair, selectPair, withDeploymentText } from "./config/environment";
@@ -24,11 +25,22 @@ const showStartupProblem = (message: string): void => {
   root.replaceChildren(box);
 };
 
+/** Waits until the loader's first swirl has ended (see `app/loader.ts`). */
+const holdForLoader = async (): Promise<void> => {
+  const milliseconds = loaderHoldMilliseconds({
+    nowMs: performance.now(),
+    loaderStartMs: loaderStartFromTiming(performance.getEntriesByType("resource") as PerformanceResourceTiming[]),
+    reducedMotion: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
+  });
+  if (milliseconds > 0) await new Promise((resolve) => setTimeout(resolve, milliseconds));
+};
+
 const start = async (): Promise<void> => {
   const configuration = await withDeploymentText(selectPair(readConfiguration(import.meta.env), requestedPair(window.location)));
   const pair = await loadPairConfig(configuration);
   const sharedPair = await loadSharedPair(configuration);
   const services = createServices(configuration, pair, { sharedPair, storage: browserStorage() });
+  await holdForLoader();
   mount.render(
     <StrictMode>
       <Providers services={services}>

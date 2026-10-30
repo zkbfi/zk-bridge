@@ -9,7 +9,7 @@ import { AddressView } from "../views/AddressView";
 import { AuditView } from "../views/AuditView";
 import { DocsView } from "../views/DocsView";
 import { GlobalView } from "../views/GlobalView";
-import { HistoryView } from "../views/HistoryView";
+import { HistoryPage } from "../views/HistoryView";
 import { EMPTY_HISTORY_FILTERS } from "../views/history-model";
 import { MessageView } from "../views/MessageView";
 import { PairView } from "../views/pair/PairView";
@@ -18,7 +18,7 @@ import { ConnectionsView } from "../views/ConnectionsView";
 import { BrandMark } from "../ui/BrandMark";
 import { Notice } from "../ui/primitives";
 import { ActionsContext } from "./actions-context";
-import { parseRoute, formatRoute, routeTitle, type Route } from "./route";
+import { formatLocation, formatRoute, linkedFields, NO_OVERLAY, parseLocation, resolveHome, routeTitle, type Overlay, type PageLocation, type Route } from "./route";
 import { useServices } from "./services";
 import { SettingsDialog } from "./SettingsDialog";
 import { SourceBadge } from "./SourceBadge";
@@ -26,18 +26,42 @@ import { useThemeChoice } from "./theme";
 
 const FORM_DIALOGS: Readonly<Record<string, FormDialogName>> = { bridge: "bridge", wrap: "wrap", "send-message": "message" };
 
-/** The route that the address bar holds now, and a function that changes it. */
-const useHashRoute = (): readonly [Route, (next: Route) => void] => {
-  const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash));
+/** How a change reaches the history: a new entry (navigation, a dialog opening or closing) or in place (typing). */
+type HistoryMode = "push" | "replace";
+
+/**
+ * The view and the dialog that the address bar holds now, and a function that changes them. The address is the only
+ * state of the page (it runs from IPFS, so a link is all there is): every change writes the hash first. A hash with
+ * no view opens the default pair in place, without a history entry.
+ */
+const useHashLocation = (defaultPairId: string): readonly [PageLocation, (next: PageLocation, mode?: HistoryMode) => void] => {
+  const read = useCallback((): PageLocation => {
+    const parsed = parseLocation(window.location.hash);
+    const route = resolveHome(parsed.route, defaultPairId);
+    if (route === parsed.route) return parsed;
+    const resolved = { route, overlay: parsed.overlay };
+    window.history.replaceState(window.history.state, "", formatLocation(resolved));
+    return resolved;
+  }, [defaultPairId]);
+  const [location, setLocation] = useState<PageLocation>(read);
   useEffect(() => {
-    const onChange = (): void => setRoute(parseRoute(window.location.hash));
+    const onChange = (): void => setLocation(read());
     window.addEventListener("hashchange", onChange);
-    return () => window.removeEventListener("hashchange", onChange);
+    window.addEventListener("popstate", onChange);
+    return () => {
+      window.removeEventListener("hashchange", onChange);
+      window.removeEventListener("popstate", onChange);
+    };
+  }, [read]);
+  const go = useCallback((next: PageLocation, mode: HistoryMode = "push"): void => {
+    const hash = formatLocation(next);
+    if (hash !== window.location.hash) {
+      if (mode === "replace") window.history.replaceState(window.history.state, "", hash);
+      else window.history.pushState(null, "", hash);
+    }
+    setLocation(next);
   }, []);
-  const navigate = useCallback((next: Route): void => {
-    window.location.hash = formatRoute(next);
-  }, []);
-  return [route, navigate];
+  return [location, go];
 };
 
 const isTypingTarget = (target: EventTarget | null): boolean => {
@@ -60,13 +84,13 @@ const usePaletteShortcuts = (open: () => void): void => {
   }, [open]);
 };
 
-const renderRoute = (route: Route, navigate: (next: Route) => void) => {
-  if (route.name === "global") return <GlobalView />;
-  if (route.name === "pair") return <PairView key={`${route.pairId}-${route.token ?? "all"}`} pairId={route.pairId} initialToken={route.token} />;
+const renderRoute = (route: Route, navigate: (next: Route) => void, update: (next: Route) => void) => {
+  if (route.name === "home" || route.name === "global") return <GlobalView />;
+  if (route.name === "pair") return <PairView key={route.pairId} route={route} onChange={update} />;
   if (route.name === "audit") return <AuditView />;
   if (route.name === "prover") return <ProverView />;
   if (route.name === "settings") return <ConnectionsView />;
-  if (route.name === "history") return <HistoryView filters={route.filters} onChange={(filters) => navigate({ name: "history", filters })} />;
+  if (route.name === "history") return <HistoryPage route={route} onNavigate={navigate} onUpdate={update} />;
   if (route.name === "docs") return <DocsView slug={route.slug} heading={route.heading} />;
   if (route.name === "address") return <AddressView address={route.address} />;
   return <MessageView messageId={route.messageId} />;
@@ -79,13 +103,22 @@ const shortAccount = (account: string | null): string => (account === null ? "No
  * There is no menu. Everything that a menu holds is a result of the search.
  */
 export const Shell = () => {
-  const { configuration } = useServices();
+  const { configuration, pair } = useServices();
   const wallet = useWallet();
-  const [route, navigate] = useHashRoute();
+  const [location, go] = useHashLocation(pair.id);
+  const { route, overlay } = location;
+  // The dialog a link opened, kept until that dialog closes, so the form can name the fields that came from the link.
+  const [linkedOverlay, setLinkedOverlay] = useState<Overlay | null>(() => (location.overlay.dialog === null ? null : location.overlay));
+  const navigate = useCallback((next: Route): void => go({ route: next, overlay: NO_OVERLAY }), [go]);
+  const update = useCallback((next: Route): void => go({ route: next, overlay }, "replace"), [go, overlay]);
+  const openDialog = useCallback((dialog: Overlay["dialog"]): void => {
+    setLinkedOverlay(null);
+    go({ route, overlay: dialog === null ? NO_OVERLAY : { ...NO_OVERLAY, dialog } });
+  }, [go, route]);
   const { theme, setTheme } = useThemeChoice();
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [dialog, setDialog] = useState<FormDialogName | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const dialog: FormDialogName | null = overlay.dialog === "settings" ? null : overlay.dialog;
+  const settingsOpen = overlay.dialog === "settings";
   const [recent, setRecent] = useState<readonly SearchResult[]>(() => loadRecent(browserStorage()));
   const [notice, setNotice] = useState<string | null>(null);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
@@ -97,10 +130,10 @@ export const Shell = () => {
 
   const runAction = useCallback(
     async (action: ActionId): Promise<void> => {
-      if (action.name === "settings") return setSettingsOpen(true);
+      if (action.name === "settings") return openDialog("settings");
       if (action.name === "theme") return setTheme(action.theme);
       const formDialog = FORM_DIALOGS[action.name];
-      if (formDialog !== undefined) return setDialog(formDialog);
+      if (formDialog !== undefined) return openDialog(formDialog);
       try {
         if (action.name === "connect-wallet") await wallet.connect();
         if (action.name === "disconnect-wallet") wallet.disconnect();
@@ -109,7 +142,7 @@ export const Shell = () => {
         setNotice(error instanceof Error ? error.message : String(error));
       }
     },
-    [setTheme, wallet],
+    [openDialog, setTheme, wallet],
   );
 
   const select = useCallback(
@@ -122,13 +155,13 @@ export const Shell = () => {
     [navigate, runAction],
   );
 
-  const actionsPort = useMemo(() => ({ open: (name: FormDialogName) => setDialog(name) }), []);
+  const actionsPort = useMemo(() => ({ open: (name: FormDialogName) => openDialog(name) }), [openDialog]);
 
   return (
     <ActionsContext.Provider value={actionsPort}>
       <Box minHeight="100vh" backgroundColor="bg" color="fg">
         <Flex as="header" position="sticky" top="0" zIndex="sticky" gap="3" alignItems="center" paddingX={{ base: "4", md: "6" }} paddingY="2" backgroundColor="bg" borderBottomWidth="1px" borderColor="border">
-          <a href="#/" aria-label="zk-bridge explorer, global view">
+          <a href={formatRoute({ name: "pair", pairId: pair.id, token: null })} aria-label={`zk-bridge explorer, ${pair.id}`}>
             <Flex as="span" gap="2" alignItems="center">
               <Box as="span" color="#eb6834" display="inline-flex">
                 <BrandMark />
@@ -166,11 +199,19 @@ export const Shell = () => {
               </Button>
             </Flex>
           )}
-          <Box marginTop="3">{renderRoute(route, navigate)}</Box>
+          <Box marginTop="3">{renderRoute(route, navigate, update)}</Box>
         </Box>
         {paletteOpen ? <CommandPalette recent={recent} walletConnected={wallet.status === "connected"} onSelect={select} onClose={() => setPaletteOpen(false)} /> : null}
-        {dialog === null ? null : <ActionDialog dialog={dialog} onClose={() => setDialog(null)} />}
-        {settingsOpen ? <SettingsDialog theme={theme} onTheme={setTheme} onRecentCleared={() => setRecent([])} onClose={() => setSettingsOpen(false)} /> : null}
+        {dialog === null ? null : (
+          <ActionDialog
+            dialog={dialog}
+            overlay={overlay}
+            onOverlay={(next) => go({ route, overlay: next }, "replace")}
+            linked={linkedOverlay === null ? [] : linkedFields(linkedOverlay, wallet.status === "connected" ? wallet.account : null)}
+            onClose={() => openDialog(null)}
+          />
+        )}
+        {settingsOpen ? <SettingsDialog theme={theme} onTheme={setTheme} onRecentCleared={() => setRecent([])} onClose={() => openDialog(null)} /> : null}
       </Box>
     </ActionsContext.Provider>
   );

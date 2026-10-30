@@ -28,10 +28,3 @@ export const validateFilter = (state: FilterState, nowSeconds: number): Validate
   const filter = toFeedFilter({ ...state, address: addressIsValid ? address : "" }, nowSeconds);
   return { filter, addressProblem: addressIsValid ? null : "This is not an address yet. The feed is not filtered by it." };
 };
-
-/**
- * A state that filters to one token and nothing else.
- *
- * @param token The token address.
- */
-export const filterForToken = (token: string): FilterState => ({ ...EMPTY_FILTER, token });

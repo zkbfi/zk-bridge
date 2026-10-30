@@ -1,3 +1,4 @@
+import { StatefulPairView } from "../support/stateful";
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { auditDifference } from "@terminal/model/audit";
@@ -5,7 +6,6 @@ import { buildFixtureFeed, FIXTURE_AUDIT, FIXTURE_NOW, FIXTURE_PAIR } from "@ter
 import type { AuditRow, PairSummary } from "@terminal/model/types";
 import { AuditView } from "../../src/views/AuditView";
 import { auditVerdict, tallyAudit } from "../../src/views/audit-model";
-import { PairView } from "../../src/views/pair/PairView";
 import { SummaryBar } from "../../src/views/pair/SummaryBar";
 import { buildTestServices, renderPage } from "../render";
 import { renderWithServices, withDataSource } from "./support";
@@ -95,7 +95,7 @@ describe("the pair feed with a covered-from time", () => {
   const feedPage = (coveredFrom?: number) => ({ items: buildFixtureFeed(FIXTURE_NOW).slice(0, 3), hasMore: true, ...(coveredFrom === undefined ? {} : { coveredFrom }) });
 
   it("shows a muted notice with the UTC time above the table, and keeps the control for older rows", async () => {
-    renderWithServices(<PairView pairId="eth-pls" initialToken={null} />, withDataSource({ getFeed: async () => feedPage(1_792_929_600) }));
+    renderWithServices(<StatefulPairView pairId="eth-pls" initialToken={null} />, withDataSource({ getFeed: async () => feedPage(1_792_929_600) }));
     const notice = await screen.findByText("RPC fallback: history since 2026-10-25 12:00:00 UTC");
     const table = await screen.findByRole("table", { name: "Transfers and messages" });
     expect(notice.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -103,7 +103,7 @@ describe("the pair feed with a covered-from time", () => {
   });
 
   it("shows no notice for a page of the whole history", async () => {
-    renderWithServices(<PairView pairId="eth-pls" initialToken={null} />, withDataSource({ getFeed: async () => feedPage() }));
+    renderWithServices(<StatefulPairView pairId="eth-pls" initialToken={null} />, withDataSource({ getFeed: async () => feedPage() }));
     await screen.findByRole("table", { name: "Transfers and messages" });
     await waitFor(() => expect(screen.queryByText(/RPC fallback: history since/)).toBeNull());
   });

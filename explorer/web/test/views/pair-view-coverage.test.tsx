@@ -1,10 +1,10 @@
+import { StatefulPairView } from "../support/stateful";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { buildFixtureFeed, buildFixtureHeads, FIXTURE_NOW, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import type { LightClientHead, PairSummary } from "@terminal/model/types";
 import { HeadsFooter } from "../../src/views/pair/HeadsFooter";
-import { PairView } from "../../src/views/pair/PairView";
 import { SummaryBar } from "../../src/views/pair/SummaryBar";
 import { ActionArea } from "../../src/views/pair/ActionArea";
 import { FilterBar } from "../../src/views/pair/FilterBar";
@@ -26,13 +26,13 @@ const summaryOf = (overrides: Partial<PairSummary> = {}): PairSummary => ({
 
 describe("the pair view", () => {
   it("says that the page has no data for a pair other than its own", () => {
-    renderPage(<PairView pairId="other-pair" initialToken={null} />);
+    renderPage(<StatefulPairView pairId="other-pair" initialToken={null} />);
     expect(screen.getByRole("status")).toHaveTextContent("This page is set up for the pair eth-pls. It has no data for other-pair.");
   });
 
   it("shows a warning and Loading when the feed fails and no rows were ever loaded", async () => {
     renderWithServices(
-      <PairView pairId="eth-pls" initialToken={null} />,
+      <StatefulPairView pairId="eth-pls" initialToken={null} />,
       withDataSource({
         getFeed: async () => {
           throw new Error("feed boom");
@@ -45,7 +45,7 @@ describe("the pair view", () => {
 
   it("offers older rows when the feed has more, and asks for a page twice as long", async () => {
     const getFeed = vi.fn(async (_pairId: string, _filter: unknown, limit: number) => ({ items: buildFixtureFeed(FIXTURE_NOW).slice(0, 3), hasMore: limit === 50 }));
-    renderWithServices(<PairView pairId="eth-pls" initialToken={null} />, withDataSource({ getFeed }));
+    renderWithServices(<StatefulPairView pairId="eth-pls" initialToken={null} />, withDataSource({ getFeed }));
     await userEvent.click(await screen.findByRole("button", { name: "Show older rows" }));
     await waitFor(() => expect(getFeed).toHaveBeenLastCalledWith("eth-pls", expect.anything(), 100));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Show older rows" })).toBeNull());
@@ -53,7 +53,7 @@ describe("the pair view", () => {
 
   it("goes back to the first page of rows when a filter changes", async () => {
     const getFeed = vi.fn(async (_pairId: string, _filter: unknown, limit: number) => ({ items: buildFixtureFeed(FIXTURE_NOW).slice(0, 3), hasMore: limit === 50 }));
-    renderWithServices(<PairView pairId="eth-pls" initialToken={null} />, withDataSource({ getFeed }));
+    renderWithServices(<StatefulPairView pairId="eth-pls" initialToken={null} />, withDataSource({ getFeed }));
     await userEvent.click(await screen.findByRole("button", { name: "Show older rows" }));
     await waitFor(() => expect(getFeed).toHaveBeenCalledWith("eth-pls", expect.anything(), 100));
     await userEvent.selectOptions(screen.getByLabelText("Kind"), "message");
@@ -62,14 +62,14 @@ describe("the pair view", () => {
 
   it("reads no balances when no wallet is connected", async () => {
     const readSnapshots = vi.fn(async () => []);
-    renderWithServices(<PairView pairId="eth-pls" initialToken={null} />, { chainAccess: { ...buildTestServices().chainAccess, readSnapshots } }, undefined, { connected: false });
+    renderWithServices(<StatefulPairView pairId="eth-pls" initialToken={null} />, { chainAccess: { ...buildTestServices().chainAccess, readSnapshots } }, undefined, { connected: false });
     await screen.findByRole("table", { name: "Transfers and messages" });
     expect(readSnapshots).not.toHaveBeenCalled();
   });
 
   it("warns about an address that is not an address yet, and does not filter by it", async () => {
     const getFeed = vi.fn(async (_pairId: string, _filter: unknown, _limit: number) => ({ items: [], hasMore: false }));
-    renderWithServices(<PairView pairId="eth-pls" initialToken={null} />, withDataSource({ getFeed }));
+    renderWithServices(<StatefulPairView pairId="eth-pls" initialToken={null} />, withDataSource({ getFeed }));
     await userEvent.type(screen.getByLabelText("Address"), "0x12");
     expect(await screen.findByRole("alert")).toHaveTextContent("This is not an address yet. The feed is not filtered by it.");
     expect(await screen.findByText("No transfers or messages match these filters.")).toBeInTheDocument();

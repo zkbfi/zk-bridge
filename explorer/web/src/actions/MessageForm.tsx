@@ -1,18 +1,36 @@
 import { Button, Flex, Stack, Text } from "@chakra-ui/react";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { buildMessageSteps } from "@terminal/app/actions";
 import type { PairConfig } from "@terminal/model/types";
 import { PlanInputError } from "@terminal/tx/plan";
+import type { MessageQuery } from "../app/route";
 import type { WebStep } from "../tx/bridge-steps";
 import { Field, SelectInput, TextAreaInput, TextInput } from "../ui/primitives";
 
 /** Props of {@link MessageForm}. */
 export type MessageFormProps = {
   readonly pair: PairConfig;
+  /** The fields that differ from the defaults, as the address holds them. */
+  readonly query: MessageQuery;
+  /** Called with the fields that differ from the defaults after every edit. */
+  readonly onQuery: (next: MessageQuery) => void;
   readonly onReview: (steps: readonly WebStep[]) => void;
 };
 
 type Values = { readonly chain: "first" | "second"; readonly target: string; readonly data: string; readonly gas: string };
+
+/** The defaults: the message goes from the first chain (Ethereum, or Sepolia) to the second. */
+const DEFAULT_VALUES: Values = { chain: "first", target: "", data: "", gas: "200000" };
+
+const valuesOf = (query: MessageQuery): Values => ({ ...DEFAULT_VALUES, ...query });
+
+/** The fields that differ from the defaults; only they go in the address. */
+const queryOf = (values: Values): MessageQuery => ({
+  ...(values.chain === DEFAULT_VALUES.chain ? {} : { chain: values.chain }),
+  ...(values.target === DEFAULT_VALUES.target ? {} : { target: values.target }),
+  ...(values.data === DEFAULT_VALUES.data ? {} : { data: values.data }),
+  ...(values.gas === DEFAULT_VALUES.gas ? {} : { gas: values.gas }),
+});
 
 const NO_DISCLOSURE = { feesApplyTo: "this-transaction", amountToken: null, destinationNativeSymbol: null, destinationChainId: null, delivery: null } as const;
 
@@ -32,10 +50,11 @@ const plan = (values: Values, pair: PairConfig): Planned => {
 /**
  * The form of "Send a message": a call to a contract on the other chain through the message bridge.
  *
- * @param props The pair and the review handler.
+ * @param props The pair, the fields from the address, their change handler and the review handler.
  */
-export const MessageForm = ({ pair, onReview }: MessageFormProps) => {
-  const [values, setValues] = useState<Values>({ chain: "first", target: "", data: "", gas: "200000" });
+export const MessageForm = ({ pair, query, onQuery, onReview }: MessageFormProps) => {
+  const values = useMemo(() => valuesOf(query), [query]);
+  const setValues = (next: Values): void => onQuery(queryOf(next));
   const planned = useMemo(() => plan(values, pair), [values, pair]);
   const source = values.chain === "first" ? pair.first : pair.second;
   const destination = values.chain === "first" ? pair.second : pair.first;

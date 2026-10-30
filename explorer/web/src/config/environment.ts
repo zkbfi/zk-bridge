@@ -90,6 +90,24 @@ const deploymentsOf = (text: string | null): Record<string, string> | null => {
 };
 
 /**
+ * The pairs the page opens on by default, best first: Ethereum and PulseChain, then, until that pair is deployed, the
+ * Sepolia and PulseChain testnet v4 pair. A pair counts as live when the release carries its deployment file.
+ */
+export const PREFERRED_PAIRS = ["eth-pls", "sepolia-pls943"] as const;
+
+/**
+ * The pair to open when the address names none: the first preferred pair that the release has a deployment for, else
+ * the release's first pair, else null.
+ *
+ * @param available The pairs that the release has deployments for, or null when it lists none.
+ */
+export const defaultPairOf = (available: readonly string[] | null): string | null => {
+  const [first] = available ?? [];
+  if (available === null || first === undefined) return null;
+  return PREFERRED_PAIRS.find((name) => available.includes(name)) ?? first;
+};
+
+/**
  * Reads the configuration from the variables that Vite exposes.
  *
  * @param environment `import.meta.env`, or a test object.
@@ -108,7 +126,7 @@ export const readConfiguration = (environment: Readonly<Record<string, string | 
   if (available !== null && namedPair !== null && !available.includes(namedPair)) {
     throw new ConfigurationError(`${VARIABLES.pair} names ${namedPair}, but ${VARIABLES.deploymentsJson} has no deployment for it.`);
   }
-  const pairName = namedPair ?? available?.[0] ?? DEFAULT_PAIR_ID;
+  const pairName = namedPair ?? defaultPairOf(available) ?? DEFAULT_PAIR_ID;
   const configuration: WebConfiguration = {
     dataMode: mode,
     indexerUrl: baseUrlOf(environment[VARIABLES.indexerUrl]),

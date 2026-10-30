@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { ChainLog, ChainReader, HistoryFilters, JsonFetcher, JsonResponse } from "@zk-bridge/shared";
-import { HistoryView } from "../../src/views/HistoryView";
+import type { Route } from "../../src/app/route";
+import { HistoryPage, HistoryView } from "../../src/views/HistoryView";
 import { EMPTY_HISTORY_FILTERS, unkeptScan, type HistoryDependencies } from "../../src/views/history-model";
 import { fakeConnections, liveServices, sharedPairForTests } from "../support/live";
 import { renderWithServices } from "./support";
@@ -79,15 +80,16 @@ const LIVE_VARIABLES = { VITE_EXPLORER_RPC_URL_1: "https://rpc-one.example.org" 
 
 /** A page that keeps its filters in state, as the shell keeps them in the address. */
 const Harness = ({ dependencies, onFilters, initial = EMPTY_HISTORY_FILTERS }: { readonly dependencies: HistoryDependencies; readonly onFilters?: (filters: HistoryFilters) => void; readonly initial?: HistoryFilters }) => {
-  const [filters, setFilters] = useState<HistoryFilters>(initial);
+  const [route, setRoute] = useState<Extract<Route, { name: "history" }>>({ name: "history", filters: initial });
   return (
-    <HistoryView
-      filters={filters}
+    <HistoryPage
+      route={route}
       dependencies={dependencies}
-      onChange={(next) => {
-        onFilters?.(next);
-        setFilters(next);
+      onNavigate={(next) => {
+        onFilters?.(next.filters);
+        setRoute(next);
       }}
+      onUpdate={setRoute}
     />
   );
 };
@@ -368,7 +370,7 @@ describe("the history view", () => {
           return operations.viaRpc();
         }
       });
-      renderWithServices(<HistoryView filters={EMPTY_HISTORY_FILTERS} onChange={() => undefined} />, services);
+      renderWithServices(<HistoryView filters={EMPTY_HISTORY_FILTERS} onChange={() => undefined} scanBlocks={null} onScanBlocks={() => undefined} />, services);
       expect(await screen.findByText(/The history did not load:/)).toBeInTheDocument();
       expect(fetchStub).toHaveBeenCalled();
     } finally {
@@ -383,7 +385,7 @@ describe("the history view", () => {
   });
 
   it("on a sample page, says that the sample data has no history", () => {
-    renderWithServices(<HistoryView filters={EMPTY_HISTORY_FILTERS} onChange={() => undefined} />);
+    renderWithServices(<HistoryView filters={EMPTY_HISTORY_FILTERS} onChange={() => undefined} scanBlocks={null} onScanBlocks={() => undefined} />);
     expect(screen.getByText(/the sample data has no history/)).toBeInTheDocument();
     expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
   });

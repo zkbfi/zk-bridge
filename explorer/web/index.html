@@ -9,9 +9,21 @@
     <link rel="icon" href="./favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="icon" href="./favicon-16.png" sizes="16x16" type="image/png" />
     <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <style>
+      /* The loader shows before the script runs; React replaces it when the page is ready. */
+      .boot { min-height: 100vh; display: grid; place-items: center; margin: 0; }
+      .boot img { width: 160px; height: 160px; }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="boot" role="status" aria-label="Loading zkb.fi">
+        <picture>
+          <source srcset="./loader-still.svg" media="(prefers-reduced-motion: reduce)" />
+          <img src="./loader.svg" alt="" width="160" height="160" />
+        </picture>
+      </div>
+    </div>
     <script type="module" src="./src/main.tsx"></script>
   </body>
 </html>
