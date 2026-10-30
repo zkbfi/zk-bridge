@@ -73,6 +73,18 @@ describe("a dialog in the address", () => {
     expect(within(dialog).getByLabelText(/Target contract/)).toHaveValue(OTHER);
   });
 
+  it("names the linked fields of a dialog that a link opens after the page has loaded", async () => {
+    window.history.replaceState(null, "", `#/pair/${FIXTURE_PAIR.id}`);
+    renderWithWallet(<Shell />, { wallet: connectedWallet() });
+    await screen.findByRole("table", { name: "Transfers and messages" });
+    act(() => {
+      window.history.pushState(null, "", `#/pair/${FIXTURE_PAIR.id}?dialog=message&msg.target=${OTHER}`);
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    const dialog = await screen.findByRole("dialog", { name: "Send a message" });
+    expect(await within(dialog).findByText(/The link you opened filled in: target contract/)).toBeInTheDocument();
+  });
+
   it("opens the settings dialog from the address", async () => {
     window.history.replaceState(null, "", "#/audit?dialog=settings");
     renderWithWallet(<Shell />, { wallet: disconnectedWallet() });

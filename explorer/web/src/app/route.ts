@@ -389,14 +389,33 @@ export const formatLocation = ({ route, overlay }: PageLocation): string => {
  * @param account The connected account; a receiver equal to it is not flagged.
  */
 export const linkedFields = (overlay: Overlay, account: string | null): readonly string[] => {
+  // Every field that moves funds, decides where they go, or changes what the sender pays is named; only the user's
+  // own account as the receiver is left out.
   const fields: string[] = [];
   const { bridge, message } = overlay;
-  if (bridge.receiver !== undefined && bridge.receiver !== "" && bridge.receiver.toLowerCase() !== account?.toLowerCase()) fields.push("receiver");
-  if (bridge.callTarget !== undefined && bridge.callTarget !== "") fields.push("call target");
-  if (bridge.callData !== undefined && bridge.callData !== "") fields.push("call data");
-  if (bridge.data !== undefined && bridge.data !== "") fields.push("data for the receiver");
-  if (bridge.tip?.routerText !== undefined && bridge.tip.routerText !== "") fields.push("relay router");
-  if (message.target !== undefined && message.target !== "") fields.push("target contract");
-  if (message.data !== undefined && message.data !== "") fields.push("message data");
+  const tip = bridge.tip ?? {};
+  const named: ReadonlyArray<readonly [string | true | undefined, string]> = [
+    [bridge.token, "token"],
+    [bridge.amount, "amount"],
+    [bridge.mode, "kind of transfer"],
+    [bridge.receiver !== undefined && bridge.receiver.toLowerCase() === account?.toLowerCase() ? undefined : bridge.receiver, "receiver"],
+    [bridge.callTarget, "call target"],
+    [bridge.callData, "call data"],
+    [bridge.data, "data for the receiver"],
+    [bridge.gasLimit, "gas for the call"],
+    [tip.mode, "tip kind"],
+    [tip.percentText, "tip percentage"],
+    [tip.fixedText, "fixed tip"],
+    [tip.marginPercentText, "tip margin"],
+    [tip.gasMultiplierText, "tip gas multiplier"],
+    [tip.ceilingGweiText, "gas price ceiling"],
+    [tip.senderPriceText, "sender gas price"],
+    [tip.routerText, "relay router"],
+    [tip.payoutNative, "tip paid in the native coin"],
+    [message.target, "target contract"],
+    [message.data, "message data"],
+    [message.gas, "gas for the call"],
+  ];
+  for (const [value, label] of named) if (value !== undefined && value !== "") fields.push(label);
   return fields;
 };

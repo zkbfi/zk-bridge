@@ -1,5 +1,5 @@
 import { Box, Button, Flex, Text } from "@chakra-ui/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActionDialog, type FormDialogName } from "../actions/ActionDialogs";
 import { CommandPalette } from "../search/CommandPalette";
 import { browserStorage, loadRecent, rememberRecent } from "../search/recent-items";
@@ -34,7 +34,12 @@ type HistoryMode = "push" | "replace";
  * state of the page (it runs from IPFS, so a link is all there is): every change writes the hash first. A hash with
  * no view opens the default pair in place, without a history entry.
  */
-const useHashLocation = (defaultPairId: string): readonly [PageLocation, (next: PageLocation, mode?: HistoryMode) => void] => {
+const useHashLocation = (
+  defaultPairId: string,
+  onOutsideChange: (next: PageLocation) => void,
+): readonly [PageLocation, (next: PageLocation, mode?: HistoryMode) => void] => {
+  const outside = useRef(onOutsideChange);
+  outside.current = onOutsideChange;
   const read = useCallback((): PageLocation => {
     const parsed = parseLocation(window.location.hash);
     const route = resolveHome(parsed.route, defaultPairId);
@@ -45,7 +50,13 @@ const useHashLocation = (defaultPairId: string): readonly [PageLocation, (next: 
   }, [defaultPairId]);
   const [location, setLocation] = useState<PageLocation>(read);
   useEffect(() => {
-    const onChange = (): void => setLocation(read());
+    // pushState and replaceState fire neither event, so every change seen here came from outside the page: the address
+    // bar, a link, or Back and Forward.
+    const onChange = (): void => {
+      const next = read();
+      setLocation(next);
+      outside.current(next);
+    };
     window.addEventListener("hashchange", onChange);
     window.addEventListener("popstate", onChange);
     return () => {
@@ -105,10 +116,12 @@ const shortAccount = (account: string | null): string => (account === null ? "No
 export const Shell = () => {
   const { configuration, pair } = useServices();
   const wallet = useWallet();
-  const [location, go] = useHashLocation(pair.id);
+  // The dialog a link opened (at load or later), kept until the user opens a dialog from inside the page, so the form
+  // can name the fields that came from the link.
+  const linkedOf = (next: PageLocation): Overlay | null => (next.overlay.dialog === null ? null : next.overlay);
+  const [linkedOverlay, setLinkedOverlay] = useState<Overlay | null>(() => linkedOf(parseLocation(window.location.hash)));
+  const [location, go] = useHashLocation(pair.id, (next) => setLinkedOverlay(linkedOf(next)));
   const { route, overlay } = location;
-  // The dialog a link opened, kept until that dialog closes, so the form can name the fields that came from the link.
-  const [linkedOverlay, setLinkedOverlay] = useState<Overlay | null>(() => (location.overlay.dialog === null ? null : location.overlay));
   const navigate = useCallback((next: Route): void => go({ route: next, overlay: NO_OVERLAY }), [go]);
   const update = useCallback((next: Route): void => go({ route: next, overlay }, "replace"), [go, overlay]);
   const openDialog = useCallback((dialog: Overlay["dialog"]): void => {

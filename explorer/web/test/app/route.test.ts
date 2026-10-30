@@ -179,11 +179,19 @@ describe("the dialog in the address", () => {
     expect(parseOverlay(`#/?dialog=bridge&bridge.data=0x${"a".repeat(30_000)}`)).toEqual({ ...NO_OVERLAY, dialog: "bridge" });
   });
 
-  it("names the fields from a link that could send funds elsewhere, and not the user's own account", () => {
+  it("names every field a link filled in that moves or spends funds, and not the user's own account", () => {
     const overlay: Overlay = { ...NO_OVERLAY, dialog: "bridge", bridge: { amount: "1", receiver: ADDRESS, callTarget: ADDRESS, callData: "0x1", data: "0x2", tip: { routerText: ADDRESS } } };
-    expect(linkedFields(overlay, null)).toEqual(["receiver", "call target", "call data", "data for the receiver", "relay router"]);
+    expect(linkedFields(overlay, null)).toEqual(["amount", "receiver", "call target", "call data", "data for the receiver", "relay router"]);
     expect(linkedFields(overlay, ADDRESS.toLowerCase())).not.toContain("receiver");
-    expect(linkedFields({ ...NO_OVERLAY, dialog: "message", message: { target: ADDRESS, data: "0x1" } }, null)).toEqual(["target contract", "message data"]);
-    expect(linkedFields({ ...NO_OVERLAY, dialog: "bridge", bridge: { amount: "2" } }, null)).toEqual([]);
+    expect(linkedFields({ ...NO_OVERLAY, dialog: "message", message: { target: ADDRESS, data: "0x1", gas: "9" } }, null)).toEqual(["target contract", "message data", "gas for the call"]);
+    expect(linkedFields({ ...NO_OVERLAY, dialog: "bridge", bridge: { token: "first:native", gasLimit: "9", mode: "call" } }, null)).toEqual(["token", "kind of transfer", "gas for the call"]);
+    expect(linkedFields({ ...NO_OVERLAY, dialog: "bridge", bridge: {} }, null)).toEqual([]);
+  });
+
+  it("names every tip setting a link filled in, since each one changes what the sender pays", () => {
+    const tip = { mode: "fixed", percentText: "50", fixedText: "9", marginPercentText: "90", gasMultiplierText: "9", ceilingGweiText: "999", senderPriceText: "9", payoutNative: true } as const;
+    expect(linkedFields({ ...NO_OVERLAY, dialog: "bridge", bridge: { tip } }, null)).toEqual([
+      "tip kind", "tip percentage", "fixed tip", "tip margin", "tip gas multiplier", "gas price ceiling", "sender gas price", "tip paid in the native coin",
+    ]);
   });
 });
