@@ -13,7 +13,7 @@ export type SettingsDialogProps = {
   readonly onClose: () => void;
 };
 
-const THEME_LABELS: Readonly<Record<ThemeChoice, string>> = { light: "Light", dark: "Dark", system: "Follow the system" };
+const THEME_LABELS: Readonly<Record<ThemeChoice, string>> = { system: "System", light: "Light", dark: "Dark", mono: "Mono" };
 
 /**
  * Shows only the host of an endpoint. A URL can carry a path that the operator would rather not repeat on screen.
@@ -66,7 +66,7 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose }: Set
           Theme
         </Text>
         <Flex gap="2" role="group" aria-label="Theme">
-          {(["light", "dark", "system"] as const).map((choice) => (
+          {(["system", "light", "dark", "mono"] as const).map((choice) => (
             <Button key={choice} size="sm" variant={theme === choice ? "solid" : "outline"} aria-pressed={theme === choice} onClick={() => onTheme(choice)}>
               {THEME_LABELS[choice]}
             </Button>

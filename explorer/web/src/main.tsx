@@ -4,6 +4,7 @@ import { Providers } from "./app/Providers";
 import { loaderHoldMilliseconds, loaderStartFromTiming } from "./app/loader";
 import { createServices } from "./app/services";
 import { Shell } from "./app/Shell";
+import "./bridge/bridge.css";
 import { loadPairConfig, loadSharedPair, readConfiguration, requestedPair, selectPair, withDeploymentText } from "./config/environment";
 import { browserStorage } from "./search/recent-items";
 

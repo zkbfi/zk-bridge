@@ -27,7 +27,7 @@ export const GROUP_TITLES: Readonly<Record<ResultKind | "recent", string>> = {
 };
 
 /** The theme choices. */
-export type ThemeChoice = "light" | "dark" | "system";
+export type ThemeChoice = "light" | "dark" | "system" | "mono";
 
 /** An action that the palette starts. */
 export type ActionId =
@@ -122,6 +122,7 @@ export const actionResults = (input: { readonly pair: PairConfig; readonly walle
     action("theme:light", "Theme: light", "Use the light colors", ["appearance", "color", "mode"], { name: "theme", theme: "light" }),
     action("theme:dark", "Theme: dark", "Use the dark colors", ["appearance", "color", "mode"], { name: "theme", theme: "dark" }),
     action("theme:system", "Theme: follow the system", "Use the setting of your system", ["appearance", "color", "mode"], { name: "theme", theme: "system" }),
+    action("theme:mono", "Theme: mono", "High contrast: off-white on black, colour only on things in motion", ["appearance", "color", "mode", "contrast", "accessibility"], { name: "theme", theme: "mono" }),
   ];
 };
 
