@@ -182,6 +182,22 @@ and the time left while in flight or the age once delivered. A row links to the 
   below, by day, one line each (token, amount, route as chain icons, time). Opening one shows every step with its time
   and transaction link, plus "Open in the explorer" and "Bridge again".
 
+- **The pulse, drawn properly (owner):** no opacity anywhere. The track is two solid colours: lit accent behind the
+  pill (everything already passed), a solid dark ember (#4a2414 on black) ahead of it. Stops already passed are pale,
+  stops ahead are dark. Pill and stop proportions are being picked (slim / matched / bold, `pulse-v5.html`).
+- **Steps of a transfer:** a vertical list whose dots are joined by a line, lit up to the current step and dark after
+  it (the pulse turned on its side). Future steps show an estimate and no link.
+- **Numbers that are not inputs:** three or more leading zeros after the decimal point collapse to a subscript count:
+  0.0001234 shows as 0.0₃1234. Fewer than three zeros show as they are. Typed amounts are never rewritten.
+- **Tokens always with their icon** wherever a symbol appears (amounts, fees, notes, buttons). **Gas is a gas can**
+  icon, never the word.
+- **Self-delivery checks the wallet:** "Deliver it yourself" reads the connected wallet's native balance on the
+  destination chain and is disabled when it can't pay the gas, with a tooltip saying how much it holds, how much is
+  needed, and what to add.
+- **Settings (owner):** theme (System default, Light, Dark, Mono); the RPC endpoint per chain, user-replaceable, with a
+  live check, kept in this browser; the image server for token and chain icons (gib.show by default), replaceable.
+  Icons the release already ships (pre-loaded at build time) don't depend on it.
+
 ## Open questions
 
 - Where the Omnibridge token list comes from and how it stays current.
