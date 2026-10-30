@@ -229,7 +229,8 @@ and the time left while in flight or the age once delivered. A row links to the 
 
 - **Token picker, round 4 (owner, supersedes rounds 2–3 where they differ):** the search is a full-width band edge to
   edge, coloured like the amount band ("a burn streak like the input"), with no pill and no top border; the close
-  button is square and hugs the right edge. Tabs: "All", then each chain as its icon only (no names). Rows carry no
+  button is an exact square the full height of the band (52 × 52 px), flush right. Tabs: "All" as an icon (a 2×2
+  grid of small circles), then each chain as its icon only (no names). Rows carry no
   chain name; the subtitle is the token's unit price. The badge on a token's icon shows its origin chain. Omnibridge
   copies get a bridge icon after the symbol (no pill), whose tooltip explains why it exists and offers an arrow link to
   the native token. Mockup: `picker-v4.html`.
@@ -294,3 +295,4 @@ noise from one message (a child on the keyboard) is left out.
 25. "the drawer works well on mobile in general. dropdown works for the from network for sure, and the choose a token should be a modal. make the remove button just an icon+button if it is going to exist at all. on desktop, that drawer should be a modal. and i do not like that n chains are showing at the same time. we should pull tkoens that the user has a balance of or that they have used in this system or bridged with before. i would like to see tabs below the search."
 26. "on mobile, your earlier render of the token picker on phone was better. all the way to the edge. only one layer of padding before content. remove the chain pills. just do all, and then each chain that is supported. all of the "anything else: search above. every bridgable token is found here" is stupid. be terse. remove the "choose a token" move the close button to be over/inside of the input on the right.. the checkmark denoting the selected token is dumb. it shifts content away. eggregious ui violation"
 27. "the search got worse. i think you should refactor it to also go edge to edge. maybe play around with it as a burn streak like the input. then the close button could be square and hugging the right side and there would be no rounded pill shape, no top border. remove the word ethereum and pulsechain from the chain tabs as well as the item rows. you shoud instead show the price of the token. the network badge over the token icon shows the origination. and for the omnibridge pill, lets instead just go with a bridge icon and a tooltip explaining its existance. maybe with an arrow function to find the native coin"
+28. "on the search input, good. better. fix the height. close button should be a square. the "all" text should be an icon"
