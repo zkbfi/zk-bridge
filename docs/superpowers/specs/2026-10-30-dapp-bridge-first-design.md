@@ -309,6 +309,15 @@ and the time left while in flight or the age once delivered. A row links to the 
   - **Row rule:** status is one word (delivered, waiting, proving, mining, …) as a pill at the right, and the chevron
     sits at the far right of the row.
 
+- **Address and transaction pages** (mockup `design/ui/screens/explore-address-tx.html`): address = identity band
+  (identicon, full address, role tags), per-chain balances and activity, totals through zkb.fi, tabs (transfers,
+  proofs posted, contracts deployed, deliveries), "Bridge to this address" and "Watch". Transaction = kind band, one
+  sentence of what it did, decoded call, gas, fee, events, raw input collapsed, and **where it sits**: the step list
+  starts with the **user's action** (the transfer that started it), and step labels are short ("Block final on
+  PulseChain", not "Block 25,767,883 final…"). Tapping a step opens a small drawer with its details (for a block:
+  number, hash, time, slot, sync committee period and signers, explorer link). Routes in every list (including
+  proofs) are shown as chain icons with a chevron, not as words.
+
 ## Open questions
 
 - Where the Omnibridge token list comes from and how it stays current.
@@ -381,3 +390,5 @@ noise from one message (a child on the keyboard) is left out.
 43. "show me the explore screen next. what i have seen so far in the implementation is not impressive. also, your chevrons in the top nav that allow the user to get to the explorer/activity should be fixed around a fixed width text block. otherwise you end up with chevrons moving back and forth"
 44. "cool. i like it. iterate a bit more, include more data including searches of the proofs or transactions or identifers. explorer should help you explore every data aspect"
 45. "for the "transfers it proved" move the chevron to the right, shorten the status to one word: delivered, waiting, proving, mining, etc. the browse section might be able to just have a single column grid if you used a large number to the left, the header to the right, and the subheader below that then send explore v2 to the build worker"
+46. "show me the address and transaction pages"
+47. "where it sits should also have to show the input transfer/user action. also, the "block n final on pulsechain" maybe should be shortened to "block final on Pulsechain" and maybe we can give a small drawer to show information about the block like its number or its hash or other info about the committee you are using "pulsechain -> sepolia" instead of icons in the proofs sections."
