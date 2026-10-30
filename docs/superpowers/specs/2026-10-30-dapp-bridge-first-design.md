@@ -229,7 +229,8 @@ and the time left while in flight or the age once delivered. A row links to the 
 
 - **Token picker, round 4 (owner, supersedes rounds 2–3 where they differ):** the search is a full-width band edge to
   edge, coloured like the amount band ("a burn streak like the input"), with no pill and no top border; the close
-  button is an exact square the full height of the band (52 × 52 px), flush right. Tabs: "All" as an icon (a 2×2
+  button is an exact square the full height of the band (52 × 52 px), flush right, the same orange as the band, set
+  apart by a full-height 3-unit dark rule on its left edge (owner picked option A). Tabs: "All" as an icon (a 2×2
   grid of small circles), then each chain as its icon only (no names). Rows carry no
   chain name; the subtitle is the token's unit price. The badge on a token's icon shows its origin chain. Omnibridge
   copies get a bridge icon after the symbol (no pill), whose tooltip explains why it exists and offers an arrow link to
@@ -296,3 +297,5 @@ noise from one message (a child on the keyboard) is left out.
 26. "on mobile, your earlier render of the token picker on phone was better. all the way to the edge. only one layer of padding before content. remove the chain pills. just do all, and then each chain that is supported. all of the "anything else: search above. every bridgable token is found here" is stupid. be terse. remove the "choose a token" move the close button to be over/inside of the input on the right.. the checkmark denoting the selected token is dumb. it shifts content away. eggregious ui violation"
 27. "the search got worse. i think you should refactor it to also go edge to edge. maybe play around with it as a burn streak like the input. then the close button could be square and hugging the right side and there would be no rounded pill shape, no top border. remove the word ethereum and pulsechain from the chain tabs as well as the item rows. you shoud instead show the price of the token. the network badge over the token icon shows the origination. and for the omnibridge pill, lets instead just go with a bridge icon and a tooltip explaining its existance. maybe with an arrow function to find the native coin"
 28. "on the search input, good. better. fix the height. close button should be a square. the "all" text should be an icon"
+29. "and the right square should be the same color as the input. try some sort of border to differentiate it"
+30. "dark rule is fine"
