@@ -3,7 +3,12 @@
  *   pack <site-directory> <archive-file>      packs a built site and prints its CID
  *   unpack <archive-file> <directory>         writes the files of an archive and prints its CID
  *   manifest <release-directory> --version <v> --commit <c> --published-at <time> [--previous <version.json>]
- *                                             writes version.json and SHA256SUMS from archives/ and downloads/
+ *            [--channel <name>]               writes version.json and SHA256SUMS from archives/ and downloads/;
+ *                                             the channel is stable unless named (next for staging)
+ *   promote <staging-directory> <out-directory> --landing <landing.car> --version <v> --published-at <time>
+ *            [--previous <production version.json>]
+ *                                             writes an unsigned production release that keeps the staging dapp and
+ *                                             docs archives (same content addresses) with a production landing
  *   sign <release-directory>                  reads the private key from standard input, writes version.json.sig
  *                                             and public-keys.json
  *   verify <release-directory> --public-keys <file>
@@ -17,6 +22,7 @@ import { packDirectory, readArchive, unpackCar } from "./car.ts";
 import { formatSha256Sums, sha256Bytes, sha256File, type ChecksumEntry } from "./checksums.ts";
 import { downloadEntry, writeManifest } from "./manifest-writer.ts";
 import { pinAdapterFromEnvironment } from "./pin.ts";
+import { promoteRelease } from "./promote.ts";
 import { publicKeyOf, readPrivateKey, signManifest } from "./sign.ts";
 import { RELEASE_LAYOUT, SITE_NAMES, verifyRelease } from "./verify.ts";
 
@@ -33,7 +39,8 @@ class UsageError extends Error {}
 const USAGE = [
   "usage: release pack <site-directory> <archive-file>",
   "       release unpack <archive-file> <directory>",
-  "       release manifest <release-directory> --version <v> --commit <c> --published-at <time> [--previous <file>]",
+  "       release manifest <release-directory> --version <v> --commit <c> --published-at <time> [--previous <file>] [--channel <name>]",
+  "       release promote <staging-directory> <out-directory> --landing <landing.car> --version <v> --published-at <time> [--previous <file>]",
   "       release sign <release-directory>   (private key on standard input)",
   "       release verify <release-directory> --public-keys <file>",
   "       release pin <release-directory> [--prefix <p>]",
@@ -82,6 +89,7 @@ export async function assembleRelease(input: {
   commit: string;
   publishedAt: string;
   previous: ReleaseManifest | null;
+  channel?: string;
 }): Promise<ReleaseManifest> {
   const sums: ChecksumEntry[] = [];
   const releases: ReleaseEntry[] = [];
@@ -104,7 +112,7 @@ export async function assembleRelease(input: {
     downloads.push(downloadEntry(file, sha256));
     sums.push({ file: `${RELEASE_LAYOUT.downloads}/${file}`, sha256 });
   }
-  const manifest = writeManifest({ previous: input.previous, releases, downloads });
+  const manifest = writeManifest({ previous: input.previous, releases, downloads, ...(input.channel === undefined ? {} : { channel: input.channel }) });
   await writeFile(join(input.directory, RELEASE_LAYOUT.manifest), canonicalManifestBytes(manifest));
   await writeFile(join(input.directory, RELEASE_LAYOUT.sums), formatSha256Sums(sums));
   return manifest;
@@ -146,8 +154,23 @@ async function command(argv: readonly string[], io: Io): Promise<number> {
       const publishedAt = required(flags, "published-at");
       const previousPath = flags.get("previous");
       const previous = previousPath === undefined ? null : await readManifestFile(previousPath);
-      const manifest = await assembleRelease({ directory: positional[0]!, version, commit, publishedAt, previous });
+      const channel = flags.get("channel");
+      const manifest = await assembleRelease({ directory: positional[0]!, version, commit, publishedAt, previous, ...(channel === undefined ? {} : { channel }) });
       io.out(`version.json: sequence ${manifest.sequence}, ${manifest.releases.length} sites, ${manifest.downloads.length} downloads`);
+      return 0;
+    }
+    case "promote": {
+      const { positional, flags } = parseArguments(rest, 2);
+      const previousPath = flags.get("previous");
+      const manifest = await promoteRelease({
+        staging: positional[0]!,
+        out: positional[1]!,
+        landingArchive: required(flags, "landing"),
+        version: required(flags, "version"),
+        publishedAt: required(flags, "published-at"),
+        previous: previousPath === undefined ? null : await readManifestFile(previousPath),
+      });
+      io.out(`promoted: version ${manifest.channels.stable}, sequence ${manifest.sequence}; sign it with the production key`);
       return 0;
     }
     case "sign": {
