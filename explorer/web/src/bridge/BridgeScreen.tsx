@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import type { Address } from "viem";
 import type { TokenInfo } from "@terminal/model/types";
-import { useDeliveryCost, usePairHealth, usePriorityFee, useSnapshots, useTokens } from "../app/queries";
+import { useDeliveryCost, usePairHealth, usePriorityFee, useSnapshots, useTokens, useUsedTokens } from "../app/queries";
 import { formatRoute, type BridgeQuery, type Route, type TipQuery } from "../app/route";
 import { useServices } from "../app/services";
 import { TransactionDialog } from "../actions/TransactionDialog";
@@ -64,6 +64,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const account = wallet.status === "connected" ? wallet.account : null;
   const tokens = useTokens(pair.id).data ?? [];
   const snapshots = useSnapshots(account, pair.id).data;
+  const used = useUsedTokens(account, pair.id).data;
   const gate = usePairHealth().data?.find((entry) => entry.pairId === pair.id)?.gates[sourceSide(route.dir)];
   const form: BridgeQuery = route.form ?? {};
   const { source, destination } = chainsFor(pair, route.dir);
@@ -321,7 +322,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
         </div>
       </section>
 
-      {menu === "token" && token !== null ? <TokenPicker tokens={tokens} selected={token} snapshots={snapshots ?? []} onPick={pick} onClose={() => setMenu(null)} /> : null}
+      {menu === "token" && token !== null ? <TokenPicker tokens={tokens} selected={token} snapshots={snapshots ?? []} {...(used === undefined ? {} : { used })} onPick={pick} onClose={() => setMenu(null)} /> : null}
       {review && token !== null && amount !== null ? (
         <Sheet label="Review" onClose={() => setReview(false)}>
           <div className="zb-col" style={{ paddingBottom: 18 }}>

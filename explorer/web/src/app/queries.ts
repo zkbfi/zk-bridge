@@ -111,3 +111,26 @@ export const usePriorityFee = (chainId: number, options: { readonly enabled: boo
     refetchInterval: POLL_MILLISECONDS,
   });
 };
+
+/**
+ * The tokens a wallet used or bridged with zkb.fi before, as `<side>:<address>` keys (both the token sent and its
+ * counterpart on the other chain), from the indexer's feed filtered by the address: the same source as the history.
+ */
+export const useUsedTokens = (account: Address | null, pairId: string) => {
+  const { dataSource } = useServices();
+  return useQuery({
+    queryKey: ["used-tokens", pairId, account],
+    enabled: account !== null,
+    queryFn: async (): Promise<ReadonlySet<string>> => {
+      const page = await dataSource.getFeed(pairId, { address: account as Address, kind: "token" }, 200);
+      const keys = new Set<string>();
+      for (const item of page.items) {
+        if (item.token === null) continue;
+        keys.add(`${item.token.side}:${item.token.address.toLowerCase()}`);
+        if (item.token.counterpart !== null) keys.add(`${item.token.side === "first" ? "second" : "first"}:${item.token.counterpart.toLowerCase()}`);
+      }
+      return keys;
+    },
+    staleTime: 60_000,
+  });
+};
