@@ -6,19 +6,6 @@ export const SPEEDS = [
   { key: "fast", label: "Fast", percent: "0.3" },
 ] as const;
 
-/** The gas levels on the gas can: how far above the measured gas a gas-based tip may go. */
-export const GAS_LEVELS = [
-  { level: 1, multiplier: "1", label: "Normal" },
-  { level: 2, multiplier: "1.5", label: "High" },
-  { level: 3, multiplier: "2", label: "Highest" },
-] as const;
-
-/** The level the gas can shows for a multiplier text. */
-export const gasLevelOf = (multiplierText: string | undefined): 1 | 2 | 3 => {
-  const value = Number(multiplierText ?? "1");
-  return value >= 2 ? 3 : value > 1 ? 2 : 1;
-};
-
 /** The pill's summary: "Standard delivery", or what differs, such as "Fast · tip 0.3%". */
 export const deliverySummary = (form: BridgeQuery): string => {
   const tip = form.tip ?? {};

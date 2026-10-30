@@ -32,6 +32,15 @@ describe("the Bridge pill's verdict", () => {
     expect(pressable(verdict)).toBe(true);
   });
 
+  it("warns, overridably, when the tip is high for the amount, naming the threshold", () => {
+    const verdict = verdictOf({ ...base, highTip: { thresholdText: "0.32%" } });
+    expect(verdict).toMatchObject({ kind: "warn", label: "High tip for this amount" });
+    expect(verdict.detail).toMatch(/0\.32%/);
+    expect(pressable(verdict)).toBe(true);
+    // A low fee says so first.
+    expect(verdictOf({ ...base, tipBelowBreakEven: true, highTip: { thresholdText: "1%" } }).label).toBe("Tip too low · may not be delivered");
+  });
+
   it("blocks a paused route", () => {
     expect(verdictOf({ ...base, paused: { route: "PulseChain → Ethereum" } })).toMatchObject({ kind: "blocked", label: "PulseChain → Ethereum is paused" });
   });

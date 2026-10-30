@@ -6,8 +6,12 @@ import { FeeLine, type FeeLineProps } from "../../src/bridge/FeeLine";
 const props = (overrides: Partial<FeeLineProps> = {}): FeeLineProps => ({
   tip: <span>0.0012 ETH</span>,
   tipHelp: "The tip pays whoever delivers your transfer. It is 0.1% of the amount, at least their gas at today's price.",
-  gas: <span>0.0004 PLS</span>,
-  gasHelp: "What the delivery costs in gas on the destination.",
+  gasHelp: "Gas level: Normal up to 2× today's base fee, High 3×, Highest 5×.",
+  breakdown: [
+    { label: "Delivery gas", value: "$0.40" },
+    { label: "Proof", value: "$0.03" },
+    { label: "Tip", value: "$0.77" },
+  ],
   gasLevel: 2,
   time: "~15 min",
   steps: [
@@ -27,6 +31,20 @@ describe("the fee line", () => {
     expect(screen.getByRole("img", { name: "Tip" })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Gas" })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Time" })).toBeInTheDocument();
+  });
+
+  it("shows one fee: the gas can is the level control, with no second cost beside it", () => {
+    const { container } = render(<FeeLine {...props()} />);
+    expect(container.querySelector('[data-fee="gas"]')!.textContent).toBe("");
+  });
+
+  it("breaks the fee down in the tip drawer", async () => {
+    render(<FeeLine {...props()} />);
+    await userEvent.click(screen.getByRole("button", { name: /0.0012 ETH/ }));
+    const list = screen.getByRole("list", { name: "What the fee covers" });
+    expect(list).toHaveTextContent(/Delivery gas\s*\$0\.40/);
+    expect(list).toHaveTextContent(/Proof\s*\$0\.03/);
+    expect(list).toHaveTextContent(/Tip\s*\$0\.77/);
   });
 
   it("explains each item in a tooltip", async () => {

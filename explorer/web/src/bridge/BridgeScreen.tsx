@@ -2,6 +2,8 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import { erc20ReaderFor, isFirstBridge, resolveCustomToken } from "./custom-token";
 import { addPending } from "./pending";
+import { usdText } from "./price-oracle";
+import { PRICE_NOTE, usePrices } from "./use-prices";
 import type { Address } from "viem";
 import type { TokenInfo } from "@terminal/model/types";
 import { useDeliveryCost, usePairHealth, usePriorityFee, useSnapshots, useTokens, useUsedTokens } from "../app/queries";
@@ -13,7 +15,8 @@ import type { WebStep } from "../tx/bridge-steps";
 import { parseUnits } from "../ui/format";
 import { useWallet } from "../wallet/wallet-port";
 import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferEstimate, transferSteps } from "./bridge-model";
-import { DeliveryMenu, deliverySummary, GAS_LEVELS, gasLevelOf } from "./DeliveryMenu";
+import { DeliveryMenu, deliverySummary } from "./DeliveryMenu";
+import { anticipatedCostUsd, ceilingWeiOf, GAS_LEVEL_FACTORS, gasLevelOfCeiling, highTipOf, highTipThreshold, lowFeeOf, PROOF_COST_USD, type GasLevel } from "./fee-guard";
 import { DirectionMenu } from "./DirectionMenu";
 import { FeeLine, type FeeSlider } from "./FeeLine";
 import { Chevron, FlipIcon, Identicon, SlidersIcon } from "./icons";
@@ -110,13 +113,49 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const snapshot = (snapshots ?? []).find((result) => result.status === "ok" && result.snapshot.chain.side === side);
   const balance = snapshot?.status === "ok" && token !== null ? (snapshot.snapshot.positions.find((position) => position.token.address === token.address)?.balance ?? null) : null;
   const amount = token === null ? null : safeParse(form.amount ?? "", token.decimals);
+  const prices = usePrices(tokens).data;
+  const priceOf = (subject: TokenInfo | null): number | null => (subject === null ? null : (prices?.get(`${subject.side}:${subject.address}`) ?? null));
+  const usd = (units: bigint | null): string => {
+    const price = priceOf(token);
+    return units === null || price === null || token === null ? "—" : `$${usdText((Number(units) / 10 ** token.decimals) * price)}`;
+  };
   const delivery = draft.delivery;
   const tipUnits = delivery?.description.nowUnits ?? null;
   const range = delivery?.suggestions.tipRange;
   const breakEven = range?.kind === "available" ? range.low.description.nowUnits : null;
   const typical = range?.kind === "available" ? range.default.description.nowUnits : null;
   const received = amount !== null && tipUnits !== null ? amount - tipUnits : amount;
-  const gasWei = delivery?.suggestions.cost.gasCostWei ?? null;
+  const baseFeeWei = delivery?.suggestions.dataSource.baseFeeWei ?? null;
+  const gasLevel = gasLevelOfCeiling(form.tip?.ceilingGweiText, baseFeeWei);
+  const dollars = (units: bigint | null): number | null => {
+    const price = priceOf(token);
+    return units === null || price === null || token === null ? null : (Number(units) / 10 ** token.decimals) * price;
+  };
+  const nativeUsd = prices?.get(`native:${destination.chainId}`) ?? null;
+  const costAt = (level: GasLevel): number | null =>
+    delivery === null || nativeUsd === null
+      ? null
+      : anticipatedCostUsd({ gasUsed: delivery.suggestions.dataSource.gas, baseFeeWei: delivery.suggestions.dataSource.baseFeeWei, priorityFeeWei: delivery.priorityFeeWei, nativeUsd, level });
+  const feeUsd = dollars(tipUnits);
+  const amountUsd = dollars(amount);
+  const costUsd = costAt(gasLevel);
+  // The high-tip check reads the tip before gas pricing, so it takes the Normal-level cost: the gas level never moves it.
+  const tipShare = amount === null || amount === 0n || tipUnits === null ? null : Number((tipUnits * 1_000_000n) / amount) / 1_000_000;
+  const highTip = highTipOf({ feeUsd, costUsd: costAt(1), amountUsd, shareWithoutPrice: options.mode === "percentage" ? (Number(options.percentText) || 0) / 100 : tipShare });
+  const thresholdText = `${Number((highTipThreshold(amountUsd) * 100).toPrecision(2))}%`;
+  const setGasLevel = (level: GasLevel): void => {
+    const { ceilingGweiText: _drop, ...rest } = form.tip ?? {};
+    const ceiling = baseFeeWei === null || level === 1 ? undefined : (Number(ceilingWeiOf(baseFeeWei, level)) / 1e9).toString();
+    write({ ...form, tip: { ...rest, ...(ceiling === undefined ? {} : { ceilingGweiText: ceiling }) } });
+  };
+  const breakdown =
+    feeUsd === null || costUsd === null
+      ? []
+      : [
+          { label: "Delivery gas", value: `$${usdText(costUsd - PROOF_COST_USD)}` },
+          { label: "Proof", value: `$${usdText(PROOF_COST_USD)}` },
+          { label: "Tip", value: feeUsd > costUsd ? `$${usdText(feeUsd - costUsd)}` : "$0" },
+        ];
 
   const verdict = verdictOf({
     connected: account !== null,
@@ -125,7 +164,8 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     overBalance: amount !== null && balance !== null && amount > balance,
     symbol: token?.symbol ?? "",
     paused: gate === "stop" || gate === "sealed" ? { route: `${source.name} → ${destination.name}` } : null,
-    tipBelowBreakEven: tipUnits !== null && breakEven !== null && tipUnits < breakEven,
+    tipBelowBreakEven: lowFeeOf({ feeUsd, costUsd, belowBreakEven: tipUnits !== null && breakEven !== null && tipUnits < breakEven }),
+    highTip: highTip ? { thresholdText } : null,
     firstBridge: token !== null && isFirstBridge(token, known, false),
   });
 
@@ -239,7 +279,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             )}
           </div>
           <div className="zb-balance">
-            <span title="No price source yet">—</span>
+            <span title={PRICE_NOTE}>{usd(amount)}</span>
             <span className="zb-right">
               {balance === null || token === null ? null : (
                 <>
@@ -279,11 +319,11 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
           {token === null ? null : (
             <FeeLine
               tip={tipUnits === null ? "—" : inline(tokenIcon(token, null, 14), amountText(tipUnits, token.decimals), token.symbol)}
-              tipHelp={`The tip pays whoever delivers your transfer on ${destination.name}. It is ${options.percentText}% of the amount, and at least their gas at today's price. Tap to change it.`}
-              gas={gasWei === null ? "—" : inline(<TokenIcon subject={{ chainId: destination.chainId }} symbol={destination.nativeSymbol} size={14} />, amountText(gasWei, 18), destination.nativeSymbol)}
-              gasHelp={`What the delivery costs in gas on ${destination.name} at today's price. The tip covers it.`}
-              gasLevel={gasLevelOf(form.tip?.gasMultiplierText)}
-              onGasLevel={(level) => write({ ...form, tip: { ...form.tip, gasMultiplierText: GAS_LEVELS.find((candidate) => candidate.level === level)!.multiplier } })}
+              tipHelp={`One fee pays whoever delivers your transfer on ${destination.name}: their gas, the proof, and a tip on top. It is ${options.percentText}% of the amount, and at least their gas at today's price${usd(tipUnits) === "—" ? "" : ` (about ${usd(tipUnits)})`}. Tap for the breakdown.`}
+              breakdown={breakdown}
+              gasHelp={`Gas level: the highest gas price on ${destination.name} at which your transfer still gets delivered. Normal: up to ${GAS_LEVEL_FACTORS[1] * 2}× today's base fee; High: ${GAS_LEVEL_FACTORS[2] * 2}×; Highest: ${GAS_LEVEL_FACTORS[3] * 2}×. A higher level raises the cost the fee must cover.`}
+              gasLevel={gasLevel}
+              onGasLevel={setGasLevel}
               time={transferEstimate(source, destination)}
               steps={transferSteps(source, destination)}
               sliders={sliders}
@@ -302,7 +342,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             )}
           </div>
           <div className="zb-balance">
-            <span title="No price source yet">—</span>
+            <span title={PRICE_NOTE}>{usd(received)}</span>
             {token === null ? null : <span className="zb-right">arrives as {/^zkb/i.test(token.symbol) ? token.symbol.replace(/^zkb/i, "") : `zkb${token.symbol}`} on {destination.name}</span>}
           </div>
         </div>
@@ -340,13 +380,16 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
         </div>
       </section>
 
-      {menu === "token" && token !== null ? <TokenPicker tokens={tokens} selected={token} snapshots={snapshots ?? []} {...(used === undefined ? {} : { used })} resolveCustom={resolveCustom} onPick={pick} onClose={() => setMenu(null)} /> : null}
+      {menu === "token" && token !== null ? <TokenPicker tokens={tokens} selected={token} snapshots={snapshots ?? []} {...(used === undefined ? {} : { used })} resolveCustom={resolveCustom} priceOf={(subject) => { const price = priceOf(subject); return price === null ? null : usdText(price); }} onPick={pick} onClose={() => setMenu(null)} /> : null}
       {review && token !== null && amount !== null ? (
         <Sheet label="Review" onClose={() => setReview(false)}>
           <div className="zb-col" style={{ paddingBottom: 18 }}>
             <div className="zb-kv"><span className="zb-k">You send</span><b>{inline(tokenIcon(token, null, 16), amountText(amount, token.decimals), token.symbol)} on {source.name}</b></div>
             <div className="zb-kv"><span className="zb-k">Arrives</span><b>{received === null ? "—" : inline(tokenIcon(token, destination.chainId, 16), amountText(received > 0n ? received : 0n, token.decimals), token.symbol)} on {destination.name}</b></div>
-            <div className="zb-kv"><span className="zb-k">Tip</span><span>{tipUnits === null ? "none" : inline(tokenIcon(token, null, 14), amountText(tipUnits, token.decimals), token.symbol)}</span></div>
+            <div className="zb-kv"><span className="zb-k">Fee</span><span>{tipUnits === null ? "none" : inline(tokenIcon(token, null, 14), amountText(tipUnits, token.decimals), token.symbol)}{feeUsd === null ? null : <span title={PRICE_NOTE}> (about {usd(tipUnits)})</span>}</span></div>
+            {breakdown.map((line) => (
+              <div key={line.label} className="zb-kv zb-kv-sub"><span className="zb-k">{line.label}</span><span title={PRICE_NOTE}>{line.value}</span></div>
+            ))}
             <div className="zb-kv"><span className="zb-k">Time</span><span>{transferEstimate(source, destination)}</span></div>
             <div className="zb-kv"><span className="zb-k">To</span><span className="zb-mono" style={{ wordBreak: "break-all", textAlign: "right" }}>{receiver}{account !== null && receiver.toLowerCase() !== account.toLowerCase() ? " (not your wallet)" : ""}</span></div>
             {delivery === null ? null : (

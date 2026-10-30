@@ -214,6 +214,9 @@
 .zb-kv { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--zb-line); font-size: 14px; }
 .zb-kv:first-child { border-top: 0; }
 .zb-kv .zb-k { color: var(--zb-muted); }
+.zb-kv-sub { padding: 2px 0 2px 14px; border-top: 0; font-size: 12px; color: var(--zb-muted); }
+.zb-breakdown { list-style: none; margin: 0 0 10px; padding: 0; font-size: 12px; color: var(--zb-muted); }
+.zb-breakdown li { display: flex; justify-content: space-between; padding: 2px 0; font-variant-numeric: tabular-nums; }
 .zb-warnbox { border: 1.5px solid var(--zb-accent); color: var(--zb-warn); padding: 8px 12px; font-size: 13px; margin: 10px 0; }
 
 /* Pulse and steps */

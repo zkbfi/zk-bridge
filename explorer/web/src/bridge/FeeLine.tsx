@@ -17,11 +17,12 @@ export type FeeSlider = {
 
 /** Props of {@link FeeLine}. */
 export type FeeLineProps = {
-  /** The tip, already with its token icon. */
+  /** The fee (tip and delivery together, owner: "we need to couple them in the ui"), already with its token icon. */
   readonly tip: ReactNode;
   readonly tipHelp: string;
-  /** The delivery gas, already with the destination coin's icon. */
-  readonly gas: ReactNode;
+  /** What the fee covers, shown in the tip drawer (delivery gas, proof, tip); empty without prices. */
+  readonly breakdown: readonly { readonly label: string; readonly value: string }[];
+  /** The gas can's help: what each gas level means. The can is a level control, not a second cost. */
   readonly gasHelp: string;
   readonly gasLevel: 0 | 1 | 2 | 3;
   /** Called with a higher (or lower) gas level the user picks on the gas can. */
@@ -48,7 +49,7 @@ const Tip = ({ id, text }: { readonly id: string; readonly text: string }) => (
  *
  * @param props The values, the help texts, the steps and the sliders.
  */
-export const FeeLine = ({ tip, tipHelp, gas, gasHelp, gasLevel, onGasLevel, time, steps, sliders, sliderNote }: FeeLineProps) => {
+export const FeeLine = ({ tip, tipHelp, breakdown, gasHelp, gasLevel, onGasLevel, time, steps, sliders, sliderNote }: FeeLineProps) => {
   const [open, setOpen] = useState<Open>(null);
   const [hover, setHover] = useState<"tip" | "gas" | "time" | null>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -97,7 +98,7 @@ export const FeeLine = ({ tip, tipHelp, gas, gasHelp, gasLevel, onGasLevel, time
     <div ref={root}>
       <div className="zb-fees">
         {item("tip", <MoneyHand title="Tip" />, tip, tipHelp, "tip")}
-        {item("gas", <GasCan title="Gas" level={gasLevel} />, gas, gasHelp, onGasLevel === undefined ? null : "gas")}
+        {item("gas", <GasCan title="Gas" level={gasLevel} />, null, gasHelp, onGasLevel === undefined ? null : "gas")}
         {item("time", <ClockIcon title="Time" />, time, "How long until it arrives. Tap for every step.", "time")}
       </div>
       {open === null ? null : (
@@ -126,6 +127,16 @@ export const FeeLine = ({ tip, tipHelp, gas, gasHelp, gasLevel, onGasLevel, time
             </ol>
           ) : (
             <>
+              {breakdown.length === 0 ? null : (
+                <ul className="zb-breakdown" aria-label="What the fee covers">
+                  {breakdown.map((line) => (
+                    <li key={line.label}>
+                      <span>{line.label}</span>
+                      <span>{line.value}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
               {sliders.map((slider) => (
                 <Slider key={slider.label} slider={slider} />
               ))}

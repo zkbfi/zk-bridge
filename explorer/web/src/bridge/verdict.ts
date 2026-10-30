@@ -23,8 +23,13 @@ export type VerdictInput = {
   readonly symbol: string;
   /** The destination's gate is closed (paused), with the route name for the message. */
   readonly paused: { readonly route: string } | null;
-  /** The tip is below what a delivery bot needs at today's gas price. */
+  /**
+   * The fee is too low: under twice the anticipated cost of the bridge (gas at the gas level plus the proof), or below
+   * the bots' break-even when there is no price. See fee-guard.
+   */
   readonly tipBelowBreakEven: boolean;
+  /** The tip before gas is above the share allowed for this amount (fee-guard), with that share as text; or null. */
+  readonly highTip?: { readonly thresholdText: string } | null;
   /** zkb.fi has never bridged this token (owner: custom tokens). */
   readonly firstBridge?: boolean;
   /** The token is an Omnibridge copy (bridging it wraps it twice). */
@@ -50,7 +55,10 @@ export const verdictOf = (input: VerdictInput): Verdict => {
     return { kind: "warn", label: "First time this token is bridged · keep the amount low", detail: "No one has bridged this token with zkb.fi before. The first transfer also deploys its counterpart on the other chain; a small first amount limits what is at risk." };
   }
   if (input.tipBelowBreakEven && input.draft.status === "ready") {
-    return { kind: "warn", label: "Tip too low · may not be delivered", detail: "Bots likely skip a tip this small at today's gas price; you would deliver it yourself. Raise it with the tip." };
+    return { kind: "warn", label: "Tip too low · may not be delivered", detail: "The fee is under twice what delivering and proving it should cost, so bots likely skip it and you would deliver it yourself. Raise it with the tip." };
+  }
+  if (input.highTip != null && input.draft.status === "ready") {
+    return { kind: "warn", label: "High tip for this amount", detail: `The tip, before gas, is over ${input.highTip.thresholdText} of the amount. A lower tip still gets delivered; lower it with the tip.` };
   }
   if (input.draft.status === "incomplete") return { kind: "blocked", label: "Bridge", detail: input.draft.reason };
   return { kind: "go", label: "Bridge", detail: null };

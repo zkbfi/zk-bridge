@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { Shell } from "../../src/app/Shell";
-import { deliverySummary, gasLevelOf } from "../../src/bridge/DeliveryMenu";
+import { deliverySummary } from "../../src/bridge/DeliveryMenu";
 import { connectedWallet, renderWithWallet } from "../app/support";
 
 beforeEach(() => {
@@ -11,15 +11,11 @@ beforeEach(() => {
   window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.amount=0.01`);
 });
 
-describe("deliverySummary and gasLevelOf", () => {
+describe("deliverySummary", () => {
   it("reads Standard delivery until something differs", () => {
     expect(deliverySummary({})).toBe("Standard delivery");
     expect(deliverySummary({ tip: { mode: "percentage", percentText: "0.3" } })).toBe("Fast · tip 0.3%");
     expect(deliverySummary({ tip: { mode: "fixed" }, gasLimit: "500000" })).toBe("fixed tip · gas 500000");
-  });
-
-  it("maps the gas multiplier to the bars", () => {
-    expect([gasLevelOf(undefined), gasLevelOf("1.5"), gasLevelOf("2")]).toEqual([1, 2, 3]);
   });
 });
 
@@ -48,6 +44,11 @@ describe("the gas level on the gas can", () => {
     });
     await userEvent.click(can);
     await userEvent.click(screen.getByRole("radio", { name: /Highest/ }));
-    await waitFor(() => expect(window.location.hash).toMatch(/tip\.gas=2/));
+    // The level raises the gas price ceiling (in every tip mode), not the gas multiplier.
+    await waitFor(() => expect(window.location.hash).toMatch(/tip\.ceiling=/));
+    expect(window.location.hash).not.toMatch(/tip\.gas=/);
+    expect(screen.getByRole("radio", { name: /Highest/ })).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(screen.getByRole("radio", { name: /Normal/ }));
+    await waitFor(() => expect(window.location.hash).not.toMatch(/tip\.ceiling=/));
   });
 });
