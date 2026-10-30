@@ -20,6 +20,7 @@ import { BridgeScreen } from "../bridge/BridgeScreen";
 import { Header } from "../bridge/Header";
 import { Notice } from "../ui/primitives";
 import { ActionsContext } from "./actions-context";
+import { resolvePair } from "./route";
 import { bridgeLinkedFields, formatLocation, formatRoute, linkedFields, NO_OVERLAY, parseLocation, resolveHome, routeTitle, type BridgeQuery, type Overlay, type PageLocation, type Route } from "./route";
 import { useServices } from "./services";
 import { SettingsDialog } from "./SettingsDialog";
@@ -39,24 +40,32 @@ type HistoryMode = "push" | "replace";
 const useHashLocation = (
   defaultPairId: string,
   onOutsideChange: (next: PageLocation) => void,
-): readonly [PageLocation, (next: PageLocation, mode?: HistoryMode) => void] => {
+): readonly [PageLocation, (next: PageLocation, mode?: HistoryMode) => void, string | null] => {
   const outside = useRef(onOutsideChange);
   outside.current = onOutsideChange;
+  // The pair the address asked for that this build does not have, for the notice.
+  const unknownPair = useRef<string | null>(null);
   const read = useCallback((): PageLocation => {
     const parsed = parseLocation(window.location.hash);
-    const route = resolveHome(parsed.route, defaultPairId);
+    const paired = resolvePair(resolveHome(parsed.route, defaultPairId), defaultPairId);
+    // Only set here: React's strict mode runs the first read twice, and the second sees the address already moved.
+    if (paired.unknown !== null) unknownPair.current = paired.unknown;
+    const route = paired.route;
     if (route === parsed.route) return parsed;
     const resolved = { route, overlay: parsed.overlay };
     window.history.replaceState(window.history.state, "", formatLocation(resolved));
     return resolved;
   }, [defaultPairId]);
   const [location, setLocation] = useState<PageLocation>(read);
+  const [unknown, setUnknown] = useState<string | null>(() => unknownPair.current);
   useEffect(() => {
     // pushState and replaceState fire neither event, so every change seen here came from outside the page: the address
     // bar, a link, or Back and Forward.
     const onChange = (): void => {
+      unknownPair.current = null;
       const next = read();
       setLocation(next);
+      setUnknown(unknownPair.current);
       outside.current(next);
     };
     window.addEventListener("hashchange", onChange);
@@ -74,7 +83,7 @@ const useHashLocation = (
     }
     setLocation(next);
   }, []);
-  return [location, go];
+  return [location, go, unknown];
 };
 
 const isTypingTarget = (target: EventTarget | null): boolean => {
@@ -129,7 +138,7 @@ export const Shell = () => {
   // the token and the amount, every field it filled is named on the screen and in the review (see linkedFields).
   const linkedFormOf = (next: PageLocation): BridgeQuery | null => (next.route.name === "bridge" ? (next.route.form ?? null) : null);
   const [linkedForm, setLinkedForm] = useState<BridgeQuery | null>(() => linkedFormOf(parseLocation(window.location.hash)));
-  const [location, go] = useHashLocation(pair.id, (next) => {
+  const [location, go, unknownPair] = useHashLocation(pair.id, (next) => {
     setLinkedOverlay(linkedOf(next));
     setLinkedForm(linkedFormOf(next));
   });
@@ -240,6 +249,11 @@ export const Shell = () => {
           </div>
         ) : route.name === "bridge" ? (
           <div key="bridge" className={slideClass}>
+          {unknownPair === null ? null : (
+            <p className="zb-notice" role="status">
+              {unknownPair} isn't available here; showing {pair.label}
+            </p>
+          )}
           <BridgeScreen
             route={route}
             onRoute={update}

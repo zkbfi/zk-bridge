@@ -19,7 +19,24 @@ export const reverse = (dir: Direction): Direction => (dir === "first-to-second"
 export const directionFrom = (side: ChainSide): Direction => (side === "first" ? "first-to-second" : "second-to-first");
 
 /** The form's value for a token: `<side>:<address>`. */
-export const choiceOf = (token: TokenInfo): string => `${token.side}:${token.address}`;
+export const choiceOf = (token: TokenInfo): string => (isNativeToken(token) ? `${token.side}:native` : `${token.side}:${token.address}`);
+
+/** The address that stands for a chain's native coin in the token list (the wrap route bridges it). */
+export const NATIVE_ADDRESS = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE" as const;
+
+/** Whether a token of the list is a chain's native coin. */
+export const isNativeToken = (token: TokenInfo): boolean => token.address === NATIVE_ADDRESS;
+
+/**
+ * The native coin of each chain that has the wrap route (a wrapped native token), as tokens of the list, so a pair
+ * with nothing bridged yet still has something to bridge (ETH on Ethereum or Sepolia, PLS on PulseChain).
+ *
+ * @param pair The pair.
+ */
+export const nativeTokensOf = (pair: PairConfig): readonly TokenInfo[] =>
+  [pair.first, pair.second]
+    .filter((chain) => chain.contracts.wrappedNative !== null)
+    .map((chain) => ({ address: NATIVE_ADDRESS, symbol: chain.nativeSymbol, decimals: 18, side: chain.side, counterpart: null }));
 
 /**
  * The token a choice names, when it is a token of the given side; else the side's first token (the default).

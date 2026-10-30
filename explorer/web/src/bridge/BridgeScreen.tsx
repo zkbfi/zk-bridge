@@ -14,6 +14,7 @@ import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS, type DeliveryOptions } fr
 import type { WebStep } from "../tx/bridge-steps";
 import { parseUnits } from "../ui/format";
 import { useWallet } from "../wallet/wallet-port";
+import { isNativeToken, nativeTokensOf } from "./bridge-model";
 import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferEstimate, transferSteps } from "./bridge-model";
 import { DeliveryMenu, deliverySummary } from "./DeliveryMenu";
 import { anticipatedCostUsd, autoFeePercent, capTooLarge, ceilingWeiOf, GAS_LEVEL_FACTORS, gasLevelOfCeiling, highTipOf, highTipThreshold, lowFeeOf, PROOF_COST_USD, type GasLevel } from "./fee-guard";
@@ -46,6 +47,9 @@ export type BridgeScreenProps = {
   readonly linked?: readonly string[];
 };
 
+/** The receiver the fee estimate reads when no wallet is connected. Never sent anywhere. */
+const ESTIMATE_RECEIVER = "0x000000000000000000000000000000000000dEaD";
+
 const short = (address: string): string => `${address.slice(0, 6)}…${address.slice(-4)}`;
 
 /** The tip defaults to a share of the amount (owner: "default is a percent anyway"); the address can change it. */
@@ -72,7 +76,8 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const { configuration, connection } = useServices();
   const known = useTokens(pair.id).data ?? [];
   const [customTokens, setCustomTokens] = useState<readonly TokenInfo[]>([]);
-  const tokens = useMemo(() => [...known, ...customTokens], [known, customTokens]);
+  // The native coins come last: the default is the first bridged token, else the native coin (wrap route).
+  const tokens = useMemo(() => [...known, ...customTokens, ...nativeTokensOf(pair)], [known, customTokens, pair]);
   const rpcFor = (chainId: number): string | null => connection?.resolved().rpcUrls[chainId]?.value ?? configuration.rpcUrls[chainId] ?? defaultRpcUrl(chainId);
   const resolveCustom = useCallback(
     async (address: string, side: "first" | "second"): Promise<TokenInfo | null> => {
@@ -107,8 +112,14 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   };
 
   const receiver = form.receiver ?? account ?? "";
-  const values = { token: token === null ? "" : choiceOf(token), amount: form.amount ?? "", receiver, mode: "plain" as const, data: "", gasLimit: form.gasLimit ?? "", callTarget: "", callData: "" };
-  const context = { pair, snapshots: snapshots ?? [], signerAddress: account ?? ("0x0000000000000000000000000000000000000000" as Address) };
+  // Without a wallet the fee is still estimated: the draft reads an empty account on the source chain and a stand-in
+  // receiver. Nothing can be sent that way; the pill asks for a wallet first.
+  const values = { token: token === null ? "" : choiceOf(token), amount: form.amount ?? "", receiver: receiver === "" && account === null ? ESTIMATE_RECEIVER : receiver, mode: "plain" as const, data: "", gasLimit: form.gasLimit ?? "", callTarget: "", callData: "" };
+  const context = {
+    pair,
+    snapshots: account === null ? [{ status: "ok" as const, snapshot: { chain: source, nativeBalance: 0n, positions: [] } }] : (snapshots ?? []),
+    signerAddress: account ?? ("0x0000000000000000000000000000000000000000" as Address),
+  };
   const draftWith = (chosen: DeliveryOptions) => computeBridgeDraft(values, chosen, { pair, tokens, context, report: report.data ?? null, priorityFeeWei: priority.data ?? null });
   const probe = useMemo(
     () => draftWith(baseOptions),
@@ -117,7 +128,12 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   );
 
   const snapshot = (snapshots ?? []).find((result) => result.status === "ok" && result.snapshot.chain.side === side);
-  const balance = snapshot?.status === "ok" && token !== null ? (snapshot.snapshot.positions.find((position) => position.token.address === token.address)?.balance ?? null) : null;
+  const balance =
+    snapshot?.status === "ok" && token !== null
+      ? isNativeToken(token)
+        ? snapshot.snapshot.nativeBalance
+        : (snapshot.snapshot.positions.find((position) => position.token.address === token.address)?.balance ?? null)
+      : null;
   const amount = token === null ? null : safeParse(form.amount ?? "", token.decimals);
   const prices = usePrices(tokens).data;
   const nativeUsd = prices?.get(`native:${destination.chainId}`) ?? null;
@@ -154,6 +170,15 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const breakEven = range?.kind === "available" ? range.low.description.nowUnits : null;
   const typical = range?.kind === "available" ? range.default.description.nowUnits : null;
   const received = amount !== null && tipUnits !== null ? amount - tipUnits : amount;
+  // What the output can say about the fee: none to take (the wrap route, no tip), known, being estimated, or unknown.
+  const feeState: "none" | "known" | "estimating" | "unknown" =
+    token === null || amount === null || draft.tip?.kind !== "on" || options.mode === "none"
+      ? "none"
+      : tipUnits !== null
+        ? "known"
+        : report.isError || priority.isError || draft.deliveryProblem !== null
+          ? "unknown"
+          : "estimating";
   const feeUsd = dollars(tipUnits);
   // The high-tip check reads the tip before gas pricing, so it takes the Normal-level cost: the gas level never moves it.
   const tipShare = amount === null || amount === 0n || tipUnits === null ? null : Number((tipUnits * 1_000_000n) / amount) / 1_000_000;
@@ -188,7 +213,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     paused: gate === "stop" || gate === "sealed" ? { route: `${source.name} → ${destination.name}` } : null,
     tipBelowBreakEven: lowFeeOf({ feeUsd, costUsd, belowBreakEven: tipUnits !== null && breakEven !== null && tipUnits < breakEven }),
     highTip: highTip ? { thresholdText } : null,
-    firstBridge: token !== null && isFirstBridge(token, known, false),
+    firstBridge: token !== null && !isNativeToken(token) && isFirstBridge(token, known, false),
   });
 
   const tokenIcon = (subjectToken: TokenInfo, badge: number | null, size = 26): ReactNode => <TokenIcon subject={iconSubjectOf(subjectToken, pair)} badgeChainId={badge} symbol={subjectToken.symbol} size={size} />;
@@ -351,7 +376,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
         <div className="zb-col">
           {token === null ? null : (
             <FeeLine
-              tip={tipUnits === null ? "—" : inline(tokenIcon(token, null, 14), amountText(tipUnits, token.decimals), token.symbol)}
+              tip={tipUnits === null ? (feeState === "none" ? "none" : "—") : inline(tokenIcon(token, null, 14), amountText(tipUnits, token.decimals), token.symbol)}
               tipHelp={`One fee pays whoever delivers your transfer on ${destination.name}: their gas, the proof, and a tip on top. It is ${options.percentText}% of the amount, and at least their gas at today's price${usd(tipUnits) === "—" ? "" : ` (about ${usd(tipUnits)})`}. Tap for the breakdown.`}
               breakdown={breakdown}
               gasHelp={`Gas level: the highest gas price on ${destination.name} at which your transfer still gets delivered. Normal: up to ${GAS_LEVEL_FACTORS[1] * 2}× today's base fee; High: ${GAS_LEVEL_FACTORS[2] * 2}×; Highest: ${GAS_LEVEL_FACTORS[3] * 2}×. A higher level raises the cost the fee must cover.`}
@@ -367,6 +392,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             <span className="zb-amount-out" aria-label={`You receive on ${destination.name}`}>
               {received === null || token === null ? "0" : <Num text={amountText(received > 0n ? received : 0n, token.decimals)} />}
             </span>
+            {feeState === "estimating" ? <span className="zb-fee-state" aria-live="polite">estimating</span> : feeState === "unknown" ? <span className="zb-fee-state">fee unknown</span> : null}
             {token === null ? null : (
               <span className="zb-token">
                 {tokenIcon(token, destination.chainId)}

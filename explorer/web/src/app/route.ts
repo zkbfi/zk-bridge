@@ -58,6 +58,16 @@ const MAXIMUM_ROWS = 1000;
 export const resolveHome = (route: Route, defaultPairId: string): Route =>
   route.name === "home" ? { name: "bridge", pairId: defaultPairId, dir: "first-to-second" } : route;
 
+/**
+ * A bridge route for a pair this build does not have moves to the build's pair; `unknown` names the pair asked for, so
+ * the page can say so instead of showing another pair under the wrong address.
+ *
+ * @param route The route read from the address.
+ * @param pairId The pair this build serves.
+ */
+export const resolvePair = (route: Route, pairId: string): { readonly route: Route; readonly unknown: string | null } =>
+  route.name === "bridge" && route.pairId !== pairId ? { route: { ...route, pairId }, unknown: route.pairId } : { route, unknown: null };
+
 const MESSAGE_IDENTIFIER = /^0x[0-9a-fA-F]{64}$/;
 
 /**
@@ -311,7 +321,8 @@ const bridgeOf = (params: URLSearchParams): BridgeQuery => {
   const tip = tipOf(params);
   return {
     ...optional("token", token !== null && TOKEN_CHOICE.test(token) ? token : undefined),
-    ...optional("amount", decimalText(get("amount"))),
+    // A bare `amount` is read too: people type it by hand (the owner did).
+    ...optional("amount", decimalText(get("amount") ?? params.get("amount"))),
     ...optional("receiver", hexText(get("receiver"), 40)),
     ...optional("mode", oneOf(["plain", "call"] as const, get("mode"))),
     ...optional("data", hexText(get("data"), MAXIMUM_DATA_DIGITS)),
