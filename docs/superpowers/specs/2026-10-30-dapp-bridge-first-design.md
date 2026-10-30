@@ -283,6 +283,11 @@ and the time left while in flight or the age once delivered. A row links to the 
   the finalizing drawer (the review sheet). "Too large" (my reading, owner to confirm): the cap is above the high-tip
   threshold for this amount (1% up to $100, sliding to 0.1% at $1,000).
 
+- **Fee-drawer motion (owner approved):** open ≈ 0.28 s (height 0.2 s ease-out via grid rows; the 3-unit accent deck
+  line draws across the top from under the tapped icon; content fades in and settles 4 px, 0.06 s delay); close 0.12 s
+  ease-in, content first; swapping redraws the line from the new icon; no overshoot or springs; reduced motion = none.
+  Mockup: `design/ui/screens/accordion-motion.html`.
+
 ## Open questions
 
 - Where the Omnibridge token list comes from and how it stays current.
@@ -347,3 +352,7 @@ noise from one message (a child on the keyboard) is left out.
 35. "delivery is on top of this"
 36. "well, no we need to couple them in the ui. think about it like this. we need to make a 100% margin on the anticipated cost to execute the bridge (assume a $0.025 cost for the proof generation) for the warning to go away"
 37. "make the default the larger of the two. cap what we are willing to set in an automated manner at 1%. make the cap adjustable. always warn users as they are checking out if their cap is too large and give them an opportunity to adjust it in the finalizing drawer."
+38. "give me an animation for when the accordion (gas/arrival/tip) expansions show/hide."
+39. "http://100.90.134.51:5200/#/bridge/eth-pls?bridge.amount=1 did not see a correlative output number it stayed at zero"
+40. "it's getting there, but you need to connect a lot of data points"
+41. "the drawer animation is fine"
