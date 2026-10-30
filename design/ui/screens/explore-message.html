@@ -70,6 +70,13 @@
   .route.plate img, .band .ic img { background: #fff; border-radius: 50%; padding: 1px; }
   .kv .k.ko { display: inline-flex; align-items: center; gap: 6px; } .kv .k .ext { stroke: #9a948b; }
   .kv .sp { width: 13px; flex: none; } .kv .usd { color: #77716a; font-size: 13px; }
+  .kv .k.kg { display: grid; grid-template-columns: 11ch 18px 14px; align-items: center; gap: 6px; }
+  .kv .k.kg .usd { grid-column: 2 / 4; }
+  .ti { width: 14px; height: 14px; border-radius: 50%; vertical-align: -2px; margin-left: 3px; }
+  .fd .chain { width: 14px; height: 14px; vertical-align: -2px; }
+  .blk .cost { color: #f0ede8; }
+  .tl .tm { text-align: right; }
+  .tl .tm small { display: block; text-align: right; color: #77716a; font-size: 12px; }
   .caption { font: 13px/1.5 system-ui, sans-serif; color: #55524d; max-width: 390px; margin-top: 8px; }
 </style>
 
@@ -94,6 +101,7 @@
   const route = (a, b) => `<span class="route"><img src="${I[a]}" alt="">${chevR}<img src="${I[b]}" alt=""></span>`;
   const ic = (t, b) => `<span class="ic"><img class="main" src="${I[t]}" alt="">${b ? `<img class="badge" src="${I[b]}" alt="">` : ''}</span>`;
 
+  const ti = `<img class="ti" src="${I.USDC}" alt="USDC">`;
   const blkRow = (k, v) => `<span>${k}</span><span>${v}</span>`;
   const transfer = head('Message') +
     `<div class="band"><div class="lbl" style="display:flex;align-items:center;gap:8px">Token transfer ${route('PLS', 'SEP').replace('class="route"', 'class="route plate" style="color:#fff"')}</div><div class="big">${ic('USDC', 'ETH').replace(/30px/g, '34px')}80 USDC</div>
@@ -102,18 +110,19 @@
      <div class="grp">Who and what</div>
      <div class="kv" style="border-top:0"><span class="k">From</span><span class="v"><span class="mono">0x52…9EE7</span>${chevR}</span></div>
      <div class="kv"><span class="k">To</span><span class="v"><span class="mono">0x52…9EE7</span>${chevR}</span></div>
-     <div class="kv"><span class="k ko">Sent on <img class="chain" src="${I.PLS}" alt="PulseChain">${ext}</span><span class="v"><b>80</b> USDC ${ic('USDC')}<i class="sp"></i></span></div>
-     <div class="kv"><span class="k ko">Received on <img class="chain" src="${I.SEP}" alt="Sepolia">${ext}</span><span class="v"><b>79.80</b> USDC ${ic('USDC')}<i class="sp"></i></span></div>
-     <div class="kv tap on"><span class="k ko">Fee <span class="usd">$0.20</span></span><span class="v"><b>0.20</b> USDC ${ic('USDC')}${chevD}</span></div>
-     <div class="fd"><span>Delivery gas · Sepolia</span><span>0.012 USDC</span><span>Proof generation</span><span>0.025 USDC</span><span>Tip to the deliverer</span><span>0.163 USDC</span><span class="tot">Total</span><span class="tot">0.20 USDC</span></div>
+     <div class="kv"><span class="k">Token</span><span class="v"><b>USDC</b> ${ic('USDC')}<i class="sp"></i></span></div>
+     <div class="kv"><span class="k kg"><span>Sent on</span><img class="chain" src="${I.PLS}" alt="PulseChain">${ext}</span><span class="v"><b>80</b> ${ic('USDC')}<i class="sp"></i></span></div>
+     <div class="kv"><span class="k kg"><span>Received on</span><img class="chain" src="${I.SEP}" alt="Sepolia">${ext}</span><span class="v"><b>79.80</b> ${ic('USDC')}<i class="sp"></i></span></div>
+     <div class="kv tap on"><span class="k kg"><span>Fee</span><span class="usd">$0.20</span></span><span class="v"><b>0.20</b> ${ic('USDC')}${chevD}</span></div>
+     <div class="fd"><span>Delivery gas · <img class="chain" src="${I.SEP}" alt="Sepolia"></span><span>0.012 ${ti}</span><span>Proof generation</span><span>0.025 ${ti}</span><span>Tip to the deliverer</span><span>0.163 ${ti}</span><span class="tot">Total</span><span class="tot">0.20 ${ti}</span></div>
      <div class="kv"><span class="k">Delivered by</span><span class="v"><span class="mono">0x8a…2c11</span> · bot${chevR}</span></div>
      <div class="grp">Steps</div>
      <div class="tl">
-       <div class="st done"><span class="d"></span><span class="name">Sent on PulseChain</span><span class="tm">12:03:10</span>${chevR}</div>
+       <div class="st done"><span class="d"></span><span class="name">Sent on PulseChain</span><span class="tm">12:03:10<small>0.41 PLS · $0.0₄2</small></span>${chevR}</div>
        <div class="st done"><span class="d"></span><span class="name">Block final on PulseChain</span><span class="tm">12:13:50</span>${chevR}</div>
-       <div class="st done"><span class="d"></span><span class="name">Proof #2 posted to Sepolia</span><span class="tm">12:16:02</span>${chevR}</div>
-       <div class="st done open"><span class="d"></span><span class="name">Delivered on Sepolia</span><span class="tm">12:17:30</span>${chevD}</div>
-       <div class="blk">${blkRow('Transaction', '0x0c…7f1a ' + ext)}${blkRow('Block', '12,031,880')}${blkRow('Gas', '91,204 · 1.2 gwei')}${blkRow('Paid out', '79.80 USDC')}</div>
+       <div class="st done"><span class="d"></span><span class="name">Proof #2 posted to Sepolia</span><span class="tm">12:16:02<small>shared · 0.0₃36 ETH</small></span>${chevR}</div>
+       <div class="st done open"><span class="d"></span><span class="name">Delivered on Sepolia</span><span class="tm">12:17:30<small>0.0₃11 ETH · $0.38</small></span>${chevD}</div>
+       <div class="blk">${blkRow('Transaction', '0x0c…7f1a ' + ext)}${blkRow('Block', '12,031,880')}${blkRow('Gas', '91,204 · 1.2 gwei')}${blkRow('Cost', '<span class="cost">0.0₃1094 ETH · $0.38</span>')}${blkRow('Paid out', '79.80 ' + ti)}</div>
      </div>
      <div class="grp">The message itself</div>
      <div class="kv" style="border-top:0"><span class="k">Nonce</span><span class="v mono">41</span></div>
@@ -137,8 +146,8 @@
        <div class="st done"><span class="d"></span><span class="name">Sent on Ethereum</span><span class="tm">09:02:11</span>${chevR}</div>
        <div class="st done"><span class="d"></span><span class="name">Block final on Ethereum</span><span class="tm">09:15:40</span>${chevR}</div>
        <div class="st done"><span class="d"></span><span class="name">Proof #18 posted to PulseChain</span><span class="tm">09:17:55</span>${chevR}</div>
-       <div class="st now open"><span class="d"></span><span class="name">Call reverted on PulseChain</span><span class="tm">09:18:20</span>${chevD}</div>
-       <div class="blk" style="border-top-color:#b00020">${blkRow('Reason', 'Ownable: caller is not the owner')}${blkRow('Transaction', '0x77…e0b2 ' + ext)}${blkRow('Gas used', '41,902 of 200,000')}</div>
+       <div class="st now open"><span class="d"></span><span class="name">Call reverted on PulseChain</span><span class="tm">09:18:20<small>38 PLS · $0.0₃9</small></span>${chevD}</div>
+       <div class="blk" style="border-top-color:#b00020">${blkRow('Reason', 'Ownable: caller is not the owner')}${blkRow('Transaction', '0x77…e0b2 ' + ext)}${blkRow('Gas used', '41,902 of 200,000')}${blkRow('Cost', '<span class="cost">38 PLS · $0.0₃9</span>')}</div>
      </div>
      <div class="act"><span class="btn" style="border-color:#eb6834;color:#ff9a6e">Retry with more gas ${chevR}</span><span class="btn">Open the call</span></div>`;
 
