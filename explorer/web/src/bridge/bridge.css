@@ -260,7 +260,7 @@
 .zb-picker-search { display: flex; align-items: center; gap: 10px; height: 52px; padding-left: 16px; background: var(--zb-from); color: var(--zb-from-ink); }
 .zb-picker-search input { flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: none; color: inherit; font: inherit; font-size: 16px; }
 .zb-picker-search input::placeholder { color: var(--zb-from-muted); }
-.zb .zb-picker-close { width: 52px; height: 52px; flex: none; display: grid; place-items: center; background: var(--zb-from); color: #ffffff; border-left: 3px solid var(--zb-page); }
+.zb .zb-picker-close { width: 52px; height: 52px; flex: none; display: grid; place-items: center; background: var(--zb-from); color: #ffffff; border-left: 3px solid #121110; }
 .zb-tabs [role="tab"] svg, .zb-tabs [role="tab"] .zb-tok-icon { flex: none; }
 .zb-omni { position: relative; display: inline-flex; color: var(--zb-accent-text); cursor: pointer; }
 .zb .zb-link { display: inline-flex; align-items: center; gap: 4px; color: var(--zb-accent-text); font-weight: 600; text-decoration: underline; }
@@ -275,3 +275,6 @@
 .zb .zb-seg [role="radio"] { display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px; font-size: 13px; }
 .zb .zb-seg [aria-checked="true"] { background: var(--zb-ink); color: var(--zb-page); font-weight: 700; }
 .zb-menu-field { width: 50%; min-width: 0; border: 1.5px solid var(--zb-pill-edge); border-radius: 999px; padding: 5px 12px; background: var(--zb-pill); color: var(--zb-pill-ink); font: inherit; font-size: 13px; }
+
+/* The orange search band is its own focus cue; no outline box under the input. */
+.zb-picker-search input:focus-visible { outline: none; }

@@ -27,7 +27,7 @@ export const TokenIcon = ({ subject, badgeChainId = null, symbol, size = 24, ima
   return (
     <span className="zb-tok-icon" style={{ width: size, height: size }}>
       {failed ? (
-        <span className="zb-tok-fallback" role="img" aria-label={symbol}>
+        <span className="zb-tok-fallback" role="img" aria-label={symbol} style={{ fontSize: Math.max(5, Math.round(size * 0.34)) }}>
           {symbol.replace(/^zkb/i, "").slice(0, 3)}
         </span>
       ) : (
