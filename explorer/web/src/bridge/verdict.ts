@@ -25,6 +25,10 @@ export type VerdictInput = {
   readonly paused: { readonly route: string } | null;
   /** The tip is below what a delivery bot needs at today's gas price. */
   readonly tipBelowBreakEven: boolean;
+  /** zkb.fi has never bridged this token (owner: custom tokens). */
+  readonly firstBridge?: boolean;
+  /** The token is an Omnibridge copy (bridging it wraps it twice). */
+  readonly omnibridge?: boolean;
 };
 
 /**
@@ -39,6 +43,12 @@ export const verdictOf = (input: VerdictInput): Verdict => {
   if (!input.amountEntered) return { kind: "blocked", label: "Enter an amount", detail: null };
   if (input.overBalance) return { kind: "blocked", label: `Not enough ${input.symbol}`, detail: null };
   if (input.draft.status === "blocked") return { kind: "blocked", label: "Check the transfer", detail: input.draft.reason };
+  if (input.omnibridge === true && input.draft.status === "ready") {
+    return { kind: "warn", label: "Already bridged by the Omnibridge · wraps twice", detail: "This token came over the Omnibridge. Bridging it again wraps it a second time and costs gas twice; it only turns back by undoing both bridges in order." };
+  }
+  if (input.firstBridge === true && input.draft.status === "ready") {
+    return { kind: "warn", label: "First time this token is bridged · keep the amount low", detail: "No one has bridged this token with zkb.fi before. The first transfer also deploys its counterpart on the other chain; a small first amount limits what is at risk." };
+  }
   if (input.tipBelowBreakEven && input.draft.status === "ready") {
     return { kind: "warn", label: "Tip too low · may not be delivered", detail: "Bots likely skip a tip this small at today's gas price; you would deliver it yourself. Raise it with the tip." };
   }

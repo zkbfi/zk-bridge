@@ -1,8 +1,9 @@
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import type { ChainSnapshotResult } from "@terminal/chain/live-reads";
 import type { ChainSide, TokenInfo } from "@terminal/model/types";
 import { useServices } from "../app/services";
 import { amountText } from "./bridge-model";
+import { isTokenAddress } from "./custom-token";
 import { Chevron, SearchIcon } from "./icons";
 import { iconSubjectOf } from "./image-source";
 import { Num } from "./Num";
@@ -20,6 +21,8 @@ export type TokenPickerProps = {
   readonly priceOf?: (token: TokenInfo) => string | null;
   /** For a token that is an Omnibridge copy, the native token it wraps; else null. */
   readonly omnibridgeNativeOf?: (token: TokenInfo) => TokenInfo | null;
+  /** Reads a pasted address that is in no list (custom tokens), on the given chain; null when it is not a token. */
+  readonly resolveCustom?: (address: string, side: ChainSide) => Promise<TokenInfo | null>;
   readonly onPick: (token: TokenInfo) => void;
   readonly onClose: () => void;
 };
@@ -83,13 +86,31 @@ const BridgeGlyph = () => (
  *
  * @param props The tokens, the selection, the balances and the handlers.
  */
-export const TokenPicker = ({ tokens, selected, snapshots, used, priceOf = () => null, omnibridgeNativeOf = () => null, onPick, onClose }: TokenPickerProps) => {
+export const TokenPicker = ({ tokens, selected, snapshots, used, priceOf = () => null, omnibridgeNativeOf = () => null, resolveCustom, onPick, onClose }: TokenPickerProps) => {
   const { pair } = useServices();
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<Tab>("all");
   const [focused, setFocused] = useState<string | null>(null);
   const [tip, setTip] = useState<string | null>(null);
-  const rows = useMemo(() => pickerRows({ tokens, snapshots, used, query, tab, selected }), [tokens, snapshots, used, query, tab, selected]);
+  const [custom, setCustom] = useState<TokenInfo | "loading" | "none" | null>(null);
+  const listed = useMemo(() => pickerRows({ tokens, snapshots, used, query, tab, selected }), [tokens, snapshots, used, query, tab, selected]);
+  const rows = useMemo(() => (custom !== null && typeof custom === "object" ? [...listed, custom] : listed), [listed, custom]);
+  // A pasted address that is in no list is read on-chain (on the chosen tab's chain, else the sending chain).
+  useEffect(() => {
+    const text = query.trim();
+    if (resolveCustom === undefined || !isTokenAddress(text) || tokens.some((token) => token.address.toLowerCase() === text.toLowerCase())) {
+      setCustom(null);
+      return;
+    }
+    let live = true;
+    setCustom("loading");
+    void resolveCustom(text, tab === "all" ? selected.side : tab).then((found) => {
+      if (live) setCustom(found ?? "none");
+    });
+    return () => {
+      live = false;
+    };
+  }, [query, tab, tokens, resolveCustom, selected.side]);
   const [active, setActive] = useState(0);
   const chainOf = (side: ChainSide) => (side === "first" ? pair.first : pair.second);
 
@@ -178,6 +199,7 @@ export const TokenPicker = ({ tokens, selected, snapshots, used, priceOf = () =>
             );
           })}
         </ul>
+        {custom === "loading" ? <p className="zb-picker-note" aria-live="polite">Reading…</p> : custom === "none" ? <p className="zb-picker-note" aria-live="polite">Not a token</p> : null}
       </div>
     </Sheet>
   );

@@ -281,3 +281,5 @@
 
 /* On phones the token picker rises to just under the header, edge to edge, whatever the number of rows. */
 @media (max-width: 719px) { .zb-sheet-bare { top: 64px; max-height: none; display: flex; flex-direction: column; } .zb-sheet-bare .zb-picker { flex: 1; overflow: auto; } }
+
+.zb-picker-note { margin: 10px 0 0; font-size: 13px; color: var(--zb-muted); }

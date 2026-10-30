@@ -1,4 +1,6 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { defaultRpcUrl } from "@terminal/config/default-rpc";
+import { erc20ReaderFor, isFirstBridge, resolveCustomToken } from "./custom-token";
 import type { Address } from "viem";
 import type { TokenInfo } from "@terminal/model/types";
 import { useDeliveryCost, usePairHealth, usePriorityFee, useSnapshots, useTokens, useUsedTokens } from "../app/queries";
@@ -62,7 +64,20 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const { pair } = useServices();
   const wallet = useWallet();
   const account = wallet.status === "connected" ? wallet.account : null;
-  const tokens = useTokens(pair.id).data ?? [];
+  const { configuration, connection } = useServices();
+  const known = useTokens(pair.id).data ?? [];
+  const [customTokens, setCustomTokens] = useState<readonly TokenInfo[]>([]);
+  const tokens = useMemo(() => [...known, ...customTokens], [known, customTokens]);
+  const rpcFor = (chainId: number): string | null => connection?.resolved().rpcUrls[chainId]?.value ?? configuration.rpcUrls[chainId] ?? defaultRpcUrl(chainId);
+  const resolveCustom = useCallback(
+    async (address: string, side: "first" | "second"): Promise<TokenInfo | null> => {
+      const chain = side === "first" ? pair.first : pair.second;
+      const rpc = rpcFor(chain.chainId);
+      return rpc === null ? null : resolveCustomToken(address, side, erc20ReaderFor(rpc));
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pair, configuration, connection],
+  );
   const snapshots = useSnapshots(account, pair.id).data;
   const used = useUsedTokens(account, pair.id).data;
   const gate = usePairHealth().data?.find((entry) => entry.pairId === pair.id)?.gates[sourceSide(route.dir)];
@@ -110,6 +125,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     symbol: token?.symbol ?? "",
     paused: gate === "stop" || gate === "sealed" ? { route: `${source.name} → ${destination.name}` } : null,
     tipBelowBreakEven: tipUnits !== null && breakEven !== null && tipUnits < breakEven,
+    firstBridge: token !== null && isFirstBridge(token, known, false),
   });
 
   const tokenIcon = (subjectToken: TokenInfo, badge: number | null, size = 26): ReactNode => <TokenIcon subject={iconSubjectOf(subjectToken, pair)} badgeChainId={badge} symbol={subjectToken.symbol} size={size} />;
@@ -168,6 +184,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
 
   const pick = (picked: TokenInfo): void => {
     setMenu(null);
+    if (!tokens.includes(picked)) setCustomTokens((list) => [...list, picked]);
     write({ ...form, token: choiceOf(picked) }, directionFrom(picked.side));
   };
 
@@ -322,7 +339,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
         </div>
       </section>
 
-      {menu === "token" && token !== null ? <TokenPicker tokens={tokens} selected={token} snapshots={snapshots ?? []} {...(used === undefined ? {} : { used })} onPick={pick} onClose={() => setMenu(null)} /> : null}
+      {menu === "token" && token !== null ? <TokenPicker tokens={tokens} selected={token} snapshots={snapshots ?? []} {...(used === undefined ? {} : { used })} resolveCustom={resolveCustom} onPick={pick} onClose={() => setMenu(null)} /> : null}
       {review && token !== null && amount !== null ? (
         <Sheet label="Review" onClose={() => setReview(false)}>
           <div className="zb-col" style={{ paddingBottom: 18 }}>
