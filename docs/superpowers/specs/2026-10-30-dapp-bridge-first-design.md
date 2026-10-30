@@ -293,6 +293,22 @@ and the time left while in flight or the age once delivered. A row links to the 
   scale is fluid (clamp tokens) up to desktop, where type is visibly larger and the content column widens to about
   520–600 px, with the bands still running edge to edge.
 
+- **Explore (owner: "explorer should help you explore every data aspect"):** mockups `design/ui/screens/explore-map.html`
+  (v1: the live ring map, numbers, light clients, feed, services) and `design/ui/screens/explore.html` (v2):
+  - The orange search band leads Explore and takes any identifier: tx hash, message ID, address, token symbol, slot,
+    block, proof number, release CID. It shows what it recognised; results are grouped by kind with the match marked.
+  - **Browse** is a single-column list: a large number on the left, the heading to its right, the subheading below
+    it, a chevron on the far right. One row per kind: transfers & messages, proofs, tokens, addresses, contracts,
+    gates & escrow, costs, releases.
+  - The live ring map, the four numbers, the light-client cards, the latest-transfers feed and the services list follow.
+  - **Every kind has its own page, and every value on a page links onward.** Proof page: what it proves, slot and
+    block, the sync committee's 512 seats as lit/unlit cells, the posting tx, verifier, proving time, gas and cost,
+    previous/next, and the transfers it proved. Token page: both addresses, escrowed vs minted, volume, gate cap, the
+    Omnibridge copy as a separate token, its transfers. Address, transaction, message, slot/block, contract, gate,
+    release and costs pages follow the same pattern.
+  - **Row rule:** status is one word (delivered, waiting, proving, mining, …) as a pill at the right, and the chevron
+    sits at the far right of the row.
+
 ## Open questions
 
 - Where the Omnibridge token list comes from and how it stays current.
@@ -362,3 +378,6 @@ noise from one message (a child on the keyboard) is left out.
 40. "it's getting there, but you need to connect a lot of data points"
 41. "the drawer animation is fine"
 42. "it seems that your ui is quite small, especially for desktop AND mobile. the baseline should be larger. and large can be achieved on larger screens"
+43. "show me the explore screen next. what i have seen so far in the implementation is not impressive. also, your chevrons in the top nav that allow the user to get to the explorer/activity should be fixed around a fixed width text block. otherwise you end up with chevrons moving back and forth"
+44. "cool. i like it. iterate a bit more, include more data including searches of the proofs or transactions or identifers. explorer should help you explore every data aspect"
+45. "for the "transfers it proved" move the chevron to the right, shorten the status to one word: delivered, waiting, proving, mining, etc. the browse section might be able to just have a single column grid if you used a large number to the left, the header to the right, and the subheader below that then send explore v2 to the build worker"
