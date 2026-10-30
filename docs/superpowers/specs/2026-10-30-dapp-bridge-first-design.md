@@ -262,6 +262,13 @@ and the time left while in flight or the age once delivered. A row links to the 
   - **Limits, stated in the UI tooltip:** spot reserves can be pushed around and Omnibridge copies can trade away from
     their originals, so prices are for display only and are never used to compute amounts, tips or fees.
 
+- **Gas levels (owner):** choosing a higher level raises the gas-price ceiling the deliverer may spend (in every tip
+  mode, including the default percentage tip), so the choice always does something.
+- **High-tip warning (owner):** the Bridge pill takes the overridable warning state when the tip is a large share of
+  the amount: above 1% for transfers up to $100, a threshold that scales down to 0.1% at $1,000, and 0.1% above that.
+  Between $100 and $1,000 the threshold is 1% × 100 / amount (a log-linear slide; it works out to a tip of about $1
+  across that range). Uses the display price; without a price, the 1% threshold applies.
+
 ## Open questions
 
 - Where the Omnibridge token list comes from and how it stays current.
@@ -321,3 +328,4 @@ noise from one message (a child on the keyboard) is left out.
 30. "dark rule is fine"
 31. "we will also have to handle custom tokens as well. tokens that neither bridge has ever seen. we can add a warning to the bridge button stating that this is the first time that this token hasbeen bridged and it may be wise to keep the amount low. lets look at the activity now"
 32. "find an oracle. i think that the pulsex exchanges serve as good oracles"
+33. "raise the gas price ceiling. warn when a tip is >1% for bridges under $100. then scale it down to 0.1% as it goes to $1000"
