@@ -1,0 +1,92 @@
+<style>
+  .fam { margin: 26px 0 8px; }
+  .fam h3 { margin: 0 0 2px; }
+  .th { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .pg { background: var(--bg); color: var(--ink); font: 13px/1.4 system-ui, sans-serif; border: 1px solid #d8d4ce; }
+  .band { position: relative; background: var(--band, var(--bg)); border-bottom: var(--rule, 0); }
+  .head { background: var(--head, var(--bg)); color: var(--headink, var(--ink)); }
+  .from { background: var(--from); color: var(--fromink, var(--ink)); } .to { background: var(--to); color: var(--toink, var(--ink)); }
+  .in { padding: 12px 14px; }
+  .top { display: flex; align-items: center; gap: 8px; }
+  .chip { border: var(--chipb, 0); border-radius: 999px; padding: 3px 11px; font-weight: 600; font-size: 11px; background: var(--chipbg); color: var(--chipink, var(--ink)); white-space: nowrap; }
+  .menu { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 3px 10px 3px 4px; font-size: 11px; font-weight: 600; background: var(--chipbg); color: var(--chipink, var(--ink)); border: var(--chipb, 0); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dot, var(--acc)); display: inline-block; }
+  .dot.f { opacity: .35; }
+  .amt { font-size: 22px; font-weight: 600; }
+  .row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .lbl { font-size: 11px; color: var(--muted); }
+  .from .lbl { color: var(--frommuted, var(--muted)); } .to .lbl { color: var(--tomuted, var(--muted)); }
+  .go { background: var(--gobg, var(--acc)); color: var(--goink, #fff); border-radius: 999px; padding: 11px; text-align: center; font-weight: 600; }
+  .flip { position: absolute; left: 50%; bottom: -15px; transform: translateX(-50%); width: 26px; height: 26px; border-radius: 50%; border: var(--flipb, 0); background: var(--flipbg, var(--chipbg)); color: var(--chipink, var(--ink)); display: grid; place-items: center; font-size: 12px; z-index: 2; }
+  .dest { border-radius: 999px; border: 2px dashed var(--dash); padding: 5px 12px; font-size: 11px; color: var(--muted); }
+  .meta { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin: 9px 0; }
+  .act { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 11px; border-top: var(--hair); }
+  .act:first-of-type { border-top: 0; }
+  .r { margin-left: auto; }
+  .h { font-weight: 700; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .mk g { stroke: var(--markc, var(--acc)); } .mk circle, .mk polygon { fill: var(--markc, var(--acc)); }
+
+  /* B: paper, no rules */
+  .b1 { --bg:#faf9f6; --from:#f1eee9; --to:#e7e3dc; --ink:#1b1a19; --muted:#7a766f; --acc:#eb6834; --chipbg:#fff; --dash:#cfcac2; --hair:1px solid #ebe7e1; --core:#ffe3d6; }
+  .b2 { --bg:#f7f2e8; --from:#efe8da; --to:#e6dccb; --ink:#1b1a19; --muted:#7d7262; --acc:#eb6834; --chipbg:#1b1a19; --chipink:#f7f2e8; --flipbg:#1b1a19; --dash:#cdbfa8; --hair:1px solid #e6dccb; --core:#ffe3d6; }
+  .b3 { --bg:#f6f7f9; --from:#eceef2; --to:#e1e4ea; --ink:#15171c; --muted:#6c7280; --acc:#eb6834; --chipbg:#fff; --chipb:1.5px solid #eb6834; --chipink:#c24e1f; --dash:#c4c9d3; --hair:1px solid #e4e7ec; --core:#ffe3d6; }
+  /* C: night */
+  .c1 { --bg:#121110; --from:#1c1a18; --to:#252220; --ink:#f0ede8; --muted:#9a948b; --acc:#ff7a45; --goink:#120d0a; --chipbg:#1c1a18; --chipb:1.5px solid #3a3632; --dash:#4a453f; --hair:1px solid #2a2724; --core:#ffd6c2; }
+  .c2 { --bg:#0d111c; --from:#151b2b; --to:#1d2438; --ink:#eef1f7; --muted:#8b93a7; --acc:#ff7a45; --goink:#0d111c; --chipbg:#151b2b; --chipb:1.5px solid #2c3550; --dash:#3a4562; --hair:1px solid #1e2537; --core:#ffd6c2; }
+  .c3 { --bg:#121110; --from:#1c1a18; --to:#2b1810; --ink:#f0ede8; --muted:#9a948b; --tomuted:#d9a080; --acc:#ff7a45; --goink:#120d0a; --chipbg:#1c1a18; --chipb:1.5px solid #3a3632; --dash:#4a453f; --hair:1px solid #2a2724; --core:#ffd6c2; }
+  /* D: ember */
+  .d1 { --bg:#fff7f2; --from:#eb6834; --fromink:#fff; --frommuted:#ffe0d0; --to:#fde4d7; --ink:#1b1a19; --muted:#8a5a43; --acc:#eb6834; --dot:#eb6834; --gobg:#1b1a19; --chipbg:#fff; --flipb:3px solid #fff7f2; --dash:#e7b8a0; --hair:1px solid #f6d8c8; --core:#ffe3d6; }
+  .d2 { --bg:#fff7f2; --head:#eb6834; --headink:#fff; --markc:#fff; --from:#eb6834; --fromink:#fff; --frommuted:#ffe0d0; --to:#fff7f2; --ink:#1b1a19; --muted:#8a5a43; --acc:#eb6834; --gobg:#1b1a19; --chipbg:#fff; --flipb:3px solid #fff7f2; --dash:#e7b8a0; --hair:1px solid #f6d8c8; --core:#ffe3d6; }
+  .d3 { --bg:#121110; --from:#eb6834; --fromink:#fff; --frommuted:#ffe0d0; --to:#1c1a18; --ink:#f0ede8; --muted:#9a948b; --acc:#eb6834; --gobg:#f0ede8; --goink:#121110; --chipbg:#121110; --chipink:#f0ede8; --flipb:3px solid #121110; --dash:#4a453f; --hair:1px solid #2a2724; --core:#ffd6c2; }
+  /* E: ink */
+  .e1 { --bg:#0b0b0b; --from:#0b0b0b; --to:#0b0b0b; --rule:1px solid #2b2a28; --ink:#f0efec; --muted:#8f8d87; --acc:#eb6834; --chipbg:#0b0b0b; --chipb:1.5px solid #f0efec; --dash:#3a3936; --hair:1px solid #1f1e1c; --core:#ffe3d6; }
+  .e2 { --bg:#0b0b0b; --from:#0b0b0b; --to:#0b0b0b; --rule:1px solid #5a2a16; --ink:#f0efec; --muted:#8f8d87; --acc:#eb6834; --chipbg:#0b0b0b; --chipb:1.5px solid #eb6834; --chipink:#ff9a6e; --dash:#5a2a16; --hair:1px solid #2a160d; --core:#ffe3d6; }
+  .e3 { --bg:#0b0b0b; --from:#0b0b0b; --to:#0b0b0b; --rule:1px solid #2b2a28; --ink:#f0efec; --muted:#8f8d87; --acc:#eb6834; --markc:#f0efec; --dot:#f0efec; --gobg:#f0efec; --goink:#0b0b0b; --chipbg:#0b0b0b; --chipb:1.5px solid #f0efec; --dash:#3a3936; --hair:1px solid #1f1e1c; --core:#ffe3d6; }
+</style>
+
+<h2>Four directions, three variations each</h2>
+<p class="subtitle">Same layout and shapes throughout. Each direction has a line on what defines it; each variation changes one thing so you can see which lever matters. Click every one worth keeping.</p>
+
+<div id="root2"></div>
+
+<script>
+  const fams = [
+    ["B · Paper, no rules", "Light and quiet. Bands are told apart by tone alone; the orange is the only colour.",
+      [["b1", "B1 Warm stone", "Warm grey steps, white pills. The baseline."],
+       ["b2", "B2 Bone, ink pills", "Cream paper; every control is a solid black pill. Crisper, more editorial."],
+       ["b3", "B3 Fog, orange outlines", "Cool grey steps; controls outlined in orange. Feels more 'fintech'."]]],
+    ["C · Night", "Dark and calm. Bands step lighter as you go down; orange glows a little brighter.",
+      [["c1", "C1 Warm night", "Warm near-black, neutral steps. The baseline."],
+       ["c2", "C2 Midnight", "Deep blue-black. Orange pops harder against the cool ground."],
+       ["c3", "C3 Night, warm destination", "The To band is tinted dark orange: the destination glows like the golden dot."]]],
+    ["D · Ember", "The accent is a surface, not just a button. Loud, unmistakably zkb.fi.",
+      [["d1", "D1 Ember source", "From band orange, To band pale tint, ink Bridge pill. The baseline."],
+       ["d2", "D2 Ember top", "Header and From are one orange block (white mark); the rest is cream."],
+       ["d3", "D3 Ember on black", "Orange From band on a black page; the Bridge pill is off-white."]]],
+    ["E · Ink", "One flat black surface; hairlines and outlines only. The mark on black.",
+      [["e1", "E1 Ink, white lines", "White outlined pills, grey hairlines, orange Bridge. The baseline."],
+       ["e2", "E2 Ink, orange lines", "Hairlines and pill outlines in orange; text stays white."],
+       ["e3", "E3 Monochrome", "Everything off-white, including the mark and the Bridge pill. Orange appears only on things in motion (activity)."]]],
+  ];
+  const mark = '<svg class="mk" viewBox="0 0 48 48" width="22" height="22"><g fill="none" stroke-width="3"><path d="M18.76 42.26 A19 19 0 0 1 24 5"/><path d="M40.2 14.07 A19 19 0 0 1 37.44 37.44"/><path d="M1 29 H42.33"/><path d="M24 11 V29"/><path d="M24 25.5 L27.39 21.41"/><path d="M24 25.5 L28 29"/><path d="M31 11 V29"/><path d="M31 21 H32 A4 4 0 0 1 32 29"/></g><polygon points="12.55,19.5 21.55,19.5 21.55,23.35 18.12,27.5 14.22,27.5 18.36,22.5 12.55,22.5"/><circle cx="36.83" cy="9.99" r="2.1"/><circle cx="24" cy="43" r="2.1"/></svg>';
+  const pulse = (done) => done
+    ? '<svg viewBox="0 0 120 12" width="86"><line x1="8" y1="6" x2="112" y2="6" stroke="#eb6834" stroke-width="3"/><circle cx="6" cy="6" r="4" fill="#eb6834"/><circle cx="114" cy="6" r="4" fill="#eb6834"/></svg>'
+    : '<svg viewBox="0 0 120 12" width="86"><line x1="8" y1="6" x2="112" y2="6" stroke="#eb6834" stroke-width="3" opacity=".22"/><g fill="#eb6834"><circle cx="42.7" cy="6" r="1.4"/><circle cx="60" cy="6" r="1.4"/><circle cx="77.3" cy="6" r="1.4" opacity=".35"/></g><line x1="58" y1="6" x2="70" y2="6" stroke="#eb6834" stroke-width="4.4" stroke-linecap="round"/><line x1="58" y1="6" x2="70" y2="6" stroke="var(--core)" stroke-width="2" stroke-linecap="round"/><circle cx="6" cy="6" r="4" fill="#eb6834"/><circle cx="114" cy="6" r="4" fill="#eb6834" opacity=".3"/></svg>';
+  const card = ([cls, name, why]) => `
+  <div class="option" data-choice="${cls}" onclick="toggleSelect(this)" style="display:block">
+    <div class="content"><h3>${name}</h3><p>${why}</p></div>
+    <div class="pg ${cls}">
+      <div class="band head"><div class="in top">${mark}<b>zkb.fi</b><span class="chip r">0x52…9EE7</span></div></div>
+      <div class="band from"><div class="in"><span class="menu"><span class="dot"></span>From Ethereum ▾</span>
+        <div class="row"><span class="amt">1.25</span><span class="chip r">ETH ▾</span></div><div class="lbl">Balance 3.40 · Max</div></div><div class="flip">⇅</div></div>
+      <div class="band to"><div class="in" style="padding-top:18px"><span class="lbl" style="display:inline-flex;align-items:center;gap:6px"><span class="dot f"></span>To PulseChain</span>
+        <div class="row"><span class="amt">1.2488</span><span class="lbl r">zkbWETH</span></div></div></div>
+      <div class="band"><div class="in"><div class="dest">+ Send to another address</div><div class="meta"><span>About 15 min</span><span>Fee 0.0012 ETH</span></div><div class="go">Bridge</div></div></div>
+      <div class="band" style="border-bottom:0"><div class="in"><div class="h">Your activity</div>
+        <div class="act">${pulse(false)}<b>0.50 ETH</b><span class="r" style="color:#eb6834">~6 min</span></div>
+        <div class="act">${pulse(true)}<b>200 USDC</b><span class="r lbl">2 h ago</span></div></div></div>
+    </div>
+  </div>`;
+  document.getElementById("root2").innerHTML = fams.map(([title, char, vs]) =>
+    `<div class="fam"><h3>${title}</h3><p class="subtitle" style="margin:0 0 10px">${char}</p></div><div class="th options" data-multiselect>${vs.map(card).join("")}</div>`).join("");
+</script>

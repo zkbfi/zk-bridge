@@ -1,0 +1,70 @@
+<style>
+  .lang { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 18px; }
+  .sw { background: #fff; border: 1px solid #e4e1dc; padding: 10px; font: 12px/1.35 system-ui, sans-serif; color: #1b1a19; }
+  .sw svg { display: block; margin: 0 auto 6px; }
+  .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; }
+  .scr { background: #fbfaf8; border: 1px solid #e4e1dc; padding: 14px; color: #1b1a19; font: 13px/1.4 system-ui, sans-serif; }
+  .a { --r: 0; } .b { --r: 999px; }
+  .panel { background: #fff; border: 3px solid #1b1a19; padding: 12px; border-radius: var(--pr, 0); }
+  .field { background: #f4f2ee; padding: 10px 14px; display: flex; align-items: center; gap: 8px; border-radius: var(--fr, 0); }
+  .chip { margin-left: auto; border: 2px solid #1b1a19; border-radius: 999px; padding: 3px 12px; font-weight: 600; font-size: 12px; background: #fff; }
+  .amt { font-size: 22px; font-weight: 600; }
+  .lbl { font-size: 11px; color: #77736d; }
+  .go { margin-top: 10px; background: #eb6834; color: #fff; border-radius: 999px; padding: 11px; text-align: center; font-weight: 600; }
+  .flip { width: 30px; height: 30px; border-radius: 50%; border: 3px solid #1b1a19; background: #fff; margin: -8px auto; position: relative; display: grid; place-items: center; font-size: 13px; }
+  .dest { margin-top: 8px; border-radius: 999px; border: 2px dashed #c9c4bd; padding: 5px 12px; font-size: 12px; color: #55524d; }
+  .meta { display: flex; justify-content: space-between; font-size: 12px; color: #55524d; margin-top: 8px; }
+  .h { font-weight: 600; font-size: 12px; margin: 14px 0 6px; }
+  .act { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-top: 1px solid #e4e1dc; font-size: 12px; }
+  .ok { color: #2d7a3e; margin-left: auto; }
+</style>
+
+<h2>Our design language, and the card built from it</h2>
+<p class="subtitle">Everything in the mark is one of five shapes. A UI built from the same five adds no new curve. The open question is the panel corner: square (B-cut like every stroke end) or a full pill.</p>
+
+<div class="lang">
+  <div class="sw"><svg width="60" height="40" viewBox="0 0 60 40"><line x1="5" y1="20" x2="55" y2="20" stroke="#eb6834" stroke-width="6"/></svg><b>Straight 3-unit stroke</b>, ends cut square (the deck, stems). Rules, dividers, borders.</div>
+  <div class="sw"><svg width="60" height="40" viewBox="0 0 60 40"><path d="M12 34 A18 18 0 0 1 30 4" fill="none" stroke="#eb6834" stroke-width="6"/><path d="M48 12 A18 18 0 0 1 44 34" fill="none" stroke="#eb6834" stroke-width="6"/></svg><b>The ring</b>, one radius only. Loaders and progress, never decoration.</div>
+  <div class="sw"><svg width="60" height="40" viewBox="0 0 60 40"><circle cx="16" cy="20" r="8" fill="#eb6834"/><circle cx="44" cy="20" r="8" fill="#eb6834" opacity=".25"/></svg><b>Heavy dots</b>: source (solid) and destination (faint until reached). Chain ends, status.</div>
+  <div class="sw"><svg width="60" height="40" viewBox="0 0 60 40"><line x1="12" y1="20" x2="48" y2="20" stroke="#eb6834" stroke-width="12" stroke-linecap="round"/><line x1="12" y1="20" x2="48" y2="20" stroke="#ffe3d6" stroke-width="5" stroke-linecap="round"/></svg><b>The pill</b> (the pulse): the only rounded rectangle. Buttons, chips, fields, the thing in flight.</div>
+  <div class="sw"><svg width="60" height="40" viewBox="0 0 60 40"><line x1="16" y1="34" x2="34" y2="12" stroke="#eb6834" stroke-width="6"/><line x1="30" y1="34" x2="48" y2="12" stroke="#eb6834" stroke-width="6"/></svg><b>50.4° diagonal</b> (z and k arm, parallel). Direction: the "→" between chains.</div>
+</div>
+
+<div class="two">
+  <div class="option" data-choice="square" onclick="toggleSelect(this)" style="display:block">
+    <div class="letter">A</div>
+    <div class="content"><h3>Square panels, pill controls</h3><p>Panels and fields are cut square with a 3-unit rule, like the deck. Every control is a pill. Two shapes, clearly separated: structure is square, things you touch are pills.</p></div>
+    <div class="scr a">
+      <div class="panel">
+        <div class="field"><div><div class="lbl">From Ethereum</div><div class="amt">1.25</div></div><span class="chip">ETH ▾</span></div>
+        <div class="flip">⇅</div>
+        <div class="field"><div><div class="lbl">To PulseChain</div><div class="amt">1.2488</div></div><span class="chip">zkbWETH</span></div>
+        <div class="dest">+ Send to another address</div>
+        <div class="meta"><span>Arrives in about 15 min</span><span>Fee 0.0012 ETH</span></div>
+        <div class="go">Bridge</div>
+      </div>
+      <div class="h">Activity</div>
+      <div class="act"><svg viewBox="0 0 120 12" width="120"><line x1="8" y1="6" x2="112" y2="6" stroke="#eb6834" stroke-width="3" opacity=".18"/><g fill="#eb6834"><circle cx="42.7" cy="6" r="1.4"/><circle cx="60" cy="6" r="1.4"/><circle cx="77.3" cy="6" r="1.4" opacity=".35"/></g><line x1="58" y1="6" x2="70" y2="6" stroke="#eb6834" stroke-width="4.4" stroke-linecap="round"/><line x1="58" y1="6" x2="70" y2="6" stroke="#ffe3d6" stroke-width="2" stroke-linecap="round"/><circle cx="6" cy="6" r="4" fill="#eb6834"/><circle cx="114" cy="6" r="4" fill="#eb6834" opacity=".25"/></svg><span>0.50 ETH → PLS</span><span class="ok" style="color:#b5651d">~6 min</span></div>
+      <div class="act"><svg viewBox="0 0 120 12" width="120"><line x1="8" y1="6" x2="112" y2="6" stroke="#eb6834" stroke-width="3"/><circle cx="6" cy="6" r="4" fill="#eb6834"/><circle cx="114" cy="6" r="4" fill="#eb6834"/></svg><span>200 USDC → ETH</span><span class="ok">2 h ago</span></div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="pill" onclick="toggleSelect(this)" style="display:block">
+    <div class="letter">B</div>
+    <div class="content"><h3>Pills all the way</h3><p>Fields are pills too, and the panel has no frame at all (no corner to choose). Softer, more "app"; the square cut only lives in the rules and the letters.</p></div>
+    <div class="scr b" style="--fr:999px">
+      <div style="padding:4px 0">
+        <div class="field"><div><div class="lbl">From Ethereum</div><div class="amt">1.25</div></div><span class="chip">ETH ▾</span></div>
+        <div class="flip">⇅</div>
+        <div class="field"><div><div class="lbl">To PulseChain</div><div class="amt">1.2488</div></div><span class="chip">zkbWETH</span></div>
+        <div class="dest">+ Send to another address</div>
+        <div class="meta"><span>Arrives in about 15 min</span><span>Fee 0.0012 ETH</span></div>
+        <div class="go">Bridge</div>
+      </div>
+      <div style="height:3px;background:#1b1a19;margin:14px 0 0"></div>
+      <div class="h">Activity</div>
+      <div class="act"><svg viewBox="0 0 120 12" width="120"><line x1="8" y1="6" x2="112" y2="6" stroke="#eb6834" stroke-width="3" opacity=".18"/><g fill="#eb6834"><circle cx="42.7" cy="6" r="1.4"/><circle cx="60" cy="6" r="1.4"/><circle cx="77.3" cy="6" r="1.4" opacity=".35"/></g><line x1="58" y1="6" x2="70" y2="6" stroke="#eb6834" stroke-width="4.4" stroke-linecap="round"/><line x1="58" y1="6" x2="70" y2="6" stroke="#ffe3d6" stroke-width="2" stroke-linecap="round"/><circle cx="6" cy="6" r="4" fill="#eb6834"/><circle cx="114" cy="6" r="4" fill="#eb6834" opacity=".25"/></svg><span>0.50 ETH → PLS</span><span class="ok" style="color:#b5651d">~6 min</span></div>
+      <div class="act"><svg viewBox="0 0 120 12" width="120"><line x1="8" y1="6" x2="112" y2="6" stroke="#eb6834" stroke-width="3"/><circle cx="6" cy="6" r="4" fill="#eb6834"/><circle cx="114" cy="6" r="4" fill="#eb6834"/></svg><span>200 USDC → ETH</span><span class="ok">2 h ago</span></div>
+    </div>
+  </div>
+</div>

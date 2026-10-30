@@ -1,0 +1,56 @@
+<style>
+  .th { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .pg { background: #121110; color: #f0ede8; font: 13px/1.4 system-ui, sans-serif; border: 1px solid #d8d4ce; }
+  .band { position: relative; }
+  .from { background: #eb6834; color: #fff; } .to { background: #1c1a18; }
+  .in { padding: 12px 14px; }
+  .top { display: flex; align-items: center; gap: 8px; }
+  .chip { border-radius: 999px; padding: 3px 11px; font-weight: 600; font-size: 11px; background: #121110; color: #f0ede8; white-space: nowrap; }
+  .menu { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 3px 10px 3px 4px; font-size: 11px; font-weight: 600; background: #121110; color: #f0ede8; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #eb6834; display: inline-block; }
+  .dot.f { opacity: .35; }
+  .amt { font-size: 22px; font-weight: 600; }
+  .row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .lbl { font-size: 11px; color: #9a948b; } .from .lbl { color: #ffe0d0; }
+  .flip { position: absolute; left: 50%; bottom: -15px; transform: translateX(-50%); width: 26px; height: 26px; border-radius: 50%; border: 3px solid #121110; background: #121110; color: #f0ede8; display: grid; place-items: center; font-size: 12px; z-index: 2; }
+  .dest { border-radius: 999px; border: 2px dashed #4a453f; padding: 5px 12px; font-size: 11px; color: #9a948b; }
+  .meta { display: flex; justify-content: space-between; font-size: 11px; color: #9a948b; margin: 9px 0; }
+  .r { margin-left: auto; }
+  .go { border-radius: 999px; padding: 10px; text-align: center; font-weight: 600; }
+  .g1 { background: #f0ede8; color: #121110; }
+  .g2 { border: 2px solid #f0ede8; color: #f0ede8; }
+  .g3 { border: 2px solid #eb6834; color: #ff8a5c; }
+  .g4 { border: 2px solid #eb6834; color: #f0ede8; }
+  .mk g { stroke: #eb6834; } .mk circle, .mk polygon { fill: #eb6834; }
+  .note { font-size: 12px; color: #77736d; margin-top: 6px; }
+</style>
+
+<h2>Ember on black: the Bridge pill</h2>
+<p class="subtitle">The same D3 screen with four Bridge pills. Outlined pills keep the orange as the From surface only, so the button doesn't compete with it. Contrast ratios are against the black page (4.5:1 is the readable minimum for text).</p>
+
+<div class="th options">
+<div id="cards" style="display:contents"></div>
+</div>
+
+<script>
+  const mark = '<svg class="mk" viewBox="0 0 48 48" width="22" height="22"><g fill="none" stroke-width="3"><path d="M18.76 42.26 A19 19 0 0 1 24 5"/><path d="M40.2 14.07 A19 19 0 0 1 37.44 37.44"/><path d="M1 29 H42.33"/><path d="M24 11 V29"/><path d="M24 25.5 L27.39 21.41"/><path d="M24 25.5 L28 29"/><path d="M31 11 V29"/><path d="M31 21 H32 A4 4 0 0 1 32 29"/></g><polygon points="12.55,19.5 21.55,19.5 21.55,23.35 18.12,27.5 14.22,27.5 18.36,22.5 12.55,22.5"/><circle cx="36.83" cy="9.99" r="2.1"/><circle cx="24" cy="43" r="2.1"/></svg>';
+  const opts = [
+    ["g1", "1 · Solid off-white", "What you saw in D3. The strongest button; it outshouts the orange band a little.", "text 16:1"],
+    ["g2", "2 · White outline, white text", "Quiet and even; the orange band stays the hero. Reads as 'secondary' to some people.", "text 16:1"],
+    ["g3", "3 · Orange outline, orange text", "Ties the button to the From band. Orange text on black is fine for a large bold label.", "text 8:1"],
+    ["g4", "4 · Orange outline, white text", "The orange ring marks the action; the white label keeps it most readable.", "text 16:1"],
+  ];
+  document.getElementById("cards").innerHTML = opts.map(([cls, name, why, cr]) => `
+  <div class="option" data-choice="${cls}" onclick="toggleSelect(this)" style="display:block">
+    <div class="content"><h3>${name}</h3><p>${why}</p></div>
+    <div class="pg">
+      <div class="band"><div class="in top">${mark}<b>zkb.fi</b><span class="chip r" style="border:1.5px solid #3a3632">0x52…9EE7</span></div></div>
+      <div class="band from"><div class="in"><span class="menu"><span class="dot"></span>From Ethereum ▾</span>
+        <div class="row"><span class="amt">1.25</span><span class="chip r">ETH ▾</span></div><div class="lbl">Balance 3.40 · Max</div></div><div class="flip">⇅</div></div>
+      <div class="band to"><div class="in" style="padding-top:18px"><span class="lbl" style="display:inline-flex;align-items:center;gap:6px"><span class="dot f"></span>To PulseChain</span>
+        <div class="row"><span class="amt">1.2488</span><span class="lbl r">zkbWETH</span></div></div></div>
+      <div class="band"><div class="in"><div class="dest">+ Send to another address</div><div class="meta"><span>About 15 min</span><span>Fee 0.0012 ETH</span></div><div class="go ${cls}">Bridge</div></div></div>
+    </div>
+    <div class="note">${cr}</div>
+  </div>`).join("");
+</script>

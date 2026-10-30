@@ -1,0 +1,120 @@
+<style>
+  .wrap3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 18px; }
+  .scr { background: #fbfaf8; border: 1px solid #e4e1dc; border-radius: 14px; padding: 14px; color: #1b1a19; font: 13px/1.4 system-ui, sans-serif; }
+  .bar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .logo { width: 22px; height: 22px; border-radius: 50%; border: 2.5px solid #eb6834; }
+  .pill { margin-left: auto; border: 1px solid #ddd; border-radius: 999px; padding: 3px 10px; font-size: 12px; background: #fff; }
+  .card { background: #fff; border: 1px solid #e4e1dc; border-radius: 14px; padding: 12px; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .box { background: #f4f2ee; border-radius: 10px; padding: 10px; }
+  .lbl { font-size: 11px; color: #77736d; margin-bottom: 4px; }
+  .amt { font-size: 22px; font-weight: 600; }
+  .tok { margin-left: auto; background: #fff; border: 1px solid #ddd; border-radius: 999px; padding: 4px 10px; font-weight: 600; font-size: 12px; white-space: nowrap; }
+  .chain { font-size: 12px; font-weight: 600; }
+  .swap { width: 28px; height: 28px; border-radius: 8px; background: #fff; border: 1px solid #ddd; margin: -6px auto; position: relative; z-index: 1; display: grid; place-items: center; font-size: 14px; }
+  .btn { margin-top: 10px; background: #eb6834; color: #fff; border-radius: 10px; padding: 10px; text-align: center; font-weight: 600; }
+  .meta { display: flex; justify-content: space-between; font-size: 12px; color: #55524d; margin-top: 8px; }
+  .dest { margin-top: 8px; font-size: 12px; color: #55524d; border: 1px dashed #d8d4ce; border-radius: 8px; padding: 6px 8px; }
+  .steps { display: flex; gap: 4px; margin: 8px 0 4px; }
+  .st { flex: 1; height: 5px; border-radius: 3px; background: #ece8e2; }
+  .st.on { background: #eb6834; }
+  .stl { display: flex; justify-content: space-between; font-size: 10.5px; color: #77736d; }
+  .act { display: flex; justify-content: space-between; padding: 6px 0; border-top: 1px solid #eee; font-size: 12px; }
+  .ok { color: #2d7a3e; } .wait { color: #b5651d; }
+  .h { font-weight: 600; font-size: 12px; margin: 12px 0 6px; }
+  .two { display: grid; grid-template-columns: 1.15fr 1fr; gap: 10px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+  .tabs span { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid #ddd; background: #fff; }
+  .tabs span.on { background: #1b1a19; color: #fff; border-color: #1b1a19; }
+</style>
+
+<h2>Three ways to frame the bridge card</h2>
+<p class="subtitle">Every option has the same core: amount and token on top, the pair (Ethereum → PulseChain, with a flip button) built into the two boxes, an optional "send to another address", and one button. They differ in how they show a transfer in flight, how long it takes, and your past activity. Numbers are placeholders.</p>
+
+<div class="wrap3">
+
+  <!-- A -->
+  <div class="option" data-choice="a" onclick="toggleSelect(this)" style="display:block">
+    <div class="letter">A</div>
+    <div class="content"><h3>Card, then a tracker and activity below</h3>
+      <p>One column. The card is the page. Anything in flight shows as a step bar under it; past transfers follow as a short list.</p></div>
+    <div class="scr">
+      <div class="bar"><div class="logo"></div><b>zkb.fi</b><span class="pill">0x52…9EE7</span></div>
+      <div class="card">
+        <div class="box"><div class="lbl">From <span class="chain">Ethereum</span></div><div class="row"><span class="amt">1.25</span><span class="tok">ETH ▾</span></div><div class="lbl" style="margin:4px 0 0">Balance 3.40 · Max</div></div>
+        <div class="swap">⇅</div>
+        <div class="box"><div class="lbl">To <span class="chain">PulseChain</span></div><div class="row"><span class="amt">1.2488</span><span class="tok">zkbWETH</span></div></div>
+        <div class="dest">+ Send to another address</div>
+        <div class="meta"><span>Arrives in about 15 min</span><span>Fee 0.0012 ETH</span></div>
+        <div class="btn">Bridge</div>
+      </div>
+      <div class="h">In flight</div>
+      <div class="card">
+        <div class="row"><b>0.50 ETH → PulseChain</b><span style="margin-left:auto" class="wait">~6 min left</span></div>
+        <div class="steps"><div class="st on"></div><div class="st on"></div><div class="st"></div><div class="st"></div></div>
+        <div class="stl"><span>Sent</span><span>Final</span><span>Proven</span><span>Delivered</span></div>
+      </div>
+      <div class="h">Recent</div>
+      <div class="act"><span>200 USDC → Ethereum</span><span class="ok">Delivered · 2 h ago</span></div>
+      <div class="act"><span>1.0 ETH → PulseChain</span><span class="ok">Delivered · yesterday</span></div>
+    </div>
+  </div>
+
+  <!-- B -->
+  <div class="option" data-choice="b" onclick="toggleSelect(this)" style="display:block">
+    <div class="letter">B</div>
+    <div class="content"><h3>Card left, your transfers right</h3>
+      <p>Two columns on desktop (stacks on phones). The right side is "your bridge": what's moving now, with a live countdown, and history with tabs.</p></div>
+    <div class="scr">
+      <div class="bar"><div class="logo"></div><b>zkb.fi</b><span class="pill">0x52…9EE7</span></div>
+      <div class="two">
+        <div class="card">
+          <div class="box"><div class="lbl">From <span class="chain">Ethereum</span></div><div class="row"><span class="amt">1.25</span><span class="tok">ETH ▾</span></div></div>
+          <div class="swap">⇅</div>
+          <div class="box"><div class="lbl">To <span class="chain">PulseChain</span></div><div class="row"><span class="amt">1.2488</span><span class="tok">zkbWETH</span></div></div>
+          <div class="dest">To: my wallet ▾</div>
+          <div class="meta"><span>~15 min</span><span>0.0012 ETH</span></div>
+          <div class="btn">Bridge</div>
+        </div>
+        <div>
+          <div class="tabs"><span class="on">Moving (1)</span><span>History</span></div>
+          <div class="card">
+            <b>0.50 ETH</b><div class="lbl" style="margin:2px 0 0">Ethereum → PulseChain</div>
+            <div style="font-size:20px;font-weight:600;margin:6px 0 2px">5:48</div>
+            <div class="lbl">until delivered (estimate)</div>
+            <div class="steps"><div class="st on"></div><div class="st on"></div><div class="st"></div><div class="st"></div></div>
+            <div class="stl"><span>Sent</span><span>Final</span><span>Proven</span><span>Delivered</span></div>
+            <div class="lbl" style="margin-top:6px">Waiting for Ethereum to finalize block 21,804,113</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- C -->
+  <div class="option" data-choice="c" onclick="toggleSelect(this)" style="display:block">
+    <div class="letter">C</div>
+    <div class="content"><h3>The card turns into the tracker</h3>
+      <p>After you press Bridge, the same card becomes the progress view, drawn with the mark's ring-fill loop (sent, final, proven, delivered) and a countdown. Activity sits behind one small button.</p></div>
+    <div class="scr">
+      <div class="bar"><div class="logo"></div><b>zkb.fi</b><span class="pill">Activity · 3</span><span class="pill" style="margin-left:6px">0x52…9EE7</span></div>
+      <div class="card" style="text-align:center">
+        <svg viewBox="-15 -4 78 56" width="230" height="165" style="display:block;margin:0 auto">
+          <g fill="none" stroke="#eb6834" stroke-width="3">
+            <path d="M18.76 42.26 A19 19 0 0 1 24 5" />
+            <path d="M40.2 14.07 A19 19 0 0 1 37.44 37.44" opacity=".18" />
+            <path d="M1 29 H42.33"/><path d="M24 11 V29"/><path d="M24 25.5 L27.39 21.41"/><path d="M24 25.5 L28 29"/><path d="M31 11 V29"/><path d="M31 21 H32 A4 4 0 0 1 32 29"/>
+          </g>
+          <polygon fill="#eb6834" points="12.55,19.5 21.55,19.5 21.55,23.35 18.12,27.5 14.22,27.5 18.36,22.5 12.55,22.5"/>
+          <circle cx="36.83" cy="9.99" r="2.1" fill="#eb6834" opacity=".25"/><circle cx="24" cy="43" r="2.1" fill="#eb6834"/>
+          <g fill="#77736d" font-size="2.6" font-family="system-ui"><text x="-0.6" y="29.9" text-anchor="end">sent</text><text x="24" y="0" text-anchor="middle">final</text><text x="42" y="44" >proven</text><text x="46" y="11">delivered</text></g>
+        </svg>
+        <div style="font-size:20px;font-weight:600">About 6 min left</div>
+        <div class="lbl">0.50 ETH, Ethereum → PulseChain · final, waiting for the proof</div>
+        <div class="row" style="justify-content:center;gap:8px;margin-top:8px"><span class="tok" style="margin:0">View on explorer</span><span class="tok" style="margin:0">New transfer</span></div>
+      </div>
+      <div class="lbl" style="margin-top:10px;text-align:center">Before sending, the card looks like A's: amount, pair, optional address, one button.</div>
+    </div>
+  </div>
+
+</div>

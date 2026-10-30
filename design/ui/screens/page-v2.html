@@ -1,0 +1,92 @@
+<style>
+  .pg { background: #fff; border: 1px solid #d8d4ce; color: #1b1a19; font: 13px/1.4 system-ui, sans-serif; position: relative; }
+  .band { border-bottom: 3px solid #1b1a19; position: relative; }
+  .from { background: #f4f2ee; } .to { background: #ece9e3; } .white { background: #fff; }
+  .in { max-width: 420px; margin: 0 auto; padding: 14px 18px; }
+  .top { display: flex; align-items: center; gap: 8px; }
+  .chip { border: 2px solid #1b1a19; border-radius: 999px; padding: 3px 12px; font-weight: 600; font-size: 12px; background: #fff; white-space: nowrap; }
+  .menu { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 3px 10px 3px 4px; font-size: 12px; font-weight: 600; background: #fff; border: 2px solid #1b1a19; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #eb6834; display: inline-block; }
+  .dot.f { opacity: .3; }
+  .amt { font-size: 28px; font-weight: 600; }
+  .row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .lbl { font-size: 11px; color: #77736d; }
+  .go { background: #eb6834; color: #fff; border-radius: 999px; padding: 12px; text-align: center; font-weight: 600; }
+  .flip { position: absolute; left: 50%; bottom: -17px; transform: translateX(-50%); width: 30px; height: 30px; border-radius: 50%; border: 3px solid #1b1a19; background: #fff; display: grid; place-items: center; font-size: 13px; z-index: 2; }
+  .dest { border-radius: 999px; border: 2px dashed #c9c4bd; padding: 6px 14px; font-size: 12px; color: #55524d; }
+  .meta { display: flex; justify-content: space-between; font-size: 12px; color: #55524d; margin: 10px 0; }
+  .act { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid #e4e1dc; font-size: 12px; }
+  .act:first-of-type { border-top: 0; }
+  .r { margin-left: auto; text-align: right; }
+  .h { font-weight: 700; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #55524d; margin-bottom: 4px; }
+  .pop { position: absolute; left: 50%; transform: translateX(-210px); top: 66px; width: 250px; background: #fff; border: 3px solid #1b1a19; z-index: 5; font-size: 12px; }
+  .pop div { padding: 9px 12px; display: flex; align-items: center; gap: 8px; border-top: 1px solid #e4e1dc; }
+  .pop div:first-child { border-top: 0; }
+  .pop .on { background: #f4f2ee; font-weight: 600; }
+  .pop .sec { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: #77736d; background: #fbfaf8; padding: 6px 12px; }
+  .grid2 { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; align-items: start; }
+</style>
+
+<h2>The panels are the bands; the pair lives in the "From" label</h2>
+<p class="subtitle">"From" and "To" are two square, full-width panels separated by the 3-unit rule, with the flip button sitting on the rule. The "From" label is a pill that opens a menu (not a native select) listing every pair and direction. The "To" label follows from it. On the left the menu is open; on the right, the phone.</p>
+
+<div class="grid2">
+<div class="pg">
+  <div class="band white"><div class="in top">
+    <svg viewBox="0 0 48 48" width="26" height="26"><g fill="none" stroke="#eb6834" stroke-width="3"><path d="M18.76 42.26 A19 19 0 0 1 24 5"/><path d="M40.2 14.07 A19 19 0 0 1 37.44 37.44"/><path d="M1 29 H42.33"/><path d="M24 11 V29"/><path d="M24 25.5 L27.39 21.41"/><path d="M24 25.5 L28 29"/><path d="M31 11 V29"/><path d="M31 21 H32 A4 4 0 0 1 32 29"/></g><polygon fill="#eb6834" points="12.55,19.5 21.55,19.5 21.55,23.35 18.12,27.5 14.22,27.5 18.36,22.5 12.55,22.5"/><circle cx="36.83" cy="9.99" r="2.1" fill="#eb6834"/><circle cx="24" cy="43" r="2.1" fill="#eb6834"/></svg>
+    <b>zkb.fi</b><span class="chip" style="margin-left:auto">0x52…9EE7</span>
+  </div></div>
+
+  <div class="band from"><div class="in">
+    <span class="menu"><span class="dot"></span>From Ethereum ▾</span>
+    <div class="row"><span class="amt">1.25</span><span class="chip" style="margin-left:auto">ETH ▾</span></div>
+    <div class="lbl">Balance 3.40 · Max</div>
+  </div><div class="flip">⇅</div></div>
+
+  <div class="pop">
+    <div class="sec">Ethereum ⇄ PulseChain</div>
+    <div class="on"><span class="dot"></span>Ethereum → PulseChain<span class="r">✓</span></div>
+    <div><span class="dot"></span>PulseChain → Ethereum</div>
+    <div class="sec">Testnet</div>
+    <div><span class="dot"></span>Sepolia → PulseChain v4</div>
+    <div><span class="dot"></span>PulseChain v4 → Sepolia</div>
+  </div>
+
+  <div class="band to"><div class="in" style="padding-top:20px">
+    <span class="lbl" style="display:inline-flex;align-items:center;gap:6px"><span class="dot f"></span>To PulseChain</span>
+    <div class="row"><span class="amt">1.2488</span><span class="lbl r">zkbWETH</span></div>
+  </div></div>
+
+  <div class="band white"><div class="in">
+    <div class="dest">+ Send to another address</div>
+    <div class="meta"><span>Arrives in about 15 min</span><span>Fee 0.0012 ETH</span></div>
+    <div class="go">Bridge</div>
+  </div></div>
+
+  <div class="band white" style="border-bottom:0"><div class="in">
+    <div class="h">Your activity</div>
+    <div class="act"><svg viewBox="0 0 120 12" width="110"><line x1="8" y1="6" x2="112" y2="6" stroke="#eb6834" stroke-width="3" opacity=".18"/><g fill="#eb6834"><circle cx="42.7" cy="6" r="1.4"/><circle cx="60" cy="6" r="1.4"/><circle cx="77.3" cy="6" r="1.4" opacity=".35"/></g><line x1="58" y1="6" x2="70" y2="6" stroke="#eb6834" stroke-width="4.4" stroke-linecap="round"/><line x1="58" y1="6" x2="70" y2="6" stroke="#ffe3d6" stroke-width="2" stroke-linecap="round"/><circle cx="6" cy="6" r="4" fill="#eb6834"/><circle cx="114" cy="6" r="4" fill="#eb6834" opacity=".25"/></svg><div><b>0.50 ETH</b><div class="lbl">final · waiting for the proof</div></div><span class="r" style="color:#b5651d">~6 min</span></div>
+    <div class="act"><svg viewBox="0 0 120 12" width="110"><line x1="8" y1="6" x2="112" y2="6" stroke="#eb6834" stroke-width="3"/><circle cx="6" cy="6" r="4" fill="#eb6834"/><circle cx="114" cy="6" r="4" fill="#eb6834"/></svg><div><b>200 USDC</b><div class="lbl">delivered to Ethereum</div></div><span class="r lbl">2 h ago</span></div>
+  </div></div>
+</div>
+
+<div class="pg" style="max-width:240px">
+  <div class="band white"><div class="in top" style="padding:10px 12px">
+    <svg viewBox="0 0 48 48" width="22" height="22"><g fill="none" stroke="#eb6834" stroke-width="3"><path d="M18.76 42.26 A19 19 0 0 1 24 5"/><path d="M40.2 14.07 A19 19 0 0 1 37.44 37.44"/><path d="M1 29 H42.33"/></g><circle cx="36.83" cy="9.99" r="2.1" fill="#eb6834"/><circle cx="24" cy="43" r="2.1" fill="#eb6834"/></svg>
+    <span class="chip" style="margin-left:auto;font-size:11px">0x52…</span>
+  </div></div>
+  <div class="band from"><div class="in" style="padding:12px">
+    <span class="menu" style="font-size:11px"><span class="dot"></span>From Ethereum ▾</span>
+    <div class="row"><span class="amt" style="font-size:22px">1.25</span><span class="chip" style="margin-left:auto">ETH ▾</span></div>
+  </div><div class="flip">⇅</div></div>
+  <div class="band to"><div class="in" style="padding:18px 12px 12px">
+    <span class="lbl">To PulseChain</span>
+    <div class="row"><span class="amt" style="font-size:22px">1.2488</span></div>
+  </div></div>
+  <div class="band white"><div class="in" style="padding:12px">
+    <div class="dest">+ Another address</div>
+    <div class="meta"><span>~15 min</span><span>0.0012 ETH</span></div>
+    <div class="go">Bridge</div>
+  </div></div>
+</div>
+</div>
