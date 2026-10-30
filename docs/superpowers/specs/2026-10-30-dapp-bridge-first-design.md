@@ -276,6 +276,13 @@ and the time left while in flight or the age once delivered. A row links to the 
   part of the fee above the anticipated cost, i.e. the tip before gas pricing (my reading of "this is before gas
   pricing"; owner to confirm).
 
+- **Default fee and the automatic cap (owner):** the default fee is the larger of 0.1% of the amount and 2 × the
+  anticipated cost. What the dapp sets automatically is capped at **1% of the amount**, and that cap is **adjustable**
+  (a setting, also changeable in the review). When the cap binds, the fee stays below 2 × the cost and the low-fee
+  warning stays on. **At checkout, always warn when the cap is too large** and let the user adjust it right there in
+  the finalizing drawer (the review sheet). "Too large" (my reading, owner to confirm): the cap is above the high-tip
+  threshold for this amount (1% up to $100, sliding to 0.1% at $1,000).
+
 ## Open questions
 
 - Where the Omnibridge token list comes from and how it stays current.
@@ -339,3 +346,4 @@ noise from one message (a child on the keyboard) is left out.
 34. "this is before gas pricing"
 35. "delivery is on top of this"
 36. "well, no we need to couple them in the ui. think about it like this. we need to make a 100% margin on the anticipated cost to execute the bridge (assume a $0.025 cost for the proof generation) for the warning to go away"
+37. "make the default the larger of the two. cap what we are willing to set in an automated manner at 1%. make the cap adjustable. always warn users as they are checking out if their cap is too large and give them an opportunity to adjust it in the finalizing drawer."
