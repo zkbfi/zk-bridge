@@ -68,6 +68,8 @@
   .fd span:nth-child(odd) { color: #9a948b; } .fd span:nth-child(even) { text-align: right; color: #c9c2b8; }
   .fd .tot { border-top: 1px solid #2a2724; padding-top: 5px; color: #f0ede8 !important; font-weight: 700; }
   .route.plate img, .band .ic img { background: #fff; border-radius: 50%; padding: 1px; }
+  .kv .k.ko { display: inline-flex; align-items: center; gap: 6px; } .kv .k .ext { stroke: #9a948b; }
+  .kv .sp { width: 13px; flex: none; } .kv .usd { color: #77716a; font-size: 13px; }
   .caption { font: 13px/1.5 system-ui, sans-serif; color: #55524d; max-width: 390px; margin-top: 8px; }
 </style>
 
@@ -100,9 +102,9 @@
      <div class="grp">Who and what</div>
      <div class="kv" style="border-top:0"><span class="k">From</span><span class="v"><span class="mono">0x52…9EE7</span>${chevR}</span></div>
      <div class="kv"><span class="k">To</span><span class="v"><span class="mono">0x52…9EE7</span>${chevR}</span></div>
-     <div class="kv"><span class="k">Sent</span><span class="v">${ic('USDC', 'PLS')}<b>80 USDC</b> on <img class="chain" src="${I.PLS}" alt=""> PulseChain</span></div>
-     <div class="kv"><span class="k">Received</span><span class="v">${ic('USDC', 'SEP')}<b>79.80 USDC</b> on <img class="chain" src="${I.SEP}" alt=""> Sepolia</span></div>
-     <div class="kv tap on"><span class="k">Fee</span><span class="v">${ic('USDC', 'PLS')}<b>0.20 USDC</b> · $0.20${chevD}</span></div>
+     <div class="kv"><span class="k ko">Sent on <img class="chain" src="${I.PLS}" alt="PulseChain">${ext}</span><span class="v"><b>80</b> USDC ${ic('USDC')}<i class="sp"></i></span></div>
+     <div class="kv"><span class="k ko">Received on <img class="chain" src="${I.SEP}" alt="Sepolia">${ext}</span><span class="v"><b>79.80</b> USDC ${ic('USDC')}<i class="sp"></i></span></div>
+     <div class="kv tap on"><span class="k ko">Fee <span class="usd">$0.20</span></span><span class="v"><b>0.20</b> USDC ${ic('USDC')}${chevD}</span></div>
      <div class="fd"><span>Delivery gas · Sepolia</span><span>0.012 USDC</span><span>Proof generation</span><span>0.025 USDC</span><span>Tip to the deliverer</span><span>0.163 USDC</span><span class="tot">Total</span><span class="tot">0.20 USDC</span></div>
      <div class="kv"><span class="k">Delivered by</span><span class="v"><span class="mono">0x8a…2c11</span> · bot${chevR}</span></div>
      <div class="grp">Steps</div>
@@ -142,6 +144,6 @@
 
   const ph = (c, body, cap) => `<div class="option" data-choice="${c}" onclick="toggleSelect(this)" style="display:block"><div class="ph">${body}</div><p class="caption">${cap}</p></div>`;
   document.getElementById('x').innerHTML =
-    ph('transfer', transfer, '<b>A token transfer.</b> The amount in the band, who sent it to whom, sent vs received, the fee as one total that opens (right chevron, here open) into delivery gas, proof and tip, who delivered it; the steps (here the delivery step open); then the message itself: nonce, the ERC-20 mediator on each side, gas limit, and the decoded payload.') +
+    ph('transfer', transfer, '<b>A token transfer.</b> The amount in the band, who sent it to whom, sent vs received, sent and received as \"Sent on [chain] [link]\" with amount, symbol and token icon lined up on the right; the fee as one total that opens (right chevron, here open) into delivery gas, proof and tip, who delivered it; the steps (here the delivery step open); then the message itself: nonce, the ERC-20 mediator on each side, gas limit, and the decoded payload.') +
     ph('call', call, '<b>A contract call.</b> Any contract on the other chain, with data you choose. This one reverted on delivery: the step opens to the revert reason, and the page offers a retry with more gas.') + '' + (false ? ph('address', address, '<b>Address.</b> Who it is (known roles as tags), its balance and activity on each chain, what it did through zkb.fi, then tabs for transfers, proofs posted, contracts deployed and deliveries made. "Bridge to this address" prefills the destination; "Watch" adds it to Activity without connecting it.') : '') + (false ? ph('tx', tx, '<b>Transaction.</b> What kind of zkb.fi transaction it is; the decoded call, gas and fee; where it sits: from the user\'s transfer that started it to delivery (joined, lit, each linking out; a step opens a small drawer, here the block); its decoded events; the raw input collapsed.') : '');
 </script>
