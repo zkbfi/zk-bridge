@@ -13,6 +13,8 @@ export type TokenIconProps = {
   readonly imageServer?: string;
   /** The icon sits next to its own name, so screen readers skip it. */
   readonly decorative?: boolean;
+  /** The surface under the icon. On the accent (orange) band it sits on a neutral plate (owner). */
+  readonly surface?: "accent" | "plain";
 };
 
 /**
@@ -21,11 +23,11 @@ export type TokenIconProps = {
  *
  * @param props The subject, the badge and the symbol.
  */
-export const TokenIcon = ({ subject, badgeChainId = null, symbol, size = 24, imageServer = loadImageServer(), decorative = false }: TokenIconProps) => {
+export const TokenIcon = ({ subject, badgeChainId = null, symbol, size = 24, imageServer = loadImageServer(), decorative = false, surface = "plain" }: TokenIconProps) => {
   const [failed, setFailed] = useState(false);
   const [badgeFailed, setBadgeFailed] = useState(false);
   return (
-    <span className="zb-tok-icon" style={{ width: size, height: size }}>
+    <span className={surface === "accent" ? "zb-tok-icon zb-on-accent" : "zb-tok-icon"} style={{ width: surface === "accent" ? size + 4 : size, height: surface === "accent" ? size + 4 : size }}>
       {failed ? (
         <span className="zb-tok-fallback" role="img" aria-label={symbol} style={{ fontSize: Math.max(5, Math.round(size * 0.34)) }}>
           {symbol.replace(/^zkb/i, "").slice(0, 3)}

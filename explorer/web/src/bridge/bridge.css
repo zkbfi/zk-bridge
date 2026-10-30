@@ -11,6 +11,7 @@
   --zb-step-0: clamp(16px, 0.9rem + 0.4vw, 19px);
   --zb-step-fee: clamp(15px, 0.86rem + 0.3vw, 18px);
   --zb-step-1: clamp(17px, 0.95rem + 0.5vw, 22px);
+  --zb-step-2: clamp(24px, 1.3rem + 0.8vw, 32px);
   --zb-step-amount: clamp(40px, 6vw, 64px);
   --zb-col-width: clamp(480px, 30vw + 150px, 600px);
   --zb-touch: 44px;
@@ -52,6 +53,7 @@
   --zb-raised-edge: #e7b8a0;
   --zb-raised-ink: #1b1a19;
   --zb-mark: #eb6834;
+  --zb-plate: #ffffff;
 }
 
 .theme-ember-dark {
@@ -85,6 +87,7 @@
   --zb-raised-edge: #3a3632;
   --zb-raised-ink: #f0ede8;
   --zb-mark: #eb6834;
+  --zb-plate: #121110;
 }
 
 .theme-mono {
@@ -118,6 +121,7 @@
   --zb-raised-edge: #f0efec;
   --zb-raised-ink: #f0efec;
   --zb-mark: #f0efec;
+  --zb-plate: #000000;
 }
 
 .zb {
@@ -225,6 +229,9 @@
 .zb-chev { width: 12px; height: 12px; }
 .zb-tok-icon { position: relative; display: inline-block; flex: none; }
 .zb-tok-icon img.zb-main { display: block; width: 100%; height: 100%; }
+/* On the accent band an icon sits on a neutral round plate (owner), 2 px around it; a badge keeps its own small plate. */
+.zb-tok-icon.zb-on-accent { border-radius: 50%; background: var(--zb-plate); padding: 2px; }
+.zb-tok-icon.zb-on-accent img.zb-badge { right: -2px; bottom: -1px; }
 .zb-tok-icon img.zb-badge { position: absolute; right: -4px; bottom: -3px; width: 50%; height: 50%; border-radius: 50%; background: var(--zb-page); padding: 1px; }
 .zb-tok-fallback { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 50%; background: var(--zb-raised); color: var(--zb-raised-ink); border: 1px solid var(--zb-raised-edge); font-size: var(--zb-step-micro); font-weight: 700; }
 .zb-ident { width: 18px; height: 18px; border-radius: 50%; flex: none; display: inline-block; }

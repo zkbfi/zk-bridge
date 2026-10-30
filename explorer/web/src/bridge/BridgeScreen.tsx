@@ -214,7 +214,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     firstBridge: token !== null && !isNativeToken(token) && isFirstBridge(token, known, false),
   });
 
-  const tokenIcon = (subjectToken: TokenInfo, badge: number | null, size = 32): ReactNode => <TokenIcon subject={iconSubjectOf(subjectToken, pair)} badgeChainId={badge} symbol={subjectToken.symbol} size={size} />;
+  const tokenIcon = (subjectToken: TokenInfo, badge: number | null, size = 32, surface: "accent" | "plain" = "plain"): ReactNode => <TokenIcon subject={iconSubjectOf(subjectToken, pair)} badgeChainId={badge} symbol={subjectToken.symbol} size={size} surface={surface} />;
   const inline = (icon: ReactNode, text: string, symbol: string): ReactNode => (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
       {icon}
@@ -328,7 +328,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             <input className="zb-amount" inputMode="decimal" autoComplete="off" placeholder="0" aria-label={`Amount to send from ${source.name}`} value={form.amount ?? ""} onChange={(event) => write({ ...form, amount: event.target.value })} />
             {token === null ? null : (
               <button type="button" className="zb-token" aria-haspopup="dialog" onClick={() => setMenu("token")} aria-label={`Token: ${token.symbol}. Choose another`}>
-                {tokenIcon(token, null)}
+                {tokenIcon(token, null, 28, "accent")}
                 {token.symbol}
                 <Chevron />
               </button>

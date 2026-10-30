@@ -17,6 +17,7 @@ import { ProverView } from "../views/ProverView";
 import { ConnectionsView } from "../views/ConnectionsView";
 import { ActivityScreen } from "../bridge/ActivityScreen";
 import { BridgeScreen } from "../bridge/BridgeScreen";
+import { ExploreScreen } from "../explore/ExploreScreen";
 import { Header } from "../bridge/Header";
 import { Notice } from "../ui/primitives";
 import { ActionsContext } from "./actions-context";
@@ -107,7 +108,8 @@ const usePaletteShortcuts = (open: () => void): void => {
 };
 
 const renderRoute = (route: Route, navigate: (next: Route) => void, update: (next: Route) => void) => {
-  if (route.name === "home" || route.name === "global" || route.name === "explore") return <GlobalView />;
+  if (route.name === "home" || route.name === "global") return <GlobalView />;
+  if (route.name === "explore") return null;
   if (route.name === "bridge") return null;
   if (route.name === "activity") return null;
   if (route.name === "pair") return <PairView key={route.pairId} route={route} onChange={update} />;
@@ -260,6 +262,10 @@ export const Shell = () => {
             fixture={configuration.dataMode === "fixture"}
             linked={linkedForm === null ? [] : bridgeLinkedFields(linkedForm, wallet.status === "connected" ? wallet.account : null)}
           />
+          </div>
+        ) : route.name === "explore" ? (
+          <div key={route.page === undefined ? "explore" : `explore-${route.page.kind}`} className={route.page === undefined ? slideClass : ""}>
+            <ExploreScreen route={route} onRoute={(next, mode = "push") => (mode === "replace" ? update(next) : navigate(next))} />
           </div>
         ) : (
         <Box as="main" paddingX={{ base: "4", md: "6" }} paddingY="4">
