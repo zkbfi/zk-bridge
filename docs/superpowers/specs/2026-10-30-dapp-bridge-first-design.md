@@ -244,12 +244,28 @@ and the time left while in flight or the age once delivered. A row links to the 
   has never bridged it, the Bridge pill takes the overridable warning state: "First time this token is bridged · keep
   the amount low", explained under the pill (the first transfer also creates its counterpart on the other chain).
 
+- **Price oracle: PulseX pools (owner: "i think that the pulsex exchanges serve as good oracles").** Checked on-chain
+  2026-10-30 through the valve.city RPC:
+  - PulseX v1 factory `0x1715a3E4A142d8b698131108995174F37aEBA10D` (65,484 pairs) and v2 factory
+    `0x29eA7545DEf87022BAdc76323F373EA1e707C523` (191,734 pairs); WPLS `0xA1077a294dDE1B09bB078844df40758a5D0f9a27`.
+  - USD anchor: WPLS against the Omnibridge stablecoins USDC `0x15D38573d2feeb82e7ad5187aB8c1D52810B1f07`, DAI
+    `0xefD766cCb38EaF1dfd701853BFCe31359239F305` and USDT `0x0Cb6F5a34ad42ec934882A05265A7d5F59b51A2f`. The v1 pools
+    hold about $325k, $326k and $234k on the stable side and agree within 0.2% (PLS ≈ $0.0₅562).
+  - Tokens price through their deepest WPLS pool (v1 or v2), times PLS/USD. Example: WETH from Ethereum
+    `0x02DcdD04e3F455D838cd1249292C58f3B79e3C3C` ≈ 3.99e8 WPLS ≈ $2,243, matching its thin direct USDC pool ($2,230).
+  - **Method:** PLS/USD = the depth-weighted median of the three stable pools across v1 and v2. A token's price =
+    its WPLS pool with the deepest WPLS side, if that side is worth at least a minimum (say $10k), else "—". Tokens
+    bridged by zkb.fi take their origin token's price (zkbWETH → ETH, via WETH from Ethereum on PulseX); Ethereum-side
+    tokens likewise use their PulseChain market. Testnets show no prices.
+  - **Where it runs:** in the browser, reading pool reserves through the user's RPC (swappable, batched, cached ~30 s),
+    so the IPFS site needs no price server. The price source is listed in Settings like every other endpoint.
+  - **Limits, stated in the UI tooltip:** spot reserves can be pushed around and Omnibridge copies can trade away from
+    their originals, so prices are for display only and are never used to compute amounts, tips or fees.
+
 ## Open questions
 
 - Where the Omnibridge token list comes from and how it stays current.
 
-- The price oracle: which sources (DEX pools on PulseChain, an ETH/USD feed on Ethereum), how bridged tokens map to
-  their originals, and where it runs (indexer or backend).
 
 ## Left to the builder
 
@@ -304,3 +320,4 @@ noise from one message (a child on the keyboard) is left out.
 29. "and the right square should be the same color as the input. try some sort of border to differentiate it"
 30. "dark rule is fine"
 31. "we will also have to handle custom tokens as well. tokens that neither bridge has ever seen. we can add a warning to the bridge button stating that this is the first time that this token hasbeen bridged and it may be wise to keep the amount low. lets look at the activity now"
+32. "find an oracle. i think that the pulsex exchanges serve as good oracles"
