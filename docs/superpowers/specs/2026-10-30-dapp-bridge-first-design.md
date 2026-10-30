@@ -219,6 +219,14 @@ and the time left while in flight or the age once delivered. A row links to the 
 - **Drawers vs modals:** bottom drawers (sheets) work on phones (e.g. the review sheet); on desktop a drawer becomes a
   centred modal.
 
+- **Token picker, round 3 (owner, supersedes round 2 where they differ):** on phone it runs edge to edge (full width,
+  rising from the bottom), one layer of padding before content. No title. The close button is icon-only and sits
+  inside the search field on its right. Tabs under the search are flat text tabs (no pills): **All**, then each
+  supported chain (icon + name); the active tab has a 3-unit accent underline. Rows show the token, its chain in small
+  text, balance and USD. The selected token is shown by a lit row with an accent bar on its left edge (absolutely
+  placed): **no checkmark, nothing shifts**. No helper copy such as "anything else: search above". Terse. On desktop
+  the same content is a centred modal. Mockup: `picker-v3.html`.
+
 ## Open questions
 
 - Where the Omnibridge token list comes from and how it stays current.
@@ -273,3 +281,4 @@ noise from one message (a child on the keyboard) is left out.
 23. "if you are going to write specs for these updates, be sure to capture my raw instruction too. often when you do this with the visual companion, and then you build it for real, you leave out key pieces and end up creating a shittier ui"
 24. "oh, you'll also have to point to a prover request endpoint. everything needs to be swappable"
 25. "the drawer works well on mobile in general. dropdown works for the from network for sure, and the choose a token should be a modal. make the remove button just an icon+button if it is going to exist at all. on desktop, that drawer should be a modal. and i do not like that n chains are showing at the same time. we should pull tkoens that the user has a balance of or that they have used in this system or bridged with before. i would like to see tabs below the search."
+26. "on mobile, your earlier render of the token picker on phone was better. all the way to the edge. only one layer of padding before content. remove the chain pills. just do all, and then each chain that is supported. all of the "anything else: search above. every bridgable token is found here" is stupid. be terse. remove the "choose a token" move the close button to be over/inside of the input on the right.. the checkmark denoting the selected token is dumb. it shifts content away. eggregious ui violation"
