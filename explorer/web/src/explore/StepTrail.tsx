@@ -16,11 +16,13 @@ export type TrailStep = {
   readonly href?: string;
   readonly external?: boolean;
   readonly drawer?: ReactNode;
+  /** "error" draws the drawer's top line in red (a reverted call). */
+  readonly tone?: "error";
 };
 
-/** The step list. */
-export const StepTrail = ({ steps }: { readonly steps: readonly TrailStep[] }) => {
-  const [open, setOpen] = useState<number | null>(null);
+/** The step list. `initiallyOpen` opens one step's drawer at first (the step where a message stopped). */
+export const StepTrail = ({ steps, initiallyOpen = null }: { readonly steps: readonly TrailStep[]; readonly initiallyOpen?: number | null }) => {
+  const [open, setOpen] = useState<number | null>(initiallyOpen);
   const id = useId();
   const current = steps.findIndex((step) => !step.done);
   return (
@@ -52,7 +54,7 @@ export const StepTrail = ({ steps }: { readonly steps: readonly TrailStep[] }) =
             {step.drawer === undefined ? null : (
               <div className={expanded ? "zb-drawer zb-open" : "zb-drawer"} id={`${id}-${index}`} aria-hidden={!expanded} inert={!expanded}>
                 <div className="zb-drawer-inner">
-                  <div className="zb-drawer-body zb-trail-drawer">{step.drawer}</div>
+                  <div className="zb-drawer-body zb-trail-drawer" data-tone={step.tone}>{step.drawer}</div>
                 </div>
               </div>
             )}

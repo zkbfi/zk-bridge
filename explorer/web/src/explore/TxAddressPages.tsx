@@ -27,11 +27,14 @@ const explore = (page: ExplorePage): string => formatRoute({ name: "explore", pa
 
 const chainOf = (pair: PairConfig, chainId: number) => (pair.first.chainId === chainId ? pair.first : pair.second);
 
-const timeText = (unix: number): string => new Date(unix * 1000).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+/** A time for a step: "29 Oct, 16:07". */
+export const timeText = (unix: number): string => new Date(unix * 1000).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
-const Missing = ({ why }: { readonly why: string }) => <span title={why}>—</span>;
+/** A value that neither the indexer nor the chain gives, with the reason on hover. */
+export const Missing = ({ why }: { readonly why: string }) => <span title={why}>—</span>;
 
-const BlockDrawer = ({ detail }: { readonly detail: Extract<StepDetail, { kind: "block" }> }) => {
+/** The drawer of a block step: number, hash, time, slot, committee and the explorer link. */
+export const BlockDrawer = ({ detail }: { readonly detail: Extract<StepDetail, { kind: "block" }> }) => {
   const reader = useChainReader()(detail.chainId);
   const block = useQuery({ queryKey: ["block", detail.chainId, detail.number.toString()], enabled: reader !== null, queryFn: () => reader!.block(detail.number) }).data;
   const url = explorerUrl(detail.chainId, "block", detail.number.toString());
@@ -39,7 +42,7 @@ const BlockDrawer = ({ detail }: { readonly detail: Extract<StepDetail, { kind: 
     <DrawerGrid
       rows={[
         ["Block", <a href={explore({ kind: "block", chainId: detail.chainId, id: detail.number.toString() })}>{detail.number.toLocaleString("en-US")}</a>],
-        ["Hash", <span className="zb-mono">{shortHex(detail.hash)}</span>],
+        ["Hash", detail.hash !== null ? <span className="zb-mono">{shortHex(detail.hash)}</span> : block === undefined || block.hash === null ? <Missing why="Read from the chain" /> : <span className="zb-mono">{shortHex(block.hash)}</span>],
         ["Time", block === undefined ? <Missing why="Read from the chain" /> : new Date(Number(block.timestamp) * 1000).toLocaleString("en-GB")],
         ["Slot", detail.slot === null ? <Missing why="Not known" /> : <a href={explore({ kind: "slot", id: detail.slot.toString() })}>{detail.slot.toLocaleString("en-US")}</a>],
         ["Committee", detail.period === null ? <Missing why="Not known" /> : <>period {detail.period.toLocaleString("en-US")} · <Missing why="The indexer does not record the signers" /> signed</>],
@@ -49,7 +52,8 @@ const BlockDrawer = ({ detail }: { readonly detail: Extract<StepDetail, { kind: 
   );
 };
 
-const TxDrawer = ({ detail }: { readonly detail: Extract<StepDetail, { kind: "tx" }> }) => {
+/** The drawer of a transaction step: the transaction and the explorer link. */
+export const TxDrawer = ({ detail }: { readonly detail: Extract<StepDetail, { kind: "tx" }> }) => {
   const url = explorerUrl(detail.chainId, "tx", detail.hash);
   return (
     <DrawerGrid

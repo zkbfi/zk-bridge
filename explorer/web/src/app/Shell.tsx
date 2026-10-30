@@ -119,7 +119,8 @@ const renderRoute = (route: Route, navigate: (next: Route) => void, update: (nex
   if (route.name === "history") return <HistoryPage route={route} onNavigate={navigate} onUpdate={update} />;
   if (route.name === "docs") return <DocsView slug={route.slug} heading={route.heading} />;
   if (route.name === "address") return <AddressView address={route.address} />;
-  return <MessageView messageId={route.messageId} />;
+  // The message route renders in Explore's frame (see the Shell); it never reaches here.
+  return null;
 };
 
 const shortAccount = (account: string | null): string => (account === null ? "No wallet" : `${account.slice(0, 6)}…${account.slice(-4)}`);
@@ -240,7 +241,7 @@ export const Shell = () => {
     <ActionsContext.Provider value={actionsPort}>
       <Box className="zb" minHeight="100vh" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         <Header
-          page={routeTitle(route)}
+          page={route.name === "message" ? "Explore" : routeTitle(route)}
           homeHref={formatRoute({ name: "bridge", pairId: pair.id, dir: "first-to-second" })}
           screenHref={(screen) => (screen === "Bridge" ? formatRoute({ name: "bridge", pairId: pair.id, dir: "first-to-second" }) : `#/${screen.toLowerCase()}`)}
           onSearch={openPalette}
@@ -266,6 +267,11 @@ export const Shell = () => {
         ) : route.name === "explore" ? (
           <div key={route.page === undefined ? "explore" : `explore-${route.page.kind}`} className={route.page === undefined ? slideClass : ""}>
             <ExploreScreen route={route} onRoute={(next, mode = "push") => (mode === "replace" ? update(next) : navigate(next))} />
+          </div>
+        ) : route.name === "message" ? (
+          // The message page is one of Explore's pages (mockup explore-message.html), framed as they are.
+          <div key={`message-${route.messageId}`}>
+            <MessageView messageId={route.messageId} />
           </div>
         ) : (
         <Box as="main" paddingX={{ base: "4", md: "6" }} paddingY="4">

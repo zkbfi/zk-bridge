@@ -393,10 +393,10 @@ describe("the proof panel", () => {
     expect(await screen.findByTestId("why-request-off")).toHaveTextContent("already covers");
     expect(screen.getByTestId("why-update-off")).toHaveTextContent("already covers");
     second.unmount();
+    // A delivered message has nothing left to prove or deliver: the page leaves the panel out.
     await renderPanel({ changes: { status: "delivered" }, endpoints: endpoints({ backendUrl: BACKEND }), transport: fakeTransport({ get: async () => ({ status: 404, body: null }) }).transport });
-    expect(await screen.findByTestId("why-request-off")).toHaveTextContent("is delivered");
-    expect(screen.getByTestId("why-update-off")).toHaveTextContent("is delivered");
-    expect(screen.getByTestId("why-deliver-off")).toHaveTextContent("already delivered");
+    expect(await screen.findByText("Delivered on PulseChain")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Proof and delivery" })).toBeNull();
   });
 
   it("asks for a wallet before a write action", async () => {

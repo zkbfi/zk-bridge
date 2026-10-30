@@ -316,3 +316,28 @@ release versions (no release events yet). "Watch" on the address page is not bui
 
 Activity screen, Explore screen, the sideways slide between screens, the price oracle, the Omnibridge token list and
 warning, the restyled transaction dialog and message dialog.
+
+## Message page: status (2026-10-30, paused for a session restart)
+
+Done (web, on `bridge-first`):
+- Base restyle: the message page is now one of Explore's pages (header reads Explore). It has the orange band with the kind, the route icons on plates, the amount with its token icon, the message ID with copy, and status tags. Who and what has From/To linking to the address pages and Delivered by. The Fee is one row that opens a drawer using the approved motion. The steps use the joined line with drawers ("Block final on <chain>"). A reverted call opens by itself, with a red top line and its reason. "Retry with more gas" is shown disabled because the dapp has no retry path; "Open the call" links to the delivery transaction. The message itself shows the nonce, the source and target app, the gas limit and the decoded payload, collapsible. The proof panel shows only while the message is undelivered.
+- ERC-20 mediator naming: one contract-name map (`web/src/explore/contract-names.ts`) is used by search, the contract page, the transaction page and the message page. The terminal's review labels say "ERC-20 mediator" too. No "Token mediator" or "TokenMediator" label is left.
+- Sent/received order: "Sent on [chain icon] [explorer link]" sits on the left and the amount with the token icon (no badge) on the right. A chevron-wide spacer keeps the token icons in one column with Fee.
+- Token row: shows the symbol and icon once and links to the token page. Sent/Received show the amount and icon only, with no symbol. The left side is a fixed grid (11ch, chain icon, link icon). The fee's USD sits in the icon columns. Fee drawer values show the amount plus a 14 px token icon, and Delivery gas shows the chain icon only.
+- Owner words 50–55 and a "Message page" section are in the spec.
+
+Left:
+- Step costs (only in the open drawer, as a "Cost" row "<native> <symbol> · $<usd>", and "shared · …" for proofs with the count of transfers covered) are not built in the web yet.
+- Indexer cost/USD is started, not done:
+  - The PulseX oracle moved to `shared/src/pulsex-oracle.ts`; web re-exports it.
+  - `nativeUsd` (PLS only; Ethereum and testnets give null) and `poolReaderOver` are added with tests.
+  - Still to build:
+    - A `transaction_costs` table keyed by (chainId, transactionHash): gasUsed, effectiveGasPrice, costWei, usdPerNative, priceSource. It is written by the send, delivery and HeadUpdated handlers, with the price read through `context.client`, which reads at the event's block.
+    - A `costs` object on `GET /api/messages/:id` (sent, delivered, proof with its covered-message count). `rpc-equivalence` then has to strip `costs`, because the RPC source reads no receipts.
+  - There is no migration tool: a Ponder schema change means a reindex from `startBlock` on deploy, and that reindex is the backfill.
+  - ETH/USD: no Ethereum pool is defined in the repo, and the bridged-WETH fallback needs a cross-chain read at a matching block.
+- Tests still to add: cost formatting, the "shared" proof cost, and testnet USD "—".
+- Then run the full checks again (web suite last run 1182/1182 passing; tsc and build pending) and take the screenshots `{phone-dark,desktop-light}-message{,-call}-v1.png`. Drafts are in `tmp/msgshots`; the shot script is `tmp/shots-msg-v1.mjs`; the fixture dev server runs on port 5210.
+- The coverage gate (100 %) already failed before this work, in files this work did not touch (BridgeScreen, use-prices, ExplorePages, …).
+
+Fields shown as "—" because the indexer does not record them: the transfer's user (From) when the answer has no `transfer.sender`, the nonce, the fee and each of its parts, USD on testnets, the revert reason, gas used and gas on delivery, the delivered block (not yet parsed from live answers before this change), committee signers in block drawers, and the payload/function/arguments when the answer has no `data`.

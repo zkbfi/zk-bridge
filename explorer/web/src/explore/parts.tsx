@@ -65,8 +65,8 @@ export const KV = ({ k, children, href }: { readonly k: string; readonly childre
   </div>
 );
 
-/** The orange band at the top of a page: a label, the big name, and a second label. */
-export const XBand = ({ label, big, sub, icon }: { readonly label: ReactNode; readonly big: ReactNode; readonly sub?: ReactNode; readonly icon?: ReactNode }) => (
+/** The orange band at the top of a page: a label, the big name, a second label, and an optional row of tags. */
+export const XBand = ({ label, big, sub, icon, tags }: { readonly label: ReactNode; readonly big: ReactNode; readonly sub?: ReactNode; readonly icon?: ReactNode; readonly tags?: ReactNode }) => (
   <section className="zb-xband">
     <div className="zb-col zb-xband-in">
       {icon === undefined ? null : icon}
@@ -74,6 +74,7 @@ export const XBand = ({ label, big, sub, icon }: { readonly label: ReactNode; re
         <div className="zb-xband-lbl">{label}</div>
         <div className="zb-xband-big">{big}</div>
         {sub === undefined ? null : <div className="zb-xband-lbl">{sub}</div>}
+        {tags === undefined ? null : <div className="zb-xband-tags">{tags}</div>}
       </div>
     </div>
   </section>

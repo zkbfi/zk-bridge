@@ -61,7 +61,8 @@
 .zb-bits i[data-on="true"] { background: var(--zb-accent); }
 
 /* The joined step list with drawers: the drawer sits inside the step, so the step's line runs through it. */
-.zb-trail-step { display: block; padding-bottom: 6px; }
+/* Two classes: bridge.css (loaded later) makes .zb-step a flex row, which would put the drawer beside the row. */
+.zb-step.zb-trail-step { display: block; padding-bottom: 6px; }
 .zb-trail-step::before { bottom: -2px; }
 .zb-trail-row { display: flex; align-items: baseline; gap: 10px; width: 100%; padding: 6px 0; text-align: left; color: inherit; text-decoration: none; }
 .zb-trail-row .zb-step-dot { transform: translateY(1px); }
@@ -82,3 +83,35 @@
 .zb-xnum { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .zb-xactions { display: flex; gap: 10px; padding-top: 16px; }
 .zb-xactions .zb-pill { text-decoration: none; }
+
+/* The message page (mockup explore-message.html). */
+.zb-xband-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.zb-xamt { display: inline-flex; align-items: center; gap: 10px; word-break: normal; }
+.zb-xcopy { display: inline-grid; place-items: center; width: 28px; height: 28px; color: inherit; flex: none; }
+.zb-xcopy .zb-icon { width: 16px; height: 16px; }
+.zb-xv > b { font-weight: 700; white-space: nowrap; }
+.zb-xusd { color: var(--zb-muted); white-space: nowrap; }
+.zb-xtap { width: 100%; text-align: left; color: inherit; cursor: pointer; align-items: center; }
+.zb-xtap > .zb-k { flex: none; }
+.zb-xtap[aria-expanded="true"] .zb-k { color: var(--zb-ink); }
+.zb-xfee { margin: 2px 0 10px; padding: 12px 0 10px; }
+.zb-xfee dt { display: inline-flex; align-items: center; gap: 5px; }
+.zb-xfee-total { border-top: 1px solid var(--zb-line); padding-top: 6px; margin-top: 2px; font-weight: 700; }
+.zb-xfee-total dt { color: var(--zb-ink) !important; }
+/* A reverted call: the drawer's top line is red, not the accent. */
+.zb-trail-drawer[data-tone="error"]::before { background: var(--zb-bad, #c8102e); }
+.zb-xretry { color: var(--zb-accent-text); border-color: var(--zb-accent); }
+.zb-xretry:disabled { opacity: .5; cursor: not-allowed; }
+.zb-xband .zb-xroute { color: inherit; }
+.zb-xkv > .zb-k { flex: none; white-space: nowrap; }
+.zb-xraw { text-align: left; }
+/* "Sent on [chain icon] [link]" on the left; the amount, symbol and token icon on the right, then a chevron-wide spacer. */
+.zb-xk-on { display: inline-flex; align-items: center; gap: 6px; }
+.zb-xk-on a { color: inherit; display: inline-flex; }
+.zb-xsp { width: 12px; flex: none; }
+/* The left label as a fixed grid (label, chain icon, link icon), so icons line up down the rows (owner). */
+.zb-xkg { display: grid; grid-template-columns: 11ch 18px 18px; align-items: center; gap: 6px; }
+.zb-xkg > a { color: inherit; display: inline-flex; }
+.zb-xkg > .zb-xusd { grid-column: 2 / 4; font-size: var(--zb-step--1); }
+.zb-xamt-sm { display: inline-flex; align-items: center; gap: 5px; }
+a.zb-kv.zb-xkv { color: inherit; text-decoration: none; }

@@ -319,6 +319,43 @@ and the time left while in flight or the age once delivered. A row links to the 
   transaction did (owner: it reads as temporary); the kind, the details and the steps say it. Routes in every list (including
   proofs) are shown as chain icons with a chevron, not as words.
 
+- **Icons on the orange band (owner):** any chain or token icon placed on the accent band (the From band, the search
+  band, Explore and page headers) sits on a neutral round plate, black or white, never directly on orange. The plate
+  follows the theme (ink on Ember on black and Mono, white on Ember light), with a 2 px margin around the icon; badges
+  keep their own small plate.
+
+## Message page (decided with the owner, mockup explore-message.html)
+
+Every transfer is a message; the message page tells one message's whole story. It is one of Explore's pages (header
+reads Explore). Two kinds: a token transfer and a contract call.
+
+- **Band:** the kind ("Token transfer" or "Contract call") with the route as chain icons on plates, the amount with
+  its token icon (a call shows "Message"), the short message ID with a copy button, and status tags (status word, and
+  the time it took once delivered).
+- **Who and what (transfer):** From and To link to their address pages. A **Token** row names the token once: bold
+  symbol then icon, linking to the token page. **Sent on / Received on** read "label, chain icon (alone, name only in
+  its alt text), link to that chain's transaction" on the left as a fixed grid (label column ~11ch, then the chain
+  icon, then the link icon, so icons line up down the rows); on the right the bold amount and the token icon, no
+  symbol, then a chevron-wide spacer so token icons form one column with the Fee row. **Fee** is one row: "Fee" and the
+  muted USD value (in the chain/link columns) on the left, the bold total and token icon on the right, with a right
+  chevron that opens a drawer (chevron turns down): delivery gas (chain icon), proof generation, tip to the deliverer
+  and a bold Total, each value an amount plus a 14 px token icon. The drawer uses the approved motion (grid rows
+  0fr→1fr 200 ms cubic-bezier(.2,.7,.2,1), close 120 ms ease-in, the 3-unit accent deck line, content fading in after
+  60 ms; none under reduced motion). **Delivered by** links to the address, or "—".
+- **Who and what (call):** From, Calls (the target, by name when it is a deployment contract), Function (signature
+  when the deployment's ABIs know it, else the selector), Arguments (bytes), Gas limit, Delivered by, Payload.
+- **Steps:** the joined step line with a drawer per step: Sent on <chain>, Block final on <chain>, Proof #n posted to
+  <chain>, Delivered on <chain> (or Call reverted / Release failed). The line stays joined through an open drawer. A
+  reverted call stops there: its drawer opens by itself with a red top line and the reason first, and the page offers
+  "Retry with more gas" (disabled until a retry path exists) and "Open the call". A step that is a real transaction
+  shows its cost only in its open drawer, as a "Cost" row: "<native amount> <native symbol> · $<usd>" in the chain the
+  transaction ran on (0.0₃ rule); a proof's row reads "shared · …" since one proof covers many transfers. Testnets
+  have no USD: "—".
+- **The message itself (transfer):** Nonce, Source app and Target app named precisely ("ERC-20 mediator <short
+  address>", linking to the contract page; never "Token mediator"; names come from the deployment's contract map),
+  Gas limit, and the payload collapsed with its decoded meaning ("mint 80 USDC to 0x52…9ee7").
+- **No invented data:** whatever the indexer, deployment or chain does not give shows "—" with the reason on hover.
+
 ## Open questions
 
 - Where the Omnibridge token list comes from and how it stays current.
@@ -395,3 +432,14 @@ noise from one message (a child on the keyboard) is left out.
 47. "where it sits should also have to show the input transfer/user action. also, the "block n final on pulsechain" maybe should be shortened to "block final on Pulsechain" and maybe we can give a small drawer to show information about the block like its number or its hash or other info about the committee you are using "pulsechain -> sepolia" instead of icons in the proofs sections."
 48. "you should still maintain the connection between completed steps when the drawer is opened"
 49. "this seems temporary: "Sepolia's light client now trusts PulseChain testnet v4 up to slot 11,194,368 (block 25,767,883). Messages sent from PulseChain before that block can be proven on Sepolia." strike it"
+50. "show me the message page. what is the message page"
+51. "for chain and token icons in the burn streak, we need to have a neutral bg such as white or black"
+52. "message looks fine. i think you should add more token icons to the sent, received and maybe break up the fee line into its componenet parts or show a total and allow a drawer to open from a right pointing chevron. token mediator is too broad. in this case, we are dealing with an erc20 mediator"
+53. "so here's the thing: the chain icon, when it stands by itself, does not need the name of the chain after it. at least on mobile. i think removing it for both is better. and i also think that if you do it in this order you will have much better lineup visually:
+Sent on [Chain_icon] [link]       [amount][symbol][token_icon]"
+54. "i also wonder if you can add a "token" row so that you do not have to keep repeating the symbol. you can just do this, where the link is right aligned to a fixed width, grouping everything on the left side
+Token                            [symbol][icon]
+Sent on    [chain_icon][link]    [amount][icon]
+the fees drawer can also then use the icon instead of the symbol.
+and items in the stes that are actual transactions, we can note the eth/native transaction costs, not just the gas, and we should also look up the usd cost, if we are not already keeping the data in the indexers"
+55. "you can remove the cost from the collapsed view. it should only show in the expanded views"

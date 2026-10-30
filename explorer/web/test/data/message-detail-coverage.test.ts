@@ -36,6 +36,7 @@ describe("parseMessageDetail, the optional parts", () => {
       coveredAt: null,
       deliveredAt: null,
       destinationTransactionHash: null,
+      deliveredBlockNumber: null,
       deliverySucceeded: null,
       executedBy: null,
       callbackFailed: false,
@@ -117,10 +118,18 @@ describe("parseMessageDetail, the transfer", () => {
       sourceToken: { address: CHECKSUM, symbol: "USDC", decimals: 6, chainId: 1 },
       destinationToken: { address: CHECKSUM, symbol: "zkbUSDC", decimals: 6, chainId: 369 },
       recipient: CHECKSUM,
+      sender: null,
       value: 10n,
       deliveredValue: 9n,
       hasCallback: true,
     });
+  });
+
+  it("reads the user who sent the tokens and the block of the delivery when the answer carries them", () => {
+    const detail = parseMessageDetail({ ...base, transfer: { ...transfer, sender: ADDRESS }, delivered: { timestamp: 300, blockNumber: 4242 } });
+    expect(detail.transfer?.sender).toBe(CHECKSUM);
+    expect(detail.deliveredBlockNumber).toBe(4242);
+    expect(parseMessageDetail({ ...base, delivered: { timestamp: 300 } }).deliveredBlockNumber).toBeNull();
   });
 
   it("carries no fallback recipient, even when an older answer sends one", () => {

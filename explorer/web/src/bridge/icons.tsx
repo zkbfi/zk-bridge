@@ -76,6 +76,14 @@ export const ExternalLink = ({ title }: IconProps) => (
   </svg>
 );
 
+/** Two sheets: copy a value. */
+export const CopyIcon = ({ title }: IconProps) => (
+  <svg viewBox="0 0 16 16" {...svgProps(title)}>
+    <rect x="5.5" y="5.5" width="8" height="9" rx="1" />
+    <path d="M3 11V3a1 1 0 0 1 1-1h6" />
+  </svg>
+);
+
 /** Two arrows: swap the direction. */
 export const FlipIcon = ({ title }: IconProps) => (
   <svg viewBox="0 0 16 16" {...svgProps(title)}>

@@ -8,6 +8,7 @@ import { decodeEventLog, decodeFunctionData, getAddress, type Abi, type AbiFunct
 import type { ChainConfig, FeedItem, PairConfig } from "@terminal/model/types";
 import { formatRoute } from "../app/route";
 import { amountText, chainsFor } from "../bridge/bridge-model";
+import { CONTRACT_NAMES } from "./contract-names";
 import type { ProofRow } from "./explore-source";
 
 /** Slots per sync-committee period on the beacon chain. */
@@ -15,7 +16,7 @@ export const SLOTS_PER_PERIOD = 8192n;
 
 const CONTRACTS: readonly { readonly key: keyof ChainConfig["contracts"]; readonly name: string; readonly kind: string; readonly abi: Abi }[] = [
   { key: "lightClient", name: "Light client", kind: "Light-client update", abi: beaconLightClientAbi as Abi },
-  { key: "tokenMediator", name: "TokenMediator", kind: "Transfer", abi: tokenMediatorAbi as Abi },
+  { key: "tokenMediator", name: CONTRACT_NAMES.tokenMediator, kind: "Transfer", abi: tokenMediatorAbi as Abi },
   { key: "messageBridge", name: "MessageBridge", kind: "Message", abi: messageBridgeAbi as Abi },
   { key: "deliveryRouter", name: "DeliveryRouter", kind: "Delivery", abi: deliveryRouterAbi as Abi },
   { key: "gate", name: "Gate", kind: "Gate", abi: beaconForkGateAbi as Abi },
@@ -64,6 +65,13 @@ const decodeCall = (input: Hex, abis: readonly Abi[]): string | null => {
   }
   return null;
 };
+
+/**
+ * The signature of a call that one of the deployment's ABIs decodes, or null for any other call.
+ *
+ * @param input The call data.
+ */
+export const deploymentCallOf = (input: Hex): string | null => decodeCall(input, ALL_ABIS);
 
 /**
  * Decodes a transaction against the deployment.
@@ -116,14 +124,14 @@ export const describeTransaction = (input: { readonly chainId: number; readonly 
 
 /** What a step's drawer shows. */
 export type StepDetail =
-  | { readonly kind: "block"; readonly chainId: number; readonly number: bigint; readonly hash: Hex; readonly slot: bigint | null; readonly period: bigint | null }
+  | { readonly kind: "block"; readonly chainId: number; readonly number: bigint; readonly hash: Hex | null; readonly slot: bigint | null; readonly period: bigint | null }
   | { readonly kind: "tx"; readonly chainId: number; readonly hash: Hex };
 
 /** A step of "where it sits". `at` is unix seconds when known; `href` leads to the step's own page. */
 export type TxStep = { readonly label: string; readonly done: boolean; readonly at: number | null; readonly href?: string; readonly detail?: StepDetail };
 
 /** A chain name without its network suffix ("PulseChain testnet v4" → "PulseChain"), for short step labels (owner). */
-const shortChain = (name: string): string => name.split(" ")[0] ?? name;
+export const shortChain = (name: string): string => name.split(" ")[0] ?? name;
 
 /**
  * Where a transaction sits: from the user's action (the transfer that started it) to delivery. Labels are short; the
