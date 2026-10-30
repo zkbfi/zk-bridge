@@ -261,6 +261,49 @@ factory) and it is not an Omnibridge copy. Icon: the image server, else the neut
 - [ ] Tests: an unknown address resolves and shows the warning; a known token does not; an Omnibridge copy keeps its
   own double-wrap warning instead.
 
+## Data-wiring audit (live build, Sepolia ↔ PulseChain v4, 2026-10-30)
+
+Owner: "it's getting there, but you need to connect a lot of data points". Every value that showed "—", a constant, a
+sample number or nothing in live mode, checked against `release.env` on the dev server and the indexer's answers
+(`/api/tokens` = `[]`, `/api/feed` = no items, `/api/heads` = Sepolia's head on PulseChain v4 9504 slots behind,
+`/api/delivery-cost` = default gas 550000 on both chains). Watched as the deployer with the dev-only `?watch=`.
+
+Bridge
+- [x] Token pill and output with no wallet and no bridged tokens: native coin by default, fee estimated without a wallet.
+- [x] Source balance, per chain, native and ERC-20 (user's RPC). Native read from the snapshot's native balance.
+- [x] MAX = balance less a gas reserve (400k gas × max fee per gas) for the native coin; the full balance for a token.
+- [x] Route status from the gate (paused shows on the pill; real: Sepolia → PulseChain v4 is paused).
+- [x] Light-client lag in the time item ("~16 min + light client 32 h behind") from the indexer's heads.
+- [x] Fee from the delivery-cost report and the priority fee through the RPC; breakdown in the drawer (needs a price).
+- [ ] USD on the balance lines: "—" on testnets by spec. A labelled "mainnet price" is not trivial (the oracle maps
+      only Ethereum-mainnet origins), so it stays "—".
+- [ ] Arrival time per direction: still the per-chain constants (finality + proof + delivery). The heads give the lag
+      only; the backend has no proving-time status endpoint the dapp reads yet, and no recorded average is published.
+- [ ] "arrives as zkbETH" for the wrap route: the label should name what the wrap route mints; not checked on chain.
+
+Picker
+- [x] Token list per chain: the registry (`/api/tokens`, empty on v4) plus each chain's native coin.
+- [x] Balances per token including the native coin.
+- [ ] The wallet's history (indexer) adds tokens only through the feed, which is empty on v4.
+- [ ] Unit prices: "—" on testnets (spec).
+
+Drawers and review
+- [x] Gas level, ceiling, cap and tip sliders read the live report.
+- [ ] Time drawer steps: constants per chain (same as arrival time above).
+
+Signing
+- [x] Steps and decoded calls come from the planned transactions (real).
+
+Activity
+- [x] Feed from the indexer filtered by the wallet, plus pending local submissions. Empty on v4 (no transfers yet).
+- [ ] Not verifiable with real rows until a transfer exists on v4.
+
+Explore
+- [ ] Still the pairs table; the Explore build (spec "Explore", mockups explore-map, explore, explore-address-tx) is next.
+
+Indexer data to check (not a dapp change): `/api/delivery-cost` reports a base fee of 14 wei for Sepolia and 7 wei for
+PulseChain v4 and block numbers that look swapped between the two chains.
+
 ## Later phase (not in this plan)
 
 Activity screen, Explore screen, the sideways slide between screens, the price oracle, the Omnibridge token list and
