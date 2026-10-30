@@ -105,8 +105,7 @@
     `<div class="band"><div class="lbl">Sepolia · block 12,021,502</div><div class="big">Light-client update</div>
        <div class="addr">0x4663c8c20fc80a37f8e93102602d2fb969e93d1973c49011edff6915ab4828db ${copyW}${extW}</div>
        <div class="tags"><span class="tagw">success</span><span class="tagw">Proof #1</span></div></div>
-     <div class="grp">What it did</div>
-     <div class="kv" style="border-top:0"><span>Sepolia's light client now trusts PulseChain testnet v4 up to slot 11,194,368 (block 25,767,883). Messages sent from PulseChain before that block can be proven on Sepolia.</span></div>
+     <div class="grp">Details</div>
      <div class="kv"><span class="k">From</span><span class="v"><span class="mono">0xF71c…5eAc</span>${chevR}</span></div>
      <div class="kv"><span class="k">To</span><span class="v">Light client <span class="mono">0x64Dd…6E4e</span>${chevR}</span></div>
      <div class="kv"><span class="k">Function</span><span class="v mono">update(bytes proof, bytes publicValues)</span></div>
@@ -129,5 +128,5 @@
   const ph = (c, body, cap) => `<div class="option" data-choice="${c}" onclick="toggleSelect(this)" style="display:block"><div class="ph">${body}</div><p class="caption">${cap}</p></div>`;
   document.getElementById('x').innerHTML =
     ph('address', address, '<b>Address.</b> Who it is (known roles as tags), its balance and activity on each chain, what it did through zkb.fi, then tabs for transfers, proofs posted, contracts deployed and deliveries made. "Bridge to this address" prefills the destination; "Watch" adds it to Activity without connecting it.') +
-    ph('tx', tx, '<b>Transaction.</b> What kind of zkb.fi transaction it is and what it did, in one sentence; the decoded call, gas and fee; where it sits: from the user\'s transfer that started it to delivery (joined, lit, each linking out; a step opens a small drawer, here the block); its decoded events; the raw input collapsed.');
+    ph('tx', tx, '<b>Transaction.</b> What kind of zkb.fi transaction it is; the decoded call, gas and fee; where it sits: from the user\'s transfer that started it to delivery (joined, lit, each linking out; a step opens a small drawer, here the block); its decoded events; the raw input collapsed.');
 </script>
