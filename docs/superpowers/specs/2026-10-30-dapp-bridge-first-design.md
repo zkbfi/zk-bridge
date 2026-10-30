@@ -169,7 +169,22 @@ and the time left while in flight or the age once delivered. A row links to the 
 - **Icons:** chevrons for every menu and disclosure (no ▾ carets); no gear icons. Delivery settings use a sliders
   icon; the account uses an identicon.
 
+- **Tooltips:** never white on black; a raised dark surface (#2a2724, 1.5 px #3a3632 edge, off-white text); on light
+  themes the mirror (a raised light surface).
+- **Omnibridge tokens (owner):** when the chosen token is one that came over the existing Omnibridge (a wrapped copy of a
+  token from the other chain), the card warns before anything else: bridging it with zkb.fi wraps it a second time,
+  costs gas twice, and isolates the tokens (they only become the original again by undoing both bridges in order). It
+  offers the Omnibridge as the way back and "Bridge anyway (double-wrapped)" as an orange-outline override. Detection
+  needs a list of Omnibridge token addresses (or the Omnibridge mediators' token registries) per chain.
+- **Activity screen** (left of Bridge): filter pills (All, In flight, Needs you, Delivered); in-flight transfers as
+  cards with the pulse, the step in words and the time left; a transfer that needs you (proven but not delivered, e.g.
+  the tip is below what bots need) says why and offers "Deliver it yourself" with its gas cost; delivered transfers
+  below, by day, one line each (token, amount, route as chain icons, time). Opening one shows every step with its time
+  and transaction link, plus "Open in the explorer" and "Bridge again".
+
 ## Open questions
+
+- Where the Omnibridge token list comes from and how it stays current.
 
 - The price oracle: which sources (DEX pools on PulseChain, an ETH/USD feed on Ethereum), how bridged tokens map to
   their originals, and where it runs (indexer or backend).
