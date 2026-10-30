@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { ClockIcon, GasCan, MoneyHand } from "./icons";
 import type { TransferStep } from "./bridge-model";
 
@@ -36,6 +36,11 @@ export type FeeLineProps = {
 
 type Open = "tip" | "time" | "gas" | null;
 
+/** How long the content takes to close before a swap shows the next item's (the close timing of the drawer's CSS). */
+export const SWAP_MILLISECONDS = 120;
+
+const reducedMotion = (): boolean => typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 const Tip = ({ id, text }: { readonly id: string; readonly text: string }) => (
   <span role="tooltip" id={id} className="zb-tooltip">
     {text}
@@ -50,18 +55,45 @@ const Tip = ({ id, text }: { readonly id: string; readonly text: string }) => (
  * @param props The values, the help texts, the steps and the sliders.
  */
 export const FeeLine = ({ tip, tipHelp, breakdown, gasHelp, gasLevel, onGasLevel, time, steps, sliders, sliderNote }: FeeLineProps) => {
+  // `open` is the item the user chose (aria-expanded); `shown` is the content in the drawer, which lags a swap by the
+  // close time; `expanded` drives the drawer's height (grid rows 0fr → 1fr) and the deck line.
   const [open, setOpen] = useState<Open>(null);
+  const [shown, setShown] = useState<Open>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [from, setFrom] = useState(0);
+  const swap = useRef<number | undefined>(undefined);
   const [hover, setHover] = useState<"tip" | "gas" | "time" | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const ids = { tip: useId(), gas: useId(), time: useId(), drawer: useId() };
 
+  const choose = (next: Open): void => {
+    setOpen(next);
+    window.clearTimeout(swap.current);
+    if (next === null) {
+      setExpanded(false);
+      return;
+    }
+    if (expanded && shown !== null && shown !== next && !reducedMotion()) {
+      // A swap: close the content, switch, reopen; the deck redraws from the new icon.
+      setExpanded(false);
+      swap.current = window.setTimeout(() => {
+        setShown(next);
+        setExpanded(true);
+      }, SWAP_MILLISECONDS);
+      return;
+    }
+    setShown(next);
+    setExpanded(true);
+  };
+  useEffect(() => () => window.clearTimeout(swap.current), []);
+
   useEffect(() => {
     if (open === null) return;
     const away = (event: MouseEvent): void => {
-      if (root.current !== null && !root.current.contains(event.target as Node)) setOpen(null);
+      if (root.current !== null && !root.current.contains(event.target as Node)) choose(null);
     };
     const escape = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") setOpen(null);
+      if (event.key === "Escape") choose(null);
     };
     document.addEventListener("mousedown", away);
     document.addEventListener("keydown", escape);
@@ -69,7 +101,15 @@ export const FeeLine = ({ tip, tipHelp, breakdown, gasHelp, gasLevel, onGasLevel
       document.removeEventListener("mousedown", away);
       document.removeEventListener("keydown", escape);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  const pick = (event: ReactMouseEvent<HTMLButtonElement>, key: Open): void => {
+    const box = event.currentTarget.getBoundingClientRect();
+    const left = root.current?.getBoundingClientRect().left ?? 0;
+    if (key !== open) setFrom(box.left + box.width / 2 - left);
+    choose(open === key ? null : key);
+  };
 
   const item = (key: "tip" | "gas" | "time", icon: ReactNode, value: ReactNode, help: string, opens: Open) => {
     const hoverProps = { onMouseEnter: () => setHover(key), onMouseLeave: () => setHover(null), onFocus: () => setHover(key), onBlur: () => setHover(null) };
@@ -88,7 +128,7 @@ export const FeeLine = ({ tip, tipHelp, breakdown, gasHelp, gasLevel, onGasLevel
       );
     }
     return (
-      <button type="button" className="zb-fee" aria-expanded={open === opens} aria-controls={ids.drawer} aria-describedby={ids[key]} data-fee={key} onClick={() => setOpen(open === opens ? null : opens)} {...hoverProps}>
+      <button type="button" className="zb-fee" aria-expanded={open === opens} aria-controls={ids.drawer} aria-describedby={ids[key]} data-fee={key} onClick={(event) => pick(event, opens)} {...hoverProps}>
         {content}
       </button>
     );
@@ -101,9 +141,10 @@ export const FeeLine = ({ tip, tipHelp, breakdown, gasHelp, gasLevel, onGasLevel
         {item("gas", <GasCan title="Gas" level={gasLevel} />, null, gasHelp, onGasLevel === undefined ? null : "gas")}
         {item("time", <ClockIcon title="Time" />, time, "How long until it arrives. Tap for every step.", "time")}
       </div>
-      {open === null ? null : (
-        <div className="zb-drawer" id={ids.drawer}>
-          {open === "gas" && onGasLevel !== undefined ? (
+      <div className={expanded ? "zb-drawer zb-open" : "zb-drawer"} id={ids.drawer} aria-hidden={!expanded} inert={!expanded}>
+        <div className="zb-drawer-inner">
+        <div className="zb-drawer-body" data-shown={shown ?? undefined} style={{ "--zb-from": `${from}px` } as CSSProperties}>
+          {shown === null ? null : shown === "gas" && onGasLevel !== undefined ? (
             <div className="zb-menu-row">
               <span>Gas level</span>
               <span className="zb-seg" role="radiogroup" aria-label="Gas level">
@@ -115,7 +156,7 @@ export const FeeLine = ({ tip, tipHelp, breakdown, gasHelp, gasLevel, onGasLevel
                 ))}
               </span>
             </div>
-          ) : open === "time" ? (
+          ) : shown === "time" ? (
             <ol className="zb-steps">
               {steps.map((step) => (
                 <li key={step.label} className="zb-step" data-state="ahead">
@@ -144,7 +185,8 @@ export const FeeLine = ({ tip, tipHelp, breakdown, gasHelp, gasLevel, onGasLevel
             </>
           )}
         </div>
-      )}
+        </div>
+      </div>
     </div>
   );
 };

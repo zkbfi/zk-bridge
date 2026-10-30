@@ -167,10 +167,20 @@
 
 /* Fee line */
 .zb-fees { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--zb-soft); margin-bottom: 6px; }
-.zb-fee { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 2px 9px 2px 5px; position: relative; }
+.zb-fee { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 2px 9px 2px 5px; position: relative; transition: background-color 160ms cubic-bezier(.2,.7,.2,1), color 160ms cubic-bezier(.2,.7,.2,1); }
 .zb-fee[aria-expanded="true"] { background: var(--zb-raised); color: var(--zb-raised-ink); }
 .zb-tooltip { position: absolute; z-index: 20; left: 0; top: calc(100% + 8px); width: 240px; padding: 9px 11px; font-size: 12px; line-height: 1.45; font-weight: 400; text-align: left; background: var(--zb-raised); color: var(--zb-raised-ink); border: 1.5px solid var(--zb-raised-edge); white-space: normal; }
-.zb-drawer { margin: 8px 0 12px; padding: 12px 0; border-top: 1px solid var(--zb-line); border-bottom: 1px solid var(--zb-line); font-size: 13px; }
+/* The fee drawer (owner: "the drawer animation is fine"; mockup accordion-motion.html). The height follows the content
+   through grid rows 0fr → 1fr, so nothing is measured. Open 200 ms, close 120 ms; no overshoot, no bounce. */
+.zb-drawer { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 120ms cubic-bezier(.4,0,1,1); font-size: 13px; }
+.zb-drawer.zb-open { grid-template-rows: 1fr; transition: grid-template-rows 200ms cubic-bezier(.2,.7,.2,1); }
+.zb-drawer-inner { min-height: 0; overflow: hidden; }
+.zb-drawer-body { position: relative; margin: 8px 0 12px; padding: 12px 0; border-bottom: 1px solid var(--zb-line); opacity: 0; transform: translateY(-4px); transition: opacity 120ms cubic-bezier(.4,0,1,1), transform 120ms cubic-bezier(.4,0,1,1); }
+.zb-drawer.zb-open .zb-drawer-body { opacity: 1; transform: none; transition: opacity 160ms cubic-bezier(.2,.7,.2,1) 60ms, transform 160ms cubic-bezier(.2,.7,.2,1) 60ms; }
+/* The deck: a 3-unit accent line scales in across the top from under the tapped icon. */
+.zb-drawer-body::before { content: ""; position: absolute; left: 0; top: 0; width: 100%; height: 3px; background: var(--zb-accent); transform: scaleX(0); transform-origin: var(--zb-from, 0) 50%; transition: transform 120ms ease-in; }
+.zb-drawer.zb-open .zb-drawer-body::before { transform: scaleX(1); transition: transform 220ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .zb-drawer, .zb-drawer-body, .zb-drawer-body::before, .zb-fee { transition: none !important; } }
 .zb-drawer-head { display: flex; align-items: baseline; gap: 6px; }
 .zb-slider { margin-top: 12px; }
 .zb-slider-top { display: flex; font-size: 12px; color: var(--zb-muted); }
