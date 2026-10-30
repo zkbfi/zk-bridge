@@ -245,6 +245,8 @@ export type TipQuery = {
   readonly marginPercentText?: string;
   readonly gasMultiplierText?: string;
   readonly ceilingGweiText?: string;
+  /** The cap on the automatic fee, in percent of the amount; absent takes the one in Settings. */
+  readonly capPercentText?: string;
   readonly senderPriceText?: string;
   readonly routerText?: string;
   readonly payoutNative?: true;
@@ -281,7 +283,7 @@ export const NO_OVERLAY: Overlay = Object.freeze({ dialog: null, bridge: Object.
 const MAXIMUM_DATA_DIGITS = 24_000;
 const TOKEN_CHOICE = /^(first|second):(native|0x[0-9a-fA-F]{40})$/;
 const BRIDGE_KEYS = ["token", "amount", "receiver", "mode", "data", "gas", "callTarget", "callData"] as const;
-const TIP_KEYS = ["mode", "percent", "fixed", "margin", "gas", "ceiling", "price", "router", "native"] as const;
+const TIP_KEYS = ["mode", "percent", "fixed", "margin", "gas", "ceiling", "cap", "price", "router", "native"] as const;
 const MESSAGE_KEYS = ["from", "target", "data", "gas"] as const;
 
 /** Whether a query parameter belongs to the overlay rather than to the route. */
@@ -296,6 +298,7 @@ const tipOf = (params: URLSearchParams): TipQuery => {
     ...optional("marginPercentText", decimalText(get("margin"))),
     ...optional("gasMultiplierText", decimalText(get("gas"))),
     ...optional("ceilingGweiText", decimalText(get("ceiling"))),
+    ...optional("capPercentText", decimalText(get("cap"))),
     ...optional("senderPriceText", decimalText(get("price"))),
     ...optional("routerText", hexText(get("router"), 40)),
     ...(get("native") === "1" ? { payoutNative: true as const } : {}),
@@ -370,6 +373,7 @@ const writeBridge = (params: URLSearchParams, bridge: BridgeQuery): void => {
     setTip("margin", tip.marginPercentText);
     setTip("gas", tip.gasMultiplierText);
     setTip("ceiling", tip.ceilingGweiText);
+    setTip("cap", tip.capPercentText);
     setTip("price", tip.senderPriceText);
     setTip("router", tip.routerText);
     setTip("native", tip.payoutNative === true ? "1" : undefined);
@@ -451,6 +455,7 @@ export const linkedFields = (overlay: Overlay, account: string | null): readonly
     [tip.marginPercentText, "tip margin"],
     [tip.gasMultiplierText, "tip gas multiplier"],
     [tip.ceilingGweiText, "gas price ceiling"],
+    [tip.capPercentText, "automatic fee cap"],
     [tip.senderPriceText, "sender gas price"],
     [tip.routerText, "relay router"],
     [tip.payoutNative, "tip paid in the native coin"],

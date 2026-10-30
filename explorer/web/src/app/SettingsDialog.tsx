@@ -1,6 +1,7 @@
 import { Box, Button, Flex, Text } from "@chakra-ui/react";
 import { useState } from "react";
 import { loadImageServer, saveImageServer } from "../bridge/image-server";
+import { loadFeeCap, saveFeeCap } from "../bridge/fee-cap";
 import { DEFAULT_IMAGE_SERVER } from "../bridge/image-source";
 import { useServices } from "./services";
 import { clearRecent, browserStorage } from "../search/recent-items";
@@ -40,6 +41,8 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose }: Set
   const { configuration, pair } = useServices();
   const [images, setImages] = useState(loadImageServer);
   const [imagesNote, setImagesNote] = useState<string | null>(null);
+  const [cap, setCap] = useState(() => String(loadFeeCap()));
+  const [capNote, setCapNote] = useState<string | null>(null);
   const rpcRows = [pair.first, pair.second].map((chain) => ({ chain, url: configuration.rpcUrls[chain.chainId] }));
   return (
     <Modal title="Settings" onClose={onClose}>
@@ -104,6 +107,33 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose }: Set
           </Button>
           <Text fontSize="xs" color="fg.muted" aria-live="polite">
             {imagesNote}
+          </Text>
+        </Flex>
+        <Text fontWeight="medium" marginTop="4" marginBottom="1">
+          Automatic fee cap
+        </Text>
+        <Text fontSize="xs" color="fg.muted" marginBottom="1">
+          The automatic fee is the larger of 0.1% of the amount and twice what delivering and proving it should cost, but never more than this share of the amount. Stored in this browser.
+        </Text>
+        <TextInput aria-label="Automatic fee cap (%)" inputMode="decimal" autoComplete="off" value={cap} onChange={(event) => setCap(event.target.value)} />
+        <Flex gap="2" marginTop="2" alignItems="center">
+          <Button size="sm" aria-label="Save fee cap" onClick={() => setCapNote(saveFeeCap(cap) ?? "Saved.")}>
+            Save
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            aria-label="Reset fee cap"
+            onClick={() => {
+              saveFeeCap(null);
+              setCap(String(loadFeeCap()));
+              setCapNote("Back to 1%.");
+            }}
+          >
+            Reset
+          </Button>
+          <Text fontSize="xs" color="fg.muted" aria-live="polite">
+            {capNote}
           </Text>
         </Flex>
       </Box>

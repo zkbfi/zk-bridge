@@ -16,7 +16,8 @@ import { parseUnits } from "../ui/format";
 import { useWallet } from "../wallet/wallet-port";
 import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferEstimate, transferSteps } from "./bridge-model";
 import { DeliveryMenu, deliverySummary } from "./DeliveryMenu";
-import { anticipatedCostUsd, ceilingWeiOf, GAS_LEVEL_FACTORS, gasLevelOfCeiling, highTipOf, highTipThreshold, lowFeeOf, PROOF_COST_USD, type GasLevel } from "./fee-guard";
+import { anticipatedCostUsd, autoFeePercent, capTooLarge, ceilingWeiOf, GAS_LEVEL_FACTORS, gasLevelOfCeiling, highTipOf, highTipThreshold, lowFeeOf, PROOF_COST_USD, type GasLevel } from "./fee-guard";
+import { loadFeeCap } from "./fee-cap";
 import { DirectionMenu } from "./DirectionMenu";
 import { FeeLine, type FeeSlider } from "./FeeLine";
 import { Chevron, FlipIcon, Identicon, SlidersIcon } from "./icons";
@@ -89,7 +90,11 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const { source, destination } = chainsFor(pair, route.dir);
   const side = sourceSide(route.dir);
   const token = tokenFor(form.token, tokens, side);
-  const options = useMemo(() => optionsOf(form.tip), [form.tip]);
+  const baseOptions = useMemo(() => optionsOf(form.tip), [form.tip]);
+  const storedCap = useMemo(() => loadFeeCap(), []);
+  const capPercent = form.tip?.capPercentText === undefined ? storedCap : Number(form.tip.capPercentText) || storedCap;
+  // The fee is automatic until the user picks a share: the larger of 0.1% and twice the cost, capped.
+  const automatic = baseOptions.mode === "percentage" && form.tip?.percentText === undefined;
   const report = useDeliveryCost(destination.chainId, { enabled: token !== null });
   const priority = usePriorityFee(destination.chainId, { enabled: token !== null });
   const [menu, setMenu] = useState<"direction" | "token" | "receiver" | "delivery" | null>(null);
@@ -104,41 +109,52 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const receiver = form.receiver ?? account ?? "";
   const values = { token: token === null ? "" : choiceOf(token), amount: form.amount ?? "", receiver, mode: "plain" as const, data: "", gasLimit: form.gasLimit ?? "", callTarget: "", callData: "" };
   const context = { pair, snapshots: snapshots ?? [], signerAddress: account ?? ("0x0000000000000000000000000000000000000000" as Address) };
-  const draft = useMemo(
-    () => computeBridgeDraft(values, options, { pair, tokens, context, report: report.data ?? null, priorityFeeWei: priority.data ?? null }),
+  const draftWith = (chosen: DeliveryOptions) => computeBridgeDraft(values, chosen, { pair, tokens, context, report: report.data ?? null, priorityFeeWei: priority.data ?? null });
+  const probe = useMemo(
+    () => draftWith(baseOptions),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [JSON.stringify(values), options, pair, tokens, snapshots, report.data, priority.data],
+    [JSON.stringify(values), baseOptions, pair, tokens, snapshots, report.data, priority.data],
   );
 
   const snapshot = (snapshots ?? []).find((result) => result.status === "ok" && result.snapshot.chain.side === side);
   const balance = snapshot?.status === "ok" && token !== null ? (snapshot.snapshot.positions.find((position) => position.token.address === token.address)?.balance ?? null) : null;
   const amount = token === null ? null : safeParse(form.amount ?? "", token.decimals);
   const prices = usePrices(tokens).data;
+  const nativeUsd = prices?.get(`native:${destination.chainId}`) ?? null;
+  const costAt = (level: GasLevel): number | null =>
+    probe.delivery === null || nativeUsd === null
+      ? null
+      : anticipatedCostUsd({ gasUsed: probe.delivery.suggestions.dataSource.gas, baseFeeWei: probe.delivery.suggestions.dataSource.baseFeeWei, priorityFeeWei: probe.delivery.priorityFeeWei, nativeUsd, level });
+  const baseFeeWei = probe.delivery?.suggestions.dataSource.baseFeeWei ?? null;
+  const gasLevel = gasLevelOfCeiling(form.tip?.ceilingGweiText, baseFeeWei);
+  const costUsd = costAt(gasLevel);
   const priceOf = (subject: TokenInfo | null): number | null => (subject === null ? null : (prices?.get(`${subject.side}:${subject.address}`) ?? null));
   const usd = (units: bigint | null): string => {
     const price = priceOf(token);
     return units === null || price === null || token === null ? "—" : `$${usdText((Number(units) / 10 ** token.decimals) * price)}`;
   };
+  const dollars = (units: bigint | null): number | null => {
+    const price = priceOf(token);
+    return units === null || price === null || token === null ? null : (Number(units) / 10 ** token.decimals) * price;
+  };
+  const amountUsd = dollars(amount);
+  const auto = autoFeePercent({ amountUsd, costUsd, capPercent });
+  const options = useMemo(
+    () => (automatic ? { ...baseOptions, percentText: String(auto.percent) } : baseOptions),
+    [automatic, baseOptions, auto.percent],
+  );
+  const draft = useMemo(
+    () => (options === baseOptions ? probe : draftWith(options)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [probe, options, baseOptions],
+  );
   const delivery = draft.delivery;
   const tipUnits = delivery?.description.nowUnits ?? null;
   const range = delivery?.suggestions.tipRange;
   const breakEven = range?.kind === "available" ? range.low.description.nowUnits : null;
   const typical = range?.kind === "available" ? range.default.description.nowUnits : null;
   const received = amount !== null && tipUnits !== null ? amount - tipUnits : amount;
-  const baseFeeWei = delivery?.suggestions.dataSource.baseFeeWei ?? null;
-  const gasLevel = gasLevelOfCeiling(form.tip?.ceilingGweiText, baseFeeWei);
-  const dollars = (units: bigint | null): number | null => {
-    const price = priceOf(token);
-    return units === null || price === null || token === null ? null : (Number(units) / 10 ** token.decimals) * price;
-  };
-  const nativeUsd = prices?.get(`native:${destination.chainId}`) ?? null;
-  const costAt = (level: GasLevel): number | null =>
-    delivery === null || nativeUsd === null
-      ? null
-      : anticipatedCostUsd({ gasUsed: delivery.suggestions.dataSource.gas, baseFeeWei: delivery.suggestions.dataSource.baseFeeWei, priorityFeeWei: delivery.priorityFeeWei, nativeUsd, level });
   const feeUsd = dollars(tipUnits);
-  const amountUsd = dollars(amount);
-  const costUsd = costAt(gasLevel);
   // The high-tip check reads the tip before gas pricing, so it takes the Normal-level cost: the gas level never moves it.
   const tipShare = amount === null || amount === 0n || tipUnits === null ? null : Number((tipUnits * 1_000_000n) / amount) / 1_000_000;
   const highTip = highTipOf({ feeUsd, costUsd: costAt(1), amountUsd, shareWithoutPrice: options.mode === "percentage" ? (Number(options.percentText) || 0) / 100 : tipShare });
@@ -147,6 +163,12 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     const { ceilingGweiText: _drop, ...rest } = form.tip ?? {};
     const ceiling = baseFeeWei === null || level === 1 ? undefined : (Number(ceilingWeiOf(baseFeeWei, level)) / 1e9).toString();
     write({ ...form, tip: { ...rest, ...(ceiling === undefined ? {} : { ceilingGweiText: ceiling }) } });
+  };
+  const capText = `${Number(capPercent.toPrecision(3))}%`;
+  const capWarning = capTooLarge(capPercent, amountUsd);
+  const setCap = (value: number): void => {
+    const { capPercentText: _drop, ...rest } = form.tip ?? {};
+    write({ ...form, tip: { ...rest, ...(value === storedCap ? {} : { capPercentText: String(value) }) } });
   };
   const breakdown =
     feeUsd === null || costUsd === null
@@ -200,6 +222,17 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
         ...(typicalPercent === null ? [] : [{ at: typicalPercent, label: "typical" }]),
       ],
       onChange: (value) => write({ ...form, tip: { ...form.tip, mode: "percentage", percentText: String(value) } }),
+    },
+    {
+      label: "Automatic fee cap",
+      help: "The most the automatic fee may take, as a share of the amount. Change the default in Settings.",
+      value: capPercent,
+      min: 0.05,
+      max: Math.max(2, capPercent),
+      step: 0.05,
+      valueText: `${capText}${auto.capped && automatic ? " · reached" : ""}`,
+      ticks: [{ at: Number((highTipThreshold(amountUsd) * 100).toFixed(3)), label: "high-tip line" }],
+      onChange: setCap,
     },
     ...(ceilingNow === null
       ? []
@@ -398,6 +431,20 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             {delivery === null || routerWarningOf(delivery) === null ? null : <div className="zb-warnbox" role="alert">{routerWarningOf(delivery)}</div>}
             {linked.length === 0 ? null : <LinkedWarning fields={linked} />}
             {verdict.kind === "warn" ? <div className="zb-warnbox">{verdict.detail}</div> : null}
+            {capWarning ? (
+              <div className="zb-warnbox" role="group" aria-label="Fee cap">
+                <p style={{ margin: "0 0 8px" }}>
+                  Your automatic fee cap is {capText}, above the {thresholdText} a tip should stay under for this amount. Lower it here; the fee updates.
+                </p>
+                <span className="zb-seg" role="radiogroup" aria-label="Automatic fee cap">
+                  {[0.1, 0.25, 0.5, 1].map((value) => (
+                    <button key={value} type="button" role="radio" aria-checked={capPercent === value} onClick={() => setCap(value)}>
+                      {value}%
+                    </button>
+                  ))}
+                </span>
+              </div>
+            ) : null}
             <button type="button" className="zb-go" data-kind="go" disabled={draft.status !== "ready"} onClick={() => { setReview(false); setSigning(draft.steps); }}>
               Confirm in wallet
             </button>

@@ -85,3 +85,30 @@ export const highTipOf = (input: { readonly feeUsd: number | null; readonly cost
   }
   return input.shareWithoutPrice !== null && input.shareWithoutPrice > highTipThreshold(null);
 };
+
+/** The automatic fee never goes above this share of the amount by default, in percent (owner: "cap ... at 1%"). */
+export const DEFAULT_AUTO_CAP_PERCENT = 1;
+
+/** The automatic fee's floor as a share of the amount, in percent. */
+export const BASE_FEE_PERCENT = 0.1;
+
+/**
+ * The automatic fee as a percentage of the amount (owner: "make the default the larger of the two"): the larger of
+ * {@link BASE_FEE_PERCENT} and twice the anticipated cost, then no more than the cap. `capped` says the cap bound, so
+ * the fee sits under twice the cost and the low-fee warning stays. Without prices it is the base share.
+ */
+export const autoFeePercent = (input: { readonly amountUsd: number | null; readonly costUsd: number | null; readonly capPercent: number }): { readonly percent: number; readonly capped: boolean } => {
+  const needed = input.amountUsd === null || input.costUsd === null || input.amountUsd <= 0 ? 0 : (COST_MARGIN * input.costUsd * 100) / input.amountUsd;
+  // Up to a thousandth of a percent, ignoring float noise.
+  const wanted = Math.max(BASE_FEE_PERCENT, Math.ceil(needed * 1000 - 1e-6) / 1000);
+  return wanted > input.capPercent ? { percent: input.capPercent, capped: true } : { percent: wanted, capped: false };
+};
+
+/**
+ * Whether the automatic cap is too large for this amount: above the high-tip line ({@link highTipThreshold}). The review
+ * always warns about it and offers to lower it. One function, so the reading can change in one place.
+ *
+ * @param capPercent The cap, in percent.
+ * @param amountUsd The amount in dollars, or null.
+ */
+export const capTooLarge = (capPercent: number, amountUsd: number | null): boolean => capPercent / 100 > highTipThreshold(amountUsd) + 1e-12;
