@@ -240,6 +240,10 @@ and the time left while in flight or the age once delivered. A row links to the 
   gas, call mode, target, data) is named in a warning on the screen and in the review sheet, which shows the full
   receiver address, the effective router and any router warning.
 
+- **Custom tokens (owner):** the picker's search accepts a pasted address of a token neither bridge has seen. If zkb.fi
+  has never bridged it, the Bridge pill takes the overridable warning state: "First time this token is bridged · keep
+  the amount low", explained under the pill (the first transfer also creates its counterpart on the other chain).
+
 ## Open questions
 
 - Where the Omnibridge token list comes from and how it stays current.
@@ -299,3 +303,4 @@ noise from one message (a child on the keyboard) is left out.
 28. "on the search input, good. better. fix the height. close button should be a square. the "all" text should be an icon"
 29. "and the right square should be the same color as the input. try some sort of border to differentiate it"
 30. "dark rule is fine"
+31. "we will also have to handle custom tokens as well. tokens that neither bridge has ever seen. we can add a warning to the bridge button stating that this is the first time that this token hasbeen bridged and it may be wise to keep the amount low. lets look at the activity now"
