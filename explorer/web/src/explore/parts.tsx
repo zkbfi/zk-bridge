@@ -7,11 +7,11 @@ import { Chevron } from "../bridge/icons";
 import { TokenIcon } from "../bridge/TokenIcon";
 
 /** A route: the source chain's icon, a chevron, the destination chain's icon (never words, owner). */
-export const RouteIcons = ({ from, to, names }: { readonly from: number; readonly to: number; readonly names: (chainId: number) => string }) => (
+export const RouteIcons = ({ from, to, names, surface = "plain" }: { readonly from: number; readonly to: number; readonly names: (chainId: number) => string; readonly surface?: "accent" | "plain" }) => (
   <span className="zb-xroute" aria-label={`${names(from)} to ${names(to)}`}>
-    <TokenIcon subject={{ chainId: from }} symbol={names(from)} size={18} decorative />
+    <TokenIcon subject={{ chainId: from }} symbol={names(from)} size={18} surface={surface} decorative />
     <Chevron dir="right" />
-    <TokenIcon subject={{ chainId: to }} symbol={names(to)} size={18} decorative />
+    <TokenIcon subject={{ chainId: to }} symbol={names(to)} size={18} surface={surface} decorative />
   </span>
 );
 

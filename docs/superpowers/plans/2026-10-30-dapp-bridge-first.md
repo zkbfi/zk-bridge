@@ -303,8 +303,14 @@ Activity
 Explore
 - [ ] Still the pairs table; the Explore build (spec "Explore", mockups explore-map, explore, explore-address-tx) is next.
 
-Indexer data to check (not a dapp change): `/api/delivery-cost` reports a base fee of 14 wei for Sepolia and 7 wei for
-PulseChain v4 and block numbers that look swapped between the two chains.
+`/api/delivery-cost` is right (checked against the chains): testnet base fees really are 14 wei (Sepolia) and 7 wei
+(PulseChain v4). Near-zero gas shows through the leading-zeros rule, and the anticipated cost is then mostly the $0.025
+proof.
+
+Explore, where neither the indexer nor the chain gives a value (shown as "—", reason on hover): which of the 512 sync
+committee seats signed a proof; proving time; transfers a proof covered (no proof → message link); volume in dollars on
+testnets; who delivered (so "Delivered by bots" and "Tips earned"); contracts an address deployed; per-token gate caps;
+release versions (no release events yet). "Watch" on the address page is not built (no watched-address store).
 
 ## Later phase (not in this plan)
 

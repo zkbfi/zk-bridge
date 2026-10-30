@@ -50,7 +50,7 @@ export const ProofPage = ({ chainId, number }: { readonly chainId: number; reado
   const verifier = useQuery({ queryKey: ["verifier", chainId], enabled: reader !== null, queryFn: () => reader!.verifier(holder.contracts.lightClient) }).data;
   const label = (
     <>
-      Light-client update <RouteIcons from={tracked.chainId} to={holder.chainId} names={names} />
+      Light-client update <RouteIcons from={tracked.chainId} to={holder.chainId} names={names} surface="accent" />
     </>
   );
   if (proof === undefined) return <XBand label={label} big={`Proof #${number}`} sub={proofs.length === 0 ? "Reading…" : "The indexer has no such proof."} />;
@@ -68,7 +68,9 @@ export const ProofPage = ({ chainId, number }: { readonly chainId: number; reado
         <KV k="Posted by" href={explore({ kind: "address", id: proof.poster })}><span className="zb-mono">{shortHex(proof.poster)}</span></KV>
         {verifier === undefined ? <KV k="Verifier"><Missing why="Read from the light client on the chain" /></KV> : <KV k="Verifier" href={explore({ kind: "contract", chainId, id: verifier })}><span className="zb-mono">{shortHex(verifier)}</span></KV>}
         <KV k="Proving time"><Missing why="The prover does not publish its timings" /></KV>
-        <KV k="Gas · cost">{proof.gasUsed.toLocaleString("en-US")} gas · <Num text={amountText(proof.costWei, 18)} /> {holder.nativeSymbol} + ${PROOF_COST_USD} proof</KV>
+        <KV k="Gas">{proof.gasUsed.toLocaleString("en-US")}</KV>
+        <KV k="Cost"><Num text={amountText(proof.costWei, 18)} /> {holder.nativeSymbol}</KV>
+        <KV k="Proof generation">${PROOF_COST_USD} (assumed)</KV>
         <KV k="Posted">{relativeTime(proof.timestamp, Math.floor(Date.now() / 1000))}</KV>
         <KV k="Previous" {...(previous === undefined ? {} : { href: explore({ kind: "proof", chainId, id: String(previous.number) }) })}>{previous === undefined ? "none" : `Proof #${previous.number}`}</KV>
         <KV k="Next" {...(next === undefined ? {} : { href: explore({ kind: "proof", chainId, id: String(next.number) }) })}>{next === undefined ? "waiting" : `Proof #${next.number}`}</KV>

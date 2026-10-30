@@ -33,7 +33,9 @@ describe("Explore's other pages", () => {
     expect(screen.getByText(/period 1,366/)).toBeInTheDocument();
     expect(screen.getByText("Posted in").nextElementSibling).toHaveAttribute("href", "#/explore/tx/11155111/0x4663c8c20fc80a37f8e93102602d2fb969e93d1973c49011edff6915ab4828db");
     await waitFor(() => expect(screen.getByText("Verifier").nextElementSibling).toHaveAttribute("href", expect.stringMatching(/^#\/explore\/contract\/11155111\//)));
-    expect(screen.getByText(/604,091 gas/)).toBeInTheDocument();
+    expect(screen.getByText("604,091")).toBeInTheDocument();
+    // The route icons on the orange band sit on plates.
+    expect(document.querySelectorAll(".zb-xband .zb-tok-icon.zb-on-accent")).toHaveLength(2);
     expect(screen.getByText("Proving time").nextElementSibling).toHaveTextContent("—");
   });
 

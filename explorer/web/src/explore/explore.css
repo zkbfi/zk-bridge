@@ -54,7 +54,7 @@
 .zb-xband-in { display: flex; align-items: center; gap: 14px; padding-block: 16px; }
 .zb-xband-lbl { color: var(--zb-from-muted); font-size: var(--zb-step--1); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .zb-xband-big { font-size: var(--zb-step-2); font-weight: 700; word-break: break-all; }
-.zb-xv { margin-left: auto; text-align: right; display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: inherit; text-decoration: none; word-break: break-all; }
+.zb-xv { margin-left: auto; text-align: right; display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; column-gap: 6px; min-width: 0; color: inherit; text-decoration: none; }
 .zb-xpage { padding-bottom: 24px; }
 .zb-bits { display: grid; grid-template-columns: repeat(32, 1fr); gap: 2px; padding: 10px 0 4px; }
 .zb-bits i { height: 8px; background: var(--zb-track-ahead); }
