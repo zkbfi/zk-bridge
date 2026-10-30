@@ -265,3 +265,13 @@
 .zb-omni { position: relative; display: inline-flex; color: var(--zb-accent-text); cursor: pointer; }
 .zb .zb-link { display: inline-flex; align-items: center; gap: 4px; color: var(--zb-accent-text); font-weight: 600; text-decoration: underline; }
 .zb-token-name small { font-variant-numeric: tabular-nums; }
+
+/* The delivery settings menu and pill segments */
+.zb-delivery-menu { position: absolute; left: 16px; right: 16px; top: 20px; padding: 6px 0; }
+.zb-menu-row { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-top: 1px solid var(--zb-line); font-size: 14px; }
+.zb-menu-row:first-child { border-top: 0; }
+.zb-menu-row > :first-child { flex: 1; }
+.zb-seg { display: inline-flex; border: 1.5px solid var(--zb-pill-edge); border-radius: 999px; overflow: hidden; }
+.zb .zb-seg [role="radio"] { display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px; font-size: 13px; }
+.zb .zb-seg [aria-checked="true"] { background: var(--zb-ink); color: var(--zb-page); font-weight: 700; }
+.zb-menu-field { width: 50%; min-width: 0; border: 1.5px solid var(--zb-pill-edge); border-radius: 999px; padding: 5px 12px; background: var(--zb-pill); color: var(--zb-pill-ink); font: inherit; font-size: 13px; }

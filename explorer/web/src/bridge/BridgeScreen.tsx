@@ -10,6 +10,7 @@ import type { WebStep } from "../tx/bridge-steps";
 import { parseUnits } from "../ui/format";
 import { useWallet } from "../wallet/wallet-port";
 import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferEstimate, transferSteps } from "./bridge-model";
+import { DeliveryMenu, deliverySummary, GAS_LEVELS, gasLevelOf } from "./DeliveryMenu";
 import { DirectionMenu } from "./DirectionMenu";
 import { FeeLine, type FeeSlider } from "./FeeLine";
 import { Chevron, FlipIcon, Identicon, SlidersIcon } from "./icons";
@@ -70,7 +71,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const options = useMemo(() => optionsOf(form.tip), [form.tip]);
   const report = useDeliveryCost(destination.chainId, { enabled: token !== null });
   const priority = usePriorityFee(destination.chainId, { enabled: token !== null });
-  const [menu, setMenu] = useState<"direction" | "token" | "receiver" | null>(null);
+  const [menu, setMenu] = useState<"direction" | "token" | "receiver" | "delivery" | null>(null);
   const [review, setReview] = useState(false);
   const [signing, setSigning] = useState<readonly WebStep[] | null>(null);
 
@@ -119,6 +120,9 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   );
 
   const percent = Number(options.percentText) || 0;
+  // The default ceiling is twice today's base fee, so half of it marks today's price.
+  const ceilingNow = delivery?.baseFeeCeilingWei == null ? null : Number(delivery.baseFeeCeilingWei / 10_000_000n) / 100;
+  const ceilingValue = form.tip?.ceilingGweiText === undefined ? (ceilingNow ?? 0) : Number(form.tip.ceilingGweiText);
   const share = (units: bigint | null): number | null => (units === null || amount === null || amount === 0n ? null : Number((units * 1_000_000n) / amount) / 10_000);
   const breakEvenPercent = share(breakEven);
   const typicalPercent = share(typical);
@@ -138,6 +142,21 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
       ],
       onChange: (value) => write({ ...form, tip: { ...form.tip, mode: "percentage", percentText: String(value) } }),
     },
+    ...(ceilingNow === null
+      ? []
+      : [
+          {
+            label: "Gas price ceiling",
+            help: "The highest base fee at which the tip still pays the deliverer. Higher lets your transfer through a gas spike; it never raises what you pay below it.",
+            value: ceilingValue,
+            min: 0,
+            max: Math.max(1, Math.round(ceilingNow * 3)),
+            step: 0.1,
+            valueText: `${ceilingValue} gwei`,
+            ticks: [{ at: Math.round((ceilingNow / 2) * 10) / 10, label: "today's price" }],
+            onChange: (value: number) => write({ ...form, tip: { ...form.tip, ceilingGweiText: String(value) } }),
+          },
+        ]),
   ];
 
   const flip = (): void => {
@@ -222,14 +241,19 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
           <button type="button" className="zb-flip" onClick={flip} aria-label={`Flip: send from ${destination.name} instead`}>
             <FlipIcon />
           </button>
-          <button type="button" className="zb-pill zb-settings-pill" onClick={() => setMenu(menu === "receiver" ? null : "receiver")} aria-label="Delivery settings">
+          <button type="button" className="zb-pill zb-settings-pill" aria-haspopup="true" aria-expanded={menu === "delivery"} onClick={() => setMenu(menu === "delivery" ? null : "delivery")} aria-label={`Delivery settings: ${deliverySummary(form)}`}>
             <SlidersIcon />
-            <span>Standard delivery</span>
-            <Chevron />
+            <span>{deliverySummary(form)}</span>
+            <Chevron dir={menu === "delivery" ? "up" : "down"} />
           </button>
         </div>
       </div>
 
+      {menu === "delivery" ? (
+        <div className="zb-col" style={{ position: "relative", zIndex: 5 }}>
+          <DeliveryMenu form={form} defaultRouter={destination.contracts.deliveryRouter} onChange={(next) => write(next)} onReceiver={() => setMenu("receiver")} />
+        </div>
+      ) : null}
       <section className="zb-band-to" aria-label={`You receive on ${destination.name}`}>
         <div className="zb-col">
           {token === null ? null : (
@@ -238,7 +262,8 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
               tipHelp={`The tip pays whoever delivers your transfer on ${destination.name}. It is ${options.percentText}% of the amount, and at least their gas at today's price. Tap to change it.`}
               gas={gasWei === null ? "—" : inline(<TokenIcon subject={{ chainId: destination.chainId }} symbol={destination.nativeSymbol} size={14} />, amountText(gasWei, 18), destination.nativeSymbol)}
               gasHelp={`What the delivery costs in gas on ${destination.name} at today's price. The tip covers it.`}
-              gasLevel={Number(options.gasMultiplierText) > 2 ? 3 : Number(options.gasMultiplierText) > 1 ? 2 : 1}
+              gasLevel={gasLevelOf(form.tip?.gasMultiplierText)}
+              onGasLevel={(level) => write({ ...form, tip: { ...form.tip, gasMultiplierText: GAS_LEVELS.find((candidate) => candidate.level === level)!.multiplier } })}
               time={transferEstimate(source, destination)}
               steps={transferSteps(source, destination)}
               sliders={sliders}

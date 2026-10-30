@@ -24,6 +24,8 @@ export type FeeLineProps = {
   readonly gas: ReactNode;
   readonly gasHelp: string;
   readonly gasLevel: 0 | 1 | 2 | 3;
+  /** Called with a higher (or lower) gas level the user picks on the gas can. */
+  readonly onGasLevel?: (level: 1 | 2 | 3) => void;
   readonly time: string;
   readonly steps: readonly TransferStep[];
   readonly sliders: readonly FeeSlider[];
@@ -31,7 +33,7 @@ export type FeeLineProps = {
   readonly sliderNote: string | null;
 };
 
-type Open = "tip" | "time" | null;
+type Open = "tip" | "time" | "gas" | null;
 
 const Tip = ({ id, text }: { readonly id: string; readonly text: string }) => (
   <span role="tooltip" id={id} className="zb-tooltip">
@@ -46,7 +48,7 @@ const Tip = ({ id, text }: { readonly id: string; readonly text: string }) => (
  *
  * @param props The values, the help texts, the steps and the sliders.
  */
-export const FeeLine = ({ tip, tipHelp, gas, gasHelp, gasLevel, time, steps, sliders, sliderNote }: FeeLineProps) => {
+export const FeeLine = ({ tip, tipHelp, gas, gasHelp, gasLevel, onGasLevel, time, steps, sliders, sliderNote }: FeeLineProps) => {
   const [open, setOpen] = useState<Open>(null);
   const [hover, setHover] = useState<"tip" | "gas" | "time" | null>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -95,12 +97,24 @@ export const FeeLine = ({ tip, tipHelp, gas, gasHelp, gasLevel, time, steps, sli
     <div ref={root}>
       <div className="zb-fees">
         {item("tip", <MoneyHand title="Tip" />, tip, tipHelp, "tip")}
-        {item("gas", <GasCan title="Gas" level={gasLevel} />, gas, gasHelp, null)}
+        {item("gas", <GasCan title="Gas" level={gasLevel} />, gas, gasHelp, onGasLevel === undefined ? null : "gas")}
         {item("time", <ClockIcon title="Time" />, time, "How long until it arrives. Tap for every step.", "time")}
       </div>
       {open === null ? null : (
         <div className="zb-drawer" id={ids.drawer}>
-          {open === "time" ? (
+          {open === "gas" && onGasLevel !== undefined ? (
+            <div className="zb-menu-row">
+              <span>Gas level</span>
+              <span className="zb-seg" role="radiogroup" aria-label="Gas level">
+                {([1, 2, 3] as const).map((level) => (
+                  <button key={level} type="button" role="radio" aria-checked={gasLevel === level} onClick={() => onGasLevel(level)}>
+                    <GasCan level={level} />
+                    {level === 1 ? "Normal" : level === 2 ? "High" : "Highest"}
+                  </button>
+                ))}
+              </span>
+            </div>
+          ) : open === "time" ? (
             <ol className="zb-steps">
               {steps.map((step) => (
                 <li key={step.label} className="zb-step" data-state="ahead">
