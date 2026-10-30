@@ -5,6 +5,8 @@ export type SheetProps = {
   /** The accessible name. Shown as a heading only when `showTitle` is set (the token picker has no title). */
   readonly label: string;
   readonly showTitle?: boolean;
+  /** No accent edge on top (the token picker opens on its own orange search band). */
+  readonly bare?: boolean;
   readonly onClose: () => void;
   readonly children: ReactNode;
 };
@@ -24,7 +26,7 @@ export const CloseButton = ({ onClose, label = "Close" }: { readonly onClose: ()
  *
  * @param props The label, the close handler and the content.
  */
-export const Sheet = ({ label, showTitle = true, onClose, children }: SheetProps) => {
+export const Sheet = ({ label, showTitle = true, bare = false, onClose, children }: SheetProps) => {
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
@@ -41,7 +43,7 @@ export const Sheet = ({ label, showTitle = true, onClose, children }: SheetProps
   return (
     <>
       <div className="zb-scrim" onClick={onClose} aria-hidden="true" />
-      <div ref={panel} className="zb-sheet" role="dialog" aria-modal="true" aria-label={label}>
+      <div ref={panel} className={bare ? "zb-sheet zb-sheet-bare" : "zb-sheet"} role="dialog" aria-modal="true" aria-label={label}>
         {showTitle ? (
           <div className="zb-col zb-sheet-head">
             <h2>{label}</h2>

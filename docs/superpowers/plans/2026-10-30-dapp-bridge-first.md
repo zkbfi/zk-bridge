@@ -240,6 +240,27 @@ Mockup: `picker-v3.html`. So:
 - [ ] Build with `VITE_EXPLORER_DATA=fixture`; screenshot phone (390 px) and desktop in all three themes.
 - [ ] Walk every item of "The owner's words, verbatim" and record pass/fail with the screenshot that shows it.
 
+### Task 13: Custom tokens (after the round-4 picker, the delivery menu, gas levels, the dialog, paused routes, history)
+
+Owner (verbatim): "we will also have to handle custom tokens as well. tokens that neither bridge has ever seen. we can
+add a warning to the bridge button stating that this is the first time that this token hasbeen bridged and it may be
+wise to keep the amount low."
+
+**Files:** Create `src/bridge/custom-token.ts`; Modify `src/bridge/TokenPicker.tsx`, `src/bridge/verdict.ts`,
+`src/bridge/BridgeScreen.tsx`; Test `test/bridge/custom-token.test.tsx`.
+
+**Interfaces:** `resolveCustomToken(address, chainId, readContract): Promise<{ address, name, symbol, decimals } | null>`
+reads name/symbol/decimals over the user's RPC (refuses a non-contract or a contract that does not answer as ERC-20);
+`isFirstBridge(token, tokens, factory)`: true when zkb.fi has no deployed counterpart for it (not known to the token
+factory) and it is not an Omnibridge copy. Icon: the image server, else the neutral lettered disc.
+
+- [ ] The picker's search accepts a pasted address that is in no list; it resolves on-chain and appears as one row.
+- [ ] The verdict gets `firstBridge: boolean`: the Bridge pill takes the overridable warning state (orange outline)
+  "First time this token is bridged · keep the amount low", with a line under it: the first transfer also deploys the
+  token's counterpart on the other chain, and a small first amount limits the risk.
+- [ ] Tests: an unknown address resolves and shows the warning; a known token does not; an Omnibridge copy keeps its
+  own double-wrap warning instead.
+
 ## Later phase (not in this plan)
 
 Activity screen, Explore screen, the sideways slide between screens, the price oracle, the Omnibridge token list and

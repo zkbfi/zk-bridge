@@ -79,16 +79,33 @@ describe("the bridge screen", () => {
 });
 
 describe("the token picker", () => {
-  it("is a panel with no title, the close button inside the search field, flat tabs, and no check mark", async () => {
+  it("opens on an orange search band with a square close, icon-only tabs, no title and no check mark (owner, rounds 3 to 7)", async () => {
     renderBridge();
     await userEvent.click(await within(fromBand()).findByRole("button", { name: /^Token:/ }));
     const picker = await screen.findByRole("dialog", { name: "Choose a token" });
     expect(within(picker).queryByRole("heading")).toBeNull();
     const search = within(picker).getByRole("combobox", { name: "Search tokens" });
-    expect(search.parentElement?.querySelector('[aria-label="Close"]')).not.toBeNull();
-    expect(within(picker).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["All", FIXTURE_PAIR.first.name, FIXTURE_PAIR.second.name]);
+    const band = search.parentElement!;
+    expect(band.className).toBe("zb-picker-search");
+    expect(band.lastElementChild).toHaveAccessibleName("Close");
+    expect(band.lastElementChild?.textContent).toBe("");
+    const tabs = within(picker).getAllByRole("tab");
+    expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual(["All chains", FIXTURE_PAIR.first.name, FIXTURE_PAIR.second.name]);
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["", "", ""]);
     expect(picker.textContent).not.toMatch(/✓|✔/);
-    expect(picker.querySelector("svg[data-check]")).toBeNull();
+  });
+
+  it("names no chain in the rows; each icon's badge is the token's origin chain", async () => {
+    renderBridge();
+    await userEvent.click(await within(fromBand()).findByRole("button", { name: /^Token:/ }));
+    const picker = await screen.findByRole("dialog", { name: "Choose a token" });
+    await userEvent.type(within(picker).getByRole("combobox", { name: "Search tokens" }), "0x");
+    const rows = within(picker).getAllByRole("option");
+    for (const row of rows) {
+      expect(row.textContent).not.toContain(FIXTURE_PAIR.first.name);
+      expect(row.textContent).not.toContain(FIXTURE_PAIR.second.name);
+      expect(row.querySelector("[data-badge]")).not.toBeNull();
+    }
   });
 
   it("searches every token, and picking one on the other chain flips the direction", async () => {

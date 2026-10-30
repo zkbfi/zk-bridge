@@ -252,3 +252,16 @@
 .zb-token-name { display: flex; flex-direction: column; line-height: 1.25; }
 .zb-token-name small { color: var(--zb-muted); font-size: 12px; }
 .zb-token-balance { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+/* Token picker, rounds 4 to 7: the search is a 52 px orange band (no pill, no top border); the close square is the same
+   orange, 52 x 52, set off by a full-height dark rule; tabs are icons only. */
+.zb-sheet-bare { border-top: 0 !important; }
+@media (min-width: 720px) { .zb-sheet-bare { border: 3px solid var(--zb-from) !important; } }
+.zb-picker-search { display: flex; align-items: center; gap: 10px; height: 52px; padding-left: 16px; background: var(--zb-from); color: var(--zb-from-ink); }
+.zb-picker-search input { flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: none; color: inherit; font: inherit; font-size: 16px; }
+.zb-picker-search input::placeholder { color: var(--zb-from-muted); }
+.zb .zb-picker-close { width: 52px; height: 52px; flex: none; display: grid; place-items: center; background: var(--zb-from); color: #ffffff; border-left: 3px solid var(--zb-page); }
+.zb-tabs [role="tab"] svg, .zb-tabs [role="tab"] .zb-tok-icon { flex: none; }
+.zb-omni { position: relative; display: inline-flex; color: var(--zb-accent-text); cursor: pointer; }
+.zb .zb-link { display: inline-flex; align-items: center; gap: 4px; color: var(--zb-accent-text); font-weight: 600; text-decoration: underline; }
+.zb-token-name small { font-variant-numeric: tabular-nums; }
