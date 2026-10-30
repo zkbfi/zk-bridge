@@ -239,6 +239,12 @@ The archives are pinned on the kubo node under their version, as production ones
   script/release/promote.sh <staging-release-directory> "$(mktemp -d)"
 ```
 
+**Promotion requires the staging commit to be on main.** A staging manifest is signed by the staging key only, so it
+may not decide on its own what the production key signs: the commit it names must be a full 40-character SHA that is
+already on `origin/main` (after a fresh fetch). Staging releases may be built from any branch; they are promoted once
+their commit is merged to main. The production landing page built from that commit must trust exactly the keys of the
+operator's `landing.config.json`, and no staging key (`script/release/promote-checks.sh`).
+
 `promote.sh` verifies the staging release against the staging key, rebuilds only the landing page (at the staging
 commit, with the production configuration), and writes a production `version.json` (`channels.stable`, sequence =
 the live production sequence + 1, version = the staging version without `-next.N`, or `PROMOTE_VERSION`) that keeps the
