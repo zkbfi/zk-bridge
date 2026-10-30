@@ -36,8 +36,9 @@ export const stepWords = (item: FeedItem, destination: ChainConfig, now: number)
   if (item.status === "sent") return "Sent · waiting for finality";
   if (item.status === "waiting_for_finality") return "Final soon · waiting for the proof";
   if (item.status === "covered") {
-    const waited = Math.max(0, Math.round((now - item.sentAt) / 60));
-    return `Proven · waiting for a deliverer${waited > 0 ? ` for ${waited} min` : ""}`;
+    const minutes = Math.max(0, Math.round((now - item.sentAt) / 60));
+    const waited = minutes === 0 ? "" : minutes < 90 ? ` for ${minutes} min` : minutes < 48 * 60 ? ` for ${Math.round(minutes / 60)} h` : ` for ${Math.round(minutes / 1440)} days`;
+    return `Proven · waiting for a deliverer${waited}`;
   }
   if (item.status === "delivered") return `Delivered to ${destination.name}`;
   return item.status === "failed_call" ? "Delivered, but the call after it failed" : "The release failed";

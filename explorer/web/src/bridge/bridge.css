@@ -324,3 +324,6 @@ a.zb-go[aria-disabled="true"] { cursor: not-allowed; }
 .zb-slide-left { animation: zb-in-left 180ms ease-out; }
 .zb-slide-right { animation: zb-in-right 180ms ease-out; }
 @media (prefers-reduced-motion: reduce) { .zb-slide-left, .zb-slide-right { animation: none; } }
+
+/* Inside the signing sheet nothing is rounded except pills. */
+.zb-sign div { border-radius: 0 !important; box-shadow: none !important; }

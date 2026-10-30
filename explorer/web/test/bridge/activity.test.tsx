@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FeedItem } from "@terminal/model/types";
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import { Shell } from "../../src/app/Shell";
-import { groupOf, NEEDS_YOU_AFTER_SECONDS, positionOf, stepsOf, txUrl } from "../../src/bridge/activity-model";
+import { groupOf, NEEDS_YOU_AFTER_SECONDS, positionOf, stepsOf, stepWords, txUrl } from "../../src/bridge/activity-model";
 import { ActivityPulse } from "../../src/bridge/ActivityScreen";
 import { addPending, clearPending } from "../../src/bridge/pending";
 import { buildTestServices } from "../render";
@@ -34,6 +34,7 @@ afterEach(() => clearPending());
 describe("the activity model", () => {
   it("groups transfers: in flight, needs you (proven and stuck, or failed), delivered", () => {
     expect(groupOf(item({ status: "waiting_for_finality" }), NOW)).toBe("in-flight");
+    expect(stepWords(item({ status: "covered", sentAt: NOW - 3 * 86_400 }), FIXTURE_PAIR.second, NOW)).toBe("Proven · waiting for a deliverer for 3 days");
     expect(groupOf(item({ status: "covered", sentAt: NOW - NEEDS_YOU_AFTER_SECONDS - 1 }), NOW)).toBe("needs-you");
     expect(groupOf(item({ status: "release_failed" }), NOW)).toBe("needs-you");
     expect(groupOf(item({ status: "delivered", deliveredAt: NOW }), NOW)).toBe("delivered");
