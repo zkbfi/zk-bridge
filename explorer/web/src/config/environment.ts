@@ -56,7 +56,22 @@ const present = (value: string | undefined): string | null => (value === undefin
 
 const baseUrlOf = (value: string | undefined): string | null => present(value)?.replace(/\/$/, "") ?? null;
 
-const rpcUrlsOf = (environment: Readonly<Record<string, string | undefined>>): Record<number, string> =>
+/**
+ * The RPC every chain uses when the build names none: the valve.city demo key, which serves Ethereum, PulseChain and
+ * their testnets (owner: "you can use the valve.city demo key as a default for both chains. also supports testnets").
+ * The user can replace it in the settings.
+ */
+export const DEFAULT_RPC_CHAIN_IDS: readonly number[] = [1, 369, 11155111, 943];
+
+/** The valve.city demo RPC of a chain. */
+export const defaultRpcUrl = (chainId: number): string => `https://one.valve.city/rpc/vk_demo/evm/${chainId}`;
+
+const rpcUrlsOf = (environment: Readonly<Record<string, string | undefined>>): Record<number, string> => ({
+  ...Object.fromEntries(DEFAULT_RPC_CHAIN_IDS.map((chainId) => [chainId, defaultRpcUrl(chainId)])),
+  ...rpcUrlsFromEnvironment(environment),
+});
+
+const rpcUrlsFromEnvironment = (environment: Readonly<Record<string, string | undefined>>): Record<number, string> =>
   Object.fromEntries(
     Object.entries(environment).flatMap(([name, value]): [number, string][] => {
       if (!name.startsWith(VARIABLES.rpcPrefix)) return [];

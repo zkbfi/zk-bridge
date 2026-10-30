@@ -1,9 +1,12 @@
 import { Box, Button, Flex, Text } from "@chakra-ui/react";
+import { useState } from "react";
+import { loadImageServer, saveImageServer } from "../bridge/image-server";
+import { DEFAULT_IMAGE_SERVER } from "../bridge/image-source";
 import { useServices } from "./services";
 import { clearRecent, browserStorage } from "../search/recent-items";
 import type { ThemeChoice } from "../search/search-model";
 import { Modal } from "../ui/Modal";
-import { DataRow, Mono } from "../ui/primitives";
+import { DataRow, Mono, TextInput } from "../ui/primitives";
 
 /** Props of {@link SettingsDialog}. */
 export type SettingsDialogProps = {
@@ -35,6 +38,8 @@ export const hostOf = (url: string): string => {
  */
 export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose }: SettingsDialogProps) => {
   const { configuration, pair } = useServices();
+  const [images, setImages] = useState(loadImageServer);
+  const [imagesNote, setImagesNote] = useState<string | null>(null);
   const rpcRows = [pair.first, pair.second].map((chain) => ({ chain, url: configuration.rpcUrls[chain.chainId] }));
   return (
     <Modal title="Settings" onClose={onClose}>
@@ -71,6 +76,34 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose }: Set
               {THEME_LABELS[choice]}
             </Button>
           ))}
+        </Flex>
+      </Box>
+      <Box marginTop="4">
+        <Text fontWeight="medium" marginBottom="1">
+          Token and chain images
+        </Text>
+        <Text fontSize="xs" color="fg.muted" marginBottom="1">
+          Where icons come from when the release does not already carry them. Icons always load as images, never as code.
+        </Text>
+        <TextInput aria-label="Image server" spellCheck={false} autoComplete="off" value={images} onChange={(event) => setImages(event.target.value)} />
+        <Flex gap="2" marginTop="2" alignItems="center">
+          <Button size="sm" onClick={() => setImagesNote(saveImageServer(images) ?? "Saved.")}>
+            Save
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              saveImageServer(null);
+              setImages(DEFAULT_IMAGE_SERVER);
+              setImagesNote("Back to gib.show.");
+            }}
+          >
+            Reset
+          </Button>
+          <Text fontSize="xs" color="fg.muted" aria-live="polite">
+            {imagesNote}
+          </Text>
         </Flex>
       </Box>
       <Box marginTop="4">

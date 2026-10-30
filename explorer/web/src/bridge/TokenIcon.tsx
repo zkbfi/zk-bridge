@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { loadImageServer } from "./image-server";
 import { iconUrl, type IconSubject } from "./image-source";
 
 /** Props of {@link TokenIcon}. */
@@ -18,7 +19,7 @@ export type TokenIconProps = {
  *
  * @param props The subject, the badge and the symbol.
  */
-export const TokenIcon = ({ subject, badgeChainId = null, symbol, size = 24, imageServer }: TokenIconProps) => {
+export const TokenIcon = ({ subject, badgeChainId = null, symbol, size = 24, imageServer = loadImageServer() }: TokenIconProps) => {
   const [failed, setFailed] = useState(false);
   const [badgeFailed, setBadgeFailed] = useState(false);
   return (

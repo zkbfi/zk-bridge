@@ -16,9 +16,23 @@ describe("readConfiguration", () => {
       VITE_EXPLORER_DEPLOYMENT_JSON: DEPLOYMENT,
     });
     expect(configuration.indexerUrl).toBe("https://indexer.example.org");
-    expect(configuration.rpcUrls).toEqual({ 1: "https://eth.example.org", 369: "https://pls.example.org" });
+    expect(configuration.rpcUrls).toEqual({
+      1: "https://eth.example.org",
+      369: "https://pls.example.org",
+      11155111: "https://one.valve.city/rpc/vk_demo/evm/11155111",
+      943: "https://one.valve.city/rpc/vk_demo/evm/943",
+    });
     expect(configuration.pairName).toBe("eth-pls");
     expect(configuration.dataMode).toBe("live");
+  });
+
+  it("defaults every chain's RPC to the valve.city demo key, testnets included, when the build names none", () => {
+    expect(readConfiguration({ VITE_EXPLORER_DEPLOYMENT_JSON: DEPLOYMENT }).rpcUrls).toEqual({
+      1: "https://one.valve.city/rpc/vk_demo/evm/1",
+      369: "https://one.valve.city/rpc/vk_demo/evm/369",
+      11155111: "https://one.valve.city/rpc/vk_demo/evm/11155111",
+      943: "https://one.valve.city/rpc/vk_demo/evm/943",
+    });
   });
 
   it("leaves the indexer unset when no variable names it, so the registry default decides later", () => {
