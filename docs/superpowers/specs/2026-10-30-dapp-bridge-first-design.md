@@ -184,18 +184,22 @@ and the time left while in flight or the age once delivered. A row links to the 
 
 - **The pulse, drawn properly (owner):** no opacity anywhere. The track is two solid colours: lit accent behind the
   pill (everything already passed), a solid dark ember (#4a2414 on black) ahead of it. Stops already passed are pale,
-  stops ahead are dark. Pill and stop proportions are being picked (slim / matched / bold, `pulse-v5.html`).
+  stops ahead are dark. Proportions: **B, matched** (owner): the pill twice the track's height, the stops a third of the pill's height.
 - **Steps of a transfer:** a vertical list whose dots are joined by a line, lit up to the current step and dark after
-  it (the pulse turned on its side). Future steps show an estimate and no link.
+  it (the pulse turned on its side). Future steps show an estimate and no link. Every reached step ends with an external-link icon, right-justified, to the
+  right of the timestamp, linking to that transaction (or block / proof) on the chain's explorer (owner).
 - **Numbers that are not inputs:** three or more leading zeros after the decimal point collapse to a subscript count:
   0.0001234 shows as 0.0₃1234. Fewer than three zeros show as they are. Typed amounts are never rewritten.
 - **Tokens always with their icon** wherever a symbol appears (amounts, fees, notes, buttons). **Gas is a gas can**
-  icon, never the word.
+  icon, never the word. In the fee line, the gas can carries a small bar graph (like signal bars) showing the gas level
+  chosen; tapping it lets the user pay more gas for speed (owner: "users can choose a higher gas payment if they want
+  (default is a percent anyway)").
 - **Self-delivery checks the wallet:** "Deliver it yourself" reads the connected wallet's native balance on the
   destination chain and is disabled when it can't pay the gas, with a tooltip saying how much it holds, how much is
   needed, and what to add.
 - **Settings (owner):** theme (System default, Light, Dark, Mono); the RPC endpoint per chain, user-replaceable, with a
-  live check, kept in this browser; the image server for token and chain icons (gib.show by default), replaceable.
+  live check, kept in this browser; the default for every chain, testnets included, is the valve.city demo key
+  (owner): `https://one.valve.city/rpc/vk_demo/evm/<chainId>` (checked 2026-10-30: answers for 1, 369, 11155111, 943); the image server for token and chain icons (gib.show by default), replaceable.
   Icons the release already ships (pre-loaded at build time) don't depend on it.
 
 ## Open questions
@@ -213,3 +217,40 @@ and the time left while in flight or the age once delivered. A row links to the 
 - Component structure, how the existing BridgeForm logic is reused, and the test plan.
 - Exact spacing, type scale, and the dark-theme palette within the language above.
 - Keyboard and screen-reader behaviour of the custom menus (they must be accessible: proper roles, focus, Escape).
+
+## The owner's words, verbatim
+
+The owner asked that every spec carry their raw instructions, because builds made from a summary of a companion
+session have dropped key pieces before. Where this document and these words disagree, these words win; ask. Keyboard
+noise from one message (a child on the keyboard) is left out.
+
+1. "it looks like the dapp loads. however, it still looks like crap. we need to greatly simplify what the user sees. an input token and amount and a chain/pairing selector. come up with a few options using the visual companion. i think that the main input and showing the result is pretty well established in bridge land, but there are other things we can do around it like communicate to the user where their bridge is in the process, how long it will take, their previous activity, things like that"
+2. "we can also provide a destination address that is different than the existing infrastructure"
+3. "the inflight bars are good, but we can use inspiration from the zkb logo with the dots at each end."
+4. "i also think that you have to use pill shape. otherwise you are just adding another curve to the design language. that may be worth exploring as well. what is our design language. the pulse looks cool. go with that one for the activity"
+5. "square panels, pill controls. that will allow us to line the button up with the content and the wrappers can get the the viewport edges"
+6. "i think the chain/pair toggle can be combined and put into the "from ethereum" label. just turn it into a dropdown/menu (never use selects) and my point with having the pointed panels is to allow them to bleed to the edge of the viewport. do you disagree that that will work?"
+7. "yes. i think you have it now"
+8. "i don't know about the borders. i would like to see some theme variations"
+9. "b,c,d,and e are all good. explore them all. 3 variations, or distinguishing characteristics from each would be good to surfac"
+10. "i gotta say, ember d1 + d3 look really good. might be worth looking at an outlined white/orange button for the bridge button instead of white. i do like e3 for accessability purpose"
+11. "no you're right. it should outshout the orange band. can you put some of these onto a picker so that i can share it with colleagues? something like zkb.fi/ui? we can put all of our variations there so that i can get collaboration"
+12. On where the picker lives: "no, you know? lets just go with my suggestions. we can change it later. we need to get to the substance"
+13. Answers to the builder check:
+    - "1) one thing to remember is no one is using this yet"
+    - "2) i have not seen this drawer from the bottom. please enlighten me"
+    - "3) yes, and the default setting should be to follow the system"
+    - "4) search pill should allow us to get to anything. docs, explorer, indexer, activity, bridging. anything. it's a generalized shortcut and search hamburger bar"
+    - "5) i have not yet seen this gas pil so you'll have to help me out here. perhaps we move the switch button to the left side and then we have all of the toggles in a wider menu on the right, also between the input and output?"
+    - "6) not sure how to present this yet. i think you could do something creative like a whole-screen-slide to the left / right to get into different modes/ navigate"
+    - "7) correct, the token selector menu modal should also have a search bar and one should be able to search through all tokens"
+14. "7) picking a token on the other chain flips the direction for you, yes / 2) that is fine, we should also use the bridge button to show things like, fee too low, bots will probably not deliver for you. and above the output token readout, we should have things like fee summaries. / so, something i have wanted to try is this: move the "from etheruem" up above the ember, and turn it into a continuous menu button, that joins with another input on the right side, which is your wallet on that network, then above the big bridge button, is your destination address section. we could also mirror it, showing "to pulsechain" on the left side and the address on the right. / 6) regarding your 3 modes, i think it would be worth putting the active page in the middle of the nav, and then, yes, the screens can slide sideways, but they are also accessible as items in the search on the right. i'll draw it out"
+15. The sketch: "so we have / [logo] [active_page_name] [search] / From [input_chain_as_icon] ... [account_settings] / [input_amount] [selector - symbol+icon]"
+16. "use the real ethereum and pulsechain icons. you can probably just pre-load them from gib.show during a build step so that we can host them on ipfs"
+17. "eth icon with a small pulsechain badge. and the zkbweth should still be the same icon as the input and the output should match the input token. the balance line should be right aligned so that the max button lines up with the edge of the token input. we can then put a dollar value on the left side. we will also have to come up with a fairly comprehensive oracle. especially because, currently, the usd value is based on bridged tokens that have crossed over the omnibridge. not this one / the fee line is good, but is misses the mark. instead of the words "tip" and gas, you should use icons. 1) take my money fist, and gas can be a gas pump/can. The word arrives, can instead be removed. we can then soften the text color and add tooltips explaining each one. for the tip, it should explain how the tip is calculated. clicking on the tip should open a hidden drawer section below the 3 items and above the output amount to allow the user to use sliders with tick marks to denote end of profitabilty. more tooltips explaining hidden information there too. the duration can tell the user all of the different technical steps. clicking again or away closes it"
+18. "i do not like the gear icons that you are using, nor the carots. use chevrons. pick something else to communicate what you are trying to say"
+19. "the tooltip should be something other than white. it is too bright on the black bg. overall it looks good. i think the other thing that we need to check for is wrapped tokens from the existing omnibridge. if we detect such a token, we should warn the user about wasting gas and isolating their tokens since they would then be double wrapped. now show me the activity screen"
+20. "the trail of the progress bar should not be so dark. it looks like you just slapped on opacity and called it a day. causes layered parts of the bar to be different colors. left of the pill should be lit up. and maybe play with the pill sizing and the middle dots sizing. looks clashy. also, some rules regarding number visualizations: anything static/not an input, should show leading zeros as 0.0<sub>3</sub>1234 for 0.0001234 any number under 3 does not make sense to do. we should show a gas can for the word, gas. we should also check the balance of the connected walet and disable delivery if they do not have enough (explaining why it is disabled with a tooltip) it looks like you are using a lot of token symbols without the icon. you should. use gib.show and we will have to add a settings modal / section for users to swap out the rpc. image server should be another thing that they can swap out"
+21. "and the vertical dots that you are showing in the delivered section, those should be connected as they are progressed through"
+22. "1) B, matched / 2) good, however the gas can on the input/output section should also have a bar graph showing different gas levels. users can choose a higher gas payment if they want (default is a percent anyway) / 3) great! be sure to add an external link icon justified to the right, to the right of the timestamp even, to link the user to the transaction / information on the blockchain / 4) you can use the valve.city demo key as a default for both chains. also supports testnets"
+23. "if you are going to write specs for these updates, be sure to capture my raw instruction too. often when you do this with the visual companion, and then you build it for real, you leave out key pieces and end up creating a shittier ui"
