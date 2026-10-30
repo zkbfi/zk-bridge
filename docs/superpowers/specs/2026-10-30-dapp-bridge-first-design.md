@@ -1,6 +1,7 @@
 # zkb.fi dapp: bridge-first redesign
 
-Date: 2026-10-30. Status: approved in conversation (layout), written up for planning.
+Date: 2026-10-30. Status: in review with the owner. Open: the review sheet, the settings pill at the seam, and
+mode navigation (whole-screen slides), shown at https://zkb.fi/ui and in the companion.
 Mockups: https://zkb.fi/ui (source `design/ui/screens/`): `page-v2.html` is the approved layout, `themes-v2.html` the
 themes (D1, D3, E3 chosen), `ember-button-v2.html` the Bridge pill (1 chosen), `language.html` the design language,
 `inflight-dots.html` option C the in-flight indicator. They are throwaway HTML, not code.
@@ -113,8 +114,8 @@ and the time left while in flight or the age once delivered. A row links to the 
 ## Settled after the builder check (my calls; owner can override)
 
 - **Routes.** The bridge screen is home: an empty hash opens `#/bridge/<pair>` (with `?dir=` for the direction and the
-  form fields in the query, as today). `#/pair/<id>` stays the explorer's pair view, so links shared since 0.1.1 still
-  open what they opened. The direction menu changes `<pair>` and `dir`; amount and destination survive a pair change
+  form fields in the query, as today). Nobody uses the dapp yet (owner), so there is no old link or route to keep working: routes and hash keys may be
+  redesigned freely. The direction menu changes `<pair>` and `dir`; amount and destination survive a pair change
   through the hash (the page reloads behind the loader, as it does today).
 - **Review step stays.** Bridge never opens the wallet directly: the existing review (tip, router warning, fee terms,
   and the "fields a link filled in" warning) and the step-by-step transaction view remain, redrawn in the new language
@@ -122,21 +123,56 @@ and the time left while in flight or the age once delivered. A row links to the 
   shadows). This is in scope.
 - **Themes apply to the whole app.** Ember light, Ember on black and Monochrome are set at the token level (colours,
   radii: pills full, panels square), so the explorer views take the palette too; their layouts are not redesigned.
-  The theme setting offers System, Light, Dark and Monochrome.
-- **Header on every route:** the mark (home), a search pill (opens the existing palette; works by tap on phones, so the
-  explorer is reachable without a wallet and without a keyboard), and the wallet pill (its menu holds the explorer
+  The theme setting offers System, Light, Dark and Monochrome; the default is System (owner).
+- **Header on every route:** the mark (home), a search pill (owner: "a generalized shortcut and search hamburger bar"
+  that reaches anything: bridging, activity, the explorer and its pages, the indexer's data, docs, settings; it replaces
+  a menu, works by tap on phones and by Ctrl/Cmd-K or / on desktop), and the wallet pill (its menu holds the explorer
   links, settings, and "Send a message").
 - **Send a message and call mode.** "Send a message" leaves the bridge screen and lives in the wallet menu and the
-  palette, opening the existing dialog (redrawn). Call mode, gas, tip and router stay behind "Advanced". Old links
-  (`?dialog=bridge&bridge.*`, `?dialog=wrap`, `?dialog=message`) keep working: their keys are kept or mapped, and the
-  linked-field warning still applies.
+  palette, opening the existing dialog (redrawn). Call mode, gas, tip and router stay behind "Advanced". Hash keys may change (no users yet); the linked-field warning still applies to whatever a link fills in.
 - **Your activity:** the current pair, both directions; transfers the wallet sent and transfers it received (so a send
   to another address shows for both sides); messages the wallet sent; a transfer appears as "sent" the moment its
   transaction is submitted (local pending state until the indexer has it); the latest 5, then "All activity" opens the
   history view filtered to the wallet.
-- **Token menu and Flip.** The direction comes first; the token menu lists the source chain's tokens only (the native
-  coin included where wrap-and-bridge exists). Flip reverses the direction and switches the token to its counterpart
+- **Token menu and Flip.** The direction comes first. The token picker is a sheet with a search field (owner) that
+  searches every bridgeable token; the source chain's tokens come first, and picking a token on the other chain flips
+  the direction (my guess at "search through all tokens"). The native coin is included where wrap-and-bridge exists. Flip reverses the direction and switches the token to its counterpart
   on the other chain, keeping the amount. The hash stores the direction (`dir`), not the token's side.
+
+- **Chain and token icons** (owner): the real Ethereum and PulseChain marks, taken from gib.show
+  (`https://gib.show/image/<chainId>` for chains, `https://gib.show/image/<chainId>/<token>` for tokens) by a build
+  step that downloads them into the site, so the IPFS release never calls gib.show at run time. Downloaded files are
+  checked (SVGs with scripts or outside references are refused) and pinned by hash in the repo so a build is
+  reproducible.
+
+## Card details (decided with the owner, 2026-10-30 afternoon)
+
+- **Header:** logo · the active page's name in the middle (Activity / Bridge / Explore; the screens slide sideways and
+  are also items in search) · search on the right.
+- **From row:** "From" + the source chain's icon (opens the direction menu) joined to your account on that chain
+  (address + identicon; opens the account menu). **To row** mirrors it above the Bridge pill: "To" + the destination
+  chain icon joined to the destination address (your wallet by default).
+- **Token:** the output shows the same token as the input: the same icon with a small badge of the destination chain
+  (ETH with a PulseChain badge; the on-chain token is zkbWETH, said in small text under the amount).
+- **Balance line:** right-aligned under the token pill so MAX lines up with the token pill's edge; the USD value on
+  the left. Same line under the output (USD left).
+- **USD needs a real oracle (owner):** today's USD values come from tokens bridged over the Omnibridge, not from this
+  bridge's tokens, so they are wrong for zkb.fi. A price source covering the bridged tokens on both chains is a
+  requirement; its design is a separate piece of work (see Open questions).
+- **Fee line:** three soft-coloured icon + value items, no words: tip (a hand holding money), gas (a pump), time (a
+  clock). Each has a tooltip; the tip's explains how the tip is calculated. Tapping the tip opens a drawer between the
+  fee line and the output amount with sliders that have tick marks (e.g. where delivery stops being profitable for
+  bots, a typical tip, today's gas price) and more ? tooltips. Tapping the time opens the same drawer listing every
+  technical step with its estimate. Tapping again or anywhere else closes it.
+- **Bridge pill carries the verdict:** solid = go; orange outline = overridable warning ("Tip too low · may not be
+  delivered", explained under the pill); grey = blocked (balance, invalid address, paused gate).
+- **Icons:** chevrons for every menu and disclosure (no ▾ carets); no gear icons. Delivery settings use a sliders
+  icon; the account uses an identicon.
+
+## Open questions
+
+- The price oracle: which sources (DEX pools on PulseChain, an ETH/USD feed on Ethereum), how bridged tokens map to
+  their originals, and where it runs (indexer or backend).
 
 ## Left to the builder
 
