@@ -15,6 +15,7 @@ import { chainNamer } from "./ExploreScreen";
 import { statusWord } from "./explore-model";
 import { RouteIcons, shortHex, XGroup, XRow } from "./parts";
 import { AddressPage, TransactionPage } from "./TxAddressPages";
+import { BlockPage, ContractPage, CostsPage, GatePage, ProofPage, ReleasePage, SlotPage, TokenPage } from "./OtherPages";
 import type { Address, Hex } from "viem";
 
 const href = (page: ExplorePage): string => formatRoute({ name: "explore", page });
@@ -24,15 +25,15 @@ export const ExplorePageView = ({ page }: { readonly page: ExplorePage }) => {
   if (page.kind === "browse") return <BrowsePage kind={page.id} />;
   if (page.kind === "tx" && page.chainId !== undefined) return <TransactionPage chainId={page.chainId} hash={page.id.toLowerCase() as Hex} />;
   if (page.kind === "address") return <AddressPage address={page.id as Address} />;
-  return <UnknownPage page={page} />;
+  if (page.kind === "proof" && page.chainId !== undefined) return <ProofPage chainId={page.chainId} number={Number(page.id)} />;
+  if (page.kind === "token") return <TokenPage id={page.id} />;
+  if (page.kind === "block" && page.chainId !== undefined) return <BlockPage chainId={page.chainId} number={BigInt(page.id)} />;
+  if (page.kind === "slot") return <SlotPage slot={BigInt(page.id)} />;
+  if (page.kind === "contract" && page.chainId !== undefined) return <ContractPage chainId={page.chainId} address={page.id as Address} />;
+  if (page.kind === "gate" && page.chainId !== undefined) return <GatePage chainId={page.chainId} />;
+  if (page.kind === "release") return <ReleasePage cid={page.id} />;
+  return <CostsPage />;
 };
-
-const UnknownPage = ({ page }: { readonly page: ExplorePage }) => (
-  <div className="zb-col">
-    <XGroup title={page.kind} />
-    <p className="zb-small">{page.id}</p>
-  </div>
-);
 
 const BrowsePage = ({ kind }: { readonly kind: string }) => {
   const { pair, explore, now } = useServices();
