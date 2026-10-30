@@ -57,6 +57,7 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose }: Set
             {row.url === undefined ? "not set" : hostOf(row.url)}
           </DataRow>
         ))}
+        <DataRow label="Prices">PulseX pools on PulseChain, through your PulseChain RPC (display only)</DataRow>
         <Text fontSize="xs" color="fg.muted" marginTop="1">
           The page was built with these values. Only the host shows. You can set other URLs on the Connections page.
         </Text>
