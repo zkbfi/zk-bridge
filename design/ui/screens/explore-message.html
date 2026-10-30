@@ -61,6 +61,13 @@
   .blk:before { content: ""; position: absolute; left: -18px; top: -14px; bottom: -14px; width: 2px; background: #eb6834; }
   .blk span:nth-child(odd) { color: #9a948b; } .blk span:nth-child(even) { text-align: right; font-family: ui-monospace, monospace; color: #c9c2b8; word-break: break-all; }
   .tl .st .chev { color: #9a948b; }
+  .kv .ic { width: 22px; height: 22px; } .kv .ic img.main { width: 22px; height: 22px; } .kv .ic img.badge { width: 11px; height: 11px; right: -3px; bottom: -2px; }
+  .kv .chain { width: 16px; height: 16px; border-radius: 50%; vertical-align: -3px; }
+  .kv.tap { cursor: pointer; } .kv.tap.on .k, .kv.tap.on .v b { color: #f0ede8; }
+  .fd { position: relative; margin: 0 16px 10px; background: #1c1a18; border-top: 3px solid #eb6834; padding: 8px 12px; font-size: 13px; display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; }
+  .fd span:nth-child(odd) { color: #9a948b; } .fd span:nth-child(even) { text-align: right; color: #c9c2b8; }
+  .fd .tot { border-top: 1px solid #2a2724; padding-top: 5px; color: #f0ede8 !important; font-weight: 700; }
+  .route.plate img, .band .ic img { background: #fff; border-radius: 50%; padding: 1px; }
   .caption { font: 13px/1.5 system-ui, sans-serif; color: #55524d; max-width: 390px; margin-top: 8px; }
 </style>
 
@@ -87,15 +94,16 @@
 
   const blkRow = (k, v) => `<span>${k}</span><span>${v}</span>`;
   const transfer = head('Message') +
-    `<div class="band"><div class="lbl" style="display:flex;align-items:center;gap:8px">Token transfer ${route('PLS', 'SEP').replace('class="route"', 'class="route" style="color:#fff"')}</div><div class="big">${ic('USDC', 'ETH').replace(/30px/g, '34px')}80 USDC</div>
+    `<div class="band"><div class="lbl" style="display:flex;align-items:center;gap:8px">Token transfer ${route('PLS', 'SEP').replace('class="route"', 'class="route plate" style="color:#fff"')}</div><div class="big">${ic('USDC', 'ETH').replace(/30px/g, '34px')}80 USDC</div>
        <div class="addr">0x4663c8c2…a01f · message ID ${copyW}</div>
        <div class="tags"><span class="tagw">delivered</span><span class="tagw">14 min 20 s</span></div></div>
      <div class="grp">Who and what</div>
      <div class="kv" style="border-top:0"><span class="k">From</span><span class="v"><span class="mono">0x52…9EE7</span>${chevR}</span></div>
      <div class="kv"><span class="k">To</span><span class="v"><span class="mono">0x52…9EE7</span>${chevR}</span></div>
-     <div class="kv"><span class="k">Sent</span><span class="v">80 USDC on PulseChain</span></div>
-     <div class="kv"><span class="k">Received</span><span class="v">79.80 USDC on Sepolia</span></div>
-     <div class="kv"><span class="k">Fee</span><span class="v">0.20 USDC · ${'tip 0.17 + delivery 0.03'}</span></div>
+     <div class="kv"><span class="k">Sent</span><span class="v">${ic('USDC', 'PLS')}<b>80 USDC</b> on <img class="chain" src="${I.PLS}" alt=""> PulseChain</span></div>
+     <div class="kv"><span class="k">Received</span><span class="v">${ic('USDC', 'SEP')}<b>79.80 USDC</b> on <img class="chain" src="${I.SEP}" alt=""> Sepolia</span></div>
+     <div class="kv tap on"><span class="k">Fee</span><span class="v">${ic('USDC', 'PLS')}<b>0.20 USDC</b> · $0.20${chevD}</span></div>
+     <div class="fd"><span>Delivery gas · Sepolia</span><span>0.012 USDC</span><span>Proof generation</span><span>0.025 USDC</span><span>Tip to the deliverer</span><span>0.163 USDC</span><span class="tot">Total</span><span class="tot">0.20 USDC</span></div>
      <div class="kv"><span class="k">Delivered by</span><span class="v"><span class="mono">0x8a…2c11</span> · bot${chevR}</span></div>
      <div class="grp">Steps</div>
      <div class="tl">
@@ -107,13 +115,13 @@
      </div>
      <div class="grp">The message itself</div>
      <div class="kv" style="border-top:0"><span class="k">Nonce</span><span class="v mono">41</span></div>
-     <div class="kv"><span class="k">Source app</span><span class="v">Token mediator <span class="mono">0x1DBB…</span>${chevR}</span></div>
-     <div class="kv"><span class="k">Target app</span><span class="v">Token mediator <span class="mono">0x1782…</span>${chevR}</span></div>
+     <div class="kv"><span class="k">Source app</span><span class="v">ERC-20 mediator <span class="mono">0x1DBB…</span>${chevR}</span></div>
+     <div class="kv"><span class="k">Target app</span><span class="v">ERC-20 mediator <span class="mono">0x1782…</span>${chevR}</span></div>
      <div class="kv"><span class="k">Gas limit</span><span class="v">200,000</span></div>
      <div class="raw">${chevD} Payload (196 bytes), decoded: release 80 USDC to 0x52…9EE7</div>`;
 
   const call = head('Message') +
-    `<div class="band"><div class="lbl" style="display:flex;align-items:center;gap:8px">Contract call ${route('ETH', 'PLS').replace('class="route"', 'class="route" style="color:#fff"')}</div><div class="big">Message</div>
+    `<div class="band"><div class="lbl" style="display:flex;align-items:center;gap:8px">Contract call ${route('ETH', 'PLS').replace('class="route"', 'class="route plate" style="color:#fff"')}</div><div class="big">Message</div>
        <div class="addr">0x9d01e4b7…33c0 · message ID ${copyW}</div>
        <div class="tags"><span class="tagw">failed</span><span class="tagw">retry possible</span></div></div>
      <div class="grp">Who and what</div>
@@ -134,6 +142,6 @@
 
   const ph = (c, body, cap) => `<div class="option" data-choice="${c}" onclick="toggleSelect(this)" style="display:block"><div class="ph">${body}</div><p class="caption">${cap}</p></div>`;
   document.getElementById('x').innerHTML =
-    ph('transfer', transfer, '<b>A token transfer.</b> The amount in the band, who sent it to whom, sent vs received, the fee split, who delivered it; the steps (here the delivery step open); then the message itself: nonce, the mediator apps on each side, gas limit, and the decoded payload.') +
+    ph('transfer', transfer, '<b>A token transfer.</b> The amount in the band, who sent it to whom, sent vs received, the fee as one total that opens (right chevron, here open) into delivery gas, proof and tip, who delivered it; the steps (here the delivery step open); then the message itself: nonce, the ERC-20 mediator on each side, gas limit, and the decoded payload.') +
     ph('call', call, '<b>A contract call.</b> Any contract on the other chain, with data you choose. This one reverted on delivery: the step opens to the revert reason, and the page offers a retry with more gas.') + '' + (false ? ph('address', address, '<b>Address.</b> Who it is (known roles as tags), its balance and activity on each chain, what it did through zkb.fi, then tabs for transfers, proofs posted, contracts deployed and deliveries made. "Bridge to this address" prefills the destination; "Watch" adds it to Activity without connecting it.') : '') + (false ? ph('tx', tx, '<b>Transaction.</b> What kind of zkb.fi transaction it is; the decoded call, gas and fee; where it sits: from the user\'s transfer that started it to delivery (joined, lit, each linking out; a step opens a small drawer, here the block); its decoded events; the raw input collapsed.') : '');
 </script>
