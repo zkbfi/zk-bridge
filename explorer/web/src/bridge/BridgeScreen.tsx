@@ -19,6 +19,14 @@ import { Sheet } from "./Sheet";
 import { TokenIcon } from "./TokenIcon";
 import { TokenPicker } from "./TokenPicker";
 import { pressable, verdictOf } from "./verdict";
+import { routerWarningOf } from "../tx/tip-copy";
+
+/** Names every field a link filled beyond the route, the token and the amount. */
+const LinkedWarning = ({ fields }: { readonly fields: readonly string[] }) => (
+  <div className="zb-warnbox" role="alert">
+    The link you opened filled in: {fields.join(", ")}. Check them before you confirm. Nothing is sent until you confirm in your wallet.
+  </div>
+);
 
 /** Props of {@link BridgeScreen}. */
 export type BridgeScreenProps = {
@@ -26,6 +34,8 @@ export type BridgeScreenProps = {
   /** Writes a changed route (direction, form fields) to the address in place. */
   readonly onRoute: (next: Route) => void;
   readonly fixture: boolean;
+  /** The fields a link filled that the user must check (receiver, tip settings, router, gas). */
+  readonly linked?: readonly string[];
 };
 
 const short = (address: string): string => `${address.slice(0, 6)}…${address.slice(-4)}`;
@@ -47,7 +57,7 @@ const safeParse = (text: string, decimals: number): bigint | null => {
  *
  * @param props The route and the handler that writes it.
  */
-export const BridgeScreen = ({ route, onRoute, fixture }: BridgeScreenProps) => {
+export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScreenProps) => {
   const { pair } = useServices();
   const wallet = useWallet();
   const account = wallet.status === "connected" ? wallet.account : null;
@@ -271,6 +281,7 @@ export const BridgeScreen = ({ route, onRoute, fixture }: BridgeScreenProps) => 
             </label>
           ) : null}
           {receiver !== "" && account !== null && receiver.toLowerCase() !== account.toLowerCase() ? <p className="zb-verdict" style={{ textAlign: "left" }}>Not your wallet. Check the address.</p> : null}
+          {linked.length === 0 ? null : <LinkedWarning fields={linked} />}
           <button
             type="button"
             className="zb-go"
@@ -292,7 +303,12 @@ export const BridgeScreen = ({ route, onRoute, fixture }: BridgeScreenProps) => 
             <div className="zb-kv"><span className="zb-k">Arrives</span><b>{received === null ? "—" : inline(tokenIcon(token, destination.chainId, 16), amountText(received > 0n ? received : 0n, token.decimals), token.symbol)} on {destination.name}</b></div>
             <div className="zb-kv"><span className="zb-k">Tip</span><span>{tipUnits === null ? "none" : inline(tokenIcon(token, null, 14), amountText(tipUnits, token.decimals), token.symbol)}</span></div>
             <div className="zb-kv"><span className="zb-k">Time</span><span>{transferEstimate(source, destination)}</span></div>
-            <div className="zb-kv"><span className="zb-k">To</span><span className="zb-mono">{short(receiver)}{account !== null && receiver.toLowerCase() !== account.toLowerCase() ? " (not your wallet)" : ""}</span></div>
+            <div className="zb-kv"><span className="zb-k">To</span><span className="zb-mono" style={{ wordBreak: "break-all", textAlign: "right" }}>{receiver}{account !== null && receiver.toLowerCase() !== account.toLowerCase() ? " (not your wallet)" : ""}</span></div>
+            {delivery === null ? null : (
+              <div className="zb-kv"><span className="zb-k">Relay router</span><span className="zb-mono" style={{ wordBreak: "break-all", textAlign: "right" }}>{delivery.router}</span></div>
+            )}
+            {delivery === null || routerWarningOf(delivery) === null ? null : <div className="zb-warnbox" role="alert">{routerWarningOf(delivery)}</div>}
+            {linked.length === 0 ? null : <LinkedWarning fields={linked} />}
             {verdict.kind === "warn" ? <div className="zb-warnbox">{verdict.detail}</div> : null}
             <button type="button" className="zb-go" data-kind="go" disabled={draft.status !== "ready"} onClick={() => { setReview(false); setSigning(draft.steps); }}>
               Confirm in wallet

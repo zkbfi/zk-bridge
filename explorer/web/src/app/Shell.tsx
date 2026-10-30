@@ -19,7 +19,7 @@ import { BridgeScreen } from "../bridge/BridgeScreen";
 import { Header } from "../bridge/Header";
 import { Notice } from "../ui/primitives";
 import { ActionsContext } from "./actions-context";
-import { formatLocation, formatRoute, linkedFields, NO_OVERLAY, parseLocation, resolveHome, routeTitle, type Overlay, type PageLocation, type Route } from "./route";
+import { bridgeLinkedFields, formatLocation, formatRoute, linkedFields, NO_OVERLAY, parseLocation, resolveHome, routeTitle, type BridgeQuery, type Overlay, type PageLocation, type Route } from "./route";
 import { useServices } from "./services";
 import { SettingsDialog } from "./SettingsDialog";
 import { SourceBadge } from "./SourceBadge";
@@ -130,7 +130,14 @@ export const Shell = () => {
   // can name the fields that came from the link.
   const linkedOf = (next: PageLocation): Overlay | null => (next.overlay.dialog === null ? null : next.overlay);
   const [linkedOverlay, setLinkedOverlay] = useState<Overlay | null>(() => linkedOf(parseLocation(window.location.hash)));
-  const [location, go] = useHashLocation(pair.id, (next) => setLinkedOverlay(linkedOf(next)));
+  // The bridge form a link carried (at load, or whenever the address changes from outside the page). Beyond the route,
+  // the token and the amount, every field it filled is named on the screen and in the review (see linkedFields).
+  const linkedFormOf = (next: PageLocation): BridgeQuery | null => (next.route.name === "bridge" ? (next.route.form ?? null) : null);
+  const [linkedForm, setLinkedForm] = useState<BridgeQuery | null>(() => linkedFormOf(parseLocation(window.location.hash)));
+  const [location, go] = useHashLocation(pair.id, (next) => {
+    setLinkedOverlay(linkedOf(next));
+    setLinkedForm(linkedFormOf(next));
+  });
   const { route, overlay } = location;
   const navigate = useCallback((next: Route): void => go({ route: next, overlay: NO_OVERLAY }), [go]);
   const update = useCallback((next: Route): void => go({ route: next, overlay }, "replace"), [go, overlay]);
@@ -190,7 +197,12 @@ export const Shell = () => {
           onSearch={openPalette}
         />
         {route.name === "bridge" ? (
-          <BridgeScreen route={route} onRoute={update} fixture={configuration.dataMode === "fixture"} />
+          <BridgeScreen
+            route={route}
+            onRoute={update}
+            fixture={configuration.dataMode === "fixture"}
+            linked={linkedForm === null ? [] : bridgeLinkedFields(linkedForm, wallet.status === "connected" ? wallet.account : null)}
+          />
         ) : (
         <Box as="main" paddingX={{ base: "4", md: "6" }} paddingY="4">
           <Flex gap="3" alignItems="center" justifyContent="flex-end" flexWrap="wrap" marginBottom="2">

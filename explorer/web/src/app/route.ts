@@ -420,6 +420,16 @@ export const formatLocation = ({ route, overlay }: PageLocation): string => {
  * @param overlay The dialog as the link opened it.
  * @param account The connected account; a receiver equal to it is not flagged.
  */
+/**
+ * The fields of a bridge-screen link that need the user's attention: everything it filled except the route, the token
+ * and the amount, which may prefill silently (security review of the bridge screen).
+ *
+ * @param form The form as the link carried it.
+ * @param account The connected account; a receiver equal to it is not flagged.
+ */
+export const bridgeLinkedFields = (form: BridgeQuery, account: string | null): readonly string[] =>
+  linkedFields({ ...NO_OVERLAY, dialog: "bridge", bridge: form }, account).filter((field) => field !== "token" && field !== "amount");
+
 export const linkedFields = (overlay: Overlay, account: string | null): readonly string[] => {
   // Every field that moves funds, decides where they go, or changes what the sender pays is named; only the user's
   // own account as the receiver is left out.
