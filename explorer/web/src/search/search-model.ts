@@ -64,6 +64,9 @@ export type ResultGroup = {
 
 /** The views that the palette lists. The route of the pair view takes the default pair. */
 export const viewResults = (defaultPairId: string): readonly SearchResult[] => [
+  { id: "view:activity", kind: "view", title: "Activity", subtitle: "Your transfers: in flight and delivered", keywords: ["history", "transfers", "mine", "status", "progress"], jump: { type: "route", route: { name: "activity" } } },
+  { id: "view:bridge", kind: "view", title: "Bridge", subtitle: "Send to the other chain", keywords: ["home", "send", "swap", defaultPairId], jump: { type: "route", route: { name: "bridge", pairId: defaultPairId, dir: "first-to-second" } } },
+  { id: "view:explore", kind: "view", title: "Explore", subtitle: "Pairs, light clients, the prover, the indexer", keywords: ["explorer", "pairs", "health", "indexer"], jump: { type: "route", route: { name: "explore" } } },
   { id: "view:global", kind: "view", title: "Global view", subtitle: "Choose a pair and see its health", keywords: ["home", "pairs", "overview"], jump: { type: "route", route: { name: "global" } } },
   { id: "view:pair", kind: "view", title: "Pair view", subtitle: "Actions, feed and light client heads", keywords: ["dashboard", "feed", "transfers", defaultPairId], jump: { type: "route", route: { name: "pair", pairId: defaultPairId, token: null } } },
   { id: "view:audit", kind: "view", title: "Audit", subtitle: "Escrow against bridged supply, and fees", keywords: ["escrow", "supply", "mismatch", "fees"], jump: { type: "route", route: { name: "audit" } } },
@@ -220,7 +223,7 @@ const GROUP_LIMITS: Readonly<Record<ResultKind | "recent", number>> = {
   address: 3,
   token: 6,
   pair: 4,
-  view: 6,
+  view: 10,
   action: 6,
   doc: 8,
 };

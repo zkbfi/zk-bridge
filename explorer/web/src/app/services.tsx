@@ -16,6 +16,7 @@ import type { WebConfiguration } from "../config/environment";
 import { createFixtureIndexerClient } from "../data/fixture-indexer-client";
 import { createFallbackIndexerClient, type IndexerClient } from "../data/indexer-client";
 import { NO_ENDPOINTS, realPanelTransport, type PanelEndpoints, type PanelTransport } from "../views/proof-panel-model";
+import { defaultRpcUrl } from "@terminal/config/default-rpc";
 
 /** Everything that a component reads from outside React. */
 export type Services = {
@@ -104,6 +105,7 @@ export const createServices = (configuration: WebConfiguration, pair: PairConfig
   }
   if (live.sharedPair === null) throw new Error("A live page needs the pair in its shared form.");
   const connection = createConnectionRuntime({
+    fallbackRpcUrl: defaultRpcUrl,
     pair,
     sharedPair: live.sharedPair,
     environment: {

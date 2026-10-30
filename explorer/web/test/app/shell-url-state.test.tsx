@@ -13,20 +13,20 @@ beforeEach(() => {
 });
 
 describe("the landing", () => {
-  it("opens the default pair's view for an empty hash, in place, with no chooser", async () => {
+  it("opens the bridge on the default pair for an empty hash, in place, with no chooser", async () => {
     window.history.replaceState(null, "", window.location.pathname);
     const before = window.history.length;
     renderWithWallet(<Shell />, { wallet: disconnectedWallet() });
-    expect(await screen.findByRole("table", { name: "Transfers and messages" })).toBeInTheDocument();
+    expect(await screen.findByTestId("page-name")).toHaveTextContent("Bridge");
     expect(screen.queryByRole("heading", { name: "Global view" })).toBeNull();
-    expect(window.location.hash).toBe(`#/pair/${FIXTURE_PAIR.id}`);
+    expect(window.location.hash).toBe(`#/bridge/${FIXTURE_PAIR.id}`);
     expect(window.history.length).toBe(before);
   });
 
-  it("sends the brand link to the default pair", async () => {
+  it("sends the mark to the bridge on the default pair", async () => {
     window.history.replaceState(null, "", "#/audit");
     renderWithWallet(<Shell />, { wallet: disconnectedWallet() });
-    expect(screen.getByRole("link", { name: `zk-bridge explorer, ${FIXTURE_PAIR.id}` })).toHaveAttribute("href", `#/pair/${FIXTURE_PAIR.id}`);
+    expect(screen.getByRole("link", { name: "zkb.fi, the bridge" })).toHaveAttribute("href", `#/bridge/${FIXTURE_PAIR.id}`);
   });
 });
 

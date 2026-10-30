@@ -42,6 +42,8 @@ export interface ConnectionRuntimeInput {
   readonly environment: ConnectionLayer
   /** What the user set before, from the secret store or from the browser. */
   readonly user: ConnectionSettings
+  /** The RPC of a chain that nothing else names, or null. The web dapp passes the valve.city demo RPC. */
+  readonly fallbackRpcUrl?: (chainId: number) => string | null
   /** Replaces the connection factory. A test passes a fake. */
   readonly createConnection?: (input: ExplorerConnectionInput) => ExplorerConnection
   /** Replaces the chain access factory. The environment maps the RPC variable name of each chain to its URL. */
@@ -93,10 +95,14 @@ export interface ConnectionRuntime {
 }
 
 /** The layer that the pair registry offers: the RPC URL of the deployment file and the standard indexer address. */
-export function registryLayer(sharedPair: Pair): ConnectionLayer {
+/**
+ * The registry's defaults. A chain the deployment gives no RPC gets `fallbackRpcUrl` (the web dapp passes the
+ * valve.city demo RPC; the terminal passes nothing, so such a chain has no URL).
+ */
+export function registryLayer(sharedPair: Pair, fallbackRpcUrl: (chainId: number) => string | null = () => null): ConnectionLayer {
   return {
     indexerUrl: DEFAULT_INDEXER_URL,
-    rpcUrls: Object.fromEntries(sharedPair.sides.map((side) => [side.chainId, side.rpcUrl === '' ? null : side.rpcUrl])),
+    rpcUrls: Object.fromEntries(sharedPair.sides.map((side) => [side.chainId, side.rpcUrl === '' ? fallbackRpcUrl(side.chainId) : side.rpcUrl])),
   }
 }
 
@@ -133,7 +139,7 @@ export function createConnectionRuntime(input: ConnectionRuntimeInput): Connecti
       chainIds: chains.map((chain) => chain.chainId),
       user,
       environment: input.environment,
-      registry: registryLayer(sharedPair),
+      registry: registryLayer(sharedPair, input.fallbackRpcUrl),
     })
     connection = createConnection({ pair: sharedPair, resolved, ...input.connectionOptions })
     dataSource = createIndexerDataSource({ baseUrl: connection.baseUrl, pair, getJson: (url) => connection.getJson(url) })

@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
-import { DEFAULT_RPC_CHAIN_IDS, defaultRpcUrl, loadPairConfig, readConfiguration, type WebConfiguration } from "../../src/config/environment";
-
-/** The valve.city demo RPC of every chain, which the variables of a build override. */
-const DEFAULT_RPCS = Object.fromEntries(DEFAULT_RPC_CHAIN_IDS.map((chainId) => [chainId, defaultRpcUrl(chainId)]));
+import { loadPairConfig, readConfiguration, type WebConfiguration } from "../../src/config/environment";
 import { ConfigurationError } from "../../src/config/secret-scan";
 
 const DEPLOYMENT = JSON.stringify({
@@ -28,7 +25,7 @@ describe("readConfiguration: the RPC variables", () => {
     ["a chain with a fraction", "VITE_EXPLORER_RPC_URL_1.5"],
   ])("keeps no endpoint for %s", (_name, variable) => {
     const configuration = readConfiguration({ VITE_EXPLORER_DATA: "fixture", [variable]: "https://rpc.example.org" });
-    expect(configuration.rpcUrls).toEqual(DEFAULT_RPCS);
+    expect(configuration.rpcUrls).toEqual({});
   });
 
   it("keeps no endpoint for a blank value, and trims a value that has spaces", () => {
@@ -37,7 +34,7 @@ describe("readConfiguration: the RPC variables", () => {
       VITE_EXPLORER_RPC_URL_1: "   ",
       VITE_EXPLORER_RPC_URL_369: "  https://pls.example.org  ",
     });
-    expect(configuration.rpcUrls).toEqual({ ...DEFAULT_RPCS, 369: "https://pls.example.org" });
+    expect(configuration.rpcUrls).toEqual({ 369: "https://pls.example.org" });
   });
 
   it("reads the wallet project identifier and the pair name when they are set", () => {

@@ -69,14 +69,14 @@ describe("route", () => {
     expect(parseRoute("")).toEqual(HOME_ROUTE);
     expect(parseRoute("#/")).toEqual(HOME_ROUTE);
     expect(parseRoute("#/nothing/here")).toEqual(HOME_ROUTE);
-    expect(resolveHome(HOME_ROUTE, "sepolia-pls943")).toEqual({ name: "pair", pairId: "sepolia-pls943", token: null });
+    expect(resolveHome(HOME_ROUTE, "sepolia-pls943")).toEqual({ name: "bridge", pairId: "sepolia-pls943", dir: "first-to-second" });
     const audit: Route = { name: "audit" };
     expect(resolveHome(audit, "sepolia-pls943")).toBe(audit);
   });
 
   it("writes the home route as the bare hash", () => {
     expect(formatRoute(HOME_ROUTE)).toBe("#/");
-    expect(routeTitle(HOME_ROUTE)).toBe("Pair view");
+    expect(routeTitle(HOME_ROUTE)).toBe("Bridge");
   });
 
   it("drops an empty address filter", () => {

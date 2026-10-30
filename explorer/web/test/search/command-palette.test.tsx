@@ -27,7 +27,7 @@ describe("the command palette", () => {
   });
 
   it("shows recent results first when the field is empty", () => {
-    open({ recent: [viewResults("eth-pls")[2]!] });
+    open({ recent: [viewResults("eth-pls").find((result) => result.id === "view:audit")!] });
     expect(groupTitles()[0]).toBe("Recent");
     expect(within(screen.getAllByRole("group")[0]!).getByText("Audit")).toBeInTheDocument();
   });

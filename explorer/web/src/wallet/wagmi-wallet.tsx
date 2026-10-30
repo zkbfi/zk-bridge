@@ -3,6 +3,7 @@ import { createConfig, http, injected, useConnect, useConnection, useConnectors,
 import { defineChain, type Chain } from "viem";
 import type { PairConfig } from "@terminal/model/types";
 import { WalletContext, type WalletPort, type WalletStatus, type WalletTransaction } from "./wallet-port";
+import { defaultRpcUrl } from "@terminal/config/default-rpc";
 
 /**
  * Builds the wagmi configuration for a pair: one chain per side, public transports from the page configuration, and the
@@ -18,14 +19,14 @@ export const createWalletConfig = (pair: PairConfig, rpcUrls: Readonly<Record<nu
       id: chain.chainId,
       name: chain.name,
       nativeCurrency: { name: chain.nativeSymbol, symbol: chain.nativeSymbol, decimals: 18 },
-      rpcUrls: { default: { http: [rpcUrls[chain.chainId] ?? "http://127.0.0.1:8545"] } },
+      rpcUrls: { default: { http: [rpcUrls[chain.chainId] ?? defaultRpcUrl(chain.chainId) ?? "http://127.0.0.1:8545"] } },
     }),
   );
   const [first, second] = chains as [Chain, Chain];
   return createConfig({
     chains: [first, second],
     connectors: [injected()],
-    transports: { [first.id]: http(rpcUrls[first.id]), [second.id]: http(rpcUrls[second.id]) },
+    transports: { [first.id]: http(rpcUrls[first.id] ?? defaultRpcUrl(first.id) ?? undefined), [second.id]: http(rpcUrls[second.id] ?? defaultRpcUrl(second.id) ?? undefined) },
     ssr: false,
   });
 };

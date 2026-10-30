@@ -187,6 +187,25 @@ to exist at all. on desktop, that drawer should be a modal. and i do not like th
 time. we should pull tkoens that the user has a balance of or that they have used in this system or bridged with
 before. i would like to see tabs below the search." Mockups: `picker-modal.html`, `picker-direction.html`.
 
+Owner, round 3 (verbatim; supersedes round 2 where they differ): "on mobile, your earlier render of the token picker on
+phone was better. all the way to the edge. only one layer of padding before content. remove the chain pills. just do
+all, and then each chain that is supported. all of the "anything else: search above. every bridgable token is found
+here" is stupid. be terse. remove the "choose a token" move the close button to be over/inside of the input on the
+right.. the checkmark denoting the selected token is dumb. it shifts content away. eggregious ui violation"
+Mockup: `picker-v3.html`. So:
+- Phone: full width, edge to edge, rising from the bottom; one layer of padding before content. Desktop: the same
+  content as a centred modal.
+- No title. Close is an icon-only round button inside the search field, on its right.
+- Flat text tabs under the search (no pills): All, then each supported chain (icon + name); the active tab has a
+  3-unit accent underline.
+- Rows: token icon (+ chain badge where bridged), symbol, chain name in small text, balance and USD right-aligned. Only
+  the user's tokens (held, or used/bridged with zkb.fi); search covers every token.
+- The selected token: lit row background plus an accent bar on its left edge, absolutely positioned. No checkmark;
+  nothing may shift.
+- No helper copy. Terse.
+- General rule: selection and state indicators never change layout (no added icons that push content). Applies to
+  every menu (the direction menu's current route too).
+
 **Files:** Create `src/bridge/DirectionMenu.tsx`, `src/bridge/TokenPicker.tsx`, `src/bridge/token-picker-model.ts`,
 `src/bridge/Sheet.tsx`; Test `test/bridge/direction-menu.test.tsx`, `test/bridge/token-picker.test.tsx`.
 
@@ -196,8 +215,8 @@ before. i would like to see tabs below the search." Mockups: `picker-modal.html`
 - DirectionMenu: a dropdown from the From pill. Routes grouped by pair, testnets under their own heading; each row
   shows the two chain icons with a chevron between, the time and status; a check on the current route; paused routes
   greyed with the reason. Choosing one sets pair + dir.
-- TokenPicker: a modal on phone and desktop. Search field, then one tab per chain (chain icon + name + count); only one
-  chain's list shows at a time. A tab lists only the user's tokens: balance > 0, or used/bridged with zkb.fi before
+- TokenPicker: a modal on phone and desktop. Search field, then flat text tabs: All, then one per chain (chain icon + name);
+  the active tab has a 3-unit accent underline (round 3 replaced the counted chain pills). A tab lists only the user's tokens: balance > 0, or used/bridged with zkb.fi before
   (activity history). Search finds every bridgeable token on every chain. Picking a token on the other chain's tab
   flips the direction. Omnibridge copies carry an orange "Omnibridge" flag.
 - `pickerTokens({ tokens, balances, history, query, tab }): { tabs: {chainId, count}[]; rows: TokenRow[] }`.

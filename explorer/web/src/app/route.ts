@@ -3,7 +3,7 @@
  * works. Parsing and formatting are pure and tested together: every route survives a round trip.
  */
 import { DEFAULT_MAXIMUM_BLOCKS, type HistoryFilters } from "@zk-bridge/shared";
-import { FEED_STATUSES } from "@terminal/model/types";
+import { FEED_STATUSES, type Direction } from "@terminal/model/types";
 import { getAddress, isAddress, type Address, type Hex } from "viem";
 import { formatHistoryQuery, historyFiltersFromQuery } from "../views/history-model";
 
@@ -11,6 +11,10 @@ import { formatHistoryQuery, historyFiltersFromQuery } from "../views/history-mo
 export type Route =
   /** No hash, or one the page does not know. The page shows the default pair in its place (see {@link resolveHome}). */
   | { readonly name: "home" }
+  /** The bridge screen (home): the pair, the direction, and the form fields that differ from the defaults. */
+  | { readonly name: "bridge"; readonly pairId: string; readonly dir: Direction; readonly form?: BridgeQuery }
+  | { readonly name: "activity" }
+  | { readonly name: "explore" }
   /** The table of every pair, at `#/pairs`. It is never the landing page. */
   | { readonly name: "global" }
   | { readonly name: "pair"; readonly pairId: string; readonly token: Address | null; readonly view?: PairViewQuery }
@@ -45,13 +49,14 @@ export const PAIR_PAGE_SIZE = 50;
 const MAXIMUM_ROWS = 1000;
 
 /**
- * Opens the default pair in place of the home route, so loading the page lands in a pair, never on a chooser.
+ * Opens the bridge on the default pair, sending from its first chain, in place of the home route, so loading the page
+ * lands on the bridge, never on a chooser.
  *
  * @param route The parsed route.
  * @param defaultPairId The pair that this page was built for.
  */
 export const resolveHome = (route: Route, defaultPairId: string): Route =>
-  route.name === "home" ? { name: "pair", pairId: defaultPairId, token: null } : route;
+  route.name === "home" ? { name: "bridge", pairId: defaultPairId, dir: "first-to-second" } : route;
 
 const MESSAGE_IDENTIFIER = /^0x[0-9a-fA-F]{64}$/;
 
@@ -67,6 +72,18 @@ export const parseRoute = (hash: string): Route => {
   const [head, first, second] = parts;
   if (head === undefined) return HOME_ROUTE;
   if (head === "pairs") return { name: "global" };
+  if (head === "activity") return { name: "activity" };
+  if (head === "explore") return { name: "explore" };
+  if (head === "bridge" && first !== undefined) {
+    const params = new URLSearchParams(query);
+    const form = bridgeOf(params);
+    return {
+      name: "bridge",
+      pairId: first,
+      dir: oneOf(DIRECTIONS, params.get("dir")) ?? "first-to-second",
+      ...(Object.keys(form).length === 0 ? {} : { form }),
+    };
+  }
   if (head === "pair" && first !== undefined) {
     const params = new URLSearchParams(query);
     const token = params.get("token");
@@ -101,6 +118,15 @@ export const parseRoute = (hash: string): Route => {
 export const formatRoute = (route: Route): string => {
   if (route.name === "home") return "#/";
   if (route.name === "global") return "#/pairs";
+  if (route.name === "activity") return "#/activity";
+  if (route.name === "explore") return "#/explore";
+  if (route.name === "bridge") {
+    const params = new URLSearchParams();
+    if (route.dir !== "first-to-second") params.set("dir", route.dir);
+    if (route.form !== undefined) writeBridge(params, route.form);
+    const query = params.toString();
+    return `#/bridge/${encodeURIComponent(route.pairId)}${query === "" ? "" : `?${query}`}`;
+  }
   if (route.name === "audit") return "#/audit";
   if (route.name === "prover") return "#/prover";
   if (route.name === "settings") return "#/settings";
@@ -127,7 +153,10 @@ export const formatRoute = (route: Route): string => {
 /** The name of the view of a route, for the title of the page and for the active mark in the palette. */
 export const routeTitle = (route: Route): string => {
   const titles: Record<Route["name"], string> = {
-    home: "Pair view",
+    home: "Bridge",
+    bridge: "Bridge",
+    activity: "Activity",
+    explore: "Explore",
     global: "Global view",
     pair: "Pair view",
     audit: "Audit",
@@ -317,37 +346,40 @@ export const parseOverlay = (hash: string): Overlay => {
   };
 };
 
+/** Writes the bridge and wrap form's fields that differ from the defaults (`bridge.*`, `tip.*`). */
+const writeBridge = (params: URLSearchParams, bridge: BridgeQuery): void => {
+  const { token, amount, receiver, mode, data, gasLimit, callTarget, callData, tip } = bridge;
+  const set = (key: (typeof BRIDGE_KEYS)[number], value: string | undefined): void => {
+    if (value !== undefined) params.set(`bridge.${key}`, value);
+  };
+  set("token", token);
+  set("amount", amount);
+  set("receiver", receiver);
+  set("mode", mode);
+  set("data", data);
+  set("gas", gasLimit);
+  set("callTarget", callTarget);
+  set("callData", callData);
+  if (tip !== undefined) {
+    const setTip = (key: (typeof TIP_KEYS)[number], value: string | undefined): void => {
+      if (value !== undefined) params.set(`tip.${key}`, value);
+    };
+    setTip("mode", tip.mode);
+    setTip("percent", tip.percentText);
+    setTip("fixed", tip.fixedText);
+    setTip("margin", tip.marginPercentText);
+    setTip("gas", tip.gasMultiplierText);
+    setTip("ceiling", tip.ceilingGweiText);
+    setTip("price", tip.senderPriceText);
+    setTip("router", tip.routerText);
+    setTip("native", tip.payoutNative === true ? "1" : undefined);
+  }
+};
+
 const writeOverlay = (params: URLSearchParams, overlay: Overlay): void => {
   if (overlay.dialog === null) return;
   params.set("dialog", overlay.dialog);
-  if (overlay.dialog === "bridge" || overlay.dialog === "wrap") {
-    const { token, amount, receiver, mode, data, gasLimit, callTarget, callData, tip } = overlay.bridge;
-    const set = (key: (typeof BRIDGE_KEYS)[number], value: string | undefined): void => {
-      if (value !== undefined) params.set(`bridge.${key}`, value);
-    };
-    set("token", token);
-    set("amount", amount);
-    set("receiver", receiver);
-    set("mode", mode);
-    set("data", data);
-    set("gas", gasLimit);
-    set("callTarget", callTarget);
-    set("callData", callData);
-    if (tip !== undefined) {
-      const setTip = (key: (typeof TIP_KEYS)[number], value: string | undefined): void => {
-        if (value !== undefined) params.set(`tip.${key}`, value);
-      };
-      setTip("mode", tip.mode);
-      setTip("percent", tip.percentText);
-      setTip("fixed", tip.fixedText);
-      setTip("margin", tip.marginPercentText);
-      setTip("gas", tip.gasMultiplierText);
-      setTip("ceiling", tip.ceilingGweiText);
-      setTip("price", tip.senderPriceText);
-      setTip("router", tip.routerText);
-      setTip("native", tip.payoutNative === true ? "1" : undefined);
-    }
-  }
+  if (overlay.dialog === "bridge" || overlay.dialog === "wrap") writeBridge(params, overlay.bridge);
   if (overlay.dialog === "message") {
     const { chain, target, data, gas } = overlay.message;
     if (chain !== undefined) params.set("msg.from", chain);

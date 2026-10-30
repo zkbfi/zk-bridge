@@ -61,9 +61,9 @@ beforeEach(() => {
 });
 
 describe("createWalletConfig: the endpoints", () => {
-  it("falls back to the local node for a chain that has no endpoint in the page configuration", () => {
+  it("falls back to the valve.city demo RPC for a chain that has no endpoint in the page configuration", () => {
     const config = createWalletConfig(FIXTURE_PAIR, { 369: "https://pls.example.org" });
-    expect(config.chains.map((chain) => chain.rpcUrls.default.http)[0]).toEqual(["http://127.0.0.1:8545"]);
+    expect(config.chains.map((chain) => chain.rpcUrls.default.http)[0]).toEqual([`https://one.valve.city/rpc/vk_demo/evm/${FIXTURE_PAIR.first.chainId}`]);
     expect(config.chains.map((chain) => chain.rpcUrls.default.http)[1]).toEqual(["https://pls.example.org"]);
   });
 });

@@ -15,7 +15,8 @@ import { MessageView } from "../views/MessageView";
 import { PairView } from "../views/pair/PairView";
 import { ProverView } from "../views/ProverView";
 import { ConnectionsView } from "../views/ConnectionsView";
-import { BrandMark } from "../ui/BrandMark";
+import { BridgeScreen } from "../bridge/BridgeScreen";
+import { Header } from "../bridge/Header";
 import { Notice } from "../ui/primitives";
 import { ActionsContext } from "./actions-context";
 import { formatLocation, formatRoute, linkedFields, NO_OVERLAY, parseLocation, resolveHome, routeTitle, type Overlay, type PageLocation, type Route } from "./route";
@@ -96,7 +97,9 @@ const usePaletteShortcuts = (open: () => void): void => {
 };
 
 const renderRoute = (route: Route, navigate: (next: Route) => void, update: (next: Route) => void) => {
-  if (route.name === "home" || route.name === "global") return <GlobalView />;
+  if (route.name === "home" || route.name === "global" || route.name === "explore") return <GlobalView />;
+  if (route.name === "bridge") return null;
+  if (route.name === "activity") return <ActivityPlaceholder />;
   if (route.name === "pair") return <PairView key={route.pairId} route={route} onChange={update} />;
   if (route.name === "audit") return <AuditView />;
   if (route.name === "prover") return <ProverView />;
@@ -108,6 +111,13 @@ const renderRoute = (route: Route, navigate: (next: Route) => void, update: (nex
 };
 
 const shortAccount = (account: string | null): string => (account === null ? "No wallet" : `${account.slice(0, 6)}…${account.slice(-4)}`);
+
+/** The Activity screen arrives in the next phase; until then it points at the history. */
+const ActivityPlaceholder = () => (
+  <Text color="fg.muted">
+    Your transfers will show here, in flight and delivered. Until then, see <a href={formatRoute({ name: "history", filters: EMPTY_HISTORY_FILTERS })}>History</a>.
+  </Text>
+);
 
 /**
  * The frame of the page: the top bar with the one search field, the current view, and the palette and dialogs.
@@ -172,37 +182,28 @@ export const Shell = () => {
 
   return (
     <ActionsContext.Provider value={actionsPort}>
-      <Box minHeight="100vh" backgroundColor="bg" color="fg">
-        <Flex as="header" position="sticky" top="0" zIndex="sticky" gap="3" alignItems="center" paddingX={{ base: "4", md: "6" }} paddingY="2" backgroundColor="bg" borderBottomWidth="1px" borderColor="border">
-          <a href={formatRoute({ name: "pair", pairId: pair.id, token: null })} aria-label={`zk-bridge explorer, ${pair.id}`}>
-            <Flex as="span" gap="2" alignItems="center">
-              <Box as="span" color="#eb6834" display="inline-flex">
-                <BrandMark />
-              </Box>
-              <Text as="span" fontWeight="bold" whiteSpace="nowrap">
-                zk-bridge
-              </Text>
-            </Flex>
-          </a>
-          <Button flex="1" justifyContent="space-between" variant="outline" size="sm" onClick={openPalette} aria-label="Search and jump (Control K or slash)" aria-haspopup="dialog">
-            <Text as="span" color="fg.muted" truncate>
-              Search or jump to…
-            </Text>
-            <Text as="kbd" fontSize="xs" color="fg.muted" display={{ base: "none", md: "inline" }}>
-              Ctrl K
-            </Text>
-          </Button>
-          <a href={formatRoute({ name: "history", filters: EMPTY_HISTORY_FILTERS })}>
-            <Text as="span" fontSize="sm" whiteSpace="nowrap">
-              History
-            </Text>
-          </a>
-          <SourceBadge />
-          <Text fontSize="sm" color="fg.muted" whiteSpace="nowrap" display={{ base: "none", sm: "block" }}>
-            {shortAccount(wallet.status === "connected" ? wallet.account : null)}
-          </Text>
-        </Flex>
+      <Box className="zb" minHeight="100vh">
+        <Header
+          page={routeTitle(route)}
+          homeHref={formatRoute({ name: "bridge", pairId: pair.id, dir: "first-to-second" })}
+          screenHref={(screen) => (screen === "Bridge" ? formatRoute({ name: "bridge", pairId: pair.id, dir: "first-to-second" }) : `#/${screen.toLowerCase()}`)}
+          onSearch={openPalette}
+        />
+        {route.name === "bridge" ? (
+          <BridgeScreen route={route} onRoute={update} fixture={configuration.dataMode === "fixture"} />
+        ) : (
         <Box as="main" paddingX={{ base: "4", md: "6" }} paddingY="4">
+          <Flex gap="3" alignItems="center" justifyContent="flex-end" flexWrap="wrap" marginBottom="2">
+            <a href={formatRoute({ name: "history", filters: EMPTY_HISTORY_FILTERS })}>
+              <Text as="span" fontSize="sm" whiteSpace="nowrap">
+                History
+              </Text>
+            </a>
+            <SourceBadge />
+            <Text fontSize="sm" color="fg.muted" whiteSpace="nowrap">
+              {shortAccount(wallet.status === "connected" ? wallet.account : null)}
+            </Text>
+          </Flex>
           {configuration.dataMode === "fixture" ? <Notice tone="warning">Sample data. Nothing here is real and no send reaches a chain.</Notice> : null}
           {notice === null ? null : (
             <Flex gap="2" alignItems="center" marginY="2">
@@ -214,6 +215,7 @@ export const Shell = () => {
           )}
           <Box marginTop="3">{renderRoute(route, navigate, update)}</Box>
         </Box>
+        )}
         {paletteOpen ? <CommandPalette recent={recent} walletConnected={wallet.status === "connected"} onSelect={select} onClose={() => setPaletteOpen(false)} /> : null}
         {dialog === null ? null : (
           <ActionDialog
