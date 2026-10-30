@@ -137,7 +137,7 @@ the server only. It can pin, unpin and change the node, so it is never public. R
 
 ```sh
 ssh -N -L 5001:127.0.0.1:5001 zkbfi-app &
-RELEASE_REMOTE=<release repository> RELEASE_GIT_NAME=<name> RELEASE_GIT_EMAIL=<email> \
+RELEASE_CHANNEL=stable RELEASE_REMOTE=<release repository> RELEASE_GIT_NAME=<name> RELEASE_GIT_EMAIL=<email> \
   RELEASE_PIN_PROVIDER=kubo KUBO_API_URL=http://127.0.0.1:5001 script/release/publish.sh <release-directory>
 ```
 
@@ -185,13 +185,64 @@ Pages is a mirror. It deploys the landing archive of a verified release, unpacke
 signature, so the page checks the same signed manifest wherever it is loaded:
 
 ```sh
-RELEASE_PAGES_LANDING=<worker name> RELEASE_LANDING_DOMAINS=zkb.fi,www.zkb.fi script/release/publish-pages.sh <release-directory>
+RELEASE_CHANNEL=stable RELEASE_PAGES_LANDING=zkb-fi RELEASE_LANDING_DOMAINS=zkb.fi,www.zkb.fi script/release/publish-pages.sh <release-directory>
 ```
 
-It refuses (exit 1) when `RELEASE_PAGES_LANDING` is not set or the release does not verify. Otherwise it deploys a
+It refuses (exit 1) when `RELEASE_PAGES_LANDING` or `RELEASE_CHANNEL` is not set, when the release names another
+channel than `RELEASE_CHANNEL`, when the Worker or a domain belongs to the other channel, or when the release does not
+verify. Otherwise it deploys a
 Cloudflare Worker with static assets only (`npx wrangler@4 deploy` with a configuration written outside the site):
 wrangler 4 creates new projects as Workers, not as classic Pages projects. `RELEASE_LANDING_DOMAINS` attaches custom
 domains; a domain must have no other DNS record on that name. Wrangler reads its own Cloudflare credentials. If the
 mirror and IPFS ever disagree, IPFS and the signature win. The mirror carries no downloads: the terminal programs are
 larger than its 25 MiB file limit, and they come from the GitHub release instead (see "Pairs and settings of a
 release").
+
+## Staging: next.zkb.fi
+
+`next.zkb.fi` is the staging channel. It is the same signed landing page as zkb.fi, served by its own Worker
+(`zkb-fi-next`), listing a release on the `next` channel. Builds are tried there, by anyone with the link, before they
+reach zkb.fi.
+
+**Two keys, on purpose.** A staging release is signed with its own Ed25519 key, the 1Password item
+`release signing key staging` in the zkb.fi vault. The staging landing page (`explorer/landing/landing.next.config.json`)
+trusts only that key; the production landing page (`landing.config.json`) trusts only the production key. So a staging
+`version.json` can never be accepted by zkb.fi, even though both are valid signatures, and a leaked staging key cannot
+publish to production. Each landing page also keeps its own sequence memory (a separate browser origin).
+
+**The channel is the operator's, never the artifact's.** `publish.sh` and `publish-pages.sh` require
+`RELEASE_CHANNEL=stable` or `next`. It picks the trusted keys, the branch of the release repository (`main` or `next`)
+and the allowed targets (stable: Worker `zkb-fi`, zkb.fi and www.zkb.fi; next: Worker `zkb-fi-next`, next.zkb.fi; the
+mapping lives in `script/release/channels.sh`). A release that names another channel, or a target of the other
+channel, is refused before anything is pinned, pushed or deployed. Trusting the channel written in `version.json` would
+let a staging release choose its own keys.
+
+Make and publish a staging release:
+
+```sh
+set -a; . script/release/release.env; set +a
+op read 'op://zkb.fi/release signing key staging/credential' | RELEASE_CHANNEL=next RELEASE_VERSION=0.1.2-next.1 \
+  RELEASE_PREVIOUS_MANIFEST=<the version.json now on next.zkb.fi> script/release/release.sh "$(mktemp -d)"
+RELEASE_CHANNEL=next RELEASE_REMOTE=<release repository> RELEASE_GIT_NAME=<name> RELEASE_GIT_EMAIL=<email> \
+  RELEASE_PIN_PROVIDER=kubo KUBO_API_URL=http://127.0.0.1:5001 script/release/publish.sh <release-directory>
+RELEASE_CHANNEL=next RELEASE_PAGES_LANDING=zkb-fi-next RELEASE_LANDING_DOMAINS=next.zkb.fi \
+  script/release/publish-pages.sh <release-directory>
+```
+
+The archives are pinned on the kubo node under their version, as production ones are (`zkbfi-<site>-<version>`,
+`/releases/<version>/<site>`). Downloads go to a GitHub release tagged `v<version>` on zkbfi/releases, as for production.
+
+## Promotion: next to zkb.fi
+
+```sh
+op read 'op://zkb.fi/release signing key/credential' | PROMOTE_PUBLISH=1 \
+  script/release/promote.sh <staging-release-directory> "$(mktemp -d)"
+```
+
+`promote.sh` verifies the staging release against the staging key, rebuilds only the landing page (at the staging
+commit, with the production configuration), and writes a production `version.json` (`channels.stable`, sequence =
+the live production sequence + 1, version = the staging version without `-next.N`, or `PROMOTE_VERSION`) that keeps the
+dapp and docs archives byte for byte: production serves the exact content addresses that were tried on staging, already
+pinned. It refuses if a kept archive differs from what the staging manifest names. It signs with the production key,
+verifies against the production key, and with `PROMOTE_PUBLISH=1` runs `publish.sh` and `publish-pages.sh` with the
+channel fixed to stable. Upload the downloads to the GitHub release of the production version as for any release.
