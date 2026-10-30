@@ -268,7 +268,10 @@ and the time left while in flight or the age once delivered. A row links to the 
   the amount: above 1% for transfers up to $100, a threshold that scales down to 0.1% at $1,000, and 0.1% above that.
   Between $100 and $1,000 the threshold is 1% × 100 / amount (a log-linear slide; it works out to a tip of about $1
   across that range). Uses the display price; without a price, the 1% threshold applies. The tip measured is the tip **before gas
-  pricing** (owner): the share-of-amount part only, not what the gas level or gas reimbursement adds on top.
+  pricing** (owner): the share-of-amount part only, not what the gas level or gas reimbursement adds on top. **Delivery is on top of
+  the tip** (owner): the delivery cost (the destination-chain gas the deliverer spends, bounded by the gas-price ceiling)
+  is a separate amount added to the tip, shown as its own item (the gas can) and summed only in the review's total; it
+  never counts toward the high-tip warning.
 
 ## Open questions
 
@@ -331,3 +334,4 @@ noise from one message (a child on the keyboard) is left out.
 32. "find an oracle. i think that the pulsex exchanges serve as good oracles"
 33. "raise the gas price ceiling. warn when a tip is >1% for bridges under $100. then scale it down to 0.1% as it goes to $1000"
 34. "this is before gas pricing"
+35. "delivery is on top of this"
