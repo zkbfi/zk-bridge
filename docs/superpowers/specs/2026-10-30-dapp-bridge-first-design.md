@@ -319,6 +319,13 @@ and the time left while in flight or the age once delivered. A row links to the 
   1% by default, so the line moves when they change the cap), the Bridge pill takes the
   overridable warning state and tells the user the bridge **may not be delivered in a timely manner**; "High cap %"
   does not show there (any fee that covers the cost would read as a high share).
+- **Two caps (owner, 2026-10-31):** the automatic fee cap (1% by default) stays, with its value input right-justified
+  next to its unit. Below it, a **hard fee cap** (2% by default): the absolute most the fee may be. A fee above it
+  (by the tip, the gas level, or a gas-based fee's worst case) blocks the Bridge button until the hard cap is raised,
+  and the block says so and offers the control to raise it right there. The automatic cap can never exceed the
+  hard cap.
+- **Msgboard node per chain (owner):** the board node is set per chain in Settings, like the RPCs. Two chains may share
+  one URL, and the page then reads it twice, once per chain, each with its own live check.
 - **The $0.025 proof cost (owner):** it is not a separate on-chain payment and needs no contract change. It is part
   of the overall cost (proof + delivery gas) that every percentage is set against: the default fee (the larger of
   0.1% and 2 × cost), the low-fee line, the tip before gas, and the worst case of a gas-priced fee. A fee signed as a
@@ -539,3 +546,5 @@ don't call it "tip too high", call it "high tip %""
 83. "i like e, but i think that the gradient is really good. lets go with that"
 84. "we should also get the docs site / links online soon too"
 85. "i don't think you need to compress the ui so quickly. let it get to the edge of the viewport"
+86. "automatic fee cap is fine, though i would prefer the input be justified to the right, next to the units, and we should have another fee cap below that of, say 2% that puts the absolute fee cap at that amount and disallows movement forward until the cap is adjusted (which we can also prompt the user to do)"
+87. "the board node is actually supposed to be assigned per chain. it can be the same url, but the ui should grab the info twice in that case."
