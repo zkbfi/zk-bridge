@@ -22,9 +22,11 @@ type BackendFile = {
   limits?: { keepAliveSeconds?: number };
 };
 
-const runProgram = (command: string, args: readonly string[], timeoutMilliseconds: number) =>
+// Secrets (an RPC URL with a key in it) go to the child through its environment, never its arguments: the arguments of a
+// running process are readable by every user of the machine (ps, /proc/<pid>/cmdline).
+const runProgram = (command: string, args: readonly string[], timeoutMilliseconds: number, extraEnvironment: Readonly<Record<string, string>> = {}) =>
   new Promise<RunResult>((resolve) => {
-    execFile(command, [...args], { maxBuffer: 64 * 1024 * 1024, timeout: timeoutMilliseconds }, (error, stdout, stderr) => {
+    execFile(command, [...args], { maxBuffer: 64 * 1024 * 1024, timeout: timeoutMilliseconds, env: { ...process.env, ...extraEnvironment } }, (error, stdout, stderr) => {
       const code = error === null ? 0 : typeof error.code === "number" ? error.code : 1;
       resolve({ exitCode: code, stdout: String(stdout), stderr: String(stderr) });
     });
@@ -128,7 +130,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
       (command, args) => runProgram(command, args, options.jobTimeoutMinutes * 60_000),
       async (target, calldata) => {
         const rpcUrl = sideOfTarget(target)[1].rpcUrl;
-        const result = await runProgram("cast", ["send", target.lightClient, "--data", calldata, "--rpc-url", rpcUrl, "--account", account, "--json"], 15 * 60_000);
+        const result = await runProgram("cast", ["send", target.lightClient, "--data", calldata, "--account", account, "--json"], 15 * 60_000, { ETH_RPC_URL: rpcUrl });
         if (result.exitCode !== 0) return { ok: false, detail: `cast send exit code ${result.exitCode}` };
         const receipt = JSON.parse(result.stdout) as { transactionHash?: string; status?: string };
         return { ok: receipt.status === "0x1" || receipt.status === "1", detail: `transaction ${receipt.transactionHash ?? "unknown"} status ${receipt.status ?? "unknown"}` };
