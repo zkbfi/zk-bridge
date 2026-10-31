@@ -64,7 +64,7 @@ let paused = false;
 // chain), the bottom lane right to left (second → first); rounded ends join them, so each chain appears once.
 const W = 780, H = 440, A = 170, B = 610, YT = 130, YB = 310, YM = (YT + YB) / 2, RE = (YB - YT) / 2, R0 = 34, RING = 20, PER = 6;
 const NODES = [{ x: A - RE, y: YM }, { x: B + RE, y: YM }];   // [first chain, second chain]
-const LAST = STEPS.length - 1;
+const LAST = STEPS.length - 1, MAX_SHOWN = 32;
 const lanes = [{ y: YT, x: (i) => A + (i * (B - A)) / LAST, from: NODES[0], exit: NODES[1] }, { y: YB, x: (i) => B - (i * (B - A)) / LAST, from: NODES[1], exit: NODES[0] }];
 let seq = 0;
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -199,6 +199,9 @@ function targets(s) {
   for (const t of s.items) if (!t.leaving) byStep[t.step].push(t);
   for (let i = 0; i < STEPS.length; i++) {
     byStep[i].sort((a, b) => a.id - b.id);
+    // At most 32 planets orbit a step: the first 32 to arrive. The rest wait unseen (counts and totals still include them).
+    for (const t of byStep[i].slice(MAX_SHOWN)) { t.hidden = true; t.tx = s.lane.x(i); t.ty = s.lane.y; }
+    byStep[i] = byStep[i].slice(0, MAX_SHOWN); for (const t of byStep[i]) t.hidden = false;
     let k = 0, ring = 0;
     while (k < byStep[i].length) {
       const cap = PER * (ring + 1), group = byStep[i].slice(k, k + cap), r = R0 + ring * RING, key = `${i}:${ring}`;
@@ -234,7 +237,7 @@ function frame(now) {
       t.x += (t.tx - t.x) * k; t.y += (t.ty - t.y) * k;
       let lift = 0;
       if (t.moving) { const p = Math.min(1, (now - t.moving.start) / t.moving.span); lift = (s.lane.y < YM ? -1 : 1) * Math.sin(p * Math.PI) * 26; if (p >= 1) t.moving = null; }
-      t.alpha += ((t.leaving ? 0 : 1) - t.alpha) * (1 - Math.exp(-dt / (t.leaving ? 500 : 250)));
+      t.alpha += ((t.leaving || t.hidden ? 0 : 1) - t.alpha) * (1 - Math.exp(-dt / (t.leaving ? 500 : 250)));
       if (t.leaving && Math.hypot(t.x - s.lane.exit.x, t.y - s.lane.exit.y) < 3 && t.alpha < 0.05) { t.gone = true; s.delivered++; s.week++; continue; }
       t.z = (t.z ?? 0) + ((t.moving || t.leaving ? 0 : (t.tz ?? 0)) - (t.z ?? 0)) * (1 - Math.exp(-dt / 120));
       draw(s, t, t.x, t.y + lift, seen);
