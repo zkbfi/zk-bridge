@@ -38,6 +38,35 @@ describe("the fee line", () => {
     expect(container.querySelector('[data-fee="gas"]')!.textContent).toBe("");
   });
 
+  it("makes the bars beside the gas can the level control: a tap asks for the next level, wrapping after Highest", async () => {
+    const onGasLevel = vi.fn();
+    const { rerender } = render(<FeeLine {...props({ gasLevel: 1, onGasLevel })} />);
+    await userEvent.click(screen.getByRole("button", { name: "Gas level: Normal. Change" }));
+    expect(onGasLevel).toHaveBeenLastCalledWith(2);
+    rerender(<FeeLine {...props({ gasLevel: 3, onGasLevel })} />);
+    await userEvent.click(screen.getByRole("button", { name: "Gas level: Highest. Change" }));
+    expect(onGasLevel).toHaveBeenLastCalledWith(1);
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+  });
+
+  it("says who sets a slider's value, with the way back", async () => {
+    const onClick = vi.fn();
+    render(<FeeLine {...props({ sliders: [{ ...props().sliders[0]!, status: { text: "Set by you · the automatic fee is off", action: { label: "Back to automatic", onClick } } }] })} />);
+    await userEvent.click(screen.getByRole("button", { name: /0.0012 ETH/ }));
+    expect(screen.getByText("Set by you · the automatic fee is off")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Back to automatic" }));
+    expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it("gives every slider the same ? button, named for it, its tooltip on hover or tap", async () => {
+    render(<FeeLine {...props()} />);
+    await userEvent.click(screen.getByRole("button", { name: /0.0012 ETH/ }));
+    const help = screen.getByRole("button", { name: "About Tip" });
+    expect(help).toHaveClass("zb-q");
+    await userEvent.hover(help);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("How much of the amount pays the deliverer.");
+  });
+
   it("breaks the fee down in the tip drawer", async () => {
     render(<FeeLine {...props()} />);
     await userEvent.click(screen.getByRole("button", { name: /0.0012 ETH/ }));
