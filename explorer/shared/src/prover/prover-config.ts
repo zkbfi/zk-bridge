@@ -88,6 +88,9 @@ function backendLines(backend: BackendSection): readonly string[] {
     'backend = "remote"',
     `remote_url = ${quoted(backend.endpoint, "remote endpoint")}`,
     `remote_api_key_env = ${quoted(backend.apiKeyVariable, "remote key variable")}`,
+    // RunPod ends a request after 330 s. Three tries of 360 s, with their pauses, stay inside a job limit of 1800 s.
+    "remote_timeout_seconds = 360",
+    "remote_attempts = 3",
   ];
 }
 
