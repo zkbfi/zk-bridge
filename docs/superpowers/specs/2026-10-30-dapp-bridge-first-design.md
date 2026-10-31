@@ -257,13 +257,21 @@ and the time left while in flight or the age once delivered. A row links to the 
     its WPLS pool with the deepest WPLS side, if that side is worth at least a minimum (say $10k), else "—". Tokens
     bridged by zkb.fi take their origin token's price (zkbWETH → ETH, via WETH from Ethereum on PulseX); Ethereum-side
     tokens likewise use their PulseChain market. Testnets show no prices.
+  - **Bridged tokens and Ethereum costs (owner, short term):** every bridged token is reversed out through the current
+    Omnibridge to its PulseChain copy and priced on PulseX (v1/v2) against USDC/USDT/DAI. ETH transaction costs use
+    WETH from Ethereum on PulseX; a past cost uses the PulseChain block nearest the transaction's timestamp. No
+    Ethereum pool or price feed is read.
   - **Where it runs:** in the browser, reading pool reserves through the user's RPC (swappable, batched, cached ~30 s),
     so the IPFS site needs no price server. The price source is listed in Settings like every other endpoint.
   - **Limits, stated in the UI tooltip:** spot reserves can be pushed around and Omnibridge copies can trade away from
     their originals, so prices are for display only and are never used to compute amounts, tips or fees.
 
 - **Gas levels (owner):** choosing a higher level raises the gas-price ceiling the deliverer may spend (in every tip
-  mode, including the default percentage tip), so the choice always does something.
+  mode, including the default percentage tip), so the choice always does something. Normal / High / Highest allow
+  up to 2× / 3× / 5× and are expected to cost 1× / 1.5× / 2.5× (owner: "those multipliers are fine"). The cost they
+  multiply is the full cost of releasing as if this bridge were the only one: $0.025 proof + the destination gas.
+- **Saving the cap (owner):** lowering the cap in the review applies to this bridge only; a small save button (a
+  floppy-disk icon) next to the cap slider makes it the default for people who want that.
 - **High-tip warning (owner):** the Bridge pill takes the overridable warning state when the tip is a large share of
   the amount: above 1% for transfers up to $100, a threshold that scales down to 0.1% at $1,000, and 0.1% above that.
   Between $100 and $1,000 the threshold is 1% × 100 / amount (a log-linear slide; it works out to a tip of about $1
@@ -443,3 +451,7 @@ Sent on    [chain_icon][link]    [amount][icon]
 the fees drawer can also then use the icon instead of the symbol.
 and items in the stes that are actual transactions, we can note the eth/native transaction costs, not just the gas, and we should also look up the usd cost, if we are not already keeping the data in the indexers"
 55. "you can remove the cost from the collapsed view. it should only show in the expanded views"
+56. "are there situations where a high gas cap is always warning? we do not want to drive people away from giving us tips.
+q3) network base fee? no, we are calculating the full fee of releaseing as if this bridge is the only bridge: so 0.025+any base fee costs - yeah, those multipliers are fine
+q4) we can put a little save button (floppy icon) next to the slider for people who want to save it
+q5) for all bridged tokens, for the short term, we need to a) reverse out the tokens, back through the current omnibridge. that way we can trace on pulsex (v1/2) what they actually cost in usdc/usdt/dai"
