@@ -1,6 +1,6 @@
 # How the bridge works
 
-This page explains the parts of the bridge and why a transfer takes time. It also defines the status words that the feed shows.
+The bridge needs no validators and no signers: each chain checks the other with a light client and a zero-knowledge proof. Here is how a transfer gets across, and why it takes about a quarter of an hour.
 
 ## The idea in one paragraph
 
@@ -30,9 +30,9 @@ The bridge uses the SP1 proof system. The SP1 proof system proves programs in ze
 
 The light client contract calls a verifier contract. The verifier checks the proof. The cost of one check does not depend on the size of the committee.
 
-One proof can cover many committee handoffs. The repository states a limit of 64 handoffs in one proof. A light client that falls behind catches up in few proofs.
+One proof can cover up to 64 committee handoffs, so a light client that falls behind catches up in a few proofs.
 
-A proof takes time to make. The bot documentation measures about 30 to 75 seconds for one proof on a remote graphics processor.
+A proof takes time to make: about 30 to 75 seconds on a graphics processor.
 
 ## Finality
 
@@ -60,11 +60,11 @@ You wait for three things. Each one has a reason.
 
 - Finality. The bridge must not deliver a send that the source chain could undo.
 - A stored head. The destination light client must hold a header at or after the block of your send. Without it, the destination cannot check your send.
-- A deliverer. Someone must pay for the delivery on the destination chain.
+- A deliverer. Someone must pay the gas of the delivery on the destination chain. The fee pays a bot to do it; the page Fees explained covers it.
 
 ## The status words
 
-The feed shows one status word for each transfer or message.
+Explore and the message page show one status word for each transfer or message. The Activity screen says the same in plain words, such as "Final soon · waiting for the proof".
 
 ### Sent
 
@@ -72,11 +72,11 @@ Your send is on the source chain. It is younger than the finality window. You ne
 
 ### Waiting for finality
 
-Your send is older than the finality window. No stored head covers it yet. Despite the name, the chain has most likely finalized your block. The bridge now waits for a proof and a head update.
+Your send is older than the finality window, and no stored head covers it yet. The chain has most likely finalized your block by now: the bridge waits for a proof and a head update.
 
 ### Covered
 
-The destination light client stored a head at or after the block of your send. Anyone can now prove and deliver your message. If you left the tip on, a runner is likely to deliver it soon through the delivery router.
+The destination light client stored a head at or after the block of your send. Anyone can now prove and deliver your message. When your transfer pays a fee, a bot is likely to deliver it soon. The Activity screen calls this step "Proven · waiting for a deliverer".
 
 ### Delivered
 
@@ -93,3 +93,7 @@ The mediator could not release the tokens to the recipient. This outcome is fina
 ## In flight
 
 A transfer is in flight when its status is sent, waiting for finality or covered. The other statuses are end states, and all of them are final.
+
+## Watch it happen
+
+Explore shows the bridge at work: a live map of the transfers in flight in each direction, the light clients and the block each has verified, the latest transfers, and the services the app reads. Search there takes any identifier, such as a transaction hash, a message ID, an address, a token, a slot, a block or a proof number. Every value on an Explore page links onward. The page Settings, search and Explore covers it.

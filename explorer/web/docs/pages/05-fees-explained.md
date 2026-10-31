@@ -1,130 +1,192 @@
 # Fees explained
 
-The bridge charges no fee. The only extra is the tip for delivery. A tip goes to the reward address of the delivery router. It is voluntary, and it buys no promise. A low tip, or no tip, never makes a delivery fail. This page explains it.
+You pay one fee for a transfer, and it covers everything needed to deliver it: the delivery gas, the proof and a tip for whoever delivers. The bridge contracts take nothing on top.
 
-## The tip for delivery
+## One fee
 
-Anyone can deliver a covered transfer. A tip is never a promise, and nothing makes a delivery wait for a tip. The tip is the one thing that you set. The interface turns the tip on by default. The default is the gas based mode at the base fee, and it equals the measured gas cost of a delivery. Its limit is the price ceiling, at twice the base fee now. The deliverer's gas choice decides how much of the limit the tip takes, so expect the tip to reach the limit. You can edit the tip, change its mode to percentage or fixed, or remove it with the choice "No tip".
+The fee comes out of the amount you send. What arrives is the amount less the fee. The fee has three parts.
 
-When you add a call (a Call target and Call data on the bridge form), the tip counts the gas that the call may use. A gas based tip then moves toward its limit. The page Bridging tokens explains the call.
+| Part | What it pays for |
+|---|---|
+| Delivery gas | The gas of the delivery transaction on the destination chain, at your gas level. |
+| Proof | $0.025, the cost of generating the proof. It is part of the fee, not a separate payment. |
+| Tip | What the deliverer keeps once the gas and the proof are paid. |
 
-You fix the tip when the transfer leaves. Nothing at delivery sets or changes it. The deliverer supplies no rate.
+The delivery gas and the proof together are the **cost** of your transfer. Every rule on this page sets the fee against that cost.
 
-The interface sends your tokens to a router on the destination chain, with `relayTokensAndCall`. The router is the receiver of that call. Your tip settings travel in the call data. When you choose "No tip", the interface involves no router at all. It sends a plain relay (`relayTokens`) with no fee terms, and the tokens go straight to the receiver. No router can take a fee. Anyone can still deliver the message directly on the bridge, for free, but it may take longer. The confirm dialog says that no router is involved.
+## The delivery control
 
-## Who can collect the tip
+Under the amount you send sits one control with three parts.
 
-Anyone can deliver through the router. The router has no list of allowed runners.
+| Part | What it shows | What a tap does |
+|---|---|---|
+| Take my money | Who delivers and the fee, such as "A bot delivers it · 0.39%" | Opens the delivery menu |
+| Gas can and bars | Your gas level | Moves to the next level: Normal, High, Highest, then Normal again |
+| Clock | The time to arrival, such as "~16 min" | Lists every step with its estimate |
 
-The router pays the tip to its reward address. The router sets this address when it is deployed, and nobody can change it. The tip comes from your tokens. The recipient gets the rest. A copied delivery gains the copier nothing, because the tip goes to the reward address and not to the account that calls the router.
+Hold the pointer on any part, or focus it with the keyboard, to read the whole sentence. Tap the same part again, tap elsewhere or press Escape to close what it opened.
 
-## When the router cannot deliver
+The delivery menu holds every fee setting in one place:
 
-The router can fail to deliver the tokens to the recipient. Then it pays the tip first. It hands the rest of the tokens to its failed delivery address. The router sets both addresses when it is deployed, and nobody can change them.
+- **Who delivers**: Automatic, Share, Fixed, Gas-based or Yourself.
+- The value of that choice, such as the tip as a share of the amount.
+- The gas level.
+- The automatic fee cap and the hard fee cap.
+- What the fee covers: delivery gas, proof, the extra for a higher gas level, tip, and the fee in total.
+- **Advanced**: the gas limit, the relay router and a call after delivery.
 
-The confirm dialog reads both addresses from the router on the destination chain. It shows them as "Tip goes to" and "If delivery fails". When the page cannot read an address, the dialog says so and names no address. Check the router before you sign.
+## The default fee
 
-## A direct delivery pays no tip
+Unless you choose otherwise, the fee is automatic. It follows a curve in dollars: 1% of the amount at $10 and below, sliding down to 0.1% at $500 and above. The curve is the same on every chain.
 
-The bridge stays open to everyone. Anyone can call the bridge directly to deliver your message. This is a direct delivery. A direct delivery does not go through the router, so nobody pays a tip. The recipient gets the whole amount. A direct delivery costs you nothing. It only means that nobody is paid.
+| Amount | Default share | Default fee |
+|---|---|---|
+| $10 | 1% | $0.10 |
+| $25 | 0.58% | about $0.14 |
+| $50 | 0.39% | about $0.19 |
+| $100 | 0.26% | about $0.25 |
+| $250 | 0.15% | about $0.37 |
+| $500 | 0.1% | $0.50 |
+| $1,000 | 0.1% | $1.00 |
 
-## When the transfer cannot carry a tip
+Two rules hold the curve in place:
 
-Two cases cannot carry a tip. In both cases the interface sends a plain relay and tells you why on the form.
+- **At least twice the cost.** The fee is never below twice the cost of your transfer, so a bot always earns a margin. Where gas is expensive, such as delivery on Ethereum, this floor sets the fee.
+- **No more than the automatic fee cap.** The automatic fee stops at your automatic fee cap, 1% of the amount unless you change it.
 
-- The wrap route. It wraps the native coin and relays it in one call. This call has no call data, so it has no place for the tip.
-- A destination chain with no delivery router in the deployment.
+The cost is read live. When gas rises, the floor rises with it, and the fee follows by itself.
 
-## The router field
+Without a dollar price for the token, as on the testnets, the automatic fee is 0.1% of the amount, or your cap if that is lower.
 
-The form has an advanced field named "Router". It starts with the default delivery router on the destination chain. You can name another router. The confirm dialog shows the router address. It marks a router that is not the default delivery router. The tip settings are written for the delivery router. Another router can read them in a different way. Use it only if you trust it.
+## The gas level
 
-## The suggested range
+The bars beside the gas can set how much gas price you allow the deliverer. Today's gas price is the anchor. Over the next 15 minutes the real price could land lower or higher, and the gas level decides how high you let it go.
 
-The interface suggests a low range of tips. It is a range, not a price. Each end is a multiple of the measured gas cost of a delivery at the base fee.
+| Level | The deliverer may pay up to | Expected cost |
+|---|---|---|
+| Normal | 2 × today's base fee | 1 × today's cost |
+| High | 3 × today's base fee | 1.5 × today's cost |
+| Highest | 5 × today's base fee | 2.5 × today's cost |
 
-- Low: half of the cost.
-- Suggested: the cost.
-- High: one and a half times the cost.
+A higher level gives a bot room to deliver even when gas jumps. It also raises the fee, in every fee choice, by the extra cost it is expected to bring. The breakdown shows that extra on its own line.
 
-The range is low on purpose, so that the bridge is cheap next to other bridges. Choose one end with one click, or type your own number. In the gas mode the lowest tip is just above zero. For a tip of zero, choose No tip or a fixed amount of 0. A tip below the cost is allowed. Another interface may suggest another range.
+In the menu, the gas level shows as a range on a track, with today's gas marked as the anchor. A line under it reads, for example: "Anchored at today's gas · could land between $0.18 and $0.31 over 15 min".
 
-A tip below the cost is allowed and never makes a delivery fail. Anyone can still make the delivery.
+## The two fee caps
 
-## The modes
+You set two limits on the fee, both as a share of the amount.
 
-The router knows three tip modes. Each one sets the tip in a different way.
+| Cap | Default | What it does |
+|---|---|---|
+| Automatic fee cap | 1% | The most the automatic fee may take. When the cap holds the fee below twice the cost, the low-fee warning stays on. |
+| Hard fee cap | 2% | The most the fee may ever be, in every fee choice. A fee above it stops the Bridge button. |
 
-- Percent of the value: the tip is a share of the tokens that arrive.
-- A fixed amount: the tip is one set number of tokens.
-- A gas based tip: the tip is the gas that the deliverer's transaction makes available, times the gas price and a multiplier, up to the limit.
+The automatic fee cap can never be above the hard fee cap. Lowering the hard cap below it brings the automatic cap down too.
 
-The settings flags that carry the mode have these names: `FIXED_FEE` (a fixed amount), `MULTIPLIER_OF_TOTAL` (percent of the value), `EXCLUDE_PRIORITY` (price the gas at the base fee only, with no priority fee) and `UNWRAP` (pay in the native coin). A fixed amount wins over a percentage when both flags are set. With neither mode flag, the tip is gas based.
+When the fee is above the hard cap, the Bridge button turns grey and reads "Fee above your 2% cap". A "Raise cap to …" button right under it raises the cap to the smallest step that admits the fee. For a gas-based fee, the hard cap checks the most the fee could reach, not only the fee today.
 
-The form offers these modes. Each one has a label that tells you how sure the amount is.
+The menu draws both caps as ranges: the span the fee could land in is shaded on each track, so you see how close it comes to each cap.
 
-### Percentage
+A change to a cap in the menu applies to this transfer. The save button beside a cap (a floppy disk) makes it your default. You can also set both caps in Settings. Your caps stay in this browser. A link can set the automatic cap for one transfer, never above your hard cap, and the page names it as a field the link filled in.
 
-You pay a share of the transfer value. The default is 0.1 percent. You can type another share. The amount is exact. The label reads "exact". This mode needs no price.
+## When the Bridge button warns
+
+The Bridge button tells you what will happen before you sign.
+
+| The button | Means |
+|---|---|
+| Solid | Ready to bridge. |
+| Orange outline | A warning. Read the line under it. You can still go ahead. |
+| Grey | Blocked until you fix what the line under it says. |
+
+The warnings about the fee are these. The page shows one at a time, the most important first.
+
+| Warning | When it shows | What you can do |
+|---|---|---|
+| Small transfer · may not be delivered in a timely manner | The cost is more than your automatic fee cap allows for this amount. | Raise the automatic fee cap, send more, or deliver it yourself. |
+| Tip too low · may not be delivered | The fee is under twice the cost. Bots are likely to skip it. | Raise the tip, or deliver it yourself. |
+| High cap % | The tip, the part of the fee above the cost, is a large share of the amount: over 1% up to $100, over $1 between $100 and $1,000, over 0.1% from $1,000. | Lower the tip. A lower tip still gets delivered. |
+
+"High cap %" does not show for a small transfer: there, any fee that covers the cost is a large share.
+
+Without a dollar price, "Tip too low" compares the fee with what a bot needs at today's gas price, and "High cap %" compares the whole fee with 1% of the amount.
+
+## Who delivers: the fee choices
+
+Open the delivery menu and choose under **Who delivers**. The text in the control always says what will happen.
+
+| Choice | You set | The control says | Known when you sign |
+|---|---|---|---|
+| Automatic | Nothing: the default fee | A bot delivers it · 0.39% | Yes |
+| Share | The tip, as a share of the amount | A bot delivers it · 0.44% | Yes |
+| Fixed | The fee, in the token | A bot delivers it · 0.50 USDC | Yes |
+| Gas-based | A multiple of the gas cost | A bot delivers it · follows gas | No, it can change up to a limit |
+| Yourself | Nothing: no fee | You deliver it | There is no fee |
+
+### Share
+
+You set the tip, the part above the cost, as a share of the amount. The fee you sign is the cost at your gas level plus that tip. When you change the gas level, your tip stays the same and the fee moves by the cost.
 
 ### Fixed
 
-You pay a fixed amount, in whole tokens. If you leave the amount empty, the form suggests one that covers the cost plus a margin. The suggestion needs your coin price. The amount is exact.
+You set the whole fee as an amount of the token. It stays the same whatever gas costs. A fixed fee below twice the cost brings the low-fee warning.
 
-### Gas based, up to the limit
+### Gas-based
 
-This is the default mode. You pay for the gas that the deliverer's transaction makes available, times the gas price and a multiplier. The limit is the price ceiling: the tip never goes above it. This mode works for any token.
+The fee is worked out at delivery from the gas actually spent, times the multiple you set ("× gas cost"). It follows gas up and down, but never past the limit you sign. That limit is your automatic fee cap's share of the amount.
 
-The deliverer chooses the gas limit of the transaction. The bridge forwards only the message gas limit, so gas that the deliverer holds back above it counts. For this reason the deliverer's gas choice decides the tip. Expect the tip to reach the limit.
+The review shows how far the fee can move, for example "$0.42 now, up to $0.60 if gas rises to the Normal ceiling". When the most the fee could reach would be a "High cap %", the review warns and lets you lower the cap right there.
 
-The amount is an estimate. The label reads "estimate, at most X". X is the limit, in the units of your token. The form and the confirm dialog show the limit as the price ceiling.
+### Yourself
 
-The default has these terms:
+No fee and no router. The page sends a plain transfer, and anyone can deliver it on the bridge for free, including you. It can take longer, because no bot is paid to do it. When your transfer is proven and still waits 30 minutes after you sent it, it moves to "Needs you" on the Activity screen, with a "Deliver it yourself" button. The button shows the gas it needs on the destination chain, and stays disabled while your wallet there holds too little.
 
-- The gas price is the base fee only. The router flag `EXCLUDE_PRIORITY` sets it.
-- The tip equals the measured gas cost. The multiplier is 1. The page turns it into token units with your coin price: the multiplier is your price of one wei, times 1, times 1e18, rounded up.
-- The limit is the tip at the ceiling base fee. The ceiling is twice the base fee now. The delivery gas comes from the indexer (the 90th percentile of recent deliveries), or, with no measure, from the larger of 550000 gas and the gas that a delivery must supply for the least gas limit of its kind.
+## Every value is yours to set
 
-Some chains report no base fee. On such a chain the base fee flag would make the tip zero. The default then reads the whole gas price, with the same multiplier, and the form says why.
+Each value in the menu is one control: a slider with tick marks, an exact field next to its unit, and a mark for the recommended value. This holds for the tip share, the fixed amount, the gas multiple, the gas level, the gas limit and both caps.
 
-If you have typed no coin price and the page knows no value of the token, the page cannot compute the gas based tip. It shows a notice that asks you to enter your price. There is no fixed fallback: a fixed amount needs the same price to turn a cost into tokens. The percentage and fixed modes stay available.
+- **Reset to recommended** shows while the value differs from the recommendation.
+- After a reset, a **Back to your …** button appears in the same place, for example "Back to your 0.44%". It stays until you change something else.
+- The ticks are named under the track: "2× cost", "high cap", "auto cap", "High", "Highest" and "recommended". When two names would touch, one is left out and named in the control's ? help instead.
 
-### Your coin price
-
-The gas based mode needs a price: how many tokens one native coin of the destination chain is worth. The field "Your coin price" holds it. The price is your own. The page cannot verify it, and nothing at delivery reads it. The interface folds the price into the multiplier when the transfer leaves. For the wrapped native token, the field starts at 1. For another token, you type it.
+The tip slider in the Share choice and the same value elsewhere are one value: move either and every number follows.
 
 ## What exact and estimate mean
 
-Exact means the fee is known to the smallest unit before you sign. Estimate means the real fee can differ. An estimate never goes above the stated maximum.
+**Exact** means the fee is known to the smallest unit before you sign. The automatic, Share and Fixed choices are exact.
 
-The most that the tip can take is shown before you sign. Check this number. It is the most you can pay in tip.
+**Estimate** means the real fee can differ. A gas-based fee is an estimate. It never goes above the limit shown before you sign.
 
-## The cost breakdown
+## The data source of each number
 
-The form shows two lines when it knows your coin price. Every line is an estimate.
+| Number | Where it comes from |
+|---|---|
+| Dollar prices | PulseX pools on PulseChain, read through your RPC endpoint at one block. |
+| Delivery gas | The 90th percentile of recent deliveries measured by the indexer, or 550,000 gas when none is measured yet. |
+| Base fee and priority fee | The destination chain, through your RPC endpoint. |
+| Proof | A set figure of $0.025. |
 
-- Gas cost: the delivery gas, times the base fee plus the priority fee.
-- Margin: the tip minus the gas cost. A margin below zero means that the tip is below the cost. That is allowed.
+Prices are for display and for choosing the default fee and its warnings. What you sign is a share of the amount or an amount of the token, so the fee itself does not depend on a price after you sign. The testnets have no prices: the menu then shows the fee as a share, with ticks for what a bot needs to break even and for a typical fee.
 
-The suggestion for the fixed amount uses a margin of 10 percent by default. The gas based default is the cost itself, so its margin is zero. A runner sets its own rule about margins.
+Every rule on this page gives the same answer for the same inputs, in this app or any other that uses the same rules. Money is counted in whole units, and any rounding goes down, in your favour.
 
-The cost counts the gas of the delivery only. A tip is not a payment for any other work.
+## Who receives the fee
 
-## The data source line
+When a bot delivers, it goes through the delivery router on the destination chain. The router pays the fee to its reward address and the rest to the recipient. The router fixes this address when it is deployed, and nobody can change it. A copied delivery earns the copier nothing.
 
-Each suggestion shows where its gas figure comes from. You see one of two lines.
+If the router cannot pay the recipient, it pays the fee first and hands the rest to its failed delivery address, also fixed at deployment. The review reads both addresses from the router and shows them before you sign.
 
-- "measured from N recent deliveries, p90": the indexer measured N real deliveries. It uses the 90th percentile of their gas.
-- "default, no deliveries measured yet": no delivery is measured. The page uses the larger of the configured default of 550000 gas and the gas that a delivery must supply for the least gas limit of its kind.
+Anyone can also deliver directly on the bridge, without the router. A direct delivery pays no fee, and the recipient gets the whole amount.
 
-The default is a computed figure, not a measurement. The figures improve by themselves as the indexer records more deliveries.
+## The relay router
 
-## Base fee time
+The Advanced part of the menu has a field named "Relay router". It starts with the default delivery router of the destination chain. You can name another router. The review shows the router, and warns when it is not the default: the fee terms are written for the delivery router, and another router can read them in a different way. Use another router only if you trust it.
 
-The form also shows the base fee that it used. It names the block and the time of that block. For example: base fee 7 gwei at block 12.
+## When a transfer cannot carry a fee
 
-The base fee changes from block to block. Check the time. An old base fee gives a weak estimate.
+Two transfers carry no fee, and the page says why on the screen:
 
-## Payout
+- Bridging the native coin (ETH or PLS) wraps and sends it in one call, which has no room for fee terms.
+- A destination chain with no delivery router.
 
-For the wrapped native token, you can ask the router to pay the tip in the native coin. This option unwraps the token first. It exists only for the wrapped native token. For every other token, the router pays the tip in that token, and the interface refuses a request to unwrap it.
+Both are delivered like the Yourself choice.

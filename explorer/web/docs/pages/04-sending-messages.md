@@ -1,6 +1,6 @@
 # Sending messages
 
-This page explains how to send a message to a contract on the other chain. A message is a call that the bridge carries and runs on the destination chain.
+Call a contract on the other chain: the bridge carries your call, proves it, and runs it on the destination chain.
 
 ## What a message is
 
@@ -34,14 +34,16 @@ Choose enough gas for the target to finish. If the target runs out of gas, the c
 
 ## How to send a message
 
+Open search (⌘K, Ctrl K or the slash key) and choose **Send a message**.
+
 1. Choose the direction.
 2. Enter the target address on the destination chain.
 3. Enter the call data as hex.
 4. Enter the gas.
-5. Read the full transaction in the interface.
-6. Sign the transaction in your wallet.
+5. Read the full transaction.
+6. Sign it in your wallet.
 
-The interface shows the chain, the contract, the function, the arguments, the value and the gas. Check each line before you sign.
+The app shows the chain, the contract, the function, the arguments, the value and the gas before your wallet opens. Check each line before you sign.
 
 ## What the target sees
 
@@ -57,7 +59,7 @@ If you send through a multicall contract, the sender is the multicall contract. 
 
 ## The life of a message
 
-A message has the same status words as a token transfer. It starts as sent. It then waits for finality and becomes covered. After delivery, it shows delivered or failed call. The page How the bridge works explains each word.
+A message has the same steps as a token transfer: sent, final, proven, delivered. A delivered message can also end as a failed call. Your messages show on the Activity screen next to your transfers. The page How the bridge works explains each status.
 
 Anyone can deliver a message. Messages are independent. They can arrive in any order.
 
@@ -77,6 +79,6 @@ This means a failed call is not the fault of the executor. It happens only when 
 
 ## The gate and your send
 
-On an enforcing chain, the first send in each epoch needs a gate confirmation. The page Safety explains the gate. The interface is meant to build and send this confirmation for you when it is needed.
+On an enforcing chain, the first send in each epoch needs a gate confirmation. The page Safety explains the gate.
 
 If a send fails with a gate error, wait one slot and try again.

@@ -34,7 +34,7 @@ describe("the command palette, the cases of the first test file leaves out", () 
     expect(await screen.findByRole("option", { name: /Zebra crossing/ })).toBeInTheDocument();
     await userEvent.clear(input);
     await userEvent.type(input, "data source");
-    expect(screen.queryByRole("option", { name: /The data source line/ })).toBeNull();
+    expect(screen.queryByRole("option", { name: /The data source of each number/ })).toBeNull();
   });
 
   it("tells the user to try other words when nothing matches and no lookup failed", async () => {

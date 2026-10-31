@@ -126,7 +126,7 @@ describe("the real pages", () => {
   it("publishes every help page, and nothing from docs/superpowers", () => {
     const ids = SITE_PAGES.map((page) => page.id);
     expect(ids).toContain("help/getting-started");
-    expect(ids.filter((id) => id.startsWith("help/"))).toHaveLength(8);
+    expect(ids.filter((id) => id.startsWith("help/"))).toHaveLength(9);
     expect(ids.filter((id) => id.startsWith("superpowers"))).toEqual([]);
     expect(Object.keys(SITE_INPUT.operatorPages).filter((key) => key.includes("superpowers"))).toEqual([]);
   });
