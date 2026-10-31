@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { maskSecret, redactError, redactSecrets, REDACTED } from "../src/config/index.js";
+import { maskSecret, redactError, redactSecrets, REDACTED } from "../src/index.js";
 import { isRegistrableSecret } from "../src/redaction.js";
 
 describe("maskSecret", () => {

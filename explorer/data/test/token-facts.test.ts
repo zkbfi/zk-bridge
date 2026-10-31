@@ -113,3 +113,23 @@ describe("mergeTransfer", () => {
     expect(mergeTransfer({ ...identity, existing: first, patch: { sourceToken: null } }).sourceToken).toBeNull();
   });
 });
+
+describe("reads that name their block", () => {
+  it("passes the block to every view of the token metadata and of the native token", async () => {
+    const calls: Array<{ functionName: string; blockNumber?: bigint }> = [];
+    const reader = {
+      readContract: async (call: { functionName: string; blockNumber?: bigint }) => {
+        calls.push(call);
+        return call.functionName === "decimals" ? 6 : call.functionName === "nativeTokenAddress" ? "0x0000000000000000000000000000000000000000" : "X";
+      },
+    };
+    const token = "0x1111111111111111111111111111111111111111";
+    await readTokenMetadata(reader, token, 12n);
+    expect(await nativeTokenBehind(reader, token, token, 12n)).toBeNull();
+    expect(calls.map((call) => call.blockNumber)).toEqual([12n, 12n, 12n, 12n]);
+    // Without a block the call carries no block key at all.
+    calls.length = 0;
+    await readTokenMetadata(reader, token);
+    expect(calls.every((call) => !("blockNumber" in call))).toBe(true);
+  });
+});
