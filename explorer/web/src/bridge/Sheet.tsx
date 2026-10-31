@@ -7,6 +7,8 @@ export type SheetProps = {
   readonly showTitle?: boolean;
   /** No accent edge on top (the token picker opens on its own orange search band). */
   readonly bare?: boolean;
+  /** On desktop, hang from near the top instead of rising from the bottom, so a list that changes length never moves the field (search). */
+  readonly top?: boolean;
   readonly onClose: () => void;
   readonly children: ReactNode;
 };
@@ -26,7 +28,7 @@ export const CloseButton = ({ onClose, label = "Close" }: { readonly onClose: ()
  *
  * @param props The label, the close handler and the content.
  */
-export const Sheet = ({ label, showTitle = true, bare = false, onClose, children }: SheetProps) => {
+export const Sheet = ({ label, showTitle = true, bare = false, top = false, onClose, children }: SheetProps) => {
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
@@ -43,7 +45,7 @@ export const Sheet = ({ label, showTitle = true, bare = false, onClose, children
   return (
     <>
       <div className="zb-scrim" onClick={onClose} aria-hidden="true" />
-      <div ref={panel} className={bare ? "zb-sheet zb-sheet-bare" : "zb-sheet"} role="dialog" aria-modal="true" aria-label={label}>
+      <div ref={panel} className={["zb-sheet", bare ? "zb-sheet-bare" : "", top ? "zb-sheet-top" : ""].filter(Boolean).join(" ")} role="dialog" aria-modal="true" aria-label={label}>
         {showTitle ? (
           <div className="zb-col zb-sheet-head">
             <h2>{label}</h2>

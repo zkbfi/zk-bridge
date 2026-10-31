@@ -1,6 +1,9 @@
 import { BrandMark } from "../ui/BrandMark";
 import { Chevron, SearchIcon } from "./icons";
 
+/** The search shortcut as this keyboard writes it: ⌘K on Apple devices, Ctrl K elsewhere. */
+const SHORTCUT = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘K" : "Ctrl K";
+
 /** The three screens that slide sideways, left to right. */
 export const SCREENS = ["Activity", "Bridge", "Explore"] as const;
 export type ScreenName = (typeof SCREENS)[number];
@@ -30,7 +33,7 @@ export const Header = ({ page, screenHref, homeHref, onSearch }: HeaderProps) =>
     <>
       <header className="zb-header zb-col">
         <a className="zb-mark" href={homeHref} aria-label="zkb.fi, the bridge">
-          <BrandMark size={28} />
+          <BrandMark size={44} />
         </a>
         <span className="zb-page-name">
           {before === undefined ? (
@@ -69,8 +72,11 @@ export const Header = ({ page, screenHref, homeHref, onSearch }: HeaderProps) =>
             </a>
           )}
         </span>
-        <button type="button" className="zb-pill zb-search" onClick={onSearch} aria-label="Search and jump (Control K or slash)" aria-haspopup="dialog">
+        <button type="button" className="zb-pill zb-search" onClick={onSearch} aria-label="Search and jump (Command K, Control K or slash)" aria-haspopup="dialog">
           <SearchIcon />
+          <kbd className="zb-kbd" aria-hidden="true">
+            {SHORTCUT}
+          </kbd>
         </button>
       </header>
       {index < 0 ? null : (
