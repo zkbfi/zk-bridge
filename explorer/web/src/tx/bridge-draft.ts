@@ -11,7 +11,7 @@ import { DEFAULT_GAS_MARGIN, defaultTipChoiceOf, UINT256_MAXIMUM, type DeliveryC
 import { bridgeSourceOf, type BridgeContext } from "@terminal/app/actions";
 import { DEFAULT_TIP_PERCENT_TEXT, resolveDeliveryTarget, senderPriceText, type DeliveryTarget } from "@terminal/app/delivery-fee-form";
 import type { ChainSide, PairConfig, TokenInfo } from "@terminal/model/types";
-import { AmountParseError, parsePercentAsRate, parseUnits } from "@terminal/format/amounts";
+import { AmountParseError, parsePercentAsRate, parseUnits, RATE_SCALE } from "@terminal/format/amounts";
 import { PlanInputError } from "@terminal/tx/plan";
 import { planBridgeSteps, type BridgeFormValues, type WebStep } from "./bridge-steps";
 import { selectDelivery, type DeliveryMode, type DeliverySelection } from "./delivery-selection";
@@ -44,6 +44,8 @@ export type DeliveryOptions = {
   readonly routerText: string | null;
   /** True when the user wants the native coin paid out (only for the wrapped native token). */
   readonly payoutNative: boolean;
+  /** The automatic cap as a share × 1e18: a gas based tip may take at most this share of the amount. Optional. */
+  readonly gasCapRate?: bigint;
 };
 
 /** The live data that a draft reads. */
@@ -241,6 +243,7 @@ const buildDelivery = (input: {
       marginRate: inputs.value.marginRate,
       gasMargin: inputs.value.gasMargin,
       baseFeeCeilingWei: inputs.value.baseFeeCeilingWei,
+      ...(options.gasCapRate === undefined ? {} : { gasLimitCapUnits: (amount * options.gasCapRate) / RATE_SCALE }),
     },
     { router: inputs.value.router, defaultRouter: target.router },
   );

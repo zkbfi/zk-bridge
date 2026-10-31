@@ -51,6 +51,8 @@ describe("the cap in the review", () => {
     await userEvent.click(within(warning).getByRole("radio", { name: "0.5%" }));
     await waitFor(() => expect(window.location.hash).toMatch(/tip\.cap=0\.5/));
     expect(within(review).queryByRole("group", { name: "Fee cap" })).toBeNull();
+    // The cap limits what the signed terms allow: the drift now stops at 0.5% of $1,000.
+    expect(within(review).getByText("Can drift").nextSibling).toHaveTextContent(/up to \$5\.00 if gas rises/);
   });
 
   it("never warns about the cap for a fee fixed at signing (the default share)", async () => {

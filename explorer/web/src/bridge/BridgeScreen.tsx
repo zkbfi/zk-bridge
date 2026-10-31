@@ -159,9 +159,16 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const amountUsd = valueOf(amount);
   const capWad = shareWadOfPercentText(String(capPercent)) ?? DEFAULT_CAP_WAD;
   const auto = defaultFee({ amountUsd: amountUsd, costUsd: costUsd, capWad });
+  // The automatic fee signs the default share; a gas-based fee signs a limit no higher than the cap's share (owner,
+  // quotes 70–71: "limited by the cap").
   const options = useMemo(
-    () => (automatic ? { ...baseOptions, percentText: formatUnits(auto.shareWad, 16) } : baseOptions),
-    [automatic, baseOptions, auto.shareWad],
+    () =>
+      automatic
+        ? { ...baseOptions, percentText: formatUnits(auto.shareWad, 16) }
+        : baseOptions.mode === "gas-multiplier"
+          ? { ...baseOptions, gasCapRate: capWad }
+          : baseOptions,
+    [automatic, baseOptions, auto.shareWad, capWad],
   );
   const draft = useMemo(
     () => (options === baseOptions ? probe : draftWith(options)),

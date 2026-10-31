@@ -228,4 +228,14 @@ describe("selectDelivery: the default gas based tip", () => {
     expect(available({ destinationBaseFee: "none" }).notice).toBeNull();
     expect(available({ mode: "fixed", destinationBaseFee: "none" }).notice).toBeNull();
   });
+  it("limits a gas-based tip by the automatic cap's share of the amount, and leaves the other modes alone", () => {
+    const uncapped = available({ mode: "gas-multiplier" });
+    const cap = uncapped.director.limit / 2n;
+    const capped = available({ mode: "gas-multiplier", gasLimitCapUnits: cap });
+    expect(capped.director.limit).toBe(cap);
+    expect(capped.maximumTip).toBe(cap);
+    // A cap above the limit changes nothing.
+    expect(available({ mode: "gas-multiplier", gasLimitCapUnits: uncapped.director.limit * 2n }).director.limit).toBe(uncapped.director.limit);
+    expect(available({ mode: "percentage", gasLimitCapUnits: 1n }).director).toEqual(available({ mode: "percentage" }).director);
+  });
 });
