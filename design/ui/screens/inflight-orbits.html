@@ -34,7 +34,7 @@
 <body>
 <div class="col">
   <h1>Every transfer in flight, at once</h1>
-  <p class="lead">One loop joins the two chains: the top lane runs from the chain on the left to the chain on the right, the bottom lane back. Each lane is the four steps of a transfer. Each planet circling a step is one transfer waiting at it. Each planet is its token's icon; its size is the value it carries. Steps complete in batches, as on chain: a finalized checkpoint moves every transfer sent before it, one proof carries every finalized transfer of its direction, and deliveries come several at a time; each batch glides as a wave. At rest each step's planets crowd into a tilted orbit, seen in depth. Hover a step to open its orbit; hover a planet (tap on a phone) to stop it and read the transfer; hover a step's sun for what waits there, by token, with its fees and what delivering it all would earn; hover a chain for its totals.</p>
+  <p class="lead">One loop joins the two chains: the top lane runs from the chain on the left to the chain on the right, the bottom lane back. Each lane is the three steps of a transfer: sent, final on its chain, and proof ready (a valid proof is on the board; posting it on chain is part of delivering, which anyone may do). Each planet circling a step is one transfer waiting at it. Each planet is its token's icon; its size is the value it carries. Steps complete in batches, as on chain: a finalized checkpoint moves every transfer sent before it, one proof makes every finalized transfer of its direction ready, and deliveries come several at a time; each batch glides as a wave. At rest each step's planets crowd into a tilted orbit, seen in depth. Hover a step to open its orbit; hover a planet (tap on a phone) to stop it and read the transfer; hover a step's sun for what waits there, by token, with its fees and what delivering it all would earn; hover a chain for its totals.</p>
   <div id="tracks"></div>
   <div class="bar"><button id="theme">Light / dark</button><button id="burst">Add a burst of transfers</button><button id="motion">Pause all</button></div>
   <ul class="notes">
@@ -45,14 +45,16 @@
 </div>
 <div class="tip" id="tip" role="tooltip"></div>
 <script>
-const STEPS = ["Sent", "Final", "Proof posted", "Delivering"];
+// A proof is "ready" once a valid one is on the board (or a client has checked it); posting it on chain is part of
+// delivering, which anyone may do, so there is no separate on-chain step before delivery.
+const STEPS = ["Sent", "Final", "Proof ready"];
 const IMG = (chain, address) => `https://gib.show/image/${chain}${address ? "/" + address : ""}`;
 // Each direction sends its source chain's tokens; the planet is the token's own icon (a native coin is its chain's icon).
 const DIRS = [
-  { key: "e2p", from: "Ethereum", to: "PulseChain", fromChain: 1, toChain: 369, gasUsd: 0.03, minutes: [13, 2, 1.5, 0.5], tokens: [
+  { key: "e2p", from: "Ethereum", to: "PulseChain", fromChain: 1, toChain: 369, gasUsd: 0.03, minutes: [13, 2, 1], tokens: [
     ["USDC", 1, 1, "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"], ["ETH", 3000, 1, null], ["DAI", 1, 1, "0x6B175474E89094C44Da98b954EedeAC495271d0F"],
     ["HEX", 0.004, 1, "0x2b591e99afE9f32eAA6214f7B7629768c40Eeb39"], ["WBTC", 68000, 1, "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"], ["USDT", 1, 1, "0xdAC17F958D2ee523a2206206994597C13D831ec7"]] },
-  { key: "p2e", from: "PulseChain", to: "Ethereum", fromChain: 369, toChain: 1, gasUsd: 0.6, minutes: [2, 2, 12, 0.5], tokens: [
+  { key: "p2e", from: "PulseChain", to: "Ethereum", fromChain: 369, toChain: 1, gasUsd: 0.6, minutes: [2, 12, 1], tokens: [
     ["PLS", 0.00003, 369, null], ["PLSX", 0.00002, 369, "0x95B303987A60C71504D99Aa1b13B4DA07b0790ab"], ["HEX", 0.004, 369, "0x2b591e99afE9f32eAA6214f7B7629768c40Eeb39"],
     ["INC", 0.6, 369, "0x2fa878Ab3F87CC1C9737Fc071108F904c0B0C95d"]] },
 ];
@@ -62,7 +64,8 @@ let paused = false;
 // chain), the bottom lane right to left (second → first); rounded ends join them, so each chain appears once.
 const W = 780, H = 440, A = 170, B = 610, YT = 130, YB = 310, YM = (YT + YB) / 2, RE = (YB - YT) / 2, R0 = 34, RING = 20, PER = 6;
 const NODES = [{ x: A - RE, y: YM }, { x: B + RE, y: YM }];   // [first chain, second chain]
-const lanes = [{ y: YT, x: (i) => A + (i * (B - A)) / 3, exit: NODES[1] }, { y: YB, x: (i) => B - (i * (B - A)) / 3, exit: NODES[0] }];
+const LAST = STEPS.length - 1;
+const lanes = [{ y: YT, x: (i) => A + (i * (B - A)) / LAST, exit: NODES[1] }, { y: YB, x: (i) => B - (i * (B - A)) / LAST, exit: NODES[0] }];
 let seq = 0;
 const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = (xs) => xs[Math.floor(Math.random() * xs.length)];
@@ -79,7 +82,7 @@ function transfer(dir, step) {
     addr: "0x" + Math.random().toString(16).slice(2, 6) + "…" + Math.random().toString(16).slice(2, 6) };
 }
 const state = DIRS.map((dir) => ({ dir, items: [], delivered: Math.floor(rnd(40, 120)), week: Math.floor(rnd(500, 900)), frozen: -1, hover: -1, open: [0, 0, 0, 0], dots: new Map(), phase: {} }));
-state.forEach((s, n) => { s.lane = lanes[n]; for (let i = 0; i < 26; i++) { const t = transfer(s.dir, Math.min(3, Math.floor(Math.random() * 4))); t.alpha = 1; t.x = s.lane.x(t.step); t.y = s.lane.y; s.items.push(t); } });
+state.forEach((s, n) => { s.lane = lanes[n]; for (let i = 0; i < 26; i++) { const t = transfer(s.dir, Math.floor(Math.random() * STEPS.length)); t.alpha = 1; t.x = s.lane.x(t.step); t.y = s.lane.y; s.items.push(t); } });
 for (const s of state) for (const t of s.items) if (!t.x) { t.x = s.lane.x(0) - 30; t.y = s.lane.y; }
 const fmt = (n) => n >= 1000 ? Math.round(n).toLocaleString("en-US") : n >= 1 ? n.toFixed(2) : n.toPrecision(3);
 const ns = "http://www.w3.org/2000/svg";
@@ -134,7 +137,7 @@ function build() {
   state.forEach((s, n) => {
     s.guides = el("g", {}); svg.append(s.guides); s.guideEls = {};
     s.layer = el("g", {}); svg.append(s.layer);
-    s.suns = [0, 1, 2, 3].map((i) => {
+    s.suns = STEPS.map((_, i) => {
       const c = el("circle", { cx: s.lane.x(i), cy: s.lane.y, r: 15, fill: i === 0 ? "var(--accent)" : "var(--ahead)", tabindex: 0, style: "cursor:pointer", "aria-label": `${STEPS[i]}: totals` });
       c.dataset.sun = i;
       // The sun's tooltip: everything waiting at this step, by token, with the fees it pays and what delivering it all costs.
@@ -145,7 +148,7 @@ function build() {
       return c;
     });
     // Step labels: above the top lane, below the bottom lane.
-    s.labelEls = [0, 1, 2, 3].map((i) => {
+    s.labelEls = STEPS.map((_, i) => {
       const y = n === 0 ? YT - 78 : YB + 86;
       const g = el("text", { x: s.lane.x(i), y, "text-anchor": "middle", "font-size": 12, fill: "var(--muted)" });
       const c = el("tspan", { x: s.lane.x(i), dy: 0, "font-weight": 700, fill: "var(--ink)", "font-size": 14 }); c.textContent = "0";
@@ -162,7 +165,7 @@ function build() {
     const s = Math.abs(y - YT) < Math.abs(y - YB) ? state[0] : state[1];
     // Only the lane under the pointer may be open or frozen; the other closes as soon as the pointer leaves it.
     state.forEach((other) => { other.hover = -1; if (other !== s) other.frozen = -1; });
-    let best = -1, d = 70; for (let i = 0; i < 4; i++) { const dd = Math.abs(x - s.lane.x(i)); if (dd < d) { d = dd; best = i; } }
+    let best = -1, d = 90; for (let i = 0; i < STEPS.length; i++) { const dd = Math.abs(x - s.lane.x(i)); if (dd < d) { d = dd; best = i; } }
     s.hover = best;
   });
 }
@@ -192,9 +195,9 @@ function stepSummary(s, i) {
 // so a step change, a ring re-spacing or a departure is always a glide, never a jump.
 let frameNo = 0;
 function targets(s) {
-  const byStep = [[], [], [], []];
+  const byStep = STEPS.map(() => []);
   for (const t of s.items) if (!t.leaving) byStep[t.step].push(t);
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < STEPS.length; i++) {
     byStep[i].sort((a, b) => a.id - b.id);
     let k = 0, ring = 0;
     while (k < byStep[i].length) {
@@ -222,7 +225,7 @@ function targets(s) {
 function frame(now) {
   const dt = Math.min(48, now - (frame.last ?? now)); frame.last = now; frameNo++;
   for (const s of state) {
-    for (let i = 0; i < 4; i++) s.open[i] += ((s.hover === i || s.frozen === i ? 1 : 0) - s.open[i]) * (1 - Math.exp(-dt / 160));
+    for (let i = 0; i < STEPS.length; i++) s.open[i] += ((s.hover === i || s.frozen === i ? 1 : 0) - s.open[i]) * (1 - Math.exp(-dt / 160));
     targets(s);
     const seen = new Set();
     for (const t of s.items) {
@@ -242,7 +245,7 @@ function frame(now) {
     order.sort((a, b) => a[0] - b[0]).forEach(([, node]) => s.layer.append(node));
     s.items = s.items.filter((t) => !t.gone);
     for (const [id, g] of s.dots) if (!seen.has(id)) { g.remove(); s.dots.delete(id); }
-    for (let i = 0; i < 4; i++) s.labelEls[i].textContent = s.items.filter((t) => t.step === i && !t.leaving).length;
+    for (let i = 0; i < STEPS.length; i++) s.labelEls[i].textContent = s.items.filter((t) => t.step === i && !t.leaving).length;
   }
   requestAnimationFrame(frame);
 }
@@ -273,7 +276,7 @@ function draw(s, t, x, y, seen) {
 function move(group, now, step) {
   group.forEach((t, j) => setTimeout(() => {
     if (t.leaving) return;
-    if (step > 3) t.leaving = true; else { t.step = step; t.moving = { start: performance.now(), span: 1100 }; }
+    if (step > LAST) t.leaving = true; else { t.step = step; t.moving = { start: performance.now(), span: 1100 }; }
   }, j * 60));
 }
 const EVENTS = ["arrive", "arrive", "finalize", "arrive", "prove", "deliver", "arrive", "deliver"];
@@ -288,7 +291,7 @@ function advance() {
     const event = EVENTS[(tick + (s === state[1] ? 3 : 0)) % EVENTS.length];
     if (event === "finalize") move(at(0).slice(0, Math.max(1, Math.round(at(0).length * rnd(0.6, 1)))), now, 1);
     if (event === "prove") move(at(1), now, 2);
-    if (event === "deliver") { move(at(3).slice(0, Math.ceil(rnd(2, 6))), now, 4); move(at(2).slice(0, Math.ceil(rnd(3, 8))), now, 3); }
+    if (event === "deliver") move(at(2).slice(0, Math.ceil(rnd(2, 6))), now, 3);
     const arrivals = event === "arrive" ? Math.round(rnd(1, 3)) : Math.random() < 0.4 ? 1 : 0;
     for (let k = 0; k < arrivals; k++) { const t = transfer(s.dir, 0); t.x = s.lane.x(0) + (s === state[0] ? -30 : 30); t.y = s.lane.y; s.items.push(t); }
     for (const t of s.items) t.age += 0.05;
