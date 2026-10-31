@@ -129,6 +129,9 @@ main() {
     touch "$release/.complete"
   fi
 
+  # ZKB_BUILD_ONLY=1 stops here, so a new indexer schema can be filled on a spare port before the switch.
+  if [ "${ZKB_BUILD_ONLY:-}" = 1 ]; then log "built $release, not switched"; exit 0; fi
+
   # --- 5. Switch ------------------------------------------------------------------------------------------------
   local previous=none
   [ ! -L "$CURRENT" ] || previous=$(basename "$(readlink "$CURRENT")")
