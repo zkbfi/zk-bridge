@@ -16,6 +16,8 @@ export type ConnectionSettings = {
    * single `msgboardUrl` of the same source, which older settings and the terminal still use.
    */
   readonly msgboardUrls?: Readonly<Record<number, string>>;
+  /** The beacon API of each chain (owner: "we need to be able to configure different beacon endpoints in the settings"). */
+  readonly beaconUrls?: Readonly<Record<number, string>>;
 } & Partial<Readonly<Record<EndpointKey, string | null>>>;
 
 /**
@@ -47,6 +49,7 @@ export type ConnectionLayer = {
   readonly indexerUrl?: string | null | undefined;
   readonly rpcUrls?: Readonly<Record<number, string | null | undefined>> | undefined;
   readonly msgboardUrls?: Readonly<Record<number, string | null | undefined>> | undefined;
+  readonly beaconUrls?: Readonly<Record<number, string | null | undefined>> | undefined;
 } & Partial<Readonly<Record<EndpointKey, string | null | undefined>>>;
 
 /** The settings in force. */
@@ -58,6 +61,8 @@ export type ResolvedConnection = {
    * Absent on a connection built before boards were per chain; read it with {@link boardUrlOf}.
    */
   readonly msgboardUrls?: Readonly<Record<number, ResolvedSetting | null>>;
+  /** The beacon API of each chain. Absent on a connection built before beacon APIs were settings. */
+  readonly beaconUrls?: Readonly<Record<number, ResolvedSetting | null>>;
 } & Readonly<Record<EndpointKey, ResolvedSetting | null>>;
 
 /** The inputs of {@link resolveConnection}. */
@@ -107,6 +112,9 @@ export const resolveConnection = (input: ResolveConnectionInput): ResolvedConnec
     ),
     msgboardUrls: Object.fromEntries(
       input.chainIds.map((chainId) => [chainId, firstSetting(layers.map(([source, layer]) => [source, present(layer.msgboardUrls?.[chainId]) ?? layer.msgboardUrl] as const))]),
+    ),
+    beaconUrls: Object.fromEntries(
+      input.chainIds.map((chainId) => [chainId, firstSetting(layers.map(([source, layer]) => [source, layer.beaconUrls?.[chainId]] as const))]),
     ),
   };
 };

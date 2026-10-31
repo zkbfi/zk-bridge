@@ -1,4 +1,5 @@
 import { screen, waitFor, within } from "@testing-library/react";
+import { defaultBeaconUrl } from "@terminal/config/default-beacon";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -67,10 +68,40 @@ describe("the msgboard nodes in Settings (owner, quote 87)", () => {
   });
 });
 
+describe("the beacon endpoints in Settings", () => {
+  it("shows one beacon API per chain with its icon and the valve.city default, and checks each against its own chain", async () => {
+    const calls: string[] = [];
+    const probe: Prober = async (url, kind) => {
+      calls.push(`${url} ${kind.kind} ${"chainId" in kind ? kind.chainId : "-"}`);
+      return kind.kind === "beacon" && kind.chainId === SECOND_CHAIN ? { ok: false, reason: "The beacon node is on another chain: its genesis validators root differs." } : { ok: true, ms: 7 };
+    };
+    renderSettings({ services: { probe } });
+    expect(screen.getByText("Where the light clients' proofs read each chain's consensus. Yours stay in this browser.")).toBeInTheDocument();
+    expect(field("Ethereum beacon API")).toHaveValue(defaultBeaconUrl(FIRST_CHAIN));
+    expect(field("PulseChain beacon API")).toHaveValue(defaultBeaconUrl(SECOND_CHAIN));
+    await waitFor(() => expect(calls).toEqual(expect.arrayContaining([`${defaultBeaconUrl(FIRST_CHAIN)} beacon ${FIRST_CHAIN}`, `${defaultBeaconUrl(SECOND_CHAIN)} beacon ${SECOND_CHAIN}`])), { timeout: 3000 });
+    expect(await screen.findByRole("status", { name: "Ethereum beacon API: ok, 7 ms" })).toBeInTheDocument();
+    expect(await screen.findByRole("status", { name: "PulseChain beacon API: down" })).toBeInTheDocument();
+  });
+
+  it("saves a chain's own beacon API in this browser, and a reset takes it back to the default", async () => {
+    const storage = memoryStorage();
+    renderSettings({ storage });
+    await userEvent.clear(field("PulseChain beacon API"));
+    await userEvent.type(field("PulseChain beacon API"), "https://rpc-pulsechain.g4mm4.io/beacon-api/");
+    await save();
+    await waitFor(() => expect(stored(storage).beaconUrls).toEqual({ [SECOND_CHAIN]: "https://rpc-pulsechain.g4mm4.io/beacon-api" }));
+    await userEvent.click(screen.getByRole("button", { name: "Reset PulseChain beacon API" }));
+    expect(field("PulseChain beacon API")).toHaveValue(defaultBeaconUrl(SECOND_CHAIN));
+    await save();
+    await waitFor(() => expect(stored(storage).beaconUrls).toEqual({}));
+  });
+});
+
 describe("the settings sheet", () => {
   it("has the sections of the mockup, in its order, and Reset to defaults before Save", () => {
     const { dialog } = renderSettings();
-    expect(within(dialog).getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent)).toEqual(["Theme", "RPC endpoints", "Token and chain images", "Services", "Msgboard nodes", "More"]);
+    expect(within(dialog).getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent)).toEqual(["Theme", "RPC endpoints", "Beacon endpoints", "Token and chain images", "Services", "Msgboard nodes", "More"]);
     expect(within(dialog).getByText("Used to read balances and send transactions. Yours stay in this browser.")).toBeInTheDocument();
     const buttons = within(dialog).getAllByRole("button").map((button) => button.textContent);
     expect(buttons.slice(-2)).toEqual(["Reset to defaults", "Save"]);

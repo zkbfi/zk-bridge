@@ -56,7 +56,7 @@ describe("resolveConnection", () => {
 
   it("gives null for a setting that no source has", () => {
     const resolved = resolveConnection({ chainIds: [1], user: {}, environment: {}, registry: {} });
-    expect(resolved).toEqual({ indexerUrl: null, rpcUrls: { 1: null }, msgboardUrls: { 1: null }, backendUrl: null, msgboardIndexerUrl: null, archiveUrl: null, msgboardUrl: null });
+    expect(resolved).toEqual({ indexerUrl: null, rpcUrls: { 1: null }, msgboardUrls: { 1: null }, beaconUrls: { 1: null }, backendUrl: null, msgboardIndexerUrl: null, archiveUrl: null, msgboardUrl: null });
   });
 });
 
@@ -256,5 +256,20 @@ describe("the msgboard node per chain (owner, quote 87)", () => {
     expect(migrateBoardUrls({ ...old, msgboardUrls: { 369: "https://mine.example" } }, chainIds).msgboardUrls).toEqual({ 1: "https://old.example", 369: "https://mine.example" });
     const none = { indexerUrl: null, rpcUrls: {} };
     expect(migrateBoardUrls(none, chainIds)).toBe(none);
+  });
+});
+
+describe("the beacon API per chain", () => {
+  it("resolves each chain from the strongest source, like the RPC URLs", () => {
+    const resolved = resolveConnection({
+      chainIds: [11155111, 943],
+      user: { beaconUrls: { 943: "https://beacon-mine.example" } },
+      environment: {},
+      registry: { beaconUrls: { 11155111: "https://beacon-default.example", 943: "https://beacon-other.example" } },
+    });
+    expect(resolved.beaconUrls).toEqual({
+      11155111: { value: "https://beacon-default.example", source: "default" },
+      943: { value: "https://beacon-mine.example", source: "user" },
+    });
   });
 });

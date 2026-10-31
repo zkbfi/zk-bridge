@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { describeStatus, failOutcome, fetchClient, fetchClientWithin, passOutcome, testHealthUrl, testIndexerUrl, testJsonRpcUrl, testRpcChainId, type HttpClient } from "../src/index.js";
+import { describeStatus, failOutcome, fetchClient, fetchClientWithin, passOutcome, testBeaconGenesis, testHealthUrl, testIndexerUrl, testJsonRpcUrl, testRpcChainId, type HttpClient } from "../src/index.js";
 
 const KEY = "FAKEKEY1234567890";
 const rpcUrl = `https://rpc.example.org/v3/${KEY}`;
@@ -159,5 +159,47 @@ describe("testJsonRpcUrl", () => {
     expect((await testJsonRpcUrl(answering(404, ""), { url: "https://b.test" })).ok).toBe("fail");
     expect((await testJsonRpcUrl(answering(200, "{}"), { url: "https://b.test" })).ok).toBe("fail");
     expect((await testJsonRpcUrl(answering(200, "<html>"), { url: "https://b.test" })).ok).toBe("fail");
+  });
+});
+
+describe("testBeaconGenesis", () => {
+  const root = `0x${"d8".repeat(32)}`;
+  const genesis = (validatorsRoot: string) => JSON.stringify({ data: { genesis_time: "1655733600", genesis_validators_root: validatorsRoot, genesis_fork_version: "0x90000069" } });
+
+  it("asks /eth/v1/beacon/genesis below the base URL, without a trailing slash", async () => {
+    const http = vi.fn(async () => ({ status: 200, text: genesis(root) }));
+    await testBeaconGenesis(http, { beaconUrl: "https://beacon.test/api/", expectedGenesisValidatorsRoot: root });
+    expect(http).toHaveBeenCalledWith({ url: "https://beacon.test/api/eth/v1/beacon/genesis", method: "GET" });
+  });
+
+  it("passes when the genesis validators root is the chain's, in any letter case", async () => {
+    const upper = `0x${"D8".repeat(32)}`;
+    expect(await testBeaconGenesis(answering(200, genesis(upper)), { beaconUrl: "https://b.test", expectedGenesisValidatorsRoot: root })).toEqual({
+      ok: "pass",
+      message: "The beacon node serves this chain's genesis.",
+    });
+  });
+
+  it("fails when the node is on another beacon chain", async () => {
+    const outcome = await testBeaconGenesis(answering(200, genesis(`0x${"4b".repeat(32)}`)), { beaconUrl: "https://b.test", expectedGenesisValidatorsRoot: root });
+    expect(outcome).toEqual({ ok: "fail", message: "The beacon node is on another chain: its genesis validators root differs." });
+  });
+
+  it("passes on any genesis when no root is known for the chain", async () => {
+    expect((await testBeaconGenesis(answering(200, genesis(root)), { beaconUrl: "https://b.test", expectedGenesisValidatorsRoot: null })).ok).toBe("pass");
+  });
+
+  it("fails on an error status, an answer with no genesis, and a refused request, and never repeats a key in the URL", async () => {
+    const keyedBeacon = `https://beacon.test/${KEY}`;
+    const refused = await testBeaconGenesis(answering(403, '{"error":"The beacon surface requires a non-public key"}'), { beaconUrl: keyedBeacon, expectedGenesisValidatorsRoot: root });
+    expect(refused).toEqual({ ok: "fail", message: expect.stringContaining("403") });
+    expect((await testBeaconGenesis(answering(200, "{}"), { beaconUrl: "https://b.test", expectedGenesisValidatorsRoot: null })).ok).toBe("fail");
+    expect((await testBeaconGenesis(answering(200, "<html>"), { beaconUrl: "https://b.test", expectedGenesisValidatorsRoot: null })).ok).toBe("fail");
+    const failing: HttpClient = async () => {
+      throw new Error(`connect failed to ${keyedBeacon}`);
+    };
+    const thrown = await testBeaconGenesis(failing, { beaconUrl: keyedBeacon, expectedGenesisValidatorsRoot: root });
+    expect(thrown.ok).toBe("fail");
+    expect(thrown.message).not.toContain(KEY);
   });
 });
