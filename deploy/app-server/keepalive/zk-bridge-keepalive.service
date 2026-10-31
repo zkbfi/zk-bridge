@@ -1,0 +1,62 @@
+# Keeps both light clients of the pair able to move (docs/testnet-run.md, "Keeping the light clients alive").
+# Started by zk-bridge-keepalive.timer. deploy.sh does not install it; install it by hand:
+#
+#   install -m 0644 /opt/zk-bridge/current/deploy/app-server/keepalive/zk-bridge-keepalive.{service,timer} /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now zk-bridge-keepalive.timer
+#
+# It runs as the backend's user, so it reads the backend's settings (pair, deployment file, rpcUrls, beaconUrls,
+# limits.keepAliveSeconds) and judges with the same endpoints and keep-alive age that the backend uses. It asks for
+# proofs through the backend's public API only (POST /requests, reason keep-alive): it holds no key, starts no prover
+# itself, and every backend limit (secondsBetweenJobsPerDirection, jobsPerDirectionPerDay, the indexer check) applies.
+#
+# Alerting: the unit fails when the march exits non-zero (stranded 12, read failure 3, failed or refused proof near
+# the deadline 13); keep-alive (10) and stepping (11) only appear with the dry run. Each problem also logs a line that
+# starts with "ALERT light-client". Watch either one:
+#   journalctl -u zk-bridge-keepalive -g '^.*ALERT light-client' --since -1d
+#   systemctl list-units --failed 'zk-bridge-keepalive*'
+# or uncomment OnFailure= below and point it at a unit that sends mail or a webhook.
+[Unit]
+Description=zk-bridge light client keep-alive march
+Wants=network-online.target
+After=network-online.target zk-bridge-backend.service
+ConditionPathExists=/etc/zk-bridge/backend/backend.json
+# OnFailure=zk-bridge-alert@%n.service
+
+[Service]
+Type=oneshot
+User=zkb_backend
+Group=zkb_backend
+WorkingDirectory=/opt/zk-bridge/current/explorer/backend
+Environment=NODE_ENV=production
+# The status line first, for the log. Its exit code is ignored ("-"): the march decides whether the unit fails.
+ExecStartPre=-/usr/bin/node bin/zk-bridge-keepalive.mjs status --backend-config /etc/zk-bridge/backend/backend.json
+# One proof per light client per run at most; the next run picks up from the chain. The backend job takes about half
+# an hour on RunPod, then the runner bot posts the update.
+ExecStart=/usr/bin/node bin/zk-bridge-keepalive.mjs march --execute --backend-config /etc/zk-bridge/backend/backend.json --backend-url https://prove.zkb.fi --max-proofs 2 --job-timeout-minutes 90 --head-timeout-minutes 60
+# Two proofs, each with a job and a head wait, fit in this.
+TimeoutStartSec=6h
+
+# Sandbox: it only reads and talks to the network.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077

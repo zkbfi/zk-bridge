@@ -76,7 +76,9 @@ job only when the chain indexer (`indexerUrl`) shows that the direction needs a 
 - a message of the direction waits for finality and no stored head covers it (status `waiting_for_finality`), or
 - the light client of the destination holds no head, or a head older than `limits.keepAliveSeconds` (default 43200,
   12 hours). A light client that falls a whole sync committee period behind (about 27 hours on Ethereum, 23 on
-  PulseChain) can never move again, so keep the value well below that.
+  PulseChain) can then move only through the committee handoff updates of the source beacon node, and a node without
+  them (the public chain 943 node) strands it for good, so keep the value well below that. `bin/zk-bridge-keepalive.mjs`
+  checks and marches the light clients through this API (docs/testnet-run.md, "Keeping the light clients alive").
 
 The reason in the request (`message`, `keep-alive`, `user`) does not change this. The backend asks the indexer only after
 the caller limits, the wait of the direction and the daily budget passed, and one answer serves a direction for 15
