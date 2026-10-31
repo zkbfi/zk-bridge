@@ -1,5 +1,6 @@
+import { renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { pressable, verdictOf, type VerdictInput } from "../../src/bridge/verdict";
+import { pressable, useVerdict, verdictOf, type VerdictInput } from "../src/verdict.js";
 
 const base: VerdictInput = {
   connected: true,
@@ -83,5 +84,39 @@ describe("the Bridge pill's verdict", () => {
     expect(verdict).toEqual({ kind: "blocked", label: "Fee above your 2% cap", detail: "The fee is 12 USDC ($12.00), more than your 2% hard cap (10 USDC ($10.00)). Raise the cap to 2.4% to go on, or lower the fee." });
     expect(pressable(verdict)).toBe(false);
     expect(verdictOf({ ...base, hardCap: { ...hardCap, worstCase: true } }).detail).toMatch(/^The fee could reach 12 USDC \(\$12\.00\) if gas rises,/);
+  });
+});
+
+describe("what is checked before the fee", () => {
+  it("asks for an amount first", () => {
+    expect(verdictOf({ ...base, amountEntered: false })).toEqual({ kind: "blocked", label: "Enter an amount", detail: null });
+  });
+
+  it("names a destination that cannot be used, unless the field under it already says so", () => {
+    expect(verdictOf({ ...base, destinationProblem: "Not an address." })).toEqual({ kind: "blocked", label: "Check the destination", detail: "Not an address." });
+    expect(verdictOf({ ...base, destinationProblem: "Not an address.", destinationProblemShown: true })).toEqual({ kind: "blocked", label: "Check the destination", detail: null });
+  });
+
+  it("warns about an Omnibridge copy and about a first bridge, in that order", () => {
+    expect(verdictOf({ ...base, omnibridge: true, firstBridge: true }).label).toMatch(/Omnibridge/);
+    expect(verdictOf({ ...base, firstBridge: true }).label).toMatch(/First time/);
+  });
+
+  it("blocks an incomplete draft with its reason", () => {
+    expect(verdictOf({ ...base, draft: { status: "incomplete", reason: "Pick a token." } })).toEqual({ kind: "blocked", label: "Bridge", detail: "Pick a token." });
+  });
+});
+
+describe("useVerdict", () => {
+  it("gives the verdict and whether the pill can be pressed, and keeps them while the state says the same", () => {
+    const { result, rerender } = renderHook((input: VerdictInput) => useVerdict(input), { initialProps: base });
+    expect(result.current.verdict).toMatchObject({ kind: "go", label: "Bridge" });
+    expect(result.current.pressable).toBe(true);
+    const first = result.current;
+    rerender({ ...base });
+    expect(result.current).toBe(first);
+    rerender({ ...base, overBalance: true });
+    expect(result.current.verdict).toMatchObject({ kind: "blocked", label: "Not enough ETH" });
+    expect(result.current.pressable).toBe(false);
   });
 });

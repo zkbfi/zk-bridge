@@ -7,6 +7,8 @@ const terminalSource = fileURLToPath(new URL("../terminal/src", import.meta.url)
 const sharedSource = fileURLToPath(new URL("../shared/src/index.ts", import.meta.url));
 const backendClientSource = fileURLToPath(new URL("../shared/src/backend-client.ts", import.meta.url));
 const msgboardHttpSource = fileURLToPath(new URL("../shared/src/msgboard/board-http.ts", import.meta.url));
+const reactSource = fileURLToPath(new URL("../react/src/index.ts", import.meta.url));
+const reactStyles = fileURLToPath(new URL("../react/styles.css", import.meta.url));
 const explorerRoot = fileURLToPath(new URL("..", import.meta.url));
 
 export default defineConfig({
@@ -18,6 +20,8 @@ export default defineConfig({
       "@zk-bridge/shared/backend-client": backendClientSource,
       "@zk-bridge/shared/msgboard-http": msgboardHttpSource,
       "@zk-bridge/shared": sharedSource,
+      "@zkb/react/styles.css": reactStyles,
+      "@zkb/react": reactSource,
     },
   },
   server: { fs: { allow: [explorerRoot] } },

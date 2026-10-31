@@ -11,6 +11,8 @@ export default defineConfig({
       "@zk-bridge/shared/backend-client": fileURLToPath(new URL("../shared/src/backend-client.ts", import.meta.url)),
       "@zk-bridge/shared/msgboard-http": fileURLToPath(new URL("../shared/src/msgboard/board-http.ts", import.meta.url)),
       "@zk-bridge/shared": fileURLToPath(new URL("../shared/src/index.ts", import.meta.url)),
+      "@zkb/react/styles.css": fileURLToPath(new URL("../react/styles.css", import.meta.url)),
+      "@zkb/react": fileURLToPath(new URL("../react/src/index.ts", import.meta.url)),
     },
   },
   server: { fs: { allow: [fileURLToPath(new URL("..", import.meta.url))] } },

@@ -17,6 +17,7 @@
     "paths": {
       "@terminal/*": ["../terminal/src/*"],
       "@zk-bridge/shared": ["../shared/src/index.ts"],
+      "@zkb/react": ["../react/src/index.ts"],
       "@zk-bridge/shared/backend-client": ["../shared/src/backend-client.ts"],
       "@zk-bridge/shared/msgboard-http": ["../shared/src/msgboard/board-http.ts"]
     }

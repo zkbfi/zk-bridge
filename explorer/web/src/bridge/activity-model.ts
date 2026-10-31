@@ -2,6 +2,7 @@
  * The Activity screen's model: what each of the wallet's transfers is doing, where it is on its steps, how long is left,
  * and whether it needs the user (proven but not delivered after a while).
  */
+import { NEEDS_YOU_AFTER_SECONDS, groupOf as groupOfStatus, positionOf, stepOf, stepWords as stepWordsOf, type ActivityGroup } from "@zkb/react";
 import type { ChainConfig, FeedItem, PairConfig } from "@terminal/model/types";
 import { chainsFor, transferSteps } from "./bridge-model";
 import type { Step } from "./StepList";
@@ -18,31 +19,14 @@ const EXPLORERS: Readonly<Record<number, string>> = {
 export const txUrl = (chainId: number, hash: string | null): string | undefined => (hash === null || EXPLORERS[chainId] === undefined ? undefined : `${EXPLORERS[chainId]}${hash}`);
 
 /** A proven transfer still undelivered after this long needs the user. */
-export const NEEDS_YOU_AFTER_SECONDS = 30 * 60;
+export { NEEDS_YOU_AFTER_SECONDS };
+export type { ActivityGroup };
 
-/** Which tab a transfer belongs to. */
-export type ActivityGroup = "in-flight" | "needs-you" | "delivered";
-
-/** The step index a status has reached (0 sent, 1 final, 2 proven, 3 checked, 4 delivered). */
-export const stepOf = (status: FeedItem["status"]): number =>
-  status === "sent" ? 0 : status === "waiting_for_finality" ? 1 : status === "covered" ? 2 : status === "delivered" ? 5 : 2;
-
-/** Where the pulse sits for a status, 0 to 1. */
-export const positionOf = (status: FeedItem["status"]): number =>
-  status === "sent" ? 0.18 : status === "waiting_for_finality" ? 0.42 : status === "covered" ? 0.72 : status === "delivered" ? 1 : 0.72;
+/** The step index a status has reached (0 sent, 1 final, 2 proven, 3 checked, 4 delivered). The rule lives in `@zkb/react`. */
+export { stepOf, positionOf };
 
 /** The step in words, as the card says it. */
-export const stepWords = (item: FeedItem, destination: ChainConfig, now: number): string => {
-  if (item.status === "sent") return "Sent · waiting for finality";
-  if (item.status === "waiting_for_finality") return "Final soon · waiting for the proof";
-  if (item.status === "covered") {
-    const minutes = Math.max(0, Math.round((now - item.sentAt) / 60));
-    const waited = minutes === 0 ? "" : minutes < 90 ? ` for ${minutes} min` : minutes < 48 * 60 ? ` for ${Math.round(minutes / 60)} h` : ` for ${Math.round(minutes / 1440)} days`;
-    return `Proven · waiting for a deliverer${waited}`;
-  }
-  if (item.status === "delivered") return `Delivered to ${destination.name}`;
-  return item.status === "failed_call" ? "Delivered, but the call after it failed" : "The release failed";
-};
+export const stepWords = (item: FeedItem, destination: ChainConfig, now: number): string => stepWordsOf({ status: item.status, sentAt: item.sentAt, destinationName: destination.name, now });
 
 /**
  * The group of a transfer: delivered, needs you (a failure, or proven and undelivered for 30 minutes), or in flight.
@@ -50,12 +34,7 @@ export const stepWords = (item: FeedItem, destination: ChainConfig, now: number)
  * @param item The transfer.
  * @param now Unix seconds now.
  */
-export const groupOf = (item: FeedItem, now: number): ActivityGroup => {
-  if (item.status === "delivered") return "delivered";
-  if (item.status === "failed_call" || item.status === "release_failed") return "needs-you";
-  if (item.status === "covered" && now - item.sentAt > NEEDS_YOU_AFTER_SECONDS) return "needs-you";
-  return "in-flight";
-};
+export const groupOf = (item: FeedItem, now: number): ActivityGroup => groupOfStatus(item.status, item.sentAt, now);
 
 /** Seconds left for a transfer in flight, from the step estimates, at least 0. */
 export const secondsLeft = (item: FeedItem, pair: PairConfig, now: number): number => {

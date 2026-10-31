@@ -17,9 +17,9 @@ import { useWallet } from "../wallet/wallet-port";
 import { isNativeToken, lightClientDelay, maxSendable, nativeTokensOf, tokenBalance } from "./bridge-model";
 import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferEstimate, transferSteps } from "./bridge-model";
 import { DeliveryMenu, deliverySummary, type TipChoiceKey } from "./DeliveryMenu";
-import { ceilingCostUsd, ceilingWeiOf, DEFAULT_CAP_WAD, DEFAULT_HARD_CAP_WAD, defaultFee, deliveryGasUsd, feeSpanUsd, feeWarnings, GAS_LEVELS, gasLevelOfCeiling, gasRange, hardCapCheck, highCapLine, PERCENT_WAD, PROOF_COST_USD, shareWadOfPercentText, totalCostUsd, usdOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
+import { ceilingCostUsd, ceilingWeiOf, deliveryGasUsd, feeSpanUsd, GAS_LEVELS, gasLevelOfCeiling, gasRange, PROOF_COST_USD, shareWadOfPercentText, totalCostUsd, usdOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
 import { formatUnits } from "viem";
-import { DEFAULT_AUTO_CAP_PERCENT, DEFAULT_HARD_CAP_PERCENT, feeCapProblem, loadFeeCap, loadHardCap, saveFeeCap, saveHardCap } from "./fee-cap";
+import { DEFAULT_AUTO_CAP_PERCENT, DEFAULT_HARD_CAP_PERCENT, feeCapProblem, ReviewNotice, ReviewRow, ReviewSheet, useDefaultFee, useFeeCaps, useFeeWarnings, useHardCap, useVerdict } from "@zkb/react";
 import { DirectionMenu } from "./DirectionMenu";
 import { FeeLine, GAS_LEVEL_NAMES, nextGasLevel, type FeeSlider } from "./FeeLine";
 import { Chevron, FlipIcon, FloppyIcon, Identicon, LockIcon, UnlockIcon } from "./icons";
@@ -27,10 +27,8 @@ import { destinationProblem, LOCK_TIPS } from "./destination";
 import { iconSubjectOf } from "./image-source";
 import { Num } from "./Num";
 import { dollarsSpanWords, dollarsText as dollarsOf } from "./number";
-import { Sheet } from "./Sheet";
 import { TokenIcon } from "./TokenIcon";
 import { TokenPicker } from "./TokenPicker";
-import { pressable, verdictOf } from "./verdict";
 import { routerWarningOf } from "../tx/tip-copy";
 
 /** Names every field a link filled beyond the route, the token and the amount. */
@@ -119,10 +117,8 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const side = sourceSide(route.dir);
   const token = tokenFor(form.token, tokens, side);
   const baseOptions = useMemo(() => optionsOf(form.tip), [form.tip]);
-  const [storedCap, setStoredCap] = useState(() => loadFeeCap());
+  const { storedCap, storedHardCap, hardCapPercent, setHardCapPercent, saveCap: storeCap, saveHard } = useFeeCaps();
   // The hard cap lives in this browser only: a link never raises it (owner, quote 86: the absolute most the fee may be).
-  const [storedHardCap, setStoredHardCap] = useState(() => loadHardCap());
-  const [hardCapPercent, setHardCapPercent] = useState(storedHardCap);
   // The automatic cap never goes above the hard cap, whatever a link or the store says.
   const capPercent = Math.min(form.tip?.capPercentText === undefined ? storedCap : Number(form.tip.capPercentText) || storedCap, hardCapPercent);
   // The fee is automatic until the user picks a share: the larger of the default curve and twice the cost, capped.
@@ -194,10 +190,8 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const costUsd = costAt(gasLevel);
   const costNormalUsd = costAt(1);
   const amountUsd = valueOf(amount);
-  const capWad = shareWadOfPercentText(plain(capPercent, 6)) ?? DEFAULT_CAP_WAD;
-  const hardCapWad = shareWadOfPercentText(plain(hardCapPercent, 6)) ?? DEFAULT_HARD_CAP_WAD;
   // A higher gas level adds its extra expected cost on top of the curve, so the automatic fee rises with the bars too.
-  const auto = defaultFee({ amountUsd: amountUsd, costUsd: costUsd, capWad, ...(costUsd === null || costNormalUsd === null ? {} : { levelExtraUsd: costUsd - costNormalUsd }) });
+  const { capWad, auto } = useDefaultFee({ amountUsd, costUsd, costNormalUsd, capPercent });
   // The automatic fee signs the default share; a gas-based fee signs a limit no higher than the cap's share (owner,
   // quotes 70–71: "limited by the cap").
   const options = useMemo(
@@ -237,7 +231,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     return input === null ? null : ceilingCostUsd(input);
   })();
   const shareWithoutPriceWad = options.mode === "percentage" ? shareWadOfPercentText(options.percentText) : amount === null || amount === 0n || tipUnits === null ? null : (tipUnits * WAD) / amount;
-  const warnings = feeWarnings({
+  const { warnings, linePercent, thresholdText } = useFeeWarnings({
     amountUsd: amountUsd,
     capWad,
     feeUsd: feeUsd,
@@ -248,9 +242,6 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     gasBased,
     expandedCostUsd: expandedUsd,
   });
-  const line = highCapLine(amountUsd);
-  const linePercent = Number((line.numerator * 10n ** 8n) / line.denominator) / 10 ** 6;
-  const thresholdText = `${Number(linePercent.toPrecision(2))}%`;
   const levelName = (level: GasLevel): string => GAS_LEVEL_NAMES[level];
   // The share to sign for a tip (a share of the amount) on top of a cost, to the nearest 0.000001%: short text in the
   // address, and the dust of a near-free delivery gas never shows as a last-digit unit. Null without a price.
@@ -301,16 +292,10 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
       write({ ...form, tip: { ...rest, ...(value === storedCap ? {} : { capPercentText: String(value) }) } });
     }
   };
-  const saveHard = (): void => {
-    if (saveHardCap(String(hardCapPercent)) !== null) return;
-    setStoredHardCap(loadHardCap());
-    setStoredCap(loadFeeCap());
-  };
   const hardSave = { saved: hardCapPercent === storedHardCap, onSave: saveHard, label: hardCapPercent === storedHardCap ? `${hardCapText} is your hard cap` : `Save ${hardCapText} as your hard cap` };
   // The save button makes this bridge's cap the default (owner: "a little save button (floppy icon) next to the slider").
   const saveCap = (): void => {
-    if (saveFeeCap(String(capPercent)) !== null) return;
-    setStoredCap(loadFeeCap());
+    if (storeCap(capPercent) !== null) return;
     const { capPercentText: _drop, ...rest } = form.tip ?? {};
     write({ ...form, tip: rest });
   };
@@ -337,15 +322,13 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
 
   // The hard cap (owner, quote 86): the fee now, or for a gas-based fee the most the signed terms allow, against the
   // cap's share of the amount, in base units. Above it the Bridge button is blocked until the cap is raised.
-  const hard = delivery !== null && amount !== null && amount > 0n && tipUnits !== null ? hardCapCheck({ amountUnits: amount, feeUnits: tipUnits, worstFeeUnits: gasBased ? delivery.maximumTip : 0n, hardCapWad }) : null;
-  const hardOver = hard !== null && hard.over;
-  const raisePercent = hard === null ? null : Number((hard.raiseToWad * 10_000n) / PERCENT_WAD) / 10_000;
+  const { check: hard, over: hardOver, raisePercent } = useHardCap({ hardCapPercent, amountUnits: amount, feeUnits: tipUnits, worstFeeUnits: gasBased && delivery !== null ? delivery.maximumTip : 0n });
   const raiseHardCap = (): void => {
     if (raisePercent !== null) setHardCap(raisePercent);
   };
   const unitsText = (units: bigint): string => (token === null ? "" : `${amountText(units, token.decimals)} ${token.symbol}${valueOf(units) === null ? "" : ` (${usd(units)})`}`);
 
-  const verdict = verdictOf({
+  const { verdict, pressable: canPress } = useVerdict({
     connected: account !== null,
     draft,
     amountEntered: amount !== null && amount > 0n,
@@ -856,7 +839,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             type="button"
             className="zb-go"
             data-kind={verdict.kind}
-            disabled={!pressable(verdict)}
+            disabled={!canPress}
             onClick={() => (verdict.kind === "connect" ? void wallet.connect() : setReview(true))}
           >
             {verdict.label}
@@ -872,37 +855,36 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
 
       {menu === "token" && token !== null ? <TokenPicker tokens={tokens} selected={token} snapshots={snapshots ?? []} {...(used === undefined ? {} : { used })} resolveCustom={resolveCustom} priceOf={(subject) => { const price = priceOf(subject); return price === null ? null : usdText(priceNumber(price)); }} onPick={pick} onClose={() => setMenu(null)} /> : null}
       {review && token !== null && amount !== null ? (
-        <Sheet label="Review" onClose={() => setReview(false)}>
-          <div className="zb-col" style={{ paddingBottom: 18 }}>
-            <div className="zb-kv"><span className="zb-k">You send</span><b>{inline(tokenIcon(token, null, 16), amountText(amount, token.decimals), token.symbol)} on {source.name}</b></div>
-            <div className="zb-kv"><span className="zb-k">Arrives</span><b>{received === null ? "—" : inline(tokenIcon(token, destination.chainId, 16), amountText(received > 0n ? received : 0n, token.decimals), token.symbol)} on {destination.name}</b></div>
-            <div className="zb-kv"><span className="zb-k">Fee</span><span>{tipUnits === null ? "none" : inline(tokenIcon(token, null, 18), amountText(tipUnits, token.decimals), token.symbol)}{feeUsd === null ? null : <span title={PRICE_NOTE}> (about {usd(tipUnits)})</span>}</span></div>
+        <ReviewSheet onClose={() => setReview(false)}>
+            <ReviewRow label="You send"><b>{inline(tokenIcon(token, null, 16), amountText(amount, token.decimals), token.symbol)} on {source.name}</b></ReviewRow>
+            <ReviewRow label="Arrives"><b>{received === null ? "—" : inline(tokenIcon(token, destination.chainId, 16), amountText(received > 0n ? received : 0n, token.decimals), token.symbol)} on {destination.name}</b></ReviewRow>
+            <ReviewRow label="Fee"><span>{tipUnits === null ? "none" : inline(tokenIcon(token, null, 18), amountText(tipUnits, token.decimals), token.symbol)}{feeUsd === null ? null : <span title={PRICE_NOTE}> (about {usd(tipUnits)})</span>}</span></ReviewRow>
             {drift === null ? null : (
-              <div className="zb-kv zb-kv-sub"><span className="zb-k">Can drift</span><span title={PRICE_NOTE}>{drift.now} now, up to {drift.most} if gas rises to the {drift.level} ceiling</span></div>
+              <ReviewRow label="Can drift" sub><span title={PRICE_NOTE}>{drift.now} now, up to {drift.most} if gas rises to the {drift.level} ceiling</span></ReviewRow>
             )}
             {breakdown.map((line) => (
-              <div key={line.label} className="zb-kv zb-kv-sub"><span className="zb-k">{line.label}</span><span title={PRICE_NOTE}>{line.value}</span></div>
+              <ReviewRow key={line.label} label={line.label} sub><span title={PRICE_NOTE}>{line.value}</span></ReviewRow>
             ))}
-            <div className="zb-kv"><span className="zb-k">Time</span><span>{transferEstimate(source, destination)}</span></div>
-            <div className="zb-kv"><span className="zb-k">To</span><span className="zb-mono" style={{ wordBreak: "break-all", textAlign: "right" }}>{receiver}{account !== null && receiver.toLowerCase() !== account.toLowerCase() ? " (not your wallet)" : ""}</span></div>
+            <ReviewRow label="Time"><span>{transferEstimate(source, destination)}</span></ReviewRow>
+            <ReviewRow label="To"><span className="zb-mono" style={{ wordBreak: "break-all", textAlign: "right" }}>{receiver}{account !== null && receiver.toLowerCase() !== account.toLowerCase() ? " (not your wallet)" : ""}</span></ReviewRow>
             {delivery === null ? null : (
-              <div className="zb-kv"><span className="zb-k">Relay router</span><span className="zb-mono" style={{ wordBreak: "break-all", textAlign: "right" }}>{delivery.router}</span></div>
+              <ReviewRow label="Relay router"><span className="zb-mono" style={{ wordBreak: "break-all", textAlign: "right" }}>{delivery.router}</span></ReviewRow>
             )}
-            {delivery === null || routerWarningOf(delivery) === null ? null : <div className="zb-warnbox" role="alert">{routerWarningOf(delivery)}</div>}
+            {delivery === null || routerWarningOf(delivery) === null ? null : <ReviewNotice role="alert">{routerWarningOf(delivery)}</ReviewNotice>}
             {linked.length === 0 ? null : <LinkedWarning fields={linked} />}
-            {verdict.kind === "warn" ? <div className="zb-warnbox">{verdict.detail}</div> : null}
+            {verdict.kind === "warn" ? <ReviewNotice>{verdict.detail}</ReviewNotice> : null}
             {hardOver && raisePercent !== null ? (
-              <div className="zb-warnbox" role="group" aria-label="Hard fee cap">
+              <ReviewNotice role="group" groupLabel="Hard fee cap">
                 <p style={{ margin: "0 0 8px" }}>
                   <b>{verdict.label}</b> · {verdict.detail}
                 </p>
                 <button type="button" className="zb-pill zb-pill-outline" onClick={raiseHardCap}>
                   Raise cap to {raisePercent}%
                 </button>
-              </div>
+              </ReviewNotice>
             ) : null}
             {warnings.capWarning ? (
-              <div className="zb-warnbox" role="group" aria-label="Fee cap">
+              <ReviewNotice role="group" groupLabel="Fee cap">
                 <p style={{ margin: "0 0 8px" }}>
                   <b>High cap %</b> · If gas rises to the {levelName(gasLevel)} ceiling, your {capText} cap lets the fee leave the deliverer more than {thresholdText} of the amount on top of the cost. Lower the cap here; the fee updates.
                 </p>
@@ -916,14 +898,13 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
                 <button type="button" className="zb-save" style={{ marginLeft: 8, verticalAlign: "middle" }} aria-label={capSave.label} title={capSave.label} disabled={capSave.saved} onClick={capSave.onSave}>
                   <FloppyIcon />
                 </button>
-              </div>
+              </ReviewNotice>
             ) : null}
             <button type="button" className="zb-go" data-kind="go" disabled={draft.status !== "ready" || hardOver || receiverProblem !== null} onClick={() => { setReview(false); setSigning(draft.steps); }}>
               Confirm in wallet
             </button>
             {draft.status === "ready" ? null : <p className="zb-verdict">{draft.reason}</p>}
-          </div>
-        </Sheet>
+        </ReviewSheet>
       ) : null}
       {signing === null ? null : <TransactionDialog
           steps={signing}
