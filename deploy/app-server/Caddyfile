@@ -17,15 +17,12 @@
 }
 
 # The upstreams are in two files that the playbooks in deploy/ansible own (docs/deploy-blue-green.md). Each one defines
-# a snippet, backend_upstream and indexer_upstream. caddy.yml writes them with the ports of ZKB_BACKEND_PORT (8787) and
+# a snippet, backend and indexer_upstream (Caddy 2.6 cannot import a snippet from inside another snippet, so the file
+# defines backend itself). caddy.yml writes them with the ports of ZKB_BACKEND_PORT (8787) and
 # ZKB_INDEXER_PORT (42069), which is the routing this file had before they existed, and does so before it installs this
 # file: an import of a missing file fails.
 import /etc/caddy/upstreams/backend.caddy
 import /etc/caddy/upstreams/indexer.caddy
-
-(backend) {
-	import backend_upstream
-}
 
 (not_found) {
 	handle {

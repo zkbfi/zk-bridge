@@ -1,7 +1,7 @@
 # Written by deploy/ansible (docs/deploy-blue-green.md). DRAINING: no new proof jobs; everything else goes on.
 # POST /requests is the only route that starts a job. It answers in the shape of the backend's own "cannot-check"
 # answer, which the dapp already treats as "try again". A restart of the backend is held for up to 20 seconds.
-(backend_upstream) {
+(backend) {
 	@zkb_new_jobs {
 		method POST
 		path /requests
