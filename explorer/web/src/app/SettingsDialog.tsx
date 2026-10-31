@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { ICON_CREDIT } from "../bridge/icons";
 import { maskUrl, migrateBoardUrls, redactConnectionText, type ConnectionSettings } from "@zk-bridge/shared";
 import { DEFAULT_AUTO_CAP_PERCENT, DEFAULT_HARD_CAP_PERCENT, feeCapProblem, loadFeeCap, loadHardCap, saveFeeCap, saveHardCap } from "../bridge/fee-cap";
 import { loadImageServer, saveImageServer } from "../bridge/image-server";
@@ -277,6 +278,9 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose, stora
             Connections and fallback
           </a>
         </div>
+        <p className="zb-set-help zb-set-credits">
+          Credits: <a href="https://game-icons.net/" rel="noopener noreferrer" target="_blank">{ICON_CREDIT}</a>
+        </p>
         {fixture ? <p className="zb-set-help">Sample data: nothing here reaches a network.</p> : null}
         {originIsShared(location) ? <p className="zb-set-help">This gateway is shared with other sites, so settings last for this visit only.</p> : null}
 

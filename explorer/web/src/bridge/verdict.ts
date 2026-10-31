@@ -20,6 +20,10 @@ export type VerdictInput = {
   readonly amountEntered: boolean;
   /** The amount is more than the balance. */
   readonly overBalance: boolean;
+  /** Why the typed destination address cannot be used, or null (destination row unlocked). */
+  readonly destinationProblem?: string | null;
+  /** The destination row already names the problem under the field, so the pill does not repeat it. */
+  readonly destinationProblemShown?: boolean;
   readonly symbol: string;
   /** The destination's gate is closed (paused), with the route name for the message. */
   readonly paused: { readonly route: string } | null;
@@ -49,7 +53,7 @@ export type VerdictInput = {
 };
 
 /**
- * The pill's verdict, in priority order: no wallet, paused, nothing typed, over balance, a blocked draft, a fee above
+ * The pill's verdict, in priority order: no wallet, paused, nothing typed, over balance, a destination that can't be used, a blocked draft, a fee above
  * the hard cap (a block, never a warning to override); then one warning at most: a small transfer, a low fee, "High cap %", an Omnibridge copy, a first bridge; then an incomplete
  * draft, go.
  *
@@ -60,6 +64,7 @@ export const verdictOf = (input: VerdictInput): Verdict => {
   if (input.paused !== null) return { kind: "blocked", label: `${input.paused.route} is paused`, detail: "The gate on the destination is closed. Nothing can be sent until it opens." };
   if (!input.amountEntered) return { kind: "blocked", label: "Enter an amount", detail: null };
   if (input.overBalance) return { kind: "blocked", label: `Not enough ${input.symbol}`, detail: null };
+  if (input.destinationProblem != null) return { kind: "blocked", label: "Check the destination", detail: input.destinationProblemShown === true ? null : input.destinationProblem };
   if (input.draft.status === "blocked") return { kind: "blocked", label: "Check the transfer", detail: input.draft.reason };
   if (input.hardCap != null) {
     const cap = input.hardCap;

@@ -15,12 +15,13 @@ beforeEach(() => {
 const at = async (query: string) => {
   window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${query}`);
   renderWithWallet(<Shell />, { wallet: connectedWallet() });
-  await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.textContent).toMatch(/\d/), { timeout: 3000 });
+  await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label")).toMatch(/Fee \d/), { timeout: 3000 });
 };
 const menu = async () => {
   await userEvent.click(screen.getByRole("button", { name: /^Delivery settings/ }));
   return screen.getByRole("group", { name: "Delivery settings" });
 };
+const advanced = async (scope: HTMLElement) => userEvent.click(within(scope).getByRole("button", { name: "Advanced" }));
 const drawer = async () => {
   await userEvent.click(screen.getAllByRole("button").find((button) => button.getAttribute("data-fee") === "tip")!);
   return document.querySelector<HTMLElement>(".zb-drawer")!;
@@ -83,21 +84,21 @@ describe("the fee values", () => {
   it("moves the gas limit with its slider and refuses a fraction", async () => {
     await at("bridge.amount=500");
     const scope = await menu();
+    await advanced(scope);
     fireEvent.change(within(scope).getByRole("slider", { name: "Gas limit" }), { target: { value: "300000" } });
     await waitFor(() => expect(window.location.hash).toMatch(/bridge\.gas=300000/));
     await retype(exact(scope, "Gas limit"), "1.5");
     expect(within(scope).getByRole("alert")).toHaveTextContent(/whole number of gas/);
   });
 
-  it("types the router and opens the receiver from the menu", async () => {
+  it("types the router in the menu", async () => {
     await at("bridge.amount=500");
     const scope = await menu();
+    await advanced(scope);
     await userEvent.type(within(scope).getByRole("textbox", { name: /Relay router/ }), "0xab");
     await waitFor(() => expect(window.location.hash).toMatch(/tip\.router=0xab/));
     await userEvent.clear(within(scope).getByRole("textbox", { name: /Relay router/ }));
     await waitFor(() => expect(window.location.hash).not.toMatch(/tip\.router/));
-    await userEvent.click(within(scope).getByRole("button", { name: "Off" }));
-    expect(screen.getByRole("textbox", { name: /Destination address/ })).toBeInTheDocument();
   });
 
   it("types both caps exactly and resets them; a link's automatic cap above the hard cap is held under it", async () => {

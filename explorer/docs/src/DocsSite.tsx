@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
-import { Chevron, SearchIcon } from "@web/bridge/icons";
+import { Chevron, ICON_CREDIT, SearchIcon } from "@web/bridge/icons";
 import { XBand, XRow } from "@web/explore/parts";
 import { useThemeChoice } from "@web/app/theme";
 import type { ThemeChoice } from "@web/search/search-model";
@@ -302,6 +302,9 @@ export const DocsSite = ({ pages }: DocsSiteProps) => {
         <footer className="zd-foot">
           <div className="zb-col zd-foot-in">
             <span className="zd-foot-name">{SITE_NAME}</span>
+            <a className="zd-foot-credit" href="https://game-icons.net/" rel="noopener noreferrer" target="_blank">
+              {ICON_CREDIT}
+            </a>
             <div className="zb-seg" role="radiogroup" aria-label="Theme">
               {THEMES.map(([choice, label]) => (
                 <button key={choice} type="button" role="radio" aria-checked={theme === choice} onClick={() => setTheme(choice)}>

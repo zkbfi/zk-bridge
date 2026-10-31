@@ -36,7 +36,7 @@ describe("deliverySummary (owner, quote 88: \"just tell the user what is happeni
 const menuOpen = async (query = "bridge.amount=500") => {
   window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${query}`);
   renderWithWallet(<Shell />, { wallet: connectedWallet() });
-  await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.textContent).toMatch(/\d/), { timeout: 3000 });
+  await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label")).toMatch(/Fee \d/), { timeout: 3000 });
   await userEvent.click(screen.getByRole("button", { name: /^Delivery settings/ }));
   return screen.getByRole("group", { name: "Delivery settings" });
 };
@@ -51,14 +51,18 @@ const typeExact = async (scope: HTMLElement, label: string, text: string) => {
 describe("the delivery settings menu", () => {
   it("offers every tip mode with its value, the gas level and the gas limit, and no speed presets", async () => {
     const menu = await menuOpen();
-    expect(within(menu).getByRole("radiogroup", { name: "Fee" })).toBeInTheDocument();
+    expect(within(menu).getByRole("radiogroup", { name: "Who delivers" })).toBeInTheDocument();
     expect(within(menu).queryByRole("radio", { name: /Standard|Fast/ })).toBeNull();
     expect(within(menu).getByRole("radio", { name: "Automatic" })).toHaveAttribute("aria-checked", "true");
     expect(within(menu).getByRole("slider", { name: "Tip" })).toBeInTheDocument();
     expect(within(menu).getByRole("slider", { name: "Gas level" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("slider", { name: "Gas limit" })).toBeNull();
+    await userEvent.click(within(menu).getByRole("button", { name: "Advanced" }));
     expect(within(menu).getByRole("slider", { name: "Gas limit" })).toBeInTheDocument();
     expect(within(menu).getByRole("textbox", { name: /Relay router/ })).toBeInTheDocument();
-    expect(pillLabel()).toMatch(/^Delivery settings: A bot delivers it on .+ · fee [\d.]+%$/);
+    expect(within(menu).getByRole("textbox", { name: /Call after delivery/ })).toBeInTheDocument();
+    expect(pillLabel()).toMatch(/^Delivery settings: A bot delivers it on .+ · fee [\d.]+%\. Fee /);
+    expect(document.querySelector('[data-fee="tip"]')?.textContent).toMatch(/^A bot delivers it · [\d.]+%$/);
   });
 
   it("drives the fee from the share typed in the menu, and the drawer's tip slider shows the same value", async () => {
@@ -101,17 +105,19 @@ describe("the delivery settings menu", () => {
     await waitFor(() => expect(within(menu).getByRole("slider", { name: "Fee on gas" })).toBeInTheDocument());
     await typeExact(menu, "Fee on gas", "1");
     await waitFor(() => expect(window.location.hash).toMatch(/tip\.gas=1(&|$)/));
-    const once = feeText();
+    const once = pillLabel();
     await typeExact(menu, "Fee on gas", "1.5");
     await waitFor(() => expect(window.location.hash).toMatch(/tip\.gas=1\.5/));
-    await waitFor(() => expect(feeText()).not.toBe(once));
+    await waitFor(() => expect(pillLabel()).not.toBe(once));
+    expect(feeText()).toBe("A bot delivers it · follows gas");
     expect(pillLabel()).toMatch(/A bot delivers it · fee follows gas, up to \$/);
   });
 
   it("says you deliver it yourself with no tip", async () => {
     const menu = await menuOpen();
-    await userEvent.click(within(menu).getByRole("radio", { name: "None" }));
+    await userEvent.click(within(menu).getByRole("radio", { name: "Yourself" }));
     await waitFor(() => expect(pillLabel()).toMatch(/^Delivery settings: You deliver it yourself on /));
+    expect(feeText()).toBe("You deliver it");
   });
 
   it("sets the gas level from the menu as an anchor with a 15-minute range, and resets it", async () => {
@@ -126,6 +132,7 @@ describe("the delivery settings menu", () => {
 
   it("takes a gas limit typed against the recommendation, and resets to it", async () => {
     const menu = await menuOpen();
+    await userEvent.click(within(menu).getByRole("button", { name: "Advanced" }));
     await typeExact(menu, "Gas limit", "400000");
     await waitFor(() => expect(window.location.hash).toMatch(/bridge\.gas=400000|gasLimit=400000|\.gas=400000/));
     expect(pillLabel()).toMatch(/gas limit 400,000/);

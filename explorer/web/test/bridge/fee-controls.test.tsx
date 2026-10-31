@@ -18,7 +18,8 @@ const at = async (query: string, connected: boolean) => {
   await waitFor(() => expect(feeText()).toMatch(/\d/), { timeout: 3000 });
 };
 
-const feeText = (): string => document.querySelector('[data-fee="tip"]')?.textContent ?? "";
+// The fee in the token, as the summary segment's label says it ("… Fee 0.193892 USDC (about $0.19) …").
+const feeText = (): string => /Fee [\d.]+ \S+/.exec(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label") ?? "")?.[0] ?? "";
 const output = (): string => document.querySelector(".zb-amount-out")?.textContent ?? "";
 const pill = (): string => document.querySelector(".zb-go")?.textContent ?? "";
 const breakdown = (): string => screen.getByRole("list", { name: "What the fee covers" }).textContent ?? "";
@@ -26,7 +27,7 @@ const row = (label: string): string => {
   const item = [...screen.getByRole("list", { name: "What the fee covers" }).querySelectorAll("li")].find((li) => li.firstElementChild?.textContent === label);
   return item?.lastElementChild?.textContent ?? "";
 };
-const openDrawer = async () => userEvent.click(screen.getByRole("button", { name: /Tip/ }));
+const openDrawer = async () => userEvent.click(screen.getByRole("button", { name: /^Delivery settings/ }));
 const bars = (): HTMLElement => screen.getByRole("button", { name: /^Gas level: / });
 
 describe.each([
@@ -129,9 +130,9 @@ describe("the help buttons", () => {
     await openDrawer();
     const drawer = document.querySelector<HTMLElement>(".zb-drawer")!;
     const helps = within(drawer).getAllByRole("button", { name: /^About / });
-    expect(helps.map((button) => button.getAttribute("aria-label"))).toEqual(["About Tip", "About Automatic fee cap", "About Hard fee cap"]);
+    expect(helps.map((button) => button.getAttribute("aria-label"))).toEqual(["About Tip", "About Gas level", "About Automatic fee cap", "About Hard fee cap"]);
     for (const help of helps) expect(help).toHaveClass("zb-q");
-    await userEvent.click(helps[1]!);
+    await userEvent.click(helps[2]!);
     expect(screen.getByRole("tooltip")).toHaveTextContent(/most the automatic fee may take/);
   });
 });

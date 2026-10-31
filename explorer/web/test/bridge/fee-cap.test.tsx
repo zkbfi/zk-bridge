@@ -61,7 +61,7 @@ describe("the hard cap on the bridge screen", () => {
   const at = async (query: string) => {
     window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${query}`);
     renderWithWallet(<Shell />, { wallet: connectedWallet() });
-    await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.textContent).toMatch(/\d/), { timeout: 3000 });
+    await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label")).toMatch(/Fee \d/), { timeout: 3000 });
   };
 
   it("blocks the Bridge pill when the tip pushes the fee above 2%, says why with the numbers, and raises the cap in one tap", async () => {
@@ -119,7 +119,7 @@ const openReview = async (query: string) => {
     expect(found!.textContent).not.toBe("Check the transfer");
     return found!;
   }, { timeout: 3000 });
-  await waitFor(() => expect(document.querySelector(".zb-fees")?.textContent).toMatch(/\d/), { timeout: 3000 });
+  await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label")).toMatch(/Fee \d/), { timeout: 3000 });
   await userEvent.click(pill);
   return screen.findByRole("dialog", { name: "Review" });
 };

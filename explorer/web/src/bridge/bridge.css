@@ -185,6 +185,18 @@
 .zb-joined > button, .zb-joined > span { display: inline-flex; align-items: center; gap: 8px; padding: 6px 16px; white-space: nowrap; min-width: 0; }
 .zb-joined > :first-child { border-right: 1.5px solid var(--zb-pill-edge); padding-left: 8px; }
 .zb-joined > :last-child { margin-left: auto; }
+/* The To row: "To" and the chain, then the destination (the wallet when locked, the address field in place when
+   unlocked), then the lock, a square 44 px target flush right behind a rule. */
+.zb-dest > .zb-dest-wallet, .zb-dest > .zb-dest-input { flex: 1; min-width: 0; margin-left: 0; justify-content: flex-end; }
+.zb-dest > .zb-dest-input { padding: 6px 12px; background: none; border: 0; color: inherit; font: inherit; font-size: var(--zb-step--1); text-align: right; outline: none; }
+.zb-dest > .zb-dest-input:focus-visible { box-shadow: inset 0 0 0 2px var(--zb-accent); }
+.zb-dest > .zb-dest-input[aria-invalid="true"] { color: var(--zb-bad, #c8102e); }
+.zb-dest > .zb-dest-lock-wrap { position: relative; display: flex; padding: 0; margin-left: 0; border-left: 1.5px solid var(--zb-pill-edge); }
+.zb-dest-lock { display: inline-grid; place-items: center; min-width: 48px; min-height: 44px; padding: 0 12px 0 10px; background: none; border: 0; color: inherit; cursor: pointer; }
+.zb-dest-lock .zb-icon { width: 20px; height: 20px; }
+.zb-dest[data-locked] .zb-dest-lock { color: var(--zb-muted); }
+.zb-dest-tip { left: auto; right: 0; width: 240px; }
+.zb-dest-err { margin: 6px 0 0; }
 .zb-mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
 .zb-row-pad { padding-block: 10px; }
 
@@ -210,26 +222,17 @@
 .zb-balance .zb-right { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
 .zb-max { border-radius: 999px; padding: 2px 9px; font-weight: 700; font-size: var(--zb-step-micro); background: var(--zb-from-pill); color: var(--zb-from-pill-ink); }
 
-/* Seam: flip on the left, the delivery settings pill on the right, sitting on the edge between the bands */
+/* Seam: the flip button, sitting on the edge between the bands */
 .zb-seam { position: relative; height: 0; z-index: 2; }
 .zb-seam .zb-col { display: flex; align-items: center; gap: 10px; transform: translateY(-50%); }
 .zb-flip { width: var(--zb-touch); height: var(--zb-touch); border-radius: 50%; display: grid; place-items: center; background: var(--zb-pill); color: var(--zb-pill-ink); border: 1.5px solid var(--zb-pill-edge); flex: none; }
-.zb-settings-pill { flex: 1; justify-content: flex-start; }
-.zb-settings-pill .zb-chev { margin-left: auto; }
-/* The delivery pill says what happens in full; only a sentence too long for a phone ends in an ellipsis. */
-.zb-settings-pill { min-width: 0; }
-.zb-settings-text { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.2; text-align: left; white-space: normal; }
 .zb-raise { display: flex; margin: 8px auto 0; }
 
-/* Fee line */
-.zb-fees { display: flex; gap: 18px; flex-wrap: wrap; font-size: var(--zb-step-fee); color: var(--zb-soft); margin-bottom: 6px; }
+/* The fee and its drawer (the delivery control is below, with the menus) */
 .zb-fee { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 2px 9px 2px 5px; position: relative; transition: background-color 160ms cubic-bezier(.2,.7,.2,1), color 160ms cubic-bezier(.2,.7,.2,1); }
 .zb-fee[aria-expanded="true"] { background: var(--zb-raised); color: var(--zb-raised-ink); }
 /* The gas can and its bars are the gas level control: a tap moves up a level. */
 /* The fee line's tooltips hang from the row, not the item, so one opened from the gas can or the clock stays on screen. */
-.zb-fees { position: relative; }
-.zb-fees .zb-fee { position: static; }
-.zb-fees .zb-tooltip { width: min(280px, 100%); }
 .zb-gas { padding-right: 8px; }
 .zb-gas:hover { color: var(--zb-ink); }
 .zb-gas svg[data-level] { width: 14px; height: 17px; }
@@ -301,6 +304,8 @@
 
 /* Icons */
 .zb-icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+/* A filled icon (take my money): no stroke, the path fills in the current colour. */
+.zb-icon.zb-icon-fill { stroke: none; }
 .zb-chev { width: 12px; height: 12px; }
 .zb-tok-icon { position: relative; display: inline-block; flex: none; }
 .zb-tok-icon img.zb-main { display: block; width: 100%; height: 100%; }
@@ -384,9 +389,33 @@
 .zb .zb-link { display: inline-flex; align-items: center; gap: 4px; color: var(--zb-accent-text); font-weight: 600; text-decoration: underline; }
 .zb-token-name small { font-variant-numeric: tabular-nums; }
 
-/* The delivery settings menu and pill segments */
-.zb-delivery-menu { position: absolute; left: 16px; right: 16px; top: 20px; padding: 6px 0; }
-.zb-menu-control { padding: 0 14px 4px; border-top: 1px solid var(--zb-line); }
+/* The delivery control (owner, quote 98): one joined pill of three segments, the summary, the gas bars and the time;
+   the one delivery menu opens in the drawer under it, in the column (no popover, one layer). */
+.zb-dctl { margin-bottom: 6px; position: relative; overflow: visible; font-size: var(--zb-step-fee); }
+.zb-dctl > .zb-dseg { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; min-height: var(--zb-touch); background: none; border: 0; color: inherit; font: inherit; white-space: nowrap; cursor: pointer; }
+.zb-dctl > .zb-dseg + .zb-dseg { border-left: 1.5px solid var(--zb-pill-edge); }
+.zb-joined.zb-dctl > :first-child { border-right: 0; padding-left: 12px; }
+.zb-joined.zb-dctl > :last-child, .zb-joined.zb-dctl > .zb-tooltip { margin-left: 0; }
+.zb-dctl > .zb-dsummary { flex: 1; min-width: 0; border-radius: 999px 0 0 999px; }
+.zb-dctl > .zb-dtime { border-radius: 0 999px 999px 0; padding-right: 16px; }
+.zb-dctl > .zb-dseg[aria-expanded="true"] { background: var(--zb-raised); color: var(--zb-raised-ink); }
+.zb-dsummary-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; flex: 1; }
+.zb-dsummary .zb-icon { width: 22px; height: 22px; }
+/* On a phone the summary needs the room: tighter segments, no chevron (the open segment is lit instead). */
+@media (max-width: 479px) {
+  .zb-dctl > .zb-dseg { padding-inline: 9px; gap: 6px; }
+  .zb-joined.zb-dctl > :first-child { padding-left: 10px; }
+  .zb-dctl > .zb-dtime { padding-right: 12px; }
+  .zb-dsummary .zb-chev { display: none; }
+  .zb-dsummary-text { font-size: var(--zb-step--1); }
+}
+.zb-dctl .zb-gas svg[data-level] { width: 14px; height: 17px; }
+.zb-dctl > .zb-tooltip { display: block; width: min(300px, 100%); padding: 9px 11px; white-space: normal; }
+.zb-delivery-menu { padding: 0; }
+.zb-delivery-menu .zb-menu-row { padding-inline: 0; }
+.zb-delivery-menu .zb-breakdown { margin: 10px 0; }
+.zb-menu-fold { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; min-height: var(--zb-touch); padding: 0; margin-top: 4px; background: none; border: 0; border-top: 1px solid var(--zb-line); color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
+.zb-menu-control { padding: 0 0 4px; border-top: 1px solid var(--zb-line); }
 .zb-menu-row.zb-menu-stack { flex-direction: column; align-items: stretch; gap: 6px; }
 .zb-menu-stack .zb-seg { display: flex; }
 .zb .zb-menu-stack .zb-seg [role="radio"] { flex: 1 1 auto; justify-content: center; padding-inline: 2px; white-space: nowrap; font-size: var(--zb-step-micro); }
@@ -457,7 +486,6 @@ a.zb-go[aria-disabled="true"] { cursor: not-allowed; }
 .zb-name-stack > span[data-on="true"] { visibility: visible; }
 .zb-near[data-hidden="true"] { visibility: hidden; }
 .zb-pages span { flex: none; }
-.zb-fees .zb-icon { width: 20px; height: 20px; }
 
 /* Settings (mockup pulse-v5.html, the "settings" panel): sections with a heading and one help line, endpoint fields as
    pills with the chain icon or the service name, the URL, a live check dot and a reset; Reset to defaults and Save at

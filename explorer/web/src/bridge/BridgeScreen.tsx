@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import { erc20ReaderFor, isFirstBridge, resolveCustomToken } from "./custom-token";
 import { addPending } from "./pending";
@@ -22,7 +22,8 @@ import { formatUnits } from "viem";
 import { DEFAULT_AUTO_CAP_PERCENT, DEFAULT_HARD_CAP_PERCENT, feeCapProblem, loadFeeCap, loadHardCap, saveFeeCap, saveHardCap } from "./fee-cap";
 import { DirectionMenu } from "./DirectionMenu";
 import { FeeLine, GAS_LEVEL_NAMES, nextGasLevel, type FeeSlider } from "./FeeLine";
-import { Chevron, FlipIcon, FloppyIcon, Identicon, SlidersIcon } from "./icons";
+import { Chevron, FlipIcon, FloppyIcon, Identicon, LockIcon, UnlockIcon } from "./icons";
+import { destinationProblem, LOCK_TIPS } from "./destination";
 import { iconSubjectOf } from "./image-source";
 import { Num } from "./Num";
 import { dollarsText as dollarsOf } from "./number";
@@ -128,7 +129,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const automatic = baseOptions.mode === "percentage" && form.tip?.percentText === undefined;
   const report = useDeliveryCost(destination.chainId, { enabled: token !== null });
   const priority = usePriorityFee(destination.chainId, { enabled: token !== null });
-  const [menu, setMenu] = useState<"direction" | "token" | "receiver" | "delivery" | null>(null);
+  const [menu, setMenu] = useState<"direction" | "token" | null>(null);
   const [review, setReview] = useState(false);
   const [signing, setSigning] = useState<readonly WebStep[] | null>(null);
 
@@ -137,10 +138,18 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     onRoute({ name: "bridge", pairId: route.pairId, dir, ...(Object.keys(cleaned).length === 0 ? {} : { form: cleaned }) });
   };
 
-  const receiver = form.receiver ?? account ?? "";
-  // Without a wallet the fee is still estimated: the draft reads an empty account on the source chain and a stand-in
-  // receiver. Nothing can be sent that way; the pill asks for a wallet first.
-  const values = { token: token === null ? "" : choiceOf(token), amount: form.amount ?? "", receiver: receiver === "" && account === null ? ESTIMATE_RECEIVER : receiver, mode: "plain" as const, data: "", gasLimit: form.gasLimit ?? "", callTarget: "", callData: "" };
+  // The destination row (owner, quotes 96–97): locked (the default), the transfer goes to the connected wallet and
+  // follows it; unlocked, to the address typed in place. A link that names a receiver opens it unlocked.
+  const [unlockedHere, setUnlockedHere] = useState(() => form.receiver !== undefined);
+  const unlocked = unlockedHere || form.receiver !== undefined;
+  const typedReceiver = form.receiver ?? "";
+  const receiver = unlocked ? typedReceiver : (account ?? "");
+  const receiverProblem = unlocked ? destinationProblem(typedReceiver) : null;
+  // Without a wallet, or while the destination is being typed, the fee is still estimated: the draft reads an empty
+  // account on the source chain and a stand-in receiver. Nothing can be sent that way: the pill asks for a wallet, or
+  // names the destination's problem, first.
+  const estimateReceiver = receiver === "" || (unlocked && receiverProblem !== null) ? ESTIMATE_RECEIVER : receiver;
+  const values = { token: token === null ? "" : choiceOf(token), amount: form.amount ?? "", receiver: estimateReceiver, mode: "plain" as const, data: "", gasLimit: form.gasLimit ?? "", callTarget: form.callTarget ?? "", callData: form.callData ?? "" };
   const context = {
     pair,
     snapshots: account === null ? [{ status: "ok" as const, snapshot: { chain: source, nativeBalance: 0n, positions: [] } }] : (snapshots ?? []),
@@ -341,6 +350,8 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     draft,
     amountEntered: amount !== null && amount > 0n,
     overBalance: amount !== null && balance !== null && amount > balance,
+    destinationProblem: receiverProblem,
+    destinationProblemShown: typedReceiver !== "",
     symbol: token?.symbol ?? "",
     paused: gate === "stop" || gate === "sealed" ? { route: `${source.name} → ${destination.name}` } : null,
     tipBelowBreakEven: warnings.lowFee,
@@ -623,7 +634,6 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     ...(spanNote === undefined ? {} : { note: spanNote }),
     save: hardSave,
   };
-  const sliders: FeeSlider[] = [...(tipControl === null ? [] : [tipControl]), capControl, hardCapControl];
   const nextLevel = nextGasLevel(gasLevel);
   const gasHelp = `${levelName(gasLevel)} gas: anchored at today's gas${gasSpan === null ? "" : `, the cost could land between ${dollarsText(gasSpan.lowUsd)} and ${dollarsText(gasSpan.highUsd)} over 15 min`}. Tap for ${levelName(nextLevel)}.`;
 
@@ -644,8 +654,28 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     fixedText: options.mode === "fixed" && tipUnits !== null && token !== null ? `${amountText(tipUnits, token.decimals)} ${token.symbol}` : null,
   });
 
+  const destinationInput = useRef<HTMLInputElement>(null);
+  const [lockTip, setLockTip] = useState(false);
+  const [focusDestination, setFocusDestination] = useState(false);
+  useEffect(() => {
+    if (!focusDestination) return;
+    destinationInput.current?.focus();
+    setFocusDestination(false);
+  }, [focusDestination]);
+  // Locking drops the typed address (the wallet takes over); unlocking opens the field in place, empty and focused.
+  const toggleLock = (): void => {
+    if (unlocked) {
+      setUnlockedHere(false);
+      const { receiver: _drop, ...rest } = form;
+      write(rest);
+      return;
+    }
+    setUnlockedHere(true);
+    setFocusDestination(true);
+  };
+
   const flip = (): void => {
-    const next = token === null ? null : counterpartOf(token, tokens);
+    const next = token === null ? null : counterpartOf(token, tokens, pair);
     write({ ...form, token: next === null ? undefined : choiceOf(next) }, reverse(route.dir));
   };
 
@@ -727,26 +757,15 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
           <button type="button" className="zb-flip" onClick={flip} aria-label={`Flip: send from ${destination.name} instead`}>
             <FlipIcon />
           </button>
-          <button type="button" className="zb-pill zb-settings-pill" aria-haspopup="true" aria-expanded={menu === "delivery"} onClick={() => setMenu(menu === "delivery" ? null : "delivery")} aria-label={`Delivery settings: ${summary.full}`} title={summary.full}>
-            <SlidersIcon />
-            <span className="zb-settings-text">{summary.text}</span>
-            <Chevron dir={menu === "delivery" ? "up" : "down"} />
-          </button>
         </div>
       </div>
 
-      {menu === "delivery" ? (
-        <div className="zb-col" style={{ position: "relative", zIndex: 5 }}>
-          <DeliveryMenu form={form} defaultRouter={destination.contracts.deliveryRouter} onChange={(next) => write(next)} onReceiver={() => setMenu("receiver")} tipChoice={tipChoice} onTipChoice={chooseTip} controls={[...(tipControl === null ? [] : [tipControl]), ...(gasControl === null ? [] : [gasControl]), gasLimitControl]} />
-        </div>
-      ) : null}
       <section className="zb-band-to" aria-label={`You receive on ${destination.name}`}>
         <div className="zb-col">
           {token === null ? null : (
             <FeeLine
-              tip={tipUnits === null ? (feeState === "none" && amount !== null ? "none" : "—") : inline(tokenIcon(token, null, 18), amountText(tipUnits, token.decimals), token.symbol)}
-              tipHelp={`One fee pays whoever delivers your transfer on ${destination.name}: their gas at your gas level, the proof, and a tip on top. It is ${Number(Number(options.percentText).toPrecision(3))}% of the amount${usd(tipUnits) === "—" ? "" : ` (about ${usd(tipUnits)})`}, ${automatic ? "set automatically" : "with the tip set by you"}. Tap for the breakdown.`}
-              breakdown={breakdown}
+              summary={summary.short}
+              summaryFull={`${summary.full}${tipUnits === null ? "" : `. Fee ${amountText(tipUnits, token.decimals)} ${token.symbol}${usd(tipUnits) === "—" ? "" : ` (about ${usd(tipUnits)})`}: the delivery gas at your gas level, the proof and a tip, ${automatic ? "set automatically" : "set by you"}`}`}
               gasHelp={gasHelp}
               gasLevel={gasLevel}
               onGasLevel={setGasLevel}
@@ -755,8 +774,21 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
                 return delay === null ? transferEstimate(source, destination) : `${transferEstimate(source, destination)} + ${delay.text}`;
               })()}
               steps={transferSteps(source, destination)}
-              sliders={sliders}
-              sliderNote={tipControl?.label !== "Fee" ? null : share(breakEven) === null ? null : "Left of break-even a delivery bot loses money at today's gas price, so expect to deliver it yourself."}
+              menu={
+                <DeliveryMenu
+                  form={form}
+                  defaultRouter={destination.contracts.deliveryRouter}
+                  onChange={(next) => write(next)}
+                  tipChoice={tipChoice}
+                  onTipChoice={chooseTip}
+                  value={tipControl}
+                  gas={gasControl}
+                  caps={[capControl, hardCapControl]}
+                  breakdown={breakdown}
+                  note={tipControl?.label !== "Fee" ? null : share(breakEven) === null ? null : "Left of break-even a delivery bot loses money at today's gas price, so expect to deliver it yourself."}
+                  gasLimit={gasLimitControl}
+                />
+              }
             />
           )}
           <div className="zb-amount-row" style={{ marginTop: 6 }}>
@@ -780,22 +812,45 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
 
       <section className="zb-actions">
         <div className="zb-col">
-          <div className="zb-joined">
+          <div className="zb-joined zb-dest" data-locked={unlocked ? undefined : "true"}>
             <span>
               To <TokenIcon subject={{ chainId: destination.chainId }} symbol={destination.name} size={26} />
             </span>
-            <button type="button" aria-expanded={menu === "receiver"} onClick={() => setMenu(menu === "receiver" ? null : "receiver")} aria-label="Destination address. Change it">
-              <span className="zb-mono">{receiver === "" ? "your wallet" : short(receiver)}</span>
-              <Chevron />
-            </button>
+            {unlocked ? (
+              <input
+                ref={destinationInput}
+                className="zb-dest-input zb-mono"
+                aria-label={`Destination address on ${destination.name}`}
+                aria-invalid={receiverProblem !== null && typedReceiver !== "" ? true : undefined}
+                spellCheck={false}
+                autoComplete="off"
+                placeholder="0x… destination address"
+                value={typedReceiver}
+                onChange={(event) => write({ ...form, receiver: event.target.value })}
+              />
+            ) : (
+              <span className="zb-dest-wallet">
+                <span className="zb-mono">{account === null ? "destination wallet" : short(account)}</span>
+                {account === null ? null : <Identicon address={account} />}
+              </span>
+            )}
+            <span className="zb-dest-lock-wrap" onMouseEnter={() => setLockTip(true)} onMouseLeave={() => setLockTip(false)}>
+              <button type="button" className="zb-dest-lock" aria-pressed={!unlocked} aria-label={unlocked ? `Destination unlocked: ${LOCK_TIPS.unlocked}. Lock it to your wallet` : `Destination locked: ${LOCK_TIPS.locked}. Unlock to type another address`} onClick={toggleLock} onFocus={() => setLockTip(true)} onBlur={() => setLockTip(false)}>
+                {unlocked ? <UnlockIcon /> : <LockIcon />}
+              </button>
+              {lockTip ? (
+                <span role="tooltip" className="zb-tooltip zb-dest-tip">
+                  {unlocked ? LOCK_TIPS.unlocked : LOCK_TIPS.locked}
+                </span>
+              ) : null}
+            </span>
           </div>
-          {menu === "receiver" ? (
-            <label className="zb-search-field" style={{ marginTop: 8 }}>
-              <span className="zb-visually-hidden">Destination address on {destination.name}</span>
-              <input spellCheck={false} autoComplete="off" placeholder="0x… (your wallet if empty)" value={form.receiver ?? ""} onChange={(event) => write({ ...form, receiver: event.target.value })} />
-            </label>
-          ) : null}
-          {receiver !== "" && account !== null && receiver.toLowerCase() !== account.toLowerCase() ? <p className="zb-verdict" style={{ textAlign: "left" }}>Not your wallet. Check the address.</p> : null}
+          {receiverProblem === null || typedReceiver === "" ? null : (
+            <p className="zb-fld-err zb-dest-err" role="alert">
+              {receiverProblem}
+            </p>
+          )}
+          {receiver !== "" && receiverProblem === null && account !== null && receiver.toLowerCase() !== account.toLowerCase() ? <p className="zb-verdict" style={{ textAlign: "left" }}>Not your wallet. Check the address.</p> : null}
           {linked.length === 0 ? null : <LinkedWarning fields={linked} />}
           <button
             type="button"
@@ -863,7 +918,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
                 </button>
               </div>
             ) : null}
-            <button type="button" className="zb-go" data-kind="go" disabled={draft.status !== "ready" || hardOver} onClick={() => { setReview(false); setSigning(draft.steps); }}>
+            <button type="button" className="zb-go" data-kind="go" disabled={draft.status !== "ready" || hardOver || receiverProblem !== null} onClick={() => { setReview(false); setSigning(draft.steps); }}>
               Confirm in wallet
             </button>
             {draft.status === "ready" ? null : <p className="zb-verdict">{draft.reason}</p>}

@@ -105,3 +105,6 @@ html, body { margin: 0; background: var(--zb-page); }
 
 /* The search sheet's wrapper only listens for Tab; it adds no box. */
 .zd-contents { display: contents; }
+
+/* The icon credit its licence asks for, quiet in the footer. */
+.zd-foot-credit { flex-basis: 100%; order: 3; font-size: var(--zb-step-micro); color: var(--zb-muted); }
