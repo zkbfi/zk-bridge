@@ -293,6 +293,13 @@ and the time left while in flight or the age once delivered. A row links to the 
   can still move after signing, i.e. a gas-priced fee (base fee × gas level) paid at delivery, up to the limit signed
   in. Then the review warns when that worst case, the most the signed terms allow, would be a "High cap %". A fee that
   is fixed at signing has no cap warning; "High cap %" reads the fee itself.
+- **Default fee curve (owner, superseding "the larger of 0.1% and 2 × cost"):** the default share of the amount
+  slides on a log curve from 1% at $10 to 0.1% at $500: share = 1% × (10 / amount)^(ln 10 / ln 50), 1% below $10,
+  0.1% from $500. The fee is the larger of that curve and 2 × the total cost, then no more than the cap (1%). The
+  curve is in dollars and the same on every chain; where real gas is high (Ethereum, ≈ $105–$1,050 at $0.50 gas) the
+  2 × cost floor holds the fee flat. The total cost is read live, so a higher cost raises the floor on its own; the
+  $0.025 proof cost is a constant that changes in one place. Computed in integer maths with a stated rounding and
+  fixed test vectors.
 - **The $0.025 proof cost (owner):** it is not a separate on-chain payment and needs no contract change. It is part
   of the overall cost (proof + delivery gas) that every percentage is set against: the default fee (the larger of
   0.1% and 2 × cost), the low-fee line, the tip before gas, and the worst case of a gas-priced fee. A fee signed as a
@@ -485,3 +492,4 @@ don't call it "tip too high", call it "high tip %""
 64. "can we spread out the slope from $10->$100? otherwise everyone pays the same amount there"
 65. "maybe stretch it to $500? make it a log curve"
 66. "or some other multiple"
+67. "these numbers seem fine. and if the total cost ends up being closer to 0.125, then the system will simply adjust to that?"
