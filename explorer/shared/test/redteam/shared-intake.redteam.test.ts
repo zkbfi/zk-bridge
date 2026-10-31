@@ -39,8 +39,10 @@ describe("redaction", () => {
     expect(redactError(new Error(`GET https://x.quiknode.pro/${secret}/ 500`), [secret])).toBe(`GET https://x.quiknode.pro/${REDACTED}/ 500`);
   });
 
-  it("ATTACK a known secret of five characters is removed (BLOCKED, was S-6)", () => {
-    expect(redactSecrets("token abcde in the url", ["abcde"])).not.toContain("abcde");
+  it("ATTACK a known secret of five characters is removed where it stands as a value (BLOCKED, was S-6)", () => {
+    // A short secret is removed after =, :, /, @ or a quote; as a plain word of prose it stays (see redaction.ts).
+    expect(redactSecrets("token: abcde in the url", ["abcde"])).not.toContain("abcde");
+    expect(redactSecrets("GET https://rpc.example/abcde/eth failed", ["abcde"])).not.toContain("abcde");
   });
 
   it("ATTACK a known secret is removed in its percent-encoded form (BLOCKED, was S-6)", () => {
@@ -56,6 +58,9 @@ describe("the light client reader (e776f05: one block)", () => {
       blocks,
       getBlockNumber: async () => 1234n,
       readContract: async (request: { functionName: string; blockNumber?: bigint }) => {
+        // The clock settings are immutable and read once, at no block; the state reads are the ones that must agree.
+        if (request.functionName === "genesisTime") return 1n;
+        if (request.functionName === "secondsPerSlot") return 12n;
         blocks.push(request.blockNumber);
         if (request.functionName === "head") return answers.head;
         if (request.functionName === "programVKey") return answers.programKey;

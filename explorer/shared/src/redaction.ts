@@ -75,15 +75,17 @@ function escapeForPattern(text: string): string {
  *
  * The rule: an empty value, a value of white space only and a configuration literal ({@link NOT_SECRETS}) are no
  * secrets and are left alone. A secret of six characters or more is removed wherever it occurs. A shorter secret is
- * removed only where it stands alone, between characters that are not letters or digits: `abcde` goes from `key=abcde&`
- * but not from `abcdefg`, and `1234` not from `12345`. So a short secret never wipes the parts of other words.
+ * removed only where it stands as a value: right after `=`, `:`, `/`, `@` or a quote (a space may follow `=` or `:`),
+ * and not followed by a letter or digit. `abcde` goes from `key=abcde&` and `pin: abcde`, but not from `key=abcdefg`,
+ * and the user name `user` of a URL stays in the sentence "a user name". So a short secret never wipes ordinary words or
+ * the parts of other words.
  */
 function removeKnownSecret(text: string, secret: string): string {
   if (secret.trim() === '' || NOT_SECRETS.has(secret.toLowerCase())) return text
   let result = text
   for (const form of new Set([secret, encodeURIComponent(secret)])) {
     if (form.length >= MINIMUM_LENGTH_ANYWHERE) result = result.split(form).join(REDACTED)
-    else result = result.replace(new RegExp(`(?<![A-Za-z0-9])${escapeForPattern(form)}(?![A-Za-z0-9])`, 'g'), REDACTED)
+    else result = result.replace(new RegExp(`(?<=(?:[=:] ?|[/@"']))${escapeForPattern(form)}(?![A-Za-z0-9])`, 'g'), REDACTED)
   }
   return result
 }

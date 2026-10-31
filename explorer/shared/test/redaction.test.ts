@@ -20,14 +20,20 @@ describe("redactSecrets", () => {
     expect(redactSecrets("a=hunter22 b=hunter22", ["hunter22"])).toBe(`a=${REDACTED} b=${REDACTED}`);
   });
 
-  it("removes a known secret shorter than six characters where it stands alone, and keeps it inside a longer word (S-6)", () => {
-    expect(redactSecrets("pin 1234 ok, key=abcde&x=1", ["1234", "abcde"])).toBe(`pin ${REDACTED} ok, key=${REDACTED}&x=1`);
-    expect(redactSecrets("block 12345 and abcdefg", ["1234", "abcd"])).toBe("block 12345 and abcdefg");
-    expect(redactSecrets("one x here", ["x"])).toBe(`one ${REDACTED} here`);
+  it("removes a known secret shorter than six characters where it stands as a value, and keeps it inside a longer word (S-6)", () => {
+    expect(redactSecrets("pin: 1234 ok, key=abcde&x=1, at /k9/ and @me, \"tok\": \"q1\"", ["1234", "abcde", "k9", "me", "q1"])).toBe(
+      `pin: ${REDACTED} ok, key=${REDACTED}&x=1, at /${REDACTED}/ and @${REDACTED}, "tok": "${REDACTED}"`,
+    );
+    expect(redactSecrets("block=12345 and id=abcdefg", ["1234", "abcd"])).toBe("block=12345 and id=abcdefg");
+    expect(redactSecrets("id=x here", ["x"])).toBe(`id=${REDACTED} here`);
+  });
+
+  it("keeps a short known secret where it is an ordinary word of the text, such as the user name of a URL in a message", () => {
+    expect(redactSecrets("The URL must not hold a user name or a password.", ["user"])).toBe("The URL must not hold a user name or a password.");
   });
 
   it("removes a short known secret that holds characters a pattern would read as special (S-6)", () => {
-    expect(redactSecrets("pass a.b* and ab", ["a.b*"])).toBe(`pass ${REDACTED} and ab`);
+    expect(redactSecrets("pass=a.b* and ab", ["a.b*"])).toBe(`pass=${REDACTED} and ab`);
   });
 
   it("never treats an empty value or a configuration literal as a secret (S-6)", () => {
