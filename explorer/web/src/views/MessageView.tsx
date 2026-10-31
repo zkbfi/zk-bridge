@@ -8,6 +8,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useId, useState, type ReactNode } from "react";
 import type { Hex } from "viem";
+import type { MessageCosts } from "@zk-bridge/shared";
 import type { PairConfig, TokenInfo } from "@terminal/model/types";
 import { formatRoute, type ExplorePage } from "../app/route";
 import { useMessage } from "../app/queries";
@@ -194,18 +195,15 @@ const DeliveryDrawer = ({ detail, reverted, pair }: { readonly detail: MessageDe
 };
 
 /** The drawer of the proof step: the proof, its transaction and its cost, shared by every message it covered. */
-const ProofDrawer = ({ detail, pair, href }: { readonly detail: MessageDetail; readonly pair: PairConfig; readonly href: string | undefined }) => {
-  const proof = detail.costs?.proof ?? null;
-  return (
-    <DrawerGrid
-      rows={[
-        ...(href === undefined ? [] : [["Proof", <a href={href}>open</a>] as const]),
-        ["Transaction", proof === null ? <Missing why={NOT_RECORDED} /> : <a href={explore({ kind: "tx", chainId: proof.chainId, id: proof.hash })} className="zb-mono">{shortHex(proof.hash)}</a>],
-        ["Cost", <CostCell text={stepCostText(proof, pair)} />],
-      ]}
-    />
-  );
-};
+const ProofDrawer = ({ proof, pair, href }: { readonly proof: NonNullable<MessageCosts["proof"]>; readonly pair: PairConfig; readonly href: string | undefined }) => (
+  <DrawerGrid
+    rows={[
+      ...(href === undefined ? [] : [["Proof", <a href={href}>open</a>] as const]),
+      ["Transaction", <a href={explore({ kind: "tx", chainId: proof.chainId, id: proof.hash })} className="zb-mono">{shortHex(proof.hash)}</a>],
+      ["Cost", <CostCell text={stepCostText(proof, pair)} />],
+    ]}
+  />
+);
 
 const trailOf = (steps: readonly MessageStep[], detail: MessageDetail, pair: PairConfig): TrailStep[] =>
   steps.map((step, index) => ({
@@ -217,7 +215,7 @@ const trailOf = (steps: readonly MessageStep[], detail: MessageDetail, pair: Pai
     ...(step.detail === undefined
       ? // The proof step (the third) opens a drawer once the indexer has its cost; else it only links to the proof.
         index === 2 && detail.costs?.proof != null
-        ? { drawer: <ProofDrawer detail={detail} pair={pair} href={step.href} /> }
+        ? { drawer: <ProofDrawer proof={detail.costs.proof} pair={pair} href={step.href} /> }
         : {}
       : {
           drawer:

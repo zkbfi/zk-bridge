@@ -222,6 +222,26 @@ describe("the message page, step costs", () => {
     expect(drawer.getByText("Transaction").nextSibling).toHaveTextContent(/^0x3333/);
   });
 
+  it("links the proof step's drawer to the proof when the indexer lists it", async () => {
+    const detail = await detailOf(tokenItem.id);
+    const services = buildTestServices();
+    const proof = { number: 2, chainId: FIXTURE_PAIR.second.chainId, slot: 14_100_000n, headerRoot: `0x${"1".repeat(64)}`, executionBlockHash: `0x${"2".repeat(64)}`, executionBlockNumber: 5n, transactionHash: `0x${"3".repeat(64)}`, blockNumber: 6n, timestamp: 1_792_929_000, gasUsed: 1n, effectiveGasPrice: 1n, costWei: 1n, poster: `0x${"4".repeat(40)}` } as const;
+    renderWithServices(<MessageView messageId={detail.id} />, { indexer: { ...services.indexer, message: async () => detail }, explore: { ...services.explore, proofs: async () => [proof] } });
+    const step = await stepButton(/^Proof #2 posted to PulseChain/);
+    await userEvent.click(step);
+    expect(within(step.closest("li")!).getByRole("link", { name: "open" })).toHaveAttribute("href", `#/explore/proof/${FIXTURE_PAIR.second.chainId}/2`);
+  });
+
+  it("opens the proof step to its cost even when the proof itself is not listed, without a link to it", async () => {
+    const detail = await detailOf(tokenItem.id);
+    renderDetail({ ...detail, coveredByHeadSlot: 1 });
+    const proof = await stepButton(/^Proof posted to PulseChain/);
+    await userEvent.click(proof);
+    const drawer = within(proof.closest("li")!);
+    expect(drawer.queryByText("Proof")).toBeNull();
+    expect(drawer.getByText("Cost").nextSibling).toHaveTextContent(/^shared · /);
+  });
+
   it("shows — for a step whose cost the indexer has not stored, and the proof step only links without one", async () => {
     const detail = await detailOf(tokenItem.id);
     renderDetail({ ...detail, costs: { sent: null, delivered: null, proof: null } });
