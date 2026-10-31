@@ -4,11 +4,11 @@
  * of them records stays null and the page shows "—".
  */
 import { decodeMediatorMessage, type CostView } from "@zk-bridge/shared";
-import { formatUnits, type Address, type Hex } from "viem";
+import type { Address, Hex } from "viem";
 import type { PairConfig } from "@terminal/model/types";
 import { formatRoute } from "../app/route";
 import { amountText } from "../bridge/bridge-model";
-import { dollarsText } from "../bridge/number";
+import { dollarsText, shortAmountText } from "../bridge/number";
 import type { MessageDetail } from "../data/message-detail";
 import { contractNameOf } from "./contract-names";
 import type { ProofRow } from "./explore-source";
@@ -147,7 +147,7 @@ export const messageSteps = (detail: MessageDetail, pair: PairConfig, proofs: re
 export const stepCostText = (cost: (CostView & { readonly coveredMessages?: number }) | null, pair: PairConfig): string | null => {
   if (cost === null) return null;
   const symbol = [pair.first, pair.second].find((chain) => chain.chainId === cost.chainId)?.nativeSymbol;
-  const coin = `${Number(Number(formatUnits(BigInt(cost.costWei), 18)).toPrecision(3))}${symbol === undefined ? "" : ` ${symbol}`}`;
+  const coin = `${shortAmountText(BigInt(cost.costWei), 18)}${symbol === undefined ? "" : ` ${symbol}`}`;
   const dollars = cost.costUsd === null ? "—" : dollarsText(BigInt(cost.costUsd));
   const text = `${coin} · ${dollars}`;
   return cost.coveredMessages === undefined ? text : `shared · ${text} over ${cost.coveredMessages} transfer${cost.coveredMessages === 1 ? "" : "s"}`;

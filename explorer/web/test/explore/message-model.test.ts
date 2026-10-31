@@ -107,15 +107,20 @@ describe("the steps", () => {
 describe("a step's cost", () => {
   const cost = (changes: Record<string, unknown> = {}) => ({ chainId: 1, hash: `0x${"ab".repeat(32)}` as const, block: "12", gasUsed: "120000", effectiveGasPriceWei: "7000000000", costWei: "840000000000000", costUsd: "2520000000000000000", nativeUsd: { usd: "3000000000000000000000", source: "pulsex-weth-copy" as const, priceBlock: "90" }, ...changes });
   it("is the native coin and its dollars at the price block", () => {
-    expect(stepCostText(cost(), FIXTURE_PAIR)).toBe("0.00084 ETH · $2.52");
+    expect(stepCostText(cost(), FIXTURE_PAIR)).toBe("0.0₃84 ETH · $2.52");
   });
   it("says a proof's cost is shared, with how many transfers it covered", () => {
     expect(stepCostText({ ...cost({ chainId: 369, costWei: "2000000000000000000", costUsd: "60000000000000" }), coveredMessages: 4 }, FIXTURE_PAIR)).toBe("shared · 2 PLS · $0.0₄6 over 4 transfers");
-    expect(stepCostText({ ...cost(), coveredMessages: 1 }, FIXTURE_PAIR)).toBe("shared · 0.00084 ETH · $2.52 over 1 transfer");
+    expect(stepCostText({ ...cost(), coveredMessages: 1 }, FIXTURE_PAIR)).toBe("shared · 0.0₃84 ETH · $2.52 over 1 transfer");
+  });
+  it("keeps the leading-zeros rule for a tiny cost, never an exponent", () => {
+    expect(stepCostText(cost({ costWei: "315000000000" }), FIXTURE_PAIR)).toBe("0.0₆315 ETH · $2.52");
+    expect(stepCostText(cost({ costWei: "315999999999" }), FIXTURE_PAIR)).toBe("0.0₆315 ETH · $2.52");
+    expect(stepCostText(cost({ costWei: "1" }), FIXTURE_PAIR)).toBe("0.0₁₇1 ETH · $2.52");
   });
   it("shows — for the dollars on a testnet, and nothing without a cost", () => {
-    expect(stepCostText(cost({ chainId: 11155111, costUsd: null, nativeUsd: null }), FIXTURE_PAIR)).toBe("0.00084 · —");
-    expect(stepCostText(cost({ costUsd: "0" }), FIXTURE_PAIR)).toBe("0.00084 ETH · $0");
+    expect(stepCostText(cost({ chainId: 11155111, costUsd: null, nativeUsd: null }), FIXTURE_PAIR)).toBe("0.0₃84 · —");
+    expect(stepCostText(cost({ costUsd: "0" }), FIXTURE_PAIR)).toBe("0.0₃84 ETH · $0");
     expect(stepCostText(null, FIXTURE_PAIR)).toBeNull();
   });
 });
