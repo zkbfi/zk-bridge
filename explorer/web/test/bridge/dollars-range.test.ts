@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dollarsRange } from "../../src/bridge/number";
+import { dollarsRange, dollarsSpanWords } from "../../src/bridge/number";
 
 describe("dollarsRange", () => {
   const usd = (text: string): bigint => BigInt(Math.round(Number(text) * 1e6)) * 10n ** 12n;
@@ -12,5 +12,13 @@ describe("dollarsRange", () => {
   });
   it("prints one value twice only when the ends are equal", () => {
     expect(dollarsRange(usd("0.05"), usd("0.05"))).toEqual(["$0.05", "$0.05"]);
+  });
+});
+
+describe("dollarsSpanWords", () => {
+  const usd = (text: string): bigint => BigInt(Math.round(Number(text) * 1e6)) * 10n ** 12n;
+  it("says between when the ends differ, about when they cannot be told apart", () => {
+    expect(dollarsSpanWords(usd("0.18"), usd("0.31"))).toBe("between $0.18 and $0.31");
+    expect(dollarsSpanWords(25_000_000_000_000_000n, 25_000_000_000_100_000n)).toBe("about $0.025");
   });
 });

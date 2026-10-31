@@ -117,7 +117,7 @@ describe("the gas bars' tooltip", () => {
     await at("bridge.amount=50", true);
     await userEvent.hover(bars());
     // An anchor with a 15-minute range, never a multiplier (owner, quote 91).
-    expect(screen.getByRole("tooltip")).toHaveTextContent(/^Normal gas: anchored at today's gas, the cost could land between \$[\d.]+ and \$[\d.]+ over 15 min\. Tap for High\.$/);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(/^Normal gas: anchored at today's gas, the cost could land (?:between \$[\d.]+ and \$[\d.]+|about \$[\d.]+) over 15 min\. Tap for High\.$/);
     expect(screen.getByRole("tooltip").textContent).not.toMatch(/×|multipl/);
     await userEvent.click(bars());
     await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(/^High gas: anchored at today's gas/));

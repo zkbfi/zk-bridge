@@ -72,6 +72,18 @@ export const dollarsRange = (low: bigint, high: bigint): readonly [string, strin
   return [precise(low, 6), precise(high, 6)];
 };
 
+/**
+ * A dollar span as words: "between $0.18 and $0.31", or "about $0.025" when the two ends cannot be told apart at six
+ * significant digits (the fixed proof cost dwarfs a gas range of fractions of a cent).
+ *
+ * @param low The lower end, USD × 1e18.
+ * @param high The upper end, USD × 1e18.
+ */
+export const dollarsSpanWords = (low: bigint, high: bigint): string => {
+  const [a, b] = dollarsRange(low, high);
+  return a === b ? `about ${a}` : `between ${a} and ${b}`;
+};
+
 /** Dollars with `digits` significant digits, cut; the leading-zeros rule below a dollar. */
 const precise = (usd: bigint, digits: number): string => {
   const DOLLAR = 10n ** 18n;
