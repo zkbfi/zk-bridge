@@ -288,8 +288,11 @@ and the time left while in flight or the age once delivered. A row links to the 
   anticipated cost. What the dapp sets automatically is capped at **1% of the amount**, and that cap is **adjustable**
   (a setting, also changeable in the review). When the cap binds, the fee stays below 2 × the cost and the low-fee
   warning stays on. **At checkout, always warn when the cap is too large** and let the user adjust it right there in
-  the finalizing drawer (the review sheet). "Too large" (my reading, owner to confirm): the cap is above the high-tip
-  threshold for this amount (1% up to $100, sliding to 0.1% at $1,000).
+  the finalizing drawer (the review sheet). **When the cap warns (owner, superseding my earlier reading "the cap is
+  above the high-tip line", which warned on every default transfer over $100):** the cap only matters when the fee
+  can still move after signing, i.e. a gas-priced fee (base fee × gas level) paid at delivery, up to the limit signed
+  in. Then the review warns when that worst case, the most the signed terms allow, would be a "High tip %". A fee that
+  is fixed at signing has no cap warning; "High tip %" reads the fee itself.
 
 - **Determinism (owner):** every fee, warning and price is a pure function of its inputs: same inputs, same answer,
   in any app that uses it. Rules: no clock, randomness or network inside a rule; prices and gas are read **at a named
@@ -470,3 +473,4 @@ q5) for all bridged tokens, for the short term, we need to a) reverse out the to
 57. "make sure that each piece is deterministic. we are also going to want to bundle a lot of this code into an sdk so that other people can integrate into their own dapps"
 58. "sorry, why would a bridge over $100 warn at the default?
 don't call it "tip too high", call it "high tip %""
+59. "oh, so the cap only makes sense to warn about if it can shift, as in if the setting is to use the base fee/gas multiplier"
