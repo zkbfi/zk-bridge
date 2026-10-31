@@ -292,7 +292,12 @@ and the time left while in flight or the age once delivered. A row links to the 
   above the high-tip line", which warned on every default transfer over $100):** the cap only matters when the fee
   can still move after signing, i.e. a gas-priced fee (base fee × gas level) paid at delivery, up to the limit signed
   in. Then the review warns when that worst case, the most the signed terms allow, would be a "High cap %". A fee that
-  is fixed at signing has no cap warning; "High cap %" reads the fee itself.
+  is fixed at signing has no cap warning; "High cap %" reads the fee itself. **Confirmed (owner, quotes 70–71):** only
+  the gas-based (base fee / gas+) mode can drift. There, "High cap %" warns when the fee recomputed at the expanded
+  cost (the gas level's 2× / 3× / 5× ceiling + the $0.025 proof), limited by the cap, would leave the deliverer more
+  than the high-cap line; the estimated cost being below the expanded cost and the cap being past the line are both
+  necessary, not enough on their own. Percent and fixed modes are known ahead of time: no cap warning, and "High cap
+  %" reads the fee itself.
 - **Default fee curve (owner, superseding "the larger of 0.1% and 2 × cost"):** the default share of the amount
   slides on a log curve from 1% at $10 to 0.1% at $500: share = 1% × (10 / amount)^(ln 10 / ln 50), 1% below $10,
   0.1% from $500. The fee is the larger of that curve and 2 × the total cost, then no more than the cap (1%). The
@@ -500,3 +505,4 @@ don't call it "tip too high", call it "high tip %""
 68. "when the cost is more than 1% of the amount, then we should be informing the user that their bridge may not be delivered in a timely manner"
 69. "rather, i should say, if the cost is higher than the percent that the user is willing to pay for it. because that is the real line"
 70. "if the estimated cost is less than the expanded (2/3/5x) and the cap is further than the high, then yes, you can warn the "high cap %""
+71. "yes, but this is only relevant for basefee/gas+ mode. in percent mode, and fixed, the values are known ahead of time. gas based mode can drift"
