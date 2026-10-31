@@ -138,6 +138,26 @@ describe("an endpoint with a key-like segment", () => {
   });
 });
 
+describe("the beacon API per chain", () => {
+  const page = { protocol: "https:", hostname: "zkb.fi", pathname: "/" } as never;
+
+  it("keeps one beacon API per chain and drops a bad entry", () => {
+    const storage = memoryStorage();
+    expect(saveUserConnections(storage, { ...EMPTY_CONNECTION_SETTINGS, beaconUrls: { 943: "https://beacon.example.org/api" } }, page)).toEqual({ saved: true, reason: "stored" });
+    expect(loadUserConnections(storage, page).beaconUrls).toEqual({ 943: "https://beacon.example.org/api" });
+    const bad = memoryStorage(JSON.stringify({ beaconUrls: { 1: "https://ok.example.org/", 369: "not a url", x: "https://x.example.org" } }));
+    expect(loadUserConnections(bad, page).beaconUrls).toEqual({ 1: "https://ok.example.org" });
+    expect(loadUserConnections(memoryStorage(JSON.stringify({})), page).beaconUrls).toBeUndefined();
+  });
+
+  it("never writes a beacon API that looks like it holds a key", () => {
+    const storage = memoryStorage();
+    const result = saveUserConnections(storage, { ...EMPTY_CONNECTION_SETTINGS, beaconUrls: { 1: "https://beacon.example.org/0123456789abcdef0123456789abcdef" } }, page);
+    expect(result.reason).toBe("key-like-url");
+    expect(loadUserConnections(storage, page).beaconUrls ?? {}).toEqual({});
+  });
+});
+
 describe("the msgboard node per chain", () => {
   it("keeps one node per chain, the same URL on both if set so, and drops a bad entry", () => {
     const storage = memoryStorage();

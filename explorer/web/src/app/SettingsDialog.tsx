@@ -154,7 +154,7 @@ export const keptNotice = (reason: SaveReason): string | null => {
 
 /**
  * The settings (mockup pulse-v5.html, the "settings" panel; spec "Settings (owner)" and "Every endpoint is
- * swappable"): the theme, an RPC per chain, the image server and every other outside service, each with its default,
+ * swappable"): the theme, an RPC and a beacon API per chain, the image server and every other outside service, each with its default,
  * a live check and a reset; then the fee cap and the recent list. One Save keeps them all.
  *
  * @param props The theme and the handlers.
@@ -242,6 +242,10 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose, stora
         <h3>RPC endpoints</h3>
         <p className="zb-set-help">Used to read balances and send transactions. Yours stay in this browser.</p>
         {section("rpc")}
+
+        <h3>Beacon endpoints</h3>
+        <p className="zb-set-help">Where the light clients' proofs read each chain's consensus. Yours stay in this browser.</p>
+        {section("beacon")}
 
         <h3>Token and chain images</h3>
         <p className="zb-set-help">Where icons come from when the release doesn't already carry them.</p>

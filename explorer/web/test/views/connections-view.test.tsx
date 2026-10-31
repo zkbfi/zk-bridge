@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ConnectionsView, INSECURE_ENDPOINT_WARNING, KEY_LIKE_NOTICE, SHARED_ORIGIN_NOTICE, STORAGE_WARNING, connectionTargets, withUserUrl, withoutUserUrl } from "../../src/views/ConnectionsView";
+import { ConnectionsView, INSECURE_ENDPOINT_WARNING, KEY_LIKE_NOTICE, SHARED_ORIGIN_NOTICE, STORAGE_WARNING, connectionTargets, settingOf, userUrlOf, withUserUrl, withoutUserUrl } from "../../src/views/ConnectionsView";
 import { CONNECTION_STORAGE_KEY, loadUserConnections } from "../../src/config/connection-storage";
 import { disconnectedWallet, walletWrapper } from "../app/support";
 import { renderPage } from "../render";
@@ -387,6 +387,20 @@ describe("the pure rules of the page", () => {
     expect(withUserUrl(user, indexer!, "https://d.example.org").indexerUrl).toBe("https://d.example.org");
     expect(withoutUserUrl(user, first!).rpcUrls).toEqual({ 369: "https://b.example.org" });
     expect(withoutUserUrl(user, indexer!)).toEqual({ ...user, indexerUrl: null });
+  });
+
+  it("reads, sets and removes a chain's beacon API, and reads none where nothing is set", () => {
+    const beacon = { kind: "beacon", label: "PulseChain beacon API", chainId: 369 } as const;
+    const set = withUserUrl(withUserUrl(user, beacon, "https://beacon.example.org"), { ...beacon, chainId: 1 }, "https://beacon-eth.example.org");
+    expect(set.beaconUrls).toEqual({ 1: "https://beacon-eth.example.org", 369: "https://beacon.example.org" });
+    expect(userUrlOf(set, beacon)).toBe("https://beacon.example.org");
+    expect(userUrlOf(user, beacon)).toBeNull();
+    expect(withoutUserUrl(set, beacon).beaconUrls).toEqual({ 1: "https://beacon-eth.example.org" });
+    expect(withoutUserUrl(user, beacon).beaconUrls).toEqual({});
+    const resolved = { indexerUrl: null, rpcUrls: {}, backendUrl: null, msgboardIndexerUrl: null, archiveUrl: null, msgboardUrl: null };
+    expect(settingOf({ ...resolved, beaconUrls: { 369: { value: "https://b.example.org", source: "user" as const } } }, beacon)).toEqual({ value: "https://b.example.org", source: "user" });
+    expect(settingOf({ ...resolved, beaconUrls: {} }, beacon)).toBeNull();
+    expect(settingOf(resolved, beacon)).toBeNull();
   });
 });
 

@@ -42,6 +42,19 @@ describe("the service probe", () => {
     expect((await createProber({ http: failing })("https://archive.zkb.fi", { kind: "health" })).ok).toBe(false);
   });
 
+  it("asks a beacon API for its genesis and passes only on the chain's genesis validators root", async () => {
+    const sepolia = "0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078";
+    const genesis = (root: string) => JSON.stringify({ data: { genesis_time: "1655733600", genesis_validators_root: root, genesis_fork_version: "0x90000069" } });
+    const seen: HttpRequest[] = [];
+    const probe = createProber({ http: answering(200, genesis(sepolia), seen), now: clock() });
+    expect(await probe("https://lodestar-sepolia.chainsafe.io/", { kind: "beacon", chainId: 11155111 })).toEqual({ ok: true, ms: 21 });
+    expect(seen).toEqual([{ url: "https://lodestar-sepolia.chainsafe.io/eth/v1/beacon/genesis", method: "GET" }]);
+    const wrongChain = await createProber({ http: answering(200, genesis(sepolia)) })("https://b.example.org", { kind: "beacon", chainId: 943 });
+    expect(wrongChain).toEqual({ ok: false, reason: "The beacon node is on another chain: its genesis validators root differs." });
+    // A chain with no known root passes on any genesis.
+    expect((await createProber({ http: answering(200, genesis(sepolia)) })("https://b.example.org", { kind: "beacon", chainId: 31337 })).ok).toBe(true);
+  });
+
   it("posts eth_chainId to an RPC and passes only on the expected chain", async () => {
     const seen: HttpRequest[] = [];
     const probe = createProber({ http: answering(200, '{"jsonrpc":"2.0","id":1,"result":"0x171"}', seen), now: clock() });

@@ -201,7 +201,9 @@ export const createRpcExplorerApi = (options: RpcExplorerApiOptions): RpcExplore
         const tracked = otherSide(pair, side.chainId);
         const head = snapshot.heads.get(side.chainId) ?? null;
         const updates = logsOf(snapshot, side, "HeadUpdated");
-        const headBlockTimestamp = head === null ? null : await explorer.blockTimestamp(tracked.chainId, head.executionBlockNumber).then(Number, () => null);
+        // The checkpoint of the deployment stores no execution block: the contract answers block zero for it.
+        const executionBlockNumber = head === null || head.executionBlockNumber === 0n ? null : head.executionBlockNumber;
+        const headBlockTimestamp = executionBlockNumber === null ? null : await explorer.blockTimestamp(tracked.chainId, executionBlockNumber).then(Number, () => null);
         const finalizedSlot = await readFinalizedSlot(explorer.readerOf(side.chainId), explorer.readerOf(tracked.chainId), side);
         const tipRow = (chainId: number) => {
           const tip = snapshot.tips.get(chainId) as ChainBlock;
@@ -213,7 +215,7 @@ export const createRpcExplorerApi = (options: RpcExplorerApiOptions): RpcExplore
           head:
             head === null
               ? undefined
-              : { chainId: side.chainId, slot: head.slot, headerRoot: (updates.at(-1)?.args.headerRoot as Hex | undefined) ?? (`0x${"00".repeat(32)}` as Hex), executionBlockNumber: head.executionBlockNumber, updatedTimestamp: head.updatedTimestamp, updateCount: updates.length },
+              : { chainId: side.chainId, slot: head.slot, headerRoot: (updates.at(-1)?.args.headerRoot as Hex | undefined) ?? (`0x${"00".repeat(32)}` as Hex), executionBlockNumber, updatedTimestamp: head.updatedTimestamp, updateCount: updates.length },
           finalizedSlot,
           headBlockTimestamp,
           trackedTip: tipRow(tracked.chainId),
