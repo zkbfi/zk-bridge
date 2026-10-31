@@ -148,15 +148,26 @@
 .zb-kbd { display: none; font: inherit; font-size: var(--zb-step--1); font-weight: 600; color: var(--zb-muted); }
 @media (min-width: 720px) and (hover: hover) { .zb-kbd { display: inline; } }
 /* Search: drawn like the token picker, results as plain rows with the selected one marked by the accent edge. */
-@media (min-width: 720px) { .zb-sheet-top { top: 12vh; bottom: auto; } }
-.zb-palette-list { margin: 0 -16px; max-height: min(60vh, 560px); overflow: auto; }
-@media (max-width: 719px) { .zb-palette-list { max-height: none; } }
+.zb-palette-list { margin: 0 -16px; }
 .zb-palette-group { padding: 14px 16px 6px; font-size: var(--zb-step--1); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--zb-muted); }
 .zb-palette-row { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 10px 16px; cursor: pointer; }
 .zb-palette-row[aria-selected="true"] { background: var(--zb-raised); }
 .zb-palette-row[aria-selected="true"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--zb-accent); }
 .zb-palette-title { font-weight: 600; overflow-wrap: anywhere; }
 .zb-palette-sub { font-size: var(--zb-step--1); color: var(--zb-muted); overflow-wrap: anywhere; }
+/* The palette is a column: band, list, footer. On desktop it hangs from 12vh and is as tall as its list (up to 78vh), so
+   no empty space sits under the rows; on phones it fills the screen and the footer sits on the bottom edge. */
+.zb-sheet.zb-sheet-top { display: flex; flex-direction: column; }
+@media (min-width: 720px) { .zb-sheet.zb-sheet-top { top: 12vh; bottom: auto; max-height: 78vh; overflow: hidden; } }
+.zb-sheet-top .zb-palette { flex: 1; min-height: 0; overflow: auto; padding-bottom: 6px; }
+.zb-palette-foot { flex: none; display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 8px 0 16px; border-top: 1px solid var(--zb-line); font-size: var(--zb-step--1); color: var(--zb-muted); }
+.zb-palette-keys { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.zb-palette-keys kbd { display: inline-grid; place-items: center; min-width: 22px; height: 20px; padding: 0 5px; border: 1.5px solid var(--zb-pill-edge); border-radius: 5px; font: inherit; font-size: var(--zb-step-micro); font-weight: 600; color: var(--zb-ink); }
+.zb-palette-keys kbd + kbd { margin-left: -2px; }
+@media (hover: none), (pointer: coarse) { .zb-palette-keys { display: none; } }
+.zb-palette-links { margin-left: auto; display: inline-flex; }
+.zb .zb-palette-links button { min-height: 44px; padding: 0 10px; font-weight: 600; color: var(--zb-ink); }
+.zb .zb-palette-links button:hover { color: var(--zb-accent-text); }
 .zb-palette-note { margin: 12px 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
 .zb-search { justify-self: end; }
 .zb-pages { display: flex; justify-content: center; gap: 4px; padding-bottom: 10px; }

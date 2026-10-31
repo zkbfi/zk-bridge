@@ -2,7 +2,8 @@ import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } f
 import { Sheet } from "../bridge/Sheet";
 import { SearchIcon } from "../bridge/icons";
 import { usePaletteSearch } from "./use-palette-search";
-import { moveHighlight, type MoveKey, type SearchResult } from "./search-model";
+import { actionResults, moveHighlight, viewResults, type MoveKey, type SearchResult } from "./search-model";
+import { useServices } from "../app/services";
 import type { DocPage } from "../docs/docs-index";
 
 /** Props of {@link CommandPalette}. */
@@ -32,6 +33,10 @@ export const CommandPalette = ({ recent, walletConnected, onSelect, onClose, doc
   const listId = useId();
   const search = usePaletteSearch({ query, recent, walletConnected, ...(docPages === undefined ? {} : { docPages }) });
   const active = search.flat[highlight] ?? null;
+  const { pair } = useServices();
+  // The footer's quick links are the palette's own Settings action and Docs view, so they open exactly what those rows open.
+  const settings = actionResults({ pair, walletConnected }).find((result) => result.id === "action:settings");
+  const docs = viewResults(pair.id).find((result) => result.id === "view:docs");
   const optionId = useCallback((result: SearchResult): string => `${listId}-${result.id}`, [listId]);
 
   useEffect(() => {
@@ -115,6 +120,21 @@ export const CommandPalette = ({ recent, walletConnected, onSelect, onClose, doc
             </p>
           ) : null}
         </div>
+      </div>
+      <div className="zb-palette-foot">
+        <span className="zb-palette-keys" aria-hidden="true">
+          <kbd>↑</kbd>
+          <kbd>↓</kbd> move <kbd>↵</kbd> open <kbd>esc</kbd> close
+        </span>
+        <span className="zb-palette-links">
+          {[settings, docs].map((result) =>
+            result === undefined ? null : (
+              <button key={result.id} type="button" onClick={() => onSelect(result)}>
+                {result.title}
+              </button>
+            ),
+          )}
+        </span>
       </div>
     </Sheet>
   );
