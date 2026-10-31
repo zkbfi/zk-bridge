@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import vectors from "./fixtures/fee-rules-vectors.json" with { type: "json" };
 import {
   capWarns,
+  clampAutoCap,
+  DEFAULT_HARD_CAP_WAD,
+  hardCapCheck,
+  HARD_CAP_STEP_WAD,
   ceilingCostUsd,
   ceilingWeiOf,
   COST_MARGIN,
@@ -297,5 +301,37 @@ describe("the fixed vectors", () => {
   });
   it.each(vectors.capWarns)("capWarns $input", ({ input, output }) => {
     expect(capWarns({ gasBased: input.gasBased, amountUsd: big(input.amountUsd), capWad: BigInt(input.capWad), expandedCostUsd: big(input.expandedCostUsd), costNormalUsd: big(input.costNormalUsd) })).toBe(output);
+  });
+  it.each(vectors.hardCapCheck)("hardCapCheck $note", ({ input, output }) => {
+    const found = hardCapCheck({ amountUnits: BigInt(input.amountUnits), feeUnits: BigInt(input.feeUnits), worstFeeUnits: BigInt(input.worstFeeUnits), hardCapWad: BigInt(input.hardCapWad) });
+    expect({ over: found.over, feeUnits: String(found.feeUnits), capUnits: String(found.capUnits), raiseToWad: String(found.raiseToWad) }).toEqual(output);
+  });
+  it.each(vectors.clampAutoCap)("clampAutoCap $note", ({ input, output }) => {
+    expect(clampAutoCap(BigInt(input.autoCapWad), BigInt(input.hardCapWad))).toBe(BigInt(output));
+  });
+});
+
+describe("the hard fee cap (owner, quote 86)", () => {
+  const amount = 100_000_000n; // 100 tokens of 6 decimals
+  it("is 2% by default and moves in 0.05% steps", () => {
+    expect(DEFAULT_HARD_CAP_WAD).toBe(2n * PERCENT_WAD);
+    expect(HARD_CAP_STEP_WAD).toBe(PERCENT_WAD / 20n);
+  });
+  it("passes a fee under or exactly at the cap and blocks one a unit over", () => {
+    expect(hardCapCheck({ amountUnits: amount, feeUnits: 1_999_999n, worstFeeUnits: 0n, hardCapWad: DEFAULT_HARD_CAP_WAD }).over).toBe(false);
+    expect(hardCapCheck({ amountUnits: amount, feeUnits: 2_000_000n, worstFeeUnits: 0n, hardCapWad: DEFAULT_HARD_CAP_WAD }).over).toBe(false);
+    const over = hardCapCheck({ amountUnits: amount, feeUnits: 2_000_001n, worstFeeUnits: 0n, hardCapWad: DEFAULT_HARD_CAP_WAD });
+    expect(over.over).toBe(true);
+    // The smallest whole step that admits the fee, and that step does admit it.
+    expect(over.raiseToWad).toBe(205n * 10n ** 14n);
+    expect(hardCapCheck({ amountUnits: amount, feeUnits: 2_000_001n, worstFeeUnits: 0n, hardCapWad: over.raiseToWad }).over).toBe(false);
+  });
+  it("reads a gas-based fee's worst case, not just the fee now", () => {
+    const found = hardCapCheck({ amountUnits: amount, feeUnits: 500_000n, worstFeeUnits: 3_000_000n, hardCapWad: DEFAULT_HARD_CAP_WAD });
+    expect(found).toEqual({ over: true, feeUnits: 3_000_000n, capUnits: 2_000_000n, raiseToWad: 3n * PERCENT_WAD });
+  });
+  it("keeps the automatic cap at or under the hard cap", () => {
+    expect(clampAutoCap(PERCENT_WAD, DEFAULT_HARD_CAP_WAD)).toBe(PERCENT_WAD);
+    expect(clampAutoCap(5n * PERCENT_WAD, DEFAULT_HARD_CAP_WAD)).toBe(DEFAULT_HARD_CAP_WAD);
   });
 });

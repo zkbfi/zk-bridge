@@ -19,7 +19,8 @@
         "ceilingFactor": "5",
         "expectedHalves": "5"
       }
-    }
+    },
+    "DEFAULT_HARD_CAP_WAD": "20000000000000000"
   },
   "usdOf": [
     {
@@ -1219,6 +1220,116 @@
         "costNormalUsd": "50000000000000000"
       },
       "output": false
+    }
+  ],
+  "hardCapCheck": [
+    {
+      "note": "default 2%, fee 1% passes",
+      "input": {
+        "amountUnits": "100000000",
+        "feeUnits": "1000000",
+        "worstFeeUnits": "1000000",
+        "hardCapWad": "20000000000000000"
+      },
+      "output": {
+        "over": false,
+        "feeUnits": "1000000",
+        "capUnits": "2000000",
+        "raiseToWad": "20000000000000000"
+      }
+    },
+    {
+      "note": "fee under the cap",
+      "input": {
+        "amountUnits": "100000000",
+        "feeUnits": "1500000",
+        "worstFeeUnits": "1500000",
+        "hardCapWad": "20000000000000000"
+      },
+      "output": {
+        "over": false,
+        "feeUnits": "1500000",
+        "capUnits": "2000000",
+        "raiseToWad": "20000000000000000"
+      }
+    },
+    {
+      "note": "fee exactly at the cap passes",
+      "input": {
+        "amountUnits": "100000000",
+        "feeUnits": "2000000",
+        "worstFeeUnits": "2000000",
+        "hardCapWad": "20000000000000000"
+      },
+      "output": {
+        "over": false,
+        "feeUnits": "2000000",
+        "capUnits": "2000000",
+        "raiseToWad": "20000000000000000"
+      }
+    },
+    {
+      "note": "fee over the cap: raise to 2.4%",
+      "input": {
+        "amountUnits": "100000000",
+        "feeUnits": "2400000",
+        "worstFeeUnits": "2400000",
+        "hardCapWad": "20000000000000000"
+      },
+      "output": {
+        "over": true,
+        "feeUnits": "2400000",
+        "capUnits": "2000000",
+        "raiseToWad": "24000000000000000"
+      }
+    },
+    {
+      "note": "gas-based: fee now under, worst case the signed terms allow over",
+      "input": {
+        "amountUnits": "100000000",
+        "feeUnits": "800000",
+        "worstFeeUnits": "2000001",
+        "hardCapWad": "20000000000000000"
+      },
+      "output": {
+        "over": true,
+        "feeUnits": "2000001",
+        "capUnits": "2000000",
+        "raiseToWad": "20500000000000000"
+      }
+    },
+    {
+      "note": "no amount is never over",
+      "input": {
+        "amountUnits": "0",
+        "feeUnits": "0",
+        "worstFeeUnits": "0",
+        "hardCapWad": "20000000000000000"
+      },
+      "output": {
+        "over": false,
+        "feeUnits": "0",
+        "capUnits": "0",
+        "raiseToWad": "20000000000000000"
+      }
+    }
+  ],
+  "clampAutoCap": [
+    {
+      "note": "automatic cap under the hard cap stays",
+      "input": {
+        "autoCapWad": "10000000000000000",
+        "hardCapWad": "20000000000000000"
+      },
+      "output": "10000000000000000"
+    },
+    {
+      "note": "automatic cap above the hard cap follows it down",
+      "input": {
+        "autoCapWad": "30000000000000000",
+        "hardCapWad": "20000000000000000"
+      },
+      "output": "20000000000000000"
     }
   ]
 }
