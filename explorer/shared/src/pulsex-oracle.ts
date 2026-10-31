@@ -69,8 +69,9 @@ const poolsOf = async (reader: PoolReader, token: Address): Promise<Pool[]> => {
   const found = await Promise.all(
     PULSEX_FACTORIES.map(async (factory): Promise<Pool | null> => {
       const pair = await reader.pairOf(factory, token, WPLS);
-      const reserves = pair === null ? null : await reader.reservesOf(pair);
-      if (pair === null || reserves === null) return null;
+      if (pair === null) return null;
+      const reserves = await reader.reservesOf(pair);
+      if (reserves === null) return null;
       const tokenIs0 = lower(reserves.token0) === lower(token);
       return { pair, token: tokenIs0 ? reserves.reserve0 : reserves.reserve1, wpls: tokenIs0 ? reserves.reserve1 : reserves.reserve0 };
     }),
