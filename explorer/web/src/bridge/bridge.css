@@ -1,7 +1,7 @@
 /*
  * The bridge screen. Colours are custom properties per theme class on <html> (set by src/app/theme.ts).
  * Shapes follow the design language: square panels (no radius), pill controls (radius 999px), one ring radius,
- * heavy dots. No shadows, no gradients, no opacity on the pulse. Spec: docs/superpowers/specs/2026-10-30-dapp-bridge-first-design.md
+ * heavy dots. No shadows; one gradient (the band in Ember on black); no opacity on the pulse. Spec: docs/superpowers/specs/2026-10-30-dapp-bridge-first-design.md
  */
 /* Type and spacing scale (owner: "the baseline should be larger. and large can be achieved on larger screens"). Defined
    once; every size on the bridge screens reads it. Fluid from phones (390) to desktops (1440). */
@@ -44,8 +44,9 @@
   --zb-accent: var(--zb-p-ember);
   --zb-accent-text: var(--zb-p-ember-deep);
   --zb-from: var(--zb-p-ember);
-  --zb-from-ink: var(--zb-p-white);
-  --zb-from-muted: var(--zb-p-tint);
+  /* Text on the orange band is ink: white reaches only 3.2:1 on #eb6834, ink 5.5:1 (owner approved, 2026-10-31). */
+  --zb-from-ink: var(--zb-p-ink);
+  --zb-from-muted: var(--zb-p-ink);
   --zb-to: var(--zb-p-tint);
   --zb-to-ink: var(--zb-p-ink);
   --zb-pill: var(--zb-p-white);
