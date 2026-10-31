@@ -354,7 +354,7 @@ describe("the gas anchor and its 15-minute range (owner, quotes 91-92)", () => {
     for (const level of [1, 2, 3] as const) {
       const range = gasRange({ ...today, level });
       expect(range.highWei).toBe(ceilingWeiOf(today.baseFeeWei, level));
-      expect(range.lowWei * GAS_LEVELS[level].ceilingFactor).toBe(today.baseFeeWei);
+      expect(range.lowWei).toBe(today.baseFeeWei / GAS_LEVELS[level].ceilingFactor);
       expect(range.anchorUsd).toBe(totalCostUsd({ ...today, level }));
       expect(range.lowUsd <= range.anchorUsd && range.anchorUsd <= range.highUsd).toBe(true);
     }

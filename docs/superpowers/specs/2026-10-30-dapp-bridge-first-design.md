@@ -343,6 +343,12 @@ and the time left while in flight or the age once delivered. A row links to the 
   (right). The control shows that range on a track with the anchor marked, e.g. "Anchored at today's gas · could
   land between $0.18 and $0.31 over 15 min". The caps are shown the same way, as ranges: the fee's possible span
   against the automatic cap and the hard cap.
+- **Docs site (owner, 2026-10-31):** docs.zkb.fi redirects (Worker `zkb-fi-docs`, deploy/docs-redirect) to
+  docs-zkb-fi.ipns.inbrowser.link, which resolves `_dnslink.docs.zkb.fi` (the stable release's docs CID) and loads
+  the docs from IPFS in the browser. The docs use the app's patterns, not a separate look: the same header (mark,
+  page name, search pill with ⌘K), the same themes and tokens (System/Light/Dark/Mono, the ember gradient band in
+  dark), the same search sheet (orange band, square close, rows, footer), the page title on the band, rows and
+  groups like Explore, the number rules, chain and token icons, and the same column width. No Chakra look.
 - **The $0.025 proof cost (owner):** it is not a separate on-chain payment and needs no contract change. It is part
   of the overall cost (proof + delivery gas) that every percentage is set against: the default fee (the larger of
   0.1% and 2 × cost), the low-fee line, the tip before gas, and the worst case of a gas-priced fee. A fee signed as a
@@ -570,3 +576,4 @@ don't call it "tip too high", call it "high tip %""
 90. "we can present a slider to them with a recommended tick and a reset to receommended button but they need to be able to control everything"
 91. "yes, go ahead with docs.zkb.fi. when controling the gas setting, the price multiplier as we understand it should not be explained to the user like that. we should tell them that this is an anchor point, but the price could end up being (left) lower over the course of 15 minutes, or higher (right) over the course of 15 mins"
 92. "and then we can also present their caps as ranges"
+93. "ok, well these docs are very bare boned. we need to use a lot of the same patterns here as we did in the app"
