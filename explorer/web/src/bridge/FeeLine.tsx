@@ -197,6 +197,7 @@ const Slider = ({ slider }: { readonly slider: FeeSlider }) => {
   const [help, setHelp] = useState(false);
   const helpId = useId();
   const share = (value: number): number => ((value - slider.min) / (slider.max - slider.min)) * 100;
+  const labelRows = tickRows(slider.ticks.map((tick) => ({ label: tick.label, left: share(tick.at) })));
   return (
     <div className="zb-slider">
       <div className="zb-slider-top">
@@ -224,13 +225,34 @@ const Slider = ({ slider }: { readonly slider: FeeSlider }) => {
         <span className="zb-range-knob" style={{ left: `${share(slider.value)}%` }} />
         <input type="range" aria-label={slider.label} min={slider.min} max={slider.max} step={slider.step} value={slider.value} onChange={(event) => slider.onChange(Number(event.target.value))} />
       </div>
-      <div className="zb-ticks">
-        {slider.ticks.map((tick) => (
-          <span key={tick.label} style={{ left: `${share(tick.at)}%` }}>
+      <div className="zb-ticks" style={{ height: `${1.3 * (Math.max(0, ...labelRows.map((tick) => tick.row)) + 1) + 0.4}em` }}>
+        {labelRows.map((tick) => (
+          <span key={tick.label} style={{ left: `${tick.left}%`, top: `${1.3 * tick.row}em` }}>
             {tick.label}
           </span>
         ))}
       </div>
     </div>
   );
+};
+
+/** Labels closer than this share of the track would overlap, so the later one drops to the next row. */
+const TICK_LABEL_GAP = 28;
+
+/**
+ * Places slider tick labels in rows so close ones never draw over each other: each label takes the first row whose last
+ * label is at least {@link TICK_LABEL_GAP} percent to its left.
+ *
+ * @param ticks The labels with their position along the track, in percent.
+ */
+export const tickRows = (ticks: readonly { readonly label: string; readonly left: number }[]): { readonly label: string; readonly left: number; readonly row: number }[] => {
+  const lastInRow: number[] = [];
+  return [...ticks]
+    .sort((a, b) => a.left - b.left)
+    .map((tick) => {
+      const free = lastInRow.findIndex((left) => tick.left - left >= TICK_LABEL_GAP);
+      const row = free === -1 ? lastInRow.length : free;
+      lastInRow[row] = tick.left;
+      return { ...tick, row };
+    });
 };

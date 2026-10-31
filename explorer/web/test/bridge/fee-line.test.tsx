@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { FeeLine, type FeeLineProps } from "../../src/bridge/FeeLine";
+import { FeeLine, tickRows, type FeeLineProps } from "../../src/bridge/FeeLine";
 
 const props = (overrides: Partial<FeeLineProps> = {}): FeeLineProps => ({
   tip: <span>0.0012 ETH</span>,
@@ -95,5 +95,19 @@ describe("the fee line", () => {
     expect(onSave).toHaveBeenCalledOnce();
     rerender(<FeeLine {...props({ sliders: [{ ...cap, save: { saved: true, onSave, label: "0.5% is your default cap" } }] })} />);
     expect(screen.getByRole("button", { name: "0.5% is your default cap" })).toBeDisabled();
+  });
+});
+
+describe("tickRows", () => {
+  it("keeps far-apart labels on one row and drops close ones to the next", () => {
+    expect(tickRows([{ label: "typical", left: 33 }, { label: "break-even", left: 16 }, { label: "high", left: 90 }])).toEqual([
+      { label: "break-even", left: 16, row: 0 },
+      { label: "typical", left: 33, row: 1 },
+      { label: "high", left: 90, row: 0 },
+    ]);
+  });
+
+  it("returns nothing for no ticks", () => {
+    expect(tickRows([])).toEqual([]);
   });
 });

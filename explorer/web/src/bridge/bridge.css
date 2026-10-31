@@ -212,7 +212,7 @@
 .zb-range-fill { position: absolute; left: 0; top: 10px; height: 4px; border-radius: 999px; background: var(--zb-accent); }
 .zb-range-knob { position: absolute; top: 4px; width: 28px; height: 16px; border-radius: 999px; background: var(--zb-ink); transform: translateX(-50%); pointer-events: none; }
 .zb-range-tick { position: absolute; top: 5px; width: 2px; height: 14px; background: var(--zb-ink); pointer-events: none; }
-.zb-ticks { position: relative; height: 30px; font-size: var(--zb-step-micro); color: var(--zb-muted); }
+.zb-ticks { position: relative; min-height: 30px; font-size: var(--zb-step-micro); color: var(--zb-muted); }
 .zb-ticks span { position: absolute; transform: translateX(-50%); text-align: center; line-height: 1.2; white-space: nowrap; }
 .zb-q { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--zb-muted); font-size: var(--zb-step-micro); color: var(--zb-muted); position: relative; }
 .zb-save { width: 24px; height: 24px; border-radius: 4px; color: var(--zb-ink); cursor: pointer; }
