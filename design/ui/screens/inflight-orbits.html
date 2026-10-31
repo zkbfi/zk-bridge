@@ -34,7 +34,7 @@
 <body>
 <div class="col">
   <h1>Every transfer in flight, at once</h1>
-  <p class="lead">One loop joins the two chains: the top lane runs from the chain on the left to the chain on the right, the bottom lane back. Each lane is the four steps of a transfer. Each planet circling a step is one transfer waiting at it. Its colour is its token; a core marks $1,000 or more and a ring $10,000 or more. When a step completes, its dot travels to the next. At rest each step's planets crowd into a tilted orbit, seen in depth. Hover a step to open its orbit; hover a planet (tap on a phone) to stop it and read the transfer.</p>
+  <p class="lead">One loop joins the two chains: the top lane runs from the chain on the left to the chain on the right, the bottom lane back. Each lane is the four steps of a transfer. Each planet circling a step is one transfer waiting at it. Its colour is its token; a core marks $1,000 or more and a ring $10,000 or more. Steps complete in batches, as on chain: a finalized checkpoint moves every transfer sent before it, one proof carries every finalized transfer of its direction, and deliveries come several at a time; each batch glides as a wave. At rest each step's planets crowd into a tilted orbit, seen in depth. Hover a step to open its orbit; hover a planet (tap on a phone) to stop it and read the transfer.</p>
   <div id="tracks"></div>
   <div class="bar"><button id="theme">Light / dark</button><button id="burst">Add a burst of transfers</button><button id="motion">Pause all</button></div>
   <ul class="notes">
@@ -109,8 +109,9 @@ function build() {
   // Hovering near a step opens its orbit so its planets separate.
   svg.addEventListener("pointermove", (e) => {
     const b = svg.getBoundingClientRect(), x = ((e.clientX - b.left) / b.width) * W, y = ((e.clientY - b.top) / b.height) * H;
-    state.forEach((s) => { s.hover = -1; });
     const s = Math.abs(y - YT) < Math.abs(y - YB) ? state[0] : state[1];
+    // Only the lane under the pointer may be open or frozen; the other closes as soon as the pointer leaves it.
+    state.forEach((other) => { other.hover = -1; if (other !== s) other.frozen = -1; });
     let best = -1, d = 70; for (let i = 0; i < 4; i++) { const dd = Math.abs(x - s.lane.x(i)); if (dd < d) { d = dd; best = i; } }
     s.hover = best;
   });
@@ -197,7 +198,7 @@ function draw(s, t, x, y, seen) {
     const body = g.querySelector(".body");
     g.addEventListener("pointerenter", (e) => { s.frozen = t.step; body.setAttribute("fill", "var(--accent)"); showTip(t, e.clientX, e.clientY); });
     g.addEventListener("pointermove", (e) => showTip(t, e.clientX, e.clientY));
-    g.addEventListener("pointerleave", () => { body.setAttribute("fill", `var(${t.colour})`); hideTip(); });
+    g.addEventListener("pointerleave", () => { body.setAttribute("fill", `var(${t.colour})`); s.frozen = -1; hideTip(); });
     g.addEventListener("focus", () => { s.frozen = t.step; const b = g.getBoundingClientRect(); showTip(t, b.right, b.bottom); });
     g.addEventListener("blur", () => { s.frozen = -1; hideTip(); });
     s.layer.append(g); s.dots.set(t.id, g);
@@ -206,20 +207,34 @@ function draw(s, t, x, y, seen) {
   g.setAttribute("transform", `translate(${x.toFixed(1)} ${y.toFixed(1)}) scale(${scale.toFixed(3)})`);
   g.setAttribute("opacity", (t.alpha * (0.62 + 0.38 * (z + 1) / 2)).toFixed(2));   // … and brighter
 }
+// How a bridge really moves: in batches. Finality takes everything sent before a finalized checkpoint at once; one proof
+// posting covers every finalized transfer of its direction; deliveries come several at a time. Each batch starts with a
+// short stagger, so it reads as a wave rather than a jump.
+function move(group, now, step) {
+  group.forEach((t, j) => setTimeout(() => {
+    if (t.leaving) return;
+    if (step > 3) t.leaving = true; else { t.step = step; t.moving = { start: performance.now(), span: 1100 }; }
+  }, j * 60));
+}
+const EVENTS = ["arrive", "arrive", "finalize", "arrive", "prove", "deliver", "arrive", "deliver"];
+let tick = 0;
 function advance() {
   if (paused) return;
   const now = performance.now();
+  tick++;
   for (const s of state) {
-    const waiting = s.items.filter((t) => !t.leaving && !t.moving && s.frozen !== t.step);
-    for (let n = 0; n < 2; n++) {
-      const t = pick(waiting); if (!t || t.moving) continue;
-      if (t.step === 3) t.leaving = true; else { t.step += 1; t.moving = { start: now, span: 1100 }; }
-    }
-    if (Math.random() < 0.7) { const t = transfer(s.dir, 0); t.x = s.lane.x(0) - (s === state[0] ? 30 : -30); t.y = s.lane.y; s.items.push(t); }
+    const at = (i) => s.items.filter((t) => t.step === i && !t.leaving && !t.moving && s.frozen !== i);
+    // Each direction runs its own clock, offset so the two lanes don't move in lockstep.
+    const event = EVENTS[(tick + (s === state[1] ? 3 : 0)) % EVENTS.length];
+    if (event === "finalize") move(at(0).slice(0, Math.max(1, Math.round(at(0).length * rnd(0.6, 1)))), now, 1);
+    if (event === "prove") move(at(1), now, 2);
+    if (event === "deliver") { move(at(3).slice(0, Math.ceil(rnd(2, 6))), now, 4); move(at(2).slice(0, Math.ceil(rnd(3, 8))), now, 3); }
+    const arrivals = event === "arrive" ? Math.round(rnd(1, 3)) : Math.random() < 0.4 ? 1 : 0;
+    for (let k = 0; k < arrivals; k++) { const t = transfer(s.dir, 0); t.x = s.lane.x(0) + (s === state[0] ? -30 : 30); t.y = s.lane.y; s.items.push(t); }
     for (const t of s.items) t.age += 0.05;
   }
 }
-build(); requestAnimationFrame(frame); setInterval(advance, 1600);
+build(); requestAnimationFrame(frame); setInterval(advance, 1400);
 document.getElementById("theme").onclick = () => document.documentElement.classList.toggle("light");
 document.getElementById("burst").onclick = () => { for (const s of state) for (let i = 0; i < 12; i++) { const t = transfer(s.dir, 0); t.x = s.lane.x(0); t.y = s.lane.y; s.items.push(t); } };
 document.getElementById("motion").onclick = (e) => { paused = !paused; e.target.textContent = paused ? "Resume" : "Pause all"; };

@@ -3,9 +3,9 @@ import { defaultBeaconUrls } from "@terminal/config/default-beacon";
 import { beaconUrlsFor } from "../../src/app/beacon-endpoints";
 
 describe("the beacon APIs a chain is read from", () => {
-  it("are the chain's whole default list, valve.city first, when the setting in force is the default", () => {
-    expect(beaconUrlsFor({ beaconUrls: { 943: { value: "https://one.valve.city/beacon/vk_demo/943", source: "default" } } }, 943)).toEqual(defaultBeaconUrls(943));
-    expect(defaultBeaconUrls(943)[1]).toBe("https://rpc-testnet-pulsechain.g4mm4.io/beacon-api");
+  it("are the chain's whole default list when the setting in force is the default", () => {
+    expect(beaconUrlsFor({ beaconUrls: { 943: { value: defaultBeaconUrls(943)[0] as string, source: "default" } } }, 943)).toEqual(defaultBeaconUrls(943));
+    expect(defaultBeaconUrls(943)[1]).toBe("https://one.valve.city/beacon/vk_demo/943");
   });
 
   it("are the one URL the user or the build chose, alone", () => {

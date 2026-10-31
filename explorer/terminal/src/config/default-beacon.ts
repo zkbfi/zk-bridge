@@ -1,7 +1,8 @@
 /**
  * The beacon APIs a chain uses when nothing else names one (not the user or the build). Owner (2026-10-31): "valve.city
- * should be your default", so the valve.city demo beacon route comes first and a public keyless node follows as the
- * fallback. Users can replace them in Settings ("every endpoint is swappable").
+ * should be your default", but valve.city refuses its public demo key on the beacon route ("The beacon surface requires
+ * a non-public key", 403 for every chain), so until a key scoped to zkb.fi exists the public keyless node comes first
+ * and valve.city follows; swap the order back when that key is in place. Users can replace them in Settings.
  *
  * The public nodes, each checked to answer `/eth/v1/beacon/genesis` with its chain's genesis validators root:
  *
@@ -22,13 +23,13 @@ const PUBLIC_BEACON: Readonly<Record<number, string>> = {
 /** The valve.city demo beacon route of a chain. */
 export const valveBeaconUrl = (chainId: number): string => `https://one.valve.city/beacon/vk_demo/${chainId}`
 
-/** Every default beacon API of a chain in the order to try them: valve.city, then the public node. Empty for a chain with no default. */
+/** Every default beacon API of a chain in the order to try them: the public node, then valve.city. Empty for a chain with no default. */
 export function defaultBeaconUrls(chainId: number): readonly string[] {
   if (!DEFAULT_BEACON_CHAIN_IDS.includes(chainId)) return []
-  return [valveBeaconUrl(chainId), PUBLIC_BEACON[chainId] as string]
+  return [PUBLIC_BEACON[chainId] as string, valveBeaconUrl(chainId)]
 }
 
-/** The first default beacon API of a chain (valve.city), or null for a chain with no default. */
+/** The first default beacon API of a chain (the public node), or null for a chain with no default. */
 export function defaultBeaconUrl(chainId: number): string | null {
   return defaultBeaconUrls(chainId)[0] ?? null
 }
