@@ -114,11 +114,17 @@ function build() {
     // The totals live on the chain: hover (or tap) it to read what leaves it and what has arrived today.
     const hit = el("circle", { cx: NODES[k].x, cy: NODES[k].y, r: 30, fill: "transparent", tabindex: 0, style: "cursor:pointer", "aria-label": `${name} totals` });
     const show = (x, y) => {
-      const out = state[k], into = state[1 - k];
-      const live = out.items.filter((t) => !t.leaving), usd = live.reduce((a, t) => a + t.usd, 0);
-      const per = STEPS.map((step, i) => `${step} ${live.filter((t) => t.step === i).length}`).join(" · ");
-      tip.innerHTML = `<img src="${IMG(chain)}" alt="" width="18" height="18" style="vertical-align:-4px;border-radius:50%;margin-right:6px"><b>${name}</b><br><span class="r">Leaving:</span> ${live.length} in flight · ≈ $${fmt(usd)}<br><span class="r">${per}</span><br><span class="r">Arrived today:</span> ${into.delivered}`;
-      tip.style.left = Math.min(innerWidth - 260, x + 14) + "px"; tip.style.top = (y + 14) + "px"; tip.classList.add("on");
+      // Relative to this chain: what leaves it (the lane that starts here) and what is on its way in (the other lane).
+      const out = state[k], into = state[1 - k], ticker = k === 0 ? "ETH" : "PLS";
+      const liveOut = out.items.filter((t) => !t.leaving), liveIn = into.items.filter((t) => !t.leaving);
+      const sum = (xs) => xs.reduce((a, t) => a + t.usd, 0);
+      tip.innerHTML = `<img src="${IMG(chain)}" alt="" width="18" height="18" style="vertical-align:-4px;border-radius:50%;margin-right:6px"><b>${name}</b> <span class="r">${ticker}</span>
+        <table style="border-collapse:collapse;margin-top:6px;font-size:13px;width:100%">
+          <tr class="r"><td></td><td style="text-align:right">in flight</td><td style="text-align:right">value</td><td style="text-align:right">delivered 24 h</td></tr>
+          <tr><td>Out</td><td style="text-align:right">${liveOut.length}</td><td style="text-align:right">$${fmt(sum(liveOut))}</td><td style="text-align:right">${out.delivered}</td></tr>
+          <tr><td>In</td><td style="text-align:right">${liveIn.length}</td><td style="text-align:right">$${fmt(sum(liveIn))}</td><td style="text-align:right">${into.delivered}</td></tr>
+        </table><span class="r">Delivered in the last 24 h: ${out.delivered + into.delivered}</span>`;
+      tip.style.left = Math.min(innerWidth - 300, x + 14) + "px"; tip.style.top = (y + 14) + "px"; tip.classList.add("on");
     };
     hit.addEventListener("pointerenter", (e) => show(e.clientX, e.clientY)); hit.addEventListener("pointermove", (e) => show(e.clientX, e.clientY));
     hit.addEventListener("pointerleave", hideTip); hit.addEventListener("focus", () => { const b = hit.getBoundingClientRect(); show(b.right, b.bottom); }); hit.addEventListener("blur", hideTip);
