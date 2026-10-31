@@ -83,7 +83,7 @@ describe("the confirm dialog", () => {
     renderPage(<TransactionDialog steps={await stepsOf({ allowance: 10n ** 12n, delivery: true })} onClose={() => undefined} />, { onSend });
     const review = await screen.findByTestId("confirm-review");
     expect(within(review).getByText("Ethereum (chain 1)")).toBeInTheDocument();
-    expect(within(review).getByText(/^TokenMediator at 0x/)).toBeInTheDocument();
+    expect(within(review).getByText(/^ERC-20 mediator at 0x/)).toBeInTheDocument();
     expect(within(review).getByText("relayTokensAndCall(address,address,uint256,bytes)")).toBeInTheDocument();
     expect(within(review).getByText("Value sent").nextSibling).toHaveTextContent("0 ETH");
     expect(within(review).getByText("value")).toBeInTheDocument();

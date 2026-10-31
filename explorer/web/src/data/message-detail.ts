@@ -1,4 +1,5 @@
 import type { Address, Hex } from "viem";
+import { messageCostsSchema, type MessageCosts } from "@zk-bridge/shared";
 import type { PairConfig } from "@terminal/model/types";
 import { FEED_STATUSES, type FeedStatus } from "@terminal/model/types";
 import {
@@ -25,6 +26,8 @@ export type DetailTransfer = {
   readonly sourceToken: DetailToken;
   readonly destinationToken: DetailToken;
   readonly recipient: Address;
+  /** The user who sent the tokens on the source chain (the message's own sender is the mediator), or null when the answer does not carry it. */
+  readonly sender: Address | null;
   /** The amount that the mediator locked or burned on the source chain, in base units. */
   readonly value: bigint;
   readonly deliveredValue: bigint | null;
@@ -49,6 +52,8 @@ export type MessageDetail = {
   readonly coveredAt: number | null;
   readonly deliveredAt: number | null;
   readonly destinationTransactionHash: Hex | null;
+  /** The block of the delivery on the destination chain, or null while undelivered or when the answer does not carry it. */
+  readonly deliveredBlockNumber: number | null;
   /** True when the destination call succeeded, false when it failed, null while undelivered. */
   readonly deliverySucceeded: boolean | null;
   readonly executedBy: Address | null;
@@ -58,6 +63,15 @@ export type MessageDetail = {
   readonly transfer: DetailTransfer | null;
   /** The call data of the message, when the answer carries it. */
   readonly data: Hex | null;
+  /** What the send, the delivery and the proof cost (the indexer's `costs`), or null when the answer has none (RPC). */
+  readonly costs: MessageCosts | null;
+};
+
+const costsOf = (value: unknown): MessageCosts | null => {
+  if (value === null || value === undefined) return null;
+  const parsed = messageCostsSchema.safeParse(value);
+  if (!parsed.success) throw new IndexerResponseError("The message's costs have an unknown shape.");
+  return parsed.data;
 };
 
 const tokenOf = (value: unknown, what: string): DetailToken => {
@@ -79,6 +93,7 @@ const transferOf = (value: unknown): DetailTransfer | null => {
     sourceToken: tokenOf(row.sourceToken, "transfer.sourceToken"),
     destinationToken: tokenOf(row.destinationToken, "transfer.destinationToken"),
     recipient: readAddress(row.recipient, "transfer.recipient"),
+    sender: typeof row.sender === "string" ? readAddress(row.sender, "transfer.sender") : null,
     value: readAmount(row.value, "value"),
     deliveredValue: row.deliveredValue === null || row.deliveredValue === undefined ? null : readAmount(row.deliveredValue, "deliveredValue"),
     hasCallback: row.hasCallback === true,
@@ -116,12 +131,14 @@ export const parseMessageDetail = (value: unknown): MessageDetail => {
     deliveredAt: delivered === null ? null : readNullableInteger(delivered.timestamp),
     destinationTransactionHash:
       delivered === null || typeof delivered.transactionHash !== "string" ? null : readHex(delivered.transactionHash, "delivered.transactionHash"),
+    deliveredBlockNumber: delivered === null ? null : readNullableInteger(delivered.blockNumber),
     deliverySucceeded: delivered === null || typeof delivered.success !== "boolean" ? null : delivered.success,
     executedBy: delivered === null || typeof delivered.executedBy !== "string" ? null : readAddress(delivered.executedBy, "delivered.executedBy"),
     callbackFailed: item.callbackFailed === true,
     releaseFailed: item.releaseFailed === true,
     transfer: transferOf(item.transfer),
     data: typeof item.data === "string" ? readHex(item.data, "data") : null,
+    costs: costsOf(item.costs),
   };
 };
 

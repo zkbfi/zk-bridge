@@ -69,13 +69,13 @@ describe("createServices for a live page", () => {
     expect(() => services.chainAccess.flowClient(FIXTURE_PAIR.second.chainId)).not.toThrow();
   });
 
-  it("refuses the flow client of a chain that has no RPC address", () => {
+  it("falls back to the valve.city demo RPC for a chain that has no RPC address, so the flow client works", () => {
     const configuration = readConfiguration({
       VITE_EXPLORER_DATA: "live",
       VITE_EXPLORER_DEPLOYMENT_URL: "https://example.org/deployment.json",
       VITE_EXPLORER_RPC_URL_1: "https://eth.example.org",
     });
     const services = createServices(configuration, FIXTURE_PAIR, { sharedPair: sharedPairForTests({ withRegistryRpcUrl: false }) });
-    expect(() => services.chainAccess.flowClient(FIXTURE_PAIR.second.chainId)).toThrow();
+    expect(() => services.chainAccess.flowClient(FIXTURE_PAIR.second.chainId)).not.toThrow();
   });
 });

@@ -1,9 +1,13 @@
 import { Box, Button, Flex, Text } from "@chakra-ui/react";
+import { useState } from "react";
+import { loadImageServer, saveImageServer } from "../bridge/image-server";
+import { loadFeeCap, saveFeeCap } from "../bridge/fee-cap";
+import { DEFAULT_IMAGE_SERVER } from "../bridge/image-source";
 import { useServices } from "./services";
 import { clearRecent, browserStorage } from "../search/recent-items";
 import type { ThemeChoice } from "../search/search-model";
 import { Modal } from "../ui/Modal";
-import { DataRow, Mono } from "../ui/primitives";
+import { DataRow, Mono, TextInput } from "../ui/primitives";
 
 /** Props of {@link SettingsDialog}. */
 export type SettingsDialogProps = {
@@ -13,7 +17,7 @@ export type SettingsDialogProps = {
   readonly onClose: () => void;
 };
 
-const THEME_LABELS: Readonly<Record<ThemeChoice, string>> = { light: "Light", dark: "Dark", system: "Follow the system" };
+const THEME_LABELS: Readonly<Record<ThemeChoice, string>> = { system: "System", light: "Light", dark: "Dark", mono: "Mono" };
 
 /**
  * Shows only the host of an endpoint. A URL can carry a path that the operator would rather not repeat on screen.
@@ -35,6 +39,10 @@ export const hostOf = (url: string): string => {
  */
 export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose }: SettingsDialogProps) => {
   const { configuration, pair } = useServices();
+  const [images, setImages] = useState(loadImageServer);
+  const [imagesNote, setImagesNote] = useState<string | null>(null);
+  const [cap, setCap] = useState(() => String(loadFeeCap()));
+  const [capNote, setCapNote] = useState<string | null>(null);
   const rpcRows = [pair.first, pair.second].map((chain) => ({ chain, url: configuration.rpcUrls[chain.chainId] }));
   return (
     <Modal title="Settings" onClose={onClose}>
@@ -52,6 +60,7 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose }: Set
             {row.url === undefined ? "not set" : hostOf(row.url)}
           </DataRow>
         ))}
+        <DataRow label="Prices">PulseX pools on PulseChain, through your PulseChain RPC (display only)</DataRow>
         <Text fontSize="xs" color="fg.muted" marginTop="1">
           The page was built with these values. Only the host shows. You can set other URLs on the Connections page.
         </Text>
@@ -66,11 +75,66 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose }: Set
           Theme
         </Text>
         <Flex gap="2" role="group" aria-label="Theme">
-          {(["light", "dark", "system"] as const).map((choice) => (
+          {(["system", "light", "dark", "mono"] as const).map((choice) => (
             <Button key={choice} size="sm" variant={theme === choice ? "solid" : "outline"} aria-pressed={theme === choice} onClick={() => onTheme(choice)}>
               {THEME_LABELS[choice]}
             </Button>
           ))}
+        </Flex>
+      </Box>
+      <Box marginTop="4">
+        <Text fontWeight="medium" marginBottom="1">
+          Token and chain images
+        </Text>
+        <Text fontSize="xs" color="fg.muted" marginBottom="1">
+          Where icons come from when the release does not already carry them. Icons always load as images, never as code.
+        </Text>
+        <TextInput aria-label="Image server" spellCheck={false} autoComplete="off" value={images} onChange={(event) => setImages(event.target.value)} />
+        <Flex gap="2" marginTop="2" alignItems="center">
+          <Button size="sm" onClick={() => setImagesNote(saveImageServer(images) ?? "Saved.")}>
+            Save
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              saveImageServer(null);
+              setImages(DEFAULT_IMAGE_SERVER);
+              setImagesNote("Back to gib.show.");
+            }}
+          >
+            Reset
+          </Button>
+          <Text fontSize="xs" color="fg.muted" aria-live="polite">
+            {imagesNote}
+          </Text>
+        </Flex>
+        <Text fontWeight="medium" marginTop="4" marginBottom="1">
+          Automatic fee cap
+        </Text>
+        <Text fontSize="xs" color="fg.muted" marginBottom="1">
+          The automatic fee is the larger of 0.1% of the amount and twice what delivering and proving it should cost, but never more than this share of the amount. Stored in this browser.
+        </Text>
+        <TextInput aria-label="Automatic fee cap (%)" inputMode="decimal" autoComplete="off" value={cap} onChange={(event) => setCap(event.target.value)} />
+        <Flex gap="2" marginTop="2" alignItems="center">
+          <Button size="sm" aria-label="Save fee cap" onClick={() => setCapNote(saveFeeCap(cap) ?? "Saved.")}>
+            Save
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            aria-label="Reset fee cap"
+            onClick={() => {
+              saveFeeCap(null);
+              setCap(String(loadFeeCap()));
+              setCapNote("Back to 1%.");
+            }}
+          >
+            Reset
+          </Button>
+          <Text fontSize="xs" color="fg.muted" aria-live="polite">
+            {capNote}
+          </Text>
         </Flex>
       </Box>
       <Box marginTop="4">

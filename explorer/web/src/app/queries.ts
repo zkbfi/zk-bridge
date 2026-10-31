@@ -102,6 +102,17 @@ export const useRouterAddresses = (chainId: number | null, router: Address | nul
 };
 
 /** The priority fee that a delivery on a chain pays now, in wei per gas. */
+/** The max fee per gas of a chain now (the gas reserve MAX keeps for the native coin). */
+export const useMaxFee = (chainId: number, options: { readonly enabled: boolean }) => {
+  const { chainAccess } = useServices();
+  return useQuery({
+    queryKey: ["max-fee", chainId],
+    queryFn: async () => (await chainAccess.flowClient(chainId).estimateFeesPerGas()).maxFeePerGas,
+    enabled: options.enabled,
+    refetchInterval: POLL_MILLISECONDS,
+  });
+};
+
 export const usePriorityFee = (chainId: number, options: { readonly enabled: boolean }) => {
   const { chainAccess } = useServices();
   return useQuery({
@@ -109,5 +120,28 @@ export const usePriorityFee = (chainId: number, options: { readonly enabled: boo
     queryFn: async () => (await chainAccess.flowClient(chainId).estimateFeesPerGas()).maxPriorityFeePerGas,
     enabled: options.enabled,
     refetchInterval: POLL_MILLISECONDS,
+  });
+};
+
+/**
+ * The tokens a wallet used or bridged with zkb.fi before, as `<side>:<address>` keys (both the token sent and its
+ * counterpart on the other chain), from the indexer's feed filtered by the address: the same source as the history.
+ */
+export const useUsedTokens = (account: Address | null, pairId: string) => {
+  const { dataSource } = useServices();
+  return useQuery({
+    queryKey: ["used-tokens", pairId, account],
+    enabled: account !== null,
+    queryFn: async (): Promise<ReadonlySet<string>> => {
+      const page = await dataSource.getFeed(pairId, { address: account as Address, kind: "token" }, 200);
+      const keys = new Set<string>();
+      for (const item of page.items) {
+        if (item.token === null) continue;
+        keys.add(`${item.token.side}:${item.token.address.toLowerCase()}`);
+        if (item.token.counterpart !== null) keys.add(`${item.token.side === "first" ? "second" : "first"}:${item.token.counterpart.toLowerCase()}`);
+      }
+      return keys;
+    },
+    staleTime: 60_000,
   });
 };

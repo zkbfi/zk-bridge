@@ -14,7 +14,7 @@ const run = (query: string, client: IndexerClient = indexer) => searchIdentifier
 
 describe("searchIdentifiers", () => {
   it("gives an address result with no read of the indexer", async () => {
-    const client: IndexerClient = { message: vi.fn(), findMessageByTransaction: vi.fn() };
+    const client: IndexerClient = { message: vi.fn(), findMessageByTransaction: vi.fn(), transactionCost: vi.fn() };
     const outcome = await run("0x52908400098527886E0F7030069857D2E4169EE7", client);
     expect(outcome.results.map((result) => [result.kind, result.title])).toEqual([["address", "0x52908400098527886E0F7030069857D2E4169EE7"]]);
     expect(outcome.problem).toBeNull();
@@ -56,12 +56,12 @@ describe("searchIdentifiers", () => {
   });
 
   it("says so when the transaction lookup names a message that the indexer cannot give", async () => {
-    const client: IndexerClient = { message: async () => null, findMessageByTransaction: async () => delivered.id };
+    const client: IndexerClient = { message: async () => null, findMessageByTransaction: async () => delivered.id, transactionCost: async () => null };
     expect((await run(delivered.sourceTransactionHash, client)).problem).toBe("The indexer knows no message with this identifier or transaction hash.");
   });
 
   it("reports a failure with the message of an Error, and with text for any other thrown value", async () => {
-    const failing = (thrown: unknown): IndexerClient => ({ message: async () => { throw thrown; }, findMessageByTransaction: async () => null });
+    const failing = (thrown: unknown): IndexerClient => ({ message: async () => { throw thrown; }, findMessageByTransaction: async () => null, transactionCost: async () => null });
     expect(await run(delivered.id, failing(new Error("boom")))).toEqual({ results: [], problem: "The indexer lookup failed: boom" });
     expect(await run(delivered.id, failing("plain text"))).toEqual({ results: [], problem: "The indexer lookup failed: plain text" });
   });

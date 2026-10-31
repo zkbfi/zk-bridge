@@ -87,3 +87,16 @@ describe("the transaction lookup of the fallback client", () => {
     expect(found).toHaveBeenCalledWith(TRANSACTION);
   });
 });
+
+describe("the transaction cost read of the fallback client", () => {
+  const cost = { chainId: 369, hash: TRANSACTION, block: "40", gasUsed: "100000", effectiveGasPriceWei: "1000000000", costWei: "100000000000000", costUsd: null, nativeUsd: null };
+  it("asks the indexer's GET /api/tx for the lowercase hash and reads the answer", async () => {
+    const { port, request } = portWith({ status: 200, body: cost });
+    expect(await createFallbackIndexerClient(port).transactionCost(369, TRANSACTION.toUpperCase().replace("0X", "0x") as `0x${string}`)).toEqual(cost);
+    expect(request).toHaveBeenCalledWith(`https://indexer.example.org/api/tx/369/${TRANSACTION}`);
+  });
+  it("gives null for 404 and throws for any other status", async () => {
+    expect(await createFallbackIndexerClient(portWith({ status: 404, body: null }).port).transactionCost(369, TRANSACTION)).toBeNull();
+    await expect(createFallbackIndexerClient(portWith({ status: 503, body: null }).port).transactionCost(369, TRANSACTION)).rejects.toThrow(`The indexer answered 503 for /api/tx/369/${TRANSACTION}.`);
+  });
+});

@@ -257,15 +257,23 @@ and the time left while in flight or the age once delivered. A row links to the 
     its WPLS pool with the deepest WPLS side, if that side is worth at least a minimum (say $10k), else "—". Tokens
     bridged by zkb.fi take their origin token's price (zkbWETH → ETH, via WETH from Ethereum on PulseX); Ethereum-side
     tokens likewise use their PulseChain market. Testnets show no prices.
+  - **Bridged tokens and Ethereum costs (owner, short term):** every bridged token is reversed out through the current
+    Omnibridge to its PulseChain copy and priced on PulseX (v1/v2) against USDC/USDT/DAI. ETH transaction costs use
+    WETH from Ethereum on PulseX; a past cost uses the PulseChain block nearest the transaction's timestamp. No
+    Ethereum pool or price feed is read.
   - **Where it runs:** in the browser, reading pool reserves through the user's RPC (swappable, batched, cached ~30 s),
     so the IPFS site needs no price server. The price source is listed in Settings like every other endpoint.
   - **Limits, stated in the UI tooltip:** spot reserves can be pushed around and Omnibridge copies can trade away from
     their originals, so prices are for display only and are never used to compute amounts, tips or fees.
 
 - **Gas levels (owner):** choosing a higher level raises the gas-price ceiling the deliverer may spend (in every tip
-  mode, including the default percentage tip), so the choice always does something.
-- **High-tip warning (owner):** the Bridge pill takes the overridable warning state when the tip is a large share of
-  the amount: above 1% for transfers up to $100, a threshold that scales down to 0.1% at $1,000, and 0.1% above that.
+  mode, including the default percentage tip), so the choice always does something. Normal / High / Highest allow
+  up to 2× / 3× / 5× and are expected to cost 1× / 1.5× / 2.5× (owner: "those multipliers are fine"). The cost they
+  multiply is the full cost of releasing as if this bridge were the only one: $0.025 proof + the destination gas.
+- **Saving the cap (owner):** lowering the cap in the review applies to this bridge only; a small save button (a
+  floppy-disk icon) next to the cap slider makes it the default for people who want that.
+- **High-tip warning (owner):** labelled **"High cap %"** (owner; earlier "High tip %", and not "tip too high"). The Bridge pill takes the
+  overridable warning state when the tip is a large share of the amount: above 1% for transfers up to $100, a threshold that scales down to 0.1% at $1,000, and 0.1% above that.
   Between $100 and $1,000 the threshold is 1% × 100 / amount (a log-linear slide; it works out to a tip of about $1
   across that range). Uses the display price; without a price, the 1% threshold applies. The tip measured is the tip **before gas
   pricing** (owner): the share-of-amount part only, not what the gas level or gas reimbursement adds on top. **Tip and delivery are coupled in the UI**
@@ -280,8 +288,52 @@ and the time left while in flight or the age once delivered. A row links to the 
   anticipated cost. What the dapp sets automatically is capped at **1% of the amount**, and that cap is **adjustable**
   (a setting, also changeable in the review). When the cap binds, the fee stays below 2 × the cost and the low-fee
   warning stays on. **At checkout, always warn when the cap is too large** and let the user adjust it right there in
-  the finalizing drawer (the review sheet). "Too large" (my reading, owner to confirm): the cap is above the high-tip
-  threshold for this amount (1% up to $100, sliding to 0.1% at $1,000).
+  the finalizing drawer (the review sheet). **When the cap warns (owner, superseding my earlier reading "the cap is
+  above the high-tip line", which warned on every default transfer over $100):** the cap only matters when the fee
+  can still move after signing, i.e. a gas-priced fee (base fee × gas level) paid at delivery, up to the limit signed
+  in. Then the review warns when that worst case, the most the signed terms allow, would be a "High cap %". A fee that
+  is fixed at signing has no cap warning; "High cap %" reads the fee itself. **Confirmed (owner, quotes 70–71):** only
+  the gas-based (base fee / gas+) mode can drift. There, "High cap %" warns when the fee recomputed at the expanded
+  cost (the gas level's 2× / 3× / 5× ceiling + the $0.025 proof), limited by the cap, would leave the deliverer more
+  than the high-cap line; the estimated cost being below the expanded cost and the cap being past the line are both
+  necessary, not enough on their own. Percent and fixed modes are known ahead of time: no cap warning, and "High cap
+  %" reads the fee itself.
+- **Default fee curve (owner, superseding "the larger of 0.1% and 2 × cost"):** the default share of the amount
+  slides on a log curve from 1% at $10 to 0.1% at $500: share = 1% × (10 / amount)^(ln 10 / ln 50), 1% below $10,
+  0.1% from $500. The fee is the larger of that curve and 2 × the total cost, then no more than the cap (1%). The
+  curve is in dollars and the same on every chain; where real gas is high (Ethereum, ≈ $105–$1,050 at $0.50 gas) the
+  2 × cost floor holds the fee flat. The total cost is read live, so a higher cost raises the floor on its own; the
+  $0.025 proof cost is a constant that changes in one place. Computed in integer maths with a stated rounding and
+  fixed test vectors.
+- **Small transfers (owner):** when the total cost is more than the share the user is willing to pay (their cap,
+  1% by default, so the line moves when they change the cap), the Bridge pill takes the
+  overridable warning state and tells the user the bridge **may not be delivered in a timely manner**; "High cap %"
+  does not show there (any fee that covers the cost would read as a high share).
+- **The $0.025 proof cost (owner):** it is not a separate on-chain payment and needs no contract change. It is part
+  of the overall cost (proof + delivery gas) that every percentage is set against: the default fee (the larger of
+  0.1% and 2 × cost), the low-fee line, the tip before gas, and the worst case of a gas-priced fee. A fee signed as a
+  share of the amount carries it inside the share.
+
+- **Determinism (owner):** every fee, warning and price is a pure function of its inputs: same inputs, same answer,
+  in any app that uses it. Rules: no clock, randomness or network inside a rule; prices and gas are read **at a named
+  block** and every quote carries that block (the browser may cache, but a quote says what it was read at, never
+  "latest"); money is integers (token base units, wei, and USD as a bigint scaled by 1e18, owner; in JSON as a decimal string) with one stated rounding
+  (down, toward the user) instead of floats and epsilons; ties are broken by a fixed key (pool address) so sorting
+  never depends on input order. Each rule ships with fixed test vectors (inputs → output) that any SDK user can run.
+- **SDK (owner):** the fee rules (cost, default fee, cap, low/high warnings, gas levels), the verdict, the PulseX
+  oracle and the delivery maths move out of `web` into a public package other dapps can embed. It takes its I/O from
+  the caller (a contract reader pinned to a block, the RPC of their choice) and holds no UI. `web` uses it exactly as
+  an outside dapp would. Until it is carved out, new rule code goes in `shared` under these rules so the carve-out is
+  a move, not a rewrite.
+- **Data package (owner):** a layer between the core rules and React that sources the data: fetching a proof from
+  the msgboard, forming and sending the request to the proof queue, and reading from the indexer API or straight
+  from an RPC (the user's choice, with the same fallback the dapp uses). Endpoints are the caller's, swappable like
+  the dapp's Settings; reads name their block so the core rules stay deterministic. Much of it exists in `shared`
+  today (`msgboard`, `prover`, `backend-client`, `rpc`, `connection`) and moves rather than being rewritten.
+- **React package (owner):** after the core SDK, the useful React code moves into a second package on top of it:
+  hooks (fee, verdict, prices at a block, delivery status) and the self-contained components (fee line and drawer,
+  review sheet, token and chain icons). It depends on the core SDK, takes its I/O from the host dapp, and `web` uses
+  it like any other dapp. Theming goes through CSS variables so a host can restyle it.
 
 - **Fee-drawer motion (owner approved):** open ≈ 0.28 s (height 0.2 s ease-out via grid rows; the 3-unit accent deck
   line draws across the top from under the tapped icon; content fades in and settles 4 px, 0.06 s delay); close 0.12 s
@@ -323,6 +375,38 @@ and the time left while in flight or the age once delivered. A row links to the 
   band, Explore and page headers) sits on a neutral round plate, black or white, never directly on orange. The plate
   follows the theme (ink on Ember on black and Mono, white on Ember light), with a 2 px margin around the icon; badges
   keep their own small plate.
+
+## Message page (decided with the owner, mockup explore-message.html)
+
+Every transfer is a message; the message page tells one message's whole story. It is one of Explore's pages (header
+reads Explore). Two kinds: a token transfer and a contract call.
+
+- **Band:** the kind ("Token transfer" or "Contract call") with the route as chain icons on plates, the amount with
+  its token icon (a call shows "Message"), the short message ID with a copy button, and status tags (status word, and
+  the time it took once delivered).
+- **Who and what (transfer):** From and To link to their address pages. A **Token** row names the token once: bold
+  symbol then icon, linking to the token page. **Sent on / Received on** read "label, chain icon (alone, name only in
+  its alt text), link to that chain's transaction" on the left as a fixed grid (label column ~11ch, then the chain
+  icon, then the link icon, so icons line up down the rows); on the right the bold amount and the token icon, no
+  symbol, then a chevron-wide spacer so token icons form one column with the Fee row. **Fee** is one row: "Fee" and the
+  muted USD value (in the chain/link columns) on the left, the bold total and token icon on the right, with a right
+  chevron that opens a drawer (chevron turns down): delivery gas (chain icon), proof generation, tip to the deliverer
+  and a bold Total, each value an amount plus a 14 px token icon. The drawer uses the approved motion (grid rows
+  0fr→1fr 200 ms cubic-bezier(.2,.7,.2,1), close 120 ms ease-in, the 3-unit accent deck line, content fading in after
+  60 ms; none under reduced motion). **Delivered by** links to the address, or "—".
+- **Who and what (call):** From, Calls (the target, by name when it is a deployment contract), Function (signature
+  when the deployment's ABIs know it, else the selector), Arguments (bytes), Gas limit, Delivered by, Payload.
+- **Steps:** the joined step line with a drawer per step: Sent on <chain>, Block final on <chain>, Proof #n posted to
+  <chain>, Delivered on <chain> (or Call reverted / Release failed). The line stays joined through an open drawer. A
+  reverted call stops there: its drawer opens by itself with a red top line and the reason first, and the page offers
+  "Retry with more gas" (disabled until a retry path exists) and "Open the call". A step that is a real transaction
+  shows its cost only in its open drawer, as a "Cost" row: "<native amount> <native symbol> · $<usd>" in the chain the
+  transaction ran on (0.0₃ rule); a proof's row reads "shared · …" since one proof covers many transfers. Testnets
+  have no USD: "—".
+- **The message itself (transfer):** Nonce, Source app and Target app named precisely ("ERC-20 mediator <short
+  address>", linking to the contract page; never "Token mediator"; names come from the deployment's contract map),
+  Gas limit, and the payload collapsed with its decoded meaning ("mint 80 USDC to 0x52…9ee7").
+- **No invented data:** whatever the indexer, deployment or chain does not give shows "—" with the reason on hover.
 
 ## Open questions
 
@@ -402,3 +486,37 @@ noise from one message (a child on the keyboard) is left out.
 49. "this seems temporary: "Sepolia's light client now trusts PulseChain testnet v4 up to slot 11,194,368 (block 25,767,883). Messages sent from PulseChain before that block can be proven on Sepolia." strike it"
 50. "show me the message page. what is the message page"
 51. "for chain and token icons in the burn streak, we need to have a neutral bg such as white or black"
+52. "message looks fine. i think you should add more token icons to the sent, received and maybe break up the fee line into its componenet parts or show a total and allow a drawer to open from a right pointing chevron. token mediator is too broad. in this case, we are dealing with an erc20 mediator"
+53. "so here's the thing: the chain icon, when it stands by itself, does not need the name of the chain after it. at least on mobile. i think removing it for both is better. and i also think that if you do it in this order you will have much better lineup visually:
+Sent on [Chain_icon] [link]       [amount][symbol][token_icon]"
+54. "i also wonder if you can add a "token" row so that you do not have to keep repeating the symbol. you can just do this, where the link is right aligned to a fixed width, grouping everything on the left side
+Token                            [symbol][icon]
+Sent on    [chain_icon][link]    [amount][icon]
+the fees drawer can also then use the icon instead of the symbol.
+and items in the stes that are actual transactions, we can note the eth/native transaction costs, not just the gas, and we should also look up the usd cost, if we are not already keeping the data in the indexers"
+55. "you can remove the cost from the collapsed view. it should only show in the expanded views"
+56. "are there situations where a high gas cap is always warning? we do not want to drive people away from giving us tips.
+q3) network base fee? no, we are calculating the full fee of releaseing as if this bridge is the only bridge: so 0.025+any base fee costs - yeah, those multipliers are fine
+q4) we can put a little save button (floppy icon) next to the slider for people who want to save it
+q5) for all bridged tokens, for the short term, we need to a) reverse out the tokens, back through the current omnibridge. that way we can trace on pulsex (v1/2) what they actually cost in usdc/usdt/dai"
+57. "make sure that each piece is deterministic. we are also going to want to bundle a lot of this code into an sdk so that other people can integrate into their own dapps"
+58. "sorry, why would a bridge over $100 warn at the default?
+don't call it "tip too high", call it "high tip %""
+59. "oh, so the cap only makes sense to warn about if it can shift, as in if the setting is to use the base fee/gas multiplier"
+60. "lets also integrate the 0.025 fixed cost that we have for all bridges"
+61. "well, no it should just be computed as part of the overall cost that we adjust the percentages against"
+62. ""high tip %" -> "high cap %""
+63. "great, then show me the total costs in the table"
+64. "can we spread out the slope from $10->$100? otherwise everyone pays the same amount there"
+65. "maybe stretch it to $500? make it a log curve"
+66. "or some other multiple"
+67. "these numbers seem fine. and if the total cost ends up being closer to 0.125, then the system will simply adjust to that?"
+68. "when the cost is more than 1% of the amount, then we should be informing the user that their bridge may not be delivered in a timely manner"
+69. "rather, i should say, if the cost is higher than the percent that the user is willing to pay for it. because that is the real line"
+70. "if the estimated cost is less than the expanded (2/3/5x) and the cap is further than the high, then yes, you can warn the "high cap %""
+71. "yes, but this is only relevant for basefee/gas+ mode. in percent mode, and fixed, the values are known ahead of time. gas based mode can drift"
+72. "build it the best you think it should work. the way that is clearest to the end user"
+73. "ok, when you are done, pull out useful code into a react package as well"
+74. "i guess another layer of the package is simply sourcing the data. going to the msgboard to get the proof, forming the request to the proof queue, getting data from the indexer or the rpc"
+75. "the indexer also needs to serve the per-tx costs"
+76. "use bigints as 1e18"

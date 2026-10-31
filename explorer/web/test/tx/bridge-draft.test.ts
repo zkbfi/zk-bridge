@@ -260,4 +260,11 @@ describe("the notice of the default tip", () => {
   it("has no notice when the tip is off", async () => {
     expect(computeBridgeDraft(values(), options({ mode: "none" }), await data()).tipNotice).toBeNull();
   });
+  it("limits a gas-based tip to the automatic cap's share of the amount when the screen passes one", async () => {
+    const free = computeBridgeDraft(values(), options({ mode: "gas-multiplier", senderPriceText: "3000" }), await data());
+    // 100 USDC at a 0.001% cap: at most 0.001 USDC (1,000 base units).
+    const capped = computeBridgeDraft(values(), options({ mode: "gas-multiplier", senderPriceText: "3000", gasCapRate: 10n ** 13n }), await data());
+    expect(free.delivery!.director.limit).toBeGreaterThan(1_000n);
+    expect(capped.delivery!.director.limit).toBe(1_000n);
+  });
 });

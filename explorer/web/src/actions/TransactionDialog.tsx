@@ -1,4 +1,5 @@
 import { Box, Button, Flex, Stack, Text } from "@chakra-ui/react";
+import { useEffect, type ReactNode } from "react";
 import { useRouterAddresses } from "../app/queries";
 import { buildConfirmView, type ConfirmLine, type ConfirmView } from "../tx/confirm-model";
 import type { WebStep } from "../tx/bridge-steps";
@@ -7,11 +8,20 @@ import { formatUnits, shortenHex } from "../ui/format";
 import { Modal } from "../ui/Modal";
 import { DataRow, Mono, Notice } from "../ui/primitives";
 import { useTransactionSequence } from "./use-transaction-sequence";
+import { Sheet } from "../bridge/Sheet";
+import { StepList } from "../bridge/StepList";
 
 /** Props of {@link TransactionDialog}. */
 export type TransactionDialogProps = {
   readonly steps: readonly WebStep[];
   readonly onClose: () => void;
+  /**
+   * `sheet`: the bridge screen's look (a square panel from the bottom edge on phones, a centred modal on desktop, pill
+   * buttons, the transactions as a joined step list). `modal` (default): the explorer's dialog.
+   */
+  readonly variant?: "modal" | "sheet";
+  /** Called once with the hash of the last transaction when every step is confirmed (the bridge records it as pending). */
+  readonly onFinished?: (lastHash: string) => void;
 };
 
 const LineList = ({ title, lines }: { readonly title: string; readonly lines: readonly ConfirmLine[] }) => (
@@ -176,9 +186,14 @@ const Review = ({ view, prepared, position }: ReviewProps) => {
  *
  * @param props The planned transactions and the close handler.
  */
-export const TransactionDialog = ({ steps, onClose }: TransactionDialogProps) => {
+export const TransactionDialog = ({ steps, onClose, variant = "modal", onFinished }: TransactionDialogProps) => {
   const { state, sequence } = useTransactionSequence(steps);
   const step = state.steps[state.stepIndex];
+  const finishedHash = state.phase === "finished" ? (state.outcomes.at(-1)?.transactionHash ?? null) : null;
+  useEffect(() => {
+    if (finishedHash !== null) onFinished?.(finishedHash);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [finishedHash]);
   const delivery = step?.disclosure.delivery ?? null;
   const routerAddresses = useRouterAddresses(step?.disclosure.destinationChainId ?? null, delivery?.router ?? null, { enabled: delivery !== null });
   const view = step === undefined ? null : buildConfirmView(step, routerAddresses.data);
@@ -190,7 +205,18 @@ export const TransactionDialog = ({ steps, onClose }: TransactionDialogProps) =>
   const position = state.steps.length > 1 ? `Step ${Math.min(state.stepIndex + 1, state.steps.length)} of ${state.steps.length}` : null;
 
   return (
-    <Modal title="Review before you sign" width="46rem" onClose={onClose}>
+    <Frame variant={variant} onClose={onClose}>
+      {variant === "sheet" ? (
+        <div style={{ marginBottom: 12 }}>
+          <StepList
+            steps={steps.map((planned, index) => ({
+              label: planned.plan.title,
+              ...(index < state.outcomes.length ? { at: state.outcomes[index]!.status } : index === state.stepIndex ? { at: state.phase === "wallet" ? "in your wallet" : state.phase === "confirming" ? "confirming" : "" } : { estimate: "next" }),
+            }))}
+            current={state.phase === "finished" ? steps.length : state.stepIndex}
+          />
+        </div>
+      ) : null}
       <Box aria-live="polite">
         {state.phase === "preparing" ? <Text>Preparing the transaction: estimating gas and fees…</Text> : null}
         {state.phase === "wallet" ? <Notice tone="info">Confirm in your wallet. With a hardware wallet, read the screen of the device too.</Notice> : null}
@@ -244,6 +270,20 @@ export const TransactionDialog = ({ steps, onClose }: TransactionDialogProps) =>
           </Button>
         ) : null}
       </Flex>
-    </Modal>
+    </Frame>
   );
 };
+
+/** The container: the explorer's modal, or the bridge screen's sheet. */
+const Frame = ({ variant, onClose, children }: { readonly variant: "modal" | "sheet"; readonly onClose: () => void; readonly children: ReactNode }) =>
+  variant === "sheet" ? (
+    <Sheet label="Review before you sign" onClose={onClose}>
+      <div className="zb-col zb-sign" style={{ paddingBottom: 18 }}>
+        {children}
+      </div>
+    </Sheet>
+  ) : (
+    <Modal title="Review before you sign" width="46rem" onClose={onClose}>
+      {children}
+    </Modal>
+  );

@@ -3,6 +3,7 @@
  * indexer needs no new route. Every call may reject; the views show the error and keep the last good data.
  */
 import type { Hex } from "viem";
+import { costViewSchema, type CostView } from "@zk-bridge/shared";
 import { IndexerResponseError, readArray, readRecord } from "./json";
 import { parseMessageDetail, type MessageDetail } from "./message-detail";
 
@@ -12,7 +13,20 @@ export interface IndexerClient {
   message(messageId: Hex): Promise<MessageDetail | null>;
   /** The identifier of the message whose send or delivery has this transaction hash, or null. */
   findMessageByTransaction(transactionHash: Hex): Promise<Hex | null>;
+  /** What one stored transaction cost (`GET /api/tx/:chainId/:hash`), or null when the indexer does not store it. */
+  transactionCost(chainId: number, transactionHash: Hex): Promise<CostView | null>;
 }
+
+/**
+ * Reads an answer of `GET /api/tx/:chainId/:hash`.
+ *
+ * @throws IndexerResponseError when it has the wrong shape.
+ */
+export const parseTransactionCost = (value: unknown): CostView => {
+  const parsed = costViewSchema.safeParse(value);
+  if (!parsed.success) throw new IndexerResponseError("The transaction cost has an unknown shape.");
+  return parsed.data;
+};
 
 /** Gets JSON. A test passes a fake. A 404 answer resolves to `notFound`. */
 export type JsonRequester = (url: string, init?: { readonly body?: string }) => Promise<unknown | typeof NOT_FOUND>;
@@ -62,6 +76,10 @@ export const createIndexerClient = (input: IndexerClientInput): IndexerClient =>
       const first = items[0];
       return first === undefined ? null : (readRecord(first, "item").messageId as Hex);
     },
+    async transactionCost(chainId, transactionHash) {
+      const answer = await request(`${base}/api/tx/${chainId}/${transactionHash.toLowerCase()}`);
+      return answer === NOT_FOUND ? null : parseTransactionCost(answer);
+    },
   };
 };
 
@@ -97,5 +115,14 @@ export const createFallbackIndexerClient = (runtime: FallbackConnectionPort): In
       viaIndexer: () => createIndexerClient({ baseUrl: connection.baseUrl }).findMessageByTransaction(transactionHash),
       viaRpc: () => connection.rpc.findMessageByTransaction(transactionHash),
     });
+  },
+  async transactionCost(chainId, transactionHash) {
+    // Only the indexer stores costs; the RPC source reads no receipts.
+    const connection = runtime.connection();
+    const path = `/api/tx/${chainId}/${transactionHash.toLowerCase()}`;
+    const response = await connection.request(`${connection.baseUrl}${path}`);
+    if (response.status === 404) return null;
+    if (response.status !== 200) throw new IndexerResponseError(`The indexer answered ${response.status} for ${path}.`);
+    return parseTransactionCost(response.body);
   },
 });

@@ -78,3 +78,35 @@ describe("the fixture indexer client", () => {
     expect((await createFixtureIndexerClient({ pair: other }).message(item.id))!.sourceChainId).toBe(777);
   });
 });
+
+describe("the fixture's sample costs", () => {
+  it("price the send and the delivery at the sample coins, and a covered message's proof as shared by three", async () => {
+    const item = itemWith((candidate) => candidate.direction === "first-to-second" && candidate.kind === "token" && candidate.status === "delivered");
+    const costs = (await client.message(item.id))!.costs!;
+    // 120,000 gas × 7 gwei = 0.00084 ETH at $3,000.
+    expect(costs.sent).toMatchObject({ chainId: 1, hash: item.sourceTransactionHash, costWei: "840000000000000", costUsd: "2520000000000000000", nativeUsd: { source: "pulsex-weth-copy", priceBlock: "0" } });
+    expect(costs.delivered).toMatchObject({ chainId: 369, hash: item.destinationTransactionHash, nativeUsd: { source: "pulsex-pls-usd" } });
+    expect(costs.proof?.coveredMessages).toBe(3);
+  });
+
+  it("have no delivery or proof before they happen", async () => {
+    const item = itemWith((candidate) => candidate.status === "sent");
+    expect((await client.message(item.id))!.costs).toMatchObject({ delivered: null, proof: null });
+  });
+
+  it("have no dollars on a chain without a sample price", async () => {
+    const other = { ...FIXTURE_PAIR, first: { ...FIXTURE_PAIR.first, chainId: 11155111 } };
+    const item = itemWith((candidate) => candidate.direction === "first-to-second" && candidate.status === "delivered");
+    expect((await createFixtureIndexerClient({ pair: other }).message(item.id))!.costs!.sent).toMatchObject({ chainId: 11155111, costUsd: null, nativeUsd: null });
+  });
+
+  it("serve a send's or a delivery's cost by chain and hash, and nothing for other transactions", async () => {
+    const item = itemWith((candidate) => candidate.direction === "first-to-second" && candidate.status === "delivered");
+    expect((await client.transactionCost(1, item.sourceTransactionHash))?.hash).toBe(item.sourceTransactionHash);
+    expect((await client.transactionCost(369, item.destinationTransactionHash!))?.hash).toBe(item.destinationTransactionHash);
+    expect(await client.transactionCost(369, item.sourceTransactionHash)).toBeNull();
+    expect(await client.transactionCost(1, `0x${"ee".repeat(32)}`)).toBeNull();
+    const undelivered = itemWith((candidate) => candidate.status === "sent");
+    expect((await client.transactionCost(undelivered.direction === "first-to-second" ? 1 : 369, undelivered.sourceTransactionHash))?.hash).toBe(undelivered.sourceTransactionHash);
+  });
+});

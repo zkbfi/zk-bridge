@@ -3,14 +3,59 @@
  * works. Parsing and formatting are pure and tested together: every route survives a round trip.
  */
 import { DEFAULT_MAXIMUM_BLOCKS, type HistoryFilters } from "@zk-bridge/shared";
-import { FEED_STATUSES } from "@terminal/model/types";
+import { FEED_STATUSES, type Direction } from "@terminal/model/types";
 import { getAddress, isAddress, type Address, type Hex } from "viem";
 import { formatHistoryQuery, historyFiltersFromQuery } from "../views/history-model";
+
+/** The kinds of Explore page. `browse` lists one kind (its id names it). */
+export const EXPLORE_KINDS = ["tx", "address", "proof", "block", "slot", "token", "contract", "gate", "release", "costs", "browse"] as const;
+
+/**
+ * One Explore page. `chainId` is set for what lives on one chain (a transaction, a proof, a block, a contract, a gate);
+ * `id` is the hash, address, number, `<side>:<address>` (token), CID (release) or the kind to browse.
+ */
+export type ExplorePage = { readonly kind: (typeof EXPLORE_KINDS)[number]; readonly id: string; readonly chainId?: number };
+
+const ON_CHAIN: ReadonlySet<ExplorePage["kind"]> = new Set(["tx", "proof", "block", "contract", "gate"]);
+
+const explorePageOf = (parts: readonly string[]): ExplorePage | null => {
+  const [kind, first, second] = parts;
+  if (!(EXPLORE_KINDS as readonly string[]).includes(kind ?? "")) return null;
+  const known = kind as ExplorePage["kind"];
+  if (known === "costs") return first === undefined ? { kind: known, id: "" } : null;
+  if (known === "gate") return first !== undefined && /^\d+$/.test(first) ? { kind: known, chainId: Number(first), id: first } : null;
+  if (ON_CHAIN.has(known)) {
+    if (first === undefined || second === undefined || !/^\d+$/.test(first)) return null;
+    const valid = known === "tx" ? /^0x[0-9a-fA-F]{64}$/.test(second) : known === "contract" ? /^0x[0-9a-fA-F]{40}$/.test(second) : /^\d+$/.test(second);
+    return valid ? { kind: known, chainId: Number(first), id: second } : null;
+  }
+  if (first === undefined) return null;
+  if (known === "token") return (first === "first" || first === "second") && second !== undefined && /^0x[0-9a-fA-F]{40}$/.test(second) ? { kind: known, id: `${first}:${second}` } : null;
+  if (known === "address") return /^0x[0-9a-fA-F]{40}$/.test(first) ? { kind: known, id: first } : null;
+  if (known === "slot") return /^\d+$/.test(first) ? { kind: known, id: first } : null;
+  if (known === "release") return /^[A-Za-z0-9]{10,}$/.test(first) ? { kind: known, id: first } : null;
+  return /^[a-z-]+$/.test(first) ? { kind: known, id: first } : null;
+};
+
+const formatExplore = (route: Extract<Route, { name: "explore" }>): string => {
+  if (route.page === undefined) return route.q === undefined || route.q === "" ? "#/explore" : `#/explore?${new URLSearchParams({ q: route.q }).toString()}`;
+  const { kind, id, chainId } = route.page;
+  if (kind === "costs") return "#/explore/costs";
+  if (kind === "gate") return `#/explore/gate/${chainId ?? id}`;
+  if (kind === "token") return `#/explore/token/${id.replace(":", "/")}`;
+  if (chainId !== undefined && ON_CHAIN.has(kind)) return `#/explore/${kind}/${chainId}/${id}`;
+  return `#/explore/${kind}/${encodeURIComponent(id)}`;
+};
 
 /** The place that the page shows. */
 export type Route =
   /** No hash, or one the page does not know. The page shows the default pair in its place (see {@link resolveHome}). */
   | { readonly name: "home" }
+  /** The bridge screen (home): the pair, the direction, and the form fields that differ from the defaults. */
+  | { readonly name: "bridge"; readonly pairId: string; readonly dir: Direction; readonly form?: BridgeQuery }
+  | { readonly name: "activity" }
+  /** Explore: the top (with a search in `q`), or one page of it. */
+  | { readonly name: "explore"; readonly q?: string; readonly page?: ExplorePage }
   /** The table of every pair, at `#/pairs`. It is never the landing page. */
   | { readonly name: "global" }
   | { readonly name: "pair"; readonly pairId: string; readonly token: Address | null; readonly view?: PairViewQuery }
@@ -45,13 +90,24 @@ export const PAIR_PAGE_SIZE = 50;
 const MAXIMUM_ROWS = 1000;
 
 /**
- * Opens the default pair in place of the home route, so loading the page lands in a pair, never on a chooser.
+ * Opens the bridge on the default pair, sending from its first chain, in place of the home route, so loading the page
+ * lands on the bridge, never on a chooser.
  *
  * @param route The parsed route.
  * @param defaultPairId The pair that this page was built for.
  */
 export const resolveHome = (route: Route, defaultPairId: string): Route =>
-  route.name === "home" ? { name: "pair", pairId: defaultPairId, token: null } : route;
+  route.name === "home" ? { name: "bridge", pairId: defaultPairId, dir: "first-to-second" } : route;
+
+/**
+ * A bridge route for a pair this build does not have moves to the build's pair; `unknown` names the pair asked for, so
+ * the page can say so instead of showing another pair under the wrong address.
+ *
+ * @param route The route read from the address.
+ * @param pairId The pair this build serves.
+ */
+export const resolvePair = (route: Route, pairId: string): { readonly route: Route; readonly unknown: string | null } =>
+  route.name === "bridge" && route.pairId !== pairId ? { route: { ...route, pairId }, unknown: route.pairId } : { route, unknown: null };
 
 const MESSAGE_IDENTIFIER = /^0x[0-9a-fA-F]{64}$/;
 
@@ -67,6 +123,23 @@ export const parseRoute = (hash: string): Route => {
   const [head, first, second] = parts;
   if (head === undefined) return HOME_ROUTE;
   if (head === "pairs") return { name: "global" };
+  if (head === "activity") return { name: "activity" };
+  if (head === "explore") {
+    const page = explorePageOf(parts.slice(1));
+    if (page !== null) return { name: "explore", page };
+    const q = new URLSearchParams(query).get("q");
+    return q === null || q.trim() === "" ? { name: "explore" } : { name: "explore", q };
+  }
+  if (head === "bridge" && first !== undefined) {
+    const params = new URLSearchParams(query);
+    const form = bridgeOf(params);
+    return {
+      name: "bridge",
+      pairId: first,
+      dir: oneOf(DIRECTIONS, params.get("dir")) ?? "first-to-second",
+      ...(Object.keys(form).length === 0 ? {} : { form }),
+    };
+  }
   if (head === "pair" && first !== undefined) {
     const params = new URLSearchParams(query);
     const token = params.get("token");
@@ -101,6 +174,15 @@ export const parseRoute = (hash: string): Route => {
 export const formatRoute = (route: Route): string => {
   if (route.name === "home") return "#/";
   if (route.name === "global") return "#/pairs";
+  if (route.name === "activity") return "#/activity";
+  if (route.name === "explore") return formatExplore(route);
+  if (route.name === "bridge") {
+    const params = new URLSearchParams();
+    if (route.dir !== "first-to-second") params.set("dir", route.dir);
+    if (route.form !== undefined) writeBridge(params, route.form);
+    const query = params.toString();
+    return `#/bridge/${encodeURIComponent(route.pairId)}${query === "" ? "" : `?${query}`}`;
+  }
   if (route.name === "audit") return "#/audit";
   if (route.name === "prover") return "#/prover";
   if (route.name === "settings") return "#/settings";
@@ -127,7 +209,10 @@ export const formatRoute = (route: Route): string => {
 /** The name of the view of a route, for the title of the page and for the active mark in the palette. */
 export const routeTitle = (route: Route): string => {
   const titles: Record<Route["name"], string> = {
-    home: "Pair view",
+    home: "Bridge",
+    bridge: "Bridge",
+    activity: "Activity",
+    explore: "Explore",
     global: "Global view",
     pair: "Pair view",
     audit: "Audit",
@@ -216,6 +301,8 @@ export type TipQuery = {
   readonly marginPercentText?: string;
   readonly gasMultiplierText?: string;
   readonly ceilingGweiText?: string;
+  /** The cap on the automatic fee, in percent of the amount; absent takes the one in Settings. */
+  readonly capPercentText?: string;
   readonly senderPriceText?: string;
   readonly routerText?: string;
   readonly payoutNative?: true;
@@ -252,7 +339,7 @@ export const NO_OVERLAY: Overlay = Object.freeze({ dialog: null, bridge: Object.
 const MAXIMUM_DATA_DIGITS = 24_000;
 const TOKEN_CHOICE = /^(first|second):(native|0x[0-9a-fA-F]{40})$/;
 const BRIDGE_KEYS = ["token", "amount", "receiver", "mode", "data", "gas", "callTarget", "callData"] as const;
-const TIP_KEYS = ["mode", "percent", "fixed", "margin", "gas", "ceiling", "price", "router", "native"] as const;
+const TIP_KEYS = ["mode", "percent", "fixed", "margin", "gas", "ceiling", "cap", "price", "router", "native"] as const;
 const MESSAGE_KEYS = ["from", "target", "data", "gas"] as const;
 
 /** Whether a query parameter belongs to the overlay rather than to the route. */
@@ -267,6 +354,7 @@ const tipOf = (params: URLSearchParams): TipQuery => {
     ...optional("marginPercentText", decimalText(get("margin"))),
     ...optional("gasMultiplierText", decimalText(get("gas"))),
     ...optional("ceilingGweiText", decimalText(get("ceiling"))),
+    ...optional("capPercentText", decimalText(get("cap"))),
     ...optional("senderPriceText", decimalText(get("price"))),
     ...optional("routerText", hexText(get("router"), 40)),
     ...(get("native") === "1" ? { payoutNative: true as const } : {}),
@@ -279,7 +367,8 @@ const bridgeOf = (params: URLSearchParams): BridgeQuery => {
   const tip = tipOf(params);
   return {
     ...optional("token", token !== null && TOKEN_CHOICE.test(token) ? token : undefined),
-    ...optional("amount", decimalText(get("amount"))),
+    // A bare `amount` is read too: people type it by hand (the owner did).
+    ...optional("amount", decimalText(get("amount") ?? params.get("amount"))),
     ...optional("receiver", hexText(get("receiver"), 40)),
     ...optional("mode", oneOf(["plain", "call"] as const, get("mode"))),
     ...optional("data", hexText(get("data"), MAXIMUM_DATA_DIGITS)),
@@ -317,37 +406,41 @@ export const parseOverlay = (hash: string): Overlay => {
   };
 };
 
+/** Writes the bridge and wrap form's fields that differ from the defaults (`bridge.*`, `tip.*`). */
+const writeBridge = (params: URLSearchParams, bridge: BridgeQuery): void => {
+  const { token, amount, receiver, mode, data, gasLimit, callTarget, callData, tip } = bridge;
+  const set = (key: (typeof BRIDGE_KEYS)[number], value: string | undefined): void => {
+    if (value !== undefined) params.set(`bridge.${key}`, value);
+  };
+  set("token", token);
+  set("amount", amount);
+  set("receiver", receiver);
+  set("mode", mode);
+  set("data", data);
+  set("gas", gasLimit);
+  set("callTarget", callTarget);
+  set("callData", callData);
+  if (tip !== undefined) {
+    const setTip = (key: (typeof TIP_KEYS)[number], value: string | undefined): void => {
+      if (value !== undefined) params.set(`tip.${key}`, value);
+    };
+    setTip("mode", tip.mode);
+    setTip("percent", tip.percentText);
+    setTip("fixed", tip.fixedText);
+    setTip("margin", tip.marginPercentText);
+    setTip("gas", tip.gasMultiplierText);
+    setTip("ceiling", tip.ceilingGweiText);
+    setTip("cap", tip.capPercentText);
+    setTip("price", tip.senderPriceText);
+    setTip("router", tip.routerText);
+    setTip("native", tip.payoutNative === true ? "1" : undefined);
+  }
+};
+
 const writeOverlay = (params: URLSearchParams, overlay: Overlay): void => {
   if (overlay.dialog === null) return;
   params.set("dialog", overlay.dialog);
-  if (overlay.dialog === "bridge" || overlay.dialog === "wrap") {
-    const { token, amount, receiver, mode, data, gasLimit, callTarget, callData, tip } = overlay.bridge;
-    const set = (key: (typeof BRIDGE_KEYS)[number], value: string | undefined): void => {
-      if (value !== undefined) params.set(`bridge.${key}`, value);
-    };
-    set("token", token);
-    set("amount", amount);
-    set("receiver", receiver);
-    set("mode", mode);
-    set("data", data);
-    set("gas", gasLimit);
-    set("callTarget", callTarget);
-    set("callData", callData);
-    if (tip !== undefined) {
-      const setTip = (key: (typeof TIP_KEYS)[number], value: string | undefined): void => {
-        if (value !== undefined) params.set(`tip.${key}`, value);
-      };
-      setTip("mode", tip.mode);
-      setTip("percent", tip.percentText);
-      setTip("fixed", tip.fixedText);
-      setTip("margin", tip.marginPercentText);
-      setTip("gas", tip.gasMultiplierText);
-      setTip("ceiling", tip.ceilingGweiText);
-      setTip("price", tip.senderPriceText);
-      setTip("router", tip.routerText);
-      setTip("native", tip.payoutNative === true ? "1" : undefined);
-    }
-  }
+  if (overlay.dialog === "bridge" || overlay.dialog === "wrap") writeBridge(params, overlay.bridge);
   if (overlay.dialog === "message") {
     const { chain, target, data, gas } = overlay.message;
     if (chain !== undefined) params.set("msg.from", chain);
@@ -388,6 +481,16 @@ export const formatLocation = ({ route, overlay }: PageLocation): string => {
  * @param overlay The dialog as the link opened it.
  * @param account The connected account; a receiver equal to it is not flagged.
  */
+/**
+ * The fields of a bridge-screen link that need the user's attention: everything it filled except the route, the token
+ * and the amount, which may prefill silently (security review of the bridge screen).
+ *
+ * @param form The form as the link carried it.
+ * @param account The connected account; a receiver equal to it is not flagged.
+ */
+export const bridgeLinkedFields = (form: BridgeQuery, account: string | null): readonly string[] =>
+  linkedFields({ ...NO_OVERLAY, dialog: "bridge", bridge: form }, account).filter((field) => field !== "token" && field !== "amount");
+
 export const linkedFields = (overlay: Overlay, account: string | null): readonly string[] => {
   // Every field that moves funds, decides where they go, or changes what the sender pays is named; only the user's
   // own account as the receiver is left out.
@@ -409,6 +512,7 @@ export const linkedFields = (overlay: Overlay, account: string | null): readonly
     [tip.marginPercentText, "tip margin"],
     [tip.gasMultiplierText, "tip gas multiplier"],
     [tip.ceilingGweiText, "gas price ceiling"],
+    [tip.capPercentText, "automatic fee cap"],
     [tip.senderPriceText, "sender gas price"],
     [tip.routerText, "relay router"],
     [tip.payoutNative, "tip paid in the native coin"],

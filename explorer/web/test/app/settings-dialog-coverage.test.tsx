@@ -68,7 +68,7 @@ describe("the controls of the settings", () => {
     renderWithWallet(<SettingsDialog theme="dark" onTheme={onTheme} onRecentCleared={() => undefined} onClose={() => undefined} />, { wallet: disconnectedWallet() });
     expect(screen.getByRole("button", { name: "Dark" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Light" })).toHaveAttribute("aria-pressed", "false");
-    await userEvent.click(screen.getByRole("button", { name: "Follow the system" }));
+    await userEvent.click(screen.getByRole("button", { name: "System" }));
     expect(onTheme).toHaveBeenCalledWith("system");
   });
 

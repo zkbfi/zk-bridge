@@ -1,0 +1,1224 @@
+{
+  "about": "Fixed test vectors for the zkb.fi fee rules (explorer/shared/src/fee-rules.ts). Every number is an integer written as a decimal string: token amounts in base units, gas prices in wei, money in USD scaled by 1e18 like wei (1 USD = 1000000000000000000), shares of the amount scaled by 1e18 (1% = 10000000000000000), prices as USD per whole token scaled by 1e18. null means 'no price'. Each list holds { input, output } pairs for the function of the same name; an SDK must give exactly these outputs.",
+  "rounding": "One rule: every division rounds down (truncates), toward the user. Thresholds are compared exactly by cross-multiplying, never rounded. The default curve's power is computed as 1% x exp(-ln(amount/10) x ln10/ln50) in 1e36 fixed point (ln by halving plus the atanh series, exp by ln2 range reduction plus the Taylor series, each term truncated, stopping at the first zero term), then truncated to 1e18.",
+  "constants": {
+    "PROOF_COST_USD": "25000000000000000",
+    "COST_MARGIN": "2",
+    "DEFAULT_CAP_WAD": "10000000000000000",
+    "NO_PRICE_SHARE_WAD": "1000000000000000",
+    "GAS_LEVELS": {
+      "1": {
+        "ceilingFactor": "2",
+        "expectedHalves": "2"
+      },
+      "2": {
+        "ceilingFactor": "3",
+        "expectedHalves": "3"
+      },
+      "3": {
+        "ceilingFactor": "5",
+        "expectedHalves": "5"
+      }
+    }
+  },
+  "usdOf": [
+    {
+      "input": {
+        "units": "1500000",
+        "decimals": 6,
+        "priceE18": "1000000000000000000"
+      },
+      "output": "1500000000000000000"
+    },
+    {
+      "input": {
+        "units": "1000000000000000000",
+        "decimals": 18,
+        "priceE18": "56200000000000"
+      },
+      "output": "56200000000000"
+    },
+    {
+      "input": {
+        "units": "123456789000000000000",
+        "decimals": 18,
+        "priceE18": "2243000000000000000000"
+      },
+      "output": "276913577727000000000000"
+    },
+    {
+      "input": {
+        "units": "1",
+        "decimals": 18,
+        "priceE18": "1000000000000000000"
+      },
+      "output": "1"
+    }
+  ],
+  "totalCostUsd": [
+    {
+      "input": {
+        "gasUsed": "1000000",
+        "baseFeeWei": "1000000000",
+        "priorityFeeWei": "0",
+        "nativePriceE18": "1000000000000000000000",
+        "level": 1
+      },
+      "output": "1025000000000000000"
+    },
+    {
+      "input": {
+        "gasUsed": "1000000",
+        "baseFeeWei": "1000000000",
+        "priorityFeeWei": "0",
+        "nativePriceE18": "1000000000000000000000",
+        "level": 2
+      },
+      "output": "1525000000000000000"
+    },
+    {
+      "input": {
+        "gasUsed": "1000000",
+        "baseFeeWei": "1000000000",
+        "priorityFeeWei": "0",
+        "nativePriceE18": "1000000000000000000000",
+        "level": 3
+      },
+      "output": "2525000000000000000"
+    },
+    {
+      "input": {
+        "gasUsed": "250000",
+        "baseFeeWei": "1200000000000000",
+        "priorityFeeWei": "10000000000000",
+        "nativePriceE18": "56200000000000",
+        "level": 1
+      },
+      "output": "42000500000000000"
+    },
+    {
+      "input": {
+        "gasUsed": "250000",
+        "baseFeeWei": "1200000000000000",
+        "priorityFeeWei": "10000000000000",
+        "nativePriceE18": "56200000000000",
+        "level": 3
+      },
+      "output": "67290500000000000"
+    },
+    {
+      "input": {
+        "gasUsed": "180000",
+        "baseFeeWei": "700000000",
+        "priorityFeeWei": "1000000",
+        "nativePriceE18": "3300000000000000000000",
+        "level": 2
+      },
+      "output": "649294000000000000"
+    }
+  ],
+  "ceilingWeiOf": [
+    {
+      "input": {
+        "baseFeeWei": "10000000000",
+        "level": 1
+      },
+      "output": "20000000000"
+    },
+    {
+      "input": {
+        "baseFeeWei": "10000000000",
+        "level": 2
+      },
+      "output": "30000000000"
+    },
+    {
+      "input": {
+        "baseFeeWei": "10000000000",
+        "level": 3
+      },
+      "output": "50000000000"
+    },
+    {
+      "input": {
+        "baseFeeWei": "7",
+        "level": 2
+      },
+      "output": "21"
+    }
+  ],
+  "gasLevelOfCeiling": [
+    {
+      "input": {
+        "ceilingWei": null,
+        "baseFeeWei": "10"
+      },
+      "output": 1
+    },
+    {
+      "input": {
+        "ceilingWei": "30",
+        "baseFeeWei": null
+      },
+      "output": 1
+    },
+    {
+      "input": {
+        "ceilingWei": "30",
+        "baseFeeWei": "0"
+      },
+      "output": 1
+    },
+    {
+      "input": {
+        "ceilingWei": "20",
+        "baseFeeWei": "10"
+      },
+      "output": 1
+    },
+    {
+      "input": {
+        "ceilingWei": "25",
+        "baseFeeWei": "10"
+      },
+      "output": 1
+    },
+    {
+      "input": {
+        "ceilingWei": "26",
+        "baseFeeWei": "10"
+      },
+      "output": 2
+    },
+    {
+      "input": {
+        "ceilingWei": "30",
+        "baseFeeWei": "10"
+      },
+      "output": 2
+    },
+    {
+      "input": {
+        "ceilingWei": "40",
+        "baseFeeWei": "10"
+      },
+      "output": 2
+    },
+    {
+      "input": {
+        "ceilingWei": "41",
+        "baseFeeWei": "10"
+      },
+      "output": 3
+    },
+    {
+      "input": {
+        "ceilingWei": "49",
+        "baseFeeWei": "11"
+      },
+      "output": 3
+    },
+    {
+      "input": {
+        "ceilingWei": "500",
+        "baseFeeWei": "10"
+      },
+      "output": 3
+    }
+  ],
+  "defaultCurveShareWad": [
+    {
+      "input": {
+        "amountUsd": "1000000000000000000"
+      },
+      "output": "10000000000000000"
+    },
+    {
+      "input": {
+        "amountUsd": "10000000000000000000"
+      },
+      "output": "10000000000000000"
+    },
+    {
+      "input": {
+        "amountUsd": "10000000000000000001"
+      },
+      "output": "9999999999999999"
+    },
+    {
+      "input": {
+        "amountUsd": "20000000000000000000"
+      },
+      "output": "6649916312686608"
+    },
+    {
+      "input": {
+        "amountUsd": "25000000000000000000"
+      },
+      "output": "5831438908323935"
+    },
+    {
+      "input": {
+        "amountUsd": "50000000000000000000"
+      },
+      "output": "3877858072289872"
+    },
+    {
+      "input": {
+        "amountUsd": "100000000000000000000"
+      },
+      "output": "2578743165320386"
+    },
+    {
+      "input": {
+        "amountUsd": "123450000000000000000"
+      },
+      "output": "2278018108171648"
+    },
+    {
+      "input": {
+        "amountUsd": "200000000000000000000"
+      },
+      "output": "1714842624129314"
+    },
+    {
+      "input": {
+        "amountUsd": "316227766000000000000"
+      },
+      "output": "1309519997646771"
+    },
+    {
+      "input": {
+        "amountUsd": "499999999999999999999"
+      },
+      "output": "1000000000000000"
+    },
+    {
+      "input": {
+        "amountUsd": "500000000000000000000"
+      },
+      "output": "1000000000000000"
+    },
+    {
+      "input": {
+        "amountUsd": "1000000000000000000000"
+      },
+      "output": "1000000000000000"
+    }
+  ],
+  "defaultFee": [
+    {
+      "input": {
+        "amountUsd": "10000000000000000000",
+        "costUsd": "50000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "10000000000000000",
+        "feeUsd": "100000000000000000"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "20000000000000000000",
+        "costUsd": "50000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "6649916312686608",
+        "feeUsd": "132998326253732160"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "50000000000000000000",
+        "costUsd": "50000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "3877858072289872",
+        "feeUsd": "193892903614493600"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "100000000000000000000",
+        "costUsd": "50000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "2578743165320386",
+        "feeUsd": "257874316532038600"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "200000000000000000000",
+        "costUsd": "50000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "1714842624129314",
+        "feeUsd": "342968524825862800"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "500000000000000000000",
+        "costUsd": "50000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "1000000000000000",
+        "feeUsd": "500000000000000000"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "1000000000000000000000",
+        "costUsd": "50000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "1000000000000000",
+        "feeUsd": "1000000000000000000"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "200000000000000000000",
+        "costUsd": "525000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "cost",
+        "shareWad": "5250000000000000",
+        "feeUsd": "1050000000000000000"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "500000000000000000000",
+        "costUsd": "525000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "cost",
+        "shareWad": "2100000000000000",
+        "feeUsd": "1050000000000000000"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "1000000000000000000000",
+        "costUsd": "525000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "cost",
+        "shareWad": "1050000000000000",
+        "feeUsd": "1050000000000000000"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "2000000000000000000000",
+        "costUsd": "525000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "1000000000000000",
+        "feeUsd": "2000000000000000000"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "25000000000000000000",
+        "costUsd": "125000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "cost",
+        "shareWad": "10000000000000000",
+        "feeUsd": "250000000000000000"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "50000000000000000000",
+        "costUsd": "125000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "cost",
+        "shareWad": "5000000000000000",
+        "feeUsd": "250000000000000000"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "100000000000000000000",
+        "costUsd": "125000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "2578743165320386",
+        "feeUsd": "257874316532038600"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "5000000000000000000",
+        "costUsd": "50000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "cap",
+        "shareWad": "10000000000000000",
+        "feeUsd": "50000000000000000"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "5000000000000000000",
+        "costUsd": "100000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "cap",
+        "shareWad": "10000000000000000",
+        "feeUsd": "50000000000000000"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "25000000000000000000",
+        "costUsd": "125000000000000000",
+        "capWad": "5000000000000000"
+      },
+      "output": {
+        "binding": "cap",
+        "shareWad": "5000000000000000",
+        "feeUsd": "125000000000000000"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "100000000000000000000",
+        "costUsd": "50000000000000000",
+        "capWad": "5000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "2578743165320386",
+        "feeUsd": "257874316532038600"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "100000000000000000000",
+        "costUsd": "50000000000000000",
+        "capWad": "1000000000000000"
+      },
+      "output": {
+        "binding": "cap",
+        "shareWad": "1000000000000000",
+        "feeUsd": "100000000000000000"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "8000000000000000000",
+        "costUsd": "50000000000000000",
+        "capWad": "5000000000000000"
+      },
+      "output": {
+        "binding": "cap",
+        "shareWad": "5000000000000000",
+        "feeUsd": "40000000000000000"
+      }
+    },
+    {
+      "input": {
+        "amountUsd": null,
+        "costUsd": "50000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "no-price",
+        "shareWad": "1000000000000000",
+        "feeUsd": null
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "100000000000000000000",
+        "costUsd": null,
+        "capWad": "500000000000000"
+      },
+      "output": {
+        "binding": "no-price",
+        "shareWad": "500000000000000",
+        "feeUsd": null
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "0",
+        "costUsd": "50000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "no-price",
+        "shareWad": "1000000000000000",
+        "feeUsd": null
+      }
+    }
+  ],
+  "highCap": [
+    {
+      "input": {
+        "feeUsd": "1525000000000000000",
+        "costNormalUsd": "1025000000000000000",
+        "amountUsd": "50000000000000000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "feeUsd": "1525001000000000000",
+        "costNormalUsd": "1025000000000000000",
+        "amountUsd": "50000000000000000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "feeUsd": "100000000000000",
+        "costNormalUsd": "1025000000000000000",
+        "amountUsd": "50000000000000000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "feeUsd": "2025000000000000000",
+        "costNormalUsd": "1025000000000000000",
+        "amountUsd": "500000000000000000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "feeUsd": "2025001000000000000",
+        "costNormalUsd": "1025000000000000000",
+        "amountUsd": "500000000000000000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "feeUsd": "1075000000000000000",
+        "costNormalUsd": "75000000000000000",
+        "amountUsd": "100000000000000000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "feeUsd": "1075001000000000000",
+        "costNormalUsd": "75000000000000000",
+        "amountUsd": "100000000000000000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "feeUsd": "1075000000000000000",
+        "costNormalUsd": "75000000000000000",
+        "amountUsd": "1000000000000000000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "feeUsd": "1075001000000000000",
+        "costNormalUsd": "75000000000000000",
+        "amountUsd": "1000000000000000000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "feeUsd": "5075001000000000000",
+        "costNormalUsd": "75000000000000000",
+        "amountUsd": "5000000000000000000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "feeUsd": null,
+        "costNormalUsd": null,
+        "amountUsd": null,
+        "shareWithoutPriceWad": "10000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "feeUsd": null,
+        "costNormalUsd": null,
+        "amountUsd": null,
+        "shareWithoutPriceWad": "10000000000000001"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "feeUsd": null,
+        "costNormalUsd": null,
+        "amountUsd": null,
+        "shareWithoutPriceWad": null
+      },
+      "output": false
+    }
+  ],
+  "smallTransfer": [
+    {
+      "input": {
+        "costUsd": "50000000000000000",
+        "amountUsd": "5000000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "costUsd": "50001000000000000",
+        "amountUsd": "5000000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "costUsd": "75000000000000000",
+        "amountUsd": "10000000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "costUsd": "50000000000000000",
+        "amountUsd": "8000000000000000000",
+        "capWad": "5000000000000000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "costUsd": "50000000000000000",
+        "amountUsd": "10000000000000000000",
+        "capWad": "5000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "costUsd": "50001000000000000",
+        "amountUsd": "10000000000000000000",
+        "capWad": "5000000000000000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "costUsd": "50000000000000000",
+        "amountUsd": "8000000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "costUsd": "525000000000000000",
+        "amountUsd": "100000000000000000000",
+        "capWad": "5000000000000000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "costUsd": "525000000000000000",
+        "amountUsd": "200000000000000000000",
+        "capWad": "2500000000000000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "costUsd": null,
+        "amountUsd": "8000000000000000000",
+        "capWad": "10000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "costUsd": "1",
+        "amountUsd": null,
+        "capWad": "10000000000000000"
+      },
+      "output": false
+    }
+  ],
+  "lowFee": [
+    {
+      "input": {
+        "feeUsd": "2049999000000000000",
+        "costUsd": "1025000000000000000",
+        "belowBreakEven": false
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "feeUsd": "2050000000000000000",
+        "costUsd": "1025000000000000000",
+        "belowBreakEven": true
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "feeUsd": null,
+        "costUsd": "1",
+        "belowBreakEven": true
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "feeUsd": "1",
+        "costUsd": null,
+        "belowBreakEven": false
+      },
+      "output": false
+    }
+  ],
+  "feeWarnings": [
+    {
+      "input": {
+        "amountUsd": "5000000000000000000",
+        "capWad": "10000000000000000",
+        "feeUsd": "50000000000000000",
+        "costUsd": "100000000000000000",
+        "costNormalUsd": "100000000000000000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": false,
+        "expandedCostUsd": null
+      },
+      "output": {
+        "smallTransfer": true,
+        "lowFee": true,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "5000000000000000000",
+        "capWad": "10000000000000000",
+        "feeUsd": "2000000000000000000",
+        "costUsd": "100000000000000000",
+        "costNormalUsd": "100000000000000000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": false,
+        "expandedCostUsd": null
+      },
+      "output": {
+        "smallTransfer": true,
+        "lowFee": false,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "8000000000000000000",
+        "capWad": "5000000000000000",
+        "feeUsd": "40000000000000000",
+        "costUsd": "50000000000000000",
+        "costNormalUsd": "50000000000000000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": false,
+        "expandedCostUsd": null
+      },
+      "output": {
+        "smallTransfer": true,
+        "lowFee": true,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "8000000000000000000",
+        "capWad": "10000000000000000",
+        "feeUsd": "80000000000000000",
+        "costUsd": "50000000000000000",
+        "costNormalUsd": "50000000000000000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": false,
+        "expandedCostUsd": null
+      },
+      "output": {
+        "smallTransfer": false,
+        "lowFee": true,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "50000000000000000000",
+        "capWad": "10000000000000000",
+        "feeUsd": "2000000000000000000",
+        "costUsd": "100000000000000000",
+        "costNormalUsd": "100000000000000000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": false,
+        "expandedCostUsd": null
+      },
+      "output": {
+        "smallTransfer": false,
+        "lowFee": false,
+        "highCap": true,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "50000000000000000000",
+        "capWad": "10000000000000000",
+        "feeUsd": "190000000000000000",
+        "costUsd": "50000000000000000",
+        "costNormalUsd": "50000000000000000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": false,
+        "expandedCostUsd": null
+      },
+      "output": {
+        "smallTransfer": false,
+        "lowFee": false,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "500000000000000000000",
+        "capWad": "10000000000000000",
+        "feeUsd": "500000000000000000",
+        "costUsd": "50000000000000000",
+        "costNormalUsd": "50000000000000000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": false,
+        "expandedCostUsd": null
+      },
+      "output": {
+        "smallTransfer": false,
+        "lowFee": false,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "50000000000000000000",
+        "capWad": "10000000000000000",
+        "feeUsd": "1000000000000000000",
+        "costUsd": "600000000000000000",
+        "costNormalUsd": "400000000000000000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": false,
+        "expandedCostUsd": null
+      },
+      "output": {
+        "smallTransfer": true,
+        "lowFee": true,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountUsd": null,
+        "capWad": "10000000000000000",
+        "feeUsd": null,
+        "costUsd": null,
+        "costNormalUsd": null,
+        "shareWithoutPriceWad": "20000000000000000",
+        "belowBreakEven": true,
+        "gasBased": false,
+        "expandedCostUsd": null
+      },
+      "output": {
+        "smallTransfer": false,
+        "lowFee": true,
+        "highCap": true,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "500000000000000000000",
+        "capWad": "10000000000000000",
+        "feeUsd": "500000000000000000000000000000",
+        "costUsd": "2025000000000000000000000000000",
+        "costNormalUsd": "2025000000000000000000000000000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": true,
+        "expandedCostUsd": "10025000000000000000000000000000"
+      },
+      "output": {
+        "smallTransfer": true,
+        "lowFee": true,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "500000000000000000000",
+        "capWad": "10000000000000000",
+        "feeUsd": "500000000000000000000000000000",
+        "costUsd": "50000000000000000000000000000",
+        "costNormalUsd": "50000000000000000000000000000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": true,
+        "expandedCostUsd": "75000000000000000000000000000"
+      },
+      "output": {
+        "smallTransfer": true,
+        "lowFee": false,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountUsd": "5000000000000000000",
+        "capWad": "10000000000000000",
+        "feeUsd": "50000000000000000000000000000",
+        "costUsd": "100000000000000000000000000000",
+        "costNormalUsd": "100000000000000000000000000000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": true,
+        "expandedCostUsd": "3000000000000000000000000000000"
+      },
+      "output": {
+        "smallTransfer": true,
+        "lowFee": true,
+        "highCap": false,
+        "capWarning": false
+      }
+    }
+  ],
+  "ceilingCostUsd": [
+    {
+      "input": {
+        "gasUsed": "1000000",
+        "baseFeeWei": "1000000000",
+        "priorityFeeWei": "0",
+        "nativePriceE18": "1000000000000000000000",
+        "level": 1
+      },
+      "output": "2025000000000000000"
+    },
+    {
+      "input": {
+        "gasUsed": "1000000",
+        "baseFeeWei": "1000000000",
+        "priorityFeeWei": "0",
+        "nativePriceE18": "1000000000000000000000",
+        "level": 2
+      },
+      "output": "3025000000000000000"
+    },
+    {
+      "input": {
+        "gasUsed": "1000000",
+        "baseFeeWei": "1000000000",
+        "priorityFeeWei": "0",
+        "nativePriceE18": "1000000000000000000000",
+        "level": 3
+      },
+      "output": "5025000000000000000"
+    },
+    {
+      "input": {
+        "gasUsed": "250000",
+        "baseFeeWei": "1200000000000000",
+        "priorityFeeWei": "10000000000000",
+        "nativePriceE18": "56200000000000",
+        "level": 1
+      },
+      "output": "58860500000000000"
+    },
+    {
+      "input": {
+        "gasUsed": "250000",
+        "baseFeeWei": "1200000000000000",
+        "priorityFeeWei": "10000000000000",
+        "nativePriceE18": "56200000000000",
+        "level": 3
+      },
+      "output": "109440500000000000"
+    },
+    {
+      "input": {
+        "gasUsed": "180000",
+        "baseFeeWei": "700000000",
+        "priorityFeeWei": "1000000",
+        "nativePriceE18": "3300000000000000000000",
+        "level": 2
+      },
+      "output": "1272994000000000000"
+    }
+  ],
+  "capWarns": [
+    {
+      "input": {
+        "gasBased": true,
+        "amountUsd": "500000000000000000000",
+        "capWad": "10000000000000000",
+        "expandedCostUsd": "75000000000000000",
+        "costNormalUsd": "50000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "gasBased": true,
+        "amountUsd": "500000000000000000000",
+        "capWad": "10000000000000000",
+        "expandedCostUsd": "10025000000000000000",
+        "costNormalUsd": "2025000000000000000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "gasBased": true,
+        "amountUsd": "500000000000000000000",
+        "capWad": "5000000000000000",
+        "expandedCostUsd": "10025000000000000000",
+        "costNormalUsd": "2025000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "gasBased": true,
+        "amountUsd": "200000000000000000000",
+        "capWad": "10000000000000000",
+        "expandedCostUsd": "1525000000000000000",
+        "costNormalUsd": "325000000000000000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "gasBased": true,
+        "amountUsd": "200000000000000000000",
+        "capWad": "20000000000000000",
+        "expandedCostUsd": "2525000000000000000",
+        "costNormalUsd": "525000000000000000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "gasBased": true,
+        "amountUsd": "2000000000000000000000",
+        "capWad": "10000000000000000",
+        "expandedCostUsd": "5025000000000000000",
+        "costNormalUsd": "1025000000000000000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "gasBased": true,
+        "amountUsd": "50000000000000000000",
+        "capWad": "10000000000000000",
+        "expandedCostUsd": "125000000000000000",
+        "costNormalUsd": "50000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "gasBased": false,
+        "amountUsd": "500000000000000000000",
+        "capWad": "10000000000000000",
+        "expandedCostUsd": "10025000000000000000",
+        "costNormalUsd": "2025000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "gasBased": false,
+        "amountUsd": "200000000000000000000",
+        "capWad": "20000000000000000",
+        "expandedCostUsd": "2525000000000000000",
+        "costNormalUsd": "525000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "gasBased": true,
+        "amountUsd": null,
+        "capWad": "10000000000000000",
+        "expandedCostUsd": "75000000000000000",
+        "costNormalUsd": "50000000000000000"
+      },
+      "output": false
+    }
+  ]
+}

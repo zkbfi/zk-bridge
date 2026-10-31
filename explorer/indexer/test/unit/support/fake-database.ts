@@ -19,6 +19,7 @@ import {
   registryObservations,
   releaseEvents,
   tokens,
+  transactionCosts,
   transfers,
 } from "../../../ponder.schema";
 
@@ -40,6 +41,7 @@ const KEY_COLUMNS = new Map<object, readonly string[]>([
   [gateStates, ["chainId"]],
   [registryObservations, ["chainId", "version"]],
   [bridgeStates, ["chainId"]],
+  [transactionCosts, ["chainId", "transactionHash"]],
 ]);
 
 const keyOf = (table: object, row: Row): string => {

@@ -157,7 +157,7 @@ export function planRelay(input: RelayInput): PlannedTransaction {
   if (input.gasLimit !== undefined && input.gasLimit <= 0n) throw new PlanInputError('The gas limit must be above zero.')
   if (input.gasLimit !== undefined) requireGasLimitInRange(input.gasLimit, { withCall: mode.kind === 'call', relayGas: input.relayGas ?? { kind: 'acknowledged' } })
   if (input.deliveryFee !== undefined) requireDeliveryFeeMatch(input.deliveryFee, receiver, mode)
-  const common = { chain, to: chain.contracts.tokenMediator, contractLabel: 'TokenMediator', value: 0n }
+  const common = { chain, to: chain.contracts.tokenMediator, contractLabel: 'ERC-20 mediator', value: 0n }
   const tokenArgument = { name: 'token', type: 'address', value: getAddress(token.address), meaning: token.symbol }
   const receiverArgument = { name: 'receiver', type: 'address', value: getAddress(receiver) }
   const amountArgument = {
