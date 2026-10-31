@@ -282,10 +282,22 @@
               - bash
               - "{{ zkb_release }}/deploy/app-server/deploy.sh"
               - "{{ zkb_commit }}"
+              - "{{ zkb_repo_dir }}"
           environment:
             ZKB_SERVICES: backend
           changed_when: true
-          failed_when: false
+
+        - name: Check that deploy.sh made the release current
+          ansible.builtin.stat:
+            path: "{{ zkb_current }}"
+          register: zkb_now_current
+          when: not ansible_check_mode
+
+        - name: Stop unless current is the release (a deploy.sh that fetched nothing must not pass as a switch)
+          ansible.builtin.assert:
+            that: zkb_now_current.stat.lnk_target | default('') == zkb_release
+            fail_msg: "deploy.sh did not switch: current is {{ zkb_now_current.stat.lnk_target | default('none') }}"
+          when: not ansible_check_mode
 
         - name: Wait for /health after the restart
           ansible.builtin.uri:
@@ -326,10 +338,10 @@
               - bash
               - "{{ zkb_releases }}/{{ zkb_previous }}/deploy/app-server/deploy.sh"
               - "{{ zkb_previous }}"
+              - "{{ zkb_repo_dir }}"
           environment:
             ZKB_SERVICES: backend
           changed_when: true
-          failed_when: false
           when: zkb_previous != 'none'
 
         - name: Wait for /health on the previous release

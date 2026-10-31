@@ -6,6 +6,8 @@
 zkb_base: /opt/zk-bridge
 zkb_releases: "{{ zkb_base }}/releases"
 zkb_current: "{{ zkb_base }}/current"
+# The bare repository deploy.sh fetches from; build.yml pushes nothing, so the commit must already be in it.
+zkb_repo_dir: "{{ zkb_base }}/repo.git"
 zkb_etc: /etc/zk-bridge
 zkb_unit_dir: /etc/systemd/system
 zkb_backend_state: /var/lib/zk-bridge-backend
