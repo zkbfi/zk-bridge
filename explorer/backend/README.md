@@ -64,7 +64,7 @@ The backend faces the open internet. It counts each caller in a window of one mi
 - With it on, the caller is the `X-Forwarded-For` entry `trustedProxyHops` places from the right. Your own proxies add those entries. The entries to the left can be forged by the client, so the backend ignores them. If the header has fewer entries, the backend uses the socket address.
 - An IPv6 caller is counted by its first 64 bits, because one person holds a whole /64 network.
 - A request with no socket address and no usable header has no known caller. All such requests share one bucket with a low limit (`requestsPerUnknownCallerPerMinute`, default 2).
-- `globalRequestsPerMinute` (default 120) caps all callers together.
+- `globalRequestsPerMinute` (default 120) caps how many distinct callers may make requests in one minute. A caller counts once however many requests it makes, and a caller already counted in the minute is held only by its own limit, so a few busy addresses cannot lock everyone else out.
 - `requestRetentionHours` (default 24) sets how long a request row stays in the database. It must not be shorter than `prover.timeoutSeconds`. The backend prunes at start and every hour, and it keeps the rows of a job that still runs.
 - A request body over 4 KiB gets the answer 413.
 

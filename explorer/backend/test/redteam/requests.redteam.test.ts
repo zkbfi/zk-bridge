@@ -66,12 +66,13 @@ describe("caller keys and forwarded headers", () => {
   it("ATTACK SUCCEEDS one holder of an IPv6 /48 gets 65,536 caller keys and passes the per-caller limit (the global limit still holds)", async () => {
     const backend = makeBackend();
     let accepted = 0;
-    for (let subnet = 0; subnet < 20; subnet += 1) {
-      for (let index = 0; index < 10; index += 1) if ((await post(backend, `2001:db8:abcd:${subnet.toString(16)}::${index + 1}`)).status === 202) accepted += 1;
+    for (let subnet = 0; subnet < 200; subnet += 1) {
+      if ((await post(backend, `2001:db8:abcd:${subnet.toString(16)}::1`)).status === 202) accepted += 1;
     }
-    // 200 tries from one /48; the per-caller limit alone would allow 10. Only the global limit (120) stops it.
+    // 200 /64 networks of one /48; the per-caller limit alone would allow 10. Only the global limit of 120 distinct
+    // callers (K-2) stops it, and then it locks out new callers for a minute (K-7 stays open).
     expect(accepted).toBe(120);
-    expect(callerRows(backend)).toHaveLength(12);
+    expect(callerRows(backend)).toHaveLength(120);
   });
 
   it("ATTACK SUCCEEDS IPv4-compatible (::a.b.c.d) and NAT64 (64:ff9b::a.b.c.d) callers collapse into one shared /64 bucket", () => {
@@ -82,16 +83,16 @@ describe("caller keys and forwarded headers", () => {
 });
 
 describe("global limit and GPU spend", () => {
-  it("ATTACK SUCCEEDS twelve IPv4 addresses fill the global limit and lock every honest caller out for a minute", async () => {
+  it("ATTACK twelve IPv4 addresses at their own limit do not lock honest callers out (BLOCKED, was K-2)", async () => {
+    // The global limit counts distinct callers, not requests: twelve addresses use 12 of its 120 places.
     const backend = makeBackend();
     for (let host = 1; host <= 12; host += 1) {
       for (let index = 0; index < 10; index += 1) expect((await post(backend, `198.51.100.${host}`)).status).toBe(202);
     }
-    const honest = await post(backend, "203.0.113.200");
-    expect(honest.status).toBe(429);
-    expect(Number(honest.headers.get("retry-after"))).toBeGreaterThan(0);
-    // The operator's keep-alive request is refused the same way.
-    expect((await post(backend, "203.0.113.201", {}, { reason: "keep-alive" })).status).toBe(429);
+    expect((await post(backend, `198.51.100.1`)).status).toBe(429);
+    expect((await post(backend, "203.0.113.200")).status).toBe(202);
+    // The operator's keep-alive request passes as well.
+    expect((await post(backend, "203.0.113.201", {}, { reason: "keep-alive" })).status).toBe(202);
   });
 
   it("ATTACK many callers cannot start more than one active job per direction", async () => {
