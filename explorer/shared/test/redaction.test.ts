@@ -132,3 +132,11 @@ describe("redactError", () => {
     expect(redactError("raw hunter22", ["hunter22"])).toBe(`raw ${REDACTED}`);
   });
 });
+
+describe("redactSecrets with secrets inside other secrets", () => {
+  it("removes the longer secret whole even when a shorter one it contains comes first", () => {
+    const long = "vk_A1b2C3d4E5f6G7h8";
+    const out = redactSecrets(`rpc /rpc/${long}/evm/1`, ["E5f6G7", long]);
+    expect(out).toBe(`rpc /rpc/${REDACTED}/evm/1`);
+  });
+});

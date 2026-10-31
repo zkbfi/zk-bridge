@@ -122,7 +122,9 @@ function removeKnownSecret(text: string, secret: string): string {
  */
 export function redactSecrets(text: string, knownSecrets: readonly string[] = []): string {
   let result = text
-  for (const secret of knownSecrets) result = removeKnownSecret(result, secret)
+  // Longest first, each once: a short secret inside a longer one must not split it and leave the rest readable.
+  const ordered = [...new Set(knownSecrets)].sort((a, b) => b.length - a.length)
+  for (const secret of ordered) result = removeKnownSecret(result, secret)
   for (const [pattern, replacement] of RULES) result = result.replace(pattern, replacement)
   return result
 }
