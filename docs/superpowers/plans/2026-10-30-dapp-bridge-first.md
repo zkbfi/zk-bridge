@@ -317,7 +317,7 @@ release versions (no release events yet). "Watch" on the address page is not bui
 Activity screen, Explore screen, the sideways slide between screens, the price oracle, the Omnibridge token list and
 warning, the restyled transaction dialog and message dialog.
 
-## Message page: status (2026-10-30, paused for a session restart)
+## Message page: status (2026-10-30)
 
 Done (web, on `bridge-first`):
 - Base restyle: the message page is now one of Explore's pages (header reads Explore). It has the orange band with the kind, the route icons on plates, the amount with its token icon, the message ID with copy, and status tags. Who and what has From/To linking to the address pages and Delivered by. The Fee is one row that opens a drawer using the approved motion. The steps use the joined line with drawers ("Block final on <chain>"). A reverted call opens by itself, with a red top line and its reason. "Retry with more gas" is shown disabled because the dapp has no retry path; "Open the call" links to the delivery transaction. The message itself shows the nonce, the source and target app, the gas limit and the decoded payload, collapsible. The proof panel shows only while the message is undelivered.
@@ -326,18 +326,22 @@ Done (web, on `bridge-first`):
 - Token row: shows the symbol and icon once and links to the token page. Sent/Received show the amount and icon only, with no symbol. The left side is a fixed grid (11ch, chain icon, link icon). The fee's USD sits in the icon columns. Fee drawer values show the amount plus a 14 px token icon, and Delivery gas shows the chain icon only.
 - Owner words 50–55 and a "Message page" section are in the spec.
 
+Done since (fees, prices, costs; branch `bridge-first`):
+- Fee rules in `shared/src/fee-rules.ts`, pure and in integers: token base units, wei, USD as bigints × 1e18 (owner 76), shares on `RATE_SCALE` (1% = 1e16). One rounding: down. Thresholds are cross-multiplied, never rounded. The total cost is `PROOF_COST_USD` ($0.025, one constant) plus the delivery gas at the gas level (expected 1× / 1.5× / 2.5×, ceiling 2× / 3× / 5×). The default fee is max(curve × amount, 2 × cost), then min(cap). The curve is 1% × exp(−ln(amount/10) × ln10/ln50), computed in 1e36 fixed point (`fixed-point.ts`: ln by halving plus the atanh series, exp by ln 2 range reduction plus the Taylor series, each term truncated), then cut to 1e18. "High cap %" uses the tip before gas (fee − Normal cost) against 1% / $1 tip / 0.1%. The small-transfer line is total cost > cap × amount (owner 69); it suppresses "High cap %" and the cap warning. `capWarns` (owner 70–71): gas-based mode only; the fee is recomputed at the ceiling cost and capped, and it warns when fee − Normal cost is over the line. Vectors: `shared/test/fixtures/fee-rules-vectors.json`, self-describing. Every curve, fee and cost vector matches an independent Python `decimal` computation at 80 digits.
+- Web uses them: `web/src/bridge/fee-guard.ts` is gone. The cap's floppy-disk save button sits on the drawer slider and in the review. A gas-based fee now signs a limit no higher than the cap's share, so lowering the cap changes what can be paid.
+- Oracle (`shared/src/pulsex-oracle.ts`) in integers at a named block. A `PoolReader` carries `block`, and every quote carries its block and pool. Ties go to the lower pool address. Ethereum tokens reverse out through the current Omnibridge (`bridgedTokenAddress` on `0x4fD0…51Ef` at that block), with the known table as fallback. `nativeUsd(reader, 1)` prices ETH by WETH's copy. `nearestBlockAt` finds the PulseChain block for a past Ethereum time; on a tie it takes the earlier block.
+- Indexer: a `transaction_costs` table (sends, deliveries, light client updates) holding wei, the coin price and its block/source, and `cost_usd`. ETH is priced at the PulseChain block nearest the transaction's time, through the pair's PulseChain RPC. `GET /api/tx/:chainId/:hash` serves it (owner 75), and `GET /api/messages/:id` has `costs` built from the same rows (the proof's with `coveredMessages`). There is no migration tool: a reindex from `startBlock` is the backfill. `rpc-equivalence` drops `costs`.
+- Message page: a "Cost" row in each open step drawer ("0.00084 ETH · $2.52"; "shared · … over N transfers" for the proof; "—" when not stored or on testnets). The proof step opens a drawer when its cost is known. The indexer client gained `transactionCost`.
+
+Presentation choices (owner 72, "clearest to the end user"), to show the owner:
+- The pill shows at most one warning, in this order: "Small transfer · may not be delivered in a timely manner" > "Tip too low · may not be delivered" > "High cap %" > Omnibridge copy > first-time token. Each detail gives the numbers and what to do, e.g. "Delivery costs about $5.06, more than the 1% ($0.05) you allow. A bot may wait for cheaper gas: raise the cap in the tip drawer, or deliver it yourself."
+- The review of a gas-based fee shows "Can drift: $6.51 now, up to $10.00 if gas rises to the Normal ceiling". When the cap warns, a "High cap %" box offers 0.1 / 0.25 / 0.5 / 1% and the save button. Percent and fixed fees show neither.
+- Dollars under $1 show three significant digits, cut (not rounded), with the owner's zero rule ($0.0₇504). So $5.0675 reads "$5.06".
+- Sample mode prices USDC $1, ETH $3,000, PLS $0.00003 at block 0, so the fee rules and warnings can be seen without a network.
+- The price tooltip now says prices pick the default fee and its warnings but never an amount you sign (the old "never used for ... fees" was no longer true once the curve uses dollars).
+
 Left:
-- Step costs (only in the open drawer, as a "Cost" row "<native> <symbol> · $<usd>", and "shared · …" for proofs with the count of transfers covered) are not built in the web yet.
-- Indexer cost/USD is started, not done:
-  - The PulseX oracle moved to `shared/src/pulsex-oracle.ts`; web re-exports it.
-  - `nativeUsd` (PLS only; Ethereum and testnets give null) and `poolReaderOver` are added with tests.
-  - Still to build:
-    - A `transaction_costs` table keyed by (chainId, transactionHash): gasUsed, effectiveGasPrice, costWei, usdPerNative, priceSource. It is written by the send, delivery and HeadUpdated handlers, with the price read through `context.client`, which reads at the event's block.
-    - A `costs` object on `GET /api/messages/:id` (sent, delivered, proof with its covered-message count). `rpc-equivalence` then has to strip `costs`, because the RPC source reads no receipts.
-  - There is no migration tool: a Ponder schema change means a reindex from `startBlock` on deploy, and that reindex is the backfill.
-  - ETH/USD: no Ethereum pool is defined in the repo, and the bridged-WETH fallback needs a cross-chain read at a matching block.
-- Tests still to add: cost formatting, the "shared" proof cost, and testnet USD "—".
-- Then run the full checks again (web suite last run 1182/1182 passing; tsc and build pending) and take the screenshots `{phone-dark,desktop-light}-message{,-call}-v1.png`. Drafts are in `tmp/msgshots`; the shot script is `tmp/shots-msg-v1.mjs`; the fixture dev server runs on port 5210.
-- The coverage gate (100 %) already failed before this work, in files this work did not touch (BridgeScreen, use-prices, ExplorePages, …).
+- The coverage gate (100 %) still fails in web, in files this work did not cover before either (BridgeScreen, use-prices, ExplorePages, …). Measured against 03d8514, no file this work touched lost coverage. shared and indexer are at 100 %.
+- The React and data packages (owner 73–74) are not started.
 
 Fields shown as "—" because the indexer does not record them: the transfer's user (From) when the answer has no `transfer.sender`, the nonce, the fee and each of its parts, USD on testnets, the revert reason, gas used and gas on delivery, the delivered block (not yet parsed from live answers before this change), committee signers in block drawers, and the payload/function/arguments when the answer has no `data`.
