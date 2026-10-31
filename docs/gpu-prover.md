@@ -58,7 +58,9 @@ The page "Load balancing endpoints" (https://docs.runpod.io/serverless/load-bala
 | Size of a request or an answer | 30 MB. |
 | A wrong port | The page says that the worker then stays up for 8 minutes and answers 502. |
 
-The page does not say which status the proxy gives when no worker is available. It names the text "no workers available". The client retries on that text with any status.
+The page does not say which status the proxy gives when no worker is available. It names the text "no workers available". The client waits on that text with any status.
+
+On 2026-10-31 a cold endpoint (min workers 0, just after an endpoint change, while the hosts pulled the 20 GB image) held a request for about 5 minutes and then answered `400` with the body `{"status":400,"title":"Bad Request","detail":"timed out waiting for worker"}`. The worker became ready minutes later. The client treats this answer as "not ready yet" and waits (see "Cold start").
 
 The routes of the worker:
 
@@ -81,10 +83,13 @@ The body of `POST /prove`:
 
 | Status | Meaning | The client |
 |---|---|---|
-| 400 | The request is wrong, or the worker holds no program with this key, or the key belongs to the other statement kind. | Stops. |
-| 422 | The program rejects the input. | Stops. |
-| 500 | The proof failed. | Retries. |
-| 503 | The worker still starts. | Retries. |
+| 400 with the RunPod `detail` "timed out waiting for worker" | The load balancer found no ready worker within its own wait. No proof ran. | Waits for the worker, up to `remote_cold_start_wait_seconds` (see "Cold start"). |
+| 400 (any other) | The request is wrong, or the worker holds no program with this key, or the key belongs to the other statement kind. | Stops at once. |
+| 422 | The program rejects the input. | Stops at once. |
+| 500, 502, 429, no answer | The proof failed, a gateway error, a rate limit, or the request timed out. | Retries, up to `remote_attempts` requests. |
+| 503, 204, or the text "no workers available" | The worker still starts, or no worker is available. No proof ran. | Waits for the worker, up to `remote_cold_start_wait_seconds`. |
+
+Only the `detail` field of a RunPod body counts for the first row. A 400 of the worker carries its text in `error`, so it stays final even if that text mentions a timeout. The client never sends a rejected input again, and it sends a job again only when no proof ran or the proof failed.
 
 The worker proves one statement at a time. A second request waits, because one GPU runs one proof. It answers `/ping` during a proof, because each request has its own thread.
 
@@ -100,7 +105,7 @@ Check 3 also fixes the program key. A proof of another program does not verify u
 
 The chain stays the final check. The verifier contract refuses every proof that fails. The local checks save a transaction and a retry cycle when a worker is wrong.
 
-The test file `prover/tests/remote_prover.rs` runs these checks against a fake worker with a real proof. The proof is `test/hardened/fixtures/sp1-proof-ethereum-update.json`. The tests cover: a good proof, wrong public values, wrong length, wrong selector, a proof for another key, a tampered proof, a worker that refuses, a timeout with a retry, and the cold start answers.
+The test file `prover/tests/remote_prover.rs` runs these checks against a fake worker with a real proof. The proof is `test/hardened/fixtures/sp1-proof-ethereum-update.json`. The tests cover: a good proof, wrong public values, wrong length, wrong selector, a proof for another key, a tampered proof, a worker that refuses, a timeout with a retry, and the cold start answers. Most of them need the fixture made anew (see the note at the top of the file). Three tests drive the transport alone and run today: a cold worker is awaited until it is ready (the RunPod 400, a 503 and a 204, then success), a cold start beyond the limit fails with a clear message, and every other 400 stops at once.
 
 ## Build and push the image
 
@@ -227,13 +232,14 @@ remote_api_key_env = "RUNPOD_API_KEY"
 remote_timeout_seconds = 900        # one request, from the first byte sent to the last byte read
 remote_attempts = 4
 remote_retry_delay_seconds = 10     # the wait before attempt n+1 is n times this value
+remote_cold_start_wait_seconds = 900   # the longest wait for a worker that is not ready yet; 0 turns the wait off
 ```
 
 The environment variables `ZK_BRIDGE_PROVER_PROVER_REMOTE_URL` and `ZK_BRIDGE_PROVER_PROVER_REMOTE_API_KEY_ENV` override the first two keys.
 
 With a route, the `prove` command reads `programVKey()` from the destination light client and stops when `program_vkey` differs from it. In that case you can leave `program_vkey` out. A run that starts from an explicit head needs the key in the file or in `--program-vkey`. A fork observation proof uses the key that the fork registry stores. The proof check binds each key, so the remote backend needs no second copy.
 
-The timeout of 900 seconds covers the wait for a worker (2 minutes), the cold start and one proof. The RunPod page recommends at least 3 retries with delays of 5 to 10 seconds for cold starts. The defaults match that.
+The timeout of 900 seconds covers the wait for a worker (2 minutes), the cold start and one proof. The RunPod page recommends at least 3 retries with delays of 5 to 10 seconds for cold starts. The defaults match that. Answers of a worker that is not ready yet do not use up `remote_attempts`. `remote_cold_start_wait_seconds` bounds them instead (next section).
 
 ## Cold start
 
@@ -246,6 +252,24 @@ I did not measure the cold start. The parts are:
 | Download of the circuit files | No | Baked into the image. |
 
 Record the time from the first 204 to the first 200 in the first live run. The RunPod page measures a cold start the same way.
+
+A normal cold start took about 24 s. After an endpoint change the hosts pull the 20 GB image first, and that can take longer than the load balancer holds one request. The load balancer then answers `400` "timed out waiting for worker" (about 5 minutes on 2026-10-31), while the worker keeps starting.
+
+The prover waits for the worker in that case. These answers mean "not ready yet": the RunPod 400 "timed out waiting for worker", 503, 204 and the text "no workers available". After each one the prover pauses and sends the job again. The first pause is `remote_retry_delay_seconds`, each next pause doubles, and no pause is longer than 60 seconds. No new request starts after `remote_cold_start_wait_seconds` (default 900, so 15 minutes) since the first request. Then the job fails with:
+
+```
+prover: the remote worker was not ready after 905 s of waiting, the limit of prover.remote_cold_start_wait_seconds (900 s); last answer: status 400: timed out waiting for worker
+```
+
+Each wait writes one line to standard error, for example:
+
+```
+ts=... level=warn event=remote_worker_not_ready waited_seconds=301 wait_seconds=10 limit_seconds=900 reason="status 400: timed out waiting for worker"
+```
+
+The line holds no key and no endpoint address.
+
+Keep the backend's job limit (`prover.timeoutSeconds` in the backend configuration, 1800 by default) above this wait plus one proof. With the defaults the worst case is about 900 s of waiting, plus one more hold of the load balancer (about 300 s), plus one proof (at most 330 s, the RunPod processing limit; measured 120 to 204 s): about 1530 s. If you raise `remote_cold_start_wait_seconds`, raise the job limit too.
 
 ## Cost model
 
