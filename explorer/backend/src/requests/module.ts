@@ -6,6 +6,7 @@ import type { BackendModuleContext } from "../module.ts";
 import { UNKNOWN_CALLER, callerKey } from "./caller.ts";
 import { findActiveJob, findLatestJob, getJob, getRequest, type Job } from "./jobs.ts";
 import { createRequestService, type RequestService } from "./service.ts";
+import { startWatch } from "../watch/module.ts";
 
 /** The largest request body in bytes. A real body is under 300 bytes. */
 export const MAXIMUM_BODY_BYTES = 4096;
@@ -116,8 +117,9 @@ export function register(app: Hono, context: BackendModuleContext): void {
 }
 
 /**
- * Prunes old request rows, resumes the jobs that a restart left behind, and prunes again every hour.
- * Resolves with the function that stops the timer and waits for the running jobs.
+ * Prunes old request rows, resumes the jobs that a restart left behind, prunes again every hour, and starts the watch
+ * that proves on finality (`watch` in the configuration). Resolves with the function that stops the timer and the
+ * watch, and waits for the running jobs.
  */
 export async function start(context: BackendModuleContext): Promise<() => Promise<void>> {
   const service = serviceFor(context);
@@ -125,8 +127,10 @@ export async function start(context: BackendModuleContext): Promise<() => Promis
   service.recover();
   const timer = setInterval(() => service.prune(), PRUNE_INTERVAL_MILLISECONDS);
   timer.unref();
+  const stopWatch = await startWatch({ context, service });
   return async () => {
     clearInterval(timer);
+    await stopWatch();
     await service.settled();
   };
 }

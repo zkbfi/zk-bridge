@@ -35,6 +35,11 @@ export type ProofRequest = {
   readonly reason: RequestReason;
   readonly messageId?: Hex;
   readonly caller: string;
+  /**
+   * When the event behind the request arrived, in milliseconds since 1970. The watcher sets it to the arrival of the
+   * finality it acts on, and `job_started` logs the latency from it. Not stored.
+   */
+  readonly since?: number;
 };
 
 /** The answer of {@link RequestService.submit}. */
@@ -92,6 +97,11 @@ function describeFailure(error: unknown): string {
   if (error instanceof ProverCommandError) return `the prover stopped with exit code ${error.exitCode}`;
   if (error instanceof CommandTimeoutError) return "the prover ran longer than its limit";
   return "the prover could not make a proof";
+}
+
+/** The stored fields of a request. */
+function stored(request: ProofRequest) {
+  return { pair: request.pair, direction: request.direction, reason: request.reason, caller: request.caller, messageId: request.messageId ?? null };
 }
 
 /** Builds the request service over the storage. */
@@ -155,7 +165,7 @@ export function createRequestService(input: RequestServiceInput): RequestService
     const active = findActiveJob(storage, request.direction);
     if (active !== null) {
       const requestId = randomUUID();
-      insertRequest(storage, { ...request, id: requestId, jobId: active.id, messageId: request.messageId ?? null, now: current });
+      insertRequest(storage, { ...stored(request), id: requestId, jobId: active.id, now: current });
       return { result: { requestId, jobId: active.id }, startedJobId: null };
     }
     const directionWait = directionWaitSeconds({ latest: findLatestJob(storage, request.direction), now: current, limits });
@@ -174,9 +184,11 @@ export function createRequestService(input: RequestServiceInput): RequestService
   // requests that arrive during a read share it. A burst of requests never becomes a burst of indexer queries.
   const needs = new Map<ProofDirection, { readonly at: number; readonly answer: Promise<ProofNeed> }>();
 
-  function proofNeed(direction: ProofDirection, current: number): Promise<ProofNeed> {
+  // The watcher's request reads afresh: it acts on a finality that arrived just now, and an answer from before it may
+  // predate the message it proves.
+  function proofNeed(direction: ProofDirection, current: number, fresh: boolean): Promise<ProofNeed> {
     const known = needs.get(direction);
-    if (known !== undefined && current - known.at < PROOF_NEED_REUSE_MILLISECONDS) return known.answer;
+    if (!fresh && known !== undefined && current - known.at < PROOF_NEED_REUSE_MILLISECONDS) return known.answer;
     const entry = { at: current, answer: input.readProofNeed(direction, current) };
     needs.set(direction, entry);
     // A failed read is not kept: the next request asks again. At worst this drops a newer answer, and costs one read.
@@ -192,7 +204,7 @@ export function createRequestService(input: RequestServiceInput): RequestService
       if (first !== null) return first.result;
       let need: ProofNeed;
       try {
-        need = await proofNeed(request.direction, asked);
+        need = await proofNeed(request.direction, asked, request.reason === "finality");
       } catch (error) {
         logger.warn("proof_need_unknown", { direction: request.direction, error });
         return { refused: "cannot-check", retryAfterSeconds: CANNOT_CHECK_RETRY_SECONDS };
@@ -205,11 +217,12 @@ export function createRequestService(input: RequestServiceInput): RequestService
         if (decided !== null) return decided;
         const job = insertJob(storage, { id: randomUUID(), direction: request.direction, now: current });
         const requestId = randomUUID();
-        insertRequest(storage, { ...request, id: requestId, jobId: job.id, messageId: request.messageId ?? null, now: current });
+        insertRequest(storage, { ...stored(request), id: requestId, jobId: job.id, now: current });
         return { result: { requestId, jobId: job.id }, startedJobId: job.id };
       });
       if (startedJobId !== null) {
-        logger.info("job_started", { jobId: startedJobId, direction: request.direction, why: need.why });
+        const latency = request.since === undefined ? {} : { latencyMs: current - request.since };
+        logger.info("job_started", { jobId: startedJobId, direction: request.direction, why: need.why, reason: request.reason, ...latency });
         start(startedJobId, request.direction);
       }
       return result;

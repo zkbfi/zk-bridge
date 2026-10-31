@@ -37,7 +37,7 @@ export const PAIR: Pair = { name: "eth-pls", sides: [side("ethereum", 1, "1"), s
 /** The secret values of the tests. Their text is easy to find in a leak check. */
 export const SECRETS = { runpodApiKey: "runpod-secret-value-1234", webhookBearer: "bearer-value-0123456789-abcdefghijklmnop-5678" };
 
-/** A valid configuration. */
+/** A valid configuration. The watch is off unless a test turns it on: it would read beacon nodes over the network. */
 export function makeConfig(overrides: Record<string, unknown> = {}): BackendConfig {
   return parseBackendConfig(
     JSON.stringify({
@@ -49,6 +49,7 @@ export function makeConfig(overrides: Record<string, unknown> = {}): BackendConf
       remote: { endpoint: "https://endpoint.example.org" },
       runpodApiKeyVariable: "RUNPOD_API_KEY",
       webhookBearerVariable: "BACKEND_WEBHOOK_BEARER",
+      watch: { enabled: false },
       ...overrides,
     }),
   );

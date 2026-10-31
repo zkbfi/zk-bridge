@@ -19,8 +19,8 @@ export type Job = {
   readonly error: string | null;
 };
 
-/** Why a request was made. */
-export type RequestReason = "message" | "keep-alive" | "user";
+/** Why a request was made. `finality` is the backend's own: the watcher saw the finality that makes a proof due. */
+export type RequestReason = "message" | "keep-alive" | "user" | "finality";
 
 /** One stored request. */
 export type StoredRequest = {
