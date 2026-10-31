@@ -9,7 +9,7 @@ import {
   type ProofDirection,
 } from "@zk-bridge/shared";
 import { createBoardFeed, type BoardFeed, type BoardMessage, type BoardSubscription } from "@zk-bridge/shared/msgboard";
-import { assessProofPayload, createLightClientReader, payloadKey } from "@zk-bridge/shared/prover";
+import { assessProofPayload, createLightClientReader, createVerifyGuard, payloadKey, type VerifyGuard } from "@zk-bridge/shared/prover";
 import { BackendConfigError } from "../config.ts";
 import type { ModuleHealth } from "../health.ts";
 import type { BackendModuleContext } from "../module.ts";
@@ -30,8 +30,11 @@ export const MAXIMUM_QUEUED_MESSAGES = 64;
 /** The longest payload the module queues, in characters: `0x` and two characters for each byte of the longest form. */
 const MAXIMUM_PAYLOAD_CHARACTERS = 2 + PROOF_MESSAGE_BYTES * 2;
 
-/** Refusals that pass when the head moves, so the message gets another look. */
-const REFUSALS_THAT_CAN_PASS = new Set(["light-client-unreadable", "start-slot-differs-from-head", "start-root-differs-from-head"]);
+/**
+ * Refusals that may pass later, so the message gets another look: those that depend on the head, a check that the
+ * verify guard dropped because the budget of the minute was used up, and a check whose verifier gave no answer.
+ */
+const REFUSALS_THAT_CAN_PASS = new Set(["light-client-unreadable", "start-slot-differs-from-head", "start-root-differs-from-head", "verify-budget-exhausted", "verify-unavailable"]);
 
 /** What the indexer needs from the outside world. A test passes fakes. */
 export type IndexerDependencies = {
@@ -42,6 +45,12 @@ export type IndexerDependencies = {
   readonly pollMilliseconds: number;
   /** Accept the oracle proofs of the free test prover. Local testing only. Default false. */
   readonly acceptOracleProof: boolean;
+  /**
+   * The guard in front of the local proof check (K-5). Anyone can post a junk proof that names the public head, and the
+   * poll reads every recent message again, so the guard remembers the payloads refused at the current head and caps
+   * the checks per minute, in all and per direction. A dropped check is logged with its counters and tried again later.
+   */
+  readonly verifyGuard: VerifyGuard;
 };
 
 type IndexerState = {
@@ -79,6 +88,7 @@ export function buildDependencies(context: BackendModuleContext): IndexerDepende
     lightClients: { "first-to-second": readerFor(pair.sides[1]), "second-to-first": readerFor(pair.sides[0]) },
     pollMilliseconds: POLL_MILLISECONDS,
     acceptOracleProof: context.config.acceptOracleProof,
+    verifyGuard: createVerifyGuard({ now: context.now, logger: context.logger }),
   };
 }
 
@@ -164,7 +174,7 @@ export async function startIndexer(context: BackendModuleContext, dependencies: 
     if (seen.has(key)) return;
     seen.add(key);
     const reader = dependencies.lightClients[direction];
-    const assessment = await assessProofPayload({ payload: message.data, pairName: dependencies.pair.name, direction, lightClient: reader, prover: context.prover, acceptOracleProof: dependencies.acceptOracleProof });
+    const assessment = await assessProofPayload({ payload: message.data, pairName: dependencies.pair.name, direction, lightClient: reader, prover: context.prover, acceptOracleProof: dependencies.acceptOracleProof, verifyGuard: dependencies.verifyGuard, verifySource: direction });
     if (!assessment.accept) {
       // A refusal that depends on the head (the head read may be old) may pass later, so the message gets another look.
       if (REFUSALS_THAT_CAN_PASS.has(assessment.reason)) seen.delete(key);

@@ -1,6 +1,6 @@
 import { zeroHash, type Address, type PublicClient } from "viem";
 import { beaconLightClientAbi } from "../abis/index.js";
-import type { LightClientReader } from "./proof-intake.js";
+import type { LightClientHead, LightClientReader } from "./proof-intake.js";
 
 /**
  * Reads the stored head, the header root of that head and the program key from a `BeaconLightClient`. The bots, the
@@ -15,9 +15,21 @@ import type { LightClientReader } from "./proof-intake.js";
  * @param lightClient The light client address.
  */
 export function createLightClientReader(client: Pick<PublicClient, "getBlockNumber" | "readContract">, lightClient: Address): LightClientReader {
+  // The clock settings are immutable in the contract, so one read serves for good. A failed read is not kept. The read
+  // names the block of the first state read, like every other read.
+  let clock: Promise<NonNullable<LightClientHead["clock"]>> | null = null;
+  const readClock = (blockNumber: bigint): Promise<NonNullable<LightClientHead["clock"]>> => {
+    clock ??= Promise.all([
+      client.readContract({ address: lightClient, abi: beaconLightClientAbi, functionName: "genesisTime", blockNumber }),
+      client.readContract({ address: lightClient, abi: beaconLightClientAbi, functionName: "secondsPerSlot", blockNumber }),
+    ]).then(([genesisTime, secondsPerSlot]) => ({ genesisTime: BigInt(genesisTime), secondsPerSlot: BigInt(secondsPerSlot) }));
+    clock.catch(() => (clock = null));
+    return clock;
+  };
   return {
     async read() {
       const blockNumber = await client.getBlockNumber();
+      const settings = await readClock(blockNumber);
       const [headSlot, programKey] = await Promise.all([
         client.readContract({ address: lightClient, abi: beaconLightClientAbi, functionName: "head", blockNumber }),
         client.readContract({ address: lightClient, abi: beaconLightClientAbi, functionName: "programVKey", blockNumber }),
@@ -30,7 +42,7 @@ export function createLightClientReader(client: Pick<PublicClient, "getBlockNumb
         blockNumber,
       });
       if (headRoot === zeroHash) throw new Error(`The light client has no header root for its head slot ${headSlot} at block ${blockNumber}.`);
-      return { headSlot: BigInt(headSlot), headRoot, programKey };
+      return { headSlot: BigInt(headSlot), headRoot, programKey, clock: settings };
     },
   };
 }

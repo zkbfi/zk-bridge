@@ -119,6 +119,11 @@ export async function receiveProofPackage(input: ReceiveInput): Promise<ReceiveO
     input.logger.warn("webhook_light_client_unreadable", { jobId: input.jobId });
     return { kind: "unavailable" };
   }
+  // A verifier that gave no answer (timeout, start failure, crash) says nothing about the proof: the job stays proving.
+  if (!verdict.accept && verdict.reason === "verify-unavailable") {
+    input.logger.warn("webhook_verifier_unavailable", { jobId: input.jobId, detail: verdict.detail });
+    return { kind: "unavailable" };
+  }
   if (!verdict.accept) return failJob(input, verdict.reason);
   input.storage.database
     .prepare("INSERT OR IGNORE INTO webhook_proofs (job_id, direction, payload, start_slot, new_slot, stored_at) VALUES (?, ?, ?, ?, ?, ?)")

@@ -17,6 +17,8 @@ import {
   SKIPPED_INSUFFICIENT_GAS,
   UPDATE_FAILED,
   WRAPPED_NATIVE,
+  address,
+  affirmationLog,
   emptyExecuteMessage,
   fakeChain,
   fakeIndexer,
@@ -86,6 +88,7 @@ function setup(options: { deliveryRouter?: DeliveryDependencies["deliveryRouter"
     multicall: options.multicall === undefined ? MULTICALL : options.multicall,
     rewardAddress: options.rewardAddress === undefined ? REWARD_ADDRESS : options.rewardAddress,
     wrappedNative: WRAPPED_NATIVE,
+    bridge: BRIDGE,
     tokenFactory: null,
     settings: {
       maximumLossPercent: 20,
@@ -376,6 +379,33 @@ describe("the receipt of a batch", () => {
         feeReceivedTokens: null,
       },
     ]);
+  });
+
+  it("does not count an AffirmationCompleted that another contract writes: a failed item stays failed (B-3)", async () => {
+    // The target of item 1 writes an event with the signature of the bridge that names message 2, whose call failed.
+    const { chain, dependencies, ledger } = setup();
+    chain.receiptResult = (position) => (position === 1 ? FAILED_IN_BRIDGE : EXECUTED);
+    chain.receiptLogsOfItem = (position) => (position === 0 ? [{ ...affirmationLog(word(2)), address: address(0xbad) }] : []);
+    const report = await sendBatch(dependencies, ledger, { readies: [readyItem(1), readyItem(2)], update: null });
+    expect(report.outcomes[0]).toMatchObject({ status: "delivered", messageId: word(1) });
+    expect(report.outcomes[1]).toEqual({ status: "failed", messageId: word(2), reason: "batch-result-missing", transactionHash: MINED });
+  });
+
+  it("passes over a log of the bridge that is no event of its interface", async () => {
+    const { chain, dependencies, ledger } = setup();
+    chain.receiptLogsOfItem = () => [{ address: BRIDGE, topics: [word(0x99)], data: "0x" }];
+    const report = await sendBatch(dependencies, ledger, { readies: [readyItem(1)], update: null });
+    expect(report.outcomes[0]).toMatchObject({ status: "delivered", messageId: word(1) });
+  });
+
+  it("does not let a forged Transfer to the router shift the fee of the next item (B-3)", async () => {
+    // The target of item 1 writes a Transfer to the router from a contract of its own. The fee of item 2 stays its own.
+    const { chain, dependencies, ledger } = setup();
+    chain.receiptLogsOfItem = (position) =>
+      position === 0 ? [transferLog(address(0xbad), DELIVERY_ROUTER, 1n)] : [transferLog(WRAPPED_NATIVE, REWARD_ADDRESS, 222n)];
+    const report = await sendBatch(dependencies, ledger, { readies: [readyItem(1), readyItem(2)], update: null });
+    expect(report.outcomes[0]).toMatchObject({ status: "delivered", messageId: word(1), feeReceivedTokens: 0n });
+    expect(report.outcomes[1]).toMatchObject({ status: "delivered", messageId: word(2), feeReceivedTokens: 222n });
   });
 
   const wrongHeadLogs: Array<[string, (logs: readonly ReceiptLog[]) => readonly ReceiptLog[]]> = [

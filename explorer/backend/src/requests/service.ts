@@ -22,7 +22,7 @@ import {
   listActiveJobs,
   pruneRequests,
   recentCostlyJobs,
-  recentRequestsOfAll,
+  recentCallersOfAll,
   recentRequestsOfCaller,
   updateJob,
   type RequestReason,
@@ -123,6 +123,8 @@ export function createRequestService(input: RequestServiceInput): RequestService
     running.add(task);
   }
 
+  // A job is lost when nothing touched it for the prover limit. The publisher touches a job on each attempt to post its
+  // proof (touchProvingJob), so a job whose paid proof waits for a slow board is not lost while the posts go on.
   function failLostJobs(): void {
     const current = now();
     for (const job of listActiveJobs(storage)) {
@@ -142,9 +144,12 @@ export function createRequestService(input: RequestServiceInput): RequestService
   function admit(request: ProofRequest, current: number): Decision | null {
     const since = current - CALLER_WINDOW_MILLISECONDS;
     const callerLimit = request.caller === UNKNOWN_CALLER ? limits.requestsPerUnknownCallerPerMinute : limits.requestsPerCallerPerMinute;
+    const ofCaller = recentRequestsOfCaller(storage, request.caller, since);
+    // The global limit counts callers, not requests (K-2): a caller already counted in this minute adds nobody, and only
+    // its own limit applies. So a few addresses, each at its own limit, cannot lock every other caller out.
     const callerWait = Math.max(
-      windowWaitSeconds({ recent: recentRequestsOfCaller(storage, request.caller, since), now: current, limit: callerLimit }),
-      windowWaitSeconds({ recent: recentRequestsOfAll(storage, since), now: current, limit: limits.globalRequestsPerMinute }),
+      windowWaitSeconds({ recent: ofCaller, now: current, limit: callerLimit }),
+      ofCaller.count > 0 ? 0 : windowWaitSeconds({ recent: recentCallersOfAll(storage, since), now: current, limit: limits.globalRequestsPerMinute }),
     );
     if (callerWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: callerWait }, startedJobId: null };
     const active = findActiveJob(storage, request.direction);

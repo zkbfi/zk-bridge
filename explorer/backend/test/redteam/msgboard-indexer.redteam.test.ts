@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, type Hex } from "viem";
 import { encodeProofMessage, proofCategory, type ProofDirection, type ProofMessage } from "@zk-bridge/shared";
 import type { BoardFeed, BoardMessage } from "@zk-bridge/shared/msgboard";
-import type { LightClientHead } from "@zk-bridge/shared/prover";
+import { DEFAULT_VERIFY_LIMITS, ProverCommandError, createVerifyGuard, type LightClientHead } from "@zk-bridge/shared/prover";
 import { createApp } from "../../src/app.ts";
 import type { BackendModuleContext } from "../../src/module.ts";
 import { MODULES } from "../../src/main.ts";
@@ -58,7 +58,7 @@ function rig(options: { verify?: () => Promise<void> } = {}) {
     async close() {},
   };
   const post = (direction: ProofDirection, data: Hex) => recent.push({ category: proofCategory("eth-pls", direction), data, hash: word("01") });
-  const run = (pollMilliseconds = 3_600_000) => startIndexer(context, { pair: PAIR, feed, lightClients: { "first-to-second": reader("first-to-second"), "second-to-first": reader("second-to-first") }, pollMilliseconds, acceptOracleProof: false });
+  const run = (pollMilliseconds = 3_600_000) => startIndexer(context, { pair: PAIR, feed, lightClients: { "first-to-second": reader("first-to-second"), "second-to-first": reader("second-to-first") }, pollMilliseconds, acceptOracleProof: false, verifyGuard: createVerifyGuard({ now: clock.now, logger: log.logger }) });
   return { storage, clock, app, heads, post, run, recent, log, verifyCalls: () => verifyCalls };
 }
 
@@ -119,28 +119,39 @@ describe("malicious board content", () => {
   });
 
   const pollTwice = async (count: number) => {
-    const r = rig({ verify: async () => { throw new Error("does not verify"); } });
+    const r = rig({ verify: async () => { throw new ProverCommandError("verify", 1, "does not verify"); } });
     for (let index = 0; index < count; index += 1) r.post("first-to-second", payloadOf(100n, 101n + BigInt(index)));
     const stop = await r.run(5);
     const first = r.verifyCalls();
-    // Let several more polls run on the same indexer (same seen set).
+    // Let several more polls run on the same indexer (same seen set), inside the same minute.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const sameMinute = r.verifyCalls();
+    // And several more in the next minute.
+    r.clock.advance(60_000);
     await new Promise((resolve) => setTimeout(resolve, 300));
     await stop();
-    return { first, total: r.verifyCalls() };
+    return { first, sameMinute, nextMinute: r.verifyCalls(), log: r.log };
   };
 
-  it("ATTACK fewer than SEEN_LIMIT junk proofs are verified once, not on every poll (control)", async () => {
-    const { first, total } = await pollTwice(100);
-    expect(first).toBe(100);
-    expect(total).toBe(100);
+  // The junk proofs claim ever higher slots, so after the general budget each also takes a check from the reserve.
+  const CAP = DEFAULT_VERIFY_LIMITS.perSourcePerMinute + DEFAULT_VERIFY_LIMITS.reservePerSourcePerMinute;
+
+  it("ATTACK fewer than SEEN_LIMIT junk proofs are verified at most once each, within the budget of the minute (control)", async () => {
+    const { first, sameMinute, nextMinute } = await pollTwice(100);
+    expect(first).toBe(CAP);
+    expect(sameMinute).toBe(CAP);
+    expect(nextMinute).toBe(2 * CAP);
   });
 
-  it("ATTACK SUCCEEDS more than SEEN_LIMIT junk proofs that start at the head make the indexer run the verifier for every one on every poll", async () => {
+  it("ATTACK more than SEEN_LIMIT junk proofs that start at the head cost at most the verify budget of a minute, however many polls run (BLOCKED, was K-5)", async () => {
     const count = SEEN_LIMIT + 88;
-    const { first, total } = await pollTwice(count);
-    expect(first).toBe(count);
-    // The least-recently-used set of 512 keys is thrashed: every later poll verifies all of them again.
-    expect(total).toBeGreaterThanOrEqual(2 * count);
+    const { first, sameMinute, nextMinute, log } = await pollTwice(count);
+    // The seen set of 512 keys is still thrashed, but the guard drops every check over the budget of the minute, and a
+    // junk proof refused at this head is never checked again.
+    expect(first).toBe(CAP);
+    expect(sameMinute).toBe(CAP);
+    expect(nextMinute).toBe(2 * CAP);
+    expect(log.lines.some((line) => line.includes("proof_verify_dropped"))).toBe(true);
   });
 });
 

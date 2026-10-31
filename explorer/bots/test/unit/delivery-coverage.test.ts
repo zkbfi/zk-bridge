@@ -42,6 +42,7 @@ function setup(options: SetupOptions = {}) {
     multicall: MULTICALL,
     rewardAddress: REWARD_ADDRESS,
     wrappedNative: WRAPPED_NATIVE,
+    bridge: BRIDGE,
     tokenFactory: options.tokenFactory ?? null,
     settings: {
       maximumLossPercent: 20,

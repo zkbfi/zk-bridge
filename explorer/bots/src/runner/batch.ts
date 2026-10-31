@@ -309,8 +309,12 @@ interface ReceiptReading {
   readonly updateApplied: boolean;
 }
 
-/** The identifier of the message in an `AffirmationCompleted` log, or null for any other log. */
-function affirmedMessageOf(log: ReceiptSummary["logs"][number]): Hex | null {
+/**
+ * The identifier of the message in an `AffirmationCompleted` log of the bridge, or null for any other log. A log of
+ * another address is never the bridge's: the target of a message runs inside the batch and can write the same event.
+ */
+function affirmedMessageOf(log: ReceiptSummary["logs"][number], bridge: Address): Hex | null {
+  if (log.address.toLowerCase() !== bridge.toLowerCase()) return null;
   try {
     const event = decodeEventLog({ abi: messageBridgeAbi, data: log.data, topics: log.topics as [Hex, ...Hex[]] });
     return event.eventName === "AffirmationCompleted" ? event.args.messageId : null;
@@ -341,31 +345,32 @@ function isTransferTo(log: ReceiptSummary["logs"][number], account: Address): bo
 }
 
 /**
- * Reads the receipt of a batch. The bridge says which messages it executed. The fee of an item reaches the reward
- * address inside the call of the item, after the mediator released the tokens to the router. So the logs from one
- * release to the router up to the next one belong to one executed item, and the executed items appear in the order of the
- * batch. The tokens of one item are known exactly, and there is no need to divide a sum among items.
+ * Reads the receipt of a batch. The bridge says which messages it executed, and only the events that the bridge itself
+ * wrote count. The fee of an item reaches the reward address inside the call of the item, after the mediator released
+ * the tokens to the router and before the bridge writes the `AffirmationCompleted` of the item. So the logs after the
+ * previous event of the bridge, up to the event that names the item, belong to that item. The boundaries are events
+ * that only the bridge can write, so a message target that writes forged events or transfers cannot move a log out of
+ * its own item. The tokens of an item are known only when its logs show a release of tokens to the router.
  */
 function readReceipt(dependencies: DeliveryDependencies, readies: readonly ReadyDelivery[], update: UpdateOffer | null, receipt: ReceiptSummary): ReceiptReading {
   const { deliveryRouter, reward } = routerOf(dependencies);
-  const executed = new Set<Hex>();
+  const logsByMessage = new Map<Hex, ReceiptSummary["logs"][number][]>();
+  let segment: ReceiptSummary["logs"][number][] = [];
   for (const log of receipt.logs) {
-    const messageId = affirmedMessageOf(log);
-    if (messageId !== null) executed.add(messageId);
+    segment.push(log);
+    const messageId = affirmedMessageOf(log, dependencies.bridge);
+    if (messageId === null) continue;
+    logsByMessage.set(messageId, segment);
+    segment = [];
   }
-  const segments: ReceiptSummary["logs"][number][][] = [];
-  for (const log of receipt.logs) {
-    if (isTransferTo(log, deliveryRouter)) segments.push([]);
-    segments.at(-1)?.push(log);
-  }
+  const executed = new Set(logsByMessage.keys());
   const tokensByMessage = new Map<Hex, bigint>();
-  readies
-    .filter((ready) => executed.has(ready.messageId))
-    .forEach((ready, order) => {
-      const token = ready.item.transfer?.destinationToken?.address as Address | undefined;
-      const segment = segments[order];
-      if (token !== undefined && segment !== undefined) tokensByMessage.set(ready.messageId, tokensReceived(segment, token, reward));
-    });
+  for (const ready of readies) {
+    const token = ready.item.transfer?.destinationToken?.address as Address | undefined;
+    const logs = logsByMessage.get(ready.messageId);
+    if (token === undefined || logs === undefined || !logs.some((log) => isTransferTo(log, deliveryRouter))) continue;
+    tokensByMessage.set(ready.messageId, tokensReceived(logs, token, reward));
+  }
   const updateApplied = update !== null && receipt.logs.some((log) => isHeadUpdated(log, update.lightClient, update.message.newSlot));
   return { executed, tokensByMessage, updateApplied };
 }
