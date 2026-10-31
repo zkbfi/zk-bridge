@@ -54,7 +54,7 @@ const DIRS = [
 const TOKENS = [["USDC", 1, "--p1"], ["ETH", 3000, "--p4"], ["DAI", 1, "--p3"], ["PLS", 0.00003, "--p2"], ["HEX", 0.004, "--p3"]];
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 let paused = false;
-const W = 700, H = 230, X0 = 60, X1 = 640, Y = 115, R0 = 30, RING = 20, PER = 6, EXIT = X1 + 46;
+const W = 700, H = 250, X0 = 64, X1 = 636, Y = 125, R0 = 34, RING = 20, PER = 6, EXIT = X1 + 46;
 const stepX = (i) => X0 + (i * (X1 - X0)) / 3;
 let seq = 0;
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -79,8 +79,9 @@ function build() {
     root.append(head); s.head = head;
     const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, class: "track", role: "img", "aria-label": `${s.dir.from} to ${s.dir.to}: transfers in flight` });
     svg.append(el("line", { x1: X0, y1: Y, x2: X1, y2: Y, stroke: "var(--track)", "stroke-width": 3 }));
-    for (let i = 0; i < 4; i++) svg.append(el("circle", { cx: stepX(i), cy: Y, r: 7, fill: i === 0 ? "var(--accent)" : "var(--ahead)" }));
-    svg.append(el("circle", { cx: EXIT, cy: Y, r: 7, fill: "var(--accent)", opacity: 0.35 }));
+    // Each step is a sun: drawn among the planets by depth, so a planet behind it is hidden for a moment as it passes.
+    s.suns = [0, 1, 2, 3].map((i) => { const c = el("circle", { cx: stepX(i), cy: Y, r: 15, fill: i === 0 ? "var(--accent)" : "var(--ahead)" }); c.dataset.sun = i; return c; });
+    svg.append(el("circle", { cx: EXIT, cy: Y, r: 10, fill: "var(--accent)", opacity: 0.35 }));
     s.guides = el("g", {}); svg.append(s.guides); s.guideEls = {};
     s.layer = el("g", {}); svg.append(s.layer); root.append(svg);
     const labels = document.createElement("div"); labels.className = "labels";
@@ -115,7 +116,7 @@ function targets(s) {
       if (!(s.frozen === i || paused || reduce)) s.phase[key] = (s.phase[key] ?? Math.random() * 6.28) + 0.0045 / (ring + 1);
       const base = s.phase[key] ?? 0;
       const o = s.open[i];                       // 0 closed (at rest) … 1 open (hovered)
-      const rr = r * (0.66 + 0.34 * o), squash = 0.5 + 0.32 * o;   // tilted ~60° at rest, near face-on when open
+      const rr = r * (0.72 + 0.28 * o), squash = 0.66 + 0.24 * o;   // tilted ~48° at rest, near face-on when open
       // The orbit's path, faint, behind the planets: it is what makes the tilt read as an orbit.
       let gEl = s.guideEls[key];
       if (!gEl) { gEl = el("ellipse", { fill: "none", stroke: "var(--line)", "stroke-width": 1.2 }); s.guides.append(gEl); s.guideEls[key] = gEl; }
@@ -150,7 +151,9 @@ function frame(now) {
       draw(s, t, t.x, t.y + lift, seen);
     }
     // Back to front: planets behind the step are drawn first, so the front ones overlap them.
-    [...s.items].filter((t) => s.dots.has(t.id)).sort((a, b) => (a.z ?? 0) - (b.z ?? 0)).forEach((t) => s.layer.append(s.dots.get(t.id)));
+    const order = [...s.items].filter((t) => s.dots.has(t.id)).map((t) => [t.z ?? 0, s.dots.get(t.id)]);
+    for (const sun of s.suns) order.push([0, sun]);   // the sun sits at depth 0: behind the front half, over the back half
+    order.sort((a, b) => a[0] - b[0]).forEach(([, node]) => s.layer.append(node));
     s.items = s.items.filter((t) => !t.gone);
     for (const [id, g] of s.dots) if (!seen.has(id)) { g.remove(); s.dots.delete(id); }
     s.head.querySelector('[data-k="live"]').textContent = s.items.filter((t) => !t.leaving).length;
