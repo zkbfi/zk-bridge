@@ -317,7 +317,7 @@ and the time left while in flight or the age once delivered. A row links to the 
 - **Determinism (owner):** every fee, warning and price is a pure function of its inputs: same inputs, same answer,
   in any app that uses it. Rules: no clock, randomness or network inside a rule; prices and gas are read **at a named
   block** and every quote carries that block (the browser may cache, but a quote says what it was read at, never
-  "latest"); money is integers (token base units, wei, and USD as integer micro-dollars) with one stated rounding
+  "latest"); money is integers (token base units, wei, and USD as a bigint scaled by 1e18, owner; in JSON as a decimal string) with one stated rounding
   (down, toward the user) instead of floats and epsilons; ties are broken by a fixed key (pool address) so sorting
   never depends on input order. Each rule ships with fixed test vectors (inputs → output) that any SDK user can run.
 - **SDK (owner):** the fee rules (cost, default fee, cap, low/high warnings, gas levels), the verdict, the PulseX
@@ -519,3 +519,4 @@ don't call it "tip too high", call it "high tip %""
 73. "ok, when you are done, pull out useful code into a react package as well"
 74. "i guess another layer of the package is simply sourcing the data. going to the msgboard to get the proof, forming the request to the proof queue, getting data from the indexer or the rpc"
 75. "the indexer also needs to serve the per-tx costs"
+76. "use bigints as 1e18"
