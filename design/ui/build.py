@@ -126,12 +126,10 @@ ROLES = [
         ("The pill's core", "core", None, None),
     ]),
     ("In-flight orbits (Explore)", [
-        ("Planet, token colour 1", "planet-1", None, None),
-        ("Planet, token colour 2", "planet-2", None, None),
-        ("Planet, token colour 3", "planet-3", None, None),
-        ("Planet, token colour 4", "planet-4", None, None),
-        ("Planet's core ($1,000 or more)", "planet-core", None, None),
-        ("Planet's ring ($10,000 or more)", None, "planet-ring", None),
+        ("Planet without its icon, tone 1", "planet-1", None, None),
+        ("Planet without its icon, tone 2", "planet-2", None, None),
+        ("Planet without its icon, tone 3", "planet-3", None, None),
+        ("Planet without its icon, tone 4", "planet-4", None, None),
     ]),
 ]
 

@@ -17,13 +17,15 @@ import { amountText, chainsFor } from "../bridge/bridge-model";
 import { Chevron, SearchIcon } from "../bridge/icons";
 import { Num } from "../bridge/Num";
 import { TokenIcon } from "../bridge/TokenIcon";
+import { loadImageServer } from "../bridge/image-server";
+import { iconSubjectOf, iconUrl } from "../bridge/image-source";
 import { priceNumber } from "../bridge/price-oracle";
 import { usePrices } from "../bridge/use-prices";
 import { durationText, exploreNumbers, lightClientCards, statusWord } from "./explore-model";
 import { ExplorePageView } from "./ExplorePages";
 import { InFlightOrbits } from "./InFlightOrbits";
 import { dayStartOf, orbitTracks } from "./orbit-model";
-import { orbitSample } from "./orbit-sample";
+import { orbitSample, SAMPLE_TICK } from "./orbit-sample";
 import { Marked, RouteIcons, XGroup, XRow } from "./parts";
 import { recognise, searchExplore } from "./search";
 import "./explore.css";
@@ -133,7 +135,7 @@ type ExploreData = ReturnType<typeof useExploreData>;
 
 /**
  * The transfers in flight, per status, on the Explore polling (useFeed's interval), and those delivered today; with
- * the sample data, a steady stream of sample transfers is added so the orbits have planets.
+ * the sample data, a stream of sample transfers that moves in batches like the chain is added so the orbits have planets.
  */
 const InFlight = ({ data }: { readonly data: ExploreData }) => {
   const { pair, tokens, now } = data;
@@ -147,7 +149,8 @@ const InFlight = ({ data }: { readonly data: ExploreData }) => {
     queryKey: ["explore", "orbit-sample", pair.id, tokens.length],
     queryFn: () => orbitSample(pair, tokens, Date.now() / 1000, now),
     enabled: configuration.dataMode === "fixture",
-    refetchInterval: 15_000,
+    // The sample stream moves one event per tick; read it as often.
+    refetchInterval: SAMPLE_TICK * 1000,
   });
   const prices = usePrices(tokens).data;
   const tracks = useMemo(
@@ -158,6 +161,7 @@ const InFlight = ({ data }: { readonly data: ExploreData }) => {
         delivered: [...(delivered.data?.items ?? []), ...(samples.data?.delivered ?? [])],
         now,
         dayStart,
+        iconOf: (token) => iconUrl(iconSubjectOf(token, pair), loadImageServer()),
         priceOf: (token) => {
           const quote = prices?.get(`${token.side}:${token.address}`) ?? null;
           return quote === null ? null : priceNumber(quote);

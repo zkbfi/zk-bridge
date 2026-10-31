@@ -1,7 +1,9 @@
 /**
  * The in-flight orbits' model (mockup design/ui/screens/inflight-orbits.html): which of the four steps each transfer in
- * flight waits at, its planet (token colour, size, a core for $1,000 or more, a ring for $10,000 or more) and the tracks
- * of a pair, one per direction. Pure: the drawing lives in orbit-engine.ts.
+ * flight waits at, its planet (the token's icon, sized by value, with a lettered fallback in a token tone) and the tracks
+ * of a pair, one per direction. A planet is its token's icon (owner: "each bridge is just a single token address, so we
+ * have enough information to visually show what is crossing the bridge and the size of it as well"); its size is its
+ * dollar value on a log scale. Pure: the drawing lives in orbit-engine.ts.
  *
  * The status → step mapping (statuses from explorer/shared/src/status.ts):
  *
@@ -72,22 +74,17 @@ export const planetTone = (key: string): PlanetTone => {
   return ((hash % 4) + 1) as PlanetTone;
 };
 
-/** A plain planet, one with a core ($1,000 or more) or one with a core and a ring ($10,000 or more). */
-export type PlanetTier = "plain" | "core" | "ring";
-
-/** The tier of a dollar value; no price is plain. */
-export const planetTier = (usd: number | null): PlanetTier => (usd === null ? "plain" : usd >= 10_000 ? "ring" : usd >= 1_000 ? "core" : "plain");
-
-/** A planet's radius: 7, growing a little with value (at most 9.5), so sizes stay close (owner: little size variation). */
-export const planetRadius = (usd: number | null): number => (usd === null || usd <= 0 ? 7 : 7 + Math.min(2.5, Math.max(0, Math.log10(usd) - 1) * 0.8));
+/** A planet's radius: 7 at $10 or less, 16 at $100,000 or more, on a log scale between; 7 with no price. */
+export const planetRadius = (usd: number | null): number => (usd === null || usd <= 10 ? 7 : 7 + 9 * Math.min(1, (Math.log10(usd) - 1) / 4));
 
 /** One transfer in flight, as a planet. */
 export type Planet = {
   readonly id: FeedItem["id"];
   readonly step: OrbitStep;
   readonly tone: PlanetTone;
-  readonly tier: PlanetTier;
   readonly radius: number;
+  /** The token's icon (the app's icon source), or null for a message; the planet falls back to a lettered disc in its tone. */
+  readonly icon: string | null;
   readonly usd: number | null;
   readonly token: TokenInfo | null;
   readonly amount: bigint | null;
@@ -143,6 +140,8 @@ export type OrbitInput = {
   readonly inFlight: readonly FeedItem[];
   /** Delivered transfers; those delivered at or after `dayStart` count as delivered today. */
   readonly delivered: readonly FeedItem[];
+  /** A token's icon URL (TokenIcon's source), or null. */
+  readonly iconOf?: (token: TokenInfo) => string | null;
   /** A token's dollar price, or null. */
   readonly priceOf: (token: TokenInfo) => number | null;
   /** Unix seconds now. */
@@ -180,8 +179,8 @@ export const orbitTracks = (input: OrbitInput): readonly OrbitTrack[] => {
         id: item.id,
         step,
         tone: planetTone(toneKey(item.token)),
-        tier: planetTier(usd),
         radius: planetRadius(usd),
+        icon: item.token === null ? null : (input.iconOf?.(item.token) ?? null),
         usd,
         token: item.token,
         amount: item.amount,

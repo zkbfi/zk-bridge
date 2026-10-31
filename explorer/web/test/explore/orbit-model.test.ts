@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { Hex } from "viem";
 import { FIXTURE_NOW, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import { FEED_STATUSES, type FeedItem } from "@terminal/model/types";
-import { dayStartOf, orbitLeftSeconds, orbitStepOf, orbitTracks, planetRadius, planetTier, planetTone, toneKey } from "../../src/explore/orbit-model";
-import { orbitSample } from "../../src/explore/orbit-sample";
+import { dayStartOf, orbitLeftSeconds, orbitStepOf, orbitTracks, planetRadius, planetTone, toneKey } from "../../src/explore/orbit-model";
+import { OrbitSampleStream, SAMPLE_TICK } from "../../src/explore/orbit-sample";
 
 const usdc = FIXTURE_TOKENS[0]!; // USDC, 6 decimals, first side
 const weth = FIXTURE_TOKENS[2]!; // WETH, 18 decimals, first side
@@ -55,11 +55,13 @@ describe("planets", () => {
     expect(tones.size).toBeGreaterThan(1);
   });
 
-  it("marks $1,000 with a core and $10,000 with a ring; sizes vary only a little", () => {
-    expect([planetTier(null), planetTier(999), planetTier(1000), planetTier(9_999), planetTier(10_000)]).toEqual(["plain", "plain", "core", "core", "ring"]);
+  it("sizes a planet by value on a log scale: 7 at $10 or less, 16 at $100,000 or more", () => {
     expect(planetRadius(null)).toBe(7);
     expect(planetRadius(5)).toBe(7);
-    expect(planetRadius(1e9)).toBe(9.5);
+    expect(planetRadius(10)).toBe(7);
+    expect(planetRadius(1_000)).toBeCloseTo(11.5);
+    expect(planetRadius(100_000)).toBe(16);
+    expect(planetRadius(1e9)).toBe(16);
   });
 
   it("estimates time left from the step estimates", () => {
@@ -73,7 +75,7 @@ describe("planets", () => {
 });
 
 describe("tracks", () => {
-  it("builds one track per direction with counts per step, prices and tiers", () => {
+  it("builds one track per direction with counts per step, prices, sizes and icons", () => {
     const rows = [
       item({ status: "sent" }),
       item({ status: "waiting_for_finality", token: weth, amount: 4n * 10n ** 18n }), // $12,000
@@ -81,10 +83,11 @@ describe("tracks", () => {
       item({ status: "delivered", deliveredAt: FIXTURE_NOW - 10 }),
       item({ status: "sent", direction: "second-to-first", token: wpls, amount: 10n ** 18n }),
     ];
-    const [out, back] = orbitTracks({ ...base, inFlight: [...rows, rows[0]!], delivered: [rows[3]!] });
+    const [out, back] = orbitTracks({ ...base, inFlight: [...rows, rows[0]!], delivered: [rows[3]!], iconOf: (token) => `icon:${token.symbol}` });
     expect(out!.from.chainId).toBe(FIXTURE_PAIR.first.chainId);
     expect(out!.counts).toEqual([1, 1, 1, 0]);
-    expect(out!.planets.map((planet) => planet.tier)).toEqual(["plain", "ring", "core"]);
+    expect(out!.planets.map((planet) => Math.round(planet.radius))).toEqual([10, 14, 12]);
+    expect(out!.planets.map((planet) => planet.icon)).toEqual(["icon:USDC", "icon:WETH", "icon:USDC"]);
     expect(out!.planets[0]!.usd).toBeCloseTo(250);
     expect(out!.deliveredToday).toBe(1);
     expect(back!.counts).toEqual([1, 0, 0, 0]);
@@ -101,24 +104,47 @@ describe("tracks", () => {
     expect(out!.drawn[0]!.sentAt).toBe(FIXTURE_NOW - 6);
   });
 
-  it("has no price → no dollar value and a plain planet", () => {
+  it("has no price → no dollar value and the smallest planet; no icon source → no icon", () => {
     const [out] = orbitTracks({ ...base, inFlight: [item()], priceOf: () => null });
-    expect(out!.planets[0]).toMatchObject({ usd: null, tier: "plain", radius: 7 });
+    expect(out!.planets[0]).toMatchObject({ usd: null, radius: 7, icon: null });
   });
 });
 
 describe("the sample stream", () => {
-  it("has transfers at every step in both directions, moves on with the clock, and delivers some today", () => {
-    const wall = 1_800_000_000;
-    const one = orbitSample(FIXTURE_PAIR, FIXTURE_TOKENS, wall, FIXTURE_NOW);
-    const [out, back] = orbitTracks({ ...base, inFlight: one.inFlight, delivered: one.delivered });
-    for (const track of [out!, back!]) {
+  const wall = 1_800_000_000;
+  const stepsOf = (sample: { readonly inFlight: readonly FeedItem[]; readonly delivered: readonly FeedItem[] }) => {
+    const [out, back] = orbitTracks({ ...base, inFlight: sample.inFlight, delivered: sample.delivered });
+    return [out!, back!];
+  };
+
+  it("has transfers at every step in both directions and delivers some today; the same start gives the same transfers", () => {
+    const one = new OrbitSampleStream(FIXTURE_TOKENS).at(wall, FIXTURE_NOW);
+    for (const track of stepsOf(one)) {
       expect(track.planets.length).toBeGreaterThan(8);
       expect(track.counts.filter((count) => count > 0).length).toBeGreaterThanOrEqual(3);
       expect(track.deliveredToday).toBeGreaterThan(0);
     }
-    expect(orbitSample(FIXTURE_PAIR, FIXTURE_TOKENS, wall, FIXTURE_NOW)).toEqual(one);
-    const later = orbitSample(FIXTURE_PAIR, FIXTURE_TOKENS, wall + 120, FIXTURE_NOW);
-    expect(later.inFlight.map((row) => `${row.id}:${row.status}`)).not.toEqual(one.inFlight.map((row) => `${row.id}:${row.status}`));
+    expect(new OrbitSampleStream(FIXTURE_TOKENS).at(wall, FIXTURE_NOW)).toEqual(one);
+  });
+
+  it("moves in batches like the chain: a proof posting moves every transfer at Final at once, and the lanes are offset", () => {
+    const stream = new OrbitSampleStream(FIXTURE_TOKENS);
+    stream.at(wall, FIXTURE_NOW);
+    let moves = 0;
+    let previous = stepsOf(stream.at(wall, FIXTURE_NOW));
+    const lockstep: boolean[] = [];
+    for (let tick = 1; tick <= 16; tick++) {
+      const next = stepsOf(stream.at(wall + tick * SAMPLE_TICK, FIXTURE_NOW));
+      const changed = next.map((track, lane) => {
+        const before = new Map(previous[lane]!.planets.map((planet) => [planet.id, planet.step]));
+        return track.planets.filter((planet) => before.has(planet.id) && before.get(planet.id) !== planet.step).length;
+      });
+      // Some ticks move several transfers at once.
+      moves = Math.max(moves, ...changed);
+      lockstep.push(changed[0]! > 0 === changed[1]! > 0);
+      previous = next;
+    }
+    expect(moves).toBeGreaterThanOrEqual(3);
+    expect(lockstep.includes(false)).toBe(true);
   });
 });

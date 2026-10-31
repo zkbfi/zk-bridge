@@ -28,12 +28,12 @@ describe("Explore's top", () => {
     expect(container.querySelectorAll(".zb-xmap .zb-tok-icon.zb-on-accent")).toHaveLength(2);
   });
 
-  it("puts the in-flight orbits, one track per direction, after the search band and before the browse rows", async () => {
+  it("puts the in-flight orbits, one loop for the pair, after the search band and before the browse rows", async () => {
     const { container } = renderWithWallet(<Shell />, { wallet: connectedWallet() });
     const heading = await screen.findByRole("heading", { name: /In flight/ });
     const browse = screen.getByRole("heading", { name: /Browse/ });
     expect(heading.compareDocumentPosition(browse) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(container.querySelectorAll(".zb-orb svg[role=group]")).toHaveLength(2);
+    expect(container.querySelectorAll("svg.zb-orb-svg[role=group]")).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Show as a list" })).toBeInTheDocument();
   });
 

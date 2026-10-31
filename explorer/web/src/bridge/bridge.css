@@ -76,8 +76,6 @@
   --zb-planet-2: var(--zb-p-ember-deep);
   --zb-planet-3: var(--zb-p-tint-3);
   --zb-planet-4: var(--zb-p-ember-dark);
-  --zb-planet-core: var(--zb-p-paper);
-  --zb-planet-ring: var(--zb-p-ink);
 }
 
 .theme-ember-dark {
@@ -138,8 +136,6 @@
   --zb-planet-2: var(--zb-p-tint-3);
   --zb-planet-3: var(--zb-p-dust);
   --zb-planet-4: var(--zb-p-ember-light);
-  --zb-planet-core: var(--zb-p-black);
-  --zb-planet-ring: var(--zb-p-text);
 }
 
 .theme-mono {
@@ -192,8 +188,6 @@
   --zb-planet-2: var(--zb-p-tint);
   --zb-planet-3: var(--zb-p-grey);
   --zb-planet-4: var(--zb-p-ember-light);
-  --zb-planet-core: var(--zb-p-black);
-  --zb-planet-ring: var(--zb-p-text);
 }
 
 .zb {
