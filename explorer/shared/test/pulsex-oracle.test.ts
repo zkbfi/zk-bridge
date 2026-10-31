@@ -147,7 +147,9 @@ describe("dollar text", () => {
   it("shows two decimals from $1, else three significant digits", () => {
     expect(usdText(1234.5)).toBe("1,234.50");
     expect(usdText(0.0000562)).toBe("0.0000562");
-    expect(usdText(0.5)).toBe("0.5");
+    expect(usdText(0.5)).toBe("0.50");
+    expect(usdText(0.299)).toBe("0.29");
+    expect(usdText(0.01)).toBe("0.01");
   });
 });
 

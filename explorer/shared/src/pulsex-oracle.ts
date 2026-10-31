@@ -166,9 +166,15 @@ export const resolvePricingAddress = async (
   return pricingAddress(token);
 };
 
-/** A dollar value as text, for display: "1,234.56", or small values with significant digits. */
-export const usdText = (value: number): string =>
-  value >= 1 ? value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : value.toPrecision(3).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+/**
+ * A dollar value as text, for display: two decimals from one cent ("1,234.56", "0.50"; under $1 cut, not rounded), and
+ * under a cent three significant digits ("0.0000562"), which the page then shows with the leading-zeros rule.
+ */
+export const usdText = (value: number): string => {
+  if (value >= 1) return value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (value >= 0.01) return value.toFixed(6).slice(0, -4);
+  return value.toPrecision(3).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+};
 
 /** Where a native coin's dollar price came from. */
 export type NativePriceSource = "pulsex-pls-usd" | "pulsex-weth-copy";
