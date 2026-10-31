@@ -215,6 +215,9 @@
 .zb-ticks { position: relative; height: 30px; font-size: var(--zb-step-micro); color: var(--zb-muted); }
 .zb-ticks span { position: absolute; transform: translateX(-50%); text-align: center; line-height: 1.2; white-space: nowrap; }
 .zb-q { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--zb-muted); font-size: var(--zb-step-micro); color: var(--zb-muted); position: relative; }
+.zb-save { width: 24px; height: 24px; border-radius: 4px; color: var(--zb-ink); cursor: pointer; }
+.zb-save .zb-icon { width: 14px; height: 14px; }
+.zb-save:disabled { opacity: 0.45; cursor: default; }
 
 /* To row, the Bridge pill and its verdict */
 .zb-actions .zb-col { padding-block: 12px 18px; }

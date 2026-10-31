@@ -2,7 +2,10 @@
  * The automatic fee cap the user set in Settings (owner: "make the cap adjustable"). Stored in this browser only; a
  * link can still carry a different cap for one transfer.
  */
-import { DEFAULT_AUTO_CAP_PERCENT } from "./fee-guard";
+import { DEFAULT_CAP_WAD, PERCENT_WAD } from "@zk-bridge/shared";
+
+/** The automatic fee's cap by default, in percent (owner: "cap ... at 1%"); the shared rules hold it as a share. */
+export const DEFAULT_AUTO_CAP_PERCENT = Number(DEFAULT_CAP_WAD / PERCENT_WAD);
 
 const KEY = "zk-bridge-explorer.fee-cap";
 

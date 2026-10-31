@@ -3,52 +3,16 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { Shell } from "../../src/app/Shell";
-import { loadFeeCap, saveFeeCap } from "../../src/bridge/fee-cap";
-import { autoFeePercent, capTooLarge, DEFAULT_AUTO_CAP_PERCENT, lowFeeOf } from "../../src/bridge/fee-guard";
+import { DEFAULT_AUTO_CAP_PERCENT, loadFeeCap, saveFeeCap } from "../../src/bridge/fee-cap";
 import { connectedWallet, renderWithWallet } from "../app/support";
 
 beforeEach(() => {
   window.localStorage.clear();
 });
 
-describe("the automatic fee", () => {
-  it("is the larger of 0.1% of the amount and twice the anticipated cost", () => {
-    // $10,000: 0.1% is $10, twice a $1.025 cost is $2.05; 0.1% wins.
-    expect(autoFeePercent({ amountUsd: 10_000, costUsd: 1.025, capPercent: 1 })).toEqual({ percent: 0.1, capped: false });
-    // $500: 0.1% is $0.50, twice the cost is $2.05 = 0.41%; the cost wins.
-    expect(autoFeePercent({ amountUsd: 500, costUsd: 1.025, capPercent: 1 })).toEqual({ percent: 0.41, capped: false });
-  });
-
-  it("stops at the cap; the fee then sits under twice the cost and the low-fee warning stays", () => {
-    // $100 with a $2 cost needs 4%; the 1% cap binds.
-    const auto = autoFeePercent({ amountUsd: 100, costUsd: 2, capPercent: DEFAULT_AUTO_CAP_PERCENT });
-    expect(auto).toEqual({ percent: 1, capped: true });
-    expect(lowFeeOf({ feeUsd: (auto.percent / 100) * 100, costUsd: 2, belowBreakEven: false })).toBe(true);
-  });
-
-  it("recomputes with a lowered cap", () => {
-    expect(autoFeePercent({ amountUsd: 500, costUsd: 1.025, capPercent: 0.25 })).toEqual({ percent: 0.25, capped: true });
-  });
-
-  it("is 0.1% without prices", () => {
-    expect(autoFeePercent({ amountUsd: null, costUsd: null, capPercent: 1 })).toEqual({ percent: 0.1, capped: false });
-  });
-});
-
-describe("a cap that is too large", () => {
-  it("is one above the high-tip line for the amount", () => {
-    expect(DEFAULT_AUTO_CAP_PERCENT).toBe(1);
-    expect(capTooLarge(1, 50)).toBe(false);
-    expect(capTooLarge(1.5, 50)).toBe(true);
-    expect(capTooLarge(1, 316)).toBe(true);
-    expect(capTooLarge(0.3, 316)).toBe(false);
-    expect(capTooLarge(1, 5_000)).toBe(true);
-    expect(capTooLarge(0.1, 5_000)).toBe(false);
-  });
-});
-
 describe("the stored cap", () => {
   it("defaults to 1%, keeps a valid value in this browser, and refuses others", () => {
+    expect(DEFAULT_AUTO_CAP_PERCENT).toBe(1);
     expect(loadFeeCap()).toBe(1);
     expect(saveFeeCap("0.5")).toBeNull();
     expect(loadFeeCap()).toBe(0.5);
@@ -59,22 +23,54 @@ describe("the stored cap", () => {
   });
 });
 
+const openReview = async (query: string) => {
+  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${query}`);
+  renderWithWallet(<Shell />, { wallet: connectedWallet() });
+  const pill = await waitFor(() => {
+    const found = screen.getAllByRole("button").find((button) => button.classList.contains("zb-go"));
+    expect(found).toBeDefined();
+    expect(found).not.toBeDisabled();
+    expect(found!.textContent).not.toBe("Check the transfer");
+    return found!;
+  }, { timeout: 3000 });
+  await waitFor(() => expect(document.querySelector(".zb-fees")?.textContent).toMatch(/\d/), { timeout: 3000 });
+  await userEvent.click(pill);
+  return screen.findByRole("dialog", { name: "Review" });
+};
+
 describe("the cap in the review", () => {
-  it("always warns about a cap that is too large and lowers it in place", async () => {
-    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.amount=0.01&tip.cap=2`);
-    renderWithWallet(<Shell />, { wallet: connectedWallet() });
-    const pill = await waitFor(() => {
-      const found = screen.getAllByRole("button").find((button) => button.classList.contains("zb-go"));
-      expect(found).toBeDefined();
-      expect(found).not.toBeDisabled();
-      return found!;
-    }, { timeout: 3000 });
-    await userEvent.click(pill);
-    const review = await screen.findByRole("dialog", { name: "Review" });
+  // PulseChain → Ethereum at the sample prices: $1,000 of zkbUSDC, delivery about $5.07 on Ethereum.
+  const GAS_BASED = "dir=second-to-first&bridge.amount=1000&tip.mode=gas-multiplier&tip.price=3000";
+
+  it("warns High cap % for a gas-based fee whose cap would leave too much if gas rises, shows the drift, and lowers the cap in place", async () => {
+    const review = await openReview(GAS_BASED);
+    expect(within(review).getByText("Can drift").nextSibling).toHaveTextContent(/now, up to .* if gas rises to the Normal ceiling/);
     const warning = within(review).getByRole("group", { name: "Fee cap" });
-    expect(warning).toHaveTextContent(/2%/);
+    expect(warning).toHaveTextContent(/High cap %/);
+    expect(warning).toHaveTextContent(/1% cap/);
     await userEvent.click(within(warning).getByRole("radio", { name: "0.5%" }));
     await waitFor(() => expect(window.location.hash).toMatch(/tip\.cap=0\.5/));
     expect(within(review).queryByRole("group", { name: "Fee cap" })).toBeNull();
+  });
+
+  it("never warns about the cap for a fee fixed at signing (the default share)", async () => {
+    const review = await openReview("dir=second-to-first&bridge.amount=1000&tip.cap=2");
+    expect(within(review).queryByRole("group", { name: "Fee cap" })).toBeNull();
+    expect(within(review).queryByText("Can drift")).toBeNull();
+  });
+
+  it("saves this bridge's cap as the default with the floppy button", async () => {
+    const review = await openReview(GAS_BASED);
+    const warning = within(review).getByRole("group", { name: "Fee cap" });
+    await userEvent.click(within(warning).getByRole("radio", { name: "0.25%" }));
+    await waitFor(() => expect(window.location.hash).toMatch(/tip\.cap=0\.25/));
+    expect(loadFeeCap()).toBe(1);
+    // At 0.25% the warning closes (the capped fee no longer covers the cost); the drawer's cap slider has the button.
+    expect(within(review).queryByRole("group", { name: "Fee cap" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /Close|Back/ }));
+    await userEvent.click(screen.getAllByRole("button").find((button) => button.getAttribute("data-fee") === "tip")!);
+    await userEvent.click(await screen.findByRole("button", { name: "Save 0.25% as your default cap" }));
+    await waitFor(() => expect(loadFeeCap()).toBe(0.25));
+    await waitFor(() => expect(window.location.hash).not.toMatch(/tip\.cap=/));
   });
 });

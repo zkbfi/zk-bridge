@@ -84,4 +84,16 @@ describe("the fee line", () => {
     expect(screen.getByText("Final on Ethereum")).toBeInTheDocument();
     expect(screen.getByText("~13 min")).toBeInTheDocument();
   });
+  it("puts a small floppy-disk save button beside a slider that can be saved, disabled once saved", async () => {
+    const onSave = vi.fn();
+    const cap = { label: "Automatic fee cap", help: "The most the automatic fee may take.", value: 0.5, min: 0.05, max: 2, step: 0.05, valueText: "0.5%", ticks: [], onChange: vi.fn() };
+    const { rerender } = render(<FeeLine {...props({ sliders: [{ ...cap, save: { saved: false, onSave, label: "Save 0.5% as your default cap" } }] })} />);
+    await userEvent.click(screen.getByRole("button", { name: /Tip/ }));
+    const save = screen.getByRole("button", { name: "Save 0.5% as your default cap" });
+    expect(save.querySelector("svg")).not.toBeNull();
+    await userEvent.click(save);
+    expect(onSave).toHaveBeenCalledOnce();
+    rerender(<FeeLine {...props({ sliders: [{ ...cap, save: { saved: true, onSave, label: "0.5% is your default cap" } }] })} />);
+    expect(screen.getByRole("button", { name: "0.5% is your default cap" })).toBeDisabled();
+  });
 });

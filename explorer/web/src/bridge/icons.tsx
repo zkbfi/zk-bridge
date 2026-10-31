@@ -28,6 +28,15 @@ export const SlidersIcon = ({ title }: IconProps) => (
   </svg>
 );
 
+/** A floppy disk: save as the default. */
+export const FloppyIcon = ({ title }: IconProps) => (
+  <svg viewBox="0 0 16 16" {...svgProps(title)}>
+    <path d="M2.5 2.5h9l2 2v9h-11z" />
+    <path d="M5 2.5v3.5h5.5V2.5" />
+    <rect x="5" y="9" width="6" height="4.5" />
+  </svg>
+);
+
 /** A hand holding money: the tip ("take my money"). */
 export const MoneyHand = ({ title }: IconProps) => (
   <svg viewBox="0 0 24 24" {...svgProps(title)}>

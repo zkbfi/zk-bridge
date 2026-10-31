@@ -42,7 +42,8 @@ describe("the owner's link, #/bridge/eth-pls?bridge.amount=1, with no wallet", (
     window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.amount=1`);
     const { container } = renderWithWallet(<Shell />, { wallet: disconnectedWallet() });
     await within(await screen.findByRole("region", { name: /^You send/ })).findByRole("button", { name: /^Token:/ });
-    await waitFor(() => expect(output()).toHaveTextContent(/^0\.999$/));
+    // At the sample prices 1 USDC is $1: the default fee wants twice the $0.025 proof cost, and the 1% cap holds it at $0.01.
+    await waitFor(() => expect(output()).toHaveTextContent(/^0\.99$/));
     expect(container.querySelector('[data-fee="tip"]')!.textContent).not.toMatch(/—/);
     expect(fromBand()).toBeInTheDocument();
   });

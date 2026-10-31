@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import { ClockIcon, GasCan, MoneyHand } from "./icons";
+import { ClockIcon, FloppyIcon, GasCan, MoneyHand } from "./icons";
 import type { TransferStep } from "./bridge-model";
 
 /** A slider of the tip drawer: a value, its range, and tick marks with labels. */
@@ -13,6 +13,8 @@ export type FeeSlider = {
   readonly valueText: ReactNode;
   readonly ticks: readonly { readonly at: number; readonly label: string }[];
   readonly onChange: (value: number) => void;
+  /** A small save button beside the value (a floppy disk) that makes it the default; `label` names what it does. */
+  readonly save?: { readonly saved: boolean; readonly onSave: () => void; readonly label: string };
 };
 
 /** Props of {@link FeeLine}. */
@@ -204,7 +206,14 @@ const Slider = ({ slider }: { readonly slider: FeeSlider }) => {
             ?{help ? <Tip id={helpId} text={slider.help} /> : null}
           </button>
         </span>
-        <b>{slider.valueText}</b>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <b>{slider.valueText}</b>
+          {slider.save === undefined ? null : (
+            <button type="button" className="zb-q zb-save" aria-label={slider.save.label} title={slider.save.label} disabled={slider.save.saved} onClick={slider.save.onSave}>
+              <FloppyIcon />
+            </button>
+          )}
+        </span>
       </div>
       <div className="zb-range">
         <span className="zb-range-bar" />
