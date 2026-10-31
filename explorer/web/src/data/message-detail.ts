@@ -1,4 +1,5 @@
 import type { Address, Hex } from "viem";
+import { messageCostsSchema, type MessageCosts } from "@zk-bridge/shared";
 import type { PairConfig } from "@terminal/model/types";
 import { FEED_STATUSES, type FeedStatus } from "@terminal/model/types";
 import {
@@ -62,6 +63,15 @@ export type MessageDetail = {
   readonly transfer: DetailTransfer | null;
   /** The call data of the message, when the answer carries it. */
   readonly data: Hex | null;
+  /** What the send, the delivery and the proof cost (the indexer's `costs`), or null when the answer has none (RPC). */
+  readonly costs: MessageCosts | null;
+};
+
+const costsOf = (value: unknown): MessageCosts | null => {
+  if (value === null || value === undefined) return null;
+  const parsed = messageCostsSchema.safeParse(value);
+  if (!parsed.success) throw new IndexerResponseError("The message's costs have an unknown shape.");
+  return parsed.data;
 };
 
 const tokenOf = (value: unknown, what: string): DetailToken => {
@@ -128,6 +138,7 @@ export const parseMessageDetail = (value: unknown): MessageDetail => {
     releaseFailed: item.releaseFailed === true,
     transfer: transferOf(item.transfer),
     data: typeof item.data === "string" ? readHex(item.data, "data") : null,
+    costs: costsOf(item.costs),
   };
 };
 

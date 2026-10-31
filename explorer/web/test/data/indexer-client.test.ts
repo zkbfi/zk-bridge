@@ -92,3 +92,18 @@ describe("createIndexerClient", () => {
     expect(await client.findMessageByTransaction(TRANSACTION as `0x${string}`)).toBeNull();
   });
 });
+
+describe("a transaction's cost", () => {
+  const cost = { chainId: 369, hash: TRANSACTION, block: "40", gasUsed: "100000", effectiveGasPriceWei: "1000000000", costWei: "100000000000000", costUsd: null, nativeUsd: null };
+  it("reads GET /api/tx/:chainId/:hash, and null for a transaction the indexer does not store", async () => {
+    const urls: string[] = [];
+    const client = createIndexerClient({ baseUrl: "https://indexer.example/", request: async (url) => (urls.push(url), url.includes("/369/") ? cost : NOT_FOUND) });
+    expect(await client.transactionCost(369, TRANSACTION.toUpperCase().replace("0X", "0x") as `0x${string}`)).toEqual(cost);
+    expect(urls[0]).toBe(`https://indexer.example/api/tx/369/${TRANSACTION}`);
+    expect(await client.transactionCost(1, TRANSACTION as `0x${string}`)).toBeNull();
+  });
+  it("refuses an answer of the wrong shape", async () => {
+    const client = createIndexerClient({ baseUrl: "https://indexer.example", request: async () => ({ ...cost, costWei: 1 }) });
+    await expect(client.transactionCost(369, TRANSACTION as `0x${string}`)).rejects.toThrow(/transaction cost/);
+  });
+});

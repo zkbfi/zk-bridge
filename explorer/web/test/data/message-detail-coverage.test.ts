@@ -38,6 +38,7 @@ describe("parseMessageDetail, the optional parts", () => {
       destinationTransactionHash: null,
       deliveredBlockNumber: null,
       deliverySucceeded: null,
+      costs: null,
       executedBy: null,
       callbackFailed: false,
       releaseFailed: false,
@@ -162,5 +163,17 @@ describe("chainNameOf", () => {
     expect(chainNameOf(FIXTURE_PAIR, FIXTURE_PAIR.first.chainId)).toBe(FIXTURE_PAIR.first.name);
     expect(chainNameOf(FIXTURE_PAIR, FIXTURE_PAIR.second.chainId)).toBe(FIXTURE_PAIR.second.name);
     expect(chainNameOf(FIXTURE_PAIR, 31337)).toBe("chain 31337");
+  });
+});
+
+describe("parseMessageDetail, the step costs", () => {
+  const cost = { chainId: 1, hash: TRANSACTION, block: "12", gasUsed: "100000", effectiveGasPriceWei: "1000000000", costWei: "100000000000000", costUsd: "300000000000000000", nativeUsd: { usd: "3000000000000000000000", source: "pulsex-weth-copy", priceBlock: "90" } };
+  it("reads the indexer's costs of the send, the delivery and the shared proof", () => {
+    const detail = parseMessageDetail({ ...base, costs: { sent: cost, delivered: null, proof: { ...cost, coveredMessages: 3 } } });
+    expect(detail.costs?.sent?.costUsd).toBe("300000000000000000");
+    expect(detail.costs?.proof?.coveredMessages).toBe(3);
+  });
+  it("refuses costs of the wrong shape", () => {
+    expect(() => parseMessageDetail({ ...base, costs: { sent: { ...cost, costWei: 5 }, delivered: null, proof: null } })).toThrow(/costs/);
   });
 });

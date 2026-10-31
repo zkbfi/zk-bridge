@@ -149,7 +149,8 @@ describe("the message page, a token transfer", () => {
     expect(drawer.getByText("Paid out").nextSibling).toHaveTextContent("16.89 USDC");
     expect(drawer.getByText("Block").nextSibling).toHaveTextContent("4,242");
     expect(drawer.getByRole("link", { name: "4,242" })).toHaveAttribute("href", `#/explore/block/${FIXTURE_PAIR.second.chainId}/4242`);
-    expect(drawer.getByText("Gas").nextSibling).toHaveTextContent("—");
+    expect(drawer.getByText("Gas").nextSibling).toHaveTextContent("210,000");
+    expect(drawer.getByText("Cost").nextSibling).toHaveTextContent(/^0\.00147 PLS · <\$0\.01$/);
     const payload = screen.getByRole("button", { name: /^Payload \(100 bytes\), decoded: mint 16\.89 USDC to 0x00000000…abc0$/ });
     expect(payload).toHaveAttribute("aria-expanded", "false");
     await userEvent.click(payload);
@@ -197,6 +198,40 @@ describe("the message page, a token transfer", () => {
   });
 });
 
+describe("the message page, step costs", () => {
+  /** A step's own row button (the step list's, not a link elsewhere on the page). */
+  const stepButton = async (name: RegExp) =>
+    waitFor(() => {
+      const found = [...document.querySelectorAll<HTMLButtonElement>("button.zb-trail-row")].find((button) => name.test(button.textContent ?? ""));
+      expect(found).toBeDefined();
+      return found!;
+    });
+  it("shows each step's cost only in its open drawer: the coin and its dollars, and the proof's as shared", async () => {
+    const detail = await detailOf(tokenItem.id);
+    renderDetail(detail);
+    const sent = await stepButton(/^Sent on Ethereum/);
+    // Collapsed, the cost is in a hidden drawer; it shows once the step opens.
+    expect(screen.getByText(/0\.00084 ETH/).closest(".zb-drawer")).toHaveAttribute("aria-hidden", "true");
+    await userEvent.click(sent);
+    expect(screen.getByText(/0\.00084 ETH/).closest(".zb-drawer")).toHaveAttribute("aria-hidden", "false");
+    expect(within(sent.closest("li")!).getByText("Cost").nextSibling).toHaveTextContent(/^0\.00084 ETH · \$2\.52$/);
+    const proof = await stepButton(/posted to PulseChain/);
+    await userEvent.click(proof);
+    const drawer = within(proof.closest("li")!);
+    expect(drawer.getByText("Cost").nextSibling).toHaveTextContent(/^shared · 0\.0105 PLS · <\$0\.01 over 3 transfers$/);
+    expect(drawer.getByText("Transaction").nextSibling).toHaveTextContent(/^0x3333/);
+  });
+
+  it("shows — for a step whose cost the indexer has not stored, and the proof step only links without one", async () => {
+    const detail = await detailOf(tokenItem.id);
+    renderDetail({ ...detail, costs: { sent: null, delivered: null, proof: null } });
+    const sent = await stepButton(/^Sent on Ethereum/);
+    await userEvent.click(sent);
+    expect(within(sent.closest("li")!).getByText("Cost").nextSibling).toHaveTextContent(/^—$/);
+    expect([...document.querySelectorAll("button.zb-trail-row")].some((button) => /posted to PulseChain/.test(button.textContent ?? ""))).toBe(false);
+  });
+});
+
 describe("the message page, a contract call", () => {
   it("shows the caller, the called contract, the function, the arguments and the gas", async () => {
     const detail = await detailOf(callItem.id);
@@ -231,16 +266,18 @@ describe("the message page, a contract call", () => {
     expect(step.closest("li")).toHaveAttribute("data-state", "now");
     expect(container.querySelector('.zb-trail-drawer[data-tone="error"]')).not.toBeNull();
     expect(screen.getByText("Reason").nextSibling).toHaveTextContent("—");
-    expect(screen.getByText("Gas used").nextSibling).toHaveTextContent("— of 2,000,000");
+    expect(screen.getByText("Gas used").nextSibling).toHaveTextContent("210,000 of 2,000,000");
     expect(screen.getByRole("button", { name: /Retry with more gas/ })).toBeDisabled();
     expect(screen.getByRole("link", { name: "Open the call" })).toHaveAttribute("href", `#/explore/tx/${FIXTURE_PAIR.second.chainId}/${callItem.destinationTransactionHash}`);
   });
 
   it("leaves out the link to the call while its transaction is unknown, and the gas limit from the reason", async () => {
     const detail = await detailOf(callItem.id);
-    renderDetail({ ...detail, destinationTransactionHash: null, gasLimit: null });
+    renderDetail({ ...detail, destinationTransactionHash: null, gasLimit: null, costs: null });
     await screen.findByText("Contract call");
     await waitFor(() => expect(screen.getByText("Gas used").nextSibling).toHaveTextContent(/^—$/));
+    const reverted = [...document.querySelectorAll("button.zb-trail-row")].find((button) => /Call reverted/.test(button.textContent ?? ""))!;
+    expect(within(reverted.closest("li")!).getByText("Cost").nextSibling).toHaveTextContent(/^—$/);
     expect(screen.queryByRole("link", { name: "Open the call" })).toBeNull();
   });
 });

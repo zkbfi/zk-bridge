@@ -5,7 +5,7 @@
  * each chain, what it did through zkb.fi, and its transfers and proofs.
  */
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { getAddress, type Address, type Hex } from "viem";
 import type { PairConfig } from "@terminal/model/types";
 import { formatRoute, type ExplorePage } from "../app/route";
@@ -52,13 +52,14 @@ export const BlockDrawer = ({ detail }: { readonly detail: Extract<StepDetail, {
   );
 };
 
-/** The drawer of a transaction step: the transaction and the explorer link. */
-export const TxDrawer = ({ detail }: { readonly detail: Extract<StepDetail, { kind: "tx" }> }) => {
+/** The drawer of a transaction step: the transaction, its cost when the page has it, and the explorer link. */
+export const TxDrawer = ({ detail, cost }: { readonly detail: Extract<StepDetail, { kind: "tx" }>; readonly cost?: ReactNode }) => {
   const url = explorerUrl(detail.chainId, "tx", detail.hash);
   return (
     <DrawerGrid
       rows={[
         ["Transaction", <a href={explore({ kind: "tx", chainId: detail.chainId, id: detail.hash })} className="zb-mono">{shortHex(detail.hash)}</a>],
+        ...(cost === undefined ? [] : [["Cost", cost] as const]),
         ["Explorer", url === undefined ? <Missing why="No explorer for this chain" /> : <a href={url} target="_blank" rel="noreferrer" aria-label="The transaction on the chain's explorer"><ExternalLink /></a>],
       ]}
     />

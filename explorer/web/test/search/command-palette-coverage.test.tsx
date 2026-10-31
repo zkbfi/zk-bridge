@@ -64,6 +64,7 @@ describe("the command palette, the cases of the first test file leaves out", () 
     const indexer: IndexerClient = {
       message: (id) => (id === slowHash ? slow : fixture.message(id)),
       findMessageByTransaction: (hash) => fixture.findMessageByTransaction(hash),
+      transactionCost: async () => null,
     };
     const { input } = open({ indexer });
     await userEvent.click(input);

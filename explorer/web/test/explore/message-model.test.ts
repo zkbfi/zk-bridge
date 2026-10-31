@@ -6,7 +6,7 @@ import { createFixtureIndexerClient } from "../../src/data/fixture-indexer-clien
 import type { MessageDetail } from "../../src/data/message-detail";
 import { CONTRACT_NAMES, contractKeyOf, contractNameOf } from "../../src/explore/contract-names";
 import type { ProofRow } from "../../src/explore/explore-source";
-import { appOf, calledFunction, coveringProof, messageSteps, payloadSummary } from "../../src/explore/message-model";
+import { appOf, calledFunction, coveringProof, messageSteps, payloadSummary, stepCostText } from "../../src/explore/message-model";
 
 const feed = buildFixtureFeed(FIXTURE_NOW);
 const tokenItem = feed.find((item) => item.kind === "token" && item.status === "delivered" && item.direction === "first-to-second")!;
@@ -101,5 +101,21 @@ describe("the steps", () => {
     const pending = messageSteps({ ...base, coveredByHeadSlot: null, coveredAt: null, deliveredAt: null }, FIXTURE_PAIR, []);
     expect(pending.map((step) => step.done)).toEqual([true, false, false, false]);
     expect(pending[3]!.detail).toBeUndefined();
+  });
+});
+
+describe("a step's cost", () => {
+  const cost = (changes: Record<string, unknown> = {}) => ({ chainId: 1, hash: `0x${"ab".repeat(32)}` as const, block: "12", gasUsed: "120000", effectiveGasPriceWei: "7000000000", costWei: "840000000000000", costUsd: "2520000000000000000", nativeUsd: { usd: "3000000000000000000000", source: "pulsex-weth-copy" as const, priceBlock: "90" }, ...changes });
+  it("is the native coin and its dollars at the price block", () => {
+    expect(stepCostText(cost(), FIXTURE_PAIR)).toBe("0.00084 ETH · $2.52");
+  });
+  it("says a proof's cost is shared, with how many transfers it covered", () => {
+    expect(stepCostText({ ...cost({ chainId: 369, costWei: "2000000000000000000", costUsd: "60000000000000" }), coveredMessages: 4 }, FIXTURE_PAIR)).toBe("shared · 2 PLS · <$0.01 over 4 transfers");
+    expect(stepCostText({ ...cost(), coveredMessages: 1 }, FIXTURE_PAIR)).toBe("shared · 0.00084 ETH · $2.52 over 1 transfer");
+  });
+  it("shows — for the dollars on a testnet, and nothing without a cost", () => {
+    expect(stepCostText(cost({ chainId: 11155111, costUsd: null, nativeUsd: null }), FIXTURE_PAIR)).toBe("0.00084 · —");
+    expect(stepCostText(cost({ costUsd: "0" }), FIXTURE_PAIR)).toBe("0.00084 ETH · $0");
+    expect(stepCostText(null, FIXTURE_PAIR)).toBeNull();
   });
 });

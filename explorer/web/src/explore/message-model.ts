@@ -3,8 +3,8 @@
  * and the steps from the send to the delivery. Every value comes from the indexer, the deployment or the chain; what none
  * of them records stays null and the page shows "—".
  */
-import { decodeMediatorMessage } from "@zk-bridge/shared";
-import type { Address, Hex } from "viem";
+import { decodeMediatorMessage, usdText, type CostView } from "@zk-bridge/shared";
+import { formatUnits, type Address, type Hex } from "viem";
 import type { PairConfig } from "@terminal/model/types";
 import { formatRoute } from "../app/route";
 import { amountText } from "../bridge/bridge-model";
@@ -133,4 +133,24 @@ export const messageSteps = (detail: MessageDetail, pair: PairConfig, proofs: re
       ...(failed ? { tone: "error" as const } : {}),
     },
   ];
+};
+
+/** Dollars (USD × 1e18) as text: "$2.52", "<$0.01" under a cent, "$0" for nothing. */
+const dollarText = (usd: bigint): string => (usd === 0n ? "$0" : usd < 10n ** 16n ? "<$0.01" : `$${usdText(Number(usd) / 1e18)}`);
+
+/**
+ * A step's cost for its drawer: "<native> <symbol> · $<usd>" (the dollars at the price block the indexer read), and
+ * "shared · … over N transfers" for a proof, whose cost every message it covered shares. "—" for the dollars where
+ * there is no price (testnets); null without a cost.
+ *
+ * @param cost The indexer's cost of the step's transaction, with the covered count for a proof.
+ * @param pair The pair, for the native coin's symbol.
+ */
+export const stepCostText = (cost: (CostView & { readonly coveredMessages?: number }) | null, pair: PairConfig): string | null => {
+  if (cost === null) return null;
+  const symbol = [pair.first, pair.second].find((chain) => chain.chainId === cost.chainId)?.nativeSymbol;
+  const coin = `${Number(Number(formatUnits(BigInt(cost.costWei), 18)).toPrecision(3))}${symbol === undefined ? "" : ` ${symbol}`}`;
+  const dollars = cost.costUsd === null ? "—" : dollarText(BigInt(cost.costUsd));
+  const text = `${coin} · ${dollars}`;
+  return cost.coveredMessages === undefined ? text : `shared · ${text} over ${cost.coveredMessages} transfer${cost.coveredMessages === 1 ? "" : "s"}`;
 };

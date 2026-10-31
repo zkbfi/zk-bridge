@@ -20,7 +20,7 @@ import { TokenIcon } from "../bridge/TokenIcon";
 import type { DetailToken, MessageDetail } from "../data/message-detail";
 import { chainNamer } from "../explore/ExploreScreen";
 import { durationText, statusWord } from "../explore/explore-model";
-import { appOf, calledFunction, messageSteps, payloadBytes, payloadSummary, type MessageApp, type MessageStep } from "../explore/message-model";
+import { appOf, calledFunction, messageSteps, payloadBytes, payloadSummary, stepCostText, type MessageApp, type MessageStep } from "../explore/message-model";
 import { KV, RouteIcons, shortHex, XBand, XGroup } from "../explore/parts";
 import { DrawerGrid, StepTrail, type TrailStep } from "../explore/StepTrail";
 import { explorerUrl } from "../explore/chain-reader";
@@ -156,8 +156,14 @@ const FeeRow = ({ token, other, pair, destination }: { readonly token: DetailTok
   );
 };
 
+/** A step's cost for its drawer (owner: only in the expanded view), or "—" when the indexer has not stored it. */
+const CostCell = ({ text }: { readonly text: string | null }) => (text === null ? <Missing why={NOT_RECORDED} /> : <span title={COST_NOTE}>{text}</span>);
+const COST_NOTE = "Gas used × the effective gas price, in the chain's coin; dollars at the PulseX price of the block the indexer read (for Ethereum, the PulseChain block nearest the transaction).";
+
 /** The drawer of the delivery step: the transaction, its block, gas and what it paid out; or, for a reverted call, the reason first. */
-const DeliveryDrawer = ({ detail, reverted }: { readonly detail: MessageDetail; readonly reverted: boolean }) => {
+const DeliveryDrawer = ({ detail, reverted, pair }: { readonly detail: MessageDetail; readonly reverted: boolean; readonly pair: PairConfig }) => {
+  const cost = <CostCell text={stepCostText(detail.costs?.delivered ?? null, pair)} />;
+  const gasUsed = detail.costs?.delivered == null ? null : Number(detail.costs.delivered.gasUsed).toLocaleString("en-US");
   const hash = detail.destinationTransactionHash;
   const transaction: readonly [string, ReactNode] = ["Transaction", hash === null ? <Missing why={NOT_RECORDED} /> : <a href={explore({ kind: "tx", chainId: detail.destinationChainId, id: hash })} className="zb-mono">{shortHex(hash)}</a>];
   const gasLimit = detail.gasLimit === null ? null : detail.gasLimit.toLocaleString("en-US");
@@ -167,7 +173,8 @@ const DeliveryDrawer = ({ detail, reverted }: { readonly detail: MessageDetail; 
         rows={[
           ["Reason", detail.releaseFailed ? "the mediator could not release the tokens; final" : <Missing why={NOT_RECORDED} />],
           transaction,
-          ["Gas used", <><Missing why={NOT_RECORDED} />{gasLimit === null ? null : ` of ${gasLimit}`}</>],
+          ["Gas used", <>{gasUsed ?? <Missing why={NOT_RECORDED} />}{gasLimit === null ? null : ` of ${gasLimit}`}</>],
+          ["Cost", cost],
         ]}
       />
     );
@@ -178,25 +185,49 @@ const DeliveryDrawer = ({ detail, reverted }: { readonly detail: MessageDetail; 
       rows={[
         transaction,
         ["Block", detail.deliveredBlockNumber === null ? <Missing why={NOT_RECORDED} /> : <a href={explore({ kind: "block", chainId: detail.destinationChainId, id: String(detail.deliveredBlockNumber) })}>{detail.deliveredBlockNumber.toLocaleString("en-US")}</a>],
-        ["Gas", <Missing why={NOT_RECORDED} />],
+        ["Gas", gasUsed ?? <Missing why={NOT_RECORDED} />],
+        ["Cost", cost],
         ...(detail.transfer === null ? [] : [["Paid out", paid === null ? <Missing why={NOT_RECORDED} /> : <><Num text={amountText(paid, detail.transfer.destinationToken.decimals)} /> {detail.transfer.destinationToken.symbol}</>] as const]),
       ]}
     />
   );
 };
 
-const trailOf = (steps: readonly MessageStep[], detail: MessageDetail): TrailStep[] =>
-  steps.map((step) => ({
+/** The drawer of the proof step: the proof, its transaction and its cost, shared by every message it covered. */
+const ProofDrawer = ({ detail, pair, href }: { readonly detail: MessageDetail; readonly pair: PairConfig; readonly href: string | undefined }) => {
+  const proof = detail.costs?.proof ?? null;
+  return (
+    <DrawerGrid
+      rows={[
+        ...(href === undefined ? [] : [["Proof", <a href={href}>open</a>] as const]),
+        ["Transaction", proof === null ? <Missing why={NOT_RECORDED} /> : <a href={explore({ kind: "tx", chainId: proof.chainId, id: proof.hash })} className="zb-mono">{shortHex(proof.hash)}</a>],
+        ["Cost", <CostCell text={stepCostText(proof, pair)} />],
+      ]}
+    />
+  );
+};
+
+const trailOf = (steps: readonly MessageStep[], detail: MessageDetail, pair: PairConfig): TrailStep[] =>
+  steps.map((step, index) => ({
     label: step.label,
     done: step.done,
     when: step.at === null ? (step.done ? "" : "waiting") : timeText(step.at),
     ...(step.href === undefined ? {} : { href: step.href }),
     ...(step.tone === undefined ? {} : { tone: step.tone }),
     ...(step.detail === undefined
-      ? {}
+      ? // The proof step (the third) opens a drawer once the indexer has its cost; else it only links to the proof.
+        index === 2 && detail.costs?.proof != null
+        ? { drawer: <ProofDrawer detail={detail} pair={pair} href={step.href} /> }
+        : {}
       : {
           drawer:
-            step.detail.kind === "block" ? <BlockDrawer detail={step.detail} /> : step.detail.kind === "tx" ? <TxDrawer detail={step.detail} /> : <DeliveryDrawer detail={detail} reverted={step.detail.reverted} />,
+            step.detail.kind === "block" ? (
+              <BlockDrawer detail={step.detail} />
+            ) : step.detail.kind === "tx" ? (
+              <TxDrawer detail={step.detail} cost={<CostCell text={stepCostText(detail.costs?.sent ?? null, pair)} />} />
+            ) : (
+              <DeliveryDrawer detail={detail} reverted={step.detail.reverted} pair={pair} />
+            ),
         }),
   }));
 
@@ -330,7 +361,7 @@ export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
           </>
         )}
         <XGroup title="Steps" />
-        <StepTrail steps={trailOf(steps, detail)} initiallyOpen={reverted ? stopped : null} />
+        <StepTrail steps={trailOf(steps, detail, pair)} initiallyOpen={reverted ? stopped : null} />
         {reverted && !detail.releaseFailed ? (
           <div className="zb-xactions">
             <button type="button" className="zb-pill zb-xretry" disabled title="Not available yet: the dapp has no retry path for a reverted call">
