@@ -1331,5 +1331,141 @@
       },
       "output": "20000000000000000"
     }
+  ],
+  "gasRange": [
+    {
+      "note": "Ethereum-like: 150k gas, 10 gwei, 1 gwei tip, ETH $3,000, Normal",
+      "input": {
+        "gasUsed": "150000",
+        "baseFeeWei": "10000000000",
+        "priorityFeeWei": "1000000000",
+        "nativePriceE18": "3000000000000000000000",
+        "level": 1
+      },
+      "output": {
+        "lowWei": "5000000000",
+        "anchorWei": "10000000000",
+        "highWei": "20000000000",
+        "lowUsd": "2725000000000000000",
+        "anchorUsd": "4975000000000000000",
+        "highUsd": "9475000000000000000"
+      }
+    },
+    {
+      "note": "same at High",
+      "input": {
+        "gasUsed": "150000",
+        "baseFeeWei": "10000000000",
+        "priorityFeeWei": "1000000000",
+        "nativePriceE18": "3000000000000000000000",
+        "level": 2
+      },
+      "output": {
+        "lowWei": "3333333333",
+        "anchorWei": "15000000000",
+        "highWei": "30000000000",
+        "lowUsd": "1974999999850000000",
+        "anchorUsd": "7462500000000000000",
+        "highUsd": "13975000000000000000"
+      }
+    },
+    {
+      "note": "same at Highest",
+      "input": {
+        "gasUsed": "150000",
+        "baseFeeWei": "10000000000",
+        "priorityFeeWei": "1000000000",
+        "nativePriceE18": "3000000000000000000000",
+        "level": 3
+      },
+      "output": {
+        "lowWei": "2000000000",
+        "anchorWei": "25000000000",
+        "highWei": "50000000000",
+        "lowUsd": "1375000000000000000",
+        "anchorUsd": "12437500000000000000",
+        "highUsd": "22975000000000000000"
+      }
+    },
+    {
+      "note": "near-free gas: the proof dominates, the high end held at the anchor",
+      "input": {
+        "gasUsed": "150000",
+        "baseFeeWei": "7",
+        "priorityFeeWei": "0",
+        "nativePriceE18": "30000000000000",
+        "level": 3
+      },
+      "output": {
+        "lowWei": "1",
+        "anchorWei": "17",
+        "highWei": "35",
+        "lowUsd": "25000000000000004",
+        "anchorUsd": "62500000000000077",
+        "highUsd": "62500000000000077"
+      }
+    }
+  ],
+  "feeSpanUsd": [
+    {
+      "note": "a fee fixed at signing is one point",
+      "input": {
+        "feeUsd": "5000000000000000000",
+        "gasBased": false,
+        "range": {
+          "lowWei": "5000000000",
+          "anchorWei": "10000000000",
+          "highWei": "20000000000",
+          "lowUsd": "2725000000000000000",
+          "anchorUsd": "4975000000000000000",
+          "highUsd": "9475000000000000000"
+        },
+        "worstFeeUsd": null
+      },
+      "output": {
+        "lowUsd": "5000000000000000000",
+        "highUsd": "5000000000000000000"
+      }
+    },
+    {
+      "note": "a gas-based fee follows the cost",
+      "input": {
+        "feeUsd": "6000000000000000000",
+        "gasBased": true,
+        "range": {
+          "lowWei": "5000000000",
+          "anchorWei": "10000000000",
+          "highWei": "20000000000",
+          "lowUsd": "2725000000000000000",
+          "anchorUsd": "4975000000000000000",
+          "highUsd": "9475000000000000000"
+        },
+        "worstFeeUsd": null
+      },
+      "output": {
+        "lowUsd": "3286432160804020100",
+        "highUsd": "11427135678391959798"
+      }
+    },
+    {
+      "note": "a gas-based fee's high end stops at the signed limit",
+      "input": {
+        "feeUsd": "6000000000000000000",
+        "gasBased": true,
+        "range": {
+          "lowWei": "5000000000",
+          "anchorWei": "10000000000",
+          "highWei": "20000000000",
+          "lowUsd": "2725000000000000000",
+          "anchorUsd": "4975000000000000000",
+          "highUsd": "9475000000000000000"
+        },
+        "worstFeeUsd": "8000000000000000000"
+      },
+      "output": {
+        "lowUsd": "3286432160804020100",
+        "highUsd": "8000000000000000000"
+      }
+    }
   ]
 }

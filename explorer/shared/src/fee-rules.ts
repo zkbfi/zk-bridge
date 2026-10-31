@@ -269,6 +269,60 @@ export const feeWarnings = (input: FeeWarningsInput): FeeWarnings => {
   };
 };
 
+/** The gas setting as an anchor and the range around it (owner, quote 91), in wei per gas and in USD × 1e18. */
+export type GasRange = {
+  /** The lowest base fee the next ~15 minutes are taken to reach: today's divided by the level's ceiling factor. */
+  readonly lowWei: bigint;
+  /** The anchor: the base fee the level is expected to cost (today's × 1, 1.5 or 2.5). */
+  readonly anchorWei: bigint;
+  /** The highest: the level's ceiling, the most the signed terms let a deliverer spend. */
+  readonly highWei: bigint;
+  /** The full cost (proof + delivery gas) at the low end. */
+  readonly lowUsd: bigint;
+  /** The full cost at the anchor: {@link totalCostUsd}. */
+  readonly anchorUsd: bigint;
+  /** The full cost at the high end: {@link ceilingCostUsd}, never under the anchor. */
+  readonly highUsd: bigint;
+};
+
+/**
+ * The gas level as an anchor point with the range the real cost could land in over about 15 minutes (owner, quote 91:
+ * "this is an anchor point, but the price could end up being (left) lower over the course of 15 minutes, or higher
+ * (right)"). The method, fixed so every app agrees: the high end is the level's ceiling (today's base fee × 2, 3 or 5),
+ * the most the signed terms allow; the low end mirrors it, today's base fee divided by the same factor (a base fee falls
+ * as fast as it rises, at most 12.5% a block, and 15 minutes holds ample blocks for either); the anchor is the level's
+ * expected base fee. Costs are {@link totalCostUsd} at the anchor and the proof plus the delivery gas at each end, every
+ * division rounded down. The high cost is never under the anchor's (the anchor counts the proof at the level too).
+ *
+ * @param input Today's gas, prices and the level.
+ */
+export const gasRange = (input: CostInput): GasRange => {
+  const level = GAS_LEVELS[input.level];
+  const lowWei = input.baseFeeWei / level.ceilingFactor;
+  const anchorWei = (input.baseFeeWei * level.expectedHalves) / 2n;
+  const highWei = ceilingWeiOf(input.baseFeeWei, input.level);
+  const gasAt = (wei: bigint): bigint => (input.gasUsed * (wei + input.priorityFeeWei) * input.nativePriceE18) / 10n ** 18n;
+  const anchorUsd = totalCostUsd(input);
+  const ceiling = ceilingCostUsd(input);
+  const lowUsd = PROOF_COST_USD + gasAt(lowWei);
+  return { lowWei, anchorWei, highWei, lowUsd: lowUsd < anchorUsd ? lowUsd : anchorUsd, anchorUsd, highUsd: ceiling > anchorUsd ? ceiling : anchorUsd };
+};
+
+/**
+ * The span the fee itself could land in over the same 15 minutes (owner, quote 92: "present their caps as ranges"). A
+ * fee fixed at signing (a share or a fixed amount) is one point. A gas-based fee follows the cost: the fee now scaled by
+ * the low and the high cost against the anchor, rounded down, the high end no more than the worst case the signed terms
+ * allow (the limit) when it is known.
+ *
+ * @param input The fee now, whether it is gas-based, the gas range and the signed worst case (USD × 1e18) or null.
+ */
+export const feeSpanUsd = (input: { readonly feeUsd: bigint; readonly gasBased: boolean; readonly range: GasRange | null; readonly worstFeeUsd: bigint | null }): { readonly lowUsd: bigint; readonly highUsd: bigint } => {
+  if (!input.gasBased || input.range === null || input.range.anchorUsd === 0n) return { lowUsd: input.feeUsd, highUsd: input.feeUsd };
+  const scaled = (cost: bigint): bigint => (input.feeUsd * cost) / input.range!.anchorUsd;
+  const high = scaled(input.range.highUsd);
+  return { lowUsd: scaled(input.range.lowUsd), highUsd: input.worstFeeUsd !== null && input.worstFeeUsd < high ? input.worstFeeUsd : high };
+};
+
 /** What {@link hardCapCheck} finds. */
 export type HardCapCheck = {
   /** The fee could go above the hard cap: the Bridge button is blocked until the cap is raised. */

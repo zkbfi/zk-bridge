@@ -3,6 +3,9 @@ import vectors from "./fixtures/fee-rules-vectors.json" with { type: "json" };
 import {
   capWarns,
   clampAutoCap,
+  feeSpanUsd,
+  gasRange,
+  type GasRange,
   DEFAULT_HARD_CAP_WAD,
   hardCapCheck,
   HARD_CAP_STEP_WAD,
@@ -306,6 +309,15 @@ describe("the fixed vectors", () => {
     const found = hardCapCheck({ amountUnits: BigInt(input.amountUnits), feeUnits: BigInt(input.feeUnits), worstFeeUnits: BigInt(input.worstFeeUnits), hardCapWad: BigInt(input.hardCapWad) });
     expect({ over: found.over, feeUnits: String(found.feeUnits), capUnits: String(found.capUnits), raiseToWad: String(found.raiseToWad) }).toEqual(output);
   });
+  it.each(vectors.gasRange)("gasRange $note", ({ input, output }) => {
+    const found = gasRange({ gasUsed: BigInt(input.gasUsed), baseFeeWei: BigInt(input.baseFeeWei), priorityFeeWei: BigInt(input.priorityFeeWei), nativePriceE18: BigInt(input.nativePriceE18), level: input.level as GasLevel });
+    expect(Object.fromEntries(Object.entries(found).map(([key, value]) => [key, String(value)]))).toEqual(output);
+  });
+  it.each(vectors.feeSpanUsd)("feeSpanUsd $note", ({ input, output }) => {
+    const range = Object.fromEntries(Object.entries(input.range).map(([key, value]) => [key, BigInt(value)])) as GasRange;
+    const found = feeSpanUsd({ feeUsd: BigInt(input.feeUsd), gasBased: input.gasBased, range, worstFeeUsd: big(input.worstFeeUsd) });
+    expect({ lowUsd: String(found.lowUsd), highUsd: String(found.highUsd) }).toEqual(output);
+  });
   it.each(vectors.clampAutoCap)("clampAutoCap $note", ({ input, output }) => {
     expect(clampAutoCap(BigInt(input.autoCapWad), BigInt(input.hardCapWad))).toBe(BigInt(output));
   });
@@ -333,5 +345,26 @@ describe("the hard fee cap (owner, quote 86)", () => {
   it("keeps the automatic cap at or under the hard cap", () => {
     expect(clampAutoCap(PERCENT_WAD, DEFAULT_HARD_CAP_WAD)).toBe(PERCENT_WAD);
     expect(clampAutoCap(5n * PERCENT_WAD, DEFAULT_HARD_CAP_WAD)).toBe(DEFAULT_HARD_CAP_WAD);
+  });
+});
+
+describe("the gas anchor and its 15-minute range (owner, quotes 91-92)", () => {
+  const today = { gasUsed: 150_000n, baseFeeWei: 10n ** 10n, priorityFeeWei: 10n ** 9n, nativePriceE18: 3_000n * USD };
+  it("anchors each level at its expected base fee, between a low that mirrors the ceiling and the ceiling itself", () => {
+    for (const level of [1, 2, 3] as const) {
+      const range = gasRange({ ...today, level });
+      expect(range.highWei).toBe(ceilingWeiOf(today.baseFeeWei, level));
+      expect(range.lowWei * GAS_LEVELS[level].ceilingFactor).toBe(today.baseFeeWei);
+      expect(range.anchorUsd).toBe(totalCostUsd({ ...today, level }));
+      expect(range.lowUsd <= range.anchorUsd && range.anchorUsd <= range.highUsd).toBe(true);
+    }
+  });
+  it("gives a fee fixed at signing no span, and a gas-based fee the cost's span, held at the signed limit", () => {
+    const range = gasRange({ ...today, level: 1 });
+    expect(feeSpanUsd({ feeUsd: 5n * USD, gasBased: false, range, worstFeeUsd: null })).toEqual({ lowUsd: 5n * USD, highUsd: 5n * USD });
+    const span = feeSpanUsd({ feeUsd: 6n * USD, gasBased: true, range, worstFeeUsd: 7n * USD });
+    expect(span.lowUsd < 6n * USD).toBe(true);
+    expect(span.highUsd).toBe(7n * USD);
+    expect(feeSpanUsd({ feeUsd: 6n * USD, gasBased: true, range: null, worstFeeUsd: null })).toEqual({ lowUsd: 6n * USD, highUsd: 6n * USD });
   });
 });
