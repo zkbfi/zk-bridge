@@ -403,9 +403,10 @@
 .zb-dsummary .zb-icon { width: 22px; height: 22px; }
 /* On a phone the summary needs the room: tighter segments, no chevron (the open segment is lit instead). */
 @media (max-width: 479px) {
-  .zb-dctl > .zb-dseg { padding-inline: 9px; gap: 6px; }
-  .zb-joined.zb-dctl > :first-child { padding-left: 10px; }
-  .zb-dctl > .zb-dtime { padding-right: 12px; }
+  .zb-dctl > .zb-dseg { padding-inline: 7px; gap: 5px; }
+  .zb-joined.zb-dctl > :first-child { padding-left: 9px; }
+  .zb-dctl > .zb-dtime { padding-right: 11px; }
+  .zb-dsummary .zb-icon { width: 20px; height: 20px; }
   .zb-dsummary .zb-chev { display: none; }
   .zb-dsummary-text { font-size: var(--zb-step--1); }
 }
