@@ -1,0 +1,105 @@
+/*
+ * The docs site's own rules, on top of the app's bridge.css (tokens, themes, header, pills, search sheet) and
+ * explore.css (bands, group headings, rows). Every colour and size reads the app's tokens, so the four themes, the
+ * ember gradient band in dark and the column width all come from the app. Square panels, pill controls, no shadows.
+ */
+html, body { margin: 0; background: var(--zb-page); }
+.zd { display: flex; flex-direction: column; }
+.zd-page { display: flex; flex-direction: column; min-height: 100vh; }
+/* A flex item with auto margins shrinks to its content, so the header and other columns take the full width first. */
+.zd-page > * { width: 100%; }
+.zd-main { flex: 1; outline: none; }
+/* The title and the text take focus from script (after a move, or the skip link); they are not controls, so no ring. */
+.zd .zd-main:focus-visible, .zd .zd-title:focus-visible { outline: none; }
+
+/* Skip link: off screen until it takes focus. */
+.zd-skip { position: absolute; left: 8px; top: -100px; z-index: 50; padding: 10px 16px; background: var(--zb-go); color: var(--zb-go-ink); font-weight: 700; border-radius: 999px; text-decoration: none; }
+.zd-skip:focus { top: 8px; }
+
+/* The page name in the middle stays on one line. */
+.zd-page-name { min-width: 0; max-width: 100%; }
+.zd-page-name > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The title on the band. */
+.zd .zb-xband-in { padding-block: 22px 26px; }
+.zd-title { margin: 2px 0 4px; font: inherit; font-size: var(--zb-step-2); font-weight: 700; line-height: 1.15; word-break: normal; overflow-wrap: anywhere; outline: none; }
+.zd .zb-xband-big { word-break: normal; }
+
+/* Front page: groups and rows, as in Explore. */
+.zd-home { padding-bottom: 32px; }
+.zd-home section + section { margin-top: 14px; }
+.zd .zb-xrow { color: inherit; }
+.zd .zb-xrow:hover b { color: var(--zb-accent-text); }
+.zd .zb-xrow-text > span { display: block; white-space: normal; }
+.zd .zb-xrow-text > b { white-space: normal; }
+
+/* Page layout: the text in the app's column; on wide screens the contents sit in the right margin. */
+.zd-layout { display: block; }
+.zd-article { max-width: var(--zb-col-width); margin: 0 auto; padding: 8px max(16px, env(safe-area-inset-right)) 40px max(16px, env(safe-area-inset-left)); min-width: 0; }
+.zd-toc-side { display: none; }
+@media (min-width: 1100px) {
+  .zd-layout { display: grid; grid-template-columns: 1fr minmax(0, var(--zb-col-width)) 1fr; }
+  .zd-article { grid-column: 2; max-width: none; margin: 0; }
+  .zd-toc-side { display: block; grid-column: 3; }
+  .zd-toc-side nav { position: sticky; top: 0; max-height: 100vh; overflow: auto; padding: 8px 16px 24px 24px; max-width: 300px; }
+  .zd-toc-phone { display: none; }
+}
+
+/* "On this page": a list of hash links, the current one marked by the accent edge, as search rows are. */
+.zd-toc-list { list-style: none; margin: 0; padding: 0; font-size: var(--zb-step--1); }
+.zd-toc-list li { position: relative; }
+.zd-toc-list a { display: block; padding: 6px 0 6px 12px; color: var(--zb-muted); text-decoration: none; border-left: 2px solid var(--zb-line); }
+.zd-toc-list li[data-level="3"] a { padding-left: 24px; }
+.zd-toc-list a:hover { color: var(--zb-ink); }
+.zd-toc-list a[aria-current] { color: var(--zb-ink); font-weight: 600; border-left: 3px solid var(--zb-accent); padding-left: 11px; }
+.zd-toc-list li[data-level="3"] a[aria-current] { padding-left: 23px; }
+
+/* On phones the contents fold under the band. */
+.zd-toc-phone { border-bottom: 1px solid var(--zb-line); background: var(--zb-to); color: var(--zb-to-ink); max-width: none; }
+.zd-toc-phone > summary { display: flex; align-items: center; justify-content: space-between; min-height: var(--zb-touch); font-weight: 600; font-size: var(--zb-step--1); cursor: pointer; list-style: none; max-width: calc(var(--zb-col-width) - 32px); margin: 0 auto; }
+.zd-toc-phone > summary::-webkit-details-marker { display: none; }
+.zd-toc-phone[open] > summary .zb-chev { transform: rotate(180deg); }
+.zd-toc-phone nav { max-width: calc(var(--zb-col-width) - 32px); margin: 0 auto; padding-bottom: 12px; }
+
+/* Body type in the app's scale. */
+.zd-body { font-size: var(--zb-step-0); line-height: 1.6; }
+.zd-h { scroll-margin-top: 16px; line-height: 1.25; outline: none; }
+.zd-h2 { margin: 36px 0 10px; font-size: var(--zb-step-1); font-weight: 700; }
+.zd-body > .zd-h2:first-child, .zd-body > :first-child + .zd-h2 { margin-top: 18px; }
+.zd-h3 { margin: 26px 0 6px; font-size: var(--zb-step-0); font-weight: 700; }
+.zd-h4 { margin: 20px 0 4px; font-size: var(--zb-step--1); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--zb-muted); }
+.zd-p { margin: 0 0 14px; }
+.zd-list { margin: 0 0 14px; padding-left: 1.4em; }
+.zd-list li { margin: 4px 0; }
+.zd-list li::marker { color: var(--zb-accent-text); }
+.zd-a { color: var(--zb-accent-text); font-weight: 600; text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
+.zd-a:hover { text-decoration-color: var(--zb-accent); }
+.zd-code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.88em; padding: 1px 5px; background: var(--zb-to); color: var(--zb-to-ink); overflow-wrap: anywhere; }
+.zd-pre { margin: 0 0 16px; padding: 12px 16px; overflow-x: auto; background: var(--zb-to); color: var(--zb-to-ink); border-left: 3px solid var(--zb-accent); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: var(--zb-step--1); line-height: 1.5; }
+.zd-pre code { font: inherit; }
+
+/* Callouts: a note on the pale band surface with the accent edge; a warning in the app's warning style (.zb-warnbox). */
+.zd-callout { margin: 0 0 16px; padding: 10px 14px; background: var(--zb-to); color: var(--zb-to-ink); border-left: 3px solid var(--zb-accent); }
+.zd-callout.zd-warn { background: none; border: 1.5px solid var(--zb-accent); color: var(--zb-warn); }
+.theme-mono .zd-callout { background: none; border-left-color: var(--zb-ink); }
+.theme-mono .zd-callout.zd-warn { border-color: var(--zb-ink); }
+
+/* Tables: hairline rows as in Explore, headings in the group-heading style, numbers right-aligned in tabular figures. */
+.zd-table { margin: 0 0 18px; overflow-x: auto; }
+.zd-table table { border-collapse: collapse; width: 100%; font-size: var(--zb-step--1); }
+.zd-table th { padding: 8px 12px 6px 0; text-align: left; font-size: var(--zb-step-micro); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--zb-muted); white-space: nowrap; }
+.zd-table td { padding: 10px 12px 10px 0; border-top: 1px solid var(--zb-line); vertical-align: top; }
+.zd-table .zd-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Previous and next: two rows, previous with its chevron on the left. */
+.zd-pager { margin-top: 32px; border-bottom: 1px solid var(--zb-line); }
+.zd .zd-prev > .zb-chev { color: var(--zb-muted); }
+.zd .zd-next .zb-xrow-text { text-align: right; }
+.zd .zd-pager .zb-xrow-text > span { font-size: var(--zb-step-micro); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+
+/* Footer: the site name and the theme switch. */
+.zd-foot { border-top: 1px solid var(--zb-line); }
+.zd-foot-in { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding-block: 16px 24px; font-size: var(--zb-step--1); color: var(--zb-muted); }
+
+/* The search sheet's wrapper only listens for Tab; it adds no box. */
+.zd-contents { display: contents; }

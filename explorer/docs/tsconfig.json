@@ -15,8 +15,12 @@
     "verbatimModuleSyntax": true,
     "types": ["vite/client", "node"],
     "paths": {
-      "@web/*": ["../web/src/*"]
+      "@web/*": ["../web/src/*"],
+      "@terminal/*": ["../terminal/src/*"],
+      "@zk-bridge/shared": ["../shared/src/index.ts"],
+      "@zk-bridge/shared/backend-client": ["../shared/src/backend-client.ts"],
+      "@zk-bridge/shared/msgboard-http": ["../shared/src/msgboard/board-http.ts"]
     }
   },
-  "include": ["src", "test", "vite.config.ts", "vitest.config.ts"]
+  "include": ["src", "test", "vite.config.ts", "vitest.config.ts", "public-pages.ts"]
 }

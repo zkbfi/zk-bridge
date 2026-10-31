@@ -1,13 +1,36 @@
 /**
  * The pages of the documentation site. The site publishes two sets of Markdown files: the help pages of the dapp
- * (`explorer/web/docs/pages`) and the operator documents (`docs/`, without `docs/superpowers/`). A new file in either
- * folder becomes a page with no change to the code. A link from one page to another `.md` file becomes a route of the
- * site, so the site works from any path prefix, an IPFS gateway path included.
+ * (`explorer/web/docs/pages`, every file) and the operator documents named in `explorer/docs/public-pages.json` (none
+ * until the owner picks them; no other file in `docs/` reaches the build). A link from one page to another `.md` file
+ * becomes a route of the site, so the site works from any path prefix, an IPFS gateway path included.
  */
 import { parseMarkdown, type Block, type Inline } from "@web/docs/markdown";
+import publicOperatorPages from "virtual:public-operator-pages";
 
 /** Which set of files a page comes from. */
 export type DocsSiteGroup = "help" | "operator";
+
+/** The groups of the front page, in order. */
+export type DocsSiteSection = "use" | "trust" | "run";
+
+/** The heading of each group of the front page. */
+export const SECTION_TITLES: Readonly<Record<DocsSiteSection, string>> = {
+  use: "Using the bridge",
+  trust: "How it works and what you trust",
+  run: "Running it",
+};
+
+/** The short name of each group, for the header. */
+export const SECTION_NAMES: Readonly<Record<DocsSiteSection, string>> = { use: "Using", trust: "How it works", run: "Running it" };
+
+export const SECTIONS: readonly DocsSiteSection[] = ["use", "trust", "run"];
+
+/** Help pages that explain the design and the trust rather than a task. Every other help page is about using the bridge. */
+const HELP_SECTIONS: Readonly<Record<string, DocsSiteSection>> = {
+  "how-the-bridge-works": "trust",
+  safety: "trust",
+  "running-a-bot": "run",
+};
 
 /** One heading below the title of a page. */
 export type DocsSiteHeading = { readonly id: string; readonly text: string; readonly level: 2 | 3 | 4 };
@@ -17,7 +40,13 @@ export type DocsSitePage = {
   /** The route of the page, such as `help/fees-explained` or `audit/known-issues`. */
   readonly id: string;
   readonly group: DocsSiteGroup;
+  /** The group of the front page that lists it. Operator pages are about running the bridge. */
+  readonly section: DocsSiteSection;
   readonly title: string;
+  /** The first sentence of the first paragraph, for the rows of the front page and search. */
+  readonly description: string;
+  /** Minutes to read, at 200 words a minute, at least one. */
+  readonly minutes: number;
   /** The blocks, with links already turned into routes of the site. */
   readonly blocks: readonly Block[];
   /** The headings below the title. */
@@ -167,9 +196,40 @@ const resolveLink = (pages: readonly SourcePage[], from: SourcePage, href: strin
   const joined = path === "" ? from.path : joinPath(from.path, path);
   if (joined.startsWith("../")) return { kind: "outside" };
   const page = pages.find((candidate) => candidate.path === joined);
-  if (page === undefined) return { kind: "missing" };
+  // An operator document that public-pages.json leaves out is not published, so a link to it shows as text.
+  if (page === undefined) return joined.startsWith("help/") ? { kind: "missing" } : { kind: "outside" };
   if (anchor !== "" && !headingIds(page).includes(anchor)) return { kind: "missing" };
   return { kind: "route", target: { page, anchor } };
+};
+
+const textOf = (items: readonly Inline[]): string =>
+  items.map((item) => (item.kind === "text" || item.kind === "code" ? item.text : textOf(item.children))).join("");
+
+/** Every word of the blocks, for the reading time. */
+const wordCount = (blocks: readonly Block[]): number =>
+  blocks
+    .map((block) => {
+      if (block.kind === "heading" || block.kind === "code") return block.text;
+      if (block.kind === "paragraph" || block.kind === "quote") return textOf(block.children);
+      if (block.kind === "list") return block.items.map(textOf).join(" ");
+      return [...block.header, ...block.rows.flat()].map(textOf).join(" ");
+    })
+    .join(" ")
+    .split(/\s+/)
+    .filter(Boolean).length;
+
+/**
+ * The first sentence of the first paragraph. "This page explains how to …" reads as "Explains how to …".
+ *
+ * @param blocks The blocks of a page.
+ */
+export const describePage = (blocks: readonly Block[]): string => {
+  const first = blocks.find((block) => block.kind === "paragraph");
+  if (first === undefined || first.kind !== "paragraph") return "";
+  const text = textOf(first.children).trim();
+  const sentence = /^.+?[.!?](?=\s|$)/.exec(text)?.[0] ?? text;
+  const trimmed = sentence.replace(/^This page\s+/, "");
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 };
 
 /** Turns the links of one page into routes. A link with no page behind it becomes plain text. */
@@ -199,7 +259,9 @@ export const collectPages = (input: DocsSiteInput): DocsSitePage[] => {
     const headings = blocks.flatMap((block): DocsSiteHeading[] =>
       block.kind === "heading" && block.level > 1 ? [{ id: block.id, text: block.text, level: block.level as 2 | 3 | 4 }] : [],
     );
-    return { id: page.id, group: page.group, title: page.title, blocks, headings };
+    const section: DocsSiteSection = page.group === "operator" ? "run" : (HELP_SECTIONS[page.id.slice("help/".length)] ?? "use");
+    const minutes = Math.max(1, Math.round(wordCount(page.blocks) / 200));
+    return { id: page.id, group: page.group, section, title: page.title, description: describePage(page.blocks), minutes, blocks, headings };
   });
 };
 
@@ -221,7 +283,8 @@ export const findUnresolvedLinks = (input: DocsSiteInput): UnresolvedLink[] => {
 /** The pages of the real files, read when the site is built. */
 export const SITE_INPUT: DocsSiteInput = {
   userPages: import.meta.glob("../../web/docs/pages/*.md", { query: "?raw", import: "default", eager: true }) as Record<string, string>,
-  operatorPages: import.meta.glob(["../../../docs/**/*.md", "!../../../docs/superpowers/**"], { query: "?raw", import: "default", eager: true }) as Record<string, string>,
+  // Only the files named in public-pages.json; the plugin in public-pages.ts reads them, and refuses any other docs/ import.
+  operatorPages: publicOperatorPages,
 };
 
 /** Every page of the site, in reading order. */
