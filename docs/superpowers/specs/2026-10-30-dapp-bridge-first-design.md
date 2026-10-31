@@ -331,6 +331,10 @@ and the time left while in flight or the age once delivered. A row links to the 
   fee 0.39%"; gas-based: "A bot delivers it · fee follows gas, up to $0.60"; fixed: "A bot delivers it for 0.50
   USDC"; no tip: "You deliver it yourself on PulseChain"; with a call: "… then calls 0x12…ab"; a custom router or gas
   limit is named too.
+- **Every tip mode has its value control (owner):** choosing a mode shows its input right there: percent → the share
+  (number + %, right-justified); fixed → the amount in the token (number + token icon); gas-based → the multiplier
+  (× of the gas cost) and, where the mode has it, the price ceiling. Each input and the fee drawer's slider are the
+  same value, so editing either moves both and every number.
 - **The $0.025 proof cost (owner):** it is not a separate on-chain payment and needs no contract change. It is part
   of the overall cost (proof + delivery gas) that every percentage is set against: the default fee (the larger of
   0.1% and 2 × cost), the low-fee line, the tip before gas, and the worst case of a gas-priced fee. A fee signed as a
@@ -554,3 +558,4 @@ don't call it "tip too high", call it "high tip %""
 86. "automatic fee cap is fine, though i would prefer the input be justified to the right, next to the units, and we should have another fee cap below that of, say 2% that puts the absolute fee cap at that amount and disallows movement forward until the cap is adjusted (which we can also prompt the user to do)"
 87. "the board node is actually supposed to be assigned per chain. it can be the same url, but the ui should grab the info twice in that case."
 88. "also, i do not like the dismissiveness? the assumptiveness of "standard delivery" just tell the user what is happening"
+89. "also, it looks like you are not giving the user control over the percentages, over the fixed amount, over the gas multiplier"
