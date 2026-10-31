@@ -7,7 +7,7 @@ import { BrandMark } from "@web/ui/BrandMark";
 import { DocsMarkdown } from "./DocsMarkdown";
 import { DocsSearch } from "./DocsSearch";
 import type { DocsResult } from "./docs-search";
-import { routeOf, SECTION_NAMES, SECTION_TITLES, SECTIONS, type DocsSitePage } from "./pages";
+import { routeOf, SECTION_TITLES, SECTIONS, type DocsSitePage } from "./pages";
 import { parseRoute } from "./route";
 
 /** Props of {@link DocsSite}. */
@@ -49,7 +49,9 @@ const DocsHeader = ({ name, onSearch }: { readonly name: string; readonly onSear
       <BrandMark size={44} />
     </a>
     <span className="zb-page-name zd-page-name">
-      <span data-testid="page-name">{name}</span>
+      <span data-testid="page-name" title={name}>
+        {name}
+      </span>
     </span>
     <button type="button" className="zb-pill zb-search" onClick={onSearch} aria-label="Search the docs (Command K, Control K or slash)" aria-haspopup="dialog">
       <SearchIcon />
@@ -225,7 +227,8 @@ export const DocsSite = ({ pages }: DocsSiteProps) => {
 
   const index = route.id === "" ? -1 : pages.findIndex((candidate) => candidate.id === route.id);
   const page = index < 0 ? null : (pages[index] as DocsSitePage);
-  const name = route.id === "" ? "Docs" : page === null ? "Not found" : SECTION_NAMES[page.section];
+  // The header names the article (ellipsized when long), as the app names its screen; "Docs" on the home page.
+  const name = route.id === "" ? "Docs" : page === null ? "Not found" : page.title;
 
   const openSearch = useCallback(() => {
     trigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;

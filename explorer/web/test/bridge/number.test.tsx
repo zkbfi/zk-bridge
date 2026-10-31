@@ -35,11 +35,14 @@ describe("Num", () => {
 });
 
 describe("dollars as text", () => {
-  it("shows two decimals from $1, three significant digits below, and collapses three or more leading zeros", () => {
+  it("shows two decimals from one cent, three significant digits below, and collapses three or more leading zeros", () => {
     expect(dollarsText(1_234_500_000_000_000_000_000n)).toBe("$1,234.50");
     expect(dollarsText(2_520_000_000_000_000_000n)).toBe("$2.52");
-    expect(dollarsText(25_000_000_000_000_000n)).toBe("$0.025");
-    expect(dollarsText(169_123_000_000_000_000n)).toBe("$0.169");
+    expect(dollarsText(25_000_000_000_000_000n)).toBe("$0.02");
+    expect(dollarsText(500_000_000_000_000_000n)).toBe("$0.50");
+    expect(dollarsText(10_000_000_000_000_000n)).toBe("$0.01");
+    expect(dollarsText(9_990_000_000_000_000n)).toBe("$0.00999");
+    expect(dollarsText(169_123_000_000_000_000n)).toBe("$0.16");
     expect(dollarsText(50_400_000_000n)).toBe("$0.0₇504");
     expect(dollarsText(56_200_000_000_000n)).toBe("$0.0₄562");
     expect(dollarsText(0n)).toBe("$0");

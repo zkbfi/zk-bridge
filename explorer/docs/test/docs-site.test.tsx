@@ -63,7 +63,7 @@ describe("DocsSite", () => {
     const article = screen.getByRole("article", { name: "Second" });
     expect(screen.getByRole("heading", { level: 1, name: "Second" })).toBeInTheDocument();
     expect(screen.getByText("1 min read · 1 section")).toBeInTheDocument();
-    expect(screen.getByTestId("page-name")).toHaveTextContent("How it works");
+    expect(screen.getByTestId("page-name")).toHaveTextContent("Second");
     expect(within(article).getByRole("heading", { level: 2, name: "Part" })).toHaveAttribute("id", "part");
     const contents = screen.getAllByRole("navigation", { name: "On this page" });
     expect(contents).toHaveLength(2);

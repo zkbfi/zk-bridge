@@ -39,7 +39,7 @@ describe.each([
     expect(bars()).toHaveAccessibleName("Gas level: Normal. Change");
     await openDrawer();
     expect(screen.getByRole("slider", { name: "Tip" })).toBeInTheDocument();
-    expect(row("Fee")).toBe("$0.193");
+    expect(row("Fee")).toBe("$0.19");
     expect(screen.getByText(/^Automatic ·/)).toBeInTheDocument();
   });
 
@@ -52,14 +52,14 @@ describe.each([
     await waitFor(() => expect(bars()).toHaveAccessibleName("Gas level: High. Change"));
     // The drawer stays open while the bars change.
     expect(screen.getByRole("list", { name: "What the fee covers" })).toBeInTheDocument();
-    expect(row("High gas level")).toBe("+$0.0125");
+    expect(row("High gas level")).toBe("+$0.01");
     expect(feeText()).not.toBe(before.fee);
     expect(output()).not.toBe(before.out);
     // The tip before gas stays where the curve put it: the level's cost is added on top.
     expect(row("Tip")).toBe(before.tip);
     await userEvent.click(bars());
     await waitFor(() => expect(bars()).toHaveAccessibleName("Gas level: Highest. Change"));
-    expect(row("Highest gas level")).toBe("+$0.0375");
+    expect(row("Highest gas level")).toBe("+$0.03");
     await userEvent.click(bars());
     await waitFor(() => expect(bars()).toHaveAccessibleName("Gas level: Normal. Change"));
     expect(feeText()).toBe(before.fee);
@@ -93,7 +93,7 @@ describe.each([
     const before = { tip: row("Tip"), fee: feeText() };
     expect(row("Fee")).toBe("$1.05");
     await userEvent.click(bars());
-    await waitFor(() => expect(row("High gas level")).toBe("+$0.0125"));
+    await waitFor(() => expect(row("High gas level")).toBe("+$0.01"));
     expect(row("Tip")).toBe(before.tip);
     expect(row("Fee")).toBe("$1.06");
     expect(window.location.hash).toMatch(/tip\.percent=0\.2125/);

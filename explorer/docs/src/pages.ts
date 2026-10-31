@@ -20,9 +20,6 @@ export const SECTION_TITLES: Readonly<Record<DocsSiteSection, string>> = {
   run: "Running it",
 };
 
-/** The short name of each group, for the header. */
-export const SECTION_NAMES: Readonly<Record<DocsSiteSection, string>> = { use: "Using", trust: "How it works", run: "Running it" };
-
 export const SECTIONS: readonly DocsSiteSection[] = ["use", "trust", "run"];
 
 /** Help pages that explain the design and the trust rather than a task. Every other help page is about using the bridge. */

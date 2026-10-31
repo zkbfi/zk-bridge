@@ -39,16 +39,17 @@ const smallText = (value: bigint, decimals: number, digits: number): string => {
 };
 
 /**
- * Dollars (USD × 1e18, as the shared fee rules keep them) as text: two decimals from $1, else three significant digits
- * (cut, not rounded) with three or more leading zeros collapsed as subscript digits ($0.0₇504). "$0" for nothing.
+ * Dollars (USD × 1e18, as the shared fee rules keep them) as text: from one cent, two decimals, cut, not rounded
+ * ($0.50, $2.52, $1,234.50); under a cent, three significant digits (cut) with three or more leading zeros collapsed as
+ * subscript digits ($0.0₇504). "$0" for nothing.
  *
  * @param usd The value, USD × 1e18.
  */
 export const dollarsText = (usd: bigint): string => {
   if (usd === 0n) return "$0";
-  const SCALE = 10n ** 18n;
-  if (usd >= SCALE) {
-    const cents = usd / 10n ** 16n;
+  const CENT = 10n ** 16n;
+  if (usd >= CENT) {
+    const cents = usd / CENT;
     return `$${(cents / 100n).toLocaleString("en-US")}.${(cents % 100n).toString().padStart(2, "0")}`;
   }
   return `$${smallText(usd, 18, 3)}`;

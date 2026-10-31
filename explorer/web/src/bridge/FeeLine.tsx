@@ -306,8 +306,13 @@ const ExactInput = ({ label, input }: { readonly label: string; readonly input: 
  */
 export const FeeControl = ({ slider }: { readonly slider: FeeSlider }) => {
   const share = (value: number): number => (slider.max === slider.min ? 0 : Math.min(100, Math.max(0, ((value - slider.min) / (slider.max - slider.min)) * 100)));
-  const ticks = [...slider.ticks, ...(slider.recommended === undefined ? [] : [{ at: slider.recommended.at, label: "recommended" }])];
-  const labelRows = tickRows(ticks.map((tick) => ({ label: tick.label, left: share(tick.at) })));
+  // The recommended tick first: it is the one a reset goes back to, so its label is the last to give way.
+  const ticks = [...(slider.recommended === undefined ? [] : [{ at: slider.recommended.at, label: "recommended" }]), ...slider.ticks];
+  const track = useRef<HTMLDivElement>(null);
+  const width = useTrackWidth(track);
+  const placed = tickLabels(ticks.map((tick) => ({ label: tick.label, left: share(tick.at) })), width);
+  // A tick whose label would touch another keeps its mark; its name moves into the control's help.
+  const help = placed.hidden.length === 0 ? slider.help : `${slider.help} Also marked on the track: ${placed.hidden.join(", ")}.`;
   const reset = slider.recommended !== undefined && slider.recommended.differs ? slider.recommended : null;
   const action = reset === null ? (slider.status?.action ?? null) : { label: "Reset to recommended", onClick: reset.onReset };
   const errors = slider.input === undefined ? null : <ExactInput label={slider.label} input={slider.input} />;
@@ -316,7 +321,7 @@ export const FeeControl = ({ slider }: { readonly slider: FeeSlider }) => {
       <div className="zb-slider-top">
         <span className="zb-label">
           {slider.label}
-          <HelpButton label={slider.label} text={slider.help} />
+          <HelpButton label={slider.label} text={help} />
         </span>
         <span className="zb-slider-value">
           {slider.valueText === undefined ? null : slider.input === undefined ? <b>{slider.valueText}</b> : <span className="zb-slider-read">{slider.valueText}</span>}
@@ -338,7 +343,7 @@ export const FeeControl = ({ slider }: { readonly slider: FeeSlider }) => {
           )}
         </div>
       )}
-      <div className="zb-range">
+      <div className="zb-range" ref={track}>
         <span className="zb-range-bar" />
         {slider.band === undefined ? null : (
           <span className="zb-range-band" title={slider.band.label} aria-label={slider.band.label} role="img" style={{ left: `${share(Math.min(slider.band.from, slider.band.to))}%`, width: `${Math.max(1, share(Math.max(slider.band.from, slider.band.to)) - share(Math.min(slider.band.from, slider.band.to)))}%` }} />
@@ -346,41 +351,77 @@ export const FeeControl = ({ slider }: { readonly slider: FeeSlider }) => {
         {slider.band?.mark === undefined ? null : <span className="zb-range-anchor" style={{ left: `${share(slider.band.mark)}%` }} />}
         <span className="zb-range-fill" style={{ width: `${share(slider.value)}%` }} />
         {ticks.map((tick) => (
-          <span key={tick.label} className="zb-range-tick" data-recommended={tick.label === "recommended" ? "" : undefined} style={{ left: `${share(tick.at)}%` }} />
+          <span key={tick.label} className="zb-range-tick" data-recommended={tick.label === "recommended" ? "" : undefined} title={tick.label} style={{ left: `${share(tick.at)}%` }} />
         ))}
         <span className="zb-range-knob" style={{ left: `${share(slider.value)}%` }} />
         <input type="range" aria-label={slider.label} min={slider.min} max={slider.max} step={slider.step} value={slider.value} onChange={(event) => slider.onChange(Number(event.target.value))} />
       </div>
-      <div className="zb-ticks" style={{ height: `${1.3 * (Math.max(0, ...labelRows.map((tick) => tick.row)) + 1) + 0.4}em` }}>
-        {labelRows.map((tick) => (
-          // Shifted by its own position, so a label at either end stays inside the track (centred in the middle).
-          <span key={tick.label} style={{ left: `${tick.left}%`, top: `${1.3 * tick.row}em`, transform: `translateX(-${tick.left}%)` }}>
-            {tick.label}
-          </span>
-        ))}
-      </div>
+      {placed.shown.length === 0 ? null : (
+        <div className="zb-ticks">
+          {placed.shown.map((tick) => (
+            // Shifted by its own position, so a label at either end stays inside the track (centred in the middle).
+            <span key={tick.label} style={{ left: `${tick.left}%`, transform: `translateX(-${tick.left}%)` }}>
+              {tick.label}
+            </span>
+          ))}
+        </div>
+      )}
       {slider.note === undefined ? null : <p className="zb-slider-band-note">{slider.note}</p>}
     </div>
   );
 };
 
-/** Labels closer than this share of the track would overlap, so the later one drops to the next row. */
-const TICK_LABEL_GAP = 28;
+/** The track width assumed before it is measured (and in tests, where nothing has a size): a phone's column. */
+const ASSUMED_TRACK_PX = 320;
+/** The width of one character of a tick label (13 px text), a little generous so labels never touch. */
+const TICK_CHAR_PX = 7.2;
+/** The least space between two labels. */
+const TICK_GAP_PX = 10;
+
+/** The width of the slider's track in pixels, followed as the layout changes; the assumed width until it is known. */
+const useTrackWidth = (ref: { readonly current: HTMLElement | null }): number => {
+  const [width, setWidth] = useState(ASSUMED_TRACK_PX);
+  useEffect(() => {
+    const element = ref.current;
+    if (element === null) return;
+    const measure = (): void => {
+      const measured = element.getBoundingClientRect().width;
+      if (measured > 0) setWidth(measured);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref]);
+  return width;
+};
 
 /**
- * Places slider tick labels in rows so close ones never draw over each other: each label takes the first row whose last
- * label is at least {@link TICK_LABEL_GAP} percent to its left.
+ * Places slider tick labels on one row, never overlapping (owner: labels stacked two or three rows deep were not
+ * legible). Labels are taken in the order given (the most important first); one that would touch a label already
+ * placed is left out, its tick still drawn, and named in `hidden` for the control's help. A label sits at its tick,
+ * shifted by its own position so the ends stay inside the track.
  *
- * @param ticks The labels with their position along the track, in percent.
+ * @param ticks The labels with their position along the track, in percent, most important first.
+ * @param trackPx The track's width in pixels.
  */
-export const tickRows = (ticks: readonly { readonly label: string; readonly left: number }[]): { readonly label: string; readonly left: number; readonly row: number }[] => {
-  const lastInRow: number[] = [];
-  return [...ticks]
-    .sort((a, b) => a.left - b.left)
-    .map((tick) => {
-      const free = lastInRow.findIndex((left) => tick.left - left >= TICK_LABEL_GAP);
-      const row = free === -1 ? lastInRow.length : free;
-      lastInRow[row] = tick.left;
-      return { ...tick, row };
+export const tickLabels = (ticks: readonly { readonly label: string; readonly left: number }[], trackPx: number): { readonly shown: readonly { readonly label: string; readonly left: number }[]; readonly hidden: readonly string[] } => {
+  const spanOf = (tick: { readonly label: string; readonly left: number }): readonly [number, number] => {
+    const width = tick.label.length * TICK_CHAR_PX;
+    const start = (tick.left / 100) * trackPx - (tick.left / 100) * width;
+    return [start, start + width];
+  };
+  const shown: { readonly label: string; readonly left: number }[] = [];
+  const hidden: string[] = [];
+  for (const tick of ticks) {
+    const [start, end] = spanOf(tick);
+    const clear = shown.every((other) => {
+      const [otherStart, otherEnd] = spanOf(other);
+      return end + TICK_GAP_PX <= otherStart || otherEnd + TICK_GAP_PX <= start;
     });
+    if (clear) shown.push(tick);
+    else hidden.push(tick.label);
+  }
+  return { shown: [...shown].sort((a, b) => a.left - b.left), hidden };
 };
