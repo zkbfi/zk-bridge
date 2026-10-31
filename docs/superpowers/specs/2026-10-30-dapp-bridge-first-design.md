@@ -326,6 +326,11 @@ and the time left while in flight or the age once delivered. A row links to the 
   hard cap.
 - **Msgboard node per chain (owner):** the board node is set per chain in Settings, like the RPCs. Two chains may share
   one URL, and the page then reads it twice, once per chain, each with its own live check.
+- **The delivery pill says what happens (owner):** no "Standard delivery" or other labels that assume or dismiss.
+  The pill states the arrangement in plain words, from the actual settings: e.g. "A bot delivers it on PulseChain ·
+  fee 0.39%"; gas-based: "A bot delivers it · fee follows gas, up to $0.60"; fixed: "A bot delivers it for 0.50
+  USDC"; no tip: "You deliver it yourself on PulseChain"; with a call: "… then calls 0x12…ab"; a custom router or gas
+  limit is named too.
 - **The $0.025 proof cost (owner):** it is not a separate on-chain payment and needs no contract change. It is part
   of the overall cost (proof + delivery gas) that every percentage is set against: the default fee (the larger of
   0.1% and 2 × cost), the low-fee line, the tip before gas, and the worst case of a gas-priced fee. A fee signed as a
@@ -548,3 +553,4 @@ don't call it "tip too high", call it "high tip %""
 85. "i don't think you need to compress the ui so quickly. let it get to the edge of the viewport"
 86. "automatic fee cap is fine, though i would prefer the input be justified to the right, next to the units, and we should have another fee cap below that of, say 2% that puts the absolute fee cap at that amount and disallows movement forward until the cap is adjusted (which we can also prompt the user to do)"
 87. "the board node is actually supposed to be assigned per chain. it can be the same url, but the ui should grab the info twice in that case."
+88. "also, i do not like the dismissiveness? the assumptiveness of "standard delivery" just tell the user what is happening"
