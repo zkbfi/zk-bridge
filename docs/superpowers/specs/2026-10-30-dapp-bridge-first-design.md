@@ -334,7 +334,10 @@ and the time left while in flight or the age once delivered. A row links to the 
 - **Every tip mode has its value control (owner):** choosing a mode shows its input right there: percent → the share
   (number + %, right-justified); fixed → the amount in the token (number + token icon); gas-based → the multiplier
   (× of the gas cost) and, where the mode has it, the price ceiling. Each input and the fee drawer's slider are the
-  same value, so editing either moves both and every number.
+  same value, so editing either moves both and every number. **Pattern for every value (owner):** a slider with a
+  "recommended" tick, an exact input next to it, and a "Reset to recommended" button; the user controls everything
+  (tip share, fixed amount, gas multiplier, price ceiling, gas level, gas limit, both caps), nothing is locked to a
+  preset.
 - **The $0.025 proof cost (owner):** it is not a separate on-chain payment and needs no contract change. It is part
   of the overall cost (proof + delivery gas) that every percentage is set against: the default fee (the larger of
   0.1% and 2 × cost), the low-fee line, the tip before gas, and the worst case of a gas-priced fee. A fee signed as a
@@ -559,3 +562,4 @@ don't call it "tip too high", call it "high tip %""
 87. "the board node is actually supposed to be assigned per chain. it can be the same url, but the ui should grab the info twice in that case."
 88. "also, i do not like the dismissiveness? the assumptiveness of "standard delivery" just tell the user what is happening"
 89. "also, it looks like you are not giving the user control over the percentages, over the fixed amount, over the gas multiplier"
+90. "we can present a slider to them with a recommended tick and a reset to receommended button but they need to be able to control everything"
