@@ -33,29 +33,71 @@ const RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/\brpa_[A-Za-z0-9_-]+/g, REDACTED],
   // Bearer and Basic credentials in a header line.
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, `$1 ${REDACTED}`],
-  // Keys in a query string.
-  [/([?&](?:api[_-]?key|key|token|secret|password)=)[^&\s"']+/gi, `$1${REDACTED}`],
+  // An Authorization header with any other scheme, or none: `authorization: <value>`, `Authorization: Token <value>`.
+  [/(\bauthorization\s*:\s*(?:[A-Za-z]+\s+)?)[^\s"',;]+/gi, `$1${REDACTED}`],
+  // An API key header: `x-api-key: <value>`, `api-key: <value>`, `x-auth-token: <value>`.
+  [/(\b(?:x-)?(?:api-?key|auth-?token|access-?token)\s*:\s*)[^\s"',;]+/gi, `$1${REDACTED}`],
+  // Keys in a query string: any parameter whose name ends in key, token, secret, password or auth (api_key, apikey,
+  // key, dkey, token, access_token, ...).
+  [/([?&][A-Za-z0-9_-]*(?:key|token|secret|password|auth)=)[^&#\s"']+/gi, `$1${REDACTED}`],
   // Keys in a JSON field.
-  [/("(?:api[_-]?key|token|secret|password)"\s*:\s*")[^"]+(")/gi, `$1${REDACTED}$2`],
-  // A keyed RPC path: /rpc/<key>/...
+  [/("(?:api[_-]?key|x-api-key|access[_-]?token|token|secret|password|authorization)"\s*:\s*")[^"]+(")/gi, `$1${REDACTED}$2`],
+  // A keyed RPC path: /rpc/<key>/... (valve.city and similar).
   [/(\/rpc\/)[A-Za-z0-9_-]{8,}/g, `$1${REDACTED}`],
   // A versioned provider path: /v2/<key>, /v3/<key> (Alchemy, Infura and similar).
   [/(\/v\d+\/)[A-Za-z0-9_-]{16,}/g, `$1${REDACTED}`],
+  // QuickNode: the token is the first segment of the path, whatever its length.
+  [/(\.quiknode\.pro\/)[A-Za-z0-9_-]+/gi, `$1${REDACTED}`],
+  // Ankr: rpc.ankr.com/<chain>/<key>.
+  [/(\brpc\.ankr\.com\/[A-Za-z0-9_-]+\/)[A-Za-z0-9_-]{16,}/gi, `$1${REDACTED}`],
+  // A path segment of 32 or more hex digits without 0x, on any host: the key of most providers. A hash or an address
+  // (0x...) and an identifier with dashes stay readable.
+  [/(\/)(?!0x)[0-9a-f]{32,}(?=[/?#\s"']|$)/gi, `$1${REDACTED}`],
   // Credentials in a URL: scheme://user:password@host
   [/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^/\s@]+@/gi, `$1${REDACTED}@`],
 ]
+
+/** A known secret shorter than this is removed only where it stands alone, not inside a longer word or number. */
+const MINIMUM_LENGTH_ANYWHERE = 6
+
+/**
+ * Values that are never treated as known secrets: configuration literals, not secrets. Removing them would wipe every
+ * `1`, `0` or `true` from a log line, and a secret with such a value protects nothing.
+ */
+const NOT_SECRETS: ReadonlySet<string> = new Set(['0', '1', 'true', 'false', 'null', 'undefined', 'none', 'yes', 'no', 'on', 'off'])
+
+function escapeForPattern(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Removes every occurrence of one known secret, in its plain and its percent-encoded form.
+ *
+ * The rule: an empty value, a value of white space only and a configuration literal ({@link NOT_SECRETS}) are no
+ * secrets and are left alone. A secret of six characters or more is removed wherever it occurs. A shorter secret is
+ * removed only where it stands alone, between characters that are not letters or digits: `abcde` goes from `key=abcde&`
+ * but not from `abcdefg`, and `1234` not from `12345`. So a short secret never wipes the parts of other words.
+ */
+function removeKnownSecret(text: string, secret: string): string {
+  if (secret.trim() === '' || NOT_SECRETS.has(secret.toLowerCase())) return text
+  let result = text
+  for (const form of new Set([secret, encodeURIComponent(secret)])) {
+    if (form.length >= MINIMUM_LENGTH_ANYWHERE) result = result.split(form).join(REDACTED)
+    else result = result.replace(new RegExp(`(?<![A-Za-z0-9])${escapeForPattern(form)}(?![A-Za-z0-9])`, 'g'), REDACTED)
+  }
+  return result
+}
 
 /**
  * Removes secrets from text.
  *
  * @param text The text of a log line, an error message or a report.
- * @param knownSecrets Secret values that the caller holds. Each occurrence is removed, whatever its shape.
+ * @param knownSecrets Secret values that the caller holds. Each occurrence is removed, whatever its shape and length;
+ *   see {@link removeKnownSecret} for the rule on short values.
  */
 export function redactSecrets(text: string, knownSecrets: readonly string[] = []): string {
   let result = text
-  for (const secret of knownSecrets) {
-    if (secret.length >= 6) result = result.split(secret).join(REDACTED)
-  }
+  for (const secret of knownSecrets) result = removeKnownSecret(result, secret)
   for (const [pattern, replacement] of RULES) result = result.replace(pattern, replacement)
   return result
 }

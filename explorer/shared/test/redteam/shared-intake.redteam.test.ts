@@ -30,8 +30,8 @@ describe("redaction", () => {
     ["dRPC dkey query", "https://lb.drpc.org/ogrpc?network=ethereum&dkey=AkLmNoPqRsTuVwXyZ012345", "AkLmNoPqRsTuVwXyZ012345"],
     ["access_token query", "https://beacon.example/eth/v1?access_token=tok_live_99887766", "tok_live_99887766"],
     ["x-api-key header", "x-api-key: 77aa88bb99cc00dd", "77aa88bb99cc00dd"],
-  ])("ATTACK SUCCEEDS %s survives redactSecrets when the caller does not pass it as a known secret", (_, text, secret) => {
-    expect(redactSecrets(`request to ${text} failed`)).toContain(secret);
+  ])("ATTACK %s is removed by redactSecrets when the caller does not pass it as a known secret (BLOCKED, was S-6)", (_, text, secret) => {
+    expect(redactSecrets(`request to ${text} failed`)).not.toContain(secret);
   });
 
   it("ATTACK a known secret is removed whatever its shape (BLOCKED)", () => {
@@ -39,13 +39,13 @@ describe("redaction", () => {
     expect(redactError(new Error(`GET https://x.quiknode.pro/${secret}/ 500`), [secret])).toBe(`GET https://x.quiknode.pro/${REDACTED}/ 500`);
   });
 
-  it("ATTACK SUCCEEDS a known secret of five characters is not removed (the minimum is six)", () => {
-    expect(redactSecrets("token abcde in the url", ["abcde"])).toContain("abcde");
+  it("ATTACK a known secret of five characters is removed (BLOCKED, was S-6)", () => {
+    expect(redactSecrets("token abcde in the url", ["abcde"])).not.toContain("abcde");
   });
 
-  it("ATTACK SUCCEEDS a known secret is not removed in its percent-encoded form", () => {
+  it("ATTACK a known secret is removed in its percent-encoded form (BLOCKED, was S-6)", () => {
     const secret = "pa ss/word!";
-    expect(redactSecrets(`https://rpc.example/?q=${encodeURIComponent(secret)}`, [secret])).toContain(encodeURIComponent(secret));
+    expect(redactSecrets(`https://rpc.example/?q=${encodeURIComponent(secret)}`, [secret])).not.toContain(encodeURIComponent(secret));
   });
 });
 
