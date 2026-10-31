@@ -18,7 +18,8 @@ const at = async (query: string, connected: boolean) => {
   await waitFor(() => expect(feeText()).toMatch(/\d/), { timeout: 3000 });
 };
 
-const feeText = (): string => document.querySelector('[data-fee="tip"]')?.textContent ?? "";
+// The fee in the token, as the summary segment's label says it ("… Fee 0.193892 USDC (about $0.19) …").
+const feeText = (): string => /Fee [\d.]+ \S+/.exec(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label") ?? "")?.[0] ?? "";
 const output = (): string => document.querySelector(".zb-amount-out")?.textContent ?? "";
 const pill = (): string => document.querySelector(".zb-go")?.textContent ?? "";
 const breakdown = (): string => screen.getByRole("list", { name: "What the fee covers" }).textContent ?? "";
@@ -26,7 +27,7 @@ const row = (label: string): string => {
   const item = [...screen.getByRole("list", { name: "What the fee covers" }).querySelectorAll("li")].find((li) => li.firstElementChild?.textContent === label);
   return item?.lastElementChild?.textContent ?? "";
 };
-const openDrawer = async () => userEvent.click(screen.getByRole("button", { name: /Tip/ }));
+const openDrawer = async () => userEvent.click(screen.getByRole("button", { name: /^Delivery settings/ }));
 const bars = (): HTMLElement => screen.getByRole("button", { name: /^Gas level: / });
 
 describe.each([
@@ -39,7 +40,7 @@ describe.each([
     expect(bars()).toHaveAccessibleName("Gas level: Normal. Change");
     await openDrawer();
     expect(screen.getByRole("slider", { name: "Tip" })).toBeInTheDocument();
-    expect(row("Fee")).toBe("$0.193");
+    expect(row("Fee")).toBe("$0.19");
     expect(screen.getByText(/^Automatic ·/)).toBeInTheDocument();
   });
 
@@ -52,14 +53,14 @@ describe.each([
     await waitFor(() => expect(bars()).toHaveAccessibleName("Gas level: High. Change"));
     // The drawer stays open while the bars change.
     expect(screen.getByRole("list", { name: "What the fee covers" })).toBeInTheDocument();
-    expect(row("High gas level, 1.5× the cost")).toBe("+$0.0125");
+    expect(row("High gas level")).toBe("+$0.01");
     expect(feeText()).not.toBe(before.fee);
     expect(output()).not.toBe(before.out);
     // The tip before gas stays where the curve put it: the level's cost is added on top.
     expect(row("Tip")).toBe(before.tip);
     await userEvent.click(bars());
     await waitFor(() => expect(bars()).toHaveAccessibleName("Gas level: Highest. Change"));
-    expect(row("Highest gas level, 2.5× the cost")).toBe("+$0.0375");
+    expect(row("Highest gas level")).toBe("+$0.03");
     await userEvent.click(bars());
     await waitFor(() => expect(bars()).toHaveAccessibleName("Gas level: Normal. Change"));
     expect(feeText()).toBe(before.fee);
@@ -80,7 +81,7 @@ describe.each([
     expect(window.location.hash).toMatch(/tip\.percent=1\.005/);
     expect(screen.getByText("Set by you · the automatic fee is off")).toBeInTheDocument();
     if (connected) expect(pill()).toBe("High cap %");
-    await userEvent.click(screen.getByRole("button", { name: "Back to automatic" }));
+    await userEvent.click(screen.getByRole("button", { name: "Reset to recommended" }));
     await waitFor(() => expect(feeText()).toBe(before.fee));
     expect(output()).toBe(before.out);
     expect(window.location.hash).not.toMatch(/tip\.percent/);
@@ -93,7 +94,7 @@ describe.each([
     const before = { tip: row("Tip"), fee: feeText() };
     expect(row("Fee")).toBe("$1.05");
     await userEvent.click(bars());
-    await waitFor(() => expect(row("High gas level, 1.5× the cost")).toBe("+$0.0125"));
+    await waitFor(() => expect(row("High gas level")).toBe("+$0.01"));
     expect(row("Tip")).toBe(before.tip);
     expect(row("Fee")).toBe("$1.06");
     expect(window.location.hash).toMatch(/tip\.percent=0\.2125/);
@@ -115,9 +116,11 @@ describe("the gas bars' tooltip", () => {
   it("says what the chosen level means in one line, and updates with it", async () => {
     await at("bridge.amount=50", true);
     await userEvent.hover(bars());
-    expect(screen.getByRole("tooltip")).toHaveTextContent(/^Normal gas: up to 2× today's base fee, cost 1× \(\$0\.025\)\. Tap for High\.$/);
+    // An anchor with a 15-minute range, never a multiplier (owner, quote 91).
+    expect(screen.getByRole("tooltip")).toHaveTextContent(/^Normal gas: anchored at today's gas, the cost could land between \$[\d.]+ and \$[\d.]+ over 15 min\. Tap for High\.$/);
+    expect(screen.getByRole("tooltip").textContent).not.toMatch(/×|multipl/);
     await userEvent.click(bars());
-    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(/^High gas: up to 3× today's base fee, cost 1\.5×/));
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(/^High gas: anchored at today's gas/));
   });
 });
 
@@ -127,9 +130,9 @@ describe("the help buttons", () => {
     await openDrawer();
     const drawer = document.querySelector<HTMLElement>(".zb-drawer")!;
     const helps = within(drawer).getAllByRole("button", { name: /^About / });
-    expect(helps.map((button) => button.getAttribute("aria-label"))).toEqual(["About Tip", "About Automatic fee cap"]);
+    expect(helps.map((button) => button.getAttribute("aria-label"))).toEqual(["About Tip", "About Gas level", "About Automatic fee cap", "About Hard fee cap"]);
     for (const help of helps) expect(help).toHaveClass("zb-q");
-    await userEvent.click(helps[1]!);
+    await userEvent.click(helps[2]!);
     expect(screen.getByRole("tooltip")).toHaveTextContent(/most the automatic fee may take/);
   });
 });

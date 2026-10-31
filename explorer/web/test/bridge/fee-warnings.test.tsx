@@ -13,7 +13,7 @@ beforeEach(() => {
 const pillAt = async (query: string) => {
   window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${query}`);
   renderWithWallet(<Shell />, { wallet: connectedWallet() });
-  await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.textContent).toMatch(/\d/), { timeout: 3000 });
+  await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label")).toMatch(/Fee \d/), { timeout: 3000 });
   const pill = screen.getAllByRole("button").find((button) => button.classList.contains("zb-go"))!;
   return { label: pill.textContent, detail: document.querySelector(".zb-verdict")?.textContent ?? null };
 };
@@ -50,7 +50,7 @@ describe("the fee warnings on the Bridge pill, at the sample prices", () => {
 
   it("takes the default curve fee with no warning in the middle", async () => {
     expect((await pillAt("bridge.amount=50")).label).toBe("Bridge");
-    expect(document.querySelector('[data-fee="tip"]')?.textContent).toMatch(/0\.193892/);
+    expect(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label")).toMatch(/Fee 0\.193892/);
   });
 });
 

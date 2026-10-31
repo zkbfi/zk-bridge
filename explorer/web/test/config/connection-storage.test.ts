@@ -137,3 +137,27 @@ describe("an endpoint with a key-like segment", () => {
     });
   });
 });
+
+describe("the msgboard node per chain", () => {
+  it("keeps one node per chain, the same URL on both if set so, and drops a bad entry", () => {
+    const storage = memoryStorage();
+    expect(saveUserConnections(storage, { ...EMPTY_CONNECTION_SETTINGS, msgboardUrls: { 1: "https://same.example.org", 369: "https://same.example.org" } }, { protocol: "https:", hostname: "zkb.fi", pathname: "/" } as never)).toEqual({ saved: true, reason: "stored" });
+    expect(loadUserConnections(storage, { protocol: "https:", hostname: "zkb.fi", pathname: "/" } as never).msgboardUrls).toEqual({ 1: "https://same.example.org", 369: "https://same.example.org" });
+    const bad = memoryStorage(JSON.stringify({ msgboardUrls: { 1: "https://ok.example.org/", 369: "not a url", x: "https://x.example.org" } }));
+    expect(loadUserConnections(bad, { protocol: "https:", hostname: "zkb.fi", pathname: "/" } as never).msgboardUrls).toEqual({ 1: "https://ok.example.org" });
+  });
+
+  it("still reads a saved single node, for the page to move to each chain", () => {
+    const old = memoryStorage(JSON.stringify({ msgboardUrl: "https://old.example.org" }));
+    const loaded = loadUserConnections(old, { protocol: "https:", hostname: "zkb.fi", pathname: "/" } as never);
+    expect(loaded.msgboardUrl).toBe("https://old.example.org");
+    expect(loaded.msgboardUrls).toBeUndefined();
+  });
+
+  it("never writes a node that looks like it holds a key", () => {
+    const storage = memoryStorage();
+    const result = saveUserConnections(storage, { ...EMPTY_CONNECTION_SETTINGS, msgboardUrls: { 1: "https://board.example.org/0123456789abcdef0123456789abcdef" } }, { protocol: "https:", hostname: "zkb.fi", pathname: "/" } as never);
+    expect(result.reason).toBe("key-like-url");
+    expect(storage.dump()).not.toMatch(/0123456789abcdef/);
+  });
+});

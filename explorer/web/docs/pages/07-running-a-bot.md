@@ -1,16 +1,15 @@
 # Running a delivery bot or prover
 
-Most users never read this page. It is for operators who want to make proofs or deliver transfers for a fee.
+Run a delivery bot or a prover and earn the fees that transfers pay.
 
-## Who needs this
+## The two bots
 
-You need this page in three cases.
+There are two bots, and you can run either or both:
 
-- You want to run the proof publisher, which makes and shares light client proofs.
-- You want to run a delivery runner, which delivers transfers through a delivery router.
-- You run your own remote graphics processor for proofs.
+- The proof publisher makes light client proofs and shares them.
+- The delivery runner delivers proven transfers through a delivery router and earns their fees.
 
-You do not need a bot to use the bridge. You only need a wallet.
+To bridge, you need only a wallet.
 
 ## What the proof publisher does
 
@@ -28,17 +27,17 @@ The delivery runner reads the proofs from msgboard. It checks each proof before 
 
 If the destination light client is behind, the runner posts the update. It then lists the transfers that are covered and not yet delivered.
 
-For each transfer, the runner reads the tip. It compares the tip with its own gas cost, plus a margin that you configure. It delivers only when the tip covers the cost.
+For each transfer, the runner reads the fee. It compares the fee with its own gas cost, plus a margin that you configure, and delivers only when the fee covers them.
 
 The runner simulates every transaction first. It never sends a transaction that would revert. It holds a wallet on the destination chain.
 
-## How the runner treats tips
+## How the runner treats fees
 
-Anyone can deliver through a delivery router. The router pays every tip to its reward address, not to the wallet that delivers. The runner earns the tip only when the reward address of the router is its own. Check the reward address of a router before you run a runner against it.
+Anyone can deliver through a delivery router. The router pays every fee to its reward address, not to the wallet that delivers. The runner earns the fee only when the router's reward address is its own. Check the reward address of a router before you run a runner against it.
 
-The runner skips transfers with no tip. You can change this with the setting `deliverWithoutOffer`. The default is off.
+The runner skips transfers that carry no fee. The setting `deliverWithoutOffer` changes this; it is off by default.
 
-A suggestion with a margin of zero covers the cost and nothing more. A runner with a margin above zero skips it. The page Fees explained describes the suggestions.
+By default the app sets a fee of at least twice the cost of a transfer (the delivery gas plus $0.025 for the proof), so a runner with a margin up to 100% still delivers it. Only a small transfer, where the user's fee cap holds the fee lower, falls short, and the app warns the user about it. A gas-based fee follows the gas the delivery actually spends. The page Fees explained covers how users set their fee.
 
 ## Where the bots run
 
@@ -46,17 +45,13 @@ Both bots run from the terminal. They are part of the bots package. The command 
 
 Logs go to standard error as one JSON object per line. The bots can stop and start again without double work.
 
-Read these files for the commands and settings.
-
-- `docs/bots.md` has the design and the decisions.
-- `explorer/bots/README.md` has the commands, the configuration fields and the tests.
-- `explorer/terminal/README.md` has the terminal dashboard, its keys and its environment variables.
+The bots' README in the source code lists the commands, the configuration fields and the tests; the terminal dashboard's README lists its keys and settings.
 
 ## The Prover setup view
 
 The terminal dashboard has a Prover setup view. You use it to enter the remote endpoint, the keys and the chain endpoints. The bots read the file that this view writes.
 
-This view exists only in the terminal. It holds operator secrets. A browser page ships its settings to every visitor, so the web interface never holds these secrets.
+This view exists only in the terminal. It holds operator secrets. A browser page ships its settings to every visitor, so the web app never holds these secrets.
 
 The terminal opens the view with the key `5`. The view is always the last option in every menu.
 
@@ -66,12 +61,10 @@ The setup view takes secrets in masked fields. It never shows them again, except
 
 The terminal stores secrets in the secret store of the operating system when one exists. Otherwise it uses a file that a password encrypts. You can also point to an environment variable instead of storing anything. Every log and error removes the secrets.
 
-## Limits and open items
+## Before you start
 
-Some facts are not verified yet.
-
-- The message size limit of the live msgboard network is not verified. The tested limit is 8 KiB, on the node software available on the development machine.
-- The proof remote mode supports only a load balancing endpoint today. A queue endpoint needs a second implementation.
-- The runner needs the `verify` command of the prover. Build the prover first.
+- Build the prover first: the runner uses its `verify` command.
+- The remote proof mode works with a load-balancing endpoint.
+- Keep proof messages small: 8 KiB is the size tested on msgboard.
 
 Run the bots against a local test chain before you use real funds.

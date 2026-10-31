@@ -44,7 +44,7 @@ describe("the type and spacing scale (owner: \"the baseline should be larger\")"
     expect(rule(".zb-pill")).toMatch(/var\(--zb-touch\)/);
     expect(rule(".zb-header")).toMatch(/var\(--zb-header-h\)/);
     expect(rule(".zb-token-list [role=\"option\"]")).toMatch(/var\(--zb-row-h\)/);
-    expect(rule(".zb-fees")).toMatch(/var\(--zb-step-fee\)/);
+    expect(rule(".zb-dctl")).toMatch(/var\(--zb-step-fee\)/);
   });
 });
 

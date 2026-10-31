@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openStorage } from "../src/storage.ts";
-import { findActiveJob, findLatestJob, getJob, getRequest, insertJob, insertRequest, pruneRequests, recentRequestsOfAll, recentRequestsOfCaller, updateJob } from "../src/requests/jobs.ts";
+import { findActiveJob, findLatestJob, getJob, getRequest, insertJob, insertRequest, pruneRequests, recentCallersOfAll, recentRequestsOfCaller, updateJob } from "../src/requests/jobs.ts";
 
 const tables = (storage: ReturnType<typeof openStorage>) =>
   (storage.database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name);
@@ -62,10 +62,10 @@ describe("storage", () => {
     add("r3", "done", "x", 300);
     add("r4", "waiting", "z", 50);
     expect(recentRequestsOfCaller(storage, "x", 150)).toEqual({ count: 1, oldest: 300 });
-    expect(recentRequestsOfAll(storage, 150)).toEqual({ count: 2, oldest: 200 });
+    expect(recentCallersOfAll(storage, 150)).toEqual({ count: 2, oldest: 200 });
     expect(pruneRequests(storage, 250)).toBe(2);
     expect(getRequest(storage, "r4")?.id).toBe("r4");
-    expect(recentRequestsOfAll(storage, 0)).toEqual({ count: 2, oldest: 50 });
+    expect(recentCallersOfAll(storage, 0)).toEqual({ count: 2, oldest: 50 });
     updateJob(storage, "waiting", { status: "failed" }, 3, ["queued"]);
     expect(pruneRequests(storage, 250)).toBe(1);
   });

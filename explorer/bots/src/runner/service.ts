@@ -6,7 +6,7 @@ import { createTransactionPort, type TransactionPort } from "../chain/transactio
 import { createIndexerClient } from "../indexer/client.ts";
 import { createBoardFeed, type BoardFeed } from "@zk-bridge/shared/msgboard";
 import { executeCommand, type CommandExecutor } from "@zk-bridge/shared/prover";
-import { createLightClientReader, createProverBinary, type ProverBinary } from "@zk-bridge/shared/prover";
+import { createLightClientReader, createProverBinary, createVerifyGuard, type ProverBinary } from "@zk-bridge/shared/prover";
 import { sidesOfDirection, type BotContext } from "../runtime/context.ts";
 import { acquireLock, type HeldLock } from "../runtime/lock-file.ts";
 import { runLoop } from "../runtime/loop.ts";
@@ -147,6 +147,8 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
     ports.set(chainId, created);
     return created;
   };
+  // One guard for the local proof checks of every runner of this process: the forged proofs of the board share one budget (B-4).
+  const verifyGuard = createVerifyGuard({ now, logger: logger.child({ bot: "runner" }) });
   const queues = new Map<number, ReturnType<typeof createSerialQueue>>();
   const queueOf = (chainId: number) => {
     const known = queues.get(chainId) ?? createSerialQueue();
@@ -188,6 +190,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       multicall,
       rewardAddress,
       wrappedNative: destination.contracts.wrappedNative,
+      bridge: destination.contracts.bridge,
       tokenFactory: destination.contracts.tokenFactory as Address,
       settings: deliverySettingsOf(runnerConfig),
       logger: directionLogger,
@@ -212,6 +215,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       prerequisiteLossRefusalMilliseconds: runnerConfig.prerequisiteLossRefusalSeconds * 1000,
       logger: directionLogger,
       acceptOracleProof: runnerConfig.acceptOracleProof,
+      verifyGuard,
     });
     const category = proofCategory(pair.name, direction);
     // `handleProofPayload` sweeps after it accepts a proof: the update goes with the first batch, or alone when none follows.

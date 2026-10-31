@@ -1,12 +1,19 @@
 import { keccak256, type Hex } from "viem";
 import { ORACLE_PROOF_MESSAGE_VERSION, tryDecodeProofMessage, type ProofDirection, type ProofMessage } from "../proof-message.js";
-import type { ProverBinary } from "./prover-binary.js";
+import { CommandStartError, CommandTimeoutError } from "./execute-command.js";
+import { ProverCommandError, ProverOutputError, type ProverBinary } from "./prover-binary.js";
+import type { VerifyGuard } from "./verify-guard.js";
 
 /** What the proof check needs to know about the light client on the destination chain. */
 export interface LightClientHead {
   readonly headSlot: bigint;
   readonly headRoot: Hex;
   readonly programKey: Hex;
+  /**
+   * The clock settings of the light client (`genesisTime` in seconds, `secondsPerSlot`). With them the intake refuses a
+   * proof whose new slot the contract would refuse as `HeadInFuture`, before any costly check. A reader may leave them out.
+   */
+  readonly clock?: { readonly genesisTime: bigint; readonly secondsPerSlot: bigint };
 }
 
 /** Reads the light client on the destination chain. */
@@ -25,6 +32,9 @@ export type ProofRefusal =
   | "already-stored"
   | "start-slot-differs-from-head"
   | "start-root-differs-from-head"
+  | "head-in-future"
+  | "verify-budget-exhausted"
+  | "verify-unavailable"
   | "proof-does-not-verify";
 
 /** The verdict on one message. */
@@ -45,6 +55,25 @@ export interface AssessInput {
    * so it is skipped for that form and the chain stays the check.
    */
   readonly acceptOracleProof?: boolean;
+  /**
+   * The guard in front of the local check: it refuses a payload that already failed at this head, and caps the checks
+   * per minute. Without a guard every payload that passes the cheap checks is checked. Pass one wherever the payloads
+   * come from the public board.
+   */
+  readonly verifyGuard?: VerifyGuard;
+  /** The source that the guard counts the check under, such as the board category of a direction. Default `unnamed`. */
+  readonly verifySource?: string;
+  /** Milliseconds since 1970, for the clock check of the new slot. Default `Date.now`. */
+  readonly now?: () => number;
+}
+
+/** The slots that a new slot may be after the clock of the destination, for clock skew between hosts. */
+export const FUTURE_SLOT_MARGIN = 2n;
+
+/** The current slot of a light client clock at `nowMilliseconds`, 0 before genesis, as `BeaconClock.slotAt` reads it. */
+function currentSlotOf(clock: NonNullable<LightClientHead["clock"]>, nowMilliseconds: number): bigint {
+  const seconds = BigInt(Math.floor(nowMilliseconds / 1000));
+  return seconds <= clock.genesisTime ? 0n : (seconds - clock.genesisTime) / clock.secondsPerSlot;
 }
 
 /** True when the first byte of the payload is the version of the oracle form. */
@@ -60,7 +89,9 @@ function isOracleVersion(payload: Hex): boolean {
  * 2. The program key equals `programVKey()` of the destination light client.
  * 3. The proof does not end at or before the stored head.
  * 4. The start slot and the start root equal the stored head.
- * 5. The Groth16 proof verifies locally for that key and those public values.
+ * 5. The new slot is not after the clock of the light client (when the reader gives its clock settings).
+ * 6. The verify guard, when given, admits the check (see `verify-guard.ts`).
+ * 7. The Groth16 proof verifies locally for that key and those public values.
  *
  * The chain stays the final check: `update` verifies the proof again.
  */
@@ -91,13 +122,51 @@ export async function assessProofPayload(input: AssessInput): Promise<ProofAsses
   if (state.headSlot >= message.newSlot) return { accept: false, reason: "already-stored" };
   if (message.startSlot !== state.headSlot) return { accept: false, reason: "start-slot-differs-from-head" };
   if (message.startRoot.toLowerCase() !== state.headRoot.toLowerCase()) return { accept: false, reason: "start-root-differs-from-head" };
+  if (state.clock !== undefined) {
+    const currentSlot = currentSlotOf(state.clock, (input.now ?? Date.now)());
+    if (message.newSlot > currentSlot + FUTURE_SLOT_MARGIN) {
+      return { accept: false, reason: "head-in-future", detail: `slot ${message.newSlot} is after the current slot ${currentSlot} of the destination` };
+    }
+  }
   if (message.version === ORACLE_PROOF_MESSAGE_VERSION) return { accept: true, message };
+  const guard = input.verifyGuard;
+  const key = payloadKey(input.payload);
+  const source = input.verifySource ?? "unnamed";
+  if (guard !== undefined) {
+    const admission = guard.admit({ key, head: state, newSlot: message.newSlot, source });
+    if (admission.kind === "refused-before") return { accept: false, reason: "proof-does-not-verify", detail: "refused before at this head" };
+    if (admission.kind === "dropped") {
+      const whose = admission.scope === "all" ? "all sources" : "this source";
+      return { accept: false, reason: "verify-budget-exhausted", detail: `the local proof checks of this minute are used up (${whose})` };
+    }
+  }
   try {
     await input.prover.verify({ programKey: message.programKey, publicValues: message.publicValues, proof: message.proof });
   } catch (error) {
-    return { accept: false, reason: "proof-does-not-verify", detail: error instanceof Error ? error.message : String(error) };
+    const detail = error instanceof Error ? error.message : String(error);
+    // The verifier could not give an answer (it timed out, did not start, crashed or printed junk): nothing is known
+    // about the proof, so the refusal may pass on a later look and is not remembered.
+    if (isVerifierFailure(error)) return { accept: false, reason: "verify-unavailable", detail };
+    // Only a definite refusal of the verifier is remembered for this head.
+    if (isDefiniteRefusal(error)) guard?.refused({ key, head: state, source });
+    return { accept: false, reason: "proof-does-not-verify", detail };
   }
+  guard?.verified({ head: state, newSlot: message.newSlot, source });
   return { accept: true, message };
+}
+
+/** The exit code of `zk-bridge-prover verify` for a proof that does not verify (or has the wrong shape). */
+export const VERIFY_REFUSED_EXIT_CODE = 1;
+
+/** True when the verifier ran and refused the proof: `verify` exits with code 1 and reads no file or network. */
+function isDefiniteRefusal(error: unknown): boolean {
+  return error instanceof ProverCommandError && error.exitCode === VERIFY_REFUSED_EXIT_CODE;
+}
+
+/** True when the verifier gave no answer about the proof: a timeout, a start failure, a crash or a junk answer. */
+function isVerifierFailure(error: unknown): boolean {
+  if (error instanceof CommandTimeoutError || error instanceof CommandStartError || error instanceof ProverOutputError) return true;
+  return error instanceof ProverCommandError && error.exitCode !== VERIFY_REFUSED_EXIT_CODE;
 }
 
 /** A key for a payload, so that the runner looks at a republished message once. */

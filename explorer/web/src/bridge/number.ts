@@ -39,19 +39,47 @@ const smallText = (value: bigint, decimals: number, digits: number): string => {
 };
 
 /**
- * Dollars (USD × 1e18, as the shared fee rules keep them) as text: two decimals from $1, else three significant digits
- * (cut, not rounded) with three or more leading zeros collapsed as subscript digits ($0.0₇504). "$0" for nothing.
+ * Dollars (USD × 1e18, as the shared fee rules keep them) as text: from one cent, two decimals, cut, not rounded
+ * ($0.50, $2.52, $1,234.50); under a cent, three significant digits (cut) with three or more leading zeros collapsed as
+ * subscript digits ($0.0₇504). "$0" for nothing.
  *
  * @param usd The value, USD × 1e18.
  */
 export const dollarsText = (usd: bigint): string => {
   if (usd === 0n) return "$0";
-  const SCALE = 10n ** 18n;
-  if (usd >= SCALE) {
-    const cents = usd / 10n ** 16n;
+  const CENT = 10n ** 16n;
+  if (usd >= CENT) {
+    const cents = usd / CENT;
     return `$${(cents / 100n).toLocaleString("en-US")}.${(cents % 100n).toString().padStart(2, "0")}`;
   }
   return `$${smallText(usd, 18, 3)}`;
+};
+
+/**
+ * A dollar range as two texts that never read the same: each end in {@link dollarsText}, unless both would print alike
+ * ("$0.02 and $0.02"); then both get as many significant digits (cut) as it takes to tell them apart, up to six.
+ *
+ * @param low The lower end, USD × 1e18.
+ * @param high The upper end, USD × 1e18.
+ */
+export const dollarsRange = (low: bigint, high: bigint): readonly [string, string] => {
+  const [a, b] = [dollarsText(low), dollarsText(high)];
+  if (a !== b || low === high) return [a, b];
+  for (let digits = 3; digits <= 6; digits += 1) {
+    const pair = [precise(low, digits), precise(high, digits)] as const;
+    if (pair[0] !== pair[1]) return pair;
+  }
+  return [precise(low, 6), precise(high, 6)];
+};
+
+/** Dollars with `digits` significant digits, cut; the leading-zeros rule below a dollar. */
+const precise = (usd: bigint, digits: number): string => {
+  const DOLLAR = 10n ** 18n;
+  if (usd < DOLLAR) return `$${smallText(usd, 18, digits)}`;
+  const whole = usd / DOLLAR;
+  const room = Math.max(0, digits - whole.toString().length);
+  const fraction = (usd % DOLLAR).toString().padStart(18, "0").slice(0, Math.max(2, room));
+  return `$${whole.toLocaleString("en-US")}.${fraction}`;
 };
 
 /**

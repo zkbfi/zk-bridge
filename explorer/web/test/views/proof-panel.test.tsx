@@ -439,6 +439,30 @@ describe("the proof panel", () => {
 const read = (set: Partial<Record<keyof PanelEndpoints, string>>, transport: PanelTransport, headSlot: bigint | null = HEAD, direction: "first-to-second" | "second-to-first" = "first-to-second") =>
   readLatestProof({ endpoints: endpoints(set), pair: "eth-pls", direction, headSlot, transport });
 
+describe("the msgboard node per chain (owner, quote 87)", () => {
+  const boards = (urls: Record<number, string>): PanelEndpoints => ({ ...endpoints(), msgboardUrls: Object.fromEntries(Object.entries(urls).map(([chainId, url]) => [chainId, setting(url)])) });
+
+  it("reads the destination chain's node, never the other chain's", async () => {
+    const { transport, posts } = fakeTransport({ post: async () => boardAnswer([encodeProofMessage(proofMessage())]) });
+    const answer = await readLatestProof({ endpoints: boards({ 1: "https://board-eth.test", 369: "https://board-pls.test" }), pair: "eth-pls", direction: "first-to-second", headSlot: HEAD, boardChainId: 369, transport });
+    expect(answer.kind).toBe("found");
+    expect(posts).toEqual(["https://board-pls.test"]);
+  });
+
+  it("falls back to the single node for a chain without its own", async () => {
+    const { transport, posts } = fakeTransport({ post: async () => boardAnswer([encodeProofMessage(proofMessage())]) });
+    await readLatestProof({ endpoints: { ...boards({ 1: "https://board-eth.test" }), msgboardUrl: setting(NODE) }, pair: "eth-pls", direction: "first-to-second", headSlot: HEAD, boardChainId: 369, transport });
+    expect(posts).toEqual([NODE]);
+  });
+
+  it("on the message page, reads the board of the chain the message arrives on", async () => {
+    const { transport, posts } = fakeTransport({ post: async () => boardAnswer([encodeProofMessage(proofMessage())]) });
+    await renderPanel({ changes: { status: "waiting_for_finality" }, endpoints: boards({ 1: "https://board-eth.test", 369: "https://board-pls.test" }), transport });
+    await waitFor(() => expect(screen.getByTestId("latest-proof")).toHaveTextContent("msgboard node"));
+    expect(new Set(posts)).toEqual(new Set(["https://board-pls.test"]));
+  });
+});
+
 describe("the other direction", () => {
   it("asks for the proof that follows the chain of the send, posts it to the first chain, and closes the review on Cancel", async () => {
     const user = userEvent.setup();

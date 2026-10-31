@@ -2,7 +2,8 @@
  * Custom tokens (owner: "tokens that neither bridge has ever seen"): a pasted address that is in no list is read
  * on-chain (symbol, name, decimals) over the user's RPC. A contract that does not answer as an ERC-20 is refused.
  */
-import { createPublicClient, erc20Abi, getAddress, http, isAddress, type Address } from "viem";
+import { createPublicClient, erc20Abi, getAddress, isAddress, type Address } from "viem";
+import { rpcTransport } from "../app/rpc-transport";
 import type { ChainSide, TokenInfo } from "@terminal/model/types";
 
 /** Reads one ERC-20 view of a token. */
@@ -43,7 +44,7 @@ export const resolveCustomToken = async (text: string, side: ChainSide, read: Er
  * @param rpcUrl The RPC of the chain.
  */
 export const erc20ReaderFor = (rpcUrl: string): Erc20Reader => {
-  const client = createPublicClient({ transport: http(rpcUrl) });
+  const client = createPublicClient({ transport: rpcTransport(rpcUrl) });
   return (address, fn) => client.readContract({ address, abi: erc20Abi, functionName: fn });
 };
 

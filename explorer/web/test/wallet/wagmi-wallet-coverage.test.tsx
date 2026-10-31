@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -61,9 +62,9 @@ beforeEach(() => {
 });
 
 describe("createWalletConfig: the endpoints", () => {
-  it("falls back to the valve.city demo RPC for a chain that has no endpoint in the page configuration", () => {
+  it("falls back to the default public RPC for a chain that has no endpoint in the page configuration", () => {
     const config = createWalletConfig(FIXTURE_PAIR, { 369: "https://pls.example.org" });
-    expect(config.chains.map((chain) => chain.rpcUrls.default.http)[0]).toEqual([`https://one.valve.city/rpc/vk_demo/evm/${FIXTURE_PAIR.first.chainId}`]);
+    expect(config.chains.map((chain) => chain.rpcUrls.default.http)[0]).toEqual([defaultRpcUrl(FIXTURE_PAIR.first.chainId)]);
     expect(config.chains.map((chain) => chain.rpcUrls.default.http)[1]).toEqual(["https://pls.example.org"]);
   });
 });

@@ -4,7 +4,7 @@
  */
 import { decodeFunctionData, toHex, type Hex } from "viem";
 import { encodeProofMessage, messageBridgeAbi, ORACLE_PROOF_MESSAGE_VERSION } from "@zk-bridge/shared";
-import { assessProofPayload } from "@zk-bridge/shared/prover";
+import { DEFAULT_VERIFY_LIMITS, ProverCommandError, assessProofPayload, createVerifyGuard } from "@zk-bridge/shared/prover";
 import { describe, expect, it } from "vitest";
 import { sendBatch } from "../../src/runner/batch.ts";
 import { prepareItem, quoteFee, type DeliveryDependencies, type ReadyDelivery } from "../../src/runner/delivery.ts";
@@ -17,6 +17,7 @@ import {
   REWARD_ADDRESS,
   TEST_PROOF_CHECK_GAS,
   WRAPPED_NATIVE,
+  BRIDGE,
   address,
   affirmationLog,
   emptyExecuteMessage,
@@ -67,6 +68,7 @@ function dependencies(overrides: Partial<DeliveryDependencies> = {}): DeliveryDe
     multicall: MULTICALL,
     rewardAddress: REWARD_ADDRESS,
     wrappedNative: WRAPPED_NATIVE,
+    bridge: BRIDGE,
     tokenFactory: null,
     settings: {
       maximumLossPercent: 20,
@@ -166,20 +168,28 @@ describe("red team: proof intake of the runner (malicious msgboard content)", ()
     expect(await result).toMatchObject({ accept: false, reason: "proof-does-not-verify" });
   });
 
-  it("ATTACK SUCCEEDS forged-proof flood: every distinct forgery that names the current head spawns one local verify", async () => {
-    // The head (slot, root, program key) is public. Each byte change of the proof gives a new payload key, so the
-    // runner's five-minute memory does not help: N forgeries cost N prover processes. msgboard proof-of-work is the only brake.
+  it("ATTACK forged-proof flood: the verify guard caps the local checks per minute, and a repeat at the head costs none (BLOCKED, was B-4)", async () => {
+    // The head (slot, root, program key) is public. Each byte change of the proof gives a new payload key, so N distinct
+    // forgeries pass the cheap checks. The guard that the runner service shares between its runners caps the checks.
+    const guard = createVerifyGuard({ now: () => 1_000_000 });
     let verifications = 0;
-    for (let index = 0; index < 50; index += 1) {
-      const prover = fakeProver({
-        verify: () => {
-          throw new Error("invalid proof");
-        },
-      });
-      await assessProofPayload({ payload: proofPayload({ proofByte: index.toString(16).padStart(2, "0") }), pairName: "eth-pls", direction: "first-to-second", lightClient: fakeLightClient(), prover });
-      verifications += prover.verifications;
+    for (let round = 0; round < 2; round += 1) {
+      for (let index = 0; index < 50; index += 1) {
+        const prover = fakeProver({
+          verify: () => {
+            throw new ProverCommandError("verify", 1, "invalid proof");
+          },
+        });
+        const payload = proofPayload({ proofByte: index.toString(16).padStart(2, "0") });
+        await assessProofPayload({ payload, pairName: "eth-pls", direction: "first-to-second", lightClient: fakeLightClient(), prover, verifyGuard: guard, verifySource: "first-to-second" });
+        verifications += prover.verifications;
+      }
     }
-    expect(verifications).toBe(50);
+    // The general budget of the minute, and one place of the reserve for the one slot that all forgeries claim.
+    const checked = DEFAULT_VERIFY_LIMITS.perSourcePerMinute + 1;
+    expect(verifications).toBe(checked);
+    // The checked ones are remembered as refused; the others are dropped in each round.
+    expect(guard.dropped().total).toBe(2 * (50 - checked));
   });
 });
 
@@ -294,10 +304,10 @@ describe("red team: delivery decisions of the runner", () => {
     expect(deps.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(0);
   });
 
-  it("ATTACK SUCCEEDS forged AffirmationCompleted from a target contract marks a failed item as delivered", async () => {
+  it("ATTACK forged AffirmationCompleted from a target contract does not mark a failed item as delivered (BLOCKED, was B-3)", async () => {
     // Item 2 fails in the mined block (it simulated fine: a race). Item 1's target, an attacker contract, emits an
-    // event with the AffirmationCompleted signature naming message 2. readReceipt does not check the log address,
-    // so the runner records message 2 as delivered and the runner writes it to `finished`: never tried again.
+    // event with the AffirmationCompleted signature naming message 2. readReceipt believes only the address of the
+    // destination bridge, so message 2 stays failed and is tried again.
     const deps = dependencies();
     deps.chain.feeTokens = 10n ** 17n;
     deps.chain.receiptResult = (position) => (position === 1 ? { success: false, returnData: "0x" } : { success: true, returnData: "0x" });
@@ -316,7 +326,7 @@ describe("red team: delivery decisions of the runner", () => {
       };
     });
     const report = await sendBatch(deps, ledger(), { readies, update: null });
-    expect(report.outcomes[1]).toMatchObject({ status: "delivered", messageId: word(2) });
+    expect(report.outcomes[1]).toMatchObject({ status: "failed", messageId: word(2), reason: "batch-result-missing" });
   });
 });
 

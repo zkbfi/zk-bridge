@@ -345,6 +345,7 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
         multicall: stack.multicall3,
         rewardAddress: account(ACCOUNT.reward).address,
         wrappedNative: stack.wrappedNative,
+        bridge: stack.mediatorBridge,
         tokenFactory: null,
         settings: {
           maximumLossPercent: 20,

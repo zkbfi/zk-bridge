@@ -12,7 +12,7 @@ import type { DataSource } from "@terminal/data/data-source";
 import { createFixtureDataSource, FIXTURE_NOW } from "@terminal/data/fixtures";
 import { createConnectionRuntime, type ConnectionRuntime } from "@terminal/data/connection-runtime";
 import type { PairConfig } from "@terminal/model/types";
-import { beaconLightClientAbi, type ExplorerConnectionInput, type ExplorerConnection, type Pair } from "@zk-bridge/shared";
+import { beaconLightClientAbi, migrateBoardUrls, type ExplorerConnectionInput, type ExplorerConnection, type Pair } from "@zk-bridge/shared";
 import { loadUserConnections, type ConnectionStorage } from "../config/connection-storage";
 import type { WebConfiguration } from "../config/environment";
 import { createFixtureIndexerClient } from "../data/fixture-indexer-client";
@@ -125,7 +125,8 @@ export const createServices = (configuration: WebConfiguration, pair: PairConfig
       msgboardUrl: configuration.msgboardUrl,
       rpcUrls: configuration.rpcUrls,
     },
-    user: loadUserConnections(live.storage ?? null),
+    // A saved single msgboard node becomes each chain's (owner, quote 87).
+    user: migrateBoardUrls(loadUserConnections(live.storage ?? null), [pair.first.chainId, pair.second.chainId]),
     ...(live.createConnection === undefined ? {} : { createConnection: live.createConnection }),
     ...(live.connectionOptions === undefined ? {} : { connectionOptions: live.connectionOptions }),
   });

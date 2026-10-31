@@ -1,92 +1,81 @@
 # Bridging tokens
 
-This page explains how to move tokens across the bridge. It covers native tokens, bridged copies, the native coin, the allowance, the gas limit and failed releases.
+Send tokens or the native coin to the other chain, to your own wallet or any address you choose, and know what arrives.
 
 ## Native tokens and bridged copies
 
-A token is native on the chain where it was created. For example, USDC on Ethereum is native on Ethereum.
+A token is native on the chain where it was created. USDC on Ethereum, for example, is native on Ethereum.
 
-When you bridge a native token, the bridge locks it in the token mediator. The mediator is the contract that handles tokens. The other chain then mints a bridged copy for the recipient.
+When you bridge a native token, the bridge locks it in the token mediator, the contract that handles tokens. The other chain then mints a bridged copy for the recipient. When you bridge the copy back, the bridge burns it, and the mediator unlocks the native token on its home chain. The supply of each copy always matches what the mediator holds.
 
-When you bridge a copy back, the bridge burns the copy. The mediator then unlocks the native token on its home chain. The supply of each copy always matches the tokens that the mediator holds in escrow.
+A copy takes the name of the native token, then " from " and the home chain, such as Wrapped Ether from Ethereum. Its symbol adds the prefix "zkb", such as zkbWETH. On the Bridge screen, what arrives shows with the same icon as what you send, with a small badge of the destination chain, and the line under it names the copy: "arrives as zkbUSDC on PulseChain".
 
-## How a copy is created
+## Choosing the token
 
-The bridge has no token list and no registration step. The address of a copy comes from the home chain and the home token. The destination chain computes this address.
+Tap the token beside the amount to open the token list.
 
-The first transfer of a token deploys its copy. This transfer costs more gas to deliver than later ones. The copy takes the name of the native token, then " from " and the name of its home chain. For example, Wrapped Ether from Ethereum. Its symbol is the symbol of the native token with the prefix "zkb". For example, zkbWETH.
+- The tabs filter by chain: the first tab shows all chains, the others one chain each.
+- Each list shows your tokens: those you hold, or have bridged with zkb.fi before. Each row shows the token's price and your balance.
+- Search finds every token the bridge knows, on both chains. Picking a token on the other chain swaps the direction for you.
+- Paste a token address to bridge a token nobody has bridged yet.
 
-## Wrapping the native coin
+## Tokens to take care with
 
-The native coin is ETH on Ethereum and PLS on PulseChain. A coin is not a token, so the mediator cannot move it directly.
+Two kinds of token get a warning on the Bridge button. You can read it and still go ahead.
 
-A router contract wraps the coin first. Wrapping turns the coin into a wrapped native token that works like any other token. The router then relays the wrapped token. On the other side, the router unwraps the token and sends the coin to the recipient.
+- **First time this token is bridged · keep the amount low.** Nobody has bridged this token with zkb.fi before. The first transfer also creates its copy on the other chain, and costs more gas to deliver. A small first amount limits what is at risk.
+- **Already bridged by the Omnibridge · wraps twice.** The token is itself a copy that came over the Omnibridge. Bridging it with zkb.fi wraps it a second time: you pay gas twice, and it only turns back into the original by undoing both bridges in order. In the token list such a token carries a bridge icon. Its tooltip explains this and links to the original token.
 
-You do this in one transaction. You send the coin to the router with its `wrapAndRelayTokens` function. You do not need an allowance for the coin.
+## Bridging the native coin
 
-## The relay functions
+The native coin is ETH on Ethereum and PLS on PulseChain. It appears in the token list where the pair supports it. The bridge wraps the coin into a token that stands for it one to one, sends that, and on the other side the coin is paid out again. It is one transaction and needs no allowance.
 
-The mediator has two ways to relay tokens. They differ in what happens at delivery. Each has a form with a trailing gas limit.
+MAX on the native coin leaves enough for the gas of sending it.
 
-### relayTokens
+A transfer of the native coin carries no fee for a bot, so anyone can deliver it for free, you included. The page Fees explained covers this.
 
-`relayTokens` is the plain transfer. It takes the token, the receiver and the amount. A second form sends the tokens to your own address on the other chain. A third form adds a gas limit after the amount.
+## The destination
 
-Use it when the receiver is a normal account.
+The **To** row above the Bridge button says where the tokens go.
 
-### relayTokensAndCall
+| The lock | The destination | Its tooltip |
+|---|---|---|
+| Locked (the default) | Your connected wallet. It follows your wallet when you switch accounts. | Sends to your connected wallet |
+| Unlocked | The address you type in the row, whatever wallet is connected. | Sends to the address you type, whatever wallet is connected |
 
-`relayTokensAndCall` delivers the tokens and then calls the receiver. It takes the same values plus call data. After the tokens arrive, the receiver contract gets a callback named `onTokenBridged` with your data.
+Tap the lock to switch. When it is unlocked, the row itself becomes the address field. The page checks the address as you type:
 
-Use it when the receiver is a contract that must act on the tokens. The interface also uses this function to send your tip through the delivery router. The page Fees explained covers that case.
+- it must be 0x followed by 40 hex characters;
+- it must not be the zero address, where nothing sent can be spent;
+- if it has capital letters, they must match the address's checksum. Type it in lower case if you are unsure where it came from.
 
-A second form adds a gas limit after the call data.
+The Bridge button stays grey, reading "Check the destination", until the address passes. Once it does, a line under the row reads "Not your wallet. Check the address." whenever it differs from your wallet, and the review marks it "(not your wallet)". Locking the row again drops the typed address.
 
-### The call after the delivery
+The same address on the other chain may belong to someone else, or to nobody. This matters most for a contract wallet: check that it exists on the destination chain. Test with a small amount first.
 
-The form has two optional fields for a call: Call target and Call data. They work with the delivery router and with a tip.
+## A link that fills in the form
 
-- **Call target.** The address of a contract on the destination chain. After the router pays the recipient, the router calls this contract. Leave the field empty for no call.
-- **Call data.** The bytes that the router sends to the call target, in hex, such as `0xabcd`. Empty data is allowed. The router then calls the target with no data.
+A link to the Bridge screen can carry the direction, the token and the amount; these are filled in quietly. When a link also fills in anything that changes where the tokens go or what you pay, such as the destination, the fee settings, the relay router, the gas limit or a call, the screen names those fields in a warning. The review names them again. Check them before you confirm.
 
-The call comes from the router, not from you or from the recipient. It sends no native coin. It runs only after the payment succeeded.
+## Advanced: gas limit and a call after delivery
 
-The call gets all the gas that is left, less 10,000 gas that the router keeps to finish. A call that fails does not undo the delivery. The recipient keeps the tokens, and the router emits the event `CallFailed`.
+The delivery menu (tap the fee) has an **Advanced** part.
 
-The call has a cost. The tip counts the gas that the call may use. A gas based tip is higher when you add a call, and it can reach its limit. The page Fees explained covers the tip.
+- **Gas limit.** The gas the message may use on the destination. It starts at the recommended amount. Raise it only if the receiver runs code that needs more. The mediator uses the larger of your number and its default, and refuses a number above the bridge maximum.
+- **Call after delivery.** A contract on the destination chain that the delivery router calls once it has paid the recipient, and the call data to send it. The call comes from the router. It sends no coin. It runs only after the payment succeeded, and a call that fails does not undo the delivery: the recipient keeps the tokens.
 
-### The gas limit
+A call costs gas, so a gas-based fee rises with it. The control names the call, the router and a gas limit you set, for example "A bot delivers it on PulseChain · fee 0.39%, then calls 0x12…ab".
 
-The form has an optional field named Gas limit. Leave it empty to use the default gas for the kind of message. This plans the functions without a gas limit.
+## The allowance
 
-Type a number to plan the forms with a trailing gas limit: `relayTokens(token, receiver, value, gasLimit)` or `relayTokensAndCall(token, receiver, value, data, gasLimit)`. The mediator uses the larger of your number and the default for the kind of message. It refuses a number above the bridge maximum with the error `GasLimitAboveBridgeMaximum`. The wrap route has no gas limit field.
+A token contract lets the mediator take your tokens only after you approve it. This approval is the allowance. When your allowance is lower than the amount, the app asks for an approval first, then sends the transfer. Both transactions show in full before your wallet opens. The app asks only for the amount you send.
 
-## The allowance step
+## What arrives
 
-A token contract only lets the mediator pull your tokens after you approve it. This approval is the allowance.
-
-1. Read your current allowance for the mediator.
-2. If it is lower than your amount, send an approval for at least the amount.
-3. Wait for the approval to confirm.
-4. Send the relay.
-
-The interface shows both transactions in full before your wallet asks you to sign. Approve only the amount you need. An approval for a larger amount stays open until you lower it.
-
-## Fees overview
-
-The bridge charges no fee. The only fee is the voluntary tip for delivery. The interface adds this tip by default, as a gas based tip. Its limit is the most that it can take, and you should expect it to reach the limit. The delivery router pays it to its reward address, as payment for the delivery. You can edit the tip or remove it. The wrap route carries no tip. The page Fees explained covers the tip.
-
-The recipient receives the whole amount that you send, less the tip when you choose one. The feed shows the amount of the transfer.
+What arrives is the amount less the fee. The Bridge screen shows it under the delivery control, in the token and in dollars, before you sign. When the fee is still being worked out, it says "estimating".
 
 ## When the receiver cannot take the tokens
 
-A delivery can fail for the receiver. For example, a token can block a receiver that is on a deny list. The bridge then follows a fixed order.
+A delivery can fail for the receiver. A token can, for example, block an address that is on a deny list. The bridge then records the failed release and stops. The message still counts as delivered: the bridge never runs it twice.
 
-1. It tries to pay the receiver.
-2. If that fails, it emits the event `ReleaseFailed` and stops.
-
-The message stays delivered in both cases. The bridge does not undo a delivery.
-
-A failed release is final. The tokens stay in the mediator. The bridge keeps no claim record, and no function pays them out later. There is no fallback address either. The page of the message shows a Release row that says so.
-
-Check the receiver address before you send from a contract. The same address on the other chain may belong to someone else, or to nobody. Test with a small amount first.
+A failed release is final. The tokens stay in the mediator. There is no claim and no fallback address, and nothing pays them out later. The page of the message shows a Release row that says so.

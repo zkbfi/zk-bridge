@@ -9,6 +9,7 @@ import { createPrerequisiteLedger } from "../../src/runner/prerequisite-ledger.t
 import type { DeliverySettings } from "../../src/runner/delivery.ts";
 import type { Logger } from "../../src/logging/logger.ts";
 import { createRunner } from "../../src/runner/runner.ts";
+import { CommandTimeoutError, createVerifyGuard, type VerifyGuard } from "@zk-bridge/shared/prover";
 import { createSerialQueue } from "../../src/runner/serial-queue.ts";
 import { INITIAL_RUNNER_STATE, type RunnerState } from "../../src/runner/state.ts";
 import {
@@ -39,6 +40,7 @@ import {
   feedItem,
   memoryLogger,
   memoryOutcomes,
+  proofMessage,
   proofPayload,
   transferLog,
   word,
@@ -114,6 +116,7 @@ interface WorldOptions {
   /** A state that an earlier runner wrote, to test a restart. */
   state?: ReturnType<typeof memoryState>;
   startTime?: number;
+  verifyGuard?: VerifyGuard;
 }
 
 /** A runner on fakes: chain, indexer, prover, board payloads. Base fee 10 wei, 300,000 gas: a cost of 3,000,000 wei. */
@@ -143,6 +146,7 @@ function world(options: WorldOptions = {}) {
     multicall: MULTICALL,
     rewardAddress: REWARD_ADDRESS,
     wrappedNative: WRAPPED_NATIVE,
+    bridge: BRIDGE,
     tokenFactory: null,
     settings: {
       maximumLossPercent: options.maximumLossPercent ?? 20,
@@ -173,6 +177,7 @@ function world(options: WorldOptions = {}) {
     now: () => clock,
     maximumDeliveriesPerSweep: options.maximumDeliveriesPerSweep ?? 10,
     prerequisiteLossRefusalMilliseconds: REFUSAL_WINDOW_MILLISECONDS,
+    ...(options.verifyGuard === undefined ? {} : { verifyGuard: options.verifyGuard }),
     logger,
   });
   return { runner, chain, prover, lightClient, state, outcomes, events, indexer, delivery, advance: (milliseconds: number) => (clock += milliseconds) };
@@ -228,6 +233,50 @@ describe("proof intake and the update", () => {
     const handling = await w.runner.handleProofPayload(proofPayload());
     expect(handling).toMatchObject({ handled: "update-skipped", reason: "simulation-reverted" });
     expect(w.chain.log.map((entry) => entry.kind)).toEqual(["simulate"]);
+  });
+
+  it("caps the local checks of a flood of forged proofs, logs the drops, and remembers a refusal at the head (B-4)", async () => {
+    const guard = createVerifyGuard({ now: () => 1_000_000, limits: { perMinute: 10, perSourcePerMinute: 3, reservePerSourcePerMinute: 0, refusalsRemembered: 100 } });
+    const w = world({ verifyGuard: guard });
+    w.prover.verify = async () => {
+      (w.prover as { verifications: number }).verifications += 1;
+      throw new Error("invalid proof");
+    };
+    const handlings = [];
+    for (let index = 0; index < 50; index += 1) handlings.push(await w.runner.handleProofPayload(proofPayload({ proofByte: index.toString(16).padStart(2, "0") })));
+    expect((w.prover as { verifications: number }).verifications).toBe(3);
+    expect(handlings.filter((handling) => "reason" in handling && handling.reason === "verify-budget-exhausted")).toHaveLength(47);
+    expect(guard.dropped()).toEqual({ total: 47, bySource: { "first-to-second": 47 } });
+    expect(w.events().filter((event) => event.event === "proof_forgery_refused")).toHaveLength(3);
+  });
+
+  it("looks again at a message that the check budget dropped, once the budget has room (B-4)", async () => {
+    let time = 1_000_000;
+    const guard = createVerifyGuard({ now: () => time, limits: { perMinute: 10, perSourcePerMinute: 1, reservePerSourcePerMinute: 0, refusalsRemembered: 100 } });
+    const w = world({ verifyGuard: guard });
+    const verify = w.prover.verify.bind(w.prover);
+    w.prover.verify = async (request) => {
+      if (request.proof !== proofMessage().proof) throw new Error("invalid proof");
+      return verify(request);
+    };
+    await w.runner.handleProofPayload(proofPayload({ proofByte: "01" }));
+    const honest = proofPayload();
+    expect(await w.runner.handleProofPayload(honest)).toMatchObject({ handled: "refused", reason: "verify-budget-exhausted" });
+    time += 60_000;
+    expect(await w.runner.handleProofPayload(honest)).toMatchObject({ handled: "update-posted" });
+  });
+
+  it("looks again at a message whose check gave no answer (a verifier timeout), and posts it when the check passes", async () => {
+    const w = world({ verifyGuard: createVerifyGuard({ now: () => 1_000_000 }) });
+    const verify = w.prover.verify.bind(w.prover);
+    let failures = 1;
+    w.prover.verify = async (request) => {
+      if (failures-- > 0) throw new CommandTimeoutError("zk-bridge-prover ran longer than its limit");
+      return verify(request);
+    };
+    const payload = proofPayload();
+    expect(await w.runner.handleProofPayload(payload)).toMatchObject({ handled: "refused", reason: "verify-unavailable" });
+    expect(await w.runner.handleProofPayload(payload)).toMatchObject({ handled: "update-posted" });
   });
 
   it("looks at a republished message once", async () => {

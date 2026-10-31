@@ -30,8 +30,8 @@ describe("redaction", () => {
     ["dRPC dkey query", "https://lb.drpc.org/ogrpc?network=ethereum&dkey=AkLmNoPqRsTuVwXyZ012345", "AkLmNoPqRsTuVwXyZ012345"],
     ["access_token query", "https://beacon.example/eth/v1?access_token=tok_live_99887766", "tok_live_99887766"],
     ["x-api-key header", "x-api-key: 77aa88bb99cc00dd", "77aa88bb99cc00dd"],
-  ])("ATTACK SUCCEEDS %s survives redactSecrets when the caller does not pass it as a known secret", (_, text, secret) => {
-    expect(redactSecrets(`request to ${text} failed`)).toContain(secret);
+  ])("ATTACK %s is removed by redactSecrets when the caller does not pass it as a known secret (BLOCKED, was S-6)", (_, text, secret) => {
+    expect(redactSecrets(`request to ${text} failed`)).not.toContain(secret);
   });
 
   it("ATTACK a known secret is removed whatever its shape (BLOCKED)", () => {
@@ -39,13 +39,15 @@ describe("redaction", () => {
     expect(redactError(new Error(`GET https://x.quiknode.pro/${secret}/ 500`), [secret])).toBe(`GET https://x.quiknode.pro/${REDACTED}/ 500`);
   });
 
-  it("ATTACK SUCCEEDS a known secret of five characters is not removed (the minimum is six)", () => {
-    expect(redactSecrets("token abcde in the url", ["abcde"])).toContain("abcde");
+  it("ATTACK a known secret of five characters is removed wherever it stands as a whole token (BLOCKED, was S-6)", () => {
+    // A short secret is removed wherever it stands as a whole token; which values may become secrets is decided when they are collected.
+    expect(redactSecrets("token abcde in the url", ["abcde"])).not.toContain("abcde");
+    expect(redactSecrets("GET https://rpc.example/abcde/eth failed", ["abcde"])).not.toContain("abcde");
   });
 
-  it("ATTACK SUCCEEDS a known secret is not removed in its percent-encoded form", () => {
+  it("ATTACK a known secret is removed in its percent-encoded form (BLOCKED, was S-6)", () => {
     const secret = "pa ss/word!";
-    expect(redactSecrets(`https://rpc.example/?q=${encodeURIComponent(secret)}`, [secret])).toContain(encodeURIComponent(secret));
+    expect(redactSecrets(`https://rpc.example/?q=${encodeURIComponent(secret)}`, [secret])).not.toContain(encodeURIComponent(secret));
   });
 });
 
@@ -56,6 +58,9 @@ describe("the light client reader (e776f05: one block)", () => {
       blocks,
       getBlockNumber: async () => 1234n,
       readContract: async (request: { functionName: string; blockNumber?: bigint }) => {
+        // The clock settings are immutable and read once, at no block; the state reads are the ones that must agree.
+        if (request.functionName === "genesisTime") return 1n;
+        if (request.functionName === "secondsPerSlot") return 12n;
         blocks.push(request.blockNumber);
         if (request.functionName === "head") return answers.head;
         if (request.functionName === "programVKey") return answers.programKey;

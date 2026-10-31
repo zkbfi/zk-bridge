@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { decodeFunctionData, encodeFunctionResult, type Hex } from "viem";
 import { beaconLightClientAbi, decodeProofMessage, proofCategory, type ProofDirection } from "@zk-bridge/shared";
 import type { BoardPublisher } from "@zk-bridge/shared/msgboard";
-import type { LightClientHead, ProverBinary } from "@zk-bridge/shared/prover";
+import { CommandTimeoutError, type LightClientHead, type ProverBinary } from "@zk-bridge/shared/prover";
 import { PROGRAM_KEY, publicValuesFor, word } from "../../shared/test/support/prover-builders.ts";
 import { MAXIMUM_BODY_BYTES } from "../src/requests/module.ts";
 import { getJob, insertJob, updateJob } from "../src/requests/jobs.ts";
@@ -241,6 +241,20 @@ describe("the check", () => {
     expect(storedCount(fixture)).toBe(0);
   });
 
+  it("does not blame the proof when the verifier gives no answer (a timeout): the job stays proving and the package may come again", async () => {
+    let failures = 1;
+    const fixture = setup({
+      verify: async () => {
+        if (failures-- > 0) throw new CommandTimeoutError("zk-bridge-prover ran longer than its limit");
+      },
+    });
+    const jobId = createProvingJob(fixture);
+    expect((await send(fixture, jobId, proofPackage())).status).toBe(503);
+    expect(getJob(fixture.storage, jobId)?.status).toBe("proving");
+    expect((await send(fixture, jobId, proofPackage())).status).toBe(202);
+    expect(storedCount(fixture)).toBe(1);
+  });
+
   it("reads the light client of the destination chain of the direction", async () => {
     const forward = setup();
     await send(forward, createProvingJob(forward, "first-to-second"), proofPackage());
@@ -407,6 +421,52 @@ describe("the publisher", () => {
     fixture.state.boardFailure = null;
     await (await start(fixture.context))();
     expect(getJob(fixture.storage, jobId)?.status).toBe("published");
+  });
+
+  it("keeps a job whose proof waits on a slow board past the prover limit, and posts the paid proof when the board is back (K-3)", async () => {
+    const fixture = setup();
+    fixture.state.boardFailure = new Error("down");
+    const jobId = createProvingJob(fixture);
+    await send(fixture, jobId, proofPackage());
+    await settled(fixture.context);
+    // The publisher keeps trying for longer than the prover limit of 1800 seconds.
+    for (let tick = 0; tick < 3; tick += 1) {
+      fixture.clock.advance(RETRY_CEILING_MILLISECONDS);
+      await (await start(fixture.context))();
+    }
+    // A public request runs the check for lost jobs. The job is still being posted, so it is not lost: the request
+    // joins it, and no new proving run starts.
+    const answer = await fixture.app.request(
+      "/requests",
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pair: "eth-pls", direction: "first-to-second", reason: "user" }) },
+      { incoming: { socket: { remoteAddress: "10.0.0.9" } } },
+    );
+    expect(answer.status).toBe(202);
+    expect(((await answer.json()) as { jobId: string }).jobId).toBe(jobId);
+    expect(getJob(fixture.storage, jobId)?.status).toBe("proving");
+    expect(storedCount(fixture)).toBe(1);
+    expect(fixture.prover.calls).toHaveLength(0);
+    fixture.state.boardFailure = null;
+    fixture.clock.advance(RETRY_CEILING_MILLISECONDS);
+    await (await start(fixture.context))();
+    expect(getJob(fixture.storage, jobId)?.status).toBe("published");
+    expect(fixture.posts).toHaveLength(1);
+  });
+
+  it("a stored proof that the publisher stopped trying still lets the prover limit fail the job", async () => {
+    // No tick runs (the webhook module is gone or stuck): the job is lost at its deadline as before.
+    const fixture = setup();
+    fixture.state.boardFailure = new Error("down");
+    const jobId = createProvingJob(fixture);
+    await send(fixture, jobId, proofPackage());
+    await settled(fixture.context);
+    fixture.clock.advance(1_800_001);
+    await fixture.app.request(
+      "/requests",
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pair: "eth-pls", direction: "first-to-second", reason: "user" }) },
+      { incoming: { socket: { remoteAddress: "10.0.0.9" } } },
+    );
+    expect(getJob(fixture.storage, jobId)?.status).toBe("failed");
   });
 
   it("fails the job with a fixed reason after the maximum number of attempts", async () => {
@@ -644,7 +704,7 @@ describe("the real outside world", () => {
   });
 
   it("reads the head, its root and the program key of a light client over JSON-RPC", async () => {
-    const answers: Record<string, unknown> = { head: 123n, programVKey: PROGRAM_KEY, headers: START_ROOT };
+    const answers: Record<string, unknown> = { head: 123n, programVKey: PROGRAM_KEY, headers: START_ROOT, genesisTime: 1_000n, secondsPerSlot: 10n };
     const listening = createServer((request, response) => {
       let text = "";
       request.on("data", (chunk) => (text += chunk));
@@ -663,6 +723,6 @@ describe("the real outside world", () => {
     await new Promise<void>((resolve) => listening.listen(0, "127.0.0.1", resolve));
     const { port } = listening.address() as { port: number };
     const head = await REAL_SOURCE.readLightClient({ rpcUrl: `http://127.0.0.1:${port}`, lightClient: `0x${"b".repeat(40)}` });
-    expect(head).toEqual({ headSlot: 123n, headRoot: START_ROOT, programKey: PROGRAM_KEY });
+    expect(head).toEqual({ headSlot: 123n, headRoot: START_ROOT, programKey: PROGRAM_KEY, clock: { genesisTime: 1_000n, secondsPerSlot: 10n } });
   });
 });

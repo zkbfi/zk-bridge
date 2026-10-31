@@ -6,7 +6,10 @@ export type RateLimits = {
   readonly requestsPerCallerPerMinute: number;
   /** How many requests all callers without a known address share in one minute. */
   readonly requestsPerUnknownCallerPerMinute: number;
-  /** How many requests all callers together may make in one minute. */
+  /**
+   * How many distinct callers may make requests in one minute. A caller counts once however many requests it makes, and
+   * a caller already counted in the minute is held only by its own limit. The name is kept for existing configurations.
+   */
   readonly globalRequestsPerMinute: number;
   /** The hours that a request row stays in the database. */
   readonly requestRetentionHours: number;

@@ -1,5 +1,6 @@
 import { useMemo, type ReactNode } from "react";
-import { createConfig, http, injected, useConnect, useConnection, useConnectors, useDisconnect, useSendTransaction, useSwitchChain, WagmiProvider, type Config } from "wagmi";
+import { rpcTransport } from "../app/rpc-transport";
+import { createConfig, injected, useConnect, useConnection, useConnectors, useDisconnect, useSendTransaction, useSwitchChain, WagmiProvider, type Config } from "wagmi";
 import { defineChain, type Chain } from "viem";
 import type { PairConfig } from "@terminal/model/types";
 import { WalletContext, type WalletPort, type WalletStatus, type WalletTransaction } from "./wallet-port";
@@ -26,7 +27,7 @@ export const createWalletConfig = (pair: PairConfig, rpcUrls: Readonly<Record<nu
   return createConfig({
     chains: [first, second],
     connectors: [injected()],
-    transports: { [first.id]: http(rpcUrls[first.id] ?? defaultRpcUrl(first.id) ?? undefined), [second.id]: http(rpcUrls[second.id] ?? defaultRpcUrl(second.id) ?? undefined) },
+    transports: { [first.id]: rpcTransport(rpcUrls[first.id] ?? defaultRpcUrl(first.id) ?? undefined), [second.id]: rpcTransport(rpcUrls[second.id] ?? defaultRpcUrl(second.id) ?? undefined) },
     ssr: false,
   });
 };

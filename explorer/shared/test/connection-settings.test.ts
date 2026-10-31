@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  boardUrlOf,
+  migrateBoardUrls,
   DEFAULT_INDEXER_URL,
   describeSource,
   maskUrl,
@@ -8,6 +10,7 @@ import {
   redactConnectionText,
   resolveConnection,
   urlSecrets,
+  REDACTED,
 } from "../src/index.js";
 
 const KEY = "FAKEKEY1234567890";
@@ -53,7 +56,7 @@ describe("resolveConnection", () => {
 
   it("gives null for a setting that no source has", () => {
     const resolved = resolveConnection({ chainIds: [1], user: {}, environment: {}, registry: {} });
-    expect(resolved).toEqual({ indexerUrl: null, rpcUrls: { 1: null }, backendUrl: null, msgboardIndexerUrl: null, archiveUrl: null, msgboardUrl: null });
+    expect(resolved).toEqual({ indexerUrl: null, rpcUrls: { 1: null }, msgboardUrls: { 1: null }, backendUrl: null, msgboardIndexerUrl: null, archiveUrl: null, msgboardUrl: null });
   });
 });
 
@@ -118,9 +121,45 @@ describe("maskUrl", () => {
 });
 
 describe("urlSecrets and redactConnectionText", () => {
-  it("lists the whole URL, the credentials, the path and the query values", () => {
+  it("lists the whole URL, the password, the path and the query values", () => {
     const secrets = urlSecrets(`https://bob:hunter2hunter2@rpc.example.org/v3/${KEY}?token=${KEY}2`);
-    expect(secrets).toEqual(expect.arrayContaining([`https://bob:hunter2hunter2@rpc.example.org/v3/${KEY}?token=${KEY}2`, "bob", "hunter2hunter2", `v3/${KEY}`, `token=${KEY}2`, `${KEY}2`]));
+    expect(secrets).toEqual(expect.arrayContaining([`https://bob:hunter2hunter2@rpc.example.org/v3/${KEY}?token=${KEY}2`, "hunter2hunter2", `v3/${KEY}`, `token=${KEY}2`, `${KEY}2`]));
+  });
+
+  it("does not register a user name that is a common word or short, a short path, or a short value of a plain parameter (S-6)", () => {
+    const secrets = urlSecrets("https://user:pw@rpc.example.org/eth?network=main&key=k9");
+    expect(secrets).not.toContain("user");
+    expect(secrets).not.toContain("eth");
+    expect(secrets).not.toContain("main");
+    // A password and the value of a key parameter are marked secret by their place: they count at any length.
+    expect(secrets).toEqual(expect.arrayContaining(["pw", "k9"]));
+    expect(redactConnectionText("The URL must not hold a user name or a password.", ["https://user:pw@rpc.example.org/eth"])).toBe("The URL must not hold a user name or a password.");
+  });
+
+  it("registers a marked password even when it is a common word, and redacts it (S-6 review)", () => {
+    const url = "https://bob:admin@rpc.example.org/";
+    expect(urlSecrets(url)).toContain("admin");
+    expect(redactConnectionText("login refused for admin", [url])).toBe(`login refused for ${REDACTED}`);
+  });
+
+  it.each(["api_key_id", "pwd", "sig", "X-Signature", "tokenId", "auth_code", "credential", "jwt", "keys", "pass"])(
+    "treats the value of the parameter %s as a secret at any length (S-6 review)",
+    (name) => {
+      const url = `https://rpc.example.org/?${name}=q7z`;
+      expect(urlSecrets(url)).toContain("q7z");
+      expect(redactConnectionText("failed with q7z", [url])).toBe(`failed with ${REDACTED}`);
+    },
+  );
+
+  it("still does not register an unmarked common word or a short plain value", () => {
+    const secrets = urlSecrets("https://admin@rpc.example.org/main?network=test");
+    expect(secrets).not.toContain("admin");
+    expect(secrets).not.toContain("main");
+    expect(secrets).not.toContain("test");
+  });
+
+  it("registers a user name that looks like a key", () => {
+    expect(urlSecrets(`https://${KEY}@rpc.example.org/`)).toContain(KEY);
   });
 
   it("lists only the text for a text that is not a URL", () => {
@@ -188,5 +227,34 @@ describe("normalizeEndpoint", () => {
     expect(normalize("https://x.example/a b")).toMatchObject({ ok: false, reason: expect.stringMatching(/space/) });
     expect(normalize("https://x.example/?key=1")).toMatchObject({ ok: false, reason: expect.stringMatching(/query/) });
     expect(normalize("https://x.example/#top")).toMatchObject({ ok: false, reason: expect.stringMatching(/fragment/) });
+  });
+});
+
+describe("the msgboard node per chain (owner, quote 87)", () => {
+  const chainIds = [1, 369];
+  it("resolves each chain on its own, a chain without its own node falling back to the single one of the same source", () => {
+    const resolved = resolveConnection({
+      chainIds,
+      user: { msgboardUrls: { 369: "https://board-pls.example" } },
+      environment: { msgboardUrl: "https://board.example" },
+      registry: {},
+    });
+    expect(resolved.msgboardUrls?.[369]).toEqual({ value: "https://board-pls.example", source: "user" });
+    expect(resolved.msgboardUrls?.[1]).toEqual({ value: "https://board.example", source: "environment" });
+    expect(boardUrlOf(resolved, 1)?.value).toBe("https://board.example");
+    expect(boardUrlOf({ msgboardUrl: { value: "https://only.example", source: "user" } }, 369)?.value).toBe("https://only.example");
+  });
+
+  it("lets two chains share one URL, each its own entry", () => {
+    const resolved = resolveConnection({ chainIds, user: { msgboardUrls: { 1: "https://same.example", 369: "https://same.example" } }, environment: {}, registry: {} });
+    expect(resolved.msgboardUrls).toEqual({ 1: { value: "https://same.example", source: "user" }, 369: { value: "https://same.example", source: "user" } });
+  });
+
+  it("moves a saved single node to every chain and clears it; a chain's own node stays", () => {
+    const old = { indexerUrl: null, rpcUrls: {}, msgboardUrl: "https://old.example" };
+    expect(migrateBoardUrls(old, chainIds)).toEqual({ indexerUrl: null, rpcUrls: {}, msgboardUrl: null, msgboardUrls: { 1: "https://old.example", 369: "https://old.example" } });
+    expect(migrateBoardUrls({ ...old, msgboardUrls: { 369: "https://mine.example" } }, chainIds).msgboardUrls).toEqual({ 1: "https://old.example", 369: "https://mine.example" });
+    const none = { indexerUrl: null, rpcUrls: {} };
+    expect(migrateBoardUrls(none, chainIds)).toBe(none);
   });
 });

@@ -124,7 +124,7 @@ describe("the command palette", () => {
     });
 
     it("a documentation heading leads to its page and heading", async () => {
-      expect((await pick("data source", /^The data source line/)).jump).toEqual({ type: "route", route: { name: "docs", slug: "fees-explained", heading: "the-data-source-line" } });
+      expect((await pick("data source", /^The data source of each number/)).jump).toEqual({ type: "route", route: { name: "docs", slug: "fees-explained", heading: "the-data-source-of-each-number" } });
     });
 
     it("a message identifier leads to the page of that transfer, through the indexer", async () => {

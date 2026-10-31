@@ -46,7 +46,6 @@ describe("the endpoint settings of a live page", () => {
     ["Backend URL", "backendUrl", "VITE_EXPLORER_BACKEND_URL"],
     ["Msgboard indexer URL", "msgboardIndexerUrl", "VITE_EXPLORER_MSGBOARD_INDEXER_URL"],
     ["Archive URL", "archiveUrl", "VITE_EXPLORER_ARCHIVE_URL"],
-    ["Msgboard node URL", "msgboardUrl", "VITE_EXPLORER_MSGBOARD_URL"],
   ] as const;
 
   it("saves and clears each new endpoint, with the environment value returning after a clear", async () => {
@@ -66,6 +65,45 @@ describe("the endpoint settings of a live page", () => {
     expect(services.connection?.resolved().archiveUrl).toBeNull();
     expect(region("Backend URL").getByText(/env\.example\.org/)).toHaveTextContent("(from the environment)");
     expect(region("Archive URL").getByText("not set")).toBeInTheDocument();
+  });
+
+  it("saves a msgboard node per chain, the same URL for both if you like, and forgets one without touching the other", async () => {
+    const { services } = renderLive({ variables: { VITE_EXPLORER_MSGBOARD_URL: "https://env.example.org/board" } });
+    const first = "Ethereum msgboard node URL";
+    const second = "PulseChain msgboard node URL";
+    // The single build value is each chain's default.
+    expect(services.connection?.resolved().msgboardUrls).toEqual({ [FIRST_CHAIN]: { value: "https://env.example.org/board", source: "environment" }, [SECOND_CHAIN]: { value: "https://env.example.org/board", source: "environment" } });
+    for (const label of [first, second]) {
+      await typeInto(label, "https://same.example.org/board/");
+      await userEvent.click(region(label).getByRole("button", { name: "Save" }));
+      expect(await region(label).findByText("Saved. The page uses this URL now.")).toBeInTheDocument();
+    }
+    expect(loadUserConnections(window.localStorage).msgboardUrls).toEqual({ [FIRST_CHAIN]: "https://same.example.org/board", [SECOND_CHAIN]: "https://same.example.org/board" });
+    await userEvent.click(region(first).getByRole("button", { name: "Forget my setting" }));
+    expect(services.connection?.resolved().msgboardUrls?.[FIRST_CHAIN]).toEqual({ value: "https://env.example.org/board", source: "environment" });
+    expect(services.connection?.resolved().msgboardUrls?.[SECOND_CHAIN]).toEqual({ value: "https://same.example.org/board", source: "user" });
+  });
+
+  it("refuses a msgboard node that is not a URL, and warns about plain http on an https page", async () => {
+    vi.stubGlobal("location", { ...window.location, protocol: "https:" });
+    const { services } = renderLive();
+    const label = "PulseChain msgboard node URL";
+    await typeInto(label, "nonsense");
+    await userEvent.click(region(label).getByRole("button", { name: "Save" }));
+    expect(await region(label).findByText(/not a URL/)).toBeInTheDocument();
+    await userEvent.clear(region(label).getByLabelText(`New ${label}`));
+    await typeInto(label, "http://board.example.org/");
+    await userEvent.click(region(label).getByRole("button", { name: "Save" }));
+    expect(await region(label).findByText(INSECURE_ENDPOINT_WARNING)).toBeInTheDocument();
+    expect(services.connection?.user().msgboardUrls?.[SECOND_CHAIN]).toBe("http://board.example.org");
+  });
+
+  it("moves a saved single msgboard node to both chains when the page starts", () => {
+    window.localStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify({ indexerUrl: null, rpcUrls: {}, msgboardUrl: "https://old.example.org" }));
+    const { services } = renderLive({ storage: window.localStorage });
+    const user = services.connection?.user();
+    expect(user?.msgboardUrls).toEqual({ [FIRST_CHAIN]: "https://old.example.org", [SECOND_CHAIN]: "https://old.example.org" });
+    expect(services.connection?.resolved().msgboardUrls?.[SECOND_CHAIN]).toEqual({ value: "https://old.example.org", source: "user" });
   });
 
   it("keeps a path prefix, drops the trailing slash, and warns that the browser blocks plain http on an https page", async () => {
@@ -341,7 +379,7 @@ describe("the pure rules of the page", () => {
   const [indexer, first] = connectionTargets(FIXTURE_PAIR);
 
   it("lists the indexer first, then each chain, then the other endpoints", () => {
-    expect(connectionTargets(FIXTURE_PAIR).map((target) => target.label)).toEqual(["Indexer URL", "Ethereum RPC URL", "PulseChain RPC URL", "Backend URL", "Msgboard indexer URL", "Archive URL", "Msgboard node URL"]);
+    expect(connectionTargets(FIXTURE_PAIR).map((target) => target.label)).toEqual(["Indexer URL", "Ethereum RPC URL", "PulseChain RPC URL", "Backend URL", "Msgboard indexer URL", "Archive URL", "Ethereum msgboard node URL", "PulseChain msgboard node URL"]);
   });
 
   it("sets and removes one entry and keeps the others", () => {

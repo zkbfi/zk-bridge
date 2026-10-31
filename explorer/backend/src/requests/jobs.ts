@@ -155,6 +155,15 @@ export function updateJob(storage: Storage, id: string, change: JobChange, now: 
   return Number(result.changes) > 0;
 }
 
+/**
+ * Marks a proving job as still alive without changing anything else. The publisher calls it on each attempt to post the
+ * proof of the job, so the check for lost jobs (`prover.timeoutSeconds` after the last change) does not fail a job whose
+ * paid proof only waits for a slow board. A job in any other status stays as it is.
+ */
+export function touchProvingJob(storage: Storage, id: string, now: number): void {
+  storage.database.prepare("UPDATE jobs SET updated_at = ? WHERE id = ? AND status = 'proving'").run(now, id);
+}
+
 /** Stores one request. */
 export function insertRequest(
   storage: Storage,
@@ -180,10 +189,14 @@ export function recentRequestsOfCaller(storage: Storage, caller: string, since: 
   return { count: row.total, oldest: row.oldest };
 }
 
-/** How many requests all callers made since `since`, and the time of the oldest one. */
-export function recentRequestsOfAll(storage: Storage, since: number): { count: number; oldest: number | null } {
+/**
+ * How many distinct callers made a request since `since`, and the earliest time at which one of them leaves the window:
+ * the oldest of their newest requests. A caller counts once, however many requests it made, so a few busy callers
+ * cannot fill a limit that all callers share.
+ */
+export function recentCallersOfAll(storage: Storage, since: number): { count: number; oldest: number | null } {
   const row = storage.database
-    .prepare("SELECT count(*) AS total, min(created_at) AS oldest FROM requests WHERE created_at > ?")
+    .prepare("SELECT count(*) AS total, min(newest) AS oldest FROM (SELECT max(created_at) AS newest FROM requests WHERE created_at > ? GROUP BY caller)")
     .get(since) as { total: number; oldest: number | null };
   return { count: row.total, oldest: row.oldest };
 }

@@ -1,12 +1,10 @@
 # Safety
 
-This page tells you plainly what you trust when you use the bridge. It also lists what the contracts cannot do and how the web interface protects you.
+Know exactly what you trust when you bridge, what the contracts cannot do, and how the app protects you before you sign.
 
 ## Audit status
 
-No independent audit of the bridge has been completed as of this writing. The repository marks the hardened code as not audited. It also states that nothing is deployed.
-
-Several fork protections are built but not audited. Do not put funds in the bridge that you cannot afford to lose.
+No independent audit of the bridge has been completed as of this writing, including its fork protections. Send only what you can afford to lose.
 
 ## What you trust
 
@@ -16,7 +14,7 @@ You trust three things.
 
 A light client checks the signatures of the sync committee of the source chain. You trust that at least two thirds of the committee are honest. A forged finalized header would let an attacker forge a message.
 
-Sync committee signatures carry no slashing penalty. On PulseChain, the repository measured on 2026-10-21 that about 18 withdrawal credentials hold 342 of 512 committee seats. One staking service can use many credentials. The number of independent parties is probably smaller.
+Sync committee signatures carry no slashing penalty. On PulseChain, a small number of staking operators hold most of the 512 committee seats, so the number of independent signers is far smaller than 512.
 
 ### The SP1 proof system and its verifier
 
@@ -32,9 +30,9 @@ Each light client starts from one checkpoint. This is a trusted header that the 
 
 The contracts have no administrator. They have no upgrade keys, no pause and no timelock. The code is immutable after deployment.
 
-The mediator charges no fee. No person can take a fee or move escrowed tokens.
+The mediator charges no fee. Nobody can take a fee from it or move escrowed tokens. The only fee is the one you choose for delivery, paid through the delivery router; the page Fees explained covers it.
 
-The bridge uses no validators. A runner or a deliverer holds no trusted role for the transfer: anyone can deliver it, and the contracts check everything that they send. The delivery router has no list of allowed runners. It pays every tip to one reward address that it fixes at deployment. A copied delivery gains the copier nothing.
+The bridge uses no validators. A deliverer holds no trusted role: anyone can deliver a transfer, and the contracts check everything it sends. The delivery router has no list of allowed deliverers. It pays every fee to one reward address that it fixes at deployment, so a copied delivery gains the copier nothing.
 
 ## The deposit gate
 
@@ -42,7 +40,7 @@ The bridge refuses to take a send that it cannot deliver. A gate contract on eac
 
 The gate protects against forks. A fork changes the rules of the source chain. A proof program that does not know the new rules cannot deliver sends from the fork. Tokens sent into such a route would stay locked.
 
-On Ethereum, the gate checks the shape of the beacon state in the current epoch. The first sender in each epoch confirms it with evidence: a proof of the fork version, and a proof of the chain's genesis validators root at the position that shape gives it. The gate keeps no list of fork names. Any version passes when its state has a shape that the proof program can read. Later senders in the same epoch just send. A send fails when nobody confirmed the epoch.
+On Ethereum, the gate checks the shape of the beacon state in the current epoch. The first sender in each epoch confirms it with evidence: a proof of the fork version, and a proof of the chain's genesis validators root at the position that shape gives it. The gate keeps no list of fork names. Any version passes when its state has a shape that the proof program can read. Later senders in the same epoch send without it. A send fails when nobody confirmed the epoch.
 
 On PulseChain, the chain has no beacon roots contract today. The gate runs in a detection mode. It admits sends, and it probes for the contract. It also probes for new opcodes and precompiles. When a probe fires, the gate refuses new sends. The gate switches itself to enforcing mode when the beacon roots contract appears. No key does this.
 
@@ -53,9 +51,9 @@ Anyone can seal a gate with proof that the state has a shape outside the allowed
 A fork can break a route. The bridge does not hide this.
 
 - The gate stops new sends into a route that cannot follow the fork.
-- Sends made just before a fork can stay locked. The repository states that refunds are out of scope.
+- Sends made shortly before a fork can stay locked, and the bridge has no way to refund them. Avoid sending large amounts around a known fork.
 - After a breaking fork, the operators deploy a new route beside the old one. The old route pays what it can still prove.
-- The interface is meant to stop offering a route before a known fork. This is advice only. A direct contract call in that window can strand funds.
+- The app shows a paused route as paused and will not send into it. A direct contract call in that window can still strand funds.
 
 ## The deposit lock
 
@@ -65,20 +63,21 @@ Each bridge starts locked. A send on a locked bridge reverts with `DepositsNotOp
 
 Delivery is final. A failed call is not retried. The bridge has no refund function. A refund without a proof of cancellation would let one send be paid twice.
 
-## What the web interface does to keep you safe
+## What the app does to keep you safe
 
-- It shows every transaction in full before your wallet asks you to sign. You see the chain, the contract, the function, the arguments, the value and the gas.
+- It shows every transaction in full before your wallet asks you to sign: the chain, the contract, the function, the arguments, the value and the gas.
+- The review before signing shows the full destination address, the relay router, the fee and its parts, and warns when the router is not the default delivery router.
+- The Bridge button warns when the fee may be too low to get delivered, when the tip is a high share of the amount, and when a token is bridged for the first time or already came over the Omnibridge. It blocks a fee above your hard fee cap.
+- A link can fill in the direction, the token and the amount. Anything else a link fills in, such as the destination, the fee settings or the router, is named in a warning on the screen and again in the review.
+- The destination is locked to your connected wallet unless you unlock it, and a typed address is checked before you can send.
 - It never holds your keys. Your wallet signs.
-- It refuses configuration that holds keys. The build and the start of the page both scan their settings. They stop on a value that looks like a key, a token or a recovery phrase.
-- Its messages name a variable but never repeat a secret value.
-
-The scan is a guard against mistakes. It prefers a false alarm to a leaked key.
+- It refuses settings that hold keys. A value that looks like a key, a token or a recovery phrase stops the page, and its messages never repeat a secret.
 
 ## Shared origin on IPFS gateways
 
 A path-style gateway has addresses like `https://gateway.example/ipfs/<content address>/`. Every site on that gateway shares one browser origin. Another site there could read or change what this app keeps in its local storage. It could point you at a false indexer or node, and then you would see false chain state.
 
-On such a gateway the app keeps your endpoint settings in memory for that visit only. It writes nothing to local storage, and the Connections page tells you so. Your settings are gone when you close the page.
+On such a gateway the app keeps your settings in memory for that visit only. It writes nothing to local storage, and Settings tells you so. Your settings are gone when you close the page.
 
 A subdomain-style gateway, such as `https://<content address>.ipfs.<gateway host>/`, gives each release its own origin. Prefer it. The release page lists those links first.
 
@@ -86,7 +85,7 @@ On any address, the app never writes a URL that looks like it holds a key. It us
 
 ## What you can do
 
-- Start with a small transfer.
-- Read the transaction before you sign.
-- Check the status in the feed.
-- Read the page Fees explained before you change the tip for delivery.
+- Start with a small transfer, above all for a token bridged for the first time.
+- Read the review, and each transaction, before you sign.
+- Follow your transfer on the Activity screen.
+- Read the page Fees explained before you change the fee settings.

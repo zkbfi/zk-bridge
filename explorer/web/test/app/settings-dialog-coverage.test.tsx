@@ -1,4 +1,5 @@
 import { screen, waitFor, within } from "@testing-library/react";
+import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionStorage } from "../../src/config/connection-storage";
@@ -6,7 +7,7 @@ import { CONNECTION_STORAGE_KEY } from "../../src/config/connection-storage";
 import { SettingsDialog, hostOf, keptNotice } from "../../src/app/SettingsDialog";
 import type { Prober } from "../../src/app/service-probe";
 import type { Services } from "../../src/app/services";
-import { loadFeeCap } from "../../src/bridge/fee-cap";
+import { loadFeeCap, loadHardCap } from "../../src/bridge/fee-cap";
 import { FIRST_CHAIN, SECOND_CHAIN, liveServices } from "../support/live";
 import { disconnectedWallet, renderWithWallet } from "./support";
 
@@ -34,10 +35,42 @@ const renderSettings = (options: Options = {}) => {
 const field = (name: string) => screen.getByRole("textbox", { name });
 const save = () => userEvent.click(screen.getByRole("button", { name: "Save" }));
 
+describe("the msgboard nodes in Settings (owner, quote 87)", () => {
+  it("shows one node per chain with its icon, and checks a shared URL twice, once per chain, each with its own result", async () => {
+    const calls: string[] = [];
+    const probe: Prober = async (url, kind) => {
+      calls.push(`${url} ${kind.kind} ${"chainId" in kind ? kind.chainId : "-"}`);
+      return kind.kind === "jsonrpc" && "chainId" in kind && kind.chainId === SECOND_CHAIN ? { ok: false, reason: "No answer." } : { ok: true, ms: 4 };
+    };
+    renderSettings({ services: { probe } });
+    expect(screen.getByRole("heading", { name: "Msgboard nodes" })).toBeInTheDocument();
+    for (const name of ["Ethereum msgboard node", "PulseChain msgboard node"]) {
+      await userEvent.clear(field(name));
+      await userEvent.type(field(name), "https://board.example.org");
+    }
+    await waitFor(() => expect(calls.filter((call) => call.startsWith("https://board.example.org jsonrpc"))).toEqual(expect.arrayContaining([`https://board.example.org jsonrpc ${FIRST_CHAIN}`, `https://board.example.org jsonrpc ${SECOND_CHAIN}`])), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByRole("status", { name: /^Ethereum msgboard node: ok/ })).toBeInTheDocument());
+    expect(screen.getByRole("status", { name: "PulseChain msgboard node: down" })).toBeInTheDocument();
+  });
+
+  it("moves a saved single node to both chains, and saves each chain on its own", async () => {
+    const storage = memoryStorage();
+    storage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify({ indexerUrl: null, rpcUrls: {}, msgboardUrl: "https://old.example.org" }));
+    renderSettings({ storage });
+    expect(field("Ethereum msgboard node")).toHaveValue("https://old.example.org");
+    expect(field("PulseChain msgboard node")).toHaveValue("https://old.example.org");
+    await userEvent.clear(field("PulseChain msgboard node"));
+    await userEvent.type(field("PulseChain msgboard node"), "https://pls.example.org");
+    await save();
+    await waitFor(() => expect(stored(storage).msgboardUrls).toEqual({ [FIRST_CHAIN]: "https://old.example.org", [SECOND_CHAIN]: "https://pls.example.org" }));
+    expect(stored(storage).msgboardUrl).toBeNull();
+  });
+});
+
 describe("the settings sheet", () => {
   it("has the sections of the mockup, in its order, and Reset to defaults before Save", () => {
     const { dialog } = renderSettings();
-    expect(within(dialog).getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent)).toEqual(["Theme", "RPC endpoints", "Token and chain images", "Services", "More"]);
+    expect(within(dialog).getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent)).toEqual(["Theme", "RPC endpoints", "Token and chain images", "Services", "Msgboard nodes", "More"]);
     expect(within(dialog).getByText("Used to read balances and send transactions. Yours stay in this browser.")).toBeInTheDocument();
     const buttons = within(dialog).getAllByRole("button").map((button) => button.textContent);
     expect(buttons.slice(-2)).toEqual(["Reset to defaults", "Save"]);
@@ -55,7 +88,7 @@ describe("the settings sheet", () => {
 
   it("shows each RPC and service with its default and a live check with the latency", async () => {
     renderSettings();
-    expect(field("Ethereum RPC")).toHaveValue(`https://one.valve.city/rpc/vk_demo/evm/${FIRST_CHAIN}`);
+    expect(field("Ethereum RPC")).toHaveValue(defaultRpcUrl(FIRST_CHAIN));
     expect(field("Indexer")).toHaveValue("http://localhost:42069");
     expect(field("Prover")).toHaveValue("");
     expect(await screen.findByRole("status", { name: /^Ethereum RPC: ok, \d+ ms$/ })).toBeInTheDocument();
@@ -112,7 +145,10 @@ describe("the settings sheet", () => {
     await userEvent.type(field("Prover"), "https://prove.example.org");
     await userEvent.clear(field("Automatic fee cap (%)"));
     await userEvent.type(field("Automatic fee cap (%)"), "3");
+    await userEvent.clear(field("Hard fee cap (%)"));
+    await userEvent.type(field("Hard fee cap (%)"), "4");
     await userEvent.click(screen.getByRole("button", { name: "Reset to defaults" }));
+    expect(field("Hard fee cap (%)")).toHaveValue("2");
     expect(field("Prover")).toHaveValue("");
     expect(field("Automatic fee cap (%)")).toHaveValue("1");
     expect(screen.getByText("Defaults filled in. Save to keep them.")).toBeInTheDocument();
@@ -134,10 +170,31 @@ describe("the settings sheet", () => {
     await save();
     expect(screen.getByRole("alert")).toHaveTextContent("Use a number above 0 and at most 100.");
     expect(loadFeeCap()).toBe(1);
+    // Above the 2% hard cap it is refused; with the hard cap raised beside it, both save.
     await userEvent.clear(field("Automatic fee cap (%)"));
     await userEvent.type(field("Automatic fee cap (%)"), "2.5");
     await save();
+    expect(screen.getByRole("alert")).toHaveTextContent("The automatic cap can't be above the 2% hard cap.");
+    expect(loadFeeCap()).toBe(1);
+    await userEvent.clear(field("Hard fee cap (%)"));
+    await userEvent.type(field("Hard fee cap (%)"), "3");
+    await save();
     await waitFor(() => expect(loadFeeCap()).toBe(2.5));
+    expect(loadHardCap()).toBe(3);
+  });
+
+  it("shows each cap's number right-justified against its unit, and refuses a hard cap out of range", async () => {
+    renderSettings();
+    for (const name of ["Automatic fee cap (%)", "Hard fee cap (%)"]) {
+      expect(field(name).nextElementSibling).toHaveTextContent(/^% of the amount$/);
+      expect(field(name).closest(".zb-fld")).toHaveClass("zb-fld-cap");
+    }
+    expect(field("Hard fee cap (%)")).toHaveValue("2");
+    await userEvent.clear(field("Hard fee cap (%)"));
+    await userEvent.type(field("Hard fee cap (%)"), "0");
+    await save();
+    expect(screen.getByRole("alert")).toHaveTextContent("Use a number above 0 and at most 100.");
+    expect(loadHardCap()).toBe(2);
   });
 
   it("clears the recent searches, and links to the connections page", async () => {

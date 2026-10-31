@@ -7,6 +7,7 @@
  */
 import type { Hex } from "viem";
 import {
+  boardUrlOf,
   fetchJsonResponse,
   proofCategory,
   tryDecodeProofMessage,
@@ -37,7 +38,7 @@ export type PanelTransport = {
 export const realPanelTransport: PanelTransport = { fetchJson: fetchJsonResponse, postJson: postJsonResponse };
 
 /** The endpoints that the panel reads. Only the resolved URLs matter, so a test passes just these. */
-export type PanelEndpoints = Pick<ResolvedConnection, EndpointKey>;
+export type PanelEndpoints = Pick<ResolvedConnection, EndpointKey | "msgboardUrls">;
 
 /** The endpoints when nothing is set. */
 export const NO_ENDPOINTS: PanelEndpoints = { backendUrl: null, msgboardIndexerUrl: null, archiveUrl: null, msgboardUrl: null };
@@ -143,6 +144,8 @@ const fromMsgboardNode = async (input: { baseUrl: string; pair: string; directio
  * @param input.pair The pair name.
  * @param input.direction The direction.
  * @param input.headSlot The stored head slot of the destination chain, or null when unknown.
+ * @param input.boardChainId The chain whose msgboard node is read (owner, quote 87: the node is set per chain): the
+ *   destination, where the proof updates the light client. Absent reads the single node.
  * @param input.transport The network access.
  */
 export const readLatestProof = async (input: {
@@ -150,6 +153,7 @@ export const readLatestProof = async (input: {
   pair: string;
   direction: ProofDirection;
   headSlot: bigint | null;
+  boardChainId?: number;
   transport: PanelTransport;
 }): Promise<LatestProofReading> => {
   const indexer = input.endpoints.msgboardIndexerUrl;
@@ -160,7 +164,7 @@ export const readLatestProof = async (input: {
     notes.push(answer.note);
     if (answer.kind === "empty") return { kind: "none", notes };
   }
-  const node = input.endpoints.msgboardUrl;
+  const node = input.boardChainId === undefined ? input.endpoints.msgboardUrl : boardUrlOf(input.endpoints, input.boardChainId);
   if (node === null) return { kind: "none", notes: [...notes, "No msgboard node is set. Set the Msgboard indexer URL or the Msgboard node URL in Connections."] };
   const answer = await fromMsgboardNode({ baseUrl: node.value, pair: input.pair, direction: input.direction, headSlot: input.headSlot, transport: input.transport });
   if (answer.kind === "found") return { kind: "found", source: "msgboard node", message: answer.message, headCheckedAt: null, notes };

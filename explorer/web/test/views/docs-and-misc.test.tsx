@@ -44,7 +44,7 @@ describe("the docs view", () => {
   it("renders the real documentation, every page of it", () => {
     renderPage(<DocsView slug="fees-explained" heading={null} />);
     expect(screen.getByRole("heading", { name: "Fees explained", level: 1 })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "The data source line" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "The data source of each number" })).toBeInTheDocument();
   });
 });
 

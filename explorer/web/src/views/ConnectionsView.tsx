@@ -2,7 +2,7 @@ import { Box, Button, Flex, Heading, Stack, Text } from "@chakra-ui/react";
 import { useState, useSyncExternalStore } from "react";
 import { describeSetting, type ConnectionRuntime } from "@terminal/data/connection-runtime";
 import type { PairConfig } from "@terminal/model/types";
-import { normalizeEndpoint, parseConnectionUrl, redactConnectionText, type EndpointKey, type ConnectionSettings, type ResolvedConnection, type ResolvedSetting } from "@zk-bridge/shared";
+import { boardUrlOf, normalizeEndpoint, parseConnectionUrl, redactConnectionText, type EndpointKey, type ConnectionSettings, type ResolvedConnection, type ResolvedSetting } from "@zk-bridge/shared";
 import { useServices } from "../app/services";
 import { saveUserConnections, type ConnectionStorage, type SaveReason } from "../config/connection-storage";
 import { originIsShared } from "../config/shared-origin";
@@ -12,6 +12,7 @@ import { Field, Notice, Panel, TextInput } from "../ui/primitives";
 /** One URL that the page can set: the indexer, the RPC URL of one chain, or one of the other endpoints. */
 export type ConnectionTarget =
   | { readonly kind: "indexer"; readonly label: string }
+  | { readonly kind: "board"; readonly label: string; readonly chainId: number }
   | { readonly kind: "endpoint"; readonly label: string; readonly key: EndpointKey }
   | { readonly kind: "rpc"; readonly label: string; readonly chainId: number };
 
@@ -20,7 +21,6 @@ const ENDPOINT_TARGETS: readonly ConnectionTarget[] = [
   { kind: "endpoint", label: "Backend URL", key: "backendUrl" },
   { kind: "endpoint", label: "Msgboard indexer URL", key: "msgboardIndexerUrl" },
   { kind: "endpoint", label: "Archive URL", key: "archiveUrl" },
-  { kind: "endpoint", label: "Msgboard node URL", key: "msgboardUrl" },
 ];
 
 /**
@@ -32,17 +32,21 @@ export const connectionTargets = (pair: PairConfig): readonly ConnectionTarget[]
   { kind: "indexer", label: "Indexer URL" },
   ...[pair.first, pair.second].map((chain): ConnectionTarget => ({ kind: "rpc", label: `${chain.name} RPC URL`, chainId: chain.chainId })),
   ...ENDPOINT_TARGETS,
+  // The msgboard node is set per chain (owner, quote 87).
+  ...[pair.first, pair.second].map((chain): ConnectionTarget => ({ kind: "board", label: `${chain.name} msgboard node URL`, chainId: chain.chainId })),
 ];
 
 /** The setting in force for a target. */
 export const settingOf = (resolved: ResolvedConnection, target: ConnectionTarget): ResolvedSetting | null => {
   if (target.kind === "endpoint") return resolved[target.key];
+  if (target.kind === "board") return boardUrlOf(resolved, target.chainId);
   return target.kind === "indexer" ? resolved.indexerUrl : (resolved.rpcUrls[target.chainId] ?? null);
 };
 
 /** The URL that the user set for a target, or null. */
 export const userUrlOf = (user: ConnectionSettings, target: ConnectionTarget): string | null => {
   if (target.kind === "endpoint") return user[target.key] ?? null;
+  if (target.kind === "board") return user.msgboardUrls?.[target.chainId] ?? user.msgboardUrl ?? null;
   return target.kind === "indexer" ? user.indexerUrl : (user.rpcUrls[target.chainId] ?? null);
 };
 
@@ -55,6 +59,7 @@ export const userUrlOf = (user: ConnectionSettings, target: ConnectionTarget): s
  */
 export const withUserUrl = (user: ConnectionSettings, target: ConnectionTarget, url: string): ConnectionSettings => {
   if (target.kind === "endpoint") return { ...user, [target.key]: url };
+  if (target.kind === "board") return { ...user, msgboardUrls: { ...user.msgboardUrls, [target.chainId]: url } };
   return target.kind === "indexer" ? { ...user, indexerUrl: url } : { ...user, rpcUrls: { ...user.rpcUrls, [target.chainId]: url } };
 };
 
@@ -66,6 +71,7 @@ export const withUserUrl = (user: ConnectionSettings, target: ConnectionTarget, 
  */
 export const withoutUserUrl = (user: ConnectionSettings, target: ConnectionTarget): ConnectionSettings => {
   if (target.kind === "endpoint") return { ...user, [target.key]: null };
+  if (target.kind === "board") return { ...user, msgboardUrls: Object.fromEntries(Object.entries(user.msgboardUrls ?? {}).filter(([chainId]) => Number(chainId) !== target.chainId)) };
   return target.kind === "indexer"
     ? { ...user, indexerUrl: null }
     : { ...user, rpcUrls: Object.fromEntries(Object.entries(user.rpcUrls).filter(([chainId]) => Number(chainId) !== target.chainId)) };
@@ -117,8 +123,18 @@ const ConnectionRow = ({ runtime, target, resolved, onChange }: RowProps) => {
     setMessage({ tone: "warning", text: INSECURE_ENDPOINT_WARNING });
   };
 
+  /** A board node is an endpoint too, set for one chain. */
+  const onSaveBoard = (board: Extract<ConnectionTarget, { kind: "board" }>): void => {
+    const normalized = normalizeEndpoint({ text: typed, pageProtocol: window.location.protocol === "https:" ? "https:" : "http:" });
+    if (!normalized.ok) return show("error", normalized.reason);
+    onChange(withUserUrl(runtime.user(), board, normalized.url));
+    setTyped("");
+    setMessage(normalized.warning === null ? { tone: "info", text: "Saved. The page uses this URL now." } : { tone: "warning", text: INSECURE_ENDPOINT_WARNING });
+  };
+
   const onSave = async (): Promise<void> => {
     if (target.kind === "endpoint") return onSaveEndpoint(target.key);
+    if (target.kind === "board") return onSaveBoard(target);
     const parsed = parseConnectionUrl(typed, purpose);
     if (!parsed.ok) return show("error", parsed.message);
     if (target.kind === "rpc") {
@@ -148,7 +164,7 @@ const ConnectionRow = ({ runtime, target, resolved, onChange }: RowProps) => {
           )}
         </Field>
         <Flex gap="2" flexWrap="wrap">
-          {target.kind === "endpoint" ? null : (
+          {target.kind === "endpoint" || target.kind === "board" ? null : (
             <Button size="sm" variant="outline" disabled={busy || typed.trim() === ""} onClick={() => void onTest()}>
               Test
             </Button>

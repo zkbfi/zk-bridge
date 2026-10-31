@@ -27,6 +27,10 @@ export const PROOF_COST_USD = (25n * USD) / 1_000n;
 export const COST_MARGIN = 2n;
 /** The automatic fee's cap by default: 1%. */
 export const DEFAULT_CAP_WAD = PERCENT_WAD;
+/** The hard fee cap by default: 2%, the absolute most the fee may be (owner, quote 86). */
+export const DEFAULT_HARD_CAP_WAD = 2n * PERCENT_WAD;
+/** The step the hard cap moves in when the page offers to raise it: 0.05%. */
+export const HARD_CAP_STEP_WAD = PERCENT_WAD / 20n;
 /** The automatic fee without a price: 0.1% (or the cap, if lower). */
 export const NO_PRICE_SHARE_WAD = PERCENT_WAD / 10n;
 
@@ -264,6 +268,101 @@ export const feeWarnings = (input: FeeWarningsInput): FeeWarnings => {
     capWarning: !small && capWarns({ gasBased: input.gasBased, amountUsd: input.amountUsd, capWad: input.capWad, expandedCostUsd: input.expandedCostUsd, costNormalUsd: input.costNormalUsd }),
   };
 };
+
+/** The gas setting as an anchor and the range around it (owner, quote 91), in wei per gas and in USD × 1e18. */
+export type GasRange = {
+  /** The lowest base fee the next ~15 minutes are taken to reach: today's divided by the level's ceiling factor. */
+  readonly lowWei: bigint;
+  /** The anchor: the base fee the level is expected to cost (today's × 1, 1.5 or 2.5). */
+  readonly anchorWei: bigint;
+  /** The highest: the level's ceiling, the most the signed terms let a deliverer spend. */
+  readonly highWei: bigint;
+  /** The full cost (proof + delivery gas) at the low end. */
+  readonly lowUsd: bigint;
+  /** The full cost at the anchor: {@link totalCostUsd}. */
+  readonly anchorUsd: bigint;
+  /** The full cost at the high end: {@link ceilingCostUsd}, never under the anchor. */
+  readonly highUsd: bigint;
+};
+
+/**
+ * The gas level as an anchor point with the range the real cost could land in over about 15 minutes (owner, quote 91:
+ * "this is an anchor point, but the price could end up being (left) lower over the course of 15 minutes, or higher
+ * (right)"). The method, fixed so every app agrees: the high end is the level's ceiling (today's base fee × 2, 3 or 5),
+ * the most the signed terms allow; the low end mirrors it, today's base fee divided by the same factor (a base fee falls
+ * as fast as it rises, at most 12.5% a block, and 15 minutes holds ample blocks for either); the anchor is the level's
+ * expected base fee. Costs are {@link totalCostUsd} at the anchor and the proof plus the delivery gas at each end, every
+ * division rounded down. The high cost is never under the anchor's (the anchor counts the proof at the level too).
+ *
+ * @param input Today's gas, prices and the level.
+ */
+export const gasRange = (input: CostInput): GasRange => {
+  const level = GAS_LEVELS[input.level];
+  const lowWei = input.baseFeeWei / level.ceilingFactor;
+  const anchorWei = (input.baseFeeWei * level.expectedHalves) / 2n;
+  const highWei = ceilingWeiOf(input.baseFeeWei, input.level);
+  const gasAt = (wei: bigint): bigint => (input.gasUsed * (wei + input.priorityFeeWei) * input.nativePriceE18) / 10n ** 18n;
+  const anchorUsd = totalCostUsd(input);
+  const ceiling = ceilingCostUsd(input);
+  const lowUsd = PROOF_COST_USD + gasAt(lowWei);
+  return { lowWei, anchorWei, highWei, lowUsd: lowUsd < anchorUsd ? lowUsd : anchorUsd, anchorUsd, highUsd: ceiling > anchorUsd ? ceiling : anchorUsd };
+};
+
+/**
+ * The span the fee itself could land in over the same 15 minutes (owner, quote 92: "present their caps as ranges"). A
+ * fee fixed at signing (a share or a fixed amount) is one point. A gas-based fee follows the cost: the fee now scaled by
+ * the low and the high cost against the anchor, rounded down, the high end no more than the worst case the signed terms
+ * allow (the limit) when it is known.
+ *
+ * @param input The fee now, whether it is gas-based, the gas range and the signed worst case (USD × 1e18) or null.
+ */
+export const feeSpanUsd = (input: { readonly feeUsd: bigint; readonly gasBased: boolean; readonly range: GasRange | null; readonly worstFeeUsd: bigint | null }): { readonly lowUsd: bigint; readonly highUsd: bigint } => {
+  if (!input.gasBased || input.range === null || input.range.anchorUsd === 0n) return { lowUsd: input.feeUsd, highUsd: input.feeUsd };
+  const scaled = (cost: bigint): bigint => (input.feeUsd * cost) / input.range!.anchorUsd;
+  const high = scaled(input.range.highUsd);
+  return { lowUsd: scaled(input.range.lowUsd), highUsd: input.worstFeeUsd !== null && input.worstFeeUsd < high ? input.worstFeeUsd : high };
+};
+
+/** What {@link hardCapCheck} finds. */
+export type HardCapCheck = {
+  /** The fee could go above the hard cap: the Bridge button is blocked until the cap is raised. */
+  readonly over: boolean;
+  /** The most the fee could be: the larger of the fee now and the worst case the signed terms allow, in base units. */
+  readonly feeUnits: bigint;
+  /** The hard cap in base units of the amount, rounded down. */
+  readonly capUnits: bigint;
+  /** The smallest cap, a whole number of {@link HARD_CAP_STEP_WAD} steps, that admits the fee. */
+  readonly raiseToWad: bigint;
+};
+
+/**
+ * The hard fee cap (owner, quote 86: "another fee cap below that of, say 2% that puts the absolute fee cap at that
+ * amount and disallows movement forward until the cap is adjusted"). It reads base units, so it needs no price: a fixed
+ * or percent fee is the fee itself; a gas-based fee is the most the signed terms allow (the fee at the gas level's
+ * ceiling, limited by the signed limit), passed as `worstFeeUnits`. The fee is over when it is strictly above the cap's
+ * share of the amount (exact, cross-multiplied); a fee exactly at the cap passes. No amount: never over.
+ *
+ * @param input The amount, the fee now, the worst case the signed terms allow, the hard cap as a share.
+ */
+export const hardCapCheck = (input: { readonly amountUnits: bigint; readonly feeUnits: bigint; readonly worstFeeUnits: bigint; readonly hardCapWad: bigint }): HardCapCheck => {
+  const fee = input.worstFeeUnits > input.feeUnits ? input.worstFeeUnits : input.feeUnits;
+  const capUnits = input.amountUnits > 0n ? (input.amountUnits * input.hardCapWad) / WAD : 0n;
+  if (input.amountUnits <= 0n) return { over: false, feeUnits: fee, capUnits, raiseToWad: input.hardCapWad };
+  const over = fee * WAD > input.hardCapWad * input.amountUnits;
+  // The smallest share whose cap admits the fee, rounded up to a whole step (the one place this rounds up: a cap that
+  // admits the fee must not fall short of it).
+  const needed = (fee * WAD + input.amountUnits - 1n) / input.amountUnits;
+  const steps = (needed + HARD_CAP_STEP_WAD - 1n) / HARD_CAP_STEP_WAD;
+  return { over, feeUnits: fee, capUnits, raiseToWad: over ? steps * HARD_CAP_STEP_WAD : input.hardCapWad };
+};
+
+/**
+ * The automatic cap in force: never above the hard cap (owner: the automatic cap can never exceed the hard cap).
+ *
+ * @param autoCapWad The automatic cap the user set.
+ * @param hardCapWad The hard cap.
+ */
+export const clampAutoCap = (autoCapWad: bigint, hardCapWad: bigint): bigint => (autoCapWad > hardCapWad ? hardCapWad : autoCapWad);
 
 /**
  * A percentage as typed ("0.5", "0.5%", ".5") as an exact share, or null when it is not a number with at most 16

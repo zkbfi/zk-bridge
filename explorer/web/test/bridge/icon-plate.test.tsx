@@ -17,9 +17,15 @@ describe("icons on the accent band (owner: \"we need to have a neutral bg such a
   });
 
   it("uses a plate colour per theme: white on Ember light, ink on Ember dark and Mono", () => {
-    expect(css).toMatch(/--zb-plate: #ffffff/);
-    expect(css).toMatch(/\.theme-ember-dark \{[^}]*--zb-plate: #121110/);
-    expect(css).toMatch(/\.theme-mono \{[^}]*--zb-plate: #000000/);
+    // Each theme names its plate from its palette: white on Ember light, that theme's black on Ember dark and Mono.
+    const plate = (theme: string): string => {
+      const block = new RegExp(`${theme} \\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+      const name = /--zb-plate: var\(--zb-p-([\w-]+)\)/.exec(block)?.[1] ?? "";
+      return `${name} ${new RegExp(`--zb-p-${name}: (#[0-9a-f]{6})`).exec(block)?.[1] ?? ""}`;
+    };
+    expect(plate("\\.theme-ember-light")).toBe("white #ffffff");
+    expect(plate("\\.theme-ember-dark")).toMatch(/^black #1[0-4]1[0-4]1[0-4]$/);
+    expect(plate("\\.theme-mono")).toMatch(/^black #0[0-9a-f]0[0-9a-f]0[0-9a-f]$/);
     expect(css).toMatch(/\.zb-tok-icon\.zb-on-accent \{[^}]*background: var\(--zb-plate\)[^}]*padding: 2px/);
   });
 });

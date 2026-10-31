@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { maskUrl, redactConnectionText, type ConnectionSettings } from "@zk-bridge/shared";
-import { DEFAULT_AUTO_CAP_PERCENT, feeCapProblem, loadFeeCap, saveFeeCap } from "../bridge/fee-cap";
+import { ICON_CREDIT } from "../bridge/icons";
+import { maskUrl, migrateBoardUrls, redactConnectionText, type ConnectionSettings } from "@zk-bridge/shared";
+import { DEFAULT_AUTO_CAP_PERCENT, DEFAULT_HARD_CAP_PERCENT, feeCapProblem, loadFeeCap, loadHardCap, saveFeeCap, saveHardCap } from "../bridge/fee-cap";
 import { loadImageServer, saveImageServer } from "../bridge/image-server";
 import { Sheet } from "../bridge/Sheet";
 import { TokenIcon } from "../bridge/TokenIcon";
@@ -124,6 +125,25 @@ const Field = ({ field, value, defaultValue, problem, onChange }: FieldProps) =>
   );
 };
 
+/**
+ * A fee cap in percent: the name on the left, the number right-justified against its % (owner, quote 86: "the input be
+ * justified to the right, next to the units").
+ */
+const CapField = ({ id, label, value, problem, onChange }: { readonly id: string; readonly label: string; readonly value: string; readonly problem: string | undefined; readonly onChange: (value: string) => void }) => (
+  <>
+    <div className="zb-fld zb-fld-cap" data-problem={problem === undefined ? undefined : "true"} data-field={id}>
+      <span className="zb-fld-k zb-fld-k-wide">{label}</span>
+      <input aria-label={`${label} (%)`} aria-invalid={problem === undefined ? undefined : true} inputMode="decimal" autoComplete="off" value={value} onChange={(event) => onChange(event.target.value)} />
+      <span className="zb-fld-unit">% of the amount</span>
+    </div>
+    {problem === undefined ? null : (
+      <p className="zb-fld-err" role="alert">
+        {problem}
+      </p>
+    )}
+  </>
+);
+
 /** What to say after a save that the browser did not fully keep, or null. */
 export const keptNotice = (reason: SaveReason): string | null => {
   if (reason === "stored") return null;
@@ -145,10 +165,11 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose, stora
   const fields = useMemo(() => settingFields(pair), [pair]);
   const defaults = useMemo(() => defaultValues({ fields, pair, configuration, sharedPair: connection?.sharedPair }), [fields, pair, configuration, connection]);
   const liveUser = useSyncExternalStore(connection?.subscribe ?? NO_SUBSCRIPTION, () => connection?.user() ?? null);
-  const [storedUser, setStoredUser] = useState<ConnectionSettings>(() => liveUser ?? loadUserConnections(storage));
+  const [storedUser, setStoredUser] = useState<ConnectionSettings>(() => liveUser ?? migrateBoardUrls(loadUserConnections(storage), [pair.first.chainId, pair.second.chainId]));
   const user = liveUser ?? storedUser;
   const [drafts, setDrafts] = useState<FieldValues>(() => currentValues(fields, defaults, user, loadImageServer()));
   const [cap, setCap] = useState(() => String(loadFeeCap()));
+  const [hardCap, setHardCap] = useState(() => String(loadHardCap()));
   const [problems, setProblems] = useState<Readonly<Record<string, string>>>({});
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -165,6 +186,9 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose, stora
     const found: Record<string, string> = { ...outcome.problems };
     const capProblem = feeCapProblem(cap);
     if (capProblem !== null) found.cap = capProblem;
+    const hardProblem = feeCapProblem(hardCap);
+    if (hardProblem !== null) found.hardCap = hardProblem;
+    else if (capProblem === null && Number(cap) > Number(hardCap)) found.cap = `The automatic cap can't be above the ${Number(hardCap)}% hard cap.`;
     setBusy(true);
     try {
       // A new RPC must serve its chain before it replaces the one in use, as on the connections page.
@@ -180,6 +204,7 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose, stora
     }
     setProblems(found);
     if (Object.keys(found).length > 0) return setStatus("Not saved: fix the marked fields.");
+    saveHardCap(hardCap.trim() === String(DEFAULT_HARD_CAP_PERCENT) ? null : hardCap);
     saveFeeCap(cap.trim() === String(DEFAULT_AUTO_CAP_PERCENT) ? null : cap);
     saveImageServer(outcome.imageServer);
     const kept = saveUserConnections(storage, outcome.user);
@@ -192,6 +217,7 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose, stora
   const resetAll = (): void => {
     setDrafts(defaults);
     setCap(String(DEFAULT_AUTO_CAP_PERCENT));
+    setHardCap(String(DEFAULT_HARD_CAP_PERCENT));
     setProblems({});
     setStatus("Defaults filled in. Save to keep them.");
   };
@@ -229,28 +255,13 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose, stora
           <span>PulseX pools, via your RPC</span>
         </div>
 
+        <h3>Msgboard nodes</h3>
+        <p className="zb-set-help">Where proofs are read, one per chain. Two chains can share a URL; each is checked on its own.</p>
+        {section("boards")}
+
         <h3 className="zb-set-quiet">More</h3>
-        <div className="zb-fld" data-problem={problems.cap === undefined ? undefined : "true"}>
-          <span className="zb-fld-k zb-fld-k-wide">Automatic fee cap</span>
-          <input
-            aria-label="Automatic fee cap (%)"
-            inputMode="decimal"
-            autoComplete="off"
-            value={cap}
-            onChange={(event) => {
-              setCap(event.target.value);
-              setProblems(({ cap: _dropped, ...rest }) => rest);
-            }}
-          />
-          <span className="zb-ok" data-ok="none">
-            % of the amount
-          </span>
-        </div>
-        {problems.cap === undefined ? null : (
-          <p className="zb-fld-err" role="alert">
-            {problems.cap}
-          </p>
-        )}
+        <CapField id="cap" label="Automatic fee cap" value={cap} problem={problems.cap} onChange={(value) => { setCap(value); setProblems(({ cap: _dropped, ...rest }) => rest); }} />
+        <CapField id="hardCap" label="Hard fee cap" value={hardCap} problem={problems.hardCap} onChange={(value) => { setHardCap(value); setProblems(({ hardCap: _dropped, cap: _cap, ...rest }) => rest); }} />
         <div className="zb-set-row">
           <button
             type="button"
@@ -267,6 +278,9 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose, stora
             Connections and fallback
           </a>
         </div>
+        <p className="zb-set-help zb-set-credits">
+          Credits: <a href="https://game-icons.net/" rel="noopener noreferrer" target="_blank">{ICON_CREDIT}</a>
+        </p>
         {fixture ? <p className="zb-set-help">Sample data: nothing here reaches a network.</p> : null}
         {originIsShared(location) ? <p className="zb-set-help">This gateway is shared with other sites, so settings last for this visit only.</p> : null}
 

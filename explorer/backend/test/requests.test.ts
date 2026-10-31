@@ -266,6 +266,29 @@ describe("rate limits", () => {
     backend.clock.advance(61_000);
     expect((await post(backend, "10.0.0.4")).status).toBe(202);
   });
+
+  it("the global cap counts callers, not requests: a few busy callers do not lock a new caller out (K-2)", async () => {
+    const backend = makeBackend({ config: makeConfig({ limits: { globalRequestsPerMinute: 3 } }) });
+    for (const caller of ["10.0.0.1", "10.0.0.2"]) {
+      for (let index = 0; index < 10; index += 1) expect((await post(backend, caller)).status).toBe(202);
+    }
+    expect((await post(backend, "10.0.0.3")).status).toBe(202);
+    expect((await post(backend, "2001:db8:1:2::1")).status).toBe(429);
+  });
+
+  it("a caller already counted in the minute is not refused by a full global cap; a new one waits for the oldest caller to leave (K-2)", async () => {
+    const backend = makeBackend({ config: makeConfig({ limits: { globalRequestsPerMinute: 2 } }) });
+    expect((await post(backend, "10.0.0.1")).status).toBe(202);
+    backend.clock.advance(10_000);
+    expect((await post(backend, "10.0.0.2")).status).toBe(202);
+    backend.clock.advance(10_000);
+    // 10.0.0.1 asks again: it is one of the two callers of the minute, so the global cap does not refuse it.
+    expect((await post(backend, "10.0.0.1")).status).toBe(202);
+    const refused = await post(backend, "10.0.0.3");
+    expect(refused.status).toBe(429);
+    // 10.0.0.2 made its last request 10 seconds ago, 10.0.0.1 just now: 10.0.0.2 leaves the window first, in 50 seconds.
+    expect(refused.headers.get("Retry-After")).toBe("50");
+  });
 });
 
 describe("routes", () => {

@@ -1,0 +1,4 @@
+{
+  "$comment": "The operator documents the docs site publishes, as paths below docs/ such as \"audit/known-issues.md\". The help pages (explorer/web/docs/pages) are always published. Every other file in docs/ stays out of the build: add a page here only once the owner has chosen to publish it.",
+  "operator": []
+}

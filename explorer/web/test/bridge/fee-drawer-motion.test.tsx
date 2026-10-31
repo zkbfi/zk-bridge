@@ -5,16 +5,14 @@ import { readFileSync } from "node:fs";
 import { FeeLine, type FeeLineProps } from "../../src/bridge/FeeLine";
 
 const props: FeeLineProps = {
-  tip: <span>0.0012 ETH</span>,
-  tipHelp: "One fee.",
-  breakdown: [],
+  summary: "A bot delivers it · 0.1%",
+  summaryFull: "A bot delivers it on PulseChain · fee 0.1%",
   gasHelp: "Gas level.",
   gasLevel: 1,
   onGasLevel: vi.fn(),
   time: "~15 min",
   steps: [{ label: "Final on Ethereum", estimate: "~13 min", seconds: 798 }],
-  sliders: [{ label: "Tip", help: "Share.", value: 0.1, min: 0, max: 1, step: 0.01, valueText: "0.1%", ticks: [], onChange: vi.fn() }],
-  sliderNote: null,
+  menu: <p>The delivery menu</p>,
 };
 
 const css = readFileSync(`${process.cwd()}/src/bridge/bridge.css`, "utf8");
@@ -24,7 +22,7 @@ const drawer = (container: HTMLElement) => container.querySelector<HTMLElement>(
 describe("the fee drawer's motion", () => {
   it("toggles the open class and aria-expanded, and points the triggers at the drawer", async () => {
     const { container } = render(<FeeLine {...props} />);
-    const tip = screen.getByRole("button", { name: /0.0012 ETH/ });
+    const tip = screen.getByRole("button", { name: /^Delivery settings/ });
     expect(tip).toHaveAttribute("aria-controls", drawer(container).id);
     expect(drawer(container)).not.toHaveClass("zb-open");
     expect(drawer(container)).toHaveAttribute("aria-hidden", "true");
@@ -38,7 +36,7 @@ describe("the fee drawer's motion", () => {
 
   it("swaps by closing the content first, then reopening with the new item's", async () => {
     const { container } = render(<FeeLine {...props} />);
-    await userEvent.click(screen.getByRole("button", { name: /0.0012 ETH/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^Delivery settings/ }));
     fireEvent.click(screen.getByRole("button", { name: /~15 min/ }));
     expect(drawer(container)).not.toHaveClass("zb-open");
     expect(container.querySelector(".zb-drawer-body")).toHaveAttribute("data-shown", "tip");
@@ -49,10 +47,10 @@ describe("the fee drawer's motion", () => {
 
   it("closes on Escape and on a click outside", async () => {
     const { container } = render(<FeeLine {...props} />);
-    await userEvent.click(screen.getByRole("button", { name: /0.0012 ETH/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^Delivery settings/ }));
     await userEvent.keyboard("{Escape}");
     expect(drawer(container)).not.toHaveClass("zb-open");
-    await userEvent.click(screen.getByRole("button", { name: /0.0012 ETH/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^Delivery settings/ }));
     fireEvent.mouseDown(document.body);
     expect(drawer(container)).not.toHaveClass("zb-open");
   });

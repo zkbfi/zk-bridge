@@ -1,4 +1,4 @@
-import { maskSecret, redactSecrets } from "./redaction.js";
+import { isRegistrableSecret, maskSecret, redactSecrets } from "./redaction.js";
 
 /**
  * The connections of the dashboards: the indexer URL and one RPC URL per chain. This module holds the pure rules that
@@ -10,6 +10,12 @@ import { maskSecret, redactSecrets } from "./redaction.js";
 export type ConnectionSettings = {
   readonly indexerUrl: string | null;
   readonly rpcUrls: Readonly<Record<number, string>>;
+  /**
+   * The msgboard node of each chain (owner, quote 87: "the board node is actually supposed to be assigned per chain. it
+   * can be the same url, but the ui should grab the info twice in that case"). A chain with no entry falls back to the
+   * single `msgboardUrl` of the same source, which older settings and the terminal still use.
+   */
+  readonly msgboardUrls?: Readonly<Record<number, string>>;
 } & Partial<Readonly<Record<EndpointKey, string | null>>>;
 
 /**
@@ -40,12 +46,18 @@ export type ResolvedSetting = { readonly value: string; readonly source: Setting
 export type ConnectionLayer = {
   readonly indexerUrl?: string | null | undefined;
   readonly rpcUrls?: Readonly<Record<number, string | null | undefined>> | undefined;
+  readonly msgboardUrls?: Readonly<Record<number, string | null | undefined>> | undefined;
 } & Partial<Readonly<Record<EndpointKey, string | null | undefined>>>;
 
 /** The settings in force. */
 export type ResolvedConnection = {
   readonly indexerUrl: ResolvedSetting | null;
   readonly rpcUrls: Readonly<Record<number, ResolvedSetting | null>>;
+  /**
+   * The msgboard node of each chain: in each source, the chain's own entry, else that source's single `msgboardUrl`.
+   * Absent on a connection built before boards were per chain; read it with {@link boardUrlOf}.
+   */
+  readonly msgboardUrls?: Readonly<Record<number, ResolvedSetting | null>>;
 } & Readonly<Record<EndpointKey, ResolvedSetting | null>>;
 
 /** The inputs of {@link resolveConnection}. */
@@ -93,7 +105,34 @@ export const resolveConnection = (input: ResolveConnectionInput): ResolvedConnec
     rpcUrls: Object.fromEntries(
       input.chainIds.map((chainId) => [chainId, firstSetting(layers.map(([source, layer]) => [source, layer.rpcUrls?.[chainId]] as const))]),
     ),
+    msgboardUrls: Object.fromEntries(
+      input.chainIds.map((chainId) => [chainId, firstSetting(layers.map(([source, layer]) => [source, present(layer.msgboardUrls?.[chainId]) ?? layer.msgboardUrl] as const))]),
+    ),
   };
+};
+
+/**
+ * The msgboard node in force for a chain: its own entry, else the single one.
+ *
+ * @param resolved The settings in force.
+ * @param chainId The chain.
+ */
+export const boardUrlOf = (resolved: Pick<ResolvedConnection, "msgboardUrl" | "msgboardUrls">, chainId: number): ResolvedSetting | null =>
+  resolved.msgboardUrls?.[chainId] ?? resolved.msgboardUrl;
+
+/**
+ * Moves a single stored msgboard node to every chain of the pair (owner, quote 87: the node is set per chain), and
+ * clears the single value, so a chain reset later falls back to the default and not to the old shared node. A chain
+ * that already has its own node keeps it.
+ *
+ * @param settings The user's settings.
+ * @param chainIds The chains of the pair.
+ */
+export const migrateBoardUrls = (settings: ConnectionSettings, chainIds: readonly number[]): ConnectionSettings => {
+  const single = present(settings.msgboardUrl);
+  if (single === null) return settings;
+  const own = settings.msgboardUrls ?? {};
+  return { ...settings, msgboardUrl: null, msgboardUrls: { ...Object.fromEntries(chainIds.map((chainId) => [chainId, single])), ...own } };
 };
 
 /** The words for a source, for the settings screens. */
@@ -146,10 +185,25 @@ export const urlSecrets = (url: string): readonly string[] => {
   } catch {
     return [url];
   }
+  // Which pieces may become known secrets is decided here (see isRegistrableSecret): the password and the value of a key
+  // parameter count at any length; the user name, the path and a plain query value only when they look like a key, so
+  // a user name such as "user" or a path such as "eth" never wipes those words from messages.
   const path = parsed.pathname.replace(/^\/+/, "");
-  const queryValues = [...parsed.searchParams.values()];
-  return [url, parsed.username, parsed.password, path, parsed.search.replace(/^\?/, ""), ...queryValues].filter((piece) => piece !== "");
+  const marked = [parsed.password, ...[...parsed.searchParams].filter(([name]) => SECRET_PARAMETER.test(name)).map(([, value]) => value)];
+  const plain = [parsed.username, path, parsed.search.replace(/^\?/, ""), ...[...parsed.searchParams].filter(([name]) => !SECRET_PARAMETER.test(name)).map(([, value]) => value)];
+  return [
+    url,
+    ...marked.filter((piece) => isRegistrableSecret(piece, { marked: true })),
+    ...plain.filter((piece) => isRegistrableSecret(piece)),
+  ];
 };
+
+/**
+ * A query parameter whose value is a secret by its name: the words match anywhere in the name, so api_key, api_key_id,
+ * dkey, keys, tokenId, access_token, auth_code, pwd, pass, sig, X-Signature, credential and jwt all count. The value is
+ * then registered at any length; the redactor removes it only as a whole token, so it never wipes parts of words.
+ */
+const SECRET_PARAMETER = /key|token|secret|pass|pwd|auth|sig|credential|jwt/i;
 
 /**
  * Removes every secret part of the given URLs from a text, and the other secret shapes that the redactor knows.

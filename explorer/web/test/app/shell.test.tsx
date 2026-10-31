@@ -74,11 +74,11 @@ describe("the shell: one search field instead of a menu", () => {
 
   it("jumps to a documentation heading and shows that page", async () => {
     renderPage(<Shell />, { connected: false });
-    await searchFor("data source line");
+    await searchFor("data source of each number");
     await userEvent.keyboard("{Enter}");
-    await waitFor(() => expect(window.location.hash).toBe("#/docs/fees-explained/the-data-source-line"));
+    await waitFor(() => expect(window.location.hash).toBe("#/docs/fees-explained/the-data-source-of-each-number"));
     const article = await screen.findByRole("article", { name: "Fees explained" });
-    expect(within(article).getByRole("heading", { name: "The data source line" })).toBeInTheDocument();
+    expect(within(article).getByRole("heading", { name: "The data source of each number" })).toBeInTheDocument();
   });
 
   it("jumps to a transfer by message identifier", async () => {

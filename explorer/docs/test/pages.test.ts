@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Block, Inline } from "@web/docs/markdown";
-import { collectPages, findUnresolvedLinks, joinPath, routeOf, SITE_INPUT, SITE_PAGES, type DocsSiteInput } from "../src/pages";
+import { collectPages, describePage, findUnresolvedLinks, joinPath, routeOf, SITE_INPUT, SITE_PAGES, type DocsSiteInput } from "../src/pages";
+import { parseMarkdown } from "@web/docs/markdown";
 
 const small = (overrides: Partial<DocsSiteInput> = {}): DocsSiteInput => ({
   userPages: { "../../web/docs/pages/01-first.md": "# First\n\nSee [second](02-second.md#part) and [tools](../tools.md).", "../../web/docs/pages/02-second.md": "# Second\n\n## Part\n\ntext" },
@@ -70,6 +71,30 @@ describe("collectPages", () => {
   });
 });
 
+describe("sections and descriptions", () => {
+  it("puts operator pages under running it and other help pages under using the bridge", () => {
+    const pages = collectPages(small());
+    expect(pages.map((page) => [page.id, page.section])).toEqual([
+      ["help/first", "use"],
+      ["help/second", "use"],
+      ["audit/notes", "run"],
+      ["tools", "run"],
+    ]);
+  });
+
+  it("describes a page by the first sentence of its first paragraph", () => {
+    expect(describePage(parseMarkdown("# T\n\nThis page explains the fees. More text."))).toBe("Explains the fees.");
+    expect(describePage(parseMarkdown("# T\n\nThe bridge charges **no** fee. The rest."))).toBe("The bridge charges no fee.");
+    expect(describePage(parseMarkdown("# T\n\n- a list only"))).toBe("");
+  });
+
+  it("a link to an operator document that is not published becomes text and is not reported", () => {
+    const input = { userPages: { "01-a.md": "# A\n\nSee [the plan](../../../../docs/deployment-plan.md)." }, operatorPages: {} };
+    expect(findUnresolvedLinks(input)).toEqual([]);
+    expect(JSON.stringify(collectPages(input)[0]?.blocks)).not.toContain("href");
+  });
+});
+
 describe("joinPath and routeOf", () => {
   it("joins onto the folder of the page and removes dot segments", () => {
     expect(joinPath("audit/notes.md", "../tools.md")).toBe("tools.md");
@@ -98,10 +123,27 @@ describe("the real pages", () => {
     }
   });
 
-  it("publishes the help pages and no repository document", () => {
+  it("publishes every help page, and nothing from docs/superpowers", () => {
     const ids = SITE_PAGES.map((page) => page.id);
     expect(ids).toContain("help/getting-started");
-    expect(ids.filter((id) => !id.startsWith("help/"))).toEqual([]);
-    expect(Object.keys(SITE_INPUT.operatorPages)).toEqual([]);
+    expect(ids.filter((id) => id.startsWith("help/"))).toHaveLength(9);
+    expect(ids.filter((id) => id.startsWith("superpowers"))).toEqual([]);
+    expect(Object.keys(SITE_INPUT.operatorPages).filter((key) => key.includes("superpowers"))).toEqual([]);
+  });
+
+  it("every page has a description and a reading time", () => {
+    for (const page of SITE_PAGES) {
+      expect(page.description, page.id).not.toBe("");
+      expect(page.minutes, page.id).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it("groups the help pages: using the bridge, how it works and what you trust, running it", () => {
+    const sectionOf = (id: string) => SITE_PAGES.find((page) => page.id === id)?.section;
+    expect(sectionOf("help/getting-started")).toBe("use");
+    expect(sectionOf("help/fees-explained")).toBe("use");
+    expect(sectionOf("help/how-the-bridge-works")).toBe("trust");
+    expect(sectionOf("help/safety")).toBe("trust");
+    expect(sectionOf("help/running-a-bot")).toBe("run");
   });
 });

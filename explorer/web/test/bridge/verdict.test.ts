@@ -76,4 +76,12 @@ describe("the Bridge pill's verdict", () => {
   it("passes on the draft's reason when it blocks", () => {
     expect(verdictOf({ ...base, draft: { status: "blocked", reason: "The receiver is not an address." } })).toMatchObject({ kind: "blocked", detail: "The receiver is not an address." });
   });
+
+  it("blocks a fee above the hard cap, ahead of every fee warning, with the numbers and the cap that admits it", () => {
+    const hardCap = { capText: "2%", feeText: "12 USDC ($12.00)", capAmountText: "10 USDC ($10.00)", raiseText: "2.4%", worstCase: false };
+    const verdict = verdictOf({ ...base, tipBelowBreakEven: true, highTip: { thresholdText: "0.2%", tipText: "$11" }, smallTransfer: { costText: "$1", capText: "1%", capAmountText: "$0.5" }, hardCap });
+    expect(verdict).toEqual({ kind: "blocked", label: "Fee above your 2% cap", detail: "The fee is 12 USDC ($12.00), more than your 2% hard cap (10 USDC ($10.00)). Raise the cap to 2.4% to go on, or lower the fee." });
+    expect(pressable(verdict)).toBe(false);
+    expect(verdictOf({ ...base, hardCap: { ...hardCap, worstCase: true } }).detail).toMatch(/^The fee could reach 12 USDC \(\$12\.00\) if gas rises,/);
+  });
 });

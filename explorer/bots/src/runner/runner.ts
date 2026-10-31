@@ -8,7 +8,7 @@ import { planBatches } from "./batch-plan.ts";
 import { isFinal, prepareItem, type DeliveryDependencies, type DeliveryOutcome, type Preparation, type ReadyDelivery } from "./delivery.ts";
 import { createPrerequisiteLedger, type BudgetStore, type PrerequisiteLedger } from "./prerequisite-ledger.ts";
 import type { OutcomeSink } from "./outcomes.ts";
-import { assessProofPayload, payloadKey, type LightClientReader, type ProofRefusal } from "@zk-bridge/shared/prover";
+import { assessProofPayload, payloadKey, type LightClientReader, type ProofRefusal, type VerifyGuard } from "@zk-bridge/shared/prover";
 import { createSerialQueue, type SerialQueue } from "./serial-queue.ts";
 import type { PrerequisiteBudgetState, RunnerState } from "./state.ts";
 import { postUpdate } from "./update.ts";
@@ -38,6 +38,12 @@ export interface RunnerDependencies {
   readonly logger: Logger;
   /** Accept oracle proofs (version 2). Set it only when the destination verifier is the oracle stand-in. Default: strict. */
   readonly acceptOracleProof?: boolean;
+  /**
+   * The guard in front of the local proof check, shared by the runners of one process (B-4). It caps the checks per
+   * minute, for all runners and for this direction, and remembers the forgeries refused at the current head. Without it
+   * every distinct payload that names the head spawns a check.
+   */
+  readonly verifyGuard?: VerifyGuard;
 }
 
 /** What the runner did with one message of the board. */
@@ -68,6 +74,8 @@ export interface Runner {
 
 /** How long a message that was looked at is not looked at again. The publisher posts it again every few minutes. */
 export const PAYLOAD_MEMORY_MILLISECONDS = 5 * 60 * 1000;
+/** Refusals of a proof that was not really checked: the message is not remembered, so its next copy gets a look. */
+const RETRYABLE_REFUSALS: ReadonlySet<ProofRefusal> = new Set(["verify-budget-exhausted", "verify-unavailable"]);
 /** How long an item waits after a failure that costs time to find again, such as evidence or a revert. */
 export const RETRY_AFTER_MILLISECONDS = 5 * 60 * 1000;
 /** The pages of the feed that one sweep reads. */
@@ -110,8 +118,13 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
       lightClient: dependencies.lightClient,
       prover: dependencies.delivery.prover,
       acceptOracleProof: dependencies.acceptOracleProof === true,
+      verifyGuard: dependencies.verifyGuard,
+      verifySource: dependencies.direction,
     });
     if (!assessment.accept) {
+      // A check that the budget dropped, or whose verifier gave no answer, says nothing about the proof: the message gets
+      // a look when it comes again.
+      if (RETRYABLE_REFUSALS.has(assessment.reason)) seenPayloads.delete(payloadKey(payload));
       logger.debug("proof_refused", { reason: assessment.reason, detail: assessment.detail });
       // A proof that fails verification is worth a warning: someone posted a forgery or a broken proof.
       if (assessment.reason === "proof-does-not-verify") logger.warn("proof_forgery_refused", { detail: assessment.detail });

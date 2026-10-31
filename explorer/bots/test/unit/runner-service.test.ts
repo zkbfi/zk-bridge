@@ -71,6 +71,8 @@ function clientWith(answers: ClientAnswers = {}) {
     if (functionName === "head" && answers.failHead === true) throw new Error("rpc down");
     if (functionName === "head") return 100n;
     if (functionName === "programVKey") return PROGRAM_KEY;
+    if (functionName === "genesisTime") return 1_606_824_023n;
+    if (functionName === "secondsPerSlot") return 12n;
     return word(101);
   });
   const getCode = vi.fn(async () => ("code" in answers ? answers.code : "0x6080"));

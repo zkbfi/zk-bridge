@@ -1,9 +1,9 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { Shell } from "../../src/app/Shell";
-import { DEFAULT_AUTO_CAP_PERCENT, loadFeeCap, saveFeeCap } from "../../src/bridge/fee-cap";
+import { DEFAULT_AUTO_CAP_PERCENT, DEFAULT_HARD_CAP_PERCENT, loadFeeCap, loadHardCap, saveFeeCap, saveHardCap } from "../../src/bridge/fee-cap";
 import { connectedWallet, renderWithWallet } from "../app/support";
 
 beforeEach(() => {
@@ -23,6 +23,92 @@ describe("the stored cap", () => {
   });
 });
 
+describe("the stored hard cap (owner, quote 86)", () => {
+  it("defaults to 2%, keeps a valid value, and refuses others", () => {
+    expect(DEFAULT_HARD_CAP_PERCENT).toBe(2);
+    expect(loadHardCap()).toBe(2);
+    expect(saveHardCap("3")).toBeNull();
+    expect(loadHardCap()).toBe(3);
+    expect(saveHardCap("-1")).not.toBeNull();
+    expect(saveHardCap(null)).toBeNull();
+    expect(loadHardCap()).toBe(2);
+  });
+
+  it("never lets the automatic cap above it: saving refuses, and lowering the hard cap takes the automatic cap down", () => {
+    expect(saveFeeCap("2.5")).toMatch(/hard cap/);
+    expect(saveFeeCap("1.5")).toBeNull();
+    expect(saveHardCap("0.8")).toBeNull();
+    expect(loadFeeCap()).toBe(0.8);
+    // A stored automatic cap above the hard cap (an older browser) reads as the hard cap.
+    window.localStorage.setItem("zk-bridge-explorer.fee-cap", "5");
+    expect(loadFeeCap()).toBe(0.8);
+  });
+
+  it("reads the 2% default against a storage it cannot read, and keeps the visit's choice when it cannot write", () => {
+    const writeOnly = { setItem: () => undefined, removeItem: () => undefined };
+    expect(saveFeeCap("2.5", writeOnly)).toMatch(/2% hard cap/);
+    expect(saveFeeCap("1.5", null)).toBeNull();
+    const broken = { getItem: () => null, setItem: () => { throw new Error("full"); }, removeItem: () => { throw new Error("full"); } };
+    expect(saveHardCap("3", broken)).toBeNull();
+    const throwing = { getItem: () => { throw new Error("blocked"); } };
+    expect(loadHardCap(throwing)).toBe(2);
+  });
+});
+
+const goPill = (): HTMLButtonElement => screen.getAllByRole("button").find((button) => button.classList.contains("zb-go")) as HTMLButtonElement;
+
+describe("the hard cap on the bridge screen", () => {
+  const at = async (query: string) => {
+    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${query}`);
+    renderWithWallet(<Shell />, { wallet: connectedWallet() });
+    await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label")).toMatch(/Fee \d/), { timeout: 3000 });
+  };
+
+  it("blocks the Bridge pill when the tip pushes the fee above 2%, says why with the numbers, and raises the cap in one tap", async () => {
+    await at("bridge.amount=500&tip.mode=percentage&tip.percent=2.37");
+    await waitFor(() => expect(goPill()).toHaveTextContent("Fee above your 2% cap"));
+    expect(goPill()).toBeDisabled();
+    expect(goPill().getAttribute("data-kind")).toBe("blocked");
+    expect(document.querySelector(".zb-verdict")).toHaveTextContent(/The fee is .+, more than your 2% hard cap \(.+\)\. Raise the cap to 2\.4% to go on/);
+    await userEvent.click(screen.getByRole("button", { name: "Raise cap to 2.4%" }));
+    // Raised, the block gives way to the one warning left (a high share).
+    await waitFor(() => expect(goPill()).not.toBeDisabled());
+    expect(goPill()).toHaveTextContent("High cap %");
+    // Raised for this visit; the floppy in the drawer keeps it.
+    expect(loadHardCap()).toBe(2);
+    await userEvent.click(screen.getAllByRole("button").find((button) => button.getAttribute("data-fee") === "tip")!);
+    await userEvent.click(await screen.findByRole("button", { name: "Save 2.4% as your hard cap" }));
+    expect(loadHardCap()).toBe(2.4);
+  });
+
+  it("puts the block ahead of every fee warning", async () => {
+    await at("bridge.amount=500&tip.mode=percentage&tip.percent=5");
+    await waitFor(() => expect(goPill()).toHaveTextContent("Fee above your 2% cap"));
+    expect(goPill()).not.toHaveTextContent("High cap %");
+  });
+
+  it("shows both caps in the drawer with the fee's span on the track, and the automatic cap follows the hard cap down", async () => {
+    await at("bridge.amount=500&tip.cap=1.5");
+    await userEvent.click(screen.getAllByRole("button").find((button) => button.getAttribute("data-fee") === "tip")!);
+    const auto = screen.getByRole("slider", { name: "Automatic fee cap" });
+    const hard = screen.getByRole("slider", { name: "Hard fee cap" });
+    expect(auto).toHaveValue("1.5");
+    expect(hard).toHaveValue("2");
+    expect(auto).toHaveAttribute("max", "2");
+    expect(screen.getAllByRole("img", { name: /^The fee: [\d.]+% of the amount$/ }).length).toBe(2);
+    fireEvent.change(hard, { target: { value: "0.5" } });
+    await waitFor(() => expect(screen.getByRole("slider", { name: "Automatic fee cap" })).toHaveValue("0.5"));
+    expect(window.location.hash).toMatch(/tip\.cap=0\.5/);
+    // The exact input sits against its unit, and refuses more than the hard cap.
+    const exact = screen.getByRole("textbox", { name: "Automatic fee cap, exact" });
+    expect(exact).toHaveValue("0.5");
+    expect(exact.nextElementSibling).toHaveTextContent("%");
+    await userEvent.clear(exact);
+    await userEvent.type(exact, "0.9");
+    expect(screen.getByText(/At most your 0\.5% hard cap/)).toHaveAttribute("role", "alert");
+  });
+});
+
 const openReview = async (query: string) => {
   window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${query}`);
   renderWithWallet(<Shell />, { wallet: connectedWallet() });
@@ -33,7 +119,7 @@ const openReview = async (query: string) => {
     expect(found!.textContent).not.toBe("Check the transfer");
     return found!;
   }, { timeout: 3000 });
-  await waitFor(() => expect(document.querySelector(".zb-fees")?.textContent).toMatch(/\d/), { timeout: 3000 });
+  await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label")).toMatch(/Fee \d/), { timeout: 3000 });
   await userEvent.click(pill);
   return screen.findByRole("dialog", { name: "Review" });
 };

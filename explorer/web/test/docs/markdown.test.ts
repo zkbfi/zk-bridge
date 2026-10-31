@@ -39,7 +39,7 @@ describe("the documentation pages", () => {
   const slugs = DOC_PAGES.map((page) => page.slug);
 
   it("holds every page of the brief, in reading order", () => {
-    expect(slugs).toEqual(["getting-started", "how-the-bridge-works", "bridging-tokens", "sending-messages", "fees-explained", "safety", "running-a-bot", "glossary"]);
+    expect(slugs).toEqual(["getting-started", "how-the-bridge-works", "bridging-tokens", "sending-messages", "fees-explained", "safety", "running-a-bot", "settings-and-explore", "glossary"]);
   });
 
   it("gives every page a title and at least two headings that the palette can find", () => {

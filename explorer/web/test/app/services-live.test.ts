@@ -1,4 +1,5 @@
 import { toFunctionSelector } from "viem";
+import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { createServices } from "../../src/app/services";
@@ -16,11 +17,11 @@ const runtimeOf = (services: ReturnType<typeof liveServices>) => {
 };
 
 describe("the precedence of a URL on a live page", () => {
-  it("uses the registry default for the indexer and for a chain that the deployment names, and the valve.city demo RPC for a chain it does not", () => {
+  it("uses the registry default for the indexer and for a chain that the deployment names, and the default public RPC for a chain it does not", () => {
     const resolved = runtimeOf(liveServices()).resolved();
     expect(resolved.indexerUrl).toEqual({ value: "http://localhost:42069", source: "default" });
     expect(resolved.rpcUrls[SECOND_CHAIN]).toEqual({ value: "https://registry.example.org/pls", source: "default" });
-    expect(resolved.rpcUrls[FIRST_CHAIN]).toEqual({ value: `https://one.valve.city/rpc/vk_demo/evm/${FIRST_CHAIN}`, source: "default" });
+    expect(resolved.rpcUrls[FIRST_CHAIN]).toEqual({ value: defaultRpcUrl(FIRST_CHAIN), source: "default" });
   });
 
   it("lets the environment of the page beat the registry default", () => {

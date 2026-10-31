@@ -3,7 +3,8 @@
  * cached about 30 s. Display only.
  */
 import { useQuery } from "@tanstack/react-query";
-import { createPublicClient, defineChain, http } from "viem";
+import { rpcTransport } from "../app/rpc-transport";
+import { createPublicClient, defineChain } from "viem";
 import type { ContractCaller } from "@zk-bridge/shared";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import type { PairConfig, TokenInfo } from "@terminal/model/types";
@@ -20,7 +21,7 @@ const PULSECHAIN = defineChain({
 
 /** A pool reader over a PulseChain RPC at its latest block; reads are batched into multicall calls and all pinned there. */
 export const poolReaderFor = async (rpcUrl: string): Promise<PoolReader> => {
-  const client = createPublicClient({ chain: PULSECHAIN, transport: http(rpcUrl), batch: { multicall: true } });
+  const client = createPublicClient({ chain: PULSECHAIN, transport: rpcTransport(rpcUrl), batch: { multicall: true } });
   const block = await client.getBlockNumber();
   return poolReaderOver(client as unknown as ContractCaller, block);
 };
