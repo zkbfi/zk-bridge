@@ -123,6 +123,8 @@ export function createRequestService(input: RequestServiceInput): RequestService
     running.add(task);
   }
 
+  // A job is lost when nothing touched it for the prover limit. The publisher touches a job on each attempt to post its
+  // proof (touchProvingJob), so a job whose paid proof waits for a slow board is not lost while the posts go on.
   function failLostJobs(): void {
     const current = now();
     for (const job of listActiveJobs(storage)) {

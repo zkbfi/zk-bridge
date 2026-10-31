@@ -2,7 +2,7 @@ import type { Hex } from "viem";
 import type { ProofDirection } from "@zk-bridge/shared";
 import type { BoardPublisher } from "@zk-bridge/shared/msgboard";
 import type { Logger } from "../logger.ts";
-import { getJob, updateJob, type Job } from "../requests/jobs.ts";
+import { getJob, touchProvingJob, updateJob, type Job } from "../requests/jobs.ts";
 import type { Storage } from "../storage.ts";
 
 /** The head of a light client. Only the slot matters here. */
@@ -78,6 +78,9 @@ export function createProofPublisher(input: ProofPublisherInput): ProofPublisher
       logger.info("webhook_proof_dropped", { jobId: stored.job_id, status: job.status });
       return;
     }
+    // The job is alive while its proof is being posted: the check for lost jobs must not fail it and throw the paid
+    // proof away while a slow board makes the retries outlast the prover limit (K-3).
+    touchProvingJob(storage, stored.job_id, input.now());
     try {
       const posted = await input.board.post({ category: input.categoryFor(stored.direction), payload: stored.payload });
       storage.transaction(() => {
@@ -92,7 +95,11 @@ export function createProofPublisher(input: ProofPublisherInput): ProofPublisher
         .prepare("UPDATE webhook_proofs SET attempts = ?, last_attempt_at = ?, last_error = ? WHERE job_id = ?")
         .run(attempts, input.now(), errorKind(error), stored.job_id);
       logger.warn("webhook_post_failed", { jobId: stored.job_id, attempts, error });
-      if (attempts < MAXIMUM_POST_ATTEMPTS) return;
+      if (attempts < MAXIMUM_POST_ATTEMPTS) {
+        // A post can take minutes (the proof of work), so the job counts as alive from the end of the attempt.
+        touchProvingJob(storage, stored.job_id, input.now());
+        return;
+      }
       updateJob(storage, stored.job_id, { status: "failed", error: POST_FAILED_REASON }, input.now(), ["proving"]);
       storage.database.prepare("DELETE FROM webhook_proofs WHERE job_id = ?").run(stored.job_id);
       logger.warn("webhook_proof_given_up", { jobId: stored.job_id, attempts });

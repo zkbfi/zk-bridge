@@ -155,6 +155,15 @@ export function updateJob(storage: Storage, id: string, change: JobChange, now: 
   return Number(result.changes) > 0;
 }
 
+/**
+ * Marks a proving job as still alive without changing anything else. The publisher calls it on each attempt to post the
+ * proof of the job, so the check for lost jobs (`prover.timeoutSeconds` after the last change) does not fail a job whose
+ * paid proof only waits for a slow board. A job in any other status stays as it is.
+ */
+export function touchProvingJob(storage: Storage, id: string, now: number): void {
+  storage.database.prepare("UPDATE jobs SET updated_at = ? WHERE id = ? AND status = 'proving'").run(now, id);
+}
+
 /** Stores one request. */
 export function insertRequest(
   storage: Storage,

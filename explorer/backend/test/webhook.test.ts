@@ -409,6 +409,52 @@ describe("the publisher", () => {
     expect(getJob(fixture.storage, jobId)?.status).toBe("published");
   });
 
+  it("keeps a job whose proof waits on a slow board past the prover limit, and posts the paid proof when the board is back (K-3)", async () => {
+    const fixture = setup();
+    fixture.state.boardFailure = new Error("down");
+    const jobId = createProvingJob(fixture);
+    await send(fixture, jobId, proofPackage());
+    await settled(fixture.context);
+    // The publisher keeps trying for longer than the prover limit of 1800 seconds.
+    for (let tick = 0; tick < 3; tick += 1) {
+      fixture.clock.advance(RETRY_CEILING_MILLISECONDS);
+      await (await start(fixture.context))();
+    }
+    // A public request runs the check for lost jobs. The job is still being posted, so it is not lost: the request
+    // joins it, and no new proving run starts.
+    const answer = await fixture.app.request(
+      "/requests",
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pair: "eth-pls", direction: "first-to-second", reason: "user" }) },
+      { incoming: { socket: { remoteAddress: "10.0.0.9" } } },
+    );
+    expect(answer.status).toBe(202);
+    expect(((await answer.json()) as { jobId: string }).jobId).toBe(jobId);
+    expect(getJob(fixture.storage, jobId)?.status).toBe("proving");
+    expect(storedCount(fixture)).toBe(1);
+    expect(fixture.prover.calls).toHaveLength(0);
+    fixture.state.boardFailure = null;
+    fixture.clock.advance(RETRY_CEILING_MILLISECONDS);
+    await (await start(fixture.context))();
+    expect(getJob(fixture.storage, jobId)?.status).toBe("published");
+    expect(fixture.posts).toHaveLength(1);
+  });
+
+  it("a stored proof that the publisher stopped trying still lets the prover limit fail the job", async () => {
+    // No tick runs (the webhook module is gone or stuck): the job is lost at its deadline as before.
+    const fixture = setup();
+    fixture.state.boardFailure = new Error("down");
+    const jobId = createProvingJob(fixture);
+    await send(fixture, jobId, proofPackage());
+    await settled(fixture.context);
+    fixture.clock.advance(1_800_001);
+    await fixture.app.request(
+      "/requests",
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pair: "eth-pls", direction: "first-to-second", reason: "user" }) },
+      { incoming: { socket: { remoteAddress: "10.0.0.9" } } },
+    );
+    expect(getJob(fixture.storage, jobId)?.status).toBe("failed");
+  });
+
   it("fails the job with a fixed reason after the maximum number of attempts", async () => {
     const fixture = setup();
     fixture.state.boardFailure = new TypeError("board at http://board.invalid refused");

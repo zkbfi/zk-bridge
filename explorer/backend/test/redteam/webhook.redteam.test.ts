@@ -210,23 +210,24 @@ describe("replays and bad proofs with a valid bearer", () => {
 });
 
 describe("posting to the board", () => {
-  it("ATTACK SUCCEEDS a board that is slow or down for longer than prover.timeoutSeconds loses a paid GPU proof, and the next request pays for another", async () => {
+  it("ATTACK a board that is slow or down for longer than prover.timeoutSeconds no longer loses a paid GPU proof (BLOCKED, was K-3)", async () => {
     const fixture = setup({ boardFailure: new Error("board down") });
-    const answer = await fixture.app.request("/requests", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pair: "eth-pls", direction: "first-to-second", reason: "user" }) }, { incoming: { socket: { remoteAddress: "1.2.3.4" } } });
-    const { jobId } = (await answer.json()) as { jobId: string };
+    const request = (remoteAddress: string) =>
+      fixture.app.request("/requests", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pair: "eth-pls", direction: "first-to-second", reason: "user" }) }, { incoming: { socket: { remoteAddress } } });
+    const { jobId } = (await (await request("1.2.3.4")).json()) as { jobId: string };
     expect((await send(fixture, jobId, proofPackage())).status).toBe(202);
     expect(stored(fixture)).toHaveLength(1);
-    // The default prover timeout is 1800 s. The publisher retries with back-off (15 s doubling to 15 min, 10 tries).
-    fixture.clock.advance(1_801_000);
-    // Any public request runs the lost-job check, which fails the job although its proof is stored.
-    await fixture.app.request("/requests", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pair: "eth-pls", direction: "first-to-second", reason: "user" }) }, { incoming: { socket: { remoteAddress: "1.2.3.5" } } });
-    expect(getJob(fixture.storage, jobId)?.status).toBe("failed");
-    fixture.clock.advance(60_000);
-    const again = await fixture.app.request("/requests", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pair: "eth-pls", direction: "first-to-second", reason: "user" }) }, { incoming: { socket: { remoteAddress: "1.2.3.6" } } });
-    expect(again.status).toBe(202);
-    const stop = await startWebhook(fixture.context);
-    await stop();
-    expect(stored(fixture)).toHaveLength(0);
-    expect(fixture.prover.calls.length).toBe(2);
+    // The default prover timeout is 1800 s. The publisher retries with back-off (15 s doubling to 15 min, 10 tries),
+    // and each attempt keeps the job alive.
+    for (let tick = 0; tick < 3; tick += 1) {
+      fixture.clock.advance(900_000);
+      await (await startWebhook(fixture.context))();
+    }
+    // Any public request runs the lost-job check. The job is still being posted, so the request joins it.
+    const again = await request("1.2.3.5");
+    expect(((await again.json()) as { jobId: string }).jobId).toBe(jobId);
+    expect(getJob(fixture.storage, jobId)?.status).toBe("proving");
+    expect(stored(fixture)).toHaveLength(1);
+    expect(fixture.prover.calls.length).toBe(1);
   });
 });
