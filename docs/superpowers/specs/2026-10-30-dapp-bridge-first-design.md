@@ -325,6 +325,10 @@ and the time left while in flight or the age once delivered. A row links to the 
   the caller (a contract reader pinned to a block, the RPC of their choice) and holds no UI. `web` uses it exactly as
   an outside dapp would. Until it is carved out, new rule code goes in `shared` under these rules so the carve-out is
   a move, not a rewrite.
+- **React package (owner):** after the core SDK, the useful React code moves into a second package on top of it:
+  hooks (fee, verdict, prices at a block, delivery status) and the self-contained components (fee line and drawer,
+  review sheet, token and chain icons). It depends on the core SDK, takes its I/O from the host dapp, and `web` uses
+  it like any other dapp. Theming goes through CSS variables so a host can restyle it.
 
 - **Fee-drawer motion (owner approved):** open ≈ 0.28 s (height 0.2 s ease-out via grid rows; the 3-unit accent deck
   line draws across the top from under the tapped icon; content fades in and settles 4 px, 0.06 s delay); close 0.12 s
@@ -507,3 +511,4 @@ don't call it "tip too high", call it "high tip %""
 70. "if the estimated cost is less than the expanded (2/3/5x) and the cap is further than the high, then yes, you can warn the "high cap %""
 71. "yes, but this is only relevant for basefee/gas+ mode. in percent mode, and fixed, the values are known ahead of time. gas based mode can drift"
 72. "build it the best you think it should work. the way that is clearest to the end user"
+73. "ok, when you are done, pull out useful code into a react package as well"
