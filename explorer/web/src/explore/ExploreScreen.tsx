@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import type { FeedItem, PairConfig } from "@terminal/model/types";
 import { formatLocation, formatRoute, NO_OVERLAY, type ExplorePage, type Route } from "../app/route";
-import { useFeed, useHeads, useTokens } from "../app/queries";
+import { useDeliveryCost, useFeed, useHeads, usePriorityFee, useTokens } from "../app/queries";
 import { useServices } from "../app/services";
 import type { ProbeKind } from "../app/service-probe";
 import { useServiceProbe } from "../app/use-service-probe";
@@ -19,12 +19,15 @@ import { Num } from "../bridge/Num";
 import { TokenIcon } from "../bridge/TokenIcon";
 import { loadImageServer } from "../bridge/image-server";
 import { iconSubjectOf, iconUrl } from "../bridge/image-source";
-import { priceNumber } from "../bridge/price-oracle";
+import { priceNumber, type PriceQuote } from "../bridge/price-oracle";
+import type { CostInput } from "@zk-bridge/shared";
 import { usePrices } from "../bridge/use-prices";
 import { durationText, exploreNumbers, lightClientCards, statusWord } from "./explore-model";
 import { ExplorePageView } from "./ExplorePages";
 import { InFlightOrbits } from "./InFlightOrbits";
-import { dayStartOf, orbitTracks } from "./orbit-model";
+import { dayStartOf, orbitTracks, proofCoversWith, type ProofReach } from "./orbit-model";
+import { readLatestProof } from "../views/proof-panel-model";
+import type { ProofDirection } from "@zk-bridge/shared";
 import { orbitSample, SAMPLE_TICK } from "./orbit-sample";
 import { Marked, RouteIcons, XGroup, XRow } from "./parts";
 import { recognise, searchExplore } from "./search";
@@ -133,26 +136,77 @@ const ExploreTop = ({ route, onRoute }: ExploreScreenProps) => {
 
 type ExploreData = ReturnType<typeof useExploreData>;
 
+/** One destination's delivery cost inputs (fee-rules' CostInput at the Normal level), or null while any is unknown. */
+const useCostInput = (chainId: number, prices: ReadonlyMap<string, PriceQuote | null> | undefined, live: boolean): CostInput | null => {
+  const report = useDeliveryCost(chainId, { enabled: true }).data;
+  const priority = usePriorityFee(chainId, { enabled: live }).data;
+  const native = prices?.get(`native:${chainId}`) ?? null;
+  if (report === undefined || report.baseFee.wei === null || native === null) return null;
+  const kind = report.kinds.token;
+  const gas = kind.p90Gas ?? kind.averageGas ?? kind.defaultGas;
+  return { gasUsed: BigInt(gas), baseFeeWei: BigInt(report.baseFee.wei), priorityFeeWei: priority ?? 0n, nativePriceE18: native.usdE18, level: 1 };
+};
+
 /**
- * The transfers in flight, per status, on the Explore polling (useFeed's interval), and those delivered today; with
- * the sample data, a stream of sample transfers that moves in batches like the chain is added so the orbits have planets.
+ * The transfers in flight, per status, on the Explore polling (useFeed's interval); the delivered counts of the last
+ * 24 hours and 7 days from the indexer's aggregate; each destination's delivery cost for the fee estimates. With the
+ * sample data, a stream of sample transfers that moves in batches like the chain is added so the orbits have planets.
  */
+/**
+ * How far the latest valid proof of each direction reaches, as a time: the source chain's beacon genesis plus the
+ * proof's new slot × seconds per slot. The proof is read as the message page's proof panel reads it (the msgboard
+ * indexer, else the msgboard node); the genesis comes from the indexer's stored heads.
+ */
+const useProofReach = (enabled: boolean, heads: ExploreData["heads"]): ProofReach => {
+  const services = useServices();
+  const { pair, explore } = services;
+  const clocks = useQuery({ queryKey: ["explore", "beacon-clocks"], queryFn: () => explore.beaconClocks(), enabled, refetchInterval: 300_000 });
+  const read = (direction: ProofDirection) => {
+    const destination = direction === "first-to-second" ? pair.second : pair.first;
+    const headSlot = heads.find((head) => head.side === (direction === "first-to-second" ? "second" : "first"))?.storedHeadSlot ?? null;
+    return {
+      queryKey: ["latest-proof", pair.id, direction, headSlot?.toString() ?? "unknown"],
+      queryFn: () => readLatestProof({ endpoints: services.endpoints(), pair: pair.id, direction, headSlot, boardChainId: destination.chainId, transport: services.transport }),
+      enabled,
+      refetchInterval: 15_000,
+    };
+  };
+  const out = useQuery(read("first-to-second"));
+  const back = useQuery(read("second-to-first"));
+  return useMemo(() => {
+    const reach: Partial<Record<ProofDirection, number>> = {};
+    for (const [direction, reading, source] of [
+      ["first-to-second", out.data, pair.first],
+      ["second-to-first", back.data, pair.second],
+    ] as const) {
+      const clock = clocks.data?.find((row) => row.trackedChainId === source.chainId);
+      if (reading?.kind === "found" && clock !== undefined) reach[direction] = clock.genesisTime + Number(reading.message.newSlot) * clock.secondsPerSlot;
+    }
+    return reach;
+  }, [out.data, back.data, clocks.data, pair]);
+};
+
 const InFlight = ({ data }: { readonly data: ExploreData }) => {
   const { pair, tokens, now } = data;
-  const { configuration } = useServices();
+  const { configuration, explore } = useServices();
+  const sample = configuration.dataMode === "fixture";
+  const reach = useProofReach(!sample, data.heads);
   const dayStart = dayStartOf(now);
   const sent = useFeed(pair.id, { status: "sent" }, 200);
   const waiting = useFeed(pair.id, { status: "waiting_for_finality" }, 200);
   const covered = useFeed(pair.id, { status: "covered" }, 200);
-  const delivered = useFeed(pair.id, { status: "delivered", sentAtOrAfter: dayStart - 86_400 }, 200);
+  const delivered = useFeed(pair.id, { status: "delivered", sentAtOrAfter: dayStart - 7 * 86_400 }, 200);
+  const aggregate = useQuery({ queryKey: ["explore", "delivered"], queryFn: () => explore.delivered(), refetchInterval: 60_000, enabled: !sample });
   const samples = useQuery({
     queryKey: ["explore", "orbit-sample", pair.id, tokens.length],
     queryFn: () => orbitSample(pair, tokens, Date.now() / 1000, now),
-    enabled: configuration.dataMode === "fixture",
+    enabled: sample,
     // The sample stream moves one event per tick; read it as often.
     refetchInterval: SAMPLE_TICK * 1000,
   });
   const prices = usePrices(tokens).data;
+  const firstCost = useCostInput(pair.first.chainId, prices, configuration.dataMode === "live");
+  const secondCost = useCostInput(pair.second.chainId, prices, configuration.dataMode === "live");
   const tracks = useMemo(
     () =>
       orbitTracks({
@@ -160,7 +214,12 @@ const InFlight = ({ data }: { readonly data: ExploreData }) => {
         inFlight: [...(sent.data?.items ?? []), ...(waiting.data?.items ?? []), ...(covered.data?.items ?? []), ...(samples.data?.inFlight ?? [])],
         delivered: [...(delivered.data?.items ?? []), ...(samples.data?.delivered ?? [])],
         now,
-        dayStart,
+        deliveredCounts:
+          aggregate.data === undefined
+            ? null
+            : new Map(aggregate.data.map((row) => [row.sourceChainId === pair.first.chainId ? ("first-to-second" as const) : ("second-to-first" as const), row])),
+        proofCovers: proofCoversWith(reach),
+        costOf: (chainId) => (chainId === pair.first.chainId ? firstCost : chainId === pair.second.chainId ? secondCost : null),
         iconOf: (token) => iconUrl(iconSubjectOf(token, pair), loadImageServer()),
         priceOf: (token) => {
           const quote = prices?.get(`${token.side}:${token.address}`) ?? null;
@@ -169,9 +228,11 @@ const InFlight = ({ data }: { readonly data: ExploreData }) => {
       }),
     // Rebuilt when an answer changes, not on every render (`now` moves each render).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pair, sent.data, waiting.data, covered.data, delivered.data, samples.data, prices, dayStart],
+    [pair, sent.data, waiting.data, covered.data, delivered.data, aggregate.data, samples.data, prices, firstCost, secondCost, reach],
   );
-  return <InFlightOrbits tracks={tracks} now={now} />;
+  // Drawn once every list has answered, so the transfers already in flight appear in place, not out of the chains.
+  const loading = sample ? samples.data === undefined : [sent, waiting, covered].some((query) => query.data === undefined && !query.isError);
+  return <InFlightOrbits tracks={tracks} now={now} loading={loading} />;
 };
 
 const Browse = ({ data }: { readonly data: ExploreData }) => {

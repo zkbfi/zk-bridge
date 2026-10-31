@@ -5,7 +5,7 @@ import type { Hex } from "viem";
 import { FIXTURE_NOW, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import type { FeedItem } from "@terminal/model/types";
 import { InFlightOrbits } from "../../src/explore/InFlightOrbits";
-import { dayStartOf, orbitTracks, type OrbitTrack } from "../../src/explore/orbit-model";
+import { orbitTracks, type OrbitTrack } from "../../src/explore/orbit-model";
 
 const usdc = FIXTURE_TOKENS[0]!;
 const id = (n: number): Hex => `0x${n.toString(16).padStart(64, "0")}` as Hex;
@@ -25,7 +25,7 @@ const row = (n: number, status: FeedItem["status"], direction: FeedItem["directi
 });
 
 const tracksOf = (inFlight: readonly FeedItem[]): readonly OrbitTrack[] =>
-  orbitTracks({ pair: FIXTURE_PAIR, inFlight, delivered: [], priceOf: () => 1, now: FIXTURE_NOW, dayStart: dayStartOf(FIXTURE_NOW) });
+  orbitTracks({ pair: FIXTURE_PAIR, inFlight, delivered: [], priceOf: () => 1, now: FIXTURE_NOW });
 
 let frames: ReturnType<typeof vi.fn>;
 beforeEach(() => {
@@ -53,29 +53,101 @@ describe("in-flight orbits", () => {
     expect([...container.querySelectorAll(".zb-orb-node-name")].map((node) => node.textContent)).toEqual([first, second]);
   });
 
-  it("shows a chain's totals on hover or focus of its node: leaving in flight per step, delivered here today, value", async () => {
-    const delivered: FeedItem = { ...row(40, "delivered", "first-to-second"), deliveredAt: FIXTURE_NOW - 30 };
-    const tracks = orbitTracks({ pair: FIXTURE_PAIR, inFlight: [row(1, "sent"), row(2, "covered"), row(3, "sent", "second-to-first")], delivered: [delivered], priceOf: () => 1, now: FIXTURE_NOW, dayStart: dayStartOf(FIXTURE_NOW) });
+  it("shows a chain's totals on hover or focus of its node: out and in, in flight, value, delivered in 24 h and 7 d", () => {
+    const deliveredOut: FeedItem = { ...row(40, "delivered", "first-to-second"), deliveredAt: FIXTURE_NOW - 30 };
+    const deliveredBack: FeedItem = { ...row(41, "delivered", "second-to-first"), deliveredAt: FIXTURE_NOW - 3 * 86_400 };
+    const tracks = orbitTracks({ pair: FIXTURE_PAIR, inFlight: [row(1, "sent"), row(2, "covered"), row(3, "sent", "second-to-first")], delivered: [deliveredOut, deliveredBack], priceOf: () => 1, now: FIXTURE_NOW });
     render(<InFlightOrbits tracks={tracks} now={FIXTURE_NOW} reducedMotion />);
     const [first, second] = [FIXTURE_PAIR.first.name.split(" ")[0], FIXTURE_PAIR.second.name.split(" ")[0]];
-    const firstNode = screen.getByRole("button", { name: new RegExp(`^${first}: 2 leaving in flight, 0 delivered here today, about \\$3,000.00 in flight`) });
+    const firstNode = screen.getByRole("button", { name: `${first} (${FIXTURE_PAIR.first.nativeSymbol}): out 2 in flight, in 1 in flight; delivered 1 in the last 24 h, 2 in the last 7 days` });
     act(() => firstNode.focus());
     const tip = screen.getByRole("tooltip");
-    expect(tip).toHaveTextContent("2 leaving in flight");
-    expect(tip).toHaveTextContent("Sent 1 · Final 0 · Proof posted 1 · Delivering 0");
-    expect(tip).toHaveTextContent("0 delivered here today");
-    expect(tip).toHaveTextContent("≈ $3,000.00 in flight");
+    expect(tip).toHaveTextContent(FIXTURE_PAIR.first.nativeSymbol);
+    expect(within(tip).getAllByRole("row").map((tr) => tr.textContent)).toEqual(["In flightValue24 h7 d", "Out2$3,000.0011", "In1$1,500.0001"]);
+    expect(tip).toHaveTextContent("Delivered: 1 in the last 24 h · 2 in the last 7 days");
     act(() => firstNode.blur());
     expect(screen.queryByRole("tooltip")).toBeNull();
-    const secondNode = screen.getByRole("button", { name: new RegExp(`^${second}: 1 leaving in flight, 1 delivered here today`) });
+    const secondNode = screen.getByRole("button", { name: new RegExp(`^${second} \\(`) });
     fireEvent.pointerEnter(secondNode);
-    expect(screen.getByRole("tooltip")).toHaveTextContent("1 delivered here today");
+    expect(within(screen.getByRole("tooltip")).getAllByRole("row")[1]).toHaveTextContent("Out1$1,500.0001");
     fireEvent.pointerLeave(secondNode);
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
+  it("shows a step's summary on its sun: transfers by token, fees, the cost to deliver all and the deliverer's profit", () => {
+    const weth = FIXTURE_TOKENS[2]!;
+    const big: FeedItem = { ...row(5, "covered"), token: weth, amount: 2n * 10n ** 18n };
+    const tracks = orbitTracks({
+      pair: FIXTURE_PAIR,
+      inFlight: [row(1, "covered"), row(2, "covered"), big, row(3, "sent")],
+      delivered: [],
+      priceOf: (token) => (token.symbol === "WETH" ? 3000 : 1),
+      now: FIXTURE_NOW,
+      costOf: () => ({ gasUsed: 200_000n, baseFeeWei: 10n ** 9n, priorityFeeWei: 0n, nativePriceE18: 3000n * 10n ** 18n, level: 1 }),
+    });
+    render(<InFlightOrbits tracks={tracks} now={FIXTURE_NOW} reducedMotion />);
+    const sun = screen.getAllByRole("button", { name: /^Proof ready, .* to .*: totals$/ })[0] as unknown as SVGElement;
+    act(() => sun.focus());
+    const tip = screen.getByRole("tooltip");
+    expect(tip).toHaveTextContent("Proof ready");
+    expect(tip).toHaveTextContent("3 transfers · $9,000.00");
+    const rows = within(tip).getAllByRole("row");
+    // Most value first: 1 × WETH ($6,000), then 2 × USDC ($3,000).
+    expect(rows[1]).toHaveTextContent(/^1× WETH2\$6,000\.00\$/);
+    expect(rows[2]).toHaveTextContent(/^2× USDC3,000\$3,000\.00\$/);
+    expect(tip).toHaveTextContent("Fees est.:");
+    // 3 deliveries × 200,000 gas × 1 gwei × $3,000 = 3 × $0.60, plus one $0.025 proof.
+    expect(tip).toHaveTextContent("Cost to deliver all: $1.82");
+    expect(tip.querySelector(".zb-orb-tip-good")).toHaveTextContent(/^Profit for a deliverer: \$[\d.,]+ \(\d+ % of fees\)$/);
+    act(() => sun.blur());
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("opens a sun's orbit while its summary shows", () => {
+    const rows = Array.from({ length: 6 }, (_, index) => row(80 + index, "sent"));
+    const { container } = render(<InFlightOrbits tracks={tracksOf(rows)} now={FIXTURE_NOW} reducedMotion />);
+    const path = () => Number(container.querySelector(`[data-lane="0"] .zb-orb-path`)!.getAttribute("rx"));
+    const rest = path();
+    const sun = container.querySelector<SVGCircleElement>(`[data-sun="0"][data-lane="0"]`)!;
+    fireEvent.pointerEnter(sun);
+    expect(path()).toBeGreaterThan(rest);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("6 transfers");
+    // Moving off the sun (here: out of the drawing) hides it and closes the orbit.
+    fireEvent.pointerLeave(container.querySelector("svg.zb-orb-svg")!);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(path()).toBeCloseTo(rest);
+  });
+
+  it("brings a transfer new in a later poll out of its source chain's node; the first answer appears in place", () => {
+    const callbacks: ((time: number) => void)[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: (time: number) => void) => (callbacks.push(callback), callbacks.length));
+    const { rerender, container } = render(<InFlightOrbits tracks={tracksOf([])} now={FIXTURE_NOW} reducedMotion={false} loading />);
+    // The first answer: already in flight, so in place, not at the node.
+    rerender(<InFlightOrbits tracks={tracksOf([row(1, "sent"), row(3, "sent", "second-to-first")])} now={FIXTURE_NOW} reducedMotion={false} />);
+    let time = performance.now();
+    act(() => callbacks.shift()?.((time += 16)));
+    const at = (n: number) => /translate\(([-\d.]+) ([-\d.]+)\)/.exec(document.querySelector(`[data-id="${id(n)}"]`)!.getAttribute("transform")!)!.slice(1).map(Number) as [number, number];
+    const node = (chainId: number) => {
+      const circle = container.querySelector(`.zb-orb-node[data-chain="${chainId}"]`)!;
+      return [Number(circle.getAttribute("cx")), Number(circle.getAttribute("cy"))] as const;
+    };
+    const [fx, fy] = node(FIXTURE_PAIR.first.chainId);
+    const [sx, sy] = node(FIXTURE_PAIR.second.chainId);
+    expect(Math.hypot(at(1)[0] - fx, at(1)[1] - fy)).toBeGreaterThan(40);
+    // A later poll: one new transfer each way, each starting at its source chain's node.
+    rerender(<InFlightOrbits tracks={tracksOf([row(1, "sent"), row(3, "sent", "second-to-first"), row(2, "sent"), row(4, "sent", "second-to-first")])} now={FIXTURE_NOW} reducedMotion={false} />);
+    act(() => callbacks.shift()?.((time += 16)));
+    expect(Math.hypot(at(2)[0] - fx, at(2)[1] - fy)).toBeLessThan(15);
+    expect(Math.hypot(at(4)[0] - sx, at(4)[1] - sy)).toBeLessThan(15);
+    // … fading in, then gliding out to the Sent orbit.
+    expect(Number(document.querySelector(`[data-id="${id(2)}"]`)!.getAttribute("opacity"))).toBeLessThan(0.2);
+    for (let frame = 0; frame < 300; frame++) act(() => callbacks.shift()?.((time += 16)));
+    const sent = container.querySelector(`[data-sun="0"][data-lane="0"]`)!;
+    expect(Math.abs(at(2)[0] - Number(sent.getAttribute("cx")))).toBeLessThan(60);
+  });
+
   it("draws each planet as its token's icon from one shared pattern per token, with a lettered disc until it loads or if it fails", () => {
-    const tracks = orbitTracks({ pair: FIXTURE_PAIR, inFlight: [row(1, "sent"), row(2, "covered"), row(3, "sent", "second-to-first")], delivered: [], priceOf: () => 1, now: FIXTURE_NOW, dayStart: dayStartOf(FIXTURE_NOW), iconOf: (token) => `https://icons.test/${token.symbol}.png` });
+    const tracks = orbitTracks({ pair: FIXTURE_PAIR, inFlight: [row(1, "sent"), row(2, "covered"), row(3, "sent", "second-to-first")], delivered: [], priceOf: () => 1, now: FIXTURE_NOW, iconOf: (token) => `https://icons.test/${token.symbol}.png` });
     const { container } = render(<InFlightOrbits tracks={tracks} now={FIXTURE_NOW} reducedMotion />);
     const patterns = container.querySelectorAll("defs pattern");
     expect(patterns).toHaveLength(1);
@@ -105,9 +177,9 @@ describe("in-flight orbits", () => {
     expect(Math.abs(yOf(3) - bottom[0]!.y)).toBeLessThan(60);
     // Step labels: above the top lane, below the bottom lane.
     const labels = [...container.querySelectorAll<SVGTextElement>(".zb-orb-label")];
-    expect(labels).toHaveLength(8);
+    expect(labels.map((label) => label.lastElementChild!.textContent)).toEqual(["Sent", "Final", "Proof ready", "Sent", "Final", "Proof ready"]);
     expect(Number(labels[0]!.getAttribute("y"))).toBeLessThan(top[0]!.y);
-    expect(Number(labels[4]!.getAttribute("y"))).toBeGreaterThan(bottom[0]!.y);
+    expect(Number(labels[3]!.getAttribute("y"))).toBeGreaterThan(bottom[0]!.y);
   });
 
   it("sends a delivered planet into its destination chain's node, where it fades out", () => {
@@ -140,7 +212,7 @@ describe("in-flight orbits", () => {
     const rows = Array.from({ length: 6 }, (_, index) => row(50 + index, "sent"));
     const { container } = render(<InFlightOrbits tracks={tracksOf(rows)} now={FIXTURE_NOW} reducedMotion />);
     const svg = container.querySelector("svg.zb-orb-svg")!;
-    expect(svg.querySelectorAll("[data-sun]")).toHaveLength(8);
+    expect(svg.querySelectorAll("[data-sun]")).toHaveLength(6);
     expect(svg.querySelectorAll(".zb-orb-path")).toHaveLength(1);
     // Planets behind the sun (scaled below 1) come before the suns in the layer; those in front come after.
     const layer = svg.querySelector("[data-sun]")!.parentElement!;
@@ -148,7 +220,7 @@ describe("in-flight orbits", () => {
     const firstSun = kids.findIndex((node) => node.hasAttribute("data-sun"));
     const scaleOf = (node: Element): number => Number(/scale\(([-\d.]+)\)/.exec(node.getAttribute("transform") ?? "")?.[1]);
     expect(kids.slice(0, firstSun).every((node) => scaleOf(node) < 1)).toBe(true);
-    expect(kids.slice(firstSun + 4).every((node) => scaleOf(node) >= 1)).toBe(true);
+    expect(kids.slice(firstSun + 3).every((node) => scaleOf(node) >= 1)).toBe(true);
     expect(firstSun).toBeGreaterThan(0);
   });
 
@@ -192,7 +264,7 @@ describe("in-flight orbits", () => {
     const links = within(list).getAllByRole("link");
     expect(links[0]).toHaveAttribute("href", `#/message/${id(1)}`);
     expect(links[0]).toHaveTextContent(/1500 USDC .*to 0xabcd…1234.*Sent, waiting for finality.*sent 3 min ago/);
-    expect(links[1]).toHaveTextContent(/Proof posted, waiting for a deliverer/);
+    expect(links[1]).toHaveTextContent(/Proof ready, waiting for a deliverer/);
     await userEvent.click(screen.getByRole("button", { name: "Show as a list" }));
     expect(screen.getAllByRole("list", { name: /transfers in flight/ })[0]).toHaveClass("zb-orb-list");
     expect(screen.getByRole("button", { name: "Show as orbits" })).toHaveAttribute("aria-pressed", "true");
@@ -223,10 +295,30 @@ describe("in-flight orbits", () => {
     expect(document.querySelectorAll(".zb-orb-track")).toHaveLength(1);
   });
 
-  it("labels the steps that hold more planets than are drawn", () => {
-    const many = Array.from({ length: 63 }, (_, index) => row(100 + index, "sent"));
-    render(<InFlightOrbits tracks={tracksOf(many)} now={FIXTURE_NOW} reducedMotion />);
-    expect(document.querySelectorAll(".zb-orb-planet")).toHaveLength(60);
-    expect(document.querySelector(".zb-orb-more")).toHaveTextContent("+3 more");
+  it("draws only the first 32 at a step, with no extra label; the step's count still says them all", () => {
+    const many = Array.from({ length: 40 }, (_, index) => ({ ...row(100 + index, "sent"), sentAt: FIXTURE_NOW - 1_000 + index }));
+    const { container } = render(<InFlightOrbits tracks={tracksOf(many)} now={FIXTURE_NOW} reducedMotion />);
+    expect(document.querySelectorAll(".zb-orb-planet")).toHaveLength(32);
+    expect(container.querySelector(".zb-orb-more")).toBeNull();
+    expect(container.querySelector(".zb-orb-label .zb-orb-count")).toHaveTextContent("40");
+  });
+
+  it("fades a planet that falls out of the first 32 at its sun, and fades the next one in at its orbit", () => {
+    const callbacks: ((time: number) => void)[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: (time: number) => void) => (callbacks.push(callback), callbacks.length));
+    const rows = Array.from({ length: 33 }, (_, index) => ({ ...row(200 + index, "sent"), sentAt: FIXTURE_NOW - 1_000 + index }));
+    const { rerender, container } = render(<InFlightOrbits tracks={tracksOf(rows)} now={FIXTURE_NOW} reducedMotion={false} />);
+    let time = performance.now();
+    act(() => callbacks.shift()?.((time += 16)));
+    expect(document.querySelector(`[data-id="${id(232)}"]`)).toBeNull();
+    // The oldest moves on to Final: the 33rd at Sent is drawn now, and fades in at its orbit, not at the chain.
+    const moved = rows.map((one, index) => (index === 0 ? { ...one, status: "waiting_for_finality" as const } : one));
+    rerender(<InFlightOrbits tracks={tracksOf(moved)} now={FIXTURE_NOW} reducedMotion={false} />);
+    act(() => callbacks.shift()?.((time += 16)));
+    const next = document.querySelector(`[data-id="${id(232)}"]`)!;
+    expect(Number(next.getAttribute("opacity"))).toBeLessThan(0.2);
+    const node = container.querySelector(`.zb-orb-node[data-chain="${FIXTURE_PAIR.first.chainId}"]`)!;
+    const [x] = /translate\(([-\d.]+)/.exec(next.getAttribute("transform")!)!.slice(1).map(Number) as [number];
+    expect(Math.abs(x - Number(node.getAttribute("cx")))).toBeGreaterThan(30);
   });
 });

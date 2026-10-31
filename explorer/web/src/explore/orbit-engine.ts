@@ -28,6 +28,8 @@ export type OrbitLane = {
   readonly dx: number;
   /** The destination chain's node, where delivered planets go. */
   readonly exit: Point;
+  /** The source chain's node, where a new transfer emerges. */
+  readonly from: Point;
   /** Away from the loop's centre: -1 up (top lane), 1 down (bottom lane). */
   readonly away: -1 | 1;
 };
@@ -75,7 +77,7 @@ export const geometryFor = (pixels: number): OrbitGeometry => {
     { x: a - end, y: yMiddle },
     { x: b + end, y: yMiddle },
   ];
-  const step = (b - a) / 3;
+  const step = (b - a) / (STEP_COUNT - 1);
   return {
     width,
     height: yBottom + 130,
@@ -87,8 +89,8 @@ export const geometryFor = (pixels: number): OrbitGeometry => {
     labelSize: width < 480 ? 11 : 12,
     nodes,
     lanes: [
-      { direction: "first-to-second", y: yTop, x0: a, dx: step, exit: nodes[1], away: -1 },
-      { direction: "second-to-first", y: yBottom, x0: b, dx: -step, exit: nodes[0], away: 1 },
+      { direction: "first-to-second", y: yTop, x0: a, dx: step, exit: nodes[1], from: nodes[0], away: -1 },
+      { direction: "second-to-first", y: yBottom, x0: b, dx: -step, exit: nodes[0], from: nodes[1], away: 1 },
     ],
   };
 };
@@ -99,6 +101,10 @@ export const stepX = (lane: OrbitLane, step: number): number => lane.x0 + step *
 /** The loop's path: top lane, right end, bottom lane, left end. */
 export const loopPath = (g: OrbitGeometry): string => `M ${g.a} ${g.yTop} H ${g.b} A ${g.end} ${g.end} 0 0 1 ${g.b} ${g.yBottom} H ${g.a} A ${g.end} ${g.end} 0 0 1 ${g.a} ${g.yTop}`;
 
+/** The steps of a lane: Sent, Final, Proof ready. */
+export const STEP_COUNT = 3;
+const STEPS = Array.from({ length: STEP_COUNT }, (_, step) => step);
+
 /** The sun at each step and a chain's node. */
 export const SUN_RADIUS = 15;
 export const NODE_RADIUS = 24;
@@ -107,8 +113,17 @@ export const NODE_RADIUS = 24;
 const R0 = 34;
 const RING = 20;
 const PER = 6;
-/** The delay between the starts of planets that move in one batch, in milliseconds. */
-const STAGGER = 60;
+/**
+ * The motion's pace (owner: "a bit less velocity"), in milliseconds unless said: the delay between the starts of planets
+ * that move in one batch, the glide of a step change and of a new transfer out of its chain, the easing time constants
+ * while moving and otherwise, and the orbit's turn per 60 Hz frame in radians (divided by the ring's number).
+ */
+const STAGGER = 90;
+const STEP_GLIDE = 1800;
+const EMERGE_GLIDE = 2100;
+const EASE_MOVING = 420;
+const EASE_AT_REST = 180;
+const TURN = 0.003;
 /** How close (in units) the pointer must be to a step to open it. */
 const HOVER_REACH = 70;
 
@@ -127,6 +142,8 @@ type Body = {
   tz: number;
   moving: { readonly start: number; readonly span: number } | null;
   leaving: boolean;
+  /** Where a leaving planet goes: null for its destination chain (delivered), or its step's sun (still in flight, no longer drawn). */
+  leaveTo: Point | null;
 };
 
 /** One lane's state. */
@@ -156,6 +173,10 @@ export type OrbitEngineOptions = {
   readonly onOpen: (planet: Planet) => void;
   /** A planet's accessible name. */
   readonly label: (planet: Planet) => string;
+  /** A step sun's accessible name ("Sent, Ethereum to PulseChain: totals"). */
+  readonly sunLabel?: (lane: number, step: number) => string;
+  /** Show a step's summary for its sun at a viewport point, or hide it (null). */
+  readonly onSunTip?: (tip: { readonly lane: number; readonly step: number; readonly x: number; readonly y: number } | null) => void;
   /** The frame scheduler (tests pass their own). */
   readonly frames?: { readonly request: (callback: (time: number) => void) => number; readonly cancel: (handle: number) => void };
   readonly document?: Document;
@@ -183,6 +204,11 @@ export class OrbitEngine {
   private geometry: OrbitGeometry;
   private readonly lanes: readonly LaneState[];
   private tipId: string | null = null;
+  /** Every transfer in flight at the last sync, drawn or not. */
+  private inFlight = new Set<string>();
+  /** The sun whose summary the pointer opened, and each sun's hide, by lane × steps + step. */
+  private sunUnderPointer: { readonly lane: number; readonly step: number } | null = null;
+  private readonly hideSun: (() => void)[] = [];
   private lastPointer = "mouse";
   private handle: number | null = null;
   private last: number | null = null;
@@ -203,10 +229,41 @@ export class OrbitEngine {
       cancel: (handle) => (typeof window.cancelAnimationFrame === "function" ? window.cancelAnimationFrame(handle) : window.clearTimeout(handle)),
     };
     this.lanes = options.lanes.map(({ layer, guides }, index) => {
-      const suns = [0, 1, 2, 3].map((step) => element("circle", { r: SUN_RADIUS, class: step === 0 ? "zb-orb-stop zb-orb-stop-first" : "zb-orb-stop", "data-sun": step, "data-lane": index }));
+      const suns = STEPS.map((step) => {
+        const sun = element("circle", { r: SUN_RADIUS, class: step === 0 ? "zb-orb-stop zb-orb-stop-first" : "zb-orb-stop", "data-sun": step, "data-lane": index, tabindex: 0, role: "button", "aria-label": options.sunLabel?.(index, step) ?? `${step}` });
+        return sun;
+      });
       layer.append(...suns);
-      return { layer, guides, suns, paths: new Map(), phase: new Map(), open: [0, 0, 0, 0], hover: -1, frozen: -1, order: "" };
+      return { layer, guides, suns, paths: new Map(), phase: new Map(), open: STEPS.map(() => 0), hover: -1, frozen: -1, order: "" };
     });
+    // A step's sun shows its summary and, like a planet, freezes and opens its orbit.
+    this.lanes.forEach((state, lane) =>
+      state.suns.forEach((sun, step) => {
+        const show = (x: number, y: number): void => {
+          state.frozen = step;
+          this.options.onSunTip?.({ lane, step, x, y });
+          if (this.options.reduced) this.drawStill();
+        };
+        const hide = (): void => {
+          this.sunUnderPointer = null;
+          state.frozen = -1;
+          this.options.onSunTip?.(null);
+          if (this.options.reduced) this.drawStill();
+        };
+        this.hideSun.push(hide);
+        // Shown on entering the sun; hidden when the pointer moves off it (checked against the sun's place in the SVG's
+        // pointer moves, since restacking by depth moves the sun's element and a browser may then miss its leave).
+        sun.addEventListener("pointerenter", (event) => {
+          this.sunUnderPointer = { lane, step };
+          show(event.clientX, event.clientY);
+        });
+        sun.addEventListener("focus", () => {
+          const box = sun.getBoundingClientRect();
+          show(box.right, box.bottom);
+        });
+        sun.addEventListener("blur", hide);
+      }),
+    );
     this.placeSuns();
     const svg = options.lanes[0].layer.ownerSVGElement;
     if (svg !== null) {
@@ -219,13 +276,20 @@ export class OrbitEngine {
         const lane = Math.abs(y - this.geometry.yTop) < Math.abs(y - this.geometry.yBottom) ? 0 : 1;
         let best = -1;
         let distance = HOVER_REACH;
-        for (let step = 0; step < 4; step++) {
+        for (let step = 0; step < STEP_COUNT; step++) {
           const d = Math.abs(x - stepX(this.geometry.lanes[lane]!, step));
           if (d < distance) [distance, best] = [d, step];
         }
         this.setHover(lane, best);
+        const under = this.sunUnderPointer;
+        if (under !== null) {
+          const sunLane = this.geometry.lanes[under.lane]!;
+          if (Math.hypot(x - stepX(sunLane, under.step), y - sunLane.y) > SUN_RADIUS + 3) this.hideSun[under.lane * STEP_COUNT + under.step]?.();
+        }
       };
       const leave = (): void => {
+        const under = this.sunUnderPointer;
+        if (under !== null) this.hideSun[under.lane * STEP_COUNT + under.step]?.();
         for (const lane of this.lanes) lane.frozen = -1;
         this.setHover(0, -1);
         this.hideTip();
@@ -314,32 +378,40 @@ export class OrbitEngine {
    * The planets to draw now (both lanes). New ones appear at their step (a new send enters from its lane's start), ones
    * whose step changed travel to it, and ones no longer listed leave into their destination chain.
    */
-  sync(planets: readonly Planet[]): void {
+  sync(planets: readonly Planet[], inFlight?: ReadonlySet<string>): void {
     const now = performance.now();
     const first = !this.synced;
     this.synced = true;
     const listed = new Set<string>();
     const placed: Body[] = [];
+    const fadeIn: Body[] = [];
     // A batch (a finality, a proof posting, a round of deliveries) moves as a wave: each mover starts 60 ms after the last.
     let wave = 0;
     for (const planet of planets) {
       listed.add(planet.id);
       const existing = this.bodies.get(planet.id);
       if (existing !== undefined) {
-        if (existing.planet.step !== planet.step && !this.options.reduced) existing.moving = { start: now + STAGGER * wave++, span: 1100 };
+        if (existing.planet.step !== planet.step && !this.options.reduced) existing.moving = { start: now + STAGGER * wave++, span: STEP_GLIDE };
         const looks = existing.planet.tone !== planet.tone || existing.planet.icon !== planet.icon || existing.planet.radius !== planet.radius;
         existing.planet = planet;
         existing.leaving = false;
+        existing.leaveTo = null;
         if (looks) this.paint(existing);
         existing.g.setAttribute("aria-label", this.options.label(planet));
         continue;
       }
       const body = this.create(planet);
       if (first || this.options.reduced) placed.push(body);
-      else {
+      else if (this.inFlight.has(planet.id)) {
+        // Already in flight but not drawn until now (a drawn one at its step left): it fades into its orbit.
+        fadeIn.push(body);
+      } else {
         const lane = this.geometry.lanes[body.lane]!;
-        body.x = planet.step === 0 ? stepX(lane, 0) - 30 * Math.sign(lane.dx) : stepX(lane, planet.step);
-        body.y = lane.y;
+        // A transfer seen in a later poll emerges from its source chain (owner: "new bridges ... really should emerge
+        // from the chain"): it fades in at the node and glides out along the lane to its orbit, in the batch's wave.
+        body.x = lane.from.x;
+        body.y = lane.from.y;
+        body.moving = { start: now + STAGGER * wave++, span: EMERGE_GLIDE };
       }
     }
     for (const [id, body] of this.bodies) {
@@ -347,13 +419,21 @@ export class OrbitEngine {
       if (this.options.reduced) {
         body.g.remove();
         this.bodies.delete(id);
-      } else if (!body.leaving) {
+      } else if (inFlight?.has(id) === true) {
+        // Still in flight, but no longer among the planets drawn at its step: it fades out at its sun.
+        const lane = this.geometry.lanes[body.lane]!;
         body.leaving = true;
+        body.leaveTo = { x: stepX(lane, body.planet.step), y: lane.y };
+      } else if (!body.leaving || body.leaveTo !== null) {
+        body.leaving = true;
+        body.leaveTo = null;
         body.moving = { start: now + STAGGER * wave++, span: 0 };
       }
     }
+    this.inFlight = new Set(inFlight ?? planets.map((planet) => planet.id));
     this.targets(0);
     for (const body of placed) [body.x, body.y, body.z, body.alpha] = [body.tx, body.ty, body.tz, 1];
+    for (const body of fadeIn) [body.x, body.y, body.z, body.alpha] = [body.tx, body.ty, body.tz, 0];
     if (this.options.reduced) this.drawStill();
     else this.start();
   }
@@ -361,13 +441,15 @@ export class OrbitEngine {
   private create(planet: Planet): Body {
     const lane = laneOf(planet);
     const g = element("g", { class: "zb-orb-planet", tabindex: 0, role: "link", "data-id": planet.id, "aria-label": this.options.label(planet) });
-    const body: Body = { planet, lane, g, x: 0, y: this.geometry.lanes[lane]!.y, z: 0, alpha: 0, tx: 0, ty: 0, tz: 0, moving: null, leaving: false };
+    const body: Body = { planet, lane, g, x: 0, y: this.geometry.lanes[lane]!.y, z: 0, alpha: 0, tx: 0, ty: 0, tz: 0, moving: null, leaving: false, leaveTo: null };
     this.paint(body);
     const state = this.lanes[lane]!;
     const show = (x: number, y: number): void => {
       state.frozen = body.planet.step;
       this.tipId = body.planet.id;
       g.classList.add("zb-orb-hot");
+      // One tooltip at a time: a planet's replaces its sun's.
+      this.options.onSunTip?.(null);
       this.options.onTip({ planet: body.planet, x, y });
       if (this.options.reduced) this.drawStill();
     };
@@ -461,13 +543,13 @@ export class OrbitEngine {
 
   /** Where each planet should be: its slot on its step's orbits (or its destination chain). Advances the orbits' phases by `dt`. */
   private targets(dt: number): void {
-    const byLane: Body[][][] = [[[], [], [], []], [[], [], [], []]];
+    const byLane: Body[][][] = [STEPS.map(() => []), STEPS.map(() => [])];
     for (const body of this.bodies.values()) if (!body.leaving) byLane[body.lane]![body.planet.step]!.push(body);
     const still = this.options.reduced;
     this.lanes.forEach((state, index) => {
       const lane = this.geometry.lanes[index]!;
       const seenPaths = new Set<string>();
-      for (let step = 0; step < 4; step++) {
+      for (let step = 0; step < STEP_COUNT; step++) {
         const group = byLane[index]![step]!;
         group.sort((a, b) => a.planet.sentAt - b.planet.sentAt || (a.planet.id < b.planet.id ? -1 : 1));
         const open = state.open[step]!;
@@ -477,7 +559,7 @@ export class OrbitEngine {
           const members = group.slice(at, at + PER * (ring + 1));
           const key = `${step}:${ring}`;
           const start = state.phase.get(key) ?? (step * 1.7 + ring * 2.3 + index) % (Math.PI * 2);
-          const base = !still && state.frozen !== step ? start + (0.0045 / (ring + 1)) * (dt / 16.7) : start;
+          const base = !still && state.frozen !== step ? start + (TURN / (ring + 1)) * (dt / 16.7) : start;
           state.phase.set(key, base);
           // Tilted at rest, near face-on when open.
           const radius = (R0 + ring * RING) * (0.72 + 0.28 * open);
@@ -513,7 +595,7 @@ export class OrbitEngine {
     });
     for (const body of this.bodies.values()) {
       if (!body.leaving) continue;
-      const exit = this.geometry.lanes[body.lane]!.exit;
+      const exit = body.leaveTo ?? this.geometry.lanes[body.lane]!.exit;
       [body.tx, body.ty, body.tz] = [exit.x, exit.y, 0];
     }
   }
@@ -523,7 +605,7 @@ export class OrbitEngine {
     if (this.destroyed) return;
     const dt = this.last === null ? 16 : Math.min(48, time - this.last);
     this.last = time;
-    for (const state of this.lanes) for (let step = 0; step < 4; step++) state.open[step]! += ((state.hover === step || state.frozen === step ? 1 : 0) - state.open[step]!) * ease(dt, 160);
+    for (const state of this.lanes) for (let step = 0; step < STEP_COUNT; step++) state.open[step]! += ((state.hover === step || state.frozen === step ? 1 : 0) - state.open[step]!) * ease(dt, 160);
     this.targets(dt);
     for (const [id, body] of this.bodies) {
       if (body.moving !== null && time < body.moving.start) {
@@ -532,7 +614,7 @@ export class OrbitEngine {
         continue;
       }
       if (body.moving !== null && body.moving.span === 0) body.moving = null;
-      const k = ease(dt, body.moving === null ? 120 : 260);
+      const k = ease(dt, body.moving === null ? EASE_AT_REST : EASE_MOVING);
       body.x += (body.tx - body.x) * k;
       body.y += (body.ty - body.y) * k;
       let lift = 0;
@@ -557,7 +639,7 @@ export class OrbitEngine {
 
   /** Draws every planet at its slot at once (reduced motion). */
   private drawStill(): void {
-    for (const state of this.lanes) for (let step = 0; step < 4; step++) state.open[step] = state.hover === step || state.frozen === step ? 1 : 0;
+    for (const state of this.lanes) for (let step = 0; step < STEP_COUNT; step++) state.open[step] = state.hover === step || state.frozen === step ? 1 : 0;
     this.targets(0);
     for (const body of this.bodies.values()) {
       [body.x, body.y, body.z, body.alpha] = [body.tx, body.ty, body.tz, 1];
@@ -581,6 +663,8 @@ export class OrbitEngine {
     const active = this.doc.activeElement;
     this.lanes.forEach((state, index) => {
       if (active !== null && state.layer.contains(active)) return;
+      // Nor while the pointer rests on one of the lane's planets or suns: moving it can lose its pointer leave.
+      if (state.frozen !== -1) return;
       const sorted = [...this.bodies.values()].filter((body) => body.lane === index).sort((a, b) => a.z - b.z);
       const behind = sorted.filter((body) => body.z < 0);
       const front = sorted.filter((body) => body.z >= 0);

@@ -49,6 +49,7 @@ export const RECORDED_HISTORY = {
 export const RECORDED_ESCROW = { escrow: [], bridgedSupply: [] };
 export const RECORDED_UNDELIVERED = { items: [], nextCursor: null };
 export const RECORDED_RELEASE_EVENTS = { events: [] };
+export const RECORDED_DELIVERED = { now: 1_790_000_000, directions: [] };
 
 /** A requester that answers the recorded responses by path. */
 export const recordedRequester = async (url: string): Promise<unknown> => {
@@ -61,6 +62,7 @@ export const recordedRequester = async (url: string): Promise<unknown> => {
     "/api/escrow": RECORDED_ESCROW,
     "/api/undelivered": RECORDED_UNDELIVERED,
     "/api/release-events": RECORDED_RELEASE_EVENTS,
+    "/api/delivered": RECORDED_DELIVERED,
   };
   if (!(path in answers)) throw new Error(`no recorded answer for ${path}`);
   return answers[path];

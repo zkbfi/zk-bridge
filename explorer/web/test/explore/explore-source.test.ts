@@ -1,6 +1,6 @@
 import { getAddress } from "viem";
 import { describe, expect, it } from "vitest";
-import { createIndexerExploreSource, parseProofs } from "../../src/explore/explore-source";
+import { createIndexerExploreSource, parseBeaconClocks, parseDelivered, parseProofs } from "../../src/explore/explore-source";
 import { recordedRequester, RECORDED_HEAD_UPDATES } from "./recorded";
 
 const source = createIndexerExploreSource(() => "https://indexer.zkb.fi/", recordedRequester);
@@ -44,5 +44,22 @@ describe("the Explore source over the indexer (recorded answers)", () => {
   it("refuses a malformed answer and asks for an indexer when none is set", async () => {
     expect(() => parseProofs({ items: [{ chainId: "x" }] })).toThrow(/chainId/);
     await expect(createIndexerExploreSource(() => null, recordedRequester).proofs()).rejects.toThrow(/Settings/);
+  });
+});
+
+describe("the in-flight orbits' reads", () => {
+  it("reads the delivered counts per direction", () => {
+    expect(parseDelivered({ now: 1, directions: [{ sourceChainId: 1, destinationChainId: 369, last24h: 3, last7d: 9, byToken: [] }] })).toEqual([{ sourceChainId: 1, last24h: 3, last7d: 9 }]);
+    expect(() => parseDelivered({ directions: [{ sourceChainId: 1, last24h: "x" }] })).toThrow(/last24h/);
+  });
+
+  it("reads each tracked chain's beacon clock from a stored head's slot and slot time", () => {
+    const clocks = parseBeaconClocks({
+      heads: [
+        { chainId: 369, trackedChainId: 1, storedHeadSlot: 100, storedHeadSlotTimestamp: 1_606_825_223 },
+        { chainId: 1, trackedChainId: 369, storedHeadSlot: null, storedHeadSlotTimestamp: null },
+      ],
+    });
+    expect(clocks).toEqual([{ trackedChainId: 1, genesisTime: 1_606_824_023, secondsPerSlot: 12 }]);
   });
 });

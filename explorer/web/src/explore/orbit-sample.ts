@@ -5,8 +5,8 @@
  * the two lanes don't move in lockstep —
  *
  * - finalize: 60–100 % of the transfers at Sent become final at once;
- * - prove: a proof posting moves every transfer at Final to Proof posted;
- * - deliver: 2–6 leave Delivering as delivered, and 3–8 move from Proof posted to Delivering;
+ * - prove: a new valid proof moves every transfer at Final to Proof ready;
+ * - deliver: 2–6 leave Proof ready as delivered;
  * - arrive: 1–3 new transfers at Sent (and sometimes one between the other events).
  *
  * A stream keeps its state and advances to the wall clock on each read, so successive polls show the batches move.
@@ -16,7 +16,7 @@ import type { Direction, FeedItem, PairConfig, TokenInfo } from "@terminal/model
 import type { Hex } from "viem";
 
 /** Seconds per event. */
-export const SAMPLE_TICK = 5;
+export const SAMPLE_TICK = 2;
 
 const EVENTS = ["arrive", "arrive", "finalize", "arrive", "prove", "deliver", "arrive", "deliver"] as const;
 
@@ -39,7 +39,7 @@ const generator = (seed: number): (() => number) => {
 
 type Sample = {
   readonly n: number;
-  step: 0 | 1 | 2 | 3;
+  step: 0 | 1 | 2;
   readonly sentWall: number;
   deliveredWall: number | null;
   readonly token: TokenInfo | null;
@@ -87,11 +87,11 @@ export class OrbitSampleStream {
     const wall = tick * SAMPLE_TICK;
     for (const lane of this.lanes) {
       for (let k = 0; k < 24; k++) {
-        const step = Math.min(3, Math.floor(lane.random() * 4)) as Sample["step"];
+        const step = Math.min(2, Math.floor(lane.random() * 3)) as Sample["step"];
         lane.items.push(this.create(lane, step, wall - Math.round((step + lane.random()) * 120)));
       }
       for (let k = 0; k < 30; k++) {
-        const sample = this.create(lane, 3, wall - 600 - k * 60);
+        const sample = this.create(lane, 2, wall - 600 - k * 60);
         sample.deliveredWall = wall - k * 60;
         lane.delivered.push(sample);
       }
@@ -122,12 +122,11 @@ export class OrbitSampleStream {
       }
       if (event === "prove") for (const sample of at(1)) sample.step = 2;
       if (event === "deliver") {
-        for (const sample of at(3).slice(0, Math.ceil(between(2, 6)))) {
+        for (const sample of at(2).slice(0, Math.ceil(between(2, 6)))) {
           sample.deliveredWall = wall;
           lane.items = lane.items.filter((item) => item !== sample);
           lane.delivered = [sample, ...lane.delivered].slice(0, 200);
         }
-        for (const sample of at(2).slice(0, Math.ceil(between(3, 8)))) sample.step = 3;
       }
       const arrivals = event === "arrive" ? Math.round(between(1, 3)) : lane.random() < 0.4 ? 1 : 0;
       for (let k = 0; k < arrivals; k++) lane.items.push(this.create(lane, 0, wall));
@@ -150,7 +149,7 @@ export class OrbitSampleStream {
       sentAt,
       deliveredAt: delivered ? Math.round(now - (wallSeconds - sample.deliveredWall!)) : null,
       sourceTransactionHash: `0x${hex(sample.n * 104729 + d, 8)}${"3".repeat(56)}` as Hex,
-      destinationTransactionHash: delivered || sample.step === 3 ? (`0x${hex(sample.n * 1299709 + d, 8)}${"4".repeat(56)}` as Hex) : null,
+      destinationTransactionHash: delivered ? (`0x${hex(sample.n * 1299709 + d, 8)}${"4".repeat(56)}` as Hex) : null,
     };
   }
 }

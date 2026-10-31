@@ -6,17 +6,18 @@
  * transfer a planet circling the step it waits at. React draws the loop once per data refresh; the planets move in
  * orbit-engine.ts. A list of the same transfers is always there for screen readers, and "Show as a list" shows it.
  */
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { formatRoute } from "../app/route";
 import { leftText } from "../bridge/activity-model";
 import { amountText } from "../bridge/bridge-model";
+import { shortAmountText } from "../bridge/number";
 import { Num } from "../bridge/Num";
 import { usdText } from "../bridge/price-oracle";
 import { TokenIcon } from "../bridge/TokenIcon";
 import { durationText } from "./explore-model";
 import { geometryFor, loopPath, NODE_RADIUS, OrbitEngine, stepX, type OrbitGeometry } from "./orbit-engine";
-import { ORBIT_STEPS, ORBIT_STEP_WORDS, type OrbitTrack, type Planet } from "./orbit-model";
+import { ORBIT_STEPS, ORBIT_STEP_WORDS, stepSummary, type OrbitStep, type OrbitTrack, type Planet } from "./orbit-model";
 import { XGroup } from "./parts";
 import { shortChain } from "./tx-model";
 
@@ -28,6 +29,8 @@ export type InFlightOrbitsProps = {
   readonly now: number;
   /** Overrides the user's reduced-motion setting (tests). */
   readonly reducedMotion?: boolean;
+  /** True until every answer has arrived: nothing is drawn yet, so the first answer appears in place rather than emerging. */
+  readonly loading?: boolean;
 };
 
 /** Whether the user asked for reduced motion, following changes. */
@@ -66,15 +69,33 @@ const messageHref = (planet: Planet): string => formatRoute({ name: "message", m
 
 type Tip = { readonly planet: Planet; readonly x: number; readonly y: number };
 
-/** A chain's totals for its node's tooltip (owner: "the totals can be shown on chain hover"). */
-export type ChainTotals = {
-  /** Transfers leaving the chain that are in flight, in all and per step. */
-  readonly leaving: number;
-  readonly perStep: readonly [number, number, number, number];
-  /** Transfers delivered into the chain today. */
-  readonly deliveredToday: number;
-  /** The dollar value leaving in flight, of the transfers with a price; null when none has one. */
+/** One lane's figures as a chain's tooltip shows them. */
+export type ChainLaneTotals = {
+  readonly inFlight: number;
+  /** The dollar value in flight, of the transfers with a price; null when none has one. */
   readonly usd: number | null;
+  readonly delivered24h: number;
+  readonly delivered7d: number;
+};
+
+/** A chain's totals (owner: "the in and out counts relative to each one as well as the total delivered in the last 24h", "as well as 7d totals"). */
+export type ChainTotals = {
+  /** The lane that starts at this chain. */
+  readonly out: ChainLaneTotals;
+  /** The other lane, arriving here. */
+  readonly in: ChainLaneTotals;
+  readonly delivered24h: number;
+  readonly delivered7d: number;
+};
+
+const laneTotals = (track: OrbitTrack | undefined): ChainLaneTotals => {
+  const priced = (track?.planets ?? []).filter((planet) => planet.usd !== null);
+  return {
+    inFlight: track?.planets.length ?? 0,
+    usd: priced.length === 0 ? null : priced.reduce((sum, planet) => sum + planet.usd!, 0),
+    delivered24h: track?.delivered24h ?? 0,
+    delivered7d: track?.delivered7d ?? 0,
+  };
 };
 
 /**
@@ -84,16 +105,12 @@ export type ChainTotals = {
  * @param index The chain.
  */
 export const chainTotals = (tracks: readonly OrbitTrack[], index: 0 | 1): ChainTotals => {
-  const leaving = tracks[index];
-  const arriving = tracks[1 - index];
-  const priced = (leaving?.planets ?? []).filter((planet) => planet.usd !== null);
-  return {
-    leaving: leaving?.planets.length ?? 0,
-    perStep: leaving?.counts ?? [0, 0, 0, 0],
-    deliveredToday: arriving?.deliveredToday ?? 0,
-    usd: priced.length === 0 ? null : priced.reduce((sum, planet) => sum + planet.usd!, 0),
-  };
+  const out = laneTotals(tracks[index]);
+  const back = laneTotals(tracks[1 - index]);
+  return { out, in: back, delivered24h: out.delivered24h + back.delivered24h, delivered7d: out.delivered7d + back.delivered7d };
 };
+
+const money = (usd: number | null): string => (usd === null ? "—" : `$${usdText(usd)}`);
 
 const placeTip = (node: HTMLElement, x: number, y: number): void => {
   const width = node.offsetWidth || 240;
@@ -105,7 +122,7 @@ const placeTip = (node: HTMLElement, x: number, y: number): void => {
 };
 
 /** The in-flight section: a heading with the list toggle, a line per direction, then the loop (or the list). */
-export const InFlightOrbits = ({ tracks, now, reducedMotion }: InFlightOrbitsProps) => {
+export const InFlightOrbits = ({ tracks, now, reducedMotion, loading = false }: InFlightOrbitsProps) => {
   const prefers = usePrefersReducedMotion();
   const reduced = reducedMotion ?? prefers;
   const [asList, setAsList] = useState(false);
@@ -118,6 +135,10 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion }: InFlightOrbitsPro
   const [tip, setTip] = useState<Tip | null>(null);
   const [chainTip, setChainTip] = useState<{ readonly index: 0 | 1; readonly x: number; readonly y: number } | null>(null);
   const chainTipNode = useRef<HTMLDivElement>(null);
+  const [sunTip, setSunTip] = useState<{ readonly lane: number; readonly step: number; readonly x: number; readonly y: number } | null>(null);
+  const sunTipNode = useRef<HTMLDivElement>(null);
+  const tracksRef = useRef(tracks);
+  tracksRef.current = tracks;
   const nowRef = useRef(now);
   nowRef.current = now;
   const out = tracks[0];
@@ -156,20 +177,29 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion }: InFlightOrbitsPro
         window.location.hash = messageHref(planet);
       },
       label: (planet) => planetLabel(planet, nowRef.current),
+      sunLabel: (lane, step) => {
+        const track = tracksRef.current[lane];
+        return `${ORBIT_STEPS[step]}, ${track === undefined ? "" : `${shortChain(track.from.name)} to ${shortChain(track.to.name)}`}: totals`;
+      },
+      onSunTip: setSunTip,
     });
     engine.current = created;
     return () => {
       created.destroy();
       engine.current = null;
       setTip(null);
+      setSunTip(null);
     };
     // The engine is rebuilt only when motion is switched; size and data reach it below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reduced]);
 
   const drawn = useMemo(() => tracks.flatMap((track) => track.drawn), [tracks]);
+  const inFlightIds = useMemo(() => new Set<string>(tracks.flatMap((track) => track.planets.map((planet) => planet.id))), [tracks]);
   useEffect(() => engine.current?.setGeometry(geometry), [geometry]);
-  useEffect(() => engine.current?.sync(drawn), [drawn, reduced]);
+  useEffect(() => {
+    if (!loading) engine.current?.sync(drawn, inFlightIds);
+  }, [drawn, reduced, loading]);
 
   useLayoutEffect(() => {
     if (tip !== null && tipNode.current !== null) placeTip(tipNode.current, tip.x, tip.y);
@@ -177,6 +207,9 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion }: InFlightOrbitsPro
   useLayoutEffect(() => {
     if (chainTip !== null && chainTipNode.current !== null) placeTip(chainTipNode.current, chainTip.x, chainTip.y);
   }, [chainTip]);
+  useLayoutEffect(() => {
+    if (sunTip !== null && sunTipNode.current !== null) placeTip(sunTipNode.current, sunTip.x, sunTip.y);
+  }, [sunTip]);
 
   if (out === undefined || back === undefined) return null;
   const first = out.from;
@@ -229,7 +262,6 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion }: InFlightOrbitsPro
                 {ORBIT_STEPS.map((label, step) => (
                   <text key={label} x={stepX(lane, step)} y={index === 0 ? geometry.yTop - 78 : geometry.yBottom + 86} textAnchor="middle" className="zb-orb-label" style={{ fontSize: geometry.labelSize }} aria-hidden="true">
                     <tspan className="zb-orb-count">{track.counts[step]}</tspan>
-                    {track.overflow[step] === 0 ? null : <tspan className="zb-orb-more">{` +${track.overflow[step]} more`}</tspan>}
                     <tspan x={stepX(lane, step)} dy={15}>
                       {label}
                     </tspan>
@@ -252,7 +284,7 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion }: InFlightOrbitsPro
               type="button"
               className="zb-orb-chain"
               style={pct(node.x, node.y)}
-              aria-label={`${shortChain(chain.name)}: ${totals.leaving} leaving in flight, ${totals.deliveredToday} delivered here today${totals.usd === null ? "" : `, about $${usdText(totals.usd)} in flight`}`}
+              aria-label={`${shortChain(chain.name)} (${chain.nativeSymbol}): out ${totals.out.inFlight} in flight, in ${totals.in.inFlight} in flight; delivered ${totals.delivered24h} in the last 24 h, ${totals.delivered7d} in the last 7 days`}
               onPointerEnter={(event) => show(event.currentTarget)}
               onPointerLeave={() => setChainTip(null)}
               onFocus={(event) => show(event.currentTarget)}
@@ -288,16 +320,41 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion }: InFlightOrbitsPro
                   <div className="zb-orb-tip-amt">
                     <TokenIcon subject={{ chainId: chain.chainId }} symbol={chain.name} size={20} decorative />
                     <b>{shortChain(chain.name)}</b>
+                    <span className="zb-orb-tip-muted">{chain.nativeSymbol}</span>
                   </div>
-                  <div>{totals.leaving} leaving in flight</div>
-                  <div className="zb-orb-tip-steps">{ORBIT_STEPS.map((label, step) => `${label} ${totals.perStep[step]}`).join(" · ")}</div>
-                  <div>{totals.deliveredToday} delivered here today</div>
-                  {totals.usd === null ? null : <div className="zb-orb-tip-eta">≈ ${usdText(totals.usd)} in flight</div>}
+                  <table className="zb-orb-tip-table">
+                    <thead>
+                      <tr>
+                        <th scope="col" />
+                        <th scope="col">In flight</th>
+                        <th scope="col">Value</th>
+                        <th scope="col">24 h</th>
+                        <th scope="col">7 d</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {([["Out", totals.out], ["In", totals.in]] as const).map(([name, lane]) => (
+                        <tr key={name}>
+                          <th scope="row">{name}</th>
+                          <td>{lane.inFlight}</td>
+                          <td>{money(lane.usd)}</td>
+                          <td>{lane.delivered24h}</td>
+                          <td>{lane.delivered7d}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="zb-orb-tip-steps">
+                    Delivered: {totals.delivered24h} in the last 24 h · {totals.delivered7d} in the last 7 days
+                  </div>
                 </div>
               );
             })(),
             document.body,
           )}
+      {sunTip === null || tracks[sunTip.lane] === undefined
+        ? null
+        : createPortal(<SunTip ref={sunTipNode} track={tracks[sunTip.lane]!} step={sunTip.step as OrbitStep} />, document.body)}
       {shown === null || tip === null
         ? null
         : createPortal(
@@ -323,3 +380,66 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion }: InFlightOrbitsPro
     </div>
   );
 };
+
+/**
+ * A step's summary, on its sun (owner: "hovering over the central planet of each should show the profitability and
+ * aggregate stats. how many of each token and how much in fees each one is estimated to pay").
+ */
+export const SunTip = forwardRef<HTMLDivElement, { readonly track: OrbitTrack; readonly step: OrbitStep }>(({ track, step }, ref) => {
+  const summary = stepSummary(track, step);
+  const est = summary.feesEstimated ? " est." : "";
+  return (
+    <div ref={ref} className="zb-orb-tip zb-orb-sun-tip" role="tooltip">
+      <div className="zb-orb-tip-amt">
+        <b>{ORBIT_STEPS[step]}</b>
+        <span className="zb-orb-tip-muted">
+          {shortChain(track.from.name)} → {shortChain(track.to.name)}
+        </span>
+      </div>
+      <div>
+        {summary.count} {summary.count === 1 ? "transfer" : "transfers"} · {money(summary.usd)}
+      </div>
+      {summary.tokens.length === 0 ? null : (
+        <table className="zb-orb-tip-table">
+          <thead>
+            <tr>
+              <th scope="col">Token</th>
+              <th scope="col">Amount</th>
+              <th scope="col">Value</th>
+              <th scope="col">Fees{est}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {summary.tokens.map((line) => (
+              <tr key={line.key}>
+                <th scope="row">
+                  <span className="zb-orb-tip-tok">
+                    {line.token === null ? null : <TokenIcon subject={{ chainId: track.from.chainId, address: line.token.address }} symbol={line.token.symbol} size={14} decorative />}
+                    {line.count}× {line.token?.symbol ?? "message"}
+                  </span>
+                </th>
+                <td>{line.token === null || line.amount === null ? "—" : <Num text={shortAmountText(line.amount, line.token.decimals)} />}</td>
+                <td>{money(line.usd)}</td>
+                <td>{money(line.feesUsd)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div>
+        Fees{est}: {money(summary.feesUsd)}
+      </div>
+      <div>
+        Cost to deliver all: {money(summary.costUsd)}
+        {summary.costUsd === null ? null : <span className="zb-orb-tip-muted"> ({summary.count} × gas + one $0.025 proof)</span>}
+      </div>
+      {summary.profitUsd === null ? null : (
+        <div className={summary.profitUsd >= 0 ? "zb-orb-tip-good" : "zb-orb-tip-eta"}>
+          {summary.profitUsd >= 0 ? "Profit" : "Loss"} for a deliverer: {money(Math.abs(summary.profitUsd))}
+          {summary.profitShare === null ? "" : ` (${Math.round(summary.profitShare * 100)} % of fees)`}
+        </div>
+      )}
+    </div>
+  );
+});
+SunTip.displayName = "SunTip";

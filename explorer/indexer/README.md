@@ -105,6 +105,14 @@ In flight means `sent`, `waiting_for_finality` or `covered`.
 
 `volume24h` sums the amount of transfers sent in the last 24 hours, per source chain and source token. `lastHeadUpdates[].update` is null when the light client has not stored a head.
 
+`GET /api/delivered` counts, per direction, the messages delivered in the last 24 hours and the last 7 days (by the delivery's timestamp), with the value per source token in base units (the dapp prices it). One grouped query over the stored messages; it reads no new data, so it needs no re-index. Query: `now` replaces the clock (tests).
+
+```json
+{ "now": 1790000000,
+  "directions": [{ "sourceChainId": 1, "destinationChainId": 369, "last24h": 12, "last7d": 80,
+                   "byToken": [{ "token": { "...": "token object" }, "value24h": "1150000", "value7d": "9000000" }] }] }
+```
+
 `GET /api/heads` returns `{ heads: [...] }`, one per side. The light client on a side tracks the other chain: `trackedChainId`. Fields:
 
 | Field | Meaning |

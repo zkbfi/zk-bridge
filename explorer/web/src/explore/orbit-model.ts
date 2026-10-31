@@ -5,54 +5,75 @@
  * have enough information to visually show what is crossing the bridge and the size of it as well"); its size is its
  * dollar value on a log scale. Pure: the drawing lives in orbit-engine.ts.
  *
- * The status → step mapping (statuses from explorer/shared/src/status.ts):
+ * The steps (owner: "a proof posted in my mind is just that it shows up on a msgboard or that the client has it and has
+ * validated it. not that it has been posted on chain. since anyone can post it on chain and they are incented to do so
+ * during their own delivery"), from the statuses of explorer/shared/src/status.ts and the latest valid proof:
  *
- * | Status                                   | Step         | What the transfer waits for                        |
- * | ---------------------------------------- | ------------ | -------------------------------------------------- |
- * | `sent`                                   | Sent         | its block to become final on the source chain      |
- * | `waiting_for_finality`                   | Final        | final; waits for a light-client update to cover it |
- * | `covered`, no destination transaction    | Proof posted | a head covers it; waits for a deliverer            |
- * | `covered`, with a destination transaction | Delivering  | a delivery is seen; its outcome is not settled     |
- * | `delivered`, `failed_call`, `release_failed` | none     | it has left the track                              |
+ * | The transfer                                                         | Step        | It waits for              |
+ * | -------------------------------------------------------------------- | ----------- | ------------------------- |
+ * | `covered` (a stored head covers it), or a valid proof covers it      | Proof ready | a deliverer               |
+ * | `waiting_for_finality`                                               | Final       | a proof that covers it    |
+ * | `sent`                                                               | Sent        | finality on its chain     |
+ * | `delivered`, `failed_call`, `release_failed`                         | none        | it has left the loop      |
  *
- * The indexer has no status between `covered` and the end states, so Delivering holds only a covered message whose
- * delivery transaction the data source already knows while its status has not settled; with the indexer's answers it
- * is usually empty.
+ * "A valid proof covers it": the latest proof of its direction (the msgboard indexer's, verified on intake, else the
+ * msgboard node's; read as the proof panel reads it) ends at a slot whose time is at or after the send. There is no
+ * step for a delivery under way: a delivery posts the proof and delivers in one transaction, so nothing reliable
+ * tells it apart from "proof ready" until it lands.
  */
 import type { ChainConfig, Direction, FeedItem, PairConfig, TokenInfo } from "@terminal/model/types";
+import { DEFAULT_CAP_WAD, defaultFee, deliveryGasUsd, PROOF_COST_USD, totalCostUsd, type CostInput } from "@zk-bridge/shared";
 import { chainsFor, transferSteps } from "../bridge/bridge-model";
 
-/** The four steps of the track, left to right. */
-export const ORBIT_STEPS = ["Sent", "Final", "Proof posted", "Delivering"] as const;
+/** The three steps of a lane, in order. */
+export const ORBIT_STEPS = ["Sent", "Final", "Proof ready"] as const;
 
-/** A step's index on the track. */
-export type OrbitStep = 0 | 1 | 2 | 3;
+/** A step's index on a lane. */
+export type OrbitStep = 0 | 1 | 2;
+
+/** Counts per step. */
+export type StepCounts = readonly [number, number, number];
 
 /** What a transfer at each step waits for, for the list and screen readers. */
 export const ORBIT_STEP_WORDS: Readonly<Record<OrbitStep, string>> = {
   0: "Sent, waiting for finality",
-  1: "Final, waiting for the proof",
-  2: "Proof posted, waiting for a deliverer",
-  3: "Delivering",
+  1: "Final, waiting for a proof",
+  2: "Proof ready, waiting for a deliverer",
 };
 
 /**
- * The step a transfer waits at, or null once it has left the track (delivered or failed).
+ * The step a transfer waits at, or null once it has left the loop (delivered or failed).
  *
- * @param item The transfer's status and destination transaction.
+ * @param item The transfer.
+ * @param proofCovers Whether the latest valid proof of its direction covers it (absent: no proof known).
  */
-export const orbitStepOf = (item: Pick<FeedItem, "status" | "destinationTransactionHash">): OrbitStep | null => {
+export const orbitStepOf = (item: Pick<FeedItem, "status" | "direction" | "sentAt">, proofCovers?: (item: Pick<FeedItem, "direction" | "sentAt">) => boolean): OrbitStep | null => {
   switch (item.status) {
-    case "sent":
-      return 0;
-    case "waiting_for_finality":
-      return 1;
     case "covered":
-      return item.destinationTransactionHash === null ? 2 : 3;
+      return 2;
+    case "sent":
+    case "waiting_for_finality":
+      if (proofCovers?.(item) === true) return 2;
+      return item.status === "sent" ? 0 : 1;
     default:
       return null;
   }
 };
+
+/** A latest valid proof's reach: the time of its new slot (genesis + newSlot × seconds per slot), per direction. */
+export type ProofReach = Readonly<Partial<Record<Direction, number>>>;
+
+/**
+ * Whether a proof covers a send: the proof's new slot starts at or after the send's block time.
+ *
+ * @param reach The proofs' reach by direction.
+ */
+export const proofCoversWith =
+  (reach: ProofReach) =>
+  (item: Pick<FeedItem, "direction" | "sentAt">): boolean => {
+    const until = reach[item.direction];
+    return until !== undefined && until >= item.sentAt;
+  };
 
 /** One of the four planet colours (intensities of the ember hue): --zb-planet-1 … --zb-planet-4. */
 export type PlanetTone = 1 | 2 | 3 | 4;
@@ -94,6 +115,12 @@ export type Planet = {
   readonly sentAt: number;
   /** Seconds left, from the step estimates; 0 means any moment. */
   readonly leftSeconds: number;
+  /**
+   * The fee the transfer pays its deliverer, in USD, or null without a price or a delivery cost. The feed does not
+   * carry the signed fee, so it is the default fee rule's estimate (`estimated`).
+   */
+  readonly feeUsd: number | null;
+  readonly feeEstimated: boolean;
 };
 
 /** One direction's track. */
@@ -106,14 +133,20 @@ export type OrbitTrack = {
   /** The planets drawn: at most `cap` per step. */
   readonly drawn: readonly Planet[];
   /** Transfers in flight at each step. */
-  readonly counts: readonly [number, number, number, number];
-  /** Transfers at each step that are not drawn (the "+N" label). */
-  readonly overflow: readonly [number, number, number, number];
-  readonly deliveredToday: number;
+  readonly counts: StepCounts;
+  /** Delivered in the last 24 hours and the last 7 days (from the indexer's aggregate, else from the delivered transfers given). */
+  readonly delivered24h: number;
+  readonly delivered7d: number;
+  /** What one delivery on the destination costs in gas today, in USD, or null when unknown. */
+  readonly deliveryGasUsd: number | null;
 };
 
-/** The planets drawn at most per step. */
-export const PLANET_CAP = 60;
+/**
+ * The planets drawn at most per step (owner: "anything beyond 32 at a single station, should only show the orbiting tokens
+ * of the first 32. the counts can still increase, the stats can stay the same"): the 32 that arrived first (oldest
+ * first, so planets don't swap in and out between polls). Counts and stats include every transfer.
+ */
+export const PLANET_CAP = 32;
 
 /**
  * Seconds left for a transfer at a step, from the step estimates (bridge-model's transferSteps): what the steps after
@@ -127,8 +160,9 @@ export const PLANET_CAP = 60;
 export const orbitLeftSeconds = (step: OrbitStep, source: ChainConfig, destination: ChainConfig, ageSeconds: number): number => {
   const plan = transferSteps(source, destination).map((row) => row.seconds);
   const total = plan.reduce((sum, seconds) => sum + seconds, 0);
-  // The plan's rows: sent, final, proof, the light client checks, delivered. A step waits for the row after it.
-  const waitsFor = [1, 2, 4, 4][step]!;
+  // The plan's rows: sent, final, proof, the light client checks, delivered. Sent waits for final, Final for the proof,
+  // Proof ready for the delivery (which posts the proof on the way).
+  const waitsFor = [1, 2, 3][step]!;
   const after = plan.slice(waitsFor + 1).reduce((sum, seconds) => sum + seconds, 0);
   return Math.max(0, Math.round(Math.max(after, total - ageSeconds)));
 };
@@ -138,16 +172,20 @@ export type OrbitInput = {
   readonly pair: PairConfig;
   /** Transfers in flight (any order; repeats are dropped). Ones that have left the track are ignored. */
   readonly inFlight: readonly FeedItem[];
-  /** Delivered transfers; those delivered at or after `dayStart` count as delivered today. */
+  /** Delivered transfers; the 24 hour and 7 day counts come from them when `deliveredCounts` does not say. */
   readonly delivered: readonly FeedItem[];
+  /** The indexer's delivered counts per direction (GET /api/delivered), or null when it has none. */
+  readonly deliveredCounts?: ReadonlyMap<Direction, { readonly last24h: number; readonly last7d: number }> | null;
+  /** The delivery cost inputs of a destination chain (gas, base fee, priority fee, native price), or null. */
+  readonly costOf?: (destinationChainId: number) => CostInput | null;
+  /** Whether the latest valid proof of a transfer's direction covers it (see {@link proofCoversWith}). */
+  readonly proofCovers?: (item: Pick<FeedItem, "direction" | "sentAt">) => boolean;
   /** A token's icon URL (TokenIcon's source), or null. */
   readonly iconOf?: (token: TokenInfo) => string | null;
   /** A token's dollar price, or null. */
   readonly priceOf: (token: TokenInfo) => number | null;
   /** Unix seconds now. */
   readonly now: number;
-  /** Unix seconds of the start of today. */
-  readonly dayStart: number;
   readonly cap?: number;
 };
 
@@ -169,10 +207,12 @@ export const orbitTracks = (input: OrbitInput): readonly OrbitTrack[] => {
   const unique = input.inFlight.filter((item) => (seen.has(item.id) ? false : (seen.add(item.id), true)));
   return (["first-to-second", "second-to-first"] as const).map((direction): OrbitTrack => {
     const { source, destination } = chainsFor(input.pair, direction);
+    const cost = input.costOf?.(destination.chainId) ?? null;
+    const totalCost = cost === null ? null : totalCostUsd(cost);
     const planets: Planet[] = [];
     for (const item of unique) {
       if (item.direction !== direction) continue;
-      const step = orbitStepOf(item);
+      const step = orbitStepOf(item, input.proofCovers);
       if (step === null) continue;
       const usd = usdOf(item, input.priceOf);
       planets.push({
@@ -189,18 +229,120 @@ export const orbitTracks = (input: OrbitInput): readonly OrbitTrack[] => {
         recipient: item.recipient,
         sentAt: item.sentAt,
         leftSeconds: orbitLeftSeconds(step, source, destination, input.now - item.sentAt),
+        feeUsd: usd === null || totalCost === null ? null : estimatedFeeUsd(usd, totalCost),
+        feeEstimated: true,
       });
     }
     planets.sort((a, b) => a.step - b.step || a.sentAt - b.sentAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-    const counts: [number, number, number, number] = [0, 0, 0, 0];
+    const counts: [number, number, number] = [0, 0, 0];
     for (const planet of planets) counts[planet.step]++;
-    const drawnPer: [number, number, number, number] = [0, 0, 0, 0];
+    const drawnPer: [number, number, number] = [0, 0, 0];
     const drawn = planets.filter((planet) => drawnPer[planet.step]! < cap && (drawnPer[planet.step]++, true));
-    const overflow = counts.map((count) => Math.max(0, count - cap)) as unknown as [number, number, number, number];
-    const deliveredIds = new Set<string>();
-    for (const item of input.delivered) if (item.direction === direction && item.deliveredAt !== null && item.deliveredAt >= input.dayStart) deliveredIds.add(item.id);
-    return { direction, from: source, to: destination, planets, drawn, counts, overflow, deliveredToday: deliveredIds.size };
+    const within = (seconds: number): number => {
+      const ids = new Set<string>();
+      for (const item of input.delivered) if (item.direction === direction && item.deliveredAt !== null && item.deliveredAt >= input.now - seconds) ids.add(item.id);
+      return ids.size;
+    };
+    const aggregate = input.deliveredCounts === undefined || input.deliveredCounts === null ? null : (input.deliveredCounts.get(direction) ?? { last24h: 0, last7d: 0 });
+    return {
+      direction,
+      from: source,
+      to: destination,
+      planets,
+      drawn,
+      counts,
+      delivered24h: aggregate?.last24h ?? within(86_400),
+      delivered7d: aggregate?.last7d ?? within(7 * 86_400),
+      deliveryGasUsd: cost === null ? null : fromE18(deliveryGasUsd(cost)),
+    };
   });
+};
+
+const fromE18 = (value: bigint): number => Number(value) / 1e18;
+const toE18 = (value: number): bigint => BigInt(Math.round(value * 1e6)) * 10n ** 12n;
+
+/**
+ * The default fee rule's fee for a transfer (fee-rules' defaultFee at the Normal gas level, the default 1% cap), in USD.
+ *
+ * @param usd The transfer's value.
+ * @param totalCostE18 Its delivery's total cost, USD × 1e18 (fee-rules' totalCostUsd).
+ */
+export const estimatedFeeUsd = (usd: number, totalCostE18: bigint): number | null => {
+  const fee = defaultFee({ amountUsd: toE18(usd), costUsd: totalCostE18, capWad: DEFAULT_CAP_WAD }).feeUsd;
+  return fee === null ? null : fromE18(fee);
+};
+
+/** The proof that one batch of deliveries shares ($0.025). */
+export const PROOF_USD = fromE18(PROOF_COST_USD);
+
+/** One token's line in a step's summary. */
+export type StepTokenLine = {
+  readonly key: string;
+  readonly token: TokenInfo | null;
+  readonly count: number;
+  /** The summed amount in base units, or null for messages. */
+  readonly amount: bigint | null;
+  /** The summed value of the priced transfers, or null when none has a price. */
+  readonly usd: number | null;
+  /** The summed fees of the transfers with a fee, or null when none has one. */
+  readonly feesUsd: number | null;
+};
+
+/** What a step's sun shows: its transfers by token, their fees, and what delivering them all would earn a deliverer. */
+export type StepSummary = {
+  readonly step: OrbitStep;
+  readonly direction: Direction;
+  readonly count: number;
+  readonly usd: number | null;
+  /** By token, most value first (unpriced last). */
+  readonly tokens: readonly StepTokenLine[];
+  readonly feesUsd: number | null;
+  /** True when any fee is an estimate. */
+  readonly feesEstimated: boolean;
+  /** Delivering them all: N × one delivery's gas + one shared $0.025 proof; null without the gas. */
+  readonly costUsd: number | null;
+  /** Fees less the cost (positive is a profit), and its share of the fees; null without both. */
+  readonly profitUsd: number | null;
+  readonly profitShare: number | null;
+};
+
+const add = (a: number | null, b: number | null): number | null => (b === null ? a : (a ?? 0) + b);
+
+/**
+ * A step's summary for its sun's tooltip.
+ *
+ * @param track The direction's track.
+ * @param step The step.
+ */
+export const stepSummary = (track: OrbitTrack, step: OrbitStep): StepSummary => {
+  const planets = track.planets.filter((planet) => planet.step === step);
+  const lines = new Map<string, { token: TokenInfo | null; count: number; amount: bigint | null; usd: number | null; feesUsd: number | null }>();
+  for (const planet of planets) {
+    const key = planet.token === null ? "message" : planet.token.address.toLowerCase();
+    const line = lines.get(key) ?? { token: planet.token, count: 0, amount: planet.amount === null ? null : 0n, usd: null, feesUsd: null };
+    line.count++;
+    if (line.amount !== null && planet.amount !== null) line.amount += planet.amount;
+    line.usd = add(line.usd, planet.usd);
+    line.feesUsd = add(line.feesUsd, planet.feeUsd);
+    lines.set(key, line);
+  }
+  const tokens = [...lines.entries()].map(([key, line]) => ({ key, ...line })).sort((a, b) => (b.usd ?? -1) - (a.usd ?? -1) || b.count - a.count);
+  const usd = tokens.reduce<number | null>((sum, line) => add(sum, line.usd), null);
+  const feesUsd = tokens.reduce<number | null>((sum, line) => add(sum, line.feesUsd), null);
+  const costUsd = track.deliveryGasUsd === null || planets.length === 0 ? null : planets.length * track.deliveryGasUsd + PROOF_USD;
+  const profitUsd = feesUsd === null || costUsd === null ? null : feesUsd - costUsd;
+  return {
+    step,
+    direction: track.direction,
+    count: planets.length,
+    usd,
+    tokens,
+    feesUsd,
+    feesEstimated: planets.some((planet) => planet.feeUsd !== null && planet.feeEstimated),
+    costUsd,
+    profitUsd,
+    profitShare: profitUsd === null || feesUsd === null || feesUsd === 0 ? null : profitUsd / feesUsd,
+  };
 };
 
 /** The start of the local day containing `now`, in unix seconds. */

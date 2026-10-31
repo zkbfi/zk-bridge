@@ -4,6 +4,7 @@
  * strictly; a value the indexer does not have stays null and shows as "—".
  */
 import { getAddress, type Address, type Hex } from "viem";
+import { secondsPerSlot } from "@zk-bridge/shared";
 
 /** A light-client update: one proof posted on a chain. `number` counts from 1 per chain, oldest first. */
 export type ProofRow = {
@@ -49,6 +50,34 @@ export type HistoryRow = {
   readonly status: string | null;
 };
 
+/** One direction's delivered counts. */
+export type DeliveredCounts = { readonly sourceChainId: number; readonly last24h: number; readonly last7d: number };
+
+/** Parses `/api/delivered`. */
+export const parseDelivered = (body: unknown): readonly DeliveredCounts[] =>
+  array(record(body, "delivered answer").directions, "delivered directions").map((item) => {
+    const row = record(item, "delivered direction");
+    return { sourceChainId: int(row.sourceChainId, "sourceChainId"), last24h: int(row.last24h, "last24h"), last7d: int(row.last7d, "last7d") };
+  });
+
+/** A tracked beacon chain's clock, from a light client's stored head: the time of slot 0. */
+export type BeaconClock = { readonly trackedChainId: number; readonly genesisTime: number; readonly secondsPerSlot: number };
+
+/**
+ * Parses `/api/heads` into the tracked chains' clocks: the stored head's slot and its slot time give the genesis
+ * (slot time − slot × seconds per slot). A head without a slot time gives none.
+ */
+export const parseBeaconClocks = (body: unknown): readonly BeaconClock[] =>
+  array(record(body, "heads answer").heads, "heads").flatMap((item) => {
+    const row = record(item, "head");
+    const slot = intOrNull(row.storedHeadSlot, "storedHeadSlot");
+    const slotTime = intOrNull(row.storedHeadSlotTimestamp, "storedHeadSlotTimestamp");
+    if (slot === null || slotTime === null) return [];
+    const trackedChainId = int(row.trackedChainId, "trackedChainId");
+    const seconds = secondsPerSlot(trackedChainId);
+    return [{ trackedChainId, genesisTime: slotTime - slot * seconds, secondsPerSlot: seconds }];
+  });
+
 /** What Explore reads from the indexer. */
 export interface ExploreSource {
   proofs(): Promise<readonly ProofRow[]>;
@@ -57,6 +86,10 @@ export interface ExploreSource {
   history(limit: number): Promise<readonly HistoryRow[]>;
   /** The count of escrow entries, undelivered messages and release events (Explore's browse counts). */
   counts(): Promise<{ readonly escrowed: number; readonly undelivered: number; readonly releases: number }>;
+  /** Per direction (by source chain), the messages delivered in the last 24 hours and 7 days (`GET /api/delivered`). */
+  delivered(): Promise<readonly DeliveredCounts[]>;
+  /** The tracked beacon chains' clocks, from the light clients' stored heads (`GET /api/heads`). */
+  beaconClocks(): Promise<readonly BeaconClock[]>;
 }
 
 type Json = Record<string, unknown>;
@@ -177,6 +210,8 @@ export const createIndexerExploreSource = (baseUrl: () => string | null, request
     gates: async () => parseGates(await get("/api/gate")),
     lightClientCosts: async () => parseLightClientCosts(await get("/api/light-client-costs")),
     history: async (limit) => parseHistory(await get(`/api/history?limit=${limit}`)),
+    delivered: async () => parseDelivered(await get("/api/delivered")),
+    beaconClocks: async () => parseBeaconClocks(await get("/api/heads")),
     counts: async () => {
       const [escrow, undelivered, releases] = await Promise.all([get("/api/escrow"), get("/api/undelivered"), get("/api/release-events")]);
       return {
