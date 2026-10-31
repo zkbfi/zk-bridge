@@ -1,13 +1,18 @@
-import { Box, Button, Flex, Text } from "@chakra-ui/react";
-import { useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { maskUrl, redactConnectionText, type ConnectionSettings } from "@zk-bridge/shared";
+import { DEFAULT_AUTO_CAP_PERCENT, feeCapProblem, loadFeeCap, saveFeeCap } from "../bridge/fee-cap";
 import { loadImageServer, saveImageServer } from "../bridge/image-server";
-import { loadFeeCap, saveFeeCap } from "../bridge/fee-cap";
-import { DEFAULT_IMAGE_SERVER } from "../bridge/image-source";
-import { useServices } from "./services";
+import { Sheet } from "../bridge/Sheet";
+import { TokenIcon } from "../bridge/TokenIcon";
+import { loadUserConnections, saveUserConnections, type ConnectionStorage, type SaveReason } from "../config/connection-storage";
+import { findSecretLikeValues } from "../config/secret-scan";
+import { originIsShared } from "../config/shared-origin";
 import { clearRecent, browserStorage } from "../search/recent-items";
 import type { ThemeChoice } from "../search/search-model";
-import { Modal } from "../ui/Modal";
-import { DataRow, Mono, TextInput } from "../ui/primitives";
+import { INSECURE_ENDPOINT_WARNING, KEY_LIKE_NOTICE } from "../views/ConnectionsView";
+import { useServices } from "./services";
+import { currentValues, defaultValues, fieldProblem, pageProtocolOf, settingFields, settingsFromDrafts, textOf, type FieldValues, type SettingField } from "./settings-model";
+import { useServiceProbe } from "./use-service-probe";
 
 /** Props of {@link SettingsDialog}. */
 export type SettingsDialogProps = {
@@ -15,9 +20,18 @@ export type SettingsDialogProps = {
   readonly onTheme: (theme: ThemeChoice) => void;
   readonly onRecentCleared: () => void;
   readonly onClose: () => void;
+  /** Where the connection settings live. Tests pass their own. */
+  readonly storage?: ConnectionStorage | null;
+  /** The page's location, for its protocol and whether a gateway shares its origin. Tests pass their own. */
+  readonly location?: Pick<Location, "protocol" | "hostname" | "pathname">;
 };
 
-const THEME_LABELS: Readonly<Record<ThemeChoice, string>> = { system: "System", light: "Light", dark: "Dark", mono: "Mono" };
+const THEMES: readonly (readonly [ThemeChoice, string])[] = [
+  ["system", "System"],
+  ["light", "Light"],
+  ["dark", "Dark"],
+  ["mono", "Mono"],
+];
 
 /**
  * Shows only the host of an endpoint. A URL can carry a path that the operator would rather not repeat on screen.
@@ -32,126 +46,242 @@ export const hostOf = (url: string): string => {
   }
 };
 
+const NO_SUBSCRIPTION = () => () => undefined;
+
+/** The value after it has stopped changing for a moment, so a live check does not run on every key. */
+const useSettled = (value: string, milliseconds = 600): string => {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), milliseconds);
+    return () => clearTimeout(timer);
+  }, [value, milliseconds]);
+  return settled;
+};
+
+/** The live check of one field: a dot and the latency, "down", or nothing to check. */
+const Check = ({ field, url }: { readonly field: SettingField; readonly url: string | null }) => {
+  const state = useServiceProbe(url, field.probe);
+  if (url === null) return null;
+  const text = state.ok === null ? "…" : state.ok ? (field.probe.kind === "image" ? "ok" : `${state.ms} ms`) : "down";
+  return (
+    <span className="zb-ok" data-ok={state.ok === null ? "wait" : String(state.ok)} title={state.ok === false ? state.reason : undefined} role="status" aria-label={`${field.label}: ${state.ok === null ? "checking" : state.ok ? `ok, ${text}` : "down"}`}>
+      <i aria-hidden="true" />
+      {text}
+    </span>
+  );
+};
+
+const ResetIcon = () => (
+  <svg viewBox="0 0 16 16" className="zb-icon" aria-hidden="true" focusable="false">
+    <path d="M3.5 6.5A5 5 0 1 1 3 9.5M3.5 2.5v4h4" />
+  </svg>
+);
+
+type FieldProps = {
+  readonly field: SettingField;
+  readonly value: string;
+  readonly defaultValue: string;
+  readonly problem: string | undefined;
+  readonly onChange: (value: string) => void;
+};
+
+/** One endpoint: the chain icon or the service name, the URL, its live check, and a reset when it differs from the default. */
+const Field = ({ field, value, defaultValue, problem, onChange }: FieldProps) => {
+  const [focused, setFocused] = useState(false);
+  const settled = useSettled(value.trim());
+  const checkable = settled !== "" && fieldProblem(field, settled, defaultValue) === null ? settled : null;
+  // A URL that looks like it holds a key shows masked until the field is in use.
+  const masked = !focused && value !== "" && findSecretLikeValues({ url: value }).length > 0;
+  return (
+    <>
+      <div className="zb-fld" data-problem={problem === undefined ? undefined : "true"}>
+        {field.chainId === undefined ? <span className="zb-fld-k">{field.short ?? field.label}</span> : <TokenIcon subject={{ chainId: field.chainId }} symbol="" size={18} decorative />}
+        <input
+          aria-label={field.label}
+          aria-invalid={problem === undefined ? undefined : true}
+          spellCheck={false}
+          autoComplete="off"
+          inputMode="url"
+          placeholder="not set"
+          value={masked ? maskUrl(value) : value}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        <Check field={field} url={checkable} />
+        {value.trim() === defaultValue ? null : (
+          <button type="button" className="zb-fld-reset" aria-label={`Reset ${field.label}`} title="Back to the default" onClick={() => onChange(defaultValue)}>
+            <ResetIcon />
+          </button>
+        )}
+      </div>
+      {problem === undefined ? null : (
+        <p className="zb-fld-err" role="alert">
+          {problem}
+        </p>
+      )}
+    </>
+  );
+};
+
+/** What to say after a save that the browser did not fully keep, or null. */
+export const keptNotice = (reason: SaveReason): string | null => {
+  if (reason === "stored") return null;
+  if (reason === "shared-origin") return "This gateway is shared with other sites, so your settings last for this visit only.";
+  if (reason === "key-like-url") return KEY_LIKE_NOTICE;
+  return "The browser did not keep your settings; they last until the page closes.";
+};
+
 /**
- * The settings: the configuration that this page was built with, the theme, and the recent list.
+ * The settings (mockup pulse-v5.html, the "settings" panel; spec "Settings (owner)" and "Every endpoint is
+ * swappable"): the theme, an RPC per chain, the image server and every other outside service, each with its default,
+ * a live check and a reset; then the fee cap and the recent list. One Save keeps them all.
  *
  * @param props The theme and the handlers.
  */
-export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose }: SettingsDialogProps) => {
-  const { configuration, pair } = useServices();
-  const [images, setImages] = useState(loadImageServer);
-  const [imagesNote, setImagesNote] = useState<string | null>(null);
+export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose, storage: storageProp, location = window.location }: SettingsDialogProps) => {
+  const { configuration, pair, connection, probe } = useServices();
+  const storage = storageProp === undefined ? browserStorage() : storageProp;
+  const fields = useMemo(() => settingFields(pair), [pair]);
+  const defaults = useMemo(() => defaultValues({ fields, pair, configuration, sharedPair: connection?.sharedPair }), [fields, pair, configuration, connection]);
+  const liveUser = useSyncExternalStore(connection?.subscribe ?? NO_SUBSCRIPTION, () => connection?.user() ?? null);
+  const [storedUser, setStoredUser] = useState<ConnectionSettings>(() => liveUser ?? loadUserConnections(storage));
+  const user = liveUser ?? storedUser;
+  const [drafts, setDrafts] = useState<FieldValues>(() => currentValues(fields, defaults, user, loadImageServer()));
   const [cap, setCap] = useState(() => String(loadFeeCap()));
-  const [capNote, setCapNote] = useState<string | null>(null);
-  const rpcRows = [pair.first, pair.second].map((chain) => ({ chain, url: configuration.rpcUrls[chain.chainId] }));
+  const [problems, setProblems] = useState<Readonly<Record<string, string>>>({});
+  const [status, setStatus] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const fixture = configuration.dataMode === "fixture";
+
+  const edit = (id: string, value: string): void => {
+    setDrafts((current) => ({ ...current, [id]: value }));
+    setProblems(({ [id]: _dropped, ...rest }) => rest);
+    setStatus(null);
+  };
+
+  const save = async (): Promise<void> => {
+    const outcome = settingsFromDrafts({ fields, drafts, defaults, user, pageProtocol: pageProtocolOf(location.protocol) });
+    const found: Record<string, string> = { ...outcome.problems };
+    const capProblem = feeCapProblem(cap);
+    if (capProblem !== null) found.cap = capProblem;
+    setBusy(true);
+    try {
+      // A new RPC must serve its chain before it replaces the one in use, as on the connections page.
+      const before = currentValues(fields, defaults, user, loadImageServer());
+      for (const field of fields) {
+        const text = textOf(drafts, field.id).trim();
+        if (field.probe.kind !== "rpc" || found[field.id] !== undefined || text === "" || text === before[field.id]) continue;
+        const result = await probe(text, field.probe);
+        if (!result.ok) found[field.id] = `Not saved. ${redactConnectionText(result.reason, [text])}`;
+      }
+    } finally {
+      setBusy(false);
+    }
+    setProblems(found);
+    if (Object.keys(found).length > 0) return setStatus("Not saved: fix the marked fields.");
+    saveFeeCap(cap.trim() === String(DEFAULT_AUTO_CAP_PERCENT) ? null : cap);
+    saveImageServer(outcome.imageServer);
+    const kept = saveUserConnections(storage, outcome.user);
+    if (connection === null) setStoredUser(outcome.user);
+    else connection.apply(outcome.user);
+    const notes = [outcome.insecure.length === 0 ? null : INSECURE_ENDPOINT_WARNING, keptNotice(kept.reason)].filter((note) => note !== null);
+    setStatus(notes.length === 0 ? "Saved." : `Saved. ${notes.join(" ")}`);
+  };
+
+  const resetAll = (): void => {
+    setDrafts(defaults);
+    setCap(String(DEFAULT_AUTO_CAP_PERCENT));
+    setProblems({});
+    setStatus("Defaults filled in. Save to keep them.");
+  };
+
+  const section = (name: SettingField["section"]) =>
+    fields
+      .filter((field) => field.section === name)
+      .map((field) => <Field key={field.id} field={field} value={textOf(drafts, field.id)} defaultValue={textOf(defaults, field.id)} problem={problems[field.id]} onChange={(value) => edit(field.id, value)} />);
+
   return (
-    <Modal title="Settings" onClose={onClose}>
-      <Box>
-        <Text fontWeight="medium" marginBottom="1">
-          Configuration
-        </Text>
-        <DataRow label="Data">{configuration.dataMode === "fixture" ? "sample data, nothing reaches a network" : "live"}</DataRow>
-        <DataRow label="Pair">
-          <Mono>{pair.id}</Mono>
-        </DataRow>
-        <DataRow label="Indexer">{configuration.dataMode === "fixture" ? "none" : configuration.indexerUrl === null ? "default" : hostOf(configuration.indexerUrl)}</DataRow>
-        {rpcRows.map((row) => (
-          <DataRow key={row.chain.chainId} label={`${row.chain.name} RPC`}>
-            {row.url === undefined ? "not set" : hostOf(row.url)}
-          </DataRow>
-        ))}
-        <DataRow label="Prices">PulseX pools on PulseChain, through your PulseChain RPC (display only)</DataRow>
-        <Text fontSize="xs" color="fg.muted" marginTop="1">
-          The page was built with these values. Only the host shows. You can set other URLs on the Connections page.
-        </Text>
-        <Text fontSize="sm" marginTop="1">
-          <a href="#/settings" onClick={onClose}>
-            Connections: indexer and RPC URLs
-          </a>
-        </Text>
-      </Box>
-      <Box marginTop="4">
-        <Text fontWeight="medium" marginBottom="1">
-          Theme
-        </Text>
-        <Flex gap="2" role="group" aria-label="Theme">
-          {(["system", "light", "dark", "mono"] as const).map((choice) => (
-            <Button key={choice} size="sm" variant={theme === choice ? "solid" : "outline"} aria-pressed={theme === choice} onClick={() => onTheme(choice)}>
-              {THEME_LABELS[choice]}
-            </Button>
+    <Sheet label="Settings" onClose={onClose}>
+      <div className="zb-col zb-set">
+        <h3>Theme</h3>
+        <div className="zb-seg" role="radiogroup" aria-label="Theme">
+          {THEMES.map(([choice, label]) => (
+            <button key={choice} type="button" role="radio" aria-checked={theme === choice} onClick={() => onTheme(choice)}>
+              {label}
+            </button>
           ))}
-        </Flex>
-      </Box>
-      <Box marginTop="4">
-        <Text fontWeight="medium" marginBottom="1">
-          Token and chain images
-        </Text>
-        <Text fontSize="xs" color="fg.muted" marginBottom="1">
-          Where icons come from when the release does not already carry them. Icons always load as images, never as code.
-        </Text>
-        <TextInput aria-label="Image server" spellCheck={false} autoComplete="off" value={images} onChange={(event) => setImages(event.target.value)} />
-        <Flex gap="2" marginTop="2" alignItems="center">
-          <Button size="sm" onClick={() => setImagesNote(saveImageServer(images) ?? "Saved.")}>
-            Save
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
+        </div>
+
+        <h3>RPC endpoints</h3>
+        <p className="zb-set-help">Used to read balances and send transactions. Yours stay in this browser.</p>
+        {section("rpc")}
+
+        <h3>Token and chain images</h3>
+        <p className="zb-set-help">Where icons come from when the release doesn't already carry them.</p>
+        {section("images")}
+
+        <h3>Services</h3>
+        <p className="zb-set-help">Everything else this page talks to.</p>
+        {section("services")}
+        <div className="zb-fld zb-fld-static">
+          <span className="zb-fld-k">Prices</span>
+          <span>PulseX pools, via your RPC</span>
+        </div>
+
+        <h3 className="zb-set-quiet">More</h3>
+        <div className="zb-fld" data-problem={problems.cap === undefined ? undefined : "true"}>
+          <span className="zb-fld-k zb-fld-k-wide">Automatic fee cap</span>
+          <input
+            aria-label="Automatic fee cap (%)"
+            inputMode="decimal"
+            autoComplete="off"
+            value={cap}
+            onChange={(event) => {
+              setCap(event.target.value);
+              setProblems(({ cap: _dropped, ...rest }) => rest);
+            }}
+          />
+          <span className="zb-ok" data-ok="none">
+            % of the amount
+          </span>
+        </div>
+        {problems.cap === undefined ? null : (
+          <p className="zb-fld-err" role="alert">
+            {problems.cap}
+          </p>
+        )}
+        <div className="zb-set-row">
+          <button
+            type="button"
+            className="zb-set-link"
             onClick={() => {
-              saveImageServer(null);
-              setImages(DEFAULT_IMAGE_SERVER);
-              setImagesNote("Back to gib.show.");
+              clearRecent(browserStorage());
+              onRecentCleared();
+              setStatus("Recent searches cleared.");
             }}
           >
-            Reset
-          </Button>
-          <Text fontSize="xs" color="fg.muted" aria-live="polite">
-            {imagesNote}
-          </Text>
-        </Flex>
-        <Text fontWeight="medium" marginTop="4" marginBottom="1">
-          Automatic fee cap
-        </Text>
-        <Text fontSize="xs" color="fg.muted" marginBottom="1">
-          The automatic fee is the larger of 0.1% of the amount and twice what delivering and proving it should cost, but never more than this share of the amount. Stored in this browser.
-        </Text>
-        <TextInput aria-label="Automatic fee cap (%)" inputMode="decimal" autoComplete="off" value={cap} onChange={(event) => setCap(event.target.value)} />
-        <Flex gap="2" marginTop="2" alignItems="center">
-          <Button size="sm" aria-label="Save fee cap" onClick={() => setCapNote(saveFeeCap(cap) ?? "Saved.")}>
+            Clear recent searches
+          </button>
+          <a className="zb-set-link" href="#/settings" onClick={onClose}>
+            Connections and fallback
+          </a>
+        </div>
+        {fixture ? <p className="zb-set-help">Sample data: nothing here reaches a network.</p> : null}
+        {originIsShared(location) ? <p className="zb-set-help">This gateway is shared with other sites, so settings last for this visit only.</p> : null}
+
+        <div className="zb-set-actions">
+          <span className="zb-set-status" role="status" aria-live="polite">
+            {status}
+          </span>
+          <button type="button" className="zb-pill zb-pill-outline" onClick={resetAll}>
+            Reset to defaults
+          </button>
+          <button type="button" className="zb-pill zb-pill-solid" disabled={busy} onClick={() => void save()}>
             Save
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            aria-label="Reset fee cap"
-            onClick={() => {
-              saveFeeCap(null);
-              setCap(String(loadFeeCap()));
-              setCapNote("Back to 1%.");
-            }}
-          >
-            Reset
-          </Button>
-          <Text fontSize="xs" color="fg.muted" aria-live="polite">
-            {capNote}
-          </Text>
-        </Flex>
-      </Box>
-      <Box marginTop="4">
-        <Text fontWeight="medium" marginBottom="1">
-          Recent searches
-        </Text>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => {
-            clearRecent(browserStorage());
-            onRecentCleared();
-          }}
-        >
-          Clear the recent list
-        </Button>
-      </Box>
-    </Modal>
+          </button>
+        </div>
+      </div>
+    </Sheet>
   );
 };

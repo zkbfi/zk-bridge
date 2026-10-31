@@ -8,7 +8,7 @@ import { disconnectedWallet, renderWithWallet } from "../app/support";
 beforeEach(() => window.localStorage.clear());
 
 const renderSettings = () =>
-  renderWithWallet(<SettingsDialog theme="system" onTheme={() => undefined} onRecentCleared={() => undefined} onClose={() => undefined} />, { wallet: disconnectedWallet() });
+  renderWithWallet(<SettingsDialog theme="system" onTheme={() => undefined} onRecentCleared={() => undefined} onClose={() => undefined} storage={null} />, { wallet: disconnectedWallet() });
 
 describe("the image server in the settings", () => {
   it("shows gib.show, saves a replacement, and resets", async () => {
@@ -19,7 +19,8 @@ describe("the image server in the settings", () => {
     await userEvent.type(field, "https://icons.example.org/{{chainId}/{{address}");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(loadImageServer()).toBe("https://icons.example.org/{chainId}/{address}");
-    await userEvent.click(screen.getByRole("button", { name: "Reset" }));
+    await userEvent.click(screen.getByRole("button", { name: "Reset Image server" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(loadImageServer()).toBe("https://gib.show/image/{chainId}/{address}");
   });
 

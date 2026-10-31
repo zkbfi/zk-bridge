@@ -164,7 +164,7 @@ describe("the dialogs of the shell", () => {
 
     await chooseFromPalette("settings");
     const settings = await screen.findByRole("dialog", { name: "Settings" });
-    await userEvent.click(within(settings).getByRole("button", { name: "Clear the recent list" }));
+    await userEvent.click(within(settings).getByRole("button", { name: "Clear recent searches" }));
     expect(window.localStorage.getItem(RECENT_STORAGE_KEY)).toBe("[]");
 
     await userEvent.keyboard("{Escape}");
@@ -179,8 +179,8 @@ describe("the dialogs of the shell", () => {
     renderWithWallet(<Shell />, { wallet: disconnectedWallet() });
     await chooseFromPalette("settings");
     const settings = await screen.findByRole("dialog", { name: "Settings" });
-    await userEvent.click(within(settings).getByRole("button", { name: "Dark" }));
+    await userEvent.click(within(settings).getByRole("radio", { name: "Dark" }));
     await waitFor(() => expect(document.documentElement).toHaveClass("dark"));
-    expect(within(settings).getByRole("button", { name: "Dark" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(settings).getByRole("radio", { name: "Dark" })).toHaveAttribute("aria-checked", "true");
   });
 });

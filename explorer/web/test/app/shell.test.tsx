@@ -114,12 +114,12 @@ describe("the shell: one search field instead of a menu", () => {
     expect(window.localStorage.getItem("zk-bridge-explorer.theme")).toBe("dark");
   });
 
-  it("opens the settings, which show only the host of an endpoint", async () => {
+  it("opens the settings, which say that the sample page reaches no network", async () => {
     renderPage(<Shell />, { connected: false });
     await searchFor("settings");
     await userEvent.keyboard("{Enter}");
     const dialog = await screen.findByRole("dialog", { name: "Settings" });
-    expect(within(dialog).getByText(/sample data, nothing reaches a network/)).toBeInTheDocument();
+    expect(within(dialog).getByText("Sample data: nothing here reaches a network.")).toBeInTheDocument();
   });
 
   it("opens the connections page from the palette, and keeps the settings action for the settings dialog", async () => {
